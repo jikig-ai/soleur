@@ -10,21 +10,31 @@ frozen drift.
 
 ## Phase 0 — Preconditions (no edits)
 
-- [ ] 0.1 Run all three gates on the clean tree; record exit codes.
+- [x] 0.1 Run all three gates on the clean tree; record exit codes.
       `bash scripts/lint-legal-scope-block-placement.sh --base origin/main`
       `bash scripts/lint-legal-mirror-drift-baseline.sh --base origin/main`
       `bash apps/web-platform/scripts/check-tc-document-sha.sh`
-- [ ] 0.2 `sha256sum docs/legal/*.md` — record as the before-picture for every SHA refresh.
-- [ ] 0.3 Re-derive the DPD §2.3 item sets with the plan's `extract()` command. Expect canonical 29,
+- [x] 0.2 `sha256sum docs/legal/*.md` — record as the before-picture for every SHA refresh.
+- [x] 0.3 Re-derive the DPD §2.3 item sets with the plan's `extract()` command. Expect canonical 29,
       mirror 23, missing `(p)(w)(x)(y)(z)(ad)`.
-- [ ] 0.4 Re-derive the dangling `2.3(x)` set per surface. Expect canonical 0; mirror `(ad)`×1,
+- [x] 0.4 Re-derive the dangling `2.3(x)` set per surface. Expect canonical 0; mirror `(ad)`×1,
       `(p)`×2, `(w)`×3, `(x)`×3, `(y)`×1.
-- [ ] 0.5 Re-measure per-pair drift for all nine pairs. Expect total 220. **Also classify the
-      CHARACTER of the deferred set, not just the counts (CPO C3)** — `privacy-policy` (58) is
-      marked "substantive" with no description; CLAs and `cookie-policy` are unclassified. If
-      `privacy-policy` carries an under-disclosure of the same class as `gdpr-policy`'s Art. 6(1)
-      bullets, the scope split changes and must change before Phase 3.
-- [ ] 0.6 **If any number disagrees with the plan, STOP and correct the plan before editing.**
+- [x] 0.5 Re-measure per-pair drift for all nine pairs. Expect total 220.
+      **CPO C3 is DISCHARGED — the condition FIRED. Do not re-open it as a question.**
+      Measured 2026-08-10 with the gate's OWN normaliser (`source scripts/lib/legal-normalise.sh`;
+      `diff <(normalize_canonical …|collapse) <(normalize_plugin …|collapse)`). Per-pair
+      canonical-only / mirror-only: `privacy-policy` 44/14, `gdpr-policy` 44/19,
+      `corporate-cla` 7/5, `individual-cla` 5/2, `cookie-policy` 2/2. A passthrough `collapse`
+      inflates these — do not reconstruct the normaliser.
+      **`privacy-policy` carries an under-disclosure of the same class as `gdpr-policy`'s
+      Art. 6(1) bullets, and a broader one:** published §4.7 discloses 6 of 12 data-category
+      bullets, and the LinkedIn dual-basis paragraph and the Art. 15/20 self-serve route are
+      absent entirely. The scope split therefore CHANGED before Phase 3 — see **Phase 3c**.
+      Two first-draft characterisations were OVERSTATED and must not be acted on: Chapter V
+      transfers and the Art. 17 community-digest carve-out are BOTH present in the published
+      mirror (the latter inlined in the merged paragraph at mirror line 491). Neither is an
+      omission; neither is in Phase 3c's scope.
+- [x] 0.6 **If any number disagrees with the plan, STOP and correct the plan before editing.**
       The plan's numbers are claims, not permissions.
 - [ ] 0.7 **The six CLO rulings are MADE and recorded in the plan's Domain Review** — SOC 2
       position, PA-30 disposition, AUP §4.6 wording, DPD port scope, E1–E9 directions, and the
@@ -40,24 +50,24 @@ frozen drift.
 
 ## Phase 1 — Guards that cannot fire (A1–A4)
 
-- [ ] 1.1 **RED:** write a test that plants a signed row in `knowledge-base/legal/tenant-dpa-register.md`
+- [x] 1.1 **RED:** write a test that plants a signed row in `knowledge-base/legal/tenant-dpa-register.md`
       and asserts the guard fires; and a second arm asserting it does NOT fire once removed.
       Both arms required — a guard that always fires passes a one-arm test.
-- [ ] 1.2 **RED:** write a test asserting the guard reaches a non-empty input, distinguishable from
+- [x] 1.2 **RED:** write a test asserting the guard reaches a non-empty input, distinguishable from
       an empty-input run. (Per #7387: detection ≠ reachability.)
-- [ ] 1.3 **GREEN:** reconcile the guard predicate and the status vocabulary to one form. Decide
+- [x] 1.3 **GREEN:** reconcile the guard predicate and the status vocabulary to one form. Decide
       which form is canonical; do not make the grep match the prose by accident.
-- [ ] 1.4 Fix the same `status: `-prefixed form in the register's prose.
-- [ ] 1.5 **RED:** test that `tenant-provisioning.md`'s gate does not report the populated-state
+- [x] 1.4 Fix the same `status: `-prefixed form in the register's prose.
+- [x] 1.5 **RED:** test that `tenant-provisioning.md`'s gate does not report the populated-state
       verdict against the current empty register.
-- [ ] 1.6 **GREEN:** make the gate fail closed on the empty register. Do not reuse `grep -c '^|'`
+- [x] 1.6 **GREEN:** make the gate fail closed on the empty register. Do not reuse `grep -c '^|'`
       — it counts the table header, the separator, and the `| _(none yet)_ |` placeholder, which
       is why the current gate reads 3 on an empty set.
-- [ ] 1.7 Reconcile `aborted-provisioning` with `aborted-provisioning-at-step-N`.
-- [ ] 1.8 Correct `apps/web-platform/scripts/seed-live-verify-user.sh` `TC_VERSION` to the canonical
+- [x] 1.7 Reconcile `aborted-provisioning` with `aborted-provisioning-at-step-N`.
+- [x] 1.8 Correct `apps/web-platform/scripts/seed-live-verify-user.sh` `TC_VERSION` to the canonical
       value, **then** add it to `SEED_SCRIPTS` in `check-tc-document-sha.sh`. Order matters —
       adding it while drifted turns a required check red.
-- [ ] 1.9 Add a `MIN_ASSERTIONS` floor to each guard suite, derived from a green run of the
+- [x] 1.9 Add a `MIN_ASSERTIONS` floor to each guard suite, derived from a green run of the
       **current** suite. A floor, never an equality.
 
 ## Phase 2 — Stale records and register shape (B1–B4)
@@ -135,6 +145,73 @@ Never rewrite a drifting line into a third form on one side.
       to `BODY_EQUIVALENCE_DOCS`. Both belong to the successor issue — including the hard-wrapped
       scope block that trips gate 1 arm (c).
 
+## Phase 3c — Published privacy-policy under-disclosure (CLO ruling 7, CPO C3 discharged)
+
+Added after Phase 0.5 falsified the plan's "pure copy exercise" premise for this document. The
+CLO ruled disposition **(b) targeted carve-back**, not full resync: the load-bearing set is
+small, almost entirely additive, and introduces **no new mechanism** — it is the identical
+technique Phase 3b uses for `gdpr-policy`.
+
+**Sequenced AFTER Phase 2, alongside Phase 3b.** Canonical is untouched, so **no
+`LEGAL_DOC_SHAS["privacy-policy"]` refresh**. `privacy-policy` is **NOT** added to
+`BODY_EQUIVALENCE_DOCS`, so residual cosmetic drift is acceptable and no zero-drift obligation
+attaches. Insertions reduce drift, so gate 2 passes as a reduction.
+
+- [ ] 3c.1 **P1** — port the six §4.7 data-category bullets: `team_names`, Concierge turn
+      summaries, `message_attachments`, workspace logo, `audit_byok_use`, `beta_contacts`.
+      Insertion point mirror 146–169 contains no scope block and is clear.
+- [ ] 3c.2 **P2** 🔴 **in-place** — restore the §4.7 Workspace-data bullet to canonical, with the
+      `/workspaces/<your-id>/` specificity.
+- [ ] 3c.3 **P3** — port the §4.7 "Right of access / portability (Articles 15 + 20)" paragraph.
+- [ ] 3c.4 **P4** — port the §4.7 Art. 15(4) rights-of-others paragraph.
+- [ ] 3c.5 **P5** — port the §8 self-serve bullet, email-fallback bullet and both-channels
+      sentence. Lands between mirror 465 and 547 — **read-verify the adjacent scope block**.
+- [ ] 3c.6 **P6** — port the LinkedIn dual-basis paragraph. Same read-verify requirement.
+- [ ] 3c.7 **P7** 🔴 **in-place** — restore the share-link Art. 6(1)(f)/(b) legitimate-interest
+      purposes ("infrastructure security and abuse prevention"), required by Art. 13(1)(d).
+- [ ] 3c.8 **P8** 🔴 **in-place** — restore the Resend data/purpose scope: invite notifications,
+      invite acceptance confirmations, DSAR export notifications.
+- [ ] 3c.9 **P9 conditional** — `statutory_repin_send` marker. Ships **only** per re-verification
+      item 8: if migration 135 has deployed, non-publication is a live omission and P9 is
+      mandatory; if not, publish only with the "not yet in force" qualifier intact.
+- [ ] 3c.10 🔴 **EXECUTION TRAP, highest severity.** P2, P7 and P8 edit currently-drifting lines
+      and **must land byte-identical to canonical**. Rewriting either side into a third form
+      fails gate 2 as `CONTENT CHANGED`. This is the single most likely way Phase 3c reds a
+      required check.
+- [ ] 3c.11 🔴 **§10 IS OUT OF SCOPE — porting it would manufacture a false claim both gates pass.**
+      Mirror line 547 is a scope block whose referent is *"The paragraph above"*, and line 545 is
+      *"The Plugin operates locally and does not transfer data internationally."* Inserting the
+      canonical §10 LinkedIn-Ireland / Microsoft-Ireland transfer bullets between them silently
+      re-points that block so it asserts operator-side Chapter V transfers describe the Plugin on
+      the user's own machine under their own key. Flatly false. **Gate 1 sees only added lines and
+      the block's own line is unchanged; gate 2 sees a drift reduction.** Two independent reasons
+      to exclude: it is duplicative of the already-published §5.12/§5.13, and porting it creates a
+      falsehood. Carry the hazard into the successor issue (6.5).
+- [ ] 3c.12 **Explicitly OUT, stays with the successor:** the Last-Updated mega-line, the merged-
+      paragraph restructuring at mirror 491/495, the §10 consolidated transfer restatement, the
+      PR-H HTML comment.
+
+### Re-verification before publication (a port is textually a copy but LEGALLY A FIRST PUBLICATION; AC34 does not reach it)
+
+- [ ] 3c.V1 🔴 **SEQUENCING LANDMINE** — `beta_contacts` must publish the **B4-corrected** role
+      sentence from Phase 2, not the pre-B4 canonical text. Identical hazard to DPD §2.3(ad).
+- [ ] 3c.V2 🔴 `/dashboard/settings/privacy` + "Download my data" — verify the route exists, the
+      re-auth step works, and that `server/dsar-export-allowlist.ts` / `server/dsar-export.ts`
+      cover every class the prose enumerates. **A published fulfilment route that does not fulfil
+      is an Art. 12(2) breach created by this PR** — worse than the omission.
+- [ ] 3c.V3 Workspace logo — flag state, PNG/WebP re-encode, ≤1 MB cap, private-bucket claim.
+- [ ] 3c.V4 `audit_byok_use` — table exists, carries the described columns, is append-only.
+- [ ] 3c.V5 `message_attachments` — bucket path and recorded metadata fields.
+- [ ] 3c.V6 Concierge turn summaries — live on `/soleur:go`, written only on **successful** turns.
+- [ ] 3c.V7 `team_names` — column exists and is in use.
+- [ ] 3c.V8 `statutory_repin_send` / migration 135 deployment state (decides P9).
+- [ ] 3c.V9 LinkedIn dual-basis — reconcile against
+      `legitimate-interest-assessments/2026-05-19-linkedin-org-page-lia.md` before publishing the
+      (a)/(b) allocation.
+- [ ] 3c.V10 Resend — confirm all three email types are actually sent today.
+- [ ] 3c.V11 Scope-block referents adjacent to the P5 and P6 insertion points (mirror 449, 547) —
+      verify **by reading**, never by gate.
+
 ## Phase 4 — Published AUP under-disclosure (C1), disclaimer, and the 404 (C4)
 
 - [ ] 4.1 Apply the CLO's §4.6 rulings. The consent-only clause is the one where neither surface is
@@ -202,6 +279,15 @@ Sequenced last: it depends on the counterparty documents being settled. The T&C 
       "45 / 45 / five". **Remove the counts; do not restate them.** Soft floors per AC37 — the
       live site renders exact counts from the filesystem, so an exact count in a versioned legal
       instrument is stale by construction and buys a Tier-2 bump every release.
+- [ ] 5.10a **CLO ruling 7(3) — fold `cookie-policy`'s count sentence into E9's count-free
+      treatment.** Canonical says *"45 agents"*; the **published mirror says "60+ agents"**. This
+      is invisible to the tooling: `collapse`'s regex matches `[0-9]+ AI agents`, not a bare
+      `[0-9]+ agents`, so it has never appeared as drift. A published legal notice carrying a
+      materially different figure from the record is a factual-accuracy defect and is the same
+      class as E9. Both surfaces must land **byte-identical** (in-place edit of a drifting line),
+      and this one **does** touch canonical, so it **requires a `LEGAL_DOC_SHAS["cookie-policy"]`
+      refresh**. **Severable:** if it threatens the PR, drop it to the successor with the count
+      drift recorded explicitly — it does not carry the Art. 13 urgency that compels Phase 3c.
 - [ ] 5.11 Mirror every T&C edit exactly.
 - [ ] 5.12 **Tier 1 → `TC_VERSION` 2.4.0 → 2.5.0 (MINOR)** per CLO ruling 6. MAJOR is reserved for
       changes expected to cause abandonment ("new license restriction, new jurisdiction") —
@@ -234,10 +320,29 @@ Sequenced last: it depends on the counterparty documents being settled. The T&C 
 - [ ] 6.3 Add `acceptable-use-policy`, `data-protection-disclosure` and `disclaimer` to
       `BODY_EQUIVALENCE_DOCS` — **after** each reports zero drift, never before.
 - [ ] 6.4 Refresh the gate-2 baseline; assert total frozen drift is strictly below 220.
-- [ ] 6.5 File the successor issue for the deferred set (`gdpr-policy` **remaining ~60 after the
-      Phase 3b carve-back**, `privacy-policy` 58, `corporate-cla` 12, `individual-cla` 7,
-      `cookie-policy` 4) with the measured table, **each document's character classification**,
-      a note that `gdpr-policy` is partially remediated here, and the 2026-09-30 target.
+- [ ] 6.5 File the successor issue for the deferred set with the measured canonical-only /
+      mirror-only table AND each document's character classification:
+      `gdpr-policy` (residue after the Phase 3b carve-back) — structural;
+      `privacy-policy` (residue after the Phase 3c carve-back) — structural/cosmetic:
+      the Last-Updated mega-line, the merged paragraphs at mirror 491/495, the §10
+      consolidated transfer restatement (duplicative of §5.12/§5.13), the PR-H comment;
+      `corporate-cla` 7/5 and `individual-cla` 5/2 — cosmetic only (canonical title/version
+      block vs Eleventy page-hero, `<legal@jikigai.com>` autolink form, one stray blockquote
+      marker; ZERO legal content);
+      `cookie-policy` — cosmetic after the agent-count sentence is fixed under E9 in this PR.
+      Its related-documents line is BETTER in the mirror (real links vs bold text): port
+      **mirror → canonical**, do not overwrite.
+      Record that `gdpr-policy` and `privacy-policy` are **partially remediated in #7349**, and
+      that "no Art. 13/14 first-instance omission remains" is a **2026-08-10 measurement, not a
+      standing guarantee**. Target 2026-09-30 (the date stays — it is a real ratchet expiry with
+      a clock check at 2026-10-01; what changes is its scope, not its deadline).
+      **CRITICAL — carry this hazard into the issue body.** Published `privacy-policy` §10 has a
+      scope block at mirror line 547 whose referent is *"The paragraph above"*, pointing at
+      *"The Plugin operates locally and does not transfer data internationally."* Porting the
+      canonical §10 LinkedIn-Ireland / Microsoft-Ireland transfer bullets above it silently
+      re-points that block at operator-side Chapter V transfers, making it assert they describe
+      the Plugin on the user's own machine under the user's own key. **BOTH write-time gates
+      stay green.** Verify by reading, never by gate.
 - [ ] 6.6 Re-point gate 2's header and runtime output from `#7349` to the successor issue, and
       update the pinned assertion in `scripts/lint-legal-mirror-drift-baseline.test.sh` **in the
       same commit**.
