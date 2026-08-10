@@ -132,7 +132,7 @@ shared `core.bare`, flips from healthy to wedged on that one write.** That is th
 is why `worktree-manager.sh:653-654` (the repo's only setter of that key) is the live hazard even
 though the clone reads healthy today.
 
-### Seven facts this establishes
+### Eight facts this establishes
 
 1. **`core.bare = true` in the shared config is INERT for linked worktrees unless
    `extensions.worktreeConfig` is also enabled** (rows 1–2 vs row 3). The issue body's stated
