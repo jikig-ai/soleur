@@ -38,6 +38,7 @@ cc3b752f99ec2d39e31fbb886178f5a2b530e2db7cce008512e3ccad8539001b  hr-prod-host-c
 4e310304ef732019a1c7a73c165050620836531841c71f6f563698dc49e9bbbd  hr-tf-variable-no-operator-mint-default
 4bd7a42bd6270f2e0cb0faa133108cb6d6dc2c1946dd1cfdbeb7218935d1f628  hr-the-bash-tool-runs-in-a-non-interactive
 47a5830a16399e9cef30bc6dca3f1d34796ad7069288f8bffbe1026d69bf2048  hr-the-host-terminal-is-warp
+3c38645f7fae2b74c0f6fb2349e92f1e5712e7cb9138721fe6dcdb5e0f4678bf  hr-third-party-content-grep-on-undertaking
 ff3181749cae3c8b90472a61dd4b8141a88ea8e518e3f7890ea60fd32deacf05  hr-type-widening-cross-consumer-grep
 672aca8a1992dde53b8c62e2c2657758e838996dc2db7aea7e697e347507ae09  hr-verify-repo-capability-claim-before-assert
 b251e0b80e180c022ddeaabe8c730e047d18d93dbfa3f13863e2e0b8fd0b5df4  hr-weigh-every-decision-against-target-user-impact
@@ -68,7 +69,7 @@ a7d752df4f6a2f494ffec8dfc4efc74afe4d43d9034d0fba0e972517b18f2d7b  wg-ship-push-b
 8b95ccde7d534ca9b2a25e7c65f9780fbd20facaf00a813a40bdc7933d33ea79  wg-ui-feature-requires-pen-wireframe
 ea8a5568d2b51e204dcb090c14e897b3d78a6d7b3664b9a643756df163230203  wg-use-closes-n-in-pr-body-not-title-to
 4f2e2fa5da1ff0be5608ef0c93bb7fbc4582ad31e1f33dd23a596c65c0837352  wg-verified-work-ships-without-asking
-bdc9e510c1034d0e7d62cb2dcda9c974703ff6629e0496d7e64a4761744aee55  wg-when-a-test-runner-crashes-segfault-oom
+e172fcc8c17068b3a5612b4a78cde82e8f32e96ade26fea08bc7ec52ab7d8e32  wg-when-a-test-runner-crashes-segfault-oom
 c2f594134bc9a968584656621ba45bb5dcf5efe6778f5eb4ce088ee4912902db  wg-when-a-workflow-gap-causes-a-mistake-fix
 f7664416f6cf7eb36ce7d2e5977f904069e1811c29928a9853f81df425634980  wg-when-an-audit-identifies-pre-existing
 b95ce4dcdabe6b01a67775263a97bff856aacd380ef7de07c8f9c552461291ae  wg-when-closing-a-phase-milestone-update

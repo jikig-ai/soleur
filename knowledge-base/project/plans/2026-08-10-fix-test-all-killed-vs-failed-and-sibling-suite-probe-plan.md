@@ -185,7 +185,7 @@ ones plan v1 missed:
 | `test-fix-loop/SKILL.md` | "zero failures → stage fixes, report success" | **false green** (R8) — folded in |
 | `work/SKILL.md` reap discriminator | `[FAIL]` + terminal marker vs. neither | killed reads as a harness reap (R9) — folded in |
 | `work/SKILL.md` banner enumeration | closed list `SIBLING_RUN_DETECTED` / `LOW_TMP_HEADROOM` | new banner undocumented — folded in |
-| `one-shot/SKILL.md` poll guidance | `^=== N/N suites passed ===$` | safe (killed run is `N<M`, so it never falsely matches green) — **no edit**, stated here so the check is recorded |
+| `one-shot/SKILL.md` poll guidance | `^=== N/N suites passed ===$` | safe against a false GREEN (killed run is `N<M`, so it never falsely matches) — but **superseded by §6.6 (R22)**: the poll then never matches at all, so the agent holds `{no marker, clock timeout}`, which is the *reap* signature it is told to walk away from. Edited after all. |
 | `git-worktree/SKILL.md` | "a killed run and a finished run are indistinguishable **from the process table**" | still true — that sentence is about `/proc`, not runner output — **no edit** |
 
 `TEST_TIMING_LOG` has no automated consumer in-repo, so a third field-3 state is free.
