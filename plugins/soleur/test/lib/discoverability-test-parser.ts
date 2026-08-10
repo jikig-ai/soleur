@@ -354,11 +354,24 @@ export function tokenizeExpected(expected: string): string[] {
  * whose message named remedies that could not apply.
  */
 export function normalizeCommand(cmd: string): string {
+  // ASCII-ONLY trim, deliberately. JS `.trim()` is Unicode-aware and strips
+  // U+00A0 / U+2028 / U+3000; the gate trims under LC_ALL=C, whose `space` class
+  // is bytes only. Using `.trim()` here made the mirror ACCEPT a command the
+  // runtime REJECTS — measured on ` curl …` with a leading U+00A0, U+2028 and
+  // U+3000 (3 divergences).
+  //
+  // The GATE's behaviour is the correct one, so the mirror follows it: bash does
+  // not word-split on U+00A0, so the executed program would be `\u00a0curl`,
+  // which does not exist. Rejecting loudly at gate time beats an opaque rc=127 —
+  // and a plan pasted from a browser or a doc is exactly how that character
+  // arrives.
+  const H = "[ \\t\\f\\v\\r]";
   return cmd
     .split(/\r?\n/)
-    .filter((l) => !/^\s*#/.test(l) && l.trim() !== "")
+    .filter((l) => !new RegExp(`^${H}*#`).test(l) && !new RegExp(`^${H}*$`).test(l))
     .join("\n")
-    .trim();
+    .replace(new RegExp(`^${H}+`), "")
+    .replace(new RegExp(`${H}+$`), "");
 }
 
 /**

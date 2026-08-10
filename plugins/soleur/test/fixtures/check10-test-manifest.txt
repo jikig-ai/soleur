@@ -1,0 +1,114 @@
+04-dns-fail.md contains the typo'd hostname (regression-snapshot invariant)
+8-state decision matrix exists with exactly one PASS terminal
+A1 every allowlisted verb is accepted
+A2 a verb outside the allowlist is rejected
+A3 the reject reason names both remedies and the widening route
+A4 dequoting still applies to the verb (quotes do not launder it)
+AC1 the blank-line skip precedes the indent terminator
+AC1 the fold header rule precedes the inline rule (first-match capture)
+awk interpreter is a known implementation (mawk or gawk)
+B1 `command: |` no longer swallows the sibling expected_output key
+B1 inline-program flags no longer false-reject legitimate probes
+B2 awk/sed/find are still rejected — by frequency, not by capability
+B2 block joins with newline, not a space, and dedents
+B3 `command: |-` enters block mode on both surfaces
+Both Form A and Form B parser shapes are documented inside Check 10
+C1 a path-shaped verb is subject to the allowlist like any other
+C2 an allowlisted verb running a repo-relative script is still accepted
+C3 rejectReason stays a pure synchronous string -> string|null
+C4 normalization is applied before the verb is read
+Check 10 explicitly rejects ssh commands (canonical reject regex form)
+Check 10 heading exists
+classifier returns FAIL with DNS reason when stub executor returns (rc=6, stdout='')
+D1 parseCredentialsRequired reads the sub-field
+D2 a declared probe classifies SKIP-DECLARED without executing
+D2b a declaration outside the discoverability_test sub-block does NOT waive
+D2c copying the documented template does NOT waive the check
+D2d a bare block/fold indicator does NOT waive the check
+D3 a placeholder declaration FAILs (existing placeholder machinery)
+D4 ssh is NOT overridable by a declaration
+D5b the advisory fires only when the declared verb IS executable
+D5 the SKIP-DECLARED fixture classifies without executing
+D6 the not-allowlisted fixture FAILs without executing
+E1 fold header with no continuations returns empty, not the indicator
+E1 sandbox unavailable => SKIP naming the sandbox, executor never called
+E2 sandbox available => the executor IS reached (E1 is not vacuous)
+empty Form A block scalar (`command: |` with no continuation) returns empty
+F1 AC1 — Step 10.4 delegates to the extracted gate, not to inline bash
+F1c the runtime normalizes $CMD ONCE, before the gate, the reject and the exec
+F2 AC2 — the sandbox carries the load-bearing binds
+F2b AC2 — the sandbox mount set is CLOSED, not merely populated
+F3 AC2 — mount order is load-bearing: --tmpfs /home precedes the repo bind
+F4 AC5b — --proc /proc degrades rather than failing the sandbox
+F4b the git common dir is bound read-only, and only when it is outside the repo
+F4 single continuation has no leading or trailing space
+F5 fold + trailing backslash yields the documented escaped-space form
+F5 no unsandboxed fallback survives in Check 10
+F6 AC16 — exactly one PASS terminal survives the matrix growth
+F7 AC13 — SKIP-DECLARED is visible headless and in the Phase 2 aggregate
+F8 the retired denylist is documented as retired, not silently deleted
+Fast-path SKIP table includes Check 10 row
+Form A — block scalar via `|`
+Form A prose names all three scalar shapes
+Form A — strict YAML expected_output key
+Form A — strict YAML inline value
+Form B — bold-wrapped `**Expected output:**` line
+Form B — fenced code block following prose key
+Form B fence with leading `# comment` lines strips comments and keeps real command
+Form B — prose `Expected output:` line
+G1 the number of plans declaring credentials_required equals the baseline
+I1 inline command is unchanged
+list match (comma-joined)
+list match (or-joined)
+N1b stops at a LESS-indented parent key (the `<` half of `<=`)
+N1 stops at a sibling key; parseExpected still reads it
+N3 stops at a column-0 dedent even when indented content resumes after
+N5 does not truncate on a deeper-indented `key: value` (jq object filter)
+N6 blank line inside a block is skipped, scalar continues
+N6 blank line inside a fold is skipped, scalar continues
+N7 a continuation beginning `command:` is CONTENT, not a re-triggered key
+normalizes trailing newline before comparing
+P1 awk and TS agree byte-exactly on every Form-A fixture
+P2 known divergence — CRLF (TS splits on /\\r?\\n/, awk leaves the \\r)
+P2 known divergence — inline quote stripping (TS strips, awk does not)
+P3 every parity fixture is Form-A-only (has `command:`, no fenced block)
+parser extracts the typo'd hostname from Form B fence (catches comment-strip bug)
+Phase 2 aggregate table includes Discoverability Test Execution row
+R1 block scalar carrying a second command line is rejected (newline is shell-active)
+R2 a folded credentialed command is rejected by the verb allowlist
+R2b the retired denylist's verbs stay rejected, and so do verbs it never named
+R3 unauthenticated probes remain runnable
+rejects command-substitution as FAIL
+rejects empty stdout against non-empty expected
+rejects parameter-expansion ($VAR, ${VAR}) as FAIL
+rejects shell-chaining tokens (;, &&, ||, |) as FAIL
+rejects ssh commands as FAIL
+returns empty string when block absent
+returns empty string when command field absent
+returns the block when present
+Row 1: no plan file → SKIP
+Row 2: plan exists, no ## Observability → FAIL
+Row 3: block exists, no discoverability_test.command → FAIL
+Row 4: DNS failure (rc=6) → FAIL
+Row 5: timeout (rc=124) → FAIL
+Row 6: output mismatch → FAIL
+Row 7: auth-gated (rc=22, 401 not in expected) → SKIP
+Row 8: PASS (rc=0 OR matching expected) — 401 in '200 or 401'
+S1 does NOT consume a less-indented non-key line (reviewer/executor differential)
+SENSITIVE_PATH_RE literal appears ≥2 times (Check 6 + Check 10)
+Shared Plan-File Resolution sub-section referenced from ≥3 places (header + 2 callers)
+short-token guard: expected '0' does NOT match 500/404/200/302
+single value substring match
+Step 10.4 calls the extracted awk via git rev-parse, not CLAUDE_PLUGIN_ROOT
+Step 10.4 delegates to the extracted probe-verb gate (#7393, ex-CPO condition C1)
+Step 10.4 hard-fails on awk rc≠0 instead of falling through to Form B
+Step 10.5 reject set includes newline
+stops at the next ## heading
+surface 1 (canonical, plan/SKILL.md §2.9) — exactly the 5 expected fields
+surface 2b — discoverability_test sub-fields agree across canonical + all 3 template blocks
+surface 2 (plan-issue-templates.md) — exactly 3 blocks, each set-equal to canonical
+surface 3 (deepen-plan/SKILL.md §4.7) — field enumeration set-equals canonical
+surface 4 (AGENTS.rules.md rule) — count parity + no-SSH invariant (names intentionally absent)
+the gate and rejectReason agree on verdict and reason for every shape
+the parity table is non-vacuous — it contains both accepts and rejects
+triple-SSOT: preflight + deepen-plan literals are byte-identical (whitespace-normalized)

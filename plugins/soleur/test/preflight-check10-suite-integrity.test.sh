@@ -38,10 +38,20 @@ SUITES=(
   plugins/soleur/test/observability-schema-parity.test.ts
 )
 
-# Derived from a green run at the time of writing. Raise when coverage grows;
-# never lower without saying why in the commit message.
-MIN_TESTS=110
-MIN_ASSERTIONS=380
+# QUANTITY floors are a secondary tripwire only. On their own they were defeated
+# three ways at 9 tests / 97 assertions of slack: deleting two whole describes
+# stayed green; neutering seven tests with an early `return` plus padding kept the
+# test count identical and RAISED the assertion count above the floor; and a
+# line-broken `test\n.todo(` evaded the grep while bun counts todo separately from
+# skip. Quantity measures the size of the input, not the work performed -- the
+# same vacuity shape this gate exists to prevent, one level up.
+#
+# The primary control is now the NAMED-TEST MANIFEST: a committed list of every
+# test name, asserted as a subset of what the sources declare. A deleted describe,
+# a renamed test, or a `.todo` all become explicit diff lines.
+MANIFEST="plugins/soleur/test/fixtures/check10-test-manifest.txt"
+MIN_TESTS=113
+MIN_ASSERTIONS=460
 
 PASS=0
 FAIL=0
@@ -59,12 +69,37 @@ for f in "${SUITES[@]}"; do
   fi
   # Anchor on the call form so prose/comments mentioning ".skip" cannot trip it,
   # and so a future `describe.skip` is caught as well as `test.skip`.
-  if grep -nE '^[[:space:]]*(test|it|describe)\.(skip|only|todo)\(' "$f"; then
-    fail "$f contains a suppressed or exclusive test (see lines above)"
+  # Newline-tolerant: `test\n    .todo("…")` is valid JS and evaded a line-anchored
+  # grep, while bun classifies `todo` separately from `skip` so the runtime
+  # counter could not see it either. Collapse whitespace before matching.
+  if tr '\n' ' ' < "$f" | grep -qE '(test|it|describe)[[:space:]]*\.[[:space:]]*(skip|only|todo)[[:space:]]*\('; then
+    tr '\n' ' ' < "$f" | grep -oE '(test|it|describe)[[:space:]]*\.[[:space:]]*(skip|only|todo)[[:space:]]*\([^)]{0,80}' | head -5
+    fail "$f contains a suppressed or exclusive test (see above)"
   else
     pass "$f has no .skip/.only/.todo"
   fi
 done
+
+# --- 1b. Named-test manifest ------------------------------------------------
+# Identity, not quantity. Every name in the committed manifest must still be
+# declared by the sources; a deletion or rename is then a diff line rather than a
+# silent count change absorbed by the floor's slack.
+if [[ ! -f "$MANIFEST" ]]; then
+  fail "manifest missing at $MANIFEST"
+else
+  DECLARED="$(mktemp -t check10-declared.XXXXXXXX.txt)"
+  # shellcheck disable=SC2064
+  trap "rm -f '$DECLARED'; cleanup" EXIT
+  grep -hoE '^[[:space:]]*(test|it)\([[:space:]]*"[^"]+"' "${SUITES[@]}" \
+    | sed -E 's/^[[:space:]]*(test|it)\([[:space:]]*"//; s/"$//' | sort -u > "$DECLARED"
+  MISSING="$(comm -23 "$MANIFEST" "$DECLARED" | head -20)"
+  if [[ -n "$MISSING" ]]; then
+    printf '%s\n' "$MISSING" | sed 's/^/      missing: /'
+    fail "$(printf '%s\n' "$MISSING" | wc -l | tr -d ' ') manifest test(s) no longer declared — deleted or renamed"
+  else
+    pass "all $(wc -l < "$MANIFEST" | tr -d ' ') manifest tests still declared"
+  fi
+fi
 
 # --- 2. The suites actually execute, and clear the floor --------------------
 # Reading the runner's own summary rather than trusting its exit code: a suite
@@ -76,7 +111,10 @@ done
 # contended resource this repo's runners warn about. Registered BEFORE the
 # assignment so there is no window where the file exists and the trap does not.
 LOG=""
-cleanup() { [[ -n "$LOG" ]] && rm -f "$LOG"; }
+# Keep the log when a message tells the reader to open it — the previous trap
+# deleted the evidence every diagnostic path cited.
+KEEP_LOG=0
+cleanup() { [[ "$KEEP_LOG" == "1" ]] && { echo "  (log retained: $LOG)"; return 0; }; [[ -n "$LOG" ]] && rm -f "$LOG"; return 0; }
 trap cleanup EXIT
 LOG="$(mktemp -t check10-integrity.XXXXXXXX.log)"
 bun test "${SUITES[@]}" >"$LOG" 2>&1
@@ -84,6 +122,7 @@ RC=$?
 
 if [[ "$RC" -ne 0 ]]; then
   fail "bun test exited $RC — see $LOG"
+  KEEP_LOG=1
 else
   pass "bun test exited 0"
 fi
@@ -93,6 +132,12 @@ n_pass=$(grep -oE '^[[:space:]]*([0-9]+) pass' "$LOG" | grep -oE '[0-9]+' | tail
 n_fail=$(grep -oE '^[[:space:]]*([0-9]+) fail' "$LOG" | grep -oE '[0-9]+' | tail -1)
 n_skip=$(grep -oE '^[[:space:]]*([0-9]+) skip' "$LOG" | grep -oE '[0-9]+' | tail -1)
 n_expect=$(grep -oE '([0-9]+) expect\(\) calls' "$LOG" | grep -oE '^[0-9]+' | tail -1)
+# An UNPARSED summary must not read as "measured zero". Without this, a run that
+# never produced a summary block still printed "[ok] no tests skipped at runtime".
+if [[ -z "${n_pass:-}" || -z "${n_expect:-}" ]]; then
+  fail "could not parse bun's summary block — treating as UNMEASURED, not as zero (log: $LOG)"
+  KEEP_LOG=1
+fi
 : "${n_pass:=0}" "${n_fail:=0}" "${n_skip:=0}" "${n_expect:=0}"
 
 echo "  (measured: pass=$n_pass fail=$n_fail skip=$n_skip expect=$n_expect)"

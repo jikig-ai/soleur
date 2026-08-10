@@ -34,9 +34,17 @@ const GATE_PATH = join(
   "probe-verb-gate.sh",
 );
 
-// Shapes the gate deliberately does not opine on — they are rejected downstream
-// by the classifier's shell-active-token branch, not by the verb gate.
-const SUBST_LIKE = /[;&|<>`$]|\$\(/;
+// Shapes the gate deliberately does not opine on — rejected downstream by the
+// classifier's ssh branch or its shell-active-token branch, never by the verb
+// gate. Kept as NARROW as possible: the previous predicate skipped any command
+// containing any of `;&|<>` backtick `$`, which measured at 60.3% of the real
+// producer corpus — and every one of the 149 real bash/TS divergences fell
+// inside the skipped region while zero fell inside the compared one. The harness
+// was verifying parity exactly where the two implementations trivially agree.
+const SKIPPED_BY_DESIGN = /(^|[\s/])ssh([\s]|$)|\n/;
+// How many PARITY_CASES rows the predicate is expected to skip. Pinned so a
+// widened predicate (which silently shrinks coverage) fails rather than passes.
+const SKIPPED_BY_DESIGN_COUNT = 2;
 
 const AWK_PATH = join(
   import.meta.dir,
@@ -1210,20 +1218,39 @@ describe("#7393 GATE — executable parity between the runtime and its TS mirror
     // invisible to this harness.
     "curl\u2028evilarg",
     "curl\u00a0evilarg",
+    // LEADING separators — the shape that actually diverged. JS `.trim()` strips
+    // these and LC_ALL=C does not, so the mirror accepted what the runtime
+    // rejects. A plan pasted from a browser or a doc is how they arrive.
+    "\u00a0curl -fsS https://app.soleur.ai/api/inngest",
+    "\u2028curl -fsS https://app.soleur.ai/api/inngest",
+    "\u3000curl -fsS https://app.soleur.ai/api/inngest",
+    "\u2009doppler secrets get FOO",
   ];
 
   test("the gate and rejectReason agree on verdict and reason for every shape", () => {
+    let compared = 0;
     for (const cmd of PARITY_CASES) {
+      // Skip BEFORE spawning: `ssh` and the shell-active reject live in the
+      // classifier, not the gate, so the gate has no opinion on them. Skipping
+      // after the spawn burned a subprocess per skipped row.
+      if (SKIPPED_BY_DESIGN.test(cmd)) continue;
       const gate = runGate(cmd);
       const mirror = rejectReason(cmd);
-      // `ssh` and the shell-active reject live in the classifier, not the gate,
-      // so compare only where the gate has an opinion.
-      if (SUBST_LIKE.test(cmd) || /(^|[\s/])ssh([\s]|$)/.test(cmd)) continue;
+      compared++;
       expect(gate.rejected, `verdict mismatch for: ${JSON.stringify(cmd)}`).toBe(mirror !== null);
       if (gate.rejected) {
         expect(gate.reason, `reason mismatch for: ${JSON.stringify(cmd)}`).toBe(mirror);
       }
     }
+    // MEASURE THE WORK, NOT THE INPUT. The previous non-vacuity check counted
+    // ROWS in the table, so a table rewritten to rows the predicate skips left
+    // the harness comparing ZERO pairs while still reporting green — the same
+    // vacuity shape it exists to prevent, one level up.
+    expect(
+      compared,
+      "the harness must actually compare pairs, not just iterate rows",
+    ).toBeGreaterThanOrEqual(PARITY_CASES.length - SKIPPED_BY_DESIGN_COUNT);
+    expect(compared, "at least this many real comparisons").toBeGreaterThanOrEqual(14);
   });
 
   test("the parity table is non-vacuous — it contains both accepts and rejects", () => {
