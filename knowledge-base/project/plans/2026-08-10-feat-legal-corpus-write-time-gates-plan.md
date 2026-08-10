@@ -1068,13 +1068,43 @@ cheapest possible proof that the two gates compose.
 The plan prescribes two pattern-bound behaviors with sibling precedent, so per Phase 4.4 they must
 be diffed rather than invented:
 
-- **The ratchet (R7).** Not novel — `scripts/lint-diagnosis-claims.sh` (*"the baseline ratchets DOWN
-  only"*, missing baseline → exit 2) and `scripts/lint-trap-tempfile-ownership.highwater` both
-  implement it. **The one genuine difference:** those baselines are *committed files*; gate 2's
-  baseline is *recomputed each run* from `git show <merge-base>:<path>`. That is strictly stronger —
-  there is no baseline artifact to launder, which removes the anti-laundering guard those scripts
-  need. Phase 3 should say so explicitly, because a reviewer who knows the committed-baseline idiom
-  will look for the missing guard.
+- **The ratchet (R7) — two precedents, and I initially named the wrong pair.**
+  - *Scalar high-water, committed file:* `scripts/lint-diagnosis-claims.sh` (*"Do NOT raise the
+    baseline to make this pass. The baseline ratchets DOWN only"*; missing baseline → **exit 2**;
+    plus a `MIN_FILES` anti-vacuity floor — *"A clean result from a walk that found nothing is not a
+    clean result"*) and `scripts/lint-trap-tempfile-ownership.highwater`. Both compare a **count**.
+  - *Per-item set, committed file:* `scripts/lint-shell-capture-exit.baseline.txt` +
+    `.py`. Its `fingerprint()` is the shape to copy — `f"{rel}\t{code}\t{' '.join(text.split())}"`,
+    **deliberately not line-numbered**, with the reasoning stated in-file: *"Line numbers churn on
+    every edit above a finding, which would make the baseline produce spurious 'new' findings for
+    untouched code."* That is an independent derivation of R6's position-header strip.
+  - **The actual merge-base precedent is `scripts/lint-rule-bodies.py`** — which I did not name in
+    the first draft. It builds its base-side map with `_git_show(root, base_commit, rel)`, resolves
+    the base via `rev-parse --verify --quiet "<ref>^{commit}"`, and **fails closed** on an
+    unresolvable base (`::error::… (fail-closed). Pass \`git merge-base origin/main HEAD\`` → exit 2).
+    Copy it, including its CI recipe: `fetch-depth: 0` + `git fetch --no-tags --quiet origin main` +
+    `BASE="$(git merge-base origin/main HEAD)"`, and register the local self-test with `--base HEAD`
+    so the no-op path is asserted green.
+
+  **Three things that precedent gives us free, and one trap:**
+  1. **No artifact to launder.** Gate 2's baseline is recomputed, so the "do not regenerate the
+     baseline" guard all three committed-file gates need does not apply. Say so in the script header
+     — a reviewer who knows the other gates will go looking for the missing guard.
+  2. **The union-of-scopes anti-hack.** `lint-rule-bodies.py` parses both sides with the **union** of
+     base-side and head-side section names, so a PR that narrows the scope while degrading an item
+     inside the removed scope cannot hide it. This is exactly R9's "union of base+HEAD globs" —
+     independently derived, now with a precedent to copy.
+  3. **Fail-closed is a choice, and the repo is split.** `lint-infra-no-human-steps.py` and
+     `lint-credential-path-literals.py` fail **closed**; `lint-trap-tempfile-ownership.py` and
+     `.claude/hooks/ship-runbook-ssh-gate.sh` fail **open**. Gate 2 is blocking → closed.
+  4. **⚠ The trap — SE-1, recorded in `lint-rule-bodies.py` itself.** When the base predates a rename
+     of the scanned corpus, `git show <base>:<path>` resolves to nothing, **the base map is empty,
+     and the change-detection arm goes blind for the entire branch** — not just the renaming commit.
+     For a ⊆-ratchet an empty base is the *unsafe* direction (everything reads as new → red, which is
+     loud), but a **head-side rename reads as a shrink and silently hides real drift**. This is the
+     same hazard R9 flags for renames; their mitigation was a committed manifest as a
+     git-history-free second oracle for the deletion direction. Phase 3.7 must decide explicitly
+     whether gate 2 needs that second oracle or whether `EXPECTED_COUNT` already serves as one.
 - **The waiver (R23).** Four in-repo idioms exist: an inline pragma with mandatory reason
   (`lint-trap-tempfile-ownership.py`), a hash-bound ack file with replay protection
   (`lint-rule-bodies.py` + `.claude/rule-weakening-acks.txt`), an in-file allowlist

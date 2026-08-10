@@ -62,12 +62,19 @@ Derived from [the plan](../../plans/2026-08-10-feat-legal-corpus-write-time-gate
 
 - [ ] 3.1 **RED first.**
 - [ ] 3.2 Drift primitive: `^[<>]`-stripped **ordered sequence**; strip `NcN`/`NaN`/`NdN` + `---` (R6).
+      Reuse `lint-shell-capture-exit.py`'s `fingerprint()` shape (path + class + whitespace-normalised
+      text, deliberately NOT line-numbered) — an independent derivation of the same decision (D2).
 - [ ] 3.3 Assertion is a **ratchet**: `driftset(HEAD) ⊆ driftset(base)`, order preserved. Reduction passes (R7).
 - [ ] 3.4 Base = `git merge-base HEAD "$base_ref"`, **not** a tip ref; `merge_group` uses the ancestor SHA (R8).
 - [ ] 3.5 `git fetch --no-tags --quiet origin <ref>` before resolving; `rev-parse --verify` or exit 2.
+      **Fail CLOSED** — the repo is split (`lint-infra-no-human-steps.py` closed vs
+      `lint-trap-tempfile-ownership.py` open); a blocking gate takes closed (D2).
 - [ ] 3.6 Event-aware resolution incl. **push-to-main** — do not exit 2 on a legitimately absent base (arch P0-1).
 - [ ] 3.7 Pair lifecycle: union of base+HEAD globs; new pair → drift must be 0; one-sided delete → fail;
-      unpaired → exit 2 (R9).
+      unpaired → exit 2 (R9). Copy `lint-rule-bodies.py`'s union-of-scopes anti-hack. **Decide the
+      SE-1 rename question explicitly (D2):** when the base predates a rename, `git show <base>:<path>`
+      is empty and a head-side rename reads as a *shrink*, silently hiding drift. Either add a
+      git-history-free second oracle for the deletion direction, or justify `EXPECTED_COUNT` as one.
 - [ ] 3.8 Enumerate pairs from the glob, not the literal 9; cross-check `EXPECTED_COUNT`.
 - [ ] 3.9 Message: per drifting doc, both paths, direction, and a diff of the **drift sets** — not of the documents.
 - [ ] 3.10 Header states what is frozen (published mirror under-discloses; name the Anthropic-US transfer
