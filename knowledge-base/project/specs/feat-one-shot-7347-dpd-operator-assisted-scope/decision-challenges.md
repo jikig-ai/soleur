@@ -58,7 +58,7 @@ Cut **D4** (§3.2 preamble — subordinate clause, D3 lands six lines above), **
 P2/P4 are *widenings* and G10 a correction, so `git diff | grep '^-'` will not yield only banner lines. It would be silently relaxed at implementation, taking the non-retraction guard with it. Specify widenings as pure appends, or scope AC-8's grep.
 
 ### M11. AC-12 misses a derived identifier.
-P-1(a) describes the counterparty as *"a French venture-exploration database business"* — quasi-identifying with one alpha tester. Add sector/nationality descriptors to the redaction sweep (`hr-third-party-content-grep-on-undertaking`).
+P-1(a) describes the counterparty by sector and nationality combined — quasi-identifying with one alpha tester. Add sector/nationality descriptors to the redaction sweep (`hr-third-party-content-grep-on-undertaking`).
 
 ### M12. Fix the mechanism, keep the conclusion.
 The nine date locations are correct, but the hero regex misses the body line because of the `:` in `**Last Updated:**`, not because it matches "first occurrence." Likewise the mirror sentinel trips via `test.each(DOCS)` → `loadMirror` ENOENT, not `expect(DOCS)` (which uses `arrayContaining`). Operational conclusions stand; the stated reasons are wrong and would mislead the next reader.

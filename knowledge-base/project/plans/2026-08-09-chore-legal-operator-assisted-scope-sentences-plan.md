@@ -91,8 +91,9 @@ where the text denies a legal DUTY (D7, D9, D10, G5) or a TRANSFER (D8, P7, G6).
 cannot yield only banner lines). Specify widenings as pure appends or scope the grep. Do not silently
 relax it at implementation — that would take the non-retraction guard with it.
 
-**A11 — AC-12 adds sector/nationality descriptors.** P-1(a)'s *"a French venture-exploration database
-business"* is quasi-identifying with one alpha tester (`hr-third-party-content-grep-on-undertaking`).
+**A11 — AC-12 adds sector/nationality descriptors.** P-1(a)'s combined sector-and-nationality
+descriptor of the counterparty is quasi-identifying with one alpha tester
+(`hr-third-party-content-grep-on-undertaking`).
 
 **A12 — fix two stated mechanisms, keep their conclusions.** The hero regex misses the body line
 because of the `:` in `**Last Updated:**`, not "first occurrence"; the mirror sentinel trips via
