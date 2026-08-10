@@ -1170,10 +1170,17 @@ if ! bwrap "${BWRAP_PROC[@]}" "${BWRAP_ARGS[@]}" true 2>/dev/null; then
 fi
 
 # Run with 15s wall-clock cap, capture stdout + exit code separately.
-# `env -i` SCRUBS Doppler/Supabase secrets from the child env; inside the sandbox
-# it is redundant-but-harmless defense-in-depth, since the on-disk stores those
-# variables point at are no longer present either. PATH is restored explicitly so
-# `curl`/`timeout` are still resolvable; HOME points at the sandbox tmpfs.
+# `env -i` SCRUBS Doppler/Supabase secrets from the child env. It is LOAD-BEARING,
+# not redundant — an earlier revision of this comment called it
+# "redundant-but-harmless" on the grounds that the on-disk stores are unmounted
+# anyway, and that reasoning is WRONG: bwrap does not scrub the environment
+# (measured — a variable set here survives into the sandbox verbatim), and
+# DOPPLER_TOKEN / GH_TOKEN / ANTHROPIC_API_KEY live in the environment ONLY, with
+# no on-disk store to unmount. With `curl` allowlisted and --share-net retaining
+# egress, dropping `-i` exfiltrates every credential in preflight's environment.
+# Pinned by an anchored assertion in the F2 test; do not weaken either.
+# PATH is restored explicitly so `curl`/`timeout` are still resolvable; HOME
+# points at the sandbox tmpfs.
 #
 # `</dev/null` is load-bearing: without it the probe inherits preflight's stdin,
 # so a command that reads stdin either consumes input the caller was still using
@@ -1233,7 +1240,7 @@ the denylist mistake ADR-173 exists to retire.
 | 3 | Block exists, no `discoverability_test.command` parsed | `$CMD` empty after both Form A + B attempts | **FAIL** | Rule violation — the load-bearing field of the schema is missing. |
 | 4 | Probe declares `credentials_required` (non-placeholder) | `$CREDS_REQ` non-empty and not a placeholder | **SKIP-DECLARED** | The property has no unauthenticated substitute. Executing it in the sandbox would fail for lack of credentials and prove nothing. Waives verification, not execution — the command never runs. |
 | 5 | `credentials_required` is placeholder text | `$CREDS_REQ` matches `TODO`/`TBD`/`N/A`/… | **FAIL** | A declaration that says nothing waives nothing (deepen-plan §4.7 placeholder machinery). |
-| 6 | Verb not on `PROBE_VERB_ALLOWLIST` | `scripts/probe-verb-gate.sh` exits 1 | **FAIL** | Deny-by-default, with no path-shaped exemption. Schema validation, not a security control — see Step 10.4. The reason names both remedies (repo-relative script; `credentials_required`) and the allowlist-extension route. |
+| 6 | Verb not on `PROBE_VERB_ALLOWLIST` | [probe-verb-gate.sh](./scripts/probe-verb-gate.sh) exits 1 | **FAIL** | Deny-by-default, with no path-shaped exemption. Schema validation, not a security control — see Step 10.4. The reason names both remedies (repo-relative script; `credentials_required`) and the allowlist-extension route. |
 | 7 | Sandbox unavailable or cannot be established | `bwrap` absent, or both `--proc` and no-`--proc` establishment attempts fail | **SKIP-NOSANDBOX** | Fail-closed. Never falls back to unsandboxed execution. Its OWN terminal: folded into ordinary SKIP, "the gate verified nothing" was byte-identical to "the gate had nothing to do". bwrap is Linux-only, so on macOS this is the steady state. Emits `SOLEUR_PREFLIGHT_CHECK10_NOSANDBOX` so it is countable across the fleet. |
 | 8 | Command DNS-fails | `$DT_RC == 6` (curl: "Could not resolve host") | **FAIL** | The hostname-typo class — the exact #4148 regression. |
 | 9 | Command times out | `$DT_RC == 28` (curl) OR `$DT_RC == 124` (timeout(1)) | **FAIL** | Endpoint unreachable; DNS resolved but no response in 15s. |

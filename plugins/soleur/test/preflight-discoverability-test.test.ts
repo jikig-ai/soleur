@@ -44,7 +44,12 @@ const GATE_PATH = join(
 const SKIPPED_BY_DESIGN = /(^|[\s/])ssh([\s]|$)|\n/;
 // How many PARITY_CASES rows the predicate is expected to skip. Pinned so a
 // widened predicate (which silently shrinks coverage) fails rather than passes.
-const SKIPPED_BY_DESIGN_COUNT = 2;
+// Measured: exactly ONE row skips (the embedded-newline block scalar). The `ssh`
+// alternative matches ZERO rows today — it guards a shape the table does not yet
+// carry. This was pinned at 2 and never asserted, so it granted a free row of
+// slack: widening the predicate by one row stayed green, which is precisely what
+// the constant exists to prevent. It is now asserted exactly, below.
+const SKIPPED_BY_DESIGN_COUNT = 1;
 
 const AWK_PATH = join(
   import.meta.dir,
@@ -1246,11 +1251,32 @@ describe("#7393 GATE — executable parity between the runtime and its TS mirror
     // ROWS in the table, so a table rewritten to rows the predicate skips left
     // the harness comparing ZERO pairs while still reporting green — the same
     // vacuity shape it exists to prevent, one level up.
+    //
+    // But a floor indexed to `PARITY_CASES.length` still SCALES WITH ITS OWN
+    // INPUT: deleting rows lowers the bar they were being measured against.
+    // Measured, that is exploitable end-to-end — delete the six separator rows
+    // (whose own comment reads "without a row here the divergence is invisible")
+    // and the suite stays green; THEN delete `export LC_ALL=C` from the runtime
+    // of record and it is still green, while the gate really does start
+    // accepting `curl<U+2028>evilarg`. With the rows present that same runtime
+    // edit reddens immediately. So the floor must be ABSOLUTE, and it ratchets
+    // upward only — never derived from the table it guards.
+    const MIN_COMPARED = 22;
     expect(
       compared,
       "the harness must actually compare pairs, not just iterate rows",
-    ).toBeGreaterThanOrEqual(PARITY_CASES.length - SKIPPED_BY_DESIGN_COUNT);
-    expect(compared, "at least this many real comparisons").toBeGreaterThanOrEqual(14);
+    ).toBeGreaterThanOrEqual(MIN_COMPARED);
+  });
+
+  test("the skip predicate is pinned — widening it cannot silently shrink coverage", () => {
+    // SKIPPED_BY_DESIGN_COUNT was pinned but never asserted, so it bought a row
+    // of slack instead of spending it: widening the predicate by one row stayed
+    // green. Assert the count EXACTLY, in both directions.
+    const skipped = PARITY_CASES.filter((c) => SKIPPED_BY_DESIGN.test(c));
+    expect(skipped.length, "the skip set is pinned exactly").toBe(SKIPPED_BY_DESIGN_COUNT);
+    // And name WHICH row, so a predicate rewritten to skip a different row than
+    // the one we sanctioned is a red diff rather than an equal count.
+    expect(skipped[0], "the sanctioned skip is the embedded-newline block scalar").toContain("\n");
   });
 
   test("the parity table is non-vacuous — it contains both accepts and rejects", () => {
@@ -1743,6 +1769,25 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
     // stdin either eats input the caller was still using, or blocks the full
     // 15s and misreports as a timeout.
     expect(execLine).toMatch(/<\/dev\/null/);
+    // ANCHORED PREFIX, not three independent presence checks. Presence alone
+    // permits arbitrary EXTRA bwrap flags between the array expansion and the
+    // interpreter — `… "${BWRAP_ARGS[@]}" --ro-bind /home /home /usr/bin/env …`
+    // satisfied every assertion above while restoring the operator's $HOME.
+    // The mount set being closed (F2b) is worth nothing if the exec line may
+    // append to it, so pin the two as ADJACENT.
+    //
+    // `env -i` is load-bearing and is asserted HERE because it is the ONLY
+    // control over environment-resident credentials. bwrap does not scrub the
+    // environment: measured, a variable set in preflight's env survives into the
+    // sandbox verbatim. DOPPLER_TOKEN, GH_TOKEN and ANTHROPIC_API_KEY live in
+    // the environment ONLY — no on-disk store to unmount — so the surrounding
+    // "the files are gone anyway" reasoning does not reach them. With `curl`
+    // allowlisted and --share-net retaining egress, dropping `-i` is a one-token
+    // edit that exfiltrates every credential in preflight's environment.
+    expect(
+      execLine,
+      "nothing may sit between the mount array and env -i, and -i must survive",
+    ).toMatch(/bwrap "\$\{BWRAP_PROC\[@\]\}" "\$\{BWRAP_ARGS\[@\]\}" \/usr\/bin\/env -i PATH=/);
   });
 
   test("F2b AC2 — the sandbox mount set is CLOSED, not merely populated", () => {
@@ -1768,6 +1813,39 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
       "only --ro-bind may appear; a writable --bind re-opens the credential surface",
     ).toEqual(["--ro-bind"]);
 
+    // 1b. THE SOURCE SET IS CLOSED. The assertion above is a WRITABILITY
+    //     predicate, not a closure one: `--ro-bind /home /home` satisfies it and
+    //     restores the operator's real $HOME wholesale. Measured against live
+    //     bwrap with that single line added, an absolute-path read of
+    //     ~/.doppler/.doppler.yaml returned the 294-byte service token and
+    //     ~/.ssh listed private keys — inside the sandbox built to remove them,
+    //     with this suite reporting 115/0 green and the integrity gate 7/7.
+    //     Read-only is sufficient to EXFILTRATE: Check 10 prints probe stdout,
+    //     `curl` is allowlisted, and --share-net retains egress. --ro-bind only
+    //     closes write-back escalation, never the credential surface.
+    //     So enumerate SOURCES over the array window and set-compare.
+    const win = sandboxWindow();
+    expect(
+      [...new Set([...win.matchAll(/--ro-bind\s+(\S+)/g)].map((m) => m[1]))].sort(),
+      "the --ro-bind SOURCE set is closed; a read-only /home re-bind restores the credential surface",
+    ).toEqual(['"$REPO_ROOT"', '"$RESOLV"', "/etc", "/usr"]);
+
+    // 1c. Closed in the DELETION direction too. Removing `--tmpfs /home` exposes
+    //     the real home exactly as an added bind would, and presence-style
+    //     assertions are all green when a tmpfs is deleted rather than added.
+    expect(
+      [...new Set([...win.matchAll(/--tmpfs\s+(\S+)/g)].map((m) => m[1]))].sort(),
+      "the --tmpfs set is closed; deleting --tmpfs /home re-exposes the operator home",
+    ).toEqual(["/home", "/root", "/run", "/tmp", "/var/tmp"]);
+
+    // 1d. Only GIT_BIND may inject mounts by expansion — otherwise 1b is bypassed
+    //     by `FOO_BIND=(--ro-bind /home /home)` declared outside the window and
+    //     expanded inside it.
+    expect(
+      [...new Set([...win.matchAll(/"\$\{(\w+)\[@\]\}"/g)].map((m) => m[1]))].sort(),
+      "only GIT_BIND may inject mounts by expansion",
+    ).toEqual(["GIT_BIND"]);
+
     // 2. The arrays are ASSIGNED, never appended to. `uniqueIndex` pins the
     //    assignment; nothing stopped a later `+=`.
     expect((body.match(/BWRAP_ARGS\+=/g) ?? []).length, "BWRAP_ARGS must never be appended to").toBe(0);
@@ -1777,6 +1855,11 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
     // 3. No --dev-bind / --bind-try smuggling a writable mount under another name.
     expect(body).not.toMatch(/--dev-bind\b/);
     expect(body).not.toMatch(/--bind-try\b/);
+    // The overlay family matches NONE of the bind regexes above (it does not
+    // contain the token `bind`), so it would re-expose /home past every
+    // assertion in this test. Named explicitly rather than left to the
+    // enumeration, because the enumeration cannot see it at all.
+    expect(body).not.toMatch(/--(?:ro-|tmp-)?overlay(?:-src)?\b/);
   });
 
   test("F3 AC2 — mount order is load-bearing: --tmpfs /home precedes the repo bind", () => {
