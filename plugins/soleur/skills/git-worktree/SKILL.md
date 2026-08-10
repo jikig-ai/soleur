@@ -89,7 +89,7 @@ Creates a new worktree with the given branch name.
 
 **Options:**
 
-- `branch-name` (required): The name for the new branch and worktree
+- `branch-name` (required): The name for the new branch. The worktree DIRECTORY is the slug of it — every `/` becomes `-`, so `ci/rule-metrics` creates branch `ci/rule-metrics` in `.worktrees/ci-rule-metrics`. Identical for any name without a slash. Read the path the script prints; do not construct `.worktrees/<branch-name>` yourself. `create` refuses if the target directory already holds a different branch (`SOLEUR_WORKTREE_SLUG_COLLISION`) — the transform is many-to-one, so `ci/foo` and `ci-foo` would otherwise share one directory.
 - `from-branch` (optional): Base branch to create from (defaults to `main`)
 
 **Example:**
@@ -334,6 +334,31 @@ SOLEUR_ORPHAN_UNREMOVABLE count=<n> cleaned=<n> errno=<LABEL> names=<basename,ba
 ```
 
 `count=` is how many could not be removed, `cleaned=` how many actually were (carried here so the success counter is readable at the default `verbose=false`, where the success summary is suppressed), and `names=` is sanitized basenames only. A human-readable failure summary naming each full path goes to stderr and prints even at `verbose=false`. A separate `SOLEUR_ORPHAN_REGISTRY_UNAVAILABLE` fires when `git worktree list` fails — the reaper then refuses to reap anything rather than treat an empty registry as "everything is an orphan". To clear it, stop the local Supabase stack (`supabase stop`) so the bind-mount is released, then re-run `cleanup-merged`. **Do not reach for a containerized `rm -rf` as a privileged workaround.** `guardrails:block-rm-rf-worktrees` still matches most docker-wrapped forms (the `.worktrees/` path survives in the command line), but it is defeated by a **remapped mount** — `docker run -v <abs>/.worktrees/foo:/target alpine rm -rf /target` never names `.worktrees/` after the `rm -rf`, so it is allowed. Measured; matcher gap tracked in #7113 (which also covers `rm -rf -- <path>`, where the `--` separator defeats the same matcher). A safely-designed privileged fallback is tracked in #7112; the producer-side fix that would stop the residue being created at all is #7114.
+- **A slash-bearing branch produces a HYPHENATED directory; the branch keeps its slashes; the directory basename is the lease key (#7408).** `create ci/rule-metrics` makes `.worktrees/ci-rule-metrics` — two levels below the repo root, never three — while `git branch --show-current` inside it still reports `ci/rule-metrics`. `switch` accepts either form. This matters because three consumers assume the flat layout: `cleanup_orphan_worktree_dirs` globs exactly one level, `cleanup_merged_worktrees` reads the lease back as `basename "$worktree_path"`, and [scripts/test-all.sh](../../../../scripts/test-all.sh) documents `cd .worktrees/<name> && bash ../../scripts/test-all.sh`. Before this fix the producer used the raw refname for both the path and the lease key, so a slash branch nested three levels, failed `_validate_worktree_name` and ran **unleased**, and its unregistered intermediate (`.worktrees/ci`) matched no guard in the reaper and was `rm -rf`'d with the live worktree inside it. `tr '/' '-'` is identity for every non-slash name, so nothing about existing worktrees changed.
+  - **Migrating a worktree that is ALREADY nested** (created by a pre-fix version). The reaper now *skips* it and emits `SOLEUR_ORPHAN_SKIP_DESCENDANT dir=… reason=holds-live-worktree` rather than deleting it. `switch <name>` still reaches it (it falls back to the raw name and warns), so you can get in and commit; it stays invisible to `list` and `copy-env` until moved. Commit any uncommitted work first, then:
+
+    ```bash
+    ROOT="$(cd "$(git rev-parse --path-format=absolute --git-common-dir)/.." && pwd)"
+
+    # 1. Find nested entries. A flat worktree has no second `/` after .worktrees/.
+    git worktree list --porcelain | grep -E '^worktree .*/\.worktrees/[^/]+/'
+
+    # 2. The destination MUST NOT already exist. `git worktree move` into an
+    #    existing directory moves the worktree INSIDE it, producing a NEW
+    #    3-level nesting — and `git worktree list` then prints a plausible path,
+    #    so the migration silently reproduces the defect it is undoing.
+    test -e "$ROOT/.worktrees/ci-rule-metrics" && echo "ABORT: destination exists"
+
+    # 3. Absolute paths: relative ones resolve against your cwd, and running
+    #    this from inside a worktree (the normal position) fails with a
+    #    misleading "No such file or directory".
+    git worktree move "$ROOT/.worktrees/ci/rule-metrics" "$ROOT/.worktrees/ci-rule-metrics"
+
+    rmdir "$ROOT/.worktrees/ci"   # only succeeds if now empty
+    git worktree list             # confirm the new path is registered
+    ```
+
+    Use `git worktree move`, never `mv` — the latter leaves the worktree's `gitdir` file pointing at the old path and the worktree reads as broken. (In this bare repo that admin file is `<bare-root>/worktrees/<name>/gitdir`, not `.git/worktrees/<name>/gitdir`.) `git worktree move` also refuses a **locked** worktree; unlock it first rather than reaching for `-f -f`. After the move the lease key changes with the basename, so re-run `switch` to re-acquire.
 - **Identity authority is inverted between environments (ADR-099, #6184).** On the non-bare Concierge agent workspace the LOCAL identity is the host-seeded workspace **owner** (authoritative); on the bare CLI dev repo the operator's **global** is the human, and the bare root frequently carries an inherited `github-actions[bot]` LOCAL that worktrees inherit (the #2815 CLA-reject bug). `ensure_worktree_identity` discriminates on **bot-shape** (`_identity_is_bot`: a `[bot]` marker in name/email), NOT on presence: it respects a present NON-bot local, overrides a bot-shaped local from a human `--global`, and REFUSES to ever write a bot-shaped `--global` (`reason=bot-global-refused`) so it can never misattribute a commit. Do NOT re-introduce a blanket "force global over local" (wrong on Concierge) OR a blanket "respect any present local" (wrong on the bare-dev bot-local) — neither is correct alone.
 
 ## Technical Details
