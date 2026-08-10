@@ -160,6 +160,87 @@ scan_diff() { diff -rq --exclude=.terraform "$1" "$2"; }
 # still says which expectation it came from.
 fresh_sbx() { rm -rf "$TMPROOT"/sbx.*; mktemp -d "$TMPROOT/sbx.$1.XXXXXX"; }
 
+# ── FROZEN_ROOT: the comparison side, snapshotted ONCE (#7376) ────────────────────────────────
+#
+# Every copy and every diff below reads FROZEN_ROOT, never the live $REAL_ROOT.
+#
+# WHY. This suite copies the infra directory and `diff -rq`s the copy against the source. It
+# runs under run-registered-suites.sh CONCURRENTLY with 92 sibling suites — several of which
+# legitimately write into that same directory while this one is mid-diff. A file that appears
+# or vanishes inside the copy→diff window yields `Only in …` → a RED in THIS suite caused
+# entirely by a DIFFERENT one. That is a harness defect, and it is one of the two provable
+# causes behind #7376's "same tree, different failure sets on every run".
+#
+# Freezing the comparison side closes the race for every concurrent tree-mutator, present and
+# future, rather than chasing them one at a time. It is unconditionally correct: the property
+# under test is "a fresh copy of the scanned tree diff-cleans against the tree it was copied
+# from", and a snapshot satisfies that definition strictly better than a moving target does.
+#
+# One extra ~4.5 MB copy (the .terraform exclusion applies), against the ~24 this suite already
+# makes.
+FROZEN_ROOT="$TMPROOT/frozen"
+mkdir -p "$FROZEN_ROOT"
+copy_scan_tree "$REAL_ROOT" "$FROZEN_ROOT"
+
+echo ""
+echo "--- frozen-snapshot decoupling (#7376) ---"
+
+# Behavioural proof, with a POSITIVE CONTROL. Without the control this is untestable-by-
+# construction: an assertion that "the frozen diff is clean" passes just as well against a live
+# root that simply happened not to be mutated during the run — which is what made the original
+# race invisible for as long as it was.
+_STANDIN="$TMPROOT/standin"; _FROZE="$TMPROOT/standin-frozen"; _SBX="$TMPROOT/standin-sbx"
+mkdir -p "$_STANDIN" "$_FROZE" "$_SBX"
+printf 'a\n' > "$_STANDIN/one.tf"; printf 'b\n' > "$_STANDIN/two.sh"
+cp -r "$_STANDIN"/* "$_FROZE"/
+cp -r "$_FROZE"/* "$_SBX"/
+# A sibling suite creates a fixture in the live tree mid-run, exactly as
+# run-registered-suites.test.sh did until this change.
+printf '#!/usr/bin/env bash\nexit 0\n' > "$_STANDIN/zzz-concurrent-fixture.test.sh"
+
+if scan_diff "$_FROZE" "$_SBX" >/dev/null 2>&1; then
+  pass "frozen comparison side is immune to a concurrent mutation of the live tree"
+else
+  fail "frozen comparison side still saw a concurrent mutation — the freeze is not working"
+fi
+
+# POSITIVE CONTROL: the same comparison against the LIVE stand-in must be DIRTY. If this arm
+# ever passes, the fixture stopped reproducing the race and the assertion above proves nothing.
+if scan_diff "$_STANDIN" "$_SBX" >/dev/null 2>&1; then
+  fail "positive control did not reproduce the race — the assertion above is now vacuous"
+else
+  pass "positive control: diffing against the LIVE tree does report the concurrent mutation"
+fi
+rm -rf "$_STANDIN" "$_FROZE" "$_SBX"
+
+# Source-anchored drift guard. Anchored on the CALL CONSTRUCT, not the bare token `REAL_ROOT`,
+# which legitimately appears elsewhere (the .terraform warm-root checks below genuinely want the
+# live tree, and so does the scanner's own verdict on it). A future edit that reintroduces a
+# live-tree comparison reds here.
+#
+# The single exemption is the freeze itself — `copy_scan_tree "$REAL_ROOT" "$FROZEN_ROOT"` reads
+# the live tree exactly once, by definition. Exempted by its DESTINATION rather than by line
+# number, which would rot on the next insertion above it.
+_live_sites="$(grep -nE '(copy_scan_tree|scan_diff) +"\$REAL_ROOT"' "${BASH_SOURCE[0]}" \
+  | grep -v '"\$FROZEN_ROOT"' || true)"
+if [[ -n "$_live_sites" ]]; then
+  fail "a copy/diff call site still reads the LIVE \$REAL_ROOT — the #7376 race is reintroduced" \
+    "$(printf '%s\n' "$_live_sites" | head -3)"
+else
+  pass "every copy/diff call site reads the frozen snapshot, not the live tree"
+fi
+
+# Anti-vacuity: the guard above is a negative assertion, so it also passes if the call construct
+# it greps for stops existing (a rename of copy_scan_tree/scan_diff, or the freeze being dropped).
+# Assert positively that the frozen sites are actually there and that FROZEN_ROOT is a real,
+# distinct directory.
+_frozen_sites=$(grep -cE '(copy_scan_tree|scan_diff) +"\$FROZEN_ROOT"' "${BASH_SOURCE[0]}" || true)
+if [[ -d "$FROZEN_ROOT" && "$FROZEN_ROOT" != "$REAL_ROOT" ]] && (( _frozen_sites >= 6 )); then
+  pass "the frozen snapshot exists, is distinct from the live tree, and has ${_frozen_sites} call sites"
+else
+  fail "frozen-snapshot wiring is missing (dir=$FROZEN_ROOT sites=${_frozen_sites}, expected >= 6)"
+fi
+
 # --- the scanner (stages 1-3 + census), written once to a temp OUTSIDE any scanned tree ---------
 SCANNER="$TMPROOT/scanner.py"
 cat > "$SCANNER" <<'PYEOF'
@@ -640,12 +721,12 @@ echo "--- copy/diff pair pin (guards assert_mutated below from going vacuous) --
 # it costs ~0.4s and pins the identical property. It also covers expect_green, which has no
 # assert_mutated gate of its own and would otherwise go silently vacuous on a dropped file.
 PIN_SBX="$(mktemp -d "$TMPROOT/pin.XXXXXX")"
-copy_scan_tree "$REAL_ROOT" "$PIN_SBX"
-if scan_diff "$REAL_ROOT" "$PIN_SBX" >/dev/null 2>&1; then
+copy_scan_tree "$FROZEN_ROOT" "$PIN_SBX"
+if scan_diff "$FROZEN_ROOT" "$PIN_SBX" >/dev/null 2>&1; then
   pass "copy/diff pair intact: a fresh copy_scan_tree copy diff-cleans against the source"
 else
   fail "copy/diff pair BROKEN: fresh copy differs from source (assert_mutated is now vacuous)" \
-    "$(scan_diff "$REAL_ROOT" "$PIN_SBX" 2>&1 | head -3)"
+    "$(scan_diff "$FROZEN_ROOT" "$PIN_SBX" 2>&1 | head -3)"
 fi
 
 # DECOY-ROOT PIN — the only assertion here that is non-vacuous on CI's shape.
@@ -753,7 +834,7 @@ expect_red() {
   # expect_red <label> <attribution-substring> <mutate-fn>
   local label="$1" attrib="$2" mutate_fn="$3"
   local sbx; sbx="$(fresh_sbx mut)"
-  copy_scan_tree "$REAL_ROOT" "$sbx"
+  copy_scan_tree "$FROZEN_ROOT" "$sbx"
   if ! python3 "$SCANNER" "$sbx" >/dev/null 2>&1; then
     fail "$label: fresh copy not GREEN before mutation (latent FAIL — attribution unsafe)"; return 0
   fi
@@ -761,7 +842,7 @@ expect_red() {
   # scan_diff's exclusion is load-bearing, not cosmetic: $sbx no longer holds .terraform, so an
   # unexcluded diff can NEVER report the trees identical — assert_mutated would pass
   # unconditionally and every broken mutation would be misreported as a vacuous guard.
-  if scan_diff "$REAL_ROOT" "$sbx" >/dev/null 2>&1; then
+  if scan_diff "$FROZEN_ROOT" "$sbx" >/dev/null 2>&1; then
     fail "$label: mutation did not change the tree (assert_mutated failed)"; return 0
   fi
   local out rc
@@ -985,13 +1066,13 @@ expect_green() {
   # expect_green <label> <mutate-fn>
   local label="$1" mutate_fn="$2"
   local sbx; sbx="$(fresh_sbx grn)"
-  copy_scan_tree "$REAL_ROOT" "$sbx"
+  copy_scan_tree "$FROZEN_ROOT" "$sbx"
   "$mutate_fn" "$sbx"
   # assert_mutated for the GREEN side too. Without it these four pins are vacuous-by-drift: a
   # mutation whose `sed` stops matching after a ci-deploy.sh refactor (greloc) applies nothing,
   # the tree stays pristine, the scanner is GREEN because the REAL tree is GREEN, and the pin
   # reports PASS while asserting nothing about the false-positive it was written to catch.
-  if scan_diff "$REAL_ROOT" "$sbx" >/dev/null 2>&1; then
+  if scan_diff "$FROZEN_ROOT" "$sbx" >/dev/null 2>&1; then
     fail "$label: mutation did not change the tree (GREEN pin is vacuous — it pins nothing)"; return 0
   fi
   local out rc
