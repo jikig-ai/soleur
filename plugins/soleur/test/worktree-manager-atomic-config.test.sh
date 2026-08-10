@@ -413,19 +413,36 @@ else echo "  PASS: no vacuous success"; PASS=$((PASS + 1)); fi
 
 # ---------------------------------------------------------------------------
 echo "Test 17: #6184 bare-layout regression — ensure_bare_config flow unchanged on a bare repo"
-# Complements Tests 12/13: a genuine bare repo (no .git subdir) still gets the
-# bare-accommodation surgery (extensions.worktreeConfig=true) via the atomic path.
+# Complements Tests 12/13: a genuine bare repo (no .git subdir) still reaches the
+# bare-accommodation path via the atomic writer rather than being skipped.
+#
+# POLARITY REVERSED (#7394). This test used to assert extensions.worktreeConfig == true
+# as proof the bare path had run. That key is the half of the pair that WEDGES worktrees:
+# with it on, git resolves core.bare per-worktree, and since `git worktree add` writes no
+# config.worktree at all, every worktree created afterwards inherits core.bare=true from
+# the shared config and is treated as bare. The invariant is now the inverse — extension
+# ABSENT, core.bare RETAINED in the shared config — and the failure strings say so, because
+# the previous FAIL text ("bare repo lost its extensions.worktreeConfig surgery") would
+# have told a future reader to restore the defect.
 BARE17=$(mktemp -d "$TMP/bare17.XXXXXX")
 git init -q --bare -b main "$BARE17/repo.git" >/dev/null 2>&1
+# Seed the retired state so the assertion below proves REMOVAL, not mere absence.
+git config --file "$BARE17/repo.git/config" core.repositoryformatversion 1
+git config --file "$BARE17/repo.git/config" extensions.worktreeConfig true
 _SAVED_GIT_ROOT="$GIT_ROOT"
 GIT_ROOT="$BARE17/repo.git"
 set +e; ensure_bare_config >"$TMP/ebc17.out" 2>&1; EBC17_RC=$?; set -e
 GIT_ROOT="$_SAVED_GIT_ROOT"
 assert_eq "0" "$EBC17_RC" "ensure_bare_config returns 0 on a genuine bare repo (regression guard)"
-if git config --file "$BARE17/repo.git/config" --get extensions.worktreeConfig 2>/dev/null | grep -qx true; then
-  echo "  PASS: bare accommodation still enables extensions.worktreeConfig (bare path unchanged)"; PASS=$((PASS + 1))
+if git config --file "$BARE17/repo.git/config" --get extensions.worktreeConfig >/dev/null 2>&1; then
+  echo "  FAIL: extensions.worktreeConfig still set — the worktree-wedging pair was not broken (#7394)"; FAIL=$((FAIL + 1))
 else
-  echo "  FAIL: bare repo lost its extensions.worktreeConfig surgery — bare-layout regression"; FAIL=$((FAIL + 1))
+  echo "  PASS: bare accommodation REMOVES extensions.worktreeConfig (reversed polarity)"; PASS=$((PASS + 1))
+fi
+if git config --file "$BARE17/repo.git/config" --get core.bare 2>/dev/null | grep -qx true; then
+  echo "  PASS: core.bare RETAINED in the shared config (the bare root must keep reporting bare)"; PASS=$((PASS + 1))
+else
+  echo "  FAIL: core.bare was removed from the shared config — the bare root now reports as a working tree"; FAIL=$((FAIL + 1))
 fi
 
 # ---------------------------------------------------------------------------
@@ -586,6 +603,14 @@ else
 fi
 assert_eq "__ABSENT__" "$(git config --file "$WS24/.git/config" --get extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
   "extensions.worktreeConfig NOT set (surgery correctly skipped on the non-bare clone)"
+# [R-kieran2 / #7394] This fixture sets core.bare=true on a `.git`-DIRECTORY clone, which is
+# exactly the state the reversed Phase-2 guard now falls THROUGH on (it decides on core.bare,
+# not on the gitdir's shape). Safety here no longer comes from the skip — it comes from the
+# polarity: both surviving operations are unsets of ABSENT keys, so the fall-through performs
+# zero writes. Assert that structurally, so a future change that re-adds a write to this path
+# reds here rather than silently enabling per-worktree resolution on a normal clone.
+assert_eq "false" "$([[ -e "$WS24/.git/config.worktree" ]] && echo true || echo false)" \
+  "no config.worktree created on the non-bare clone (fall-through stays write-free)"
 
 # ---------------------------------------------------------------------------
 echo "Test 24: #5934 D3 GAP — non-bare guard SKIPS when the mask leaves GIT_ROOT RELATIVE (\".git\")"
@@ -602,7 +627,8 @@ echo "Test 24: #5934 D3 GAP — non-bare guard SKIPS when the mask leaves GIT_RO
 #   RED  (pre-fix): fallback gated on `-z GIT_ROOT` stays inert → git_dir stays ".git" → no skip
 #                   → is-bare "true" → reaches surgery → emits branch=bare-fail/target-masked, rc 1.
 #   GREEN (fixed):  `-d \$PWD/.git` fires UNCONDITIONALLY → git_dir=ABSOLUTE \$PWD/.git → line-532
-#                   skip fires → emits SOLEUR_GIT_CONFIG_MASK_SKIP branch=non-bare-skip, rc 0.
+#                   skip fires → emits SOLEUR_GIT_CONFIG_MASK_SKIP branch=non-bare-skip
+#                   (reason=masked-cannot-determine since #7394), rc 0.
 WS25=$(mktemp -d "$TMP/relroot25.XXXXXX"); git init -q -b main "$WS25" >/dev/null 2>&1
 rm -f "$WS25/.git/config"
 if mknod "$WS25/.git/config" c 1 3 2>/dev/null; then :; else ln -s /dev/null "$WS25/.git/config"; fi
@@ -618,7 +644,11 @@ else
   echo "  PASS: no bare-surgery wedge sentinel — surgery was not reached"; PASS=$((PASS + 1))
 fi
 # The distinguishing positive assertion: the non-bare skip path fired its benign marker.
-if grep -qF 'SOLEUR_GIT_CONFIG_MASK_SKIP file=config reason=non-bare-skip branch=non-bare-skip' "$TMP/ebc25.out"; then
+# reason= became `masked-cannot-determine` in #7394: under the mask the read cannot
+# establish non-bareness, so claiming `non-bare-skip` as the REASON asserted more than the
+# branch knows. The classification (`branch=non-bare-skip`) and the rc-0 outcome this test
+# exists to pin are unchanged, so anchor on those rather than on the retired reason text.
+if grep -qE 'SOLEUR_GIT_CONFIG_MASK_SKIP file=config reason=[a-z-]+ branch=non-bare-skip' "$TMP/ebc25.out"; then
   echo "  PASS: SOLEUR_GIT_CONFIG_MASK_SKIP branch=non-bare-skip emitted (non-bare skip fired)"; PASS=$((PASS + 1))
 else
   echo "  FAIL: expected the SOLEUR_GIT_CONFIG_MASK_SKIP branch=non-bare-skip marker (skip did not fire)"; FAIL=$((FAIL + 1))
