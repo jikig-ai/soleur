@@ -49,7 +49,7 @@ files); the cost came from three habits below, each of which multiplies.
    say which commit the full run covered. **On RESUME, this heuristic inverts: a verification
    claim you inherited (a handoff, a prior session's summary, `session-state.md`) is a statement
    about a tree that may no longer exist — re-run it before relying on it.** #7397 resumed on
-   "bun shard rc=0 (2419/0)"; that shard was RED, reddened by a commit made after the claim.
+   "bun shard rc=0 (2419/0)"; that shard was RED, reddened by a commit made after the claim. See `knowledge-base/project/learnings/2026-08-10-a-guard-that-cannot-be-driven-red-is-vacuous-four-rounds-four-instances.md`.
 5. **Bound every command's output.** `git grep` over a tree containing generated JSON returns
    megabytes on one "line": use `':!*.json'`, `--name-only`, `| cut -c1-200`.
 6. **Delegate wide reads to a subagent** (`cm-delegate-verbose-exploration…`) — keep the

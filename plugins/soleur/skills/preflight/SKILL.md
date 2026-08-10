@@ -868,7 +868,7 @@ valid-looking declaration whose "scope" was the template's own comment), a bare
 
 ```bash
 # Log-injection guard, defined HERE rather than in Step 10.5. Every value echoed
-# below ($CREDS_REQ, $PROBE_VERB, $PROBE_PROG) is derived from PR-authored plan
+# below ($CREDS_REQ, $PROBE_VERB) is derived from PR-authored plan
 # text, which this check's own design treats as adversarial — and Step 10.5's
 # copy is ~250 lines further down, so these paths could not call it even in
 # principle. U+2028/U+2029 are NOT in [[:space:]] under LC_ALL=C, so they survive

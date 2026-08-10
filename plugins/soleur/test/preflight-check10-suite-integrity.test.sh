@@ -54,12 +54,19 @@ MANIFEST="plugins/soleur/test/fixtures/check10-test-manifest.txt"
 # 7 tests and 37 assertions below the real counts, and that gap was not padding —
 # it was the budget an attacker spends: gutting a manifest-listed test's BODY to
 # `expect(true).toBe(true)` (name intact, so the manifest is satisfied) and
-# deleting the 5 generated fold-indicator tests both landed inside it while all
-# seven checks stayed green. These suites have no environment-conditional
+# deleting the 6 generated fold-indicator tests both landed inside it while all
+# every check stayed green. These suites have no environment-conditional
 # branching, so the counts are deterministic and an exact floor is safe.
 # Ratchet both UPWARD when coverage is added; never widen the gap.
-MIN_TESTS=121
-MIN_ASSERTIONS=505
+# All THREE floors live here, together, under one contract: absolute, ratcheted to
+# the measured value, upward only. MIN_MANIFEST_LINES used to sit buried inside the
+# manifest block's else-branch, which is how a reader misses that it carries the
+# same rule. An EMPTY manifest previously passed vacuously as
+# "[ok] all 0 manifest tests still declared", so this floor is what makes the
+# primary identity control non-vacuous.
+MIN_TESTS=122
+MIN_ASSERTIONS=514
+MIN_MANIFEST_LINES=117
 
 PASS=0
 FAIL=0
@@ -117,6 +124,23 @@ for f in "${SUITES[@]}"; do
   else
     pass "$f has no .skip/.only/.todo"
   fi
+
+  # REBINDING GUARD. `test`, `it` and `describe` are ordinary JS bindings, and
+  # SUPPRESS_RE anchors on those literal identifiers followed by a call form.
+  # `const it = test.failing;` has no `(` after `.failing`, so the pattern misses
+  # it entirely — and `.failing` is the ONE member of the suppression family the
+  # runtime counters cannot see: bun scores a failing `.failing` test as a PASS
+  # (measured: 2 pass / 0 fail), so n_skip and n_todo both stay 0. Measured
+  # end-to-end: delete `env -i` from the runtime of record, alias one test to the
+  # rebound `it`, and this gate reported a full green with pass=121.
+  # Adds no expect() calls, so MIN_ASSERTIONS is unaffected.
+  REBIND_RE='(^|[;{}[:space:]])(const|let|var|function)[[:space:]]+(test|it|describe)([[:space:]]|=|;|\()'
+  if tr '\n' ' ' < "$f" | grep -qE "$REBIND_RE"; then
+    tr '\n' ' ' < "$f" | grep -oE "${REBIND_RE}[^;]{0,60}" | head -5
+    fail "$f REBINDS test/it/describe — the source-pattern gate can be aliased around"
+  else
+    pass "$f does not rebind test/it/describe"
+  fi
 done
 
 # --- 1b. Named-test manifest ------------------------------------------------
@@ -136,7 +160,7 @@ else
   # disabled-by-noise. The manifest is committed in C collation to match.
   #
   # Backtick-named declarations are extracted too. The double-quote-only form was
-  # structurally blind to `test(\`${id} …\`)`, leaving 5 generated tests (120
+  # structurally blind to `test(\`${id} …\`)`, leaving 6 generated tests (120
   # runtime vs 114 manifest) outside the "identity, not quantity" guarantee — and
   # deleting all 5 stayed green inside MIN_TESTS' slack. The literal source text
   # is a stable identity for them even though the runtime name interpolates.
@@ -152,8 +176,21 @@ else
   # sandbox-boundary tests were deleted and a writable --bind /home added. The
   # floor reasoning applied to the test counts was never applied to the manifest
   # itself. Ratchets upward with the manifest.
-  MIN_MANIFEST_LINES=116
-  n_manifest=$(wc -l < "$MANIFEST" | tr -d ' ')
+  # The delta pinned LC_ALL=C on the sort that builds $DECLARED and on comm, but
+  # NOT on the committed manifest. Measured: this manifest passes `LC_ALL=C sort -c`
+  # and FAILS `en_US.UTF-8 sort -c` at line 30 — so regenerating it the obvious way
+  # (`sort -u` in a normal UTF-8 locale) desorts it relative to comm, which then
+  # emits 81 spurious "no longer declared" lines accusing a deletion that never
+  # happened. A gate that cries wolf gets bypassed, so name the remedy in the message.
+  if ! LC_ALL=C sort -c "$MANIFEST" 2>/dev/null; then
+    fail "$MANIFEST is not in C collation — regenerate with: LC_ALL=C sort -u -o $MANIFEST $MANIFEST"
+  else
+    pass "manifest is in C collation (comm's operands agree)"
+  fi
+  # Count ENTRIES, not newlines: `wc -l` under-counts a file whose last line lost
+  # its terminator, turning a formatting nit into a "gutted?" accusation, and it
+  # counts duplicates — so 116 copies of one name would satisfy a raw line floor.
+  n_manifest=$(LC_ALL=C sort -u "$MANIFEST" | wc -l | tr -d ' ')
   n_declared=$(wc -l < "$DECLARED" | tr -d ' ')
   if [[ "$n_manifest" -lt "$MIN_MANIFEST_LINES" ]]; then
     fail "manifest has only $n_manifest entries, floor is $MIN_MANIFEST_LINES (manifest gutted?)"
@@ -215,6 +252,13 @@ fi
 
 echo "  (measured: pass=$n_pass fail=$n_fail skip=$n_skip todo=$n_todo expect=$n_expect)"
 
+if [[ "$n_fail" -gt 0 ]]; then
+  fail "$n_fail test(s) FAILED per bun's own summary"
+  KEEP_LOG=1
+else
+  pass "bun's summary reports no failing tests"
+fi
+
 if [[ "$n_skip" -gt 0 || "$n_todo" -gt 0 ]]; then
   fail "$n_skip skipped + $n_todo todo test(s) — coverage silently removed"
 else
@@ -222,18 +266,33 @@ else
 fi
 
 if [[ "$n_pass" -lt "$MIN_TESTS" ]]; then
-  fail "only $n_pass tests passed, floor is $MIN_TESTS (coverage removed?)"
+  fail "only $n_pass tests passed, floor is $MIN_TESTS (coverage removed? — if 'bun test exited 0' also failed, this is a consequence of that, not a cause)"
 else
   pass "test count $n_pass >= floor $MIN_TESTS"
 fi
 
 if [[ "$n_expect" -lt "$MIN_ASSERTIONS" ]]; then
-  fail "only $n_expect expect() calls, floor is $MIN_ASSERTIONS (assertions gutted?)"
+  fail "only $n_expect expect() calls, floor is $MIN_ASSERTIONS (assertions gutted? — if 'bun test exited 0' also failed, this is a consequence of that, not a cause)"
 else
   pass "assertion count $n_expect >= floor $MIN_ASSERTIONS"
 fi
 
 # (the EXIT trap removes $LOG)
+
+# THE GATE'S OWN ANTI-VACUITY FLOOR. Every control above routes through pass()/fail(),
+# so both are a single point of silence: neutering them to no-ops printed
+# "=== 0 passed, 0 failed ===" and exited 0, and the realistic half-mutation
+# (fail() still prints, stops counting) printed "[FAIL] manifest has only 0 entries"
+# and STILL exited 0, because the only terminal below reads $FAIL. CI reads the exit
+# code. This file's whole thesis is that a suite asserting nothing is
+# indistinguishable from one that passed — that applies to this file too.
+# Ratchet with the check count, exactly like MIN_TESTS.
+MIN_CHECKS=11
+if [[ "$((PASS + FAIL))" -lt "$MIN_CHECKS" ]]; then
+  printf '  [FAIL] only %d checks dispatched, floor is %d — the gate itself went silent\n' \
+    "$((PASS + FAIL))" "$MIN_CHECKS"
+  FAIL=$((FAIL + 1))
+fi
 
 echo "=== $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]] || exit 1

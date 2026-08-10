@@ -599,6 +599,14 @@ describe("#6772 F1-F5 — folded scalars parse (permissive)", () => {
   // the literal indicator — i.e. it reproduces #6772 exactly.
   const INDICATORS = [">", ">-", ">+"] as const;
   const TAILS = ["", " # trailing comment"] as const;
+  // These two arrays generate 6 tests from ONE backtick `test(` site, and `sort -u`
+  // collapses all 6 to a single manifest entry — so the named-test manifest
+  // identifies the TEMPLATE, not the instances, and shrinking INDICATORS to [">"]
+  // deletes the `>-`/`>+` regression shapes with the manifest wholly unaffected.
+  // Pin the generator's shape here, where it lives.
+  test("the generated fold-indicator matrix is pinned (manifest sees one entry for all six)", () => {
+    expect(INDICATORS.length * TAILS.length, "generated parity coverage is pinned").toBe(6);
+  });
   const EXPECTED_F =
     'curl -fsS -o /dev/null -w "%{http_code}" --max-time 10 https://app.soleur.ai/api/health';
 
@@ -1234,6 +1242,7 @@ describe("#7393 GATE — executable parity between the runtime and its TS mirror
 
   test("the gate and rejectReason agree on verdict and reason for every shape", () => {
     let compared = 0;
+    const seenShapes = new Set<string>();
     for (const cmd of PARITY_CASES) {
       // Skip BEFORE spawning: `ssh` and the shell-active reject live in the
       // classifier, not the gate, so the gate has no opinion on them. Skipping
@@ -1242,6 +1251,7 @@ describe("#7393 GATE — executable parity between the runtime and its TS mirror
       const gate = runGate(cmd);
       const mirror = rejectReason(cmd);
       compared++;
+      seenShapes.add(cmd);
       expect(gate.rejected, `verdict mismatch for: ${JSON.stringify(cmd)}`).toBe(mirror !== null);
       if (gate.rejected) {
         expect(gate.reason, `reason mismatch for: ${JSON.stringify(cmd)}`).toBe(mirror);
@@ -1262,21 +1272,48 @@ describe("#7393 GATE — executable parity between the runtime and its TS mirror
     // edit reddens immediately. So the floor must be ABSOLUTE, and it ratchets
     // upward only — never derived from the table it guards.
     const MIN_COMPARED = 22;
+    // DISTINCT shapes, not iterations: `compared` increments once per surviving
+    // row regardless of what the row IS, so replacing the six separator rows with
+    // six duplicate reject-rows held the floor at 22 — and deleting `export
+    // LC_ALL=C` from the runtime of record was then green again. That is this
+    // test's own headline exploit, one level down.
     expect(
-      compared,
-      "the harness must actually compare pairs, not just iterate rows",
+      seenShapes.size,
+      "the harness must compare DISTINCT shapes, not repeat one row",
     ).toBeGreaterThanOrEqual(MIN_COMPARED);
+
+    // The separator rows are the only thing that reddens on an LC_ALL=C deletion,
+    // so pin them by identity rather than trusting the count to imply them.
+    for (const sep of ["\u2028", "\u00a0", "\u3000", "\u2009"]) {
+      expect(
+        PARITY_CASES.some((c) => c.includes(sep)),
+        `a row carrying U+${sep.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")} must exist`,
+      ).toBe(true);
+    }
+    // And assert the runtime property those rows exist to protect, directly.
+    expect(
+      readFileSync(GATE_PATH, { encoding: "utf8" }),
+      "the gate pins LC_ALL=C; without it U+2028 is accepted",
+    ).toMatch(/^export LC_ALL=C$/m);
   });
 
   test("the skip predicate is pinned — widening it cannot silently shrink coverage", () => {
-    // SKIPPED_BY_DESIGN_COUNT was pinned but never asserted, so it bought a row
-    // of slack instead of spending it: widening the predicate by one row stayed
-    // green. Assert the count EXACTLY, in both directions.
+    // Every skipped row must be skipped for a SANCTIONED reason. An exact count
+    // was tried first and rejected: it false-REDs on a legitimate `ssh` row
+    // addition — the very shape the predicate's ssh alternative exists for — while
+    // the absolute MIN_COMPARED floor above already catches a widened predicate
+    // (widening drops `compared` below 22). Reason-pinning catches the case the
+    // count was actually for: a predicate rewritten to skip an UNSANCTIONED shape.
     const skipped = PARITY_CASES.filter((c) => SKIPPED_BY_DESIGN.test(c));
-    expect(skipped.length, "the skip set is pinned exactly").toBe(SKIPPED_BY_DESIGN_COUNT);
-    // And name WHICH row, so a predicate rewritten to skip a different row than
-    // the one we sanctioned is a red diff rather than an equal count.
-    expect(skipped[0], "the sanctioned skip is the embedded-newline block scalar").toContain("\n");
+    expect(skipped.length, "at least the sanctioned skip is present").toBeGreaterThanOrEqual(
+      SKIPPED_BY_DESIGN_COUNT,
+    );
+    for (const c of skipped) {
+      expect(
+        /\n/.test(c) || /(^|[\s/])ssh([\s]|$)/.test(c),
+        `unsanctioned skip (predicate widened?): ${JSON.stringify(c)}`,
+      ).toBe(true);
+    }
   });
 
   test("the parity table is non-vacuous — it contains both accepts and rejects", () => {
@@ -1787,7 +1824,9 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
     expect(
       execLine,
       "nothing may sit between the mount array and env -i, and -i must survive",
-    ).toMatch(/bwrap "\$\{BWRAP_PROC\[@\]\}" "\$\{BWRAP_ARGS\[@\]\}" \/usr\/bin\/env -i PATH=/);
+    ).toMatch(
+      /bwrap "\$\{BWRAP_PROC\[@\]\}" "\$\{BWRAP_ARGS\[@\]\}" \/usr\/bin\/env -i PATH=\/usr\/local\/bin:\/usr\/bin:\/bin HOME=\/tmp timeout 15s bash -c "\$CMD"/,
+    );
   });
 
   test("F2b AC2 — the sandbox mount set is CLOSED, not merely populated", () => {
@@ -1817,7 +1856,7 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
     //     predicate, not a closure one: `--ro-bind /home /home` satisfies it and
     //     restores the operator's real $HOME wholesale. Measured against live
     //     bwrap with that single line added, an absolute-path read of
-    //     ~/.doppler/.doppler.yaml returned the 294-byte service token and
+    //     the Doppler config under ~/.doppler/ returned the 294-byte token and
     //     ~/.ssh listed private keys — inside the sandbox built to remove them,
     //     with this suite reporting 115/0 green and the integrity gate 7/7.
     //     Read-only is sufficient to EXFILTRATE: Check 10 prints probe stdout,
@@ -1842,9 +1881,36 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
     //     by `FOO_BIND=(--ro-bind /home /home)` declared outside the window and
     //     expanded inside it.
     expect(
-      [...new Set([...win.matchAll(/"\$\{(\w+)\[@\]\}"/g)].map((m) => m[1]))].sort(),
+      [...new Set([...win.matchAll(/\$\{(\w+)\[@\]\}/g)].map((m) => m[1]))].sort(),
       "only GIT_BIND may inject mounts by expansion",
     ).toEqual(["GIT_BIND"]);
+    // Quotes are NOT part of the pattern above: requiring them made an UNQUOTED
+    // `${FOO_BIND[@]}` inside the window invisible to this very assertion —
+    // the exact case its comment describes, defeated by dropping two characters.
+    // Unquoted expansion is also a word-splitting bug, so pin it separately.
+    expect(
+      [...win.matchAll(/(.?)\$\{\w+\[@\]\}(.?)/g)].map((m) => m[1] + m[2]),
+      "every array expansion in the mount vector must be double-quoted",
+    ).toEqual(Array((win.match(/\$\{\w+\[@\]\}/g) ?? []).length).fill('""'));
+
+    // 1e. The arrays that reach the exec line must be ASSIGNED exactly where we
+    //     think. 1d pins WHICH names may expand; it does not bound how many times
+    //     each is ASSIGNED, and both arrays are assigned OUTSIDE sandboxWindow().
+    //     Measured, all three of these left the suite green: a second
+    //     `GIT_BIND=(--ro-bind /home /home)` after the `fi`; an `else` branch
+    //     assigning the same; and `BWRAP_PROC=(--proc /proc --ro-bind /home /realhome)`.
+    //     The destination matters — `--tmpfs /home` does not shadow /realhome, and a
+    //     live bwrap replay reached the Doppler token, ~/.ssh and the gh token store.
+    const gitBindAssigns = [...body.matchAll(/^\s*GIT_BIND=\((.*)\)\s*$/gm)].map((m) => m[1]);
+    expect(
+      gitBindAssigns,
+      "GIT_BIND is assigned exactly twice: the empty init and the conditional ro-bind",
+    ).toEqual(["", '--ro-bind "$GIT_COMMON_DIR" "$GIT_COMMON_DIR"']);
+    const procAssigns = [...body.matchAll(/^\s*BWRAP_PROC=\((.*)\)\s*$/gm)].map((m) => m[1]);
+    expect(
+      procAssigns,
+      "BWRAP_PROC carries --proc only; its degrade form is empty",
+    ).toEqual(["--proc /proc", ""]);
 
     // 2. The arrays are ASSIGNED, never appended to. `uniqueIndex` pins the
     //    assignment; nothing stopped a later `+=`.

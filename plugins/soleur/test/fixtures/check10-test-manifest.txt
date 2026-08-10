@@ -111,6 +111,7 @@ surface 2b — discoverability_test sub-fields agree across canonical + all 3 te
 surface 3 (deepen-plan/SKILL.md §4.7) — field enumeration set-equals canonical
 surface 4 (AGENTS.rules.md rule) — count parity + no-SSH invariant (names intentionally absent)
 the gate and rejectReason agree on verdict and reason for every shape
+the generated fold-indicator matrix is pinned (manifest sees one entry for all six)
 the parity table is non-vacuous — it contains both accepts and rejects
 the skip predicate is pinned — widening it cannot silently shrink coverage
 triple-SSOT: preflight + deepen-plan literals are byte-identical (whitespace-normalized)

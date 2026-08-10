@@ -30,7 +30,7 @@ The four instances:
 3. Guards counted ROWS in a table instead of COMPARISONS actually performed.
 4. A test literally named *"the sandbox mount set is CLOSED, not merely populated"* asserted only
    that binds were READ-ONLY. `--ro-bind /home /home` satisfies that. Measured against live
-   bwrap, that one added line makes `~/.doppler/.doppler.yaml` readable (294 bytes — the live
+   bwrap, that one added line makes the Doppler config under `~/.doppler/` readable (294 bytes — the live
    service token) and lists `~/.ssh` private keys, **with the suite reporting 115/0 green and the
    anti-vacuity gate reporting 7/7**.
 
@@ -146,6 +146,36 @@ measurement twice (exit code, then credential *discovery* presented as *reachabi
 circular trust argument (`git ls-files` interrogates the attacker's own PR-head index, and
 preflight runs pre-merge). Both were caught before the plan froze and are recorded in the plan's
 Sharp Edges.
+
+## Round five: the rate still had not decayed
+
+A six-agent panel on round four's fixes found more, four of them in the fixes themselves:
+
+- **The closure guard had an open source.** `sandboxWindow()` scopes to `BWRAP_ARGS=( … )`, but
+  `GIT_BIND` and `BWRAP_PROC` are ASSIGNED outside it and EXPANDED inside it. A second
+  `GIT_BIND=(--ro-bind /home /home)`, an `else` branch, or
+  `BWRAP_PROC=(--proc /proc --ro-bind /home /realhome)` each left the suite green — with a live
+  bwrap replay reaching the Doppler token, SSH keys and the gh token store. Closure over a window
+  that CONTAINS an indirection is not closure.
+- **The exec anchor stopped at `PATH=`**, so `DOPPLER_TOKEN="$DOPPLER_TOKEN"` could be appended
+  before `HOME=`, forwarding past `env -i` — the control the same commit had just documented as
+  load-bearing.
+- **The anti-vacuity gate had no floor at its own chokepoint.** Neutering `pass()`/`fail()`
+  printed `0 passed, 0 failed` and exited 0; the half-mutation printed a `[FAIL]` line and STILL
+  exited 0. Every control routed through two unguarded one-line functions.
+- **`test`/`it`/`describe` are rebindable.** `const it = test.failing;` has no `(` after
+  `.failing`, so the source grep misses it, and bun scores a failing `.failing` test as a PASS —
+  invisible to `n_skip` and `n_todo` alike. Deleting `env -i` and aliasing one test reported 7/7.
+- **The distinct-shape gap.** `MIN_COMPARED` counted ITERATIONS, so six duplicate rows held the
+  floor at 22 while the separator coverage was deleted — after which removing `LC_ALL=C` from the
+  runtime was green again. The headline exploit, one level down.
+- **A required CI gate went red.** `credential-path-guard` forbids resolvable credential-file
+  path literals in docs, because such a path makes the harness auto-attach the real file into
+  model context. The learning file itself tripped it.
+
+The generalizing lesson is not "add these six guards". It is that **a guard's window, its
+chokepoint, and its identifiers are each a separate closure question**, and answering one does
+not answer the others.
 
 ## Verification
 

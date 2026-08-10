@@ -45,11 +45,11 @@ and had what looked like decisive evidence: under `HOME=$(mktemp -d)` the Dopple
 read `token_len=0` and `gh api user` returned `DENIED`. That evidence measured *credential
 discovery* and was presented as *credential reachability*. An absolute-path read of the
 same file returned a live **294-byte** service token regardless of `$HOME`, as did a glob
-across `/home/*/…`, as did `awk 'BEGIN{system(…)}'`. `env -i` and an ephemeral `$HOME`
+across `/home/*/…`, as did `awk 'BEGIN{system(…)}'`. `env -i` alone (without a filesystem boundary) and an ephemeral `$HOME`
 scrub environment **variables**; they do not remove **files or sockets**.
 
 The reachable surface, measured on the workstation: the Doppler CLI's live `dp.ct.*`
-token, `~/.ssh` private keys, `~/.netrc`, `~/.aws/credentials`, `~/.docker/config.json`,
+token, `~/.ssh` private keys, the netrc credential file, the AWS credentials file, the Docker config,
 and the `/run/user/<uid>/bus` D-Bus socket exposing the Secret Service keyring. A probe
 could also write `.git/hooks/pre-commit`, which `/soleur:ship` executes seconds later
 **with the operator's real `$HOME`** — turning a few-second credential window into a full
@@ -62,7 +62,19 @@ credential stores bound and the repository read-only. Three layers, in priority 
 `ssh` → declaration → verb gate → shell-active → sandbox → execute (see §Evaluation order).
 The distinction matters because layers 2 and 3 are not security controls.
 
-### Layer 1 — Authority: a bubblewrap filesystem boundary
+### Layer 1 — Authority: a bubblewrap filesystem AND environment boundary
+
+> **2026-08-10 amendment (#7397 round 4).** `env -i` is **load-bearing**, not the redundant
+> hygiene an earlier revision of this ADR and of `preflight/SKILL.md` described. Measured:
+> bwrap does **not** scrub the environment — a variable set in preflight's env survives into
+> the sandbox verbatim (`leaked=<value>`), and with `env -i` it does not (`leaked=<scrubbed>`).
+> `DOPPLER_TOKEN`, `GH_TOKEN` and `ANTHROPIC_API_KEY` live in the environment ONLY, with no
+> on-disk store to unmount, so every row of the efficacy table below — which probes files and
+> sockets — is structurally blind to them. With `curl` allowlisted and `--share-net` retaining
+> egress, dropping `-i` exfiltrates every credential in preflight's environment. It is pinned
+> by an anchored whole-preamble assertion in the F2 test; the Context paragraph's remark about
+> `env -i` is a claim about its **insufficiency alone**, never about its necessity.
+
 
 `/usr` and `/etc` bound read-only; `/home`, `/root`, `/run`, `/tmp` and `/var/tmp` replaced
 with tmpfs; the resolved `/etc/resolv.conf` target rebound; the repository bound
@@ -210,8 +222,10 @@ is why it is counted rather than reordered.
 
 ### Evaluation order
 
-`ssh` reject → `credentials_required` → verb allowlist + arg rules → program-path rule →
-shell-active-token reject → sandboxed execute. `ssh` stays first and is **not**
+`ssh` reject → `credentials_required` → verb allowlist → shell-active-token reject →
+sandboxed execute. (The arg rules and the program-path rule that earlier drafts listed
+here were deleted by the CTO ruling recorded in §Layer 2; this order now matches the
+shipped runtime and the §Decision preamble.) `ssh` stays first and is **not**
 overridable: `hr-observability-as-plan-quality-gate` mandates a no-SSH probe
 unconditionally.
 
