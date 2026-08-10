@@ -207,11 +207,11 @@ Soleur's architecture is designed to minimize data processing concerns:
 
 - **(a)** The Plugin executes entirely within the User's local CLI environment.
 
-  **Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c.
-
 - **(b)** No data is transmitted to Soleur-operated servers.
 - **(c)** No telemetry, analytics, or usage tracking is embedded in the Plugin itself.
 - **(d)** The Plugin does not establish network connections to Soleur-controlled endpoints.
+
+**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c.
 
 ### 3.2 User-Side Security Recommendations
 
@@ -439,9 +439,9 @@ Users may uninstall the Plugin at any time. Upon removal:
 - **(a)** All Local Data remains on the User's filesystem under their sole control.
 - **(b)** Soleur does not retain any copy of Local Data, as no such data was ever transmitted to Soleur.
 
-  **Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c.
-
 - **(c)** Users are responsible for deleting or retaining Local Data according to their own data retention policies.
+
+**Scope.** This section describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in Section 2.1c.
 
 ### 10.2 Docs Site and Repository Data
 
