@@ -45,11 +45,11 @@ operator-stated scope are recorded in `decision-challenges.md` and were delibera
 
 ## Phase 4 — Sibling-suite probe
 
-- [ ] 4.1 **`_tc_scan_procs` single-walk enumerator + thin `tc_siblings`/`tc_suite_siblings` filters** — NOT a `mode` parameter (it cannot express 4.3's cross-bucket cancellation without two non-atomic walks). Move the run matcher **byte-unchanged** with its rejected-alternatives comment block.
-- [ ] 4.2 Add the `suite` matcher (`*.test.sh`, or `test-*.sh` and not `test-all.sh`; or shell `argv[0]` + a whitespace-free later token). Document the three scope edges inline (the `test-all.sh` exclusion; `test-contention.sh` matching latently; `test_*.sh` underscore + `timeout`/`env` `argv[0]` being under-broad).
-- [ ] 4.3 Cancel run-children by **ancestry/pgid** (`_tc_ppid` walk under the 64-step guard, `_tc_pgrp` fallback) — **not** cwd. Do **one** `/proc` walk, classifying each pid into both buckets.
-- [ ] 4.4 Emit the count line, per-pid detail lines, and `BANNER SIBLING_SUITE_DETECTED`. Leave `SIBLING_RUN_DETECTED` untouched.
-- [ ] 4.5 Extend `make_fake_proc` for parameterisable `argv[0]` **and ppid/pgrp** (both hardcoded 0 today); add T9, T10, T11, **T11b** (`env`-wrapped run), **T11c** (`<unreadable>`, asserting the literal appears first so it cannot pass vacuously), **T11d** (over-cancellation control), T12, T13; raise the 40-assertion floor.
+- [x] 4.1 **`_tc_scan_procs` single-walk enumerator + thin `tc_siblings`/`tc_suite_siblings` filters** — NOT a `mode` parameter (it cannot express 4.3's cross-bucket cancellation without two non-atomic walks). Move the run matcher **byte-unchanged** with its rejected-alternatives comment block.
+- [x] 4.2 Add the `suite` matcher (`*.test.sh`, or `test-*.sh` and not `test-all.sh`; or shell `argv[0]` + a whitespace-free later token). Document the three scope edges inline (the `test-all.sh` exclusion; `test-contention.sh` matching latently; `test_*.sh` underscore + `timeout`/`env` `argv[0]` being under-broad).
+- [x] 4.3 Cancel run-children by **ancestry/pgid** (`_tc_ppid` walk under the 64-step guard, `_tc_pgrp` fallback) — **not** cwd. Do **one** `/proc` walk, classifying each pid into both buckets.
+- [x] 4.4 Emit the count line, per-pid detail lines, and `BANNER SIBLING_SUITE_DETECTED`. Leave `SIBLING_RUN_DETECTED` untouched.
+- [x] 4.5 Extend `make_fake_proc` for parameterisable `argv[0]` **and ppid/pgrp** (both hardcoded 0 today); add T9, T10, T11, **T11b** (`env`-wrapped run), **T11c** (`<unreadable>`, asserting the literal appears first so it cannot pass vacuously), **T11d** (over-cancellation control), T12, T13; raise the 40-assertion floor.
 
 ## Phase 5 — Declared time budgets
 
@@ -61,14 +61,14 @@ operator-stated scope are recorded in `decision-challenges.md` and were delibera
 
 ## Phase 6 — Fold-in consumers
 
-- [ ] 6.1 `main-health-monitor.yml`: **shape-anchored** `^\[KILLED\]` grep (the file contains arbitrary suite stdout) into an **initialised** flag, **appending hits to `SUMMARY`** with the `--- (tail) ---` separator and a `cut -c1-500` length bound; fourth arm; **per-arm `ACTIONS` block** (the current one is hardcoded and tells the operator to revert); **`${LEDE}` in the comment path**; fix the pre-existing "usually a step or job timeout" LEDE; leave `grep -E '^RED |^\[FAIL\]'` byte-unchanged.
-- [ ] 6.2 `plugins/soleur/test/main-health-monitor-workflow.test.sh`: add assertion (8b) (distinct variable + SUMMARY append + cause-free fourth arm); leave (8) unmodified.
-- [ ] 6.3 `plugins/soleur/skills/work/SKILL.md` — **three** edits: §663 (rc third arm + 2nd banner enumeration + `^\[KILLED\]` in its grep), §745 (reap discriminator), §743 (banner enumeration).
-- [ ] 6.4 `plugins/soleur/skills/test-fix-loop/SKILL.md` — **four** sites: pre-loop gate (read rc, not "all tests pass"), parse step (define "non-zero exit, nothing parseable"), **iteration-delta arithmetic** (count must be `failures + killed`; otherwise a FAILED→KILLED transition reads as improvement and the return jump reads as Regression → `git reset --hard HEAD` **discards real fixes**), and a terminating row.
-- [ ] 6.5 `plugins/soleur/scripts/grok-pre-push-gate.sh`: `run_step` captures rc; exit 3 → `[UNRESOLVED]`, still non-zero.
-- [ ] 6.6 `plugins/soleur/skills/one-shot/SKILL.md`: poll the marker *shape* + rc file; state the green/killed/reap trichotomy (a killed run currently reads as a harness reap).
+- [x] 6.1 `main-health-monitor.yml`: **shape-anchored** `^\[KILLED\]` grep (the file contains arbitrary suite stdout) into an **initialised** flag, **appending hits to `SUMMARY`** with the `--- (tail) ---` separator and a `cut -c1-500` length bound; fourth arm; **per-arm `ACTIONS` block** (the current one is hardcoded and tells the operator to revert); **`${LEDE}` in the comment path**; fix the pre-existing "usually a step or job timeout" LEDE; leave `grep -E '^RED |^\[FAIL\]'` byte-unchanged.
+- [x] 6.2 `plugins/soleur/test/main-health-monitor-workflow.test.sh`: add assertion (8b) (distinct variable + SUMMARY append + cause-free fourth arm); leave (8) unmodified.
+- [x] 6.3 `plugins/soleur/skills/work/SKILL.md` — **three** edits: §663 (rc third arm + 2nd banner enumeration + `^\[KILLED\]` in its grep), §745 (reap discriminator), §743 (banner enumeration).
+- [x] 6.4 `plugins/soleur/skills/test-fix-loop/SKILL.md` — **four** sites: pre-loop gate (read rc, not "all tests pass"), parse step (define "non-zero exit, nothing parseable"), **iteration-delta arithmetic** (count must be `failures + killed`; otherwise a FAILED→KILLED transition reads as improvement and the return jump reads as Regression → `git reset --hard HEAD` **discards real fixes**), and a terminating row.
+- [x] 6.5 `plugins/soleur/scripts/grok-pre-push-gate.sh`: `run_step` captures rc; exit 3 → `[UNRESOLVED]`, still non-zero.
+- [x] 6.6 `plugins/soleur/skills/one-shot/SKILL.md`: poll the marker *shape* + rc file; state the green/killed/reap trichotomy (a killed run currently reads as a harness reap).
 - [x] 6.7 `AGENTS.rules.md`: one short clause on `wg-when-a-test-runner-crashes-segfault-oom`. **Budget-gated** — `B_ALWAYS`=44400 vs 46000 ratchet; keep under ~150 bytes, re-run `lint-agents-rule-budget.py`, else carry the ladder in ADR-175 + skills only.
-- [ ] 6.8 No-edit checks recorded: `git-worktree/SKILL.md` process-table sentence; `review/SKILL.md` anchor-rule example.
+- [x] 6.8 No-edit checks recorded: `git-worktree/SKILL.md` process-table sentence; `review/SKILL.md` anchor-rule example.
 
 ## Phase 7 — ADR + deferral
 
@@ -78,10 +78,10 @@ operator-stated scope are recorded in `decision-challenges.md` and were delibera
 ## Phase 8 — Verification
 
 - [x] 8.1 `bash scripts/test-all-killed-classification.test.sh`
-- [ ] 8.2 `bash scripts/test-contention.test.sh`
+- [x] 8.2 `bash scripts/test-contention.test.sh`
 - [x] 8.3 `bash scripts/test-all-infra-coverage-notice.test.sh`
 - [x] 8.4 `bash scripts/lint-orphan-test-suites.sh`
 - [x] 8.5 `bash scripts/lint-diagnosis-claims.sh` (≤ highwater 1; gates both edited surfaces)
 - [x] 8.6 `python3 scripts/lint-shell-capture-exit.py --baseline scripts/lint-shell-capture-exit.baseline.txt`
-- [ ] 8.7 `bash plugins/soleur/test/main-health-monitor-workflow.test.sh`
+- [x] 8.7 `bash plugins/soleur/test/main-health-monitor-workflow.test.sh`
 - [ ] 8.8 Full-suite exit gate on a clean tree; read the terminal marker.
