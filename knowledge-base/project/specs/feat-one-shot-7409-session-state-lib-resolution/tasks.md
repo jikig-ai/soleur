@@ -87,7 +87,7 @@ Anchor: `${CLAUDE_PLUGIN_ROOT:-<preserved-anchor>}/scripts/lib/session-state.sh`
 
 ## Phase 6 — Verification
 
-- [ ] **6.1** `bash scripts/test-all.sh` exits 0, and its output **names** `plugins/soleur/test/session-state.test.sh` (R6 — it never has). Pin the same `TEST_GROUP` shard for any comparison.
+- [x] **6.1** `bash scripts/test-all.sh` exits 0, and its output **names** `plugins/soleur/test/session-state.test.sh` (R6 — it never has). Pin the same `TEST_GROUP` shard for any comparison.
 - [x] **6.2** `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` (the `npm run -w` form fails — no root `workspaces`).
 - [x] **6.3** `bash plugins/soleur/test/c4-model-freshness.test.sh`; `./node_modules/.bin/vitest run test/c4-code-syntax.test.ts test/c4-render.test.ts` from `apps/web-platform`.
 - [x] **6.4** Byte-identity (AC10): `git show origin/main:.claude/hooks/lib/session-state.sh | diff - plugins/soleur/scripts/lib/session-state.sh` differs only in Phase 1.5 comments.
