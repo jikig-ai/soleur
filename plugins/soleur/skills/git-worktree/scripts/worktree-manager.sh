@@ -1256,6 +1256,66 @@ fetch_origin_branch_base() {
   fi
 }
 
+# Make an arbitrary, possibly hostile string safe to interpolate into a
+# `key=value` SOLEUR_* marker line (#7408 review).
+#
+# Extracted from cleanup_orphan_worktree_dirs's failure summary, which has
+# carried this rule — and the reasoning for it — since #7102. It was a local
+# idiom there; every later marker that interpolated user-derived text had to
+# remember to re-implement it, and the #7408 markers did not. Now there is one
+# definition, so a new emitter inherits the property instead of re-deriving it.
+#
+# Positive ALLOWLIST, never a denylist: a denylist of the characters that break
+# the line format ("\n\r\t and space) still admits \v, \f, ESC and U+2028/U+2029
+# — the last of which splits lines in JSON log viewers even though bash's own
+# `split("\n")` does not (cq-regex-unicode-separators-escape-only). Closed sets
+# are the only ones that stay closed as sinks change.
+#
+# This is not paranoia about a theoretical input: `create` takes $1 verbatim and
+# emits a lease marker BEFORE `git worktree add` ever validates it as a refname,
+# so a caller can pass an embedded newline and forge a second, wedge-shaped
+# marker line on stdout. Measured against the real script during review.
+#
+# 64-char cap matches the pre-existing call site: a marker field is a diagnostic
+# handle, not a payload.
+_sanitize_marker_field() {
+  local s="${1//[^A-Za-z0-9._-]/_}"
+  printf '%s' "${s:0:64}"
+}
+
+# Derive the on-disk worktree name from a git branch name (#7408).
+#
+# Git refnames may contain `/`; worktree DIRECTORIES may not, because this
+# script's consumers all assume a flat two-level layout:
+#   - cleanup_orphan_worktree_dirs globs exactly one level ("$WORKTREE_DIR"/*/)
+#   - cleanup_merged_worktrees keys leases on `basename "$worktree_path"`
+#   - scripts/test-all.sh documents `cd .worktrees/<name> && bash ../../…`
+#   - _validate_worktree_name rejects `/`, so a raw refname cannot be a lease key
+#
+# cleanup_merged_worktrees has always applied this transform inline and said so
+# in a comment. The PRODUCER never did — so for any slash-bearing branch the
+# worktree nested three levels deep, ran UNLEASED, and its unregistered
+# intermediate was reaped with `rm -rf`, taking uncommitted work with it.
+#
+# This helper exists so the producer and the consumer cannot desynchronize: the
+# lease key and the reaper's `basename` now agree BY CONSTRUCTION rather than by
+# two independent copies of `tr` staying in step.
+#
+# Pure transform. Never returns non-zero — a derivation that can fail is a
+# derivation every call site has to guard, and `tr` cannot fail on a non-empty
+# string. Callers that need to know whether the RESULT is lease-keyable ask
+# _validate_worktree_name; that is a separate question with a separate answer
+# (see _acquire_worktree_lease's reason=name-not-keyable branch).
+#
+# NOT a general sanitizer: `tr '/' '-'` is identity for every non-slash name,
+# which is what makes this change identity for every worktree already on disk.
+# A refname may legally contain other characters _validate_worktree_name
+# rejects (`feat+foo`, `fix(scope)/bar`, `user@host/topic`); those still run
+# unleased, and the marker now says so explicitly instead of guessing.
+_safe_worktree_name() {
+  printf '%s' "$1" | tr '/' '-'
+}
+
 # Acquire the session lease for a worktree, with the diagnostics a destructive
 # path requires. Used by create_worktree() and create_for_feature() at four
 # sites; extracted so the protocol (sweep -> acquire -> VERIFY -> trap) cannot
@@ -1295,11 +1355,52 @@ _acquire_worktree_lease() {
     || acquired=false
 
   if [[ "$acquired" != "true" ]]; then
-    # Most common real cause: a branch name the lease layer cannot key on
-    # (_validate_worktree_name rejects anything outside [A-Za-z0-9._-], so any
-    # slash-bearing name lands here and runs UNLEASED).
-    echo "SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED branch=$branch_name site=$site reason=rc-nonzero"
-    headless_or_stderr warn "could not acquire lease for $branch_name — this worktree is REAPABLE"
+    # Discriminate the two causes rather than reporting one for both. Before
+    # #7408 every slash-bearing branch landed here under a flat `rc-nonzero`,
+    # which is why "the key is unusable" and "the lease layer misbehaved" were
+    # indistinguishable in telemetry — the single most common cause was hiding
+    # inside the generic bucket.
+    #
+    # Callers now pass an already-slugified key, so `name-not-keyable` means the
+    # slug transform was INSUFFICIENT (a refname carrying some other character
+    # outside [A-Za-z0-9._-], e.g. `feat+foo` or `fix(scope)/bar`) — a residual
+    # class, not the slash case. Such a worktree still runs unleased, but it is
+    # NOT reapable: the reaper only deletes directories that are unregistered
+    # AND `.git`-less, and this one is registered.
+    local fail_reason="rc-nonzero"
+    # `declare -F` guard: _validate_worktree_name is a PRIVATE symbol in
+    # session-state.sh reached across the plugin -> .claude/hooks boundary, and
+    # the _SS_LIB_MISSING stub block does not define it. Unreachable today (the
+    # stub path returns above), but if that ordering ever inverts, an absent
+    # function yields 127 -> truthy -> EVERY failure mislabelled
+    # `name-not-keyable`. That is the exact mislabelling this split exists to
+    # remove, inverted and silent. Fail toward the generic bucket instead.
+    if declare -F _validate_worktree_name >/dev/null 2>&1 \
+      && ! _validate_worktree_name "$branch_name" 2>/dev/null; then
+      fail_reason="name-not-keyable"
+    fi
+    # `key=`, not the old field name: every caller passes the SLUG (the lease
+    # key), so a failure on `ci/rule-metrics` used to report the slugified form
+    # under a field labelled as a branch — a string that resolves to no ref, so
+    # a responder could not `git branch -D` it or `gh pr list --head` it. This
+    # marker is in WEDGE_RE, i.e. it pages; the field name has to say what the
+    # value actually is.
+    #
+    # Deliberately NOT spelling the old `<field>=<value>` pair literally here:
+    # the Case-19 vocabulary guard in worktree-manager-bare-in-dotgit-layout
+    # greps this file's BODY for that token shape and cannot tell an emitter
+    # from a comment, so quoting the example verbatim registered a phantom
+    # vocabulary value and reddened a guard that was working correctly.
+    echo "SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED key=$(_sanitize_marker_field "$branch_name") site=$site reason=$fail_reason"
+    if [[ "$fail_reason" == "name-not-keyable" ]]; then
+      # Deliberately NOT "REAPABLE". The reaper deletes only directories that are
+      # unregistered AND `.git`-less; this worktree is registered, so it is
+      # unleased but not reapable. The old blanket wording contradicted the
+      # comment directly above it.
+      headless_or_stderr warn "could not key a lease on '$branch_name' (characters outside [A-Za-z0-9._-]) — it runs UNLEASED but is not reapable; a sibling cleanup-merged may still reap it once merged"
+    else
+      headless_or_stderr warn "could not acquire lease for $branch_name — this worktree is REAPABLE"
+    fi
     return 1
   fi
 
@@ -1310,7 +1411,7 @@ _acquire_worktree_lease() {
   local lease_path=""
   lease_path="$(_lease_file "$branch_name" 2>/dev/null || true)"
   if [[ -z "$lease_path" || ! -f "$lease_path" ]]; then
-    echo "SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED branch=$branch_name site=$site reason=file-absent"
+    echo "SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED key=$(_sanitize_marker_field "$branch_name") site=$site reason=file-absent"
     headless_or_stderr warn "acquire_lease reported success but no lease file exists for $branch_name — this worktree is REAPABLE"
     return 1
   fi
@@ -1616,10 +1717,41 @@ create_worktree() {
     exit 1
   fi
 
-  local worktree_path="$WORKTREE_DIR/$branch_name"
+  # Derived ONCE and used for every on-disk/lease identity below. The raw
+  # $branch_name stays the git ref (see `git worktree add -b` further down):
+  # the slug is a filesystem and lease-key concern, never a ref concern.
+  local safe_branch
+  safe_branch="$(_safe_worktree_name "$branch_name")"
+  local worktree_path="$WORKTREE_DIR/$safe_branch"
 
   # Check if worktree already exists
   if [[ -d "$worktree_path" ]]; then
+    # SLUG-COLLISION GUARD (#7408 review). The slug transform is many-to-one:
+    # `ci/foo` and `ci-foo` both resolve here. Without this, `create ci/foo` on a
+    # box that already has `.worktrees/ci-foo` (branch `ci-foo`) printed only
+    # "Worktree already exists", switched into it, returned 0 — and NEVER created
+    # refs/heads/ci/foo. Every later commit landed on the wrong branch. Measured.
+    #
+    # Scoped deliberately to the case THIS change introduced ($safe_branch differs
+    # from the requested name, i.e. slugification actually happened). When no
+    # slugification occurred, a directory-vs-branch divergence is the PRE-EXISTING
+    # condition plan R2 examined and declined to abort on — it is the resume path
+    # `one-shot`/`work` take under --yes, and a divergent worktree exists on the
+    # operator's machine today, so aborting there would break a live workflow.
+    # That case stays a warning; only the new collision refuses.
+    local existing_branch=""
+    existing_branch="$(git -C "$worktree_path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")"
+    if [[ -n "$existing_branch" && "$existing_branch" != "$branch_name" ]]; then
+      echo "SOLEUR_WORKTREE_SLUG_COLLISION dir=$(_sanitize_marker_field "$(basename "$worktree_path")") requested=$(_sanitize_marker_field "$branch_name") actual=$(_sanitize_marker_field "$existing_branch") reason=directory-holds-different-branch"
+      if [[ "$safe_branch" != "$branch_name" ]]; then
+        echo -e "${RED}Refusing: $worktree_path holds branch '$existing_branch', not '$branch_name'.${NC}" >&2
+        echo -e "${RED}'$branch_name' slugifies to '$safe_branch', which collides with an existing worktree.${NC}" >&2
+        echo -e "${RED}Creating it here would silently put you on '$existing_branch' and never create '$branch_name'.${NC}" >&2
+        echo -e "${YELLOW}Pick a non-colliding branch name, or remove $worktree_path first.${NC}" >&2
+        exit 1
+      fi
+      headless_or_stderr warn "worktree $worktree_path is on branch '$existing_branch', not '$branch_name' — entering it anyway (pre-existing divergence, see #7408 review)"
+    fi
     echo -e "${YELLOW}Worktree already exists at: $worktree_path${NC}"
     local response="n"
     if [[ "$YES_FLAG" == "true" ]]; then
@@ -1644,8 +1776,12 @@ create_worktree() {
       # ownership check, so re-acquiring rewrites pid/started_at — arming the
       # release trap here would make THIS process release_lease's in-process
       # owner, and a SIGINT would then delete the INCUMBENT's protection.
-      _acquire_worktree_lease "$branch_name" create-reentry notrap || true
-      switch_worktree "$branch_name"
+      _acquire_worktree_lease "$safe_branch" create-reentry notrap || true
+      # $safe_branch, not $branch_name: switch_worktree resolves a DIRECTORY,
+      # and this is the resume path a re-entered one-shot/work run takes. Passing
+      # the raw refname here would send the resume down a path that does not
+      # exist for any slash-bearing branch.
+      switch_worktree "$safe_branch"
     fi
     return
   fi
@@ -1695,7 +1831,11 @@ create_worktree() {
   # and was destroyed before verify_worktree_created ran. Acquiring after
   # install_deps — which is where parity with create_for_feature originally put
   # it — would not have prevented that. Parity of FORM is not parity of COVER.
-  _acquire_worktree_lease "$branch_name" create trap || true
+  # Keyed on $safe_branch — the same string cleanup_merged_worktrees derives via
+  # `basename "$worktree_path"`. That agreement is the whole point of #7408:
+  # before it, create keyed the lease on the raw refname, which
+  # _validate_worktree_name rejects outright, so every slash branch ran UNLEASED.
+  _acquire_worktree_lease "$safe_branch" create trap || true
 
   echo -e "${BLUE}Creating worktree from $BASE_REF...${NC}"
   # shellcheck disable=SC2086 # intentional unquoted $TRACK_FLAG: empty string must elide
@@ -1766,8 +1906,17 @@ create_for_feature() {
   fi
 
   local branch_name="feat-$name"
-  local worktree_path="$WORKTREE_DIR/$branch_name"
-  local spec_dir="$worktree_path/knowledge-base/project/specs/$branch_name"
+  # `feat-$name` nests exactly like a raw refname whenever $name contains a
+  # slash (`feature a/b` -> `feat-a/b`), so this path needs the same derivation.
+  local safe_branch
+  safe_branch="$(_safe_worktree_name "$branch_name")"
+  local worktree_path="$WORKTREE_DIR/$safe_branch"
+  # Self-consistency: basename(spec_dir) == basename(worktree_path). This does
+  # NOT make the spec dir "agree with cleanup_merged_worktrees" — that function
+  # reads specs under $GIT_ROOT (the bare root) for pre-#2815 legacy layouts,
+  # while this one writes under $worktree_path. Different roots; they can never
+  # agree, for any branch name. See plan R6.
+  local spec_dir="$worktree_path/knowledge-base/project/specs/$safe_branch"
 
   # Check if worktree already exists
   if [[ -d "$worktree_path" ]]; then
@@ -1782,7 +1931,7 @@ create_for_feature() {
     # SIGINT delete a live incumbent's lease. Before PR #7373 this arm registered
     # no trap at all, so adding one would have been a NEW deletion path on a
     # previously-safe surface.
-    _acquire_worktree_lease "$branch_name" feature-reentry notrap || true
+    _acquire_worktree_lease "$safe_branch" feature-reentry notrap || true
     return 0
   fi
 
@@ -1818,7 +1967,7 @@ create_for_feature() {
   # Lease BEFORE the worktree exists — same reasoning as create_worktree, and
   # the same reap window (verify + config + identity + env copy + install_deps)
   # applies here. This placement is what parity should have meant.
-  _acquire_worktree_lease "$branch_name" feature trap || true
+  _acquire_worktree_lease "$safe_branch" feature trap || true
 
   echo -e "${BLUE}Creating worktree from $base_ref...${NC}"
   # shellcheck disable=SC2086 # intentional unquoted $track_flag: empty string must elide
@@ -1895,7 +2044,10 @@ create_for_feature() {
   echo ""
   echo "Next steps:"
   echo -e "  1. ${BLUE}cd $worktree_path${NC}"
-  echo -e "  2. Create spec: ${BLUE}knowledge-base/project/specs/$branch_name/spec.md${NC}"
+  # $safe_branch: this must name the directory that was actually created above,
+  # not the refname. Printing $branch_name here would hand the operator a path
+  # that does not exist for any slash-bearing branch.
+  echo -e "  2. Create spec: ${BLUE}knowledge-base/project/specs/$safe_branch/spec.md${NC}"
   echo -e "  3. Open draft PR: ${BLUE}bash $SCRIPT_DIR/worktree-manager.sh draft-pr${NC}"
   echo ""
 }
@@ -1958,9 +2110,26 @@ switch_worktree() {
     read -r worktree_name
   fi
 
-  local worktree_path="$WORKTREE_DIR/$worktree_name"
+  # Accept either form. Operators (and create_worktree's re-entry arm) may hand
+  # this a branch name; the directory is always the slug. Identity for every
+  # non-slash input, so an operator passing a directory name is unaffected.
+  local safe_name
+  safe_name="$(_safe_worktree_name "$worktree_name")"
+  local worktree_path="$WORKTREE_DIR/$safe_name"
+
+  # LEGACY-NESTED FALLBACK. Slugifying is what lets `switch <branch-name>` work,
+  # but it also removed the only access path to a worktree that is ALREADY nested
+  # from a pre-fix version — and "get in and commit your work" is step 0 of the
+  # migration runbook this very PR documents. Fall back to the raw name when the
+  # slug resolves nothing and the raw form does, so the runbook stays reachable.
+  if [[ ! -d "$worktree_path" && -d "$WORKTREE_DIR/$worktree_name" ]]; then
+    worktree_path="$WORKTREE_DIR/$worktree_name"
+    headless_or_stderr warn "entering LEGACY NESTED worktree at $worktree_path — migrate it per git-worktree SKILL.md §Sharp Edges; it is invisible to list/copy-env until moved"
+  fi
 
   if [[ ! -d "$worktree_path" ]]; then
+    # Echo what the OPERATOR typed, not the slug — reporting a string they did
+    # not type reads as a different error than the one they made.
     echo -e "${RED}Error: Worktree not found: $worktree_name${NC}"
     echo ""
     list_worktrees
@@ -1979,15 +2148,17 @@ switch_worktree() {
   # protection.
   #
   # Keyed on the DIRECTORY name, which is what cleanup_merged_worktrees looks up
-  # (`is_lease_active "$(basename "$worktree_path")"`). For everything create or
-  # feature made, that equals the branch name.
+  # (`is_lease_active "$(basename "$worktree_path")"`). Since #7408 that equals
+  # the SLUG of the branch name, not the branch name — derive it from the
+  # resolved path rather than from the argument, so this reads back exactly what
+  # the reaper will look up regardless of which form the caller passed.
   #
   # Non-fatal: switching is a navigation verb and must not fail because the lease
   # layer is unavailable. The marker inside the helper is what makes an
   # unprotected switch visible instead of silent.
-  _acquire_worktree_lease "$worktree_name" switch notrap || true
+  _acquire_worktree_lease "$(basename "$worktree_path")" switch notrap || true
 
-  echo -e "${GREEN}Switching to worktree: $worktree_name${NC}"
+  echo -e "${GREEN}Switching to worktree: $(basename "$worktree_path")${NC}"
   cd "$worktree_path"
   echo -e "${BLUE}Now in: $(pwd)${NC}"
 }
@@ -2011,7 +2182,16 @@ copy_env_to_worktree() {
       return 1
     fi
   else
-    worktree_path="$WORKTREE_DIR/$worktree_name"
+    # Slugified for the same reason switch_worktree is (#7408 review): this
+    # builds a path from operator-supplied input, and leaving it raw made the
+    # verb set inconsistent — `switch ci/x` resolved while `copy-env ci/x` did
+    # not, for the same worktree. It is also the traversal-relevant one: this
+    # path is a `cp` DESTINATION for the repo's real `.env`, so a raw
+    # `../../../escape` argument wrote secrets outside the repo (measured).
+    # `tr '/' '-'` neutralizes that by construction. Plan R4 cut this on the
+    # grounds that there is "no refname caller" — true of in-repo callers, and
+    # not the property that matters for a path built from operator input.
+    worktree_path="$WORKTREE_DIR/$(_safe_worktree_name "$worktree_name")"
 
     if [[ ! -d "$worktree_path" ]]; then
       echo -e "${RED}Error: Worktree not found: $worktree_name${NC}"
@@ -2132,11 +2312,30 @@ cleanup_orphan_worktree_dirs() {
     headless_or_stderr warn "cleanup_orphan_worktree_dirs: 'git worktree list' failed; skipping orphan reap (fail-closed)"
     return 0
   fi
+  local registered_count=0
   while IFS= read -r line; do
     if [[ "$line" == "worktree "* ]]; then
       registered_paths["${line#worktree }"]=1
+      registered_count=$((registered_count + 1))
     fi
   done <<<"$wt_list"
+
+  # The rc check above tests only the EXIT STATUS. A `git worktree list` that
+  # succeeds with empty or unparseable output leaves the allowlist empty, under
+  # which every directory reads as unregistered — the precise mass-reap the
+  # fail-closed branch above exists to prevent, reached through the door it does
+  # not watch. Any valid repo emits at least one `worktree ` line (the main
+  # worktree), so a zero-length parse is prima facie evidence of a broken
+  # registry, not of a repo with no worktrees.
+  #
+  # Counted during the loop rather than via `${#registered_paths[@]}`: on bash
+  # 5.3 that expansion errors with "unbound variable" under `set -u` when the
+  # associative array was declared but never assigned — i.e. exactly this case.
+  if [[ "$registered_count" -eq 0 ]]; then
+    echo "SOLEUR_ORPHAN_REGISTRY_UNAVAILABLE reason=empty-parse errno=OTHER hint=\"git worktree list succeeded but yielded no worktree records; refusing to reap — every dir would read as unregistered\""
+    headless_or_stderr warn "cleanup_orphan_worktree_dirs: worktree registry parsed empty; skipping orphan reap (fail-closed)"
+    return 0
+  fi
 
   local orphans_cleaned=0
   local -a orphans_failed=()
@@ -2165,6 +2364,74 @@ cleanup_orphan_worktree_dirs() {
       continue
     fi
     if [[ -z "${registered_paths[$dir]:-}" ]]; then
+      # SOLEUR-GUARD-DESCENDANT-START
+      # REMEDIATION for #7408, not defence-in-depth. Fixing the producer stops
+      # NEW nesting; it does nothing for a worktree already nested on a
+      # customer's disk from a prior version — and that directory is reapable at
+      # the very next session start.
+      #
+      # `.worktrees/ci` (holding a live `.worktrees/ci/rule-metrics`) is
+      # unregistered, has no `.git` entry, is not a symlink and is not a bare
+      # layout, so without this it falls through every guard below to `rm -rf`.
+      #
+      # THE TRAILING `/` IS LOAD-BEARING. `"$dir"/*` is a PATH-BOUNDARY test;
+      # `"$dir"*` would be a STRING-PREFIX test, under which `.worktrees/ci-foo`
+      # reads as a descendant of `.worktrees/ci` — a sibling, not a child. That
+      # would make the reaper skip legitimate orphans for every name-prefix
+      # family, silently converting a working reaper into a no-op. (The `$PWD`
+      # check in cleanup_merged_worktrees has exactly that missing-slash bug;
+      # do not copy it.) `"$dir"` is quoted so a glob metacharacter in a
+      # directory name is matched literally rather than as a pattern.
+      #
+      # Pure skip-and-warn: it can only spare a directory, never delete one that
+      # survives today, so it is strictly non-destructive relative to current
+      # behavior.
+      local _live_descendant=""
+      local _registered
+      for _registered in "${!registered_paths[@]}"; do
+        if [[ "$_registered" == "$dir"/* ]]; then
+          _live_descendant="$_registered"
+          break
+        fi
+      done
+      if [[ -n "$_live_descendant" ]]; then
+        # Basenames only, allowlist-sanitized: `$dir` is BY CONSTRUCTION an
+        # unregistered directory — the arbitrarily-named class this function's
+        # own failure summary already sanitizes for. Any process can `mkdir` a
+        # name embedding a newline and forge a second, wedge-shaped marker line.
+        echo "SOLEUR_ORPHAN_SKIP_DESCENDANT dir=$(_sanitize_marker_field "${dir##*/}") registered=$(_sanitize_marker_field "${_live_descendant##*/}") reason=holds-live-worktree"
+        headless_or_stderr warn "cleanup_orphan_worktree_dirs: $(basename "$dir") holds a registered worktree ($_live_descendant); skipping. This is a legacy nested layout — see git-worktree SKILL.md §Sharp Edges for the migration runbook."
+        continue
+      fi
+      # FILESYSTEM BACKSTOP. The guard above is a string comparison against
+      # `git worktree list` output, so it inherits the registry's CORRECTNESS as
+      # a dependency, not merely its availability. Three reachable states break
+      # that comparison while a live checkout sits on disk — all reproduced
+      # during review, each destroying planted uncommitted work:
+      #
+      #   - `.worktrees/` (or a component below it) is a SYMLINK. Git records and
+      #     reports the realpath; the glob yields the unresolved path, so no key
+      #     ever matches. Plausible operator setup: worktrees moved to a bigger
+      #     disk.
+      #   - A path containing a NEWLINE splits one porcelain record across two
+      #     lines, so the stored key is truncated and matches nothing.
+      #   - The registry entry is simply gone (`.git/worktrees/<name>/` removed by
+      #     a repair race, manual surgery, or a half-finished migration) — which
+      #     is exactly the mid-state the SKILL.md runbook can leave behind.
+      #
+      # It also covers a nested full `git clone` at depth >= 2, which the
+      # `.git`-entry test below claims to protect but only checks at depth 1.
+      #
+      # So ask the FILESYSTEM "does anything below this look like a checkout?"
+      # rather than asking the registry "did you tell me about it?". Immune to
+      # every path-form question above. Strictly non-destructive: it can only
+      # spare a directory, never delete one that survives today.
+      if compgen -G "$dir"/*/.git >/dev/null 2>&1; then
+        echo "SOLEUR_ORPHAN_SKIP_DESCENDANT dir=$(_sanitize_marker_field "${dir##*/}") registered=unknown reason=holds-checkout-on-disk"
+        headless_or_stderr warn "cleanup_orphan_worktree_dirs: $(basename "$dir") contains a checkout below it; skipping. See git-worktree SKILL.md §Sharp Edges for the migration runbook."
+        continue
+      fi
+      # SOLEUR-GUARD-DESCENDANT-END
       # Not a registered worktree — reap only when there is NO `.git` entry of
       # any kind. `-e`, not `-f`: a linked worktree has a `.git` FILE, but a
       # nested full `git clone` has a `.git` DIRECTORY, and `-f` reads that as
@@ -2238,9 +2505,9 @@ cleanup_orphan_worktree_dirs() {
       # U+2028/U+2029, the last of which splits lines in JSON log viewers even
       # though bash's own `.split("\n")` does not (cq-regex-unicode-separators).
       # Closed sets are the only ones that stay closed as sinks change.
-      local safe_name="${failed_dir##*/}"
-      safe_name="${safe_name//[^A-Za-z0-9._-]/_}"
-      failed_names+="${failed_names:+,}${safe_name:0:64}"
+      # Now routed through the shared _sanitize_marker_field so this rule has one
+      # definition rather than being an idiom each new emitter must remember.
+      failed_names+="${failed_names:+,}$(_sanitize_marker_field "${failed_dir##*/}")"
     done
     # `cleaned=` is carried here, not only in the verbose-gated success summary,
     # so the success counter is OBSERVABLE on the default verbose=false path —
@@ -2401,7 +2668,13 @@ cleanup_merged_worktrees() {
   for branch in $all_stale_branches; do
     local worktree_path="${branch_to_worktree[$branch]:-}"
     local safe_branch
-    safe_branch=$(echo "$branch" | tr '/' '-')
+    # Behavior-identical to the inline `echo … | tr '/' '-'` this replaces —
+    # true only because _safe_worktree_name is a pure transform that cannot
+    # fail. The point is not the behavior, it is that the producer
+    # (create_worktree/create_for_feature) and this consumer now share ONE
+    # definition, so a future edit to the transform cannot desynchronize them
+    # the way #7408 did.
+    safe_branch=$(_safe_worktree_name "$branch")
     # Skip if active worktree
     if [[ -n "$worktree_path" && "$PWD" == "$worktree_path"* ]]; then
       [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) $branch - currently active${NC}"
@@ -2944,7 +3217,8 @@ Commands:
   create <branch-name> [from-branch]  Create new worktree (copies .env files automatically)
                                       (from-branch defaults to main)
   feature | feat <name> [from-branch] Create worktree for feature with spec directory
-                                      (creates feat-<name> branch + knowledge-base/project/specs/feat-<name>/)
+                                      (creates feat-<name> branch; the worktree dir and spec dir
+                                       use the SLUG of it — every / becomes -, identical otherwise)
   list | ls                           List all worktrees
   switch | go [name]                  Switch to worktree
   copy-env | env [name]               Copy .env files from main repo to worktree

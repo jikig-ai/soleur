@@ -181,7 +181,26 @@ STUB
   chmod +x "$stub_dir/gh"
 }
 
+# print_results [expected_assertion_count]
+#
+# The optional argument is an ANTI-VACUITY FLOOR, and it is the only thing that
+# distinguishes "every assertion passed" from "no assertion ran". Measured on
+# this suite during #7408 review: neutering `assert_eq` to `return 0` produced
+#
+#     Passed: 0 / Failed: 0 / ALL TESTS PASSED   (exit 0)
+#
+# because the green branch was keyed on `FAIL -eq 0` and nothing on `PASS > 0`.
+# Deleting six of nine arms wholesale was likewise exit 0. CI reads the exit
+# code, so both are indistinguishable from a clean run.
+#
+# A FLOOR, not equality: the count is developer-incremented, so `-eq` would turn
+# every legitimately-added assertion into a spurious failure and train people to
+# edit the number without reading it. Derive the floor from a green run.
+#
+# Optional by design — ~21 sibling bash suites call this with no argument and
+# must keep working. Suites that pass a floor opt into the stronger guarantee.
 print_results() {
+  local expected="${1:-}"
   echo "=== Results ==="
   echo "Passed: $PASS"
   echo "Failed: $FAIL"
@@ -189,6 +208,15 @@ print_results() {
     echo "Skipped: $SKIPPED"
   fi
   echo ""
+
+  if [[ -n "$expected" ]]; then
+    local ran=$(( PASS + FAIL + SKIPPED ))
+    if [[ "$ran" -lt "$expected" ]]; then
+      echo "ANTI-VACUITY FLOOR TRIPPED: $ran assertion(s) ran, expected at least $expected."
+      echo "Assertions were skipped or the dispatch helpers were neutered — this is NOT a pass."
+      exit 1
+    fi
+  fi
 
   if [[ $FAIL -gt 0 ]]; then
     echo "SOME TESTS FAILED"
