@@ -49,18 +49,19 @@ Users should be aware that interacting with Soleur may involve third-party servi
 
 - **Anthropic (Claude API) — locally-installed Soleur plugin:** When you run the Soleur **plugin** on your own machine and invoke its agents and skills, requests are sent to Anthropic's Claude API using **your own** API key. Anthropic acts as an independent data controller or processor under its own terms and privacy policy. For that path, Soleur does not intermediate, intercept, or store any data exchanged between you and Anthropic.
 - **Anthropic (Claude API) — Jikigai-operated processing:** Separately, Jikigai runs its own automated jobs that send content to Anthropic PBC (United States) under a **Jikigai-held API key**, not yours. For that processing **Jikigai is the controller and Anthropic PBC is its processor** under a data processing agreement. This covers automated monitoring of publicly visible repository activity, our Discord community and public Hacker News discussions; and automated checks that run in our continuous-integration pipeline, which send contributor-authored source and pull-request content to Anthropic. See Section 3.3 below and Section 4.4 of the Privacy Policy. **[Correction, 2026-07-31 (#7100): this entry previously stated, without qualification, that requests are sent "using the user's own API key" and that "Soleur does not intermediate, intercept, or store any data exchanged between the user and Anthropic". That was accurate for the locally-installed plugin and **affirmatively false** for the Jikigai-operated processing described above, which has been running since at least 2026-02-19. The two paths are now stated separately.]**
-- **Operator-assisted sessions and repository access granted to Jikigai.** Where Jikigai, at a User's
-  request, runs Soleur against that User's own material using a Jikigai machine or a Jikigai-held API
-  key, Jikigai acts as a **processor** on the User's instructions, and additionally as a
-  **controller** for its own product-learning purpose. Jikigai does not carry out operator-assisted
-  processing without first agreeing a written Article 28(3) instrument with the User; where such an
-  instrument is agreed, it — not this Policy — addresses the matters listed in the Data Protection
-  Disclosure, Section 2.1c(c). Separately, where a User has granted Jikigai access to a repository and
-  Jikigai reads it for a purpose Jikigai has chosen, Jikigai is a **controller** for that reading even
-  though no session, no Jikigai machine and no Jikigai-held key is involved. The lawful basis for both
-  controller limbs, the balancing, and the right to object are at Section 3.14. This is distinct from
-  the automated jobs described above: an operator-assisted session is interactive and is initiated at
-  the User's request.
+- **Operator-assisted sessions and repository access granted to Jikigai.** Where Jikigai, at a
+  User's request, runs Soleur against that User's own material using a Jikigai machine or a
+  Jikigai-held API key, Jikigai acts as a **processor** on the User's instructions, and additionally
+  as a **controller** for its own product-learning purpose. Jikigai **will not** carry out
+  operator-assisted processing without first agreeing a written Article 28(3) instrument with the
+  User; where such an instrument is agreed, it — not this Policy — addresses the matters listed in
+  the Data Protection Disclosure, Section 2.1c(c). Separately, where a User has granted Jikigai
+  access to a repository and Jikigai reads it for a purpose Jikigai has chosen, Jikigai is a
+  **controller** for that reading even though the User has not asked for a session and the reading
+  does not by itself send content to an AI provider under a Jikigai-held key. The lawful basis for
+  both controller limbs, the balancing, and the right to object are at Section 3.14. This is
+  distinct from the automated jobs described above: an operator-assisted session is interactive and
+  is initiated at the User's request.
 - **GitHub Pages (Documentation Site):** The Soleur documentation site at [soleur.ai](https://soleur.ai) is hosted on GitHub Pages. GitHub acts as a **data processor** for the hosting service, collecting IP addresses, browser metadata, and other standard web server logs on Jikigai's behalf. GitHub's processing is governed by the [GitHub Terms of Service](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service) and the [GitHub Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement), which include GDPR compliance commitments. Note: GitHub's formal [Data Protection Agreement](https://github.com/customer-terms/github-data-protection-agreement) applies to paid plans (Enterprise Cloud, Teams) only; Jikigai's free-plan organization is covered by GitHub's standard terms, under which GitHub acknowledges processor obligations and maintains EU-US Data Privacy Framework certification and Standard Contractual Clauses.
 - **GitHub (Repository):** Users who interact with the Soleur repository (issues, pull requests, discussions) do so under GitHub's terms and privacy policies. For repository interactions, GitHub and Jikigai act as independent controllers of the data involved in community participation. Jikigai is the sole controller for its own downstream processing of that activity -- automated monitoring, transmission to Anthropic PBC as processor, and publication of community digests -- as described in Section 3.3 and in Section 4.4 of the Privacy Policy.
 - **Supabase (Web Platform):** The Soleur Web Platform uses Supabase for authentication and database services. Supabase acts as a **data processor** on Jikigai's behalf, processing email addresses, hashed passwords, authentication tokens, and session data. Supabase Inc is US-based, but the Jikigai project is deployed to **AWS eu-west-1 (Ireland, EU)** -- no international data transfers occur for Supabase-processed data. DPA signed 2026-03-19 via PandaDoc. See [Supabase DPA](https://supabase.com/legal/dpa).
@@ -241,8 +242,8 @@ need one (Data Protection Disclosure, Section 2.1c):
 - **(ii) repository access granted to Jikigai** — where a User has made Jikigai a collaborator on, or
   otherwise granted Jikigai access to, a repository, and Jikigai reads it to measure how an
   early-access programme the User is taking part in is progressing. Limb (ii) does not depend on the
-  User having asked for a session, involves no Jikigai machine and no Jikigai-held credential, and
-  continues for as long as the access lasts.
+  User having asked for a session, and the reading does not by itself send the User's content to an
+  AI provider under a Jikigai-held credential; it continues for as long as the access lasts.
 
 - **Lawful basis:** **Legitimate interest** (Article 6(1)(f) GDPR). The full assessment is at
   `knowledge-base/legal/legitimate-interest-assessments/2026-08-06-alpha-tester-repo-observation-lia.md`;
@@ -263,11 +264,17 @@ need one (Data Protection Disclosure, Section 2.1c):
     Article 22 automated decision-making — together with the safeguards below. The assessment
     concludes that Article 6(1)(f) is available for limb (i) and **only marginally available** for
     limb (ii). It should not be cited as concluding otherwise.
-- **Safeguards:** access is repository-scoped rather than organisation-wide, and read-only in
-  practice; no systematic copy of a User's content is kept, only derived aggregate measurements; a
-  no-republication rule applies to what is observed — it is not to be published, quoted or reproduced
-  in any Jikigai commit, issue, digest, case study or marketing material; and access is scheduled to
-  end when the programme ends, with deletion of local copies part of that step.
+- **Safeguards, including one recorded as absent.** Access is repository-scoped rather than
+  organisation-wide, and read-only in practice. No systematic copy of a User's content is kept — only
+  derived aggregate measurements persist, and any local working copy is transient and is deleted when
+  access ends. A no-republication rule applies to what is observed: it is not to be published, quoted
+  or reproduced in any Jikigai commit, issue, digest, case study or marketing material. Access is
+  scheduled to end when the programme ends. **One measure is recorded as absent rather than claimed:**
+  the workstation on which any local working copy sits is **not** full-disk encrypted, so that copy is
+  unencrypted at rest and a lost or stolen workstation would expose it. Because this activity is
+  continuous rather than session-bound, that exposure is standing rather than momentary. It is
+  disclosed here for the same reason the weaknesses above are — an accurate account of the safeguards
+  is worth more than a flattering one.
 - **Article 14 information posture:** stated in full in the closing paragraph of this Section.
 - **Data subject rights, including the right to object.** Articles 15–21 are exercisable against
   Jikigai at <legal@jikigai.com>. **Because this processing rests on legitimate interests, you have
@@ -426,7 +433,7 @@ Users who are subject to the GDPR and have concerns about international data tra
 
 **Scope.** The paragraph above describes **plugin-local processing** — the Plugin running on the User's own machine, under the User's own credentials, for the User's own purposes. That is the default, and it is what applies unless the User has asked Jikigai for an operator-assisted session. It does not describe **operator-assisted processing**, in which a Jikigai machine or a Jikigai-held credential is used, and must not be read as covering it. Operator-assisted processing is described in the Data Protection Disclosure, Section 2.1c.
 
-Where an operator-assisted session has taken place, the written instrument agreed before that session addresses any transfer of personal data outside the European Economic Area arising from it, and the safeguards relied on for that transfer. A copy of the safeguards relied on is available from <legal@jikigai.com> on request.
+Where an operator-assisted session has taken place, the written instrument agreed before that session addresses any transfer of personal data outside the European Economic Area arising from it, and the safeguards relied on for that transfer. To ask what safeguards apply to that transfer, and to obtain a copy of them, write to <legal@jikigai.com>.
 
 ---
 
