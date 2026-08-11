@@ -94,7 +94,7 @@ WHETHER BASED ON WARRANTY, CONTRACT, TORT (INCLUDING NEGLIGENCE), STRICT LIABILI
 
 ### 3.2 Aggregate Liability Cap
 
-To the extent that any jurisdiction does not allow the exclusion or limitation of liability as set forth above, our total aggregate liability to you for all claims arising out of or related to your use of the Platform shall not exceed the amount you paid to us for the Platform in the twelve (12) months preceding the claim. **For the self-hosted Plugin, which is provided free of charge, that amount is zero (EUR 0.00). For the Web Platform, that amount is the subscription fees you actually paid to us in the twelve (12) months preceding the claim.**
+To the extent that any jurisdiction does not allow the exclusion or limitation of liability as set forth above, our total aggregate liability to you for all claims arising out of or related to your use of the Platform shall not exceed **the greater of (a) the amount you paid us (if any) in the twelve (12) months preceding the claim, or (b) one hundred euros (EUR 100)**. This is the same cap as Terms and Conditions Section 11.2, which prevails in the event of any inconsistency.
 
 ### 3.3 EU/EEA Consumer Protections
 

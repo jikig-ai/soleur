@@ -472,11 +472,11 @@ See the [Terms and Conditions](terms-and-conditions.md) Section 14.1b for the fu
 
 ## 11. Governing Law and Jurisdiction
 
-**11.1** This DPD shall be governed by and construed in accordance with the laws of the European Union and the Member State in which the User is established, to the extent required by the GDPR.
+**11.1** This DPD is a disclosure document that supplements the [Terms and Conditions](terms-and-conditions.md), as stated in the introduction above. It is not a separate agreement and it establishes no choice of law and no choice of forum of its own. The law governing the relationship between Jikigai and the User, and the courts before which disputes between them are brought, are those stated in Terms and Conditions Sections 15.1 to 15.3. The GDPR applies to the processing described in this DPD as a matter of law and not by contractual choice, and no term of the Terms and Conditions displaces it.
 
-**11.2** Any disputes arising out of or in connection with this DPD shall be subject to the exclusive jurisdiction of the courts of the Member State in which the User is established, unless otherwise required by mandatory law.
+**11.2** Nothing in this DPD limits the rights of data subjects under the GDPR or the powers of supervisory authorities. A data subject may lodge a complaint with a supervisory authority under Article 77 GDPR, and may bring proceedings under Article 79(2) GDPR either before the courts of the Member State where Jikigai has an establishment or before the courts of the Member State of their own habitual residence. Those routes are available irrespective of Terms and Conditions Section 15.2.
 
-**11.3** Nothing in this DPD shall limit the rights of data subjects under the GDPR or the powers of supervisory authorities.
+**11.3** Where the User is a consumer in the EU/EEA, Terms and Conditions Section 15.3 governs and preserves the User's mandatory consumer-protection rights, including the right to bring proceedings in the courts of their country of habitual residence.
 
 ---
 

@@ -396,9 +396,11 @@ If you are a consumer in the EU/EEA, nothing in these Terms affects your rights 
 
 ## 16. General Provisions
 
-### 16.1 Entire Agreement
+### 16.1 Entire Agreement and Order of Precedence
 
-These Terms, together with any referenced policies (including our Privacy Policy and Acceptable Use Policy), constitute the entire agreement between you and us regarding your use of the Plugin and the Web Platform.
+These Terms, together with any referenced policies (including our Privacy Policy, Acceptable Use Policy, Cookie Policy, Data Protection Disclosure, and Disclaimer / Limitation of Liability), constitute the entire agreement between you and us regarding your use of the Plugin and the Web Platform.
+
+If a provision of these Terms conflicts with a provision of any referenced policy, the provision of these Terms prevails to the extent of the conflict. This order of precedence does not limit any right you have under mandatory EU or member state law, including the consumer rights preserved by Section 15.3, the liability that cannot be excluded under Section 11.3, and a data subject's rights under Articles 77 and 79 GDPR.
 
 ### 16.2 Severability
 
