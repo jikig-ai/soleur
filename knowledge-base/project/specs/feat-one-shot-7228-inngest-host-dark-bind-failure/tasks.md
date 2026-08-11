@@ -48,18 +48,27 @@ RED before GREEN for every behavioral change (`cq-write-failing-tests-before`).
 
 ## Phase 2 — Make the host diagnosable and verifiable
 
-- [ ] 2.1 RED: listener-gate test — dedicated pusher must not ping when local `/health` is non-200.
-- [ ] 2.2 GREEN: ~5 lines in the `HEARTBEATSCRIPTEOF` heredoc in `inngest-bootstrap.sh`.
+- [x] 2.1 RED: listener-gate test — dedicated pusher must not ping when local `/health` is non-200.
+- [x] 2.2 GREEN: ~5 lines in the `HEARTBEATSCRIPTEOF` heredoc in `inngest-bootstrap.sh`.
 - [x] 2.3 Diagnostic-boot path: non-prod `INNGEST_POSTGRES_URI` variable for the dedicated host so
       the flip guard's prod detection yields `is_prod=false` and its ALLOW arm is taken. This is
       the mechanism that makes `## Hypotheses` decidable — treat it as the plan's centerpiece.
-- [ ] 2.4 Extend `inngest-server-probe.sh` with `instance_id`, `cli_version`, `cutover_flag`.
+- [x] 2.4 Extend `inngest-server-probe.sh` with `instance_id`, `cli_version`, `cutover_flag`.
       Keep the hourly cadence; do not add a timer, a `SYSLOG_IDENTIFIER`, or a `vector.toml` entry.
       `journal_tail` stays on the boot marker only.
-- [ ] 2.5 RED: emitter tests — missing token and failed POST each emit a loud `logger -t` line.
-- [ ] 2.6 GREEN: fix the two silent exits in `cloud-init-inngest.yml`'s emitter.
-- [ ] 2.7 Token re-stage systemd oneshot: re-fetch from Doppler each boot, never a baked re-stamp.
-      Assert over the RENDERED userdata, not the source template.
+- [x] 2.5 RED: emitter tests — missing token and failed POST each emit a loud `logger -t` line.
+      THREE silent exits, not two: the empty-token arm is the same shape one line down.
+- [x] 2.6 GREEN: fix the silent exits in `cloud-init-inngest.yml`'s emitter. **Deviation:** the
+      plan's "already-allowlisted identifier" was unavailable — `journald-config.test.sh` CF-4
+      asserted in BOTH directions that this emitter never calls `logger` and that its tag is
+      absent from the allowlist. CF-4's rationale is explicitly conditional, so it was inverted
+      into the positive pair the same file uses for `ci-deploy`, and a new Source-4 tag was
+      opened (bounded: silent on success). That also exposed a real hole in the tag drift-guard —
+      a `logger -t` inside a cloud-init write_files body matched none of its derivation channels
+      — closed as Channel D in `vector-pii-scrub.test.sh`.
+- [x] 2.7 Token re-stage systemd oneshot: re-fetch from Doppler each boot, never a baked re-stamp.
+      Assert over the RENDERED userdata, not the source template. Mutation-proved: a baked
+      `${betterstack_logs_token}` re-stamp reds 2 legs including the sentinel.
 
 ## Phase 3 — Cutover safety (must land before any host replace)
 
