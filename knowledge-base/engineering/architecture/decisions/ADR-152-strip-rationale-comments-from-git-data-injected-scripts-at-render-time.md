@@ -281,3 +281,64 @@ birth, not after a breach.
 (`inngest-host.tf`) and the grok-dogfood host (`grok-dogfood.tf`). Both are under cap today and
 neither is this PR's scope — but they are on the same unguarded trajectory the registry was on,
 and this paragraph is the record that the gap is known rather than closed.
+
+## Amendment (2026-08-11, #7264) — git-data's own cloud-init template is now stripped too
+
+This ADR's original scope stripped the **nine injected payloads** and explicitly left
+git-data's `cloud-init-git-data.yml` alone; the 2026-08-04 amendment then extended the
+technique to the registry host with a deliberately **different** expression, and recorded the
+generalizable rule as a two-row table for "the next host". git-data is that next host, and it
+now occupies **both** rows of its own table.
+
+**What changed.** `modules/git-data-userdata/main.tf` declares a second local,
+`git_data_template_rationale_strip = "/(?m)^[ \t]*#([ \t][^\n]*)?\n/"` — byte-identical to
+the registry's `registry_rationale_strip` — and the render is wrapped
+`replace(templatefile(…), local.git_data_template_rationale_strip, "")`, mirroring
+`zot-registry.tf`. The payload expression is **unchanged**.
+
+**Measured** (terraform's own `base64gzip`, via `git-data-userdata-budget.sh`):
+
+| | raw | stripped | stored | headroom |
+|---|---|---|---|---|
+| before | 67,479 B | — | **30,376 B** | 2,392 B |
+| after | 67,479 B | 36,805 B | **12,588 B** | **20,180 B** |
+
+Recovery is **17,788 stored bytes**, and headroom goes from 7% of the cap to 62%.
+
+**Why two expressions and not one.** This amendment does not relax the rule above it — it
+applies it. The payload form preserves `#!` and nothing else, which is correct for scripts
+that have a shebang and no `#`-directive, and *wrong* for a cloud-init body, where
+`#cloud-config` is a directive that is a comment by syntax. That was verified rather than
+assumed: applying the payload expression to the git-data render produces a document whose
+first line is `package_update`, and `cloud-init schema -c` rejects it with *"Expected first
+line to be one of: #!, ## template: jinja, #cloud-boothook, #cloud-config, …"*. A collapse of
+the two expressions is therefore a dark-host defect, and it is one line away at all times —
+so `git-data-render-strip-parity.test.sh` now asserts they are **distinct**, in addition to
+mirroring each independently.
+
+### The verification triad, and the gate that was blind to it
+
+This ADR prescribes three arms — first line survives, every shebang survives, the strip is not
+a no-op. All three now run for git-data, in `git-data-template-strip.test.sh` (registered in
+`infra-validation.yml`), alongside two that the triad does not cover:
+
+- **Per-entry byte diff.** Top-level keys and `runcmd`/`write_files` entry *counts* are
+  invariant under corruption *inside* a `write_files` content string or the `LUKSEOF` heredoc
+  body, so a shape comparison passes over a deleted data line. The arm asserts each entry
+  differs from its unstripped twin **only** by lines the expression matches.
+- **Interpolation reachability.** The strip runs over the *rendered* output, so it sees
+  interpolated values. Nine interpolation sites sit at the start of a line
+  (`${indent(6, git_data_bootstrap)}` and its siblings) and six of those payloads begin with
+  `#!/usr/bin/env bash`; they survive only because `!` is not `[ \t]`. That was true by
+  accident and is now asserted.
+
+**A gate was validating the wrong document.** `.github/scripts/validate-infra-templates.sh`
+renders the **bare** `templatefile()` and runs `cloud-init schema -c` on it. Once a call site
+wraps the render in `replace(...)`, that gate validates a document no host is ever given — and
+worse, the *one shape that cannot fail*, because the unstripped body still carries its header.
+The script now resolves the call site's strip local and applies it before validating. This
+affected the registry host too, from #7278 onward. Mutation-proven in both directions.
+
+**Still outstanding**, unchanged from the amendment above: `hcloud_server.inngest` and the
+grok-dogfood host still render `base64gzip(templatefile(...))` with no arm in
+`cloud-init-user-data-size.test.ts`. Under cap today; on the same unguarded trajectory.
