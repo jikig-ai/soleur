@@ -201,6 +201,37 @@ else
   done
 fi
 
+# --- tests/commands/*.sh (#7442) -------------------------------------------------------
+# test-all.sh registers this directory by explicit run_suite lines with NO glob, and the
+# scripts/*.test.sh loop above cannot see it, so the tombstone did not cover it. A suite
+# added here without a run_suite line gates nothing while looking like coverage — the same
+# class this file exists to catch, in a directory it could not reach.
+#
+# The naming convention differs (`test-<name>.sh`, not `<name>.test.sh`), which is exactly
+# why the existing glob misses it rather than merely under-matching.
+cmd_seen=0
+for f in "$REPO_ROOT"/tests/commands/*.sh; do
+  [[ -e "$f" ]] || continue
+  base=$(basename "$f")
+  cmd_seen=$((cmd_seen + 1))
+
+  # Anchored on the run_suite CALL SHAPE, and on the COMMAND rather than the label: the
+  # label is free-form text, so a pattern accepting the path anywhere after `run_suite ` is
+  # satisfied by the label alone while the command runs something else entirely.
+  if ! grep -qE "^[[:space:]]*run_suite .*[[:space:]]bash[[:space:]]+[\"']?tests/commands/${base}[\"']?([[:space:]]|\$)" "$RUNNER"; then
+    echo "ERROR: tests/commands/${base} is never run by test-all.sh -- add a run_suite line" >&2
+    fails=$((fails + 1))
+  fi
+done
+
+# Minimum-cardinality guard: a glob that matches nothing would report a clean pass and
+# certify zero coverage. The directory is non-empty today; if it ever is not, that is a
+# finding, not a silent green.
+if (( cmd_seen < 1 )); then
+  echo "ERROR: tests/commands/ matched zero suites -- the glob is broken, so this check certified nothing" >&2
+  fails=$((fails + 1))
+fi
+
 if (( fails > 0 )); then
   echo "orphan test suites: $fails" >&2
   exit 1
