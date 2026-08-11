@@ -468,6 +468,15 @@ text, and has none of the two-writer protections (`GENERATED` header refusal,
 same renderer emits the degraded file with a real marker line. Then the failure path is
 testable from bash, and the second writer disappears.
 
+**This is an extension of an existing shape, not a new mechanism.** Verified at
+`write-kb-coverage.ts:96-110`: the catch block already calls
+`renderCoverageMarkdown(entries, counts, ["coverage producer failed: ${reason}"])` —
+the same renderer, real counts from `assessCoverage`, and the degraded reason passed as
+the third argument. `--producer-unreachable <class>` reuses that argument exactly, so
+the implementation is a new entry point onto a path that already exists and is already
+correct. Its inner `catch {}` is deliberately best-effort with a comment explaining that
+the stdout marker has already been emitted — preserve that.
+
 **Standalone areas have no durable surface.** `sync.md:264-265` — standalone
 `/soleur:sync c4|domain-model|rule-prune` never write `kb-coverage.md`, so their failures
 are stdout-only, which this plan's own User-Brand Impact calls the defining defect.
