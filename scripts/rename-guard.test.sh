@@ -165,6 +165,87 @@ printf 'process.exit(3);\n' > "$R6/$PARSER_REL"
 assert_guard "TS-6 parser failure still exits 2 (fail-closed preserved)" 2 "$R6" "$SUT"
 
 # ---------------------------------------------------------------------------
+# TS-7 (R-A): a rename PLUS a content edit in the same commit drops below git's
+# default similarity threshold, so git reports D+A rather than R and the pair
+# never reaches the chokepoint. One extra line defeated the whole guard.
+# ---------------------------------------------------------------------------
+R7="$(mk_repo subthreshold)" || exit 2
+seed_file "$R7" "apps/web-platform/server/creds2.ts" "$(for i in $(seq 1 40); do echo "const k$i = 'synthetic$i';"; done)"
+mkdir -p "$R7/knowledge-base/project/plans"
+git -C "$R7" mv apps/web-platform/server/creds2.ts knowledge-base/project/plans/laundered2.md
+# A REALISTIC edit-while-moving: enough to fall below git's ~50% default, well
+# above the 5% floor the guard now sets. A total rewrite (similarity ~0) is
+# genuinely D+A rather than a rename and is a documented residual limit.
+# 40 original lines + 60 added ~= 40% similarity: BELOW git's ~50% default
+# (so the unguarded form misses it) and well ABOVE the 5% floor the guard
+# now sets. That band is exactly what MB-3 proves is load-bearing.
+for i in $(seq 1 200); do echo "added filler content line number $i here" >> "$R7/knowledge-base/project/plans/laundered2.md"; done
+git -C "$R7" add -A >/dev/null 2>&1
+git -C "$R7" commit -q -m "move and edit"
+assert_guard "TS-7 rename+edit below similarity threshold is still a violation" 1 "$R7" "$SUT"
+
+# ---------------------------------------------------------------------------
+# TS-8 (G7): git quotes non-ASCII paths under core.quotePath=true, so the
+# trailing quote defeats every `$`-anchored allowlist regex and the target reads
+# as un-allowlisted -> exempt.
+# ---------------------------------------------------------------------------
+R8="$(mk_repo nonascii)" || exit 2
+seed_file "$R8" "apps/web-platform/server/creds3.ts" "const b = 'synthetic';"
+commit_rename "$R8" "apps/web-platform/server/creds3.ts" "knowledge-base/project/plans/café.md"
+assert_guard "TS-8 non-ASCII destination is still a violation (quotePath)" 1 "$R8" "$SUT"
+
+# ---------------------------------------------------------------------------
+# TS-9 (G3): `git log --name-status` prints NO diff for merge commits by
+# default, so a rename introduced during conflict resolution is invisible.
+# ---------------------------------------------------------------------------
+R9="$(mk_repo evilmerge)" || exit 2
+seed_file "$R9" "apps/web-platform/server/creds4.ts" "const c = 'synthetic';"
+git -C "$R9" checkout -q -b side
+seed_file "$R9" "docs/side.md" "side"
+git -C "$R9" checkout -q main
+seed_file "$R9" "docs/mainline.md" "mainline"
+git -C "$R9" merge -q --no-ff side -m "merge side" >/dev/null 2>&1
+mkdir -p "$R9/knowledge-base/project/plans"
+git -C "$R9" mv apps/web-platform/server/creds4.ts knowledge-base/project/plans/viamerge.md
+git -C "$R9" commit -q --amend --no-edit
+assert_guard "TS-9 rename inside a merge commit is still a violation" 1 "$R9" "$SUT"
+
+# ---------------------------------------------------------------------------
+# TS-10 (G8 — THE P1): the source is allowlisted for SOME rules only. gitleaks
+# still scans it under every other rule, so moving it to a GLOBALLY allowlisted
+# path converts scanned content into unscanned content. Laundering does not
+# require source-outside; it requires scope(dest) NOT subset-of scope(source).
+# ---------------------------------------------------------------------------
+R10="$(mk_repo perrule)" || exit 2
+seed_file "$R10" "knowledge-base/project/learnings/2026-01-01-x.md" "a learning"
+commit_rename "$R10" "knowledge-base/project/learnings/2026-01-01-x.md" "knowledge-base/plans/x.md"
+assert_guard "TS-10 per-rule-allowlisted source -> globally allowlisted dest is a violation" 1 "$R10" "$SUT"
+
+# ---------------------------------------------------------------------------
+# TS-11 (R-C): an allowlist parser that succeeds but returns an EMPTY array
+# currently disarms the whole gate and exits 0. Absence of an allowlist must be
+# fail-closed, not a clean pass.
+# ---------------------------------------------------------------------------
+R11="$(mk_repo emptyallow)" || exit 2
+seed_file "$R11" "apps/web-platform/server/creds5.ts" "const d = 'synthetic';"
+commit_rename "$R11" "apps/web-platform/server/creds5.ts" "knowledge-base/project/plans/empty.md"
+printf 'console.log("[]");\n' > "$R11/$PARSER_REL"
+assert_guard "TS-11 empty allowlist fails closed (exit 2), never a clean pass" 2 "$R11" "$SUT"
+
+# ---------------------------------------------------------------------------
+# TS-12 (r1): the Rename-Allowed-By trailer override had NO fixture at all —
+# 12 lines including the log-injection strip were deletable at full green.
+# ---------------------------------------------------------------------------
+R12="$(mk_repo trailer)" || exit 2
+seed_file "$R12" "apps/web-platform/server/creds6.ts" "const e = 'synthetic';"
+mkdir -p "$R12/knowledge-base/project/plans"
+git -C "$R12" mv apps/web-platform/server/creds6.ts knowledge-base/project/plans/trailered.md
+git -C "$R12" commit -q -m "move it
+
+Rename-Allowed-By: Tester"
+assert_guard "TS-12 Rename-Allowed-By trailer suppresses a real violation" 0 "$R12" "$SUT"
+
+# ---------------------------------------------------------------------------
 # MB — mutation battery. Each mutant is proven landed with `diff -q` against a
 # PRISTINE BACKUP, never against HEAD.
 # ---------------------------------------------------------------------------
@@ -181,12 +262,29 @@ mb_delete() {
     fail "$label" "marker '$marker' matched nothing"
     return
   fi
+  # POSITIVE CONTROL (H-2): a mutant destroyed by the deletion (0 bytes, syntax
+  # error) also "changes the verdict", so a landing check alone cannot tell a
+  # load-bearing branch from a wrecked program. Require the mutant to still BE
+  # the guard: it must run and still emit its own banner on an unrelated fixture.
+  local ctl
+  ctl="$(cd "$R5" && BASE_SHA="$(git -C "$R5" rev-list --max-parents=0 HEAD)" \
+        HEAD_SHA="$(git -C "$R5" rev-parse HEAD)" PR_LABELS='[]' bash "$mutant" 2>&1)"
+  if ! grep -qF 'rename-guard:' <<<"$ctl"; then
+    fail "$label" "mutant is not a working program (no banner on the no-rename control): $(printf '%s' "$ctl" | head -2 | tr '\n' ' ')"
+    return
+  fi
   assert_guard "$label" "$want_rc" "$dir" "$mutant"
 }
 
 # MB-1 (matrix row 3): delete the source-allowlist check -> TS-2 reverts to a
 # violation, proving the exemption is load-bearing rather than decorative.
-mb_delete "MB-1 deleting the source check reverts TS-2 to a violation" srcallow "$R2" 1
+mb_delete "MB-1 deleting the scope-subset exemption reverts TS-2 to a violation" scopesubset "$R2" 1
+# MB-3 (r5): narrowing the rename matcher to exact-R100 must redden TS-7.
+mb_delete "MB-3 deleting the low-similarity rename flag reverts TS-7" renamethresh "$R7" 0
+# MB-4 (r1): the trailer override block was entirely unfixtured.
+mb_delete "MB-4 deleting the trailer override reverts TS-12 to a violation" trailer "$R12" 1
+# MB-5 (G8): deleting the scope-subset check reverts TS-10 to a pass.
+
 
 # ---------------------------------------------------------------------------
 # MB-2 (matrix row 4): SOURCE and TARGET resolved against DIFFERENT sets.
@@ -198,28 +296,52 @@ mb_delete "MB-1 deleting the source check reverts TS-2 to a violation" srcallow 
 # shared-resolver design prevents. A mutant that changes the verdict on the
 # security case is the proof that source and target must share one assembly.
 # ---------------------------------------------------------------------------
-MUT2="$WORK/mutant-splitsets.sh"
+MUT2="$WORK/mutant-widesource.sh"
 cp "$PRISTINE" "$MUT2" || { echo "harness: cp failed" >&2; exit 2; }
-python3 - "$MUT2" <<'PY'
+python3 - "$MUT2" <<'PYEOF'
 import sys, pathlib
 p = pathlib.Path(sys.argv[1]); s = p.read_text()
-# Give the SOURCE call its own, wider resolver — the two-assemblies defect.
-needle = 'if matching_allow_re "${source}" >/dev/null; then'
-assert needle in s, "source call site not found — MB-2 marker drifted"
-s = s.replace(needle, 'if matching_allow_re_wide "${source}" >/dev/null; then', 1)
-s = s.replace('violations=""\nwhile IFS=', 'matching_allow_re_wide() { return 0; }\nviolations=""\nwhile IFS=', 1)
+needle = '  src_res="$(matched_allow_res "${source}")"'
+assert needle in s, "MB-2 anchor drifted"
+# Give the SOURCE a set that matches EVERYTHING: the subset test then always
+# holds and every rename is exempt — the two-assemblies fail-open.
+s = s.replace(needle, '  src_res="$(printf \'%s\\n\' "${ALLOW_RES[@]}")"', 1)
 p.write_text(s)
-PY
+PYEOF
 if diff -q "$PRISTINE" "$MUT2" >/dev/null 2>&1; then
-  fail "MB-2 split-set mutation" "mutation did not land"
+  fail "MB-2 wide-source mutation" "mutation did not land"
 else
-  assert_guard "MB-2 a WIDER source set fails the guard open on TS-1" 0 "$R1" "$MUT2"
+  assert_guard "MB-2 a source set matching EVERYTHING fails the guard open on TS-1" 0 "$R1" "$MUT2"
+fi
+
+# ---------------------------------------------------------------------------
+# MB-5: revert the scope-subset test to the OLD boolean ("is the source
+# allowlisted at ALL?"). That is the exact defect this guard shipped with, so
+# TS-10 must flip from a violation back to a clean pass. A DELETION cannot prove
+# this — deleting the exemption makes the guard stricter, not weaker.
+# ---------------------------------------------------------------------------
+MUT5="$WORK/mutant-oldboolean.sh"
+cp "$PRISTINE" "$MUT5" || { echo "harness: cp failed" >&2; exit 2; }
+python3 - "$MUT5" <<'PYEOF'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+needle = '  subset=1'
+assert needle in s, "MB-5 anchor drifted"
+i = s.index(needle)
+j = s.index('  matched_re="$(printf', i)
+s = s[:i] + '  if [[ -n "${src_res}" ]]; then\n    continue\n  fi\n\n' + s[j:]
+p.write_text(s)
+PYEOF
+if diff -q "$PRISTINE" "$MUT5" >/dev/null 2>&1; then
+  fail "MB-5 old-boolean mutation" "mutation did not land"
+else
+  assert_guard "MB-5 reverting to the old boolean re-opens TS-10 (the shipped defect)" 0 "$R10" "$MUT5"
 fi
 
 # ---------------------------------------------------------------------------
 # Anti-vacuity floor on this harness's own dispatch.
 # ---------------------------------------------------------------------------
-EXPECTED_MIN=8
+EXPECTED_MIN=16
 if [[ "$TOTAL" -lt "$EXPECTED_MIN" ]]; then
   echo "FAIL: harness dispatched only $TOTAL assertions (expected >= $EXPECTED_MIN) — vacuous run" >&2
   exit 1

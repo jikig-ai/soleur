@@ -55,9 +55,14 @@ if ! node "${PARSER}" "${GITLEAKS_TOML}" | jq -r '.[]' > "${TMP_PATHS}"; then
   exit 2
 fi
 mapfile -t ALLOW_RES < "${TMP_PATHS}"
+# An EMPTY allowlist is a parser/config fault, not a clean bill of health: it
+# disarms the entire gate while reporting success. The parser can return [] at
+# exit 0 (e.g. if .gitleaks.toml ever moves to double-quoted TOML literals,
+# which it does not read), so absence must fail CLOSED like a parser crash.
 if [[ ${#ALLOW_RES[@]} -eq 0 ]]; then
-  echo "rename-guard: no allowlist paths to guard; skipping."
-  exit 0
+  echo "rename-guard: allowlist parsed to ZERO paths — refusing to run blind." >&2
+  echo "rename-guard: check parse-gitleaks-allowlists.mjs against .gitleaks.toml." >&2
+  exit 2
 fi
 
 # `git diff BASE..HEAD --diff-filter=R` only sees a rename if both
@@ -67,29 +72,64 @@ fi
 # `git log --diff-filter=R --name-status` to scan EACH commit's renames.
 # `--no-renames` is OFF by default; `-M` rename detection is on by default
 # for log/diff in modern git.
-renames=$(git log --diff-filter=R --name-status --pretty=format: "${BASE_SHA}..${HEAD_SHA}" \
-  | awk -F'\t' 'NF>=3 && $1 ~ /^R/ { print }' || true)
+# Four things here are load-bearing, each closing a measured evasion:
+#
+#  -c core.quotePath=false — git QUOTES non-ASCII paths by default, emitting
+#    "knowledge-base/project/plans/caf\303\251.md" (with the quotes). The
+#    trailing quote defeats every `$`-anchored allowlist regex, so the target
+#    reads as un-allowlisted and the pair is skipped entirely.
+#
+#  --diff-merges=first-parent — `git log --name-status` prints NO diff for a
+#    merge commit by default, so a rename introduced during conflict resolution
+#    (or by `commit --amend` on a merge) is invisible to the scan.
+#
+#  --find-renames=5% --find-copies=5% — at git's default ~50% similarity a
+#    rename PLUS a content edit in the same commit is reported as D+A rather
+#    than R, so appending one screen of text to the destination took the pair
+#    out of scope. A low threshold keeps it classified as a rename.
+#
+#  --diff-filter=RC + /^[RC]/ — with copy detection on, the same laundering
+#    shows up as C (copy) when the source survives; both must be scanned.
+#
+# `git log` (per commit) rather than `git diff BASE..HEAD` is deliberate and
+# unchanged: it is what makes a multi-commit chain (outside -> allowlisted ->
+# allowlisted) fire on its first hop.
+renames=$(git -c core.quotePath=false log --diff-merges=first-parent \
+  --diff-filter=RC \
+  --find-renames=5% --find-copies=5% `# MUT:renamethresh` \
+  --name-status --pretty=format: "${BASE_SHA}..${HEAD_SHA}" \
+  | awk -F'\t' 'NF>=3 && $1 ~ /^[RC]/ { print }' || true)
 if [[ -z "${renames}" ]]; then
   echo "rename-guard: no renames in PR; nothing to guard."
   exit 0
 fi
 
-# matching_allow_re <path> — prints the first allowlist regex matching <path>
-# and returns 0; returns 1 when none match.
+# matched_allow_res <path> — prints EVERY allowlist regex matching <path>, one
+# per line (empty output = the path is not allowlisted at all).
 #
-# SOURCE and TARGET are both resolved through THIS ONE function against THIS ONE
-# array. That is deliberate: two separately-derived allowlist sets would be two
-# assemblies and could drift, and a source set wider than the target set fails
-# the guard OPEN (every laundering rename reads as "source already allowlisted").
-matching_allow_re() {
+# Printing the whole matching SET, not just the first hit, is the correction for
+# the defect this guard shipped with. "Allowlisted" is not a boolean in gitleaks:
+# .gitleaks.toml carries ONE global `[allowlist]` (applying to every rule,
+# including the inherited default pack) and EIGHTEEN per-rule
+# `[[rules.allowlists]]` blocks (applying to one rule each), and
+# parse-gitleaks-allowlists.mjs flattens all of them into a single deduped union
+# with no rule provenance.
+#
+# So a file under `knowledge-base/project/learnings/` is exempt from exactly two
+# rules and is genuinely SCANNED by every other one — measured: a synthesized
+# GitHub PAT there is flagged, and the same token under `knowledge-base/plans/`
+# is not. A boolean "is the source allowlisted?" test therefore treats a
+# genuinely-scanned source as unscanned and exempts a real laundering rename.
+#
+# SOURCE and TARGET resolve through THIS ONE function against THIS ONE array —
+# two separately-derived sets would be two assemblies and could drift.
+matched_allow_res() {
   local path="$1" re
   for re in "${ALLOW_RES[@]}"; do
     if printf '%s' "${path}" | grep -qP "${re}"; then
-      printf '%s' "${re}"
-      return 0
+      printf '%s\n' "${re}"
     fi
   done
-  return 1
 }
 
 violations=""
@@ -97,23 +137,35 @@ while IFS=$'\t' read -r status source target; do
   [[ -z "${target:-}" ]] && continue
 
   # Not landing in an allowlisted path — nothing to launder.
-  matched_re="$(matching_allow_re "${target}")" || continue
+  dst_res="$(matched_allow_res "${target}")"
+  [[ -z "${dst_res}" ]] && continue
+  src_res="$(matched_allow_res "${source}")"
 
-  # The SOURCE is already allowlisted, so gitleaks was ALREADY not scanning this
-  # content before the rename: moving it creates no NEW unscanned surface and
-  # there is nothing to launder. Exempt — evaluated PER RENAME PAIR, so a
-  # laundering rename elsewhere in the same PR is still caught.
+  # EXEMPT iff the destination's exemption scope is a SUBSET of the source's —
+  # every rule the destination is exempt from, the source was already exempt
+  # from too. Only then does the rename create no newly-unscanned surface.
   #
   # This is the archive-kb shape: compound `git mv`s plans/specs into their own
-  # `archive/` subdirectory on every one-shot run, and the allowlist regex
-  # matches both sides. Without this the guard fires on a class that cannot be a
-  # laundering vector, which is why `secret-scan-allow-rename` had become
-  # effectively mandatory rather than an exceptional opt-in (#5095, #5097).
-  # Pre-applying that label would instead disarm the guard for the WHOLE PR.
-  if matching_allow_re "${source}" >/dev/null; then  # MUT:srcallow
-    continue                                          # MUT:srcallow
-  fi                                                  # MUT:srcallow
+  # `archive/` subdirectory on every one-shot run and BOTH sides match the same
+  # regex set, so the subset holds and the rename is exempt. Without it the
+  # guard fires on a class that cannot be a laundering vector, which is why
+  # `secret-scan-allow-rename` had become effectively mandatory rather than an
+  # exceptional operator opt-in (#5095, #5097). Pre-applying that label would
+  # instead disarm the guard for the WHOLE PR; this is per rename pair.
+  #
+  # The DIRECTION is the correction. A source exempt from two rules moving to a
+  # path exempt from all of them WIDENS the exemption — that is laundering, and
+  # the boolean "is the source allowlisted?" test this replaces passed it.
+  subset=1                                                            # MUT:scopesubset
+  while IFS= read -r dre; do                                          # MUT:scopesubset
+    [[ -z "${dre}" ]] && continue                                     # MUT:scopesubset
+    grep -qxF -- "${dre}" <<<"${src_res}" || { subset=0; break; }     # MUT:scopesubset
+  done <<<"${dst_res}"                                                # MUT:scopesubset
+  if [[ "${subset}" -eq 1 ]]; then                                    # MUT:scopesubset
+    continue                                                          # MUT:scopesubset
+  fi                                                                  # MUT:scopesubset
 
+  matched_re="$(printf '%s' "${dst_res}" | head -1)"
   violations+="${source} -> ${target} (matches /${matched_re}/)"$'\n'
 done <<<"${renames}"
 
@@ -129,16 +181,16 @@ if printf '%s' "${PR_LABELS}" | jq -e --arg label "${OVERRIDE_LABEL}" 'index($la
   exit 0
 fi
 
-# Override 2: any commit in range carries the trailer.
-trailers=$(git log --format="%(trailers:key=${TRAILER_KEY},valueonly)" "${BASE_SHA}..${HEAD_SHA}" | tr -d '\r')
-trailers_clean=$(printf '%s' "${trailers}" | grep -v '^[[:space:]]*$' || true)
-if [[ -n "${trailers_clean}" ]]; then
-  # Strip CR/LF before echoing into annotations (log-injection guard).
-  safe="${trailers_clean//[$'\n\r']/, }"
-  echo "::notice::rename-guard suppressed by ${TRAILER_KEY} trailer: ${safe}"
-  printf 'Renames into allowlisted paths (trailer-suppressed):\n%s' "${violations}"
-  exit 0
-fi
+# Override 2: any commit in range carries the trailer.  # MUT:trailer
+trailers=$(git log --format="%(trailers:key=${TRAILER_KEY},valueonly)" "${BASE_SHA}..${HEAD_SHA}" | tr -d '\r')  # MUT:trailer
+trailers_clean=$(printf '%s' "${trailers}" | grep -v '^[[:space:]]*$' || true)  # MUT:trailer
+if [[ -n "${trailers_clean}" ]]; then  # MUT:trailer
+  # Strip CR/LF before echoing into annotations (log-injection guard).  # MUT:trailer
+  safe="${trailers_clean//[$'\n\r']/, }"  # MUT:trailer
+  echo "::notice::rename-guard suppressed by ${TRAILER_KEY} trailer: ${safe}"  # MUT:trailer
+  printf 'Renames into allowlisted paths (trailer-suppressed):\n%s' "${violations}"  # MUT:trailer
+  exit 0  # MUT:trailer
+fi  # MUT:trailer
 
 echo "::error::Rename(s) into gitleaks-allowlisted paths require either the '${OVERRIDE_LABEL}' label OR a '${TRAILER_KEY}: <name>' commit trailer." >&2
 printf '%s' "${violations}" >&2
