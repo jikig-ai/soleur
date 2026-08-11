@@ -5,6 +5,14 @@ re-implementation of the core engine of the `soleur:review` skill. It is a
 **prototype for A/B comparison** against the prose-driven SKILL.md — not a
 replacement. Both can coexist.
 
+> **Known divergence:** `SKILL.md` §"Change Classification Gate" step 4 adds a
+> **`design-risk`** signal — a mechanism-introducing PR gets a design-validity
+> pass (simplicity + architecture, plus economics only on a cost claim) *before*
+> the full panel, with mandatory dedup of lenses that already ran. This port does
+> not implement it: its classify agent returns the four classes and the `triggers`
+> object only. A run driven from this script therefore skips the design-validity
+> ordering. The prose skill remains the default and the authority.
+
 ## What it does
 
 ```
