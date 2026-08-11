@@ -312,8 +312,16 @@ run_gate_arm() {
   # without this line the suite is green on a developer laptop and RED in the required `test`
   # check, which is the worst possible split. Same class as the documented vitest trap where
   # vi.unstubAllEnvs() cannot clear a process-inherited variable.
+  # TEST_TIMING_LOG is REDIRECTED to a per-arm file, never inherited. skip_suite and the
+  # run-boundary bytes probe both append to whatever TEST_TIMING_LOG names, so a sandbox arm
+  # that inherits the caller's path writes ITS rows into the operator's real timing log.
+  # Measured on the sanctioned gate run before this line existed: 12 spurious
+  # `skip=not_in_diff` rows and 26 spurious `bytes_tmp=0` boundary rows landed in the log the
+  # run's own measurement was read from. A test suite must not write into the artifact the
+  # thing under test produces.
   GATE_OUT=$(cd "$REPO_ROOT" && env SOLEUR_TEST_FORCE_ALL= CI= \
              TEST_GROUP=all SOLEUR_INCIDENT_SKIP=0 \
+             TEST_TIMING_LOG="$TMP/gate-timing-${label}.tsv" \
              SANDBOX_DIFF_NAMES="$diff_fixture" "$@" timeout 180 bash "$sb" 2>&1)
   RAN_REGISTRY=0; RAN_CFTUNNEL=0
   grep -qxF "RECORDED_SUITE:$REGISTRY_LABEL" "$SANDBOX_RECORD" && RAN_REGISTRY=1

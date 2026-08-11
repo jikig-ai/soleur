@@ -79,7 +79,11 @@ run_arm() {
   # An INHERITED SOLEUR_ALLOW_FULL_GATE=1 would make the refusal arm pass vacuously, and an
   # inherited SOLEUR_SUBAGENT=1 would break the negative control -- and the environment that
   # sets these is precisely a spawned-agent shell, i.e. the one this suite exists to describe.
+  # TEST_TIMING_LOG redirected per-arm, never inherited: skip_suite and the run-boundary bytes
+  # probe append to whatever it names, so an inherited path puts this suite's sandbox rows into
+  # the operator's real timing log -- the artifact a gate run's measurement is read from.
   ARM_OUT=$(cd "$REPO_ROOT" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
+            TEST_TIMING_LOG="$TMP/arm-timing-$label.tsv" \
             "$@" timeout 120 bash "$SANDBOX" 2>&1)
   ARM_RC=$?
   ARM_SUITES=$(wc -l < "$SANDBOX_RECORD" | tr -d '[:space:]')
