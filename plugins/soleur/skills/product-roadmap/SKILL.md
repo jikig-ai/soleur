@@ -240,10 +240,7 @@ Present an output summary listing the document path, milestones created, issues 
        gh pr merge <number> --squash --auto
      rc=$?
    else
-     # Degrade OPEN, loudly (#7409). The lock is ADVISORY — it serialises parallel
-     # sessions queueing auto-merge. Failing closed here would leave a marketplace
-     # user's PR simply never queued, which is the original bug with a nicer
-     # message. Run the command unlocked and say so.
+     # Degrade open, loudly — the lock is advisory (ADR-175 §5).
      echo "SOLEUR_SESSION_STATE_UNAVAILABLE path=$SS_LIB reason=running-unlocked"
      gh pr merge <number> --squash --auto
      rc=$?

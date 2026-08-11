@@ -167,12 +167,27 @@ it existed) would have been inside the user's own repo.
 
 ## Consequences
 
-**This change arms the reaper.** Pre-fix, a marketplace user's missing library made
-`is_lease_active` return "active" for everything, so `cleanup-merged` could never reap
-anything. Post-fix the library resolves and an unrecoverable operation goes live for
-that entire population **for the first time**. The refusal direction therefore carries
-its own test in a cache layout, with a mutation arm proving the refusal is attributable
-to the lease rather than to an inert reaper.
+**This change arms the reaper, and arming it is a distinct event from running it.**
+Pre-fix, a marketplace user's missing library made `is_lease_active` return "active" for
+everything, so `cleanup-merged` could never reap anything. Post-fix the library resolves
+and an unrecoverable operation goes live for that entire population **for the first
+time**. The refusal direction carries its own test in a cache layout, with a mutation arm
+proving the refusal is attributable to the lease rather than to an inert reaper.
+
+That covers the steady state. The *transition* needed its own handling: every worktree
+already on such a machine was created by a `create` that could not acquire a lease, so
+none of them can hold one, and `cleanup-merged` runs at session start — so the first
+post-upgrade session would have swept the entire accumulated backlog in one pass. Each
+of those reaps might be individually correct; the objection is that the user's first
+notice of the capability would have been its aftermath, including gitignored files
+(`git status --porcelain` does not list ignored paths, and the reap's `--force` retry
+removes them anyway). `cleanup_merged_worktrees` therefore takes a **one-time dry pass**
+the first time it can reap on a given store: it reports what it would delete, emits
+`SOLEUR_WORKTREE_REAPER_ARMED`, deletes nothing, and stamps the store. The stamp is what
+makes it self-clearing — a condition-based hold ("hold while zero leases exist") would
+never clear on a machine whose sessions only run cleanup, leaving the reaper permanently
+inert, which is a worse failure than the one being prevented. Both directions are
+mutation-tested.
 
 **The ADR-156 eval scan set had to be preserved explicitly.** A1's roots are walked with
 `find … 2>/dev/null`, so removing or outrunning a root makes the gate report `ok` while
@@ -190,12 +205,15 @@ Note that shell globs do not cross `/` while Python's `fnmatch` does: checking t
 
 **Mid-rollout, two library homes coexist on disk.** A worktree created before this change
 sources the old path; a new one sources the plugin. Both anchor their lease store to
-`git rev-parse --git-common-dir`, so they share one set of lease files. This is safe
-**only** under byte-identity of the moved file — no lease-format change is permitted in
-the move — and interoperation is asserted directly by running the pre-move library
-(recovered from `origin/main`) against the post-move one. Byte-identity is verified on
-the final tree by `diff`, never by `git show --stat -M`: rename detection is a
-diff-renderer heuristic, not a stored property.
+`git rev-parse --git-common-dir`, so they share one set of lease files. This is safe only if the two copies agree on the lease FORMAT. The moved file is
+identical to its predecessor **apart from comments** — it is not byte-identical, and
+saying so would be false on inspection (`diff` reports four comment-only hunks). The
+property the rollout actually depends on is behavioural, and it is asserted directly
+rather than inferred from the diff: a scenario runs the pre-move library — recovered
+from its immutable blob, not from a moving ref — against the post-move one and checks
+that a lease written by either is honoured by the other. Do not substitute
+`git show --stat -M` for that: rename detection is a diff-renderer heuristic, not a
+stored property, and it says nothing about interop.
 
 **No compat shim at the old path.** `_SOLEUR_SESSION_STATE_LOADED` makes a double-source
 harmless, so a shim would be *safe* — but it would re-introduce the two-homes ambiguity

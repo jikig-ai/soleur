@@ -2681,6 +2681,45 @@ cleanup_merged_worktrees() {
     fi
   done < <(git worktree list --porcelain 2>/dev/null)
 
+  # ONE-TIME ARMING HOLD (#7409). Give the first armed run a dry pass.
+  #
+  # Before #7409 a marketplace install could not resolve the lease library, so
+  # `is_lease_active` was the stub that returns "active" for everything and this
+  # loop reaped NOTHING, ever. After it, the real predicate runs — and every
+  # worktree already on that user's disk was created by a `create` that could not
+  # acquire a lease, so none of them can hold one. `cleanup-merged` runs at
+  # session start, which means the first post-upgrade session would sweep the
+  # entire accumulated backlog in one uninterruptible pass, deleting each
+  # worktree, its local branch, its remote branch (which closes the PR), and any
+  # gitignored file it held — `git status --porcelain` does not list ignored
+  # paths, so a worktree holding only `.env.local` reads clean and the `--force`
+  # retry removes it anyway.
+  #
+  # Every one of those reaps may be individually correct. The problem is that
+  # arming a destructive operation and running it in bulk are the same event, so
+  # the user never sees the first one coming. This decouples them: the first run
+  # after the layer becomes resolvable reports what it WOULD reap and reaps
+  # nothing, then stamps itself. The stamp is what makes it self-clearing — a
+  # condition-based hold (e.g. "hold while zero leases exist") would never clear
+  # on a machine whose sessions only ever run cleanup, which is worse than no
+  # guard because cleanup would then be dead forever.
+  local _reaper_first_run=false
+  if [[ "$_SS_LIB_MISSING" != "true" ]] && declare -F _session_state_root >/dev/null 2>&1; then
+    local _reaper_stamp
+    _reaper_stamp="$(_session_state_root)/reaper-armed"
+    if [[ ! -f "$_reaper_stamp" ]]; then
+      _reaper_first_run=true
+      # Stamp BEFORE the loop, not after: if the run dies midway the user has
+      # already had their warning, and a stamp that only lands on clean exit
+      # would re-hold forever on a machine where something else keeps failing.
+      : > "$_reaper_stamp" 2>/dev/null || true
+      echo "SOLEUR_WORKTREE_REAPER_ARMED reason=first-run-dry-pass"
+      echo "[warn] cleanup-merged can reap worktrees on this machine for the first time." >&2
+      echo "[warn] Nothing is being deleted this run. The branches listed below are what" >&2
+      echo "[warn] the next run will reap — move any work you want to keep before then." >&2
+    fi
+  fi
+
   local cleaned=()
 
   for branch in $all_stale_branches; do
@@ -2696,6 +2735,15 @@ cleanup_merged_worktrees() {
     # Skip if active worktree
     if [[ -n "$worktree_path" && "$PWD" == "$worktree_path"* ]]; then
       [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) $branch - currently active${NC}"
+      continue
+    fi
+
+    # First armed run: report, do not reap (see the ONE-TIME ARMING HOLD above).
+    # Placed here rather than as an early return from the function so the rest of
+    # session-start maintenance — orphan-dir cleanup, tmp reclamation, the
+    # runaway-process kill — still runs on this pass.
+    if [[ "$_reaper_first_run" == "true" ]]; then
+      echo "(hold) $branch - would be reaped; skipped on this first armed run"
       continue
     fi
 

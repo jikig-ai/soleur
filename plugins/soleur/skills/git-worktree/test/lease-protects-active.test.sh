@@ -72,6 +72,12 @@ git -C "$BARE" worktree add -b feat-actor "$WT_PARENT/.worktrees/feat-actor" mai
 # ---------------------------------------------------------------------------
 LEASE_ROOT="$BARE/soleur-session-state"
 mkdir -p "$LEASE_ROOT/leases" "$LEASE_ROOT/locks" "$LEASE_ROOT/logs"
+# Pre-stamp the #7409 first-run arming hold. Every scenario below asserts what
+# the reaper does with a lease present or absent; the hold suppresses reaping
+# entirely on a store's first armed run, so without this stamp "the victim
+# survived" would pass for the wrong reason in every one of them. Scenario 12
+# is where the hold itself is tested.
+: > "$LEASE_ROOT/reaper-armed"
 
 # Hold a real, alive PID for the lease. Background a long sleep.
 sleep 300 &
@@ -592,6 +598,7 @@ git -C "$BARE9" worktree add -b feat-a9 "$WT9/.worktrees/feat-a9" main >/dev/nul
 
 LEASE_ROOT9="$BARE9/soleur-session-state"
 mkdir -p "$LEASE_ROOT9/leases"
+: > "$LEASE_ROOT9/reaper-armed"   # see the note at LEASE_ROOT above
 cat > "$LEASE_ROOT9/leases/feat-v9.lease" <<EOF
 pid=$$
 ppid=$$
@@ -766,6 +773,88 @@ else
 worktree would be reaped by a sibling (new lib present: $([[ -f "$NEW_LIB" ]] && echo yes || echo NO))"
 fi
 
+# ---------------------------------------------------------------------------
+# SCENARIO 12 (#7409): the one-time arming hold.
+#
+# This PR makes the reaper reachable for a population that never had it. Every
+# worktree already on such a machine was created by a `create` that could not
+# acquire a lease, so none of them can hold one — and cleanup-merged runs at
+# session start. Without a hold, the first post-upgrade session sweeps the whole
+# accumulated backlog at once, and the user's first notice of the feature is its
+# aftermath.
+#
+# Both directions matter and they fail differently: a hold that never fires
+# leaves the bulk reap live; a hold that never CLEARS makes cleanup dead
+# forever, which is worse than not having it.
+# ---------------------------------------------------------------------------
+BARE12="$TMP/repo12.git"; git init --bare -b main "$BARE12" >/dev/null
+S12="$TMP/s12"; git clone "$BARE12" "$S12" >/dev/null 2>&1
+( cd "$S12" && git -c user.email=t@t -c user.name=t commit --allow-empty -m seed >/dev/null \
+    && git push origin main >/dev/null 2>&1 )
+rm -rf "$S12"
+WT12="$TMP/wt12"; mkdir -p "$WT12/.worktrees"
+git -C "$BARE12" worktree add -b feat-v12 "$WT12/.worktrees/feat-v12" main >/dev/null 2>&1
+( cd "$WT12/.worktrees/feat-v12"
+  echo hi12 > d.txt
+  git -c user.email=t@t -c user.name=t add d.txt
+  GIT_COMMITTER_DATE="2025-01-01T00:00:00Z" \
+    git -c user.email=t@t -c user.name=t commit \
+      --date "2025-01-01T00:00:00Z" -m "v12 change" >/dev/null
+)
+git -C "$BARE12" update-ref refs/heads/main "$(git -C "$BARE12" rev-parse refs/heads/feat-v12)"
+git -C "$BARE12" worktree add -b feat-a12 "$WT12/.worktrees/feat-a12" main >/dev/null 2>&1
+
+# Deliberately NOT pre-stamped: this is the only scenario that exercises a
+# genuinely first-armed store, which is the state every marketplace user is in
+# the moment they update.
+LEASE_ROOT12="$BARE12/soleur-session-state"
+mkdir -p "$LEASE_ROOT12/leases"
+if [[ ! -f "$LEASE_ROOT12/reaper-armed" ]]; then
+  pass "scenario 12 fixture: the store has never armed the reaper (no stamp)"
+else
+  fail "scenario 12 fixture: stamp already present — cannot exercise the first armed run"
+fi
+
+if ( cd "$WT12/.worktrees/feat-a12" \
+     && SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT12" \
+        bash "$CACHE_WM" cleanup-merged >"$TMP/hold12.log" 2>&1 ); then
+  :
+fi
+# The victim is unleased and stale — without the hold it would be reaped here.
+if [[ -d "$WT12/.worktrees/feat-v12" ]]; then
+  pass "scenario 12: the first armed run reaped nothing, even though the victim holds no lease"
+else
+  fail "scenario 12: an UNLEASED stale worktree was reaped on the very first armed run — \
+the bulk-reap-on-upgrade hold is not in effect (output: $(cat "$TMP/hold12.log" 2>/dev/null))"
+fi
+if grep -q 'SOLEUR_WORKTREE_REAPER_ARMED' "$TMP/hold12.log"; then
+  pass "scenario 12: the hold announces itself rather than silently doing nothing"
+else
+  fail "scenario 12: the reaper armed with no marker — indistinguishable from a run \
+that found nothing to do (output: $(cat "$TMP/hold12.log" 2>/dev/null))"
+fi
+if [[ -f "$LEASE_ROOT12/reaper-armed" ]]; then
+  pass "scenario 12: the run stamped the store"
+else
+  fail "scenario 12: no stamp written — the hold would repeat forever and cleanup would \
+never reap anything again"
+fi
+
+# SECOND run: the hold must be CLEARED. A hold that cannot clear is a worse
+# defect than the bulk reap it prevents, and nothing else in this suite would
+# notice — every other fixture is pre-stamped.
+if ( cd "$WT12/.worktrees/feat-a12" \
+     && SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT12" \
+        bash "$CACHE_WM" cleanup-merged >"$TMP/hold12b.log" 2>&1 ); then
+  :
+fi
+if [[ -d "$WT12/.worktrees/feat-v12" ]]; then
+  fail "scenario 12b: the victim survived the SECOND run too — the hold never clears, so \
+cleanup-merged is now permanently inert (output: $(cat "$TMP/hold12b.log" 2>/dev/null))"
+else
+  pass "scenario 12b: the second run reaps — the hold is one-shot, not a permanent disable"
+fi
+
 echo
 echo "=== Results ==="
 echo "PASS: $PASS"
@@ -778,7 +867,7 @@ echo "FAIL: $FAIL"
 # on the fetch-prune path, a non-zero sweep aborting under `set -e`, a lock it
 # could not take. A floor cannot detect a no-op reap loop by itself, but it does
 # catch the case where the assertions were never reached.
-MIN_ASSERTIONS=35  # 3 -> 6 -> 9 -> 15 -> 17 (PR #7373 sc. 3-7) -> 35 (#7409 sc. 8-11)
+MIN_ASSERTIONS=40  # 3 -> 6 -> 9 -> 15 -> 17 (PR #7373 sc. 3-7) -> 40 (#7409 sc. 8-12)
 # Calibrated to the MEASURED count, not to a round number below it. At 32 against a
 # 34-dispatch suite the floor carried exactly two assertions of slack — and scenario 9
 # + 9b is exactly two dispatches, so deleting the reaper-refusal arm (the one guarding
