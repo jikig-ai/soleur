@@ -34,6 +34,36 @@ The eng panel above reviews for engineering quality (simplicity, convention, cor
 
 **Every named-panel reviewer is prompted for structured advisory only — NO `AskUserQuestion`.** cpo/cmo default to orchestrator mode and will otherwise emit `AskUserQuestion`, which hangs a headless `one-shot` (a Task subagent cannot answer it, and the agent `.md` body does not reach anonymous Task spawns). The prohibition MUST live in the prompt text, mirroring the plan Phase 2.5 Product/UX gate's "Output a structured advisory — do not use AskUserQuestion."
 
+## Standing panel checks (every review, no relevance gate)
+
+Run these against the plan regardless of change class. They are cheap, textual, and each has
+exactly one right answer, so all findings here classify **Mechanical** and auto-apply.
+
+1. **Acceptance criteria must not depend on unrelated concurrent processes**
+   (`cq-ac-must-not-depend-on-concurrent-sessions`). Read every entry under `## Acceptance
+   Criteria` and ask: *could a process this plan never mentions — a sibling worktree, another
+   agent session, ambient machine state, whatever else happens to be running — flip this from
+   true to false without a single line of the diff changing?* If yes, the criterion measures the
+   machine rather than the change, and it must be rewritten as a deterministic test over a
+   synthetic fixture.
+
+   The tell is an AC that asserts the ABSENCE of an ambient signal: "the run fires no contention
+   banner", "no sibling process is detected", "`/tmp` has N MB free", "the suite completes in
+   under N minutes". Each is unfalsifiable when it passes (you learn only that nothing else ran)
+   and uninformative when it fails.
+
+   Rewrite by moving the property into a fixture the plan controls. "Fires no contention banner"
+   becomes "with a synthetic procfs containing zero sibling runs, `tc_preamble` emits no
+   `SIBLING_RUN_DETECTED`" — which is a claim about the code, runs in milliseconds, and cannot be
+   invalidated by a colleague starting a build.
+
+   **Why this is worth a standing check:** on 2026-08-11 an AC of exactly this shape ("the
+   sanctioned full-gate run fires neither banner") cost a second ~45-minute full-gate re-run
+   after a sibling worktree started a suite one second after the clearance check. The re-run
+   verified an environmental condition, not the code, and the substantive property was already
+   proven deterministically by a synthetic-procfs unit test. Catching it at plan review costs one
+   sentence; catching it at verification costs the whole run.
+
 ## Classifier routing (taste findings are surfaced, never silently applied)
 
 Consolidation tags **each** consolidated decision with `decisionClass ∈ {mechanical, taste, user-challenge}` per **[decision-principles.md](../brainstorm-techniques/references/decision-principles.md)** (ADR-084), routing through that doc's **four never-Mechanical classes** (dropping operator-requested scope; a new sub-processor/paid dep; a new recurring cost; an irreversible data op) — not a fresh classification path:

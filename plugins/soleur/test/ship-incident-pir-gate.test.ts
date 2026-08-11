@@ -115,6 +115,40 @@ describe("ship Incident-PIR gate (#6813)", () => {
     expect(signals("release-tooling-plan-no-delivery-outage.md")).toBe(false);
   });
 
+  // The `prod` substring class. Bare `prod` in PROD_RE matched `producer`,
+  // `produced`, `product` and `reproduced` — all four are ordinary plan
+  // vocabulary, so the production conjunct was satisfied by essentially every
+  // plan and the gate reduced to its outage half alone. Measured on the PR that
+  // found it: 14 `prod` hits in the haystack, ZERO of them the word. A
+  // `post-mortem` reference to a LOCAL test-runner retrospective then demanded a
+  // PIR for an event that never happened — the #6813 label-not-claim class,
+  // recurring on the other conjunct.
+  test("a post-mortem whose only prod tokens are `produce*` substrings does NOT signal", () => {
+    expect(signals("postmortem-word-with-only-produce-substrings.md")).toBe(false);
+  });
+
+  // The other direction, so the boundary guard cannot be widened into a deletion
+  // of the alternative. `production` is exercised by every positive fixture
+  // above; this one pins the standalone word `prod`, which no other fixture uses
+  // and which a careless `prod(uction)` (no `?`) would silently drop.
+  test("a real production incident using the bare word `prod` DOES signal", () => {
+    expect(signals("postmortem-with-real-prod-word.md")).toBe(true);
+  });
+
+  // The `live` substring class — the same defect one token over in the same
+  // alternation. Unguarded, `live` matches `lives` on the right and
+  // `delivery`/`delivered`/`deliverables` on the left, all of which are ordinary
+  // prose in this repo ("the gate lives in a real script"). Fixing only `prod`
+  // would have been the soundness-for-completeness swap this gate keeps
+  // re-learning: the class named, one instance closed, the twin left open.
+  test("a post-mortem whose only live tokens are substrings does NOT signal", () => {
+    expect(signals("postmortem-word-with-only-live-substrings.md")).toBe(false);
+  });
+
+  test("a real production incident using the bare word `live` DOES signal", () => {
+    expect(signals("postmortem-with-real-live-word.md")).toBe(true);
+  });
+
   // The gate must own its own exit semantics: a no-signal run exits 1 cleanly,
   // never crashes, so a `set -euo pipefail` caller cannot misread it as an
   // infrastructure failure (the foot-gun the old inline `A && B && echo` chain had).

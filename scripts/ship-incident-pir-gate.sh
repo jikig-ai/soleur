@@ -35,7 +35,30 @@ set -uo pipefail
 # Verified additive: the new alternation matches ZERO of the nine existing
 # fixtures, so no prior verdict moves.
 OUTAGE_RE='(incident report|post-?incident|post-?mortem|outage|went down|was down|took down|brought down|stopped working|silently (broke|broken|failing)|regression in prod|users? (could not|were unable to)|shipped broken|ran broken|failed in prod(uction)?|broke prod(uction)?|releases? behind|(releases?|deploys?|deployments?) (was|were) blocked|blocked (every|all) (release|deploy))'
-PROD_RE='(prod|production|deployed|live|app\.soleur\.ai|tenant-zero|customer)'
+# `prod` is boundary-guarded — this is the SAME substring class the header above
+# documents fixing for `incident`/`incidental`, left unfixed one line below it.
+# Measured on the PR that found it: bare `prod` matched 14 times in the haystack
+# and NOT ONCE as the word `prod` or `production` — every hit was `producer`,
+# `produced`, `product`, `reproduced`. Plans are dense with all four ("the session
+# that produced these six items", "a producer/consumer pair"), so the production
+# conjunct was satisfied by essentially every plan, and the whole gate reduced to
+# its outage half. A `post-mortem` reference to a LOCAL test-runner retrospective
+# then demanded a PIR for an event that never happened.
+#
+# NO `\b` — the host grep is ugrep, where `\b` is not a word boundary in ERE and
+# silently matches nothing, which would delete the alternative rather than bound
+# it. `[^a-zA-Z]` is spelled with both cases explicitly because these greps run
+# under `-i`, where a bare `[^a-z]` is implementation-defined.
+#
+# `prod(uction)?` keeps `production` matching (every positive fixture relies on
+# that exact word); the trailing guard is what rejects `produc*`.
+#
+# `live` is guarded on BOTH sides, and fixing only `prod` would have been the
+# same soundness-for-completeness swap this gate keeps re-learning: unguarded,
+# `live` matches `lives` on the right ("the parser lives in a real file" is
+# ordinary prose here) and `delivery`/`delivered`/`deliverables` on the left.
+# Standalone `live` stays a production token — only the substrings are rejected.
+PROD_RE='(prod(uction)?([^a-zA-Z]|$)|deployed|([^a-zA-Z]|^)live([^a-zA-Z]|$)|app\.soleur\.ai|tenant-zero|customer)'
 
 # Strip, in order:
 #   1. fenced code blocks (``` … ```) — regexes/config/SQL quoted in a plan are

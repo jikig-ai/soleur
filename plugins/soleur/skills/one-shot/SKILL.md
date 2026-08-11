@@ -60,9 +60,14 @@ files); the cost came from three habits below, each of which multiplies.
    the *green* spelling `N/N` only is safe against a false green but not against a false
    dismissal: a run with a terminated suite is `N<M`, so the poll never matches, the `Monitor`
    runs out its clock, and `{no marker, clock timeout}` is byte-for-byte the harness-reap
-   signature that `work/SKILL.md` says to walk away from. The trichotomy: marker + rc 0 =
-   green; marker + rc 3 = a suite was terminated (UNRESOLVED — coverage not obtained, re-run
-   that suite in isolation); no marker + no rc file = harness reap, not your diff.
+   signature that `work/SKILL.md` says to walk away from. **Since ADR-181, `N/N` is not even the
+   ordinary LOCAL spelling** — a diff touching neither heavy battery nor `apps/web-platform/infra/`
+   declines three suites, so a healthy local run reads `N-3/N`. Poll the marker's SHAPE and read
+   the rc file. The four cases: marker + rc 0 = green; marker + rc 3 = a suite was terminated
+   (UNRESOLVED — coverage not obtained, re-run that suite in isolation); **no marker + rc 4 =
+   REFUSED before anything ran, because `SOLEUR_SUBAGENT=1` is set — you are a spawned agent and
+   must run your own targeted suites, not the gate**; no marker + no rc file = harness reap, not
+   your diff.
 
 **Report cost honestly.** If a run was disproportionate, say so and name the cause — the
 operator paid for it and cannot see the breakdown.

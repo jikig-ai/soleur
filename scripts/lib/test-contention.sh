@@ -79,6 +79,37 @@ tc_used_pct() {
   printf '%s\n' "$p"
 }
 
+# Used BYTES on the mount a directory lives on.
+#
+# WHY THIS EXISTS. The per-suite probe records `tmp_delta=<ENTRY COUNT>`, but
+# ADR-133's capacity verdict is about BYTES -- that ADR explicitly rejected
+# count-based reasoning because 4,294 small entries held 160 MB (4.5%) while
+# three trees held 3.1 GiB (88%). The quantity the advisory lock exists to
+# protect had never been measured by the instrument shipped to measure it.
+#
+# `df`, NOT `du`. ADR-133's question is a MOUNT's capacity ("a machine-global
+# RAM-backed 4 GiB /tmp at 86% full"), not a directory's size, and df answers it
+# in O(1) with no recursive walk. Measured on this machine: `du -sk /tmp` took
+# 2.15 s and `du -sk /var/tmp` did not finish in 115 s, so a du-based probe would
+# have added an unbounded observer effect to the very run it instruments.
+#
+# PER-MOUNT BY CONSTRUCTION. It takes a directory and reports the mount that
+# directory lives on; there is deliberately no "total scratch" variant. TMPDIR
+# (/var/tmp, disk-backed) and TC_TMPDIR (/tmp, the tmpfs) are different mounts ON
+# PURPOSE, and a single number spanning both would report health from whichever
+# is roomier -- indistinguishable from a healthy mount, which is the exact
+# fail-open the comment at test-all.sh:18-29 was written to prevent.
+#
+# Field 3 of `df -P -k` is Used in 1024-blocks. Degrades to 0 rather than
+# failing: callers run inside the gate, so an exception on an unparseable
+# reading would take a whole run down mid-flight.
+tc_used_bytes() {
+  local d="${1:-$TC_TMPDIR}" kb
+  kb=$("$TC_DF_CMD" -P -k "$d" 2>/dev/null | awk 'NR==2 {print $3}') || kb=""
+  [[ "$kb" =~ ^[0-9]+$ ]] || { printf '0\n'; return 0; }
+  printf '%s\n' $(( kb * 1024 ))
+}
+
 # --- Sibling scan ----------------------------------------------------------
 #
 # /proc/<pid>/stat field 22 is starttime in clock ticks since boot; combined

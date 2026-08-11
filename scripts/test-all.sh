@@ -8,7 +8,14 @@ set -euo pipefail
 #      3 is a TOP-LEVEL contract only: a nested runner returning 3 into run_suite classifies
 #      as a plain FAIL, because rc=3 is not signal-shaped. Do not adopt 3 in a nested runner
 #      without revisiting this.
-#   2  usage error (TEST_GROUP took an unsupported value) — predates the above
+#   2  usage error — TEST_GROUP took an unsupported value (predates the above), OR the
+#      relevance-predicate data file is missing. Both are "this runner cannot run", not a
+#      verdict about any suite; ADR-181 declined a separate code because every consumer is
+#      binary and a second usage-shaped code buys nothing.
+#   4  REFUSED before anything ran — SOLEUR_SUBAGENT=1 without SOLEUR_ALLOW_FULL_GATE=1
+#      (ADR-181). Distinct from 3 on purpose: 3 says a suite was terminated and its coverage
+#      is unresolved; 4 says nothing ran, by design, and nothing is unresolved. Sharing 3
+#      would make a refused run read as a killed suite.
 #
 # Every consumer was binary zero/non-zero BEFORE this change (lefthook, the three ci.yml
 # shards, package.json, main-health-monitor.yml) and still blocks on any non-zero, so 3 is
@@ -114,8 +121,56 @@ if ! declare -F tc_acquire >/dev/null 2>&1; then
   tc_preamble() { :; }
   tc_epilogue() { :; }
   tc_tmp_entry_count() { printf '0\n'; }
+  tc_used_bytes() { printf '0\n'; }
   tc_acquire() { :; }
 fi
+
+# ADR-133 amendment instrument: bytes held per mount, at RUN boundaries.
+#
+# WHY BYTES. The per-suite probe records `tmp_delta=<ENTRY COUNT>`, but ADR-133's
+# capacity verdict is about BYTES — it explicitly rejected count-based reasoning
+# because 4,294 small entries held 160 MB (4.5%) while three trees held 3.1 GiB
+# (88%). The quantity the advisory lock exists to protect had never been measured
+# by the instrument shipped to measure it.
+#
+# WHY RUN BOUNDARIES AND NOT PER SUITE. `du` is a RECURSIVE walk, unlike the
+# shallow `find -maxdepth 1` the entry-count probe uses. At two edges x ~289
+# suites that is ~578 walks per mount over multi-GiB trees — the same
+# observer-effect confound that got a background sampler rejected during
+# planning. Four walks answer the question ADR-133 actually asks: how many bytes
+# did this run hold on each mount. WHICH suite holds them is the coincident-peak
+# question, and that belongs to the deferred multi-run experiment.
+#
+# TWO DIRECTORIES, NEVER SUMMED. TMPDIR is /var/tmp (disk-backed) and TC_TMPDIR
+# is /tmp (the 4 GiB tmpfs) — deliberately different mounts. A single number
+# spanning both would report health from whichever is roomier, which is
+# indistinguishable from a healthy mount.
+#
+# Gated on TEST_TIMING_LOG, so a default local run pays nothing for it.
+_emit_bytes_probe() {
+  [[ -n "${TEST_TIMING_LOG:-}" ]] || return 0
+  local tmpfs_bytes disk_bytes
+  tmpfs_bytes=$(tc_used_bytes "${TC_TMPDIR:-/tmp}")
+  disk_bytes=$(tc_used_bytes "${TMPDIR:-/var/tmp}")
+  printf '%s\t0\tbytes_tmp=%s\tbytes_tmpdir=%s\n' \
+    "$1" "$tmpfs_bytes" "$disk_bytes" >> "$TEST_TIMING_LOG"
+}
+
+# --- Relevance predicates (ADR-181) ---
+# Sourced at TOP LEVEL, and deliberately NOT defensively, unlike the contention lib above. That
+# one is observe-only, so a missing lib must degrade to a normal run. This one DECIDES WHETHER
+# SUITES EXECUTE: were it absent and the arrays empty, every gated suite would decline silently
+# and the summary would still read green — the exact "green that is not evidence" the gate
+# exists to prevent, produced by the gate itself. A missing file is a hard failure.
+_REL_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/test-relevance-paths.sh"
+if [[ ! -f "$_REL_LIB" ]]; then
+  echo "ERROR: missing $_REL_LIB — the suite relevance predicates are undefined." >&2
+  echo "Refusing to run: without them every gated suite would decline silently while the" >&2
+  echo "summary still reported green." >&2
+  exit 2
+fi
+# shellcheck source=scripts/lib/test-relevance-paths.sh
+source "$_REL_LIB"
 
 # --- Test group selector ---
 # TEST_GROUP partitions the suite list across CI matrix shards. Env var wins
@@ -146,6 +201,41 @@ case "$TEST_GROUP" in
     exit 2
     ;;
 esac
+
+# --- Subagent full-gate refusal (Item 6 of the 2026-08-11 test-pipeline post-mortem) ---------
+# A spawned subagent runs only the suites targeting the files it was given. Three review agents
+# running lints and suites concurrently inflated a measurement of the registry mutation battery
+# by 1.9x (860 s -> 1675 s): the battery did not get slower, the machine did. A timing figure
+# taken under that contention is not a measurement of the code — and this runner now GATES
+# suites on measured cost, so a corrupted measurement propagates into what runs at all.
+#
+# MECHANICAL, not prose. The fan-out instructions in plugins/soleur/skills/{work,review}/SKILL.md
+# carry the same rule in English, but a paragraph in a prompt IS agent discretion: a grep
+# asserting that paragraph exists certifies the instruction was WRITTEN, never that it was
+# obeyed. Those clauses explain this guard; this guard is what enforces it.
+#
+# It fires HERE — after TEST_GROUP is validated so the message can name it, but before
+# tc_acquire and before the first suite — so a refused run costs nothing and never takes the
+# advisory lock that a legitimate sibling run is queued on.
+if [[ "${SOLEUR_SUBAGENT:-}" == "1" && "${SOLEUR_ALLOW_FULL_GATE:-}" != "1" ]]; then
+  echo "ERROR: refusing a full-gate run — SOLEUR_SUBAGENT=1 is set (TEST_GROUP=$TEST_GROUP)." >&2
+  echo "" >&2
+  echo "Spawned agents run only the suites targeting the files they were given. Concurrent" >&2
+  echo "full-gate runs inflate each other's timings and corrupt the measurement. The lead runs" >&2
+  echo "the gate once, after collecting fan-out work." >&2
+  echo "" >&2
+  echo "Run the suite covering your files instead:" >&2
+  echo "    bash <path/to/the/suite.test.sh>" >&2
+  echo "" >&2
+  echo "If you are the lead and this IS the sanctioned gate run, override explicitly:" >&2
+  echo "    SOLEUR_ALLOW_FULL_GATE=1 bash scripts/test-all.sh" >&2
+  # rc 4, deliberately NOT 3. #7424 assigned rc 3 the meaning "a suite was terminated —
+  # unresolved, coverage not obtained", and that trichotomy is documented in one-shot/SKILL.md.
+  # A refusal is the opposite claim (nothing ran, by design, and nothing is unresolved), so it
+  # needs its own code; sharing 3 would make a refused run read as a killed suite. 1 is an
+  # ordinary suite failure and 2 is a bad TEST_GROUP, so 4 is the next free value.
+  exit 4
+fi
 
 want_scripts() { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "scripts" ]]; }
 want_bun()     { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "bun"     ]]; }
@@ -229,6 +319,10 @@ _suite_budget_ms() {
     *) return 0 ;;
   esac
 }
+
+# Declines (ADR-181). Beside failed/killed for the same reason: a suite that was not run
+# is not a suite that passed, and the denominator must still account for it.
+skipped=0
 
 run_suite() {
   local label="$1"; shift
@@ -320,6 +414,40 @@ run_suite() {
   fi
 }
 
+# A DECLINE IS A VERDICT, NOT AN ABSENCE (ADR-181).
+#
+# run_suite increments `suites` on ENTRY, so the older shape — wrapping the call in an `if` and
+# echoing a notice on the else branch — silently removed the declined suite from the
+# denominator. `N/N suites passed` then read IDENTICALLY whether a suite was deliberately gated
+# or had been DE-REGISTERED, and the second is the #3366 class one level up: a suite running in
+# zero runners behind a green summary. Counting the decline is what makes those two states
+# distinguishable without reading the log body.
+#
+# A SIBLING of run_suite, deliberately NOT an option on it. scripts/lint-orphan-test-suites.sh
+# anchors suite registration on the literal `run_suite ` token, and its per-suite check is
+# satisfied by ANY scripts/*.test.sh appearing after that token — so a
+# `run_suite --skip-if-not-relevant "<paths>"` shape would let a path in the predicate list
+# satisfy the registration check for a DIFFERENT suite than the one executed, and deleting that
+# suite's real registration would still report `orphan test suites: none`. `skip_suite ` cannot
+# match `^[[:space:]]*run_suite `, so it is invisible to that anchor by construction.
+#
+# $1 = label (must match the label the suite would have run under)
+# $2 = machine-readable reason  $3 = the exact command that re-runs it
+skip_suite() {
+  local label="$1" reason="$2" rerun="$3"
+  suites=$((suites + 1))
+  skipped=$((skipped + 1))
+  echo ""
+  echo "[skip] $label ($reason)"
+  echo "      Nothing in this run is evidence for it. Re-run with:"
+  echo "        $rerun"
+  echo ""
+  # LABELLED trailing field, never a bare positional one: field 3 already carries the `FAIL`
+  # marker, so an unlabelled append would be positionally ambiguous across the ok, FAIL and
+  # skip shapes. Same reasoning the tmp_delta= field above already applies.
+  printf '%s\t%d\tskip=%s\n' "$label" 0 "$reason" >> "${TEST_TIMING_LOG:-/dev/null}"
+}
+
 # INFRA RELEVANCE DETECTION (#6730/#7014, converted from a boundary to a gate by #7103).
 # This runner NOW COVERS apps/web-platform/infra/, by registering
 # apps/web-platform/infra/run-registered-suites.sh as a nested suite (see the registration
@@ -367,26 +495,82 @@ run_suite() {
 # legitimately empty, so treating "either ref resolved" as success reports a confident
 # no-infra verdict from the ref that could not have known — measured on a scratch repo with a
 # committed infra file and no remote. Only the range ref's failure means "could not determine".
-_infra_detect_ok=0
-_infra_diff_names=""
-if _infra_out="$(git -c core.quotePath=false diff --name-only HEAD 2>/dev/null)"; then
-  _infra_diff_names="${_infra_diff_names}
-${_infra_out}"
+_diff_detect_ok=0
+_diff_head_ok=0
+_diff_names=""
+if _diff_out="$(git -c core.quotePath=false diff --name-only HEAD 2>/dev/null)"; then
+  _diff_head_ok=1
+  _diff_names="${_diff_names}
+${_diff_out}"
 fi
-if _infra_out="$(git -c core.quotePath=false diff --name-only origin/main...HEAD 2>/dev/null)"; then
-  _infra_detect_ok=1
-  _infra_diff_names="${_infra_diff_names}
-${_infra_out}"
+if _diff_out="$(git -c core.quotePath=false diff --name-only origin/main...HEAD 2>/dev/null)"; then
+  _diff_detect_ok=1
+  _diff_names="${_diff_names}
+${_diff_out}"
 fi
-_infra_diff_names="${_infra_diff_names}
-$(git ls-files --others --exclude-standard -- apps/web-platform/infra 2>/dev/null || true)"
+# RENAME SOURCES. `--name-only` emits only the DESTINATION of a rename, so `git mv` on a declared
+# predicate path leaves the OLD path — the one the array names — absent from the diff, and the
+# battery declines on the single most destructive edit possible to its own SUT. `--name-status -M`
+# emits `R100<TAB>old<TAB>new`, and since matching is substring-based over this whole blob, adding
+# it makes BOTH paths matchable. (The narrow window this closes is a rename WITHOUT a matching
+# array update; `lint-orphan-test-suites.sh` already reds loudly in the same run for that case, so
+# it was never a silent green — this just stops the suite declining while that error prints.)
+_diff_names="${_diff_names}
+$(git -c core.quotePath=false diff --name-status -M HEAD 2>/dev/null || true)
+$(git -c core.quotePath=false diff --name-status -M origin/main...HEAD 2>/dev/null || true)"
+# WIDENED from `-- apps/web-platform/infra` to the union of every prefix the relevance
+# predicates declare. The narrow form was correct while the only consumer was the infra notice;
+# as a suite GATE it was a fail-open, because a brand-new UNTRACKED mutation target under
+# scripts/ or .github/ was invisible here — so the session that ADDS a target and runs the gate
+# before committing would have had the suite declined on the very diff that needed it.
+_diff_names="${_diff_names}
+$(git ls-files --others --exclude-standard -- "${TEST_RELEVANCE_PREFIXES[@]}" 2>/dev/null || true)"
+
+# Does this run's diff touch any of the given paths? Used to decline suites that guard code the
+# diff does not reach. Substring match without a `^` anchor, matching the existing infra check:
+# over-matching a path that merely CONTAINS the string errs toward RUNNING the suite, which is
+# the safe direction.
+#
+# Reads a VARIABLE via a herestring, never `producer | grep -q`. Under this script's `set -o
+# pipefail` that pipeline reports non-zero when grep exits on a match while the producer is
+# still writing (SIGPIPE 141), which would make the condition evaluate FALSE despite the match —
+# a fail-open whose likelihood scales with diff size. A herestring has no producer to kill.
+_diff_touches() {
+  # The two bypasses are UNCONDITIONAL early returns, not flags consulted later.
+  #
+  # Under CI a decline is therefore UNREACHABLE rather than merely detected. That is strictly
+  # stronger than the assertion this replaced, and it is what keeps main-health-monitor green:
+  # on `main` both diff refs resolve and return EMPTY, so _diff_detect_ok is 1 (the fail-SAFE
+  # arm does not rescue it) and every gated suite would decline — an "assert no skips occurred"
+  # design would have reddened that workflow every six hours.
+  #
+  # Written as explicit `if` blocks rather than `[[ … ]] && return 0`. Under this script's
+  # `set -e` the short form's exit status depends on the CALL SITE — harmless inside an `if`
+  # condition, an abort anywhere else — and a predicate that decides whether suites run must not
+  # carry a landmine for the next caller.
+  if [[ "${SOLEUR_TEST_FORCE_ALL:-}" == "1" ]]; then return 0; fi
+  if [[ -n "${CI:-}" ]]; then return 0; fi
+  # Fail SAFE, not fail quiet: a diff the runner could not determine RUNS everything.
+  #
+  # BOTH arms, not just the range. The HEAD arm is what sees UNCOMMITTED work, and it can fail
+  # independently — a sibling process holding `index.lock` while `git diff` refreshes the index is
+  # the realistic case in this repo, where parallel worktrees are the documented workflow. With
+  # only the range arm consulted, that failure is swallowed: the range looks clean, and the battery
+  # declines on a working tree carrying exactly the edits it guards.
+  if [[ "$_diff_detect_ok" == 0 || "$_diff_head_ok" == 0 ]]; then return 0; fi
+  local p
+  for p in "$@"; do
+    if grep -qF -- "$p" <<<"$_diff_names"; then return 0; fi
+  done
+  return 1
+}
 
 _infra_in_diff=0
-if grep -qF 'apps/web-platform/infra/' <<<"$_infra_diff_names"; then
+if grep -qF 'apps/web-platform/infra/' <<<"$_diff_names"; then
   _infra_in_diff=1
 fi
 
-if [[ "$_infra_detect_ok" == 0 ]]; then
+if [[ "$_diff_detect_ok" == 0 ]]; then
   # Fail SAFE, not quiet: assume the boundary applies rather than assume it does not.
   _infra_in_diff=1
 fi
@@ -416,7 +600,7 @@ if ! want_infra; then
     echo "        TEST_GROUP=infra bash scripts/test-all.sh"
     echo ""
   fi
-elif [[ "$_infra_detect_ok" == 0 ]]; then
+elif [[ "$_diff_detect_ok" == 0 ]]; then
   echo ""
   echo "NOTE: could not determine this branch's diff (no origin/main, shallow clone, or a"
   echo "      fresh repo), so this runner cannot tell whether apps/web-platform/infra/ is"
@@ -447,6 +631,12 @@ _TC_RUN_START_ENTRIES=$(tc_tmp_entry_count)
 # timeout it proceeds with a named banner, so it cannot wedge a run. CI and the
 # SOLEUR_DISABLE_SESSION_STATE kill switch are honoured inside tc_acquire.
 tc_acquire "test-all"
+
+# AFTER tc_acquire, deliberately. A run that queued behind a sibling can wait up
+# to TC_LOCK_TIMEOUT (900 s) here, so a reading taken before the wait describes a
+# machine state up to fifteen minutes stale and makes the start/end delta
+# meaningless. Sampled at the moment this run actually begins doing work.
+_emit_bytes_probe "__run_boundary_start__"
 
 # Pre-suite bash/python tests — scripts shard.
 if want_scripts; then
@@ -782,7 +972,18 @@ if want_scripts; then
   # when it was finally committed it found 15 of its mutations surviving, including a seam that
   # could replace the pass condition itself. It sandboxes its own copies of both SUTs, so it
   # neither mutates the worktree nor depends on suite ordering here (#7277).
-  run_suite "tests/scripts/registry-gate-mutation-battery" bash tests/scripts/test-registry-gate-mutation-battery.sh
+  #
+  # RELEVANCE-GATED (ADR-181). At ~860 s this is the single most expensive suite in the runner —
+  # about 32% of a full local run — and it guards a script most PRs never touch. The predicate is
+  # referenced BY NAME: no path literal may appear on a `run_suite` line, because
+  # lint-orphan-test-suites.sh's per-suite anchor is satisfied by any scripts/*.test.sh appearing
+  # after that token, so an inline list would register a DIFFERENT suite than the one executed.
+  if _diff_touches "${REGISTRY_BATTERY_PATHS[@]}"; then
+    run_suite "tests/scripts/registry-gate-mutation-battery" bash tests/scripts/test-registry-gate-mutation-battery.sh
+  else
+    skip_suite "tests/scripts/registry-gate-mutation-battery" "relevance" \
+      "bash tests/scripts/test-registry-gate-mutation-battery.sh"
+  fi
   # Registered explicitly, next to its D10 sibling. Nothing auto-discovers tests/scripts/: this
   # file's *.test.sh glob cannot match the `test-*` prefix, and scripts/lint-orphan-test-suites.sh
   # covers scripts/*.test.sh only. An unregistered suite here runs in ZERO runners and is silent
@@ -939,7 +1140,15 @@ if want_scripts; then
   run_suite "scripts/digest-oracle-guard" bash scripts/digest-oracle-guard.test.sh
   # Sandbox-only: copies scripts/ and .github/ into a mktemp -d, mutates the copies, and asserts
   # the working tree is unchanged when it finishes.
-  run_suite "scripts/cf-tunnel-liveness-gate-mutations" bash scripts/cf-tunnel-liveness-gate-mutations.test.sh
+  # RELEVANCE-GATED (ADR-181), ~189 s. The battery COPIES all of scripts/ and .github/ into its
+  # sandbox but only DEPENDS on the paths the predicate names; gating on the copy set would match
+  # nearly every diff and never decline. Referenced by name — see the registry gate above.
+  if _diff_touches "${CF_TUNNEL_BATTERY_PATHS[@]}"; then
+    run_suite "scripts/cf-tunnel-liveness-gate-mutations" bash scripts/cf-tunnel-liveness-gate-mutations.test.sh
+  else
+    skip_suite "scripts/cf-tunnel-liveness-gate-mutations" "relevance" \
+      "bash scripts/cf-tunnel-liveness-gate-mutations.test.sh"
+  fi
   # Pins that this runner's OWN infra coverage claim matches whether it actually invoked the
   # infra runner. Registered here rather than under want_bun for the same reason as above.
   run_suite "scripts/test-all-infra-coverage-notice" bash scripts/test-all-infra-coverage-notice.test.sh
@@ -982,11 +1191,8 @@ if want_infra; then
     # path. The alternative was leaving TEST_GROUP as an undocumented escape hatch — which
     # silently drops far more than the infra runner and says so nowhere.
     _infra_skip_reason="incident"
-    echo ""
-    echo "SKIPPED (SOLEUR_INCIDENT_SKIP=1): apps/web-platform/infra/run-registered-suites.sh"
-    echo "      Nothing below is evidence for apps/web-platform/infra/. Re-run with:"
-    echo "        bash apps/web-platform/infra/run-registered-suites.sh"
-    echo ""
+    skip_suite "apps/web-platform/infra/run-registered-suites.sh" "incident" \
+      "bash apps/web-platform/infra/run-registered-suites.sh"
   elif [[ "$TEST_GROUP" == "infra" || "$_infra_in_diff" == 1 ]]; then
     run_suite "apps/web-platform/infra/run-registered-suites.sh" bash "apps/web-platform/infra/run-registered-suites.sh"
     # THE ONLY site that may set this. Every downstream coverage claim reads it, so it records
@@ -994,12 +1200,8 @@ if want_infra; then
     _infra_ran=1
   else
     _infra_skip_reason="not_in_diff"
-    echo ""
-    echo "SKIPPED (diff does not touch apps/web-platform/infra/): apps/web-platform/infra/run-registered-suites.sh"
-    echo "      Re-run explicitly with either:"
-    echo "        bash apps/web-platform/infra/run-registered-suites.sh"
-    echo "        TEST_GROUP=infra bash scripts/test-all.sh"
-    echo ""
+    skip_suite "apps/web-platform/infra/run-registered-suites.sh" "not_in_diff" \
+      "bash apps/web-platform/infra/run-registered-suites.sh"
   fi
 fi
 
@@ -1010,6 +1212,7 @@ if want_scripts; then
   run_suite ".github/scripts/test/run-all.sh" bash .github/scripts/test/run-all.sh
 fi
 
+_emit_bytes_probe "__run_boundary_end__"
 tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"
 
 # BREAKDOWN FIRST, TERMINAL MARKER LAST. The ordering is load-bearing, not cosmetic.
@@ -1020,10 +1223,18 @@ tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"
 # the one scenario (a killed run) where identifying completion correctly matters
 # most. Ordering it first keeps both contracts at zero cost: byte-identical clean
 # output, and `=== N/M suites passed ===` stays the last `===` line on every arm.
-if (( killed > 0 )); then
-  echo "=== $suites suites: $((suites - failed - killed)) passed, $failed failed, $killed killed (unresolved — coverage not obtained) ==="
+#
+# ADR-181 adds `skipped` to the same breakdown rather than appending it to the marker.
+# An earlier revision of this change DID append `(F failed, S skipped)` to the marker, which
+# orphaned every anchored poll of it; the separate-line shape #7424 established keeps the marker
+# byte-identical, so no reader is orphaned at all. Declines are counted in `suites` and excluded
+# from the numerator: with skips in the denominator but not in `failed`, the numerator would
+# report a gated suite as PASSED — a green that is not evidence, produced by the very change
+# that added the gate.
+if (( killed > 0 || skipped > 0 )); then
+  echo "=== $suites suites: $((suites - failed - killed - skipped)) passed, $failed failed, $killed killed (unresolved — coverage not obtained), $skipped skipped (declined — not relevant to this diff) ==="
 fi
-echo "=== $((suites - failed - killed))/$suites suites passed ==="
+echo "=== $((suites - failed - killed - skipped))/$suites suites passed ==="
 
 # Restatement of the PREAMBLE notice (#6730/#7014, re-pointed by #7103). Since the infra
 # runner is now a REGISTERED nested suite, the thing worth restating inverted: it is no

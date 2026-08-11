@@ -158,6 +158,14 @@ printf '#!/usr/bin/env bash\nsleep 0.05\n'                 > "$FIXTURES/slow.sh"
 build_sandbox() {
   local out="$1" arm="$2" mutation="$3"
   cp "$TARGET" "$out" || return 1
+  # The sandbox RELOCATES test-all.sh, so anything it resolves via ${BASH_SOURCE[0]} must be
+  # relocated with it. The ADR-179 relevance-predicate data file is sourced FAIL-CLOSED (a
+  # missing one exits 2, because empty predicates would decline every gated suite while the
+  # summary still read green), so without this copy every arm below measures that guard firing
+  # instead of the classifier under test. Safe unconditionally: the AC8 baseline arm builds from
+  # origin/main:scripts/test-all.sh, where the extra file is simply inert.
+  mkdir -p "$(dirname "$out")/lib" || return 1
+  cp "$REPO_ROOT/scripts/lib/test-relevance-paths.sh" "$(dirname "$out")/lib/" || return 1
   python3 - "$out" "$arm" "$mutation" "$FIXTURES" <<'PY'
 import sys, re
 path, arm, mutation, fixtures = sys.argv[1:5]
@@ -252,7 +260,11 @@ run_arm() {
   # would grep it — reporting a second, misleading verdict about the wrong arm.
   ARM_OUT=""; ARM_RC=-1
   build_sandbox "$sb" "$arm" "$mutation" >/dev/null || { fail "sandbox build failed: $arm/$mutation"; return 1; }
-  ARM_OUT=$(cd "$REPO_ROOT" && TEST_TIMING_LOG="$timing" TEST_GROUP=all timeout 120 bash "$sb" 2>&1)
+  # SOLEUR_SUBAGENT / SOLEUR_ALLOW_FULL_GATE cleared for hermeticity: test-all.sh exits 4 under
+  # the first BEFORE any registration, so an inherited value makes every arm measure a refusal
+  # rather than the classifier — and a fan-out agent is exactly the environment that sets it.
+  ARM_OUT=$(cd "$REPO_ROOT" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
+            TEST_TIMING_LOG="$timing" TEST_GROUP=all timeout 120 bash "$sb" 2>&1)
   ARM_RC=$?
   return 0
 }

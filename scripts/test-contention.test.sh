@@ -835,9 +835,91 @@ else
   fail "tc_preamble walks /proc more than once ($scan_calls scan, $view_calls view calls)"
 fi
 
-# --- Minimum-cardinality guard ---------------------------------------------
-# A silently-empty run exits 0 with zero coverage, which reads exactly like
-# success. This is the guard for that.
+# --- Per-mount used-bytes attribution (ADR-133 amendment instrument) -------
+# WHY BYTES. The shipped per-suite probe records `tmp_delta=<ENTRY COUNT>`, but
+# ADR-133's capacity verdict is about BYTES — that ADR explicitly rejected
+# count-based reasoning because 4,294 small entries held 160 MB (4.5%) while
+# three trees held 3.1 GiB (88%). So the quantity the advisory lock exists to
+# protect had never been measured by the instrument shipped to measure it.
+#
+# WHY `df` AND NOT `du`. ADR-133's question is about a MOUNT's capacity ("a
+# machine-global RAM-backed 4 GiB /tmp at 86% full"), not a directory's size, and
+# `df` answers it in O(1). A `du` walk was measured on this machine at 2.15 s for
+# /tmp and >115 s for /var/tmp — at the per-suite hook that is ~578 walks per
+# mount, which is the same observer-effect confound that got a background
+# sampler rejected during planning.
+#
+# WHY PER-MOUNT. test-all.sh points TMPDIR at /var/tmp (disk-backed) while
+# pinning TC_TMPDIR at /tmp (the tmpfs), so a probe returning one number for
+# "scratch" would re-create the fail-open the comment at test-all.sh:18-29 was
+# written to prevent: a healthy reading from the wrong mount is
+# indistinguishable from a healthy mount.
+#
+# THE MUTATION CONTROL IS THE PINNED PAIR. The stub keys its output on the PATH
+# argument, so an implementation that ignored its argument, or summed the two
+# mounts, returns the SAME number twice — which the distinctness arm rejects —
+# and neither pinned value equals their sum.
+BYTES_DF_STUB="$TESTROOT/df-bytes-stub.sh"
+cat > "$BYTES_DF_STUB" <<'DFEOF'
+#!/usr/bin/env bash
+# df -P -k shape (header + one data row), keyed on the LAST argument so the two
+# mounts report different Used values. Field 3 is Used in 1024-blocks.
+target="${*: -1}"
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted\n'
+case "$target" in
+  *tmpfs-under-pressure*) printf 'tmpfs 4194304 3500000 694304 84%% /tmp\n' ;;
+  *disk-roomy*)           printf '/dev/fake 999999999 4096 999995903 1%% /\n' ;;
+  *)                      printf 'unparseable\n' ;;
+esac
+DFEOF
+chmod +x "$BYTES_DF_STUB"
+mkdir -p "$TESTROOT/tmpfs-under-pressure" "$TESTROOT/disk-roomy"
+
+if bash -c "source '$LIB'; declare -F tc_used_bytes >/dev/null 2>&1"; then
+  pass "tc_used_bytes is defined"
+else
+  fail "tc_used_bytes is not defined — the bytes instrument does not exist"
+fi
+
+bytes_of() {
+  TC_DF_CMD="$BYTES_DF_STUB" TC_D="$1" \
+    bash -c "source '$LIB'; tc_used_bytes \"\$TC_D\"" 2>/dev/null || echo ""
+}
+b_tmpfs=$(bytes_of "$TESTROOT/tmpfs-under-pressure")
+b_disk=$(bytes_of "$TESTROOT/disk-roomy")
+
+# 3500000 KiB * 1024 and 4096 KiB * 1024. Pinned exactly: a range would admit
+# the sum (3588194304), which is the specific wrong answer being rejected.
+if [[ "$b_tmpfs" == "3584000000" ]]; then
+  pass "tc_used_bytes reports the tmpfs mount's used bytes exactly (3584000000)"
+else
+  fail "tmpfs mount reported '$b_tmpfs', expected 3584000000"
+fi
+if [[ "$b_disk" == "4194304" ]]; then
+  pass "tc_used_bytes reports the disk mount's used bytes exactly (4194304)"
+else
+  fail "disk mount reported '$b_disk', expected 4194304"
+fi
+if [[ -n "$b_tmpfs" && "$b_tmpfs" != "$b_disk" ]]; then
+  pass "per-mount attribution: the two mounts report DISTINCT byte counts"
+else
+  fail "both mounts reported '$b_tmpfs' — the helper ignores its argument or sums the mounts"
+fi
+if [[ "$b_tmpfs" != "3588194304" && "$b_disk" != "3588194304" ]]; then
+  pass "neither mount reports the SUM of the two (3588194304)"
+else
+  fail "a mount reported the sum of both mounts"
+fi
+
+# Degrade, never abort: this runs inside the gate's run-boundary hook, so an
+# exception on an unparseable df would take the whole run down mid-flight.
+b_bad=$(bytes_of "$TESTROOT/some-other-path")
+if [[ "$b_bad" == "0" ]]; then
+  pass "an unparseable df reports 0 rather than failing the run"
+else
+  fail "an unparseable df returned '$b_bad' instead of 0"
+fi
+
 # --- T15: the SUITE view dedupes by WORKTREE, not by pid ---------------------
 # The run view has carried this pair since #6789; the suite view shipped without
 # it, and the gap is not theoretical: replacing `cut -f2 | sort -u | grep -c .`
@@ -872,6 +954,44 @@ else
   fail "T15b: expected 'suite siblings: 2'; got: $(grep 'suite siblings' "$TESTROOT/preamble-t15b.txt" || true)"
 fi
 
+# V5: `df` FAILING is a different case from `df` succeeding with junk, and only the second was
+# fixtured — BYTES_DF_STUB exits 0 on every arm including its `unparseable` one. So an
+# implementation that dropped the `2>/dev/null` and the `|| kb=""` (`kb=$(... ) || return 1`)
+# satisfied every existing assertion while propagating a non-zero return into test-all.sh's
+# `set -euo pipefail` at a run-boundary hook — which is the "takes the whole run down mid-flight"
+# outcome the helper's own comment says it exists to prevent.
+BYTES_DF_FAIL_STUB="$TESTROOT/df-fail-stub.sh"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$BYTES_DF_FAIL_STUB"
+chmod +x "$BYTES_DF_FAIL_STUB"
+# tc_used_bytes emits a trailing newline, so the rc suffix lands on a second line; collapse it
+# rather than comparing against a shape that depends on that newline.
+# `set -o pipefail` IS THE POINT, and without it this arm is vacuous. The capture is a PIPELINE
+# (`df | awk`), whose exit status is awk's — and awk exits 0 on empty input — so a failing df is
+# invisible unless pipefail is set. test-all.sh runs `set -euo pipefail` and sources this lib into
+# that context, so the production shell is the one where df's failure actually propagates.
+# Measured: without pipefail here, replacing `|| kb=""` with `|| return 1` was an EQUIVALENT
+# mutation and this arm passed over it.
+b_failed=$(TC_DF_CMD="$BYTES_DF_FAIL_STUB" TC_D="$TESTROOT" \
+  bash -c "set -o pipefail; source '$LIB'; tc_used_bytes \"\$TC_D\"; printf ' rc=%s' \"\$?\"" 2>/dev/null | tr -d '\n' || echo "ABORTED")
+if [[ "$b_failed" == "0 rc=0" ]]; then
+  pass "a FAILING df yields 0 and returns success (degrades, never aborts the run)"
+else
+  fail "a failing df produced '$b_failed' — expected '0 rc=0'"
+fi
+
+# V6: nothing asserted that the implementation passes `-P -k`, because the stub ignores its
+# arguments entirely. Dropping `-P` lets a long device name wrap onto a second line, so `NR==2`
+# becomes the device name alone and field 3 is empty -> silently 0 on the PRODUCTION path while
+# every stubbed arm stays green. Dropping `-k` gives `df -h`'s `3.5G`, which fails the numeric
+# guard -> also 0. This arm is the only one that runs the helper against the REAL df.
+# Bounded, not pinned: the value is a measured quantity, so it asserts shape and non-zero only.
+b_real=$(TC_D="$TESTROOT" bash -c "source '$LIB'; tc_used_bytes \"\$TC_D\"" 2>/dev/null || echo "")
+if [[ "$b_real" =~ ^[0-9]+$ ]] && [[ "$b_real" -gt 0 ]]; then
+  pass "against the REAL df, tc_used_bytes returns a positive integer ($b_real bytes)"
+else
+  fail "against the real df, tc_used_bytes returned '$b_real' — the -P -k contract is broken"
+fi
+
 # POSITIVE CONTROL. The guard below reports THROUGH fail(), so fail() is a single
 # point of failure for this entire file: neutered to a no-op it takes the whole
 # verdict with it. Measured before this control existed: `fail() { :; }` plus
@@ -893,8 +1013,11 @@ fi
 # Count BOTH outcomes: a run with genuine failures has a lower pass_n, and testing
 # pass_n alone reported "cardinality guard: only 64 ran (expected >= 66)" on a run
 # whose real problem was two failures -- a strand message for a non-strand.
-if [[ "$((pass_n + fails))" -lt 68 ]]; then
-  fail "cardinality guard: only $((pass_n + fails)) assertions ran (expected >= 68)"
+# Raised 68 -> 76 with the ADR-181 per-mount bytes arms (6 attribution + 2 contract). At 68 the floor had exactly the slack
+# to swallow that whole block: deleting it left the suite green and silent, which is the defect
+# this guard exists to prevent, applied to the feature that added it.
+if [[ "$((pass_n + fails))" -lt 76 ]]; then
+  fail "cardinality guard: only $((pass_n + fails)) assertions ran (expected >= 76)"
 fi
 
 echo "=== test-contention: $pass_n passed, $fails failed ==="
