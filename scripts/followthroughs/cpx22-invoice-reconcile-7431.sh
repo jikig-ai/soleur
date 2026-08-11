@@ -69,16 +69,22 @@ body="$(gh issue view "$ISSUE" --json comments --jq '.comments[].body' 2>/dev/nu
 # Anchored at line start. An unanchored grep would match this script's own instructions if they
 # were ever pasted into the issue, which is the token-in-prose collision that has bitten this repo
 # repeatedly.
-if printf '%s\n' "$body" | grep -qE '^RESULT: PASS'; then
-  echo "cpx22-invoice-reconcile[#${ISSUE}]: PASS — operator confirmed against the invoice"
-  printf '%s\n' "$body" | grep -E '^RESULT: PASS' | head -1
-  exit 0
-fi
+#
+# FAIL IS TESTED FIRST, and the order is the assertion. Checking PASS first means a comment thread
+# reading "RESULT: PASS ..." then "RESULT: FAIL retracting, that was the July invoice" closes the
+# issue on the retracted verdict — the operator's correction loses to the string it is correcting.
+# Verdicts here are append-only and cannot be edited away, so the only safe rule is that any FAIL
+# outranks any PASS. Caught by case 5 of the harness, which failed on the original order.
 if printf '%s\n' "$body" | grep -qE '^RESULT: FAIL'; then
   echo "cpx22-invoice-reconcile[#${ISSUE}]: FAIL — the invoice contradicts the ledger"
   printf '%s\n' "$body" | grep -E '^RESULT: FAIL' | head -1
   echo "Correct expenses.md AND cost-model.md together; the registry rows move as a pair."
   exit 1
+fi
+if printf '%s\n' "$body" | grep -qE '^RESULT: PASS'; then
+  echo "cpx22-invoice-reconcile[#${ISSUE}]: PASS — operator confirmed against the invoice"
+  printf '%s\n' "$body" | grep -E '^RESULT: PASS' | head -1
+  exit 0
 fi
 
 echo "TRANSIENT: no anchored RESULT: line on #${ISSUE} yet — the invoice covering 2026-08-10 onward has not been reconciled."
