@@ -357,11 +357,22 @@ FIXEOF
 chmod +x "$FIXDIR3"/*.test.sh
 mkfixture_wf "$FIXDIR3/wf.yml" "$FIXDIR3/aaa-flood.test.sh"
 OUT6P="$(INFRA_WF="$FIXDIR3/wf.yml" SOLEUR_INFRA_DIR="$FIXDIR3" timeout 60 bash "$SUT" 2>&1)" || true
+# Assert on what DUMP_CAP ACTUALLY governs — the selection block — not the total prefixed
+# line count, which also carries a banner and footer and so drifts with unrelated edits.
+FLOOD_SEL=$(printf '%s\n' "$OUT6P" | grep -cE '^SOLEUR\| FAIL: flood line ' || true)
+if (( FLOOD_SEL > DUMP_CAP_SUT )); then
+  no "T6p: the selection block is ${FLOOD_SEL} lines, above DUMP_CAP=${DUMP_CAP_SUT} — the cap does not bind after selection"
+else
+  ok "T6p: 10,000 marker lines capped to ${FLOOD_SEL} <= DUMP_CAP=${DUMP_CAP_SUT} (binds AFTER selection)"
+fi
+
+# And the dump as a whole stays bounded. On failure, PRINT the unexpected lines — a bare count
+# mismatch is not self-diagnosing, and this bound is the one that drifted between local and CI.
 FLOOD=$(printf '%s\n' "$OUT6P" | grep -cE '^SOLEUR\| ' || true)
 if (( FLOOD > 0 && FLOOD <= DUMP_CEIL )); then
-  ok "T6p: 10,000 marker lines are capped after selection (${FLOOD} <= ${DUMP_CEIL}, from the runner's DUMP_CAP=${DUMP_CAP_SUT})"
+  ok "T6p-total: dump bounded at ${FLOOD} <= ${DUMP_CEIL} lines"
 else
-  no "T6p: the cap does not bind after selection (${FLOOD} lines, ceiling ${DUMP_CEIL} = DUMP_CAP ${DUMP_CAP_SUT} + 6)"
+  no "T6p-total: dump is ${FLOOD} lines, ceiling ${DUMP_CEIL} = DUMP_CAP ${DUMP_CAP_SUT} + 6 banner/footer lines"$'\n'"$(printf '%s\n' "$OUT6P" | grep -E '^SOLEUR\| ' | grep -vE '^SOLEUR\| FAIL: flood line ' | cut -c1-100)"
 fi
 
 # ── T6q: two suites failing at once — both dumped, deterministic order ────────
@@ -642,8 +653,8 @@ open(p,'w').write(s)
     "s = s.replace('if (( RED == 0 && \${#UNACCOUNTED[@]} == 0 )); then\n  rm -rf \"\$SOLEUR_SUITE_LOGDIR\"\nelse\n  SOLEUR_KEEP_LOGDIR=1\nfi', 'rm -rf \"\$SOLEUR_SUITE_LOGDIR\"')"
 
   # Drop the cap → one suite with 10,000 marker lines dumps all of them.
-  run_mutant drop-cap "T6p: the cap does not bind after selection" \
-    "s = s.replace('printf \\'%s\\\\n\\' \"\$sel\" | head -n \"\$DUMP_CAP\"', 'printf \\'%s\\\\n\\' \"\$sel\"')"
+  run_mutant drop-cap "T6p: the selection block is" \
+    "s = s.replace('mapfile -t -n \"\$DUMP_CAP\" _capped <<<\"\$sel\"', 'mapfile -t _capped <<<\"\$sel\"')"
 
   # Invert the capture order → `2>&1 >"$f"` sends stderr to the OLD stdout, so the per-suite
   # log holds only stdout and every failure marker is lost from the file the selector reads.

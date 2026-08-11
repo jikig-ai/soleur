@@ -373,7 +373,7 @@ dump_reds() {
 # without this a single long line makes `gh issue create` fail and the monitor files NOTHING,
 # silently losing its only job. `--no-group-separator` keeps grep's `--` markers out of the dump.
 dump_one() {
-  local f="$1" sel grc
+  local f="$1" sel grc _capped
   # "no capture file" and "capture file is empty" are DIFFERENT facts and must not share a
   # message. Observed 2026-08-11: the log dir was removed mid-run (an operator editing this
   # script while a run held it open), and all 12 REDs reported "the suite produced no output at
@@ -390,7 +390,15 @@ dump_one() {
   sel="$(grep -E -A3 --no-group-separator "$MARKER_ERE" "$f" 2>/dev/null)"; grc=$?
   case "$grc" in
     0) echo "[selection: marker-anchored]"
-       printf '%s\n' "$sel" | head -n "$DUMP_CAP" | cut -c1-2000 ;;
+       # `mapfile -n`, NOT `printf … | head -n`. The pipe form makes the producer write the
+       # whole selection into a consumer that exits after N lines, so `printf` takes SIGPIPE —
+       # and since the dump block is now `2>&1`-captured, any shell that reports that write
+       # error turns it into an extra prefixed line. Measured: 46 lines locally, 47 in CI, on a
+       # cap the test derives from DUMP_CAP. `mapfile -n` reads at most N lines and never
+       # writes past the cap, which also fixes the O(N) materialisation review flagged.
+       local _capped=()
+       mapfile -t -n "$DUMP_CAP" _capped <<<"$sel"
+       printf '%s\n' "${_capped[@]}" | cut -c1-2000 ;;
     1) echo "[selection: fallback tail — no line matched the failure-marker ERE]"
        tail -n "$DUMP_CAP" "$f" 2>/dev/null | cut -c1-2000 ;;
     *) echo "[selection: unavailable — grep exited ${grc} reading the capture]" ;;
