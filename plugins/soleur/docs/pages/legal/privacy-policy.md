@@ -37,7 +37,7 @@ For privacy inquiries, you may contact us at <legal@jikigai.com> (include "Priva
 
 ## 3. What the Plugin Does
 
-Soleur is a locally installed Claude Code plugin. It provides {{ stats.agents }} AI agents, {{ stats.skills }} skills, and a compounding knowledge base to support structured software development workflows. The Plugin is installed via the Claude Code CLI and runs entirely on your local machine.
+Soleur is a locally installed Claude Code plugin. It provides specialist AI agents, skills, and a compounding knowledge base to support structured software development workflows. The Plugin is installed via the Claude Code CLI and runs entirely on your local machine.
 
 ## 4. Data We Collect
 

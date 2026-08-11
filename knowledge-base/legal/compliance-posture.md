@@ -59,7 +59,7 @@ Living status document for vendor DPAs, legal documents, and compliance action i
 
 | Document | Location | Version | Last Updated | Status |
 |----------|----------|---------|--------------|--------|
-| Terms & Conditions | `docs/legal/terms-and-conditions.md` | 2.4.0 | 2026-07-02 | Active |
+| Terms & Conditions | `docs/legal/terms-and-conditions.md` | 2.5.0 | 2026-08-11 | Active |
 | Privacy Policy | `docs/legal/privacy-policy.md` | — | 2026-08-09 | Active |
 | Article 30 Register (RoPA) | `knowledge-base/legal/article-30-register.md` | — | 2026-07-31 | Draft (counsel review pending) |
 | Cookie Policy | `docs/legal/cookie-policy.md` | — | 2026-03-29 | Active |

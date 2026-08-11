@@ -135,7 +135,7 @@ header_json="Content-Type: application/json"
 
 # TC_VERSION must match lib/legal/tc-version.ts (middleware redirects to
 # /accept-terms on mismatch). Keep this literal in sync with that file.
-TC_VERSION="2.4.0"
+TC_VERSION="2.5.0"
 
 EMAIL="live-verify@soleur.ai"
 # Synthetic, non-resolvable sentinel repo URL. Never cloned/fetched — the app
