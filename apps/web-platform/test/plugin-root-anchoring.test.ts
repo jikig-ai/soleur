@@ -10,19 +10,19 @@ import { resolve } from "node:path";
  * On any repo that is not this monorepo, a CWD-relative operand resolves into
  * the CUSTOMER's tree — and on a name collision, executes THEIR file.
  *
- * Canonical form: bare `${CLAUDE_PLUGIN_ROOT}/<payload-relative-path>`.
+ * Canonical form: bare `${CLAUDE_PLUGIN_ROOT}/<payload-relative-path>`, QUOTED.
  * Rejected: `${CLAUDE_PLUGIN_ROOT:-…}` and `${CLAUDE_PLUGIN_ROOT:?…}`. Neither is
  * the literal token, so neither is substituted; the `:-` form then expands to a
- * customer-controlled relative path (the reported bug), and `:?` hard-fails on
- * exactly the marketplace surface the fix targets.
+ * customer-controlled relative path (the reported bug).
  *
- * DELIBERATELY OUT OF SCOPE — state it rather than imply closure:
- *   - `plugins/soleur/skills/ ** ` still carries ~100 `${CLAUDE_PLUGIN_ROOT:-…}`
- *     sites. That convention migration is deferred; it requires changing
- *     `server/safe-bash.ts`'s exact-literal set and the coupling test's regex,
- *     which does not belong behind a P1 customer bug fix. Tracked separately.
- *   - Shipped `.sh`/`.ts` under `plugins/soleur/ ** /scripts/` are not scanned,
- *     so path defects INSIDE payload scripts remain uncovered.
+ * DELIBERATELY OUT OF SCOPE — stated rather than implied:
+ *   - `plugins/soleur/skills/ ** ` still carries ~98 `${CLAUDE_PLUGIN_ROOT:-…}`
+ *     sites and some bare-CWD-relative `bash plugins/soleur/scripts/…` sites.
+ *     Deferred to #7453; that is also an open bypass of THIS guard, since moving
+ *     a producer into a SKILL.md escapes the scope below onto a surface that is
+ *     equally customer-facing.
+ *   - Shipped `.sh`/`.ts` under `plugins/soleur/ ** /scripts/` are not scanned.
+ *   - Remaining follow-ups: #7452.
  */
 
 const REPO_ROOT = resolve(__dirname, "../../..");
@@ -31,15 +31,9 @@ const PAYLOAD_ROOT = resolve(REPO_ROOT, "plugins/soleur");
 
 /**
  * Closed set of areas permitted to invoke a monorepo-only repo-root script.
- * THIS IS THE ANTI-LAUNDERING CONDITION. Every other condition below is
- * satisfiable by anyone who wraps an invocation in an `if`; membership here is
- * not, because expanding it means editing this file — a reviewable diff.
- *
- * `rule-prune` qualifies because the area is monorepo-only BY CONSTRUCTION: its
- * input (`knowledge-base/project/rule-metrics.json`) derives from
- * `.claude/.rule-incidents.jsonl`, written by `emit_incident()` in
- * `.claude/hooks/lib/incidents.sh` — Soleur's own rule-corpus telemetry, which
- * does not and should not exist on a customer machine.
+ * THIS IS THE ANTI-LAUNDERING CONDITION. Every other condition is satisfiable by
+ * anyone who wraps an invocation in an `if`; membership here is not, because
+ * expanding it means editing this file — a reviewable diff.
  */
 const MONOREPO_ONLY_AREAS: ReadonlySet<string> = new Set(["rule-prune"]);
 
@@ -47,17 +41,44 @@ const MONOREPO_ONLY_AREAS: ReadonlySet<string> = new Set(["rule-prune"]);
 const SENTINEL_LITERAL =
   'SOLEUR_MONOREPO="$(test -f plugins/soleur/.claude-plugin/plugin.json && pwd || true)"';
 
-/** Executable verbs whose first operand is a script path. */
-const VERB = /^\s*(?:bash|bun|node|sh|python3?)\s+(\S+)/;
+/**
+ * The mandated fail-closed preflight (ADR-177 decision 2). Anchored on the
+ * manifest probe rather than on a whole block, so reformatting does not
+ * false-fail while deleting the gate still does.
+ */
+const PREFLIGHT_ANCHOR = '"${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json"';
 
 const ANCHOR_PREFIX = "${CLAUDE_PLUGIN_ROOT}/";
+
+/** Runners whose FIRST operand is a script path. */
+const RUNNERS = "bash|bun|node|sh|python3?|bunx|npx|tsx|deno|exec|source";
+
+/**
+ * Command position, not line start. `cd x && bash foo` and `FOO=1 bash foo` both
+ * put the invocation in second position, which a `^\s*` anchor cannot see — both
+ * were measured to defeat the previous form of this guard while executing a
+ * planted decoy.
+ */
+const RUNNER_RE = new RegExp(
+  String.raw`(?:^|\||&&|;|\bthen\b|\bdo\b|\$\()\s*(?:\w+=\S*\s+)*(?:${RUNNERS})\s+(\S+)`,
+  "g",
+);
+
+/**
+ * Direct execution with no runner token — `./script.sh`, `../x/y.sh`. Measured to
+ * defeat the runner-only form while executing a planted decoy, i.e. #7442
+ * reintroduced in different clothes.
+ */
+const DIRECT_EXEC_RE = new RegExp(
+  String.raw`(?:^|\||&&|;|\bthen\b|\bdo\b|\$\()\s*(?:\w+=\S*\s+)*(\.{1,2}/\S+)`,
+  "g",
+);
 
 interface Invocation {
   file: string;
   line: string;
   operand: string;
   lineIdx: number;
-  /** Index into `fences`, or -1 when the invocation is an inline code span. */
   fenceIdx: number;
 }
 
@@ -80,36 +101,66 @@ function commandFiles(): string[] {
   return out.sort();
 }
 
+/** Strip one layer of surrounding quotes from an operand. */
+function unquote(op: string): string {
+  return op.replace(/^["']/, "").replace(/["']$/, "");
+}
+
+function extractOperands(text: string): string[] {
+  const out: string[] = [];
+  for (const re of [RUNNER_RE, DIRECT_EXEC_RE]) {
+    re.lastIndex = 0;
+    for (const m of text.matchAll(re)) out.push(m[1]);
+  }
+  return out;
+}
+
 /**
- * Collect fenced ```bash blocks AND inline code spans.
+ * Collect fenced blocks AND inline code spans.
  *
- * Both matter, and the inline case is the one that bites: the two rule-prune
- * invocations this guard exists to constrain were inline spans inside numbered
- * list items, which a column-0 fence scanner cannot see. An indent-aware fence
- * regex is also required — every producer fence here is list-indented.
+ * Fence tracking follows CommonMark run-length: a closer must be at least as
+ * long as its opener. A naive "toggle on any ```" is a parity counter, and a
+ * four-backtick documentation fence containing a three-backtick bash fence
+ * inverts parity for the rest of the file — measured to blind this guard
+ * completely, which is why `fencesBalanced` is asserted rather than assumed.
  */
-function parse(file: string): { invocations: Invocation[]; fences: Fence[] } {
-  const src = readFileSync(file, "utf8");
-  const lines = src.split("\n");
+function parse(file: string): {
+  invocations: Invocation[];
+  fences: Fence[];
+  fencesBalanced: boolean;
+  hasBashFence: boolean;
+} {
+  const lines = readFileSync(file, "utf8").split("\n");
   const fences: Fence[] = [];
   const invocations: Invocation[] = [];
 
   let openIdx = -1;
+  let openLen = 0;
   let body: string[] = [];
+  let hasBashFence = false;
+
   for (let i = 0; i < lines.length; i++) {
-    // Indent-aware: ```bash may be nested under a list item.
-    if (/^\s*```/.test(lines[i])) {
+    const m = lines[i].match(/^\s*(`{3,})(.*)$/);
+    if (m) {
+      const len = m[1].length;
       if (openIdx === -1) {
         openIdx = i;
+        openLen = len;
         body = [];
-      } else {
+        if (/^\s*bash\b/.test(m[2])) hasBashFence = true;
+        continue;
+      }
+      // A closer carries no info string and must be >= the opener's length.
+      if (len >= openLen && m[2].trim() === "") {
         fences.push({ startIdx: openIdx, endIdx: i, body });
         openIdx = -1;
+        openLen = 0;
+        continue;
       }
-      continue;
     }
     if (openIdx !== -1) body.push(lines[i]);
   }
+  const fencesBalanced = openIdx === -1;
 
   const fenceOf = (idx: number) =>
     fences.findIndex((f) => idx > f.startIdx && idx < f.endIdx);
@@ -117,92 +168,100 @@ function parse(file: string): { invocations: Invocation[]; fences: Fence[] } {
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
     const inFence = fenceOf(i);
-
     if (inFence !== -1) {
-      const m = raw.match(VERB);
-      if (m) {
-        invocations.push({ file, line: raw.trim(), operand: m[1], lineIdx: i, fenceIdx: inFence });
+      for (const operand of extractOperands(raw)) {
+        invocations.push({ file, line: raw.trim(), operand, lineIdx: i, fenceIdx: inFence });
       }
       continue;
     }
-
-    // Inline code spans on a prose line, e.g. `bash scripts/foo.sh --flag`.
     for (const span of raw.matchAll(/`([^`]+)`/g)) {
-      const m = span[1].match(VERB);
-      if (m) {
-        invocations.push({
-          file,
-          line: span[1].trim(),
-          operand: m[1],
-          lineIdx: i,
-          fenceIdx: -1,
-        });
+      for (const operand of extractOperands(span[1])) {
+        invocations.push({ file, line: span[1].trim(), operand, lineIdx: i, fenceIdx: -1 });
       }
     }
   }
-  return { invocations, fences };
+  return { invocations, fences, fencesBalanced, hasBashFence };
+}
+
+/** True when the operand escapes the payload via `..` after normalization. */
+function escapesPayload(operand: string): boolean {
+  const rel = unquote(operand).slice(ANCHOR_PREFIX.length);
+  const abs = resolve(PAYLOAD_ROOT, rel);
+  return !abs.startsWith(PAYLOAD_ROOT + "/");
+}
+
+function isAnchored(operand: string): boolean {
+  return unquote(operand).startsWith(ANCHOR_PREFIX);
 }
 
 /**
- * Monorepo-gated: ALL SIX conditions, each failing closed. Returns the matched
- * area on success so P3b can prove every closed-set member is exercised.
+ * Monorepo-gated: ALL SEVEN conditions, each failing closed. Condition (1)
+ * (closed-set membership) is the anti-laundering one; (7) is the only one with
+ * real teeth against a hostile operand, so it is deliberately strict.
  */
 function monorepoGatedArea(inv: Invocation, fences: Fence[]): string | null {
-  if (inv.fenceIdx === -1) return null; // an inline span carries no gate
+  if (inv.fenceIdx === -1) return null;
   const fence = fences[inv.fenceIdx];
-  const bodyStart = fence.startIdx + 1;
-  const rel = inv.lineIdx - bodyStart;
+  const rel = inv.lineIdx - (fence.startIdx + 1);
 
-  // (2) exact sentinel literal present
+  // (2) exact sentinel literal
   const sentinelRel = fence.body.findIndex((l) => l.includes(SENTINEL_LITERAL));
   if (sentinelRel === -1) return null;
-
-  // (3) ordering — sentinel strictly before the invocation
+  // (3) ordering
   if (!(sentinelRel < rel)) return null;
-
-  // (4) emission, and (1) closed-set membership of the emitted area
+  // (4) emission + (1) closed-set membership
   const emit = fence.body.find((l) => l.includes('echo "SOLEUR_SYNC_AREA_UNAVAILABLE area='));
   if (!emit) return null;
   const areaMatch = emit.match(/SOLEUR_SYNC_AREA_UNAVAILABLE area=(\S+)/);
-  if (!areaMatch) return null;
-  const area = areaMatch[1];
-  if (!MONOREPO_ONLY_AREAS.has(area)) return null;
-
+  if (!areaMatch || !MONOREPO_ONLY_AREAS.has(areaMatch[1])) return null;
   // (5) halt between sentinel and invocation
   const exitRel = fence.body.findIndex((l) => /^\s*exit 2\s*$/.test(l));
   if (exitRel === -1 || !(exitRel > sentinelRel && exitRel < rel)) return null;
+  // (6) one gate, one command
+  if (fence.body.reduce((n, l) => n + extractOperands(l).length, 0) !== 1) return null;
+  // (7) the operand must be fail-closed IN ISOLATION and must not escape via `..`.
+  //     `:?` is correct here (unlike for CLAUDE_PLUGIN_ROOT) because the value is
+  //     assigned two lines above by code in this repo, not supplied by the harness
+  //     — so an ambient export cannot direct it.
+  const bare = unquote(inv.operand);
+  if (!bare.startsWith("${SOLEUR_MONOREPO:?")) return null;
+  if (bare.includes("/../") || bare.endsWith("/..")) return null;
 
-  // (6) one gate, one command — otherwise a single sentinel launders several
-  const invocationsInFence = fence.body.filter((l) => VERB.test(l)).length;
-  if (invocationsInFence !== 1) return null;
-
-  // (7) the operand itself must be fail-closed in isolation. Added beyond the
-  // ruled six because a gate on a SEPARATE LINE does not survive a line-wise
-  // reader: measured, the decoys executed when the invocation was extracted
-  // alone. `"$SOLEUR_MONOREPO/…` degrades to `/…` when unset, which is
-  // root-anchored and nonexistent rather than customer-controlled.
-  if (!inv.operand.startsWith('"$SOLEUR_MONOREPO/')) return null;
-
-  return area;
+  return areaMatch[1];
 }
 
 describe("plugin-root anchoring — customer-facing command surface", () => {
   const files = commandFiles();
   const parsed = files.map((f) => ({ file: f, ...parse(f) }));
   const allInvocations = parsed.flatMap((p) => p.invocations);
+  let assertions = 0;
+  const seen = () => {
+    assertions += 1;
+  };
 
-  it("P3: extracts at least one executable invocation (anti-vacuity floor)", () => {
-    // Floor is >= 1, deliberately NOT pinned to today's count, so legitimately
-    // removing a producer does not false-fail the guard. Mirrors the reasoning
-    // committed at plugin-root-list-carveout-coupling.test.ts:41-44.
-    expect(allInvocations.length).toBeGreaterThanOrEqual(1);
+  it("P0: every command file's fences are balanced", () => {
+    // An unbalanced fence silently drops every invocation after it, which makes
+    // all downstream assertions vacuous rather than failing.
+    seen();
+    expect(parsed.filter((p) => !p.fencesBalanced).map((p) => p.file)).toEqual([]);
+  });
+
+  it("P3: any file with a bash fence yields at least one invocation", () => {
+    // Per-file, not global: a global `>= 1` floor stays green while one file
+    // contributes and another has been blinded.
+    seen();
+    const blind = parsed
+      .filter((p) => p.hasBashFence && p.invocations.length === 0)
+      .map((p) => p.file.replace(REPO_ROOT + "/", ""));
+    expect(blind).toEqual([]);
   });
 
   it("P1: every producer operand is bare-anchored or monorepo-gated", () => {
+    seen();
     const violations: string[] = [];
     for (const p of parsed) {
       for (const inv of p.invocations) {
-        if (inv.operand.startsWith(ANCHOR_PREFIX)) continue;
+        if (isAnchored(inv.operand)) continue;
         if (monorepoGatedArea(inv, p.fences)) continue;
         violations.push(`${inv.file.replace(REPO_ROOT + "/", "")}: ${inv.line}`);
       }
@@ -210,35 +269,50 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
     expect(violations).toEqual([]);
   });
 
-  it("P1b: no :- or :? default anywhere in the command surface", () => {
-    const violations: string[] = [];
-    for (const f of files) {
-      const src = readFileSync(f, "utf8");
-      if (src.includes("${CLAUDE_PLUGIN_ROOT:-") || src.includes("${CLAUDE_PLUGIN_ROOT:?")) {
-        violations.push(f.replace(REPO_ROOT + "/", ""));
-      }
-    }
+  it("P1b: no :- or :? default on CLAUDE_PLUGIN_ROOT in the command surface", () => {
+    seen();
+    const violations = files
+      .filter((f) => {
+        const src = readFileSync(f, "utf8");
+        return src.includes("${CLAUDE_PLUGIN_ROOT:-") || src.includes("${CLAUDE_PLUGIN_ROOT:?");
+      })
+      .map((f) => f.replace(REPO_ROOT + "/", ""));
     expect(violations).toEqual([]);
   });
 
-  it("P2: every anchored operand resides in the plugin payload", () => {
-    // The residency teeth. Catches a producer that is perfectly anchored but
-    // points at a path no marketplace install would carry.
-    const missing: string[] = [];
+  it("P1c: every anchored operand is quoted", () => {
+    // An unquoted expansion word-splits on an install path containing a space
+    // (measured: `/mnt/c/Users/First Last/…`), and the split prefix is what gets
+    // executed. The preflight cannot see this — it passes, then the run breaks.
+    seen();
+    const unquoted = allInvocations
+      .filter((inv) => isAnchored(inv.operand) && !/^["']/.test(inv.operand))
+      .map((inv) => `${inv.file.replace(REPO_ROOT + "/", "")}: ${inv.line}`);
+    expect(unquoted).toEqual([]);
+  });
+
+  it("P2: every anchored operand resides INSIDE the plugin payload", () => {
+    seen();
+    const bad: string[] = [];
     for (const inv of allInvocations) {
-      if (!inv.operand.startsWith(ANCHOR_PREFIX)) continue;
-      const rel = inv.operand.slice(ANCHOR_PREFIX.length).replace(/["']/g, "");
+      if (!isAnchored(inv.operand)) continue;
+      const rel = unquote(inv.operand).slice(ANCHOR_PREFIX.length);
+      // Containment first: `resolve()` normalizes `..` straight through the
+      // payload boundary, so a `${CLAUDE_PLUGIN_ROOT}/../../x` operand would
+      // otherwise land on a real repo-root file and be certified resident.
+      if (escapesPayload(inv.operand)) {
+        bad.push(`ESCAPES PAYLOAD: ${inv.line}`);
+        continue;
+      }
       if (!existsSync(resolve(PAYLOAD_ROOT, rel))) {
-        missing.push(`${inv.file.replace(REPO_ROOT + "/", "")}: plugins/soleur/${rel}`);
+        bad.push(`NOT RESIDENT: plugins/soleur/${rel}`);
       }
     }
-    expect(missing).toEqual([]);
+    expect(bad).toEqual([]);
   });
 
   it("P3b: every MONOREPO_ONLY_AREAS member is exercised by a live gated site", () => {
-    // Anti-graveyard ratchet: a member with no live gated site REDs, so the
-    // closed vocabulary cannot silently accumulate dead entries and rot into a
-    // free-form one.
+    seen();
     const exercised = new Set<string>();
     for (const p of parsed) {
       for (const inv of p.invocations) {
@@ -247,5 +321,36 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
       }
     }
     expect([...MONOREPO_ONLY_AREAS].filter((a) => !exercised.has(a))).toEqual([]);
+  });
+
+  it("P4: every command file with an anchored producer carries the fail-closed preflight", () => {
+    // ADR-177 decision 2 mandates this per command file, and it is the half of
+    // the safety argument that carries the bare form. Without this assertion the
+    // whole preflight block is deletable with the suite green.
+    seen();
+    const missing: string[] = [];
+    for (const p of parsed) {
+      const anchored = p.invocations.filter((inv) => isAnchored(inv.operand));
+      if (anchored.length === 0) continue;
+      const src = readFileSync(p.file, "utf8");
+      if (!src.includes(PREFLIGHT_ANCHOR)) {
+        missing.push(p.file.replace(REPO_ROOT + "/", ""));
+        continue;
+      }
+      // Ordering: the preflight must precede the first anchored invocation.
+      const preflightIdx = src.split("\n").findIndex((l) => l.includes(PREFLIGHT_ANCHOR));
+      const firstAnchored = Math.min(...anchored.map((inv) => inv.lineIdx));
+      if (!(preflightIdx < firstAnchored)) {
+        missing.push(`${p.file.replace(REPO_ROOT + "/", "")} (preflight below first producer)`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  it("P5: the suite ran every assertion (anti-vacuity floor)", () => {
+    // Neutering or deleting an assertion block otherwise leaves the file green.
+    // Absolute, ratcheted by hand — never derived from the cases themselves,
+    // which would simply descend with a deletion.
+    expect(assertions).toBe(8);
   });
 });

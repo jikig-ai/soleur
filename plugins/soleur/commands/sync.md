@@ -79,28 +79,45 @@ fi
 
 Warn but continue if not a git repo.
 
-**Validate the plugin root resolves (fail closed — #7442):**
+**Validate the plugin root is OUR plugin (fail closed — #7442):**
 
 ```bash
-test -d "${CLAUDE_PLUGIN_ROOT}/scripts" || {
-  echo "soleur:sync — plugin root unresolved; refusing to run producers CWD-relative (ADR-177)." >&2
+SOLEUR_ROOT_OK=0
+if [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
+   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
+   && [ -d "${CLAUDE_PLUGIN_ROOT}/scripts" ]; then
+  SOLEUR_ROOT_OK=1
+fi
+if [ "$SOLEUR_ROOT_OK" -ne 1 ]; then
+  echo "SOLEUR_SYNC_ROOT_UNRESOLVED reason=plugin-root-unverified"
+  echo "soleur:sync — the plugin root did not verify as the Soleur payload; refusing to run any producer (ADR-177)." >&2
   exit 1
-}
+fi
 ```
 
-Every producer below is anchored to `${CLAUDE_PLUGIN_ROOT}` — **bare, never
-`:-` or `:?`** — and its path is **payload-relative** (the root already *is*
-`plugins/soleur`, so it is `${CLAUDE_PLUGIN_ROOT}/scripts/foo.ts`, never
-`${CLAUDE_PLUGIN_ROOT}/plugins/soleur/scripts/foo.ts`).
+**STOP if that block exits non-zero.** Report to the user verbatim: *"I can't run
+`/soleur:sync` here — I couldn't verify where the Soleur plugin is installed.
+Please reinstall the plugin and try again."* Do **not** try to locate the
+producers yourself, do **not** substitute a relative path, and do **not**
+continue to the phases below. Resolving the plugin root by hand is the defect
+this gate exists to prevent, and the refusal message is the point at which it is
+most tempting.
 
-This gate is the reason the bare form is correct under either substitution
-hypothesis. If the harness substitutes the token, it yields the installed root
-and the producers run. If it does not, the token reaches bash where the variable
-is unset and expands to `/scripts/…` — root-anchored, nonexistent, and not
-writable by a non-root user — so this preflight turns it into a clean refusal.
-A `:-` default is the only form that expands into a path the *customer* controls,
-which is how a same-named file in their tree gets executed. Never reintroduce one
-here.
+Every producer below is anchored to `${CLAUDE_PLUGIN_ROOT}` — **bare, never
+`:-` or `:?`** — the operand is **quoted** (an install path may contain spaces),
+and its path is **payload-relative** (the root already *is* `plugins/soleur`, so
+it is `"${CLAUDE_PLUGIN_ROOT}/scripts/foo.ts"`, never
+`"${CLAUDE_PLUGIN_ROOT}/plugins/soleur/scripts/foo.ts"`).
+
+Why this gate checks plugin IDENTITY and not directory shape: `CLAUDE_PLUGIN_ROOT`
+is an ordinary environment variable, and the Bash tool inherits the user's
+profile — so a `.envrc`, a `~/.bashrc` line, or a package `postinstall` can
+export it. A `test -d "$X/scripts"` predicate is satisfied by *any* directory
+with a `scripts/` child, which measurably lets an ambient value execute
+attacker-chosen bytes. Verifying the payload manifest raises the bar from
+"set any variable" to "plant a complete fake plugin". The bare form remains
+strictly better than a `:-` default, which needs no attacker precondition at all
+— but it is not safe *by construction*, and this gate is what carries it.
 
 ### Phase 1: Analyze
 
@@ -220,7 +237,7 @@ Runs when `<sync_area>` is `c4`, and as part of `all` **after** the `project`
 area (it consumes the component docs that area writes).
 
 ```bash
-bun ${CLAUDE_PLUGIN_ROOT}/scripts/generate-c4-from-components.ts
+bun "${CLAUDE_PLUGIN_ROOT}/scripts/generate-c4-from-components.ts"
 ```
 
 The producer parses each component doc's `dependencies:` frontmatter (falling back
@@ -271,14 +288,14 @@ Runs at the END of an `all` sync, after every other area. Writes
 `knowledge-base/project/kb-coverage.md` and prints the same marker to stdout:
 
 ```bash
-bun ${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts
+bun "${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts"
 ```
 
 Add one `--degraded "<reason>"` for each producer that reported `status=degraded`
 earlier in the run (the `reason=` token from its marker is the right string):
 
 ```bash
-bun ${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts \
+bun "${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts" \
   --degraded "c4: no-generated-relationships"
 ```
 
@@ -348,7 +365,7 @@ Runs only when `<sync_area>` is literally `rule-prune`. Surfaces AGENTS.md rules
      echo "SOLEUR_SYNC_AREA_UNAVAILABLE area=rule-prune reason=monorepo-only-maintenance-area"
      exit 2
    fi
-   bash "$SOLEUR_MONOREPO/scripts/rule-metrics-aggregate.sh"
+   bash "${SOLEUR_MONOREPO:?monorepo sentinel not evaluated}/scripts/rule-metrics-aggregate.sh"
    ```
 
    Append `--dry-run` to preview the summary without writing. Do not create a stub file.
@@ -362,7 +379,7 @@ Runs only when `<sync_area>` is literally `rule-prune`. Surfaces AGENTS.md rules
      echo "SOLEUR_SYNC_AREA_UNAVAILABLE area=rule-prune reason=monorepo-only-maintenance-area"
      exit 2
    fi
-   bash "$SOLEUR_MONOREPO/scripts/rule-prune.sh" --weeks=<n>
+   bash "${SOLEUR_MONOREPO:?monorepo sentinel not evaluated}/scripts/rule-prune.sh" --weeks=<n>
    ```
 
    Append `--dry-run` to preview candidates without filing. The script:
@@ -390,7 +407,7 @@ are disclosed as blind spots, never counted.
 1. **Emit the drift report** (read-only). Run:
 
    ```bash
-   bash ${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh drift --repo . --register knowledge-base/engineering/architecture/domain-model.md
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" drift --repo . --register knowledge-base/engineering/architecture/domain-model.md
    ```
 
    Exit `0` = clean, `1` = drift found, `2` = error, `3` = secret-shape refuse. Present the report verbatim
@@ -404,7 +421,7 @@ are disclosed as blind spots, never counted.
    **accepted** candidate, append it via the safe primitive:
 
    ```bash
-   bash ${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh write-row \
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" write-row \
      --register knowledge-base/engineering/architecture/domain-model.md \
      --anchor "<migration-file › table.object>" --statement "<candidate statement>"
    ```
@@ -434,7 +451,7 @@ so under `all` (or headless) that gate would write **zero rows**. Take this path
    on a path they cannot resolve:
 
    ```bash
-   bash ${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh init --repo . \
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" init --repo . \
      --register knowledge-base/engineering/architecture/domain-model.md
    ```
 

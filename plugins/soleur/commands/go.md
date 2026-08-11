@@ -21,11 +21,22 @@ Do not proceed until there is input from the user.
 Before the session-start preamble and before any routing, confirm a usable git repository exists. Run the readiness probe (it decides readiness AND, on failure, emits a `SOLEUR_GIT_REPO_DIAG` forensic line that the server-side telemetry hook mirrors to Better Stack — so a not-ready workspace is self-diagnosable without a manual probe):
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/git-repo-readiness-diag.sh 2>&1 \
-  || { git rev-parse --is-bare-repository 2>/dev/null || true; git rev-parse --is-inside-work-tree 2>/dev/null || true; }
+if [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
+   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json"; then
+  bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/git-repo-readiness-diag.sh" 2>&1
+else
+  # Distinct from a not-ready workspace: the PROBE could not run. Emitting the
+  # same marker family keeps this visible to the telemetry hook instead of
+  # silently degrading into two git calls that print `true` (#7442).
+  echo "SOLEUR_GIT_REPO_DIAG source=probe-unreachable reason=plugin-root-unverified"
+  git rev-parse --is-bare-repository 2>/dev/null || true
+  git rev-parse --is-inside-work-tree 2>/dev/null || true
+fi
 ```
 
-The `||` fallback runs the bare inline probes if the script is unavailable (e.g. a repo-less workspace whose plugin symlink was not scaffolded). Readiness = the output contains `SOLEUR_GIT_REPO_READY=true` (script path) OR a bare `true` (fallback path).
+The `else` branch runs the bare inline probes when the plugin payload cannot be verified (e.g. a repo-less workspace whose plugin symlink was not scaffolded). Readiness = the output contains `SOLEUR_GIT_REPO_READY=true` (script path) OR a bare `true` (fallback path).
+
+**The fallback is not silent.** Before #7442 this was a bare `||` after an unquoted, unverified path: if the probe could not resolve, the fallback printed `true` and the gate read PASS while `SOLEUR_GIT_REPO_DIAG` — the forensic line the server-side hook mirrors to Better Stack — was never emitted. "Probe said not-ready" and "probe never ran" produced identical output. The `source=probe-unreachable` marker keeps them distinguishable, which matters because `/soleur:go` is the first command of every session.
 
 If the output shows `SOLEUR_GIT_REPO_READY=false` (or, on the fallback, **neither** probe printed `true`), the workspace has no usable git checkout. In the Soleur web (Concierge) environment this happens when a connected repository is still cloning in the background, or its setup failed (the CWD is then a repo-less `/workspaces/<id>`), OR the `.git` is present but git rejects it (a corrupt/masked config — the emitted `SOLEUR_GIT_REPO_DIAG config_parse_rc`/`err=` fields distinguish these). **Every** route (`go`/`brainstorm`/`plan`/`one-shot`/`fix`/`drain`) will fail: worktree creation, knowledge-base artifact writes, and the session-start preamble all need a real repo. Do NOT run the preamble, do NOT route, do NOT improvise filesystem exploration. STOP and reply with this honest, no-wait message:
 
@@ -38,9 +49,16 @@ This gate is deterministic and fires on the first action, so a not-ready workspa
 Before any other work, run the session-start gates from AGENTS.md (`wg-at-session-start-run-bash-plugins-soleur` + `wg-at-session-start-after-cleanup-merged`):
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged && \
-  git worktree list && \
-  git show main:.mcp.json > .mcp.json 2>/dev/null || true
+if [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ]; then
+  bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged && \
+    git worktree list && \
+    git show main:.mcp.json > .mcp.json 2>/dev/null || true
+else
+  # Do not let the session-start gate no-op invisibly: the previous form ended in
+  # `|| true`, so an unresolved root skipped cleanup-merged AND the .mcp.json
+  # restore with no output at all (#7442).
+  echo "SOLEUR_SESSION_START_SKIPPED reason=plugin-root-unverified"
+fi
 ```
 
 The script works from either the bare root or any worktree. The `.mcp.json` refresh is harmless inside a worktree (file gets overwritten on next session-start from the new CWD). Skip silently on first error — do not block routing on session-start hygiene.
