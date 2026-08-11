@@ -79,6 +79,88 @@ else
   pass "guard output carries no connection-string fragment"
 fi
 
+# --- DIAGNOSTIC BOOT (#7228) --------------------------------------------------------------
+# The flag rests at `rollback` after the 2026-08-11 rollback, which the allowlist excludes, so
+# the guard refuses every prod-URI start — correct, but it also means a REPLACED host can never
+# attempt a bind and every hypothesis stays UNKNOWN. Diagnostic boot exists to break that, and
+# the whole question is whether it can be abused into starting a second prod scheduler.
+#
+# The guard does not trust INNGEST_DIAGNOSTIC_BOOT; it verifies the UNIT. So the fixtures below
+# are unit files, and each direction is driven separately.
+echo "TEST: diagnostic boot is gated on the unit, not on the flag (#7228)"
+DIAG_TMP="$(mktemp -d)"
+DURABLE_UNIT="$DIAG_TMP/durable.service"
+SQLITE_UNIT="$DIAG_TMP/sqlite.service"
+# Mirrors inngest-bootstrap.sh's two BACKEND_FLAGS forms: the durable one carries the
+# --postgres-max-open-conns sentinel FIRST; the SQLite-only one carries no backend flags.
+printf '%s\n' \
+  "ExecStart=/usr/bin/doppler run --config prd -- /usr/bin/bash -c 'exec /usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest --postgres-max-open-conns 5 --postgres-max-idle-conns 2 --poll-interval 60'" \
+  > "$DURABLE_UNIT"
+printf '%s\n' \
+  "ExecStart=/usr/bin/doppler run --config prd -- /usr/bin/bash -c 'unset INNGEST_POSTGRES_URI; exec /usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest --poll-interval 60'" \
+  > "$SQLITE_UNIT"
+
+run_guard_diag() {  # <uri> <flag> <diagnostic> <unit-file> -> rc
+  local uri="$1" flag="$2" diag="$3" unit="$4" rc=0
+  GUARD_POSTGRES_URI="$uri" GUARD_FLIP_FLAG="$flag" \
+    GUARD_DIAGNOSTIC_BOOT="$diag" GUARD_UNIT_FILE="$unit" \
+    bash "$TARGET" >/dev/null 2>&1 || rc=$?
+  printf '%s' "$rc"
+}
+
+# The payload: prod URI + the CURRENT LIVE flag (`rollback`) + a SQLite-only unit => ALLOW.
+assert_rc "diagnostic boot ALLOWs a prod-URI host at flag=rollback when the unit is SQLite-only" \
+  "0" "$(run_guard_diag "$PROD_URI" rollback 1 "$SQLITE_UNIT")"
+# The abuse direction: the same request against a DURABLE unit must be refused. This is the one
+# state where allowing would start a real second prod scheduler.
+assert_rc "diagnostic boot BLOCKS when the unit still carries the durable sentinel (halves disagree)" \
+  "1" "$(run_guard_diag "$PROD_URI" rollback 1 "$DURABLE_UNIT")"
+# Fail closed on an unprovable backend: an unreadable unit must not be read as non-durable.
+assert_rc "diagnostic boot BLOCKS when the unit file is missing (cannot prove non-durable)" \
+  "1" "$(run_guard_diag "$PROD_URI" rollback 1 "$DIAG_TMP/nonexistent.service")"
+# And it must not become a general bypass: with diagnostic OFF the SQLite unit changes nothing,
+# because the guard's job in that case is still governed by the flag allowlist.
+assert_rc "without the diagnostic flag, a SQLite unit does NOT relax the guard (prod URI + rollback still blocks)" \
+  "1" "$(run_guard_diag "$PROD_URI" rollback 0 "$SQLITE_UNIT")"
+# Non-prod URIs were already allowed; diagnostic mode must not change that either way.
+assert_rc "diagnostic boot leaves a non-prod URI allowed" \
+  "0" "$(run_guard_diag "$DARK_URI" rollback 1 "$SQLITE_UNIT")"
+# A legitimate post-cutover start must remain allowed with diagnostic off.
+assert_rc "flag=done with a durable unit and diagnostic off still allows (no regression)" \
+  "0" "$(run_guard_diag "$PROD_URI" done 0 "$DURABLE_UNIT")"
+rm -rf "$DIAG_TMP"
+
+# --- TWO-HALF AGREEMENT: both consumers must read the SAME variable and the SAME sentinel ----
+# Diagnostic boot is only safe because the guard's relaxation and the bootstrap's backend
+# selection are driven by one variable and adjudicated by one sentinel. If a future edit renames
+# either in one file alone, the host would start DURABLY while the guard believed it was
+# diagnostic — the exact second-prod-scheduler state this is built to prevent. Anchor on the
+# syntactic read/assignment, not a bare word a comment could satisfy.
+echo "TEST: diagnostic-boot halves are pinned in lockstep"
+BOOTSTRAP="$SCRIPT_DIR/inngest-bootstrap.sh"
+if grep -qE '(GUARD_DIAGNOSTIC_BOOT-\$\{INNGEST_DIAGNOSTIC_BOOT|INNGEST_DIAGNOSTIC_BOOT:-)' "$TARGET"; then
+  pass "guard reads INNGEST_DIAGNOSTIC_BOOT"
+else
+  fail "guard no longer reads INNGEST_DIAGNOSTIC_BOOT — the diagnostic half is disconnected"
+fi
+if grep -qE '^DIAGNOSTIC_BOOT="\$\(printf .*INNGEST_DIAGNOSTIC_BOOT' "$BOOTSTRAP"; then
+  pass "bootstrap reads the SAME INNGEST_DIAGNOSTIC_BOOT variable"
+else
+  fail "bootstrap no longer reads INNGEST_DIAGNOSTIC_BOOT — the halves have drifted apart"
+fi
+if grep -qE '^readonly DURABLE_SENTINEL="--postgres-max-open-conns"' "$TARGET" \
+   && grep -qE "BACKEND_FLAGS='--postgres-max-open-conns" "$BOOTSTRAP"; then
+  pass "guard's durable sentinel matches the token bootstrap actually emits"
+else
+  fail "the durable sentinel drifted between the guard and inngest-bootstrap.sh — the guard can no longer tell a durable unit from a SQLite one"
+fi
+# The bootstrap's diagnostic branch must produce a unit the guard will accept: no backend flags.
+if awk '/DIAGNOSTIC_BOOT" == "1"/,/^elif/' "$BOOTSTRAP" | grep -qE "^[[:space:]]*BACKEND_FLAGS=''[[:space:]]*$"; then
+  pass "bootstrap's diagnostic branch emits EMPTY backend flags (so the guard can prove non-durable)"
+else
+  fail "bootstrap's diagnostic branch does not clear BACKEND_FLAGS — the guard would block its own diagnostic unit"
+fi
+
 # --- FSM<->guard lockstep drift guard (#6553 / ADR-100 class invariant) ---
 # The guard's ALLOW allowlist MUST be a SUPERSET of every FSM state in which the cutover
 # flip oneshot invokes `start_server`. Otherwise the guard blocks the FSM's own controlled

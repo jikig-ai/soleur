@@ -122,6 +122,7 @@ _flip_transition_dt() {
     --grep '"reason":"dbsize-nonzero"' \
     --grep '"reason":"flushall-failed"' \
     --grep '"reason":"refuse-rearm-after-done"' \
+    --grep '"reason":"latch-unrecordable"' \
     --limit "$limit") || rc=$?
   if [[ "$rc" -ne 0 ]]; then
     FSM_FAIL_REASON="query-failed rc=$rc"

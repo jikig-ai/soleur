@@ -789,12 +789,18 @@ EnvironmentFile=/etc/default/inngest-server
 # @@FLIP_GUARD_EXECSTARTPRE@@ — the P1-5 arm-atomicity guard (#6178), substituted to an
 # ExecStartPre line ON THE DEDICATED HOST ONLY (empty on the co-located web host). Wrapped
 # in `doppler run` so the guard sees INNGEST_POSTGRES_URI + INNGEST_CUTOVER_FLIP; blocks a
-# prod-URI start when the flip flag is not in {armed, flipping, done} — the guard's ACTUAL
-# allowlist, verbatim from inngest-server-flip-guard.sh's case. #6536: that is deliberately
-# NOT the full FSM (ADR-100's is armed → flipping → flushed → done), so `flushed` is omitted
-# — fail-closed + self-healing, tracked separately. Do NOT add `flushed` here to "reconcile"
-# it: this documents the guard's code, and a comment describing behaviour the code lacks is
-# the #6536 defect itself.
+# prod-URI start when the flip flag is not in {armed, flipping, flushed, done} — the guard's
+# ACTUAL allowlist, verbatim from inngest-server-flip-guard.sh's case.
+#
+# CORRECTED 2026-08-11 (#7228). This comment used to read `{armed, flipping, done}` and warned
+# against adding `flushed` to "reconcile" it, on the grounds that a comment describing behaviour
+# the code lacks is the #6536 defect itself. That reasoning is right and the comment had since
+# become an instance of it: #6553 added `flushed` to the guard's case (the FSM starts the server
+# AT flag=flushed, so without it the guard blocked the FSM's own controlled start), and this
+# prose kept asserting the older, narrower set — actively warning a future editor away from the
+# code's real behaviour. The allowlist is now quoted from the guard as it stands, and
+# inngest-server-flip-guard.test.sh derives both sets from source so the pair cannot drift again
+# without a suite failure.
 @@FLIP_GUARD_EXECSTARTPRE@@
 ExecStart=/usr/bin/doppler run --config prd -- /usr/bin/bash -c 'export INNGEST_SIGNING_KEY="$${INNGEST_SIGNING_KEY#signkey-prod-}"; @@BACKEND_ENV@@exec /usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest @@BACKEND_FLAGS@@ --poll-interval 60 --sdk-url @@SDK_URL@@'
 Restart=on-failure
@@ -840,7 +846,30 @@ UNITEOF
 # stays literal until systemd unescapes $$→$ and the doppler-wrapped bash -c expands the
 # injected env (same $${...} contract as before). The `exec` in the ExecStart keeps
 # inngest as the unit's main PID (Type=simple signal/drain/`inngest pause` semantics).
-if [[ "$REDIS_READY" == "1" ]]; then
+# #7228 DIAGNOSTIC BOOT takes precedence over Redis readiness. After the 2026-08-11 rollback
+# the cutover flag rests at `rollback`, outside the flip guard's allowlist, so the guard refuses
+# every prod-URI start — and a replaced host could therefore never attempt a bind, leaving every
+# hypothesis about the original failure permanently UNKNOWN. Selecting the SQLite-only form here
+# is what makes the host startable: prod Postgres is unreachable, so no second scheduler is
+# possible, and inngest can bind :8288 and emit the discriminating `net-health` row.
+#
+# This is one HALF of a two-half agreement. The other half is inngest-server-flip-guard.sh, which
+# does NOT trust this variable: it verifies the emitted unit lacks the `--postgres-max-open-conns`
+# durable sentinel before relaxing, and BLOCKS if diagnostic is requested while the unit is still
+# durable. Both halves read INNGEST_DIAGNOSTIC_BOOT, and inngest-server-flip-guard.test.sh pins
+# that they agree — changing the variable in one place alone fails the suite rather than silently
+# producing a host that starts durably while believing it is diagnostic.
+DIAGNOSTIC_BOOT="$(printf '%s' "${INNGEST_DIAGNOSTIC_BOOT:-}" | tr -d '[:space:]')"
+case "$DIAGNOSTIC_BOOT" in
+  1 | true | TRUE | yes | YES) DIAGNOSTIC_BOOT=1 ;;
+  *) DIAGNOSTIC_BOOT=0 ;;
+esac
+
+if [[ "$DIAGNOSTIC_BOOT" == "1" ]]; then
+  BACKEND_ENV='unset INNGEST_POSTGRES_URI; '
+  BACKEND_FLAGS=''
+  log "inngest-server ExecStart: DIAGNOSTIC BOOT (#7228) — SQLite-only by request; prod Postgres unreachable so no second scheduler is possible. The host can now bind :8288 and emit net-health. This is NOT a cutover state: clear INNGEST_DIAGNOSTIC_BOOT before arming."
+elif [[ "$REDIS_READY" == "1" ]]; then
   BACKEND_ENV='export INNGEST_REDIS_URI="redis://:$${INNGEST_REDIS_PASSWORD}@127.0.0.1:6379"; '
   BACKEND_FLAGS='--postgres-max-open-conns 5 --postgres-max-idle-conns 2 --postgres-conn-max-idle-time 1'
   log "inngest-server ExecStart: durable backend (env-delivered URIs; bounded per-pool footprint open=5/idle=2/idle-time=1min; --postgres-max-open-conns sentinel FIRST) #6258"

@@ -207,20 +207,23 @@ flush_already_performed() {
 record_flush_latch() {
   local dbsize="$1" dir
   if [[ -n "$LATCH_REQUIRE_MOUNT" ]] && ! mountpoint -q "$LATCH_REQUIRE_MOUNT" 2>/dev/null; then
-    emit_state 1 "$dbsize" "latch-unrecordable(${LATCH_REQUIRE_MOUNT} is not a mountpoint — a latch written here would sit on the ephemeral root disk and NOT survive a host replace)" aborted
+    emit_state 1 "$dbsize" "latch-unrecordable" aborted
+    logger -t "$LOG_TAG" "latch-unrecordable detail=not-a-mountpoint path=${LATCH_REQUIRE_MOUNT} — a latch written here would sit on the ephemeral root disk and NOT survive a host replace" 2>/dev/null || true
     flag_set aborted
     exit 1
   fi
   dir="$(dirname "$LATCH_FILE")"
   if ! mkdir -p "$dir" 2>/dev/null; then
-    emit_state 1 "$dbsize" "latch-unrecordable(cannot create ${dir})" aborted
+    emit_state 1 "$dbsize" "latch-unrecordable" aborted
+    logger -t "$LOG_TAG" "latch-unrecordable detail=mkdir-failed path=${dir}" 2>/dev/null || true
     flag_set aborted
     exit 1
   fi
   if ! printf 'flushed_at=%s host=%s dbsize=%s\n' \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" \
         "$(hostname 2>/dev/null || echo unknown)" "$dbsize" >> "$LATCH_FILE" 2>/dev/null; then
-    emit_state 1 "$dbsize" "latch-unrecordable(cannot write ${LATCH_FILE})" aborted
+    emit_state 1 "$dbsize" "latch-unrecordable" aborted
+    logger -t "$LOG_TAG" "latch-unrecordable detail=write-failed path=${LATCH_FILE}" 2>/dev/null || true
     flag_set aborted
     exit 1
   fi
