@@ -1335,7 +1335,7 @@ SKIP-on-no-PR (that would fail it open).
 **Step 11.2 — run + parse the stale sub-count** (line-anchored; the raw exit code is NOT the signal):
 
 ```bash
-bash scripts/domain-model-drift.sh drift --repo . \
+bash plugins/soleur/scripts/domain-model-drift.sh drift --repo . \
   --register knowledge-base/engineering/architecture/domain-model.md > "$PREFLIGHT_TMP/register-drift.txt" 2>&1; rc=$?
 stale=$(grep -oE '^## Stale register citations \([0-9]+\)' "$PREFLIGHT_TMP/register-drift.txt" | head -1 | grep -oE '[0-9]+')
 stale=${stale:-0}

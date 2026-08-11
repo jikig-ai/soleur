@@ -9,7 +9,12 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DRIFT="$SCRIPT_DIR/domain-model-drift.sh"
+# The analyzer moved into the plugin payload (#7442) so a marketplace install ships
+# it; this suite stays under scripts/ so test-all.sh's `scripts/*.test.sh` glob keeps
+# gating it. Resolve from the repo root, not as a sibling — the two now differ.
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+DRIFT="$REPO_ROOT/plugins/soleur/scripts/domain-model-drift.sh"
+[[ -f "$DRIFT" ]] || { echo "FATAL: analyzer not found at $DRIFT" >&2; exit 2; }
 
 PASS=0
 FAIL=0

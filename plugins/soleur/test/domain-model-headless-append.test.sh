@@ -23,7 +23,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-helpers.sh"
 
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-DRIFT="$REPO_ROOT/scripts/domain-model-drift.sh"
+DRIFT="$REPO_ROOT/plugins/soleur/scripts/domain-model-drift.sh"
 SYNC_MD="$REPO_ROOT/plugins/soleur/commands/sync.md"
 
 echo "=== domain-model headless append — preserved safety properties ==="

@@ -629,7 +629,7 @@ grep_rank() {
 # corpus-driven (e.g. globbing knowledge-base/project/learnings/, ~1,986 files today),
 # $FIXTURE_ROWS lands around 308 KB and this jq dies with `Argument list too long`.
 # Growing it to a few dozen seeds is fine; sourcing it from the corpus is not — spool it
-# to a file and bind with `--rawfile … | fromjson` first (see scripts/domain-model-drift.sh).
+# to a file and bind with `--rawfile … | fromjson` first (see plugins/soleur/scripts/domain-model-drift.sh).
 FIXTURE_SEEDS=(
   "knowledge-base/project/learnings/2026-02-22-archiving-slug-extraction-must-match-branch-conventions.md"
   "knowledge-base/project/learnings/2026-03-05-bulk-yaml-frontmatter-migration-patterns.md"

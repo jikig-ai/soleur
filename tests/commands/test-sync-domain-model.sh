@@ -6,7 +6,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SYNC_MD="$REPO_ROOT/plugins/soleur/commands/sync.md"
-DRIFT="$REPO_ROOT/scripts/domain-model-drift.sh"
+DRIFT="$REPO_ROOT/plugins/soleur/scripts/domain-model-drift.sh"
 pass=0; fail=0
 _r() { if [[ "$2" == ok ]]; then pass=$((pass+1)); echo "[ok] $1"; else fail=$((fail+1)); echo "[FAIL] $1 ${3:-}" >&2; fi; }
 
