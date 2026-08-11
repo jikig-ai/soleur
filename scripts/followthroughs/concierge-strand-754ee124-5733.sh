@@ -19,7 +19,11 @@
 set -uo pipefail
 
 N=5733
-comments=$(gh issue view "$N" --repo jikig-ai/soleur --json comments --jq '.comments[].body' 2>/dev/null) || {
+# AUTHOR FILTER — load-bearing, and NOT optional. `jikig-ai/soleur` is a PUBLIC repo with issues
+# open to the world, and this probe's exit code makes the sweeper act on the tracker. An unfiltered
+# `.comments[].body` therefore accepts a verdict from ANY authenticated GitHub user: one HTTP POST
+# of `RESULT: PASS` was enough. See #7448.
+comments=$(gh issue view "$N" --repo jikig-ai/soleur --json comments --jq '.comments[] | select(.authorAssociation == "OWNER" or .authorAssociation == "MEMBER" or .authorAssociation == "COLLABORATOR") | .body' 2>/dev/null) || {
   echo "TRANSIENT: could not read #$N comments" >&2
   exit 2
 }

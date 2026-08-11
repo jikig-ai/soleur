@@ -30,7 +30,11 @@ if [[ -z "$ISSUE" ]]; then
   exit 2
 fi
 
-COMMENTS=$(gh issue view "$ISSUE" --json comments --jq '.comments[].body' 2>/dev/null) || {
+# AUTHOR FILTER — load-bearing, and NOT optional. `jikig-ai/soleur` is a PUBLIC repo with issues
+# open to the world, and this probe's exit code makes the sweeper act on the tracker. An unfiltered
+# `.comments[].body` therefore accepts a verdict from ANY authenticated GitHub user: one HTTP POST
+# of `RESULT: PASS` was enough. See #7448.
+COMMENTS=$(gh issue view "$ISSUE" --json comments --jq '.comments[] | select(.authorAssociation == "OWNER" or .authorAssociation == "MEMBER" or .authorAssociation == "COLLABORATOR") | .body' 2>/dev/null) || {
   echo "TRANSIENT: gh issue view failed for #$ISSUE" >&2
   exit 2
 }

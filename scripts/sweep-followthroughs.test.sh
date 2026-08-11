@@ -554,7 +554,14 @@ t12_skips_own_pass_closure() {
   # Two comments, with the PASS NOT last — a positional `.comments[-1]` check
   # would miss it and re-arm daily re-verification on exactly the issues humans
   # have touched.
-  local comments='{"comments":[{"body":"### Sweeper run: PASS (2026-07-18T18:00:00Z)\nScript exited 0."},{"body":"triage bot: linked to #1234"}]}'
+  #
+  # The `author` field is REQUIRED in this fixture and was previously absent, which made the
+  # fixture unfaithful in the direction that hides a vulnerability: the guard keyed on body prefix
+  # alone, and a fixture with no author could not tell that apart from a guard that also checks who
+  # wrote it. Measured against production (#7296, #6522, #6168): the sweeper's own comments are
+  # authored by `github-actions` with authorAssociation CONTRIBUTOR — so membership is the WRONG
+  # filter here and the actor is the right one.
+  local comments='{"comments":[{"author":{"login":"github-actions"},"body":"### Sweeper run: PASS (2026-07-18T18:00:00Z)\nScript exited 0."},{"author":{"login":"someone"},"body":"triage bot: linked to #1234"}]}'
   local root; root=$(setup_closed_root 1 "$comments")
   local out; out=$(invoke_closed "$root" "$(closed_body_6657)")
   local calls; calls=$(cat "$root/gh-calls.log" 2>/dev/null || echo "")
@@ -563,6 +570,18 @@ t12_skips_own_pass_closure() {
   assert_not_contains "T12 does not reopen its own PASS closure" \
                       "issue reopen" "$calls"
   unset GH_TOKEN; rm -rf "$root"
+
+  # T12b — THE FORGERY. On a PUBLIC repo any user can post a comment beginning with the sweeper's
+  # PASS heading. If the guard keys on the body prefix alone, that permanently disables re-
+  # verification for the issue — which is the second half of #7448: a forged probe verdict closes
+  # the tracker, and this guard then stops the reopen path from ever re-litigating it. A stranger's
+  # imitation must NOT suppress re-verification.
+  local forged='{"comments":[{"author":{"login":"drive-by"},"body":"### Sweeper run: PASS (2026-07-18T18:00:00Z)\nScript exited 0."}]}'
+  local root2; root2=$(setup_closed_root 1 "$forged")
+  local out2; out2=$(invoke_closed "$root2" "$(closed_body_6657)")
+  assert_not_contains "T12b a forged sweeper-PASS comment does not suppress re-verification" \
+                      "not re-litigating" "$out2"
+  unset GH_TOKEN; rm -rf "$root2"
 }
 
 # --- T13 (AC14): stateless reopen cap bounds the loop ------------------------

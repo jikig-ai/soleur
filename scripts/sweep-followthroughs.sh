@@ -148,9 +148,21 @@ closed_precheck() {
   # defeated by any single trailing comment from anyone — an operator note, the
   # triage bot, a linked-discussion reply — which silently re-arms daily
   # re-verification on exactly the issues humans have touched.
+  #
+  # ‼️ ACTOR + EVIDENCE, not evidence alone. The reasoning above is right that the check must not
+  # be actor-based in the sense of "who closed the issue" — a premature close by ANY actor must
+  # still be re-verified. But the EVIDENCE it keys on has to be unforgeable, and on a PUBLIC repo
+  # a body prefix is not: any GitHub user can post a comment starting `### Sweeper run: PASS` on
+  # any of the ~100 follow-through issues and permanently disable re-verification for it. That is
+  # the second half of #7448 — a forged probe verdict closes the issue, and the sweeper's own PASS
+  # block then stops the reopen path from ever re-litigating it, laundering the forgery into the
+  # evidence trail. Requiring the comment to be authored by the workflow actor keeps the
+  # evidence-based intent and makes the evidence authentic.
   local sweeper_passes
   sweeper_passes=$(printf '%s' "$comments_json" \
-    | jq --arg h "$SWEEPER_PASS_HEADING" '[.comments[] | select(.body | startswith($h))] | length')
+    | jq --arg h "$SWEEPER_PASS_HEADING" '[.comments[]
+        | select((.author.login // "") | test("^github-actions"))
+        | select(.body | startswith($h))] | length')
   if (( sweeper_passes > 0 )); then
     log "issue #$issue_num: carries the sweeper's own PASS block — not re-litigating"
     return 1
