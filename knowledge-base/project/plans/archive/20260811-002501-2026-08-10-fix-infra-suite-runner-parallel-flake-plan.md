@@ -647,10 +647,21 @@ logs:
   where: "per-run log dir (path printed; retained on failure, reaped on success) + the Actions run log"
   retention: "GitHub Actions default (90d). The on-disk dir serves the LOCAL repro only — a hosted runner is destroyed with its filesystem"
 discoverability_test:
-  # Note the runner exits NON-ZERO on RED by design, so `; echo rc=$?` is part of the
-  # demonstration — without it a successful diagnosis is indistinguishable from a broken command.
-  command: "taskset -c 0-3 bash apps/web-platform/infra/run-registered-suites.sh; echo rc=$?"
-  expected_output: "on any RED: a named suite with rc, elapsed and a prefixed excerpt anchored on its failing assertion, then rc=1 — no ssh"
+  # CORRECTED at ship time. The first draft was
+  #   "taskset -c 0-3 bash …/run-registered-suites.sh; echo rc=$?"
+  # which is not a runnable discoverability probe: it carries a shell-active `;` (rejected by
+  # preflight Check 10's executor) and takes ~23 minutes against a 15-second cap. A command a
+  # gate cannot execute proves nothing about discoverability — the point of the field is that an
+  # operator can actually run it.
+  #
+  # This form derives the registered suite set and the orphan report in ~3s, no ssh, no
+  # credentials, and it exercises the derivation path this change touches.
+  command: "bash apps/web-platform/infra/run-registered-suites.sh --list"
+  expected_output: "Derived 93 registered infra suite(s)"
+  # The FULL diagnostic demonstration is a separate, longer procedure (it must actually run a
+  # failing suite): run the runner without --list and read the `SOLEUR| ` block, which names each
+  # RED suite with rc, elapsed, a start offset and a marker-anchored excerpt. That is ~23 min and
+  # is deliberately NOT the discoverability command.
 ```
 
 ## Architecture Decision (ADR/C4)
