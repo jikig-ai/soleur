@@ -1,9 +1,9 @@
 ---
-title: "ADR-178: Guard Contract as a plan-time deliverable"
+title: "ADR-179: Guard Contract as a plan-time deliverable"
 date: 2026-08-11
 ---
 
-# ADR-178: Guard Contract as a plan-time deliverable
+# ADR-179: Guard Contract as a plan-time deliverable
 
 ## Status
 

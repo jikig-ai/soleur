@@ -485,7 +485,7 @@ under `/var/tmp` and proven landed with `diff -q` against a pristine backup.
 - `scripts/lint-guard-contract.test.sh`
 - `scripts/lint-window-closure-assertion.py`
 - `scripts/lint-window-closure-assertion.test.sh`
-- `knowledge-base/engineering/architecture/decisions/ADR-178-guard-contract-as-plan-time-deliverable.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-179-guard-contract-as-plan-time-deliverable.md`
 
 ## Domain Review
 

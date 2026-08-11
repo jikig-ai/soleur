@@ -142,7 +142,7 @@ in the plan's Scope Decision section.
 - `bun test plugins/soleur/test/components.test.ts` — **1297 pass / 0 fail**.
 - `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md` — `B_ALWAYS=44478`,
   byte-identical to the pre-change baseline. This PR adds zero `AGENTS.*` rule bodies.
-- `bash scripts/check-adr-ordinals.sh` — pass. ADR-178 chosen by re-deriving max+1 across all 64
+- `bash scripts/check-adr-ordinals.sh` — pass. ADR ordinal moved TWICE in one session, which is the evidence #7446 exists on: 176 on `origin/main` while a branch held 177, so 178 was taken; at ship time TWO further unmerged branches had claimed 178, so the ADR is 179. Chosen by re-deriving max+1 across all
   `origin/*` refs: `origin/main` reported 176 while a pushed branch already held 177.
 - `bash scripts/lint-orphan-test-suites.sh` — `orphan test suites: none` (all three new suites wired).
 - `bash scripts/test-all.sh` — **rc=1, `=== 291/293 suites passed ===`**. Both failures confirmed as
