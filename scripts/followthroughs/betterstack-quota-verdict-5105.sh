@@ -22,9 +22,14 @@ set -uo pipefail
 
 # soleur:followthrough betterstack-quota-verdict-5105
 
-ISSUE=$(gh issue list --label follow-through --state open \
-  --search "betterstack-quota-verdict-5105.sh" \
-  --json number --jq '.[0].number // empty' 2>/dev/null)
+# HARDCODED, not searched. `gh issue list --search "<filename>"` is hijackable: GitHub issue
+# search matches COMMENT bodies as well as issue bodies, and `.[0]` is relevance-ordered — verified
+# live, searching `infra-config-activation-7220.sh` returns #7297 FIRST, and #7297's body does not
+# contain that string at all. So any user commenting this filename on another follow-through issue
+# can steer the probe at a tracker that already carries a member-authored `RESULT: PASS`, while the
+# sweeper still acts on THIS one. The `--state open` form also could not find #5110 (closed), so
+# the search was already inert. See #7448.
+ISSUE=5110
 if [[ -z "$ISSUE" ]]; then
   echo "TRANSIENT: could not locate tracking issue for betterstack-quota-verdict-5105" >&2
   exit 2
@@ -39,10 +44,14 @@ COMMENTS=$(gh issue view "$ISSUE" --json comments --jq '.comments[] | select(.au
   exit 2
 }
 
-if printf '%s\n' "$COMMENTS" | grep -qE '^RESULT: PASS$'; then
+# LAST verdict wins. Two independent greps with PASS first let an early PASS outrank a later
+# FAIL, so a regression recorded after a pass could never reopen the tracker. The `$` anchor is
+# this probe's own stricter contract (a bare verdict, no trailing text) and is deliberately kept.
+last="$(printf '%s\n' "$COMMENTS" | grep -E '^RESULT: (PASS|FAIL)$' | tail -1)"
+if [[ "$last" == "RESULT: PASS" ]]; then
   exit 0
 fi
-if printf '%s\n' "$COMMENTS" | grep -qE '^RESULT: FAIL$'; then
+if [[ "$last" == "RESULT: FAIL" ]]; then
   echo "FAIL: operator recorded RESULT: FAIL — quota remediation insufficient, re-open per AC12" >&2
   exit 1
 fi

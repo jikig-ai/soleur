@@ -76,14 +76,18 @@ if [[ $rc -ne 0 ]]; then
   exit 2
 fi
 
-if printf '%s' "$comments" | grep -qE '^RESULT: FAIL'; then
+# LAST verdict wins, and `\b` is load-bearing. Two independent greps with PASS tested first
+# accepted `RESULT: PASSing on this for now` (no word boundary) and let an early PASS outrank a
+# later FAIL, so a regression recorded after a pass could never reopen the tracker. See #7448.
+last="$(printf '%s\n' "$comments" | grep -E '^RESULT: (PASS|FAIL)\b' | tail -1)"
+if [[ "$last" =~ ^RESULT:\ FAIL ]]; then
   echo "FAIL: #$ISSUE carries RESULT: FAIL — the doublefire probe found runs on" >&2
   echo "      the dedicated host. This is a live double-scheduler condition." >&2
   echo "      Do NOT close; escalate per plan branch C6.3." >&2
   exit 1
 fi
 
-if printf '%s' "$comments" | grep -qE '^RESULT: PASS'; then
+if [[ "$last" =~ ^RESULT:\ PASS ]]; then
   echo "PASS: delivery landed and the doublefire verdict is recorded on #$ISSUE."
   exit 0
 fi

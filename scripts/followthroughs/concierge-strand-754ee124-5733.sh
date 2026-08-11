@@ -28,10 +28,14 @@ comments=$(gh issue view "$N" --repo jikig-ai/soleur --json comments --jq '.comm
   exit 2
 }
 
-if printf '%s\n' "$comments" | grep -qE '^RESULT: PASS'; then
+# LAST verdict wins, and `\b` is load-bearing. Two independent greps with PASS tested first
+# accepted `RESULT: PASSing on this for now` (no word boundary) and let an early PASS outrank a
+# later FAIL, so a regression recorded after a pass could never reopen the tracker. See #7448.
+last="$(printf '%s\n' "$comments" | grep -E '^RESULT: (PASS|FAIL)\b' | tail -1)"
+if [[ "$last" =~ ^RESULT:\ PASS ]]; then
   exit 0
 fi
-if printf '%s\n' "$comments" | grep -qE '^RESULT: FAIL'; then
+if [[ "$last" =~ ^RESULT:\ FAIL ]]; then
   echo "FAIL: operator reported RESULT: FAIL on #$N — strand persists; capture the agent_readiness_self_stop .git shape and open a data-driven follow-up." >&2
   exit 1
 fi

@@ -176,9 +176,16 @@ closed_precheck() {
     return 1
   fi
 
+  # Same actor gate as the PASS guard above, and for the same reason. The marker is an INVISIBLE
+  # HTML comment and the cap is 3, so without this any GitHub user posts three innocuous-looking
+  # comments each secretly carrying it and the sweeper permanently refuses to reopen that issue —
+  # the outcome this whole change exists to prevent, by a stealthier route than a forged verdict.
   local reopens
   reopens=$(printf '%s' "$comments_json" \
-    | jq --arg m "$SWEEPER_REOPEN_MARKER" '[.comments[] | select(.body | contains($m))] | length')
+    | jq --arg m "$SWEEPER_REOPEN_MARKER" '[.comments[]
+        | select((.author.login // "") as $l
+                 | $l == "github-actions" or $l == "github-actions[bot]")
+        | select(.body | contains($m))] | length')
   if (( reopens >= REOPEN_MAX )); then
     # ::error:: rather than a bare log: this is the give-up branch. Past the cap
     # the sweeper permanently abandons a still-failing verification, and a plain

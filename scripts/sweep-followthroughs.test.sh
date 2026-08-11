@@ -609,8 +609,15 @@ t13_reopen_cap_bounds_the_loop() {
   # The script is stateless and runs verification under `env -i`, so an
   # in-process counter cannot survive between sweeps — GitHub's comment history
   # is the state.
+  #
+  # The `author` field is REQUIRED here, and its absence was the same unfaithfulness that hid the
+  # hole in T12. The reopen marker is an INVISIBLE HTML comment, so without an actor gate any user
+  # posts three innocuous-looking comments secretly carrying it and the sweeper permanently stops
+  # reopening that issue. A fixture with no author cannot tell a marker-only cap apart from one
+  # that also checks who wrote it. Real reopen comments come from the workflow (see T12).
   local m='<!-- soleur:sweeper-reopen -->'
-  local comments="{\"comments\":[{\"body\":\"r1 $m\"},{\"body\":\"r2 $m\"},{\"body\":\"r3 $m\"}]}"
+  local ga='{"login":"github-actions"}'
+  local comments="{\"comments\":[{\"author\":$ga,\"body\":\"r1 $m\"},{\"author\":$ga,\"body\":\"r2 $m\"},{\"author\":$ga,\"body\":\"r3 $m\"}]}"
   local root; root=$(setup_closed_root 1 "$comments")
   local out; out=$(invoke_closed "$root" "$(closed_body_6657)")
   local calls; calls=$(cat "$root/gh-calls.log" 2>/dev/null || echo "")
@@ -621,12 +628,21 @@ t13_reopen_cap_bounds_the_loop() {
 
   # Non-vacuity: one fewer prior reopen and it DOES act, so the cap is what
   # stopped it rather than some unrelated skip.
-  local root2; root2=$(setup_closed_root 1 "{\"comments\":[{\"body\":\"r1 $m\"}]}")
+  local root2; root2=$(setup_closed_root 1 "{\"comments\":[{\"author\":$ga,\"body\":\"r1 $m\"}]}")
   invoke_closed "$root2" "$(closed_body_6657)" >/dev/null
   local calls2; calls2=$(cat "$root2/gh-calls.log" 2>/dev/null || echo "")
   assert_contains     "T13 still reopens below the cap (non-vacuity)" \
                       "issue reopen" "$calls2"
-  unset GH_TOKEN; rm -rf "$root" "$root2"
+
+  # T13b — FORGED CAP. Three marker-carrying comments from a NON-sweeper author must not consume
+  # the reopen budget. Otherwise any GitHub user silently disables reopening for any of the ~50
+  # open follow-through issues — the same end as a forged verdict, by a quieter route.
+  local rando='{"login":"drive-by"}'
+  local root3; root3=$(setup_closed_root 1 "{\"comments\":[{\"author\":$rando,\"body\":\"r1 $m\"},{\"author\":$rando,\"body\":\"r2 $m\"},{\"author\":$rando,\"body\":\"r3 $m\"}]}")
+  local out3; out3=$(invoke_closed "$root3" "$(closed_body_6657)")
+  assert_not_contains "T13b a forged reopen marker does not consume the reopen cap" \
+                      "cap=3" "$out3"
+  unset GH_TOKEN; rm -rf "$root" "$root2" "$root3"
 }
 
 # --- T14 (AC14): a failed reopen emits ::error:: ----------------------------
