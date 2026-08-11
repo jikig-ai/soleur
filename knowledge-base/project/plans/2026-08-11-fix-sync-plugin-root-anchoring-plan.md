@@ -13,6 +13,54 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-11
+**Passes:** 2 research agents (repo conventions, learnings) · 4 plan-review agents
+(architecture-strategist, spec-flow-analyzer, code-simplicity-reviewer, scoped
+strong-model advisor) · 2 deepen-review agents (security-sentinel,
+test-design-reviewer) · mechanical verification throughout.
+
+### Key improvements over the first draft
+
+1. **The proposed remedy was measured to be a no-op on the target surface.**
+   `CLAUDE_PLUGIN_ROOT` is unset in a plain CLI session, so
+   `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` expands to the bug. Root resolution is now
+   a **blocking Phase 0** with a bound decision tree instead of an assumption.
+2. **Scope corrected from 3 sites to 29.** The 50 findings decompose into 29 anchorable
+   (payload-owned) and 21 un-anchorable (repo-root `scripts/`, = #6222). The first draft
+   fixed 3 and grandfathered 26 — remediating the reporter, not the shape.
+3. **The grandfathering subsystem was deleted.** Fixing all 29 removes the need for a
+   baseline, a marker vocabulary, and a ~630-line Python linter family; the guard is now
+   a ~50-line vitest file modelled on an existing sibling.
+4. **Two measurement traps corrected** — indented fences (46 → 50) and inline code spans
+   (which contain the single most dangerous site in the issue).
+5. **The rule-prune claim was narrowed** from "structurally monorepo-only" to "no input
+   source today", after two payload scripts were found consuming the same telemetry with
+   graceful degradation. The halt became executable rather than prose.
+6. **Second-writer defect avoided** — the degraded artifact moved from LLM-hand-authored
+   markdown into `write-kb-coverage.ts --producer-unreachable`, preserving the single
+   renderer, the documented `grep`, determinism, and the brand-wording gate.
+7. **ADR decision reversed** — mint, don't amend: `check-adr-ordinals.sh` removes the
+   collision rationale and ADR-093 is surface-bound to the platform.
+8. **C4 finding reversed twice** — from "add an edge", to "no change", to the correct
+   answer: the self-hosted CLI topology is genuinely unmodelled.
+
+### New considerations discovered
+
+- Two subagent claims were falsified by direct read (`rule-prune.sh:52` "move is safe";
+  a non-existent `scheduled-rule-prune.yml`). Both are recorded in Reconciliation.
+- A live citation check corrected the recurrence chain: **#4826 is the class's victim,
+  not a member**.
+- Axes 3 (library root) and 4 (toolchain root) were added; `worktree-manager.sh:48` is a
+  live shipped instance where lease protection is silently off for customers.
+- `/soleur:sync domain-model` standalone is dead on a fresh repo independently of this
+  bug (`init` is wired only into `all`).
+- Standalone areas write no durable artifact at all, exempting three areas from the
+  layer-7 argument.
+
+---
+
 ## Overview
 
 `/soleur:sync` invokes its producer scripts with paths written relative to the
@@ -273,7 +321,14 @@ one-line pointer in ADR-093. Derive the ordinal with `scripts/check-adr-ordinals
 across **every `origin/*` ref**, and **re-derive immediately before merge**. Also add an
 `AP-0NN` row to `knowledge-base/engineering/architecture/principles-register.md` — the
 register has no principle covering the payload boundary, and this class has recurred
-across #4826 → #6121 → #6154 → #6222 → #7442.
+across #6121 → #6154 → #6156 → #6222 → #7442 (all verified live: the first three
+CLOSED, #6222 and #7442 OPEN).
+
+**Citation correction.** ADR-093 cites #4826 as *"(delivery wedge; the infra bug behind
+it)"*. Live-verified, **#4826 is "feat: nav-rail position resume"** — the issue whose
+*delivery* the plugin-shadow bug blocked, not an instance of the class. It is therefore
+the class's most visible **victim**, not a member of the recurrence chain, and must not
+be listed as one. Do not propagate the looser reading into the new ADR.
 
 ### C4 — the self-hosted CLI topology is unmodelled
 
@@ -292,6 +347,15 @@ plugin on a customer's own machine against their own repo. The first draft's cla
 *"the customer running `/soleur:sync` is `founder`, already modelled"* is **false** — on
 the platform path the Concierge agent runs sync from `/app/shared/plugins/soleur` with
 the variable set, which is the path that is **not** broken.
+
+**The universal negative was tested, not assumed.** Enumerating every `person`/`system`
+declaration in `model.c4` (24 top-level elements) and grepping for
+`self.?host|marketplace|local install|customer.?machine|cli install|workstation` returns
+only `zotRegistry` ("Self-hosted zot registry"), two Redis containers, and — tellingly —
+the `contributor` description's mention of *"the operator's own workstation"* for the
+ADR-175 preflight probe. So the model **acknowledges operator-workstation execution in
+prose while modelling no element for it**. That is the gap, and it is exactly the shape
+this bug lives in.
 
 **In-scope C4 task:** add a `selfHostedCli` external element plus the producer-execution
 edge, so the model represents the surface this bug lives on.
