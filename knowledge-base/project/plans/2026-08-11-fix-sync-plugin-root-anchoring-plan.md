@@ -644,7 +644,7 @@ a plain `grep -c` returns 0, a false negative in the direction that hides the bu
 7. `git ls-files scripts/rule-prune.sh scripts/lib/rule-metrics-constants.sh scripts/retired-rule-ids.txt` lists all three; `git diff --stat origin/main -- apps/web-platform/server/inngest/functions/cron-rule-prune.ts` is empty.
 8. The rule-prune halt is **executable**: the emitted shell contains the sentinel gate, and `grep -F '<halt message literal>' plugins/soleur/commands/sync.md` returns 1.
 9. `rule-prune` no longer appears in `sync.md`'s `argument-hint` or `**Valid areas:**`.
-10. Guard green: `cd apps/web-platform && ./node_modules/.bin/vitest run test/plugin-root-anchoring.test.ts`. *(Runner and `include:` globs confirmed at Phase 0, not assumed.)*
+10. Guard green: `cd apps/web-platform && ./node_modules/.bin/vitest run test/plugin-root-anchoring.test.ts`. *(**Verified at plan time**: `apps/web-platform/vitest.config.ts` `projects[unit]` declares `include: ["test/**/*.test.ts", "lib/**/*.test.ts"]` with `environment: "node"`, so this path is collected; the sibling guard already lives in the same directory. Use the in-package `./node_modules/.bin/vitest` form — the repo root declares no `workspaces`, so `npm run -w` aborts.)*
 11. **Both** guard mutation tests behave: deleting an anchor → red; replacing an anchor with a `:-`-wrapped bare path → red.
 12. Subdirectory invocation: coverage artifact at `<repo-top>/knowledge-base/project/kb-coverage.md`; `test -d <subdir>/knowledge-base` **fails**.
 13. `--root` and the positional override still target the given path.
