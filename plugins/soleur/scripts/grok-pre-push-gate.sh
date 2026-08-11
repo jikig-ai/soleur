@@ -58,8 +58,22 @@ run_step() {
   local name="$1"
   shift
   step "$name"
-  if "$@"; then
+  # Capture rc — `if "$@"` is a boolean test and discards the exit code, so a step that
+  # reports 3 (test-all.sh's EXIT CONTRACT: zero suites failed, >= 1 suite terminated with a
+  # signal-shaped status) would be re-labelled a failure. Non-zero either way: a step that was
+  # not measured is not a step that passed.
+  local rc=0
+  "$@" || rc=$?
+  if (( rc == 0 )); then
     echo "[ok] $name"
+  elif (( rc == 3 )); then
+    # Worded WITHOUT promising [KILLED] lines. exit 3 is test-all.sh's contract, and
+    # run_step drives ten steps; the other nine emit no [KILLED] lines, so the old
+    # wording asserted evidence that would not be there. None of them returns 3 today
+    # (verified), which makes this latent rather than live — but a message that names
+    # absent evidence is the ADR-166 class this repo gates on.
+    echo "[UNRESOLVED] $name — exited 3 without reporting a failure; if this step is test-all.sh see its EXIT CONTRACT block" >&2
+    exit 3
   else
     echo "[FAIL] $name" >&2
     exit 1

@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { readFileSync } from "fs";
+import { spawnSync } from "child_process";
 import { resolve } from "path";
 import {
   isPipelineSkill,
@@ -274,6 +275,47 @@ describe("workflow-fidelity sentinel markers in skills", () => {
     expect(gate).toContain("scripts/test-all.sh");
     expect(gate).toContain("grok-fidelity-gate.sh");
     expect(gate).toContain("readme-counts");
+  });
+
+  // Behavioural, not a source grep: run the gate's own `run_step` against a stub step whose
+  // exit code we choose. test-all.sh reserves 3 for "zero suites failed, >= 1 suite terminated
+  // with a signal-shaped status" — unresolved, not failed — and `run_step` must keep the two
+  // apart while stopping the push either way.
+  const runStepWithExit = (code: number) =>
+    spawnSync(
+      "bash",
+      [
+        "-c",
+        [
+          "set -euo pipefail",
+          `eval "$(sed -n '/^step() {/,/^}/p;/^run_step() {/,/^}/p' "$1")"`,
+          'run_step probe bash -c "exit $2"',
+        ].join("\n"),
+        "harness",
+        resolve(PLUGIN_ROOT, "scripts/grok-pre-push-gate.sh"),
+        String(code),
+      ],
+      { encoding: "utf-8" },
+    );
+
+  test("grok-pre-push-gate run_step: exit 3 is UNRESOLVED, other non-zero is FAIL, both stop the push", () => {
+    const ok = runStepWithExit(0);
+    expect(ok.status).toBe(0);
+    expect(ok.stdout).toContain("[ok] probe");
+
+    const unresolved = runStepWithExit(3);
+    expect(unresolved.stderr).toContain("[UNRESOLVED] probe");
+    expect(unresolved.stderr).not.toContain("[FAIL] probe");
+    // toBe(3), not not.toBe(0): the point of the arm is that the gate FORWARDS the
+    // class rather than collapsing it. `exit 3` -> `exit 1` survived `not.toBe(0)`.
+    expect(unresolved.status).toBe(3);
+
+    for (const code of [1, 2, 143]) {
+      const failed = runStepWithExit(code);
+      expect(failed.stderr).toContain("[FAIL] probe");
+      expect(failed.stderr).not.toContain("[UNRESOLVED]");
+      expect(failed.status).not.toBe(0);
+    }
   });
 
   test("grok-fidelity-gate.sh runs AGENTS rule-budget lint when not skipped", () => {
