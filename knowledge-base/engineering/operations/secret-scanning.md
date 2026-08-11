@@ -379,14 +379,37 @@ Mitigations in place:
 
 1. **`rename-guard` CI job** (added 2026-05-15, [#3160](https://github.com/jikig-ai/soleur/issues/3160))
    — fails the PR check on any `git mv` whose destination matches a regex
-   in `.gitleaks.toml`'s allowlist surface. Override paths:
+   in `.gitleaks.toml`'s allowlist surface **and whose source does not**.
+   Override paths:
    - Apply the `secret-scan-allow-rename` label to the PR, OR
    - Include `Rename-Allowed-By: <name>` as a trailer on any commit in
      the PR (mirrors the `Co-Authored-By` convention; case-sensitive).
 
+   **Allowlist → allowlist renames are exempt by construction** (2026-08-11,
+   [#5095](https://github.com/jikig-ai/soleur/issues/5095) /
+   [#5097](https://github.com/jikig-ai/soleur/issues/5097)). Laundering requires
+   the source to be OUTSIDE the allowlist: when both sides match, gitleaks was
+   already not scanning that content, so the rename creates no new unscanned
+   surface and there is nothing to launder. This is the `archive-kb` shape —
+   compound `git mv`s plans/specs into their own `archive/` subdirectory on every
+   one-shot run, and the regex
+   `knowledge-base/(?:plans|project/(?:plans|specs))/.*\.md$` matches both sides.
+   Without the exemption the label was effectively mandatory rather than an
+   exceptional opt-in.
+
+   The exemption is evaluated **per rename pair**, so a laundering rename
+   elsewhere in the same PR is still caught. Pre-applying the label — the
+   originally-filed remedy — would instead have disarmed the guard for the whole
+   PR. Source and target are resolved through one shared resolver against one
+   array: two separately-derived sets would be two assemblies, and a source set
+   wider than the target set fails the guard open.
+
    Logic lives in `apps/web-platform/scripts/rename-guard.sh`; the smoke
    matrix exercises it via three cases (`rename-guard-fires`,
-   `rename-guard-label-override`, `rename-guard-trailer-override`).
+   `rename-guard-label-override`, `rename-guard-trailer-override`), and
+   `scripts/rename-guard.test.sh` carries the exemption's fixtures plus a
+   two-row mutation battery (deleting the source check reverts the archival case
+   to a violation; widening the source set fails the guard open).
 2. **GitHub push protection** independently scans every committed line for
    well-known token shapes (Doppler, AWS, Stripe, etc.) and blocks the push
    regardless of allowlist scope. We confirmed this empirically when

@@ -1736,6 +1736,19 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
   // The sandbox flags live in ONE array so the establishment probe and the real
   // run cannot drift; anchor the window on that array rather than on the exec
   // line, which references it by name.
+  //
+  // window-assembly: sandboxWindow — this window spans ONLY the `BWRAP_ARGS=( … )`
+  // literal, which is NARROWER than the mount set. The full assembly is
+  // BWRAP_ARGS + GIT_BIND + BWRAP_PROC + the exec line, and three separate
+  // one-line edits outside this window each re-opened the operator's credential
+  // surface with the whole suite green. The sibling assertions at "1e" below pin
+  // the assembly's remainder: gitBindAssigns and procAssigns are matched against
+  // the WHOLE Check 10 body (not this window), and the `+=` checks at "2" bound
+  // append sites for all three arrays. The FOURTH member — the exec line — is
+  // pinned separately by the anchored full-invocation regex in test F2 above,
+  // NOT by 1e or 2; loosening F2 would leave this declaration reading true while
+  // that member went unpinned. Any new mount-injection site must be added to
+  // those assertions, not here.
   const sandboxWindow = (): string => {
     const idx = uniqueIndex(lines, (l) => /^BWRAP_ARGS=\(/.test(l), "BWRAP_ARGS=(");
     const end = lines.findIndex((l, i) => i > idx && /^\)/.test(l));
