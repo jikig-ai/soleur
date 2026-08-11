@@ -772,6 +772,15 @@ flips to fix-inline — do not file the issue. If the first line is `CONCUR`,
 proceed with filing. Any other first-line content is treated as `DISSENT`
 (fail-safe toward fix-inline).
 
+**Search for an existing tracker BEFORE invoking the CONCUR gate, not after.** The gate should
+be adjudicating the deferral, not discovering a duplicate — and a duplicate is the modal outcome
+for any finding in a subsystem that has been audited before. One `gh issue list --search` on the
+defect's distinguishing noun costs seconds; the gate costs an agent round-trip and still leaves
+you re-deriving an analysis that already exists, usually a better one. **Why:** #7376 — a
+scope-out for 7 underived infra suites went to CONCUR without a search; `#7076` was already open,
+tracked the same remediation, and counted **8** (it knew about a `sudo bash` registration shape
+the proposed filing had missed entirely). The DISSENT was correct on all three of its grounds.
+
 **Write-time self-check:** Before invoking `gh issue create --label
 deferred-scope-out`, scroll up in the conversation and confirm the most
 recent `code-simplicity-reviewer` Task reply begins with `CONCUR` for THIS
