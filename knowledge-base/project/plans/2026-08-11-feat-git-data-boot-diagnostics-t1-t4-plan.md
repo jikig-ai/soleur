@@ -156,6 +156,64 @@ a committed assertion.
 - `cq-assert-anchor-not-bare-token` — the Sentry arm anchors on field shape (`"id":"…"`).
 - `2026-05-16-adr-amendment-required-when-reversing…` — amend the ADR you correct, in the PR.
 
+### Deepening — concrete implementations for the four open mechanics
+
+**Cost note.** This plan had already been through a 6-reviewer panel before `/deepen-plan`, so
+the fan-out was scoped to the four mechanics still unspecified plus a proxy-AC re-check, rather
+than re-running a full agent sweep over settled material. That is a deliberate deviation from
+the skill's "run every agent" default; the byte measurements, ADR corpus survey and T-4
+security analysis were not re-derived.
+
+**(1) The per-entry byte-diff assertion (Phase 1.8).** Do not diff the YAML text. Parse both
+renders with `yaml.safe_load`, then for each `write_files` entry compare `content` and for each
+`runcmd` element compare the string, asserting:
+`stripped == "\n".join(l for l in unstripped.splitlines() if not STRIP_LINE.match(l))`
+where `STRIP_LINE` is the template expression compiled from `main.tf`. This is exact — it
+proves *only* matching lines were removed, catching a deletion inside the `LUKSEOF` heredoc
+body that key-and-count comparisons cannot see. Iterate by index over both lists after
+asserting equal lengths, so a reordering also fails.
+
+**(2) `validate-infra-templates.sh` (Phase 1.7).** The script discovers call sites with an
+anchored call-syntax pattern over the dir's `*.tf`, resolving `${path.module}/(../)*<name>`
+(the `(?:\.\./)*` run exists precisely so the git-data template attributes to its module call
+site), and takes the stub map keys from that call site. Minimal change: when the discovered
+call site's enclosing expression is `replace(templatefile(...), local.<X>, "")`, extract
+`local.<X>`'s `/…/` literal from the same `.tf` and apply it to the rendered file **before**
+`cloud-init schema -c "$rendered"` at `:301`. Roughly ten lines, and it keeps the existing
+stub-map machinery untouched.
+
+**(3) B1's extractor (Phase 1.6).** Two independent fixes at `rehearsal:212`:
+- **Anchor to line start with `re.M`** — `re.search(r'^\s*git_data_rationale_strip\s*=\s*"([^"]*)"', tf, re.M)`.
+  `^\s*` before the identifier means a commented line (`# git_data_rationale_strip = …`) can no
+  longer match, because `#` is neither whitespace nor the identifier's first character. Swapping
+  greedy `.*` for `[^"]*` also stops it over-reaching on a line with more than one quote pair.
+- **Name the template local so it cannot cross-match.** `git_data_template_rationale_strip`
+  does **not** contain `git_data_rationale_strip` as a substring, so B1's payload-expression
+  search is unambiguous by construction. Avoid a suffix form such as
+  `git_data_rationale_strip_template`, which shares the prefix and invites exactly this class.
+  B1 should additionally extract the template expression under its own name and assert the two
+  are **different** — ADR-152 requires them not to be shared, so equality is a regression.
+
+**(4) The Sentry query shape (Phase 3.4).** All candidate shapes were probed live and return
+200: `statsPeriod=24h`, `statsPeriod=90m` (minute granularity accepted), a `lastSeen:-90m`
+clause inside `query=`, and explicit ISO `start=`/`end=` without `statsPeriod`. Use
+**`statsPeriod`, substituted directly from the script's existing `WINDOW`**, so the two sinks
+share one bound and there is one variable to keep correct. `host_name` remains the boot
+discriminator — the module already diverges it for the rehearsal by design, which is what lets
+the capture script isolate a rehearsal boot from prod. Reserve ISO `start`/`end` for the case
+where a future change needs to pin a single run rather than a window.
+
+**(5) Proxy-vs-invariant re-check of the acceptance criteria.** AC4 (per-entry byte diff) now
+asserts the invariant rather than the shape proxy that revision 1 carried, and AC14's TRANSIENT
+arm closes the fail-open path. Two remain deliberately weaker than the invariant, and are
+labelled as such rather than silently trusted: **AC13** ("the capture script issues at least one
+Sentry HTTP query") is a source-level existence check, not proof the query returns the right
+rows — the behavioural half lives in AC14's three test arms; and **AC12** asserts the token
+*resolves* under `prd_terraform`, which is the dead-read fix but not proof the workflow run
+itself authenticates. Above both, the Post-merge note records that **no criterion exercises a
+real host** — `user_data` is ForceNew, no birth route exists, and dispatching the rehearsal is
+a Non-Goal. That limitation is stated rather than papered over.
+
 ## Open Code-Review Overlap
 
 None. No open `code-review`-labelled issue names any file in this plan's edit set.
@@ -217,21 +275,70 @@ No new vendor resource.
 
 ### at_rest
 
-- **`user_data` / `terraform.tfstate`** — mechanism: provider-side encryption on the R2 state
-  backend. **Defends against:** at-rest disclosure of the state object. **Does not defend
-  against:** a reader of instance metadata or state, who obtains the pre-existing Doppler
-  service token. **Unchanged by this PR** — T-2 removes bytes and adds no credential.
-  Live verification: the `discoverability_test` below.
+- **store:** `terraform.tfstate` on the R2 backend (which contains the rendered `user_data`)
+  - **mechanism:** Cloudflare R2 server-side encryption (AES-256), applied to every object at
+    rest by the bucket, plus the encrypted-backend configuration this root already declares.
+  - **evidence:** the R2 backend block in `apps/web-platform/infra/main.tf`; the same posture
+    the sibling roots already declare and that `lint-encryption-posture.py --repo-sweep`
+    resolves against real code.
+  - **defends_against:** disclosure of the state object at rest in R2 (a stolen bucket object,
+    a mis-scoped bucket read).
+  - **does_not_defend:** a principal who can read the state through the backend's own
+    credentials, or who can read instance metadata on a booted host. Either obtains the
+    pre-existing baked Doppler service token. **This PR does not change that surface** — T-2
+    removes bytes and adds no credential; T-4's added credential is deferred to #7460.
+  - **disclosed_as:** unchanged from the current posture; no new disclosure is required
+    because no new credential class enters the payload in this PR.
+  - **live_verification:** `bash apps/web-platform/infra/git-data-userdata-budget.sh` renders
+    the payload locally and reports its stored size without touching state or any credential;
+    `python3 scripts/lint-encryption-posture.py --repo-sweep` resolves the declared posture
+    against the real backend configuration.
 
 ### in_transit
 
-- **host → Better Stack ingest** — tls yes (`https://`), cert_verification on. Unchanged.
-- **host → Sentry** — tls yes, cert_verification on. Unchanged.
-- **capture script → Sentry API** — tls yes, cert_verification on; read-only token.
+- **connection:** host → Better Stack ingest — **tls:** yes (`https://` ingest URL);
+  **cert_verification:** on (`curl` without `-k`); **does_not_defend:** a holder of the ingest
+  token forging rows; **disclosed_as:** unchanged.
+- **connection:** host → Sentry — **tls:** yes; **cert_verification:** on;
+  **does_not_defend:** a holder of the DSN submitting events; **disclosed_as:** unchanged.
+- **connection:** capture script → Sentry API (new in T-1) — **tls:** yes;
+  **cert_verification:** on; **does_not_defend:** a holder of `SENTRY_ISSUE_RO_TOKEN` reading
+  issue metadata for the org (read-only, `[event:read, org:read]`); **disclosed_as:** an
+  existing read-only credential, newly used from CI rather than newly created.
 
 ### exception
 
-None.
+None. No plaintext-exception and no disabled certificate verification is introduced.
+
+## Downtime & Cutover
+
+**The offline-inducing operation, named.** `user_data` is a ForceNew attribute on
+`hcloud_server`, and git-data deliberately does **not** carry `lifecycle { ignore_changes =
+[user_data] }` (`git-data.tf:376-394`) — the replace *is* the intended reprovision path. T-2
+changes the rendered `user_data`, so on a host that existed this would be a `-/+` replace of
+the machine holding every connected user's source code.
+
+**Why no downtime occurs here.** There is no serving git-data host. No birth route exists
+(#6977: `git-data-host-replace` hard-aborts on a first CREATE and no `git-data-host-create`
+target exists), and `ls apps/web-platform/infra/ | grep git-data-host` returns nothing. At
+merge this change is inert: the first birth is a **create**, not a replace, and it simply boots
+the new payload. Blast radius at merge time: zero running hosts.
+
+**Zero-downtime path, for when a host does exist.** git-data's own design already is
+blue-green by construction — a fresh host is born with the new `user_data`, the LUKS volume is
+attached, and the old host is retired once drained. That path is `git-data-host-replace`'s
+job, not this PR's. This PR therefore does **not** accept residual downtime; it defers the
+cutover entirely.
+
+**Pre-merge verification.** Confirm no git-data server resource is present in state before
+merge (AC-adjacent precondition, recorded rather than asserted as a CI gate since no CI job
+reads prod state). If one ever is, this change must not merge until the blue-green route in
+#6977 exists.
+
+**Ordering prerequisite recorded against #6977.** Because the rung-2 evidence hash covers
+`modules/git-data-userdata/main.tf`, the first birth must dispatch the rung-2 rehearsal
+**after** this merge — an attestation captured before it would bind a render that no longer
+matches.
 
 ## Observability
 
@@ -260,6 +367,11 @@ failure_modes:
   - mode: Sentry query arm fails (401/429/network) and reads as "no fatal"
     detection: explicit rc + HTTP-status check; non-200 => TRANSIENT with a no-verdict line
     alert_route: capture-script verdict
+logs:
+  where: Better Stack source 2457081 (boot-stage markers, host_name/stage tagged) and Sentry
+    issues for the same host; CI logs for the infra-validation suites that gate this change
+  retention: Better Stack per-source retention on the current plan; Sentry issue retention on
+    the jikigai-eu org. Both EU-resident (eu-fsn-3 / ingest.de).
 discoverability_test:
   command: bash apps/web-platform/infra/git-data-userdata-budget.sh
   expected_output: "git-data user_data: stored=<N> B / cap=32768 B" with N < 32768 and exit 0

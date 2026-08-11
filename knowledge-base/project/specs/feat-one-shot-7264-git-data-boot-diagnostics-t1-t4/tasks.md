@@ -33,12 +33,27 @@ No predicate may use `producer | grep -q` (SIGPIPE fails open under `set -uo pip
 - [ ] 1.4 Mirror the new local in `git-data-userdata-budget.sh`; emit `stripped_bytes`; emit both
       stripped and unstripped renders.
 - [ ] 1.5 Extend `git-data-render-strip-parity.test.sh` to compare the **second** expression too.
-- [ ] 1.6 Harden B1's extractor (`git-data-runcmd-rehearsal.test.sh:212`) to skip comment lines.
-      Write **no** `# was: …` comment naming an expression until this lands.
-- [ ] 1.7 Fix `.github/scripts/validate-infra-templates.sh` so `cloud-init schema -c` runs
-      against the **stripped** render (today it renders the bare `templatefile()` at `:558`).
-- [ ] 1.8 Add the per-entry byte-diff assertion: each `write_files` entry and each `runcmd`
-      element differs only by lines matching the strip regex.
+- [ ] 1.6 Harden B1's extractor (`git-data-runcmd-rehearsal.test.sh:212`) — anchor to line
+      start with `re.M` and stop the greedy quote match:
+      `re.search(r'^\s*git_data_rationale_strip\s*=\s*"([^"]*)"', tf, re.M)`. `^\s*` before the
+      identifier makes a commented line unmatchable. **Name the new local
+      `git_data_template_rationale_strip`** — it does not contain `git_data_rationale_strip` as
+      a substring, so the two searches cannot cross-match (a suffix form like
+      `git_data_rationale_strip_template` would share the prefix — avoid it). Have B1 also
+      extract the template expression under its own name and assert the two are **different**
+      (ADR-152 forbids sharing; equality is a regression). Write **no** `# was: …` comment
+      naming an expression until this lands.
+- [ ] 1.7 Fix `.github/scripts/validate-infra-templates.sh`: when the discovered call site's
+      enclosing expression is `replace(templatefile(...), local.<X>, "")`, extract `local.<X>`'s
+      `/…/` literal from the same `.tf` and apply it to the rendered file **before**
+      `cloud-init schema -c "$rendered"` at `:301`. Leave the stub-map machinery untouched
+      (~10 lines). Today it renders the bare `templatefile()` at `:558`.
+- [ ] 1.8 Add the per-entry byte-diff assertion. **Do not diff the YAML text.** Parse both
+      renders with `yaml.safe_load`; assert equal list lengths; then for each `write_files`
+      entry compare `content` and for each `runcmd` element compare the string against
+      `"\n".join(l for l in unstripped.splitlines() if not STRIP_LINE.match(l))`, with
+      `STRIP_LINE` compiled from the template expression in `main.tf`. This catches a deletion
+      inside the `LUKSEOF` heredoc body that key-and-count comparison cannot see.
 - [ ] 1.9 Add the interpolation-site assertion: every `${…}` in `cloud-init-git-data.yml` is
       preceded on its line by a non-newline character.
 - [ ] 1.10 Keep at least one rehearsal arm reading the **unstripped** render so R1 (`:757`,
@@ -72,9 +87,13 @@ No predicate may use `producer | grep -q` (SIGPIPE fails open under `set -uo pip
 - [ ] 3.3 Add it to the two TRANSIENT exit paths as well — transport rc≠0 (`:252`) and zero-row
       anchor (`:271`) — which return **before** `host_out` is queried.
 - [ ] 3.4 Query `GET /api/0/organizations/jikigai-eu/issues/?query=…` scoped by `host_name:` and
-      `stage:`, **bounded by the same `WINDOW`** as the Better Stack SQL (Sentry issues
-      aggregate across occurrences; unbounded, an earlier boot of a reused `host_name` would
-      flip a genuine PASS to FAIL).
+      `stage:`, bounded by **`statsPeriod`, substituted directly from the script's existing
+      `WINDOW`** so both sinks share one bound. (Probed live 2026-08-11 — all of
+      `statsPeriod=24h`, `statsPeriod=90m`, an in-query `lastSeen:-90m` clause, and ISO
+      `start=`/`end=` return 200; `statsPeriod` is chosen for having one variable to keep
+      correct. Reserve ISO `start`/`end` for pinning a single run.) Unbounded, an earlier boot
+      of a reused `host_name` would flip a genuine PASS to FAIL, since Sentry issues aggregate
+      across occurrences.
 - [ ] 3.5 Fail closed: non-200 / rc≠0 / unparseable ⇒ `TRANSIENT` with an explicit no-verdict
       line, mirroring `:253`/`:282`. Anchor on field shape (`"id":"…"`), never a bare token.
 - [ ] 3.6 State the precedence rule in the script: **FAIL from either sink wins; TRANSIENT only
