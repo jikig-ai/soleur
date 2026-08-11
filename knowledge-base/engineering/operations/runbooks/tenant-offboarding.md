@@ -28,6 +28,24 @@ provisioning runbook's individual teardown paths do **not** cover:
    agent (e.g., transferring the Hetzner sub-project to the tenant's own
    master account billing).
 
+## Scope — what this runbook does NOT cover
+
+**A non-tenant alpha tester is not offboarded here.** This runbook is the inverse of
+`tenant-provisioning.md` and assumes a tenant on the multi-tenant deploy substrate: a provisioned
+provider account set, a `tenant_deploy_audit` trail, a GitHub App installation and a Doppler
+secret. An alpha tester has none of those. They run the self-hosted CLI on their own machine, and
+the only Jikigai-side artifact is collaborator access to their repository.
+
+That exit path is owned by
+[`alpha-tester-onboarding.md`](./alpha-tester-onboarding.md) § "Offboarding — at end of alpha":
+revoke collaborator access on every tester repository, delete local clones and retained feedback
+artifacts, and confirm in writing to the tester within 30 days.
+
+**This is a cross-link, not a copy, on purpose.** Duplicating the procedure here would create a
+second version to drift against the first — the same defect class #7349 fixed across the published
+legal corpus. The case is stated explicitly so the absence reads as a boundary rather than as a
+gap.
+
 ### Step 0 — Pre-offboarding gate
 
 Confirm the tenant has either (a) signed a written notice of offboarding
@@ -214,7 +232,7 @@ Update `knowledge-base/legal/tenant-dpa-register.md` row with:
 
 ## References
 
-- Provisioning runbook: `knowledge-base/engineering/ops/runbooks/tenant-provisioning.md`
+- Provisioning runbook: `knowledge-base/engineering/operations/runbooks/tenant-provisioning.md`
 - ADR-030: `knowledge-base/engineering/architecture/decisions/ADR-030-multi-tenant-deploy-substrate.md`
 - Migration 043: `apps/web-platform/supabase/migrations/043_tenant_deploy_audit.sql`
 - Tenant DPA register: `knowledge-base/legal/tenant-dpa-register.md`

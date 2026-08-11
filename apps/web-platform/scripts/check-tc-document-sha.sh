@@ -127,7 +127,10 @@ extract_legal_doc_sha() {
 # Per-doc loop.
 # ----------------------------------------------------------------------
 
-BODY_EQUIVALENCE_DOCS=("terms-and-conditions")
+BODY_EQUIVALENCE_DOCS=("terms-and-conditions" "acceptable-use-policy" "disclaimer")
+# Enrolled #7349 (6.3) AFTER each reported ZERO normalised drift, never before -- enrolling a
+# drifted document turns a required check red. data-protection-disclosure stays OUT at 4 drift
+# lines (the Last-Updated line and a PR-H comment); it enrols when the successor closes those.
 # data-protection-disclosure: guard infrastructure ready (test at legal-doc-shas-guard.test.ts
 # proves detection); activation deferred until PR #4455-introduced drift is resolved.
 # Add "data-protection-disclosure" to the array once the mirror is re-synced.
