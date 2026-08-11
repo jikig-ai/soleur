@@ -168,3 +168,44 @@ resolution (last-member-verdict-wins) came from neither alone.
 
 category: test-design
 module: followthrough-probes
+
+---
+
+## Addendum — 2026-08-11 (#7451, #7448)
+
+The security fix for C1 got its own review, which found four more. Three points that the
+main body above does not make.
+
+**The unfaithful fixture is a repeating pattern, not an incident.** Three times in one day a
+fixture silently asserted that a bug was fine:
+
+| Fixture | What it omitted | What that hid |
+|---|---|---|
+| `zot-fill-rate` stub | used `datetime.now()` (local) | a UTC/local error that cancelled against the parser's identical error |
+| sweeper `T12` | no `author` field | that the PASS guard keyed on body prefix alone |
+| sweeper `T13` | no `author` field | that the reopen cap keyed on an *invisible marker* alone |
+
+The common shape is an **omitted field, not a wrong value**. A wrong value gets noticed because
+something disagrees with it; an absent field is silently supplied by whatever default the code
+already assumes, so the fixture agrees with the code by construction. Gate: for any assertion about
+*who* or *when* or *which*, name the field that carries it and check the fixture actually sets it.
+
+**The second hole was eleven lines below the first.** `reopens` in the same function keyed on
+`SWEEPER_REOPEN_MARKER` — an invisible HTML comment, cap 3 — with no actor check, so three
+innocuous-looking comments permanently stop the sweeper reopening an issue. Fixing an
+authorization hole means auditing *every* read in that trust boundary, not the one that was
+reported. The reported instance is a sample, never the population.
+
+**I wrote an inversion into the rule intended to prevent the bug.** The one-liner added to
+`ship/SKILL.md` ended `grep -qE '^RESULT: (PASS|FAIL)\b'`; in that section's `… && exit 0 || exit 1`
+idiom it exits 0 on an explicit FAIL, closing a tracker on the operator's own rejection. It also
+contradicted the reference implementation it cited in the same sentence. This is the same class as
+[[2026-08-06-i-shipped-two-unmeasured-causal-claims-inside-the-lint-that-forbids-them]] — the
+document that codifies a rule is written in prose-mode, not code-mode, and gets less scrutiny than
+the code it governs. **Prevention:** a skill bullet that prescribes behaviour must POINT AT a
+reference implementation rather than inline a snippet. Prose cannot be executed, so it cannot be
+tested, so it drifts from and eventually contradicts the code it describes.
+
+Also recorded, because they are judgement calls rather than defects: `authorAssociation` is
+evaluated at READ time, so a stranger's verdict posted today becomes authoritative if that person
+is later granted access; and outside collaborators can now cast binding verdicts.
