@@ -206,12 +206,12 @@ else
 fi
 
 # --- T0h: the fail-closed preflight exists ------------------------------------
-# ADR-177 decision 2. Without this, the block carrying the whole safety argument
+# ADR-179 decision 2. Without this, the block carrying the whole safety argument
 # is deletable with the suite green.
 if grep -Fq '"${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json"' "$SYNC_MD"; then
   pass "T0h: sync.md carries the fail-closed plugin-identity preflight"
 else
-  fail "T0h: sync.md has no plugin-identity preflight (ADR-177 decision 2)"
+  fail "T0h: sync.md has no plugin-identity preflight (ADR-179 decision 2)"
 fi
 
 # --- T0i: the preflight is EXECUTED, not spell-checked -------------------------

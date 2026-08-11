@@ -15,7 +15,7 @@ synced_to: []
 
 # I measured the issue's remedy and caught a no-op. Then I asserted my own and did not.
 
-**Issue:** #7442 · **PR:** #7443 · **ADR:** ADR-177 (amends ADR-093) · **Spun out:** #7450 (P0), #7452, #7453
+**Issue:** #7442 · **PR:** #7443 · **ADR:** ADR-179 (amends ADR-093) · **Spun out:** #7450 (P0), #7452, #7453
 
 ## Problem
 
@@ -43,7 +43,7 @@ first was right.
 
 ## Then I made the identical error, one section later
 
-ADR-177 shipped asserting the replacement form was safe **"under no hypothesis does it
+ADR-179 shipped asserting the replacement form was safe **"under no hypothesis does it
 resolve into customer-controlled bytes."** A review agent measured otherwise:
 
 ```
@@ -154,7 +154,7 @@ facts that would CHANGE the ruling, not just the ones that support your framing.
 
 **Review — my own work falsified:**
 
-8. **ADR-177's "under no hypothesis" claim was false, measured.** — Recovery: preflight rewritten to verify plugin identity; ADR corrected. — **Prevention:** ask of every safety claim whether it is a property of the CODE or of the ENVIRONMENT.
+8. **ADR-179's "under no hypothesis" claim was false, measured.** — Recovery: preflight rewritten to verify plugin identity; ADR corrected. — **Prevention:** ask of every safety claim whether it is a property of the CODE or of the ENVIRONMENT.
 9. **T0c never executed the mechanism it documents** (`set -u`, 8/8). — Recovery: `set +u` in the eval subshell. — **Prevention:** ask which shell options the harness imposes that the real surface does not.
 10. **T0d was not a control over the extractor.** — Recovery: rebuilt over a synthesized fixture through the same extraction. — **Prevention:** a control must fail for the reason the assertion would.
 11. **My mutation battery reported 8/8 while nine mutants survived.** — Recovery: review's test-design pass found them. — **Prevention:** enumerate the AXES a battery edits before crediting its count.

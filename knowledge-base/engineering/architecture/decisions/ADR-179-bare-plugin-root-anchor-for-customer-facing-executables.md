@@ -103,7 +103,7 @@ Mandatory companion, one per command file, before the first producer:
 
 ```bash
 test -d "${CLAUDE_PLUGIN_ROOT}/scripts" || {
-  echo "soleur:sync — plugin root unresolved; refusing to run producers CWD-relative (ADR-177)." >&2
+  echo "soleur:sync — plugin root unresolved; refusing to run producers CWD-relative (ADR-179)." >&2
   exit 1
 }
 ```

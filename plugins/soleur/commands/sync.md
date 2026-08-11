@@ -90,7 +90,7 @@ if [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
 fi
 if [ "$SOLEUR_ROOT_OK" -ne 1 ]; then
   echo "SOLEUR_SYNC_ROOT_UNRESOLVED reason=plugin-root-unverified"
-  echo "soleur:sync — the plugin root did not verify as the Soleur payload; refusing to run any producer (ADR-177)." >&2
+  echo "soleur:sync — the plugin root did not verify as the Soleur payload; refusing to run any producer (ADR-179)." >&2
   exit 1
 fi
 ```

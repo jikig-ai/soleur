@@ -42,7 +42,7 @@ const SENTINEL_LITERAL =
   'SOLEUR_MONOREPO="$(test -f plugins/soleur/.claude-plugin/plugin.json && pwd || true)"';
 
 /**
- * The mandated fail-closed preflight (ADR-177 decision 2). Anchored on the
+ * The mandated fail-closed preflight (ADR-179 decision 2). Anchored on the
  * manifest probe rather than on a whole block, so reformatting does not
  * false-fail while deleting the gate still does.
  */
@@ -324,7 +324,7 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
   });
 
   it("P4: every command file with an anchored producer carries the fail-closed preflight", () => {
-    // ADR-177 decision 2 mandates this per command file, and it is the half of
+    // ADR-179 decision 2 mandates this per command file, and it is the half of
     // the safety argument that carries the bare form. Without this assertion the
     // whole preflight block is deletable with the suite green.
     seen();

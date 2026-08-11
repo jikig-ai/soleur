@@ -43,7 +43,7 @@ Plan frontmatter `closes: 7442` — already cleared at Step 0a.5. The only ref p
 ## Work Phase
 
 - Status: implementation complete; full-suite exit gate deferred to post-review (see below).
-- Commits: `a16af4bce` relocation · `632f09d92` rule-prune gate · `9484afac7` anchoring + T0 · `09a7460fa` guard · ADR-177 · `783ff94c2` orphan tombstone.
+- Commits: `a16af4bce` relocation · `632f09d92` rule-prune gate · `9484afac7` anchoring + T0 · `09a7460fa` guard · ADR-179 · `783ff94c2` orphan tombstone.
 
 ### Phase 0 outcome — a fourth branch the plan's decision tree did not enumerate
 
@@ -53,7 +53,7 @@ execution context, not merely a plain session. So the issue's proposed
 `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` expands to the defect it was meant to fix.
 
 Remedy bound to the **bare** token, which is fail-closed under either substitution
-hypothesis. Full reasoning + rejected alternatives: ADR-177.
+hypothesis. Full reasoning + rejected alternatives: ADR-179.
 
 ### Task-list reconciliation — why the plan's boxes are NOT ticked
 
@@ -68,7 +68,7 @@ assert work that was superseded rather than done. What actually changed:
 | Phase 6 C4 modelling | Deferred to #7452 | Outside the CTO's stated scope boundary; a modelling addition, not a fix for #7442. |
 | Guard over `plugins/soleur/**/*.md` | Scoped to `commands/**/*.md` | Residency (P2) would red unpredictably against the unaudited skills corpus. Exclusion stated in the guard's docstring, not implied. |
 | AC8: halt literal count = 1 | 2 | Both call sites are gated, not just the pruner. |
-| Deferral 4 (make rule-prune customer-capable) | **Closed, not deferred** | ADR-177: the area is monorepo-only by construction. |
+| Deferral 4 (make rule-prune customer-capable) | **Closed, not deferred** | ADR-179: the area is monorepo-only by construction. |
 
 ### Defects found in my own work by my own tests
 
@@ -78,7 +78,7 @@ assert work that was superseded rather than done. What actually changed:
 2. **`scripts/domain-model-drift.test.sh` resolved its SUT as a sibling**, so the relocation
    broke it in a way no path-literal grep could see. Repointed with a fail-loud guard.
 3. **`ADR-174` cited in the preflight message** before the ordinal was checked; corrected to
-   `ADR-177`.
+   `ADR-179`.
 
 ### Exit-gate note (honest)
 
@@ -97,7 +97,7 @@ The panel's highest-value findings **falsified my own work**:
 
 | Finding | Verdict |
 | --- | --- |
-| ADR-177's "under no hypothesis does it resolve into customer-controlled bytes" | **FALSE, measured.** An ambient exported `CLAUDE_PLUGIN_ROOT` executed a hostile payload past a `test -d "$X/scripts"` preflight. Same reasoning error the ADR diagnoses in the `:-` form: an environmental property asserted as a construction guarantee. |
+| ADR-179's "under no hypothesis does it resolve into customer-controlled bytes" | **FALSE, measured.** An ambient exported `CLAUDE_PLUGIN_ROOT` executed a hostile payload past a `test -d "$X/scripts"` preflight. Same reasoning error the ADR diagnoses in the `:-` form: an environmental property asserted as a construction guarantee. |
 | T0c "the decisive cell" | Had **never once** executed the mechanism it documents — this suite's own `set -u` aborted at parameter expansion 8/8. Green because bash died early. |
 | T0d "positive control" | Not a control over anything T0c depends on — it eval'd hardcoded literals and never touched the extractor. |
 | `./script.sh`, `cd x && bash …` | Defeated **both** suites while executing a decoy. #7442 in different clothes. |
@@ -129,7 +129,7 @@ green result under it is sound. `tsc --noEmit` rc=0. shellcheck rc=0. ADR ordina
 | --- | --- |
 | **AC12 / T3** (subdirectory invocation writes the artifact at repo top level) | **Not implemented.** Plan Phase 2 axis 2 — `write-kb-coverage.ts` still defaults its root to `process.cwd()`. Deferred to #7452. |
 | **AC15 / T8** (`/soleur:sync domain-model` standalone on a fresh repo produces a register) | **Not implemented.** Plan Phase 3 item 4 — `init` is wired only into the `all` path, so standalone still dies on a fresh repo. A real bug the plan found while in the area, but a *different* bug from the reachability defect #7442 reports, and not verifiable without a full end-to-end sync run. Deferred to #7452. |
-| **AC14** (`--producer-unreachable` degraded artifact) | **Not built.** The durability half of #7442. ADR-177 Consequences says so explicitly. Deferred to #7452. |
+| **AC14** (`--producer-unreachable` degraded artifact) | **Not built.** The durability half of #7442. ADR-179 Consequences says so explicitly. Deferred to #7452. |
 | AC19 (C4) | Deferred to #7452 per the CTO scope boundary. |
 
 Every other pre-merge AC is met and verified above.
