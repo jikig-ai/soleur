@@ -116,26 +116,26 @@ Direction: canonical → mirror, verbatim, unless the CLO ruled otherwise for a 
 Making the surfaces identical removes the drift-line pair and passes gate 2 as a reduction.
 Never rewrite a drifting line into a third form on one side.
 
-- [ ] 3.1 Port §2.3 items `(p) (w) (x) (y) (z) (ad)` into the mirror.
-- [ ] 3.2 Port the two §4.2 sub-processor rows (LinkedIn Ireland, Microsoft Ireland).
-- [ ] 3.3 Port the two Chapter V transfer bullets and the Art. 17 carve-out.
-- [ ] 3.4 Port the four Art. 17 erasure-cascade limbs.
-- [ ] 3.5 Restore §5.3 to the canonical text, **including** the `/dashboard/settings/privacy`
+- [x] 3.1 Port §2.3 items `(p) (w) (x) (y) (z) (ad)` into the mirror.
+- [x] 3.2 Port the two §4.2 sub-processor rows (LinkedIn Ireland, Microsoft Ireland).
+- [x] 3.3 Port the two Chapter V transfer bullets and the Art. 17 carve-out.
+- [x] 3.4 Port the four Art. 17 erasure-cascade limbs.
+- [x] 3.5 Restore §5.3 to the canonical text, **including** the `/dashboard/settings/privacy`
       self-serve export route (Art. 15/20 fulfilment path).
-- [ ] 3.6 Restore the truncated §2.3(i) and the §2.3 roll-call entry for `(p)`.
-- [ ] 3.6a 🔴 **§2.3(ad) must NOT be ported verbatim.** Task 2.5 changed its controller/processor
+- [x] 3.6 Restore the truncated §2.3(i) and the §2.3 roll-call entry for `(p)`.
+- [x] 3.6a 🔴 **§2.3(ad) must NOT be ported verbatim.** Task 2.5 changed its controller/processor
       characterisation. Restate the role sentence first, then publish — otherwise the notice tells
       users the "operator" is controller of a store whose only owner is Jikigai.
-- [ ] 3.6b 🔴 **READ every scope block adjacent to an insertion point.** The DPD has a hard-wrapped
+- [x] 3.6b 🔴 **READ every scope block adjacent to an insertion point.** The DPD has a hard-wrapped
       scope block whose referent is *"The paragraph above"*. Inserting a restored §2.3 item above
       it silently re-points the referent at different text, and **both gates are blind** — the
       block's own line never changes. Verify by reading, not by gate. (AC39)
-- [ ] 3.6c Re-verify each of `(p)(w)(x)(y)(z)(ad)` against the live implementation before
+- [x] 3.6c Re-verify each of `(p)(w)(x)(y)(z)(ad)` against the live implementation before
       publishing — especially `(z)` workspace-logo upload and `(w)` delegated-credential routing
       (`BYOK_DELEGATIONS_ENABLED`). A port is textually a copy but legally a first publication,
       and AC34 does not reach it. (AC40)
-- [ ] 3.7 Re-run the dangling-cross-reference check; expect zero on **both** surfaces.
-- [ ] 3.8 Re-run gate 2; expect a strict reduction, never `CONTENT CHANGED`.
+- [x] 3.7 Re-run the dangling-cross-reference check; expect zero on **both** surfaces.
+- [x] 3.8 Re-run gate 2; expect a strict reduction, never `CONTENT CHANGED`.
 
 ## Phase 3b — GDPR Policy lawful-basis carve-back (CPO C3)
 
