@@ -12,7 +12,9 @@ export type ExecResult = { rc: number; stdout: string };
 export type Executor = (cmd: string, timeoutMs: number) => Promise<ExecResult>;
 
 export type ClassificationResult = {
-  result: "PASS" | "FAIL" | "SKIP";
+  // SKIP-DECLARED is deliberately NOT folded into SKIP: it is a verification
+  // waiver a reviewer must be able to see (ADR-175 Layer 3).
+  result: "PASS" | "FAIL" | "SKIP" | "SKIP-DECLARED" | "SKIP-NOSANDBOX";
   reason?: string;
 };
 
@@ -22,6 +24,13 @@ export type ClassifyInput = {
   prBody: string;
   runner: Executor;
   timeoutMs?: number;
+  /**
+   * Whether the Step 10.5 bwrap sandbox can be established. Defaults to true so
+   * existing callers are unaffected. When false the runtime SKIPs — it never
+   * falls back to unsandboxed execution, because a skill claiming a boundary
+   * that is not there is worse than one claiming none (ADR-175 Layer 1).
+   */
+  sandboxAvailable?: boolean;
 };
 
 // Use POSIX [:space:] equivalent (not \s) so the TS reject regex behaves
@@ -30,21 +39,67 @@ export type ClassifyInput = {
 // Keeping the surface narrow avoids cross-runtime drift bypasses.
 const SSH_REJECT_RE = /(^|[\t\n\r \f\v/])ssh([\t\n\r \f\v]|$)/;
 
-// Credentialed CLIs — mirrors SKILL.md Step 10.4. Check 10 runs `$CMD` with the
-// operator's ambient FILE-BACKED CLI auth reachable: `env -i` scrubs env vars
-// but preserves $HOME, so e.g. the Doppler CLI still reads a live `dp.ct.*`
-// token from its on-disk config under ~/.doppler/.
+// Deny-by-default probe-verb allowlist — mirrors SKILL.md Step 10.4 (#7393).
 //
-// This is the load-bearing control for the #6772 folded-scalar fix, which is a
-// fail-open transition — commands that used to parse to the literal `>` and
-// self-reject now reach execution. A folded scalar joins with a SPACE and so
-// carries no shell-active token by construction; SUBST_REJECT_RE therefore
-// covers none of that class. Only this verb reject does.
+// This REPLACED a denylist of ten credentialed CLIs, which was unbounded-negative
+// by construction: it never caught indirect invocation (`bash scripts/foo.sh`
+// whose body self-wraps `doppler run -c prd`), nor any future vendor CLI, nor an
+// absolute-path read of a credential file by a permitted verb.
 //
-// The `/` in the leading class catches `/usr/local/bin/gh`; the trailing
-// boundary keeps `curl https://app.soleur.ai/highlights` runnable.
-const CRED_REJECT_RE =
-  /(^|[\t\n\r \f\v/])(doppler|gh|aws|supabase|stripe|hcloud|wrangler|terraform|flyctl|vercel)([\t\n\r \f\v]|$)/;
+// This is a CORPUS-FREQUENCY list, not a capability list — each verb has >= 2
+// uses in the measured corpus (ADR-175 §Layer 2 states the count and the
+// extraction method). `sh`, `dig` and `getent` are absent on the same evidence:
+// zero uses. `awk`/`sed`/`find` are absent for the same reason, NOT because they
+// are uniquely dangerous — `git -c alias.x='!cmd' x` and `bash <script>` are
+// full execution vectors and both are on the list.
+//
+// EVERY ENTRY IS AN AUTHORITY GRANT, and this gate bounds none of it. Authority
+// is bounded by Step 10.5's sandbox and by nothing here. See probe-verb-gate.sh
+// (the runtime of record) for why this layer is schema validation rather than a
+// security or legibility control.
+export const PROBE_VERB_ALLOWLIST = [
+  "curl",
+  "bash",
+  "grep",
+  "rg",
+  "jq",
+  "python3",
+  "node",
+  "bun",
+  "printf",
+  "git",
+] as const;
+
+// DELETED (ADR-175 revision, CTO ruling on #7393): the inline-program arg rules
+// (`-c`/`-e`/`-p`/`--eval`/`--print`) and the repo-relative program-path rule.
+//
+// Both were removed because the gate's own sanctioned remedy — "wrap it in a
+// repo-relative script" => `bash scripts/x.sh` — confers strictly MORE
+// capability than anything they rejected, and Step 10.5 runs `bash -c "$CMD"`
+// regardless, so every probe already is an inline program. They rejected a
+// spelling, not a capability. Measured cost on the real corpus: 1 of the 2
+// inline rejects was a false positive, the path rule fired once across the corpus,
+// and both false-rejected legitimate probes (`bun test … -p`,
+// `python3 … --print json`, `node … -e prod`). Negative value on both sides.
+//
+// Also deleted: the path-shaped exemption that skipped the allowlist whenever the
+// first token contained `/`. It made `./doppler secrets get FOO` accept while a
+// bare `doppler` rejected — i.e. it made "deny-by-default" false as printed.
+
+// Placeholder text in a declaration waives nothing.
+//
+// This MUST be a superset of deepen-plan §4.7's set, because three artifacts
+// claim it simply reuses that machinery. It did not: the two sets were disjoint
+// on exactly the wrong members. Measured before this fix —
+// `credentials_required: placeholder` and `credentials_required: manual operator
+// check` both yielded SKIP-DECLARED, i.e. the two literal strings the rest of
+// the repo treats as the canonical "this field says nothing" markers were the
+// ones that GRANTED the waiver, on the cheapest path to a non-FAIL in the check.
+//
+// deepen-plan §4.7's set:  TODO TBD N/A placeholder "manual operator check"
+// preflight's additions:   na none tktk ... <…>
+const PLACEHOLDER_RE =
+  /^(todo|tbd|n\/a|na|none|tktk|placeholder|manual operator check|\.\.\.|<.*>)$/i;
 
 // Bash resolves `"doppler"`, `\doppler` and `dopp""ler` to the same binary, but the
 // word-boundary anchors above cannot see through the quote characters. Strip them
@@ -200,6 +255,69 @@ export function parseExpected(observabilityBlock: string): string {
   return "";
 }
 
+/**
+ * Read the optional `credentials_required` sub-field of `discoverability_test`.
+ *
+ * SCOPED TO THE SUB-BLOCK, deliberately — which NARROWS the bypass class
+ * without closing it: a `credentials_required:` line sitting inside the
+ * command's own block scalar is still honoured, so a multi-line command can
+ * still waive itself. Constraining to direct children would need a YAML-aware
+ * parse the flat awk deliberately avoids. Stated rather than claimed closed. `expected_output` is read with a flat
+ * whole-block scan and that is survivable, because a stray `expected_output:`
+ * only changes what a probe is compared against. This field SKIPS EXECUTION
+ * ENTIRELY, so the same flat read is a bypass rather than a parsing quirk:
+ * measured, a `credentials_required:` line sitting under `liveness_signal:`, or
+ * in prose anywhere in the `## Observability` section, waived a perfectly
+ * runnable unauthenticated `curl` probe. One line, anywhere in the section,
+ * silently disabled the check. The precedent does not transfer when the blast
+ * radii differ this much.
+ *
+ * Three further shapes are rejected rather than honoured, each measured as a
+ * silent waiver before this guard existed:
+ *
+ *   - a value that is only a `#` comment. The documented template ships
+ *     `credentials_required: # OPTIONAL. Only when ...`, so an agent copying the
+ *     canonical schema produced a valid-looking declaration whose "declared
+ *     scope" was the template's own explanatory comment.
+ *   - a bare block/folded indicator (`>` or `|`). #6772 made those first-class
+ *     for `command:`, so an author following that pattern got SKIP-DECLARED with
+ *     the justification `">"`.
+ *   - an empty value.
+ *
+ * `parse-form-a.awk` is still deliberately NOT extended — it is pinned
+ * byte-exactly against this file by the P1/P2/P3 parity harness.
+ */
+export function parseCredentialsRequired(observabilityBlock: string): string {
+  const lines = observabilityBlock.split(/\r?\n/);
+  const start = lines.findIndex((l) => /^\s*discoverability_test:/.test(l));
+  if (start === -1) return "";
+  const parentIndent = (lines[start].match(/^[ \t]*/) ?? [""])[0].length;
+
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim() === "") continue;
+    const indent = (line.match(/^[ \t]*/) ?? [""])[0].length;
+    // Back to the parent's level or shallower => the sub-block ended.
+    if (indent <= parentIndent) break;
+    const m = line.match(/^\s*credentials_required:\s*(.*)$/);
+    if (!m) continue;
+    const raw = stripQuotes(m[1].trim());
+    // A comment-only value, a bare block/fold indicator, or nothing at all
+    // declares nothing — and a declaration that says nothing waives nothing.
+    // The CHOMPED indicators are included for the same reason as the bare ones:
+    // #6772 made `>-` / `|-` first-class for `command:`, so an author following
+    // that pattern reaches for them FIRST. Omitting them covered the two shapes
+    // least likely to be typed.
+    if (
+      raw === "" ||
+      raw.startsWith("#") ||
+      [">", ">-", ">+", "|", "|-", "|+"].includes(raw)
+    )
+      return "";
+    return raw;
+  }
+  return "";
+}
+
 export function matchExpected(expected: string, actualStdout: string): boolean {
   const normalized = actualStdout.replace(/\n+$/, "").trim();
   if (normalized === "") return false;
@@ -221,16 +339,77 @@ export function tokenizeExpected(expected: string): string[] {
     .filter((s) => s.length > 0);
 }
 
+/**
+ * Normalize a parsed command before anything reads its verb.
+ *
+ * MIRRORS `probe-verb-gate.sh` — that script is the runtime of record and this
+ * is the mirror; if they disagree the script wins and this is the bug. The
+ * `probe-verb-gate-parity` test executes both over one fixture table precisely
+ * so a disagreement cannot ship silently again.
+ *
+ * Two producer asymmetries make this necessary, and both shipped green before
+ * the parity harness existed: Form B prints fenced lines VERBATIM (keeping
+ * markdown indentation, so the verb was `""`), and a Form A block scalar can
+ * carry a leading `#` comment line (so the verb was `"#"`). Both produced a FAIL
+ * whose message named remedies that could not apply.
+ */
+export function normalizeCommand(cmd: string): string {
+  // ASCII-ONLY trim, deliberately. JS `.trim()` is Unicode-aware and strips
+  // U+00A0 / U+2028 / U+3000; the gate trims under LC_ALL=C, whose `space` class
+  // is bytes only. Using `.trim()` here made the mirror ACCEPT a command the
+  // runtime REJECTS — measured on ` curl …` with a leading U+00A0, U+2028 and
+  // U+3000 (3 divergences).
+  //
+  // The GATE's behaviour is the correct one, so the mirror follows it: bash does
+  // not word-split on U+00A0, so the executed program would be `\u00a0curl`,
+  // which does not exist. Rejecting loudly at gate time beats an opaque rc=127 —
+  // and a plan pasted from a browser or a doc is exactly how that character
+  // arrives.
+  const H = "[ \\t\\f\\v\\r]";
+  return cmd
+    .split(/\r?\n/)
+    .filter((l) => !new RegExp(`^${H}*#`).test(l) && !new RegExp(`^${H}*$`).test(l))
+    .join("\n")
+    .replace(new RegExp(`^${H}+`), "")
+    .replace(new RegExp(`${H}+$`), "");
+}
+
+/**
+ * The effective verb: the first whitespace-delimited token of the NORMALIZED,
+ * DEQUOTED command. Bash resolves `"doppler"`, `\doppler` and `dopp""ler` to the
+ * same binary, so quoting must not launder the verb past the allowlist.
+ */
+export function effectiveVerb(cmd: string): string {
+  return dequote(normalizeCommand(cmd)).split(/[\t\n\r \f\v]/)[0] ?? "";
+}
+
 export function rejectReason(cmd: string): string | null {
   if (SSH_REJECT_RE.test(cmd)) {
     return "discoverability_test.command contains ssh (rule violation per hr-observability-as-plan-quality-gate)";
   }
-  // Ordered to mirror the runtime: Step 10.4's verb rejects run before Step
-  // 10.5's shell-active-token reject.
-  if (CRED_REJECT_RE.test(dequote(cmd))) {
-    return "discoverability_test.command invokes a credentialed CLI; refusing to run. Check 10 executes with the operator's ambient file-backed CLI auth reachable (env -i does NOT scrub it — $HOME is preserved, so the Doppler CLI token, SSH private keys, netrc, git credentials, AWS credentials, the gcloud credentials database, and the Docker config are all readable). Use an unauthenticated probe, or see the Check-10 credentialed-probe design issue if this probe genuinely needs credentials.";
+
+  // Ordered to mirror the runtime: Step 10.4's verb gate runs before Step 10.5's
+  // shell-active-token reject.
+  const verb = effectiveVerb(cmd);
+
+  if (verb === "") {
+    return "discoverability_test.command is empty after normalization — no command could be parsed. See plan-issue-templates.md §Observability for the canonical schema.";
   }
-  if (SUBST_REJECT_RE.test(cmd)) {
+
+  // NO path-shaped exemption: a first token containing `/` used to skip this
+  // check entirely, which admitted `./doppler secrets get FOO` and the prose
+  // entry `gh/Sentry query for …` while a bare `doppler` rejected. Removing it
+  // is what makes "deny-by-default" true as printed.
+  if (!(PROBE_VERB_ALLOWLIST as readonly string[]).includes(verb)) {
+    return `discoverability_test.command starts with \`${verb}\`, which is not on the probe-verb allowlist (${PROBE_VERB_ALLOWLIST.join(" ")}). Either wrap the probe in a repo-relative script committed in this same PR (\`bash scripts/<name>.sh …\`), or — if the probe genuinely cannot run without credentials — declare \`credentials_required\` on the discoverability_test block so Check 10 skips it explicitly. To permit a new verb for everyone, add it to PROBE_VERB_ALLOWLIST in a reviewed PR; every entry is an authority grant.`;
+  }
+
+  // Tested against the NORMALIZED command, and the runtime EXECUTES that same
+  // normalized string — gating one form while executing another is the
+  // laundering trap this check exists to avoid. Concretely: a leading `#`
+  // comment line is not an executable statement, so it must not trip the
+  // newline (block-chaining) reject; a genuine second statement still does.
+  if (SUBST_REJECT_RE.test(normalizeCommand(cmd))) {
     return "discoverability_test.command contains shell-active token (;, &&, ||, |, >, <, &, $var, $(, `, <(, >() — refusing to run. Plans must compose single-statement commands without chaining or substitution.";
   }
   return null;
@@ -239,7 +418,13 @@ export function rejectReason(cmd: string): string | null {
 export async function classifyDiscoverabilityResult(
   input: ClassifyInput,
 ): Promise<ClassificationResult> {
-  const { planPath, planBody, runner, timeoutMs = 15_000 } = input;
+  const {
+    planPath,
+    planBody,
+    runner,
+    timeoutMs = 15_000,
+    sandboxAvailable = true,
+  } = input;
 
   if (!planPath || planBody === "") {
     return {
@@ -265,11 +450,77 @@ export async function classifyDiscoverabilityResult(
     };
   }
 
+  // Evaluation order mirrors the runtime:
+  //   ssh reject -> credentials_required -> verb/arg/path gates ->
+  //   shell-active reject -> sandbox availability -> sandboxed execute.
+  //
+  // `ssh` stays first and is NOT overridable by a declaration:
+  // hr-observability-as-plan-quality-gate mandates a no-SSH probe unconditionally.
+  if (SSH_REJECT_RE.test(cmd)) {
+    return {
+      result: "FAIL",
+      reason:
+        "discoverability_test.command contains ssh (rule violation per hr-observability-as-plan-quality-gate). A credentials_required declaration does NOT override this.",
+    };
+  }
+
+  const credsRequired = parseCredentialsRequired(block);
+  if (credsRequired !== "") {
+    if (PLACEHOLDER_RE.test(credsRequired)) {
+      return {
+        result: "FAIL",
+        reason: `discoverability_test.credentials_required is a placeholder ("${credsRequired}"). State the credential scope and why no unauthenticated probe verifies the same property, or remove the field.`,
+      };
+    }
+    // INVERTED ADVISORY (ADR-175 Layer 3). Applying the verb gate to declared
+    // probes as a REJECT would re-close the door #7393 opened — the motivating
+    // case is `doppler run …`, and `doppler` is deliberately off the allowlist.
+    // A plain advisory would fire on ~100% of declarations by construction, and
+    // an always-on warning is noise. So it fires only in the case that is
+    // actually suspicious: the declared command's verb is one Check 10 COULD
+    // have executed, which means either the declaration is unnecessary or the
+    // credential dependency is hidden inside a wrapped script.
+    const declaredVerb = effectiveVerb(cmd);
+    const advisory = (PROBE_VERB_ALLOWLIST as readonly string[]).includes(declaredVerb)
+      ? ` (advisory: this command's verb \`${declaredVerb}\` is one Check 10 can execute — either the declaration is unnecessary, or the credential dependency is hidden inside a wrapped script)`
+      : "";
+    return {
+      result: "SKIP-DECLARED",
+      reason: `discoverability_test declares credentials_required — ${credsRequired}. Check 10 did NOT execute the command: running it inside the Step 10.5 sandbox would fail for lack of credentials and prove nothing about the property under test.${advisory}`,
+    };
+  }
+
   const rejected = rejectReason(cmd);
   if (rejected !== null) return { result: "FAIL", reason: rejected };
 
+  // Fail-closed: no unsandboxed fallback, ever. A skill that claims a boundary
+  // it does not have is worse than one that claims none.
+  if (!sandboxAvailable) {
+    // ITS OWN TERMINAL, never folded into ordinary SKIP.
+    //
+    // Folded, "the security gate verified nothing" was byte-identical to "the
+    // gate correctly had nothing to do" (no sensitive paths, no PR, no plan) —
+    // in the aggregate row, to /soleur:ship, and to the operator. That is the
+    // blanket-disablement-that-looks-like-correct-operation failure this ADR's
+    // own Sharp Edge names, and it shipped.
+    //
+    // The asymmetry made it plain: credentials_required waives ONE probe in ONE
+    // plan and got three mechanical counterweights on the grounds that "prose is
+    // not an enforcement mechanism"; this disables the check for EVERY plan,
+    // permanently, on that host — and had none. bwrap is Linux-only, so on macOS
+    // this is the steady state, not an exception.
+    return {
+      result: "SKIP-NOSANDBOX",
+      reason:
+        "Check 10 executes plan-declared commands only inside a bubblewrap (bwrap) sandbox, and the sandbox could not be established on this host (bwrap absent, or unprivileged user namespaces restricted). Refusing to run the probe unsandboxed. NOTE: bubblewrap is Linux-only — on macOS Check 10 is disabled permanently, not transiently.",
+    };
+  }
+
   const expected = parseExpected(block);
-  const result = await runner(cmd, timeoutMs);
+  // Execute the SAME normalized string the gate approved. Gating one form and
+  // executing another is exactly the laundering gap that lets a rejected shape
+  // reach the shell.
+  const result = await runner(normalizeCommand(cmd), timeoutMs);
 
   if (result.rc === 6) {
     return {

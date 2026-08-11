@@ -226,18 +226,31 @@ else:
 # run-registered-suites.sh's own header: "a failing suite prints `RED <path>`,
 # not `FAIL`. A `grep FAIL` over this runner's log returns zero hits on a failing
 # run and reads as clean -- measured 2026-08-04 (#7220)."
-# The flag list is deliberately NOT pinned -- `(?:-\S+ )*` tolerates `-m 20` etc.
-# This assertion's own message names a property of the PATTERN (it must match ^RED as
-# well as ^[FAIL]); pinning `grep -E` as a contiguous literal pinned flag ADJACENCY
-# instead, which is narrower than the property and reds on a hardening that leaves the
-# pattern byte-identical. The plan said (8) stays untouched; this is a deliberate
-# deviation, and it preserves what (8) exists to prove.
-if re.search(r"grep [^']*-E '\^RED \|\^\\\[FAIL\\\]'", stripped):
-    ok("(8) failure marker matches ^RED as well as ^[FAIL]")
+# AMENDED 2026-08-11 (#7376): the anchor was widened to include `^UNACCOUNTED `, so this now
+# asserts the two REQUIRED alternates are present rather than pinning the exact spelling.
+# An exact-string pin would have to be edited for every legitimate widening, and editing it is
+# indistinguishable from removing a required alternate. `^UNACCOUNTED ` is required for the
+# same reason `^RED ` is: a suite whose wrapper is killed emits NEITHER PASS nor RED, so
+# without it HAS_FAIL_MARKER stays 0 and the monitor titles the issue "did not complete ...
+# usually a timeout" -- a cause it never measured, on the exact failure the runner's accounting
+# assertion exists to catch.
+# `grep [^']*-E` rather than `grep -E`: the alternates are what this asserts (see the
+# comment above), so the EXTRACTOR must not pin flag adjacency. #7424 added `-m 20`, which
+# left the exact-adjacency form matching nothing -- and `_alts` then came back EMPTY, which
+# reports as "all three alternates missing" rather than as "the extraction broke". A check
+# whose failure mode is indistinguishable from the defect it hunts is the class this file
+# exists to keep out of the monitor.
+_anchor = re.search(r"hits=\$\(grep [^']*-E '([^']+)'", stripped)
+_alts = _anchor.group(1) if _anchor else ""
+_required = ["^RED ", "^UNACCOUNTED ", "^\\[FAIL\\]"]
+_missing = [a for a in _required if a not in _alts]
+if _anchor and not _missing:
+    ok("(8) failure-marker anchor carries ^RED , ^UNACCOUNTED and ^[FAIL]")
 else:
-    bad("(8) failure marker matches ^RED as well as ^[FAIL]",
-        "the infra runner never emits [FAIL]; matching it alone re-labels a real "
-        "infra failure as 'Run did not complete' and names a timeout that did not happen")
+    bad("(8) failure-marker anchor carries ^RED , ^UNACCOUNTED and ^[FAIL]",
+        f"missing={_missing or '<anchor not found>'} in {_alts!r} -- the infra runner never "
+        "emits [FAIL] itself; and without ^UNACCOUNTED a vanished suite sets no marker at all, "
+        "so the monitor names a timeout that did not happen")
 
 # ---- (8b) [KILLED] is a SEPARATE grep whose hits reach SUMMARY ------------
 # scripts/test-all.sh now carries a THIRD result class. A suite terminated by a signal
@@ -417,10 +430,27 @@ else:
 
 # ---- (10) no pipeline whose status is discarded in setup steps ------------
 # defect B's shape: `cmd | tail` under bash -e (pipefail OFF) always exits 0.
+#
+# AMENDED 2026-08-10 (#7376) — deliberately, not worked around. The excerpt builder gained
+# `grep -v '^SOLEUR| ' "$file" | tail -30`, which matches all three offender conditions and
+# would otherwise red this check.
+#
+# The exemption is sound because defect B is about DISCARDING A PRODUCER'S VERDICT. This
+# producer has no verdict to discard: it is a display filter over a file whose non-emptiness
+# the enclosing `if [[ -s "$file" ]]` already established, and `grep -v`'s exit status here
+# encodes only "did every line match the filter" — which is not an error condition, it is the
+# fully-dumped case. Propagating it would make the monitor abort and file NOTHING in exactly
+# the situation it exists to report.
+#
+# Keyed on the literal filter, so this exempts THAT line and nothing else — any other
+# `| tail` still trips. Deliberately NOT spelled `grep -E -v` to slip past the substring
+# exemption above, which would have widened the blind spot instead of narrowing it.
+DISPLAY_FILTER_EXEMPT = "grep -v '^SOLEUR| '"
 offenders = [l.strip() for l in run_lines
              if re.search(r'\|\s*(tail|head)\b', l)
              and 'PIPESTATUS' not in l
-             and 'grep -E' not in l]
+             and 'grep -E' not in l
+             and DISPLAY_FILTER_EXEMPT not in l]
 if offenders:
     bad("(10) no setup pipeline silently discards its producer's exit status",
         f"offenders={offenders} -- this is defect B's exact shape")
@@ -473,6 +503,163 @@ while IFS=$'\t' read -r status msg detail; do
   if [[ "$status" == "ok" ]]; then pass "$msg"; else fail "$msg" "$detail"; fi
 done < "$RESULT_FILE"
 
+# ── (13) the dump filter's EFFECT, not its spelling (#7376) ───────────────────────────────────
+#
+# Everything above parses the YAML with a python regex and NEVER EXECUTES THE SHELL, so an
+# assertion that the literal `grep -v '^SOLEUR| '` appears would pin the filter's PRESENCE and
+# say nothing about what it does. The compliance clearance for this change depends on the
+# EFFECT: run-registered-suites.sh now prints per-suite diagnostics that must not reach a
+# public issue body. So extract the excerpt expression from the workflow and run it.
+#
+# Extracted, not re-typed. A hand-copied duplicate of the pipeline is a second source of truth
+# that drifts silently — this test would keep passing against a workflow that had stopped
+# filtering.
+# Extract ANY `grep -v '<pattern>' "$file" | tail -N` shape, not just today's sentinel. Pinning
+# the extraction to `^SOLEUR| ` would make a WIDENED filter (a bare `^| `) unextractable, and it
+# would then fail as "could not extract" — a correct verdict for the wrong reason, which reads
+# as a missing filter rather than as the over-broad one that 13c exists to catch.
+EXCERPT_EXPR="$(grep -oE "grep -v '[^']*' \"\\\$file\" \| tail -[0-9]+" "$WF" | head -1)"
+if [[ -n "$EXCERPT_EXPR" ]]; then
+  _fix="$(mktemp)"; _out="$(mktemp)"
+
+  # DERIVE the sentinel from the runner instead of typing it. This is the only guard on the
+  # producer->consumer direction: a runner-side rename plus its own test update (the natural
+  # single-PR edit, both files under apps/web-platform/infra/) leaves this filter matching a
+  # prefix the runner no longer emits, and every dumped byte — including the `[FAIL]` lines 10
+  # registered suites print at column 0 — reaches the PUBLIC issue body and the monitor's
+  # title derivation. Mirrors T8c's technique for MARKER_ERE in the runner's own suite.
+  _RUNNER="$REPO_ROOT/apps/web-platform/infra/run-registered-suites.sh"
+  SP="$(sed -n "s/^SENTINEL_PREFIX='\(.*\)'$/\1/p" "$_RUNNER")"
+  if [[ -z "$SP" ]]; then
+    fail "(13) could not read SENTINEL_PREFIX from the runner" "$_RUNNER"
+    SP='SOLEUR| '
+  elif ! grep -qF "grep -v '^${SP}'" "$WF"; then
+    fail "(13d) the workflow filters '^<other>' but the runner emits '${SP}'" \
+      "a runner-side sentinel rename would publish every dumped diagnostic line"
+  else
+    pass "(13d) the workflow's filter pattern is derived from the runner's SENTINEL_PREFIX"
+  fi
+
+  # The fixture must exceed the tail window, or `tail -30` is a no-op and the ORDER of
+  # `grep -v | tail` — the entire point — goes untested. A real capture puts ~46 prefixed
+  # lines between the RED names and EOF, so the swapped order yields an EMPTY body.
+  {
+    echo "RED  apps/web-platform/infra/inngest.test.sh"
+    echo "UNACCOUNTED  apps/web-platform/infra/zot-liveness.test.sh"
+    echo "PASS apps/web-platform/infra/other.test.sh"
+    printf "${SP}filler diagnostic line %s\n" $(seq 1 40)
+    echo "${SP}[FAIL] a dumped marker that must NOT reach the public issue body"
+    echo "${SP}retained per-suite log dir: /var/tmp/infra-suites.deadbeef"
+    echo "| Service | Provider | Category |"
+    echo "=== registered infra suites: 91 passed, 1 failed, 1 unaccounted (of 93) ==="
+  } > "$_fix"
+  # `file` IS read — by the workflow expression under `eval` below, which shellcheck cannot see
+  # into. That indirection is the point: the expression is extracted from the YAML rather than
+  # re-typed, so it reads the same variable name the workflow's own loop does.
+  # shellcheck disable=SC2034
+  file="$_fix"; eval "$EXCERPT_EXPR" > "$_out" 2>/dev/null || true
+
+  if ! grep -q '^SOLEUR| ' "$_out"; then
+    pass "(13a) the excerpt drops every dumped diagnostic line"
+  else
+    fail "(13a) dumped diagnostic lines survive into the published excerpt" "$(grep -c '^SOLEUR| ' "$_out") line(s)"
+  fi
+
+  # WHITELIST, not an absence check. "no SOLEUR| line" is satisfied by a filter that drops
+  # EVERYTHING, which would silently gut the issue body. Assert positively that the signal
+  # the operator actually needs survived.
+  if grep -q '=== registered infra suites: 91 passed, 1 failed, 1 unaccounted (of 93) ===' "$_out" \
+     && grep -q '^RED  *apps/web-platform/infra/inngest.test.sh' "$_out" \
+     && grep -q '^UNACCOUNTED  *apps/web-platform/infra/zot-liveness.test.sh' "$_out"; then
+    pass "(13b) the summary count, the RED name and the UNACCOUNTED name survive the filter"
+  else
+    fail "(13b) the filter removed signal the issue body depends on" "$(head -5 "$_out")"
+  fi
+
+  # The tests half of the same loop: expenses-verify-by-check prints markdown tables at
+  # column 0. A bare `^| ` sentinel would have deleted them from the public excerpt; this is
+  # the assertion that keeps the sentinel distinctive.
+  if grep -q '^| Service | Provider' "$_out"; then
+    pass "(13c) a legitimate column-0 markdown table is NOT stripped"
+  else
+    fail "(13c) the filter stripped a markdown table — the sentinel is too broad"
+  fi
+  rm -f "$_fix" "$_out"
+else
+  fail "(13) could not extract the excerpt filter from the workflow" \
+    "the dump filter is missing, or its shape changed and this pin went blind"
+fi
+
+# ── (14) the redaction set actually redacts (#7376) ───────────────────────────────────────────
+#
+# This channel now carries per-suite diagnostic output into a PUBLIC issue body, so the
+# redaction pass is load-bearing rather than belt-and-braces. Asserted by EXTRACTING the sed
+# expressions from the workflow and running them — a re-typed copy would be a second source of
+# truth that drifts silently.
+#
+# Every fixture is SYNTHESIZED (cq-test-fixtures-synthesized-only) and assembled by
+# CONCATENATION, so no contiguous token-shaped literal exists in this file. A real-shaped
+# literal would trip GitHub Push Protection and block the push even though the value is fake.
+mapfile -t _SED_EXPRS < <(awk '/REDACTED=\$\(printf/,/^ *$/' "$WF" | grep -oE "^ *-e '.*'" | sed -E "s/^ *-e '//; s/'$//")
+if (( ${#_SED_EXPRS[@]} >= 12 )); then
+  _args=(); for e in "${_SED_EXPRS[@]}"; do _args+=(-e "$e"); done
+
+  _hdr='-----BEGIN'; _ftr='-----END'
+  _corpus="$(
+    printf '%s\n' \
+      "token gh""p_0123456789abcdefghij0123456789abcdef" \
+      "jwt ey""J0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk" \
+      "supa sbp_""v0_0123456789abcdef0123456789abcdef01234567" \
+      "stripe rk_""live_0123456789abcdefghij0123456789" \
+      "whsec wh""sec_0123456789abcdefghij0123456789" \
+      "doppler dp""."'scim'".0123456789abcdefghij0123456789abcdef0123" \
+      "sentry sn""trys_0123456789abcdefghij0123456789abcdef" \
+      "dsn https://0123456789abcdef0123456789abcdef@o123.ingest.sentry.io/456" \
+      "Authorization: Bea""rer abcdefghijklmnop0123456789" \
+      "${_hdr} RSA PRIVATE KEY-----" \
+      "MIIEowIBAAKCAQEAsecretbodythatmustnotsurvive0123456789" \
+      "${_ftr} RSA PRIVATE KEY-----" \
+      "keepme: this ordinary diagnostic line must survive"
+  )"
+  _red="$(printf '%s' "$_corpus" | sed -E "${_args[@]}")"
+
+  # Anchor on the SECRET-BEARING substrings, not on the word "redacted": asserting the
+  # replacement text appears would pass even if one rule silently stopped matching.
+  _leaks=()
+  grep -q '0123456789abcdefghij0123456789abcdef' <<<"$_red" && _leaks+=("gh-token")
+  grep -q 'dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk' <<<"$_red" && _leaks+=("jwt")
+  grep -q 'sbp_v0_' <<<"$_red" && _leaks+=("supabase")
+  grep -qE '(rk_live|whsec)_[A-Za-z0-9]{16,}' <<<"$_red" && _leaks+=("stripe")
+  grep -q 'scim\.0123456789' <<<"$_red" && _leaks+=("doppler-scim")
+  grep -q 'sntrys_0123' <<<"$_red" && _leaks+=("sentry-token")
+  grep -q 'o123.ingest.sentry.io' <<<"$_red" && _leaks+=("sentry-dsn")
+  grep -q 'abcdefghijklmnop0123456789' <<<"$_red" && _leaks+=("authorization")
+  grep -q 'MIIEowIBAAKCAQEAsecretbody' <<<"$_red" && _leaks+=("pem-body")
+
+  if (( ${#_leaks[@]} == 0 )); then
+    pass "(14a) every synthesized secret shape is redacted (${#_SED_EXPRS[@]} rules)"
+  else
+    fail "(14a) secret shapes SURVIVED redaction" "leaked: ${_leaks[*]}"
+  fi
+
+  # The PEM rule is a RANGE. A header-only rule is an anti-mitigation: it strips the marker
+  # that makes a leaked key recognisable and leaves the base64 body behind.
+  if ! grep -q 'MIIEowIBAAKCAQEA' <<<"$_red" && ! grep -q 'END RSA PRIVATE KEY' <<<"$_red"; then
+    pass "(14b) the PEM rule removes the whole key BLOCK, not just its header"
+  else
+    fail "(14b) the PEM body or END line survived — the rule is header-only"
+  fi
+
+  # WHITELIST: redaction that eats everything is not a pass.
+  if grep -q 'keepme: this ordinary diagnostic line must survive' <<<"$_red"; then
+    pass "(14c) ordinary diagnostic text survives redaction"
+  else
+    fail "(14c) redaction destroyed non-secret diagnostic text"
+  fi
+else
+  fail "(14) could not extract the redaction rules from the workflow" \
+    "found ${#_SED_EXPRS[@]} -e expressions, expected >= 12"
+fi
 # =============================================================================
 # BEHAVIOURAL ARMS -- the filer's `run:` body, EXECUTED (AC21 / AC22 / AC23)
 # =============================================================================
@@ -749,7 +936,7 @@ fi
 # block emit nothing reported 28 assertions / exit 0 (all nine #7424 static guards gone),
 # and stranding the behavioural battery reported 30 / exit 0 (all 26 AC21/AC22/AC23
 # assertions gone, incl. redaction and forged-marker rejection).
-MIN_ASSERTIONS=56
+MIN_ASSERTIONS=63
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   echo "  [FAIL] anti-vacuity: only $TOTAL assertion(s) ran, expected >= $MIN_ASSERTIONS" >&2

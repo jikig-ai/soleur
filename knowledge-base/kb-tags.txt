@@ -146,6 +146,7 @@ adr-corpus
 adr-drift
 adr-hygiene
 adr-ordinals
+adversarial-review
 advisor
 advisory-gate
 advisory-vs-blocking
