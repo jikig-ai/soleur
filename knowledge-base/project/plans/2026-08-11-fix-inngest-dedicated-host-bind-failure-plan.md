@@ -19,26 +19,42 @@ The dedicated inngest host (`soleur-inngest`, 10.0.1.40) boots and runs but neve
 the web-platform container's dispatches fail with `connect ECONNREFUSED`. Twelve days passed
 without anyone noticing.
 
-The initial framing — "the host is dark because it has no error channel" — did not survive
-measurement. The host has an **excellent** boot-trace channel (eight staged
+Two framings were tried and both were refuted by measurement. They are recorded because the
+refutations are the plan's foundation.
+
+**Refuted #1 — "the host has no error channel."** It has an excellent one: eight staged
 `SOLEUR_INNGEST_BOOT_STAGE` markers ending in `post-boot-health` and `net-health`, the latter
-carrying `bind=`, `priv8288=` and `nft=`: this entire diagnosis in one row). That channel almost
-certainly fired on 2026-07-30 and its evidence **expired**, because the sink's retention is ~3 days
-and nothing alerts on a failure marker. Meanwhile the one monitor that should have screamed —
-`betteruptime_heartbeat.inngest_prd` — is a single monitor with **two** pushers, and the still-alive
-co-located scheduler held it green throughout.
+carrying `bind=`, `priv8288=` and `nft=` — this entire diagnosis in one row. It almost certainly
+fired on 2026-07-30 and its evidence **expired**: sink retention is ~3 days against a 12-day-old
+boot, and nothing alerts on a failure marker.
 
-So the defect is not an absent channel. It is a channel whose evidence has a 72-hour half-life, a
-liveness monitor that cannot distinguish which host is answering, and a cutover state machine whose
-terminal `done` outlives the host it describes. The root cause of the bind failure itself remains
-**UNKNOWN and is not guessed at here** — the deciding datum was discarded by retention, and this
-plan's first job is to guarantee the next boot produces one that survives.
+**Refuted #2 — "one monitor with two pushers, masked by the co-located host."** There is exactly
+one `betteruptime_heartbeat` (`inngest.tf:302`), the dedicated host's dark-arm skip already ships
+(`inngest-bootstrap.sh:277`, `#6617b`), and `inngest-host.tf:170` states it outright: *"The monitor
+stayed green throughout only because the co-located host is the sole pusher."* The `paused = true`
+alternative was checked too and also fails — `heartbeat-manifest.ts` records the live monitor,
+self-pulled from `/api/v2/heartbeats`, as unpaused and up.
 
-Scope is deliberately bounded to what is safe to land in one PR: make the host self-annunciating,
-make the re-cutover safe, and record the decisions. Executing the cutover and bumping the CLI are
-sequenced into their own operator-gated windows (see `## Non-Goals`), because atomic cutover is
-structurally unavailable and the version bump runs one-way Postgres migrations against a backend the
-co-located host still shares.
+**The actual mechanism: no monitor anywhere asserts that :8288 is bound.** The pusher is
+`exec curl -gfsS "$INNGEST_HEARTBEAT_URL"` — it proves a systemd timer fired, on either host. One
+correctly-armed, correctly-scoped monitor stayed green for twelve days because it measures the
+wrong thing. Splitting it would mint a second meaningless green.
+
+The root cause of the bind failure is **UNKNOWN and is not guessed at here** — the deciding datum
+was destroyed by retention. The plan's spine is therefore a **diagnostic boot**: a guard-permitted
+boot against a non-prod backend, where `is_prod=false` takes the flip guard's ALLOW arm so the host
+can actually attempt a bind and emit a discriminating `net-health` row, with zero double-scheduler
+risk. That converts every UNKNOWN in `## Hypotheses` into a measurement, and it is what makes "fix
+it properly" reachable rather than aspirational.
+
+Alongside it, detection ships that does **not** depend on the broken host: a consumer-side probe on
+the web host wrapping `inngest-registry-probe.sh`, which has been returning the exact diagnosis for
+twelve days with nothing watching it. It needs no host replace, so it works the day it merges.
+
+**Operator decisions, 2026-08-11.** The twelve days of failed dispatches are **accepted as lost** —
+no replay or backfill path is in scope. `INNGEST_BASE_URL` is **not** repointed as an interim
+restore; the dedicated host is fixed properly instead, accepting a few more hours against the twelve
+days already elapsed.
 
 ## Research Insights
 
@@ -225,182 +241,208 @@ the file — is what ports.
 
 | Claim as given | Reality | Plan response |
 |---|---|---|
-| "There is no `inngest-boot-phone-home.sh` on main" | It exists as an embedded `write_files` entry in `cloud-init-inngest.yml`, emitting 8 staged markers | Do not build a channel. Make the existing one's evidence durable and its failure loud |
-| "`inngest-server.service` journald is not in the vector allowlist" | Already present as Source 1 (`[sources.inngest_journald]`, `include_units`) | No change to the allowlist |
-| "Ship the error channel before any reproduction" | The channel shipped; its **evidence expired** (retention ~3 days vs a 12-day-old boot) | Reframed: durability + annunciation, not construction |
-| "ADR-167 documents the rollback and needs superseding" | ADR-167 is not on `main`; two unmerged branches each claim the ordinal | Record the reversal at **ADR-179** (re-derived across all 66 refs; 178 was taken mid-session) |
-| "Make the cutover atomic" | Structurally unavailable — the two hosts sit on disjoint control planes | Accept a **gap**, never an overlap; quiesce-web precedes arm |
-| "Bump the CLI pin in this change" | `inngest start` runs one-way goose migrations; the co-located host shares that Postgres at v1.19.4 | Deferred to its own window, sequenced after the cutover |
+| "There is no `inngest-boot-phone-home.sh` on main" | Exists as a `write_files` entry in `cloud-init-inngest.yml`, 8 staged markers | Don't build a channel; make its evidence durable and its failure loud |
+| "`inngest-server.service` journald is not in the vector allowlist" | Already Source 1 (`[sources.inngest_journald]`) | No allowlist change |
+| "One monitor, two pushers" (inherited from a domain assessment) | **False.** One resource at `inngest.tf:302`; dedicated host dark-armed at `inngest-bootstrap.sh:277`; `inngest-host.tf:170` names the co-located host the sole pusher | Do **not** split. Gate the push on a listener instead |
+| "The monitor may be paused" | **False.** `heartbeat-manifest.ts`: source `paused=true`, live `paused=false / up`, self-pulled | Rejected; arming is not the gap |
+| "Ship the error channel before reproduction" | The channel shipped; its evidence expired | Reframed: durability, annunciation, and a boot that can actually be observed |
+| "ADR-167 needs superseding" | Not on `main`; two unmerged branches claim it | Fold the rule into the ADR-100 amendment; mint no new ordinal |
+| "Make the cutover atomic" | Structurally unavailable — disjoint control planes | Accept a **gap**; quiesce-web precedes arm |
+| "Bump the CLI here" | One-way goose migrations on a Postgres the co-located v1.19.4 host shares | Deferred to its own window |
 | Runner fail-open still live | Already closed on `main` | No action |
-| "27 releases behind" / issue title says 22 | Neither reproduced | Compute at bump time; restate neither |
+| "27 releases behind" / issue says 22 | Neither reproduced | Compute at bump time |
+| A new health timer is needed | `inngest-server-probe.timer`/`.sh` already ships hourly with `http_code` on `127.0.0.1:8288/health`, `boot_id`, `image_ref`, and a Vector-independent fallback | Extend it by 4 fields; create no second timer |
 
 ## Hypotheses
 
-Per `hr-ssh-diagnosis-verify-firewall`, L3→L7 order, unverified layers first. **No verdict is recorded
-where the discriminator is invisible** — the 2026-07-30 boot trace is destroyed by retention, so
-boot-time causation is UNKNOWN for every hypothesis below, including those that feel refuted.
+Per `hr-ssh-diagnosis-verify-firewall`, L3→L7, unverified first. The 2026-07-30 trace is destroyed
+by retention, so **no verdict is recorded where the discriminator is invisible**. Phase 2.1's
+diagnostic boot is what makes every row below decidable — that is its purpose.
 
-1. **L3 — firewall / nftables allowlist.** UNVERIFIED. The `net-health` marker captures the
-   `inet soleur_inngest input` chain, but that row expired. Not diagnosable from the repo.
-   Discriminator ships in Phase 1; verdict deferred to the first instrumented boot.
-2. **L3 — private-network routing / NIC.** UNVERIFIED for the same reason (`nic=` field, expired).
-   Partially constrained: the web host reaches 10.0.1.40 well enough to receive a TCP refusal
-   rather than a timeout, which is consistent with the route being intact and nothing listening.
-3. **L7 — TLS/proxy.** **Opt-out with artifact.** The symptom is plain HTTP over the private
-   network (`http://10.0.1.40:8288`), with no CDN, proxy or TLS in path.
-4. **L7 — application.** UNVERIFIED. The dedicated host's journal cannot be read off-box
-   (`hr-no-ssh-fallback-in-runbooks`), and Source 1 has shipped **zero** rows from this host.
-   Measured: of 1,839 rows naming `inngest-server.service` in 72h, 1,459 carry
-   `host = soleur-web-platform` — the co-located unit. Absence of a lower-layer signal is itself a
-   signal, and here it is contaminated by a sibling host, so field-isolation on `host` is mandatory.
-5. **Bootstrap never installed or enabled the unit.** UNVERIFIED, and the leading candidate given
-   that the creation timestamp is the outage onset. `bootstrap-exit-N` would decide it; expired.
-6. **The FSM believed it was already finished.** MEASURED-PLAUSIBLE, mechanism confirmed in source:
-   `inngest-cutover-flip.sh` sets `done` after a bare unit-start call that asserts no listener, and
-   the flag lives in Doppler, which outlives the host. A host created 2026-07-30 reads `done` and
-   takes the no-op arm forever. This explains why nothing self-healed; it does **not** by itself
-   explain why the first start failed, and is not recorded as the root cause.
-7. **Doppler `/usr/bin` symlink regression (status=203/EXEC).** Present in source
-   (`ln -sf /usr/local/bin/doppler /usr/bin/doppler`). Source presence is not host presence — the
-   image is the only delivery path — so this stays a hypothesis to falsify against the first
-   instrumented boot, not a closed item.
+1. **L3 — firewall / nftables.** UNVERIFIED. `net-health` captures the `inet soleur_inngest input`
+   chain; that row expired. Decided by the diagnostic boot.
+2. **L3 — private-network routing / NIC.** UNVERIFIED. Partially constrained: the web host gets a
+   TCP *refusal*, not a timeout, consistent with an intact route and nothing listening.
+3. **L7 — TLS/proxy.** **Opt-out with artifact:** plain HTTP over the private network, no CDN, no
+   proxy, no TLS in path.
+4. **L7 — application.** UNVERIFIED. The host's journal is unreadable off-box
+   (`hr-no-ssh-fallback-in-runbooks`) and Source 1 has shipped zero rows from it. Measured: 1,459
+   of 1,839 rows naming `inngest-server.service` carry `host = soleur-web-platform`, so any
+   assertion must field-isolate on `host`.
+5. **Bootstrap never installed or enabled the unit.** UNVERIFIED, leading candidate given the
+   creation timestamp is the outage onset. `bootstrap-exit-N` would decide it; expired.
+6. **The FSM believed it was already finished.** MEASURED-PLAUSIBLE in source: `done` is set after
+   a bare unit-start call that asserts no listener, and the flag lives in Doppler, which outlives
+   the host. Explains why nothing self-healed; does **not** explain why the first start failed.
+7. **Doppler `/usr/bin` symlink (status=203/EXEC).** Present in source. Source presence is not host
+   presence — the image is the only delivery path — so it stays open until the diagnostic boot.
 
-## Scope Decision
+## Sequencing
 
-**In scope (this PR).** Diagnosability and safety — everything that must be true *before* a
-re-cutover is attempted, plus two independent fixes.
+Explicit because the review found Phase 1's delivery path unowned. Every step is either automated
+or a numbered issue; none is an unowned operator step.
 
-**Out of scope, sequenced.** Cutover execution and the v1.41.1 bump. Rationale and tracking in
-`## Non-Goals`.
+1. Merge → `apply-web-platform-infra.yml` applies the TF delta (consumer probe + its heartbeat).
+   **Detection is live here, with no host replace.**
+2. `apply_target=inngest-host-replace` — the only delivery path for cloud-init/bootstrap changes.
+   Tracked by a numbered issue (AC9); preconditions asserted by Phase 3.1 landing first.
+3. Diagnostic boot: the replaced host comes up on a non-prod backend, attempts a bind, and emits
+   `net-health`. **This is the measurement that resolves `## Hypotheses`.**
+4. Fix whatever the trace names. That fix is not pre-written here.
+5. Cutover, in its own window: quiesce-web → confirm → arm → verify. Numbered issue.
+6. CLI bump, in a separate window. Numbered issue.
 
 ## Implementation Phases
 
-### Phase 1 — Make the failure annunciate (the reason 12 days passed)
+### Phase 1 — Detection that does not depend on the broken host
 
-1.1 **Split the shared heartbeat.** `betteruptime_heartbeat.inngest_prd` is one monitor with two
-pushers; a dedicated-host outage is masked by the co-located pusher. Add a distinct heartbeat owned
-solely by the dedicated host, and scope the existing one to the web fleet. `inngest-host.tf` already
-names this hazard in prose — the change makes the code agree with the comment.
+1.1 **Consumer-side probe.** Clone `web-zot-consumer-probe.{sh,timer}` (#6438) into
+`inngest-consumer-probe.{sh,timer}` on the web host, wrapping the existing
+`inngest-registry-probe.sh`. 200 + non-empty registry → ping a **new** heartbeat; every other
+outcome suppresses so absence alarms. New `doppler_secret` resource for the URL — never a value
+edit under `ignore_changes = [value]`. Arm on the `web-probe.tf:39-40` / ADR-117 pattern (PATCH
+`paused=false` only after a real measured beat), never a UI step.
 
-1.2 **Promote `post-boot-health` from one-shot to recurring.** A `.timer` (60–300s) pushes
-`host, boot_id, instance_id, uptime, inngest_cli_version, unit states, listener-on-:8288, cutover flag, redacted journal tail`.
-This is a promotion of existing code, not a new pattern.
+1.2 **Gate the existing dedicated pusher on a listener check.** ~5 lines inside the existing
+`HEARTBEATSCRIPTEOF` heredoc: ping only on a local `/health` 200, using the classification
+`web-zot-consumer-probe.sh` documents. Without this a green beat means "a timer fired". Its
+disposition during the deferral window is stated explicitly: the dedicated host stays dark-armed
+(no URL provisioned), so the beat is *absent*, not *falsely green*.
 
-1.3 **Re-stage the sink token every boot.** Every write of `/run/inngest-bs-logs-token` lives in
-`runcmd:` (first boot only) and `/run` is tmpfs. A systemd oneshot re-fetches it from Doppler each
-boot — re-fetch, never a baked re-stamp, so no long-lived credential lands in userdata at rest.
-`cloud-init-inngest.yml` already *claims* "re-fetched every boot"; this makes the comment true.
+### Phase 2 — Make the host diagnosable and verifiable
 
-1.4 **Make the emitter's failure loud.** `[ -r "$tok_file" ] || exit 0` with
-`curl >/dev/null 2>&1` is the silent fallback `cq-silent-fallback-must-mirror-to-sentry` forbids. A
-missing token or a failed POST emits a `logger -t` line on an allowlisted `SYSLOG_IDENTIFIER`.
+2.1 **Diagnostic-boot path.** A non-prod `INNGEST_POSTGRES_URI` for the dedicated host so the flip
+guard's prod detection yields `is_prod=false` and its ALLOW arm is taken while the FSM flag is
+non-terminal. The host can then attempt a bind and emit `net-health` without any path to a second
+prod scheduler. This is the plan's central mechanism.
 
-1.5 **Assert arrival before trusting silence.** A marker is pulled back from Better Stack,
-field-isolated on `host`, and its absence fails the phase. An empty query is not evidence until the
-signal is proven instrumented **and** retention proven to cover the window.
+2.2 **Extend the existing probe.** Add `instance_id`, `cli_version`, `cutover_flag` to
+`inngest-server-probe.sh`. Keep its hourly cadence — the existing comment records why 60s was
+rejected (~1,440 rows/day against a ~25k/day quota, the cost `#6617b` removed). No new timer, no
+new `SYSLOG_IDENTIFIER`, no `vector.toml` quota decision. `journal_tail` stays on the boot marker
+only, per `## User-Brand Impact`.
 
-### Phase 2 — Make the re-cutover safe
+2.3 **Re-stage the sink token every boot.** Every write of `/run/inngest-bs-logs-token` is in
+`runcmd:` (first boot only) and `/run` is tmpfs. A systemd oneshot re-fetches from Doppler each
+boot — re-fetch, never a baked re-stamp. This is a precondition for 2.2 surviving a reboot, not an
+independent fix.
 
-2.1 **Move the catastrophe latch onto surviving storage.** `/var/lock/inngest-cutover-flip.state`
-is tmpfs and dies on replace, while the Redis AOF volume survives — so a replace plus any flag
-rewind re-runs `FLUSHALL` against a restored prod queue. Relocate the latch onto the durable volume.
+2.4 **Make the emitter's failure loud.** `[ -r "$tok_file" ] || exit 0` with `curl >/dev/null 2>&1`
+is the silent fallback `cq-silent-fallback-must-mirror-to-sentry` forbids. Both the missing-token
+and failed-POST paths emit a `logger -t` line on an already-allowlisted identifier.
 
-2.2 **Correct the false durability claim.** `inngest-host.tf` asserts `DBSIZE==0` still guards a
-spurious re-flush. `run_preflush_flip` reads DBSIZE *after* the flush, making it a post-condition,
-not a guard. Fix the comment and add the real pre-flush assertion.
+### Phase 3 — Make the re-cutover safe
 
-2.3 **Make `done` mean "it serves".** Before `flag_set done`, require in a bounded window:
-`/health` 200; a **non-empty** registry via the `v0/gql` query `inngest-registry-probe.sh` already
-sends; and the unit still active after a settle window. Any failure ⇒ `aborted` plus a loud marker.
+3.1 **Monotonic latch on surviving storage.** The current slot is last-write-wins and `emit_state`
+stamps it on every branch including terminal no-ops — so relocating it as-is would *persist an
+erasure* and authorize a `FLUSHALL` against the preserved AOF volume. The latch becomes
+append-only: "has `done` EVER been recorded". Paired, all three required:
+`RequiresMountsFor=/mnt/data` on `inngest-cutover-flip.service`; the write becomes fatal rather
+than `2>/dev/null || true`; and `cat-inngest-cutover-state.sh` is swept to the new path so the
+no-SSH read surface does not report a false "no state".
 
-2.4 **Scope `done` to the host instance.** Stamp the flag with the Hetzner instance/boot id; a
-`done` bearing a foreign instance id is treated as `unset`. This one change makes a recreate
-self-annunciating.
+3.2 **Correct the false durability claim.** `inngest-host.tf:229` asserts `DBSIZE==0` guards a
+spurious re-flush; `run_preflush_flip` reads DBSIZE *after* the flush. Correct the comment. No new
+pre-flush assertion — the monotonic latch is the guard, and a second guard on the same question is
+how a `done`-shaped bug gets inside the guard.
 
-### Phase 3 — Record the decisions
+3.3 **Probe-derived, instance-scoped `done`.** One change, not two: `done` is set only after a
+bounded-window `/health` 200 **and** a non-empty registry from the `v0/gql` query
+`inngest-registry-probe.sh` already sends; any failure ⇒ `aborted` plus a loud marker. The instance
+stamp goes in a **separate** Doppler key, not appended to the flag value — so
+`inngest-server-flip-guard.sh`'s exact `case` match on `done` is preserved and
+`inngest-server-flip-guard.test.sh`'s `EXPECTED_START_SITES` derivation does not break. The guard
+reads both keys and refuses a `done` whose instance stamp is foreign. Both files are in
+`## Files to Edit` (`hr-type-widening-cross-consumer-grep`).
 
-3.1 Amend **ADR-100** in place (its established idiom): correct Decision 6a, whose gate is
-`exit_code:0` on the same unasserted unit-start the code performs, and add an addendum stating the
-cutover did not hold and the soak never started. Keep `status: adopting`; rewrite the blockquote
-that implies a soak is running.
+### Phase 4 — Record the decision
 
-3.2 Create **ADR-179** for the extracted cross-cutting rule: *a terminal state asserting a live host
-condition must be re-derived from a probe, and must not be stored in a medium whose lifetime exceeds
-the thing it asserts.* Record the reversal of the co-location rollback here in prose (no
-`supersedes:` key — ADR-167 is not on `main` and the pointer would dangle).
-
-### Phase 4 — Independent fixes
-
-4.1 **Pin-freshness monitoring** (#7308's actual ask — nothing watches the pin today). The bump
-itself is deferred; the monitor is not.
-
-4.2 **Entropy bound.** Port the assertion (not the file) so
-`registry-userdata-budget.sh`'s compressible `STUBSTUB…` stub can no longer under-measure the
-incompressible part of the render. A per-stub bound of `>= 0.75 × raw` rejects the stub (0.62) and
-accepts real entropy (1.51).
+4.1 Amend **ADR-100** in place (its established idiom): correct Decision 6a, whose gate is
+`exit_code:0` on the same unasserted unit-start the code performs; fold in the extracted rule — *a
+terminal state asserting a live host condition must be re-derived from a probe and must not outlive
+what it asserts*; add an addendum recording that the cutover did not hold and the soak never
+started. Keep `status: adopting`; rewrite the blockquote implying a running soak. **No new ADR
+ordinal** — the rule is a correction to this ADR, and 167/178 were both lost to contention already.
 
 ## Files to Edit
 
-- `apps/web-platform/infra/inngest.tf` — heartbeat split; `INNGEST_HEARTBEAT_URL` publication
-- `apps/web-platform/infra/inngest-host.tf` — dedicated heartbeat resource; correct the false
-  `DBSIZE` durability claim; correct the stale arm64/cax11 prose
-- `apps/web-platform/infra/cloud-init-inngest.yml` — token re-stage unit; loud emitter
-- `apps/web-platform/infra/inngest-bootstrap.sh` — recurring health timer install
-- `apps/web-platform/infra/inngest-cutover-flip.sh` — completion criteria; instance-scoped `done`;
-  latch relocation
-- `apps/web-platform/infra/vector.toml` — allowlist the new `SYSLOG_IDENTIFIER`
-- `apps/web-platform/infra/inngest-betterstack-token.tf` — stale header prose
-- `apps/web-platform/infra/registry-userdata-budget.test.sh` — entropy bound
-- `knowledge-base/engineering/architecture/decisions/ADR-100-*.md` — Decision 6a + addendum
+- `apps/web-platform/infra/inngest.tf` — new `doppler_secret` for the consumer-probe heartbeat URL
+- `apps/web-platform/infra/inngest-host.tf` — correct the `DBSIZE` claim; correct stale arm64/cax11
+  prose; diagnostic-backend variable
+- `apps/web-platform/infra/server.tf` — install `inngest-consumer-probe.timer` on the web host
+- `apps/web-platform/infra/inngest-bootstrap.sh` — listener gate in the heartbeat heredoc; extend
+  `inngest-server-probe.sh`; token re-stage unit
+- `apps/web-platform/infra/cloud-init-inngest.yml` — loud emitter; re-stage wiring
+- `apps/web-platform/infra/inngest-cutover-flip.sh` — monotonic latch; probe-derived `done`
+- `apps/web-platform/infra/inngest-cutover-flip.service` — `RequiresMountsFor=/mnt/data`
+- `apps/web-platform/infra/inngest-server-flip-guard.sh` — instance-aware refusal
+- `apps/web-platform/infra/inngest-server-flip-guard.test.sh` — lockstep re-review latch
+- `apps/web-platform/infra/cat-inngest-cutover-state.sh` — latch path sweep
+- `apps/web-platform/infra/outputs.tf` — heartbeat output consumer
+- `scripts/cutover-inngest.sh` — `op=arm` URL source; `op=rollback` unconditional URL delete
+- `.github/workflows/apply-web-platform-infra.yml` — `-target=` line for the new resources
+- `.github/workflows/infra-validation.yml` — register every new suite (else they never run)
+- `plugins/soleur/lib/heartbeat-manifest.ts` — row + `feeder` for the new heartbeat
+- `knowledge-base/engineering/architecture/decisions/ADR-100-*.md` — Decision 6a, rule, addendum
 
 ## Files to Create
 
-- `apps/web-platform/infra/inngest-host-health.timer` / `.service` — recurring state channel
-- `apps/web-platform/infra/inngest-bs-token-restage.service` — per-boot token re-fetch
-- `knowledge-base/engineering/architecture/decisions/ADR-179-terminal-state-must-be-rederived-from-a-live-probe.md`
-- test suites for each behavioral change (RED before GREEN, `cq-write-failing-tests-before`)
+- `apps/web-platform/infra/inngest-consumer-probe.sh` / `.timer`
+- `apps/web-platform/infra/inngest-consumer-probe.test.sh`
+- `apps/web-platform/infra/inngest-cutover-latch.test.sh`
+- `apps/web-platform/infra/inngest-boot-emitter.test.sh`
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-1. `betteruptime_heartbeat` resources: exactly one owned by the dedicated host, one scoped to the
-   web fleet; `terraform validate` passes.
-2. A dedicated-host heartbeat push is absent from any web-host code path (grep, field-isolated).
-3. The recurring health `.timer` unit is installed by the bootstrap and its content asserts all of:
-   unit states, listener on :8288, cutover flag, boot/instance id.
-4. The token re-stage unit re-fetches from Doppler; no baked token value is written by it (grep for
-   the template var name returns zero hits in the new unit).
-5. The emitter emits a `logger -t` line on both the missing-token and failed-POST paths; the new
-   `SYSLOG_IDENTIFIER` appears in `vector.toml`'s exact-match allowlist (assert the anchor, not a
-   bare token).
-6. The catastrophe latch path resolves onto the durable volume, not `/var/lock`.
-7. `flag_set done` is unreachable without a 200 `/health`, a non-empty registry, and a
-   post-settle active unit — asserted by a test that drives each failure arm to `aborted`.
-8. A `done` flag bearing a foreign instance id is treated as `unset` — asserted by test.
-9. `ADR-179` exists, carries no `supersedes:` key, and no artifact in this feature's plan/spec set
-   cites a different ordinal (`grep -rn 'ADR-17[0-9]'` over the feature's artifacts).
-10. ADR-100 `status:` remains `adopting`; its blockquote no longer asserts a running soak.
-11. The entropy bound rejects the current `STUBSTUB…` stub and accepts a real-entropy token —
-    asserted by two cases in the same suite.
-12. Full registered-suite run is green, with the run's commit named.
+1. `inngest-consumer-probe.sh` pings its heartbeat **only** on a 200 + non-empty registry; every
+   other outcome suppresses — asserted per-arm by test, including the 500 the live host returns now.
+2. The consumer probe's heartbeat is a **new** `betteruptime_heartbeat` and a **new**
+   `doppler_secret` (named resource addresses, not a count), and `heartbeat-manifest.ts` carries its
+   row with a `feeder` whose `evidence.pattern` resolves against `server.tf`.
+3. Arming follows ADR-117: `paused = true` in source with a measured-beat PATCH path; no UI step
+   appears in any artifact (`hr-never-label-any-step-as-manual-without`).
+4. The dedicated pusher does not ping unless a local `/health` returns 200 — asserted by driving
+   the non-200 arm.
+5. The token re-stage unit re-fetches from Doppler; asserted over the **rendered** userdata, not
+   the source template.
+6. The emitter emits a `logger -t` line on both the missing-token and failed-POST paths.
+7. The latch is append-only: a `rolled-back` no-op poll followed by `armed` **refuses** the flush —
+   asserted by test. `inngest-cutover-flip.service` carries `RequiresMountsFor=/mnt/data`, the write
+   is fatal, and `cat-inngest-cutover-state.sh` resolves the same path.
+8. `flag_set done` is unreachable without a 200 `/health` **and** a non-empty registry; a foreign
+   instance stamp makes the **guard** refuse the start — asserted against
+   `inngest-server-flip-guard.sh`, not only the FSM. `inngest-server-flip-guard.test.sh` passes
+   unmodified in its `EXPECTED_START_SITES` derivation.
+9. Numbered, created issues exist for: the host replace, the cutover window, and the CLI bump —
+   asserted by `gh issue view` on each, and each is cited in the PR body as `Ref`, not `Closes`.
+10. Every new suite is registered in `infra-validation.yml` and appears in the
+    `run-registered-suites.sh` derivation — asserted by the accounting gate's own count.
+11. ADR-100 keeps `status: adopting`, its blockquote no longer asserts a running soak, and no new
+    ADR ordinal is minted by this PR.
+12. Full registered-suite run green, naming the commit it covered.
 
 ### Post-merge (automated)
 
-13. `apply-web-platform-infra.yml` applies the Terraform delta; the heartbeat split is visible in
-    the applied state.
-14. Pin-freshness monitoring reports the live pin and the current upstream tag.
+13. The TF apply provisions the consumer probe + heartbeat; a real beat is measured and the
+    monitor is PATCHed unpaused by the ADR-117 arm gate.
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** inbound email that is silently never processed —
-the #7228 symptom — or, if the heartbeat split is wrong, a fleet that looks healthy while a
-scheduler is dead. In the worst arm, a re-cutover attempted on an unfixed latch wipes in-flight
-Redis jobs, losing queued work the user has already paid for in time.
+**If this lands broken, the user experiences:** app-originated event dispatch continuing to fail
+silently. Corrected from the earlier draft: #7228 measured this as **fleet-wide**, not inbound-email
+only — `engineering.pr_review_pending` was among the failures. Conversely the 53 registered crons
+were **unaffected**, because execution is still pinned to web-1 (#7230). In the worst arm, a
+re-cutover on a non-monotonic latch wipes in-flight Redis jobs.
+
+**Recoverability of the outage to date:** the twelve days of failed dispatches are **accepted as
+lost** by operator decision (2026-08-11). No replay, backfill or dead-letter path is in scope, and
+none is deferred — this is a decision, not an omission.
 
 **If this leaks, the user's data is exposed via:** the phone-home POST, which bypasses Vector's PII
-scrub by design. Every new field added to the recurring channel must route through
-`inngest-redact.sh`; the journal tail is the highest-risk field.
+scrub by design. Every field routes through `inngest-redact.sh`; `journal_tail` stays on the
+once-per-boot marker rather than the recurring one, so the highest-risk field is not amplified.
 
 **Brand-survival threshold:** single-user incident.
 
@@ -408,82 +450,78 @@ scrub by design. Every new field added to the recurring channel must route throu
 
 ```yaml
 liveness_signal:
-  what: dedicated-host heartbeat, pushed only by 10.0.1.40
-  cadence: 60-300s
-  alert_target: Better Stack heartbeat monitor (dedicated, not shared)
-  configured_in: apps/web-platform/infra/inngest-host.tf
+  what: consumer-side probe on the web host asserting a 200 + non-empty registry at 10.0.1.40:8288
+  cadence: 60s
+  alert_target: new dedicated Better Stack heartbeat, armed via the ADR-117 measured-beat PATCH
+  configured_in: apps/web-platform/infra/inngest.tf + server.tf
 error_reporting:
-  destination: Better Stack Logs (SOLEUR_INNGEST_BOOT_STAGE + the recurring health marker)
-  fail_loud: true  # missing token and failed POST both emit an allowlisted logger line
+  destination: Better Stack Logs (SOLEUR_INNGEST_BOOT_STAGE + inngest-server-probe marker)
+  fail_loud: true
 failure_modes:
   - mode: inngest-server never binds :8288
-    detection: recurring health marker, listener field, field-isolated on host
-    alert_route: dedicated heartbeat goes silent
-  - mode: boot-trace channel itself dies (token lost on reboot)
+    detection: consumer probe from the web host — independent of the dedicated host booting at all
+    alert_route: consumer-probe heartbeat goes silent
+  - mode: boot-trace channel dies on reboot (token lost from tmpfs)
     detection: re-stage unit failure emits an allowlisted logger line
     alert_route: Better Stack log alert on the marker
   - mode: cutover FSM asserts done on a host that never served
-    detection: instance-id mismatch treated as unset; aborted marker on failed completion criteria
+    detection: probe-derived done; foreign instance stamp refused by the guard
     alert_route: Better Stack log alert on the aborted marker
 logs:
   where: Better Stack source table t520508_soleur_inngest_vector_prd_3_logs
-  retention: ~3 days measured — the reason this incident was undiagnosable; the recurring
-    channel re-emits within every retention window, so a live failure is always in-window
+  retention: ~3 days measured. The consumer probe re-emits every 60s from a host that is up, so a
+    live failure is always in-window regardless of the dedicated host's state
 discoverability_test:
-  command: bash apps/web-platform/infra/inngest-host-health-probe.test.sh
-  expected_output: "OK inngest-host-health: all assertions passed"
+  command: bash apps/web-platform/infra/inngest-consumer-probe.test.sh
+  expected_output: "OK inngest-consumer-probe: all assertions passed"
 ```
 
 ## Infrastructure (IaC)
 
 ### Terraform changes
 
-`inngest.tf` (heartbeat scoping), `inngest-host.tf` (new dedicated heartbeat, corrected prose),
-`inngest-betterstack-token.tf` (prose). No new provider or version pin. No new no-default variable,
-so no mint is required and `hr-tf-variable-no-operator-mint-default` is not engaged.
+`inngest.tf` (new heartbeat + new `doppler_secret`), `inngest-host.tf` (prose corrections,
+diagnostic-backend variable), `server.tf` (web-host timer install), `outputs.tf`. No new provider.
+No new no-default variable, so `hr-tf-variable-no-operator-mint-default` is not engaged.
 
 ### Apply path
 
-cloud-init + immutable redeploy. Per `hr-prod-host-config-change-immutable-redeploy` the
-cloud-init and bootstrap changes reach 10.0.1.40 only through a host replace via
-`apply_target=inngest-host-replace` (the additive `inngest-host` dispatch aborts on the delete a
-replace emits). Blast radius is nil today: the host serves nothing. `hcloud_volume.inngest_redis` is
-preserved — and Phase 2.1 is what makes that preservation safe.
+Two distinct paths, and conflating them is what the review caught:
+
+- **Merge-applied:** the consumer probe and its heartbeat live in files inside the per-merge
+  `-target=` set, with the new `-target=` line added in the same PR. Detection ships on merge.
+- **Replace-only:** cloud-init and bootstrap changes reach 10.0.1.40 **only** via
+  `apply_target=inngest-host-replace` (`hr-prod-host-config-change-immutable-redeploy`). Sequenced
+  at step 2 of `## Sequencing` and tracked by a numbered issue. Phase 3.1 must land first, because
+  the replace is the operation that disarms the old latch.
 
 ### Distinctness / drift safeguards
 
-The dedicated host's secrets live in the isolated `soleur-inngest` project with no inheritance path
-to `soleur/prd`. The heartbeat split must not reuse the existing monitor id.
+`doppler_secret.inngest_heartbeat_url_prd` carries `ignore_changes = [value]`, so the new URL needs
+a **new resource**, not a value edit — a value edit plans no change and applies nothing while the
+ACs still pass. The dedicated host's secrets stay in the isolated `soleur-inngest` project.
 
 ### Vendor-tier reality check
 
-Better Stack heartbeats are already provisioned on this tier; adding one more monitor is within the
-existing plan and requires no tier gate.
+One additional Better Stack heartbeat is within the existing tier; no tier gate needed.
 
 ## Architecture Decision (ADR/C4)
 
 ### ADR
 
-- **Amend ADR-100** in place — correct Decision 6a's completion criteria; addendum recording that
-  the cutover did not hold and the soak never began.
-- **Create ADR-179** — terminal state must be re-derived from a live probe and must not outlive the
-  thing it asserts. Records the reversal of the co-location rollback in prose.
+**Amend ADR-100 in place.** Correct Decision 6a's completion criteria; fold in the
+terminal-state-must-be-re-derived rule; add the addendum recording that the cutover did not hold.
+**No new ordinal is minted** — a one-sentence rule correcting this ADR does not warrant a separate
+file, and the session already lost 167 and 178 to contention.
 
 ### C4 views
 
-Checked all three model files. The external actors and systems this change touches — Better Stack
-(external monitoring system), Hetzner (external infrastructure), the Inngest scheduler container —
-are already modeled, as is the dedicated-host container. **This change alters no element, no
-relationship and no boundary**: it changes how an already-modeled container reports its own health,
-and splits one already-modeled monitoring relationship into two instances of the same edge. No new
-actor, system, container or data store is introduced. Enumerated and found already-modeled:
-Better Stack, Hetzner, `soleur-inngest` host container, web-platform container, Supabase Postgres,
-Redis volume.
-
-### Sequencing
-
-ADR-179 is authored now describing the target state. ADR-100 stays `adopting` because its decision
-is still the operator's target; only its false soak claim is corrected.
+Read all three model files. Enumerated for this change: external human actors (none new), external
+systems (Better Stack, Hetzner — both modeled), containers (`soleur-inngest` host, web-platform —
+both modeled), data stores (Supabase Postgres, Redis volume — both modeled), and access
+relationships. One relationship **does** change and gets a model line: the web-platform container
+gains a monitoring probe edge to the dedicated host container. The earlier draft's claim of "no
+relationship change" was overstated and is corrected here.
 
 ## Encryption Posture
 
@@ -491,28 +529,33 @@ is still the operator's target; only its false soak claim is corrected.
 at_rest:
   - store: /run/inngest-bs-logs-token (re-staged per boot)
     mechanism: tmpfs, mode 0600, root-owned
-    evidence: cloud-init write + chmod; cleared on every reboot by construction
+    evidence: cloud-init write + chmod; cleared every reboot by construction
     defends_against: at-rest recovery from the block device
     does_not_defend: a root compromise on the live host
     disclosed_as: internal credential, not user data
-    live_verification: the re-stage unit's own status field in the recurring health marker
-  - store: hcloud_volume.inngest_redis (unchanged by this plan)
+    live_verification: the re-stage unit's status field on the probe marker
+  - store: hcloud_volume.inngest_redis (unchanged)
     mechanism: plaintext-exception
-    evidence: pre-existing; this plan neither introduces nor changes it
+    evidence: pre-existing; neither introduced nor changed here
     defends_against: nothing at rest
     does_not_defend: volume-snapshot recovery of in-flight job payloads
-    disclosed_as: tracked separately as a known encryption-posture gap
+    disclosed_as: known encryption-posture gap
     live_verification: n/a — no change in this PR
 in_transit:
+  - connection: web host -> 10.0.1.40:8288 (consumer probe)
+    tls: false
+    cert_verification: off
+    does_not_defend: private-network traffic is unencrypted by design on this segment
+    disclosed_as: internal private-network probe, no user data in the request
   - connection: host -> Better Stack ingest
     tls: true
     cert_verification: on
-    does_not_defend: content already scrubbed client-side; a compromised host can ship anything
+    does_not_defend: content is scrubbed client-side; a compromised host can ship anything
     disclosed_as: telemetry egress
 exception:
-  justification: the Redis volume's plaintext state is pre-existing and out of scope here;
-    changing it would require a volume migration that conflicts with the preserve-on-replace
-    requirement this plan depends on
+  justification: the Redis volume's plaintext state is pre-existing and out of scope; changing it
+    needs a volume migration that conflicts with the preserve-on-replace requirement. The probe
+    connection is plaintext because it rides the Hetzner private network and carries no user data.
   tracking_issue: "6894"
   reevaluate_when: the cutover completes and the volume can be migrated in its own window
   expires_on: 2026-11-30
@@ -520,24 +563,32 @@ exception:
 
 ## Domain Review
 
-**Domains relevant:** engineering
+**Domains relevant:** engineering, product
 
 ### Engineering (CTO)
 
-**Status:** reviewed
-**Assessment:** Identified the four findings that reshaped this plan: the dual-pusher heartbeat as
-the actual masking mechanism (#6617); `done` as a host-outliving assertion over an unasserted
-unit start; the catastrophe latch disarmed by the very replace being contemplated, with the
-`DBSIZE` guard shown to be a post-condition; and atomicity as structurally unavailable across two
-disjoint control planes. Ruled that the FSM must be parked at `rolled-back` rather than rewound,
-because every rewind target that lets the FSM act also permits a prod-URI start. Ruled the version
-bump must not share a window with the cutover, because `inngest start` runs one-way goose migrations
-against a Postgres the co-located v1.19.4 host still shares.
+**Status:** reviewed (with one finding corrected downstream)
+**Assessment:** Established that atomicity is structurally unavailable across two disjoint control
+planes (accept a gap, never an overlap); that `done` is a host-outliving assertion over an
+unasserted unit start; that the catastrophe latch is disarmed by the very replace being
+contemplated, with the `DBSIZE` check shown to be a post-condition; and that the CLI bump must not
+share a window with the cutover because of one-way goose migrations on a shared Postgres. **Its
+dual-pusher heartbeat finding was subsequently refuted against source** (`inngest.tf:302`,
+`inngest-host.tf:170`, `inngest-bootstrap.sh:277`) and is superseded by the corrected mechanism in
+`## Overview`. Recorded rather than deleted, because propagating it unverified is what the review
+had to undo.
+
+### Product (CPO)
+
+**Status:** reviewed — CHANGES-REQUESTED, all four resolved
+**Assessment:** Required pricing the restoration deferral, answering recoverability, correcting the
+blast radius, and asserting the heartbeat is *armed* rather than merely declared. Resolved by the
+operator decisions in `## Overview` (restoration deferred deliberately; dispatches accepted as
+lost), the corrected blast radius in `## User-Brand Impact`, and AC2/AC3.
 
 ### Product/UX Gate
 
-Not applicable — no UI surface in `## Files to Edit` or `## Files to Create`; the mechanical
-UI-surface override does not fire.
+Not applicable — no UI-surface path in `## Files to Edit` or `## Files to Create`.
 
 ## Open Code-Review Overlap
 
@@ -545,36 +596,43 @@ None.
 
 ## Test Scenarios
 
-1. Emitter with no token file emits an allowlisted logger line and does not exit 0 silently.
-2. Emitter whose POST fails emits an allowlisted logger line.
-3. Re-stage unit re-fetches on a simulated second boot with `/run` cleared.
-4. `flag_set done` refused when `/health` is non-200.
-5. `flag_set done` refused when the registry query returns empty.
-6. `flag_set done` refused when the unit is inactive after the settle window.
-7. A `done` flag with a foreign instance id is treated as `unset`.
-8. Pre-flush latch resolves onto the durable volume and blocks a second flush.
-9. Entropy bound rejects the compressible stub; accepts a real-entropy token.
-10. `vector.toml` admits the new `SYSLOG_IDENTIFIER` (anchor assertion).
+1. Consumer probe: 200 + non-empty registry → pings.
+2. Consumer probe: HTTP 500 (the current live response) → suppresses.
+3. Consumer probe: connection refused → suppresses.
+4. Dedicated pusher: local `/health` non-200 → no ping.
+5. Emitter: no token file → loud logger line, not a silent exit 0.
+6. Emitter: POST fails → loud logger line.
+7. Token re-stage: simulated second boot with `/run` cleared → token present.
+8. Latch: `rolled-back` no-op poll, then `armed` → flush refused.
+9. Latch: unwritable path → fatal, not silently swallowed.
+10. `done` refused on non-200 `/health`; refused on empty registry.
+11. Guard refuses a `done` whose instance stamp is foreign.
+12. `inngest-server-flip-guard.test.sh` `EXPECTED_START_SITES` derivation still passes.
 
 ## Risks & Mitigations
 
 | Risk | Mitigation |
 |---|---|
-| Host replace re-runs FLUSHALL on the restored AOF queue | Phase 2.1 lands the latch relocation **before** any replace; the FSM is parked at `rolled-back` so the guard refuses a prod start |
-| Heartbeat split leaves both monitors unwatched | AC2 asserts ownership per host; the dedicated monitor's first push is verified field-isolated |
-| New recurring channel ships secrets | Every field routes through `inngest-redact.sh`; the journal tail is length-capped and redacted, as the existing marker already does |
-| Recurring timer adds log volume/cost | 60–300s cadence on one host is ~300–1,400 rows/day, the same order as the existing heartbeat |
-| ADR-179 ordinal collides before merge | Re-derived across all 66 refs immediately before merge; 178 was already lost once this session |
+| Replace re-runs FLUSHALL on the restored AOF volume | The **monotonic latch** (Phase 3.1) is the guard, and it lands before the replace. Corrected from the earlier draft, which wrongly credited the flip guard — that guard is an `ExecStartPre` on the server and never runs on the flush path |
+| Replaced host can never bind because the FSM flag is non-terminal | Phase 2.1's diagnostic boot: a non-prod backend yields `is_prod=false` and the guard's ALLOW arm, with no path to a second prod scheduler |
+| New heartbeat ships inert | AC3 forces the ADR-117 measured-beat arming path; #6537 is the 9-day precedent |
+| Instance stamp breaks the guard's exact `case` match | The stamp lives in a separate Doppler key; the flag value is unchanged (AC8) |
+| New suites never execute | AC10 registers them in `infra-validation.yml`, which is the derivation source |
+| Heartbeat URL repoint silently no-ops | New `doppler_secret` resource, never a value edit under `ignore_changes = [value]` |
 
 ## Non-Goals
 
-- **Executing the cutover.** Requires a maintenance window and the sequence quiesce-web → confirm
-  quiesced → arm → verify, accepting a gap. Gated behind the `inngest-cutover` required-reviewer
-  environment. Tracked as a follow-up issue.
-- **Bumping `inngest_cli_version` to v1.41.1.** Hard-coupled to the cutover by one-way goose
-  migrations on a shared Postgres. Needs a re-spike of ADR-100's three Phase-0 empirical findings at
-  the new version, both arch checksums from one signed `checksums.txt`, and verification that
-  `--postgres-max-open-conns` (a durable-detection sentinel) and the `signkey-prod-` strip still
-  hold. Tracked as a follow-up issue.
-- **Re-litigating zot health**, per the operator decision.
-- **Repointing `INNGEST_BASE_URL`** away from 10.0.1.40, per the operator decision.
+- **Replay/backfill of the 12 days of failed dispatches.** Accepted as lost by operator decision
+  (2026-08-11). Not deferred — decided.
+- **Interim `INNGEST_BASE_URL` repoint.** Declined by operator decision (2026-08-11): fix the
+  dedicated host properly rather than return to the co-located operating point. Cost recorded —
+  dispatch stays down until the cutover window.
+- **Executing the cutover.** quiesce-web → confirm → arm → verify, accepting a gap. Numbered issue
+  (AC9), gated behind the `inngest-cutover` required-reviewer environment.
+- **Bumping to v1.41.1.** Hard-coupled to the cutover by one-way goose migrations on a shared
+  Postgres; needs a re-spike of ADR-100's three Phase-0 findings, both arch checksums from one
+  signed `checksums.txt`, and verification that `--postgres-max-open-conns` and the `signkey-prod-`
+  strip still hold. Numbered issue (AC9).
+- **Pin-freshness monitoring (#7308).** Moves to the bump window, where its remediation exists.
+- **The entropy bound.** Unrelated subsystem (container-registry userdata budget); its own PR.
+- **Re-litigating zot health.**
