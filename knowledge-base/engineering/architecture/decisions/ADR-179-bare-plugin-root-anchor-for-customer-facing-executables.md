@@ -207,6 +207,30 @@ the workspace.
   the failure still leaves no trace after the session ends. Tracked in #7452. Stated here
   because the issue explicitly raised it and a reader would otherwise take the marker work
   for the whole fix.
+- **Amendment 2026-08-11 (#7474) — a third marker, and decision 5 binds the freshness axis.**
+  The marker set enumerated above is now three: `SOLEUR_SYNC_ROOT_UNRESOLVED` (identity),
+  `SOLEUR_SYNC_TOOLCHAIN_MISSING` (the runner binary), and
+  `SOLEUR_SYNC_PRODUCER_MISSING producer=<payload-relative-path> affects=<area>
+  reason=absent-from-verified-root` (the producer FILE). The third closes an axis this ADR
+  did not separate: the preflight answers whether a root is genuinely ours — *identity* —
+  and a root that is authentically Soleur but does not carry a producer satisfies every
+  predicate it tests, after which the invocation dies as an unattributed interpreter error.
+  Identity and freshness are different questions, and adding path predicates to the identity
+  gate would answer neither well (it is exactly the `test -d "$X/scripts"` shape §Considered
+  Options rejects), so the freshness check lives at the invocation sites instead.
+
+  **Decision 5 (fail-closed in isolation) binds this axis, and is why.** The rejected design
+  put a presence loop in Phase 0 and then instructed the agent, in prose, to skip the
+  affected area three phases later. Bash shares no state across fences, so that guard could
+  only ever *ask* — and a marker printed above a bare death is still a bare death. Each
+  producer invocation is therefore wrapped in its own presence check, sharing a subprocess
+  with the invocation it guards, so separating the two is not possible without deleting
+  both. `reason=` states the observation, never the cause, matching the two pre-existing
+  `reason=` tokens. Pinned by `plugin-root-anchoring.test.ts` P6 (parity + closed `affects=`
+  set) and `test-sync-producer-reachability.sh` T0j/T0k/T0l/T0m.
+
+  This does **not** close the durability residual above: a run whose missing producer is
+  `write-kb-coverage.ts` still has no durable channel by construction.
 - The `~100` `${CLAUDE_PLUGIN_ROOT:-…}` sites under `plugins/soleur/skills/**` are **not**
   migrated here. That migration requires changing `server/safe-bash.ts`'s exact-literal set
   and `plugin-root-list-carveout-coupling.test.ts`'s regex, which does not belong behind a
