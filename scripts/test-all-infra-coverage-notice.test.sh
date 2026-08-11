@@ -86,18 +86,35 @@ print("sandbox built")
 PY
 }
 
-# Parse the terminal summary line into PARSED_PASS / PARSED_TOTAL / PARSED_FAIL / PARSED_SKIP.
-# Returns non-zero when the line is absent or does not carry all four numbers, so a summary that
-# silently reverts to a shape without the skip breakdown FAILS rather than reading as zero skips.
+# Parse the runner's summary into PARSED_PASS / PARSED_TOTAL / PARSED_FAIL / PARSED_SKIP.
+#
+# TWO LINES, deliberately (the shape #7424 established and ADR-178 extends): a BREAKDOWN line
+# emitted only when something was killed or declined, then the TERMINAL MARKER
+# `=== P/N suites passed ===`, byte-identical to what it has always been. The marker is last so
+# that the runner's final `===` line is always the one pollers anchor on; the breakdown carries
+# the detail. Reading the marker alone therefore cannot tell a decline from a failure, which is
+# why this parser reads both.
+#
+# Returns non-zero when the marker is absent or a decline occurred with no breakdown line, so a
+# summary that silently stopped reporting declines FAILS rather than reading as zero skips.
 parse_summary() {
-  local out="$1" line
+  local out="$1" marker breakdown
   PARSED_PASS=""; PARSED_TOTAL=""; PARSED_FAIL=""; PARSED_SKIP=""
-  line=$(grep -oE '=== [0-9]+/[0-9]+ suites passed \([0-9]+ failed, [0-9]+ skipped\) ===' <<<"$out" | tail -1)
-  [[ -n "$line" ]] || return 1
-  # shellcheck disable=SC2001
-  local nums; nums=$(sed 's/[^0-9]\+/ /g' <<<"$line")
-  read -r PARSED_PASS PARSED_TOTAL PARSED_FAIL PARSED_SKIP <<<"$nums"
-  [[ -n "$PARSED_SKIP" ]] || return 1
+  marker=$(grep -oE '=== [0-9]+/[0-9]+ suites passed ===' <<<"$out" | tail -1)
+  [[ -n "$marker" ]] || return 1
+  PARSED_PASS=$(sed 's|=== \([0-9]*\)/.*|\1|' <<<"$marker")
+  PARSED_TOTAL=$(sed 's|.*/\([0-9]*\) suites passed ===|\1|' <<<"$marker")
+
+  breakdown=$(grep -oE '=== [0-9]+ suites: .* ===' <<<"$out" | tail -1)
+  if [[ -n "$breakdown" ]]; then
+    PARSED_FAIL=$(grep -oE '[0-9]+ failed' <<<"$breakdown" | grep -oE '^[0-9]+')
+    PARSED_SKIP=$(grep -oE '[0-9]+ skipped' <<<"$breakdown" | grep -oE '^[0-9]+')
+  else
+    # No breakdown line means nothing was killed or declined — both are zero by construction.
+    PARSED_FAIL=0; PARSED_SKIP=0
+  fi
+  [[ "$PARSED_PASS" =~ ^[0-9]+$ && "$PARSED_TOTAL" =~ ^[0-9]+$ ]] || return 1
+  [[ "$PARSED_FAIL" =~ ^[0-9]+$ && "$PARSED_SKIP" =~ ^[0-9]+$ ]] || return 1
   return 0
 }
 

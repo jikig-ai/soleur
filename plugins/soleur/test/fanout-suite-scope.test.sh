@@ -94,13 +94,15 @@ echo "=== fan-out suite-scope suite ==="
 # --- Arm 1: the refusal fires, and fires BEFORE any work ------------------------------------
 run_arm refuse SOLEUR_SUBAGENT=1
 # rc 3 exactly, not merely non-zero: 1 is an ordinary suite failure and 2 is a bad TEST_GROUP,
-# so a wrapper, CI step or agent branching on the code cannot distinguish a REFUSAL from a
-# genuine RED unless the value is pinned. Swapping `exit 3` for `exit 1` satisfies a `-ne 0`
-# assertion while destroying that distinction.
-if [[ "$ARM_RC" -eq 3 ]]; then
-  pass "SOLEUR_SUBAGENT=1 makes a full-gate invocation exit 3 (the refusal code)"
+# Each code is a distinct claim: 1 = a suite failed, 2 = a bad TEST_GROUP, 3 = a suite was
+# TERMINATED (#7424 -- unresolved, coverage not obtained), 4 = refused before anything ran.
+# A wrapper, CI step or agent branching on the code cannot tell a refusal from a genuine RED --
+# or, worse, from a killed suite -- unless the value is pinned, and swapping `exit 4` for any
+# of the others satisfies a `-ne 0` assertion while destroying that distinction.
+if [[ "$ARM_RC" -eq 4 ]]; then
+  pass "SOLEUR_SUBAGENT=1 makes a full-gate invocation exit 4 (the refusal code)"
 else
-  fail "SOLEUR_SUBAGENT=1 did not refuse with rc=3 — got rc=$ARM_RC"
+  fail "SOLEUR_SUBAGENT=1 did not refuse with rc=4 — got rc=$ARM_RC"
 fi
 if [[ "$ARM_SUITES" -eq 0 ]]; then
   pass "the refusal happens before any suite runs (0 suites recorded)"

@@ -147,7 +147,7 @@ Spawned agents run only the suites targeting the files they were given, and are 
 the densest concurrency in the whole pipeline, and concurrent full-gate runs inflate each other's
 timings and corrupt the measurement. Measured 2026-08-11 — three agents running lints and suites
 at once turned an 860 s battery into 1675 s. The lead runs the gate ONCE, after the panel
-returns. [scripts/test-all.sh](../../../../scripts/test-all.sh) enforces this mechanically (it exits 3 when `SOLEUR_SUBAGENT=1`),
+returns. [scripts/test-all.sh](../../../../scripts/test-all.sh) enforces this mechanically (it exits 4 when `SOLEUR_SUBAGENT=1`),
 because a paragraph in a prompt is agent discretion and this is not.
 
 <parallel_tasks>

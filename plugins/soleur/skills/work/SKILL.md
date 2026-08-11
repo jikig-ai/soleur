@@ -276,7 +276,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    full-gate runs inflate each other's timings and corrupt the measurement. Measured 2026-08-11 —
    three agents running lints and suites at once turned an 860 s battery into 1675 s, and that
    1.9x figure was then nearly used as the suite's cost budget. The lead runs the gate ONCE,
-   after collecting fan-out work. [scripts/test-all.sh](../../../../scripts/test-all.sh) enforces this mechanically (it exits 3
+   after collecting fan-out work. [scripts/test-all.sh](../../../../scripts/test-all.sh) enforces this mechanically (it exits 4
    when `SOLEUR_SUBAGENT=1`), because a paragraph in a prompt is agent discretion and this is not.
 
    **Step 1: Analyze independence**
