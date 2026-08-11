@@ -352,7 +352,7 @@ Sequenced last: it depends on the counterparty documents being settled. The T&C 
 ## Phase 7 — Verification
 
 - [x] 7.1 Run every gate by **its own invocation**, not a reconstruction of its input set.
-- [ ] 7.2 `bash scripts/test-all.sh`.
+- [x] 7.2 `bash scripts/test-all.sh`.
 - [x] 7.3 Walk each cross-document contradiction commit and assert both region markers are present
       in that commit's diff. **Do not use `git log -- A B`** — it is a union filter and cannot
       distinguish a paired commit from a one-sided one.
@@ -365,6 +365,12 @@ Sequenced last: it depends on the counterparty documents being settled. The T&C 
 
 - **7.1** — every gate by its own invocation: scope-block 0, drift-ratchet 0, tc-sha 0, and the
   three self-tests 0 with **65 + 38 + 29** assertions. Orphan-suite check clean.
+- **7.2** — `scripts/test-all.sh`: **rc=0, 287/287 suites, 0 `[FAIL]`**. Read from the rc FILE, not a
+  notification (a background wrapper reports the trailing command's exit, not the suite's). Coverage
+  epilogue read rather than assumed: *"apps/web-platform/infra/ is NOT covered above (diff does not
+  touch it)"* — confirmed, the diff touches 0 infra files, so rc=0 accounts for the whole diff. A
+  sibling `test-all.sh` was running in another worktree throughout; ownership was resolved via
+  `/proc/<pid>/cwd` rather than a bare `ps` count, and no contention banner fired for this run.
 - **7.3** — per-commit walk, NOT `git log -- A B` (a union filter that cannot distinguish a paired
   commit from a one-sided one). 18 paired legal-doc moves, 4 mirror-only ports (drift reductions),
   **0 canonical-only** — no commit introduced divergence. All nine SHA pins verified current.
