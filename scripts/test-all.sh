@@ -652,6 +652,21 @@ if want_scripts; then
   run_suite "tests/scripts/zot-inventory" bash tests/scripts/test-zot-inventory.sh
   run_suite "tests/scripts/zot-inventory-assert-marker" bash tests/scripts/test-zot-inventory-assert-marker.sh
   run_suite "tests/scripts/zot-disk-sample" bash tests/scripts/test-zot-disk-sample.sh
+  # (#7440) The zot CONTAINER-LOG channel's readback probe. Registered HERE for the same reason as
+  # its #7278 siblings above: nothing auto-discovers tests/scripts/.
+  #
+  # ONLY this fixture suite belongs in this file. The shipper's own suite is an INFRA suite and its
+  # registration point is `.github/workflows/infra-validation.yml`, from which
+  # apps/web-platform/infra/run-registered-suites.sh DERIVES its list — adding it here instead
+  # would run it in ZERO runners (#3366), silent and green.
+  #
+  # The probe is INERT UNTIL DISPATCHED (the registry host is cloud-init-only, so merging applies
+  # nothing), which makes every one of its arms a false-green candidate: a probe that can never PASS
+  # is indistinguishable from one correctly reporting a not-yet. Its highest-value case is the
+  # FALSE-GREEN — a window holding nothing but SOLEUR_ZOT_DISK heartbeat rows whose zot_last_err
+  # echoes `zotregistry.dev` must NOT pass. That is not hypothetical: it is the state production is
+  # in right now, where a bare grep for that string returns 53 rows over 6h and every one is an echo.
+  run_suite "tests/scripts/zot-log-channel-probe" bash tests/scripts/test-zot-log-channel-probe.sh
   # git-data-host-replace scoped-recreate destroy-guard (#6242; 5-target, preserves BOTH data volumes + LUKS passphrase by omission).
   run_suite "tests/scripts/git-data-host-replace-gate" bash tests/scripts/test-git-data-host-replace-gate.sh
   # workspaces-luks-cutover FIRST-PROVISION destroy-guard (#6604). Permits the +create of the
