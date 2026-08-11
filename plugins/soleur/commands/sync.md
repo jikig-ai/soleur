@@ -107,6 +107,36 @@ this line the failure surfaces only as `bun: command not found` with no marker,
 which is indistinguishable from the area having nothing to do. Report the missing
 toolchain to the user alongside whatever else the run produced.
 
+**A producer missing from a VERIFIED root is named, not silent.** The gate above
+answers whether the root is genuinely the Soleur payload, and answers it
+correctly. It cannot answer whether that root actually *carries* the producer a
+given area invokes — an incomplete or torn payload satisfies every predicate
+above. Each producer invocation below is therefore wrapped in its own presence
+check, in the same subprocess, so an absent producer is skipped rather than
+invoked and reports:
+
+    SOLEUR_SYNC_PRODUCER_MISSING producer=<payload-relative-path> affects=<area> reason=absent-from-verified-root
+
+`reason=` states what was **observed** — this path is absent under a root that
+verified — never why it is absent. A stale install, an interrupted install, and a
+packaging change that dropped a file are indistinguishable from here, and naming
+one of them would be a diagnosis the guard cannot support.
+
+When one of these fires, report to the user verbatim:
+
+> Soleur couldn't find one of its own files (`<producer>`), so the `<area>` step
+> didn't run. This is a problem with the Soleur installation, not with your
+> project. The most likely fix is to reinstall the Soleur plugin — updating the
+> marketplace alone does not update an installed plugin. If that doesn't clear
+> it, this is a bug in Soleur: please report it with this line. Everything else
+> in this run completed normally.
+
+**Headless variant.** Under `--headless` (the post-clone auto-sync at
+`/api/repo/setup`) the user has no plugin installed, so "reinstall the plugin" is
+actively misdirecting. Report instead: *"A Soleur component (`<producer>`) was
+missing, so the `<area>` step didn't run. That's a Soleur-side defect and needs
+nothing from you — everything else completed normally."*
+
 **STOP if the plugin-root block exits non-zero.** Report to the user verbatim: *"I can't run
 `/soleur:sync` here — I couldn't verify where the Soleur plugin is installed.
 Please reinstall the plugin and try again."* Do **not** try to locate the
@@ -318,7 +348,14 @@ fi
 ```
 
 Add one `--degraded "<reason>"` for each producer that reported `status=degraded`
-earlier in the run (the `reason=` token from its marker is the right string):
+earlier in the run (the `reason=` token from its marker is the right string) —
+including any `SOLEUR_SYNC_PRODUCER_MISSING`, which is how a missing producer
+reaches a durable artifact rather than living only in session stdout. Two limits,
+stated once: this carry-forward is unavailable when `write-kb-coverage.ts` is
+itself the missing producer, and for standalone area invocations (which write no
+coverage at all). In both cases a PRIOR `kb-coverage.md` still sits on disk and
+still satisfies the existing `SOLEUR_KB_SYNC_PRODUCERS` grep — so that grep
+certifies the *previous* run, not this one.
 
 ```bash
 if [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts" ]; then

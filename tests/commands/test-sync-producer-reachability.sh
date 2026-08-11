@@ -407,11 +407,38 @@ else
   fi
 fi
 
+# --- T0m: the operator-facing message carries all four required properties -----
+# The marker is machine-readable; this message is the half a founder actually
+# reads, and without it the guard converts a bare error into a bare marker. It is
+# matched against a WHITESPACE-NORMALIZED sync.md (blockquote markers stripped,
+# newlines collapsed) because a prose anchor that happens to straddle a line wrap
+# is a property of the reflow, not of the message — pinning the raw bytes would
+# make every reflow a false failure and tempt the fix of deleting the anchor.
+NORM_SYNC="$(sed 's/^[[:space:]]*>[[:space:]]*/ /' "$SYNC_MD" | tr '\n' ' ' | tr -s ' ')"
+missing_props=""
+# (1) attribution: the operator's project is not at fault.
+grep -Fq "not with your project" <<<"$NORM_SYNC" || missing_props="$missing_props attribution"
+# (2) a concrete remedy, and (3) WHY the obvious action is insufficient.
+grep -Fq "reinstall the Soleur plugin" <<<"$NORM_SYNC" || missing_props="$missing_props remedy"
+grep -Fq "does not update an installed plugin" <<<"$NORM_SYNC" || missing_props="$missing_props remedy-rationale"
+# (4) an explicit fallback for when the remedy does not clear it.
+grep -Fq "this is a bug in Soleur" <<<"$NORM_SYNC" || missing_props="$missing_props fallback"
+# (5) what still succeeded — a partial run must not read as a failed one.
+grep -Fq "completed normally" <<<"$NORM_SYNC" || missing_props="$missing_props what-still-worked"
+# The headless arm must NOT tell a web-platform user to reinstall a plugin they
+# never installed.
+grep -Fq "Soleur-side defect" <<<"$NORM_SYNC" || missing_props="$missing_props headless-variant"
+if [[ -n "$missing_props" ]]; then
+  fail "T0m: producer-missing operator message is missing required properties:$missing_props"
+else
+  pass "T0m: operator message carries attribution, remedy, remedy-rationale, fallback, what-still-worked, and a headless variant"
+fi
+
 # --- anti-vacuity floor -------------------------------------------------------
 # Neutering pass()/fail() or deleting a case otherwise summarizes green and
 # exits 0. Absolute and hand-ratcheted; a floor derived from the cases would
 # simply descend with a deletion.
-EXPECTED_CASES=12
+EXPECTED_CASES=13
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   echo "[FAIL] anti-vacuity: ran $CASES of $EXPECTED_CASES cases — a case was deleted or its counter neutered" >&2
   FAIL=$((FAIL + 1))
