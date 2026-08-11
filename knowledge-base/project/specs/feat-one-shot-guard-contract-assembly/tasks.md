@@ -56,8 +56,10 @@ in the plan's Scope Decision section.
 - [x] 4.4 Enumerate by directory walk over BOTH test roots (`apps/web-platform/`,
       `plugins/soleur/test/`) — a walk, not a glob list.
 - [x] 4.5 Quantify over EVERY `*Window` / `*Region` / `*Section` helper per file, not the first.
-- [x] 4.6 Encode the grandfather allowlist measured at plan time (7 helpers, 5 files) as an explicit
-      enumerated list, not a pattern.
+- [x] 4.6 Encode the grandfather allowlist as an explicit enumerated list, not a pattern.
+      CORRECTED at implementation time: the population is **7 helpers across 3 files**, not the 5
+      files the looser plan-time probe suggested. Six are allowlisted; `sandboxWindow` — the
+      originating defect — instead carries a real `// window-assembly:` declaration.
 - [x] 4.7 Wire `run_suite` into `scripts/test-all.sh`.
 - [x] 4.8 Mutation-prove rows 1-5 (including the relocation row, which pins the walk).
 
@@ -126,8 +128,11 @@ in the plan's Scope Decision section.
 - [x] 11.2 `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md` — no worse tier
       (this PR adds zero rule bodies).
 - [x] 11.3 `bash scripts/check-adr-ordinals.sh`
-- [x] 11.4 `bash scripts/test-all.sh` — read the preamble and epilogue banners, not the exit code
-      alone; confirm no `SIBLING_RUN_DETECTED`.
+- [x] 11.4 `bash scripts/test-all.sh` — preamble and epilogue banners read, not the exit code alone.
+      `SIBLING_RUN_DETECTED` and `LOW_TMP_HEADROOM` BOTH fired and rc was 1 (291/293). This is NOT
+      a clean green: the two failures were attributed to contention via the three required
+      confirmations recorded below, not dismissed. Task 0.2's precondition (no siblings) could not
+      be met — the box ran 3-4 concurrent suites throughout.
 - [x] 11.5 `git grep -ln "secret-scan-allow-rename" -- plugins/soleur/skills/` returns >= 1 hit
       (#5097's own close criterion).
 - [x] 11.6 Confirm this plan's own `## Guard Contract` passes `scripts/lint-guard-contract.py`.
