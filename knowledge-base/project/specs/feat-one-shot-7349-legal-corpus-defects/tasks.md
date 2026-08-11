@@ -139,9 +139,9 @@ Never rewrite a drifting line into a third form on one side.
 
 ## Phase 3b — GDPR Policy lawful-basis carve-back (CPO C3)
 
-- [ ] 3b.1 Port the canonical-only Art. 6(1) lawful-basis bullets into the published
+- [x] 3b.1 Port the canonical-only Art. 6(1) lawful-basis bullets into the published
       `gdpr-policy` mirror as a **lockstep two-surface** addition (same technique as 2.7).
-- [ ] 3b.2 Do NOT attempt the remaining ~60 `gdpr-policy` drift lines, and do NOT add the document
+- [x] 3b.2 Do NOT attempt the remaining ~60 `gdpr-policy` drift lines, and do NOT add the document
       to `BODY_EQUIVALENCE_DOCS`. Both belong to the successor issue — including the hard-wrapped
       scope block that trips gate 1 arm (c).
 
@@ -157,10 +157,10 @@ technique Phase 3b uses for `gdpr-policy`.
 `BODY_EQUIVALENCE_DOCS`, so residual cosmetic drift is acceptable and no zero-drift obligation
 attaches. Insertions reduce drift, so gate 2 passes as a reduction.
 
-- [ ] 3c.1 **P1** — port the six §4.7 data-category bullets: `team_names`, Concierge turn
+- [x] 3c.1 **P1** — port the six §4.7 data-category bullets: `team_names`, Concierge turn
       summaries, `message_attachments`, workspace logo, `audit_byok_use`, `beta_contacts`.
       Insertion point mirror 146–169 contains no scope block and is clear.
-- [ ] 3c.2 **P2** 🔴 **in-place** — restore the §4.7 Workspace-data bullet to canonical, with the
+- [x] 3c.2 **P2** 🔴 **in-place** — restore the §4.7 Workspace-data bullet to canonical, with the
       `/workspaces/<your-id>/` specificity.
 - [ ] 3c.3 **P3** — port the §4.7 "Right of access / portability (Articles 15 + 20)" paragraph.
 - [ ] 3c.4 **P4** — port the §4.7 Art. 15(4) rights-of-others paragraph.
@@ -171,14 +171,14 @@ attaches. Insertions reduce drift, so gate 2 passes as a reduction.
       purposes ("infrastructure security and abuse prevention"), required by Art. 13(1)(d).
 - [ ] 3c.8 **P8** 🔴 **in-place** — restore the Resend data/purpose scope: invite notifications,
       invite acceptance confirmations, DSAR export notifications.
-- [ ] 3c.9 **P9 conditional** — `statutory_repin_send` marker. Ships **only** per re-verification
+- [x] 3c.9 **P9 conditional** — `statutory_repin_send` marker. Ships **only** per re-verification
       item 8: if migration 135 has deployed, non-publication is a live omission and P9 is
       mandatory; if not, publish only with the "not yet in force" qualifier intact.
-- [ ] 3c.10 🔴 **EXECUTION TRAP, highest severity.** P2, P7 and P8 edit currently-drifting lines
+- [x] 3c.10 **FIRED TWICE AND WAS OBEYED, NOT FORCED.** Chained insertion put bullets in a non-canonical order; diff then stopped matching three unrelated identical lines and the ratchet reported CONTENT CHANGED. Fix = the gate's own remediation: port the ENCLOSING PASSAGE so the block becomes identical. Apply items singly, gate after each, revert on red. 🔴 **EXECUTION TRAP, highest severity.** P2, P7 and P8 edit currently-drifting lines
       and **must land byte-identical to canonical**. Rewriting either side into a third form
       fails gate 2 as `CONTENT CHANGED`. This is the single most likely way Phase 3c reds a
       required check.
-- [ ] 3c.11 🔴 **§10 IS OUT OF SCOPE — porting it would manufacture a false claim both gates pass.**
+- [x] 3c.11 🔴 **§10 IS OUT OF SCOPE — porting it would manufacture a false claim both gates pass.**
       Mirror line 547 is a scope block whose referent is *"The paragraph above"*, and line 545 is
       *"The Plugin operates locally and does not transfer data internationally."* Inserting the
       canonical §10 LinkedIn-Ireland / Microsoft-Ireland transfer bullets between them silently
@@ -187,7 +187,7 @@ attaches. Insertions reduce drift, so gate 2 passes as a reduction.
       the block's own line is unchanged; gate 2 sees a drift reduction.** Two independent reasons
       to exclude: it is duplicative of the already-published §5.12/§5.13, and porting it creates a
       falsehood. Carry the hazard into the successor issue (6.5).
-- [ ] 3c.12 **Explicitly OUT, stays with the successor:** the Last-Updated mega-line, the merged-
+- [x] 3c.12 **Explicitly OUT, stays with the successor:** the Last-Updated mega-line, the merged-
       paragraph restructuring at mirror 491/495, the §10 consolidated transfer restatement, the
       PR-H HTML comment.
 
@@ -195,16 +195,16 @@ attaches. Insertions reduce drift, so gate 2 passes as a reduction.
 
 - [ ] 3c.V1 🔴 **SEQUENCING LANDMINE** — `beta_contacts` must publish the **B4-corrected** role
       sentence from Phase 2, not the pre-B4 canonical text. Identical hazard to DPD §2.3(ad).
-- [ ] 3c.V2 🔴 `/dashboard/settings/privacy` + "Download my data" — verify the route exists, the
+- [x] 3c.V2 🔴 `/dashboard/settings/privacy` + "Download my data" — verify the route exists, the
       re-auth step works, and that `server/dsar-export-allowlist.ts` / `server/dsar-export.ts`
       cover every class the prose enumerates. **A published fulfilment route that does not fulfil
       is an Art. 12(2) breach created by this PR** — worse than the omission.
-- [ ] 3c.V3 Workspace logo — flag state, PNG/WebP re-encode, ≤1 MB cap, private-bucket claim.
-- [ ] 3c.V4 `audit_byok_use` — table exists, carries the described columns, is append-only.
-- [ ] 3c.V5 `message_attachments` — bucket path and recorded metadata fields.
-- [ ] 3c.V6 Concierge turn summaries — live on `/soleur:go`, written only on **successful** turns.
-- [ ] 3c.V7 `team_names` — column exists and is in use.
-- [ ] 3c.V8 `statutory_repin_send` / migration 135 deployment state (decides P9).
+- [x] 3c.V3 Workspace logo — flag state, PNG/WebP re-encode, ≤1 MB cap, private-bucket claim.
+- [x] 3c.V4 `audit_byok_use` — table exists, carries the described columns, is append-only.
+- [x] 3c.V5 `message_attachments` — bucket path and recorded metadata fields.
+- [x] 3c.V6 Concierge turn summaries — live on `/soleur:go`, written only on **successful** turns.
+- [x] 3c.V7 `team_names` — column exists and is in use.
+- [x] 3c.V8 `statutory_repin_send` / migration 135 deployment state (decides P9).
 - [ ] 3c.V9 LinkedIn dual-basis — reconcile against
       `legitimate-interest-assessments/2026-05-19-linkedin-org-page-lia.md` before publishing the
       (a)/(b) allocation.
