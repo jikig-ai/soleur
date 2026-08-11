@@ -65,7 +65,7 @@ reporting exists, and no phase makes a decision before its instrument exists.
       `git-data-cutover.yml` (mutated at `:200-205`), **plus the battery file itself**.
 - [x] **C.7** Guard both `run_suite` lines on `_diff_touches "${ARRAY[@]}"`, calling `skip_suite` on the
       else branch. Array referenced **by name**; no path literal on a `run_suite` line.
-- [x] **C.8** Author `ADR-178` via `/soleur:architecture` — "The local gate may decline to execute a
+- [x] **C.8** Author `ADR-181` via `/soleur:architecture` — "The local gate may decline to execute a
       suite, and every decline is a counted verdict." Re-derive the ordinal against freshly-fetched
       `origin/*` refs before writing.
 - [x] **C.9** Run the coverage-notice suite alone. Green.
@@ -154,5 +154,5 @@ vacuously. The data file from C.5 is what removes the parser.
       Phase E log.
 - [x] **H.7** Confirm `ship` renders `decision-challenges.md` (UC-1, UC-2) into the PR body and files
       the `action-required` issue.
-- [x] **H.8** Re-derive the ADR-178 ordinal against freshly-fetched `origin/main` immediately before
+- [x] **H.8** Re-derive the ADR-181 ordinal against freshly-fetched `origin/main` immediately before
       merge; on renumber sweep the plan body, this file, and plan AC8 in the same edit.

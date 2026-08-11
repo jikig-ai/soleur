@@ -103,7 +103,7 @@ REJECT print to stderr.
 
 - `ADR-133` — the mechanism Phase F re-opens. Decision 3 is the advisory lock. Its Alternatives already REJECTED "make the lock blocking" and "stale-holder detection"; it did **not** consider headroom-based admission control, so that is a genuine gap, not a re-litigation. Its addendum states the governing method: *"Its **method** — probe before committing to a mechanism, and let a measurement rather than an argument settle it — transfers completely. Its **conclusion** is a prior, not evidence."*
 - `ADR-151` — the AGENTS index/body split; constrains where the new rule lives.
-- No ADR proposes or rejects letting the local gate decline to execute a suite. That is the new decision → **ADR-178** (provisional).
+- No ADR proposes or rejects letting the local gate decline to execute a suite. That is the new decision → **ADR-181** (provisional).
 
 ### Skill description budget (Phase 1.8)
 
@@ -161,7 +161,7 @@ preflight Check 6's regex is touched, so no `threshold: none` scope-out bullet i
 
 ### ADR
 
-1. **ADR-178 (provisional) — "The local gate may decline to execute a suite, and every decline is a
+1. **ADR-181 (provisional) — "The local gate may decline to execute a suite, and every decline is a
    counted verdict."** New decision, and it survives the review cuts: the function all 288 suites flow
    through gains a third outcome, and a future engineer reading only the existing ADRs would be
    misled about what `N/N suites passed` means. Records: declines are counted in the denominator and
@@ -169,7 +169,7 @@ preflight Check 6's regex is touched, so no `threshold: none` scope-out bullet i
    resolve; and a decline is unreachable under `CI`. Authored via `/soleur:architecture` in Phase C.
    **Ordinal is provisional** — probed across all **62** `origin/*` refs (highest claimed `ADR-177`).
    `/ship`'s collision gate re-derives before merge. On renumber, sweep in the same edit:
-   `grep -rn 'ADR-178' knowledge-base/project/{plans,specs}/` — the plan body, `tasks.md`, and AC8
+   `grep -rn 'ADR-181' knowledge-base/project/{plans,specs}/` — the plan body, `tasks.md`, and AC8
    all name it.
 2. **Amendment to ADR-133** (a dated addendum, matching the precedent its own 2026-08-10 addendum
    set). Records the Phase F bytes measurement and states that the lock's mechanism does **not**
@@ -203,7 +203,7 @@ preflight Check 6's regex is touched, so no `threshold: none` scope-out bullet i
 
 ### Sequencing
 
-ADR-178 is authored in Phase C, once the contract is real rather than proposed. The ADR-133 amendment
+ADR-181 is authored in Phase C, once the contract is real rather than proposed. The ADR-133 amendment
 is authored in Phase F, once the measurement exists. Neither is deferred to a follow-up issue.
 
 ---
@@ -393,7 +393,7 @@ distinguish "286/286 because two were gated" from "286/286 because two were de-r
    file** — that single element makes new-target drift self-correcting, because the commit adding a
    target necessarily edits the battery, necessarily matches the predicate, and necessarily runs the
    suite.
-5. **Author ADR-178.**
+5. **Author ADR-181.**
 
 ### Phase D — anti-rot (~25-30 lines in an existing linter + a ~15-line data file)
 
@@ -565,7 +565,7 @@ problem.
 - `scripts/lib/test-relevance-paths.sh` — declarations only (two arrays, no `set -e`, no side
   effects), sourced by both `test-all.sh` and `lint-orphan-test-suites.sh`. Added at deepen-plan; it
   is what removes the array *parser* and its vacuous-pass failure mode.
-- `knowledge-base/engineering/architecture/decisions/ADR-178-local-gate-declines-are-counted-verdicts.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-181-local-gate-declines-are-counted-verdicts.md`
   (provisional ordinal)
 
 **Two small files and one ADR, down from nine new files.** Every path claimed to exist was resolved
@@ -619,7 +619,7 @@ passes, including the behavioural arm (a full-gate invocation with `SOLEUR_SUBAG
 and names the alternative) and the text arm (both SKILL.md files carry the clause, asserted on a
 content anchor).
 
-**AC8** — Architecture records exist: `ADR-178-*.md` is present (or the ordinal actually claimed at
+**AC8** — Architecture records exist: `ADR-181-*.md` is present (or the ordinal actually claimed at
 merge time, swept across the plan body, `tasks.md` and this AC in the same edit), and the ADR-133
 amendment is dated, quotes **both** the `/tmp` and `$TMPDIR` bytes figures from the sanctioned run's
 `TEST_TIMING_LOG`, states the keep-the-lock verdict, and states the evidence bar that was not met.
@@ -815,7 +815,7 @@ to be doing** — the rule this plan adds, applied to itself.
 - **A plan whose `## User-Brand Impact` section is empty or omits the threshold fails `deepen-plan`
   Phase 4.6.** This plan's is filled with a concrete artifact, a concrete (null) exposure vector, and
   the `aggregate pattern` threshold.
-- **The ADR-178 ordinal is provisional.** Free across all 62 `origin/*` refs at plan time (highest
+- **The ADR-181 ordinal is provisional.** Free across all 62 `origin/*` refs at plan time (highest
   claimed: ADR-177), but a sibling can claim it mid-pipeline — this repo has seen an ordinal move
   twice in one ~2h session. On renumber, sweep the plan body, `tasks.md` and AC8 in the same edit.
 - **Never put a path literal on a `run_suite` line.** `lint-orphan-test-suites.sh:57` is satisfied by

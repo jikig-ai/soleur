@@ -12,7 +12,7 @@ weaker claim, so the commands below are pasted as the plan wrote them.
 | AC5 | `bash scripts/lint-orphan-test-suites.sh` | **PASS** — `orphan test suites: none`, exit 0. Mutation-proved in place across **five** directions (plan asked four) |
 | AC6 | (same suite, W7 completeness arms) | **PASS** — all five `W7_EXPECTED` workflows covered, read from the oracle's own literal rather than restated |
 | AC7 | `bash plugins/soleur/test/fanout-suite-scope.test.sh` | **PASS** — 13 passed, 0 failed |
-| AC8 | ADR-178 present; ADR-133 amendment | **PASS** — `ADR-178-local-gate-declines-are-counted-verdicts.md` present, `check-adr-ordinals.sh` passes. ADR-133 carries a dated 2026-08-11 addendum quoting **both** mount figures, the keep-the-lock verdict, and the unmet evidence bar; `status: active` unchanged; appended, nothing above edited. |
+| AC8 | ADR-181 present; ADR-133 amendment | **PASS** — `ADR-181-local-gate-declines-are-counted-verdicts.md` present, `check-adr-ordinals.sh` passes. ADR-133 carries a dated 2026-08-11 addendum quoting **both** mount figures, the keep-the-lock verdict, and the unmet evidence bar; `status: active` unchanged; appended, nothing above edited. |
 | AC9 | `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md 2>&1` | **PASS** — exit 0 (WARN, which the AC permits). `B_ALWAYS=45104` vs the 44,478 baseline; 896 B under the 46,000 REJECT cap. `lint-rule-ids.py` and `lint-agents-enforcement-tags.py` both exit 0 (31 skill tags via 32 anchor checks). |
 | AC10 | the sanctioned run | **PARTIAL — stated deviation.** The run was **RED (rc=1)**, not green. It found two real regressions introduced by this branch. See below. |
 

@@ -2,9 +2,11 @@
 title: The local gate may decline to execute a suite, and every decline is a counted verdict
 status: active
 date: 2026-08-11
+amends: ADR-177
+related_adrs: [ADR-133, ADR-177]
 ---
 
-# ADR-178: `test-all.sh` — relevance-gated suites, and declines that count
+# ADR-181: `test-all.sh` — relevance-gated suites, and declines that count
 
 ## Context
 
@@ -38,18 +40,28 @@ decision worth recording rather than an optimisation worth committing.
 DECLINED because the run's diff touches nothing it guards. Four properties are load-bearing.
 
 **1. A decline is a counted verdict, not an absence.** A `skip_suite <label> <reason> <rerun-cmd>`
-helper increments both `suites` and a new `skipped` counter. The terminal summary becomes:
+helper increments both `suites` and a new `skipped` counter, and the decline joins the BREAKDOWN
+line ADR-177 established — emitted only when something was killed or declined, immediately before
+the terminal marker:
 
 ```
-=== 287/289 suites passed (0 failed, 2 skipped) ===
+=== 292 suites: 289 passed, 0 failed, 0 killed (…), 3 skipped (declined — not relevant to this diff) ===
+=== 289/292 suites passed ===
 ```
 
-The `=== N/M suites passed` **prefix is preserved byte-for-byte**. It is the documented poll
-target for long runs (`plugins/soleur/skills/one-shot/SKILL.md`) and is quoted as the thing to
-read in roughly thirty learnings; substituting the whole line would orphan every one of those
-readers at once. The numerator now **excludes** skips — with declines counted in `suites` but not
-in `failed`, the old expression would have reported a declined suite as PASSED, a green that is
-not evidence produced by the very change that added the gate.
+**The terminal marker is preserved byte-for-byte, whole.** An earlier revision of this decision
+appended `(F failed, S skipped)` to the marker itself, which orphaned every anchored poll of it
+and cost a commit spent updating three SKILL.md files to cope. ADR-177's separate-line shape is
+strictly better and is adopted here instead: the marker never changes, so no reader is orphaned,
+and the breakdown carries the detail. Ordering is load-bearing — both lines are `=== …`-shaped,
+so the marker must be LAST for "match the runner's last emitted line" to stay correct.
+
+The numerator **excludes** skips (as it already excludes killed) — with declines counted in
+`suites` but not in `failed`, the old expression would have reported a declined suite as PASSED, a
+green that is not evidence produced by the very change that added the gate. A consequence worth
+naming: on a local run whose diff touches neither battery nor `apps/web-platform/infra/`, the
+marker now reads `N-3/N`, so `N/N` is no longer the ordinary local green spelling. The rc file and
+the breakdown line are the verdict; the marker is the completion signal.
 
 **2. Every decline is loud and actionable.** It prints the suite label, a machine-readable reason,
 and the exact command that re-runs it, and it writes `skip=<reason>` to `TEST_TIMING_LOG` as a
@@ -80,6 +92,14 @@ everything (fail-SAFE). Making the decline unreachable is both stronger and smal
 it did not happen: on `main` both diff refs resolve and return **empty**, so `_diff_detect_ok` is
 1 and the fail-SAFE arm does not rescue it — every gated suite would decline and an
 "assert no skips occurred" check would have reddened `main-health-monitor` every six hours.
+
+**5. A spawned subagent cannot run the full gate.** `test-all.sh` exits **4** when
+`SOLEUR_SUBAGENT=1` is set without `SOLEUR_ALLOW_FULL_GATE=1`, before `tc_acquire` and before the
+first suite, so a refused run costs nothing and never takes the advisory lock a legitimate
+sibling is queued on. This is recorded here rather than left to prose because it changes the same
+surface: three agents running suites concurrently inflated a battery measurement 1.9x, and this
+runner now GATES suites on measured cost, so a corrupted measurement propagates into what runs at
+all. `4` is deliberately not `3` — see the ADR-177 addendum.
 
 **Scope.** This is a **local-run optimisation only**. CI runs everything by construction, and
 `main-health-monitor` runs the full un-gated set every six hours (Inngest cron
@@ -144,9 +164,10 @@ logic:
 3. Both batteries already hard-abort on a missing declared path.
 4. CI and the six-hourly monitor run everything, where a decline is unreachable.
 
-**Also harder.** Reading `N/M suites passed` now requires reading the parenthesised breakdown to
-know whether the run covered everything. That cost is deliberate: the alternative was a number
-that could not distinguish a gated suite from a de-registered one.
+**Also harder.** Reading `N/M suites passed` now requires reading the preceding breakdown line to
+know whether the run covered everything, and `N/N` is no longer the ordinary local spelling. That
+cost is deliberate: the alternative was a number that could not distinguish a gated suite from a
+de-registered one.
 
 ## What this does NOT claim
 

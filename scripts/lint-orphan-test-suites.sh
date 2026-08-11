@@ -104,8 +104,8 @@ for r in "${REQUIRED_RUNNERS[@]}"; do
   fi
 done
 
-# --- Relevance-predicate anti-rot (ADR-178) --------------------------------------------
-# The two checks above answer "is this suite registered?". This answers the question ADR-178
+# --- Relevance-predicate anti-rot (ADR-181) --------------------------------------------
+# The two checks above answer "is this suite registered?". This answers the question ADR-181
 # created: "is the predicate that decides whether a REGISTERED suite actually executes still
 # pointing at real files?"
 #

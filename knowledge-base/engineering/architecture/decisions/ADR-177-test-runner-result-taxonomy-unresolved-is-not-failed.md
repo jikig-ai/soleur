@@ -181,3 +181,31 @@ them even though the exit code is non-zero:
 | **A4** | A self-killing watchdog that aborts a suite at its declared budget (the issue's literal "fail with its own diagnostic") | Requires guessing the upstream killer's timing, which is precisely what was not measured, and trades a possibly-completing measurement for a guaranteed non-result. Adopted instead: **declare and report**, which delivers the attribution the item was asking for without self-inflicting the outcome. Recorded as a deliberate deviation from the issue's literal wording. |
 | **A6** | Carry the class OUT-OF-BAND rather than on the exit code — a nested runner appends a `KILLED` row to `TEST_TIMING_LOG` (whose field 3 this change already widened) and `run_suite` classifies on `signal-shaped rc` ∪ `child declared killed` | Not adopted here, recorded because it is the one design that makes the taxonomy COMPOSITIONAL: that channel survives npm, `xargs` and `if ! bash`, so it resolves the top-level-only limit and wrapper absorption with one mechanism. Absence of the channel means "no killed", so it is fail-safe and byte-identical to today. The cost is real — three files must be taught to write it, and `TEST_TIMING_LOG` becomes a CONTRACT rather than ad-hoc telemetry; today nothing outside the runner parses it, which is precisely why widening field 3 was free. #7429 should spend that freedom deliberately rather than inherit it. |
 | **A5** | Widen the existing `SIBLING_RUN_DETECTED` matcher to also cover directly-run suites | The two answer different questions — "is another full run in flight?" versus "is another suite in flight?" — and merging them would silently change what an existing `SIBLING_RUN_DETECTED` line means in every log and learning that cites one. A separate `SIBLING_SUITE_DETECTED` banner keeps both readable. |
+
+## Addendum — 2026-08-11 (ADR-181): the exit contract gains a REFUSED class, and `2` widens
+
+ADR-181 (relevance-gated suites) changes the contract this ADR defines. Recorded here because
+`scripts/test-all.sh`'s `EXIT CONTRACT` block is cited as authoritative by
+`plugins/soleur/scripts/grok-pre-push-gate.sh` and `plugins/soleur/skills/work/SKILL.md`, so a
+contract change that lands only in the code leaves both pointing at a stale table. Nothing above
+is edited — this appends.
+
+```
+4  REFUSED before anything ran — SOLEUR_SUBAGENT=1 without SOLEUR_ALLOW_FULL_GATE=1
+2  ALSO: the relevance-predicate data file is missing (in addition to the TEST_GROUP usage error)
+```
+
+**Why `4` and not `3`.** They are opposite claims. `3` says a registered suite was terminated
+and its coverage is therefore *unresolved* — the runner tried and could not measure. `4` says
+nothing ran at all, deliberately, and nothing is unresolved: a spawned agent asked for the full
+gate and was refused so it would not corrupt the lead's measurement. Collapsing them would make a
+refusal indistinguishable from a killed suite for exactly the consumers this ADR exists to serve.
+
+**Why the missing-data-file case reuses `2` rather than taking `5`.** Both `2` cases mean "this
+runner cannot run" and neither is a verdict about a suite, which is the distinction this ADR's
+taxonomy actually turns on. Every consumer is binary zero/non-zero, so a second usage-shaped code
+would add a value nothing reads. The overload is documented rather than silent.
+
+**Consumer impact: none beyond what this ADR already recorded.** Every consumer still blocks on
+any non-zero. `grok-pre-push-gate.sh` reads `3` specifically; it does not read `4`, and a refusal
+cannot reach it because the gate does not set `SOLEUR_SUBAGENT`.

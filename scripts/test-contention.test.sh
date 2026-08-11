@@ -1013,7 +1013,7 @@ fi
 # Count BOTH outcomes: a run with genuine failures has a lower pass_n, and testing
 # pass_n alone reported "cardinality guard: only 64 ran (expected >= 66)" on a run
 # whose real problem was two failures -- a strand message for a non-strand.
-# Raised 68 -> 76 with the ADR-178 per-mount bytes arms (6 attribution + 2 contract). At 68 the floor had exactly the slack
+# Raised 68 -> 76 with the ADR-181 per-mount bytes arms (6 attribution + 2 contract). At 68 the floor had exactly the slack
 # to swallow that whole block: deleting it left the suite green and silent, which is the defect
 # this guard exists to prevent, applied to the feature that added it.
 if [[ "$((pass_n + fails))" -lt 76 ]]; then

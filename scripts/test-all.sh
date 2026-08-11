@@ -8,7 +8,14 @@ set -euo pipefail
 #      3 is a TOP-LEVEL contract only: a nested runner returning 3 into run_suite classifies
 #      as a plain FAIL, because rc=3 is not signal-shaped. Do not adopt 3 in a nested runner
 #      without revisiting this.
-#   2  usage error (TEST_GROUP took an unsupported value) — predates the above
+#   2  usage error — TEST_GROUP took an unsupported value (predates the above), OR the
+#      relevance-predicate data file is missing. Both are "this runner cannot run", not a
+#      verdict about any suite; ADR-181 declined a separate code because every consumer is
+#      binary and a second usage-shaped code buys nothing.
+#   4  REFUSED before anything ran — SOLEUR_SUBAGENT=1 without SOLEUR_ALLOW_FULL_GATE=1
+#      (ADR-181). Distinct from 3 on purpose: 3 says a suite was terminated and its coverage
+#      is unresolved; 4 says nothing ran, by design, and nothing is unresolved. Sharing 3
+#      would make a refused run read as a killed suite.
 #
 # Every consumer was binary zero/non-zero BEFORE this change (lefthook, the three ci.yml
 # shards, package.json, main-health-monitor.yml) and still blocks on any non-zero, so 3 is
@@ -149,7 +156,7 @@ _emit_bytes_probe() {
     "$1" "$tmpfs_bytes" "$disk_bytes" >> "$TEST_TIMING_LOG"
 }
 
-# --- Relevance predicates (ADR-178) ---
+# --- Relevance predicates (ADR-181) ---
 # Sourced at TOP LEVEL, and deliberately NOT defensively, unlike the contention lib above. That
 # one is observe-only, so a missing lib must degrade to a normal run. This one DECIDES WHETHER
 # SUITES EXECUTE: were it absent and the arrays empty, every gated suite would decline silently
@@ -313,7 +320,7 @@ _suite_budget_ms() {
   esac
 }
 
-# Declines (ADR-178). Beside failed/killed for the same reason: a suite that was not run
+# Declines (ADR-181). Beside failed/killed for the same reason: a suite that was not run
 # is not a suite that passed, and the denominator must still account for it.
 skipped=0
 
@@ -407,7 +414,7 @@ run_suite() {
   fi
 }
 
-# A DECLINE IS A VERDICT, NOT AN ABSENCE (ADR-178).
+# A DECLINE IS A VERDICT, NOT AN ABSENCE (ADR-181).
 #
 # run_suite increments `suites` on ENTRY, so the older shape — wrapping the call in an `if` and
 # echoing a notice on the else branch — silently removed the declined suite from the
@@ -489,8 +496,10 @@ skip_suite() {
 # no-infra verdict from the ref that could not have known — measured on a scratch repo with a
 # committed infra file and no remote. Only the range ref's failure means "could not determine".
 _diff_detect_ok=0
+_diff_head_ok=0
 _diff_names=""
 if _diff_out="$(git -c core.quotePath=false diff --name-only HEAD 2>/dev/null)"; then
+  _diff_head_ok=1
   _diff_names="${_diff_names}
 ${_diff_out}"
 fi
@@ -499,6 +508,16 @@ if _diff_out="$(git -c core.quotePath=false diff --name-only origin/main...HEAD 
   _diff_names="${_diff_names}
 ${_diff_out}"
 fi
+# RENAME SOURCES. `--name-only` emits only the DESTINATION of a rename, so `git mv` on a declared
+# predicate path leaves the OLD path — the one the array names — absent from the diff, and the
+# battery declines on the single most destructive edit possible to its own SUT. `--name-status -M`
+# emits `R100<TAB>old<TAB>new`, and since matching is substring-based over this whole blob, adding
+# it makes BOTH paths matchable. (The narrow window this closes is a rename WITHOUT a matching
+# array update; `lint-orphan-test-suites.sh` already reds loudly in the same run for that case, so
+# it was never a silent green — this just stops the suite declining while that error prints.)
+_diff_names="${_diff_names}
+$(git -c core.quotePath=false diff --name-status -M HEAD 2>/dev/null || true)
+$(git -c core.quotePath=false diff --name-status -M origin/main...HEAD 2>/dev/null || true)"
 # WIDENED from `-- apps/web-platform/infra` to the union of every prefix the relevance
 # predicates declare. The narrow form was correct while the only consumer was the infra notice;
 # as a suite GATE it was a fail-open, because a brand-new UNTRACKED mutation target under
@@ -532,7 +551,13 @@ _diff_touches() {
   if [[ "${SOLEUR_TEST_FORCE_ALL:-}" == "1" ]]; then return 0; fi
   if [[ -n "${CI:-}" ]]; then return 0; fi
   # Fail SAFE, not fail quiet: a diff the runner could not determine RUNS everything.
-  if [[ "$_diff_detect_ok" == 0 ]]; then return 0; fi
+  #
+  # BOTH arms, not just the range. The HEAD arm is what sees UNCOMMITTED work, and it can fail
+  # independently — a sibling process holding `index.lock` while `git diff` refreshes the index is
+  # the realistic case in this repo, where parallel worktrees are the documented workflow. With
+  # only the range arm consulted, that failure is swallowed: the range looks clean, and the battery
+  # declines on a working tree carrying exactly the edits it guards.
+  if [[ "$_diff_detect_ok" == 0 || "$_diff_head_ok" == 0 ]]; then return 0; fi
   local p
   for p in "$@"; do
     if grep -qF -- "$p" <<<"$_diff_names"; then return 0; fi
@@ -928,7 +953,7 @@ if want_scripts; then
   # could replace the pass condition itself. It sandboxes its own copies of both SUTs, so it
   # neither mutates the worktree nor depends on suite ordering here (#7277).
   #
-  # RELEVANCE-GATED (ADR-178). At ~860 s this is the single most expensive suite in the runner —
+  # RELEVANCE-GATED (ADR-181). At ~860 s this is the single most expensive suite in the runner —
   # about 32% of a full local run — and it guards a script most PRs never touch. The predicate is
   # referenced BY NAME: no path literal may appear on a `run_suite` line, because
   # lint-orphan-test-suites.sh's per-suite anchor is satisfied by any scripts/*.test.sh appearing
@@ -1095,7 +1120,7 @@ if want_scripts; then
   run_suite "scripts/digest-oracle-guard" bash scripts/digest-oracle-guard.test.sh
   # Sandbox-only: copies scripts/ and .github/ into a mktemp -d, mutates the copies, and asserts
   # the working tree is unchanged when it finishes.
-  # RELEVANCE-GATED (ADR-178), ~189 s. The battery COPIES all of scripts/ and .github/ into its
+  # RELEVANCE-GATED (ADR-181), ~189 s. The battery COPIES all of scripts/ and .github/ into its
   # sandbox but only DEPENDS on the paths the predicate names; gating on the copy set would match
   # nearly every diff and never decline. Referenced by name — see the registry gate above.
   if _diff_touches "${CF_TUNNEL_BATTERY_PATHS[@]}"; then
@@ -1179,7 +1204,7 @@ tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"
 # most. Ordering it first keeps both contracts at zero cost: byte-identical clean
 # output, and `=== N/M suites passed ===` stays the last `===` line on every arm.
 #
-# ADR-178 adds `skipped` to the same breakdown rather than appending it to the marker.
+# ADR-181 adds `skipped` to the same breakdown rather than appending it to the marker.
 # An earlier revision of this change DID append `(F failed, S skipped)` to the marker, which
 # orphaned every anchored poll of it; the separate-line shape #7424 established keeps the marker
 # byte-identical, so no reader is orphaned at all. Declines are counted in `suites` and excluded

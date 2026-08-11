@@ -2,8 +2,8 @@
 # shellcheck disable=SC2034  # every array here is consumed by files that SOURCE this one
 #   (scripts/test-all.sh, scripts/lint-orphan-test-suites.sh); shellcheck analyses one file
 #   at a time and cannot see a cross-file consumer. The de-reference anchor in the linter is
-#   what actually proves each array is consumed -- see ADR-178.
-# Relevance predicates for the two heavy mutation batteries (ADR-178).
+#   what actually proves each array is consumed -- see ADR-181.
+# Relevance predicates for the two heavy mutation batteries (ADR-181).
 #
 # DECLARATIONS ONLY. No `set -e`, no `exit`, no side effects, nothing executed. Two very
 # different consumers source this file and both need it to be inert:
@@ -110,7 +110,7 @@ CF_TUNNEL_BATTERY_PATHS=(
 
 # Union of the top-level prefixes every declared path lives under. The untracked arm of
 # test-all.sh's diff detection is path-scoped, and scoping it to apps/web-platform/infra alone
-# (as it was before ADR-178) made a brand-new UNTRACKED mutation target under scripts/ or
+# (as it was before ADR-181) made a brand-new UNTRACKED mutation target under scripts/ or
 # .github/ invisible to the predicate — so a session that ADDS a target and runs the gate before
 # committing would have had the suite skipped on the very diff that needed it.
 TEST_RELEVANCE_PREFIXES=(

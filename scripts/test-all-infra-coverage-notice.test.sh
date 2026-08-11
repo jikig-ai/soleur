@@ -88,7 +88,7 @@ PY
 
 # Parse the runner's summary into PARSED_PASS / PARSED_TOTAL / PARSED_FAIL / PARSED_SKIP.
 #
-# TWO LINES, deliberately (the shape #7424 established and ADR-178 extends): a BREAKDOWN line
+# TWO LINES, deliberately (the shape #7424 established and ADR-181 extends): a BREAKDOWN line
 # emitted only when something was killed or declined, then the TERMINAL MARKER
 # `=== P/N suites passed ===`, byte-identical to what it has always been. The marker is last so
 # that the runner's final `===` line is always the one pollers anchor on; the breakdown carries
@@ -134,7 +134,7 @@ run_arm() {
   # diff happens to touch — and a diff irrelevant to those batteries would make them decline,
   # changing the skip count these arms assert on for a reason that has nothing to do with infra.
   # SOLEUR_SUBAGENT / SOLEUR_ALLOW_FULL_GATE are cleared for the same reason as the two
-  # variables below: test-all.sh exits 3 under SOLEUR_SUBAGENT=1 BEFORE any registration, so
+  # variables below: test-all.sh exits 4 under SOLEUR_SUBAGENT=1 BEFORE any registration, so
   # an inherited value makes every arm measure a run that did nothing -- and the 10 matrix
   # cells then pass VACUOUSLY on `claim (0) matches invocation (0)`. The environment that
   # sets it is a spawned agent, i.e. exactly how this PR tells reviewers to run suites.
@@ -306,7 +306,7 @@ else
   fail "the gated suite was written to TEST_TIMING_LOG as a FAIL"
 fi
 
-# --- THE RELEVANCE GATE FOR THE TWO HEAVY BATTERIES (Phase C / ADR-178) ----------------------
+# --- THE RELEVANCE GATE FOR THE TWO HEAVY BATTERIES (Phase C / ADR-181) ----------------------
 # These two suites are 38.6% of a full local run and guard paths most PRs never touch. The gate
 # declines them on an irrelevant diff — which is only safe if the decline is DERIVED from the
 # diff rather than from anything ambient, and if every bypass really bypasses.
@@ -450,6 +450,28 @@ else
   fail "could not read W7_EXPECTED from the oracle — the completeness check is vacuous"
 fi
 
+# --- RENAME: the OLD path must still arm the battery ----------------------------------------
+# `git diff --name-only` emits only a rename's DESTINATION, so `git mv` on a declared predicate
+# path leaves the array's path absent from the diff and declines the battery on the most
+# destructive possible edit to its own SUT. The runner therefore also feeds `--name-status -M`,
+# whose `R100<TAB>old<TAB>new` rows make BOTH paths matchable.
+#
+# Two arms, because they pin different halves and each is weak alone: the fixture proves the
+# MATCHING works on a rename-shaped row, and the source anchor proves the runner actually asks
+# git for those rows. Without the second, deleting the `--name-status` invocation leaves this
+# fixture green; without the first, the invocation could feed a shape nothing matches.
+run_gate_arm rename-old-path "$(printf 'R100\tscripts/registry-pull-path-health.sh\tscripts/registry-pph.sh')" || true
+if [[ "$RAN_REGISTRY" == 1 ]]; then
+  pass "a renamed predicate path still arms its battery via the rename source"
+else
+  fail "a rename hid the OLD path from the predicate — the battery declined on a git mv of its SUT"
+fi
+if grep -qE '^\$\(git -c core\.quotePath=false diff --name-status -M ' "$TARGET"; then
+  pass "the runner feeds rename sources into the diff blob"
+else
+  fail "the runner no longer asks git for --name-status -M, so rename sources are invisible"
+fi
+
 # --- Fail SAFE, not fail quiet. An undeterminable diff must RUN everything. Skipping on a diff
 # --- the runner could not read is the one direction that turns this feature into a hazard.
 run_gate_arm undeterminable "$DOCS_ONLY_DIFF" SANDBOX_DETECT_OK=0 || true
@@ -501,7 +523,7 @@ fi
 #
 # MIN_FIXED is the count of assertions NOT produced by those loops; it is the only number that
 # should ever be edited by hand, and only when a fixed assertion is deliberately added.
-MIN_FIXED=42
+MIN_FIXED=44
 MIN_ASSERTIONS=$(( MIN_FIXED + ${#W7_FILES[@]} + ${#REGISTRY_BATTERY_PATHS[@]} + ${#CF_TUNNEL_BATTERY_PATHS[@]} ))
 if [[ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]]; then
   echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= $MIN_ASSERTIONS — the suite was stranded, not clean." >&2
