@@ -40,7 +40,7 @@ DEFER_VALUE="defer"
 # --- Inline TARGETS array: rule_id|prose_ref|regex (bash ERE) -----------
 # Regex engine: bash [[ =~ ]] (ERE). POSIX [[:space:]], NOT \s.
 # Anchor `(^|&&|\|\||;|[[:space:]]--[[:space:]])` catches wrapped invocations
-# (e.g., `bash session-state.sh with_lock ... -- git push origin main`) and
+# (e.g., `bash <plugin-root>/scripts/lib/session-state.sh with_lock ... -- git push origin main`) and
 # chained `&&` / `;` / `||` forms. Without this anchor, the regex misses the
 # class of bug surfaced in learning 2026-05-12-cross-session-lock-lease-bash-primitives.md.
 #

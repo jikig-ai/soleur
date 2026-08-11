@@ -206,9 +206,15 @@ a18b_rewriter_contract() {
       && fail_soft+=("$hook")
 
     # (ii) a real parse gate at the call site (comments stripped, per A13).
-    sed 's/[[:space:]]*#.*$//' "$src" | grep -q 'hook_parse_input' \
+    # Two-step like (i) above, and for the SIGPIPE reason A13 states: under
+    # `set -o pipefail`, `sed "$src" | grep -q X` returns 141 when grep matches
+    # EARLY, because grep exits and sed dies on the closed pipe. The `||` then
+    # fires and this reports "no hook_parse_input call" for a hook that calls it
+    # on line 3 — the assertion inverts precisely for the healthiest hooks.
+    src_stripped="$(sed 's/[[:space:]]*#.*$//' "$src")"
+    grep -q 'hook_parse_input' <<<"$src_stripped" \
       || no_gate+=("$hook: no hook_parse_input call")
-    sed 's/[[:space:]]*#.*$//' "$src" | grep -q 'hook_input_report' \
+    grep -q 'hook_input_report' <<<"$src_stripped" \
       || no_gate+=("$hook: no hook_input_report call")
 
     # (iii) exit 0 on every payload class — a non-zero exit from a PreToolUse
@@ -363,8 +369,20 @@ MIXED_LEAK_PAYLOAD="$(jq -nc '{tool_name:"Bash", tool_input:{command:"git stash 
 EVAL_ALLOW='eval "exec ${fd}>&-" 2>/dev/null || true'
 
 a1_idiom_ban() {
-  local offenders=() f line n stripped trimmed
+  local offenders=() scanned=() f line n stripped trimmed root
+  # Scoped to `scripts/lib` rather than all of `plugins/soleur/scripts` (#7409).
+  # ADR-156's ban exists because a hook's stdin is MODEL-CONTROLLED; the library
+  # that moved there is in that trust path (three .claude/hooks/** consumers
+  # source it). The rest of plugins/soleur/scripts consumes no hook stdin, so
+  # banning eval across it would be an unrecorded expansion of ADR-156's scope,
+  # not preservation of it.
+  local _a1_roots=(
+    "$REPO_ROOT/.claude/hooks"
+    "$REPO_ROOT/.openhands/hooks"
+    "$REPO_ROOT/plugins/soleur/scripts/lib"
+  )
   while IFS= read -r f; do
+    scanned+=("$f")
     [[ "$f" == *.test.sh ]] && continue
     stripped="$(sed 's/^[[:space:]]*#.*$//' "$f")"
     while IFS= read -r line; do
@@ -374,10 +392,63 @@ a1_idiom_ban() {
       [[ "$trimmed" == "$EVAL_ALLOW" && "$f" == */lib/session-state.sh ]] && continue
       offenders+=("${f#"$REPO_ROOT/"}:$n: $trimmed")
     done < <(printf '%s\n' "$stripped" | grep -nE '(^|[^[:alnum:]_])eval([[:space:]]|$)' || true)
-  done < <(find "$REPO_ROOT/.claude/hooks" "$REPO_ROOT/.openhands/hooks" -name '*.sh' -type f 2>/dev/null | sort)
+  done < <(find "${_a1_roots[@]}" -name '*.sh' -type f 2>/dev/null | sort)
 
-  if (( ${#offenders[@]} == 0 )); then
-    ok "A1 no eval under .claude/hooks/** or .openhands/hooks/** (2 fd-close lines allow-listed)"
+  # MEMBERSHIP ASSERTION (#7409). Extending the roots above is a one-time patch;
+  # this is the tripwire. `find` is invoked with `2>/dev/null`, so deleting a
+  # root — or relocating the file out from under one — makes this gate report
+  # `ok` while scanning strictly less. A silently-narrowed green gate is the
+  # #5454 shape exactly: the assertion keeps passing and stops meaning anything.
+  #
+  # session-state.sh is the ONLY file in the scan set that needs the allow-listed
+  # `eval` fd-close idiom, so its presence is a sound proxy for "the roots still
+  # reach the plugin". It moved to plugins/soleur/scripts/lib/ in #7409; the
+  # carve-out above is suffix-matched (*/lib/session-state.sh) and needs no edit.
+  # Two assertions, because either one alone is defeatable.
+  #
+  # (1) The REQUIRED set is pinned as literals here, independent of the array the
+  #     walk uses. Deriving "expected" from `_a1_roots` would be a tautology —
+  #     deleting an entry shrinks both sides and the comparison still holds.
+  #     Measured: with only the per-root-contributed check below, dropping
+  #     `.openhands/hooks` from the array left this gate GREEN at 83 files.
+  # (2) Each root must actually have CONTRIBUTED a file, because `find … 2>/dev/null`
+  #     swallows a root that is present in the array but missing on disk.
+  local _a1_required=(
+    ".claude/hooks"
+    ".openhands/hooks"
+    "plugins/soleur/scripts/lib"
+  )
+  local _a1_narrowed="" req present
+  for req in "${_a1_required[@]}"; do
+    present=false
+    for root in "${_a1_roots[@]}"; do
+      [[ "$root" == "$REPO_ROOT/$req" ]] && { present=true; break; }
+    done
+    [[ "$present" == true ]] || _a1_narrowed="${_a1_narrowed} ${req}(dropped-from-roots)"
+  done
+  # Materialised once, and read via herestring below: `printf … | grep -q` under
+  # `set -o pipefail` returns 141 when grep matches early (printf dies on the
+  # closed pipe), and the `!` turns that into "0 files" for a root that in fact
+  # matched on its FIRST entry — the assertion inverts for the healthiest case.
+  _a1_scanned="$(printf '%s\n' "${scanned[@]}")"
+  for root in "${_a1_roots[@]}"; do
+    if [[ ! -d "$root" ]]; then
+      _a1_narrowed="${_a1_narrowed} ${root#"$REPO_ROOT/"}(absent)"
+    elif ! grep -q "^$root/" <<<"$_a1_scanned"; then
+      _a1_narrowed="${_a1_narrowed} ${root#"$REPO_ROOT/"}(0 files)"
+    fi
+  done
+  if [[ -n "$_a1_narrowed" ]]; then
+    bad "A1 scan set lost a root — this gate is scanning less than it claims (ADR-156, #7409)" \
+      "narrowed:$_a1_narrowed" "scanned ${#scanned[@]} file(s)"
+  elif (( ${#offenders[@]} == 0 )); then
+    # The message names the ACTUAL scan set. A green assertion naming a narrower
+    # surface than it ran is the same evidence-vs-claim gap the membership check
+    # above exists to close.
+    # Message rendered FROM the root array, so it can never advertise a root the
+    # walk no longer uses.
+    ok "A1 no eval under$(printf ' %s' "${_a1_roots[@]#"$REPO_ROOT/"}") \
+(${#scanned[@]} files; 2 fd-close lines allow-listed)"
   else
     bad "A1 eval found in ${#offenders[@]} place(s) — hook stdin is untrusted (ADR-156)" "${offenders[@]}"
   fi

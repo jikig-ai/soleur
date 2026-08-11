@@ -172,17 +172,33 @@ Syncs stale on-disk files from git HEAD in a bare repo. Only needed when the rep
 bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh sync-bare-files
 ```
 
-**What it syncs:**
+**What it syncs: EVERY tracked file at HEAD — there is no allowlist.**
 
-- `AGENTS.md`, `CLAUDE.md` (session-start instructions)
-- `plugins/soleur/AGENTS.md`, `plugins/soleur/CLAUDE.md`
-- `plugins/soleur/hooks/*` (plugin hooks: stop-hook, welcome-hook, hooks.json)
-- `.claude/settings.json` (permission rules)
-- `.claude/hooks/*.sh` (PreToolUse hooks)
-- `plugins/soleur/scripts/resolve-git-root.sh`
-- The `worktree-manager.sh` script itself
+The implementation builds a throwaway index from `HEAD` and runs
+`git checkout-index -a -f` against the bare root, so every path git tracks is
+materialized. That pass is **additive** — it never removes anything — so a
+separate prune step afterwards deletes on-disk leftovers for paths that were
+tracked once and are absent from HEAD. The two together are what make the bare
+root equal HEAD exactly. It then re-applies execute bits for the scripts and
+hooks the plugin loader and SessionStart hooks exec.
 
-**Important:** Any file that Claude Code executes at runtime from the bare repo root (via `${CLAUDE_PLUGIN_ROOT}` or direct path) must be added to the sync list in `worktree-manager.sh`. Stale on-disk files cause silent regressions.
+> **Corrected 2026-08-10 (#7409).** This section previously enumerated a
+> seven-entry list (`AGENTS.md`, `plugins/soleur/hooks/*`, `.claude/hooks/*.sh`,
+> `resolve-git-root.sh`, …) and told readers that "any file Claude Code executes
+> at runtime from the bare repo root **must be added to the sync list**". Both
+> halves were wrong: the enumeration described a whitelist the code has not
+> had, and the instruction sent readers to register files in a list that does
+> not exist. Worth stating precisely rather than deleting, because the
+> difference is load-bearing — when #7409 moved the session-state lock/lease
+> library to `plugins/soleur/scripts/lib/`, a genuine whitelist would have left
+> the bare root's repointed `.claude/hooks/*` sources pointing at a file the
+> mirror never copied, and they degrade **silently** (`|| true`). The full
+> mirror is what makes that a non-event.
+
+**Still important:** run `sync-bare-files` after any merge that moves or adds a
+file executed from the bare root. The mirror is complete, but it is not
+automatic — on-disk files at a `core.bare=true` root are never updated by git
+itself, so a stale copy survives until this runs.
 
 ## Workflow Examples
 
@@ -317,7 +333,40 @@ Navigate back to the repository root directory.
 
   **This is now largely a fallback — `worktree-manager.sh` performs both halves itself (#7394, [ADR-173](../../../../knowledge-base/engineering/architecture/decisions/ADR-173-bare-config-polarity-for-linked-worktrees.md)).** `ensure_bare_config` removes the extension on every `create` / `create-for-feature` / `cleanup-merged`, `create` seeds `core.bare = false` into each new worktree's `config.worktree`, and a detection-time self-heal repairs the CURRENT worktree the moment git reports it as bare — so an already-wedged worktree recovers on first use rather than waiting for a session-start gate. The root cause of #7332 was that `ensure_bare_config` was **dead code** on the operator's bare-repo-in-`.git` layout: its guard branched on the gitdir's SHAPE (`.git` is a directory) which is true of that layout too. Reach for the manual repair only if `SOLEUR_GIT_BARE_SELFHEAL … branch=failed` or a `worktree wedge: could not …` line shows the automated path could not write. **Do not gate on `SOLEUR_GIT_BARE_POISON`** — it is emitted on the SUCCESS path too (`branch=clean` fires on every healthy run), so treating its presence as a failure signal sends you into config surgery on a healthy repo. **Correction to the text above:** the per-worktree files are typically **absent**, not 0 bytes — measured on git 2.53.0, `git worktree add` writes no `config.worktree` at all, so test for non-existence rather than for an empty file.
 - When creating worktrees manually (not via the script), always use absolute paths. Relative paths resolve from CWD, not from `GIT_DIR`, creating nested worktrees that are difficult to clean up. The script handles this correctly but manual `git worktree add` commands are susceptible.
-- **A manually-added worktree holds NO LEASE and is reapable by any sibling's `cleanup-merged` — and RECOVERING an existing branch is exactly the case that forces you into the manual path.** `worktree-manager.sh create` runs `git worktree add -b "$branch"`, which fails when the branch already exists, so recovering a branch whose worktree was removed (or whose PR is mid-flight) cannot go through the script — and the lease wiring lives only in the script's `create`. After any manual `git worktree add`, acquire the lease explicitly: `source .claude/hooks/lib/session-state.sh && acquire_lease "<branch>" "<skill>" <minutes>`. Note the default grant is 240 minutes: a long review-and-fix pass outlives it, so re-acquire rather than assuming the initial grant still covers you. Recovery when it is reaped: the commit objects survive unreferenced, so `git branch <name> <sha>` pins them before gc can prune, then re-push. Tell for the whole class — a test run whose failures read `fatal: Unable to read current working directory` or `getcwd: cannot access parent directories` is reporting its own environment being deleted, not defects. **Why:** 2026-08-10 (#7278) — reaped twice in one session, once on lease expiry and once with no lease at all; 2 of 3 full-suite "failures" were the deletion landing mid-run.
+- **A manually-added worktree holds NO LEASE and is reapable by any sibling's `cleanup-merged` — and RECOVERING an existing branch is exactly the case that forces you into the manual path.** `worktree-manager.sh create` runs `git worktree add -b "$branch"`, which fails when the branch already exists, so recovering a branch whose worktree was removed (or whose PR is mid-flight) cannot go through the script — and the lease wiring lives only in the script's `create`. After any manual `git worktree add`, acquire the lease explicitly:
+
+  ```bash
+  # Run this from INSIDE the new worktree. The lease key is the worktree
+  # DIRECTORY name, not the branch: cleanup-merged checks
+  # `is_lease_active "$(basename "$worktree_path")"`, and the acquire side keys on
+  # the same slug (every `/` becomes `-`). Passing a branch name with a slash
+  # writes nothing at all — the validator rejects `/` — and says so only in a
+  # per-PID log file the agent never reads, so the worktree runs unleased and
+  # reapable with no visible signal. `basename "$PWD"` is also exactly what the
+  # matching `release_lease` calls in one-shot and work use.
+  SS_LIB="${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/scripts/lib/session-state.sh"
+  WT_KEY="$(basename "$PWD")"
+  if [[ -r "$SS_LIB" ]]; then
+    source "$SS_LIB" && acquire_lease "$WT_KEY" "<skill>" <minutes>
+    # rc=0 is NOT proof the lease exists: acquire_lease returns 0 and writes
+    # nothing when the layer is disabled. Assert the FILE, and reuse the marker
+    # the script already emits — it is mirrored and paged, so a new name here
+    # would be observable to nobody.
+    if [[ ! -f "$(git rev-parse --git-common-dir)/soleur-session-state/leases/$WT_KEY.lease" ]]; then
+      echo "SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED key=$WT_KEY site=manual reason=file-absent"
+    fi
+  else
+    # NEVER silent (#7409). Unlike release_lease and with_lock — advisory
+    # operations that degrade open quietly — this call IS the acquisition of
+    # the protection itself. There is nothing else to do when the library is
+    # absent, but degrading open without saying so manufactures exactly the
+    # exposure the lease exists to prevent: an unleased worktree that a
+    # sibling `cleanup-merged` is now free to reap.
+    echo "SOLEUR_SESSION_STATE_UNAVAILABLE path=$SS_LIB reason=worktree-UNLEASED-and-reapable"
+  fi
+  ```
+
+  Note the default grant is 240 minutes: a long review-and-fix pass outlives it, so re-acquire rather than assuming the initial grant still covers you. Recovery when it is reaped: the commit objects survive unreferenced, so `git branch <name> <sha>` pins them before gc can prune, then re-push. Tell for the whole class — a test run whose failures read `fatal: Unable to read current working directory` or `getcwd: cannot access parent directories` is reporting its own environment being deleted, not defects. **Why:** 2026-08-10 (#7278) — reaped twice in one session, once on lease expiry and once with no lease at all; 2 of 3 full-suite "failures" were the deletion landing mid-run.
 - When lefthook hangs in a worktree (>60s), kill it (`pkill -f "lefthook run"`), verify checks manually, then commit with `LEFTHOOK=0 git commit`. This is a known lefthook/worktree interaction bug. (ex-`cq-when-lefthook-hangs-in-a-worktree-60s`; also guarded by `.claude/hooks/lib/incidents.sh` detect_bypass)
 - **`pkill -f <shared-script-name>` is NEVER correctly scoped in this repo — it kills the identical process in every sibling worktree.** Parallel worktrees are the documented workflow, so the same [scripts/test-all.sh](../../../../scripts/test-all.sh) (or lefthook, or any shared script) runs under a byte-identical command line in each one; a `-f` pattern match cannot distinguish yours. Kill by **PID** from the process listing, or resolve `readlink /proc/<pid>/cwd` and match the worktree before killing anything. The same `/proc` resolution is the only sound liveness test — a bare `pgrep -f "<script>"` matches its OWN command line, so it always finds ≥1 process and can never report "not running". **The read-only direction of that self-match is the more dangerous one and recurred on #7109: a polling loop whose condition was `! ps -ef | grep "<script>" | grep -v grep` reported `FINISHED` while a 40-minute suite was still 3,000 lines from its terminal marker** — `grep -v grep` does not filter the poller's own `/bin/bash -c` wrapper (it is not `grep`), so the check oscillates between matching itself and matching nothing, and "nothing" reads as done. Resolve liveness by **PID** (`[[ -d /proc/$PID ]]`) plus `readlink /proc/$PID/cwd` to confirm the process is yours, and confirm completion from the runner's own terminal marker (`=== N/M suites passed ===`) — a killed run and a finished run are indistinguishable from the process table. **Why:** #7086 — `pkill -f "bash scripts/test-all.sh"` terminated a parallel session's suite 4,274 lines in (its infra/terraform results had already landed and survived; only the `test-all` rc was lost), and a `pgrep` self-match was twice read as "my run is alive" while the run had been dead for hours. **The cwd filter above is necessary and NOT sufficient, and #5454 paid for the difference:** a scan that resolved `/proc/<pid>/cwd` and killed only pids whose cwd was the current worktree still killed the SCANNING shell (exit 144) — the scanner's own cwd *is* that worktree and its command line matches its own predicate, so filtering by worktree selects it too. Neither `grep -v grep` nor a `[t]est` bracket trick excludes it, because the matching process is the `/bin/bash -c` wrapper, not `grep`. Compute self + ancestry first and skip those pids explicitly: `p=$$; while [ -n "$p" ] && [ "$p" != 1 ]; do ANC="$ANC $p"; p=$(awk '{print $4}' /proc/$p/stat 2>/dev/null); done`, then `case " $ANC " in *" $pid "*) continue ;; esac` inside the kill loop. That form killed both target processes and spared every sibling.
 - Never pass `-c user.email=<fake>` / `-c user.name=<fake>` to `git commit` to bypass author-identity errors — fix the worktree's local git config instead (`worktree-manager.sh create` auto-runs `ensure_worktree_identity`). (ex-`hr-never-fake-git-author`; PR #2815 forced a destructive force-push after 4 commits were authored as `test@test` and blocked CLA; `knowledge-base/project/learnings/2026-04-24-fake-git-author-bare-repo-bot-override.md`)

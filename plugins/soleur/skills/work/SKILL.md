@@ -218,7 +218,14 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    **Phase Exit (release lease).** At the end of the workflow — after `/soleur:ship` returns OR if you exit without shipping — release the lease so a sibling `cleanup-merged` can reap the worktree once it's actually merged:
 
    ```bash
-   bash .claude/hooks/lib/session-state.sh release_lease "$(basename "$PWD")"
+   # Degrade open (#7409): releasing is advisory — an unreleased lease expires
+   # on its own window — so a missing library must not fail the pipeline here.
+   SS_LIB="${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/scripts/lib/session-state.sh"
+   if [[ -r "$SS_LIB" ]]; then
+     bash "$SS_LIB" release_lease "$(basename "$PWD")" || true
+   else
+     echo "SOLEUR_SESSION_STATE_UNAVAILABLE path=$SS_LIB reason=lease-not-released"
+   fi
    ```
 
    The release is a no-op if the lease was already removed by the multi-signal trap (EXIT/INT/TERM/HUP fires on abnormal exit). Stale leases get swept after 24 hours regardless.
