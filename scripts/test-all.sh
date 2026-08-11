@@ -114,8 +114,40 @@ if ! declare -F tc_acquire >/dev/null 2>&1; then
   tc_preamble() { :; }
   tc_epilogue() { :; }
   tc_tmp_entry_count() { printf '0\n'; }
+  tc_used_bytes() { printf '0\n'; }
   tc_acquire() { :; }
 fi
+
+# ADR-133 amendment instrument: bytes held per mount, at RUN boundaries.
+#
+# WHY BYTES. The per-suite probe records `tmp_delta=<ENTRY COUNT>`, but ADR-133's
+# capacity verdict is about BYTES — it explicitly rejected count-based reasoning
+# because 4,294 small entries held 160 MB (4.5%) while three trees held 3.1 GiB
+# (88%). The quantity the advisory lock exists to protect had never been measured
+# by the instrument shipped to measure it.
+#
+# WHY RUN BOUNDARIES AND NOT PER SUITE. `du` is a RECURSIVE walk, unlike the
+# shallow `find -maxdepth 1` the entry-count probe uses. At two edges x ~289
+# suites that is ~578 walks per mount over multi-GiB trees — the same
+# observer-effect confound that got a background sampler rejected during
+# planning. Four walks answer the question ADR-133 actually asks: how many bytes
+# did this run hold on each mount. WHICH suite holds them is the coincident-peak
+# question, and that belongs to the deferred multi-run experiment.
+#
+# TWO DIRECTORIES, NEVER SUMMED. TMPDIR is /var/tmp (disk-backed) and TC_TMPDIR
+# is /tmp (the 4 GiB tmpfs) — deliberately different mounts. A single number
+# spanning both would report health from whichever is roomier, which is
+# indistinguishable from a healthy mount.
+#
+# Gated on TEST_TIMING_LOG, so a default local run pays nothing for it.
+_emit_bytes_probe() {
+  [[ -n "${TEST_TIMING_LOG:-}" ]] || return 0
+  local tmpfs_bytes disk_bytes
+  tmpfs_bytes=$(tc_used_bytes "${TC_TMPDIR:-/tmp}")
+  disk_bytes=$(tc_used_bytes "${TMPDIR:-/var/tmp}")
+  printf '%s\t0\tbytes_tmp=%s\tbytes_tmpdir=%s\n' \
+    "$1" "$tmpfs_bytes" "$disk_bytes" >> "$TEST_TIMING_LOG"
+}
 
 # --- Relevance predicates (ADR-178) ---
 # Sourced at TOP LEVEL, and deliberately NOT defensively, unlike the contention lib above. That
@@ -574,6 +606,12 @@ _TC_RUN_START_ENTRIES=$(tc_tmp_entry_count)
 # timeout it proceeds with a named banner, so it cannot wedge a run. CI and the
 # SOLEUR_DISABLE_SESSION_STATE kill switch are honoured inside tc_acquire.
 tc_acquire "test-all"
+
+# AFTER tc_acquire, deliberately. A run that queued behind a sibling can wait up
+# to TC_LOCK_TIMEOUT (900 s) here, so a reading taken before the wait describes a
+# machine state up to fifteen minutes stale and makes the start/end delta
+# meaningless. Sampled at the moment this run actually begins doing work.
+_emit_bytes_probe "__run_boundary_start__"
 
 # Pre-suite bash/python tests — scripts shard.
 if want_scripts; then
@@ -1129,6 +1167,7 @@ if want_scripts; then
   run_suite ".github/scripts/test/run-all.sh" bash .github/scripts/test/run-all.sh
 fi
 
+_emit_bytes_probe "__run_boundary_end__"
 tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"
 
 # BREAKDOWN FIRST, TERMINAL MARKER LAST. The ordering is load-bearing, not cosmetic.
