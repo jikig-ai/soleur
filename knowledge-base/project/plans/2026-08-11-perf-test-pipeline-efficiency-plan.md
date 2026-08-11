@@ -23,6 +23,16 @@ The six items from the post-mortem are all accounted for, but three of them ship
 and two ship as tracked deferrals. That is the outcome of review, not of effort, and every reduction
 is stated with its evidence below and belongs in the PR body.
 
+**[Deepened 2026-08-11.]** Two round-1 realism passes ran after review. The verify-the-negative pass
+probed all eight of the plan's negative claims and CONFIRMED seven (one line-range citation was off by
+two and is corrected). The implementation-realism pass on Phase D found the anti-rot check as specced
+would have **matched zero lines** — both call sites are indented inside `if want_scripts`, so a
+column-0 array anchor extracts nothing and every check passes vacuously — and found that the linter is
+bash-3.2-compatible by explicit design and ships no companion suite on purpose. Phase D was
+restructured around a declarations-only data file, which removes the parser entirely, and now cites the
+house precedent at `tests/scripts/test-zot-inventory.sh:902-910` per the precedent-diff gate. Details in
+Phase D.
+
 **[Revised 2026-08-11 after 3-agent plan review.]** The first draft was 921 lines proposing 9 new
 files, 3 linters, a memo library and 28 acceptance criteria — a plan longer than the 866-line script
 it modifies. Both the simplification panel and the correctness lens fired on the same scope, which is
@@ -367,9 +377,11 @@ distinguish "286/286 because two were gated" from "286/286 because two were de-r
    `SOLEUR_TEST_FORCE_ALL=1` **or `CI` is set** (same `[[ -n "${CI:-}" ]]` predicate as
    `test-contention.sh:322`). Under CI a decline is *unreachable*, not merely detected — which is why
    no CI assertion is needed and why main-health-monitor cannot red on this (P0-2).
-4. **GREEN — the predicates.** A named bash array above each of the two call sites (`:614`, `:760`),
-   referenced by name on the guarded branch so **no path literal ever appears on a `run_suite` line**
-   (P0-1). Verified against the batteries' own declarations, not invented:
+4. **GREEN — the predicates.** Two named bash arrays, declared in `scripts/lib/test-relevance-paths.sh`
+   (see Phase D for why they live in a data file rather than beside the call sites) and sourced at top
+   level by `test-all.sh`. Each is referenced **by name** on the guarded branch, so **no path literal
+   ever appears on a `run_suite` line** (P0-1). Verified against the batteries' own declarations, not
+   invented:
 
    | Gated suite | Declared predicate paths | Source of truth |
    |---|---|---|
@@ -383,16 +395,69 @@ distinguish "286/286 because two were gated" from "286/286 because two were de-r
    suite.
 5. **Author ADR-178.**
 
-### Phase D — anti-rot (~15 lines in an existing linter)
+### Phase D — anti-rot (~25-30 lines in an existing linter + a ~15-line data file)
 
 Fold into `scripts/lint-orphan-test-suites.sh`, which already reads `test-all.sh`, already has a
-`fails` counter, and already uses the anchor-grep idiom (`:57`, `:101`). No new linter, no manifest
-file, no `--explain` mode.
+`fails` counter, and already uses the anchor-grep idiom (`:57`, `:101`). No new linter, no `--explain`
+mode.
 
-1. **RED.** Arms in the existing suite: a declared path renamed out of the tree FAILs; an array
-   missing its own battery path FAILs; the shipped tree PASSes.
-2. **GREEN.** Extract the two predicate arrays from `test-all.sh`, assert every element resolves in
-   `git ls-files`, and assert each array contains its own battery path.
+**[Revised at deepen-plan.]** The first draft said "~15 lines, statically extract the two arrays from
+`test-all.sh`". That is wrong twice over and the deepen pass measured both:
+
+- **The obvious extraction matches nothing.** Both `run_suite` sites are indented two spaces inside
+  `if want_scripts` (opened at `:319` and `:744`), so a column-0 anchor like `awk '/^NAME=\(/,/^\)/'`
+  extracts **zero lines** — and a zero-length path list passes every check vacuously. That is the exact
+  class this plan exists to close, reproduced inside its own guard.
+- **The linter is bash-3.2-compatible by explicit design** (`:38-39` documents why: macOS still ships
+  3.2, and lefthook runs the gate locally). No `mapfile`, no `readarray`, no `declare -n`.
+
+**Resolution: hoist the arrays into a declarations-only data file** rather than parsing them back out
+of a script. This removes the parser and its vacuous-pass mode by construction.
+
+1. **GREEN — the data file.** `scripts/lib/test-relevance-paths.sh` declares both arrays and nothing
+   else: no `set -e`, no side effects, safe to source from anywhere. `test-all.sh` sources it at top
+   level; the linter sources it directly.
+   **Why not source `test-all.sh` itself:** structurally blocked. The arrays would sit inside
+   `if want_scripts`, so any guard returning "before suites run" never defines them — and sourcing far
+   enough to reach them executes ~40 suites, exports `TMPDIR`/`TC_TMPDIR` into the caller, can `exit`
+   the linter from the bare-repo guard (`:69-74`) or the TEST_GROUP `case` (`:119-128`), and calls
+   `tc_acquire` — taking the 900 s flock the linter is *already running inside*, so it would block on
+   a lock held by its own parent.
+2. **GREEN — the checks.** In `lint-orphan-test-suites.sh`: source the data file, then for each array
+   (a) assert every element resolves via `git -C "$REPO_ROOT" ls-files --error-unmatch` (the linter is
+   invocable from any cwd, so `-C` is load-bearing), and (b) assert the array contains its own battery
+   path.
+3. **GREEN — the fail-closed vacuity guard.** An empty array must FAIL, loudly, naming itself. This is
+   the load-bearing half: without it, a future edit that empties or renames an array leaves every check
+   passing over nothing.
+4. **GREEN — the de-reference anchor.** Assert `test-all.sh` actually *references* each array
+   (`grep -qE '_diff_touches "\$\{REGISTRY_BATTERY_PATHS\[@\]\}"'`), mirroring what `REQUIRED_RUNNERS`
+   (`:85-105`) does for de-registered runners. Without it, an array could be correct, resolvable, and
+   consumed by nothing — the "named but not run" class one level up.
+5. **Mutation-prove inline, not in a companion suite.** `lint-orphan-test-suites.sh:11-13` documents
+   that it deliberately ships no `.test.sh`; new logic is proven by mutation in-place. Prove both
+   directions: delete an array element → non-zero; blank an array → non-zero.
+
+**Precedent (Phase 4.4 precedent-diff gate): this pattern is house style, not novel.**
+`tests/scripts/test-zot-inventory.sh:905-907` and `:939-941` derive key lists from a producer script's
+own arrays, and `:902-904` states the rationale verbatim — *"Derived from the CONSTRUCTION SITE …
+A hand-copied key list has gone green in this repo while the producer silently dropped two keys"* —
+with the fail-closed vacuity guard at `:909-910`. This plan takes the same guarantee by a cheaper
+route: a shared declaration source needs no derivation at all. The vacuity guard carries over
+unchanged, because a shared array can still be emptied.
+
+**Scope note:** `lint-orphan-test-suites.sh:33` iterates `"$REPO_ROOT"/scripts/*.test.sh` only, so its
+pre-existing loop covers `scripts/cf-tunnel-liveness-gate-mutations.test.sh` but not
+`tests/scripts/test-registry-gate-mutation-battery.sh` (different top-level directory *and* a `test-`
+prefix rather than a `.test.sh` suffix — `test-all.sh:609-613` says so explicitly). The array checks
+added here are what cover the second one, which is why they are array-driven rather than glob-driven.
+
+**Deliberately NOT built:** a set-equality check between the arrays and the batteries' own
+declarations. The batteries declare in four incompatible shapes — shell vars, a bare inline literal, an
+unquoted `for` list, and a *transitive* dependency living in a sibling suite's `W7_EXPECTED` — so the
+checker would be a second implementation of the batteries' semantics, written by the same author in the
+same session. That is the exact learning this plan cites as binding on it. Battery self-inclusion plus
+the batteries' own hard-aborts plus unconditional CI cover the window instead.
 
 **Scope note:** `lint-orphan-test-suites.sh:33` iterates `scripts/*.test.sh` only, so its pre-existing
 loop covers `scripts/cf-tunnel-liveness-gate-mutations.test.sh` but not
@@ -419,7 +484,8 @@ same log.
 1. **RED.** Arms in `scripts/test-contention.test.sh` via the existing `TC_DF_CMD` seam (`:58`),
    asserting **per-directory** attribution: a fixture with pressure on `/tmp` and none on `$TMPDIR`
    reports two distinct numbers and never their sum.
-2. **GREEN.** At the existing `TEST_TIMING_LOG`-gated probe hook (`test-all.sh:148-152`, `:177-181`),
+2. **GREEN.** At the existing `TEST_TIMING_LOG`-gated probe hook (`test-all.sh:149-152`, `:178-180`
+   — note `:181` is a *different*, ungated branch keyed on `$status`, so do not extend the gate over it),
    record a per-directory `du -sb` alongside the entry count, emitting `bytes_tmp=` / `bytes_tmpdir=`
    as labelled trailing fields. Boundary-sampled at the same two edges the current probe already uses
    — **no background sampler**. This answers the real objection (bytes vs entries) with no
@@ -477,8 +543,9 @@ problem.
 
 - `scripts/test-all.sh` — `SOLEUR_SUBAGENT` refusal; `skipped` counter + `skip_suite` helper; summary
   line; migrate the infra gate's `else` branch; `_infra_diff_names` → `_diff_names` + `_diff_touches`
-  with the widened untracked arm and the CI/force bypasses; the two predicate arrays; `du -sb` at the
-  existing probe hook; register nothing new beyond what the existing glob already catches.
+  with the widened untracked arm and the CI/force bypasses; source the predicate data file at top
+  level and guard the two call sites on it; `du -sb` at the existing probe hook; register nothing new
+  beyond what the existing glob already catches.
 - `scripts/lib/test-contention.sh` — per-directory bytes helper behind the `TC_DF_CMD` seam.
 - `scripts/test-contention.test.sh` — per-directory attribution arms.
 - `scripts/test-all-infra-coverage-notice.test.sh` — denominator, skip-line shape, negative-control
@@ -495,10 +562,13 @@ problem.
 ## Files to Create
 
 - `plugins/soleur/test/fanout-suite-scope.test.sh`
+- `scripts/lib/test-relevance-paths.sh` — declarations only (two arrays, no `set -e`, no side
+  effects), sourced by both `test-all.sh` and `lint-orphan-test-suites.sh`. Added at deepen-plan; it
+  is what removes the array *parser* and its vacuous-pass failure mode.
 - `knowledge-base/engineering/architecture/decisions/ADR-178-local-gate-declines-are-counted-verdicts.md`
   (provisional ordinal)
 
-**One new test file and one ADR, down from nine new files.** Every path claimed to exist was resolved
+**Two small files and one ADR, down from nine new files.** Every path claimed to exist was resolved
 with `git ls-files` or a direct `Read`; every path claimed to be new returned no match.
 
 ---
@@ -530,9 +600,13 @@ gated suite RUNS. Skipping on an undeterminable diff is a hard failure of this A
 `CI=1` does the same. The CI arm asserts the decline is *unreachable* — the suite executes — not that
 an assertion fired.
 
-**AC5** — Anti-rot, both directions: `bash scripts/lint-orphan-test-suites.sh` exits 0 on the shipped
-tree with `orphan test suites: none`, and its new arms FAIL when (a) a declared predicate path is
-renamed out of the tree, and (b) a predicate array does not contain its own battery path.
+**AC5** — Anti-rot, all four directions: `bash scripts/lint-orphan-test-suites.sh` exits 0 on the
+shipped tree with `orphan test suites: none`, and mutation-proving in place (the file ships no
+companion suite by design, `:11-13`) shows it exits **non-zero** when (a) a declared predicate path is
+renamed out of the tree, (b) a predicate array does not contain its own battery path, (c) a predicate
+array is **emptied** — the fail-closed vacuity guard, without which every other check passes over
+nothing, and (d) `test-all.sh` stops **referencing** an array, mirroring the `REQUIRED_RUNNERS`
+de-registration check at `:85-105`.
 
 **AC6** — Predicate completeness against the source of truth: the cf-tunnel array contains all five
 workflows in `W7_EXPECTED` at `scripts/check-cloudflare-token-drift.test.sh:1791` plus
@@ -760,6 +834,19 @@ to be doing** — the rule this plan adds, applied to itself.
   the problem. Do not read `tmp_delta` as evidence about capacity.
 - **`TMPDIR` and `TC_TMPDIR` are deliberately different mounts** (`test-all.sh:16` vs `:30`). Any probe
   resolving them to one value re-creates the fail-open the comment at `:18-29` was written to prevent.
+- **A column-0 anchor cannot find anything inside `test-all.sh`'s `if want_*` blocks.** Every suite
+  registration is indented two spaces, so `awk '/^NAME=\(/,/^\)/'` and friends extract zero lines and
+  the check that consumes them passes over nothing. Anchor on `^[[:space:]]*` — or, as this plan does,
+  put the data in a file so nothing has to be parsed. Any static extraction from a script in this repo
+  needs the fail-closed vacuity guard `tests/scripts/test-zot-inventory.sh:909-910` demonstrates.
+- **`scripts/lint-orphan-test-suites.sh` is bash-3.2-compatible on purpose and ships no companion
+  suite on purpose** (`:38-39`, `:11-13`). Adding `mapfile` or a `.test.sh` beside it works locally on
+  Linux and breaks the operator's macOS lefthook run, or contradicts the file's stated design. Prove
+  new logic by in-place mutation.
+- **Do not source `scripts/test-all.sh` from a linter.** It `export`s `TMPDIR`/`TC_TMPDIR` into the
+  caller, can `exit` the caller from its bare-repo guard (`:69-74`) or its TEST_GROUP `case`
+  (`:119-128`), and calls `tc_acquire` — which would block for up to 900 s on the flock the linter is
+  already running inside, held by its own parent.
 - **`_site/` is untracked and is a producer/consumer pair between two suites**
   (`validate-blog-links.sh:7-12` reads it; `plugins/soleur/test/seo-aeo-drift-guard.test.ts:8-10,48-51`
   builds it). Any future caching or skip mechanism keyed on tracked content alone will serve a stale

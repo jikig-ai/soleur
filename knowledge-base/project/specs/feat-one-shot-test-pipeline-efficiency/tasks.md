@@ -55,10 +55,11 @@ reporting exists, and no phase makes a decision before its instrument exists.
 - [ ] **C.4** Make `_diff_touches` return true unconditionally when `SOLEUR_TEST_FORCE_ALL=1` **or**
       `CI` is set (same `[[ -n "${CI:-}" ]]` predicate as `test-contention.sh:322`). A decline must be
       *unreachable* under CI, not detected — no CI assertion.
-- [ ] **C.5** Declare the registry predicate as a named bash array above `test-all.sh:614`, from the
-      battery's own declarations (`:58-59`, `:60-61`, `:70-72`, `:73-76`) **plus the battery file
-      itself**.
-- [ ] **C.6** Declare the cf-tunnel predicate as a named array above `:760`: `SUITE_REL`/`BRIDGE_REL`/
+- [ ] **C.5** Create `scripts/lib/test-relevance-paths.sh` (declarations only — no `set -e`, no side
+      effects) and source it at **top level** of `test-all.sh`. Declare the registry predicate array
+      from the battery's own declarations (`:58-59`, `:60-61`, `:70-72`, `:73-76`) **plus the battery
+      file itself**.
+- [ ] **C.6** In the same data file, declare the cf-tunnel predicate array: `SUITE_REL`/`BRIDGE_REL`/
       `APPLY_REL` (`:37-39`), `INVENTORY_REL` (`:64`), `scheduled-terraform-drift.yml` (`:227`/`:260`),
       **all five `W7_EXPECTED` workflows** from `check-cloudflare-token-drift.test.sh:1791` including
       `git-data-cutover.yml` (mutated at `:200-205`), **plus the battery file itself**.
@@ -69,17 +70,34 @@ reporting exists, and no phase makes a decision before its instrument exists.
       `origin/*` refs before writing.
 - [ ] **C.9** Run the coverage-notice suite alone. Green.
 
-## Phase D — anti-rot (~15 lines in an existing linter)
+## Phase D — anti-rot (~25-30 lines in an existing linter)
 
-- [ ] **D.1** Add arms to the `lint-orphan-test-suites` coverage (RED): a declared path renamed out of
-      the tree FAILs; an array missing its own battery path FAILs; the shipped tree PASSes.
-- [ ] **D.2** Extend `scripts/lint-orphan-test-suites.sh` (GREEN): extract both predicate arrays from
-      `test-all.sh`, assert every element resolves in `git ls-files`, and assert each array contains
-      its own battery path. Fold into the existing `fails` counter.
-- [ ] **D.3** Do **not** build a set-equality check against the batteries' own declarations — they
+Read plan Phase D before starting: the naive "extract the arrays from `test-all.sh`" approach was
+measured to match **zero lines** (both call sites are indented inside `if want_scripts`), which passes
+vacuously. The data file from C.5 is what removes the parser.
+
+- [ ] **D.1** Constraints to honour, all documented in the file itself:
+  - [ ] D.1.1 **bash 3.2 compatible** (`:38-39` — macOS, and lefthook runs this locally). No
+        `mapfile`, no `readarray`, no `declare -n`.
+  - [ ] D.1.2 **No companion `.test.sh`** (`:11-13`, deliberate). Mutation-prove new logic in place.
+  - [ ] D.1.3 Use `git -C "$REPO_ROOT" ls-files` — the linter is invocable from any cwd.
+- [ ] **D.2** Source `scripts/lib/test-relevance-paths.sh` in `scripts/lint-orphan-test-suites.sh` and,
+      for each array, assert every element resolves via `git ls-files --error-unmatch`. Fold into the
+      existing `fails` counter.
+- [ ] **D.3** Assert each array contains its own battery path (self-inclusion).
+- [ ] **D.4** Add the **fail-closed vacuity guard**: an empty array FAILs, naming itself. Load-bearing
+      — without it every other check passes over nothing. Precedent:
+      `tests/scripts/test-zot-inventory.sh:909-910`.
+- [ ] **D.5** Add the **de-reference anchor**: assert `test-all.sh` actually references each array,
+      mirroring `REQUIRED_RUNNERS` at `:85-105`. An array nothing consumes is the "named but not run"
+      class one level up.
+- [ ] **D.6** Mutation-prove all four directions in place: rename a declared path → non-zero; drop the
+      self-inclusion entry → non-zero; empty an array → non-zero; remove an array reference from
+      `test-all.sh` → non-zero.
+- [ ] **D.7** Do **not** build a set-equality check against the batteries' own declarations — they
       declare in four incompatible shapes including a transitive `W7_EXPECTED` in a sibling suite (see
       plan Phase D "Deliberately NOT built").
-- [ ] **D.4** Run `bash scripts/lint-orphan-test-suites.sh`. Expect `orphan test suites: none`, exit 0.
+- [ ] **D.8** Run `bash scripts/lint-orphan-test-suites.sh`. Expect `orphan test suites: none`, exit 0.
 
 ## Phase E — the sanctioned full-gate run (ONCE)
 
