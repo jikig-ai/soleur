@@ -199,6 +199,12 @@ while IFS= read -r msg; do
   jq -cn --arg m "$msg" --arg c "s=aaa;i=$n;b=bbb" \
     '{__CURSOR:$c, CONTAINER_NAME:"zot", _TRANSPORT:"journal", MESSAGE:$m}'
 done < "$STUB_JOURNAL"
+# Model --follow faithfully: real journalctl BLOCKS after draining the backlog rather than
+# exiting. Without this the SIGKILL case below could not exist — the shipper would exit cleanly
+# on its own and the test would prove clean-exit durability while claiming SIGKILL durability.
+for a in "$@"; do
+  if [[ "$a" == "--follow" ]]; then sleep 300; fi
+done
 exit 0
 EOS
 chmod +x "$BIN/journalctl"
@@ -391,6 +397,52 @@ assert "T10 an invalidated cursor emits reason=cursor_invalidated rather than ga
   "grep -q 'reason=cursor_invalidated' '$STUB_POSTS'"
 assert "T10 after cursor invalidation the shipper still ships (it restarted from the tail)" \
   "grep -q 'SOLEUR_ZOT_LOG shipper=' '$STUB_POSTS'"
+
+# --- T10b: cursor durability across SIGKILL, not merely a clean stop --------------------
+# THE WHOLE REASON journalctl's own --cursor-file was rejected. Measured on systemd 259: that file
+# is written at clean exit only — SIGTERM writes it, SIGKILL leaves it stale — because the flag is
+# built for sequential one-shot invocations, not a Restart=always daemon. On an OOM-kill (and this
+# host has an OOM restart-loop history) the shipper would resume from the last CLEAN-EXIT cursor and
+# re-ship everything since, unbounded: the runaway-volume mode created by the mechanism meant to
+# prevent gaps. Self-persisting __CURSOR after each successful POST is what makes SIGKILL survivable,
+# and a clean-stop test cannot tell the two designs apart — so this case is the discriminator.
+KSTATE="$TMP/kstate"; mkdir -p "$KSTATE"
+KPOSTS="$TMP/posts.kill"; KCURL="$TMP/curlargs.kill"; KJC="$TMP/jcalls.kill"
+: > "$KPOSTS"; : > "$KCURL"; : > "$KJC"
+env PATH="$BIN:/usr/bin:/bin" \
+    STUB_JOURNAL="$J1" STUB_POSTS="$KPOSTS" STUB_CURLARGS="$KCURL" STUB_JCALLS="$KJC" \
+    BETTERSTACK_LOGS_TOKEN="synthetic-ingest-token-not-a-real-secret" \
+    ZOT_LOG_SHIPPER_STATE_DIR="$KSTATE" ZOT_LOG_SHIPPER_ONESHOT=0 \
+    bash "$SHIPPER" >/dev/null 2>&1 &
+SHIP_PID=$!
+# Wait for the cursor to land (i.e. a POST succeeded), bounded so a hang cannot wedge CI.
+for _ in $(seq 1 60); do [[ -s "$KSTATE/cursor" ]] && break; sleep 0.25; done
+CURSOR_BEFORE="$(cat "$KSTATE/cursor" 2>/dev/null || true)"
+assert "T10b the shipper was still ALIVE when killed (a clean exit would void this case)" \
+  "kill -0 '$SHIP_PID' 2>/dev/null"
+assert "T10b it ran with --follow (so it was blocked on the journal, as in production)" \
+  "grep -q 'notail=1' '$KJC'"
+kill -KILL "$SHIP_PID" 2>/dev/null
+wait "$SHIP_PID" 2>/dev/null
+CURSOR_AFTER="$(cat "$KSTATE/cursor" 2>/dev/null || true)"
+assert "T10b a cursor was persisted BEFORE the kill (written per successful POST, not at exit)" \
+  "[[ -n '$CURSOR_BEFORE' ]]"
+assert "T10b the cursor SURVIVED SIGKILL intact (--cursor-file would be stale or absent here)" \
+  "[[ -n '$CURSOR_AFTER' && '$CURSOR_AFTER' == '$CURSOR_BEFORE' ]]"
+assert "T10b the surviving cursor is the DELIVERED entry's cursor, not a placeholder" \
+  "[[ '$CURSOR_AFTER' == 's=aaa;i=1;b=bbb' ]]"
+# And the payoff: resuming from that cursor must not replay the already-delivered row.
+KPOSTS2="$TMP/posts.kill2"; KJC2="$TMP/jcalls.kill2"; : > "$KPOSTS2"; : > "$KJC2"
+env PATH="$BIN:/usr/bin:/bin" \
+    STUB_JOURNAL="$J1" STUB_POSTS="$KPOSTS2" STUB_CURLARGS="$TMP/curlargs.kill2" STUB_JCALLS="$KJC2" \
+    STUB_SKIP_UNTIL=1 \
+    BETTERSTACK_LOGS_TOKEN="synthetic-ingest-token-not-a-real-secret" \
+    ZOT_LOG_SHIPPER_STATE_DIR="$KSTATE" ZOT_LOG_SHIPPER_ONESHOT=1 \
+    timeout 25 bash "$SHIPPER" >/dev/null 2>&1
+assert "T10b post-SIGKILL resume passed the surviving cursor as --after-cursor" \
+  "grep -q 'after=s=aaa;i=1' '$KJC2'"
+assert "T10b post-SIGKILL resume replayed NOTHING (the runaway-volume mode is closed)" \
+  "[[ \$(grep -c . '$KPOSTS2') -eq 0 ]]"
 
 # --- T11: POST failure telemetry rides an INDEPENDENT path ------------------------------
 # A counter surfaced on the channel it monitors is unobservable exactly when it is non-zero: when
