@@ -379,6 +379,12 @@ if want_scripts; then
   # in a plan reds CI, not just the fixtures.
   run_suite "scripts/lint-guard-contract" bash scripts/lint-guard-contract.test.sh
   run_suite "scripts/lint-guard-contract-live" python3 scripts/lint-guard-contract.py
+  # Window-derived closure assertions must DECLARE their assembly (per helper).
+  # Enforces a declaration, not semantic completeness — no static checker can
+  # prove a regex window equals its assembly. TS-1..TS-11 + MB-1..MB-2.
+  run_suite "scripts/lint-window-closure-assertion" bash scripts/lint-window-closure-assertion.test.sh
+  run_suite "scripts/lint-window-closure-assertion-live" python3 scripts/lint-window-closure-assertion.py \
+    --allowlist scripts/lint-window-closure-assertion.allowlist.txt
   run_suite "scripts/extract-api-spend" bash scripts/extract-api-spend.test.sh
   run_suite "scripts/domain-model-drift" bash scripts/domain-model-drift.test.sh
   # #6602: exit-code harness for the expenses verify_by expiry gate. Registered
