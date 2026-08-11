@@ -133,6 +133,7 @@ matched_allow_res() {
 }
 
 violations=""
+exempted=0
 while IFS=$'\t' read -r status source target; do
   [[ -z "${target:-}" ]] && continue
 
@@ -162,6 +163,12 @@ while IFS=$'\t' read -r status source target; do
     grep -qxF -- "${dre}" <<<"${src_res}" || { subset=0; break; }     # MUT:scopesubset
   done <<<"${dst_res}"                                                # MUT:scopesubset
   if [[ "${subset}" -eq 1 ]]; then                                    # MUT:scopesubset
+    # Exemptions are AUDITABLE. Both override paths emit a ::notice::; this
+    # third, now-default path must too, or a post-incident review cannot recover
+    # which renames were exempted and an all-exempt PR is indistinguishable from
+    # one with no renames at all.
+    echo "::notice::rename-guard: exempted ${source} -> ${target} (source already carries the destination's exemption scope)"
+    exempted=$((exempted + 1))                                        # MUT:scopesubset
     continue                                                          # MUT:scopesubset
   fi                                                                  # MUT:scopesubset
 
@@ -170,7 +177,11 @@ while IFS=$'\t' read -r status source target; do
 done <<<"${renames}"
 
 if [[ -z "${violations}" ]]; then
-  echo "rename-guard: OK — no renames target allowlisted paths."
+  if [[ "${exempted}" -gt 0 ]]; then
+    echo "rename-guard: OK — ${exempted} rename(s) exempted (source already carried the destination's exemption scope); no laundering renames."
+  else
+    echo "rename-guard: OK — no renames target allowlisted paths."
+  fi
   exit 0
 fi
 
