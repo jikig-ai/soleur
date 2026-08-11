@@ -160,6 +160,8 @@ else
     # FAIL-CLOSED VACUITY GUARD. This is the load-bearing half. Without it, emptying an array
     # makes every check below pass over nothing and this linter reports success while both
     # batteries decline on every diff forever.
+    # shellcheck disable=SC2154  # rel_elems is assigned by the eval above; bash 3.2 has no
+    #   declare -n, so the array must be expanded by name and shellcheck cannot follow it.
     if [[ "${#rel_elems[@]}" -eq 0 ]]; then
       echo "ERROR: relevance predicate array ${arr_name} is EMPTY -- every check over it would pass vacuously while its suite declined on every diff." >&2
       fails=$((fails + 1))

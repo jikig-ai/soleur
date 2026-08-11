@@ -1,4 +1,8 @@
 # shellcheck shell=bash
+# shellcheck disable=SC2034  # every array here is consumed by files that SOURCE this one
+#   (scripts/test-all.sh, scripts/lint-orphan-test-suites.sh); shellcheck analyses one file
+#   at a time and cannot see a cross-file consumer. The de-reference anchor in the linter is
+#   what actually proves each array is consumed -- see ADR-178.
 # Relevance predicates for the two heavy mutation batteries (ADR-178).
 #
 # DECLARATIONS ONLY. No `set -e`, no `exit`, no side effects, nothing executed. Two very

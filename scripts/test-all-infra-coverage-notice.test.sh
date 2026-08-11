@@ -203,7 +203,7 @@ INFRA_LABEL='apps/web-platform/infra/run-registered-suites.sh'
 # and the arm would silently measure nothing. `all` is the group where the diff verdict is
 # actually the deciding variable, which is what makes these two arms a controlled pair.
 run_arm all 1 0 || true
-RUN_OUT="$ARM_OUT"; RUN_TIMING="$ARM_TIMING"
+RUN_OUT="$ARM_OUT"
 if parse_summary "$RUN_OUT"; then
   RUN_TOTAL="$PARSED_TOTAL"; RUN_SKIP="$PARSED_SKIP"
   pass "the summary carries all four counts on a run where nothing was gated"
