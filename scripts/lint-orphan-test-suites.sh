@@ -104,6 +104,101 @@ for r in "${REQUIRED_RUNNERS[@]}"; do
   fi
 done
 
+# --- Relevance-predicate anti-rot (ADR-178) --------------------------------------------
+# The two checks above answer "is this suite registered?". This answers the question ADR-178
+# created: "is the predicate that decides whether a REGISTERED suite actually executes still
+# pointing at real files?"
+#
+# THE FAILURE THIS CATCHES. A declared path is renamed. The predicate stops matching, the suite
+# is declined locally forever, and no later edit re-arms it — because the edit that broke the
+# predicate is the edit that would have fixed it. Nothing else in the tree notices: the suite is
+# still registered, still passes when invoked by hand, still gates in CI. Locally it has simply
+# stopped running, behind a summary that now says "1 skipped" and is read as intentional.
+#
+# WHY THE ARRAYS LIVE IN A DATA FILE. Parsing them back out of test-all.sh was measured to match
+# ZERO lines — both call sites are indented two spaces inside `if want_scripts`, so a column-0
+# anchor extracts nothing and every check below would pass over an empty list. Sourcing
+# test-all.sh instead is worse: it exports TMPDIR/TC_TMPDIR into this process, can `exit` this
+# script from its bare-repo guard or its TEST_GROUP `case`, and calls tc_acquire — which would
+# block for up to 900 s on the advisory flock this linter is ALREADY running inside, held by its
+# own parent. A shared declaration source needs no derivation at all.
+#
+# Precedent: tests/scripts/test-zot-inventory.sh derives key lists from the producer's own arrays
+# and carries the same fail-closed vacuity guard, for the same stated reason — a hand-copied list
+# has gone green in this repo while the producer silently dropped two keys.
+REL_LIB="$REPO_ROOT/scripts/lib/test-relevance-paths.sh"
+if [[ ! -f "$REL_LIB" ]]; then
+  echo "ERROR: $REL_LIB is missing -- test-all.sh sources it fail-closed, so the local gate cannot run at all." >&2
+  fails=$((fails + 1))
+else
+  # shellcheck source=scripts/lib/test-relevance-paths.sh
+  source "$REL_LIB"
+
+  # array name | the battery file that array gates. bash 3.2 has no associative arrays and no
+  # `declare -n` (macOS ships 3.2 and lefthook runs this locally), so the mapping is a
+  # pipe-delimited list and the arrays are expanded by name via eval.
+  RELEVANCE_ARRAYS=(
+    "REGISTRY_BATTERY_PATHS|tests/scripts/test-registry-gate-mutation-battery.sh"
+    "CF_TUNNEL_BATTERY_PATHS|scripts/cf-tunnel-liveness-gate-mutations.test.sh"
+  )
+
+  for entry in "${RELEVANCE_ARRAYS[@]}"; do
+    arr_name="${entry%%|*}"
+    battery="${entry#*|}"
+
+    # `declare -p` rather than `${#arr[@]}`: on bash 3.2 an UNSET array under `set -u` aborts the
+    # script instead of reporting, which would turn a renamed array into a crash with no message.
+    if ! declare -p "$arr_name" >/dev/null 2>&1; then
+      echo "ERROR: relevance predicate array ${arr_name} is not declared in ${REL_LIB} -- test-all.sh references it by name, so the gated suite would abort or decline." >&2
+      fails=$((fails + 1))
+      continue
+    fi
+
+    # `${a[@]+"${a[@]}"}` so an EMPTY array does not trip `set -u` on bash < 4.4.
+    eval "rel_elems=( \${${arr_name}[@]+\"\${${arr_name}[@]}\"} )"
+
+    # FAIL-CLOSED VACUITY GUARD. This is the load-bearing half. Without it, emptying an array
+    # makes every check below pass over nothing and this linter reports success while both
+    # batteries decline on every diff forever.
+    if [[ "${#rel_elems[@]}" -eq 0 ]]; then
+      echo "ERROR: relevance predicate array ${arr_name} is EMPTY -- every check over it would pass vacuously while its suite declined on every diff." >&2
+      fails=$((fails + 1))
+      continue
+    fi
+
+    # Each declared path must still exist in the tree. `git -C` because this linter is invocable
+    # from any cwd (lefthook runs it from the repo root; a developer may not).
+    for p in "${rel_elems[@]}"; do
+      if ! git -C "$REPO_ROOT" ls-files --error-unmatch -- "$p" >/dev/null 2>&1; then
+        echo "ERROR: ${arr_name} declares '${p}', which is not a tracked file -- the predicate can never match it, so its suite is declined locally forever." >&2
+        fails=$((fails + 1))
+      fi
+    done
+
+    # SELF-INCLUSION. The one element that makes new-target drift self-correcting: a commit that
+    # teaches a battery to mutate something new necessarily edits the battery, so it necessarily
+    # matches the predicate and necessarily runs the suite with the stale list.
+    self_ok=""
+    for p in "${rel_elems[@]}"; do
+      [[ "$p" == "$battery" ]] && self_ok=1
+    done
+    if [[ -z "$self_ok" ]]; then
+      echo "ERROR: ${arr_name} does not contain its own battery '${battery}' -- without it, a commit adding a mutation target does not re-arm the predicate and the new target is never exercised locally." >&2
+      fails=$((fails + 1))
+    fi
+
+    # DE-REFERENCE ANCHOR. Mirrors what REQUIRED_RUNNERS does for de-registered runners, one
+    # level up: an array can be correct, fully resolvable, and consumed by NOTHING. Anchored on
+    # the call shape, never the bare name -- the name also appears in this script and in
+    # test-all.sh's comments, either of which would satisfy a bare-token grep.
+    ref_re='_diff_touches "\$\{'"$arr_name"'\[@\]\}"'
+    if ! grep -qE "$ref_re" "$RUNNER"; then
+      echo "ERROR: test-all.sh no longer references \${${arr_name}[@]} in a _diff_touches call -- the predicate is declared but consumes nothing, so its suite is ungated or unreachable." >&2
+      fails=$((fails + 1))
+    fi
+  done
+fi
+
 if (( fails > 0 )); then
   echo "orphan test suites: $fails" >&2
   exit 1
