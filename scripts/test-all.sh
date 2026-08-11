@@ -502,6 +502,24 @@ if want_scripts; then
   # the probe would have closed the issue on the evidence of its own recurrence. The suite pins
   # the action-vocabulary split and the freshness guard that a PASS now requires.
   run_suite "scripts/infra-config-activation-7220" bash scripts/followthroughs/infra-config-activation-7220.test.sh
+  # Post-recut registry fill rate (#7341). Same failure family as the probe directly above, which
+  # is why it is registered next to it: five separate fail-open defects, every one of which
+  # produced a GREEN verdict. Two are worth pinning here. A 72h window straddling the recut fitted
+  # one line through the old 100%-full volume and the new empty one, reporting a WIPE as a trend
+  # (`PASS slope=-58.48pp/day`). And `boot_id=([0-9a-f-]+)` matched only a PREFIX of the token, so
+  # two distinct boots compared equal and the scoping the whole check rests on was silently off.
+  # Registration is explicit in this file, so an unregistered harness runs only when someone
+  # invokes it by hand — which for a probe that auto-closes a tracker means the anti-vacuity floor
+  # is decoration.
+  run_suite "scripts/zot-fill-rate-7341" bash scripts/followthroughs/zot-fill-rate-7341.test.sh
+  # CPX22 invoice reconciliation (#7437). An operator-confirmed probe reads a production ledger
+  # verdict out of free text a human typed, so the suite pins the two properties that decide
+  # whether it can be trusted: the verdict is anchored at line start (an unanchored grep closes
+  # the issue on a comment ASKING about it), and FAIL is evaluated before PASS (checking PASS
+  # first let a retraction lose to the string it was retracting — the harness failed on the
+  # original order). It also pins the accept-shape against the peers' `$`-anchored form, which
+  # would reject the figure this issue requires the operator to state.
+  run_suite "scripts/cpx22-invoice-reconcile-7431" bash scripts/followthroughs/cpx22-invoice-reconcile-7431.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.

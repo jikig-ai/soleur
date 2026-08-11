@@ -126,6 +126,26 @@ For every issue, blocker, dependency, or prior-art artifact the feature descript
 
 Emit a one-paragraph **Premise Validation** note (what was checked, what held, what was stale) into the research-insights scratch so Phase 1.7 and the plan's "Research Reconciliation" section can carry it forward. If nothing is cited by reference, state "no external premises to validate" and proceed.
 
+### 0.6b. Mechanism Minimality Gate (Always)
+
+Runs after premise validation and before the Phase 1 fan-out, for the same reason Phase 0.7 sits there: a mechanism must be cut **before** anything expensive researches it. Premise validation (0.6) asks whether the plan's cited facts still hold; this asks whether the plan's proposed machinery is needed at all.
+
+**1. Restate the ask as discrete properties — the Property List.** An issue routinely proposes a *mechanism* rather than a property — #7418 asked for an HTML-comment in-progress marker, while the properties underneath were "research survives a stall" and "a consumer can distinguish a half-written plan from a finished one". Write each property as one sentence naming an observable outcome. This restatement is what makes step 2 possible at all: two mechanisms cannot be compared until it is clear what they are both for.
+
+**2. For every mechanism the FEATURE DESCRIPTION or issue proposes, name (a) the property it buys, and (b) whether a mechanism already on `origin/main` buys that property.** Scope this to the mechanisms named in the ask — the plan file does not exist yet and `## Files to Edit` is not written until Step 2, so do not guess at mechanisms the plan has not proposed (the discipline Phase 1.7.5 states for its own file list). Answer (b) by grepping, per `hr-verify-repo-capability-claim-before-assert`. A repo mechanism that already covers a property is the cheapest possible implementation of it. **Grep the AUTHORITY, and say which file you grepped:** a negative result against a *consumer* is indistinguishable from a real gap but carries the authority of a command with an exit code. If the ask itself asserts "the repo does not have X" — briefs written by the session that lived an incident routinely do — that assertion is a claim to verify here, not a premise to build on.
+
+**3. Cut before researching.** Any mechanism that buys no property in the list, or buys one an existing mechanism already covers, is removed here — not researched, not designed, not reviewed. Record each cut in one line (mechanism → property → what already covers it) as the **Cut List**. Emit both lists into the research-insights scratch, exactly as Phase 0.6 emits its Premise Validation note; Phase 1.7 persists them into `## Research Insights`, which is where `plan-review` reads them. A mechanism the ask did not name but the plan later invents is caught by Step 2's re-read of this list, not here.
+
+**Why:** #7418 / ADR-176 — the plan delivered a five-value cursor vocabulary, two decision tables, a resume cap with a strict-advance rule, a bounded-deletion rule, and a branch selector with a tiebreak. The second property was already free: `## Acceptance Criteria` appears in all three detail-level templates, is written last, and `soleur:one-shot` was already asserting on it. The plan never compared its new mechanism against the one already in the codebase; a twelve-agent review then found twelve blocking defects behind a 285/285 green suite, and **nine of them dissolved with the machinery** when the redesign landed. See `knowledge-base/project/learnings/2026-08-10-i-fixed-the-guard-twice-and-my-test-could-not-see-either-fix.md`.
+
+### 0.6c. Value-Proposition Measurement (Conditional)
+
+Fires when a plan's justification is a **cost or performance saving** ("saves an expensive fan-out", "avoids re-running X", "cuts N minutes"). Quantify the saving at plan time and **name the command that produced the number** — the same shape as Phase 1.8's budget check, which records a measured baseline rather than an asserted one.
+
+Measure the thing actually claimed: if the case is "protects an expensive block", identify *which* block is expensive before designing the protection. If the saving cannot be measured at plan time, say so explicitly and record what would measure it — an unquantified saving is a hypothesis, and it must not be the sole justification for a mechanism that survives 0.6b.
+
+**Why:** #7418 / ADR-176 — the plan's stated case was "save an expensive research fan-out", and which fan-out was expensive went unmeasured until *review*, where `performance-oracle` established that the checkpoint boundaries subdivide neither expensive block: all five agents under `plugins/soleur/agents/engineering/research/` are pinned cheap (`grep -l '^model: haiku' plugins/soleur/agents/engineering/research/*.md` returns 5), while the un-pinned eleven-agent Phase 2.5 domain fan-out — the real cost — was unprotected either way. The answer was one grep of agent frontmatter, three phases earlier.
+
 ### 0.7. Skeleton Checkpoint (Always)
 
 Phase 1 dispatches the research fan-out — the most expensive stretch of this skill. Write the plan
@@ -317,8 +337,11 @@ After all research steps complete, consolidate findings:
 **Persist the research to the plan file now — this is the write that makes the Phase 0.7 checkpoint
 pay.** Write a `## Research Insights` section into the plan holding the consolidated findings above:
 the relevant file paths, the applicable institutional learnings, any external documentation and best
-practices, the related issues and PRs, the CLAUDE.md conventions, and the **Premise Validation** note
-carried forward from Phase 0.6.
+practices, the related issues and PRs, the CLAUDE.md conventions, the **Premise Validation** note
+carried forward from Phase 0.6, and the **Property List** plus **Cut List** carried forward from
+Phase 0.6b. The property list is what `plan-review` reads to ask "which requirement does this
+mechanism satisfy?", so it must reach the file — a consumer pointed at an artifact no producer writes
+will silently skip the check.
 
 Everything above this line was bought with the fan-out. A checkpoint that only reserved a filename
 would still lose all of it to a stall here. `deepen-plan` later enriches this section; `plan` is what
