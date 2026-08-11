@@ -500,7 +500,7 @@ else
   fail "no expiry warning past the target (rc=$rc) -- the freeze reads as managed forever"
 fi
 out=$(cd "$d" && SOLEUR_LEGAL_DRIFT_TODAY=2026-01-01 bash ./scripts/gate.sh --base main 2>&1) && rc=0 || rc=$?
-if grep -qE 'passed its .* remediation target' <<<"$out"; then
+if grep -qE 'passed its .* remediation target' <<<"$out" && grep -qF '#7465' <<<"$out"; then
   fail "the expiry warning fires before the target date"
 else
   pass "before the target date the expiry warning is silent"

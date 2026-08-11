@@ -62,17 +62,17 @@ Living status document for vendor DPAs, legal documents, and compliance action i
 |----------|----------|---------|--------------|--------|
 | Terms & Conditions | `docs/legal/terms-and-conditions.md` | 2.5.0 | 2026-08-11 | Active |
 | Privacy Policy | `docs/legal/privacy-policy.md` | — | 2026-08-09 | Active |
-| Article 30 Register (RoPA) | `knowledge-base/legal/article-30-register.md` | — | 2026-07-31 | Draft (counsel review pending) |
+| Article 30 Register (RoPA) | `knowledge-base/legal/article-30-register.md` | 0.1.0-draft | 2026-07-31 | Draft (counsel review pending) |
 | Cookie Policy | `docs/legal/cookie-policy.md` | — | 2026-03-29 | Active |
 | GDPR Policy | `docs/legal/gdpr-policy.md` | — | 2026-08-09 | Active |
-| Acceptable Use Policy | `docs/legal/acceptable-use-policy.md` | — | 2026-08-09 | Active |
+| Acceptable Use Policy | `docs/legal/acceptable-use-policy.md` | — | 2026-08-11 | Active |
 | Data Protection Disclosure | `docs/legal/data-protection-disclosure.md` | — | 2026-08-09 | Active |
 | LinkedIn Page LIA | `knowledge-base/legal/legitimate-interest-assessments/2026-05-19-linkedin-org-page-lia.md` | — | 2026-05-19 | Draft (counsel review pending) |
 | Operator Inbox Triage LIA | `knowledge-base/legal/legitimate-interest-assessments/2026-06-11-operator-inbox-triage-lia.md` | — | 2026-06-11 | Draft (counsel review pending) |
 | Statutory Response Catalog | `knowledge-base/legal/statutory-response-catalog.md` | — | 2026-06-11 | Draft (counsel review pending) |
 | Claude-eval Fleet + CI LIA | `knowledge-base/legal/legitimate-interest-assessments/2026-07-31-claude-eval-fleet-and-ci-lia.md` | — | 2026-07-31 | Draft (counsel review pending) |
 | Claude-eval Fleet + CI DPIA Screening | `knowledge-base/legal/audits/2026-07-31-dpia-screening-claude-eval-fleet-and-ci.md` | — | 2026-07-31 | Draft (counsel review pending) |
-| Disclaimer | `docs/legal/disclaimer.md` | — | 2026-08-09 | Active |
+| Disclaimer | `docs/legal/disclaimer.md` | — | 2026-08-11 | Active |
 | Individual CLA | `docs/legal/individual-cla.md` | 1.0 | 2026-02-26 | Active |
 | Corporate CLA | `docs/legal/corporate-cla.md` | 1.0 | 2026-02-26 | Active |
 

@@ -653,3 +653,33 @@ because every gate measures *agreement between two surfaces* and none measures *
 text is true*. Two identical copies of a false sentence pass cleanly. That is not an argument for
 another gate; it is the reason the counsel-review pass exists, and the reason it must read the prose
 rather than the drift number.
+
+---
+
+## Addendum — 2026-08-11 (#7349, post-review)
+
+Row 22 above records **DISCHARGED — "Role correction propagated"** for
+`2026-07-07-beta-crm-lia.md`. At sign-off that was **not yet true**. The prose correction had
+landed at the "Controller / processor posture — corrected 2026-08-11 (#7349 B4)" paragraph, but
+three sites still carried the superseded position:
+
+1. the LIA's own YAML `controller:` frontmatter — the **machine-readable** field, fifteen lines
+   above the paragraph that contradicted it;
+2. the LIA's operative balancing conclusion, which rested the Art. 6(1)(f) analysis on "the
+   operator (as controller)";
+3. `2026-08-06-alpha-tester-repo-observation-lia.md`, which distinguished itself from "the
+   beta-CRM pattern where the operator is controller and Jikigai processor" — a contrast drawn
+   against a posture that had just been corrected away.
+
+All three were corrected on 2026-08-11 in the same PR, after `pattern-recognition-specialist` and
+`user-impact-reviewer` independently flagged the frontmatter. The verdict in row 22 is now
+accurate; it is left unedited because this file is a dated, signed-off record, and the useful
+artefact is the gap, not a clean row.
+
+**What the gap teaches.** "Propagated" was asserted from the corrected paragraph, not measured
+across the sites that carry the same claim. A superseded position survives in exactly the places
+prose review does not look — frontmatter, an operative conclusion far from the edit, and a sibling
+document that cites the old posture as its own contrast case. The audit's closing paragraph says
+no gate measures whether agreed text is *true*; this addendum narrows that: none of them measures
+whether a correction reached **every site asserting the thing corrected**, and a corrected document
+containing an uncorrected field is the shape that clears both the gates and the review.

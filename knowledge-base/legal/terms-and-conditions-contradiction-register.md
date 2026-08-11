@@ -97,7 +97,7 @@ requires the implementer to confirm such claims rather than inherit them.
 - GDPR Art. 79(2) gives a **data subject** a home forum by statute — the same claimant §11.3
   already covered. It leaves the controller-vs-provider universe untouched.
 
-**Resolution:** fixed at the source. The DPD says of itself *"this is **not** a Data Processing
+**Resolution:** fixed at the source. The DPD says of itself *"this is not a Data Processing
 Agreement under Article 28. It is a disclosure document"* — and a disclosure with no acceptance
 record cannot found an Art. 25 forum agreement. §11 now yields to the Terms and states the
 data-subject routes expressly (Art. 77, Art. 79(2), home forum), so the net effect on the reader is

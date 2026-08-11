@@ -3,7 +3,7 @@ title: "Acceptable Use Policy"
 type: acceptable-use-policy
 jurisdiction: FR, EU
 generated-date: 2026-02-20
-last-updated: 2026-08-09
+last-updated: 2026-08-11
 ---
 
 # Acceptable Use Policy

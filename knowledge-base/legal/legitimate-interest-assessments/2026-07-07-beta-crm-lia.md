@@ -6,7 +6,7 @@ plan: knowledge-base/project/plans/2026-07-07-feat-beta-conversation-capture-pla
 adr: knowledge-base/engineering/architecture/decisions/ADR-102-beta-crm-capture-store-per-tenant-owner-private-agent-native.md
 issue: 6165
 status: draft-requires-counsel-review
-controller: "The Web Platform user (operator) is the controller for the third-party personal data recorded; Jikigai SARL (France; 25 rue de Ponthieu, 75008 Paris) is the processor operating the store"
+controller: "Jikigai SARL (France; 25 rue de Ponthieu, 75008 Paris) is the controller for the third-party personal data recorded, as this activity runs today — every store owner is Jikigai personnel (corrected 2026-08-11, #7349 B4; the operator-as-controller / Jikigai-as-processor split assessed at first issue applies only if a non-Jikigai operator ever runs the store)"
 processing_activity: "Owner-private beta-tester / prospect CRM capture store — Article 30 register Processing Activity 30"
 lawful_basis: "Art. 6(1)(f) GDPR — legitimate interest"
 data_subjects: "Beta testers / prospects the operator converses with (involuntary third-party data subjects); the operator (owner)"
@@ -94,7 +94,7 @@ An individual beta tester's Art. 17 erasure request is fulfilled via the auditab
 
 ### Conclusion
 
-**Balancing outcome: legitimate interest prevails.** Art. 6(1)(f) is the appropriate lawful basis for the operator (as controller) to process third-party contact and conversation data in the owner-private CRM, given the routine business-relationship-management purpose, the least-intrusive owner-only-RLS + human-gated-write architecture, the bounded low impact, the Art. 14 notice, and the implementable erasure path. The processing does not override the fundamental rights and freedoms of the data subject.
+**Balancing outcome: legitimate interest prevails.** Art. 6(1)(f) is the appropriate lawful basis for Jikigai (as controller — see the 2026-08-11 correction above) to process third-party contact and conversation data in the owner-private CRM, given the routine business-relationship-management purpose, the least-intrusive owner-only-RLS + human-gated-write architecture, the bounded low impact, the Art. 14 notice, and the implementable erasure path. The processing does not override the fundamental rights and freedoms of the data subject.
 
 ---
 

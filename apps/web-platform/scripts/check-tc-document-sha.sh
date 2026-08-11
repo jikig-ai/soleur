@@ -288,6 +288,27 @@ if [ -n "$CANONICAL_TC_VERSION" ]; then
   done
 fi
 
+  # The fifth replica. The three seed scripts above are guarded; the compliance register's
+  # T&C row carries the same literal and was NOT, which is precisely the copy that goes
+  # stale silently -- a stale row here is what made #7349's "compliance-posture.md T&C row
+  # stale vs TC_VERSION" defect invisible until someone read the two files side by side.
+  POSTURE_REGISTER="${_TC_SHA_REPO_ROOT}/knowledge-base/legal/compliance-posture.md"
+  if [ -f "$POSTURE_REGISTER" ]; then
+    POSTURE_VERSION=$(grep -oE '^\| Terms & Conditions \|[^|]*\| *[0-9]+\.[0-9]+\.[0-9]+ *\|' "$POSTURE_REGISTER" \
+                      | head -n 1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+    if [ -z "$POSTURE_VERSION" ]; then
+      echo "::error::compliance-posture.md has no parseable Terms & Conditions version cell" >&2
+      echo "    The row is the compliance register's record of the live T&C version; if its" >&2
+      echo "    shape changed, this guard stops being able to detect drift -- fix the row or" >&2
+      echo "    this check, do not drop it." >&2
+      FAILED=$((FAILED+1)); FAILURES+=("compliance-posture.md: T&C version cell unparseable")
+    elif [ "$POSTURE_VERSION" != "$CANONICAL_TC_VERSION" ]; then
+      echo "::error::compliance-posture.md T&C row version=$POSTURE_VERSION drifted from canonical $CANONICAL_TC_VERSION" >&2
+      echo "    Remediation: update the Version cell in the Terms & Conditions row." >&2
+      FAILED=$((FAILED+1)); FAILURES+=("compliance-posture.md: T&C version drift")
+    fi
+  fi
+
 # ----------------------------------------------------------------------
 # Aggregate exit.
 # ----------------------------------------------------------------------

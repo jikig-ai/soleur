@@ -446,6 +446,32 @@ while IFS= read -r name; do
   fi
 done <<< "$names"
 
+# ---------------------------------------------------------------------------------------
+# PUBLISHED LINK FORM. Independent of drift, and deliberately so: normalize_*() collapses
+# `(gdpr-policy.md)` and `(/legal/gdpr-policy/)` to the SAME token, because for BODY
+# equivalence they say the same thing. That is what makes the drift check blind to a link
+# that 404s -- the mirror is served at /legal/<slug>/, so a relative `.md` target resolves
+# under the page's own route and dies. The canonical copies keep `.md` on purpose: they are
+# read on GitHub, where it works. #7349 shipped three of these onto the published surface
+# while fixing a 404, and every gate stayed green.
+# ---------------------------------------------------------------------------------------
+badlinks=0
+while IFS= read -r f; do
+  [[ -n "$f" ]] || continue
+  while IFS= read -r hit; do
+    [[ -n "$hit" ]] || continue
+    echo "::error::published mirror link 404s: ${f}:${hit%%:*} -- ${hit#*:}" >&2
+    echo "::error::  served at /legal/<slug>/, so a relative .md target resolves under that route." >&2
+    echo "::error::  Use /legal/<slug>/ on the mirror; the canonical copy keeps .md (GitHub-rendered)." >&2
+    badlinks=$((badlinks + 1))
+  done < <(grep -noE '\]\((\./)?[a-z0-9-]+\.md\)' "$f" || true)
+done < <(find "$MIRROR_DIR" -maxdepth 1 -name '*.md' -type f | sort)
+
+if (( badlinks > 0 )); then
+  echo "::error::legal mirror: ${badlinks} published link(s) use the canonical .md form and will 404" >&2
+  exit 1
+fi
+
 # A real VIOLATION is reported before the "nothing was evaluated" guard. The guard used to
 # run first, so on a single-pair corpus a correct one-sided-delete finding was computed,
 # written to the report, and then discarded in favour of "no comparable document pairs were
@@ -506,6 +532,6 @@ echo "  human review catch that."
 # rests on. `date -d` is offline; --today exists so the suite can pin the comparison.
 _today="${SOLEUR_LEGAL_DRIFT_TODAY:-$(date -u +%Y-%m-%d)}"
 if [[ "$_today" > "$REMEDIATION_TARGET" ]] && (( total_drift > 0 )); then
-  echo "::warning::the canonical/mirror drift freeze passed its ${REMEDIATION_TARGET} remediation target on ${_today} and ${total_drift} drift line(s) remain. Re-date #7349 or resync the corpus -- an undated permanent freeze is evidence the divergence was institutionalised, not managed." >&2
+  echo "::warning::the canonical/mirror drift freeze passed its ${REMEDIATION_TARGET} remediation target on ${_today} and ${total_drift} drift line(s) remain. Re-date #7465 or resync the corpus -- an undated permanent freeze is evidence the divergence was institutionalised, not managed." >&2
 fi
 exit 0
