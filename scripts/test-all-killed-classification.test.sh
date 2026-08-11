@@ -247,6 +247,10 @@ PY
 run_arm() {
   local arm="$1" mutation="${2:-none}" timing="${3:-}"
   local sb="$TMP/runner-${arm}-${mutation}.sh"
+  # Clear BEFORE the build. Every call site is `|| true`, so returning early on a build
+  # failure would leave the previous arm's capture in place and the following assertions
+  # would grep it — reporting a second, misleading verdict about the wrong arm.
+  ARM_OUT=""; ARM_RC=-1
   build_sandbox "$sb" "$arm" "$mutation" >/dev/null || { fail "sandbox build failed: $arm/$mutation"; return 1; }
   ARM_OUT=$(cd "$REPO_ROOT" && TEST_TIMING_LOG="$timing" TEST_GROUP=all timeout 120 bash "$sb" 2>&1)
   ARM_RC=$?

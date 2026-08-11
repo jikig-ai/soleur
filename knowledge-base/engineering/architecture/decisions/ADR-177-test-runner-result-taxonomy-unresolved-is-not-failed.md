@@ -59,8 +59,11 @@ as a *decode*, and states the ambiguity in its own text.
 UNRESOLVED result.** Concretely:
 
 1. It gets **its own marker**, `[KILLED]`, distinct from `[ok]` and `[FAIL]` — both of which
-   keep their exact current byte shape, because roughly thirty learnings and four skills are
-   anchored on `^\[FAIL\]`.
+   keep their exact current byte shape, because 11 learning files (21 occurrences) and four
+   skills are anchored on `^\[FAIL\]`. Re-derive rather than trusting that count:
+   `grep -rl '\[FAIL\]' knowledge-base/project/learnings/ | wc -l`. An earlier revision of
+   this line said "roughly thirty", which reproduces at neither reading — the conclusion
+   survives, the number did not.
 2. It is **excluded from the failure count**. It counts as neither passed nor failed in
    `=== N/M suites passed ===`.
 3. It is **named in the summary**, via a breakdown line emitted only when `killed > 0`.
@@ -127,8 +130,17 @@ Three in-repo wrappers swallow the signal shape:
 
 So an OOM kill of the vitest/node process — the single most plausible instance of the class
 this ADR is about — still surfaces as `[FAIL]`. This is a real limit, not a rounding error.
-Parity is tracked as #7429, deferred because `run-registered-suites.sh` is the live target of
-open #7376; it re-evaluates when that merges.
+Parity is tracked as #7429. The deferral reason differs per wrapper, and an earlier revision
+of this paragraph over-generalised it into a single coupling that does not exist:
+
+- **Wrapper 1** (`run-registered-suites.sh`) is genuinely coupled to #7376, which owns that file.
+- **Wrapper 3** (the webplat `npm run test:ci` registration) is coupled to nothing and is deferred
+  for scope alone. `apps/web-platform/package.json` defines `"test:ci": "vitest run"` — a single
+  command, no flags — so `exec node_modules/.bin/vitest run` would make the process `run_suite`
+  waits on BE the vitest process, and a kernel OOM kill would render `[KILLED]`. The cost is that
+  it bypasses the package's declared entry point, so it needs a drift pin asserting `test:ci`
+  stays exactly `vitest run`. Since this is the wrapper named most consequential above, claiming
+  it waits on #7376 asserts a dependency the evidence does not support.
 
 Measured and worth recording: `env VAR=x bash -c '…'` **does** propagate, because `env` execs
 rather than forks.
@@ -167,4 +179,5 @@ them even though the exit code is non-zero:
 | **A2** | Exit `1` for killed-only (no new exit code) | Free, but throws away the machine-readable half of the distinction — the conflation simply moves from the marker to the exit code. All consumers were measured binary zero/non-zero, so `3` is safe for every one; `scripts/zot-restart-loop-alarm.sh` is the in-repo precedent for a named multi-code contract. |
 | **A3** | Put the classifier in `scripts/lib/suite-exit-class.sh` with its own auto-globbed unit suite | Measured fatal. `scripts/test-all-infra-coverage-notice.test.sh` builds its sandbox with `cp "$TARGET" "$out"` — a **single-file** copy. A sourced lib would be absent under test, the degradation path would fire, and every KILLED assertion would silently exercise the fallback instead of the classifier. Inlining also removes the degradation stub and a whole failure mode. |
 | **A4** | A self-killing watchdog that aborts a suite at its declared budget (the issue's literal "fail with its own diagnostic") | Requires guessing the upstream killer's timing, which is precisely what was not measured, and trades a possibly-completing measurement for a guaranteed non-result. Adopted instead: **declare and report**, which delivers the attribution the item was asking for without self-inflicting the outcome. Recorded as a deliberate deviation from the issue's literal wording. |
+| **A6** | Carry the class OUT-OF-BAND rather than on the exit code — a nested runner appends a `KILLED` row to `TEST_TIMING_LOG` (whose field 3 this change already widened) and `run_suite` classifies on `signal-shaped rc` ∪ `child declared killed` | Not adopted here, recorded because it is the one design that makes the taxonomy COMPOSITIONAL: that channel survives npm, `xargs` and `if ! bash`, so it resolves the top-level-only limit and wrapper absorption with one mechanism. Absence of the channel means "no killed", so it is fail-safe and byte-identical to today. The cost is real — three files must be taught to write it, and `TEST_TIMING_LOG` becomes a CONTRACT rather than ad-hoc telemetry; today nothing outside the runner parses it, which is precisely why widening field 3 was free. #7429 should spend that freedom deliberately rather than inherit it. |
 | **A5** | Widen the existing `SIBLING_RUN_DETECTED` matcher to also cover directly-run suites | The two answer different questions — "is another full run in flight?" versus "is another suite in flight?" — and merging them would silently change what an existing `SIBLING_RUN_DETECTED` line means in every log and learning that cites one. A separate `SIBLING_SUITE_DETECTED` banner keeps both readable. |

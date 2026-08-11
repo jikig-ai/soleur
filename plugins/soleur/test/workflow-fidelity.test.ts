@@ -306,7 +306,9 @@ describe("workflow-fidelity sentinel markers in skills", () => {
     const unresolved = runStepWithExit(3);
     expect(unresolved.stderr).toContain("[UNRESOLVED] probe");
     expect(unresolved.stderr).not.toContain("[FAIL] probe");
-    expect(unresolved.status).not.toBe(0);
+    // toBe(3), not not.toBe(0): the point of the arm is that the gate FORWARDS the
+    // class rather than collapsing it. `exit 3` -> `exit 1` survived `not.toBe(0)`.
+    expect(unresolved.status).toBe(3);
 
     for (const code of [1, 2, 143]) {
       const failed = runStepWithExit(code);

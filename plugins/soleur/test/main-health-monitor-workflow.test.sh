@@ -623,8 +623,7 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
   run_filer "$BEHAVE_DIR/fx-killed.txt" "$NO_TRACKER" "$SHELLOPTS_ARM"
   if [[ "$B_RC" -ne 0 ]]; then
     fail "(B1)$ARM the filer completes on a killed-only capture" \
-      "rc=$B_RC -- under errexit an unguarded capture ABORTS the step, and everything below "\
-"it (the issue body, the ::error::) never runs. stdout: $(tail -3 "$BEHAVE_DIR/run/stdout.txt" | tr '\n' ' ')"
+      "rc=$B_RC -- under errexit an unguarded capture ABORTS the step, and everything below it (the issue body, the ::error::) never runs. stdout: $(tail -3 "$BEHAVE_DIR/run/stdout.txt" | tr '\n' ' ')"
   else
     pass "(B1)$ARM the filer completes on a killed-only capture"
   fi
@@ -633,8 +632,7 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
     pass "(B2)$ARM the issue body NAMES the terminated suite"
   else
     fail "(B2)$ARM the issue body NAMES the terminated suite" \
-      "the [KILLED] line sits 36 lines above the end of the capture, outside tail -30, so "\
-"without the SUMMARY append the operator gets an issue titled 'terminated' naming no suite"
+      "the [KILLED] line sits 36 lines above the end of the capture, outside tail -30, so without the SUMMARY append the operator gets an issue titled 'terminated' naming no suite"
   fi
 
   if grep -qF -- '<redacted-gh-token>' "$BEHAVE_DIR/run/issue-body.md"; then
@@ -666,8 +664,7 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
   fi
   if grep -qF -- 'Fix the tests or revert the breaking change' "$BEHAVE_DIR/run/issue-body.md"; then
     fail "(B6)$ARM the killed body prescribes no revert" \
-      "a non-technical operator is told to find and revert a commit on a run whose own "\
-"lede says no suite reported a failure"
+      "a non-technical operator is told to find and revert a commit on a run whose own lede says no suite reported a failure"
   else
     pass "(B6)$ARM the killed body prescribes no revert"
   fi
@@ -690,8 +687,7 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
     pass "(B7)$ARM a shape-invalid [KILLED] line does not select the fourth arm"
   else
     fail "(B7)$ARM a shape-invalid [KILLED] line does not select the fourth arm" \
-      "rc=$B_RC title=$(b_title) -- either a suite that merely prints '[KILLED] fake' "\
-"re-titles the operator's issue, or the no-match grep aborted the step outright"
+      "rc=$B_RC title=$(b_title) -- either a suite that merely prints '[KILLED] fake' re-titles the operator's issue, or the no-match grep aborted the step outright"
   fi
 
   run_filer "$BEHAVE_DIR/fx-uncorroborated.txt" "$NO_TRACKER" "$SHELLOPTS_ARM"
@@ -699,8 +695,7 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
     pass "(B8)$ARM a [KILLED] line with no runner breakdown line does not select the arm"
   else
     fail "(B8)$ARM a [KILLED] line with no runner breakdown line does not select the arm" \
-      "rc=$B_RC title=$(b_title) -- the runner emits its breakdown line exactly once, after "\
-"every suite has run; without corroboration one forged line of suite stdout re-titles the issue"
+      "rc=$B_RC title=$(b_title) -- the runner emits its breakdown line exactly once, after every suite has run; without corroboration one forged line of suite stdout re-titles the issue"
   fi
 
   # --- failure dominates ----------------------------------------------------
@@ -724,8 +719,7 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
     pass "(B10)$ARM the existing-tracker comment carries the killed arm's LEDE"
   else
     fail "(B10)$ARM the existing-tracker comment carries the killed arm's LEDE" \
-      "runs 2, 3, 4 ... of a flapping killed suite otherwise append only 'still not "\
-"passing' -- an escalating claim that main is broken, from a runner that measured nothing"
+      "runs 2, 3, 4 ... of a flapping killed suite otherwise append only 'still not passing' -- an escalating claim that main is broken, from a runner that measured nothing"
   fi
 done
 

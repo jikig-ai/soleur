@@ -31,7 +31,8 @@ implicated suites' documented timeout-flake class fires.
    is observe-only (creates no files, takes no locks, deletes nothing). It prints
    a contention preamble (`/tmp` + runtime-dir headroom, sibling `test-all.sh`
    runs resolved to their worktrees via `/proc/<pid>/cwd`, machine load) and
-   named banners (`LOW_TMP_HEADROOM` / `SIBLING_RUN_DETECTED`) so a contended run
+   named banners (`LOW_TMP_HEADROOM` / `SIBLING_RUN_DETECTED`, joined by
+   `SIBLING_SUITE_DETECTED` in #7424) so a contended run
    is self-identifying and a false RED is never again diagnosed as a regression.
    A per-suite `/tmp` entry-count delta, appended to the existing
    `TEST_TIMING_LOG` channel, is the probe for a residual shared-tempfile
