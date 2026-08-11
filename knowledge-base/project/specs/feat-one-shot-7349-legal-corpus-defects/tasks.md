@@ -40,7 +40,7 @@ frozen drift.
       position, PA-30 disposition, AUP §4.6 wording, DPD port scope, E1–E9 directions, and the
       Tier 1 / `2.5.0` classification, each with drafted replacement wording. Read them before
       editing; do not re-derive or re-author legal wording the CLO already settled.
-- [ ] 0.8 **Three first-draft claims are FALSE — do not "fix" them:** E2's T&C↔DPD forum conflict
+- [x] 0.8 🔴 **ONLY TWO of the three were false — E2 was NOT.** Re-measured 2026-08-11: the DPD DOES carry §11 governing-law and exclusive-forum clauses, so E2 is REAL as filed and was fixed (see 5.3, and the register). E8 (a) and (b) confirmed false as stated. **Original text follows.** Three first-draft claims are FALSE — do not "fix" them:** E2's T&C↔DPD forum conflict
       (the DPD has no forum clause), E8's dangling AUP→T&C cross-reference (all resolve), and
       E8's mandatory-vs-optional side letter (two distinct instruments). Confirm each measurement
       yourself before touching those clauses.
@@ -80,9 +80,9 @@ frozen drift.
       create an obligation the operative clause negates; `security-sentinel` already forced this
       recast away from date-certain on §12.2(b) contract-formation grounds; and #4330 is CLOSED so
       it cannot make anything live.
-- [ ] 2.2 **SEQUENCED WITH 5.1** (the row must not name a path that does not yet resolve — a dangling cross-reference is one of the defects this PR fixes). Replace the struck-through `#736` row in `compliance-posture.md` with a row naming the
+- [x] 2.2 **SEQUENCED WITH 5.1** (the row must not name a path that does not yet resolve — a dangling cross-reference is one of the defects this PR fixes). Replace the struck-through `#736` row in `compliance-posture.md` with a row naming the
       T&C enumeration artifact by path.
-- [ ] 2.3 Add a version column to `compliance-posture.md`'s document inventory and populate it;
+- [x] 2.3 Add a version column to `compliance-posture.md`'s document inventory and populate it;
       refresh the stale Last-Updated values (T&C, AUP, Cookie Policy, Disclaimer, both CLAs).
 - [x] 2.4 Correct `knowledge-base/product/roadmap.md` row 4.1 to **"In progress — 1 of 10"**
       (verified: #1439 OPEN, tester #1 onboarded 2026-08-06, mix 1 CC / 0 non-CC against a
@@ -243,30 +243,30 @@ attaches. Insertions reduce drift, so gate 2 passes as a reduction.
 Sequenced last: it depends on the counterparty documents being settled. The T&C mirror is at
 **zero** drift, so every edit must be exactly lockstep or gate 2 fails immediately.
 
-- [ ] 5.1 Write the enumeration artifact under `knowledge-base/legal/` recording all nine
+- [x] 5.1 Write the enumeration artifact under `knowledge-base/legal/` recording all nine
       contradictions **and** the six ambiguities, each with both sides quoted by content anchor and
       the resolution taken. This is the durable record the `#736` row falsely appeared to be.
-- [ ] 5.2 Fix E1 (liability cap) **with** `docs/legal/disclaimer.md` in the same commit. The T&C
+- [x] 5.2 Fix E1 (liability cap) **with** `docs/legal/disclaimer.md` in the same commit. The T&C
       governs — it is the instrument with an acceptance record; the Disclaimer has none.
-- [ ] 5.3 🔴 **E2 is half not real.** Measured: the DPD has **no** governing-law and **no** forum
+- [x] 5.3 🔴 **E2 is half not real.** Measured: the DPD has **no** governing-law and **no** forum
       clause; T&C §15 and `disclaimer.md` §8 both say France / Paris and **agree**. Do not "fix" a
       forum conflict. **Fix only the surviving half:** §16.1 is a bare entire-agreement clause with
       no order of precedence, so E1's genuine conflict has no resolution rule. Add a precedence
       paragraph to §16.1.
-- [ ] 5.4 Fix E3 (unscoped plugin-local absolutes, T&C §§4.1/4.2/8.1) using the CLO's drafted scope
+- [x] 5.4 Fix E3 (unscoped plugin-local absolutes, T&C §§4.1/4.2/8.1) using the CLO's drafted scope
       blocks. **Gate-1 constraint:** the negative delimiter must sit on the SAME LINE as the scope
       assertion, and the declared referent must be no larger than the genuinely plugin-local text.
-- [ ] 5.5 Fix E4 (missing Anthropic + four processors in §8.1b).
-- [ ] 5.6 🔴 **E5's direction was backwards.** T&C §3b.1 *agrees* with the DPD (both make the
+- [x] 5.5 Fix E4 (missing Anthropic + four processors in §8.1b).
+- [x] 5.6 🔴 **E5's direction was backwards.** T&C §3b.1 *agrees* with the DPD (both make the
       Workspace Owner controller) and `compliance-posture.md` already adjudicated it as "no
       contradiction" — editing `gdpr-policy.md` would fix the wrong document. **The real
       contradiction is intra-T&C:** §3b.1's "**all** personal data" vs §3b.2's Arts. 15–22 rights
       **against Jikigai** (rights that run against a controller). Narrow §3b.1 to workspace
       content and workspace-activity records, and keep Jikigai controller of Co-Member account
       data, subscription records, and Art. 5(2) audit logs.
-- [ ] 5.7 Fix E6 (processor status asserted in present tense) **with** the DPD.
-- [ ] 5.8 Fix E7 (share links described as processor capacity).
-- [ ] 5.9 🔴 **E8 — fix ONE limb, not three.** (a) The "dangling AUP §5.6 cross-reference" does
+- [x] 5.7 Fix E6 (processor status asserted in present tense) **with** the DPD.
+- [x] 5.8 Fix E7 (share links described as processor capacity).
+- [x] 5.9 🔴 **E8 — fix ONE limb, not three.** (a) The "dangling AUP §5.6 cross-reference" does
       **not exist**: every T&C section referenced anywhere in the corpus resolves (measured).
       (b) "Mandatory vs optional" is **two different instruments** — AUP §5.6 mandates the
       *Delegation Consent Side Letter*, explicitly "distinct from the workspace co-member Side
@@ -274,12 +274,12 @@ Sequenced last: it depends on the counterparty documents being settled. The T&C 
       (c) **REAL:** BYOK joint vs sole controllership — cured by the 5.6 redraft plus an Art. 26
       joint-controller paragraph in §3b.1, which also cures a *substantively* dangling reference
       (AUP §5.6 points at §3b for delegation, and §3b currently says nothing about it).
-- [ ] 5.10 Fix E9 across the T&C and Privacy Policy (the **AUP** half already landed at 4.4a as an
+- [x] 5.10 Fix E9 across the T&C and Privacy Policy (the **AUP** half already landed at 4.4a as an
       AC19 precondition). Measured today: **68** agent files, **95** skills, **9** domains vs
       "45 / 45 / five". **Remove the counts; do not restate them.** Soft floors per AC37 — the
       live site renders exact counts from the filesystem, so an exact count in a versioned legal
       instrument is stale by construction and buys a Tier-2 bump every release.
-- [ ] 5.10a **CLO ruling 7(3) — fold `cookie-policy`'s count sentence into E9's count-free
+- [x] 5.10a **CLO ruling 7(3) — fold `cookie-policy`'s count sentence into E9's count-free
       treatment.** Canonical says *"45 agents"*; the **published mirror says "60+ agents"**. This
       is invisible to the tooling: `collapse`'s regex matches `[0-9]+ AI agents`, not a bare
       `[0-9]+ agents`, so it has never appeared as drift. A published legal notice carrying a
@@ -288,8 +288,8 @@ Sequenced last: it depends on the counterparty documents being settled. The T&C 
       and this one **does** touch canonical, so it **requires a `LEGAL_DOC_SHAS["cookie-policy"]`
       refresh**. **Severable:** if it threatens the PR, drop it to the successor with the count
       drift recorded explicitly — it does not carry the Art. 13 urgency that compels Phase 3c.
-- [ ] 5.11 Mirror every T&C edit exactly.
-- [ ] 5.12 **Tier 1 → `TC_VERSION` 2.4.0 → 2.5.0 (MINOR)** per CLO ruling 6. MAJOR is reserved for
+- [x] 5.11 Mirror every T&C edit exactly.
+- [x] 5.12 **Tier 1 → `TC_VERSION` 2.4.0 → 2.5.0 (MINOR)** per CLO ruling 6. MAJOR is reserved for
       changes expected to cause abandonment ("new license restriction, new jurisdiction") —
       neither occurs, and every substantive change is neutral-to-favourable to the user. Update in
       lockstep — `TC_DOCUMENT_SHA`, all four `TC_BUMP_METADATA` fields, the canonical Last-Updated
@@ -300,11 +300,11 @@ Sequenced last: it depends on the counterparty documents being settled. The T&C 
       with a per-artifact verdict and a DISCHARGED/BLOCKED disposition. Flag **E6**
       (T&C-as-Art.-28(3)-instrument) in that audit's frontmatter as the strongest external-counsel
       re-review candidate.
-- [ ] 5.14 **M1 (CPO C2)** — reset the alpha-tester roster's `Terms` column and re-send the
+- [x] 5.14 **M1 (CPO C2)** — reset the alpha-tester roster's `Terms` column and re-send the
       corrected paragraph to every tester at `agreed` or `sent-awaiting-reply`; add that as a
       standing step in `knowledge-base/engineering/operations/runbooks/alpha-tester-onboarding.md`.
       The bump cannot reach a self-hosted CLI tester, so without this the cohort gets no notice.
-- [ ] 5.15 **M2 (CPO C2)** — write `TC_BUMP_METADATA.substantiveChange` in plain outcome language.
+- [x] 5.15 **M2 (CPO C2)** — write `TC_BUMP_METADATA.substantiveChange` in plain outcome language.
       It renders verbatim into the Art. 13(3) banner on `/accept-terms`; no clause names, no
       jargon. Consistency is AC24; comprehensibility is AC36.
 
