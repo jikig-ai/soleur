@@ -199,6 +199,24 @@ include_matches.SYSLOG_IDENTIFIER = [
   "web-zot-consumer-probe",
   "web-git-data-probe",
   "web-nic-guard",
+  # (#7228) The inngest consumer-perspective probe on the web host. Same argument as the three
+  # above: the heartbeat only says "suppressed", this channel says WHY — UNREACHABLE (no listener
+  # at 10.0.1.40:8288) vs EMPTY REGISTRY (serving, owns nothing) vs WEDGED (GraphQL error
+  # envelope). Those are three different remediations, and #7228 is a twelve-day outage in which
+  # the binary signal was green and no channel carried the WHY, so shipping the beat without this
+  # entry would repeat the defect one layer down. Reading it must not require SSH
+  # (hr-no-ssh-fallback-in-runbooks).
+  #
+  # QUOTA, and this IS the "fresh quota decision" the note above demands rather than a skip of it.
+  # The probe runs at 60s, which unbounded would cost 1,440 identical fault lines/day while the
+  # host is dark — precisely the cost #6617b removed, and the host is dark for the whole deferral
+  # window. So the probe is SILENT on success (zero rows in the healthy steady state at any
+  # cadence) and its fault line is rate-limited on a /run marker to ~30min, giving a WORST case of
+  # ~48 rows/day and a typical case of 0. That sits inside the same headroom the other tags
+  # occupy, and it is a ceiling enforced in code (inngest-consumer-probe.sh `_fault`), not a
+  # projection: inngest-consumer-probe.test.sh drives two consecutive fault runs and asserts the
+  # second emits nothing.
+  "inngest-consumer-probe",
   # #6617 (a/c): the dedicated inngest host's three remaining dark channels. Each entry here
   # is HALF a change — Source 4 is sd_journal_add_match EXACT-VALUE equality, so an entry
   # whose unit does not set that literal SyslogIdentifier= is a permanently-dead no-op that

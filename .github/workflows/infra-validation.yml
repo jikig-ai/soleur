@@ -1128,6 +1128,13 @@ jobs:
       - name: Run inngest-registry-probe.sh tests
         run: bash apps/web-platform/infra/inngest-registry-probe.test.sh
 
+      # (#7228) The web-host consumer probe that asserts 10.0.1.40 actually SERVES its registry.
+      # Registration is not a formality here: run-registered-suites.sh DERIVES its suite list from
+      # THIS FILE (:128), so an unregistered suite runs in no runner, locally or in CI, and reports
+      # nothing while reading as coverage.
+      - name: Run inngest-consumer-probe.sh tests
+        run: bash apps/web-platform/infra/inngest-consumer-probe.test.sh
+
       - name: Run git-lock-chardevice-sweep.sh tests
         run: bash apps/web-platform/infra/git-lock-chardevice-sweep.test.sh
 
