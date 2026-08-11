@@ -209,10 +209,17 @@ suite_exit_class() {
 # attribution half of what a reader needs when a long suite does not come back.
 _suite_budget_ms() {
   case "$1" in
-    # PENDING MEASUREMENT — do not fill this in from the incident's 560931ms.
-    # That figure is elapsed AT THE KILL, mid-way through the engine-mutation
-    # phase: a lower bound on the clean duration, and useless as a budget.
-    # tests/scripts/registry-gate-mutation-battery) printf '<measured>\n' ;;
+    # MEASURED 2026-08-11, both runs completing rc=0 on this 16-core host:
+    #   860692ms  as run BY THIS RUNNER (TEST_TIMING_LOG), one sibling worktree
+    #             running an individual suite concurrently
+    #   1675430ms standalone, with three concurrent agent sessions on the box
+    # Load alone moves it 1.9x, so a budget near either figure would fire on
+    # ordinary busy runs and become noise. Declared at ~1.5x the HIGHEST observed.
+    #
+    # NOT derived from the incident's 560931ms: that is elapsed AT THE KILL,
+    # roughly two thirds of the way in, so it is a lower bound on the duration
+    # and useless as a budget.
+    tests/scripts/registry-gate-mutation-battery) printf '2500000\n' ;;
     *) return 0 ;;
   esac
 }

@@ -57,7 +57,7 @@ operator-stated scope are recorded in `decision-challenges.md` and were delibera
 
 - [x] 5.1 Add `_suite_budget_ms <label>` as a `case` (not `declare -A`) — reason: initialization order + zero churn at the 131 call sites, **not** bash 3.2.
 - [x] 5.2 Emit the advisory `[budget]` line after the elapsed computation; never change status or exit code.
-- [ ] 5.3 Measure the long suite standalone and set the budget at a stated multiple, with the measurement/date/multiple in a comment. **If the battery is itself killed during measurement, defer Phase 5 to the Phase-7.2 issue — do not ship an empty `case`.**
+- [x] 5.3 Measure the long suite standalone and set the budget at a stated multiple, with the measurement/date/multiple in a comment. **If the battery is itself killed during measurement, defer Phase 5 to the Phase-7.2 issue — do not ship an empty `case`.**
 
 ## Phase 6 — Fold-in consumers
 
