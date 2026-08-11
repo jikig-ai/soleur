@@ -15,19 +15,19 @@ reporting exists, and no phase makes a decision before its instrument exists.
 
 ## Phase A — Item 6: keep heavy suites out of subagent fan-out
 
-- [ ] **A.1** Write `plugins/soleur/test/fanout-suite-scope.test.sh` (RED). Two arms:
-  - [ ] A.1.1 Behavioural: with `SOLEUR_SUBAGENT=1`, a full-gate invocation exits non-zero and names
+- [x] **A.1** Write `plugins/soleur/test/fanout-suite-scope.test.sh` (RED). Two arms:
+  - [x] A.1.1 Behavioural: with `SOLEUR_SUBAGENT=1`, a full-gate invocation exits non-zero and names
         the targeted-suite alternative.
-  - [ ] A.1.2 Text: both `work/SKILL.md` and `review/SKILL.md` carry the scope clause, asserted on a
+  - [x] A.1.2 Text: both `work/SKILL.md` and `review/SKILL.md` carry the scope clause, asserted on a
         content anchor spanning no punctuation boundary in the source.
-- [ ] **A.2** Add the `SOLEUR_SUBAGENT=1` full-gate refusal to `scripts/test-all.sh` (GREEN), printing
+- [x] **A.2** Add the `SOLEUR_SUBAGENT=1` full-gate refusal to `scripts/test-all.sh` (GREEN), printing
       the alternative and the escape hatch.
-- [ ] **A.3** Add the fan-out scope clause to `plugins/soleur/skills/work/SKILL.md`.
-- [ ] **A.4** Add the same clause to `plugins/soleur/skills/review/SKILL.md`.
-- [ ] **A.5** Confirm the new suite is caught by the `plugins/soleur/test/*.test.sh` glob at
+- [x] **A.3** Add the fan-out scope clause to `plugins/soleur/skills/work/SKILL.md`.
+- [x] **A.4** Add the same clause to `plugins/soleur/skills/review/SKILL.md`.
+- [x] **A.5** Confirm the new suite is caught by the `plugins/soleur/test/*.test.sh` glob at
       `test-all.sh:764` — which sits inside `want_scripts` (`:744-768`), **not** `want_bun`. Verify the
       match; do not assume it.
-- [ ] **A.6** Run the new suite alone. Green.
+- [x] **A.6** Run the new suite alone. Green.
 
 ## Phase B — skip reporting (the enabler, ~15 lines)
 

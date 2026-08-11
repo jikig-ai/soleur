@@ -147,6 +147,36 @@ case "$TEST_GROUP" in
     ;;
 esac
 
+# --- Subagent full-gate refusal (Item 6 of the 2026-08-11 test-pipeline post-mortem) ---------
+# A spawned subagent runs only the suites targeting the files it was given. Three review agents
+# running lints and suites concurrently inflated a measurement of the registry mutation battery
+# by 1.9x (860 s -> 1675 s): the battery did not get slower, the machine did. A timing figure
+# taken under that contention is not a measurement of the code — and this runner now GATES
+# suites on measured cost, so a corrupted measurement propagates into what runs at all.
+#
+# MECHANICAL, not prose. The fan-out instructions in plugins/soleur/skills/{work,review}/SKILL.md
+# carry the same rule in English, but a paragraph in a prompt IS agent discretion: a grep
+# asserting that paragraph exists certifies the instruction was WRITTEN, never that it was
+# obeyed. Those clauses explain this guard; this guard is what enforces it.
+#
+# It fires HERE — after TEST_GROUP is validated so the message can name it, but before
+# tc_acquire and before the first suite — so a refused run costs nothing and never takes the
+# advisory lock that a legitimate sibling run is queued on.
+if [[ "${SOLEUR_SUBAGENT:-}" == "1" && "${SOLEUR_ALLOW_FULL_GATE:-}" != "1" ]]; then
+  echo "ERROR: refusing a full-gate run — SOLEUR_SUBAGENT=1 is set (TEST_GROUP=$TEST_GROUP)." >&2
+  echo "" >&2
+  echo "Spawned agents run only the suites targeting the files they were given. Concurrent" >&2
+  echo "full-gate runs inflate each other's timings and corrupt the measurement. The lead runs" >&2
+  echo "the gate once, after collecting fan-out work." >&2
+  echo "" >&2
+  echo "Run the suite covering your files instead:" >&2
+  echo "    bash <path/to/the/suite.test.sh>" >&2
+  echo "" >&2
+  echo "If you are the lead and this IS the sanctioned gate run, override explicitly:" >&2
+  echo "    SOLEUR_ALLOW_FULL_GATE=1 bash scripts/test-all.sh" >&2
+  exit 3
+fi
+
 want_scripts() { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "scripts" ]]; }
 want_bun()     { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "bun"     ]]; }
 want_webplat() { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "webplat" ]]; }
