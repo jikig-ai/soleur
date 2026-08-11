@@ -162,14 +162,14 @@ attaches. Insertions reduce drift, so gate 2 passes as a reduction.
       Insertion point mirror 146–169 contains no scope block and is clear.
 - [x] 3c.2 **P2** 🔴 **in-place** — restore the §4.7 Workspace-data bullet to canonical, with the
       `/workspaces/<your-id>/` specificity.
-- [ ] 3c.3 **P3** — port the §4.7 "Right of access / portability (Articles 15 + 20)" paragraph.
-- [ ] 3c.4 **P4** — port the §4.7 Art. 15(4) rights-of-others paragraph.
-- [ ] 3c.5 **P5** — port the §8 self-serve bullet, email-fallback bullet and both-channels
+- [x] 3c.3 **P3** — port the §4.7 "Right of access / portability (Articles 15 + 20)" paragraph.
+- [x] 3c.4 **P4** — port the §4.7 Art. 15(4) rights-of-others paragraph.
+- [x] 3c.5 **P5** — port the §8 self-serve bullet, email-fallback bullet and both-channels
       sentence. Lands between mirror 465 and 547 — **read-verify the adjacent scope block**.
-- [ ] 3c.6 **P6** — port the LinkedIn dual-basis paragraph. Same read-verify requirement.
-- [ ] 3c.7 **P7** 🔴 **in-place** — restore the share-link Art. 6(1)(f)/(b) legitimate-interest
+- [x] 3c.6 **P6** — port the LinkedIn dual-basis paragraph. Same read-verify requirement.
+- [x] 3c.7 **P7** 🔴 **in-place** — restore the share-link Art. 6(1)(f)/(b) legitimate-interest
       purposes ("infrastructure security and abuse prevention"), required by Art. 13(1)(d).
-- [ ] 3c.8 **P8** 🔴 **in-place** — restore the Resend data/purpose scope: invite notifications,
+- [x] 3c.8 **P8** 🔴 **in-place** — restore the Resend data/purpose scope: invite notifications,
       invite acceptance confirmations, DSAR export notifications.
 - [x] 3c.9 **P9 conditional** — `statutory_repin_send` marker. Ships **only** per re-verification
       item 8: if migration 135 has deployed, non-publication is a live omission and P9 is
@@ -193,7 +193,7 @@ attaches. Insertions reduce drift, so gate 2 passes as a reduction.
 
 ### Re-verification before publication (a port is textually a copy but LEGALLY A FIRST PUBLICATION; AC34 does not reach it)
 
-- [ ] 3c.V1 🔴 **SEQUENCING LANDMINE** — `beta_contacts` must publish the **B4-corrected** role
+- [x] 3c.V1 🔴 **SEQUENCING LANDMINE** — `beta_contacts` must publish the **B4-corrected** role
       sentence from Phase 2, not the pre-B4 canonical text. Identical hazard to DPD §2.3(ad).
 - [x] 3c.V2 🔴 `/dashboard/settings/privacy` + "Download my data" — verify the route exists, the
       re-auth step works, and that `server/dsar-export-allowlist.ts` / `server/dsar-export.ts`
@@ -205,38 +205,38 @@ attaches. Insertions reduce drift, so gate 2 passes as a reduction.
 - [x] 3c.V6 Concierge turn summaries — live on `/soleur:go`, written only on **successful** turns.
 - [x] 3c.V7 `team_names` — column exists and is in use.
 - [x] 3c.V8 `statutory_repin_send` / migration 135 deployment state (decides P9).
-- [ ] 3c.V9 LinkedIn dual-basis — reconcile against
+- [x] 3c.V9 LinkedIn dual-basis — reconcile against
       `legitimate-interest-assessments/2026-05-19-linkedin-org-page-lia.md` before publishing the
       (a)/(b) allocation.
-- [ ] 3c.V10 Resend — confirm all three email types are actually sent today.
-- [ ] 3c.V11 Scope-block referents adjacent to the P5 and P6 insertion points (mirror 449, 547) —
+- [x] 3c.V10 Resend — confirm all three email types are actually sent today.
+- [x] 3c.V11 Scope-block referents adjacent to the P5 and P6 insertion points (mirror 449, 547) —
       verify **by reading**, never by gate.
 
 ## Phase 4 — Published AUP under-disclosure (C1), disclaimer, and the 404 (C4)
 
-- [ ] 4.1 Apply the CLO's §4.6 rulings. The consent-only clause is the one where neither surface is
+- [x] 4.1 Apply the CLO's §4.6 rulings. The consent-only clause is the one where neither surface is
       right — the published text drops "or another lawful basis under applicable law", narrowing
       the user's position below the statutory floor. New text, both surfaces.
-- [ ] 4.2 Restore the canonical cross-reference to §4.2 rather than the mirror's paraphrase.
-- [ ] 4.3 Land the CLO's decision on the mirror-only share-link-revocation sentence and the
+- [x] 4.2 Restore the canonical cross-reference to §4.2 rather than the mirror's paraphrase.
+- [x] 4.3 Land the CLO's decision on the mirror-only share-link-revocation sentence and the
       canonical-only workspace-logo paragraph: each on both surfaces or neither.
-- [ ] 4.4 Reconcile the changelog abridgement (port the fuller canonical changelog to the mirror;
+- [x] 4.4 Reconcile the changelog abridgement (port the fuller canonical changelog to the mirror;
       both substantive disclosures already survive in the section bodies, but AC19 forces
       convergence).
-- [ ] 4.4a 🔴 **Execute E9 HERE, not in Phase 5.** The AUP mirror renders `{{ stats.agents }}`
+- [x] 4.4a 🔴 **Execute E9 HERE, not in Phase 5.** The AUP mirror renders `{{ stats.agents }}`
       through Eleventy and the canonical cannot, so the two surfaces can never reach zero
       normalised drift while any count sits in that sentence. **E9 is a precondition of AC19, and
       AC19 is a precondition of the Phase 6 `BODY_EQUIVALENCE_DOCS` activation.** Left in Phase 5
       the ordering deadlocks and turns a required check red. Use soft floors (AC37).
-- [ ] 4.5 Resync `disclaimer` (2 cosmetic drift lines — one autolinked email address).
-- [ ] 4.5a 🔴 **CLO E1b/E1c** — correct `disclaimer.md` §3.2's false "provided free of charge"
+- [x] 4.5 Resync `disclaimer` (2 cosmetic drift lines — one autolinked email address).
+- [x] 4.5a 🔴 **CLO E1b/E1c** — correct `disclaimer.md` §3.2's false "provided free of charge"
       premise (the Web Platform sells Stripe subscriptions per T&C §5) and delete §3.1's
       unqualified **direct-damages** exclusion, leaving direct damages subject to the §3.2 cap.
       An unqualified direct-damages exclusion against an EU consumer risks the whole limitation
       clause under Directive 93/13 Annex 1(b). (AC41)
-- [ ] 4.6 Point `apps/web-platform/lib/messages/trust-tier-copy.ts` at the served URL. No
+- [x] 4.6 Point `apps/web-platform/lib/messages/trust-tier-copy.ts` at the served URL. No
       `/docs/legal/` path may remain in user-facing copy.
-- [ ] 4.7 Refresh `LEGAL_DOC_SHAS` for every canonical changed in Phases 3–4.
+- [x] 4.7 Refresh `LEGAL_DOC_SHAS` for every canonical changed in Phases 3–4.
 
 ## Phase 5 — T&C contradictions (E1–E9) and the version bump
 
