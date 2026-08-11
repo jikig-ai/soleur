@@ -87,3 +87,49 @@ worktree runs (~58 min each); `/tmp` was at 83%, firing both `LOW_TMP_HEADROOM` 
 `SIBLING_RUN_DETECTED`. I killed my queued run by PID (ancestry excluded; siblings verified
 untouched) rather than hold it against a tree review may still change. The gate runs once
 against the final tree. `tsc --noEmit` completed independently: **rc=0, zero errors**.
+
+## Review Phase
+
+6 agents, report-only (panel-scale concurrent fix-inline contaminates the shared worktree).
+All findings applied inline by me from a known SHA. Commits `0b62be720`, `f42234c1d`.
+
+The panel's highest-value findings **falsified my own work**:
+
+| Finding | Verdict |
+| --- | --- |
+| ADR-177's "under no hypothesis does it resolve into customer-controlled bytes" | **FALSE, measured.** An ambient exported `CLAUDE_PLUGIN_ROOT` executed a hostile payload past a `test -d "$X/scripts"` preflight. Same reasoning error the ADR diagnoses in the `:-` form: an environmental property asserted as a construction guarantee. |
+| T0c "the decisive cell" | Had **never once** executed the mechanism it documents — this suite's own `set -u` aborted at parameter expansion 8/8. Green because bash died early. |
+| T0d "positive control" | Not a control over anything T0c depends on — it eval'd hardcoded literals and never touched the extractor. |
+| `./script.sh`, `cd x && bash …` | Defeated **both** suites while executing a decoy. #7442 in different clothes. |
+| `${CLAUDE_PLUGIN_ROOT}/../../x` | Passed the residency check; `resolve()` normalizes `..` through the payload boundary. |
+| `go.md` | Migrated to the bare anchor with no preflight and both sites swallowing failure — silent fail-open on the first command of every session. |
+
+Mutation battery re-run after fixes: **8 of 9 previously-surviving mutants killed**; the
+ninth was equivalent (fail-closed either way). F1 and F4 needed a second pass — my first
+assertions pinned the PRESENCE of a string, which a gutted gate still satisfies. T0i now
+EXECUTES the extracted preflight against a hostile root.
+
+### Exit gate (final tree, HEAD f42234c1d)
+
+Sharded because the full run queued behind 3 sibling worktrees twice.
+
+| Shard | Result |
+| --- | --- |
+| `scripts` | rc=0, 281/281 suites |
+| `bun` | rc=0, 7/7 suites |
+| `webplat` | rc=0, 1053 files / 12,929 tests |
+
+Shards ran 14:48–14:59, after HEAD was committed at 13:31. `SIBLING_RUN_DETECTED` +
+`LOW_TMP_HEADROOM` fired throughout — contention produces false RED, not false GREEN, so a
+green result under it is sound. `tsc --noEmit` rc=0. shellcheck rc=0. ADR ordinals pass.
+
+### Acceptance criteria NOT met — stated, not silently dropped
+
+| AC | Status |
+| --- | --- |
+| **AC12 / T3** (subdirectory invocation writes the artifact at repo top level) | **Not implemented.** Plan Phase 2 axis 2 — `write-kb-coverage.ts` still defaults its root to `process.cwd()`. Deferred to #7452. |
+| **AC15 / T8** (`/soleur:sync domain-model` standalone on a fresh repo produces a register) | **Not implemented.** Plan Phase 3 item 4 — `init` is wired only into the `all` path, so standalone still dies on a fresh repo. A real bug the plan found while in the area, but a *different* bug from the reachability defect #7442 reports, and not verifiable without a full end-to-end sync run. Deferred to #7452. |
+| **AC14** (`--producer-unreachable` degraded artifact) | **Not built.** The durability half of #7442. ADR-177 Consequences says so explicitly. Deferred to #7452. |
+| AC19 (C4) | Deferred to #7452 per the CTO scope boundary. |
+
+Every other pre-merge AC is met and verified above.
