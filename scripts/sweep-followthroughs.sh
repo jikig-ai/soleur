@@ -148,17 +148,44 @@ closed_precheck() {
   # defeated by any single trailing comment from anyone — an operator note, the
   # triage bot, a linked-discussion reply — which silently re-arms daily
   # re-verification on exactly the issues humans have touched.
+  #
+  # ‼️ ACTOR + EVIDENCE, not evidence alone. The reasoning above is right that the check must not
+  # be actor-based in the sense of "who closed the issue" — a premature close by ANY actor must
+  # still be re-verified. But the EVIDENCE it keys on has to be unforgeable, and on a PUBLIC repo
+  # a body prefix is not: any GitHub user can post a comment starting `### Sweeper run: PASS` on
+  # any of the ~100 follow-through issues and permanently disable re-verification for it. That is
+  # the second half of #7448 — a forged probe verdict closes the issue, and the sweeper's own PASS
+  # block then stops the reopen path from ever re-litigating it, laundering the forgery into the
+  # evidence trail. Requiring the comment to be authored by the workflow actor keeps the
+  # evidence-based intent and makes the evidence authentic.
+  #
+  # EXACT logins, not a `^github-actions` prefix. A prefix would also admit a user-registered
+  # login such as `github-actions-evil`, which is a valid GitHub username shape — reintroducing
+  # the forgery through the control meant to stop it. Both renderings are listed because the two
+  # API surfaces disagree and either could reach this code: GraphQL (`gh --json comments`, what
+  # this script uses) reports `github-actions`; REST reports `github-actions[bot]`. Measured on
+  # #7296 today, both forms, same comment.
   local sweeper_passes
   sweeper_passes=$(printf '%s' "$comments_json" \
-    | jq --arg h "$SWEEPER_PASS_HEADING" '[.comments[] | select(.body | startswith($h))] | length')
+    | jq --arg h "$SWEEPER_PASS_HEADING" '[.comments[]
+        | select((.author.login // "") as $l
+                 | $l == "github-actions" or $l == "github-actions[bot]")
+        | select(.body | startswith($h))] | length')
   if (( sweeper_passes > 0 )); then
     log "issue #$issue_num: carries the sweeper's own PASS block — not re-litigating"
     return 1
   fi
 
+  # Same actor gate as the PASS guard above, and for the same reason. The marker is an INVISIBLE
+  # HTML comment and the cap is 3, so without this any GitHub user posts three innocuous-looking
+  # comments each secretly carrying it and the sweeper permanently refuses to reopen that issue —
+  # the outcome this whole change exists to prevent, by a stealthier route than a forged verdict.
   local reopens
   reopens=$(printf '%s' "$comments_json" \
-    | jq --arg m "$SWEEPER_REOPEN_MARKER" '[.comments[] | select(.body | contains($m))] | length')
+    | jq --arg m "$SWEEPER_REOPEN_MARKER" '[.comments[]
+        | select((.author.login // "") as $l
+                 | $l == "github-actions" or $l == "github-actions[bot]")
+        | select(.body | contains($m))] | length')
   if (( reopens >= REOPEN_MAX )); then
     # ::error:: rather than a bare log: this is the give-up branch. Past the cap
     # the sweeper permanently abandons a still-failing verification, and a plain
