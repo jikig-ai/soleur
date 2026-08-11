@@ -1,21 +1,19 @@
 #!/usr/bin/env bash
-# Exit-code harness for cpx22-invoice-reconcile-7431.sh (#7437).
+# Exit-code harness for cpx22-invoice-reconcile-7431.sh (tracking issue #7437).
 #
-# The probe decides whether a production ledger stands or gets corrected, and it decides it from
-# free text a human typed into a GitHub comment. Two properties therefore matter more than the
-# happy path:
+# The probe decides whether a production financial ledger stands or gets corrected, from free text
+# typed into a GitHub comment on a PUBLIC repo. Exit 0 auto-closes the tracker. So the cases here
+# are chosen against the ways that verdict can be forged, poisoned, or wedged — not against the
+# happy path, which is one line.
 #
-#   * the verdict must be ANCHORED. This issue body necessarily quotes the strings `RESULT: PASS`
-#     and `RESULT: FAIL` while explaining how to close it, and the probe reads COMMENTS — but any
-#     of that prose can be pasted into a comment while discussing the reconciliation. An
-#     unanchored grep would then close the issue on a comment that was asking a question about it.
-#   * it must not be anchored at the END. Peers use `^RESULT: PASS$`, which rejects the actual
-#     figure this issue REQUIRES the operator to state. A probe whose accept-shape contradicts its
-#     own instructions never closes.
-#
-# THE SEAM is PATH: the probe shells out to `gh`, so a stub `gh` drives every arm through the real
-# script and its real greps. Testing against the live issue would mean posting throwaway verdicts
-# to a production tracker.
+# THE STUB RUNS REAL jq. An earlier version returned a canned body string and ignored the probe's
+# `--jq` argument, which would have made the author filter — the fix for the critical finding —
+# structurally untestable: the filter would have been asserted by a fixture that never applied it.
+# That is the "a fixture can only falsify assumptions its author did not share" failure this PR's
+# own learning doc is about, so the stub feeds the probe's real jq expression over a real comments
+# payload. It also asserts the flags it is passed, because a probe wedged at TRANSIENT by a wrong
+# flag is a tracker that never closes and an alarm that never fires (#6288 sat open a month on
+# exactly that), and no assertion about verdicts can see it.
 
 set -uo pipefail
 
@@ -27,72 +25,151 @@ pass() { printf '  PASS: %s\n' "$1"; checks=$((checks + 1)); }
 fail() { printf '  FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); checks=$((checks + 1)); }
 
 [[ -f "$PROBE" ]] || { echo "FATAL: probe not found at $PROBE" >&2; exit 1; }
+command -v jq >/dev/null || { echo "FATAL: jq required for the stub" >&2; exit 1; }
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin"
 
-# `gh issue list ...` -> the issue number in ISSUE_NUM (empty simulates "cannot find itself").
-# `gh issue view ...` -> the comment bodies in COMMENTS.
+# gh stub. `issue view --json body` -> $ISSUE_BODY. `issue view --json comments --jq <expr>` ->
+# runs the REAL expr over $COMMENTS_JSON, so the authorAssociation filter is genuinely exercised.
 cat > "$WORK/bin/gh" <<'STUB'
 #!/usr/bin/env bash
-case "${2:-}" in
-  list) printf '%s' "${ISSUE_NUM:-}" ;;
-  view) printf '%s' "${COMMENTS:-}" ;;
-  *)    exit 1 ;;
+[[ "${GH_RC:-0}" == "0" ]] || exit "${GH_RC}"
+jqexpr=""; want=""
+prev=""
+for a in "$@"; do
+  [[ "$prev" == "--jq"   ]] && jqexpr="$a"
+  [[ "$prev" == "--json" ]] && want="$a"
+  prev="$a"
+done
+case "$want" in
+  body)     printf '%s' "${ISSUE_BODY:-}" ;;
+  comments) printf '%s' "${COMMENTS_JSON:-{\"comments\":[]\}}" | jq -r "$jqexpr" ;;
+  *)        exit 64 ;;
 esac
 STUB
 chmod +x "$WORK/bin/gh"
 
-run() { # run <comments> [issue_num]
-  OUT="$(COMMENTS="$1" ISSUE_NUM="${2-7437}" PATH="$WORK/bin:$PATH" bash "$PROBE" 2>&1)"
+DIRECTIVE='<!-- soleur:followthrough script=scripts/followthroughs/cpx22-invoice-reconcile-7431.sh earliest=2026-09-03 secrets=GH_TOKEN -->'
+
+# comments_json <assoc>:<body> ...  -> a --json comments payload
+comments_json() {
+  local out="[]" a b
+  for spec in "$@"; do
+    a="${spec%%:*}"; b="${spec#*:}"
+    out="$(jq -c --arg a "$a" --arg b "$b" '. + [{authorAssociation:$a, body:$b}]' <<<"$out")"
+  done
+  jq -c '{comments: .}' <<<"$out"
+}
+
+run() { # run <comments_json> [issue_body] [gh_rc]
+  OUT="$(COMMENTS_JSON="$1" ISSUE_BODY="${2-$DIRECTIVE}" GH_RC="${3-0}" \
+         PATH="$WORK/bin:$PATH" bash "$PROBE" 2>&1)"
   RC=$?
 }
 
-expect() { # expect <label> <want_rc> <want_substr>
-  local label="$1" want_rc="$2" want_sub="$3"
-  if [[ "$RC" != "$want_rc" ]]; then
-    fail "$label — wanted rc=$want_rc, got rc=$RC. Output: $OUT"; return
-  fi
-  if [[ -n "$want_sub" && "$OUT" != *"$want_sub"* ]]; then
-    fail "$label — rc correct but output lacks '$want_sub'. Output: $OUT"; return
-  fi
-  pass "$label (rc=$RC)"
+expect() { local l="$1" wrc="$2" wsub="$3"
+  if [[ "$RC" != "$wrc" ]]; then fail "$l — wanted rc=$wrc, got rc=$RC. Output: $OUT"; return; fi
+  if [[ -n "$wsub" && "$OUT" != *"$wsub"* ]]; then fail "$l — rc ok but output lacks '$wsub'. Output: $OUT"; return; fi
+  pass "$l (rc=$RC)"
 }
 
 echo "cpx22-invoice-reconcile-7431 harness"
 
-# 1. The shape the issue actually asks for: a verdict WITH the figure. A `$`-anchored probe would
-#    reject this, and then never close no matter what the operator wrote.
-run 'Pulled the PDF.
-RESULT: PASS  EUR 13.98 delta, gross == net, no VAT correction needed'
-expect "PASS with the required figure closes" 0 "PASS"
+# 1. The shape the issue asks for. A `$`-anchored probe would reject the figure and never close.
+run "$(comments_json 'MEMBER:RESULT: PASS  EUR 13.98 delta, gross == net, no VAT correction')"
+expect "member PASS with the required figure closes" 0 "PASS"
 
-# 2. FAIL reopens, and says both ledgers move together — correcting one leaves them disagreeing.
-run 'RESULT: FAIL  invoice still shows the cx23 rate for soleur-registry'
-expect "FAIL is exit 1" 1 "expenses.md AND cost-model.md"
+# 2. FAIL reopens and names the both-ledgers consequence.
+run "$(comments_json 'MEMBER:RESULT: FAIL  invoice still shows the cx23 rate')"
+expect "member FAIL is exit 1" 1 "expenses.md AND cost-model.md"
 
-# 3. No verdict yet. The overwhelmingly common state, and it must never be a pass.
-run 'Chased ops@ for the PDF, nothing yet.'
-expect "no verdict is TRANSIENT" 2 "no anchored RESULT"
+# 3. Nothing yet — the overwhelmingly common state, and never a pass.
+run "$(comments_json 'MEMBER:Chased ops@ for the PDF, nothing yet.')"
+expect "no verdict is TRANSIENT" 2 "no member-authored"
 
-# 4. ANCHORING. Someone quotes the instructions mid-sentence while asking a question. An unanchored
-#    grep closes the issue here, on a comment that is literally asking whether it can be closed.
-run 'Do I write RESULT: PASS once the invoice lands, or wait for the full month?'
-expect "an inline mention of the token does not close the issue" 2 "no anchored RESULT"
+# ── FORGERY ──────────────────────────────────────────────────────────────────────────────────
+# 4. THE CRITICAL ONE. Public repo: any GitHub user can comment. A NONE/CONTRIBUTOR verdict must
+#    not close a financial tracker. Before the author filter this exited 0 on one HTTP POST.
+run "$(comments_json 'NONE:RESULT: PASS  EUR 19.49, VAT unchanged')"
+expect "a stranger's PASS does NOT close the issue" 2 "no member-authored"
 
-# 5. FAIL must win when both appear — a later correction of an earlier premature PASS must not be
-#    outvoted by the string it is correcting. Guards the arm ORDER, which is otherwise invisible.
-run 'RESULT: PASS  looked right at first glance
-RESULT: FAIL  retracting: that was the July invoice, August bills cx23'
-expect "FAIL present alongside PASS still fails" 1 "FAIL"
+# 5. ...and the filter must not be so tight it rejects real reviewers.
+run "$(comments_json 'COLLABORATOR:RESULT: PASS  EUR 14.00 confirmed')"
+expect "a COLLABORATOR verdict is accepted" 0 "PASS"
 
-# 6. Cannot self-locate -> TRANSIENT, never a pass. This is the arm that would have fired forever
-#    had the probe taken the issue number as $1, since the sweeper passes no arguments.
-run 'RESULT: PASS  whatever' ''
-expect "unlocatable issue is TRANSIENT" 2 "could not locate"
+# 6. A stranger cannot fabricate a FAIL either — wedging the tracker red is also an attack.
+run "$(comments_json 'NONE:RESULT: FAIL  nope')"
+expect "a stranger's FAIL does not wedge the tracker" 2 "no member-authored"
 
-MIN_CHECKS=6
+# ── ANCHORING ────────────────────────────────────────────────────────────────────────────────
+# 7. The word boundary. `RESULT: PASSing on this for now` exited 0 before `\b` — closing the
+#    tracker on a comment that explicitly DECLINES to verify.
+run "$(comments_json 'MEMBER:RESULT: PASSing on this for now, invoice not here yet')"
+expect "RESULT: PASSing does not close" 2 "no member-authored"
+
+# 8. Evidence required. The header and the issue both promise a bare verdict is refused.
+run "$(comments_json 'MEMBER:RESULT: PASS')"
+expect "bare PASS with no figure is TRANSIENT" 2 "no figure"
+
+# 9. A fenced template must not arm the probe. This is a helpful contributor, not an attacker —
+#    and case 10 shows the unindented paste is the realistic one.
+run "$(comments_json 'MEMBER:Use this form:
+```
+RESULT: PASS   <actual figure, and any VAT correction>
+```
+Asking before the invoice lands.')"
+expect "a fenced template does not close the issue" 2 "no member-authored"
+
+# 10. Mid-sentence mention — the easy anchoring case, kept as the cheap regression.
+run "$(comments_json 'MEMBER:Do I write RESULT: PASS once the invoice lands?')"
+expect "an inline mention does not close the issue" 2 "no member-authored"
+
+# ── VERDICT SELECTION ────────────────────────────────────────────────────────────────────────
+# 11. Retraction of a premature PASS. FAIL must win here.
+run "$(comments_json 'MEMBER:RESULT: PASS  looked right at first glance' \
+                     'MEMBER:RESULT: FAIL  retracting: that was July, August bills cx23')"
+expect "a later FAIL overrides an earlier PASS" 1 "FAIL"
+
+# 12. THE INVERSE, and the reason this is last-wins rather than FAIL-absorbing. Under the old rule
+#     a premature FAIL was unrecoverable: exit 1 on every sweep forever, tracker permanently red.
+#     Note case 11 alone cannot distinguish the two rules — this case is what makes the choice
+#     observable, and "FAIL always wins" fails here.
+run "$(comments_json 'MEMBER:RESULT: FAIL  invoice shows cx23' \
+                     'MEMBER:RESULT: PASS  corrected invoice reissued, EUR 14.00 delta confirmed')"
+expect "a later corrected PASS overrides an earlier FAIL" 0 "PASS"
+
+# 13. SELF-POISONING. The sweeper posts this probe's own stdout into a comment on this issue. If
+#     the echoed verdict keeps its `RESULT:` anchor at column 1, the next run reads the sweeper's
+#     echo as a verdict and the issue can never close again. Simulates that exact comment.
+run "$(comments_json 'MEMBER:RESULT: FAIL  invoice shows cx23' \
+                     'MEMBER:### Sweeper run: FAIL
+cpx22-invoice-reconcile[#7437]: FAIL — the invoice contradicts the ledger
+RESULT: FAIL  invoice shows cx23' \
+                     'MEMBER:RESULT: PASS  corrected invoice, EUR 14.00 delta confirmed')"
+expect "the sweeper's own echoed FAIL does not outlive the operator's correction" 0 "PASS"
+
+# 14. And the probe must not EMIT a re-readable anchor in the first place.
+run "$(comments_json 'MEMBER:RESULT: FAIL  invoice shows cx23')"
+if [[ "$OUT" == *$'\n''RESULT: FAIL'* || "$OUT" == 'RESULT: FAIL'* ]]; then
+  fail "the probe echoes an unredacted ^RESULT: line, which the sweeper will post back and re-read"
+else
+  pass "the echoed verdict is redacted so it cannot be re-read as one"
+fi
+
+# ── PLUMBING ─────────────────────────────────────────────────────────────────────────────────
+# 15. gh transport failure must never read as "no verdict, therefore fine". Untestable before,
+#     because the old stub's view arm always exited 0.
+run "$(comments_json 'MEMBER:RESULT: PASS  EUR 14.00')" "$DIRECTIVE" 7
+expect "gh transport failure is TRANSIENT, not a pass" 2 "TRANSIENT"
+
+# 16. The hardcoded issue number is asserted against the directive, so a retarget is caught rather
+#     than silently reading a stale thread.
+run "$(comments_json 'MEMBER:RESULT: PASS  EUR 14.00')" "this issue no longer tracks that script"
+expect "a tracker missing its directive is TRANSIENT" 2 "no longer carries"
+
+MIN_CHECKS=16
 if (( checks < MIN_CHECKS )); then
   echo "FAIL: only $checks assertions ran, expected >= $MIN_CHECKS" >&2
   fails=$((fails + 1))
