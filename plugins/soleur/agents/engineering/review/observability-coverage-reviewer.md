@@ -116,9 +116,13 @@ Also verify **verb-completeness**, not just the first-step check: a runbook clai
 
 Note: the PreToolUse hook `ship-runbook-ssh-gate.sh` enforces this mechanically at `gh pr ready` — your review surfaces violations earlier in the review cycle.
 
-### Step 6: Plan `discoverability_test.command` no-SSH check
+### Step 6: Plan `discoverability_test.command` no-SSH + executability check
 
-In each plan's `## Observability` block, the `discoverability_test.command` field must NOT include `ssh`, `docker exec`, `journalctl -f`, or any other in-host interactive verb. Acceptable shapes: `curl ...`, `gh run view ...`, `gh issue view ...`, `gh api ...`, `doppler secrets get ...`. Violations = **P1 finding**.
+In each plan's `## Observability` block, the `discoverability_test.command` field must NOT include `ssh`, `docker exec`, `journalctl -f`, or any other in-host interactive verb. Violations = **P1 finding**.
+
+Preflight Check 10 **executes** this command inside a sandbox behind a deny-by-default verb allowlist, so also verify it can actually run. Acceptable shapes are the allowlisted verbs — `curl …`, `grep …`, `rg …`, `jq …`, `printf …`, `git …`, `bash <repo-relative-script> …`, `python3 …`, `node …`, `bun …` — **plus** any other shape (`gh api …`, `doppler secrets get …`, `docker …`, `npm …`, and every other non-allowlisted verb) *only when* the block carries a non-placeholder `credentials_required` declaration naming the credential scope and stating why no unauthenticated probe verifies the same property. Note there is **no path-shaped exemption**: `./doppler …` and `gh/Sentry …` are rejected exactly like a bare `doppler`. Without a declaration, a non-allowlisted command is a **P1**
+
+Treat `credentials_required` as a **verification waiver**, and review it as one. It is the cheapest path to a non-FAIL for any probe, for any reason, and in `/soleur:one-shot` the same agent authors the declaration and runs the gate. Accept it only where the property genuinely has no unauthenticated substitute; where an unauthenticated probe would verify the same property, a declaration that swaps live verification for prose is a **P1 finding**. Canonical gate: `plugins/soleur/skills/preflight/SKILL.md` §Check 10 Step 10.4 (ADR-175).
 
 ### Step 7: Report
 
