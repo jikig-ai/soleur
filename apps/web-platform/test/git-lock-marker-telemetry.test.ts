@@ -235,20 +235,40 @@ describe("drift guard: every sentinel the shell script emits is mirrored", () =>
       .map((e) => join(skillsDir, e.name, "SKILL.md"))
       .filter((p) => existsSync(p))
       .map((p) => readFileSync(p, "utf8"));
-    scripts.push(...skillDocs);
     // Both scripts emit `echo "SOLEUR_..."` sentinels; also collect the non-SOLEUR_-prefixed
     // fatal markers now in the allowlist (D1b): `NO_GIT_REPOSITORY` (the repo-readiness gate),
     // the `SOLEUR_FEATURE_*` push-failure, and the `worktree wedge:` give-up phrase (this PR
     // adds five new bare-echo copies of it — pin the literal so a future rename fails CI here
     // rather than silently un-mirroring). A renamed/added sentinel unmatched by MARKER_RE
     // must fail CI here rather than go silently unmirrored — the exact blindness this closes.
-    const sentinels = scripts.flatMap((s) =>
-      [...s.matchAll(/echo "(SOLEUR_[A-Z_]+|NO_GIT_REPOSITORY|worktree wedge:)/g)].map(
-        (m) => m[1],
-      ),
-    );
-    const unique = [...new Set(sentinels)];
+    const SENTINEL_RE = /echo "(SOLEUR_[A-Z_]+|NO_GIT_REPOSITORY|worktree wedge:)/g;
+    const collect = (s: string) => [...s.matchAll(SENTINEL_RE)].map((m) => m[1]);
+
+    // The two .sh files are a bounded surface: every sentinel they echo belongs to
+    // this telemetry's domain, so collect them wholesale.
+    const scriptSentinels = scripts.flatMap(collect);
+
+    // SKILL.md is NOT bounded that way — a skill file is agent-executed prose for
+    // whatever that skill does, so it carries sentinels from unrelated domains.
+    // Requiring MARKER_RE to mirror all of them makes this guard fail on other
+    // people's work and pressures the fix in the wrong direction: registering a
+    // foreign marker for telemetry nobody asked for. Measured: the unscoped form
+    // demanded `SOLEUR_PREFLIGHT_CHECK10_NOSANDBOX` (preflight's sandbox
+    // diagnostic, landed on main by a sibling PR) be mirrored as a git-lock marker.
+    // Scope the SKILL.md half to the domains extractGitLockMarkers actually covers.
+    const DOMAIN_RE = /^(SOLEUR_GIT_|SOLEUR_WORKTREE_|SOLEUR_SESSION_STATE_)/;
+    const skillSentinels = skillDocs.flatMap(collect).filter((n) => DOMAIN_RE.test(n));
+
+    const unique = [...new Set([...scriptSentinels, ...skillSentinels])];
     expect(unique.length).toBeGreaterThan(0); // non-vacuous: the scripts DO emit sentinels
+    // The SKILL.md scan is the whole point of the #7409 widening, and a prefix
+    // filter is exactly the thing that can silently reduce it to a no-op — which
+    // would reopen the blindness (a sentinel authored in prose, mirrored nowhere)
+    // while leaving this test green. Assert the scan still contributes.
+    expect(
+      new Set(skillSentinels).size,
+      "the SKILL.md scan matched no in-domain sentinel — DOMAIN_RE has drifted from the names skills actually echo, and the #7409 gap is open again",
+    ).toBeGreaterThan(0);
     // Every emitted sentinel must be mirrored — except SUCCESS-PATH control signals,
     // which are read locally and are not forensics to log:
     //   - SOLEUR_GIT_REPO_READY — go.md's readiness gate reads it on the ready path.
@@ -270,7 +290,7 @@ describe("drift guard: every sentinel the shell script emits is mirrored", () =>
       const sample = `${name} file=.git/config.lock type=chardevice rdev=1:3`;
       expect(
         extractGitLockMarkers(sample).length,
-        `sentinel ${name} echoed by a git-worktree script is not matched by the telemetry extractor — update MARKER_RE`,
+        `sentinel ${name} echoed by a git-worktree script or a skill's SKILL.md is not matched by the telemetry extractor — update MARKER_RE`,
       ).toBe(1);
     }
   });
