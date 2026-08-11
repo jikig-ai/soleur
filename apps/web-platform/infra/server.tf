@@ -198,6 +198,17 @@ locals {
     "web-git-data-probe.sh",
     "web-git-data-probe.service",
     "web-git-data-probe.timer",
+    # (#7228) The inngest consumer probe. Baked for the SAME reason as the three above: the SSH
+    # provisioner reaches web-1 only, so without these a rebuilt web-2 would come up with NO
+    # detection for the dedicated inngest host — silently reintroducing the blind spot this whole
+    # change exists to close. web-host-provisioner-parity.test.sh caught exactly that.
+    # inngest-registry-probe.sh is included because the consumer probe SOURCES it for the shared
+    # GQL query; on a fresh host its other delivery path (the infra-config push) has not run yet,
+    # so the probe would FATAL on a missing peer every 60s.
+    "inngest-consumer-probe.sh",
+    "inngest-consumer-probe.service",
+    "inngest-consumer-probe.timer",
+    "inngest-registry-probe.sh",
     "web-probe-envwrite.sh",
   ]
 
