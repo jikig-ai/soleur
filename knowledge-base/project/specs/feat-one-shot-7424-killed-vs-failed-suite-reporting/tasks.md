@@ -67,12 +67,12 @@ operator-stated scope are recorded in `decision-challenges.md` and were delibera
 - [x] 6.4 `plugins/soleur/skills/test-fix-loop/SKILL.md` — **four** sites: pre-loop gate (read rc, not "all tests pass"), parse step (define "non-zero exit, nothing parseable"), **iteration-delta arithmetic** (count must be `failures + killed`; otherwise a FAILED→KILLED transition reads as improvement and the return jump reads as Regression → `git reset --hard HEAD` **discards real fixes**), and a terminating row.
 - [x] 6.5 `plugins/soleur/scripts/grok-pre-push-gate.sh`: `run_step` captures rc; exit 3 → `[UNRESOLVED]`, still non-zero.
 - [x] 6.6 `plugins/soleur/skills/one-shot/SKILL.md`: poll the marker *shape* + rc file; state the green/killed/reap trichotomy (a killed run currently reads as a harness reap).
-- [x] 6.7 `AGENTS.rules.md`: one short clause on `wg-when-a-test-runner-crashes-segfault-oom`. **Budget-gated** — `B_ALWAYS`=44400 vs 46000 ratchet; keep under ~150 bytes, re-run `lint-agents-rule-budget.py`, else carry the ladder in ADR-175 + skills only.
+- [x] 6.7 `AGENTS.rules.md`: one short clause on `wg-when-a-test-runner-crashes-segfault-oom`. **Budget-gated** — `B_ALWAYS`=44400 vs 46000 ratchet; keep under ~150 bytes, re-run `lint-agents-rule-budget.py`, else carry the ladder in ADR-177 + skills only.
 - [x] 6.8 No-edit checks recorded: `git-worktree/SKILL.md` process-table sentence; `review/SKILL.md` anchor-rule example.
 
 ## Phase 7 — ADR + deferral
 
-- [x] 7.1 Write `ADR-175-test-runner-result-taxonomy-unresolved-is-not-failed.md` (Decision, Alternatives A1–A5, Consequences incl. wrapper-absorption + top-level-only exit 3). Re-derive the ordinal against fresh `origin/main` at ship; sweep all artifacts on any renumber.
+- [x] 7.1 Write `ADR-177-test-runner-result-taxonomy-unresolved-is-not-failed.md` (Decision, Alternatives A1–A5, Consequences incl. wrapper-absorption + top-level-only exit 3). Re-derive the ordinal against fresh `origin/main` at ship; sweep all artifacts on any renumber.
 - [x] 7.2 File the parity tracking issue (triple test already passed): wrapper surfaces from R4 (incl. the webplat `npm run test:ci` registration) + Phase 5 budgets if deferred. Verify labels exist first.
 
 ## Phase 8 — Verification

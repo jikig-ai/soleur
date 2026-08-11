@@ -838,8 +838,29 @@ fi
 # --- Minimum-cardinality guard ---------------------------------------------
 # A silently-empty run exits 0 with zero coverage, which reads exactly like
 # success. This is the guard for that.
-if [[ "$pass_n" -lt 66 ]]; then
-  fail "cardinality guard: only $pass_n assertions ran (expected >= 66)"
+# POSITIVE CONTROL. The guard below reports THROUGH fail(), so fail() is a single
+# point of failure for this entire file: neutered to a no-op it takes the whole
+# verdict with it. Measured before this control existed: `fail() { :; }` plus
+# deleting the SIBLING_SUITE_DETECTED banner from the lib reported
+# "62 passed, 0 failed", exit 0 -- the flagship feature gone, four assertions
+# silently vanished, and the cardinality guard DETECTING the shortfall and unable
+# to say so. A brace group with a redirect, never `$( )`: command substitution
+# runs in a subshell and the increments would be discarded.
+_pc_p=$pass_n; _pc_f=$fails
+{ pass "positive-control probe"; fail "positive-control probe"; } >/dev/null 2>&1
+if [[ "$pass_n" -eq $((_pc_p + 1)) && "$fails" -eq $((_pc_f + 1)) ]]; then
+  pass_n="$_pc_p"; fails="$_pc_f"
+  echo "  [control] pass() and fail() both move their counters"
+else
+  echo "  [FATAL] assertion helpers do not move their counters -- every verdict here is void." >&2
+  exit 1
+fi
+
+# Count BOTH outcomes: a run with genuine failures has a lower pass_n, and testing
+# pass_n alone reported "cardinality guard: only 64 ran (expected >= 66)" on a run
+# whose real problem was two failures -- a strand message for a non-strand.
+if [[ "$((pass_n + fails))" -lt 66 ]]; then
+  fail "cardinality guard: only $((pass_n + fails)) assertions ran (expected >= 66)"
 fi
 
 echo "=== test-contention: $pass_n passed, $fails failed ==="

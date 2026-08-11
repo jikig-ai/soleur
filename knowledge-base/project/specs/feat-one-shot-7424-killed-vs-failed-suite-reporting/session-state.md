@@ -52,7 +52,7 @@ All encountered errors were resolved in-session; none outstanding.
 ### Carried-forward constraint
 `AGENTS.rules.md` is at `B_ALWAYS=44400` against a 46000 ratchet (already in WARN). The planned
 rule-83 clause is budget-gated in the plan — if it does not fit under ~150 bytes, the escalation
-ladder ships in ADR-175 and the skills instead.
+ladder ships in ADR-177 and the skills instead.
 
 ## Collision checks
 - Step 0a.5 (invoked ref `#7424`): OPEN, no closing PRs; `linked:issue`, `in:body`, `in:title`,

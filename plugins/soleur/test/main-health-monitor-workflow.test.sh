@@ -226,7 +226,13 @@ else:
 # run-registered-suites.sh's own header: "a failing suite prints `RED <path>`,
 # not `FAIL`. A `grep FAIL` over this runner's log returns zero hits on a failing
 # run and reads as clean -- measured 2026-08-04 (#7220)."
-if re.search(r"grep -E '\^RED \|\^\\\[FAIL\\\]'", stripped):
+# The flag list is deliberately NOT pinned -- `(?:-\S+ )*` tolerates `-m 20` etc.
+# This assertion's own message names a property of the PATTERN (it must match ^RED as
+# well as ^[FAIL]); pinning `grep -E` as a contiguous literal pinned flag ADJACENCY
+# instead, which is narrower than the property and reds on a hardening that leaves the
+# pattern byte-identical. The plan said (8) stays untouched; this is a deliberate
+# deviation, and it preserves what (8) exists to prove.
+if re.search(r"grep [^']*-E '\^RED \|\^\\\[FAIL\\\]'", stripped):
     ok("(8) failure marker matches ^RED as well as ^[FAIL]")
 else:
     bad("(8) failure marker matches ^RED as well as ^[FAIL]",
@@ -623,7 +629,7 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
     pass "(B1)$ARM the filer completes on a killed-only capture"
   fi
 
-  if b_body | grep -qF 'registry-gate-mutation-battery'; then
+  if grep -qF -- 'registry-gate-mutation-battery' "$BEHAVE_DIR/run/issue-body.md"; then
     pass "(B2)$ARM the issue body NAMES the terminated suite"
   else
     fail "(B2)$ARM the issue body NAMES the terminated suite" \
@@ -631,13 +637,13 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
 "without the SUMMARY append the operator gets an issue titled 'terminated' naming no suite"
   fi
 
-  if b_body | grep -qF '<redacted-gh-token>'; then
+  if grep -qF -- '<redacted-gh-token>' "$BEHAVE_DIR/run/issue-body.md"; then
     pass "(B3)$ARM a token on a [KILLED] line is redacted in the published body"
   else
     fail "(B3)$ARM a token on a [KILLED] line is redacted in the published body" \
       "this repo is PUBLIC; content appended AFTER the REDACTED= pass ships raw"
   fi
-  if b_body | grep -qF "$_TOK"; then
+  if grep -qF -- "$_TOK" "$BEHAVE_DIR/run/issue-body.md"; then
     fail "(B3b)$ARM the raw token literal does NOT survive into the body" \
       "the killed hits were appended after the redactor"
   else
@@ -652,20 +658,20 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
       "title=$(b_title) -- 'tests failing' would assert a failure no suite reported"
   fi
 
-  if b_body | grep -qF 'gh workflow run main-health-monitor.yml'; then
+  if grep -qF -- 'gh workflow run main-health-monitor.yml' "$BEHAVE_DIR/run/issue-body.md"; then
     pass "(B5)$ARM the killed body's Actions block names a re-run command"
   else
     fail "(B5)$ARM the killed body's Actions block names a re-run command" \
       "the only actionable text on the page must match the arm it is on"
   fi
-  if b_body | grep -qF 'Fix the tests or revert the breaking change'; then
+  if grep -qF -- 'Fix the tests or revert the breaking change' "$BEHAVE_DIR/run/issue-body.md"; then
     fail "(B6)$ARM the killed body prescribes no revert" \
       "a non-technical operator is told to find and revert a commit on a run whose own "\
 "lede says no suite reported a failure"
   else
     pass "(B6)$ARM the killed body prescribes no revert"
   fi
-  if b_body | grep -qF '### Actions required'; then
+  if grep -qF -- '### Actions required' "$BEHAVE_DIR/run/issue-body.md"; then
     pass "(B6b)$ARM the killed body still carries an Actions required block"
   else
     fail "(B6b)$ARM the killed body still carries an Actions required block" \
@@ -705,7 +711,7 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
     fail "(B9)$ARM a capture with BOTH markers is reported as a failure" \
       "title=$(b_title) -- calling a run with a real [FAIL] merely 'terminated' hides it"
   fi
-  if b_body | grep -qF 'Fix the tests or revert the breaking change'; then
+  if grep -qF -- 'Fix the tests or revert the breaking change' "$BEHAVE_DIR/run/issue-body.md"; then
     pass "(B9b)$ARM the failure arm keeps its pre-existing Actions wording"
   else
     fail "(B9b)$ARM the failure arm keeps its pre-existing Actions wording" \
@@ -744,7 +750,12 @@ fi
 # having asserted nothing -- the exact "a check that cannot report is
 # indistinguishable from one that passed" class. A FLOOR, not equality: a new
 # assertion must not require editing this number.
-MIN_ASSERTIONS=14
+# Calibrated to the CURRENT count, not left at the pre-#7424 value of 14. Slack in this
+# floor IS the budget a stranded layer has to hide in: at 14-against-56, making the static
+# block emit nothing reported 28 assertions / exit 0 (all nine #7424 static guards gone),
+# and stranding the behavioural battery reported 30 / exit 0 (all 26 AC21/AC22/AC23
+# assertions gone, incl. redaction and forged-marker rejection).
+MIN_ASSERTIONS=56
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   echo "  [FAIL] anti-vacuity: only $TOTAL assertion(s) ran, expected >= $MIN_ASSERTIONS" >&2

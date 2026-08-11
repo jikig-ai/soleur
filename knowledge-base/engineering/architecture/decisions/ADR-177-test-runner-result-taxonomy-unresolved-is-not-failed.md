@@ -1,4 +1,4 @@
-# ADR-175: A terminated suite is UNRESOLVED, not failed
+# ADR-177: A terminated suite is UNRESOLVED, not failed
 
 - **Status:** Accepted. True the moment the code merges — no soak window, no time-gated criterion.
 - **Date:** 2026-08-11

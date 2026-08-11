@@ -10,9 +10,11 @@ set -euo pipefail
 #      without revisiting this.
 #   2  usage error (TEST_GROUP took an unsupported value) — predates the above
 #
-# Every measured consumer treats this as binary zero/non-zero (lefthook, the three ci.yml
-# shards, package.json, grok-pre-push-gate.sh, main-health-monitor.yml), so 3 is safe for all
-# of them; exiting 0 on a killed suite would silently green every one. Note that ci.yml's
+# Every consumer was binary zero/non-zero BEFORE this change (lefthook, the three ci.yml
+# shards, package.json, main-health-monitor.yml) and still blocks on any non-zero, so 3 is
+# safe for all of them; exiting 0 on a killed suite would silently green every one.
+# grok-pre-push-gate.sh is the exception THIS change creates: it now reads 3, renders
+# [UNRESOLVED] instead of [FAIL], and forwards 3 — its own consumer (ship Phase 6) is binary. Note that ci.yml's
 # aggregate `test` job reads `needs.<shard>.result`, whose domain is
 # {success,failure,cancelled,skipped} — so the REQUIRED context cannot carry 3. CI collapses
 # killed into failure, and the distinction survives in the shard log and the [KILLED] lines.
@@ -157,9 +159,13 @@ want_infra()   { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "infra"   ]]; }
 # --- Run Tests Per Directory ---
 failed=0
 suites=0
-# Beside failed/suites deliberately. Under `set -u` an uninitialized `killed`
-# aborts the summary block AFTER the terminal marker but BEFORE the exit arm,
-# yielding exit 0 on a run that had failures. This line is not cosmetic.
+# Beside failed/suites deliberately, and required — but for a different reason
+# than an earlier revision of this comment claimed. MEASURED 2026-08-11 (bash
+# 5.3.9): with `killed` unset, `set -u` aborts at the FIRST read, which is the
+# breakdown gate — ABOVE the terminal marker, not below it — and the run exits
+# 1, not 0. So the failure mode is a loud abort with no terminal marker, not a
+# silent false green. That shape is what work/SKILL.md reads as "a failure with
+# no marker", which sends a reader hunting for [FAIL] lines that do not exist.
 killed=0
 
 # Classify a suite's exit code into exactly one of: ok | failed | killed.
@@ -201,7 +207,7 @@ suite_exit_class() {
 
 # Declared wall-clock budgets for suites known to be long. A `case`, not a
 # `declare -A`: no initialization ordering to get right, no associative-array
-# declaration at the top of an 800-line script, and zero churn at the 131
+# declaration at the top of a ~1000-line script, and zero churn at the 132
 # run_suite call sites. Emits nothing for an undeclared label.
 #
 # A budget NEVER changes a suite's status or the runner's exit code. It exists so
@@ -294,7 +300,19 @@ run_suite() {
     echo "[ok] $label (${elapsed_ms}ms)"
     printf '%s\t%d%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
   elif [[ "$status" == "killed" ]]; then
-    echo "[KILLED] $label (exit=$rc, signal-shaped 128+$(( rc - 128 )) = SIG$(kill -l $(( rc - 128 )) 2>/dev/null), ${elapsed_ms}ms) — UNRESOLVED, not a failure: this runner did not measure what terminated it, and exit $rc is also what a suite calling exit($rc) reports." >&2
+    # A declared budget is named HERE, on the one line where it changes the
+    # reading: it tells the reader whether this suite's elapsed time was expected.
+    # Without it "560931ms" is a bare number; with it, it is two thirds of a
+    # declared 2500000ms budget, i.e. the kill was not this runner running long.
+    # OUTSIDE the parenthetical, deliberately. main-health-monitor.yml anchors on
+    # the exact shape `(exit=N, signal-shaped 128+n = SIGNAME, Nms)`; putting the
+    # budget note inside it makes that grep miss and routes every terminated suite
+    # to the generic "did not complete" arm. Measured — this comment exists because
+    # the note was first written inside the parens and the monitor went blind.
+    local _kb; _kb="$(_suite_budget_ms "$label")"
+    local _bnote=""
+    [[ -n "$_kb" ]] && _bnote=" This suite declares a ${_kb}ms budget, so compare the elapsed above against it before treating the duration as anomalous."
+    echo "[KILLED] $label (exit=$rc, signal-shaped 128+$(( rc - 128 )) = SIG$(kill -l $(( rc - 128 )) 2>/dev/null), ${elapsed_ms}ms) — UNRESOLVED, not a failure: this runner did not measure what terminated it, and exit $rc is also what a suite calling exit($rc) reports.${_bnote}" >&2
     printf '%s\t%d\tKILLED%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
   else
     echo "[FAIL] $label (${elapsed_ms}ms)" >&2

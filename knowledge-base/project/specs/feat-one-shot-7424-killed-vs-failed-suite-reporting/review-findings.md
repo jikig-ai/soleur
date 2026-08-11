@@ -66,4 +66,4 @@ plan; the two that touch operator-stated scope live in `decision-challenges.md`.
   suite stdout to the Actions log parser; precedent exists at `reusable-release.yml`.
 - Issue-title staleness when a tracker's arm changes between runs (pre-existing across all 3 arms).
 - `run-registered-suites.sh`'s own `exit 2` (FATAL) — evidence for the "exit codes are runner-local"
-  framing, recorded in ADR-175 Consequences rather than changed.
+  framing, recorded in ADR-177 Consequences rather than changed.

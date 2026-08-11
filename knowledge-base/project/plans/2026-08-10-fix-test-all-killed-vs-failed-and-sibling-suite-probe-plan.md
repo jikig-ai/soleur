@@ -201,7 +201,7 @@ misled.
 
 ### ADR
 
-**Create `ADR-175-test-runner-result-taxonomy-unresolved-is-not-failed.md`**. Decision: *a suite
+**Create `ADR-177-test-runner-result-taxonomy-unresolved-is-not-failed.md`**. Decision: *a suite
 whose exit is signal-shaped with a decodable signal name is an UNRESOLVED result — its own marker,
 excluded from the failure count, named in the summary, surfaced as a distinct non-zero exit code;
 the runner never names what terminated it.* `## Alternatives Considered` carries A1–A5 below.
@@ -212,7 +212,7 @@ the runner never names what terminated it.* `## Alternatives Considered` carries
 > check, so a sibling PR can claim 175 and the collision surfaces only post-squash. `/ship`'s
 > ADR-Ordinal Collision Gate re-derives it against freshly-fetched `origin/main`. **On any
 > renumber, sweep the whole artifact set in the same edit:**
-> `grep -rn 'ADR-175' knowledge-base/project/{plans,specs}/feat-one-shot-7424-*/` plus this body and
+> `grep -rn 'ADR-177' knowledge-base/project/{plans,specs}/feat-one-shot-7424-*/` plus this body and
 > AC16 — a renumber reaching only the ADR file leaves an AC asserting a nonexistent path.
 
 ### C4 views
@@ -232,7 +232,7 @@ No `.c4` edit, hence no `views.c4` include and no re-run of the c4 syntax/render
 
 ### Sequencing
 
-True the moment the code merges — no soak, no `status: adopting`. ADR-175 ships in this PR.
+True the moment the code merges — no soak, no `status: adopting`. ADR-177 ships in this PR.
 
 ---
 
@@ -849,7 +849,7 @@ LEDE="At least one suite exited with a signal-shaped status (128+N). The runner 
 
 ### Phase 7 — ADR + deferral
 
-7.1 Write ADR-175 per §Architecture Decision.
+7.1 Write ADR-177 per §Architecture Decision.
 
 7.2 File **one** tracking issue for deferred parity. Triple test (`wg-defer-only-after-inline-triage`)
     run 2026-08-10 and passed on all three arms: **(1)** inline-first fails —
@@ -885,14 +885,14 @@ LEDE="At least one suite exited with a signal-shaped status (128+N). The runner 
 | `plugins/soleur/skills/test-fix-loop/SKILL.md` | **four** sites: pre-loop gate, parse step, iteration-delta arithmetic, terminating row |
 | `plugins/soleur/scripts/grok-pre-push-gate.sh` | `run_step` captures rc; exit 3 renders `[UNRESOLVED]`, still non-zero |
 | `plugins/soleur/skills/one-shot/SKILL.md` | poll the marker *shape* + rc file; state the green/killed/reap trichotomy |
-| `AGENTS.rules.md` | one short clause on `wg-when-a-test-runner-crashes-segfault-oom` scoping a `[KILLED]` suite in, pointing at ADR-175 for the ladder (id unchanged). **Budget-gated:** `B_ALWAYS`=44400 vs the 46000 ratchet (WARN at 44000) — keep it under ~150 bytes and re-run `lint-agents-rule-budget.py`; if it does not fit, drop the clause and carry the ladder in ADR-175 + the two skills only |
+| `AGENTS.rules.md` | one short clause on `wg-when-a-test-runner-crashes-segfault-oom` scoping a `[KILLED]` suite in, pointing at ADR-177 for the ladder (id unchanged). **Budget-gated:** `B_ALWAYS`=44400 vs the 46000 ratchet (WARN at 44000) — keep it under ~150 bytes and re-run `lint-agents-rule-budget.py`; if it does not fit, drop the clause and carry the ladder in ADR-177 + the two skills only |
 
 ## Files to Create
 
 | Path | Purpose |
 | --- | --- |
 | `scripts/test-all-killed-classification.test.sh` | Part A: table-driven classifier over 21 rows incl. 160/161/192. Part B: sandbox proof the **runner** renders KILLED, excludes it from the failure total, exits 3 — plus mutation arms A5/A7 |
-| `knowledge-base/engineering/architecture/decisions/ADR-175-test-runner-result-taxonomy-unresolved-is-not-failed.md` | the decision, A1–A5, and the wrapper-absorption + top-level-exit-3 consequences |
+| `knowledge-base/engineering/architecture/decisions/ADR-177-test-runner-result-taxonomy-unresolved-is-not-failed.md` | the decision, A1–A5, and the wrapper-absorption + top-level-exit-3 consequences |
 
 *(Plan v1's `scripts/lib/suite-exit-class.sh` and `scripts/lib/suite-exit-class.test.sh` are **not**
 created — see Phase 1.)*
@@ -959,10 +959,10 @@ All pre-merge. **No post-merge operator steps.**
     multiple — **or** Phase 5 is recorded as deferred to the Phase-7.2 issue with the measurement
     attempt noted. An empty `case` shipped silently satisfies neither branch. T14 proves the emitter
     independently via a fixture with a 0 ms budget.
-17. **AC16 — the ADR ships with the code.** `ADR-175-*.md` exists; its `## Decision` states the
+17. **AC16 — the ADR ships with the code.** `ADR-177-*.md` exists; its `## Decision` states the
     three-class taxonomy and the 0/1/3 contract; `## Consequences` states the wrapper-absorption
     limit and that 3 is top-level-only; `## Alternatives Considered` carries A1–A5. After any
-    ship-time renumber, `grep -rn 'ADR-175'` over the plan, spec dir and ADR body returns zero stale
+    ship-time renumber, `grep -rn 'ADR-177'` over the plan, spec dir and ADR body returns zero stale
     hits.
 18. **AC17 — deferral tracked.** The Phase-7.2 issue exists with its re-evaluation criterion, filed
     with labels verified present.

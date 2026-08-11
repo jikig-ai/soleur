@@ -178,6 +178,13 @@ j = s.index(end_anchor)
 
 calls = {
     "killed_only": [("selfterm", "selfterm.sh")],
+    # TWO killed suites, deliberately. Every other arm instantiates exactly one,
+    # and 1-of-1 cannot distinguish `killed=$((killed + 1))` from `killed=1`:
+    # a saturating counter passes a single-kill table in full. It is not cosmetic
+    # — the terminal marker computes `suites - failed - killed`, so under a
+    # saturating counter a run with N kills OVERSTATES the passed count by N-1,
+    # in exactly the multi-kill (OOM sweep) scenario this class exists for.
+    "killed_two":  [("selfterm1", "selfterm.sh"), ("selfterm2", "selfterm.sh")],
     "mixed":       [("assertfail", "assertfail.sh"), ("selfterm", "selfterm.sh")],
     "clean":       [("okfixture", "ok.sh")],
     "budget_hit":  [("budgetfixture", "slow.sh")],
@@ -312,6 +319,69 @@ if grep -qE '^\[KILLED\].*UNRESOLVED, not a failure' <<<"$A1_OUT" \
   pass "the [KILLED] line states it is unresolved and names no cause"
 else
   fail "the [KILLED] line does not carry the unresolved/no-cause wording"
+fi
+
+# --- A1c: EMITTER <-> CONSUMER parity -------------------------------------------------------
+# The [KILLED] line's shape is asserted in two places that cannot see each other: the runner
+# emits it, and main-health-monitor.yml greps it to decide whether a terminated suite gets
+# named in the ci/main-broken issue. Nothing derived one from the other, so reformatting the
+# parenthetical shipped a fully green suite while the monitor went permanently blind — every
+# terminated suite silently routed to the generic "did not complete" arm, whose actions tell
+# the operator to find the bad commit and revert it.
+#
+# This is not hypothetical: it happened while FIXING this file. A budget note was appended
+# inside the parens, all assertions stayed green, and the monitor stopped matching.
+#
+# So: extract the consumer's regex from the workflow and run it against the line the runner
+# actually emitted in A1. No hand-copied fixture — a copy drifts the same way the original did.
+MHM_WF="$REPO_ROOT/.github/workflows/main-health-monitor.yml"
+if [[ -r "$MHM_WF" ]]; then
+  killed_re=$(grep -oE "\^\\\\\[KILLED\\\\\][^']*ms\\\\\)" "$MHM_WF" | head -1 || true)
+  if [[ -n "$killed_re" ]]; then
+    pass "A1c — extracted the monitor's [KILLED] regex from the workflow"
+    emitted=$(grep -E '^\[KILLED\] selfterm ' <<<"$A1_OUT" | head -1 || true)
+    if [[ -n "$emitted" ]] && grep -qE "$killed_re" <<<"$emitted"; then
+      pass "A1c — the monitor's own regex matches the line the runner actually emitted"
+    else
+      fail "A1c — EMITTER/CONSUMER DRIFT: the monitor's regex does not match the emitted [KILLED] line"
+      dump "regex:   $killed_re"
+      dump "emitted: $emitted"
+    fi
+    # Non-vacuity: the regex must be capable of rejecting something.
+    if grep -qE "$killed_re" <<<'[KILLED] nope' ; then
+      fail "A1c — the extracted regex matches a malformed line; it pins nothing"
+    else
+      pass "A1c — the extracted regex rejects a malformed [KILLED] line (non-vacuous)"
+    fi
+  else
+    fail "A1c — could not extract the monitor's [KILLED] regex; the parity check did not run"
+  fi
+else
+  fail "A1c — main-health-monitor.yml unreadable; the parity check did not run"
+fi
+
+# --- A1b: TWO killed suites — the counter must ACCUMULATE, not saturate ---------------------
+run_arm killed_two none || true
+k2=$(grep -cE '^\[KILLED\] selfterm[12] ' <<<"$ARM_OUT" || true)
+if [[ "$k2" == "2" ]]; then
+  pass "AC2/A1b — both terminated suites render their own [KILLED] line"
+else
+  fail "AC2/A1b — expected 2 '^[KILLED] selfterm[12] ' lines, found $k2"; dump "$ARM_OUT"
+fi
+if grep -qE '^=== 2 suites: 0 passed, 0 failed, 2 killed \(unresolved' <<<"$ARM_OUT"; then
+  pass "AC2/A1b — the breakdown line accumulates to 2 killed"
+else
+  fail "AC2/A1b — breakdown did not report 2 killed (a saturating counter reports 1)"; dump "$ARM_OUT"
+fi
+if grep -qE '^=== 0/2 suites passed ===$' <<<"$ARM_OUT"; then
+  pass "AC2/A1b — the terminal marker does not overstate the passed count"
+else
+  fail "AC2/A1b — terminal marker wrong; a saturating counter would read 1/2"; dump "$ARM_OUT"
+fi
+if [[ "$ARM_RC" == "3" ]]; then
+  pass "AC3/A1b — a multi-kill run still exits 3"
+else
+  fail "AC3/A1b — exited $ARM_RC, expected 3"
 fi
 
 # --- A2: mixed — failure dominates ----------------------------------------------------------
@@ -511,12 +581,36 @@ else
   pass "T14c — no [budget] line for an undeclared label"
 fi
 
+# --- Positive control: can this file REPORT a failure at all? --------------------------------
+# The floor below counts PASS+FAIL, both of which are produced BY the helpers. So neutering
+# `fail()` to a no-op costs only the delta between the floor and the real count — and with
+# slack in the floor, an SUT mutation worth fewer assertions than that slack goes green.
+# Measured before this control existed: `fail() { :; }` plus rewording the [KILLED] line to
+# say the suite "FAILED and was terminated" reported 61 passed / 0 failed, exit 0 — the exact
+# misreading this entire PR exists to eliminate, certified green by the suite that pins it.
+# This control exercises both counters directly and exits non-zero itself, bypassing `fail()`.
+_pc_pass_before="$PASS"; _pc_fail_before="$FAIL"
+# A BRACE GROUP with a redirect, not `$( )`: command substitution runs in a SUBSHELL and the
+# counter increments would be discarded, so the control would silently measure nothing — the
+# very class it exists to catch. The redirect keeps the probe's own PASS/FAIL text out of the
+# log, where a literal "FAIL:" line would read as a real failure to a human scanning output.
+{ pass "positive-control probe"; fail "positive-control probe"; } >/dev/null 2>&1
+if [[ "$PASS" -eq $((_pc_pass_before + 1)) && "$FAIL" -eq $((_pc_fail_before + 1)) ]]; then
+  PASS="$_pc_pass_before"; FAIL="$_pc_fail_before"   # retract both; totals below stay honest
+  echo "  [control] pass() and fail() both move their counters — failures are reportable"
+else
+  echo "FATAL: the assertion helpers do not move their counters — every verdict in this file is void." >&2
+  exit 1
+fi
+
 # --- Anti-vacuity floor ---------------------------------------------------------------------
 # Every assertion above is emitted from a helper. Strand the block — an early exit, a renamed
 # TARGET, an extraction that silently produced nothing — and this file would report
 # "0 passed, 0 failed / exit 0", which reads exactly like a clean run. A FLOOR, not equality:
 # the count is developer-incremented and `-eq` turns every added assertion into a false red.
-MIN_ASSERTIONS=58
+# Set to the CURRENT count, not a round number below it: slack in this floor is exactly the
+# budget a neutered dispatcher has to work with (#7220's class).
+MIN_ASSERTIONS=69
 if [[ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]]; then
   echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= $MIN_ASSERTIONS — the suite was stranded, not clean." >&2
   exit 1
