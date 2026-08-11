@@ -109,7 +109,7 @@ on:
       # Each job accepts only its OWN literal, so a token typed for one target cannot authorize
       # the other.
       confirm:
-        description: "Typo-guard for destructive/creative targets, NOT the authorization (the environment reviewer gate is). The exact token is in the runbook for the target you are firing, and in that target's job header in this file — deliberately not enumerated here, because this string accreted one clause per target and no operator reads a field label that long. Birth and replace tokens are always distinct, so a token typed for a birth cannot authorize a destroy."
+        description: "Typo-guard for destructive/creative targets. NOT the authorization. Only web-host-create, web-host-replace, git-data-host-create and workspaces-luks-recut carry an `environment:` reviewer gate — EVERY other target has none, including registry-luks-recut, registry-host-replace, registry-region-migrate, inngest-host-replace and git-data-host-replace, all of which destroy or replace production hosts. For those, the gate chain, the destroy-guard and the id-pin are the entire protection. The exact token is in the runbook for the target you are firing, and in that target's job header in this file — deliberately not enumerated here, because this string accreted one clause per target and no operator reads a field label that long. Birth and replace tokens are always distinct, so a token typed for a birth cannot authorize a destroy."
         required: false
         type: string
       # For apply_target=web-host-create ONLY (#6730). The var.web_hosts key of the host to
@@ -2882,7 +2882,21 @@ jobs:
         # best-effort restore whose failure does not fail the job would leave the window open
         # while the run reported green.
         env:
-          DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
+          # DOPPLER_TOKEN, not DOPPLER_TOKEN_PRD. The Doppler CLI reads `DOPPLER_TOKEN` (or
+          # `--token`); it does not know the _PRD suffix. This step declared the suffixed name,
+          # referenced it NOWHERE in its body, and called `doppler secrets get` bare -- so the CLI
+          # ran unauthenticated and returned "you must provide a token", the sink credentials came
+          # back empty, and the engine aborted exit 3 (SINK unavailable).
+          #
+          # It failed POST-DESTROY. The store was already wiped when this ran, so the one job whose
+          # entire purpose is refilling it could not read the credential it needed. The bridge step
+          # directly above sets `DOPPLER_TOKEN` correctly and succeeded, which is what made the
+          # failure look like a bridge problem in the log.
+          #
+          # This was LATENT behind the D10 gate: A2 had never once passed, so this leg had never
+          # run. Fixing A2 did not create this bug, it exposed it -- a saga only ever surfaces its
+          # FIRST broken step.
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
           GH_TOKEN_FOR_ENGINE: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # `set +e` is REQUIRED and `set -uo pipefail` is NOT a substitute. A run: block with no

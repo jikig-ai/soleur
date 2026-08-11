@@ -240,7 +240,7 @@ Present an output summary listing the document path, milestones created, issues 
        gh pr merge <number> --squash --auto
      rc=$?
    else
-     # Degrade open, loudly — the lock is advisory (ADR-175 §5).
+     # Degrade open, loudly — the lock is advisory (ADR-177 §5).
      echo "SOLEUR_SESSION_STATE_UNAVAILABLE path=$SS_LIB reason=running-unlocked"
      gh pr merge <number> --squash --auto
      rc=$?

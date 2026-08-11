@@ -171,7 +171,7 @@ When adding or modifying skills, verify compliance with skill-creator spec:
 
 ### Token Budget Check (Required when adding skills)
 
-- [ ] Run: `bun test plugins/soleur/test/components.test.ts` -- cumulative description word count must stay under 1,800 words (see #618)
+- [ ] Run: `bun test plugins/soleur/test/components.test.ts` -- cumulative description word count must stay under `SKILL_DESCRIPTION_WORD_BUDGET` (defined in that same test file — read it, never a remembered literal; see #618)
 - [ ] Descriptions are for **routing**, not instruction. Remove trigger phrases (`Triggers on "..."`) and verbose restatements. Target ~30 words per skill.
 - [ ] No single description exceeds 1,024 characters
 

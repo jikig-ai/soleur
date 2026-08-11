@@ -121,7 +121,7 @@ The real install at `~/.claude/plugins/cache/soleur/soleur/0.0.0-dev/` contains 
 
 ### ADR
 
-**Create `ADR-175: Shared bash primitives ship inside `plugins/soleur/` and resolve plugin-root-relative`.**
+**Create `ADR-177: Shared bash primitives ship inside `plugins/soleur/` and resolve plugin-root-relative`.**
 
 > **Ordinal PROVISIONAL.** `ADR-174` is highest on `origin/main`. `/ship`'s collision gate re-verifies. On renumber, sweep `knowledge-base/project/{plans,specs}/feat-one-shot-7409-session-state-lib-resolution/` for the old ordinal.
 
@@ -139,7 +139,7 @@ The real install at `~/.claude/plugins/cache/soleur/soleur/0.0.0-dev/` contains 
 4. **Security posture (state explicitly).** Post-move a marketplace user loads the library from `~/.claude/plugins/cache/`, i.e. **outside** the untrusted connected workspace — a posture *improvement* consistent with ADR-093, not a weakening.
 5. **Standardise the exact snippet in the ADR**, including the `$SS_LIB` assignment itself (the assignment *is* the defect; a snippet that shows only the `if` around it elides the hard part) and a one-line note on the `600` contention timeout replicated across the four `with_lock` sites.
 
-**Relationship to ADR-093.** ADR-093 §Consequences declares an OPEN residual (#6222): paths `${CLAUDE_PLUGIN_ROOT}` *cannot* anchor because they live outside `plugins/soleur/`. This is that shape; ADR-175 resolves this member by **relocating the file so it becomes anchorable**. Add a cross-reference line to ADR-093 §Consequences.
+**Relationship to ADR-093.** ADR-093 §Consequences declares an OPEN residual (#6222): paths `${CLAUDE_PLUGIN_ROOT}` *cannot* anchor because they live outside `plugins/soleur/`. This is that shape; ADR-177 resolves this member by **relocating the file so it becomes anchorable**. Add a cross-reference line to ADR-093 §Consequences.
 
 ### C4 views
 
@@ -363,7 +363,7 @@ Settle the R8 confound: run a Soleur skill from a directory with **no** `plugins
 
 - `plugins/soleur/scripts/lib/session-state.sh` *(via `git mv`)*
 - `plugins/soleur/test/session-state.test.sh` *(via `git mv`)*
-- `knowledge-base/engineering/architecture/decisions/ADR-175-shared-bash-primitives-ship-in-plugin.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-177-shared-bash-primitives-ship-in-plugin.md`
 
 ## Files to Edit
 
@@ -467,7 +467,7 @@ No `SKILL.md` `description:` frontmatter is edited (1800-word budget not engaged
 Per ADR-084, taste/user-challenge decisions are surfaced, never silently applied. This plan ran **headless**, so they are persisted to `knowledge-base/project/specs/feat-one-shot-7409-session-state-lib-resolution/decision-challenges.md` for `/ship` to render into the PR body and file as an `action-required` issue.
 
 1. **CTO: split into two PRs.** Kept as one (R-1). If split, #7409 must stay OPEN until the second merges — the move-only PR must use `Ref #7409`.
-2. **CTO: record as an ADR-093 amendment.** Standalone ADR-175 + bidirectional cross-reference.
+2. **CTO: record as an ADR-093 amendment.** Standalone ADR-177 + bidirectional cross-reference.
 3. **Destination.** CTO recommended `hooks/lib/`; the advisor recommended `scripts/`. Architecture review then showed **both of the CTO-supplied grounds for `hooks/lib/` were factually wrong** (`AGENTS.md:182` is skill-scoped; the `plugins/soleur/lib/` date was a month off). **Resolved by synthesis:** `plugins/soleur/scripts/lib/` satisfies the advisor's cohesion objection *and* keeps the A1 suffix carve-out matching with zero edit.
 4. **Advisor: degrade open, not fail loud.** **Adopted** — reversed a first-draft decision stated as "not negotiable".
 5. **Architecture: add an `AP-023` principles-register row** ("no shipped plugin file resolves a path outside the plugin root"), citing the class-level gate as its enforcement. **Not adopted**, because that gate was cut on measurement (Alternative G) and an AP row with no enforcement mechanism is a claim, not a principle. Revisit if the gate is ever built.

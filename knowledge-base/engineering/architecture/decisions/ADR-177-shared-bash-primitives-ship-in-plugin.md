@@ -1,4 +1,4 @@
-# ADR-175: Shared bash primitives ship inside `plugins/soleur/` and resolve plugin-root-relative
+# ADR-177: Shared bash primitives ship inside `plugins/soleur/` and resolve plugin-root-relative
 
 - **Status:** Accepted
 - **Date:** 2026-08-10

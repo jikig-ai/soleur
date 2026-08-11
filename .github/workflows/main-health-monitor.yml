@@ -133,7 +133,9 @@ jobs:
     #
     # infra — do NOT use this branch's standalone step (warm). The cold sequential
     # figure comes from infra-validation.yml's deploy-script-tests, which runs the
-    # SAME 92 suites sequentially on a fresh checkout, n=25 successful runs:
+    # SAME registered suite set sequentially on a fresh checkout, n=25 successful runs.
+    # (Deliberately not a number: the set is DERIVED from infra-validation.yml and grows —
+    # it was 92 when this was written and is 93 today. A hardcoded count here rots silently.)
     #   min 334s   p50 397s   p90 439s   max 459s   (mean 401.5s, sd 33.9s)
     #
     # Rule: roundup5(x) = 5*ceil(x/5); minutes fractional to 2dp
@@ -405,10 +407,15 @@ jobs:
           # Excerpt ONLY the step(s) that failed, each labelled.
           #
           # Prefer the FAILURE LINES over the tail. `run-registered-suites.sh`
-          # emits one `PASS <path>` / `RED  <path>` per suite and discards each
-          # suite's own output, so with 92 suites a `tail -30` of an infra
-          # failure is 30 PASS lines and a count — the operator gets no name.
-          # Issue #7374, filed by this branch, is exactly that artifact.
+          # emits one `PASS <path>` / `RED  <path>` per suite, so a `tail -30` of
+          # an infra failure is 30 PASS lines and a count — the operator gets no
+          # name. Issue #7374, filed by this branch, is exactly that artifact.
+          #
+          # The runner no longer DISCARDS each suite's output (#7376): it captures
+          # per-suite stdout+stderr and prints a bounded, marker-anchored excerpt
+          # for every RED. Those lines carry the `SOLEUR| ` sentinel and are
+          # filtered out below — they answer "why" in the run log, while this
+          # block's job is to name the failing suite from the `^RED ` lines.
           SUMMARY=""
           HAS_FAIL_MARKER=0
           RAN_ANY=0
@@ -427,13 +434,35 @@ jobs:
               # over this runner's log returns zero hits on a failing run and
               # reads as clean — measured 2026-08-04 (#7220)". `[FAIL]` alone
               # matched only because scripts/test-all.sh wraps the runner.
-              hits=$(grep -E '^RED |^\[FAIL\]' "$file" | head -20) || hits=""
+              hits=$(grep -E '^RED |^UNACCOUNTED |^\[FAIL\]' "$file" | head -20) || hits=""
               if [[ -n "$hits" ]]; then
                 HAS_FAIL_MARKER=1
                 SUMMARY="${SUMMARY}${hits}"$'\n'
                 SUMMARY="${SUMMARY}--- (tail) ---"$'\n'
               fi
-              SUMMARY="${SUMMARY}$(tail -30 "$file")"$'\n\n'
+              # Strip run-registered-suites.sh's per-suite diagnostic dump (#7376) before it
+              # reaches the PUBLIC issue body. The runner prefixes every line it emits after
+              # its parallel section with `SOLEUR| `; those lines belong in the run log, where
+              # they answer "why did it fail", not in the filed issue, whose job is to name the
+              # failing suite from the `^RED ` lines above.
+              #
+              # THIS `tail` IS UNCONDITIONAL — it sits outside the `if [[ -n "$hits" ]]` block,
+              # so it runs on every non-success outcome. Prefixing alone therefore does NOT keep
+              # dumped bytes out of the issue body; only this filter does. An earlier draft
+              # cleared the compliance gate on the belief that anchoring away from `^RED ` was
+              # sufficient, and that was false for exactly this line.
+              #
+              # Applied to BOTH captures, not just infra: the tests step runs test-all.sh, which
+              # invokes the runner as a nested suite. And the sentinel is `SOLEUR| ` rather than
+              # a bare `| ` precisely so this is safe here — scripts/expenses-verify-by-check
+              # prints markdown tables at column 0, which a bare filter would strip.
+              #
+              # `grep -v` is a DISPLAY FILTER: its producer is a file that `[[ -s ]]` above
+              # already proved non-empty, so there is no producer status worth propagating. Safe
+              # under this step's default shell (errexit ON, pipefail OFF — see the header) even
+              # when the filter removes every line; adding `shell: bash` later would turn a
+              # fully-filtered file into an abort that files nothing, so leave it default.
+              SUMMARY="${SUMMARY}$(grep -v '^SOLEUR| ' "$file" | tail -30)"$'\n\n'
             else
               SUMMARY="${SUMMARY}(no capture on disk — the step did not run, or was killed before writing)"$'\n\n'
             fi
@@ -470,15 +499,39 @@ jobs:
           # GITHUB_TOKEN and the infra step runs terraform, whose error text is
           # the likeliest carrier. Before this PR the filer never fired, so the
           # channel was dormant; it is live now.
+          #
+          # WIDENED 2026-08-10 (#7376). This channel now carries per-suite diagnostic output,
+          # so the measured gaps below matter more than they did when it only carried a
+          # summary. Each addition is a shape the previous set provably missed:
+          #   - JWTs (`eyJ…`) were UNMATCHED — the highest-value miss, since OIDC id_tokens
+          #     and Supabase service_role keys both wear that shape.
+          #   - `sbp_v0_…` slipped the `sbp_` rule, whose `[A-Za-z0-9]` class excludes `_`.
+          #   - Stripe restricted/webhook keys, Doppler service-account tokens, the Sentry
+          #     DSN (the URL rule requires a `:password@`, which a DSN has no room for),
+          #     and bare `Authorization:` headers were all unmatched.
+          #
+          # The PEM rule was an ANTI-mitigation: rewriting only the `-----BEGIN-----` header
+          # stripped the one marker that makes a leaked key recognisable to a human or a
+          # scanner, and left the base64 body and the END line intact. `sed` is line-based,
+          # so nothing spanning a newline is catchable any other way than a RANGE.
           REDACTED=$(printf '%s' "$SUMMARY" | sed -E \
+            -e 's/-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----/<redacted-private-key-marker>/g' \
+            -e 's/^[[:space:]]*[A-Za-z0-9+/]{40,}={0,2}[[:space:]]*$/<redacted-key-material>/' \
+            -e 's/(AKIA|ASIA|AGPA|AIDA|AROA|ANPA|ANVA)[A-Z0-9]{16}/<redacted-aws-key-id>/g' \
+            -e 's/(aws_secret_access_key|aws_session_token)[[:space:]]*[=:][[:space:]]*[A-Za-z0-9\/+=]{20,}/\1=<redacted>/gI' \
+            -e 's/X-Amz-(Signature|Security-Token|Credential)=[^&[:space:]]+/X-Amz-\1=<redacted>/g' \
             -e 's/gh[pousr]_[A-Za-z0-9]{16,}/<redacted-gh-token>/g' \
             -e 's/github_pat_[A-Za-z0-9_]{20,}/<redacted-gh-pat>/g' \
             -e 's/sk-ant-[A-Za-z0-9_-]{16,}/<redacted-anthropic-key>/g' \
             -e 's/sk_(test|live)_[A-Za-z0-9]{16,}/<redacted-stripe-key>/g' \
-            -e 's/sbp_[A-Za-z0-9]{16,}/<redacted-supabase-token>/g' \
-            -e 's/dp\.(pt|st|sa|ct)\.[A-Za-z0-9_-]{20,}/<redacted-doppler-token>/g' \
-            -e 's#(postgres(ql)?|redis|amqp)://[^:@/[:space:]]+:[^@[:space:]]+@#\1://<redacted>:<redacted>@#g' \
-            -e 's/-----BEGIN [A-Z ]*PRIVATE KEY-----/<redacted-private-key>/g')
+            -e 's/(rk_(test|live)|whsec)_[A-Za-z0-9]{16,}/<redacted-stripe-key>/g' \
+            -e 's/sbp_(v0_)?[A-Za-z0-9]{16,}/<redacted-supabase-token>/g' \
+            -e 's/dp\.(pt|st|sa|ct|scim|audit)\.[A-Za-z0-9_.-]{20,}/<redacted-doppler-token>/g' \
+            -e 's/sntrys_[A-Za-z0-9_.-]{20,}/<redacted-sentry-token>/g' \
+            -e 's#https://[0-9a-f]{16,}@[A-Za-z0-9.-]+/[0-9]+#<redacted-sentry-dsn>#g' \
+            -e 's/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/<redacted-jwt>/g' \
+            -e 's/([Aa]uthorization: *)(Basic|Bearer) +[A-Za-z0-9._~+\/=-]+/\1\2 <redacted>/g' \
+            -e 's#(postgres(ql)?|redis|amqp)://[^:@/[:space:]]+:[^@[:space:]]+@#\1://<redacted>:<redacted>@#g')
 
           # A longer fence than any the captured output can contain, so a triple
           # backtick in a test's own output cannot terminate the block early and
@@ -497,6 +550,15 @@ jobs:
             echo '`````'
             echo "${REDACTED}"
             echo '`````'
+            echo ""
+            echo "### Where the per-suite diagnostics are"
+            echo ""
+            echo "The infra runner captures each suite's own stdout+stderr and prints a"
+            echo "marker-anchored excerpt (rc, elapsed, start offset) for every failing suite."
+            echo "Those lines are deliberately withheld from this PUBLIC body — read them in"
+            echo "the run log, no SSH required:"
+            echo ""
+            echo "    gh run view ${GITHUB_RUN_ID} --log | grep '^SOLEUR| '"
             echo ""
             echo "### Actions required"
             echo ""
@@ -523,6 +585,9 @@ jobs:
               echo '`````'
               echo "${REDACTED}"
               echo '`````'
+              echo ""
+              echo "Per-suite diagnostics are withheld from this public comment; read them"
+              echo "in the run log with: gh run view ${GITHUB_RUN_ID} --log | grep '^SOLEUR| '"
               echo ""
               echo "Run: ${RUN_URL}"
             } > /tmp/issue-comment.md

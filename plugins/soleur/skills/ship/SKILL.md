@@ -1717,7 +1717,7 @@ if [[ -r "$SS_LIB" ]] && command -v flock >/dev/null 2>&1; then
     gh pr merge <number> --squash --auto
   rc=$?
 else
-  # Degrade open, loudly — the lock is advisory (ADR-175 §5).
+  # Degrade open, loudly — the lock is advisory (ADR-177 §5).
   echo "SOLEUR_SESSION_STATE_UNAVAILABLE path=$SS_LIB reason=running-unlocked"
   gh pr merge <number> --squash --auto
   rc=$?

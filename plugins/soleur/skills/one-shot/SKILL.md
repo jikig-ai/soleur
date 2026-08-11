@@ -46,7 +46,10 @@ files); the cost came from three habits below, each of which multiplies.
    extra fix → CI → correction round.
 4. **Re-run a suite only when its inputs changed.** A green full-suite run against commit A
    still covers commit B when B touches only docs — verify the delta with targeted suites and
-   say which commit the full run covered.
+   say which commit the full run covered. **On RESUME, this heuristic inverts: a verification
+   claim you inherited (a handoff, a prior session's summary, `session-state.md`) is a statement
+   about a tree that may no longer exist — re-run it before relying on it.** #7397 resumed on
+   "bun shard rc=0 (2419/0)"; that shard was RED, reddened by a commit made after the claim. See `knowledge-base/project/learnings/2026-08-10-a-guard-that-cannot-be-driven-red-is-vacuous-four-rounds-four-instances.md`.
 5. **Bound every command's output.** `git grep` over a tree containing generated JSON returns
    megabytes on one "line": use `':!*.json'`, `--name-only`, `| cut -c1-200`.
 6. **Delegate wide reads to a subagent** (`cm-delegate-verbose-exploration…`) — keep the
@@ -201,10 +204,58 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 
 **If absent or subagent failed (fallback):**
 
-1. **Partial-artifact recovery check.** Before re-running plan inline, look for artifacts the crashed subagent may have written: `ls "knowledge-base/project/plans/$(date -u +%Y-%m-%d)-"*.md 2>/dev/null` and `ls "knowledge-base/project/specs/$(git branch --show-current)/tasks.md" 2>/dev/null`. If a plan file exists with frontmatter + Overview + Acceptance Criteria sections, the subagent completed plan generation before crashing (only the Session Summary emission failed). Load it and continue from `/soleur:plan-review` rather than re-running `/soleur:plan` from scratch. Note in session-state.md: `Status: recovered from partial-artifact (subagent crashed mid-Session-Summary; plan body was on disk).` See `knowledge-base/project/learnings/2026-05-15-subagent-crash-recovery-via-on-disk-artifacts.md`.
-2. Write to session-state.md: `## Plan Phase\n- Status: fallback (subagent failed)\n` (or `recovered from partial-artifact` per step 1).
-3. If no partial artifact was found, use the **Skill tool**: `skill: soleur:plan`, args: "$ARGUMENTS" and then `skill: soleur:deepen-plan` inline (no compaction benefit, but pipeline continues).
+<!-- plan-artifact-recovery:start -->
+1. **Partial-artifact recovery check.** `plan` writes its file before the research fan-out and
+   persists `## Research Insights` as soon as that fan-out returns (#7418, ADR-176), so a crashed
+   subagent has usually left recoverable work on disk. Select this branch's plan the same way `plan`
+   does — frontmatter `branch:`, read bounded to the leading `---` block, non-recursive over
+   `plans/*.md` so `plans/archive/` is excluded by construction:
+
+   ```bash
+   BR=$(git branch --show-current)
+   PLANS_DIR="$(git rev-parse --show-toplevel)/knowledge-base/project/plans"
+   PLAN=""
+   for f in "$PLANS_DIR"/*.md; do
+     [[ -e "$f" ]] || continue
+     [[ "$(head -n 1 "$f")" == "---" ]] || continue
+     v=$(awk 'NR==1{next} /^---[[:space:]]*$/{exit}
+              /^branch:/{ sub(/^branch:[[:space:]]*/,""); gsub(/^"|"$/,""); print; exit }' "$f")
+     [[ "$v" == "$BR" ]] && PLAN="$f"
+   done
+   # Fall back to the same-day glob ONLY if the branch match found nothing.
+   [[ -n "$PLAN" ]] || PLAN=$(ls "$PLANS_DIR/$(date -u +%Y-%m-%d)-"*.md 2>/dev/null | tail -n1)
+   ```
+
+   Then branch on **one** predicate — does the file contain `## Acceptance Criteria`?
+
+   - **Present** — the subagent finished planning and only the Session Summary emission failed.
+     Load it and continue from `/soleur:plan-review`. Note in session-state.md:
+     `Status: recovered from partial-artifact (subagent crashed mid-Session-Summary; plan body was on disk).`
+   - **Absent (or no file at all)** — planning did not finish. Re-invoke `skill: soleur:plan` with
+     `args: "$ARGUMENTS"`, then `skill: soleur:deepen-plan` inline. `plan` finds its own checkpoint
+     via the same selector and continues in place, so the research already on disk is reused rather
+     than re-spent.
+
+   `## Acceptance Criteria` is the predicate because it is the one heading present in all three
+   detail-level templates and it lands last, after every expensive phase — while the skeleton writes
+   `## Overview` and nothing else, so a stub can never carry it. Do **not** add `## Overview` as a
+   conjunct: the MINIMAL template has none, so a finished minimal plan would read as incomplete.
+   See `knowledge-base/project/learnings/2026-05-15-subagent-crash-recovery-via-on-disk-artifacts.md`.
+
+2. Write the outcome to session-state.md under `## Plan Phase`, including:
+   `Plan artifact: <complete|recovered|action-required> (selector=<branch|date-glob|none>)`
+
+3. **The recovery runs at most once.** If `soleur:plan` returns and the selected artifact *still*
+   has no `## Acceptance Criteria`, do **not** re-invoke planning again: stop and file an
+   `action-required` issue naming the plan path and the branch. A deterministic re-failure is not a
+   transient one, and looping on it would multiply the operator's spend with no re-disclosure
+   (`hr-autonomous-loop-skill-api-budget-disclosure`).
+
 4. Continue to step 3.
+
+**Every arm above terminates in "continue to step 3"** — except the step-3 escalation, which is
+terminal and files the issue instead. A re-invocation is a step *within* an arm, never an arm's end.
+<!-- plan-artifact-recovery:end -->
 
 **Steps 3-8: Implementation, Review, and Ship**
 
