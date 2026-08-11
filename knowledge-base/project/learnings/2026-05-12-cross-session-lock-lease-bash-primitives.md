@@ -25,7 +25,7 @@ Implementing the fix surfaced six **non-obvious** integration gotchas across hoo
 
 ## Solution
 
-`.claude/hooks/lib/session-state.sh` adds: per-name `flock` locks (dynamic `exec {fd}>>file` FDs), key=value lease files (`mktemp + mv` atomic write, validated worktree-name path, `started_at`-pinned release-guard), `headless_or_stderr` routing (TTY-aware), and a `with_lock <name> <timeout> -- <cmd>` CLI shim for SKILL.md callers. `worktree-manager.sh` calls `acquire_lease + _register_lease_release_trap + git push -u + ls-remote verify` on `feature` creation; `cleanup_merged_worktrees` wraps in `cleanup-merged` lock + reap loop checks `is_lease_active` + 10-min recent-commit grace. Four skills wrap `gh pr merge --auto` in `with_lock merge-main 600`; `pre-merge-rebase.sh` wraps `git merge origin/main` in `rebase-main` lock and routes 4 stderr emissions through `headless_or_stderr`.
+`plugins/soleur/scripts/lib/session-state.sh` (at the time of writing, `.claude/hooks/lib/session-state.sh` — relocated by #7409) adds: per-name `flock` locks (dynamic `exec {fd}>>file` FDs), key=value lease files (`mktemp + mv` atomic write, validated worktree-name path, `started_at`-pinned release-guard), `headless_or_stderr` routing (TTY-aware), and a `with_lock <name> <timeout> -- <cmd>` CLI shim for SKILL.md callers. `worktree-manager.sh` calls `acquire_lease + _register_lease_release_trap + git push -u + ls-remote verify` on `feature` creation; `cleanup_merged_worktrees` wraps in `cleanup-merged` lock + reap loop checks `is_lease_active` + 10-min recent-commit grace. Four skills wrap `gh pr merge --auto` in `with_lock merge-main 600`; `pre-merge-rebase.sh` wraps `git merge origin/main` in `rebase-main` lock and routes 4 stderr emissions through `headless_or_stderr`.
 
 ## Key Insights — Sharp Edges discovered
 
@@ -34,7 +34,7 @@ Implementing the fix surfaced six **non-obvious** integration gotchas across hoo
 `pre-merge-rebase.sh`'s command-detection regex anchored to `(^|&&|\|\||;)\s*gh\s+pr\s+merge`. The new wrapped form is:
 
 ```bash
-bash .claude/hooks/lib/session-state.sh with_lock merge-main 600 -- gh pr merge ...
+bash "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/scripts/lib/session-state.sh" with_lock merge-main 600 -- gh pr merge ...
 ```
 
 The `gh pr merge` substring is preceded by ` -- `, not by `^` or a chain operator. The regex doesn't match → hook exits 0 → review-evidence gate AND origin/main auto-sync are silently bypassed. This was the #1 P1 finding at review time.

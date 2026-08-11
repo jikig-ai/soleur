@@ -206,7 +206,7 @@ assert_eq "false" \
   "$(grep -q 'SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED' "$TEST_DIR/a1.log" && echo true || echo false)" \
   "no lease-acquire failure during create"
 assert_eq "true" \
-  "$( ( source "$SCRIPT_DIR/../../../.claude/hooks/lib/session-state.sh" 2>/dev/null \
+  "$( ( source "$SCRIPT_DIR/../scripts/lib/session-state.sh" 2>/dev/null \
         && _validate_worktree_name "ci-rule-metrics" && echo true ) || echo false )" \
   "slug passes _validate_worktree_name"
 echo ""

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Tests for .claude/hooks/lib/session-state.sh.
+# Tests for plugins/soleur/scripts/lib/session-state.sh.
 #
 # T1-T8 per plan 2026-05-12-feat-bg-readiness-concurrency-hardening-plan.md.
-# Run via:  bash .claude/hooks/lib/session-state.test.sh
+# Run via:  bash plugins/soleur/test/session-state.test.sh
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HELPER="$SCRIPT_DIR/session-state.sh"
+HELPER="$SCRIPT_DIR/../scripts/lib/session-state.sh"
 
 PASS=0
 FAIL=0
@@ -191,7 +191,7 @@ set -e
 # entry point produces on the happy path, because `acquire_lease` records `pid=$$`
 # and those processes exit within milliseconds by design:
 #
-#     bash .claude/hooks/lib/session-state.sh acquire_lease <worktree>
+#     bash <plugin-root>/scripts/lib/session-state.sh acquire_lease <worktree>
 #     bash .../worktree-manager.sh --yes create <branch>
 #
 # One signal, two indistinguishable causes — so the old rule could not be right in
@@ -273,7 +273,7 @@ rc=$?
 set -e
 if [[ "$rc" != "99" ]]; then
   fail "T6: expected rc=99 when flock missing, got rc=$rc (out: $OUT)"
-elif ! echo "$OUT" | grep -qi flock; then
+elif ! grep -qi flock <<<"$OUT"; then
   fail "T6: error message did not mention flock (got: $OUT)"
 else
   pass "T6"
@@ -371,7 +371,7 @@ fi
 # `acquire_lease` records `pid=$$`. The DOCUMENTED entry points are
 # short-lived processes:
 #
-#     bash .claude/hooks/lib/session-state.sh acquire_lease <worktree>
+#     bash <plugin-root>/scripts/lib/session-state.sh acquire_lease <worktree>
 #     bash .../worktree-manager.sh --yes create <branch>
 #
 # so `$$` belongs to a bash that exits within milliseconds. `is_lease_active`
@@ -782,6 +782,10 @@ fi
 # satisfied by the prose.
 # ------------------------------------------------------------------------
 echo "T18: the worktree-manager wiring is pinned"
+# `../../..` reaches the repo root from plugins/soleur/test/ — the same depth it
+# reached from the pre-#7409 home at .claude/hooks/lib/, so this line survived the
+# move by COINCIDENCE rather than by design. Stated explicitly so a future
+# relocation does not silently point it at the wrong tree.
 WM="$(cd "$SCRIPT_DIR/../../.." && pwd)/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
 
 if [[ ! -f "$WM" ]]; then
@@ -789,7 +793,20 @@ if [[ ! -f "$WM" ]]; then
 else
   # The sweep call must appear INSIDE cleanup_merged_worktrees, at the start of
   # a line (a comment line starts with '#', so this cannot match the prose).
-  if awk '/^cleanup_merged_worktrees\(\)/,/^}/' "$WM" | grep -qE '^[[:space:]]*sweep_orphan_leases'; then
+  #
+  # The awk output is captured FIRST rather than piped into `grep -q`. This file
+  # runs under `set -uo pipefail` (line 7), and `awk … | grep -q …` is a race:
+  # `grep -q` exits the moment it matches — here at relative line 41 of a
+  # ~350-line function — which SIGPIPEs awk (141), and pipefail then reports 141
+  # as the PIPELINE's status. The `if` takes the else branch and the suite claims
+  # the sweep call is gone while it is sitting right there.
+  #
+  # It is scheduling-dependent, so it passes locally and fails on a loaded CI
+  # runner: measured 1 failure in 10 consecutive local runs. This suite reached
+  # CI for the first time in #7409, and the first CI run it ever had failed
+  # exactly this way — a green local run is not evidence either way.
+  _t18_body="$(awk '/^cleanup_merged_worktrees\(\)/,/^}/' "$WM")"
+  if grep -qE '^[[:space:]]*sweep_orphan_leases' <<<"$_t18_body"; then
     pass "T18a: cleanup_merged_worktrees invokes sweep_orphan_leases"
   else
     fail "T18a: the sweep call is gone from cleanup_merged_worktrees — the 24h backstop never runs during cleanup"

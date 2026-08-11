@@ -890,6 +890,17 @@ if want_bun; then
 fi
 
 # Bash *.test.sh glob — scripts shard. (ci-deploy.test.sh runs in infra-validation.yml.)
+# .claude/hooks/lib/*.test.sh added 2026-08-10 (#7409). Shell globs do NOT cross
+# `/`, so the flat `.claude/hooks/*.test.sh` below never reached the `lib/`
+# subdirectory: every suite there had NEVER gated CI. That is how the #5454
+# vacuous-green class survived inside session-state.test.sh (34 KB, orphaned) —
+# it relocates to plugins/soleur/test/ in this change, and this glob closes the
+# hole for its remaining sibling, freeze-lock.test.sh (13 assertions, passing).
+# Measured against every *.test.sh under any lib/ in the repo: after this line,
+# zero orphans remain in that class. Do NOT check such coverage with Python
+# `fnmatch` — its `*` DOES cross `/`, so it reports these files as already
+# covered and falsifies the finding.
+#
 # .claude/hooks/*.test.sh added 2026-05-15 (#3799 prereq to #3789); covers the
 # 8 hook tests that previously only the session-rules-loader entry pulled in.
 if want_scripts; then
@@ -917,7 +928,10 @@ if want_scripts; then
   # want_bun for the same reason as its neighbours — it shells out to python3 to build its
   # sandbox, and `test-scripts` is the shard documented as "bash + python3".
   run_suite "scripts/test-all-killed-classification" bash scripts/test-all-killed-classification.test.sh
-  for f in plugins/soleur/test/*.test.sh plugins/soleur/skills/*/test/*.test.sh plugins/soleur/scripts/*.test.sh .claude/hooks/*.test.sh apps/cla-evidence/scripts/*.test.sh apps/web-platform/scripts/*.test.sh apps/web-platform/scripts/lib/*.test.sh scripts/lib/*.test.sh; do
+  # `.claude/hooks/lib/*.test.sh` is this branch's addition (#7409): shell globs do not cross
+  # `/`, so the `.claude/hooks/*.test.sh` entry beside it never reached the lib/ subdirectory
+  # and freeze-lock.test.sh had never gated CI.
+  for f in plugins/soleur/test/*.test.sh plugins/soleur/skills/*/test/*.test.sh plugins/soleur/scripts/*.test.sh .claude/hooks/*.test.sh .claude/hooks/lib/*.test.sh apps/cla-evidence/scripts/*.test.sh apps/web-platform/scripts/*.test.sh apps/web-platform/scripts/lib/*.test.sh scripts/lib/*.test.sh; do
     [[ -f "$f" ]] || continue
     run_suite "$f" bash "$f"
   done

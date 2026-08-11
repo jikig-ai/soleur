@@ -115,7 +115,7 @@ const log = createChildLogger("git-lock-marker-telemetry");
 //     refusal is the safe outcome; genuine git breakage surfaces as a wedge via the
 //     creation path's own SOLEUR_GIT_LOCK_*/SOLEUR_GIT_CONFIG_* markers.
 const MARKER_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
 
 // A wedge (vs. a benign DIAG) is any marker that indicates git operations could not
 // proceed: an unremovable/masked lock, a temp-wedge, a config-TARGET-masked give-up, an
@@ -134,6 +134,23 @@ const MARKER_RE =
 // local-only branch), OR a rejected worktree (SOLEUR_GIT_WORKTREE_VERIFY_FAILED → creation
 // aborted with exit 1). EXCLUDED (benign, mirrored-not-paged): SOLEUR_GIT_LOCK_IDENTITY_DIAG
 // (precondition) and SOLEUR_GIT_CONFIG_MASK_SKIP (non-bare-skip-under-mask → creation proceeds).
+//   - SOLEUR_WORKTREE_REAPER_ARMED (#7409) — the one-time dry pass taken the first
+//     time cleanup-merged can reap on a given store. MIRRORED so the transition is
+//     measurable across the installed base (it fires once per machine, ever), NOT
+//     paged: it reports that a destructive capability became available and that
+//     nothing was deleted, which is the safe direction.
+//
+// OUTCOME-DISCRIMINATED (#7409): SOLEUR_SESSION_STATE_UNAVAILABLE is emitted by the
+// SKILL.md degrade-open arms when the session-state library (or flock) cannot be
+// reached. It is mirrored for every reason, and PAGED only at
+// reason=worktree-UNLEASED-and-reapable. The split is the destructiveness gradient:
+// reason=running-unlocked and reason=lease-not-released describe an ADVISORY
+// operation that proceeded (a merge queued without serialisation, a lease left to
+// expire on its own window) — real, bounded, not worth waking anyone. The reapable
+// reason describes a worktree running with no lease AFTER this change armed the
+// reaper for that population, which is the same exposure
+// SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED already pages for.
+//
 // PAGED (PR #7373): SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED. It is strictly more
 // consequential than SOLEUR_FEATURE_PUSH_FAILED, which is already here — a failed
 // push leaves a local-only branch that MAY be reaped later; a failed lease leaves
@@ -155,7 +172,7 @@ const MARKER_RE =
 // its branch string — the name is what keeps it out, and the drift guard derives names
 // from the script automatically.
 const WEDGE_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:UNREMOVABLE|TEMP_WEDGED)\b|SOLEUR_GIT_LOCK_IDENTITY_WEDGED\b|SOLEUR_GIT_CONFIG_TARGET_MASKED\b|SOLEUR_GIT_BARE_SELFHEAL\b(?=[^\n]*\sbranch=failed\s*$)|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b|SOLEUR_GIT_REPO_DIAG\b|SOLEUR_FEATURE_PUSH_FAILED\b|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b|NO_GIT_REPOSITORY\b|worktree wedge:)/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:UNREMOVABLE|TEMP_WEDGED)\b|SOLEUR_GIT_LOCK_IDENTITY_WEDGED\b|SOLEUR_GIT_CONFIG_TARGET_MASKED\b|SOLEUR_GIT_BARE_SELFHEAL\b(?=[^\n]*\sbranch=failed\s*$)|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b|SOLEUR_GIT_REPO_DIAG\b|SOLEUR_FEATURE_PUSH_FAILED\b|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b|SOLEUR_SESSION_STATE_UNAVAILABLE\b(?=[^\n]*\sreason=worktree-UNLEASED-and-reapable\s*$)|NO_GIT_REPOSITORY\b|worktree wedge:)/;
 
 // Bounds: scan at most this many lines, keep at most this many matched markers, and
 // truncate any single marker line to this many chars. A wedged run emits a handful of

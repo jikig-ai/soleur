@@ -118,10 +118,17 @@ If the script exits non-zero and its output contains `NO_GIT_REPOSITORY`, the wo
 
 Then `cd` into the worktree path printed by the script. Parallel agents on the same repo cause silent merge conflicts when both work on main.
 
-The `SOLEUR_SKILL_NAME` + `SOLEUR_EXPECTED_DURATION_MIN` env wire a lease on this worktree (see `.claude/hooks/lib/session-state.sh`). A sibling session's `cleanup-merged` invocation refuses to reap any worktree with an active lease. Release on clean exit:
+The `SOLEUR_SKILL_NAME` + `SOLEUR_EXPECTED_DURATION_MIN` env wire a lease on this worktree (see `<plugin-root>/scripts/lib/session-state.sh`). A sibling session's `cleanup-merged` invocation refuses to reap any worktree with an active lease. Release on clean exit:
 
 ```bash
-bash .claude/hooks/lib/session-state.sh release_lease "$(basename "$PWD")"
+# Degrade open (#7409): releasing is advisory — an unreleased lease expires on
+# its own window — so a missing library must not fail the pipeline here.
+SS_LIB="${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/scripts/lib/session-state.sh"
+if [[ -r "$SS_LIB" ]]; then
+  bash "$SS_LIB" release_lease "$(basename "$PWD")" || true
+else
+  echo "SOLEUR_SESSION_STATE_UNAVAILABLE path=$SS_LIB reason=lease-not-released"
+fi
 ```
 
 **Step 0c: Create draft PR.** After creating the feature branch, create a draft PR from inside the worktree (the script errors with "Cannot run from bare repo root" otherwise — use a single `cd && bash` so the target tree is explicit and cannot be silently redirected by a prior call that `cd`d elsewhere; CWD persists across Bash calls, but relying on ambient CWD is fragile):

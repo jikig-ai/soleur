@@ -39,13 +39,22 @@ NC='\033[0m' # No Color
 # without knowing where plugins/ lives relative to their CWD.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Source session-state helpers (locks + leases + headless visibility). The
-# live copy lives in the worktree filesystem; SCRIPT_DIR resolves to
-# plugins/soleur/skills/git-worktree/scripts/, so 5 levels up is the worktree
-# root. When invoked from a worktree that predates this file (legacy state),
-# the file is missing and we degrade to no-op stubs so the script keeps
-# running — old worktrees lose lock/lease protection but don't crash.
-_SS_LIB="$SCRIPT_DIR/../../../../../.claude/hooks/lib/session-state.sh"
+# Source session-state helpers (locks + leases + headless visibility).
+#
+# PLUGIN-INTERNAL and layout-invariant (#7409, ADR-178). SCRIPT_DIR is
+# <plugin-root>/skills/git-worktree/scripts, so three levels up is the plugin
+# root — the SAME arithmetic in this repo and in a marketplace install under
+# ~/.claude/plugins/cache/<mkt>/soleur/<ver>/. It reads NO environment variable,
+# so resolution cannot depend on an invariant that does not hold on the CLI.
+#
+# This path previously walked FIVE levels up to .claude/hooks/lib/, i.e. out of
+# the plugin entirely. Only this repo has such a tree; the marketplace ships
+# ./plugins/soleur alone, so for every installed user the walk missed, the no-op
+# stubs below loaded, and the whole lock/lease layer was silently absent.
+#
+# A worktree that predates this file still degrades to the stubs rather than
+# crashing — it loses lock/lease protection but keeps running.
+_SS_LIB="$SCRIPT_DIR/../../../scripts/lib/session-state.sh"
 # Read at the reap decision point so the skip REASON is mode-accurate: with the
 # stub in place every worktree reads "leased", and reporting that as an observed
 # active lease would assert something the gate cannot know.
@@ -53,6 +62,14 @@ _SS_LIB_MISSING=false
 if [[ -f "$_SS_LIB" ]]; then
   # shellcheck source=/dev/null
   source "$_SS_LIB"
+  # POSITIVE marker (#7409). Its counterpart below is emitted unconditionally on
+  # the failure path, so without this line SILENCE is ambiguous: it means either
+  # "resolved fine" or "this build does not emit markers at all". A marketplace
+  # user's only observability layer is their own terminal (layer 7 — there is no
+  # server-side sink for an installed user's local run, and inventing one would
+  # be a new egress surface), so the success signal has to be visible there.
+  # stdout, not stderr, for the same reason as the MISSING marker below.
+  echo "SOLEUR_WORKTREE_LEASE_LIB_OK path=$_SS_LIB"
 else
   # Loud one-shot warn so an operator (or CI log scrape) sees that lease
   # protection is OFF in this worktree. Silent stubs would mask the
@@ -64,7 +81,7 @@ else
   echo "[warn] session-state.sh missing at $_SS_LIB — lease/lock protection disabled in this worktree." >&2
   echo "[warn] cleanup-merged will REFUSE to reap any worktree (fail-closed): with no lease" >&2
   echo "[warn] library there is no way to tell a live session from an abandoned one." >&2
-  echo "[warn] Restore it with: git checkout origin/main -- .claude/hooks/lib/session-state.sh" >&2
+  echo "[warn] Restore it with: git checkout origin/main -- plugins/soleur/scripts/lib/session-state.sh" >&2
   acquire_lock() { return 0; }
   release_lock() { return 0; }
   acquire_lease() { return 0; }
@@ -1369,7 +1386,8 @@ _acquire_worktree_lease() {
     # AND `.git`-less, and this one is registered.
     local fail_reason="rc-nonzero"
     # `declare -F` guard: _validate_worktree_name is a PRIVATE symbol in
-    # session-state.sh reached across the plugin -> .claude/hooks boundary, and
+    # session-state.sh, which since #7409 ships inside the plugin alongside this
+    # script (it used to be reached across a plugin -> .claude/hooks boundary), and
     # the _SS_LIB_MISSING stub block does not define it. Unreachable today (the
     # stub path returns above), but if that ordering ever inverts, an absent
     # function yields 127 -> truthy -> EVERY failure mislabelled
@@ -2663,6 +2681,45 @@ cleanup_merged_worktrees() {
     fi
   done < <(git worktree list --porcelain 2>/dev/null)
 
+  # ONE-TIME ARMING HOLD (#7409). Give the first armed run a dry pass.
+  #
+  # Before #7409 a marketplace install could not resolve the lease library, so
+  # `is_lease_active` was the stub that returns "active" for everything and this
+  # loop reaped NOTHING, ever. After it, the real predicate runs — and every
+  # worktree already on that user's disk was created by a `create` that could not
+  # acquire a lease, so none of them can hold one. `cleanup-merged` runs at
+  # session start, which means the first post-upgrade session would sweep the
+  # entire accumulated backlog in one uninterruptible pass, deleting each
+  # worktree, its local branch, its remote branch (which closes the PR), and any
+  # gitignored file it held — `git status --porcelain` does not list ignored
+  # paths, so a worktree holding only `.env.local` reads clean and the `--force`
+  # retry removes it anyway.
+  #
+  # Every one of those reaps may be individually correct. The problem is that
+  # arming a destructive operation and running it in bulk are the same event, so
+  # the user never sees the first one coming. This decouples them: the first run
+  # after the layer becomes resolvable reports what it WOULD reap and reaps
+  # nothing, then stamps itself. The stamp is what makes it self-clearing — a
+  # condition-based hold (e.g. "hold while zero leases exist") would never clear
+  # on a machine whose sessions only ever run cleanup, which is worse than no
+  # guard because cleanup would then be dead forever.
+  local _reaper_first_run=false
+  if [[ "$_SS_LIB_MISSING" != "true" ]] && declare -F _session_state_root >/dev/null 2>&1; then
+    local _reaper_stamp
+    _reaper_stamp="$(_session_state_root)/reaper-armed"
+    if [[ ! -f "$_reaper_stamp" ]]; then
+      _reaper_first_run=true
+      # Stamp BEFORE the loop, not after: if the run dies midway the user has
+      # already had their warning, and a stamp that only lands on clean exit
+      # would re-hold forever on a machine where something else keeps failing.
+      : > "$_reaper_stamp" 2>/dev/null || true
+      echo "SOLEUR_WORKTREE_REAPER_ARMED reason=first-run-dry-pass"
+      echo "[warn] cleanup-merged can reap worktrees on this machine for the first time." >&2
+      echo "[warn] Nothing is being deleted this run. The branches listed below are what" >&2
+      echo "[warn] the next run will reap — move any work you want to keep before then." >&2
+    fi
+  fi
+
   local cleaned=()
 
   for branch in $all_stale_branches; do
@@ -2678,6 +2735,15 @@ cleanup_merged_worktrees() {
     # Skip if active worktree
     if [[ -n "$worktree_path" && "$PWD" == "$worktree_path"* ]]; then
       [[ "$verbose" == "true" ]] && echo -e "${YELLOW}(skip) $branch - currently active${NC}"
+      continue
+    fi
+
+    # First armed run: report, do not reap (see the ONE-TIME ARMING HOLD above).
+    # Placed here rather than as an early return from the function so the rest of
+    # session-start maintenance — orphan-dir cleanup, tmp reclamation, the
+    # runaway-process kill — still runs on this pass.
+    if [[ "$_reaper_first_run" == "true" ]]; then
+      echo "(hold) $branch - would be reaped; skipped on this first armed run"
       continue
     fi
 
