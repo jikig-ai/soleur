@@ -65,21 +65,29 @@ fi
 # A script must not make that call. It reads the recorded verdict instead —
 # the sanctioned operator-confirmed pattern (the script reads the human
 # verdict; the human does not read a dashboard).
-comments=$(gh issue view "$ISSUE" --comments --json comments --jq '.comments[].body' 2>/dev/null)
+# AUTHOR FILTER — load-bearing, and NOT optional. `jikig-ai/soleur` is a PUBLIC repo with issues
+# open to the world, and this probe's exit code makes the sweeper act on the tracker. An unfiltered
+# `.comments[].body` therefore accepts a verdict from ANY authenticated GitHub user: one HTTP POST
+# of `RESULT: PASS` was enough. See #7448.
+comments=$(gh issue view "$ISSUE" --comments --json comments --jq '.comments[] | select(.authorAssociation == "OWNER" or .authorAssociation == "MEMBER" or .authorAssociation == "COLLABORATOR") | .body' 2>/dev/null)
 rc=$?
 if [[ $rc -ne 0 ]]; then
   echo "TRANSIENT: could not read #$ISSUE comments (gh rc=$rc)" >&2
   exit 2
 fi
 
-if printf '%s' "$comments" | grep -qE '^RESULT: FAIL'; then
+# LAST verdict wins, and `\b` is load-bearing. Two independent greps with PASS tested first
+# accepted `RESULT: PASSing on this for now` (no word boundary) and let an early PASS outrank a
+# later FAIL, so a regression recorded after a pass could never reopen the tracker. See #7448.
+last="$(printf '%s\n' "$comments" | grep -E '^RESULT: (PASS|FAIL)\b' | tail -1)"
+if [[ "$last" =~ ^RESULT:\ FAIL ]]; then
   echo "FAIL: #$ISSUE carries RESULT: FAIL — the doublefire probe found runs on" >&2
   echo "      the dedicated host. This is a live double-scheduler condition." >&2
   echo "      Do NOT close; escalate per plan branch C6.3." >&2
   exit 1
 fi
 
-if printf '%s' "$comments" | grep -qE '^RESULT: PASS'; then
+if [[ "$last" =~ ^RESULT:\ PASS ]]; then
   echo "PASS: delivery landed and the doublefire verdict is recorded on #$ISSUE."
   exit 0
 fi
