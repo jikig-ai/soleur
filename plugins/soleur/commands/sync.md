@@ -1,7 +1,7 @@
 ---
 name: sync
 description: Analyze codebase and populate knowledge-base with conventions, patterns, and technical debt
-argument-hint: "[area: conventions|architecture|testing|debt|project|c4|rule-prune|domain-model|all]"
+argument-hint: "[area: conventions|architecture|testing|debt|project|c4|domain-model|all]"
 ---
 
 # Sync Codebase to Knowledge Base
@@ -17,12 +17,18 @@ Analyze an existing codebase and populate knowledge-base files with coding conve
 
 <sync_area> #$ARGUMENTS </sync_area>
 
-**Valid areas:** `conventions`, `architecture`, `testing`, `debt`, `project`, `c4`, `rule-prune`, `domain-model`, `all` (default)
+**Valid areas:** `conventions`, `architecture`, `testing`, `debt`, `project`, `c4`, `domain-model`, `all` (default)
 
-**Note on `rule-prune`:** This area is excluded from `all` dispatch. It files
-GitHub issues for AGENTS.md rules with zero recorded hits; it should be run
-intentionally (weekly or monthly), not as part of every `/soleur:sync` call.
-Append `--weeks=<n>` (default 8) to override the staleness threshold.
+**Note on `rule-prune` (undocumented, monorepo-only):** This area is excluded
+from `all` dispatch AND from the advertised area list above, because its
+producers (`scripts/rule-metrics-aggregate.sh`, `scripts/rule-prune.sh`) live at
+the monorepo root outside the plugin payload and cannot be shipped to a
+marketplace install (#7442). It also has no input source on a customer machine:
+its telemetry producer `emit_incident()` is defined in
+`.claude/hooks/lib/incidents.sh`, which is likewise not in the payload.
+Advertising it would invite a customer into a path that always halts. It remains
+invocable by name inside this repo, gated on the sentinel below. Append
+`--weeks=<n>` (default 8) to override the staleness threshold.
 
 **Note on `c4`:** Generates a LikeC4 diagram from the component docs the `project`
 area writes, so it runs AFTER `project` in `all` dispatch. Non-destructive: it
@@ -300,10 +306,34 @@ and nothing under `plugins/` imports Sentry.
 Runs only when `<sync_area>` is literally `rule-prune`. Surfaces AGENTS.md rules that have zero recorded hits over the threshold window as GitHub issues milestoned to "Post-MVP / Later". Does NOT edit `AGENTS.md` — a human reviews each issue and decides whether to prune.
 
 1. **Parse `--weeks=<n>`** from `<sync_area>` additional tokens (e.g., `rule-prune --weeks=4`). Default: 8. Also supports `--dry-run` (forwarded to `rule-prune.sh`).
-2. **Ensure `knowledge-base/project/rule-metrics.json` exists.** If missing, instruct the user to run the aggregator first: `bash scripts/rule-metrics-aggregate.sh` (or `bash scripts/rule-metrics-aggregate.sh --dry-run` to preview summary without writing). Do not create a stub file.
+2. **Ensure `knowledge-base/project/rule-metrics.json` exists.** If missing, run the aggregator first. Both producers in this area are repo-root scripts outside the plugin payload, so the invocation is gated on a monorepo sentinel that fails closed — run this block verbatim rather than the bare command, so the halt executes whether or not this paragraph was read:
+
+   ```bash
+   # Fail closed (#7442). scripts/ here is the CUSTOMER's scripts/ on any repo
+   # that is not this monorepo, so a same-named file would execute as theirs.
+   # The sentinel is the self-hosted plugin checkout -- the same condition
+   # Phase 4.1 already gates on, and one a marketplace install never satisfies.
+   if [[ ! -f plugins/soleur/.claude-plugin/plugin.json ]]; then
+     echo "SOLEUR_SYNC_AREA_UNAVAILABLE area=rule-prune reason=monorepo-only-maintenance-area"
+     exit 2
+   fi
+   bash scripts/rule-metrics-aggregate.sh
+   ```
+
+   Append `--dry-run` to preview the summary without writing. Do not create a stub file.
 
    **Local telemetry source:** `.claude/.rule-incidents.jsonl` (gitignored, one line per deny/bypass written by the hooks under `.claude/hooks/`). The aggregator reads this file to produce `rule-metrics.json`. Monthly rotation archives it to `.claude/.rule-incidents-<YYYY-MM>.jsonl.gz` when `AGGREGATOR_ROTATE=1` is set (CI only).
-3. **Invoke** `bash scripts/rule-prune.sh --weeks=<n>` (or with `--dry-run` to preview candidates without filing). The script:
+3. **Invoke** the pruner behind the same fail-closed sentinel (again, run the block, not the bare command):
+
+   ```bash
+   if [[ ! -f plugins/soleur/.claude-plugin/plugin.json ]]; then
+     echo "SOLEUR_SYNC_AREA_UNAVAILABLE area=rule-prune reason=monorepo-only-maintenance-area"
+     exit 2
+   fi
+   bash scripts/rule-prune.sh --weeks=<n>
+   ```
+
+   Append `--dry-run` to preview candidates without filing. The script:
    - Reads `knowledge-base/project/rule-metrics.json`.
    - Filters rules with `hit_count == 0` AND `first_seen` older than the cutoff.
    - Validates every rule_id against `^(hr|wg|cq|rf|pdr|cm)-[a-z0-9-]{3,60}$`; malformed ids are skipped with a stderr warning (never filed as issues).
