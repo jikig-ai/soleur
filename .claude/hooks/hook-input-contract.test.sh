@@ -206,9 +206,15 @@ a18b_rewriter_contract() {
       && fail_soft+=("$hook")
 
     # (ii) a real parse gate at the call site (comments stripped, per A13).
-    sed 's/[[:space:]]*#.*$//' "$src" | grep -q 'hook_parse_input' \
+    # Two-step like (i) above, and for the SIGPIPE reason A13 states: under
+    # `set -o pipefail`, `sed "$src" | grep -q X` returns 141 when grep matches
+    # EARLY, because grep exits and sed dies on the closed pipe. The `||` then
+    # fires and this reports "no hook_parse_input call" for a hook that calls it
+    # on line 3 — the assertion inverts precisely for the healthiest hooks.
+    src_stripped="$(sed 's/[[:space:]]*#.*$//' "$src")"
+    grep -q 'hook_parse_input' <<<"$src_stripped" \
       || no_gate+=("$hook: no hook_parse_input call")
-    sed 's/[[:space:]]*#.*$//' "$src" | grep -q 'hook_input_report' \
+    grep -q 'hook_input_report' <<<"$src_stripped" \
       || no_gate+=("$hook: no hook_input_report call")
 
     # (iii) exit 0 on every payload class — a non-zero exit from a PreToolUse
@@ -420,10 +426,15 @@ a1_idiom_ban() {
     done
     [[ "$present" == true ]] || _a1_narrowed="${_a1_narrowed} ${req}(dropped-from-roots)"
   done
+  # Materialised once, and read via herestring below: `printf … | grep -q` under
+  # `set -o pipefail` returns 141 when grep matches early (printf dies on the
+  # closed pipe), and the `!` turns that into "0 files" for a root that in fact
+  # matched on its FIRST entry — the assertion inverts for the healthiest case.
+  _a1_scanned="$(printf '%s\n' "${scanned[@]}")"
   for root in "${_a1_roots[@]}"; do
     if [[ ! -d "$root" ]]; then
       _a1_narrowed="${_a1_narrowed} ${root#"$REPO_ROOT/"}(absent)"
-    elif ! printf '%s\n' "${scanned[@]}" | grep -q "^$root/"; then
+    elif ! grep -q "^$root/" <<<"$_a1_scanned"; then
       _a1_narrowed="${_a1_narrowed} ${root#"$REPO_ROOT/"}(0 files)"
     fi
   done
