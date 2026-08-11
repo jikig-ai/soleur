@@ -271,7 +271,7 @@ assert_case "TS-7 Guard Contract with zero entries fails" 1 "no guard entries" "
 # positive dispatch line exists so MB-4 has something to neuter.
 # ---------------------------------------------------------------------------
 combined="$(run_sut "$D1")"
-if grep -qE 'checked [0-9]+ plan|guard entr' <<<"$combined"; then
+if grep -qF 'scanned 1 plan file(s), 1 with a Guard Contract, 1 guard entry' <<<"$combined"; then
   pass "TS-8 SUT reports a dispatch count"
 else
   fail "TS-8 SUT reports a dispatch count" "no count line in: $(printf '%s' "$combined" | head -3 | tr '\n' ' ')"
@@ -292,6 +292,158 @@ assert_case "TS-9 plans/archive is excluded from the sweep" 0 "" "$D9"
 D10="$WORK/ts10"; mkdir -p "$D10/elsewhere" || exit 2
 write_plan "$D10/elsewhere/thing.md" no_assembly
 assert_case "TS-10 explicit path argument is honored" 1 "Assembly" "$D10" "elsewhere/thing.md"
+
+# ---------------------------------------------------------------------------
+# TS-11 (S-4/g7): the sweep must FAIL when it dispatched over nothing. A gate
+# that examined zero inputs must never report success — the fourth instance from
+# the originating evidence, which this gate reproduced.
+# ---------------------------------------------------------------------------
+D11="$WORK/ts11"; mkdir -p "$D11/knowledge-base/project/plans" || exit 2
+assert_case "TS-11 sweep over zero plan files fails (own-dispatch floor)" 1 "scanned 0" "$D11"
+
+# ---------------------------------------------------------------------------
+# TS-12 (S-5): a plan in a SUBDIRECTORY of plans/ must be swept. One such plan
+# exists in the repo today and was never checked. archive/ stays excluded.
+# ---------------------------------------------------------------------------
+D12="$WORK/ts12"; mk_plan_dir "$D12" || exit 2
+write_plan "$D12/knowledge-base/project/plans/ok-plan.md" compliant_guard 1 "good"
+write_plan "$D12/knowledge-base/project/plans/feat-x/plan.md" no_assembly
+assert_case "TS-12 plan in a subdirectory is swept" 1 "Assembly" "$D12"
+
+# ---------------------------------------------------------------------------
+# TS-13 (S-1/A5): heading variants must not silently exempt a whole file.
+# ---------------------------------------------------------------------------
+D13="$WORK/ts13"; mk_plan_dir "$D13" || exit 2
+{
+  printf -- '---\ntitle: "x"\nbranch: b\n---\n\n## Overview\n\nx\n\n## Guard Contract (3 guards)\n'
+  no_assembly
+} > "$D13/knowledge-base/project/plans/head-plan.md"
+assert_case "TS-13 heading with trailing text is still a Guard Contract" 1 "Assembly" "$D13"
+
+# ---------------------------------------------------------------------------
+# TS-14 (S-3/A6): a SECOND Guard Contract section must also be checked.
+# ---------------------------------------------------------------------------
+second_section() {
+  compliant_guard 1 "good"
+  printf '\n## Something Else\n\nprose\n\n## Guard Contract\n'
+  no_assembly
+}
+D14="$WORK/ts14"; mk_plan_dir "$D14" || exit 2
+write_plan "$D14/knowledge-base/project/plans/two-plan.md" second_section
+assert_case "TS-14 a second Guard Contract section is checked too" 1 "Assembly" "$D14"
+
+# ---------------------------------------------------------------------------
+# TS-15 (S-2/D1): the matrix floor must be satisfied by the MUTATION MATRIX, not
+# by any table in the entry. An Assembly-as-table with NO matrix passed before.
+# ---------------------------------------------------------------------------
+table_assembly_no_matrix() {
+  cat <<'EOF'
+
+### Guard 1 — table assembly, no matrix
+
+**Property.** Something holds everywhere.
+
+**Assembly.** The property quantifies over:
+
+| file | why |
+|---|---|
+| a.sh | one |
+| b.sh | two |
+| c.sh | three |
+EOF
+}
+D15="$WORK/ts15"; mk_plan_dir "$D15" || exit 2
+write_plan "$D15/knowledge-base/project/plans/tbl-plan.md" table_assembly_no_matrix
+assert_case "TS-15 an unrelated table does not satisfy the matrix floor" 1 "mutation" "$D15"
+
+# ---------------------------------------------------------------------------
+# TS-16 (C1): a placeholder plus any trailing prose must still be a placeholder.
+# ---------------------------------------------------------------------------
+tbd_with_prose() {
+  cat <<'EOF'
+
+### Guard 1 — placeholder plus prose
+
+**Property.** Something holds everywhere.
+
+**Assembly.** TBD
+
+See the design doc for the real enumeration.
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | a | RED |
+| 2 | b | RED |
+| 3 | c | RED |
+EOF
+}
+D16="$WORK/ts16"; mk_plan_dir "$D16" || exit 2
+write_plan "$D16/knowledge-base/project/plans/prose-plan.md" tbd_with_prose
+assert_case "TS-16 placeholder followed by prose is still a placeholder" 1 "placeholder" "$D16"
+
+# ---------------------------------------------------------------------------
+# TS-17 (H-1/C2): a field name outside [A-Za-z ] must still terminate the
+# preceding field, or the Assembly swallows it and TBD goes undetected.
+# ---------------------------------------------------------------------------
+paren_field() {
+  cat <<'EOF'
+
+### Guard 1 — paren field name
+
+**Property.** Something holds everywhere.
+
+**Assembly.** TBD
+
+**Mutation matrix (3 rows):**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | a | RED |
+| 2 | b | RED |
+| 3 | c | RED |
+EOF
+}
+D17="$WORK/ts17"; mk_plan_dir "$D17" || exit 2
+write_plan "$D17/knowledge-base/project/plans/paren-plan.md" paren_field
+assert_case "TS-17 a parenthesised next-field still terminates the Assembly" 1 "placeholder" "$D17"
+
+# ---------------------------------------------------------------------------
+# TS-18 (H-4/B1): a mis-levelled `#### Guard` must FAIL loudly, not fold into
+# its predecessor (where its rows also inflated the predecessor's matrix count).
+# ---------------------------------------------------------------------------
+mislevelled() {
+  compliant_guard 1 "good"
+  cat <<'EOF'
+
+#### Guard 2 — wrong level
+
+**Property.** Something else.
+EOF
+}
+D18="$WORK/ts18"; mk_plan_dir "$D18" || exit 2
+write_plan "$D18/knowledge-base/project/plans/lvl-plan.md" mislevelled
+assert_case "TS-18 a mis-levelled Guard heading fails loudly" 1 "heading level" "$D18"
+
+# ---------------------------------------------------------------------------
+# TS-19 (M-1/D3): a template pasted into a fenced block must not parse as a
+# real, passing entry.
+# ---------------------------------------------------------------------------
+fenced_template() {
+  printf '\nSee the template:\n\n```markdown\n'
+  compliant_guard 1 "template example"
+  printf '```\n'
+}
+D19="$WORK/ts19"; mk_plan_dir "$D19" || exit 2
+write_plan "$D19/knowledge-base/project/plans/fence-plan.md" fenced_template
+assert_case "TS-19 a fenced template block is not a real guard entry" 1 "no guard entries" "$D19"
+
+# ---------------------------------------------------------------------------
+# TS-20 (M-7): an unreadable target is an INFRA fault (exit 2), never a finding.
+# ---------------------------------------------------------------------------
+D20="$WORK/ts20"; mkdir -p "$D20" || exit 2
+assert_case "TS-20 a missing explicit path exits 2, not 1" 2 "" "$D20" "nope.md"
 
 # ---------------------------------------------------------------------------
 # MB — mutation battery. Copy the SUT, delete a marked branch, assert the
@@ -317,6 +469,16 @@ mb_case() {
     return
   fi
 
+  # POSITIVE CONTROL: the mutant must still BE the linter — it must run and
+  # still emit its own summary line on a compliant fixture. Without this a
+  # mutant destroyed by the deletion reports PASS (python3 on an empty file
+  # exits 0).
+  local ctl
+  ctl="$(cd "$D1" && python3 "$mutant" --repo-root "$D1" 2>&1)"
+  if ! grep -qF 'lint-guard-contract: scanned' <<<"$ctl"; then
+    fail "$label" "mutant is not a working program (no summary on the compliant control): $(printf '%s' "$ctl" | head -2 | tr '\n' ' ')"
+    return
+  fi
   local out rc
   set +e
   out="$(cd "$dir" && python3 "$mutant" --repo-root "$dir" "$@" 2>&1)"
@@ -334,6 +496,64 @@ mb_case "MB-2 deleting the matrix-floor check makes TS-4 pass"    matrix   "$D4"
 mb_case "MB-3 deleting the placeholder check makes TS-5 pass"     placeholder "$D5"
 mb_case "MB-4 deleting the zero-entry floor makes TS-7 pass"      floor    "$D7"
 
+mb_case "MB-5 deleting the own-dispatch floor makes TS-11 pass"      dispatchfloor "$D11"
+mb_case "MB-6 deleting the heading-level check makes TS-18 pass"     level      "$D18"
+# MB-7 is SEMANTIC, not a deletion: removing the scope check leaves `span` None
+# and crashes, which is a broken mutant rather than a weaker one. Reverting to
+# the ORIGINAL entry-wide counting is the mutation that matters — it is the
+# defect this fix removed, and it must make TS-15 pass again.
+MUT7="$WORK/mutant-entrywide.py"
+cp "$PRISTINE" "$MUT7" || { echo "harness: cp failed" >&2; exit 2; }
+python3 - "$MUT7" <<'PYEOF'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+needle = '    span = field_span(entry_lines, "Mutation matrix")\n    if span is None:\n        return 0\n'
+assert s.count(needle) == 1, "MB-7 anchor drifted"
+s = s.replace(needle, '    span = "\\n".join(entry_lines)\n', 1)
+p.write_text(s)
+PYEOF
+if diff -q "$PRISTINE" "$MUT7" >/dev/null 2>&1; then
+  fail "MB-7 entry-wide mutation" "mutation did not land"
+else
+  _c="$(cd "$D1" && python3 "$MUT7" --repo-root "$D1" 2>&1)"
+  if ! grep -qF 'lint-guard-contract: scanned' <<<"$_c"; then
+    fail "MB-7 reverting to entry-wide counting makes TS-15 pass" "mutant is not a working program"
+  else
+    _m7out=""; _m7rc=0
+    set +e
+    _m7out="$(cd "$D15" && python3 "$MUT7" --repo-root "$D15" 2>&1)"; _m7rc=$?
+    set -e
+    if [[ "$_m7rc" == "0" ]]; then
+      pass "MB-7 reverting to entry-wide counting re-opens TS-15"
+    else
+      fail "MB-7 reverting to entry-wide counting re-opens TS-15" "mutant still failed (rc=$_m7rc): $(printf '%s' "$_m7out" | head -2 | tr '\n' ' ')"
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# TS-21: positive control on THIS harness's own accounting. A `fail()` rewritten
+# to increment PASS keeps the count floor satisfied and reports a clean run —
+# the exact "0 passed, 0 failed, exit 0" defect the SUT's docstring cites as
+# originating evidence. The floor counts DISPATCH; this checks DISCRIMINATION.
+# ---------------------------------------------------------------------------
+_accounting_live() {
+  local p0=$PASS f0=$FAIL t0=$TOTAL ok=1
+  pass "__control__" >/dev/null
+  fail "__control__" "control" >/dev/null
+  [[ "$PASS"  -eq $((p0 + 1)) ]] || ok=0
+  [[ "$FAIL"  -eq $((f0 + 1)) ]] || ok=0
+  [[ "$TOTAL" -eq $((t0 + 2)) ]] || ok=0
+  PASS=$p0; FAIL=$f0; TOTAL=$t0
+  [[ "$ok" -eq 1 ]]
+}
+if _accounting_live; then
+  pass "TS-21 harness accounting is live (pass/fail move their own counters)"
+else
+  echo "FAIL: TS-21 harness accounting is broken — pass()/fail() do not move their counters" >&2
+  exit 1
+fi
+
 # Matrix row 5 (all-members, not first-member) is a FIXTURE-space proof, not a
 # code-deletion one: TS-6 fails iff the checker quantifies over every entry. A
 # code mutation for it would require an artificial `check_all` seam — dead
@@ -344,7 +564,7 @@ mb_case "MB-4 deleting the zero-entry floor makes TS-7 pass"      floor    "$D7"
 # printing "0 passed, 0 failed" and exiting 0 is the exact defect this whole PR
 # exists to prevent — so the suite refuses to report success on an empty run.
 # ---------------------------------------------------------------------------
-EXPECTED_MIN=14
+EXPECTED_MIN=28
 if [[ "$TOTAL" -lt "$EXPECTED_MIN" ]]; then
   echo "FAIL: harness dispatched only $TOTAL assertions (expected >= $EXPECTED_MIN) — vacuous run" >&2
   exit 1
