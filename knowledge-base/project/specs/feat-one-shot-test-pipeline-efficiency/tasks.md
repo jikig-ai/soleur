@@ -141,13 +141,13 @@ vacuously. The data file from C.5 is what removes the parser.
 
 ## Phase H — deferrals, PR, ship
 
-- [ ] **H.1** File the Item 4 deferral issue (bounded parallelism; blocked on #7376), with
+- [x] **H.1** (consolidated into #7454 item 1 per the /work net-issue-flow gate) File the Item 4 deferral issue (bounded parallelism; blocked on #7376), with
       re-evaluation criteria and a milestone from `knowledge-base/product/roadmap.md`.
-- [ ] **H.2** File the Item 5 deferral issue (session memo; the `_site/` defect — cite UC-1 in
+- [x] **H.2** (consolidated into #7454 item 2) File the Item 5 deferral issue (session memo; the `_site/` defect — cite UC-1 in
       `decision-challenges.md`).
-- [ ] **H.3** File the Item 2 deferral issue (multi-run experiment), carrying the evidence bar from the
+- [x] **H.3** (consolidated into #7454 item 3) File the Item 2 deferral issue (multi-run experiment), carrying the evidence bar from the
       plan's §Risks verbatim.
-- [ ] **H.4** Comment on **#7376** linking H.1 and the Phase F probe. Do **not** close or re-scope it.
+- [x] **H.4** Comment on **#7376** linking H.1 and the Phase F probe. Do **not** close or re-scope it.
 - [ ] **H.5** Verify all 10 acceptance criteria in the plan.
 - [ ] **H.6** Confirm the PR body states: the two scope reductions (no new nightly workflow; three
       items deferred) with reasons, the measured `B_ALWAYS`, and the before/after wall clock from the
