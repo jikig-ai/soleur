@@ -101,9 +101,11 @@ implicated suites' documented timeout-flake class fires.
 
 ## Addendum — 2026-08-10 (#7376): scope of the "capacity, not a colliding path" verdict
 
+<!-- lint-infra-ignore start: describes a PAST measurement's environment (which machine and mount ADR-133's original verdict was taken on), not a step anyone is being asked to perform. The actor+environment co-occurrence is what the linter keys on; there is no imperative here. -->
 This ADR's verdict — that the observed flakiness was **capacity**, not a colliding path —
 was measured on one specific machine and mount: a **RAM-backed 4 GiB `/tmp`** at 86% full
 with swap exhausted, on the operator's workstation, under **cross-worktree** overlap.
+<!-- lint-infra-ignore end -->
 
 It does **not** transfer to `apps/web-platform/infra/run-registered-suites.sh` running on a
 4-vCPU **hosted GitHub runner** against disk-backed `/var/tmp`, as a **single** run. Those

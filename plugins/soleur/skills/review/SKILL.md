@@ -774,9 +774,13 @@ proceed with filing. Any other first-line content is treated as `DISSENT`
 
 **Search for an existing tracker BEFORE invoking the CONCUR gate, not after.** The gate should
 be adjudicating the deferral, not discovering a duplicate — and a duplicate is the modal outcome
-for any finding in a subsystem that has been audited before. One `gh issue list --search` on the
+for any finding in a subsystem that has been audited before. One issue-list query on the
 defect's distinguishing noun costs seconds; the gate costs an agent round-trip and still leaves
-you re-deriving an analysis that already exists, usually a better one. **Why:** #7376 — a
+you re-deriving an analysis that already exists, usually a better one. Use the enumerating shape,
+not a bare search — `gh issue list --state all -L 200 --search "<noun>" --json number,title`:
+without `--state all` an already-closed duplicate is invisible, and without an explicit `-L` the
+result set silently caps at 30, so the probe fails open exactly when the backlog is large enough
+for a duplicate to be likely. **Why:** #7376 — a
 scope-out for 7 underived infra suites went to CONCUR without a search; `#7076` was already open,
 tracked the same remediation, and counted **8** (it knew about a `sudo bash` registration shape
 the proposed filing had missed entirely). The DISSENT was correct on all three of its grounds.
