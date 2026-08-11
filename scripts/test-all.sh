@@ -373,6 +373,12 @@ if want_scripts; then
   # the "encryption at rest + in transit" design-time gate). TS-1..8,15..17 +
   # the MB-1..MB-12 mutation battery (fixture-isolated, not suite-pass-count).
   run_suite "scripts/lint-encryption-posture" bash scripts/lint-encryption-posture.test.sh
+  # Guard Contract completeness gate (plan/SKILL.md §2.12, deepen-plan §4.11).
+  # TS-1..TS-10 fixtures + the MB-1..MB-4 mutation battery. The -live line runs
+  # the sweep over the real plans/ tree so a non-compliant Guard Contract landing
+  # in a plan reds CI, not just the fixtures.
+  run_suite "scripts/lint-guard-contract" bash scripts/lint-guard-contract.test.sh
+  run_suite "scripts/lint-guard-contract-live" python3 scripts/lint-guard-contract.py
   run_suite "scripts/extract-api-spend" bash scripts/extract-api-spend.test.sh
   run_suite "scripts/domain-model-drift" bash scripts/domain-model-drift.test.sh
   # #6602: exit-code harness for the expenses verify_by expiry gate. Registered
