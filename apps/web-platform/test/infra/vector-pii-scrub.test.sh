@@ -437,6 +437,21 @@ EXPECTED_TAGS=$(
   # case). luks-monitor.service ships SyslogIdentifier=luks-monitor here (idempotent with the
   # #6627 luks-monitor.sh logger -t derivation — the union is sort -u'd at line ~442).
   grep -rhoP '^[[:space:]]*SyslogIdentifier=\K[a-z0-9-]+' "$INFRA_DIR"/*.service "$INFRA_DIR"/cloud-init*.yml 2>/dev/null
+  # Channel D (#7228) — a `logger -t <literal>` inside a cloud-init write_files SCRIPT body.
+  # Not a systemd unit, so it has no SyslogIdentifier= for the line above to find, and not a
+  # .sh file, so the LOG_TAG= loop above never opens it: inngest-boot-phone-home.sh lives
+  # entirely inside cloud-init-inngest.yml. Before this line the tag was underivable, and the
+  # only ways to allowlist it were to hand-park it in SYSTEMD_UNIT_IDENTIFIERS (which that
+  # list's own comment forbids — it is for unit-BINARY identifiers, not a drift-guard bypass)
+  # or to leave the emitter silent. An unmatched EMISSION SHAPE is a hole in this guard rather
+  # than caught drift — the same reasoning that added the sed-replacement form as Channel B/3.
+  #
+  # The tag is a LITERAL here, unlike the .sh convention of a LOG_TAG= assignment, and that is
+  # correct for this channel: the LOG_TAG indirection exists so the .sh loop can derive a tag
+  # from a file whose logger calls are heredoc-hidden. This extraction reads the call itself,
+  # so the literal IS the derivation. `-oP` on the call shape (not a bare token) keeps a prose
+  # mention of the tag from feeding the set.
+  grep -rhoP '^[[:space:]]*logger -t \K[a-z0-9-]+' "$INFRA_DIR"/cloud-init*.yml 2>/dev/null
 )
 # #6178: some legitimate SYSLOG_IDENTIFIER entries come from a systemd UNIT's binary
 # writing to stdout — NOT from a `logger -t` call in infra/*.sh — so they are not

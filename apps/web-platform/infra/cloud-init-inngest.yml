@@ -117,15 +117,58 @@ write_files:
       set +e
       stage="$1"; detail="$2"
       tok_file=/run/inngest-bs-logs-token
-      [ -r "$tok_file" ] || exit 0
+      # Test seam (never set in production). Deliberately brace-FREE: this file is rendered by
+      # Terraform templatefile(), where a bare $${...} would have to be escaped and the escaped
+      # form is what a source-reading test would then see. `[ -n "$UNSET" ]` is safe here — this
+      # script runs under `set +e` with no `set -u`.
+      [ -n "$SOLEUR_INNGEST_BS_TOKEN_FILE" ] && tok_file="$SOLEUR_INNGEST_BS_TOKEN_FILE"
+      # --- #7228: this emitter must be able to report its OWN death ------------------------
+      # These three arms were `|| exit 0` and `curl >/dev/null 2>&1` — exit 0, no output, no
+      # trace. This script is the SINGLE delivery path for all eight SOLEUR_INNGEST_BOOT_STAGE
+      # markers, i.e. the entire diagnosis of a boot failure on a host with no SSH, so a silent
+      # failure here does not degrade the trace, it DELETES it. Paired with the tmpfs defect
+      # (every write of this token file lives in `runcmd:`, which cloud-init runs on FIRST BOOT
+      # ONLY, and /run is cleared on reboot), one reboot made the host dark forever and the
+      # silence was indistinguishable from health.
+      #
+      # journald, NOT the POST, because the POST is the thing that failed. The two channels are
+      # independent at the credential level: this script reads the staged token file, while
+      # vector.service resolves BETTERSTACK_LOGS_TOKEN from Doppler at ExecStart — so exactly
+      # the failure that silences this emitter leaves journald -> Vector -> Better Stack up.
+      # The tag is in vector.toml's Source 4 allowlist; without that entry these rows would
+      # never leave the box, which is #6536 rather than a fix.
+      #
+      # SILENT ON SUCCESS: a row per call site per boot on a HEALTHY host would be ~15 rows of
+      # pure duplication (the POST already carries the marker). Only the failure arms emit, so
+      # the channel costs zero in steady state.
+      #
+      # $detail NEVER rides these rows. On the missing-token arm the redaction below has not
+      # run yet, and this tag opens a route from this script's output to Better Stack (the
+      # P1-SEC lesson from the inngest-redis allowlist entry). Stage names are call-site
+      # literals; the reason fields are numeric.
+      if [ ! -r "$tok_file" ]; then
+        logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=token-file-missing path=$tok_file — the Better Stack boot-trace channel is DEAD for this boot and every marker after this one is lost. Expected after any reboot if the per-boot re-stage unit did not run (/run is tmpfs; cloud-init runcmd is first-boot only). #7228"
+        exit 0
+      fi
       bs_token="$(cat "$tok_file" 2>/dev/null)"
-      [ -n "$bs_token" ] || exit 0
+      if [ -z "$bs_token" ]; then
+        logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=token-file-empty path=$tok_file — the token file exists but is EMPTY, so the boot-trace channel is dead. A Doppler fetch that failed after the file was created leaves exactly this state. #7228"
+        exit 0
+      fi
       host="$(hostname 2>/dev/null)"
       ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
       detail="$(printf '%s' "$detail" | sed -E 's#(://[^:@/]+:)[^@]+(@)#\1REDACTED\2#g; s#dp\.[a-z0-9]+\.[A-Za-z0-9_-]{10,}#REDACTED#g; s#[0-9a-f]{32,}#REDACTED#g; s#(signkey-[a-z]+-)[0-9a-f]*#\1REDACTED#g' 2>/dev/null)"
       payload="$(jq -nc --arg m SOLEUR_INNGEST_BOOT_STAGE --arg s "$stage" --arg d "$detail" --arg h "$host" --arg t "$ts" '{message:($m+" stage="+$s+" "+$d), marker:$m, stage:$s, detail:$d, host:$h, dt:$t, shipper:"cloud-init-phone-home"}' 2>/dev/null)"
       [ -n "$payload" ] || payload="{\"message\":\"SOLEUR_INNGEST_BOOT_STAGE stage=$stage\",\"marker\":\"SOLEUR_INNGEST_BOOT_STAGE\",\"stage\":\"$stage\",\"host\":\"$host\"}"
       curl -fsS --max-time 8 -X POST "https://s2457081.eu-fsn-3.betterstackdata.com/" -H "Authorization: Bearer $bs_token" -H "Content-Type: application/json" -d "$payload" >/dev/null 2>&1
+      crc=$?
+      # The third silent arm. `>/dev/null 2>&1` discarded curl's own diagnosis, so an ingest
+      # outage, a revoked token (401) or a clock-skewed TLS failure all presented as a boot
+      # that simply stopped reporting. rc alone is enough to separate them: 6/7 = egress, 22 =
+      # HTTP >=400 under -f, 28 = the 8s timeout, 35/60 = TLS.
+      if [ "$crc" -ne 0 ]; then
+        logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=post-failed rc=$crc — the marker was built and the POST to Better Stack failed, so this stage is missing from the boot trace even though the host reached it. curl rc: 6/7 egress, 22 HTTP>=400 (revoked token), 28 timeout, 35/60 TLS. #7228"
+      fi
       exit 0
     owner: root:root
     permissions: '0755'

@@ -175,6 +175,23 @@ include_matches.SYSLOG_IDENTIFIER = [
   "inngest-server-flip-guard",
   "inngest-registry-probe",
   "inngest-doublefire-probe",
+  # #7228: the boot-trace emitter reporting its OWN death. inngest-boot-phone-home.sh
+  # (cloud-init-inngest.yml) is the single delivery path for all eight
+  # SOLEUR_INNGEST_BOOT_STAGE markers — the entire diagnosis of a boot failure on a host
+  # with no SSH — and all three of its failure modes were `exit 0` with no output, so it
+  # could not report that the trace had died. Paired with the tmpfs defect (the token is
+  # staged only from `runcmd:`, which cloud-init runs on first boot only, while /run is
+  # cleared every reboot) one reboot made the host dark forever and the silence read as
+  # health. journald is the RIGHT channel precisely because the emitter's own POST is the
+  # thing that failed, and the two are independent at the credential level: the emitter
+  # reads the staged token file, while this Vector process resolves BETTERSTACK_LOGS_TOKEN
+  # from Doppler at ExecStart. Bounded by construction — the emitter is SILENT ON SUCCESS,
+  # so a healthy host pays zero rows and a fully-dark one pays ~15 per boot.
+  #
+  # journald-config.test.sh CF-4 previously asserted this tag's ABSENCE, correctly, on the
+  # stated condition that the emitter "never calls logger". It now does, so that pair is
+  # inverted there into the positive lockstep form the same file uses for ci-deploy.
+  "inngest-boot-phone-home",
   # #6536: inngest-heartbeat.service exited non-zero every 60s for 3 days (3,724 fires) and
   # the stderr proving why never left the host — the unit set no SyslogIdentifier=, so systemd
   # tagged it with the ExecStart basename (`doppler`), which matches no source here. The
