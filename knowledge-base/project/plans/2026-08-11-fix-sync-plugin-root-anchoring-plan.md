@@ -367,6 +367,8 @@ decision tree above.
 
 ## User-Brand Impact
 
+- **Brand-survival threshold:** single-user incident
+
 **If this lands broken, the user experiences:** a first-run `/soleur:sync all` that
 reports success while silently omitting the generated C4 diagram, the domain-model
 register rows, and `kb-coverage.md` — the artifact whose purpose is to say what the
@@ -555,7 +557,7 @@ logs:
   retention: "permanent (git history); deterministic — no timestamp, stable ordering"
 
 discoverability_test:
-  command: "bash tests/commands/test-sync-producer-reachability.sh"
+  command: bash tests/commands/test-sync-producer-reachability.sh
   expected_output: "0 failed"
 ```
 
