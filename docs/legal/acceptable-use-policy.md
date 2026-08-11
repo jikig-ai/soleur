@@ -30,7 +30,7 @@ This Policy applies to all users globally, with specific provisions addressing c
 
 This Policy applies to all use of the Soleur platform, including but not limited to:
 
-- Interaction with Soleur's 45 AI agents and 45 skills;
+- Interaction with Soleur's specialist AI agents and skills;
 - Execution of shell commands, code generation, and file manipulation through agents;
 - Autonomous (auto-run) execution of shell commands by the Web Platform agent without a per-command approval step, as described in Section 5.7 and Terms & Conditions Section 3a.7;
 - Browser automation via the agent-browser subsystem;
@@ -126,10 +126,10 @@ The Web Platform allows you to share knowledge base documents via public links. 
 
 - (a) Share documents containing confidential or proprietary information belonging to third parties without authorization from the information owner;
 - (b) Share documents containing personally identifiable information (PII) of third parties without their explicit consent or another lawful basis under applicable data protection law;
-- (c) Share documents containing material that infringes the intellectual property rights of any third party, including copyrighted content, trade secrets, or proprietary methodologies; or
-- (d) Use the sharing feature to distribute content that would otherwise violate Section 4.2 (Harmful or Illegal Content) of this Policy.
+- (c) Share documents containing material that infringes the intellectual property rights of any third party, including copyrighted content, trademarks, trade secrets, or proprietary methodologies; or
+- (d) Use the sharing feature to distribute content that would otherwise violate Section 4.2 (Harmful or Illegal Content) of this Policy, including defamatory or misleading content.
 
-You are solely responsible for reviewing document content before sharing. Jikigai does not pre-screen shared content and is not liable for content you choose to make publicly accessible.
+You are solely responsible for reviewing document content before sharing. Jikigai does not pre-screen shared content and is not liable for content you choose to make publicly accessible. Violation of this Section may result in share-link revocation and account suspension under Section 6.
 
 <!-- End: KB sharing -->
 

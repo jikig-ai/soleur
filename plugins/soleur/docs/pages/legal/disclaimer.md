@@ -94,7 +94,6 @@ Business plans, strategies, analyses, and recommendations produced by the Platfo
 
 TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL JIKIGAI, ITS CONTRIBUTORS, MAINTAINERS, AFFILIATES, OR LICENSORS BE LIABLE FOR ANY:
 
-- **Direct damages** arising from your use of or inability to use the Platform;
 - **Indirect, incidental, special, consequential, or punitive damages**, including but not limited to loss of profits, loss of data, loss of business opportunity, loss of goodwill, or business interruption;
 - **Damages arising from AI-Generated Output**, including but not limited to damages caused by errors in generated code, inaccurate legal documents, flawed business plans, or any other AI-generated content;
 - **Damages arising from the execution of commands**, file modifications, or system changes performed by the Platform's AI agents on your local system;
@@ -104,7 +103,7 @@ WHETHER BASED ON WARRANTY, CONTRACT, TORT (INCLUDING NEGLIGENCE), STRICT LIABILI
 
 ### 3.2 Aggregate Liability Cap
 
-To the extent that any jurisdiction does not allow the exclusion or limitation of liability as set forth above, our total aggregate liability to you for all claims arising out of or related to your use of the Platform shall not exceed the amount you paid to us for the Platform in the twelve (12) months preceding the claim. **As the Platform is provided free of charge, this amount is zero (EUR 0.00 / USD $0.00).**
+To the extent that any jurisdiction does not allow the exclusion or limitation of liability as set forth above, our total aggregate liability to you for all claims arising out of or related to your use of the Platform shall not exceed the amount you paid to us for the Platform in the twelve (12) months preceding the claim. **For the self-hosted Plugin, which is provided free of charge, that amount is zero (EUR 0.00). For the Web Platform, that amount is the subscription fees you actually paid to us in the twelve (12) months preceding the claim.**
 
 ### 3.3 EU/EEA Consumer Protections
 
@@ -222,7 +221,7 @@ Soleur is a source-available project maintained by Jikigai, a company incorporat
 
 If you have questions about this Disclaimer, you may contact us through:
 
-- **Email:** <legal@jikigai.com>
+- **Email:** legal@jikigai.com
 - **GitHub:** [github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur)
 - **Website:** [soleur.ai](https://soleur.ai)
 

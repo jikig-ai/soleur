@@ -20,7 +20,7 @@ permalink: legal/acceptable-use-policy/
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** August 9, 2026 *(Scope clarification added 9 August 2026: the distinction between plugin-local and operator-assisted processing was previously implicit, which left these sections reading as statements about every configuration.)* Previous: June 4, 2026 -- added Section 5.7 "Autonomous command execution (Web Platform)" + a Section 2 scope clause disclosing the Web Platform agent's auto-run shell-command surface and its residual-risk admission, with the git-backed-recovery and visible-in-chat mitigations (PR #4949 / #4952); previously May 26, 2026 -- added Section 5.6 "BYOK delegation responsibilities" (PR-B #4508 / #4232); previously May 22, 2026 -- softened Section 5.5 (renamed "Workspace member attestation" → "Workspace member responsibility"): the per-pair Soleur Side Letter is no longer required; Owners may satisfy the responsibility by any sufficient means (click-through ToS reliance, existing employment/contractor/consultancy agreement, or optional Side Letter execution); the Side Letter template remains available as a belt-and-braces reference document; previously same-day added Section 5.5 "Workspace member attestation" governing the team-workspace feature gated by `FLAG_TEAM_WORKSPACE_INVITE` (PR #4289); May 21, 2026 added a "Template-authorization revocation for AUP breaches" paragraph to Section 5.4 disclosing that Soleur may revoke a per-template authorization (`template_authorizations` ledger, PR-I #4078) with revocation reason `policy_violation` where a template-bound send is determined to violate this AUP; May 18, 2026 added Section 5.4 "Automated agent actions taken on your behalf" governing per-tenant scope grants on the Web Platform (PR-G #3947); previously same-day added Section 4.7 "Special-Category and Sensitive Personal Data -- Hosted Chat Surface" + chat-attachments scope bullet (PR #3988) (previous: March 29, 2026)
+**Last Updated:** August 9, 2026 *(Scope clarification added 9 August 2026: the distinction between plugin-local and operator-assisted processing was previously implicit, which left these sections reading as statements about every configuration.)* Previous: June 4, 2026 -- added Section 5.7 "Autonomous command execution (Web Platform)" + a Section 2 scope clause disclosing the Web Platform agent's auto-run shell-command surface and its residual-risk admission (the blocklist is illustrative, not exhaustive; a non-blocked command can auto-run and change or delete files), with the git-backed-recovery and visible-in-chat mitigations and the trust-only-what-you-connect responsibility; cross-references Terms Section 3a.7 / Section 10.4 and the in-product autonomous-execution disclosure banner (PR #4949 / #4952); previously May 26, 2026 -- added Section 5.6 "BYOK delegation responsibilities" for the delegated-credential prompt routing feature (PR-B #4508 / #4232); Grantor must hold Delegation Consent Side Letter from each Grantee; cost-telemetry-only visibility; Art. 26 joint controllership; cross-references DPD Section 2.3(w) and Terms Section 3b; previously May 22, 2026 -- softened Section 5.5 (renamed "Workspace member attestation" → "Workspace member responsibility"): the per-pair Soleur Side Letter is no longer required; Owners may satisfy the responsibility by any sufficient means (click-through ToS reliance, existing employment/contractor/consultancy agreement, or optional Side Letter execution); the Side Letter template remains available as a belt-and-braces reference document; previously same-day added Section 5.5 "Workspace member attestation" governing the team-workspace feature gated by `FLAG_TEAM_WORKSPACE_INVITE` (PR #4289); May 21, 2026 added a "Template-authorization revocation for AUP breaches" paragraph to Section 5.4 disclosing that Soleur may revoke a per-template authorization (`template_authorizations` ledger, PR-I #4078) with revocation reason `policy_violation` where a template-bound send is determined to violate this AUP; May 18, 2026 added Section 5.4 "Automated agent actions taken on your behalf" governing per-tenant scope grants on the Web Platform (PR-G #3947); previously same-day added Section 4.7 "Special-Category and Sensitive Personal Data -- Hosted Chat Surface" + chat-attachments scope bullet (PR #3988) (previous: March 29, 2026)
 
 ---
 
@@ -38,7 +38,7 @@ This Policy applies to all users globally, with specific provisions addressing c
 
 This Policy applies to all use of the Soleur platform, including but not limited to:
 
-- Interaction with Soleur's {{ stats.agents }} AI agents and {{ stats.skills }} skills;
+- Interaction with Soleur's specialist AI agents and skills;
 - Execution of shell commands, code generation, and file manipulation through agents;
 - Autonomous (auto-run) execution of shell commands by the Web Platform agent without a per-command approval step, as described in Section 5.7 and Terms & Conditions Section 3a.7;
 - Browser automation via the agent-browser subsystem;
@@ -97,6 +97,8 @@ You must not use Soleur to generate, process, store, or distribute:
 - (f) Defamatory, fraudulent, or deliberately misleading content intended to deceive; or
 - (g) Content that violates export control laws, sanctions regulations, or trade restrictions.
 
+This Section applies equally to images you upload to the Web Platform, including a workspace logo image: you must not upload any logo or other image that is objectionable, infringes a third party's intellectual property or trademark rights, or otherwise falls within (a)–(g) above.
+
 ### 4.3 Circumvention of Security Controls
 
 You must not:
@@ -128,14 +130,14 @@ You must not:
 
 ### 4.6 Shared Content
 
-When sharing knowledge base documents via the Web Platform's public link feature, you must not share documents that:
+The Web Platform allows you to share knowledge base documents via public links. When using this feature, you must not:
 
-- (a) Contain confidential or proprietary information belonging to third parties without their authorization;
-- (b) Include personally identifiable information (PII) of third parties without their explicit consent;
-- (c) Contain material that infringes any third party's copyright, trademark, or other intellectual property rights; or
-- (d) Contain harmful, illegal, defamatory, or misleading content.
+- (a) Share documents containing confidential or proprietary information belonging to third parties without authorization from the information owner;
+- (b) Share documents containing personally identifiable information (PII) of third parties without their explicit consent or another lawful basis under applicable data protection law;
+- (c) Share documents containing material that infringes the intellectual property rights of any third party, including copyrighted content, trademarks, trade secrets, or proprietary methodologies; or
+- (d) Use the sharing feature to distribute content that would otherwise violate Section 4.2 (Harmful or Illegal Content) of this Policy, including defamatory or misleading content.
 
-You are solely responsible for reviewing document content before sharing. Jikigai does not pre-screen shared content. Violation of this section may result in share link revocation and account suspension under Section 6.
+You are solely responsible for reviewing document content before sharing. Jikigai does not pre-screen shared content and is not liable for content you choose to make publicly accessible. Violation of this Section may result in share-link revocation and account suspension under Section 6.
 
 <!-- End: KB sharing -->
 
@@ -413,3 +415,5 @@ For questions about this Policy, please contact us through:
     </div>
   </div>
 </section>
+
+<!-- PR-H (#3244) #4066 — 2026-05-19: Card-screenshot-redaction clause. GitHub-sourced Today cards (source='github' rows on /dashboard) render with `redactGithubSourcedText` applied at the render layer. Founders are advised not to capture or share screenshots of cards containing third-party repository content beyond what Soleur presents — the runtime's render-time redaction is a minimization control, not a downstream sharing license. CVE / secret-scanning cards render ID + severity only by default; founders should not work around this to capture redacted body content for redistribution. KB-drift cards (source='kb-drift') are internal-infrastructure signal and render unredacted by design. Authoritative shape: knowledge-base/legal/article-30-register.md Processing Activity 17. -->
