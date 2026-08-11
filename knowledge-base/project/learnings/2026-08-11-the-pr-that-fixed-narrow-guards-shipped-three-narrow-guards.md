@@ -5,7 +5,7 @@ category: workflow-patterns
 tags: [guards, mutation-testing, review, secret-scanning, gitleaks, enumeration]
 issue: 5095
 pr: 7438
-adr: ADR-179
+adr: ADR-180
 ---
 
 # The PR that fixed narrow guards shipped three narrow guards
