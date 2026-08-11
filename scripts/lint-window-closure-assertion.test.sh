@@ -221,6 +221,116 @@ D11="$WORK/ts11"; mkdir -p "$D11/$ROOT_REL" || exit 2
 assert_case "TS-11 zero scanned files fails (anti-vacuity floor)" 1 "scanned 0" "$D11"
 
 # ---------------------------------------------------------------------------
+# TS-12 (W-5): .test.tsx / .spec.ts are the SAME defect surface. 247 such files
+# exist in-repo and were entirely outside the walk.
+# ---------------------------------------------------------------------------
+D12="$WORK/ts12"
+write_test_file "$D12/$ROOT_REL/benign.test.ts" <<'EOF'
+it("nothing", () => { expect(1).toBe(1); });
+EOF
+write_test_file "$D12/$ROOT_REL/bad.test.tsx" <<'EOF'
+const tsxWindow = (): string => src.match(/A=\((.*)\)/)![1];
+it("pins", () => { expect(a(tsxWindow())).toEqual(["x"]); });
+EOF
+assert_case "TS-12 .test.tsx is in scope" 1 "tsxWindow" "$D12"
+
+D13="$WORK/ts13"
+write_test_file "$D13/$ROOT_REL/bad.spec.ts" <<'EOF'
+const specWindow = (): string => src.match(/A=\((.*)\)/)![1];
+it("pins", () => { expect(a(specWindow())).toEqual(["x"]); });
+EOF
+assert_case "TS-13 .spec.ts is in scope" 1 "specWindow" "$D13"
+
+# ---------------------------------------------------------------------------
+# TS-14 (B2/B3/B7): declaration forms HELPER_RE could not see. Each moved a real
+# window helper out of reach at zero cost.
+# ---------------------------------------------------------------------------
+D14="$WORK/ts14"
+write_test_file "$D14/$ROOT_REL/forms.test.ts" <<'EOF'
+const helpers = { objWindow: (s: string) => s.match(/A=\((.*)\)/)![1] };
+it("pins", () => { expect(a(helpers.objWindow(src))).toEqual(["x"]); });
+EOF
+assert_case "TS-14 an object-property helper is in scope" 1 "objWindow" "$D14"
+
+D15="$WORK/ts15"
+write_test_file "$D15/$ROOT_REL/asyncform.test.ts" <<'EOF'
+export async function asyncWindow(): Promise<string> { return src.match(/A=\((.*)\)/)![1]; }
+it("pins", () => { expect(a(asyncWindow())).toEqual(["x"]); });
+EOF
+assert_case "TS-15 an async/exported function helper is in scope" 1 "asyncWindow" "$D15"
+
+# ---------------------------------------------------------------------------
+# TS-16 (C2): hoisting the expected array to a const took the WHOLE FILE out of
+# scope, because the closure test is a file-level switch.
+# ---------------------------------------------------------------------------
+D16="$WORK/ts16"
+write_test_file "$D16/$ROOT_REL/constexpected.test.ts" <<'EOF'
+const EXPECTED_MOUNTS = ["/repo", "/tmp"];
+const hoistWindow = (): string => src.match(/A=\((.*)\)/)![1];
+it("pins", () => { expect(mountsIn(hoistWindow())).toEqual(EXPECTED_MOUNTS); });
+EOF
+assert_case "TS-16 toEqual(CONST) is still a closure assertion" 1 "hoistWindow" "$D16"
+
+# ---------------------------------------------------------------------------
+# TS-17 (D1/W-4): a bare marker with no justification satisfied the gate. The
+# plan's stated property requires a justification; the gate did not enforce it.
+# ---------------------------------------------------------------------------
+D17="$WORK/ts17"
+write_test_file "$D17/$ROOT_REL/bare.test.ts" <<'EOF'
+// window-assembly: bareWindow
+const bareWindow = (): string => src.match(/A=\((.*)\)/)![1];
+it("pins", () => { expect(a(bareWindow())).toEqual(["x"]); });
+EOF
+assert_case "TS-17 a declaration with no justification is rejected" 1 "justification" "$D17"
+
+# ---------------------------------------------------------------------------
+# TS-18: node_modules must be excluded. 492 of 1420 "scanned" files were
+# vendored, so the anti-vacuity floor could be satisfied by third-party code and
+# a dependency bump could red CI on code the author cannot edit.
+# ---------------------------------------------------------------------------
+D18="$WORK/ts18"
+write_test_file "$D18/$ROOT_REL/ok.test.ts" <<'EOF'
+// window-assembly: fineWindow — pinned by the sibling assertion below.
+const fineWindow = (): string => src.match(/A=\((.*)\)/)![1];
+it("pins", () => { expect(a(fineWindow())).toEqual(["x"]); });
+EOF
+write_test_file "$D18/apps/web-platform/node_modules/vendor/v.test.ts" <<'EOF'
+const vendorWindow = (): string => src.match(/A=\((.*)\)/)![1];
+it("pins", () => { expect(a(vendorWindow())).toEqual(["x"]); });
+EOF
+assert_case "TS-18 node_modules is excluded from the walk" 0 "" "$D18"
+
+# ---------------------------------------------------------------------------
+# TS-19 (M-9): a stale allowlist entry naming a file that no longer exists must
+# be reported. "Members drift; assembly is structural" applies to the allowlist.
+# ---------------------------------------------------------------------------
+D19="$WORK/ts19"
+write_test_file "$D19/$ROOT_REL/present.test.ts" <<'EOF'
+it("nothing", () => { expect(1).toBe(1); });
+EOF
+printf '%s
+' "$ROOT_REL/gone.test.ts::ghostWindow" > "$D19/allow.txt"
+assert_case "TS-19 a stale allowlist entry is reported" 1 "stale" "$D19" --allowlist allow.txt
+
+# ---------------------------------------------------------------------------
+# TS-20 (w4): TWO in-scope files, the FIRST compliant and the SECOND not. Every
+# other fixture holds exactly one in-scope file, which is what let
+# `find_test_files(root)[:1]` survive the whole battery — the gate proved
+# all-members at the HELPER level and first-member at the FILE level.
+# ---------------------------------------------------------------------------
+D20="$WORK/ts20"
+write_test_file "$D20/$ROOT_REL/aaa-first.test.ts" <<'EOF'
+// window-assembly: firstFileWindow — pinned by the sibling assertion below.
+const firstFileWindow = (): string => src.match(/A=\((.*)\)/)![1];
+it("pins", () => { expect(a(firstFileWindow())).toEqual(["x"]); });
+EOF
+write_test_file "$D20/$ROOT_REL/zzz-second.test.ts" <<'EOF'
+const secondFileWindow = (): string => src.match(/B=\((.*)\)/)![1];
+it("pins", () => { expect(b(secondFileWindow())).toEqual(["y"]); });
+EOF
+assert_case "TS-20 the SECOND in-scope file is checked (all-files, not first-file)" 1 "secondFileWindow" "$D20"
+
+# ---------------------------------------------------------------------------
 # MB — mutation battery.
 # ---------------------------------------------------------------------------
 PRISTINE="$WORK/pristine.py"
@@ -250,11 +360,13 @@ mb_case() {
 
 mb_case "MB-1 deleting the declaration check makes TS-1 pass" marker "$D1"
 mb_case "MB-2 deleting the zero-dispatch floor makes TS-11 pass" floor "$D11"
+mb_case "MB-3 deleting the justification check makes TS-17 pass" justification "$D17"
+mb_case "MB-4 deleting the stale-allowlist check makes TS-19 pass" stale "$D19" --allowlist allow.txt
 
 # ---------------------------------------------------------------------------
 # Anti-vacuity floor on THIS harness's own dispatch.
 # ---------------------------------------------------------------------------
-EXPECTED_MIN=13
+EXPECTED_MIN=24
 if [[ "$TOTAL" -lt "$EXPECTED_MIN" ]]; then
   echo "FAIL: harness dispatched only $TOTAL assertions (expected >= $EXPECTED_MIN) — vacuous run" >&2
   exit 1

@@ -31,10 +31,26 @@ plan-time Guard Contract forces it at design time.
 
 Scope
 -----
-Both test roots — `apps/web-platform/` and `plugins/soleur/test/` — enumerated by
-DIRECTORY WALK, never a fixed-depth glob: a test file relocated one directory
-deeper must stay in scope. Within each file, EVERY helper whose identifier ends
-in `Window`, `Region` or `Section` is examined, never only the first.
+Three test roots — `apps/web-platform/`, `plugins/soleur/test/` and the repo-root
+`test/` — enumerated by DIRECTORY WALK over `*.test.ts(x)` and `*.spec.ts(x)`,
+excluding vendored trees. Within each file, EVERY helper whose identifier ends in
+`Window`, `Region` or `Section` is examined, never only the first.
+
+HONEST LIMITS — this gate's own identifier set is narrower than the property it
+names, and saying so is the point:
+
+  - The chokepoint is a NAMING CONVENTION. A window helper called `sandboxSlice`
+    or `extractBwrapArgs` is invisible, and renaming a helper silences the gate.
+    That is the same "suppression grep anchored on rebindable identifiers"
+    failure this file cites as originating evidence; it is accepted here because
+    the alternative (parsing TypeScript) is disproportionate, and the
+    `/review` closure-assertion bullet carries the wider judgement half.
+  - A helper imported from a sibling module is out of reach: the walk only reads
+    test files.
+  - A declaration inside a string literal is not distinguished from a real
+    comment.
+
+Do not read a clean run as "no window-derived closure assertion is unpinned".
 
 A file is in scope only when it contains BOTH a window helper AND a closure
 assertion.
@@ -56,25 +72,69 @@ import re
 import sys
 from pathlib import Path
 
-TEST_ROOTS = ("apps/web-platform", "plugins/soleur/test")
+TEST_ROOTS = ("apps/web-platform", "plugins/soleur/test", "test")
+TEST_SUFFIXES = (".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx")
+EXCLUDED_PARTS = ("node_modules", ".next", "dist", "build")
 
-HELPER_RE = re.compile(
-    r"^\s*(?:export\s+)?(?:const|let|var|function)\s+"
-    r"(?P<name>[A-Za-z_$][\w$]*(?:Window|Region|Section))\b"
+# The identifier set is a NAMING CONVENTION, which is rebindable by the very
+# author whose work this gate checks — see the honest-limits note in the
+# docstring. What is fixed here is the DECLARATION FORM: the first version saw
+# only `const|let|var|function`, so an object property, a class method, an
+# `async function` or an `export default` each moved a real window helper out of
+# reach at zero cost.
+_NAME = r"[A-Za-z_$][\w$]*(?:Window|Region|Section)"
+HELPER_RES = (
+    # const/let/var/function, optionally exported, optionally async/generator
+    re.compile(rf"^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?"
+               rf"(?:function\s*\*?|const|let|var)\s+(?P<name>{_NAME})\b"),
+    # object property or class method, at line start OR mid-line after `{`/`,`:
+    # `const h = { fooWindow: (s) => … }` is a single line.
+    re.compile(rf"(?:^|[{{,])\s*(?:public|private|protected|static|readonly|async|\*)?\s*"
+               rf"(?P<name>{_NAME})\s*[:(]"),
+    # additional declarator in a multi-declarator statement: `, fooWindow = …`
+    re.compile(rf"^\s*,?\s*(?P<name>{_NAME})\s*="),
 )
-CLOSURE_RE = re.compile(r"to(?:Strict)?Equal\(\s*\[")
-DECLARATION_RE = re.compile(r"//\s*window-assembly:\s*(?P<name>[A-Za-z_$][\w$]*)")
+
+# A closure assertion is not only a literal array: hoisting the expected value to
+# a named const is a routine cleanup that silently took the WHOLE FILE out of
+# scope, because this is a file-level switch.
+CLOSURE_RE = re.compile(
+    r"to(?:Strict)?Equal\(\s*(?:\[|new\s+Set\s*\(|[A-Z_][A-Z0-9_]*\s*[),])"
+    r"|toMatchObject\(\s*\["
+    r"|deepStrictEqual\([^,]+,\s*\["
+)
+
+# The declaration must carry a JUSTIFICATION, not just a name. The plan's stated
+# property requires one; the first version accepted a bare marker, so the gate
+# was narrower than the property it named.
+DECLARATION_RE = re.compile(
+    r"^\s*//\s*window-assembly:\s*(?P<name>[A-Za-z_$][\w$]*)\s*(?P<rest>.*)$"
+)
+MIN_JUSTIFICATION_CHARS = 12
 
 
 def find_test_files(root: Path) -> list[Path]:
-    """Every *.test.ts under the configured test roots, by directory walk."""
+    """Every test file under the configured roots, by directory walk.
+
+    Vendored trees are excluded: 492 of 1420 files the first version "scanned"
+    were under node_modules, so the anti-vacuity floor could be satisfied by
+    third-party code and a dependency bump could redden CI on code the author
+    cannot edit.
+    """
     files: list[Path] = []
     for rel in TEST_ROOTS:
         base = root / rel
         if not base.is_dir():
             continue
-        files.extend(sorted(base.rglob("*.test.ts")))
-    return files
+        for p in base.rglob("*"):
+            if not p.is_file() or p.is_symlink():
+                continue
+            if not p.name.endswith(TEST_SUFFIXES):
+                continue
+            if any(part in EXCLUDED_PARTS for part in p.relative_to(root).parts):
+                continue
+            files.append(p)
+    return sorted(set(files))
 
 
 def load_allowlist(path: Path) -> set[tuple[str, str]]:
@@ -105,11 +165,29 @@ def check_file(
     if not CLOSURE_RE.search(text):
         return 0
 
-    helpers = [m.group("name") for m in (HELPER_RE.match(l) for l in text.splitlines()) if m]
+    helpers: list[str] = []
+    for line in text.splitlines():
+        for rx in HELPER_RES:
+            m = rx.search(line)
+            if m:
+                helpers.append(m.group("name"))
+                break
     if not helpers:
         return 0
 
-    declared = {m.group("name") for m in DECLARATION_RE.finditer(text)}
+    declared: set[str] = set()
+    for line in text.splitlines():
+        m = DECLARATION_RE.match(line)
+        if not m:
+            continue
+        rest = m.group("rest").strip(" \t-—:").strip()
+        if len(rest) < MIN_JUSTIFICATION_CHARS:  # MUT:justification
+            failures.append(  # MUT:justification
+                f"{rel}: `{m.group('name')}` declaration carries no justification — "  # MUT:justification
+                f"say what the window is complete against, not just its name"  # MUT:justification
+            )  # MUT:justification
+            continue  # MUT:justification
+        declared.add(m.group("name"))
 
     # EVERY helper, never the first. A per-file marker covering a whole file
     # would reintroduce exactly the first-member degradation this gate exists to
@@ -156,12 +234,26 @@ def main(argv: list[str]) -> int:
         rel = f.relative_to(root).as_posix()
         helpers_checked += check_file(f, rel, allow, failures)
 
+    # "Members drift; assembly is structural" applies to the allowlist too: an
+    # entry naming a file that no longer exists is a member left to rot, and the
+    # header's "shrinking is always welcome" is unactionable without this.
+    if allow:  # MUT:stale
+        seen = {(f.relative_to(root).as_posix(), None) for f in files}  # MUT:stale
+        seen_paths = {p for p, _ in seen}  # MUT:stale
+        for rel_p, helper in sorted(allow):  # MUT:stale
+            if rel_p not in seen_paths:  # MUT:stale
+                failures.append(  # MUT:stale
+                    f"{rel_p}::{helper}: stale allowlist entry — that file is no "  # MUT:stale
+                    f"longer in scope; remove the entry"  # MUT:stale
+                )  # MUT:stale
+
     for msg in failures:
         print(f"FAIL: {msg}", file=sys.stderr)
 
     print(
         f"lint-window-closure-assertion: scanned {len(files)} test file(s), "
-        f"{helpers_checked} in-scope window helper(s)"
+        f"{helpers_checked} in-scope window helper(s), "
+        f"{len(allow)} allowlisted"
     )
 
     # Anti-vacuity floor on this gate's OWN dispatch. A gate that examined
