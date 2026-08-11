@@ -48,7 +48,7 @@ mechanical gate for the specific recurring idiom.
 | #5095/#5097 propose pre-applying the `secret-scan-allow-rename` label | Both OPEN. `git grep -ln "secret-scan-allow-rename" -- plugins/soleur/skills/` returns **zero** — the fix has not landed and #5097's own event-grep close criterion is unmet | Confirmed unfixed. But see next row — the proposed remedy is the weaker of the two options. |
 | "decide between pre-applying the label vs exempting archival destinations" | `rename-guard.sh:78-86` tests **only the rename TARGET** against the gitleaks allowlist. `archive-kb.sh:166` does `git mv <artifact> <same-dir>/archive/<ts>-<name>`. The allowlist regex `knowledge-base/(?:plans\|project/(?:plans\|specs))/.*\.md$` matches **both** source and destination (`.*` spans `archive/`) | **Neither option as filed.** A third, strictly better fix: exempt renames whose SOURCE is already allowlisted. Rationale below. |
 | D should be "a review bullet, a lint, or both" | `review/SKILL.md:1177` already documents this class *and* its disposition: *"the disposition for a recurring documented class is a mechanical gate, not another learning"* | The repo's own guidance answers it: **both**, lint primary. |
-| A broad window/closure lint is feasible | Naive predicate (window idiom + closure assertion co-occurring) matches **30+** test files — overwhelmingly false positives | Narrow the predicate to named window helpers: **7 helpers across 5 files** repo-wide. Tractable, with a grandfather set. |
+| A broad window/closure lint is feasible | Naive predicate (window idiom + closure assertion co-occurring) matches **30+** test files — overwhelmingly false positives | Narrow the predicate to named window helpers: **7 helpers across 3 files** repo-wide. Tractable, with a grandfather set. |
 
 ### Why the source-allowlist exemption beats pre-applying the label
 
@@ -98,7 +98,7 @@ evidence that the contract is usable rather than ceremonial.
    deserves its own Guard Contract and mutation matrix, which means its own plan.
 4. E touches `ship/SKILL.md` (2382 lines), the largest skill in the repo, on its merge-critical path.
 
-Net issue flow: **-2** (close #5095, #5097) **+1** (file E) = **-1**.
+Net issue flow: **-2** (close #5095, #5097) **+1** (filed E as #7446) = **-1**.
 
 This is a judgment call on scope, not on merit — E is worth doing and the design sketch is recorded
 in the filed issue so no analysis is lost.
@@ -151,8 +151,10 @@ window back to the whole source — or by an explicit waiver marker carrying a j
   deeper must remain in scope.
 - Within each file: **every** helper whose identifier ends in `Window`, `Region`, or `Section`, not
   merely the first.
-- The grandfather set measured at plan time (5 files, 7 helpers), stored as an explicit allowlist so
-  the lint lands green and every future addition is gated.
+- The grandfather set measured at implementation time (3 files, 7 helpers). Six are stored as an
+  explicit allowlist so the lint lands green and every future addition is gated; `sandboxWindow` —
+  the originating defect — instead carries a real `// window-assembly:` declaration citing the
+  sibling assertions that pin the rest of its assembly.
 - The lint's own dispatch and its `run_suite` wiring.
 
 **Mutation matrix:**
@@ -405,7 +407,7 @@ Contract because its failure mode is a narrow window.
 15. `git grep -ln "secret-scan-allow-rename" -- plugins/soleur/skills/` returns at least one hit,
     satisfying #5097's own event-grep close criterion.
 16. PR body carries `Closes #5095` and `Closes #5097`.
-17. The E issue is filed and its number recorded in the PR body.
+17. The E issue is filed (#7446) and its number recorded in the PR body.
 
 ### Post-merge
 
@@ -458,7 +460,7 @@ under `/var/tmp` and proven landed with `diff -q` against a pristine backup.
 - `scripts/lint-guard-contract.test.sh`
 - `scripts/lint-window-closure-assertion.py`
 - `scripts/lint-window-closure-assertion.test.sh`
-- `knowledge-base/engineering/architecture/decisions/ADR-<re-derived at ship>-guard-contract-as-plan-time-deliverable.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-178-guard-contract-as-plan-time-deliverable.md`
 
 ## Domain Review
 
@@ -484,7 +486,7 @@ Create and Files to Edit lists contain no UI-surface path.
 |---|---|
 | Put the Guard Contract in `AGENTS.rules.md` | Domain-scoped insight belonging to the owning skills; the corpus is at WARN (44478/46000), so the placement gate and the budget agree |
 | D as a review bullet only | `review/SKILL.md:1177` states the disposition for a recurring documented class is a mechanical gate, not another learning. The class has already recurred repeatedly with prose in place |
-| D as a broad heuristic lint | Measured: 30+ false-positive files. Narrowed to named window helpers: 7 across 5 files |
+| D as a broad heuristic lint | Measured: 30+ false-positive files. Narrowed to named window helpers: 7 across 3 files |
 | F by pre-applying the label (#5095 as filed) | Disarms the guard for the whole PR including genuine laundering renames in the same PR; the source-allowlist exemption is per-rename and preserves the property |
 | F by exempting `archive/` destinations | Wrong axis — it keys on the destination shape rather than on whether new unscanned surface is created, and would admit `git mv server/secrets.ts <allowlisted>/archive/x.md` |
 | Bundle E | See Scope Decision — unrelated thesis, non-trivial sweep needing its own contract, touches the largest skill on its merge path |
