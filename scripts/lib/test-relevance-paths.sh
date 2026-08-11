@@ -32,6 +32,35 @@
 # abort. The cf-tunnel battery copies all of scripts/ and .github/ into its sandbox; gating on
 # that copy set would match nearly every diff and never skip.
 #
+# EVERY LIST ALSO CONTAINS *THIS* FILE, for the same reason one level up. These lists decide
+# whether a battery runs, so a commit editing only this file must run both — and the dangerous
+# edit is REMOVING a path, which is exactly the edit whose safety a battery would demonstrate.
+# Nothing else covers it: lint-orphan-test-suites.sh asserts that declared paths resolve, that
+# each array self-includes, that none is empty, and that test-all.sh consumes each one — and a
+# SHORTER list satisfies all four. Verified by deleting an entry: the linter stayed green.
+# Cost is ~17 min of battery time on commits touching this one file, which is rare.
+#
+# scripts/test-all.sh is deliberately NOT listed. Its gating LOGIC is already covered
+# unconditionally by scripts/test-all-infra-coverage-notice (registered with no relevance gate),
+# and the batteries verify neither that logic nor these lists — so listing it would tax every
+# routine suite registration with ~17 min for no added signal.
+#
+# KNOWN LIMIT — the cf-tunnel enumeration is a LOWER BOUND, not a closed set. Three of the
+# oracle's assertions bind to a DIRECTORY rather than to nameable files: W2 counts
+# `--only CI_SSH_ACCESS_TOKEN` call sites across .github/, W7 enumerates bridge adopters under
+# .github/workflows/, and W8 asserts no `-replace` targets the .deploy token anywhere in
+# .github/. A brand-new workflow adopting the bridge reddens the oracle while these lists
+# decline the battery. Two things bound that: the oracle is registered unconditionally, and
+# legitimising a new adopter REQUIRES editing W7_EXPECTED in
+# scripts/check-cloudflare-token-drift.test.sh — a listed path — which re-arms the battery on
+# the same commit. The residual window is between adding the workflow and updating W7_EXPECTED.
+#
+# NON-OBVIOUS TRANSITIVE EDGE: the registry GATE oracle depends on the ENGINE SUT. It derives
+# its seam list by grepping REGISTRY_(GATE|RESTORE)_* out of BOTH the gate and
+# scripts/registry-restore-from-ghcr.sh, so adding a REGISTRY_RESTORE_* seam to the engine
+# changes the gate oracle's assertion count. Both are listed; do not "simplify" the pairing to
+# gate-SUT-with-gate-suite.
+#
 # EVERY LIST CONTAINS ITS OWN BATTERY FILE. That single element is what makes new-target drift
 # self-correcting: a commit that teaches a battery to mutate something new necessarily edits the
 # battery, necessarily matches the predicate, and therefore necessarily runs the suite that
@@ -48,9 +77,10 @@ REGISTRY_BATTERY_PATHS=(
   "tests/scripts/test-registry-pull-path-health.sh"         # SUITE_GATE (the oracle)
   "tests/scripts/test-registry-restore-from-ghcr.sh"        # SUITE_ENGINE (the oracle)
   "scripts/zot-mirror-diagnosis.sh"                         # sourced companion; absence changes which arm runs
-  "scripts/check-cloudflare-token-drift.sh"                 # sourced companion; same
+  "scripts/check-cloudflare-token-drift.sh"                 # copied, but seam-overridden on every run
   "apps/web-platform/infra/cloud-init.yml"                  # copied fixture
   "tests/scripts/test-registry-gate-mutation-battery.sh"    # SELF — see the note above
+  "scripts/lib/test-relevance-paths.sh"                      # THIS FILE — see the self-reference note above
 )
 
 # scripts/cf-tunnel-liveness-gate-mutations (test-all.sh) — ~189 s.
@@ -75,6 +105,7 @@ CF_TUNNEL_BATTERY_PATHS=(
   ".github/workflows/workspaces-luks-cutover.yml"           # W7_EXPECTED (two call sites)
   ".github/workflows/workspaces-luks-verify.yml"            # W7_EXPECTED
   "scripts/cf-tunnel-liveness-gate-mutations.test.sh"       # SELF — see the note above
+  "scripts/lib/test-relevance-paths.sh"                      # THIS FILE — see the self-reference note above
 )
 
 # Union of the top-level prefixes every declared path lives under. The untracked arm of

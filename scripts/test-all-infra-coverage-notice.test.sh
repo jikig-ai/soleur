@@ -116,7 +116,13 @@ run_arm() {
   # only variable these arms move. Without it they would inherit whatever this worktree's real
   # diff happens to touch — and a diff irrelevant to those batteries would make them decline,
   # changing the skip count these arms assert on for a reason that has nothing to do with infra.
-  ARM_OUT=$(cd "$REPO_ROOT" && SOLEUR_INCIDENT_SKIP="$incident" TEST_GROUP="$group" \
+  # SOLEUR_SUBAGENT / SOLEUR_ALLOW_FULL_GATE are cleared for the same reason as the two
+  # variables below: test-all.sh exits 3 under SOLEUR_SUBAGENT=1 BEFORE any registration, so
+  # an inherited value makes every arm measure a run that did nothing -- and the 10 matrix
+  # cells then pass VACUOUSLY on `claim (0) matches invocation (0)`. The environment that
+  # sets it is a spawned agent, i.e. exactly how this PR tells reviewers to run suites.
+  ARM_OUT=$(cd "$REPO_ROOT" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
+            SOLEUR_INCIDENT_SKIP="$incident" TEST_GROUP="$group" \
             SOLEUR_TEST_FORCE_ALL=1 \
             TEST_TIMING_LOG="$ARM_TIMING" timeout 120 bash "$sb" 2>&1)
   ARM_RAN=0
@@ -319,7 +325,7 @@ run_gate_arm() {
   # `skip=not_in_diff` rows and 26 spurious `bytes_tmp=0` boundary rows landed in the log the
   # run's own measurement was read from. A test suite must not write into the artifact the
   # thing under test produces.
-  GATE_OUT=$(cd "$REPO_ROOT" && env SOLEUR_TEST_FORCE_ALL= CI= \
+  GATE_OUT=$(cd "$REPO_ROOT" && env SOLEUR_TEST_FORCE_ALL= CI= SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
              TEST_GROUP=all SOLEUR_INCIDENT_SKIP=0 \
              TEST_TIMING_LOG="$TMP/gate-timing-${label}.tsv" \
              SANDBOX_DIFF_NAMES="$diff_fixture" "$@" timeout 180 bash "$sb" 2>&1)
@@ -374,18 +380,53 @@ else
   fail "P0-3 regression: git-data-cutover.yml is not in the cf-tunnel predicate"
 fi
 
-# Every W7_EXPECTED workflow, read from the oracle's own literal rather than restated here — so
-# a new adopter added to W7_EXPECTED makes THIS assertion fail until the predicate learns it too.
+# --- COMPLETENESS: every declared predicate path must actually ARM its battery -----------
+# THE GAP THIS CLOSES. Before this loop the suite drove a positive fixture for 1 of 8 registry
+# elements and 5 of 11 cf-tunnel elements, so the predicate arrays could be TRIMMED to exactly
+# the asserted paths and both this suite and lint-orphan-test-suites.sh stayed green (measured:
+# 47/0 and `orphan test suites: none` with the bridge action -- the very gate the cf-tunnel
+# battery exists to guard -- deleted from the array).
+#
+# That is a soundness/completeness split: the linter checks that every DECLARED path resolves,
+# self-includes, is non-empty and is consumed. None of those can see a path silently REMOVED,
+# because a shorter list satisfies all four. This loop is the completeness half -- one positive
+# fixture per element, driven from the array itself, so deleting an element deletes its own
+# assertion AND trips the derived floor below.
+#
+# The realistic mutation it blocks: someone measures that a battery "skips too rarely", trims the
+# array to the paths the tests cover, and ships green -- after which a PR removing the bridge
+# `uses:` declines the battery and reports green, which is verbatim the P0-3 scenario.
+# shellcheck source=scripts/lib/test-relevance-paths.sh
+source "$REPO_ROOT/scripts/lib/test-relevance-paths.sh"
+
+check_element_arms() {
+  local label="$1" path="$2" want="$3"   # want = registry|cftunnel
+  run_gate_arm "elem-$(printf '%s' "$path" | tr '/.' '__')" "$path" || return 0
+  local ran; [[ "$want" == "registry" ]] && ran="$RAN_REGISTRY" || ran="$RAN_CFTUNNEL"
+  if [[ "$ran" == 1 ]]; then
+    pass "$label predicate element arms its battery: $path"
+  else
+    fail "$label predicate element does NOT arm its battery: $path"
+  fi
+}
+
+for p in "${REGISTRY_BATTERY_PATHS[@]}"; do check_element_arms "registry" "$p" registry; done
+for p in "${CF_TUNNEL_BATTERY_PATHS[@]}"; do check_element_arms "cf-tunnel" "$p" cftunnel; done
+
+# --- W7 completeness against the oracle's own literal ------------------------------------
+# A pure SET check (no sandbox run): the loop above already proves each listed workflow arms the
+# battery; this proves the LIST still matches what the oracle pins. Read from W7_EXPECTED rather
+# than restated here, so a new bridge adopter reds until the predicate learns it too.
 W7_LITERAL=$(grep -oE '^W7_EXPECTED="[^"]+"' "$REPO_ROOT/scripts/check-cloudflare-token-drift.test.sh" | head -1 | sed 's/^W7_EXPECTED="//; s/"$//')
+W7_FILES=()
 if [[ -n "$W7_LITERAL" ]]; then
   pass "the W7_EXPECTED literal was located in the oracle"
   IFS=',' read -r -a W7_FILES <<<"$W7_LITERAL"
   for wf in "${W7_FILES[@]}"; do
-    run_gate_arm "w7-${wf}" ".github/workflows/${wf}" || continue
-    if [[ "$RAN_CFTUNNEL" == 1 ]]; then
-      pass "W7 workflow $wf is covered by the cf-tunnel predicate"
+    if printf '%s\n' "${CF_TUNNEL_BATTERY_PATHS[@]}" | grep -qxF ".github/workflows/${wf}"; then
+      pass "W7 workflow $wf is present in the cf-tunnel predicate"
     else
-      fail "W7 workflow $wf is NOT covered by the cf-tunnel predicate"
+      fail "W7 workflow $wf is MISSING from the cf-tunnel predicate"
     fi
   done
 else
@@ -435,7 +476,16 @@ fi
 # a renamed TARGET, a sandbox build that silently fails — and this file would report
 # "0 passed, 0 failed / exit 0", which reads exactly like a clean run. A FLOOR, not equality:
 # the count is developer-incremented and `-eq` turns every added assertion into a false red.
-MIN_ASSERTIONS=47
+# DERIVED, not a hand-typed integer. The loops above contribute one assertion per predicate
+# element and one per W7 workflow, all of which are variable-cardinality — so a fixed literal
+# acquires slack every time a list grows, and that slack can then subsidise a DELETED fixed
+# assertion. Measured before this change: adding one W7 adopter and deleting the entire P0-3
+# regression block left the suite at 47/47 green with `grep -c 'P0-3'` == 0.
+#
+# MIN_FIXED is the count of assertions NOT produced by those loops; it is the only number that
+# should ever be edited by hand, and only when a fixed assertion is deliberately added.
+MIN_FIXED=42
+MIN_ASSERTIONS=$(( MIN_FIXED + ${#W7_FILES[@]} + ${#REGISTRY_BATTERY_PATHS[@]} + ${#CF_TUNNEL_BATTERY_PATHS[@]} ))
 if [[ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]]; then
   echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= $MIN_ASSERTIONS — the suite was stranded, not clean." >&2
   exit 1

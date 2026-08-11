@@ -954,6 +954,44 @@ else
   fail "T15b: expected 'suite siblings: 2'; got: $(grep 'suite siblings' "$TESTROOT/preamble-t15b.txt" || true)"
 fi
 
+# V5: `df` FAILING is a different case from `df` succeeding with junk, and only the second was
+# fixtured — BYTES_DF_STUB exits 0 on every arm including its `unparseable` one. So an
+# implementation that dropped the `2>/dev/null` and the `|| kb=""` (`kb=$(... ) || return 1`)
+# satisfied every existing assertion while propagating a non-zero return into test-all.sh's
+# `set -euo pipefail` at a run-boundary hook — which is the "takes the whole run down mid-flight"
+# outcome the helper's own comment says it exists to prevent.
+BYTES_DF_FAIL_STUB="$TESTROOT/df-fail-stub.sh"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$BYTES_DF_FAIL_STUB"
+chmod +x "$BYTES_DF_FAIL_STUB"
+# tc_used_bytes emits a trailing newline, so the rc suffix lands on a second line; collapse it
+# rather than comparing against a shape that depends on that newline.
+# `set -o pipefail` IS THE POINT, and without it this arm is vacuous. The capture is a PIPELINE
+# (`df | awk`), whose exit status is awk's — and awk exits 0 on empty input — so a failing df is
+# invisible unless pipefail is set. test-all.sh runs `set -euo pipefail` and sources this lib into
+# that context, so the production shell is the one where df's failure actually propagates.
+# Measured: without pipefail here, replacing `|| kb=""` with `|| return 1` was an EQUIVALENT
+# mutation and this arm passed over it.
+b_failed=$(TC_DF_CMD="$BYTES_DF_FAIL_STUB" TC_D="$TESTROOT" \
+  bash -c "set -o pipefail; source '$LIB'; tc_used_bytes \"\$TC_D\"; printf ' rc=%s' \"\$?\"" 2>/dev/null | tr -d '\n' || echo "ABORTED")
+if [[ "$b_failed" == "0 rc=0" ]]; then
+  pass "a FAILING df yields 0 and returns success (degrades, never aborts the run)"
+else
+  fail "a failing df produced '$b_failed' — expected '0 rc=0'"
+fi
+
+# V6: nothing asserted that the implementation passes `-P -k`, because the stub ignores its
+# arguments entirely. Dropping `-P` lets a long device name wrap onto a second line, so `NR==2`
+# becomes the device name alone and field 3 is empty -> silently 0 on the PRODUCTION path while
+# every stubbed arm stays green. Dropping `-k` gives `df -h`'s `3.5G`, which fails the numeric
+# guard -> also 0. This arm is the only one that runs the helper against the REAL df.
+# Bounded, not pinned: the value is a measured quantity, so it asserts shape and non-zero only.
+b_real=$(TC_D="$TESTROOT" bash -c "source '$LIB'; tc_used_bytes \"\$TC_D\"" 2>/dev/null || echo "")
+if [[ "$b_real" =~ ^[0-9]+$ ]] && [[ "$b_real" -gt 0 ]]; then
+  pass "against the REAL df, tc_used_bytes returns a positive integer ($b_real bytes)"
+else
+  fail "against the real df, tc_used_bytes returned '$b_real' — the -P -k contract is broken"
+fi
+
 # POSITIVE CONTROL. The guard below reports THROUGH fail(), so fail() is a single
 # point of failure for this entire file: neutered to a no-op it takes the whole
 # verdict with it. Measured before this control existed: `fail() { :; }` plus
@@ -975,11 +1013,11 @@ fi
 # Count BOTH outcomes: a run with genuine failures has a lower pass_n, and testing
 # pass_n alone reported "cardinality guard: only 64 ran (expected >= 66)" on a run
 # whose real problem was two failures -- a strand message for a non-strand.
-# Raised 68 -> 74 with the ADR-178 per-mount bytes arms. At 68 the floor had exactly the slack
+# Raised 68 -> 76 with the ADR-178 per-mount bytes arms (6 attribution + 2 contract). At 68 the floor had exactly the slack
 # to swallow that whole block: deleting it left the suite green and silent, which is the defect
 # this guard exists to prevent, applied to the feature that added it.
-if [[ "$((pass_n + fails))" -lt 74 ]]; then
-  fail "cardinality guard: only $((pass_n + fails)) assertions ran (expected >= 74)"
+if [[ "$((pass_n + fails))" -lt 76 ]]; then
+  fail "cardinality guard: only $((pass_n + fails)) assertions ran (expected >= 76)"
 fi
 
 echo "=== test-contention: $pass_n passed, $fails failed ==="

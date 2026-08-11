@@ -93,10 +93,14 @@ echo "=== fan-out suite-scope suite ==="
 
 # --- Arm 1: the refusal fires, and fires BEFORE any work ------------------------------------
 run_arm refuse SOLEUR_SUBAGENT=1
-if [[ "$ARM_RC" -ne 0 ]]; then
-  pass "SOLEUR_SUBAGENT=1 makes a full-gate invocation exit non-zero (rc=$ARM_RC)"
+# rc 3 exactly, not merely non-zero: 1 is an ordinary suite failure and 2 is a bad TEST_GROUP,
+# so a wrapper, CI step or agent branching on the code cannot distinguish a REFUSAL from a
+# genuine RED unless the value is pinned. Swapping `exit 3` for `exit 1` satisfies a `-ne 0`
+# assertion while destroying that distinction.
+if [[ "$ARM_RC" -eq 3 ]]; then
+  pass "SOLEUR_SUBAGENT=1 makes a full-gate invocation exit 3 (the refusal code)"
 else
-  fail "SOLEUR_SUBAGENT=1 did not refuse — exited 0"
+  fail "SOLEUR_SUBAGENT=1 did not refuse with rc=3 — got rc=$ARM_RC"
 fi
 if [[ "$ARM_SUITES" -eq 0 ]]; then
   pass "the refusal happens before any suite runs (0 suites recorded)"
