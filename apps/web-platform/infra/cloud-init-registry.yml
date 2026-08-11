@@ -310,7 +310,10 @@ write_files:
       # the exact crash case this field targets); finally drop "/\ so it can't corrupt the JSON.
       # (#7247) `--tail 3` was STRUCTURALLY incapable of carrying the crash line this field exists
       # to carry. zot logs EVERY request at info (:128) and this host's own liveness probe GETs
-      # /v2/ every 5 min, so the last 3 lines are near-always routine HTTP traffic. Across a 21-hour
+      # /v2/ every 60s (zot-liveness-heartbeat.timer: OnUnitActiveSec=60s — the TIMER is the
+      # authority; an earlier version of this comment said "every 5 min", and #7440's row-volume
+      # floor depends on the correct figure), so the last 3 lines are near-always routine HTTP
+      # traffic. Across a 21-hour
       # 4.4-restarts/min loop (2026-08-03 17:08Z onward) the field carried a cause exactly zero
       # times — every sample was an HTTP 200/401 session line or a gc/dedupe info line. The comment
       # above already called this "the exact crash case this field targets"; the window was the bug.
@@ -402,9 +405,32 @@ write_files:
         [ -n "$${ZOT_PULL_TOKEN:-}" ] && HTP_PULL=$(_htp_verify "${zot_pull_user}" "$${ZOT_PULL_TOKEN:-}")
         [ -n "$${ZOT_PUSH_TOKEN:-}" ] && HTP_PUSH=$(_htp_verify "${zot_push_user}" "$${ZOT_PUSH_TOKEN:-}")
       fi
+      # #7440: carry the LOG SHIPPER's own health on THIS line, which is a DIFFERENT and
+      # independently-working egress path. A POST-failure counter surfaced on the channel it
+      # monitors is unobservable in exactly the state it reports — when the POST path is the fault,
+      # the row carrying the counter never arrives. So the shipper writes these to a state file and
+      # this 5-min reporter reads them, giving the follow-through probe a `shipper_post_failing`
+      # reason that survives a totally dead shipper egress.
+      # -1 means "no successful POST recorded yet", which is distinguishable from a fresh 0 age.
+      LOG_SHIPPER_POST_FAIL=unknown; LOG_SHIPPER_LAST_OK_AGE_S=-1
+      if [ -r /var/lib/zot-log-shipper/state ]; then
+        LOG_SHIPPER_POST_FAIL=0
+        while IFS='=' read -r _lsk _lsv; do
+          case "$_lsk" in
+            post_fail) LOG_SHIPPER_POST_FAIL="$_lsv" ;;
+            last_ok_epoch)
+              case "$_lsv" in
+                ''|*[!0-9]*) : ;;
+                0) : ;;
+                *) LOG_SHIPPER_LAST_OK_AGE_S=$(( $(date +%s) - _lsv )) ;;
+              esac
+              ;;
+          esac
+        done < /var/lib/zot-log-shipper/state
+      fi
       # zot_last_err is free-text (may contain spaces) → keep it the LAST field so it never corrupts
       # key=value parsing of the fields before it.
-      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE zot_uptime_s=$ZOT_UPTIME_S zot_last_err_src=$ZOT_ERR_SRC oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID zot_image_digest=$ZOT_IMAGE_DIGEST htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
+      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE zot_uptime_s=$ZOT_UPTIME_S zot_last_err_src=$ZOT_ERR_SRC oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID zot_image_digest=$ZOT_IMAGE_DIGEST htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH log_shipper_post_fail=$LOG_SHIPPER_POST_FAIL log_shipper_last_ok_age_s=$LOG_SHIPPER_LAST_OK_AGE_S host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
       TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
       if [ -n "$TOKEN" ]; then
         # Fail-loud-but-not-wedge: retry ONCE, then breadcrumb to journald. ping_rc is carried in
@@ -520,6 +546,343 @@ write_files:
 
       [Install]
       WantedBy=timers.target
+    owner: root:root
+    permissions: '0644'
+
+  # --- #7440: zot CONTAINER-LOG shipper (journald -> Better Stack Logs) -------------------
+  # THE GAP. Before this, the only telemetry leaving this host was the 5-min SOLEUR_ZOT_DISK
+  # marker above. The zot container's own log stream went nowhere off-box, so every count derived
+  # from that channel was a LOWER BOUND rather than a measurement: the reporter samples
+  # `docker logs` once per interval and folds one truncated, quote-stripped excerpt into
+  # zot_last_err. Measured 2026-08-11 over a 6h window — 72 rows mentioning this host, all 72
+  # heartbeats; `routes.go` and `blobs/uploads` returned 0 rows; `zotregistry.dev` returned 53,
+  # all 53 inside a heartbeat echo. Zero genuine zot log lines had ever reached the warehouse.
+  #
+  # THIS IS A SHIPPING PROBLEM, NOT AN INSTRUMENTATION ONE — the single most important scoping
+  # fact. The container already runs `--log-driver journald` under the name `zot` (see the launch
+  # block below), so the lines are ALREADY on the host as CONTAINER_NAME=zot. Nothing about zot's
+  # own configuration changes here, which keeps this clear of ADR-172 §3's write-surface deadlock.
+  #
+  # WHY NOT VECTOR (the issue's literal framing). Decided in ADR-179. The binding reason is
+  # PAYLOAD DESTRUCTION, not credentials: the shared vector.toml drops any top-level `message` key
+  # as an Art-9 user-content key, and zerolog's log text IS a top-level `message` — so a
+  # Vector-shipped zot line would arrive with its message deleted. Nominally shipping, actually
+  # empty. Supporting reasons (each sufficient alone): host_metrics quota cost, a boot-time binary
+  # download on the sole image-pull path, a second config to hold in lockstep, and the user_data
+  # budget. The pepper/isolation-guard argument is RETRACTED as false — do not re-derive it.
+  #
+  # THE LOG SHAPE IS MEASURED, NOT INFERRED. zot emits QUOTED zerolog JSON. Measured against the
+  # pinned image locally on 2026-08-11:
+  #   {"time":"...","level":"info","message":"HTTP API","path":"/v2/","statusCode":401,
+  #    "headers":{"Accept":["*/*"],"Authorization":["******"],"User-Agent":["curl/8.5.0"]},
+  #    "caller":"zotregistry.dev/zot/v2/pkg/api/session.go:92",...}
+  # The colon-joined `{time:...,caller:zotregistry.dev/...}` form visible in zot_last_err is the
+  # SAMPLER's rendering (that field passes through `tr -d '"\\'`), NOT zot's output. Anchoring
+  # either the redaction or the probe's discriminator on the stripped form ships an inert
+  # mechanism: a rule shaped like vector.toml's `(?i)(authorization:\s*)bearer` cannot match
+  # `"Authorization":["..."]`, and a probe grepping `caller:zotregistry.dev` matches ONLY the echo.
+  #
+  # ALSO MEASURED: zot masks Authorization ITSELF (`["******"]`) — the literal credential appeared
+  # 0 times across basic-auth/Bearer/Basic probes. The redact() rule below is therefore DEFENCE IN
+  # DEPTH against a future zot that stops masking, not the primary control. But a NON-Authorization
+  # header IS logged verbatim (`"X-Custom":["plainvalue"]`), which is why the rule is anchored on
+  # the header-object shape rather than trusting one header name's known masking.
+  #
+  # A DIRECT HOST POST BYPASSES VRL REDACTION, so this shipper owns its own sanitizer. Note the
+  # two are DIFFERENT jobs and are deliberately named apart: the `tr` pipeline is PAYLOAD
+  # INTEGRITY (RFC 8259 — an unescaped quote or a raw tab would make Better Stack reject the whole
+  # body), and redact() is the credential backstop. Four rules an earlier draft carried CANNOT
+  # fire on this host (no email in zot's identity model; no sync/extensions/credentialsFile in the
+  # config, so no credentialed upstream URL; htpasswd values are never echoed) and were dropped
+  # rather than kept as decorative safety.
+  #
+  # INERT UNTIL PROVISIONED, AND THAT IS STATED RATHER THAN HIDDEN. hcloud_server.registry is
+  # cloud-init-only (ADR-096, amended by ADR-172 §8): no config webhook, no provisioner, no
+  # cloud-init re-run, and every registry resource is an OPERATOR_APPLIED_EXCLUSION. Merging this
+  # applies NOTHING. Delivery rides the pending step-6 `registry-host-replace` of the open
+  # zot-pin ordered path; this change does not request that replace. Liveness is owned by
+  # scripts/followthroughs/zot-log-channel-7440.sh on a DEDICATED tracker.
+  #
+  # betterstack_ingest_url is terraform-interpolated (non-secret host routing, same class as the
+  # reporter above); BETTERSTACK_LOGS_TOKEN is injected AT UNIT START by `doppler run` from the
+  # isolated soleur-registry/prd config and is NEVER baked into user_data. Plain dollar-VARs stay
+  # literal; shell brace-expansions are written $${VAR:-}.
+  - path: /usr/local/bin/zot-log-shipper.sh
+    content: |
+      #!/usr/bin/env bash
+      set -uo pipefail
+
+      # Env overrides exist ONLY so apps/web-platform/infra/zot-log-shipper.test.sh can drive this
+      # exact program against synthesized fixtures. Production takes every default.
+      STATE_DIR="$${ZOT_LOG_SHIPPER_STATE_DIR:-/var/lib/zot-log-shipper}"
+      ONESHOT="$${ZOT_LOG_SHIPPER_ONESHOT:-0}"
+      # 5,000 rows/day budget against a shared source. Floor is ~1,440/day from the 60s liveness
+      # GET alone (zot logs every request at info) plus ~288/day of heartbeat pings, so the cap
+      # leaves real headroom without approaching the 25k/day threshold host_metrics occupies.
+      # 5000 * 300 / 86400 = 17 per 5-minute window; both literals are explicit so the suite can
+      # assert them (a derived-at-runtime value would not be assertable).
+      INTERVAL_S="$${ZOT_LOG_SHIPPER_INTERVAL_S:-300}"
+      CAP_PER_INTERVAL="$${ZOT_LOG_SHIPPER_CAP_PER_INTERVAL:-17}"
+      MAXLEN=800
+
+      mkdir -p "$STATE_DIR" || exit 1
+      CURSOR_FILE="$STATE_DIR/cursor"
+      CURSOR_TMP="$STATE_DIR/cursor.new"
+      STATE_FILE="$STATE_DIR/state"
+      STATE_TMP="$STATE_DIR/state.new"
+
+      TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
+      HOST_NAME_V="$(hostname)"
+      BOOT_ID="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || printf 'unknown')"
+
+      POST_FAIL=0; LAST_OK_EPOCH=0; SHIPPED_CUM=0; DROPPED_CUM=0; DROP_SEQ=0
+      if [ -r "$STATE_FILE" ]; then
+        while IFS='=' read -r k v; do
+          case "$k" in
+            post_fail)     POST_FAIL="$v" ;;
+            last_ok_epoch) LAST_OK_EPOCH="$v" ;;
+            shipped_cum)   SHIPPED_CUM="$v" ;;
+            dropped_cum)   DROPPED_CUM="$v" ;;
+            drop_seq)      DROP_SEQ="$v" ;;
+          esac
+        done < "$STATE_FILE"
+      fi
+
+      write_state() {
+        printf 'post_fail=%s\nlast_ok_epoch=%s\nshipped_cum=%s\ndropped_cum=%s\ndrop_seq=%s\nboot_id=%s\n' \
+          "$POST_FAIL" "$LAST_OK_EPOCH" "$SHIPPED_CUM" "$DROPPED_CUM" "$DROP_SEQ" "$BOOT_ID" \
+          > "$STATE_TMP" 2>/dev/null && mv -f "$STATE_TMP" "$STATE_FILE" 2>/dev/null || true
+      }
+
+      # The cursor means DELIVERED, not READ — it is persisted only after a successful POST, with
+      # an atomic rename so a torn write can never make the shipper replay or gap silently.
+      # journalctl's own --cursor-file is NOT used: measured on systemd 259 it is written at clean
+      # exit only (SIGTERM writes it, SIGKILL leaves it stale), so an OOM-kill would resume from
+      # the last clean-exit cursor and re-ship everything since, unbounded — the runaway-volume
+      # mode triggered by the very mechanism meant to prevent gaps.
+      persist_cursor() {
+        printf '%s' "$1" > "$CURSOR_TMP" 2>/dev/null && mv -f "$CURSOR_TMP" "$CURSOR_FILE" 2>/dev/null || true
+      }
+
+      post_body() {
+        curl -fsS -m 10 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+          "${betterstack_ingest_url}" --data-raw "$1" >/dev/null 2>&1
+      }
+
+      # Retry ONCE then breadcrumb to journald, mirroring the reporter's `post || post || echo`.
+      # Returns non-zero on failure so the caller can count it.
+      ship() {
+        local line="$1" body
+        body="{\"message\":\"$line\"}"
+        if [ -z "$TOKEN" ]; then
+          echo "[zot-log-shipper] WARN: BETTERSTACK_LOGS_TOKEN unset (run under 'doppler run --project soleur-registry --config prd') — not shipped: $line" >&2
+          return 1
+        fi
+        post_body "$body" && return 0
+        post_body "$body" && return 0
+        echo "[zot-log-shipper] egress to Better Stack Logs FAILED: $line" >&2
+        return 1
+      }
+
+      # CREDENTIAL BACKSTOP — anchored on the RAW QUOTED shape measured above, and applied BEFORE
+      # the sanitizer (which strips the very quotes this pattern needs). Both header renderings are
+      # covered: the array form zot actually emits, and a bare-string form a future version might.
+      redact() {
+        sed -E \
+          -e 's/("[Aa]uthorization"[[:space:]]*:[[:space:]]*\[)[^]]*\]/\1"REDACTED"]/g' \
+          -e 's/("[Aa]uthorization"[[:space:]]*:[[:space:]]*)"[^"]*"/\1"REDACTED"/g'
+      }
+
+      # PAYLOAD INTEGRITY, not redaction. Collapse the whitespace that would break a JSON string,
+      # drop anything outside printable ASCII (a mid-sequence-sliced UTF-8 byte is invalid
+      # unescaped per RFC 8259 §7, and a tab-indented Go crash trace would make Better Stack
+      # reject the WHOLE payload in exactly the crash case worth carrying), then drop " and \ so
+      # the value cannot corrupt the single-key body. Bounded with a substring expansion rather
+      # than `head -c`: under pipefail, head closing the pipe early makes the producer take
+      # SIGPIPE and the whole pipeline report 141.
+      sanitize() {
+        local s
+        s="$(printf '%s' "$1" | tr '\n\r\t' ' ' | LC_ALL=C tr -cd '\40-\176' | tr -d '"\\')"
+        printf '%s' "$${s:0:MAXLEN}"
+      }
+
+      # The four measured evidence classes are CAP-EXEMPT. Without this the cap drops the
+      # diagnostic evidence preferentially during exactly the flood (crash-loop / pull storm) that
+      # accompanies disk growth. `executing gc` is the DENOMINATOR the downstream gc-completion
+      # question needs: a stalled gc emits a start with no completion, so admitting only
+      # completion lines would make "gc never ran", "gc ran fine" and "the shipper filtered it"
+      # indistinguishable — the lower-bound defect reproduced one layer up.
+      is_cap_exempt() {
+        case "$1" in
+          *"executing gc"*)              return 0 ;;
+          *"gc successfully completed"*) return 0 ;;
+          *"garbage collected blobs"*)   return 0 ;;
+          *PatchBlobUpload*)             return 0 ;;
+        esac
+        return 1
+      }
+
+      WIN_START="$(date +%s)"
+      WIN_COUNT=0
+      WIN_DROPPED=0
+
+      # `n` is scoped to THE INTERVAL THIS ROW CLOSES. The extra fields exist because three
+      # boundaries otherwise make n a lower bound with no marker saying so: a host replace resets
+      # these counters on the root fs, a crash replay re-counts re-shipped lines, and a line
+      # crossing the cap mid-interval is attributable to either interval. boot_id + drop_seq let a
+      # reader DETECT the discontinuity, which is exactly the marker silent truncation lacks.
+      emit_drops() {
+        local reason="$1"
+        [ "$WIN_DROPPED" -gt 0 ] || [ "$reason" = "cursor_invalidated" ] || return 0
+        DROP_SEQ=$(( DROP_SEQ + 1 ))
+        DROPPED_CUM=$(( DROPPED_CUM + WIN_DROPPED ))
+        ship "SOLEUR_ZOT_LOG_DROPPED n=$WIN_DROPPED interval_s=$INTERVAL_S boot_id=$BOOT_ID seq=$DROP_SEQ cum=$DROPPED_CUM reason=$reason" || POST_FAIL=$(( POST_FAIL + 1 ))
+        WIN_DROPPED=0
+        write_state
+      }
+
+      maybe_roll_window() {
+        local now
+        now="$(date +%s)"
+        if [ $(( now - WIN_START )) -ge "$INTERVAL_S" ]; then
+          emit_drops rate_cap
+          WIN_START="$now"
+          WIN_COUNT=0
+        fi
+      }
+
+      CURSOR=""
+      [ -r "$CURSOR_FILE" ] && CURSOR="$(cat "$CURSOR_FILE" 2>/dev/null || printf '')"
+
+      # PROBE the cursor before streaming from it. A journal rotated past the persisted cursor
+      # during a sink outage makes --after-cursor fail; without this the shipper would either die
+      # in a restart loop or silently gap. Instead it says so and restarts from the tail.
+      if [ -n "$CURSOR" ]; then
+        if ! journalctl CONTAINER_NAME=zot --output=json --no-tail --after-cursor "$CURSOR" -n 0 >/dev/null 2>&1; then
+          emit_drops cursor_invalidated
+          CURSOR=""
+          rm -f "$CURSOR_FILE" 2>/dev/null || true
+        fi
+      fi
+
+      JARGS=( CONTAINER_NAME=zot --output=json --no-tail )
+      # --no-tail above is load-bearing on a COLD start: with no cursor, --follow implies -n 10, so
+      # a fresh host's shipper would discard the boot backlog the persistence exists to preserve.
+      [ "$ONESHOT" = "1" ] || JARGS+=( --follow )
+      [ -z "$CURSOR" ] || JARGS+=( --after-cursor "$CURSOR" )
+
+      while IFS= read -r entry; do
+        [ -n "$entry" ] || continue
+        msg="$(printf '%s' "$entry" | jq -r '.MESSAGE // empty' 2>/dev/null || printf '')"
+        cur="$(printf '%s' "$entry" | jq -r '.__CURSOR // empty' 2>/dev/null || printf '')"
+        [ -n "$msg" ] || continue
+        maybe_roll_window
+        if is_cap_exempt "$msg"; then
+          :
+        elif [ "$WIN_COUNT" -ge "$CAP_PER_INTERVAL" ]; then
+          WIN_DROPPED=$(( WIN_DROPPED + 1 ))
+          continue
+        else
+          WIN_COUNT=$(( WIN_COUNT + 1 ))
+        fi
+        clean="$(sanitize "$(printf '%s' "$msg" | redact)")"
+        [ -n "$clean" ] || continue
+        # THE ENVELOPE. Source 2457081 is shared by EVERY host and host_name is a VECTOR-populated
+        # field — this channel has no Vector, so a direct POST carries no host_name and no
+        # SYSLOG_IDENTIFIER at all. The in-message host= token is the ONLY isolation available, and
+        # the probe asserts on it POSITIVELY. A negative discriminator ("raw does not begin with
+        # the heartbeat prefix") would be fail-open: under any raw-encoding drift every echo row
+        # reclassifies as genuine and the probe auto-PASSes on the exact state it exists to reject.
+        if ship "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOST_NAME_V $clean"; then
+          SHIPPED_CUM=$(( SHIPPED_CUM + 1 ))
+          LAST_OK_EPOCH="$(date +%s)"
+          [ -n "$cur" ] && persist_cursor "$cur"
+        else
+          POST_FAIL=$(( POST_FAIL + 1 ))
+        fi
+        write_state
+      done < <(journalctl "$${JARGS[@]}" 2>/dev/null)
+
+      emit_drops rate_cap
+      write_state
+      exit 0
+    owner: root:root
+    permissions: '0755'
+
+  # The registry host's FIRST Restart=always unit — every existing unit here is Type=oneshot. That
+  # is recorded because it changes the host's failure surface, and it is why the resource caps
+  # below are not optional. With no in-place execution path there is NO KILL SWITCH: the only
+  # containment available is making the unit incapable of needing one. #6288 was a host-level OOM
+  # restart loop on this same host, and zot's own cgroup cap is DERIVED as host RAM minus a
+  # 1024 MB reserve documented for "cron+doppler+sshd+OS" — this unit is a new line item against
+  # exactly that reserve, on the host whose failure darks every deploy.
+  #
+  # StartLimitIntervalSec=0 is load-bearing. Bare Restart=always inherits RestartSec=100ms with
+  # StartLimitBurst=5 in StartLimitIntervalSec=10s, so a shipper that fails fast at boot (Doppler
+  # or the network not yet up) latches `failed` in under a second and stays dead until the next
+  # boot — indistinguishable from "never provisioned", which is precisely the discrimination the
+  # follow-through probe exists to make. RestartSec=5 mirrors inngest-bootstrap.sh.
+  #
+  # DOPPLER_CONFIG_DIR is a unit-owned StateDirectory path, NOT /tmp/.doppler: a unit with
+  # PrivateTmp=true gets a private /tmp so the cron convention would resolve elsewhere (the #6536
+  # class). PrivateTmp is pinned explicitly either way rather than left to the default. HOME is set
+  # explicitly because the Doppler CLI errors with "$HOME is not defined" even when
+  # DOPPLER_CONFIG_DIR is set, and a unit inherits no login environment.
+  #
+  # RuntimeMaxSec bounds the unit's own lifetime because `doppler run` resolves the environment
+  # ONCE at ExecStart: a BETTERSTACK_LOGS_TOKEN rotation would otherwise break a long-running
+  # shipper until the next restart, where the 5-min cron re-resolves every tick. A daily recycle is
+  # cheap precisely because the cursor is durable.
+  - path: /etc/systemd/system/zot-log-shipper.service
+    content: |
+      [Unit]
+      Description=Ship zot container logs from journald to Better Stack Logs (#7440)
+      After=network-online.target docker.service
+      Wants=network-online.target
+      StartLimitIntervalSec=0
+
+      [Service]
+      Type=simple
+      Restart=always
+      RestartSec=5
+      RuntimeMaxSec=86400
+      SyslogIdentifier=zot-log-shipper
+      StateDirectory=zot-log-shipper
+      Environment=HOME=/root
+      Environment=DOPPLER_CONFIG_DIR=/var/lib/zot-log-shipper/.doppler
+      PrivateTmp=false
+      MemoryMax=128M
+      CPUQuota=20%
+      IOWeight=20
+      EnvironmentFile=/etc/default/registry-doppler
+      ExecStart=/usr/bin/flock -n /run/lock/zot-log-shipper.lock /usr/bin/doppler run --project soleur-registry --config prd -- /usr/local/bin/zot-log-shipper.sh
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root:root
+    permissions: '0644'
+
+  # JOURNALD SIZING — set UNCONDITIONALLY so the literals are assertable by test. A conditional
+  # bound is not.
+  #
+  # This template previously set no Storage=, no SystemMaxUse= and no /var/log/journal, so the
+  # behaviour was the base-image default. Ubuntu ships Storage=auto with no /var/log/journal
+  # present, which means VOLATILE: the journal lives in /run/log/journal, a tmpfs bounded by
+  # RuntimeMaxUse (~10% of /run). On a 3,814 MB host where zot is capped at 3,072 MB and the
+  # documented reserve is 1,024 MB, that is RAM pressure on the host whose OOM history is the
+  # reason the cap exists. Storage=persistent moves the buffer off tmpfs; both media are bounded.
+  #
+  # SystemMaxUse is sized against the measured 4.8-restarts/min flood rate rather than against
+  # root exhaustion. A percentage default gives a very SHORT retention window under flood, which
+  # is what the shipper's catch-up reach then converts into a gap. At ~20 startup lines per
+  # restart and ~300 bytes per line, a sustained flood writes ~1.7 MB/hour, so 512M holds roughly
+  # 12 days of it — against a 59 GB root filesystem currently 8% used, i.e. under 1% of the disk.
+  - path: /etc/systemd/journald.conf.d/10-zot-log-shipper.conf
+    content: |
+      [Journal]
+      Storage=persistent
+      SystemMaxUse=512M
+      RuntimeMaxUse=64M
     owner: root:root
     permissions: '0644'
 
@@ -1042,6 +1405,31 @@ runcmd:
   # passing silently. This is the one place where fail-open and fail-loud agree.
   - systemctl daemon-reload || true
   - systemctl enable --now zot-liveness-heartbeat.timer || true
+  # #7440: apply the journald sizing drop-in BEFORE the shipper starts, so the buffer it reads from
+  # is already persistent and bounded rather than a tmpfs the first flood can blow through.
+  - systemctl restart systemd-journald || true
+  # #7440: ARM the container-log shipper. `|| true` is fail-OPEN toward serving, matching every
+  # sibling above — a broken observer must never take down the registry it observes.
+  - systemctl enable --now zot-log-shipper.service || true
+  # #7440 IN-SURFACE DELIVERY SIGNAL. This host is cloud-init-only, so "was this change ever
+  # actually delivered?" is otherwise unanswerable from the observability layer — and it is the
+  # question that separates "not delivered yet" (wait) from "delivered and dead" (act). Fired ONCE
+  # from runcmd, mirroring the precedent where both existing reporters also fire once at boot.
+  # Absent boot marker + unchanged SOLEUR_ZOT_DISK boot_id = not delivered. Deliberately NOT routed
+  # through the shipper: a marker that needs the shipper alive cannot report the shipper's absence.
+  - |
+    set -a; . /etc/default/registry-doppler 2>/dev/null || true; set +a
+    doppler run --project soleur-registry --config prd -- bash -s <<'ZLSBOOTEOF' || true
+    BOOT_ID="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || printf 'unknown')"
+    LINE="SOLEUR_ZOT_LOG_BOOT boot_id=$BOOT_ID host=$(hostname) shipper_unit=$(systemctl is-active zot-log-shipper.service 2>/dev/null || printf 'unknown') journald_storage=persistent"
+    TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
+    if [ -n "$TOKEN" ]; then
+      post() { curl -fsS -m 10 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' "${betterstack_ingest_url}" --data-raw "{\"message\":\"$LINE\"}" >/dev/null 2>&1; }
+      post || post || echo "[zot-log-shipper] SOLEUR_ZOT_LOG_BOOT egress FAILED: $LINE" >&2
+    else
+      echo "[zot-log-shipper] WARN: BETTERSTACK_LOGS_TOKEN unset — SOLEUR_ZOT_LOG_BOOT not shipped: $LINE" >&2
+    fi
+    ZLSBOOTEOF
   # #6895 (D2): ARM the boot-time LUKS reopen so a reboot (the NIC guard self-`reboot`s the host)
   # reopens /dev/mapper/registry before docker + the self-heal. `enable` persists it for the next
   # boot; the mapper is already open+mounted on THIS provision boot (the LUKS mount block above),
