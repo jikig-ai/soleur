@@ -5,6 +5,12 @@ Issue: #7442 (`Closes`) · #6222 (`Ref` — **never** `Closes`)
 
 > **Phase 0 is a hard gate.** Every task from Phase 1 onward is conditional on the H7
 > measurement. Do not begin Phase 1 until 0.1–0.3 are recorded.
+>
+> **Read `## BLOCKING FINDINGS FROM DEEPEN REVIEW` in the plan first.** Three findings
+> are plan-invalidating as written: BF-1 (a more severe untrusted-PR-execution issue that
+> must be filed and fixed separately), BF-2 (the guard predicate cannot go green — the
+> population is ~127 not 29, and two committed artifacts *require* the `:-` form), and
+> BF-3 (the new suite would never gate; T0's assertion is near-vacuous).
 
 ## Phase 0 — Blocking: root resolution + the decisive failing test
 
@@ -24,6 +30,17 @@ Issue: #7442 (`Closes`) · #6222 (`Ref` — **never** `Closes`)
 - [ ] 0.6 Hard stop: confirm `grep -rn 'emit_incident' plugins/soleur/hooks/` prints nothing.
 - [ ] 0.7 Confirm the vitest runner and `include:` globs so the guard's path is actually
       collected (`apps/web-platform/vitest.config.ts`); confirm `package.json scripts.test`.
+      *(Verified at plan time: `projects[unit]` includes `test/**/*.test.ts`.)*
+- [ ] 0.8 **BF-1:** file the untrusted-PR-execution issue separately (5 redaction gates +
+      `worktree-manager.sh:48` + the falsified ADR-093 §Amendment:55 premise) and confirm
+      with the operator whether it is fixed before this plan proceeds.
+- [ ] 0.9 **BF-2:** decide the guard's verb/target scope so the predicate does not red the
+      ~100 pre-existing `:-` literals, and does not break
+      `plugin-root-list-carveout-coupling.test.ts:66-68` (which *requires* `:-`) or
+      `safe-bash.ts:168` (which pins the literal). Record the decision as an AC.
+- [ ] 0.10 **BF-3:** add `run_suite "tests/commands/sync-producer-reachability" bash
+      tests/commands/test-sync-producer-reachability.sh` to `scripts/test-all.sh`
+      (there is no glob for that dir) and add `scripts/test-all.sh` to Files to Edit.
 
 ## Phase 1 — Fix all 29 anchorable sites
 

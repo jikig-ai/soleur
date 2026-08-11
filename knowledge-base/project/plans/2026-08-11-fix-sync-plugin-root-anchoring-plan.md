@@ -135,6 +135,105 @@ cell except the one that reproduces #7442. Worse, it planted a decoy only at
 itself introduces* was untested. A suite that sets the variable it is supposed to be
 testing the absence of is a manufactured pass.
 
+## BLOCKING FINDINGS FROM DEEPEN REVIEW — read before Phase 0
+
+Three findings from the security and test-design passes are plan-invalidating as
+written. All are verified against files in this repo, not argued.
+
+### BF-1 (P0) — The trust direction is NOT uniformly inverted, and a worse issue than #7442 exists
+
+The plan claimed the CLI case inverts ADR-093's trust direction ("the customer's own
+machine and own repo"). **That is true only for the marketplace-customer case.** For the
+dominant CLI surface today it is **identical to ADR-093**:
+
+- `plugins/soleur/skills/review/SKILL.md:63` — *"Make sure we are on the branch we are
+  reviewing. Use `gh pr checkout` to switch to the branch."*
+- `plugins/soleur/skills/review/SKILL.md:276` — then runs
+  `bash scripts/domain-model-drift.sh drift --repo .` (bare CWD-relative), and
+  `preflight/SKILL.md:1338` does the same.
+- Measured: `git rev-parse --show-toplevel` returns the **worktree** root, not the
+  operator's canonical checkout.
+
+So reviewing an untrusted contributor's PR executes **that contributor's** script on the
+operator's machine, with the operator's `gh` token, Doppler token and SSH keys. The repo
+already models an untrusted `contributor` actor (ADR-074). The CLI-unset measurement
+makes this unconditional.
+
+**BF-1a — the 5 git-root redaction-gate sites are affected, and this is a separate, more
+severe issue.** `incident/SKILL.md:222`, `legal-generate/SKILL.md:63`,
+`linear-fetch/SKILL.md:79`, `compound/SKILL.md:326`, and the test that pins the form at
+`incident/test/redact-sentinel.test.sh:593`. #7442's failure mode is *availability*;
+these are a **security control whose exit code decides whether secrets are emitted** —
+a substituted script that `exit 0`s silently disables redaction and the operator sees a
+pass. The `[[ -r "$SENTINEL" ]]` guards do not help; ADR-093's own Amendment says so.
+
+**ADR-093 §Amendment line 55 contains a now-falsified premise:** *"it is the correct,
+trusted path for CLI/worktree/local-operator use (var legitimately unset, **git-root =
+the operator's own checkout**)."* After `gh pr checkout`, git-root is the PR author's
+tree; on a marketplace install it is the customer's repo. The entire justification for
+retaining the fallback rests on that parenthetical.
+
+**Action: file BF-1/BF-1a as a separate P0 security issue and fix the redaction gates
+first — do not fold into #7442.** Correct the plan's trust-direction claim to:
+*inverted for the marketplace-customer case; identical to ADR-093 for the
+self-hosting/PR-review case.*
+
+### BF-2 (P1) — The guard predicate as specified cannot go green, and would break two committed guards
+
+If the `:-` fallback is the vector (BLOCKING UNKNOWN), then the ~100 already-anchored
+literals are violations too — so the population is **~127, not 29**. Measured in the
+guard's own declared scope: **100 `:-` literals across 35 files** in six forms,
+including `${CLAUDE_PLUGIN_ROOT:-.}` and `${CLAUDE_PLUGIN_ROOT:-../../plugins/soleur}`.
+
+Two committed artifacts **require** the `:-` form:
+
+- `apps/web-platform/test/plugin-root-list-carveout-coupling.test.ts:66-68` — its
+  `LIST_EMISSION` regex is `\$\{CLAUDE_PLUGIN_ROOT:-[^}]+\}/skills/git-worktree/…`, with
+  a `>= 1` vacuity floor. Converting the 22 git-worktree sites off `:-` reds it by
+  vacuity.
+- `apps/web-platform/server/safe-bash.ts:168` pins the exact literal
+  `"bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/git-worktree/scripts/worktree-manager.sh"`
+  in an allowlist.
+
+So the plan's Phase 4 ("constrain the fallback form"), AC2 ("zero anchorable violations
+repo-wide") and Phase 1 ("29 one-line edits") are **mutually unsatisfiable**. Phase 0
+must additionally fix **which verb/target set the predicate covers**, and an AC must
+assert the guard is green against the pre-existing `:-` corpus (or scope its remediation
+explicitly).
+
+**BF-2a — `worktree-manager.sh:48` comes out of deferral 6.** It is a `source` (full
+shell execution in the calling process, strictly worse than `bash <script>`) of
+`$SCRIPT_DIR/../../../../../.claude/hooks/lib/session-state.sh` — five levels up from a
+worktree is the **checked-out tree**, i.e. the untrusted-PR path from BF-1.
+
+### BF-3 (P1) — The new test suite would never gate, and T0's assertion is near-vacuous
+
+- **Silent orphan.** `scripts/test-all.sh:573-574` registers the two existing
+  `tests/commands/` suites by **explicit `run_suite` lines — there is no glob**, and
+  `scripts/lint-orphan-test-suites.sh:33` iterates only `"$REPO_ROOT"/scripts/*.test.sh`,
+  so the tombstone that catches this class does not cover `tests/commands/`. The new
+  suite must add a `run_suite` line, `scripts/test-all.sh` must join Files to Edit, and
+  an AC must assert the registration **anchored on the call shape**, not the bare
+  filename (`cq-assert-anchor-not-bare-token`).
+- **T0 is negative-only.** "Neither decoy executed" is satisfied by *nothing executed* —
+  and under decision-tree outcome (B) nothing does execute, by design. T0 needs a
+  **positive control**: a pre-fix cell where the decoy sentinel **is** present, kept
+  permanently in the suite and parameterized on the literal rather than on git state.
+- **A bash test cannot assert what the agent would do.** The correct unit is one level
+  down: extract the command literal from `sync.md`, `eval` it in a subshell with the fake
+  CWD and the variable unset, and assert on what bash did. Substitute `<n>`-class
+  placeholders first (`<n>` is a bash input redirect and fails before path resolution),
+  seed the register fixture, and shim `bun` on `PATH` the way
+  `tests/commands/test-sync-rule-prune.sh:24-79` already shims `gh`.
+- **Do not pin the vacuity floor to a site count.** The repo litigated this and reached
+  the opposite conclusion — `plugin-root-list-carveout-coupling.test.ts:41-44`: the floor
+  *"is deliberately NOT pinned to today's exact count … so that legitimately removing a
+  site does not false-fail the guard."* Bound it by **mechanism** instead: ≥1 site per
+  detection mechanism (indented fence, column-0 fence, inline span), plus a
+  synthetic-fixture self-test asserting exact counts on an in-test string.
+- **`expected_output` pre-commits to outcome (A)** while H7 is declared UNKNOWN. Bind it
+  to the measured branch at Phase 0.
+
 ## Research Insights
 
 ### Premise Validation (Phase 0.6)
@@ -282,6 +381,15 @@ issues from the sentinels. **The `:-` fallback keeps this vector open even after
 "fix"** — which is why the Blocking Unknown rejects fallbacks into customer-writable
 paths outright, and why the decoy test must plant a decoy at `plugins/soleur/scripts/`
 too, not only at `scripts/`.
+
+**The sharper framing is BF-1, and it is not the customer's own code.** Executing a
+customer's own file on the customer's own machine is an integrity failure. Executing an
+**untrusted contributor's** file on the **operator's** machine — which
+`review/SKILL.md:63`'s `gh pr checkout` plus `:276`'s bare-relative invocation does
+today — is arbitrary code execution with the operator's credentials, triggered by the
+act of reviewing a PR. The trust direction is therefore *inverted only for the
+marketplace-customer case*; for the PR-review case it is identical to ADR-093. That
+strand is more severe than #7442 and is filed separately (deferral 8).
 
 **Brand-survival threshold:** `single-user incident`
 
@@ -690,8 +798,10 @@ None. Every step is automatable in-session or in CI.
 3. **`dependencies:` frontmatter needs an inbound-vs-outbound direction rule** — "web-server replays the manifest" is an *inbound* edge; emitted as `dependencies:` it inverts the arrow.
 4. **Make `rule-prune` customer-capable** — ship rule-incident telemetry in the payload hook surface (the graceful-degradation precedents show it is possible), or formally scope the area as a monorepo maintenance tool.
 5. **The 21 un-anchorable repo-root `scripts/…` sites** — comment on **#6222** with the inventory; note the 29 anchorable sites are now closed so its remaining scope is the `scripts/` class plus `taste-profile-update.sh` siblings.
-6. **Axis-3/4 residuals** — `worktree-manager.sh:48` traversing out of the payload (lease protection silently off for customers); the `npx likec4` toolchain dependency; guard scope excluding shipped `.sh`/`.ts`.
+6. **Axis-4 residual** — the `npx likec4` toolchain dependency; guard scope excluding shipped `.sh`/`.ts`. *(`worktree-manager.sh:48` was pulled OUT of this deferral by BF-2a — it is a `source` on the untrusted-PR path.)*
 7. **Standalone areas have no durable failure surface** — if Phase 5 does not extend it, file it.
+8. **[P0 — file FIRST, separately] Untrusted-PR code execution via the git-root fallback** (BF-1/BF-1a). The 5 redaction-gate sites plus `worktree-manager.sh:48`, plus the falsified safety premise at ADR-093 §Amendment line 55. Higher severity than #7442: these are security controls whose exit code decides whether secrets are emitted, and the trigger is the act of reviewing a contributor PR. Fix before, not with, this plan.
+9. **Extend `lint-orphan-test-suites.sh`'s glob to `tests/commands/`** so a new suite there cannot silently fail to gate (BF-3). Three suites now depend on someone remembering a `run_suite` line.
 
 ## Test Scenarios
 
