@@ -37,14 +37,29 @@ GUARD="$REPO_ROOT/scripts/tenant-dpa-register-guard.sh"
 LIVE_REGISTER="$REPO_ROOT/knowledge-base/legal/tenant-dpa-register.md"
 RUNBOOK="$REPO_ROOT/knowledge-base/engineering/operations/runbooks/tenant-provisioning.md"
 
-# Floor, not equality. Neutering pass()/fail() otherwise yields `passed: 0 failed: 0` and
-# exit 0, making 0 assertions indistinguishable from a full green run.
-MIN_ASSERTIONS=26
+# Floor calibrated to the CURRENT assertion count -- deliberately NO slack. A floor below the
+# real count is deletion headroom: at 26-against-29 three assertions could be removed (including
+# all three that pin the column anchor) and the suite still exited 0. A floor still permits
+# GROWTH, which equality would turn into a spurious failure; it is only the slack that was wrong.
+MIN_ASSERTIONS=37
 
 passes=0
 fails=0
 pass() { passes=$((passes + 1)); echo "[ok] $1"; }
 fail() { fails=$((fails + 1)); echo "[FAIL] $1" >&2; }
+
+# DISPATCHER SELF-TEST. The floor sees `total = passes + fails`, so neutering fail() ALONE
+# leaves the count intact while silently absorbing real failures. Prove both counters move
+# before any real assertion runs.
+_p0=$passes; _f0=$fails
+pass "dispatcher self-test: pass() increments"; fail "dispatcher self-test: fail() increments (EXPECTED)"
+if (( passes == _p0 + 1 && fails == _f0 + 1 )); then
+  passes=$_p0; fails=$_f0            # rewind; the probe is not a real assertion
+  pass "dispatcher self-test: both counters are live"
+else
+  passes=$_p0; fails=$((_f0 + 1))
+  echo "[FAIL] dispatcher self-test: pass()/fail() are not both incrementing -- assertions are unobservable" >&2
+fi
 
 [[ -x "$GUARD" ]] || { echo "guard script missing or not executable: $GUARD" >&2; exit 2; }
 
@@ -164,6 +179,55 @@ else
 fi
 
 # --------------------------------------------------------------------------------------
+# Parser regressions found at review. Each was a SILENT wrong answer, not an error: the guard
+# returned a count the caller had no way to distrust.
+# --------------------------------------------------------------------------------------
+
+# A Status-bearing table ABOVE `## Rows` used to capture the column, rendering the real rows
+# table invisible while still exiting 0.
+reg_above="$SANDBOX/above.md"
+{ printf -- '## Summary\n\n| Quarter | Status |\n|---|---|\n| Q3 | open |\n\n'
+  printf -- '## Rows\n\n%s\n%s\n%s\n' "$HEADER" "$SEP" "$SIGNED_ROW"; } > "$reg_above"
+n=$("$GUARD" --register "$reg_above" count-signed)
+[[ "$n" == "1" ]] && pass "parser: a Status table above '## Rows' does not capture the column (got $n)" \
+                  || fail "parser: bound to the wrong table (got '$n', want 1)"
+
+# An escaped pipe in a cell LEFT of Status shifted every column right of it.
+reg_esc="$SANDBOX/esc.md"
+build_register "$reg_esc" \
+  '| acme | Acme SARL | 00000000-0000-4000-8000-000000000001 | 2026-08-10 | 2026-08-10 | Hetzner \| Cloudflare | dpa-signed | ok |'
+n=$("$GUARD" --register "$reg_esc" count-signed)
+[[ "$n" == "1" ]] && pass "parser: an escaped pipe in a left-hand cell does not shift the Status column (got $n)" \
+                  || fail "parser: escaped pipe shifted the column (got '$n', want 1)"
+
+# GFM trailing pipes are optional; without one the LAST cell was never compared.
+reg_notrail="$SANDBOX/notrail.md"
+{ printf -- '## Rows\n\n| Tenant slug | Legal entity | Status\n|---|---|---\n| acme | Acme SARL | dpa-signed\n'; } > "$reg_notrail"
+n=$("$GUARD" --register "$reg_notrail" count-signed)
+[[ "$n" == "1" ]] && pass "parser: a row with no trailing pipe still has its Status compared (got $n)" \
+                  || fail "parser: last cell skipped without a trailing pipe (got '$n', want 1)"
+
+# The placeholder must be position-INDEPENDENT: a column inserted left of the slug made an
+# EMPTY register report a tenant, so Step 0's "STOP, do not provision" gate passed on it.
+reg_shift="$SANDBOX/shift.md"
+{ printf -- '## Rows\n\n| Region | Tenant slug | Status | Notes |\n|---|---|---|---|\n| eu | _(none yet)_ | | |\n'; } > "$reg_shift"
+n=$("$GUARD" --register "$reg_shift" count-data-rows)
+[[ "$n" == "0" ]] && pass "parser: the placeholder is matched in any column, not a fixed index (got $n)" \
+                  || fail "parser: an empty register reported ${n} tenant row(s) after a column insert"
+
+# A data row whose first cell starts with a hyphen used to be eaten as a separator.
+reg_hyphen="$SANDBOX/hyphen.md"
+{ printf -- '## Rows\n\n| Tenant slug | Status |\n|---|---|\n| -acme | dpa-signed |\n'; } > "$reg_hyphen"
+n=$("$GUARD" --register "$reg_hyphen" count-signed)
+[[ "$n" == "1" ]] && pass "parser: a hyphen-leading first cell is a data row, not a separator (got $n)" \
+                  || fail "parser: hyphen-leading row eaten as a separator (got '$n', want 1)"
+
+# assert-populated must distinguish >=1 from ==1 -- it was only ever driven at 0 and 1 rows.
+"$GUARD" --register "$reg_mixed" assert-populated >/dev/null 2>&1 \
+  && pass "A2: assert-populated succeeds at 3 rows (>=1, not ==1)" \
+  || fail "A2: assert-populated rejected a 3-row register"
+
+# --------------------------------------------------------------------------------------
 # Fail-closed on unusable input -- never a vacuous 0.
 # --------------------------------------------------------------------------------------
 
@@ -210,9 +274,19 @@ live_rows=$(awk '/^\| /' "$LIVE_REGISTER" | wc -l)
   && pass "reachability: the guard runs clean against the live register" \
   || fail "reachability: the guard errored against the live register"
 
-live_signed=$("$GUARD" --register "$LIVE_REGISTER" count-signed)
-[[ "$live_signed" == "0" ]] && pass "live register signed-row count is 0 (§6.1 clock not triggered)" \
-                            || fail "live register reports ${live_signed} signed row(s) -- the §6.1 30-day clock applies; escalate to CLO"
+# DECIDABILITY, not emptiness. "Jikigai has zero tenants" is a business fact with an expiry
+# date, not a code property: encoding it here means onboarding tenant #1 reds the suite on the
+# day the guard finally matters, and the under-pressure fix is to delete the assertion.
+rc=0; live_signed=$("$GUARD" --register "$LIVE_REGISTER" count-signed) || rc=$?
+[[ "$rc" == "0" && "$live_signed" =~ ^[0-9]+$ ]] \
+  && pass "live register is DECIDABLE (signed-row count = ${live_signed}, rc=0)" \
+  || fail "live register is undecidable: rc=$rc out='${live_signed}' -- the guard cannot parse its real input"
+
+# The placeholder literal is coupled to the register's markdown. If the register reworded it
+# and the guard did not, an EMPTY register would count as populated -- the A2 defect respelled.
+grep -qF '_(none yet)_' "$LIVE_REGISTER" \
+  && pass "coupling: the guard's placeholder literal appears verbatim in the live register" \
+  || fail "coupling: the register's empty-state placeholder no longer matches the guard's literal"
 
 # --------------------------------------------------------------------------------------
 # Call-site coupling. The dead predicates must not come back, and the runbook + register
@@ -225,22 +299,22 @@ else
   pass "call-site: the dead 'status: dpa-signed' form is gone from the register"
 fi
 
-if grep -qE "grep -c '\^\|'" "$RUNBOOK"; then
+if grep -qE "grep -c ['\"]\^\|['\"]" "$RUNBOOK"; then
   fail "call-site: the vacuous \"grep -c '^|' ... -ge 3\" gate is still present in the runbook"
 else
   pass "call-site: the vacuous pipe-line-count gate is gone from the runbook"
 fi
 
-grep -q 'tenant-dpa-register-guard.sh' "$RUNBOOK" \
-  && pass "call-site: the runbook cites the real guard script" \
-  || fail "call-site: the runbook does not cite scripts/tenant-dpa-register-guard.sh"
+grep -qE 'bash scripts/tenant-dpa-register-guard\.sh (assert-populated|assert-empty|count-signed|count-data-rows)' "$RUNBOOK" \
+  && pass "call-site: the runbook carries an executable INVOCATION, not a prose mention" \
+  || fail "call-site: the runbook mentions the guard but does not invoke it"
 
 grep -q 'tenant-dpa-register-guard.sh' "$LIVE_REGISTER" \
   && pass "call-site: the register cites the real guard script" \
   || fail "call-site: the register does not cite scripts/tenant-dpa-register-guard.sh"
 
 # A3 -- the status vocabulary is one form, not two.
-if grep -qE '`aborted-provisioning`' "$RUNBOOK"; then
+if grep -qE 'aborted-provisioning([^-]|$)' "$RUNBOOK"; then
   fail "A3: the runbook still writes the bare 'aborted-provisioning' status"
 else
   pass "A3: the runbook uses the 'aborted-provisioning-at-step-N' vocabulary"

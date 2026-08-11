@@ -172,6 +172,6 @@ If you have questions about this Cookie Policy or our data practices, you can re
 
 ---
 
-> **Related documents:** This Cookie Policy references data collection and privacy practices. Consider reviewing the companion **Privacy Policy** document for comprehensive coverage of personal data handling, the **Terms & Conditions** for the governing law that applies to this policy, and the **GDPR Policy** for EU/EEA-specific data protection obligations.
+> **Related documents:** This Cookie Policy references data collection and privacy practices. Consider reviewing the companion [Privacy Policy](/legal/privacy-policy/) for comprehensive coverage of personal data handling, the [Terms & Conditions](/legal/terms-and-conditions/) for the governing law that applies to this policy, and the [GDPR Policy](/legal/gdpr-policy/) for EU/EEA-specific data protection obligations.
 
 ---

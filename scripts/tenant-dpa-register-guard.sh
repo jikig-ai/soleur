@@ -19,7 +19,10 @@
 # ANCHORED ON THE COLUMN, NOT THE TOKEN. The Status column is resolved by NAME from the
 # header row, so a tenant slug or a Notes cell containing the literal `dpa-signed` is not
 # counted, and adding a column upstream does not silently shift the match
-# (cq-assert-anchor-not-bare-token).
+# (cq-assert-anchor-not-bare-token). The empty-state placeholder is matched in ANY cell
+# for the same reason: pinning it to a fixed index meant inserting one column to the left
+# of the slug made an EMPTY register report a tenant, and Step 0's "STOP, do not
+# provision" gate then passed on it.
 #
 # FAIL-CLOSED. Every unusable input exits 2 rather than reporting a count. A zero that means
 # "nothing matched" and a zero that means "I could not read the table" are the same byte, and
@@ -32,7 +35,10 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REGISTER="$REPO_ROOT/knowledge-base/legal/tenant-dpa-register.md"
 
-# The empty-state placeholder. Its first cell is the sentinel; it is NOT a tenant.
+# The empty-state placeholder. Matched in ANY cell; it is NOT a tenant.
+# COUPLED TO THE REGISTER'S MARKDOWN: if the register's placeholder is reworded and this
+# literal is not, the guard counts it as a real tenant row and `assert-empty` reds on an
+# empty register. scripts/tenant-dpa-register-guard.test.sh asserts the two agree.
 PLACEHOLDER_CELL='_(none yet)_'
 SIGNED_STATUS='dpa-signed'
 
@@ -73,31 +79,66 @@ done
 parse() {
   awk -v want="$1" -v placeholder="$PLACEHOLDER_CELL" -v signed="$SIGNED_STATUS" '
     function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+    # Escaped pipes are protected before splitting and restored after, so a multi-value cell
+    # written `Hetzner \| Cloudflare` does not shift every column to its right.
+    function unprot(s) { gsub(/\002/, "|", s); return s }
 
-    # A markdown table separator, e.g. |---|---|
-    /^[ \t]*\|[ \t]*:?-+/ { if (in_header) { in_header = 0; in_body = 1 } ; next }
+    # A separator row is one whose EVERY cell is only dashes, colons and spaces. Testing the
+    # whole row (rather than prefix-matching `|` + `-`) stops a data row whose first cell
+    # begins with a hyphen -- `| -acme | ... |` -- from being eaten as a separator.
+    function is_sep(c, k,    j) {
+      for (j = 1; j <= k; j++) if (trim(c[j]) !~ /^:?-+:?$/) return 0
+      return k > 0
+    }
+
+    # SECTION-ANCHORED. The rows table is the one under the "## Rows" heading. Binding to the
+    # first Status-bearing table ANYWHERE made a summary table above it capture status_col,
+    # which rendered a real signed row invisible while still exiting 0.
+    /^##[ \t]+Rows[ \t]*$/ { in_rows = 1; next }
+    /^#{1,6}[ \t]/         { in_rows = 0; next }
+    !in_rows               { next }
 
     /^[ \t]*\|/ {
-      n = split($0, cell, "|")
-      if (!found_header && !in_body) {
-        for (i = 2; i < n; i++) {
-          if (trim(cell[i]) == "Status") { status_col = i; found_header = 1; in_header = 1 }
+      line = $0
+      gsub(/\\\|/, "\002", line)
+      sub(/^[ \t]*\|/, "", line)         # strip the outer pipes FIRST so a row with no
+      sub(/\|[ \t]*$/, "", line)         # trailing pipe indexes identically to one with it
+      n = split(line, cell, "|")
+
+      if (is_sep(cell, n)) {
+        if (found_header && !ever_body) { ever_body = 1; in_body = 1 }
+        else if (found_header)          { multi = 1 }
+        next
+      }
+
+      if (!found_header) {
+        for (i = 1; i <= n; i++) {
+          if (trim(cell[i]) == "Status") { if (status_col) dup = 1; status_col = i; found_header = 1 }
         }
         if (found_header) next
+        multi = 1                        # a pipe row before any Status header: ambiguous
+        next
       }
+
       if (in_body) {
-        if (trim(cell[2]) == placeholder) { next }   # empty-state sentinel, not a tenant
+        is_placeholder = 0
+        for (i = 1; i <= n; i++) if (trim(unprot(cell[i])) == placeholder) is_placeholder = 1
+        if (is_placeholder) next   # empty-state sentinel anywhere in the row, not a tenant
         data++
-        if (status_col > 0 && status_col < n && trim(cell[status_col]) == signed) sig++
+        if (status_col >= 1 && status_col <= n && trim(unprot(cell[status_col])) == signed) sig++
+        next
       }
+      multi = 1                          # a row outside the resolved body: ambiguous
       next
     }
 
-    # A blank line ends the table body.
-    /^[ \t]*$/ { if (in_body) in_body = 0 }
-
     END {
+      # Every ambiguity is a REFUSAL, never a count. A zero meaning "nothing matched" and a
+      # zero meaning "I could not read the table" are the same byte to the caller.
       if (!found_header) { print "ERR_NO_STATUS_COLUMN"; exit 0 }
+      if (dup)           { print "ERR_DUPLICATE_STATUS"; exit 0 }
+      if (!ever_body)    { print "ERR_NO_SEPARATOR";     exit 0 }
+      if (multi)         { print "ERR_MULTIPLE_TABLES";  exit 0 }
       if (want == "data")   { print data + 0; exit 0 }
       if (want == "signed") { print sig + 0;  exit 0 }
       print "ERR_BAD_WANT"
@@ -109,7 +150,10 @@ read_count() {
   local out
   out="$(parse "$1")" || die2 "failed to parse $REGISTER"
   case "$out" in
-    ERR_NO_STATUS_COLUMN) die2 "no rows table with a 'Status' column found in $REGISTER" ;;
+    ERR_NO_STATUS_COLUMN) die2 "no rows table with a 'Status' column under '## Rows' in $REGISTER" ;;
+    ERR_DUPLICATE_STATUS) die2 "the rows table has more than one 'Status' column in $REGISTER" ;;
+    ERR_NO_SEPARATOR)     die2 "the rows table header has no |---| separator in $REGISTER" ;;
+    ERR_MULTIPLE_TABLES)  die2 "more than one table (or a stray pipe row) under '## Rows' in $REGISTER" ;;
     ERR_BAD_WANT)         die2 "internal: bad parse selector" ;;
     ''|*[!0-9]*)          die2 "unparseable count '$out' from $REGISTER" ;;
   esac
@@ -132,6 +176,10 @@ case "$subcommand" in
       exit 0
     fi
     echo "::error::register holds ${count} tenant row(s); expected the empty baseline." >&2
+    echo "::error::If a tenant DPA was genuinely signed, this is EXPECTED: flip the live check in" >&2
+    echo "::error::scripts/test-all.sh from assert-empty to assert-populated in the same PR that adds" >&2
+    echo "::error::the row, and escalate to the CLO -- the DPA template §6.1 30-day sub-processor" >&2
+    echo "::error::notification clock starts at the first dpa-signed row." >&2
     exit 1
     ;;
   assert-populated)

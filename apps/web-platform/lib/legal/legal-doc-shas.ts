@@ -1,6 +1,6 @@
 /**
  * SHA-256 hashes of each legal document's canonical source file. These
- * are compared at build/CI time by `scripts/check-tc-document-sha.sh` to
+ * are compared at build/CI time by `apps/web-platform/scripts/check-tc-document-sha.sh` to
  * detect content changes that require a TC_VERSION bump assessment.
  *
  * When you edit a legal document (docs/legal/*.md), regenerate the hash:
@@ -14,7 +14,7 @@ export const LEGAL_DOC_SHAS: Readonly<Record<string, string>> = {
   "acceptable-use-policy":
     "88e327707bde8f2e6999f10f2aac2ae179af0a185ac538f5b556295ba10bfbdb",
   "cookie-policy":
-    "c40439d1413772fcc145d8bbe4bcd16227649123d710310e896d9f7bd6c18d77",
+    "e2ac3ba184bf3e29d94a5702e48b85447748d749f28c00664ee94b170b84417e",
   "corporate-cla":
     "d41147d94cf53c9340cdf39d751b91b4140991ddbab092451308a1398eb00826",
   "data-protection-disclosure":

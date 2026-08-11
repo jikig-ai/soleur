@@ -52,7 +52,7 @@
 # still carries both the issue number and the date.
 #
 # WHAT NO OTHER GATE SEES. legal-doc-consistency compares heading SEQUENCE; check-tc-
-# document-sha compares canonical HASHES and its body-equivalence step is T&C-only. Neither
+# document-sha compares canonical HASHES and its body-equivalence step covers terms-and-conditions, acceptable-use-policy and disclaimer (#7349). Neither
 # can see the same content landing in a different POSITION on the mirror -- the published
 # page then presents those rights in a sequence the record does not. All three gates were
 # green while exactly that was true.
