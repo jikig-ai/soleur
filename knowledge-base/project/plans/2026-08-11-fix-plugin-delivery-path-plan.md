@@ -25,6 +25,49 @@ repository this size; the refresh then leaves the local checkout in an unusable 
 This plan addresses delivery only. The underlying lock/lease library fix is correct and is
 not in scope.
 
+## Deepen-Plan Gate Results
+
+Run 2026-08-11 against the post-plan-review plan.
+
+| Gate | Result |
+|---|---|
+| **4.5** Network-outage deep-dive (fired on `timeout`) | **PASS** — `## Hypotheses` answers all four layers with artifacts; L3/L7 opt-outs cite the successful raised-timeout clone as the discriminator |
+| **4.6** User-Brand Impact halt | **PASS** — section present, non-placeholder, threshold `single-user incident` |
+| **4.7** Observability gate | **PASS** — all five fields present and non-empty; `discoverability_test.command` first token `jq` (allowlisted), zero `ssh` matches |
+| **4.8** PAT-shaped variable halt | **PASS** — no matches |
+| **4.9** UI-wireframe artifact halt | **TRIGGERS — determination below, not a silent pass** |
+| **4.10** Encryption Posture halt | **PASS** — section present; no `plaintext-exception`, no `cert_verification: off`, so no `exception` block required |
+
+### Gate 4.9 — explicit determination (flagged for overturn, not resolved by fiat)
+
+The gate fires: `## Files to Edit` contains `plugins/soleur/docs/pages/getting-started.njk` and
+`changelog.njk`, the glob superset matches `**/*.{njk,…}`, and zero committed `.pen` files are
+referenced. By the letter of the glob rule this is a HALT.
+
+**Two authorities in the same document disagree.**
+`plugins/soleur/skills/brainstorm/references/ui-surface-terms.md` states under **Excluded (no
+wireframe required)**: *"Pure copy or style tweaks with no structural/layout change"*. Its glob
+superset states the opposite precedence: *"Any match forces the UI-surface determination true
+regardless of subjective assessment."*
+
+**Determination: the Excluded clause governs here, and the reason is not subjective.** The two
+edits change (a) the text inside one `<pre><code>` block and (b) the wording of one FAQ answer
+plus its JSON-LD twin. No page, route, component, modal, banner, nav, layout, flow, or template
+*structure* changes; nothing new renders; no user journey gains a step. The glob's "regardless of
+subjective assessment" clause exists to stop a judgement call from excusing a real UI surface —
+it is not aimed at a categorical carve-out the same document grants.
+
+**This is recorded, not skipped.** `ux-design-lead` does **not** appear in `Skipped specialists:`
+(the failure mode `wg-ui-feature-requires-pen-wireframe` exists to prevent); the Product/UX Gate
+is declared **ADVISORY** with this reasoning in `## Domain Review`, and the gate ambiguity is
+surfaced in the session summary. **If plan-review or the operator disagrees, the remedy is one
+`ux-design-lead` invocation** — cheap, and preferable to a precedent that lets any `.njk` copy
+fix claim the carve-out.
+
+**Standing recommendation:** the glob superset and the Excluded clause should be reconciled in
+`ui-surface-terms.md` itself, so the next plan touching a `.njk` string does not re-litigate this.
+That is a workflow fix, not part of this change.
+
 ## Research Insights
 
 ### Premise Validation (Phase 0.6)
