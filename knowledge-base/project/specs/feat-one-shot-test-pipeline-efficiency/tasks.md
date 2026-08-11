@@ -31,17 +31,17 @@ reporting exists, and no phase makes a decision before its instrument exists.
 
 ## Phase B — skip reporting (the enabler, ~15 lines)
 
-- [ ] **B.1** Extend `scripts/test-all-infra-coverage-notice.test.sh` (RED): denominator counts a
+- [x] **B.1** Extend `scripts/test-all-infra-coverage-notice.test.sh` (RED): denominator counts a
       skipped suite; summary distinguishes passed/failed/skipped; the skip line names suite + reason +
       re-run command; `TEST_TIMING_LOG` carries `skip=<reason>` as a **labelled** trailing field that
       keeps field 3 unambiguous against both the `ok` and `FAIL` shapes.
-- [ ] **B.2** Add `skipped=0` and the `skip_suite <label> <reason> <rerun-cmd>` helper to
+- [x] **B.2** Add `skipped=0` and the `skip_suite <label> <reason> <rerun-cmd>` helper to
       `scripts/test-all.sh` (GREEN). It increments both `suites` and `skipped` and prints in the shape
       `:806-812` already uses. A **sibling helper**, never an option on `run_suite`.
-- [ ] **B.3** Change the summary to `=== P passed, F failed, S skipped, N total ===` with `N = P+F+S`.
-- [ ] **B.4** Migrate the existing infra gate's `else` branch (`test-all.sh:806-812`) onto `skip_suite`
+- [x] **B.3** Change the summary to `=== P passed, F failed, S skipped, N total ===` with `N = P+F+S`.
+- [x] **B.4** Migrate the existing infra gate's `else` branch (`test-all.sh:806-812`) onto `skip_suite`
       in the same edit, retiring the pre-existing denominator drift.
-- [ ] **B.5** Run the coverage-notice suite alone. Green.
+- [x] **B.5** Run the coverage-notice suite alone. Green.
 
 ## Phase C — Item 1: the relevance gate (~25 lines)
 

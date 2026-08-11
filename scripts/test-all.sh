@@ -174,7 +174,12 @@ if [[ "${SOLEUR_SUBAGENT:-}" == "1" && "${SOLEUR_ALLOW_FULL_GATE:-}" != "1" ]]; 
   echo "" >&2
   echo "If you are the lead and this IS the sanctioned gate run, override explicitly:" >&2
   echo "    SOLEUR_ALLOW_FULL_GATE=1 bash scripts/test-all.sh" >&2
-  exit 3
+  # rc 4, deliberately NOT 3. #7424 assigned rc 3 the meaning "a suite was terminated —
+  # unresolved, coverage not obtained", and that trichotomy is documented in one-shot/SKILL.md.
+  # A refusal is the opposite claim (nothing ran, by design, and nothing is unresolved), so it
+  # needs its own code; sharing 3 would make a refused run read as a killed suite. 1 is an
+  # ordinary suite failure and 2 is a bad TEST_GROUP, so 4 is the next free value.
+  exit 4
 fi
 
 want_scripts() { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "scripts" ]]; }
@@ -259,6 +264,10 @@ _suite_budget_ms() {
     *) return 0 ;;
   esac
 }
+
+# Declines (ADR-178). Beside failed/killed for the same reason: a suite that was not run
+# is not a suite that passed, and the denominator must still account for it.
+skipped=0
 
 run_suite() {
   local label="$1"; shift
@@ -348,6 +357,40 @@ run_suite() {
     echo "[FAIL] $label (${elapsed_ms}ms)" >&2
     printf '%s\t%d\tFAIL%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
   fi
+}
+
+# A DECLINE IS A VERDICT, NOT AN ABSENCE (ADR-178).
+#
+# run_suite increments `suites` on ENTRY, so the older shape — wrapping the call in an `if` and
+# echoing a notice on the else branch — silently removed the declined suite from the
+# denominator. `N/N suites passed` then read IDENTICALLY whether a suite was deliberately gated
+# or had been DE-REGISTERED, and the second is the #3366 class one level up: a suite running in
+# zero runners behind a green summary. Counting the decline is what makes those two states
+# distinguishable without reading the log body.
+#
+# A SIBLING of run_suite, deliberately NOT an option on it. scripts/lint-orphan-test-suites.sh
+# anchors suite registration on the literal `run_suite ` token, and its per-suite check is
+# satisfied by ANY scripts/*.test.sh appearing after that token — so a
+# `run_suite --skip-if-not-relevant "<paths>"` shape would let a path in the predicate list
+# satisfy the registration check for a DIFFERENT suite than the one executed, and deleting that
+# suite's real registration would still report `orphan test suites: none`. `skip_suite ` cannot
+# match `^[[:space:]]*run_suite `, so it is invisible to that anchor by construction.
+#
+# $1 = label (must match the label the suite would have run under)
+# $2 = machine-readable reason  $3 = the exact command that re-runs it
+skip_suite() {
+  local label="$1" reason="$2" rerun="$3"
+  suites=$((suites + 1))
+  skipped=$((skipped + 1))
+  echo ""
+  echo "[skip] $label ($reason)"
+  echo "      Nothing in this run is evidence for it. Re-run with:"
+  echo "        $rerun"
+  echo ""
+  # LABELLED trailing field, never a bare positional one: field 3 already carries the `FAIL`
+  # marker, so an unlabelled append would be positionally ambiguous across the ok, FAIL and
+  # skip shapes. Same reasoning the tmp_delta= field above already applies.
+  printf '%s\t%d\tskip=%s\n' "$label" 0 "$reason" >> "${TEST_TIMING_LOG:-/dev/null}"
 }
 
 # INFRA RELEVANCE DETECTION (#6730/#7014, converted from a boundary to a gate by #7103).
@@ -992,11 +1035,8 @@ if want_infra; then
     # path. The alternative was leaving TEST_GROUP as an undocumented escape hatch — which
     # silently drops far more than the infra runner and says so nowhere.
     _infra_skip_reason="incident"
-    echo ""
-    echo "SKIPPED (SOLEUR_INCIDENT_SKIP=1): apps/web-platform/infra/run-registered-suites.sh"
-    echo "      Nothing below is evidence for apps/web-platform/infra/. Re-run with:"
-    echo "        bash apps/web-platform/infra/run-registered-suites.sh"
-    echo ""
+    skip_suite "apps/web-platform/infra/run-registered-suites.sh" "incident" \
+      "bash apps/web-platform/infra/run-registered-suites.sh"
   elif [[ "$TEST_GROUP" == "infra" || "$_infra_in_diff" == 1 ]]; then
     run_suite "apps/web-platform/infra/run-registered-suites.sh" bash "apps/web-platform/infra/run-registered-suites.sh"
     # THE ONLY site that may set this. Every downstream coverage claim reads it, so it records
@@ -1004,12 +1044,8 @@ if want_infra; then
     _infra_ran=1
   else
     _infra_skip_reason="not_in_diff"
-    echo ""
-    echo "SKIPPED (diff does not touch apps/web-platform/infra/): apps/web-platform/infra/run-registered-suites.sh"
-    echo "      Re-run explicitly with either:"
-    echo "        bash apps/web-platform/infra/run-registered-suites.sh"
-    echo "        TEST_GROUP=infra bash scripts/test-all.sh"
-    echo ""
+    skip_suite "apps/web-platform/infra/run-registered-suites.sh" "not_in_diff" \
+      "bash apps/web-platform/infra/run-registered-suites.sh"
   fi
 fi
 
@@ -1030,10 +1066,18 @@ tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"
 # the one scenario (a killed run) where identifying completion correctly matters
 # most. Ordering it first keeps both contracts at zero cost: byte-identical clean
 # output, and `=== N/M suites passed ===` stays the last `===` line on every arm.
-if (( killed > 0 )); then
-  echo "=== $suites suites: $((suites - failed - killed)) passed, $failed failed, $killed killed (unresolved — coverage not obtained) ==="
+#
+# ADR-178 adds `skipped` to the same breakdown rather than appending it to the marker.
+# An earlier revision of this change DID append `(F failed, S skipped)` to the marker, which
+# orphaned every anchored poll of it; the separate-line shape #7424 established keeps the marker
+# byte-identical, so no reader is orphaned at all. Declines are counted in `suites` and excluded
+# from the numerator: with skips in the denominator but not in `failed`, the numerator would
+# report a gated suite as PASSED — a green that is not evidence, produced by the very change
+# that added the gate.
+if (( killed > 0 || skipped > 0 )); then
+  echo "=== $suites suites: $((suites - failed - killed - skipped)) passed, $failed failed, $killed killed (unresolved — coverage not obtained), $skipped skipped (declined — not relevant to this diff) ==="
 fi
-echo "=== $((suites - failed - killed))/$suites suites passed ==="
+echo "=== $((suites - failed - killed - skipped))/$suites suites passed ==="
 
 # Restatement of the PREAMBLE notice (#6730/#7014, re-pointed by #7103). Since the infra
 # runner is now a REGISTERED nested suite, the thing worth restating inverted: it is no
