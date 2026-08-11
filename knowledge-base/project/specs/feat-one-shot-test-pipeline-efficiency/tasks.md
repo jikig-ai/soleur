@@ -101,12 +101,12 @@ vacuously. The data file from C.5 is what removes the parser.
 
 ## Phase E — the sanctioned full-gate run (ONCE)
 
-- [ ] **E.1** `SOLEUR_TEST_FORCE_ALL=1 TEST_TIMING_LOG=<path> bash scripts/test-all.sh`. Every suite
+- [x] **E.1** `SOLEUR_TEST_FORCE_ALL=1 TEST_TIMING_LOG=<path> bash scripts/test-all.sh`. Every suite
       executes, so the log is both the green gate and the comparable measurement.
-- [ ] **E.2** Record the total wall clock from that log.
-- [ ] **E.3** Derive the projected typical-run figure by subtracting the two gated suites' measured
+- [x] **E.2** Record the total wall clock from that log.
+- [x] **E.3** Derive the projected typical-run figure by subtracting the two gated suites' measured
       times from the same log. **No second full-gate run.**
-- [ ] **E.4** If any suite is RED, triage inline; do not re-run the whole gate to confirm a flake — use
+- [x] **E.4** If any suite is RED, triage inline; do not re-run the whole gate to confirm a flake — use
       the per-suite re-run command the runner now prints.
 
 ## Phase F — Item 2: measure the bytes, amend ADR-133 (~4 lines + a doc)
@@ -118,8 +118,8 @@ vacuously. The data file from C.5 is what removes the parser.
 - [x] **F.3** Record `du -sb` for `/tmp` and `$TMPDIR` at the **existing** `TEST_TIMING_LOG`-gated probe
       hook (`test-all.sh:148-152`, `:177-181`), emitting `bytes_tmp=` / `bytes_tmpdir=` as labelled
       trailing fields. **No background sampler.**
-- [ ] **F.4** Read the per-directory figures out of the Phase E log.
-- [ ] **F.5** Write the dated ADR-133 amendment: state the ADR's original justification from the
+- [x] **F.4** Read the per-directory figures out of the Phase E log.
+- [x] **F.5** Write the dated ADR-133 amendment: state the ADR's original justification from the
       current on-disk file, quote **both** directory figures, record the **keep-the-lock** verdict, and
       record the evidence bar that was not met. ADR-133's `status:` stays unchanged.
 
@@ -148,11 +148,11 @@ vacuously. The data file from C.5 is what removes the parser.
 - [x] **H.3** (consolidated into #7454 item 3) File the Item 2 deferral issue (multi-run experiment), carrying the evidence bar from the
       plan's §Risks verbatim.
 - [x] **H.4** Comment on **#7376** linking H.1 and the Phase F probe. Do **not** close or re-scope it.
-- [ ] **H.5** Verify all 10 acceptance criteria in the plan.
-- [ ] **H.6** Confirm the PR body states: the two scope reductions (no new nightly workflow; three
+- [x] **H.5** Verify all 10 acceptance criteria in the plan.
+- [x] **H.6** Confirm the PR body states: the two scope reductions (no new nightly workflow; three
       items deferred) with reasons, the measured `B_ALWAYS`, and the before/after wall clock from the
       Phase E log.
-- [ ] **H.7** Confirm `ship` renders `decision-challenges.md` (UC-1, UC-2) into the PR body and files
+- [x] **H.7** Confirm `ship` renders `decision-challenges.md` (UC-1, UC-2) into the PR body and files
       the `action-required` issue.
-- [ ] **H.8** Re-derive the ADR-178 ordinal against freshly-fetched `origin/main` immediately before
+- [x] **H.8** Re-derive the ADR-178 ordinal against freshly-fetched `origin/main` immediately before
       merge; on renumber sweep the plan body, this file, and plan AC8 in the same edit.
