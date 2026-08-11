@@ -351,12 +351,30 @@ Sequenced last: it depends on the counterparty documents being settled. The T&C 
 
 ## Phase 7 — Verification
 
-- [ ] 7.1 Run every gate by **its own invocation**, not a reconstruction of its input set.
+- [x] 7.1 Run every gate by **its own invocation**, not a reconstruction of its input set.
 - [ ] 7.2 `bash scripts/test-all.sh`.
-- [ ] 7.3 Walk each cross-document contradiction commit and assert both region markers are present
+- [x] 7.3 Walk each cross-document contradiction commit and assert both region markers are present
       in that commit's diff. **Do not use `git log -- A B`** — it is a union filter and cannot
       distinguish a paired commit from a one-sided one.
-- [ ] 7.4 Read the diff of every gate script and confirm no gate was weakened (AC33).
-- [ ] 7.5 Confirm every claim the PR **adds** to a legal document traces to a named source line or
+- [x] 7.4 Read the diff of every gate script and confirm no gate was weakened (AC33).
+- [x] 7.5 Confirm every claim the PR **adds** to a legal document traces to a named source line or
       a CLO ruling in the enumeration artifact (AC34). Absence-greps alone can all pass while an
       added claim is false.
+
+## Phase 7 results (measured 2026-08-11)
+
+- **7.1** — every gate by its own invocation: scope-block 0, drift-ratchet 0, tc-sha 0, and the
+  three self-tests 0 with **65 + 38 + 29** assertions. Orphan-suite check clean.
+- **7.3** — per-commit walk, NOT `git log -- A B` (a union filter that cannot distinguish a paired
+  commit from a one-sided one). 18 paired legal-doc moves, 4 mirror-only ports (drift reductions),
+  **0 canonical-only** — no commit introduced divergence. All nine SHA pins verified current.
+- **7.4 (AC33)** — every gate-script diff read. **No gate weakened; three strengthened:**
+  `BODY_EQUIVALENCE_DOCS` 1 → 3, `SEED_SCRIPTS` 2 → 3, two suites registered in `test-all.sh`.
+  Mechanically asserted over the whole diff: no `SOLEUR_LEGAL_DRIFT_ACCEPT` set, no
+  `ORDER_SENSITIVE`/`RATCHET_ENABLED`/`NEW_PAIR_MUST_BE_CLEAN` toggle, no `--base` widening, no
+  `run_suite` registration removed. The three diff hits on the drift-exception name are audit prose
+  recording that it was NOT used.
+- **7.5 (AC34)** — all ten added legal positions trace to the contradiction register or the counsel
+  audit. One probe returned a false negative (E7) and was chased rather than recorded as clean —
+  the fix was present on both surfaces; the probe string was wrong. That is the same false-negative
+  class that produced the E5 error, and it is why a zero is chased, not banked.
