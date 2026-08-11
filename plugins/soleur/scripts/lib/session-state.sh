@@ -11,7 +11,7 @@
 # number: the previous `:160-170` range pointed at the jq_fail block, and a
 # repo-relative line citation is unresolvable from the plugin cache anyway —
 # which is the class of defect this file's relocation exists to fix.
-# Location: ships INSIDE the plugin (ADR-177, #7409) so a marketplace install
+# Location: ships INSIDE the plugin (ADR-178, #7409) so a marketplace install
 # resolves it; .claude/hooks/** consumers reach in from the repo side.
 
 # Guard against double-source within a single shell.

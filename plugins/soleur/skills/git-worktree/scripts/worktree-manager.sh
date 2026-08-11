@@ -41,7 +41,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source session-state helpers (locks + leases + headless visibility).
 #
-# PLUGIN-INTERNAL and layout-invariant (#7409, ADR-177). SCRIPT_DIR is
+# PLUGIN-INTERNAL and layout-invariant (#7409, ADR-178). SCRIPT_DIR is
 # <plugin-root>/skills/git-worktree/scripts, so three levels up is the plugin
 # root — the SAME arithmetic in this repo and in a marketplace install under
 # ~/.claude/plugins/cache/<mkt>/soleur/<ver>/. It reads NO environment variable,

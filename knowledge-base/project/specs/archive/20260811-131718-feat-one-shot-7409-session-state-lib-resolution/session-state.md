@@ -37,7 +37,7 @@ before handoff — each would have caused rework or a false-green at `/work` or 
 - **Disposition follows the destructiveness gradient** — the reap path stays fail-closed; advisory
   `with_lock` / `release_lease` sites degrade open loudly. Hard-failing there would convert exit 127 into a
   prettier exit 127 for exactly the users #7409 is about.
-- **ADR-177 recorded** (the provisional ADR-175 collided at ship time — a sibling landed `ADR-175-preflight-probe-execution-boundary` mid-pipeline and main reached ADR-176, so this renumbered to 177; the sibling's two `model.c4` ADR-175 citations were deliberately left untouched), with C4 edits to **two**
+- **ADR-178 recorded** (the provisional ADR-175 collided at ship time — a sibling landed `ADR-175-preflight-probe-execution-boundary` mid-pipeline and main reached ADR-176, so this renumbered to 177; the sibling's two `model.c4` ADR-175 citations were deliberately left untouched), with C4 edits to **two**
   falsified descriptions plus `model.likec4.json` regeneration — omitting that is a guaranteed CI red via
   the byte-diff freshness gate.
 - **Scope corrected upward from the issue**: seven invocation sites, not six (the issue omitted `one-shot`).

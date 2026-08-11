@@ -20,7 +20,7 @@ Issue: #7409
 - **Class:** taste
 - **Raised by:** CTO domain review
 - **Challenge:** This resolves part of ADR-093's own declared residual class (#6222); a sibling ADR fragments the anchoring doctrine.
-- **Plan decision:** **standalone ADR-177 with a bidirectional cross-reference.** ADR-093 is about SDK plugin-source *trust*; ADR-177 is about *where a shared bash library lives and how it resolves on CLI installs*, and carries its own alternatives table (move / duplicate+drift-gate / fallback-chain-only). #7409 also explicitly requests an ADR. Both documents are edited in this PR, so the doctrine stays navigable either way.
+- **Plan decision:** **standalone ADR-178 with a bidirectional cross-reference.** ADR-093 is about SDK plugin-source *trust*; ADR-178 is about *where a shared bash library lives and how it resolves on CLI installs*, and carries its own alternatives table (move / duplicate+drift-gate / fallback-chain-only). #7409 also explicitly requests an ADR. Both documents are edited in this PR, so the doctrine stays navigable either way.
 
 ## DC-3 — Destination: `hooks/lib/` vs `scripts/` — RESOLVED BY SYNTHESIS
 

@@ -80,7 +80,7 @@ Anchor: `${CLAUDE_PLUGIN_ROOT:-<preserved-anchor>}/scripts/lib/session-state.sh`
 
 ## Phase 5 — ADR + C4
 
-- [x] **5.1** Write `ADR-177` — location, per-consumer-class resolution order, MOVE-not-duplicate, the security-posture note, and the **standardised snippet including the `$SS_LIB` assignment** (the assignment is the defect; showing only the `if` around it elides the hard part). Alternatives table: A–G from the plan.
+- [x] **5.1** Write `ADR-178` — location, per-consumer-class resolution order, MOVE-not-duplicate, the security-posture note, and the **standardised snippet including the `$SS_LIB` assignment** (the assignment is the defect; showing only the `if` around it elides the hard part). Alternatives table: A–G from the plan.
 - [x] **5.2** Cross-reference from `ADR-093` §Consequences (this resolves a member of its declared #6222 residual class).
 - [x] **5.3** `model.c4` — correct **both** falsified descriptions (`platform.plugin`, `platform.engine.hooks`) and add the `hooks -> plugin` edge. Both endpoints are already in the `containers` view include list, so no new `include` line.
 - [x] **5.4** ⚠️ `bash scripts/regenerate-c4-model.sh` — `c4-model-freshness.test.sh` **byte-diffs** the committed `model.likec4.json` and is pinned in CI. Skipping this is a guaranteed red.
