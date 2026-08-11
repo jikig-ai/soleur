@@ -713,6 +713,26 @@ exception:        # present ONLY when mechanism is plaintext-exception OR cert_v
 
 **Why:** ADR-140 and `knowledge-base/project/plans/2026-07-23-feat-encryption-posture-design-time-default-plan.md` (Plan Review Revisions R1-R11) — a new store or connection shipped with no declared encryption posture is undetectable at review time by name-similarity alone (a plaintext `hcloud_volume.workspaces` reads identically to its LUKS-backed sibling `hcloud_volume.workspaces_luks` until the device-binding chain is actually walked). Codifying the posture as a plan deliverable, resolved against real code by `lint-encryption-posture.py` (repo-root `scripts/`), closes the gap at design time instead of at incident time.
 
+### 2.12. Guard Contract Gate
+
+[skill-enforced: plan Phase 2.12 + deepen-plan Phase 4.11 + [lint-guard-contract.py](../../../../scripts/lint-guard-contract.py)]
+
+If the plan's deliverable **includes a guard** — a guard, gate, lint, drift-check, assertion-based CI check, or anti-vacuity control — the plan MUST emit a `## Guard Contract` section carrying one `### Guard <n> — <name>` entry per guard, each with three fields.
+
+**The class this exists to catch:** *a guard's WINDOW, CHOKEPOINT, or IDENTIFIER SET is narrower than the property it names.*
+
+1. **Property** — the invariant in ONE sentence. Not "the sandbox is correct" but "no mount outside the declared set reaches the sandbox."
+2. **Assembly** — every code path, array, file, and call site the property quantifies over. **Members drift; assembly is structural.** An "assembly" enumerated as the list of current members is not an assembly — it is a snapshot, and the next one-line edit invalidates it while the suite stays green. Name the *chokepoint* the members must flow through, and if there is more than one, say so: a guard scoped to one of three injection sites is the defect, not a partial fix.
+3. **Mutation matrix** — **>= 3** edits that MUST drive the guard RED, derivable from the DESIGN rather than from the implementation as it happens to be shaped. At least one row MUST target the guard's **own dispatch** (a guard that reports "0 checked" and exits 0 is vacuous), and at least one MUST add a **second** member after a compliant first (a check that stops at the first member is itself an instance of the class).
+
+**Write the matrix BEFORE the guard.** A matrix derived from finished code tests the code that exists; a matrix derived from the design tests the property. This ordering is the whole point of the gate.
+
+**Reject conditions** (enforced mechanically by [lint-guard-contract.py](../../../../scripts/lint-guard-contract.py), and halted at deepen-plan Phase 4.11): the section missing while detection fires; a `## Guard Contract` heading with zero `### Guard` entries; a missing or placeholder `**Property.**` or `**Assembly.**`; a mutation matrix with fewer than 3 rows. The lint quantifies over EVERY entry, not the first.
+
+**Skip silently** when the deliverable contains no guard — a copy change, a dependency bump, a pure refactor behind existing tests.
+
+**Why:** the preflight Check 10 execution-boundary work (merged 2026-08-10) absorbed FIVE adversarial review rounds; every round found real defects in the previous round's fixes, and ~20 findings reduced to the one class above. Instances: a mount-set closure assertion scoped to `BWRAP_ARGS=( … )` while `GIT_BIND`, `BWRAP_PROC` and the exec line also injected mounts (three separate one-line edits each re-opened the operator's credential surface with the whole suite green — verified against live bwrap reaching the Doppler token, `~/.ssh` and the gh token store); a parity floor counting ITERATIONS rather than distinct shapes; a suppression grep anchored on `test`/`it`/`describe`, which are rebindable; and an anti-vacuity gate with NO floor on its own dispatch. Those were not five discoveries — they were ONE enumeration nobody performed, found five times by different means, at ~880k subagent tokens and five CI cycles. The root cause was at plan time: that plan specified CONTROLS and 13 Test Scenarios all of the shape "command X -> terminal Y", and ZERO of the shape "mutation M -> guard G reddens". For a change whose deliverable WAS guards, the scenarios tested the thing being guarded. See `knowledge-base/project/learnings/2026-08-10-a-guard-that-cannot-be-driven-red-is-vacuous-four-rounds-four-instances.md`.
+
 ### 3. SpecFlow Analysis
 
 **If spec-flow-analyzer was already invoked in Phase 2.5, skip this phase and proceed to Phase 4.**

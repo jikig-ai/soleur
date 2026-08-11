@@ -582,6 +582,40 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
 
 **Why:** #4819 — the one-shot path skips brainstorm, so plan Phase 2.5 is the sole producer; this halt is the independent verifier that a UI feature did not reach implementation with zero wireframes (the silent-skip class the feature kills).
 
+### 4.11. Guard Contract Halt (Conditional)
+
+Fires when the plan's deliverable includes a **guard, gate, lint, drift-check or anti-vacuity control** (plan Phase 2.12). This is the design-time verifier that a guard-shaped plan carries a usable Guard Contract before `/work` writes any guard code.
+
+**Step 1 — Detect.** Scan the plan's `## Files to Create` / `## Files to Edit` and its prose for guard-shaped deliverables: a new a new repo-root `lint-*` script, a `*.test.sh` drift guard, a CI gate, a `lifecycle.precondition`, a hook, or prose naming a "guard"/"gate"/"drift-check". If none, SKIP silently.
+
+**Step 2 — Locate the section.**
+
+```bash
+grep -q '^## Guard Contract' <plan-file>
+```
+
+Absent while detection fires → HALT with:
+
+> Error: Plan's deliverable includes a guard but there is no `## Guard Contract` section.
+> See `plugins/soleur/skills/plan/references/plan-issue-templates.md` for the template.
+> Per plan Phase 2.12, each guard needs its property, its structural ASSEMBLY, and a
+> mutation matrix of >= 3 edits that must go RED. Re-run `/soleur:plan` (or edit the plan
+> directly) to add the section, then re-run deepen-plan.
+
+**Step 3 — Resolve it mechanically.** Do not re-implement the field checks in prose — run the gate that owns them:
+
+```bash
+python3 scripts/lint-guard-contract.py <plan-file>
+```
+
+Non-zero → HALT and surface the lint's own `FAIL:` lines verbatim. It rejects: a heading with zero `### Guard` entries; a missing or placeholder `**Property.**` / `**Assembly.**`; a mutation matrix under 3 rows. It quantifies over EVERY entry, never the first.
+
+**Step 4 — Adequacy read (the part no lint can do).** The lint proves the fields are *present and non-empty*; only a reader can judge whether the ASSEMBLY is *structural*. Reject and HALT when the Assembly enumerates the current MEMBERS (a list of today's mounts, today's call sites) rather than the STRUCTURE that produces them (the chokepoint they must flow through, the array that holds them, the walk that finds them). Members drift; assembly does not. Equally, reject a mutation matrix whose rows were plainly derived from a finished implementation rather than from the design — the tell is a row naming a specific variable or line that only exists because the code was written that way.
+
+**Step 5 — Pass-through.** Section present, lint green, assembly structural → proceed normally. No telemetry on pass.
+
+**Why:** the preflight Check 10 work (merged 2026-08-10) cost five adversarial review rounds and ~880k subagent tokens on ~20 findings that all reduced to one class — a guard's window/chokepoint/identifier set narrower than the property it named. The plan that produced it had 13 Test Scenarios all shaped "command X -> terminal Y" and none shaped "mutation M -> guard G reddens", so the guards were written as assertions about the implementation as it happened to be shaped. This halt is the independent verifier that the enumeration happened at design time rather than being discovered five times at review time.
+
 ### 5. Discover and Run ALL Review Agents
 
 <thinking>
