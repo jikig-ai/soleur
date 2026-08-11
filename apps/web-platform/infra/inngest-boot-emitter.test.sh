@@ -197,6 +197,78 @@ CURL_AUTH_PROBE=$(PATH="$WORK/bin:$PATH" CURL_OUT="$WORK/probe.txt" sh -c 'curl 
 assert "harness: the curl stub REFUSES a POST with no Authorization header (exit 64, not a no-op)" \
   "[[ '$CURL_AUTH_PROBE' -eq 64 ]]"
 
+# --- #7228 AC5: the per-boot token re-stage, asserted over the RENDERED userdata ----------------
+# WHY RENDERED AND NOT THE SOURCE. cloud-init-inngest.yml is a Terraform templatefile(), so the
+# bytes the host actually receives are not the bytes in this repo: `$${...}` collapses, `%{...}`
+# directives evaluate, and a var can inject or delete whole regions. A source-grep therefore
+# asserts a property of a file NO HOST EVER SEES — which is the plan-review finding that struck
+# AC4 of the first draft. The render is the artifact; assert there.
+echo ""
+echo "--- #7228 AC5: per-boot token re-stage (asserted over the RENDERED userdata) ---"
+
+if ! command -v terraform >/dev/null 2>&1; then
+  # Not a silent skip: an absent renderer means this section proved NOTHING, and a run that
+  # reports "all passed" while its load-bearing leg never executed is the false-green this
+  # whole PR is about. deploy-script-tests (where this suite is registered) runs
+  # hashicorp/setup-terraform, so CI always takes the real branch.
+  fail "AC5 REQUIRES terraform to render the userdata, and terraform is not on PATH — this section proved nothing"
+else
+  RENDER_DIR="$WORK/render"
+  RENDERED="$WORK/rendered-userdata.yml"
+  mkdir -p "$RENDER_DIR"
+  # Keys come from the templatefile() call site in inngest-host.tf — the authoritative statement
+  # of what this template receives. A missing key is a render error, not a silent empty string,
+  # so a future var addition trips this loudly rather than degrading the assertions to vacuity.
+  printf 'templatefile("%s", { inngest_volume_id="v", doppler_token="d", sdk_url="https://sdk", inngest_cli_arch="amd64", inngest_cli_sha256="s", vector_sha256="vs", doppler_arch="amd64", doppler_sha256="ds", ghcr_read_user="u", ghcr_read_token="g", web_host_private_ips="10.0.1.10", betterstack_logs_token="BS_TOKEN_SENTINEL_7228" })\n' \
+    "$CLOUD_INIT" | terraform -chdir="$RENDER_DIR" console > "$RENDERED" 2>"$WORK/render.err"
+
+  # A truncated or empty render makes every assertion below pass or fail for the wrong reason.
+  assert "AC5 the userdata rendered at all (terraform console produced output)" \
+    "[[ -s '$RENDERED' ]]"
+  if [[ ! -s "$RENDERED" ]]; then
+    echo "    render stderr: $(head -c 400 "$WORK/render.err")"
+  fi
+
+  assert "AC5 RENDERED userdata delivers the re-stage script" \
+    "grep -qF '/usr/local/bin/inngest-bs-token-restage.sh' '$RENDERED'"
+  assert "AC5 RENDERED userdata delivers the re-stage UNIT (so it runs on boot, not just on cloud-init)" \
+    "grep -qF '/etc/systemd/system/inngest-bs-token-restage.service' '$RENDERED'"
+  # A delivered-but-unenabled unit is the defect verbatim: present on disk, never started, and
+  # the channel still dies on the next reboot.
+  assert "AC5 RENDERED userdata ENABLES the unit (delivery alone leaves the channel dead on reboot)" \
+    "grep -qE 'systemctl enable inngest-bs-token-restage\.service' '$RENDERED'"
+  assert "AC5 the unit is WantedBy=multi-user.target (it must fire on EVERY boot)" \
+    "grep -qE '^[[:space:]]*WantedBy=multi-user\.target' '$RENDERED'"
+  assert "AC5 the unit sets SyslogIdentifier (else its rows retag to the ExecStart basename and ship nowhere)" \
+    "grep -qE '^[[:space:]]*SyslogIdentifier=inngest-bs-token-restage' '$RENDERED'"
+  assert "AC5 the re-stage tag IS in the vector Source 4 allowlist" \
+    "grep -qE '^[[:space:]]*\"inngest-bs-token-restage\",?\$' '$VECTOR_TOML'"
+
+  # THE LOAD-BEARING ONE. "Re-fetch from Doppler, never a baked re-stamp." A unit that re-writes
+  # the templatefile's own betterstack_logs_token would satisfy every assertion above while
+  # making the token durable on the ROOT DISK (defeating the tmpfs staging) and pinning it at
+  # image-build time so a rotation could never reach the host. The sentinel proves it: the
+  # rendered SCRIPT BODY must not contain the interpolated token value.
+  RESTAGE_BODY="$(awk '/^  - path: \/usr\/local\/bin\/inngest-bs-token-restage\.sh$/{f=1;next} f&&/^  - path: /{f=0} f' "$RENDERED")"
+  assert "AC5 the re-stage script body was located in the render (else the two checks below are vacuous)" \
+    "[[ -n \"\$RESTAGE_BODY\" ]]"
+  assert "AC5 the re-stage RE-FETCHES from Doppler (never a baked re-stamp)" \
+    "grep -qF 'doppler secrets get BETTERSTACK_LOGS_TOKEN' <<<\"\$RESTAGE_BODY\""
+  assert "AC5 the rendered re-stage script does NOT bake the token value (it would outlive tmpfs and defeat rotation)" \
+    "! grep -qF 'BS_TOKEN_SENTINEL_7228' <<<\"\$RESTAGE_BODY\""
+  # Non-vacuity for the sentinel: prove the render DID substitute it somewhere, so the negative
+  # above is a real absence rather than a var that never landed.
+  assert "AC5 non-vacuity: the sentinel IS present elsewhere in the render (the negative above is meaningful)" \
+    "grep -qF 'BS_TOKEN_SENTINEL_7228' '$RENDERED'"
+
+  # The re-stage must fail LOUD. A silent failure re-creates the original defect one layer up:
+  # the channel is dead and nothing says so.
+  assert "AC5 the re-stage emits a loud row when the Doppler fetch yields nothing" \
+    "grep -qF 'SOLEUR_INNGEST_BS_TOKEN_RESTAGE_FAILED' <<<\"\$RESTAGE_BODY\""
+  assert "AC5 the re-stage emits a positive control on success (else 'no rows' is ambiguous — ADR-117)" \
+    "grep -qF 'SOLEUR_INNGEST_BS_TOKEN_RESTAGED' <<<\"\$RESTAGE_BODY\""
+fi
+
 echo ""
 if [[ "$FAIL" -eq 0 ]]; then
   echo "OK inngest-boot-emitter: all assertions passed ($PASS)"

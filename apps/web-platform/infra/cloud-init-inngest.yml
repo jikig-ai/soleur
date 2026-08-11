@@ -201,6 +201,78 @@ write_files:
     owner: root:root
     permissions: '0755'
 
+  # --- #7228: re-stage the boot-trace token on EVERY boot, not just the first ------------
+  # THE DEFECT. Every write of /run/inngest-bs-logs-token lives inside `runcmd:`. cloud-init
+  # runs runcmd on FIRST BOOT ONLY, and /run is tmpfs — cleared on every reboot. No unit
+  # re-staged it. So after ANY reboot the token was gone, inngest-boot-phone-home.sh took its
+  # `[ -r "$tok_file" ] || exit 0` arm, and the ENTIRE boot-trace channel was permanently and
+  # silently dead. A host that reboots once is dark forever, with no signal that the channel
+  # died. Combined with ~3-day sink retention against a 12-day-old boot, that is the whole
+  # reason #7228's diagnosis was unrecoverable.
+  #
+  # RE-FETCH, NEVER A BAKED RE-STAMP. Writing the templatefile's `betterstack_logs_token`
+  # into a unit file would make the token durable on the ROOT DISK, which is exactly the
+  # property the tmpfs staging exists to avoid, and would pin the value at image-build time so
+  # a rotation could never reach this host. Fetching from Doppler each boot keeps the only
+  # durable copy in Doppler and makes rotation take effect on the next boot.
+  #
+  # This unit is the precondition for the emitter's loudness fix being reachable at all: the
+  # emitter can only report "the channel is dead" if something is expected to have kept it
+  # alive. The two ship together.
+  - path: /usr/local/bin/inngest-bs-token-restage.sh
+    content: |
+      #!/usr/bin/env bash
+      set +e
+      tok=/run/inngest-bs-logs-token
+      # Test seam (never set in production). Brace-free for the same templatefile reason as
+      # inngest-boot-phone-home.sh above.
+      [ -n "$SOLEUR_INNGEST_BS_TOKEN_FILE" ] && tok="$SOLEUR_INNGEST_BS_TOKEN_FILE"
+      # HOME + DOPPLER_CONFIG_DIR come from here; the Doppler CLI aborts without HOME (#6122).
+      set -a; . /etc/default/inngest-doppler 2>/dev/null; set +a
+      t="$(doppler secrets get BETTERSTACK_LOGS_TOKEN --project soleur-inngest --config prd --plain 2>/dev/null)"; drc=$?
+      if [ -z "$t" ]; then
+        # LOUD, and non-zero so `systemctl is-active` disagrees too. Nothing Requires= this
+        # unit, so a failure here cannot wedge the boot — it only makes the dead channel
+        # visible instead of silent, which is the entire point of the change.
+        logger -t inngest-bs-token-restage "SOLEUR_INNGEST_BS_TOKEN_RESTAGE_FAILED drc=$drc — could not re-fetch BETTERSTACK_LOGS_TOKEN from Doppler, so /run/inngest-bs-logs-token is EMPTY for this boot and every SOLEUR_INNGEST_BOOT_STAGE marker will be lost. #7228"
+        exit 1
+      fi
+      umask 077
+      printf '%s' "$t" > "$tok"
+      chmod 600 "$tok" 2>/dev/null
+      # Emitted on SUCCESS too, unlike the emitter's failure-only rows. This fires once per
+      # BOOT, not per call site, so the cost is ~1 row per reboot — and without it a healthy
+      # host and a host whose unit never ran produce the identical observation (no rows),
+      # which is the ADR-117 failure this whole PR is about.
+      logger -t inngest-bs-token-restage "SOLEUR_INNGEST_BS_TOKEN_RESTAGED ok=1 path=$tok — boot-trace channel re-armed for this boot. #7228"
+      exit 0
+    owner: root:root
+    permissions: '0755'
+
+  - path: /etc/systemd/system/inngest-bs-token-restage.service
+    content: |
+      [Unit]
+      Description=Re-stage the Better Stack boot-trace token into tmpfs /run on every boot (#7228)
+      # Doppler needs the network. Before= inngest-server so a marker emitted around the
+      # server's start has a token to ship with; ordering only, never a Requires=, so a failed
+      # re-stage degrades the trace instead of blocking the thing being traced.
+      After=network-online.target
+      Wants=network-online.target
+      Before=inngest-server.service
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      # WITHOUT this systemd derives SYSLOG_IDENTIFIER from the ExecStart basename, which
+      # matches ZERO vector.toml sources and the row never leaves the host — #6536 exactly.
+      SyslogIdentifier=inngest-bs-token-restage
+      ExecStart=/usr/local/bin/inngest-bs-token-restage.sh
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root:root
+    permissions: '0644'
+
 runcmd:
   # --- #6178 boot observability: EARLIEST marker (Doppler-INDEPENDENT) -------------------
   # First instruction. Stage the baked Better Stack token and phone home immediately. If this
@@ -267,7 +339,13 @@ runcmd:
   # Reached only if the volume mount + Doppler CLI install + scoped-token auth all succeeded,
   # so a received `doppler-token-fetched` marker proves the boot got this far AND Doppler auth
   # works; TOTAL marker absence localizes the failure to those earlier stages (or lost egress).
-  # 0600 in tmpfs /run (re-fetched every boot; the phone-home reads it). set +e: fail-open.
+  # 0600 in tmpfs /run; the phone-home reads it. set +e: fail-open.
+  #
+  # CORRECTED (#7228): this comment used to say "re-fetched every boot", which no line of this
+  # file performed. runcmd runs on FIRST BOOT ONLY and /run is tmpfs, so the token was staged
+  # exactly once and lost on the first reboot — the defect that made the boot trace
+  # unrecoverable. It is true NOW, and it is inngest-bs-token-restage.service (enabled below,
+  # written in write_files above) that makes it true, not this block.
   - |
     set +e
     set -a; . /etc/default/inngest-doppler; set +a
@@ -281,6 +359,21 @@ runcmd:
       /usr/local/bin/inngest-boot-phone-home.sh doppler-token-fetched "arch=${inngest_cli_arch} apiprobe=[$api_probe]"
     else
       /usr/local/bin/inngest-boot-phone-home.sh doppler-token-fetch-FAILED "drc=$drc apiprobe=[$api_probe] derr=[$(printf %s "$derr" | head -c 200)]"
+    fi
+
+  # --- #7228: arm the per-boot re-stage so the block above stops being a one-shot ---------
+  # `enable`, not `enable --now`: the token is already staged by the block above on THIS boot,
+  # so starting it here would spend a redundant Doppler round-trip. What matters is that it is
+  # WantedBy=multi-user.target from the SECOND boot onward, which is the boot the old code
+  # never survived. Failure to enable is loud rather than swallowed — a silently unenabled
+  # unit reproduces the exact defect, and would do so invisibly.
+  - |
+    set +e
+    systemctl daemon-reload
+    if systemctl enable inngest-bs-token-restage.service; then
+      /usr/local/bin/inngest-boot-phone-home.sh bs-token-restage-enabled "boot-trace channel now survives reboot"
+    else
+      /usr/local/bin/inngest-boot-phone-home.sh bs-token-restage-enable-FAILED "the boot-trace channel will die on the next reboot (#7228)"
     fi
 
   # --- Bake scoped GHCR read-creds (#6179/#6161) --------------------------------------

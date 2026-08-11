@@ -192,6 +192,14 @@ include_matches.SYSLOG_IDENTIFIER = [
   # stated condition that the emitter "never calls logger". It now does, so that pair is
   # inverted there into the positive lockstep form the same file uses for ci-deploy.
   "inngest-boot-phone-home",
+  # #7228: the per-boot token re-stage oneshot (inngest-bs-token-restage.service, written by
+  # cloud-init-inngest.yml). Every write of /run/inngest-bs-logs-token used to live in
+  # `runcmd:` — first boot only — while /run is tmpfs, so one reboot killed the boot-trace
+  # channel permanently and silently. This unit re-FETCHES the token from Doppler each boot,
+  # and this entry is what lets it say so: it emits on SUCCESS as well as failure (~1 row per
+  # reboot), because without a positive control a healthy host and a host whose unit never ran
+  # are the same observation — the ADR-117 shape this PR exists to close.
+  "inngest-bs-token-restage",
   # #6536: inngest-heartbeat.service exited non-zero every 60s for 3 days (3,724 fires) and
   # the stderr proving why never left the host — the unit set no SyslogIdentifier=, so systemd
   # tagged it with the ExecStart basename (`doppler`), which matches no source here. The
