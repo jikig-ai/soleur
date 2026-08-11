@@ -8,12 +8,27 @@
 # a dashboard (hr-no-dashboard-eyeball-pull-data-yourself compliant: the
 # verdict itself comes from scripts/betterstack-query.sh).
 #
-# Verdict command (run ≥24h after the vinngest deploy lands):
+# Verdict command (run ≥24h after the vinngest deploy lands). The UNION is NOT optional and the
+# earlier form here omitted it: `remote($BS_TABLE)` alone is ONLY the ~40-minute hot window, so
+# a 3-day query silently returns one partial day. Measured 2026-08-11 — the hot-only form
+# returned `{"day":"2026-08-11","c":546}` against a 25,000 threshold, reading as a comfortable
+# pass, while the true figure was ~22,464/day. It undercounts ~40x, always in the PASS
+# direction, which on an operator-confirmed probe means the human is handed a forged pass by
+# their own instructions. betterstack-query.sh documents this in its header; its --since/--grep
+# mode unions both tables for exactly this reason and only the raw-SQL path leaves it to you.
 #   doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
-#     "SELECT toDate(dt) AS day, count(*) AS c FROM remote(\$BS_TABLE) \
-#      WHERE dt >= now() - INTERVAL 3 DAY AND raw LIKE '%\"namespace\":\"host\"%' \
-#      GROUP BY day ORDER BY day FORMAT JSONEachRow"
+#     "SELECT toDate(dt) AS day, count(*) AS c FROM ( \
+#        SELECT dt FROM remote(\$BS_TABLE) \
+#          WHERE dt >= now() - INTERVAL 3 DAY AND raw LIKE '%\"namespace\":\"host\"%' \
+#        UNION ALL \
+#        SELECT dt FROM s3Cluster(primary, \$BS_TABLE_S3) \
+#          WHERE dt >= now() - INTERVAL 3 DAY AND raw LIKE '%\"namespace\":\"host\"%' \
+#      ) GROUP BY day ORDER BY day FORMAT JSONEachRow"
 #   PASS iff the first full post-deploy day shows c <= 25000 (baseline ~196k).
+#
+# Status 2026-08-11: re-measured at 22,464/day on 08-09 and 08-10 — the remediation works, and
+# the 2026-06-10 RESULT line on #5110 is stale rather than wrong. #5110 stays CLOSED
+# (NOT_PLANNED, which the sweeper's closed-set skips by design), so this probe is dormant.
 #
 # Exit semantics (scripts/sweep-followthroughs.sh):
 #   0 = PASS (close), 1 = FAIL (comment + leave open), * = TRANSIENT (retry)
