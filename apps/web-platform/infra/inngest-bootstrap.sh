@@ -237,6 +237,44 @@ dark_arm_emit_due() {
 # correct THERE and only there. The co-located web host is TODAY'S live pusher and gets no
 # arm at all -- an absent URL there is always a real fault and must stay loud.
 @@DARK_ARM@@
+#
+# --- #7228: LISTENER GATE -------------------------------------------------------------------
+# Everything above decides WHETHER THIS HOST SHOULD BEAT AT ALL. This decides whether it has
+# anything to beat ABOUT, and it is the whole of #7228.
+#
+# The beat below is `curl "$INNGEST_HEARTBEAT_URL"` fired by a 60s systemd timer: it proves a
+# TIMER FIRED, and asserts nothing whatsoever about :8288. That is why one correctly-armed,
+# correctly-scoped, unpaused monitor stayed GREEN for twelve days while the dedicated host
+# served nothing and every app dispatch failed with ECONNREFUSED. The tempting fix -- give the
+# dedicated host its own monitor -- mints a SECOND meaningless green; the monitor has to be
+# gated on a listener or it is decoration.
+#
+# NOT DEDICATED-ONLY, DELIBERATELY. This heredoc is the shared renderer for both hosts, and both
+# run inngest-server.service on loopback 127.0.0.1:8288 (:782). inngest-server-probe.sh already
+# probes that exact URL from this same file. So the gate is meaningful on both, and on the
+# co-located web host -- TODAY's live pusher, the one actually feeding the monitor -- it is what
+# converts that monitor from "a timer fired" into "the scheduler serves".
+#
+# NO `curl -f`, and `-w '%{http_code}'` is the point: -f makes curl exit non-zero and print
+# NOTHING on 4xx/5xx, collapsing every distinguishable failure into one empty string. Same
+# classification web-zot-consumer-probe.sh documents. `|| true` keeps a curl failure from being
+# the thing that decides -- the CODE decides, and a code we could not obtain is 000.
+#
+# QUOTA. The row fires only while the listener is DOWN, which is an active outage someone is
+# resolving -- unlike the dark arm above, whose suppressed state is an indefinite HEALTHY steady
+# state and is therefore rate-limited. At 60s an outage costs ~1,440 rows/day against a ~25k/day
+# quota (~5.8%), and that row is the only thing that says WHY the monitor went silent without an
+# SSH (hr-no-ssh-fallback-in-runbooks). Paying 5.8% during an outage to make the outage readable
+# is the trade #6617b made in the other direction for a state that never ends.
+INNGEST_HEALTH_URL="${INNGEST_HEARTBEAT_HEALTH_URL:-http://127.0.0.1:8288/health}"
+health_code="$(/usr/bin/curl -gsS -m 5 -o /dev/null -w '%{http_code}' "$INNGEST_HEALTH_URL" 2>/dev/null || true)"
+# curl prints nothing at all when it cannot even start. Normalize to the literal 000 so
+# "no HTTP response" is a VALUE; an empty field reads as missing data on the Better Stack side.
+[ -n "$health_code" ] || health_code=000
+if [ "$health_code" != "200" ]; then
+  logger -t "$LOG_TAG" "SOLEUR_INNGEST_HEARTBEAT_SUPPRESSED listener=no health_code=$health_code — refusing to beat: inngest does not serve /health on this host, so a beat would certify only that a timer fired (#7228). Absence-of-beat is the alarm."
+  exit 0
+fi
 # -g (--globoff): the URL is a BEARER capability. Without -g, a URL containing [ ] or
 # { } makes curl print the FULL URL in its glob-parse error (`curl: (3) bad range in URL
 # position N:` followed by the URL) — measured, curl 8.18 — which FR4's SyslogIdentifier

@@ -313,10 +313,62 @@ render_ping_script() {
     bash -c "log() { :; }; $DARK_ARM_RENDER_BLOCK"
 }
 
+# --- #7228: a REAL local health endpoint, because the listener gate is the point -------------
+# The gate below decides whether to beat by asking 127.0.0.1:8288/health for a 200. Faking that
+# answer through an injected-status seam would test the branch and not the probe: the whole
+# defect #7228 names is a health signal that certified a DIFFERENT server, and an injected code
+# reproduces that shape inside the test. So the 200 arm drives the real /usr/bin/curl against a
+# real listener. python3 is already a hard dependency of this suite (:198, :229).
+#
+# `http.server` answers 200 for a file that exists and 404 for one that does not, so ONE server
+# serves both arms by path selection -- no second process, and the 404 is genuinely produced by
+# an HTTP server rather than asserted about one. The third arm (000, "no listener at all") is a
+# closed port, which is the LIVE state of 10.0.1.40 this whole PR exists for.
+HEALTH_ROOT="$PING_TMP/health-root"
+mkdir -p "$HEALTH_ROOT"
+: > "$HEALTH_ROOT/health"
+HEALTH_PORT=""
+HEALTH_PID=""
+# Bind to port 0 and read back what the kernel assigned: a hardcoded port collides with the
+# sibling worktrees this repo runs in parallel, and the collision surfaces as a suppressed beat
+# -- i.e. as a plausible SUT failure rather than as a harness one.
+HEALTH_PORT=$(python3 - <<'PYEOF'
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PYEOF
+)
+python3 -m http.server "$HEALTH_PORT" --bind 127.0.0.1 --directory "$HEALTH_ROOT" \
+  >/dev/null 2>&1 &
+HEALTH_PID=$!
+trap 'rm -rf "$PING_TMP"; [[ -n "$HEALTH_PID" ]] && kill "$HEALTH_PID" 2>/dev/null' EXIT
+# Wait for the listener rather than sleeping a guessed interval: a race here would make the
+# 200 arm flake as a suppression, which is the failure this suite reports as a SUT defect.
+for _ in $(seq 1 50); do
+  curl -fsS -m 1 -o /dev/null "http://127.0.0.1:$HEALTH_PORT/health" 2>/dev/null && break
+  sleep 0.1
+done
+HEALTH_OK_URL="http://127.0.0.1:$HEALTH_PORT/health"
+HEALTH_404_URL="http://127.0.0.1:$HEALTH_PORT/no-such-endpoint"
+# Port 1 is closed on every runner; curl reports 000 (no HTTP response at all).
+HEALTH_DOWN_URL="http://127.0.0.1:1/health"
+
+# Precondition, asserted rather than assumed: if the mock never came up, every "suppressed"
+# result below is a harness artifact and the whole gate section proves nothing.
+assert "harness precondition: the mock health endpoint serves 200 (else every gate leg is vacuous)" \
+  "[[ \"\$(curl -s -o /dev/null -w '%{http_code}' -m 5 '$HEALTH_OK_URL')\" == '200' ]]"
+assert "harness precondition: the mock health endpoint serves 404 on an absent path" \
+  "[[ \"\$(curl -s -o /dev/null -w '%{http_code}' -m 5 '$HEALTH_404_URL')\" == '404' ]]"
+
 run_ping() {
-  # $1 = rendered script, $2 = INNGEST_HEARTBEAT_URL, $3 = logger sink
+  # $1 = rendered script, $2 = INNGEST_HEARTBEAT_URL, $3 = logger sink,
+  # $4 = health URL (optional; defaults to the SERVING mock so a caller that predates the
+  #      listener gate keeps testing what it always tested -- "given a host that serves").
   : > "$3"
   PATH="$PING_TMP/bin:$PATH" LOGGER_OUT="$3" INNGEST_HEARTBEAT_URL="$2" \
+    INNGEST_HEARTBEAT_HEALTH_URL="${4:-$HEALTH_OK_URL}" \
     sh "$1" 2>&1
 }
 
@@ -505,6 +557,90 @@ assert "AC3 non-vacuity: the harness observes a leaked canary when one IS emitte
 # the RENDERED scripts (not the heredoc body) so it also covers the sed replacement's text.
 assert "AC3 secondary: no logger/echo/printf line references the URL value (both renders)" \
   "! grep -qE '^[[:space:]]*(logger|echo|printf)[[:space:]].*INNGEST_HEARTBEAT_URL' '$DEDICATED_PING' '$WEB_PING'"
+
+# --- #7228 AC4: the LISTENER GATE ------------------------------------------------------------
+# THE DEFECT. This pusher is `curl "$INNGEST_HEARTBEAT_URL"` fired by a systemd timer. It proves
+# A TIMER FIRED and asserts nothing about :8288. One correctly-armed, correctly-scoped monitor
+# therefore stayed green for twelve days while the dedicated host served nothing -- and the fix
+# the first plan draft proposed (split the monitor in two) would have minted a SECOND meaningless
+# green. The only thing that makes a beat mean anything is gating it on a local listener check.
+#
+# THE GATE IS NOT DEDICATED-ONLY, AND THAT IS DELIBERATE. inngest-bootstrap.sh is the SHARED
+# renderer for both hosts (which is why plan-review AC2 was struck as structurally unsatisfiable
+# -- no grep can isolate "web-host code paths" here). Both hosts run inngest-server.service on
+# loopback 127.0.0.1:8288 (:782, and inngest-server-probe.sh:472 already probes exactly that URL
+# on this same shared script), so the gate is meaningful on both. On the co-located web host --
+# TODAY's live pusher and the one actually feeding the monitor -- it is the change that converts
+# that monitor from "a timer fired" into "the scheduler serves". That is the #7228 fix proper.
+#
+# ORDERING IS LOAD-BEARING: the gate sits AFTER the dark arm. A dark dedicated host must exit on
+# url-absence BEFORE spending a health probe every 60s, and the dark arm's hourly rate limit must
+# keep governing that path. The A6 legs above pin it from the other side -- they drive the dark
+# arm with no health URL at all and would break if the gate ran first.
+echo ""
+echo "--- #7228 (AC4): heartbeat listener gate (a green beat must mean :8288 SERVES) ---"
+
+# The discriminator across all three arms is rc plus the ping's own side effect: the heartbeat
+# URL is a CLOSED port, so an UNGATED script reaches curl and exits 7. rc=0 means the gate
+# short-circuited before curl. That is a real behavioural distinction, not a grep.
+GATE_LOG="$PING_TMP/logger-gate.txt"
+
+GATE_OK_OUT=$(run_ping "$DEDICATED_PING" "$CANARY_URL" "$GATE_LOG" "$HEALTH_OK_URL") \
+  && GATE_OK_RC=0 || GATE_OK_RC=$?
+assert "AC4 listener 200 -> the beat is SENT (rc=7 vs the closed heartbeat port; gate does not block a serving host)" \
+  "[[ '$GATE_OK_RC' -eq 7 ]]"
+assert "AC4 listener 200 -> no suppression row (a serving host must stay silent, per the quota note)" \
+  "! grep -q 'listener=no' '$GATE_LOG'"
+
+GATE_404_OUT=$(run_ping "$DEDICATED_PING" "$CANARY_URL" "$GATE_LOG" "$HEALTH_404_URL") \
+  && GATE_404_RC=0 || GATE_404_RC=$?
+assert "AC4 listener 404 -> the beat is SUPPRESSED (rc=0: curl never reached the heartbeat URL)" \
+  "[[ '$GATE_404_RC' -eq 0 ]]"
+assert "AC4 listener 404 -> curl never ran against the heartbeat URL (no curl error on output)" \
+  "! printf '%s' \"\$GATE_404_OUT\" | grep -qi '^curl:'"
+# Loud, not silent: cq-silent-fallback-must-mirror-to-sentry. Absence-of-beat is the ALARM, but
+# the journal row is the only thing that says WHY without an SSH (hr-no-ssh-fallback-in-runbooks).
+assert "AC4 listener 404 -> emits a loud listener=no row naming the code (never a silent exit 0)" \
+  "grep -q 'listener=no' '$GATE_LOG' && grep -q 'health_code=404' '$GATE_LOG'"
+
+# The LIVE state of 10.0.1.40 as measured 2026-08-11: nothing listening at all. curl produces no
+# HTTP response, and the field must be the literal 000 rather than empty -- an empty field reads
+# as missing data on the Better Stack side, which is how a diagnosis becomes unreadable.
+GATE_DOWN_OUT=$(run_ping "$DEDICATED_PING" "$CANARY_URL" "$GATE_LOG" "$HEALTH_DOWN_URL") \
+  && GATE_DOWN_RC=0 || GATE_DOWN_RC=$?
+assert "AC4 listener UNREACHABLE (the live #7228 state) -> the beat is SUPPRESSED" \
+  "[[ '$GATE_DOWN_RC' -eq 0 ]]"
+assert "AC4 listener UNREACHABLE -> health_code is the literal 000, never an empty field" \
+  "grep -q 'health_code=000' '$GATE_LOG'"
+
+# The shared-renderer half. Without this leg the gate could be rendered into the dedicated arm
+# only and every assertion above would still pass, leaving the LIVE pusher ungated -- i.e. #7228
+# unfixed on the one host that actually feeds the monitor.
+GATE_WEB_LOG="$PING_TMP/logger-gate-web.txt"
+GATE_WEB_OUT=$(run_ping "$WEB_PING" "$CANARY_URL" "$GATE_WEB_LOG" "$HEALTH_404_URL") \
+  && GATE_WEB_RC=0 || GATE_WEB_RC=$?
+assert "AC4 the gate is present on the WEB render too (shared renderer; the live pusher is gated)" \
+  "[[ '$GATE_WEB_RC' -eq 0 ]] && grep -q 'listener=no' '$GATE_WEB_LOG'"
+GATE_WEB_OK_LOG="$PING_TMP/logger-gate-web-ok.txt"
+GATE_WEB_OK_OUT=$(run_ping "$WEB_PING" "$CANARY_URL" "$GATE_WEB_OK_LOG" "$HEALTH_OK_URL") \
+  && GATE_WEB_OK_RC=0 || GATE_WEB_OK_RC=$?
+assert "AC4 the WEB render still beats when it DOES serve (the gate is a gate, not a mute)" \
+  "[[ '$GATE_WEB_OK_RC' -eq 7 ]]"
+
+# AC3 still holds through the new branch: the suppression row must not carry the bearer URL.
+# `cat | grep -c`, never `grep -c f1 f2`: the multi-file form prints one `path:count` line PER
+# FILE, so the arithmetic compares a two-line string and the assertion fails on a clean tree.
+assert "AC4/AC3 the suppression row never leaks the heartbeat URL value" \
+  "[[ \$(cat '$GATE_LOG' '$GATE_WEB_LOG' | grep -c 'CANARY_SENTINEL') -eq 0 ]]"
+
+# ORDERING, asserted behaviourally rather than by reading the file. A dark dedicated host has no
+# URL; if the gate ran FIRST it would probe health every 60s and emit listener=no instead of the
+# dark-arm row. Driving it with a health URL that would FAIL makes the two orderings produce
+# different observable output, so this leg cannot pass under the wrong one.
+ORDER_LOG="$PING_TMP/logger-gate-order.txt"
+ORDER_OUT=$(run_ping "$DEDICATED_PING" "" "$ORDER_LOG" "$HEALTH_DOWN_URL") && ORDER_RC=0 || ORDER_RC=$?
+assert "AC4 ordering: dark arm precedes the gate (URL-absent dedicated host emits url_present=no, NOT listener=no)" \
+  "[[ '$ORDER_RC' -eq 0 ]] && grep -q 'url_present=no' '$ORDER_LOG' && ! grep -q 'listener=no' '$ORDER_LOG'"
 
 # --- #6617a (A4): the inngest-server POSITIVE liveness probe -------------------------
 # The probe ships three artifacts (script, .service, .timer) plus an `enable --now`, and had
