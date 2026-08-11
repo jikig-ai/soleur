@@ -45,30 +45,30 @@ reporting exists, and no phase makes a decision before its instrument exists.
 
 ## Phase C — Item 1: the relevance gate (~25 lines)
 
-- [ ] **C.1** Extend the coverage-notice suite (RED) with the negative-control pair, the fail-safe arm,
+- [x] **C.1** Extend the coverage-notice suite (RED) with the negative-control pair, the fail-safe arm,
       the force-all arm, and the CI arm.
-- [ ] **C.2** Rename `_infra_diff_names` → `_diff_names` throughout `scripts/test-all.sh` (it was never
+- [x] **C.2** Rename `_infra_diff_names` → `_diff_names` throughout `scripts/test-all.sh` (it was never
       infra-specific; leaving the name invites a later reader to re-narrow it).
-- [ ] **C.3** Add `_diff_touches <path…>`, reusing the three-source union and fail-SAFE arm at
+- [x] **C.3** Add `_diff_touches <path…>`, reusing the three-source union and fail-SAFE arm at
       `:237-259`, and **widen the untracked arm** from `-- apps/web-platform/infra` to the union of
       declared predicate prefixes.
-- [ ] **C.4** Make `_diff_touches` return true unconditionally when `SOLEUR_TEST_FORCE_ALL=1` **or**
+- [x] **C.4** Make `_diff_touches` return true unconditionally when `SOLEUR_TEST_FORCE_ALL=1` **or**
       `CI` is set (same `[[ -n "${CI:-}" ]]` predicate as `test-contention.sh:322`). A decline must be
       *unreachable* under CI, not detected — no CI assertion.
-- [ ] **C.5** Create `scripts/lib/test-relevance-paths.sh` (declarations only — no `set -e`, no side
+- [x] **C.5** Create `scripts/lib/test-relevance-paths.sh` (declarations only — no `set -e`, no side
       effects) and source it at **top level** of `test-all.sh`. Declare the registry predicate array
       from the battery's own declarations (`:58-59`, `:60-61`, `:70-72`, `:73-76`) **plus the battery
       file itself**.
-- [ ] **C.6** In the same data file, declare the cf-tunnel predicate array: `SUITE_REL`/`BRIDGE_REL`/
+- [x] **C.6** In the same data file, declare the cf-tunnel predicate array: `SUITE_REL`/`BRIDGE_REL`/
       `APPLY_REL` (`:37-39`), `INVENTORY_REL` (`:64`), `scheduled-terraform-drift.yml` (`:227`/`:260`),
       **all five `W7_EXPECTED` workflows** from `check-cloudflare-token-drift.test.sh:1791` including
       `git-data-cutover.yml` (mutated at `:200-205`), **plus the battery file itself**.
-- [ ] **C.7** Guard both `run_suite` lines on `_diff_touches "${ARRAY[@]}"`, calling `skip_suite` on the
+- [x] **C.7** Guard both `run_suite` lines on `_diff_touches "${ARRAY[@]}"`, calling `skip_suite` on the
       else branch. Array referenced **by name**; no path literal on a `run_suite` line.
-- [ ] **C.8** Author `ADR-178` via `/soleur:architecture` — "The local gate may decline to execute a
+- [x] **C.8** Author `ADR-178` via `/soleur:architecture` — "The local gate may decline to execute a
       suite, and every decline is a counted verdict." Re-derive the ordinal against freshly-fetched
       `origin/*` refs before writing.
-- [ ] **C.9** Run the coverage-notice suite alone. Green.
+- [x] **C.9** Run the coverage-notice suite alone. Green.
 
 ## Phase D — anti-rot (~25-30 lines in an existing linter)
 
