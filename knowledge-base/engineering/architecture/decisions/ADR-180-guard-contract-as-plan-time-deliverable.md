@@ -22,11 +22,17 @@ round's fixes**, and roughly twenty findings reduce to a single class:
 
 The instances:
 
+<!-- lint-infra-ignore start — historical finding, not a prescribed step.
+     The bullet below names what a PAST verification observed the sandbox
+     reaching (a credential surface); it instructs nobody to run anything.
+     `lint-infra-no-human-steps` matches on an actor word co-occurring with an
+     SSH/terraform token, which this record trips incidentally. -->
 - The mount-set closure assertion scoped to `BWRAP_ARGS=( … )` via a
   `sandboxWindow()` helper, while `GIT_BIND`, `BWRAP_PROC` and the exec line ALSO
   injected mounts. Three separate one-line edits each re-opened the operator's
   credential surface **with the whole suite green** — verified against live bwrap
   reaching the Doppler token, `~/.ssh` and the gh token store.
+<!-- lint-infra-ignore end -->
 - A parity floor counting ITERATIONS rather than distinct shapes.
 - A suppression grep anchored on `test` / `it` / `describe`, which are rebindable
   (`const it = test.failing;` — and bun scores a failing `.failing` test as a
