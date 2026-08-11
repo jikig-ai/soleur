@@ -271,6 +271,105 @@ single-arg path) silently returns empty strings. Use the multi-key form
 object. When a tag extraction unexpectedly groups everything under one empty
 key, sample one raw row (`SELECT raw ... LIMIT 1`) before trusting the path.
 
+## Querying the zot CONTAINER log channel (`SOLEUR_ZOT_LOG`) — registry, #7440 / ADR-179
+
+> **⚠️ THIS CHANNEL IS LIVE ONLY AFTER DELIVERY. Read this box before following the
+> queries below mid-incident.** The `soleur-registry` host is cloud-init-only (ADR-096),
+> so the shipper was **merged inert**: nothing was applied at merge time. It starts
+> emitting only after the host is next re-provisioned, via the step-6
+> `registry-host-replace` of the zot-pin ordered path. Until then every query in this
+> section correctly returns **zero rows**, and that zero is a *not-yet*, not a fault.
+> Check delivery first (below) rather than concluding the registry is silent for some
+> new reason. Enrolled probe:
+> `scripts/followthroughs/zot-log-channel-7440.sh` — run it and read its `reason=`.
+
+**What changed.** Before #7440 the only registry telemetry was the 5-minute
+`SOLEUR_ZOT_DISK` heartbeat, which samples **one** `docker logs` line per interval into
+its `zot_last_err` field. Every count derived from that channel was therefore a **lower
+bound**, not a measurement. Measured over 6h on 2026-08-11: 72 rows mentioned the host,
+all 72 were heartbeats, and zero genuine zot log lines had ever reached the warehouse.
+
+### The discriminator: a positive, host-isolated envelope
+
+Every line the shipper POSTs is prefixed:
+
+```text
+SOLEUR_ZOT_LOG shipper=zot-log-shipper host=soleur-registry <sanitized zot line>
+```
+
+**Match that prefix at offset 0. Do not grep `zotregistry.dev`.** That string returns
+53 rows over a 6h window *today, with no shipper in existence* — every one of them the
+heartbeat echoing its own `zot_last_err`. It is the canonical false green for this
+channel. And `host_name` does not exist on these rows: that field is Vector-populated
+and this host runs no Vector, so the in-message `host=` token is the only isolation
+available on a source every host ships to.
+
+### Grep encoding-safe, THEN decode, THEN field-isolate
+
+ClickHouse stores `raw` **double-encoded**: real zot JSON `"caller":"zotregistry.dev/…"`
+is stored as `\"caller\":\"zotregistry.dev`. A grep containing a quote or a colon-joined
+field name becomes a `LIKE` that matches **nothing, ever**. Use the quote-free,
+colon-free token:
+
+```bash
+# Genuine zot rows in the last 30 min (hot window; --no-archive is correct at this span).
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+  --since 30m --no-archive --limit 400 --grep SOLEUR_ZOT_LOG \
+  | jq -R -r 'fromjson? | .raw // empty' \
+  | jq -R -r 'fromjson? | .message // empty' \
+  | grep -F 'SOLEUR_ZOT_LOG shipper=zot-log-shipper host=soleur-registry '
+```
+
+`zotregistry.dev/zot/v2/pkg/api` is the zot-only substring to confirm the content really
+came from zot — it carries no quote and no colon, so it survives the double encoding.
+
+### The four evidence classes, and why the gc RATIO is the point
+
+These four are **cap-exempt** in the shipper, so they survive the rate cap during exactly
+the flood (crash-loop / pull storm) that accompanies disk growth:
+
+| String | What it answers |
+|---|---|
+| `executing gc` | the **denominator** — gc started |
+| `gc successfully completed` | gc finished |
+| `garbage collected blobs` | gc actually reclaimed |
+| `PatchBlobUpload` | orphaned `.uploads/` evidence (i/o timeouts) |
+
+`gc` runs hourly (`"gc": true`, `gcDelay`/`gcInterval` 1h). **A stalled gc emits a start
+with no completion**, so the start/complete *ratio* is the discriminator — which is why
+the channel admits starts at all. If only completions were shipped, "gc never ran", "gc
+ran fine" and "the shipper filtered it" would be indistinguishable: the lower-bound
+defect reproduced one layer up.
+
+### Is it delivered? (check this before reading any zero as a fault)
+
+```bash
+# 1. The one-shot boot marker, fired once from runcmd at provision time.
+… --grep SOLEUR_ZOT_LOG_BOOT     # boot_id=, shipper_unit=<active|failed|unknown>
+
+# 2. The reporter's INDEPENDENT path — it survives a totally dead shipper egress.
+… --grep SOLEUR_ZOT_DISK | … | grep -oE 'log_shipper_post_fail=[0-9]+|log_shipper_last_ok_age_s=-?[0-9]+|boot_id=[0-9a-f-]+'
+```
+
+- **No boot marker AND `boot_id` still `bc135d5b-…`** → not delivered. Expected; wait.
+- **Boot marker present (or `boot_id` drifted) but zero envelope rows** → *delivered and
+  dead*. **This is the state that means act, not wait.** The unit crashed, latched its
+  start-limit, or its journald match is wrong.
+- **`log_shipper_post_fail` climbing** → the unit runs but its POSTs fail; an egress or
+  token fault, not a dead unit. That counter deliberately rides the 5-min reporter rather
+  than the shipper's own channel, because a counter surfaced on the channel it monitors is
+  unobservable exactly when it is non-zero.
+- **`SOLEUR_ZOT_LOG_DROPPED n=… reason=rate_cap`** → volume exceeded the 5,000/day cap.
+  `n` is scoped to the interval that row closes; `boot_id` + `seq` are what let you detect
+  a counter discontinuity across a replace or a crash replay.
+
+### Expected volume
+
+`zot-liveness-heartbeat.timer` fires every **60s** and zot logs every request at info, so
+~**1,440 rows/day** arrive by construction before any real pull traffic. A window
+returning far fewer is a measurable shortfall, not a judgement call — the probe reports it
+as `reason=below_expected_floor`.
+
 ## Verifying disk-fullness / write-health on a deny-all host WITHOUT SSH (registry, #6122 session)
 
 > **⚠️ Correction (#6240/#6244, 2026-07-08): triangulation does NOT prove a disk is
