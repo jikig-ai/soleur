@@ -539,7 +539,7 @@ failure_modes:
     detection: "`command -v bun` probed in the precondition; `test -r` on the .ts file is
                 NOT sufficient — a missing interpreter exits 127 while the readable check
                 passes. generate-c4 additionally needs npx + network (:249-252)."
-    alert_route: "degraded row via write-kb-coverage.ts --producer-unreachable"
+    alert_route: "NOT SHIPPED — `--producer-unreachable` was designed below but not built; write-kb-coverage.ts parses only `--degraded`. The durable-artifact half of this failure mode remains open, tracked in #7452. Do not read this row as a live route."
   - mode: "Anchor regression — a bare-relative or fallback-laundered payload path returns"
     detection: "apps/web-platform/test/plugin-root-anchoring.test.ts — constrains the
                 FALLBACK, not merely token presence; fenced blocks + inline spans;
@@ -556,7 +556,7 @@ logs:
 
 discoverability_test:
   command: "bash tests/commands/test-sync-producer-reachability.sh"
-  expected_output: "PASS: all shipped producers resolve from a non-monorepo CWD"
+  expected_output: "0 failed"
 ```
 
 First token `bash` is on Check 10's `PROBE_VERB_ALLOWLIST`; the target is repo-relative

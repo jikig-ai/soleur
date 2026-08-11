@@ -95,7 +95,19 @@ if [ "$SOLEUR_ROOT_OK" -ne 1 ]; then
 fi
 ```
 
-**STOP if that block exits non-zero.** Report to the user verbatim: *"I can't run
+**Probe the producer toolchain (named degradation, not a silent 127):**
+
+```bash
+command -v bun >/dev/null 2>&1 \
+  || echo "SOLEUR_SYNC_TOOLCHAIN_MISSING tool=bun affects=c4,coverage"
+```
+
+`bun` absent is not fatal — the areas that do not need it still run — but without
+this line the failure surfaces only as `bun: command not found` with no marker,
+which is indistinguishable from the area having nothing to do. Report the missing
+toolchain to the user alongside whatever else the run produced.
+
+**STOP if the plugin-root block exits non-zero.** Report to the user verbatim: *"I can't run
 `/soleur:sync` here — I couldn't verify where the Soleur plugin is installed.
 Please reinstall the plugin and try again."* Do **not** try to locate the
 producers yourself, do **not** substitute a relative path, and do **not**

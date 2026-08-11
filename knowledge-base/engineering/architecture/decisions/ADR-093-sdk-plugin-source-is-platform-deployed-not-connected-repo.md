@@ -1,6 +1,7 @@
 # ADR-093: The SDK plugin/hook/skill source is the platform-deployed root, never the connected-repo workspace copy
 
-- **Status:** Accepted
+- **Status:** Accepted — **amended by [ADR-177](./ADR-177-bare-plugin-root-anchor-for-customer-facing-executables.md)** (2026-08-11)
+- **Amended by:** ADR-177 scopes the `${CLAUDE_PLUGIN_ROOT:-<preserved-anchor>}` guidance below **out of the customer-facing command surface** (`plugins/soleur/commands/**`), where the canonical form is now the **bare** `${CLAUDE_PLUGIN_ROOT}`. This ADR's reasoning remains correct for the server surface it was written against; a third surface (a marketplace install) has since appeared, on which the `:-` default resolves into the customer's own tree. ADR-177 also records that this ADR's §Amendment premise *"git-root = the operator's own checkout"* is falsified on the review path after `gh pr checkout` (#7450, P0). Read both before following the guidance here.
 - **Date:** 2026-07-06
 - **Issue:** [#4826](https://github.com/jikig-ai/soleur/issues/4826) (delivery wedge; the infra bug behind it)
 - **Supersedes attempt:** [#6115](https://github.com/jikig-ai/soleur/pull/6115) (reverted via [#6117](https://github.com/jikig-ai/soleur/pull/6117)) — this decision corrects that attempt: it covers BOTH SDK factories (#6115 fixed only `cc-dispatcher.ts`) and the residual in-process SKILL.md reader, and it does not gate on the (falsified) "regenerate the ADR-079 canary fixture" premise.

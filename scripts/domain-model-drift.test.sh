@@ -10,8 +10,11 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The analyzer moved into the plugin payload (#7442) so a marketplace install ships
-# it; this suite stays under scripts/ so test-all.sh's `scripts/*.test.sh` glob keeps
-# gating it. Resolve from the repo root, not as a sibling — the two now differ.
+# it; this suite stays under scripts/, registered by an explicit `run_suite` line in
+# test-all.sh. (An earlier version of this comment claimed a `scripts/*.test.sh` glob
+# keeps it gated — there is no such glob; test-all.sh says so in its own comments,
+# and lint-orphan-test-suites.sh exists precisely because registration is by hand.)
+# Resolve from the repo root, not as a sibling — the two now differ.
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DRIFT="$REPO_ROOT/plugins/soleur/scripts/domain-model-drift.sh"
 [[ -f "$DRIFT" ]] || { echo "FATAL: analyzer not found at $DRIFT" >&2; exit 2; }

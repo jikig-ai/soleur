@@ -285,7 +285,7 @@ if grep -qE '^##### Standalone contract' "$SYNC_MD"; then
 else
   echo "  FAIL: the standalone terminal contract was dropped, not reconciled"; FAIL=$((FAIL + 1))
 fi
-if grep -qE 'domain-model-drift\.sh init' "$SYNC_MD"; then
+if grep -qE '\$\{CLAUDE_PLUGIN_ROOT\}/scripts/domain-model-drift\.sh" init' "$SYNC_MD"; then
   echo "  PASS: the all-dispatch path bootstraps the register via init"; PASS=$((PASS + 1))
 else
   echo "  FAIL: the all-dispatch path does not call init — it dies on a fresh repo"; FAIL=$((FAIL + 1))
