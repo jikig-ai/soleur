@@ -201,9 +201,14 @@ escalates instead of reporting TRANSIENT forever.
 `adopting → accepted` on the **first PASS** of `scripts/followthroughs/zot-log-channel-7440.sh` —
 an envelope-stamped row read back OUT of the warehouse, which no exit code on the host can fake.
 
-The probe is enrolled on a **dedicated tracker**, never on #7440. That is not a preference: the
-sweeper lists `--state open`, and on the closed issue this PR's `Closes` produces, a correct exit-2
-probe is a permanent silent no-op with no artifact to flip this ADR.
+The probe is enrolled on a **dedicated tracker (#7455)**, never on #7440. That is not a preference:
+the sweeper lists `--state open`, and on the closed issue this PR's `Closes` produces, a correct
+exit-2 probe is a permanent silent no-op with no artifact to flip this ADR.
+
+Deferred work from this change is consolidated on **#7456**: the root-filesystem LUKS exception
+recorded below (expires 2027-02-11), the forward-looking growth-attribution discriminator, and any
+rate-cap retune. The retune is tracked rather than implied to be free because changing the cap needs
+another cloud-init edit and therefore another provisioning event.
 
 ## Ordinal derivation
 

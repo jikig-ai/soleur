@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # #7440 / ADR-179 — post-delivery readback for the registry host's zot container-log channel.
 #
-# TRACKER: a DEDICATED issue. **NOT #7440** — that issue is closed by the shipping PR, and
+# TRACKER: **#7455** (dedicated). **NOT #7440** — that issue is closed by the shipping PR, and
 # scripts/sweep-followthroughs.sh lists `--state open`, so a probe hosted there would be a
 # permanent silent no-op: on a closed issue rc=0 takes "no action, no comment" and rc=2 likewise,
 # so even the eventual real PASS would leave NO artifact to flip ADR-179 — and CLOSED_LOOKBACK_DAYS
-# removes the issue from the candidate set entirely after two weeks. The dedicated tracker's number
-# is in the directive comment on that issue, not here, so this file needs no edit when it is filed.
+# removes the issue from the candidate set entirely after two weeks. The sweeper resolves the host
+# from the directive comment on #7455, so this reference is for a human reader; changing it does not
+# re-route the probe.
 #
 # WHAT IT CLOSES. ADR-179 ships at status `adopting`. Its flip condition is an OBSERVED
 # envelope-stamped row read back OUT of the warehouse. That cannot happen before merge:
