@@ -12,10 +12,20 @@ RED before GREEN for every behavioral change (`cq-write-failing-tests-before`).
       hour, field-isolated on `host`. Self-pull via
       `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh`.
       Never ask the operator to fetch (`hr-no-dashboard-eyeball-pull-data-yourself`).
-- [ ] 0.2 Confirm brake run 31486949232's outcome. Predicted: `confirm_flip_state` times out
-      because the host ships no rows, so the run exits 1 while the flag write lands. Record which
-      value `INNGEST_CUTOVER_FLIP` actually rests at — `rollback` vs `rolled-back` — and do not
-      assert the terminal state without a discriminator.
+- [x] 0.2 **DONE — measured 2026-08-11.** Brake run 31486949232 completed `failure`, exactly as
+      the review predicted: `op=rollback: the FSM did not confirm rolled-back within 600s
+      (state='timeout'; the write DID land). WITHHOLDING`. Consequences, all verified from the run
+      log rather than inferred:
+      - The brake **is set**: `INNGEST_CUTOVER_FLIP=rollback` landed. That value is outside the
+        flip guard's `{armed, flipping, flushed, done}` allowlist, so a prod-URI start on
+        10.0.1.40 is now refused. **This is why Phase 2.3's diagnostic boot is mandatory** — the
+        replaced host cannot bind against a prod backend until the flag is deliberately re-armed.
+      - It **fail-closed correctly**: having failed to confirm, it withheld Half (B), the
+        `INNGEST_HEARTBEAT_URL` delete. Nothing is half-applied.
+      - The flag rests at `rollback`, **not** `rolled-back`. Do not assert the terminal state.
+      - Independent corroboration that the host is dark: 40 polls over 600s produced no terminal
+        flag marker. Do NOT over-read this — it cannot distinguish "FSM not running" from "Vector
+        not shipping". It narrows nothing on its own; the diagnostic boot is still what decides.
 - [ ] 0.3 Confirm `run-registered-suites.sh` still derives its list from `infra-validation.yml`,
       so new suites must be registered there to run at all.
 
