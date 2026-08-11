@@ -114,7 +114,12 @@ The `SOLEUR_SKILL_NAME` + `SOLEUR_EXPECTED_DURATION_MIN` env wire a lease on thi
 ```bash
 # Degrade open (#7409): releasing is advisory — an unreleased lease expires on
 # its own window — so a missing library must not fail the pipeline here.
-bash "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/scripts/lib/session-state.sh" release_lease "$(basename "$PWD")" || true
+SS_LIB="${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/scripts/lib/session-state.sh"
+if [[ -r "$SS_LIB" ]]; then
+  bash "$SS_LIB" release_lease "$(basename "$PWD")" || true
+else
+  echo "SOLEUR_SESSION_STATE_UNAVAILABLE path=$SS_LIB reason=lease-not-released"
+fi
 ```
 
 **Step 0c: Create draft PR.** After creating the feature branch, create a draft PR from inside the worktree (the script errors with "Cannot run from bare repo root" otherwise — use a single `cd && bash` so the target tree is explicit and cannot be silently redirected by a prior call that `cd`d elsewhere; CWD persists across Bash calls, but relying on ambient CWD is fragile):

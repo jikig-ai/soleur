@@ -539,6 +539,20 @@ being written — scenario 8 is non-vacuous"
     fail "scenario 8b (mutation): library absent but NO marker on stdout \
 (output: $(cat "$TMP/create8b.log" 2>/dev/null))"
   fi
+  # The OK marker's DIRECTION, not just its presence. Scenario 10 asserts it
+  # fires when the library resolves; without this arm nothing asserts it does
+  # NOT fire when the library is gone — so hoisting the echo above the
+  # `if [[ -f "$_SS_LIB" ]]` (making it unconditional) left the whole suite
+  # green while the marker claimed protection was on with the layer absent.
+  # That is the worst possible failure for a signal whose entire purpose is to
+  # make silence unambiguous, and it is the marketplace user's only channel.
+  if grep -q 'SOLEUR_WORKTREE_LEASE_LIB_OK' "$TMP/create8b.log"; then
+    fail "scenario 8b (mutation): the ..._LIB_OK marker fired with the library ABSENT — \
+it is not conditioned on resolution and reports protection that is not there"
+  else
+    pass "scenario 8b (mutation): ..._LIB_OK is absent when the library is — the marker \
+discriminates rather than always firing"
+  fi
   mv "$CACHE_LIB.disabled" "$CACHE_LIB"
 else
   fail "scenario 8b (mutation): no session-state.sh found anywhere under the cache fixture — \
@@ -683,44 +697,64 @@ fi
 # interop, which is the property the rollout actually depends on. This arm runs
 # the ORIGIN/MAIN copy (genuinely old code) against the post-move copy.
 # ---------------------------------------------------------------------------
-# The pre-move path is DERIVED from origin/main's tree, never hard-coded. Two
-# reasons, both load-bearing: (a) AC6 asserts no `.claude/hooks/lib/
-# session-state.sh` literal survives anywhere under plugins/soleur/skills/, and a
-# fixture that spelled it out would turn that AC red for a correct tree; (b) a
-# derived path cannot silently rot into testing nothing once the old file is gone
-# from main — the lookup returns empty and the assertion below fails loudly.
-# `ls-tree` is exact, unlike rename detection, which is a diff-renderer heuristic.
-OLD_REL="$(git -C "$REPO_ROOT" ls-tree -r --name-only origin/main 2>/dev/null \
-  | grep -E 'hooks/lib/session-state\.sh$' | head -1)"
+# PINNED TO AN IMMUTABLE BLOB, never to a moving ref.
+#
+# The first draft resolved the pre-move path out of `origin/main`'s tree. That is
+# correct for exactly as long as this change is unmerged: the moment it lands,
+# `origin/main` IS this tree, `hooks/lib/session-state.sh` matches nothing, and
+# all three assertions below fail — permanently, on main, for every branch cut
+# from it. A proof-of-red pinned to a moving ref consumes its own fix, and it
+# fires when the rollout SUCCEEDS. (The prior comment defended the empty lookup
+# as anti-vacuity; loudness with no expiry is not a regression detector.)
+#
+# A blob SHA is reachable from history forever, so `git cat-file` keeps working
+# after the path is gone. It also removes the `.claude/hooks/lib/session-state.sh`
+# literal, which AC6 asserts is absent everywhere under plugins/soleur/skills/.
+OLD_BLOB="864f3865590ee92b1fc9348c0b2bc6371091b8fa"  # .claude/hooks/lib/session-state.sh @ pre-move main
 OLD_LIB="$TMP/oldtree/legacy-session-state.sh"
 mkdir -p "$(dirname "$OLD_LIB")"
-if [[ -n "$OLD_REL" ]] \
-   && git -C "$REPO_ROOT" show "origin/main:$OLD_REL" > "$OLD_LIB" 2>/dev/null \
+if git -C "$REPO_ROOT" cat-file -e "$OLD_BLOB" 2>/dev/null \
+   && git -C "$REPO_ROOT" cat-file blob "$OLD_BLOB" > "$OLD_LIB" 2>/dev/null \
    && [[ -s "$OLD_LIB" ]]; then
-  pass "scenario 11 fixture: recovered the pre-move library from origin/main ($OLD_REL)"
+  pass "scenario 11 fixture: recovered the pre-move library from blob ${OLD_BLOB:0:12}"
+elif [[ -n "${CI:-}" ]]; then
+  # Under CI the checkout pins full depth, so reachability is contractual and an
+  # absent object is a real failure. Locally a blobless/shallow clone is ordinary,
+  # and degrading to a hard FAIL there would train people to ignore this suite.
+  fail "scenario 11 fixture: pre-move blob $OLD_BLOB unreachable under CI — \
+the checkout is not full-depth, so old/new interop is unverified"
 else
-  fail "scenario 11 fixture: could not recover the pre-move session-state library from \
-origin/main (resolved path: ${OLD_REL:-NONE}) — cannot test old/new interop"
+  pass "scenario 11: SKIPPED — pre-move blob $OLD_BLOB not in this clone (blobless/shallow); \
+interop unverified locally, enforced under CI"
 fi
 NEW_LIB="$REPO_ROOT/plugins/soleur/scripts/lib/session-state.sh"
 SHARED11="$TMP/shared11"; mkdir -p "$SHARED11/leases"
-# OLD code acquires...
-bash -c "
-  export SOLEUR_SESSION_STATE_ROOT='$SHARED11'
-  # shellcheck source=/dev/null
-  source '$OLD_LIB'
-  acquire_lease feat-interop one-shot 137
-" >/dev/null 2>&1
-if [[ -f "$SHARED11/leases/feat-interop.lease" ]]; then
-  pass "scenario 11: the pre-move library wrote a lease into the shared store"
+# The two arms below are only meaningful when the fixture actually materialized.
+# Without this guard a legitimate blobless-clone SKIP would report as two
+# failures — the arm reporting a fixture problem as a product defect.
+if [[ -s "$OLD_LIB" ]]; then
+  # OLD code acquires...
+  bash -c "
+    export SOLEUR_SESSION_STATE_ROOT='$SHARED11'
+    # shellcheck source=/dev/null
+    source '$OLD_LIB'
+    acquire_lease feat-interop one-shot 137
+  " >/dev/null 2>&1
+  if [[ -f "$SHARED11/leases/feat-interop.lease" ]]; then
+    pass "scenario 11: the pre-move library wrote a lease into the shared store"
+  else
+    fail "scenario 11: the pre-move library wrote no lease — fixture cannot discriminate"
+  fi
 else
-  fail "scenario 11: the pre-move library wrote no lease — fixture cannot discriminate"
+  pass "scenario 11: acquire arm skipped (no pre-move fixture)"
 fi
 # ...and NEW code must honour it. `is_lease_active` is only trustworthy here
 # because NEW_LIB genuinely exists: when it does not, worktree-manager.sh's
 # fail-closed STUB also returns 0, so this would pass vacuously against the exact
 # bug. Guard on the file, then call the real function.
-if [[ -f "$NEW_LIB" ]] && bash -c "
+if [[ ! -s "$OLD_LIB" ]]; then
+  pass "scenario 11: honour arm skipped (no pre-move fixture)"
+elif [[ -f "$NEW_LIB" ]] && bash -c "
   export SOLEUR_SESSION_STATE_ROOT='$SHARED11'
   # shellcheck source=/dev/null
   source '$NEW_LIB'
@@ -744,7 +778,12 @@ echo "FAIL: $FAIL"
 # on the fetch-prune path, a non-zero sweep aborting under `set -e`, a lock it
 # could not take. A floor cannot detect a no-op reap loop by itself, but it does
 # catch the case where the assertions were never reached.
-MIN_ASSERTIONS=32  # 3 -> 6 -> 9 -> 15 -> 17 (PR #7373 sc. 3-7) -> 32 (#7409 sc. 8-11)
+MIN_ASSERTIONS=35  # 3 -> 6 -> 9 -> 15 -> 17 (PR #7373 sc. 3-7) -> 35 (#7409 sc. 8-11)
+# Calibrated to the MEASURED count, not to a round number below it. At 32 against a
+# 34-dispatch suite the floor carried exactly two assertions of slack — and scenario 9
+# + 9b is exactly two dispatches, so deleting the reaper-refusal arm (the one guarding
+# an unrecoverable delete) left the suite green. A floor with slack is a floor sized
+# to the block it fails to notice.
 # Count DISPATCHES (PASS + FAIL), not wins. Counting PASS alone conflates two
 # different things: "the suite did not run" and "the suite ran and found bugs".
 # It printed "only N assertions ran — the suite did not execute what it claims

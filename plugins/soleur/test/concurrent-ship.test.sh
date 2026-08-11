@@ -55,6 +55,92 @@ for f in "${SKILL_FILES[@]}"; do
 done
 
 # ---------------------------------------------------------------------------
+# T1b (#7409): T1 alone can no longer distinguish "every invocation is wrapped"
+# from "one of two is".
+#
+# Before #7409 each of these files held exactly ONE `gh pr merge --auto`, so a
+# file-scoped presence grep for `with_lock merge-main` was a sound proxy for
+# "the invocation is wrapped". #7409 added a deliberately-UNLOCKED second
+# invocation in a degrade-open else arm — so the bare token now matches whether
+# or not the locked arm still exists, and deleting the locked arm would leave
+# T1 green. This asserts the STRUCTURE the pair is supposed to have.
+# ---------------------------------------------------------------------------
+echo "T1b: the locked arm and the degrade-open arm both exist, and nothing else merges"
+
+for f in "${SKILL_FILES[@]}"; do
+  path="$REPO_ROOT/$f"
+  [[ -f "$path" ]] || { fail "T1b: missing file $f"; continue; }
+
+  # Anchor on the call form, not a bare token: these files also DISCUSS the
+  # wrapper in prose, and a bare `with_lock merge-main` is satisfied by that.
+  locked=$(grep -cE 'bash "\$SS_LIB" with_lock merge-main' "$path" || true)
+  unlocked_marker=$(grep -cE 'reason=running-unlocked' "$path" || true)
+
+  if [[ "$locked" -eq 1 ]]; then
+    pass "T1b: $f has exactly one LOCKED merge invocation"
+  else
+    fail "T1b: $f has $locked locked merge invocations (expected exactly 1) — \
+the degrade-open arm makes T1's presence grep unable to catch this"
+  fi
+
+  if [[ "$unlocked_marker" -ge 1 ]]; then
+    pass "T1b: $f announces the unlocked arm (reason=running-unlocked)"
+  else
+    fail "T1b: $f runs a merge unlocked without emitting reason=running-unlocked — \
+a silent unserialised merge"
+  fi
+
+  # NO cardinality leg here. A `grep -c 'gh pr merge'` counts PROSE mentions as
+  # well as invocations — measured: 12 in ship/SKILL.md, 4 in merge-pr, 3 in
+  # product-roadmap — so "expected 2" fails on a correct file. Catching a third,
+  # unaccounted invocation would need a real shell parse; the two assertions
+  # above pin what this suite can actually measure.
+done
+
+# ---------------------------------------------------------------------------
+# T1c (#7409): the seven SKILL.md anchor sites — the actual deliverable.
+#
+# Nothing pinned these. #7409's whole user-visible effect is that seven
+# agent-executed snippets resolve the library through the plugin-root anchor
+# instead of a repo-only path; reverting all seven left every suite green,
+# because the one scenario that exercises an anchor types the command into the
+# test rather than reading it from SKILL.md. AC6 was a manual grep, which is
+# not a gate.
+# ---------------------------------------------------------------------------
+echo "T1c: all seven SKILL.md sites resolve session-state through the plugin-root anchor"
+
+declare -a ANCHOR_SITES=(
+  "plugins/soleur/skills/merge-pr/SKILL.md"
+  "plugins/soleur/skills/ship/SKILL.md"
+  "plugins/soleur/skills/product-roadmap/SKILL.md"
+  "plugins/soleur/skills/schedule/SKILL.md"
+  "plugins/soleur/skills/one-shot/SKILL.md"
+  "plugins/soleur/skills/work/SKILL.md"
+  "plugins/soleur/skills/git-worktree/SKILL.md"
+)
+
+for f in "${ANCHOR_SITES[@]}"; do
+  path="$REPO_ROOT/$f"
+  [[ -f "$path" ]] || { fail "T1c: missing file $f"; continue; }
+
+  # Presence of the new shape, then absence of the old — in that order. An
+  # absence-only assertion is satisfied by DELETING the call site.
+  if grep -qE '\$\{CLAUDE_PLUGIN_ROOT:-[^}]+\}/scripts/lib/session-state\.sh' "$path"; then
+    pass "T1c: $f anchors session-state at \${CLAUDE_PLUGIN_ROOT:-…}/scripts/lib/"
+  else
+    fail "T1c: $f does not resolve session-state through the plugin-root anchor — \
+a marketplace install cannot reach the library from this site (#7409)"
+  fi
+
+  if grep -qE '\.claude/hooks/lib/session-state\.sh' "$path"; then
+    fail "T1c: $f still references the pre-#7409 repo-only path, which does not \
+exist in a marketplace install"
+  else
+    pass "T1c: $f carries no reference to the pre-#7409 repo-only path"
+  fi
+done
+
+# ---------------------------------------------------------------------------
 # T2: Serialization smoke — primitive correctness under contention
 # ---------------------------------------------------------------------------
 echo "T2: parallel acquire_lock merge-main serializes critical sections"

@@ -235,7 +235,7 @@ Present an output summary listing the document path, milestones created, issues 
 
    ```bash
    SS_LIB="${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/scripts/lib/session-state.sh"
-   if [[ -r "$SS_LIB" ]]; then
+   if [[ -r "$SS_LIB" ]] && command -v flock >/dev/null 2>&1; then
      bash "$SS_LIB" with_lock merge-main 600 -- \
        gh pr merge <number> --squash --auto
      rc=$?
@@ -244,13 +244,20 @@ Present an output summary listing the document path, milestones created, issues 
      # sessions queueing auto-merge. Failing closed here would leave a marketplace
      # user's PR simply never queued, which is the original bug with a nicer
      # message. Run the command unlocked and say so.
-     echo "SOLEUR_SESSION_STATE_LIB_MISSING path=$SS_LIB reason=running-unlocked"
+     echo "SOLEUR_SESSION_STATE_UNAVAILABLE path=$SS_LIB reason=running-unlocked"
      gh pr merge <number> --squash --auto
      rc=$?
    fi
+   # Both arms above capture rc, so something must READ it. Without this branch
+   # the capture is a dead assignment and a contended merge is silently treated
+   # as queued — the sibling blocks in merge-pr and ship both carry it.
+   if [[ "$rc" -eq 99 ]]; then
+     echo "merge-main lock could not be taken (contention >600s, or the lock file could not be opened) — the merge was NOT queued. Retry."
+     exit 1
+   fi
    ```
 
-   If the wrapper returns rc=99, the lock was contended for >600s and the merge was NOT queued — surface to the operator and retry rather than assuming success. **rc=99 is reachable only from the locked branch**: the degrade-open branch runs `gh pr merge` bare, which has no contention semantics, so a run that emitted `reason=running-unlocked` can never report rc=99 and its merge was queued without serialisation.
+   rc=99 is reachable only from the LOCKED arm — the degrade-open arm runs `gh pr merge` bare, which has no lock semantics — so a run that emitted `reason=running-unlocked` queued its merge without serialisation rather than failing. Note 99 means "the lock could not be taken", which includes an unopenable lock file, not only >600s contention.
 4. Poll the PR using the Monitor tool with the same state machine as `/soleur:ship` Phase 7 (state+`mergeStateStatus`, BEHIND auto-sync capped at 6, required-check failure exit, DIRTY exit). Naive `gh pr view <number> --json state` is insufficient — it heartbeats silently through BEHIND / BLOCKED-with-CI-failure / DIRTY states. Reuse the loop body from `plugins/soleur/skills/ship/SKILL.md` Phase 7. **Precondition:** must run from inside a worktree (`git rev-parse --is-inside-work-tree`) — the BEHIND auto-sync uses `git merge origin/main && git push`.
 5. Run `cleanup-merged` to remove the worktree.
 

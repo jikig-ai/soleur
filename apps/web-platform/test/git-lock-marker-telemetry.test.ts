@@ -2,7 +2,7 @@
 // the pure extractor, tool_response coercion, and the PostToolUse hook's fail-open
 // classification (wedge → error, diag-only → warn, non-Bash → no-op).
 import { describe, test, expect } from "vitest";
-import { readFileSync } from "fs";
+import { readFileSync, readdirSync, existsSync } from "fs";
 import { join } from "path";
 import {
   extractGitLockMarkers,
@@ -222,6 +222,20 @@ describe("drift guard: every sentinel the shell script emits is mirrored", () =>
       "../../../plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh",
       "../../../plugins/soleur/skills/git-worktree/scripts/git-repo-readiness-diag.sh",
     ].map((p) => readFileSync(join(__dirname, p), "utf8"));
+    // SKILL.md files are scanned too (#7409). The two .sh paths above were the
+    // entire scan set, so a `SOLEUR_*` sentinel authored in agent-executed
+    // SKILL.md prose was invisible to this guard FOREVER — which is exactly what
+    // happened: #7409's degrade-open arms minted a new failure marker across five
+    // skills and it reached no telemetry layer, while the guard stayed green.
+    // Derived from the directory rather than listed, so a new skill cannot add an
+    // unmirrored sentinel by being absent from a hand-maintained array.
+    const skillsDir = join(__dirname, "../../../plugins/soleur/skills");
+    const skillDocs = readdirSync(skillsDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => join(skillsDir, e.name, "SKILL.md"))
+      .filter((p) => existsSync(p))
+      .map((p) => readFileSync(p, "utf8"));
+    scripts.push(...skillDocs);
     // Both scripts emit `echo "SOLEUR_..."` sentinels; also collect the non-SOLEUR_-prefixed
     // fatal markers now in the allowlist (D1b): `NO_GIT_REPOSITORY` (the repo-readiness gate),
     // the `SOLEUR_FEATURE_*` push-failure, and the `worktree wedge:` give-up phrase (this PR

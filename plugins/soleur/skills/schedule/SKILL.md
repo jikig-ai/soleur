@@ -469,7 +469,7 @@ jobs:
                  parallel CC sessions don't queue concurrent auto-merges
                  (the `--` separator terminates `with_lock`'s positional
                  args; required):
-                 `MERGE_ERR="$(mktemp -t merge.XXXXXXXX.err)"; SS_LIB="${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/scripts/lib/session-state.sh"; if [[ -r "$SS_LIB" ]]; then bash "$SS_LIB" with_lock merge-main 600 -- gh pr merge --squash --auto "$PR_URL" 2>"$MERGE_ERR"; else echo "SOLEUR_SESSION_STATE_LIB_MISSING path=$SS_LIB reason=running-unlocked"; gh pr merge --squash --auto "$PR_URL" 2>"$MERGE_ERR"; fi`.
+                 `MERGE_ERR="$(mktemp -t merge.XXXXXXXX.err)"; SS_LIB="${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/scripts/lib/session-state.sh"; if [[ -r "$SS_LIB" ]] && command -v flock >/dev/null 2>&1; then bash "$SS_LIB" with_lock merge-main 600 -- gh pr merge --squash --auto "$PR_URL" 2>"$MERGE_ERR"; else echo "SOLEUR_SESSION_STATE_UNAVAILABLE path=$SS_LIB reason=running-unlocked"; gh pr merge --squash --auto "$PR_URL" 2>"$MERGE_ERR"; fi`.
                  `MERGE_ERR` is hoisted out of both arms deliberately: the
                  stderr file has to be nameable by the check two paragraphs
                  down, and a `mktemp` inside each branch would produce a
