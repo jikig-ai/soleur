@@ -766,7 +766,19 @@ assert "A4 a failed curl degrades http_code to the literal 000, not to an empty 
   "grep -qE 'http_code=000( |\$)' '$PROBE_LOG'"
 # Every field present and non-empty. An empty field silently reads as "no data" in Better
 # Stack, which is the same ambiguity a missing row creates.
-for _f in server_active vector_active redis_active uptime_s boot_id image_ref; do
+# #7228 adds instance_id, cli_version and cutover_flag. The three answer questions the existing
+# fields structurally cannot, and each one was needed during this incident and unavailable:
+#   instance_id  — WHICH host emitted this. 1,459 of 1,839 rows naming inngest-server.service
+#                  came from the CO-LOCATED web host, so a substring query over the shared source
+#                  table manufactures a false all-clear. This is the field that makes a row
+#                  self-identifying instead of requiring the query to get field-isolation right.
+#   cli_version  — the running binary, not the pinned one. inngest.tf pins a version; whether the
+#                  host actually runs it is a different claim, and only the host can answer it.
+#   cutover_flag — the FSM state the flip guard will actually read at the next start. The guard
+#                  refuses every prod-URI start outside {armed, flipping, flushed, done}, so this
+#                  is the difference between "the host is broken" and "the host is refusing on
+#                  purpose" — the distinction that cost this incident the most time.
+for _f in server_active vector_active redis_active uptime_s boot_id image_ref instance_id cli_version cutover_flag; do
   assert "A4 probe marker carries a non-empty $_f= field" \
     "grep -qE '$_f=[^ ]+' '$PROBE_LOG'"
 done
@@ -777,6 +789,28 @@ done
 # exists to close. Both sides pinned so a rename on either drifts loudly.
 assert "A4 the image field is named image_ref (it carries a full ref, not a bare sha)" \
   "grep -qE 'image_ref=' '$PROBE_LOG' && ! grep -qE 'image_sha=' '$PROBE_LOG'"
+
+# --- #7228: the three new fields must COST NOTHING in cadence or quota -----------------------
+# The obvious way to ship instance_id/cli_version/cutover_flag is a second, faster timer with its
+# own SYSLOG_IDENTIFIER — and the plan review struck exactly that from the first draft. Source 4
+# applies NO PRIORITY filter, so every fire ships a row: at 60s a single marker costs ~1,440
+# rows/day against a ~25k/day quota, which is precisely the cost #6617b removed from the
+# heartbeat in this same subsystem. vector.toml calls any new timer-driven tag "a fresh quota
+# decision". The fields therefore ride the EXISTING hourly marker, and these assertions are what
+# stop a later edit from quietly reintroducing the cost.
+#
+# The "exactly ONE marker row per fire" assertion above already proves the fields ride the
+# existing row rather than a new one; these pin the artifacts.
+assert "A4/#7228 the bootstrap declares exactly ONE probe timer (no second, faster timer was added)" \
+  "[[ \$(grep -cE '^readonly PROBE_TIMER=' '$BOOTSTRAP_SH') -eq 1 ]]"
+assert "A4/#7228 the probe unit still ships exactly ONE SyslogIdentifier, unchanged (no new Source 4 tag)" \
+  "[[ \$(printf '%s\n' \"\$PROBE_UNIT_BLOCK\" | grep -cE '^SyslogIdentifier=') -eq 1 ]] && printf '%s\n' \"\$PROBE_UNIT_BLOCK\" | grep -qE '^SyslogIdentifier=inngest-server-probe$'"
+# The cutover_flag read needs Doppler credentials, and the ONLY safe way to give a shared-renderer
+# unit an env file that exists on just one of the two hosts is the `-` prefix. Without it systemd
+# fails the unit outright on the co-located web host — a change made to ADD observability would
+# silently DELETE it on one host. Anchored on the `=-` construct, which a comment cannot produce.
+assert "A4/#7228 the probe unit's EnvironmentFile is OPTIONAL (\`=-\`), so the co-located host's probe still runs" \
+  "printf '%s\n' \"\$PROBE_UNIT_BLOCK\" | grep -qE '^EnvironmentFile=-/etc/default/inngest-doppler$'"
 assert "A4 cloud-init writes INNGEST_BOOTSTRAP_IMAGE from the full \$IREF (what image_ref reports)" \
   "grep -qF \"printf 'INNGEST_BOOTSTRAP_IMAGE=%s\\\\n' \\\"\\\$IREF\\\"\" '$SCRIPT_DIR/cloud-init-inngest.yml'"
 
@@ -823,7 +857,7 @@ assert "P2-B vector_active=inactive ALSO reaches the Vector-independent phone-ho
   "[[ -s '$PROBE_PH_LOG' ]] && grep -qF 'vector_active=inactive' '$PROBE_PH_LOG'"
 # Same fields on both channels — an off-box consumer reading only the phone-home row must be
 # able to make the same call as one reading the journald row.
-for _f in http_code server_active redis_active uptime_s boot_id image_ref; do
+for _f in http_code server_active redis_active uptime_s boot_id image_ref instance_id cli_version cutover_flag; do
   assert "P2-B the phone-home payload carries the same $_f= field as the journald marker" \
     "grep -qE '$_f=[^ ]+' '$PROBE_PH_LOG'"
 done

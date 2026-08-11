@@ -534,8 +534,42 @@ boot_id="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
 image_ref="$(sed -n 's/^INNGEST_BOOTSTRAP_IMAGE=//p' /etc/default/soleur-inngest-image 2>/dev/null | head -1 || true)"
 [ -n "$image_ref" ] || image_ref=unknown
 
+# --- #7228: three fields whose absence cost this incident the most time -----------------
+# WHICH HOST IS THIS. 1,459 of the 1,839 rows naming inngest-server.service in a 72h window
+# came from the CO-LOCATED web host, so a substring query over the shared source table returns
+# healthy-looking rows FROM THE WRONG HOST and manufactures a false all-clear — the #7228 title
+# ("health probe certified a different server") reproduced one layer down, in the telemetry.
+# This field makes a row self-identifying instead of depending on the reader field-isolating
+# correctly. Hetzner IMDS only, deliberately: cat-deploy-state.sh's resolve_host_id() falls back
+# to /etc/machine-id and must HASH it, because machine-id(5) says the value is confidential and
+# this row's destination is a third-party vendor. Rather than carry that obligation into a
+# POSIX-sh heredoc, an unreachable IMDS degrades to `unknown` — honest, and never a leak.
+# (Fourth site to resolve a host id; cat-deploy-state.sh:32 names a 4th copy as the #6465
+# extraction trigger. Not a copy of that bash helper — no machine-id arm, no hashing — but the
+# same question, so it belongs on that ticket rather than being extracted mid-incident.)
+instance_id="$(curl -sf --max-time 3 http://169.254.169.254/hetzner/v1/metadata/instance-id 2>/dev/null || true)"
+case "$instance_id" in '' | *[!0-9]*) instance_id=unknown ;; *) instance_id="hetzner-$instance_id" ;; esac
+
+# WHAT IS ACTUALLY RUNNING. inngest.tf pins a version; whether the host runs it is a DIFFERENT
+# claim, and only the host can answer it. A replace that silently landed an older image is
+# indistinguishable from a healthy one without this.
+cli_version="$(/usr/local/bin/inngest version 2>/dev/null | head -1 || true)"
+[ -n "$cli_version" ] || cli_version=unknown
+
+# WHY THE SERVER IS NOT RUNNING, when it is not. inngest-server-flip-guard.sh refuses EVERY
+# prod-URI start on a flag outside {armed, flipping, flushed, done}, so this field is the
+# difference between "the host is broken" and "the host is refusing on purpose". During this
+# incident the flag sat at `rollback` — outside the allowlist — and nothing off-box could say
+# so. Read from Doppler rather than the local state slot because Doppler is what the guard
+# itself reads; the slot records the FSM's last write, which is a different question.
+# doppler's stderr is discarded, never shipped: this row's tag is allowlisted, so raw stderr
+# from a credentialed CLI would be a route from the token's own error text to Better Stack.
+cutover_flag="$(doppler secrets get INNGEST_CUTOVER_FLIP --project soleur-inngest --config prd --plain 2>/dev/null || true)"
+cutover_flag="$(printf '%s' "$cutover_flag" | tr -d '[:space:]')"
+[ -n "$cutover_flag" ] || cutover_flag=unknown
+
 # --- emit: unconditional, one event, all fields. NO `if` may precede this line. ---
-logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref"
+logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag"
 
 # --- second channel, AFTER the unconditional emit above (ADR-117 unaffected) ---
 # vector_active is the ONE field whose only off-box path is Vector itself: this marker reaches
@@ -552,7 +586,7 @@ logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_ac
 # branching BEFORE the unconditional emit, not after it. Fail-open: the emitter exits 0 on any
 # error and is absent on the co-located web host, so `[ -x ]` guards it.
 if [ "$vector_active" != "active" ] && [ -x /usr/local/bin/inngest-boot-phone-home.sh ]; then
-  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref" || true
+  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag" || true
 fi
 exit 0
 PROBESCRIPTEOF
@@ -568,6 +602,16 @@ Type=oneshot
 # ZERO vector.toml sources and the marker never leaves the host — the #6536 defect exactly.
 # Source 4 (vector.toml host_scripts_journald) carries the matching exact-value entry.
 SyslogIdentifier=inngest-server-probe
+# #7228: the cutover_flag field reads Doppler, which needs DOPPLER_TOKEN + DOPPLER_CONFIG_DIR
+# and — per the #6122 boot fix — HOME, all of which live here.
+#
+# The leading `-` is load-bearing, not decoration. This bootstrap is the SHARED renderer for
+# both hosts, and /etc/default/inngest-doppler is written by cloud-init-inngest.yml, which is
+# the DEDICATED host's userdata only. Without the `-`, systemd fails the unit outright on the
+# co-located web host and the probe stops firing there entirely — a change made to add
+# observability would delete it on one of the two hosts. With it, the web host simply reports
+# cutover_flag=unknown, which is honest: that host has no cutover flag.
+EnvironmentFile=-/etc/default/inngest-doppler
 ExecStart=/usr/local/bin/inngest-server-probe.sh
 PROBEUNITEOF
 
