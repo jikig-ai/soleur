@@ -142,12 +142,12 @@ Before spawning review agents, classify the PR to avoid spawning agents whose ex
 
 **Suite scope for every agent below — a review agent never runs the gate.**
 Spawned agents run only the suites targeting the files they were given, and are spawned with
-`SOLEUR_SUBAGENT=1` in their environment. They must not run `scripts/test-all.sh`,
+`SOLEUR_SUBAGENT=1` in their environment. They must not run [scripts/test-all.sh](../../../../scripts/test-all.sh),
 `apps/web-platform/infra/run-registered-suites.sh`, or any other full-gate runner: this panel is
 the densest concurrency in the whole pipeline, and concurrent full-gate runs inflate each other's
 timings and corrupt the measurement. Measured 2026-08-11 — three agents running lints and suites
 at once turned an 860 s battery into 1675 s. The lead runs the gate ONCE, after the panel
-returns. `scripts/test-all.sh` enforces this mechanically (it exits 3 when `SOLEUR_SUBAGENT=1`),
+returns. [scripts/test-all.sh](../../../../scripts/test-all.sh) enforces this mechanically (it exits 3 when `SOLEUR_SUBAGENT=1`),
 because a paragraph in a prompt is agent discretion and this is not.
 
 <parallel_tasks>

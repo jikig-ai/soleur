@@ -302,7 +302,18 @@ run_gate_arm() {
   build_sandbox "$sb" 0 >/dev/null || { fail "sandbox build failed for gate arm $label"; return 1; }
   export SANDBOX_RECORD="$TMP/record-gate-${label}.txt"
   : > "$SANDBOX_RECORD"
-  GATE_OUT=$(cd "$REPO_ROOT" && env TEST_GROUP=all SOLEUR_INCIDENT_SKIP=0 \
+  # SOLEUR_TEST_FORCE_ALL and CI are CLEARED here, before "$@", so an arm that wants either can
+  # still set it and win (env takes the last assignment).
+  #
+  # This is not defensive noise — it is the arm's entire premise. Both are unconditional bypasses
+  # in _diff_touches, so an INHERITED value makes every decline unreachable and each
+  # "battery is declined" assertion passes vacuously. Two environments set them for real: the
+  # sanctioned gate run exports SOLEUR_TEST_FORCE_ALL=1, and CI sets CI=1 on every job — so
+  # without this line the suite is green on a developer laptop and RED in the required `test`
+  # check, which is the worst possible split. Same class as the documented vitest trap where
+  # vi.unstubAllEnvs() cannot clear a process-inherited variable.
+  GATE_OUT=$(cd "$REPO_ROOT" && env SOLEUR_TEST_FORCE_ALL= CI= \
+             TEST_GROUP=all SOLEUR_INCIDENT_SKIP=0 \
              SANDBOX_DIFF_NAMES="$diff_fixture" "$@" timeout 180 bash "$sb" 2>&1)
   RAN_REGISTRY=0; RAN_CFTUNNEL=0
   grep -qxF "RECORDED_SUITE:$REGISTRY_LABEL" "$SANDBOX_RECORD" && RAN_REGISTRY=1

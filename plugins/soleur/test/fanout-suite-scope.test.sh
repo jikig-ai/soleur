@@ -75,7 +75,12 @@ run_arm() {
   local label="$1"; shift
   export SANDBOX_RECORD="$TMP/record-$label.txt"
   : > "$SANDBOX_RECORD"
-  ARM_OUT=$(cd "$REPO_ROOT" && env "$@" timeout 120 bash "$SANDBOX" 2>&1)
+  # Both refusal variables are CLEARED before "$@", so an arm that wants either still wins.
+  # An INHERITED SOLEUR_ALLOW_FULL_GATE=1 would make the refusal arm pass vacuously, and an
+  # inherited SOLEUR_SUBAGENT=1 would break the negative control -- and the environment that
+  # sets these is precisely a spawned-agent shell, i.e. the one this suite exists to describe.
+  ARM_OUT=$(cd "$REPO_ROOT" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
+            "$@" timeout 120 bash "$SANDBOX" 2>&1)
   ARM_RC=$?
   ARM_SUITES=$(wc -l < "$SANDBOX_RECORD" | tr -d '[:space:]')
 }
