@@ -338,7 +338,7 @@ commit_base "$d"
 printf 'unrelated\n' > "$d/README.md"
 commit_all "$d" unrelated
 res=$(run_gate "$d"); out=${res#*|}
-for token in '#7349' '2026-09-30'; do
+for token in '#7465' '2026-09-30'; do
   if grep -qF -- "$token" <<<"$out"; then
     pass "clean-run output carries '$token' (the freeze reads as dated, not permanent)"
   else

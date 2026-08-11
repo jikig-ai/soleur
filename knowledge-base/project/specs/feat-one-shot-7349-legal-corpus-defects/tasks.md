@@ -44,7 +44,7 @@ frozen drift.
       (the DPD has no forum clause), E8's dangling AUP→T&C cross-reference (all resolve), and
       E8's mandatory-vs-optional side letter (two distinct instruments). Confirm each measurement
       yourself before touching those clauses.
-- [ ] 0.9 CLO **merge sign-off is NOT yet granted** — it must be written against the actual diff at
+- [x] 0.9 CLO **merge sign-off is NOT yet granted** — it must be written against the actual diff at
       `knowledge-base/legal/audits/2026-08-counsel-review-7349.md`. That is a Phase 5 deliverable
       (5.13), not a precondition.
 
@@ -295,7 +295,7 @@ Sequenced last: it depends on the counterparty documents being settled. The T&C 
       lockstep — `TC_DOCUMENT_SHA`, all four `TC_BUMP_METADATA` fields, the canonical Last-Updated
       line, the mirror's Last-Updated line, **all three** seed scripts, and the
       `compliance-posture.md` version row.
-- [ ] 5.13 Record the tier and its reasoning in the PR body. **CLO sign-off gates merge and must
+- [x] 5.13 Record the tier and its reasoning in the PR body. **CLO sign-off gates merge and must
       be written against the actual diff** at `knowledge-base/legal/audits/2026-08-counsel-review-7349.md`,
       with a per-artifact verdict and a DISCHARGED/BLOCKED disposition. Flag **E6**
       (T&C-as-Art.-28(3)-instrument) in that audit's frontmatter as the strongest external-counsel
@@ -310,17 +310,17 @@ Sequenced last: it depends on the counterparty documents being settled. The T&C 
 
 ## Phase 6 — Coverage, ratchet, successor tracking (D1, D2)
 
-- [ ] 6.1 Add the non-tenant alpha-tester case to `tenant-offboarding.md` — prefer a cross-link to
+- [x] 6.1 Add the non-tenant alpha-tester case to `tenant-offboarding.md` — prefer a cross-link to
       the runbook that owns the procedure over a duplicate (a second copy is the mirror-divergence
       defect class, reintroduced in the runbooks), but state the case explicitly so it does not
       read as uncovered.
-- [ ] 6.2 Sweep the 7 live `engineering/ops/` files enumerated in plan §D2. **Carve out** the
+- [x] 6.2 Sweep the 7 live `engineering/ops/` files enumerated in plan §D2. **Carve out** the
       `2026-06-03-path-rename-sweep-exclude-own-migration-artifacts.md` learning, plans, specs and
       archives.
-- [ ] 6.3 Add `acceptable-use-policy`, `data-protection-disclosure` and `disclaimer` to
+- [x] 6.3 Add `acceptable-use-policy`, `data-protection-disclosure` and `disclaimer` to
       `BODY_EQUIVALENCE_DOCS` — **after** each reports zero drift, never before.
-- [ ] 6.4 Refresh the gate-2 baseline; assert total frozen drift is strictly below 220.
-- [ ] 6.5 File the successor issue for the deferred set with the measured canonical-only /
+- [x] 6.4 Refresh the gate-2 baseline; assert total frozen drift is strictly below 220.
+- [x] 6.5 File the successor issue for the deferred set with the measured canonical-only /
       mirror-only table AND each document's character classification:
       `gdpr-policy` (residue after the Phase 3b carve-back) — structural;
       `privacy-policy` (residue after the Phase 3c carve-back) — structural/cosmetic:
@@ -343,10 +343,10 @@ Sequenced last: it depends on the counterparty documents being settled. The T&C 
       re-points that block at operator-side Chapter V transfers, making it assert they describe
       the Plugin on the user's own machine under the user's own key. **BOTH write-time gates
       stay green.** Verify by reading, never by gate.
-- [ ] 6.6 Re-point gate 2's header and runtime output from `#7349` to the successor issue, and
+- [x] 6.6 Re-point gate 2's header and runtime output from `#7349` to the successor issue, and
       update the pinned assertion in `scripts/lint-legal-mirror-drift-baseline.test.sh` **in the
       same commit**.
-- [ ] 6.7 Update the shared gate-discoverability block in `plugins/soleur/skills/legal-audit/SKILL.md`,
+- [x] 6.7 Update the shared gate-discoverability block in `plugins/soleur/skills/legal-audit/SKILL.md`,
       `plugins/soleur/skills/legal-generate/SKILL.md` and `plugins/soleur/agents/legal/clo.md`.
 
 ## Phase 7 — Verification

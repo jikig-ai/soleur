@@ -43,11 +43,11 @@
 # it was written to support. The list came from an issue body and was reproduced here under
 # the word "measured" without being checked. Corrected on #7349 too.
 #
-# That divergence is tracked on #7349, which carries a remediation target of 2026-09-30.
+# That divergence is tracked on #7465, which carries a remediation target of 2026-09-30.
 # The date is part of this gate's contract, not a footnote: a knowingly-retained divergence
 # bears on GDPR Art. 83(2)(b) (intentional or negligent character) and 83(2)(c) (mitigating
 # action taken), and a permanent freeze with no date is documentary evidence that the
-# divergence was measured, understood, and institutionalised. If the date on #7349 moves,
+# divergence was measured, understood, and institutionalised. If the date on #7465 moves,
 # move it here too -- the two are deliberately coupled, and the suite asserts this header
 # still carries both the issue number and the date.
 #
@@ -288,7 +288,7 @@ if [[ -n "$expected" && "$live_pairs" != "0" && "$live_pairs" != "$expected" ]];
 fi
 
 # Single source for the remediation date so the header, the PASS message and the expiry
-# check cannot drift apart. Coupled to #7349 by design.
+# check cannot drift apart. Coupled to #7465 by design.
 REMEDIATION_TARGET="2026-09-30"
 
 violations=0
@@ -433,7 +433,7 @@ while IFS= read -r name; do
           echo "    Remediation: this line exists on only ONE surface (it is pre-existing drift),"
           echo "    so 'apply it to both in the same position' may be impossible. Either port the"
           echo "    enclosing passage to the other surface -- which REDUCES drift and always"
-          echo "    passes -- or leave the line unedited until #7349 resyncs the pair."
+          echo "    passes -- or leave the line unedited until #7465 resyncs the pair."
           ;;
         *)
           echo "    Remediation: apply the change to BOTH surfaces in the same commit, in the"
@@ -463,7 +463,7 @@ if (( violations > 0 )); then
     cat "$report" >&2
     echo "  base=${RESOLVED_REF} merge-base=${MERGE_BASE:0:7}" >&2
     echo "  This run did NOT gate. The accepted drift becomes the new baseline for every" >&2
-    echo "  later PR, so record why in the PR body and on #7349." >&2
+    echo "  later PR, so record why in the PR body and on #7465." >&2
     exit 0
   fi
   echo "::error::legal mirror drift: ${violations} document(s) drifted beyond the baseline" >&2
@@ -494,7 +494,7 @@ echo "  agree: the published mirror under-discloses relative to the record. Re-m
 echo "  merge sign-off -- a named sub-processor (Flagsmith), the Art. 14 information posture and"
 echo "  DPIA-status statement, and the Art. 15/20 request-channel split in gdpr-policy; the"
 echo "  LinkedIn Page data category with its two transfer rows and the community-digest carve-out"
-echo "  in privacy-policy. Tracked on #7349, remediation target ${REMEDIATION_TARGET}."
+echo "  in privacy-policy. Tracked on #7465, remediation target ${REMEDIATION_TARGET}."
 echo "  NOT CHECKED: a lockstep DELETION. Removing the same disclosure from both surfaces"
 echo "  leaves drift unchanged and passes here; only the SHA pin in legal-doc-shas.ts and"
 echo "  human review catch that."
