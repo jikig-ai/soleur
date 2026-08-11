@@ -385,6 +385,9 @@ if want_scripts; then
   run_suite "scripts/lint-window-closure-assertion" bash scripts/lint-window-closure-assertion.test.sh
   run_suite "scripts/lint-window-closure-assertion-live" python3 scripts/lint-window-closure-assertion.py \
     --allowlist scripts/lint-window-closure-assertion.allowlist.txt
+  # rename-guard: allowlist->allowlist renames (the archive-kb shape) are exempt;
+  # outside->allowlist still fails. TS-1..TS-6 + MB-1..MB-2.
+  run_suite "scripts/rename-guard" bash scripts/rename-guard.test.sh
   run_suite "scripts/extract-api-spend" bash scripts/extract-api-spend.test.sh
   run_suite "scripts/domain-model-drift" bash scripts/domain-model-drift.test.sh
   # #6602: exit-code harness for the expenses verify_by expiry gate. Registered

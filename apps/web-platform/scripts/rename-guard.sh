@@ -74,15 +74,47 @@ if [[ -z "${renames}" ]]; then
   exit 0
 fi
 
+# matching_allow_re <path> — prints the first allowlist regex matching <path>
+# and returns 0; returns 1 when none match.
+#
+# SOURCE and TARGET are both resolved through THIS ONE function against THIS ONE
+# array. That is deliberate: two separately-derived allowlist sets would be two
+# assemblies and could drift, and a source set wider than the target set fails
+# the guard OPEN (every laundering rename reads as "source already allowlisted").
+matching_allow_re() {
+  local path="$1" re
+  for re in "${ALLOW_RES[@]}"; do
+    if printf '%s' "${path}" | grep -qP "${re}"; then
+      printf '%s' "${re}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 violations=""
 while IFS=$'\t' read -r status source target; do
   [[ -z "${target:-}" ]] && continue
-  for re in "${ALLOW_RES[@]}"; do
-    if printf '%s' "${target}" | grep -qP "${re}"; then
-      violations+="${source} -> ${target} (matches /${re}/)"$'\n'
-      break
-    fi
-  done
+
+  # Not landing in an allowlisted path — nothing to launder.
+  matched_re="$(matching_allow_re "${target}")" || continue
+
+  # The SOURCE is already allowlisted, so gitleaks was ALREADY not scanning this
+  # content before the rename: moving it creates no NEW unscanned surface and
+  # there is nothing to launder. Exempt — evaluated PER RENAME PAIR, so a
+  # laundering rename elsewhere in the same PR is still caught.
+  #
+  # This is the archive-kb shape: compound `git mv`s plans/specs into their own
+  # `archive/` subdirectory on every one-shot run, and the allowlist regex
+  # matches both sides. Without this the guard fires on a class that cannot be a
+  # laundering vector, which is why `secret-scan-allow-rename` had become
+  # effectively mandatory rather than an exceptional opt-in (#5095, #5097).
+  # Pre-applying that label would instead disarm the guard for the WHOLE PR.
+  if matching_allow_re "${source}" >/dev/null; then  # MUT:srcallow
+    continue                                          # MUT:srcallow
+  fi                                                  # MUT:srcallow
+
+  violations+="${source} -> ${target} (matches /${matched_re}/)"$'\n'
 done <<<"${renames}"
 
 if [[ -z "${violations}" ]]; then
