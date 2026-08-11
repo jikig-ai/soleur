@@ -632,6 +632,24 @@ assert "T15 the timer really is 60s (the authority for the ~1,440/day floor)" \
 assert "T15 no comment still claims the liveness probe GETs /v2/ 'every 5 min'" \
   "! grep -qE 'liveness.*every 5 min|/v2/ every 5 min' '$CI'"
 
+# ASSERTION FLOOR (#7444 F-4). An ABSOLUTE LITERAL, never derived from the run it guards: a
+# floor computed from this suite's own output is reduced by the exact truncation it exists to
+# detect. It increments FAIL rather than exiting, so the miss is reported through the same
+# channel as every other failure and the gate below stays the single exit point.
+#
+# Without it, `assert() { return 0; }` and "delete everything from T5 onward" both yield a
+# summary line and rc=0 — CI-green on a suite that asserted nothing. Neither runner catches it:
+# run_suite branches solely on `if ! "$@"`, and the workflow step is pure rc.
+#
+# Raise this literal in the same commit that adds assertions.
+MIN_ASSERTIONS=111
+RAN=$(( PASS + FAIL ))
+if [[ "$RAN" -lt "$MIN_ASSERTIONS" ]]; then
+  FAIL=$(( FAIL + 1 ))
+  echo "  FAIL: assertion floor — ran $RAN assertions, expected >= $MIN_ASSERTIONS"
+  echo "        (suite truncated, or assert() neutered — this run certified nothing)"
+fi
+
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]] || exit 1

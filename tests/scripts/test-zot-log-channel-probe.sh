@@ -311,6 +311,24 @@ assert "C12 the probe's tracker is NOT #7440 (the sweeper would make it a silent
 # archive arm would add an S3 failure mode to a steady-state probe for no coverage.
 assert "C12 the probe passes --no-archive on its queries" "grep -qF -- '--no-archive' '$PROBE'"
 
+# ASSERTION FLOOR (#7444 F-4). An ABSOLUTE LITERAL, never derived from the run it guards: a
+# floor computed from this suite's own output is reduced by the exact truncation it exists to
+# detect. It increments FAIL rather than exiting, so the miss is reported through the same
+# channel as every other failure and the gate below stays the single exit point.
+#
+# Without it, `assert() { return 0; }` and "delete everything from C5 onward" both yield a
+# summary line and rc=0 — CI-green on a suite that asserted nothing. Neither runner catches it:
+# run_suite branches solely on `if ! "$@"`, and the workflow step is pure rc.
+#
+# Raise this literal in the same commit that adds assertions.
+MIN_ASSERTIONS=55
+RAN=$(( PASS + FAIL ))
+if [[ "$RAN" -lt "$MIN_ASSERTIONS" ]]; then
+  FAIL=$(( FAIL + 1 ))
+  echo "  FAIL: assertion floor — ran $RAN assertions, expected >= $MIN_ASSERTIONS"
+  echo "        (suite truncated, or assert() neutered — this run certified nothing)"
+fi
+
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]] || exit 1
