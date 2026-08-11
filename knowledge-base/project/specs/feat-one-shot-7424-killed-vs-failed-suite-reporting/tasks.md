@@ -84,4 +84,4 @@ operator-stated scope are recorded in `decision-challenges.md` and were delibera
 - [x] 8.5 `bash scripts/lint-diagnosis-claims.sh` (≤ highwater 1; gates both edited surfaces)
 - [x] 8.6 `python3 scripts/lint-shell-capture-exit.py --baseline scripts/lint-shell-capture-exit.baseline.txt`
 - [x] 8.7 `bash plugins/soleur/test/main-health-monitor-workflow.test.sh`
-- [ ] 8.8 Full-suite exit gate on a clean tree; read the terminal marker.
+- [x] 8.8 Full-suite exit gate on a clean tree; read the terminal marker.
