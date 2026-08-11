@@ -120,6 +120,24 @@ to its own issue: its reference sweep is itself guard-shaped work whose failure
 mode is a narrow window, so it deserves its own contract rather than riding along
 here.
 
-**Self-application.** The PR introducing this ADR carries a `## Guard Contract`
-for its own three guards with fifteen mutation rows, every one proven RED. A
-guard-building change fails open in the guard, not in the guarded code.
+**Self-application, and what it cost.** The PR introducing this ADR carries a
+`## Guard Contract` for its own three guards. Its first revision then failed its
+own contract in all three: the rename guard treated gitleaks' per-rule allowlist
+as a global boolean and exempted a real laundering rename; the Guard Contract
+lint exited 0 having examined nothing, swept non-recursively, matched its section
+heading by exact equality, and counted rows from any table in the entry; and the
+window lint's identifier set was a rebindable naming convention that missed 247
+test files outright.
+
+Every one of those is the same class — a window narrower than the property it
+names — found in the guards built to catch it. They were surfaced by the
+structural-enumeration seat this ADR introduces, which produced the complete map
+in one pass where four adversarial seats had each found fragments.
+
+That is the strongest available evidence for the decision and the strongest
+available warning about it: a Guard Contract makes the assembly writable and
+reviewable, and it does not make it correct. The contract is a prompt for the
+enumeration, not a substitute for performing it. Note also that not every
+mutation row is a code deletion — some are fixture-space proofs, and one asserts
+a GREEN outcome (a relocated fixture must still be found); the matrix records
+what must change the verdict, not uniformly what must go red.

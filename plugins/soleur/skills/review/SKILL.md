@@ -237,12 +237,12 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 **If the PR's deliverable IS a guard (guard-shaped PR):**
 
-14. Task general-purpose(PR content) — **STRUCTURAL ENUMERATION seat**
+18. Task general-purpose(PR content) — **STRUCTURAL ENUMERATION seat**
 
 **When to run the structural-enumeration seat:**
 
 - The diff adds or edits a guard, gate, lint, drift-check, hook, `lifecycle.precondition`, CI assertion, or anti-vacuity control
-- The diff adds a a new repo-root `lint-*` script, a `*.test.sh` drift guard, or a closure assertion over an extracted window
+- The diff adds a new repo-root `lint-*` script, a `*.test.sh` drift guard, or a closure assertion over an extracted window
 - The PR body or plan carries a `## Guard Contract` section
 
 **How this seat differs — spend it on ENUMERATION, not adversarial search.** Prompt it to produce a *map*, never a findings list:

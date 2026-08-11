@@ -105,92 +105,117 @@ in the filed issue so no analysis is lost.
 
 ## Guard Contract
 
-This PR is guard-shaped work about guard-shaped work, so the contract applies to itself. A
-guard-building change fails open in the guard, not in the guarded code.
+This PR is guard-shaped work about guard-shaped work, so the contract applies to
+itself. It did not hold on the first revision: review found all three guards
+narrower than the properties below, and the corrected assemblies are recorded
+here with the evasions that falsified the originals.
 
 ### Guard 1 — `scripts/lint-guard-contract.py`
 
-**Property.** Every plan file that declares a `## Guard Contract` section has, for every guard entry
-within it, a non-empty ASSEMBLY field and a mutation matrix carrying at least three rows.
+**Property.** Every plan file declaring a Guard Contract has, for every guard
+entry in every such section, a non-placeholder property, a non-placeholder
+assembly, and a mutation matrix of at least three rows.
 
 **Assembly.** The property quantifies over:
 
-- Every `*.md` directly under `knowledge-base/project/plans/` (non-recursive — `archive/` excluded by
-  construction), selected by presence of the `## Guard Contract` heading. Enumerated by a directory
-  walk, never a hardcoded file list.
-- Within each selected file: **every** `### Guard N —` subsection between `## Guard Contract` and the
-  next `^## ` heading. Not the first; every one.
-- The lint's own dispatch: its pass/fail counters and its exit path.
-- Invocation sites that make the lint non-orphaned: the `run_suite` line in `scripts/test-all.sh`
-  and `scripts/lint-guard-contract.test.sh`.
+- Every `.md` under `knowledge-base/project/plans/` **recursively**, excluding
+  any path with an `archive/` component. The original non-recursive glob missed a
+  plan one directory deeper, and one such plan exists in the repo today.
+- **Every** `## Guard Contract` section in a file, not the first, matched by
+  prefix rather than exact string equality — `## Guard Contract (3 guards)`
+  previously exempted a whole file.
+- **Every** `### Guard` entry in each section, plus explicit rejection of
+  mis-levelled or indented entries, which previously folded into the predecessor
+  and inflated its matrix row count.
+- The mutation-matrix table's **own span**, not any table in the entry.
+- Fenced code blocks, masked out, so a pasted template is not a real entry.
+- The lint's own dispatch: the sweep's file count and its exit path.
+- Its wiring in `scripts/test-all.sh`.
 
-**Mutation matrix** (each MUST drive the suite RED):
+**Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Delete the ASSEMBLY line from a guard entry in a fixture plan | lint exits non-zero |
-| 2 | Reduce a fixture's mutation matrix from 3 rows to 2 | lint exits non-zero |
-| 3 | Replace an ASSEMBLY body with `TBD` | lint exits non-zero |
-| 4 | Make the lint's own dispatch unconditional (always exit 0, print `0 checked`) | `lint-guard-contract.test.sh` reddens — an anti-vacuity floor on its OWN dispatch |
-| 5 | Add a SECOND, non-compliant guard entry to a fixture whose FIRST entry is compliant | lint exits non-zero — proves all-members, not first-member |
-
-Row 4 is the fourth instance from the originating evidence (a gate with no floor on its own dispatch
-printed "0 passed, 0 failed" and exited 0). Row 5 is the `review/SKILL.md:1191(a)` first-member
-degradation.
+| 1 | Delete the Assembly check | RED (MB-1) |
+| 2 | Delete the matrix-row floor | RED (MB-2) |
+| 3 | Delete the placeholder check | RED (MB-3) |
+| 4 | Delete the zero-entry floor | RED (MB-4) |
+| 5 | Delete the own-dispatch floor | RED (MB-5) |
+| 6 | Delete the heading-level check | RED (MB-6) |
+| 7 | Revert matrix counting to entry-wide | RED (MB-7, semantic) |
+| 8 | Add a second non-compliant entry after a compliant first | RED (TS-6, fixture) |
+| 9 | Neuter `fail()` to increment `PASS` | RED (TS-21, harness control) |
 
 ### Guard 2 — `scripts/lint-window-closure-assertion.py`
 
-**Property.** A closure assertion (`toEqual([…])` / `toStrictEqual([…])`) whose subject derives from a
-named window helper must be accompanied, in the same file, by a completeness assertion tying the
-window back to the whole source — or by an explicit waiver marker carrying a justification.
+**Property.** A closure assertion fed by a named window helper carries a
+per-helper declaration naming what the window is complete against, with a real
+justification.
 
 **Assembly.** The property quantifies over:
 
-- Every `*.test.ts` beneath BOTH test roots — `apps/web-platform/` and `plugins/soleur/test/` —
-  enumerated by directory walk. A walk, not a glob list, because a test file relocated one directory
-  deeper must remain in scope.
-- Within each file: **every** helper whose identifier ends in `Window`, `Region`, or `Section`, not
-  merely the first.
-- The grandfather set measured at implementation time (3 files, 7 helpers). Six are stored as an
-  explicit allowlist so the lint lands green and every future addition is gated; `sandboxWindow` —
-  the originating defect — instead carries a real `// window-assembly:` declaration citing the
-  sibling assertions that pin the rest of its assembly.
-- The lint's own dispatch and its `run_suite` wiring.
+- Every `*.test.ts(x)` and `*.spec.ts(x)` under three roots —
+  `apps/web-platform/`, `plugins/soleur/test/` and the repo-root `test/` — by
+  directory walk, excluding vendored trees. The original walk read one suffix
+  under two roots and included `node_modules`.
+- **Every** helper per file across all declaration forms: `const/let/var`,
+  `function`, `async`, `export default`, object properties, class methods and
+  additional declarators.
+- The closure-assertion set: array literals, `new Set([…])`, `toMatchObject`,
+  `deepStrictEqual`, and a named SCREAMING_CASE const.
+- The grandfather allowlist, keyed per helper, including its stale entries.
+- The lint's own dispatch.
+
+**Known-narrower than the property, deliberately:** the chokepoint is a
+rebindable NAMING CONVENTION, so a rename silences the gate; an imported helper
+is out of reach; a marker inside a string literal is not distinguished from a
+comment. The `/review` bullet carries the wider judgement half.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Add a new `const fooWindow = …` + closure assertion, no completeness assertion | lint exits non-zero |
-| 2 | Remove the completeness assertion from a compliant fixture | lint exits non-zero |
-| 3 | Neuter the lint's dispatch to always exit 0 | its `.test.sh` reddens |
-| 4 | Add a second non-compliant helper to a file whose first helper is compliant | lint exits non-zero |
-| 5 | Relocate a fixture one directory deeper than the walk's start | lint still finds it |
+| 1 | Delete the declaration check | RED (MB-1) |
+| 2 | Delete the zero-dispatch floor | RED (MB-2) |
+| 3 | Delete the justification requirement | RED (MB-3) |
+| 4 | Delete the stale-allowlist check | RED (MB-4) |
+| 5 | Truncate the walk to its first file | RED (TS-20, two-file fixture) |
+| 6 | Relocate a fixture one directory deeper | still found (TS-8) |
 
-### Guard 3 — `rename-guard.sh` source-allowlist exemption (F)
+### Guard 3 — `apps/web-platform/scripts/rename-guard.sh`
 
-**Property.** `rename-guard` fails only for renames that move content from OUTSIDE the gitleaks path
-allowlist to INSIDE it. Allowlist→allowlist renames are exempt.
+**Property.** A rename fails only when it moves content into a path whose
+gitleaks exemption scope is **wider** than the source's — i.e. when it creates
+newly-unscanned surface.
 
 **Assembly.** The property quantifies over:
 
-- The rename pairs emitted by the `git log --diff-filter=R --name-status` scan at
-  `rename-guard.sh:70-71` — the sole chokepoint through which every candidate flows.
-- The `ALLOW_RES` array produced by `parse-gitleaks-allowlists.mjs` — the sole allowlist source.
-  Source and target MUST be tested against the *same* array; two separately-derived sets would be two
-  assemblies and could drift.
-- Both override paths that already exist (label, trailer) — the exemption must not disturb them.
-- The parser-failure and empty-allowlist early exits at `rename-guard.sh:53-61`.
+- Every rename and copy pair emitted by `git log --diff-merges=first-parent
+  --diff-filter=RC --find-renames=5% --find-copies=5%`, with
+  `core.quotePath=false`. The original scan missed merge-commit diffs entirely,
+  classified a rename-plus-edit as D+A, and could not match quoted non-ASCII
+  destinations.
+- The `ALLOW_RES` array, consulted for BOTH source and target through one shared
+  resolver, compared as **sets** rather than as booleans. The original boolean
+  test conflated gitleaks' one global allowlist with its eighteen per-rule
+  allowlists and exempted a genuine laundering rename.
+- Both override paths (label, trailer) and the parser-failure and
+  empty-allowlist exits, the latter now fail-closed.
+
+**Known-narrower than the property, deliberately:** a rename whose similarity is
+effectively zero is a delete-plus-add and cannot be classified as a rename by
+git at any threshold; a plain add of a secret at an allowlisted path was never in
+scope. Both are documented in `secret-scanning.md`.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Rename a file from outside the allowlist into an allowlisted path, no override | exit 1 — the guard's real property survives |
-| 2 | Rename an allowlisted file into an allowlisted path (the `archive-kb` shape) | exit 0 — the new exemption |
-| 3 | Delete the source-allowlist check | scenario 2 returns to exit 1, proving the exemption is load-bearing rather than decorative |
-| 4 | Point the source check at a different or empty regex set than the target check | scenario 1 must still exit 1 — proves one shared assembly |
-| 5 | Force the parser to fail | exit 2, unchanged — fail-closed behaviour preserved |
+| 1 | Delete the scope-subset exemption | RED (MB-1, archival case becomes a violation) |
+| 2 | Give the source a set matching everything | fails OPEN on TS-1 (MB-2) |
+| 3 | Delete the low-similarity rename flags | RED (MB-3) |
+| 4 | Delete the trailer override | RED (MB-4) |
+| 5 | Revert to the old boolean source test | re-opens TS-10 (MB-5, semantic) |
 
 ## User-Brand Impact
 

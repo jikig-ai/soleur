@@ -586,7 +586,7 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
 
 Fires when the plan's deliverable includes a **guard, gate, lint, drift-check or anti-vacuity control** (plan Phase 2.12). This is the design-time verifier that a guard-shaped plan carries a usable Guard Contract before `/work` writes any guard code.
 
-**Step 1 — Detect.** Scan the plan's `## Files to Create` / `## Files to Edit` and its prose for guard-shaped deliverables: a new a new repo-root `lint-*` script, a `*.test.sh` drift guard, a CI gate, a `lifecycle.precondition`, a hook, or prose naming a "guard"/"gate"/"drift-check". If none, SKIP silently.
+**Step 1 — Detect.** Scan the plan's `## Files to Create` / `## Files to Edit` and its prose for guard-shaped deliverables: a new repo-root `lint-*` script, a `*.test.sh` drift guard, a CI gate, a `lifecycle.precondition`, a hook, or prose naming a "guard"/"gate"/"drift-check". If none, SKIP silently.
 
 **Step 2 — Locate the section.**
 

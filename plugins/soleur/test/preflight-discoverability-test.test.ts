@@ -1743,9 +1743,12 @@ describe("#7393 F — SKILL.md runtime wiring (gate windows, never whole-file)",
   // one-line edits outside this window each re-opened the operator's credential
   // surface with the whole suite green. The sibling assertions at "1e" below pin
   // the assembly's remainder: gitBindAssigns and procAssigns are matched against
-  // the WHOLE body (not this window), and the `+=` checks at "2" bound append
-  // sites for all three arrays. Any new mount-injection site must be added there,
-  // not here.
+  // the WHOLE Check 10 body (not this window), and the `+=` checks at "2" bound
+  // append sites for all three arrays. The FOURTH member — the exec line — is
+  // pinned separately by the anchored full-invocation regex in test F2 above,
+  // NOT by 1e or 2; loosening F2 would leave this declaration reading true while
+  // that member went unpinned. Any new mount-injection site must be added to
+  // those assertions, not here.
   const sandboxWindow = (): string => {
     const idx = uniqueIndex(lines, (l) => /^BWRAP_ARGS=\(/.test(l), "BWRAP_ARGS=(");
     const end = lines.findIndex((l, i) => i > idx && /^\)/.test(l));

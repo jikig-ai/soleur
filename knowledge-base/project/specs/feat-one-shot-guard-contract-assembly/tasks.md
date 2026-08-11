@@ -165,3 +165,47 @@ in the plan's Scope Decision section.
   (`compound/SKILL.md`, `archive-kb/SKILL.md`), satisfying #5097's own event-grep close criterion.
 - `python3 scripts/lint-guard-contract.py` over the real tree — 1533 plans scanned, 1 with a Guard
   Contract (this one), 3 guard entries, exit 0 (AC10).
+
+## Review rework (2026-08-11) — 8-agent panel
+
+The panel found all three guards narrower than their stated properties. 18
+mutations were run across axes the author's battery never edited; 11 survived
+(61%). Every survivor is now a fixture.
+
+The structural-enumeration seat added by this PR produced the complete map in one
+pass, including six evasions no adversarial seat found — which is the strongest
+evidence for the seat and the strongest warning about the contract: it makes an
+assembly writable and reviewable, not correct.
+
+| Guard | Before | After |
+|---|---|---|
+| `lint-guard-contract` | 14/14, 4 seams | **28/28, 7 seams** |
+| `lint-window-closure-assertion` | 13/13, 2 seams | **24/24, 4 seams** |
+| `rename-guard` | 8/8, 2 seams | **17/17, 5 seams** |
+
+Corrections that changed behaviour, not just coverage:
+
+- rename-guard's exemption was UNSOUND. "Allowlisted" is not a boolean —
+  `.gitleaks.toml` has one global allowlist and eighteen per-rule ones, flattened
+  by the parser with no provenance. Verified with a control: a synthesized PAT
+  under `learnings/` is flagged, the same token under `plans/` is not, so
+  `git mv learnings/X.md plans/x.md` laundered it and the guard exempted it.
+  Now scope-SUBSET. Plus merge-commit diffs, sub-threshold renames (measured
+  R011), quoted non-ASCII paths, and a fail-open empty allowlist.
+- `lint-guard-contract` exited 0 having examined nothing (the fourth instance
+  from the originating evidence, in the flagship guard), swept non-recursively
+  past a plan that exists today, read only the first section, matched its heading
+  by exact equality, and counted matrix rows from any table in the entry.
+- `lint-window-closure-assertion` walked `node_modules` (492 of 1420 files),
+  missed 247 `.test.tsx`/`.spec.ts` files, missed five declaration forms, lost a
+  whole file when the expected array was hoisted to a const, and accepted a bare
+  marker with no justification.
+
+Harness-level vacuities closed: `TS-8` was tautological; `mb_case` credited a
+0-byte mutant (python3 on an empty file exits 0); and a `fail()` rewritten to
+increment `PASS` kept every count floor satisfied while asserting nothing — the
+floors count DISPATCH, so `TS-21` now checks DISCRIMINATION.
+
+Two agent claims were checked and rejected: the "merged 2026-08-10" date is
+correct in UTC (the agent read local time), and `rename-guard.test.sh` correctly
+has no `-live` counterpart because the guard requires BASE_SHA/HEAD_SHA.
