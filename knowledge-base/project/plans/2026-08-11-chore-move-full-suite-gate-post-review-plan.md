@@ -25,6 +25,24 @@ The reading discipline that surrounds both runs — the preamble/epilogue read, 
 that reports whether the nested infra runner actually executed, and the contention-banner
 interpretation — is preserved at both positions and is not in scope for reduction.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-11
+
+**Gates run:** 4.6 User-Brand Impact (pass, `single-user incident`) · 4.7 Observability (**halted** — the drafted "not applicable" claim was wrong; `plugins/*/skills/*.md` is inside the non-exempt set, so a real 5-field block was written) · 4.8 PAT-shaped (clean) · 4.9 UI wireframe (skip, no UI surface) · 4.10 Encryption posture (skip, no store/connection) · 4.55 Downtime (skip, no serving-surface change).
+
+**Realism passes (Phase 4.45):** verify-the-negative confirmed all 7 surviving factual claims live; post-edit self-audit found 5 stale-live defects introduced by the plan-review revision, all corrected — the assertion count still read "two" in three places, the cut falsifiability tripwire was still prescribed as live in four, cut ACs (AC10b, AC12) were still cited as active mitigations, and an orphaned AC13-15 block duplicated AC8-10 with a *weaker* AC14 that reintroduced the deleted SHA-pin phrasing.
+
+### Key improvements this pass
+
+1. **Observability block is now real and runnable** (`bun test plugins/soleur/test/fullsuite-merge-gate.test.ts`), not an exemption argument.
+2. **Internal consistency restored** after the heavy plan-review cuts — the plan no longer prescribes anything it also records as deleted.
+3. **Every load-bearing negative claim re-verified against the repo**, including the two that reversed the plan's original design (R4 is CI-gated; R5 is gated by nothing).
+
+### Note carried forward, not acted on
+
+`scripts/test-all.sh:129`'s comment says "21 plugins/soleur/test/*.test.sh"; the real count is **65**. Pre-existing stale comment in the runner, unrelated to this plan's claims — worth a one-line fix in a passing PR, not this one.
+
 ## Research Insights
 
 ### Premise Validation (Phase 0.6)
@@ -71,7 +89,7 @@ The justification is a cost saving, so the saving is quantified and its provenan
 - `scripts/test-all.sh` accepts `TEST_GROUP` ∈ `all|webplat|bun|scripts|infra` (`scripts/test-all.sh:140-157`) and has **no diff-scoped mode**. Its only diff-relevance gate is `_infra_in_diff` (`scripts/test-all.sh:384-391`), which decides whether to *invoke the nested infra runner*, not which suites to run. So "run only what the diff touches" is not a flag on the existing runner; it is a different command set.
 - `vitest 4.1.0` `--changed` verified live (see C1a). This is the single largest shard and it already supports the scoping.
 
-**Not re-measured, deliberately.** A fresh `time bash scripts/test-all.sh` now would contend with the live sibling worktree `feat-one-shot-test-pipeline-efficiency` for the same advisory lock and tmpfs — i.e. the measurement would both perturb that session and be perturbed by it, which is precisely the contention ADR-133 documents. The paired A/B that *would* settle it is recorded as an acceptance criterion instead (AC12), to be run on a quiet machine.
+**Not re-measured, deliberately.** A fresh `time bash scripts/test-all.sh` now would contend with the live sibling worktree `feat-one-shot-test-pipeline-efficiency` for the same advisory lock and tmpfs — i.e. the measurement would both perturb that session and be perturbed by it, which is precisely the contention ADR-133 documents. The paired A/B that *would* settle it is recorded as a PR-body reporting obligation instead, to be run on a quiet machine. It is deliberately not an AC: its only honest form carries an always-available `UNMEASURED` escape hatch, and an AC that cannot fail is not an AC.
 
 ### The merge gate is CI, not the local runner — the issue's justification is wrong (in a way that makes the change safer)
 
@@ -274,7 +292,7 @@ Phase 4 already runs the battery. Three things change, and the naming is deliber
 
 **[REVISED — the drafted 5-assertion set had two assertions that could not fail and one resting on a false premise. Reduced to two.]**
 
-Write `plugins/soleur/test/fullsuite-merge-gate.test.ts` with exactly **two** assertions:
+Write `plugins/soleur/test/fullsuite-merge-gate.test.ts` with exactly **one** assertion:
 
 1. **Ship keeps an UNSHARDED full run.** `ship/SKILL.md`'s Phase 4 section prescribes `bash scripts/test-all.sh` with no `TEST_GROUP` argument or prefix. This is named ceiling 2 and the only assertion guarding an irreversible loss: a future speed-PR that shards Phase 4 silently deletes the only gate R4/R5 have. Its mutation is *sharding* the command, not deleting it — deletion is the easy mutation and the wrong threat.
 *(A second assertion — the infra re-run trigger — was drafted and is now cut with the mechanism it guarded. One assertion is the honest count.)*
@@ -339,9 +357,44 @@ Consequently `requires_cpo_signoff: true` is set in the frontmatter, and `user-i
 
 ## Observability
 
-**Not applicable — gate skipped with reason.** Plan Phase 2.9 fires on a Files-to-Edit entry under `apps/*/server/`, `apps/*/src/`, `apps/*/infra/`, `plugins/*/scripts/`, or a new infrastructure surface. This plan's code-class file set is `plugins/soleur/skills/*/SKILL.md` (prose, not executed) and `plugins/soleur/test/*.test.ts` (a test). No runtime surface, no new error path, no new infrastructure. Preflight Check 10 will likewise return SKIP, since the diff matches no path in `SENSITIVE_PATH_RE`.
+**[REVISED — the drafted "not applicable, gate skipped" text was wrong and deepen-plan Phase 4.7 halted on it.** The exemption covers `\.md$` **outside** `plugins/*/skills/`; this plan's Files-to-Edit are `.md` files *inside* `plugins/soleur/skills/`, plus a new `plugins/soleur/test/*.test.ts`. So the gate applies and the 5-field schema is required. Recorded rather than quietly corrected, because "I assumed the gate did not apply to me" is the failure mode the gate exists for.**]
 
-The change's own observability is the guard test: a regression in the merge-gate wiring is a red suite in `bun test plugins/soleur/`, discoverable locally with no credentials.
+The observable surface of this change is the guard test — it is the only executable artifact, and its whole job is to detect that ship Phase 4 stopped running an unsharded battery.
+
+```yaml
+liveness_signal:
+  what: "plugins/soleur/test/fullsuite-merge-gate.test.ts executes and passes"
+  cadence: "every push and merge_group event"
+  alert_target: "the required `test` status context (ruleset 14145388) goes red on the PR"
+  configured_in: ".github/workflows/ci.yml:663-664 (test-bun shard) -> scripts/test-all.sh:883 `run_suite \"plugins/soleur\" bun test plugins/soleur/`"
+
+error_reporting:
+  destination: "GitHub Actions job log for test-bun, surfaced as the required `test` check"
+  fail_loud: true   # a red required check blocks merge; there is no silent-degrade path
+
+failure_modes:
+  - mode: "ship Phase 4 is sharded (TEST_GROUP added), deleting the only enforcing gate for registered apps/web-platform/infra/ suites"
+    detection: "fullsuite-merge-gate.test.ts assertion 1 fails"
+    alert_route: "required `test` context red -> merge blocked"
+  - mode: "the guard suite itself is deleted or renamed, so nothing asserts the ceiling"
+    detection: "suite count drop in the test-bun shard; `bun test plugins/soleur/` no longer lists the label"
+    alert_route: "visible in the test-bun job log; NOT independently alarmed — accepted limitation, and the reason AC2's mutation proof is mandatory rather than optional"
+  - mode: "the guard passes vacuously because its section slice matches nothing after a Phase 4 retitle"
+    detection: "AC2 mutation proof (shard the command) fails to red"
+    alert_route: "caught at implementation time by AC2, not at runtime"
+
+logs:
+  where: "GitHub Actions run logs for the ci.yml test-bun job"
+  retention: "90 days (GitHub default for this repo's public actions retention)"
+
+discoverability_test:
+  command: "bun test plugins/soleur/test/fullsuite-merge-gate.test.ts"
+  expected_output: "exit 0, with the assertion naming ship Phase 4's unsharded test-all.sh invocation reported as passing"
+```
+
+No `credentials_required`: the probe reads two committed files and needs no credential. The first token is `bun`, which is on preflight Check 10's `PROBE_VERB_ALLOWLIST`, and the command contains no `ssh`.
+
+Preflight Check 10 itself will return **SKIP** at ship time, since the diff matches no path in `SENSITIVE_PATH_RE` — but the block is required and executable regardless, and stating a runnable probe is cheaper than arguing the exemption.
 
 ## Encryption Posture
 
@@ -359,7 +412,7 @@ This plan changes a cross-cutting workflow invariant every pipeline consumer hon
 
 That framing records the fact most likely to be re-derived wrongly (which gate is authoritative) and the one dependency that keeps the infra classes alive.
 
-The ADR must carry: the measured cost table; the R1-R6 table with both the "gated by required CI" and "cheap to re-home" columns; the four named ceilings; the falsifiability tripwire and its review date; and an `## Alternatives Considered` section with rows for "drop the pre-review gate entirely" (the three counter-arguments), "add a second full run at ship Phase 5.5" (Cut List C2), and "let ship Phase 4 shard for speed" (**rejected — deletes the only gate R4/R5 have**; recorded here so a future optimisation PR finds the rejection rather than re-deriving the idea).
+The ADR must carry: the measured cost table; the R1-R6 table with both the "gated by required CI" and "cheap to re-home" columns; the four named ceilings; one line on reverting if this bites; and an `## Alternatives Considered` section with rows for "drop the pre-review gate entirely" (the three counter-arguments), "add a second full run at ship Phase 5.5" (Cut List C2), and "let ship Phase 4 shard for speed" (**rejected — deletes the only gate R4/R5 have**; recorded here so a future optimisation PR finds the rejection rather than re-deriving the idea).
 
 Per `wg-architecture-decision-is-a-plan-deliverable` this is authored in-session via `/soleur:architecture`, not filed as a follow-up.
 
@@ -397,7 +450,7 @@ The decision is true the moment both SKILL.md edits land; nothing is soak-gated.
 
 **[REVISED — 17 ACs reduced to 9. The cuts are recorded because "why did this AC go away" is the question a reviewer will ask.]**
 
-1. **AC1** — `plugins/soleur/test/fullsuite-merge-gate.test.ts` exists and both assertions pass: `bun test plugins/soleur/test/fullsuite-merge-gate.test.ts` exits 0.
+1. **AC1** — `plugins/soleur/test/fullsuite-merge-gate.test.ts` exists and its single assertion passes: `bun test plugins/soleur/test/fullsuite-merge-gate.test.ts` exits 0.
 2. **AC2** — mutation proof: **shard** the ship Phase 4 command to `bash scripts/test-all.sh webplat` → the guard must red. Restore. Recorded in the PR body. Sharding, not deletion — deletion is the easy mutation and the wrong threat.
 3. **AC3** — **the "do not weaken" assertion.** All **six** reading-discipline passages are present verbatim in `work/SKILL.md`, each by a distinctive substring: `The exit gate only describes the tree you launched it against`; `"My edit is unrelated to the running suite" is how the exit gate gets invalidated`; `Sibling-worktree contention produces a FALSE RED`; `A long run can be reaped by the HARNESS`; `Doppler-env false-positive caveat`; `Feature-branch-CWD blind spot`. Plus the coverage-NOTE polarity strings `is NOT covered above` in both `work/SKILL.md` and `ship/SKILL.md`. *(Absorbs the drafted AC7 + AC8 + AC9, which were three ceremonies over one property; the two extra passages and the two extra substrings come from review.)*
 4. **AC4** — the banner grep at `work/SKILL.md:670` is byte-identical to its pre-change form, verified by `git diff origin/main...HEAD -- plugins/soleur/skills/work/SKILL.md | grep -c '^-.*\[contention\] BANNER'` returning 0. *(The drafted AC9 used `grep -F` on a **truncated** prefix that dropped `|^\[budget\]|^\[KILLED\] [^ ]+ \(exit=` — so it would have passed with the `[KILLED]` half deleted, i.e. the exact three-way-split signal the plan says must survive. Presence ≠ byte-identity; use the diff.)*
@@ -416,9 +469,6 @@ The decision is true the moment both SKILL.md edits land; nothing is soak-gated.
 - *AC6 (eleven Files-to-Edit entries show a change)* — a checklist audit of the plan's own instructions, and it **contradicted AC7**: entry 8 is "lines 748-770 — retained" while AC7 required those passages verbatim. Mutually unsatisfiable.
 - *AC10b (re-query the ruleset at ship time)* — treating one documented sentence as a live invariant needing a pre-merge API probe. The ADR ages like every ADR.
 - *AC12 (measure the value proposition)* — **cut as an AC, kept as a reporting obligation.** It was unfailable: its own escape hatch (`record UNMEASURED — sibling run detected`) is always available, and the plan documents that a sibling worktree is running the same battery on the same machine. An AC that cannot fail is not an AC. The PR body states the measurement or states plainly that the cost case is carried from PRs #7344/#7343 and was not re-measured here.
-13. **AC13** — `ADR-183` (or its re-derived ordinal) exists, carries the R1-R6 re-homing table and the three counter-arguments to dropping the gate, and the ordinal is re-verified against all `refs/remotes/origin/*` immediately before merge. If it moved, `grep -rn 'ADR-183' knowledge-base/project/{plans,specs}/` returns zero.
-14. **AC14** — the full battery is green at the SHA that merges: `bash scripts/test-all.sh` run at ship Phase 4, `rc` read from the rc file (never the harness notification), the terminal `=== N/M suites passed ===` marker present, and the epilogue NOTE + contention banners read per `work/SKILL.md:670`.
-15. **AC15** — PR body uses `Closes #7352`.
 
 ### Post-merge (operator)
 
@@ -447,25 +497,25 @@ None. Every step above is automatable in-session: the guard test and mutations r
 | Risk | Mitigation |
 |---|---|
 | The Phase-2 shard set under-covers and R1/R4-class breakage reaches review | The shard map is derived from `scripts/test-all.sh:150-157`, not hand-maintained, and a shard runs its whole registered suite list — so R1 (source-text-coupled) and R4 (differently-named guards) are covered whenever their shard is selected. R6 is explicitly accepted as surviving to the merge gate. |
-| The guard test is vacuous — a prose grep satisfied by surrounding prose | Two assertions, two distinct-shape mutations (AC2). The drafted set had two assertions that could never fail; both were cut rather than patched. |
+| The guard test is vacuous — a prose grep satisfied by surrounding prose | One assertion, one mutation (AC2). The drafted set had two assertions that could never fail; both were cut rather than patched. |
 | **Loss of the pre-review reap redundancy** | With two full runs, a reaped Phase 2 was recovered by Phase 4; with one, a reaped Phase 4 has no second chance — and "unresolved" under ship-time pressure resolves to "ship anyway" more often than to a 45-minute re-run. Mitigation: ship Phase 4's prose states that a reaped run is UNRESOLVED per the three-way split (`work/SKILL.md:764`) and must be re-run, never shipped on. *(Surfaced by CPO; the plan's own research records 4 reaps on PR #7344.)* |
 | **The relaxation ships to users whose repo has neither backstop** | The four generic lines (`work/SKILL.md:243,337,668,818`) are project-agnostic. Neither ruleset 14145388 nor `scripts/test-all.sh` exists in a user's repo. See the Taste finding in `decision-challenges.md` — this is the one open question the operator must settle. |
 | Rebase collision with `feat-one-shot-test-pipeline-efficiency` | Its `work/SKILL.md` edits are near line 269; §9 is at 742. Expect a touch-up, not a conflict. Do not read or reset that branch or worktree. |
-| The ADR ordinal is claimed by a sibling mid-pipeline | AC13 re-runs the all-refs probe before merge and sweeps planning artifacts on renumber. This has collided twice in one session before (#5990). |
+| The ADR ordinal is claimed by a sibling mid-pipeline | AC8 re-runs the all-refs probe before merge and sweeps planning artifacts on renumber. This has collided twice in one session before (#5990). |
 | Removing the Phase-2 full run also removes the only place some authors ever saw a contention banner | The four reading-discipline passages stay in `work/SKILL.md` (AC7), and ship Phase 4 links them. |
 | **A future PR shards ship Phase 4 for speed, deleting the only gate R4/R5 have** | The highest-consequence risk in this plan. Three defenses: named ceiling 2 in the plan, an explicit rejected-alternative row in the ADR (so an optimiser finds the rejection instead of re-deriving the idea), and guard assertion 1, whose mutation proof is *sharding* the command rather than deleting it. |
-| Branch protection changes between plan and merge, falsifying the ADR's central claim | AC10b re-queries ruleset 14145388 at ship time. Same shelf-life discipline as the ADR ordinal. |
+| Branch protection changes between plan and merge, falsifying the ADR's central claim | Accepted. The ADR ages like every ADR; a drafted pre-merge API probe (AC10b) was cut as bureaucracy. The claim is dated and sourced in the ADR. |
 | Sequencing against PR #7441 is wrong because its contents were not read first-hand | The dependency is recorded as **agent-sourced and unverified by this session** (see `## Sequencing`), and is framed as a decision point with a stated fallback, not as an asserted blocker. |
-| The relaxation is unfalsifiable — nothing measures whether it causes escapes | A tripwire is declared in the ADR with a review date; automating the count is deferred with a tracking issue (`## Deferred`), because it needs a data source spanning many PRs. |
+| The relaxation is unfalsifiable — nothing measures whether it causes escapes | The ADR records one line: if this bites, restore the unconditional Phase-2 run. A quantified tripwire was drafted and cut — an unspecified `N` with deferred counting is not falsifiability. |
 
 ## Success Metrics
 
 - Full-suite invocations per PR on the Claude Code arm: 2 → 1.
-- `/work` Phase 2 exit wall clock: full-battery duration → ~1-2 min on a representative diff (AC12 records the measured pair).
+- `/work` Phase 2 exit wall clock: full-battery duration → ~1-2 min on a representative diff (the PR body records the measured pair, or states plainly that the cost case is carried from PRs #7344/#7343).
 - Advisory-lock queue events per PR across concurrent worktrees: halved by construction (one acquisition instead of two).
 - Zero change to what reaches `main` for R1-R3: CI's required `test` context (ruleset 14145388) runs the same three `test-all.sh` shards on the PR head, independent of anything this plan touches.
 - Zero change to what reaches `main` for R4: already blocked by the required `test` context via `terraform-target-parity.test.ts` in the `bun` shard. For registered infra suites: still gated by exactly one local `TEST_GROUP=all` run at ship Phase 4. For R5 orphans: unchanged, because nothing gated them before either — tracked separately in `## Deferred`.
-- Escape rate (the falsifiability tripwire): PRs whose required `test` context reds after a green local touched-file gate. Target 0; tripwire threshold and review date recorded in the ADR.
+- Escape rate: PRs whose required `test` context reds after a green local Phase-2 shard gate. Target 0. Not automated — see `## Deferred`.
 
 ## Sequencing
 
@@ -482,7 +532,7 @@ The CTO advisory recommends landing PR #7441 (`feat-one-shot-test-pipeline-effic
 ## Deferred
 
 - **Promote `infra-validate-required` to a required status check.** The R5 gap this plan discovered is a ruleset gap: `apps/web-platform/infra/` orphan suites are gated by nothing, and `infra-validation.yml`'s `infra-validate-required` job is absent from `scripts/required-checks.txt` (verified: `grep -c` → 0). Fixing it means editing that file plus `scripts/ci-required-ruleset-canonical-required-status-checks.json` and `infra/github/ruleset-ci-required.tf`, which `plugins/soleur/test/required-checks-canonical-parity.test.sh` Test 1 parity-guards. File as its own issue: this is a branch-protection change, and folding it into a test-reordering PR would hide a merge-policy change inside a workflow-prose diff. Triaged inline first per `wg-defer-only-after-inline-triage` — it is genuinely a different subsystem, not deferred scope.
-- **Automated escape-rate measurement for the falsifiability tripwire.** Counting "PRs whose required `test` context reds after a green local touched-file gate" needs a data source spanning many PRs and a place to keep the running count; it is a separate work-stream, not a line in this diff. File a tracking issue at `/work` time with: what is deferred, why (needs cross-PR data), the re-evaluation criterion (the tripwire threshold and date recorded in the ADR), and the milestone from `knowledge-base/product/roadmap.md`. Per `wg-defer-only-after-inline-triage` this was triaged inline first — the *tripwire itself* ships in the ADR now; only its automation defers.
+- **Automated escape-rate measurement.** Counting "PRs whose required `test` context reds after a green local touched-file gate" needs a data source spanning many PRs and a place to keep the running count; it is a separate work-stream, not a line in this diff. File a tracking issue at `/work` time with: what is deferred, why (needs cross-PR data), the re-evaluation criterion, and the milestone from `knowledge-base/product/roadmap.md`. Per `wg-defer-only-after-inline-triage` this was triaged inline first — the ADR's one-line revert note ships now; only the measurement defers.
 
 ## Domain Review
 
