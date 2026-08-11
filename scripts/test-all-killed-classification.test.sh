@@ -585,6 +585,34 @@ else
   pass "T14c — no [budget] line for an undeclared label"
 fi
 
+# --- F6: every DECLARED budget label must be a label the runner actually uses ---------------
+# `_suite_budget_ms` keys on the run_suite label string, 500+ lines away from the registration.
+# Renaming the registration leaves `bash -n` clean, `lint-orphan-test-suites.sh` green and all
+# other assertions passing, while the incident-motivated budget can never fire again — the
+# advisory silently evaporates and nothing says so.
+# Anchored on the case-arm CONSTRUCT (`<label>) printf`), not on any line containing a
+# `)`. The first draft of this extraction matched a rationale COMMENT carrying
+# "(TEST_TIMING_LOG)" and reported a false finding — the same body-grep-sees-comments
+# class this suite exists to keep out of the runner. Comments are stripped first.
+_budget_labels=$(sed -n '/^_suite_budget_ms() {/,/^}/p' "$TARGET" \
+  | sed 's/[[:space:]]*#.*$//' \
+  | grep -oE '^[[:space:]]*[^[:space:]]+\) printf' \
+  | sed 's/) printf$//' | tr -d ' ' || true)
+if [[ -z "$_budget_labels" ]]; then
+  pass "F6: no declared budgets to reconcile"
+else
+  _bad=0
+  while IFS= read -r _bl; do
+    [[ -z "$_bl" ]] && continue
+    grep -qE "^[[:space:]]*run_suite \"${_bl//\//\\/}\"" "$TARGET" || { _bad=$((_bad+1)); echo "    unmatched budget label: $_bl"; }
+  done <<< "$_budget_labels"
+  if [[ "$_bad" == "0" ]]; then
+    pass "F6: every declared budget label matches a registered run_suite label"
+  else
+    fail "F6: $_bad declared budget label(s) match no run_suite registration — the budget can never fire"
+  fi
+fi
+
 # --- Positive control: can this file REPORT a failure at all? --------------------------------
 # The floor below counts PASS+FAIL, both of which are produced BY the helpers. So neutering
 # `fail()` to a no-op costs only the delta between the floor and the real count — and with
@@ -614,7 +642,7 @@ fi
 # the count is developer-incremented and `-eq` turns every added assertion into a false red.
 # Set to the CURRENT count, not a round number below it: slack in this floor is exactly the
 # budget a neutered dispatcher has to work with (#7220's class).
-MIN_ASSERTIONS=69
+MIN_ASSERTIONS=70
 if [[ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]]; then
   echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= $MIN_ASSERTIONS — the suite was stranded, not clean." >&2
   exit 1

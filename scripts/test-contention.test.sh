@@ -838,6 +838,40 @@ fi
 # --- Minimum-cardinality guard ---------------------------------------------
 # A silently-empty run exits 0 with zero coverage, which reads exactly like
 # success. This is the guard for that.
+# --- T15: the SUITE view dedupes by WORKTREE, not by pid ---------------------
+# The run view has carried this pair since #6789; the suite view shipped without
+# it, and the gap is not theoretical: replacing `cut -f2 | sort -u | grep -c .`
+# with a bare `grep -c .` (count pids, not worktrees) passed all 66 assertions,
+# while the SAME mutation on the run view reds. The banner's own text says
+# "running in N other worktree(s)", so a pid count makes it say something false.
+T15_PROC="$TESTROOT/proc-t15"
+mkdir -p "$TESTROOT/t15-wt"
+# Two suite processes, ONE worktree -> must collapse to 1.
+make_fake_proc "$T15_PROC" 707001 "$TESTROOT/t15-wt" 30 "tests/scripts/test-foo.sh"
+make_fake_proc "$T15_PROC" 707002 "$TESTROOT/t15-wt" 40 "tests/scripts/test-bar.sh"
+tc_env env TC_PROC_ROOT="$T15_PROC" TC_SELF_PID=999999 \
+  bash -c "source '$LIB'; tc_preamble" > "$TESTROOT/preamble-t15.txt" 2>&1 || true
+if [[ "$(grep -cE '^\[contention\] suite siblings: 1 ' "$TESTROOT/preamble-t15.txt" || true)" -ge 1 ]]; then
+  pass "T15: two suite procs in ONE worktree collapse to 'suite siblings: 1'"
+else
+  fail "T15: expected 'suite siblings: 1'; got: $(grep 'suite siblings' "$TESTROOT/preamble-t15.txt" || true)"
+fi
+
+# --- T15b: the suite count REACHES 2 for two distinct worktrees --------------
+# Without a genuine N=2 case, a mutation capping the count at 1 survives, and the
+# banner's plural has never been exercised.
+T15B_PROC="$TESTROOT/proc-t15b"
+mkdir -p "$TESTROOT/t15b-wt-a" "$TESTROOT/t15b-wt-b"
+make_fake_proc "$T15B_PROC" 708001 "$TESTROOT/t15b-wt-a" 30 "tests/scripts/test-foo.sh"
+make_fake_proc "$T15B_PROC" 708002 "$TESTROOT/t15b-wt-b" 40 "tests/scripts/test-bar.sh"
+tc_env env TC_PROC_ROOT="$T15B_PROC" TC_SELF_PID=999999 \
+  bash -c "source '$LIB'; tc_preamble" > "$TESTROOT/preamble-t15b.txt" 2>&1 || true
+if [[ "$(grep -cE '^\[contention\] suite siblings: 2 ' "$TESTROOT/preamble-t15b.txt" || true)" -ge 1 ]]; then
+  pass "T15b: suite count reaches 2 for two DISTINCT worktrees (not capped at 1)"
+else
+  fail "T15b: expected 'suite siblings: 2'; got: $(grep 'suite siblings' "$TESTROOT/preamble-t15b.txt" || true)"
+fi
+
 # POSITIVE CONTROL. The guard below reports THROUGH fail(), so fail() is a single
 # point of failure for this entire file: neutered to a no-op it takes the whole
 # verdict with it. Measured before this control existed: `fail() { :; }` plus
@@ -859,8 +893,8 @@ fi
 # Count BOTH outcomes: a run with genuine failures has a lower pass_n, and testing
 # pass_n alone reported "cardinality guard: only 64 ran (expected >= 66)" on a run
 # whose real problem was two failures -- a strand message for a non-strand.
-if [[ "$((pass_n + fails))" -lt 66 ]]; then
-  fail "cardinality guard: only $((pass_n + fails)) assertions ran (expected >= 66)"
+if [[ "$((pass_n + fails))" -lt 68 ]]; then
+  fail "cardinality guard: only $((pass_n + fails)) assertions ran (expected >= 68)"
 fi
 
 echo "=== test-contention: $pass_n passed, $fails failed ==="
