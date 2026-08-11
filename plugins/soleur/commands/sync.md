@@ -79,6 +79,29 @@ fi
 
 Warn but continue if not a git repo.
 
+**Validate the plugin root resolves (fail closed — #7442):**
+
+```bash
+test -d "${CLAUDE_PLUGIN_ROOT}/scripts" || {
+  echo "soleur:sync — plugin root unresolved; refusing to run producers CWD-relative (ADR-174)." >&2
+  exit 1
+}
+```
+
+Every producer below is anchored to `${CLAUDE_PLUGIN_ROOT}` — **bare, never
+`:-` or `:?`** — and its path is **payload-relative** (the root already *is*
+`plugins/soleur`, so it is `${CLAUDE_PLUGIN_ROOT}/scripts/foo.ts`, never
+`${CLAUDE_PLUGIN_ROOT}/plugins/soleur/scripts/foo.ts`).
+
+This gate is the reason the bare form is correct under either substitution
+hypothesis. If the harness substitutes the token, it yields the installed root
+and the producers run. If it does not, the token reaches bash where the variable
+is unset and expands to `/scripts/…` — root-anchored, nonexistent, and not
+writable by a non-root user — so this preflight turns it into a clean refusal.
+A `:-` default is the only form that expands into a path the *customer* controls,
+which is how a same-named file in their tree gets executed. Never reintroduce one
+here.
+
 ### Phase 1: Analyze
 
 Based on the area specified (or `all` if none):
@@ -197,7 +220,7 @@ Runs when `<sync_area>` is `c4`, and as part of `all` **after** the `project`
 area (it consumes the component docs that area writes).
 
 ```bash
-bun plugins/soleur/scripts/generate-c4-from-components.ts
+bun ${CLAUDE_PLUGIN_ROOT}/scripts/generate-c4-from-components.ts
 ```
 
 The producer parses each component doc's `dependencies:` frontmatter (falling back
@@ -248,14 +271,14 @@ Runs at the END of an `all` sync, after every other area. Writes
 `knowledge-base/project/kb-coverage.md` and prints the same marker to stdout:
 
 ```bash
-bun plugins/soleur/scripts/write-kb-coverage.ts
+bun ${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts
 ```
 
 Add one `--degraded "<reason>"` for each producer that reported `status=degraded`
 earlier in the run (the `reason=` token from its marker is the right string):
 
 ```bash
-bun plugins/soleur/scripts/write-kb-coverage.ts \
+bun ${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts \
   --degraded "c4: no-generated-relationships"
 ```
 
@@ -313,11 +336,19 @@ Runs only when `<sync_area>` is literally `rule-prune`. Surfaces AGENTS.md rules
    # that is not this monorepo, so a same-named file would execute as theirs.
    # The sentinel is the self-hosted plugin checkout -- the same condition
    # Phase 4.1 already gates on, and one a marketplace install never satisfies.
-   if [[ ! -f plugins/soleur/.claude-plugin/plugin.json ]]; then
+   #
+   # SOLEUR_MONOREPO is what makes the invocation line safe ON ITS OWN. If the
+   # line is ever separated from this gate -- a reader that takes the last line
+   # of the block, a tool that extracts invocations line-wise -- the variable is
+   # unset and the operand becomes "/scripts/...": root-anchored, nonexistent,
+   # not writable by a non-root user. Fail-closed. A bare relative operand would
+   # instead resolve into the customer's tree and execute their file.
+   SOLEUR_MONOREPO="$(test -f plugins/soleur/.claude-plugin/plugin.json && pwd || true)"
+   if [[ -z "$SOLEUR_MONOREPO" ]]; then
      echo "SOLEUR_SYNC_AREA_UNAVAILABLE area=rule-prune reason=monorepo-only-maintenance-area"
      exit 2
    fi
-   bash scripts/rule-metrics-aggregate.sh
+   bash "$SOLEUR_MONOREPO/scripts/rule-metrics-aggregate.sh"
    ```
 
    Append `--dry-run` to preview the summary without writing. Do not create a stub file.
@@ -326,11 +357,12 @@ Runs only when `<sync_area>` is literally `rule-prune`. Surfaces AGENTS.md rules
 3. **Invoke** the pruner behind the same fail-closed sentinel (again, run the block, not the bare command):
 
    ```bash
-   if [[ ! -f plugins/soleur/.claude-plugin/plugin.json ]]; then
+   SOLEUR_MONOREPO="$(test -f plugins/soleur/.claude-plugin/plugin.json && pwd || true)"
+   if [[ -z "$SOLEUR_MONOREPO" ]]; then
      echo "SOLEUR_SYNC_AREA_UNAVAILABLE area=rule-prune reason=monorepo-only-maintenance-area"
      exit 2
    fi
-   bash scripts/rule-prune.sh --weeks=<n>
+   bash "$SOLEUR_MONOREPO/scripts/rule-prune.sh" --weeks=<n>
    ```
 
    Append `--dry-run` to preview candidates without filing. The script:
@@ -358,7 +390,7 @@ are disclosed as blind spots, never counted.
 1. **Emit the drift report** (read-only). Run:
 
    ```bash
-   bash scripts/domain-model-drift.sh drift --repo . --register knowledge-base/engineering/architecture/domain-model.md
+   bash ${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh drift --repo . --register knowledge-base/engineering/architecture/domain-model.md
    ```
 
    Exit `0` = clean, `1` = drift found, `2` = error, `3` = secret-shape refuse. Present the report verbatim
@@ -372,7 +404,7 @@ are disclosed as blind spots, never counted.
    **accepted** candidate, append it via the safe primitive:
 
    ```bash
-   bash scripts/domain-model-drift.sh write-row \
+   bash ${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh write-row \
      --register knowledge-base/engineering/architecture/domain-model.md \
      --anchor "<migration-file › table.object>" --statement "<candidate statement>"
    ```
@@ -402,7 +434,7 @@ so under `all` (or headless) that gate would write **zero rows**. Take this path
    on a path they cannot resolve:
 
    ```bash
-   bash scripts/domain-model-drift.sh init --repo . \
+   bash ${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh init --repo . \
      --register knowledge-base/engineering/architecture/domain-model.md
    ```
 
