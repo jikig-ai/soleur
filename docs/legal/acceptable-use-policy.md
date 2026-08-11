@@ -291,7 +291,7 @@ Where the team-workspace feature is enabled for your organization (gated by `FLA
 
 ### 5.6 BYOK delegation responsibilities
 
-Where the BYOK delegation feature is enabled for your organization (gated by `BYOK_DELEGATIONS_ENABLED`), the following additional responsibilities apply:
+Where the BYOK delegation feature is enabled for your organization (gated by the `byok-delegations` runtime feature flag), the following additional responsibilities apply:
 
 - **Grantor (Workspace Owner) responsibilities:** You must hold a current Delegation Consent Side Letter (available from Jikigai at <legal@jikigai.com>, distinct from the workspace co-member Side Letter in Section 5.5) from each Co-Member ("Grantee") before granting them a BYOK delegation. You may not use delegation to circumvent a Grantee's usage limits or to surveil a Grantee's prompt content. The cost telemetry you receive is limited to: token count, cost in USD cents, timestamp, and agent role. Prompt content, response content, and conversation history are NOT accessible to you via delegation.
 - **Grantee (Co-Member) responsibilities:** By accepting a BYOK delegation, you consent to the Grantor receiving itemized cost telemetry for each AI agent run funded by the delegation (as described in the Delegation Consent Side Letter and the Data Protection Disclosure Section 2.3(w)). You remain responsible for the content of prompts submitted through the delegation.

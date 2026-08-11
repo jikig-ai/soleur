@@ -481,7 +481,7 @@ ADR-038 (`knowledge-base/engineering/architecture/decisions/ADR-038-workspace-me
 | **(d) Recipients** | Anthropic PBC (processor under Grantor's DPA); Supabase Inc (infrastructure processor — existing sub-processor) |
 | **(e) Transfers** | Existing Anthropic transfer mechanism (DPF + SCCs). No new third-country transfer introduced |
 | **(f) Retention** | 7 years (financial audit trail, matching tc_acceptances). Art. 17 cascade via `anonymise_byok_delegations` (step 5.10) + `anonymise_byok_delegation_acceptances` (step 5.11) in `server/account-delete.ts` |
-| **(g) TOMs** | (1) WORM trigger on `byok_delegation_acceptances` (append-only, `session_replication_role=replica` bypass for Art. 17 only); (2) same-workspace CHECK constraint on `byok_delegations`; (3) RLS: authenticated users SELECT + INSERT own acceptance rows via `auth.uid()`; (4) SECURITY DEFINER RPCs with `search_path = public, pg_temp`; (5) daily + hourly USD cap enforcement; (6) 60s grace window on revocation; (7) feature flag gate (`BYOK_DELEGATIONS_ENABLED`, default OFF) |
+| **(g) TOMs** | (1) WORM trigger on `byok_delegation_acceptances` (append-only, `session_replication_role=replica` bypass for Art. 17 only); (2) same-workspace CHECK constraint on `byok_delegations`; (3) RLS: authenticated users SELECT + INSERT own acceptance rows via `auth.uid()`; (4) SECURITY DEFINER RPCs with `search_path = public, pg_temp`; (5) daily + hourly USD cap enforcement; (6) 60s grace window on revocation; (7) feature flag gate (runtime flag `byok-delegations` via `isByokDelegationsEnabled`, environment fallback `FLAG_BYOK_DELEGATIONS`, default OFF) |
 
 ---
 
