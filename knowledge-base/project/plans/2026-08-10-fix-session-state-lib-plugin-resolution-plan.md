@@ -187,8 +187,17 @@ logs:
   where: "$(git rev-parse --git-common-dir)/soleur-session-state/logs/<PPID>.log via headless_or_stderr"
   retention: "operator-local; rotated by .claude/hooks/lib/log-rotation.sh (repo-side only)"
 discoverability_test:
-  command: "bash plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh"
-  expected_output: "PASS including the cache-layout scenario — a cache-only tree resolved the library and --yes create wrote a lease file with pid=/skill=/expected_duration_min=137"
+  # Revised at ship time. The first draft named the full lease suite, which is
+  # the right REGRESSION gate and the wrong DISCOVERABILITY probe: it measured
+  # 13s against preflight Check 10's 15s cap (a 2s margin that flakes on a
+  # loaded machine), and its expected_output was a prose sentence that cannot
+  # substring-match real stdout — so the check would have failed on mismatch
+  # even when the fix was correct. A discoverability test is what an operator
+  # runs to answer "is the layer live here?", so it must be fast and have a
+  # machine-checkable expectation.
+  command: bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh list
+  expected_output: SOLEUR_WORKTREE_LEASE_LIB_OK
+  regression_gate: "bash plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh (40 assertions incl. the cache-install, reaper-refusal, anchor-hop, interop and arming-hold scenarios)"
 ```
 
 ## Domain Review
