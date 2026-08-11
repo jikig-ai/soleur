@@ -39,3 +39,51 @@ Plan frontmatter `closes: 7442` — already cleared at Step 0a.5. The only ref p
 - Plan review: `architecture-strategist`, `spec-flow-analyzer`, `code-simplicity-reviewer`, scoped strong-model advisor
 - Deepen review: `security-sentinel`, `test-design-reviewer`
 - Deepen gates: 4.5 (fired, disposition + telemetry recorded), 4.6/4.7/4.8 PASS, 4.9/4.10/4.55 skipped (no trigger)
+
+## Work Phase
+
+- Status: implementation complete; full-suite exit gate deferred to post-review (see below).
+- Commits: `a16af4bce` relocation · `632f09d92` rule-prune gate · `9484afac7` anchoring + T0 · `09a7460fa` guard · ADR-177 · `783ff94c2` orphan tombstone.
+
+### Phase 0 outcome — a fourth branch the plan's decision tree did not enumerate
+
+`CLAUDE_PLUGIN_ROOT` is UNSET in the bash tool environment (three ways: `${VAR+SET}` empty,
+`env | grep -c` = 0, fallback expanding). Measured from inside a plugin-provided **skill**
+execution context, not merely a plain session. So the issue's proposed
+`${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}` expands to the defect it was meant to fix.
+
+Remedy bound to the **bare** token, which is fail-closed under either substitution
+hypothesis. Full reasoning + rejected alternatives: ADR-177.
+
+### Task-list reconciliation — why the plan's boxes are NOT ticked
+
+The CTO ruling reshaped scope after `tasks.md` was written, so ticking its 53 boxes would
+assert work that was superseded rather than done. What actually changed:
+
+| Plan said | Shipped | Why |
+| --- | --- | --- |
+| Anchor 29 sites across 19 files | Anchored the **command surface** only (`sync.md` 6 + `go.md` 2) | The 100-site skills migration needs a `server/safe-bash.ts` change; bundling an allowlist edit behind a P1 bug fix is how allowlist regressions ship. Deferred to #7453. |
+| `${CLAUDE_PLUGIN_ROOT:-…}` prefix | **Bare** `${CLAUDE_PLUGIN_ROOT}`, payload-relative | The `:-` form is the vector, measured. |
+| Relocate `domain-model-drift.sh` **and** `rule-prune.sh` | Relocated the first only | Both `rule-prune.sh:52` and `rule-metrics-aggregate.sh:34` derive their data root from `$SCRIPT_DIR/..`; a move silently repoints them. |
+| Phase 6 C4 modelling | Deferred to #7452 | Outside the CTO's stated scope boundary; a modelling addition, not a fix for #7442. |
+| Guard over `plugins/soleur/**/*.md` | Scoped to `commands/**/*.md` | Residency (P2) would red unpredictably against the unaudited skills corpus. Exclusion stated in the guard's docstring, not implied. |
+| AC8: halt literal count = 1 | 2 | Both call sites are gated, not just the pruner. |
+| Deferral 4 (make rule-prune customer-capable) | **Closed, not deferred** | ADR-177: the area is monorepo-only by construction. |
+
+### Defects found in my own work by my own tests
+
+1. **The Phase 5 sentinel was line-separable.** T0 extracted the invocation line-wise and the
+   decoys executed. Fixed by variable-anchoring the operand so the line is fail-closed in
+   isolation; `|| true` on the assignment so `set -e` cannot abort before the message prints.
+2. **`scripts/domain-model-drift.test.sh` resolved its SUT as a sibling**, so the relocation
+   broke it in a way no path-literal grep could see. Repointed with a fail-loud guard.
+3. **`ADR-174` cited in the preflight message** before the ordinal was checked; corrected to
+   `ADR-177`.
+
+### Exit-gate note (honest)
+
+`test-all.sh` was launched detached and **queued on the advisory lock** behind three sibling
+worktree runs (~58 min each); `/tmp` was at 83%, firing both `LOW_TMP_HEADROOM` and
+`SIBLING_RUN_DETECTED`. I killed my queued run by PID (ancestry excluded; siblings verified
+untouched) rather than hold it against a tree review may still change. The gate runs once
+against the final tree. `tsc --noEmit` completed independently: **rc=0, zero errors**.
