@@ -49,8 +49,33 @@ trap 'rm -rf "$TMP"' EXIT
 # Render the REAL template, then extract the emitter and the Doppler-download runcmd block
 # from it. Extracting from the render (not from a hand-written fixture) is what makes this
 # track the artifact that actually ships.
-bash "$DIR/git-data-userdata-budget.sh" "$TMP/rendered.yml" >/dev/null 2>&1 \
+# TWO ARTIFACTS (#7264). `rendered.yml` is the STRIPPED render — the bytes the host is
+# actually handed, and the right corpus for every boot-fidelity predicate below.
+# `rendered-raw.yml` is the unstripped one, kept so this suite retains a corpus that still
+# contains comments: once the render is comment-free, a predicate satisfiable by prose and
+# one satisfiable only by code become indistinguishable, and the discriminating power this
+# suite was built for (a green arm satisfied by a comment block) silently disappears.
+bash "$DIR/git-data-userdata-budget.sh" "$TMP/rendered.yml" "$TMP/rendered-raw.yml" >/dev/null 2>&1 \
   || { echo "FAIL: render failed" >&2; exit 1; }
+
+# The strip is load-bearing end-to-end, not just in the budget script's own accounting: the
+# raw render MUST still carry rationale comments and the stripped one MUST NOT. If these ever
+# converge, either the strip stopped matching (cap regression) or the template lost its
+# rationale (a different problem) — both are worth failing on here rather than at apply time.
+_raw_comments=$(grep -cE '^[[:space:]]*#[[:space:]]' "$TMP/rendered-raw.yml" || true)
+_stripped_comments=$(grep -cE '^[[:space:]]*#[[:space:]]' "$TMP/rendered.yml" || true)
+if [ "$_raw_comments" -lt 100 ] || [ "$_stripped_comments" -ne 0 ]; then
+  echo "FAIL: render strip did not take effect (raw rationale lines=${_raw_comments} expected >=100; stripped=${_stripped_comments} expected 0)" >&2
+  exit 1
+fi
+# No `head … | grep -q` here: under `set -uo pipefail` grep -q closes the pipe on match and
+# the producer takes SIGPIPE (141), which pipefail promotes — so the guard fails OPEN exactly
+# when it matches (#7005). Compare the captured string instead.
+_first_line=$(head -1 "$TMP/rendered.yml")
+if [ "$_first_line" != "#cloud-config" ]; then
+  echo "FAIL: stripped render begins with '${_first_line}', not '#cloud-config' — cloud-init would ignore the payload and the host would boot dark" >&2
+  exit 1
+fi
 
 python3 - "$TMP/rendered.yml" "$TMP" <<'PY'
 import sys, yaml, re
@@ -119,8 +144,20 @@ open(f"{out}/runcmd-all.sh", "w").write(_all)
 # up: this file's prose discusses `git-data-emit … fatal`, `[ -s "$_detail"` and the literal
 # log path at length, so any regex predicate reading the raw text can be satisfied by the
 # commentary that explains the property instead of the property.
-open(f"{out}/runcmd-all.code.sh", "w").write(
-    "\n".join(l for l in _all.splitlines() if not re.match(r'^\s*#', l)) + "\n")
+_all_code = "\n".join(l for l in _all.splitlines() if not re.match(r'^\s*#', l))
+# NON-VACUITY, mirroring luks-stage.code.sh's `mkfs.ext4` assert one level up (#7264).
+# luks-stage.code.sh has carried this since it was written; THIS file did not, and its four
+# consumers (R3(3b), R3(3c), R3(3d), R3(2d)) are all NEGATIVE-space or ordering predicates —
+# the shapes that pass on an EMPTY slice. So a strip that ate the whole concatenation, or an
+# upstream change that emptied `runcmd`, would have reported four green arms about a file
+# with nothing in it. Assert both a content anchor and a size floor: the anchor catches an
+# over-aggressive strip, the floor catches a slice that silently collapsed.
+assert "git-data-emit" in _all_code, (
+    "comment-stripped runcmd concatenation lost the emitter invocation — strip is too aggressive")
+assert len(_all_code.splitlines()) >= 40, (
+    f"comment-stripped runcmd concatenation collapsed to {len(_all_code.splitlines())} lines "
+    "(floor 40) — the four R3 predicates reading it would pass vacuously")
+open(f"{out}/runcmd-all.code.sh", "w").write(_all_code + "\n")
 PY
 [ -s "$TMP/doppler-dl.sh" ] || { echo "FAIL: could not extract the checksum block" >&2; exit 1; }
 
@@ -209,7 +246,19 @@ tpl = open(os.path.join(srcdir, "cloud-init-git-data.yml")).read()
 # expression FROM git-data.tf rather than restating it: a hand-copied spelling would drift,
 # and a stripper that silently disagreed with production would make this whole check compare
 # the wrong bytes while still reporting byte-identity.
-m = re.search(r'git_data_rationale_strip\s*=\s*"(.*)"', tf)
+# ANCHORED AT LINE START, and non-greedy between the quotes (#7264). The previous form was a
+# bare `re.search` over the raw file taking the FIRST match, so a COMMENT naming an old
+# expression (`# git_data_rationale_strip = "<old form>"` — exactly the prose this repo
+# writes) would be extracted instead of the live assignment, and the probe below passes
+# either way: wrong stripper, green suite. `^\s*` before the identifier makes a commented
+# line unmatchable, because `#` is neither whitespace nor the identifier's first character.
+# `[^"]*` stops the greedy `.*` over-reaching on a line carrying more than one quote pair.
+#
+# The name is also unambiguous by construction: main.tf now declares a SECOND expression,
+# `git_data_template_rationale_strip`, which does not contain this one as a substring — so
+# this search cannot pick up the template form, and the template search cannot pick up this
+# one. ADR-152 requires them to differ; git-data-render-strip-parity.test.sh asserts it.
+m = re.search(r'^\s*git_data_rationale_strip\s*=\s*"([^"]*)"', tf, re.M)
 if not m:
     print("B1 FAIL: no git_data_rationale_strip in modules/git-data-userdata/main.tf — cannot mirror the render-time strip")
     sys.exit(1)

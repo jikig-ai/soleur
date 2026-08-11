@@ -61,14 +61,23 @@ printf '\n=== git-data-render-strip-parity ===\n\n'
 # change is exactly the kind of prose that gets written. Both files would then be compared on
 # their comments while their real expressions drifted apart. Latent today (no such comment
 # exists); stripped so it stays that way. (cq-assert-anchor-not-bare-token)
-extract_strip() { grep -vE '^[[:space:]]*(#|//)' "$1" | grep -oE 'git_data_rationale_strip[[:space:]]*=[[:space:]]*".*"' | head -1 | sed 's/^[^=]*=[[:space:]]*//'; }
+#
+# PARAMETERISED BY NAME because main.tf now declares TWO expressions (#7264): the payload
+# strip (`#!`-preserving, for the nine file()-bound scripts) and the template strip
+# (directive-preserving, for the cloud-init body). ADR-152 rules they are "deliberately not
+# shared, and must not be" — so each needs its OWN mirror check, and arm 1c below asserts
+# they have not been collapsed into one. The two names cannot cross-match:
+# `git_data_template_rationale_strip` does not contain `git_data_rationale_strip` as a
+# substring, which is why the template local is named with the qualifier in the MIDDLE and
+# not as a `_template` suffix.
+extract_strip() { grep -vE '^[[:space:]]*(#|//)' "$2" | grep -oE "$1"'[[:space:]]*=[[:space:]]*".*"' | head -1 | sed 's/^[^=]*=[[:space:]]*//'; }
 
-tf_strip="$(extract_strip "$TF")"
+tf_strip="$(extract_strip git_data_rationale_strip "$TF")"
 # The budget script emits its locals block through an UNQUOTED heredoc, so bash halves every
 # backslash on the way to the generated main.tf. Compare what terraform will actually see:
 # unescape the shell layer before comparing, rather than comparing the two source spellings
 # (which legitimately differ) or normalising both to nothing (which would compare no bytes).
-budget_raw="$(extract_strip "$BUDGET")"
+budget_raw="$(extract_strip git_data_rationale_strip "$BUDGET")"
 # Halve the doubled backslashes ONLY. Do NOT run this through `printf '%b'`: that would
 # interpret `\t`/`\n` as a real tab and newline, comparing the expression's MEANING instead of
 # the bytes terraform receives — and it would report two genuinely different expressions as
@@ -84,6 +93,49 @@ elif [[ "$tf_strip" == "$budget_strip" ]]; then
 else
   fail "strip expression DRIFTED between the two hand-mirrored maps" \
     "module: ${tf_strip} | budget(as terraform sees it): ${budget_strip}"
+fi
+
+# ── 1b. The TEMPLATE strip expression must be mirrored the same way ────────────────────
+tf_tpl="$(extract_strip git_data_template_rationale_strip "$TF")"
+budget_tpl_raw="$(extract_strip git_data_template_rationale_strip "$BUDGET")"
+budget_tpl="${budget_tpl_raw//\\\\/\\}"
+
+if [[ -z "$tf_tpl" ]]; then
+  fail "modules/git-data-userdata/main.tf declares a TEMPLATE strip expression" "no git_data_template_rationale_strip assignment found — the cloud-init body would ship unstripped"
+elif [[ -z "$budget_tpl_raw" ]]; then
+  fail "git-data-userdata-budget.sh mirrors the TEMPLATE strip expression" "no git_data_template_rationale_strip assignment found — the budget would measure a payload no host is given"
+elif [[ "$tf_tpl" == "$budget_tpl" ]]; then
+  pass "TEMPLATE strip expression is byte-identical in modules/git-data-userdata/main.tf and git-data-userdata-budget.sh"
+else
+  fail "TEMPLATE strip expression DRIFTED between the two hand-mirrored maps" \
+    "module: ${tf_tpl} | budget(as terraform sees it): ${budget_tpl}"
+fi
+
+# ── 1c. The two expressions must NOT be the same ───────────────────────────────────────
+#
+# ADR-152: "The expression is deliberately not shared, and must not be." The payload form
+# preserves `#!` and NOTHING else, which deletes `#cloud-config`; the template form preserves
+# any `#`-directive. Collapsing them is the exact regression that boots a host dark, and it
+# is a one-line edit away at all times.
+if [[ -z "$tf_tpl" || -z "$tf_strip" ]]; then
+  fail "both strip expressions are present to compare" "payload='${tf_strip}' template='${tf_tpl}'"
+elif [[ "$tf_strip" == "$tf_tpl" ]]; then
+  fail "the payload and TEMPLATE strip expressions have been COLLAPSED into one" \
+    "ADR-152 forbids sharing: the payload form deletes '#cloud-config'. Both are: ${tf_strip}"
+else
+  pass "payload and TEMPLATE strip expressions are distinct (ADR-152: deliberately not shared)"
+fi
+
+# ── 1d. The template strip must actually be APPLIED to the render ──────────────────────
+#
+# Declared-but-unreferenced is the silent form of this defect: the expression is present,
+# parity holds, and the render still ships unstripped. Mirrors the registry precedent's
+# `never REFERENCES` guard.
+if grep -qE 'replace\(templatefile\(' "$TF" && grep -qF 'local.git_data_template_rationale_strip' "$TF"; then
+  pass "the render wraps templatefile() in replace(..., local.git_data_template_rationale_strip, \"\")"
+else
+  fail "the render does NOT apply the template strip" \
+    "main.tf declares git_data_template_rationale_strip but never wraps templatefile() with it — the stored payload is unstripped"
 fi
 
 # ── 2. Downstream-parser invariants (plugins/soleur/test/cloud-init-user-data-size.test.ts) ─
@@ -238,11 +290,11 @@ rm -f "$probe"
 
 # ── Minimum-cardinality floor ──────────────────────────────────────────────────────────
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 9 ]]; then
+if [[ "$_ran" -lt 13 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 9.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 13.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 9)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 13)\n' "$_ran"
 fi
 
 printf '\n=== git-data-render-strip-parity: %d passed, %d failed ===\n\n' "$passes" "$fails"

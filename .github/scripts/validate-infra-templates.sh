@@ -294,6 +294,69 @@ has_template_syntax() { # file
   return 1
 }
 
+# (#7264) APPLY THE CALL SITE'S RENDER STRIP BEFORE VALIDATING.
+#
+# This gate renders the BARE `templatefile(...)`. When the call site wraps it —
+# `user_data = base64gzip(replace(templatefile(...), local.<X>, ""))`, which both
+# zot-registry.tf and modules/git-data-userdata/main.tf now do — the document the host is
+# actually handed is the STRIPPED one, and this gate would be schema-validating a document
+# that never boots anything. Worse, it would validate the one shape that cannot fail: the
+# unstripped body still carries `#cloud-config`, so the exact regression a too-permissive
+# strip causes (header eaten, host boots dark) is invisible here by construction.
+#
+# So: find the wrapping `replace(templatefile(` for THIS template, resolve the named local to
+# its `/…/` literal, and apply it. Fail closed — if the wrap is present but the local cannot
+# be resolved, that is a gate that no longer knows what it is validating.
+apply_render_strip() { # rendered_path template_path
+  local rendered="$1" tpl="$2" tplbase local_name expr tf
+  tplbase="$(basename "$tpl")"
+  for tf in "${TF_FILES[@]}"; do
+    # LINE-SCOPED AND LITERAL. An earlier form joined the file with `tr '\n' ' '` and matched
+    # `replace\(templatefile\(.*<base>.*\}\), local\.X`; with the whole file on one line the
+    # `.*` runs span everything, so ANY wrapped call site in ANY .tf donated its strip to
+    # EVERY template — measured: the web host's unwrapped cloud-init.yml was handed the
+    # registry's expression. `$tplbase` also contains `.`, which is a regex any-char, so
+    # `cloud-init.yml` could match a sibling basename. Both are fixed by matching the ONE
+    # line that opens the call (terraform keeps `replace(templatefile("…", {` together) with
+    # grep -F, then scanning FORWARD from it for the closing `}), local.<X>,`.
+    local open_ln
+    open_ln=$(grep -nF "$tplbase" "$tf" 2>/dev/null \
+      | grep -F 'replace(templatefile(' | head -1 | cut -d: -f1)
+    [[ -n "$open_ln" ]] || continue
+    local_name=$(tail -n "+${open_ln}" "$tf" \
+      | grep -oE '^[[:space:]]*\}\)[[:space:]]*,[[:space:]]*local\.[a-z_]+' \
+      | head -1 | grep -oE 'local\.[a-z_]+$' | sed 's/^local\.//')
+    if [[ -z "$local_name" ]]; then
+      echo "ERROR: $tplbase opens a replace(templatefile( at ${tf}:${open_ln} but no closing '}), local.<name>,' was found." >&2
+      echo "  Refusing to schema-validate a document that is not the one the host boots." >&2
+      exit 3
+    fi
+    expr=$(grep -vE '^[[:space:]]*(#|//)' "$tf" \
+      | grep -oE "^[[:space:]]*${local_name}[[:space:]]*=[[:space:]]*\"[^\"]*\"" \
+      | sed -E 's/^[^=]*=[[:space:]]*"(.*)"$/\1/' | head -1)
+    if [[ -z "$expr" ]]; then
+      echo "ERROR: $tplbase is rendered through replace(..., local.${local_name}, \"\") but that local has no resolvable /…/ literal in $tf." >&2
+      echo "  Refusing to schema-validate a document that is not the one the host boots." >&2
+      exit 3
+    fi
+    python3 - "$rendered" "$expr" <<'PY' || { echo "ERROR: could not apply render strip to $tplbase" >&2; exit 3; }
+import re, sys
+path, expr = sys.argv[1], sys.argv[2]
+if not (expr.startswith("/") and expr.endswith("/")):
+    sys.exit(f"strip expression is not a slash-delimited terraform regex literal: {expr!r}")
+pat = expr[1:-1].replace("\\t", "\t").replace("\\n", "\n")
+body = open(path).read()
+out = re.sub(pat, "", body)
+if out == body:
+    sys.exit("the render strip matched nothing — it is a no-op, so this gate would validate the unstripped document")
+open(path, "w").write(out)
+PY
+    echo "  ..  $tplbase: applied local.${local_name} before validation (the bytes the host boots)"
+    return 0
+  done
+  return 0
+}
+
 validate_by_type() { # rendered_path original_basename label
   local rendered="$1" base="$2" label="$3" out rc
   case "$base" in
@@ -601,6 +664,8 @@ for base in "${MEMBERS[@]}"; do
         exit 3
       fi
     done
+
+    apply_render_strip "$rendered" "$path"
 
     if ! validate_by_type "$rendered" "$base" "$label"; then
       exit 1
