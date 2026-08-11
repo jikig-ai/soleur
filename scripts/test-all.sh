@@ -738,6 +738,11 @@ if want_scripts; then
   run_suite "tests/scripts/audit-bot-codeql-coverage" bash tests/scripts/test-audit-bot-codeql-coverage.sh
   run_suite "tests/commands/sync-rule-prune" bash tests/commands/test-sync-rule-prune.sh
   run_suite "tests/commands/sync-domain-model" bash tests/commands/test-sync-domain-model.sh
+  # tests/commands/ is registered by these explicit lines ONLY — there is no glob
+  # here, and lint-orphan-test-suites.sh iterates scripts/*.test.sh, so it does
+  # not cover this directory either. A new suite added below without a run_suite
+  # line silently never gates (#7442).
+  run_suite "tests/commands/sync-producer-reachability" bash tests/commands/test-sync-producer-reachability.sh
   run_suite "tests/scripts/kb-drift-walker" bash tests/scripts/test-kb-drift-walker.sh
   # Destroy-guard counters (apply-* workflow trio). Pre-existing gap from
   # #4420 closed in #4419 — without these in CI, a PR that mutates a filter
