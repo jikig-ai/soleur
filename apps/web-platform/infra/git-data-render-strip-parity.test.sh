@@ -138,6 +138,45 @@ else
     "main.tf declares git_data_template_rationale_strip but never wraps templatefile() with it — the stored payload is unstripped"
 fi
 
+# ── 1e. B1's extractor must not be shadowed by a comment ───────────────────────────────
+#
+# git-data-runcmd-rehearsal.test.sh's B1 arm re-reads the strip expression OUT of main.tf and
+# recompiles it as a Python regex to mirror the render. Its original form was a bare
+# `re.search` over the raw file taking the FIRST match, so a comment naming an old expression
+# — exactly the prose this repo writes — would be extracted instead of the live assignment,
+# and B1's own `#!/bin/sh\n# a comment\n` probe passes either way. Wrong stripper, green
+# suite. The fixture below is the proof the anchored form is required: it prepends a
+# shadowing comment and asserts the live expression still wins.
+_b1_probe=$(python3 - "$TF" <<'PY' 2>&1
+import re, sys
+tf = open(sys.argv[1]).read()
+probe = '# git_data_rationale_strip = "/(?m)^SHADOW\\n/"\n' + tf
+old = re.search(r'git_data_rationale_strip\s*=\s*"(.*)"', probe)
+new = re.search(r'^\s*git_data_rationale_strip\s*=\s*"([^"]*)"', probe, re.M)
+if old is None or new is None:
+    print("EXTRACT-FAILED"); sys.exit(0)
+print("SHADOWED" if "SHADOW" in old.group(1) else "NOT-SHADOWED", end=" ")
+print("LIVE" if "SHADOW" not in new.group(1) else "ALSO-SHADOWED")
+PY
+)
+if [[ "$_b1_probe" == "SHADOWED LIVE" ]]; then
+  pass "the anchored extractor ignores a shadowing comment that fools the bare form"
+elif [[ "$_b1_probe" == *"ALSO-SHADOWED"* ]]; then
+  fail "the anchored extractor is ALSO fooled by a shadowing comment" \
+    "B1 would mirror the wrong expression while its own probe still passes"
+else
+  fail "could not run the B1 shadowing probe" "$_b1_probe"
+fi
+
+# And the live form must actually be the anchored one in the rehearsal suite.
+REHEARSAL="$DIR/git-data-runcmd-rehearsal.test.sh"
+if [[ -f "$REHEARSAL" ]] && grep -qF "re.search(r'^\\s*git_data_rationale_strip" "$REHEARSAL"; then
+  pass "git-data-runcmd-rehearsal.test.sh uses the anchored, line-start extractor"
+else
+  fail "git-data-runcmd-rehearsal.test.sh does NOT use the anchored extractor" \
+    "a comment naming an old expression would shadow the live one (B1 mirrors the wrong strip)"
+fi
+
 # ── 2. Downstream-parser invariants (plugins/soleur/test/cloud-init-user-data-size.test.ts) ─
 #
 # That file finds the templatefile map by counting BRACE DEPTH and parses entries with a
@@ -290,11 +329,11 @@ rm -f "$probe"
 
 # ── Minimum-cardinality floor ──────────────────────────────────────────────────────────
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 13 ]]; then
+if [[ "$_ran" -lt 15 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 13.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 15.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 13)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 15)\n' "$_ran"
 fi
 
 printf '\n=== git-data-render-strip-parity: %d passed, %d failed ===\n\n' "$passes" "$fails"

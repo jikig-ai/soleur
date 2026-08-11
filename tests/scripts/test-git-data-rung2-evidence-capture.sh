@@ -506,12 +506,40 @@ if [[ "$rc" -eq 1 ]]; then pass "live anchor + silent host + Sentry fatal => exi
 if [[ "$out" == *"6123456789"* ]]; then pass "the FAIL names the Sentry issue id it found"; else
   fail "the FAIL names the Sentry issue id it found" "$rc" "$out"; fi
 
+
+# ── ARM S5: the Sentry credential must live where the workflow actually runs ───────────
+#
+# The arm above is only as good as the environment it runs in. scripts/sentry-issue.sh
+# documents SENTRY_ISSUE_RO_TOKEN as living in Doppler soleur/prd, but the rung-2 workflow
+# invokes this script under `doppler run -p soleur -c prd_terraform` — a different config.
+# Had that been assumed rather than checked, the arm would have been a dead read: the token
+# unset, every consult reporting COULD NOT CONSULT, and the TRANSIENT mis-report #7116 exists
+# to fix surviving untouched behind a green suite. (Measured 2026-08-11: it resolves under
+# BOTH configs.) This arm pins the static half — that the workflow's config is the one the
+# script's header names — so a future config change surfaces here instead of at dispatch.
+WF="${ROOT}/.github/workflows/git-data-rung2-rehearsal.yml"
+if [[ -f "$WF" ]]; then
+  _cap_cfg="$(grep -B2 -A2 'git-data-rung2-evidence-capture.sh' "$WF" | grep -oE '\-c [a-z_]+' | head -1 | awk '{print $2}')"
+  if [[ "$_cap_cfg" == "prd_terraform" ]]; then
+    pass "the workflow invokes the capture script under the Doppler config the header names (prd_terraform)"
+  else
+    fail "the workflow invokes the capture script under Doppler config '${_cap_cfg}'" \
+      "the Sentry arm's credential is documented for prd_terraform; a mismatch makes it a dead read"
+  fi
+  if grep -qF 'prd_terraform' "$SUT"; then
+    pass "the capture script records which Doppler config its Sentry credential resolves under"
+  else
+    fail "the capture script does not name the Doppler config for SENTRY_ISSUE_RO_TOKEN" \
+      "the next reader cannot tell whether the arm can run"
+  fi
+fi
+
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 41 ]]; then
+if [[ "$_ran" -lt 43 ]]; then
   fails=$((fails + 1))
   printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 33. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 41)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 43)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"
