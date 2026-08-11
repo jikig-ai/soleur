@@ -224,6 +224,60 @@ Two consequences, both load-bearing:
 This is recorded because the plan's justification must rest on what was measured. Nothing
 below depends on which producer the reporter actually hit.
 
+## Deepening Verification
+
+Run after the seven-reviewer panel, against the **redesigned** (per-site) form. Every claim below
+was executed, not reasoned.
+
+### The redesign's central claim, verified empirically
+
+Ran the file's real `RUNNER_RE` and `DIRECT_EXEC_RE` against the guard form:
+
+| Line of the guard | Operands extracted |
+| --- | --- |
+| `[ -f "${CLAUDE_PLUGIN_ROOT}/scripts/…ts" ] \` | none |
+| `  && bun "${CLAUDE_PLUGIN_ROOT}/scripts/…ts" \` | **one** — `"${CLAUDE_PLUGIN_ROOT}/scripts/generate-c4-from-components.ts"` |
+| `  \|\| echo "SOLEUR_SYNC_PRODUCER_MISSING …"` | none |
+
+That single operand is **anchored** (P1 ✓), **quoted** (P1c ✓), payload-relative and resident
+(P2 ✓ — P2's `existsSync` covers it for free), and the block contains no `:-`/`:?` (P1b ✓).
+
+Two consequences worth stating:
+
+1. **The existing suite covers the guard automatically.** The rejected Phase-0-probe form
+   extracted *nothing* and would have introduced an anchored-operand class no assertion touched.
+   The per-site form is the only one of the two that the guard suite can see.
+2. **The extracted-operand count per site is unchanged** (one, exactly as today's bare `bun "…"`
+   line), so P3's per-file invocation floor is unaffected by the edit.
+
+### Gate results
+
+| Gate | Result |
+| --- | --- |
+| 4.6 User-Brand Impact | PASS — section present, threshold `single-user incident`, worst-case enumerated |
+| 4.7 Observability | PASS — all five fields non-placeholder; `discoverability_test.command` starts with `bash` (allowlisted) and contains no `ssh` |
+| 4.8 PAT-shaped variable | PASS — no match |
+| 4.5 Network-outage | Skipped — the two keyword hits are a learning *filename* and the phrase "unreachable past the gate's `exit 1`"; neither is a network symptom |
+| 4.55 Downtime & cutover | Skipped — no reboot/replace, lock-taking DDL, or router change |
+| 4.9 UI wireframe | Skipped — no UI-surface path in Files to Edit |
+| 4.10 Encryption posture | Skipped — no persistent store or cross-component connection |
+| 4.4 Precedent diff | The guard reuses the `bun`-probe marker idiom already in `sync.md`; ADR-179 decision 5 supplies the fail-closed-in-isolation precedent the per-site form satisfies |
+
+### Citation sweep
+
+All seven AGENTS rule IDs cited in this plan resolve to active `[id: …]` entries in `AGENTS.md`
+(`cq-assert-anchor-not-bare-token`, `cq-cite-content-anchor-not-line-number`,
+`cq-test-fixtures-synthesized-only`, `hr-verify-repo-capability-claim-before-assert`,
+`hr-when-a-command-exits-non-zero-or-prints`, `hr-when-in-a-worktree-never-read-from-bare`,
+`wg-architecture-decision-is-a-plan-deliverable`) — no retired or fabricated IDs. Every
+`knowledge-base/` path cited resolves on disk. Every issue and PR number was checked live
+(#7442 CLOSED, #7443 MERGED, #7450 OPEN, #7452 OPEN, #7474 OPEN). No new ADR ordinal is claimed.
+
+**AC self-grep scope:** the one negative grep in the ACs is scoped to
+`plugins/soleur/commands/sync.md`, not the repo — this plan and
+`decision-challenges.md` both legitimately contain the rejected `reason=stale-install`
+token, so a wider scope would self-fail.
+
 ## Design Decisions
 
 A seven-reviewer panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow, CPO,
