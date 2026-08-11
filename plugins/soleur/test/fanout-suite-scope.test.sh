@@ -42,6 +42,12 @@ trap 'rm -rf "$TMP"' EXIT
 build_sandbox() {
   local out="$1"
   cp "$TARGET" "$out" || return 1
+  # The sandbox RELOCATES test-all.sh, so anything it resolves via ${BASH_SOURCE[0]} must be
+  # relocated with it. The relevance-predicate data file is sourced fail-CLOSED (a missing one
+  # exits 2 rather than declining every gated suite behind a green summary), so without this
+  # copy every arm below would measure that guard firing instead of the refusal under test.
+  mkdir -p "$(dirname "$out")/lib" || return 1
+  cp "$REPO_ROOT/scripts/lib/test-relevance-paths.sh" "$(dirname "$out")/lib/" || return 1
   python3 - "$out" <<'PY' || exit 2
 import re, sys
 path = sys.argv[1]

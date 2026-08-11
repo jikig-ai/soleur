@@ -39,6 +39,13 @@ fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 build_sandbox() {
   local out="$1" in_diff="$2"
   cp "$TARGET" "$out" || return 1
+  # The sandbox RELOCATES test-all.sh, so anything it resolves via ${BASH_SOURCE[0]} has to be
+  # relocated with it. The relevance-predicate data file is sourced fail-CLOSED (a missing one
+  # exits 2, because empty predicates would decline every gated suite while the summary still
+  # read green), so without this copy every arm below would measure that guard firing rather
+  # than the gate it guards.
+  mkdir -p "$(dirname "$out")/lib" || return 1
+  cp "$REPO_ROOT/scripts/lib/test-relevance-paths.sh" "$(dirname "$out")/lib/" || return 1
   # Recorder. Appended AFTER the original definition so it wins, and before any invocation.
   python3 - "$out" "$in_diff" <<'PY'
 import sys, re
@@ -48,14 +55,23 @@ s = open(path).read()
 # 1. Force the diff verdict deterministically: this suite is about the NOTICE, not about
 #    git plumbing, and deriving it from the real repo would make the arms depend on whatever
 #    the working tree happens to touch today.
+#    The two SANDBOX_* seams below are injected at the same anchor, which sits AFTER the whole
+#    three-source detection block — so an override here cannot be overwritten by a later `git`
+#    arm, and the relevance predicate downstream reads exactly the fixture this arm declared.
 old = '_infra_in_diff=0'
 assert s.count(old) == 1, f"expected exactly one '{old}', found {s.count(old)}"
-s = s.replace(old, f'_infra_in_diff={in_diff}\n_SANDBOX_FORCED_DIFF=1')
+s = s.replace(old, (
+    f'_infra_in_diff={in_diff}\n'
+    '_SANDBOX_FORCED_DIFF=1\n'
+    '[[ -n "${SANDBOX_DIFF_NAMES:-}" ]] && _diff_names="$SANDBOX_DIFF_NAMES"\n'
+    '[[ -n "${SANDBOX_DETECT_OK:-}" ]] && _diff_detect_ok="$SANDBOX_DETECT_OK"\n'
+))
 
-# 2. Neuter the detection block so it cannot overwrite the forced value.
-old2 = '_infra_detect_ok=0'
+# 2. Neuter the detection block so it cannot overwrite the forced value. SANDBOX_DETECT_OK can
+#    still force it back to 0 for the fail-SAFE arm.
+old2 = '_diff_detect_ok=0'
 assert s.count(old2) == 1, f"expected exactly one '{old2}', found {s.count(old2)}"
-s = s.replace(old2, '_infra_detect_ok=1')
+s = s.replace(old2, '_diff_detect_ok=1')
 
 # 3. Replace run_suite's BODY with a recorder. Matches the definition line and its block.
 #    The recorder KEEPS the `suites` increment: the denominator is itself under test (a gated
@@ -96,7 +112,12 @@ run_arm() {
   # previous arm's leftovers.
   ARM_TIMING="$TMP/timing-${group}-${in_diff}-${incident}.tsv"
   : > "$ARM_TIMING"
+  # SOLEUR_TEST_FORCE_ALL pins the two relevance-gated batteries ON, so the INFRA gate is the
+  # only variable these arms move. Without it they would inherit whatever this worktree's real
+  # diff happens to touch — and a diff irrelevant to those batteries would make them decline,
+  # changing the skip count these arms assert on for a reason that has nothing to do with infra.
   ARM_OUT=$(cd "$REPO_ROOT" && SOLEUR_INCIDENT_SKIP="$incident" TEST_GROUP="$group" \
+            SOLEUR_TEST_FORCE_ALL=1 \
             TEST_TIMING_LOG="$ARM_TIMING" timeout 120 bash "$sb" 2>&1)
   ARM_RAN=0
   grep -q 'RECORDED_SUITE:apps/web-platform/infra/run-registered-suites.sh' "$SANDBOX_RECORD" && ARM_RAN=1
@@ -262,12 +283,140 @@ else
   fail "the gated suite was written to TEST_TIMING_LOG as a FAIL"
 fi
 
+# --- THE RELEVANCE GATE FOR THE TWO HEAVY BATTERIES (Phase C / ADR-178) ----------------------
+# These two suites are 38.6% of a full local run and guard paths most PRs never touch. The gate
+# declines them on an irrelevant diff — which is only safe if the decline is DERIVED from the
+# diff rather than from anything ambient, and if every bypass really bypasses.
+#
+# Every arm below drives a SYNTHETIC diff fixture. None reads the branch's real diff: an arm
+# whose verdict depends on what this worktree happens to have edited today would pass or fail
+# for reasons that have nothing to do with the gate.
+REGISTRY_LABEL='tests/scripts/registry-gate-mutation-battery'
+CFTUNNEL_LABEL='scripts/cf-tunnel-liveness-gate-mutations'
+
+# $1 = arm label, $2 = newline-separated diff fixture, rest = extra VAR=VALUE env.
+# Sets RAN_REGISTRY / RAN_CFTUNNEL / GATE_OUT.
+run_gate_arm() {
+  local label="$1" diff_fixture="$2"; shift 2
+  local sb="$TMP/test-all-gate-${label}.sh"
+  build_sandbox "$sb" 0 >/dev/null || { fail "sandbox build failed for gate arm $label"; return 1; }
+  export SANDBOX_RECORD="$TMP/record-gate-${label}.txt"
+  : > "$SANDBOX_RECORD"
+  GATE_OUT=$(cd "$REPO_ROOT" && env TEST_GROUP=all SOLEUR_INCIDENT_SKIP=0 \
+             SANDBOX_DIFF_NAMES="$diff_fixture" "$@" timeout 180 bash "$sb" 2>&1)
+  RAN_REGISTRY=0; RAN_CFTUNNEL=0
+  grep -qxF "RECORDED_SUITE:$REGISTRY_LABEL" "$SANDBOX_RECORD" && RAN_REGISTRY=1
+  grep -qxF "RECORDED_SUITE:$CFTUNNEL_LABEL" "$SANDBOX_RECORD" && RAN_CFTUNNEL=1
+  return 0
+}
+
+DOCS_ONLY_DIFF='README.md
+knowledge-base/project/learnings/2026-01-01-some-learning.md'
+
+# --- Negative-control PAIR. One arm alone proves nothing: an implementation that always skips
+# --- passes the skip arm, and one that never skips passes the run arm. Only the pair is a gate.
+run_gate_arm docs-only "$DOCS_ONLY_DIFF" || true
+if [[ "$RAN_REGISTRY" == 0 ]]; then
+  pass "docs-only diff: the registry battery is declined"
+else
+  fail "docs-only diff: the registry battery ran anyway"
+fi
+if [[ "$RAN_CFTUNNEL" == 0 ]]; then
+  pass "docs-only diff: the cf-tunnel battery is declined"
+else
+  fail "docs-only diff: the cf-tunnel battery ran anyway"
+fi
+if grep -qF "[skip] $REGISTRY_LABEL" <<<"$GATE_OUT"; then
+  pass "the declined registry battery is announced as a counted skip"
+else
+  fail "the registry battery was declined silently"
+fi
+
+run_gate_arm registry-touched 'scripts/registry-pull-path-health.sh' || true
+if [[ "$RAN_REGISTRY" == 1 ]]; then
+  pass "a diff touching registry-pull-path-health.sh runs the registry battery"
+else
+  fail "a diff touching the registry gate's own SUT did NOT run its battery"
+fi
+if [[ "$RAN_CFTUNNEL" == 0 ]]; then
+  pass "that same diff still declines the unrelated cf-tunnel battery"
+else
+  fail "the cf-tunnel battery ran on a diff that does not touch it"
+fi
+
+# --- P0-3 regression. The first draft's cf-tunnel predicate omitted four workflows the battery
+# --- actually depends on. M4 mutates git-data-cutover.yml and the W7 oracle pins it, so a PR
+# --- removing the bridge `uses:` there would fail W7 AND crash M4 — while the battery sat
+# --- skipped, reporting green.
+run_gate_arm cutover-touched '.github/workflows/git-data-cutover.yml' || true
+if [[ "$RAN_CFTUNNEL" == 1 ]]; then
+  pass "a diff touching git-data-cutover.yml runs the cf-tunnel battery (P0-3)"
+else
+  fail "P0-3 regression: git-data-cutover.yml is not in the cf-tunnel predicate"
+fi
+
+# Every W7_EXPECTED workflow, read from the oracle's own literal rather than restated here — so
+# a new adopter added to W7_EXPECTED makes THIS assertion fail until the predicate learns it too.
+W7_LITERAL=$(grep -oE '^W7_EXPECTED="[^"]+"' "$REPO_ROOT/scripts/check-cloudflare-token-drift.test.sh" | head -1 | sed 's/^W7_EXPECTED="//; s/"$//')
+if [[ -n "$W7_LITERAL" ]]; then
+  pass "the W7_EXPECTED literal was located in the oracle"
+  IFS=',' read -r -a W7_FILES <<<"$W7_LITERAL"
+  for wf in "${W7_FILES[@]}"; do
+    run_gate_arm "w7-${wf}" ".github/workflows/${wf}" || continue
+    if [[ "$RAN_CFTUNNEL" == 1 ]]; then
+      pass "W7 workflow $wf is covered by the cf-tunnel predicate"
+    else
+      fail "W7 workflow $wf is NOT covered by the cf-tunnel predicate"
+    fi
+  done
+else
+  fail "could not read W7_EXPECTED from the oracle — the completeness check is vacuous"
+fi
+
+# --- Fail SAFE, not fail quiet. An undeterminable diff must RUN everything. Skipping on a diff
+# --- the runner could not read is the one direction that turns this feature into a hazard.
+run_gate_arm undeterminable "$DOCS_ONLY_DIFF" SANDBOX_DETECT_OK=0 || true
+if [[ "$RAN_REGISTRY" == 1 && "$RAN_CFTUNNEL" == 1 ]]; then
+  pass "an undeterminable diff runs both batteries (fail-SAFE)"
+else
+  fail "an undeterminable diff DECLINED a battery (registry=$RAN_REGISTRY cf=$RAN_CFTUNNEL)"
+fi
+
+# --- The two bypasses. Both assert the suite EXECUTES — not that a warning fired. Under CI the
+# --- decline must be UNREACHABLE rather than merely detected: an assertion-based design would
+# --- have reddened main-health-monitor every six hours, because on `main` both diff refs resolve
+# --- and return empty, so both batteries would skip and the assertion would fire (P0-2).
+run_gate_arm force-all "$DOCS_ONLY_DIFF" SOLEUR_TEST_FORCE_ALL=1 || true
+if [[ "$RAN_REGISTRY" == 1 && "$RAN_CFTUNNEL" == 1 ]]; then
+  pass "SOLEUR_TEST_FORCE_ALL=1 runs both batteries on a docs-only diff"
+else
+  fail "SOLEUR_TEST_FORCE_ALL=1 did not force both (registry=$RAN_REGISTRY cf=$RAN_CFTUNNEL)"
+fi
+
+run_gate_arm ci-set "$DOCS_ONLY_DIFF" CI=1 || true
+if [[ "$RAN_REGISTRY" == 1 && "$RAN_CFTUNNEL" == 1 ]]; then
+  pass "CI=1 runs both batteries on a docs-only diff (P0-2: the decline is unreachable)"
+else
+  fail "CI=1 declined a battery (registry=$RAN_REGISTRY cf=$RAN_CFTUNNEL)"
+fi
+# Scoped to the two BATTERIES, deliberately not to `[skip]` in general. The infra runner's own
+# not_in_diff decline is pre-existing and must survive: infra has dedicated CI coverage
+# (infra-validation.yml, plus main-health-monitor's separate TEST_GROUP=infra step), so forcing
+# it under CI would re-run ~87 suites every six hours for nothing. The two batteries have no
+# other CI home at all — the scripts shard is where they run — which is exactly why the CI
+# bypass has to reach them and not it.
+if grep -qE "^\[skip\] ($REGISTRY_LABEL|$CFTUNNEL_LABEL) " <<<"$GATE_OUT"; then
+  fail "a CI run declined a battery, which would leave it running in zero runners"
+else
+  pass "a CI run declines neither battery"
+fi
+
 # --- Anti-vacuity floor ---------------------------------------------------------------------
 # Every assertion above lives inside a loop or a conditional. Strand the block — an early exit,
 # a renamed TARGET, a sandbox build that silently fails — and this file would report
 # "0 passed, 0 failed / exit 0", which reads exactly like a clean run. A FLOOR, not equality:
 # the count is developer-incremented and `-eq` turns every added assertion into a false red.
-MIN_ASSERTIONS=31
+MIN_ASSERTIONS=47
 if [[ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]]; then
   echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= $MIN_ASSERTIONS — the suite was stranded, not clean." >&2
   exit 1

@@ -117,6 +117,22 @@ if ! declare -F tc_acquire >/dev/null 2>&1; then
   tc_acquire() { :; }
 fi
 
+# --- Relevance predicates (ADR-178) ---
+# Sourced at TOP LEVEL, and deliberately NOT defensively, unlike the contention lib above. That
+# one is observe-only, so a missing lib must degrade to a normal run. This one DECIDES WHETHER
+# SUITES EXECUTE: were it absent and the arrays empty, every gated suite would decline silently
+# and the summary would still read green — the exact "green that is not evidence" the gate
+# exists to prevent, produced by the gate itself. A missing file is a hard failure.
+_REL_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/test-relevance-paths.sh"
+if [[ ! -f "$_REL_LIB" ]]; then
+  echo "ERROR: missing $_REL_LIB — the suite relevance predicates are undefined." >&2
+  echo "Refusing to run: without them every gated suite would decline silently while the" >&2
+  echo "summary still reported green." >&2
+  exit 2
+fi
+# shellcheck source=scripts/lib/test-relevance-paths.sh
+source "$_REL_LIB"
+
 # --- Test group selector ---
 # TEST_GROUP partitions the suite list across CI matrix shards. Env var wins
 # over positional ($1) so GitHub Actions `env:` blocks and `gh workflow run`
@@ -440,26 +456,64 @@ skip_suite() {
 # legitimately empty, so treating "either ref resolved" as success reports a confident
 # no-infra verdict from the ref that could not have known — measured on a scratch repo with a
 # committed infra file and no remote. Only the range ref's failure means "could not determine".
-_infra_detect_ok=0
-_infra_diff_names=""
-if _infra_out="$(git -c core.quotePath=false diff --name-only HEAD 2>/dev/null)"; then
-  _infra_diff_names="${_infra_diff_names}
-${_infra_out}"
+_diff_detect_ok=0
+_diff_names=""
+if _diff_out="$(git -c core.quotePath=false diff --name-only HEAD 2>/dev/null)"; then
+  _diff_names="${_diff_names}
+${_diff_out}"
 fi
-if _infra_out="$(git -c core.quotePath=false diff --name-only origin/main...HEAD 2>/dev/null)"; then
-  _infra_detect_ok=1
-  _infra_diff_names="${_infra_diff_names}
-${_infra_out}"
+if _diff_out="$(git -c core.quotePath=false diff --name-only origin/main...HEAD 2>/dev/null)"; then
+  _diff_detect_ok=1
+  _diff_names="${_diff_names}
+${_diff_out}"
 fi
-_infra_diff_names="${_infra_diff_names}
-$(git ls-files --others --exclude-standard -- apps/web-platform/infra 2>/dev/null || true)"
+# WIDENED from `-- apps/web-platform/infra` to the union of every prefix the relevance
+# predicates declare. The narrow form was correct while the only consumer was the infra notice;
+# as a suite GATE it was a fail-open, because a brand-new UNTRACKED mutation target under
+# scripts/ or .github/ was invisible here — so the session that ADDS a target and runs the gate
+# before committing would have had the suite declined on the very diff that needed it.
+_diff_names="${_diff_names}
+$(git ls-files --others --exclude-standard -- "${TEST_RELEVANCE_PREFIXES[@]}" 2>/dev/null || true)"
+
+# Does this run's diff touch any of the given paths? Used to decline suites that guard code the
+# diff does not reach. Substring match without a `^` anchor, matching the existing infra check:
+# over-matching a path that merely CONTAINS the string errs toward RUNNING the suite, which is
+# the safe direction.
+#
+# Reads a VARIABLE via a herestring, never `producer | grep -q`. Under this script's `set -o
+# pipefail` that pipeline reports non-zero when grep exits on a match while the producer is
+# still writing (SIGPIPE 141), which would make the condition evaluate FALSE despite the match —
+# a fail-open whose likelihood scales with diff size. A herestring has no producer to kill.
+_diff_touches() {
+  # The two bypasses are UNCONDITIONAL early returns, not flags consulted later.
+  #
+  # Under CI a decline is therefore UNREACHABLE rather than merely detected. That is strictly
+  # stronger than the assertion this replaced, and it is what keeps main-health-monitor green:
+  # on `main` both diff refs resolve and return EMPTY, so _diff_detect_ok is 1 (the fail-SAFE
+  # arm does not rescue it) and every gated suite would decline — an "assert no skips occurred"
+  # design would have reddened that workflow every six hours.
+  #
+  # Written as explicit `if` blocks rather than `[[ … ]] && return 0`. Under this script's
+  # `set -e` the short form's exit status depends on the CALL SITE — harmless inside an `if`
+  # condition, an abort anywhere else — and a predicate that decides whether suites run must not
+  # carry a landmine for the next caller.
+  if [[ "${SOLEUR_TEST_FORCE_ALL:-}" == "1" ]]; then return 0; fi
+  if [[ -n "${CI:-}" ]]; then return 0; fi
+  # Fail SAFE, not fail quiet: a diff the runner could not determine RUNS everything.
+  if [[ "$_diff_detect_ok" == 0 ]]; then return 0; fi
+  local p
+  for p in "$@"; do
+    if grep -qF -- "$p" <<<"$_diff_names"; then return 0; fi
+  done
+  return 1
+}
 
 _infra_in_diff=0
-if grep -qF 'apps/web-platform/infra/' <<<"$_infra_diff_names"; then
+if grep -qF 'apps/web-platform/infra/' <<<"$_diff_names"; then
   _infra_in_diff=1
 fi
 
-if [[ "$_infra_detect_ok" == 0 ]]; then
+if [[ "$_diff_detect_ok" == 0 ]]; then
   # Fail SAFE, not quiet: assume the boundary applies rather than assume it does not.
   _infra_in_diff=1
 fi
@@ -489,7 +543,7 @@ if ! want_infra; then
     echo "        TEST_GROUP=infra bash scripts/test-all.sh"
     echo ""
   fi
-elif [[ "$_infra_detect_ok" == 0 ]]; then
+elif [[ "$_diff_detect_ok" == 0 ]]; then
   echo ""
   echo "NOTE: could not determine this branch's diff (no origin/main, shallow clone, or a"
   echo "      fresh repo), so this runner cannot tell whether apps/web-platform/infra/ is"
@@ -835,7 +889,18 @@ if want_scripts; then
   # when it was finally committed it found 15 of its mutations surviving, including a seam that
   # could replace the pass condition itself. It sandboxes its own copies of both SUTs, so it
   # neither mutates the worktree nor depends on suite ordering here (#7277).
-  run_suite "tests/scripts/registry-gate-mutation-battery" bash tests/scripts/test-registry-gate-mutation-battery.sh
+  #
+  # RELEVANCE-GATED (ADR-178). At ~860 s this is the single most expensive suite in the runner —
+  # about 32% of a full local run — and it guards a script most PRs never touch. The predicate is
+  # referenced BY NAME: no path literal may appear on a `run_suite` line, because
+  # lint-orphan-test-suites.sh's per-suite anchor is satisfied by any scripts/*.test.sh appearing
+  # after that token, so an inline list would register a DIFFERENT suite than the one executed.
+  if _diff_touches "${REGISTRY_BATTERY_PATHS[@]}"; then
+    run_suite "tests/scripts/registry-gate-mutation-battery" bash tests/scripts/test-registry-gate-mutation-battery.sh
+  else
+    skip_suite "tests/scripts/registry-gate-mutation-battery" "relevance" \
+      "bash tests/scripts/test-registry-gate-mutation-battery.sh"
+  fi
   # Registered explicitly, next to its D10 sibling. Nothing auto-discovers tests/scripts/: this
   # file's *.test.sh glob cannot match the `test-*` prefix, and scripts/lint-orphan-test-suites.sh
   # covers scripts/*.test.sh only. An unregistered suite here runs in ZERO runners and is silent
@@ -992,7 +1057,15 @@ if want_scripts; then
   run_suite "scripts/digest-oracle-guard" bash scripts/digest-oracle-guard.test.sh
   # Sandbox-only: copies scripts/ and .github/ into a mktemp -d, mutates the copies, and asserts
   # the working tree is unchanged when it finishes.
-  run_suite "scripts/cf-tunnel-liveness-gate-mutations" bash scripts/cf-tunnel-liveness-gate-mutations.test.sh
+  # RELEVANCE-GATED (ADR-178), ~189 s. The battery COPIES all of scripts/ and .github/ into its
+  # sandbox but only DEPENDS on the paths the predicate names; gating on the copy set would match
+  # nearly every diff and never decline. Referenced by name — see the registry gate above.
+  if _diff_touches "${CF_TUNNEL_BATTERY_PATHS[@]}"; then
+    run_suite "scripts/cf-tunnel-liveness-gate-mutations" bash scripts/cf-tunnel-liveness-gate-mutations.test.sh
+  else
+    skip_suite "scripts/cf-tunnel-liveness-gate-mutations" "relevance" \
+      "bash scripts/cf-tunnel-liveness-gate-mutations.test.sh"
+  fi
   # Pins that this runner's OWN infra coverage claim matches whether it actually invoked the
   # infra runner. Registered here rather than under want_bun for the same reason as above.
   run_suite "scripts/test-all-infra-coverage-notice" bash scripts/test-all-infra-coverage-notice.test.sh
