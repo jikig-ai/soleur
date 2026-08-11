@@ -17,7 +17,7 @@
 > flagging was intentionally not built — no diff exists at plan time.
 >
 > **Auto-fill + drift-check (live, #5754).** `/soleur:sync domain-model` runs a
-> deterministic analyzer (`scripts/domain-model-drift.sh`) that drift-checks this
+> deterministic analyzer (`plugins/soleur/scripts/domain-model-drift.sh`) that drift-checks this
 > register against the repo's migrations/RLS/guards and, with per-row operator
 > approval, proposes rows into `## Auto-inferred (unreviewed)` below. See
 > [`ADR-076`](./decisions/ADR-076-domain-model-drift-extraction.md).

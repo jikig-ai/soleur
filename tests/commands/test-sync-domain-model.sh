@@ -6,7 +6,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SYNC_MD="$REPO_ROOT/plugins/soleur/commands/sync.md"
-DRIFT="$REPO_ROOT/scripts/domain-model-drift.sh"
+DRIFT="$REPO_ROOT/plugins/soleur/scripts/domain-model-drift.sh"
 pass=0; fail=0
 _r() { if [[ "$2" == ok ]]; then pass=$((pass+1)); echo "[ok] $1"; else fail=$((fail+1)); echo "[FAIL] $1 ${3:-}" >&2; fi; }
 
@@ -27,13 +27,13 @@ grep -qE '^##### `all`-dispatch path' "$SYNC_MD" \
   && _r "all-dispatch path documented" ok || _r "all-dispatch path documented" fail
 grep -qE '^##### Standalone contract' "$SYNC_MD" \
   && _r "standalone terminal contract still stated" ok || _r "standalone terminal contract still stated" fail
-grep -qE 'scripts/domain-model-drift\.sh init' "$SYNC_MD" \
+grep -qE '\$\{CLAUDE_PLUGIN_ROOT\}/scripts/domain-model-drift\.sh" init' "$SYNC_MD" \
   && _r "all-dispatch path bootstraps the register via init" ok \
   || _r "all-dispatch path bootstraps the register via init" fail
 grep -qE '^#### Domain Model Analysis' "$SYNC_MD" && _r "Domain Model Analysis section present" ok || _r "Domain Model Analysis section present" fail
 # the section invokes the backend script in both modes
-grep -qE 'scripts/domain-model-drift\.sh drift' "$SYNC_MD" && _r "section invokes drift mode" ok || _r "section invokes drift mode" fail
-grep -qE 'scripts/domain-model-drift\.sh (\\\n *)?write-row' "$SYNC_MD" && _r "section invokes write-row mode" ok || _r "section invokes write-row mode" fail
+grep -qE '\$\{CLAUDE_PLUGIN_ROOT\}/scripts/domain-model-drift\.sh" drift' "$SYNC_MD" && _r "section invokes drift mode" ok || _r "section invokes drift mode" fail
+grep -qE '\$\{CLAUDE_PLUGIN_ROOT\}/scripts/domain-model-drift\.sh" (\\\n *)?write-row' "$SYNC_MD" && _r "section invokes write-row mode" ok || _r "section invokes write-row mode" fail
 # Phase-4 area-scope list includes domain-model (so definition-sync does not run for it)
 grep -qE 'Area is a specific scope.*domain-model' "$SYNC_MD" && _r "Phase-4 scope list includes domain-model" ok || _r "Phase-4 scope list includes domain-model" fail
 

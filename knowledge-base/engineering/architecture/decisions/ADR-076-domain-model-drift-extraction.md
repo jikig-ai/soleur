@@ -24,8 +24,8 @@ extraction conventions those consumers depend on.
 
 ## Decision
 
-1. **Deterministic-first extraction.** A bash analyzer (`scripts/domain-model-drift.sh`, tokenizer
-   in `scripts/lib/domain-model-lib.sh`) extracts structural facts. The LLM is confined to phrasing a
+1. **Deterministic-first extraction.** A bash analyzer (`plugins/soleur/scripts/domain-model-drift.sh`, tokenizer
+   in `plugins/soleur/scripts/lib/domain-model-lib.sh`) extracts structural facts. The LLM is confined to phrasing a
    candidate statement at interactive approval time — it is NEVER in the drift-detection or write
    path. Consequence: drift detection is a pure deterministic set-diff, so re-runs are byte-identical
    (`LC_ALL=C` sorts + `jq -S`), which is what makes it CI-gateable.
@@ -93,7 +93,7 @@ The fast-follow enforcement gates this ADR anticipated are now built. Design of 
    bounded structural scope of item 4). Trigger = migrations + `workspace-resolver.ts` + the register.
 4. **Ships blocking directly** (stale=0 on `main`; no advisory-first rollout apparatus). The residual
    citation-parser false-positive risk is covered by an actionable `stale>0` FAIL message.
-5. The `name_after()` `public.` default-schema strip (`scripts/lib/domain-model-lib.sh`) **enforces
+5. The `name_after()` `public.` default-schema strip (`plugins/soleur/scripts/lib/domain-model-lib.sh`) **enforces
    item 3** — anchors are `<table>.<object>`, not the previously-corrupt `public.<table>.public.<object>`.
 
 ### Scheduled drift cron (2026-07-02 amendment, #5872)
