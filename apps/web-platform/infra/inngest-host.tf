@@ -226,8 +226,19 @@ resource "doppler_secret" "inngest_redis_password_dedicated" {
 # feeds user_data (below), and hcloud_server.inngest carries NO ignore_changes=[user_data],
 # so `terraform apply` REPLACES the live dedicated host (destroy+recreate, re-run cloud-init,
 # re-bake the new read/write token). The Redis AOF volume survives (separate resource);
-# the flip's /var/lock state slot does not (re-derived from the Doppler flag — DBSIZE==0
-# still guards a spurious re-flush). Delivered via the #6178 apply_target=inngest-host-replace
+# the flip's /var/lock state slot does not.
+#
+# CORRECTED 2026-08-11 (#7228 P0-5). This used to add "DBSIZE==0 still guards a spurious
+# re-flush". It does not, and the direction matters: `run_preflush_flip` reads DBSIZE *after*
+# FLUSHALL, so it is a POST-CONDITION confirming the flush emptied the store — it can no more
+# prevent a flush than a receipt can prevent a purchase. Believing otherwise is what made losing
+# the state slot on replace look harmless, when in fact the replace is the operation that
+# DISARMS the re-flush latch.
+#
+# What actually guards it now is the monotonic latch in inngest-cutover-flip.sh: an append-only
+# record on THIS volume (/mnt/data/inngest-cutover/), which is why it survives the replacement
+# described above while the /var/lock slot does not. That is deliberate, not incidental.
+# Delivered via the #6178 apply_target=inngest-host-replace
 # dispatch; confirm `terraform plan` shows `-/+ doppler_service_token.inngest` cascading to
 # the host replacement before applying.
 resource "doppler_service_token" "inngest" {
