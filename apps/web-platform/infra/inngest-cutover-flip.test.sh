@@ -47,6 +47,7 @@ assert_logger() {
 }
 
 WORK=""
+LATCH=""
 TRACE="" STATE="" LOGTRACE=""
 SYSCTL="" REDIS="" FLAGSET="" LOGGER=""
 
@@ -55,6 +56,13 @@ setup_case() {
   TRACE="$WORK/trace"
   STATE="$WORK/state.json"
   LOGTRACE="$WORK/logtrace"
+  # (#7228 P0-5) The monotonic re-flush latch is a real side effect of the forward path, so it
+  # needs a seamed location here exactly like redis/systemctl/doppler do. Its mountpoint gate is
+  # disabled (empty) because a mktemp dir is not a mountpoint — the gate's own behaviour is
+  # covered by inngest-cutover-latch.test.sh, which owns the latch contract. Without these two
+  # the forward-flip cases abort against the real /mnt/data, which is correct fail-closed
+  # behaviour and useless as an FSM fixture.
+  LATCH="$WORK/latch/flip-done.latch"
   : > "$TRACE"
   : > "$LOGTRACE"
 
@@ -97,6 +105,8 @@ run_flip() {
       CUTOVER_FLAG_SET_CMD="$FLAGSET" \
       CUTOVER_LOGGER_CMD="$LOGGER" \
       INNGEST_CUTOVER_STATE="$STATE" \
+      INNGEST_CUTOVER_LATCH="$LATCH" \
+      INNGEST_CUTOVER_LATCH_MOUNT="" \
       ${extra[@]+"${extra[@]}"} \
       bash "$TARGET" >/dev/null 2>&1 || rc=$?
   printf '%s' "$rc"
@@ -225,7 +235,7 @@ EOF
   env CUTOVER_FLIP_FLAG="$flag" \
       CUTOVER_SYSTEMCTL_CMD="$SYSCTL" CUTOVER_REDIS_CLI_CMD="$REDIS" \
       CUTOVER_FLAG_SET_CMD="$FLAGSET" CUTOVER_LOGGER_CMD="$LOGGER" \
-      INNGEST_CUTOVER_STATE="$STATE" "$@" \
+      INNGEST_CUTOVER_STATE="$STATE" INNGEST_CUTOVER_LATCH="$LATCH" INNGEST_CUTOVER_LATCH_MOUNT="" "$@" \
       bash "$TARGET" >/dev/null 2>&1 || rc=$?
   printf '%s' "$rc"
 }
@@ -264,7 +274,7 @@ chmod +x "$FLAGSET"
 rc=0
 env CUTOVER_FLIP_FLAG="armed" CUTOVER_SYSTEMCTL_CMD="$SYSCTL" \
     CUTOVER_REDIS_CLI_CMD="$REDIS" CUTOVER_FLAG_SET_CMD="$FLAGSET" \
-    CUTOVER_LOGGER_CMD="$LOGGER" INNGEST_CUTOVER_STATE="$STATE" \
+    CUTOVER_LOGGER_CMD="$LOGGER" INNGEST_CUTOVER_STATE="$STATE" INNGEST_CUTOVER_LATCH="$LATCH" INNGEST_CUTOVER_LATCH_MOUNT="" \
     CUTOVER_REDIS_DBSIZE=0 \
     bash "$TARGET" >/dev/null 2>&1 || rc=$?
 order=$(trace_csv)

@@ -145,18 +145,85 @@ emit_state() {
   "${CUTOVER_LOGGER_CMD:-logger}" -t "$LOG_TAG" "$json" 2>/dev/null || true
 }
 
-# --- P2-d re-arm-after-done latch (#5450 catastrophe guard). A flip that reached terminal
-# `done` means the queue is now on LIVE prod Postgres/Redis; a stray flag flip back to
-# `armed` (or `flipping`) must NEVER re-enter the flush path and FLUSHALL a now-live prod
-# Redis. Reuses the EXISTING host-path state slot (no new file): a completed flip records
-# {"flag":"done",...} there, and the `done`/no-op polls keep it stamped `done`. Reading it
-# back proves the flush already happened. Best-effort: an absent/unreadable slot ⇒ NOT done
-# (a genuine first flip proceeds — the DBSIZE==0 assert still guards that path).
-flip_already_done() {
+# --- P2-d re-arm-after-flush latch (#5450 catastrophe guard; made MONOTONIC by #7228 P0-5).
+#
+# A flip that performed a FLUSHALL means the queue is now on LIVE prod Postgres/Redis; a stray
+# flag flip back to `armed` (or `flipping`) must NEVER re-enter the flush path and wipe it.
+#
+# THE DEFECT THIS FIXES. The latch used to read `.flag == "done"` out of the state slot — but
+# emit_state() stamps that slot on EVERY branch including the terminal no-ops, and the
+# `rolled-back` arm writes {"flag":"rolled-back"} straight over the `done` record. So
+# `done -> rollback -> rolled-back -> armed` ERASED the latch and re-entered the flush path
+# against a live prod Redis. It failed safe only by accident: /var/lock is the ephemeral root
+# disk, so a host replace wiped the slot and a genuine first flip proceeded. Relocating that slot
+# onto the durable volume — the obvious "make the latch survive a replace" fix, and the one the
+# first draft of this plan proposed — would have made it strictly WORSE by PERSISTING the erasure,
+# converting a latch that fails safe by amnesia into one that fails unsafe by false memory.
+#
+# The predicate is therefore MONOTONIC — "has a FLUSHALL EVER been performed?" — and answered by
+# a DISJUNCTION over two independent records:
+#
+#   (a) the durable latch file. Existence-based and never rewritten, so no branch can erase it,
+#       and it lives on /mnt/data, the volume that SURVIVES a host replace. Survival is the whole
+#       point: the replace is the operation that disarms the old latch, which is why Phase 3 has
+#       to land before any replace is dispatched.
+#   (b) the legacy state slot recording `done`. The COMPATIBILITY arm: a host that already
+#       completed a flip before this change ships has no latch file, only a slot. Dropping this
+#       arm would silently disarm the guard on exactly those hosts until their next flip. It is
+#       the erasable one by construction, so it can only ever ADD refusals, never remove them.
+#
+# Both absent ⇒ NOT flushed, and a genuine first flip proceeds (the DBSIZE==0 assert still guards
+# that path). inngest-cutover-latch.test.sh fixtures each arm ALONE — a fixture satisfying both
+# at once would prove only that the set is non-empty and would stay green if either were deleted.
+LATCH_FILE="${INNGEST_CUTOVER_LATCH:-/mnt/data/inngest-cutover/flip-done.latch}"
+# The mountpoint the latch MUST sit behind. `${VAR-default}` (not `:-`) so an explicitly-empty
+# value disables the gate for tests without also disabling it for an empty-but-set production env.
+LATCH_REQUIRE_MOUNT="${INNGEST_CUTOVER_LATCH_MOUNT-/mnt/data}"
+
+flush_already_performed() {
+  [[ -e "$LATCH_FILE" ]] && return 0
   [[ -f "$STATE_FILE" ]] || return 1
   local recorded
   recorded="$(jq -r '.flag // ""' "$STATE_FILE" 2>/dev/null || printf '')"
   [[ "$recorded" == "done" ]]
+}
+
+# --- Record the durable latch. FATAL on failure, never best-effort.
+#
+# An unrecordable latch means the catastrophe guard is disarmed for every future poll, which is
+# precisely the silent fallback cq-silent-fallback-must-mirror-to-sentry forbids — so this aborts
+# to terminal `aborted` WITHOUT starting the server rather than proceeding unguarded. Aborting
+# here is safe: the flush has just succeeded, so Redis is empty and a later re-arm would re-flush
+# an already-empty store.
+#
+# The mountpoint gate is not paranoia. cloud-init mounts the volume with `|| true` and fstab
+# carries `nofail`, so a FAILED mount leaves /mnt/data as an ordinary directory on the ephemeral
+# root disk. A latch written there LOOKS durable and would vanish on the very replace it exists to
+# survive — a guard that reports armed and is not.
+#
+# Append, never truncate: `>>` cannot destroy an existing record, so even a future caller that
+# invokes this twice preserves the original. That is what makes the latch monotonic in the write
+# path as well as in the predicate.
+record_flush_latch() {
+  local dbsize="$1" dir
+  if [[ -n "$LATCH_REQUIRE_MOUNT" ]] && ! mountpoint -q "$LATCH_REQUIRE_MOUNT" 2>/dev/null; then
+    emit_state 1 "$dbsize" "latch-unrecordable(${LATCH_REQUIRE_MOUNT} is not a mountpoint — a latch written here would sit on the ephemeral root disk and NOT survive a host replace)" aborted
+    flag_set aborted
+    exit 1
+  fi
+  dir="$(dirname "$LATCH_FILE")"
+  if ! mkdir -p "$dir" 2>/dev/null; then
+    emit_state 1 "$dbsize" "latch-unrecordable(cannot create ${dir})" aborted
+    flag_set aborted
+    exit 1
+  fi
+  if ! printf 'flushed_at=%s host=%s dbsize=%s\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" \
+        "$(hostname 2>/dev/null || echo unknown)" "$dbsize" >> "$LATCH_FILE" 2>/dev/null; then
+    emit_state 1 "$dbsize" "latch-unrecordable(cannot write ${LATCH_FILE})" aborted
+    flag_set aborted
+    exit 1
+  fi
 }
 
 # --- Loud refuse: a re-arm arrived after a terminal `done`. Do NOT stop, do NOT FLUSHALL.
@@ -190,6 +257,11 @@ run_preflush_flip() {
     emit_state 1 "$dbsize" "dbsize-nonzero" aborted
     exit 1
   fi
+  # MONOTONIC LATCH (#7228 P0-5): recorded HERE — at the flush, not at completion — because it
+  # asserts "a FLUSHALL has been performed", not "the flip finished". Placing it after
+  # start_server would leave a crash between the flush and the start free to re-flush a prod
+  # queue on the next re-arm. FATAL if it cannot be recorded; see record_flush_latch.
+  record_flush_latch "$dbsize"
   # POST-assert checkpoint (P1-5 / #5450): the flush provably succeeded (DBSIZE==0) and the
   # queue is about to be adopted by the prod scheduler. A resume from `flushed` MUST NOT
   # re-FLUSHALL — write the checkpoint BEFORE start_server so the window is covered.
@@ -223,7 +295,7 @@ run_flip() {
     armed)
       # P2-d (#5450): refuse to re-enter the flush path if a terminal `done` was already
       # recorded — re-arming after a completed flip would FLUSHALL a now-LIVE prod Redis.
-      if flip_already_done; then
+      if flush_already_performed; then
         refuse_rearm_after_done
       fi
       # Transition BEFORE touching Redis so a mid-flip reboot resumes via `flipping` and
@@ -236,7 +308,7 @@ run_flip() {
       # happened BEFORE the flush completed and the server is still stopped/dark, so
       # re-running stop->FLUSHALL->assert is SAFE and closes the skip-flush window.
       # P2-d: same latch — never re-FLUSHALL if a terminal `done` was already recorded.
-      if flip_already_done; then
+      if flush_already_performed; then
         refuse_rearm_after_done
       fi
       run_preflush_flip
@@ -245,6 +317,12 @@ run_flip() {
       # POST-flush resume (#5450 trap): the flush already completed (proven by the
       # `flushed` checkpoint) and the queue is now on prod Postgres. Do NOT re-FLUSHALL;
       # just ensure inngest-server is started and complete to `done`.
+      #
+      # Reaching this state PROVES a FLUSHALL happened, so backfill the durable latch if it is
+      # absent — the case on a host that checkpointed `flushed` before this change shipped, or
+      # that crashed between the flush and the latch write. Leaving it absent here would let a
+      # later re-arm flush a live prod queue, which is the whole failure this latch prevents.
+      record_flush_latch ""
       start_server
       flag_set "done"
       emit_state 0 "" "flushed-resume-no-reflush" "done"

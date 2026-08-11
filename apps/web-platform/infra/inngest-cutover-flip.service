@@ -2,6 +2,13 @@
 Description=Inngest cutover flip oneshot (FSM: armed->flipping->done / rollback; #6178)
 After=network-online.target
 Wants=network-online.target
+# (#7228 P0-5) The monotonic re-flush latch lives on the durable Hetzner volume at
+# /mnt/data/inngest-cutover/. The flip timer fires every 30s from boot, and cloud-init mounts
+# that volume with `|| true` (fstab: `nofail`), so without this the oneshot can run BEFORE the
+# mount lands — the latch's mountpoint gate would then abort a legitimate flip on a cold boot,
+# and worse, a latch written pre-mount would sit on the ephemeral root disk looking durable.
+# RequiresMountsFor pulls in the mount unit for the path and orders this unit after it.
+RequiresMountsFor=/mnt/data
 
 [Service]
 Type=oneshot
