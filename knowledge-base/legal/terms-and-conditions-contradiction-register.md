@@ -233,6 +233,7 @@ arrangement and cross-referencing AUP §5.6 and DPD §2.3(w).
 |---|---|
 | T&C §4 (before) | *"45 AI agents … across **five** domains"*, *"45 skills"* |
 | Privacy Policy (before) | *"45 AI agents, 45 skills"* |
+| GDPR Policy §1 (before) | record: *"45 agents, 45 skills"*; **published mirror: "60+ agents, 60+ skills"** — the two surfaces stated different counts of the same product, and both were wrong |
 | Filesystem, measured 2026-08-11 | **68** agent files, **96** skill directories, **9** domains |
 
 **Verdict: REAL.** **Resolution:** counts **removed, not restated**. A fixed count in a versioned
@@ -240,6 +241,29 @@ instrument is false the day the next agent lands and buys a version bump every r
 treatment was applied to the AUP and the Cookie Policy — the latter carried "45 agents" in the
 record against **"60+ agents"** on the published page, a divergence the drift normaliser could not
 see because its pattern matches `[0-9]+ AI agents`, not a bare `[0-9]+ agents`.
+
+### E10 — Privacy Policy assigned beta-CRM controllership to the user
+
+| Side | Statement |
+|---|---|
+| Privacy Policy §4.7 CRM bullet (before) | *"**you act as the data controller** for that data and Jikigai processes it on your behalf"* |
+| Art. 30 register PA-30, DPD §2.3(ad), GDPR Policy §3.13, beta-CRM LIA (all as corrected in #7349) | *"As this activity runs today, **Jikigai is the controller**"* |
+
+**Verdict: REAL — found at merge sign-off, and this PR is implicated.** #7349 corrected the
+beta-CRM controllership in four artifacts and missed the one a data subject actually reads.
+
+**Aggravating, and the reason it is recorded rather than quietly fixed:** the canonical carried
+this sentence before the PR but the **mirror did not**. The Phase 3c drift-reduction port
+*published it to soleur.ai*. A drift reduction is normally strictly protective — here it copied a
+defect onto the published surface, and no gate can see that, because the gates measure divergence
+between surfaces, not truth.
+
+**Resolution:** both surfaces now state that Jikigai is the controller as the capability runs
+today, that the role flips on the first non-Jikigai store owner under a written Art. 28(3)
+instrument, and that the basis is Art. 6(1)(f) with Art. 14 notice to affected third parties.
+
+**Lesson for the next port:** verify what a ported passage *claims*, not only that it is textually
+identical to the record. A port is legally a first publication, and the record can be wrong.
 
 ---
 
