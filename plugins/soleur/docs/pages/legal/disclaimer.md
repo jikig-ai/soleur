@@ -8,7 +8,7 @@ permalink: legal/disclaimer/
 <section class="page-hero">
   <div class="container">
     <h1>Disclaimer</h1>
-    <p>Effective February 20, 2026 | Last Updated August 9, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated August 11, 2026</p>
   </div>
 </section>
 
@@ -20,7 +20,7 @@ permalink: legal/disclaimer/
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** August 9, 2026 *(Scope clarification added 9 August 2026: the distinction between plugin-local and operator-assisted processing was previously implicit, which left these sections reading as statements about every configuration.)* Previous: March 2, 2026
+**Last Updated:** August 11, 2026 *(Section 3.1 no longer excludes direct damages. Section 3.2's cap is now the greater of what you paid us or EUR 100, replacing a cap of zero that assumed the platform is free — it is not, for Web Platform subscribers. Both now match Terms Section 11.)* Previous: August 9, 2026 *(Scope clarification added 9 August 2026: the distinction between plugin-local and operator-assisted processing was previously implicit, which left these sections reading as statements about every configuration.)* Previous: March 2, 2026
 
 This Disclaimer / Limitation of Liability ("Disclaimer") governs your use of Soleur, a Company-as-a-Service platform provided as a source-available Claude Code plugin (the "Platform," "Software," or "Service"), operated by Jikigai ("we," "us," or "our"). By accessing or using the Platform, you acknowledge that you have read, understood, and agree to be bound by this Disclaimer.
 

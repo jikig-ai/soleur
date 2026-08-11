@@ -12,11 +12,21 @@
 #
 # WHAT THIS GATE FREEZES, STATED PLAINLY. The frozen divergence is not neutral formatting.
 # The published mirror UNDER-DISCLOSES relative to the canonical record. VERIFIED omissions,
-# each checked against the drift this gate actually computes:
-#   - collected-data categories (team/agent customisation data, turn summaries, message
-#     attachments, workspace logo, BYOK usage audit log, beta-tester CRM);
-#   - lawful bases (several canonical-only Art. 6(1) bullets in gdpr-policy);
-#   - the Art. 15/20 self-serve export route (/dashboard/settings/privacy is canonical-only).
+# each re-measured against the drift this gate actually computes, at #7349 merge sign-off:
+#   - a named sub-processor (Bullet Train Ltd / Flagsmith) in gdpr-policy;
+#   - the Art. 14 information posture and the DPIA-status statement in gdpr-policy;
+#   - the Art. 15/20 request-channel split (self-serve vs email) in gdpr-policy Sec. 8;
+#   - the LinkedIn Company Page data category and its two international-transfer rows, and
+#     the community-digest rights carve-out, in privacy-policy.
+#
+# The PRIOR enumeration here -- "collected-data categories (team/agent customisation data,
+# turn summaries, message attachments, workspace logo, BYOK usage audit log, beta-tester
+# CRM); lawful bases; the Art. 15/20 self-serve export route" -- was CORRECT WHEN WRITTEN and
+# was falsified by #7349, which put all six named categories on the mirror, brought
+# gdpr-policy's Art. 6(1) bullets to 12/12 parity with zero canonical-only bullets, and
+# published /dashboard/settings/privacy. It is restated rather than deleted because a header
+# that silently swaps one omission list for another teaches the next reader nothing about how
+# often this list goes stale. RE-MEASURE THIS LIST WHENEVER DRIFT MOVES; do not inherit it.
 #
 # An earlier version of this header also claimed the mirror omits "a named third-country
 # recipient (Anthropic, US)". That is WITHDRAWN and was wrong: the mirror discloses the
@@ -480,9 +490,11 @@ echo "legal mirror drift: ${checked} pair(s) checked, drift is within the baseli
 echo "  base=${RESOLVED_REF} merge-base=${MERGE_BASE:0:7}"
 echo "  This is a RATCHET, not a clean bill of health. It asserts drift did not GROW, REORDER"
 echo "  or change CONTENT relative to the merge base. It does NOT assert the two surfaces"
-echo "  agree: the published mirror under-discloses relative to the record on three verified"
-echo "  counts -- collected-data categories, lawful bases, and the Art. 15/20 self-serve"
-echo "  export route. Tracked on #7349, remediation target ${REMEDIATION_TARGET}."
+echo "  agree: the published mirror under-discloses relative to the record. Re-measured at #7349"
+echo "  merge sign-off -- a named sub-processor (Flagsmith), the Art. 14 information posture and"
+echo "  DPIA-status statement, and the Art. 15/20 request-channel split in gdpr-policy; the"
+echo "  LinkedIn Page data category with its two transfer rows and the community-digest carve-out"
+echo "  in privacy-policy. Tracked on #7349, remediation target ${REMEDIATION_TARGET}."
 echo "  NOT CHECKED: a lockstep DELETION. Removing the same disclosure from both surfaces"
 echo "  leaves drift unchanged and passes here; only the SHA pin in legal-doc-shas.ts and"
 echo "  human review catch that."

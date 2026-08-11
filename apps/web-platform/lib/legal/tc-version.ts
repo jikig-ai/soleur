@@ -48,6 +48,6 @@ export const TC_DOCUMENT_SHA =
  */
 export const TC_BUMP_METADATA = {
   lastUpdated: "August 11, 2026",
-  substantiveChange: "Clearer statements of who controls your data, how to get a copy of it, and which courts hear disputes",
+  substantiveChange: "Clearer statements of who controls your data, who we send your conversations to, and which document wins if two disagree",
   fullTermsUrl: "https://soleur.ai/pages/legal/terms-and-conditions.html",
 } as const;

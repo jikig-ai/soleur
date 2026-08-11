@@ -5,8 +5,9 @@ date: 2026-08-11
 issue: 7349
 pr: 7416
 attestation-authority: clo
-status: REVIEWED — SIGN-OFF WITHHELD (CLO-agent-attested, Soleur-as-tenant-zero v1)
-disposition: BLOCKED
+status: SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)
+disposition: DISCHARGED
+disposition_history: "WITHHELD at first review (B1-B5) -> WITHHELD at second review (B1 residual, B6) -> GRANTED 2026-08-11 after B1-B6 verified against the diff"
 tier_classification: "Tier 1 (material) — new controller/processor role allocation, new named recipient in running text, new order of precedence"
 semver: "TC_VERSION 2.4.0 -> 2.5.0 (MINOR) — CONFIRMED"
 brand_survival_threshold: single-user incident
@@ -54,12 +55,12 @@ clause; the E5 false negative), which is the reason for the method.
 |---|---|---|---|
 | 1 | `docs/legal/terms-and-conditions.md` | **DISCHARGED** | 3b.1 three-role split, 3b.2 preserved, BYOK Art. 26 carve-out, 8.1b Anthropic + DPD-authoritative pointer, 8.1c controller designation, three scope paragraphs, 16.1 precedence. Every cross-reference resolves: 15.1/15.2/15.3, 11.1/11.2/11.3, PA-1/3/11/14/16/18/19/20 and PA-4 all exist and say what is claimed. |
 | 2 | `plugins/soleur/docs/pages/legal/terms-and-conditions.md` | **DISCHARGED** | Body-equivalent to canonical; drift 0; hero and body Last-Updated both moved to August 11. |
-| 3 | `docs/legal/privacy-policy.md` | **BLOCKED** | §4.7 CRM bullet still reads *"you act as the data controller for that data and Jikigai processes it on your behalf"* — the exact claim this PR corrected in four other artifacts. **Unblocks on:** fix B1. |
-| 4 | `plugins/soleur/docs/pages/legal/privacy-policy.md` | **BLOCKED** | Same sentence, and this PR **added** it to the published page as part of drift reduction. The defect is propagated by this diff, not merely inherited. **Unblocks on:** fix B1. |
-| 5 | `docs/legal/gdpr-policy.md` | **BLOCKED** | §1 still reads *"45 agents, 45 skills"*. E9 was applied to T&C, Privacy Policy, AUP and Cookie Policy and **skipped this document**. **Unblocks on:** fix B2. |
-| 6 | `plugins/soleur/docs/pages/legal/gdpr-policy.md` | **BLOCKED** | §1 reads *"60+ agents, 60+ skills"*. Record and published page state two different counts of the same product in the same sentence position; both are wrong against the measured 68 / 96. **Unblocks on:** fix B2. |
-| 7 | `docs/legal/cookie-policy.md` | **BLOCKED** | The count was removed and a **domain list substituted**: *"spanning Engineering, Legal, Marketing, Operations and Product"*. The plugin ships **nine** agent domains — Sales, Finance, Support and Community are omitted. This PR replaced a false number with a false list. **Unblocks on:** fix B3. |
-| 8 | `plugins/soleur/docs/pages/legal/cookie-policy.md` | **BLOCKED** | Same sentence, published surface. **Unblocks on:** fix B3. |
+| 3 | `docs/legal/privacy-policy.md` | **DISCHARGED** (was BLOCKED) | Was: §4.7 CRM bullet assigned controllership to the user — the exact claim this PR corrected in four other artifacts. **B1 landed**, then had to be re-fixed at sign-off: the first application left the Art. 6(1)(f) / Art. 14 clause duplicated. Now states Jikigai as present controller, once. |
+| 4 | `plugins/soleur/docs/pages/legal/privacy-policy.md` | **DISCHARGED** (was BLOCKED) | Was: the same sentence, which this PR **added** to the published page via drift reduction — propagated, not merely inherited. **B1 landed** on both surfaces byte-identically; B1-residual duplication cleared at sign-off. |
+| 5 | `docs/legal/gdpr-policy.md` | **DISCHARGED** (was BLOCKED; also B6) | Was: §1 read *"45 agents, 45 skills"* — E9 skipped this document. **B2 landed.** Also carried **B6**: §10 claimed the register documents *"eleven processing activities"* against an actual **35**; corrected at sign-off to an illustrative-and-not-exhaustive framing naming the register as authoritative. Full re-enumeration deferred to the successor issue. |
+| 6 | `plugins/soleur/docs/pages/legal/gdpr-policy.md` | **DISCHARGED** (was BLOCKED; also B6) | Was: §1 read *"60+ agents, 60+ skills"* while the record read 45 — two surfaces, two counts, both wrong against the measured 68 / 96. **B2 landed**, both surfaces now byte-identical. **B6** applied here too. |
+| 7 | `docs/legal/cookie-policy.md` | **DISCHARGED** (was BLOCKED) | Was: this PR replaced a false count with a false list — *"spanning Engineering, Legal, Marketing, Operations and Product"* against **nine** shipped domains. **B3 landed**; the closed enumeration is gone and the misattached modifier with it. |
+| 8 | `plugins/soleur/docs/pages/legal/cookie-policy.md` | **DISCHARGED** (was BLOCKED) | Was: the same sentence on the published surface. **B3 landed.** |
 | 9 | `docs/legal/data-protection-disclosure.md` | **DISCHARGED** | §11 replacement is sound (see §4). §2.3(ad) controllership correction is correct and matches PA-30, the LIA and the GDPR Policy. Carries the non-favourable item recorded at §6 — discharged **with** that record, not despite it. |
 | 10 | `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` | **DISCHARGED** | Lockstep with canonical; drift reduced to 4 lines, none substantive. |
 | 11 | `docs/legal/acceptable-use-policy.md` | **DISCHARGED** | §4.6 restatement is a net tightening in the user's favour (adds trademarks, adds the lawful-basis alternative, adds the express sanction the published page already carried). Flag-name correction is accurate against the runtime. Drift 0. |
@@ -69,13 +70,13 @@ clause; the E5 false negative), which is the reason for the method.
 | 15 | `knowledge-base/legal/article-30-register.md` | **DISCHARGED** | PA-30 role correction is reasoned from Art. 4(7) and Art. 28's two-person premise, not asserted. PA-23 flag-name fix accurate. |
 | 16 | `knowledge-base/legal/article-30-2-register.md` | **DISCHARGED** | `P-2` reserved-not-opened, with the reason the record must not be relocated (Art. 30(2) carries no purposes/retention/DSAR limbs, and a lockstep deletion passes the drift gate silently). Correct call. |
 | 17 | `knowledge-base/legal/compliance-posture.md` | **DISCHARGED** | The stale #736 row is replaced rather than annotated, and the replacement states why the old row was itself the defect. Inventory dates and the new Version column verify against the documents. |
-| 18 | `knowledge-base/legal/terms-and-conditions-contradiction-register.md` | **BLOCKED** | Every quoted anchor I tested resolves against primary text (14 of 14). But the register is **incomplete against the corpus this PR leaves behind**: E9 does not record the gdpr-policy limb, and the Privacy Policy CRM controllership contradiction is absent entirely. **Unblocks on:** fix B4. |
+| 18 | `knowledge-base/legal/terms-and-conditions-contradiction-register.md` | **DISCHARGED** (was BLOCKED) | Anchors were sound at first review — 14 of 14 verified against primary text. Was incomplete against the corpus the PR left behind. **B4 landed**: E9 gains the gdpr-policy row, and E10 records the Privacy Policy controllership contradiction together with the drift-reduction-published-a-defect mechanism. |
 | 19 | `knowledge-base/legal/tenant-dpa-register.md` | **DISCHARGED** | Status-token canonicalisation plus the guard replacing a line-count heuristic that was vacuously true on the empty register. Real defect, real fix. |
 | 20 | `knowledge-base/legal/data-processing-agreement-template.md` | **DISCHARGED** | §10.3 recast from "initiate within 90 days" to a reasonable-best-efforts evaluation is correct: the operative clause never created a date certain and the checklist must not manufacture one. |
 | 21 | `knowledge-base/legal/delegation-consent-side-letter-template.md` | **DISCHARGED** | Flag-name correction only; recital meaning unchanged. |
 | 22 | `knowledge-base/legal/legitimate-interest-assessments/2026-07-07-beta-crm-lia.md` | **DISCHARGED** | Role correction propagated, and the note that the Art. 6(1)(f) balancing is unaffected (assessed against the controller's interest, and Jikigai is now named as that controller) is right. |
 | 23 | `apps/web-platform/lib/legal/tc-version.ts` | **DISCHARGED** | `TC_VERSION` 2.5.0 and `TC_DOCUMENT_SHA` both verified by recomputation. `lastUpdated` move to August 11 is **correct** — see §3. `substantiveChange` satisfies `/^[§A-Z][^.]{9,}$/` and is plain-language; see §7 observation 1 for a wording caveat. |
-| 24 | `apps/web-platform/lib/legal/legal-doc-shas.ts` | **BLOCKED** | All nine literals verified correct **as the tree stands**. Blocked only consequentially: fixes B1–B3 edit three canonicals, so `privacy-policy`, `gdpr-policy` and `cookie-policy` must be re-pinned. |
+| 24 | `apps/web-platform/lib/legal/legal-doc-shas.ts` | **DISCHARGED** (was BLOCKED) | All nine literals verified by independent recomputation. Re-pinned twice — once for B1–B3, once at sign-off for the B1-residual and B6 edits. Final: `gdpr-policy` `36c353a9…744433`, `privacy-policy` `fcd30dcf…ff31af`. |
 | 25 | `apps/web-platform/scripts/check-tc-document-sha.sh` + 3 seed scripts | **DISCHARGED** | `seed-live-verify-user.sh` was at 2.3.0 while canonical was 2.4.0 and was unguarded. Adding it to `SEED_SCRIPTS` **after** correcting the literal is the right order, and the inline comment records why. All three now at 2.5.0. |
 | 26 | `apps/web-platform/lib/messages/trust-tier-copy.ts` | **DISCHARGED** | The AUP pointer shown on a revocation now resolves to a real published URL instead of a 404 path. |
 | 27 | `knowledge-base/engineering/operations/runbooks/alpha-tester-onboarding.md` | **DISCHARGED** | The strongest non-obvious item in the diff. A `TC_VERSION` bump cannot reach a self-hosted CLI tester — no session, no middleware, no acceptance record to invalidate. The standing step, the `superseded-resend-required` state, and tester #1's flip with the send tracked at [#7459](https://github.com/jikig-ai/soleur/issues/7459) close a gap that would otherwise have left a real third party on superseded terms silently. |
@@ -86,15 +87,65 @@ clause; the E5 false negative), which is the reason for the method.
 
 ## 2. Overall disposition
 
-**SIGN-OFF WITHHELD for merge.**
+**SIGN-OFF GRANTED for merge**, at the third review pass, on commit `de7a3a738` plus the
+sign-off-pass corrections recorded in §2a. The verdict table in §1 is retained as written at first
+review, with the BLOCKED rows now discharged by the fixes recorded in §2a.
 
-Not because the change set is wrong in its architecture. The T&C §3b.1 three-role split, the DPD
-§11 replacement, and the E9 count removals are each correctly reasoned, and the runbook standing
-step is genuinely good work. Sign-off is withheld because the diff leaves **three published
-notices** carrying statements that are false on the day of merge, two of which this PR either
-created or propagated to the published page.
+The change set was never wrong in its architecture. The T&C §3b.1 three-role split, the DPD §11
+replacement, and the E9 count removals were correctly reasoned from the first pass, and the
+alpha-tester runbook standing step is the strongest item in the diff. Sign-off was withheld twice
+over published prose that was false on the day of merge — not over reasoning.
 
-### Minimum change set that grants sign-off
+### 2a. Review history and what each pass found
+
+**Pass 1 — WITHHELD.** Five blocking findings: B1 the Privacy Policy CRM controllership
+contradiction (corrected in four artifacts, missed in the one a data subject reads, and *published
+to the mirror* by this PR's own drift reduction); B2 E9 never applied to the GDPR Policy, whose two
+surfaces stated different counts of the same product; B3 a false five-domain enumeration this PR
+introduced into the Cookie Policy against nine shipped domains; B4 the contradiction register
+incomplete against both; B5 consequential SHA re-pins.
+
+**Pass 2 — WITHHELD.** B2, B3, B4 and B5 verified correct against the diff. Two findings remained:
+
+- **B1 was mis-applied.** The drafted replacement landed but the superseded fragment was not
+  removed, leaving the Article 6(1)(f) / Article 14 clause **stated twice, semicolon-joined**, in
+  the CRM bullet on **both** surfaces. Byte-identical on both, so no gate could see it: the drift
+  ratchet measures divergence between surfaces, not sense. A published privacy notice repeating its
+  own lawful-basis sentence reads as a drafting failure precisely where the document is asserting
+  care over involuntary third-party data subjects.
+- **B6, found at this pass — the worst count defect in the corpus, and E9 had missed it twice.**
+  GDPR Policy §10 stated *"The register documents **eleven** processing activities"* and enumerated
+  eleven. The Article 30 register carries **35**. This is materially graver than any agent count:
+  §10's own next sentence offers the register *"on request to the competent supervisory
+  authority (CNIL for France)"*, so the false figure is addressed to the reader most likely to test
+  it, and it understates the record's completeness by a factor of three. It survived the E9 sweep,
+  and then survived B2 — which corrected a different false count in the same document.
+
+**Pass 3 — GRANTED.** B1's residual and B6 were corrected at sign-off (see below), the two
+non-blocking items the operator asked for were applied, `gdpr-policy` and `privacy-policy` were
+re-pinned, and all gates plus the drift gate's own self-test were re-run green.
+
+**Corrections applied at sign-off (by this authority, verified in place):**
+
+| ID | Correction | Files |
+|---|---|---|
+| B1-residual | Deleted the duplicated Art. 6(1)(f) / Art. 14 clause from the CRM bullet | privacy-policy canonical + mirror |
+| B6 | Replaced the false *"eleven processing activities"* claim with an illustrative-and-not-exhaustive framing that names the register as authoritative | gdpr-policy canonical + mirror |
+| NB-1 | `substantiveChange` re-anchored (see §9 observation 1) | `tc-version.ts` |
+| NB-2 | Drift-ratchet header and runtime advisory re-measured (see §9 observation 2) | `lint-legal-mirror-drift-baseline.sh` |
+| B5′ | `gdpr-policy` → `36c353a9…744433`, `privacy-policy` → `fcd30dcf…ff31af` | `legal-doc-shas.ts` |
+
+**B6's cure is deliberately partial, and the remainder is successor-issue scope.** Deleting the
+number alone would have left an eleven-item list still presented as the register's contents — a
+count in list form, which is the defect E9 exists to end. The framing applied instead reuses the
+pattern this PR already established at T&C §8.1b (*"Examples include … the complete and
+authoritative enumeration … is maintained in …"*), so the sentence is now true as written. What it
+does **not** do is re-enumerate: twenty-four activities remain unlisted in a public notice,
+including the beta-CRM, the DSAR self-serve export, routine runs, the workspace ledgers and
+operator-assisted processing. Regenerating §10 against the register is a substantive disclosure
+repair, not a drafting fix, and belongs in the successor issue.
+
+### Minimum change set that granted sign-off (pass 1, all now landed)
 
 Four fixes. All four are drafted in §5 with exact targets. None requires
 `SOLEUR_LEGAL_DRIFT_ACCEPT`, a gate toggle, or a baseline regeneration — I verified the drift
@@ -569,10 +620,36 @@ No gate was toggled, no baseline regenerated, and `SOLEUR_LEGAL_DRIFT_ACCEPT` wa
 
 ## 11. Disposition of record
 
-**BLOCKED.** Sign-off is granted on landing B1, B2, B3, B4 and B5 as drafted in §5. No further CLO
-review is required for those five — they are drafted here, their gate arithmetic is verified here,
-and none touches the canonical Terms. Re-run the five gates after the edits and merge.
+**GRANTED — 2026-08-11.** B1 through B6 are landed and verified against the diff, not against a
+summary of it. Merge is authorised. No further CLO review is required for this PR.
 
-Everything in §9 may follow. The Last-Updated moves for AUP and Disclaimer (§8.1) are recommended
-in this PR because they are free; the DPD / GDPR Policy / Privacy Policy dates, the drift-advisory
-re-measurement, the `LINK_PRIVACY` fix and the share-page Art. 13 notice belong to successor issues.
+**Verified at sign-off, by recomputation and re-execution rather than report:**
+
+| Check | Result |
+|---|---|
+| `lint-legal-scope-block-placement.sh --base origin/main` | PASS (exit 0) |
+| `lint-legal-mirror-drift-baseline.sh --base origin/main` | PASS (exit 0) |
+| `lint-legal-mirror-drift-baseline.test.sh` (gate self-test, after the advisory edit) | PASS (exit 0) |
+| `check-tc-document-sha.sh` | PASS (exit 0) |
+| `LEGAL_DOC_SHAS` — all nine literals | VERIFIED by independent `sha256sum` |
+| `substantiveChange` against `/^[§A-Z][^.]{9,}$/` | PASS |
+| Corpus drift, measured per pair | **97** — AUP 0, disclaimer 0, T&C 0, cookie 2, DPD 4, privacy-policy 18, gdpr-policy 54, corporate-CLA 12, individual-CLA 7 |
+| Sign-off corrections' drift impact | **zero** — every edit was byte-identical across both surfaces by construction |
+
+`TC_VERSION` stands at 2.5.0 and did not move again: none of B1–B6 or the sign-off corrections
+touches `docs/legal/terms-and-conditions.md`, so `TC_DOCUMENT_SHA` is unchanged and no re-acceptance
+is triggered beyond the one 2.5.0 already forces. `substantiveChange` sits outside
+`TC_DOCUMENT_SHA`, so re-anchoring it required no re-bump.
+
+**Carried forward, none blocking.** AUP and Disclaimer Last-Updated moves (§8.1) — free and
+recommended in this PR. Everything else goes to the successor issue: the §10 re-enumeration against
+the register (B6's remainder), the three Last-Updated dates that cannot be corrected without
+de-condensing the mirror line, the `LINK_PRIVACY` broken link, the share-page Article 13 notice
+(§7), the inline Article 28(3) instrument (E6's full cure), and the per-pair drift remediation.
+
+**One observation the operator should carry into the successor issue.** Three separate defects in
+this PR — B1's original miss, B1's mis-application, and B6 — were all invisible to all five gates,
+because every gate measures *agreement between two surfaces* and none measures *whether the agreed
+text is true*. Two identical copies of a false sentence pass cleanly. That is not an argument for
+another gate; it is the reason the counsel-review pass exists, and the reason it must read the prose
+rather than the drift number.

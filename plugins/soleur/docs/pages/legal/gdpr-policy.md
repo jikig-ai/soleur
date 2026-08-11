@@ -526,7 +526,7 @@ This assessment will be revisited if processing activities expand significantly 
 
 Jikigai maintains an internal record of processing activities as required by Article 30(1) of the GDPR. The SME exemption under Article 30(5) does not apply because, although Jikigai has fewer than 250 employees, the documentation site hosting constitutes non-occasional processing (continuous web hosting).
 
-The register documents eleven processing activities:
+The activities below are illustrative and not exhaustive. The complete and authoritative record, which is larger than this list and is kept current as processing changes, is the internal Article 30 register itself; where that register and this list differ, the register is the current record.
 
 1. **Documentation website hosting** (soleur.ai via GitHub Pages) -- IP addresses, browser metadata of visitors
 2. **Website analytics** (soleur.ai via Plausible Analytics) -- page URLs, referrer URLs, country (derived from IP, not stored), device type, browser type. Legal basis: legitimate interest (Article 6(1)(f)). No personal data is stored; IP addresses are discarded after geolocation. Plausible Analytics is hosted in the EU.
