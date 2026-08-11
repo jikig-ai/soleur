@@ -56,6 +56,8 @@ All `archive/` subdirectories are excluded from discovery.
 
 ## Notes
 
+**No `secret-scan-allow-rename` label is required for archival.** The destinations here (`knowledge-base/project/{plans,specs}/archive/`) match the gitleaks path allowlist — but so do the sources, so the `git mv` creates no new unscanned surface. `rename-guard` exempts allowlist -> allowlist renames per rename pair; see [secret-scanning.md](../../../../knowledge-base/engineering/operations/secret-scanning.md).
+
 - The script calls `git add` before `git mv` to handle untracked files
 - A single timestamp is generated per invocation for consistency
 - Exit code 0 for success (including "no artifacts found")

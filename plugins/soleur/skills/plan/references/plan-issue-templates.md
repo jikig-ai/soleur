@@ -133,6 +133,33 @@ exception:            # present ONLY when mechanism is plaintext-exception OR ce
   expires_on:         # YYYY-MM-DD — <=90 days out; Layer A FAILs an expired exception
 ```
 
+## Guard Contract
+
+Required when the deliverable includes a guard, gate, lint, drift-check or
+anti-vacuity control (plan Phase 2.12). One entry per guard. Resolved
+mechanically by `scripts/lint-guard-contract.py`; halted at deepen-plan 4.11.
+
+```markdown
+### Guard 1 — <name>
+
+**Property.** <the invariant in ONE sentence>
+
+**Assembly.** <every code path, array, file and call site the property
+quantifies over. Members drift; assembly is structural — name the chokepoint
+the members must flow through, and if there is more than one, say so.>
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | <an edit that must drive the guard RED> | RED |
+| 2 | <one targeting the guard's OWN dispatch — a guard reporting "0 checked" and exiting 0 is vacuous> | RED |
+| 3 | <one adding a SECOND member after a compliant first — a check that stops at the first is the defect itself> | RED |
+```
+
+Write the matrix BEFORE the guard. A matrix derived from finished code tests the
+code that exists; one derived from the design tests the property.
+
 ## Acceptance Criteria
 
 - [ ] Core requirement 1
@@ -300,6 +327,33 @@ exception:            # present ONLY when mechanism is plaintext-exception OR ce
   reevaluate_when:    # the concrete condition that reopens the decision
   expires_on:         # YYYY-MM-DD — <=90 days out; Layer A FAILs an expired exception
 ```
+
+## Guard Contract
+
+Required when the deliverable includes a guard, gate, lint, drift-check or
+anti-vacuity control (plan Phase 2.12). One entry per guard. Resolved
+mechanically by `scripts/lint-guard-contract.py`; halted at deepen-plan 4.11.
+
+```markdown
+### Guard 1 — <name>
+
+**Property.** <the invariant in ONE sentence>
+
+**Assembly.** <every code path, array, file and call site the property
+quantifies over. Members drift; assembly is structural — name the chokepoint
+the members must flow through, and if there is more than one, say so.>
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | <an edit that must drive the guard RED> | RED |
+| 2 | <one targeting the guard's OWN dispatch — a guard reporting "0 checked" and exiting 0 is vacuous> | RED |
+| 3 | <one adding a SECOND member after a compliant first — a check that stops at the first is the defect itself> | RED |
+```
+
+Write the matrix BEFORE the guard. A matrix derived from finished code tests the
+code that exists; one derived from the design tests the property.
 
 ## Acceptance Criteria
 
@@ -482,6 +536,33 @@ exception:            # present ONLY when mechanism is plaintext-exception OR ce
   reevaluate_when:    # the concrete condition that reopens the decision
   expires_on:         # YYYY-MM-DD — <=90 days out; Layer A FAILs an expired exception
 ```
+
+## Guard Contract
+
+Required when the deliverable includes a guard, gate, lint, drift-check or
+anti-vacuity control (plan Phase 2.12). One entry per guard. Resolved
+mechanically by `scripts/lint-guard-contract.py`; halted at deepen-plan 4.11.
+
+```markdown
+### Guard 1 — <name>
+
+**Property.** <the invariant in ONE sentence>
+
+**Assembly.** <every code path, array, file and call site the property
+quantifies over. Members drift; assembly is structural — name the chokepoint
+the members must flow through, and if there is more than one, say so.>
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | <an edit that must drive the guard RED> | RED |
+| 2 | <one targeting the guard's OWN dispatch — a guard reporting "0 checked" and exiting 0 is vacuous> | RED |
+| 3 | <one adding a SECOND member after a compliant first — a check that stops at the first is the defect itself> | RED |
+```
+
+Write the matrix BEFORE the guard. A matrix derived from finished code tests the
+code that exists; one derived from the design tests the property.
 
 ## Acceptance Criteria
 
