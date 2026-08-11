@@ -215,7 +215,7 @@ For the durable, per-turn plain-language **turn summary** persisted by the Conci
 
 ### 3.13 Owner-private beta-tester / prospect CRM (agent-native capture store)
 
-For the operator's **owner-private** store of beta-tester / prospect conversations (Privacy Policy Section 4.7; Data Protection Disclosure Section 2.3(ad); Article 30 register Processing Activity 30; migration 126, ADR-102). Here **the Web Platform user is the controller and Jikigai is the processor** for the third-party personal data recorded:
+For the operator's **owner-private** store of beta-tester / prospect conversations (Privacy Policy Section 4.7; Data Protection Disclosure Section 2.3(ad); Article 30 register Processing Activity 30; migration 126, ADR-102). Here, **as this activity runs today, Jikigai is the controller** for the third-party personal data the user records — every store owner is Jikigai personnel, and Jikigai determines the purposes and means. This changes on the first arms-length (non-Jikigai) store owner, at which point that owner becomes the controller and Jikigai becomes an Art. 28 processor under a written instrument (corrected 2026-08-11, #7349):
 
 - **What it is:** three owner-only content tables (RLS keyed on the user's `user_id`) holding a contact head (`beta_contacts`), dated dual-lens conversation notes (`interview_notes`: verbatim `body` + `lens[]` in `{sales, product}`), and an append-only stage-transition history. Written/read on the operator's behalf by the `cro`/`cpo` agents via `auth.uid()`-pinned functions; agent write tools are **human-gated**.
 - **Data subjects:** the beta testers / prospects — **involuntary, third-party data subjects** → **Article 14 applies**. **No special-category (Article 9) data is solicited.**
