@@ -582,6 +582,26 @@ t12_skips_own_pass_closure() {
   assert_not_contains "T12b a forged sweeper-PASS comment does not suppress re-verification" \
                       "not re-litigating" "$out2"
   unset GH_TOKEN; rm -rf "$root2"
+
+  # T12c — NEAR-NAME. `github-actions-evil` is a valid GitHub username shape, so a `^github-actions`
+  # prefix match would admit it and reintroduce the forgery through the control meant to stop it.
+  # The guard uses EXACT logins for that reason; this pins it.
+  local nearname='{"comments":[{"author":{"login":"github-actions-evil"},"body":"### Sweeper run: PASS (2026-07-18T18:00:00Z)\nScript exited 0."}]}'
+  local root3; root3=$(setup_closed_root 1 "$nearname")
+  local out3; out3=$(invoke_closed "$root3" "$(closed_body_6657)")
+  assert_not_contains "T12c a near-name login does not satisfy the sweeper-actor check" \
+                      "not re-litigating" "$out3"
+  unset GH_TOKEN; rm -rf "$root3"
+
+  # T12d — the REST rendering. The two API surfaces disagree (GraphQL: github-actions;
+  # REST: github-actions[bot]); either could reach this code, and both must be honoured or the
+  # guard silently stops recognising its own PASS block and re-verifies every closed issue daily.
+  local botform='{"comments":[{"author":{"login":"github-actions[bot]"},"body":"### Sweeper run: PASS (2026-07-18T18:00:00Z)\nScript exited 0."}]}'
+  local root4; root4=$(setup_closed_root 1 "$botform")
+  local out4; out4=$(invoke_closed "$root4" "$(closed_body_6657)")
+  assert_contains "T12d the REST [bot] rendering is recognised as the sweeper" \
+                  "not re-litigating" "$out4"
+  unset GH_TOKEN; rm -rf "$root4"
 }
 
 # --- T13 (AC14): stateless reopen cap bounds the loop ------------------------

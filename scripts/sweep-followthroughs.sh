@@ -158,10 +158,18 @@ closed_precheck() {
   # block then stops the reopen path from ever re-litigating it, laundering the forgery into the
   # evidence trail. Requiring the comment to be authored by the workflow actor keeps the
   # evidence-based intent and makes the evidence authentic.
+  #
+  # EXACT logins, not a `^github-actions` prefix. A prefix would also admit a user-registered
+  # login such as `github-actions-evil`, which is a valid GitHub username shape — reintroducing
+  # the forgery through the control meant to stop it. Both renderings are listed because the two
+  # API surfaces disagree and either could reach this code: GraphQL (`gh --json comments`, what
+  # this script uses) reports `github-actions`; REST reports `github-actions[bot]`. Measured on
+  # #7296 today, both forms, same comment.
   local sweeper_passes
   sweeper_passes=$(printf '%s' "$comments_json" \
     | jq --arg h "$SWEEPER_PASS_HEADING" '[.comments[]
-        | select((.author.login // "") | test("^github-actions"))
+        | select((.author.login // "") as $l
+                 | $l == "github-actions" or $l == "github-actions[bot]")
         | select(.body | startswith($h))] | length')
   if (( sweeper_passes > 0 )); then
     log "issue #$issue_num: carries the sweeper's own PASS block — not re-litigating"
