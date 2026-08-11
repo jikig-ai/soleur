@@ -145,3 +145,37 @@ defect in a different subsystem — the gate requires it stay separate).
 The `code-simplicity-reviewer` CONCUR co-sign that normally gates a `deferred-scope-out` filing was
 **not run**: this session is configured not to spawn agents. The cost-of-filing test was applied
 directly instead, and all three filings are structurally un-inlineable.
+
+## Review Phase — DEGRADED (0 of 12 agents)
+
+**Status: BLOCKED on an operator decision. The PR is deliberately left in DRAFT.**
+
+Change classified **`code`** (14 files, +3337/−5, `.sh` + `.ts` present) → 8 always-on agents plus
+`test-design-reviewer`, `user-impact-reviewer`, `observability-coverage-reviewer` and `semgrep-sast`
+= **12 expected**. **Zero were spawned** — this session is configured not to use the Agent tool
+(review Gate 2a: "spawning unavailable or unauthorized"), so the sanctioned inline degraded path was
+run instead.
+
+Evidence trailer emitted with honest coverage: `Reviewed-Coverage: inline-fallback 0/12 agents`,
+all twelve named in `--agents-missing`. A full-strength trailer would have been worse than none,
+because `/ship` reads that field as a boolean.
+
+### What the degraded pass DID cover
+- `shellcheck` on all three authored bash files **and** on the extracted post-strip shipper (the
+  bytes the host actually runs) — clean; five `SC2034`s on the tests, three false positives
+  (read inside `eval`'d assert strings), two real and fixed.
+- Deterministic gates: `check-adr-ordinals`, `lint-orphan-test-suites`,
+  `lint-followthrough-varq-ban`, `followthrough-exec-bit`, `lint-infra-no-human-steps` (scoped as
+  lefthook invokes it), render + `cloud-init schema`, userdata budget, `systemd-analyze verify`.
+- Inline reasoning over security / architecture / resource / simplicity, plus three findings fixed
+  (see the `review:` commit).
+
+### What it did NOT cover, and why that matters here
+`security-sentinel`, `user-impact-reviewer` and `observability-coverage-reviewer` are exactly the
+lenses this diff most needs: it adds the registry host's **first `Restart=always` unit** on the
+**sole container-image pull path**, ships log content to a third-party warehouse, and the plan
+declares `brand_survival_threshold: single-user incident`. Gate 2a item 4 forbids marking a PR ready
+at that threshold with zero agents, so I did not.
+
+**Remaining: re-run `/review` with the panel** (needs agent spawning authorized), then `/compound`
+→ `/ship`. Do NOT read this as "review passed" — it is a measured 0/12.
