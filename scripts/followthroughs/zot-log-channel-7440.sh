@@ -329,5 +329,12 @@ echo "      own output produces."
 echo "      The gc start/complete ratio (${n_gc_start}/${n_gc_done}) is now readable, which is what"
 echo "      makes the downstream growth-attribution question answerable from telemetry at all."
 echo "      ADR-182 may now flip adopting -> accepted."
-printf '%s\n' "$envelope_hits" | tail -3 | cut -c1-200 | sed 's/^/        /'
+# NO ROW EXCERPT. sweep-followthroughs.sh captures this stdout with 2>&1 and posts it as a comment
+# on a PUBLIC repo issue, so anything printed here is published. A raw zot row carries internal
+# 10.0.1.x topology, service usernames, OCI repo names, digests, filesystem paths and User-Agent,
+# and the credential scan above covers exactly three patterns — a secret shape outside those three
+# reaches this line having already passed every gate. The FAIL arm is counts-only for this reason;
+# the PASS arm is held to the same discipline. Counts and ratios are the contract; row VALUES are
+# not, and the diagnostic question this probe answers ("did the channel deliver?") is a counting
+# question. Pinned by C13 in tests/scripts/test-zot-log-channel-probe.sh.
 exit 0

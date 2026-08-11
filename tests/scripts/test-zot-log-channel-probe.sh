@@ -311,6 +311,22 @@ assert "C12 the probe's tracker is NOT #7440 (the sweeper would make it a silent
 # archive arm would add an S3 failure mode to a steady-state probe for no coverage.
 assert "C12 the probe passes --no-archive on its queries" "grep -qF -- '--no-archive' '$PROBE'"
 
+# --- C13: no raw row content reaches stdout (#7444 F-6) -----------------------------------
+# sweep-followthroughs.sh captures this probe's stdout with 2>&1 and posts it as a comment on a
+# PUBLIC repo issue. The FAIL arm is counts-only by design; the PASS arm ended in a three-row
+# excerpt. A raw zot row carries internal 10.0.1.x topology, service usernames, OCI repo names,
+# digests, filesystem paths and User-Agent — and the credential scan above covers exactly three
+# patterns, so a secret shape outside those three exits 0 and is published verbatim.
+#
+# Counts and ratios are the contract. Row VALUES never are.
+#
+# Two-stage predicate mirroring C12's, and the two stages are not optional: the prose above
+# legitimately names the forbidden construct, so a single-stage grep false-FAILS a compliant file.
+N_EXCERPT=$(grep -nE '\$\{?(envelope_hits|decoded|auth_rows|shape_leaks|drop_hits|boot_hits|control_decoded)\}?"?[[:space:]]*\|[[:space:]]*(tail|head|cut|sed)\b' "$PROBE" | grep -vcE '^[0-9]+:[[:space:]]*#' || true)
+[[ "$N_EXCERPT" =~ ^[0-9]+$ ]] || N_EXCERPT=0
+assert "C13 no raw row variable is excerpted to stdout (the sweeper posts stdout to a PUBLIC issue)" \
+  "[[ '$N_EXCERPT' -eq 0 ]]"
+
 # ASSERTION FLOOR (#7444 F-4). An ABSOLUTE LITERAL, never derived from the run it guards: a
 # floor computed from this suite's own output is reduced by the exact truncation it exists to
 # detect. It increments FAIL rather than exiting, so the miss is reported through the same
