@@ -294,6 +294,23 @@ assert "T6 sanitizer: a shipped row contains no raw double quote (would corrupt 
 assert "T6 sanitizer: the POSTed body is still valid JSON after a tab-bearing input" \
   "jq -e . < <(head -1 '$STUB_POSTS') >/dev/null"
 
+# The length BOUND was unasserted until this case. `${s:0:MAXLEN}` is a bounded substring rather
+# than `head -c` deliberately — under pipefail, head closing the pipe early makes the producer take
+# SIGPIPE and the pipeline report 141 — but a bound nothing exercises is a bound nothing pins, and a
+# Go panic trace is exactly the input that reaches it. Two directions matter: the row must be
+# TRUNCATED (an unbounded line risks a rejected payload) and it must still be valid JSON afterwards
+# (truncation must not sever an escape or leave the body malformed).
+J_LONG="$TMP/j_long"
+LONGMSG="$(printf 'A%.0s' $(seq 1 2000))"
+printf '{"level":"error","message":"panic %s","caller":"zotregistry.dev/zot/v2/pkg/api/routes.go:1"}\n' "$LONGMSG" > "$J_LONG"
+run_shipper "$J_LONG"
+assert "T6 a 2000-char line was truncated (the MAXLEN bound is load-bearing, not decorative)" \
+  "[[ \$(jq -re '.message' < <(head -1 '$STUB_POSTS') | wc -c) -lt 1200 ]]"
+assert "T6 the truncated row is still valid JSON (truncation did not sever the body)" \
+  "jq -e . < <(head -1 '$STUB_POSTS') >/dev/null"
+assert "T6 the truncated row still carries the envelope, so it remains attributable" \
+  "grep -q 'SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$TEST_HOST ' '$STUB_POSTS'"
+
 # NEGATIVE CONTROL: a clean diagnostic line must survive with its diagnostic content intact.
 J_GC="$TMP/j_gc"
 printf '%s\n' '{"level":"info","message":"executing gc","component":"gc","caller":"zotregistry.dev/zot/v2/pkg/storage/gc.go:1"}' > "$J_GC"
@@ -379,6 +396,8 @@ env PATH="$BIN:/usr/bin:/bin" STUB_JOURNAL="$J2" STUB_POSTS="$STUB_POSTS" \
     BETTERSTACK_LOGS_TOKEN="synthetic-ingest-token-not-a-real-secret" \
     ZOT_LOG_SHIPPER_STATE_DIR="$SEEDED" ZOT_LOG_SHIPPER_ONESHOT=1 \
     timeout 25 bash "$SHIPPER" >/dev/null 2>&1 || RESUME_RC=$?
+assert "T10 the resume run exited cleanly (rc=$RESUME_RC) — without this the asserts below could pass on a crashed shipper" \
+  "[[ '$RESUME_RC' -eq 0 ]]"
 assert "T10 resume passed the persisted cursor as --after-cursor" \
   "grep -qE 'after=s=aaa' '$STUB_JCALLS'"
 assert "T10 resume shipped only the newer entry (no replay of the already-delivered row)" \
@@ -393,6 +412,8 @@ env PATH="$BIN:/usr/bin:/bin" STUB_JOURNAL="$J1" STUB_POSTS="$STUB_POSTS" \
     BETTERSTACK_LOGS_TOKEN="synthetic-ingest-token-not-a-real-secret" \
     ZOT_LOG_SHIPPER_STATE_DIR="$BADSTATE" ZOT_LOG_SHIPPER_ONESHOT=1 \
     timeout 25 bash "$SHIPPER" >/dev/null 2>&1 || BAD_RC=$?
+assert "T10 the invalid-cursor run exited cleanly (rc=$BAD_RC) — an abort here would make the asserts below vacuous" \
+  "[[ '$BAD_RC' -eq 0 ]]"
 assert "T10 an invalidated cursor emits reason=cursor_invalidated rather than gapping silently" \
   "grep -q 'reason=cursor_invalidated' '$STUB_POSTS'"
 assert "T10 after cursor invalidation the shipper still ships (it restarted from the tail)" \
