@@ -345,7 +345,7 @@ defect reproduced one layer up.
 
 ```bash
 # 1. The one-shot boot marker, fired once from runcmd at provision time.
-… --grep SOLEUR_ZOT_LOG_BOOT     # boot_id=, shipper_unit=<active|failed|unknown>
+… --grep SOLEUR_ZOT_LOG_BOOT     # boot_id=, shipper_cron=<present|absent>
 
 # 2. The reporter's INDEPENDENT path — it survives a totally dead shipper egress.
 … --grep SOLEUR_ZOT_DISK | … | grep -oE 'log_shipper_post_fail=[0-9]+|log_shipper_last_ok_age_s=-?[0-9]+|boot_id=[0-9a-f-]+'

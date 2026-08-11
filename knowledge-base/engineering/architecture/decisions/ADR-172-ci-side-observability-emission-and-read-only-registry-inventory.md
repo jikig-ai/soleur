@@ -193,7 +193,7 @@ provisioning event, and while the LUKS recut is unfired (#7287) there is no safe
 corollary is that the *read-only* surface is currently the only instrumentable one — so read-only
 instrumentation is not a lesser version of the work, it is the entire near side of the deadlock.
 
-> **Superseded 2026-08-11 (#7440), by ADR-182 §7 — the premise above no longer holds.** The body of
+> **Superseded 2026-08-11 (#7440), by ADR-182 §6 — the premise above no longer holds.** The body of
 > this section is left exactly as written because it was true when written and is the reason this
 > ADR took the shape it did; the correction is appended rather than substituted.
 >

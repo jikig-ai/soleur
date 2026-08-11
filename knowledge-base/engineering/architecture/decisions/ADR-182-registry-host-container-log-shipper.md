@@ -112,40 +112,99 @@ cannot fire on this host at all (no email in zot's identity model; no `sync`/`ex
 `credentialsFile` in the config, so no credentialed upstream URL; htpasswd values are never echoed)
 and were dropped rather than kept as decorative safety.
 
-### 4. This is the registry host's FIRST `Restart=always` unit
+### 4. The shipper is a cron one-shot, not a daemon — because this host cannot be fixed in place
 
-Every existing unit here is `Type=oneshot`. Recorded because it changes the host's failure surface,
-and it is why §5 exists.
+Every unit on this host is `Type=oneshot` and every recurring job is a 5-minute `cron.d` line
+wrapped in `doppler run`. This change adds a third such line rather than the host's first
+`Restart=always` unit.
 
-### 5. Resource governance is the ONLY containment available
+The governing constraint is not efficiency, it is **reversibility**. `hcloud_server.registry` is
+cloud-init-only (ADR-096) with no in-place execution path, so the repair cost of any defect shipped
+here is an operator-authorized destructive replace of the fleet's sole image-pull path. The correct
+question is therefore "which shape's failure modes are survivable without a replace?", not "which
+shape is better in steady state." A daemon's are not: a bad `ExecStart`, a missing dependency, or a
+fast-failing start all become permanent conditions. A one-shot's are: each is one failed tick, and
+the next is five minutes away.
 
-With no in-place execution path there is no kill switch, so the unit must be incapable of needing
-one: `MemoryMax=128M`, `CPUQuota=20%`, `IOWeight=20`, `RestartSec=5`, and `StartLimitIntervalSec=0`.
+This is measured, not hypothesised. The first implementation of this change named
+`ExecStart=/usr/bin/doppler` — a path this template never creates, since it installs to
+`/usr/local/bin` and, unlike the inngest template, writes no symlink. That is `status=203/EXEC`, and
+because `Restart=always` + `StartLimitIntervalSec=0` deliberately disable the start-limit latch, a
+permanent 5-second restart loop shipping nothing, whose only fix is another destructive replace. The
+local `systemd-analyze verify` gate passed it, because `verify` resolves `ExecStart` against the
+**runner's** filesystem — which has `/usr/bin/doppler` and lacks `/usr/local/bin/doppler`, the exact
+inverse of production.
 
-The start-limit setting is load-bearing rather than cosmetic. Bare `Restart=always` inherits
-`RestartSec=100ms` with `StartLimitBurst=5` in `StartLimitIntervalSec=10s`, so a shipper that fails
-fast at boot (Doppler or the network not yet up) **latches `failed` in under a second and stays dead
-until the next boot** — indistinguishable from "never provisioned", which is exactly the
-discrimination the follow-through probe exists to make.
+Latency is what the daemon buys, and this channel has no consumer that can spend it. The disk
+reporter runs at 5 minutes, the liveness feeder at 60 seconds against a 90-second deadline, and the
+follow-through probe reads warehouse windows of 12 minutes and up. The consumer is post-hoc
+root-cause work on a host blind for its entire existence; five-minute granularity is not
+distinguishable from seconds there.
 
-The caps are sized against a real precedent: #6288 was a host-level OOM restart loop on this same
-host, and zot's own cgroup cap is *derived* as host RAM minus a 1024 MB reserve documented for
-"cron+doppler+sshd+OS". This unit is a new line item against that reserve, on the host whose failure
-darks every deploy.
+The resource governance offered in exchange was independently disproven, which is why it does not
+appear as a counter-argument: `IOWeight=20` is a verified no-op (no BFQ; `io.cost.model`/`qos`
+empty) and sat on the wrong cgroup for its stated goal, `RuntimeMaxUse=64M` **raised** the volatile
+journal ceiling above journald's ~38 MB default rather than lowering it, the 1024 MB host reserve it
+was sized against is mis-derived (the host reports 3,814 MB, so the true remainder is ~742 MB), and
+every cap magnitude survived mutation — `MemoryMax` 128M→3000M and `CPUQuota` 20%→400% both passed a
+green suite. Containment that cannot be asserted is not containment.
 
-### 6. The cursor means DELIVERED, not READ
+The cron line takes a **free minute offset** (`4-59/5`). `zot-disk-heartbeat` holds `*/5` and
+`soleur-private-nic-guard` holds `2-59/5`, and that guard's own comment records why the offset
+exists: the host budgets ~1024 MB for "cron+doppler+sshd+OS" and must not have these concurrently
+resident. A third `doppler run` at `*/5` would reintroduce the daemon's RAM risk through the
+schedule instead of the process table, on a host with an OOM restart-loop history (#6288). The
+suite asserts this as a real disjointness check over the minutes each line actually fires, not a
+string compare against a remembered literal.
 
-`journalctl --cursor-file` is **not** used. Measured on systemd 259: the file is written at clean
-exit only — SIGTERM writes it, **SIGKILL leaves it stale**. The man page explains why (it documents
-the flag for sequential one-shot invocations, not a `Restart=always` daemon). So on an OOM-kill the
-shipper would resume from the last clean-exit cursor and **re-ship everything since, unbounded** —
-the runaway-volume mode triggered by the very mechanism chosen to prevent gaps.
+`flock -n` — carried over from the daemon's `ExecStart`, where systemd's single-instance guarantee
+already made it decorative — becomes load-bearing here as the tick-overrun guard, matching the NIC
+guard's shape exactly.
+
+The invocation also narrows its own secret scope, which the daemon could not usefully do: a
+long-lived process held the **whole** `soleur-registry/prd` set (including `REGISTRY_LUKS_KEY`) in a
+permanently-resident environment, and its `StateDirectory`-rooted `DOPPLER_CONFIG_DIR` made it the
+first persistent doppler fallback-cache root on the estate. A tick's environment lives seconds, and
+`--only-secrets BETTERSTACK_LOGS_TOKEN --no-fallback` (both verified against doppler v3.75.3)
+narrows it explicitly rather than by inheritance.
+
+### 5. The cursor means DELIVERED, not READ — and that is independent of the cadence
+
+`journalctl --cursor-file` is **not** used, and the reason is semantic rather than incidental.
+
+An earlier draft of this ADR rejected it because the file is written at clean exit only (SIGTERM
+writes it, SIGKILL leaves it stale) and conceded, in the Alternatives table, that this rejection
+"was corrected" once the shape became a sequential one-shot — the pattern the man page documents the
+flag for. **That concession is withdrawn.** Measured on systemd 259: the flag writes the cursor of
+the last entry **READ** (`man journalctl`: *"At the end, write the cursor of the last entry to
+FILE"*), and journalctl has no channel by which to learn whether the consumer delivered anything.
+Reading 5 entries lands the file on the 5th regardless of what the consumer did with them, and a
+consumer exiting non-zero does not hold it back. Adopting it would make a transient sink outage a
+permanent, silent, unaccounted loss — the defect, shipped as the design. Also measured: when the
+consumer breaks the pipe early, journalctl takes SIGPIPE and the file is **never written at all**,
+so the break-on-first-failure design below would replay the entire tick.
 
 Instead the shipper persists the per-entry `__CURSOR` from the JSON it already parses, atomically,
-**after each successful POST**. `--no-tail` is passed because with no cursor `--follow` implies
-`-n 10`, so a fresh host would discard the boot backlog the persistence exists to preserve.
+**after each successful POST**. That is ~6 lines, is exact rather than tick-granular, and is the one
+part of the original streaming design that is load-bearing independent of the scheduling shape.
 
-### 7. Amendment to ADR-172 §8
+A tick ends at its first undelivered row and exits non-zero. **Recovery is not the exit code** — it
+is that the cursor was never advanced past the hole, so the next tick resumes exactly there. The
+exit code exists only so a failing tick is visible without SSH. This is also why the shipper posts
+each row **once**: the disk reporter retries (`post || post || echo`) because its value is not
+replayable, whereas every shipper row is replayable from the cursor, so an immediate second attempt
+against a briefly-500ing ingest buys nothing the five-minute gap does not buy better — and
+back-to-back attempts are the one retry shape guaranteed to fail both times against a transient
+fault.
+
+A cold start — a fresh host that has never persisted a cursor — still reads from the beginning of
+the retained journal, because that host's journal is small and the boot backlog is exactly what the
+persistence exists to preserve. Only a cursor **invalidation** (a journal rotated past the persisted
+cursor during a sink outage) bounds the replay, with an explicit `--since`. Dropping `--no-tail` is
+not a bound: measured, absent `--follow`/`-n` it is a strict no-op (702 vs 702 entries over a bounded
+window) and only undoes an explicit `--lines=`.
+
+### 6. Amendment to ADR-172 §8
 
 ADR-172 §8 recorded that *"while the LUKS recut is unfired there is no safe provisioning event"*,
 with the corollary that *"the read-only surface is currently the only instrumentable one"*. **Both
@@ -155,9 +214,9 @@ were true when written and are no longer.** The recut has fired: the live heartb
 
 §3's write-surface finding is **undisturbed**: this plan changes no `accessControl` and grants no
 `delete`. ADR-096's cloud-init-only posture is restated here rather than amended separately — it
-still holds, and it is why §8 below exists.
+still holds, and it is why §7 below exists.
 
-### 8. Ships inert until provisioned, and says so
+### 7. Ships inert until provisioned, and says so
 
 `hcloud_server.registry` is cloud-init-only and every registry resource is an
 `OPERATOR_APPLIED_EXCLUSION`, so **merging this applies nothing**. This is a deferral of delivery and
@@ -174,7 +233,9 @@ escalates instead of reporting TRANSIENT forever.
 | Widen the reporter's `zot_last_err` field | **Rejected** | Stays a 5-minute sampler — the defect itself. A wider field raises the lower bound without producing a count |
 | Ship from CI, extending ADR-172's inventory lever | **Rejected** | CI reaches only the read-only `/v2/` surface; container logs are unreachable from a runner |
 | Grant `delete` / edit `/etc/zot/config.json` | **Rejected, out of scope** | The write-surface deadlock ADR-172 §3 declines to pretend around |
-| A timer-driven shipper with `journalctl --since <window>` | **Rejected, but its rejection was corrected** | Boundary arithmetic double-ships or gaps. The original rejection cited `--cursor-file` continuity, which was **measured false under SIGKILL** — the actual resolution is self-persisted `__CURSOR`, not the `--cursor-file` idiom whose man page documents this very timer pattern |
+| **A `Restart=always` streaming daemon** (this change's first implementation) | **Rejected** | Buys seconds-latency no consumer of this channel can spend — the disk reporter is 5-min, the liveness feeder 60s against a 90s deadline, the probe reads warehouse windows of 12+ min — and pays with the host's first always-on unit on the fleet's sole image-pull path, a host with no in-place execution path and an OOM restart-loop history (#6288). The trade is not latency-vs-complexity but latency-vs-**reversibility**: every daemon failure mode is repairable only by an operator-authorized destructive replace. Measured, not hypothesised — one wrong `ExecStart` path (`/usr/bin/doppler`, which this template never creates) made it a permanent 5s restart loop shipping nothing, and the local `systemd-analyze verify` gate passed it because it resolved against the runner's filesystem. Under cron that same defect is one failed tick per five minutes. The `MemoryMax`/`CPUQuota`/`IOWeight` containment offered in exchange was independently disproven: `IOWeight` is a no-op without BFQ and sits on the wrong cgroup, `RuntimeMaxUse=64M` **raises** the volatile ceiling it was meant to lower, and every cap magnitude survives mutation |
+| **`journalctl --cursor-file`, under the cron one-shot** | **Rejected — and the earlier "its rejection was corrected" note is itself WITHDRAWN** | The one-shot IS the sequential-invocation pattern the man page documents the flag for, so the invocation-shape objection was indeed wrong. The semantics remain disqualifying, for a simpler reason than the SIGKILL staleness earlier cited: measured on systemd 259, the flag writes **the cursor of the last entry READ** (`man journalctl`: *"At the end, write the cursor of the last entry to FILE"*), and journalctl has no channel by which to learn whether the consumer delivered anything. Adopting it makes the cursor mean READ — precisely the defect that turns a transient sink outage into permanent, silent, unaccounted loss. Also measured: when the consumer breaks the pipe early, journalctl takes SIGPIPE and the file is **never written at all**, so a break-on-first-failure design would replay the whole tick. Self-persisting the per-entry `__CURSOR` after each successful POST is ~6 lines, is exact rather than tick-granular, and is the one part of the original design load-bearing independent of scheduling shape |
+| A timer- or cron-driven shipper keyed on `journalctl --since <window>` | **Rejected** | Boundary arithmetic double-ships or gaps, and no window value fixes it, because the boundary is between the wall clock and the journal's own ordering. The cadence was never the defect — the **positioning mechanism** was. The adopted design takes the cron cadence and keeps cursor positioning |
 | A selectivity filter admitting named log classes | **Rejected** | Duplicates the rate cap, suppresses the free 60s positive control, needs lockstep with zot's log vocabulary across version bumps, and creates a "filter admits nothing" mode needing its own detector. Wholesale admission + a class-prioritised cap is simpler and admits `executing gc`, the denominator the downstream question needs |
 | A dedicated `SOLEUR_ZOT_LOG_CANARY` | **Rejected** | `zot-liveness-heartbeat.timer` already GETs `/v2/` every 60s and zot logs every request at info, so a genuine zot line lands every minute BY CONSTRUCTION (~1,440/day). That control traverses the WHOLE path (zot → journald → match → sanitize → POST → warehouse); a shipper-emitted canary would skip journald ingestion and the field match — the two actual failure modes — so it would certify something other than what it claims |
 | Batched JSON-array POSTs | **Rejected** | Flush-trigger ambiguity, partial-batch loss across restarts, an unbounded in-memory buffer under a sink outage, and a second JSON-escaping surface. Per-line POST is the proven transport |
@@ -192,7 +253,7 @@ escalates instead of reporting TRANSIENT forever.
 - New standing row volume on a shared source, bounded by an explicit 5,000/day cap with the four
   measured evidence classes cap-exempt so the diagnostic evidence is not dropped preferentially
   during exactly the flood that accompanies disk growth.
-- A new permanently-resident process on the sole image-pull path, contained by §5's hard caps.
+- No new permanently-resident process: a 5-minute cron tick on the sole image-pull path (§4).
 - Journald moves to `Storage=persistent` with both media explicitly bounded, which takes the log
   buffer off a `/run` tmpfs on a RAM-constrained host.
 
