@@ -6,7 +6,13 @@
 # collisions become safe side-effects.
 #
 # Plan: knowledge-base/project/plans/2026-05-12-feat-bg-readiness-concurrency-hardening-plan.md
-# Canonical flock idiom: .claude/hooks/agent-token-tee.sh:160-170
+# Canonical flock idiom: the `flock -w 5` append block in agent-token-tee.sh
+# (search that file for `Append under flock`). Cited by content, not by line
+# number: the previous `:160-170` range pointed at the jq_fail block, and a
+# repo-relative line citation is unresolvable from the plugin cache anyway —
+# which is the class of defect this file's relocation exists to fix.
+# Location: ships INSIDE the plugin (ADR-178, #7409) so a marketplace install
+# resolves it; .claude/hooks/** consumers reach in from the repo side.
 
 # Guard against double-source within a single shell.
 if [[ "${_SOLEUR_SESSION_STATE_LOADED:-}" == "1" ]]; then
@@ -208,6 +214,37 @@ acquire_lease() {
   fi
 
   local tmp
+  # Surfaced by #7409, PRE-EXISTING and deliberately left as-is. Moving this file
+  # made it a "new entrant" for lint-trap-tempfile-ownership rule (c), which is
+  # scoped to files changed vs the merge base — the pre-existing population is
+  # fenced by the high-water instead. So the finding is new; the code is not.
+  #
+  # The remedy rule (c) proposes — "add a single owning trap ... EXIT" — is
+  # ACTIVELY HARMFUL in this file specifically, for the reason recorded at
+  # `_register_lease_release_trap` below: EXIT is deliberately excluded there
+  # because `create_worktree` acquires the lease and registers its trap IN THE
+  # SAME shell that then exits normally on success, so an armed EXIT trap fired
+  # on that success and released the lease immediately. That is what made the
+  # lease layer unreachable in production. Arming one here to satisfy a linter
+  # would re-introduce it.
+  #
+  # The residual, stated honestly rather than waved away: `sweep_orphan_leases`
+  # globs `*.lease`, so a leaked `*.lease.XXXXXX` does NOT match it and nothing
+  # else reaps it. A SIGKILL (or power loss) in the window between this mktemp
+  # and the `mv` below — one `date` subshell and one heredoc write — therefore
+  # strands a single ~150-byte file in the repo's own scratch dir, permanently.
+  # Bounded and non-destructive, but not zero.
+  #
+  # An earlier draft of this comment said INT/TERM/HUP were "already covered by
+  # the multi-signal trap; only SIGKILL reaches this window." Both halves were
+  # false. `_register_lease_release_trap` is invoked by the CALLER, after this
+  # function has already returned, and only in trap mode — so during the window
+  # below no trap is armed at all. And even when one is, its body releases
+  # `<name>.lease`; it has never known anything about `<name>.lease.XXXXXX`. So
+  # ANY signal strands the file, and Ctrl-C during `create` is a routine
+  # operator action, which makes the accumulation rate higher than "power loss"
+  # implies. Still bounded, still non-destructive; just not as rare as claimed.
+  # lint-trap-ownership: ok  an EXIT trap is documented-harmful here (see _register_lease_release_trap) — it would re-arm the release-on-success bug; residual is one ~150B stranded file per SIGKILL in a two-statement window
   tmp=$(mktemp "${lease_file}.XXXXXX") || return 1
 
   local started_at
@@ -263,7 +300,7 @@ release_lease() {
 
   # TWO owners can release, and the second one is why this function used to do
   # NOTHING. Measured before this change: the DOCUMENTED call —
-  #   bash .claude/hooks/lib/session-state.sh release_lease "$(basename "$PWD")"
+  #   bash <plugin-root>/scripts/lib/session-state.sh release_lease "$(basename "$PWD")"
   # which both one-shot and work tell you to run at the end — returned rc=0 and
   # deleted no file, because a fresh process has a different `$$` and an empty
   # `_LEASE_ACQUIRED_STARTED_AT`, so the in-process conjunction could never
@@ -359,7 +396,7 @@ is_lease_active() {
   # `acquire_lease` records `pid=$$`, and every DOCUMENTED entry point is a
   # short-lived process:
   #
-  #     bash .claude/hooks/lib/session-state.sh acquire_lease <worktree>
+  #     bash <plugin-root>/scripts/lib/session-state.sh acquire_lease <worktree>
   #     bash .../worktree-manager.sh --yes create <branch>
   #
   # so `$$` is a bash that exits within milliseconds of writing the file.

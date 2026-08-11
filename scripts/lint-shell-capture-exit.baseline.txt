@@ -5,8 +5,8 @@
 # gate -- fix the finding instead.
 .claude/hooks/cla-signed-author-gate.test.sh	S2	[[ -f "$jsonl" ]] && denied=$(grep -c '"event_type":"deny"' "$jsonl" 2>/dev/null || echo 0)
 .claude/hooks/doppler-secrets-delete-redirect.sh	S1	SUBCMD=$(printf '%s' "$CMD" | grep -oE 'doppler\s+secrets\s+(delete|set|upload)' | awk '{print $3}')
-.claude/hooks/lib/session-state.test.sh	S1	T17_MTIME=$(grep -oE '\(\( age > [0-9]+ \)\)' "$HELPER" | grep -oE '[0-9]+' | head -1)
-.claude/hooks/lib/session-state.test.sh	S1	t9_pid=$(grep '^pid=' "$ROOT/leases/$T9_WT.lease" | cut -d= -f2)
+plugins/soleur/test/session-state.test.sh	S1	T17_MTIME=$(grep -oE '\(\( age > [0-9]+ \)\)' "$HELPER" | grep -oE '[0-9]+' | head -1)
+plugins/soleur/test/session-state.test.sh	S1	t9_pid=$(grep '^pid=' "$ROOT/leases/$T9_WT.lease" | cut -d= -f2)
 .claude/hooks/pre-merge-auto-close-scan.test.sh	S1	HOOK_CODE="$(grep -vE '^[[:space:]]*#' "$HOOK")"
 .claude/hooks/session-rules-loader.test.sh	S1	bodies25=$(grep -hE '^- .*\[id: ' "$T25"/AGENTS.rules.md | wc -l | tr -d ' ')
 .claude/hooks/session-rules-loader.test.sh	S1	code26=$(grep -vE '^[[:space:]]*#' "$HOOK")

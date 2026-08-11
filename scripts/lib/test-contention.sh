@@ -44,7 +44,7 @@ _TC_CLK_TCK="$(getconf CLK_TCK 2>/dev/null || echo 100)"
 # session-state.sh supplies the advisory lock (Phase 3). Resolved relative to
 # this lib so it works from any CWD; overridable for tests.
 _tc_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
-TC_SESSION_STATE="${TC_SESSION_STATE:-$_tc_lib_dir/../../.claude/hooks/lib/session-state.sh}"
+TC_SESSION_STATE="${TC_SESSION_STATE:-$_tc_lib_dir/../../plugins/soleur/scripts/lib/session-state.sh}"
 # A test-all.sh run is minutes, not seconds. with_lock's 30s default would fire
 # the advisory path on essentially every genuine overlap, so size the wait to a
 # full suite.

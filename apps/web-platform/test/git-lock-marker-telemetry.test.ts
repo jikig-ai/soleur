@@ -2,7 +2,7 @@
 // the pure extractor, tool_response coercion, and the PostToolUse hook's fail-open
 // classification (wedge → error, diag-only → warn, non-Bash → no-op).
 import { describe, test, expect } from "vitest";
-import { readFileSync } from "fs";
+import { readFileSync, readdirSync, existsSync } from "fs";
 import { join } from "path";
 import {
   extractGitLockMarkers,
@@ -222,27 +222,75 @@ describe("drift guard: every sentinel the shell script emits is mirrored", () =>
       "../../../plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh",
       "../../../plugins/soleur/skills/git-worktree/scripts/git-repo-readiness-diag.sh",
     ].map((p) => readFileSync(join(__dirname, p), "utf8"));
+    // SKILL.md files are scanned too (#7409). The two .sh paths above were the
+    // entire scan set, so a `SOLEUR_*` sentinel authored in agent-executed
+    // SKILL.md prose was invisible to this guard FOREVER — which is exactly what
+    // happened: #7409's degrade-open arms minted a new failure marker across five
+    // skills and it reached no telemetry layer, while the guard stayed green.
+    // Derived from the directory rather than listed, so a new skill cannot add an
+    // unmirrored sentinel by being absent from a hand-maintained array.
+    const skillsDir = join(__dirname, "../../../plugins/soleur/skills");
+    const skillDocs = readdirSync(skillsDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => join(skillsDir, e.name, "SKILL.md"))
+      .filter((p) => existsSync(p))
+      .map((p) => readFileSync(p, "utf8"));
     // Both scripts emit `echo "SOLEUR_..."` sentinels; also collect the non-SOLEUR_-prefixed
     // fatal markers now in the allowlist (D1b): `NO_GIT_REPOSITORY` (the repo-readiness gate),
     // the `SOLEUR_FEATURE_*` push-failure, and the `worktree wedge:` give-up phrase (this PR
     // adds five new bare-echo copies of it — pin the literal so a future rename fails CI here
     // rather than silently un-mirroring). A renamed/added sentinel unmatched by MARKER_RE
     // must fail CI here rather than go silently unmirrored — the exact blindness this closes.
-    const sentinels = scripts.flatMap((s) =>
-      [...s.matchAll(/echo "(SOLEUR_[A-Z_]+|NO_GIT_REPOSITORY|worktree wedge:)/g)].map(
-        (m) => m[1],
-      ),
-    );
-    const unique = [...new Set(sentinels)];
+    const SENTINEL_RE = /echo "(SOLEUR_[A-Z_]+|NO_GIT_REPOSITORY|worktree wedge:)/g;
+    const collect = (s: string) => [...s.matchAll(SENTINEL_RE)].map((m) => m[1]);
+
+    // The two .sh files are a bounded surface: every sentinel they echo belongs to
+    // this telemetry's domain, so collect them wholesale.
+    const scriptSentinels = scripts.flatMap(collect);
+
+    // SKILL.md is NOT bounded that way — a skill file is agent-executed prose for
+    // whatever that skill does, so it carries sentinels from unrelated domains.
+    // Requiring MARKER_RE to mirror all of them makes this guard fail on other
+    // people's work and pressures the fix in the wrong direction: registering a
+    // foreign marker for telemetry nobody asked for. Measured: the unscoped form
+    // demanded `SOLEUR_PREFLIGHT_CHECK10_NOSANDBOX` (preflight's sandbox
+    // diagnostic, landed on main by a sibling PR) be mirrored as a git-lock marker.
+    // Scope the SKILL.md half to the domains extractGitLockMarkers actually covers.
+    const DOMAIN_RE = /^(SOLEUR_GIT_|SOLEUR_WORKTREE_|SOLEUR_SESSION_STATE_)/;
+    const skillSentinels = skillDocs.flatMap(collect).filter((n) => DOMAIN_RE.test(n));
+
+    const unique = [...new Set([...scriptSentinels, ...skillSentinels])];
     expect(unique.length).toBeGreaterThan(0); // non-vacuous: the scripts DO emit sentinels
-    // Every emitted sentinel must be mirrored — except the readiness-READY status line,
-    // which is a control signal for go.md (ready path), not a forensic to log.
+    // The SKILL.md scan is the whole point of the #7409 widening, and a prefix
+    // filter is exactly the thing that can silently reduce it to a no-op — which
+    // would reopen the blindness (a sentinel authored in prose, mirrored nowhere)
+    // while leaving this test green. Assert the scan still contributes.
+    expect(
+      new Set(skillSentinels).size,
+      "the SKILL.md scan matched no in-domain sentinel — DOMAIN_RE has drifted from the names skills actually echo, and the #7409 gap is open again",
+    ).toBeGreaterThan(0);
+    // Every emitted sentinel must be mirrored — except SUCCESS-PATH control signals,
+    // which are read locally and are not forensics to log:
+    //   - SOLEUR_GIT_REPO_READY — go.md's readiness gate reads it on the ready path.
+    //   - SOLEUR_WORKTREE_LEASE_LIB_OK (#7409) — the positive counterpart of
+    //     SOLEUR_WORKTREE_LEASE_LIB_MISSING, emitted once per worktree-manager.sh
+    //     load whenever the lease library resolves, i.e. on EVERY invocation in a
+    //     healthy tree (`list` included). It exists so that silence is not ambiguous
+    //     at the operator's terminal — the only observability layer a marketplace
+    //     install has. Mirroring the healthy path of the highest-frequency script in
+    //     the system would be pure volume, and paging on it is meaningless: it
+    //     reports that nothing is wrong. The FAILURE direction stays mirrored via
+    //     ..._LIB_MISSING, so the signal this telemetry exists for is unaffected.
+    const SUCCESS_PATH_CONTROL_SIGNALS = new Set([
+      "SOLEUR_GIT_REPO_READY",
+      "SOLEUR_WORKTREE_LEASE_LIB_OK",
+    ]);
     for (const name of unique) {
-      if (name === "SOLEUR_GIT_REPO_READY") continue;
+      if (SUCCESS_PATH_CONTROL_SIGNALS.has(name)) continue;
       const sample = `${name} file=.git/config.lock type=chardevice rdev=1:3`;
       expect(
         extractGitLockMarkers(sample).length,
-        `sentinel ${name} echoed by a git-worktree script is not matched by the telemetry extractor — update MARKER_RE`,
+        `sentinel ${name} echoed by a git-worktree script or a skill's SKILL.md is not matched by the telemetry extractor — update MARKER_RE`,
       ).toBe(1);
     }
   });

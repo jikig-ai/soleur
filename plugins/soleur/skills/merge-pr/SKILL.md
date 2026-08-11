@@ -257,9 +257,24 @@ Announce the PR URL.
 ### 5.1 Queue Auto-Merge
 
 ```bash
-bash .claude/hooks/lib/session-state.sh with_lock merge-main 600 -- \
+SS_LIB="${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/scripts/lib/session-state.sh"
+if [[ -r "$SS_LIB" ]] && command -v flock >/dev/null 2>&1; then
+  bash "$SS_LIB" with_lock merge-main 600 -- \
+    gh pr merge <number> --squash --auto
+  rc=$?
+else
+  # Degrade open, loudly — the lock is advisory (ADR-178 §5).
+  echo "SOLEUR_SESSION_STATE_UNAVAILABLE path=$SS_LIB reason=running-unlocked"
   gh pr merge <number> --squash --auto
-rc=$?
+  rc=$?
+fi
+# rc=99 comes only from `with_lock` — but it means "the lock could not be
+# TAKEN", which is broader than contention: `acquire_lock` also returns 99 when
+# the lock FILE cannot be opened (EROFS/ENOSPC/EMFILE). The guard above removes
+# the third cause (a missing flock(1)) by routing it to the degrade-open arm,
+# because otherwise a host without util-linux reports ">600s contention" on an
+# uncontended lock and exits 1 forever. Do not report 99 as contention without
+# saying it may be an unopenable lock file.
 if [[ "$rc" -eq 99 ]]; then
   echo "merge-main lock contended >600s — another session is queueing auto-merge. Retry shortly."
   exit 1
