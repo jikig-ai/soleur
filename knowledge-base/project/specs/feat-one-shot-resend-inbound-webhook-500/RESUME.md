@@ -47,9 +47,29 @@ WRONG LEVER — do not reach for it. restart-inngest-server.yml drives the DEPLO
 lands on the WEB host's co-located unit. It never touches 10.0.1.40 and will report success having
 fixed nothing. tasks.md 0.0b already struck it for this reason.
 
+ALSO IN SCOPE — WE ARE 27 RELEASES BEHIND. inngest.tf:29 pins inngest_cli_version = "v1.19.4"
+(published 2026-05-15); latest upstream is v1.41.1 (2026-08-05). Confirm the running server is on
+a current version and bump the pin.
+  - The bump needs TWO checksums, not one: the dedicated host is DUAL-ARCH (local.inngest_arch,
+    inngest-host.tf), so inngest_cli_sha256 (amd64) AND inngest_cli_sha256_arm64 must both come
+    from the same signed checksums.txt for the new tag. Using the amd64 SHA on an arm64 type fails
+    the download verify — that pairing is why both locals exist.
+  - Read the release notes across v1.19 -> v1.41 for breaking changes to the server flags this
+    fleet passes (inngest-bootstrap.sh's ExecStart, --sdk-url, the postgres/redis URIs). Three
+    months of minors is a real migration surface, not a version-string edit.
+  - SEQUENCE IT SECOND, NOT FIRST. v1.19.4 was pinned 2026-05-15 and the host served on it until
+    the 2026-07-30 recreate, so the version is unlikely to be the bind failure's cause. Fix
+    observability, diagnose the actual fault, THEN bump — changing the binary and the diagnosis
+    surface in one move is how a fix gets attributed to the wrong change. If the diagnosis turns
+    out to implicate the version after all, that is a finding, not the starting assumption.
+
 FILES: apps/web-platform/infra/{cloud-init-inngest.yml, inngest-bootstrap.sh, inngest-host.tf,
-vector.toml}. ADR-100 is the cutover; ADR-167 documents the rollback this decision reverses and
-needs superseding, not deleting.
+inngest.tf, vector.toml}. ADR-100 is the cutover; ADR-167 documents the rollback this decision
+reverses and needs superseding, not deleting.
+
+DEFINITION OF DONE: the dedicated host serves :8288, the app dispatches to 10.0.1.40 with zero
+ECONNREFUSED, the host emits its own telemetry so the next failure is diagnosable without SSH, and
+inngest_cli_version is current with both arch checksums matching the signed checksums.txt.
 
 SCOPE NOTE: PR #7158 is now contrary to this decision — its core change is the repoint away from
 the dedicated host. Do not rebase it (71 commits behind, 16 conflict hunks, and its registry-budget
