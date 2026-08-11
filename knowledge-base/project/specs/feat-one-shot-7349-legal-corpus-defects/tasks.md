@@ -36,7 +36,7 @@ frozen drift.
       omission; neither is in Phase 3c's scope.
 - [x] 0.6 **If any number disagrees with the plan, STOP and correct the plan before editing.**
       The plan's numbers are claims, not permissions.
-- [ ] 0.7 **The six CLO rulings are MADE and recorded in the plan's Domain Review** — SOC 2
+- [x] 0.7 **The six CLO rulings are MADE and recorded in the plan's Domain Review** — SOC 2
       position, PA-30 disposition, AUP §4.6 wording, DPD port scope, E1–E9 directions, and the
       Tier 1 / `2.5.0` classification, each with drafted replacement wording. Read them before
       editing; do not re-derive or re-author legal wording the CLO already settled.
@@ -72,7 +72,7 @@ frozen drift.
 
 ## Phase 2 — Stale records and register shape (B1–B4)
 
-- [ ] 2.1 **The no-commitment position governs** (CLO ruling 1). The DPA template's **§10.3 stays
+- [x] 2.1 **The no-commitment position governs** (CLO ruling 1). The DPA template's **§10.3 stays
       unchanged** — it is the operative clause. Replace the 90-day form at the other three sites
       (the DPA commitments table, the DPA's "commitment in §10.3" reference, and
       `knowledge-base/legal/compliance-posture.md`) with an evaluation-plus-12-month-status-update
@@ -80,17 +80,17 @@ frozen drift.
       create an obligation the operative clause negates; `security-sentinel` already forced this
       recast away from date-certain on §12.2(b) contract-formation grounds; and #4330 is CLOSED so
       it cannot make anything live.
-- [ ] 2.2 Replace the struck-through `#736` row in `compliance-posture.md` with a row naming the
+- [ ] 2.2 **SEQUENCED WITH 5.1** (the row must not name a path that does not yet resolve — a dangling cross-reference is one of the defects this PR fixes). Replace the struck-through `#736` row in `compliance-posture.md` with a row naming the
       T&C enumeration artifact by path.
 - [ ] 2.3 Add a version column to `compliance-posture.md`'s document inventory and populate it;
       refresh the stale Last-Updated values (T&C, AUP, Cookie Policy, Disclaimer, both CLAs).
-- [ ] 2.4 Correct `knowledge-base/product/roadmap.md` row 4.1 to **"In progress — 1 of 10"**
+- [x] 2.4 Correct `knowledge-base/product/roadmap.md` row 4.1 to **"In progress — 1 of 10"**
       (verified: #1439 OPEN, tester #1 onboarded 2026-08-06, mix 1 CC / 0 non-CC against a
       `≥3 of 10 non-CC` requirement).
-- [ ] 2.4b **CPO C4** — either sync the `## Current State` milestone counts to the live API
+- [x] 2.4b **CPO C4** — either sync the `## Current State` milestone counts to the live API
       (Phase 4: 89/206; Post-MVP: 1003/1549 — the roadmap says 710/1283, a 293-issue drift) or
       leave the section's date untouched. Never refresh the date over stale counts.
-- [ ] 2.5 🔴 **RE-CHARACTERISE PA-30 IN PLACE — the re-home is overruled (CLO ruling 2).** Amend
+- [x] 2.5 🔴 **RE-CHARACTERISE PA-30 IN PLACE — the re-home is overruled (CLO ruling 2).** Amend
       its role sentence in `knowledge-base/legal/article-30-register.md`: Jikigai is controller
       today because it is the only store owner; the roles flip on the first arms-length store
       owner, at which point an Art. 28(3) instrument is owed before processing.
@@ -99,9 +99,9 @@ frozen drift.
       re-home silently drops six of PA-30's limbs and gate 2 passes it. And
       `apps/web-platform/supabase/migrations/126_beta_crm.sql` cites PA-30 twice in a migration
       **already applied to production** — its body cannot be edited, only superseded.
-- [ ] 2.6 Add a `P-2` **reservation stub** to `knowledge-base/legal/article-30-2-register.md`
+- [x] 2.6 Add a `P-2` **reservation stub** to `knowledge-base/legal/article-30-2-register.md`
       §Register maintenance, recording it as reserved for the first arms-length store owner.
-- [ ] 2.7 Sweep every PA-30 referrer (the role sentence changed even though the location did not):
+- [x] 2.7 **DONE except DPD §2.3(ad), which is deferred to 3.6a**: that line is canonical-only, so editing its text alone changes a drift-sequence line and gate 2 fails CONTENT CHANGED. It lands paired with its port. Sweep every PA-30 referrer (the role sentence changed even though the location did not):
       `article-30-register.md` (the record, PA-32's lawful-basis cell, Register-Maintenance item
       9); `legitimate-interest-assessments/2026-07-07-beta-crm-lia.md` ×3 — including
       *"full list in PA-30 §(g)"*; `.../2026-07-31-claude-eval-fleet-and-ci-lia.md` ×3;
