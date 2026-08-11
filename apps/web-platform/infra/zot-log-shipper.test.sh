@@ -447,6 +447,37 @@ assert "T12 unit sets DOPPLER_CONFIG_DIR" "grep -qE 'DOPPLER_CONFIG_DIR=' '$UNIT
 DCD=$(grep -oE 'DOPPLER_CONFIG_DIR=[^ "]+' "$UNITBLK" | head -1 | cut -d= -f2-)
 assert "T12 DOPPLER_CONFIG_DIR has no /tmp component (the measured PrivateTmp= defect class)" \
   "[[ -n '$DCD' ]] && ! grep -qE '(^|/)tmp(/|$)' <<<'$DCD'"
+
+# THE ASSERTION ABOVE IS NECESSARY BUT ASSERTS LESS THAN IT NAMES, so this pins the EFFECTIVE value.
+# The unit also pulls EnvironmentFile=/etc/default/registry-doppler, and that file — written by
+# runcmd — sets DOPPLER_CONFIG_DIR=/tmp/.doppler. So two sources compete for the variable this host
+# has a measured defect class around, and a grep that stops at the first good-looking line cannot
+# see the loser. systemd resolves it by a PRECEDENCE LIST, not by file order: `Environment=` ranks
+# after `EnvironmentFile=` and therefore WINS regardless of which line appears first. Verified
+# empirically with real unit files on systemd 259 (both orders resolved to the Environment= value);
+# note that `systemd-run -p` does NOT reproduce this faithfully, so a transient-unit probe is the
+# wrong instrument here. Pin the mechanism: the override must come from `Environment=`, because that
+# is the only form that wins.
+assert "T12 DOPPLER_CONFIG_DIR is set via Environment= (the form that WINS over EnvironmentFile=)" \
+  "grep -qE '^[[:space:]]*Environment=DOPPLER_CONFIG_DIR=[^[:space:]]+' '$UNITBLK'"
+assert "T12 the competing EnvironmentFile is still declared (if it vanished, the note above is stale)" \
+  "grep -qE '^[[:space:]]*EnvironmentFile=/etc/default/registry-doppler[[:space:]]*$' '$UNITBLK'"
+assert "T12 the envfile really does set a /tmp value, so the override is load-bearing rather than decorative" \
+  "grep -qF 'DOPPLER_CONFIG_DIR=/tmp/.doppler' '$CI'"
+
+# systemd's own parser is the authority on whether this unit can start at all — a syntax error here
+# is otherwise discovered at BOOT, on the host that is the fleet's sole image-pull path. Skipped
+# with a STATED reason rather than vacuously when systemd-analyze is unavailable.
+if [[ -n "$(command -v systemd-analyze)" ]]; then
+  SA_OUT="$TMP/sa.out"
+  ( cd "$TMP" && cp "$UNITBLK" zot-log-shipper.service \
+      && systemd-analyze verify ./zot-log-shipper.service ) >"$SA_OUT" 2>&1
+  SA_RC=$?
+  assert "T12 systemd-analyze verify accepts the unit (rc=$SA_RC; catches CPUQuota=20%% and friends)" \
+    "[[ '$SA_RC' -eq 0 ]]"
+else
+  echo "  SKIP: T12 systemd-analyze verify — binary not available in this environment (stated, not vacuous)"
+fi
 assert "T12 the PrivateTmp choice is EXPLICIT either way (not left to the default)" \
   "grep -qE '^[[:space:]]*PrivateTmp=(true|false)[[:space:]]*$' '$UNITBLK'"
 assert "T12 unit owns a StateDirectory (the cursor must not live in a world-writable path)" \
