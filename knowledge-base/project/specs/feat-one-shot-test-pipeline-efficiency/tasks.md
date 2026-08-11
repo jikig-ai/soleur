@@ -111,11 +111,11 @@ vacuously. The data file from C.5 is what removes the parser.
 
 ## Phase F — Item 2: measure the bytes, amend ADR-133 (~4 lines + a doc)
 
-- [ ] **F.1** Add per-directory attribution arms to `scripts/test-contention.test.sh` (RED) via the
+- [x] **F.1** Add per-directory attribution arms to `scripts/test-contention.test.sh` (RED) via the
       existing `TC_DF_CMD` seam (`:58`): pressure on `/tmp` and none on `$TMPDIR` yields two distinct
       numbers, never their sum.
-- [ ] **F.2** Add the per-directory bytes helper to `scripts/lib/test-contention.sh` (GREEN).
-- [ ] **F.3** Record `du -sb` for `/tmp` and `$TMPDIR` at the **existing** `TEST_TIMING_LOG`-gated probe
+- [x] **F.2** Add the per-directory bytes helper to `scripts/lib/test-contention.sh` (GREEN).
+- [x] **F.3** Record `du -sb` for `/tmp` and `$TMPDIR` at the **existing** `TEST_TIMING_LOG`-gated probe
       hook (`test-all.sh:148-152`, `:177-181`), emitting `bytes_tmp=` / `bytes_tmpdir=` as labelled
       trailing fields. **No background sampler.**
 - [ ] **F.4** Read the per-directory figures out of the Phase E log.
@@ -125,18 +125,18 @@ vacuously. The data file from C.5 is what removes the parser.
 
 ## Phase G — Item 3: the rule against session-dependent acceptance criteria
 
-- [ ] **G.1** Re-measure: `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md 2>&1`
+- [x] **G.1** Re-measure: `python3 scripts/lint-agents-rule-budget.py AGENTS.md AGENTS.rules.md 2>&1`
       (baseline `B_ALWAYS=44478`, cap 46000, per-rule cap 600). If headroom is under ~700 bytes, trim
       sibling prose **in the same commit** — do not defer the trim.
-- [ ] **G.2** Write the `cq-ac-must-not-depend-on-concurrent-sessions` body in `AGENTS.rules.md` under
+- [x] **G.2** Write the `cq-ac-must-not-depend-on-concurrent-sessions` body in `AGENTS.rules.md` under
       `## Code Quality`, ≤600 bytes, with a `[skill-enforced: …]` tag naming the plan-review wiring.
-- [ ] **G.3** Add the pointer-only entry to `AGENTS.md` under `## Code Quality` (ADR-151 — never merge
+- [x] **G.3** Add the pointer-only entry to `AGENTS.md` under `## Code Quality` (ADR-151 — never merge
       the body into the index).
-- [ ] **G.4** Wire the check into `plugins/soleur/skills/plan-review/SKILL.md`'s standing panel
+- [x] **G.4** Wire the check into `plugins/soleur/skills/plan-review/SKILL.md`'s standing panel
       instructions, classified **Mechanical**.
-- [ ] **G.5** Do **not** build `lint-plan-ac-determinism.py` — it necessarily fires on this plan's own
+- [x] **G.5** Do **not** build `lint-plan-ac-determinism.py` — it necessarily fires on this plan's own
       acceptance criteria (see plan Phase G "Deliberately NOT built").
-- [ ] **G.6** Verify: `scripts/lint-rule-ids.py` and `scripts/lint-agents-enforcement-tags.py` both
+- [x] **G.6** Verify: `scripts/lint-rule-ids.py` and `scripts/lint-agents-enforcement-tags.py` both
       exit 0.
 
 ## Phase H — deferrals, PR, ship

@@ -101,6 +101,7 @@ Pointer index; bodies in `AGENTS.rules.md`, injected in full by the SessionStart
 - [id: cq-regex-unicode-separators-escape-only]
 - [id: cq-cite-content-anchor-not-line-number]
 - [id: cq-assert-anchor-not-bare-token]
+- [id: cq-ac-must-not-depend-on-concurrent-sessions]
 
 ## Review & Feedback
 
