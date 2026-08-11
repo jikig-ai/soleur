@@ -249,7 +249,17 @@ Runs when `<sync_area>` is `c4`, and as part of `all` **after** the `project`
 area (it consumes the component docs that area writes).
 
 ```bash
-bun "${CLAUDE_PLUGIN_ROOT}/scripts/generate-c4-from-components.ts"
+# Guarded per ADR-179 decision 5 (#7474): the presence check and the invocation
+# share a subprocess, so a producer missing from an otherwise identity-valid
+# plugin root cannot be invoked, and its absence is named rather than surfacing
+# as a bare interpreter error. Changing this shape reds
+# tests/commands/test-sync-producer-reachability.sh (T0j/T0k/T0l) and
+# apps/web-platform/test/plugin-root-anchoring.test.ts (P6).
+if [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/generate-c4-from-components.ts" ]; then
+  bun "${CLAUDE_PLUGIN_ROOT}/scripts/generate-c4-from-components.ts"
+else
+  echo "SOLEUR_SYNC_PRODUCER_MISSING producer=scripts/generate-c4-from-components.ts affects=c4 reason=absent-from-verified-root"
+fi
 ```
 
 The producer parses each component doc's `dependencies:` frontmatter (falling back
@@ -300,15 +310,23 @@ Runs at the END of an `all` sync, after every other area. Writes
 `knowledge-base/project/kb-coverage.md` and prints the same marker to stdout:
 
 ```bash
-bun "${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts"
+if [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts" ]; then
+  bun "${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts"
+else
+  echo "SOLEUR_SYNC_PRODUCER_MISSING producer=scripts/write-kb-coverage.ts affects=coverage reason=absent-from-verified-root"
+fi
 ```
 
 Add one `--degraded "<reason>"` for each producer that reported `status=degraded`
 earlier in the run (the `reason=` token from its marker is the right string):
 
 ```bash
-bun "${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts" \
-  --degraded "c4: no-generated-relationships"
+if [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts" ]; then
+  bun "${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts" \
+    --degraded "c4: no-generated-relationships"
+else
+  echo "SOLEUR_SYNC_PRODUCER_MISSING producer=scripts/write-kb-coverage.ts affects=coverage reason=absent-from-verified-root"
+fi
 ```
 
 **Do not hand-author `kb-coverage.md`, and do not pass the counts in.** Every count
@@ -419,7 +437,11 @@ are disclosed as blind spots, never counted.
 1. **Emit the drift report** (read-only). Run:
 
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" drift --repo . --register knowledge-base/engineering/architecture/domain-model.md
+   if [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" ]; then
+     bash "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" drift --repo . --register knowledge-base/engineering/architecture/domain-model.md
+   else
+     echo "SOLEUR_SYNC_PRODUCER_MISSING producer=scripts/domain-model-drift.sh affects=domain-model reason=absent-from-verified-root"
+   fi
    ```
 
    Exit `0` = clean, `1` = drift found, `2` = error, `3` = secret-shape refuse. Present the report verbatim
@@ -433,9 +455,13 @@ are disclosed as blind spots, never counted.
    **accepted** candidate, append it via the safe primitive:
 
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" write-row \
-     --register knowledge-base/engineering/architecture/domain-model.md \
-     --anchor "<migration-file › table.object>" --statement "<candidate statement>"
+   if [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" ]; then
+     bash "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" write-row \
+       --register knowledge-base/engineering/architecture/domain-model.md \
+       --anchor "<migration-file › table.object>" --statement "<candidate statement>"
+   else
+     echo "SOLEUR_SYNC_PRODUCER_MISSING producer=scripts/domain-model-drift.sh affects=domain-model reason=absent-from-verified-root"
+   fi
    ```
 
    The primitive writes into the `## Auto-inferred (unreviewed)` section only — it NEVER touches the curated
@@ -463,8 +489,12 @@ so under `all` (or headless) that gate would write **zero rows**. Take this path
    on a path they cannot resolve:
 
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" init --repo . \
-     --register knowledge-base/engineering/architecture/domain-model.md
+   if [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" ]; then
+     bash "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" init --repo . \
+       --register knowledge-base/engineering/architecture/domain-model.md
+   else
+     echo "SOLEUR_SYNC_PRODUCER_MISSING producer=scripts/domain-model-drift.sh affects=domain-model reason=absent-from-verified-root"
+   fi
    ```
 
    Idempotent: an existing register is a no-op exit 0, so this is safe to run unconditionally.
