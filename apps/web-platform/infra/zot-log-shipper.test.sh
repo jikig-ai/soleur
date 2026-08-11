@@ -67,7 +67,6 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CI="$SCRIPT_DIR/cloud-init-registry.yml"
 SHIPPER_PATH="/usr/local/bin/zot-log-shipper.sh"
-UNIT_PATH="/etc/systemd/system/zot-log-shipper.service"
 JOURNALD_DROPIN="/etc/systemd/journald.conf.d/10-zot-log-shipper.conf"
 TEST_INGEST_URL="https://s0000000.eu-fsn-3.example-ingest.invalid/"
 TEST_HOST="soleur-registry"
@@ -175,17 +174,20 @@ BIN="$TMP/bin"; mkdir -p "$BIN"
 # wrong thing and stay green.
 cat > "$BIN/journalctl" <<'EOS'
 #!/usr/bin/env bash
-have_match=0; have_json=0; have_notail=0; after_cursor=""; prev=""
+have_match=0; have_json=0; have_follow=0; since=""; after_cursor=""; prev=""
 for a in "$@"; do
   case "$a" in
     CONTAINER_NAME=zot) have_match=1 ;;
     --output=json)      have_json=1 ;;
-    --no-tail)          have_notail=1 ;;
+    --follow|-f)        have_follow=1 ;;
+    --since=*)          since="${a#--since=}" ;;
   esac
   [[ "$prev" == "--after-cursor" ]] && after_cursor="$a"
+  [[ "$prev" == "--since" ]] && since="$a"
   prev="$a"
 done
-printf 'match=%s json=%s notail=%s after=%s\n' "$have_match" "$have_json" "$have_notail" "$after_cursor" >> "$STUB_JCALLS"
+printf 'match=%s json=%s follow=%s since=%s after=%s\n' \
+  "$have_match" "$have_json" "$have_follow" "$since" "$after_cursor" >> "$STUB_JCALLS"
 [[ "$have_match" == 1 ]] || { echo "journalctl stub: missing CONTAINER_NAME=zot match" >&2; exit 64; }
 [[ "$have_json"  == 1 ]] || { echo "journalctl stub: missing --output=json" >&2; exit 64; }
 # A cursor the shipper cannot resume from: model journald's own rejection.
@@ -199,12 +201,12 @@ while IFS= read -r msg; do
   jq -cn --arg m "$msg" --arg c "s=aaa;i=$n;b=bbb" \
     '{__CURSOR:$c, CONTAINER_NAME:"zot", _TRANSPORT:"journal", MESSAGE:$m}'
 done < "$STUB_JOURNAL"
-# Model --follow faithfully: real journalctl BLOCKS after draining the backlog rather than
-# exiting. Without this the SIGKILL case below could not exist — the shipper would exit cleanly
-# on its own and the test would prove clean-exit durability while claiming SIGKILL durability.
-for a in "$@"; do
-  if [[ "$a" == "--follow" ]]; then sleep 300; fi
-done
+# A cron one-shot never passes --follow, so the stub cannot rely on --follow to hold the shipper
+# open for the SIGKILL case. $STUB_HANG models the real reason a TICK can be killed mid-flight:
+# journald streaming slowly (or the tick simply running long) while an OOM kill or a reboot lands.
+# Without this the shipper would exit cleanly on its own and T10b would prove clean-exit
+# durability while claiming SIGKILL durability.
+[[ -n "${STUB_HANG:-}" ]] && sleep 300
 exit 0
 EOS
 chmod +x "$BIN/journalctl"
@@ -236,7 +238,9 @@ printf '%s\n' "$TEST_HOST"
 EOS
 chmod +x "$BIN/hostname"
 
-# Run the shipper once over a fixture journal. Bounded so a runaway --follow cannot wedge CI.
+# Run the shipper once over a fixture journal. The shipper is a cron ONE-SHOT (ADR-182 §4), so
+# there is no ONESHOT override to pass any more — production runs exactly this shape, which is
+# what removes the "the suite drives a mode production does not run" seam.
 run_shipper() {
   local journal="$1"; shift
   STUB_POSTS="$TMP/posts.$RANDOM"; STUB_CURLARGS="$TMP/curlargs.$RANDOM"
@@ -248,7 +252,7 @@ run_shipper() {
       STUB_JOURNAL="$journal" STUB_POSTS="$STUB_POSTS" STUB_CURLARGS="$STUB_CURLARGS" \
       STUB_JCALLS="$STUB_JCALLS" \
       BETTERSTACK_LOGS_TOKEN="synthetic-ingest-token-not-a-real-secret" \
-      ZOT_LOG_SHIPPER_STATE_DIR="$state" ZOT_LOG_SHIPPER_ONESHOT=1 \
+      ZOT_LOG_SHIPPER_STATE_DIR="$state" \
       "$@" \
       timeout 25 bash "$SHIPPER" >"$TMP/out.$RANDOM" 2>&1 || CASE_RC=$?
   LAST_STATE="$state"
@@ -270,8 +274,13 @@ assert "T4 the POSTed body is a single-key JSON object (mirrors the proven repor
   "jq -e 'keys == [\"message\"]' < <(head -1 '$STUB_POSTS') >/dev/null"
 assert "T4 every egress call was bounded (-m/--max-time present)" \
   "[[ \$(grep -c 'm=1' '$STUB_CURLARGS') -eq \$(grep -c . '$STUB_CURLARGS') ]]"
-assert "T4 the journalctl query passed --no-tail (cold start must not discard the boot backlog)" \
-  "grep -q 'notail=1' '$STUB_JCALLS'"
+assert "T4 the journalctl query did NOT pass --follow (a cron one-shot must drain and exit)" \
+  "grep -q 'follow=0' '$STUB_JCALLS'"
+# A COLD start (no cursor ever persisted) must read from the beginning of the retained journal:
+# that host's journal is small and the boot backlog is exactly what the persistence exists to
+# preserve. --since is the INVALIDATION bound (T10), not a cold-start one.
+assert "T4 a cold start is NOT bounded by --since (the boot backlog must not be discarded)" \
+  "grep -q 'since= ' '$STUB_JCALLS'"
 assert "T4 the cursor was persisted after the successful POST" \
   "[[ -s '$LAST_STATE/cursor' ]]"
 
@@ -330,22 +339,60 @@ assert "T6 redaction: the row still ships (redaction must not drop the line)" \
   "[[ \$(grep -c . '$STUB_POSTS') -eq 1 ]]"
 assert "T6 redaction: a REDACTED marker is present so the elision is visible, not silent" \
   "grep -q 'REDACTED' '$STUB_POSTS'"
-assert "T6 redaction: an unrelated header value is preserved (the rule is scoped, not a blanket wipe)" \
+assert "T6 redaction: an ALLOWLISTED routing header is preserved (User-Agent is not a credential)" \
   "grep -qF 'curl/8.5.0' '$STUB_POSTS'"
+
+# INVERTED (#7444 F-10). This assertion previously read "an unrelated header value is preserved"
+# and was satisfied by an arbitrary UNKNOWN header surviving — which LOCKED THE GAP IN: the rule
+# was header-NAME-anchored on the literal [Aa]uthorization, so Cookie, X-Api-Key and
+# X-Amz-Security-Token all shipped verbatim and silently, while Proxy-Authorization shipped and
+# THEN tripped the probe's own leak detector. Meanwhile ADR-182 §3 and the cloud-init comment both
+# claimed anchoring on "the header-object shape rather than trusting one header name's known
+# masking". The redaction is now a name ALLOWLIST over the whole headers object, so the failure
+# mode of an unanticipated header is over-redaction rather than silent leakage.
+J_HDRS="$TMP/j_hdrs"
+printf '%s\n' '{"level":"info","message":"HTTP API","headers":{"Accept":["*/*"],"Cookie":["session=synthetic-cookie-not-real"],"X-Api-Key":["synthetic-apikey-not-real"],"Proxy-Authorization":["Basic c3ludGhldGljOnByb3h5"],"X-Future-Header":["synthetic-future-not-real"],"User-Agent":["curl/8.5.0"]},"caller":"zotregistry.dev/zot/v2/pkg/api/session.go:92"}' > "$J_HDRS"
+run_shipper "$J_HDRS"
+assert "T6 redaction: the row shipped (non-vacuity for the four assertions below)" \
+  "[[ \$(grep -c . '$STUB_POSTS') -eq 1 ]]"
+for _leak in synthetic-cookie-not-real synthetic-apikey-not-real c3ludGhldGljOnByb3h5; do
+  assert "T6 redaction: a NON-Authorization credential header ($_leak) does not reach the wire" \
+    "! grep -qF '$_leak' '$STUB_POSTS'"
+done
+assert "T6 redaction: an ARBITRARY UNKNOWN header is redacted too (allowlist, not denylist)" \
+  "! grep -qF 'synthetic-future-not-real' '$STUB_POSTS'"
+assert "T6 redaction: the allowlisted headers still survive this row (not a blanket wipe)" \
+  "grep -qF 'curl/8.5.0' '$STUB_POSTS'"
+
+# A `]` INSIDE the Authorization value defeated the previous value class: `[^]]*\]` stopped at the
+# first `]`, so the row shipped `Authorization:[REDACTED` with the credential tail three characters
+# to its right, and the probe's own subtraction then exonerated the line.
+J_BRACKET="$TMP/j_bracket"
+printf '%s\n' '{"level":"info","message":"HTTP API","headers":{"Authorization":["Basic synth]etic-bracket-not-real"],"User-Agent":["curl/8.5.0"]},"caller":"zotregistry.dev/zot/v2/pkg/api/session.go:92"}' > "$J_BRACKET"
+run_shipper "$J_BRACKET"
+assert "T6 redaction: a ']' inside the credential value does not truncate the redaction" \
+  "! grep -qF 'etic-bracket-not-real' '$STUB_POSTS'"
 
 # --- T7: FEEDBACK-LOOP guard ------------------------------------------------------------
 # Measured: a `zot-log-shipper`-tagged journal entry carries NO CONTAINER_NAME, and
 # `journalctl CONTAINER_NAME=zot` excludes it (0 hits). Asserted on BOTH sides of the filter.
-assert "T7 the unit sets SyslogIdentifier=zot-log-shipper (so its own lines are tagged, not container-named)" \
-  "grep -qE '^[[:space:]]*SyslogIdentifier=zot-log-shipper[[:space:]]*$' '$CI'"
+# Under cron there is no SyslogIdentifier= to set, and none is needed: the match field is
+# CONTAINER_NAME, which ONLY the journald container log driver populates. The shipper runs
+# directly from cron on the host, never inside a container, so its own stderr breadcrumbs cannot
+# carry that field — the exclusion is structural rather than configured.
+assert "T7 the shipper is invoked directly on the host, not through docker (its lines cannot carry CONTAINER_NAME)" \
+  "! grep -qE '^[[:space:]]*[0-9*/,-]+ .*docker .*zot-log-shipper\.sh' '$CI'"
 assert "T7 the shipper matches CONTAINER_NAME (a field its own journald lines cannot carry)" \
   "grep -qE 'journalctl[^|]*CONTAINER_NAME=zot' '$SHIPPER'"
 assert "T7 the shipper does not match on its own SyslogIdentifier (that would be a feedback loop)" \
   "! grep -qE 'journalctl[^|]*(-t|--identifier)[[:space:]=]*zot-log-shipper' '$SHIPPER'"
 
 # --- T8: SINGLETON — flock -n, mirroring both cron siblings on this host ----------------
-assert "T8 the unit's ExecStart is flock -n guarded (a double-run would double-ship)" \
-  "grep -qE 'ExecStart=.*flock[[:space:]]+-n[[:space:]]' '$CI'"
+# Under Restart=always systemd already guaranteed a single instance, so flock was decorative.
+# Under cron it is load-bearing: a tick that outruns its 5-minute slot would otherwise overlap the
+# next one and double-ship every row between their cursors.
+assert "T8 the shipper's cron line is flock -n guarded (a tick overrun would double-ship)" \
+  "grep -qE '^[[:space:]]*[0-9*/,-]+ .*flock[[:space:]]+-n[[:space:]].*zot-log-shipper\.sh' '$CI'"
 
 # --- T9: RATE CAP + cap-exempt evidence classes -----------------------------------------
 # The four classes are the measured evidence vocabulary the downstream disk-attribution question
@@ -394,7 +441,7 @@ RESUME_RC=0
 env PATH="$BIN:/usr/bin:/bin" STUB_JOURNAL="$J2" STUB_POSTS="$STUB_POSTS" \
     STUB_CURLARGS="$STUB_CURLARGS" STUB_JCALLS="$STUB_JCALLS" STUB_SKIP_UNTIL=1 \
     BETTERSTACK_LOGS_TOKEN="synthetic-ingest-token-not-a-real-secret" \
-    ZOT_LOG_SHIPPER_STATE_DIR="$SEEDED" ZOT_LOG_SHIPPER_ONESHOT=1 \
+    ZOT_LOG_SHIPPER_STATE_DIR="$SEEDED" \
     timeout 25 bash "$SHIPPER" >/dev/null 2>&1 || RESUME_RC=$?
 assert "T10 the resume run exited cleanly (rc=$RESUME_RC) — without this the asserts below could pass on a crashed shipper" \
   "[[ '$RESUME_RC' -eq 0 ]]"
@@ -410,7 +457,7 @@ BAD_RC=0
 env PATH="$BIN:/usr/bin:/bin" STUB_JOURNAL="$J1" STUB_POSTS="$STUB_POSTS" \
     STUB_CURLARGS="$STUB_CURLARGS" STUB_JCALLS="$STUB_JCALLS" \
     BETTERSTACK_LOGS_TOKEN="synthetic-ingest-token-not-a-real-secret" \
-    ZOT_LOG_SHIPPER_STATE_DIR="$BADSTATE" ZOT_LOG_SHIPPER_ONESHOT=1 \
+    ZOT_LOG_SHIPPER_STATE_DIR="$BADSTATE" \
     timeout 25 bash "$SHIPPER" >/dev/null 2>&1 || BAD_RC=$?
 assert "T10 the invalid-cursor run exited cleanly (rc=$BAD_RC) — an abort here would make the asserts below vacuous" \
   "[[ '$BAD_RC' -eq 0 ]]"
@@ -433,7 +480,7 @@ KPOSTS="$TMP/posts.kill"; KCURL="$TMP/curlargs.kill"; KJC="$TMP/jcalls.kill"
 env PATH="$BIN:/usr/bin:/bin" \
     STUB_JOURNAL="$J1" STUB_POSTS="$KPOSTS" STUB_CURLARGS="$KCURL" STUB_JCALLS="$KJC" \
     BETTERSTACK_LOGS_TOKEN="synthetic-ingest-token-not-a-real-secret" \
-    ZOT_LOG_SHIPPER_STATE_DIR="$KSTATE" ZOT_LOG_SHIPPER_ONESHOT=0 \
+    ZOT_LOG_SHIPPER_STATE_DIR="$KSTATE" STUB_HANG=1 \
     bash "$SHIPPER" >/dev/null 2>&1 &
 SHIP_PID=$!
 # Wait for the cursor to land (i.e. a POST succeeded), bounded so a hang cannot wedge CI.
@@ -441,8 +488,8 @@ for _ in $(seq 1 60); do [[ -s "$KSTATE/cursor" ]] && break; sleep 0.25; done
 CURSOR_BEFORE="$(cat "$KSTATE/cursor" 2>/dev/null || true)"
 assert "T10b the shipper was still ALIVE when killed (a clean exit would void this case)" \
   "kill -0 '$SHIP_PID' 2>/dev/null"
-assert "T10b it ran with --follow (so it was blocked on the journal, as in production)" \
-  "grep -q 'notail=1' '$KJC'"
+assert "T10b it was mid-tick when killed, not idling (the journal read had not returned)" \
+  "grep -q 'follow=0' '$KJC'"
 kill -KILL "$SHIP_PID" 2>/dev/null
 wait "$SHIP_PID" 2>/dev/null
 CURSOR_AFTER="$(cat "$KSTATE/cursor" 2>/dev/null || true)"
@@ -458,7 +505,7 @@ env PATH="$BIN:/usr/bin:/bin" \
     STUB_JOURNAL="$J1" STUB_POSTS="$KPOSTS2" STUB_CURLARGS="$TMP/curlargs.kill2" STUB_JCALLS="$KJC2" \
     STUB_SKIP_UNTIL=1 \
     BETTERSTACK_LOGS_TOKEN="synthetic-ingest-token-not-a-real-secret" \
-    ZOT_LOG_SHIPPER_STATE_DIR="$KSTATE" ZOT_LOG_SHIPPER_ONESHOT=1 \
+    ZOT_LOG_SHIPPER_STATE_DIR="$KSTATE" \
     timeout 25 bash "$SHIPPER" >/dev/null 2>&1
 assert "T10b post-SIGKILL resume passed the surviving cursor as --after-cursor" \
   "grep -q 'after=s=aaa;i=1' '$KJC2'"
@@ -470,14 +517,39 @@ assert "T10b post-SIGKILL resume replayed NOTHING (the runaway-volume mode is cl
 # the POST path is the fault, the row carrying the counter never arrives. So the counter is written
 # to a state file that the 5-min SOLEUR_ZOT_DISK reporter reads and carries in ITS line.
 run_shipper "$J1" STUB_POST_FAIL=1
-assert "T11 a POST failure did not wedge the shipper (it exits for the next tick)" \
-  "[[ '$CASE_RC' -eq 0 ]]"
+FAILSTATE="$LAST_STATE"
+# THE CURSOR MUST NOT ADVANCE PAST AN UNDELIVERED ROW (#7444 F-3). Before this, a failed POST
+# only incremented POST_FAIL and the loop carried on, so the NEXT successful row advanced the
+# cursor past the hole: a transient Better Stack outage became permanent, silent, unaccounted
+# loss. Executed then: offered 3, shipped 2, dropped_cum=0, cursor at i=3 — violating this very
+# suite's T9 "dropped + shipped == offered" invariant with no test covering it.
+assert "T11 a tick that left a row undelivered exits NON-ZERO (visible without SSH)" \
+  "[[ '$CASE_RC' -ne 0 ]]"
+assert "T11 a FAILED POST did NOT advance the cursor" \
+  "[[ ! -s '$FAILSTATE/cursor' ]]"
 assert "T11 the post-failure counter was written to the shipper's state file" \
-  "grep -qE 'post_fail=[1-9]' '$LAST_STATE/state'"
+  "grep -qE 'post_fail=[1-9]' '$FAILSTATE/state'"
 assert "T11 a last-ok timestamp is tracked so the reporter can compute an age" \
-  "grep -qE 'last_ok_epoch=[0-9]+' '$LAST_STATE/state'"
-assert "T11 the POST was retried before giving up (retry once, then breadcrumb)" \
-  "[[ \$(grep -c . '$STUB_CURLARGS') -ge 2 ]]"
+  "grep -qE 'last_ok_epoch=[0-9]+' '$FAILSTATE/state'"
+# POST ONCE: every row is replayable from the cursor, so a back-to-back second attempt against a
+# briefly-500ing ingest buys nothing the five-minute gap does not buy better.
+assert "T11 the row was POSTed exactly once (no back-to-back retry against a transient fault)" \
+  "[[ \$(grep -c . '$STUB_CURLARGS') -eq 1 ]]"
+# THE RESUME LEG — the payoff, and the half an exit-code assertion cannot prove: the undelivered
+# row must still be REACHABLE on the next tick. Same state dir, sink now healthy, nothing skipped.
+R11P="$TMP/posts.f3resume"; R11J="$TMP/jcalls.f3resume"; : > "$R11P"; : > "$R11J"
+R11_RC=0
+env PATH="$BIN:/usr/bin:/bin" \
+    STUB_JOURNAL="$J1" STUB_POSTS="$R11P" STUB_CURLARGS="$TMP/curlargs.f3resume" STUB_JCALLS="$R11J" \
+    BETTERSTACK_LOGS_TOKEN="synthetic-ingest-token-not-a-real-secret" \
+    ZOT_LOG_SHIPPER_STATE_DIR="$FAILSTATE" \
+    timeout 25 bash "$SHIPPER" >/dev/null 2>&1 || R11_RC=$?
+assert "T11 the recovery tick exited cleanly once the sink recovered (rc=$R11_RC)" \
+  "[[ '$R11_RC' -eq 0 ]]"
+assert "T11 the previously-undelivered row WAS delivered on the next tick (no silent discard)" \
+  "grep -q 'SOLEUR_ZOT_LOG shipper=' '$R11P'"
+assert "T11 the recovery tick did NOT resume from a cursor (none was ever persisted past the hole)" \
+  "grep -q 'after= ' '$R11J' || grep -qE 'after=$' '$R11J'"
 assert "T11 the 5-min reporter carries the shipper's post-fail counter on its own working path" \
   "grep -qF 'log_shipper_post_fail=' '$CI'"
 assert "T11 the 5-min reporter carries the shipper's last-ok age" \
@@ -485,120 +557,105 @@ assert "T11 the 5-min reporter carries the shipper's last-ok age" \
 assert "T11 the reporter's SOLEUR_ZOT_DISK LINE includes both shipper fields (not just defined nearby)" \
   "grep -E '^[[:space:]]*LINE=\"SOLEUR_ZOT_DISK' '$CI' | grep -qF 'log_shipper_post_fail='"
 
-# --- T12: UNIT HARDENING — resource governance is the only containment available ---------
-# This is the registry host's FIRST Restart=always unit (every existing unit is Type=oneshot). With
-# no in-place execution path there is no kill switch, so the unit must be incapable of needing one.
-UNITBLK="$TMP/unit"
-extract_block "$UNIT_PATH" "$UNITBLK"
-assert "T12 the systemd unit block was extracted" "[[ -s '$UNITBLK' ]]"
-for kv in 'MemoryMax=' 'CPUQuota=' 'IOWeight=' 'RestartSec=' 'Restart=always'; do
-  assert "T12 unit pins $kv" "grep -qE '^[[:space:]]*${kv}' '$UNITBLK'"
-done
-# An EXISTENCE grep cannot see a MALFORMED value, and this one has a template trap behind it:
-# Terraform's directive escape is `%%{`, so a bare `%%` is NOT an escape and `CPUQuota=20%%` would
-# render literally as `20%%` — which systemd rejects, on the host with no in-place fix path. Assert
-# the VALUE SHAPE, and assert no doubled percent survives anywhere in the rendered unit.
-assert "T12 CPUQuota is a well-formed single-percent value (a bare %% is not a TF escape and systemd rejects it)" \
-  "grep -qE '^[[:space:]]*CPUQuota=[0-9]+%[[:space:]]*$' '$UNITBLK'"
-assert "T12 MemoryMax is a well-formed byte value" \
-  "grep -qE '^[[:space:]]*MemoryMax=[0-9]+[KMG]?[[:space:]]*$' '$UNITBLK'"
-assert "T12 the unit block contains no doubled percent (would survive the render verbatim)" \
-  "! grep -qF '%%' '$UNITBLK'"
-# Bare Restart=always inherits RestartSec=100ms with StartLimitBurst=5 in StartLimitIntervalSec=10s,
-# so a unit that fails fast at boot (Doppler or network not yet up) latches `failed` in under a
-# second and stays dead until the next boot — indistinguishable from "not provisioned".
-assert "T12 unit disables the start-limit latch (StartLimitIntervalSec=0)" \
-  "grep -qE '^[[:space:]]*StartLimitIntervalSec=0[[:space:]]*$' '$UNITBLK'"
-assert "T12 RestartSec is >= 1s (100ms default would latch failed before the network is up)" \
-  "[[ \$(grep -oE '^[[:space:]]*RestartSec=[0-9]+' '$UNITBLK' | grep -oE '[0-9]+$') -ge 1 ]]"
-# The Doppler CLI errors with '\$HOME is not defined' even when DOPPLER_CONFIG_DIR is set, and a
-# unit inherits no login environment.
-assert "T12 unit sets HOME explicitly (the Doppler CLI needs it; a unit inherits no login env)" \
-  "grep -qE '^[[:space:]]*Environment=.*HOME=/' '$UNITBLK'"
-assert "T12 unit sets DOPPLER_CONFIG_DIR" "grep -qE 'DOPPLER_CONFIG_DIR=' '$UNITBLK'"
-# A unit with PrivateTmp=true gets a private /tmp, so the cron convention resolves elsewhere.
-DCD=$(grep -oE 'DOPPLER_CONFIG_DIR=[^ "]+' "$UNITBLK" | head -1 | cut -d= -f2-)
-assert "T12 DOPPLER_CONFIG_DIR has no /tmp component (the measured PrivateTmp= defect class)" \
-  "[[ -n '$DCD' ]] && ! grep -qE '(^|/)tmp(/|$)' <<<'$DCD'"
+# --- T12: CRON CONTRACT — the shape that replaced the daemon (ADR-182 §4) ----------------
+# This block used to assert a Restart=always unit's resource governance, on the reasoning that
+# caps were "the only containment available" on a host with no in-place execution path. Review
+# disproved the containment itself: IOWeight was a no-op without BFQ and on the wrong cgroup,
+# RuntimeMaxUse RAISED the volatile ceiling it was meant to lower, the reserve it spent against
+# was mis-derived, and every cap magnitude survived mutation. The CTO ruling replaced the daemon
+# with a cron one-shot: the containment is now that there is no long-lived process to contain.
+CRONBLK="$TMP/cron"
+extract_block "/etc/cron.d/zot-log-shipper" "$CRONBLK"
+assert "T12 the shipper's cron.d block was extracted" "[[ -s '$CRONBLK' ]]"
 
-# THE ASSERTION ABOVE IS NECESSARY BUT ASSERTS LESS THAN IT NAMES, so this pins the EFFECTIVE value.
-# The unit also pulls EnvironmentFile=/etc/default/registry-doppler, and that file — written by
-# runcmd — sets DOPPLER_CONFIG_DIR=/tmp/.doppler. So two sources compete for the variable this host
-# has a measured defect class around, and a grep that stops at the first good-looking line cannot
-# see the loser. systemd resolves it by a PRECEDENCE LIST, not by file order: `Environment=` ranks
-# after `EnvironmentFile=` and therefore WINS regardless of which line appears first. Verified
-# empirically with real unit files on systemd 259 (both orders resolved to the Environment= value);
-# note that `systemd-run -p` does NOT reproduce this faithfully, so a transient-unit probe is the
-# wrong instrument here. Pin the mechanism: the override must come from `Environment=`, because that
-# is the only form that wins.
-assert "T12 DOPPLER_CONFIG_DIR is set via Environment= (the form that WINS over EnvironmentFile=)" \
-  "grep -qE '^[[:space:]]*Environment=DOPPLER_CONFIG_DIR=[^[:space:]]+' '$UNITBLK'"
-assert "T12 the competing EnvironmentFile is still declared (if it vanished, the note above is stale)" \
-  "grep -qE '^[[:space:]]*EnvironmentFile=/etc/default/registry-doppler[[:space:]]*$' '$UNITBLK'"
-assert "T12 the envfile really does set a /tmp value, so the override is load-bearing rather than decorative" \
-  "grep -qF 'DOPPLER_CONFIG_DIR=/tmp/.doppler' '$CI'"
+CRONLINE="$(grep -E '^[[:space:]]*[0-9*][0-9*/,-]* ' "$CRONBLK" | head -1)"
+assert "T12 the cron block carries exactly one schedule line" \
+  "[[ \$(grep -cE '^[[:space:]]*[0-9*][0-9*/,-]* ' '$CRONBLK') -eq 1 ]]"
+assert "T12 the schedule line names the shipper" \
+  "grep -qF '/usr/local/bin/zot-log-shipper.sh' '$CRONBLK'"
+assert "T12 the cron line declares the root user (cron.d format requires it)" \
+  "grep -qE '^[[:space:]]*[0-9*][0-9*/,-]*( +[0-9*][0-9*/,-]*){4} +root ' '$CRONBLK'"
 
-# systemd's own parser is the authority on whether this unit can start at all — a syntax error here
-# is otherwise discovered at BOOT, on the host that is the fleet's sole image-pull path. Skipped
-# with a STATED reason rather than vacuously when systemd-analyze is unavailable.
-if [[ -n "$(command -v systemd-analyze)" ]]; then
-  SA_OUT="$TMP/sa.out"
-  ( cd "$TMP" && cp "$UNITBLK" zot-log-shipper.service \
-      && systemd-analyze verify ./zot-log-shipper.service ) >"$SA_OUT" 2>&1
-  SA_RC=$?
-  assert "T12 systemd-analyze verify accepts the unit (rc=$SA_RC; catches CPUQuota=20%% and friends)" \
-    "[[ '$SA_RC' -eq 0 ]]"
-else
-  echo "  SKIP: T12 systemd-analyze verify — binary not available in this environment (stated, not vacuous)"
-fi
-assert "T12 the PrivateTmp choice is EXPLICIT either way (not left to the default)" \
-  "grep -qE '^[[:space:]]*PrivateTmp=(true|false)[[:space:]]*$' '$UNITBLK'"
-assert "T12 unit owns a StateDirectory (the cursor must not live in a world-writable path)" \
-  "grep -qE '^[[:space:]]*StateDirectory=' '$UNITBLK'"
-# `doppler run` resolves the environment once at ExecStart, so a token rotation breaks a
-# long-running shipper until restart, where a 5-min cron re-resolves every tick.
-assert "T12 unit bounds its own lifetime so a token rotation is picked up (RuntimeMaxSec=)" \
-  "grep -qE '^[[:space:]]*RuntimeMaxSec=[0-9]+' '$UNITBLK'"
-assert "T12 the unit is armed in runcmd" \
-  "grep -qE '^[[:space:]]*- systemctl.*enable.*zot-log-shipper\\.service' '$CI'"
-
-# EVERY ABSOLUTE PATH IN ExecStart MUST BE INSTALLED BY THIS SAME TEMPLATE, and this assertion
-# exists because its absence shipped a dead unit. `ExecStart` named `/usr/bin/doppler`; this
-# template installs the CLI to `/usr/local/bin` (`tar xzf … -C /usr/local/bin doppler`) and creates
-# NO symlink — the SIBLING inngest template needs an explicit `ln -sf /usr/local/bin/doppler
-# /usr/bin/doppler` precisely because that path is not otherwise real. Every other doppler call site
-# in this file is bare and PATH-resolved; the unit was the only absolute one and it picked the path
-# a different host had to fabricate. Consequence: status=203/EXEC, and because Restart=always +
-# StartLimitIntervalSec=0 deliberately disable the latch, a permanent 5s restart loop shipping
-# nothing, on a host whose only fix is another destructive replace.
+# THE MINUTE OFFSET IS LOAD-BEARING, not cosmetic. zot-disk-heartbeat holds */5 (0,5,10…) and
+# soleur-private-nic-guard holds 2-59/5 (2,7,12…). That guard's own comment records why: the host
+# budgets ~1024 MB for "cron+doppler+sshd+OS" and must not have these `doppler run` invocations
+# concurrently resident. A third at */5 would reintroduce the daemon's RAM risk through the
+# SCHEDULE on a host with an OOM restart-loop history (#6288).
 #
-# T12's systemd-analyze verify did NOT catch it: `verify` DOES reject a missing ExecStart binary,
-# but it resolves against the RUNNER's filesystem, and this dev box has /usr/bin/doppler and lacks
-# /usr/local/bin/doppler — the exact inverse of production. So the gate validated the developer's
-# host. That is why this assertion is textual and template-relative rather than another exec probe.
-# Scope to BINARY paths only. `ExecStart` also carries non-executable path ARGUMENTS — here the
-# flock lock file under /run/lock — and demanding those be "installed" is a false positive in the
-# guard itself (it fired on /run/lock/zot-log-shipper.lock on the first run). Binaries live under
-# /usr, /bin, /sbin; runtime state does not.
+# Asserted as a real DISJOINTNESS check over the minutes each line actually fires, not as a string
+# compare against a remembered literal — a sibling's schedule can change without this file knowing.
+CRON_MINUTE="$(printf '%s' "$CRONLINE" | awk '{print $1}')"
+assert "T12 the shipper's minute field parses as an offset stride (not a bare */5)" \
+  "[[ '$CRON_MINUTE' =~ ^[0-9]+-59/5$ ]]"
+expand_minutes() {
+  printf '%s' "$1" | awk '
+    /^\*\/[0-9]+$/      { step=substr($0,3)+0; for (m=0; m<60; m+=step) print m; next }
+    /^[0-9]+-59\/[0-9]+$/ { split($0, a, "[-/]"); for (m=a[1]+0; m<60; m+=a[3]+0) print m; next }
+    /^[0-9]+$/          { print $0+0; next }
+  ' | sort -n | uniq
+}
+SIB_MINUTES="$TMP/sibmins"; : > "$SIB_MINUTES"
+while IFS= read -r sched; do
+  expand_minutes "$sched" >> "$SIB_MINUTES"
+done < <(grep -hE '^[[:space:]]*[0-9*][0-9*/,-]*( +[0-9*][0-9*/,-]*){4} +root ' "$CI" \
+         | grep -vF 'zot-log-shipper.sh' | awk '{print $1}')
+MINE_MINUTES="$TMP/minemins"
+expand_minutes "$CRON_MINUTE" > "$MINE_MINUTES"
+COLLISIONS="$(comm -12 <(sort -n "$SIB_MINUTES" | uniq) <(sort -n "$MINE_MINUTES" | uniq) | tr '\n' ' ')"
+assert "T12 at least one sibling cron line was found (otherwise the disjointness check is vacuous)" \
+  "[[ -s '$SIB_MINUTES' ]]"
+assert "T12 the shipper's minutes are DISJOINT from every sibling doppler-run cron (collisions: '$COLLISIONS')" \
+  "[[ -z \"\$(printf '%s' '$COLLISIONS' | tr -d ' ')\" ]]"
+
+# EVERY ABSOLUTE PATH THE CRON LINE EXECUTES MUST BE INSTALLED BY THIS SAME TEMPLATE. This
+# assertion exists because its absence shipped a dead unit: the daemon's ExecStart named
+# /usr/bin/doppler, which this template never creates (it installs to /usr/local/bin and, unlike
+# the inngest template, writes no symlink). systemd-analyze verify did not catch it — it DOES
+# reject a missing ExecStart binary, but resolved against the RUNNER's filesystem, which has
+# /usr/bin/doppler and lacks /usr/local/bin/doppler: the exact inverse of production. The lesson
+# is retargeted here rather than deleted with the unit.
 while IFS= read -r _abs; do
+  [[ -n "$_abs" ]] || continue
   case "$_abs" in
-    /usr/*|/bin/*|/sbin/*) ;;
-    *) continue ;;
+    */zot-log-shipper.sh) continue ;;              # written by this template, asserted above
+    /run/lock/*)          continue ;;              # a lock PATH argument, not a binary
   esac
-  case "$_abs" in
-    /usr/bin/flock|/usr/local/bin/zot-log-shipper.sh) ;;
-    /usr/local/bin/doppler)
-      assert "T12 ExecStart's doppler path is the one THIS template installs (tar -C /usr/local/bin)" \
-        "grep -qE 'tar xzf .*-C /usr/local/bin doppler' '$CI'" ;;
-    *)
-      assert "T12 ExecStart binary '$_abs' is installed or symlinked by this same template" \
-        "grep -qE '(-C $(dirname "$_abs") $(basename "$_abs")|ln -sf [^ ]+ $_abs|chmod \\+x $_abs)' '$CI'" ;;
-  esac
-done < <(grep -oE '^[[:space:]]*ExecStart=.*' "$UNITBLK" | grep -oE '/[A-Za-z0-9/._-]+' | sort -u)
-assert "T12 ExecStart does NOT name /usr/bin/doppler (this template creates no such symlink)" \
-  "! grep -qF '/usr/bin/doppler' '$UNITBLK'"
-assert "T12 flock's absolute path exists on this platform (util-linux ships /usr/bin/flock)" \
-  "grep -qF '/usr/bin/flock' '$UNITBLK'"
+  if [[ "$_abs" == *doppler* ]]; then
+    assert "T12 the cron line's doppler path is the one THIS template installs (tar -C /usr/local/bin)" \
+      "grep -qE 'tar[^\n]*-C[[:space:]]+/usr/local/bin[[:space:]]+doppler' '$CI' || grep -qE 'ln -sf[^\n]*doppler' '$CI'"
+  else
+    assert "T12 cron-executed binary '$_abs' is installed or symlinked by this same template" \
+      "[[ -x '$_abs' ]] || grep -qF '$_abs' '$CI'"
+  fi
+done < <(printf '%s\n' "$CRONLINE" | grep -oE '/[A-Za-z0-9/._-]+' | sort -u)
+
+# The daemon named an absolute /usr/bin/doppler; the cron line resolves doppler through PATH, as
+# both siblings on this host already do.
+assert "T12 the cron line does NOT name /usr/bin/doppler (this template creates no such symlink)" \
+  "! grep -qF '/usr/bin/doppler' '$CRONBLK'"
+assert "T12 flock's absolute path exists on this platform (util-linux ships it)" \
+  "command -v flock >/dev/null 2>&1"
+
+# THE DAEMON IS GONE — asserted as an absence, because a leftover unit would be enabled by a
+# leftover runcmd and would race the cron line for the same lock.
+assert "T12 no zot-log-shipper systemd unit is written any more" \
+  "! grep -qE '^[[:space:]]*-[[:space:]]*path:[[:space:]]*/etc/systemd/system/zot-log-shipper\.service' '$CI'"
+assert "T12 no runcmd arms a zot-log-shipper unit" \
+  "! grep -qE 'systemctl[^\n]*(enable|start|restart)[^\n]*zot-log-shipper' '$CI'"
+assert "T12 the template declares no Restart= directive for the shipper (the host keeps zero always-on units)" \
+  "! grep -qE '^[[:space:]]*Restart=always' '$CI'"
+
+# SECRET SCOPE (#7444 F-13/F-14). A daemon held the WHOLE soleur-registry/prd set — including
+# REGISTRY_LUKS_KEY — in a permanently-resident process env, and its StateDirectory-rooted
+# DOPPLER_CONFIG_DIR made this the first persistent doppler fallback cache on the estate. A tick's
+# env lives seconds, but the scope is still narrowed explicitly rather than left to inheritance.
+# Both flags verified against the installed CLI (doppler v3.75.3 `run --help`).
+assert "T12 the cron line narrows the injected secret set to the one secret it needs" \
+  "grep -qE 'only-secrets[[:space:]]+BETTERSTACK_LOGS_TOKEN' '$CRONBLK'"
+assert "T12 the cron line declines the on-disk doppler fallback cache" \
+  "grep -qF -- '--no-fallback' '$CRONBLK'"
+assert "T12 the cron line does not resurrect a DOPPLER_CONFIG_DIR under a state directory" \
+  "! grep -qF 'DOPPLER_CONFIG_DIR' '$CRONBLK'"
 
 # --- T13: JOURNALD sizing — set UNCONDITIONALLY so the literals are assertable -----------
 # The template sets no Storage=, no SystemMaxUse= and no /var/log/journal, so behaviour is the
@@ -632,6 +689,112 @@ assert "T15 the timer really is 60s (the authority for the ~1,440/day floor)" \
 assert "T15 no comment still claims the liveness probe GETs /v2/ 'every 5 min'" \
   "! grep -qE 'liveness.*every 5 min|/v2/ every 5 min' '$CI'"
 
+# --- T16: cap-exempt ceiling + parsed-field matching (#7444 F-5) -------------------------
+# Cap-exempt classes previously faced NO ceiling at all: is_cap_exempt returned before WIN_COUNT
+# was consulted. PatchBlobUpload fires per blob-upload CHUNK, so exempt volume is proportional to
+# push traffic, and the measured crash-loop case (6,912 restarts/day x ~10 repos x ~2 gc lines)
+# is ~138,000 rows/day against a 5,000/day budget — 28x, in the exact scenario the exemption was
+# sized against. Source 2457081 is shared with the web hosts, the Inngest node and this host's own
+# disk alarms, so the observer can starve the observed.
+J_EXEMPT_FLOOD="$TMP/j_exempt_flood"
+: > "$J_EXEMPT_FLOOD"
+for _ in $(seq 1 40); do
+  printf '%s\n' '{"level":"info","message":"executing gc","component":"gc","caller":"zotregistry.dev/zot/v2/pkg/storage/gc.go:1"}' >> "$J_EXEMPT_FLOOD"
+done
+run_shipper "$J_EXEMPT_FLOOD" ZOT_LOG_SHIPPER_CAP_EXEMPT_PER_INTERVAL=10
+EXEMPT_SHIPPED=$(grep -c 'SOLEUR_ZOT_LOG shipper=' "$STUB_POSTS" || true)
+assert "T16 the exempt ceiling BOUNDS exempt rows (shipped $EXEMPT_SHIPPED of 40 offered, cap 10)" \
+  "[[ '$EXEMPT_SHIPPED' -eq 10 ]]"
+assert "T16 the overflow is ACCOUNTED as a drop row, not silently discarded" \
+  "grep -q 'SOLEUR_ZOT_LOG_DROPPED' '$STUB_POSTS'"
+assert "T16 the exempt overflow carries its OWN reason, not the ordinary rate_cap reason" \
+  "grep -q 'reason=exempt_cap' '$STUB_POSTS'"
+EXEMPT_DROP_N=$(grep -oE 'SOLEUR_ZOT_LOG_DROPPED n=[0-9]+[^\"]*reason=exempt_cap' "$STUB_POSTS" | grep -oE 'n=[0-9]+' | head -1 | cut -d= -f2 || true)
+assert "T16 dropped n + shipped == offered for the exempt class (n=$EXEMPT_DROP_N + $EXEMPT_SHIPPED == 40)" \
+  "[[ -n '$EXEMPT_DROP_N' && \$(( EXEMPT_DROP_N + EXEMPT_SHIPPED )) -eq 40 ]]"
+
+# THE BYPASS. is_cap_exempt matched the WHOLE LINE, so any private-net client sending
+# `User-Agent: executing gc` made EVERY one of its request lines cap-exempt — an
+# externally-controlled hole in the rate cap on a shared 5,000/day source. Matching zerolog's
+# PARSED `message` field closes it: these rows carry message "HTTP API", not "executing gc".
+J_BYPASS="$TMP/j_bypass"
+: > "$J_BYPASS"
+for _ in $(seq 1 40); do
+  printf '%s\n' '{"level":"info","message":"HTTP API","headers":{"User-Agent":["executing gc"]},"caller":"zotregistry.dev/zot/v2/pkg/api/session.go:92"}' >> "$J_BYPASS"
+done
+run_shipper "$J_BYPASS" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=5
+BYPASS_SHIPPED=$(grep -c 'SOLEUR_ZOT_LOG shipper=' "$STUB_POSTS" || true)
+assert "T16 a 'executing gc' string in a HEADER does not buy cap exemption (shipped $BYPASS_SHIPPED, cap 5)" \
+  "[[ '$BYPASS_SHIPPED' -eq 5 ]]"
+assert "T16 those capped rows are accounted under the ORDINARY rate cap" \
+  "grep -q 'reason=rate_cap' '$STUB_POSTS'"
+
+# --- T17: cursor invalidation replays a BOUNDED window (#7444 F-9) -----------------------
+# On invalidation the shipper cleared CURSOR and re-read with no bound. journalctl's default with
+# no --lines/--follow is ALL retained entries, and this same change raises SystemMaxUse to 512M —
+# so the recovery path re-read the entire retained journal. That is the runaway-volume mode the
+# design cites as its reason for rejecting --cursor-file, re-entered by a different door, and the
+# block's own comment claimed it "restarts from the tail" while the code did the opposite.
+BADSTATE2="$TMP/badstate2"; mkdir -p "$BADSTATE2"; printf 'INVALID-CURSOR' > "$BADSTATE2/cursor"
+BJC="$TMP/jcalls.bounded"; BPOSTS="$TMP/posts.bounded"; : > "$BJC"; : > "$BPOSTS"
+BND_RC=0
+env PATH="$BIN:/usr/bin:/bin" STUB_JOURNAL="$J1" STUB_POSTS="$BPOSTS" \
+    STUB_CURLARGS="$TMP/curlargs.bounded" STUB_JCALLS="$BJC" \
+    BETTERSTACK_LOGS_TOKEN="synthetic-ingest-token-not-a-real-secret" \
+    ZOT_LOG_SHIPPER_STATE_DIR="$BADSTATE2" \
+    timeout 25 bash "$SHIPPER" >/dev/null 2>&1 || BND_RC=$?
+assert "T17 the invalidation run exited cleanly (rc=$BND_RC) — otherwise the asserts below are vacuous" \
+  "[[ '$BND_RC' -eq 0 ]]"
+assert "T17 the RECOVERY read is bounded by --since (not an unbounded whole-journal replay)" \
+  "grep -vE 'since=[[:space:]]' '$BJC' | grep -qE 'since=-?[0-9]+[smhd]'"
+assert "T17 the recovery still shipped (the bound must not silence the channel)" \
+  "grep -q 'SOLEUR_ZOT_LOG shipper=' '$BPOSTS'"
+# And the bound must NOT apply to a genuine cold start: a fresh host's journal is small and the
+# boot backlog is exactly what the cursor persistence exists to preserve (asserted in T4).
+assert "T17 the bound is keyed on INVALIDATION, not on cursor-emptiness (cold start stays unbounded)" \
+  "grep -qE 'CURSOR_WAS_INVALIDATED' '$SHIPPER'"
+
+# --- T18: a missing jq is a LOUD failure, never a silent zero (#7444 F-11) ---------------
+# jq is a hard per-line dependency and lives in `packages:`, whose own comment records that the
+# stage is NON-FATAL. Measured with jq off PATH before this guard: 0 of 2 rows delivered, rc=0, no
+# stderr, state all zeros, no drop rows, unit active forever — 100% silent loss, which the
+# reporter then rendered as post_fail=unknown, so the probe reported the INVERTED root cause.
+# The PATH must contain everything the shipper needs EXCEPT jq — a PATH so narrow that `mkdir`
+# is missing would abort before the guard and the case would pass for the wrong reason.
+NOJQ_BIN="$TMP/nojq"; mkdir -p "$NOJQ_BIN"
+for _t in journalctl curl hostname; do cp "$BIN/$_t" "$NOJQ_BIN/$_t"; done
+while IFS= read -r _real; do
+  [[ -n "$_real" ]] || continue
+  ln -sf "$_real" "$NOJQ_BIN/$(basename "$_real")" 2>/dev/null || true
+done < <(for _b in bash mkdir cat mv rm date sed tr sleep timeout; do command -v "$_b" 2>/dev/null; done)
+assert "T18 the no-jq PATH really lacks jq (otherwise this case proves nothing)" \
+  "[[ -z \"\$(PATH='$NOJQ_BIN' command -v jq 2>/dev/null)\" ]]"
+assert "T18 the no-jq PATH still has mkdir (so the shipper reaches its jq guard, not an earlier abort)" \
+  "[[ -n \"\$(PATH='$NOJQ_BIN' command -v mkdir 2>/dev/null)\" ]]"
+NOJQ_STATE="$TMP/nojqstate"; mkdir -p "$NOJQ_STATE"
+NOJQ_POSTS="$TMP/posts.nojq"; : > "$NOJQ_POSTS"
+NOJQ_RC=0
+env PATH="$NOJQ_BIN" \
+    STUB_JOURNAL="$J1" STUB_POSTS="$NOJQ_POSTS" STUB_CURLARGS="$TMP/curlargs.nojq" \
+    STUB_JCALLS="$TMP/jcalls.nojq" \
+    BETTERSTACK_LOGS_TOKEN="synthetic-ingest-token-not-a-real-secret" \
+    ZOT_LOG_SHIPPER_STATE_DIR="$NOJQ_STATE" \
+    timeout 25 bash "$SHIPPER" >"$TMP/out.nojq" 2>&1 || NOJQ_RC=$?
+# Pinned to the GUARD's own exit code, not merely "non-zero": a PATH so narrow that bash itself
+# was unreachable also exits non-zero (127), which passed this case while never reaching the
+# guard at all. Measured while writing it.
+assert "T18 a missing jq exits 1 from the guard itself (rc=$NOJQ_RC; 127 would mean bash was unreachable)" \
+  "[[ '$NOJQ_RC' -eq 1 ]]"
+assert "T18 it says WHY on stderr rather than dying mutely" \
+  "grep -qi 'jq' '$TMP/out.nojq'"
+assert "T18 it ships nothing rather than shipping empty rows" \
+  "[[ \$(grep -c . '$NOJQ_POSTS') -eq 0 ]]"
+# `.*` NOT `[^\n]*`: in a POSIX ERE `[^\n]` is a bracket expression excluding backslash and the
+# LETTER n, so it cannot cross "install" — the assertion would be unmatchable, and as a NEGATIVE
+# it would have passed vacuously forever.
+assert "T18 the template also re-ensures jq in runcmd (packages: alone is non-fatal)" \
+  "grep -qE 'dpkg -s jq.*apt-get install -y jq' '$CI'"
+
 # ASSERTION FLOOR (#7444 F-4). An ABSOLUTE LITERAL, never derived from the run it guards: a
 # floor computed from this suite's own output is reduced by the exact truncation it exists to
 # detect. It increments FAIL rather than exiting, so the miss is reported through the same
@@ -642,7 +805,7 @@ assert "T15 no comment still claims the liveness probe GETs /v2/ 'every 5 min'" 
 # run_suite branches solely on `if ! "$@"`, and the workflow step is pure rc.
 #
 # Raise this literal in the same commit that adds assertions.
-MIN_ASSERTIONS=111
+MIN_ASSERTIONS=131
 RAN=$(( PASS + FAIL ))
 if [[ "$RAN" -lt "$MIN_ASSERTIONS" ]]; then
   FAIL=$(( FAIL + 1 ))

@@ -177,18 +177,40 @@ n_control=$(printf '%s\n' "$control_decoded" | count_lines)
 
 # The reporter carries the shipper's own health on an INDEPENDENT working path, which is the only
 # signal that survives a totally dead shipper egress.
-shipper_post_fail=$(printf '%s\n' "$control_decoded" | grep -oE 'log_shipper_post_fail=[0-9]+' | tail -1 | grep -oE '[0-9]+$' || true)
+# `[0-9]+` alone cannot match the reporter's `unknown` DEFAULT, which is what it emits when the
+# shipper's state file is unreadable — so an unset value silently read as "no POST failures", an
+# absence the probe never measured. Captured as its own sub-state instead.
+shipper_post_fail_raw=$(printf '%s\n' "$control_decoded" | grep -oE 'log_shipper_post_fail=[^ ]+' | tail -1 | sed 's/^log_shipper_post_fail=//' || true)
+shipper_post_fail=""
+shipper_post_fail_unknown=0
+case "$shipper_post_fail_raw" in
+  '')           : ;;                                   # field absent entirely (old cloud-init)
+  *[!0-9]*)     shipper_post_fail_unknown=1 ;;         # `unknown` — state file unreadable
+  *)            shipper_post_fail=$shipper_post_fail_raw ;;
+esac
 current_boot_id=$(printf '%s\n' "$control_decoded" | grep -oE 'boot_id=[0-9a-f-]+' | tail -1 | sed 's/^boot_id=//' || true)
 
 # --- DELIVERY DISCRIMINATION: this is what separates WAIT from ACT ---------------------------
+# GATED ON A KEY THAT ONLY THE NEW CLOUD-INIT CAN PRODUCE (#7444 F-7), never on boot_id drift.
+#
+# boot_id drift is NOT a provisioning event on this host. The private-NIC guard calls `reboot` as
+# a convergence primitive, and cloud-init's `runcmd` is per-instance, so a plain reboot of the
+# CURRENT, UN-REPLACED host flips boot_id without delivering anything. Reproduced: that drift
+# alone flipped delivered=1 -> reason=delivered_but_silent -> "ACT, NOT WAIT", starting the 90-day
+# escalation clock against a host that was never replaced.
+#
+# `log_shipper_post_fail=` exists only in the reporter shipped BY this change, so its presence on
+# a control row is positive proof the new cloud-init ran — and its ABSENCE proves the opposite,
+# regardless of how many times the host has rebooted. The boot marker remains the primary
+# evidence; this is the fallback that replaces the drift heuristic.
 delivered=0
 delivery_evidence="none"
 if [[ "$n_boot" -gt 0 ]]; then
   delivered=1
   delivery_evidence="boot_marker(${n_boot})"
-elif [[ -n "$current_boot_id" && "$current_boot_id" != "$BASELINE_BOOT_ID" ]]; then
+elif [[ -n "$shipper_post_fail_raw" ]]; then
   delivered=1
-  delivery_evidence="boot_id_drift(${current_boot_id})"
+  delivery_evidence="reporter_carries_shipper_fields(log_shipper_post_fail=${shipper_post_fail_raw})"
 fi
 
 # --- CREDENTIAL-SHAPE SCAN: the sole exit-1 arm ---------------------------------------------
@@ -244,23 +266,33 @@ if [[ "$n_envelope" -eq 0 ]]; then
     echo "           was authored (${delivery_evidence}), yet zero envelope rows arrived in the last" >&2
     echo "           ${WINDOW} while the read path is alive (${n_control} control row(s))." >&2
     echo "           THIS IS THE STATE THAT MEANS ACT, NOT WAIT, and it is deliberately NOT" >&2
-    echo "           collapsed into 'not delivered': the shipper unit crashed, latched its" >&2
-    echo "           start-limit, or its journald match is wrong." >&2
-    if [[ -n "$shipper_post_fail" && "$shipper_post_fail" != "0" ]]; then
+    echo "           collapsed into 'not delivered': the shipper's cron tick is failing, its" >&2
+    echo "           journald match is wrong, or jq is missing on the host." >&2
+    if [[ "$shipper_post_fail_unknown" -eq 1 ]]; then
+      echo "           The reporter says log_shipper_post_fail=unknown, which is NOT zero: it means" >&2
+      echo "           the shipper's state file was unreadable, so the shipper may never have run a" >&2
+      echo "           single tick. reason=shipper_state_unreadable — do NOT read this as 'no POST" >&2
+      echo "           failures', which would be an absence this probe never measured." >&2
+    elif [[ -n "$shipper_post_fail" && "$shipper_post_fail" != "0" ]]; then
       echo "           The reporter's INDEPENDENT path says log_shipper_post_fail=${shipper_post_fail}," >&2
-      echo "           so the unit IS running and its POSTs are failing — that is an egress or token" >&2
-      echo "           fault, not a dead unit. reason=shipper_post_failing." >&2
+      echo "           so ticks ARE running and their POSTs are failing — that is an egress or token" >&2
+      echo "           fault, not a dead shipper. reason=shipper_post_failing." >&2
     else
-      echo "           The reporter reports no POST failures, so the unit is likely not running at" >&2
+      echo "           The reporter reports no POST failures, so the tick is likely not running at" >&2
       echo "           all rather than failing to egress." >&2
     fi
-    echo "           Next: read log_shipper_post_fail / log_shipper_last_ok_age_s on the" >&2
-    echo "           ${CONTROL_MARKER} rows, and the SOLEUR_ZOT_LOG_BOOT row's shipper_unit= field." >&2
+    echo "           Next: read log_shipper_post_fail / log_shipper_last_ok_age_s /" >&2
+    echo "           log_shipper_dropped_cum on the ${CONTROL_MARKER} rows, and the" >&2
+    echo "           ${BOOT_MARKER} row's shipper_cron= field." >&2
     exit 2
   fi
-  echo "TRANSIENT: reason=not_delivered — zero envelope rows, no ${BOOT_MARKER} row, and the" >&2
-  echo "           ${CONTROL_MARKER} boot_id still reads ${current_boot_id:-unknown}, which is the" >&2
-  echo "           pre-delivery baseline. The read path IS alive (${n_control} control row(s)), so" >&2
+  echo "TRANSIENT: reason=not_delivered — zero envelope rows, no ${BOOT_MARKER} row, and no" >&2
+  echo "           log_shipper_post_fail= field on any ${CONTROL_MARKER} row. That field exists" >&2
+  echo "           only in the reporter this change ships, so its absence is positive proof the" >&2
+  echo "           new cloud-init has not run (boot_id currently ${current_boot_id:-unknown}; note" >&2
+  echo "           boot_id DRIFT is not used as evidence — this host self-reboots via the NIC" >&2
+  echo "           guard, and runcmd is per-instance, so drift without a replace proves nothing)." >&2
+  echo "           The read path IS alive (${n_control} control row(s)), so" >&2
   echo "           this is a MEASURED absence rather than a dark channel." >&2
   echo "           This is the EXPECTED steady state until the host is replaced: the registry host" >&2
   echo "           is cloud-init-only, so merging the shipper applied nothing. Delivery rides the" >&2

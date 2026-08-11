@@ -54,9 +54,20 @@ row() { jq -cn --arg m "$1" '{dt:"2026-08-11 10:00:00.000000", raw:({message:$m}
 ZOTLINE='level:info,message:HTTP API,module:http,component:session,clientIP:10.0.1.30:39330,method:GET,path:/v2/,statusCode:401,caller:zotregistry.dev/zot/v2/pkg/api/session.go:92'
 
 envelope_row() { row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV $ZOTLINE"; }
+# A control row from the reporter THIS CHANGE SHIPS — it carries the log_shipper_* fields, whose
+# presence is the probe's delivery discriminator (#7444 F-7).
 control_row() {
   local boot="$1" postfail="${2:-0}"
-  row "SOLEUR_ZOT_DISK pcent=8 zot_restarts=0 ping_rc=0 state_status=running boot_id=$boot log_shipper_post_fail=$postfail log_shipper_last_ok_age_s=42 host=$HOSTV zot_last_err={time:2026-08-11T10:04:34Z,level:info,message:HTTP API,caller:zotregistry.dev/zot/v2/pkg/api/session.go:92,func:zotregistry.dev/}"
+  row "SOLEUR_ZOT_DISK pcent=8 zot_restarts=0 ping_rc=0 state_status=running boot_id=$boot log_shipper_post_fail=$postfail log_shipper_last_ok_age_s=42 log_shipper_dropped_cum=0 log_shipper_drop_seq=0 host=$HOSTV zot_last_err={time:2026-08-11T10:04:34Z,level:info,message:HTTP API,caller:zotregistry.dev/zot/v2/pkg/api/session.go:92,func:zotregistry.dev/}"
+}
+
+# A control row from the reporter running on the host TODAY, i.e. BEFORE this change is delivered.
+# It has no log_shipper_* fields at all, because the reporter that emits them ships with the
+# shipper. This is what makes "not delivered" a POSITIVE, measured observation rather than an
+# inference from boot_id, which drifts on every self-reboot without any provisioning happening.
+control_row_predelivery() {
+  local boot="$1"
+  row "SOLEUR_ZOT_DISK pcent=8 zot_restarts=0 ping_rc=0 state_status=running boot_id=$boot host=$HOSTV zot_last_err={time:2026-08-11T10:04:34Z,level:info,message:HTTP API,caller:zotregistry.dev/zot/v2/pkg/api/session.go:92,func:zotregistry.dev/}"
 }
 
 # The query stub dispatches on --grep, which is what makes per-case fixtures possible. It VALIDATES
@@ -122,26 +133,57 @@ assert "C1 the probe queried with --no-archive (30m window is inside the ~40m ho
 assert "C1 the probe queried the 30m window" "grep -q 'since=30m' '$LAST_QCALLS'"
 
 # --- C2: not_delivered — no boot marker, boot_id still the pre-delivery baseline -----------
-C2_CTL="$TMP/c2.ctl"; control_row "$BASELINE_BOOT" 0 > "$C2_CTL"
+C2_CTL="$TMP/c2.ctl"; control_row_predelivery "$BASELINE_BOOT" > "$C2_CTL"
 run_probe "$EMPTY" "$C2_CTL"
 assert "C2 zero envelope + baseline boot_id -> exit 2" "[[ '$CASE_RC' -eq 2 ]]"
 assert "C2 reason=not_delivered" "grep -q 'reason=not_delivered' <<<\"\$CASE_OUT\""
 assert "C2 says so is the EXPECTED steady state (so the operator does not chase it)" \
   "grep -qi 'expected steady state' <<<\"\$CASE_OUT\""
 
-# --- C3: delivered_but_silent — boot_id drifted, still zero envelope rows ------------------
+# --- C3: delivered_but_silent — reporter carries log_shipper_* fields, zero envelope rows --
 # This is the state that separates ACT from WAIT, and collapsing it into 'not delivered' is the
 # defect this case exists to prevent.
 C3_CTL="$TMP/c3.ctl"; control_row "$DRIFTED_BOOT" 0 > "$C3_CTL"
 run_probe "$EMPTY" "$C3_CTL"
-assert "C3 boot_id drift + zero envelope -> exit 2" "[[ '$CASE_RC' -eq 2 ]]"
+assert "C3 shipper fields present + zero envelope -> exit 2" "[[ '$CASE_RC' -eq 2 ]]"
 assert "C3 reason=delivered_but_silent (NOT collapsed into not_delivered)" \
   "grep -q 'reason=delivered_but_silent' <<<\"\$CASE_OUT\""
 assert "C3 does NOT also claim not_delivered" "! grep -q 'reason=not_delivered' <<<\"\$CASE_OUT\""
 
+# --- C3d: BOOT_ID DRIFT ALONE IS NOT A PROVISIONING EVENT (#7444 F-7) ---------------------
+# THE REPRODUCED DEFECT. The private-NIC guard calls `reboot` as a convergence primitive and
+# cloud-init's runcmd is per-instance, so a plain reboot of the CURRENT, UN-REPLACED host drifts
+# boot_id while delivering nothing. Keyed on drift, that flipped delivered=1 ->
+# reason=delivered_but_silent -> "ACT, NOT WAIT" and started the 90-day escalation clock against a
+# host that was never replaced.
+#
+# The fixture is exactly that state: a DRIFTED boot_id on a PRE-DELIVERY reporter row. The verdict
+# must be not_delivered, because the log_shipper_* fields — which only the new cloud-init emits —
+# are absent.
+C3D_CTL="$TMP/c3d.ctl"; control_row_predelivery "$DRIFTED_BOOT" > "$C3D_CTL"
+run_probe "$EMPTY" "$C3D_CTL"
+assert "C3d drifted boot_id WITHOUT shipper fields -> not_delivered (drift is not evidence)" \
+  "[[ '$CASE_RC' -eq 2 ]] && grep -q 'reason=not_delivered' <<<\"\$CASE_OUT\""
+assert "C3d it does NOT claim delivered_but_silent (that would start the escalation clock)" \
+  "! grep -q 'reason=delivered_but_silent' <<<\"\$CASE_OUT\""
+
+# --- C3e: log_shipper_post_fail=unknown is its OWN sub-state, never a zero -----------------
+# The reporter emits `unknown` when the shipper's state file is unreadable. A `[0-9]+` extraction
+# cannot match it, so it silently read as "no POST failures" — reporting an absence the probe
+# never measured, and naming the INVERTED root cause (jq missing => 100% silent loss => state
+# never written => `unknown`).
+C3E_CTL="$TMP/c3e.ctl"; control_row "$DRIFTED_BOOT" "unknown" > "$C3E_CTL"
+run_probe "$EMPTY" "$C3E_CTL"
+assert "C3e an 'unknown' post_fail still counts as DELIVERED (the field's presence is the proof)" \
+  "grep -q 'reason=delivered_but_silent' <<<\"\$CASE_OUT\""
+assert "C3e it is reported as shipper_state_unreadable, not as 'no POST failures'" \
+  "grep -q 'reason=shipper_state_unreadable' <<<\"\$CASE_OUT\""
+assert "C3e it does NOT claim the reporter saw no POST failures" \
+  "! grep -q 'reports no POST failures' <<<\"\$CASE_OUT\""
+
 # --- C3b: same state reached via the BOOT MARKER rather than boot_id drift -----------------
 C3B_LOG="$TMP/c3b.log"
-row "SOLEUR_ZOT_LOG_BOOT boot_id=$DRIFTED_BOOT host=$HOSTV shipper_unit=failed journald_storage=persistent" > "$C3B_LOG"
+row "SOLEUR_ZOT_LOG_BOOT boot_id=$DRIFTED_BOOT host=$HOSTV shipper_cron=present journald_storage=persistent" > "$C3B_LOG"
 run_probe "$C3B_LOG" "$C2_CTL"
 assert "C3b a boot marker with zero envelope rows -> delivered_but_silent" \
   "[[ '$CASE_RC' -eq 2 ]] && grep -q 'reason=delivered_but_silent' <<<\"\$CASE_OUT\""
@@ -248,7 +290,7 @@ assert "C8c a Doppler service-token shape -> exit 1" \
 # zotregistry.dev. A bare `--grep zotregistry.dev` returns 53 of these over 6h right now.
 C9_LOG="$TMP/c9.log"; : > "$C9_LOG"
 C9_CTL="$TMP/c9.ctl"; : > "$C9_CTL"
-for _ in $(seq 1 53); do control_row "$BASELINE_BOOT" 0 >> "$C9_CTL"; done
+for _ in $(seq 1 53); do control_row_predelivery "$BASELINE_BOOT" >> "$C9_CTL"; done
 run_probe "$C9_LOG" "$C9_CTL"
 assert "C9 FALSE-GREEN REFUSED: a heartbeat-echo-only window does NOT pass" "[[ '$CASE_RC' -ne 0 ]]"
 assert "C9 it is reported as not_delivered, not as a live channel" \
@@ -337,7 +379,7 @@ assert "C13 no raw row variable is excerpted to stdout (the sweeper posts stdout
 # run_suite branches solely on `if ! "$@"`, and the workflow step is pure rc.
 #
 # Raise this literal in the same commit that adds assertions.
-MIN_ASSERTIONS=55
+MIN_ASSERTIONS=61
 RAN=$(( PASS + FAIL ))
 if [[ "$RAN" -lt "$MIN_ASSERTIONS" ]]; then
   FAIL=$(( FAIL + 1 ))
