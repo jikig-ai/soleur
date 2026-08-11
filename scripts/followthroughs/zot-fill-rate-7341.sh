@@ -28,11 +28,15 @@
 #   1 = FAIL       breach, or projected breach — the refill is live; #7341 stays open, treat
 #                  zot#4235 / the .uploads/ lead as the actual work
 #   * = TRANSIENT  Better Stack unreachable, or too little CURRENT-BOOT history to fit a slope
-#                  (fewer than 12 samples, or spanning under MIN_SPAN_HOURS). The sweeper leaves
-#                  the issue open and re-runs; this is the expected verdict for the first day or
-#                  so after a recut, and it must never be read as health.
+#                  (fewer than 12 samples, spanning under MIN_SPAN_HOURS, or a newest sample
+#                  older than MAX_AGE_MIN — a dead heartbeat is not a low disk). The sweeper
+#                  leaves the issue open and re-runs; this is the expected verdict for the first
+#                  day or so after a recut, and it must never be read as health.
 #
 # Required env: BETTERSTACK_QUERY_HOST / _USERNAME / _PASSWORD (read by betterstack-query.sh).
+#
+# shellcheck disable=SC2016  # the python3 -c bodies are single-quoted ON PURPOSE — bash must not
+#                              expand them; the constants they need arrive via the environment.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,6 +50,7 @@ QUERY="${ZOT_FILL_QUERY:-${REPO_ROOT}/scripts/betterstack-query.sh}"
 export PCENT_MAX=85       # the alerting threshold the heartbeat itself uses
 export HORIZON_DAYS=14    # project the slope this far; a breach inside it is a FAIL
 export MIN_SPAN_HOURS=24  # a slope needs a BASELINE, not just a count — see below
+export MAX_AGE_MIN=30     # the newest sample must be RECENT — see below
 WINDOW="${ZOT_FILL_WINDOW:-72h}"
 
 [[ -x "$QUERY" ]] || { echo "TRANSIENT: ${QUERY} is not executable"; exit 2; }
@@ -81,8 +86,16 @@ for line in sys.stdin:
     # entire check rests on, with no error anywhere. Caught by the harness at first run.
     b=re.search(r"boot_id=(\S+)", raw)
     if not (dt and m and b): continue
+    # Better Stack emits `dt` as a NAIVE string in UTC ("2026-08-11 08:20:02.302267"), with no
+    # offset and no Z. fromisoformat() therefore builds a naive datetime, and .timestamp() on a
+    # naive datetime assumes LOCAL time — so on a UTC+2 host every sample read as two hours older
+    # than it is, and the staleness gate below reported a live heartbeat as 124 minutes stale.
+    # Differences are immune to a constant offset, so span and slope were never affected; only the
+    # comparison against wall-clock was. Pin the timezone instead of inheriting it from the host.
+    # (No apostrophes in here: this block is single-quoted, so one would terminate it.)
     try:
-        ts=datetime.datetime.fromisoformat(dt.split(".")[0]).timestamp()
+        ts=(datetime.datetime.fromisoformat(dt.split(".")[0])
+            .replace(tzinfo=datetime.timezone.utc).timestamp())
     except Exception: continue
     rows.append((int(ts), int(m.group(1)), b.group(1)))
 if not rows:
@@ -101,15 +114,29 @@ if [[ "${n:-0}" -lt 12 ]]; then
 fi
 
 read -r verdict detail <<<"$(printf '%s\n' "$samples" | python3 -c '
-import sys, os
+import sys, os, time
 pmax=float(os.environ["PCENT_MAX"]); horizon=float(os.environ["HORIZON_DAYS"])
 min_span=float(os.environ["MIN_SPAN_HOURS"])/24.0
+max_age=float(os.environ["MAX_AGE_MIN"])*60.0
 pts=[tuple(map(int,l.split())) for l in sys.stdin if l.strip()]
 pts.sort()
 t0=pts[0][0]
 xs=[(t-t0)/86400.0 for t,_ in pts]; ys=[float(p) for _,p in pts]
 span=xs[-1]
 cur=ys[-1]
+
+# STALENESS. Everything below reads the NEWEST sample as the current state, which is only true
+# if the newest sample is actually current. A host whose heartbeat stopped still has history in
+# the window, so a dead registry with 48h of low-flat readings satisfies the span floor, fits a
+# +0.00pp/day slope, and returns PASS — measured, before this gate existed. The check would then
+# be certifying "the last readings we happen to have were low", not "the store is healthy", and
+# it would be loudest-green exactly when the host is gone.
+#
+# The heartbeat is every 5 minutes, so 30 allows six missed beats before we stop trusting it.
+age=time.time()-pts[-1][0]
+if age > max_age:
+    print(f"TRANSIENT newest_sample_{age/60:.0f}min_old_over_{max_age/60:.0f}min_pcent={cur:.0f}")
+    raise SystemExit(0)
 
 # COUNT is not BASELINE. The heartbeat emits every 5 minutes, so 12 samples can span one hour —
 # enough rows to satisfy any count floor while extrapolating an hour of jitter across two weeks.
@@ -135,6 +162,6 @@ echo "zot-fill-rate[#7341]: ${verdict} ${detail} samples=${n} window=${WINDOW}"
 case "$verdict" in
   PASS) exit 0 ;;
   FAIL) echo "The store is refilling toward the threshold. zot#4235 is unfixed in v2.1.20; also weigh the orphaned .uploads/ lead (i/o timeout during PatchBlobUpload cleanup, observed 2026-08-10)."; exit 1 ;;
-  TRANSIENT) echo "TRANSIENT: ${detail} — too little post-recut history to fit a slope. NOT a pass."; exit 2 ;;
+  TRANSIENT) echo "TRANSIENT: ${detail} — the store's state could not be established. NOT a pass."; exit 2 ;;
   *)    echo "TRANSIENT: could not classify"; exit 2 ;;
 esac

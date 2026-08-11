@@ -41,7 +41,12 @@ cat > "$WORK/stub-query" <<'STUB'
 [[ "${STUB_RC:-0}" == "0" ]] || exit "${STUB_RC}"
 python3 -c '
 import os, json, datetime
-now = datetime.datetime.now()
+# UTC, matching what Better Stack actually emits. This line is load-bearing: when it read
+# datetime.now() the stub carried the SAME local-time assumption as the parser in the probe, so
+# the two errors cancelled and the staleness cases passed while production was two hours off.
+# A fixture that mirrors the bug cannot see it.
+# (No apostrophes in this block: it is single-quoted, so one would terminate it.)
+now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
 rows = []
 for seg in os.environ["SPEC"].split(";"):
     if not seg.strip(): continue
@@ -121,9 +126,20 @@ expect "query transport failure is TRANSIENT" 2 "transport"
 run "bootOLD-aaaa,72,26,10,80,120;bootNEW-bbbb,48,0,6,7,144"
 expect "a rise on the previous boot does not condemn the current one" 0 "PASS"
 
+# 9. A DEAD HEARTBEAT. 48h of low-flat history that stopped 40h ago clears the span floor, fits
+#    a +0.00pp/day slope, and returned PASS before the staleness gate existed. The check would be
+#    loudest-green exactly when the host is gone.
+run "bootNEW-bbbb,88,40,5,5,144"
+expect "a heartbeat that stopped 40h ago is TRANSIENT, not PASS" 2 "min_old_over"
+
+# 10. And the boundary holds in the other direction: a still-live host is not rejected as stale.
+#     Without this, case 9 is satisfiable by a gate that fails everything.
+run "bootNEW-bbbb,48,0,6,8,144"
+expect "a live heartbeat is not rejected as stale" 0 "PASS"
+
 # Anti-vacuity floor: if a refactor drops cases, the count fails even when every remaining case
 # passes.
-MIN_CHECKS=9
+MIN_CHECKS=11
 if (( checks < MIN_CHECKS )); then
   echo "FAIL: only $checks assertions ran, expected >= $MIN_CHECKS" >&2
   fails=$((fails + 1))
