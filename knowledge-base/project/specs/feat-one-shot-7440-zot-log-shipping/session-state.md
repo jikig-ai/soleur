@@ -16,7 +16,7 @@ so nothing was lost to the crash:
 | Late correction | Finding | On disk |
 |---|---|---|
 | C4 edge exists at `model.c4:562` (the earlier grep was case-broken against `zotRegistry`) | A10 | 3 refs |
-| ADR-178 also taken → moved to ADR-179 | A12 | 11 refs |
+| ADR-178 also taken → moved to ADR-182 | A12 | 11 refs |
 | Infra suites register via `.github/workflows/infra-validation.yml`, not `scripts/test-all.sh` | A11 | 5 refs |
 
 **`plan-review` was NOT re-run.** The generic recovery arm says "continue from `/soleur:plan-review`",
@@ -43,7 +43,7 @@ immediately before merge. Both re-probes are owed by `/work`, not satisfied by t
 ### Decisions
 - **Shape change from the issue's literal framing.** The issue says "follow the existing Vector
   source/allowlist pattern"; the registry host runs **no Vector agent**, so there is no allowlist entry
-  to add. The deliverable is a purpose-built journald→ingest shipper (ADR-179), adopting Vector's
+  to add. The deliverable is a purpose-built journald→ingest shipper (ADR-182), adopting Vector's
   *discipline* (exact-value field match, explicit quota budget, redaction before egress) but not its
   agent.
 - **The binding reason against the shared Vector config is payload destruction, not credentials.**

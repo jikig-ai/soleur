@@ -562,6 +562,44 @@ assert "T12 unit bounds its own lifetime so a token rotation is picked up (Runti
 assert "T12 the unit is armed in runcmd" \
   "grep -qE '^[[:space:]]*- systemctl.*enable.*zot-log-shipper\\.service' '$CI'"
 
+# EVERY ABSOLUTE PATH IN ExecStart MUST BE INSTALLED BY THIS SAME TEMPLATE, and this assertion
+# exists because its absence shipped a dead unit. `ExecStart` named `/usr/bin/doppler`; this
+# template installs the CLI to `/usr/local/bin` (`tar xzf … -C /usr/local/bin doppler`) and creates
+# NO symlink — the SIBLING inngest template needs an explicit `ln -sf /usr/local/bin/doppler
+# /usr/bin/doppler` precisely because that path is not otherwise real. Every other doppler call site
+# in this file is bare and PATH-resolved; the unit was the only absolute one and it picked the path
+# a different host had to fabricate. Consequence: status=203/EXEC, and because Restart=always +
+# StartLimitIntervalSec=0 deliberately disable the latch, a permanent 5s restart loop shipping
+# nothing, on a host whose only fix is another destructive replace.
+#
+# T12's systemd-analyze verify did NOT catch it: `verify` DOES reject a missing ExecStart binary,
+# but it resolves against the RUNNER's filesystem, and this dev box has /usr/bin/doppler and lacks
+# /usr/local/bin/doppler — the exact inverse of production. So the gate validated the developer's
+# host. That is why this assertion is textual and template-relative rather than another exec probe.
+# Scope to BINARY paths only. `ExecStart` also carries non-executable path ARGUMENTS — here the
+# flock lock file under /run/lock — and demanding those be "installed" is a false positive in the
+# guard itself (it fired on /run/lock/zot-log-shipper.lock on the first run). Binaries live under
+# /usr, /bin, /sbin; runtime state does not.
+while IFS= read -r _abs; do
+  case "$_abs" in
+    /usr/*|/bin/*|/sbin/*) ;;
+    *) continue ;;
+  esac
+  case "$_abs" in
+    /usr/bin/flock|/usr/local/bin/zot-log-shipper.sh) ;;
+    /usr/local/bin/doppler)
+      assert "T12 ExecStart's doppler path is the one THIS template installs (tar -C /usr/local/bin)" \
+        "grep -qE 'tar xzf .*-C /usr/local/bin doppler' '$CI'" ;;
+    *)
+      assert "T12 ExecStart binary '$_abs' is installed or symlinked by this same template" \
+        "grep -qE '(-C $(dirname "$_abs") $(basename "$_abs")|ln -sf [^ ]+ $_abs|chmod \\+x $_abs)' '$CI'" ;;
+  esac
+done < <(grep -oE '^[[:space:]]*ExecStart=.*' "$UNITBLK" | grep -oE '/[A-Za-z0-9/._-]+' | sort -u)
+assert "T12 ExecStart does NOT name /usr/bin/doppler (this template creates no such symlink)" \
+  "! grep -qF '/usr/bin/doppler' '$UNITBLK'"
+assert "T12 flock's absolute path exists on this platform (util-linux ships /usr/bin/flock)" \
+  "grep -qF '/usr/bin/flock' '$UNITBLK'"
+
 # --- T13: JOURNALD sizing — set UNCONDITIONALLY so the literals are assertable -----------
 # The template sets no Storage=, no SystemMaxUse= and no /var/log/journal, so behaviour is the
 # base-image default: Ubuntu ships Storage=auto with no /var/log/journal present, which means

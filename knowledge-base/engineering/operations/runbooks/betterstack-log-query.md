@@ -271,7 +271,7 @@ single-arg path) silently returns empty strings. Use the multi-key form
 object. When a tag extraction unexpectedly groups everything under one empty
 key, sample one raw row (`SELECT raw ... LIMIT 1`) before trusting the path.
 
-## Querying the zot CONTAINER log channel (`SOLEUR_ZOT_LOG`) — registry, #7440 / ADR-179
+## Querying the zot CONTAINER log channel (`SOLEUR_ZOT_LOG`) — registry, #7440 / ADR-182
 
 > **⚠️ THIS CHANNEL IS LIVE ONLY AFTER DELIVERY. Read this box before following the
 > queries below mid-incident.** The `soleur-registry` host is cloud-init-only (ADR-096),

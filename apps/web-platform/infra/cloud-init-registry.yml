@@ -563,7 +563,7 @@ write_files:
   # block below), so the lines are ALREADY on the host as CONTAINER_NAME=zot. Nothing about zot's
   # own configuration changes here, which keeps this clear of ADR-172 §3's write-surface deadlock.
   #
-  # WHY NOT VECTOR (the issue's literal framing). Decided in ADR-179. The binding reason is
+  # WHY NOT VECTOR (the issue's literal framing). Decided in ADR-182. The binding reason is
   # PAYLOAD DESTRUCTION, not credentials: the shared vector.toml drops any top-level `message` key
   # as an Art-9 user-content key, and zerolog's log text IS a top-level `message` — so a
   # Vector-shipped zot line would arrive with its message deleted. Nominally shipping, actually
@@ -855,7 +855,7 @@ write_files:
       CPUQuota=20%
       IOWeight=20
       EnvironmentFile=/etc/default/registry-doppler
-      ExecStart=/usr/bin/flock -n /run/lock/zot-log-shipper.lock /usr/bin/doppler run --project soleur-registry --config prd -- /usr/local/bin/zot-log-shipper.sh
+      ExecStart=/usr/bin/flock -n /run/lock/zot-log-shipper.lock /usr/local/bin/doppler run --project soleur-registry --config prd -- /usr/local/bin/zot-log-shipper.sh
 
       [Install]
       WantedBy=multi-user.target

@@ -17,7 +17,7 @@
 # THE HIGHEST-VALUE CASE IS C9, THE FALSE-GREEN. Its fixture is TODAY'S ACTUAL PRODUCTION STATE: a
 # window containing nothing but SOLEUR_ZOT_DISK heartbeat rows whose `zot_last_err` field echoes
 # `zotregistry.dev/...`. A bare `--grep zotregistry.dev` returns 53 such rows over 6h right now. If
-# the probe PASSes on that fixture it would auto-close its own tracker and flip ADR-179 on an echo
+# the probe PASSes on that fixture it would auto-close its own tracker and flip ADR-182 on an echo
 # of the very absence it exists to detect.
 #
 # Run: bash tests/scripts/test-zot-log-channel-probe.sh

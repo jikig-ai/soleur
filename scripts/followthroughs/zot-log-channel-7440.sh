@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# #7440 / ADR-179 — post-delivery readback for the registry host's zot container-log channel.
+# #7440 / ADR-182 — post-delivery readback for the registry host's zot container-log channel.
 #
 # TRACKER: **#7455** (dedicated). **NOT #7440** — that issue is closed by the shipping PR, and
 # scripts/sweep-followthroughs.sh lists `--state open`, so a probe hosted there would be a
 # permanent silent no-op: on a closed issue rc=0 takes "no action, no comment" and rc=2 likewise,
-# so even the eventual real PASS would leave NO artifact to flip ADR-179 — and CLOSED_LOOKBACK_DAYS
+# so even the eventual real PASS would leave NO artifact to flip ADR-182 — and CLOSED_LOOKBACK_DAYS
 # removes the issue from the candidate set entirely after two weeks. The sweeper resolves the host
 # from the directive comment on #7455, so this reference is for a human reader; changing it does not
 # re-route the probe.
 #
-# WHAT IT CLOSES. ADR-179 ships at status `adopting`. Its flip condition is an OBSERVED
+# WHAT IT CLOSES. ADR-182 ships at status `adopting`. Its flip condition is an OBSERVED
 # envelope-stamped row read back OUT of the warehouse. That cannot happen before merge:
 # hcloud_server.registry is cloud-init-only (ADR-096, ADR-172 §8), every registry resource is an
 # OPERATOR_APPLIED_EXCLUSION, and merging this applies NOTHING. Delivery rides the pending step-6
@@ -328,6 +328,6 @@ echo "      ${n_zot_token} of ${n_envelope} row(s) carry ${ZOT_ONLY_TOKEN}, the 
 echo "      own output produces."
 echo "      The gc start/complete ratio (${n_gc_start}/${n_gc_done}) is now readable, which is what"
 echo "      makes the downstream growth-attribution question answerable from telemetry at all."
-echo "      ADR-179 may now flip adopting -> accepted."
+echo "      ADR-182 may now flip adopting -> accepted."
 printf '%s\n' "$envelope_hits" | tail -3 | cut -c1-200 | sed 's/^/        /'
 exit 0
