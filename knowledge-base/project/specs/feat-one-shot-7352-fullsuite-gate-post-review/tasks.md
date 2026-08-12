@@ -200,3 +200,38 @@ so it runs whether or not the bun suites do). Floors ratcheted to the measured v
 per that file's own contract: `MIN_TESTS` 122→131, `MIN_ASSERTIONS` 514→537, `MIN_MANIFEST_LINES`
 117→126. Non-vacuity verified: `perl -pi -e 's/^(\s*)test\(/$1test.skip(/'` on the guard reds the
 floor with three distinct `[FAIL]` lines.
+
+
+## Review round (2026-08-12) — 8-agent panel, report-only
+
+20 findings closed inline; net issue flow **0** (closing #7352, filing #7492).
+
+Panel: `pr-test-analyzer`, `security-sentinel`, `code-simplicity-reviewer`, `architecture-strategist`,
+`pattern-recognition-specialist`, `code-quality-analyst` (stalled at 600 s on a wide read, resumed
+from transcript with a narrowed scope), `git-history-analyzer`, `user-impact-reviewer` (fired by the
+`single-user incident` threshold). Deterministic: semgrep 79 rules / 1 file / 0 findings — rule count
+checked, because an invalid `--config` exits 7 and still prints `findings: 0`.
+
+Spawned **report-only**: with 8 concurrent agents the fix-inline default contaminates the shared
+worktree, and agents then read each other's uncommitted edits as defects. All fixes applied by the
+lead from the pinned SHA `94b258420`.
+
+**Convergence (not lone-agent P1s):** pointer cardinality — 3 agents; the dead `INVERTED_DEFAULT` —
+3 agents; the ladder fail-open — 2 agents; the "SOLE gate" overstatement — 2 agents.
+
+**Clean, verified rather than assumed:** provenance (ADR ordinal across all refs, #7441 ancestry and
+its two pinned literals, measurement attribution, no auto-close hazard) returned zero findings; the
+central "nothing changes for `main`" claim verified — the shard partition is exhaustive, all 155
+`run_suite`/`skip_suite` call sites sit in exactly one `want_*` block; and the security-suite
+intersection is empty except for `apps/web-platform/infra/`, which has its own required-context gap.
+
+### Deferred, deliberately (recorded rather than silently dropped)
+
+- **§9 restates ~7 claims from ADR-183.** Real token-discipline debt in a file agents read every
+  turn. Not trimmed this round: the prose is operationally useful at the point of use, the ADR link
+  is present, and a further prose pass on an already-large diff risks a fourth review round for P3
+  value. Worth a follow-up pass, not a follow-up issue.
+- **A SEVENTH project-agnostic relaxation with no pointer is not caught** — see the Round-2 known
+  gap above.
+- **`required-checks.txt` bot-PR synthetic `test` green** (pre-existing) and **repo-root `infra/**`
+  outside `_infra_in_diff`** (pre-existing) — both out of scope, neither exacerbated by this diff.
