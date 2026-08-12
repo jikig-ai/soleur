@@ -394,11 +394,19 @@ perform_install() {
   # operator's session cannot pass for a reason a customer's machine would not
   # share. PREFER_HTTPS skips the SSH attempt the CLI makes first — on a runner
   # with no key that attempt is a pure delay before the same HTTPS fallback.
+  # ORDER IS LOAD-BEARING: every `-u` must precede the first NAME=VALUE operand.
+  # `env` stops parsing options at the first non-option argument, so with the
+  # assignments first it treats `-u` as the COMMAND TO RUN and dies with
+  # `env: '-u': No such file or directory` before the CLI is ever invoked. That
+  # failure surfaced as `install_failed`, which reads exactly like a broken
+  # delivery channel — the canary would have blamed the thing it was watching for
+  # a defect in its own invocation. Only a live run catches it: the hermetic
+  # fixtures stub the CLI, so nothing there executes this array.
   local -a env_wrap=(
     env
+    -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN
     "HOME=$home"
     "CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1"
-    -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN
   )
 
   if ! "${env_wrap[@]}" "$CLI" plugin marketplace add "$MARKETPLACE_REPO" >"$SCRATCH/add.log" 2>&1; then

@@ -761,6 +761,80 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# THE INSTALL INVOCATION ITSELF. Every case above points CANARY_CLI at a path
+# that cannot exist, which is correct for keeping fixtures off the network — and
+# it means none of them ever EXECUTES the env wrapper the real install runs
+# under. That blind spot shipped a live defect: the wrapper listed its `-u`
+# options AFTER its NAME=VALUE assignments, so `env` stopped parsing options at
+# the first assignment, treated `-u` as the command to run, and died with
+# `env: '-u': No such file or directory` before the CLI was ever reached. The
+# canary reported `install_failed` — i.e. it blamed the delivery channel for a
+# defect in its own invocation — through 98 green assertions.
+#
+# This drives the real install path with a fake CLI that records the environment
+# it was handed. The assertion is deliberately about the WRAPPER, not about a
+# successful install: if `env` dies, the fake never runs and the record is
+# absent, which is the only signal needed to kill the class.
+# ---------------------------------------------------------------------------
+r="$(new_fixture)"
+mkdir -p "$r/bin" || { echo "FATAL: mkdir failed" >&2; exit 2; }
+REC="$r/cli-invocation.txt"
+cat > "$r/bin/fake-claude" <<FAKE
+#!/usr/bin/env bash
+# Records the environment the canary handed us, then fails so the run stops here.
+{
+  echo "ARGS=\$*"
+  echo "HOME=\${HOME:-<unset>}"
+  echo "PREFER_HTTPS=\${CLAUDE_CODE_PLUGIN_PREFER_HTTPS:-<unset>}"
+  echo "ANTHROPIC_API_KEY=\${ANTHROPIC_API_KEY:-<unset>}"
+  echo "ANTHROPIC_AUTH_TOKEN=\${ANTHROPIC_AUTH_TOKEN:-<unset>}"
+  echo "CLAUDE_CODE_OAUTH_TOKEN=\${CLAUDE_CODE_OAUTH_TOKEN:-<unset>}"
+} >> "$REC"
+exit 1
+FAKE
+chmod +x "$r/bin/fake-claude" || { echo "FATAL: chmod failed" >&2; exit 2; }
+
+# Export decoy credentials so "unset" is a real observation rather than an
+# artefact of them being absent from this shell in the first place.
+set +e
+env ANTHROPIC_API_KEY=decoy-key \
+    ANTHROPIC_AUTH_TOKEN=decoy-token \
+    CLAUDE_CODE_OAUTH_TOKEN=decoy-oauth \
+    "CANARY_CLI=$r/bin/fake-claude" \
+    bash "$CANARY" >/dev/null 2>&1
+set -e
+
+cases=$((cases + 1))
+if [[ -s "$REC" ]]; then
+  pass "the install path actually EXECUTES the CLI (the env wrapper is well-formed)"
+else
+  fail "the CLI was never invoked — the env wrapper died before reaching it (the 'env: -u' class)"
+fi
+
+cases=$((cases + 1))
+if grep -qE '^HOME=.*/home$' "$REC" 2>/dev/null; then
+  pass "the CLI runs against the canary's scratch HOME"
+else
+  fail "HOME was not pointed at the scratch home: $(grep -E '^HOME=' "$REC" 2>/dev/null | head -1)"
+fi
+
+for v in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN; do
+  cases=$((cases + 1))
+  if grep -qxF "${v}=<unset>" "$REC" 2>/dev/null; then
+    pass "credential ${v} is cleared for the install (decoy did not leak through)"
+  else
+    fail "credential ${v} reached the CLI: $(grep -E "^${v}=" "$REC" 2>/dev/null | head -1)"
+  fi
+done
+
+cases=$((cases + 1))
+if grep -qE '^ARGS=plugin marketplace add ' "$REC" 2>/dev/null; then
+  pass "the first CLI call is the marketplace add"
+else
+  fail "unexpected first CLI call: $(grep -E '^ARGS=' "$REC" 2>/dev/null | head -1)"
+fi
+
+# ---------------------------------------------------------------------------
 # Minimum-cardinality vacuity guard. If the fixture builder or the seam silently
 # stopped producing cases, every row above would vanish and this suite would
 # exit 0 having asserted nothing.
