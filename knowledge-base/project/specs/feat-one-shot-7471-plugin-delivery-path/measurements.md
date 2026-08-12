@@ -101,3 +101,36 @@ defect is that `plugin update` **compares version strings** and short-circuits, 
 comparison, not about whether a SHA was written. It does mean the version segment of the cache path
 above is still `0.0.0-dev` here, and Phase 2 is what changes it. Task 1.2's migration fixture is
 what measures the comparison; do not read this row as having pre-empted it.
+
+---
+
+## 2B — The published marketplace, measured against the real repo
+
+**Run 2026-08-12, immediately after `jikig-ai/soleur-marketplace` was created and pushed.**
+This is §1.0 re-run against the **shipped article** rather than a local-path fixture — a fixture
+passing while the published thing fails is the exact gap this plan exists to close.
+
+Clean `HOME`, `CLAUDE_CODE_PLUGIN_GIT_TIMEOUT_MS` unset, unauthenticated:
+
+```
+claude plugin marketplace add jikig-ai/soleur-marketplace
+claude plugin install soleur@soleur-marketplace --scope project
+```
+
+| | Value |
+|---|---|
+| `marketplace add` | **13 s** (the monorepo path exceeds the 120 s default and destroys the checkout) |
+| `install` | **33 s** |
+| `plugins/marketplaces` | 39,188 B — the repo's whole cost |
+| `plugins/cache` | 10,093,043 B |
+| **Total** | **10,132,231 B = 9.66 MiB** (threshold 50 MiB) |
+
+**Plugin ID: `soleur@soleur-marketplace`.** The `@` half comes from the manifest's `name` field,
+not the repo name — they coincide here by choice. `installPath` =
+`<home>/.claude/plugins/cache/soleur-marketplace/soleur/0.0.0-dev`; `gitCommitSha` recorded.
+
+**Defect 2 is resolved for new installs**, measured on the published repo rather than asserted.
+
+The version segment still reads `0.0.0-dev` because `plugins/soleur/.claude-plugin/plugin.json`
+on `main` still carries the key — Phase 2 is what changes that, and task 6.5 re-runs this after
+merge. Do not read this row as having verified Phase 2; it verifies distribution only.
