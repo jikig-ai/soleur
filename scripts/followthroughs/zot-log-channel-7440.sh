@@ -165,7 +165,16 @@ decoded=$(printf '%s\n' "$raw_log" | decode_messages)
 # The prefix contains no ERE metacharacter, so -E changes nothing except adding the anchor.
 envelope_hits=$(printf '%s\n' "$decoded" | grep -E "^${ENVELOPE_PREFIX}${HOST_TOKEN} " || true)
 n_envelope=$(printf '%s\n' "$envelope_hits" | count_lines)
-boot_hits=$(printf '%s\n' "$decoded" | grep -E "^${BOOT_MARKER} boot_id=" || true)
+# THE BOOT MARKER NEEDS ITS OWN WINDOW (#7444 R32). It fires ONCE, from runcmd, at provision
+# time — but it was being read out of $decoded, i.e. the 30-minute `--no-archive` hot-window
+# query sized for the steady envelope stream. So `n_boot > 0` was true only if a sweep happened
+# to run within ~30 minutes of a host replace, and false for the rest of that host's life.
+# That made the ONE field that breaks the four-way `post_fail=unknown` collapse unreadable in
+# practice. Queried separately at 72h WITH the archive arm, which is the window its cadence
+# actually needs; past the source's 3-day retention it is gone permanently, which the arms below
+# say rather than implying the absence is evidence.
+boot_raw=$(BOOT_WINDOW=72h; "$QUERY" --since 72h --limit "$LIMIT" --grep "$BOOT_MARKER" 2>/dev/null || printf '')
+boot_hits=$(printf '%s\n' "$boot_raw" | decode_messages | grep -E "^${BOOT_MARKER} boot_id=[0-9a-f-]+ host=${HOST_TOKEN}( |$)" || true)
 n_boot=$(printf '%s\n' "$boot_hits" | count_lines)
 drop_hits=$(printf '%s\n' "$decoded" | grep -E "^${DROP_MARKER} n=" || true)
 n_drop=$(printf '%s\n' "$drop_hits" | count_lines)

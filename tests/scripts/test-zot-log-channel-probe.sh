@@ -75,9 +75,9 @@ _final_gate() {
   fi
   _tally
   local ran=$(( PASS + FAIL ))
-  if [[ "$ran" -lt "64" ]]; then
+  if [[ "$ran" -lt "68" ]]; then
     FAIL=$(( FAIL + 1 ))
-    echo "  FAIL: assertion floor — ran $ran assertions, expected >= 64"
+    echo "  FAIL: assertion floor — ran $ran assertions, expected >= 68"
     echo "        (suite truncated, or assert() neutered — this run certified nothing)"
   fi
   echo ""
@@ -142,7 +142,13 @@ printf 'grep=%s since=%s noarchive=%s\n' "$grep_arg" "$since" "$has_noarchive" >
 [[ -n "$grep_arg" ]] || { echo "stub: no --grep" >&2; exit 64; }
 [[ -n "$since"    ]] || { echo "stub: no --since" >&2; exit 64; }
 if [[ -n "${STUB_QUERY_RC:-}" && "${STUB_QUERY_RC}" != 0 ]]; then exit "$STUB_QUERY_RC"; fi
+# The boot marker is queried SEPARATELY (#7444 R32) on its own 72h archive-inclusive window,
+# because it fires once at provision and cannot be found in the 30m hot window sized for the
+# steady envelope stream. The stub must model that dispatch or the probe's boot arm is untested.
+# STUB_BOOT_ROWS falls back to STUB_LOG_ROWS so fixtures that place a boot row alongside the
+# envelope rows keep working unchanged.
 case "$grep_arg" in
+  SOLEUR_ZOT_LOG_BOOT) _b="${STUB_BOOT_ROWS:-${STUB_LOG_ROWS:-/nonexistent}}"; [[ -r "$_b" ]] && cat "$_b" ;;
   SOLEUR_ZOT_LOG)  [[ -r "${STUB_LOG_ROWS:-/nonexistent}"     ]] && cat "$STUB_LOG_ROWS" ;;
   SOLEUR_ZOT_DISK) [[ -r "${STUB_CONTROL_ROWS:-/nonexistent}" ]] && cat "$STUB_CONTROL_ROWS" ;;
 esac
@@ -338,6 +344,27 @@ row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV level:error,message:upst
 run_probe "$C8C_LOG" "$C1_CTL"
 assert "C8c a Doppler service-token shape -> exit 1" \
   "[[ '$CASE_RC' -eq 1 ]] && grep -q 'token_or_hash_shaped_rows=1' <<<\"\$CASE_OUT\""
+
+# --- C14: the boot marker is queried on its OWN window (#7444 R32) ------------------------
+# It fires once at provision; reading it out of the 30m --no-archive hot window made the field
+# that breaks the four-way post_fail=unknown collapse unreadable for all but ~30 minutes of a
+# host's life. Assert the separate query happened, at a wide window, WITH the archive arm.
+C14_BOOT="$TMP/c14.boot"
+row "SOLEUR_ZOT_LOG_BOOT boot_id=$DRIFTED_BOOT host=$HOSTV shipper_cron=present journald_storage=persistent" > "$C14_BOOT"
+C14_CTL="$TMP/c14.ctl"; control_row_predelivery "$BASELINE_BOOT" > "$C14_CTL"
+run_probe "$EMPTY" "$C14_CTL" STUB_BOOT_ROWS="$C14_BOOT"
+assert "C14 the boot marker is queried on a window WIDER than the envelope window" \
+  "grep -qE 'grep=SOLEUR_ZOT_LOG_BOOT since=(72h|[0-9]+[dh])' '$LAST_QCALLS'"
+assert "C14 the boot-marker query does NOT pass --no-archive (the row is older than the hot window)" \
+  "[[ \$(grep 'grep=SOLEUR_ZOT_LOG_BOOT' '$LAST_QCALLS' | grep -c 'noarchive=1') -eq 0 ]]"
+assert "C14 a boot marker found on its own window counts as delivery, even with a pre-delivery control row" \
+  "grep -q 'reason=delivered_but_silent' <<<\"\$CASE_OUT\""
+# Host isolation: source 2457081 is shared, so a boot marker from ANOTHER host must not count.
+C14_OTHER="$TMP/c14.other"
+row "SOLEUR_ZOT_LOG_BOOT boot_id=$DRIFTED_BOOT host=some-other-host shipper_cron=present" > "$C14_OTHER"
+run_probe "$EMPTY" "$C14_CTL" STUB_BOOT_ROWS="$C14_OTHER"
+assert "C14 a boot marker from a DIFFERENT host does not count as delivery here" \
+  "grep -q 'reason=not_delivered' <<<\"\$CASE_OUT\""
 
 # --- C13b: THE DISCRIMINATOR MUST BE ANCHORED (#7444 R18) ---------------------------------
 # The envelope grep was `grep -F`, which has NO anchor, while the comment above it claimed "a
