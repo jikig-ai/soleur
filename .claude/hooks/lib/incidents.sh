@@ -15,8 +15,8 @@
 
 # headless_or_stderr is provided by lib/session-state.sh; route warns to a
 # log file under `claude --bg`. Fall back to stderr for legacy worktrees.
-# shellcheck source=session-state.sh
-source "$(dirname "${BASH_SOURCE[0]}")/session-state.sh" 2>/dev/null || true
+# shellcheck source=../../../plugins/soleur/scripts/lib/session-state.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../../../plugins/soleur/scripts/lib/session-state.sh" 2>/dev/null || true
 if ! declare -f headless_or_stderr >/dev/null; then
   headless_or_stderr() { echo "[$1] $2" >&2; }
 fi

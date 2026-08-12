@@ -452,6 +452,8 @@ If absent, HALT with:
 - **Field value is a placeholder** — the field-value line (case-insensitive) matches `^\s*<field>:\s*(TODO|TBD|N/A|placeholder|manual operator check)\s*$` (anchored — distinguish "field is exactly this string" from "prose contains this string"). Also reject `^\s*<field>:\s*(TODO|TBD|N/A|placeholder|manual operator check)\b` — trailing whitespace + extra text still counts as a placeholder.
 - **Field is empty / has no children** — for fields that template as a YAML block (`liveness_signal`, `error_reporting`, `failure_modes`, `logs`, `discoverability_test`), the line immediately following `<field>:` MUST be either a continuation (indented sub-field starting with whitespace + non-`#` content) OR an inline scalar value on the same line as the key. A bare `<field>:` followed by a blank line or another top-level key fails the gate. This is the empty-key case (#4116 review). Detect with: locate the `<field>:` line; if `awk "NR==<n>+1 {print}"` returns a blank line OR a line matching `^[^[:space:]]`, reject.
 - **`discoverability_test.command` requires SSH** — extract the `command:` sub-field's value and reject if it matches `(^|\s|/)ssh(\s|$)` (word-boundary `ssh` followed by whitespace, end-of-string, or a path-style `/usr/bin/ssh`). Distinguishes the verb from `ssh-free` / `xssh` / `ssh.md` prose.
+- **`discoverability_test.command`'s verb is not executable by preflight Check 10** — Check 10 runs this command inside a sandbox behind a deny-by-default allowlist, so a probe that cannot run should fail at authoring time rather than at ship time. Reject if the first whitespace-delimited token of the dequoted, normalized value (leading blank/`#`-comment lines stripped) is not a member of `curl bash grep rg jq python3 node bun printf git`. There is NO path-shaped exemption: `./doppler …` is rejected exactly like `doppler …`. The canonical gate is `plugins/soleur/skills/preflight/scripts/probe-verb-gate.sh` — mirror it, do not re-derive it.
+- **`discoverability_test.credentials_required` is placeholder text** — this sub-field is OPTIONAL and is checked only when present. It declares that the probe verifies a property with no unauthenticated substitute, in the shape `"<scope> — <justification>"`; Check 10 then skips without executing (`SKIP-DECLARED`) rather than failing. Reject when its value matches the placeholder set above, by the same anchored regex as every other field — a declaration that says nothing waives nothing. It does **not** override the SSH reject.
 
 On rejection, HALT with a message naming the specific field and its failure mode (e.g., `"Phase 4.7 reject: liveness_signal is empty (no sub-fields and no inline value)"`).
 
@@ -463,7 +465,7 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
   "Every plan touching production code/infra MUST declar"
 ```
 
-**Step 5 — Pass-through.** If the section is present, all 5 fields exist with non-placeholder values, no field is empty, and `discoverability_test.command` does not require SSH, deepen-plan proceeds normally. No telemetry on pass.
+**Step 5 — Pass-through.** If the section is present, all 5 fields exist with non-placeholder values, no field is empty, `discoverability_test.command` does not require SSH and starts with an allowlisted probe verb — or the block carries a non-placeholder `credentials_required` declaration — deepen-plan proceeds normally. No telemetry on pass.
 
 **Why:** #4116 — `inngest-heartbeat.service` was silently broken for 16+ hours because the substrate (introduced in #4085) declared no observability surface and the operator never had a non-SSH way to verify the heartbeat. Combined with plan Phase 2.9 (template-time gate), this phase is the load-bearing pre-implementation gate. The empty-key reject was added per the PR #4123 review — the most common drift mode is `liveness_signal:` with no children, which earlier regex-only forms allowed through.
 
@@ -579,6 +581,40 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
 **Step 5 — Pass-through.** Non-UI plan, or a committed `.pen` present → proceed normally. No telemetry on pass.
 
 **Why:** #4819 — the one-shot path skips brainstorm, so plan Phase 2.5 is the sole producer; this halt is the independent verifier that a UI feature did not reach implementation with zero wireframes (the silent-skip class the feature kills).
+
+### 4.11. Guard Contract Halt (Conditional)
+
+Fires when the plan's deliverable includes a **guard, gate, lint, drift-check or anti-vacuity control** (plan Phase 2.12). This is the design-time verifier that a guard-shaped plan carries a usable Guard Contract before `/work` writes any guard code.
+
+**Step 1 — Detect.** Scan the plan's `## Files to Create` / `## Files to Edit` and its prose for guard-shaped deliverables: a new repo-root `lint-*` script, a `*.test.sh` drift guard, a CI gate, a `lifecycle.precondition`, a hook, or prose naming a "guard"/"gate"/"drift-check". If none, SKIP silently.
+
+**Step 2 — Locate the section.**
+
+```bash
+grep -q '^## Guard Contract' <plan-file>
+```
+
+Absent while detection fires → HALT with:
+
+> Error: Plan's deliverable includes a guard but there is no `## Guard Contract` section.
+> See `plugins/soleur/skills/plan/references/plan-issue-templates.md` for the template.
+> Per plan Phase 2.12, each guard needs its property, its structural ASSEMBLY, and a
+> mutation matrix of >= 3 edits that must go RED. Re-run `/soleur:plan` (or edit the plan
+> directly) to add the section, then re-run deepen-plan.
+
+**Step 3 — Resolve it mechanically.** Do not re-implement the field checks in prose — run the gate that owns them:
+
+```bash
+python3 scripts/lint-guard-contract.py <plan-file>
+```
+
+Non-zero → HALT and surface the lint's own `FAIL:` lines verbatim. It rejects: a heading with zero `### Guard` entries; a missing or placeholder `**Property.**` / `**Assembly.**`; a mutation matrix under 3 rows. It quantifies over EVERY entry, never the first.
+
+**Step 4 — Adequacy read (the part no lint can do).** The lint proves the fields are *present and non-empty*; only a reader can judge whether the ASSEMBLY is *structural*. Reject and HALT when the Assembly enumerates the current MEMBERS (a list of today's mounts, today's call sites) rather than the STRUCTURE that produces them (the chokepoint they must flow through, the array that holds them, the walk that finds them). Members drift; assembly does not. Equally, reject a mutation matrix whose rows were plainly derived from a finished implementation rather than from the design — the tell is a row naming a specific variable or line that only exists because the code was written that way.
+
+**Step 5 — Pass-through.** Section present, lint green, assembly structural → proceed normally. No telemetry on pass.
+
+**Why:** the preflight Check 10 work (merged 2026-08-10) cost five adversarial review rounds and ~880k subagent tokens on ~20 findings that all reduced to one class — a guard's window/chokepoint/identifier set narrower than the property it named. The plan that produced it had 13 Test Scenarios all shaped "command X -> terminal Y" and none shaped "mutation M -> guard G reddens", so the guards were written as assertions about the implementation as it happened to be shaped. This halt is the independent verifier that the enumeration happened at design time rather than being discovered five times at review time.
 
 ### 5. Discover and Run ALL Review Agents
 

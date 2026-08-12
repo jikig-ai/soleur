@@ -146,6 +146,33 @@ fi
 # a gate that crashes is indistinguishable from one that passed. Caught by
 # scripts/lint-shell-capture-exit.py once the edit above moved this line off its baselined entry.
 REFS=$(grep -oiE '(Ref|Tracks)[[:space:]]+#[0-9]+' "$CORPUS" | grep -oE '[0-9]+' | sort -u || true)
+
+# The exclusion above is reasoned at ISSUE level ("an issue the PR CLOSES is the work item")
+# but was implemented at MENTION level: it asks which keyword introduced each `#N`, so the
+# carve-out survives only while every mention of the closing target uses a closing keyword.
+# One `Ref #N` anywhere in the corpus re-adds the PR's own target and restores the exact
+# deadlock #7278 fixed — and the corpus includes the whole linked plan, which is prose written
+# for humans, not keyword-disciplined input.
+#
+# Whether #N needs a soak tracker is a property of the ISSUE, not of one sentence about it:
+# if the merge closes it, it stops existing and cannot be swept, however it is spelled
+# elsewhere. So drop closing targets from REFS after extraction.
+#
+# Read closing keywords from PR_BODY only, never the plan — GitHub auto-closes on the PR body
+# alone, so a plan that merely discusses "Closes #N" must not shrink this gate's scope.
+#
+# **Why:** PR #7426 — flagged its own `Closes #7409` target. The corpus matched SOAK_RE on the
+# plan's sentence "Nothing soak-gated." (the regex is negation-blind) and drew `Ref #7409` from
+# a rejected counterfactual: "If split, #7409 must stay OPEN … the move-only PR must use
+# `Ref #7409`" — describing a two-PR split the plan had explicitly decided against. Both
+# matches came from prose asserting the opposite of what the gate concluded.
+CLOSES=$(printf '%s' "$PR_BODY" \
+  | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+' \
+  | grep -oE '[0-9]+' | sort -u || true)
+if [[ -n "$CLOSES" ]]; then
+  REFS=$(printf '%s\n' $REFS | grep -vxF -f <(printf '%s\n' $CLOSES) || true)
+fi
+
 UNENROLLED=()
 for n in $REFS; do
   state=$(gh issue view "$n" --json state --jq .state 2>/dev/null || echo "")

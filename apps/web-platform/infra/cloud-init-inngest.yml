@@ -246,10 +246,15 @@ runcmd:
   # `grep -n cosign` on this file returned exactly one hit — that sentence, which named a
   # verification step no line of this file performs. Real verification exists only in
   # ci-deploy.sh (the app-deploy path); cloud-init-registry.yml only retains the sha256-*
-  # signature tags that verify depends on. build-inngest-bootstrap-image.yml states plainly that
-  # this image is "NOT cosign-signed (no id-token perm) — no sign step", so there is no
-  # signature for a verify to check and adding one would gate the sole scheduler's boot on an
-  # artifact that has never been produced.
+  # signature tags that verify depends on. build-inngest-bootstrap-image.yml USED to state
+  # plainly that this image is "NOT cosign-signed (no id-token perm) — no sign step". As of
+  # #7410 it signs, so that quote would be false the moment #7410 merged — and this exact file
+  # already shipped a false verification comment once (#6617). Restated from what is true now:
+  # the image IS cosign-signed at GHCR, and nothing on THIS path verifies it. ci-deploy.sh's
+  # inngest branch calls verify_image_signature zero times (measured), and its
+  # COSIGN_IDENTITY_REGEXP admits only reusable-release.yml, which is not the workflow that
+  # signs this image. The signature exists to satisfy the restore gate's presence check
+  # (D10 A2), not to gate this boot.
   #
   # The correction is recorded rather than quietly deleted because a false comment is how this
   # class propagates: the plan for this very change inherited the claim instead of grepping
@@ -260,9 +265,10 @@ runcmd:
   # bytes are content-addressed, so a swapped or spoofed payload fails the pull regardless of
   # transport or which registry served it. It does NOT give PROVENANCE: it proves you got the
   # bytes someone recorded, never who built them. Provenance here still rests entirely on
-  # GHCR's TLS + authn. Signing the image is a separate change that must land BEFORE any
-  # verify step, not with it — until then this path is integrity-pinned and unsigned, and
-  # that is the honest description of it.
+  # GHCR's TLS + authn. Signing the image was a separate change and it has now landed
+  # (#7410), BEFORE any verify step — which was the stated ordering. This path remains
+  # integrity-pinned and UNVERIFIED: signed upstream, but with no verify step here and no
+  # consumer whose identity regexp admits the signer. That is the honest description of it.
   #
   # So the cold-boot soleur-inngest-bootstrap OCI pull authenticates even
   # when Doppler answers empty at the boot instant (else anonymous private pull → 401 →

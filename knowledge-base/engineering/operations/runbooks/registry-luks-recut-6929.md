@@ -464,9 +464,32 @@ The **rehearsal** (D10 A2) runs the same engine, so the same table reads both.
 | `0` | Every required reference restored **and** blob-verified, signature present. | Nothing. The window is closed. |
 | `2` | **Source unavailable** — GHCR could not be read. | Nothing was written. Check the job's `packages: read` permission and GHCR status. **Not** proof the images were deleted: GHCR returns the same error for *absent* and *not visible to this credential*. |
 | `3` | **Sink unavailable** — the registry did not accept the write. **Retryable**, and the job already retries it: a replaced host can outrun the Cloudflare Tunnel's re-convergence. | If it exhausted its retries, confirm the registry host is serving, then re-run the job. |
-| `4` | **Verification failed** — a digest mismatched, a blob is missing (including an *attestation* child's blob), a **layer's content does not match its declared mediaType**, or a signature is absent. | **Do not deploy.** The store contents are not trustworthy. Re-run the job and read the per-entry lines; a repeat means the copy is landing wrong, not that it was interrupted. A layer-format failure names **two causes the engine cannot tell apart**: the bytes really do disagree with the declared mediaType (corruption), OR the layer is legitimately not gzip (an uncompressed/zstd layer, or a child this engine failed to classify as an attestation) — a validator artifact. The message carries the discriminating command: re-run the identical `crane validate --remote` against `ghcr.io/<repo>@<child-digest>`; if GHCR fails the same way the store is fine. Also reaches exit 4: an index whose child list is empty, a child with no digest, a **nested** index child, an index with no platform child at all, an attestation manifest declaring no blobs, a sink manifest whose `.manifests` is not an array, and a sink manifest that is not JSON. For those SHAPE failures "re-run the job" is the wrong advice — they reproduce identically; capture the per-entry line and file it. |
+| `4` | **Verification failed OR the engine could not verify the shape** — a digest mismatched (including the new GHCR↔sink *signature* digest parity check), a blob is missing (including an *attestation* or *signature-bundle* child's blob), a **layer's content does not match its declared mediaType**, a signature is absent, or the engine met an artifact shape it declines to walk (see the ENGINE-CAPABILITY note below). | **Read the message before deploying anything — exit 4 now covers two different situations.** If the message names a digest mismatch, a missing blob or an absent signature, the store contents are not trustworthy: do not deploy. Re-run the job and read the per-entry lines; a repeat means the copy is landing wrong, not that it was interrupted. A layer-format failure names **two causes the engine cannot tell apart**: the bytes really do disagree with the declared mediaType (corruption), OR the layer is legitimately not gzip (an uncompressed/zstd layer, or a child this engine failed to classify as an attestation) — a validator artifact. The message carries the discriminating command: re-run the identical `crane validate --remote` against `ghcr.io/<repo>@<child-digest>`; if GHCR fails the same way the store is fine. Also reaches exit 4: an index whose child list is empty, a child with no digest, a **nested** index child, an index with no platform child at all, an attestation manifest declaring no blobs, a sink manifest whose `.manifests` is not an array, and a sink manifest that is not JSON. For those SHAPE failures "re-run the job" is the wrong advice — they reproduce identically; capture the per-entry line and file it. |
 | `5` | **Credential unusable** — absent, empty, or **rejected** by the sink. **Not** retryable. | Retrying only burns the window. **Do NOT start by rotating anything** — see "If the sink rejects the credential" immediately below. |
 | `6` | **Could not classify** — a failure shape the engine does not recognise. | Read the crane stderr in the per-entry line before acting. Do **not** assume the images are absent. Worth filing alongside the recovery: an unenumerated failure is itself a defect. **This arm proved that claim on 2026-08-09**: the first live A2 rehearsal exited 6 on `gzip: invalid header`, which was a *validator* false positive over a buildx attestation manifest and not a store problem at all. It is now classified (exit 4), so a fresh exit 6 is again a genuinely unenumerated shape — treat it as a defect to file, not a store to distrust. |
+
+> #### ENGINE-CAPABILITY refusals inside exit 4 (added #7410)
+>
+> Exit 4 now carries two populations, and they need opposite responses:
+>
+> | The message says | What it means | What to do |
+> |---|---|---|
+> | digest mismatch / missing blob / absent signature / signature digest parity mismatch | The store is genuinely wrong. | **Do not deploy.** |
+> | *"is an index nested inside another index"*, *"declares no digest"*, *"is an index with no children"*, *"declares a config but NO layers"*, *"`manifests` field that is not an array"*, *"an unrecognised shape"* | The engine **declines to verify a shape it has never measured**. The store may be perfectly healthy. | Do not deploy either — but the fix is a code change, not a re-copy. Capture the per-entry line and file it against the engine. Re-running reproduces it exactly. |
+>
+> The distinction matters because the first population motivates destroying and re-restoring, and
+> the second motivates neither. Conflating them is how a healthy store gets a second unnecessary
+> recut — and it is the same "could not measure" vs "measured, and it is bad" collapse that ADR-169
+> forbids in the gate's own verdicts.
+>
+> **The discriminating command has a blind spot on signature children.** The row above tells you to
+> re-run `crane validate --remote ghcr.io/<repo>@<child-digest>` and conclude the store is fine if
+> GHCR fails the same way. For a **sigstore bundle child** that command gunzip-fails at GHCR
+> *always*, healthy or not — the bundle layer is plain JSON and was never gzipped. The conclusion
+> it yields ("a validator artifact, store fine") happens to be correct for the healthy case, but
+> the command has no power to detect a genuinely corrupt bundle child, so it is not evidence. For
+> a signature child, use `crane blob ghcr.io/<repo>@<blob-digest>` and compare against the sink.
+
 
 ### If the sink rejects the credential (exit `5`, or a bridge `docker login` failure)
 

@@ -376,6 +376,10 @@ Assess a feature or plan against the NFR register to identify which non-function
 
 ---
 
+## Sharp Edges
+
+- **An ADR ordinal derived across ALL `origin/*` refs still goes stale within a day — re-derive immediately before merge, and scope the renumber sweep to YOUR files.** `ls decisions/` is not enough (it misses sibling branches) and neither is a one-time cross-ref sweep (a sibling merges, or claims the next two, while your PR is in review). Derive with `for r in $(git for-each-ref --format='%(refname)' refs/remotes/origin); do git ls-tree --name-only "$r" knowledge-base/engineering/architecture/decisions/; done | grep -oE 'ADR-[0-9]+' | sort -u -t- -k2 -n | tail`, and re-run it as the last step before merge. When renumbering, sweep only the files YOUR branch owns — the colliding ADR's own citations (plugin scripts, `model.c4`, `model.likec4.json`, session-state) must not move, and a blanket search-replace will take them. **Why:** #7441 — ADR-178 was free across 65 refs at plan time; #7426 landed it the next day and 179/180 were claimed by two sibling branches by the time it was re-checked, so it renumbered to 181 with 27 citations swept and 8 deliberately left alone.
+
 ## ADR vs Learning
 
 ADRs and learnings serve different purposes:

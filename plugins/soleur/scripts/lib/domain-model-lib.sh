@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # domain-model-lib.sh — reusable tokenizer for the domain-model drift analyzer (#5754).
 #
-# Sourced by scripts/domain-model-drift.sh. Factored out so the enforcement gates
+# Sourced by plugins/soleur/scripts/domain-model-drift.sh. Factored out so the enforcement gates
 # tracked in #5871 can reuse the extraction without re-parsing. Pure functions:
 # they read files and emit to stdout; they never write, never eval migration
 # content, and treat all SQL as DATA (grep -F / awk -v only).

@@ -23,7 +23,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-helpers.sh"
 
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-DRIFT="$REPO_ROOT/scripts/domain-model-drift.sh"
+DRIFT="$REPO_ROOT/plugins/soleur/scripts/domain-model-drift.sh"
 SYNC_MD="$REPO_ROOT/plugins/soleur/commands/sync.md"
 
 echo "=== domain-model headless append — preserved safety properties ==="
@@ -285,7 +285,7 @@ if grep -qE '^##### Standalone contract' "$SYNC_MD"; then
 else
   echo "  FAIL: the standalone terminal contract was dropped, not reconciled"; FAIL=$((FAIL + 1))
 fi
-if grep -qE 'domain-model-drift\.sh init' "$SYNC_MD"; then
+if grep -qE '\$\{CLAUDE_PLUGIN_ROOT\}/scripts/domain-model-drift\.sh" init' "$SYNC_MD"; then
   echo "  PASS: the all-dispatch path bootstraps the register via init"; PASS=$((PASS + 1))
 else
   echo "  FAIL: the all-dispatch path does not call init — it dies on a fresh repo"; FAIL=$((FAIL + 1))

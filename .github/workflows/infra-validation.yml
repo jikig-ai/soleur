@@ -495,11 +495,24 @@ jobs:
     # move the distribution, but shipping a step into a job that cancels at this rate would make
     # the next unrelated failure look like this PR's.
     #
-    # 8 → 12 minutes (720 s) restores ~1.4x over the observed 501 s max. Deliberately NOT larger:
+    # RE-DERIVED 2026-08-11 (#7376), as the block above instructs, because that PR makes an
+    # EXISTING step materially slower — the same class of composition change as adding one.
+    # `run-registered-suites.test.sh` gains a 9-row mutation matrix that re-executes the suite
+    # in child processes; measured on a 16-core box, 3 s -> 67 s (+64 s). Against the 501 s max
+    # recorded above that is ~565 s, i.e. 720/565 = 1.27x — inside the ceiling but below the
+    # ~1.4x margin this block sized for, so the ceiling moves with it: 565 x 1.4 = 791 -> 14 min.
+    #
+    # Two costs were removed before re-deriving rather than absorbed into the budget: the OOM
+    # fixture's `sleep 5` (the fixture holds the xargs pipe open while it sleeps, so `tee`
+    # blocks the full duration, x8 invocations) became `sleep 1`, and the mutation children now
+    # skip the repo-level assertions (the 93-suite corpus scan, the registration ratchet) that
+    # no mutation of the runner can affect. Those took it from ~108 s to 67 s.
+    #
+    # 8 → 12 minutes (720 s) restored ~1.4x over the observed 501 s max. Deliberately NOT larger:
     # the ceiling's purpose is to catch a bypassed sleep mock, and a 20-minute ceiling would not.
     # Current long poles (run 31054177230): git-data runcmd rehearsal 96 s, web-host parity
     # mutation 47 s, ci-deploy 35 s, LUKS verify 28 s.
-    timeout-minutes: 12
+    timeout-minutes: 14
     steps:
       # fetch-depth: 0 + fetch-tags: true make the vinngest-v* tags reachable so
       # the cloud-init-inngest-bootstrap drift-guard (AC6, #4675) can compare the

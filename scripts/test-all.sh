@@ -1,6 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# EXIT CONTRACT (#7424)
+#   0  every registered suite passed
+#   1  >= 1 suite FAILED (an assertion verdict) — failure dominates when both are present
+#   3  0 failures and >= 1 suite KILLED — UNRESOLVED, not measured, and NOT green
+#      3 is a TOP-LEVEL contract only: a nested runner returning 3 into run_suite classifies
+#      as a plain FAIL, because rc=3 is not signal-shaped. Do not adopt 3 in a nested runner
+#      without revisiting this.
+#   2  usage error — TEST_GROUP took an unsupported value (predates the above), OR the
+#      relevance-predicate data file is missing. Both are "this runner cannot run", not a
+#      verdict about any suite; ADR-181 declined a separate code because every consumer is
+#      binary and a second usage-shaped code buys nothing.
+#   4  REFUSED before anything ran — SOLEUR_SUBAGENT=1 without SOLEUR_ALLOW_FULL_GATE=1
+#      (ADR-181). Distinct from 3 on purpose: 3 says a suite was terminated and its coverage
+#      is unresolved; 4 says nothing ran, by design, and nothing is unresolved. Sharing 3
+#      would make a refused run read as a killed suite.
+#
+# Every consumer was binary zero/non-zero BEFORE this change (lefthook, the three ci.yml
+# shards, package.json, main-health-monitor.yml) and still blocks on any non-zero, so 3 is
+# safe for all of them; exiting 0 on a killed suite would silently green every one.
+# grok-pre-push-gate.sh is the exception THIS change creates: it now reads 3, renders
+# [UNRESOLVED] instead of [FAIL], and forwards 3 — its own consumer (ship Phase 6) is binary. Note that ci.yml's
+# aggregate `test` job reads `needs.<shard>.result`, whose domain is
+# {success,failure,cancelled,skipped} — so the REQUIRED context cannot carry 3. CI collapses
+# killed into failure, and the distinction survives in the shard log and the [KILLED] lines.
+
 # Default TMPDIR to /var/tmp (disk-backed) rather than /tmp.
 #
 # /tmp on this machine class is a ~4 GiB SHARED tmpfs, and parallel worktrees are this
@@ -34,7 +59,9 @@ export TC_TMPDIR="${TC_TMPDIR:-/tmp}"
 # See: knowledge-base/project/learnings/2026-03-20-bun-fpe-spawn-count-sensitivity.md
 #
 # Per-suite timing: when TEST_TIMING_LOG is set to a writable path, each
-# run_suite() invocation appends "<label>\t<elapsed_ms>[\tFAIL]" to that path.
+# run_suite() invocation appends "<label>\t<elapsed_ms>[\tFAIL|\tKILLED]" to that
+# path. Field 3 carries the result class for any non-passing suite; KILLED means
+# signal-shaped and UNRESOLVED, not failed (#7424).
 # Elapsed time uses bash 5.0+ EPOCHREALTIME (microsecond precision, no
 # coreutils dependency, portable across Linux + Homebrew bash on macOS).
 # CI runs ubuntu-latest (bash 5.x). macOS default /bin/bash is 3.2 — install
@@ -94,8 +121,56 @@ if ! declare -F tc_acquire >/dev/null 2>&1; then
   tc_preamble() { :; }
   tc_epilogue() { :; }
   tc_tmp_entry_count() { printf '0\n'; }
+  tc_used_bytes() { printf '0\n'; }
   tc_acquire() { :; }
 fi
+
+# ADR-133 amendment instrument: bytes held per mount, at RUN boundaries.
+#
+# WHY BYTES. The per-suite probe records `tmp_delta=<ENTRY COUNT>`, but ADR-133's
+# capacity verdict is about BYTES — it explicitly rejected count-based reasoning
+# because 4,294 small entries held 160 MB (4.5%) while three trees held 3.1 GiB
+# (88%). The quantity the advisory lock exists to protect had never been measured
+# by the instrument shipped to measure it.
+#
+# WHY RUN BOUNDARIES AND NOT PER SUITE. `du` is a RECURSIVE walk, unlike the
+# shallow `find -maxdepth 1` the entry-count probe uses. At two edges x ~289
+# suites that is ~578 walks per mount over multi-GiB trees — the same
+# observer-effect confound that got a background sampler rejected during
+# planning. Four walks answer the question ADR-133 actually asks: how many bytes
+# did this run hold on each mount. WHICH suite holds them is the coincident-peak
+# question, and that belongs to the deferred multi-run experiment.
+#
+# TWO DIRECTORIES, NEVER SUMMED. TMPDIR is /var/tmp (disk-backed) and TC_TMPDIR
+# is /tmp (the 4 GiB tmpfs) — deliberately different mounts. A single number
+# spanning both would report health from whichever is roomier, which is
+# indistinguishable from a healthy mount.
+#
+# Gated on TEST_TIMING_LOG, so a default local run pays nothing for it.
+_emit_bytes_probe() {
+  [[ -n "${TEST_TIMING_LOG:-}" ]] || return 0
+  local tmpfs_bytes disk_bytes
+  tmpfs_bytes=$(tc_used_bytes "${TC_TMPDIR:-/tmp}")
+  disk_bytes=$(tc_used_bytes "${TMPDIR:-/var/tmp}")
+  printf '%s\t0\tbytes_tmp=%s\tbytes_tmpdir=%s\n' \
+    "$1" "$tmpfs_bytes" "$disk_bytes" >> "$TEST_TIMING_LOG"
+}
+
+# --- Relevance predicates (ADR-181) ---
+# Sourced at TOP LEVEL, and deliberately NOT defensively, unlike the contention lib above. That
+# one is observe-only, so a missing lib must degrade to a normal run. This one DECIDES WHETHER
+# SUITES EXECUTE: were it absent and the arrays empty, every gated suite would decline silently
+# and the summary would still read green — the exact "green that is not evidence" the gate
+# exists to prevent, produced by the gate itself. A missing file is a hard failure.
+_REL_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/test-relevance-paths.sh"
+if [[ ! -f "$_REL_LIB" ]]; then
+  echo "ERROR: missing $_REL_LIB — the suite relevance predicates are undefined." >&2
+  echo "Refusing to run: without them every gated suite would decline silently while the" >&2
+  echo "summary still reported green." >&2
+  exit 2
+fi
+# shellcheck source=scripts/lib/test-relevance-paths.sh
+source "$_REL_LIB"
 
 # --- Test group selector ---
 # TEST_GROUP partitions the suite list across CI matrix shards. Env var wins
@@ -127,6 +202,41 @@ case "$TEST_GROUP" in
     ;;
 esac
 
+# --- Subagent full-gate refusal (Item 6 of the 2026-08-11 test-pipeline post-mortem) ---------
+# A spawned subagent runs only the suites targeting the files it was given. Three review agents
+# running lints and suites concurrently inflated a measurement of the registry mutation battery
+# by 1.9x (860 s -> 1675 s): the battery did not get slower, the machine did. A timing figure
+# taken under that contention is not a measurement of the code — and this runner now GATES
+# suites on measured cost, so a corrupted measurement propagates into what runs at all.
+#
+# MECHANICAL, not prose. The fan-out instructions in plugins/soleur/skills/{work,review}/SKILL.md
+# carry the same rule in English, but a paragraph in a prompt IS agent discretion: a grep
+# asserting that paragraph exists certifies the instruction was WRITTEN, never that it was
+# obeyed. Those clauses explain this guard; this guard is what enforces it.
+#
+# It fires HERE — after TEST_GROUP is validated so the message can name it, but before
+# tc_acquire and before the first suite — so a refused run costs nothing and never takes the
+# advisory lock that a legitimate sibling run is queued on.
+if [[ "${SOLEUR_SUBAGENT:-}" == "1" && "${SOLEUR_ALLOW_FULL_GATE:-}" != "1" ]]; then
+  echo "ERROR: refusing a full-gate run — SOLEUR_SUBAGENT=1 is set (TEST_GROUP=$TEST_GROUP)." >&2
+  echo "" >&2
+  echo "Spawned agents run only the suites targeting the files they were given. Concurrent" >&2
+  echo "full-gate runs inflate each other's timings and corrupt the measurement. The lead runs" >&2
+  echo "the gate once, after collecting fan-out work." >&2
+  echo "" >&2
+  echo "Run the suite covering your files instead:" >&2
+  echo "    bash <path/to/the/suite.test.sh>" >&2
+  echo "" >&2
+  echo "If you are the lead and this IS the sanctioned gate run, override explicitly:" >&2
+  echo "    SOLEUR_ALLOW_FULL_GATE=1 bash scripts/test-all.sh" >&2
+  # rc 4, deliberately NOT 3. #7424 assigned rc 3 the meaning "a suite was terminated —
+  # unresolved, coverage not obtained", and that trichotomy is documented in one-shot/SKILL.md.
+  # A refusal is the opposite claim (nothing ran, by design, and nothing is unresolved), so it
+  # needs its own code; sharing 3 would make a refused run read as a killed suite. 1 is an
+  # ordinary suite failure and 2 is a bad TEST_GROUP, so 4 is the next free value.
+  exit 4
+fi
+
 want_scripts() { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "scripts" ]]; }
 want_bun()     { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "bun"     ]]; }
 want_webplat() { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "webplat" ]]; }
@@ -139,6 +249,80 @@ want_infra()   { [[ "$TEST_GROUP" == "all" || "$TEST_GROUP" == "infra"   ]]; }
 # --- Run Tests Per Directory ---
 failed=0
 suites=0
+# Beside failed/suites deliberately, and required — but for a different reason
+# than an earlier revision of this comment claimed. MEASURED 2026-08-11 (bash
+# 5.3.9): with `killed` unset, `set -u` aborts at the FIRST read, which is the
+# breakdown gate — ABOVE the terminal marker, not below it — and the run exits
+# 1, not 0. So the failure mode is a loud abort with no terminal marker, not a
+# silent false green. That shape is what work/SKILL.md reads as "a failure with
+# no marker", which sends a reader hunting for [FAIL] lines that do not exist.
+killed=0
+
+# Classify a suite's exit code into exactly one of: ok | failed | killed.
+#
+# `killed` means SIGNAL-SHAPED, not "was killed by <signal>". $? cannot tell a
+# signal death from a literal exit(128+N) — `bash -c 'exit 143'` also yields 143
+# — so the class is a statement about the SHAPE of the status, and the rendered
+# line says so. Naming a cause here would reintroduce, one layer up, the defect
+# this whole change exists to remove.
+#
+# All three guards are load-bearing. Measured 2026-08-10, bash 5.3.9/Linux:
+#   kill -l 0   -> "EXIT"  (rc 0)          so `rc > 128` is what excludes rc=128
+#   kill -l 32  -> ""      (rc 0)          glibc-internal SIGCANCEL
+#   kill -l 33  -> ""      (rc 0)          glibc-internal SIGSETXID
+#                                          so `-n "$name"` is what excludes 160/161
+#   kill -l 143 -> "TERM"                  it MASKS values > 64
+# `kill -l` is therefore NOT a validity oracle. Anyone "simplifying away the
+# redundant > 128 check because kill -l already bounds it" breaks the classifier.
+#
+# The numeric guard closes an INPUT-side false green: without it, `(( rc == 0 ))`
+# on "" or " " evaluates TRUE and returns `ok` — the one class that increments no
+# counter and emits no warning. Not reachable from today's run_suite (`local rc=0`
+# guarantees numeric) but reachable from the suite that certifies this function.
+suite_exit_class() {
+  local rc="${1-}" name
+  [[ "$rc" =~ ^[0-9]+$ ]] || { printf 'failed\n'; return 0; }   # fail CLOSED on a malformed rc
+  (( rc == 0 )) && { printf 'ok\n'; return 0; }
+  # `<= 192` is a legibility bound and is NOT load-bearing: the call passes
+  # `kill -l $(( rc - 128 ))`, so for every rc in 193..255 the operand is 65..127,
+  # which kill -l rejects — the `-n "$name"` guard already excludes it. Mutating
+  # this to `rc > 128` leaves every table row byte-identical, so no test pins it.
+  # It is kept to state the intended domain, not because a row proves it.
+  if (( rc > 128 && rc <= 192 )); then
+    name=$(kill -l $(( rc - 128 )) 2>/dev/null) || name=""
+    [[ -n "$name" ]] && { printf 'killed\n'; return 0; }
+  fi
+  printf 'failed\n'
+}
+
+# Declared wall-clock budgets for suites known to be long. A `case`, not a
+# `declare -A`: no initialization ordering to get right, no associative-array
+# declaration at the top of a ~1000-line script, and zero churn at the 132
+# run_suite call sites. Emits nothing for an undeclared label.
+#
+# A budget NEVER changes a suite's status or the runner's exit code. It exists so
+# that a nine-minute suite is a STATED FACT rather than a surprise — which is the
+# attribution half of what a reader needs when a long suite does not come back.
+_suite_budget_ms() {
+  case "$1" in
+    # MEASURED 2026-08-11, both runs completing rc=0 on this 16-core host:
+    #   860692ms  as run BY THIS RUNNER (TEST_TIMING_LOG), one sibling worktree
+    #             running an individual suite concurrently
+    #   1675430ms standalone, with three concurrent agent sessions on the box
+    # Load alone moves it 1.9x, so a budget near either figure would fire on
+    # ordinary busy runs and become noise. Declared at ~1.5x the HIGHEST observed.
+    #
+    # NOT derived from the incident's 560931ms: that is elapsed AT THE KILL,
+    # roughly two thirds of the way in, so it is a lower bound on the duration
+    # and useless as a budget.
+    tests/scripts/registry-gate-mutation-battery) printf '2500000\n' ;;
+    *) return 0 ;;
+  esac
+}
+
+# Declines (ADR-181). Beside failed/killed for the same reason: a suite that was not run
+# is not a suite that passed, and the denominator must still account for it.
+skipped=0
 
 run_suite() {
   local label="$1"; shift
@@ -152,11 +336,31 @@ run_suite() {
   fi
   local start="$EPOCHREALTIME"
   echo "--- $label ---"
-  local status="ok"
-  if ! "$@"; then
-    status="FAIL"
-    failed=$((failed + 1))
+  # Capture the exit code rather than testing it. `if ! "$@"` is a boolean test:
+  # it discards WHICH non-zero the suite returned, which is precisely the
+  # information needed to tell a terminated suite from a failed one.
+  local rc=0
+  "$@" || rc=$?
+  # An ABORTING classifier is its own degradation and must not be absorbed into
+  # the ordinary `failed` bucket: that would make a broken classifier — which can
+  # mis-bucket every subsequent suite — indistinguishable from one honest test
+  # failure, silently. It is routed to the same fail-closed arm as an
+  # unrecognized class so it is counted FAILED and SAID OUT LOUD.
+  local status="failed" cls_rc=0
+  status="$(suite_exit_class "$rc" 2>/dev/null)" || cls_rc=$?
+  if (( cls_rc != 0 )); then
+    status="__aborted(rc=$cls_rc)__"
   fi
+  case "$status" in
+    ok)     ;;
+    failed) failed=$((failed + 1)) ;;
+    killed) killed=$((killed + 1)) ;;
+    # Fail CLOSED. Without this arm an unrecognized class increments NEITHER
+    # counter, and `$((suites - failed - killed))` then counts the suite as
+    # PASSED — the exact false green this change exists to prevent.
+    *)      echo "WARNING: suite_exit_class returned unrecognized class '$status' for rc=$rc (classifier exit=$cls_rc); counting as FAILED." >&2
+            status="failed"; failed=$((failed + 1)) ;;
+  esac
   # Integer math on EPOCHREALTIME ("seconds.microseconds") avoids a coreutils
   # `date +%N` dependency that macOS lacks. 10# forces base-10 parsing of the
   # microseconds substring (a leading zero would otherwise trigger octal).
@@ -178,13 +382,70 @@ run_suite() {
   if [[ -n "${TEST_TIMING_LOG:-}" && -n "$tmp_before" ]]; then
     tmp_field=$'\t'"tmp_delta=$(( $(tc_tmp_entry_count) - tmp_before ))"
   fi
+  # Advisory only: never changes status, never changes the exit code.
+  local budget_ms; budget_ms="$(_suite_budget_ms "$label")"
+  if [[ -n "$budget_ms" ]] && (( elapsed_ms > budget_ms )); then
+    echo "[budget] $label ran ${elapsed_ms}ms against its declared ${budget_ms}ms budget — expected-long suite, declared here so a long run is a stated fact rather than a surprise." >&2
+  fi
+  # `[ok]` and `[FAIL]` keep their EXACT current text. Every monitor, learning and
+  # skill anchored on `^\[FAIL\]` must keep working byte-for-byte; the new class is
+  # additive, never a re-spelling of an existing one.
   if [[ "$status" == "ok" ]]; then
     echo "[ok] $label (${elapsed_ms}ms)"
     printf '%s\t%d%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
+  elif [[ "$status" == "killed" ]]; then
+    # A declared budget is named HERE, on the one line where it changes the
+    # reading: it tells the reader whether this suite's elapsed time was expected.
+    # Without it "560931ms" is a bare number; with it, it is two thirds of a
+    # declared 2500000ms budget, i.e. the kill was not this runner running long.
+    # OUTSIDE the parenthetical, deliberately. main-health-monitor.yml anchors on
+    # the exact shape `(exit=N, signal-shaped 128+n = SIGNAME, Nms)`; putting the
+    # budget note inside it makes that grep miss and routes every terminated suite
+    # to the generic "did not complete" arm. Measured — this comment exists because
+    # the note was first written inside the parens and the monitor went blind.
+    local _kb; _kb="$(_suite_budget_ms "$label")"
+    local _bnote=""
+    [[ -n "$_kb" ]] && _bnote=" This suite declares a ${_kb}ms budget, so compare the elapsed above against it before treating the duration as anomalous."
+    echo "[KILLED] $label (exit=$rc, signal-shaped 128+$(( rc - 128 )) = SIG$(kill -l $(( rc - 128 )) 2>/dev/null), ${elapsed_ms}ms) — UNRESOLVED, not a failure: this runner did not measure what terminated it, and exit $rc is also what a suite calling exit($rc) reports.${_bnote}" >&2
+    printf '%s\t%d\tKILLED%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
   else
     echo "[FAIL] $label (${elapsed_ms}ms)" >&2
     printf '%s\t%d\tFAIL%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
   fi
+}
+
+# A DECLINE IS A VERDICT, NOT AN ABSENCE (ADR-181).
+#
+# run_suite increments `suites` on ENTRY, so the older shape — wrapping the call in an `if` and
+# echoing a notice on the else branch — silently removed the declined suite from the
+# denominator. `N/N suites passed` then read IDENTICALLY whether a suite was deliberately gated
+# or had been DE-REGISTERED, and the second is the #3366 class one level up: a suite running in
+# zero runners behind a green summary. Counting the decline is what makes those two states
+# distinguishable without reading the log body.
+#
+# A SIBLING of run_suite, deliberately NOT an option on it. scripts/lint-orphan-test-suites.sh
+# anchors suite registration on the literal `run_suite ` token, and its per-suite check is
+# satisfied by ANY scripts/*.test.sh appearing after that token — so a
+# `run_suite --skip-if-not-relevant "<paths>"` shape would let a path in the predicate list
+# satisfy the registration check for a DIFFERENT suite than the one executed, and deleting that
+# suite's real registration would still report `orphan test suites: none`. `skip_suite ` cannot
+# match `^[[:space:]]*run_suite `, so it is invisible to that anchor by construction.
+#
+# $1 = label (must match the label the suite would have run under)
+# $2 = machine-readable reason  $3 = the exact command that re-runs it
+skip_suite() {
+  local label="$1" reason="$2" rerun="$3"
+  suites=$((suites + 1))
+  skipped=$((skipped + 1))
+  echo ""
+  echo "[skip] $label ($reason)"
+  echo "      Nothing in this run is evidence for it. Re-run with:"
+  echo "        $rerun"
+  echo ""
+  # LABELLED trailing field, never a bare positional one: field 3 already carries the `FAIL`
+  # marker, so an unlabelled append would be positionally ambiguous across the ok, FAIL and
+  # skip shapes. Same reasoning the tmp_delta= field above already applies.
+  printf '%s\t%d\tskip=%s\n' "$label" 0 "$reason" >> "${TEST_TIMING_LOG:-/dev/null}"
 }
 
 # INFRA RELEVANCE DETECTION (#6730/#7014, converted from a boundary to a gate by #7103).
@@ -234,26 +495,82 @@ run_suite() {
 # legitimately empty, so treating "either ref resolved" as success reports a confident
 # no-infra verdict from the ref that could not have known — measured on a scratch repo with a
 # committed infra file and no remote. Only the range ref's failure means "could not determine".
-_infra_detect_ok=0
-_infra_diff_names=""
-if _infra_out="$(git -c core.quotePath=false diff --name-only HEAD 2>/dev/null)"; then
-  _infra_diff_names="${_infra_diff_names}
-${_infra_out}"
+_diff_detect_ok=0
+_diff_head_ok=0
+_diff_names=""
+if _diff_out="$(git -c core.quotePath=false diff --name-only HEAD 2>/dev/null)"; then
+  _diff_head_ok=1
+  _diff_names="${_diff_names}
+${_diff_out}"
 fi
-if _infra_out="$(git -c core.quotePath=false diff --name-only origin/main...HEAD 2>/dev/null)"; then
-  _infra_detect_ok=1
-  _infra_diff_names="${_infra_diff_names}
-${_infra_out}"
+if _diff_out="$(git -c core.quotePath=false diff --name-only origin/main...HEAD 2>/dev/null)"; then
+  _diff_detect_ok=1
+  _diff_names="${_diff_names}
+${_diff_out}"
 fi
-_infra_diff_names="${_infra_diff_names}
-$(git ls-files --others --exclude-standard -- apps/web-platform/infra 2>/dev/null || true)"
+# RENAME SOURCES. `--name-only` emits only the DESTINATION of a rename, so `git mv` on a declared
+# predicate path leaves the OLD path — the one the array names — absent from the diff, and the
+# battery declines on the single most destructive edit possible to its own SUT. `--name-status -M`
+# emits `R100<TAB>old<TAB>new`, and since matching is substring-based over this whole blob, adding
+# it makes BOTH paths matchable. (The narrow window this closes is a rename WITHOUT a matching
+# array update; `lint-orphan-test-suites.sh` already reds loudly in the same run for that case, so
+# it was never a silent green — this just stops the suite declining while that error prints.)
+_diff_names="${_diff_names}
+$(git -c core.quotePath=false diff --name-status -M HEAD 2>/dev/null || true)
+$(git -c core.quotePath=false diff --name-status -M origin/main...HEAD 2>/dev/null || true)"
+# WIDENED from `-- apps/web-platform/infra` to the union of every prefix the relevance
+# predicates declare. The narrow form was correct while the only consumer was the infra notice;
+# as a suite GATE it was a fail-open, because a brand-new UNTRACKED mutation target under
+# scripts/ or .github/ was invisible here — so the session that ADDS a target and runs the gate
+# before committing would have had the suite declined on the very diff that needed it.
+_diff_names="${_diff_names}
+$(git ls-files --others --exclude-standard -- "${TEST_RELEVANCE_PREFIXES[@]}" 2>/dev/null || true)"
+
+# Does this run's diff touch any of the given paths? Used to decline suites that guard code the
+# diff does not reach. Substring match without a `^` anchor, matching the existing infra check:
+# over-matching a path that merely CONTAINS the string errs toward RUNNING the suite, which is
+# the safe direction.
+#
+# Reads a VARIABLE via a herestring, never `producer | grep -q`. Under this script's `set -o
+# pipefail` that pipeline reports non-zero when grep exits on a match while the producer is
+# still writing (SIGPIPE 141), which would make the condition evaluate FALSE despite the match —
+# a fail-open whose likelihood scales with diff size. A herestring has no producer to kill.
+_diff_touches() {
+  # The two bypasses are UNCONDITIONAL early returns, not flags consulted later.
+  #
+  # Under CI a decline is therefore UNREACHABLE rather than merely detected. That is strictly
+  # stronger than the assertion this replaced, and it is what keeps main-health-monitor green:
+  # on `main` both diff refs resolve and return EMPTY, so _diff_detect_ok is 1 (the fail-SAFE
+  # arm does not rescue it) and every gated suite would decline — an "assert no skips occurred"
+  # design would have reddened that workflow every six hours.
+  #
+  # Written as explicit `if` blocks rather than `[[ … ]] && return 0`. Under this script's
+  # `set -e` the short form's exit status depends on the CALL SITE — harmless inside an `if`
+  # condition, an abort anywhere else — and a predicate that decides whether suites run must not
+  # carry a landmine for the next caller.
+  if [[ "${SOLEUR_TEST_FORCE_ALL:-}" == "1" ]]; then return 0; fi
+  if [[ -n "${CI:-}" ]]; then return 0; fi
+  # Fail SAFE, not fail quiet: a diff the runner could not determine RUNS everything.
+  #
+  # BOTH arms, not just the range. The HEAD arm is what sees UNCOMMITTED work, and it can fail
+  # independently — a sibling process holding `index.lock` while `git diff` refreshes the index is
+  # the realistic case in this repo, where parallel worktrees are the documented workflow. With
+  # only the range arm consulted, that failure is swallowed: the range looks clean, and the battery
+  # declines on a working tree carrying exactly the edits it guards.
+  if [[ "$_diff_detect_ok" == 0 || "$_diff_head_ok" == 0 ]]; then return 0; fi
+  local p
+  for p in "$@"; do
+    if grep -qF -- "$p" <<<"$_diff_names"; then return 0; fi
+  done
+  return 1
+}
 
 _infra_in_diff=0
-if grep -qF 'apps/web-platform/infra/' <<<"$_infra_diff_names"; then
+if grep -qF 'apps/web-platform/infra/' <<<"$_diff_names"; then
   _infra_in_diff=1
 fi
 
-if [[ "$_infra_detect_ok" == 0 ]]; then
+if [[ "$_diff_detect_ok" == 0 ]]; then
   # Fail SAFE, not quiet: assume the boundary applies rather than assume it does not.
   _infra_in_diff=1
 fi
@@ -283,7 +600,7 @@ if ! want_infra; then
     echo "        TEST_GROUP=infra bash scripts/test-all.sh"
     echo ""
   fi
-elif [[ "$_infra_detect_ok" == 0 ]]; then
+elif [[ "$_diff_detect_ok" == 0 ]]; then
   echo ""
   echo "NOTE: could not determine this branch's diff (no origin/main, shallow clone, or a"
   echo "      fresh repo), so this runner cannot tell whether apps/web-platform/infra/ is"
@@ -314,6 +631,12 @@ _TC_RUN_START_ENTRIES=$(tc_tmp_entry_count)
 # timeout it proceeds with a named banner, so it cannot wedge a run. CI and the
 # SOLEUR_DISABLE_SESSION_STATE kill switch are honoured inside tc_acquire.
 tc_acquire "test-all"
+
+# AFTER tc_acquire, deliberately. A run that queued behind a sibling can wait up
+# to TC_LOCK_TIMEOUT (900 s) here, so a reading taken before the wait describes a
+# machine state up to fifteen minutes stale and makes the start/end delta
+# meaningless. Sampled at the moment this run actually begins doing work.
+_emit_bytes_probe "__run_boundary_start__"
 
 # Pre-suite bash/python tests — scripts shard.
 if want_scripts; then
@@ -373,6 +696,21 @@ if want_scripts; then
   # the "encryption at rest + in transit" design-time gate). TS-1..8,15..17 +
   # the MB-1..MB-12 mutation battery (fixture-isolated, not suite-pass-count).
   run_suite "scripts/lint-encryption-posture" bash scripts/lint-encryption-posture.test.sh
+  # Guard Contract completeness gate (plan/SKILL.md §2.12, deepen-plan §4.11).
+  # TS-1..TS-10 fixtures + the MB-1..MB-4 mutation battery. The -live line runs
+  # the sweep over the real plans/ tree so a non-compliant Guard Contract landing
+  # in a plan reds CI, not just the fixtures.
+  run_suite "scripts/lint-guard-contract" bash scripts/lint-guard-contract.test.sh
+  run_suite "scripts/lint-guard-contract-live" python3 scripts/lint-guard-contract.py
+  # Window-derived closure assertions must DECLARE their assembly (per helper).
+  # Enforces a declaration, not semantic completeness — no static checker can
+  # prove a regex window equals its assembly. TS-1..TS-11 + MB-1..MB-2.
+  run_suite "scripts/lint-window-closure-assertion" bash scripts/lint-window-closure-assertion.test.sh
+  run_suite "scripts/lint-window-closure-assertion-live" python3 scripts/lint-window-closure-assertion.py \
+    --allowlist scripts/lint-window-closure-assertion.allowlist.txt
+  # rename-guard: allowlist->allowlist renames (the archive-kb shape) are exempt;
+  # outside->allowlist still fails. TS-1..TS-6 + MB-1..MB-2.
+  run_suite "scripts/rename-guard" bash scripts/rename-guard.test.sh
   run_suite "scripts/extract-api-spend" bash scripts/extract-api-spend.test.sh
   run_suite "scripts/domain-model-drift" bash scripts/domain-model-drift.test.sh
   # #6602: exit-code harness for the expenses verify_by expiry gate. Registered
@@ -493,6 +831,24 @@ if want_scripts; then
   # the probe would have closed the issue on the evidence of its own recurrence. The suite pins
   # the action-vocabulary split and the freshness guard that a PASS now requires.
   run_suite "scripts/infra-config-activation-7220" bash scripts/followthroughs/infra-config-activation-7220.test.sh
+  # Post-recut registry fill rate (#7341). Same failure family as the probe directly above, which
+  # is why it is registered next to it: five separate fail-open defects, every one of which
+  # produced a GREEN verdict. Two are worth pinning here. A 72h window straddling the recut fitted
+  # one line through the old 100%-full volume and the new empty one, reporting a WIPE as a trend
+  # (`PASS slope=-58.48pp/day`). And `boot_id=([0-9a-f-]+)` matched only a PREFIX of the token, so
+  # two distinct boots compared equal and the scoping the whole check rests on was silently off.
+  # Registration is explicit in this file, so an unregistered harness runs only when someone
+  # invokes it by hand — which for a probe that auto-closes a tracker means the anti-vacuity floor
+  # is decoration.
+  run_suite "scripts/zot-fill-rate-7341" bash scripts/followthroughs/zot-fill-rate-7341.test.sh
+  # CPX22 invoice reconciliation (#7437). An operator-confirmed probe reads a production ledger
+  # verdict out of free text a human typed, so the suite pins the two properties that decide
+  # whether it can be trusted: the verdict is anchored at line start (an unanchored grep closes
+  # the issue on a comment ASKING about it), and FAIL is evaluated before PASS (checking PASS
+  # first let a retraction lose to the string it was retracting — the harness failed on the
+  # original order). It also pins the accept-shape against the peers' `$`-anchored form, which
+  # would reject the figure this issue requires the operator to state.
+  run_suite "scripts/cpx22-invoice-reconcile-7431" bash scripts/followthroughs/cpx22-invoice-reconcile-7431.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.
@@ -578,6 +934,11 @@ if want_scripts; then
   run_suite "tests/scripts/audit-bot-codeql-coverage" bash tests/scripts/test-audit-bot-codeql-coverage.sh
   run_suite "tests/commands/sync-rule-prune" bash tests/commands/test-sync-rule-prune.sh
   run_suite "tests/commands/sync-domain-model" bash tests/commands/test-sync-domain-model.sh
+  # tests/commands/ is registered by these explicit lines ONLY — there is no glob
+  # here, and lint-orphan-test-suites.sh iterates scripts/*.test.sh, so it does
+  # not cover this directory either. A new suite added below without a run_suite
+  # line silently never gates (#7442).
+  run_suite "tests/commands/sync-producer-reachability" bash tests/commands/test-sync-producer-reachability.sh
   run_suite "tests/scripts/kb-drift-walker" bash tests/scripts/test-kb-drift-walker.sh
   # Destroy-guard counters (apply-* workflow trio). Pre-existing gap from
   # #4420 closed in #4419 — without these in CI, a PR that mutates a filter
@@ -617,7 +978,18 @@ if want_scripts; then
   # when it was finally committed it found 15 of its mutations surviving, including a seam that
   # could replace the pass condition itself. It sandboxes its own copies of both SUTs, so it
   # neither mutates the worktree nor depends on suite ordering here (#7277).
-  run_suite "tests/scripts/registry-gate-mutation-battery" bash tests/scripts/test-registry-gate-mutation-battery.sh
+  #
+  # RELEVANCE-GATED (ADR-181). At ~860 s this is the single most expensive suite in the runner —
+  # about 32% of a full local run — and it guards a script most PRs never touch. The predicate is
+  # referenced BY NAME: no path literal may appear on a `run_suite` line, because
+  # lint-orphan-test-suites.sh's per-suite anchor is satisfied by any scripts/*.test.sh appearing
+  # after that token, so an inline list would register a DIFFERENT suite than the one executed.
+  if _diff_touches "${REGISTRY_BATTERY_PATHS[@]}"; then
+    run_suite "tests/scripts/registry-gate-mutation-battery" bash tests/scripts/test-registry-gate-mutation-battery.sh
+  else
+    skip_suite "tests/scripts/registry-gate-mutation-battery" "relevance" \
+      "bash tests/scripts/test-registry-gate-mutation-battery.sh"
+  fi
   # Registered explicitly, next to its D10 sibling. Nothing auto-discovers tests/scripts/: this
   # file's *.test.sh glob cannot match the `test-*` prefix, and scripts/lint-orphan-test-suites.sh
   # covers scripts/*.test.sh only. An unregistered suite here runs in ZERO runners and is silent
@@ -745,6 +1117,17 @@ if want_bun; then
 fi
 
 # Bash *.test.sh glob — scripts shard. (ci-deploy.test.sh runs in infra-validation.yml.)
+# .claude/hooks/lib/*.test.sh added 2026-08-10 (#7409). Shell globs do NOT cross
+# `/`, so the flat `.claude/hooks/*.test.sh` below never reached the `lib/`
+# subdirectory: every suite there had NEVER gated CI. That is how the #5454
+# vacuous-green class survived inside session-state.test.sh (34 KB, orphaned) —
+# it relocates to plugins/soleur/test/ in this change, and this glob closes the
+# hole for its remaining sibling, freeze-lock.test.sh (13 assertions, passing).
+# Measured against every *.test.sh under any lib/ in the repo: after this line,
+# zero orphans remain in that class. Do NOT check such coverage with Python
+# `fnmatch` — its `*` DOES cross `/`, so it reports these files as already
+# covered and falsifies the finding.
+#
 # .claude/hooks/*.test.sh added 2026-05-15 (#3799 prereq to #3789); covers the
 # 8 hook tests that previously only the session-rules-loader entry pulled in.
 if want_scripts; then
@@ -763,11 +1146,27 @@ if want_scripts; then
   run_suite "scripts/digest-oracle-guard" bash scripts/digest-oracle-guard.test.sh
   # Sandbox-only: copies scripts/ and .github/ into a mktemp -d, mutates the copies, and asserts
   # the working tree is unchanged when it finishes.
-  run_suite "scripts/cf-tunnel-liveness-gate-mutations" bash scripts/cf-tunnel-liveness-gate-mutations.test.sh
+  # RELEVANCE-GATED (ADR-181), ~189 s. The battery COPIES all of scripts/ and .github/ into its
+  # sandbox but only DEPENDS on the paths the predicate names; gating on the copy set would match
+  # nearly every diff and never decline. Referenced by name — see the registry gate above.
+  if _diff_touches "${CF_TUNNEL_BATTERY_PATHS[@]}"; then
+    run_suite "scripts/cf-tunnel-liveness-gate-mutations" bash scripts/cf-tunnel-liveness-gate-mutations.test.sh
+  else
+    skip_suite "scripts/cf-tunnel-liveness-gate-mutations" "relevance" \
+      "bash scripts/cf-tunnel-liveness-gate-mutations.test.sh"
+  fi
   # Pins that this runner's OWN infra coverage claim matches whether it actually invoked the
   # infra runner. Registered here rather than under want_bun for the same reason as above.
   run_suite "scripts/test-all-infra-coverage-notice" bash scripts/test-all-infra-coverage-notice.test.sh
-  for f in plugins/soleur/test/*.test.sh plugins/soleur/skills/*/test/*.test.sh plugins/soleur/scripts/*.test.sh .claude/hooks/*.test.sh apps/cla-evidence/scripts/*.test.sh apps/web-platform/scripts/*.test.sh apps/web-platform/scripts/lib/*.test.sh scripts/lib/*.test.sh; do
+  # Pins this runner's THREE-CLASS result taxonomy (#7424): a signal-shaped exit renders as
+  # [KILLED], stays out of the failure count, and exits 3. Registered here rather than under
+  # want_bun for the same reason as its neighbours — it shells out to python3 to build its
+  # sandbox, and `test-scripts` is the shard documented as "bash + python3".
+  run_suite "scripts/test-all-killed-classification" bash scripts/test-all-killed-classification.test.sh
+  # `.claude/hooks/lib/*.test.sh` is this branch's addition (#7409): shell globs do not cross
+  # `/`, so the `.claude/hooks/*.test.sh` entry beside it never reached the lib/ subdirectory
+  # and freeze-lock.test.sh had never gated CI.
+  for f in plugins/soleur/test/*.test.sh plugins/soleur/skills/*/test/*.test.sh plugins/soleur/scripts/*.test.sh .claude/hooks/*.test.sh .claude/hooks/lib/*.test.sh apps/cla-evidence/scripts/*.test.sh apps/web-platform/scripts/*.test.sh apps/web-platform/scripts/lib/*.test.sh scripts/lib/*.test.sh; do
     [[ -f "$f" ]] || continue
     run_suite "$f" bash "$f"
   done
@@ -798,11 +1197,8 @@ if want_infra; then
     # path. The alternative was leaving TEST_GROUP as an undocumented escape hatch — which
     # silently drops far more than the infra runner and says so nowhere.
     _infra_skip_reason="incident"
-    echo ""
-    echo "SKIPPED (SOLEUR_INCIDENT_SKIP=1): apps/web-platform/infra/run-registered-suites.sh"
-    echo "      Nothing below is evidence for apps/web-platform/infra/. Re-run with:"
-    echo "        bash apps/web-platform/infra/run-registered-suites.sh"
-    echo ""
+    skip_suite "apps/web-platform/infra/run-registered-suites.sh" "incident" \
+      "bash apps/web-platform/infra/run-registered-suites.sh"
   elif [[ "$TEST_GROUP" == "infra" || "$_infra_in_diff" == 1 ]]; then
     run_suite "apps/web-platform/infra/run-registered-suites.sh" bash "apps/web-platform/infra/run-registered-suites.sh"
     # THE ONLY site that may set this. Every downstream coverage claim reads it, so it records
@@ -810,12 +1206,8 @@ if want_infra; then
     _infra_ran=1
   else
     _infra_skip_reason="not_in_diff"
-    echo ""
-    echo "SKIPPED (diff does not touch apps/web-platform/infra/): apps/web-platform/infra/run-registered-suites.sh"
-    echo "      Re-run explicitly with either:"
-    echo "        bash apps/web-platform/infra/run-registered-suites.sh"
-    echo "        TEST_GROUP=infra bash scripts/test-all.sh"
-    echo ""
+    skip_suite "apps/web-platform/infra/run-registered-suites.sh" "not_in_diff" \
+      "bash apps/web-platform/infra/run-registered-suites.sh"
   fi
 fi
 
@@ -826,9 +1218,29 @@ if want_scripts; then
   run_suite ".github/scripts/test/run-all.sh" bash .github/scripts/test/run-all.sh
 fi
 
+_emit_bytes_probe "__run_boundary_end__"
 tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"
 
-echo "=== $((suites - failed))/$suites suites passed ==="
+# BREAKDOWN FIRST, TERMINAL MARKER LAST. The ordering is load-bearing, not cosmetic.
+# Both lines are `=== ...`-shaped, and the documented lesson from #6750 is to match
+# the runner's LAST emitted line and never a per-stage line that merely looks
+# summary-shaped. Emitting the breakdown last would make a summary-shaped line that
+# is NOT the terminal marker the final one — reintroducing that exact ambiguity in
+# the one scenario (a killed run) where identifying completion correctly matters
+# most. Ordering it first keeps both contracts at zero cost: byte-identical clean
+# output, and `=== N/M suites passed ===` stays the last `===` line on every arm.
+#
+# ADR-181 adds `skipped` to the same breakdown rather than appending it to the marker.
+# An earlier revision of this change DID append `(F failed, S skipped)` to the marker, which
+# orphaned every anchored poll of it; the separate-line shape #7424 established keeps the marker
+# byte-identical, so no reader is orphaned at all. Declines are counted in `suites` and excluded
+# from the numerator: with skips in the denominator but not in `failed`, the numerator would
+# report a gated suite as PASSED — a green that is not evidence, produced by the very change
+# that added the gate.
+if (( killed > 0 || skipped > 0 )); then
+  echo "=== $suites suites: $((suites - failed - killed - skipped)) passed, $failed failed, $killed killed (unresolved — coverage not obtained), $skipped skipped (declined — not relevant to this diff) ==="
+fi
+echo "=== $((suites - failed - killed - skipped))/$suites suites passed ==="
 
 # Restatement of the PREAMBLE notice (#6730/#7014, re-pointed by #7103). Since the infra
 # runner is now a REGISTERED nested suite, the thing worth restating inverted: it is no
@@ -868,4 +1280,6 @@ fi
 
 if [[ "$failed" -gt 0 ]]; then
   exit 1
+elif (( killed > 0 )); then
+  exit 3
 fi

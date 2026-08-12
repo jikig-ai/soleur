@@ -462,6 +462,14 @@ resource "hcloud_server" "registry" {
   #   2026-07-26 (#6966)    cx23 ✗   cx33 ✗   cax11 ✗   cpx22 ✓
   #   2026-08-04 (#7280)    cx23 ✗   cx33 —   cax11 —   cpx22 ✓
   #   2026-08-06 (#7309)    cx23 ✓   cx33 ✗   cax11 ✗   cpx22 ✓
+  #   2026-08-10 15:12Z     cx23 ✗   cx33 ✗   cax11 ✗   cpx22 ✓   (#7410, pre-recut probe)
+  #   2026-08-10 19:55Z     cx23 ✓   cx33 ✓   cax11 ✗   cpx22 ✓   (#7410, same session)
+  #
+  # The last two rows are ~4 hours apart and cx23 flips NO->YES between them. That is the
+  # tightest direction change recorded here -- the previous tightest was "inside 24 hours" --
+  # and it is why the recut runbook demands a re-probe IMMEDIATELY before firing rather than
+  # reusing a reading from earlier in the same session. Note also that a NO here is not a
+  # verdict about the type: both readings are the same command against the same datacenter.
   #
   # Sources, so a reader can re-derive rather than trust this table:
   #   2026-07-15  knowledge-base/project/plans/2026-07-15-chore-hetzner-cap-headroom-plan.md,

@@ -24,12 +24,12 @@ set -eo pipefail
 # shellcheck source=lib/incidents.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh"
 
-# shellcheck source=lib/session-state.sh
+# shellcheck source=../../plugins/soleur/scripts/lib/session-state.sh
 # headless_or_stderr routes warns to a log file under $GIT_COMMON_DIR/
 # soleur-session-state/logs/$PPID.log when stderr is not a TTY and
 # CLAUDECODE is set (running under `claude --bg`). Otherwise echoes to
 # stderr as before. Tolerate missing helper for legacy worktrees.
-_SS_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/session-state.sh"
+_SS_LIB="$(dirname "${BASH_SOURCE[0]}")/../../plugins/soleur/scripts/lib/session-state.sh"
 if [[ -f "$_SS_LIB" ]]; then
   # shellcheck source=/dev/null
   source "$_SS_LIB"
@@ -215,7 +215,13 @@ if [[ -z "$REVIEW_TODOS" ]] && [[ -z "$REVIEW_COMMIT" ]]; then
   # Reads $CMD (not $SCAN) intentionally: by here the command IS a real merge
   # (passed the SCAN filter), and the PR-number arg lives outside quotes, so
   # the #4600 quote-strip is unnecessary for the extraction.
-  PR_NUMBER=$(echo "$CMD" | grep -oE 'gh\s+pr\s+merge\s+([0-9]+)' | grep -oE '[0-9]+' || true)
+  # `head -1` is load-bearing, not defensive: a command may contain MORE THAN ONE
+  # `gh pr merge <number>` — #7409's degrade-open snippets put the same merge in a
+  # locked arm and an unlocked else arm, so an unbounded extraction yields
+  # "N\nN", the search phrase below becomes "PR #N\nN", it matches no issue, and
+  # this gate denies with "No review evidence" on a PR that has it. The sibling
+  # extraction in pre-merge-auto-close-scan.sh already bounds itself this way.
+  PR_NUMBER=$(echo "$CMD" | grep -oE 'gh\s+pr\s+merge\s+([0-9]+)' | grep -oE '[0-9]+' | head -1 || true)
   if [[ -z "$PR_NUMBER" ]]; then
     # No PR number in command args -- fall back to branch-based lookup
     PR_NUMBER=$(gh pr list --repo "$(git -C "$WORK_DIR" remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||')" \

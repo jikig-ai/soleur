@@ -257,11 +257,60 @@ else _report "W7 scripts/derive-app-domain-base.sh exists" fail "the wired scrip
 if [[ -x "$DERIVE" ]]; then _report "W7 scripts/derive-app-domain-base.sh is executable" ok
 else _report "W7 scripts/derive-app-domain-base.sh is executable" fail "not +x"; fi
 
+# ── W8: every step that shells out to `doppler` must actually give it a token. ──────────────
+# The restore leg -- the job whose entire purpose is refilling the store AFTER the destroy --
+# declared `DOPPLER_TOKEN_PRD` in its env, referenced it nowhere in its body, and called
+# `doppler secrets get` bare. The CLI reads `DOPPLER_TOKEN` (or `--token`) and does not know the
+# _PRD suffix, so it ran unauthenticated: "you must provide a token", empty sink credentials,
+# engine abort exit 3, POST-DESTROY.
+#
+# It was latent behind the D10 gate for as long as A2 had never passed. Fixing A2 did not create
+# it; it exposed it. This row is the mechanical version of that lesson, and it quantifies over
+# EVERY step rather than the one that bit us.
+# The variable is WORKFLOW, not WF. The first cut of this row used an undefined "$WF", so python
+# opened "" , errored, the command substitution yielded EMPTY, and empty read as "no offenders" --
+# the row reported ok with the bug fully reintroduced. That is the same empty-means-pass vacuity
+# this row exists to catch, committed inside the row itself. Hence both guards below: the rc is
+# checked, and an empty result is only trusted when python said it looked at something.
+_dop_out=$(python3 - "$WORKFLOW" <<'PYX'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+bad, seen = [], 0
+for jn, j in (d.get("jobs") or {}).items():
+    if not isinstance(j, dict):
+        continue
+    for st in (j.get("steps") or []):
+        body = str(st.get("run") or "")
+        env = st.get("env") or {}
+        if "doppler " not in body:
+            continue
+        seen += 1
+        if "DOPPLER_TOKEN" not in env and "--token" not in body:
+            bad.append(f"{jn}::{st.get('name')}")
+# SEEN is printed so a zero-offender result can be distinguished from a scan that inspected
+# nothing -- a non-vacuity control on the row's own population.
+print(f"SEEN={seen}")
+for b in bad:
+    print(f"BAD={b}")
+PYX
+) || _dop_out="RC_FAIL"
+_dop_seen=$(printf '%s\n' "$_dop_out" | sed -n 's/^SEEN=//p')
+_dop_bad=$(printf '%s\n' "$_dop_out" | sed -n 's/^BAD=//p')
+if [[ "$_dop_out" == "RC_FAIL" ]]; then
+  _report "W8 every doppler-calling step supplies a token" fail "the scan itself failed; no verdict"
+elif [[ -z "${_dop_seen:-}" || "${_dop_seen:-0}" -lt 1 ]]; then
+  _report "W8 every doppler-calling step supplies a token" fail "the scan inspected ZERO doppler-calling steps — vacuous"
+elif [[ -n "$_dop_bad" ]]; then
+  _report "W8 every doppler-calling step supplies a token" fail "$_dop_bad"
+else
+  _report "W8 every doppler-calling step supplies a token (${_dop_seen} steps inspected)" ok
+fi
+
 # ── Anti-vacuity assertion floor ────────────────────────────────────────────────────────────
 # Measured: neutering `_report` to `return 0` reported "0 passed, 0 failed" and exit 0 — a
 # suite asserting nothing is byte-indistinguishable from one that passed, because `fails` is a
 # single unguarded integer. Pinned EXACTLY: a `>=` re-opens the hole on the next added row.
-EXPECTED_ASSERTIONS=22
+EXPECTED_ASSERTIONS=23
 if [[ "$fails" -eq 0 && "$passes" -ne "$EXPECTED_ASSERTIONS" ]]; then
   printf '  FAIL anti-vacuity: %d assertions passed, expected exactly %d — rows were added, removed, or silenced\n' \
     "$passes" "$EXPECTED_ASSERTIONS"

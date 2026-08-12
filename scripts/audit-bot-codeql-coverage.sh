@@ -275,7 +275,7 @@ TOTAL=$((PASSING + DRIFT + IN_PROGRESS))
 # this jq at the ceiling and the audit dies with `Argument list too long`; dropping the
 # flag makes `gh pr list` unbounded and the failure certain on any mature repo. If the
 # sample is ever widened past a few hundred, spool $DRIFT_ENTRIES to a file and bind
-# `--rawfile … | fromjson` first (see scripts/domain-model-drift.sh).
+# `--rawfile … | fromjson` first (see plugins/soleur/scripts/domain-model-drift.sh).
 #
 # The comment lives HERE, above the invocation, and not inline next to the flag: every
 # line of that jq call ends in a backslash continuation, and a `#` comment inside a

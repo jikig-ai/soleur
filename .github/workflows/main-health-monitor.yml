@@ -133,7 +133,9 @@ jobs:
     #
     # infra — do NOT use this branch's standalone step (warm). The cold sequential
     # figure comes from infra-validation.yml's deploy-script-tests, which runs the
-    # SAME 92 suites sequentially on a fresh checkout, n=25 successful runs:
+    # SAME registered suite set sequentially on a fresh checkout, n=25 successful runs.
+    # (Deliberately not a number: the set is DERIVED from infra-validation.yml and grows —
+    # it was 92 when this was written and is 93 today. A hardcoded count here rots silently.)
     #   min 334s   p50 397s   p90 439s   max 459s   (mean 401.5s, sd 33.9s)
     #
     # Rule: roundup5(x) = 5*ceil(x/5); minutes fractional to 2dp
@@ -405,12 +407,21 @@ jobs:
           # Excerpt ONLY the step(s) that failed, each labelled.
           #
           # Prefer the FAILURE LINES over the tail. `run-registered-suites.sh`
-          # emits one `PASS <path>` / `RED  <path>` per suite and discards each
-          # suite's own output, so with 92 suites a `tail -30` of an infra
-          # failure is 30 PASS lines and a count — the operator gets no name.
-          # Issue #7374, filed by this branch, is exactly that artifact.
+          # emits one `PASS <path>` / `RED  <path>` per suite, so a `tail -30` of
+          # an infra failure is 30 PASS lines and a count — the operator gets no
+          # name. Issue #7374, filed by this branch, is exactly that artifact.
+          #
+          # The runner no longer DISCARDS each suite's output (#7376): it captures
+          # per-suite stdout+stderr and prints a bounded, marker-anchored excerpt
+          # for every RED. Those lines carry the `SOLEUR| ` sentinel and are
+          # filtered out below — they answer "why" in the run log, while this
+          # block's job is to name the failing suite from the `^RED ` lines.
           SUMMARY=""
           HAS_FAIL_MARKER=0
+          # A THIRD result class, tracked separately and never folded into the flag above.
+          # scripts/test-all.sh now distinguishes a suite that FAILED an assertion from one
+          # that was TERMINATED by a signal, and only the first is a statement about main.
+          HAS_KILLED_MARKER=0
           RAN_ANY=0
           for pair in "tests:/tmp/tests-output.txt:${TESTS_OUTCOME}" \
                       "infra:/tmp/infra-output.txt:${INFRA_OUTCOME}"; do
@@ -427,12 +438,97 @@ jobs:
               # over this runner's log returns zero hits on a failing run and
               # reads as clean — measured 2026-08-04 (#7220)". `[FAIL]` alone
               # matched only because scripts/test-all.sh wraps the runner.
-              hits=$(grep -E '^RED |^\[FAIL\]' "$file" | head -20) || hits=""
+              # `-m 20` + `cut`, matching the killed capture below. The `| head -20` form
+              # this replaced is latent-not-live under `bash -e` (pipefail off), but the
+              # blast radius changed under #7424: an empty `hits` now clears
+              # HAS_FAIL_MARKER, and if a [KILLED] line is also present the run routes to
+              # the killed arm — which tells the operator "no suite reported a failure" on
+              # a run with hundreds of them. `cut` also bounds this capture's contribution
+              # to the 65536-char issue-body limit, which the killed capture alone cannot do.
+              hits=$(grep -m 20 -E '^RED |^UNACCOUNTED |^\[FAIL\]' "$file" | cut -c1-500) || hits=""
               if [[ -n "$hits" ]]; then
                 HAS_FAIL_MARKER=1
                 SUMMARY="${SUMMARY}${hits}"$'\n'
                 SUMMARY="${SUMMARY}--- (tail) ---"$'\n'
               fi
+              # Strip run-registered-suites.sh's per-suite diagnostic dump (#7376) before it
+              # reaches the PUBLIC issue body. The runner prefixes every line it emits after
+              # its parallel section with `SOLEUR| `; those lines belong in the run log, where
+              # they answer "why did it fail", not in the filed issue, whose job is to name the
+              # failing suite from the `^RED ` lines above.
+              #
+              # THIS `tail` IS UNCONDITIONAL — it sits outside the `if [[ -n "$hits" ]]` block,
+              # so it runs on every non-success outcome. Prefixing alone therefore does NOT keep
+              # dumped bytes out of the issue body; only this filter does. An earlier draft
+              # cleared the compliance gate on the belief that anchoring away from `^RED ` was
+              # sufficient, and that was false for exactly this line.
+              #
+              # Applied to BOTH captures, not just infra: the tests step runs test-all.sh, which
+              # invokes the runner as a nested suite. And the sentinel is `SOLEUR| ` rather than
+              # a bare `| ` precisely so this is safe here — scripts/expenses-verify-by-check
+              # prints markdown tables at column 0, which a bare filter would strip.
+              #
+              # `grep -v` is a DISPLAY FILTER: its producer is a file that `[[ -s ]]` above
+              # already proved non-empty, so there is no producer status worth propagating. Safe
+              # under this step's default shell (errexit ON, pipefail OFF — see the header) even
+              # when the filter removes every line; adding `shell: bash` later would turn a
+              # fully-filtered file into an abort that files nothing, so leave it default.
+              SUMMARY="${SUMMARY}$(grep -v '^SOLEUR| ' "$file" | tail -30)"$'\n\n'
+
+              # A SECOND, SEPARATE grep — deliberately not folded into the one above.
+              # scripts/test-all.sh renders a signal-terminated suite as
+              #   [KILLED] <label> (exit=<rc>, signal-shaped 128+<n> = SIG<NAME>, <ms>ms)
+              # and does NOT count it as a failure, because the runner did not measure what
+              # terminated it. Adding `^\[KILLED\]` to the `^RED |^\[FAIL\]` alternation
+              # would set HAS_FAIL_MARKER and re-label an UNRESOLVED run "main branch tests
+              # failing" — the conflation this change exists to remove.
+              #
+              # SHAPE-anchored, not prefix-anchored (cq-assert-anchor-not-bare-token): this
+              # file is arbitrary suite stdout, so a bare `^\[KILLED\]` is forgeable by any
+              # suite that happens to print the token.
+              #
+              # `grep -m 20` rather than `| head -20`. Both bound the LINE COUNT, but `head`
+              # closes the pipe the moment it has 20 lines and leaves grep on SIGPIPE (141).
+              # Measured 2026-08-11 over a 200-match capture: under `bash -eo pipefail`,
+              # `grep … | head -20 | cut` returns the EMPTY string through its own `||`
+              # guard — the monitor would name no suite on precisely the run with the most
+              # to say.
+              #
+              # This step's shell is `bash -e {0}` (no `shell:` key), where pipefail is
+              # OFF — see this file's own header, hazard B, and the 2026-07-30 correction
+              # it cites. So the `head` form is not broken here TODAY; `-m` is used because
+              # it is correct under both shells and stays correct the day someone adds
+              # `shell: bash`, which is exactly the edit that would silently arm the bug.
+              # The signal-name class is `[A-Z0-9+-]`, not `[A-Z0-9]`: real-time signals
+              # decode with `+`/`-` (SIGRTMIN+1, SIGRTMAX-14), and 29 of the 62 rc values
+              # the classifier buckets as `killed` render one. Narrowing this class silently
+              # routes those to the generic "did not complete" arm.
+              # `cut` bounds LENGTH: one 100 KB line would push
+              # the body past GitHub's 65536-character issue limit, `gh issue create` would
+              # fail, and the monitor would file NOTHING on a broken main.
+              #
+              # The append is NOT optional. `hits` feeds both HAS_FAIL_MARKER and SUMMARY;
+              # without the same treatment here a killed-only run yields a body containing
+              # only `tail -30`, and the runner emits its contention epilogue plus up to
+              # four multi-line infra NOTE blocks after the summary — so a [KILLED] line 200
+              # suites earlier falls outside that window and the operator gets an issue
+              # titled "terminated" that names no suite.
+              killed_hits=$(grep -m 20 -E '^\[KILLED\] [^ ]+ \(exit=[0-9]+, signal-shaped 128\+[0-9]+ = SIG[A-Z0-9+-]+, [0-9]+ms\)' "$file" | cut -c1-500) || killed_hits=""
+              if [[ -n "$killed_hits" ]]; then
+                SUMMARY="${SUMMARY}${killed_hits}"$'\n'
+                SUMMARY="${SUMMARY}--- (tail) ---"$'\n'
+              fi
+
+              # CORROBORATED, AND ORDERED, before the flag is set. The runner emits its
+              # breakdown line exactly once and only after every suite has run, so a suite
+              # would have to forge BOTH lines, in that order, to re-title the operator's
+              # issue by printing to its own stdout.
+              killed_ln=$(grep -m 1 -nE '^\[KILLED\] [^ ]+ \(exit=[0-9]+, signal-shaped 128\+[0-9]+ = SIG[A-Z0-9+-]+, [0-9]+ms\)' "$file" | cut -d: -f1) || killed_ln=""
+              breakdown_ln=$(grep -m 1 -nE '^=== [0-9]+ suites: [0-9]+ passed, [0-9]+ failed, [1-9][0-9]* killed \(unresolved' "$file" | cut -d: -f1) || breakdown_ln=""
+              if [[ -n "$killed_ln" && -n "$breakdown_ln" && "$breakdown_ln" -gt "$killed_ln" ]]; then
+                HAS_KILLED_MARKER=1
+              fi
+
               SUMMARY="${SUMMARY}$(tail -30 "$file")"$'\n\n'
             else
               SUMMARY="${SUMMARY}(no capture on disk — the step did not run, or was killed before writing)"$'\n\n'
@@ -444,12 +540,25 @@ jobs:
             --color "B60205" \
             --force 2>/dev/null || true
 
-          # THREE shapes, not two. AP-021 (ADR-166): a CI-emitted message may only
+          # FOUR shapes, not three. AP-021 (ADR-166): a CI-emitted message may only
           # name a cause the job MEASURED. The setup-failure arm exists because
-          # `!cancelled()` deliberately routes it here, and calling it a timeout
+          # `!cancelled()` deliberately routes it here, and naming a cause for it
           # would send the operator after a phantom — the defect this file exists
           # to remove. The TITLE is derived too: it is the string the operator
           # sees in the issue list and in the notification email.
+          #
+          # ACTIONS is derived per arm for the same reason the TITLE is. It used to
+          # be three hardcoded echoes in the body below — "identify the commit /
+          # revert it / verify CI" — which on the terminated arm is the ONLY
+          # actionable text on a page whose own lede says no suite reported a
+          # failure. The default below is that pre-existing text, byte-unchanged;
+          # only the arm that needs different instructions overrides it.
+          ACTIONS=(
+            "1. Identify the commit that introduced the failure"
+            "2. Fix the tests or revert the breaking change"
+            "3. Verify CI passes on main before closing this issue"
+          )
+
           if [[ "$RAN_ANY" == "0" ]]; then
             TITLE="CI: main-branch health check could not run"
             HEADING="Run failed before the suites started"
@@ -458,10 +567,27 @@ jobs:
             TITLE="CI: main branch tests failing"
             HEADING="Failure summary"
             LEDE="The health monitor ran the suite against main and it reported failures."
+          elif [[ "$HAS_KILLED_MARKER" == "1" ]]; then
+            # ORDERED AFTER the failure arm so a failure dominates: a run carrying both
+            # a real [FAIL] and a [KILLED] is a failing run, and reporting it as merely
+            # "terminated" would hide the failure the operator can act on.
+            TITLE="CI: main-branch health check was terminated before it could report"
+            HEADING="Run did not complete — a suite was terminated"
+            LEDE="At least one suite exited with a signal-shaped status (128+N). The runner reports this as unresolved: it did not measure what terminated the suite, so this issue is not a statement that main is broken."
+            ACTIONS=(
+              "1. Re-run this check: \`gh workflow run main-health-monitor.yml\`"
+              "2. If the same suite is reported terminated again, file a tracking issue for it and link it here"
+              "3. A signal-shaped exit is not by itself evidence of a bad commit, so do not revert on the strength of this issue alone. But it is not evidence of a HEALTHY commit either: an in-process fault (SIGSEGV/SIGABRT/SIGFPE) renders the same way as an external kill, and the six suites this runner starts via \`bun\`/\`node\` directly can surface one. If the same suite is terminated on every run, treat it as a crash and investigate the code — see AGENTS rule \`wg-when-a-test-runner-crashes-segfault-oom\`."
+            )
           else
+            # No marker of any kind in the capture. What this run MEASURED is the step
+            # outcome and nothing else. The previous wording here named "a step or job
+            # timeout" — a cause the job did not measure, in the very file whose header
+            # condemns that pattern. It survived lint-diagnosis-claims.sh only because
+            # `usually` is absent from that gate's CLAIM regex; it was still a miss.
             TITLE="CI: main-branch health check did not complete"
             HEADING="Run did not complete"
-            LEDE="A suite step started but never reported. This is usually a step or job timeout; GitHub records a timeout as \`cancelled\`, not \`failure\`."
+            LEDE="A suite step started but never reported a result. The step outcome recorded below is all this run measured about it — read the run log's step list for what the runner did last."
           fi
 
           # REDACT before publishing. This repo is PUBLIC, and `tee` captures the
@@ -470,15 +596,39 @@ jobs:
           # GITHUB_TOKEN and the infra step runs terraform, whose error text is
           # the likeliest carrier. Before this PR the filer never fired, so the
           # channel was dormant; it is live now.
+          #
+          # WIDENED 2026-08-10 (#7376). This channel now carries per-suite diagnostic output,
+          # so the measured gaps below matter more than they did when it only carried a
+          # summary. Each addition is a shape the previous set provably missed:
+          #   - JWTs (`eyJ…`) were UNMATCHED — the highest-value miss, since OIDC id_tokens
+          #     and Supabase service_role keys both wear that shape.
+          #   - `sbp_v0_…` slipped the `sbp_` rule, whose `[A-Za-z0-9]` class excludes `_`.
+          #   - Stripe restricted/webhook keys, Doppler service-account tokens, the Sentry
+          #     DSN (the URL rule requires a `:password@`, which a DSN has no room for),
+          #     and bare `Authorization:` headers were all unmatched.
+          #
+          # The PEM rule was an ANTI-mitigation: rewriting only the `-----BEGIN-----` header
+          # stripped the one marker that makes a leaked key recognisable to a human or a
+          # scanner, and left the base64 body and the END line intact. `sed` is line-based,
+          # so nothing spanning a newline is catchable any other way than a RANGE.
           REDACTED=$(printf '%s' "$SUMMARY" | sed -E \
+            -e 's/-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----/<redacted-private-key-marker>/g' \
+            -e 's/^[[:space:]]*[A-Za-z0-9+/]{40,}={0,2}[[:space:]]*$/<redacted-key-material>/' \
+            -e 's/(AKIA|ASIA|AGPA|AIDA|AROA|ANPA|ANVA)[A-Z0-9]{16}/<redacted-aws-key-id>/g' \
+            -e 's/(aws_secret_access_key|aws_session_token)[[:space:]]*[=:][[:space:]]*[A-Za-z0-9\/+=]{20,}/\1=<redacted>/gI' \
+            -e 's/X-Amz-(Signature|Security-Token|Credential)=[^&[:space:]]+/X-Amz-\1=<redacted>/g' \
             -e 's/gh[pousr]_[A-Za-z0-9]{16,}/<redacted-gh-token>/g' \
             -e 's/github_pat_[A-Za-z0-9_]{20,}/<redacted-gh-pat>/g' \
             -e 's/sk-ant-[A-Za-z0-9_-]{16,}/<redacted-anthropic-key>/g' \
             -e 's/sk_(test|live)_[A-Za-z0-9]{16,}/<redacted-stripe-key>/g' \
-            -e 's/sbp_[A-Za-z0-9]{16,}/<redacted-supabase-token>/g' \
-            -e 's/dp\.(pt|st|sa|ct)\.[A-Za-z0-9_-]{20,}/<redacted-doppler-token>/g' \
-            -e 's#(postgres(ql)?|redis|amqp)://[^:@/[:space:]]+:[^@[:space:]]+@#\1://<redacted>:<redacted>@#g' \
-            -e 's/-----BEGIN [A-Z ]*PRIVATE KEY-----/<redacted-private-key>/g')
+            -e 's/(rk_(test|live)|whsec)_[A-Za-z0-9]{16,}/<redacted-stripe-key>/g' \
+            -e 's/sbp_(v0_)?[A-Za-z0-9]{16,}/<redacted-supabase-token>/g' \
+            -e 's/dp\.(pt|st|sa|ct|scim|audit)\.[A-Za-z0-9_.-]{20,}/<redacted-doppler-token>/g' \
+            -e 's/sntrys_[A-Za-z0-9_.-]{20,}/<redacted-sentry-token>/g' \
+            -e 's#https://[0-9a-f]{16,}@[A-Za-z0-9.-]+/[0-9]+#<redacted-sentry-dsn>#g' \
+            -e 's/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/<redacted-jwt>/g' \
+            -e 's/([Aa]uthorization: *)(Basic|Bearer) +[A-Za-z0-9._~+\/=-]+/\1\2 <redacted>/g' \
+            -e 's#(postgres(ql)?|redis|amqp)://[^:@/[:space:]]+:[^@[:space:]]+@#\1://<redacted>:<redacted>@#g')
 
           # A longer fence than any the captured output can contain, so a triple
           # backtick in a test's own output cannot terminate the block early and
@@ -498,11 +648,18 @@ jobs:
             echo "${REDACTED}"
             echo '`````'
             echo ""
+            echo "### Where the per-suite diagnostics are"
+            echo ""
+            echo "The infra runner captures each suite's own stdout+stderr and prints a"
+            echo "marker-anchored excerpt (rc, elapsed, start offset) for every failing suite."
+            echo "Those lines are deliberately withheld from this PUBLIC body — read them in"
+            echo "the run log, no SSH required:"
+            echo ""
+            echo "    gh run view ${GITHUB_RUN_ID} --log | grep '^SOLEUR| '"
+            echo ""
             echo "### Actions required"
             echo ""
-            echo "1. Identify the commit that introduced the failure"
-            echo "2. Fix the tests or revert the breaking change"
-            echo "3. Verify CI passes on main before closing this issue"
+            printf '%s\n' "${ACTIONS[@]}"
             echo ""
             echo "### Run details"
             echo ""
@@ -516,6 +673,12 @@ jobs:
             {
               echo "Main branch health check still not passing as of $(date -u +%Y-%m-%dT%H:%M:%SZ)."
               echo ""
+              # The arm's LEDE, not just its HEADING. Without it, runs 2, 3, 4 … of a
+              # flapping killed suite each append the fixed sentence above and nothing
+              # that qualifies it — an escalating claim that main is broken, produced by
+              # a runner that measured nothing about what terminated the suite.
+              echo "${LEDE}"
+              echo ""
               echo "Step outcomes: \`tests=${TESTS_OUTCOME:-<never ran>}\` \`infra=${INFRA_OUTCOME:-<never ran>}\`"
               echo ""
               echo "### ${HEADING}"
@@ -524,8 +687,27 @@ jobs:
               echo "${REDACTED}"
               echo '`````'
               echo ""
+              echo "Per-suite diagnostics are withheld from this public comment; read them"
+              echo "in the run log with: gh run view ${GITHUB_RUN_ID} --log | grep '^SOLEUR| '"
+              # The ACTIONS of THIS run, not of the run that opened the tracker.
+              # Since ACTIONS became per-arm, a stale title+actions pair is actively
+              # harmful rather than merely untidy: an issue opened by a KILLED run says
+              # "Do not revert anything on this issue alone — no suite reported a
+              # failure", and six hours later a genuinely broken commit comments on that
+              # same issue. The operator opens it, reads a title saying "terminated" and
+              # the only actionable text on the page telling them not to revert, while a
+              # dozen suites are red below the fold.
+              echo "### Actions required"
+              echo ""
+              printf '%s\n' "${ACTIONS[@]}"
+              echo ""
               echo "Run: ${RUN_URL}"
             } > /tmp/issue-comment.md
+            # Retitle so the issue list and the notification email describe what the
+            # LATEST run measured. Guarded like the comment: a locked issue or a
+            # secondary rate limit must not abort the step.
+            gh issue edit "$EXISTING" --title "$TITLE" \
+              || echo "::warning::could not retitle #${EXISTING}"
             # Guarded: a locked issue or a secondary rate limit must not abort the
             # step, matching the treatment given to `gh issue edit` below.
             gh issue comment "$EXISTING" --body-file /tmp/issue-comment.md \

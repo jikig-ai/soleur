@@ -25,12 +25,16 @@ model {
   }
 
   // External actor — an UNTRUSTED pull-request author, distinct from the trusted
-  // `founder` Owner above. Their PR-head code executes only in the fix-constraints
-  // Stage A recovery producer (`pull_request`, contents:read, no write/secret
-  // token); it never runs in the privileged Stage B consumer (ADR-074).
+  // `founder` Owner above. In CI their PR-head code executes only in the
+  // fix-constraints Stage A recovery producer (`pull_request`, contents:read, no
+  // write/secret token); it never runs in the privileged Stage B consumer
+  // (ADR-074). Operator-side, preflight Check 10 executes a plan-declared probe
+  // inside a bwrap sandbox (ADR-175) — but running a checked-out PR head's tests
+  // or scripts by hand is outside both boundaries. Keep this comment and the
+  // description below in agreement; they disagreed once (#7393 review).
   contributor = actor "Contributor / PR Author" {
     #external
-    description "An untrusted contributor opening a pull request. Their PR-head code is executed only by the fix-constraints Stage A producer (pull_request, contents:read, no write token) — never by the privileged Stage B consumer, which opens a data-only draft follow-up PR from the default branch (ADR-074)."
+    description "An untrusted contributor opening a pull request. In CI their PR-head code executes only under pull_request isolation (fix-constraints Stage A: contents:read, no write token) and never in the privileged Stage B consumer, which opens a data-only draft follow-up PR from the default branch (ADR-074). The one PR-head artifact preflight executes on the operator's own workstation — a plan-declared discoverability probe — runs inside a bubblewrap sandbox with no credential stores bound and the repo read-only, failing closed if that sandbox cannot be established (ADR-175); its residual reach is host-loopback and outbound network (#7412). Other operator-side execution of a checked-out PR head (running its tests, its scripts, its hooks) is covered by NEITHER boundary."
   }
 
   // ---- Soleur Platform (enterprise boundary) -----------------------------
@@ -67,12 +71,12 @@ model {
       }
       hooks = container "Hook Engine" {
         technology "PreToolUse Guards + Rewriter + PostToolUse hints"
-        description "Guards tool calls (blocks commits to main, rm -rf, etc.) AND injects additive context — phase-surface hints (ADR-070) and declarative skill context_queries (ADR-086). CONSUMES a MODEL-CONTROLLED tool-call envelope on stdin: that input is untrusted and is parsed without shell evaluation, with each contracted field type-asserted rather than coerced (ADR-156, #7164 — an array tool_input.command previously reached eval AND evaded every anchored guard). Prior description said only what hooks DO, never what they CONSUME. A PreToolUse hook also has a THIRD disposition beyond allow/deny: it may REWRITE tool_input before execution and let the call proceed (ADR-162, #7165) — grep-rewrite.sh prepends a grep() redefinition that neutralizes the ugrep shim which reached 9.5 GB RSS against a 21 kB file, leaving the command byte-identical. Bounded by a SINGLE-REWRITER invariant: updatedInput REPLACES tool_input (it does not merge), a sibling deny still wins, and permission rules match the ORIGINAL command. Additionally, in the repo-local `.claude/` hook surface only — never the shipped plugin surface — it enforces host resource control: at SessionStart it adopts the agent process tree into a memory-capped systemd transient scope (ADR-161). Where this container runs server-side there is no per-user systemd bus, so that path declines and does nothing. TWO HARNESSES: `.claude/hooks/` (Claude Code) and three blocking PreToolUse mirrors in `.openhands/hooks/`, which consume a different envelope over a protocol with no `ask` state — so ADR-157's posture is split by reason class there (ADR-165). On the `.claude` side exit 0 is the precondition for that posture at all: a non-zero exit makes Claude Code discard the hook's stdout JSON entirely (#7190)."
+        description "Guards tool calls (blocks commits to main, rm -rf, etc.) AND injects additive context — phase-surface hints (ADR-070) and declarative skill context_queries (ADR-086). CONSUMES a MODEL-CONTROLLED tool-call envelope on stdin: that input is untrusted and is parsed without shell evaluation, with each contracted field type-asserted rather than coerced (ADR-156, #7164 — an array tool_input.command previously reached eval AND evaded every anchored guard). Prior description said only what hooks DO, never what they CONSUME. A PreToolUse hook also has a THIRD disposition beyond allow/deny: it may REWRITE tool_input before execution and let the call proceed (ADR-162, #7165) — grep-rewrite.sh prepends a grep() redefinition that neutralizes the ugrep shim which reached 9.5 GB RSS against a 21 kB file, leaving the command byte-identical. Bounded by a SINGLE-REWRITER invariant: updatedInput REPLACES tool_input (it does not merge), a sibling deny still wins, and permission rules match the ORIGINAL command. Additionally, in the repo-local `.claude/` hook surface only — never the shipped plugin surface — it enforces host resource control: at SessionStart it adopts the agent process tree into a memory-capped systemd transient scope (ADR-161). Where this container runs server-side there is no per-user systemd bus, so that path declines and does nothing. TWO HARNESSES: `.claude/hooks/` (Claude Code) and three blocking PreToolUse mirrors in `.openhands/hooks/`, which consume a different envelope over a protocol with no `ask` state — so ADR-157's posture is split by reason class there (ADR-165). On the `.claude` side exit 0 is the precondition for that posture at all: a non-zero exit makes Claude Code discard the hook's stdout JSON entirely (#7190). The two-harness enumeration describes where hook CODE lives; since ADR-178 (#7409) it no longer describes where its concurrency layer comes from — `lib/incidents.sh`, `lib/log-rotation.sh` and `pre-merge-rebase.sh` source the session-state lock/lease primitives from a THIRD, shipped location inside the deployed plugin root, reaching in from the repo side."
       }
     }
 
     plugin = system "Soleur Plugin" {
-      description "plugins/soleur/ — skills, agents, and knowledge base"
+      description "plugins/soleur/ — skills, agents, knowledge base, AND the shared bash primitives shipped for execution on an installed user's machine (ADR-178, #7409): scripts/lib/session-state.sh is the cross-session lock/lease layer that gates worktree reaping. It lived under .claude/hooks/ until #7409, i.e. outside the subtree marketplace.json copies, so every installed user ran with that layer silently replaced by no-op stubs. What this system SHIPS is therefore not only prose for an agent to read — it includes executable concurrency primitives whose absence is unobservable to the user."
 
       skills = container "Skills" {
         technology "Markdown SKILL.md"
@@ -435,6 +439,7 @@ model {
   skillloader -> agents "Discovers" { technology "Recursive scan" }
   hooks -> claude "Guards, annotates, and rewrites tool input before execution" { technology "Event hook" }
   claude -> hooks "Tool-call envelope on stdin — MODEL-CONTROLLED, UNTRUSTED (ADR-156): parsed without eval; input that cannot be fully parsed asks, never continues silently (ADR-157)" { technology "stdin JSON" }
+  hooks -> plugin "Sources the shared session-state lock/lease primitives from the deployed plugin root (ADR-178, #7409) — lib/incidents.sh, lib/log-rotation.sh and pre-merge-rebase.sh reach into plugins/soleur/scripts/lib/. The dependency direction is the point: hook code in the repo depends on a file that SHIPS, which is why the file had to live inside the plugin rather than beside its consumers." { technology "Shell source" }
   hooks -> kb "Reads context_queries artifacts (skill-scoped injection)" { technology "File I/O" }
   api -> kb "Reads context_queries artifacts (skill-scoped injection, web in-process)" { technology "File I/O" }
   // #6750 — the ONLY inbound kb edge that is NOT an operator-attended session.

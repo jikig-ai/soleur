@@ -1,0 +1,16 @@
+# Grandfather set for scripts/lint-window-closure-assertion.py.
+#
+# Entries are `<repo-relative-path>::<helperName>` and are PER HELPER: an entry
+# never waives an undeclared sibling in the same file. This is the population
+# measured when the gate landed, so it lands green and every subsequent addition
+# is gated. Shrinking this list is always welcome; growing it needs a reason.
+#
+# `sandboxWindow` is deliberately ABSENT — it is the originating defect and now
+# carries a real `// window-assembly:` declaration citing the sibling assertions
+# that pin the rest of its assembly.
+plugins/soleur/test/distribution-content-format.test.ts::extractSection
+plugins/soleur/test/distribution-content-format.test.ts::xSection
+plugins/soleur/test/preflight-discoverability-test.test.ts::gateWindow
+plugins/soleur/test/preflight-discoverability-test.test.ts::makeGateWindow
+plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts::getGateSection
+plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts::onSection

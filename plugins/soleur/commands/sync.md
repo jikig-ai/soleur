@@ -1,7 +1,7 @@
 ---
 name: sync
 description: Analyze codebase and populate knowledge-base with conventions, patterns, and technical debt
-argument-hint: "[area: conventions|architecture|testing|debt|project|c4|rule-prune|domain-model|all]"
+argument-hint: "[area: conventions|architecture|testing|debt|project|c4|domain-model|all]"
 ---
 
 # Sync Codebase to Knowledge Base
@@ -17,12 +17,18 @@ Analyze an existing codebase and populate knowledge-base files with coding conve
 
 <sync_area> #$ARGUMENTS </sync_area>
 
-**Valid areas:** `conventions`, `architecture`, `testing`, `debt`, `project`, `c4`, `rule-prune`, `domain-model`, `all` (default)
+**Valid areas:** `conventions`, `architecture`, `testing`, `debt`, `project`, `c4`, `domain-model`, `all` (default)
 
-**Note on `rule-prune`:** This area is excluded from `all` dispatch. It files
-GitHub issues for AGENTS.md rules with zero recorded hits; it should be run
-intentionally (weekly or monthly), not as part of every `/soleur:sync` call.
-Append `--weeks=<n>` (default 8) to override the staleness threshold.
+**Note on `rule-prune` (undocumented, monorepo-only):** This area is excluded
+from `all` dispatch AND from the advertised area list above, because its
+producers (`scripts/rule-metrics-aggregate.sh`, `scripts/rule-prune.sh`) live at
+the monorepo root outside the plugin payload and cannot be shipped to a
+marketplace install (#7442). It also has no input source on a customer machine:
+its telemetry producer `emit_incident()` is defined in
+`.claude/hooks/lib/incidents.sh`, which is likewise not in the payload.
+Advertising it would invite a customer into a path that always halts. It remains
+invocable by name inside this repo, gated on the sentinel below. Append
+`--weeks=<n>` (default 8) to override the staleness threshold.
 
 **Note on `c4`:** Generates a LikeC4 diagram from the component docs the `project`
 area writes, so it runs AFTER `project` in `all` dispatch. Non-destructive: it
@@ -72,6 +78,58 @@ fi
 ```
 
 Warn but continue if not a git repo.
+
+**Validate the plugin root is OUR plugin (fail closed — #7442):**
+
+```bash
+SOLEUR_ROOT_OK=0
+if [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
+   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
+   && [ -d "${CLAUDE_PLUGIN_ROOT}/scripts" ]; then
+  SOLEUR_ROOT_OK=1
+fi
+if [ "$SOLEUR_ROOT_OK" -ne 1 ]; then
+  echo "SOLEUR_SYNC_ROOT_UNRESOLVED reason=plugin-root-unverified"
+  echo "soleur:sync — the plugin root did not verify as the Soleur payload; refusing to run any producer (ADR-179)." >&2
+  exit 1
+fi
+```
+
+**Probe the producer toolchain (named degradation, not a silent 127):**
+
+```bash
+command -v bun >/dev/null 2>&1 \
+  || echo "SOLEUR_SYNC_TOOLCHAIN_MISSING tool=bun affects=c4,coverage"
+```
+
+`bun` absent is not fatal — the areas that do not need it still run — but without
+this line the failure surfaces only as `bun: command not found` with no marker,
+which is indistinguishable from the area having nothing to do. Report the missing
+toolchain to the user alongside whatever else the run produced.
+
+**STOP if the plugin-root block exits non-zero.** Report to the user verbatim: *"I can't run
+`/soleur:sync` here — I couldn't verify where the Soleur plugin is installed.
+Please reinstall the plugin and try again."* Do **not** try to locate the
+producers yourself, do **not** substitute a relative path, and do **not**
+continue to the phases below. Resolving the plugin root by hand is the defect
+this gate exists to prevent, and the refusal message is the point at which it is
+most tempting.
+
+Every producer below is anchored to `${CLAUDE_PLUGIN_ROOT}` — **bare, never
+`:-` or `:?`** — the operand is **quoted** (an install path may contain spaces),
+and its path is **payload-relative** (the root already *is* `plugins/soleur`, so
+it is `"${CLAUDE_PLUGIN_ROOT}/scripts/foo.ts"`, never
+`"${CLAUDE_PLUGIN_ROOT}/plugins/soleur/scripts/foo.ts"`).
+
+Why this gate checks plugin IDENTITY and not directory shape: `CLAUDE_PLUGIN_ROOT`
+is an ordinary environment variable, and the Bash tool inherits the user's
+profile — so a `.envrc`, a `~/.bashrc` line, or a package `postinstall` can
+export it. A `test -d "$X/scripts"` predicate is satisfied by *any* directory
+with a `scripts/` child, which measurably lets an ambient value execute
+attacker-chosen bytes. Verifying the payload manifest raises the bar from
+"set any variable" to "plant a complete fake plugin". The bare form remains
+strictly better than a `:-` default, which needs no attacker precondition at all
+— but it is not safe *by construction*, and this gate is what carries it.
 
 ### Phase 1: Analyze
 
@@ -191,7 +249,7 @@ Runs when `<sync_area>` is `c4`, and as part of `all` **after** the `project`
 area (it consumes the component docs that area writes).
 
 ```bash
-bun plugins/soleur/scripts/generate-c4-from-components.ts
+bun "${CLAUDE_PLUGIN_ROOT}/scripts/generate-c4-from-components.ts"
 ```
 
 The producer parses each component doc's `dependencies:` frontmatter (falling back
@@ -242,14 +300,14 @@ Runs at the END of an `all` sync, after every other area. Writes
 `knowledge-base/project/kb-coverage.md` and prints the same marker to stdout:
 
 ```bash
-bun plugins/soleur/scripts/write-kb-coverage.ts
+bun "${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts"
 ```
 
 Add one `--degraded "<reason>"` for each producer that reported `status=degraded`
 earlier in the run (the `reason=` token from its marker is the right string):
 
 ```bash
-bun plugins/soleur/scripts/write-kb-coverage.ts \
+bun "${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts" \
   --degraded "c4: no-generated-relationships"
 ```
 
@@ -300,10 +358,43 @@ and nothing under `plugins/` imports Sentry.
 Runs only when `<sync_area>` is literally `rule-prune`. Surfaces AGENTS.md rules that have zero recorded hits over the threshold window as GitHub issues milestoned to "Post-MVP / Later". Does NOT edit `AGENTS.md` — a human reviews each issue and decides whether to prune.
 
 1. **Parse `--weeks=<n>`** from `<sync_area>` additional tokens (e.g., `rule-prune --weeks=4`). Default: 8. Also supports `--dry-run` (forwarded to `rule-prune.sh`).
-2. **Ensure `knowledge-base/project/rule-metrics.json` exists.** If missing, instruct the user to run the aggregator first: `bash scripts/rule-metrics-aggregate.sh` (or `bash scripts/rule-metrics-aggregate.sh --dry-run` to preview summary without writing). Do not create a stub file.
+2. **Ensure `knowledge-base/project/rule-metrics.json` exists.** If missing, run the aggregator first. Both producers in this area are repo-root scripts outside the plugin payload, so the invocation is gated on a monorepo sentinel that fails closed — run this block verbatim rather than the bare command, so the halt executes whether or not this paragraph was read:
+
+   ```bash
+   # Fail closed (#7442). scripts/ here is the CUSTOMER's scripts/ on any repo
+   # that is not this monorepo, so a same-named file would execute as theirs.
+   # The sentinel is the self-hosted plugin checkout -- the same condition
+   # Phase 4.1 already gates on, and one a marketplace install never satisfies.
+   #
+   # SOLEUR_MONOREPO is what makes the invocation line safe ON ITS OWN. If the
+   # line is ever separated from this gate -- a reader that takes the last line
+   # of the block, a tool that extracts invocations line-wise -- the variable is
+   # unset and the operand becomes "/scripts/...": root-anchored, nonexistent,
+   # not writable by a non-root user. Fail-closed. A bare relative operand would
+   # instead resolve into the customer's tree and execute their file.
+   SOLEUR_MONOREPO="$(test -f plugins/soleur/.claude-plugin/plugin.json && pwd || true)"
+   if [[ -z "$SOLEUR_MONOREPO" ]]; then
+     echo "SOLEUR_SYNC_AREA_UNAVAILABLE area=rule-prune reason=monorepo-only-maintenance-area"
+     exit 2
+   fi
+   bash "${SOLEUR_MONOREPO:?monorepo sentinel not evaluated}/scripts/rule-metrics-aggregate.sh"
+   ```
+
+   Append `--dry-run` to preview the summary without writing. Do not create a stub file.
 
    **Local telemetry source:** `.claude/.rule-incidents.jsonl` (gitignored, one line per deny/bypass written by the hooks under `.claude/hooks/`). The aggregator reads this file to produce `rule-metrics.json`. Monthly rotation archives it to `.claude/.rule-incidents-<YYYY-MM>.jsonl.gz` when `AGGREGATOR_ROTATE=1` is set (CI only).
-3. **Invoke** `bash scripts/rule-prune.sh --weeks=<n>` (or with `--dry-run` to preview candidates without filing). The script:
+3. **Invoke** the pruner behind the same fail-closed sentinel (again, run the block, not the bare command):
+
+   ```bash
+   SOLEUR_MONOREPO="$(test -f plugins/soleur/.claude-plugin/plugin.json && pwd || true)"
+   if [[ -z "$SOLEUR_MONOREPO" ]]; then
+     echo "SOLEUR_SYNC_AREA_UNAVAILABLE area=rule-prune reason=monorepo-only-maintenance-area"
+     exit 2
+   fi
+   bash "${SOLEUR_MONOREPO:?monorepo sentinel not evaluated}/scripts/rule-prune.sh" --weeks=<n>
+   ```
+
+   Append `--dry-run` to preview candidates without filing. The script:
    - Reads `knowledge-base/project/rule-metrics.json`.
    - Filters rules with `hit_count == 0` AND `first_seen` older than the cutoff.
    - Validates every rule_id against `^(hr|wg|cq|rf|pdr|cm)-[a-z0-9-]{3,60}$`; malformed ids are skipped with a stderr warning (never filed as issues).
@@ -328,7 +419,7 @@ are disclosed as blind spots, never counted.
 1. **Emit the drift report** (read-only). Run:
 
    ```bash
-   bash scripts/domain-model-drift.sh drift --repo . --register knowledge-base/engineering/architecture/domain-model.md
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" drift --repo . --register knowledge-base/engineering/architecture/domain-model.md
    ```
 
    Exit `0` = clean, `1` = drift found, `2` = error, `3` = secret-shape refuse. Present the report verbatim
@@ -342,7 +433,7 @@ are disclosed as blind spots, never counted.
    **accepted** candidate, append it via the safe primitive:
 
    ```bash
-   bash scripts/domain-model-drift.sh write-row \
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" write-row \
      --register knowledge-base/engineering/architecture/domain-model.md \
      --anchor "<migration-file › table.object>" --statement "<candidate statement>"
    ```
@@ -372,7 +463,7 @@ so under `all` (or headless) that gate would write **zero rows**. Take this path
    on a path they cannot resolve:
 
    ```bash
-   bash scripts/domain-model-drift.sh init --repo . \
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" init --repo . \
      --register knowledge-base/engineering/architecture/domain-model.md
    ```
 

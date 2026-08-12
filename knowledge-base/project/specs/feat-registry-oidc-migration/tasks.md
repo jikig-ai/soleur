@@ -26,7 +26,7 @@ plan: knowledge-base/project/plans/2026-07-06-feat-registry-oidc-migration-plan.
 
 ## Phase 2 — Push side (dual-push)
 - [x] 2.0 NEW `cf-tunnel-registry-bridge` composite action (CI→private-net zot push via the existing web CF Tunnel; CTO ruling 2). `cloudflared access tcp … 127.0.0.1:5000` + `docker login` (CF Access registry_push token + zot-push htpasswd from Doppler)
-- [x] 2.1 `build-inngest-bootstrap-image.yml` → dual-push (docker tag+push 127.0.0.1:5000; plain build → local docker, no crane). Not cosign-signed (no id-token perm — GHCR parity)
+- [x] 2.1 `build-inngest-bootstrap-image.yml` → dual-push (docker tag+push 127.0.0.1:5000; plain build → local docker, no crane). Not cosign-signed at the time (no id-token perm — GHCR parity). **Superseded 2026-08-10 (#7410):** it IS now signed, because the restore engine requires a signature for every required pin and D10 A2 could not otherwise pass. Signed but not verified on the inngest path — see the workflow comment.
 - [x] 2.2 `reusable-release.yml` → dual-push web image via `crane copy` GHCR→zot RUNNER-SIDE (buildx container driver can't reach the runner bridge; digest preserved). Bridge continue-on-error + if:always() teardown (additive — zot failure never fails GHCR)
 - [x] 2.3 `reusable-release.yml` → cosign-sign the zot digest (same digest; host offline-verify passes, COSIGN_IDENTITY_REGEXP unchanged)
 - [ ] 2.4 CI evidence: a tag build is pullable + signed from zot — **post-provisioning (needs live zot + a tag build)**

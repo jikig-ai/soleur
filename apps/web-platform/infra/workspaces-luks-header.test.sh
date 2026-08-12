@@ -321,6 +321,20 @@ loader="$(awk '/^load_escrow_creds\(\) \{/,/^\}/' "$SH")"
 if [ -z "$readers" ] || [ -z "$loader" ]; then
   fail "S6: could not extract readers/load_escrow_creds from the script"
 else
+  # Blank any AMBIENT AWS credentials for THIS WHOLE BLOCK (#7376).
+  #
+  # run_s7's `echo "END … kid=$AWS_ACCESS_KEY_ID …"` is replayed verbatim by its FAIL branch
+  # (`out=$s7_out`) — precisely the path run-registered-suites.sh now captures and excerpts into
+  # a run log on a PUBLIC repo. The local `doppler()` stub supplies `stub-…` today, so nothing
+  # real leaks; but infra-validation.yml exports genuine AWS credentials into $GITHUB_ENV in a
+  # DIFFERENT job, leaving this one job-move from printing a live access key on failure.
+  #
+  # Hoisted above run_s6 rather than scoped to run_s7: the sibling subshells (s6/s8/s9) are safe
+  # only because they happen to contain no AWS_* emit and because load_escrow_creds dies at its
+  # guards first. That is the same incidental isolation this comment exists to criticise, so
+  # leaving them unblanked would preserve it. `export`, so children see the empty value too.
+  export AWS_ACCESS_KEY_ID='' AWS_SECRET_ACCESS_KEY='' AWS_SESSION_TOKEN=''
+
   # run_s6 <only-empty-secret-name | ""> — a doppler stub that returns EMPTY for the named secret
   # (or all four when ""), every other secret non-empty. Proves the per-field fail-loud: a
   # HALF-populated cred pair must die on its OWN [ -n ] check, not sail through to a mid-freeze SigV4.

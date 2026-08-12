@@ -2,6 +2,37 @@
 
 Select how comprehensive you want the issue to be, simpler is mostly better.
 
+## Plan Frontmatter (all detail levels)
+
+The frontmatter block is identical across the three templates below; only the body differs. It is
+written in **two stages**, because the plan file now exists before the research that derives most
+of its metadata (#7418, ADR-176).
+
+**Stage 1 — the skeleton, written by `plan` Phase 0.7 before the research fan-out.** Only what
+Phase 0.6 already knows:
+
+| Key | Source |
+|---|---|
+| `title:` | the issue title Phase 0.6 fetched, or the feature description on the freeform arm |
+| `date:` | today, UTC |
+| `slug:` | the kebab title, without the date prefix or `-plan` suffix |
+| `branch:` | `git branch --show-current` — this is what the recovery selector matches on |
+| `issue:` | the cited issue — **provisional**, planning may re-target it |
+
+**Stage 2 — finalization.** `issue:` and `closes:` are rewritten unconditionally and the derived
+fields are added (`type:`, `priority:`, `domain:`, `brand_survival_threshold:`,
+`requires_cpo_signoff:`). `lane:` is written separately by Save Tasks, from `spec.md` — do **not**
+pre-seed it here or in the skeleton, because the fail-closed default is `cross-domain`, which widens
+the Phase 2.5 domain fan-out.
+
+**There is no progress key, by decision.** A plan is finished when it has `## Acceptance Criteria` —
+the one heading present in all three templates below, and the last one written. Completion is
+asserted from that content, never from a dedicated cursor field, because a second progress signal
+can disagree with the file's own content and every such disagreement resolves to a fail-open arm
+(ADR-176 §Considered Options 6). Do not add one, and do not repurpose the free-text `status:` field
+for it: `status:` is a human draft-state field already carrying dozens of distinct values across the
+plan corpus, including ones that read as pipeline states.
+
 ## MINIMAL (Quick Issue)
 
 **Best for:** Simple bugs, small improvements, clear features
@@ -19,6 +50,10 @@ Select how comprehensive you want the issue to be, simpler is mostly better.
 title: [Issue Title]
 type: [feat|fix|refactor]
 date: YYYY-MM-DD
+slug: [derived-from-title]
+branch: [feat-<name>]
+issue: [N]
+closes: [N]
 ---
 
 # [Issue Title]
@@ -58,8 +93,16 @@ logs:
   retention:       # how long until lost
 
 discoverability_test:
-  command:         # one command an operator can run LOCALLY (no ssh) to read the observability state
+  command:         # one command an operator can run LOCALLY (no ssh) to read the observability state.
+                   # preflight Check 10 EXECUTES this inside a sandbox, so the first token must be on
+                   # PROBE_VERB_ALLOWLIST (curl bash grep rg jq python3 node bun printf git) — there is
+                   # no path-shaped exemption. Wrap anything else in a repo-relative script committed
+                   # in the SAME PR; it runs with PATH=/usr/local/bin:/usr/bin:/bin, HOME on tmpfs, no
+                   # credential stores and the repo read-only.
   expected_output: # canonical "everything OK" output
+  credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
+                   # "<scope> — <why no unauthenticated probe verifies the same property>".
+                   # Check 10 then SKIP-DECLAREDs without executing. Placeholder text = FAIL.
 ```
 
 ## Encryption Posture
@@ -89,6 +132,33 @@ exception:            # present ONLY when mechanism is plaintext-exception OR ce
   reevaluate_when:    # the concrete condition that reopens the decision
   expires_on:         # YYYY-MM-DD — <=90 days out; Layer A FAILs an expired exception
 ```
+
+## Guard Contract
+
+Required when the deliverable includes a guard, gate, lint, drift-check or
+anti-vacuity control (plan Phase 2.12). One entry per guard. Resolved
+mechanically by `scripts/lint-guard-contract.py`; halted at deepen-plan 4.11.
+
+```markdown
+### Guard 1 — <name>
+
+**Property.** <the invariant in ONE sentence>
+
+**Assembly.** <every code path, array, file and call site the property
+quantifies over. Members drift; assembly is structural — name the chokepoint
+the members must flow through, and if there is more than one, say so.>
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | <an edit that must drive the guard RED> | RED |
+| 2 | <one targeting the guard's OWN dispatch — a guard reporting "0 checked" and exiting 0 is vacuous> | RED |
+| 3 | <one adding a SECOND member after a compliant first — a check that stops at the first is the defect itself> | RED |
+```
+
+Write the matrix BEFORE the guard. A matrix derived from finished code tests the
+code that exists; one derived from the design tests the property.
 
 ## Acceptance Criteria
 
@@ -149,6 +219,10 @@ end
 title: [Issue Title]
 type: [feat|fix|refactor]
 date: YYYY-MM-DD
+slug: [derived-from-title]
+branch: [feat-<name>]
+issue: [N]
+closes: [N]
 ---
 
 # [Issue Title]
@@ -214,8 +288,16 @@ logs:
   retention:       # how long until lost
 
 discoverability_test:
-  command:         # one command an operator can run LOCALLY (no ssh) to read the observability state
+  command:         # one command an operator can run LOCALLY (no ssh) to read the observability state.
+                   # preflight Check 10 EXECUTES this inside a sandbox, so the first token must be on
+                   # PROBE_VERB_ALLOWLIST (curl bash grep rg jq python3 node bun printf git) — there is
+                   # no path-shaped exemption. Wrap anything else in a repo-relative script committed
+                   # in the SAME PR; it runs with PATH=/usr/local/bin:/usr/bin:/bin, HOME on tmpfs, no
+                   # credential stores and the repo read-only.
   expected_output: # canonical "everything OK" output
+  credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
+                   # "<scope> — <why no unauthenticated probe verifies the same property>".
+                   # Check 10 then SKIP-DECLAREDs without executing. Placeholder text = FAIL.
 ```
 
 ## Encryption Posture
@@ -245,6 +327,33 @@ exception:            # present ONLY when mechanism is plaintext-exception OR ce
   reevaluate_when:    # the concrete condition that reopens the decision
   expires_on:         # YYYY-MM-DD — <=90 days out; Layer A FAILs an expired exception
 ```
+
+## Guard Contract
+
+Required when the deliverable includes a guard, gate, lint, drift-check or
+anti-vacuity control (plan Phase 2.12). One entry per guard. Resolved
+mechanically by `scripts/lint-guard-contract.py`; halted at deepen-plan 4.11.
+
+```markdown
+### Guard 1 — <name>
+
+**Property.** <the invariant in ONE sentence>
+
+**Assembly.** <every code path, array, file and call site the property
+quantifies over. Members drift; assembly is structural — name the chokepoint
+the members must flow through, and if there is more than one, say so.>
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | <an edit that must drive the guard RED> | RED |
+| 2 | <one targeting the guard's OWN dispatch — a guard reporting "0 checked" and exiting 0 is vacuous> | RED |
+| 3 | <one adding a SECOND member after a compliant first — a check that stops at the first is the defect itself> | RED |
+```
+
+Write the matrix BEFORE the guard. A matrix derived from finished code tests the
+code that exists; one derived from the design tests the property.
 
 ## Acceptance Criteria
 
@@ -303,6 +412,10 @@ If the feature touches external services, include deterministic verification com
 title: [Issue Title]
 type: [feat|fix|refactor]
 date: YYYY-MM-DD
+slug: [derived-from-title]
+branch: [feat-<name>]
+issue: [N]
+closes: [N]
 ---
 
 # [Issue Title]
@@ -384,8 +497,16 @@ logs:
   retention:       # how long until lost
 
 discoverability_test:
-  command:         # one command an operator can run LOCALLY (no ssh) to read the observability state
+  command:         # one command an operator can run LOCALLY (no ssh) to read the observability state.
+                   # preflight Check 10 EXECUTES this inside a sandbox, so the first token must be on
+                   # PROBE_VERB_ALLOWLIST (curl bash grep rg jq python3 node bun printf git) — there is
+                   # no path-shaped exemption. Wrap anything else in a repo-relative script committed
+                   # in the SAME PR; it runs with PATH=/usr/local/bin:/usr/bin:/bin, HOME on tmpfs, no
+                   # credential stores and the repo read-only.
   expected_output: # canonical "everything OK" output
+  credentials_required: # OPTIONAL. Only when the property has no unauthenticated substitute.
+                   # "<scope> — <why no unauthenticated probe verifies the same property>".
+                   # Check 10 then SKIP-DECLAREDs without executing. Placeholder text = FAIL.
 ```
 
 ## Encryption Posture
@@ -415,6 +536,33 @@ exception:            # present ONLY when mechanism is plaintext-exception OR ce
   reevaluate_when:    # the concrete condition that reopens the decision
   expires_on:         # YYYY-MM-DD — <=90 days out; Layer A FAILs an expired exception
 ```
+
+## Guard Contract
+
+Required when the deliverable includes a guard, gate, lint, drift-check or
+anti-vacuity control (plan Phase 2.12). One entry per guard. Resolved
+mechanically by `scripts/lint-guard-contract.py`; halted at deepen-plan 4.11.
+
+```markdown
+### Guard 1 — <name>
+
+**Property.** <the invariant in ONE sentence>
+
+**Assembly.** <every code path, array, file and call site the property
+quantifies over. Members drift; assembly is structural — name the chokepoint
+the members must flow through, and if there is more than one, say so.>
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | <an edit that must drive the guard RED> | RED |
+| 2 | <one targeting the guard's OWN dispatch — a guard reporting "0 checked" and exiting 0 is vacuous> | RED |
+| 3 | <one adding a SECOND member after a compliant first — a check that stops at the first is the defect itself> | RED |
+```
+
+Write the matrix BEFORE the guard. A matrix derived from finished code tests the
+code that exists; one derived from the design tests the property.
 
 ## Acceptance Criteria
 
