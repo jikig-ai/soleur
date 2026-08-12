@@ -73,7 +73,28 @@ PR #7441 merged 2026-08-11T17:27:07Z. The Phase 0.5 FAIL-HARD rebase (this plan 
 | enforcement-tag linter | OK — 31 skill tags resolved, incl. the preserved `work Phase 2 exit` anchor |
 | ADR ordinal checker | pass |
 | credential-path-guard | pass |
-| Phase-2 touched-shard gate (dogfood) | `bun` shard rc=1 on #6842 only; `scripts` shard pending |
+| Phase-2 touched-shard gate (dogfood) | **GREEN** — see below |
+| `lint-guard-contract` (live + suite) | rc=0; 28/28 |
+
+### Phase-2 touched-shard gate — this PR as its own first customer
+
+Diff touches `plugins/soleur/**` + `knowledge-base/**`, so the derived shards are `bun` and
+`scripts`. Both run; the full battery is deferred to ship Phase 4 per the new rule.
+
+| Shard | rc | Terminal marker | Verdict |
+|---|---|---|---|
+| `bun` | 1 | `=== 6/7 suites passed ===` | 1 FAIL, 0 KILLED — the failure is #6842 only (pre-existing, confirmed 3 ways) |
+| `scripts` | 0 | `=== 290/292 suites passed ===` | 0 failed, 0 killed, **2 skipped (declined — not relevant to this diff)** per ADR-181 |
+
+The `scripts` epilogue reads verbatim: `292 suites: 290 passed, 0 failed, 0 killed (unresolved —
+coverage not obtained), 2 skipped (declined — not relevant to this diff)`. 290/292 is therefore a
+clean run under ADR-181's counted-decline taxonomy, not a partial one — the exact distinction #7441
+shipped, exercised here by the PR that reorders the gate around it.
+
+Both logs carry `SIBLING_RUN_DETECTED`, `SIBLING_SUITE_DETECTED` and `LOCK_CONTENDED_PROCEEDING`
+('test-all' lock held >900 s). With 0 unexplained failures across both shards there is nothing to
+attribute to contention; the banners are recorded because the discipline says read them, not because
+they changed a verdict.
 
 ### Known-flaky, confirmed three ways — NOT this diff
 
