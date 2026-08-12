@@ -692,6 +692,12 @@ if want_scripts; then
   run_suite "scripts/lint-shell-capture-exit" bash scripts/lint-shell-capture-exit.test.sh
   run_suite "scripts/lint-shell-capture-exit-live" python3 scripts/lint-shell-capture-exit.py \
     --baseline scripts/lint-shell-capture-exit.baseline.txt
+  # #7471: the published distribution manifest in jikig-ai/soleur-marketplace is the
+  # ONLY artifact in the delivery path that no CI check in this repo can reach — that
+  # repo has no CI, no review, and no CODEOWNERS. scheduled-marketplace-drift.yml is its
+  # sole guard; this suite is the guard's guard. Registered explicitly because
+  # scripts/*.test.sh is NOT auto-globbed here — an unregistered gate never runs.
+  run_suite "scripts/marketplace-drift-check" bash scripts/marketplace-drift-check.test.sh
   # ADR-140: Layer A encryption-posture detector (the mechanical resolver behind
   # the "encryption at rest + in transit" design-time gate). TS-1..8,15..17 +
   # the MB-1..MB-12 mutation battery (fixture-isolated, not suite-pass-count).

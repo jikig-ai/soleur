@@ -1110,6 +1110,38 @@ resource "sentry_cron_monitor" "scheduled_heartbeat_reconcile" {
 # own header cites (median 80-134 late, max 339). A truly dark alarm still pages within ~6h.
 # The workflow keeps */30: extra ticks cost nothing on a public repo and improve detection
 # latency whenever GitHub does deliver.
+# (#7471) Liveness for the DAILY published-marketplace-manifest drift check
+# (.github/workflows/scheduled-marketplace-drift.yml, on.schedule "37 6 * * *").
+#
+# WHY IT EXISTS. `jikig-ai/soleur-marketplace` is the plugin's sole distribution channel and has
+# no CI, no required review and no CODEOWNERS — edits to it are unreviewed by construction, and
+# that workflow is the only control on it. So the control needed a control: without this monitor,
+# a workflow that stops being scheduled (GitHub disables schedules on repo inactivity and drops
+# ticks under load) is indistinguishable from a manifest that has stayed clean. There is no red
+# run to notice, because there is no run.
+#
+# The workflow's own issue carries the drift verdict; this answers only "did the checker run".
+# The heartbeat status carries a `delivered` conjunct, so a drift that was DETECTED and whose
+# issue failed to file reports `error` here rather than `ok` — a detected-but-undelivered alarm
+# is a monitor failure, not a successful evaluation.
+#
+# checkin_margin_minutes = 360 follows the measured-delivery rationale established for
+# scheduled-prod-version-drift above, NOT margin == interval: this repo's scheduled ticks are
+# delivered late often enough that a tight margin would page on essentially every tick, and the
+# founder has one page. A genuinely dark checker still surfaces within ~6 h against a 24 h
+# check interval.
+resource "sentry_cron_monitor" "scheduled_marketplace_drift" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-marketplace-drift"
+  schedule                = { crontab = "37 6 * * *" }
+  checkin_margin_minutes  = 360
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
 resource "sentry_cron_monitor" "scheduled_prod_version_drift" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
