@@ -572,7 +572,7 @@ volume API ("~30 GB") as "not full", but that API reports the **block-device** s
 - **Blind-host disk observability (#6244).** The deny-all-ingress, no-SSH registry host now
   self-reports its disk state as ONE structured **`SOLEUR_ZOT_DISK`** event
   (`pcent`, `fs_size_gb`, `block_size_gb`, `resize_ok`, `zot_restarts`, `ping_rc`) to the **existing**
-  isolated Better Stack Logs source **2457081** (reused via the same token + region-bound ingest URL
+  Better Stack Logs source **2457081** ("isolated" was never accurate and is corrected here: the web hosts and the Inngest node ship to the same source, and from #7440/ADR-184 so does the registry host's zot-log shipper — rows are told apart only by a per-host discriminator) (reused via the same token + region-bound ingest URL
   `s2457081.eu-fsn-3` that `vector.toml` ships to — no new source), queryable via
   `scripts/betterstack-query.sh --grep SOLEUR_ZOT_DISK` with NO SSH. The `#6244`-suggested
   journald-`logger` interim was rejected (journald needs SSH to read — `hr-no-ssh-fallback-in-runbooks`).
