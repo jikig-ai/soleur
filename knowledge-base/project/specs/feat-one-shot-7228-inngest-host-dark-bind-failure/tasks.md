@@ -115,7 +115,37 @@ RED before GREEN for every behavioral change (`cq-write-failing-tests-before`).
 ## Phase 6 — Exit
 
 - [x] 6.1 Full `test-all.sh`; name the commit it covered.
-- [ ] 6.2 Verify every AC in the plan, including that the new suites actually ran.
+- [x] 6.2 Verify every AC in the plan, including that the new suites actually ran.
+
+      Each AC verified by running its LITERAL command, never a normalized variant.
+
+      | AC | Verdict | Evidence |
+      |---|---|---|
+      | 1 | PASS | `inngest-consumer-probe.test.sh` — per-arm, incl. the 500 the live host returns |
+      | 2 | PASS | `betteruptime_heartbeat.inngest_consumer` + `doppler_secret.inngest_consumer_url` are NEW named resources; `heartbeat-manifest.ts` carries 2 `inngest_consumer` refs |
+      | 3 | PASS | `paused     = true` at `inngest.tf:409` + the ADR-117 PATCH arm gate; no UI step in any artifact |
+      | 4 | PASS | `inngest.test.sh` AC4 legs drive the non-200 arm against a REAL listener |
+      | 5 | PASS | `inngest-boot-emitter.test.sh` AC5 legs assert over the RENDERED userdata |
+      | 6 | PASS | same suite, ARM1/ARM2/ARM3 — and ARM4 pins silence-on-success |
+      | 7 | PASS | `inngest-cutover-latch.test.sh` 39/39; `RequiresMountsFor=/mnt/data` at `.service:11` |
+      | 8 | PASS | both `flag_set "done"` sites (`:439`, `:497`) are preceded by `verify_or_abort`; guard reads `INNGEST_CUTOVER_DONE_INSTANCE`; flip-guard suite passes `EXPECTED_START_SITES=2` UNMODIFIED |
+      | 9 | PASS | `gh issue view` — #7462 / #7463 / #7464 all OPEN; cited as `Ref`, never `Closes` |
+      | 10 | PASS | all three new suites appear exactly once in the `run: bash …` derivation; runner reports **96** registered (was 95) |
+      | 11 | PASS | `status: adopting`; ADR-100 is the ONLY file changed under `decisions/` — no new ordinal |
+      | 12 | **PASS with a stated boundary** | see below |
+      | 13 | N/A at merge | unsatisfiable by construction — see correction 1 below |
+
+      **AC12 — 95/96 PASS, 0 RED, 1 UNRESOLVED, against commit `ca1e172b7`.**
+      The only change after launch was this file, which no infra suite reads.
+      The unresolved suite is `git-data-runcmd-rehearsal.test.sh`, and it is
+      NOT this branch's: it is a runtime rehearsal that `docker run`s a pinned
+      Ubuntu 24.04 image, it did not finish in 15 min **in isolation** (rc=124),
+      and an independent sibling worktree on a DIFFERENT branch was wedged in
+      the identical suite throughout. This diff touches **zero** git-data files
+      (`git diff origin/main...HEAD --name-only | grep -c git-data` = 0). It is
+      registered in `infra-validation.yml`, so CI runs it on the PR and it gates
+      at merge regardless. Reported as UNRESOLVED rather than as either colour,
+      per the runner's own exit contract.
 
 ---
 
