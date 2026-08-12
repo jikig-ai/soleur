@@ -107,6 +107,167 @@ stop_server() { systemctl_cmd stop "$SERVER_UNIT"; }
 # deliberate re-review latch).
 start_server() { systemctl_cmd start "$SERVER_UNIT"; }
 
+# --- #7228 (3.5/3.6): `done` must be DERIVED FROM A PROBE, never asserted -------------------
+# THE DEFECT. `done` was set immediately after `start_server`, which is `systemctl start` — a
+# call that returns success when systemd ACCEPTED the unit, not when inngest bound :8288. So
+# `done` asserted a live host condition it never measured. Worse, the flag lives in Doppler,
+# which OUTLIVES THE HOST: the 2026-07-30 host recorded `done`, never bound, and the flag stayed
+# `done` for twelve days across a host that served nothing. That is why nothing self-healed, and
+# it is the ADR-100 Decision 6a defect this PR amends the ADR to record.
+#
+# The rule extracted from it: a terminal state asserting a live host condition must be re-derived
+# from a probe and must not outlive what it asserts.
+#
+# TWO conditions, because either alone is satisfiable by a broken host:
+#   /health 200      — the listener is bound. Alone, it is satisfied by a server serving an EMPTY
+#                      registry, which during a cutover is the difference between "healthy" and
+#                      "the scheduler owns nothing".
+#   non-empty registry — the scheduler actually adopted the functions. Alone, it cannot be
+#                      reached at all without a listener, but asserting both makes the failure
+#                      DISTINGUISHABLE in the marker, which is what an operator reads.
+#
+# BOUNDED WINDOW, not a single shot: inngest takes seconds to bind after `systemctl start`, so a
+# single immediate probe would fail on a perfectly healthy cutover. Bounded rather than unbounded
+# because this runs from a 30s timer — an unbounded wait would stack overlapping oneshots.
+CUTOVER_HEALTH_URL="${CUTOVER_HEALTH_URL:-http://127.0.0.1:8288/health}"
+CUTOVER_GQL_URL="${CUTOVER_GQL_URL:-http://127.0.0.1:8288/v0/gql}"
+CUTOVER_VERIFY_WINDOW_S="${CUTOVER_VERIFY_WINDOW_S:-90}"
+CUTOVER_VERIFY_INTERVAL_S="${CUTOVER_VERIFY_INTERVAL_S:-3}"
+
+# DRIFT-PINNED (#7228). Byte-identical to inngest-registry-probe.sh's FUNCTIONS_GQL_QUERY, and
+# inngest-consumer-probe.test.sh's drift block asserts all THREE copies agree. It is inlined here
+# rather than sourced because inngest-registry-probe.sh is delivered to the WEB host only
+# (server.tf + the infra-config push); this FSM runs on the DEDICATED host, where that file does
+# not exist. Sourcing a file that is not there would make the `done` gate fail-closed on an
+# asset-delivery problem — i.e. wedge a cutover for a reason unrelated to whether the host serves.
+# shellcheck disable=SC2016  # GraphQL query, not a shell expansion
+readonly FUNCTIONS_GQL_QUERY='query RegistryProbe { functions { id } }'
+
+# --- curl: fixture seam CUTOVER_CURL_CMD else the real binary. Seamed at the COMMAND, not at
+# the verdict, so the bounded-window logic below stays under test rather than stubbed away.
+curl_cmd() {
+  if [[ -n "${CUTOVER_CURL_CMD:-}" ]]; then
+    "$CUTOVER_CURL_CMD" "$@"
+  else
+    curl "$@"
+  fi
+}
+
+# Echoes a reason token on FAILURE and returns non-zero; silent + 0 when the host truly serves.
+# Reason tokens are stable short strings: scripts/cutover-inngest.sh greps the marker's literal
+# `"reason":"<token>"`, so they are part of that contract and variable detail belongs in the
+# sibling logger line, never in the token.
+verify_serving() {
+  local deadline=$(( SECONDS + CUTOVER_VERIFY_WINDOW_S ))
+  local code=""
+  while :; do
+    code="$(curl_cmd -s -o /dev/null -w '%{http_code}' --max-time 5 "$CUTOVER_HEALTH_URL" 2>/dev/null || true)"
+    [[ "$code" == "200" ]] && break
+    (( SECONDS >= deadline )) && { printf 'verify-health'; return 1; }
+    sleep "$CUTOVER_VERIFY_INTERVAL_S"
+  done
+  # The listener is up. Now: did it adopt the registry? A well-formed but EMPTY function list is
+  # a server that serves and owns nothing — every reachability check passes and the cutover has
+  # silently moved zero work.
+  local body count
+  body="$(curl_cmd -s --max-time 10 -H 'Content-Type: application/json' \
+    --data-binary "$(jq -nc --arg q "$FUNCTIONS_GQL_QUERY" '{query:$q}')" \
+    "$CUTOVER_GQL_URL" 2>/dev/null || true)"
+  # jq indexes null as null, so an `{"errors":…,"data":null}` envelope yields type "null" and
+  # lands on the non-numeric arm rather than being read as a count of zero.
+  count="$(printf '%s' "$body" | jq -r '(.data.functions // null) | if type == "array" then length else "nan" end' 2>/dev/null || true)"
+  case "$count" in
+    ''|*[!0-9]*) printf 'verify-registry-unreadable'; return 1 ;;
+  esac
+  [[ "$count" -gt 0 ]] || { printf 'verify-registry-empty'; return 1; }
+  return 0
+}
+
+# --- #7228 (3.6): the instance stamp, in a SEPARATE Doppler key -----------------------------
+# NEVER appended to the flag value. `done@i-1234` would fall through
+# inngest-server-flip-guard.sh's exact `case` match on `done` — blocking a legitimately-completed
+# host on every reboot — and would break inngest-server-flip-guard.test.sh's EXPECTED_START_SITES
+# derivation, which parses `flag_set` literals. A separate key keeps the flag value byte-identical
+# and still lets the guard refuse a FOREIGN instance's `done`, which is the double-scheduler
+# hazard: the flag outlives the host, so a REPLACED host inherits its predecessor's `done`.
+readonly INSTANCE_KEY="INNGEST_CUTOVER_DONE_INSTANCE"
+
+# Hetzner IMDS only, matching inngest-server-probe.sh's instance_id field: /etc/machine-id is
+# confidential per machine-id(5) and this value reaches Doppler and the marker.
+resolve_instance_id() {
+  if [[ -n "${CUTOVER_INSTANCE_ID+x}" ]]; then
+    printf '%s' "$CUTOVER_INSTANCE_ID"
+    return 0
+  fi
+  local id
+  id="$(curl_cmd -sf --max-time 3 http://169.254.169.254/hetzner/v1/metadata/instance-id 2>/dev/null || true)"
+  case "$id" in
+    ''|*[!0-9]*) printf '' ;;
+    *) printf 'hetzner-%s' "$id" ;;
+  esac
+}
+
+# Fixture seam mirrors flag_set's. Not `|| true`: an unrecorded stamp leaves the guard unable to
+# tell this host's `done` from an inherited one, which is the state the stamp exists to end.
+instance_set() {
+  local value="$1"
+  if [[ -n "${CUTOVER_INSTANCE_SET_CMD:-}" ]]; then
+    "$CUTOVER_INSTANCE_SET_CMD" "$value"
+  else
+    doppler secrets set "$INSTANCE_KEY" "$value" \
+      --project soleur-inngest --config prd --silent
+  fi
+}
+
+# --- The single place `done` may be reached from. Both start sites call THIS, never flag_set
+# directly, so a future arm cannot acquire an unverified `done` by copying the shorter form.
+# It deliberately contains NO `start_server` call and NO `flag_set` before the probe, so
+# inngest-server-flip-guard.test.sh's start-site derivation is unaffected (still 2 sites, both
+# attributing to `flushed`).
+# EVERY emit_state below passes its reason as a STRING LITERAL, never through a variable. The
+# #6178 emitter-parity test derives the anchor vocabulary by extracting the literal 3rd positional
+# of each emit_state call, and scripts/cutover-inngest.sh's `--grep '"reason":"…"'` set is pinned
+# against it. A `"$reason"` here extracts as the token `$reason`, which matches no row — the
+# anchor would then silently skip these rows and return a LATER one, NARROWING the coexistence
+# window, which is the unsafe direction that anchor exists to prevent.
+verify_or_abort() {
+  local dbsize="$1" reason=""
+  if ! reason="$(verify_serving)"; then
+    # LOUD and terminal. `aborted` (not a retry) because the 30s timer would otherwise storm,
+    # and because a host that did not serve within the window needs a human to look — silently
+    # retrying is how a cutover ends up believing it finished.
+    # Sibling detail line, NOT the marker: emit_state's `reason` is the stable token the
+    # cutover orchestrator greps, so variable detail belongs here. No backticks anywhere in
+    # this string — inside double quotes they are command substitution, and the words being
+    # quoted here are shell keywords.
+    "${CUTOVER_LOGGER_CMD:-logger}" -t "$LOG_TAG" \
+      "SOLEUR_INNGEST_CUTOVER_VERIFY_FAILED reason=$reason health_url=$CUTOVER_HEALTH_URL window_s=$CUTOVER_VERIFY_WINDOW_S — inngest-server was started but did NOT serve, so the terminal 'done' was REFUSED and the flag is 'aborted'. The host is not carrying the registry. #7228" 2>/dev/null || true
+    flag_set aborted
+    case "$reason" in
+      verify-health)              emit_state 1 "$dbsize" "verify-health" aborted ;;
+      verify-registry-empty)      emit_state 1 "$dbsize" "verify-registry-empty" aborted ;;
+      verify-registry-unreadable) emit_state 1 "$dbsize" "verify-registry-unreadable" aborted ;;
+      # A reason verify_serving grew without a matching arm here must still EMIT, or the one
+      # path with no marker is the one nobody anticipated. Fail loud into a known token.
+      *)                          emit_state 1 "$dbsize" "verify-unknown" aborted ;;
+    esac
+    exit 1
+  fi
+  local iid
+  iid="$(resolve_instance_id)"
+  if [[ -z "$iid" ]]; then
+    # Fail CLOSED: an unstamped `done` is exactly the inheritable state the guard cannot audit.
+    "${CUTOVER_LOGGER_CMD:-logger}" -t "$LOG_TAG" \
+      "SOLEUR_INNGEST_CUTOVER_VERIFY_FAILED reason=verify-instance-unknown — the host SERVES, but its instance id could not be resolved from IMDS, so a terminal 'done' here would be indistinguishable from one INHERITED by a replacement host. Refusing. #7228" 2>/dev/null || true
+    flag_set aborted
+    emit_state 1 "$dbsize" "verify-instance-unknown" aborted
+    exit 1
+  fi
+  # Stamp BEFORE the flag. If the order were reversed a crash in between would leave a `done`
+  # with no stamp — which the guard must treat as foreign, wedging a host that actually served.
+  instance_set "$iid"
+}
+
 # --- redis-cli: fixture seam CUTOVER_REDIS_CLI_CMD else `redis-cli -a <pw>` (loopback
 # :6379). The password is passed via -a from the env-injected INNGEST_REDIS_PASSWORD and
 # is NEVER echoed to stdout/stderr or a log line.
@@ -270,6 +431,11 @@ run_preflush_flip() {
   # re-FLUSHALL — write the checkpoint BEFORE start_server so the window is covered.
   flag_set flushed
   start_server
+  # #7228: `done` is now PROBE-DERIVED. confirm_and_finish either verifies the host actually
+  # serves and stamps the instance, or drives the flag terminal-aborted and exits non-zero.
+  # It contains no start_server call and no flag_set before its probe, so the flip-guard
+  # lockstep derivation still attributes this start site to `flushed`.
+  verify_or_abort "$dbsize"
   flag_set "done"
   emit_state 0 "$dbsize" "flip-complete" "done"
 }
@@ -327,6 +493,7 @@ run_flip() {
       # later re-arm flush a live prod queue, which is the whole failure this latch prevents.
       record_flush_latch ""
       start_server
+      verify_or_abort ""
       flag_set "done"
       emit_state 0 "" "flushed-resume-no-reflush" "done"
       ;;

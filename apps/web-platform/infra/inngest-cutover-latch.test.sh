@@ -102,7 +102,27 @@ EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$LOGTRACE"
 EOF
-  chmod +x "$SYSCTL" "$REDIS" "$FLAGSET" "$LOGGER"
+  # #7228: a HEALTHY host fixture. This suite's contract is the LATCH, so verification must be
+  # satisfiable and out of the way — but it cannot be BYPASSED, because the latch is recorded at
+  # the flush and the cases below assert its presence at points AFTER the verification runs.
+  CURLSTUB="$WORK/curl.sh"
+  cat > "$CURLSTUB" <<'CURLEOF'
+#!/usr/bin/env bash
+for a in "$@"; do
+  case "$a" in '%{http_code}') printf '%s' "${STUB_HEALTH_CODE:-200}"; exit 0 ;; esac
+done
+if [ -n "${STUB_REGISTRY_BODY:-}" ]; then
+  printf '%s' "$STUB_REGISTRY_BODY"
+else
+  printf '%s' '{"data":{"functions":[{"id":"fn-1"}]}}'
+fi
+CURLEOF
+  INSTSET="$WORK/instset.sh"
+  cat > "$INSTSET" <<EOF
+#!/usr/bin/env bash
+printf 'instance:%s\n' "\$1" >> "$TRACE"
+EOF
+  chmod +x "$SYSCTL" "$REDIS" "$FLAGSET" "$LOGGER" "$CURLSTUB" "$INSTSET"
 }
 teardown_case() { rm -rf "$WORK"; }
 
@@ -121,6 +141,16 @@ run_flip() {
       INNGEST_CUTOVER_STATE="$STATE" \
       INNGEST_CUTOVER_LATCH="$LATCH" \
       INNGEST_CUTOVER_LATCH_MOUNT="" \
+      `# --- #7228: the serving-verification seams. This suite owns the LATCH contract, not the` \
+      `# verification one, so it fixtures a HEALTHY host and the window is collapsed to zero.` \
+      `# Without these the FSM would run its real bounded-window curl against 127.0.0.1:8288 —` \
+      `# a closed port in CI — retrying for 90s PER CASE, which does not fail the suite so much` \
+      `# as hang it. A seam added to the FSM has to reach every harness that drives the FSM.` \
+      CUTOVER_CURL_CMD="$CURLSTUB" \
+      CUTOVER_INSTANCE_SET_CMD="$INSTSET" \
+      CUTOVER_INSTANCE_ID="hetzner-test-1" \
+      CUTOVER_VERIFY_WINDOW_S=0 \
+      CUTOVER_VERIFY_INTERVAL_S=0 \
       ${extra[@]+"${extra[@]}"} \
       bash "$TARGET" >/dev/null 2>&1 || rc=$?
   printf '%s' "$rc"
@@ -212,8 +242,12 @@ order=$(trace_csv)
 assert_contains "(4a) the latch EXISTED by the time the server was started" "$order" "latch@start"
 assert_absent "(4b) the latch did NOT exist when the FLUSHALL ran (it is recorded by this flip, not pre-existing)" \
   "$order" "latch@flushall"
-assert_eq "(4c) full ordering unchanged apart from the latch stamp" \
-  "flag:flipping,stop,flushall,flag:flushed,start,latch@start,flag:done" "$order"
+# #7228 adds `instance:` between `start` and `flag:done`: `done` is now probe-derived, and the
+# instance stamp is written BEFORE the flag so a crash in between cannot leave a `done` with no
+# stamp (which the flip guard must treat as foreign). The latch's own position — recorded at the
+# flush, present by the time the server starts — is unchanged, which is what this suite owns.
+assert_eq "(4c) full ordering unchanged apart from the latch stamp and the #7228 instance stamp" \
+  "flag:flipping,stop,flushall,flag:flushed,start,latch@start,instance:hetzner-test-1,flag:done" "$order"
 teardown_case
 
 # --- 5. `flushed` RESUME BACKFILLS THE LATCH ----------------------------------------------

@@ -123,6 +123,16 @@ _flip_transition_dt() {
     --grep '"reason":"flushall-failed"' \
     --grep '"reason":"refuse-rearm-after-done"' \
     --grep '"reason":"latch-unrecordable"' \
+    `# --- #7228: the probe-derived done refusals. These fire on the path where start_server` \
+    `# SUCCEEDED and the host then failed to serve — i.e. squarely inside the coexistence` \
+    `# region, which is exactly what this anchor must not start after. Omitting them would` \
+    `# return a LATER row and narrow the window, the unsafe direction. A cross-file parity` \
+    `# test pins this set against the emitter, so a new reason without an entry here reds.` \
+    --grep '"reason":"verify-health"' \
+    --grep '"reason":"verify-registry-empty"' \
+    --grep '"reason":"verify-registry-unreadable"' \
+    --grep '"reason":"verify-instance-unknown"' \
+    --grep '"reason":"verify-unknown"' \
     --limit "$limit") || rc=$?
   if [[ "$rc" -ne 0 ]]; then
     FSM_FAIL_REASON="query-failed rc=$rc"

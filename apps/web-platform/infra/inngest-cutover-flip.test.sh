@@ -89,7 +89,48 @@ EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$LOGTRACE"
 EOF
-  chmod +x "$SYSCTL" "$REDIS" "$FLAGSET" "$LOGGER"
+  # --- #7228: the serving-verification seam ---------------------------------------------
+  # `done` is now PROBE-DERIVED: the FSM will not record it until a bounded-window /health
+  # returns 200 AND the v0/gql registry comes back non-empty. Seamed at the CURL COMMAND, not
+  # at the verdict, so the bounded-window/classification logic stays under test rather than
+  # being stubbed away — a verdict seam would let the loop be deleted with this suite green.
+  #
+  # The DEFAULT stub is the HEALTHY host, so every pre-existing forward-flip case keeps
+  # asserting what it always asserted. Cases that need a broken host overwrite it.
+  # It dispatches on argv: `-w '%{http_code}'` present => the health probe (echo 200);
+  # otherwise => the GQL POST (echo a one-function registry). A stub that answered
+  # identically for both could not tell the two conditions apart, which is the whole point.
+  # Parameterised by ENV at call time (STUB_HEALTH_CODE / STUB_REGISTRY_BODY) rather than by
+  # regenerating the file per case: one stub, and each case states its scenario in the same
+  # `env` line as the rest of its fixture.
+  CURLSTUB="$WORK/curl.sh"
+  cat > "$CURLSTUB" <<'CURLEOF'
+#!/usr/bin/env bash
+# The health probe is the invocation carrying -w '%{http_code}'; everything else is the GQL
+# POST. Dispatching on argv (not answering identically) is what lets a fixture drive "listener
+# up but registry empty" — the arm that distinguishes serving from serving-something.
+for a in "$@"; do
+  case "$a" in '%{http_code}') printf '%s' "${STUB_HEALTH_CODE:-200}"; exit 0 ;; esac
+done
+# An explicit branch, NOT a ${VAR:-default} with a JSON default: the first `}` inside the
+# expansion terminates it, silently yielding malformed JSON that jq parses as "nan" — the
+# healthy fixture would then drive the registry-unreadable arm and every forward case would
+# abort for a harness reason that looks exactly like a SUT failure.
+if [ -n "${STUB_REGISTRY_BODY:-}" ]; then
+  printf '%s' "$STUB_REGISTRY_BODY"
+else
+  printf '%s' '{"data":{"functions":[{"id":"fn-1"}]}}'
+fi
+CURLEOF
+  chmod +x "$CURLSTUB"
+  # Instance stamp seam. The FSM refuses to write an unstamped `done`, so a fixture without
+  # this would abort on verify-instance-unknown rather than exercising the path under test.
+  INSTSET="$WORK/instset.sh"
+  cat > "$INSTSET" <<EOF
+#!/usr/bin/env bash
+printf 'instance:%s\n' "\$1" >> "$TRACE"
+EOF
+  chmod +x "$SYSCTL" "$REDIS" "$FLAGSET" "$LOGGER" "$INSTSET"
 }
 
 teardown_case() { rm -rf "$WORK"; }
@@ -107,6 +148,11 @@ run_flip() {
       INNGEST_CUTOVER_STATE="$STATE" \
       INNGEST_CUTOVER_LATCH="$LATCH" \
       INNGEST_CUTOVER_LATCH_MOUNT="" \
+      CUTOVER_CURL_CMD="$CURLSTUB" \
+      CUTOVER_INSTANCE_SET_CMD="$INSTSET" \
+      CUTOVER_INSTANCE_ID="hetzner-test-1" \
+      CUTOVER_VERIFY_WINDOW_S=0 \
+      CUTOVER_VERIFY_INTERVAL_S=0 \
       ${extra[@]+"${extra[@]}"} \
       bash "$TARGET" >/dev/null 2>&1 || rc=$?
   printf '%s' "$rc"
@@ -127,8 +173,13 @@ assert_eq "exit 0 on forward flip" "0" "$rc"
 # start (the skip-flush-window fix), start AFTER the flush, flag:done LAST. A non-FSM
 # implementation (e.g. flush-then-restart, done before start, or the old no-`flushed`
 # ordering) fails this.
-assert_eq "combined order flipping,stop,flushall,flushed,start,done" \
-  "flag:flipping,stop,flushall,flag:flushed,start,flag:done" "$order"
+# #7228: `instance:` now sits between `start` and `flag:done`, and the ORDER is a guarantee, not
+# an artifact. The stamp is written BEFORE the flag so a crash in between cannot leave a `done`
+# with no stamp — which inngest-server-flip-guard.sh must treat as foreign, wedging a host that
+# genuinely served. Reversing the two would still pass a set-membership check; only the sequence
+# catches it.
+assert_eq "combined order flipping,stop,flushall,flushed,start,instance-stamp,done" \
+  "flag:flipping,stop,flushall,flag:flushed,start,instance:hetzner-test-1,flag:done" "$order"
 assert_eq "state exit_code is 0" "0" "$(jq -r '.exit_code' "$STATE")"
 assert_eq "state reason is flip-complete" "flip-complete" "$(jq -r '.reason' "$STATE")"
 assert_logger "logger line emitted (armed branch)"
@@ -177,8 +228,8 @@ order=$(trace_csv)
 assert_eq "exit 0 on flipping resume" "0" "$rc"
 # Intermediate-ordering assertion that FAILS without the split-checkpoint fix (the old
 # flipping branch produced only "start,flag:done" with no flush).
-assert_eq "flipping resume re-runs full flush: stop,flushall,flushed,start,done" \
-  "stop,flushall,flag:flushed,start,flag:done" "$order"
+assert_eq "flipping resume re-runs full flush: stop,flushall,flushed,start,instance-stamp,done" \
+  "stop,flushall,flag:flushed,start,instance:hetzner-test-1,flag:done" "$order"
 assert_contains "re-FLUSHALL DID happen on flipping (PRE-flush) resume" "$order" "flushall"
 assert_contains "flag transitioned to done" "$order" "flag:done"
 assert_logger "logger line emitted (flipping branch)"
@@ -235,7 +286,9 @@ EOF
   env CUTOVER_FLIP_FLAG="$flag" \
       CUTOVER_SYSTEMCTL_CMD="$SYSCTL" CUTOVER_REDIS_CLI_CMD="$REDIS" \
       CUTOVER_FLAG_SET_CMD="$FLAGSET" CUTOVER_LOGGER_CMD="$LOGGER" \
-      INNGEST_CUTOVER_STATE="$STATE" INNGEST_CUTOVER_LATCH="$LATCH" INNGEST_CUTOVER_LATCH_MOUNT="" "$@" \
+      INNGEST_CUTOVER_STATE="$STATE" INNGEST_CUTOVER_LATCH="$LATCH" INNGEST_CUTOVER_LATCH_MOUNT="" \
+      CUTOVER_CURL_CMD="$CURLSTUB" CUTOVER_INSTANCE_SET_CMD="$INSTSET" \
+      CUTOVER_INSTANCE_ID="hetzner-test-1" CUTOVER_VERIFY_WINDOW_S=0 CUTOVER_VERIFY_INTERVAL_S=0 "$@" \
       bash "$TARGET" >/dev/null 2>&1 || rc=$?
   printf '%s' "$rc"
 }
@@ -275,6 +328,8 @@ rc=0
 env CUTOVER_FLIP_FLAG="armed" CUTOVER_SYSTEMCTL_CMD="$SYSCTL" \
     CUTOVER_REDIS_CLI_CMD="$REDIS" CUTOVER_FLAG_SET_CMD="$FLAGSET" \
     CUTOVER_LOGGER_CMD="$LOGGER" INNGEST_CUTOVER_STATE="$STATE" INNGEST_CUTOVER_LATCH="$LATCH" INNGEST_CUTOVER_LATCH_MOUNT="" \
+    CUTOVER_CURL_CMD="$CURLSTUB" CUTOVER_INSTANCE_SET_CMD="$INSTSET" \
+    CUTOVER_INSTANCE_ID="hetzner-test-1" CUTOVER_VERIFY_WINDOW_S=0 CUTOVER_VERIFY_INTERVAL_S=0 \
     CUTOVER_REDIS_DBSIZE=0 \
     bash "$TARGET" >/dev/null 2>&1 || rc=$?
 order=$(trace_csv)
@@ -308,6 +363,108 @@ if grep -qE '\bsystemctl[^\n]*disable\b' "$TARGET"; then
   fail "script contains a systemctl disable (P0-1 forbids disabling the timer)"
 else
   pass "no systemctl disable anywhere in the script"
+fi
+
+# --- Test 7 (#7228 3.5/3.6): `done` is PROBE-DERIVED, never asserted ------------------------
+# THE DEFECT. `done` was written immediately after `start_server`, which is `systemctl start` —
+# a call that succeeds when systemd ACCEPTED the unit, not when inngest bound :8288. So the
+# terminal state asserted a live host condition it never measured, and because the flag lives in
+# Doppler it OUTLIVED THE HOST: the 2026-07-30 machine recorded `done`, never bound, and the flag
+# read `done` for twelve days across a host serving nothing. Nothing self-healed because nothing
+# ever re-derived it.
+#
+# Each arm below is fixtured ALONE. A single "unhealthy" fixture that failed both conditions at
+# once would pass against an implementation that checked only one of them.
+echo "TEST: #7228 done is refused unless the host actually SERVES"
+
+# ARM 1 — listener never comes up. The live state of 10.0.1.40 since 2026-07-30.
+setup_case
+rc=$(run_flip armed CUTOVER_REDIS_DBSIZE=0 STUB_HEALTH_CODE=000)
+order=$(trace_csv)
+assert_eq "health never 200 => non-zero exit" "1" "$rc"
+assert_absent "health never 200 => flag NEVER reached done" "$order" "flag:done"
+assert_contains "health never 200 => flag driven terminal aborted" "$order" "flag:aborted"
+assert_absent "health never 200 => no instance stamp was written" "$order" "instance:"
+assert_eq "health never 200 => state reason is the stable verify-health token" \
+  "verify-health" "$(jq -r '.reason' "$STATE")"
+assert_contains "health never 200 => a loud sibling line names the failure" \
+  "$(cat "$LOGTRACE")" "SOLEUR_INNGEST_CUTOVER_VERIFY_FAILED"
+# The flush still happened — this is a post-flush refusal, not a pre-flush one. Asserting it
+# keeps the refusal from being mistaken for "the FSM aborted before doing anything".
+assert_contains "health never 200 => the FLUSHALL still ran (refusal is POST-flush)" "$order" "flushall"
+teardown_case
+
+# ARM 2 — the listener is UP and the registry is EMPTY. The arm that makes this a check on
+# SERVICE rather than on liveness: every reachability probe passes and the scheduler owns
+# nothing, which during a cutover is the difference between "healthy" and "moved zero work".
+setup_case
+rc=$(run_flip armed CUTOVER_REDIS_DBSIZE=0 STUB_REGISTRY_BODY='{"data":{"functions":[]}}')
+order=$(trace_csv)
+assert_eq "200 + EMPTY registry => non-zero exit" "1" "$rc"
+assert_absent "200 + EMPTY registry => flag NEVER reached done" "$order" "flag:done"
+assert_eq "200 + EMPTY registry => state reason is the stable verify-registry-empty token" \
+  "verify-registry-empty" "$(jq -r '.reason' "$STATE")"
+teardown_case
+
+# ARM 3 — the endpoint answers with something that is not a registry (a 5xx body, a proxy page,
+# a GraphQL error envelope). Never go green over a response we did not understand.
+setup_case
+rc=$(run_flip armed CUTOVER_REDIS_DBSIZE=0 STUB_REGISTRY_BODY='{"errors":[{"message":"boom"}],"data":null}')
+assert_eq "200 + unparseable registry => non-zero exit" "1" "$rc"
+assert_eq "200 + unparseable registry => state reason is verify-registry-unreadable" \
+  "verify-registry-unreadable" "$(jq -r '.reason' "$STATE")"
+teardown_case
+
+# ARM 4 — the host SERVES but cannot name itself. Fail CLOSED: an unstamped `done` is exactly
+# the inheritable state the guard cannot audit, so writing one would re-open the hazard the
+# stamp exists to close.
+setup_case
+rc=$(run_flip armed CUTOVER_REDIS_DBSIZE=0 CUTOVER_INSTANCE_ID=)
+order=$(trace_csv)
+assert_eq "serving but no instance id => non-zero exit (fails CLOSED)" "1" "$rc"
+assert_absent "serving but no instance id => flag NEVER reached done" "$order" "flag:done"
+assert_eq "serving but no instance id => state reason is verify-instance-unknown" \
+  "verify-instance-unknown" "$(jq -r '.reason' "$STATE")"
+teardown_case
+
+# ARM 5 — the `flushed)` RESUME arm must be gated too. Without this leg the verification could be
+# wired into the forward path only, leaving a resume able to reach `done` unverified — and the
+# resume arm is the one a crashed cutover actually takes.
+setup_case
+rc=$(run_flip flushed STUB_HEALTH_CODE=503)
+order=$(trace_csv)
+assert_eq "flushed-resume + non-200 => non-zero exit (the resume arm is gated too)" "1" "$rc"
+assert_absent "flushed-resume + non-200 => flag NEVER reached done" "$order" "flag:done"
+assert_contains "flushed-resume + non-200 => started the server, then refused" "$order" "start"
+teardown_case
+
+# NON-VACUITY. Every arm above asserts a REFUSAL, and a `verify_serving` hard-wired to `return 1`
+# would satisfy all five while making the cutover impossible to complete. This is the positive
+# control: the same fixture, healthy, must still reach `done`.
+setup_case
+rc=$(run_flip flushed)
+order=$(trace_csv)
+assert_eq "non-vacuity: a HEALTHY host still completes the flushed resume (exit 0)" "0" "$rc"
+assert_contains "non-vacuity: a HEALTHY host still reaches done" "$order" "flag:done"
+assert_contains "non-vacuity: a HEALTHY host stamps its instance" "$order" "instance:hetzner-test-1"
+teardown_case
+
+# --- The GQL query is DRIFT-PINNED against inngest-registry-probe.sh ------------------------
+# It is inlined here rather than sourced because inngest-registry-probe.sh is delivered to the
+# WEB host only (server.tf + the infra-config push) and this FSM runs on the DEDICATED host.
+# Sourcing an absent file would make the `done` gate fail-closed on an asset-delivery problem,
+# i.e. wedge a cutover for a reason unrelated to whether the host serves. The cost of inlining is
+# a third copy, so it is pinned byte-identical here AND in inngest-consumer-probe.test.sh.
+echo "TEST: #7228 the inlined GQL query matches inngest-registry-probe.sh byte-for-byte"
+REGISTRY_PROBE_SH="$SCRIPT_DIR/inngest-registry-probe.sh"
+fsm_q=$(grep -oE "^readonly FUNCTIONS_GQL_QUERY=.*" "$TARGET" | head -1 || true)
+probe_q=$(grep -oE "^readonly FUNCTIONS_GQL_QUERY=.*" "$REGISTRY_PROBE_SH" | head -1 || true)
+if [[ -z "$fsm_q" || -z "$probe_q" ]]; then
+  fail "could not extract FUNCTIONS_GQL_QUERY from both files (fsm='$fsm_q' probe='$probe_q') — the drift pin is vacuous"
+elif [[ "$fsm_q" != "$probe_q" ]]; then
+  fail "GQL query DRIFT: FSM has [$fsm_q] but inngest-registry-probe.sh has [$probe_q]"
+else
+  pass "inlined GQL query is byte-identical to inngest-registry-probe.sh's"
 fi
 
 echo ""

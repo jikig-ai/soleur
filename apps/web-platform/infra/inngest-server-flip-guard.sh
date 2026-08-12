@@ -106,5 +106,45 @@ if [[ "$is_prod" == true && "$flag_ok" == false ]]; then
   exit 1
 fi
 
+# --- #7228 (3.7): a `done` INHERITED from a different host must not authorize a prod start ----
+# THE HAZARD THE ALLOWLIST ALONE CANNOT SEE. The cutover flag lives in Doppler, which OUTLIVES
+# THE HOST. `done` means "the flip completed" — but on WHICH machine? The 2026-07-30 host recorded
+# `done`, never bound :8288, and the flag stayed `done` for twelve days. A REPLACED host therefore
+# boots and inherits a `done` it never earned, the allowlist above says ALLOW, and if the
+# co-located scheduler is still serving the registry that is precisely the double-fire race
+# ADR-100's P1-5 guard exists to prevent — reached through the guard rather than around it.
+#
+# The stamp lives in its OWN Doppler key, never appended to the flag value: `done@hetzner-123`
+# would fall through the exact `case` match above and block a legitimately-completed host on
+# every reboot, and would break this file's own lockstep test, which parses `flag_set` literals.
+#
+# SCOPED TO `done`, deliberately. The other allowlisted states are transient and belong to a flip
+# that is actively in progress on THIS host; only `done` is terminal and therefore inheritable.
+# Gating the transient states on a stamp the FSM has not written yet would deadlock the cutover.
+#
+# FAIL CLOSED on an unresolvable identity, but only when it CHANGES the verdict: if this host
+# cannot learn its own instance id it cannot prove the `done` is its own. The FSM refuses to
+# write an unstamped `done` for the same reason, so an absent stamp against a `done` flag means
+# either a pre-#7228 completion or an inherited one — neither is provably this host's.
+INSTANCE_STAMP="$(printf '%s' "${GUARD_DONE_INSTANCE-${INNGEST_CUTOVER_DONE_INSTANCE:-}}" | tr -d '[:space:]')"
+
+if [[ "$is_prod" == true && "$FLIP_FLAG" == "done" ]]; then
+  self_id="$(printf '%s' "${GUARD_INSTANCE_ID-}" | tr -d '[:space:]')"
+  if [[ -z "$self_id" ]]; then
+    # Hetzner IMDS only — matching the FSM's and the probe's resolution. /etc/machine-id is
+    # confidential per machine-id(5) and this value reaches a journald row.
+    imds_id="$(curl -sf --max-time 3 http://169.254.169.254/hetzner/v1/metadata/instance-id 2>/dev/null || true)"
+    case "$imds_id" in
+      '' | *[!0-9]*) self_id="" ;;
+      *) self_id="hetzner-$imds_id" ;;
+    esac
+  fi
+  if [[ -z "$INSTANCE_STAMP" || -z "$self_id" || "$INSTANCE_STAMP" != "$self_id" ]]; then
+    logger -t "$LOG_TAG" "BLOCK: cutover flag='done' but its instance stamp does not identify THIS host (stamp='${INSTANCE_STAMP:-unset}' self='${self_id:-unresolvable}') — refusing a prod start on an INHERITED done (#7228)" 2>/dev/null || true
+    echo "ERROR: refusing inngest-server start — the cutover flag is 'done' but ${INSTANCE_STAMP:+its instance stamp '${INSTANCE_STAMP}' }does not match this host${self_id:+ ('${self_id}')}. The flag outlives the host, so a replaced machine inherits a 'done' it never earned; starting here could run a SECOND prod scheduler. Re-run the cutover on this host (it will re-stamp ${INSTANCE_STAMP:+INNGEST_CUTOVER_DONE_INSTANCE}), or start diagnostically with INNGEST_DIAGNOSTIC_BOOT=1." >&2
+    exit 1
+  fi
+fi
+
 logger -t "$LOG_TAG" "ALLOW: is_prod=$is_prod flag='${FLIP_FLAG:-unset}'" 2>/dev/null || true
 exit 0
