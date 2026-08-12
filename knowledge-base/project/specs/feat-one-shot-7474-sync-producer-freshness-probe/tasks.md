@@ -13,86 +13,109 @@ Derived from the finalized (post-review) plan. Phase order is load-bearing: the 
 before the `sync.md` edit (`cq-write-failing-tests-before`).
 
 **Do not** edit the Phase 0 identity-gate fence in `plugins/soleur/commands/sync.md`. The
-redesign deliberately leaves it untouched — no `exit 0`, no STOP-prose retarget.
+redesign deliberately leaves it untouched — no `exit 0`, no STOP-prose retarget. *(Held: the
+fence is not in the diff.)*
+
+## Deviations from the plan — measured, not preferred
+
+Three, each recorded where it happened rather than folded silently into a checked box.
+
+1. **3.1 — the guard form is `if … then … else … fi`, not `[ -f ] && … || echo …`.** The plan
+   specified the `&&`/`||` one-liner. Measured: when the producer is **present but exits
+   non-zero**, that form falls through to the `||` and reports it MISSING. That is a
+   confidently wrong remedy, which the plan's own `## User-Brand Impact` ranks worst — strictly
+   worse than today's unattributed error. Shipped as `if/then/else`, and **T0l** pins the
+   semantics (not the syntax) via a form-agnostic block extractor, so reintroducing the
+   rejected form goes RED rather than becoming invisible.
+2. **2.3.8 held, but the sibling BASH extractor was widened.** `RUNNER_RE` and
+   `DIRECT_EXEC_RE` are untouched (AC6 verified). Separately, the reachability suite has its
+   own line-start-anchored `extract_from`, which the plan's Deepening Verification never
+   examined — it only checked the vitest extractors. Measured: without a command-position
+   normalization there, the `&&`-form mutation of a guarded site reports "target not in
+   inventory" instead of the defect it introduces, i.e. **T0l could not fail**. Widened, and
+   **T0d** now carries a command-position control so narrowing it back is caught.
+3. **5.2 — the update-path defect was inlined as docs, not filed as an issue.** The
+   `code-simplicity-reviewer` CONCUR gate DISSENTED and was right on two counts, both verified
+   before adopting: the work is 3 files / ~25 lines (inside the inline-it threshold), and a
+   milestone issue in *this* tracker could never be closed because the two-step behaviour
+   belongs to the Claude Code plugin harness. Net issue flow **-1** rather than 0.
 
 ## Phase 1 — Preconditions (verify, never assume)
 
-- [ ] **1.1** Re-derive the producer inventory at HEAD:
-      `grep -nE '(bash|bun) "\$\{CLAUDE_PLUGIN_ROOT\}/' plugins/soleur/commands/sync.md`.
-      Expect 3 distinct paths across 6 sites. A fourth changes the work-list below.
-- [ ] **1.2** Read **both** hand-ratcheted anti-vacuity floors and record the values:
-  - [ ] **1.2.1** `apps/web-platform/test/plugin-root-anchoring.test.ts` → `expect(assertions).toBe(8)`.
-  - [ ] **1.2.2** `tests/commands/test-sync-producer-reachability.sh` → `EXPECTED_CASES=9`
-        (enforced twice — the anti-vacuity block and the final exit expression).
-- [ ] **1.3** Confirm both suites green before editing:
-  - [ ] **1.3.1** `cd apps/web-platform && ./node_modules/.bin/vitest run test/plugin-root-anchoring.test.ts`
-        (**vitest, never `bun test`** — `bunfig.toml` sets `pathIgnorePatterns = ["**"]`).
-  - [ ] **1.3.2** `bash tests/commands/test-sync-producer-reachability.sh`
+- [x] **1.1** Re-derived at HEAD: **3 distinct paths across 6 sites**, matching the plan.
+- [x] **1.2** Both hand-ratcheted anti-vacuity floors read:
+  - [x] **1.2.1** `expect(assertions).toBe(8)` (8 `seen()` calls).
+  - [x] **1.2.2** `EXPECTED_CASES=9`, enforced twice.
+- [x] **1.3** Both suites confirmed green before editing:
+  - [x] **1.3.1** vitest 9/9 (**vitest, never `bun test`**).
+  - [x] **1.3.2** reachability 9/9.
 
 ## Phase 2 — RED (tests first)
 
-- [ ] **2.1** Add the marker-emission case to `tests/commands/test-sync-producer-reachability.sh`.
-  - [ ] **2.1.1** Synthesize an identity-valid root missing one producer. **Precondition:** the
-        root must still contain an (empty) `scripts/` directory, or the identity gate refuses
-        first and the case asserts nothing.
-  - [ ] **2.1.2** Assert the exact marker, including `affects=` and
-        `reason=absent-from-verified-root`.
-  - [ ] **2.1.3** Assert the guarded producer did **not** execute.
-  - [ ] **2.1.4** Leave T0i's `fi`-counting extractor alone — its truncation is load-bearing for
-        `good_rc`.
-- [ ] **2.2** Bump `EXPECTED_CASES` by exactly the number of cases added.
-- [ ] **2.3** Add the **P6** parity assertion to `apps/web-platform/test/plugin-root-anchoring.test.ts`.
-  - [ ] **2.3.1** **Insert the `it()` block ABOVE the P5 block.** `assertions` increments inside
-        each callback in registration order; appending after P5 makes P5 read the pre-increment
-        value and fail while P6 passes.
-  - [ ] **2.3.2** Scope the expected set to `sync.md`'s entry of `parsed` only — `parse()` walks
-        all of `plugins/soleur/commands/`, and `go.md` contributes two anchored `.sh` operands.
-  - [ ] **2.3.3** Restrict to operands invoked by `bash`/`bun` in command position, not to any
-        `.ts`/`.sh` suffix (`source` is in `RUNNERS`).
-  - [ ] **2.3.4** Assert every guarded invocation carries an `affects=` value from the closed set
-        `{c4, coverage, domain-model}`.
-  - [ ] **2.3.5** Non-vacuity: assert both derived sets are non-empty (`>= 3`) before comparing.
-  - [ ] **2.3.6** Remedy-bearing failure strings, matching the file's `expect(violations).toEqual([])`
-        idiom (e.g. `PRODUCER NOT GUARDED: scripts/x.ts — wrap its invocation in the [ -f ] guard`).
-  - [ ] **2.3.7** Scope the parser to fence bodies — `sync.md`'s Phase 0 prose contains ADR-179's
-        worked `"${CLAUDE_PLUGIN_ROOT}/scripts/foo.ts"` examples.
-  - [ ] **2.3.8** Do **not** widen `RUNNER_RE` or `DIRECT_EXEC_RE`.
-- [ ] **2.4** Bump `expect(assertions).toBe(8)` → `toBe(9)`.
-- [ ] **2.5** Confirm both suites RED for the right reason.
+- [x] **2.1** Marker-emission cases added — **three**, because each alone is satisfiable by a
+      wrong implementation: T0j (absent → marker, not invoked), T0k (present → no marker,
+      invoked), T0l (present but failing → not reported missing).
+  - [x] **2.1.1** Synthesized identity-valid roots (manifest + name + `scripts/`), producers
+        as marker-touchers — never the real payload, which would mutate this repo.
+  - [x] **2.1.2** Exact marker asserted, including `affects=` and `reason=absent-from-verified-root`.
+  - [x] **2.1.3** Guarded producer asserted **not** executed; present siblings asserted still run.
+  - [x] **2.1.4** T0i's `fi`-counting extractor left alone.
+- [x] **2.2** `EXPECTED_CASES` 9 → **13** (T0j, T0k, T0l, T0m).
+- [x] **2.3** **P6** parity assertion added.
+  - [x] **2.3.1** Inserted **above** P5.
+  - [x] **2.3.2** Scoped to `sync.md`'s entry of `parsed`.
+  - [x] **2.3.3** Restricted to anchored operands in command position.
+  - [x] **2.3.4** `affects=` closed set `{c4, coverage, domain-model}`, comma-split.
+  - [x] **2.3.5** Non-vacuity (`>= 3`) asserted **before** the set comparison.
+  - [x] **2.3.6** Remedy-bearing failure strings.
+  - [x] **2.3.7** Parser scoped to fence bodies (ADR-179's worked examples are inline spans).
+  - [x] **2.3.8** `RUNNER_RE` / `DIRECT_EXEC_RE` untouched — see Deviation 2.
+- [x] **2.4** `expect(assertions).toBe(8)` → `toBe(9)`.
+- [x] **2.5** Both suites confirmed RED for the right reason before the `sync.md` edit.
 
 ## Phase 3 — GREEN (the guard)
 
-- [ ] **3.1** Wrap each of the 6 producer invocations in `plugins/soleur/commands/sync.md`:
-      `[ -f "${CLAUDE_PLUGIN_ROOT}/<p>" ] && <runner> "${CLAUDE_PLUGIN_ROOT}/<p>" [args] || echo "SOLEUR_SYNC_PRODUCER_MISSING producer=<p> affects=<area> reason=absent-from-verified-root"`
-  - [ ] **3.1.1** `scripts/generate-c4-from-components.ts` → `affects=c4`
-  - [ ] **3.1.2** `scripts/write-kb-coverage.ts` (both plain and `--degraded` forms) → `affects=coverage`
-  - [ ] **3.1.3** `scripts/domain-model-drift.sh` (`drift`, `write-row`, `init`) → `affects=domain-model`
-  - [ ] **3.1.4** Keep every operand **bare-anchored and quoted** — no `:-`, no `:?` (P1b is a
-        whole-file check).
-- [ ] **3.2** Add the verbatim operator message (observation → remedy → fallback → what still
-      worked). No internal term "producers"; no unproven "predates" as the sole instruction.
-- [ ] **3.3** Add the headless variant — `auto-sync-trigger.ts` users have no plugin installed,
-      so "reinstall the plugin" is misdirecting there.
-- [ ] **3.4** Add the one-sentence `--degraded` reuse note with its two limits (unavailable when
-      `write-kb-coverage.ts` is itself missing, and for standalone invocations; a prior
-      `kb-coverage.md` persists and still satisfies the existing `SOLEUR_KB_SYNC_PRODUCERS` grep).
-- [ ] **3.5** Add a pointer comment above the first guarded invocation naming both test suites.
-- [ ] **3.6** Keep `domain-model`'s two contracts distinct (standalone terminal vs under `all`).
-- [ ] **3.7** Both suites green.
+- [x] **3.1** All 6 producer invocations wrapped — **`if/then/else`, see Deviation 1**.
+  - [x] **3.1.1** `scripts/generate-c4-from-components.ts` → `affects=c4`
+  - [x] **3.1.2** `scripts/write-kb-coverage.ts` (plain **and** `--degraded`) → `affects=coverage`
+  - [x] **3.1.3** `scripts/domain-model-drift.sh` (`drift`, `write-row`, `init`) → `affects=domain-model`
+  - [x] **3.1.4** Every operand bare-anchored and quoted; no `:-`, no `:?` (T0b + P1b green).
+- [x] **3.2** Verbatim operator message: attribution → remedy → remedy-rationale → fallback →
+      what still worked. Pinned by **T0m** against a whitespace-normalized `sync.md`.
+- [x] **3.3** Headless variant added (web-platform users have no plugin to reinstall).
+- [x] **3.4** `--degraded` reuse note with both limits stated once.
+- [x] **3.5** Pointer comment above the first guarded invocation naming both suites.
+- [x] **3.6** `domain-model`'s two contracts left distinct.
+- [x] **3.7** Both suites green (13/13 and 10/10).
 
 ## Phase 4 — ADR
 
-- [ ] **4.1** Add one line to ADR-179's `## Consequences` marker enumeration for
-      `SOLEUR_SYNC_PRODUCER_MISSING`.
-- [ ] **4.2** Record that decision 5 (fail-closed in isolation) binds the freshness axis, and is
-      why the guard is per-site.
+- [x] **4.1** `SOLEUR_SYNC_PRODUCER_MISSING` added to ADR-179's `## Consequences` enumeration.
+- [x] **4.2** Recorded that decision 5 (fail-closed in isolation) binds the freshness axis and
+      is why the guard is per-site; also that this does **not** close the durability residual.
 
 ## Phase 5 — Tracking and exit gate
 
-- [ ] **5.1** Append the deferred SHA-divergence mechanism to #7452 with re-evaluation criteria.
-- [ ] **5.2** File the update-path UX defect ("updating the marketplace does not update an
-      installed plugin, and nothing says so") in the **Phase 4: Validate + Scale** milestone.
-- [ ] **5.3** Assign #7474 to the Phase 4 milestone (currently unset).
-- [ ] **5.4** `bash scripts/test-all.sh`.
-- [ ] **5.5** PR body uses `Closes #7474`, links 5.1-5.3, and renders
-      `decision-challenges.md` (3 User-Challenges, 2 Taste items).
+- [x] **5.1** SHA-divergence mechanism deferral appended to #7452 with re-evaluation criteria
+      (comment `#issuecomment-5264170579`).
+- [x] **5.2** ~~File the update-path UX defect~~ → **inlined as docs**, see Deviation 3.
+      `README.md` `## Updating`, `plugins/soleur/README.md` `## Known Issues`,
+      `docs/pages/getting-started.njk` callout, plus
+      `feature-request-plugin-update-surfaces-install-divergence.md` for the upstream half.
+- [x] **5.3** #7474 assigned to **Phase 4: Validate + Scale**.
+- [ ] **5.4** `bash scripts/test-all.sh` — running; queued behind two sibling worktree runs.
+- [ ] **5.5** PR body: `Closes #7474`, links 5.1-5.3, renders `decision-challenges.md`.
+
+## Mutation matrix — every guard driven RED, then restored GREEN
+
+| # | Mutation | Goes RED |
+| --- | --- | --- |
+| M1 | c4 `else`-branch deleted | T0j |
+| M2 | c4 presence test inverted (`[ -f` → `[ ! -f`) | T0j, T0k, T0l |
+| M3 | c4 guard rewritten as the rejected `&&`/`||` form | **T0l only** |
+| M4 | `extract_from` narrowed to line-start | T0d |
+| M5 | `affects=c4` typo'd to `c4x` | P6 closed-set |
+| M6 | new unguarded producer invocation added | P6 parity |
+| M7 | domain-model guard unwrapped to a bare invocation | P6 parity |
+| M8 | "not with your project" attribution clause deleted | T0m |
+| M9 | headless variant deleted | T0m |
