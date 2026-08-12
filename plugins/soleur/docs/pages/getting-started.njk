@@ -60,6 +60,10 @@ claude plugin install soleur</code></pre>
           <strong>Starting fresh?</strong> Run <code>/soleur:go</code> and describe what you need.
         </div>
 
+        <div class="callout">
+          <strong>Updating later?</strong> It takes two commands, and the first one looks like enough on its own. <code>claude plugin marketplace update soleur</code> advances the marketplace checkout; <code>claude plugin update soleur</code> updates the plugin you actually run. Skipping the second leaves you on the old version while the new one looks installed &mdash; and if a fix still isn&rsquo;t taking effect, <code>claude plugin uninstall soleur &amp;&amp; claude plugin install soleur</code> is the step guaranteed to converge them.
+        </div>
+
         <h3 class="section-subtitle" style="margin-top: var(--space-8);">The Workflow</h3>
         <p>Soleur follows a structured 6-step workflow for software development:</p>
 
