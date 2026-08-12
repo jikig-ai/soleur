@@ -445,101 +445,12 @@ fi
 # break the only real call site), and a rehearsal-prefixed name carrying a quote must STILL
 # be refused (the SQL-interpolation property must survive the narrowing, not be traded for
 # it). 30 + 3 = 33. Measured: 33 passed, 0 failed.
-
-# ── ARMS S1-S4: THE SENTRY SECOND CHANNEL (#7116) ──────────────────────────────────────
-#
-# The parent shell runs OUTSIDE `doppler run`, so BETTERSTACK_LOGS_TOKEN is absent and the
-# five parent-shell stages (gitdata_runcmd_early, sshd_config, volume_mount,
-# gitdata_doppler_dl, gc_timer) reach SENTRY ONLY. Polling Better Stack alone, this script
-# returned TRANSIENT for a host that had already reported a fatal — and each TRANSIENT costs
-# one of only two sanctioned rehearsal dispatches.
-#
-# PLACEMENT IS THE POINT. The two paths where Sentry is the ONLY surviving channel — the
-# transport failing, and the anchor returning zero rows — both exit BEFORE the host-rows
-# query runs. An arm wired only to the boot_complete branch would be unreachable in exactly
-# the case that justifies it, so S1 drives the DEAD-anchor path specifically.
-SENTRY_HITS="$TMP/sentry-hits.sh"
-cat > "$SENTRY_HITS" <<'EOS'
-#!/usr/bin/env bash
-printf '%s' '[{"id":"6123456789","title":"gitdata_runcmd_early fatal","culprit":"git-data-emit"}]'
-EOS
-chmod +x "$SENTRY_HITS"
-
-SENTRY_EMPTY="$TMP/sentry-empty.sh"
-printf '#!/usr/bin/env bash\nprintf %%s "[]"\n' > "$SENTRY_EMPTY"; chmod +x "$SENTRY_EMPTY"
-
-SENTRY_BROKEN="$TMP/sentry-broken.sh"
-printf '#!/usr/bin/env bash\necho "curl: (22) 401 Unauthorized" >&2\nexit 2\n' > "$SENTRY_BROKEN"; chmod +x "$SENTRY_BROKEN"
-
-# S1: dead anchor (Better Stack blind) + Sentry HAS a fatal => FAIL, not TRANSIENT.
-make_stub "$STUB" "$ANCHOR_DEAD" "$HOSTROWS_EMPTY"
-OUT_S1="$TMP/evidence-s1.env"
-out="$(SENTRY_ISSUES_SH="$SENTRY_HITS" run_sut --out "$OUT_S1")"; rc=$?
-if [[ "$rc" -eq 1 ]]; then pass "dead Better Stack anchor + Sentry fatal => exit 1 (FAIL), not TRANSIENT"; else
-  fail "dead Better Stack anchor + Sentry fatal => exit 1 (FAIL)" "$rc" "$out"; fi
-if [[ ! -f "$OUT_S1" ]]; then pass "a Sentry-sourced FAIL writes NO evidence file"; else
-  fail "a Sentry-sourced FAIL writes NO evidence file" "$rc" "an evidence file was written"; fi
-
-# S2: Sentry queried cleanly with nothing found => the prior TRANSIENT verdict survives.
-OUT_S2="$TMP/evidence-s2.env"
-out="$(SENTRY_ISSUES_SH="$SENTRY_EMPTY" run_sut --out "$OUT_S2")"; rc=$?
-if [[ "$rc" -eq 2 ]]; then pass "Sentry queried cleanly, no issues => TRANSIENT preserved"; else
-  fail "Sentry queried cleanly, no issues => TRANSIENT preserved" "$rc" "$out"; fi
-if [[ "$out" == *"queried cleanly"* ]]; then pass "a clean Sentry query says so explicitly"; else
-  fail "a clean Sentry query says so explicitly" "$rc" "$out"; fi
-
-# S3: THE FAIL-OPEN ARM. A broken Sentry query must read as "no verdict", never as "nothing
-# found" — a broken instrument reporting a clean bill of health is worse than no instrument.
-OUT_S3="$TMP/evidence-s3.env"
-out="$(SENTRY_ISSUES_SH="$SENTRY_BROKEN" run_sut --out "$OUT_S3")"; rc=$?
-if [[ "$rc" -eq 2 ]]; then pass "a FAILING Sentry query => TRANSIENT (never PASS, never a clean bill)"; else
-  fail "a FAILING Sentry query => TRANSIENT" "$rc" "$out"; fi
-if [[ "$out" == *"COULD NOT CONSULT"* ]]; then pass "a failed Sentry query is reported as not-consulted, not as empty"; else
-  fail "a failed Sentry query is reported as not-consulted" "$rc" "$out"; fi
-
-# S4: the boot_complete-missing path (live anchor, silent host) also consults Sentry.
-make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_EMPTY"
-OUT_S4="$TMP/evidence-s4.env"
-out="$(SENTRY_ISSUES_SH="$SENTRY_HITS" run_sut --out "$OUT_S4")"; rc=$?
-if [[ "$rc" -eq 1 ]]; then pass "live anchor + silent host + Sentry fatal => exit 1 (FAIL)"; else
-  fail "live anchor + silent host + Sentry fatal => exit 1 (FAIL)" "$rc" "$out"; fi
-if [[ "$out" == *"6123456789"* ]]; then pass "the FAIL names the Sentry issue id it found"; else
-  fail "the FAIL names the Sentry issue id it found" "$rc" "$out"; fi
-
-
-# ── ARM S5: the Sentry credential must live where the workflow actually runs ───────────
-#
-# The arm above is only as good as the environment it runs in. scripts/sentry-issue.sh
-# documents SENTRY_ISSUE_RO_TOKEN as living in Doppler soleur/prd, but the rung-2 workflow
-# invokes this script under `doppler run -p soleur -c prd_terraform` — a different config.
-# Had that been assumed rather than checked, the arm would have been a dead read: the token
-# unset, every consult reporting COULD NOT CONSULT, and the TRANSIENT mis-report #7116 exists
-# to fix surviving untouched behind a green suite. (Measured 2026-08-11: it resolves under
-# BOTH configs.) This arm pins the static half — that the workflow's config is the one the
-# script's header names — so a future config change surfaces here instead of at dispatch.
-WF="${ROOT}/.github/workflows/git-data-rung2-rehearsal.yml"
-if [[ -f "$WF" ]]; then
-  _cap_cfg="$(grep -B2 -A2 'git-data-rung2-evidence-capture.sh' "$WF" | grep -oE '\-c [a-z_]+' | head -1 | awk '{print $2}')"
-  if [[ "$_cap_cfg" == "prd_terraform" ]]; then
-    pass "the workflow invokes the capture script under the Doppler config the header names (prd_terraform)"
-  else
-    fail "the workflow invokes the capture script under Doppler config '${_cap_cfg}'" \
-      "the Sentry arm's credential is documented for prd_terraform; a mismatch makes it a dead read"
-  fi
-  if grep -qF 'prd_terraform' "$SUT"; then
-    pass "the capture script records which Doppler config its Sentry credential resolves under"
-  else
-    fail "the capture script does not name the Doppler config for SENTRY_ISSUE_RO_TOKEN" \
-      "the next reader cannot tell whether the arm can run"
-  fi
-fi
-
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 43 ]]; then
+if [[ "$_ran" -lt 33 ]]; then
   fails=$((fails + 1))
   printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 33. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 43)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 33)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"

@@ -42,31 +42,21 @@
 #
 # WHAT THIS DOES NOT CLAIM, stated because a gate believed to cover more than it does is worse
 # than one whose scope is written down:
-#   - IT NOW VERIFIES THE SENTRY CHANNEL. Resolved 2026-08-11 (#7116) — this bullet used to
-#     say "#7116 owns that work; do not do it here", and this IS that work.
-#
-#     The history is worth keeping, because the first version of this note was wrong in a way
-#     that would have planned the fix against a wall that does not exist. It originally read
-#     "Sentry has no search capability wired in this repo"; the 2026-08-03 correction (#7204)
-#     established that was FALSE — SENTRY_ISSUE_RO_TOKEN ([event:read, org:read]) returns
-#     HTTP 200 on /api/0/organizations/jikigai-eu/issues/?query=…, including a host_name:
-#     query, and only scripts/sentry-issue.sh was id-shaped. Re-measured 2026-08-11: the same
-#     token also resolves under Doppler soleur/prd_terraform, which is the config the rung-2
-#     workflow actually invokes this script under (git-data-rung2-rehearsal.yml). That last
-#     fact is load-bearing: the arm would have been a dead read against soleur/prd alone
-#     (hr-verify-repo-capability-claim-before-assert).
-#
-#     The arm consults Sentry on every path that would otherwise return TRANSIENT from Better
-#     Stack alone — including the two that exit BEFORE the host-rows query (transport failure,
-#     and a zero-row liveness anchor), which are precisely the paths where Sentry is the only
-#     surviving channel. Precedence: a FAIL from EITHER sink wins; TRANSIENT survives only
-#     when both are silent-and-live. A query that cannot run reports "could not consult",
-#     never "nothing found".
-#
-#     The fatal channel is still proven at RUNG 1 by git-data-runcmd-rehearsal.test.sh, which
-#     shows the trap firing and emitting `fatal`; rung 2's job remains the real-host facts
-#     rung 1 structurally cannot reach — TLS egress from a real Hetzner host, a real
-#     `doppler run`, and a real `cryptsetup luksOpen`.
+#   - It does not verify the SENTRY channel independently. NOTE, corrected 2026-08-03 (#7204):
+#     the reason is NOT that search is unavailable — an earlier revision of this comment said
+#     "Sentry has no search capability wired in this repo", and that is FALSE. Measured:
+#     SENTRY_ISSUE_RO_TOKEN (Doppler soleur/prd, [event:read, org:read]) returns HTTP 200 on
+#     /api/0/organizations/jikigai-eu/issues/?query=..., including a host_name: query. Only
+#     scripts/sentry-issue.sh is id-shaped; the API is not. This route simply does not
+#     implement the read — a scope decision, not a capability limit. It matters because #7116
+#     (mis-reporting TRANSIENT for early-boot fatals it could read from Sentry directly) must
+#     be planned against what is actually possible, and a false constraint in this header
+#     would have planned it against a wall that does not exist
+#     (hr-verify-repo-capability-claim-before-assert). #7116 owns that work; do not do it here.
+#     The fatal channel is proven at RUNG 1
+#     by git-data-runcmd-rehearsal.test.sh, which shows the trap firing and emitting `fatal`;
+#     rung 2's job is the real-host facts rung 1 structurally cannot reach — TLS egress from a
+#     real Hetzner host, a real `doppler run`, and a real `cryptsetup luksOpen`.
 #   - It does not verify the render VARS. The hash binds the template and the nine payloads,
 #     never the templatefile arguments — which is why it writes RUNG2_VAR_DIVERGENCE and why
 #     the gate refuses anything outside an identity-only allowlist.
@@ -257,131 +247,12 @@ _run_query() {  # $1 = sql ; prints rows, returns the transport's rc
   bash "$QUERY" "$1" 2>&1
 }
 
-# ── THE SENTRY SECOND CHANNEL (#7116) ──────────────────────────────────────────────────
-#
-# WHY THIS EXISTS. The emitter's Better Stack block is gated on BETTERSTACK_LOGS_TOKEN being
-# in the environment, which is true only under `doppler run` — so every stage BEFORE that
-# point (gitdata_runcmd_early, sshd_config, volume_mount, gitdata_doppler_dl, gc_timer)
-# reaches SENTRY ONLY. Polling Better Stack alone, this script returned TRANSIENT for a host
-# that had already reported a fatal, and each TRANSIENT costs a rehearsal dispatch against a
-# cap of two. The header of this file used to end that paragraph with "Check Sentry for this
-# host_name before concluding anything" — an instruction to a human, in a script whose whole
-# job is to reach a verdict without one.
-#
-# MEASURED, 2026-08-11: SENTRY_ISSUE_RO_TOKEN (scopes [event:read, org:read], Doppler
-# soleur/prd AND soleur/prd_terraform — the config the rung-2 workflow actually runs under)
-# returns HTTP 200 on /organizations/<org>/issues/?query=…, including a host_name: tag query.
-# The #7204 correction in this file's header already recorded that the capability existed and
-# that only the tooling shape was missing; this is that work.
-#
-# FAIL-CLOSED BY CONSTRUCTION. Every non-200, transport error, or missing credential yields
-# "could not consult", never "nothing found" — a broken instrument must not read as a clean
-# bill of health. That is the same distinction the source-liveness anchor above draws for
-# Better Stack, applied to the second sink.
-SENTRY_ORG="${SENTRY_ORG:-jikigai-eu}"
-# Test seam, mirroring BETTERSTACK_QUERY_SH above: when set, this script is invoked as
-# `bash "$SENTRY_QUERY" <host_name> <stats_period>` and must print the issues JSON.
-SENTRY_QUERY="${SENTRY_ISSUES_SH:-}"
-
-# Better Stack's window is a ClickHouse interval ("30 DAY"); Sentry wants a statsPeriod
-# ("30d"). Derived rather than hardcoded so the two sinks cannot silently disagree about the
-# window — an unbounded Sentry query would let an EARLIER boot of a reused host_name flip a
-# genuine PASS to FAIL, because Sentry issues aggregate across occurrences.
-_sentry_stats_period() {
-  local n unit
-  n="$(awk '{print $1}' <<<"$WINDOW")"
-  unit="$(awk '{print toupper($2)}' <<<"$WINDOW")"
-  case "$unit" in
-    DAY | DAYS) printf '%sd' "$n" ;;
-    HOUR | HOURS) printf '%sh' "$n" ;;
-    MINUTE | MINUTES) printf '%sm' "$n" ;;
-    *) printf '24h' ;;
-  esac
-}
-
-# Prints the issues JSON on stdout. rc 0 = the query succeeded (body may hold zero issues);
-# rc 2 = could not consult Sentry at all.
-_sentry_issues() {
-  local period body code tmp
-  period="$(_sentry_stats_period)"
-
-  if [[ -n "$SENTRY_QUERY" ]]; then
-    bash "$SENTRY_QUERY" "$HOST_NAME" "$period" 2>&1
-    return $?
-  fi
-
-  [[ -n "${SENTRY_ISSUE_RO_TOKEN:-}" ]] || return 2
-  tmp="$(mktemp)" || return 2
-  code="$(curl -sS -o "$tmp" -w '%{http_code}' --max-time 25 \
-    -H "Authorization: Bearer ${SENTRY_ISSUE_RO_TOKEN}" \
-    --get \
-    --data-urlencode "query=host_name:${HOST_NAME}" \
-    --data-urlencode "statsPeriod=${period}" \
-    "https://sentry.io/api/0/organizations/${SENTRY_ORG}/issues/" 2>/dev/null)" || {
-    rm -f "$tmp"
-    return 2
-  }
-  body="$(cat "$tmp")"
-  rm -f "$tmp"
-  [[ "$code" == "200" ]] || return 2
-  printf '%s' "$body"
-  return 0
-}
-
-# Consults Sentry and reports. Returns 1 = Sentry has issues for this host (a FAIL verdict is
-# available); 0 = queried cleanly, nothing found; 2 = could not consult.
-#
-# ANCHORED ON THE FIELD SHAPE (`"id":"<digits>"`), never a bare token — the body is JSON and
-# a bare `grep -q id` matches half of it (cq-assert-anchor-not-bare-token). Herestrings
-# throughout: under `set -o pipefail` a `producer | grep -q` returns non-zero on a successful
-# EARLY match via SIGPIPE, so the match would read as a miss (#7005).
-_sentry_consult() {
-  local out rc
-  out="$(_sentry_issues)"
-  rc=$?
-  if [[ "$rc" -ne 0 ]]; then
-    echo "  Sentry second channel: COULD NOT CONSULT (no SENTRY_ISSUE_RO_TOKEN in this"
-    echo "  environment, or the query returned non-200/failed). Fail-closed: this run has no"
-    echo "  verdict from EITHER sink, which is not the same as a clean one."
-    return 2
-  fi
-  if grep -qE '"id":"[0-9]+"' <<<"$out"; then
-    _SENTRY_HITS="$out"
-    return 1
-  fi
-  echo "  Sentry second channel: queried cleanly (statsPeriod=$(_sentry_stats_period)); no"
-  echo "  issues tagged host_name:${HOST_NAME}."
-  return 0
-}
-
-# The shared exit for every path that would otherwise return TRANSIENT on Better Stack alone.
-# PRECEDENCE: a FAIL from EITHER sink wins; TRANSIENT survives only when both are
-# silent-and-live. Better Stack cannot see the parent-shell stages at all, so on those paths
-# Sentry is not a second opinion — it is the only one.
-_verdict_via_sentry_then_exit() {
-  local rc
-  _sentry_consult
-  rc=$?
-  if [[ "$rc" -eq 1 ]]; then
-    echo
-    echo "FAIL: ${HOST_NAME} has Sentry issue(s) within ${WINDOW}. Better Stack could not see"
-    echo "this — the parent shell runs outside \`doppler run\`, so those stages reach Sentry"
-    echo "only. This is the failure class the route exists to catch, and it is now a verdict"
-    echo "rather than a TRANSIENT that would burn another dispatch (#7116)."
-    grep -oE '"(id|title|culprit)":"[^"]*"' <<<"${_SENTRY_HITS:-}" | head -12
-    echo
-    echo "NO EVIDENCE FILE WRITTEN. Fix the cause, then re-run the rehearsal."
-    exit 1
-  fi
-  exit 2
-}
-
 # ── ARTIFACT 1: the source-liveness anchor ────────────────────────────────────────
 anchor_out="$(_run_query "$ANCHOR_SQL")"; anchor_rc=$?
 if [[ "$anchor_rc" -ne 0 ]]; then
   echo "TRANSIENT: the Better Stack query transport exited ${anchor_rc} (unreachable or unauthorised). No verdict — this says nothing about the rehearsal host."
   printf '%s\n' "$anchor_out" | tail -5
-  _verdict_via_sentry_then_exit
+  exit 2
 fi
 # DELIBERATELY EXCLUDES THIS HOST'S OWN ROWS (see the SQL). If the anchor could be satisfied
 # by the rehearsal host, then "this host emitted nothing" would make the anchor dead too — and
@@ -402,7 +273,7 @@ if ! grep -qE '"host":"[^"]+"' <<<"$anchor_out"; then
   echo "That is a statement about the INSTRUMENT, not about ${HOST_NAME}: a live source with a"
   echo "silent host and a dead source look identical from this host's rows alone, so this run"
   echo "declines to read silence as a dark boot. Check the Better Stack source and credentials."
-  _verdict_via_sentry_then_exit
+  exit 2
 fi
 
 # ── ARTIFACT 2: everything this host reported ─────────────────────────────────────
@@ -410,7 +281,7 @@ host_out="$(_run_query "$HOST_SQL")"; host_rc=$?
 if [[ "$host_rc" -ne 0 ]]; then
   echo "TRANSIENT: the host-rows query exited ${host_rc} after the anchor succeeded. No verdict."
   printf '%s\n' "$host_out" | tail -5
-  _verdict_via_sentry_then_exit
+  exit 2
 fi
 
 # ── ARTIFACT 3: the FAIL arms ─────────────────────────────────────────────────────
@@ -438,8 +309,8 @@ if ! grep -q 'boot_complete' <<<"$host_out"; then
   echo "still in progress, or it died before reaching a stage that can emit to Better Stack at"
   echo "all — everything before \`doppler run\` reaches SENTRY ONLY, because the emitter's"
   echo "Better Stack block is gated on BETTERSTACK_LOGS_TOKEN being in the environment."
-  echo "Consulting Sentry directly rather than asking an operator to (#7116):"
-  _verdict_via_sentry_then_exit
+  echo "Check Sentry for this host_name before concluding anything."
+  exit 2
 fi
 
 _bc_rows="$(grep 'boot_complete' <<<"$host_out" || true)"
