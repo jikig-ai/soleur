@@ -117,9 +117,9 @@ _final_gate() {
   fi
   _tally
   local ran=$(( PASS + FAIL ))
-  if [[ "$ran" -lt "142" ]]; then
+  if [[ "$ran" -lt "150" ]]; then
     FAIL=$(( FAIL + 1 ))
-    echo "  FAIL: assertion floor — ran $ran assertions, expected >= 142"
+    echo "  FAIL: assertion floor — ran $ran assertions, expected >= 150"
     echo "        (suite truncated, or assert() neutered — this run certified nothing)"
   fi
   echo ""
@@ -266,20 +266,34 @@ chmod +x "$BIN/journalctl"
 
 # curl stub: records the full POSTed body so the envelope, the redaction and the drop rows are all
 # observable. Honours -m (bounded egress) and models a POST failure via $STUB_POST_FAIL.
+# The stub VALIDATES argv and exits 64 on anything missing. Recording a value that nothing
+# asserts reads as coverage in review and provides none: `url=` was recorded and unread, so a
+# combined mutation pointing the POST at an arbitrary third-party host with no auth header kept
+# the suite fully green while every zot row - internal 10.0.1.x topology, OCI repo names,
+# digests - was redirected off-estate (#7444 R16).
+#
+# STUB_POST_FAIL_MATCH fails only the rows whose body contains a token, which is what makes the
+# F-3 defect instantiable at all: with a global fail switch and a one-row fixture, neither the
+# "earlier failure" nor the "later row" half of "the next successful line advances the cursor
+# past the hole" can exist (#7444 R17).
 cat > "$BIN/curl" <<'EOS'
 #!/usr/bin/env bash
-body=""; has_m=0; url=""; prev=""
+body=""; has_m=0; url=""; auth=""; prev=""
 for a in "$@"; do
   case "$a" in
     http*://*) url="$a" ;;
+    "Authorization: Bearer "*) auth="$a" ;;
   esac
   [[ "$prev" == "--data-raw" ]] && body="$a"
   [[ "$prev" == "-m" || "$prev" == "--max-time" ]] && has_m=1
   prev="$a"
 done
-printf 'm=%s url=%s\n' "$has_m" "$url" >> "$STUB_CURLARGS"
+printf 'm=%s url=%s auth=%s\n' "$has_m" "$url" "${auth:+yes}" >> "$STUB_CURLARGS"
 [[ "$has_m" == 1 ]] || { echo "curl stub: unbounded call (no -m/--max-time)" >&2; exit 64; }
+[[ -n "$url"  ]] || { echo "curl stub: no URL argument" >&2; exit 64; }
+[[ -n "$auth" ]] || { echo "curl stub: no Authorization: Bearer header" >&2; exit 64; }
 if [[ "${STUB_POST_FAIL:-0}" == 1 ]]; then exit 22; fi
+if [[ -n "${STUB_POST_FAIL_MATCH:-}" && "$body" == *"$STUB_POST_FAIL_MATCH"* ]]; then exit 22; fi
 printf '%s\n' "$body" >> "$STUB_POSTS"
 exit 0
 EOS
@@ -325,6 +339,10 @@ assert "T4 the POSTed row carries the encoding-safe zot-only token the probe gre
   "grep -qF 'zotregistry.dev/zot/v2/pkg/api' '$STUB_POSTS'"
 assert "T4 the POSTed body is a single-key JSON object (mirrors the proven reporter transport)" \
   "jq -e 'keys == [\"message\"]' < <(head -1 '$STUB_POSTS') >/dev/null"
+assert "T4 every egress call went to the configured ingest URL, not an arbitrary host" \
+  "[[ \$(grep -c \"url=$TEST_INGEST_URL \" '$STUB_CURLARGS') -eq \$(grep -c . '$STUB_CURLARGS') ]]"
+assert "T4 every egress call carried an Authorization: Bearer header" \
+  "! grep -q 'auth=$' '$STUB_CURLARGS'"
 assert "T4 every egress call was bounded (-m/--max-time present)" \
   "[[ \$(grep -c 'm=1' '$STUB_CURLARGS') -eq \$(grep -c . '$STUB_CURLARGS') ]]"
 assert "T4 the journalctl query did NOT pass --follow (a cron one-shot must drain and exit)" \
@@ -650,6 +668,37 @@ assert "T11 the 5-min reporter carries the shipper's last-ok age" \
   "grep -qF 'log_shipper_last_ok_age_s=' '$CI'"
 assert "T11 the reporter's SOLEUR_ZOT_DISK LINE includes both shipper fields (not just defined nearby)" \
   "grep -E '^[[:space:]]*LINE=\"SOLEUR_ZOT_DISK' '$CI' | grep -qF 'log_shipper_post_fail='"
+
+# --- T11b: THE HOLE (#7444 R17) -----------------------------------------------------------
+# T11 named the F-3 defect - "the next successful line advances the cursor past the hole" - and
+# could not instantiate it: one row in the fixture, and a GLOBAL fail switch. Measured, reverting
+# the fix (break -> continue) left the whole suite green while row 1 was permanently lost.
+# This fixture has an earlier failing row AND a later succeeding one, which is the only shape
+# where the two implementations differ.
+J_HOLE="$TMP/j_hole"
+printf '%s\n' '{"level":"info","message":"FAILME first row"}' > "$J_HOLE"
+printf '%s\n' '{"level":"info","message":"second row would ship"}' >> "$J_HOLE"
+run_shipper "$J_HOLE" STUB_POST_FAIL_MATCH=FAILME
+HOLESTATE="$LAST_STATE"
+assert "T11b the tick stopped at the hole and did NOT ship the later row" \
+  "[[ \$(grep -c 'SOLEUR_ZOT_LOG shipper=' '$STUB_POSTS') -eq 0 ]]"
+assert "T11b the tick exited non-zero" "[[ '$CASE_RC' -ne 0 ]]"
+assert "T11b NO cursor was persisted, so the next tick cannot skip the hole" \
+  "[[ ! -s '$HOLESTATE/cursor' ]]"
+# The payoff: with the sink healthy, BOTH rows arrive, in order, exactly once.
+H2P="$TMP/posts.hole2"; : > "$H2P"
+H2_RC=0
+env PATH="$BIN:/usr/bin:/bin" \
+    STUB_JOURNAL="$J_HOLE" STUB_POSTS="$H2P" STUB_CURLARGS="$TMP/curlargs.hole2" \
+    STUB_JCALLS="$TMP/jcalls.hole2" \
+    BETTERSTACK_LOGS_TOKEN="synthetic-ingest-token-not-a-real-secret" \
+    ZOT_LOG_SHIPPER_STATE_DIR="$HOLESTATE" \
+    timeout 25 bash "$SHIPPER" >/dev/null 2>&1 || H2_RC=$?
+assert "T11b the recovery tick exited cleanly (rc=$H2_RC)" "[[ '$H2_RC' -eq 0 ]]"
+assert "T11b BOTH rows were delivered on recovery — nothing was skipped" \
+  "[[ \$(grep -c 'SOLEUR_ZOT_LOG shipper=' '$H2P') -eq 2 ]]"
+assert "T11b the previously-failing row came FIRST (order preserved, no reordering)" \
+  "head -1 '$H2P' | grep -qF 'FAILME first row'"
 
 # --- T12: CRON CONTRACT — the shape that replaced the daemon (ADR-182 §4) ----------------
 # This block used to assert a Restart=always unit's resource governance, on the reasoning that
