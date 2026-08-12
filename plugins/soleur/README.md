@@ -370,6 +370,20 @@ Restart the CLI afterwards; plugin changes apply on restart. If your original in
 `--scope project` or `--scope local`, pass the same `--scope` to every command above — the
 default is `user`, and a scope mismatch silently targets an install that isn't there.
 
+Removing the marketplace does **not** reclaim the plugin cache. Measured: after `uninstall`
+and `marketplace remove` both succeed, the old plugin cache survives — about 9.6 MiB, with no
+CLI verb to reclaim it. Delete it explicitly, checking the path first:
+
+```bash
+ls -d ~/.claude/plugins/cache/soleur          # confirm this is the OLD entry before deleting
+rm -rf ~/.claude/plugins/cache/soleur         # NOT .../cache/soleur-marketplace, which is the new one
+```
+
+The two directory names differ by one suffix, so read the path before running `rm -rf`. Project-
+and local-scope installs cache under the project directory instead; `claude plugin list` shows
+the scope.
+
+
 </details>
 
 ## Known Issues
