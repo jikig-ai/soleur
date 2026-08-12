@@ -625,7 +625,15 @@ t_rsc_order_insensitive() {
 # (credential-path-guard, ADR-139 — the always-run full-scan job that blocks a
 # tracked doc from reintroducing a resolvable credential-file path; its bot-PR
 # synthetic is EARNED in the composite action's Phase-4 ceiling, not
-# fabricated-but-unreachable, because its SCAN_DIRS intersects ALLOWED_PATHS).
+# fabricated-but-unreachable, because its SCAN_DIRS intersects ALLOWED_PATHS);
+# bumped 21->22 by #7493 (marketplace-manifest-guard — the always-run job
+# validating the marketplace manifest SOURCE that Terraform publishes to
+# jikig-ai/soleur-marketplace; born blocking because once the drift workflow
+# dispatches a reconcile apply, a bad manifest that merges is REPUBLISHED daily
+# while a published-vs-source byte-diff reports in-sync. Its bot-PR synthetic is
+# sound-by-UNREACHABILITY like rule-body-lint, not earned like
+# credential-path-guard: SCAN_DIRS is one file and ALLOWED_PATHS does not
+# contain it — re-derived per ADR-139, not inherited).
 # The exact count is kept in lockstep
 # with infra/github/ruleset-ci-required.tf by T-rsc-9 below.
 #
@@ -644,10 +652,10 @@ t_rsc_real_canonical_shape() {
   # Every non-CodeQL check is a GitHub Actions context (15368). A flattened
   # CodeQL integration_id would let github-actions[bot] spoof the GHAS gate.
   non_codeql_apps=$(jq -r '[.[] | select(.context!="CodeQL") | .integration_id] | unique | join(",")' < "$real")
-  if [[ "$n" == "21" && "$codeql_app" == "57789" && "$non_codeql_apps" == "15368" ]]; then
-    _report "T-rsc-7 real canonical RSC: 21 entries, CodeQL=57789, rest=15368" ok
+  if [[ "$n" == "22" && "$codeql_app" == "57789" && "$non_codeql_apps" == "15368" ]]; then
+    _report "T-rsc-7 real canonical RSC: 22 entries, CodeQL=57789, rest=15368" ok
   else
-    _report "T-rsc-7 real canonical RSC: 21 entries, CodeQL=57789, rest=15368" fail "n=$n codeql_app=$codeql_app non_codeql=$non_codeql_apps"
+    _report "T-rsc-7 real canonical RSC: 22 entries, CodeQL=57789, rest=15368" fail "n=$n codeql_app=$codeql_app non_codeql=$non_codeql_apps"
   fi
 }
 

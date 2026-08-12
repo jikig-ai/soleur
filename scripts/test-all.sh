@@ -698,6 +698,12 @@ if want_scripts; then
   # sole guard; this suite is the guard's guard. Registered explicitly because
   # scripts/*.test.sh is NOT auto-globbed here — an unregistered gate never runs.
   run_suite "scripts/marketplace-drift-check" bash scripts/marketplace-drift-check.test.sh
+  # Guard 4 (#7493): validates the manifest SOURCE that Terraform publishes, as opposed to the
+  # sibling above which validates the PUBLISHED artifact. Neither subsumes the other — once the
+  # drift workflow dispatches a reconcile, a bad SOURCE is republished daily while a
+  # published-vs-source byte-diff reports in-sync, so the merge boundary is the only place that
+  # loop can be broken.
+  run_suite "scripts/marketplace-manifest-validate" bash scripts/marketplace-manifest-validate.test.sh
   # ADR-140: Layer A encryption-posture detector (the mechanical resolver behind
   # the "encryption at rest + in transit" design-time gate). TS-1..8,15..17 +
   # the MB-1..MB-12 mutation battery (fixture-isolated, not suite-pass-count).
