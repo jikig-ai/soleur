@@ -34,9 +34,25 @@ fail() { fails=$((fails + 1)); printf '[FAIL] %s\n' "$1"; }
 #   <root>/home             scratch HOME
 #   <root>/project          scratch project dir
 #   <root>/managed.json     managed-policy file (probe is pointed at it explicitly)
+# ONE owning trap for every fixture this suite allocates (ADR-129). Registering
+# inside new_fixture would not work: it is called in a command substitution, so
+# an array append there happens in a SUBSHELL and is discarded — the same
+# subshell-loses-state shape that makes `x=$(fn)` drop everything but stdout.
+# Allocating a single parent up front and nesting each fixture under it gives
+# the trap one thing to own, and the per-case `rm -rf` calls below still work.
+SUITE_TMP="$(mktemp -d "${TMPDIR}/legacy-probe-suite.XXXXXXXX")" || {
+  echo "FATAL: mktemp failed — cannot build the suite sandbox" >&2
+  exit 2
+}
+cleanup_suite() {
+  if [[ -n "${SUITE_TMP:-}" && -d "$SUITE_TMP" ]]; then rm -rf "$SUITE_TMP" || true; fi
+  return 0
+}
+trap cleanup_suite EXIT
+
 new_fixture() {
   local root
-  root="$(mktemp -d "${TMPDIR}/legacy-probe.XXXXXXXX")" || {
+  root="$(mktemp -d "${SUITE_TMP}/legacy-probe.XXXXXXXX")" || {
     echo "FATAL: mktemp failed — cannot build fixture sandbox" >&2
     exit 2
   }

@@ -269,8 +269,51 @@ classify_body() { # <file> -> empty | html | bytes
 # ---------------------------------------------------------------------------
 
 # reference_list <outfile> -> 0 on success, 1 when the listing is unusable
+# Materialize the whole reference tree in ONE request, at the pinned commit.
+#
+# WHY, MEASURED. The first live run fetched every file individually from
+# raw.githubusercontent — ~890 sequential requests for this plugin. It had not
+# finished after 30 minutes against a job budget of 15, and it produced
+# intermittent `reference_unreadable` findings on files that fetch fine in
+# isolation (verified: the named file returns HTTP 200, and ten rapid fetches of
+# it all succeed). So the per-file transport fails in two ways at once — too slow
+# to complete, and flaky enough to raise findings about the channel that are
+# really findings about the canary. A daily alarm that cries wolf is worse than
+# no alarm, because it trains the operator to ignore the one signal this adds.
+#
+# One archive at the same pinned SHA collapses that to a single request, and the
+# extracted tree then flows through the LOCAL reference path — the branch the
+# battery already covers — so this changes the transport without changing the
+# comparison logic or what any conjunct means.
+materialize_reference() { # <sha> -> prints the plugin subdir on success
+  local sha="$1"
+  local tarball="$SCRATCH/reference.tar.gz" dest="$SCRATCH/reference" code
+  code="$(curl -sSL -o "$tarball" -w '%{http_code}' --max-time 180 --retry 2 --retry-delay 3 \
+    "https://codeload.github.com/${REPO}/tar.gz/${sha}" 2>/dev/null || true)"
+  [[ "$code" == "200" ]] || return 1
+  [[ -s "$tarball" ]] || return 1
+  mkdir -p "$dest" || return 1
+  # --strip-components=1 removes the `<repo>-<sha>/` wrapper the archive adds.
+  tar -xzf "$tarball" -C "$dest" --strip-components=1 >/dev/null 2>&1 || return 1
+  [[ -d "$dest/${PLUGIN_SUBDIR}" ]] || return 1
+  printf '%s' "$dest/${PLUGIN_SUBDIR}"
+}
+
 reference_list() {
   local out="$1"
+
+  # Network mode: materialize once, then fall through to the local branch below.
+  # Assigning REFERENCE_DIR here is safe because this function is CALLED
+  # DIRECTLY, not in a command substitution — inside `$( )` the assignment would
+  # happen in a subshell and be silently discarded, leaving every later
+  # reference_fetch back on the per-file transport this exists to replace.
+  if [[ -z "$REFERENCE_DIR" ]]; then
+    local materialized
+    if materialized="$(materialize_reference "$DELIVERED_SHA")" && [[ -n "$materialized" ]]; then
+      REFERENCE_DIR="$materialized"
+    fi
+  fi
+
   if [[ -n "$REFERENCE_DIR" ]]; then
     [[ -d "$REFERENCE_DIR" ]] || return 1
     list_tree "$REFERENCE_DIR" > "$out" || return 1

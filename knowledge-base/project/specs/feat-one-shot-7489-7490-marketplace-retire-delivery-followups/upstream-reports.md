@@ -198,11 +198,15 @@ cannot complete.
 
 ## Posting log
 
-_Filled in when the postings are made. Each row records the URL and the result of re-running the
-scrub grep against the body as fetched back via `gh api`._
+Posted 2026-08-13 with the operator's explicit approval, from the operator's GitHub account. Each
+body was fetched back with `gh api` and re-scrubbed **as upstream stores it** — the posted body is
+the artefact that leaks, and the local copy is not evidence about it.
 
 | Section(s) | Destination | URL | Scrub re-check |
 |---|---|---|---|
-| §1 | 76882 | _pending_ | _pending_ |
-| §2 + §3 | 77927 | _pending_ | _pending_ |
-| §4 | not filed | — | n/a |
+| §1 | 76882 | [comment 5273479508](https://github.com/anthropics/claude-code/issues/76882#issuecomment-5273479508) | PASS — 0 exposures, 2345 bytes as stored |
+| §2 + §3 | 77927 | [comment 5273482066](https://github.com/anthropics/claude-code/issues/77927#issuecomment-5273482066) | PASS — 0 exposures, 3406 bytes as stored |
+| §4 | not filed | — | n/a (withdrawn on measurement, see §4) |
+
+Both routes landed, so the follow-through's posting check is satisfied. §4 stays unfiled by
+decision rather than by omission; if it is ever reproduced, §4 is the evidence to file with.
