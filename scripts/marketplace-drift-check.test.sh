@@ -99,6 +99,26 @@ run_check() {
   VERDICT="$(sed -n 's/^verdict=//p' "$TMP/out.txt" | head -1)"
   FINDING_COUNT="$(sed -n 's/^finding_count=//p' "$TMP/out.txt" | head -1)"
   FINDINGS="$(sed -n '/^findings<</,/^MARKETPLACE_DRIFT_FINDINGS_EOF$/p' "$TMP/out.txt")"
+  DISPATCH_ELIGIBLE="$(sed -n 's/^dispatch_eligible=//p' "$TMP/out.txt" | head -1)"
+}
+
+# Guard 2 (#7493). The reconcile predicate decides whether a drift verdict triggers an apply
+# that REPUBLISHES the manifest. Both directions are load-bearing and they fail differently:
+# dispatching on a verdict Terraform cannot fix rewrites an already-correct file every tick
+# forever, while NOT dispatching on one it can leaves the published artifact wrong.
+#
+# The decision must be OBSERVABLE for any of this to be testable at all — that is the
+# own-dispatch row. A predicate living in an Actions `if:` would be invisible to this harness
+# (which runs only the check step's bash), so an unreadable output is itself a failure.
+expect_dispatch() {
+  local label="$1" want="$2"
+  if [[ -z "$DISPATCH_ELIGIBLE" ]]; then
+    fail "$label" "dispatch_eligible was not emitted at all — the decision is unobservable, so this suite cannot see the predicate (Guard 2 own-dispatch row)"
+  elif [[ "$DISPATCH_ELIGIBLE" == "$want" ]]; then
+    pass "$label"
+  else
+    fail "$label" "dispatch_eligible='$DISPATCH_ELIGIBLE' (want '$want'), findings: $(tr '\n' ' ' <<<"$FINDINGS" | cut -c1-300)"
+  fi
 }
 
 expect_verdict() {
@@ -286,6 +306,51 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------------
+# Guard 2 — the reconcile dispatch predicate (#7493). Behavioural: these drive the real check
+# step and read the decision it emits, rather than grepping the `if:` text.
+# ---------------------------------------------------------------------------------------------
+
+# A clean run must not dispatch. Without this the "always dispatch" implementation passes every
+# other row here.
+run_check "$GOOD_MANIFEST" 0 "$GOOD_PLUGIN" 0
+expect_verdict "G2 control: a clean manifest is OK" "OK"
+expect_dispatch "G2 control: a clean manifest does not dispatch a reconcile" "false"
+
+# A content finding Terraform CAN fix -> dispatch.
+VERSIONED_MANIFEST='{"name":"soleur-marketplace","plugins":[{"name":"soleur","version":"1.0.0","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur"}}]}'
+run_check "$VERSIONED_MANIFEST" 0 "$GOOD_PLUGIN" 0
+expect_verdict "G2.2 a version key is MISMATCH" "MISMATCH"
+expect_dispatch "G2.2 a version key dispatches a reconcile" "true"
+
+# GET-2-ONLY: the marketplace manifest is perfect and plugin.json is unresolvable. Republishing
+# the manifest cannot fix this — it would rewrite a correct file on every tick while the real
+# breakage (a moved plugins/soleur in THIS repo) persists.
+run_check "$GOOD_MANIFEST" 0 "" 22
+expect_verdict "G2.1 an unresolvable plugin manifest is MISMATCH" "MISMATCH"
+expect_dispatch "G2.1 a plugin_manifest_unresolvable-ONLY verdict does NOT dispatch" "false"
+
+# The SECOND GET-2 key. A denylist naming only `plugin_manifest_unresolvable` is short by one and
+# would dispatch a pointless daily apply here; the PREFIX form covers it, which is the whole
+# reason the predicate is written as a prefix.
+run_check "$GOOD_MANIFEST" 0 'not json at all' 0
+expect_verdict "G2.3 an unparseable plugin manifest is MISMATCH" "MISMATCH"
+expect_dispatch "G2.3 a plugin_manifest_UNPARSEABLE-only verdict does NOT dispatch (second-member row)" "false"
+
+# MIXED: a GET-2 finding alongside a real content finding. This is the case an unanchored
+# `contains(findings, 'plugin_manifest_unresolvable')` gets WRONG — it would suppress a dispatch
+# that is needed, leaving the published manifest broken.
+run_check "$VERSIONED_MANIFEST" 0 "" 22
+expect_verdict "G2.4 a mixed verdict is MISMATCH" "MISMATCH"
+expect_dispatch "G2.4 a MIXED verdict (GET-2 + content) DOES dispatch" "true"
+
+# Substring soundness in the other direction: `manifest_unparseable` (the MARKETPLACE manifest,
+# fixable) is a proper substring of `plugin_manifest_unparseable` (the monorepo's, not fixable).
+# An unanchored match would classify this fixable finding as un-dispatchable.
+run_check 'not json at all' 0 "$GOOD_PLUGIN" 0
+expect_verdict "G2.5 an unparseable MARKETPLACE manifest is MISMATCH" "MISMATCH"
+expect_dispatch "G2.5 manifest_unparseable DOES dispatch (it is not plugin_manifest_unparseable)" "true"
+
+# ---------------------------------------------------------------------------------------------
 # Structural assertions on the workflow itself. These cover the parts GitHub evaluates, which
 # no runtime driver can reach.
 # ---------------------------------------------------------------------------------------------
@@ -297,6 +362,11 @@ wf = yaml.safe_load(src)
 job = wf["jobs"]["drift-check"]
 steps = job["steps"]
 problems = []
+
+# The `check` step's run body — the block this harness also extracts and executes elsewhere.
+check_body = next((st.get("run", "") for st in steps if st.get("id") == "check"), "")
+if not check_body:
+    problems.append("no step with id 'check' carrying a run body")
 
 if "<!-- gate-override: new-scheduled-cron-prefer-inngest -->" not in src:
     problems.append("missing the ADR-033 gate-override marker")
@@ -312,18 +382,83 @@ if len(crons) != 1 or not re.fullmatch(r"\d+ \d+ \* \* \*", crons[0]):
 # reads as a verdict. And any step that writes to the issue tracker needs a status-check
 # function or it inherits an implicit success() and skips exactly when the alarm fired.
 STATUS_FN = re.compile(r"\b(always|failure|success|cancelled)\s*\(")
+
+# #7493 — the reconcile dispatch is EXEMPT from the status-function rule below, and the
+# exemption is the opposite of a weakening. That rule exists because an ALARM-DELIVERY step
+# inheriting an implicit success() would skip exactly when an earlier step failed, i.e. when
+# the alarm matters most. The dispatch step's requirement is the mirror image: it must NOT run
+# when the issue step failed, because it republishes the manifest and erases the drifted bytes.
+# Copying `!cancelled()` down to it — which is what a reader following the rule literally would
+# do — would let remediation outrun its own evidence. So the exemption is paired with a
+# POSITIVE pin below that is strictly stronger than the generic rule it replaces.
+DISPATCH_STEP = "Dispatch the reconcile apply"
+
 for s in steps:
     cond = s.get("if", "")
     body = s.get("run", "")
+    name = s.get("name")
     if "steps.check.outputs" in cond and "steps.check.outcome == 'success'" not in cond:
-        problems.append(f"step {s.get('name')!r} gates on a check output without the outcome conjunct")
-    if re.search(r"gh issue (create|comment|close|edit)\b", body) and not STATUS_FN.search(cond):
-        problems.append(f"issue-writing step {s.get('name')!r} has no status-check function in its if:")
+        problems.append(f"step {name!r} gates on a check output without the outcome conjunct")
+    if (
+        name != DISPATCH_STEP
+        and re.search(r"gh issue (create|comment|close|edit)\b", body)
+        and not STATUS_FN.search(cond)
+    ):
+        problems.append(f"issue-writing step {name!r} has no status-check function in its if:")
 
-# Unauthenticated by design; the only credential is the automatic token.
+# The dispatch step's `if:` is pinned POSITIVELY: it must depend on the issue having been
+# delivered, must be gated on reconcile-eligibility, and must NOT carry a status function that
+# would let it run past a failed alarm. Each clause is a distinct way the evidence-before-
+# remediation ordering can be lost, so each is asserted separately rather than as one blob.
+dispatch = next((s for s in steps if s.get("name") == DISPATCH_STEP), None)
+if dispatch is None:
+    problems.append(f"missing the {DISPATCH_STEP!r} step (the reconcile arm is absent)")
+else:
+    dcond = dispatch.get("if", "")
+    if "steps.issue.outputs.delivered == '1'" not in dcond:
+        problems.append("dispatch step does not require the drift issue to have been DELIVERED — remediation could erase the drifted bytes with no record")
+    if "steps.check.outputs.dispatch_eligible == 'true'" not in dcond:
+        problems.append("dispatch step does not gate on dispatch_eligible — it would reconcile verdicts Terraform cannot fix")
+    if STATUS_FN.search(dcond):
+        problems.append("dispatch step carries a status-check function; the IMPLICIT success() is load-bearing here (see the exemption note above)")
+    di = next((i for i, s in enumerate(steps) if s.get("name") == DISPATCH_STEP), -1)
+    ii = next((i for i, s in enumerate(steps) if s.get("id") == "issue"), -1)
+    if not (ii >= 0 and di > ii):
+        problems.append("dispatch step does not run AFTER the issue-filing step — evidence must precede remediation")
+
+# The reconcile predicate must be computed in the `check` step's bash, not in an Actions
+# expression. Actions has no split/regex/iteration, so `contains(findings, ...)` cannot tell a
+# GET-2-only verdict from a MIXED one — and those need opposite decisions. Computing it in the
+# step body is also what puts it inside the block this harness extracts and executes.
+if "dispatch_eligible=" not in check_body:
+    problems.append("dispatch_eligible is not computed in the check step body (an Actions if: cannot express the predicate, and the harness cannot drive it)")
+
+# Unauthenticated against the WATCHED artifact by design. The only repo credential is the
+# automatic token; the three Sentry values are write-only Crons INGEST identifiers (a public
+# DSN's components), forwarded because the composite declares them `required: true` and Actions
+# does not enforce that — they were omitted for the workflow's whole life, so the check-in never
+# delivered. See the amended gate-override clause (iii).
+ALLOWED_SECRETS = {
+    "GITHUB_TOKEN",
+    "SENTRY_INGEST_DOMAIN",
+    "SENTRY_PROJECT_ID",
+    "SENTRY_PUBLIC_KEY",
+}
 for secret in set(re.findall(r"secrets\.([A-Za-z0-9_]+)", src)):
-    if secret != "GITHUB_TOKEN":
+    if secret not in ALLOWED_SECRETS:
         problems.append(f"unexpected secret consumed: {secret}")
+
+# The heartbeat must actually be able to deliver. Asserting the three inputs are FORWARDED is
+# the check that would have caught the silent no-op: the composite's own `required: true` is
+# unenforced, so a missing input degrades to a ::warning:: and exit 0.
+hb = next((s for s in steps if "sentry-heartbeat" in str(s.get("uses", ""))), None)
+if hb is None:
+    problems.append("missing the sentry-heartbeat step (no liveness channel)")
+else:
+    hw = hb.get("with", {}) or {}
+    for req in ("sentry-ingest-domain", "sentry-project-id", "sentry-public-key"):
+        if req not in hw:
+            problems.append(f"sentry-heartbeat does not forward {req!r}; the composite degrades to a warning and exit 0, so the check-in silently never delivers")
 
 if not re.search(r'^\s*MANIFEST_URL="https://raw\.githubusercontent\.com/jikig-ai/soleur-marketplace/main/\.claude-plugin/marketplace\.json"', src, re.M):
     problems.append("does not read the published marketplace manifest over raw.githubusercontent.com")
@@ -405,7 +540,7 @@ echo "=== Results: $PASS passed, $FAIL failed ==="
 # A FLOOR, not equality: an added assertion must not become a spurious failure. Derived from a
 # green run, ratcheted upward deliberately. Treat slack between this and the measured count as
 # attack budget rather than padding.
-MIN_ASSERTIONS=44
+MIN_ASSERTIONS=56
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   echo "ANTI-VACUITY: only $PASS assertions ran, expected at least $MIN_ASSERTIONS." >&2
   echo "Either assertions were deleted or short-circuited, or the floor needs a deliberate bump." >&2
