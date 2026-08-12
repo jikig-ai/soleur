@@ -168,7 +168,30 @@ else
   # worst possible shape for a floor -- it under-counts `want`, so the floor is satisfied by a
   # SHORTER list and the guard passes over exactly the gate it could not see. Any future array
   # whose name contains a digit depends on this class.
-  want=$(grep -cE '_diff_touches "\$\{[A-Z0-9_]+\[@\]\}"' "$RUNNER")
+  #
+  # `grep -c` EXITS 1 ON A ZERO COUNT, and this script runs under `set -e`. A bare
+  # `want=$(grep -c …)` therefore ABORTS here -- and it aborts in precisely the catastrophic case
+  # this floor exists to catch: every `_diff_touches` gate removed from test-all.sh. The script
+  # would die at this line with no message, and every check below it (the whole per-array block,
+  # the tests/commands loop, its cardinality guard) would never run, while the non-zero exit read
+  # as "the linter found something". Caught by scripts/lint-shell-capture-exit.py, which is
+  # registered in this same runner.
+  #
+  # NOT `|| true`: that collapses grep's two distinct non-zero meanings into one. Exit 1 is "zero
+  # matches", a legitimate answer; exit >= 2 is a real error (an unreadable or missing runner), and
+  # silently reading that as a count of 0 would make the floor pass VACUOUSLY on a file it could
+  # not open -- the same fail-open shape the floor is here to close.
+  want=$(grep -cE '_diff_touches "\$\{[A-Z0-9_]+\[@\]\}"' "$RUNNER") || {
+    grep_rc=$?
+    if (( grep_rc > 1 )); then
+      echo "ERROR: could not read ${RUNNER} to count _diff_touches gates (grep exit ${grep_rc}) -- the dispatch floor could not be derived, so it is not evidence about anything." >&2
+      fails=$((fails + 1))
+    fi
+    want=0
+  }
+  # A zero `want` needs no floor error of its own: if the runner truly has no gates while arrays
+  # are registered here, the DE-REFERENCE ANCHOR check below fires once per array, which is the
+  # more specific message.
   if (( ${#RELEVANCE_ARRAYS[@]} < want )); then
     echo "ERROR: RELEVANCE_ARRAYS has ${#RELEVANCE_ARRAYS[@]} entries but test-all.sh has ${want} _diff_touches gates -- an unregistered gate rots unchecked, and an emptied list makes every check below pass over nothing." >&2
     fails=$((fails + 1))
