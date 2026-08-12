@@ -543,8 +543,17 @@ tc_preamble() {
 # defect this whole change removes, so the degraded path must not re-introduce
 # it one branch over. run_suite may fabricate 0 for a suite timing because there
 # the number is advisory; here the number IS the claim.
+#
+# EVERY read of EPOCHREALTIME here and in tc_acquire is `${EPOCHREALTIME:-}`,
+# never bare. test-all.sh sources this lib under `set -euo pipefail`, so on a
+# shell where the variable does not exist a bare read is an unbound-variable
+# ABORT — which would take the whole run down from inside the one function
+# whose contract is that it can never do that (ADR-133 Decision 3; this file's
+# header promises every function is safe under `set -euo pipefail`). It would
+# also make the `*.*` guard below unreachable on precisely the platform it was
+# written for: the abort happens at the read, before this function is entered.
 _tc_ms_since() {
-  local start="$1" end="${2:-$EPOCHREALTIME}"
+  local start="$1" end="${2:-${EPOCHREALTIME:-}}"
   if [[ "$start" == *.* && "$end" == *.* ]]; then
     local start_us=$(( ${start%.*} * 1000000 + 10#${start#*.} ))
     local end_us=$(( ${end%.*} * 1000000 + 10#${end#*.} ))
@@ -606,14 +615,14 @@ tc_acquire() {
   # The two readings bracket the blocking call and nothing else. `_tc_ms_since`
   # is called AFTER the end reading is captured, so its command substitution
   # cannot inflate the number it formats.
-  local t0="$EPOCHREALTIME" t1 waited
+  local t0="${EPOCHREALTIME:-}" t1 waited
   if acquire_lock "$name" "$timeout_s"; then
-    t1="$EPOCHREALTIME"
+    t1="${EPOCHREALTIME:-}"
     waited="$(_tc_ms_since "$t0" "$t1")"
     echo "[contention] LOCK_ACQUIRED: '$name' after $waited (worktrees of this repo serialize on it)." >&2
     return 0
   fi
-  t1="$EPOCHREALTIME"
+  t1="${EPOCHREALTIME:-}"
   waited="$(_tc_ms_since "$t0" "$t1")"
 
   # Advisory: proceed, never abort. Reports the duration that was MEASURED

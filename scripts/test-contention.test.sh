@@ -723,7 +723,50 @@ else
   fail "AC5: LOCK_WAITING fired on a run that never waited: $(cat "$TESTROOT/noflock.txt")"
 fi
 
-# --- Arm 18: every tc_acquire exit path returns 0 (AC6, structurally) -------
+# --- Arm 18: the degraded timing path is REACHABLE and still fails open ----
+# The `unknown` branch exists for bash 3.2, where EPOCHREALTIME is unset. Every
+# other arm runs on bash 5.x, so without this one that branch has no coverage at
+# all — and a branch with no coverage is where a justification comment can
+# describe behaviour the code cannot actually produce.
+#
+# `unset EPOCHREALTIME` de-specialises the variable for the rest of that shell,
+# which reproduces the bash-3.2 shape exactly rather than approximating it. The
+# arm runs under `set -euo pipefail` deliberately: that is how scripts/test-all.sh
+# sources this lib, and an UNGUARDED `$EPOCHREALTIME` read is an unbound-variable
+# ABORT there — the function never returns at all. Arm 19's structural check
+# cannot see that, because structurally every `return` is still `return 0`; a
+# function that dies before returning satisfies the grep and violates the
+# contract. This is the behavioural half of AC6, and the lib's own header
+# ("Every function is safe to call under `set -euo pipefail`") is the claim it
+# holds to.
+lock_env bash -c "
+set -euo pipefail
+unset EPOCHREALTIME
+source '$LIB'
+tc_acquire 6789-noclock 2
+echo RC=\$?
+" > "$TESTROOT/noclock.txt" 2>&1 || true
+if [[ "$(grep -cE 'RC=0' "$TESTROOT/noclock.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'unbound variable' "$TESTROOT/noclock.txt" || true)" -eq 0 ]]; then
+  pass "AC6: tc_acquire fails open under set -u with no EPOCHREALTIME (bash 3.2 shape)"
+else
+  fail "AC6: tc_acquire did not survive a missing EPOCHREALTIME: $(cat "$TESTROOT/noclock.txt")"
+fi
+# And it must degrade to the HONEST token, not a fabricated zero: `after 0ms` is
+# indistinguishable from a lock that was free on the first try, which is the very
+# defect this change removes.
+if [[ "$(grep -cE 'LOCK_ACQUIRED.*after unknown' "$TESTROOT/noclock.txt" || true)" -ge 1 ]]; then
+  pass "AC6: an unmeasurable wait prints 'unknown', never a fabricated 0ms"
+else
+  fail "AC6: degraded path did not print 'unknown': $(cat "$TESTROOT/noclock.txt")"
+fi
+if [[ "$(grep -cE 'after 0ms' "$TESTROOT/noclock.txt" || true)" -eq 0 ]]; then
+  pass "AC6: the degraded path fabricates no duration"
+else
+  fail "AC6: degraded path fabricated a 0ms measurement: $(cat "$TESTROOT/noclock.txt")"
+fi
+
+# --- Arm 19: every tc_acquire exit path returns 0 (AC6, structurally) -------
 # The behavioural arms above cover the paths a fixture can reach. This one
 # covers the ones it cannot: ADR-133 Decision 3 makes the lock fail-OPEN, so a
 # single `return 1` added later would let an instrument wedge the run it exists
@@ -1220,8 +1263,11 @@ fi
 # slow-acquire arm, the flock-missing arm, the LOCK_WAITING ordering/absence arms and the
 # structural fail-open arm). Derived by running the as-written file, not estimated: a floor
 # guessed from a plan's prose is the same unmeasured claim this change exists to remove.
-if [[ "$((pass_n + fails))" -lt 92 ]]; then
-  fail "cardinality guard: only $((pass_n + fails)) assertions ran (expected >= 92)"
+# Raised 92 -> 95 with the degraded-timing arm (fail-open under `set -u` with no
+# EPOCHREALTIME, plus the two `unknown`-not-0ms assertions). That branch had a
+# justification comment and zero coverage, and the code could not in fact reach it.
+if [[ "$((pass_n + fails))" -lt 95 ]]; then
+  fail "cardinality guard: only $((pass_n + fails)) assertions ran (expected >= 95)"
 fi
 
 echo "=== test-contention: $pass_n passed, $fails failed ==="
