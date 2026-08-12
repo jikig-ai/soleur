@@ -528,44 +528,57 @@ tc_preamble() {
 # Elapsed between two EPOCHREALTIME readings, formatted for a banner:
 # "<N>ms", or the literal "unknown".
 #
-# DELIBERATE DUPLICATION. This is run_suite's arithmetic, lifted from
-# scripts/test-all.sh (find it there by the `local elapsed_ms=0` block). The
-# script SOURCES this lib, so the lib must not depend on the script; the
-# alternative to duplicating ~5 lines is a dependency cycle. Both copies carry
-# the same two non-obvious guards: the `*.*` glob rejects bash 3.x, where
-# EPOCHREALTIME is unset and the captured value is empty or non-dotted, and
-# `10#` forces base-10 so a leading zero in the microseconds substring is not
-# parsed as octal.
+# DELIBERATE DUPLICATION of run_suite's arithmetic in scripts/test-all.sh (find
+# it there by the `local elapsed_ms=0` block). Not shared, and the reason is NOT
+# a dependency cycle — the de-duplicating direction is script->lib, which is the
+# direction that already exists. It is that test-all.sh degrades this lib to a
+# silent noop stub when it cannot be sourced (`tc_acquire() { :; }`), so routing
+# run_suite's REQUIRED timing through an OPTIONALLY-present function would trade
+# 5 duplicated lines for a new silent-zero failure mode in the most load-bearing
+# script in the repo.
 #
-# WHY IT PRINTS "unknown" AND NOT 0. A fabricated zero is indistinguishable
-# from a lock that was free on the first try — it would state, in the banner,
-# that a wait took no time when nothing was in fact measured. That is the exact
-# defect this whole change removes, so the degraded path must not re-introduce
-# it one branch over. run_suite may fabricate 0 for a suite timing because there
-# the number is advisory; here the number IS the claim.
+# WHY "unknown" AND NOT 0: a fabricated zero is indistinguishable from a lock
+# that was free on the first try — the exact false claim this change removes.
+# Enforced behaviourally by the degraded-timing arm in scripts/test-contention.test.sh
+# (search it for `unset EPOCHREALTIME`), which also pins the `${EPOCHREALTIME:-}`
+# discipline below.
 #
 # EVERY read of EPOCHREALTIME here and in tc_acquire is `${EPOCHREALTIME:-}`,
-# never bare. test-all.sh sources this lib under `set -euo pipefail`, so on a
-# shell where the variable does not exist a bare read is an unbound-variable
-# ABORT — which would take the whole run down from inside the one function
-# whose contract is that it can never do that (ADR-133 Decision 3; this file's
-# header promises every function is safe under `set -euo pipefail`). It would
-# also make the `*.*` guard below unreachable on precisely the platform it was
-# written for: the abort happens at the read, before this function is entered.
+# never bare: test-all.sh sources this lib under `set -euo pipefail`, where a
+# bare read is an unbound-variable ABORT inside the one function whose contract
+# is that it cannot abort (ADR-133 Decision 3).
 _tc_ms_since() {
-  local start="$1" end="${2:-${EPOCHREALTIME:-}}"
-  if [[ "$start" == *.* && "$end" == *.* ]]; then
-    local start_us=$(( ${start%.*} * 1000000 + 10#${start#*.} ))
-    local end_us=$(( ${end%.*} * 1000000 + 10#${end#*.} ))
-    printf '%sms' $(( (end_us - start_us) / 1000 ))
-  else
-    printf 'unknown'
-  fi
+  local start="${1:-}" end="${2:-}"
+  # The separator is LOCALE-dependent: bash renders EPOCHREALTIME using
+  # LC_NUMERIC's radix, so a comma-locale operator (fr_FR, de_DE, ru_RU, pt_BR …)
+  # gets `1786573806,515545`. Accept both, and require PURE DIGITS on each side.
+  # The previous `*.*` glob was a SHAPE test, not a numeric one, so `100.` and
+  # `x.1` passed it and reached the arithmetic — where they abort the caller
+  # under `set -e`. Measured: comma locale blanked every banner to `unknown`
+  # AND reddened three gate arms on a healthy bash 5 with a working clock.
+  local re='^([0-9]+)[.,]([0-9]+)$'
+  [[ "$start" =~ $re ]] || { printf 'unknown'; return 0; }
+  local s_i="${BASH_REMATCH[1]}" s_f="${BASH_REMATCH[2]}"
+  [[ "$end" =~ $re ]] || { printf 'unknown'; return 0; }
+  local e_i="${BASH_REMATCH[1]}" e_f="${BASH_REMATCH[2]}"
+  # `10#` forces base-10 so a leading zero in the microseconds field is not read
+  # as octal.
+  printf '%sms' $(( (e_i * 1000000 + 10#$e_f - s_i * 1000000 - 10#$s_f) / 1000 ))
 }
 
 tc_acquire() {
-  local name="$1"
+  # `${1:-}`, never bare `$1`. Under the `set -euo pipefail` that test-all.sh
+  # sources this lib into, a zero-arg call is an unbound-variable ABORT one line
+  # into the function whose whole contract is that it cannot abort — the same
+  # class as the EPOCHREALTIME reads, one construct further out, and `|| true`
+  # at the call site does not rescue it (a `set -u` expansion error is not
+  # suppressible that way).
+  local name="${1:-}"
   local timeout_s="${2:-$TC_LOCK_TIMEOUT}"
+  if [[ -z "$name" ]]; then
+    echo "[contention] LOCK_UNAVAILABLE: tc_acquire called with no lock name; proceeding without serialization." >&2
+    return 0
+  fi
 
   # Kill switch — honoured before anything else so an operator can always
   # disable the layer in an emergency.
@@ -581,20 +594,31 @@ tc_acquire() {
     return 0
   fi
 
-  # The serialization primitive itself. acquire_lock returns the SAME 99 for
-  # "waited the whole budget" and "flock(1) is not installed", so without this
-  # precheck a run that never waited at all takes the contended path — and then
-  # reports a duration for a wait that never happened. `command -v` answers the
-  # question exactly where an elapsed-time threshold only approximates it, and
-  # it needs no new outcome name: a missing flock is the same class as the two
-  # cases below, the serialization layer is unavailable.
-  if ! command -v flock >/dev/null 2>&1; then
-    echo "[contention] LOCK_UNAVAILABLE: flock(1) not found on PATH; proceeding without serialization." >&2
+  if [[ ! -f "$TC_SESSION_STATE" ]]; then
+    echo "[contention] LOCK_UNAVAILABLE: session-state.sh not found at $TC_SESSION_STATE; proceeding without serialization." >&2
     return 0
   fi
 
-  if [[ ! -f "$TC_SESSION_STATE" ]]; then
-    echo "[contention] LOCK_UNAVAILABLE: session-state.sh not found at $TC_SESSION_STATE; proceeding without serialization." >&2
+  # The serialization primitive itself. acquire_lock returns the SAME 99 for
+  # "waited the whole budget" and "flock(1) is not installed", so without this
+  # precheck a run that never waited at all takes the contended path and then
+  # reports a duration for a wait that never happened.
+  #
+  # It removes the DOMINANT such source, not all of them: `exec {fd}>>` failing
+  # on an unwritable lock dir also returns 99 and still reports as contention
+  # (measured: `gave up after 5ms of 900s`). The measured elapsed is what keeps
+  # that case self-diagnosing rather than a flat lie — classifying it by an
+  # elapsed threshold was considered and rejected as approximate where
+  # `command -v` is exact.
+  #
+  # Placed AFTER the session-state check so a flock-less host still reports a
+  # MISSING LIB when that is also true — that line is the tell for the
+  # #7426 / ADR-178 plugin-path regression class, and checking flock first
+  # masked it. Carries session-state's own remediation, which this early return
+  # means we never reach.
+  if ! command -v flock >/dev/null 2>&1; then
+    echo "[contention] LOCK_UNAVAILABLE: flock(1) not found on PATH; proceeding without serialization." >&2
+    echo "[contention]   macOS: brew install util-linux && add \$(brew --prefix util-linux)/sbin to PATH" >&2
     return 0
   fi
   # shellcheck source=/dev/null

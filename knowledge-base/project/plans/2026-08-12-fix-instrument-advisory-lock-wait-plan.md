@@ -158,8 +158,25 @@ of an ambient signal (`cq-ac-must-not-depend-on-concurrent-sessions`).
 - **AC6** Every `tc_acquire` exit path still returns `0` (TR2) — asserted, not assumed.
 - **AC7** The banner **tokens** `LOCK_ACQUIRED` and `LOCK_CONTENDED_PROCEEDING` are unchanged, so
   `work/SKILL.md`'s grep and arms 10–13 still match.
-- **AC8** `scripts/test-all.sh` and `plugins/soleur/scripts/lib/session-state.sh` are both untouched:
-  `git diff --name-only origin/main...HEAD` lists neither.
+- **AC8** *(amended at review — see below)* `plugins/soleur/scripts/lib/session-state.sh` is untouched:
+  `git diff --name-only origin/main...HEAD` does not list it. `scripts/test-all.sh` is touched by
+  **exactly one** change — `$EPOCHREALTIME` → `${EPOCHREALTIME:-}` at `run_suite`'s two timing reads,
+  plus the comment correcting what that file claims about its own degraded behaviour. Mechanically:
+  `git diff -U0 origin/main...HEAD -- scripts/test-all.sh | grep '^[+-]' | grep -v '^[+-][+-]'` shows
+  only `EPOCHREALTIME` lines and comment lines, and no change to `TC_LOCK_TIMEOUT`, to the
+  `tc_acquire` call site, or to any `run_suite` control flow.
+
+  **Why AC8 was amended rather than satisfied.** The original form asserted `test-all.sh` untouched,
+  to fence out the *mechanism* change (raising the timeout / short-circuiting on holder age). Review
+  measured a pre-existing defect in that file of the same class this PR fixes in the lib: both timing
+  reads are bare `$EPOCHREALTIME` under `set -euo pipefail`, so on a shell without the variable
+  `run_suite` **aborts on its first suite** — no summary, no rc file, no `[FAIL]`, which is precisely
+  the signature `work/SKILL.md` attributes to a harness reap, sending the operator into a relaunch
+  loop. The file's own comment claimed the opposite ("computes 0 silently"). AC8's *intent* —
+  no mechanism drift — is preserved and now asserted directly; only its literal file-list form
+  changed. Fixing a two-line unbound-variable abort while shipping the identical fix one file over,
+  and declining to fix it because of a boundary drawn for a different reason, would have been
+  scope discipline in form and incoherence in substance.
 - **AC9** Arms 10–15 pass; arm 15's negative grep still returns zero.
 - **AC10** ADR-133 carries a third addendum; no new ADR file is created.
 - **AC11** #7454 carries the Phase 4 comment.
@@ -272,9 +289,15 @@ lives entirely inside that already-described space.
 - `scripts/test-contention.test.sh` — extend arms 10–11; add slow-acquire and flock-missing arms.
 - `knowledge-base/engineering/architecture/decisions/ADR-133-…-advisory-lock.md` — third addendum.
 
-**Explicitly NOT edited** (asserted by AC8): `scripts/test-all.sh`,
-`plugins/soleur/scripts/lib/session-state.sh`, `scripts/test-all-killed-classification.test.sh`,
-`scripts/test-all-infra-coverage-notice.test.sh`.
+- `scripts/test-all.sh` — **added at review**, and bounded by the amended AC8: the two
+  `${EPOCHREALTIME:-}` guards in `run_suite` plus the comment that misdescribed the degradation.
+  No mechanism change.
+- `plugins/soleur/skills/work/SKILL.md` — **added at review**: the queue-vs-hang prose documented the
+  parked-run signature as "the contention preamble and then nothing (~1206 bytes)", which
+  `LOCK_WAITING` invalidates. Re-anchored on the new marker.
+
+**Explicitly NOT edited** (asserted by AC8): `plugins/soleur/scripts/lib/session-state.sh`,
+`scripts/test-all-killed-classification.test.sh`, `scripts/test-all-infra-coverage-notice.test.sh`.
 
 ## Files to Create
 

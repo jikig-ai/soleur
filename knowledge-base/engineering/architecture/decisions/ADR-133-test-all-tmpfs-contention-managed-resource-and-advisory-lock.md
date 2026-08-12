@@ -259,10 +259,22 @@ line to decide whether a RED is trustworthy, which made the false statement load
   `LOCK_CONTENDED_PROCEEDING: '<name>' — gave up after <N>ms of <timeout_s>s`. Where timing is
   unavailable the banner prints `unknown`, never a fabricated `0ms`: a zero is indistinguishable
   from a lock that was free, which would re-introduce the same defect one branch over.
-- The `rc=99` ambiguity is removed **at its source** by a `command -v flock` precheck emitting the
-  existing `LOCK_UNAVAILABLE`. This is exact where an elapsed-time threshold would be approximate,
-  and it needs no new outcome name — a missing `flock` is the same class as the two
-  `LOCK_UNAVAILABLE` cases already there: the serialization layer is absent.
+- The **dominant** `rc=99` source is removed by a `command -v flock` precheck emitting the existing
+  `LOCK_UNAVAILABLE`. This is exact where an elapsed-time threshold would be approximate, and it
+  needs no new outcome name — a missing `flock` is the same class as the two `LOCK_UNAVAILABLE`
+  cases already there: the serialization layer is absent.
+
+  **It removes one of three, and the residue is recorded rather than implied.** `_acquire_lock_impl`
+  returns `99` from three places: the `flock` precondition (now precluded), the `exec {fd}>>` open of
+  the lock file, and the genuine `flock -w` timeout. An unwritable lock directory therefore still
+  reports `LOCK_CONTENDED_PROCEEDING` — measured on this branch as
+  `gave up after 5ms of 900s`. That is a **non-timeout failure still classified as a timeout**, so
+  the second half of the Guard Contract's property is enforced for one cause rather than all of
+  them. What changed is that the case is now self-diagnosing: 5 ms against a 900 s budget is legible
+  as a precondition failure, where the previous text printed the identical flat lie
+  `still held after 900s` whether or not anything was ever held. Classifying the residue by an
+  elapsed threshold was considered and rejected — approximate where `command -v` is exact — and
+  closing it properly means reaching into `session-state.sh`'s internals, which is a separate change.
 - `LOCK_WAITING` is emitted after every skip path, so its presence is a fact about control flow
   ("this run reached the wait") and a long block reads as a queue rather than a hang.
 - Both banner **tokens** are byte-identical. Only post-colon text moved, so this ADR's own

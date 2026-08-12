@@ -451,9 +451,11 @@ lock_env() {
 # takes and releases the lock itself when free, which is harmless here (the
 # holder is the only other contender) and is what makes it a real probe rather
 # than a guess.
+# $2 caps the poll count (default 200 ~= 10s) so the negative arm can prove the
+# failure direction in ~0.15s instead of blocking the suite for ten seconds.
 await_held() {
-  local f="$1" i
-  for (( i = 0; i < 200; i++ )); do
+  local f="$1" max="${2:-200}" i
+  for (( i = 0; i < max; i++ )); do
     if ! flock -w 0 -x "$f" -c true 2>/dev/null; then return 0; fi
     sleep 0.05
   done
@@ -483,10 +485,18 @@ fi
 # accept a fabricated 0 (this repo's runners are bash 5.x; test-all.sh already
 # depends on EPOCHREALTIME for every suite timing).
 acq_line="$(awk '/LOCK_ACQUIRED/{print; exit}' "$TESTROOT/free.txt")"
-if [[ "$acq_line" =~ \[contention\]\ LOCK_ACQUIRED:\ \'[^\']+\'\ after\ ([0-9]+)ms ]]; then
-  pass "AC1/AC7: LOCK_ACQUIRED keeps its token and carries a measured elapsed (${BASH_REMATCH[1]}ms)"
+# The UPPER bound is the load-bearing half. Every elapsed assertion in this file
+# was originally a lower bound sampled on one side only, and a lower bound
+# cannot distinguish a measurement from a CONSTANT: replacing the arithmetic
+# with `printf '%sms' 1500` left the whole suite green, so the PR's own headline
+# claim — that the duration is measured rather than asserted — was pinned by
+# nothing. A free lock must read SMALL and a contended one must read LARGE, so
+# no single constant can satisfy both arms at once.
+if [[ "$acq_line" =~ \[contention\]\ LOCK_ACQUIRED:\ \'[^\']+\'\ after\ ([0-9]+)ms ]] \
+   && (( BASH_REMATCH[1] <= 500 )); then
+  pass "AC1/AC7: LOCK_ACQUIRED keeps its token and carries a measured elapsed (${BASH_REMATCH[1]}ms, free lock reads small)"
 else
-  fail "AC1/AC7: LOCK_ACQUIRED has no measured elapsed in the expected shape; got: $acq_line"
+  fail "AC1/AC7: LOCK_ACQUIRED has no measured elapsed <= 500ms in the expected shape; got: $acq_line"
 fi
 
 # AC5 (ordering half). LOCK_WAITING marks "this run reached the wait", so it
@@ -531,11 +541,19 @@ fi
 # `${timeout_s}ms` substituted into the new text — lands below the floor or
 # fails the shape, so mutation row 1 cannot survive by changing units.
 cont_line="$(awk '/LOCK_CONTENDED_PROCEEDING/{print; exit}' "$TESTROOT/timeout.txt")"
-if [[ "$cont_line" =~ \[contention\]\ LOCK_CONTENDED_PROCEEDING:\ \'[^\']+\'.*gave\ up\ after\ ([0-9]+)ms\ of\ ([0-9]+)s ]] \
-   && (( BASH_REMATCH[1] >= 1000 )); then
-  pass "AC2/AC7: LOCK_CONTENDED_PROCEEDING reports a measured ${BASH_REMATCH[1]}ms against a ${BASH_REMATCH[2]}s budget"
+# Bounded on BOTH sides against the budget the banner itself reports. The lower
+# bound kills mutation "substitute ${timeout_s} for the measurement" (2 vs 2011);
+# the upper bound kills "drop the /1000", which otherwise prints a 33-MINUTE
+# wait against a 2-second budget in the exact line work/SKILL.md's contention
+# grep consumes — and did so at full green.
+_ms=0; _budget=0
+if [[ "$cont_line" =~ \[contention\]\ LOCK_CONTENDED_PROCEEDING:\ \'[^\']+\'.*gave\ up\ after\ ([0-9]+)ms\ of\ ([0-9]+)s ]]; then
+  _ms="${BASH_REMATCH[1]}"; _budget="${BASH_REMATCH[2]}"
+fi
+if (( _ms >= 1000 && _budget > 0 && _ms <= _budget * 1000 + 3000 )); then
+  pass "AC2/AC7: LOCK_CONTENDED_PROCEEDING reports a measured ${_ms}ms bounded by its own ${_budget}s budget"
 else
-  fail "AC2/AC7: contended banner does not report a measured elapsed >= 1000ms; got: $cont_line"
+  fail "AC2/AC7: contended elapsed not within [1000, budget*1000+3000]; got: $cont_line"
 fi
 # The original assertion, negatively. The line above could in principle be
 # satisfied while the old unmeasured claim survives ALONGSIDE it, which would
@@ -672,10 +690,15 @@ if [[ "$(grep -cE 'RC=0' "$TESTROOT/slow.txt" || true)" -ge 1 ]] \
 else
   fail "AC3: mid-wait release did not acquire; got: $(cat "$TESTROOT/slow.txt")"
 fi
-if [[ "$slow_line" =~ after\ ([0-9]+)ms ]] && (( BASH_REMATCH[1] >= 800 )); then
-  pass "AC3: the redeemed wait reports a non-trivial ${BASH_REMATCH[1]}ms (a free lock reads single-digit)"
+# Bounded above by the 8s budget: a wait that was REDEEMED necessarily finished
+# inside it, so an inflated elapsed (the dropped `/1000`) fails here too. The
+# floor is 800ms against a 3s holder, i.e. ~2.2s of slack for fixture startup —
+# `await_held` returns on the first successful poll (~50ms typical).
+if [[ "$slow_line" =~ after\ ([0-9]+)ms ]] \
+   && (( BASH_REMATCH[1] >= 800 && BASH_REMATCH[1] <= 8000 )); then
+  pass "AC3: the redeemed wait reports a non-trivial ${BASH_REMATCH[1]}ms, inside its own budget"
 else
-  fail "AC3: elapsed is not a non-trivial measured wait (>= 800ms); got: $slow_line"
+  fail "AC3: elapsed is not a non-trivial in-budget wait ([800, 8000]ms); got: $slow_line"
 fi
 # A slow acquire must be DISTINGUISHABLE from a timeout, not merely non-empty.
 if [[ "$(grep -cE 'LOCK_CONTENDED_PROCEEDING' "$TESTROOT/slow.txt" || true)" -eq 0 ]]; then
@@ -732,11 +755,25 @@ env -u CI SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" TC_PROC_ROOT="$FAKE_PROC" \
     TC_TMPDIR="$FAKE_TMP" TC_XDG_DIR="" PATH="$NOFLOCK_BIN" \
     "$REAL_BASH" -c "source '$LIB'; tc_acquire 6789-noflock 2; echo RC=\$?" \
     > "$TESTROOT/noflock.txt" 2>&1 || true
-if [[ "$(grep -cE 'LOCK_UNAVAILABLE' "$TESTROOT/noflock.txt" || true)" -ge 1 ]] \
+# Anchored on THIS branch's message, not the bare `LOCK_UNAVAILABLE` token —
+# cq-assert-anchor-not-bare-token, applied to my own arm. All three
+# LOCK_UNAVAILABLE branches emit that token, so a bare grep passes when the arm
+# reaches a DIFFERENT branch: demonstrated by dropping `dirname` from the shim
+# list, after which the mask broke the lib's own path resolution, this arm still
+# passed, and the flock-precheck mutation survived undetected.
+if [[ "$(grep -cF 'LOCK_UNAVAILABLE: flock(1) not found on PATH' "$TESTROOT/noflock.txt" || true)" -ge 1 ]] \
    && [[ "$(grep -cE 'RC=0' "$TESTROOT/noflock.txt" || true)" -ge 1 ]]; then
-  pass "AC4/AC6: a missing flock(1) is LOCK_UNAVAILABLE and still returns 0"
+  pass "AC4/AC6: a missing flock(1) takes the flock branch specifically and still returns 0"
 else
-  fail "AC4: missing flock did not emit LOCK_UNAVAILABLE; got: $(cat "$TESTROOT/noflock.txt")"
+  fail "AC4: missing flock did not emit the flock-specific LOCK_UNAVAILABLE; got: $(cat "$TESTROOT/noflock.txt")"
+fi
+# The remediation must survive: this early return means session-state.sh's own
+# `brew install util-linux` hint is never reached, and for a non-technical
+# operator that hint is the entire actionable content of the failure.
+if [[ "$(grep -cF 'brew install util-linux' "$TESTROOT/noflock.txt" || true)" -ge 1 ]]; then
+  pass "AC4: the flock-missing banner carries the remediation it displaced"
+else
+  fail "AC4: no remediation hint on the flock-missing path; got: $(cat "$TESTROOT/noflock.txt")"
 fi
 if [[ "$(grep -cE 'LOCK_CONTENDED_PROCEEDING' "$TESTROOT/noflock.txt" || true)" -eq 0 ]]; then
   pass "AC4: a missing primitive is not reported as contention"
@@ -792,21 +829,120 @@ else
   fail "AC6: degraded path fabricated a 0ms measurement: $(cat "$TESTROOT/noclock.txt")"
 fi
 
-# --- Arm 19: every tc_acquire exit path returns 0 (AC6, structurally) -------
+# --- Arm 19: the two skip paths no fixture reached (AC5 + AC6) --------------
+# `TC_SESSION_STATE` was referenced NOWHERE in this file, so `session-state.sh
+# not found` and `acquire_lock not defined` had no behavioural coverage at all —
+# AC5 claims LOCK_WAITING is absent on EVERY skip path and it was sampled on 3
+# of 5. Consequence, measured: moving the LOCK_WAITING emit ABOVE the
+# precondition block left the suite green while the marker fired on runs that
+# never waited, which is the always-firing-banner failure this module's header
+# is built around.
+: > "$TESTROOT/defines-nothing.sh"
+while IFS='|' read -r label state expect; do
+  [[ -n "$label" ]] || continue
+  lock_env env TC_SESSION_STATE="$state" \
+    bash -c "source '$LIB'; tc_acquire 6789-$label 2; echo RC=\$?" > "$TESTROOT/$label.txt" 2>&1 || true
+  if [[ "$(grep -cF "$expect" "$TESTROOT/$label.txt" || true)" -ge 1 ]] \
+     && [[ "$(grep -cE 'RC=0' "$TESTROOT/$label.txt" || true)" -ge 1 ]]; then
+    pass "AC6: the '$label' skip path emits its own diagnostic and returns 0"
+  else
+    fail "AC6: '$label' path wrong; got: $(cat "$TESTROOT/$label.txt")"
+  fi
+  if [[ "$(grep -cE 'LOCK_WAITING' "$TESTROOT/$label.txt" || true)" -eq 0 ]]; then
+    pass "AC5: LOCK_WAITING is absent on the '$label' skip path"
+  else
+    fail "AC5: LOCK_WAITING fired on '$label', which never reaches the wait"
+  fi
+done <<EOF
+missinglib|$TESTROOT/nope.sh|LOCK_UNAVAILABLE: session-state.sh not found
+nolockfn|$TESTROOT/defines-nothing.sh|LOCK_UNAVAILABLE: acquire_lock not defined
+EOF
+
+# --- Arm 20: the arity guard (AC6) -----------------------------------------
+# A zero-arg call is an unbound-variable ABORT under `set -u` — the same class
+# as the EPOCHREALTIME reads, one construct further out, and one line into the
+# function whose contract is that it cannot abort. `|| true` cannot rescue it,
+# so this arm asserts the guard rather than the rescue.
+out="$(lock_env bash -c "set -euo pipefail; source '$LIB'; tc_acquire; echo RC=\$?" 2>&1 || true)"
+if [[ "$(grep -cE 'RC=0' <<<"$out" || true)" -ge 1 ]] \
+   && [[ "$(grep -cF 'unbound variable' <<<"$out" || true)" -eq 0 ]]; then
+  pass "AC6: a zero-arg tc_acquire fails open under set -u instead of aborting"
+else
+  fail "AC6: zero-arg tc_acquire did not fail open; got: $out"
+fi
+
+# --- Arm 21: _tc_ms_since is locale- and garbage-proof ----------------------
+# Driven as a UNIT, so it needs no locale installed on the host. The comma case
+# is the live one: bash renders EPOCHREALTIME with LC_NUMERIC's radix, so before
+# this every banner on a comma-locale machine read `unknown` on a healthy bash 5
+# with a working clock — and three gate arms went RED for a European operator,
+# manufacturing exactly the false-RED that ADR-133 exists to eliminate.
+while IFS='|' read -r label a b expect; do
+  [[ -n "$label" ]] || continue
+  got="$(lock_env bash -c "set -euo pipefail; source '$LIB'; _tc_ms_since '$a' '$b'" 2>&1 || echo "ABORTED")"
+  if [[ "$got" == "$expect" ]]; then
+    pass "AC6: _tc_ms_since $label -> $got"
+  else
+    fail "AC6: _tc_ms_since $label expected '$expect', got '$got'"
+  fi
+done <<'EOF'
+dot radix|100.000000|101.500000|1500ms
+comma radix|100,000000|101,500000|1500ms
+mixed radix|100.000000|101,500000|1500ms
+empty (bash 3.2)|||unknown
+trailing-dot garbage|100.|101.|unknown
+non-numeric garbage|x.1|y.2|unknown
+leading-zero microseconds|100.000001|100.002001|2ms
+EOF
+
+# --- Arm 22: await_held actually observes, rather than claiming -------------
+# The helper added to remove a race had no coverage: replacing its whole body
+# with `return 0` left the suite green, so its polarity and its bound rested on
+# nothing and a future edit could silently reinstate the flake. Both directions
+# are sampled — a no-op that always claims success is believed absolutely by a
+# one-sided test.
+AH="$SS_ROOT/locks/6789-awaitheld.lock"
+: > "$AH"
+if await_held "$AH" 3; then
+  fail "await_held claimed a FREE lock was held (its success arm is unconditional)"
+else
+  pass "await_held returns non-zero for a free lock (it observes, it does not assume)"
+fi
+flock -x "$AH" -c 'sleep 3' &
+AH_HOLDER=$!
+if await_held "$AH"; then
+  pass "await_held returns zero once the lock is genuinely held"
+else
+  fail "await_held failed to observe a real holder"
+fi
+kill "$AH_HOLDER" 2>/dev/null || true
+wait "$AH_HOLDER" 2>/dev/null || true
+
+# --- Arm 23: every tc_acquire exit path returns 0 (AC6, structurally) -------
 # The behavioural arms above cover the paths a fixture can reach. This one
 # covers the ones it cannot: ADR-133 Decision 3 makes the lock fail-OPEN, so a
 # single `return 1` added later would let an instrument wedge the run it exists
 # to observe. Asserted over the function BODY, not assumed from the arms.
 tc_body="$(awk '/^tc_acquire\(\) \{/{f=1} f{print} f && /^\}/{exit}' "$LIB")"
-ret_lines="$(grep -E '^[[:space:]]*return[[:space:]]' <<<"$tc_body" || true)"
+# Comments stripped FIRST: the match below is no longer line-anchored, so prose
+# containing the word would otherwise be counted as an exit path.
+tc_code="$(grep -vE '^[[:space:]]*#' <<<"$tc_body" || true)"
+# Matched ANYWHERE on the line, not just at line start. The line-anchored form
+# was blind to every compound exit — `|| { …; return 1; }`, `&& return 1`, a
+# `return` inside a one-line `case`, and bare `return` (which propagates $?) —
+# so a new fail-CLOSED path could be added with the suite fully green, against
+# a function ADR-133 Decision 3 requires to be fail-open.
+ret_lines="$(grep -oE '\breturn\b([[:space:]]+[0-9]+)?' <<<"$tc_code" || true)"
 n_ret="$(grep -c . <<<"$ret_lines" || true)"
-n_zero="$(grep -cE '^[[:space:]]*return 0[[:space:]]*$' <<<"$ret_lines" || true)"
-# Minimum-cardinality guard: a failed extraction yields zero return lines, and
-# `0 == 0` would report the property as held over an empty set.
-if (( n_ret >= 6 )) && [[ "$(grep -cE 'LOCK_ACQUIRED' <<<"$tc_body" || true)" -ge 1 ]]; then
-  pass "AC6 extractor is live: $n_ret return statements found inside tc_acquire"
+n_zero="$(grep -cE '^return 0$' <<<"$ret_lines" || true)"
+# Cardinality floor set to the ACTUAL count, not a guess with slack in it: at
+# `>= 6` against 7 real paths, deleting an entire exit branch left the suite
+# green and the liveness line cheerfully reported the reduced number.
+_TC_EXPECTED_RETURNS=8
+if (( n_ret >= _TC_EXPECTED_RETURNS )) && [[ "$(grep -cE 'LOCK_ACQUIRED' <<<"$tc_code" || true)" -ge 1 ]]; then
+  pass "AC6 extractor is live: $n_ret return statements found inside tc_acquire (floor $_TC_EXPECTED_RETURNS)"
 else
-  fail "AC6 extractor is vacuous — found $n_ret returns and no banner in the extracted body"
+  fail "AC6 extractor is vacuous or a path vanished — found $n_ret returns (expected >= $_TC_EXPECTED_RETURNS)"
 fi
 if (( n_ret == n_zero )); then
   pass "AC6: all $n_ret tc_acquire exit paths return 0 (fail-open, ADR-133 Decision 3)"
@@ -1292,8 +1428,13 @@ fi
 # Raised 92 -> 95 with the degraded-timing arm (fail-open under `set -u` with no
 # EPOCHREALTIME, plus the two `unknown`-not-0ms assertions). That branch had a
 # justification comment and zero coverage, and the code could not in fact reach it.
-if [[ "$((pass_n + fails))" -lt 95 ]]; then
-  fail "cardinality guard: only $((pass_n + fails)) assertions ran (expected >= 95)"
+# Raised 95 -> 110 with the review-round arms (two-sided elapsed bounds, the two
+# previously-unfixtured skip paths, the arity guard, the _tc_ms_since radix
+# table, and await_held's own both-directions coverage). Derived by running the
+# as-written file. Zero slack is deliberate: at `>= 6` against 7, the sibling
+# floor one layer down absorbed the deletion of a whole exit branch.
+if [[ "$((pass_n + fails))" -lt 110 ]]; then
+  fail "cardinality guard: only $((pass_n + fails)) assertions ran (expected >= 110)"
 fi
 
 echo "=== test-contention: $pass_n passed, $fails failed ==="

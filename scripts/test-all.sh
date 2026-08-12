@@ -65,8 +65,17 @@ export TC_TMPDIR="${TC_TMPDIR:-/tmp}"
 # Elapsed time uses bash 5.0+ EPOCHREALTIME (microsecond precision, no
 # coreutils dependency, portable across Linux + Homebrew bash on macOS).
 # CI runs ubuntu-latest (bash 5.x). macOS default /bin/bash is 3.2 — install
-# bash 5 from Homebrew if you need timing locally; otherwise EPOCHREALTIME
-# resolves to empty and elapsed_ms computes 0 silently.
+# bash 5 from Homebrew if you need timing locally; otherwise EPOCHREALTIME is
+# unset and elapsed_ms computes 0 silently.
+#
+# Both reads below are `${EPOCHREALTIME:-}`, never bare. This file runs under
+# `set -euo pipefail` (line 2), so a BARE read on a shell without the variable
+# is an unbound-variable ABORT in run_suite — the runner would die on its FIRST
+# suite with no summary, no rc file and no [FAIL], which is exactly the shape
+# work/SKILL.md's triage table attributes to a harness REAP, sending the
+# operator into a relaunch loop that reproduces it forever. The `*.*` guard
+# below only works if the read reaches it. (#7484 review; the same class was
+# found and fixed in scripts/lib/test-contention.sh.)
 
 # --- Version Check ---
 # Gated on bun being installed so the script runs cleanly in a bun-free
@@ -334,7 +343,7 @@ run_suite() {
   if [[ -n "${TEST_TIMING_LOG:-}" ]]; then
     tmp_before=$(tc_tmp_entry_count)
   fi
-  local start="$EPOCHREALTIME"
+  local start="${EPOCHREALTIME:-}"
   echo "--- $label ---"
   # Capture the exit code rather than testing it. `if ! "$@"` is a boolean test:
   # it discards WHICH non-zero the suite returned, which is precisely the
@@ -368,7 +377,7 @@ run_suite() {
   # and the captured value is empty or non-dotted) and exits elapsed_ms=0
   # gracefully instead of arithmetic-overflowing on `${start#*.}` returning
   # the whole string.
-  local end="$EPOCHREALTIME"
+  local end="${EPOCHREALTIME:-}"
   local elapsed_ms=0
   if [[ "$start" == *.* && "$end" == *.* ]]; then
     local start_us=$(( ${start%.*} * 1000000 + 10#${start#*.} ))
