@@ -283,8 +283,8 @@ jobs:
         uses: anthropics/claude-code-action@<ACTION_SHA> # v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          plugin_marketplaces: 'https://github.com/<REPO_OWNER>/<REPO_NAME>.git'
-          plugins: 'soleur@soleur'
+          plugin_marketplaces: 'https://github.com/jikig-ai/soleur-marketplace.git'
+          plugins: 'soleur@soleur-marketplace'
           claude_args: >-
             --model <MODEL>
             --max-turns <MAX_TURNS>
@@ -402,8 +402,8 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           show_full_output: true
-          plugin_marketplaces: 'https://github.com/<REPO_OWNER>/<REPO_NAME>.git'
-          plugins: 'soleur@soleur'
+          plugin_marketplaces: 'https://github.com/jikig-ai/soleur-marketplace.git'
+          plugins: 'soleur@soleur-marketplace'
           # --allowedTools mirrors the recurring template (Step 3a). Do NOT
           # widen — the fire-time prompt is fed an externally-fetched comment
           # body (D1), so least-privilege tool surface is load-bearing.

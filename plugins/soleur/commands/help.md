@@ -10,7 +10,9 @@ Display a formatted overview of all available Soleur capabilities. Read the plug
 
 ## Step 1: Read Plugin Manifest
 
-Use the **Read tool** to read `plugins/soleur/.claude-plugin/plugin.json` to get the plugin version and metadata.
+Use the **Read tool** to read `plugins/soleur/.claude-plugin/plugin.json` to get the plugin name, description, and metadata.
+
+**The manifest carries no `version` key** — that is deliberate, not an omission (a constant version string makes `claude plugin update` compare equal and no-op while reporting success, #7471). Do not report a version read from it. If a version is wanted, it comes from the latest GitHub Release tag (`gh release list --limit 1 --json tagName --jq '.[0].tagName'`); if that is unavailable, print no version rather than guessing one.
 
 If that path does not exist, try reading from `~/.claude/plugins/*/soleur/.claude-plugin/plugin.json`.
 

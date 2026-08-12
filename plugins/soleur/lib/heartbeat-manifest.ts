@@ -201,6 +201,41 @@ export const MANIFEST: ManifestEntry[] = [
       "web-host-resident feeder (web-private-nic-guard.timer on web-1) delivered by the SSH terraform_data provisioner (terraform_data.private_nic_guard_install), NOT web-1 cloud-init boot — web-1 is cx33-unrebuildable. No <host>-host-replace path, so ADR-103's replace_target requirement correctly does not fire.",
   },
   {
+    name: "inngest_consumer",
+    // #7228 — the inngest CONSUMER-perspective serviceability beat. web-host-cron, not
+    // dedicated-host-boot, and that is the entire point of the design: its feeder runs on web-1
+    // and reads 10.0.1.40:8288 over the private net, so it detects a dark dedicated host WITHOUT
+    // depending on that host's bootstrap having run and WITHOUT a host replace. web-1 is
+    // cx33-unrebuildable and never re-runs cloud-init, so delivery is the SSH terraform_data
+    // provisioner and ADR-103's replace_target requirement correctly does not fire (mirrors
+    // web_zot_consumer / git_data_prd / workspaces_luks).
+    arming: "web-host-cron",
+    paused: true,
+    feeder: {
+      kind: "timer",
+      evidence: {
+        file: "apps/web-platform/infra/server.tf",
+        pattern: "systemctl enable --now inngest-consumer-probe.timer",
+      },
+    },
+    // FED-but-inert, declared rather than discovered. The feeder ships and runs at 60s from merge,
+    // but it pings only on a NON-EMPTY registry out of 10.0.1.40:8288 — and that host has not
+    // bound :8288 since 2026-07-30 (measured 2026-08-11: ~600 ECONNREFUSED rows/hour). So the
+    // probe is correctly SUPPRESSING and no beat can land until #7462 restores the host. Without
+    // this declaration the nightly live-reconcile would raise `fed-but-paused` every night for a
+    // state that is expected and owned.
+    //
+    // This is deliberately NOT the #6537 shape it superficially resembles. There the monitor sat
+    // inert because a probe that "claimed to have shipped" had never been written, and nothing
+    // said so. Here the feeder demonstrably exists (the evidence pattern above is grepped on every
+    // run), the inertness has a named cause and a named owner, and the probe's fault
+    // classification ships off-box from merge via vector Source 4 — so the outage stays observable
+    // the whole time the beat is silent. Removing this row is step 6 of #7462.
+    arming_pending: { tracking_issue: 7462 },
+    exempt_reason:
+      "web-host-resident feeder (inngest-consumer-probe.timer on web-1) delivered by the SSH terraform_data provisioner (terraform_data.inngest_consumer_probe_install), NOT cloud-init boot on either host. It monitors the dedicated inngest host from the consumer side precisely so that arming it never requires an inngest-host-replace, so ADR-103's replace_target requirement correctly does not fire.",
+  },
+  {
     name: "inngest_prd",
     arming: "dedicated-host-boot",
     // Source says paused=true; LIVE is paused=false / up (self-pulled from /api/v2/heartbeats).

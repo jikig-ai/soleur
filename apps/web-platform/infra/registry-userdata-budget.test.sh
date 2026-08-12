@@ -90,10 +90,45 @@ else
   fail "strip is effective" "raw=$raw stripped=$stripped — expected stripped < raw/2"
 fi
 
-if [ -n "$headroom" ] && [ "$headroom" -ge 20000 ]; then
-  pass "headroom ${headroom} B >= 20000 B floor (stored ${stored} B)"
+ts_floor=$(grep -oE '^const REGISTRY_GZIP_FLOOR = [0-9_]+' "$TS_TEST" | grep -oE '[0-9_]+$' | tr -d '_')
+ts_budget=$(grep -oE '^const REGISTRY_GZIP_BUDGET = [0-9_]+' "$TS_TEST" | grep -oE '[0-9_]+$' | tr -d '_')
+
+# THE HEADROOM FLOOR IS DERIVED, NOT DECIDED HERE (#7444, CTO ruling).
+#
+# This arm used to read `headroom -ge 20000`. That literal was AC1 of the #7299 plan — a
+# ONE-SHOT verification that the measurer fix had landed (that the corrected reading was ~23.4 kB
+# rather than the phantom -3,636 B), transcribed verbatim into a standing regression arm where it
+# silently became a permanent capacity ceiling nobody decided on. It rationed every future
+# feature on this host to 3,360 B and blocked a correctness round at 11% over.
+#
+# Nothing else in the repo held that number: registry-userdata-budget.sh (the gate the operator
+# actually runs before a destructive replace) fails only on `stored >= cap`; the recut runbook
+# states the operational invariant as "headroom must be > 0, strictly"; the #7299 plan's own
+# rejected-alternatives table records "production is 71% under cap"; and the sibling git-data host
+# runs under GIT_DATA_BUDGET = 28_000, which PERMITS headroom as low as 4,768 — 4x less conservative
+# on the same 32,768 B ForceNew cap.
+#
+# That last clause is stated as what the budget AUTHORISES, not as a measurement, and deliberately
+# so: git-data's measured headroom was 12,312 B when ADR-185 was written and became 20,180 B four
+# days later when #7264 applied the same rationale-strip to git-data's own template. A comment
+# pinned to the measurement would have been false within the week; the budget constant is the part
+# that actually encodes a policy. See ADR-185 evidence 4.
+#
+# The ONE number authored as a policy is in the TS oracle: REGISTRY_GZIP_BUDGET < HETZNER_CAP -
+# 8_000, i.e. "preserve at least 8,000 B of real headroom". Largest measure-time-to-apply-time
+# divergence ever observed on this class is 612 B, so 8,000 is ~13x the worst case.
+#
+# So this arm DERIVES its floor from that single owning constant and is deliberately redundant
+# with the extracted cross-check below: its value is the message in the operator's unit, not an
+# independent constraint. Change the budget in cloud-init-user-data-size.test.ts and both move.
+if [ -z "$ts_budget" ] || [ -z "$ts_floor" ]; then
+  # EXPLICIT, not arithmetic-by-accident: an empty $ts_budget inside $(( )) is 0, which would
+  # demand headroom > cap and fail closed for a reason no message names.
+  fail "headroom floor derived from the TS budget" "could not extract REGISTRY_GZIP_FLOOR/BUDGET from $TS_TEST — the oracle is unreadable, not satisfied"
+elif [ -n "$headroom" ] && [ "$headroom" -ge "$(( cap - ts_budget ))" ]; then
+  pass "headroom ${headroom} B >= $(( cap - ts_budget )) B floor derived from REGISTRY_GZIP_BUDGET=${ts_budget} (stored ${stored} B)"
 else
-  fail "headroom >= 20000 B floor" "headroom=$headroom stored=$stored"
+  fail "headroom >= derived floor" "stored=$stored exceeds REGISTRY_GZIP_BUDGET=$ts_budget from plugins/soleur/test/cloud-init-user-data-size.test.ts, which is itself gated at HETZNER_CAP - 8000; headroom=$headroom floor=$(( cap - ts_budget ))"
 fi
 
 # THE OTHER SIDE OF THE SAME NUMBER. Without this, any mutation that under-reports the payload
@@ -117,8 +152,6 @@ fi
 # same payload with node zlib and pins its own bounds; requiring our byte-exact figure to fall
 # inside them triangulates the two measurers against each other. Bounds are EXTRACTED, not
 # restated, so they cannot drift.
-ts_floor=$(grep -oE '^const REGISTRY_GZIP_FLOOR = [0-9_]+' "$TS_TEST" | grep -oE '[0-9_]+$' | tr -d '_')
-ts_budget=$(grep -oE '^const REGISTRY_GZIP_BUDGET = [0-9_]+' "$TS_TEST" | grep -oE '[0-9_]+$' | tr -d '_')
 if [ -z "$ts_floor" ] || [ -z "$ts_budget" ]; then
   fail "cross-check against cloud-init-user-data-size.test.ts bounds" "could not extract REGISTRY_GZIP_FLOOR/BUDGET — the oracle is unreadable, not satisfied"
 elif [ -n "$stored" ] && [ "$stored" -gt "$ts_floor" ] && [ "$stored" -lt "$ts_budget" ]; then

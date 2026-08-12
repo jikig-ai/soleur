@@ -49,8 +49,33 @@ trap 'rm -rf "$TMP"' EXIT
 # Render the REAL template, then extract the emitter and the Doppler-download runcmd block
 # from it. Extracting from the render (not from a hand-written fixture) is what makes this
 # track the artifact that actually ships.
-bash "$DIR/git-data-userdata-budget.sh" "$TMP/rendered.yml" >/dev/null 2>&1 \
+# TWO ARTIFACTS (#7264). `rendered.yml` is the STRIPPED render — the bytes the host is
+# actually handed, and the right corpus for every boot-fidelity predicate below.
+# `rendered-raw.yml` is the unstripped one. It is read ONLY by the sanity check just below,
+# which asserts the strip actually took effect end-to-end. No predicate arm runs against it —
+# an earlier version of this comment claimed it preserved "discriminating power" for the arms,
+# and that was never true: the arms all read the stripped render.
+bash "$DIR/git-data-userdata-budget.sh" "$TMP/rendered.yml" "$TMP/rendered-raw.yml" >/dev/null 2>&1 \
   || { echo "FAIL: render failed" >&2; exit 1; }
+
+# The strip is load-bearing end-to-end, not just in the budget script's own accounting: the
+# raw render MUST still carry rationale comments and the stripped one MUST NOT. If these ever
+# converge, either the strip stopped matching (cap regression) or the template lost its
+# rationale (a different problem) — both are worth failing on here rather than at apply time.
+_raw_comments=$(grep -cE '^[[:space:]]*#[[:space:]]' "$TMP/rendered-raw.yml" || true)
+_stripped_comments=$(grep -cE '^[[:space:]]*#[[:space:]]' "$TMP/rendered.yml" || true)
+if [ "$_raw_comments" -lt 100 ] || [ "$_stripped_comments" -ne 0 ]; then
+  echo "FAIL: render strip did not take effect (raw rationale lines=${_raw_comments} expected >=100; stripped=${_stripped_comments} expected 0)" >&2
+  exit 1
+fi
+# No `head … | grep -q` here: under `set -uo pipefail` grep -q closes the pipe on match and
+# the producer takes SIGPIPE (141), which pipefail promotes — so the guard fails OPEN exactly
+# when it matches (#7005). Compare the captured string instead.
+_first_line=$(head -1 "$TMP/rendered.yml")
+if [ "$_first_line" != "#cloud-config" ]; then
+  echo "FAIL: stripped render begins with '${_first_line}', not '#cloud-config' — cloud-init would ignore the payload and the host would boot dark" >&2
+  exit 1
+fi
 
 python3 - "$TMP/rendered.yml" "$TMP" <<'PY'
 import sys, yaml, re
@@ -84,24 +109,28 @@ open(f"{out}/sshd-stage.sh", "w").write(sshd[0])
 # extractions — a stage that split into two runcmd entries must fail loudly rather than
 # silently extract the first half.
 #
-# TWO FILES, AND THE SPLIT IS LOAD-BEARING.
+# TWO FILES, AND THE SPLIT IS NOW DEGENERATE — kept for shape, not for discrimination.
 #
-# CORRECTION (review, #7204): an earlier revision of this comment claimed "ADR-152 strips
-# whole-line comments at render, so the collision disappears here for free." THAT IS FALSE,
-# and the repo says so verbatim — `modules/git-data-userdata/main.tf` states
-# "cloud-init-git-data.yml itself is NOT stripped." ADR-152's strip applies only to the nine
-# injected `write_files` scripts. Measured on the real render: 81 of the luks stage's 117
-# lines are COMMENTS. Every unanchored grep below was therefore running over prose, and this
-# PR's own comment block — which discusses the seed, the ordering and the emit call at
-# length — is the largest body of prose in the file. Two arms were demonstrably satisfiable
-# by it while the boot-critical property was violated, at a fully green suite
-# (hr-verify-repo-capability-claim-before-assert: the claim was never checked).
+# HISTORY, because both revisions of this comment were wrong in opposite directions. The
+# first claimed "ADR-152 strips whole-line comments at render, so the collision disappears
+# here for free"; #7204 corrected that to "FALSE — main.tf states cloud-init-git-data.yml
+# itself is NOT stripped", and measured 81 of the luks stage's 117 lines as COMMENTS. Both
+# were true when written. NEITHER is true now: #7264 extended the strip to the template, so
+# the render this suite slices arrives comment-free and the sentence #7204 quoted no longer
+# exists in main.tf.
 #
-#   luks-stage.sh       raw, comments intact — ONLY for shlex parsing of the real emit call
-#   luks-stage.code.sh  comments stripped    — for every grep/regex predicate
+# Measured after that change: the luks stage goes 55 -> 55 lines and the runcmd concatenation
+# 170 -> 170. Zero lines removed, so `luks-stage.sh` is byte-identical to `luks-stage.code.sh`
+# and `runcmd-all.sh` to `runcmd-all.code.sh`.
 #
-# This mirrors `_luks_slice()` in git-data-luks.test.sh, which has always stripped comments
-# and is the reason the B16/B17 family was never exposed to this class.
+#   luks-stage.sh       the stage as rendered — now already comment-free
+#   luks-stage.code.sh  the same bytes, kept so every predicate below has one stable name
+#
+# The split is retained rather than collapsed because the predicates are code-anchored and a
+# rename would touch every one of them for no behavioural gain; the vacuity it used to guard
+# against is now covered by the non-vacuity asserts below and by the strip's own guards in
+# git-data-template-strip.test.sh. `_luks_slice()` in git-data-luks.test.sh still slices the
+# RAW template on disk, so it is unaffected by any of this.
 luks = [c for c in d["runcmd"] if isinstance(c, str) and "STAGE=luks_open" in c]
 assert len(luks) == 1, f"expected exactly 1 luks_open runcmd block, found {len(luks)}"
 open(f"{out}/luks-stage.sh", "w").write(luks[0])
@@ -119,8 +148,20 @@ open(f"{out}/runcmd-all.sh", "w").write(_all)
 # up: this file's prose discusses `git-data-emit … fatal`, `[ -s "$_detail"` and the literal
 # log path at length, so any regex predicate reading the raw text can be satisfied by the
 # commentary that explains the property instead of the property.
-open(f"{out}/runcmd-all.code.sh", "w").write(
-    "\n".join(l for l in _all.splitlines() if not re.match(r'^\s*#', l)) + "\n")
+_all_code = "\n".join(l for l in _all.splitlines() if not re.match(r'^\s*#', l))
+# NON-VACUITY, mirroring luks-stage.code.sh's `mkfs.ext4` assert one level up (#7264).
+# luks-stage.code.sh has carried this since it was written; THIS file did not, and its four
+# consumers (R3(3b), R3(3c), R3(3d), R3(2d)) are all NEGATIVE-space or ordering predicates —
+# the shapes that pass on an EMPTY slice. So a strip that ate the whole concatenation, or an
+# upstream change that emptied `runcmd`, would have reported four green arms about a file
+# with nothing in it. Assert both a content anchor and a size floor: the anchor catches an
+# over-aggressive strip, the floor catches a slice that silently collapsed.
+assert "git-data-emit" in _all_code, (
+    "comment-stripped runcmd concatenation lost the emitter invocation — strip is too aggressive")
+assert len(_all_code.splitlines()) >= 40, (
+    f"comment-stripped runcmd concatenation collapsed to {len(_all_code.splitlines())} lines "
+    "(floor 40) — the four R3 predicates reading it would pass vacuously")
+open(f"{out}/runcmd-all.code.sh", "w").write(_all_code + "\n")
 PY
 [ -s "$TMP/doppler-dl.sh" ] || { echo "FAIL: could not extract the checksum block" >&2; exit 1; }
 
@@ -206,10 +247,23 @@ tpl = open(os.path.join(srcdir, "cloud-init-git-data.yml")).read()
 
 # The payloads are delivered with whole-line `#` comments stripped at render time (ADR-152),
 # so the source must be stripped the same way before the bytes are compared. Read the
-# expression FROM git-data.tf rather than restating it: a hand-copied spelling would drift,
+# expression FROM modules/git-data-userdata/main.tf rather than restating it: a hand-copied
+# spelling would drift,
 # and a stripper that silently disagreed with production would make this whole check compare
 # the wrong bytes while still reporting byte-identity.
-m = re.search(r'git_data_rationale_strip\s*=\s*"(.*)"', tf)
+# ANCHORED AT LINE START, and non-greedy between the quotes (#7264). The previous form was a
+# bare `re.search` over the raw file taking the FIRST match, so a COMMENT naming an old
+# expression (`# git_data_rationale_strip = "<old form>"` — exactly the prose this repo
+# writes) would be extracted instead of the live assignment, and the probe below passes
+# either way: wrong stripper, green suite. `^\s*` before the identifier makes a commented
+# line unmatchable, because `#` is neither whitespace nor the identifier's first character.
+# `[^"]*` stops the greedy `.*` over-reaching on a line carrying more than one quote pair.
+#
+# The name is also unambiguous by construction: main.tf now declares a SECOND expression,
+# `git_data_template_rationale_strip`, which does not contain this one as a substring — so
+# this search cannot pick up the template form, and the template search cannot pick up this
+# one. ADR-152 requires them to differ; git-data-render-strip-parity.test.sh asserts it.
+m = re.search(r'^\s*git_data_rationale_strip\s*=\s*"([^"]*)"', tf, re.M)
 if not m:
     print("B1 FAIL: no git_data_rationale_strip in modules/git-data-userdata/main.tf — cannot mirror the render-time strip")
     sys.exit(1)

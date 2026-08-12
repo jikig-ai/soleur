@@ -35,7 +35,10 @@ which does not exist and never has.
 ### Measured, not inferred
 
 On the authoring machine, against the real install at
-`~/.claude/plugins/cache/soleur/soleur/0.0.0-dev/`:
+`~/.claude/plugins/cache/soleur/soleur/0.0.0-dev/` *(the path shape as it stood on
+2026-08-10; the third segment is no longer `0.0.0-dev` and the first is no longer
+`soleur` for a new install — see the [2026-08-12 amendment](#amendment--2026-08-12-7471-the-cache-path-segments-and-the-delivery-comparator).
+The reading below is unaffected: the library was absent at any depth)*:
 
 ```
 $ find ~/.claude/plugins/cache/soleur -name 'session-state.sh'     # → empty
@@ -220,9 +223,12 @@ harmless, so a shim would be *safe* — but it would re-introduce the two-homes 
 this decision exists to remove. The transient window fails **safe**: a missing library
 makes `is_lease_active` return "active", so nothing is reaped.
 
-**Delivery is not guaranteed by merging.** `plugin.json` carries the frozen sentinel
-version `0.0.0-dev`, so the cache directory name never changes and there is no version
-bump to trigger an update. Measured on the authoring machine: the install carries **64
+**Delivery is not guaranteed by merging.** *(Reasoning superseded 2026-08-12 — see the
+[amendment](#amendment--2026-08-12-7471-the-cache-path-segments-and-the-delivery-comparator).
+The measured staleness below stands; the explanation for it has changed.)* `plugin.json`
+carried the frozen sentinel version `0.0.0-dev`, so the cache directory name never
+changed and there was no version bump to trigger an update. Measured on the authoring
+machine: the install carries **64
 skills against 96 in the repo**, with mtime **2026-05-10** — three months and 32 skills
 stale — while its `.in_use` marker is stamped today. It has been actively used and has
 received nothing. Users who never run `claude plugin marketplace update soleur &&
@@ -240,3 +246,94 @@ cover that. This is a real limit on the change, stated rather than assumed away.
 | E. Keep in `.claude/hooks/lib/`, add a fallback chain | **Not a fix.** The file genuinely does not exist in the cache tree; a chain over nonexistent paths still ends in stubs. |
 | F. Bespoke 4-arm resolver + extracted `resolve-session-state.sh` | Rejected as circular: sourcing the resolver requires resolving `plugins/soleur/` — the identical problem, plus a file. |
 | G. Class-level `plugin-self-containment` CI gate | Rejected on measurement: **65 files / 338 hits** of `.claude/` under `plugins/soleur/**`; restricted to non-test `.sh`, **8 files / ~25 hits, of which exactly one is the defect** — a 96% seed-allowlist rate. The signature is also wrong: `$PROJECT_ROOT/.claude/` is *correct* (it addresses the user's repo, not ours). A cache-install test catches escapes behaviourally instead. |
+
+## Amendment — 2026-08-12 (#7471): the cache-path segments and the delivery comparator
+
+This ADR's `## Context` and `## Consequences` each named the installed cache path
+`~/.claude/plugins/cache/soleur/soleur/0.0.0-dev/`, and `## Consequences` reasoned from it
+that "the cache directory name never changes and there is no version bump to trigger an
+update." Both statements were true when written. Neither is true now, and they stopped
+being true in **two independent ways** — which is why this is one amendment rather than a
+line edit.
+
+**What changed.** #7471 removed the `0.0.0-dev` version key from both in-repo manifests
+(`plugins/soleur/.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`'s
+`plugins[0]`), and published an **additive** second marketplace source at
+`jikig-ai/soleur-marketplace` — a `git-subdir` entry pointing back at `plugins/soleur` in
+this repository. `jikig-ai/soleur` remains a valid marketplace; existing installs keep
+working and do not auto-migrate.
+
+**The path, by segment.** The cache path is
+`cache/<marketplace manifest name>/<plugin name>/<version>`. All three segments were read
+off a real install, not inferred — the `installPath` is recorded in
+`knowledge-base/project/specs/feat-one-shot-7471-plugin-delivery-path/measurements.md`
+§1.0 (the falsification gate, against a local-path fixture) and §2B (the same run against
+the **published** `jikig-ai/soleur-marketplace`), which is also where the byte and timing
+readings live. Cite that file by anchor rather than restating its numbers.
+
+| Segment | This ADR asserted | After the sentinel removal (existing install) | After the new marketplace (new install) |
+|---|---|---|---|
+| Marketplace | `soleur` | `soleur` (unchanged) | `soleur-marketplace` — the `name` declared by `jikig-ai/soleur-marketplace`'s `.claude-plugin/marketplace.json`. That is the manifest's `name` field, **not** the repo name; the two coincide here by choice |
+| Plugin | `soleur` | `soleur` (unchanged) | `soleur` (unchanged) |
+| Version | `0.0.0-dev`, "never changes" | `unknown`, refreshed in place | `unknown`, refreshed in place |
+
+One caution on that table. Both the §1.0 and §2B runs resolved a version segment of
+`0.0.0-dev` because both cloned pre-fix `main` — the `plugin.json` they materialised still
+carried the key. The `unknown` value is the keyless resolution measured against the
+official control-group plugins, not a guess, and task 6.5 re-runs the install after merge
+to confirm it on the shipped article.
+
+**The comparator, not the directory name.** The replacement reasoning is the one that
+matters for delivery. `claude plugin update` short-circuits when it can compare two
+identical version strings — that is the mechanism behind the staleness measured above. A
+**keyless marketplace entry** is what makes the CLI record a `gitCommitSha` and compare
+*that* instead, so new content is delivered by the source commit advancing rather than by a
+version bump. Note the two keys are independent: §1.0 measured a `gitCommitSha` recorded
+through a keyless `git-subdir` entry even while the cloned `plugin.json` still carried
+`0.0.0-dev`. `plugin.json`'s key is removed for the separate reasons above — it feeds this
+ADR's version segment and the docs data layer. The distribution manifest also carries no
+pinned `ref`/`sha` and tracks `main`, for the same spirit: a constant pin would be the
+frozen sentinel wearing different clothes.
+
+> **Correction — 2026-08-12 (#7471), superseding the two sentences above about SHA
+> recording.** The paragraph's *conclusion* (keyless manifests, unpinned entry) stands. Its
+> stated *mechanism* does not, and it was inferred rather than measured.
+>
+> "A keyless marketplace entry is what makes the CLI record a `gitCommitSha`", and the
+> "two keys are independent" gloss that follows it, are both wrong. `measurements.md` §1.9
+> tested it directly — two arms differing **only** in the plugin manifest's `version` key,
+> marketplace entry keyless in both — and **both arms recorded a `gitCommitSha`**. The key
+> suppresses nothing.
+>
+> What the key actually changes is the **recorded version string**: the manifest's constant
+> with it, the **commit SHA** without it. So the comparator reads a string that varies
+> between commits in the keyless case and a frozen one otherwise. Identity is recorded
+> either way; **whether the identity string changes between commits** is the load-bearing
+> property, not which field carries it. Two counterexamples killed the original inference —
+> `code-review` is keyless yet has no `gitCommitSha` (its SHA landed in `version`), and
+> §1.0's own gate recorded a SHA from a *versioned* manifest.
+>
+> **Second correction, same date — the version SEGMENT.** The table above predicts the cache
+> path's version segment becomes `unknown`, "refreshed in place". Both halves are refuted by
+> `measurements.md` §1.2/1.3, which measured Soleur's own migration rather than inferring from the
+> control group: the segment resolves to a 12-character **commit SHA prefix**
+> (`0.0.0-dev` → `fedc656ce6f5` → `6245ba0a3c94`), and each update materialises a **new** directory
+> while the previous one survives — so it is not refreshed in place, and the stale directory is an
+> orphan. The `unknown` prediction came from one reading of a control-group plugin, which is the
+> same class of unmeasured inference the first correction retired.
+>
+> This correction is appended rather than applied in place because the passage above is a
+> dated record. The provenance matters: the refuted claim reached six governance sites and
+> a published README before anyone tested it.
+
+**What this does not change.** ADR-178's decision stands untouched. The library still
+ships inside `plugins/soleur/` and still resolves `${CLAUDE_PLUGIN_ROOT}`-anchored, which
+is precisely why the segment values above are *not* load-bearing — an anchored resolver is
+indifferent to what the three segments happen to be, and the five-level walk this ADR
+removed was the thing that was not. §6's security posture claim is likewise unaffected: it
+names `~/.claude/plugins/cache/` without segments.
+
+**The residual limit stands, for a different reason.** A user who never refreshes still
+receives nothing. What changed is the cost of refreshing: the migration and install path
+through `jikig-ai/soleur-marketplace` does not clone the monorepo, so the operation that
+used to time out is no longer on the route.

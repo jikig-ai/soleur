@@ -107,6 +107,49 @@ this line the failure surfaces only as `bun: command not found` with no marker,
 which is indistinguishable from the area having nothing to do. Report the missing
 toolchain to the user alongside whatever else the run produced.
 
+**A producer missing from a VERIFIED root is named, not silent.** The gate above
+answers whether the root is genuinely the Soleur payload, and answers it
+correctly. It cannot answer whether that root actually *carries* the producer a
+given area invokes — an incomplete or torn payload satisfies every predicate
+above. Each producer invocation below is therefore wrapped in its own presence
+check, in the same subprocess, so an absent producer is skipped rather than
+invoked and reports:
+
+    SOLEUR_SYNC_PRODUCER_MISSING producer=<payload-relative-path> affects=<area> reason=absent-from-verified-root
+
+`reason=` states what was **observed** — this path is absent under a root that
+verified — never why it is absent. A stale install, an interrupted install, and a
+packaging change that dropped a file are indistinguishable from here, and naming
+one of them would be a diagnosis the guard cannot support.
+
+When one of these fires, report to the user verbatim:
+
+> Soleur couldn't find one of its own files (`<producer>`), so the `<area>` step
+> didn't run. This is a problem with the Soleur installation, not with your
+> project. The most likely fix is to reinstall the Soleur plugin — updating the
+> marketplace alone does not update an installed plugin. Run
+> `claude plugin marketplace update soleur && claude plugin update soleur`, then
+> start a new session. If the same line comes back, reinstall outright with
+> `claude plugin uninstall soleur && claude plugin install soleur`. If it still
+> comes back, this is a bug in Soleur: please report it with this line. Everything
+> else in this run completed normally.
+
+Give the commands, not just the advice. The message names the marketplace-vs-install
+distinction, and a founder who is told that and handed no command is left exactly where the
+report that opened #7474 started. The reinstall fallback is not belt-and-braces either:
+`plugin.json` carries a frozen `0.0.0-dev` sentinel, so there is no version bump for
+`plugin update` to act on and an install can sit months stale while reporting success
+(measured in ADR-178).
+
+**Do not attempt the reinstall yourself.** It mutates `${CLAUDE_PLUGIN_ROOT}` underneath a
+run that is still executing. Report it and let the operator run it between sessions.
+
+**Headless variant.** Under `--headless` (the post-clone auto-sync at
+`/api/repo/setup`) the user has no plugin installed, so "reinstall the plugin" is
+actively misdirecting. Report instead: *"A Soleur component (`<producer>`) was
+missing, so the `<area>` step didn't run. That's a Soleur-side defect and needs
+nothing from you — everything else completed normally."*
+
 **STOP if the plugin-root block exits non-zero.** Report to the user verbatim: *"I can't run
 `/soleur:sync` here — I couldn't verify where the Soleur plugin is installed.
 Please reinstall the plugin and try again."* Do **not** try to locate the
@@ -249,7 +292,17 @@ Runs when `<sync_area>` is `c4`, and as part of `all` **after** the `project`
 area (it consumes the component docs that area writes).
 
 ```bash
-bun "${CLAUDE_PLUGIN_ROOT}/scripts/generate-c4-from-components.ts"
+# Guarded per ADR-179 decision 5 (#7474): the presence check and the invocation
+# share a subprocess, so a producer missing from an otherwise identity-valid
+# plugin root cannot be invoked, and its absence is named rather than surfacing
+# as a bare interpreter error. Changing this shape reds
+# tests/commands/test-sync-producer-reachability.sh (T0j/T0k/T0l) and
+# apps/web-platform/test/plugin-root-anchoring.test.ts (P6).
+if [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/generate-c4-from-components.ts" ]; then
+  bun "${CLAUDE_PLUGIN_ROOT}/scripts/generate-c4-from-components.ts"
+else
+  echo "SOLEUR_SYNC_PRODUCER_MISSING producer=scripts/generate-c4-from-components.ts affects=c4 reason=absent-from-verified-root"
+fi
 ```
 
 The producer parses each component doc's `dependencies:` frontmatter (falling back
@@ -300,15 +353,37 @@ Runs at the END of an `all` sync, after every other area. Writes
 `knowledge-base/project/kb-coverage.md` and prints the same marker to stdout:
 
 ```bash
-bun "${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts"
+if [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts" ]; then
+  bun "${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts"
+else
+  echo "SOLEUR_SYNC_PRODUCER_MISSING producer=scripts/write-kb-coverage.ts affects=coverage reason=absent-from-verified-root"
+fi
 ```
 
 Add one `--degraded "<reason>"` for each producer that reported `status=degraded`
-earlier in the run (the `reason=` token from its marker is the right string):
+earlier in the run (the `reason=` token from its marker is the right string).
+
+For a `SOLEUR_SYNC_PRODUCER_MISSING` marker, pass the **subject as well as the
+reason** — write `--degraded "<area>: producer-missing (<producer>)"`, matching the
+area-prefixed house form shown in the `--degraded` example further down. `write-kb-coverage.ts` renders this string
+verbatim, so passing the bare `reason=` token alone would put
+`absent-from-verified-root` in the durable row with no producer and no area — the
+same unattributed signal this guard exists to replace, one layer down.
+
+Two limits, stated once: this carry-forward is unavailable when
+`write-kb-coverage.ts` is itself the missing producer, and for standalone area
+invocations (which write no coverage at all). In both cases a PRIOR
+`kb-coverage.md` still sits on disk and still satisfies the existing
+`SOLEUR_KB_SYNC_PRODUCERS` grep — so that grep certifies the *previous* run, not
+this one.
 
 ```bash
-bun "${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts" \
-  --degraded "c4: no-generated-relationships"
+if [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts" ]; then
+  bun "${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts" \
+    --degraded "c4: no-generated-relationships"
+else
+  echo "SOLEUR_SYNC_PRODUCER_MISSING producer=scripts/write-kb-coverage.ts affects=coverage reason=absent-from-verified-root"
+fi
 ```
 
 **Do not hand-author `kb-coverage.md`, and do not pass the counts in.** Every count
@@ -419,10 +494,18 @@ are disclosed as blind spots, never counted.
 1. **Emit the drift report** (read-only). Run:
 
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" drift --repo . --register knowledge-base/engineering/architecture/domain-model.md
+   if [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" ]; then
+     bash "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" drift --repo . --register knowledge-base/engineering/architecture/domain-model.md
+   else
+     echo "SOLEUR_SYNC_PRODUCER_MISSING producer=scripts/domain-model-drift.sh affects=domain-model reason=absent-from-verified-root"
+   fi
    ```
 
-   Exit `0` = clean, `1` = drift found, `2` = error, `3` = secret-shape refuse. Present the report verbatim
+   Exit `0` = clean, `1` = drift found, `2` = error, `3` = secret-shape refuse. **This mapping
+   describes the producer's own exit codes and applies only when the producer actually ran.** If
+   the guard above emitted `SOLEUR_SYNC_PRODUCER_MISSING`, the fence still exits `0` because the
+   `echo` succeeded — that is "could not check", NOT "clean". Report it as unchecked; never fold it
+   into the register-agrees-with-source verdict. Present the report verbatim
    to the operator — it has three sections: **stale register citations** (a cited symbol/migration no longer
    resolves), **undocumented source facts** (a table with RLS/constraints the register never names), and a
    **blind-spots** disclosure line. Every report carries the completeness disclaimer.
@@ -433,9 +516,13 @@ are disclosed as blind spots, never counted.
    **accepted** candidate, append it via the safe primitive:
 
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" write-row \
-     --register knowledge-base/engineering/architecture/domain-model.md \
-     --anchor "<migration-file › table.object>" --statement "<candidate statement>"
+   if [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" ]; then
+     bash "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" write-row \
+       --register knowledge-base/engineering/architecture/domain-model.md \
+       --anchor "<migration-file › table.object>" --statement "<candidate statement>"
+   else
+     echo "SOLEUR_SYNC_PRODUCER_MISSING producer=scripts/domain-model-drift.sh affects=domain-model reason=absent-from-verified-root"
+   fi
    ```
 
    The primitive writes into the `## Auto-inferred (unreviewed)` section only — it NEVER touches the curated
@@ -445,7 +532,11 @@ are disclosed as blind spots, never counted.
    is a deliberate human edit (assign an id + keep the source anchor).
 
 3. **Report** the drift counts (stale / undocumented / blind-spots) and any rows written. No constitution /
-   learnings promotion paths apply.
+   learnings promotion paths apply. **If any guard above emitted `SOLEUR_SYNC_PRODUCER_MISSING`,
+   report ZERO rows written and say the register was not consulted** — the `write-row` fence exits 0
+   on the guard's `echo`, so "no error" is not evidence a row landed. Reporting rows that were never
+   appended is a false statement about the operator's own data, and it is the one thing here worse
+   than the bare error this guard replaced.
 
 ##### Standalone contract (`/soleur:sync domain-model`)
 
@@ -463,11 +554,20 @@ so under `all` (or headless) that gate would write **zero rows**. Take this path
    on a path they cannot resolve:
 
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" init --repo . \
-     --register knowledge-base/engineering/architecture/domain-model.md
+   if [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" ]; then
+     bash "${CLAUDE_PLUGIN_ROOT}/scripts/domain-model-drift.sh" init --repo . \
+       --register knowledge-base/engineering/architecture/domain-model.md
+   else
+     echo "SOLEUR_SYNC_PRODUCER_MISSING producer=scripts/domain-model-drift.sh affects=domain-model reason=absent-from-verified-root"
+   fi
    ```
 
    Idempotent: an existing register is a no-op exit 0, so this is safe to run unconditionally.
+   **But exit 0 here has two meanings.** If the guard above emitted
+   `SOLEUR_SYNC_PRODUCER_MISSING`, the fence also exits 0 — because the `echo` succeeded, not
+   because the register exists. Do not read that as "already initialized": no register was
+   created, and the steps below would then append to a file that is not there. Treat a fired
+   guard as **unchecked** and skip the rest of this area.
 
 2. **Emit the drift report** exactly as in step 1 above.
 

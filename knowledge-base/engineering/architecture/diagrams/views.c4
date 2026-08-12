@@ -11,6 +11,10 @@ views {
     include
       founder, emailSender, betaContact, contributor,
       platform, platform.webapp, platform.engine, platform.infra.supabase,
+      // platform.plugin is included explicitly so the delivery edges from
+      // soleurMarketplace have a rendered target — without it the marketplace
+      // renders as a disconnected box (ADR-182, #7471).
+      platform.plugin, soleurMarketplace,
       anthropic, github, cloudflare, doppler, discord, stripe, plausible, resend, pushService, ghcr, projectZot, zotRegistry, betterstack, sentry, sigstore, letsencrypt, publicResolvers, systemdUser
 
     style element.tag == #external {

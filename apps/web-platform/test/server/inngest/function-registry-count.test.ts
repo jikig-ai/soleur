@@ -82,6 +82,14 @@ const KNOWN_UNMONITORED_SLUGS = new Set([
 
 const NON_INNGEST_MONITORS = new Set([
   "scheduled-terraform-drift",
+  // #7471: GHA-fired on its own `schedule:` (scheduled-marketplace-drift.yml). It checks the
+  // PUBLISHED marketplace manifest with two unauthenticated raw GETs and no product secrets, so
+  // there is deliberately no Inngest cron function and therefore no SENTRY_MONITOR_SLUG — same
+  // class as scheduled-terraform-drift. The monitor exists because that workflow is the sole
+  // control on a repo with no CI, no review and no CODEOWNERS: without a heartbeat, a schedule
+  // that stops firing is indistinguishable from a manifest that has stayed clean, and there is
+  // no red run to notice because there is no run.
+  "scheduled-marketplace-drift",
   // #7307: GHA-fired executor (main-health-monitor.yml) posts the terminal
   // heartbeat; cron-main-health-monitor.ts only DISPATCHES the workflow and
   // declares no SENTRY_MONITOR_SLUG (the suite runs in the ephemeral runner, not

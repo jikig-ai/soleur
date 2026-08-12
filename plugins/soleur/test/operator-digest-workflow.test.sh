@@ -44,11 +44,23 @@ assert "issues: write (posts the digest issue)" '^[[:space:]]*issues:[[:space:]]
 refute "show_full_output: true is NOT set" 'show_full_output:[[:space:]]*true'
 
 # --- Cross-repo checkout of PUBLIC soleur, no persisted creds ---
-assert "checks out jikig-ai/soleur as the data source" 'repository:[[:space:]]+jikig-ai/soleur'
+# Anchored on a repo-name BOUNDARY. `jikig-ai/soleur` as a bare prefix also matches
+# `jikig-ai/soleur-marketplace`, so the unanchored form passed identically whether or not
+# the data source was the one intended — the vacuous-assertion class this repo has caught
+# twice before (#7471).
+assert "checks out jikig-ai/soleur as the data source" 'repository:[[:space:]]+jikig-ai/soleur[[:space:]]*$'
 assert "persist-credentials: false on checkout" 'persist-credentials:[[:space:]]+false'
 
-# --- plugin_marketplaces pinned to soleur (not the running private repo) ---
-assert "plugin_marketplaces pinned to jikig-ai/soleur" 'plugin_marketplaces:.*jikig-ai/soleur'
+# --- plugin_marketplaces pinned to the DISTRIBUTION marketplace, not the monorepo ---
+# Full URL, anchored at both ends. The previous form (`plugin_marketplaces:.*jikig-ai/soleur`)
+# was satisfied by any `jikig-ai/soleur*` repo, so it could not tell the monorepo from the
+# marketplace and would have reported PASS across the very migration it exists to police.
+# The distinction is load-bearing: the monorepo source clones ~181 MiB on every scheduled
+# run and exceeds the CLI's default clone timeout (measurements.md §1.6/2B.6).
+assert "plugin_marketplaces pinned to the soleur-marketplace repo" \
+  "plugin_marketplaces:[[:space:]]*'https://github\.com/jikig-ai/soleur-marketplace\.git'[[:space:]]*\$"
+assert "plugins id targets the soleur-marketplace entry" \
+  "plugins:[[:space:]]*'soleur@soleur-marketplace'[[:space:]]*\$"
 
 # --- Comment-stripped view of the asset. The YAML carries a documentation header that
 # replicates every load-bearing token (`gh issue create`, `digest-scrub.sh`, …), so a

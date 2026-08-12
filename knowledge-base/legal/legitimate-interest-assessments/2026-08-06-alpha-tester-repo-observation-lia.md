@@ -6,7 +6,7 @@ plan: knowledge-base/project/plans/2026-08-06-legal-alpha-tester-terms-and-proce
 determination: knowledge-base/legal/audits/2026-08-06-alpha-tester-controller-processor-determination.md
 issue: 7331
 status: draft-requires-counsel-review
-controller: "Jikigai SARL (France; 25 rue de Ponthieu, 75008 Paris) is the CONTROLLER for both limbs assessed here — this is not the beta-CRM pattern where the operator is controller and Jikigai processor"
+controller: "Jikigai SARL (France; 25 rue de Ponthieu, 75008 Paris) is the CONTROLLER for both limbs assessed here — both LIAs now name Jikigai as controller (the beta-CRM operator-as-controller split was corrected 2026-08-11, #7349 B4)"
 processing_activity: "Article 30(1) register PA-34 (dogfooding limb of operator-assisted runs, session-bound) and PA-35 (ongoing collaborator-access observation, live)"
 lawful_basis: "Art. 6(1)(f) GDPR — legitimate interest"
 data_subjects: "Natural persons whose personal data appears in an alpha tester's private repository. TWO POPULATIONS, and the balance differs between them: (1) involuntary third parties with no relationship to Jikigai — company officers named in business-register pouvoirs fixture data, and external git commit authors; (2) the tester's own personnel, who knowingly joined the alpha and granted the access, and whose Recital 47 reasonable expectations are therefore materially different. Population (1) is the one the balancing below is hardest on."
@@ -28,7 +28,7 @@ Two activities are assessed, both with **Jikigai as controller**:
 - **PA-35 (primary, live and ongoing):** the operator holds GitHub collaborator access to an alpha tester's **private** repository and reads the git history of its `knowledge-base/` tree to measure knowledge-base growth for Jikigai's own validation metrics (#1442).
 - **PA-34 (session-bound):** the dogfooding limb of the operator-assisted run of 2026-08-06 — observing how Soleur performs against a real third-party codebase, for Jikigai's own product learning.
 
-`knowledge-base/legal/legitimate-interest-assessments/2026-07-07-beta-crm-lia.md` does **not** cover either. That LIA addresses the operator's notes *about* testers, where the **operator** is controller and Jikigai is processor of the operator's own capture store. It says nothing about tester-owned data that Soleur or the operator reads, transforms or writes. The roles are inverted here.
+`knowledge-base/legal/legitimate-interest-assessments/2026-07-07-beta-crm-lia.md` does **not** cover either. That LIA addresses the operator's notes *about* testers, where **Jikigai** is controller as the activity runs today (corrected 2026-08-11, #7349 B4), of a capture store. It says nothing about tester-owned data that Soleur or the operator reads, transforms or writes. The roles are inverted here.
 
 `PA-32` (community observation and republication) does not cover it either: PA-32 is scoped to **public** activity, and this repository is private.
 

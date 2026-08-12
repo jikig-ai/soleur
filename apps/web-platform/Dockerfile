@@ -250,6 +250,10 @@ COPY --from=builder \
   /app/infra/web-git-data-probe.service \
   /app/infra/web-git-data-probe.timer \
   /app/infra/web-probe-envwrite.sh \
+  /app/infra/inngest-consumer-probe.sh \
+  /app/infra/inngest-consumer-probe.service \
+  /app/infra/inngest-consumer-probe.timer \
+  /app/infra/inngest-registry-probe.sh \
   /opt/soleur/host-scripts/
 RUN chown -R 1001:1001 /opt/soleur
 
