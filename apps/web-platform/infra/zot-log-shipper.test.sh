@@ -117,9 +117,9 @@ _final_gate() {
   fi
   _tally
   local ran=$(( PASS + FAIL ))
-  if [[ "$ran" -lt "131" ]]; then
+  if [[ "$ran" -lt "138" ]]; then
     FAIL=$(( FAIL + 1 ))
-    echo "  FAIL: assertion floor — ran $ran assertions, expected >= 131"
+    echo "  FAIL: assertion floor — ran $ran assertions, expected >= 138"
     echo "        (suite truncated, or assert() neutered — this run certified nothing)"
   fi
   echo ""
@@ -425,6 +425,47 @@ printf '%s\n' '{"level":"info","message":"HTTP API","headers":{"Authorization":[
 run_shipper "$J_BRACKET"
 assert "T6 redaction: a ']' inside the credential value does not truncate the redaction" \
   "! grep -qF 'etic-bracket-not-real' '$STUB_POSTS'"
+
+# --- T6b: REDACTION POSITIONAL COVERAGE (#7444 R8) --------------------------------------
+# The jq rewrite keyed on a TOP-LEVEL, lowercase, object-valued `headers` and returned every
+# other shape unmodified at rc=0 — a REGRESSION, since the sed it replaced matched
+# "Authorization":[...] anywhere in the line text. Every fixture below is a shape that leaked.
+# Note the axis this closes: all 131 prior fixtures were well-formed top-level JSON objects, so
+# the non-JSON branch and the nested/capitalised/array shapes were dead code w.r.t. the suite.
+_SECRET='SECRETVALUE123'
+redaction_case() {   # label, journal-line
+  local label="$1" line="$2"
+  local j="$TMP/j_red.$RANDOM"
+  printf '%s\n' "$line" > "$j"
+  run_shipper "$j"
+  assert "T6b $label: the credential never reaches the wire" \
+    "! grep -qF '$_SECRET' '$STUB_POSTS'"
+}
+redaction_case "nested request.headers" \
+  '{"request":{"headers":{"Authorization":["Basic SECRETVALUE123"]}}}'
+redaction_case "capitalised Headers key" \
+  '{"Headers":{"Authorization":["Basic SECRETVALUE123"]}}'
+redaction_case "bare top-level Authorization" \
+  '{"Authorization":["Basic SECRETVALUE123"]}'
+redaction_case "top-level array" \
+  '[{"headers":{"Cookie":["SECRETVALUE123"]}}]'
+# journald splits a line exceeding the log driver's buffer, and header size is client-controlled,
+# so a private-net client with a large Cookie chooses whether the line arrives as invalid JSON.
+redaction_case "truncated JSON fragment" \
+  '{"level":"info","headers":{"Cookie":["SECRETVALUE123"],"Authorization":["Bearer SECRETVALUE123'
+# How a panic trace or a pre-logger startup error actually renders. Neither previous sed rule
+# matched the bare form, and the probe's leak arm greps `Authorization:[` so it could not see it.
+redaction_case "bare Authorization in plaintext" \
+  'panic: config load failed; GET /v2/ Authorization: Basic SECRETVALUE123 from 10.0.1.30'
+
+# NON-VACUITY, and the direction the fixtures above cannot see: an over-aggressive redactor
+# would satisfy every one of them. A clean plaintext line must still ship with content intact,
+# and an allowlisted routing header must survive.
+J_CLEAN="$TMP/j_clean"
+printf '%s\n' 'panic: runtime error: index out of range [3] with length 3' > "$J_CLEAN"
+run_shipper "$J_CLEAN"
+assert "T6b non-vacuity: a credential-free plaintext line still ships, content intact" \
+  "grep -qF 'index out of range' '$STUB_POSTS'"
 
 # --- T7: FEEDBACK-LOOP guard ------------------------------------------------------------
 # Measured: a `zot-log-shipper`-tagged journal entry carries NO CONTAINER_NAME, and

@@ -752,37 +752,54 @@ write_files:
       # match there, so the row shipped `Authorization:[REDACTED` with the credential tail three
       # characters right, and the probe's subtraction then exonerated the line. Matching the
       # bracketed array non-greedily to the LAST `]` before the next key closes that.
-      # Structural, via jq — already a hard dependency (see the fail-loud guard above), so this
-      # adds no new failure surface. A regex over the header BODY was rejected: it needs a
-      # non-greedy value class, and a `]` inside an Authorization value defeated the previous one
-      # (`[^]]*\]` stopped at the first `]`, shipping `Authorization:[REDACTED` with the
-      # credential tail three characters right, which the probe's subtraction then exonerated).
+      # Structural, via jq — already a hard dependency (see the fail-loud guard above).
       #
-      # A line that does not parse as a JSON object has no headers object to anchor on, so it
-      # takes the name-anchored backstop. That split is exhaustive: jq exits non-zero here only on
-      # a parse failure, so the structural path covers every line that HAS headers.
+      # WALK, don't peek at the top level (#7444 R8). The first version of this fix keyed on a
+      # top-level, lowercase, OBJECT-valued `headers` and returned every other shape unmodified
+      # with rc=0. Measured leaks: {"request":{"headers":{...}}} nested, {"Headers":{...}}
+      # capitalised, an array-valued headers, a bare top-level {"Authorization":[...]}, and a
+      # top-level array. Worse, it was a REGRESSION: the sed it replaced matched
+      # "Authorization":[...] ANYWHERE in the line text, so those five shapes were redacted
+      # before and not after. The rewrite widened NAME coverage and narrowed POSITIONAL
+      # coverage, and only the first was measured.
+      #
+      # walk() reaches every object at any depth; the container key is compared case-folded, the
+      # same way the inner keys already were. A headers key whose value is NOT an object is a
+      # shape this redactor cannot reason about, so it becomes an error and the row is dropped.
       HDR_KEEP='["content-type","content-length","accept","accept-encoding","user-agent","host","connection","range","docker-distribution-api-version"]'
-      # FAILS CLOSED. The two branches are selected by whether the line IS a JSON object, decided
-      # up front — NOT by whether the redaction pipeline happened to exit zero. Those are different
-      # questions, and conflating them is a silent leak: a bug in the jq program would otherwise
-      # degrade every structured row to the name-anchored backstop, which is precisely the
-      # header-NAME anchoring this fix exists to remove. Measured while writing it — an earlier
-      # draft indexed the allowlist wrongly, jq exited 5, and the fallback shipped a Cookie value
-      # verbatim while every Authorization assertion still passed.
+      # FAILS CLOSED, and the two branches are selected by whether the line IS JSON, decided up
+      # front — NOT by whether the pipeline happened to exit zero. Conflating those is a silent
+      # leak: an earlier draft indexed the allowlist wrongly, jq exited 5, and the fallback
+      # shipped a Cookie verbatim while every Authorization assertion still passed.
       #
-      # So: a JSON object MUST redact structurally or the row is dropped (return 1). Only a
-      # genuinely non-JSON line — which has no headers object to anchor on — takes the backstop.
+      # THE NON-JSON BRANCH IS REACHABLE AND IS NOT A LESSER PATH. An earlier comment here claimed
+      # the split was "exhaustive" because only a parse failure takes the backstop — which inverts
+      # its own premise, since a parse failure is exactly the case where a line HAS headers and
+      # cannot be structurally redacted. zot runs --log-driver journald, so a line exceeding the
+      # driver's buffer arrives as multiple invalid-JSON fragments, and header size is
+      # client-controlled: a private-net client with a large Cookie chooses whether the line
+      # splits. So the backstop redacts the bare/quoted/bracketed forms AND refuses any residual.
       redact() {
         local line="$1" out
-        if printf '%s' "$line" | jq -e 'type == "object"' >/dev/null 2>&1; then
+        if printf '%s' "$line" | jq -e 'type == "object" or type == "array"' >/dev/null 2>&1; then
           out="$(printf '%s' "$line" | jq -c --argjson keep "$HDR_KEEP" '
-                  if has("headers") and ((.headers | type) == "object")
-                  then .headers |= with_entries(
-                         (.key | ascii_downcase) as $k
-                         | if ($keep | index($k)) then .
-                           else .value = (if (.value | type) == "array" then ["REDACTED"] else "REDACTED" end)
-                           end)
-                  else . end' 2>/dev/null)" || {
+                  def scrub:
+                    with_entries(
+                      (.key | ascii_downcase) as $k
+                      | if ($keep | index($k)) then .
+                        else .value = (if (.value | type) == "array" then ["REDACTED"] else "REDACTED" end)
+                        end);
+                  walk(
+                    if type == "object" then
+                      with_entries(
+                        if (.key | ascii_downcase) == "headers" then
+                          if (.value | type) == "object" then .value |= scrub
+                          else error("non-object headers value")
+                          end
+                        elif (.key | ascii_downcase) == "authorization" then
+                          .value = (if (.value | type) == "array" then ["REDACTED"] else "REDACTED" end)
+                        else . end)
+                    else . end)' 2>/dev/null)" || {
             echo "[zot-log-shipper] FATAL: header redaction failed on a JSON row — dropping it rather than shipping unredacted" >&2
             return 1
           }
@@ -793,9 +810,29 @@ write_files:
           printf '%s' "$out"
           return 0
         fi
-        printf '%s' "$line" | sed -E \
-          -e 's/("?[Aa]uthorization"?[[:space:]]*:[[:space:]]*\[)[^]]*\]/\1"REDACTED"]/g' \
-          -e 's/("?[Aa]uthorization"?[[:space:]]*:[[:space:]]*)"[^"]*"/\1"REDACTED"/g'
+        # Non-JSON. ONE rule over every credential-bearing header name, covering all the
+        # renderings such a line can take — bracketed array, quoted string, and BARE
+        # (`Authorization: Basic <b64>`, how a panic trace or a pre-logger startup error
+        # actually renders). The optional quote between the name and the colon is load-bearing:
+        # a TRUNCATED JSON fragment renders as `"Cookie":["…` , and a rule written for the bare
+        # form alone does not match it — measured, that shipped a Cookie verbatim.
+        #
+        # The value class runs to the next `,` or `}` rather than to a closing quote or bracket,
+        # because a truncated fragment has neither. That over-redacts the tail of a bare
+        # plaintext line; on a credential-bearing line that is the safe direction.
+        out="$(printf '%s' "$line" | sed -E \
+          -e 's/("?)([Aa]uthorization|[Cc]ookie|[Xx]-[Aa]pi-[Kk]ey|[Pp]roxy-[Aa]uthorization|[Xx]-[Aa]mz-[Ss]ecurity-[Tt]oken)("?[[:space:]]*:[[:space:]]*)[^,}]*/\1\2\3REDACTED/g')"
+        # REFUSE ANY RESIDUAL. If a credential-bearing header name still carries anything other
+        # than REDACTED, this redactor did not understand the line and must not ship it.
+        # `[^R[:space:]]` excludes the space, not just R: with `[^R]` alone the regex backtracks
+        # — `[[:space:]]*` matches zero characters and `[^R]` then matches the space itself, so a
+        # correctly-redacted `Authorization: REDACTED` was read as a residual and the row dropped.
+        # Measured: it discarded a panic trace whose credential had in fact been removed.
+        if printf '%s' "$out" | grep -qiE '(authorization|cookie|x-api-key|x-amz-security-token)"?[[:space:]]*:[[:space:]]*[^R[:space:]]' ; then
+          echo "[zot-log-shipper] FATAL: unredactable credential header in a non-JSON line — dropping the row" >&2
+          return 1
+        fi
+        printf '%s' "$out"
       }
 
       # PAYLOAD INTEGRITY, not redaction. Collapse the whitespace that would break a JSON string,
@@ -912,13 +949,19 @@ write_files:
       # (OOM, reboot) would then have persisted no cursor for rows it had already read, and the
       # whole drain replays. Measured by T10b, which went RED the moment the single-jq pipeline
       # landed without it.
+      # THE PARENTHESES AROUND fromjson? ARE LOAD-BEARING. `$m | fromjson? | .message? // ""`
+      # binds nothing when $m is not JSON — `fromjson?` emits NO value on a parse error, so the
+      # `as $z` never binds and jq drops the WHOLE record. Every plaintext line (Go panic traces,
+      # docker daemon lines, pre-logger startup errors — the highest-value evidence) vanished at
+      # the jq stage with no drop row and no stderr. `(...) // ""` applies the alternative to the
+      # empty stream instead. Caught by T6b's non-vacuity fixture, not by any leak fixture.
       # @tsv escapes embedded tabs and newlines, so a field cannot split a record. The three
       # fields are emitted in a fixed order and `read -r` with IFS=tab takes them positionally;
       # zmsg is LAST because it is the only one that can legitimately be empty.
       JQ_TICK='
         (.__CURSOR // "") as $c
         | (.MESSAGE // "") as $m
-        | ($m | fromjson? | .message? // "") as $z
+        | (($m | fromjson? | .message?) // "") as $z
         | [$c, $m, $z] | @tsv
       '
       while IFS=$'\t' read -r cur msg zmsg; do
