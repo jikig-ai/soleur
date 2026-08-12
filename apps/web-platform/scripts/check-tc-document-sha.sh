@@ -295,7 +295,7 @@ fi
   POSTURE_REGISTER="${_TC_SHA_REPO_ROOT}/knowledge-base/legal/compliance-posture.md"
   if [ -f "$POSTURE_REGISTER" ]; then
     POSTURE_VERSION=$(grep -oE '^\| Terms & Conditions \|[^|]*\| *[0-9]+\.[0-9]+\.[0-9]+ *\|' "$POSTURE_REGISTER" \
-                      | head -n 1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+                      | head -n 1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
     if [ -z "$POSTURE_VERSION" ]; then
       echo "::error::compliance-posture.md has no parseable Terms & Conditions version cell" >&2
       echo "    The row is the compliance register's record of the live T&C version; if its" >&2
