@@ -115,3 +115,73 @@ Two failures from the prior complete run were run down rather than re-run away:
   on main; the skip guard was descoped rather than the threshold raised. Region now 1166.
 - `run-migrations-unmerged-gate.test.ts` — NOT mine. Confirmed three ways: diff touches neither
   the test nor its subject; 3/3 in isolation; and it did **not recur** on the clean run.
+
+---
+
+## Resume session 2026-08-12 (post-review-panel remediation)
+
+**These entries record what LANDED, verified against the artifact — not intent.** Every
+row below is committed and its suite was run. (The prior block's `### Decisions` entries
+are intent and were treated as unverified on entry, per the resume rule.)
+
+### Done — committed, green, mutation-proven
+
+| # | Work | Evidence |
+| --- | --- | --- |
+| 0 | **Merged `origin/main`.** #7475 landed mid-flight and touched `plugin-root-anchoring.test.ts` (+287), ADR-179 (+127), `go.md`, `sync.md`, `review/SKILL.md` — the exact files this work rebuilds. Findings §F's "main moved one commit … introduces no new members" is STALE. | clean merge, no conflicts |
+| 1 | **CTO ruling on the §E fork** — binding, recorded at `cto-ruling-adr179-fork.md`. Dissolves the deadlock: decision 1 governs PATHS, so a telemetry emission need not be a path. Three framing corrections, one scope-changing (C1). | `d863182fc`.. |
+| 2 | **Guard 1 rebuilt** — A1, A2, A3, A5, A8, A9, A10, A11, A13 closed. Per-occurrence verdict, halt bound to the preflight's own statement, identity-set pin, 7 synthesized fixtures as positive control, symlink-tolerant discovery, axis widened to `redact-*.py` + `digest-scrub.sh`. | 25/25; 8-mutation battery all RED vs GREEN control |
+| 3 | **Guard 2 hardened** — A4 (cross-file floor, Test 20), A6 (resolve-before-containment), A7 (bash-fence-scoped oracle, exactly one), A12 (18c positive control), C15 (`SENTINEL\|SCRUBBER`), 18b strengthened to assert dispatch, `mkdir` guarded, contributor text no longer bash-expanded. | 92/0; 6-mutation battery, M-D proven non-equivalent |
+| 4 | **linear-fetch C1–C4** — pipe restored via quoted heredoc, `$PERSIST_SAFE` printed, redaction-HAPPENED check added, blob-independent guards moved to a new **Phase B.0 pre-fetch preflight** so the halt precedes `agent_context`. | 4/4 suites |
+| 5 | **All FOUR linear-fetch suites were unregistered**, not one as §G recorded — `test-all.sh` globs `skills/*/test/*.test.sh` and linear-fetch was the only skill putting `.test.sh` in `scripts/`. Relocated via `git mv`. | now inside the glob, 4/4 |
+| 6 | **B2 trigger-cron** — bare quoted anchor + identity preflight + presence guard. Zero `:-` left in the file. | Guard 1+2 green |
+| 7 | **B4 settings.json** — dead auto-approve entry deleted (measured dead: all 22 sites emit the `:-` form). Not replaced; that belongs with #7453. | JSON still parses |
+| 8 | **CTO C1 — three payload SCRIPTS** (`gdpr-gate.sh`, `net-issue-flow.sh`, `token-efficiency-report.sh`) no longer source incidents.sh from the git root. | telemetry preserved 828→832 rows |
+
+### Measured correction to the CTO ruling
+
+The ruling prescribed resolving the incidents lib via `CLAUDE_PROJECT_DIR` alone.
+**Measured: that variable is unset in a plain Claude Code session and in git hooks**, and
+`gdpr-gate.sh` runs from lefthook — so a single-arm fix would have silently retired the
+telemetry at all three sites while looking like a security fix. Its cited precedent
+(`git-commit-secret-scan.sh`) falls back to `git rev-parse`, the banned construct. Shipped
+two-armed: `CLAUDE_PROJECT_DIR`, else the script's own location (layout-invariant per
+ADR-178, not CWD-derived), never git-root.
+
+### NOT done — exact resume points
+
+1. **B3 — the 20 markdown `source` sites + the capture hook.** The CTO's decision-9
+   inversion: replace each `source … && emit_incident` with an inert `printf` marker, and
+   add a monorepo-only **PostToolUse/`Bash`** hook that parses the marker and emits.
+   **These must land TOGETHER** — markers without a consumer is the measurement blackout
+   the ruling explicitly rejected. The hook MUST validate the rule id against a closed
+   corpus and sanitize the note (the markdown that prompts the marker is
+   contributor-writable on the review path). Use the two-arm resolver already shipped in
+   item 8 for the hook's own lib resolution, NOT `CLAUDE_PROJECT_DIR` alone.
+2. **B1 — root-outside-worktree assertion at all three gates.** Design tension to settle
+   first, and it is real: on a plain (non-bare) clone the plugin root IS inside the working
+   tree, so the naive assertion breaks dogfooding. It passes on THIS machine only because
+   the install is the bare root while review happens in `.worktrees/`. Needs an explicit
+   escape, or the CTO's §R1 framing applied (remove trust from CWD-resident operands rather
+   than authenticate the tree).
+3. **Records.** ADR-179 amendment carrying the ruling's decisions 8/9/10 verbatim + the
+   §R1 replacement text + the option-(e) scoping (C5); ADR-093 paragraph restored
+   BYTE-IDENTICAL with AC11's needle rescoped (C8); the 2026-07-08 plugin-root-migration
+   learning superseded (D1 — highest-value one-liner); Pattern A count 6→5 with Pattern B's
+   command published (C11); `tasks.md` 48 boxes (D5); C5, C6, C7, C9, C10, C12, C13, C14;
+   D3, D4, D7.
+4. **D6** — `phase-1-measurement.md` Arm 3's inference is logically void. Either run the
+   deferred arm via headless `claude -p` (it builds its own skill registry, so the recorded
+   "requires a fresh session" blocker is wrong) or drop the leg and rest on the two
+   independent precedents.
+5. **Re-route §R1's second half** — a review session opened inside a contributor-checked-out
+   worktree executes that tree's `.claude/hooks/*.sh` on every tool call. Strictly larger
+   than any path anchor, not an anchoring defect. File as a separate P0; it must NOT hold
+   #7450 open.
+6. **Full-suite exit gate has NOT been run this session.** Run it on a clean tree, detached
+   (`setsid nohup`), and read the rc file plus the epilogue's infra-coverage line — not the
+   task notification.
+7. Then `/soleur:review` (min: security-sentinel, test-design-reviewer, structural-enumeration
+   seat against the rebuilt guard) → `/soleur:compound` → `/soleur:ship`.
+
+**Do NOT close #7450 until the ADR-179 §R1 replacement text is committed.**
