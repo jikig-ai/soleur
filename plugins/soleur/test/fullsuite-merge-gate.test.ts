@@ -69,6 +69,16 @@ const FAILSAFE_CLAUSE =
  * heading, and a literal planted in the swallowed section satisfies the slice's
  * assertions (verified as a live mutation).
  */
+// window-assembly: sliceSection — the window is asserted complete against ONE
+// markdown section, delimited by its own start heading and the SPECIFIC heading
+// that follows it (never a generic `## Phase ` prefix). Completeness is enforced
+// at both ends by construction: each `indexOf` throws on -1, so a retitle of
+// either delimiter fails loudly instead of silently truncating the window (start
+// missing) or swallowing the following section into it (terminator missing). The
+// enumeration this stands for is "every fenced test-all.sh invocation prescribed
+// by this section" — widening the window would admit invocations from a section
+// that is not the one under test, which is the defect a generic terminator caused
+// and which review demonstrated as a live mutation.
 function sliceSection(src: string, startHeading: string, nextHeading: string): string {
   const start = src.indexOf(startHeading);
   if (start === -1) throw new Error(`anchor not found: ${JSON.stringify(startHeading)} — retitled?`);
