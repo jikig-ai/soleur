@@ -1005,6 +1005,94 @@ else
   FAIL=$((FAIL + 1))
 fi
 
+# ---------------------------------------------------------------------------
+# Test 24 — STAKES-KEYED, discovered on disk, NO allowlist (CTO ruling item 2).
+#
+# Test 18c is keyed to a SYNTAX: the `${CLAUDE_PLUGIN_ROOT:-$(git rev-parse …)}` literal.
+# That is what let review-finding B2 hide. `trigger-cron` invoked a script running
+# `doppler secrets get … -c prd --plain` through the `./`-relative `:-` form, so 18c
+# truthfully printed "zero … remain anywhere under plugins/soleur/" while a cheaper-to-exploit
+# secret site sat one syntax away. A needle keyed to the shape of yesterday's bug cannot see
+# tomorrow's.
+#
+# So this assertion is keyed to STAKES instead, and the population is DISCOVERED ON DISK
+# rather than pinned: any script under skills/*/scripts/ whose own text handles a credential.
+# A pinned list has the same blind spot as a syntax needle — it cannot contain a site nobody
+# thought to add. G3/G5 in Guard 1 pin their populations deliberately (they assert an exact
+# identity set); this one deliberately does not.
+#
+# NO ALLOWLIST, by ruling. The ~105 non-gate sites deferred to #7453 are allowed to keep the
+# `:-` arm; a site that hands a credential to the resolved script is not, regardless of which
+# migration wave it belongs to.
+# ---------------------------------------------------------------------------
+t24_secret_scripts=()
+while IFS= read -r t24_s; do
+  t24_secret_scripts+=("${t24_s}")
+done < <(
+  find "${REPO_ROOT}/plugins/soleur/skills" -path '*/scripts/*' -type f \
+       \( -name '*.sh' -o -name '*.py' \) 2>/dev/null |
+  while IFS= read -r f; do
+    case "${f}" in *.test.sh) continue;; esac
+    # Credential handling, in the script's OWN text: a secrets-manager read, or a named
+    # credential variable it requires. Deliberately broad — a false positive costs one
+    # migrated anchor, a false negative costs a secret.
+    if grep -qE 'doppler secrets get|gh auth token|(API_KEY|ACCESS_TOKEN|BOT_TOKEN|_SECRET|_PAT|PRIVATE_KEY)[^A-Z_]' "${f}" 2>/dev/null; then
+      printf '%s\n' "${f}"
+    fi
+  done | sort
+)
+
+# Anti-vacuity FIRST: an empty or shrunken discovery set would make the violation loop below
+# pass unconditionally — the false-PASS shape 18c had to fix (A12).
+#
+# The floor is REQUIRED MEMBERSHIP, not a count. A bare `>= N` count is the same defect as
+# `GATE_REF_FLOOR` (A10): it fails OPEN on shrinkage, so a predicate edit that quietly drops
+# 70% of the population still clears a threshold set below the old size. Measured — an early
+# draft of this test used `>= 5` against a real population of 21, and a mutation that gutted
+# three-quarters of the credential predicate SURVIVED it.
+#
+# These three are pinned because each is a distinct credential-acquisition shape: a secrets
+# manager read, an ambient bot token, and a platform-API key set. A predicate that stops
+# seeing any one of them has stopped doing its job, whatever its total.
+t24_required=("trigger-cron/scripts/trigger.sh" "community/scripts/community-router.sh" "flag-create/scripts/create.sh")
+t24_missing_required=""
+for t24_req in "${t24_required[@]}"; do
+  t24_found=0
+  for t24_have in "${t24_secret_scripts[@]}"; do
+    case "${t24_have}" in */"${t24_req}") t24_found=1; break;; esac
+  done
+  [[ "${t24_found}" -eq 1 ]] || t24_missing_required="${t24_missing_required} ${t24_req}"
+done
+
+if [[ -n "${t24_missing_required}" ]]; then
+  echo "FAIL: Test 24: credential-script discovery no longer sees:${t24_missing_required} — each is a distinct credential-acquisition shape (secrets-manager read / ambient bot token / platform API key set), so the predicate is broken and a zero-violation verdict below would be vacuous. Found ${#t24_secret_scripts[@]} members total."
+  FAIL=$((FAIL + 1))
+else
+  t24_violations=""
+  for t24_script in "${t24_secret_scripts[@]}"; do
+    t24_base="${t24_script##*/}"
+    # Every SKILL.md invocation of this script that routes through a `:-` default arm.
+    while IFS= read -r t24_hit; do
+      [[ -n "${t24_hit}" ]] || continue
+      t24_violations="${t24_violations}
+    ${t24_hit}"
+    done < <(
+      grep -rn --include='SKILL.md' -E "CLAUDE_PLUGIN_ROOT:-[^}]*}[^\"']*${t24_base}" \
+        "${REPO_ROOT}/plugins/soleur/skills" 2>/dev/null |
+        sed "s|${REPO_ROOT}/plugins/soleur/skills/||"
+    )
+  done
+
+  if [[ -z "${t24_violations}" ]]; then
+    echo "PASS: Test 24: zero \`:-\` default arms on any of the ${#t24_secret_scripts[@]} discovered secret-handling scripts (stakes-keyed, no allowlist)"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL: Test 24: a script that handles a credential is invoked through a \`:-\` default arm, which resolves CWD-relative into whatever tree the session sits in:${t24_violations}"
+    echo "       Migrate the invocation to the bare quoted anchor. This assertion has NO allowlist on purpose (CTO ruling item 2) — deferring to #7453 is for non-gate sites, not for sites that hand over a credential."
+    FAIL=$((FAIL + 1))
+  fi
+fi
+
 echo
 echo "Total: ${PASS} pass, ${FAIL} fail"
 [[ "${FAIL}" -eq 0 ]]

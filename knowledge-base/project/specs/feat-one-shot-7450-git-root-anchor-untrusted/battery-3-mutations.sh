@@ -28,12 +28,20 @@ INC="$SBX/plugins/soleur/skills/incident/SKILL.md"
 LIN="$SBX/plugins/soleur/skills/linear-fetch/SKILL.md"
 
 # Pristine backup — the ONLY thing a "did the mutation land?" check may compare against.
+COMM="$SBX/plugins/soleur/skills/community/SKILL.md"
 PRISTINE="$SBX/.pristine"
 mkdir -p "$PRISTINE"
-cp "$GUARD" "$PRISTINE/guard"; cp "$INC" "$PRISTINE/inc"; cp "$LIN" "$PRISTINE/lin"
+cp "$GUARD" "$PRISTINE/guard"; cp "$INC" "$PRISTINE/inc"; cp "$LIN" "$PRISTINE/lin"; cp "$COMM" "$PRISTINE/comm"
 
 run_guard() { bash "$GUARD" 2>&1; }
-restore() { cp "$PRISTINE/guard" "$GUARD"; cp "$PRISTINE/inc" "$INC"; cp "$PRISTINE/lin" "$LIN"; }
+# EVERY mutable file, every time. An earlier version of this function omitted $COMM, so M-G's
+# mutation survived into M-H and M-H reported RED for M-G's reason — a fake row that looks
+# exactly like a real one. Cross-row contamination is why restore() is total rather than
+# per-row: a battery is only as trustworthy as its weakest teardown.
+restore() {
+  cp "$PRISTINE/guard" "$GUARD"; cp "$PRISTINE/inc" "$INC"
+  cp "$PRISTINE/lin" "$LIN";     cp "$PRISTINE/comm" "$COMM"
+}
 
 # ---- GREEN CONTROL ---------------------------------------------------------
 out="$(run_guard)"; rc=$?
@@ -102,6 +110,29 @@ mutate "M-E" "the [ -n \"\$PERSIST_SAFE\" ] non-empty check deleted outright" \
 mutate "M-F" "non-empty check retained but its halt arm converted to a no-op" \
   "$LIN" "Test 23" "$PRISTINE/lin" \
   sed -i '/reason=redaction-empty-output/,/exit 2; }/ s/exit 2; }/true; }/' "$LIN"
+
+cp "$COMM" "$PRISTINE/comm"
+
+# ---- M-G: Test 24 — revert the community anchor to the `:-` form. This is the site the
+# stakes-keyed assertion FOUND (the panel's syntax-keyed 18c could not see it), so it is the
+# row that proves the assertion is live rather than decorative.
+mutate "M-G" "community's router anchor reverted to \${CLAUDE_PLUGIN_ROOT:-plugins/soleur}" \
+  "$COMM" "Test 24" "$PRISTINE/comm" \
+  sed -i 's|"\${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/community-router.sh"|${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/community/scripts/community-router.sh|g' "$COMM"
+
+# ---- M-H: Test 24 harness mutation — break the on-disk discovery so the population goes
+# empty. Without the anti-vacuity floor, a zero-violation verdict over an empty set passes.
+mutate "M-H" "credential-detection predicate re-keyed so discovery returns nothing" \
+  "$GUARD" "Test 24" "$PRISTINE/guard" \
+  sed -i "s|doppler secrets get\|gh auth token\|(API_KEY\|ACCESS_TOKEN\|BOT_TOKEN\|_SECRET\|_PAT\|PRIVATE_KEY)[^A-Z_]|zzznevermatchesanything|" "$GUARD"
+
+# ---- M-I: Test 24 — PARTIAL shrinkage. Drops the alternations that discover
+# community-router.sh while leaving enough of the predicate that the population stays well
+# above the old `>= 5` count floor. This is the row that proves REQUIRED MEMBERSHIP beats a
+# count: the superseded floor would have waved this straight through.
+mutate "M-I" "predicate narrowed so a required member vanishes while the COUNT stays healthy" \
+  "$GUARD" "Test 24" "$PRISTINE/guard" \
+  sed -i "s|(API_KEY\\|ACCESS_TOKEN\\|BOT_TOKEN\\|_SECRET\\|_PAT\\|PRIVATE_KEY)\[^A-Z_\]|(_PAT\\|PRIVATE_KEY)[^A-Z_]|" "$GUARD"
 
 echo
 echo "Battery complete."

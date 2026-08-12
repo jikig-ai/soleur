@@ -76,7 +76,7 @@ indistinguishable from a real regression (this happened on the first run and was
 worked around). Un-mutated control run FIRST and required GREEN. Each mutation compared against a
 pristine backup before its verdict is believed.
 
-**Control: GREEN, 95 pass / 0 fail. Result: 6/6 RED. Zero survivors.**
+**Control: GREEN, 96 pass / 0 fail. Result: 9/9 RED. Zero survivors.**
 
 | # | Mutation | Target | Required | Observed |
 | --- | --- | --- | --- | --- |
@@ -86,6 +86,9 @@ pristine backup before its verdict is believed.
 | M-D | Redirect a marker to stderr (marker present, but off the mirrored stream) | SUT | RED at Test 22 | **RED** |
 | M-E | **Delete `[ -n "$PERSIST_SAFE" ]` outright** — finding C12's defect verbatim | SUT | RED at Test 23 | **RED** |
 | M-F | Retain the non-empty check, convert its halt arm to `true` (the A2 fail-open shape) | SUT | RED at Test 23 | **RED** |
+| M-G | Revert `community`'s router anchor to the `:-` form — **the site Test 24 found** | SUT | RED at Test 24 | **RED** |
+| M-H | **Harness mutation** — gut the credential predicate so discovery returns nothing | **guard** | RED at Test 24's floor | **RED** |
+| M-I | **Harness mutation, PARTIAL** — narrow the predicate so one required member vanishes while the COUNT stays healthy | **guard** | RED at Test 24's floor | **RED** |
 
 M-B is the row that answers the panel's post-mortem directly: *harness/guard mutation* was one of
 the seven axes M1–M10 never touched, and it is the axis on which a guard silently stops guarding.
@@ -97,3 +100,20 @@ quoting error), and the landing check reported **`NOT APPLIED — row VOID`** in
 Without that check it would have been recorded as a survivor, and the natural response to a
 "survivor" is to weaken or delete the assertion — a mutation battery whose bugs push toward
 removing real coverage. It is reported here rather than quietly re-run.
+
+### Two battery defects that produced wrong rows before they produced right ones
+
+Both are recorded because each fails in the direction of false confidence.
+
+1. **Cross-row contamination.** `restore()` initially omitted `community/SKILL.md`, so M-G's
+   mutation survived into M-H and **M-H reported RED for M-G's reason** — a fake row
+   indistinguishable from a real one, in a battery whose whole purpose is to be believed.
+   `restore()` is now total rather than per-row.
+2. **The anti-vacuity floor was a COUNT, and counts fail open on shrinkage.** Test 24's floor
+   was `>= 5` against a real population of 21. M-H — which guts three-quarters of the credential
+   predicate — **SURVIVED it**. That is finding A10 (`GATE_REF_FLOOR` fails open on additions) in
+   another guise, reintroduced by me in the same PR that fixed it. The floor is now **required
+   membership**: three pinned scripts, each a distinct credential-acquisition shape (secrets-manager
+   read / ambient bot token / platform API key set). **M-I exists specifically to prove the
+   replacement is stronger than the thing it replaced** — it narrows the predicate so exactly one
+   required member disappears while the count stays healthy, and the old floor would have passed it.
