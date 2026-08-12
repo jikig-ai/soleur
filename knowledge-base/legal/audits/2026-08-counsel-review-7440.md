@@ -7,7 +7,7 @@ pr: 7444
 attestation-authority: clo
 status: WITHHELD (CLO-agent-attested, Soleur-as-tenant-zero v1)
 disposition: BLOCKED
-disposition_history: "BLOCKED at first review (B1-B6) — 2026-08-12"
+disposition_history: "BLOCKED at first review (B1-B6) — 2026-08-12 -> B1-B6 VERIFIED FIXED at re-review (22f298dde) -> BLOCKED at re-review on B7, a table-breaking defect introduced by this authority's own §7 B2 draft — 2026-08-12"
 tier_classification: "Tier 3 (internal record-keeping) — Art. 30(1)(d)/(g) amendment to an existing Processing Activity. No new recipient, no new sub-processor, no new third-country transfer, no user-facing legal-document surface. `docs/legal/**` untouched, so none of the five mirror/SHA/heading gates are engaged."
 semver: "N/A — no `docs/legal/**` document changed; TC_VERSION unaffected"
 brand_survival_threshold: single-user incident
@@ -210,3 +210,72 @@ On a clean re-review this becomes `status: SIGNED-OFF (CLO-agent-attested, Soleu
 **Referred out of this domain:** whether `zot_last_err` should route through `redact()` on the `SOLEUR_ZOT_DISK` path is a CTO decision (§3, B2). My gate is discharged by accurate disclosure regardless of which way it goes, but it should carry its own issue rather than being folded into a docs fix.
 
 **Standing note.** This attestation is the v1 *internal* sign-off under the Soleur-as-tenant-zero posture. The operator retains an optional veto. External counsel re-review is reserved for the frontmatter triggers, of which the public-ingress trigger is the strongest candidate.
+
+---
+
+## 9. Re-review — 2026-08-12, commit `22f298dde`
+
+Confined to the two legal files per §8. I did not re-verify `redact()`, the Art. 30(1) characterisation, the lawful basis, the recipient/sub-processor/transfer analysis, the INERT posture, or the ADR cross-references.
+
+**Disposition: BLOCKED** on one new finding, B7, which this authority introduced.
+
+### 9.1 B1–B6: all six verified fixed
+
+| Blocker | Verdict at re-review |
+|---|---|
+| B1 — false "FIRST without Vector" | **FIXED.** Headline recast to payload class; #6122/#6244 credited; both pre-existing reporters named as unchanged. Zero residual occurrences of the false string in either file. |
+| B2 — host-level assurance false at host level | **FIXED.** `redact()` scoped "**for this emitter**"; the host-level residual disclosure is present with the `zot_last_err` tiering, the sanitizer-not-redactor distinction, and the `Cookie`/`X-Api-Key` gap. `#<TBD>` correctly resolved to **#7500** (verified OPEN, correctly titled and labelled). |
+| B3 — mutation-arm claim untrue of the cited file | **FIXED.** Recast to non-vacuity controls, with the 150/150 count, the harness canary, the assertion floor, the development-time 11-mutant battery, and the explicit contrast against `git-data-emit.test.sh`. |
+| B4 — §(c) left stale | **FIXED.** Block appended to the PA-8 §(c) cell. |
+| B5 — vendor-mapping row unannotated | **FIXED**, and improved: adding `(#7500)` to the `SOLEUR_ZOT_DISK` clause was the coordinator's own addition and is right — the residual now points at its tracker from the mapping table too. |
+| B6 — within-cell contradiction | **FIXED.** Pseudonymisation sentence scoped to the Vector plane. |
+
+**On the two questions raised.** The B4 anchor is **correct as applied** — appending to the end of the existing PA-8 §(c) cell is what was intended; this table is two-column (`| Art. 30(1) limb | Entry |`), so a "separate cell" is not a structure it admits. And **do not recast the `compliance-posture.md` cell** per §6.1: the inline sentence is now correctly qualified, §6.1 was a style preference and nothing more, and widening a docs fix past its blocker is the wrong instinct. Declining it was the right call. Consider it withdrawn.
+
+The one ordering deviation — the host-level residual disclosure appended *after* the test-methodology sentence rather than before it — is accepted. The block closes on the residual rather than on the enforcement, which reads slightly oddly, but the scoping fix opens the block and the disclosure sits in the same block in the same cell. No reader is misled. Not worth a round-trip.
+
+### 9.2 B7 — BLOCKING: three unescaped pipes break the §(g) table row
+
+**This defect came from my own §7 B2 draft. I wrote the text, I did not check it against the file's conventions, and the coordinator applied it in good faith verbatim. The finding is mine to own.**
+
+`article-30-register.md` line 180 (the §(g) row) went from **3 pipes to 6**. The three new ones are unescaped `|` characters inside backtick spans in the residual-disclosure sentence:
+
+> (tiered: `panic:`/`fatal error`/signal/`runtime error`, then `` `level:error|fatal` ``, then a `` `cannot|failed to|unable to` `` sweep, then a `docker logs --tail 3` fallback)
+
+Backticks do **not** protect a pipe in a Markdown table. GFM splits the row into cells on `|` before it parses inline code. This table declares two columns (`|---|---|`), so a row arriving with four cells has the surplus **dropped from the rendered output entirely**.
+
+The truncation begins at `level:error`. Everything after it is invisible in any rendered view — GitHub, the Eleventy build, any export handed to a supervisory authority:
+
+- the `cannot|failed to|unable to` and `docker logs --tail 3` fallback tiers,
+- "That sample passes through the payload-integrity sanitizer only and through no `redact()` at all",
+- the `Cookie` / `X-Api-Key` non-masking gap,
+- and the #7500 remediation pointer.
+
+That is the entire substance of B2. The source is correct; the record as read is truncated at precisely the sentence B2 was raised to install, and it fails in the direction of understating exposure — the same failure direction as B1 and B2 themselves. I will not attest a safeguards cell whose disclosure disappears on render.
+
+**The file already knows this rule and follows it everywhere else.** `article-30-register.md` carries ten existing escaped pipes — `` `in_progress\|ok\|error` ``, `` `terraform show -json \| jq` ``, `` `^(payment\|legal\|auth)\.` `` among them. My draft was the only place that departed from the file's own convention.
+
+**Fix — two substitutions on line 180, three characters total:**
+
+| Current | Replace with |
+|---|---|
+| `` `level:error|fatal` `` | `` `level:error\|fatal` `` |
+| `` `cannot|failed to|unable to` `` | `` `cannot\|failed to\|unable to` `` |
+
+Line 180 must return to a pipe count of **3**.
+
+### 9.3 Scope check on the rest of the commit
+
+No other cell gained a pipe. `article-30-register.md` line 174 (§(c), B4) 5→5, line 177 (§(d), B1) 3→3, line 446 (B5) 7→7; `compliance-posture.md` line 96 (B6) 7→7. **B7 is confined to line 180.** No other structural defect found.
+
+### 9.4 One non-blocking precision note, also on my draft
+
+§(d) now reads "the first to carry VARIABLE, CLIENT-INFLUENCED log content to source 2457081 without Vector", contrasted against "a fixed-schema `key=value` line assembled by the template".
+
+Strictly, the pre-existing `SOLEUR_ZOT_DISK` line is fixed-schema only in its *keys*. The value of `zot_last_err` is a ≤300-character sample of raw zot output whose fallback tier is `HTTP API` rows carrying client-controlled headers — so it too is variable and client-influenced, in bounded form. My §7 draft drew the contrast one notch too sharply, in the same direction B1 erred.
+
+**Not blocking, and I am not asking for a change now.** §(g) in this same amendment discloses the `zot_last_err` sampling exactly and completely, so the two cells read together give an accurate picture and no reader of PA-8 can be misled. The distinction that survives is one of degree and it is a real one: whole journald rows continuously, against a bounded error sample. If §(d) is edited for any other reason, tighten "a fixed-schema `key=value` line" to "a fixed-schema `key=value` line whose only variable field is a bounded error sample". Recorded so it is not rediscovered as a defect later.
+
+### 9.5 Re-review path
+
+Apply the two substitutions at §9.2 and re-invoke. Nothing else is open. B1–B6 are closed and are not re-litigable; §9.4 is recorded, not required. On confirmation that line 180 carries 3 pipes, this becomes `status: SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)` / `disposition: DISCHARGED`.
