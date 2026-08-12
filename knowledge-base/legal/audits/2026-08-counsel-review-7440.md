@@ -5,9 +5,12 @@ date: 2026-08-12
 issue: 7440
 pr: 7444
 attestation-authority: clo
-status: WITHHELD (CLO-agent-attested, Soleur-as-tenant-zero v1)
-disposition: BLOCKED
-disposition_history: "BLOCKED at first review (B1-B6) — 2026-08-12 -> B1-B6 VERIFIED FIXED at re-review (22f298dde) -> BLOCKED at re-review on B7, a table-breaking defect introduced by this authority's own §7 B2 draft — 2026-08-12"
+status: SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)
+disposition: DISCHARGED
+signed_off_at: 2026-08-12
+signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v1 posture; operator retains an optional veto)"
+disposition_history: "BLOCKED at first review (B1-B6) — 2026-08-12 -> B1-B6 VERIFIED FIXED at re-review (22f298dde) -> BLOCKED at re-review on B7, a table-breaking defect introduced by this authority's own §7 B2 draft -> B7 VERIFIED FIXED (649f983dd) and DISCHARGED 2026-08-12, verified against the RENDERED cell split rather than the raw line"
+attested_commits: "22f298dde (B1-B6), 649f983dd (B7)"
 tier_classification: "Tier 3 (internal record-keeping) — Art. 30(1)(d)/(g) amendment to an existing Processing Activity. No new recipient, no new sub-processor, no new third-country transfer, no user-facing legal-document surface. `docs/legal/**` untouched, so none of the five mirror/SHA/heading gates are engaged."
 semver: "N/A — no `docs/legal/**` document changed; TC_VERSION unaffected"
 brand_survival_threshold: single-user incident
@@ -26,7 +29,11 @@ This audit is the load-bearing evidence for the `/ship` Phase 5.5 Counsel-Review
 
 I am the reviewing authority for the Soleur-as-tenant-zero v1 posture. The operator is a non-lawyer founder and does not sign off here.
 
-**Disposition: BLOCKED.**
+**Final disposition: DISCHARGED** at 649f983dd. This section records the first review, which was BLOCKED; §9 and §10 record the two re-reviews that closed it. The narrative below is preserved as written on first reading, because the reasoning is the record.
+
+---
+
+**Disposition at first review: BLOCKED.**
 
 The safeguards this change describes are real, and I verified them against the code rather than against the prose. The redaction boundary is correctly designed, correctly implemented, and correctly tested. That is not what blocks this.
 
@@ -40,14 +47,14 @@ Every blocker below is small and locally fixable. None requires redesigning anyt
 
 | # | Artifact | Verdict | Basis |
 |---|----------|---------|-------|
-| 1 | `knowledge-base/legal/article-30-register.md` — PA-8 §(d) recipients (line 177), `[2026-08-12 UPDATE (#7440 / ADR-184)]` block | **BLOCKED** | **B1.** The block's headline — "the **FIRST** that reaches source 2457081 **WITHOUT** Vector" — is false. See §2. Everything else in the block is verified sound: no new recipient, no new sub-processor, no new third-country transfer, correct Art. 30(1)(d) characterisation, correct INERT statement. |
-| 2 | `knowledge-base/legal/article-30-register.md` — PA-8 §(g) TOMs (line 180), `[2026-08-12 UPDATE (#7440 / ADR-184)]` block | **BLOCKED** | **B2** — the redaction assurance is written at host level ("Because `soleur-registry` runs no Vector agent, ... its own `redact()` is the whole boundary") and is false at host level. **B3** — "each with a mutation arm proving the assertion can fail" is not true of the file it cites. The substantive description of `redact()` itself is **verified correct in every particular**; see §3. |
-| 3 | `knowledge-base/legal/article-30-register.md` — PA-8 §(c) categories of personal data (line 174) | **BLOCKED** | **B4.** The §(d) block states in terms that this edit "makes the phrase 'shipped by Vector' in this cell and in §(c) an incomplete description of this Activity" — and then leaves §(c) unamended. A register that names its own inaccuracy and does not repair it is worse than one that has not noticed. Compounded by the unrecorded `clientIP` category; see §4. |
-| 4 | `knowledge-base/legal/article-30-register.md` — Vendor / Sub-Processor Mapping, Better Stack row (line 446) | **BLOCKED** | **B5.** Still reads "Vector-shipped journald + host_metrics; `userIdHash` pseudonymised at the VRL boundary". Not annotated. The same row already carries the exact annotation pattern this omission needs, added by #7100 for the PA-31 CLI-stderr path. The file's own precedent was available and not followed. |
-| 5 | `knowledge-base/legal/compliance-posture.md` — Better Stack sub-processor row (line 96) | **BLOCKED** | **B6.** The edit created a contradiction inside a single table cell: the new parenthetical says the `pii_scrub_*` transforms "do not cover it", and two sentences later the cell still asserts, unqualified, "Pseudonymisation: `userIdHash` HMAC-SHA256 at the VRL boundary". Style observation at §6.1. |
+| 1 | `knowledge-base/legal/article-30-register.md` — PA-8 §(d) recipients (line 177), `[2026-08-12 UPDATE (#7440 / ADR-184)]` block | **DISCHARGED** (was BLOCKED) | **B1.** The block's headline — "the **FIRST** that reaches source 2457081 **WITHOUT** Vector" — is false. See §2. Everything else in the block is verified sound: no new recipient, no new sub-processor, no new third-country transfer, correct Art. 30(1)(d) characterisation, correct INERT statement. |
+| 2 | `knowledge-base/legal/article-30-register.md` — PA-8 §(g) TOMs (line 180), `[2026-08-12 UPDATE (#7440 / ADR-184)]` block | **DISCHARGED** (was BLOCKED) | **B2** — the redaction assurance is written at host level ("Because `soleur-registry` runs no Vector agent, ... its own `redact()` is the whole boundary") and is false at host level. **B3** — "each with a mutation arm proving the assertion can fail" is not true of the file it cites. The substantive description of `redact()` itself is **verified correct in every particular**; see §3. |
+| 3 | `knowledge-base/legal/article-30-register.md` — PA-8 §(c) categories of personal data (line 174) | **DISCHARGED** (was BLOCKED) | **B4.** The §(d) block states in terms that this edit "makes the phrase 'shipped by Vector' in this cell and in §(c) an incomplete description of this Activity" — and then leaves §(c) unamended. A register that names its own inaccuracy and does not repair it is worse than one that has not noticed. Compounded by the unrecorded `clientIP` category; see §4. |
+| 4 | `knowledge-base/legal/article-30-register.md` — Vendor / Sub-Processor Mapping, Better Stack row (line 446) | **DISCHARGED** (was BLOCKED) | **B5.** Still reads "Vector-shipped journald + host_metrics; `userIdHash` pseudonymised at the VRL boundary". Not annotated. The same row already carries the exact annotation pattern this omission needs, added by #7100 for the PA-31 CLI-stderr path. The file's own precedent was available and not followed. |
+| 5 | `knowledge-base/legal/compliance-posture.md` — Better Stack sub-processor row (line 96) | **DISCHARGED** (was BLOCKED) | **B6.** The edit created a contradiction inside a single table cell: the new parenthetical says the `pii_scrub_*` transforms "do not cover it", and two sentences later the cell still asserts, unqualified, "Pseudonymisation: `userIdHash` HMAC-SHA256 at the VRL boundary". Style observation at §6.1. |
 | 6 | `apps/web-platform/infra/cloud-init-registry.yml` — `zot-log-shipper.sh` `redact()` | **VERIFIED SOUND** (not a legal artifact; reviewed as the referent of §(g)) | Allowlist, depth-coverage, fail-closed and residual-refusal all confirmed against the code and against a 150/150 suite run. See §3. |
 
-**Overall disposition: BLOCKED.** Six blockers, B1–B6. Recommended wording for all six is drafted at §7.
+**Overall disposition at first review: BLOCKED.** Six blockers, B1–B6. Recommended wording for all six was drafted at §7 and applied at 22f298dde; each is verified closed at §9.1. The verdict column above reflects the final position. A seventh blocker, B7, surfaced at re-review as a consequence of my own §7 draft and is recorded at §9.2; it was closed at 649f983dd.
 
 ---
 
@@ -217,7 +224,7 @@ On a clean re-review this becomes `status: SIGNED-OFF (CLO-agent-attested, Soleu
 
 Confined to the two legal files per §8. I did not re-verify `redact()`, the Art. 30(1) characterisation, the lawful basis, the recipient/sub-processor/transfer analysis, the INERT posture, or the ADR cross-references.
 
-**Disposition: BLOCKED** on one new finding, B7, which this authority introduced.
+**Disposition at this re-review: BLOCKED** on one new finding, B7, which this authority introduced. Closed at the second re-review; see §10.
 
 ### 9.1 B1–B6: all six verified fixed
 
@@ -279,3 +286,33 @@ Strictly, the pre-existing `SOLEUR_ZOT_DISK` line is fixed-schema only in its *k
 ### 9.5 Re-review path
 
 Apply the two substitutions at §9.2 and re-invoke. Nothing else is open. B1–B6 are closed and are not re-litigable; §9.4 is recorded, not required. On confirmation that line 180 carries 3 pipes, this becomes `status: SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)` / `disposition: DISCHARGED`.
+
+---
+
+## 10. Second re-review and discharge — 2026-08-12, commit `649f983dd`
+
+**B7: VERIFIED FIXED. Overall disposition: DISCHARGED.**
+
+Both substitutions applied as prescribed. I verified against the **rendered** form rather than the raw line, because the whole substance of B7 was that source and render diverge:
+
+- **Unescaped pipes on line 180: 3.** Raw `|` characters remain 6 — escaping adds a backslash, it does not remove the character — of which 3 are now `\|`. My first-review measurement counted raw pipes, so "back to 3" is correctly read as 3 *unescaped*, which is what GFM cares about. The coordinator's framing was right and my original phrasing of the target was loose; recorded so the next reader of this audit does not repeat the ambiguity.
+- **Cell split is correct.** Splitting on pipes not preceded by a backslash yields four fields — a leading empty, the `(g)` label cell, the entry cell, and a trailing empty — i.e. exactly **2 content cells**, matching the table's two-column declaration.
+- **The B2 substance survives into the rendered entry cell.** I asserted presence inside the second content cell, not merely inside the raw line: `` no `redact()` at all ``, `X-Api-Key`, `Cookie`, `payload-integrity sanitizer`, `docker logs --tail 3`, `#7500`, and both escaped spans `` `level:error\|fatal` `` and `` `cannot\|failed to\|unable to` ``. All present. Nothing is truncated on render.
+- **Whole-file sweep, not just line 180.** Every pipe-leading row in `article-30-register.md` was split the same way. The PA-8 activity tables carry 2 content cells throughout; the Vendor / Sub-Processor Mapping table at lines 438–452 carries 6 throughout, including the B5-edited row 446, consistent with its own six-column header. No row is ragged as a result of this change set. (Line 660 carries 1 content cell and is pre-existing, untouched by this PR and outside this review's scope.)
+- **Commit scope is clean:** `649f983dd` touches `article-30-register.md` and this audit file only.
+
+§9.4 was correctly taken as recorded-not-actioned. Declining to re-open settled wording over a non-blocking precision note was the right instinct, and it is the second time in this review that instinct produced the better outcome.
+
+### 10.1 Disposition of record
+
+The PA-8 Art. 30(1)(c)/(d)/(g) amendment for #7440, and the corresponding `compliance-posture.md` sub-processor entry, are **DISCHARGED** and attested under the Soleur-as-tenant-zero v1 posture.
+
+The register now states accurately: that `soleur-registry` has reached Better Stack source 2457081 without Vector since #6122/#6244 and that the new fact is payload class; that the shipper's `redact()` is a fail-closed header-name allowlist and is the boundary **for that emitter only**; that the sibling `SOLEUR_ZOT_DISK` path carries a bounded, unredacted sample of zot's own log output, with remediation tracked at #7500; that the registry plane traverses no VRL transform and carries no `userIdHash`; and that `clientIP` is shipped unredacted, is not Art. 4(1) personal data on the current topology, and ceases not to be if the topology changes.
+
+No Art. 33 or Art. 34 notification is warranted. No new recipient, sub-processor or third-country transfer. Lawful basis unchanged and adequate. The change ships INERT.
+
+**Standing caveat.** This is the v1 *internal* sign-off. The operator retains an optional veto. External counsel re-review is reserved for the frontmatter triggers, of which public ingress to zot is the strongest candidate — it is the one condition that converts `clientIP` into personal data on a path with no redaction.
+
+### 10.2 Note for the next author of a fix draft
+
+Two of the seven blockers in this review — B7, and the imprecision at §9.4 — originated in wording I drafted, not in the change under review. Drafted remediation text is convenient and it is also unreviewed text entering a regulator-facing record. It should be checked against the target file's own conventions before it is applied. `article-30-register.md` carried ten correctly escaped pipes before mine arrived; the convention was there to be read.
