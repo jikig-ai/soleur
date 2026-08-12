@@ -14,6 +14,42 @@ brand_survival_threshold: aggregate pattern
 
 # fix: the T5 mutation arm reports "vacuous" when the mutant never executed
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-12 · **Passes:** 6-agent plan review, then a verify-the-negative sweep and
+a precedent-diff sweep.
+
+### Key improvements
+
+1. **Scope cut by roughly two thirds.** Plan v1's suite-wide container-setup refactor was removed
+   after the simplification and correctness panels both fired on it; the retry it contained was
+   replaced by a deferred image pre-bake, which measurement showed to be the better remedy.
+2. **A prior-art miss corrected.** ADR-177, ADR-181 and AP-021/ADR-166 already govern multi-valued
+   test verdicts. The ADR is reframed from standalone to `amends: ADR-181` with one argued reversal.
+3. **Three false claims of my own found and fixed** — sibling-suite count, skip-counter precedent,
+   and ADR coverage. All three are recorded rather than quietly corrected.
+4. **Four hard-failure states routed** that v1 named in prose and never gave a verdict.
+
+### Gate record (deepen-plan halts)
+
+| Gate | Outcome |
+|---|---|
+| 4.5 Network-outage | **Evaluated, non-trigger.** The keyword scan matches 4 times, all substring false positives: ADR-181's quoted word "UNREACHABLE" (×2) and the `/run/sshd` directory path in the deferred pre-bake note (×2). No network-connectivity symptom is diagnosed — the CI container's apt fetch is a dependency, not a diagnosis subject, and the plan explicitly defers rather than diagnoses it. |
+| 4.55 Downtime & cutover | Skipped — no serving surface, no reboot/replace, no lock-taking DDL. |
+| 4.6 User-Brand Impact | Pass — section present, threshold `aggregate pattern`, no placeholders. |
+| 4.7 Observability | **HALTED on the first run** — `error_reporting` was missing from the v2 rewrite. Added; all five fields now present, no placeholders, probe verb `bash` is allowlisted. |
+| 4.8 PAT-shaped variable | Pass — no matches. |
+| 4.9 UI wireframe | Skipped — no UI-surface file in Files to Edit/Create. |
+| 4.10 Encryption posture | Skipped — no persistent store, no new cross-component connection. |
+| 4.11 Guard Contract | Pass — `lint-guard-contract.py` green; adequacy read confirms the Assembly names a chokepoint (not a member snapshot) and explicitly names the two out-of-scope invokers, and the matrix carries an own-dispatch row and a second-member row. |
+
+### New considerations discovered at deepen time
+
+- **rc-discard is a four-member class, not a one-off.** 4 of 6 `docker run` invocations end `|| true`.
+  Deferred deliberately rather than swept, and recorded so the class is not mistaken for closed.
+- Every other load-bearing structural claim in the plan was re-verified independently and confirmed
+  (15-claim sweep; see Verified environment facts).
+
 ## Overview
 
 `apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh` carries an anti-vacuity arm for T5. T5
@@ -206,6 +242,12 @@ All three were my own unverified claims, in the plan that criticised the issue f
 Structural facts verified by direct read:
 
 - `run_case()` has exactly **two** callers (T5 primary `want=1`, T17 healthy `want=0`). Not "others".
+- **Four of the six `docker run` invocations discard their exit code with a trailing `|| true`** — the
+  T5 mutation arm, the T17 mutation arm, the R1 mutation arm and R4. Only the two that flow through
+  `run_case()` capture rc. A reviewer asserted the T5 arm was the *only* `|| true` site; it is not,
+  and the correction matters: it makes rc-discarding a **class** with four members rather than a
+  one-off, which is further support for fixing the named instance now and extending deliberately
+  (Deferred Scope) rather than claiming the class is closed by this PR.
 - The `drive.sh` heredoc ends `. /work/doppler-dl.sh` immediately before its `DRIVE` terminator; the
   `FIXTURE: capture server never bound :8099` guard sits earlier in the same heredoc.
 - The **T17 mutation arm discards its container output** (`' >/dev/null 2>&1 || true`).
@@ -343,6 +385,7 @@ tracking issue with its re-evaluation criterion.
 
 | Deferred | Why | Re-evaluation criterion |
 |---|---|---|
+| **rc-discard in the other three arms** (`|| true` on the T17 mutation, R1 mutation and R4 `docker run`s) | Measured at deepen time: 4 of 6 invocations discard rc, so this is a four-member class, not a one-off. Fixing the three unnamed members here would repeat plan v1's error of building past the evidence. | Ship with the `run_case`/`_s1_run` verdict extension, which needs the same skip-propagation work. |
 | **Pre-bake the container image** (preferred over retry) | Attacks the measured sufficient cause with more leverage than a retry: collapses 6 apt transactions to 1 and makes the *healthy* path faster, where a retry makes the *degraded* path slower. v1's rejection ("new image / new build step / new registry dependency") was false on all three counts — three in-script `docker build` precedents exist, none pushes to a registry, none touches the workflow. | The first post-merge SKIP. Must carry a `[ ! -d /run/sshd ]` in-arm assertion: S1's finding depends on that directory not existing at runcmd time, and installing `openssh-server` at build time changes when it could appear. |
 | Bounded retry on container setup | Built against a cause measurement showed sufficient but never actual — and it would convert the most likely occurrence class from visible to invisible, destroying the frequency signal Phase 1 exists to collect. | Only if pre-bake lands and the flake persists. Must emit `SETUP_RETRIED attempt=N` counted and surfaced. |
 | Skip verdict for `run_case()` and `_s1_run()` | In isolation a **net regression** — see Revisions R4. | Ship with per-caller skip propagation for every follow-on assertion, ceiling denominated in assertions not arms. |
@@ -400,6 +443,9 @@ liveness_signal:
   cadence: every PR and every push to main whose diff matches apps/*/infra/**
   alert_target: the deploy-script-tests job in .github/workflows/infra-validation.yml
   configured_in: .github/workflows/infra-validation.yml (the step invoking the suite)
+error_reporting:
+  destination: the GitHub Actions step's own non-zero exit, surfaced as a red deploy-script-tests check on the PR; every FAIL writes its reason and detail to stderr in the suite's existing fail() format, and every SKIP writes its reason plus the captured docker rc
+  fail_loud: true
 failure_modes:
   - mode: the mutant executed and did not reach the chmod marker
     detection: execution marker present, FIXTURE literal absent, CHMOD_RAN absent
