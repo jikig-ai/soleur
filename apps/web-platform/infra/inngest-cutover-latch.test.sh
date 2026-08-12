@@ -301,8 +301,8 @@ teardown_case
 
 # --- 9. STATIC: the unit must not race the mount, and the read surface must show the latch --
 echo "TEST: static unit + operator read-surface contract"
-assert_eq "(9a) inngest-cutover-flip.service carries RequiresMountsFor=/mnt/data" "yes" \
-  "$(grep -qE '^RequiresMountsFor=/mnt/data$' "$SVC" && echo yes || echo no)"
+assert_eq "(9a) inngest-cutover-flip.service ORDERS after mnt-data.mount without REQUIRING it" "yes" \
+  "$(grep -qE '^After=mnt-data\.mount$' "$SVC" && ! grep -qE '^RequiresMountsFor=' "$SVC" && echo yes || echo no)"
 # The 30s timer can otherwise fire before the volume mounts, and the mountpoint gate would then
 # abort a legitimate flip on a cold boot.
 assert_eq "(9b) cat-inngest-cutover-state.sh surfaces the latch, not just the erasable slot" "yes" \

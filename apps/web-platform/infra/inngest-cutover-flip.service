@@ -3,12 +3,24 @@ Description=Inngest cutover flip oneshot (FSM: armed->flipping->done / rollback;
 After=network-online.target
 Wants=network-online.target
 # (#7228 P0-5) The monotonic re-flush latch lives on the durable Hetzner volume at
-# /mnt/data/inngest-cutover/. The flip timer fires every 30s from boot, and cloud-init mounts
-# that volume with `|| true` (fstab: `nofail`), so without this the oneshot can run BEFORE the
-# mount lands — the latch's mountpoint gate would then abort a legitimate flip on a cold boot,
-# and worse, a latch written pre-mount would sit on the ephemeral root disk looking durable.
-# RequiresMountsFor pulls in the mount unit for the path and orders this unit after it.
-RequiresMountsFor=/mnt/data
+# /mnt/data/inngest-cutover/, and the flip timer fires every 30s from boot — so this unit wants
+# to run AFTER the mount lands, or a latch written pre-mount would sit on the ephemeral root
+# disk looking durable.
+#
+# ORDERING ONLY, deliberately downgraded from RequiresMountsFor= (#7228 review).
+# RequiresMountsFor= is Requires-strength: it makes the WHOLE oneshot un-startable when the
+# volume is absent. But cloud-init mounts /mnt/data with `|| true` under fstab `nofail`, i.e. a
+# failed mount is an expected-survivable state — and the oneshot's other arms need no volume at
+# all. In particular `rollback` only stops the server and writes the flag, and on a host with no
+# inbound SSH the flag poll is the ONLY control channel. Requiring the mount therefore deleted
+# the operator's sole means of stopping a scheduler on exactly the host that was already
+# degraded, and replaced the script's LOUD abort (a latch-unrecordable marker) with a silent
+# systemd dependency failure that emits none of the FSM's markers.
+# The hazard it was added for — a latch written pre-mount looking durable on the root disk — is
+# now gated in-script at the top of run_preflush_flip, before anything destructive, with its own
+# reason token. After= keeps the ordering benefit on a healthy boot and costs nothing on a
+# broken one.
+After=mnt-data.mount
 
 [Service]
 Type=oneshot
