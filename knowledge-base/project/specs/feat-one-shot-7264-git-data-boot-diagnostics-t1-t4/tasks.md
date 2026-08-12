@@ -1,4 +1,4 @@
-# Tasks — git-data boot-diagnostics: T-2, T-3, T-1
+# Tasks — git-data boot-diagnostics: T-2 + T-3
 
 Derived from
 [`2026-08-11-feat-git-data-boot-diagnostics-t1-t4-plan.md`](../../plans/2026-08-11-feat-git-data-boot-diagnostics-t1-t4-plan.md)
@@ -6,6 +6,8 @@ after plan-review (6 reviewers) and the operator's rulings on
 [`decision-challenges.md`](./decision-challenges.md).
 
 **T-4 is out of scope for this branch** — deferred to #7460.
+**T-1 was split out after review** — deferred to #7481; #7116 stays open. Phases 0 and 3 below
+are therefore superseded and left unchecked as the record of what moved.
 
 Suite floors: luks ≥133 · runcmd rehearsal ≥44 (**detached, poll an rc file** — ~13 min
 exceeds the 600 s tool ceiling) · rung-2 rehearsal ≥71 · evidence-capture ≥33.
@@ -63,7 +65,7 @@ No predicate may use `producer | grep -q` (SIGPIPE fails open under `set -uo pip
       ADR-152's standing statement about git-data. Evaluate `templatestring()` (A3) in its
       alternatives — if rejected, reject on cost, not impossibility.
 - [x] 1.13 Re-run `git-data-userdata-budget.sh`; record stored/headroom.
-- [ ] 1.14 GREEN: budget · parity · `validate-infra-templates.sh` · luks ≥133 · runcmd
+- [x] 1.14 GREEN: budget · parity · `validate-infra-templates.sh` · luks ≥133 · runcmd
       rehearsal ≥44 (detached).
 
 ## Phase 2 — T-3: close the vacuity hole
@@ -75,7 +77,7 @@ No predicate may use `producer | grep -q` (SIGPIPE fails open under `set -uo pip
       the concatenated runcmd that is not comment-only text.
 - [x] 2.3 **No shared bash library** (UC-A, operator-resolved — two of three call sites are
       Python inside a `python3 <<PY` heredoc).
-- [ ] 2.4 GREEN: runcmd rehearsal ≥44 (detached).
+- [x] 2.4 GREEN: runcmd rehearsal ≥44 (detached).
 
 ## Phase 3 — T-1: Sentry arm on the evidence-capture script
 
@@ -108,10 +110,10 @@ No predicate may use `producer | grep -q` (SIGPIPE fails open under `set -uo pip
 - [x] 4.1 Re-sync measured byte figures across the ADR-152 addendum and the acceptance record so
       all match the budget artifact.
 - [x] 4.2 Confirm `git_data_rationale_strip` is byte-identical to `origin/main`.
-- [ ] 4.3 Full floors: luks ≥133 · runcmd rehearsal ≥44 (detached) · rung-2 rehearsal ≥71 ·
+- [x] 4.3 Full floors: luks ≥133 · runcmd rehearsal ≥44 (detached) · rung-2 rehearsal ≥71 ·
       evidence-capture ≥33 · `lint-encryption-posture.py --repo-sweep` PASS ·
       `validate-infra-templates.sh` rc=0 · `check-adr-ordinals.sh` rc=0.
 - [x] 4.4 Confirm `git-data-rung2-boot-evidence.env` is still absent and no
       `git-data-rung2-rehearsal.yml` dispatch occurred.
-- [ ] 4.5 Add the ordering prerequisite to #6977: the first birth must dispatch the rung-2
+- [x] 4.5 Add the ordering prerequisite to #6977: the first birth must dispatch the rung-2
       rehearsal **after** this merge (the evidence hash covers `main.tf`).

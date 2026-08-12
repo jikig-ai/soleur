@@ -1,10 +1,10 @@
 ---
-title: "feat: git-data boot-diagnostics — template strip, slice non-vacuity, Sentry second channel"
+title: "feat: git-data boot-diagnostics — template strip + slice non-vacuity (T-2, T-3)"
 date: 2026-08-11
 slug: feat-git-data-boot-diagnostics-t1-t4
 branch: feat-one-shot-7264-git-data-boot-diagnostics-t1-t4
 issue: 7264
-closes: [7116]
+closes: []   # T-1 (which closed #7116) split to #7481 after review
 lane: cross-domain
 type: feat
 priority: p2
@@ -13,8 +13,18 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
-# feat: git-data boot-diagnostics — T-2, T-3, T-1 (T-4 deferred to a follow-up PR)
+# feat: git-data boot-diagnostics — T-2 + T-3 (T-4 → #7460, T-1 → #7481)
 
+> **Revision 4 (post-review).** An 11-agent panel found ~36 findings, all `pr-introduced`.
+> **T-1 was split out to #7481** on the operator's ruling: its Sentry arm had six independent
+> ways to return a wrong verdict, the worst being a missing `level:fatal` filter against an
+> UNCONDITIONAL `level:info` bootcmd beacon — every rehearsal would have false-FAILed on its
+> first poll and burned a paid cpx22 against a cap of two. The suite was 43/43 green over it,
+> because the fixtures modelled a synthetic fatal rather than the production beacon.
+>
+> T-2's transform was independently proven correct byte-for-byte; its **guards** were the
+> weak part, and three mutations passed every suite green (see `## Review Findings Applied`).
+>
 > **Revision 3.** Six reviewers (DHH, Kieran, code-simplicity, architecture-strategist,
 > spec-flow-analyzer, CTO) materially changed this plan, and the operator ruled on the three
 > User-Challenges they raised
@@ -118,9 +128,9 @@ Measured with terraform's own `base64gzip` in a scratch dir replicating
 
 | variant | rendered | stored | headroom |
 |---|---|---|---|
-| baseline | 67,286 | 30,376 | 2,392 |
-| payload expr applied to the render | 36,748 | 12,580 | **deletes `#cloud-config`** |
-| directive-preserving expr | 36,762 | **12,588** | **20,180** |
+| baseline | 67,479 | 30,376 | 2,392 |
+| payload expr applied to the render | 36,791 | 12,580 | **deletes `#cloud-config`** |
+| directive-preserving expr | 36,805 | **12,588** | **20,180** |
 
 Structural check: the stripped render parses via `yaml.safe_load` with identical top-level
 keys, identical counts (`runcmd` 14=14, `bootcmd` 1=1, `write_files` 12=12), identical `STAGE=`
@@ -499,9 +509,37 @@ the ordering prerequisite that the first birth dispatches the rehearsal *after* 
    non-200 / rc≠0 ⇒ TRANSIENT.
 8. **Better Stack down + Sentry silent** ⇒ TRANSIENT, not PASS.
 
+## Review Findings Applied
+
+An 11-agent panel (full `code` class + `test-design-reviewer`, `user-impact-reviewer`,
+`observability-coverage-reviewer`) reviewed the pushed branch. Every finding was
+`pr-introduced`, so none was scope-out eligible. Highlights, all fixed inline and
+mutation-proven:
+
+| finding | what it meant |
+|---|---|
+| **The saving was unguarded.** Deleting one character from the expression's character class in both mirrors collapsed the saving from 30,524 B to 68 B at 5/0 green — and the cap cannot backstop it, because the fully unstripped render is 30,092 B, *under* the 32,768 cap. | Arm 3 now bounds the ratio (54% today, bound 60%) instead of asserting `> 0 bytes`. |
+| **The wrap's application was pinned by nothing.** Parity asserted the expression is declared, mirrored and distinct — never that `main.tf` applies it. Deleting the `replace(...)` reverted what a host boots from, on a ForceNew attribute, with every gate green. | Arm 1d asserts the open and its matching close on comment-stripped text. |
+| **The continuation guard never got the template.** It enumerated the nine payloads; this PR makes the template strip-bearing, and a comment after a `\` splices two commands on the host. | Template added to the guard's file list. |
+| **The schema gate read comments and required one physical line.** A `terraform fmt`-legal reformat made it silently validate the unstripped document — the exact regression it exists to catch. It also failed open on an unresolvable wrap, and rescanned 49 files per member (~1,850 process spawns). | Replaced with a comment-stripped, paren-matched pre-pass that runs once and is fatal on an unresolvable wrap. |
+| **A sibling gate modelled the unstripped document.** `cloud-init-user-data-size.test.ts` carried the full registry strip treatment and no git-data counterpart, so its budget bracketed a payload no host receives. | Mirrored the registry treatment; bracket retuned to the model's output. |
+| **Two guards were tautologies, and five comments were false.** Arm 1e compared Python's own regex semantics; arm 5's headline check cannot fire on a template-strip change (TEMPLATE ⊆ PAYLOAD); the rehearsal quoted a sentence this PR deleted. | Arm 1e now checks the shipped extractor; the tautology and the residual are recorded rather than left to be over-trusted. |
+
+**Verified clean by the panel, independently:** the transform itself
+(`B.sub('', raw) == stripped` byte-for-byte, deep YAML walk, `bash -n` clean before and
+after), no new `producer | grep -q`, correct ADR figures, and no `HOST_NAME` injection
+surface.
+
+**Pre-existing, filed separately:** `git-data-birth-readiness-gate.sh` discounts 2 module
+`.tf` files while its glob adds 3, so `_n_resolved` (11) exceeds the ref count (9) and the
+hash derivation aborts. Reproduced on `origin/main`; it blocks #6977's birth path and is not
+this PR's to fix.
+
+
 ## Non-Goals
 
-- **T-4 (baking the Better Stack ingest token)** — deferred to its own PR by operator ruling.
+- **T-4 (baking the Better Stack ingest token)** — deferred to #7460 by operator ruling.
+- **T-1 (the rung-2 Sentry second channel)** — split to #7481 after review; #7116 stays open.
 - Dispatching `git-data-rung2-rehearsal.yml` (paid cpx22; operator step, cap 2).
 - Triggering a git-data birth (#6977).
 - Creating or regenerating `git-data-rung2-boot-evidence.env`.

@@ -234,7 +234,7 @@ The registry uses `/(?m)^[ \t]*#([ \t][^\n]*)?\n/` (`local.registry_rationale_st
 
 | What is being stripped | Safe expression | Why |
 |---|---|---|
-| Injected scripts, cloud-init NOT stripped (git-data) | preserve `#!` only | scripts have no `#`-directive but a shebang |
+| Injected scripts (both hosts) | preserve `#!` only | scripts have no `#`-directive but a shebang |
 | The cloud-init template itself (registry) | preserve `#!` **and** any `#`-directive without a separator | `#cloud-config` is load-bearing and is a comment by syntax |
 
 Do not port an expression between these two cases. Verify the divergence the same way #7278
@@ -337,7 +337,9 @@ renders the **bare** `templatefile()` and runs `cloud-init schema -c` on it. Onc
 wraps the render in `replace(...)`, that gate validates a document no host is ever given — and
 worse, the *one shape that cannot fail*, because the unstripped body still carries its header.
 The script now resolves the call site's strip local and applies it before validating. This
-affected the registry host too, from #7278 onward. Mutation-proven in both directions.
+affected the registry host too — from **#7280** (`d0295964f`), the commit that actually
+shipped the registry's `replace()` wrap, not #7278 where this amendment was written.
+Mutation-proven in both directions.
 
 **Still outstanding**, unchanged from the amendment above: `hcloud_server.inngest` and the
 grok-dogfood host still render `base64gzip(templatefile(...))` with no arm in
