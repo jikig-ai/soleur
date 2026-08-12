@@ -1,10 +1,21 @@
 # Decision Challenges — feat-one-shot-7352-fullsuite-gate-post-review
 
-Surfaced by `plan-review` (6-agent panel) on 2026-08-11. This session is headless, so per the
-classifier routing these are **persisted, not auto-applied**. `/ship` Phase 6 renders this file into
-the PR body and files it as an `action-required` issue.
+Surfaced by `plan-review` (6-agent panel) on 2026-08-11. ~~This session is headless, so per the
+classifier routing these are **persisted, not auto-applied**.~~ **That classification was wrong —
+the session is interactive.** UC1 and UC2 were put to the operator on 2026-08-12 and are now
+**RESOLVED**; see `## Operator Decisions (2026-08-12)` in the plan, which is authoritative. UC3
+remains open and non-blocking. `/ship` Phase 6 renders this file into the PR body and files the
+residue as an `action-required` issue.
 
 Mechanical findings were auto-applied to the plan and are not listed here.
+
+## Resolutions (2026-08-12)
+
+| Item | Operator decision | Effect |
+|---|---|---|
+| **UC1** | **Apply CPO's C1 conditional** — *not* narrow-to-§9, *not* accept-as-is | The four project-agnostic lines are relaxed **with** the conditional. The detection question CPO routed to CTO is **in scope for `/work`**, not deferred. See plan OD1 + AC11/AC12. |
+| **UC2** | **Wait for #7441 to land + combined verification** — *not* the stated proceed-now default | Implementation/review/QA run now; the **merge** is held. PR stays draft. See plan OD2 + AC13 + the Pre-merge hold (H1-H4). |
+| **UC3** | Not asked | Open, non-blocking. Carried to the PR body / `action-required` issue. |
 
 ---
 

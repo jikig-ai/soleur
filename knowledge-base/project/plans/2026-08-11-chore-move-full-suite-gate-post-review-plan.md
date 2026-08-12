@@ -25,6 +25,59 @@ The reading discipline that surrounds both runs — the preamble/epilogue read, 
 that reports whether the nested infra runner actually executed, and the contention-banner
 interpretation — is preserved at both positions and is not in scope for reduction.
 
+## Operator Decisions (2026-08-12) — AUTHORITATIVE
+
+`plan-review` classified this session as headless and therefore **persisted** the three
+`decision-challenges.md` items rather than asking. That premise was wrong — the session is
+interactive. Both open items were put to the operator and answered. These answers **override** any
+contrary statement elsewhere in this plan; where they conflict, this section wins.
+
+### OD1 — UC1 resolved: apply CPO's C1 conditional (NOT the narrow-to-§9 option)
+
+The four project-agnostic lines (`work/SKILL.md:243`, `:337`, `:668`, `:818`) **are** relaxed, but
+each carries the conditional: *when the project has no CI-enforced full-suite gate on the merge
+branch, the full battery stays at implementation exit.* §9 and `ship/SKILL.md` — both already
+Soleur-coupled — are relaxed unconditionally as planned.
+
+This closes the `## Risks & Mitigations` row "The relaxation ships to users whose repo has neither
+backstop": the compensating gate is the conditional itself, so a self-hosted user with no CI gate
+keeps today's behaviour and loses nothing.
+
+**The detection question is IN SCOPE for `/work`, not deferred.** CPO routed "how does the pipeline
+detect whether a project has a CI-enforced full-suite gate?" to CTO at spec time, and the operator
+selected this option knowing that. `/work` must answer it concretely before Phase 2 edits land.
+Constraints on the answer:
+
+- These are **skill prose lines an agent reads**, not executable code — so "detection" means a
+  cheap, bounded check the reading agent performs, not a new script (Cut List C1 still forbids a new
+  selection script, and OD1 does not reopen it).
+- It must degrade **fail-safe**: unknown / unprobeable ⇒ treat as "no CI gate" ⇒ run the full
+  battery at implementation exit. The relaxation is the privileged branch and must never be the
+  default under uncertainty.
+- It must not assume `gh` auth, a GitHub remote, or a ruleset API scope — a self-hosted user may
+  have none of these, and an unauthenticated probe failure must land on the safe branch above.
+
+### OD2 — UC2 resolved: HOLD THE MERGE until #7441 lands and a combined verification passes
+
+The operator chose the sequencing option, not the proceed-now default. Consequences, binding on
+`/ship`:
+
+- **Implementation, review, and QA proceed now.** The hold is on the merge, not on the work.
+- **This PR stays a DRAFT** through `/ship`. Do not mark it ready, do not `gh pr merge`, and do not
+  enable `--auto`. `wg-verified-work-ships-without-asking` does **not** apply — the operator has
+  given an explicit contrary sequencing instruction, which outranks the default.
+- **Merge precondition:** PR #7441 is merged to `main`, this branch is rebased onto it, and a
+  **combined** verification (`TEST_GROUP=all bash scripts/test-all.sh` on the rebased tree, per AC9)
+  is green. Only then does this PR go ready.
+- **Record the merge date against #1442** (usage tracking) so the alpha window's data stays
+  interpretable, and note the sequencing in the PR body.
+- This upgrades `## Sequencing` below: #7441 moves from *preferred predecessor* to a **hard merge
+  blocker**. Its "if it has not merged, proceed" arm still governs *implementation* order only.
+
+### OD3 — UC3 (milestone placement) — not asked, remains open
+
+Non-blocking for implementation. Carried into the PR body and the `action-required` issue as before.
+
 ## Enhancement Summary
 
 **Deepened on:** 2026-08-11
@@ -260,16 +313,21 @@ Phase 4 already runs the battery. Three things change, and the naming is deliber
 ## Files to Edit
 
 - **`plugins/soleur/skills/work/SKILL.md`**
-  - line 243 — todo-list template: "Place a final 'Run full test suite and lint' task at the end" → the touched-file gate.
-  - line 337 — "Run full test suite after changes" → touched-file suites.
+  - line 243 — todo-list template: "Place a final 'Run full test suite and lint' task at the end" → the touched-file gate. **PROJECT-AGNOSTIC — carries the OD1/C1 conditional.**
+  - line 337 — "Run full test suite after changes" → touched-file suites. **PROJECT-AGNOSTIC — carries the OD1/C1 conditional.**
   - line 589 — `.c4` / `c4-model-freshness.test.sh` coupling: re-point "full-suite-only, not the touched-file loop" to "include this suite in the Phase 2 touched-file set when the diff touches `*.c4`".
   - line 642 — stale citation "fail only at the full-suite exit gate" → the derived symbol-graph rule.
   - line 649 — stale citation "the full-suite exit gate is what catches it" → same.
-  - line 668 — "Run the full test suite after each RED/GREEN/REFACTOR cycle" → "Run the touched-file suites after each cycle". **The single largest cost line in the file.**
+  - line 668 — "Run the full test suite after each RED/GREEN/REFACTOR cycle" → "Run the touched-file suites after each cycle". **The single largest cost line in the file. PROJECT-AGNOSTIC — carries the OD1/C1 conditional.**
   - lines 742-746 — §9 heading + body: the gate itself. Preserve `[skill-enforced: work Phase 2 exit]` at line 744 verbatim (hygiene, not a verified coupling — see Phase 1).
   - **lines 748-770 — §9 runs to 770, not 768.** Retained; re-scoped under an explicit "reading a `test-all.sh` run" sub-heading. **Six** passages, not four — the drafted list missed two that a §9 rewrite would destroy: `:750-760` (*"My edit is unrelated to the running suite" is how the exit gate gets invalidated* — #7376) and `:770` (*Feature-branch-CWD blind spot for `.claude/hooks/*.test.sh`* — #5192/#5209). Both are the same "do not weaken" class and are added to AC7.
   - line 768 — legal-doc mirror coupling: re-point *"Catch it at the full-suite exit gate"* to the shard that covers it.
-  - line 818 — Phase 3 code comment `# Run full test suite (use project's test command)`.
+  - line 818 — Phase 3 code comment `# Run full test suite (use project's test command)`. **PROJECT-AGNOSTIC — carries the OD1/C1 conditional.**
+
+  **The four PROJECT-AGNOSTIC lines above are governed by OD1.** They are relaxed *with* the
+  conditional, not left untouched and not relaxed bare. `/work` resolves the detection mechanism
+  under OD1's three constraints (agent-performed check, fail-safe to "run the full battery" on any
+  uncertainty, no assumption of `gh` auth / GitHub remote / ruleset scope) before these edits land.
   - lines 1080, 1081, 1083 — Sharp Edges: re-scope from "the Phase 2 gate" to "whenever you run the full battery".
 - **`plugins/soleur/skills/ship/SKILL.md`**
   - lines 326-333 — Phase 4 prose: **name CI's required `test` context as the merge gate**, and Phase 4 as the last local fail-fast checkpoint and the sole gate for `apps/web-platform/infra/`. **Do NOT write "the local run is the merge gate"** — Proposed Solution §3 and AC10 both forbid it, and the drafted wording here contradicted them.
@@ -460,6 +518,9 @@ The decision is true the moment both SKILL.md edits land; nothing is soak-gated.
 8. **AC8** — `ADR-183` (or its re-derived ordinal) exists and carries the decision line, the two ceilings, and the three alternative rows. The ordinal is re-verified against all `refs/remotes/origin/*` immediately before merge; if it moved, the sweep of `knowledge-base/project/{plans,specs}/` happens **in the same edit**.
 9. **AC9** — the full battery is green at ship Phase 4: `TEST_GROUP=all bash scripts/test-all.sh`, `rc` read from the rc file (never the harness notification), terminal `=== N/M suites passed ===` marker present, and the epilogue NOTE + contention banners read per `work/SKILL.md:670`.
 10. **AC10** — PR body uses `Closes #7352`.
+11. **AC11 (OD1)** — each of the four project-agnostic lines (`work/SKILL.md:243`, `:337`, `:668`, `:818`) carries the C1 conditional, asserted by content anchor rather than line number. The guard test additionally asserts the **fail-safe polarity**: the prose must make "no CI-enforced full-suite gate on the merge branch" ⇒ *run the full battery*, so a mutation that flips the default to the relaxed branch reds. An assertion that merely finds the word "conditional" is vacuous and does not satisfy this AC.
+12. **AC12 (OD1)** — the detection mechanism is named concretely in `work/SKILL.md` and satisfies all three OD1 constraints: agent-performed (no new selection script), fail-safe under uncertainty, and no assumed `gh` auth / GitHub remote / ruleset API scope. Recorded in the PR body with the reasoning for the mechanism chosen.
+13. **AC13 (OD2)** — the PR is **still a draft** when `/ship` completes, and the PR body states the merge is held on #7441 per OD2. A ready-for-review or merged PR at this point is an AC **failure**, not an overachievement.
 
 **Cut, with reasons:**
 
@@ -469,6 +530,19 @@ The decision is true the moment both SKILL.md edits land; nothing is soak-gated.
 - *AC6 (eleven Files-to-Edit entries show a change)* — a checklist audit of the plan's own instructions, and it **contradicted AC7**: entry 8 is "lines 748-770 — retained" while AC7 required those passages verbatim. Mutually unsatisfiable.
 - *AC10b (re-query the ruleset at ship time)* — treating one documented sentence as a live invariant needing a pre-merge API probe. The ADR ages like every ADR.
 - *AC12 (measure the value proposition)* — **cut as an AC, kept as a reporting obligation.** It was unfailable: its own escape hatch (`record UNMEASURED — sibling run detected`) is always available, and the plan documents that a sibling worktree is running the same battery on the same machine. An AC that cannot fail is not an AC. The PR body states the measurement or states plainly that the cost case is carried from PRs #7344/#7343 and was not re-measured here.
+
+### Pre-merge hold (OD2)
+
+The merge is gated on a sibling PR, so these are pre-merge steps that outlive this pipeline run:
+
+- **H1** — PR #7441 is merged to `main`.
+- **H2** — this branch is rebased onto the post-#7441 `main`, and the `work/SKILL.md` touch-up
+  reconciling its "the lead runs the gate ONCE" constraint (near line 269) with the retitled §9 is
+  applied in the same rebase.
+- **H3** — combined verification per AC9 (`TEST_GROUP=all bash scripts/test-all.sh`) is green **on
+  the rebased tree**. The pre-rebase run does not satisfy this — per the token-discipline rule, a
+  verification claim about a tree that no longer exists is re-run, not inherited.
+- **H4** — only then: mark ready, merge, and record the merge date against #1442.
 
 ### Post-merge (operator)
 
@@ -499,8 +573,9 @@ None. Every step above is automatable in-session: the guard test and mutations r
 | The Phase-2 shard set under-covers and R1/R4-class breakage reaches review | The shard map is derived from `scripts/test-all.sh:150-157`, not hand-maintained, and a shard runs its whole registered suite list — so R1 (source-text-coupled) and R4 (differently-named guards) are covered whenever their shard is selected. R6 is explicitly accepted as surviving to the merge gate. |
 | The guard test is vacuous — a prose grep satisfied by surrounding prose | One assertion, one mutation (AC2). The drafted set had two assertions that could never fail; both were cut rather than patched. |
 | **Loss of the pre-review reap redundancy** | With two full runs, a reaped Phase 2 was recovered by Phase 4; with one, a reaped Phase 4 has no second chance — and "unresolved" under ship-time pressure resolves to "ship anyway" more often than to a 45-minute re-run. Mitigation: ship Phase 4's prose states that a reaped run is UNRESOLVED per the three-way split (`work/SKILL.md:764`) and must be re-run, never shipped on. *(Surfaced by CPO; the plan's own research records 4 reaps on PR #7344.)* |
-| **The relaxation ships to users whose repo has neither backstop** | The four generic lines (`work/SKILL.md:243,337,668,818`) are project-agnostic. Neither ruleset 14145388 nor `scripts/test-all.sh` exists in a user's repo. See the Taste finding in `decision-challenges.md` — this is the one open question the operator must settle. |
-| Rebase collision with `feat-one-shot-test-pipeline-efficiency` | Its `work/SKILL.md` edits are near line 269; §9 is at 742. Expect a touch-up, not a conflict. Do not read or reset that branch or worktree. |
+| ~~**The relaxation ships to users whose repo has neither backstop**~~ **RESOLVED by OD1** | Settled by the operator 2026-08-12: apply CPO's C1 conditional. The four generic lines (`work/SKILL.md:243,337,668,818`) are relaxed *with* the conditional "when the project has no CI-enforced full-suite gate on the merge branch, the full battery stays at implementation exit", so a user with neither backstop keeps today's behaviour. Residual risk moves to the **detection mechanism**, next row. |
+| **The OD1 detection check misfires and silently relaxes a user's gate** | This is the new failure surface OD1 introduces, and it is the one that fails *quietly*. Mitigated by OD1's fail-safe constraint: unknown / unprobeable / no `gh` auth / no GitHub remote ⇒ treat as "no CI gate" ⇒ run the full battery. The relaxation is the privileged branch and is never the default under uncertainty. `/work` must state the chosen mechanism and demonstrate the fail-safe branch. |
+| Rebase collision with `feat-one-shot-test-pipeline-efficiency` | Its `work/SKILL.md` edits are near line 269; §9 is at 742. Expect a touch-up, not a conflict. Do not read or reset that branch or worktree. **Under OD2 this PR merges only AFTER #7441**, so the rebase is mandatory and the combined verification runs on the rebased tree. |
 | The ADR ordinal is claimed by a sibling mid-pipeline | AC8 re-runs the all-refs probe before merge and sweeps planning artifacts on renumber. This has collided twice in one session before (#5990). |
 | Removing the Phase-2 full run also removes the only place some authors ever saw a contention banner | The four reading-discipline passages stay in `work/SKILL.md` (AC7), and ship Phase 4 links them. |
 | **A future PR shards ship Phase 4 for speed, deleting the only gate R4/R5 have** | The highest-consequence risk in this plan. Three defenses: named ceiling 2 in the plan, an explicit rejected-alternative row in the ADR (so an optimiser finds the rejection instead of re-deriving the idea), and guard assertion 1, whose mutation proof is *sharding* the command rather than deleting it. |
@@ -523,7 +598,10 @@ The CTO advisory recommends landing PR #7441 (`feat-one-shot-test-pipeline-effic
 
 **Provenance, stated plainly: this session did not verify any of it.** The brief prohibits reading that branch or worktree, so the findings are agent-sourced and second-hand. They are recorded because a wrong sequencing decision is expensive, not because they are established.
 
-**Decision.** Treat #7441 as a *preferred predecessor*, not a hard blocker:
+**Decision — SUPERSEDED by OD2 for the merge, retained for implementation order.** The operator
+settled UC2 on 2026-08-12: #7441 is a **hard blocker on the MERGE**. Implementation, review, and QA
+proceed now; the PR stays draft until H1-H4 in `## Acceptance Criteria → Pre-merge hold (OD2)` are
+satisfied. The bullets below still govern *how* to implement while #7441 is in flight:
 
 - If #7441 has merged when `/work` begins, adopt its `skip_suite()` vocabulary and `test-relevance-paths.sh` substrate rather than authoring a parallel one, and re-read the `work/SKILL.md` region for its "lead runs the gate ONCE" constraint so the two statements stay consistent.
 - If it has not merged, proceed. Nothing in this plan's Files-to-Edit overlaps its reported hunk (`@@ -269 @@` in `work/SKILL.md`; §9 is at line 742), and this plan deliberately introduces **no** new selection script (Cut List C1), so there is nothing to collide with structurally. Expect a rebase touch-up.
