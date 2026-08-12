@@ -484,6 +484,8 @@ measurement window. Each layer is answered with an artifact, not with "obvious".
 
 ## User-Brand Impact
 
+- **Brand-survival threshold:** `single-user incident`
+
 **If this lands broken, the user experiences:** `claude plugin update soleur@soleur` printing a
 green checkmark and exiting 0 while their `~/.claude/plugins/cache/soleur/soleur/` keeps running
 months-old skills — the failure mode the issue names as "the worst shape of failure, because it
