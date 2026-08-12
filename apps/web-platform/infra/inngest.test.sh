@@ -893,9 +893,15 @@ assert "#7228 the inngest-server restart is GUARDED (a guard refusal must not ki
 # The load-bearing half: the units that make the refusal OBSERVABLE and RECOVERABLE are sequenced
 # after the restart, so if the guard ever regresses to an unguarded call they go down with it.
 # Assert the ordering rather than mere presence — presence alone is satisfied by the broken order.
-RESTART_LINE=$(grep -nE '^if ! systemctl restart inngest-server\.service; then$' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1)
-PROBE_TIMER_LINE=$(grep -nE '^systemctl enable --now inngest-server-probe\.timer$' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1)
-FLIP_TIMER_LINE=$(grep -nE '^[[:space:]]*systemctl enable --now inngest-cutover-flip\.timer$' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1)
+# `|| true` on each capture, matching this file's established idiom (see DOPPLER_BIN_LINE,
+# HEARTBEAT_UNIT_LINE, ENV_FILE_LINE). It is load-bearing, not decoration: a no-match here is a
+# NORMAL answer that the very next assertion is written to report ("else this pin is vacuous").
+# Without it the capture aborts the script on exactly the failure that assertion exists to catch,
+# so the guard could never run on its own trigger — and an aborted suite reads as an error rather
+# than as the clear "the anchor moved" verdict the assertion would have printed.
+RESTART_LINE=$(grep -nE '^if ! systemctl restart inngest-server\.service; then$' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
+PROBE_TIMER_LINE=$(grep -nE '^systemctl enable --now inngest-server-probe\.timer$' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
+FLIP_TIMER_LINE=$(grep -nE '^[[:space:]]*systemctl enable --now inngest-cutover-flip\.timer$' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
 assert "#7228 the restart and both downstream timers were located by shape (else this pin is vacuous)" \
   "[[ -n '$RESTART_LINE' && -n '$PROBE_TIMER_LINE' && -n '$FLIP_TIMER_LINE' ]]"
 assert "#7228 the probe + flip timers are DOWNSTREAM of the restart, so a refusal cannot strand them" \

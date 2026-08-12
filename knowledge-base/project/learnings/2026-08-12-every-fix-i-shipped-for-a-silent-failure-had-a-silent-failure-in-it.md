@@ -219,7 +219,18 @@ Four measurements in this session were themselves broken:
     and its trap are one edit, never two. And note the sharp edge in the fix: a second
     `trap … EXIT` REPLACES the first, so a suite with two tempdirs needs one combined trap —
     registering a second would have silently stopped cleaning the first.
-24. **The plan frontmatter claimed `closes: [7228, 6617, 7308]`.** All three would have closed
+24. **Three new captures omitted the `|| true` that every sibling capture in the SAME FILE
+    carries.** `RESTART_LINE`/`PROBE_TIMER_LINE`/`FLIP_TIMER_LINE` captured
+    `grep … | head -1 | cut` bare, while `DOPPLER_BIN_LINE`, `HEARTBEAT_UNIT_LINE` and
+    `ENV_FILE_LINE` in the same file all guard it. The consequence is the shape again: the very
+    next assertion is written to report the no-match case ("else this pin is vacuous"), and the
+    bare capture aborts the script before it can run — the guard could never fire on its own
+    trigger, and an aborted suite reads as an error rather than as "the anchor moved". Caught by
+    `lint-shell-capture-exit` (live, baselined) as 3 NEW findings. Mutation-proved after the fix:
+    breaking the anchor now fires the vacuity assertion and all 232 assertions still execute
+    (228/232) instead of the run dying. **Prevention:** the file's own idiom is the spec — before
+    adding a capture, grep the file for how its existing captures end.
+25. **The plan frontmatter claimed `closes: [7228, 6617, 7308]`.** All three would have closed
     at merge on a promise; #7228 cannot close until the #7462 host restore lands. Recovery:
     `refs:`, and `Ref` rather than `Closes` in the PR body. **Prevention:** before writing a
     close keyword, ask what post-merge event proves the issue's ask is true — if one exists,
