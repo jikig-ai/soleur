@@ -169,30 +169,42 @@ curl_cmd() {
 # Reason tokens are stable short strings: scripts/cutover-inngest.sh greps the marker's literal
 # `"reason":"<token>"`, so they are part of that contract and variable detail belongs in the
 # sibling logger line, never in the token.
+# BOTH conditions are retried against ONE deadline. An earlier revision broke out of the loop as
+# soon as /health returned 200 and then sampled the registry EXACTLY ONCE — which made the whole
+# window inapplicable to the condition it was raised for. /health comes up within seconds of
+# `systemctl start`, but the registry is DISCOVERED by polling the web-platform's --sdk-url at
+# --poll-interval 60, so a single shot taken seconds after start reads EMPTY on a perfectly
+# healthy cutover and drives the flag to terminal `aborted`. That is the exact scenario the
+# window exists to prevent, and the loop shape was silently exempting it.
+#
+# The reported reason is the LAST observed failure, not the first: a host whose listener comes up
+# and whose registry never populates should report verify-registry-empty (what is actually wrong),
+# not verify-health (what was wrong at t=0).
 verify_serving() {
   local deadline=$(( SECONDS + CUTOVER_VERIFY_WINDOW_S ))
-  local code=""
+  local code="" body count last="verify-health"
   while :; do
     code="$(curl_cmd -s -o /dev/null -w '%{http_code}' --max-time 5 "$CUTOVER_HEALTH_URL" 2>/dev/null || true)"
-    [[ "$code" == "200" ]] && break
-    (( SECONDS >= deadline )) && { printf 'verify-health'; return 1; }
+    if [[ "$code" == "200" ]]; then
+      # The listener is up. Now: has it adopted the registry? A well-formed but EMPTY function
+      # list is a server that serves and owns nothing — every reachability check passes and the
+      # cutover has silently moved zero work.
+      body="$(curl_cmd -s --max-time 10 -H 'Content-Type: application/json' \
+        --data-binary "$(jq -nc --arg q "$FUNCTIONS_GQL_QUERY" '{query:$q}')" \
+        "$CUTOVER_GQL_URL" 2>/dev/null || true)"
+      # jq indexes null as null, so an `{"errors":…,"data":null}` envelope yields type "null" and
+      # lands on the non-numeric arm rather than being read as a count of zero.
+      count="$(printf '%s' "$body" | jq -r '(.data.functions // null) | if type == "array" then length else "nan" end' 2>/dev/null || true)"
+      case "$count" in
+        ''|*[!0-9]*) last="verify-registry-unreadable" ;;
+        *) [[ "$count" -gt 0 ]] && return 0; last="verify-registry-empty" ;;
+      esac
+    else
+      last="verify-health"
+    fi
+    (( SECONDS >= deadline )) && { printf '%s' "$last"; return 1; }
     sleep "$CUTOVER_VERIFY_INTERVAL_S"
   done
-  # The listener is up. Now: did it adopt the registry? A well-formed but EMPTY function list is
-  # a server that serves and owns nothing — every reachability check passes and the cutover has
-  # silently moved zero work.
-  local body count
-  body="$(curl_cmd -s --max-time 10 -H 'Content-Type: application/json' \
-    --data-binary "$(jq -nc --arg q "$FUNCTIONS_GQL_QUERY" '{query:$q}')" \
-    "$CUTOVER_GQL_URL" 2>/dev/null || true)"
-  # jq indexes null as null, so an `{"errors":…,"data":null}` envelope yields type "null" and
-  # lands on the non-numeric arm rather than being read as a count of zero.
-  count="$(printf '%s' "$body" | jq -r '(.data.functions // null) | if type == "array" then length else "nan" end' 2>/dev/null || true)"
-  case "$count" in
-    ''|*[!0-9]*) printf 'verify-registry-unreadable'; return 1 ;;
-  esac
-  [[ "$count" -gt 0 ]] || { printf 'verify-registry-empty'; return 1; }
-  return 0
 }
 
 # --- #7228 (3.6): the done-OWNER marker, on the ROOT DISK -----------------------------------

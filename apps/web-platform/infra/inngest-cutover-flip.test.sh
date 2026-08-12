@@ -494,6 +494,49 @@ fi
 # BOTH operands are extracted BY SHAPE, neither restated: a hardcoded copy of either number
 # would agree with itself while disagreeing with the file it came from, which is the silent
 # drift this exists to catch.
+# --- #7228: the window must apply to the REGISTRY, not only to /health ----------------------
+# THE DEFECT THIS PINS, and it is the one the numeric pin below could not see. An earlier
+# revision broke out of the retry loop the moment /health returned 200 and then sampled the
+# registry EXACTLY ONCE. /health comes up within seconds of `systemctl start`; the registry is
+# discovered by polling --sdk-url at --poll-interval 60. So the single shot landed before the
+# first poll, read EMPTY, and drove a HEALTHY cutover to terminal `aborted` — with the FLUSHALL
+# already performed and the web scheduler quiesced. Raising the window did nothing for it,
+# because the window was never applied to that condition.
+#
+# STATIC fixtures cannot distinguish the two loop shapes: they probe t=0 and t=infinity and never
+# the transition, so both a retrying loop and a single-shot one pass. The discriminator is a
+# STATEFUL stub that changes on the Nth invocation — empty registry on the first call, populated
+# on the second — which is exactly the population a real cutover passes through.
+echo "TEST: #7228 the verify window covers the REGISTRY, not just /health"
+setup_case
+STATE_COUNTER="$WORK/gql-calls"
+: > "$STATE_COUNTER"
+cat > "$CURLSTUB" <<CURLEOF
+#!/usr/bin/env bash
+for a in "\$@"; do
+  case "\$a" in '%{http_code}') printf '200'; exit 0 ;; esac
+done
+# GQL call: empty on the FIRST invocation, populated from the second onward.
+printf 'x' >> "$STATE_COUNTER"
+if [ "\$(wc -c < "$STATE_COUNTER")" -le 1 ]; then
+  printf '%s' '{"data":{"functions":[]}}'
+else
+  printf '%s' '{"data":{"functions":[{"id":"fn-1"}]}}'
+fi
+CURLEOF
+chmod +x "$CURLSTUB"
+# A non-zero window with a zero sleep: the loop may retry, and does so without wall-clock cost.
+rc=$(run_flip armed CUTOVER_REDIS_DBSIZE=0 CUTOVER_VERIFY_WINDOW_S=30 CUTOVER_VERIFY_INTERVAL_S=0)
+order=$(trace_csv)
+assert_eq "a registry that populates on the SECOND poll still reaches done (exit 0)" "0" "$rc"
+assert_contains "a registry that populates on the SECOND poll still reaches done (flag)" "$order" "flag:done"
+assert_absent "a registry that populates on the SECOND poll is NOT aborted" "$order" "flag:aborted"
+# Non-vacuity: prove the stub really did serve an empty registry first, so the pass above is a
+# RETRY and not a stub that was populated all along.
+assert_eq "non-vacuity: the GQL endpoint was polled more than once (the loop retried)" \
+  "yes" "$([[ $(wc -c < "$STATE_COUNTER") -ge 2 ]] && echo yes || echo no)"
+teardown_case
+
 echo "TEST: #7228 the verify window dominates inngest-server's --poll-interval"
 BOOTSTRAP_SH="$SCRIPT_DIR/inngest-bootstrap.sh"
 WINDOW_DEFAULT=$(grep -oE '^CUTOVER_VERIFY_WINDOW_S="\$\{CUTOVER_VERIFY_WINDOW_S:-[0-9]+\}"' "$TARGET" \
