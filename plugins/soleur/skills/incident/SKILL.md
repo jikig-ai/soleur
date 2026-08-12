@@ -218,6 +218,21 @@ No public artifact is generated in MVP. Re-evaluation criteria are tracked in #3
 
 Resolve the gate from the **deployed plugin root** (`${CLAUDE_PLUGIN_ROOT}`, the platform-trusted copy — ADR-179's canonical bare anchor, with no fallback arm), verify the root is really a Soleur install, fail closed if either check fails, then run it against the unwritten draft. On the Concierge server the deployed-root anchor is load-bearing: a bare CWD-relative path would resolve the connected repo's **untrusted** copy of the sentinel (ADR-093). The default arm was **removed, not re-pointed**: `review/SKILL.md` instructs `gh pr checkout`, after which the git worktree is the *reviewed party's* tree, so that arm resolved this gate's own scanner from a file a hostile PR controls (#7450). The draft lives in `mktemp` only — it has NOT been emitted inline yet AND has not been written to `post-mortems/`.
 
+Register the cleanup trap **in the same block that allocates the draft**, before anything
+can halt. This PR adds an earlier fail-closed exit, so it increases how often the draft is
+abandoned mid-flight — and the abandoned file is the UN-REDACTED text, which is precisely
+what this gate exists to stop escaping. Leaving it in `mktemp` is a leak with a longer
+lifetime than the session (#7450 review-finding C14).
+
+```bash
+DRAFT="$(mktemp)" || { echo "cannot allocate a draft file — halt (fail closed)" >&2; exit 2; }
+trap 'rm -f "$DRAFT"' EXIT INT TERM HUP
+```
+
+Every halt path below inherits this trap, so the un-redacted draft is removed whether the
+gate passes, refuses, or the shell dies.
+
+
 The identity preflight is mandatory, not defence-in-depth: `[[ -r ]]` is a *shape* check, and ADR-179 §(a) measured a shape check passing while an attacker-chosen payload executed.
 
 ```bash

@@ -71,6 +71,21 @@ plural `Articles 15 through 22` — use `Articles? 1[5-9]`.
 A generated legal draft can echo a secret or PII that was passed in as company context (a contact email, an API identifier pasted into a data-practices answer). **Presenting the draft inline in Phase 3 is a transcript write boundary** — the same fail-closed rule the incident skill enforces (`incident/SKILL.md` Phase 6): the sentinel must precede inline-emit, not just file-commit. So the redaction gate runs here, before the operator ever sees the draft.
 
 1. Write the generated draft to a `mktemp` file (do NOT emit it inline yet).
+
+Register the cleanup trap **in the same block that allocates the draft**, before anything
+can halt. This PR adds an earlier fail-closed exit, so it increases how often the draft is
+abandoned mid-flight — and the abandoned file is the UN-REDACTED text, which is precisely
+what this gate exists to stop escaping. Leaving it in `mktemp` is a leak with a longer
+lifetime than the session (#7450 review-finding C14).
+
+```bash
+DRAFT="$(mktemp)" || { echo "cannot allocate a draft file — halt (fail closed)" >&2; exit 2; }
+trap 'rm -f "$DRAFT"' EXIT INT TERM HUP
+```
+
+Every halt path below inherits this trap, so the un-redacted draft is removed whether the
+gate passes, refuses, or the shell dies.
+
 2. Run the shared hardened engine against it. Resolve the path from the **deployed plugin root**
    (`${CLAUDE_PLUGIN_ROOT}`, the platform-trusted copy — ADR-179's canonical bare anchor, with no
    fallback arm) — NOT a bare `../incident/...` relative path, which depends on the current working

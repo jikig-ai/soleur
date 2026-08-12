@@ -103,8 +103,19 @@ The path is **payload-relative** — the root already *is* `plugins/soleur`, so
 `${CLAUDE_PLUGIN_ROOT}/plugins/soleur/scripts/foo.sh`. This is the highest-frequency way to
 get the migration wrong.
 
-Mandatory companion, one per command **or skill** file (scope extended by the 2026-08-12
-amendment), before the first producer:
+Mandatory companion, before the first producer, in every command file and in every
+**secret-gate** skill file (scope extended by the 2026-08-12 amendment):
+
+> **Scoped to SECRET-GATE skill files on 2026-08-12 (#7450 review-finding C7).** The
+> amendment first widened this to "command **or skill** file", which the amending PR then
+> violated with a site it shipped: `compound/SKILL.md` is a skill file with a producer
+> (`token-efficiency-report.sh`) and no companion preflight. The wider wording was also
+> wrong on the merits — that producer prints an advisory cost table and its exit code
+> authorises nothing, so halting there is a pure operator regression with no security
+> benefit, which is the same asymmetry §R5's correction records. The population is now the
+> one `plugin-root-anchoring.test.ts` G5 actually pins: `incident`, `legal-generate`,
+> `linear-fetch`. The ~105 remaining non-gate `skills/**` sites stay deferred to #7453.
+
 
 ```bash
 [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
@@ -346,10 +357,19 @@ the workspace.
   > exit 127 and empty stdout, which is the shape an agent persists as "the redacted text");
   > and one advisory reporter (`compound`). The distinction is load-bearing rather than
   > pedantic: the fail-closed asymmetry that justifies halting rests on the gate authorising
-  > secret emission, so `compound` correctly received a **non-blocking** skip guard. Halting
-  > knowledge capture over a missing cost table would be a pure operator regression with no
-  > security benefit. Flattening the four into one class is what would have produced that
-  > regression.
+  > secret emission, so a **non-blocking** skip guard is the right shape for `compound` and a
+  > halt is not. Halting knowledge capture over a missing cost table would be a pure operator
+  > regression with no security benefit. Flattening the four into one class is what would have
+  > produced that regression.
+  >
+  > **Correction (2026-08-12, #7450 review-finding C6): that guard was NOT shipped.** An
+  > earlier revision of this paragraph said `compound` "correctly received" it. It did not —
+  > `7840b2a42` descoped the guard to stay inside a byte budget and landed the anchor swap
+  > only, so `compound/SKILL.md` carries a bare, unguarded invocation today. The class
+  > analysis above is unchanged and still correct; what was wrong was the tense. Recording a
+  > design as a delivered control is precisely the defect class this PR exists to close, so
+  > it is corrected here rather than quietly satisfied by shipping the guard late.
+  > Tracked with the other non-gate `skills/**` work at #7453.
 
 - **R6.** **Deferrals are tracked at #7452** (remaining follow-ups, incl. the unmodelled
   self-hosted-CLI C4 topology) **and #7453** (the `skills/**` convention migration). Named
