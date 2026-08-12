@@ -189,7 +189,15 @@ Four measurements in this session were themselves broken:
     **Prevention:** the gate anchors on bullet shape deliberately — substring-matching prose
     would let "this is not a single-user incident" pass. Copy the literal from
     `plan-issue-templates.md` rather than approximating it.
-21. **The plan frontmatter claimed `closes: [7228, 6617, 7308]`.** All three would have closed
+21. **I cleared a gate, then changed the input that gate reads.** I ran the soak-followthrough
+    check inline against the PR body, recorded PASS, and then added a plan link to satisfy a
+    DIFFERENT check (Check 10). The soak gate concatenates the linked plan, so my own edit
+    invalidated my own result — and the hook, correctly, blocked `gh pr ready` minutes later.
+    **Prevention:** a gate result is scoped to the exact input it read. When a later step
+    changes the PR body, the plan link, or the diff, every already-cleared body-reading gate
+    is stale — re-run them after the last edit, not after the first. This is the same shape as
+    error (4): confirm the path still consumes what you verified.
+22. **The plan frontmatter claimed `closes: [7228, 6617, 7308]`.** All three would have closed
     at merge on a promise; #7228 cannot close until the #7462 host restore lands. Recovery:
     `refs:`, and `Ref` rather than `Closes` in the PR body. **Prevention:** before writing a
     close keyword, ask what post-merge event proves the issue's ask is true — if one exists,
