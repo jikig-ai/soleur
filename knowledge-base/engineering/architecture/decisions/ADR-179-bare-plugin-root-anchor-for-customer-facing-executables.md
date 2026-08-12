@@ -9,10 +9,10 @@ amended_by:
   - "#7474 (2026-08-11) — producer presence as a fourth precondition; see ## Amendment 2026-08-11"
 related_plans:
   - knowledge-base/project/plans/2026-08-11-fix-sync-plugin-root-anchoring-plan.md
-  - knowledge-base/project/plans/2026-08-11-fix-sync-producer-freshness-probe-plan.md
+  - knowledge-base/project/plans/archive/20260812-125433-2026-08-11-fix-sync-producer-freshness-probe-plan.md
 related_specs:
   - knowledge-base/project/specs/feat-one-shot-7442-sync-plugin-root-anchoring/tasks.md
-  - knowledge-base/project/specs/feat-one-shot-7474-sync-producer-freshness-probe/tasks.md
+  - knowledge-base/project/specs/archive/20260812-145032-feat-one-shot-7474-sync-producer-freshness-probe/tasks.md
 brand_survival_threshold: single-user incident
 ---
 
