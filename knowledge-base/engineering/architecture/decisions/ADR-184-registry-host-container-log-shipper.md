@@ -313,3 +313,15 @@ done | grep -oE 'ADR-[0-9]+' | sort -u | tail -5
 
 Re-run it immediately before merge. An ordinal derived at plan time is stale by the time a review
 round finishes; this one was.
+
+## `user_data` budget
+
+This shipper took the registry payload from 9,408 B to 13,136 B stored (base64gzip of the
+stripped render), which surfaced a three-way contradiction between the gates governing that
+number. **ADR-185** rules it: the policy is 8,000 B of preserved headroom, single-sourced from
+`REGISTRY_GZIP_BUDGET`, and the `headroom >= 20000` arm that blocked this change was #7299's
+one-shot fix-verification criterion, not a policy. The shipper ships at 19,632 B headroom — 2.45x
+the written policy and ~32x the largest measure-to-apply divergence ever observed on this class.
+
+The ratchet is real regardless: this feature consumed 3,728 compressed bytes, and the next
+`user_data` feature on this host meets the budget one level up.

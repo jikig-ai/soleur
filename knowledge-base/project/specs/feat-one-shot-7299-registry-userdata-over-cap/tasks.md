@@ -19,6 +19,15 @@ Closes: #7299 · Branch: `feat-one-shot-7299-registry-userdata-over-cap` · PR: 
       `zot-registry.tf` *including* the strip, which is extracted rather than copied.
 - [x] 1.6 Verify: `bash apps/web-platform/infra/registry-userdata-budget.sh` → exit 0,
       headroom ≥ 20,000 B. (AC1)
+      <!-- SUPERSEDED 2026-08-12 (#7440): this was a ONE-SHOT verification that the measurer fix
+      had landed — that the corrected reading was ~23.4 kB rather than the phantom -3,636 B. It
+      was later transcribed verbatim into a standing regression arm in
+      registry-userdata-budget.test.sh, where it silently became a permanent capacity ceiling
+      nobody decided on, rationing every future feature on this host to 3,360 B. Do NOT re-derive
+      20,000 as policy from this line. The repo's actual headroom policy is 8,000 B, stated once
+      as REGISTRY_GZIP_BUDGET < HETZNER_CAP - 8_000 in
+      plugins/soleur/test/cloud-init-user-data-size.test.ts; the bash gate now derives its floor
+      from that constant. See ADR-185. -->
 
 ## Phase 2 — Restore the ONE COPY invariant
 
