@@ -12,14 +12,30 @@
 # this file merges (see the `import_repository` helper in that workflow and
 # infra/github/README.md), exactly like the two sibling rulesets.
 #
-# OWNERSHIP BOUNDARY -- read before editing:
-#   Terraform owns:     visibility, description, topics, archival/destroy.
-#   Terraform does NOT own the repo CONTENTS. `.claude-plugin/marketplace.json`
-#   is hand-maintained in that repo and has no CI, no review, and no CODEOWNERS
-#   there. The ONLY control on the artifact is the daily drift guard
-#   `.github/workflows/scheduled-marketplace-drift.yml` in THIS repo, which
-#   re-reads the published manifest over raw.githubusercontent.com and opens an
-#   issue on mismatch. Deleting that workflow leaves the manifest ungoverned.
+# OWNERSHIP BOUNDARY -- read before editing (REWRITTEN by #7493; the previous
+# text is now false in both of its clauses and is quoted below so the change is
+# legible rather than silent):
+#   Terraform owns:     visibility, description, topics, archival/destroy, AND
+#                       the repo's default-branch ruleset + the CONTENTS of
+#                       `.claude-plugin/marketplace.json`.
+#
+#   Superseded 2026-08-12 (#7493): "Terraform does NOT own the repo CONTENTS ...
+#   The ONLY control on the artifact is the daily drift guard". Both clauses were
+#   retired together. The manifest's content is now declared by
+#   `github_repository_file.marketplace_manifest` in
+#   ruleset-marketplace-pr-required.tf, sourced from
+#   `infra/github/soleur-marketplace-manifest.json` in THIS repo — so it carries
+#   this repo's CI (the always-run `marketplace-manifest-guard` context), its
+#   required checks, and the CODEOWNERS pin on `/infra/github/`. The daily drift
+#   guard remains, with its role changed from sole control to publication
+#   verifier, and it now dispatches a reconcile apply on a content-drift verdict.
+#
+#   ⚠ A DESTROY NOW UNPUBLISHES THE PLUGIN. `github_repository_file` has no
+#   `keep_on_destroy` at provider 6.12.1, so destroying that resource DELETES the
+#   published manifest and breaks `marketplace add` for every new install.
+#   `archive_on_destroy` below does NOT cover it — that protects the repository,
+#   not a file inside it. The `[ack-destroy]` line in a merge commit therefore
+#   carries more weight than it did when it could only remove a ruleset.
 #
 # Attribute-by-attribute provenance (all read from the live API with
 # `gh api repos/jikig-ai/soleur-marketplace` before this file was written, so

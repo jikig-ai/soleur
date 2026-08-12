@@ -39,6 +39,13 @@ on:
     paths:
       - "infra/github/*.tf"
       - "infra/github/.terraform.lock.hcl"
+      # #7493 — the CONTENT source for `github_repository_file.marketplace_manifest`.
+      # The `infra/github/*.tf` glob above does NOT match a `.json` sibling (a `*`
+      # in a GitHub path filter is extension-literal), so without this line an edit
+      # to the manifest source would merge and never publish — with no error
+      # anywhere, because nothing else reads the file. That is the whole failure
+      # mode: a source of truth that silently is not the source of what ships.
+      - "infra/github/soleur-marketplace-manifest.json"
       # Defense-in-depth: re-fire on filter mutations so a PR that mutates
       # the destroy-guard filter without touching infra still runs the
       # apply step against `main`'s captured baseline (#4419).
@@ -428,6 +435,160 @@ jobs:
           echo "cla_actual_count=$CLA_ACTUAL" >> "$GITHUB_OUTPUT"
           echo "Ruleset 13304872 (CLA): required_status_checks count = ${CLA_ACTUAL}."
 
+          # ---- Step 5: marketplace ruleset probe (#7493) ------------------------------------
+          # Lives INSIDE this step deliberately: the EXIT trap at the top shreds
+          # $APP_PEM_FILE when the step ends, so no later step can mint an
+          # installation token. Reuses INSTALL_TOKEN for the same reason.
+          #
+          # TWO-HOP, and the hop is load-bearing. The rulesets LIST endpoint returns a
+          # SUMMARY — id/name/target/enforcement only, with NO `rules`, NO
+          # `bypass_actors`, NO `conditions`. Only GET /rulesets/{id} carries them, so a
+          # one-hop probe over the list would silently assert nothing on three of the
+          # four properties below while looking thorough. Selecting by NAME rather than a
+          # hardcoded id is what makes this work on the FIRST apply, when the id does not
+          # yet exist; it also means a rename reddens, which is correct.
+          MP_REPO="jikig-ai/soleur-marketplace"
+          MP_NAME="Marketplace PR Required"
+          MP_LIST=$(GH_TOKEN="$INSTALL_TOKEN" gh api "repos/${MP_REPO}/rulesets" 2>&1) || {
+            echo "::error::gh api repos/${MP_REPO}/rulesets failed — App lacks Administration:Read on the marketplace repo. Response: ${MP_LIST}"
+            exit 1
+          }
+          MP_ID=$(echo "$MP_LIST" | jq -r --arg n "$MP_NAME" '[.[]? | select(.name == $n) | .id] | first // empty')
+          # FAIL CLOSED on an empty list or a name miss. "The ruleset is gone" and "the
+          # ruleset is fine" must never produce the same verdict — a probe that reports
+          # 0-checked-OK is the vacuity this assertion exists to refuse.
+          if [[ ! "$MP_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::No ruleset named '${MP_NAME}' on ${MP_REPO} (got id '${MP_ID}'). The marketplace branch protection is ABSENT — this is the state #7493 exists to prevent."
+            exit 1
+          fi
+          MP_JSON=$(GH_TOKEN="$INSTALL_TOKEN" gh api "repos/${MP_REPO}/rulesets/${MP_ID}" 2>&1) || {
+            echo "::error::gh api repos/${MP_REPO}/rulesets/${MP_ID} failed. Response: ${MP_JSON}"
+            exit 1
+          }
+
+          mp_fail=0
+          mp_checked=0
+          mp_assert() { # $1=label $2=actual $3=expected
+            mp_checked=$((mp_checked + 1))
+            if [[ "$2" != "$3" ]]; then
+              echo "::error::marketplace ruleset ${1}: got '${2}', expected '${3}'."
+              mp_fail=1
+            fi
+          }
+
+          mp_assert "enforcement" "$(echo "$MP_JSON" | jq -r '.enforcement // "<absent>"')" "active"
+
+          # required_approving_review_count == 1 is the assertion that would have caught
+          # this PR's own first draft: `pull_request` present with the count defaulting to
+          # 0 does not close an actor holding pull_requests:write. Selected by .type, never
+          # a positional .rules[0].
+          mp_assert "pull_request rule present" \
+            "$(echo "$MP_JSON" | jq -r '[.rules[]? | select(.type=="pull_request")] | length')" "1"
+          mp_assert "required_approving_review_count" \
+            "$(echo "$MP_JSON" | jq -r '[.rules[]? | select(.type=="pull_request") | .parameters.required_approving_review_count] | first // "<absent>"')" "1"
+
+          # deletion + non_fast_forward are declared in the .tf and are the only
+          # unconditional protections here, so they get their own assertions. An omission
+          # or a hand-edit clearing either reads as false with NO other symptom:
+          # enforcement stays active, the pull_request rule stays present, the ref
+          # condition stays correct, and every other assertion passes.
+          mp_assert "deletion rule present" \
+            "$(echo "$MP_JSON" | jq -r '[.rules[]? | select(.type=="deletion")] | length')" "1"
+          mp_assert "non_fast_forward rule present" \
+            "$(echo "$MP_JSON" | jq -r '[.rules[]? | select(.type=="non_fast_forward")] | length')" "1"
+
+          # A ruleset can be `active` and structurally intact while quantifying over
+          # NOTHING — point ref_name at a branch that does not exist and every
+          # "is it enabled" check still passes.
+          mp_assert "conditions.ref_name.include" \
+            "$(echo "$MP_JSON" | jq -c '.conditions.ref_name.include // []')" '["~DEFAULT_BRANCH"]'
+
+          # bypass_actors as a SET, not a count. A 4th entry is the widening that matters
+          # and it is invisible to "is OrganizationAdmin present" or "is the array
+          # non-empty". Terraform writes actor_id = 0 for OrganizationAdmin and the API
+          # reads it back as null (provider issue #2536), so the canonical is stored
+          # API-shaped and BOTH sides are normalised 0 -> null before comparing —
+          # without that, this probe reddens on every single apply.
+          MP_CANON="${GITHUB_WORKSPACE}/scripts/marketplace-ruleset-canonical-bypass-actors.json"
+          if [[ ! -f "$MP_CANON" ]]; then
+            echo "::error::canonical bypass-actors file missing at ${MP_CANON}."
+            exit 1
+          fi
+          NORM='map({actor_type, actor_id: (if .actor_id == 0 then null else .actor_id end), bypass_mode}) | sort_by(.actor_type, (.actor_id // "null" | tostring), .bypass_mode)'
+          mp_assert "bypass_actors set" \
+            "$(echo "$MP_JSON" | jq -c ".bypass_actors // [] | ${NORM}")" \
+            "$(jq -c "${NORM}" < "$MP_CANON")"
+
+          # Anti-vacuity: assert the probe actually evaluated every property. A guard that
+          # silently checks zero things and exits 0 is the failure mode all of the above
+          # is written to avoid.
+          if [[ "$mp_checked" -ne 8 ]]; then
+            echo "::error::marketplace ruleset probe ran ${mp_checked} assertions, expected 8 — the probe itself is broken."
+            exit 1
+          fi
+          if [[ "$mp_fail" -ne 0 ]]; then
+            echo "::error::marketplace ruleset (${MP_REPO} #${MP_ID}) does not match its declaration."
+            exit 1
+          fi
+          echo "marketplace_ruleset_id=$MP_ID" >> "$GITHUB_OUTPUT"
+          echo "Ruleset ${MP_ID} (${MP_REPO}): ${mp_checked}/8 assertions hold."
+
+      - name: Post-apply verify (published manifest matches its source)
+        id: verify_manifest
+        env:
+          RAW_URL: https://raw.githubusercontent.com/jikig-ai/soleur-marketplace/main/.claude-plugin/marketplace.json
+          SRC: infra/github/soleur-marketplace-manifest.json
+        run: |
+          set -uo pipefail
+          # Reads the PUBLISHED artifact as an installer resolves it — never Terraform
+          # state and never the provider's own `content` attribute. A state-only check
+          # reports success while publication silently failed, which is precisely the
+          # case worth catching (e.g. the `paths:` trigger not matching the source file).
+          #
+          # THE CDN IS PART OF THE ASSEMBLY. raw.githubusercontent.com serves
+          # `cache-control: max-age=300` through Fastly, and this job finishes well inside
+          # that window — measured 2026-08-12 with `source-age: 102` on a live response.
+          # A single fetch here would read the PRE-APPLY copy and pass on the very first
+          # apply (the run this verifier exists for, since the source is seeded
+          # byte-identical), then flake red on every later content change. So: poll on the
+          # body, cache-busted, until it matches or the budget expires.
+          #
+          # Raw `diff`, never `jq -S`: byte identity is the stated property and it is
+          # achievable, because github_repository_file writes `content` verbatim. Key-order
+          # normalisation would quietly weaken the guard to canonical-JSON equality.
+          deadline=$(( SECONDS + 300 ))
+          attempt=0
+          matched=0
+          while [[ "$SECONDS" -lt "$deadline" ]]; do
+            attempt=$((attempt + 1))
+            pub="$(mktemp)"
+            rc=0
+            curl -fsS --proto '=https' --max-time 20 \
+              -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+              "$RAW_URL" -o "$pub" || rc=$?
+            if [[ "$rc" -eq 0 ]] && diff -u "$SRC" "$pub" > /dev/null 2>&1; then
+              matched=1
+              rm -f "$pub"
+              break
+            fi
+            rm -f "$pub"
+            sleep 15
+          done
+
+          if [[ "$matched" -ne 1 ]]; then
+            echo "::error::Published manifest does not match ${SRC} after ${attempt} attempt(s) over ~300s (CDN TTL is 300s, so this is past a full cache cycle). Either the apply did not publish, or the published bytes diverge."
+            pub="$(mktemp)"
+            if curl -fsS --proto '=https' --max-time 20 -H 'Cache-Control: no-cache' "$RAW_URL" -o "$pub"; then
+              diff -u "$SRC" "$pub" | head -40 >&2 || true
+            else
+              echo "::error::and the published manifest could not be fetched at all — it may have been deleted." >&2
+            fi
+            rm -f "$pub"
+            exit 1
+          fi
+          echo "attempts=$attempt" >> "$GITHUB_OUTPUT"
+          echo "Published manifest is byte-identical to ${SRC} (settled after ${attempt} attempt(s))."
+
       - name: Post-apply summary
         if: always()
         env:
@@ -438,6 +599,8 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           ACTUAL: ${{ steps.verify.outputs.actual_count }}
           CLA_ACTUAL: ${{ steps.verify.outputs.cla_actual_count }}
+          MP_ID: ${{ steps.verify.outputs.marketplace_ruleset_id }}
+          MP_ATTEMPTS: ${{ steps.verify_manifest.outputs.attempts }}
         run: |
           {
             echo "## Apply github infra (rulesets)"
@@ -448,5 +611,7 @@ jobs:
             echo "**Status:** ${JOB_STATUS}"
             echo "**Ruleset 14145388 (CI) required_status_checks count:** ${ACTUAL:-n/a}"
             echo "**Ruleset 13304872 (CLA) required_status_checks count:** ${CLA_ACTUAL:-n/a}"
+            echo "**Marketplace ruleset (jikig-ai/soleur-marketplace):** ${MP_ID:-n/a}"
+            echo "**Published manifest byte-match:** ${MP_ATTEMPTS:+settled after ${MP_ATTEMPTS} attempt(s)}${MP_ATTEMPTS:-n/a}"
             echo "**Run:** ${RUN_URL}"
           } >> "$GITHUB_STEP_SUMMARY"
