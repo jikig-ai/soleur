@@ -187,3 +187,55 @@ telemetry accumulator. Resolved by taking `main`'s version rather than hand-merg
 would have fabricated data; it correctly dropped out of the branch diff. Also re-verified after the
 merge that `_tc_ms_since`'s cited anchor (`local elapsed_ms=0` in `test-all.sh`, which a sibling PR
 touched) still resolves, and that AC8 still holds.
+
+## Review round — 2026-08-13: the panel found the claim was pinned by nothing
+
+Targeted 4-agent panel (architecture-strategist, test-design-reviewer,
+code-simplicity-reviewer, structural-enumeration seat), spawned report-only so no agent edited the
+tree the others were reading. It closed the plan's recorded debt — Kieran and architecture-strategist
+both died on the weekly API limit at plan-review time.
+
+**The finding that mattered.** Replacing `_tc_ms_since`'s arithmetic with `printf '%sms' 1500` — a
+constant, nothing measured anywhere — left the suite **95 passed, 0 failed**. The PR titled *"report
+the measured advisory-lock wait instead of asserting one"* could not tell a measurement from an
+assertion. All three elapsed predicates were **lower bounds sampled on one side only**, and arm 16's
+discriminating premise ("a free lock reads single-digit ms") existed as a prose comment and was never
+an assertion. My round-1 battery's 7 rows all perturbed toward *small or absent*; none toward a
+plausible constant. Dropping the `/1000` was green too, printing a claimed 33-minute wait against a
+2-second budget.
+
+**A live user-facing bug nobody had enumerated.** Bash renders `EPOCHREALTIME` with `LC_NUMERIC`'s
+radix, so on a comma-locale machine it is `1786573806,515545`. The `*.*` guard failed, every banner
+read `unknown` on a healthy bash 5 with a working clock, and the gate went **92/3** — this
+instrument manufacturing the exact false RED that ADR-133 exists to eliminate, for every European
+operator. Two agents converged on it independently; measured under `fr_FR.utf8`.
+
+**A second member of the class this PR was already fixing.** `local name="$1"` — a zero-arg call is
+an unbound-variable abort one line into the function whose entire contract is that it cannot abort,
+and `|| true` at the call site cannot suppress it. The EPOCHREALTIME fix guarded the *read*; the
+arithmetic *consuming* it (`100.`, `x.1` past a shape-only guard) was still unguarded, and so was
+the arity.
+
+**Recommendation declined, with the reason measured rather than asserted.** `code-simplicity-reviewer`
+rated P1 a swap to the `SECONDS` builtin: −68 lines, kills the bash-3.2 hazard outright, and its
+critique of the duplication comment was correct (the "dependency cycle" argument ruled out an option
+nobody proposed — the de-duplicating direction is script→lib, which already exists). But at arm 11's
+2-second timeout the measured elapsed and the budget are **both `2`** in whole seconds, so mutation
+row 1b — substituting `${timeout_s}` for the measurement — becomes undetectable. Millisecond
+precision is not for the operator; it is what makes the sneakiest mutation observable. Duplication
+kept, comment rewritten to the real reason (test-all.sh degrades this lib to a silent noop stub, so
+routing `run_suite`'s required timing through it would buy a new silent-zero failure mode).
+
+**AC8 amended, not quietly broken.** Review measured the identical unbound-variable abort in
+`scripts/test-all.sh` — a file AC8 fenced off — where `run_suite`'s two bare `$EPOCHREALTIME` reads
+kill the runner on its *first* suite, producing no summary, no rc file and no `[FAIL]`: precisely the
+signature `work/SKILL.md` attributes to a harness reap, which sends the operator into a relaunch loop
+that reproduces it forever. The file's own comment claimed it "computes 0 silently". Fixed in two
+lines; AC8 rewritten to assert its *intent* (no mechanism drift) mechanically instead of a file list.
+
+**Round-2 mutation battery: 12/12 RED**, covering all seven mutants that survived round 1 plus the
+original rows re-confirmed against the rewritten helper. Each row runs against a green sandbox
+baseline and asserts the mutation LANDED (exact-occurrence `python` replace, `diff -q` proof) — a
+`sed` that silently no-ops reports the baseline count, which reads exactly like a survivor.
+
+Suite 95 → **110 passed, 0 failed**; floor raised to 110, derived by running the file.
