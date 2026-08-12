@@ -14,7 +14,9 @@
 
 **No plugin manifest carries a `version` key.** Not one of the three, and the reason is functional rather than stylistic.
 
-A `version` key's presence **suppresses `gitCommitSha` tracking** — the CLI records the source commit only for a keyless manifest, and `claude plugin update` compares version strings when a version exists, finds them identical, and short-circuits. That is defect 1 of #7471: a plugin that never updates. The reading is in `knowledge-base/project/specs/feat-one-shot-7471-plugin-delivery-path/measurements.md` §1.0 — cite it there, do not restate the numbers here.
+A **marketplace entry's** `version` key suppresses `gitCommitSha` tracking: in `installed_plugins.json`, the keyless official plugins carry a recorded source commit and the versioned ones do not. Without a SHA there is nothing to compare but the version string, so `claude plugin update` compares two identical strings and short-circuits — defect 1 of #7471, a plugin that never updates. Measurement record: `knowledge-base/project/specs/feat-one-shot-7471-plugin-delivery-path/measurements.md` (§1.0 the gate, §2B the published repo). Cite it by anchor; do not restate its numbers here.
+
+Be precise about *which* key. §1.0 measured that `plugin.json`'s own `version` key does **not** suppress the SHA — a `git-subdir` install recorded one while the cloned `plugin.json` still carried `0.0.0-dev`. The two keys are independent, and `plugin.json`'s is removed for the separate reason that it feeds the cache path's version segment and the docs data layer. Do not read §1.0 as contradicting the paragraph above; it is about the other manifest.
 
 So the rule is not "the version fields are frozen, leave them alone". The fields are **gone**, deliberately, and adding one back to any of the three silently reverts the fix for every new install.
 

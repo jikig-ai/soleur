@@ -66,7 +66,7 @@ Changes to files under `plugins/soleur/` require:
 - **`semver:patch|minor|major` label** -- CI bumps the version from the latest release tag at merge time
 - **`README.md`** -- verify component counts and tables are accurate
 
-Do NOT add a `version` key to `plugin.json` or to `marketplace.json`'s `plugins[]` entry. Neither carries one, and that is deliberate: a `version` key's presence suppresses `gitCommitSha` tracking, so `claude plugin update` compares two identical version strings and short-circuits -- the plugin never updates for anyone ([#7471](https://github.com/jikig-ai/soleur/issues/7471)). The same applies to the published distribution manifest in [`jikig-ai/soleur-marketplace`](https://github.com/jikig-ai/soleur-marketplace). Release versions live in git tags; a release publishes nothing to any manifest.
+Do NOT add a `version` key to `plugin.json` or to `marketplace.json`'s `plugins[]` entry. Neither carries one, and that is deliberate: a marketplace entry's `version` key suppresses `gitCommitSha` tracking, leaving nothing to compare but the version string, so `claude plugin update` compares two identical strings and short-circuits -- the plugin never updates for anyone ([#7471](https://github.com/jikig-ai/soleur/issues/7471)). The same applies to the published distribution manifest in [`jikig-ai/soleur-marketplace`](https://github.com/jikig-ai/soleur-marketplace). Release versions live in git tags; a release publishes nothing to any manifest.
 
 (`marketplace.json`'s **top-level** `version` is a different field -- the manifest-format version -- and stays.)
 

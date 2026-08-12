@@ -265,31 +265,35 @@ working and do not auto-migrate.
 
 **The path, by segment.** The cache path is
 `cache/<marketplace manifest name>/<plugin name>/<version>`. All three segments were read
-off a real install, not inferred — the `installPath` shape is recorded in
+off a real install, not inferred — the `installPath` is recorded in
 `knowledge-base/project/specs/feat-one-shot-7471-plugin-delivery-path/measurements.md`
-§1.0, which is also where the byte and timing readings live. Cite that file by anchor
-rather than restating its numbers.
+§1.0 (the falsification gate, against a local-path fixture) and §2B (the same run against
+the **published** `jikig-ai/soleur-marketplace`), which is also where the byte and timing
+readings live. Cite that file by anchor rather than restating its numbers.
 
 | Segment | This ADR asserted | After the sentinel removal (existing install) | After the new marketplace (new install) |
 |---|---|---|---|
-| Marketplace | `soleur` | `soleur` (unchanged) | the `name` declared by `jikig-ai/soleur-marketplace`'s `.claude-plugin/marketplace.json` — the manifest's `name` field, **not** the repo name |
+| Marketplace | `soleur` | `soleur` (unchanged) | `soleur-marketplace` — the `name` declared by `jikig-ai/soleur-marketplace`'s `.claude-plugin/marketplace.json`. That is the manifest's `name` field, **not** the repo name; the two coincide here by choice |
 | Plugin | `soleur` | `soleur` (unchanged) | `soleur` (unchanged) |
 | Version | `0.0.0-dev`, "never changes" | `unknown`, refreshed in place | `unknown`, refreshed in place |
 
-Two cautions on that table. The §1.0 gate run resolved a version segment of `0.0.0-dev`
-because it cloned pre-fix `main` — the manifest it materialised still carried the key; the
-`unknown` value is the keyless resolution measured against the official control-group
-plugins, not a guess. And the marketplace segment comes from the published manifest's
-`name`, so it is read off that file rather than derived from the repo slug.
+One caution on that table. Both the §1.0 and §2B runs resolved a version segment of
+`0.0.0-dev` because both cloned pre-fix `main` — the `plugin.json` they materialised still
+carried the key. The `unknown` value is the keyless resolution measured against the
+official control-group plugins, not a guess, and task 6.5 re-runs the install after merge
+to confirm it on the shipped article.
 
 **The comparator, not the directory name.** The replacement reasoning is the one that
 matters for delivery. `claude plugin update` short-circuits when it can compare two
 identical version strings — that is the mechanism behind the staleness measured above. A
-**keyless** manifest suppresses no `gitCommitSha`: the CLI records the source commit and
-compares *that*, so new content is delivered by the source commit advancing rather than by
-a version bump. The distribution manifest deliberately carries no pinned `ref`/`sha` and
-tracks `main` for the same reason: a constant pin would be the frozen sentinel wearing
-different clothes.
+**keyless marketplace entry** is what makes the CLI record a `gitCommitSha` and compare
+*that* instead, so new content is delivered by the source commit advancing rather than by a
+version bump. Note the two keys are independent: §1.0 measured a `gitCommitSha` recorded
+through a keyless `git-subdir` entry even while the cloned `plugin.json` still carried
+`0.0.0-dev`. `plugin.json`'s key is removed for the separate reasons above — it feeds this
+ADR's version segment and the docs data layer. The distribution manifest also carries no
+pinned `ref`/`sha` and tracks `main`, for the same spirit: a constant pin would be the
+frozen sentinel wearing different clothes.
 
 **What this does not change.** ADR-178's decision stands untouched. The library still
 ships inside `plugins/soleur/` and still resolves `${CLAUDE_PLUGIN_ROOT}`-anchored, which
