@@ -30,6 +30,22 @@ claude plugin install --url https://github.com/jikig-ai/soleur/tree/main/plugins
 
 **For existing codebases:** Run `/soleur:sync` first to populate your knowledge-base with conventions and patterns.
 
+## Updating
+
+Updating is **two steps**, and the first one looks sufficient on its own:
+
+```bash
+claude plugin marketplace update soleur   # advances the marketplace checkout ONLY
+claude plugin install soleur              # re-pulls the installed plugin
+```
+
+`/plugin marketplace update` moves the marketplace checkout to the new HEAD. It does **not**
+re-pull the plugin install, which keeps its own `gitCommitSha` in `installed_plugins.json`.
+Soleur's commands resolve `${CLAUDE_PLUGIN_ROOT}` to the *install*, never the marketplace
+checkout — so after step 1 alone you can read a fix as shipped while every run still executes
+the old payload. If a fix you expect is not taking effect, run step 2 and compare the two SHAs
+before assuming the fix is broken.
+
 ## The Workflow
 
 The recommended way to use Soleur:
