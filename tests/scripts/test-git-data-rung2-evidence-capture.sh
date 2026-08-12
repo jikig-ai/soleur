@@ -433,10 +433,44 @@ else
   fi
 fi
 
+# ── ARM 12: the derivation-fault path, EXECUTED ───────────────────────────────────
+#
+# AN EXECUTING ARM, NOT A GREP OVER THE SOURCE. A grep is satisfied whether or not the branch
+# is REACHABLE, and this branch sits after the whole Better Stack verdict — so "the label was
+# corrected" and "the label is reached" are two independent claims and only running it proves
+# both. It also binds the message to the lib's abort text: the capture script promises the
+# diagnostic below names the offending file, and that promise is only true if the lib's abort
+# actually flows through.
+#
+# The stub is re-armed with the PASS rows deliberately: the run has to get all the way PAST
+# boot_complete to reach the derivation, which is exactly why this fault is expensive in
+# production — it is discovered after the host has already booted.
+FIX_BROKEN="$TMP/fix-broken"
+cp -r "$FIX" "$FIX_BROKEN" || { echo "HARNESS ABORT: could not copy the fixture tree" >&2; exit 2; }
+rm -f "$FIX_BROKEN/git-data-gc.timer" \
+  || { echo "HARNESS ABORT: could not remove the A12 payload" >&2; exit 2; }
+HOSTROWS_DERIV="$TMP/rows-deriv.jsonl"
+row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes > "$HOSTROWS_DERIV"
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_DERIV"
+out="$(BETTERSTACK_QUERY_SH="$STUB" BETTERSTACK_QUERY_HOST=stub \
+       BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
+       bash "$SUT" --host-name "$HOST" --evidence-url "$URL" --divergence "$DIVERGENCE" \
+         --cloud-init "$FIX_BROKEN/cloud-init-git-data.yml" \
+         --out "$TMP/evidence-deriv.env" 2>&1)"; rc=$?
+if [[ "$rc" -eq 2 \
+      && "$out" == *"DERIVATION FAULT (deterministic, NOT transient)"* \
+      && "$out" == *"references payload '../../git-data-gc.timer'"* ]]; then
+  pass "an unresolvable payload => exit 2, labelled deterministic and naming the payload"
+else
+  fail "an unresolvable payload => exit 2, labelled deterministic and naming the payload" "$rc" "$out"
+fi
+
 # ── Minimum-cardinality floor ─────────────────────────────────────────────────────
 # Developer-incremented, and a FLOOR rather than an equality so a legitimately added arm does
 # not redden the suite and train the next person to bump it unread. Counts passes+fails, so a
 # genuine failure still reports as a failure rather than as an empty suite.
+#
+# RAISED 33 -> 34 (#7485): ARM 12, the executing derivation-fault arm.
 #
 # RAISED 30 -> 33 WITH THE ARMS THAT MADE IT NECESSARY (#7227 item 4). ARM 6b constrains
 # --host-name to rehearsal hosts, and is three arms because the constraint has three
@@ -446,11 +480,11 @@ fi
 # be refused (the SQL-interpolation property must survive the narrowing, not be traded for
 # it). 30 + 3 = 33. Measured: 33 passed, 0 failed.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 33 ]]; then
+if [[ "$_ran" -lt 34 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 33. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 34. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 33)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 34)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"
