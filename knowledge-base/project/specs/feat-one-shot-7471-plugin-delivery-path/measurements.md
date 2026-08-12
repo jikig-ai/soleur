@@ -134,3 +134,63 @@ not the repo name — they coincide here by choice. `installPath` =
 The version segment still reads `0.0.0-dev` because `plugins/soleur/.claude-plugin/plugin.json`
 on `main` still carries the key — Phase 2 is what changes that, and task 6.5 re-runs this after
 merge. Do not read this row as having verified Phase 2; it verifies distribution only.
+
+---
+
+## 1.9 — What the `version` key actually does (controlled, and it refutes §1.0's inference)
+
+**Run 2026-08-12. This supersedes the mechanism stated in §1.0's "Finding the gate was not looking
+for" and every corpus site that cited it. §1.0's readings stand; its *inference* does not.**
+
+### Why this was run
+
+A claim propagated through the governance corpus and the published marketplace README: *a `version`
+key's presence suppresses `gitCommitSha` tracking.* It came from a control-group correlation in
+`installed_plugins.json` — six keyless official plugins carrying a SHA, two versioned ones showing
+`sha=NONE`. It was never tested, and the control group is heterogeneous (different source shapes,
+different authors, different CLI versions at install time).
+
+Two counterexamples surfaced before the experiment:
+
+- **`code-review`** — plugin manifest **keyless**, yet `sha=NONE`, with `version` recorded as
+  `15b07b46dab3` (a commit string in the version field).
+- **§1.0's own gate10 run** — plugin manifest **versioned**, yet a `gitCommitSha` **was** recorded.
+
+One counterexample in each direction means the correlation is not the mechanism.
+
+### The experiment
+
+Two arms, identical in every respect except the plugin manifest's `version` key. Marketplace entry
+keyless in **both** arms; relative-path source, matching the control group's shape; clean `HOME`
+per arm; same CLI.
+
+| Arm | `plugin.json` `version` | `gitCommitSha` | recorded `version` |
+|---|---|---|---|
+| with-version | `"0.0.0-dev"` | **YES** | `0.0.0-dev` |
+| keyless | absent | **YES** | `bfc681c7d8c7` |
+
+### The finding
+
+**A `version` key does not suppress `gitCommitSha`. Both arms record one.** What the key changes is
+the **recorded version string**: with the key it is the constant from the manifest; without it the
+CLI records **the commit SHA as the version**.
+
+That is the actual defect mechanism, and it is simpler than the one it replaces:
+
+> `claude plugin update` compares **version strings**. A constant `0.0.0-dev` always compares equal,
+> so the update short-circuits, reports "already at the latest version", and exits 0 having
+> delivered nothing. A SHA-valued version changes with every commit, so the comparison sees a
+> difference and the update applies.
+
+This matches the issue's own evidence exactly — `✔ soleur is already at the latest version
+(0.0.0-dev)`, exit 0 — which the suppression story never explained.
+
+It also explains `code-review`: a keyless manifest whose SHA landed in `version` and not in
+`gitCommitSha`. The CLI has more than one recording mode; **which field carries the identity is not
+the load-bearing part — whether the identity string CHANGES between commits is.**
+
+### Consequence
+
+Every site asserting the suppression mechanism is wrong and must state the comparator instead. The
+conclusion — *do not add a `version` key to any of the three manifests* — is unchanged and, if
+anything, better supported: it now rests on a measured comparator rather than an inferred one.
