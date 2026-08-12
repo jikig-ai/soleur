@@ -15,16 +15,42 @@
 #   (iii) NO PRODUCT SECRETS ARE CONSUMED. Unlike scheduled-prod-version-drift.yml — which
 #       acknowledges rather than meets `plugins/soleur/skills/schedule/SKILL.md`'s reservation
 #       that a gate-override be reserved for a genuinely pure-GH op — this workflow consumes only
-#       the automatic `secrets.GITHUB_TOKEN`. It reads two public URLs unauthenticated. It is the
-#       pure-GH-op case the reservation describes.
+#       the automatic `secrets.GITHUB_TOKEN` plus the Sentry heartbeat's DSN components. The
+#       `drift-check` job reads two public URLs unauthenticated.
 #
-# WHAT THIS WATCHES, AND WHY IT IS THE ONLY CONTROL.
+# THE `canary` JOB IS NOT A PURE-GH OP, AND SAYING SO IS THE POINT (#7490, ADR-182 Decision 6).
+# It downloads a pinned Claude Code CLI and MATERIALISES EXECUTABLE PLUGIN CONTENT into a scratch
+# HOME on the runner. That is a materially larger surface than two curls, so the mitigating facts
+# are stated here rather than left to be inferred:
+#   * The canary job carries `contents: read` ONLY. The write-capable `issues: write` stays with
+#     `drift-check`, which consumes the canary's verdict through job outputs and never executes
+#     anything the canary downloaded.
+#   * The payload originates in THIS protected monorepo, reached through the published marketplace
+#     entry — the same bytes an installing user gets, which is precisely what makes the assertion
+#     meaningful.
+#   * It consumes no secrets at all. Measured: `marketplace add` + `plugin install` complete with
+#     every Claude credential variable unset.
+# The residual risk — executing a downloaded CLI in a workflow that also holds a write-capable
+# token — is accepted and recorded in ADR-182 Decision 6, not left implicit here.
+#
+# WHAT THIS WATCHES, AND THE TWO CONTROLS ON IT.
 # `jikig-ai/soleur-marketplace` holds one hand-maintained file, `.claude-plugin/marketplace.json`.
 # That repo has NO CI, NO required review, and NO CODEOWNERS — edits to it are unreviewed BY
 # CONSTRUCTION. Terraform (infra/github/repository-marketplace.tf) owns that repo's settings but
 # explicitly NOT its contents. So this workflow is the entire control surface on the artifact
 # every `claude plugin marketplace add` resolves against. Deleting it leaves the manifest
 # ungoverned; nothing else would notice a change to it.
+#
+# THE TWO JOBS ASSERT DIFFERENT THINGS, AND NEITHER SUBSUMES THE OTHER.
+#   * `drift-check` asserts the published MANIFEST still describes the delivery contract. It is a
+#     statement about a pointer.
+#   * `canary` asserts that following that pointer actually DELIVERS the plugin — complete, byte
+#     -correct at the delivered commit, and current. It is a statement about the bytes.
+# A manifest can be perfect while delivery is broken: #7471 shipped 64 skill directories where 96
+# were expected, with every metadata field reading correct. That is the defect `drift-check`
+# structurally cannot see and `canary` exists for. The converse also holds — a manifest edit
+# pointing installs at another repository would deliver a complete, self-consistent, current tree
+# of the WRONG plugin, which `canary` would pass and `drift-check` catches.
 #
 # The three assertions, and why each earns its place:
 #
@@ -82,9 +108,166 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ===========================================================================
+  # THE DELIVERY CANARY (#7490). A separate JOB, not extra steps in `drift-check`,
+  # and that is forced by three facts rather than chosen for tidiness:
+  #
+  #   1. `findings` and `sanitize()` are shell LOCALS of the `check` step below.
+  #      Anything appended to them from another step appends to nothing.
+  #   2. `scripts/marketplace-drift-check.test.sh` extracts the `check` step by id
+  #      and re-executes it HERMETICALLY with a curl shim and no network. Canary
+  #      logic placed inside that step would run there with no `claude` binary.
+  #   3. This job needs a different privilege and timeout profile from two curls:
+  #      it checks out the repo and downloads a CLI, and it must NOT hold the
+  #      `issues: write` token that the filing step needs.
+  #
+  # Verified count-neutral against plugins/soleur/test/c4-count-parity.test.sh: C1
+  # and C2 count heartbeat workflow FILES and C5 counts distinct `monitor-slug:`
+  # values, so a second job in an existing file moves none of them.
+  # ===========================================================================
+  canary:
+    runs-on: ubuntu-24.04
+    # Sized for CLI acquisition plus the measured ~27 s add+install, with headroom.
+    # Deliberately larger than drift-check's 5: acquisition is the new and slowest
+    # dependency, and a canary that times out mid-install would report a finding it
+    # did not measure.
+    timeout-minutes: 15
+    # `contents: read` ONLY. The write-capable token stays with drift-check, which
+    # consumes this job's verdict through outputs. This job executes a downloaded
+    # CLI and materialises plugin content; it must not also be able to write.
+    permissions:
+      contents: read
+    outputs:
+      verdict: ${{ steps.canary.outputs.verdict }}
+      finding_count: ${{ steps.canary.outputs.finding_count }}
+      findings: ${{ steps.canary.outputs.findings }}
+      counts: ${{ steps.canary.outputs.counts }}
+    steps:
+      # Unlike drift-check — which deliberately does NOT check out, because it must
+      # observe what raw.githubusercontent serves rather than the runner's tree —
+      # this job needs the committed canary script. The checkout is scoped to this
+      # job alone, so drift-check's no-checkout property is undisturbed.
+      - name: Check out this repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Claude Code CLI
+        id: cli
+        env:
+          # Pinned, never `latest`: an unpinned CLI makes every canary verdict a
+          # function of whatever shipped that morning, so a red run could not be
+          # attributed to this repo's delivery path.
+          CLI_VERSION: "2.1.228"
+        run: |
+          set -uo pipefail
+          # Inherited errexit is ON in a `run:` block with no `shell:` key. A failed
+          # install is a FINDING to report, not a reason to abort before reporting
+          # it, so the bracket is required for the `available=false` path to be
+          # reachable at all.
+          set +e
+          npm install -g "@anthropic-ai/claude-code@${CLI_VERSION}" >/dev/null 2>&1
+          install_rc=$?
+          set -e
+
+          if [[ "$install_rc" -ne 0 ]] || ! command -v claude >/dev/null 2>&1; then
+            echo "::warning::Could not install the pinned Claude Code CLI (npm exited ${install_rc}); the canary will report cli_unavailable."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+          # Always succeed: acquisition failure travels as data to the step below,
+          # which turns it into a finding. Failing here would skip the reporting.
+          exit 0
+
+      - name: Assert the published channel delivers this repo's plugin
+        id: canary
+        if: ${{ !cancelled() }}
+        env:
+          # Measured: the CLI clones via SSH first and reaches HTTPS only after the
+          # SSH attempt terminates. On a runner that attempt is dead weight against
+          # the clone budget, so it is skipped rather than survived.
+          CLAUDE_CODE_PLUGIN_PREFER_HTTPS: "1"
+          CLI_AVAILABLE: ${{ steps.cli.outputs.available }}
+        run: |
+          set -uo pipefail
+          set +e
+
+          if [[ "${CLI_AVAILABLE:-false}" != "true" ]]; then
+            # AP-021: name only what was measured. Nothing about delivery was
+            # evaluated here, so the finding says exactly that.
+            findings="cli_unavailable: the pinned Claude Code CLI could not be obtained; no delivery assertion was evaluated"
+            finding_count=1
+            verdict="MISMATCH"
+            counts="compared=0 expected=0"
+          else
+            raw="$(bash scripts/plugin-delivery-canary.sh 2>/dev/null)"
+            canary_rc=$?
+
+            findings="$(printf '%s\n' "$raw" | sed -n 's/^canary-finding| //p')"
+            counts="$(printf '%s\n' "$raw" | sed -n 's/^canary-counts| //p' | head -1)"
+            [[ -n "$counts" ]] || counts="compared=0 expected=0"
+
+            compared="$(printf '%s' "$counts" | sed -n 's/.*compared=\([0-9]*\).*/\1/p')"
+            [[ -n "$compared" ]] || compared=0
+
+            if [[ "$canary_rc" -eq 0 && "$compared" -gt 0 ]]; then
+              verdict="OK"
+              finding_count=0
+              findings=""
+            else
+              verdict="MISMATCH"
+              # A zero comparison count with a zero exit is a contradiction, not a
+              # pass: "0 differences" and "nothing was compared" are the same bytes
+              # and only one of them is green.
+              if [[ "$canary_rc" -eq 0 && "$compared" -eq 0 ]]; then
+                findings="installpath_unresolved: the canary exited 0 having compared 0 files; a zero comparison count is not a clean result"
+              fi
+              [[ -n "$findings" ]] || findings="install_failed: the canary exited ${canary_rc} without emitting a finding"
+              finding_count="$(printf '%s\n' "$findings" | grep -c . || true)"
+            fi
+          fi
+
+          printf 'marketplace-canary| %s\n' "$counts"
+          if [[ "$verdict" == "OK" ]]; then
+            printf 'marketplace-canary| every delivery assertion holds\n'
+          else
+            printf '%s\n' "$findings" | while IFS= read -r _l; do
+              [[ -n "$_l" ]] && printf 'marketplace-canary| %s\n' "$_l"
+            done
+          fi
+
+          # RE-ARM before the output write, mirroring the sibling step: a failed
+          # append must not fall through to exit 0 leaving an EMPTY verdict, which
+          # satisfies no gate and would report the finding nowhere.
+          set -e
+
+          {
+            echo "verdict=${verdict}"
+            echo "finding_count=${finding_count}"
+            echo "counts=${counts}"
+            echo "findings<<MARKETPLACE_CANARY_FINDINGS_EOF"
+            [[ "$verdict" != "OK" ]] && printf '%s\n' "$findings"
+            echo "MARKETPLACE_CANARY_FINDINGS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          if [[ "$verdict" == "MISMATCH" ]]; then
+            echo "::error::Delivery canary: ${finding_count} failing assertion(s); each is printed above on a marketplace-canary| line."
+          fi
+
+          # The verdict travels as DATA. Failing the step would conflate "delivery
+          # is broken" with "the canary is broken" and skip its consumers.
+          exit 0
+
   drift-check:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    # `needs` is what lets the alarm see BOTH verdicts. `!cancelled()` is
+    # load-bearing with it: a `needs:` dependency that FAILS would otherwise skip
+    # this job entirely, silently disabling the manifest assertions because an
+    # unrelated CLI download broke. The manifest check must survive a broken canary.
+    needs: [canary]
+    if: ${{ !cancelled() }}
     steps:
       # No `actions/checkout`. Every input is fetched over HTTPS, and checking out THIS repo
       # would be actively misleading: assertion 3 must observe what `main` serves to an installer
@@ -271,14 +454,32 @@ jobs:
       # `!cancelled()` is also required for a different gate: an `if:` on an issue-filing step
       # with no status-check function inherits an implicit `success()`, which silently skips the
       # filing whenever any earlier step failed (scripts/alarm-issue-filing-guard.test.sh).
+      # Fires when EITHER control reports. Before #7490 this gated on the manifest
+      # verdict alone, so a canary-only failure would have filed nothing and checked
+      # in `ok` -- a detector whose alarm is wired to a different detector's verdict.
+      # That is the exact shape this repo's own cited learning names, and the plan
+      # that added the canary reproduced it in its first draft.
+      #
+      # `needs.canary.outputs.verdict != 'OK'` is deliberately written as a
+      # NOT-EQUAL against a non-numeric string: Actions `==` is loose, so an unset
+      # output is '' which casts to 0 and would satisfy a numeric gate. Written this
+      # way, a canary job that died before writing anything reads as not-OK and
+      # files, rather than coercing its way to silence.
       - name: File or update the drift issue
         id: issue
-        if: ${{ !cancelled() && steps.check.outcome == 'success' && steps.check.outputs.verdict == 'MISMATCH' }}
+        if: ${{ !cancelled() && ( (steps.check.outcome == 'success' && steps.check.outputs.verdict == 'MISMATCH') || needs.canary.result != 'success' || needs.canary.outputs.verdict != 'OK' ) }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           FINDINGS: ${{ steps.check.outputs.findings }}
           FINDING_COUNT: ${{ steps.check.outputs.finding_count }}
+          CHECK_OUTCOME: ${{ steps.check.outcome }}
+          CHECK_VERDICT: ${{ steps.check.outputs.verdict }}
+          CANARY_RESULT: ${{ needs.canary.result }}
+          CANARY_VERDICT: ${{ needs.canary.outputs.verdict }}
+          CANARY_FINDINGS: ${{ needs.canary.outputs.findings }}
+          CANARY_COUNT: ${{ needs.canary.outputs.finding_count }}
+          CANARY_COUNTS: ${{ needs.canary.outputs.counts }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
@@ -287,8 +488,6 @@ jobs:
           # is unreachable code.
           set +e
 
-          TITLE="[ci/marketplace-drift] The published marketplace manifest no longer matches the delivery contract"
-
           # BOOTSTRAP THE LABEL FIRST, ALWAYS. `gh issue create` with an undefined `--label`
           # HARD-FAILS, and ci/marketplace-drift does not exist yet. This repo has shipped that
           # exact failure before (seccomp-unenforced-alert.sh, scheduled-terraform-drift.yml).
@@ -296,66 +495,125 @@ jobs:
             --description "Standing alarm: the published plugin marketplace manifest drifted" \
             --color "B60205" 2>/dev/null || true
 
-          # A FAILED LOOKUP IS NOT "NOTHING FOUND". Collapsing a `gh issue list` failure into ""
-          # routes to the create branch, so an API blip files a DUPLICATE issue on every
-          # subsequent day the drift persists.
-          EXISTING="$(gh issue list --repo "$GH_REPO" --state open --label "ci/marketplace-drift" -L 100 \
-            --search "in:title \"$TITLE\"" --json number --jq '.[0].number' 2>/dev/null)"
-          list_rc=$?
+          # ---- Finding CLASSES ---------------------------------------------------------------
+          # AP-021 forbids a CI message naming a cause the job did not measure. The existing
+          # title and its five remediation steps are ALL about the manifest, so filing them for a
+          # delivery failure would misdiagnose it in the one artefact an operator actually reads.
+          # Each class therefore carries its own title, its own findings and its own remediation,
+          # and the classes are independent: either can be open while the other is clean.
+          MANIFEST_TITLE="[ci/marketplace-drift] The published marketplace manifest no longer matches the delivery contract"
+          DELIVERY_TITLE="[ci/marketplace-drift] The published channel no longer delivers this repository's plugin"
+
+          delivered=1
+          needed=0
+
+          file_or_update() {
+            # $1 = title, $2 = findings, $3 = body preamble, $4 = remediation.
+            # The finding COUNT is deliberately not a parameter: each class states its own count
+            # inside its preamble, in that class's own words, so passing it separately would give
+            # two places to disagree about one number.
+            local TITLE="$1" FIND="$2" PREAMBLE="$3" REMEDIATION="$4"
+            local EXISTING list_rc BODY
+            needed=1
+
+            # A FAILED LOOKUP IS NOT "NOTHING FOUND". Collapsing a `gh issue list` failure into ""
+            # routes to the create branch, so an API blip files a DUPLICATE issue on every
+            # subsequent day the condition persists.
+            EXISTING="$(gh issue list --repo "$GH_REPO" --state open --label "ci/marketplace-drift" -L 100 \
+              --search "in:title \"$TITLE\"" --json number --jq '.[0].number' 2>/dev/null)"
+            list_rc=$?
+
+            BODY="${PREAMBLE}"
+            BODY="${BODY}"$'\n\n'"### Findings"
+            BODY="${BODY}"$'\n'"\`\`\`"
+            BODY="${BODY}"$'\n'"${FIND}"
+            BODY="${BODY}"$'\n'"\`\`\`"
+            BODY="${BODY}"$'\n\n'"Run: ${RUN_URL}"
+            BODY="${BODY}"$'\n\n'"### Remediation"
+            BODY="${BODY}"$'\n'"${REMEDIATION}"
+            BODY="${BODY}"$'\n\n'"This issue closes automatically on the next run where this class of assertion holds."
+
+            if [[ "$list_rc" -ne 0 ]]; then
+              echo "::error::Could not query existing marketplace-drift issues (gh exited ${list_rc}); no issue was filed, because filing without a dedupe result would break the one-issue-per-episode property the close step depends on."
+              delivered=0
+            elif [[ -n "$EXISTING" && "$EXISTING" != "null" ]]; then
+              if ! gh issue comment "$EXISTING" --repo "$GH_REPO" --body "$BODY"; then
+                echo "::error::Could not comment on marketplace-drift issue #${EXISTING}; the standing issue no longer reflects the current findings."
+                delivered=0
+              fi
+            else
+              # NEVER report success unconditionally: with `set +e` in effect an unchecked create
+              # would fall through to a line asserting an issue exists when none does.
+              if ! gh issue create --repo "$GH_REPO" --title "$TITLE" --body "$BODY" \
+                   --label "ci/marketplace-drift" --label "action-required"; then
+                echo "::error::marketplace_drift_issue_filing_failed — the verdict reached the run log only; no action-required issue exists."
+                delivered=0
+              fi
+            fi
+          }
 
           # Built by appending indented lines: a multi-line literal with lines at column 0 inside
           # a `run: |` block terminates the YAML block scalar.
-          BODY="The daily check of the published marketplace manifest reported ${FINDING_COUNT} failing assertion(s)."
-          BODY="${BODY}"$'\n\n'"This repo is the plugin's sole distribution channel and \`jikig-ai/soleur-marketplace\` has no CI, no required review and no CODEOWNERS — this alarm is the only control on that file."
-          BODY="${BODY}"$'\n\n'"### Findings"
-          BODY="${BODY}"$'\n'"\`\`\`"
-          BODY="${BODY}"$'\n'"${FINDINGS}"
-          BODY="${BODY}"$'\n'"\`\`\`"
-          BODY="${BODY}"$'\n\n'"Run: ${RUN_URL}"
-          BODY="${BODY}"$'\n\n'"### Remediation"
-          BODY="${BODY}"$'\n\n'"1. Read what is actually published:"
-          BODY="${BODY}"$'\n'"   \`curl -fsS https://raw.githubusercontent.com/jikig-ai/soleur-marketplace/main/.claude-plugin/marketplace.json | jq .\`"
-          BODY="${BODY}"$'\n'"2. If \`.plugins[0]\` has a \`version\` key, REMOVE it. \`claude plugin update\` compares version strings: with no key the CLI records the commit SHA as the version so it changes every commit, but a constant version always compares equal and the update short-circuits, reporting success while delivering nothing (#7471). This is the failure with no visible symptom."
-          BODY="${BODY}"$'\n'"3. \`.plugins[0].source\` must stay \`git-subdir\` on \`https://github.com/jikig-ai/soleur.git\` with \`path: plugins/soleur\`, unpinned (no \`ref\`, no \`sha\`)."
-          BODY="${BODY}"$'\n'"4. If the plugin manifest itself did not resolve, \`plugins/soleur/.claude-plugin/plugin.json\` moved in THIS repo — fix the path in the marketplace manifest, or move it back."
-          BODY="${BODY}"$'\n'"5. Re-run on demand: \`gh workflow run scheduled-marketplace-drift.yml\`"
-          BODY="${BODY}"$'\n\n'"This issue closes automatically on the next run where every assertion holds."
 
-          delivered=0
-          if [[ "$list_rc" -ne 0 ]]; then
-            echo "::error::Could not query existing marketplace-drift issues (gh exited ${list_rc}); no issue was filed, because filing without a dedupe result would break the one-issue-per-episode property the close step depends on."
-          elif [[ -n "$EXISTING" && "$EXISTING" != "null" ]]; then
-            if gh issue comment "$EXISTING" --repo "$GH_REPO" --body "$BODY"; then
-              delivered=1
-            else
-              echo "::error::Could not comment on marketplace-drift issue #${EXISTING}; the standing issue no longer reflects the current findings."
-            fi
-          else
-            # NEVER report success unconditionally: with `set +e` in effect an unchecked create
-            # would fall through to a line asserting an issue exists when none does.
-            if gh issue create --repo "$GH_REPO" --title "$TITLE" --body "$BODY" \
-                 --label "ci/marketplace-drift" --label "action-required"; then
-              delivered=1
-            else
-              echo "::error::marketplace_drift_issue_filing_failed — the drift verdict reached the run log only; no action-required issue exists."
-            fi
+          # ---- Class 1: the published MANIFEST ----------------------------------------------
+          if [[ "$CHECK_OUTCOME" == "success" && "$CHECK_VERDICT" == "MISMATCH" ]]; then
+            M_PRE="The daily check of the published marketplace manifest reported ${FINDING_COUNT} failing assertion(s)."
+            M_PRE="${M_PRE}"$'\n\n'"\`jikig-ai/soleur-marketplace\` has no CI, no required review and no CODEOWNERS — the manifest assertions in this workflow are the only control on that file."
+            M_REM="1. Read what is actually published:"
+            M_REM="${M_REM}"$'\n'"   \`curl -fsS https://raw.githubusercontent.com/jikig-ai/soleur-marketplace/main/.claude-plugin/marketplace.json | jq .\`"
+            M_REM="${M_REM}"$'\n'"2. If \`.plugins[0]\` has a \`version\` key, REMOVE it. \`claude plugin update\` compares version strings: with no key the CLI records the commit SHA as the version so it changes every commit, but a constant version always compares equal and the update short-circuits, reporting success while delivering nothing (#7471). This is the failure with no visible symptom."
+            M_REM="${M_REM}"$'\n'"3. \`.plugins[0].source\` must stay \`git-subdir\` on \`https://github.com/jikig-ai/soleur.git\` with \`path: plugins/soleur\`, unpinned (no \`ref\`, no \`sha\`)."
+            M_REM="${M_REM}"$'\n'"4. If the plugin manifest itself did not resolve, \`plugins/soleur/.claude-plugin/plugin.json\` moved in THIS repo — fix the path in the marketplace manifest, or move it back."
+            M_REM="${M_REM}"$'\n'"5. Re-run on demand: \`gh workflow run scheduled-marketplace-drift.yml\`"
+            file_or_update "$MANIFEST_TITLE" "$FINDINGS" "$M_PRE" "$M_REM"
           fi
 
-          # FAIL THE JOB when drift was found and the alarm did not deliver. Without this the
+          # ---- Class 2: actual DELIVERY ------------------------------------------------------
+          # Deliberately says nothing about the manifest. A delivery failure with a clean
+          # manifest is the #7471 shape: every metadata field correct, 64 skill directories
+          # delivered where 96 were expected.
+          if [[ "$CANARY_RESULT" != "success" || "$CANARY_VERDICT" != "OK" ]]; then
+            if [[ "$CANARY_RESULT" != "success" ]]; then
+              C_FIND="${CANARY_FINDINGS:-canary_job_${CANARY_RESULT}: the canary job did not complete, so no delivery assertion was evaluated}"
+              C_PRE="The delivery canary job did not complete (job result: \`${CANARY_RESULT}\`). No delivery assertion was evaluated on this run."
+            else
+              C_FIND="${CANARY_FINDINGS:-<no findings were emitted>}"
+              C_PRE="The delivery canary reported ${CANARY_COUNT:-?} failing assertion(s) against a fresh install of \`soleur@soleur-marketplace\`. Comparison counts: \`${CANARY_COUNTS:-unavailable}\`."
+            fi
+            C_PRE="${C_PRE}"$'\n\n'"This asserts what an installing user actually RECEIVES, which the manifest assertions structurally cannot see: a correct manifest can point at a channel that delivers an incomplete or stale tree."
+            C_REM="1. Reproduce locally — this needs no credentials:"
+            C_REM="${C_REM}"$'\n'"   \`bash scripts/plugin-delivery-canary.sh\`"
+            C_REM="${C_REM}"$'\n'"2. Look up the finding token in \`knowledge-base/engineering/operations/runbooks/plugin-delivery-recovery.md\`; every token this canary emits has a row there."
+            C_REM="${C_REM}"$'\n'"3. \`incomplete_delivery\` means the delivered file SET is smaller than what \`main\` serves — the #7471 under-delivery shape. \`content_mismatch\` means bytes differ at the delivered commit. \`stale_delivery\` means the delivered commit is behind \`main\`."
+            C_REM="${C_REM}"$'\n'"4. \`installpath_unresolved\` or \`reference_unreadable\` mean the canary could not form expectations — treat as the canary failing closed, not as evidence about delivery."
+            C_REM="${C_REM}"$'\n'"5. Re-run on demand: \`gh workflow run scheduled-marketplace-drift.yml\`"
+            file_or_update "$DELIVERY_TITLE" "$C_FIND" "$C_PRE" "$C_REM"
+          fi
+
+          # FAIL THE JOB when something was found and the alarm did not deliver. Without this the
           # run is green, the annotation scrolls past, and the only record of a real drift is a
           # line in a log nobody reads — the alarm channel failing open. A red run is the
           # fallback channel, and the heartbeat below carries the same conjunct to Sentry.
           echo "delivered=${delivered}" >> "$GITHUB_OUTPUT"
-          if [[ "$delivered" -ne 1 ]]; then
-            echo "::error::Drift was detected but no issue was delivered; failing the job so this is not silently green."
+          echo "needed=${needed}" >> "$GITHUB_OUTPUT"
+          if [[ "$needed" -eq 1 && "$delivered" -ne 1 ]]; then
+            echo "::error::A finding was detected but no issue was delivered; failing the job so this is not silently green."
             exit 1
           fi
 
-      - name: Close the drift issue once the manifest matches again
-        if: ${{ !cancelled() && steps.check.outcome == 'success' && steps.check.outputs.verdict == 'OK' }}
+      # Closes PER CLASS. The two classes are independent, so a run where the manifest is clean
+      # and delivery is broken must close the manifest issue and leave the delivery one open.
+      # Closing on a single combined verdict would either strand a resolved alarm open (which
+      # then dedupes every later episode into silence) or close an alarm that is still true.
+      - name: Close the drift issues whose assertions hold again
+        if: ${{ !cancelled() && ( (steps.check.outcome == 'success' && steps.check.outputs.verdict == 'OK') || (needs.canary.result == 'success' && needs.canary.outputs.verdict == 'OK') ) }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          CHECK_OUTCOME: ${{ steps.check.outcome }}
+          CHECK_VERDICT: ${{ steps.check.outputs.verdict }}
+          CANARY_RESULT: ${{ needs.canary.result }}
+          CANARY_VERDICT: ${{ needs.canary.outputs.verdict }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
@@ -370,19 +628,32 @@ jobs:
           # label alone would auto-close a human-filed issue that merely carries the label, and
           # closing only .[0] would leave a duplicate open forever — which then satisfies the
           # filing step's dedupe guard and suppresses every LATER episode.
-          TITLE="[ci/marketplace-drift] The published marketplace manifest no longer matches the delivery contract"
-          OPEN_NUMS="$(gh issue list --repo "$GH_REPO" --state open --label "ci/marketplace-drift" -L 100 \
-            --search "in:title \"$TITLE\"" --json number --jq '.[].number' 2>/dev/null)"
-          list_rc=$?
-          if [[ "$list_rc" -ne 0 ]]; then
-            echo "::error::Could not query open marketplace-drift issues (gh exited ${list_rc}); a resolved alarm may still be open."
-          else
+          MANIFEST_TITLE="[ci/marketplace-drift] The published marketplace manifest no longer matches the delivery contract"
+          DELIVERY_TITLE="[ci/marketplace-drift] The published channel no longer delivers this repository's plugin"
+
+          close_class() {
+            # $1 = title, $2 = the sentence naming what holds again
+            local TITLE="$1" REASON="$2" OPEN_NUMS list_rc n
+            OPEN_NUMS="$(gh issue list --repo "$GH_REPO" --state open --label "ci/marketplace-drift" -L 100 \
+              --search "in:title \"$TITLE\"" --json number --jq '.[].number' 2>/dev/null)"
+            list_rc=$?
+            if [[ "$list_rc" -ne 0 ]]; then
+              echo "::error::Could not query open marketplace-drift issues (gh exited ${list_rc}); a resolved alarm may still be open."
+              return
+            fi
             while IFS= read -r n; do
               [[ -z "$n" ]] && continue
               gh issue close "$n" --repo "$GH_REPO" \
-                --comment "Every marketplace-manifest assertion holds again. Closed automatically by ${RUN_URL}." \
+                --comment "${REASON} Closed automatically by ${RUN_URL}." \
                 --reason completed || echo "::error::Could not close marketplace-drift issue #${n}."
             done <<< "$OPEN_NUMS"
+          }
+
+          if [[ "$CHECK_OUTCOME" == "success" && "$CHECK_VERDICT" == "OK" ]]; then
+            close_class "$MANIFEST_TITLE" "Every marketplace-manifest assertion holds again."
+          fi
+          if [[ "$CANARY_RESULT" == "success" && "$CANARY_VERDICT" == "OK" ]]; then
+            close_class "$DELIVERY_TITLE" "A fresh install from the published channel delivers this repository's plugin completely, byte-correctly and at current main."
           fi
 
       - name: Sentry check-in (final)
@@ -393,6 +664,17 @@ jobs:
         continue-on-error: true
         with:
           monitor-slug: scheduled-marketplace-drift
+          # These three were MISSING until #7490, and their absence was invisible by design:
+          # the composite fail-softs with a `::warning::` and a clean `exit 0` when its secrets
+          # are absent, so the symptom was a check-in that silently never landed rather than a
+          # red run. `actionlint` reported all three as missing required inputs on origin/main,
+          # and this workflow was the ONLY one of the ten heartbeat callers omitting them.
+          # Repaired here because this plan already edits this step's `status:` expression, and
+          # shipping a canary whose alarm cannot check in would be the same silent-observability
+          # failure the canary exists to prevent.
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}
           # `ok` means THE MONITOR WORKED, not that the manifest is clean — a detected drift is a
           # SUCCESSFUL evaluation whose surface is the issue. But a drift that was detected and
           # NOT delivered is a monitor failure, hence the delivered conjunct.
@@ -401,4 +683,11 @@ jobs:
           # disables schedules on repo inactivity and silently drops ticks under load, and a
           # missed tick leaves no red run to notice. Without this step the guard's own liveness
           # was unmonitored while every sibling scheduled workflow carries one.
-          status: ${{ (steps.check.outcome == 'success' && (steps.check.outputs.verdict == 'OK' || (steps.check.outputs.verdict == 'MISMATCH' && steps.issue.outputs.delivered == '1'))) && 'ok' || 'error' }}
+          #
+          # BOTH controls are conjuncts (#7490). Keyed on the manifest check alone, a canary-only
+          # failure checked in `ok` — the alarm reporting healthy through the exact defect the
+          # canary was added to catch. `needs.canary.result == 'success'` is a separate conjunct
+          # from the verdict so that a canary job which ABORTS before emitting any finding (the
+          # `cli_unavailable` shape, or an infrastructure failure) checks in `error` instead of
+          # being silently absent from the expression.
+          status: ${{ ( steps.check.outcome == 'success' && (steps.check.outputs.verdict == 'OK' || (steps.check.outputs.verdict == 'MISMATCH' && steps.issue.outputs.delivered == '1')) && needs.canary.result == 'success' && (needs.canary.outputs.verdict == 'OK' || steps.issue.outputs.delivered == '1') ) && 'ok' || 'error' }}

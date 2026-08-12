@@ -320,9 +320,24 @@ for s in steps:
     if re.search(r"gh issue (create|comment|close|edit)\b", body) and not STATUS_FN.search(cond):
         problems.append(f"issue-writing step {s.get('name')!r} has no status-check function in its if:")
 
-# Unauthenticated by design; the only credential is the automatic token.
+# Unauthenticated by design. This stays a CLOSED ALLOWLIST rather than becoming a
+# prefix match or being dropped: the property it protects is that a drift alarm
+# cannot quietly grow into a credential consumer.
+#
+# The three SENTRY_* entries were added with the heartbeat repair (#7490). They are
+# the components of a Sentry DSN, which is public by construction -- the same values
+# ship inside browser bundles -- so admitting them does not widen the credential
+# surface in the way the assertion exists to prevent. They are enumerated
+# individually for that reason; `SENTRY_*` as a wildcard would also admit an auth
+# token, which is a real secret.
+ALLOWED_SECRETS = {
+    "GITHUB_TOKEN",
+    "SENTRY_INGEST_DOMAIN",
+    "SENTRY_PROJECT_ID",
+    "SENTRY_PUBLIC_KEY",
+}
 for secret in set(re.findall(r"secrets\.([A-Za-z0-9_]+)", src)):
-    if secret != "GITHUB_TOKEN":
+    if secret not in ALLOWED_SECRETS:
         problems.append(f"unexpected secret consumed: {secret}")
 
 if not re.search(r'^\s*MANIFEST_URL="https://raw\.githubusercontent\.com/jikig-ai/soleur-marketplace/main/\.claude-plugin/marketplace\.json"', src, re.M):
@@ -355,7 +370,13 @@ fi
 filing_structural="$(python3 - "$WORKFLOW" <<'ALARMPY'
 import sys, yaml
 wf = yaml.safe_load(open(sys.argv[1]))
-steps = list(wf["jobs"].values())[0]["steps"]
+# Name the job explicitly. This read used to be `list(wf["jobs"].values())[0]`,
+# which silently became "whichever job is declared first" -- so adding the
+# `canary` job above `drift-check` would have pointed every assertion below at a
+# job that files no issues, and they would all have failed for a reason that has
+# nothing to do with the property they test. A positional selector over a
+# multi-job workflow is a latent misattribution, not a shortcut.
+steps = wf["jobs"]["drift-check"]["steps"]
 problems = []
 
 def step_with(substr):
