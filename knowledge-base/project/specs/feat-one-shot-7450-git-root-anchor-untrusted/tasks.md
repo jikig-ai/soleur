@@ -140,3 +140,33 @@ the panel's own `SKILL.md`-scoped grep could not see:
 - **Not in any finding:** all FOUR linear-fetch suites were unregistered — `test-all.sh`
   globs `skills/*/test/*.test.sh` and linear-fetch was the only skill putting `.test.sh`
   under `scripts/`. §G had recorded this for one file; it was four.
+
+## Round-2 reconciliation (2026-08-13)
+
+Thirteen boxes remain unchecked. Each is one of three kinds, and the kind is stated so an
+unchecked box is never read as forgotten work.
+
+**DONE — tick, evidence named**
+
+| Box | Evidence |
+| --- | --- |
+| 4.4b | Every halt at all four gates carries state-discriminating remediation (empty-root vs wrong-root are different actions) and a `SOLEUR_*_HALT` marker. Pinned by Test 22, which also has a growth floor so a new halt cannot arrive unmarked. |
+| 5.3 | §R5 corrected in place; its "all four are secret gates" wording is what correction C6 retracts, and ADR-093 now carries the same correction after this session reinstated it by accident. |
+| 6.1 / 6.2 / 6.3 | Both comments posted and both issues verified OPEN (re-verified this session; #7453's title does still cite ADR-177, which DC-2 records as a citation correction, not a defect in this PR). |
+| 7.3 / 7.4 | M1–M6 and M7–M10 executed. **Superseded as adequacy evidence** — see `mutation-matrices.md`: all ten mutate the SUT along five axes, and the vacuities lived on axes they never edit. Battery 3 (15/15, eight axes) is what carries the claim now, so the PR body renders Battery 3 rather than these. |
+| 7.5 | PR body carries `Closes #7450`, the AC #3 disposition and DC-1/DC-2. |
+
+**SUPERSEDED — deliberately not done, recorded where it will be found**
+
+| Box | Disposition |
+| --- | --- |
+| 0.2 | The "(6 / 45 / 2)" counts are stale by construction: this PR changed the populations. Live counts are re-derived in the guards themselves (Test 24's population is discovered on disk, not asserted from a plan-time number) — which is the point of the rewrite. |
+| 3.3 | `scanned >= 5` was **implemented and then removed**. A count floor fails OPEN on shrinkage; it was measured surviving a mutation that gutted the predicate. Replaced by required-membership. Re-adding this box would re-introduce finding A10. |
+| 4.4 | `compound`'s non-blocking guard was descoped by `7840b2a42` and is correctly still unchecked. ADR-179 §R5 C6 retracts the claim that it shipped; ADR-093 briefly reinstated that claim this session and has been corrected. |
+
+**IN FLIGHT**
+
+| Box | State |
+| --- | --- |
+| 7.6 | `/soleur:review` run twice — a 10-agent panel and a 6-agent round-2 panel plus a CTO consult. `user-impact-reviewer` was NOT among the round-2 seats; the round-2 panel was scoped to the guard/record surface, and the threshold-driven seat ran in round 1. |
+| 7.7 | `/soleur:ship` — next. |
