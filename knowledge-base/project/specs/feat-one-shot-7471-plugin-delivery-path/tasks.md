@@ -16,7 +16,9 @@ and no existing task number moves.
 
 ## Phase 1 — Falsify before building
 
-- [ ] **1.0** **FALSIFICATION GATE — run this before anything else.** Measure whether a
+- [x] **1.0** **PASSED 2026-08-12 — 9.63 MiB, 37 s, both clauses.** Full reading in
+      `measurements.md` §1.0; cite that, do not restate the numbers.
+      **FALSIFICATION GATE — run this before anything else.** Measure whether a
       `git-subdir` marketplace entry avoids the whole-repo clone. Build a scratch marketplace
       whose single entry is
       `{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur"}`;
