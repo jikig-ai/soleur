@@ -63,7 +63,27 @@ land Phases 2 and 4 as written". Three coherent outcomes:
 - **(c) Ship as currently planned.** Accepts that ADR-183 and the C4 model will be rewritten when
   option F lands, and that the Art. 17 / Art. 25(2) findings stay live in the interim.
 
-**Status:** unresolved — requires an operator decision. Not applied.
+**Status:** RESOLVED 2026-08-11 by operator decision — **outcome (b): ship the additive marketplace
+source in this PR.** The challenge is upheld; the plan's deferral of option F is withdrawn.
+
+Consequences the plan must absorb (not optional follow-ups):
+
+1. **The premise is still unmeasured and gates the rest.** Option (b) rests on `git-subdir` avoiding
+   the whole-repo clone. That was never measured — it was task 1 of the deferred follow-up. It moves
+   to the FRONT of Phase 0 as a falsification gate: if a `git-subdir` marketplace entry still clones
+   181 MiB, outcome (b) does not resolve defect 2 and the run halts for a new decision rather than
+   building on a false premise.
+2. **Phases 2 and 4 now describe the final shape, once.** The governance reconciliation, ADR, and C4
+   model target the marketplace-source delivery path — not the current one — so they are written a
+   single time. ADR-178's hard-coded cache path is reconciled against the new plugin ID.
+3. **The GDPR findings are retired by construction, not argued away.** A ~50 KB payload carrying only
+   `plugins/soleur` no longer ships the Art. 30 register or the 41 counsel-review memoranda to every
+   installer, which is what the Art. 5(1)(c) / Art. 25(2) minimisation finding turned on.
+4. **New-repo creation is an outward-facing step.** Creating the marketplace repo is authorised by
+   this decision, but its name and visibility are confirmed with the operator at execution time
+   rather than assumed here.
+5. **Additive, not a replacement.** `jikig-ai/soleur` remains a valid marketplace; existing installs
+   keep working. The plugin ID changes for new installs only.
 
 ---
 

@@ -1,10 +1,10 @@
 ---
-title: "fix: plugin delivery path — drop the version sentinel so the updater tracks the commit SHA"
+title: "fix: merged plugin code now actually reaches installed users — SHA-tracked updates and a marketplace that installs in seconds, not minutes"
 date: 2026-08-11
 slug: fix-plugin-delivery-path
 branch: feat-one-shot-7471-plugin-delivery-path
 issue: 7471
-refs: 7471
+closes: 7471
 type: bug
 lane: cross-domain
 priority: p1-high
@@ -24,6 +24,76 @@ repository this size; the refresh then leaves the local checkout in an unusable 
 
 This plan addresses delivery only. The underlying lock/lease library fix is correct and is
 not in scope.
+
+## Amendment 2026-08-12 — UC-1 resolved as outcome (b)
+
+The operator resolved **UC-1** in
+`knowledge-base/project/specs/feat-one-shot-7471-plugin-delivery-path/decision-challenges.md`:
+ship the additive marketplace source in this PR. The deferral of option F is withdrawn. That
+file's **RESOLVED** status block is the single record of the decision and its five consequences;
+it is cited here by content anchor and **not duplicated** — read it there.
+
+This section is the one place the amendment's own reasoning is written. Everything below
+references it rather than restating it.
+
+### The measured floor (new, and it belongs here before anything is built on it)
+
+The challenge's premise — that a narrowed source avoids the whole-repo clone — was never
+measured. It still is not measured *for the CLI*, which is what Phase 0.0 exists to do. What
+**is** now measured is the **floor**: what git itself transfers when asked for the subtree only.
+Run 2026-08-12 against `https://github.com/jikig-ai/soleur.git`:
+
+```
+git clone --filter=blob:none --depth=1 --no-checkout --sparse <url> s
+cd s && git sparse-checkout set plugins/soleur && git checkout
+```
+
+| Quantity | Measured |
+|---|---|
+| `.git` after partial+shallow clone, no checkout | 794,973 B (0.76 MiB) |
+| `.git` after the sparse checkout resolves | 7,454,753 B (7.11 MiB) |
+| Working tree (`plugins/soleur` only) | 10,093,006 B (9.63 MiB), 914 files |
+| **Total on disk** | **17,803,760 B (16.98 MiB)** |
+| Today's full clone, for contrast | 215.4 MiB tree + 181.37 MiB packed history |
+
+**This is a floor, not a prediction.** It proves the technique is possible with plain git and
+sets the pass/fail band for Phase 0.0. It says nothing about whether Claude Code's `git-subdir`
+implementation uses it — that is precisely the unmeasured premise, and Phase 0.0 measures the
+CLI, not git.
+
+### Correction: "~50 KB" describes the marketplace repo, not the delivered payload
+
+UC-1 and the CTO framing both use "~50 KB". That figure is correct for the **marketplace source
+repo** (a `marketplace.json`, a README, a licence — the thing `claude plugin marketplace add`
+clones). It is **not** the delivered payload. The plugin itself is still materialised through the
+`git-subdir` entry, and the floor above puts that at ~17 MiB, not 50 KB. Both numbers are used
+below with the distinction kept explicit, because a compliance claim resting on a 340× wrong
+number would not survive contact.
+
+The minimisation conclusion is unaffected: everything the Art. 5(1)(c) / Art. 25(2) finding
+named — `knowledge-base/legal/` (the Art. 30 register, 41 counsel-review memoranda), 333 design
+screenshots, `knowledge-base/project/` — lies outside `plugins/soleur` and is not in the ~17 MiB.
+
+### `closes: 7471` — why the frontmatter flipped, and the condition on it
+
+The frontmatter was `refs: 7471`. The recorded reason (Plan Review, correctness panel item 1) was
+that this PR bought P2 and P3 but not P1, because P1 needs a marketplace refresh to complete and
+P5 was deferred. **Outcome (b) removes that gap**, and it removes it for the existing install too,
+which is the part that had to be checked honestly rather than assumed:
+
+- **New installs** follow a documented path that clones ~50 KB of marketplace and materialises
+  ~17 MiB of plugin. P1 and P5b both land.
+- **The one existing install** (alpha tester #1, `scope: project`) is on `soleur@soleur` and does
+  **not** auto-migrate. Its route is `marketplace add <new source>` → `install soleur@<new
+  marketplace> --scope project` → remove the old entry. The decisive point: **none of those steps
+  clones 181 MiB.** The migration route no longer passes through the operation that times out,
+  which is exactly what made the old `remove → re-add → reinstall` unusable. It is a documented,
+  fast, in-default-timeout sequence for a population of one, carried by AC25's outbound.
+
+So the PR does deliver the user-visible fix, and `closes:` is honest. **The flip is conditional
+on Phase 0.0 passing.** If the falsification gate fires, outcome (b) does not resolve defect 2,
+the run halts (Phase 0.8), and reverting the frontmatter to `refs: 7471` is an explicit item of
+that halt branch — not something to be discovered at merge time.
 
 ## Deepen-Plan Gate Results
 
@@ -56,6 +126,11 @@ plus its JSON-LD twin. No page, route, component, modal, banner, nav, layout, fl
 *structure* changes; nothing new renders; no user journey gains a step. The glob's "regardless of
 subjective assessment" clause exists to stop a judgement call from excusing a real UI surface —
 it is not aimed at a categorical carve-out the same document grants.
+
+**Operator determination 2026-08-11: the advisory determination is ACCEPTED.** No wireframe is
+required for these two edits; the Excluded clause governs. This is a decision on these specific
+copy-only edits, not a general licence for `.njk` changes to claim the carve-out — the standing
+recommendation below (reconcile the two clauses in `ui-surface-terms.md`) still holds.
 
 **This is recorded, not skipped.** `ux-design-lead` does **not** appear in `Skipped specialists:`
 (the failure mode `wg-ui-feature-requires-pen-wireframe` exists to prevent); the Product/UX Gate
@@ -293,6 +368,13 @@ into Phase 3's critical path, because for the only currently-installed user it i
 nice-to-have but the sole route back to a working install. The `autoUpdate` exposure is recorded
 and its refresh cadence is a Phase 0 measurement, not an inference from timestamps.
 
+**Still stands after the UC-1 resolution, and it is worth saying why.** The escape clause fired
+because P5 was deferred; P5 is now undeferred, which might look like grounds to re-cut P4. It is
+not. `jikig-ai/soleur` is **retained** with `autoUpdate: true`, so the destructive arm remains
+reachable with zero user action for anyone on the old entry — and that includes the one existing
+install until it migrates. P4's exposure is narrowed to the old path, not removed. The recovery
+half stays in Phase 3.
+
 ### The delivery paradox (raised by CPO review — the structural finding)
 
 **The fix for defect 1 ships inside the manifest, and seeing the new manifest requires a
@@ -301,14 +383,24 @@ the current install it is worse than gated: the checkout is already gone, so the
 remove → re-add → reinstall, and the re-add *is* the 120s clone. This is why Phase 3 is not
 optional garnish on Phase 1.
 
+**Broken by the UC-1 resolution — this is the structural argument for outcome (b), stated once.**
+The paradox holds only while there is a single delivery path. Phase 1B adds a second one, and the
+new one is not the broken one: `marketplace add <new source>` clones ~50 KB and does not pass
+through the 181 MiB operation at all. So the fix now has a route to a user that does not depend on
+the defect it fixes. That is the difference between a fix and a fix that arrives, and it is why
+the challenge treated the deferral as load-bearing rather than a matter of scope taste.
+
 ### Population calibration
 
 `knowledge-base/product/roadmap.md` line 81: **Beta users: 1** — alpha tester #1 (Skouer),
 onboarded 2026-08-06 **on the self-hosted CLI plugin**. The affected population and the total
 population are the same set, which is what makes `single-user incident` the literal, not
-rhetorical, threshold. It also relocates the real deadline: the deferred P5 fix becomes
-cohort-wide the moment #1439 (recruit 10 founders) resumes — a roadmap dependency currently
-recorded nowhere.
+rhetorical, threshold. It also relocated the real deadline: the deferred P5 fix would have become
+cohort-wide the moment #1439 (recruit 10 founders) resumed — a roadmap dependency recorded
+nowhere. **Under the UC-1 resolution that deadline is met in advance:** P5b lands in this PR, so
+the cohort arrives onto the narrow path rather than onto the one that times out. The #1439
+relationship is no longer a blocking dependency, and Phase 3.4 keeps one line of it in the PR
+body so a future reader of #1439 can see the ordering was deliberate.
 
 ### Value-Proposition Measurement (Phase 0.6c)
 
@@ -345,7 +437,7 @@ there is no `lane:` to carry forward. Defaulted to `cross-domain` (TR2 fail-clos
 |---|---|---|
 | The sentinel lives at `plugins/soleur/plugin.json` | The manifest is `plugins/soleur/.claude-plugin/plugin.json`; there is no file at the cited path | Use the real path everywhere. The sibling `.claude-plugin/marketplace.json` carries a second copy of the same sentinel, which the issue does not mention |
 | "Publish a real version so the updater stops short-circuiting on a constant string" | Correct diagnosis, but the implied mechanism (CI writes a version into the manifests) is the alternative ADR-017 rejected, blocked by the CLA ruleset on `github-actions[bot]` pushes | Keep the diagnosis, replace the mechanism: **delete** the key so the CLI falls back to the commit SHA. Strictly cheaper and preserves ADR-017's "no version in files" posture |
-| "Make marketplace refresh viable … (shallow/partial clone or a raised timeout default)" | Both are Claude Code CLI internals. Nothing in this repository selects the clone strategy or the timeout default | Re-scope to the two levers that are ours: *what* gets cloned (deferred, tracked) and *what the documented command says* (in scope). Record the rest as upstream |
+| "Make marketplace refresh viable … (shallow/partial clone or a raised timeout default)" | Both are Claude Code CLI internals. Nothing in this repository selects the clone strategy or the timeout default | Re-scope to the two levers that are ours: *what* gets cloned and *what the documented command says* — **both now in scope.** The first was deferred and is undeferred by the UC-1 resolution: Phase 1B narrows the clone to `plugins/soleur` via a `git-subdir` marketplace source, gated on Phase 0.0. Record the clone-strategy and timeout-default internals as upstream |
 | "Make refresh failure restore the `.bak` rather than destroy the checkout" | Entirely CLI-internal | Out of scope by capability, not by choice. Tracked upstream; stated plainly rather than assumed away |
 | `0.0.0-dev` is enforced somewhere | Zero tests, zero lint rules, zero CI steps assert it. Four prose sites only | The blast radius of removing it is governance prose plus one docs-data consumer — not a mechanical failure surface |
 
@@ -384,9 +476,9 @@ measurement window. Each layer is answered with an artifact, not with "obvious".
 | B. CI writes the computed version into the manifests and pushes to `main` | P2 | **Rejected.** Requires the bot push to `main` that the CLA Required ruleset blocks — the exact constraint that produced ADR-017. Also self-triggers `version-bump-and-release.yml` via its own `paths` filter, and strands one un-GC'd cache directory per release (#71074) |
 | C. Set the version to the commit SHA at build time | P2 | **Rejected.** Same push-to-`main` problem as B, plus it re-introduces a version string the CLI would key the cache directory on — the directory-proliferation failure that route A avoids entirely |
 | D. A Soleur-side staleness detector (SessionStart hook comparing the installed cache against `origin/main`) | P3, partially | **Rejected for this PR, worth revisiting.** It buys a property A already buys for the *update* path, and only adds value for the case where the *marketplace refresh* silently failed. That case disappears if the deferred P5 fix lands. Building it now is machinery ahead of the need — and `plugins/soleur/hooks/welcome-hook.sh` would have to stop early-exiting outside this repo, a change with its own blast radius. If it is ever built, mirror `scripts/prod-version-drift-check.sh`'s four-verdict shape, never a boolean |
-| **E. A persistent timeout env setting, documented on the surfaces users actually read** | P5, partially | **Selected as a stopgap — re-scoped twice under review.** Originally "fold the var into the documented one-liner (README only)". CTO: a command prefix sets the var for *one invocation*, but `autoUpdate: true` fires the refresh inside ordinary sessions, so the automatic, higher-frequency, user-invisible arm stays at 120s. It must be a **persistent** setting (an `env` block in `~/.claude/settings.json`, or a shell-profile export), and that route must be verified before it is documented. CPO: README is not where users go — the docs site is |
-| F. Publish a small dedicated marketplace source (`git-subdir` back into `jikig-ai/soleur`) | P5 | **Deferred to a tracked, milestone-targeted issue — but the original reason was wrong.** The schema is proven (Anthropic's own marketplace uses `git-subdir` + pinned `ref`/`sha` for 42crunch and adobe). This plan first deferred it as "a breaking change to the documented install path", which holds only if `jikig-ai/soleur` is *replaced* as the marketplace. CTO raised the **additive** shape: a *second* ~50 KB repo whose single entry is a `git-subdir` source. Existing installs keep working; new installs clone 50 KB instead of 181 MiB. That breaks nothing, and costs a new repo plus a plugin-ID change (`soleur@soleur-marketplace`). It is deferred on **scope** grounds, not on breakage. **The strongest deferral reason, added under plan review, is epistemic:** option F rests on a premise this plan never measured — that a `git-subdir` source avoids the full monorepo clone. That is sourced from Anthropic's docs ("clones sparsely to minimise bandwidth for monorepos") and nothing more. If `git-subdir` still fetches the 181 MiB history before resolving the subdirectory, F buys nothing and the second repo is dead weight. **Measuring that premise is task 1 of the follow-up issue, and it may refute F outright.** A plan that lectures itself three times about measuring before asserting should not exempt its own preferred alternative. Contested — the compliance gate and CTO argue for pulling F forward; see UC-1 |
-| G. Point the *marketplace* source at a subdirectory of this repo | P5 | **Refuted by the schema.** Marketplace sources are github / git URL / local path / remote JSON URL. `git-subdir` is a *plugin* source, read only after the marketplace clone has already completed. Recorded so it is not re-proposed |
+| **E. A persistent timeout env setting, documented on the surfaces users actually read** | P5a | **Selected — re-scoped three times.** *(Third re-scope, UC-1 resolution:* with F selected, E is no longer the delivery mechanism for the fix. It is retained because `jikig-ai/soleur` **stays** a valid marketplace carrying `autoUpdate: true`, so the 181 MiB refresh remains reachable for anyone still on the old entry — including the one existing install until it migrates, and the four CI surfaces in Phase 0.9. E covers that residue; it is no longer the headline.)* Prior wording, unchanged: **selected as a stopgap — re-scoped twice under review.** Originally "fold the var into the documented one-liner (README only)". CTO: a command prefix sets the var for *one invocation*, but `autoUpdate: true` fires the refresh inside ordinary sessions, so the automatic, higher-frequency, user-invisible arm stays at 120s. It must be a **persistent** setting (an `env` block in `~/.claude/settings.json`, or a shell-profile export), and that route must be verified before it is documented. CPO: README is not where users go — the docs site is |
+| **F. Publish a small dedicated marketplace source, additive, whose single entry is a `git-subdir` into `jikig-ai/soleur`** | P1, P5a, **P5b** | **Selected — the deferral is withdrawn.** UC-1 was resolved as outcome (b); see the RESOLVED block in `decision-challenges.md` for the decision and its five consequences, and `## Amendment 2026-08-12` above for this plan's reasoning. The schema is proven (Anthropic's own marketplace uses `git-subdir` + pinned `ref`/`sha` for 42crunch and adobe). The shape is **additive**: a *second* repo (~50 KB) alongside `jikig-ai/soleur`, which remains a valid marketplace, so no existing install breaks. Cost: one new repo, a plugin-ID change for new installs, and a sweep of four live `soleur@soleur` consumers (Phase 0.9). **The epistemic objection is preserved, not waived** — the premise that `git-subdir` avoids the full clone is still doc-sourced. It is no longer deferred to a follow-up issue; it is **Phase 0.0, at the front of the plan, with a numeric halt.** Option F is the *only* option that buys P5b, which is why the plan is willing to gate itself on measuring it rather than drop it |
+| G. Point the *marketplace* source at a subdirectory of this repo | P5 | **Refuted by the schema.** Marketplace sources are github / git URL / local path / remote JSON URL. `git-subdir` is a *plugin* source, read only after the marketplace clone has already completed. Recorded so it is not re-proposed. **This is precisely why F needs a second repo rather than a path inside this one** — the marketplace clone happens first, so the only way to make it small is to point it at something small |
 | H. Shrink the repository | P5b | **Rejected as a fix.** 80% of the HEAD tree is `knowledge-base/`, but a full clone transfers the 181 MiB history regardless, so deleting files today changes nothing about what is cloned. A separate long-horizon track |
 | **I. Set `autoUpdate: false` on the `soleur` marketplace entry** | P4 | **Added under plan review — this was a real gap, not a rejected option.** The plan measured that `autoUpdate: true` is what makes the destructive refresh reachable with zero user action, then proposed a *timeout* variable, which does not disable the automatic operation. Turning auto-refresh off removes the automatic destructive arm outright and costs nothing. Measured limit: `claude plugin marketplace --help` exposes only `add`/`list`/`remove`/`update` — **no flag sets `autoUpdate`**, so this is a `known_marketplaces.json` edit, and whether that survives the CLI rewriting the file is unmeasured. Phase 3.1 measures it; if it holds, it is strictly better than the env var for P4 and they are complementary, not alternatives |
 
@@ -404,7 +496,9 @@ existing one is worth naming because this plan touches it — the marketplace cl
 entire public monorepo to every installer, including `knowledge-base/project/` (84 MiB of
 plans, specs and session learnings) and `knowledge-base/product/` (78 MiB, largely design
 screenshots). The repository is already public, so this is a distribution-mechanism
-observation, not a disclosure; the deferred option F would narrow it to `plugins/soleur/`.
+observation, not a disclosure. **Option F, now in scope (Phase 1B), narrows the new-install
+payload to `plugins/soleur/` — measured floor ~17 MiB, see `## Amendment 2026-08-12`.** It does
+not narrow it for anyone still installing from the old marketplace entry, which stays valid.
 
 **Brand-survival threshold:** `single-user incident`.
 
@@ -420,9 +514,17 @@ non-technical founder is told to trust. `requires_cpo_signoff: true` is set in t
 - Changing how releases are versioned. Git tags remain the single source of truth; this plan
   removes the vestigial file-side copy rather than replacing it.
 - Reducing repository size. Measured as ineffective against a full clone (option H).
-- Publishing a dedicated marketplace source (option F) — deferred to a milestone-targeted
-  tracking issue, recorded as **contested** (the compliance gate and CTO both argue for pulling
-  it forward; CPO accepts the architectural deferral). Plan-review adjudicates.
+- ~~Publishing a dedicated marketplace source (option F)~~ — **no longer a Non-Goal.** UC-1 was
+  resolved as outcome (b) and option F is now in scope as Phase 1B. What remains out of scope,
+  and is stated here so the boundary is not assumed away:
+  - **Retiring or redirecting `jikig-ai/soleur` as a marketplace.** It stays valid and keeps
+    serving existing installs. Deprecating it is a separate decision with its own migration
+    window.
+  - **Automatically migrating existing installs** to the new plugin ID. There is no CLI
+    mechanism for it, and at a population of one the route is documented plus AC25's outbound.
+  - **Migrating the four CI/scheduled-workflow `soleur@soleur` consumers** in the same PR —
+    Phase 0.9 sweeps and *decides* for each; moving them is only in scope where the decision is
+    to move them, and any that stay are recorded with the reason.
 - Building the operator-side delivery canary — real work with its own failure modes and an
   auth-feasibility gate; tracked separately (Phase 3.5).
 - Building an in-session staleness banner (option D) — deferred, trigger named.
@@ -430,16 +532,75 @@ non-technical founder is told to trust. `requires_cpo_signoff: true` is set in t
   `ai-agents-for-solo-founders.njk`, the blog posts,
   `knowledge-base/marketing/distribution-content/soleur-vs-crewai.md`). Those state
   `claude plugin install soleur`, which is not the failing verb; the two surfaces this plan
-  edits are the ones carrying the *marketplace add* command and the false *upgrade* claim. If
-  option F lands, all of them change together, which is the right time to touch them once.
+  edits are the ones carrying the *marketplace add* command and the false *upgrade* claim.
+  **Re-examined under the UC-1 resolution and deliberately kept as a Non-Goal.** The old
+  reasoning — "if option F lands they all change together" — expired the moment F moved into this
+  PR, so it cannot carry the deferral any more. The deferral survives on a different and better
+  reason: `claude plugin install soleur` is **still accurate** after Phase 1B, because
+  `jikig-ai/soleur` remains a valid marketplace. Nothing on those surfaces becomes false. They
+  become *not-the-recommended-path*, which is a marketing refresh, not a correctness fix, and it
+  belongs with the old-marketplace-deprecation issue. Adding a fourth and fifth surface to this
+  PR would also cut against the standing review finding that three stopgap surfaces is already
+  one too many at a population of one.
 
 ## Implementation Phases
 
 ### Phase 0 — Falsify the plan before building on it
 
-The whole plan rests on one claim: that a keyless manifest makes the CLI track the commit SHA.
-It is measured against a control group, but never against *Soleur's own* install. Phase 0 is
-the probe that can end the plan cheaply.
+The plan now rests on **two** claims, and both are falsifiable here. Claim one: a keyless
+manifest makes the CLI track the commit SHA (measured against a control group, never against
+*Soleur's own* install). Claim two, added by the UC-1 resolution and **never measured at all**:
+that a `git-subdir` marketplace entry avoids cloning the whole repository. Claim two runs first,
+because everything the resolution added is built on it.
+
+#### 0.0 — Falsification gate: does `git-subdir` actually avoid the full clone?
+
+**This is the first task in the plan. Nothing in Phase 1B is built before it returns a number.**
+
+Option F is the only option that buys P5b, and its premise is sourced from one sentence of
+Anthropic's documentation ("clones sparsely to minimise bandwidth for monorepos") and nothing
+else. It was task 1 of the follow-up issue that outcome (b) dissolved; dissolving the issue does
+not dissolve the measurement.
+
+**Setup.** Build a throwaway marketplace source — a directory (or a scratch repo) containing only
+a `.claude-plugin/marketplace.json` whose single plugin entry is:
+
+```json
+{ "name": "soleur", "source": { "source": "git-subdir",
+  "url": "https://github.com/jikig-ai/soleur.git", "path": "plugins/soleur" } }
+```
+
+**The measurement.** With a clean `HOME` (`HOME=$(mktemp -d)`), so nothing pre-existing is
+counted:
+
+```
+/usr/bin/time -v claude plugin marketplace add <scratch-source> \
+  && /usr/bin/time -v claude plugin install soleur@<scratch-name> --scope project
+du -sb "$HOME/.claude/plugins/marketplaces" "$HOME/.claude/plugins/cache"
+```
+
+**The number that falsifies it.** Sum the two `du -sb` byte counts.
+
+| Total materialised bytes | Verdict |
+|---|---|
+| **< 50 MiB (52,428,800 B)** | **PASS.** Comfortably above the 16.98 MiB floor measured in `## Amendment 2026-08-12`, comfortably below the 181.37 MiB pack. The premise holds |
+| **≥ 50 MiB** | **FALSIFIED.** The CLI is fetching materially more than the subtree. Do not attempt to explain the middle of the band away — the gate is fail-closed |
+
+**Second clause, and it is not optional.** The whole point of F is P5b — completing inside the
+CLI's *default* timeout. Run the measurement with `CLAUDE_CODE_PLUGIN_GIT_TIMEOUT_MS` **unset**.
+If either command dies on the 120,000 ms default, F buys P5a at best and the gate fails on that
+clause alone, whatever the byte count says.
+
+**On failure, the run STOPS.** It does not fall back, re-scope, or proceed with a narrowed
+version of Phase 1B. Outcome (b) does not resolve defect 2, which is the ground the operator's
+decision stood on, so the decision needs re-taking with the measurement in hand — see the halt
+table at 0.8. Building Phases 1B, 2 and 4 on a refuted premise is the exact failure the
+challenge existed to prevent.
+
+**Diagnostic, not a substitute.** If the gate fails, also record whether the CLI's git invocation
+used `--filter` / `--sparse` at all (`GIT_TRACE=1`). The floor measurement proves plain git can do
+this in 17 MiB; a failure therefore locates the defect in the CLI, which makes it an upstream
+report alongside #77927 rather than a mystery.
 
 0.1 Re-verify the control group is still what it was, and record the reading:
 `jq 'has("version")' ~/.claude/plugins/marketplaces/claude-plugins-official/plugins/pr-review-toolkit/.claude-plugin/plugin.json`
@@ -482,15 +643,42 @@ grep; that ordering is the failure mode, not the finding. Run the sweep as a gat
 `plugins/`, `apps/`, `scripts/`, `.claude/`, `.github/`. One missed consumer is the same class of
 defect the `jsonLdSafe` throw already demonstrated.
 
+0.9 **Sweep the plugin-ID and marketplace-URL consumers — the same discipline as 0.7, applied to
+the thing the new marketplace changes.** Phase 1B changes the plugin ID for new installs, and
+`soleur@soleur` is not only prose. Measured 2026-08-12, four live sites pair a
+`plugin_marketplaces:` URL with a `plugins:` ID in a `claude-code-action` step:
+
+| Site | Marketplace URL | Ships to |
+|---|---|---|
+| `.github/workflows/test-pretooluse-hooks.yml` | `https://github.com/jikig-ai/soleur.git` | This repo's CI |
+| `plugins/soleur/skills/operator-digest/assets/operator-digest.workflow.yml` | `https://github.com/jikig-ai/soleur.git` | **A user's generated workflow** |
+| `plugins/soleur/skills/schedule/SKILL.md` (two blocks) | templated `<REPO_OWNER>/<REPO_NAME>` | **A user's generated workflow** |
+
+Two findings fall out and both belong in the record:
+
+- **These runners clone 181 MiB on every scheduled run.** Defect 2 has a second affected
+  population that this plan had not named — GitHub Actions runners, per run, at whatever cadence
+  the cron fires. That is an argument *for* migrating them, not merely a chore.
+- **`plugins/soleur/test/operator-digest-workflow.test.sh` asserts
+  `plugin_marketplaces:.*jikig-ai/soleur`.** If the new repo is named with `jikig-ai/soleur` as a
+  prefix (`jikig-ai/soleur-marketplace`, say), that regex **still matches** and the test passes
+  whether or not the migration happened. This is the vacuously-true-assertion class plan review
+  already caught once in AC6. Anchor the assertion on the full repo path, not a prefix.
+
+Decide per site: migrate now, or stay on the old marketplace with the reason recorded. Both are
+defensible; silence is not.
+
 0.8 **Halt conditions — each with a defined branch, because a halt with no alternative is a
 stall.**
 
 | Probe | Failure | Branch |
 |---|---|---|
-| 0.2 | The SHA fallback does not fire for a relative-path plugin source | Option A is refuted. Fall back to the alternatives table — and note the surviving candidate is option F, the deferred marketplace source, whose `git-subdir` entry is a *different* source type and may behave differently. That is the alternative; do not stall |
+| **0.0** | **`git-subdir` materialises ≥ 50 MiB, or misses the 120 s default timeout** | **STOP the run.** Not a fallback — a halt. Outcome (b) rested on this premise and it is refuted, so the operator decides again with the number in hand. Concretely: mark UC-1's resolution superseded (append to `decision-challenges.md`, do not rewrite the RESOLVED block), revert the frontmatter to `refs: 7471`, and put the three coherent outcomes back on the table — (a) and (c) both survive a refutation of the premise, (b) does not. Do **not** proceed to Phase 1B, and do **not** silently degrade to "ship Phase 1 + Phase 3 and call it outcome (a)"; that is the operator's call, not the run's |
+| 0.2 | The SHA fallback does not fire for a relative-path plugin source | Option A is refuted for the *relative-path* source shape. **0.0 has already told you whether `git-subdir` — a different source type — behaves differently**, so this is now an ordering question, not an open one: if 0.0 passed, the keyless manifest is re-probed against the `git-subdir` entry before option A is declared dead. Do not stall |
 | 0.4 | The migration resolves to the stale `0.0.0-dev/` directory | Option A needs an explicit migration step (uninstall/reinstall guidance) before it ships. Phase 1 does not begin without one |
-| 0.6 | The refresh still cannot complete from the migration state with the persistent setting | The stopgap does not deliver, so Phase 1 ships a fix that structurally cannot arrive. Escalate UC-1 in `decision-challenges.md` from a deferral question to a blocking one |
+| 0.6 | The refresh still cannot complete from the migration state with the persistent setting | The stopgap does not deliver for the **old** marketplace entry. That is no longer a blocker on the fix arriving — Phase 1B is the delivery path — but it is a blocker on the *existing install's* migration story, so record it and make the migration sequence the documented route rather than the refresh |
 | 0.7 | A version consumer exists outside the known set | Add it to Phase 1 and re-run the sweep |
+| **0.9** | **A plugin-ID or marketplace-URL consumer exists outside the four measured sites** | Add it to the 0.9 decision table and re-run the sweep. A consumer that ships inside `plugins/soleur/skills/` reaches users' generated workflows, so it is not optional to enumerate |
 
 ### Phase 1 — Remove the sentinel
 
@@ -516,6 +704,114 @@ and `marketing-content-drift.test.ts` already spawn that build in `beforeAll`, s
 loudly without the guard — but neither asserts the JSON-LD *shape*, which is the property that
 matters here.
 
+### Phase 1B — Publish the additive marketplace source
+
+**Gated on Phase 0.0 passing.** Numbered `1B` rather than renumbering the plan, so every existing
+cross-reference and the tasks file stay valid.
+
+**Additive, not a replacement.** `jikig-ai/soleur` remains a valid marketplace with its existing
+entry intact. Nothing about an existing install changes as a consequence of this phase; the
+plugin ID changes for **new** installs only.
+
+1B.1 **Confirm the repo name and visibility with the operator before creating anything.** The
+UC-1 resolution authorises creating the repo; it does not name it. Two properties are decided by
+the operator at execution time, not assumed here:
+
+- **Name.** Every candidate in the discussion so far (`soleur-marketplace`) is illustrative. The
+  name propagates into the plugin ID, the docs, and the 0.9 sweep, so it is confirmed once and
+  then used consistently. **Note the prefix trap from 0.9:** any name beginning `soleur` makes
+  `jikig-ai/soleur` a substring, which is what silently passes
+  `operator-digest-workflow.test.sh`'s current regex.
+- **Visibility.** It must be **public** for `claude plugin marketplace add` to work
+  unauthenticated. If the operator wants it private, F does not function and that is a decision,
+  not a detail.
+
+Create it with `/soleur:provision-github` rather than by hand, so the step is automated and
+audited like every other repo this project provisions.
+
+1B.2 **Contents of the new repo — deliberately minimal, because its size *is* the feature.**
+
+| Path | Content |
+|---|---|
+| `.claude-plugin/marketplace.json` | `name` (this string, **not** the repo name, becomes the `@marketplace` half of the plugin ID), `owner`, and exactly one `plugins[]` entry |
+| `README.md` | What it is, why it exists, and a pointer back to `jikig-ai/soleur` as the source of truth. It must say the two repos are not alternatives to choose between — one is the source, one is the delivery surface |
+| `LICENSE` | Mirror `BUSL-1.1` from `plugins/soleur/.claude-plugin/plugin.json`'s `license` key |
+
+Nothing else. No history, no assets, no vendored copy of the plugin. If it grows past a few
+hundred KB, the reason it exists has been lost.
+
+1B.3 **The plugin entry shape.** One entry, `git-subdir`, pointing back at this repository:
+
+```json
+{ "name": "soleur",
+  "description": "…",
+  "source": { "source": "git-subdir",
+              "url": "https://github.com/jikig-ai/soleur.git",
+              "path": "plugins/soleur" } }
+```
+
+Two decisions inside that shape:
+
+- **No `version` key**, for the same reason Phase 1 deletes it from the other two manifests. The
+  new marketplace must not reintroduce the sentinel through the back door — this is the third
+  manifest, and AC1's two-sided assertion becomes three-sided.
+- **No pinned `ref` / `sha`.** Anthropic's 42crunch/adobe precedent pins both, which is right for
+  a third-party plugin they do not control. Soleur controls this source, and pinning a `sha`
+  would recreate defect 1 in a new location: a constant pin that never advances is a frozen
+  sentinel wearing different clothes. Track `main`. **Record this as a deliberate divergence from
+  the cited precedent**, because the next reader will otherwise assume it was an oversight.
+
+1B.4 **The plugin ID changes for new installs.** Today: `soleur@soleur`, cache at
+`~/.claude/plugins/cache/soleur/soleur/<version>/`. The `@` half is the marketplace manifest's
+`name` field, and the cache path is `cache/<marketplace name>/<plugin name>/<version>` — read off
+the measured control-group entry
+(`.../cache/claude-plugins-official/pr-review-toolkit/unknown`), not from documentation. So the
+new install resolves to `soleur@<new marketplace name>` at
+`~/.claude/plugins/cache/<new marketplace name>/soleur/unknown/`.
+
+**The third component is an inference under a source type nobody has measured.** The control
+group is a `github` marketplace with relative `./plugins/<name>` entries; `git-subdir` may key the
+cache differently. Phase 0.0 already installs through a `git-subdir` entry — **record the actual
+resolved `installPath` from that run** and use the measured string everywhere downstream. Do not
+propagate the inferred one.
+
+1B.5 **Update the documented install path** on the surfaces this plan already edits
+(`README.md`, `plugins/soleur/README.md`, `plugins/soleur/docs/pages/getting-started.njk`) to
+add the new marketplace as the recommended path, and to state plainly that the existing path
+still works. Both are true; presenting one as broken would be false, and presenting them as
+equivalent would hide the 181 MiB.
+
+**Scope note for Gate 4.9, surfaced rather than assumed.** The operator's accepted determination
+(no `.pen` wireframe) was made for two specific copy-only edits: text inside one `<pre><code>`
+block and one FAQ answer plus its JSON-LD twin. This step enlarges the `getting-started.njk` edit
+— a second install path presented alongside the first, with a recommendation between them. It is
+still text inside existing blocks with no new page, route, component, or layout, so the Excluded
+clause still reads as governing. **But the determination was granted against a smaller edit, so
+the enlargement is recorded here rather than quietly absorbed.** If review or the operator wants
+it re-taken, the remedy is unchanged and cheap: one `ux-design-lead` invocation. The Gate 4.9
+section itself is not amended — the acceptance recorded there is a decision about what was in
+front of the operator at the time.
+
+1B.6 **Write the migration sequence for an existing install.** It is short and, critically, it
+never clones the monorepo — which is what makes it usable where the old `remove → re-add →
+reinstall` was not:
+
+```
+claude plugin marketplace add jikig-ai/<new repo>
+claude plugin install soleur@<new marketplace> --scope project --project-path <path>
+claude plugin uninstall soleur@soleur --scope project --project-path <path>
+claude plugin marketplace remove soleur          # optional; frees the 373 MiB checkout
+```
+
+Include the CLI restart (`plugin update --help`: "restart required to apply") and the
+`soleur.bak` / old-cache reclaim from Phase 3.6. Every command carries its scope —
+`scope: project`, `projectPath: /home/jean/git-repositories/skouer/Skouer` — per plan review
+finding 3; a bare command targets user scope and finds nothing.
+
+1B.7 **Apply the 0.9 decisions** to whichever of the four `soleur@soleur` consumers the sweep
+says to migrate, and fix `operator-digest-workflow.test.sh`'s prefix-matching assertion in the
+same commit whether or not that workflow moves — the assertion is wrong either way.
+
 ### Phase ordering note — recovery precedes the manifest edit
 
 *(Advisor consult, applied.)* The phase numbering below reads as "fix, then document". That is
@@ -523,14 +819,29 @@ backwards for this change. The Phase 1 fix ships **inside** the manifest, and a 
 manifest only through a marketplace refresh — the operation defect 2 breaks. The persistent
 timeout setting is therefore **not a Phase 3 stopgap; it is Phase 1's delivery mechanism.**
 Phase 3.1 (verify the persistent-env route) and Phase 0.6 (rehearse a real refresh from the
-migration state) both gate Phase 1 being *complete*, not merely *merged*. Execution order:
-0.1–0.5 → 3.1 → 0.6 → 1 → 2 → 3.2–3.7 → 4 → 5.
+migration state) both gate Phase 1 being *complete*, not merely *merged*.
+
+**Revised under the UC-1 resolution.** Phase 0.0 runs first, before everything, because Phase 1B
+and the re-scoped Phases 2 and 4 are all built on it. Phase 1B then supplies a *second* delivery
+mechanism that does not depend on the old refresh at all, which demotes the ordering constraint
+above rather than removing it — the old marketplace stays live, so 3.1 and 0.6 still gate the
+residue. Execution order:
+
+**0.0 → 0.1–0.5, 0.7, 0.9 → 3.1 → 0.6 → 1 → 1B → 2 → 3.2–3.7 → 4 → 5.**
 
 ### Phase 2 — Reconcile the governance corpus
 
 The sentinel is prose-enforced in **five** places — four instruction sites plus ADR-178, which
 CTO review found and this plan's first draft missed. All five now assert something false, and a
 rule that is false is worse than no rule.
+
+**Re-scoped by the UC-1 resolution: these sites describe the FINAL delivery shape, once.** This
+was the core of the challenge — Phases 2 and 4 were the artifacts a later marketplace change
+would rewrite, and landing them against the *current* shape meant writing them twice. They are
+now written against the post-Phase-1B shape: two marketplaces (`jikig-ai/soleur` retained,
+`jikig-ai/<new repo>` recommended), keyless manifests in **three** places, and identity carried
+by the source commit SHA. Where a site names a cache path or a plugin ID, it names the new one
+and notes that the old one persists for existing installs. Nothing here is written twice.
 
 2.1 `AGENTS.rules.md` — `wg-never-bump-version-files-in-feature`. The *gate* is still correct
 (feature branches must not introduce a version) and its id is immutable
@@ -546,11 +857,28 @@ field (frozen sentinel `0.0.0-dev`)" bullet.
 
 2.4 `CONTRIBUTING.md` — the "Plugin changes" section's sentinel sentence.
 
-2.5 **`ADR-178` is the fifth site.** It hard-codes the cache path
-`~/.claude/plugins/cache/soleur/soleur/0.0.0-dev/` at its line 38, and at line 224 states the
-reasoning: *"version `0.0.0-dev`, so the cache directory name never changes and there is no
-version bump to trigger an update."* Both become false. ADR-178 merged last week and is
-`active` — it is not an archive record, and it needs the amendment.
+2.5 **`ADR-178` is the fifth site, and its cache path must be reconciled against the NEW plugin
+ID — not merely against the keyless manifest.** Anchor on content, not line numbers
+(`cq-cite-content-anchor-not-line-number`): the passage containing the literal
+`~/.claude/plugins/cache/soleur/soleur/0.0.0-dev/`, and the sentence containing *"so the cache
+directory name never changes and there is no version bump to trigger an update."* Both become
+false, and they become false in **two** independent ways, which is the whole reason this edit is
+worth doing once rather than twice:
+
+| Component | ADR-178 asserts | After Phase 1 | After Phase 1 **and** Phase 1B (new installs) |
+|---|---|---|---|
+| Marketplace segment | `soleur` | `soleur` (unchanged) | `<new marketplace name>` |
+| Plugin segment | `soleur` | `soleur` (unchanged) | `soleur` (unchanged) |
+| Version segment | `0.0.0-dev`, "never changes" | `unknown`, refreshed in place | `unknown`, refreshed in place |
+
+The amendment states the post-1B path as current, records the post-1 path as what an existing
+install resolves to, and replaces the "never changes / no version bump to trigger an update"
+reasoning with the SHA comparator. **Use the `installPath` measured in Phase 0.0/1B.4, not the
+inferred one** — the third segment under a `git-subdir` source is unverified until that run.
+
+ADR-178 merged last week and is `active`; it is not an archive record. It has **no YAML
+frontmatter and no `status:` key** (it uses `- **Status:** Accepted`), so do not look for
+`status: active` there.
 
 2.6 Sweep for stragglers: `git grep -n '0\.0\.0-dev'` must return only historical records —
 archived plans, specs, brainstorms, learnings, and ADR bodies describing the past. Any *live*
@@ -586,14 +914,20 @@ corrected, and it is duplicated into a JSON-LD `FAQPage` block fed to AI answer 
 site this repo actively AEO-optimises. Correcting a false machine-readable claim is the point;
 the env-var note is secondary.
 
-3.4 File the option F follow-up: publish a dedicated marketplace source so the CLI stops cloning
-the monorepo. Include the measured size table, the `git-subdir` schema with the 42crunch/adobe
-precedent, **the additive-second-repo shape** (which breaks no existing install), the compliance
-gate's minimisation and Art. 17 findings, and the migration question. **Target it at the
-roadmap Phase 4 milestone and record it as a prerequisite of #1439** (recruit 10 founders) —
-today that dependency is recorded nowhere, and the deferral will otherwise age into the next
-recruitment push. Passes the `wg-defer-only-after-inline-triage` triple test: not a ten-line
-change, observable trigger, fires well inside six months.
+3.4 ~~File the option F follow-up.~~ **Withdrawn — option F ships in this PR as Phase 1B.** The
+issue that would have carried it is not filed; there is nothing left in it to track. What the
+deferral was carrying that still needs a home is redistributed rather than dropped:
+
+- The `git-subdir` premise measurement was that issue's task 1 → it is now **Phase 0.0**.
+- The `#1439` (recruit 10 founders) dependency was the reason for milestone-targeting the
+  deferral. With F landing now, #1439 is no longer *blocked* by it — but the relationship is
+  still worth one line in the PR body, because "the delivery path was fixed before the cohort
+  arrived" is the fact a future reader of #1439 will want.
+- The old marketplace entry keeps `autoUpdate: true` and keeps cloning 181 MiB for anyone on it.
+  **That residue does get an issue** — deprecating or redirecting `jikig-ai/soleur` as a
+  marketplace, which is an explicit Non-Goal here and a real decision with a migration window.
+  Passes the `wg-defer-only-after-inline-triage` triple test: not a ten-line change, observable
+  trigger (a second install appearing on the old entry), fires well inside six months.
 
 3.5 File the delivery-canary follow-up (see `## Observability`), with its auth-feasibility check
 as the first task.
@@ -609,18 +943,45 @@ measurements here.
 
 ### Phase 4 — Architecture record
 
+**Re-scoped by the UC-1 resolution: this phase models the FINAL delivery shape, once.** The
+challenge's second argument was that Phase 4 was about to model the *current* topology in C4 for
+the first time and then re-model it when the marketplace changed. It no longer does. The C4
+edits and the new ADR describe the two-marketplace, `git-subdir`, SHA-identity shape that exists
+at the end of this PR. This also answers the simplification panel's "deleting a manifest key does
+not change the delivery topology" objection (Plan Review, *Surfaced — Taste*): under the amended
+scope **it does** — a new external system, a new delivery edge, and a changed payload boundary.
+The cut recommendation is therefore not carried forward, and the reason is recorded here rather
+than left as a silently-ignored review finding.
+
 4.1 Amend `ADR-017`. Its `## Decision` names the sentinel and its `## Consequences` claims
 "zero manual version management" — the first is now wrong and the second was always true for
 the wrong reason. Add the correction plus an `## Alternatives Considered` entry recording why
 the CI write-back stays rejected (the CLA-ruleset constraint is unchanged). ADR-017 keeps
 `status: active`; this is an amendment, not a supersession.
 
-4.2 Write the new ADR for the delivery decision itself: version identity for an installed
-plugin is the source commit SHA, obtained by omitting the field rather than by publishing a
-string. Provisional ordinal **ADR-183** — verified free across all 64 `origin/*` refs on
-2026-08-11 (179–182 are already claimed on sibling branches). The ordinal is a claim, not a
-reservation: re-derive it against a freshly fetched `origin/main` immediately before merge, and
-if it moves, sweep this plan, the tasks file, and any AC naming the ordinal in the same edit.
+4.2 Write the new ADR for the delivery decision itself. **Refer to it by slug and assign the
+ordinal at file-creation time** — do not pre-claim (plan review: the pre-claim ritual invents
+coordination overhead across 64 refs). Its scope widened with the UC-1 resolution and now carries
+**two** coupled decisions in one record, because they are one delivery architecture:
+
+- **Identity.** Version identity for an installed plugin is the source commit SHA, obtained by
+  omitting the field rather than by publishing a string.
+- **Distribution.** The marketplace source is a small dedicated repo whose single entry is a
+  `git-subdir` into `jikig-ai/soleur`, published **additively** — the monorepo stays a valid
+  marketplace. Record the measured `git-subdir` numbers from Phase 0.0, the deliberate divergence
+  from the 42crunch/adobe precedent on pinning (1B.3), and that the payload boundary is now
+  `plugins/soleur` rather than the whole repository.
+
+Its `## Consequences` is the home for the risks with nowhere else to live: dependence on
+undocumented CLI internals (≥3 recording modes, upstream #79950 actively changing the
+comparator); **the two-marketplace state and its cost** — two IDs, two cache trees, a documented
+migration, and an old entry that still clones 181 MiB; and the rollback. The rollback statement
+is the one plan review corrected and it must survive verbatim in substance: re-adding the
+`version` key is a *source-side* edit whose delivery is gated on the refresh it is rolling back,
+so the real floor is `remove → re-add → reinstall`, which materialises HEAD unconditionally.
+**Phase 1B gives that floor a cheap route it did not have** — re-add against the ~50 KB
+marketplace, not the 181 MiB one — and the ADR should say so, because it is the difference
+between a rollback that exists on paper and one an operator can run.
 
 4.3 C4. The installed-user delivery path is **entirely unmodeled** — verified by reading all
 three of `model.c4`, `views.c4` and `spec.c4`, not by grepping the feature's own noun. The
@@ -640,12 +1001,28 @@ enumeration:
   it ships primitives "for execution on an installed user's machine" — an assertion with no
   element behind it. Correct it or give it the element it presumes.
 
-Add the actor, the local cache store, and the delivery relationship; tag the external ones
-`#external`; and add both endpoints of every new edge to the `context` view's `include` list —
-per the `#7332` note already in `views.c4`, an edge renders only when *both* endpoints are
-included, and a node added to a view containing neither endpoint renders as a disconnected box.
-Then run `apps/web-platform/test/c4-code-syntax.test.ts` and `c4-render.test.ts`; a `view
-include` naming an undefined element fails there, never at `tsc`.
+- **Added by the UC-1 resolution:** the **marketplace source repo** is a distinct external
+  system, not a detail of `github`. It is the element that carries the whole point — a small
+  delivery surface fronting a large source repo — and modelling delivery without it would model
+  the shape this PR replaces. Its edges: *installed CLI → marketplace repo* (clone the catalogue,
+  ~50 KB) and *marketplace repo → `jikig-ai/soleur`* (`git-subdir` resolution, ~17 MiB measured
+  floor). The two edges carrying different payload sizes **is** the architecture; a single
+  undifferentiated "clones from GitHub" edge would say nothing.
+
+Add the actor, the local cache store, the marketplace source repo, and the delivery
+relationships; tag the external ones `#external`; and add both endpoints of every new edge to the
+`context` view's `include` list — per the `#7332` note already in `views.c4`, an edge renders only
+when *both* endpoints are included, and a node added to a view containing neither endpoint
+renders as a disconnected box. **`platform.plugin` is not currently in that include list**, so a
+delivery edge terminating there needs it added explicitly.
+
+**Then run `scripts/regenerate-c4-model.sh` and commit
+`knowledge-base/engineering/architecture/diagrams/model.likec4.json`.** It is an 801 KB
+*committed render artifact* that `plugins/soleur/test/c4-model-freshness.test.sh` byte-diffs
+against a fresh render, and that suite — **not** `c4-code-syntax.test.ts` (a CodeMirror tokenizer
+unit test that never reads a `.c4` file) and **not** `c4-render.test.ts` (which fully mocks
+`spawn`/`fs`; its "Could not resolve reference" string is a fixture) — is the real gate. Both of
+those still run, but neither can fail on a broken model.
 
 ### Phase 5 — Verification
 
@@ -678,18 +1055,42 @@ include` naming an undefined element fails there, never at `tsc`.
 | `knowledge-base/engineering/architecture/decisions/ADR-178-shared-bash-primitives-ship-in-plugin.md` | Amend the cache-path consequences (lines 38, 224) that this change falsifies |
 | `knowledge-base/legal/article-30-register.md` | Amend PA-32 §(f) to name the marketplace clone channel |
 | `knowledge-base/engineering/architecture/diagrams/model.c4` | Installed-user actor, local cache store, delivery edge; correct the `plugin` description |
-| `knowledge-base/engineering/architecture/diagrams/views.c4` | Add both endpoints of each new edge to `context` |
+| `knowledge-base/engineering/architecture/diagrams/views.c4` | Add both endpoints of each new edge to `context`, **including `platform.plugin`** |
+| `knowledge-base/engineering/architecture/diagrams/model.likec4.json` | **Regenerate** via `scripts/regenerate-c4-model.sh` — committed render artifact, byte-diffed by `c4-model-freshness.test.sh` |
+| `plugins/soleur/test/operator-digest-workflow.test.sh` | Fix the prefix-matching `plugin_marketplaces:.*jikig-ai/soleur` assertion (Phase 0.9) — wrong whether or not the workflow migrates |
+
+**Added by the UC-1 resolution (Phase 1B):**
+
+| File | Change |
+|---|---|
+| `.github/workflows/test-pretooluse-hooks.yml` | Per the 0.9 decision: migrate the `plugin_marketplaces` + `plugins` pair, or record why it stays |
+| `plugins/soleur/skills/operator-digest/assets/operator-digest.workflow.yml` | Same decision — **this one ships into a user's generated workflow** |
+| `plugins/soleur/skills/schedule/SKILL.md` | Same decision, two `claude-code-action` blocks |
+
+`README.md`, `plugins/soleur/README.md` and `getting-started.njk` already appear above; Phase 1B.5
+adds the new marketplace path to the same edit rather than opening a second pass over them.
 
 ## Files to Create
 
 | File | Purpose |
 |---|---|
-| `knowledge-base/engineering/architecture/decisions/ADR-183-*.md` | The delivery-identity decision (ordinal provisional) |
+| `knowledge-base/engineering/architecture/decisions/ADR-<n>-*.md` | The delivery decision — identity **and** distribution. **Slug now, ordinal at file-creation time**; do not pre-claim (plan review) |
 | `knowledge-base/project/specs/feat-one-shot-7471-plugin-delivery-path/tasks.md` | Task breakdown |
 
-**Glob verification.** Every path above was confirmed to exist with `git ls-files` /`ls` at plan
-time except the two Files-to-Create entries. `plugins/soleur/plugin.json` — the path the issue
-cites — was confirmed **not** to exist and is deliberately absent from this table.
+**In the new marketplace repository, not this one** (Phase 1B.2 — listed so the deliverable is
+not invisible just because it lands outside this tree):
+
+| File | Purpose |
+|---|---|
+| `.claude-plugin/marketplace.json` | One `git-subdir` plugin entry, **no `version` key** |
+| `README.md` | What it is; pointer back to `jikig-ai/soleur` as source of truth |
+| `LICENSE` | `BUSL-1.1`, mirroring the plugin manifest's `license` |
+
+**Glob verification.** Every path in this repo was confirmed to exist with `git ls-files` / `ls`;
+the four Phase 1B additions above were confirmed by `git grep -n 'plugin_marketplaces'` and
+`git grep -n 'soleur@soleur'` on 2026-08-12. The Files-to-Create entries do not exist yet by
+definition. `plugins/soleur/plugin.json` — the path the issue cites — was confirmed **not** to
+exist and is deliberately absent from this table.
 
 ## Open Code-Review Overlap
 
@@ -719,8 +1120,8 @@ change.
 
 | Finding | Article | Severity | Bears on the option choice |
 |---|---|---|---|
-| The whole-repo clone industrialises the Art. 17 erasure impossibility PA-32 §(f) already records — converting a bounded, counted population (2 forks) into an unbounded population of full-history clones | Art. 17; Art. 5(1)(e) | Important | **Yes.** Options F/(remote-URL) remove the corpus *and* the 181 MiB history from the payload; the stopgap-only path preserves the fan-out |
-| Minimisation: **887 of 13,523 delivered files (~93%) and ~94% of bytes are not the product**, including `knowledge-base/legal/` (the Art. 30 register itself, plus 41 counsel-review memoranda) and 333 design screenshots | Art. 5(1)(c); **Art. 25(2)** | Important | **Yes.** Art. 25(2) is the sharper citation: "already public on GitHub" answers a *disclosure* question, not a *minimisation* one. Retrievable-on-request and pushed-to-every-installer are different operations |
+| The whole-repo clone industrialises the Art. 17 erasure impossibility PA-32 §(f) already records — converting a bounded, counted population (2 forks) into an unbounded population of full-history clones | Art. 17; Art. 5(1)(e) | Important | **Decided.** Option F selected (Phase 1B): the new-install payload carries neither the corpus nor the 181 MiB history. Narrowed for the new path, **not** retired for the old entry or for existing clones — see "What is NOT retired" |
+| Minimisation: **887 of 13,523 delivered files (~93%) and ~94% of bytes are not the product**, including `knowledge-base/legal/` (the Art. 30 register itself, plus 41 counsel-review memoranda) and 333 design screenshots | Art. 5(1)(c); **Art. 25(2)** | Important | **Decided — retired by construction for the new path.** A `git-subdir` payload carries only `plugins/soleur`, so the register, the memoranda and the screenshots are structurally absent rather than policy-excluded. Art. 25(2) is the sharper citation: "already public on GitHub" answers a *disclosure* question, not a *minimisation* one. Retrievable-on-request and pushed-to-every-installer are different operations |
 | The redistributed corpus has a live limb with **no available lawful basis** — `compliance-posture.md` Active Item #7119, OPEN and BLOCKING, with #7120 (Art. 14 notice, expired), #7121 (DPIA, ~5 months overdue), #7122 open against the same population | Art. 6(1)(f); Art. 4(2) | Important | Context. **#7471 does not remediate #7119** and must not be recorded as doing so |
 | No Art. 30 processing activity covers plugin distribution (`grep -i marketplace` over the register returns zero). Disposition: **amend PA-32 §(f)**, do not create a new PA — no new purpose, data category, recipient category, or sub-processor | Art. 30(1)(d)/(f) | Important | Amendment needed under **every** option |
 | No new sub-processor under any candidate — GitHub throughout (option F is another GitHub repo; the remote-URL variant resolves to GitHub Pages). *Lindqvist* C-101/01: world-readable availability is not a Chapter V transfer | Art. 44–49 | Suggestion | Negative. **Re-open if the option becomes non-GitHub** (a CDN, npm, a third-party registry) — that would be a genuinely new sub-processor |
@@ -738,19 +1139,55 @@ change.
 2. Narrowing the distribution surface **must not** be claimed to satisfy #7119's R5. Route that
    question to `clo`; do not decide it here.
 
-**Effect on this plan.** Finding 1 and finding 2 are a substantive argument that option F is
-not merely an engineering nicety to defer but the option with the compliance case behind it,
-and they are recorded as a **contested deferral** in the Domain Review below rather than
-absorbed. The gate also confirms that **item 1 (removing the `version` key) has zero GDPR
-surface on its own** and could ship without any compliance gate — which is independent support
-for the split this plan proposes.
+**Effect on this plan — rewritten under the UC-1 resolution.** Findings 1 and 2 were recorded as
+a *contested deferral*. They are no longer contested and no longer deferred: option F ships as
+Phase 1B, and the two findings are **retired by construction rather than argued away.**
 
-**Register work carried by whichever option lands:** amend PA-32 §(f) to name the marketplace
-clone as a distinct automated clone-generating channel (its counts are stale in this branch
-already — 81 committed digests, not 80), and if option F lands, add the new repository to the
-register's in-scope surfaces list and widen the `GitHub Inc` vendor-row scope cell, which
-currently reads "cc-router in-process MCP tool surface" and does not cover distribution
-hosting.
+**What is retired, precisely.** The Art. 5(1)(c) / Art. 25(2) minimisation finding turned on
+delivering ~93% non-product files to every installer — `knowledge-base/legal/` (the Art. 30
+register itself, plus 41 counsel-review memoranda), 333 design screenshots, and 84 MiB of
+`knowledge-base/project/`. A `git-subdir` payload carries **only `plugins/soleur`**, so none of
+those files is in it. This is a structural property of the payload boundary, not a policy
+undertaking — there is nothing to comply with, because there is nothing to send. The Art. 17
+fan-out finding narrows the same way: the new-install path materialises no full-history clone of
+the corpus, so it stops converting a bounded population into an unbounded one.
+
+**Use the right number.** The payload is ~17 MiB (measured floor, `## Amendment 2026-08-12`), not
+~50 KB — 50 KB is the marketplace repo. The minimisation conclusion does not depend on which
+figure is used, and it would not survive citing the wrong one.
+
+**What is NOT retired, and this is the part a compliance reader must not skim.**
+
+1. **Every existing install already holds a full clone.** Retiring a distribution channel does not
+   un-distribute what it distributed. The Art. 17 impossibility PA-32 §(f) records is unchanged
+   for anything already cloned; Phase 1B narrows the *future* fan-out only.
+2. **The old marketplace entry still delivers the whole repository.** `jikig-ai/soleur` stays a
+   valid marketplace by deliberate design (additive, not a replacement). Anyone who installs from
+   it — and the four CI surfaces in Phase 0.9, on every scheduled run, until they migrate — pulls
+   the full 181 MiB of history and the entire non-product corpus. The minimisation finding is
+   retired **for the new path**, not for the repository. Deprecating the old entry is the tracked
+   Non-Goal that would close it, and until that lands the honest statement is *narrowed*, not
+   *eliminated*.
+3. **#7119 is untouched.** Per the gate's second adopted constraint, narrowing the distribution
+   surface must **not** be claimed to satisfy #7119's R5. That question routes to `clo` and is not
+   decided here — a narrower payload is not a lawful basis.
+
+The gate's other confirmation still holds: **item 1 (removing the `version` key) has zero GDPR
+surface on its own.**
+
+**Register work, now unconditional rather than option-dependent:**
+
+- Amend **PA-32 §(f)** to name the marketplace clone as a distinct automated clone-generating
+  channel, and to record that a second, narrowed channel now exists alongside it. **Change no
+  figure** — the "80 committed digests" count is correct and the register was never stale; an
+  earlier draft of this plan asserted "81, not 80" by counting the `user-conversations/`
+  subdirectory as a digest, and that error must not travel into a legal register. See AC18.
+- Add the **new marketplace repository** to the register's in-scope surfaces list.
+- Widen the **`GitHub Inc` vendor-row scope cell**, which currently reads "cc-router in-process
+  MCP tool surface" and covers neither distribution hosting nor a second repository.
+- **No new sub-processor.** The new repo is GitHub, same as the old; the Art. 44–49 Suggestion's
+  negative determination is unchanged, and its re-open trigger (a non-GitHub host — CDN, npm, a
+  third-party registry) is not fired by this change.
 
 ## Observability
 
@@ -786,6 +1223,19 @@ failure_modes:
   - mode: "The docs build emits an undefined softwareVersion on the offline path"
     detection: "Eleventy build under SOLEUR_DOCS_OFFLINE=1 plus a JSON-LD shape assertion"
     alert_route: "docs build failure in CI"
+  - mode: "The new marketplace repo's entry drifts — a `version` key is reintroduced, or the
+           git-subdir `path` stops pointing at plugins/soleur — silently restoring the whole-repo
+           payload or the no-op comparator"
+    detection: "NOT detectable by a check in THIS repo: the third manifest lives in the new
+                marketplace repository, outside this tree, so the AC12 --check gate cannot reach
+                it. The canary is the only observer, which is a reason to build it rather than a
+                reason to assume the manifest stays put. Stated as a blind spot, not assumed away."
+    alert_route: "Canary CHECK_ERROR / payload-size verdict; none today"
+  - mode: "A CI or user-generated scheduled workflow still on `soleur@soleur` clones 181 MiB on
+           every run, unnoticed because it succeeds"
+    detection: "Phase 0.9's sweep is a point-in-time audit, not a monitor. The repeatable
+                observable is the workflow's own step duration in Actions run logs."
+    alert_route: "None automated; the 0.9 decision table is the record"
 logs:
   where: "GitHub Actions run logs for version-bump-and-release.yml"
   retention: "GitHub default (90 days)"
@@ -805,18 +1255,40 @@ observable from this side today and no amount of manifest editing changes that. 
 raised by CTO review and tracked at Phase 3.5:
 
 A scheduled workflow on a clean runner with a fresh `HOME` runs the **documented install path
-end to end** and asserts `installed_plugins.json → soleur@soleur.gitCommitSha == origin/main`.
-This is the layer-7 analogue of `scripts/prod-version-drift-check.sh` (#7091) — already cited
-in this plan as the staleness-detector precedent, here extended rather than re-invented. Adopt
-its four-verdict discipline, and in particular its stated rule: **a clone timeout must report
-`CHECK_ERROR`, never `CLEAN`** — "we could not evaluate" must never be encoded as "no drift".
+end to end**. This is the layer-7 analogue of `scripts/prod-version-drift-check.sh` (#7091) —
+already cited in this plan as the staleness-detector precedent, here extended rather than
+re-invented. Adopt its four-verdict discipline, and in particular its stated rule: **a clone
+timeout must report `CHECK_ERROR`, never `CLEAN`** — "we could not evaluate" must never be
+encoded as "no drift".
+
+**Three changes to the canary's target under the UC-1 resolution.**
+
+1. **It targets the new marketplace, because that is what "the documented install path" now
+   means.** `soleur@<new marketplace name>`, added from the ~50 KB source. A canary pointed at
+   `soleur@soleur` would monitor the path the plan is steering users off.
+2. **It should also probe the old entry, at a lower cadence.** `jikig-ai/soleur` stays a valid
+   marketplace and stays the path four CI surfaces and one existing install are on. An
+   unmonitored live path is how the next silent failure happens. Its expected verdict is
+   `CHECK_ERROR` on timeout, which is information, not noise.
+3. **It asserts on content, not on `gitCommitSha`.** Plan review finding 5 measured the metadata
+   failing to follow the content (upstream #76882 — in this plan's own defect corpus), so a
+   `gitCommitSha == origin/main` clause can be **false after a successful delivery**. Assert that
+   a file the merge commit changed is present with its new content inside `installPath`; keep the
+   SHA as explicitly-unreliable secondary context.
+
+**The canary also becomes affordable, which is a real consequence and not a footnote.** Against
+the old path it clones ~396 MiB per run — a job slow enough that its own cadence would be argued
+down. Against the new path it moves ~17 MiB (measured floor) and finishes inside the CLI's
+default timeout, which is the same property Phase 0.0 gates. A monitor that is cheap gets run.
 
 **It would have caught both defects before a user did.** That is the argument for building it.
 
 **First task is a feasibility gate, not construction:** determine whether `claude plugin
 marketplace add / install / update` function unauthenticated on a runner. If they require
 credentials, the canary is blocked and the plan says so rather than designing around an
-unverified assumption.
+unverified assumption. **Phase 1B.1 resolves half of this in advance** — the new marketplace repo
+must be public for `marketplace add` to work at all, so the repo-visibility half of the question
+is already decided; what remains is whether the CLI itself needs credentials.
 
 Two weaker options, recorded and not selected: an in-session staleness banner comparing the
 local `gitCommitSha` against `api.github.com/repos/jikig-ai/soleur/commits/main` (needs a new
@@ -873,6 +1345,11 @@ recorded.
 **Assessment:** ADVISORY, 0 Critical / 4 Important / 2 Suggestion. Two Important findings bear
 directly on the option choice (Art. 17 clone fan-out; Art. 25(2) minimisation at ~93% non-product
 files). PA-32 §(f) needs amending under every option. Item 1 alone has zero GDPR surface.
+**Updated 2026-08-12:** option F is selected, so those two findings are retired **by construction
+for the new install path** — the payload no longer contains the files the minimisation finding
+named. They are **not** retired for existing clones or for the retained `jikig-ai/soleur` entry;
+the Compliance section states that boundary explicitly, and #7119 remains untouched and routed to
+`clo`.
 
 ### Product/UX Gate
 
@@ -987,24 +1464,34 @@ block is absent because no plaintext exception or disabled cert verification is 
    containing *"so the cache directory name never changes"* still asserts that as current. Note
    ADR-178 has **no YAML frontmatter and no `status:` key** — it uses `- **Status:** Accepted` —
    so do not go looking for `status: active` there; that is ADR-017's format, not ADR-178's.
-10. **AC10 — the new ADR exists at the ordinal this plan names,** and that ordinal was
-    re-derived against a freshly fetched `origin/main` within the merge window. If it moved,
-    `grep -rn 'ADR-<old>' knowledge-base/project/{plans,specs}/` returns zero.
-11. **AC11 — the C4 delivery path renders.** `model.c4` declares the installed-user actor, the
-    local plugin-cache store, and the GitHub→CLI delivery relationship; `views.c4`'s `context`
-    view includes **both** endpoints of each new edge; and
-    `apps/web-platform/test/c4-code-syntax.test.ts` plus `c4-render.test.ts` pass.
+10. **AC10 — the new ADR exists, and its ordinal is unique against `origin/main` at creation
+    time.** No pre-claim, no merge-window re-derivation, no sweep of every artifact naming it —
+    plan review cut that ritual. The plan and `tasks.md` refer to the ADR by **slug**, so a
+    collision costs a filename, not a sweep.
+11. **AC11 — the C4 delivery path renders, and the gate is the one that can actually fail.**
+    `model.c4` declares the installed-user actor, the local plugin-cache store, **the new
+    marketplace source repo**, and the delivery relationships; `views.c4`'s `context` view
+    includes **both** endpoints of each new edge, **`platform.plugin` among them**;
+    `model.likec4.json` is regenerated via `scripts/regenerate-c4-model.sh` and committed; and
+    **`plugins/soleur/test/c4-model-freshness.test.sh` passes.** That byte-diff suite is the real
+    gate — `c4-code-syntax.test.ts` is a CodeMirror tokenizer test that never reads a `.c4` file
+    and `c4-render.test.ts` mocks `spawn`/`fs`, so the earlier draft of this AC named two tests
+    that **cannot fail on a broken model** and would have passed over one.
 12. **AC12 — a CI check now asserts the manifests stay keyless,** following the repo's
     established `--check` shape rather than a write-back, so the defect cannot silently return.
-13. **AC13 — the deferrals are tracked, and the load-bearing one is milestone-targeted.** The
-    option F issue exists, carries the measured size table and the additive-second-repo shape,
-    is targeted at the roadmap Phase 4 milestone, and records the blocking relationship to
-    #1439. The delivery-canary issue exists with its auth-feasibility check as task 1. The
-    in-session banner is an explicit Non-Goal with its trigger stated.
+13. **AC13 — the remaining deferrals are tracked. Rewritten: the option F issue is no longer one
+    of them.** Option F ships as Phase 1B, so no issue is filed for it and none is expected. What
+    must exist: the **old-marketplace-deprecation** issue (the residue named in Phase 3.4), and
+    the delivery-canary issue with its auth-feasibility check as task 1. The in-session banner is
+    an explicit Non-Goal with its trigger stated. **An AC that requires a now-shipped deferral to
+    be filed as an issue would fail a correct implementation** — this is the same class of defect
+    plan review caught in AC5 and AC6.
 14. **AC14 — the stopgap names its own expiry and is on the surfaces users read.** The entry
     appears in `README.md`, `plugins/soleur/README.md`, and
-    `plugins/soleur/docs/pages/getting-started.njk`; it links the option F issue and states that
-    it is a workaround for an upstream defect.
+    `plugins/soleur/docs/pages/getting-started.njk`; it states that it is a workaround for an
+    upstream defect. **Its expiry link changes:** it no longer points at the option F issue
+    (which does not exist) but at the old-marketplace-deprecation issue, because the stopgap's
+    scope is now exactly the old entry's residue.
 15. **AC15 — the false upgrade claim is corrected in both of its forms.**
     `plugins/soleur/docs/pages/changelog.njk` no longer asserts that the plugin manager handles
     the update automatically, in **either** the rendered FAQ copy or the JSON-LD `FAQPage`
@@ -1030,6 +1517,41 @@ block is absent because no plaintext exception or disabled cert verification is 
 20. **AC20 — the full suite is green** via the repo's own invocation, not a hand-enumerated
     subset of paths.
 
+#### Added by the UC-1 resolution (Phase 0.0 and Phase 1B)
+
+26. **AC26 — the `git-subdir` premise was measured, and the number is in the PR body.** Phase
+    0.0's two `du -sb` byte counts are recorded, their sum is **< 52,428,800 B (50 MiB)**, and
+    both CLI commands completed with `CLAUDE_CODE_PLUGIN_GIT_TIMEOUT_MS` **unset**. If the gate
+    was not run, AC26 fails — it is not waivable, because every AC below it and the `closes:`
+    frontmatter rest on it. If the gate *ran and failed*, the run halted and this PR does not
+    exist in its current form.
+27. **AC27 — the new marketplace repo exists, is public, and its name and visibility were
+    confirmed by the operator** rather than chosen by the run. The confirmation is recorded in
+    the PR body. Public is not a preference: `claude plugin marketplace add` cannot read a
+    private source unauthenticated, so a private repo means F does not function.
+28. **AC28 — the third manifest is keyless and points where it claims.** In the new repo,
+    `jq '.plugins[0]|has("version")'` returns `false`, `jq -r '.plugins[0].source.source'`
+    returns `git-subdir`, and `jq -r '.plugins[0].source.path'` returns `plugins/soleur`.
+    **Asserted by reading the published file, not the local draft** — it lives outside this tree,
+    so no CI check in this repo can reach it and AC12's `--check` gate does not cover it.
+29. **AC29 — a real install through the new marketplace resolves and runs.** On a clean `HOME`:
+    `marketplace add` then `install soleur@<new marketplace> --scope project` succeeds, and the
+    resolved `installPath` is **recorded verbatim** — the third path segment under a `git-subdir`
+    source is unverified until this run, and Phase 2.5's ADR-178 amendment consumes the measured
+    string, not the inferred one. Read the entry as an **array** of per-scope records selected by
+    scope + `projectPath`; `.plugins["soleur@…"]` is not an object (plan review finding 4).
+30. **AC30 — the plugin-ID sweep is complete and decided.** The four measured `soleur@soleur`
+    sites each carry a recorded decision (migrate / stay, with the reason). `git grep -n
+    'soleur@soleur'` over `.github/` and `plugins/soleur/skills/` returns only sites the table
+    accounts for. **And `operator-digest-workflow.test.sh` no longer matches on a prefix** — the
+    assertion pins the full repo path, so it cannot pass vacuously against
+    `jikig-ai/soleur-<anything>`.
+31. **AC31 — the existing install's migration route is documented and never clones the
+    monorepo.** The published sequence contains no `marketplace add jikig-ai/soleur` step,
+    carries `--scope project` on every command, and includes the CLI restart. This is the clause
+    that makes `closes: 7471` honest; if the documented route still passes through the 181 MiB
+    clone, the frontmatter is wrong and reverts to `refs:`.
+
 ### Post-merge
 
 21. **AC21 — the release fired.** `version-bump-and-release.yml` succeeded for the merge commit
@@ -1044,39 +1566,64 @@ block is absent because no plaintext exception or disabled cert verification is 
     `~/.claude/plugins/cache/soleur/soleur/0.0.0-dev/` directory is confirmed present and inert
     (the `installPath` in `installed_plugins.json` points at the new location), and the ADR's
     consequences already say this happens once per existing install.
-24. **AC24 — delivery is demonstrated end to end, not asserted.** After a marketplace refresh
-    and `claude plugin update soleur@soleur`, `installed_plugins.json` records a `gitCommitSha`
-    **equal to the merge commit**. That equality is the assertion; the installed cache's skill
-    count is recorded as advisory context, **not** as a pass/fail clause — it is a proxy with no
-    stated tolerance, and an unrelated in-flight merge could make 95-vs-96 fail a correct
-    delivery. This is the acceptance criterion the predecessor issue could not write; if it
-    cannot be satisfied, the plan did not solve the problem it was written for.
-25. **AC25 — the affected user was told.** Outbound to alpha tester #1 is tracked as a
-    follow-through item per `wg-pm-class-followthrough-for-operator-dogfood` — not a line in the
-    ship message (`hr-ship-message-no-operator-checklist`). No automated surface reaches an
-    external installed user, which is why this is tracked rather than assumed.
+24. **AC24 — delivery is demonstrated end to end, on content.** After the update, a file the
+    merge commit changed is present **with its new content** inside the resolved `installPath`.
+    That is the assertion. `gitCommitSha` is recorded as **explicitly-unreliable secondary
+    context**, not as a pass/fail clause — plan review finding 5 measured the metadata failing to
+    follow the content (upstream #76882, in this plan's own defect corpus), so a
+    `gitCommitSha == merge commit` clause can be false after a *successful* delivery. The skill
+    count is likewise advisory: a proxy with no stated tolerance, already true before the fix
+    ships (96 == 96, measured), and an unrelated in-flight merge could make 95-vs-96 fail a
+    correct delivery. Read `installed_plugins.json`'s entry as an **array**, selecting by scope +
+    `projectPath`. Every command carries `--scope project`. This is the acceptance criterion the
+    predecessor issue could not write; if it cannot be satisfied, the plan did not solve the
+    problem it was written for.
+    **Run it twice — once per marketplace**, because there are now two live delivery paths:
+    through `soleur@<new marketplace>` (the documented path, and the one `closes: 7471` rests on)
+    and through `soleur@soleur` (the retained path, which must still work — additive means
+    additive).
+25. **AC25 — the affected user was told, and told what to do.** Outbound to alpha tester #1 is
+    tracked as a follow-through item per `wg-pm-class-followthrough-for-operator-dogfood` — not a
+    line in the ship message (`hr-ship-message-no-operator-checklist`). No automated surface
+    reaches an external installed user, which is why this is tracked rather than assumed.
+    **Scope widened by Phase 1B:** the outbound now carries the migration sequence (1B.6), not
+    just a notification, because the existing install does not move to the new marketplace on its
+    own. At a population of one this is the entire migration mechanism.
+32. **AC32 — the new delivery path is measured post-merge, not just pre-merge.** A fresh install
+    from the published marketplace materialises **< 50 MiB** (the same threshold Phase 0.0 used,
+    now against the real repo rather than the scratch fixture) and completes with the default
+    timeout. A pre-merge fixture passing and the shipped article failing is exactly the gap
+    between "measured" and "delivered" this whole plan is about.
+33. **AC33 — the old path still works.** `soleur@soleur` remains installable and updatable.
+    Additive was the basis of the operator's decision; a change that quietly broke the old entry
+    would be outcome (b) in name only.
 
 ## Architecture Decision (ADR/C4)
 
-Detection fired: this plan **reverses a recorded decision** (ADR-017's version-field clause) and
-falsifies a second one's consequences (ADR-178's cache-path reasoning). Both records are
-deliverables of this plan, not follow-ups (`wg-architecture-decision-is-a-plan-deliverable`).
+Detection fired: this plan **reverses a recorded decision** (ADR-017's version-field clause),
+falsifies a second one's consequences (ADR-178's cache-path reasoning), and — under the UC-1
+resolution — **changes the distribution architecture**, which is a decision in its own right and
+not a consequence of the first two. All records are deliverables of this plan, not follow-ups
+(`wg-architecture-decision-is-a-plan-deliverable`).
 
 ### ADR
 
-- **New — ADR-183 (provisional ordinal):** *Track plugin identity by git commit SHA, not by a
-  manifest version field.* Supersedes ADR-017's version-field clause and amends ADR-178's
-  cache-path consequences. Its `## Consequences` is the natural home for the two risks that have
-  nowhere else to live: dependence on undocumented CLI internals (≥3 recording modes, upstream
-  #79950 actively changing the comparator) and the stated rollback (re-add the key). Authored via
-  `/soleur:architecture`. **The ordinal is a claim, not a reservation** — 179–182 are already
-  claimed on sibling `origin/*` branches, 183 was free across all 64 refs on 2026-08-11, and it
-  must be re-derived against a freshly fetched `origin/main` immediately before merge. If it
-  moves, sweep this plan, `tasks.md`, and every AC naming it in the same edit.
+- **New — one ADR, referred to by slug; ordinal assigned at file-creation time.** *Plugin
+  delivery: identity by commit SHA, distribution by a dedicated `git-subdir` marketplace source.*
+  Two coupled decisions in one record because they are one delivery architecture — full body in
+  Phase 4.2. It declares **partial supersession** of ADR-017's version-field clause only, and
+  amends ADR-178's cache-path consequences. Authored via `/soleur:architecture`. **Do not
+  pre-claim the ordinal across `origin/*` refs** — plan review cut that ritual as invented
+  coordination overhead; assigning at creation time removes the re-derivation and the
+  sweep-every-AC-that-names-it step along with it.
 - **Amend — ADR-017.** Do **not** silently rewrite its `## Decision` line: that erases why the
   sentinel existed and leaves the 2026-03-03 brainstorm's rejected-options table dangling. Amend
   with the correction plus the alternatives entry; keep `status: active`.
-- **Amend — ADR-178.** Lines 38 and 224 (cache path and the "name never changes" reasoning).
+- **Amend — ADR-178.** The cache-path passage and the "name never changes" sentence, anchored on
+  **content, not line numbers** (`cq-cite-content-anchor-not-line-number` — the earlier "lines 38
+  and 224" citation is exactly what that rule forbids). Reconciled against the **new plugin ID**,
+  not merely against the keyless manifest — see the three-column table in Phase 2.5. ADR-178 has
+  no `status:` key; it uses `- **Status:** Accepted`.
 
 ### C4 views
 
@@ -1094,15 +1641,17 @@ The ADR describes the target state and is true the moment Phase 1 merges — the
 later slice to wait on, so no `status: adopting` staging is needed. The C4 edit lands in the same
 PR; the recorded architecture must not lag the change that creates it.
 
-**Open risk, unresolved and deliberately not decided here.** Phases 2 and 4 produce exactly the
-artifacts that a later change of delivery *shape* would rewrite: five governance sites naming the
-current cache path, a new ADR describing the current identity mechanism, and the first-ever C4
-model of the current delivery path. If the deferred marketplace source (option F) lands later,
-each is written twice. The advisor consult's recommendation is to settle that question **before**
-Phases 2 and 4, not after — either by shipping option F now, or by narrowing these two phases to
-claims that stay true under either delivery shape. This is recorded as **UC-1** in
-`knowledge-base/project/specs/feat-one-shot-7471-plugin-delivery-path/decision-challenges.md`
-and requires an operator decision; it is not settled by this plan.
+**Open risk — RESOLVED 2026-08-12, and the resolution is the reason this section changed.** The
+risk was that Phases 2 and 4 would produce exactly the artifacts a later change of delivery
+*shape* would rewrite: five governance sites naming the current cache path, a new ADR describing
+the current identity mechanism, and the first-ever C4 model of the current delivery path. The
+advisor consult's recommendation was to settle it **before** Phases 2 and 4, not after.
+
+It was settled. **UC-1 resolved as outcome (b)** — see the RESOLVED status block in
+`knowledge-base/project/specs/feat-one-shot-7471-plugin-delivery-path/decision-challenges.md`.
+Phases 2 and 4 are re-scoped to describe the final shape once, and Phase 1B builds it. Nothing
+here is written twice; the residual risk is not "we may rewrite this" but "Phase 0.0 may refute
+the premise", which has its own halt.
 
 ## Test Scenarios
 
@@ -1113,7 +1662,13 @@ and requires an operator decision; it is not settled by this plan.
 | Docs build with `SOLEUR_DOCS_OFFLINE=1` | `softwareVersion` well-formed or absent; never `undefined` |
 | Docs build online with at least one published release | `softwareVersion` equals the latest non-draft tag minus its `v` prefix |
 | A future PR reintroduces a `version` key | The AC12 CI check fails the PR |
-| Marketplace refresh on a slow link without the env var | Still times out — this plan does not claim otherwise, and the README entry is the documented answer until option F lands |
+| Marketplace refresh **of the old entry** on a slow link without the env var | Still times out — this plan does not claim otherwise. The documented answer is now *migrate to the new marketplace*, with the timeout setting as the fallback for anyone who cannot |
+| **`git-subdir` install on a clean `HOME`, default timeout** | Completes; materialised bytes < 50 MiB. **This is Phase 0.0 and it is a halt gate, not a test** — listed here so the scenario table and the gate cannot drift apart |
+| New marketplace entry, plugin manifest keyless, second commit lands on `jikig-ai/soleur` | Recorded `gitCommitSha` advances and the new content appears in `installPath`. Confirms the SHA fallback holds under a `git-subdir` source, which the control group does **not** cover — it is a `github` marketplace with relative `./plugins/<name>` entries |
+| New marketplace entry that *does* declare a `version` | The comparator short-circuits again — defect 1, relocated. This is the regression AC28 exists to catch, and the reason the new manifest is keyless too |
+| `git-subdir` `path` pointing at a directory that does not exist | Install fails loudly. Verify it fails rather than silently delivering an empty plugin: an empty-but-successful install is the "indistinguishable from success" shape this whole issue is about |
+| An existing `soleur@soleur` install after the new marketplace is published | Unaffected — still installed, still updatable. Additive means the old entry keeps working (AC33) |
+| Both marketplaces installed simultaneously, same project scope | Two entries, two caches, both resolvable. Record which one the session loads; if it is ambiguous, the migration sequence must uninstall the old before adding the new, not after |
 
 ## Risks & Mitigations
 
@@ -1123,7 +1678,13 @@ and requires an operator decision; it is not settled by this plan.
 | The migration strands the old `0.0.0-dev/` cache directory forever (#71074 — no pruning) | Real and unavoidable on this route; ~9.5 MiB per install, once. Recorded in the ADR's consequences rather than discovered later. The alternative (option B) strands one per *release* |
 | A user mid-migration holds both the old versioned cache and the new keyless one, and the CLI resolves the wrong one | Enumerate in Phase 0.3 and state the resolution order observed. If it resolves to the stale directory, option A needs a migration note before it ships |
 | Removing the version key breaks a consumer no grep found | Two consumers were found by grep (`docs/_data/plugin.js`, `docs/_includes/base.njk`) and one by reading (`session-rules-loader.sh` reads `mcpServers`, not `version`). The `--check` gate in AC12 plus the full suite in AC20 are the backstop |
-| The stopgap README entry becomes permanent | AC14 requires it to link its own tracking issue; the option F trigger is observable |
+| The stopgap README entry becomes permanent | AC14 requires it to link its own tracking issue — now the old-marketplace-deprecation issue, since the option F issue no longer exists |
+| **`git-subdir` does not avoid the full clone, and the premise was doc-sourced** | **Phase 0.0, at the front of the plan, with a numeric halt.** This is the amendment's largest risk and the reason the gate exists rather than a mitigation bolted on afterwards |
+| The new marketplace repo drifts from this one — its manifest is edited, a `version` key returns, or the `git-subdir` path stops matching | **No CI check in this repo can reach a file in another repo.** AC28 asserts it at merge time and the canary is the only continuous observer. Stated as a known blind spot; the mitigation is to keep the repo small enough that drift is visible, not to pretend a gate covers it |
+| The new repo's name makes `jikig-ai/soleur` a substring, so `operator-digest-workflow.test.sh` passes whether or not the migration happened | Measured in Phase 0.9 and fixed in 1B.7: pin the assertion to the full repo path. Same vacuously-true-assertion class plan review caught in AC6 |
+| Two marketplaces, two plugin IDs, and a user who ends up with both | Test Scenarios covers the simultaneous-install case; 1B.6's sequence is ordered so the outcome is deterministic. The cost is recorded in the ADR's `## Consequences` rather than discovered by a user |
+| The operator is asked to confirm a repo name mid-run and the run stalls waiting | 1B.1 is the **first** step of Phase 1B and gated only on 0.0, so the confirmation is requested early, while other phases can proceed. Provisioning goes through `/soleur:provision-github`, not a hand-run checklist |
+| `closes: 7471` is claimed and the existing install still cannot get the fix | AC31 asserts the documented migration route contains no monorepo clone. If it does, the frontmatter is wrong and reverts — the condition is written down rather than left to judgement at merge time |
 | `wg-never-bump-version-files-in-feature` is weakened by the edit | The gate's *behaviour* is unchanged — feature branches still must not introduce a version. Only the clause describing a field that no longer exists is removed. AC7 pins the id and the budget |
 
 ## Plan Review — Consolidated
@@ -1175,6 +1736,14 @@ a PR that cannot deliver P1 to anyone would be reporting success while deliverin
 precisely the failure class this issue is about. **Frontmatter changed from `closes: 7471` to
 `refs: 7471`; the option F issue becomes the closer.** The alternatives table's option A row
 should be read as P2/P3 only.
+
+> **Superseded 2026-08-12 by the UC-1 resolution — the finding was correct and its premise
+> changed.** The reasoning above is sound *given a deferred P5*. Outcome (b) undefers P5: option
+> F ships as Phase 1B, so this PR buys P1 and P5b directly and there is no option F issue left to
+> be the closer. **Frontmatter is back to `closes: 7471`**, conditional on Phase 0.0 — see
+> `## Amendment 2026-08-12` for the reasoning, including the honest check against the existing
+> install, and Phase 0.8 for the revert branch if the gate fires. The finding is left standing
+> rather than deleted: it is why the flip had to be argued instead of assumed.
 
 **2. The premise went stale mid-session — re-measured 2026-08-11 19:10.**
 This plan was drafted against an 18:02 snapshot in which the marketplace checkout was destroyed.
@@ -1315,6 +1884,25 @@ mandatory workflow gates, so none is auto-applied. UC-1 in
 already carries the related question, and these cuts sharpen it: the C4 and ADR work are exactly
 the artifacts that get written twice if option F lands later.
 
+> **Adjudicated 2026-08-12 by the UC-1 resolution.** Option F lands **now**, not later, so the
+> "written twice" premise under the two largest cuts is gone. Dispositions:
+>
+> - **Cut Phase 4.3 (C4) — not carried.** Its decisive argument was that deleting a manifest key
+>   does not change the delivery topology. True then; false now. Phase 1B adds an external system,
+>   two edges with different payload sizes, and a changed payload boundary. Recorded in Phase 4's
+>   re-scope note so this is a reasoned rejection, not a review finding quietly dropped.
+> - **Cut ADR-183 / fold into ADR-017 — not carried.** The split was genuine (DHH for folding,
+>   code-simplicity against). It resolves against folding: the record now carries a *distribution*
+>   decision that ADR-017 never contemplated, so it is not "we finally did what we already
+>   decided."
+> - **The ordinal ritual, the vacuous AC6 grep, the AC24 tolerance, the P5a/P5b split — all
+>   carried and applied**, and they remain applied above. Nothing in this amendment weakens them.
+> - **The remaining cuts** (collapse Phase 0's probes, cut AC12, cut Phase 1.4, collapse the ACs,
+>   reduce the stopgap surfaces) are untouched by the resolution and stay as surfaced, unapplied
+>   taste findings. Note the amendment moves in the opposite direction on one of them: Phase 0
+>   gained 0.0 and 0.9 rather than collapsing — deliberately, because both exist to falsify
+>   something rather than to be thorough.
+
 ## Sharp Edges
 
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder
@@ -1368,3 +1956,29 @@ the artifacts that get written twice if option F lands later.
   git tags, not in files; the sentinel was the half-measure that kept a vestigial file-side copy
   alive. Anyone reading this as "Soleur abandoned tag-based versioning" has it backwards, which
   is why AC9 requires the amendment to say so in ADR-017 itself.
+- **A repo name can make an assertion vacuous.**
+  `plugins/soleur/test/operator-digest-workflow.test.sh` asserts
+  `plugin_marketplaces:.*jikig-ai/soleur`. Name the new marketplace repo `soleur-marketplace` and
+  `jikig-ai/soleur` is a **substring** of `jikig-ai/soleur-marketplace`, so the test passes
+  identically before and after the migration it is supposed to police. This is the third
+  vacuously-true assertion this plan has caught, after AC6's literal grep and AC24's
+  already-satisfied skill count. The tell is the same each time: the assertion matches a
+  *fragment* of the thing it means to pin.
+- **"~50 KB" and "~17 MiB" answer different questions, and only one of them is the payload.** The
+  marketplace repo is ~50 KB — that is what `marketplace add` clones. The plugin is materialised
+  separately through the `git-subdir` entry and measures ~17 MiB at the floor. A compliance
+  argument written against 50 KB would be wrong by 340×, and would be wrong in the direction that
+  flatters the plan. Carry both numbers with their referents attached.
+- **A gate whose failure mode is "proceed anyway" is not a gate.** Phase 0.0's halt is written to
+  stop the run and return the decision to the operator, and it explicitly forbids the tempting
+  degradation — quietly shipping Phase 1 + Phase 3 and calling it outcome (a). Outcome (a) is a
+  choice the operator can make; it is not a place a run lands by default when a measurement
+  disappoints.
+- **The marketplace manifest's `name` field, not the repo name, sets the plugin ID.** The cache
+  path is `cache/<marketplace name>/<plugin name>/<version>` — read off the measured control-group
+  entry, not documentation. So a repo named one thing and a manifest named another silently
+  produces a third ID, and every doc surface that named the repo will be wrong.
+- **A check in this repo cannot police a file in another repo.** Once the marketplace manifest
+  lives in a second repository, AC12's `--check` gate, `git grep`, and every CI job here are blind
+  to it. The plan says so rather than implying coverage it does not have — that blind spot is a
+  real cost of option F and belongs in the ADR's consequences beside the benefit.
