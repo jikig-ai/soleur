@@ -37,6 +37,9 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # make every arm below vacuous (an empty extraction compared against an empty extraction).
 TF="$DIR/modules/git-data-userdata/main.tf"
 BUDGET="$DIR/git-data-userdata-budget.sh"
+# Read by arm 1e: B1 lives in the rehearsal suite and re-reads the payload expression
+# out of main.tf, so the shape of ITS extractor is a parity concern.
+REHEARSAL="$DIR/git-data-runcmd-rehearsal.test.sh"
 
 if [[ ! -f "$TF" ]]; then
   printf '\n=== git-data-render-strip-parity ===\n\n  FAIL canonical render module not found at %s\n' "$TF"
@@ -61,14 +64,23 @@ printf '\n=== git-data-render-strip-parity ===\n\n'
 # change is exactly the kind of prose that gets written. Both files would then be compared on
 # their comments while their real expressions drifted apart. Latent today (no such comment
 # exists); stripped so it stays that way. (cq-assert-anchor-not-bare-token)
-extract_strip() { grep -vE '^[[:space:]]*(#|//)' "$1" | grep -oE 'git_data_rationale_strip[[:space:]]*=[[:space:]]*".*"' | head -1 | sed 's/^[^=]*=[[:space:]]*//'; }
+#
+# PARAMETERISED BY NAME because main.tf now declares TWO expressions (#7264): the payload
+# strip (`#!`-preserving, for the nine file()-bound scripts) and the template strip
+# (directive-preserving, for the cloud-init body). ADR-152 rules they are "deliberately not
+# shared, and must not be" — so each needs its OWN mirror check, and arm 1c below asserts
+# they have not been collapsed into one. The two names cannot cross-match:
+# `git_data_template_rationale_strip` does not contain `git_data_rationale_strip` as a
+# substring, which is why the template local is named with the qualifier in the MIDDLE and
+# not as a `_template` suffix.
+extract_strip() { grep -vE '^[[:space:]]*(#|//)' "$2" | grep -oE "$1"'[[:space:]]*=[[:space:]]*".*"' | head -1 | sed 's/^[^=]*=[[:space:]]*//'; }
 
-tf_strip="$(extract_strip "$TF")"
+tf_strip="$(extract_strip git_data_rationale_strip "$TF")"
 # The budget script emits its locals block through an UNQUOTED heredoc, so bash halves every
 # backslash on the way to the generated main.tf. Compare what terraform will actually see:
 # unescape the shell layer before comparing, rather than comparing the two source spellings
 # (which legitimately differ) or normalising both to nothing (which would compare no bytes).
-budget_raw="$(extract_strip "$BUDGET")"
+budget_raw="$(extract_strip git_data_rationale_strip "$BUDGET")"
 # Halve the doubled backslashes ONLY. Do NOT run this through `printf '%b'`: that would
 # interpret `\t`/`\n` as a real tab and newline, comparing the expression's MEANING instead of
 # the bytes terraform receives — and it would report two genuinely different expressions as
@@ -84,6 +96,107 @@ elif [[ "$tf_strip" == "$budget_strip" ]]; then
 else
   fail "strip expression DRIFTED between the two hand-mirrored maps" \
     "module: ${tf_strip} | budget(as terraform sees it): ${budget_strip}"
+fi
+
+# ── 1b. The TEMPLATE strip expression must be mirrored the same way ────────────────────
+tf_tpl="$(extract_strip git_data_template_rationale_strip "$TF")"
+budget_tpl_raw="$(extract_strip git_data_template_rationale_strip "$BUDGET")"
+budget_tpl="${budget_tpl_raw//\\\\/\\}"
+
+if [[ -z "$tf_tpl" ]]; then
+  fail "modules/git-data-userdata/main.tf declares a TEMPLATE strip expression" "no git_data_template_rationale_strip assignment found — the cloud-init body would ship unstripped"
+elif [[ -z "$budget_tpl_raw" ]]; then
+  fail "git-data-userdata-budget.sh mirrors the TEMPLATE strip expression" "no git_data_template_rationale_strip assignment found — the budget would measure a payload no host is given"
+elif [[ "$tf_tpl" == "$budget_tpl" ]]; then
+  pass "TEMPLATE strip expression is byte-identical in modules/git-data-userdata/main.tf and git-data-userdata-budget.sh"
+else
+  fail "TEMPLATE strip expression DRIFTED between the two hand-mirrored maps" \
+    "module: ${tf_tpl} | budget(as terraform sees it): ${budget_tpl}"
+fi
+
+# ── 1c. The two expressions must NOT be the same ───────────────────────────────────────
+#
+# ADR-152: "The expression is deliberately not shared, and must not be." The payload form
+# preserves `#!` and NOTHING else, which deletes `#cloud-config`; the template form preserves
+# any `#`-directive. Collapsing them is the exact regression that boots a host dark, and it
+# is a one-line edit away at all times.
+if [[ -z "$tf_tpl" || -z "$tf_strip" ]]; then
+  fail "both strip expressions are present to compare" "payload='${tf_strip}' template='${tf_tpl}'"
+elif [[ "$tf_strip" == "$tf_tpl" ]]; then
+  fail "the payload and TEMPLATE strip expressions have been COLLAPSED into one" \
+    "ADR-152 forbids sharing: the payload form deletes '#cloud-config'. Both are: ${tf_strip}"
+else
+  pass "payload and TEMPLATE strip expressions are distinct (ADR-152: deliberately not shared)"
+fi
+
+# ── 1d. The template strip must actually be APPLIED to the render ──────────────────────
+#
+# Declared-but-unreferenced is the silent form of this defect: the expression is present,
+# parity holds, and the render still ships unstripped. Mirrors the registry precedent's
+# `never REFERENCES` guard.
+# COMMENT-STRIPPED AND CO-LOCATED, because neither property is optional here.
+#
+# The first form of this arm was two INDEPENDENT unanchored greps over the raw file — one for
+# `replace(templatefile(`, one for the local's name. Both tokens appear in this module's own
+# rationale prose, so comment rot alone could satisfy it with the render unwrapped. And even
+# on stripped text, two independent greps assert only that both strings EXIST somewhere; they
+# never assert the close belongs to that open.
+#
+# This is the only arm anywhere that pins the strip's APPLICATION. The sibling arms assert the
+# expression is declared (1/1b), mirrored (1/1b) and distinct from the payload form (1c) —
+# every one of which stays green when the `replace(...)` wrap is deleted, because the render
+# harness every render-based suite uses carries its own copy and strips regardless. Deleting
+# one line in main.tf reverts what a git-data host boots from, on a ForceNew attribute, and
+# nothing else in CI can see it.
+_tf_code="$(grep -vE '^[[:space:]]*(#|//)' "$TF")"
+_open_ln="$(grep -nE '^[[:space:]]*rendered[[:space:]]*=[[:space:]]*replace\(templatefile\(' <<<"$_tf_code" | head -1 | cut -d: -f1)"
+if [[ -z "$_open_ln" ]]; then
+  fail "the render does NOT apply the template strip" \
+    "main.tf declares git_data_template_rationale_strip but `rendered` never opens replace(templatefile( — the stored payload is unstripped and the host boots the un-stripped document"
+elif ! grep -qE '^[[:space:]]*\}\)[[:space:]]*,[[:space:]]*local\.git_data_template_rationale_strip[[:space:]]*,' <<<"$(tail -n "+${_open_ln}" <<<"$_tf_code")"; then
+  fail "the render opens replace(templatefile( but no matching '}), local.git_data_template_rationale_strip,' follows it" \
+    "the wrap is applied with some OTHER expression, or the close drifted — either way the shipped payload is not the one this suite measures"
+else
+  pass "the render APPLIES the template strip: replace(templatefile(...), local.git_data_template_rationale_strip, \"\")"
+fi
+
+# ── 1e. B1's extractor must not be shadowed by a comment ───────────────────────────────
+#
+# git-data-runcmd-rehearsal.test.sh's B1 arm re-reads the strip expression OUT of main.tf and
+# recompiles it as a Python regex to mirror the render. Its original form was a bare
+# `re.search` over the raw file taking the FIRST match, so a comment naming an old expression
+# — exactly the prose this repo writes — would be extracted instead of the live assignment,
+# and B1's own `#!/bin/sh\n# a comment\n` probe passes either way. Wrong stripper, green
+# suite. The fixture below is the proof the anchored form is required: it prepends a
+# shadowing comment and asserts the live expression still wins.
+# THE SHIPPED EXTRACTOR, not Python's own regex semantics.
+#
+# The first form of this arm built its own shadowed fixture and asserted that Python's
+# ANCHORED `re.search` beats its UNANCHORED one. That is true of Python whatever the rehearsal
+# suite actually contains, so the arm could never fail while still counting toward the floor —
+# a tautology wearing a guard's clothes. What matters is which form the rehearsal SHIPS.
+#
+# B1 re-reads the payload strip expression out of main.tf and recompiles it to mirror the
+# render. Unanchored, a COMMENT naming an old expression — exactly the prose this repo writes —
+# is extracted instead of the live assignment, and B1's own `#!/bin/sh\n# a comment\n` probe
+# passes either way: wrong stripper, green suite.
+_b1_anchored=$(grep -cF "re.search(r'^\\s*git_data_rationale_strip" "$REHEARSAL" 2>/dev/null || true)
+_b1_bare=$(grep -cE "re\\.search\\(r'git_data_rationale_strip" "$REHEARSAL" 2>/dev/null || true)
+if [[ ! -f "$REHEARSAL" ]]; then
+  fail "the rehearsal suite is readable" "expected it at $REHEARSAL"
+elif [[ "$_b1_anchored" -ge 1 && "$_b1_bare" -eq 0 ]]; then
+  pass "the rehearsal's B1 extractor is line-anchored, so a shadowing comment cannot displace the live expression"
+else
+  fail "the rehearsal's B1 extractor is not line-anchored (anchored=${_b1_anchored} bare=${_b1_bare})" \
+    "an unanchored re.search takes the FIRST match, so a comment naming an old expression is mirrored instead of the live one — and B1's own probe passes either way"
+fi
+
+# And the live form must actually be the anchored one in the rehearsal suite.
+if [[ -f "$REHEARSAL" ]] && grep -qF "re.search(r'^\\s*git_data_rationale_strip" "$REHEARSAL"; then
+  pass "git-data-runcmd-rehearsal.test.sh uses the anchored, line-start extractor"
+else
+  fail "git-data-runcmd-rehearsal.test.sh does NOT use the anchored extractor" \
+    "a comment naming an old expression would shadow the live one (B1 mirrors the wrong strip)"
 fi
 
 # ── 2. Downstream-parser invariants (plugins/soleur/test/cloud-init-user-data-size.test.ts) ─
@@ -138,7 +251,8 @@ fi
 _cont_hits="$(awk 'prev ~ /\\[ \t]*$/ && $0 ~ /^[ \t]*#/ {printf "%s:%d\n", FILENAME, NR} {prev=$0}' \
   "$DIR"/git-data-bootstrap.sh "$DIR"/git-data-provision.sh "$DIR"/git-data-transport-wrapper.sh \
   "$DIR"/git-data-remove.sh "$DIR"/git-data-gc.sh "$DIR"/git-data-pre-receive-placeholder.sh \
-  "$DIR"/git-data-gc.service "$DIR"/git-data-gc-failure.service "$DIR"/git-data-gc.timer 2>/dev/null || true)"
+  "$DIR"/git-data-gc.service "$DIR"/git-data-gc-failure.service "$DIR"/git-data-gc.timer \
+  "$DIR"/cloud-init-git-data.yml 2>/dev/null || true)"
 if [[ -z "$_cont_hits" ]]; then
   pass "no comment sits directly after a line continuation in any injected payload"
 else
@@ -238,11 +352,11 @@ rm -f "$probe"
 
 # ── Minimum-cardinality floor ──────────────────────────────────────────────────────────
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 9 ]]; then
+if [[ "$_ran" -lt 15 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 9.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 15.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 9)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 15)\n' "$_ran"
 fi
 
 printf '\n=== git-data-render-strip-parity: %d passed, %d failed ===\n\n' "$passes" "$fails"

@@ -31,7 +31,18 @@
 # not pay for it. Hetzner's cap is a hard 32,768 B ForceNew gate and comments were 61% of the
 # raw payload; without this, every safety comment competes with a fail-closed invariant for
 # space, which on a host where a green apply and a dark host are indistinguishable is the
-# wrong trade. cloud-init-git-data.yml itself is NOT stripped.
+# wrong trade.
+#
+# THE TEMPLATE IS NOW STRIPPED TOO, BY A SECOND AND DELIBERATELY DIFFERENT EXPRESSION
+# (#7264). ADR-152 rules that these two expressions are "deliberately not shared, and must
+# not be", and gives the reason: the nine payloads have no `#`-directive but do have a
+# shebang, so preserving `#!` alone is correct for them — and WRONG for a cloud-init
+# template, because `#cloud-config` is a directive that is a comment by syntax. Stripping it
+# does not fail: the apply succeeds, the host boots, and cloud-init never recognises the
+# payload, so none of it runs — the dark-host indistinguishability ADR-149 names, reached
+# through the mechanism ADR-152 introduced. `git_data_template_rationale_strip` below is the
+# registry's expression (zot-registry.tf), which preserves `#!` AND any `#`-directive by
+# construction rather than by enumeration. Do not merge the two.
 #
 # ANCHORED AT LINE START, and `#!` is preserved by construction. `${var#...}` and other
 # mid-line `#` are untouched because the match must begin the line; a `#`-anywhere rule
@@ -46,7 +57,8 @@
 # physical line (its var parser is line-based). git-data-userdata-budget.sh mirrors this
 # expression byte-for-byte; git-data-render-strip-parity.test.sh is what keeps them equal.
 locals {
-  git_data_rationale_strip = "/(?m)^[ \t]*#([^!\n][^\n]*)?\n/"
+  git_data_rationale_strip          = "/(?m)^[ \t]*#([^!\n][^\n]*)?\n/"
+  git_data_template_rationale_strip = "/(?m)^[ \t]*#([ \t][^\n]*)?\n/"
 }
 
 # THE DOPPLER ARCH PAIR IS DERIVED HERE, and that location is the point.
@@ -68,7 +80,7 @@ locals {
 }
 
 locals {
-  rendered = templatefile("${path.module}/../../cloud-init-git-data.yml", {
+  rendered = replace(templatefile("${path.module}/../../cloud-init-git-data.yml", {
     git_data_bootstrap               = replace(file("${path.module}/../../git-data-bootstrap.sh"), local.git_data_rationale_strip, "")
     git_data_pre_receive_placeholder = replace(file("${path.module}/../../git-data-pre-receive-placeholder.sh"), local.git_data_rationale_strip, "")
     # The FIXED provision forced-command wrapper (git init --bare), delivered to
@@ -142,5 +154,5 @@ locals {
     # shared Better Stack source 2457081. The rehearsal diverges here BY DESIGN: it is
     # what lets the capture script isolate a rehearsal boot's rows from prod's.
     host_name = var.host_name
-  })
+  }), local.git_data_template_rationale_strip, "")
 }
