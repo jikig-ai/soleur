@@ -591,6 +591,9 @@ fi
 # (`cq-assert-anchor-not-bare-token`).
 INCIDENT_SKILL="${SKILL_DIR}/SKILL.md"
 LINEAR_SKILL="${REPO_ROOT}/plugins/soleur/skills/linear-fetch/SKILL.md"
+# The 4th gate ADR-179's negative branch names. It carries the preflight but nothing pinned
+# it, and its halts carried no marker — so C10 covered 3 of the 4 skills the ADR credits.
+TRIGGER_SKILL="${REPO_ROOT}/plugins/soleur/skills/trigger-cron/SKILL.md"
 
 # 18a — coupling (preserved): the bare literal appears exactly 1x in each site.
 ANCHOR='${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-sentinel.sh'
@@ -1021,7 +1024,8 @@ t22_on_stderr=""
 t22_uncovered=""
 t22_specs="${INCIDENT_SKILL}:SOLEUR_INCIDENT_HALT:plugin-root-unverified,sentinel-unreadable,draft-alloc-failed,invalid-calendar-date,mttr-transposed,mttd-transposed
 ${LEGAL_SKILL}:SOLEUR_LEGAL_GENERATE_HALT:plugin-root-unverified,sentinel-unreadable,draft-alloc-failed
-${LINEAR_SKILL}:SOLEUR_LINEAR_FETCH_HALT:plugin-root-unverified,scrubber-unreadable,scrubber-nonzero-exit,redaction-empty-output,redaction-ineffective"
+${LINEAR_SKILL}:SOLEUR_LINEAR_FETCH_HALT:plugin-root-unverified,scrubber-unreadable,scrubber-nonzero-exit,redaction-empty-output,redaction-ineffective
+${TRIGGER_SKILL}:SOLEUR_TRIGGER_CRON_HALT:plugin-root-unverified,producer-missing"
 
 while IFS= read -r t22_spec; do
   [[ -n "${t22_spec}" ]] || continue
@@ -1079,7 +1083,7 @@ while IFS= read -r t22_spec; do
 done < <(printf '%s\n' "${t22_specs}")
 
 if [[ -z "${t22_missing}" && -z "${t22_on_stderr}" && -z "${t22_uncovered}" ]]; then
-  echo "PASS: Test 22: all 11 fail-closed halts across the 3 gates emit a distinct SOLEUR_*_HALT reason= marker, on STDOUT, from an executable line — and each gate's halt count is covered by its marker count"
+  echo "PASS: Test 22: all 16 fail-closed halts across the 4 gates (incident 6, legal-generate 3, linear-fetch 5, trigger-cron 2) emit a distinct SOLEUR_*_HALT reason= marker, on STDOUT, from an executable line — and each gate's halt count is covered by its marker count"
   PASS=$((PASS + 1))
 else
   [[ -n "${t22_missing}" ]] && echo "FAIL: Test 22: fail-closed halt with no SOLEUR_* marker EMITTED from an executable line at:${t22_missing} — a marker that appears only in prose or a comment is documentation, and a halt nobody can see in telemetry is indistinguishable from a run that never happened"
