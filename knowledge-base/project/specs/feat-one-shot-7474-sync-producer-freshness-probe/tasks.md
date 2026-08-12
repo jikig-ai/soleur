@@ -103,7 +103,18 @@ Three, each recorded where it happened rather than folded silently into a checke
       `docs/pages/getting-started.njk` callout, plus
       `feature-request-plugin-update-surfaces-install-divergence.md` for the upstream half.
 - [x] **5.3** #7474 assigned to **Phase 4: Validate + Scale**.
-- [ ] **5.4** `bash scripts/test-all.sh` — running; queued behind two sibling worktree runs.
+- [x] **5.4** `bash scripts/test-all.sh` → `rc=1`, **297/301 suites passed** (297 passed, 1
+      failed, 0 killed, 3 skipped as not-relevant-to-this-diff). The single failure is
+      `plugins/soleur`, from two `changelog.js data file` cases that fetch the GitHub Releases
+      API and timed out at 5000 ms (`[github.js] GitHub API failed … This operation was
+      aborted`). Confirmed an environment flake three ways, as the `SIBLING_RUN_DETECTED` /
+      `LOCK_CONTENDED_PROCEEDING` banners require: (a) isolated re-run of
+      `plugins/soleur/test/changelog-data.test.ts` → **3 pass, 0 fail**; (b) `ci.yml` green on
+      `main`; (c) the diff touches no `_data/` or `changelog` path, so it cannot reach that
+      code. The run proceeded past a 900 s lock wait with two sibling worktrees running the
+      same suite, which is the documented interleaving condition.
+      Epilogue also records `apps/web-platform/infra/ is NOT covered above (diff does not
+      touch it)` — correct for this diff.
 - [ ] **5.5** PR body: `Closes #7474`, links 5.1-5.3, renders `decision-challenges.md`.
 
 ## Mutation matrix — every guard driven RED, then restored GREEN
