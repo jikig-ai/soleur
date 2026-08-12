@@ -1168,9 +1168,12 @@ if want_scripts; then
   # and freeze-lock.test.sh had never gated CI.
   for f in plugins/soleur/test/*.test.sh plugins/soleur/skills/*/test/*.test.sh plugins/soleur/scripts/*.test.sh .claude/hooks/*.test.sh .claude/hooks/lib/*.test.sh apps/cla-evidence/scripts/*.test.sh apps/web-platform/scripts/*.test.sh apps/web-platform/scripts/lib/*.test.sh scripts/lib/*.test.sh; do
     [[ -f "$f" ]] || continue
-    # RELEVANCE-GATED (ADR-181), ~429 s — the only suite this loop registers whose cost justifies
-    # a predicate. A per-file `if` rather than a lookup table: bash 3.2 has no associative arrays
-    # and one gated member does not earn a mapping.
+    # RELEVANCE-GATED (ADR-181) — declined on 96% of recent commits, and the only suite this loop
+    # registers whose cost justifies a predicate. The justification is the SKIP RATE, not a
+    # wall-clock figure: see the measurement caveat in scripts/lib/test-relevance-paths.sh, where
+    # three reps of an unchanged tree spanned 23-91 s under sibling load. A per-file `if` rather
+    # than a lookup table: bash 3.2 has no associative arrays and one gated member does not earn a
+    # mapping.
     #
     # The label is written LITERALLY, not as "$f". skip_suite's contract is "$1 = label (must
     # match the label the suite would have run under)" and this loop's label IS the path, so the
@@ -1241,7 +1244,8 @@ fi
 # the suite, the reason, and the exact re-run command. Reading the floor as coverage of a run
 # that never happened is the same green-that-is-not-evidence shape ADR-181 closes one level up.
 #
-# RELEVANCE-GATED (ADR-181), ~95 s. `run_suite … bash .github/scripts/test/run-all.sh` keeps its
+# RELEVANCE-GATED (ADR-181) — declined on 56% of recent commits. `run_suite … bash
+# .github/scripts/test/run-all.sh` keeps its
 # command shape byte-for-byte because scripts/lint-orphan-test-suites.sh's REQUIRED_RUNNERS check
 # anchors on the COMMAND, not the label.
 if want_scripts; then

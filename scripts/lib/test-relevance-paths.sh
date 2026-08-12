@@ -122,9 +122,23 @@ CF_TUNNEL_BATTERY_PATHS=(
   "scripts/lib/test-relevance-paths.sh"                      # THIS FILE — see the self-reference note above
 )
 
-# plugins/soleur/test/c4-from-components.test.sh (test-all.sh, scripts shard) — ~429 s, the most
-# expensive suite the local gate still ran unconditionally before this array existed.
-# Source of truth: the suite's own header — PRODUCER=, FIXTURES=, and the sourced test-helpers.sh.
+# plugins/soleur/test/c4-from-components.test.sh (test-all.sh, scripts shard) — declined on 96%
+# of recent commits. Source of truth: the suite's own header — PRODUCER=, FIXTURES=, and the
+# sourced test-helpers.sh.
+#
+# THE DECISION VARIABLE IS THE SKIP RATE, NOT A WALL-CLOCK FIGURE, and that is a measurement
+# result rather than a preference. #7494 was filed quoting 429 s for this suite; three consecutive
+# reps of an UNCHANGED tree measured 23 s / 34 s / 91 s, taken while two sibling test-all.sh runs
+# from another worktree were active. The spread is wider than most effects anyone would compare,
+# so no honest saving figure is available from this machine — while the skip rate is a
+# deterministic `git log` replay that load cannot touch. Re-derive it with:
+#   for sha in $(git log --format=%H -80 origin/main); do
+#     git show --pretty=format: --name-only "$sha" > /tmp/b
+#     armed=0; for p in "${C4_PRODUCER_PATHS[@]}"; do grep -qF -- "$p" /tmp/b && { armed=1; break; }; done
+#     [[ $armed == 0 ]] && echo skip
+#   done | wc -l
+# Do NOT restate a per-run saving here or in the ADR: cq-ac-must-not-depend-on-concurrent-sessions
+# applies to the justification as much as to an acceptance criterion.
 #
 # WHY THIS SET IS CLOSED where the two batteries above are not: the suite NEVER reads the real
 # tree. seed() builds throwaway roots under $TMPDIR from $FIXTURES and the producer takes its root
@@ -157,8 +171,12 @@ C4_PRODUCER_PATHS=(
   "scripts/lib/test-relevance-paths.sh"                    # THIS FILE — see the self-reference note above
 )
 
-# .github/scripts/test/run-all.sh (test-all.sh) — ~95 s. A nested RUNNER, so the predicate covers
-# what its fixture suites depend on, not just the runner.
+# .github/scripts/test/run-all.sh (test-all.sh) — declined on 56% of recent commits. A nested
+# RUNNER, so the predicate covers what its fixture suites depend on, not just the runner.
+#
+# Same measurement caveat as the block above, and it cuts the OTHER way here: #7494 quoted 95 s,
+# while two reps under sibling load measured 163 s and 205 s. Neither figure is trustworthy on a
+# contended machine; the 56% is a deterministic replay and is the number this gate is justified by.
 #
 # apps/web-platform/infra IS LOAD-BEARING AND WAS NOT OBVIOUS. test-infra-suite-registration.sh
 # derives its expected set from `git ls-files "${INFRA_PREFIX}/*.test.sh"` against the REAL tree, so

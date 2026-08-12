@@ -895,6 +895,8 @@ Naming a floor that cannot fire is how a refusal quietly becomes permanent. The 
 counterfactual: **41/80 = 51 %** of commits touch no `apps/web-platform/` file. So the follow-up is
 concrete work, not a wait:
 
+**Filed as #7498.**
+
 > Relocate the repo-wide parity guards into a dedicated vitest **project** with its own explicit
 > `include:` glob — making the subset *structural* rather than grep-heuristic — then gate the
 > remaining app-local project on `apps/web-platform`. Measured ceiling: 51 % skip against the
@@ -1084,3 +1086,77 @@ terminal output*.
   epilogue, not the helpers.
 - **#7484 (advisory-lock contention), #7402 (glob blind spots), #7429 (KILLED through wrappers).**
   Acknowledged, not folded in.
+
+---
+
+## Verification Addendum — 2026-08-12 (implementation)
+
+Append-only. The plan body above records what was planned; this records what measurement changed.
+Three corrections, two of them to load-bearing claims the plan asserted as facts.
+
+### C1 — AC3's literal command is unsatisfiable by construction; the AC is amended
+
+AC3 required that "the c4 timing output contains `status=ok` and `relationships=3`". Run literally
+against a real invocation, **both are ABSENT** — and the suite is nonetheless rendering correctly.
+`c4-from-components.test.sh` captures the producer's output into shell variables
+(`OK_OUT="$(run_producer "$OK_ROOT")"`) and asserts against those; the markers never reach the
+suite's own stdout. Grepping the suite's stdout for them can therefore only ever fail.
+
+**Amended AC3.** The evidence that the measurement was not taken on the degraded path is that the
+suite's own two green-arm assertions PASS — `assert_contains "$OK_OUT" "status=ok"` and
+`assert_contains "$OK_OUT" "relationships=3"` — together with its guarded degrade branch
+(`if [[ "$OK_OUT" == *"reason=likec4-unavailable"* ]]`) not having fired. That is strictly stronger
+than a stdout grep: it asserts the markers against the producer's actual output rather than against
+whatever the harness happened to echo. Verified: 14/14 PASS, `rc=0`, no `reason=likec4-unavailable`
+anywhere in the run.
+
+Recorded rather than quietly normalised, per the rule that an AC's quoted command is part of its
+contract: satisfying a *looser* variant without saying so is how an unverified claim ships.
+
+### C2 — the plan's wall-clock figures are unsupported in BOTH directions; no saving is claimed
+
+The plan's Overview table, its expected-saving distribution (~465 s/run), and its array comments
+all carried 429 s for the c4 suite and 95 s for the `.github` runner, inherited from #7494's table.
+Re-measured on this machine:
+
+| Suite | Plan / issue | Measured, 3 and 2 reps of an UNCHANGED tree |
+|---|---:|---|
+| `plugins/soleur/test/c4-from-components.test.sh` | ~429 s | **23 s / 34 s / 91 s** |
+| `.github/scripts/test/run-all.sh` | ~95 s | **163 s / 205 s** |
+
+Two sibling `test-all.sh` runs from `feat-one-shot-7471-plugin-delivery-path` were active
+throughout (ownership resolved via `/proc/<pid>/cwd`, not inferred from a `pgrep` count). The
+run-to-run spread exceeds the effects being compared, so **this machine cannot resolve the cost**,
+and the deviation is not in one direction — the first figure is ~5-18x too high and the second
+~2x too low.
+
+**Consequence: the "~465 s per local full-gate run" headline is withdrawn**, from the plan, the
+array comments, `test-all.sh`, and the ADR addendum. The gates are justified by their **skip
+rates** — 96% and 56%, deterministic `git log` replays unaffected by load, re-derived at
+implementation time with the runtime matcher's own semantics against the predicates *as declared*.
+`cq-ac-must-not-depend-on-concurrent-sessions` is applied to the justification, not only to an AC.
+No AC failed as a result: the plan had already, correctly, refused to gate any AC on wall-clock.
+
+### C3 — the derived dispatch floor's regex was wrong as specified (`[A-Z_]+`)
+
+Phase 4b prescribed `grep -cE '_diff_touches "\$\{[A-Z_]+\[@\]\}"'`. Run against the wired runner it
+returned **3, not 4**: `C4_PRODUCER_PATHS` contains a digit, and a digit-free character class skips
+it silently. The failure shape is the worst available for a floor — it under-counts `want`, so the
+floor is satisfied by a shorter list and passes over precisely the gate it cannot see. Corrected to
+`[A-Z0-9_]+` and recorded in ADR-181's addendum. Caught only by running the check the plan
+prescribed rather than reading it (the "measure the remedy, do not adopt it" rule).
+
+### C4 — the D3 counterfactual moved with the measurement window
+
+The plan recorded 41/80 = 51% of commits touching no `apps/web-platform/` file. Re-derived after
+rebasing onto `origin/main`, it is **39/80 = 48%** — the 80-commit window shifted by the two
+commits the rebase brought in. Independently re-derived at 39/80 by the CONCUR reviewer. #7498
+carries 48%, and the conclusion is unchanged: the trigger is alive and the refusal is sized.
+
+### Mutation matrices — 10/10
+
+Both matrices executed with each row proved to LAND (non-empty diff vs pristine before running the
+guard), required to exit non-zero **with its own named message** rather than merely non-zero, then
+reverted with a re-green check. M1-M4 and N1-N6 all passed; tree clean afterwards; both guards
+green. N4 confirmed the plan's soundness/completeness split empirically — under a trimmed
+`C4_PRODUCER_PATHS` the linter still reported `orphan test suites: none` while the harness reddened.
