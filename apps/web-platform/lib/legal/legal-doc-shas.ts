@@ -1,6 +1,6 @@
 /**
  * SHA-256 hashes of each legal document's canonical source file. These
- * are compared at build/CI time by `scripts/check-tc-document-sha.sh` to
+ * are compared at build/CI time by `apps/web-platform/scripts/check-tc-document-sha.sh` to
  * detect content changes that require a TC_VERSION bump assessment.
  *
  * When you edit a legal document (docs/legal/*.md), regenerate the hash:
@@ -12,19 +12,19 @@
  */
 export const LEGAL_DOC_SHAS: Readonly<Record<string, string>> = {
   "acceptable-use-policy":
-    "eb8f4dd62418b7d58d43200bb45171e3113c323fdd44614c1412851aed49028a",
+    "133508693d94a12af2cf71a585de24123b0c0a2039fbd7418d868aad59165683",
   "cookie-policy":
-    "3c3d57a9227069bccf2c7f671b389d2f2ac79980481647fb029793a957020cc8",
+    "e2ac3ba184bf3e29d94a5702e48b85447748d749f28c00664ee94b170b84417e",
   "corporate-cla":
     "d41147d94cf53c9340cdf39d751b91b4140991ddbab092451308a1398eb00826",
   "data-protection-disclosure":
-    "6864fac371a4083b9ef3ba4fd959692a74de78c56332e1302d2267a12262b844",
+    "b011cd43df9a81f20ff417ff7ef7c4c8be9b9b3d6e4ecb10d572c907a5016dea",
   "disclaimer":
-    "f02375aadf0b0aeb6f60718bbca3f75135bb6a949b2cded1bbfabbf704b117c2",
+    "ea66cca071771aad58b151ad022649326bcedf8b734d6afcffcd4ce1bcb44d7e",
   "gdpr-policy":
-    "56f8021cc0fabf3806131d3ea4370f18189b964b0f8bbda54bd45dd3b43c5ed0",
+    "912e5759d6cb8e3ec54838c9e1f687c2647b701ae9ccab6693a800669a8a3e94",
   "individual-cla":
     "8d773e4331fd82e4b27a506eac2f968ad319adcef624d8f6115c0b71deb5e538",
   "privacy-policy":
-    "dc2df0ce37ad1bbec032b8a79ebba3a81152ef342121bacb2789976dab8c4495",
+    "8efeaa0e9808c9621a70f5727c27b3e4286afa92abf602ab524e9ee0c4a5f6d0",
 };

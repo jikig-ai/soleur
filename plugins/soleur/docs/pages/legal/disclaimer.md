@@ -8,7 +8,7 @@ permalink: legal/disclaimer/
 <section class="page-hero">
   <div class="container">
     <h1>Disclaimer</h1>
-    <p>Effective February 20, 2026 | Last Updated August 9, 2026</p>
+    <p>Effective February 20, 2026 | Last Updated August 11, 2026</p>
   </div>
 </section>
 
@@ -20,7 +20,7 @@ permalink: legal/disclaimer/
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** August 9, 2026 *(Scope clarification added 9 August 2026: the distinction between plugin-local and operator-assisted processing was previously implicit, which left these sections reading as statements about every configuration.)* Previous: March 2, 2026
+**Last Updated:** August 11, 2026 *(Section 3.1 no longer excludes direct damages. Section 3.2's cap is now the greater of what you paid us or EUR 100, replacing a cap of zero that assumed the platform is free — it is not, for Web Platform subscribers. Both now match Terms Section 11.)* Previous: August 9, 2026 *(Scope clarification added 9 August 2026: the distinction between plugin-local and operator-assisted processing was previously implicit, which left these sections reading as statements about every configuration.)* Previous: March 2, 2026
 
 This Disclaimer / Limitation of Liability ("Disclaimer") governs your use of Soleur, a Company-as-a-Service platform provided as a source-available Claude Code plugin (the "Platform," "Software," or "Service"), operated by Jikigai ("we," "us," or "our"). By accessing or using the Platform, you acknowledge that you have read, understood, and agree to be bound by this Disclaimer.
 
@@ -94,7 +94,6 @@ Business plans, strategies, analyses, and recommendations produced by the Platfo
 
 TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL JIKIGAI, ITS CONTRIBUTORS, MAINTAINERS, AFFILIATES, OR LICENSORS BE LIABLE FOR ANY:
 
-- **Direct damages** arising from your use of or inability to use the Platform;
 - **Indirect, incidental, special, consequential, or punitive damages**, including but not limited to loss of profits, loss of data, loss of business opportunity, loss of goodwill, or business interruption;
 - **Damages arising from AI-Generated Output**, including but not limited to damages caused by errors in generated code, inaccurate legal documents, flawed business plans, or any other AI-generated content;
 - **Damages arising from the execution of commands**, file modifications, or system changes performed by the Platform's AI agents on your local system;
@@ -104,7 +103,7 @@ WHETHER BASED ON WARRANTY, CONTRACT, TORT (INCLUDING NEGLIGENCE), STRICT LIABILI
 
 ### 3.2 Aggregate Liability Cap
 
-To the extent that any jurisdiction does not allow the exclusion or limitation of liability as set forth above, our total aggregate liability to you for all claims arising out of or related to your use of the Platform shall not exceed the amount you paid to us for the Platform in the twelve (12) months preceding the claim. **As the Platform is provided free of charge, this amount is zero (EUR 0.00 / USD $0.00).**
+To the extent that any jurisdiction does not allow the exclusion or limitation of liability as set forth above, our total aggregate liability to you for all claims arising out of or related to your use of the Platform shall not exceed **the greater of (a) the amount you paid us (if any) in the twelve (12) months preceding the claim, or (b) one hundred euros (EUR 100)**. This is the same cap as Terms and Conditions Section 11.2, which prevails in the event of any inconsistency.
 
 ### 3.3 EU/EEA Consumer Protections
 
@@ -222,7 +221,7 @@ Soleur is a source-available project maintained by Jikigai, a company incorporat
 
 If you have questions about this Disclaimer, you may contact us through:
 
-- **Email:** <legal@jikigai.com>
+- **Email:** legal@jikigai.com
 - **GitHub:** [github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur)
 - **Website:** [soleur.ai](https://soleur.ai)
 

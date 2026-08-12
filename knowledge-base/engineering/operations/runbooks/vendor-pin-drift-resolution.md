@@ -145,4 +145,4 @@ When `gdpr-gate.sh` emits `POSTURE_FAIL: gdpr-gate rules >90 days stale` to STDO
    - Otherwise dispatch via `/soleur:trigger-cron` (`cron/content-vendor-drift.manual-trigger`).
 6. The current regulated PR ships per its own gate; the staleness-driven follow-up is a separate work cycle with its own review and merge. The Active Compliance Items row tracks both.
 
-Precedent: `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md` uses the same operator-acknowledged-write pattern for credential drift.
+Precedent: `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md` uses the same operator-acknowledged-write pattern for credential drift.

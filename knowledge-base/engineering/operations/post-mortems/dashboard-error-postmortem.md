@@ -400,4 +400,4 @@ GitHub issues to file so this cannot recur (logs, tests, alerts, automation, doc
 - AGENTS.md `hr-weigh-every-decision-against-target-user-impact`
 - `apps/web-platform/lib/supabase/client.ts` — module-load throw site (now wrapped)
 - `apps/web-platform/infra/ci-deploy.sh` — canary probe set (now layered)
-- `knowledge-base/engineering/ops/runbooks/canary-probe-set.md` — canary contract
+- `knowledge-base/engineering/operations/runbooks/canary-probe-set.md` — canary contract

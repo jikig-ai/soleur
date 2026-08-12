@@ -16,6 +16,19 @@ You are the **implementation orchestrator** for standalone `/work` and one-shot 
 See `plugins/soleur/lib/workflow-fidelity.ts` (`IMPLEMENTATION_TAIL`) and Phase 4 Invocation Mode below.
 <!-- work-anti-bypass-protocol:end -->
 
+**"PROPAGATED" IS A MEASUREMENT ACROSS EVERY SITE ASSERTING THE CLAIM — NOT AN OBSERVATION ABOUT
+THE ONE YOU EDITED.** Grep for the OLD claim after correcting it, never for the new one: a residual
+count over the new text is structurally blind to the sites still carrying the old. A superseded
+position survives precisely where prose review does not look — machine-readable frontmatter, an
+operative conclusion far from the edited paragraph, and a DIFFERENT document citing the old
+position as its own contrast case — so a corrected document containing an uncorrected field clears
+both the gates and the review. **Why:** #7349 — a legal record's controllership was corrected in
+prose while its YAML `controller:` field FIFTEEN LINES ABOVE still asserted the superseded
+position, along with the operative balancing conclusion and a sibling document; the signed-off
+audit had already recorded that propagation as DISCHARGED. Same shape as the measurement rule
+below, one level up: that rule protects a number's freshness, this one protects a correction's
+reach. See `knowledge-base/project/learnings/2026-08-12-every-blocking-finding-was-the-defect-class-the-pr-existed-to-close.md`.
+
 **VERIFY A MEASUREMENT ONCE, BEFORE IT PROPAGATES.** When a plan's sweep will write the same
 measured fact into more than one file, verify it at the granularity you are about to CLAIM it
 — before the first write, not after the last. A false measurement does not stay where you put
