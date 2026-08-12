@@ -300,8 +300,24 @@ only unrelated Sentry/Hetzner rows.
    coupling being relied upon, and its failure message names the fix.
 4. **The claim-class sweep is complete.** Re-run the bounding grep
    (`git grep -nl "step-6 registry-host-replace\|merged inert\|INERT UNTIL A PROVISIONING"` over
-   `knowledge-base/ apps/ scripts/`, excluding both archive trees). Expected survivors: exactly
-   `scripts/followthroughs/zot-log-channel-7440.sh`, the documented Acknowledge.
+   `knowledge-base/ apps/ scripts/`, excluding both archive trees).
+
+   **[Amended 2026-08-12 during /work — the original expectation was wrong.]** This scenario
+   originally read "expected survivors: exactly `scripts/followthroughs/zot-log-channel-7440.sh`".
+   That was authored before the retraction wording existed, and a *file-level* grep structurally
+   cannot tell a live claim from prose that QUOTES the claim it retracts — so the correct check is
+   line-level inspection of each survivor, not a survivor count. Measured result: **6 files, zero
+   live stale claims** —
+
+   | Survivor | What matched | Verdict |
+   |---|---|---|
+   | `model.c4`, `model.likec4.json` | inside the `is RETRACTED 2026-08-12 (#7455)` sentence | correct — the file's own annotation style |
+   | `betterstack-log-query.md` | `was **merged inert**`, followed immediately by the delivery timestamp | correct — true past tense |
+   | this plan, this `tasks.md` | the feature's own planning artifacts | documented carve-out |
+   | `scripts/followthroughs/zot-log-channel-7440.sh` | operator-excluded probe | documented Acknowledge |
+
+   This is the inverse of the known "grep assertion false-matches its own comments" class: a
+   *correction* sweep false-fires on the correction's own quotation of what it corrected.
 
 ## Risks & Mitigations
 

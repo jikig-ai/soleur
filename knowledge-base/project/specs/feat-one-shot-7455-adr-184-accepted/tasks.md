@@ -55,8 +55,21 @@ Branch: `feat-one-shot-7455-adr-184-accepted` · Tracker: #7455 (Ref only — do
 - [ ] 4.6 AC8: `c4-model-freshness.test.sh` exits 0
 - [ ] 4.7 AC10: `git diff origin/main...HEAD --name-only` touches no `apps/web-platform/infra/`,
       no `scripts/followthroughs/`, no `.tf`
-- [ ] 4.8 Claim-class sweep re-run; expected sole survivor is
-      `scripts/followthroughs/zot-log-channel-7440.sh` (documented Acknowledge)
+- [x] 4.8 Claim-class sweep re-run. **AC amended 2026-08-12 — the original expectation ("exactly
+      one survivor") was written before the retraction wording existed and was wrong.** A
+      file-level grep cannot distinguish a live claim from prose *quoting* the claim it retracts,
+      so the check is now line-level: 6 files survive, and each match was inspected —
+      - `model.c4` + `model.likec4.json` (generated mirror): match sits inside the
+        `is RETRACTED 2026-08-12 (#7455)` sentence, quoting the clause it retracts. This is the
+        file's own annotation style.
+      - `betterstack-log-query.md`: matches `was **merged inert**`, a true past-tense statement
+        immediately followed by the delivery timestamp.
+      - this plan + this tasks.md: the feature's own planning artifacts (documented carve-out).
+      - `scripts/followthroughs/zot-log-channel-7440.sh`: the documented Acknowledge.
+
+      Zero live stale claims. Same false-positive class as
+      `2026-06-17-grep-assertion-over-script-body-false-matches-own-comments`, inverted: a
+      correction grep false-*fires* on the correction's own quotation of what it corrected.
 - [ ] 4.9 Full-suite gate at its usual `/work` point; no suite regresses
 
 ## Phase 5 — Follow-up to file (not folded in)
