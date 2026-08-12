@@ -84,11 +84,10 @@ CONTROL_MARKER="SOLEUR_ZOT_DISK"
 ZOT_ONLY_TOKEN="zotregistry.dev/zot/v2/pkg/api"
 HOST_TOKEN="${ZOT_LOG_7440_HOST:-soleur-registry}"
 
-# The boot_id observed on 2026-08-11 while authoring this change, i.e. the boot that PRE-DATES
-# delivery. A SOLEUR_ZOT_DISK row still reporting this value means the host has not been replaced
-# since, so the cloud-init carrying the shipper cannot have been delivered. Any other value means a
-# provisioning event happened — which is what separates "wait" from "act" below.
-BASELINE_BOOT_ID="${ZOT_LOG_7440_BASELINE_BOOT_ID:-bc135d5b-d509-41c4-8129-9181421e845c}"
+# NOTE: the pre-delivery boot_id baseline that used to live here is GONE (#7444 R20). F-7
+# replaced boot_id drift with the presence of the log_shipper_post_fail= key as the delivery
+# discriminator, which left the constant dead — and a dead constant with five lines of rationale
+# describing it as the wait/act discriminator reads as though it were still load-bearing.
 
 WINDOW="${ZOT_LOG_7440_WINDOW:-30m}"
 WINDOW_MIN="${ZOT_LOG_7440_WINDOW_MIN:-30}"
@@ -156,10 +155,15 @@ fi
 
 decoded=$(printf '%s\n' "$raw_log" | decode_messages)
 
-# PREFIX-ANCHORED and HOST-ISOLATED. `grep -F` on a fixed prefix at offset 0: a prose mention of
-# the marker (this file, the ADR, the tracker body, the PR description — all ingested somewhere in
-# this estate) can never sit at offset 0 followed by the exact shipper+host tokens.
-envelope_hits=$(printf '%s\n' "$decoded" | grep -F "${ENVELOPE_PREFIX}${HOST_TOKEN} " || true)
+# PREFIX-ANCHORED and HOST-ISOLATED — and the anchor is `grep -E "^…"`, not `grep -F` (#7444
+# R18). `grep -F` has NO anchor, so the comment that used to sit here claiming "a fixed prefix at
+# offset 0 … can never sit at offset 0" described a property the code did not have. Measured: a
+# warehouse row that merely MENTIONS the envelope mid-line satisfied it, and 30 such rows clear
+# FLOOR_ROWS and exit 0 — auto-flipping ADR-182 to accepted on prose. The three sibling marker
+# greps below were anchored all along, which is what made this read as an omission.
+#
+# The prefix contains no ERE metacharacter, so -E changes nothing except adding the anchor.
+envelope_hits=$(printf '%s\n' "$decoded" | grep -E "^${ENVELOPE_PREFIX}${HOST_TOKEN} " || true)
 n_envelope=$(printf '%s\n' "$envelope_hits" | count_lines)
 boot_hits=$(printf '%s\n' "$decoded" | grep -E "^${BOOT_MARKER} boot_id=" || true)
 n_boot=$(printf '%s\n' "$boot_hits" | count_lines)
@@ -189,6 +193,14 @@ case "$shipper_post_fail_raw" in
   *)            shipper_post_fail=$shipper_post_fail_raw ;;
 esac
 current_boot_id=$(printf '%s\n' "$control_decoded" | grep -oE 'boot_id=[0-9a-f-]+' | tail -1 | sed 's/^boot_id=//' || true)
+# The reporter carries three more shipper fields on this same row and the probe held them all
+# while telling the operator to go re-run the query it had just run (#7444 R19). last_ok_age_s in
+# particular decides between the two hypotheses `delivered_but_silent` otherwise only guesses at:
+# -1 means no row has EVER shipped, while a small age with zero envelope rows means the shipper
+# works and the envelope/grep drifted.
+shipper_last_ok_age=$(printf '%s\n' "$control_decoded" | grep -oE 'log_shipper_last_ok_age_s=-?[0-9]+' | tail -1 | sed 's/^log_shipper_last_ok_age_s=//' || true)
+shipper_dropped_cum=$(printf '%s\n' "$control_decoded" | grep -oE 'log_shipper_dropped_cum=[^ ]+' | tail -1 | sed 's/^log_shipper_dropped_cum=//' || true)
+shipper_drop_seq=$(printf '%s\n' "$control_decoded" | grep -oE 'log_shipper_drop_seq=[^ ]+' | tail -1 | sed 's/^log_shipper_drop_seq=//' || true)
 
 # --- DELIVERY DISCRIMINATION: this is what separates WAIT from ACT ---------------------------
 # GATED ON A KEY THAT ONLY THE NEW CLOUD-INIT CAN PRODUCE (#7444 F-7), never on boot_id drift.
@@ -281,9 +293,17 @@ if [[ "$n_envelope" -eq 0 ]]; then
       echo "           The reporter reports no POST failures, so the tick is likely not running at" >&2
       echo "           all rather than failing to egress." >&2
     fi
-    echo "           Next: read log_shipper_post_fail / log_shipper_last_ok_age_s /" >&2
-    echo "           log_shipper_dropped_cum on the ${CONTROL_MARKER} rows, and the" >&2
-    echo "           ${BOOT_MARKER} row's shipper_cron= field." >&2
+    echo "           Reporter fields already read on this run (no second query needed):" >&2
+    echo "             log_shipper_post_fail=${shipper_post_fail_raw:-<absent>}" >&2
+    echo "             log_shipper_last_ok_age_s=${shipper_last_ok_age:-<absent>}  (-1 = no row has EVER shipped)" >&2
+    echo "             log_shipper_dropped_cum=${shipper_dropped_cum:-<absent>}  drop_seq=${shipper_drop_seq:-<absent>}" >&2
+    if [[ "${shipper_last_ok_age}" == "-1" ]]; then
+      echo "           last_ok_age_s=-1: the shipper has never delivered a row, so this is a" >&2
+      echo "           never-worked state, not a regression." >&2
+    elif [[ -n "${shipper_last_ok_age}" ]]; then
+      echo "           A finite last_ok_age_s with zero envelope rows means the shipper IS" >&2
+      echo "           delivering and the envelope prefix or the probe's grep has drifted." >&2
+    fi
     exit 2
   fi
   echo "TRANSIENT: reason=not_delivered — zero envelope rows, no ${BOOT_MARKER} row, and no" >&2

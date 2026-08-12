@@ -75,9 +75,9 @@ _final_gate() {
   fi
   _tally
   local ran=$(( PASS + FAIL ))
-  if [[ "$ran" -lt "61" ]]; then
+  if [[ "$ran" -lt "64" ]]; then
     FAIL=$(( FAIL + 1 ))
-    echo "  FAIL: assertion floor — ran $ran assertions, expected >= 61"
+    echo "  FAIL: assertion floor — ran $ran assertions, expected >= 64"
     echo "        (suite truncated, or assert() neutered — this run certified nothing)"
   fi
   echo ""
@@ -99,6 +99,7 @@ assert "the probe exists" "[[ -f '$PROBE' ]]"
 BASELINE_BOOT="bc135d5b-d509-41c4-8129-9181421e845c"
 DRIFTED_BOOT="ffffffff-1111-2222-3333-444444444444"
 HOSTV="soleur-registry"
+ENV_PREFIX_LITERAL="SOLEUR_ZOT_LOG shipper=zot-log-shipper host="
 
 # Wrap a bare message in the real two-layer encoding: the inner object is JSON-encoded into a
 # string, which becomes the `raw` column of the outer object.
@@ -337,6 +338,35 @@ row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV level:error,message:upst
 run_probe "$C8C_LOG" "$C1_CTL"
 assert "C8c a Doppler service-token shape -> exit 1" \
   "[[ '$CASE_RC' -eq 1 ]] && grep -q 'token_or_hash_shaped_rows=1' <<<\"\$CASE_OUT\""
+
+# --- C13b: THE DISCRIMINATOR MUST BE ANCHORED (#7444 R18) ---------------------------------
+# The envelope grep was `grep -F`, which has NO anchor, while the comment above it claimed "a
+# fixed prefix at offset 0 … can never sit at offset 0". C9/C9b could not see the difference:
+# no fixture in the suite placed the prefix anywhere but offset 0, so anchored and unanchored
+# were indistinguishable — one encoding level deeper than the false-green C9 is billed to refuse.
+#
+# These rows MENTION the envelope mid-line, which is what an ingested PR body, ADR, tracker
+# comment or this very file looks like once it reaches the warehouse.
+C13B_LOG="$TMP/c13b.log"; : > "$C13B_LOG"
+for _ in $(seq 1 30); do
+  # ADVERSARIAL: correct in every field the success path reads EXCEPT the offset. It carries the
+  # zot-only token too, because without it the probe rejects the row via envelope_without_zot_content
+  # and the case passes for a reason that has nothing to do with the anchor — measured, the first
+  # version of this fixture did exactly that and the unanchored mutant survived it.
+  row "ci-runner: PR #7444 quotes a shipped row: ${ENV_PREFIX_LITERAL}${HOSTV} ${ZOTLINE}" >> "$C13B_LOG"
+done
+C13B_CTL="$TMP/c13b.ctl"; control_row "$DRIFTED_BOOT" 0 > "$C13B_CTL"
+run_probe "$C13B_LOG" "$C13B_CTL"
+assert "C13b 30 rows MENTIONING the envelope mid-line do NOT count as delivery" \
+  "[[ '$CASE_RC' -ne 0 ]]"
+assert "C13b and it does not PASS (a prose mention must never flip ADR-182)" \
+  "! grep -q 'PASS:' <<<\"\$CASE_OUT\""
+# Non-vacuity in the other direction: the same count of REAL rows must still pass, so this
+# fixture cannot be satisfied by a probe that simply rejects everything.
+C13B_OK="$TMP/c13b.ok"; : > "$C13B_OK"
+for _ in $(seq 1 30); do envelope_row >> "$C13B_OK"; done
+run_probe "$C13B_OK" "$C13B_CTL"
+assert "C13b non-vacuity: 30 GENUINE offset-0 rows still PASS" "[[ '$CASE_RC' -eq 0 ]]"
 
 # --- C9: THE FALSE-GREEN. The highest-value assertion in this suite -----------------------
 # This fixture is TODAY'S PRODUCTION STATE: only heartbeat rows, whose zot_last_err echoes
