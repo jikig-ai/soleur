@@ -104,6 +104,19 @@ in place of a semantic version. Release tags remain the human-facing version via
 
 **A third manifest exists outside this repo**, reachable by no CI check here except the drift job.
 
+**Accepted trade, stated because it is a real reduction in review coverage.** Three
+`claude-code-action` workflows that ship into users' generated CI — `operator-digest`, both
+`schedule` templates — plus this repo's own `test-pretooluse-hooks` now install the plugin via
+`soleur-marketplace`. Those workflows carry `ANTHROPIC_API_KEY`, a `GITHUB_TOKEN` with
+`issues: write`, and the plugin they install ships executable hooks and skills. `jikig-ai/soleur` is
+protected by the `ci_required` and `cla_required` rulesets managed in `infra/github/`;
+`soleur-marketplace` is protected by nothing but Terraform ownership of its *settings*. The
+mitigating facts: the marketplace repo holds only a **pointer** — the executable code still comes
+from `jikig-ai/soleur` through the `git-subdir` source, which is protected — and the drift job now
+asserts the pointer's url, source type, pin-absence, entry count and entry name, so a repoint is
+detected within 24 h. Detection is not prevention, and the two alternatives above are the
+prevention. Until one of them lands, this is an accepted risk rather than an unnoticed one — tracked at #7493.
+
 ## Alternatives considered
 
 - **Publish a real version per release, instead of removing the key.** Rejected: it puts a
@@ -117,6 +130,20 @@ in place of a semantic version. Release tags remain the human-facing version via
   The additive shape was the point of the challenge that produced this decision.
 - **A new dedicated Terraform root.** Rejected: duplicates a backend, provider, auth path, and apply
   pipeline that `infra/github/` already has, and would trigger the new-root R2 backend rule.
+- **Terraform owning the manifest's CONTENTS via `github_repository_file`.** Not rejected on
+  merit — deferred, and recorded here because a future reader would otherwise assume it was never
+  considered. It is the one option that converts detection into prevention: the manifest would live
+  in this monorepo under review, CODEOWNERS and required checks, and drift would be auto-reconciled
+  by the next apply instead of surfacing as an issue up to 24 h later. It does not reintroduce
+  release-path coupling, because the write lives in `apply-github-infra.yml` rather than the release
+  path. Costs: the App needs `contents: write` on that repo, and a Terraform-managed file on a
+  default branch interacts with branch protection. Tracked as follow-up work rather than shipped
+  untested inside a delivery fix.
+- **A `github_repository_ruleset` restricting pushes to the marketplace repo.** Same disposition and
+  the same reason. It would be the direct answer to the review finding below, and it is cheap —
+  `infra/github/` already manages two rulesets. It is deferred because an untested ruleset shipped
+  inside this PR could either break the unattended apply pipeline or lock the sole maintainer out of
+  the repo, and neither failure is one this change should risk.
 - **Hand-maintained manifest with no drift check.** Rejected: the artifact is unreviewable and its
   silent-failure detector would otherwise be "a new user tries to install and it fails", which at a
   beta population of one may not fire for weeks.
