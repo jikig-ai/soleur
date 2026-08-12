@@ -40,3 +40,60 @@ distinguishes "compliant" from "scanned nothing".
 M7 is the control on the control: if the decoy could not pass a file the real sentinel rejects,
 the containment assertion in M8 would be asserting against an inert file. M9 is what stops the
 oracle drifting into a self-referential copy — the test must keep reading its producer.
+
+**M1–M10 are superseded as adequacy evidence, and retained as history.** The review panel's
+post-mortem is the reason: all ten mutate the SUT, along five axes, and *"ten points along five
+axes is not ten axes."* Six confirmed vacuities lived on the seven axes they never edit. They
+still pass; they are simply not what establishes the guards are non-vacuous. The batteries below
+are.
+
+They also used a harness this file no longer sanctions — mutating the real worktree and reverting
+via `git checkout --`. That is unsafe during a review pass (the tree is legitimately dirty, so
+`git checkout --` can revert work in progress, and "did it land?" checked against `HEAD` gives the
+wrong answer). Everything after this point mutates a **sandbox copy** and checks landing against a
+**pristine backup**.
+
+## Guard rebuild batteries (post-panel)
+
+Run when the two guards were rebuilt to close the §A vacuities: **8 mutations against Guard 1, 6
+against Guard 2, each with a GREEN control first and each asserted to have LANDED against a
+pristine backup.** All RED. `M-D` of the Guard 2 battery was additionally proven non-equivalent.
+
+*Record gap, stated rather than papered over:* the per-row detail of these two batteries was not
+persisted at the time — `session-state.md` part 1, rows 2 and 3, carries the headline result and
+the list of findings each closed, but not the individual mutations. The rows are therefore not
+reproduced here, because inventing them after the fact would be exactly the self-graded-matrix
+failure this project has already been bitten by twice
+(`learnings/2026-07-19-a-self-graded-mutation-battery-went-vacuous-twice-in-one-pr…`).
+
+## Battery 3 — the three assertions added by the review remediation
+
+Guard 2 Tests 21 (B1 invariant), 22 (C10 telemetry markers), 23 (C12 / AC5d).
+
+Harness: `cp -r` to a temp sandbox — every `${REPO_ROOT}`-relative read enumerated **from the
+guard itself** rather than guessed, because a sandbox missing one produces a RED control that is
+indistinguishable from a real regression (this happened on the first run and was fixed, not
+worked around). Un-mutated control run FIRST and required GREEN. Each mutation compared against a
+pristine backup before its verdict is believed.
+
+**Control: GREEN, 95 pass / 0 fail. Result: 6/6 RED. Zero survivors.**
+
+| # | Mutation | Target | Required | Observed |
+| --- | --- | --- | --- | --- |
+| M-A | **Review finding §B1's own prescription, applied literally** — its `case` statement added to incident's preflight fence | SUT | RED at Test 21 | **RED** |
+| M-B | **Harness mutation** — fence extractor re-keyed to a language that never appears, so it yields an empty stream | **guard** | RED at Test 21's anti-vacuity control | **RED** |
+| M-C | Delete the `redaction-ineffective` telemetry marker | SUT | RED at Test 22 | **RED** |
+| M-D | Redirect a marker to stderr (marker present, but off the mirrored stream) | SUT | RED at Test 22 | **RED** |
+| M-E | **Delete `[ -n "$PERSIST_SAFE" ]` outright** — finding C12's defect verbatim | SUT | RED at Test 23 | **RED** |
+| M-F | Retain the non-empty check, convert its halt arm to `true` (the A2 fail-open shape) | SUT | RED at Test 23 | **RED** |
+
+M-B is the row that answers the panel's post-mortem directly: *harness/guard mutation* was one of
+the seven axes M1–M10 never touched, and it is the axis on which a guard silently stops guarding.
+M-D and M-F are the "present but neutered" pair — both would pass a presence grep, which is why
+neither test is written as one.
+
+M-F is also the row that validates the harness. On its first run the mutation failed to apply (a
+quoting error), and the landing check reported **`NOT APPLIED — row VOID`** instead of a verdict.
+Without that check it would have been recorded as a survivor, and the natural response to a
+"survivor" is to weaken or delete the assertion — a mutation battery whose bugs push toward
+removing real coverage. It is reported here rather than quietly re-run.

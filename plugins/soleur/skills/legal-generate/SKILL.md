@@ -79,7 +79,9 @@ what this gate exists to stop escaping. Leaving it in `mktemp` is a leak with a 
 lifetime than the session (#7450 review-finding C14).
 
 ```bash
-DRAFT="$(mktemp)" || { echo "cannot allocate a draft file — halt (fail closed)" >&2; exit 2; }
+DRAFT="$(mktemp)" || { echo "SOLEUR_LEGAL_GENERATE_HALT reason=draft-alloc-failed"
+                       echo "legal-generate: cannot allocate a draft file — stopping before any draft text exists." >&2
+                       exit 2; }
 trap 'rm -f "$DRAFT"' EXIT INT TERM HUP
 ```
 
@@ -94,20 +96,31 @@ gate passes, refuses, or the shell dies.
    CWD-relative path would resolve the connected repo's **untrusted** copy of the sentinel (ADR-093).
    The default arm was **removed, not re-pointed**: `review/SKILL.md` instructs `gh pr checkout`, after
    which the git worktree is the *reviewed party's* tree, so that arm resolved this gate's own scanner
-   from a file a hostile PR controls (#7450). The identity preflight is
-   mandatory rather than defence-in-depth — `[[ -r ]]` is a *shape* check, and ADR-179 §(a) measured a
-   shape check passing while an attacker-chosen payload executed:
+   from a file a hostile PR controls (#7450). The **bare anchor is the load-bearing control** — the
+   loader substitutes it with the installed root at delivery, so no ambient environment value reaches
+   this site (measured: `specs/feat-one-shot-7450-git-root-anchor-untrusted/phase-1-measurement.md`
+   Arm 4). The identity preflight below is **defence-in-depth** for surfaces where substitution does
+   not govern: it is a *shape* check and cannot tell an install from a checkout carrying the same
+   manifest, which is why ADR-179 §(a) measured a shape check passing while an attacker-chosen payload
+   executed. The stronger root-outside-the-worktree form was evaluated and rejected — see
+   `specs/feat-one-shot-7450-git-root-anchor-untrusted/b1-disposition.md`. Each halt emits a
+   `SOLEUR_*` marker on stdout so refusals reach telemetry:
 
    ```bash
    [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
      && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
-     || { echo "legal-generate: cannot verify the Soleur plugin installation — halt (fail closed)" >&2
-          echo "  What to do: re-run /soleur:legal-generate from a session where the Soleur plugin is installed." >&2
+     || { echo "SOLEUR_LEGAL_GENERATE_HALT reason=plugin-root-unverified root=[${CLAUDE_PLUGIN_ROOT}]"
+          echo "legal-generate: cannot verify the Soleur plugin installation — stopping before any draft is written." >&2
+          echo "  Resolved plugin root: [${CLAUDE_PLUGIN_ROOT}]" >&2
+          echo "  If that is EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session — re-running here resolves the same empty root." >&2
+          echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur', then reinstall if that does not clear it." >&2
           echo "  Do NOT hand-edit and publish this draft — the redaction scanner is what makes it safe to share." >&2
           exit 2; }
    SENTINEL="${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-sentinel.sh"
-   [[ -r "$SENTINEL" ]] || { echo "legal-generate: redaction sentinel not readable — halt (fail closed)" >&2
-          echo "  What to do: reinstall or update the Soleur plugin, then re-run /soleur:legal-generate." >&2
+   [[ -r "$SENTINEL" ]] || { echo "SOLEUR_LEGAL_GENERATE_HALT reason=sentinel-unreadable sentinel=[$SENTINEL]"
+          echo "legal-generate: the redaction sentinel is missing from an otherwise valid Soleur install — stopping." >&2
+          echo "  Expected at: [$SENTINEL]" >&2
+          echo "  The install is partial or out of date. Run 'claude plugin update soleur', then reinstall if that does not clear it." >&2
           echo "  Do NOT hand-edit and publish this draft — the redaction scanner is what makes it safe to share." >&2
           exit 2; }
    bash "$SENTINEL" <draft-tmpfile>

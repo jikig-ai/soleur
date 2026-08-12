@@ -225,7 +225,9 @@ what this gate exists to stop escaping. Leaving it in `mktemp` is a leak with a 
 lifetime than the session (#7450 review-finding C14).
 
 ```bash
-DRAFT="$(mktemp)" || { echo "cannot allocate a draft file — halt (fail closed)" >&2; exit 2; }
+DRAFT="$(mktemp)" || { echo "SOLEUR_INCIDENT_HALT reason=draft-alloc-failed"
+                       echo "incident: cannot allocate a draft file — stopping before any post-mortem text exists." >&2
+                       exit 2; }
 trap 'rm -f "$DRAFT"' EXIT INT TERM HUP
 ```
 
@@ -233,18 +235,29 @@ Every halt path below inherits this trap, so the un-redacted draft is removed wh
 gate passes, refuses, or the shell dies.
 
 
-The identity preflight is mandatory, not defence-in-depth: `[[ -r ]]` is a *shape* check, and ADR-179 §(a) measured a shape check passing while an attacker-chosen payload executed.
+The two checks below have **different** jobs, and conflating them overstates the second.
+
+The **bare anchor is the load-bearing control.** The loader substitutes `${CLAUDE_PLUGIN_ROOT}` with the installed root at delivery, *before* this text reaches bash — so at this site there is no shell variable for an ambient `direnv` / `.bashrc` / `postinstall` value to poison. Measured directly, with a decoy value simultaneously live in the executing subprocess and ignored: [`phase-1-measurement.md`](../../../../knowledge-base/project/specs/feat-one-shot-7450-git-root-anchor-untrusted/phase-1-measurement.md) Arm 4.
+
+The **identity preflight is defence-in-depth** — for surfaces where substitution does *not* govern and the environment does. It is a *shape* check: it cannot distinguish an installed plugin from a checkout carrying the same manifest, and ADR-179 §(a) measured a shape check passing while an attacker-chosen payload executed. It is retained because it is the only control on an unsubstituted surface; it is not what makes the bare anchor safe. The stronger "assert the root is outside the working tree" form was evaluated and **rejected** — it guards an operand the adversary cannot reach here, breaks dogfooding on any plain clone, and reintroduces `git rev-parse` into the very gate this PR de-git-roots: [`b1-disposition.md`](../../../../knowledge-base/project/specs/feat-one-shot-7450-git-root-anchor-untrusted/b1-disposition.md).
+
+Each halt emits a `SOLEUR_*` marker on stdout so a refusal is visible in telemetry rather than only to whoever was watching the terminal (`hr-observability-as-plan-quality-gate`; same pattern as `go.md`'s `SOLEUR_GIT_REPO_DIAG`). The operator guidance is **state-discriminating**: an empty root and a wrong root need different actions, and "re-run this skill" is not an action for either.
 
 ```bash
 [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
-  || { echo "incident: cannot verify the Soleur plugin installation — halt (fail closed)" >&2
-       echo "  What to do: re-run /soleur:incident from a session where the Soleur plugin is installed." >&2
+  || { echo "SOLEUR_INCIDENT_HALT reason=plugin-root-unverified root=[${CLAUDE_PLUGIN_ROOT}]"
+       echo "incident: cannot verify the Soleur plugin installation — stopping before any post-mortem is written." >&2
+       echo "  Resolved plugin root: [${CLAUDE_PLUGIN_ROOT}]" >&2
+       echo "  If that is EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session — re-running here resolves the same empty root." >&2
+       echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur', then reinstall if that does not clear it." >&2
        echo "  Do NOT write this post-mortem by hand — the redaction scanner is what makes it safe to publish." >&2
        exit 2; }
 SENTINEL="${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-sentinel.sh"
-[[ -r "$SENTINEL" ]] || { echo "incident: redaction sentinel not readable — halt (fail closed)" >&2
-       echo "  What to do: reinstall or update the Soleur plugin, then re-run /soleur:incident." >&2
+[[ -r "$SENTINEL" ]] || { echo "SOLEUR_INCIDENT_HALT reason=sentinel-unreadable sentinel=[$SENTINEL]"
+       echo "incident: the redaction sentinel is missing from an otherwise valid Soleur install — stopping." >&2
+       echo "  Expected at: [$SENTINEL]" >&2
+       echo "  The install is partial or out of date. Run 'claude plugin update soleur', then reinstall if that does not clear it." >&2
        echo "  Do NOT write this post-mortem by hand — the redaction scanner is what makes it safe to publish." >&2
        exit 2; }
 bash "$SENTINEL" <draft-tmpfile>

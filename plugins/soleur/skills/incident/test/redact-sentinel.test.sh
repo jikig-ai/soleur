@@ -870,6 +870,141 @@ else
   fi
 fi
 
+# ---------------------------------------------------------------------------
+# Test 21 — B1: PIN THE ABSENCE of any git-root anchor at the three secret gates.
+#
+# Review finding §B1 prescribed adding, at each gate,
+#   case "$(cd "${CLAUDE_PLUGIN_ROOT}" && pwd -P)/" in "$(git rev-parse --show-toplevel)/"*) halt;;
+# to assert the plugin root sits OUTSIDE the working tree. That was measured and REJECTED
+# (specs/.../b1-disposition.md): the loader substitutes the bare token at delivery, so the
+# operand is a literal the adversary cannot reach — while the assertion itself breaks
+# dogfooding on any plain clone (there, the plugin root IS inside the working tree) and puts
+# `git rev-parse --show-toplevel` back into the exact three files this PR exists to remove it
+# from.
+#
+# The disposition is therefore an INVARIANT, and an invariant that is merely satisfied is not
+# guarded. This pins it: these three files carry ZERO git-root resolution, in any form. A
+# future well-meaning implementation of §B1 reddens here instead of landing quietly.
+#
+# Deliberately broader than Test 18c's needle: 18c is keyed to the `${CLAUDE_PLUGIN_ROOT:-...}`
+# SYNTAX, so a bare `$(git rev-parse --show-toplevel)` with no `:-` arm — which is precisely
+# the shape §B1 proposes — passes it. Keying on stakes rather than syntax is the same
+# correction the CTO ruling made to 18c.
+# ---------------------------------------------------------------------------
+
+# FENCE-SCOPED, and that scoping is load-bearing rather than tidiness. Prose in these very
+# files legitimately NAMES the construct while explaining why it was removed — the rejection
+# rationale added by this PR does exactly that. An unscoped grep flags the documentation of a
+# ban as a violation of it, which is the oracle-shadowing failure (A7) with the polarity
+# reversed: it does not go vacuous, it goes permanently and uninformatively red, and the
+# cheapest way to "fix" that is to delete the explanation. Only EXECUTABLE lines count.
+t21_exec_lines() {
+  awk '
+    /^[[:space:]]*```bash([[:space:]]|$)/ { in_fence = 1; next }
+    /^[[:space:]]*```[[:space:]]*$/       { in_fence = 0; next }
+    in_fence                              { print }
+  ' "$1"
+}
+t21_offenders=""
+for gate_file in "${INCIDENT_SKILL}" "${LEGAL_SKILL}" "${LINEAR_SKILL}"; do
+  n=$(t21_exec_lines "${gate_file}" | grep -c 'git rev-parse' || true)
+  if [[ "${n}" -ne 0 ]]; then
+    t21_offenders="${t21_offenders} ${gate_file##*/skills/}(${n})"
+  fi
+done
+# Anti-vacuity: the extractor must actually be seeing code. A scoping bug that yields an empty
+# stream would make the loop above pass unconditionally — the exact "search root does not
+# exist" false-PASS that Test 18c had to fix (A12).
+t21_control=0
+for gate_file in "${INCIDENT_SKILL}" "${LEGAL_SKILL}" "${LINEAR_SKILL}"; do
+  t21_control=$(( t21_control + $(t21_exec_lines "${gate_file}" | grep -c 'CLAUDE_PLUGIN_ROOT' || true) ))
+done
+if [[ "${t21_control}" -lt 3 ]]; then
+  echo "FAIL: Test 21: fence extractor returned ${t21_control} anchor lines across the 3 gates (expected >=3) — the scoping is broken, so the zero-offender result below would be vacuous"
+  FAIL=$((FAIL + 1))
+  t21_offenders="__EXTRACTOR_BROKEN__"
+fi
+if [[ -z "${t21_offenders}" ]]; then
+  echo "PASS: Test 21: all 3 secret gates carry ZERO git-root resolution (the B1 invariant is pinned, not merely satisfied)"
+  PASS=$((PASS + 1))
+else
+  echo "FAIL: Test 21: git-root resolution reappeared at:${t21_offenders} — see specs/feat-one-shot-7450-git-root-anchor-untrusted/b1-disposition.md. If this is a deliberate reversal, that document must be superseded FIRST; a gate that resolves the git root is the #7450 vector itself"
+  FAIL=$((FAIL + 1))
+fi
+
+# ---------------------------------------------------------------------------
+# Test 22 — C10: every fail-closed halt on the anchor path emits a SOLEUR_* marker,
+# ON STDOUT.
+#
+# `go.md` and `sync.md` already emit one and `go.md` documents why: a refusal nobody can see
+# in telemetry is indistinguishable from a run that never happened
+# (hr-observability-as-plan-quality-gate, hr-no-dashboard-eyeball-pull-data-yourself).
+#
+# The stdout half is not pedantry. The operator guidance goes to stderr by design; the MARKER
+# is the machine-readable half, and a marker redirected to stderr alongside the prose is the
+# silent-degradation shape this whole PR is about. So the marker line is asserted NOT to carry
+# a `>&2`.
+# ---------------------------------------------------------------------------
+t22_missing=""
+t22_on_stderr=""
+# gate file : marker prefix : the reasons that must each be present
+t22_specs="${INCIDENT_SKILL}:SOLEUR_INCIDENT_HALT:plugin-root-unverified,sentinel-unreadable,draft-alloc-failed
+${LEGAL_SKILL}:SOLEUR_LEGAL_GENERATE_HALT:plugin-root-unverified,sentinel-unreadable,draft-alloc-failed
+${LINEAR_SKILL}:SOLEUR_LINEAR_FETCH_HALT:plugin-root-unverified,scrubber-unreadable,scrubber-nonzero-exit,redaction-empty-output,redaction-ineffective"
+
+while IFS= read -r t22_spec; do
+  [[ -n "${t22_spec}" ]] || continue
+  t22_file="${t22_spec%%:*}"
+  t22_rest="${t22_spec#*:}"
+  t22_prefix="${t22_rest%%:*}"
+  t22_reasons="${t22_rest#*:}"
+  while IFS= read -r t22_reason; do
+    [[ -n "${t22_reason}" ]] || continue
+    t22_line="$(grep -F "${t22_prefix} reason=${t22_reason}" "${t22_file}" 2>/dev/null || true)"
+    if [[ -z "${t22_line}" ]]; then
+      t22_missing="${t22_missing} ${t22_file##*/skills/}:${t22_reason}"
+    elif [[ "${t22_line}" == *'>&2'* ]]; then
+      t22_on_stderr="${t22_on_stderr} ${t22_file##*/skills/}:${t22_reason}"
+    fi
+  done < <(printf '%s\n' "${t22_reasons}" | tr ',' '\n')
+done < <(printf '%s\n' "${t22_specs}")
+
+if [[ -z "${t22_missing}" && -z "${t22_on_stderr}" ]]; then
+  echo "PASS: Test 22: all 11 fail-closed halts across the 3 gates emit a distinct SOLEUR_*_HALT reason= marker on STDOUT"
+  PASS=$((PASS + 1))
+else
+  [[ -n "${t22_missing}" ]] && echo "FAIL: Test 22: fail-closed halt with no SOLEUR_* telemetry marker at:${t22_missing} — a halt nobody can see in Better Stack is indistinguishable from a run that never happened (hr-observability-as-plan-quality-gate)"
+  [[ -n "${t22_on_stderr}" ]] && echo "FAIL: Test 22: SOLEUR_* marker redirected to stderr at:${t22_on_stderr} — the human guidance belongs on stderr, but the MARKER is the machine-readable half and must go to stdout to reach the telemetry mirror"
+  FAIL=$((FAIL + 1))
+fi
+
+# ---------------------------------------------------------------------------
+# Test 23 — C12/AC5d: the linear-fetch non-empty check is ASSERTED, not merely present.
+#
+# AC5d claimed "asserted by a test, not by inspection" and no test asserted it: deleting
+# `[ -n "$PERSIST_SAFE" ]` from the fence left the whole suite green. The E2E suite defines
+# its OWN PERSIST_SAFE local, which is why grepping the test corpus for the name looked like
+# coverage and was not.
+#
+# Empty output matters here specifically: a scrubber that emits nothing exits 0, so without
+# this check an EMPTY string is persisted as `persist_safe_summary` and the callers' absent-
+# artifact contract (which is what stops them substituting the bearer-URL-bearing
+# agent_context) never fires — the artifact is present, just worthless.
+# ---------------------------------------------------------------------------
+t23_needle='[ -n "$PERSIST_SAFE" ]'
+t23_n=$(grep -Fc "${t23_needle}" "${LINEAR_SKILL}" 2>/dev/null || true)
+# The guard is only fail-closed if the non-empty test DISPATCHES to a halt. Presence alone
+# would be satisfied by `[ -n "$PERSIST_SAFE" ] || true`, which is the A2 defect this suite
+# already had to fix once at 18b.
+t23_dispatches=$(grep -A6 -F "${t23_needle}" "${LINEAR_SKILL}" 2>/dev/null | grep -c 'exit 2' || true)
+if [[ "${t23_n}" -ge 1 && "${t23_dispatches}" -ge 1 ]]; then
+  echo "PASS: Test 23: linear-fetch asserts non-empty redaction output AND dispatches to exit 2 (AC5d is now test-enforced)"
+  PASS=$((PASS + 1))
+else
+  echo "FAIL: Test 23: the linear-fetch non-empty guard is missing or does not halt (present=${t23_n}, dispatches-to-exit-2=${t23_dispatches}) — empty scrubber output would be persisted as persist_safe_summary, and the callers' absent-artifact contract would never fire"
+  FAIL=$((FAIL + 1))
+fi
+
 echo
 echo "Total: ${PASS} pass, ${FAIL} fail"
 [[ "${FAIL}" -eq 0 ]]

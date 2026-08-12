@@ -69,21 +69,54 @@ delivered text. Arm A and Arm B are the same arm.
 This is also why `/soleur:go`'s Step 0.0 gate ran successfully in this very session with the
 shell variable unset.
 
-## Residual — stated, not hidden
+## Arm 4 — the deferred direct arm, EXECUTED (2026-08-12, review-remediation session)
 
-The **direct** bare-token-inside-a-SKILL.md arm was attempted and could not be executed. A
-throwaway skill (`zzz-probe-7450`) carrying a bare token in a fenced `bash` block was written
-into the live plugin root and invoked; the Skill tool returned `Unknown skill:
-zzz-probe-7450`. The skill registry is built at session start, so a mid-session addition is not
-discoverable. That arm requires a fresh session. The probe was removed immediately
-(verified absent).
+Review finding **D6** correctly held that Arm 3's inference was logically void: non-substitution
+of a *non-matching* literal cannot distinguish "the pass ran and declined" from "the pass never
+ran on this surface" — both predict identical bytes. D6 also held that the recorded blocker was
+wrong, and it was: a headless `claude -p` builds its own skill registry, so no fresh interactive
+session is needed.
 
-The SKILL-surface bare-token claim therefore rests on Arm 3 (the transform pass runs over
-SKILL.md text) plus the two independent precedents below — not on a direct execution.
+**The arm was run. It is POSITIVE, and it is stronger than the inference it replaces.**
 
-**§R3 is upgraded to "proven for the measured construction"** — a bare token, in a fenced `bash`
-block, in plugin markdown on the command surface — **never to "proven" flatly**, per the plan's
-§Sharp Edges.
+Method — a synthetic single-skill plugin outside the tracked tree, loaded via `--plugin-dir`, whose
+fence writes the text **as delivered** through a *quoted* heredoc (so bash performs no expansion of
+its own and the file records the loader's output, not a model paraphrase):
+
+```bash
+CLAUDE_PLUGIN_ROOT=/tmp/DECOY-EVIL-ROOT claude -p \
+  --plugin-dir <sandbox>/probe-plugin --allowedTools "Bash,Skill" \
+  "Invoke the zzzprobe skill and run its bash block exactly as delivered."
+```
+
+| Arm | Delivered / resolved to |
+| --- | --- |
+| bare `${CLAUDE_PLUGIN_ROOT}/x.sh`, SKILL.md fence | `<sandbox>/probe-plugin/x.sh` — **substituted with the real install root** |
+| `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/…` , same fence | literal, **unsubstituted** |
+| control: runtime env inside the Bash tool | `RUNTIME_ENV_RAW=[/tmp/DECOY-EVIL-ROOT]`, `ENV_GREP=[1]` |
+| control: what the `:-` form expands to at runtime | **`/tmp/DECOY-EVIL-ROOT/skills/incident/scripts/redact-sentinel.sh`** |
+
+**Three things this establishes that the inference could not.**
+
+1. **The transform applies to the SKILL surface directly** — not merely "runs over SKILL.md text".
+   Arm 3 is superseded, not merely corroborated.
+2. **The substituted value comes from the install path, not from the environment.** The decoy was
+   simultaneously live in the very subprocess that executed the fence (`ENV_GREP=[1]`) and was
+   ignored. So the bare form's operand is **not an environment variable at execution time**; it is
+   a literal fixed by the trusted loader before bash ever sees the text. This is the control that
+   makes the claim non-confoundable — without it, "ambient ignored" and "ambient never propagated"
+   are indistinguishable.
+3. **The pre-fix `:-` form is a reproduced exploit, not a theorised one.** In the same session,
+   same environment, it resolved this repo's own redaction gate to an attacker-chosen root.
+
+**§R3 is upgraded to "proven for the measured construction" on BOTH surfaces** — a bare token in a
+fenced `bash` block in plugin markdown, on the command surface (Arm 1) and on the skill surface
+(Arm 4). Still never "proven" flatly: unmeasured delivery surfaces are enumerated in
+[`b1-disposition.md`](./b1-disposition.md).
+
+The two independent precedents below are retained — they are no longer load-bearing for the skill
+surface, but they remain the evidence that the behaviour predates ADR-179 rather than being
+introduced by it.
 
 ## Correction to the plan's evidence list (a defect it did not catch)
 
