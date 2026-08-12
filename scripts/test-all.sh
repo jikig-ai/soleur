@@ -698,6 +698,12 @@ if want_scripts; then
   # sole guard; this suite is the guard's guard. Registered explicitly because
   # scripts/*.test.sh is NOT auto-globbed here — an unregistered gate never runs.
   run_suite "scripts/marketplace-drift-check" bash scripts/marketplace-drift-check.test.sh
+  # #7489: the legacy `soleur@soleur` marketplace entry carries client-side
+  # `autoUpdate: true`, which cannot be revoked remotely — so the tracker's
+  # closing condition is a claim about MACHINES, and the probe is how that claim
+  # is made checkable rather than asserted. Guard 2's battery; registered
+  # explicitly for the same reason as the suite above.
+  run_suite "scripts/plugin-legacy-resolver-probe" bash scripts/plugin-legacy-resolver-probe.test.sh
   # ADR-140: Layer A encryption-posture detector (the mechanical resolver behind
   # the "encryption at rest + in transit" design-time gate). TS-1..8,15..17 +
   # the MB-1..MB-12 mutation battery (fixture-isolated, not suite-pass-count).
