@@ -274,7 +274,14 @@ verify_or_abort() {
     # must mean the same thing or `aborted` stops being one state.
     # Best-effort: a stop failure must not prevent the flag reaching terminal, or a crash here
     # leaves the flag mid-transition and a later poll resumes into a no-flush false `done`.
-    stop_server || true
+    # Capture the stop's OUTCOME rather than swallowing it. A failed stop is the single most
+    # important thing this arm can report: it produces exactly the state the comment above calls
+    # dangerous — a LIVE prod scheduler under an `aborted` flag the guard will never be consulted
+    # about again, because the process is already past it. `|| true` discarded that, and the
+    # operator line below then asserted "it has been STOPPED" unconditionally, which on the one
+    # path that matters was a lie. Still non-fatal: the flag must reach terminal either way.
+    stop_rc=0; stop_server || stop_rc=$?
+    stopped=ok; [[ "$stop_rc" -eq 0 ]] || stopped=FAILED
     # LOUD and terminal. `aborted` (not a retry) because the 30s timer would otherwise storm,
     # and because a host that did not serve within the window needs a human to look — silently
     # retrying is how a cutover ends up believing it finished.
@@ -283,7 +290,7 @@ verify_or_abort() {
     # this string — inside double quotes they are command substitution, and the words being
     # quoted here are shell keywords.
     "${CUTOVER_LOGGER_CMD:-logger}" -t "$LOG_TAG" \
-      "SOLEUR_INNGEST_CUTOVER_VERIFY_FAILED reason=$reason health_url=$CUTOVER_HEALTH_URL window_s=$CUTOVER_VERIFY_WINDOW_S — inngest-server was started but did NOT serve within the window, so it has been STOPPED, the terminal 'done' was REFUSED and the flag is 'aborted'. The host is not carrying the registry. #7228" 2>/dev/null || true
+      "SOLEUR_INNGEST_CUTOVER_VERIFY_FAILED reason=$reason health_url=$CUTOVER_HEALTH_URL window_s=$CUTOVER_VERIFY_WINDOW_S — inngest-server was started but did NOT serve within the window, so the terminal 'done' was REFUSED and the flag is 'aborted'. stopped=$stopped — if FAILED, a prod scheduler is STILL RUNNING on this host under a terminal flag and needs immediate operator attention. The host is not carrying the registry. #7228" 2>/dev/null || true
     flag_set aborted
     case "$reason" in
       verify-health)              emit_state 1 "$dbsize" "verify-health" aborted ;;
@@ -299,9 +306,10 @@ verify_or_abort() {
   # a `done` with no owner marker — which the guard must treat as inherited, wedging a host that
   # actually served. An unrecordable marker is fatal for the same reason: see record_done_owner.
   if ! record_done_owner; then
-    stop_server || true
+    stop_rc=0; stop_server || stop_rc=$?
+    stopped=ok; [[ "$stop_rc" -eq 0 ]] || stopped=FAILED
     "${CUTOVER_LOGGER_CMD:-logger}" -t "$LOG_TAG" \
-      "SOLEUR_INNGEST_CUTOVER_VERIFY_FAILED reason=verify-owner-unrecordable path=$DONE_OWNER_MARKER — the host SERVES, but its done-owner marker could not be written, so a terminal 'done' here would be indistinguishable from one INHERITED by a replacement host. Server STOPPED and refusing. #7228" 2>/dev/null || true
+      "SOLEUR_INNGEST_CUTOVER_VERIFY_FAILED reason=verify-owner-unrecordable stopped=$stopped path=$DONE_OWNER_MARKER — the host SERVES, but its done-owner marker could not be written, so a terminal 'done' here would be indistinguishable from one INHERITED by a replacement host. Refusing; see stopped= above. #7228" 2>/dev/null || true
     flag_set aborted
     emit_state 1 "$dbsize" "verify-owner-unrecordable" aborted
     exit 1

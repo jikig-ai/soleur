@@ -245,6 +245,16 @@ write_files:
       # host and a host whose unit never ran produce the identical observation (no rows),
       # which is the ADR-117 failure this whole PR is about.
       logger -t inngest-bs-token-restage "SOLEUR_INNGEST_BS_TOKEN_RESTAGED ok=1 path=$tok — boot-trace channel re-armed for this boot. #7228"
+      # AND on the VECTOR-INDEPENDENT channel. The line above rides journald -> Vector, which is
+      # the one path that is dead on a host whose Vector never came up — and this unit IS the
+      # positive control that separates "channel healthy" from "channel never re-armed". Reported
+      # only through Vector, its success and its absence are the same observation on exactly the
+      # host it exists to speak for, which is the ADR-117 shape displaced one unit sideways.
+      # The token has just been staged, so the direct-curl emitter works here by construction.
+      # ~1 POST per boot. `[ -x ]` mirrors inngest-server-probe.sh's guard.
+      if [ -x /usr/local/bin/inngest-boot-phone-home.sh ]; then
+        /usr/local/bin/inngest-boot-phone-home.sh bs-token-restaged "ok=1 boot-trace channel re-armed" || true
+      fi
       exit 0
     owner: root:root
     permissions: '0755'
@@ -485,7 +495,7 @@ runcmd:
     set -euo pipefail
     names="$(doppler secrets --only-names --json | jq -r 'keys[]' | grep -v '^DOPPLER_' || true)"
     n_total="$(printf '%s\n' "$names" | grep -c . || true)"
-    n_inngest="$(printf '%s\n' "$names" | grep -Ec '^(INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|CUTOVER_FLIP|CONFIG_DIGEST|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' || true)"
+    n_inngest="$(printf '%s\n' "$names" | grep -Ec '^(INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|CUTOVER_FLIP|DIAGNOSTIC_BOOT|CONFIG_DIGEST|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' || true)"
     if [ "$n_total" -ne "$n_inngest" ] || [ "$n_inngest" -lt 5 ]; then
       echo "[inngest] FATAL: boot credential not isolated (sees $n_total non-DOPPLER, $n_inngest INNGEST_) — refusing to bootstrap"; exit 1
     fi
@@ -641,9 +651,20 @@ runcmd:
     /usr/local/bin/inngest-boot-phone-home.sh pre-bootstrap-run
     set +e
     install -m 600 /dev/null /var/log/inngest-bootstrap.log   # 0600 pre-create (secrets in the tail; see inngest-redact.sh)
+    # #7228: DELIVER THE DIAGNOSTIC FLAG. inngest-bootstrap.sh reads INNGEST_DIAGNOSTIC_BOOT from
+    # its ENV to choose the SQLite-only ExecStart, but this runcmd is NOT wrapped in `doppler run`
+    # and the explicit env list below is the only thing it inherits — so the flag never arrived and
+    # the bootstrap always emitted the DURABLE form. The GUARD, by contrast, runs under
+    # `doppler run --config prd` and DOES see it, so requesting a diagnostic boot produced exactly
+    # the "two halves disagree" state the guard is built to refuse: durable unit + diagnostic
+    # request => BLOCK, every time. Diagnostic boot could never have worked.
+    # Read best-effort with a bounded timeout: an unreachable Doppler must degrade to a normal
+    # (durable) boot, never hang the only path that installs the observability stack.
+    DIAG_BOOT="$(timeout 20 doppler secrets get INNGEST_DIAGNOSTIC_BOOT --project soleur-inngest --config prd --plain 2>/dev/null || true)"
     env "INNGEST_CLI_VERSION=$INNGEST_CLI_VERSION" "INNGEST_CLI_SHA256=$INNGEST_CLI_SHA256" \
         "INNGEST_CLI_ARCH=${inngest_cli_arch}" "SDK_URL=${sdk_url}" \
         "DOPPLER_PROJECT=soleur-inngest" \
+        "INNGEST_DIAGNOSTIC_BOOT=$DIAG_BOOT" \
         "VECTOR_CLI_VERSION=$VECTOR_CLI_VERSION" "VECTOR_CLI_SHA256=${vector_sha256}" "VECTOR_CLI_ARCH=${inngest_cli_arch}" \
       bash "$EXTRACT_DIR/inngest-bootstrap.sh" > /var/log/inngest-bootstrap.log 2>&1
     boot_rc=$?

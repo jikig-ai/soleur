@@ -996,7 +996,31 @@ systemctl daemon-reload
 # pause above runs before the binary replace; this restart subsumes the start
 # and the resume below runs after.
 systemctl enable inngest-server.service 2>/dev/null || true
-systemctl restart inngest-server.service
+# --- #7228: a REFUSED start must not take the observability stack down with it -------------
+# This was the only unguarded systemctl call in this block, and under `set -euo pipefail` a
+# non-zero restart aborted the ENTIRE bootstrap here — before Vector, the server-probe timer and
+# the cutover flip timer install, all of which are sequenced below.
+#
+# That became reachable on the NORMAL replace path the moment the flip guard learned to refuse an
+# inherited `done` (inngest-server-flip-guard.sh): a replaced host boots, inherits `done` from
+# Doppler, carries no done-owner marker, the ExecStartPre BLOCKS, the restart exits non-zero, and
+# the host ends up with no shipper and no flip timer — i.e. DARK and with the recovery FSM
+# unarmed, so the `flushed` re-entry the guard's own message prescribes cannot even be polled.
+# The guard would have been protecting the host by bricking it.
+#
+# Fail-closed on the SCHEDULER (it stays stopped — that is the guard's whole point) and fail-OPEN
+# on the BOOTSTRAP, so the machinery that makes the refusal visible and recoverable still lands.
+# A dark server with working observability is the outcome #7228 exists to buy; a dark server with
+# no observability is #7228 itself.
+if ! systemctl restart inngest-server.service; then
+  # Vector may not be up yet at this point in the bootstrap, so the marker rides the
+  # Vector-INDEPENDENT direct-curl emitter as well as the log.
+  if [[ -x /usr/local/bin/inngest-boot-phone-home.sh ]]; then
+    /usr/local/bin/inngest-boot-phone-home.sh inngest-server-start-REFUSED \
+      "ExecStartPre refused or the unit failed; bootstrap CONTINUES so vector + the probe + the flip timer still install" || true
+  fi
+  log "warn: inngest-server did not start (flip guard refusal or unit failure) — continuing the bootstrap so observability and the flip timer install; read the guard's BLOCK line for the reason"
+fi
 systemctl enable --now inngest-heartbeat.timer
 # Force one heartbeat tick now so a unit-shape change (e.g. ExecStart) takes
 # effect immediately rather than waiting up to 60s for the next timer fire.

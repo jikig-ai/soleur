@@ -803,6 +803,32 @@ assert "A4 the image field is named image_ref (it carries a full ref, not a bare
 # existing row rather than a new one; these pin the artifacts.
 assert "A4/#7228 the bootstrap declares exactly ONE probe timer (no second, faster timer was added)" \
   "[[ \$(grep -cE '^readonly PROBE_TIMER=' '$BOOTSTRAP_SH') -eq 1 ]]"
+# --- #7228: a REFUSED inngest-server start must not abort the bootstrap ---------------------
+# THE CASCADE THIS PINS. inngest-bootstrap.sh is `set -euo pipefail`, and the
+# `systemctl restart inngest-server.service` was the ONE unguarded systemctl call in its block.
+# Every sibling around it carries `|| true` or `|| log`. Once the flip guard learned to refuse an
+# inherited `done`, a replaced host — which by construction has no done-owner marker — makes that
+# ExecStartPre BLOCK, the restart exit non-zero, and the bootstrap die BEFORE vector, the
+# server-probe timer and the cutover flip timer install. The host is then dark with the recovery
+# FSM unarmed, so the `flushed` re-entry the guard's own message prescribes cannot be polled.
+# Anchored on the guarded CONSTRUCT (`if ! systemctl restart …`), which a comment cannot produce.
+echo ""
+echo "--- #7228: a refused inngest-server start does not abort the bootstrap ---"
+assert "#7228 the inngest-server restart is GUARDED (a guard refusal must not kill the bootstrap)" \
+  "grep -qE '^if ! systemctl restart inngest-server\.service; then$' '$BOOTSTRAP_SH'"
+# The load-bearing half: the units that make the refusal OBSERVABLE and RECOVERABLE are sequenced
+# after the restart, so if the guard ever regresses to an unguarded call they go down with it.
+# Assert the ordering rather than mere presence — presence alone is satisfied by the broken order.
+RESTART_LINE=$(grep -nE '^if ! systemctl restart inngest-server\.service; then$' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1)
+PROBE_TIMER_LINE=$(grep -nE '^systemctl enable --now inngest-server-probe\.timer$' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1)
+FLIP_TIMER_LINE=$(grep -nE '^[[:space:]]*systemctl enable --now inngest-cutover-flip\.timer$' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1)
+assert "#7228 the restart and both downstream timers were located by shape (else this pin is vacuous)" \
+  "[[ -n '$RESTART_LINE' && -n '$PROBE_TIMER_LINE' && -n '$FLIP_TIMER_LINE' ]]"
+assert "#7228 the probe + flip timers are DOWNSTREAM of the restart, so a refusal cannot strand them" \
+  "[[ '$PROBE_TIMER_LINE' -gt '$RESTART_LINE' && '$FLIP_TIMER_LINE' -gt '$RESTART_LINE' ]]"
+assert "#7228 a refused start is reported on the Vector-INDEPENDENT channel (vector may not be up yet)" \
+  "grep -qE 'inngest-boot-phone-home\.sh inngest-server-start-REFUSED' '$BOOTSTRAP_SH'"
+
 assert "A4/#7228 the probe unit still ships exactly ONE SyslogIdentifier, unchanged (no new Source 4 tag)" \
   "[[ \$(printf '%s\n' \"\$PROBE_UNIT_BLOCK\" | grep -cE '^SyslogIdentifier=') -eq 1 ]] && printf '%s\n' \"\$PROBE_UNIT_BLOCK\" | grep -qE '^SyslogIdentifier=inngest-server-probe$'"
 # The cutover_flag read needs Doppler credentials, and the ONLY safe way to give a shared-renderer
@@ -1070,8 +1096,11 @@ GUARD_CLOSE_LINE=$(grep -nE '^fi  # end SKIP_BINARY_INSTALL guard' "$BOOTSTRAP_S
 SERVER_UNIT_WRITE_LINE=$(grep -nE 'cat > "\$UNIT_FILE" <<' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
 assert "server unit write is OUTSIDE the SKIP_BINARY_INSTALL guard (reconcile-always)" \
   "[[ -n '$GUARD_CLOSE_LINE' && -n '$SERVER_UNIT_WRITE_LINE' && '$GUARD_CLOSE_LINE' -lt '$SERVER_UNIT_WRITE_LINE' ]]"
+# #7228: the restart is now GUARDED (`if ! systemctl restart …; then`) so a flip-guard refusal
+# cannot abort the bootstrap and strand vector + the flip timer. The property asserted here is
+# unchanged — the restart still happens — so the anchor moves to the guarded construct.
 assert "bootstrap restarts inngest-server.service (new ExecStart loads on redeploy)" \
-  "grep -qE '^systemctl restart inngest-server.service' '$BOOTSTRAP_SH'"
+  "grep -qE '^if ! systemctl restart inngest-server\.service; then$' '$BOOTSTRAP_SH'"
 # The upgrade-drain resume must still run after the restart (R2 — restart must
 # not orphan the pause/resume pairing). Match the actual resume COMMAND
 # (`"$INSTALL_PATH" resume`) precisely — no broad `|| grep resume` fallback,
@@ -1131,7 +1160,7 @@ assert "INNGEST_REDIS_PASSWORD doppler_secret"      "grep -qE 'name[[:space:]]+=
 # `inngest-redis-bootstrap.sh` and a `$`-anchored `tail -1` could pick it; the
 # invocation is the line whose ordering vs the restart actually matters.
 REDIS_RUN_LINE=$(grep -nE 'if /usr/local/bin/inngest-redis-bootstrap.sh; then' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
-RESTART_LINE=$(grep -nE '^systemctl restart inngest-server.service' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
+RESTART_LINE=$(grep -nE '^if ! systemctl restart inngest-server\.service; then$' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
 assert "bootstrap runs inngest-redis-bootstrap.sh (REDIS_READY probe) BEFORE the inngest-server restart" \
   "[[ -n '$REDIS_RUN_LINE' && -n '$RESTART_LINE' && '$REDIS_RUN_LINE' -lt '$RESTART_LINE' ]]"
 

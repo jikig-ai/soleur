@@ -165,6 +165,37 @@ rm -rf "$DIAG_TMP"
 # identity, the verify window vs --poll-interval, DURABLE_SENTINEL vs BACKEND_FLAGS). This one
 # was the omission. Both operands extracted BY SHAPE — a restated literal would agree with
 # itself while disagreeing with the file it came from.
+# --- #7228: diagnostic boot must be ADMITTED and DELIVERED, not just read -------------------
+# The lockstep block above asserts both files READ the same variable name. That is necessary and
+# was not sufficient: it is satisfied by a variable nothing ever sets, which is what shipped.
+# Two independent defects, both of which made diagnostic boot — the plan's centerpiece —
+# impossible, and the first of which BRICKS the host the moment an operator follows the runbook:
+#
+#  (a) ADMISSION. cloud-init-inngest.yml's boot isolation self-check is an EXACT-SET match over
+#      the soleur-inngest/prd secret names and FATALs on any name outside it. Setting
+#      INNGEST_DIAGNOSTIC_BOOT=1 (which the recovery procedure instructs) would have made every
+#      subsequent re-provision refuse to bootstrap — the #6178 recurrence this repo has already
+#      paid for twice, and the exact reason the done-owner marker is NOT a Doppler key.
+#  (b) DELIVERY. inngest-bootstrap.sh reads the flag from its ENV, but its runcmd invocation is
+#      not wrapped in `doppler run` and passes an explicit env list. The flag never arrived, so
+#      the bootstrap always emitted the DURABLE ExecStart — while the guard, which DOES run under
+#      `doppler run`, saw the request. Durable unit + diagnostic request is precisely the
+#      "two halves disagree" state the guard refuses, so the result was a guaranteed BLOCK.
+echo "TEST: #7228 diagnostic boot is admitted by the boot self-check AND delivered to the bootstrap"
+CLOUD_INIT_INNGEST="$SCRIPT_DIR/cloud-init-inngest.yml"
+ISO_RE=$(grep -oE "grep -Ec '\^\(INNGEST_\([^']*\)\|BETTERSTACK_LOGS_TOKEN\)\\$'" "$CLOUD_INIT_INNGEST" | head -1 || true)
+assert_rc "the boot isolation allowlist was extracted by shape (else these pins are vacuous)" \
+  "0" "$([[ -n "$ISO_RE" ]] && echo 0 || echo 1)"
+assert_rc "(a) the isolation allowlist ADMITS DIAGNOSTIC_BOOT (an unadmitted name FATALs every re-provision)" \
+  "0" "$(grep -qF 'DIAGNOSTIC_BOOT' <<<"$ISO_RE" && echo 0 || echo 1)"
+# Anchored on the assignment construct in the env list a comment cannot produce.
+assert_rc "(b) the bootstrap invocation DELIVERS the flag (reading it is not the same as receiving it)" \
+  "0" "$(grep -qE '^\s*"INNGEST_DIAGNOSTIC_BOOT=\$DIAG_BOOT" ' "$CLOUD_INIT_INNGEST" && echo 0 || echo 1)"
+# The read that feeds it must be BOUNDED: this sits on the only path that installs the
+# observability stack, so an unreachable Doppler must degrade to a normal boot, never hang it.
+assert_rc "(b) the delivery read is bounded by a timeout (it precedes the observability install)" \
+  "0" "$(grep -qE 'DIAG_BOOT=.*timeout [0-9]+ doppler secrets get INNGEST_DIAGNOSTIC_BOOT' "$CLOUD_INIT_INNGEST" && echo 0 || echo 1)"
+
 echo "TEST: the done-owner marker path agrees between the FSM writer and this guard (#7228)"
 FLIP_SH="$SCRIPT_DIR/inngest-cutover-flip.sh"
 GUARD_PATH=$(grep -oE '^DONE_OWNER_MARKER="\$\{GUARD_DONE_OWNER_MARKER:-[^}]+\}"' "$TARGET" \
