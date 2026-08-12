@@ -194,3 +194,53 @@ the load-bearing part — whether the identity string CHANGES between commits is
 Every site asserting the suppression mechanism is wrong and must state the comparator instead. The
 conclusion — *do not add a `version` key to any of the three manifests* — is unchanged and, if
 anything, better supported: it now rests on a measured comparator rather than an inferred one.
+
+---
+
+## 1.6 / 2B.6 — Full migration rehearsal, legacy install → new marketplace
+
+**Run 2026-08-12 on a clean `HOME`, end to end, no shortcuts.** Task 1.6 asked for a real refresh
+from the real migration state rather than a fixture; this is that run, and it doubles as the
+verification of the migration sequence published in both READMEs.
+
+### Step 1 — establish a genuine legacy install
+
+| | Value |
+|---|---|
+| `marketplace add jikig-ai/soleur` (timeout raised to 900,000 ms) | **329 s** |
+| `install soleur@soleur` | 2 s |
+| Total `~/.claude/plugins` | **359,399,529 B = 342.7 MiB** |
+
+**329 s is the finding.** The CLI's default is 120,000 ms, so the documented install path takes
+**~2.7× longer than the timeout allows**. Defect 2 is not marginal or network-dependent — the
+default cannot succeed here, which is why the failure is reproducible rather than flaky.
+
+### Step 2 — the published migration sequence, default timeout UNSET
+
+| Command | Result |
+|---|---|
+| `marketplace add jikig-ai/soleur-marketplace` | rc=0, **6 s** |
+| `install soleur@soleur-marketplace` | rc=0, **28 s** |
+| `uninstall soleur@soleur` | rc=0 |
+| `marketplace remove soleur` | rc=0 |
+
+All four succeed **with no raised timeout**, because the sequence never re-clones the monorepo.
+That is the property task 2B.6 required — a migration usable *from* the broken state, rather than
+one that must first traverse the thing that is broken.
+
+### Step 3 — end state is correct
+
+`plugin list` shows only `soleur@soleur-marketplace`; `marketplace list` shows only
+`soleur-marketplace`. The 181 MiB marketplace checkout is reclaimed (`plugins/marketplaces` back
+to 39,188 B — the new repo's whole footprint).
+
+### The orphan the migration leaves behind (task 3.6's class, measured)
+
+`plugins/cache` ends at **20,186,220 B**, roughly double the ~10 MiB the new install needs:
+`cache/soleur/soleur` survives `uninstall` **and** `marketplace remove`. About **9.6 MiB** of
+orphaned plugin cache, never garbage-collected.
+
+Modest in absolute terms and worth documenting rather than automating away — but it means
+"removed the marketplace" does not mean "reclaimed the disk", and the same class explains the
+374 MiB `soleur.bak` orphan the issue reported. The reclaim is a manual `rm -rf` of the stale
+cache directory; there is no CLI verb for it.
