@@ -601,6 +601,81 @@ else
   FAIL=$((FAIL + 1))
 fi
 
+# ---------------------------------------------------------------------------
+# Test 19 — DECOY POSITIVE CONTROL for the untrusted-anchor vector (#7450, ADR-179).
+#
+# Test 18 above pins the two call sites to each OTHER. Nothing pinned either of them to a
+# path the reviewed party cannot control — which is the actual defect: `review/SKILL.md`
+# instructs `gh pr checkout`, so on the review path `$(git rev-parse --show-toplevel)` IS the
+# contributor's tree, and the gate whose exit code decides whether secrets are emitted resolves
+# its own scanner from there.
+#
+# The oracle is the anchor expression AS COMMITTED in incident/SKILL.md, extracted at runtime.
+# It is deliberately NOT duplicated into this file: a guard whose expected value is a literal
+# copied from the artifact it guards is a set-difference over one producer, and goes vacuous the
+# moment someone edits both together
+# (learnings/2026-07-19-a-self-graded-mutation-battery-went-vacuous-twice-in-one-pr...).
+#
+# 19a proves the decoy is a LIVE hazard rather than an inert file — the real sentinel flags the
+# same fixture that the decoy waves through. A positive control that could not have passed
+# proves nothing.
+# ---------------------------------------------------------------------------
+t19_tree="${TMP_DIR}/t19-contributor-tree"
+mkdir -p "${t19_tree}/plugins/soleur/skills/incident/scripts"
+git -C "${t19_tree}" init -q >/dev/null 2>&1
+# Compare physical paths: mktemp may hand back a symlinked prefix while
+# `git rev-parse --show-toplevel` always reports the resolved one, which would make the
+# containment test below silently false-PASS.
+t19_tree="$(cd "${t19_tree}" && pwd -P)"
+t19_decoy="${t19_tree}/plugins/soleur/skills/incident/scripts/redact-sentinel.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "${t19_decoy}"
+chmod 0755 "${t19_decoy}"
+
+# 19a — the decoy is a live hazard: it passes a file the real sentinel rejects.
+t19_secret="${TMP_DIR}/t19-secret.md"
+python3 -c "import sys; sys.stdout.write('anthropic_key: ' + 'sk-' + 'ant-api03-' + 'A'*32 + '\n')" > "${t19_secret}"
+bash "${SENTINEL}" "${t19_secret}" >/dev/null 2>&1
+t19_real_rc=$?
+bash "${t19_decoy}" "${t19_secret}" >/dev/null 2>&1
+t19_decoy_rc=$?
+if [[ "${t19_real_rc}" -eq 1 && "${t19_decoy_rc}" -eq 0 ]]; then
+  echo "PASS: Test 19a: decoy is a live hazard (real sentinel exit=1 on the fixture, decoy exit=0)"
+  PASS=$((PASS + 1))
+else
+  echo "FAIL: Test 19a: decoy is not a valid positive control (real=${t19_real_rc} expected 1, decoy=${t19_decoy_rc} expected 0)"
+  FAIL=$((FAIL + 1))
+fi
+
+# 19b — extract the anchor from the committed producer, and refuse to run vacuously.
+# The grep -Fq is the anti-hardcode assertion: a future edit that stops reading the producer
+# and pins a literal here goes RED as soon as the SKILL.md drifts away from it.
+t19_expr=$(sed -n 's/^[[:space:]]*SENTINEL="\(.*\)"[[:space:]]*$/\1/p' "${INCIDENT_SKILL}" | head -1)
+if [[ -n "${t19_expr}" ]] && grep -Fq "${t19_expr}" "${INCIDENT_SKILL}"; then
+  echo "PASS: Test 19b: anchor expression extracted from the committed incident/SKILL.md"
+  PASS=$((PASS + 1))
+else
+  echo "FAIL: Test 19b: anchor extraction is vacuous — no SENTINEL= assignment found in ${INCIDENT_SKILL##*/}, or the extracted text is not present in it"
+  FAIL=$((FAIL + 1))
+fi
+
+# 19c — expand the committed expression the way a reviewer's session would: plugin root
+# unresolved, CWD inside the checked-out contributor tree. The resolved path must not land
+# inside that tree.
+t19_expand="${TMP_DIR}/t19-expand.sh"
+printf 'printf "%%s" "%s"\n' "${t19_expr}" > "${t19_expand}"
+t19_resolved=$(cd "${t19_tree}" && env -u CLAUDE_PLUGIN_ROOT bash "${t19_expand}" 2>/dev/null)
+case "${t19_resolved}" in
+  "${t19_tree}"/*|"${t19_tree}") t19_inside=1 ;;
+  *)                             t19_inside=0 ;;
+esac
+if [[ -n "${t19_resolved}" && "${t19_inside}" -eq 0 ]]; then
+  echo "PASS: Test 19c: committed anchor resolves outside the contributor tree (${t19_resolved})"
+  PASS=$((PASS + 1))
+else
+  echo "FAIL: Test 19c: committed anchor resolves INTO the reviewed party's tree — a hostile PR's redact-sentinel.sh would run as the gate (resolved=${t19_resolved:-<empty>}, decoy=${t19_decoy})"
+  FAIL=$((FAIL + 1))
+fi
+
 echo
 echo "Total: ${PASS} pass, ${FAIL} fail"
 [[ "${FAIL}" -eq 0 ]]
