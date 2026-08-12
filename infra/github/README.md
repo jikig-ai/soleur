@@ -231,6 +231,32 @@ doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
   terraform import github_repository_ruleset.cla_required soleur:13304872
 ```
 
+### Adopting `jikig-ai/soleur-marketplace` (#7471)
+
+`repository-marketplace.tf` declares `github_repository.soleur_marketplace` — the public
+repo that is the plugin's distribution channel (ADR-182). The repo was created out-of-band
+with `gh repo create` as a one-time bootstrap and is adopted into state by
+`import_repository` in `apply-github-infra.yml`, a sibling of `import_ruleset` with the same
+`grep -qxF` exact-address guard.
+
+**The import id shape differs from the ruleset one, and the difference is load-bearing.** A
+`github_repository` imports by its bare **name**; the owner comes from the provider block.
+Copying the ruleset's `owner:id` form fails at apply:
+
+```bash
+doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+  terraform import github_repository.soleur_marketplace soleur-marketplace
+```
+
+**If the App installation is scoped to selected repositories**, the import fails with a 404
+that reads like a missing repo rather than a missing grant. Widen the installation to include
+the new repo before re-running; the failure aborts the step under `set -euo pipefail` rather
+than falling through to a `plan` that would propose CREATE against a name that already exists.
+
+Terraform owns the repo's settings — visibility, description, topics, `archive_on_destroy` —
+and deliberately **not** its contents. The manifest inside it is hand-maintained and guarded
+by `.github/workflows/scheduled-marketplace-drift.yml`, not by this root.
+
 If you want to reproduce the local-terminal plan-diff probe before merge
 (sanity check that the diff is the expected set of additions), the
 canonical sequence is:
