@@ -117,9 +117,9 @@ _final_gate() {
   fi
   _tally
   local ran=$(( PASS + FAIL ))
-  if [[ "$ran" -lt "138" ]]; then
+  if [[ "$ran" -lt "142" ]]; then
     FAIL=$(( FAIL + 1 ))
-    echo "  FAIL: assertion floor — ran $ran assertions, expected >= 138"
+    echo "  FAIL: assertion floor — ran $ran assertions, expected >= 142"
     echo "        (suite truncated, or assert() neutered — this run certified nothing)"
   fi
   echo ""
@@ -725,6 +725,19 @@ done < <(printf '%s\n' "$CRONLINE" | grep -oE '/[A-Za-z0-9/._-]+' | sort -u)
 
 # The daemon named an absolute /usr/bin/doppler; the cron line resolves doppler through PATH, as
 # both siblings on this host already do.
+# PATH, timeout and the logger pipe are each load-bearing and each was absent (#7444 R10/R11).
+assert "T12 the cron block declares a PATH covering /usr/local/bin (where doppler actually is)" \
+  "grep -qE '^[[:space:]]*PATH=.*(/usr/local/bin)' '$CRONBLK'"
+# Scoped to $CRONLINE, the executable schedule line — NOT $CRONBLK. The rationale comment above
+# these directives contains the literal "timeout 240", so a block-wide grep matched the comment
+# as well as the code and returned two values. Exactly the class this suite pins elsewhere.
+assert "T12 the tick is time-bounded below the cadence (no cgroup bound exists under cron)" \
+  "grep -qE 'timeout[[:space:]]+[0-9]+[[:space:]]' <<<\"\$CRONLINE\""
+TMO="$(printf '%s' "$CRONLINE" | grep -oE 'timeout[[:space:]]+[0-9]+' | grep -oE '[0-9]+$' || true)"
+assert "T12 the timeout (${TMO}s) is strictly below the 300s cadence, so ticks cannot overlap" \
+  "[[ -n '$TMO' && '$TMO' -lt 300 ]]"
+assert "T12 the tick's stderr reaches journald via logger (cron has no MTA on this host)" \
+  "grep -qE '\\|[[:space:]]*logger[[:space:]]+-t[[:space:]]+zot-log-shipper' <<<\"\$CRONLINE\""
 assert "T12 the cron line does NOT name /usr/bin/doppler (this template creates no such symlink)" \
   "! grep -qF '/usr/bin/doppler' '$CRONBLK'"
 assert "T12 flock's absolute path exists on this platform (util-linux ships it)" \
@@ -762,10 +775,18 @@ extract_block "$JOURNALD_DROPIN" "$JDROP"
 assert "T13 the journald drop-in block was extracted" "[[ -s '$JDROP' ]]"
 assert "T13 journald Storage=persistent (moves the buffer off the /run tmpfs)" \
   "grep -qE '^[[:space:]]*Storage=persistent[[:space:]]*$' '$JDROP'"
-assert "T13 journald SystemMaxUse is pinned to a literal (assertable; a conditional one is not)" \
-  "grep -qE '^[[:space:]]*SystemMaxUse=[0-9]+[KMG]?[[:space:]]*$' '$JDROP'"
-assert "T13 journald RuntimeMaxUse is pinned to a literal (bounds the tmpfs side too)" \
-  "grep -qE '^[[:space:]]*RuntimeMaxUse=[0-9]+[KMG]?[[:space:]]*$' '$JDROP'"
+# MAGNITUDE, not shape (#7444 R15). A `[0-9]+[KMG]?` regex accepts 512M -> 1K and 512M -> 4G
+# alike, so the literal every sizing argument in this file rests on was unpinned. Bound it.
+SMU="$(grep -oE '^[[:space:]]*SystemMaxUse=[0-9]+[KMG]?' "$JDROP" | grep -oE '[0-9]+[KMG]?$' || true)"
+assert "T13 journald SystemMaxUse is exactly 512M (the retention arithmetic depends on it)" \
+  "[[ '$SMU' == '512M' ]]"
+# RuntimeMaxUse is ABSENT ON PURPOSE. journald's default is 10% of /run = ~38MB on this 3,814MB
+# host, so the previous RuntimeMaxUse=64M RAISED the volatile ceiling it was documented as
+# lowering — ADR-182 cites that defect as an argument for deleting the daemon while the template
+# shipped the identical line. Under Storage=persistent the volatile journal is only a fallback,
+# so the correct value is no line at all.
+assert "T13 journald sets NO RuntimeMaxUse (64M raised the ~38M default it claimed to lower)" \
+  "! grep -qE '^[[:space:]]*RuntimeMaxUse=' '$JDROP'"
 
 # --- T14: BOOT MARKER — in-surface 'was this ever delivered?' signal ---------------------
 # Absent boot marker + unchanged SOLEUR_ZOT_DISK boot_id = not delivered. This is what lets the

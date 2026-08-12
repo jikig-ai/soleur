@@ -645,7 +645,7 @@ write_files:
       # the exemption was sized against. Source 2457081 is shared, so the observer can starve the
       # observed. Generous enough that ordinary evidence never trips it; bounded so a flood cannot
       # spend the estate's quota.
-      CAP_EXEMPT_PER_INTERVAL="$${ZOT_LOG_SHIPPER_CAP_EXEMPT_PER_INTERVAL:-200}"
+      CAP_EXEMPT_PER_INTERVAL="$${ZOT_LOG_SHIPPER_CAP_EXEMPT_PER_INTERVAL:-17}"
       MAXLEN=800
 
       mkdir -p "$STATE_DIR" || exit 1
@@ -871,6 +871,16 @@ write_files:
           "gc successfully completed"*) return 0 ;;
           "garbage collected blobs"*)   return 0 ;;
           PatchBlobUpload*)             return 0 ;;
+          # CRASH evidence, not just GROWTH evidence (#7444 R12). The four classes above are all
+          # gc/blob-upload — so under a crash loop, which is BOTH the flood the exemption was
+          # sized against AND the incident class that motivated this whole change, the rows the
+          # cap dropped were the panic traces and the rows it kept were the gc lines. A Go panic
+          # is 30-60 journald entries against a 17/tick ordinary cap. The sibling disk reporter
+          # already encodes this severity ordering ~500 lines above.
+          panic:*)                      return 0 ;;
+          "fatal error"*)               return 0 ;;
+          "runtime error"*)             return 0 ;;
+          \[signal*)                     return 0 ;;
         esac
         return 1
       }
@@ -1093,7 +1103,27 @@ write_files:
       # environment to the one secret this job needs, so REGISTRY_LUKS_KEY and the zot tokens are
       # never resident in it (#7444 F-14). --no-fallback declines the on-disk encrypted fallback
       # cache, which would otherwise persist the resolved secret set under $HOME/.doppler (F-13).
-      4-59/5 * * * * root set -a; . /etc/default/registry-doppler; set +a; flock -n /run/lock/zot-log-shipper.lock doppler run --project soleur-registry --config prd --only-secrets BETTERSTACK_LOGS_TOKEN --no-fallback -- /usr/local/bin/zot-log-shipper.sh
+      # PATH IS LOAD-BEARING, and this block omitted it while the NIC guard's block below states
+      # exactly why and adds that "the sibling disk-heartbeat cron is not cover for this".
+      # doppler lives ONLY at /usr/local/bin/doppler (F-1 established this template writes no
+      # symlink) and /etc/default/registry-doppler sets no PATH, so under the model this repo
+      # itself commits, a bare `doppler` does not resolve, every tick exits 127, and the channel
+      # is silently dead. The disk-heartbeat working in production implies Debian cron uses
+      # _PATH_DEFPATH_ROOT for root jobs — but two committed models of cron's PATH contradict
+      # each other here and nothing asserted either, so this pins it rather than inheriting it.
+      PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      # `timeout 240` bounds the tick BELOW the 5-minute cadence. Without it a tick had no bound
+      # of any kind: the daemon's RuntimeMaxSec/MemoryMax/CPUQuota went with the unit, and a
+      # cron.d job inherits no cgroup. A killed tick loses nothing — the cursor stops at the last
+      # delivered row — so the bound is free.
+      #
+      # 3-59/5, not 4-59/5. The disk heartbeat holds */5 and the NIC guard 2-59/5, so the free
+      # slots are 1, 3 and 4. Minute 4 has ONE minute of forward clearance to the heartbeat;
+      # minute 3 has two. The earlier "furthest free slot" claim maximised distance from the
+      # PREVIOUS neighbour and left the least room ahead — for the one job of the three whose
+      # runtime is not fixed. `logger -t` is what makes the shipper's stderr observable at all:
+      # cron has no MTA here, so without it every fail-loud breadcrumb goes to /dev/null.
+      3-59/5 * * * * root set -a; . /etc/default/registry-doppler; set +a; flock -n /run/lock/zot-log-shipper.lock timeout 240 doppler run --project soleur-registry --config prd --only-secrets BETTERSTACK_LOGS_TOKEN --no-fallback -- /usr/local/bin/zot-log-shipper.sh 2>&1 | logger -t zot-log-shipper
     owner: root:root
     permissions: '0644'
 
@@ -1117,7 +1147,6 @@ write_files:
       [Journal]
       Storage=persistent
       SystemMaxUse=512M
-      RuntimeMaxUse=64M
     owner: root:root
     permissions: '0644'
 
