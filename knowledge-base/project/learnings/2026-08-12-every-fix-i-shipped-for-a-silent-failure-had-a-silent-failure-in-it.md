@@ -173,3 +173,24 @@ Four measurements in this session were themselves broken:
     than respawned, preserving partial findings — one had already established a finding it
     was mid-way through proving. **Prevention:** resume, do not respawn; and cap
     sub-agent fan-out inside an agent that has stalled once.
+19. **The plan's `discoverability_test.expected_output` was a string the suite never emits.**
+    It read `"OK inngest-consumer-probe: all assertions passed"`, copied by analogy from the
+    sibling suite `inngest-boot-emitter.test.sh`, which genuinely ends that way; this suite
+    ends `=== $PASS passed, $FAIL failed ===`. The declared value appears nowhere in the repo.
+    Caught by preflight Check 10, which EXECUTES the command rather than checking the field is
+    present — every earlier gate checked presence and passed. Recovery: corrected to `0 failed`
+    (stable across assertion-count changes). **Prevention:** a verification contract is not
+    verified by existing. Run the command once at authoring time; and treat "the sibling
+    artifact says X" as a hypothesis about THIS artifact, never as evidence — the nineteenth
+    instance of this PR's own recurring shape, committed in the field that certifies the fix.
+20. **The plan's brand-survival threshold was bold prose, not the canonical bullet.**
+    `**Brand-survival threshold:** single-user incident.` instead of the required
+    `- **Brand-survival threshold:** single-user incident`. Recovery: canonicalized.
+    **Prevention:** the gate anchors on bullet shape deliberately — substring-matching prose
+    would let "this is not a single-user incident" pass. Copy the literal from
+    `plan-issue-templates.md` rather than approximating it.
+21. **The plan frontmatter claimed `closes: [7228, 6617, 7308]`.** All three would have closed
+    at merge on a promise; #7228 cannot close until the #7462 host restore lands. Recovery:
+    `refs:`, and `Ref` rather than `Closes` in the PR body. **Prevention:** before writing a
+    close keyword, ask what post-merge event proves the issue's ask is true — if one exists,
+    the keyword is wrong.

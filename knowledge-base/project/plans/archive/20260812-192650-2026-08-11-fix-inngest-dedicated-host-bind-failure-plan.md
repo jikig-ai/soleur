@@ -475,7 +475,13 @@ logs:
     live failure is always in-window regardless of the dedicated host's state
 discoverability_test:
   command: bash apps/web-platform/infra/inngest-consumer-probe.test.sh
-  expected_output: "OK inngest-consumer-probe: all assertions passed"
+  # Corrected at ship time by preflight Check 10, which EXECUTES this command instead of
+  # trusting it. The original value ("OK inngest-consumer-probe: all assertions passed")
+  # appears nowhere in the repo — it was copied by analogy from the sibling suite
+  # inngest-boot-emitter.test.sh, which genuinely emits that shape. This suite ends with
+  # `=== $PASS passed, $FAIL failed ===`. Matching on "0 failed" rather than the full line
+  # so the expectation survives adding assertions.
+  expected_output: "0 failed"
 ```
 
 ## Infrastructure (IaC)
