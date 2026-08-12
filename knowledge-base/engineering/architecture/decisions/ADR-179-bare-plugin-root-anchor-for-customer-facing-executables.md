@@ -4,15 +4,18 @@ status: accepted
 date: 2026-08-11
 amends: [ADR-093]
 related_adrs: [ADR-074, ADR-091, ADR-093, ADR-151, ADR-155, ADR-171]
-related: [7442, 7450, 6222, 7474, 7452]
+related: [7442, 7450, 6222, 7474, 7452, 7453, 7502]
 amended_by:
   - "#7474 (2026-08-11) — producer presence as a fourth precondition; see ## Amendment 2026-08-11"
+  - "#7450 (2026-08-12) — the skills secret-gate subset, then decisions 8/9/10 and the §R1 settlement from the CTO ruling; see ## Amendment — 2026-08-12"
 related_plans:
   - knowledge-base/project/plans/2026-08-11-fix-sync-plugin-root-anchoring-plan.md
   - knowledge-base/project/plans/archive/20260812-125433-2026-08-11-fix-sync-producer-freshness-probe-plan.md
+  - knowledge-base/project/plans/2026-08-12-fix-git-root-fallback-untrusted-anchor-plan.md
 related_specs:
   - knowledge-base/project/specs/feat-one-shot-7442-sync-plugin-root-anchoring/tasks.md
   - knowledge-base/project/specs/archive/20260812-145032-feat-one-shot-7474-sync-producer-freshness-probe/tasks.md
+  - knowledge-base/project/specs/feat-one-shot-7450-git-root-anchor-untrusted/tasks.md
 brand_survival_threshold: single-user incident
 ---
 
@@ -235,11 +238,29 @@ the workspace.
 - **A fourth precondition — producer PRESENCE — was added 2026-08-11 (#7474).** Identity is
   not freshness: a root that is authentically Soleur can still not carry a producer. See
   `## Amendment 2026-08-11 (#7474)` below.
-- The `~100` `${CLAUDE_PLUGIN_ROOT:-…}` sites under `plugins/soleur/skills/**` are **not**
-  migrated here. That migration requires changing `server/safe-bash.ts`'s exact-literal set
-  and `plugin-root-list-carveout-coupling.test.ts`'s regex, which does not belong behind a
-  P1 customer bug fix — bundling an allowlist edit with a bug fix is how allowlist
-  regressions ship. Deferred, blocked on this ADR.
+- ~~The `~100` `${CLAUDE_PLUGIN_ROOT:-…}` sites under `plugins/soleur/skills/**` are **not**
+  migrated here … Deferred, blocked on this ADR.~~ **Superseded 2026-08-12 (#7450).** The
+  skills surface is no longer wholly deferred and is no longer "blocked on this ADR" — the
+  ADR is accepted, so nothing is blocked on it. The **secret-gate subset** is migrated (see
+  `## Amendment — 2026-08-12`); the remaining ~105 non-gate sites stay deferred to **#7453**,
+  for the reason above that survives: that migration edits `safe-bash.ts`'s exact-literal set
+  and `plugin-root-list-carveout-coupling.test.ts`'s regex, and bundling an allowlist edit
+  with a security fix is how allowlist regressions ship. Those ~105 are **unmigrated, not
+  endorsed** — a new site must use the bare anchor.
+- **The negative branch of §R3 has a larger blast radius than "the operator-experience
+  calculus" implies, and it is stated here rather than left to the halt-gate note.** If the
+  loader did not substitute, four skills — `incident`, `legal-generate`, `linear-fetch`,
+  `trigger-cron` — would halt on **every invocation, for every CLI operator, permanently**,
+  because the bare form expands to a root-anchored path that cannot exist. Not a degraded
+  mode: a total loss of those skills, including the redaction gates that make post-mortems
+  and legal drafts safe to publish. And the failure would be **invisible in aggregate** —
+  observability layer 7 (ADR-171) has no durable artifact on this path, so the only evidence
+  is each operator's terminal. That is why §R3 was gated on a *measurement* rather than an
+  argument, and why the halt messages now carry `SOLEUR_*_HALT` markers: a mass halt should
+  be visible in telemetry on the first occurrence, not inferred from support volume.
+  **The branch did not occur** — §R3 is measured positive on both surfaces (see
+  `## Amendment — 2026-08-12`) — but the residual is recorded because the measurement is
+  construction-specific, not a flat proof.
 - `EXACT_LITERAL_SAFE_COMMANDS` in `safe-bash.ts` is **prompt-suppression, not an execution
   gate** — the committed docstring at `plugin-root-list-carveout-coupling.test.ts:26-29`
   says trust comes from the path anchor and that drift is "UX friction, never untrusted-code
@@ -497,8 +518,22 @@ would is deferred (#7452).
 
 - **Amends ADR-093.** Its `${CLAUDE_PLUGIN_ROOT:-<preserved-anchor>}` guidance remains
   correct for the server surface it was written against; this ADR scopes it out of the
-  customer-facing command surface. ADR-093 §Amendment's premise that "git-root = the
-  operator's own checkout" is falsified on the review path — see #7450.
+  customer-facing command surface **and, since 2026-08-12 (#7450), out of the secret-gate
+  subset of the skills surface** — the scope is no longer command-surface-only. ADR-093
+  §Amendment's premise that "git-root = the operator's own checkout" is falsified on the
+  review path — see #7450. That paragraph is deliberately retained byte-identical in ADR-093
+  and carries an inline falsification notice, because it is the record of what was believed;
+  two ADRs quote its wording as a content anchor, so it must not be reworded to satisfy a
+  grep.
+- **Supersedes the 2026-07-08 plugin-root-migration learning** on one point:
+  `learnings/best-practices/2026-07-08-plugin-root-migration-ac-grep-scope-and-anchor-preservation.md`
+  instructed *"preserve the EXACT original fallback anchor per site — never homogenize"* and
+  named the git-root form for these three redaction gates specifically. It carries
+  `synced_to: [work, plan]`, so it was agent-retrievable and would have been followed. It now
+  carries a superseding banner and inline markers.
+- **#7502** carries the half of §R1 that is not an anchoring defect: a review session opened
+  inside a contributor-checked-out worktree executes that tree's `.claude/hooks/*.sh` on every
+  tool call. Strictly larger than any path anchor, and deliberately not held inside #7450.
 - **ADR-091** establishes the rule-metrics producer as local, which is the substantive
   reason `rule-prune` is monorepo-only.
 - **ADR-155** supplies the closed-vocabulary-over-free-form-token precedent reused in
@@ -710,3 +745,66 @@ copy of the command-surface rule unusable: the anchor lives in an **assignment**
 the assignment points anywhere; and most path-form references in the corpus are **markdown
 links**, so a bare-path rule reports documentation as a vulnerability. `redact-sentinel.test.sh`
 carries a planted-decoy positive control and a corpus-wide zero.
+
+### Amendment continued — 2026-08-12 (#7450 review remediation): §R3 measured on the skill surface, and the root-outside-worktree form REJECTED
+
+**10. §R3 is measured positive on the SKILL surface, by direct execution.** The original
+measurement covered the *command* surface (`commands/go.md`) and bridged to the skill surface
+by an inference the review panel correctly called void: non-substitution of a *non-matching*
+literal cannot distinguish "the pass ran and declined" from "the pass never ran here" — both
+predict identical bytes.
+
+The direct arm was run. The recorded blocker ("requires a fresh session", because the skill
+registry is built at session start) was **wrong**: a headless `claude -p --plugin-dir` builds
+its own registry. With a synthetic single-skill plugin, in one session and one environment:
+
+| Form, in a fenced `bash` block in `SKILL.md` | Result |
+| --- | --- |
+| bare `${CLAUDE_PLUGIN_ROOT}/x.sh` | **substituted at delivery** with the real install root |
+| `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/…` | literal; expanded at runtime to **`/tmp/DECOY-EVIL-ROOT/…`** |
+| control: the decoy inside the executing Bash subprocess | present — `ENV_GREP=[1]` |
+
+The control is the load-bearing part. Without it, "the ambient value was ignored" and "the
+ambient value never propagated" are indistinguishable, and the first reads as safety. With it,
+the conclusion is unambiguous: **at a bare-anchored site the token is not a shell variable at
+execution time.** The loader fixes it to a literal before bash sees the text, and it takes the
+value from the install path, not from the environment. Evidence:
+`specs/feat-one-shot-7450-git-root-anchor-untrusted/phase-1-measurement.md` Arm 4.
+
+This also makes the pre-fix `:-` form a **reproduced** exploit rather than a modelled one: in
+the same session it resolved this repo's own redaction gate to an attacker-chosen root.
+
+**11. REJECTED — asserting the resolved root lies outside the working tree.** The review panel
+prescribed, at each secret gate:
+
+```bash
+case "$(cd "${CLAUDE_PLUGIN_ROOT}" && pwd -P)/" in "$(git rev-parse --show-toplevel 2>/dev/null)/"*) halt;; esac
+```
+
+Its diagnosis is right — manifest-plus-name is a shape check and a `gh pr checkout` tree
+satisfies it byte-for-byte. Its prescription is rejected on three grounds:
+
+1. **It guards an unreachable operand.** Per decision 10 there is no environment-supplied
+   value at these sites to constrain.
+2. **It breaks dogfooding on every plain clone.** On a normal `git clone` the plugin root *is*
+   inside the working tree, so the assertion halts every invocation. It appeared to pass only
+   on a machine where the install is a **bare** root while review runs in `.worktrees/`, so the
+   two paths happen not to nest — a local-layout accident, not a property.
+3. **It re-adds a CWD-resident trust decision.** It reintroduces `git rev-parse --show-toplevel`
+   into the exact three files this amendment removes it from, and §R1's settlement is precisely
+   *"not a stronger sentinel but the removal of trust decisions from CWD-resident operands."*
+   Authenticating a tree from inside that tree is what §R1 rules out.
+
+Consequently the identity preflight is **defence-in-depth**, not the load-bearing control, and
+the prose at all three gates now says so. The bare anchor is what carries the security claim.
+
+**Recorded as an invariant, not a preference.** `redact-sentinel.test.sh` Test 21 pins the three
+gates at **zero** git-root resolution, fence-scoped so that prose explaining the ban is not
+flagged as a violation of it. A future implementation of the rejected form reddens rather than
+landing quietly; reversing this decision means superseding `b1-disposition.md` first.
+
+**Residual, stated not closed.** Grok Build is a supported harness and neither
+`plugins/soleur/lib/harness.ts` nor `.grok/` handles `CLAUDE_PLUGIN_ROOT`. Whether a bare token
+in plugin markdown is substituted there is **unmeasured**. If it is not, the operand becomes
+attacker-reachable on that surface and decision 11 must be revisited — with cost 2 solved first,
+since a naive `case` would halt every contributor there too.
