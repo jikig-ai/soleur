@@ -308,6 +308,31 @@ assert_eq "(9a) inngest-cutover-flip.service carries RequiresMountsFor=/mnt/data
 assert_eq "(9b) cat-inngest-cutover-state.sh surfaces the latch, not just the erasable slot" "yes" \
   "$(grep -qE 'INNGEST_CUTOVER_LATCH' "$CAT_STATE" && echo yes || echo no)"
 
+# --- #7228: an UNPROVABLE mount must not reach FLUSHALL ------------------------------------
+# Every other case here sets INNGEST_CUTOVER_LATCH_MOUNT="" to disable the gate, because a mktemp
+# dir is not a mountpoint — so the gate itself had no fixture. That mattered: the write-path gate
+# sits AFTER stop_server + redis_flushall, so on an absent /mnt/data the queue was destroyed
+# before the guard spoke, and the READ path returned "not flushed" (latch invisible) which is the
+# arm that authorises the flush. The catastrophe guard failed OPEN on exactly its own condition.
+echo "TEST: #7228 an unprovable /mnt/data refuses the flush BEFORE anything destructive"
+setup_case
+rc=$(run_flip armed CUTOVER_REDIS_DBSIZE=0 INNGEST_CUTOVER_LATCH_MOUNT="$WORK/not-a-mountpoint")
+order=$(trace_csv)
+assert_eq "unprovable mount => non-zero exit" "1" "$rc"
+assert_absent "unprovable mount => FLUSHALL never ran" "$order" "flushall"
+assert_absent "unprovable mount => the server was never stopped" "$order" "stop"
+assert_absent "unprovable mount => never reached done" "$order" "flag:done"
+assert_contains "unprovable mount => terminal aborted" "$order" "flag:aborted"
+assert_eq "unprovable mount => state reason is latch-unrecordable" \
+  "latch-unrecordable" "$(jq -r '.reason' "$STATE")"
+teardown_case
+
+# --- assertion-count FLOOR ------------------------------------------------------------------
+LATCH_MIN_ASSERTIONS=45  # derived from a green run; raise in lockstep when adding assertions
+if [[ "$PASS" -lt "$LATCH_MIN_ASSERTIONS" ]]; then
+  fail "assertion-count floor: only $PASS assertions ran, expected >= $LATCH_MIN_ASSERTIONS — a block was skipped or emptied"
+fi
+
 echo
 echo "=== $PASS passed, $FAIL failed ==="
 [[ "$FAIL" -eq 0 ]]

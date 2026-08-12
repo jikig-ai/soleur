@@ -153,6 +153,20 @@ assert_rc "flag=done with a durable unit and diagnostic off still allows (no reg
   "0" "$(run_guard_diag "$PROD_URI" done 0 "$DURABLE_UNIT")"
 rm -rf "$DIAG_TMP"
 
+# The sentinel governs the QUEUE, not registry adoption. A diagnostic host left pointing at the
+# live --sdk-url would adopt the PROD registry and independently fire every cron against prod —
+# duplicate execution reached through the escape hatch, which the guard's "no second scheduler is
+# possible" comment did not cover. Assert the diagnostic branch also neutralises the sync target.
+echo "TEST: #7228 diagnostic boot adopts NO registry (cannot double-fire prod crons)"
+assert_rc "the diagnostic branch repoints --sdk-url at a closed loopback port" \
+  "0" "$(grep -qE "^  SDK_URL='http://127\.0\.0\.1:1/api/inngest'\$" "$SCRIPT_DIR/inngest-bootstrap.sh" && echo 0 || echo 1)"
+# ...and it must sit INSIDE the diagnostic arm, not above it, or every boot loses its registry.
+DIAG_ARM_START=$(grep -nE '^if \[\[ "\$DIAGNOSTIC_BOOT" == "1" \]\]; then$' "$SCRIPT_DIR/inngest-bootstrap.sh" | head -1 | cut -d: -f1 || true)
+SDK_NEUTER_LINE=$(grep -nE "^  SDK_URL='http://127\.0\.0\.1:1/api/inngest'\$" "$SCRIPT_DIR/inngest-bootstrap.sh" | head -1 | cut -d: -f1 || true)
+DIAG_ELIF=$(grep -nE '^elif \[\[ "\$REDIS_READY" == "1" \]\]; then$' "$SCRIPT_DIR/inngest-bootstrap.sh" | head -1 | cut -d: -f1 || true)
+assert_rc "the neutralisation is scoped to the diagnostic arm (a normal boot keeps its registry)" \
+  "0" "$([[ -n "$DIAG_ARM_START" && -n "$SDK_NEUTER_LINE" && -n "$DIAG_ELIF" && "$SDK_NEUTER_LINE" -gt "$DIAG_ARM_START" && "$SDK_NEUTER_LINE" -lt "$DIAG_ELIF" ]] && echo 0 || echo 1)"
+
 # --- #7228: the done-owner PATH must agree between writer and reader ------------------------
 # The writer (inngest-cutover-flip.sh) and the reader (this guard) each declare the default
 # independently. Nothing pinned them, which is the one cross-file invariant in this change whose
@@ -398,7 +412,7 @@ fi
 # This suite gates only on FAIL, so a deleted or silently-emptied block reports green with fewer
 # rows. Placed BEFORE the summary so a floor breach is counted and PRINTED rather than exiting
 # silently after the totals. A FLOOR, never -eq: adding tests must not red the suite.
-GUARD_MIN_ASSERTIONS=44  # derived from a green run; raise in lockstep when adding assertions
+GUARD_MIN_ASSERTIONS=46  # derived from a green run; raise in lockstep when adding assertions
 if [[ "$PASS" -lt "$GUARD_MIN_ASSERTIONS" ]]; then
   fail "assertion-count floor: only $PASS assertions ran, expected >= $GUARD_MIN_ASSERTIONS — a block was skipped or emptied"
 fi

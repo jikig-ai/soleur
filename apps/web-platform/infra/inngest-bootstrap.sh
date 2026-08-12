@@ -950,7 +950,17 @@ esac
 if [[ "$DIAGNOSTIC_BOOT" == "1" ]]; then
   BACKEND_ENV='unset INNGEST_POSTGRES_URI; '
   BACKEND_FLAGS=''
-  log "inngest-server ExecStart: DIAGNOSTIC BOOT (#7228) — SQLite-only by request; prod Postgres unreachable so no second scheduler is possible. The host can now bind :8288 and emit net-health. This is NOT a cutover state: clear INNGEST_DIAGNOSTIC_BOOT before arming."
+  # AND NEUTRALISE REGISTRY ADOPTION. The durable sentinel governs where the QUEUE lives; it does
+  # not govern whether this host discovers and OWNS the function registry. Left pointing at the
+  # live web-platform, a diagnostic host polls --sdk-url every 60s, adopts the PRODUCTION registry
+  # into its local SQLite, and then independently fires the schedule for every cron in it against
+  # the prod app — while the co-located scheduler does the same. Two independent schedulers, two
+  # run ids, one production app: duplicate cron execution, which is the double-fire this whole
+  # guard exists to prevent, reached through the diagnostic escape hatch.
+  # The diagnostic objective — does the process bind :8288, and what does net-health say — is
+  # fully satisfied with an EMPTY registry, so point the sync at a closed loopback port.
+  SDK_URL='http://127.0.0.1:1/api/inngest'
+  log "inngest-server ExecStart: DIAGNOSTIC BOOT (#7228) — SQLite-only by request; prod Postgres unreachable so no second scheduler is possible. --sdk-url is pointed at a closed loopback port so the host adopts NO registry and cannot double-fire prod crons. The host can now bind :8288 and emit net-health. This is NOT a cutover state: clear INNGEST_DIAGNOSTIC_BOOT before arming."
 elif [[ "$REDIS_READY" == "1" ]]; then
   BACKEND_ENV='export INNGEST_REDIS_URI="redis://:$${INNGEST_REDIS_PASSWORD}@127.0.0.1:6379"; '
   BACKEND_FLAGS='--postgres-max-open-conns 5 --postgres-max-idle-conns 2 --postgres-conn-max-idle-time 1'

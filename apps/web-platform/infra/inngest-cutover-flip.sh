@@ -390,6 +390,13 @@ LATCH_FILE="${INNGEST_CUTOVER_LATCH:-/mnt/data/inngest-cutover/flip-done.latch}"
 LATCH_REQUIRE_MOUNT="${INNGEST_CUTOVER_LATCH_MOUNT-/mnt/data}"
 
 flush_already_performed() {
+  # NOTE on the unprovable-mount case: it is NOT handled here. Gating this predicate on the mount
+  # would work, but it reports through whichever caller consulted it — so an absent /mnt/data
+  # surfaced as `refuse-rearm-after-done`, a reason that describes a completely different
+  # situation and would send an operator looking for a prior flip that never happened. The gate
+  # lives at the top of run_preflush_flip instead, before anything destructive, where it has its
+  # own `latch-unrecordable` reason. That placement covers the same hazard (a FLUSHALL authorised
+  # by a latch we cannot read) with one unambiguous signal.
   [[ -e "$LATCH_FILE" ]] && return 0
   [[ -f "$STATE_FILE" ]] || return 1
   local recorded
@@ -453,6 +460,15 @@ refuse_rearm_after_done() {
 # landed before the post-assert `flushed` checkpoint. Re-running the flush is therefore
 # SAFE (nothing on prod) and closes the skip-flush window (P1-5 / #5450).
 run_preflush_flip() {
+  # DURABILITY GATE BEFORE THE DESTRUCTIVE OP. The write-path gate in record_flush_latch sits
+  # AFTER stop_server + redis_flushall, so on an absent /mnt/data the queue was already destroyed
+  # by the time it spoke. Assert it here, before anything irreversible happens, and abort loudly.
+  if [[ -n "$LATCH_REQUIRE_MOUNT" ]] && ! mountpoint -q "$LATCH_REQUIRE_MOUNT" 2>/dev/null; then
+    "${CUTOVER_LOGGER_CMD:-logger}" -t "$LOG_TAG" "SOLEUR_INNGEST_CUTOVER_ABORT reason=latch-unrecordable detail=pre-flush path=${LATCH_REQUIRE_MOUNT} is not a mountpoint — refusing to FLUSHALL when the latch that prevents a SECOND flush cannot be durably recorded. Nothing was stopped or flushed. #7228" 2>/dev/null || true
+    flag_set aborted
+    emit_state 1 "" "latch-unrecordable" aborted
+    exit 1
+  fi
   # P1-4 ORDER: stop the dark scheduler's write path, THEN flush, THEN assert.
   stop_server
   if ! redis_flushall; then
