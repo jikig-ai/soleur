@@ -1,7 +1,7 @@
 # ADR-093: The SDK plugin/hook/skill source is the platform-deployed root, never the connected-repo workspace copy
 
 - **Status:** Accepted — **amended by [ADR-179](./ADR-179-bare-plugin-root-anchor-for-customer-facing-executables.md)** (2026-08-11)
-- **Amended by:** ADR-179 scopes the `${CLAUDE_PLUGIN_ROOT:-<preserved-anchor>}` guidance below **out of the customer-facing command surface** (`plugins/soleur/commands/**`), where the canonical form is now the **bare** `${CLAUDE_PLUGIN_ROOT}`. This ADR's reasoning remains correct for the server surface it was written against; a third surface (a marketplace install) has since appeared, on which the `:-` default resolves into the customer's own tree. ADR-179 also records that this ADR's §Amendment premise *"git-root = the operator's own checkout"* is falsified on the review path after `gh pr checkout` (#7450, P0). Read both before following the guidance here.
+- **Amended by:** ADR-179 scopes the `${CLAUDE_PLUGIN_ROOT:-<preserved-anchor>}` guidance below **out of the customer-facing command surface** (`plugins/soleur/commands/**`) **and, since 2026-08-12 (#7450), out of the secret-gate subset of the skills surface** (`incident`, `legal-generate`, `linear-fetch`, `compound`, and the `redact-sentinel` test) — on both, the canonical form is now the **bare** `${CLAUDE_PLUGIN_ROOT}`. The ~105 remaining non-gate `plugins/soleur/skills/**` sites still follow the guidance below, pending #7453. This ADR's reasoning remains correct for the server surface it was written against; a third surface (a marketplace install) has since appeared, on which the `:-` default resolves into the customer's own tree. ADR-179 also records that this ADR's §Amendment premise *"git-root = the operator's own checkout"* is falsified on the review path after `gh pr checkout` (#7450, P0) — that paragraph now carries an inline falsification notice. Read both before following the guidance here.
 - **Date:** 2026-07-06
 - **Issue:** [#4826](https://github.com/jikig-ai/soleur/issues/4826) (delivery wedge; the infra bug behind it)
 - **Supersedes attempt:** [#6115](https://github.com/jikig-ai/soleur/pull/6115) (reverted via [#6117](https://github.com/jikig-ai/soleur/pull/6117)) — this decision corrects that attempt: it covers BOTH SDK factories (#6115 fixed only `cc-dispatcher.ts`) and the residual in-process SKILL.md reader, and it does not gate on the (falsified) "regenerate the ADR-079 canary fixture" premise.
@@ -53,7 +53,25 @@ For a workspace whose **connected repo ships its own committed `plugins/soleur/`
 
 Surfaced by the `user-impact-reviewer` P1 on the #6156 pull-forward PR (redaction-gate + prod-cron subset) and adjudicated by the CTO (defer, not block). The `${CLAUDE_PLUGIN_ROOT:-<git-root fallback>}` form this ADR mandates is **fail-safe only under one invariant**: the SDK exports a non-empty `CLAUDE_PLUGIN_ROOT` into the Concierge autonomous-bypass bash env. The in-script `[[ -r "$SENTINEL" ]]` fail-closed guard on the redaction gates catches an **absent/unreadable** path (→ exit 2 halt), but it does **not** catch a *readable-but-untrusted* copy: if `CLAUDE_PLUGIN_ROOT` were ever unset on the server, the `:-` fallback would resolve the connected repo's untrusted copy and `[[ -r ]]` would pass — re-opening the exact hole this ADR closes (a silent-leak for `redact-sentinel.sh`; `INNGEST_MANUAL_TRIGGER_SECRET` exfiltration for `trigger.sh`).
 
-The fallback branch **cannot** be made "fail-closed on unset" at the shell layer: it is the *correct, trusted* path for CLI/worktree/local-operator use (var legitimately unset, git-root = the operator's own checkout), and the shell cannot distinguish trusted-local-unset from untrusted-server-unset. The distinction *is* this invariant.
+> **FALSIFIED 2026-08-12 (#7450, P0). The paragraph below is retained as the record of what
+> was believed; do not follow it.** Its parenthetical asserted that when the variable is
+> legitimately unset, the git root is the operator's own checkout. That does not hold on the
+> review path: `plugins/soleur/skills/review/SKILL.md` instructs `gh pr checkout`, after which
+> `git rev-parse --show-toplevel` resolves to a tree whose contents are the **PR author's** —
+> and ADR-074 already models `contributor` as untrusted. On a marketplace install it resolves
+> to the customer's repo. So the fallback was not a rare degraded path but the CLI default,
+> and it pointed at a tree the reviewed party controls.
+>
+> The claimed impossibility was also resolved, though **not** at the shell layer where this
+> paragraph looked for it: [ADR-179](./ADR-179-bare-plugin-root-anchor-for-customer-facing-executables.md)
+> removed the default arm **entirely**. The bare `${CLAUDE_PLUGIN_ROOT}` is substituted by the
+> plugin loader before the text is ever executed (measured, #7450), so there is no unset-at-the-shell
+> state to distinguish — the dilemma this paragraph poses is dissolved rather than answered.
+>
+> Everything below about the **export invariant** (#6223) remains correct and is unaffected:
+> that reasoning is about the *server* surface, where the value is injected and validated.
+
+The fallback branch **cannot** be made "fail-closed on unset" at the shell layer: it is the *correct, trusted* path for CLI/worktree/local-operator use (var legitimately unset, the git worktree being the operator's own checkout), and the shell cannot distinguish trusted-local-unset from untrusted-server-unset. The distinction *is* this invariant.
 
 This premise spans all ~28 anchored sites (Slices B + C + Slice D) plus the SDK/`agent-env.ts` injection layer — so it is an ADR-093-wide platform concern, not a defect of any single doc migration.
 
