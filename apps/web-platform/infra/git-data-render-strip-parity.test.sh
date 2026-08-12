@@ -37,6 +37,9 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # make every arm below vacuous (an empty extraction compared against an empty extraction).
 TF="$DIR/modules/git-data-userdata/main.tf"
 BUDGET="$DIR/git-data-userdata-budget.sh"
+# Read by arm 1e: B1 lives in the rehearsal suite and re-reads the payload expression
+# out of main.tf, so the shape of ITS extractor is a parity concern.
+REHEARSAL="$DIR/git-data-runcmd-rehearsal.test.sh"
 
 if [[ ! -f "$TF" ]]; then
   printf '\n=== git-data-render-strip-parity ===\n\n  FAIL canonical render module not found at %s\n' "$TF"
@@ -131,11 +134,30 @@ fi
 # Declared-but-unreferenced is the silent form of this defect: the expression is present,
 # parity holds, and the render still ships unstripped. Mirrors the registry precedent's
 # `never REFERENCES` guard.
-if grep -qE 'replace\(templatefile\(' "$TF" && grep -qF 'local.git_data_template_rationale_strip' "$TF"; then
-  pass "the render wraps templatefile() in replace(..., local.git_data_template_rationale_strip, \"\")"
-else
+# COMMENT-STRIPPED AND CO-LOCATED, because neither property is optional here.
+#
+# The first form of this arm was two INDEPENDENT unanchored greps over the raw file — one for
+# `replace(templatefile(`, one for the local's name. Both tokens appear in this module's own
+# rationale prose, so comment rot alone could satisfy it with the render unwrapped. And even
+# on stripped text, two independent greps assert only that both strings EXIST somewhere; they
+# never assert the close belongs to that open.
+#
+# This is the only arm anywhere that pins the strip's APPLICATION. The sibling arms assert the
+# expression is declared (1/1b), mirrored (1/1b) and distinct from the payload form (1c) —
+# every one of which stays green when the `replace(...)` wrap is deleted, because the render
+# harness every render-based suite uses carries its own copy and strips regardless. Deleting
+# one line in main.tf reverts what a git-data host boots from, on a ForceNew attribute, and
+# nothing else in CI can see it.
+_tf_code="$(grep -vE '^[[:space:]]*(#|//)' "$TF")"
+_open_ln="$(grep -nE '^[[:space:]]*rendered[[:space:]]*=[[:space:]]*replace\(templatefile\(' <<<"$_tf_code" | head -1 | cut -d: -f1)"
+if [[ -z "$_open_ln" ]]; then
   fail "the render does NOT apply the template strip" \
-    "main.tf declares git_data_template_rationale_strip but never wraps templatefile() with it — the stored payload is unstripped"
+    "main.tf declares git_data_template_rationale_strip but `rendered` never opens replace(templatefile( — the stored payload is unstripped and the host boots the un-stripped document"
+elif ! grep -qE '^[[:space:]]*\}\)[[:space:]]*,[[:space:]]*local\.git_data_template_rationale_strip[[:space:]]*,' <<<"$(tail -n "+${_open_ln}" <<<"$_tf_code")"; then
+  fail "the render opens replace(templatefile( but no matching '}), local.git_data_template_rationale_strip,' follows it" \
+    "the wrap is applied with some OTHER expression, or the close drifted — either way the shipped payload is not the one this suite measures"
+else
+  pass "the render APPLIES the template strip: replace(templatefile(...), local.git_data_template_rationale_strip, \"\")"
 fi
 
 # ── 1e. B1's extractor must not be shadowed by a comment ───────────────────────────────
@@ -147,29 +169,29 @@ fi
 # and B1's own `#!/bin/sh\n# a comment\n` probe passes either way. Wrong stripper, green
 # suite. The fixture below is the proof the anchored form is required: it prepends a
 # shadowing comment and asserts the live expression still wins.
-_b1_probe=$(python3 - "$TF" <<'PY' 2>&1
-import re, sys
-tf = open(sys.argv[1]).read()
-probe = '# git_data_rationale_strip = "/(?m)^SHADOW\\n/"\n' + tf
-old = re.search(r'git_data_rationale_strip\s*=\s*"(.*)"', probe)
-new = re.search(r'^\s*git_data_rationale_strip\s*=\s*"([^"]*)"', probe, re.M)
-if old is None or new is None:
-    print("EXTRACT-FAILED"); sys.exit(0)
-print("SHADOWED" if "SHADOW" in old.group(1) else "NOT-SHADOWED", end=" ")
-print("LIVE" if "SHADOW" not in new.group(1) else "ALSO-SHADOWED")
-PY
-)
-if [[ "$_b1_probe" == "SHADOWED LIVE" ]]; then
-  pass "the anchored extractor ignores a shadowing comment that fools the bare form"
-elif [[ "$_b1_probe" == *"ALSO-SHADOWED"* ]]; then
-  fail "the anchored extractor is ALSO fooled by a shadowing comment" \
-    "B1 would mirror the wrong expression while its own probe still passes"
+# THE SHIPPED EXTRACTOR, not Python's own regex semantics.
+#
+# The first form of this arm built its own shadowed fixture and asserted that Python's
+# ANCHORED `re.search` beats its UNANCHORED one. That is true of Python whatever the rehearsal
+# suite actually contains, so the arm could never fail while still counting toward the floor —
+# a tautology wearing a guard's clothes. What matters is which form the rehearsal SHIPS.
+#
+# B1 re-reads the payload strip expression out of main.tf and recompiles it to mirror the
+# render. Unanchored, a COMMENT naming an old expression — exactly the prose this repo writes —
+# is extracted instead of the live assignment, and B1's own `#!/bin/sh\n# a comment\n` probe
+# passes either way: wrong stripper, green suite.
+_b1_anchored=$(grep -cF "re.search(r'^\\s*git_data_rationale_strip" "$REHEARSAL" 2>/dev/null || true)
+_b1_bare=$(grep -cE "re\\.search\\(r'git_data_rationale_strip" "$REHEARSAL" 2>/dev/null || true)
+if [[ ! -f "$REHEARSAL" ]]; then
+  fail "the rehearsal suite is readable" "expected it at $REHEARSAL"
+elif [[ "$_b1_anchored" -ge 1 && "$_b1_bare" -eq 0 ]]; then
+  pass "the rehearsal's B1 extractor is line-anchored, so a shadowing comment cannot displace the live expression"
 else
-  fail "could not run the B1 shadowing probe" "$_b1_probe"
+  fail "the rehearsal's B1 extractor is not line-anchored (anchored=${_b1_anchored} bare=${_b1_bare})" \
+    "an unanchored re.search takes the FIRST match, so a comment naming an old expression is mirrored instead of the live one — and B1's own probe passes either way"
 fi
 
 # And the live form must actually be the anchored one in the rehearsal suite.
-REHEARSAL="$DIR/git-data-runcmd-rehearsal.test.sh"
 if [[ -f "$REHEARSAL" ]] && grep -qF "re.search(r'^\\s*git_data_rationale_strip" "$REHEARSAL"; then
   pass "git-data-runcmd-rehearsal.test.sh uses the anchored, line-start extractor"
 else
@@ -229,7 +251,8 @@ fi
 _cont_hits="$(awk 'prev ~ /\\[ \t]*$/ && $0 ~ /^[ \t]*#/ {printf "%s:%d\n", FILENAME, NR} {prev=$0}' \
   "$DIR"/git-data-bootstrap.sh "$DIR"/git-data-provision.sh "$DIR"/git-data-transport-wrapper.sh \
   "$DIR"/git-data-remove.sh "$DIR"/git-data-gc.sh "$DIR"/git-data-pre-receive-placeholder.sh \
-  "$DIR"/git-data-gc.service "$DIR"/git-data-gc-failure.service "$DIR"/git-data-gc.timer 2>/dev/null || true)"
+  "$DIR"/git-data-gc.service "$DIR"/git-data-gc-failure.service "$DIR"/git-data-gc.timer \
+  "$DIR"/cloud-init-git-data.yml 2>/dev/null || true)"
 if [[ -z "$_cont_hits" ]]; then
   pass "no comment sits directly after a line continuation in any injected payload"
 else

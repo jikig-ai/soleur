@@ -18,11 +18,19 @@
 # shebang survives, and the strip is not a no-op (a strip matching nothing satisfies both
 # preservation checks while delivering none of the saving).
 #
-# ARM 4 IS THE ONE SHAPE-COMPARISON CANNOT DO. Top-level keys and runcmd/write_files entry
-# COUNTS are invariant under arbitrary corruption INSIDE a write_files content string or the
-# LUKSEOF heredoc body, so a "structure is identical" check passes over a deleted data line.
-# Arm 4 asserts the actual invariant per entry: stripped and unstripped differ ONLY by lines
-# the strip expression matches.
+# ARM 4, AND WHAT IT DOES *NOT* PROVE. It compares per entry rather than per document, so a
+# re-indented block scalar or a Go-RE2-vs-Python divergence reds here where a shape check
+# (top-level keys, entry counts) would pass. Its second floor is the load-bearing one: 20 of
+# 27 entries are byte-identical raw-vs-stripped, so an entry-count floor alone is satisfiable
+# entirely by entries the strip never touched.
+#
+# It does NOT prove a removed line was a comment rather than DATA. It asserts
+# `stripped == B(raw)` — the identity terraform just computed — so a `# `-shaped line that is
+# CONTENT (a heredoc writing a file whose body happens to contain one) is removed on both
+# sides and compares equal. Measured: adding such a line to a heredoc that writes
+# /etc/git-data-banner makes the host write 2 lines instead of 3, and this arm stays green.
+# No line of that shape exists in the corpus today; the residual is recorded rather than
+# claimed closed.
 #
 # ARM 5 PINS AN INVARIANT THAT IS CURRENTLY TRUE BY ACCIDENT. The strip runs over the
 # RENDERED output, so it sees interpolated values too. Nine interpolation sites sit at the
@@ -32,15 +40,24 @@
 # `# ` comment — or a new line-leading interpolation carries one — the strip silently eats
 # host content. Arm 5 makes that a CI failure instead of a boot failure.
 #
+# ITS HEADLINE CHECK IS A TAUTOLOGY UNDER TODAY'S PAIR, and that is worth stating so the arm
+# is not over-trusted: TEMPLATE matches `#` + `([ \t]…)?` and PAYLOAD matches `#` +
+# `([^!\n]…)?`, and `[ \t] ⊂ [^!\n]`, so TEMPLATE ⊆ PAYLOAD and a post-payload-strip line
+# can never match TEMPLATE. It therefore fires on a PAYLOAD-strip change (measured) and can
+# never fire on a TEMPLATE-strip change. Its live residue is the "references no known file()
+# payload" branch and the ≥9-bindings floor, which catch a NEW line-leading interpolation
+# that is not a known payload — the case the arm was actually written for.
+#
 # COVERAGE BOUNDARY, stated because it is not what it looks like. This suite renders through
 # git-data-userdata-budget.sh, which carries its OWN hand-mirrored copy of the expression —
 # so mutating only modules/git-data-userdata/main.tf does not change what these arms see.
-# Measured: collapsing the template expression in main.tf alone leaves this suite 5/0 green.
-# Coupling the two copies is git-data-render-strip-parity.test.sh's job, and it reds on that
-# mutation. Both suites are required; neither is sufficient. Arms 4 and 5 read the expression
-# from main.tf while the render comes from the budget script, which is safe only because
-# parity forces them equal — if that suite is ever removed, these arms silently compare a
-# render against an expression that did not produce it.
+# Measured: COLLAPSING the template expression in main.tf alone leaves this suite 5/0 green.
+# The reason is narrower than "these arms read a different file than the render came from" —
+# arm 4 DOES red on a main.tf-only change that alters the match set (verified against the
+# one-character narrowing). It survives the collapse specifically because inside runcmd and
+# write_files entries the payload and template forms disagree about nothing: those bodies are
+# already comment-free by the time the template strip sees them. Coupling the two copies is
+# git-data-render-strip-parity.test.sh's job. Both suites are required; neither is sufficient.
 #
 # Registered as a step in .github/workflows/infra-validation.yml.
 set -uo pipefail
@@ -96,14 +113,34 @@ else
     "a lost '#!' falls back to dash for the authorized_keys command= payloads"
 fi
 
-# ── 3. The strip is not a no-op (ADR-152's third verification arm) ─────────────────────
+# ── 3. The strip delivers a REAL saving, not merely a non-zero one ─────────────────────
+#
+# ADR-152's third arm is "assert the strip is not a no-op". A `> 0 bytes` reading of that is
+# too weak to be worth having, and this suite shipped it that way: deleting ONE character
+# from the expression's character class (`#([ \t]…)` -> `#([\t]…)`, dropping the space, in
+# both mirrored copies) collapses the saving from 30,524 B to 68 B — 99.8% lost — and every
+# arm here, the parity suite, the budget script and the schema validator all stay GREEN. The
+# old arm even PRINTED the evidence and passed: `raw 67479 B -> stripped 67411 B`.
+#
+# The cap cannot backstop it either: the fully UNSTRIPPED render base64gzips to 30,092 B,
+# under the 32,768 B cap, so a total strip failure does not breach the budget.
+#
+# BOUNDED, NOT PINNED. A pin to today's 30,524 B would red on every comment edit — the
+# opposite of useful. The bound is a ratio with real headroom: today's stripped render is
+# 54.5% of raw; the one-character narrowing is 99.9%. 60% separates them with room for the
+# template's rationale to grow or shrink normally.
 raw_bytes=$(wc -c < "$TMP/raw.yml")
 str_bytes=$(wc -c < "$TMP/stripped.yml")
-if [[ "$str_bytes" -lt "$raw_bytes" ]]; then
-  pass "strip removed content (raw ${raw_bytes} B -> stripped ${str_bytes} B)"
-else
+max_ratio=60
+str_pct=$(( str_bytes * 100 / raw_bytes ))
+if [[ "$str_bytes" -ge "$raw_bytes" ]]; then
   fail "strip removed nothing (raw ${raw_bytes} B -> stripped ${str_bytes} B)" \
     "a strip that matches nothing satisfies arms 1 and 2 while delivering no saving"
+elif [[ "$str_pct" -gt "$max_ratio" ]]; then
+  fail "strip delivered only ${str_pct}% reduction (raw ${raw_bytes} B -> stripped ${str_bytes} B)" \
+    "expected the stripped render at or under ${max_ratio}% of raw. A near-total loss of the saving is what a one-character narrowing of the character class produces, and it is otherwise SILENT — the cap does not catch it (the unstripped render is under cap)."
+else
+  pass "strip delivers a real saving: ${str_pct}% of raw (raw ${raw_bytes} B -> stripped ${str_bytes} B, bound ${max_ratio}%)"
 fi
 
 # ── 4. Per-entry: stripped differs from raw ONLY by strip-matching lines ───────────────
@@ -132,6 +169,7 @@ if sorted(raw.keys()) != sorted(stp.keys()):
     sys.exit(f"top-level keys diverged: {sorted(raw.keys())} vs {sorted(stp.keys())}")
 
 checked = 0
+differing = 0
 for key in ("runcmd", "bootcmd"):
     a, b = raw.get(key) or [], stp.get(key) or []
     if len(a) != len(b):
@@ -141,8 +179,10 @@ for key in ("runcmd", "bootcmd"):
             continue
         want = strip_lines(x)
         if y != want:
-            sys.exit(f"{key}[{i}]: stripped content differs by more than strip-matching lines")
+            sys.exit(f"{key}[{i}]: terraform replace() and this arm's re.sub disagree")
         checked += 1
+        if y != x:
+            differing += 1
 
 a, b = raw.get("write_files") or [], stp.get("write_files") or []
 if len(a) != len(b):
@@ -154,19 +194,30 @@ for i, (x, y) in enumerate(zip(a, b)):
     if x.get("path") != y.get("path"):
         sys.exit(f"write_files[{i}]: path changed {x.get('path')} -> {y.get('path')}")
     if yc != strip_lines(xc):
-        sys.exit(f"write_files[{i}] ({x.get('path')}): stripped content differs by more than "
-                 "strip-matching lines — a data line inside the body was altered")
+        sys.exit(f"write_files[{i}] ({x.get('path')}): terraform replace() and this arm's "
+                 "re.sub disagree, or the block scalar was re-indented")
     checked += 1
+    if yc != xc:
+        differing += 1
 
-if checked < 10:
-    sys.exit(f"only {checked} entries compared (floor 10) — the corpus collapsed, so this arm is vacuous")
-print(f"per-entry byte diff: {checked} entries differ ONLY by strip-matching lines")
+# TWO FLOORS, AND THE SECOND IS THE LOAD-BEARING ONE. `checked` counts entries COMPARED; on
+# today's corpus 20 of 27 are byte-identical raw-vs-stripped (the strip touches nothing in
+# them), so a `checked >= 10` floor was satisfiable ENTIRELY by entries the strip never
+# altered -- vacuous in exactly the direction that matters. `differing` counts the entries
+# the strip actually changed, which is the population this arm exists to check.
+if checked < 20:
+    sys.exit(f"only {checked} entries compared (floor 20) -- the corpus collapsed, so this arm is vacuous")
+if differing < 5:
+    sys.exit(f"only {differing} entries actually differ raw-vs-stripped (floor 5) -- this arm "
+             "compared a corpus the strip never touched, which passes without testing anything")
+print(f"per-entry: {checked} compared, {differing} actually stripped, each differing only by "
+      "strip-matching lines")
 PY
 arm4_rc=$?
 if [[ "$arm4_rc" -eq 0 ]]; then
   pass "$(cat "$TMP/arm4.out")"
 else
-  fail "per-entry byte diff: stripped content differs by more than strip-matching lines" \
+  fail "per-entry: the strip touched something it should not have, or barely stripped at all" \
     "$(cat "$TMP/arm4.out")"
 fi
 
