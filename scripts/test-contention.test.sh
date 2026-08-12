@@ -665,37 +665,39 @@ fi
 # happen. The precheck removes the ambiguity at its source rather than inferring
 # it from an elapsed threshold.
 #
-# The mask SHADOWS the entire real PATH minus flock, rather than curating a
-# minimal allowlist. That matters for the mutation: with the precheck deleted,
-# control must actually REACH `acquire_lock` (which itself fails on missing
-# flock and returns 99). Under a curated PATH, sourcing session-state.sh could
-# fail for an unrelated missing binary and emit LOCK_UNAVAILABLE anyway — the
-# arm would stay green against the mutation for the wrong reason.
+# The mask is a curated shim, NOT a shadow of the whole PATH. Shadowing every
+# real PATH entry except flock was the first implementation, and it is exact —
+# but MEASURED it cost 18.9s of this suite's 32s runtime to build ~3,600
+# symlinks on every invocation. That is a 59% tax on a suite registered in the
+# full gate, paid to assert one thing about one binary.
+#
+# The cheap version is only sound if the fixture proves the property the arm
+# actually rests on, and that property is specific: with the precheck deleted
+# (mutation row 2), control must REACH `acquire_lock` — which itself fails on a
+# missing flock and returns 99, producing the timeout banner the arm looks for.
+# Were sourcing session-state.sh to break under the mask for some UNRELATED
+# missing binary, tc_acquire would emit LOCK_UNAVAILABLE anyway and this arm
+# would stay green against that mutation for entirely the wrong reason. So the
+# self-check asserts exactly that, rather than a proxy for it.
 NOFLOCK_BIN="$TESTROOT/noflock-bin"
 mkdir -p "$NOFLOCK_BIN"
 REAL_BASH="$(command -v bash)"
-_pdirs=()
-IFS=: read -r -a _pdirs <<<"$PATH"
-for _d in "${_pdirs[@]}"; do
-  if [[ ! -d "$_d" ]]; then continue; fi
-  for _f in "$_d"/*; do
-    if [[ ! -f "$_f" || ! -x "$_f" ]]; then continue; fi
-    _b="${_f##*/}"
-    if [[ "$_b" == "flock" ]]; then continue; fi
-    if [[ -e "$NOFLOCK_BIN/$_b" ]]; then continue; fi
-    ln -s "$_f" "$NOFLOCK_BIN/$_b" 2>/dev/null || true
-  done
+for _b in dirname basename getconf cat mkdir rm awk sed grep find wc id date \
+          sort cut env stat readlink tr head tail ls touch chmod mktemp git; do
+  _p="$(command -v "$_b" 2>/dev/null || true)"
+  if [[ -n "$_p" ]]; then ln -sfn "$_p" "$NOFLOCK_BIN/$_b"; fi
 done
 
 # FIXTURE SELF-CHECK. Without it, a mask that broke the environment wholesale
 # would still produce LOCK_UNAVAILABLE and the arm below would read as proof of
-# a precheck that does not exist. It must hide flock SPECIFICALLY.
-_mask_probe="$(env PATH="$NOFLOCK_BIN" "$REAL_BASH" -c \
-  'command -v flock >/dev/null && echo HAS_FLOCK || echo NO_FLOCK
-   command -v dirname >/dev/null && echo HAS_DIRNAME || echo NO_DIRNAME' 2>&1 || true)"
+# a precheck that does not exist.
+_mask_probe="$(env PATH="$NOFLOCK_BIN" SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" "$REAL_BASH" -c \
+  "command -v flock >/dev/null && echo HAS_FLOCK || echo NO_FLOCK
+   source '$REPO_ROOT/plugins/soleur/scripts/lib/session-state.sh' 2>/dev/null || true
+   declare -F acquire_lock >/dev/null && echo ACQUIRE_LOCK_DEFINED || echo ACQUIRE_LOCK_MISSING" 2>&1 || true)"
 if [[ "$(grep -cE '^NO_FLOCK$' <<<"$_mask_probe" || true)" -ge 1 ]] \
-   && [[ "$(grep -cE '^HAS_DIRNAME$' <<<"$_mask_probe" || true)" -ge 1 ]]; then
-  pass "AC4 fixture: the mask hides flock specifically (the rest of PATH survives)"
+   && [[ "$(grep -cE '^ACQUIRE_LOCK_DEFINED$' <<<"$_mask_probe" || true)" -ge 1 ]]; then
+  pass "AC4 fixture: the mask hides flock alone — acquire_lock stays reachable under it"
 else
   fail "AC4 fixture is invalid — mask probe returned: $_mask_probe"
 fi
