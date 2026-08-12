@@ -216,11 +216,22 @@ No public artifact is generated in MVP. Re-evaluation criteria are tracked in #3
 
 ## Phase 6 — Redaction sentinel (BLOCKING, pre-inline-emit)
 
-Resolve the gate from the **deployed plugin root** (`${CLAUDE_PLUGIN_ROOT}`, the platform-trusted copy; git-root fallback for CLI/worktree), fail closed if it is unreadable, then run it against the unwritten draft. On the Concierge server the deployed-root anchor is load-bearing: a bare CWD-relative path would resolve the connected repo's **untrusted** copy of the sentinel (ADR-093). The draft lives in `mktemp` only — it has NOT been emitted inline yet AND has not been written to `post-mortems/`.
+Resolve the gate from the **deployed plugin root** (`${CLAUDE_PLUGIN_ROOT}`, the platform-trusted copy — ADR-179's canonical bare anchor, with no fallback arm), verify the root is really a Soleur install, fail closed if either check fails, then run it against the unwritten draft. On the Concierge server the deployed-root anchor is load-bearing: a bare CWD-relative path would resolve the connected repo's **untrusted** copy of the sentinel (ADR-093). The default arm was **removed, not re-pointed**: `review/SKILL.md` instructs `gh pr checkout`, after which the git worktree is the *reviewed party's* tree, so that arm resolved this gate's own scanner from a file a hostile PR controls (#7450). The draft lives in `mktemp` only — it has NOT been emitted inline yet AND has not been written to `post-mortems/`.
+
+The identity preflight is mandatory, not defence-in-depth: `[[ -r ]]` is a *shape* check, and ADR-179 §(a) measured a shape check passing while an attacker-chosen payload executed.
 
 ```bash
-SENTINEL="${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}/skills/incident/scripts/redact-sentinel.sh"
-[[ -r "$SENTINEL" ]] || { echo "incident: redaction sentinel not found — halt (fail closed)"; exit 2; }
+[ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
+  && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
+  || { echo "incident: cannot verify the Soleur plugin installation — halt (fail closed)" >&2
+       echo "  What to do: re-run /soleur:incident from a session where the Soleur plugin is installed." >&2
+       echo "  Do NOT write this post-mortem by hand — the redaction scanner is what makes it safe to publish." >&2
+       exit 2; }
+SENTINEL="${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-sentinel.sh"
+[[ -r "$SENTINEL" ]] || { echo "incident: redaction sentinel not readable — halt (fail closed)" >&2
+       echo "  What to do: reinstall or update the Soleur plugin, then re-run /soleur:incident." >&2
+       echo "  Do NOT write this post-mortem by hand — the redaction scanner is what makes it safe to publish." >&2
+       exit 2; }
 bash "$SENTINEL" <draft-tmpfile>
 ```
 

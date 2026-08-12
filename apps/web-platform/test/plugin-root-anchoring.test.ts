@@ -415,9 +415,6 @@ const GATE_SCRIPT_EXTRAS: ReadonlySet<string> = new Set(["token-efficiency-repor
  */
 const GATE_REF_FLOOR = 4;
 
-/** Lines the identity preflight's `exit 2` must appear within, after the manifest probe. */
-const PREFLIGHT_EXIT_WINDOW = 5;
-
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -578,16 +575,27 @@ describe("plugin-root anchoring — skills secret-gate subset (#7450)", () => {
       if (gateRefs(f, secret).length === 0) continue;
       const rel = f.replace(REPO_ROOT + "/", "");
       const lines = readFileSync(f, "utf8").split("\n");
+      const { fences } = parse(f);
       const pIdx = lines.findIndex((l) => l.includes(PREFLIGHT_ANCHOR));
       if (pIdx === -1) {
         missing.push(`${rel} (no identity preflight)`);
         continue;
       }
-      const hasExit = lines
-        .slice(pIdx, pIdx + PREFLIGHT_EXIT_WINDOW + 1)
-        .some((l) => /\bexit 2\b/.test(l));
-      if (!hasExit) {
-        missing.push(`${rel} (preflight present, but no exit 2 within ${PREFLIGHT_EXIT_WINDOW} lines)`);
+      // Scope the halt to the preflight's OWN fence rather than a fixed line
+      // window. A window is brittle in both directions: widen it and a later
+      // unrelated `exit 2` satisfies it, narrow it and a remediation message
+      // legitimately pushes the halt out of range. The fence is the actual unit
+      // of execution, and prose like incident's "Exit 2 → halt with the error
+      // message" sits outside it.
+      const fence = fences.find((fc) => pIdx > fc.startIdx && pIdx < fc.endIdx);
+      if (!fence) {
+        missing.push(`${rel} (identity preflight is not inside a code fence)`);
+        continue;
+      }
+      const relIdx = pIdx - (fence.startIdx + 1);
+      const hasHalt = fence.body.some((l, i) => i > relIdx && /\bexit 2\b/.test(l));
+      if (!hasHalt) {
+        missing.push(`${rel} (preflight present, but no exit 2 below it in the same fence)`);
       }
     }
     expect(missing).toEqual([]);

@@ -582,22 +582,65 @@ else
   echo "FAIL: Test 17: email-class flood did not complete (rc=${rc} — O(n^2) ReDoS regression)"; FAIL=$((FAIL + 1))
 fi
 
-# Test 18 — deployed-anchor coupling parity (#6156 review P2): legal-generate and incident resolve the
-# IDENTICAL redact-sentinel.sh via the ADR-093 deployment-anchored form. The anchored literal is
-# duplicated verbatim across both SKILL.md files; nothing else pins them identical (Test 11b's loose
-# `redact-sentinel\.sh` substring grep stays green even if one site drops the git-root fallback or
-# diverges the anchor). This byte-identity guard is the missing coupling fence on the fail-closed gate —
-# a future edit that de-syncs the two sites (bare `scripts/…`, `./plugins/soleur`, dropped `:-`) flips a
-# count off 1. Mirrors the coupling pattern of trigger-cron-allowlist-parity.test.ts.
+# Test 18 — deployed-anchor coupling, RETARGETED and STRENGTHENED (#7450; was #6156 review P2).
+#
+# The original pinned the two redact-sentinel call sites byte-identical to each other, which is
+# necessary and was never sufficient: two files can agree perfectly on an anchor that resolves
+# into the reviewed party's tree. A naive `ANCHOR` swap would have preserved only that weak
+# property and left the corpus unguarded, so this now asserts THREE things
+# (`cq-assert-anchor-not-bare-token`).
 INCIDENT_SKILL="${SKILL_DIR}/SKILL.md"
-ANCHOR='${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}/skills/incident/scripts/redact-sentinel.sh'
+LINEAR_SKILL="${REPO_ROOT}/plugins/soleur/skills/linear-fetch/SKILL.md"
+
+# 18a — coupling (preserved): the bare literal appears exactly 1x in each site.
+ANCHOR='${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-sentinel.sh'
 lg_anchor=$(grep -Fc "${ANCHOR}" "${LEGAL_SKILL}" 2>/dev/null || true)
 inc_anchor=$(grep -Fc "${ANCHOR}" "${INCIDENT_SKILL}" 2>/dev/null || true)
 if [[ "${lg_anchor}" == "1" && "${inc_anchor}" == "1" ]]; then
-  echo "PASS: Test 18: deployed-anchor redact-sentinel literal is byte-identical (1×) in both legal-generate & incident SKILL.md"
+  echo "PASS: Test 18a: bare deployed-anchor redact-sentinel literal is byte-identical (1×) in both legal-generate & incident SKILL.md"
   PASS=$((PASS + 1))
 else
-  echo "FAIL: Test 18: deployed-anchor drift — expected the ADR-093 anchored redact-sentinel literal exactly once in each (legal-generate=${lg_anchor}, incident=${inc_anchor})"
+  echo "FAIL: Test 18a: deployed-anchor drift — expected the ADR-179 bare anchored redact-sentinel literal exactly once in each (legal-generate=${lg_anchor}, incident=${inc_anchor})"
+  FAIL=$((FAIL + 1))
+fi
+
+# 18b — the ADR-179 decision-2 identity preflight is present at every secret-gate site.
+# Anchored on the manifest name check, which a prose sentence cannot produce; a bare token like
+# "preflight" or "CLAUDE_PLUGIN_ROOT" would be satisfied by a comment ABOUT the guard.
+# `[[ -r ]]` does NOT satisfy this: ADR-179 §(a) measured a shape check passing while an
+# attacker-chosen payload executed.
+PREFLIGHT_NEEDLE='grep -q '"'"'"name"[[:space:]]*:[[:space:]]*"soleur"'"'"''
+missing_preflight=""
+for gate_file in "${INCIDENT_SKILL}" "${LEGAL_SKILL}" "${LINEAR_SKILL}"; do
+  n=$(grep -Fc "${PREFLIGHT_NEEDLE}" "${gate_file}" 2>/dev/null || true)
+  [[ "${n}" -ge 1 ]] || missing_preflight="${missing_preflight} ${gate_file##*/skills/}"
+done
+if [[ -z "${missing_preflight}" ]]; then
+  echo "PASS: Test 18b: identity preflight (manifest name check) present at all 3 secret-gate sites"
+  PASS=$((PASS + 1))
+else
+  echo "FAIL: Test 18b: identity preflight missing at:${missing_preflight} — the bare anchor is NOT safe by construction; the preflight is what carries it (ADR-179 decision 2)"
+  FAIL=$((FAIL + 1))
+fi
+
+# 18c — corpus-wide negative. This single assertion mechanically closes ADR-179 §R5 and stops the
+# rejected form reappearing ANYWHERE under the payload, which per-file counts structurally cannot
+# do. The needle is built by concatenation so this file does not match its own assertion — the
+# same reason the suite splits token-shaped fixtures.
+#
+# The split point sits INSIDE the rev-parse argument, not at the variable-name boundary. Splitting
+# at the boundary leaves the shorter default-arm substring contiguous, and that shorter form is the
+# needle this PR's own AC1 sweep greps for — so the file would report ITSELF as an unmigrated site
+# while its own assertion passed. Do not restore the literal to this comment for readability: a
+# body-grep cannot tell an explanation from an occurrence.
+FORBIDDEN='${CLAUDE_PLUGIN_ROOT:-$(git rev-parse ''--show-toplevel)'
+residual=$(grep -rlF "${FORBIDDEN}" "${REPO_ROOT}/plugins/soleur/" 2>/dev/null || true)
+if [[ -z "${residual}" ]]; then
+  echo "PASS: Test 18c: zero git-root-defaulted plugin-root anchors remain anywhere under plugins/soleur/"
+  PASS=$((PASS + 1))
+else
+  echo "FAIL: Test 18c: the rejected git-root-default form survives at:"
+  echo "${residual}" | sed 's/^/         /'
   FAIL=$((FAIL + 1))
 fi
 

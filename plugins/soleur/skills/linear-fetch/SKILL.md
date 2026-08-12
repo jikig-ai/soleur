@@ -76,7 +76,32 @@ For each issue, emit exactly one disclosure line to stdout based on the Phase C 
 Construct the two return artifacts:
 
 - **agent_context** — emit the full markdown blob inline in the conversation, so the parent's message history holds both the text and the image content blocks from `extract_images`. The parent retains these for downstream phases (one-shot Steps 3+, brainstorm Phase 2 Synthesis, brainstorm Phase 3 Capture). Per `2026-05-12-task-subagent-prompt-text-only.md`, image content blocks do NOT propagate to Task subagents — design accordingly.
-- **persist_safe_summary** — produce by piping the full markdown blob through `bash "${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}/skills/linear-fetch/scripts/redact-linear-urls.sh"`. The redacted text is the only artifact callers may persist. Return it as a fenced text block clearly labeled `PERSIST-SAFE SUMMARY (use this for any write to disk):` so the parent skill cannot confuse it with the agent_context.
+- **persist_safe_summary** — produce by piping the full markdown blob through the redaction primitive, resolved from the **deployed plugin root** (ADR-179's canonical bare anchor, no fallback arm). The redacted text is the only artifact callers may persist. Return it as a fenced text block clearly labeled `PERSIST-SAFE SUMMARY (use this for any write to disk):` so the parent skill cannot confuse it with the agent_context.
+
+  **The readability guard and the exit-code dispatch below are load-bearing, and this site had neither before #7450.** With no guard, an unresolved root yields exit `127` and **empty stdout** — and empty stdout is exactly the shape an agent can mistake for "the redacted text" and persist. Empty output is a failure, never a clean summary. The default arm was removed, not re-pointed: `review/SKILL.md` instructs `gh pr checkout`, so that arm resolved this scrubber from the reviewed party's tree.
+
+  ```bash
+  [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
+    && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
+    || { echo "linear-fetch: cannot verify the Soleur plugin installation — halt (fail closed)" >&2
+         echo "  What to do: re-run from a session where the Soleur plugin is installed." >&2
+         echo "  Do NOT persist the unredacted issue text — it carries signed uploads.linear.app URLs." >&2
+         exit 2; }
+  SCRUBBER="${CLAUDE_PLUGIN_ROOT}/skills/linear-fetch/scripts/redact-linear-urls.sh"
+  [[ -r "$SCRUBBER" ]] || { echo "linear-fetch: redaction primitive not readable — halt (fail closed)" >&2
+         echo "  What to do: reinstall or update the Soleur plugin, then re-run." >&2
+         echo "  Do NOT persist the unredacted issue text — it carries signed uploads.linear.app URLs." >&2
+         exit 2; }
+  # The scrubber reads stdin and writes redacted text to stdout.
+  PERSIST_SAFE="$(bash "$SCRUBBER" <blob-tmpfile)" \
+    || { echo "linear-fetch: redaction primitive failed — halt (fail closed)" >&2; exit 2; }
+  [ -n "$PERSIST_SAFE" ] \
+    || { echo "linear-fetch: redaction produced EMPTY output — halt (fail closed)" >&2
+         echo "  Empty output is a failure, not a clean summary. Do NOT persist it." >&2
+         exit 2; }
+  ```
+
+  On any halt above, `persist_safe_summary` **does not exist**. Callers must treat its absence as a hard stop and MUST NOT substitute `agent_context` — see the absent-artifact contract in [one-shot](../one-shot/SKILL.md) Step 0a and [brainstorm](../brainstorm/SKILL.md) Phase 0.4. `agent_context` carries the signed `uploads.linear.app` bearer URLs this primitive exists to remove, so falling back to it converts a refusal into the exact leak.
 
 **Telemetry redaction (TR7).** This skill MUST NOT include the matched Linear identifier, the issue title, any image URL, or any signed-URL fragment in incident telemetry (`.claude/hooks/lib/incidents.sh emit_incident`). If telemetry is ever emitted from inside this skill, use generic strings only (e.g., `linear-fetch applied`). The current implementation has zero `emit_incident` call sites; a future maintainer adding one must pass the [assert-no-linear-telemetry.sh](./scripts/assert-no-linear-telemetry.sh) assertion or extend the assertion to cover the new emission shape.
 
