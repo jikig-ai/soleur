@@ -131,7 +131,7 @@ _flip_transition_dt() {
     --grep '"reason":"verify-health"' \
     --grep '"reason":"verify-registry-empty"' \
     --grep '"reason":"verify-registry-unreadable"' \
-    --grep '"reason":"verify-instance-unknown"' \
+    --grep '"reason":"verify-owner-unrecordable"' \
     --grep '"reason":"verify-unknown"' \
     --limit "$limit") || rc=$?
   if [[ "$rc" -ne 0 ]]; then

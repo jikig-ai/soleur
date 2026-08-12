@@ -79,11 +79,6 @@ EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$(printf '%s' "\$1" | tr '[:upper:]' '[:lower:]')" >> "$TRACE"
 EOF
-  FLAGSET="$WORK/flagset.sh"
-  cat > "$FLAGSET" <<EOF
-#!/usr/bin/env bash
-printf 'flag:%s\n' "\$1" >> "$TRACE"
-EOF
   LOGGER="$WORK/logger.sh"
   cat > "$LOGGER" <<EOF
 #!/usr/bin/env bash
@@ -123,14 +118,22 @@ else
 fi
 CURLEOF
   chmod +x "$CURLSTUB"
-  # Instance stamp seam. The FSM refuses to write an unstamped `done`, so a fixture without
-  # this would abort on verify-instance-unknown rather than exercising the path under test.
-  INSTSET="$WORK/instset.sh"
-  cat > "$INSTSET" <<EOF
+  # --- #7228: the done-OWNER marker seam -------------------------------------------------
+  # The FSM refuses to write an unowned `done`, so a fixture without a writable marker path
+  # would abort on verify-owner-unrecordable rather than exercising the path under test.
+  # It is a FILE, not a command, so it leaves no command trace — which is why the flag stub
+  # below stamps whether it exists at the moment `flag_set` runs. That is a strictly better
+  # anchor than the command trace it replaces: the guarantee is "the marker is recorded BEFORE
+  # the flag reaches done", and stamping at flag-time is what actually pins the ordering.
+  OWNER_MARKER="$WORK/owner/done-owner"
+  FLAGSET="$WORK/flagset.sh"
+  cat > "$FLAGSET" <<EOF
 #!/usr/bin/env bash
-printf 'instance:%s\n' "\$1" >> "$TRACE"
+printf 'flag:%s\n' "\$1" >> "$TRACE"
+[ -e "$OWNER_MARKER" ] && printf 'owner@%s\n' "\$1" >> "$TRACE"
+exit 0
 EOF
-  chmod +x "$SYSCTL" "$REDIS" "$FLAGSET" "$LOGGER" "$INSTSET"
+  chmod +x "$SYSCTL" "$REDIS" "$FLAGSET" "$LOGGER"
 }
 
 teardown_case() { rm -rf "$WORK"; }
@@ -149,8 +152,7 @@ run_flip() {
       INNGEST_CUTOVER_LATCH="$LATCH" \
       INNGEST_CUTOVER_LATCH_MOUNT="" \
       CUTOVER_CURL_CMD="$CURLSTUB" \
-      CUTOVER_INSTANCE_SET_CMD="$INSTSET" \
-      CUTOVER_INSTANCE_ID="hetzner-test-1" \
+      CUTOVER_DONE_OWNER_MARKER="$OWNER_MARKER" \
       CUTOVER_VERIFY_WINDOW_S=0 \
       CUTOVER_VERIFY_INTERVAL_S=0 \
       ${extra[@]+"${extra[@]}"} \
@@ -179,7 +181,7 @@ assert_eq "exit 0 on forward flip" "0" "$rc"
 # genuinely served. Reversing the two would still pass a set-membership check; only the sequence
 # catches it.
 assert_eq "combined order flipping,stop,flushall,flushed,start,instance-stamp,done" \
-  "flag:flipping,stop,flushall,flag:flushed,start,instance:hetzner-test-1,flag:done" "$order"
+  "flag:flipping,stop,flushall,flag:flushed,start,flag:done,owner@done" "$order"
 assert_eq "state exit_code is 0" "0" "$(jq -r '.exit_code' "$STATE")"
 assert_eq "state reason is flip-complete" "flip-complete" "$(jq -r '.reason' "$STATE")"
 assert_logger "logger line emitted (armed branch)"
@@ -229,7 +231,7 @@ assert_eq "exit 0 on flipping resume" "0" "$rc"
 # Intermediate-ordering assertion that FAILS without the split-checkpoint fix (the old
 # flipping branch produced only "start,flag:done" with no flush).
 assert_eq "flipping resume re-runs full flush: stop,flushall,flushed,start,instance-stamp,done" \
-  "stop,flushall,flag:flushed,start,instance:hetzner-test-1,flag:done" "$order"
+  "stop,flushall,flag:flushed,start,flag:done,owner@done" "$order"
 assert_contains "re-FLUSHALL DID happen on flipping (PRE-flush) resume" "$order" "flushall"
 assert_contains "flag transitioned to done" "$order" "flag:done"
 assert_logger "logger line emitted (flipping branch)"
@@ -287,8 +289,7 @@ EOF
       CUTOVER_SYSTEMCTL_CMD="$SYSCTL" CUTOVER_REDIS_CLI_CMD="$REDIS" \
       CUTOVER_FLAG_SET_CMD="$FLAGSET" CUTOVER_LOGGER_CMD="$LOGGER" \
       INNGEST_CUTOVER_STATE="$STATE" INNGEST_CUTOVER_LATCH="$LATCH" INNGEST_CUTOVER_LATCH_MOUNT="" \
-      CUTOVER_CURL_CMD="$CURLSTUB" CUTOVER_INSTANCE_SET_CMD="$INSTSET" \
-      CUTOVER_INSTANCE_ID="hetzner-test-1" CUTOVER_VERIFY_WINDOW_S=0 CUTOVER_VERIFY_INTERVAL_S=0 "$@" \
+      CUTOVER_CURL_CMD="$CURLSTUB" CUTOVER_DONE_OWNER_MARKER="$OWNER_MARKER" CUTOVER_VERIFY_WINDOW_S=0 CUTOVER_VERIFY_INTERVAL_S=0 "$@" \
       bash "$TARGET" >/dev/null 2>&1 || rc=$?
   printf '%s' "$rc"
 }
@@ -328,8 +329,7 @@ rc=0
 env CUTOVER_FLIP_FLAG="armed" CUTOVER_SYSTEMCTL_CMD="$SYSCTL" \
     CUTOVER_REDIS_CLI_CMD="$REDIS" CUTOVER_FLAG_SET_CMD="$FLAGSET" \
     CUTOVER_LOGGER_CMD="$LOGGER" INNGEST_CUTOVER_STATE="$STATE" INNGEST_CUTOVER_LATCH="$LATCH" INNGEST_CUTOVER_LATCH_MOUNT="" \
-    CUTOVER_CURL_CMD="$CURLSTUB" CUTOVER_INSTANCE_SET_CMD="$INSTSET" \
-    CUTOVER_INSTANCE_ID="hetzner-test-1" CUTOVER_VERIFY_WINDOW_S=0 CUTOVER_VERIFY_INTERVAL_S=0 \
+    CUTOVER_CURL_CMD="$CURLSTUB" CUTOVER_DONE_OWNER_MARKER="$OWNER_MARKER" CUTOVER_VERIFY_WINDOW_S=0 CUTOVER_VERIFY_INTERVAL_S=0 \
     CUTOVER_REDIS_DBSIZE=0 \
     bash "$TARGET" >/dev/null 2>&1 || rc=$?
 order=$(trace_csv)
@@ -384,11 +384,23 @@ order=$(trace_csv)
 assert_eq "health never 200 => non-zero exit" "1" "$rc"
 assert_absent "health never 200 => flag NEVER reached done" "$order" "flag:done"
 assert_contains "health never 200 => flag driven terminal aborted" "$order" "flag:aborted"
-assert_absent "health never 200 => no instance stamp was written" "$order" "instance:"
+assert_absent "health never 200 => no owner marker was recorded" "$order" "owner@"
 assert_eq "health never 200 => state reason is the stable verify-health token" \
   "verify-health" "$(jq -r '.reason' "$STATE")"
 assert_contains "health never 200 => a loud sibling line names the failure" \
   "$(cat "$LOGTRACE")" "SOLEUR_INNGEST_CUTOVER_VERIFY_FAILED"
+# THE SERVER MUST BE STOPPED. start_server has already succeeded by the time verification runs,
+# and inngest-server.service is Type=simple with Restart=on-failure — so returning without a
+# stop leaves a RUNNING scheduler while the flag records `aborted`. On the registry-empty arm
+# that process has already adopted PROD Postgres, and ADR-100's Context states scheduling is
+# driven by the shared Postgres tables REGARDLESS of local registration: a live prod scheduler
+# the FSM has just declared dead, which the guard can never legitimately restart but is already
+# past. Every other abort in this FSM means "no scheduler is running here"; this one must too.
+# Asserted on ORDER, not membership: a `stop` before the `start` is the pre-flush stop and
+# would satisfy a bare contains-check while the post-start stop was missing entirely.
+assert_eq "health never 200 => the started server is STOPPED before the flag goes terminal" \
+  "stop,flushall,start,stop" \
+  "$(printf '%s' "$order" | tr ',' '\n' | grep -E '^(start|stop|flushall)$' | paste -sd, -)"
 # The flush still happened — this is a post-flush refusal, not a pre-flush one. Asserting it
 # keeps the refusal from being mistaken for "the FSM aborted before doing anything".
 assert_contains "health never 200 => the FLUSHALL still ran (refusal is POST-flush)" "$order" "flushall"
@@ -415,16 +427,16 @@ assert_eq "200 + unparseable registry => state reason is verify-registry-unreada
   "verify-registry-unreadable" "$(jq -r '.reason' "$STATE")"
 teardown_case
 
-# ARM 4 — the host SERVES but cannot name itself. Fail CLOSED: an unstamped `done` is exactly
+# ARM 4 — the host SERVES but cannot RECORD that it owns the done. Fail CLOSED: an unstamped `done` is exactly
 # the inheritable state the guard cannot audit, so writing one would re-open the hazard the
 # stamp exists to close.
 setup_case
-rc=$(run_flip armed CUTOVER_REDIS_DBSIZE=0 CUTOVER_INSTANCE_ID=)
+rc=$(run_flip armed CUTOVER_REDIS_DBSIZE=0 CUTOVER_DONE_OWNER_MARKER=/proc/cannot/create/here)
 order=$(trace_csv)
-assert_eq "serving but no instance id => non-zero exit (fails CLOSED)" "1" "$rc"
-assert_absent "serving but no instance id => flag NEVER reached done" "$order" "flag:done"
-assert_eq "serving but no instance id => state reason is verify-instance-unknown" \
-  "verify-instance-unknown" "$(jq -r '.reason' "$STATE")"
+assert_eq "serving but marker unwritable => non-zero exit (fails CLOSED)" "1" "$rc"
+assert_absent "serving but marker unwritable => flag NEVER reached done" "$order" "flag:done"
+assert_eq "serving but marker unwritable => state reason is verify-instance-unknown" \
+  "verify-owner-unrecordable" "$(jq -r '.reason' "$STATE")"
 teardown_case
 
 # ARM 5 — the `flushed)` RESUME arm must be gated too. Without this leg the verification could be
@@ -446,7 +458,7 @@ rc=$(run_flip flushed)
 order=$(trace_csv)
 assert_eq "non-vacuity: a HEALTHY host still completes the flushed resume (exit 0)" "0" "$rc"
 assert_contains "non-vacuity: a HEALTHY host still reaches done" "$order" "flag:done"
-assert_contains "non-vacuity: a HEALTHY host stamps its instance" "$order" "instance:hetzner-test-1"
+assert_contains "non-vacuity: a HEALTHY host records its owner marker" "$order" "owner@done"
 teardown_case
 
 # --- The GQL query is DRIFT-PINNED against inngest-registry-probe.sh ------------------------
@@ -465,6 +477,36 @@ elif [[ "$fsm_q" != "$probe_q" ]]; then
   fail "GQL query DRIFT: FSM has [$fsm_q] but inngest-registry-probe.sh has [$probe_q]"
 else
   pass "inlined GQL query is byte-identical to inngest-registry-probe.sh's"
+fi
+
+# --- #7228: the verify window must DOMINATE the server's poll interval ----------------------
+# THE DEFECT THIS PINS. The dedicated host does not learn its registry at startup — it polls the
+# web-platform's --sdk-url, and inngest-bootstrap.sh starts the unit with `--poll-interval 60`.
+# At the original 90s window that is 1.5 poll cycles, so a HEALTHY cutover whose registry
+# populates on the second poll reads as EMPTY and is driven to TERMINAL `aborted` — not
+# retryable, indistinguishable from a genuinely dark host, and requiring an operator re-arm.
+#
+# AND NOTHING PINNED IT. Every fixture in this suite and in inngest-cutover-latch.test.sh sets
+# CUTOVER_VERIFY_WINDOW_S=0 to keep the cases fast, so the PRODUCTION default — the value that
+# decides whether a real cutover survives — was asserted by zero tests. A constant the tests
+# always override is a constant nothing guards.
+#
+# BOTH operands are extracted BY SHAPE, neither restated: a hardcoded copy of either number
+# would agree with itself while disagreeing with the file it came from, which is the silent
+# drift this exists to catch.
+echo "TEST: #7228 the verify window dominates inngest-server's --poll-interval"
+BOOTSTRAP_SH="$SCRIPT_DIR/inngest-bootstrap.sh"
+WINDOW_DEFAULT=$(grep -oE '^CUTOVER_VERIFY_WINDOW_S="\$\{CUTOVER_VERIFY_WINDOW_S:-[0-9]+\}"' "$TARGET" \
+  | grep -oE '[0-9]+' | tail -1 || true)
+POLL_INTERVAL=$(grep -oE -- '--poll-interval [0-9]+' "$BOOTSTRAP_SH" | grep -oE '[0-9]+' | sort -u | head -1 || true)
+if [[ -z "$WINDOW_DEFAULT" || -z "$POLL_INTERVAL" ]]; then
+  fail "could not extract both operands by shape (window='$WINDOW_DEFAULT' poll='$POLL_INTERVAL') — the pin is vacuous"
+elif [[ "$(grep -cE -- '--poll-interval [0-9]+' "$BOOTSTRAP_SH")" -eq 0 ]]; then
+  fail "no --poll-interval literal found in inngest-bootstrap.sh — extraction broke"
+elif [[ $(( WINDOW_DEFAULT )) -lt $(( POLL_INTERVAL * 3 )) ]]; then
+  fail "verify window ${WINDOW_DEFAULT}s is under 3x the --poll-interval (${POLL_INTERVAL}s): a healthy cutover whose registry lands on a later poll would be driven to TERMINAL aborted"
+else
+  pass "verify window ${WINDOW_DEFAULT}s >= 3x --poll-interval ${POLL_INTERVAL}s (registry has room to populate)"
 fi
 
 echo ""

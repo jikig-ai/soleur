@@ -126,22 +126,29 @@ fi
 # cannot learn its own instance id it cannot prove the `done` is its own. The FSM refuses to
 # write an unstamped `done` for the same reason, so an absent stamp against a `done` flag means
 # either a pre-#7228 completion or an inherited one — neither is provably this host's.
-INSTANCE_STAMP="$(printf '%s' "${GUARD_DONE_INSTANCE-${INNGEST_CUTOVER_DONE_INSTANCE:-}}" | tr -d '[:space:]')"
+# EXISTENCE ON THE ROOT DISK, not an identity comparison. The marker is written by
+# inngest-cutover-flip.sh at the moment a verified flip completes, and /mnt/data is the only
+# mount on this host — so the file has exactly host-lifetime persistence, which IS the predicate:
+# it survives a reboot (same machine, same root disk => the `done` is genuinely ours) and cannot
+# survive a replace or re-image (fresh root disk => the `done` was inherited).
+#
+# Deliberately NOT a Doppler key: a new secret in soleur-inngest/prd is rejected by the boot
+# isolation self-check's exact-set match in cloud-init-inngest.yml, which would FATAL every
+# re-provision of this host from the first stamped flip onward — the #6178 recurrence that file
+# already records. It also avoids an IMDS round-trip on a boot-critical path.
+DONE_OWNER_MARKER="${GUARD_DONE_OWNER_MARKER:-/var/lib/inngest-cutover/done-owner}"
 
 if [[ "$is_prod" == true && "$FLIP_FLAG" == "done" ]]; then
-  self_id="$(printf '%s' "${GUARD_INSTANCE_ID-}" | tr -d '[:space:]')"
-  if [[ -z "$self_id" ]]; then
-    # Hetzner IMDS only — matching the FSM's and the probe's resolution. /etc/machine-id is
-    # confidential per machine-id(5) and this value reaches a journald row.
-    imds_id="$(curl -sf --max-time 3 http://169.254.169.254/hetzner/v1/metadata/instance-id 2>/dev/null || true)"
-    case "$imds_id" in
-      '' | *[!0-9]*) self_id="" ;;
-      *) self_id="hetzner-$imds_id" ;;
-    esac
-  fi
-  if [[ -z "$INSTANCE_STAMP" || -z "$self_id" || "$INSTANCE_STAMP" != "$self_id" ]]; then
-    logger -t "$LOG_TAG" "BLOCK: cutover flag='done' but its instance stamp does not identify THIS host (stamp='${INSTANCE_STAMP:-unset}' self='${self_id:-unresolvable}') — refusing a prod start on an INHERITED done (#7228)" 2>/dev/null || true
-    echo "ERROR: refusing inngest-server start — the cutover flag is 'done' but ${INSTANCE_STAMP:+its instance stamp '${INSTANCE_STAMP}' }does not match this host${self_id:+ ('${self_id}')}. The flag outlives the host, so a replaced machine inherits a 'done' it never earned; starting here could run a SECOND prod scheduler. Re-run the cutover on this host (it will re-stamp ${INSTANCE_STAMP:+INNGEST_CUTOVER_DONE_INSTANCE}), or start diagnostically with INNGEST_DIAGNOSTIC_BOOT=1." >&2
+  if [[ ! -e "$DONE_OWNER_MARKER" ]]; then
+    logger -t "$LOG_TAG" "BLOCK: cutover flag='done' but this host carries no done-owner marker at ${DONE_OWNER_MARKER} — refusing a prod start on an INHERITED done (#7228)" 2>/dev/null || true
+    # The recovery named here is the one the system will actually PERFORM. `op=arm` is NOT it:
+    # arm writes INNGEST_CUTOVER_FLIP=armed, the FSM's armed arm consults the monotonic flush
+    # latch on /mnt/data — which SURVIVES the replace by design — and refuses the re-arm into
+    # terminal `aborted`, leaving the host more blocked than before. That refusal is correct
+    # (post-flush that Redis holds the live prod queue; re-flushing is the #5450 catastrophe),
+    # so the re-entry is the POST-flush resume: `flushed` starts the server, verifies it serves,
+    # writes this marker and completes to `done` WITHOUT re-flushing.
+    echo "ERROR: refusing inngest-server start — the cutover flag is 'done' but this host has no done-owner marker at ${DONE_OWNER_MARKER}. The flag lives in Doppler and outlives the host, so a replaced machine inherits a 'done' it never earned; starting here could run a SECOND prod scheduler. To re-enter on a replaced host, set INNGEST_CUTOVER_FLIP=flushed (the post-flush resume: it starts, verifies, re-records the marker and completes to done WITHOUT re-running FLUSHALL). Do NOT re-arm — the monotonic flush latch on /mnt/data survives the replace and will refuse it. For diagnosis only, start with INNGEST_DIAGNOSTIC_BOOT=1 (SQLite-only, serves nothing)." >&2
     exit 1
   fi
 fi

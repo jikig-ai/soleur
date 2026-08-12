@@ -247,16 +247,51 @@ from web cloud-init.** The following sub-decisions are fixed by this ADR:
      terminal `aborted` with a `verify-*` reason. The `exit_code:0` gate above is unchanged in
      form and is now worth what it claims, because the run can no longer exit 0 without the probe
      having passed.
-   - **The `done` flag carries an instance stamp (added 2026-08-12, Ref #7228).** The flag lives in
-     Doppler, which **outlives the host**, so `done` says a flip completed without saying on which
-     machine — and a replaced host boots into a predecessor's `done`, which the `ExecStartPre`
-     allowlist above reads as ALLOW. That reaches the second-prod-scheduler state P1-5 exists to
-     prevent *through* the guard rather than around it. The stamp lives in a **separate** Doppler
-     key (`INNGEST_CUTOVER_DONE_INSTANCE`), never appended to the flag value: `done@hetzner-123`
-     would fall through the guard's exact `case` match and block a legitimately-completed host on
-     every reboot. The guard refuses a prod start when a `done` flag's stamp does not identify the
-     running host, and is scoped to `done` alone — the transient states belong to a flip in
-     progress on this host and have no stamp yet, so gating them would deadlock the cutover.
+   - **A `done` must be OWNED by the host acting on it (added 2026-08-12, Ref #7228).** The flag
+     lives in Doppler, which **outlives the host**, so `done` says a flip completed without saying
+     on which machine — and a replaced host boots into a predecessor's `done`, which the
+     `ExecStartPre` allowlist above reads as ALLOW. That reaches the second-prod-scheduler state
+     P1-5 exists to prevent *through* the guard rather than around it.
+     The record is an **existence-only marker on the root disk** (`/var/lib/inngest-cutover/done-owner`),
+     written by the flip FSM at the moment a verified flip completes and tested by the guard.
+     The question is not *which* instance earned the `done` but the strictly weaker *did the machine
+     currently booting earn it* — a yes/no — and root-disk persistence **is** that predicate: the
+     marker survives a reboot (same machine) and cannot survive a replace or re-image (fresh disk).
+     `/mnt/data` is the only mount on this host, so `/var/lib` has exactly host lifetime. This is the
+     same durable-vs-ephemeral axis Decision 6's flush latch reasons about one tier up, inverted:
+     that latch lives on `/mnt/data` **because** it must survive a replace; this marker lives on the
+     root disk **because** it must not.
+     **A Doppler key was rejected at review, on a defect not a preference.** A new
+     `INNGEST_CUTOVER_DONE_INSTANCE` secret in `soleur-inngest/prd` is admitted by nothing: the boot
+     isolation self-check in `cloud-init-inngest.yml` is an **exact-set** match that FATALs when the
+     project holds any name outside its allowlist, so from the first stamped flip onward **every
+     re-provision of this host would refuse to bootstrap** — no Vector, no inngest-server, no flip
+     timer — precisely when an operator is recovering it. That is the #6178 recurrence this ADR
+     already records for `CUTOVER_FLIP`. Admitting the key would also have worked, and would have
+     made the guard's correctness depend on remembering an allowlist in a different file; the marker
+     has no such coupling, and additionally drops an IMDS round-trip from a boot-critical path.
+     Nothing here touches the flag **value**, so the guard's exact `case` match and the lockstep
+     test's `flag_set`-literal derivation are both preserved — the original constraint.
+     Scoped to `done` alone: the transient states belong to a flip in progress on this host and
+     carry no marker yet, so gating them would deadlock the cutover.
+   - **`aborted` means no scheduler is running here (added 2026-08-12, Ref #7228).** The
+     probe-derived `done` above runs *after* `start_server`, so its refusal path is the first abort
+     in this FSM that can be reached with a server already up — and `inngest-server.service` is
+     `Type=simple` with `Restart=on-failure`. Returning without stopping it would leave a **live prod
+     scheduler** (on the empty-registry arm it has already adopted prod Postgres, and per this ADR's
+     own Context scheduling is driven by the shared Postgres tables regardless of local registration)
+     while the flag records a terminal failure the guard will never let anyone restart from. So
+     `verify_or_abort` stops the server before driving the flag terminal, preserving the invariant
+     every other abort already had: `dbsize-nonzero` never starts, `rollback` stops, and this one
+     stops too.
+   - **Post-flush re-entry on a replaced host is `flushed`, not `arm` (added 2026-08-12, Ref #7228).**
+     A replaced host blocked by the owner-marker check cannot recover via `op=arm`: the FSM's `armed`
+     arm consults the monotonic flush latch on `/mnt/data`, which **survives the replace by design**,
+     and correctly refuses the re-arm into terminal `aborted` — re-flushing there would wipe the live
+     prod queue (#5450). The reachable re-entry is `INNGEST_CUTOVER_FLIP=flushed`: it starts the
+     server, verifies it serves, records the owner marker and completes to `done` **without**
+     re-running `FLUSHALL`. The guard's refusal message names this path, because a guard that
+     recommends a remedy the system refuses is worse than one that stays silent.
    - **Class rule, extracted from both corrections above (added 2026-08-12, Ref #7228 — this is the
      generalisation, and it is why no separate ADR ordinal was minted for it):**
      *a terminal state that asserts a live host condition must be re-derived from a probe, and must

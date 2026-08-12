@@ -131,7 +131,19 @@ start_server() { systemctl_cmd start "$SERVER_UNIT"; }
 # because this runs from a 30s timer — an unbounded wait would stack overlapping oneshots.
 CUTOVER_HEALTH_URL="${CUTOVER_HEALTH_URL:-http://127.0.0.1:8288/health}"
 CUTOVER_GQL_URL="${CUTOVER_GQL_URL:-http://127.0.0.1:8288/v0/gql}"
-CUTOVER_VERIFY_WINDOW_S="${CUTOVER_VERIFY_WINDOW_S:-90}"
+# THE WINDOW MUST DOMINATE THE SERVER'S POLL INTERVAL, and 90s did not. The dedicated host
+# does not learn its registry at startup — it DISCOVERS it by polling the web-platform's
+# --sdk-url, and inngest-bootstrap.sh starts the unit with `--poll-interval 60`. At a 90s
+# window that is 1.5 poll cycles: a perfectly healthy cutover whose registry populates on the
+# second poll is read as EMPTY and driven to TERMINAL `aborted`, which is not retryable and
+# needs an operator re-arm. The failure is indistinguishable from a genuinely dark host.
+# 240s is four poll cycles, so two consecutive missed polls still converge.
+# The relationship is the thing that matters, not the number: inngest-cutover-flip.test.sh
+# pins `default >= 3 x the --poll-interval literal`, extracting BOTH operands by shape so
+# neither side can drift silently. Raising the window costs nothing on the failure path — the
+# FSM is a systemd oneshot and its timer cannot re-trigger while the unit is active, so a
+# longer wait delays a verdict rather than stacking invocations.
+CUTOVER_VERIFY_WINDOW_S="${CUTOVER_VERIFY_WINDOW_S:-240}"
 CUTOVER_VERIFY_INTERVAL_S="${CUTOVER_VERIFY_INTERVAL_S:-3}"
 
 # DRIFT-PINNED (#7228). Byte-identical to inngest-registry-probe.sh's FUNCTIONS_GQL_QUERY, and
@@ -183,40 +195,45 @@ verify_serving() {
   return 0
 }
 
-# --- #7228 (3.6): the instance stamp, in a SEPARATE Doppler key -----------------------------
-# NEVER appended to the flag value. `done@i-1234` would fall through
-# inngest-server-flip-guard.sh's exact `case` match on `done` — blocking a legitimately-completed
-# host on every reboot — and would break inngest-server-flip-guard.test.sh's EXPECTED_START_SITES
-# derivation, which parses `flag_set` literals. A separate key keeps the flag value byte-identical
-# and still lets the guard refuse a FOREIGN instance's `done`, which is the double-scheduler
-# hazard: the flag outlives the host, so a REPLACED host inherits its predecessor's `done`.
-readonly INSTANCE_KEY="INNGEST_CUTOVER_DONE_INSTANCE"
+# --- #7228 (3.6): the done-OWNER marker, on the ROOT DISK -----------------------------------
+# THE HAZARD. The cutover flag lives in Doppler, which OUTLIVES THE HOST, so `done` says a flip
+# completed without saying on WHICH machine — and a REPLACED host boots into its predecessor's
+# `done`, which the flip guard's allowlist reads as ALLOW. That reaches the second-prod-scheduler
+# state P1-5 exists to prevent THROUGH the guard rather than around it.
+#
+# EXISTENCE, NOT IDENTITY. The question the guard must answer is not "which instance earned this
+# `done`" but the strictly weaker "did the machine currently booting earn it?" — a yes/no. So the
+# record is an empty file on the ROOT DISK, whose persistence semantics ARE that predicate:
+#   reboot after a legitimate flip -> present -> ALLOW   (root disk survives a reboot)
+#   host replaced / re-imaged      -> absent  -> BLOCK   (fresh root disk, by construction)
+# /mnt/data is the ONLY mount on this host (cloud-init-inngest.yml), so /var/lib has exactly
+# host-lifetime persistence. This is the same durable-vs-ephemeral axis the flush latch reasons
+# about one tier up: that latch lives on /mnt/data BECAUSE it must survive a replace; this marker
+# lives on the root disk BECAUSE it must NOT.
+#
+# WHY NOT A DOPPLER KEY (rejected at review — it boot-bricks the host it protects). A new
+# `INNGEST_CUTOVER_DONE_INSTANCE` secret in soleur-inngest/prd is admitted by NOTHING: the boot
+# isolation self-check in cloud-init-inngest.yml is an EXACT-SET match
+# (`n_total -ne n_inngest` -> FATAL -> "refusing to bootstrap"), so from the first stamped flip
+# onward EVERY re-provision of this host would FATAL at boot — with no Vector, no inngest-server
+# and no flip timer — precisely when an operator is trying to recover it. That is byte-for-byte
+# the #6178 recurrence the same file's comment already records for CUTOVER_FLIP. Admitting the
+# key to the allowlist would work, and would make this guard's correctness depend on remembering
+# an allowlist in a different file; the marker has no such coupling. It also drops the IMDS call
+# (a network dependency on a boot-critical path) and the whole verify-instance-unknown arm.
+#
+# Nothing here touches the flag VALUE, so the guard's exact `case` match on `done` and
+# inngest-server-flip-guard.test.sh's `flag_set`-literal EXPECTED_START_SITES derivation are
+# both untouched — which was the original constraint.
+DONE_OWNER_MARKER="${CUTOVER_DONE_OWNER_MARKER:-/var/lib/inngest-cutover/done-owner}"
 
-# Hetzner IMDS only, matching inngest-server-probe.sh's instance_id field: /etc/machine-id is
-# confidential per machine-id(5) and this value reaches Doppler and the marker.
-resolve_instance_id() {
-  if [[ -n "${CUTOVER_INSTANCE_ID+x}" ]]; then
-    printf '%s' "$CUTOVER_INSTANCE_ID"
-    return 0
-  fi
-  local id
-  id="$(curl_cmd -sf --max-time 3 http://169.254.169.254/hetzner/v1/metadata/instance-id 2>/dev/null || true)"
-  case "$id" in
-    ''|*[!0-9]*) printf '' ;;
-    *) printf 'hetzner-%s' "$id" ;;
-  esac
-}
-
-# Fixture seam mirrors flag_set's. Not `|| true`: an unrecorded stamp leaves the guard unable to
-# tell this host's `done` from an inherited one, which is the state the stamp exists to end.
-instance_set() {
-  local value="$1"
-  if [[ -n "${CUTOVER_INSTANCE_SET_CMD:-}" ]]; then
-    "$CUTOVER_INSTANCE_SET_CMD" "$value"
-  else
-    doppler secrets set "$INSTANCE_KEY" "$value" \
-      --project soleur-inngest --config prd --silent
-  fi
+# Not `|| true`: an unrecordable marker leaves the guard unable to tell this host's `done` from
+# an inherited one, which is the exact state the marker exists to end. Fail LOUD.
+record_done_owner() {
+  local dir
+  dir="$(dirname "$DONE_OWNER_MARKER")"
+  mkdir -p "$dir" || return 1
+  : > "$DONE_OWNER_MARKER" || return 1
 }
 
 # --- The single place `done` may be reached from. Both start sites call THIS, never flag_set
@@ -233,6 +250,19 @@ instance_set() {
 verify_or_abort() {
   local dbsize="$1" reason=""
   if ! reason="$(verify_serving)"; then
+    # STOP THE SERVER FIRST. `start_server` has already succeeded at every call site, and
+    # inngest-server.service is Type=simple with Restart=on-failure — so returning here without
+    # stopping it leaves a RUNNING scheduler while the flag records `aborted`. On the
+    # verify-registry-empty arm that scheduler has already adopted PROD Postgres, and ADR-100's
+    # own Context states scheduling is driven by the shared Postgres tables REGARDLESS of local
+    # registration: it is a live prod scheduler the FSM has just declared dead. Worse, `aborted`
+    # is outside the guard allowlist, so the process can never be legitimately restarted — but
+    # it is already up, so the guard is never consulted. Every other abort in this FSM means
+    # "no scheduler is running here" (dbsize-nonzero never starts; rollback stops); this arm
+    # must mean the same thing or `aborted` stops being one state.
+    # Best-effort: a stop failure must not prevent the flag reaching terminal, or a crash here
+    # leaves the flag mid-transition and a later poll resumes into a no-flush false `done`.
+    stop_server || true
     # LOUD and terminal. `aborted` (not a retry) because the 30s timer would otherwise storm,
     # and because a host that did not serve within the window needs a human to look — silently
     # retrying is how a cutover ends up believing it finished.
@@ -241,7 +271,7 @@ verify_or_abort() {
     # this string — inside double quotes they are command substitution, and the words being
     # quoted here are shell keywords.
     "${CUTOVER_LOGGER_CMD:-logger}" -t "$LOG_TAG" \
-      "SOLEUR_INNGEST_CUTOVER_VERIFY_FAILED reason=$reason health_url=$CUTOVER_HEALTH_URL window_s=$CUTOVER_VERIFY_WINDOW_S — inngest-server was started but did NOT serve, so the terminal 'done' was REFUSED and the flag is 'aborted'. The host is not carrying the registry. #7228" 2>/dev/null || true
+      "SOLEUR_INNGEST_CUTOVER_VERIFY_FAILED reason=$reason health_url=$CUTOVER_HEALTH_URL window_s=$CUTOVER_VERIFY_WINDOW_S — inngest-server was started but did NOT serve within the window, so it has been STOPPED, the terminal 'done' was REFUSED and the flag is 'aborted'. The host is not carrying the registry. #7228" 2>/dev/null || true
     flag_set aborted
     case "$reason" in
       verify-health)              emit_state 1 "$dbsize" "verify-health" aborted ;;
@@ -253,19 +283,17 @@ verify_or_abort() {
     esac
     exit 1
   fi
-  local iid
-  iid="$(resolve_instance_id)"
-  if [[ -z "$iid" ]]; then
-    # Fail CLOSED: an unstamped `done` is exactly the inheritable state the guard cannot audit.
+  # Record ownership BEFORE the flag. If the order were reversed, a crash in between would leave
+  # a `done` with no owner marker — which the guard must treat as inherited, wedging a host that
+  # actually served. An unrecordable marker is fatal for the same reason: see record_done_owner.
+  if ! record_done_owner; then
+    stop_server || true
     "${CUTOVER_LOGGER_CMD:-logger}" -t "$LOG_TAG" \
-      "SOLEUR_INNGEST_CUTOVER_VERIFY_FAILED reason=verify-instance-unknown — the host SERVES, but its instance id could not be resolved from IMDS, so a terminal 'done' here would be indistinguishable from one INHERITED by a replacement host. Refusing. #7228" 2>/dev/null || true
+      "SOLEUR_INNGEST_CUTOVER_VERIFY_FAILED reason=verify-owner-unrecordable path=$DONE_OWNER_MARKER — the host SERVES, but its done-owner marker could not be written, so a terminal 'done' here would be indistinguishable from one INHERITED by a replacement host. Server STOPPED and refusing. #7228" 2>/dev/null || true
     flag_set aborted
-    emit_state 1 "$dbsize" "verify-instance-unknown" aborted
+    emit_state 1 "$dbsize" "verify-owner-unrecordable" aborted
     exit 1
   fi
-  # Stamp BEFORE the flag. If the order were reversed a crash in between would leave a `done`
-  # with no stamp — which the guard must treat as foreign, wedging a host that actually served.
-  instance_set "$iid"
 }
 
 # --- redis-cli: fixture seam CUTOVER_REDIS_CLI_CMD else `redis-cli -a <pw>` (loopback

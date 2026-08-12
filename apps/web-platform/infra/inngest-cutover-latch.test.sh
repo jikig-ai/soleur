@@ -117,12 +117,11 @@ else
   printf '%s' '{"data":{"functions":[{"id":"fn-1"}]}}'
 fi
 CURLEOF
-  INSTSET="$WORK/instset.sh"
-  cat > "$INSTSET" <<EOF
-#!/usr/bin/env bash
-printf 'instance:%s\n' "\$1" >> "$TRACE"
-EOF
-  chmod +x "$SYSCTL" "$REDIS" "$FLAGSET" "$LOGGER" "$CURLSTUB" "$INSTSET"
+  # #7228: the done-owner marker is a FILE, not a command, so it needs a writable path here —
+  # without one the forward cases abort on verify-owner-unrecordable instead of exercising the
+  # latch contract this suite owns.
+  OWNER_MARKER="$WORK/owner/done-owner"
+  chmod +x "$SYSCTL" "$REDIS" "$FLAGSET" "$LOGGER" "$CURLSTUB"
 }
 teardown_case() { rm -rf "$WORK"; }
 
@@ -147,8 +146,7 @@ run_flip() {
       `# a closed port in CI — retrying for 90s PER CASE, which does not fail the suite so much` \
       `# as hang it. A seam added to the FSM has to reach every harness that drives the FSM.` \
       CUTOVER_CURL_CMD="$CURLSTUB" \
-      CUTOVER_INSTANCE_SET_CMD="$INSTSET" \
-      CUTOVER_INSTANCE_ID="hetzner-test-1" \
+      CUTOVER_DONE_OWNER_MARKER="$OWNER_MARKER" \
       CUTOVER_VERIFY_WINDOW_S=0 \
       CUTOVER_VERIFY_INTERVAL_S=0 \
       ${extra[@]+"${extra[@]}"} \
@@ -246,8 +244,8 @@ assert_absent "(4b) the latch did NOT exist when the FLUSHALL ran (it is recorde
 # instance stamp is written BEFORE the flag so a crash in between cannot leave a `done` with no
 # stamp (which the flip guard must treat as foreign). The latch's own position — recorded at the
 # flush, present by the time the server starts — is unchanged, which is what this suite owns.
-assert_eq "(4c) full ordering unchanged apart from the latch stamp and the #7228 instance stamp" \
-  "flag:flipping,stop,flushall,flag:flushed,start,latch@start,instance:hetzner-test-1,flag:done" "$order"
+assert_eq "(4c) full ordering unchanged apart from the latch stamp" \
+  "flag:flipping,stop,flushall,flag:flushed,start,latch@start,flag:done" "$order"
 teardown_case
 
 # --- 5. `flushed` RESUME BACKFILLS THE LATCH ----------------------------------------------

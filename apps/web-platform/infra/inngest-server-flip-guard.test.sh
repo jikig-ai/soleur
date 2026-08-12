@@ -19,34 +19,36 @@ pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
 # run_guard <uri> <flag-present:0|1> <flag> -> echoes exit code.
-# #7228: GUARD_DONE_INSTANCE / GUARD_INSTANCE_ID default to a MATCHING pair so every pre-existing
-# case keeps testing what it always tested — "does the flag allowlist admit this state?" — rather
-# than silently becoming a test of the new stamp check. The stamp's own behaviour is driven
-# explicitly by the dedicated legs further down. Without the defaults, GUARD_INSTANCE_ID would be
-# unset, the guard would fall through to a real IMDS curl, and every `done` case would depend on
-# whether the CI runner can reach 169.254.169.254 — a network-dependent verdict in a unit suite.
-GUARD_SELF_ID="hetzner-self-1"
+# #7228: the done-owner marker is a FILE on the root disk, so the seam is a PATH.
+# GUARD_OWNER_PRESENT points at a marker that exists; GUARD_OWNER_ABSENT at one that
+# does not. Every pre-existing case gets the PRESENT path so it keeps testing what it
+# always tested — "does the flag allowlist admit this state?" — rather than silently
+# becoming a test of the new marker check.
+GUARD_OWNER_DIR="$(mktemp -d)"
+GUARD_OWNER_PRESENT="$GUARD_OWNER_DIR/present"
+: > "$GUARD_OWNER_PRESENT"
+GUARD_OWNER_ABSENT="$GUARD_OWNER_DIR/absent"
 run_guard() {
   local uri="$1" has_flag="$2" flag="${3:-}"
   local rc=0
   if [[ "$has_flag" == "1" ]]; then
     GUARD_POSTGRES_URI="$uri" GUARD_FLIP_FLAG="$flag" \
-      GUARD_DONE_INSTANCE="$GUARD_SELF_ID" GUARD_INSTANCE_ID="$GUARD_SELF_ID" \
+      GUARD_DONE_OWNER_MARKER="$GUARD_OWNER_PRESENT" \
       bash "$TARGET" >/dev/null 2>&1 || rc=$?
   else
     # Flag genuinely unset in the env (no GUARD_FLIP_FLAG, no INNGEST_CUTOVER_FLIP).
     GUARD_POSTGRES_URI="$uri" \
-      GUARD_DONE_INSTANCE="$GUARD_SELF_ID" GUARD_INSTANCE_ID="$GUARD_SELF_ID" \
+      GUARD_DONE_OWNER_MARKER="$GUARD_OWNER_PRESENT" \
       bash "$TARGET" >/dev/null 2>&1 || rc=$?
   fi
   printf '%s' "$rc"
 }
 
-# Drives the #7228 instance-stamp check directly: <stamp-in-doppler> <this-host-id> -> rc.
-run_guard_stamp() {
-  local stamp="$1" self="$2" rc=0
+# Drives the #7228 done-owner check directly: <marker-path> -> rc.
+run_guard_owner() {
+  local marker="$1" rc=0
   GUARD_POSTGRES_URI="$PROD_URI" GUARD_FLIP_FLAG="done" \
-    GUARD_DONE_INSTANCE="$stamp" GUARD_INSTANCE_ID="$self" \
+    GUARD_DONE_OWNER_MARKER="$marker" \
     bash "$TARGET" >/dev/null 2>&1 || rc=$?
   printf '%s' "$rc"
 }
@@ -124,7 +126,7 @@ run_guard_diag() {  # <uri> <flag> <diagnostic> <unit-file> -> rc
   local uri="$1" flag="$2" diag="$3" unit="$4" rc=0
   GUARD_POSTGRES_URI="$uri" GUARD_FLIP_FLAG="$flag" \
     GUARD_DIAGNOSTIC_BOOT="$diag" GUARD_UNIT_FILE="$unit" \
-    GUARD_DONE_INSTANCE="$GUARD_SELF_ID" GUARD_INSTANCE_ID="$GUARD_SELF_ID" \
+    GUARD_DONE_OWNER_MARKER="$GUARD_OWNER_PRESENT" \
     bash "$TARGET" >/dev/null 2>&1 || rc=$?
   printf '%s' "$rc"
 }
@@ -158,36 +160,33 @@ rm -rf "$DIAG_TMP"
 # boots, inherits a `done` it never earned, the allowlist says ALLOW, and if the co-located
 # scheduler is still carrying the registry that is the double-fire race ADR-100's P1-5 guard
 # exists to prevent — reached THROUGH the guard rather than around it.
-echo "TEST: a done flag stamped by a DIFFERENT instance is refused (#7228)"
-assert_rc "own stamp: prod + done + matching instance ALLOWs (the legitimate post-cutover start)" \
-  "0" "$(run_guard_stamp "$GUARD_SELF_ID" "$GUARD_SELF_ID")"
-assert_rc "FOREIGN stamp: prod + done stamped by another host BLOCKS (inherited done)" \
-  "1" "$(run_guard_stamp "hetzner-predecessor-9" "$GUARD_SELF_ID")"
-# Fail CLOSED on an absent stamp. This is the pre-#7228 completion and the inherited case alike:
-# neither is provably this host's, and the FSM now refuses to write an unstamped `done` at all.
-assert_rc "ABSENT stamp: prod + done with no stamp at all BLOCKS (cannot prove it is ours)" \
-  "1" "$(run_guard_stamp "" "$GUARD_SELF_ID")"
-# ...and closed the other way too: a host that cannot name itself cannot verify the stamp.
-assert_rc "UNRESOLVABLE self: prod + done + a stamp but no self-id BLOCKS" \
-  "1" "$(run_guard_stamp "$GUARD_SELF_ID" "")"
+echo "TEST: a done flag with no owner marker on THIS host is refused (#7228)"
+assert_rc "own marker: prod + done + a present owner marker ALLOWs (the legitimate post-cutover start)" \
+  "0" "$(run_guard_owner "$GUARD_OWNER_PRESENT")"
+# The inheritance case: a replaced host has a fresh root disk, so the marker cannot be there.
+assert_rc "ABSENT marker: prod + done on a host that never recorded ownership BLOCKS (inherited done)" \
+  "1" "$(run_guard_owner "$GUARD_OWNER_ABSENT")"
+# A path whose PARENT does not exist is the same absence, and must not error differently.
+assert_rc "ABSENT marker (missing parent dir): still BLOCKS rather than erroring" \
+  "1" "$(run_guard_owner "$GUARD_OWNER_DIR/no/such/dir/done-owner")"
 # SCOPE. Only `done` is terminal and therefore inheritable; the other allowlisted states belong
 # to a flip actively in progress on THIS host, and the FSM has not written a stamp yet when they
 # are read. Gating them would DEADLOCK the cutover — the guard would block the very start the FSM
 # is driving. These two prove the check did not leak into the transient states.
-echo "TEST: the stamp check is scoped to done, not to the transient flip states (#7228)"
+echo "TEST: the owner check is scoped to done, not to the transient flip states (#7228)"
 for _st in armed flipping flushed; do
   rc=0
   GUARD_POSTGRES_URI="$PROD_URI" GUARD_FLIP_FLAG="$_st" \
-    GUARD_DONE_INSTANCE="" GUARD_INSTANCE_ID="" \
+    GUARD_DONE_OWNER_MARKER="$GUARD_OWNER_ABSENT" \
     bash "$TARGET" >/dev/null 2>&1 || rc=$?
-  assert_rc "flag=$_st with NO stamp still ALLOWs (transient states are not inheritable)" "0" "$rc"
+  assert_rc "flag=$_st with NO owner marker still ALLOWs (transient states are not inheritable)" "0" "$rc"
 done
 # And a non-prod URI is unaffected: the stamp check only guards against a second PROD scheduler.
 rc=0
 GUARD_POSTGRES_URI="$DARK_URI" GUARD_FLIP_FLAG="done" \
-  GUARD_DONE_INSTANCE="hetzner-predecessor-9" GUARD_INSTANCE_ID="$GUARD_SELF_ID" \
+  GUARD_DONE_OWNER_MARKER="$GUARD_OWNER_ABSENT" \
   bash "$TARGET" >/dev/null 2>&1 || rc=$?
-assert_rc "non-prod URI + foreign stamp still ALLOWs (no second prod scheduler is possible)" "0" "$rc"
+assert_rc "non-prod URI + absent marker still ALLOWs (no second prod scheduler is possible)" "0" "$rc"
 
 # --- TWO-HALF AGREEMENT: both consumers must read the SAME variable and the SAME sentinel ----
 # Diagnostic boot is only safe because the guard's relaxation and the bootstrap's backend
