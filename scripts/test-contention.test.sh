@@ -438,6 +438,28 @@ lock_env() {
       "$@"
 }
 
+# Block until $1 is ACTUALLY held, bounded.
+#
+# The arms below background a holder and then measure how long tc_acquire waits
+# for it. A fixed `sleep 1` assumes the holder wins a scheduling race within one
+# second; under load — which is exactly when this suite runs, since parallel
+# worktrees are the documented workflow — it may not, and the waiter then takes
+# a FREE lock. That fails the elapsed floor for a reason with nothing to do with
+# the code under test, i.e. a flake that reads as a real regression.
+#
+# `flock -w 0` is the observation: it exits non-zero iff the lock is held. It
+# takes and releases the lock itself when free, which is harmless here (the
+# holder is the only other contender) and is what makes it a real probe rather
+# than a guess.
+await_held() {
+  local f="$1" i
+  for (( i = 0; i < 200; i++ )); do
+    if ! flock -w 0 -x "$f" -c true 2>/dev/null; then return 0; fi
+    sleep 0.05
+  done
+  return 1
+}
+
 # --- Arm 10: POSITIVE CONTROL — a free lock is acquirable -------------------
 # Without this control, a broken probe reads as "blocked" and would justify
 # building the stale-holder detection Phase 3.6 proves is dead code (the
@@ -485,7 +507,9 @@ HELD="$SS_ROOT/locks/6789-testall.lock"
 : > "$HELD"
 flock -x "$HELD" -c 'sleep 12' &
 HOLDER=$!
-sleep 1
+if ! await_held "$HELD"; then
+  fail "AC4 fixture: the holder never took '6789-testall' — the arms below would measure a free lock"
+fi
 lock_env bash -c "source '$LIB'; tc_acquire 6789-testall 2; echo RC=\$?" \
   > "$TESTROOT/timeout.txt" 2>&1 || true
 if [[ "$(grep -cE 'RC=0' "$TESTROOT/timeout.txt" || true)" -ge 1 ]]; then
@@ -633,7 +657,9 @@ SLOW="$SS_ROOT/locks/6789-slow.lock"
 : > "$SLOW"
 flock -x "$SLOW" -c 'sleep 3' &
 SLOW_HOLDER=$!
-sleep 1
+if ! await_held "$SLOW"; then
+  fail "AC3 fixture: the holder never took '6789-slow' — the elapsed floor below would measure a free lock"
+fi
 lock_env bash -c "source '$LIB'; tc_acquire 6789-slow 8; echo RC=\$?" \
   > "$TESTROOT/slow.txt" 2>&1 || true
 kill "$SLOW_HOLDER" 2>/dev/null || true
