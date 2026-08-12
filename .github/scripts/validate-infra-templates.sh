@@ -304,56 +304,115 @@ has_template_syntax() { # file
 # unstripped body still carries `#cloud-config`, so the exact regression a too-permissive
 # strip causes (header eaten, host boots dark) is invisible here by construction.
 #
-# So: find the wrapping `replace(templatefile(` for THIS template, resolve the named local to
-# its `/…/` literal, and apply it. Fail closed — if the wrap is present but the local cannot
-# be resolved, that is a gate that no longer knows what it is validating.
+# ONE PRE-PASS, NOT A PER-MEMBER RESCAN. An earlier form re-scanned all 49 TF_FILES inside
+# the per-member loop — O(members x tf_files), ~1,850 process spawns and ~2.9s per run — and
+# matched with `grep`, which meant (a) it read COMMENTS (zot-registry.tf alone has 11 comment
+# lines naming its template, and the sibling expression extraction already filtered them),
+# and (b) it required `replace(templatefile(` and the basename on ONE PHYSICAL LINE, so a
+# `terraform fmt`-legal reformat splitting the call silently reverted the gate to validating
+# the unstripped document with no signal at all. Discovery (A) above was deliberately made
+# stream-based for exactly that reason.
+#
+# The pre-pass below strips comments, tolerates newlines inside the call, and paren-matches
+# to the closing `), local.<X>,`. It runs once and yields a basename -> expression map.
+declare -A RENDER_STRIP_BY_BASENAME=()
+build_render_strip_map() {
+  local line base expr
+  local _map_err="$TMP/render-strip-map.err"
+  while IFS=$'\t' read -r base expr; do
+    [[ -n "$base" ]] && RENDER_STRIP_BY_BASENAME["$base"]="$expr"
+  done < <(python3 - "${TF_FILES[@]}" 2>"$_map_err" <<'PY'
+import os, re, sys
+
+def strip_comments(t):
+    out, i, n = [], 0, len(t)
+    in_s = False
+    while i < n:
+        c = t[i]
+        if in_s:
+            out.append(c)
+            if c == '\\' and i + 1 < n:
+                out.append(t[i+1]); i += 2; continue
+            if c == '"':
+                in_s = False
+            i += 1; continue
+        if c == '"':
+            in_s = True; out.append(c); i += 1; continue
+        if t.startswith('//', i) or c == '#':
+            j = t.find('\n', i)
+            i = n if j < 0 else j
+            continue
+        if t.startswith('/*', i):
+            j = t.find('*/', i)
+            i = n if j < 0 else j + 2
+            continue
+        out.append(c); i += 1
+    return ''.join(out)
+
+for path in sys.argv[1:]:
+    try:
+        src = strip_comments(open(path).read())
+    except OSError:
+        continue
+    for m in re.finditer(r'replace\(\s*templatefile\(\s*"([^"]+)"', src):
+        tpl = os.path.basename(m.group(1))
+        # Paren-match from the `replace(` so the close is found wherever it sits.
+        depth, i, n = 0, src.index('templatefile', m.start()) + len('templatefile'), len(src)
+        while i < n:
+            if src[i] == '(':
+                depth += 1
+            elif src[i] == ')':
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        tail = src[i:i + 200]
+        lm = re.match(r'\)\s*,\s*local\.([A-Za-z0-9_]+)\s*,', tail)
+        if not lm:
+            print(f"UNRESOLVED\t{tpl}\t{path}", file=sys.stderr)
+            continue
+        em = re.search(r'^\s*' + re.escape(lm.group(1)) + r'\s*=\s*"([^"]*)"', src, re.M)
+        if not em:
+            print(f"UNRESOLVED\t{tpl}\t{path}", file=sys.stderr)
+            continue
+        print(f"{tpl}\t{em.group(1)}")
+PY
+  )
+  # FAIL CLOSED. A wrap this pre-pass can SEE but cannot RESOLVE means the gate no longer
+  # knows which bytes the host boots. Reporting it on stderr and continuing is the same
+  # silent revert-to-unstripped this function exists to prevent, so it is fatal.
+  if [[ -s "$_map_err" ]]; then
+    echo "ERROR: a replace(templatefile(...)) call site could not be resolved to a strip expression:" >&2
+    sed 's/^/  | /' "$_map_err" >&2
+    echo "  Refusing to schema-validate a document that is not the one the host boots." >&2
+    exit 3
+  fi
+}
+
 apply_render_strip() { # rendered_path template_path
-  local rendered="$1" tpl="$2" tplbase local_name expr tf
-  tplbase="$(basename "$tpl")"
-  for tf in "${TF_FILES[@]}"; do
-    # LINE-SCOPED AND LITERAL. An earlier form joined the file with `tr '\n' ' '` and matched
-    # `replace\(templatefile\(.*<base>.*\}\), local\.X`; with the whole file on one line the
-    # `.*` runs span everything, so ANY wrapped call site in ANY .tf donated its strip to
-    # EVERY template — measured: the web host's unwrapped cloud-init.yml was handed the
-    # registry's expression. `$tplbase` also contains `.`, which is a regex any-char, so
-    # `cloud-init.yml` could match a sibling basename. Both are fixed by matching the ONE
-    # line that opens the call (terraform keeps `replace(templatefile("…", {` together) with
-    # grep -F, then scanning FORWARD from it for the closing `}), local.<X>,`.
-    local open_ln
-    open_ln=$(grep -nF "$tplbase" "$tf" 2>/dev/null \
-      | grep -F 'replace(templatefile(' | head -1 | cut -d: -f1)
-    [[ -n "$open_ln" ]] || continue
-    local_name=$(tail -n "+${open_ln}" "$tf" \
-      | grep -oE '^[[:space:]]*\}\)[[:space:]]*,[[:space:]]*local\.[a-z_]+' \
-      | head -1 | grep -oE 'local\.[a-z_]+$' | sed 's/^local\.//')
-    if [[ -z "$local_name" ]]; then
-      echo "ERROR: $tplbase opens a replace(templatefile( at ${tf}:${open_ln} but no closing '}), local.<name>,' was found." >&2
-      echo "  Refusing to schema-validate a document that is not the one the host boots." >&2
-      exit 3
-    fi
-    expr=$(grep -vE '^[[:space:]]*(#|//)' "$tf" \
-      | grep -oE "^[[:space:]]*${local_name}[[:space:]]*=[[:space:]]*\"[^\"]*\"" \
-      | sed -E 's/^[^=]*=[[:space:]]*"(.*)"$/\1/' | head -1)
-    if [[ -z "$expr" ]]; then
-      echo "ERROR: $tplbase is rendered through replace(..., local.${local_name}, \"\") but that local has no resolvable /…/ literal in $tf." >&2
-      echo "  Refusing to schema-validate a document that is not the one the host boots." >&2
-      exit 3
-    fi
-    python3 - "$rendered" "$expr" <<'PY' || { echo "ERROR: could not apply render strip to $tplbase" >&2; exit 3; }
+  local rendered="$1" tplbase expr
+  tplbase="$(basename "$2")"
+  expr="${RENDER_STRIP_BY_BASENAME[$tplbase]:-}"
+  [[ -n "$expr" ]] || return 0
+  python3 - "$rendered" "$expr" <<'PY' || { echo "ERROR: could not apply the render strip to $tplbase" >&2; exit 3; }
 import re, sys
 path, expr = sys.argv[1], sys.argv[2]
 if not (expr.startswith("/") and expr.endswith("/")):
     sys.exit(f"strip expression is not a slash-delimited terraform regex literal: {expr!r}")
-pat = expr[1:-1].replace("\\t", "\t").replace("\\n", "\n")
+# Terraform's HCL unescaping, for the escapes a strip literal can carry. Anything else would
+# reach re.sub with different bytes than terraform's RE2 sees, so it is refused rather than
+# silently mistranslated.
+body_pat = expr[1:-1]
+if re.search(r'\\(?![tnr\\])', body_pat):
+    sys.exit(f"strip expression carries an HCL escape this gate does not model: {expr!r}")
+pat = body_pat.replace("\\t", "\t").replace("\\n", "\n").replace("\\r", "\r")
 body = open(path).read()
 out = re.sub(pat, "", body)
 if out == body:
     sys.exit("the render strip matched nothing — it is a no-op, so this gate would validate the unstripped document")
 open(path, "w").write(out)
 PY
-    echo "  ..  $tplbase: applied local.${local_name} before validation (the bytes the host boots)"
-    return 0
-  done
+  echo "  ..  $tplbase: applied the call site's render strip before validation (the bytes the host boots)"
   return 0
 }
 
@@ -387,6 +446,10 @@ validate_by_type() { # rendered_path original_basename label
 
 VALIDATED=0
 TOTAL_BOOLS=0
+
+
+# Built ONCE here, consumed per member by apply_render_strip below.
+build_render_strip_map
 
 for base in "${MEMBERS[@]}"; do
   path="$ROOT/$base"
