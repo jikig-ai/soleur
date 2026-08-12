@@ -98,8 +98,8 @@ independent pieces of evidence, plus one that is specific to the skills surface:
 **Therefore this PR pays the measurement ADR-179 deferred.** §R3 states a direct run of a
 bare token inside a bash fence "would close it outright, and remains a prerequisite for the
 deferred `safe-bash.ts` migration (#7453)." The unknown now gates a **P0 secret gate**, and
-retiring it costs minutes: ship a throwaway skill carrying a bare token in a ```bash fence
-that prints its own expansion, and read the result. This is Phase 1 of the implementation and
+retiring it costs minutes: ship a throwaway skill carrying a bare token in a fenced `bash`
+block that prints its own expansion, and read the result. This is Phase 1 of the implementation and
 it **precedes the amendment text**, because a negative result changes what the amendment
 should say rather than merely weakening it (§R3a: under no-substitution, option (a)'s
 advantage over `:?` evaporates). Asserting the fix without measuring it is precisely the
@@ -129,7 +129,7 @@ differences change what each site needs:
 | `incident/SKILL.md` | Secret gate | **Has** `[[ -r "$SENTINEL" ]] \|\| { … exit 2; }` with a documented exit-2 contract | Operator re-runs a PIR | Anchor swap **+ identity preflight** |
 | `legal-generate/SKILL.md` | Secret gate | Has the same guard | Operator re-runs a legal draft | Anchor swap **+ identity preflight**; stay byte-identical to `incident` |
 | `linear-fetch/SKILL.md` | Secret gate | **NONE** — verified: the `persist_safe_summary` bullet is a bare pipeline with no readability check and no exit-code dispatch | Empty persist-safe summary | **Highest residual risk in the set.** Anchor swap **+ add the missing guard** + identity preflight |
-| `compound/SKILL.md` | **Not a secret gate** — `token-efficiency-report.sh` prints a top-3 cost table and appends `te-*` warnings to `.claude/.rule-incidents.jsonl` | n/a (advisory, explicitly non-blocking) | An advisory table is skipped | Anchor swap only; **do not assert the P0 secret-gate rationale for it** |
+| `compound/SKILL.md` | **Not a secret gate** — `token-efficiency-report.sh` prints a top-3 cost table and appends `te-*` warnings to `.claude/.rule-incidents.jsonl` | **NONE** — verified: a bare `bash "${…}"` with no readability check | Today: a raw `bash: /skills/…: No such file or directory` (127) that reads to a founder as a corrupted install | Anchor swap **+ a NON-BLOCKING skip guard** (not a halt); **do not assert the P0 secret-gate rationale for it** |
 
 Two consequences:
 
@@ -142,7 +142,15 @@ Two consequences:
   the script measures the workspace, so its data root *should* be the git root. Say this
   explicitly in the amendment or a reviewer reads the migration as internally inconsistent.
   (Its inputs are monorepo-only telemetry, so the customer-surface half of the rationale does
-  not apply to this site either; it degrades to empty rather than failing.)
+  not apply to this site either.)
+- **`compound`'s guard must be NON-BLOCKING — this is the one site where fail-closed is
+  wrong.** The fail-closed asymmetry that justifies halting the other three rests on the gate
+  authorising secret emission. `token-efficiency-report.sh` authorises nothing; halting
+  knowledge capture over a missing advisory cost table is a pure operator regression with no
+  security benefit. So: add a readability check whose else arm **prints a named skip marker
+  and continues**, never `exit 2`. Keeping the site in scope (rather than deferring it to
+  #7453) is what lets AC5a assert a corpus-wide zero; deferring it would leave the last
+  `:-$(git rev-parse` occurrence standing and dissolve that assertion.
 
 ### The identity preflight is mandatory, and `[[ -r ]]` does not satisfy it
 
@@ -156,13 +164,32 @@ ADR-179 §(a) *Correction (review, measured)* is decisive and this plan initiall
 "strictly better than a `:-` default … but it is **not** safe by construction, and the
 preflight is what carries it" — which is why ADR-179 makes decision 2 *mandatory rather than
 defence-in-depth*. **Swapping the anchor without adding the identity preflight ships half of
-ADR-179 and none of its decision 2.** The shipped form to reuse verbatim is `go.md` /
-`sync.md`:
+ADR-179 and none of its decision 2.**
+
+Reuse **only the condition**, from `go.md` / `sync.md`:
 
 ```bash
 [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json"
 ```
+
+**NEVER reuse `go.md`'s `else` branch — measured, it fails open.** `go.md`'s else does not
+exit: it emits `SOLEUR_GIT_REPO_DIAG source=probe-unreachable reason=plugin-root-unverified`,
+runs two bare `git rev-parse` probes, and **continues degraded**. That is correct for a
+readiness probe and catastrophic for a secret gate — copying it verbatim would port a
+degrade-and-continue arm onto a control whose entire purpose is to stop, which is the
+fail-open class this PR exists to close. The correct precedent is **`sync.md`**, whose else
+sets a flag and then hard-`exit 1`s. At every gate site the else branch is **`exit 2`**, the
+halt code these skills already document. AC5c asserts the **exit-2 dispatch**, not merely the
+presence of the manifest grep — a `grep -Fc >= 1` on the condition would pass a fail-open
+copy.
+
+**ADR-179's own Decision 2 code block is the defeated form.** It reads
+`test -d "${CLAUDE_PLUGIN_ROOT}/scripts" || { … }` — the exact shape its own §(a) Correction
+measured as bypassable — and that block appears nowhere in `plugins/` (zero hits); what
+shipped is the manifest+name check above. So the amendment must **replace ADR-179's Decision 2
+code block**, not just extend its scope, or an agent following Decision 2 literally ships the
+bypassable preflight.
 
 ### Sweep — complete, classified (hr-write-boundary-sentinel-sweep-all-write-sites)
 
@@ -283,11 +310,45 @@ handled explicitly in §Implementation Phases (comment-only, no scope change).
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** `/soleur:incident`, `/soleur:legal-generate`
-and `/soleur:linear-fetch` refuse to complete, halting at the redaction gate with
-`redact-sentinel.sh unreadable` (exit 2). The operator cannot produce a post-incident report
-or a legal draft until the plugin root resolves. No data is lost and nothing leaks — the
-failure is a refusal, not a corruption.
+**If this lands broken, the user experiences** — enumerated by the command the founder
+actually types, not by the file the diff touches (`linear-fetch` is never invoked directly;
+`/soleur:one-shot` and `/soleur:brainstorm` invoke it):
+
+- `/soleur:incident` and `/soleur:legal-generate` halt at the redaction gate (exit 2). The
+  founder cannot produce a post-incident report or a legal draft until the root resolves.
+- `/soleur:one-shot <LINEAR-ID>` and `/soleur:brainstorm <LINEAR-ID>` abort at Step 0a /
+  Phase 0.4, because `persist_safe_summary` — which both callers are *required* to substitute
+  for `$ARGUMENTS` — no longer exists.
+- `/soleur:compound` skips its advisory cost table with a named marker and continues
+  (non-blocking by design; see §Research Insights).
+
+**Two honest qualifications the earlier draft got wrong:**
+
+1. **"Nothing leaks" is not unconditional.** The un-redacted PIR draft is generated into
+   `mktemp` *before* the gate runs, and `incident/SKILL.md` has no `trap`/`rm -f` on the
+   exit-2 path — so every halt leaves un-redacted production logs in `/tmp` on the founder's
+   machine. Pre-existing, but this change increases how often that path is taken. Either add
+   cleanup or scope it out explicitly; do not repeat the flat "nothing leaks" claim.
+2. **A refusing control invites a workaround.** A founder blocked mid-outage can paste the
+   production log into an editor and commit the post-mortem by hand — which removes the only
+   thing scanning it. The halt message must therefore say *"do not write this report by hand
+   — the redaction scanner is what makes it safe to publish"* and name a remediation.
+
+**If this leaks, the user's data is exposed via:** a founder runs `/soleur:review` on an
+outside contributor's PR. **Only the SKILL.md review path establishes this precondition** —
+`review/SKILL.md` instructs `gh pr checkout`, while `review/workflows/review.workflow.js`
+explicitly instructs the opposite ("do NOT `gh pr checkout` — other agents share this working
+tree") and reads read-only via `gh pr diff`. On the checkout path the gate resolves
+`redact-sentinel.sh` **from the contributor's tree**; a hostile PR ships a two-line
+`redact-sentinel.sh` that `exit 0`s. The operator's post-incident report — which by
+construction quotes production logs and therefore carries API keys, Supabase service-role
+tokens, and customer identifiers — is written to `post-mortems/` and pushed **with the gate
+reporting a pass**.
+
+**The higher-frequency carriers in that same hostile tree are `linear-fetch` (auto-invoked by
+every `/soleur:one-shot`) and `compound` (run after any session)**, not `incident` — a founder
+rarely drafts a post-mortem while sitting in a contributor's checkout. Severity does not rest
+on the least reachable of the three.
 
 **If this leaks, the user's data is exposed via:** a reviewer runs `/soleur:review` on a
 contributor PR, which instructs `gh pr checkout`. The redaction gate then resolves
@@ -308,17 +369,32 @@ threshold sets `requires_cpo_signoff: true` and enrols `user-impact-reviewer` at
 
 ### ADR
 
-**Amend ADR-179 — do not write a new ADR.** ADR-179 already ratified the mechanism; the gap
-is that its Decision 1 is scoped to the customer-facing *command* surface while these five
-sites are on the *skills* surface, which its Consequences explicitly deferred.
+**Amend ADR-179 — do not write a new ADR.** ADR-179 already ratified the mechanism.
+
+**The instrument is retiring a DEFERRAL, not extending a scope — a weaker claim on the ADR
+and a stronger footing for this PR.** Decision 1 already says "every customer-facing
+executable path in **plugin markdown**", which governs SKILL.md; it is the *Consequences*
+that defer the migration **work** ("are **not** migrated here … Deferred, blocked on this
+ADR"), and §R5 names these five sites by path. So ADR-179 already governs them both
+normatively and by name. (An earlier draft of this plan said Decision 1 was "scoped to the
+command surface". That is false — and the same narrowing is already committed at ADR-093's
+header, so writing the amendment from the wrong framing would re-ratify the error into
+ADR-179 itself.)
 
 The amendment (authored at `/work`, designed here) must say:
 
-1. **Scope extension.** ADR-179 Decision 1's canonical bare
-   `${CLAUDE_PLUGIN_ROOT}/<payload-relative-path>` form extends from
-   `plugins/soleur/commands/**` to **secret-gate invocations in
-   `plugins/soleur/skills/**`**, defined as the closed set of gate scripts in
-   §Guard Contract. The remaining ~105 non-gate skills sites stay deferred to #7453.
+1. **Deferral retired.** ADR-179 Decision 1's canonical bare
+   `${CLAUDE_PLUGIN_ROOT}/<payload-relative-path>` form already governs
+   `plugins/soleur/skills/**`; this PR retires the Consequences' deferral for the
+   **secret-gate subset**, defined as the closed set of gate scripts in §Guard Contract. The
+   remaining ~105 non-gate skills sites stay deferred to #7453.
+1b. **Decision 2 extended AND its stale code block replaced.** Decision 2 currently reads "a
+   preflight guard per **command file**" and ships
+   `test -d "${CLAUDE_PLUGIN_ROOT}/scripts" || { … }` — the shape ADR-179's own §(a)
+   Correction measured as **bypassable**, and which exists nowhere in `plugins/`. Extend it
+   to skill files **and** replace the block with the shipped manifest+name identity check,
+   with an explicit `exit 2` else arm. Without this, an agent following Decision 2 literally
+   ships the defeated preflight.
 2. **Why this subset can precede #7453.** #7453 is blocked on a `safe-bash.ts`
    exact-literal edit; measured, none of these three scripts is in
    `EXACT_LITERAL_SAFE_COMMANDS`, so this subset carries no allowlist edit and is not
@@ -374,21 +450,32 @@ the Amendment's premise is falsified.
 
 ### C4 views
 
-**No C4 impact.** Enumerated against all three model files —
+**No C4 change — because the affected topology is entirely unmodelled, a known gap tracked at
+#7452.** Enumerated against all three model files —
 `knowledge-base/engineering/architecture/diagrams/{model.c4,views.c4,spec.c4}` — read in
 full rather than keyword-grepped, per the completeness mandate:
 
-- **External human actors:** the change adds none. The untrusted `contributor` actor this
-  threat model turns on is **already modelled** (ADR-074, `model.c4`) and its trust
-  relationship to the reviewer is unchanged — this PR closes a path that violated the
-  existing model, it does not alter the model.
+- **External human actors:** none added. The untrusted `contributor` actor is already
+  modelled (ADR-074, `model.c4`). **Note its description explicitly declares this region
+  uncovered** — "Other operator-side execution of a checked-out PR head (running its tests,
+  its scripts, its hooks) is covered by NEITHER boundary." So this PR *narrows an
+  acknowledged-uncovered region*; it does **not** close "a path that violated the model", and
+  the description stays true after the change (no edit needed).
 - **External systems / vendors:** none added or removed. No new webhook, API, or store.
 - **Containers / data stores:** none. The change edits markdown operands, a bash test, a
   vitest file, and two ADRs.
-- **Actor↔surface access relationships:** none change. The plugin-payload↔CLI relationship
-  is the same edge; only the *path expression* used to traverse it changes.
-- **Element descriptions falsified by the change:** none found. No element description
-  asserts an anchor form.
+- **Actor↔surface access relationships:** none change — **and there is no
+  plugin-payload↔CLI edge to change.** Every plugin-touching relationship in `model.c4` is
+  server-side or repo-side (`claude -> skillloader`, `connectedRepoPlugin -> skillloader`,
+  `skillloader -> skills|agents`, `hooks -> plugin`). There is no self-hosted-CLI container
+  and no marketplace-customer actor. ADR-179 §R6 already records this as "the unmodelled
+  self-hosted-CLI C4 topology", deferred to #7452.
+- **Element descriptions falsified by the change:** none. No element description asserts an
+  anchor form. `spec.c4` defines only element kinds and tags — nothing path- or
+  anchor-shaped.
+
+**Amendment advisory:** record the secret-gate surface as a further consumer of the unmodelled
+CLI topology, strengthening #7452's case.
 
 `/work` must re-read all three files and re-confirm this before concluding; the enumeration
 above is the plan's evidence, not a substitute for that check.
@@ -495,6 +582,8 @@ only the weak property that two files agree, and leaves the corpus unguarded. Pe
    returns **zero**. This single assertion mechanically closes ADR-179 §R5 and stops the form
    reappearing *anywhere*, which per-file counts structurally cannot do.
 
+**Mutation matrix.** Derived from the design above, not from the implementation.
+
 | # | Mutation | Must |
 | --- | --- | --- |
 | M7 | Change the decoy from `exit 0` to `exit 2` | RED at step 3 — the hazard-liveness assertion |
@@ -570,12 +659,21 @@ verifies, so the RED/GREEN transition is observable (`cq-write-failing-tests-bef
 ### Phase 1 — MEASURE: retire ADR-179 §R3 (must precede the amendment text)
 
 Settle whether the plugin loader substitutes a **bare** `${CLAUDE_PLUGIN_ROOT}` inside a
-```bash fence in **SKILL.md** text. Ship a throwaway skill whose fence prints its own
+fenced `bash` block in **SKILL.md** text. Ship a throwaway skill whose fence prints its own
 expansion, invoke it, and read the result. Record the exact artifact, invocation, and raw
 output in the PR body.
 
+**Run TWO arms — the preflight introduces a second unknown the loader probe does not cover.**
+Arm A: a marketplace-style session where `CLAUDE_PLUGIN_ROOT` is expected to resolve. Arm B:
+a **plain monorepo session with the variable unset** — which is how this repo's own operator
+invokes these skills today. Arm B matters because the identity preflight checks
+`${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`, so it halts on an unset variable
+*regardless* of whether the loader substitutes correctly inside a fence. Record which operator
+populations lose which skills under each arm.
+
 - **Positive** (token substituted to the installed root) → §R3 is retired from "corroborated"
-  to "proven"; proceed as planned and say so in the amendment.
+  to **"proven for the measured construction"** (bare token, fenced `bash` block, SKILL.md) —
+  never to "proven" flatly; proceed as planned and say so in the amendment.
 - **Negative** (token reaches bash literally and expands empty) → **STOP and re-plan.** Under
   §R3a the chosen option's advantage over `:?` evaporates and the correct skills-surface
   decision may differ. Do not proceed to Phase 4 on a negative.
@@ -613,9 +711,15 @@ ADR-179 decision-2 identity preflight** (manifest exists AND names `"soleur"`), 
 3. `linear-fetch/SKILL.md` — operand **+ add the missing readability guard and exit-code
    dispatch**, which this site has never had. Empty stdout must not be persistable as "the
    redacted text". This is the largest behavioural change in the PR.
-4. `compound/SKILL.md` — operand only. **Code root** moves to `${CLAUDE_PLUGIN_ROOT}`; the
+4. `compound/SKILL.md` — operand + a **NON-BLOCKING** skip guard (named marker, continue —
+   never `exit 2`; it authorises nothing). **Code root** moves to `${CLAUDE_PLUGIN_ROOT}`; the
    script-internal `TE_REPORT_REPO_ROOT` **data root** stays git-root-defaulted and must not
    be touched.
+4b. `one-shot/SKILL.md` + `brainstorm/SKILL.md` — the absent-`persist_safe_summary` halt
+   contract. Without it the linear-fetch guard turns a refusal into a leak (the callers would
+   fall back to `agent_context`, which carries signed Linear bearer URLs).
+4c. Each halt message gains an **operator-actionable remediation line** — plain language, a
+   named next step, and for the redaction gates an explicit "do NOT write this by hand".
 5. `incident/test/redact-sentinel.test.sh` — retarget Test 18's `ANCHOR` (see §Guard 2).
 
 **Also correct the surrounding prose, which the brief does not list and a
@@ -678,14 +782,22 @@ returns 0 because `$`, `{` and `}` are not literal in BRE.
 ### Pre-merge (PR)
 
 1. **AC1 — zero git-root defaults remain at gate sites.**
-   `git grep -c ':-\$(git rev-parse' -- plugins/soleur/skills/` returns **1** hit, and that
-   hit is the benign `worktree-manager.sh` `--git-common-dir` default. (Not 0: the benign
-   site is deliberately retained.)
+   `git grep -lF ':-$(git rev-parse --show-toplevel)' -- plugins/soleur/` returns **0 files**.
+   (Uses `-lF`: `git grep -c` emits *per-file* counts, not a total, so a "returns 1" assertion
+   on it is unreadable; and the needle contains `$`/`(`, which are not literal in BRE. The
+   benign `worktree-manager.sh` site is excluded automatically because it is
+   `--git-common-dir`, a different subcommand — so this AC is a clean zero rather than a
+   count-with-an-exception.) **Pre-fix baseline, measured on this branch: 5 files** — so this
+   AC is a genuine 5→0 transition, not a tautology.
 2. **AC2 — the bare anchor is present and byte-identical across the coupled pair.**
    `grep -Fc '${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-sentinel.sh'` returns
    exactly `1` for **each** of `incident/SKILL.md` and `legal-generate/SKILL.md`.
 3. **AC3 — no doubled payload segment.**
-   `git grep -Fc '${CLAUDE_PLUGIN_ROOT}/plugins/soleur'` over `plugins/` returns **0**.
+   `git grep -lF '${CLAUDE_PLUGIN_ROOT}/plugins/soleur' -- plugins/soleur/skills/` returns
+   **0 files**. **Scoped to `skills/` deliberately:** the unscoped form matches
+   `commands/sync.md`, where the string appears inside ADR-179's *documentation of the
+   anti-pattern* ("…, never `"${CLAUDE_PLUGIN_ROOT}/plugins/soleur/scripts/foo.ts"`"). An
+   unscoped AC would fail on `main` today — verified.
 4. **AC4 — the other two gate sites migrated.** `grep -Fc` confirms the bare anchor in
    `linear-fetch/SKILL.md` (`redact-linear-urls.sh`) and `compound/SKILL.md`
    (`token-efficiency-report.sh`), 1 each.
@@ -698,9 +810,12 @@ returns 0 because `$`, `{` and `}` are not literal in BRE.
    invocation, and its raw output, with an explicit positive/negative verdict. The amendment
    cites that measurement and **does not** cite `preflight`/`review` as skills-surface
    evidence (`git grep -c 'preflight/SKILL.md' <ADR-179>` in an evidentiary context = 0).
-5c. **AC5c — identity preflight at every gate site.** Each of `incident`, `legal-generate`
-   and `linear-fetch` carries the ADR-179 decision-2 manifest+name check;
-   `grep -Fc '"name"[[:space:]]*:[[:space:]]*"soleur"'` returns ≥1 in each of the three files.
+5c. **AC5c — identity preflight at every gate site, WITH a fail-closed else.** Each of
+   `incident`, `legal-generate` and `linear-fetch` carries the manifest+name check AND an
+   `exit 2` else arm. **The exit-2 dispatch is the assertion**, not the grep for the
+   condition — a `grep -Fc '"name"…' >= 1` would pass a verbatim copy of `go.md`'s
+   degrade-and-continue else, which is the fail-open shape this PR exists to close. Asserted
+   by a test that drives the unresolved-root path and observes exit 2.
 5d. **AC5d — `linear-fetch` gained the guard it never had.** Its `persist_safe_summary`
    invocation performs a readability check and dispatches on exit code; empty stdout from an
    unresolved or failing scrubber cannot be returned as the persist-safe summary. Asserted by
@@ -723,11 +838,16 @@ returns 0 because `$`, `{` and `}` are not literal in BRE.
 10. **AC10 — ADR-179 amended.** Contains the scope extension, the no-`safe-bash`-change
     finding, the fail-closed-asymmetry reasoning, the skills-surface substitution evidence,
     and §R5 retired with a pointer to this PR.
-11. **AC11 — ADR-093 §Amendment corrected.** The `git-root = the operator's own checkout`
-    parenthetical no longer asserts the false premise;
-    `grep -Fc 'git-root = the operator' <ADR-093>` returns **0** in an asserting context, and
-    the surrounding #6223 export-invariant reasoning is intact (spot-checked by reading, not
-    by count).
+11. **AC11 — ADR-093 §Amendment corrected, section-scoped.**
+    `awk '/^## Amendments/,0' <ADR-093> | grep -Fc 'git-root = the operator'` returns **0**.
+    **Section-scoped deliberately:** the unscoped count is **2** today — the second occurrence
+    is a *quotation* inside the amended-by header (line 4) that must SURVIVE, so an unscoped
+    "returns 0" AC is unsatisfiable without destroying the cross-reference. The surrounding
+    #6223 export-invariant reasoning is intact (verified by reading, not by count).
+11b. **AC11b — ADR-093's header parenthetical corrected too.** Line 4 asserts ADR-179 "scopes
+    the … guidance below out of the customer-facing command surface
+    (`plugins/soleur/commands/**`)". After this PR that is false — the canonical form also
+    governs the skills secret-gate subset. The parenthetical is updated in the same edit.
 12. **AC12 — no new ADR file.** `git diff --name-only origin/main...HEAD` shows **no added**
     file under `knowledge-base/engineering/architecture/decisions/`; both ADR paths appear as
     modifications only.
@@ -845,16 +965,75 @@ data flow, and no new distribution surface. No Critical finding; nothing to writ
 - **`grep -c` on a `${…}` needle silently returns 0.** Every AC here uses `grep -F`. A
   verification that reports 0 is far more likely to be a BRE escaping bug than a real
   absence.
-- **ADR-179 §R3's honesty is load-bearing — do not upgrade "corroborated" to "proven."** The
-  new skills-surface evidence strengthens the corroboration; it is still not a direct
-  measurement of a bare token in a SKILL.md bash fence under a controlled A/B. Record it as
-  what it is.
+- **Upgrade §R3 to "proven **for the measured construction**" — never to "proven" flatly.**
+  (An earlier draft of this bullet said "do not upgrade" and justified it with the
+  skills-surface evidence this plan has since **retracted**; that text was stale and
+  contradicted Phase 1 and AC5b. Resolved: a positive Phase 1 result upgrades §R3, scoped to
+  the construction actually measured — a bare token, in a fenced `bash` block, in a SKILL.md.
+  One measurement of one construction is not a general proof, and stating it flatly would
+  repeat the over-generalisation §R3's honesty exists to prevent.)
 - **#7453's GitHub title cites ADR-177, which is a different ADR.** Anyone working that issue
   from the title alone will read the test-runner taxonomy ADR and find nothing about anchors.
   The Phase 5 comment must correct it explicitly.
 - The `worktree-manager.sh` `${_common_dir:-$(git rev-parse --git-common-dir …)}` hit is
   **not** a defect and must survive AC1. A sweep that drives the `:-$(git rev-parse` count to
   0 has broken worktree lease resolution.
+
+## Deepen-Plan Review Findings
+
+Panel: CTO (plan-time consult), `security-sentinel`, `architecture-strategist`,
+`user-impact-reviewer`, `code-simplicity-reviewer`, `test-design-reviewer`,
+`spec-flow-analyzer`, `git-history-analyzer`.
+
+**COVERAGE GAP — 4 of 7 panel agents failed. Stated, not hidden.** Only the CTO consult,
+`architecture-strategist`, `user-impact-reviewer` and `git-history-analyzer` returned
+findings. These four died mid-run and returned nothing:
+
+| Agent | Failure | Unreviewed lens |
+| --- | --- | --- |
+| `security-sentinel` | stalled, 600s watchdog | **The core security lens on a P0 security plan** — residual attack surface after the identity preflight, CI-safety of the planted decoy |
+| `code-simplicity-reviewer` | stalled, 600s watchdog | YAGNI. It was asked to name ACs to cut; the AC list is consequently **unpruned** and may carry ceremony |
+| `test-design-reviewer` | API error, connection lost | Mutation-matrix adequacy, Guard 1 assembly drift paths, Guard 2 vacuity |
+| `spec-flow-analyzer` | API error, connection lost | Phase-flow cycles, the Phase 1 negative-branch dead end, tasks.md drift |
+
+**Consequence for `/work` and `/soleur:review`:** treat §Guard Contract, §Implementation
+Phases, and §Acceptance Criteria as the **least-reviewed** sections. Re-run all four lenses at
+review time. In particular, the Phase 1 negative branch ("STOP and re-plan") is an
+acknowledged open end that no flow reviewer has examined, and the AC list has had no
+simplicity pass.
+
+Both surviving reviewers were strong: `architecture-strategist` returned four blocking items
+(all fixed below) and `user-impact-reviewer` returned nine findings, eight uncovered.
+
+### Corrections applied to this plan (all independently re-verified before folding in)
+
+| # | Finding | Verification | Disposition |
+| --- | --- | --- | --- |
+| F1 | **The plan instructed reusing `go.md`'s preflight verbatim — whose `else` branch does NOT exit.** It emits a marker, runs two probes, and continues degraded. Copying it onto a secret gate ports a fail-open arm onto a control whose purpose is to stop. | Read `commands/go.md`; confirmed the else has no `exit`. `sync.md` does hard-`exit 1`. | **FIXED** — reuse the condition only; `sync.md` is the precedent; else is `exit 2`; AC5c now asserts the exit-2 dispatch, not the grep. |
+| F2 | **ADR-179's own Decision 2 ships the code block its own §(a) Correction measured as bypassable** (`test -d "$X/scripts"`), and that block exists nowhere in `plugins/`. | `git grep` for the block: 0 hits. | **FIXED** — amendment item 1b now replaces Decision 2's block, not just its scope. |
+| F3 | **The linear-fetch guard converts a refusal into a LEAK.** `one-shot:86` and `brainstorm:143-145` *mandate* substituting `persist_safe_summary`; if the scrubber cannot run that artifact does not exist, and the only remaining issue text is `agent_context`, which carries signed `uploads.linear.app` bearer URLs. | Read both caller contracts. | **FIXED** — both callers added to §Files to Edit with an absent-artifact halt contract. |
+| F4 | **`compound` has no readability guard at all** (bare `bash "${…}"`), so the bare anchor yields a raw 127 — and it authorises nothing, so halting is a pure operator regression. | Read `compound/SKILL.md` Phase 1.6. | **FIXED** — non-blocking skip guard, explicitly not `exit 2`. Kept in scope so AC5a's corpus-wide zero survives. |
+| F5 | **"Decision 1 is scoped to the command surface" is false** — it says "plugin markdown". The instrument is retiring a *deferral*, not extending a *scope*. | Read ADR-179 §Decision item 1. | **FIXED** — reframed; the plan was over-claiming the gap and under-claiming its footing. |
+| F6 | **§Sharp Edges contradicted Phase 1 and AC5b** on "corroborated → proven", justified by evidence this plan had already retracted. | Internal contradiction. | **FIXED** — resolved to "proven **for the measured construction**". |
+| F7 | **AC1 used `git grep -c`**, which emits per-file counts, not a total. | Ran it: 6 lines out. | **FIXED** — `git grep -lF … ` returning 0 files. |
+| F8 | **AC3 fails on `main` today** — the unscoped needle matches ADR-179's *documentation of the anti-pattern* in `commands/sync.md`. | Ran it: 1 hit. | **FIXED** — scoped to `skills/`. |
+| F9 | **AC11 was unsatisfiable** — the unscoped count is 2, and the second occurrence is a quotation in the amended-by header that must survive. | Ran it: 2 hits. | **FIXED** — scoped to `## Amendments`; added AC11b for the header parenthetical, which is also falsified by this PR. |
+| F10 | **The C4 conclusion was right but wrongly reasoned** — there is no plugin-payload↔CLI edge in `model.c4`, and `model.c4`'s `contributor` description says this region is "covered by NEITHER boundary", so the PR narrows an acknowledged-uncovered region rather than closing a model violation. | Read all three `.c4` files. | **FIXED** — restated as "unmodelled topology, #7452". |
+| F11 | **Halt messages are unactionable for a non-technical founder** ("sentinel", "fail closed", exit 2), and a blocked founder's obvious workaround is to hand-write the post-mortem — removing the only thing scanning it. | Read the exit-2 documentation. | **FIXED** — Phase 4c mandates a remediation line incl. "do NOT write this by hand". |
+| F12 | **"Nothing leaks" was unearned** — the un-redacted draft is written to `mktemp` *before* the gate, with no `trap`/`rm -f` on the exit-2 path. | `git grep 'trap\|rm -f'` in `incident/SKILL.md`: none. | **FIXED** — qualified in §User-Brand Impact; cleanup or explicit scope-out required. |
+| F13 | **The exposure vector was over-broad** — `review/workflows/review.workflow.js` explicitly forbids `gh pr checkout`; only the SKILL.md path establishes the precondition. And the higher-frequency carriers are `linear-fetch`/`compound`, not `incident`. | Read both review paths. | **FIXED** — vector narrowed and carriers added. |
+| F14 | **The preflight introduces a second unknown Phase 1 did not cover** — it halts on an unset variable regardless of loader substitution, which is the plain-session operator's normal state. | Reasoned from the preflight's own condition. | **FIXED** — Phase 1 now runs two arms. |
+
+### Findings recorded, deliberately not actioned here
+
+| Finding | Disposition |
+| --- | --- |
+| `plugin-root-list-carveout-coupling.test.ts`'s regex is also unaffected by this subset (it scopes to `worktree-manager.sh list\|ls`). ADR-179's Consequences name it as a second blocker alongside `safe-bash.ts`. | Fold into the amendment as a one-line "also unaffected" — retires the other half of ADR-179's deferral reasoning. |
+| **Layering smell:** a guard whose entire subject is `plugins/soleur/**` lives in `apps/web-platform/test/` and runs in the web-platform vitest project. | Pre-existing (arrived with #7442). Splitting now would create the two-assembly drift the Cut List rejects. **Recorded as debt, routed to #7453.** |
+| `plugin-root-anchoring.test.ts`'s opening docstring line ("Guards the CUSTOMER-FACING command surface") goes stale once skills are in scope — Phase 3 only mandates updating the out-of-scope block. | Phase 3 extended: update the header sentence too. |
+| ADR-179 has a `## Principle Alignment` ("fail closed on an unresolved trust anchor") with no corresponding row in `principles-register.md` (AP-001…AP-022, last citing ADR-170). #7450 is a third instance of AP-020's shape. | Advisory. Suggested as an amendment addendum, not a blocker. |
+| `redact-sentinel.test.sh` is **NOT** path-gated — it is auto-discovered by the `plugins/soleur/skills/*/test/*.test.sh` glob and runs whenever `want_scripts` is true. | Phase 0 step 6 downgraded from "widen the predicate" to "record the confirmation". |
+| ADR-179 was originally numbered **ADR-177** and renumbered within commit `98ad03aa8` — which is exactly why #7453's title cites the wrong ordinal. | Include this provenance in the #7453 comment so the correction reads as an explanation, not a rebuke. |
 
 ## Decision Challenges
 
@@ -884,6 +1063,13 @@ Two challenges were raised at plan time and recorded (headless arm — not asked
   (**code root only** — the script's `TE_REPORT_REPO_ROOT` data root is not touched)
 - `plugins/soleur/skills/preflight/SKILL.md` — **the falsified rationale comment above
   `FORM_A_AWK` only.** Its two git-root operands are deliberately NOT migrated here (DC-1)
+- `plugins/soleur/skills/one-shot/SKILL.md` — Step 0a: an explicit **absent-artifact halt
+  contract**. Today it mandates substituting `persist_safe_summary` for `$ARGUMENTS` with no
+  defined behaviour when that artifact does not exist; the only remaining issue text in the
+  parent's context is `agent_context`, which carries signed `uploads.linear.app` bearer URLs.
+  Without this edit the linear-fetch guard converts a *refusal* into a *leak*
+- `plugins/soleur/skills/brainstorm/SKILL.md` — Phase 0.4 / Phase 0.5: the same contract.
+  Its "MUST NOT write any `uploads.linear.app` URL" is an instruction, not a guard
 - `plugins/soleur/skills/incident/test/redact-sentinel.test.sh` — retarget Test 18; add the
   Guard 2 decoy test
 - `apps/web-platform/test/plugin-root-anchoring.test.ts` — extend to the structural gate

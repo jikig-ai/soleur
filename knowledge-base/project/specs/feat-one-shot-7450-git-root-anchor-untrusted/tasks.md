@@ -20,11 +20,16 @@ the plan rather than degrading it.
 
 ## Phase 1 — MEASURE (halt gate; precedes the amendment text)
 
-- [ ] 1.1 Build a throwaway skill with a bare `${CLAUDE_PLUGIN_ROOT}` inside a ```bash fence
-      that prints its own expansion
-- [ ] 1.2 Invoke it; capture artifact + invocation + raw output verbatim
-- [ ] 1.3 Record the positive/negative verdict in the PR body
-- [ ] 1.4 **On negative: STOP and re-plan.** Do not proceed to Phase 5
+- [ ] 1.1 Build a throwaway skill with a bare `${CLAUDE_PLUGIN_ROOT}` inside a fenced `bash`
+      block that prints its own expansion
+- [ ] 1.2 **Arm A** — marketplace-style session, variable expected to resolve. Capture
+      artifact + invocation + raw output verbatim
+- [ ] 1.3 **Arm B** — plain monorepo session, variable unset. The identity preflight halts on
+      an unset variable regardless of loader substitution, so this arm covers a second unknown
+      Arm A cannot reach
+- [ ] 1.4 Record the verdict per arm, and which sessions lose which skills under each
+- [ ] 1.5 **On negative: STOP and re-plan.** Do not proceed to Phase 5. (No flow reviewer
+      examined this branch — see §Deepen-Plan Review Findings coverage gap)
 
 ## Phase 2 — RED: decoy positive control
 
@@ -52,7 +57,13 @@ the plan rather than degrading it.
 - [ ] 4.2 `legal-generate/SKILL.md` — same; byte-identical to 4.1
 - [ ] 4.3 `linear-fetch/SKILL.md` — operand + identity preflight + **the missing readability
       guard and exit-code dispatch**
-- [ ] 4.4 `compound/SKILL.md` — operand only; **do not touch** `TE_REPORT_REPO_ROOT`
+- [ ] 4.3b `one-shot/SKILL.md` + `brainstorm/SKILL.md` — absent-`persist_safe_summary` halt
+      contract. Without it the 4.3 guard turns a refusal into a LEAK (callers fall back to
+      `agent_context`, which carries signed `uploads.linear.app` bearer URLs)
+- [ ] 4.4 `compound/SKILL.md` — operand + **NON-BLOCKING** skip guard (named marker, continue;
+      never `exit 2` — it authorises nothing); **do not touch** `TE_REPORT_REPO_ROOT`
+- [ ] 4.4b Each halt message gains a plain-language remediation line; the redaction gates also
+      say "do NOT write this by hand"
 - [ ] 4.5 Correct the git-root-fallback prose in `incident` + `legal-generate`
 - [ ] 4.6 Correct the falsified rationale comment in `preflight/SKILL.md`
       (**comment only — operands stay**, DC-1)
