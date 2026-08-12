@@ -14,9 +14,11 @@
 
 **No plugin manifest carries a `version` key.** Not one of the three, and the reason is functional rather than stylistic.
 
-A **marketplace entry's** `version` key suppresses `gitCommitSha` tracking: in `installed_plugins.json`, the keyless official plugins carry a recorded source commit and the versioned ones do not. Without a SHA there is nothing to compare but the version string, so `claude plugin update` compares two identical strings and short-circuits — defect 1 of #7471, a plugin that never updates. Measurement record: `knowledge-base/project/specs/feat-one-shot-7471-plugin-delivery-path/measurements.md` (§1.0 the gate, §2B the published repo). Cite it by anchor; do not restate its numbers here.
+`claude plugin update` compares **version strings**. With no `version` key the CLI records the plugin's **commit SHA** as its version, so the string changes with every commit and the comparison detects the update. A constant `version` never changes, so the comparison always comes back equal: the update short-circuits, reports `already at the latest version`, and exits **0** having delivered nothing. That is defect 1 of #7471 — a plugin that never updates while telling the operator it is current, which is the worst shape of failure because it is indistinguishable from success.
 
-Be precise about *which* key. §1.0 measured that `plugin.json`'s own `version` key does **not** suppress the SHA — a `git-subdir` install recorded one while the cloned `plugin.json` still carried `0.0.0-dev`. The two keys are independent, and `plugin.json`'s is removed for the separate reason that it feeds the cache path's version segment and the docs data layer. Do not read §1.0 as contradicting the paragraph above; it is about the other manifest.
+Measurement record: `knowledge-base/project/specs/feat-one-shot-7471-plugin-delivery-path/measurements.md` — **§1.9** is the controlled experiment that establishes the mechanism above; §1.0 is the `git-subdir` gate and §2B the published repo. Cite by anchor; do not restate the numbers here.
+
+A superseded claim, recorded so it is not reintroduced: an earlier draft of this section said a `version` key *suppresses `gitCommitSha` tracking*. §1.9 refuted it — two arms differing only in that key **both** recorded a SHA. Identity is recorded either way; what the key changes is whether the identity string **varies between commits**, and that is what the comparator reads. Which field carries the identity is not the load-bearing part.
 
 So the rule is not "the version fields are frozen, leave them alone". The fields are **gone**, deliberately, and adding one back to any of the three silently reverts the fix for every new install.
 
@@ -41,7 +43,7 @@ Nothing publishes to the third manifest on release. A GitHub Release creates a t
 Before committing ANY changes:
 
 - [ ] README.md component counts verified (tables accurate)
-- [ ] Do NOT add a `version` key to `plugin.json` or to `marketplace.json`'s `plugins[]` entry — a `version` key's presence suppresses `gitCommitSha` tracking, which silently breaks update delivery for every new install (#7471). See [Manifest versioning](#manifest-versioning)
+- [ ] Do NOT add a `version` key to `plugin.json` or to `marketplace.json`'s `plugins[]` entry — a constant version string makes `claude plugin update` compare equal and no-op while reporting success, silently breaking update delivery for every install (#7471). See [Manifest versioning](#manifest-versioning)
 - [ ] PR body includes a `## Changelog` section describing changes
 
 ### Directory Structure

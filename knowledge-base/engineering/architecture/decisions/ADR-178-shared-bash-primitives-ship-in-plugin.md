@@ -295,6 +295,28 @@ ADR's version segment and the docs data layer. The distribution manifest also ca
 pinned `ref`/`sha` and tracks `main`, for the same spirit: a constant pin would be the
 frozen sentinel wearing different clothes.
 
+> **Correction — 2026-08-12 (#7471), superseding the two sentences above about SHA
+> recording.** The paragraph's *conclusion* (keyless manifests, unpinned entry) stands. Its
+> stated *mechanism* does not, and it was inferred rather than measured.
+>
+> "A keyless marketplace entry is what makes the CLI record a `gitCommitSha`", and the
+> "two keys are independent" gloss that follows it, are both wrong. `measurements.md` §1.9
+> tested it directly — two arms differing **only** in the plugin manifest's `version` key,
+> marketplace entry keyless in both — and **both arms recorded a `gitCommitSha`**. The key
+> suppresses nothing.
+>
+> What the key actually changes is the **recorded version string**: the manifest's constant
+> with it, the **commit SHA** without it. So the comparator reads a string that varies
+> between commits in the keyless case and a frozen one otherwise. Identity is recorded
+> either way; **whether the identity string changes between commits** is the load-bearing
+> property, not which field carries it. Two counterexamples killed the original inference —
+> `code-review` is keyless yet has no `gitCommitSha` (its SHA landed in `version`), and
+> §1.0's own gate recorded a SHA from a *versioned* manifest.
+>
+> This correction is appended rather than applied in place because the passage above is a
+> dated record. The provenance matters: the refuted claim reached six governance sites and
+> a published README before anyone tested it.
+
 **What this does not change.** ADR-178's decision stands untouched. The library still
 ships inside `plugins/soleur/` and still resolves `${CLAUDE_PLUGIN_ROOT}`-anchored, which
 is precisely why the segment values above are *not* load-bearing — an anchored resolver is
