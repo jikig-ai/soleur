@@ -704,6 +704,12 @@ if want_scripts; then
   # is made checkable rather than asserted. Guard 2's battery; registered
   # explicitly for the same reason as the suite above.
   run_suite "scripts/plugin-legacy-resolver-probe" bash scripts/plugin-legacy-resolver-probe.test.sh
+  # #7490: the manifest suite above asserts the published POINTER is well-formed.
+  # This one guards the assertion that following it actually DELIVERS the plugin --
+  # complete, byte-correct at the delivered commit, and current. #7471 shipped 64
+  # skill directories where 96 were expected with every metadata field reading
+  # correct, which is the defect a manifest check structurally cannot see.
+  run_suite "scripts/plugin-delivery-canary" bash scripts/plugin-delivery-canary.test.sh
   # ADR-140: Layer A encryption-posture detector (the mechanical resolver behind
   # the "encryption at rest + in transit" design-time gate). TS-1..8,15..17 +
   # the MB-1..MB-12 mutation battery (fixture-isolated, not suite-pass-count).
