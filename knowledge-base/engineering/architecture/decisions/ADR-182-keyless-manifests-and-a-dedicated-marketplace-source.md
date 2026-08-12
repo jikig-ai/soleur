@@ -91,7 +91,17 @@ demoted behind a disclosure carrying the timeout mitigation.
 **Disposition, 2026-08-12 (#7489).** `scripts/plugin-legacy-resolver-probe.sh` found exactly one
 install still resolving to `jikig-ai/soleur` — project-scoped to a repository other than this one —
 and two registrations, both carrying `autoUpdate: true`. The arm taken was **migrate that install
-onto the published channel**, run from its own `projectPath` with `--scope project`. What was
+onto the published channel**, run from its own `projectPath` with `--scope project`.
+
+**Taken under the ATTACHED branch**, and the branch is recorded because it determines who decided.
+The session ran in the main agent loop with an operator present rather than inside a subagent, so
+the question was put once and answered by the operator. Because the install was project-scoped to a
+*different* repository, migrating it changes another project's tooling — that is a judgment call,
+not a chore, and executing it unasked would have been the wrong default. Had the run been headless
+the arm executed would have been **C** (write nothing), with the question and Phase 2's verdicts
+appended to `decision-challenges.md` for the operator instead. The two arms that were offered
+alongside A carried their measurement status with them: arm B was presented with an explicit
+`unverified` label on both mechanisms it depends on, rather than as an equal option. What was
 **accepted**, and is the other half of this decision, is that the monorepo marketplace entry stays
 live and published (see the rejected retire-the-entry alternative below for why removing it buys
 nothing). The probe now returns `clean` — 0 registrations, 0 installs, 0 unresolvable installs — so
