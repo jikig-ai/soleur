@@ -113,3 +113,41 @@ the precondition mutation row 2 needs. Suite now **15.3s**; row 2 still RED.
 
 **AC sweep: 10/10 positive HITs** (one grep per AC asserting the thing that had to appear — a
 prohibition sweep cannot detect an omission). AC9 is covered by the 92/0 run.
+
+## Addendum — 2026-08-12: the fail-open contract was asserted structurally and was broken anyway
+
+Found at self-review of the diff, before the exit gate. Fixed inline (a ~4-line correctness fix is
+not an architecture fork), and recorded here because the *shape* is the reusable part.
+
+**The defect.** `test-all.sh` sources this lib under `set -euo pipefail`. The three
+`$EPOCHREALTIME` reads the measurement introduced were **bare**, so on any shell where the variable
+does not exist (bash 3.2 — the exact platform the `unknown` branch was written for) `tc_acquire`
+aborts with `EPOCHREALTIME: unbound variable` and never returns. Measured against a copy rather than
+reasoned about:
+
+```
+[contention] LOCK_WAITING: 'probe-32' — waiting up to 2s for the advisory lock.
+test-contention.sh: line 609: EPOCHREALTIME: unbound variable
+```
+
+No `RC` printed. The whole run dies — from inside the one function whose contract is that it can
+never do that (ADR-133 Decision 3, and this lib's own header: *"Every function is safe to call under
+`set -euo pipefail`"*). Two harms, not one: the run wedges, **and** the `unknown` branch is
+unreachable on the platform it exists for, because the abort happens at the read before the guard is
+entered. It had a justification paragraph and could not execute.
+
+**Why the AC6 arm did not catch it.** That arm greps `tc_acquire`'s body and asserts every `return`
+is a `return 0`. It was true, it stayed true, and it is beside the point: a function that dies before
+returning satisfies a grep over return statements. **A grep over exit statements cannot see an exit
+that is not a statement.** The structural arm was the more rigorous-looking of the two checks and was
+the one blind to this.
+
+**Fix.** `${EPOCHREALTIME:-}` at every read (four sites, swept — `grep -nE '\$EPOCHREALTIME' | grep -v ':-'`
+returns nothing), plus a **behavioural** arm: `unset EPOCHREALTIME` de-specialises the variable for
+the rest of that shell, reproducing the bash-3.2 shape exactly rather than approximating it. It runs
+under `set -euo pipefail` and asserts `RC=0`, the `unknown` token, and the **absence** of a fabricated
+`after 0ms`. Floor 92 → 95.
+
+**Mutation battery re-run: 7/7 RED**, adding row 6 (re-bare the reads). RED was verified on the arm
+before the fix landed (2 failures, both naming the unbound abort), so the arm is known to drive the
+defect rather than merely to coexist with the fix.
