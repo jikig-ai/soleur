@@ -291,3 +291,56 @@ this change edits*. If those early returns were altered, that suite would run in
 everywhere at once and nothing outside `test-all.sh` would notice — which is why the merge-base
 byte-identity check on `run_suite` / `skip_suite` / `_diff_touches` is the load-bearing criterion
 for changes in this area, not the skip rates.
+
+### 8. Corrections to this addendum (same date, review pass on PR #7495)
+
+Appended rather than edited above, for the reason the addendum itself gives. An eight-agent review
+falsified four claims in §1–§7 and one in the runner they describe.
+
+**§3 mis-states WHY mitigation layer 3 narrows, and undersells the stack.** Every declared element
+of `C4_PRODUCER_PATHS` *does* hard-abort: the producer via `assert_file_exists`, `test-helpers.sh`
+via `source` under `set -euo pipefail`, the fixture corpora via an explicit `FATAL: fixture copy
+failed`, and `plugins/soleur/lib` via a stack trace that fails the `status=ok` assertion.
+`status=degraded reason=likec4-unavailable` fires on a missing **CLI binary**, which the array
+comment explicitly declares as *not* a predicate path — so the original text cited an undeclared
+dependency to retire a mitigation defined over declared ones. The true, narrower statement: because
+the degrade branch exits at the first arm, declared paths exercised only by *later* arms go
+unvalidated on a likec4-less host. Layer 3 is **conditionally available**, not unavailable. The §3
+corollary — that the printed re-run command can exit 0 having rendered nothing — is unaffected and
+remains the real finding. Also unrecorded and material: `run_suite "plugins/soleur" bun test
+plugins/soleur/` runs the **ungated** unit suite `c4-from-components.test.ts` on every local run, so
+the producer's pure logic never loses coverage; only the e2e render arms are gated.
+
+**§7's "the c4 suite has exactly one CI home" is an undercount.** `main-health-monitor.yml` runs
+`bash scripts/test-all.sh` with `TEST_GROUP` defaulting to `all` and installs both `bun` and the
+pinned `likec4`, so the e2e suite genuinely executes there every six hours. The conclusion is
+unchanged and in fact strengthened: both homes are `test-all.sh`-mediated, so c4's CI coverage still
+rests entirely on the `CI` early return inside the edited file, which is why the merge-base
+byte-identity check remains the load-bearing criterion.
+
+**§1's `.github` skip rate is now 15%, not 56%, and the change is deliberate.**
+`GITHUB_SCRIPTS_SUITE_PATHS` was missing a real-tree read: `test-no-at-mention-credfile-footgun.sh`
+scans `plugins/soleur/{skills,agents,commands,docs,hooks}`, `.claude/hooks` and the root
+`AGENTS`/`CLAUDE` markdown via `git ls-files`. A diff touching
+`plugins/soleur/skills/preflight/SKILL.md` declined the runner — and that guard exists because a
+documentation example in exactly that file class leaked an operator's live root token into a
+transcript. The surface is now declared, at a measured cost of 56% → 15%.
+`hr-weigh-every-decision-against-target-user-impact` resolves that trade in one direction only.
+
+**Every skip rate in §1 is anchored to `fcae560b4`.** `origin/main` is a moving window: the same
+recipe returns 95%/51% four commits later. The figures are 96% (c4) and 15% (`.github`, post-fix)
+at that SHA; re-derive against the SHA, never the tip.
+
+**The three-list shape has a justification §4 did not state, and it is not duplication.** The linter
+keys array name → *suite file path*; the harness keys *display label* → array name; the runner keys
+neither. Label and path genuinely differ for both batteries. More importantly the split is
+**fail-closed**: three independent vacuity surfaces must each be satisfied, where a single shared
+registry would let one deleted row satisfy all three consumers at once.
+
+**Two known residuals, disclosed rather than fixed.** (a) `_diff_touches` called with zero arguments
+returns 1 (decline) rather than 0 — self-inconsistent with its own fail-SAFE header, but bounded:
+an emptied array reds both the linter's vacuity guard and the harness's, so the run exits non-zero.
+It is not fixed here because the fix lands inside a function this change pins byte-identical to the
+merge base. (b) This addendum's own gate harness is registered **ungated** and grew from 19 to ~45
+sandbox arms, so the change adds unconditional local cost in service of removing conditional cost.
+That trade is not measurable on a contended machine and is stated rather than quantified.

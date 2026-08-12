@@ -120,7 +120,7 @@ All in `scripts/test-all-infra-coverage-notice.test.sh`. **Extend; do not fork.*
 ## 9. Ship
 
 - [x] 9.1 Verify all six ACs.
-- [x] 9.2 PR body carries `Closes #7494`, the measured numbers from 8.1/8.2 as ceilings, and both
+- [ ] 9.2 (written at ship, after review) PR body carries `Closes #7494`, the measured numbers from 8.1/8.2 as ceilings, and both
       mutation transcripts.
 
 ---
@@ -150,7 +150,7 @@ differently from how the plan specified them; the difference is recorded here ra
   exists to catch. `scripts/lint-shell-capture-exit.py` flagged it as the single NEW finding
   against a 215-entry baseline, and it was the only real failure in the first dogfood run. Fixed by
   separating grep's exit-1 (zero matches) from exit ≥ 2 (unreadable runner), the latter counted as
-  its own failure. Mutation-proven as row **M5**: with all four gate sites removed the linter emits
+  its own failure. Mutation-proven as an added row **M5** (defined in this addendum, not in the plan's original Guard 1 matrix, which stops at M4): with all four gate sites removed the linter emits
   four named de-reference errors *and reaches its terminal summary line*.
 
 - **8.2 — AC3's literal command is unsatisfiable by construction; the AC was amended, not
@@ -177,3 +177,31 @@ and no wall-clock saving is claimed anywhere in the shipped artifacts.
 | AC4 | `run_suite` / `skip_suite` / `_diff_touches` byte-identical to merge base `fcae560b4`; 0 new function definitions |
 | AC5 | full gate `rc=0`, **302/303**, 0 failed, 0 killed; both newly-gated suites shown `[ok]`; 0 relevance declines (the PR edits the file both arrays declare); lever printed exactly once |
 | AC6 | explicit-registration grep returns **0** — still discovered by the glob |
+
+---
+
+## Review Addendum — 2026-08-12 (8-agent panel on PR #7495)
+
+The panel found 30 issues; all were fixed inline and **zero** issues were filed. Two were P1, each
+surfaced independently by more than one agent — both in guards this PR itself added:
+
+- **`GATED` was an unenforced sixth declaration site.** A fifth gate added by following the HOW-TO
+  block verbatim left every check green while the harness quantified over 4 of 5. Replaced the
+  literal floor with a registration floor deriving the expected array NAMES from the runner.
+- **A relevance decline was asserted by its text, never its count.** Bare `echo`s reproducing
+  `skip_suite`'s output byte-for-byte left the suite at 99/0 while the denominator dropped.
+
+Also corrected here, because the panel proved these claims false rather than merely stale:
+
+- `9.2` was checked while PR #7495's body was still the auto-generated draft placeholder. Unchecked
+  above; it is a ship-time step, and checking it early is the "a checkbox is a CLAIM" failure.
+- The `M5` citation named a row absent from the plan's Guard 1 matrix; qualified above.
+- `session-state.md`'s `Commits: 5563a954f, 776532cbf — both pushed` names PRE-REBASE SHAs that are
+  now dangling, and its scope-check line describes a tree that no longer exists. Both were true when
+  written and are false now; left in place as a dated record, flagged here.
+- The "215-entry baseline" is 216, and plan D3's "74 of the last 80" is 75 in both #7498 and the ADR.
+
+**Round-2 mutation battery: 14/14 caught**, each with its own named message, against a green
+unmutated control at both ends. It targets only the guards the review pass added — a review-driven
+fix is exactly as unpinned as the blind spot it closes, and the first run of this battery reported
+four false FATALs from its own landing-check bug, which is why the landing assertion exists.

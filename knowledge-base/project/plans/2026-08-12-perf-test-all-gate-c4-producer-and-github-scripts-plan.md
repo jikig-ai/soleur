@@ -69,6 +69,12 @@ measured 978 s / 204 s, while `scripts/lib/test-relevance-paths.sh` and `scripts
 record ~860 s / ~189 s. Phase 1 writes comments next to those, so the discrepancy is named rather
 than silently contradicted.
 
+> **Superseded 2026-08-12 (review of PR #7495):** the figure below is WITHDRAWN — see the
+> Verification Addendum §C2. Re-measurement contradicted its inputs in both directions under
+> sibling-worktree load. The `.github` skip rate also fell 56% → 15% when a missing real-tree
+> read was declared, so the distribution below no longer holds either. Nothing in the shipped
+> artifacts claims a per-run saving; the decision variable is the skip rate.
+
 **Expected saving: ~465 s per local full-gate run.** Stated as an absolute, deliberately. The
 issue's 3020 s is *pre*-`325a1a5c0` summed registered-suite time and ADR-181's "≈45 min → ≈28 min"
 was measured over a different scope (~289 suites); the two must not be arithmetically combined.
@@ -1130,8 +1136,10 @@ run-to-run spread exceeds the effects being compared, so **this machine cannot r
 and the deviation is not in one direction — the first figure is ~5-18x too high and the second
 ~2x too low.
 
-**Consequence: the "~465 s per local full-gate run" headline is withdrawn**, from the plan, the
-array comments, `test-all.sh`, and the ADR addendum. The gates are justified by their **skip
+**Consequence: the "~465 s per local full-gate run" headline is withdrawn** from the array
+comments, `test-all.sh`, and the ADR addendum, and is marked superseded in place at the Overview
+above (this document is append-only, so the original text stands with a banner rather than being
+rewritten). The gates are justified by their **skip
 rates** — 96% and 56%, deterministic `git log` replays unaffected by load, re-derived at
 implementation time with the runtime matcher's own semantics against the predicates *as declared*.
 `cq-ac-must-not-depend-on-concurrent-sessions` is applied to the justification, not only to an AC.
