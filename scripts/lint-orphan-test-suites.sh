@@ -137,12 +137,49 @@ else
   # array name | the battery file that array gates. bash 3.2 has no associative arrays and no
   # `declare -n` (macOS ships 3.2 and lefthook runs this locally), so the mapping is a
   # pipe-delimited list and the arrays are expanded by name via eval.
+  #
+  # The mapped value is the array's own SUITE FILE, which the self-inclusion check requires to be
+  # an element of the array. It is NOT the skip_suite display label, and in this repo the two
+  # differ for both batteries (`tests/scripts/test-registry-gate-mutation-battery.sh` vs the label
+  # `tests/scripts/registry-gate-mutation-battery`). Anything anchoring on this field as a label
+  # would red two correctly-wired suites.
   RELEVANCE_ARRAYS=(
     "REGISTRY_BATTERY_PATHS|tests/scripts/test-registry-gate-mutation-battery.sh"
     "CF_TUNNEL_BATTERY_PATHS|scripts/cf-tunnel-liveness-gate-mutations.test.sh"
+    "C4_PRODUCER_PATHS|plugins/soleur/test/c4-from-components.test.sh"
+    "GITHUB_SCRIPTS_SUITE_PATHS|.github/scripts/test/run-all.sh"
   )
 
-  for entry in "${RELEVANCE_ARRAYS[@]}"; do
+  # DISPATCH FLOOR, DERIVED FROM THE RUNNER — not a hand-typed literal.
+  #
+  # Today RELEVANCE_ARRAYS=() makes the ENTIRE anti-rot block below iterate zero times while this
+  # script still prints `orphan test suites: none`. That is the same vacuity the two guards below
+  # exist to catch, reproduced inside the guard itself.
+  #
+  # Derived rather than literal for the reason the neighbouring MIN_ASSERTIONS comment in
+  # scripts/test-all-infra-coverage-notice.test.sh gives: "a fixed literal acquires slack every
+  # time a list grows". It also catches strictly MORE — a literal floor can only see the list
+  # SHRINK, while deriving `want` from the runner catches a gate ADDED to test-all.sh and never
+  # registered here, which a literal cannot see at all. Verified: this pattern matches only the
+  # four real `_diff_touches "${ARRAY[@]}"` call sites and no comment in test-all.sh.
+  #
+  # `[A-Z0-9_]+`, NOT `[A-Z_]+`. Measured: the first form counted 3 of 4 gates, because
+  # C4_PRODUCER_PATHS carries a DIGIT and a digit-free class silently skips it. The failure is the
+  # worst possible shape for a floor -- it under-counts `want`, so the floor is satisfied by a
+  # SHORTER list and the guard passes over exactly the gate it could not see. Any future array
+  # whose name contains a digit depends on this class.
+  want=$(grep -cE '_diff_touches "\$\{[A-Z0-9_]+\[@\]\}"' "$RUNNER")
+  if (( ${#RELEVANCE_ARRAYS[@]} < want )); then
+    echo "ERROR: RELEVANCE_ARRAYS has ${#RELEVANCE_ARRAYS[@]} entries but test-all.sh has ${want} _diff_touches gates -- an unregistered gate rots unchecked, and an emptied list makes every check below pass over nothing." >&2
+    fails=$((fails + 1))
+  fi
+
+  # `${a[@]+"${a[@]}"}` for the SAME reason the EXCLUSIONS loop above already carries it: under
+  # `set -u` on bash 3.2 an EMPTY array under `[@]` aborts the script. Without it the floor's
+  # message above would be followed two lines later by an `unbound variable` crash, so the
+  # RELEVANCE_ARRAYS=() mutation would exit non-zero for a reason unrelated to the check under
+  # test -- a guard that appears to fire while actually crashing.
+  for entry in ${RELEVANCE_ARRAYS[@]+"${RELEVANCE_ARRAYS[@]}"}; do
     arr_name="${entry%%|*}"
     battery="${entry#*|}"
 
@@ -173,6 +210,30 @@ else
     for p in "${rel_elems[@]}"; do
       if ! git -C "$REPO_ROOT" ls-files --error-unmatch -- "$p" >/dev/null 2>&1; then
         echo "ERROR: ${arr_name} declares '${p}', which is not a tracked file -- the predicate can never match it, so its suite is declined locally forever." >&2
+        fails=$((fails + 1))
+      fi
+    done
+
+    # PREFIX COVERAGE. scripts/lib/test-relevance-paths.sh states this invariant in its own prose
+    # -- TEST_RELEVANCE_PREFIXES is "the union of the top-level prefixes every declared path lives
+    # under" -- and until now NOTHING enforced it. Measured: `grep -c TEST_RELEVANCE_PREFIXES` in
+    # this file was 0.
+    #
+    # WHY IT MATTERS. test-all.sh's untracked-file arm is `git ls-files --others -- "${PREFIXES}"`,
+    # so a declared path outside every prefix is invisible to the predicate WHILE UNTRACKED. The
+    # failure is precisely inverted from useful: a session that ADDS a new fixture or mutation
+    # target under that path and runs the gate before committing gets the suite DECLINED on the
+    # one diff that needed it, and the decline reads as intentional in the summary.
+    #
+    # Prefix match, not equality: the prefixes are directory roots and the declared paths are
+    # files or subdirectories beneath them.
+    for p in "${rel_elems[@]}"; do
+      covered=""
+      for pre in "${TEST_RELEVANCE_PREFIXES[@]}"; do
+        [[ "$p" == "$pre"* ]] && covered=1
+      done
+      if [[ -z "$covered" ]]; then
+        echo "ERROR: ${arr_name} declares '${p}', which lives under no TEST_RELEVANCE_PREFIXES entry -- an UNTRACKED file there is invisible to the predicate, so the suite declines on the diff that adds it." >&2
         fails=$((fails + 1))
       fi
     done

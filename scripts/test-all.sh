@@ -1168,6 +1168,26 @@ if want_scripts; then
   # and freeze-lock.test.sh had never gated CI.
   for f in plugins/soleur/test/*.test.sh plugins/soleur/skills/*/test/*.test.sh plugins/soleur/scripts/*.test.sh .claude/hooks/*.test.sh .claude/hooks/lib/*.test.sh apps/cla-evidence/scripts/*.test.sh apps/web-platform/scripts/*.test.sh apps/web-platform/scripts/lib/*.test.sh scripts/lib/*.test.sh; do
     [[ -f "$f" ]] || continue
+    # RELEVANCE-GATED (ADR-181), ~429 s — the only suite this loop registers whose cost justifies
+    # a predicate. A per-file `if` rather than a lookup table: bash 3.2 has no associative arrays
+    # and one gated member does not earn a mapping.
+    #
+    # The label is written LITERALLY, not as "$f". skip_suite's contract is "$1 = label (must
+    # match the label the suite would have run under)" and this loop's label IS the path, so the
+    # two agree byte-for-byte — TEST_TIMING_LOG rows and any anchored reader stay stable.
+    #
+    # An `if` block, never `[[ … ]] && continue`: _diff_touches's own header forbids the short
+    # form because under `set -e` its exit status depends on the call site.
+    #
+    # `run_suite "$f" bash "$f"` below is left byte-for-byte unchanged, so the glob's discovery
+    # surface is untouched and the suite is still registered exactly once, by the glob.
+    if [[ "$f" == "plugins/soleur/test/c4-from-components.test.sh" ]]; then
+      if ! _diff_touches "${C4_PRODUCER_PATHS[@]}"; then
+        skip_suite "plugins/soleur/test/c4-from-components.test.sh" "relevance" \
+          "bash plugins/soleur/test/c4-from-components.test.sh"
+        continue
+      fi
+    fi
     run_suite "$f" bash "$f"
   done
 fi
@@ -1214,8 +1234,23 @@ fi
 # The guard-script fixture runner. Its own MIN_SUITES floor (10) is what makes a silently
 # empty run fail rather than pass, so registering it here inherits that floor instead of
 # re-implementing one.
+#
+# THE FLOOR AND A DECLINE ARE DIFFERENT OUTCOMES. The floor still applies whenever the runner
+# runs, but it is not evaluated at all when the runner is DECLINED — nothing inside it executes.
+# What distinguishes "declined" from "ran and found nothing" is skip_suite's output, which names
+# the suite, the reason, and the exact re-run command. Reading the floor as coverage of a run
+# that never happened is the same green-that-is-not-evidence shape ADR-181 closes one level up.
+#
+# RELEVANCE-GATED (ADR-181), ~95 s. `run_suite … bash .github/scripts/test/run-all.sh` keeps its
+# command shape byte-for-byte because scripts/lint-orphan-test-suites.sh's REQUIRED_RUNNERS check
+# anchors on the COMMAND, not the label.
 if want_scripts; then
-  run_suite ".github/scripts/test/run-all.sh" bash .github/scripts/test/run-all.sh
+  if _diff_touches "${GITHUB_SCRIPTS_SUITE_PATHS[@]}"; then
+    run_suite ".github/scripts/test/run-all.sh" bash .github/scripts/test/run-all.sh
+  else
+    skip_suite ".github/scripts/test/run-all.sh" "relevance" \
+      "bash .github/scripts/test/run-all.sh"
+  fi
 fi
 
 _emit_bytes_probe "__run_boundary_end__"
@@ -1239,6 +1274,20 @@ tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"
 # that added the gate.
 if (( killed > 0 || skipped > 0 )); then
   echo "=== $suites suites: $((suites - failed - killed - skipped)) passed, $failed failed, $killed killed (unresolved — coverage not obtained), $skipped skipped (declined — not relevant to this diff) ==="
+fi
+# THE LEVER, PRINTED ONCE, ONLY WHEN IT IS ACTIONABLE. SOLEUR_TEST_FORCE_ALL appears exactly once
+# in this whole runner — inside _diff_touches's early return — and until now was printed NOWHERE.
+# A developer who wants full coverage anyway had to run each declined suite's re-run command by
+# hand or already know an undocumented variable, while the infra runner advertises its own lever
+# (SOLEUR_INCIDENT_SKIP) in two places. A decline is only safe while it stays actionable, so the
+# recovery path for ALL of them belongs beside the count of them.
+#
+# Emitted BEFORE the terminal marker, for the same reason the breakdown is: `=== N/M suites
+# passed ===` must remain the last `===` line on every arm, and this line is not `===`-shaped at
+# all, so it cannot be mistaken for a summary by an anchored poll.
+if (( skipped > 0 )); then
+  echo "      To run everything regardless of the diff:"
+  echo "        SOLEUR_TEST_FORCE_ALL=1 bash scripts/test-all.sh"
 fi
 echo "=== $((suites - failed - killed - skipped))/$suites suites passed ==="
 
