@@ -574,8 +574,8 @@ logs:
   where: session stdout (observability layer 7, cli-stdout-artifact, per ADR-171); knowledge-base/project/kb-coverage.md for the durable half
   retention: session-scoped for stdout; git history for kb-coverage.md
 discoverability_test:
-  command: 'bash tests/commands/test-sync-producer-reachability.sh'
-  expected_output: "all cases PASS, including the new producer-missing marker-emission case"
+  command: bash tests/commands/test-sync-producer-reachability.sh
+  expected_output: "0 failed"
 ```
 
 **Layer citation.** Observability **layer 7 (`cli-stdout-artifact`)** per ADR-171 — plugin code
