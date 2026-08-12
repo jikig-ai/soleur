@@ -844,6 +844,8 @@ write_files:
       WIN_EXEMPT=0
       WIN_DROPPED=0
       WIN_DROPPED_EXEMPT=0
+      WIN_DROPPED_REDACT=0
+      WIN_DROPPED_EMPTY=0
       UNDELIVERED=0
 
       # `n` is scoped to THE TICK THIS ROW CLOSES. boot_id + drop_seq remain because two
@@ -898,32 +900,75 @@ write_files:
       fi
       [ -z "$CURSOR" ] || JARGS+=( --after-cursor "$CURSOR" )
 
-      while IFS= read -r entry; do
-        [ -n "$entry" ] || continue
-        msg="$(printf '%s' "$entry" | jq -r '.MESSAGE // empty' 2>/dev/null || printf '')"
-        cur="$(printf '%s' "$entry" | jq -r '.__CURSOR // empty' 2>/dev/null || printf '')"
+      # ONE jq FOR THE WHOLE TICK (#7444 R2). Previously this forked three jq processes PER
+      # JOURNAL ENTRY — .MESSAGE, .__CURSOR, and the zerolog .message for the exemption test — and
+      # all three ran BEFORE the cap was consulted, so the caps bounded EGRESS but not WORK.
+      # Measured: a full 512M journal is ~806,000 entries, i.e. ~2.4 MILLION execs in one tick,
+      # 2.7-5.4 hours of CPU on this 2-shared-vCPU host, to deliver at most CAP rows. A single
+      # streaming jq emitting all three fields as TSV is one process for the entire tick.
+      #
+      # --unbuffered is LOAD-BEARING, not hygiene: jq block-buffers when stdout is a pipe, so
+      # without it the shipper reads nothing until journalctl closes. A tick killed mid-drain
+      # (OOM, reboot) would then have persisted no cursor for rows it had already read, and the
+      # whole drain replays. Measured by T10b, which went RED the moment the single-jq pipeline
+      # landed without it.
+      # @tsv escapes embedded tabs and newlines, so a field cannot split a record. The three
+      # fields are emitted in a fixed order and `read -r` with IFS=tab takes them positionally;
+      # zmsg is LAST because it is the only one that can legitimately be empty.
+      JQ_TICK='
+        (.__CURSOR // "") as $c
+        | (.MESSAGE // "") as $m
+        | ($m | fromjson? | .message? // "") as $z
+        | [$c, $m, $z] | @tsv
+      '
+      while IFS=$'\t' read -r cur msg zmsg; do
         [ -n "$msg" ] || continue
-        if is_cap_exempt "$(zerolog_message "$msg")"; then
-          # Exempt classes get a SEPARATE, generous ceiling rather than none (#7444 F-5).
+        # THE CURSOR ADVANCES ON EVERY *DECIDED* ROW, not only on delivered ones (#7444 R1).
+        #
+        # Previously a cap-dropped row hit `continue` before persist_cursor, so it was re-read on
+        # every subsequent tick. Three consequences, all measured: (a) draining N entries cost
+        # ~N^2/CAP scans, so a tick stopped finishing inside its 5-minute slot after ~5 hours of a
+        # crash-loop flood and `flock -n` then silently skipped every successor; (b) dropped_cum
+        # counted the same physical row once per tick until it eventually shipped, so 40 offered
+        # rows that were ALL delivered reported dropped_cum=140; (c) worst, an EXEMPT row arriving
+        # after capped rows bypassed the cap test and advanced the cursor past them, so the same
+        # 40-row input lost 0 rows or 35 rows depending only on whether one gc line trailed it —
+        # with a byte-identical `n=35 reason=rate_cap` record in both cases.
+        #
+        # A capped row is DECIDED and ACCOUNTED (emit_drops carries it), not undelivered. Only an
+        # undelivered row may hold the cursor, which is exactly what F-3 established.
+        decided=0
+        if is_cap_exempt "$zmsg"; then
           if [ "$WIN_EXEMPT" -ge "$CAP_EXEMPT_PER_INTERVAL" ]; then
-            WIN_DROPPED_EXEMPT=$(( WIN_DROPPED_EXEMPT + 1 ))
-            continue
+            WIN_DROPPED_EXEMPT=$(( WIN_DROPPED_EXEMPT + 1 )); decided=1
+          else
+            WIN_EXEMPT=$(( WIN_EXEMPT + 1 ))
           fi
-          WIN_EXEMPT=$(( WIN_EXEMPT + 1 ))
         elif [ "$WIN_COUNT" -ge "$CAP_PER_INTERVAL" ]; then
-          WIN_DROPPED=$(( WIN_DROPPED + 1 ))
-          continue
+          WIN_DROPPED=$(( WIN_DROPPED + 1 )); decided=1
         else
           WIN_COUNT=$(( WIN_COUNT + 1 ))
         fi
-        # A redaction failure DROPS the row (redact() fails closed), and the drop is accounted
-        # rather than silent — an unredactable row is a real operational fact, not a non-event.
+        if [ "$decided" = "1" ]; then
+          [ -n "$cur" ] && persist_cursor "$cur"
+          continue
+        fi
+        # A redaction failure DROPS the row (redact() fails closed) under its OWN reason — folding
+        # it into rate_cap sent an operator to raise a cap that was never the cause (#7444 R4).
         if ! redacted="$(redact "$msg")"; then
-          WIN_DROPPED=$(( WIN_DROPPED + 1 ))
+          WIN_DROPPED_REDACT=$(( WIN_DROPPED_REDACT + 1 ))
+          [ -n "$cur" ] && persist_cursor "$cur"
           continue
         fi
         clean="$(sanitize "$redacted")"
-        [ -n "$clean" ] || continue
+        # A row that sanitizes to empty was silently discarded with no accounting while the cursor
+        # advanced past it — the literal F-3 signature (offered N, shipped N-1, dropped 0) on a
+        # path the F-3 fix never touched. Reproduced with a non-ASCII line, which tr -cd empties.
+        if [ -z "$clean" ]; then
+          WIN_DROPPED_EMPTY=$(( WIN_DROPPED_EMPTY + 1 ))
+          [ -n "$cur" ] && persist_cursor "$cur"
+          continue
+        fi
         # THE ENVELOPE. Source 2457081 is shared by EVERY host and host_name is a VECTOR-populated
         # field — this channel has no Vector, so a direct POST carries no host_name and no
         # SYSLOG_IDENTIFIER at all. The in-message host= token is the ONLY isolation available, and
@@ -937,26 +982,31 @@ write_files:
         else
           # STOP AT THE HOLE (#7444 F-3). Previously this counted the failure and carried on, so
           # the NEXT successful row advanced the cursor past the undelivered one — a transient
-          # Better Stack outage became permanent, silent, unaccounted loss, violating this suite's
-          # own "dropped + shipped == offered" invariant with nothing emitting a drop row.
+          # Better Stack outage became permanent, silent, unaccounted loss.
           #
           # The recovery is NOT the exit code: it is that the cursor was never advanced past this
-          # row, so the next tick resumes exactly here. The non-zero exit exists only so a failing
-          # tick is visible without SSH. Emitting a `reason=post_fail` drop row instead was
-          # rejected — that row would ship over the very sink that just failed, so its only signal
-          # is structurally undeliverable in its own causal story (F-8).
+          # row, so the next tick resumes exactly here. Emitting a `reason=post_fail` drop row
+          # instead was rejected — that row would ship over the very sink that just failed, so its
+          # only signal is structurally undeliverable in its own causal story (F-8).
           POST_FAIL=$(( POST_FAIL + 1 ))
           UNDELIVERED=1
           write_state
           break
         fi
         write_state
-      done < <(journalctl "$${JARGS[@]}" 2>/dev/null)
+      done < <(journalctl "$${JARGS[@]}" 2>/dev/null | jq -r --unbuffered "$JQ_TICK" 2>/dev/null)
 
+      # One reason per cause. A single bucket sent an operator to raise a cap that was never the
+      # cause: a jq regression failing redact() on every structured row presented as
+      # `reason=rate_cap` with zero envelope rows, whose documented remediation is a no-op.
       emit_drops rate_cap "$WIN_DROPPED"
       WIN_DROPPED=0
       emit_drops exempt_cap "$WIN_DROPPED_EXEMPT"
       WIN_DROPPED_EXEMPT=0
+      emit_drops redact_failed "$WIN_DROPPED_REDACT"
+      WIN_DROPPED_REDACT=0
+      emit_drops sanitized_empty "$WIN_DROPPED_EMPTY"
+      WIN_DROPPED_EMPTY=0
       write_state
 
       # A tick that left a row undelivered exits non-zero so the failure is visible from the
