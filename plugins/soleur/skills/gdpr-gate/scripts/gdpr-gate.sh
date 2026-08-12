@@ -23,8 +23,29 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 # may not ship .claude/hooks/lib/incidents.sh — preserve the always-exit-0
 # advisory contract by no-op'ing emit_incident in that case rather than
 # letting `set -e` abort before the breadcrumb.
-INCIDENTS_LIB="$REPO_ROOT/.claude/hooks/lib/incidents.sh"
-if [[ -f "$INCIDENTS_LIB" ]]; then
+#
+# CODE ROOT, not a data root (#7450; ADR-179's classification). This path gets
+# SOURCED, so it executes in THIS shell — and it must therefore never be derived
+# from `git rev-parse --show-toplevel`, which on the review path resolves to the
+# contributor's checked-out tree. `review/SKILL.md` instructs `gh pr checkout`,
+# and this script is itself a compliance gate, so a same-named file in a hostile
+# PR would run with the gate's authority. CLAUDE_PROJECT_DIR is supplied by the
+# harness rather than by the tree under review. `REPO_ROOT` above stays as-is:
+# its other uses are DATA-root reads of the workspace being audited, which is
+# exactly what they should measure.
+# Resolution, in trust order, and NEVER from `git rev-parse --show-toplevel`:
+#   1. CLAUDE_PROJECT_DIR — supplied by the harness, not by the tree under review.
+#      Measured 2026-08-12: unset in a plain Claude Code session and in git hooks,
+#      so it cannot be the ONLY arm without silently retiring this telemetry.
+#   2. This script's OWN location. Layout-invariant per ADR-178, and crucially NOT
+#      CWD-derived: a `gh pr checkout` cannot redirect it, because by the time this
+#      line runs the anchor decision has already been made — if a hostile script
+#      were executing, sourcing its sibling lib adds nothing. On a plugin INSTALL
+#      the walk lands somewhere with no such lib, so it no-ops, which is correct.
+# The `-f` test is the safety net for both arms: a wrong root simply no-ops.
+_incidents_root="${CLAUDE_PROJECT_DIR:-$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../../../../.." 2>/dev/null && pwd -P)}"
+INCIDENTS_LIB="${_incidents_root:+${_incidents_root}/.claude/hooks/lib/incidents.sh}"
+if [[ -n "$INCIDENTS_LIB" && -f "$INCIDENTS_LIB" ]]; then
   # shellcheck source=/dev/null
   source "$INCIDENTS_LIB"
 else

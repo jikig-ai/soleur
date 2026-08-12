@@ -84,8 +84,25 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
 # Telemetry. Never wrap emit_incident in $(...) or a pipe — its output IS the
 # telemetry write.
-_incidents="$REPO_ROOT/.claude/hooks/lib/incidents.sh"
-if [[ -r "$_incidents" ]]; then
+# CODE ROOT, not a data root (#7450; ADR-179's classification). Sourced, so it
+# executes in THIS shell — never derive it from `git rev-parse --show-toplevel`,
+# which on the review path is the contributor's checked-out tree. This is a ship
+# gate, so a same-named file in a hostile PR would run with the gate's authority.
+# CLAUDE_PROJECT_DIR comes from the harness, not from the tree under review.
+# REPO_ROOT above is unchanged: its other uses are DATA-root reads.
+# Resolution, in trust order, and NEVER from `git rev-parse --show-toplevel`:
+#   1. CLAUDE_PROJECT_DIR — supplied by the harness, not by the tree under review.
+#      Measured 2026-08-12: unset in a plain Claude Code session and in git hooks,
+#      so it cannot be the ONLY arm without silently retiring this telemetry.
+#   2. This script's OWN location. Layout-invariant per ADR-178, and crucially NOT
+#      CWD-derived: a `gh pr checkout` cannot redirect it, because by the time this
+#      line runs the anchor decision has already been made — if a hostile script
+#      were executing, sourcing its sibling lib adds nothing. On a plugin INSTALL
+#      the walk lands somewhere with no such lib, so it no-ops, which is correct.
+# The `-f` test is the safety net for both arms: a wrong root simply no-ops.
+_incidents_root="${CLAUDE_PROJECT_DIR:-$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../../../../.." 2>/dev/null && pwd -P)}"
+_incidents="${_incidents_root:+${_incidents_root}/.claude/hooks/lib/incidents.sh}"
+if [[ -n "$_incidents" && -r "$_incidents" ]]; then
   # shellcheck disable=SC1090
   source "$_incidents" 2>/dev/null || true
 fi
