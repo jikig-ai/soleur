@@ -61,16 +61,29 @@ Three, each recorded where it happened rather than folded silently into a checke
   - [x] **2.1.3** Guarded producer asserted **not** executed; present siblings asserted still run.
   - [x] **2.1.4** T0i's `fi`-counting extractor left alone.
 - [x] **2.2** `EXPECTED_CASES` 9 → **13** (T0j, T0k, T0l, T0m).
-- [x] **2.3** **P6** parity assertion added.
-  - [x] **2.3.1** Inserted **above** P5.
-  - [x] **2.3.2** Scoped to `sync.md`'s entry of `parsed`.
-  - [x] **2.3.3** Restricted to anchored operands in command position.
-  - [x] **2.3.4** `affects=` closed set `{c4, coverage, domain-model}`, comma-split.
-  - [x] **2.3.5** Non-vacuity (`>= 3`) asserted **before** the set comparison.
+- [x] **2.3** Parity assertion added. **Shipped as P6 + P7 + P8, not a single P6** — review
+      split and widened it; sub-bullets below are restated as shipped.
+  - [x] **2.3.1** Inserted **above** P5 (which must count last).
+  - [x] **2.3.2** ~~Scoped to `sync.md`'s entry of `parsed`~~ → **P6 spans the whole command
+        surface.** Scoping to sync.md was the defect: `go.md` carried the same freshness gap and
+        runs at every session start. `SYNC_MD` now scopes **P7** only, whose subject is the
+        sync-specific marker grammar.
+  - [x] **2.3.3** Restricted to anchored operands in command position, **and the guard must
+        PRECEDE its invocation** — co-occurrence in the same fence let an invocation be hoisted
+        above its own guard, reintroducing #7474 at full green.
+  - [x] **2.3.4** ~~closed set~~ → **producer→area `Map`, checked for correspondence** (P7).
+        3 producers against 3 areas made every permutation pass a membership check.
+  - [x] **2.3.5** Non-vacuity (`>= 3`) asserted **before** the set comparison (P7); P6 carries
+        an absolute `>= 8` invocation floor.
   - [x] **2.3.6** Remedy-bearing failure strings.
   - [x] **2.3.7** Parser scoped to fence bodies (ADR-179's worked examples are inline spans).
   - [x] **2.3.8** `RUNNER_RE` / `DIRECT_EXEC_RE` untouched — see Deviation 2.
-- [x] **2.4** `expect(assertions).toBe(8)` → `toBe(9)`.
+  - [x] **2.3.9** *(added at review)* **P8** pins `go.md`'s two guards, keyed on the FULL marker
+        including `reason=` — the bare marker name collides with the pre-existing
+        identity-failure arm in the same fence.
+- [x] **2.4** `expect(assertions).toBe(8)` → **`toBe(14)`**, and the floor now counts **decided
+      assertions** via a `check()` wrapper rather than `it` blocks: a per-block counter is
+      satisfied by a block whose body was gutted.
 - [x] **2.5** Both suites confirmed RED for the right reason before the `sync.md` edit.
 
 ## Phase 3 — GREEN (the guard)

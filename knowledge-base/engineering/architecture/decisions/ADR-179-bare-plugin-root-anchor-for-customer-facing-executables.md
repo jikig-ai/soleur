@@ -324,9 +324,22 @@ else
 fi
 ```
 
-The Phase 0 identity fence is **not** edited. Pinned by `plugin-root-anchoring.test.ts`
-P6 (presence-guard parity across the whole command surface) and P7 (marker grammar +
-closed `affects=` set), and by `test-sync-producer-reachability.sh` T0j/T0k/T0l/T0m.
+**The marker family is per-surface, not universal.** The template above is the `sync.md`
+instance. `go.md`'s two guards deliberately reuse *its* existing families —
+`SOLEUR_GIT_REPO_DIAG source=probe-unreachable reason=…` and
+`SOLEUR_SESSION_START_SKIPPED reason=…` — because they are not sync producers and because
+`SOLEUR_GIT_REPO_DIAG` is already mirrored by
+`apps/web-platform/server/git-lock-marker-telemetry.ts`. Emitting a `SOLEUR_SYNC_*` marker
+from `/soleur:go` would be wrong. What is universal is the SHAPE: presence check and
+invocation in one subprocess, and an `else` that NAMES the absence.
+
+`sync.md`'s Phase 0 identity fence is **not** edited. (`go.md`'s Step 0.0 identity fence
+*body* is — a presence check is nested inside it. The fence's own predicate is unchanged.)
+
+Pinned by `plugin-root-anchoring.test.ts` P6 (presence-guard parity across the whole command
+surface, guard-precedes-invocation), P7 (`sync.md` marker grammar + producer→area
+correspondence) and P8 (`go.md`'s two markers), and by
+`test-sync-producer-reachability.sh` T0j/T0k/T0l/T0m.
 
 ### Why the axes stay separate
 
@@ -374,10 +387,13 @@ for decision 5. Decision 6 rejects syntactic self-serve predicates for exactly t
 
 ### Marker vocabulary
 
-Six markers cross this surface, not three: `SOLEUR_SYNC_ROOT_UNRESOLVED` (anchor identity),
-`SOLEUR_SYNC_TOOLCHAIN_MISSING` (runner binary), `SOLEUR_SYNC_PRODUCER_MISSING` (producer
-file), `SOLEUR_SYNC_AREA_UNAVAILABLE` (area not offered on this surface), plus
-`SOLEUR_KB_SYNC_PRODUCERS` and `SOLEUR_KB_SYNC_ERROR` from `plugins/soleur/lib/kb-coverage.ts`.
+**Eight** markers cross the surface Decision 7 governs (`plugins/soleur/commands/**`), not the
+three this section originally listed. Six in the `sync.md` + `kb-coverage.ts` family:
+`SOLEUR_SYNC_ROOT_UNRESOLVED` (anchor identity), `SOLEUR_SYNC_TOOLCHAIN_MISSING` (runner
+binary), `SOLEUR_SYNC_PRODUCER_MISSING` (producer file), `SOLEUR_SYNC_AREA_UNAVAILABLE` (area
+not offered on this surface), plus `SOLEUR_KB_SYNC_PRODUCERS` and `SOLEUR_KB_SYNC_ERROR` from
+`plugins/soleur/lib/kb-coverage.ts`. Two more in `go.md`: `SOLEUR_GIT_REPO_DIAG` and
+`SOLEUR_SESSION_START_SKIPPED`.
 
 The **axes** are disjoint and coherent. The **grammar** is not, and this amendment does not
 close it. Target shape:
@@ -403,7 +419,7 @@ was actually at work there; see the plan's H1/H2/H3 table. It does **not** close
 durability residual above: a run whose missing producer is `write-kb-coverage.ts` still has
 no durable channel by construction.
 
-### Residual added to §Residuals
+### Additional residual (R1–R3 are in §Residuals above)
 
 **R4.** The command TEXT and `${CLAUDE_PLUGIN_ROOT}` can resolve to **different trees** — the
 harness may load a project-scoped `sync.md` while the anchor points at an installed payload

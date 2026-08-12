@@ -356,7 +356,16 @@ every run still executes the old payload.
 
 ```bash
 claude plugin marketplace update soleur
-claude plugin install soleur
+claude plugin update soleur
+```
+
+**If that does not converge them, reinstall.** `plugin.json` carries a frozen `0.0.0-dev`
+version sentinel, so the install directory name never changes and there is no version bump
+for `plugin update` to act on (measured in ADR-178: an actively-used install carried 64
+skills against 96 in the repo, three months stale, while reporting success):
+
+```bash
+claude plugin uninstall soleur && claude plugin install soleur
 ```
 
 **Symptom to watch for:** `/soleur:sync` emitting

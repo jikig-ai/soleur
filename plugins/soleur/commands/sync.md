@@ -127,9 +127,22 @@ When one of these fires, report to the user verbatim:
 > Soleur couldn't find one of its own files (`<producer>`), so the `<area>` step
 > didn't run. This is a problem with the Soleur installation, not with your
 > project. The most likely fix is to reinstall the Soleur plugin — updating the
-> marketplace alone does not update an installed plugin. If that doesn't clear
-> it, this is a bug in Soleur: please report it with this line. Everything else
-> in this run completed normally.
+> marketplace alone does not update an installed plugin. Run
+> `claude plugin marketplace update soleur && claude plugin update soleur`, then
+> start a new session. If the same line comes back, reinstall outright with
+> `claude plugin uninstall soleur && claude plugin install soleur`. If it still
+> comes back, this is a bug in Soleur: please report it with this line. Everything
+> else in this run completed normally.
+
+Give the commands, not just the advice. The message names the marketplace-vs-install
+distinction, and a founder who is told that and handed no command is left exactly where the
+report that opened #7474 started. The reinstall fallback is not belt-and-braces either:
+`plugin.json` carries a frozen `0.0.0-dev` sentinel, so there is no version bump for
+`plugin update` to act on and an install can sit months stale while reporting success
+(measured in ADR-178).
+
+**Do not attempt the reinstall yourself.** It mutates `${CLAUDE_PLUGIN_ROOT}` underneath a
+run that is still executing. Report it and let the operator run it between sessions.
 
 **Headless variant.** Under `--headless` (the post-clone auto-sync at
 `/api/repo/setup`) the user has no plugin installed, so "reinstall the plugin" is
@@ -352,7 +365,7 @@ earlier in the run (the `reason=` token from its marker is the right string).
 
 For a `SOLEUR_SYNC_PRODUCER_MISSING` marker, pass the **subject as well as the
 reason** — write `--degraded "<area>: producer-missing (<producer>)"`, matching the
-area-prefixed house form two lines above. `write-kb-coverage.ts` renders this string
+area-prefixed house form shown in the `--degraded` example further down. `write-kb-coverage.ts` renders this string
 verbatim, so passing the bare `reason=` token alone would put
 `absent-from-verified-root` in the durable row with no producer and no area — the
 same unattributed signal this guard exists to replace, one layer down.
@@ -519,7 +532,11 @@ are disclosed as blind spots, never counted.
    is a deliberate human edit (assign an id + keep the source anchor).
 
 3. **Report** the drift counts (stale / undocumented / blind-spots) and any rows written. No constitution /
-   learnings promotion paths apply.
+   learnings promotion paths apply. **If any guard above emitted `SOLEUR_SYNC_PRODUCER_MISSING`,
+   report ZERO rows written and say the register was not consulted** — the `write-row` fence exits 0
+   on the guard's `echo`, so "no error" is not evidence a row landed. Reporting rows that were never
+   appended is a false statement about the operator's own data, and it is the one thing here worse
+   than the bare error this guard replaced.
 
 ##### Standalone contract (`/soleur:sync domain-model`)
 
@@ -546,6 +563,11 @@ so under `all` (or headless) that gate would write **zero rows**. Take this path
    ```
 
    Idempotent: an existing register is a no-op exit 0, so this is safe to run unconditionally.
+   **But exit 0 here has two meanings.** If the guard above emitted
+   `SOLEUR_SYNC_PRODUCER_MISSING`, the fence also exits 0 — because the `echo` succeeded, not
+   because the register exists. Do not read that as "already initialized": no register was
+   created, and the steps below would then append to a file that is not there. Treat a fired
+   guard as **unchecked** and skip the rest of this area.
 
 2. **Emit the drift report** exactly as in step 1 above.
 

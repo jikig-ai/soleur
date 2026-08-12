@@ -435,7 +435,7 @@ else
   fi
 fi
 
-# --- T0m: the operator-facing message carries all four required properties -----
+# --- T0m: the operator-facing message carries every required property ------------
 # The marker is machine-readable; this message is the half a founder actually
 # reads, and without it the guard converts a bare error into a bare marker. It is
 # matched against a WHITESPACE-NORMALIZED sync.md (blockquote markers stripped,
@@ -451,6 +451,14 @@ grep -Fq "reinstall the Soleur plugin" <<<"$NORM_SYNC" || missing_props="$missin
 grep -Fq "does not update an installed plugin" <<<"$NORM_SYNC" || missing_props="$missing_props remedy-rationale"
 # (4) an explicit fallback for when the remedy does not clear it.
 grep -Fq "this is a bug in Soleur" <<<"$NORM_SYNC" || missing_props="$missing_props fallback"
+# (4b) the remedy must carry RUNNABLE COMMANDS, and the right verbs. `claude plugin install`
+# is not the update verb (`claude plugin update` is), and neither is guaranteed to converge a
+# stale install because plugin.json's version sentinel is frozen — so the uninstall+install
+# fallback is load-bearing, not decoration. Pinned because a wrong command here is worse than
+# no command: the operator runs it, sees success, and hits the identical marker.
+grep -Fq "claude plugin marketplace update soleur" <<<"$NORM_SYNC" || missing_props="$missing_props remedy-command-marketplace"
+grep -Fq "claude plugin update soleur" <<<"$NORM_SYNC" || missing_props="$missing_props remedy-command-update"
+grep -Fq "claude plugin uninstall soleur" <<<"$NORM_SYNC" || missing_props="$missing_props remedy-command-reinstall"
 # (5) what still succeeded — a partial run must not read as a failed one.
 grep -Fq "completed normally" <<<"$NORM_SYNC" || missing_props="$missing_props what-still-worked"
 # The headless arm must NOT tell a web-platform user to reinstall a plugin they

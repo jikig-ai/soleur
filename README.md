@@ -36,15 +36,25 @@ Updating is **two steps**, and the first one looks sufficient on its own:
 
 ```bash
 claude plugin marketplace update soleur   # advances the marketplace checkout ONLY
-claude plugin install soleur              # re-pulls the installed plugin
+claude plugin update soleur               # updates the installed plugin (restart to apply)
 ```
 
-`/plugin marketplace update` moves the marketplace checkout to the new HEAD. It does **not**
-re-pull the plugin install, which keeps its own `gitCommitSha` in `installed_plugins.json`.
-Soleur's commands resolve `${CLAUDE_PLUGIN_ROOT}` to the *install*, never the marketplace
-checkout — so after step 1 alone you can read a fix as shipped while every run still executes
-the old payload. If a fix you expect is not taking effect, run step 2 and compare the two SHAs
-before assuming the fix is broken.
+`marketplace update` moves the marketplace checkout to the new HEAD. It does **not** touch
+the plugin install, which keeps its own `gitCommitSha` in `installed_plugins.json`. Soleur's
+commands resolve `${CLAUDE_PLUGIN_ROOT}` to the *install*, never the marketplace checkout —
+so after step 1 alone you can read a fix as shipped while every run still executes the old
+payload.
+
+**If the fix still isn't taking effect after both steps,** reinstall outright:
+
+```bash
+claude plugin uninstall soleur && claude plugin install soleur
+```
+
+That is not belt-and-braces. Soleur's `plugin.json` carries a frozen `0.0.0-dev` version
+sentinel, so the install directory name never changes and there is no version bump for
+`plugin update` to act on — an install can sit months stale while every command reports
+success. A full reinstall is the only step guaranteed to converge the two SHAs.
 
 ## The Workflow
 

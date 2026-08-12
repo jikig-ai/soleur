@@ -63,9 +63,16 @@ summary, but it should not be the only thing between a missing producer and the 
 **Issue #7474 asked for:** *"the installed Soleur plugin predates these producers — update the
 plugin itself, not just the marketplace"*
 
-**Plan does:** a four-property message (observation → remedy → fallback → what still worked)
+**Plan does:** a multi-property message (observation → remedy → fallback → what still worked)
 that names the missing file, locates the fault in Soleur rather than the user's project, and
 adds an explicit "if that doesn't clear it, report it" branch.
+
+> **Count reconciled at review, 2026-08-11.** This said "four-property" while `tasks.md` said
+> five and `T0m` enforced six — three artifacts, three counts of one thing. `T0m` is the
+> authority, and it now pins **nine** anchors: attribution, remedy, remedy-rationale, fallback,
+> what-still-worked, the headless variant, and the three remedy COMMANDS. The commands were
+> added at review because the message named the marketplace-vs-install distinction and then
+> handed the founder no command — leaving them where the report that opened #7474 started.
 
 **Why challenged (CPO, sign-off review):** the drafted sentence asserts the same unproven cause
 UC1 removes from the token — and asserts it in the half the founder actually reads. Under H1
@@ -122,8 +129,13 @@ while ~14 sibling suites use the shared `gate_assert_ran` harness, whose own com
 *"A FLOOR, NOT EQUALITY. The count is developer-incremented, so `-eq` would turn every newly-added
 assertion into a spurious failure and train people to bump the number without reading it."*
 
-Adding a case today produces `ran 10 of 9 cases — a case was deleted or its counter neutered`,
+Adding a case today produces `ran N+1 of N cases — a case was deleted or its counter neutered`,
 which is directionally wrong for someone who just added one.
+
+> **Numbers updated at review.** The quoted floors were `toBe(8)` / `EXPECTED_CASES=9` at plan
+> time; as shipped they are `toBe(14)` / `EXPECTED_CASES=13`, and the vitest floor now counts
+> decided assertions rather than blocks. The argument is unaffected — both are still
+> exact-equality, and the tax this records is still paid.
 
 **Plan does:** bumps both floors and leaves the pattern alone — flipping two suites' assertion
 semantics is scope creep on a P2 diagnostic fix. Recorded here so the next change does not pay

@@ -287,6 +287,11 @@ That is recorded here as rejected, because the reasoning is the deliverable.
 
 ### D1 — the guard is per-invocation-site, not a Phase 0 loop
 
+> **Superseded at /work (form only), 2026-08-11.** The `[ -f … ] && … || echo …` one-liner
+> below is the REJECTED form: a producer that is present but exits non-zero falls through to
+> the `||` and is reported MISSING. Shipped as `if/then/else`. The per-site placement this
+> section argues for is unchanged and correct.
+
 **Each producer invocation guards itself, in its own subprocess:**
 
 ```bash
@@ -365,6 +370,10 @@ plugin installed** — "reinstall the plugin" is actively misdirecting there. Th
 reports the missing file as a Soleur-side defect with no operator action.
 
 ### D4 — the stronger SHA-divergence variant is deferred; the user pain is filed separately
+
+> **Superseded at review, 2026-08-11.** The deferral to #7452 stands. The user pain was NOT
+> filed as a separate issue — the CONCUR gate DISSENTed and it shipped as docs in this PR.
+> See `decision-challenges.md` T1.
 
 Deferring the *mechanism* is right (four measured reasons in the Cut List, plus: it reads two
 paths **outside** the verified root, the hand-resolution class ADR-179 exists to forbid).
@@ -495,7 +504,7 @@ the reason the guard is per-site. Without that note ADR-179 reads as silently se
 | File | Change |
 | --- | --- |
 | `plugins/soleur/commands/sync.md` | Wrap 6 producer invocations in the per-site guard; add the verbatim operator message + headless variant; the `--degraded` note; the test-suite pointer comment. **The Phase 0 identity-gate fence is not edited.** |
-| `apps/web-platform/test/plugin-root-anchoring.test.ts` | Add P6 (scoped, non-vacuous, remedy-bearing, `affects=` closed-set) **above** P5; bump the floor 8 → 9. |
+| `apps/web-platform/test/plugin-root-anchoring.test.ts` | ~~Add P6 (scoped, …); bump the floor 8 → 9~~ → **shipped as P6 + P7 + P8**, P6 spanning the whole command surface; floor 8 → 14 (decided assertions, not blocks). Superseded at review. |
 | `tests/commands/test-sync-producer-reachability.sh` | Add the marker-emission case; bump `EXPECTED_CASES` by the number added. |
 | `knowledge-base/engineering/architecture/decisions/ADR-179-…md` | One-line marker-enumeration addition + the decision-5 scope note. |
 

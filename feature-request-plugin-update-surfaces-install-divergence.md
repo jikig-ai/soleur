@@ -9,7 +9,7 @@ required:
 
 ```bash
 claude plugin marketplace update <name>   # advances ~/.claude/plugins/marketplaces/<name>
-claude plugin install <name>              # re-pulls ~/.claude/plugins/cache/<name>/…
+claude plugin update <name>               # updates ~/.claude/plugins/cache/<name>/…
 ```
 
 `marketplace update` moves the marketplace checkout to the new HEAD and reports success. It

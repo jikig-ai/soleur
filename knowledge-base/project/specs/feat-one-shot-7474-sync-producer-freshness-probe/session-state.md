@@ -19,23 +19,40 @@ Research Reconciliation table:
 One unverified capability claim ("markers are parsed by an agent that files GitHub issues") was
 withdrawn per `hr-verify-repo-capability-claim-before-assert` — no such consumer exists.
 
-### Decisions
+### Decisions — CORRECTED AT REVIEW
+
+Four of the five original bullets were written at plan time and reversed during review. They are
+restated here as shipped; the plan-time wording is preserved in the plan itself.
+
 - **Per-invocation-site guards, not a Phase 0 probe loop** — makes the check enforcement rather
-  than instruction-following, satisfies ADR-179 decision 5, and dissolves five reviewer findings
-  including a false-marker regression on unrelated areas (`/soleur:sync conventions` invokes no
-  producer at all, so a Phase 0 loop would emit a confident wrong answer on a healthy run).
+  than instruction-following, and dissolves five reviewer findings including a false-marker
+  regression on unrelated areas (`/soleur:sync conventions` invokes no producer at all, so a
+  Phase 0 loop would emit a confident wrong answer on a healthy run).
+  **Correction:** the original bullet said this *satisfies ADR-179 decision 5*. It does not.
+  Decision 5's property is that the invocation line ALONE is safe, via an operand bound only by
+  the gate; this guard's invocation line is byte-identical to the pre-fix line, so it is
+  **co-located**, not fail-closed in isolation. Decision 5's *reasoning* is what applies (a gate
+  separated from its invocation is not a gate). Binding the operand to a variable would satisfy
+  the letter and drop it out of `extractOperands`, vacating P2's residency assertion — a worse
+  trade, recorded in the ADR amendment rather than glossed.
 - **`reason=absent-from-verified-root`, not `reason=stale-install`** — the marker states the
   observation; the stale-install hypothesis and remedy move to operator prose. Matches both
-  existing `reason=` tokens in `sync.md`.
-- **The Phase 0 identity-gate fence is not edited at all** — the proposed `exit 0` plus STOP-prose
-  retarget were cut after three reviewers showed they would degrade both of ADR-179's stop signals
-  to pre-empt a hypothetical refactor.
-- **The SHA-divergence variant stays deferred to #7452, but the user pain is filed separately in
-  Phase 4** — #7452 sits in Post-MVP/Later behind 1027 issues, which is indistinguishable from
-  unfiled.
-- **P6 parity assertion pins guarded sites *and* `affects=` values** — scoped to `sync.md`'s entry
-  (unscoped it would demand `go.md`'s operands), inserted above P5 (registration-order counter),
-  non-vacuous, with remedy-bearing failure strings. Both hand-ratcheted floors bump.
+  existing `reason=` tokens in `sync.md`. (Unchanged.)
+- **`sync.md`'s Phase 0 identity-gate fence is not edited** — the proposed `exit 0` plus
+  STOP-prose retarget were cut after three reviewers showed they would degrade both of ADR-179's
+  stop signals to pre-empt a hypothetical refactor. **Correction:** the original bullet said this
+  unscoped. `go.md`'s Step 0.0 identity fence *body* WAS edited, to nest a presence check inside
+  it. The claim holds for `sync.md` only.
+- **The SHA-divergence mechanism stays deferred to #7452.** **Correction:** the original bullet
+  said the user pain is *filed separately in Phase 4*. It is not — the CONCUR gate DISSENTed and
+  it shipped as docs in this PR. See `decision-challenges.md` T1.
+- **P6 pins presence-guard parity across the WHOLE command surface; P7 pins sync.md's marker
+  grammar.** **Correction:** the original bullet described a single P6 scoped to `sync.md` that
+  also pinned `affects=`. Review split them and widened P6 deliberately — `go.md` carried the
+  same gap and is the higher-traffic file, so scoping around it was the defect, not the design.
+  `affects=` is now a producer→area **Map** checked for correspondence, not a set checked for
+  membership (3 producers against 3 areas made every permutation pass). Floors: `EXPECTED_CASES`
+  13, `assertions` 14 — the vitest floor counts decided assertions, not blocks.
 
 ### Scope caveat carried into implementation — CORRECTED AT REVIEW
 An earlier draft of this section asserted flatly that closing #7474 does not resolve the
