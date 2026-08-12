@@ -203,6 +203,13 @@ chmod +x "$BIN/gh"
 # GH_REPO is an unroutable sentinel, ISSUE_NUM is 0, GH_TOKEN is empty and GH_CONFIG_DIR is a
 # temp dir — so a real `gh` that somehow ran could not authenticate against anything, let
 # alone mutate an issue.
+#
+# THE ONE PLACE THE HARNESS SHELL IS SPELLED. `bash -e` is what Actions uses for a `run:`
+# block declaring no `shell:` key (C11 asserts that premise still holds). The errexit
+# self-check above runs through this same array, so dropping `-e` here fails the precondition
+# instead of silently making every arm vacuous.
+HARNESS_SHELL=(bash -e)
+
 GUARD_RC=0; GUARD_OUT=""; GUARD_REOPENS=0; GUARD_BODY=""
 run_guard() {  # $1=comments-json-file $2=issue-body-json-file $3=run-conclusion
   local comments="$1" issuebody="$2" conclusion="$3"
@@ -220,7 +227,7 @@ run_guard() {  # $1=comments-json-file $2=issue-body-json-file $3=run-conclusion
     ISSUE_NUM="0" \
     GH_TOKEN="" \
     GH_CONFIG_DIR="$rundir/ghcfg" \
-    bash -e "$BODY" 2>&1
+    "${HARNESS_SHELL[@]}" "$BODY" 2>&1
   )"; GUARD_RC=$?
   # Counted from a log with ONE LINE PER INVOCATION, never from the argv log: the body passes
   # a multi-line --comment, so a line-based count over argv would score one reopen as ~20.
@@ -233,6 +240,30 @@ run_guard() {  # $1=comments-json-file $2=issue-body-json-file $3=run-conclusion
 _resolved="$(PATH="$BIN:$PATH" command -v gh)"
 if [[ "$_resolved" != "$BIN/gh" ]]; then
   printf 'FAIL: gh does not resolve to the stub (%s) — refusing to run against a real gh\n' "$_resolved"
+  printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$((fails + 1))"
+  exit 1
+fi
+
+# THE HARNESS'S OWN ERREXIT IS A PRECONDITION, PROVEN — not assumed from the literal `-e` a
+# reader can see in run_guard.
+#
+# This closes a measured vacuity. Dropping `-e` from the invocation below is the single edit
+# that makes EVERY arm in this suite unable to see the defect it was written for: without
+# errexit the failing `printf` no longer aborts the body, so a fully reverted `--` still
+# yields rc=0 with one reopen and C1-C3 pass. Against the FIXED workflow that edit is
+# invisible — the body succeeds either way — so no assertion over the workflow can catch it,
+# and mutation-testing the harness reported GREEN.
+#
+# A precondition rather than a 14th arm: it is a statement about this file's own harness, not
+# about the workflow, and the exact-13 count below is a specification of the C-arms.
+# SINGLE-SOURCED: the probe and run_guard invoke the body through the SAME array, so there is
+# exactly one place to drop `-e` and the probe is downstream of it. A probe that spelled
+# `bash -e` for itself would keep passing while run_guard lost the flag — testing a literal
+# rather than the harness.
+_probe="$TMP/errexit-probe.sh"
+printf '%s\n' 'false' 'echo REACHED_AFTER_FAILURE' > "$_probe"
+if [[ "$("${HARNESS_SHELL[@]}" "$_probe" 2>/dev/null)" == *REACHED_AFTER_FAILURE* ]]; then
+  printf 'FAIL: the harness shell does not abort on a failing command — errexit is not active, so every arm below is vacuous\n'
   printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$((fails + 1))"
   exit 1
 fi
@@ -338,14 +369,21 @@ fi
 # A body-content predicate ("skip comments containing '## Closure gate'") is a one-line bypass
 # for anyone who can comment. A login is not: GitHub logins are alphanumeric-plus-hyphen, so
 # `[bot]` cannot be spelled by a human account.
+#
+# THE HUMAN COMMENT MUST BE **COMPLETE**, and that is what makes this arm discriminate.
+# Measured with an INCOMPLETE one: both implementations reopen once — the identity filter
+# because the comment qualifies and is incomplete, the content predicate because the comment
+# is excluded, leaving an empty body whose every field is missing. Same count, different
+# reason, so the arm could not tell them apart and a body-content predicate survived it.
+# With a COMPLETE comment the count genuinely moves: qualifies -> 0 reopens; excluded -> 1.
 C_HUMAN_HEADING="$TMP/c-human-heading.json"
-mk_comments "$C_HUMAN_HEADING" "someone::$(printf '## Closure gate: re-opening\n%s' "$INCOMPLETE_NO_URLS")"
-run_guard "$C_HUMAN_HEADING" "$ISSUE_PLAIN" "failure"
-if [[ "$GUARD_REOPENS" -eq 1 ]]; then
+mk_comments "$C_HUMAN_HEADING" "someone::$(printf '## Closure gate: re-opening\n%s' "$COMPLETE_BODY")"
+run_guard "$C_HUMAN_HEADING" "$ISSUE_PLAIN" "success"
+if [[ "$GUARD_REOPENS" -eq 0 ]]; then
   pass "C7: a HUMAN comment carrying the guard's own heading is NOT excluded (identity filter)"
 else
   fail "C7: a HUMAN comment carrying the guard's own heading is NOT excluded (identity filter)" \
-       "$GUARD_RC" "reopens=${GUARD_REOPENS}"
+       "$GUARD_RC" "reopens=${GUARD_REOPENS} — a content-based filter would exclude it, empty the body, and reopen"
 fi
 
 # ── C8: pagination ────────────────────────────────────────────────────────────────

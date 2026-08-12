@@ -809,8 +809,19 @@ _a_abort "A9: a module binding only 2 payloads aborts, naming the payload count"
 # set whose comment claims the two "cannot drift" — and it had drifted twice (no sibling glob,
 # a bare `file\(` where the lib matches the whole family). Byte-identity was measured once at
 # repair time; a one-time measurement is not a guard. This arm makes a third drift unshippable.
-_a10_mirror="$(_r2_hash "$R2")"
-_a10_lib="$(git_data_rung2_user_data_sha256 "$R2/ci.yml" 2>&1)"; _a10_rc=$?
+#
+# THE FIXTURE MUST CARRY A SIBLING, and that is not a detail. Measured: against the bare `$R2`
+# tree — which has no sibling and no `filebase64` binding — deleting `_r2_hash`'s sibling glob
+# outright leaves this arm GREEN, because neither implementation has anything to disagree
+# about. An equivalence arm whose fixture cannot express the difference is the same defect as
+# the mirror it guards: a fixture sharing the blind spot of the thing it tests. So the
+# comparison runs over a tree with a sibling `.tf` AND a sibling `.tf.json`, which is where the
+# two implementations actually had drifted.
+_a10="$(_a_tree a10)"
+_a_sibling_var "$_a10/modules/git-data-userdata/variables.tf"
+printf '{"variable":{"a10_knob":{"default":"x"}}}\n' > "$_a10/modules/git-data-userdata/extra.tf.json"
+_a10_mirror="$(_r2_hash "$_a10")"
+_a10_lib="$(git_data_rung2_user_data_sha256 "$_a10/ci.yml" 2>&1)"; _a10_rc=$?
 if [[ "$_a10_rc" -eq 0 && -n "$_a10_mirror" && "$_a10_mirror" == "$_a10_lib" ]]; then
   pass "A10: _r2_hash equals the lib's derivation over the same fixture (mirror non-drift)"
 else
