@@ -50,3 +50,33 @@ may prefer instead to widen scope so the follow-up decision is actually reachabl
 recording the holder's age, which spec-flow argues is a `printf` rather than the control-flow change
 the Cut List rightly excluded. Not taken unilaterally, because the Cut List's exclusion was a
 deliberate scope boundary set at brainstorm time.
+
+## Decision — 2026-08-12 (#7484, at `/work` start)
+
+**UC-1 is resolved as DHH's position: drop the row. No persistence ships in this PR.**
+
+**The premise was re-derived before deciding, not restated.** `git grep -nE 'TEST_TIMING_LOG='`
+returns ten hits and every one is either (a) a test arm redirecting the variable into its own sandbox
+(`fanout-suite-scope.test.sh`, `test-all-infra-coverage-notice.test.sh` ×2,
+`test-all-killed-classification.test.sh`) or (b) a plan/spec documenting a *manual* one-off operator
+invocation. No automated path assigns it. The channel has no writer outside a sandbox, so a row
+written to it would be read by nobody — the writer-with-no-reader shape this repo already carries a
+learning about.
+
+**Why not the other two positions.** spec-flow's candidate (i) and the CTO's marker+evaluator both
+require the data to actually arrive, and the only way to make that happen is to change a shared
+default (`TEST_TIMING_LOG` for every run in every sibling worktree, which share `.git/common` and so
+need a run-id or per-worktree path). That is a blast-radius argument about a shared default, and it
+deserves to be made on its own merits in its own PR rather than as a rider on a ~15-line
+instrumentation fix. The CTO's evaluator additionally inherits the same hole unless paired with one of
+the persistence options, so it cannot stand alone.
+
+**What this decision costs.** Property P2 ("the contended-vs-acquired ratio is derivable across runs")
+is **not delivered** and the plan says so in its own Overview. Per-run data lives in the operator
+terminal and the agent transcript; a reader accumulating across runs does so by reading transcripts.
+That is the honest scope, and it is the scope the v2 plan was already rewritten against.
+
+**UC-2 is left as applied.** The optional widening — recording the *holder's* age at wait time so the
+deferred mechanism question becomes reachable — is **not taken**. It is barred by the Non-Goals list,
+and that exclusion was a deliberate scope boundary set at brainstorm time, not an oversight to correct
+mid-implementation. The deferred question gets a home via the Phase 4 comment on #7454 instead.
