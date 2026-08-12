@@ -51,10 +51,24 @@ Five independent lines of evidence, none from the convenience of the change that
    (`registry-luks-recut-6929.md`).
 3. **The #7299 plan's own rejected-alternatives table records "production is 71% under cap"** — a
    plan whose finding is abundance did not simultaneously intend a scarcity ration.
-4. **The sibling host falsifies it empirically.** ADR-152 records git-data at 20,456 B stored /
-   **12,312 B headroom**, under `GIT_DATA_BUDGET = 28_000` permitting headroom as low as 4,768 —
-   same cap, same ForceNew, same hazard, and 4× less conservative. A 20,000 B headroom floor would
-   red git-data on contact.
+4. **The sibling host contradicts it at the level of policy, which is the level that matters.**
+   `GIT_DATA_BUDGET = 28_000` permits headroom as low as **4,768 B** — same cap, same ForceNew, same
+   hazard, and 4× less conservative than the arm this ADR retires. That is a statement about what the
+   owning constant *authorises*, and it is what makes the two hosts' policies incomparable.
+
+   The *measurement* is deliberately not load-bearing here, because it moved while this ADR was in
+   review. ADR-152 recorded git-data at 20,456 B stored / 12,312 B headroom on 2026-08-04; its
+   2026-08-11 amendment (#7264) applied the same rationale-strip technique to git-data's own
+   cloud-init template and re-measured at **12,588 B stored / 20,180 B headroom**. So the earlier
+   draft of this bullet — "a 20,000 B headroom floor would red git-data on contact" — was true when
+   written and is now false by 180 B.
+
+   Recorded rather than quietly deleted, because the correction argues the point better than the
+   original did: a host that clears an arbitrary floor by **180 B**, and that cleared it only via an
+   unrelated compression change landed a week later, is not evidence the floor is principled. It is
+   evidence that a number nobody derived will be satisfied or violated by whatever happens to be in
+   the payload that week. A budget the owning constant sets to 4,768 B does not become a 20,000 B
+   budget because one measurement drifted above it.
 5. **The fingerprint.** The bash suite carries both TS literals: `4000` applied to `stored` (keeping
    both referent and value) and `20000` applied to `headroom` (keeping the value, losing the
    referent). Two constants travelled together; one kept its meaning.
