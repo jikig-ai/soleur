@@ -348,14 +348,21 @@ fi
 ```
 
 Add one `--degraded "<reason>"` for each producer that reported `status=degraded`
-earlier in the run (the `reason=` token from its marker is the right string) —
-including any `SOLEUR_SYNC_PRODUCER_MISSING`, which is how a missing producer
-reaches a durable artifact rather than living only in session stdout. Two limits,
-stated once: this carry-forward is unavailable when `write-kb-coverage.ts` is
-itself the missing producer, and for standalone area invocations (which write no
-coverage at all). In both cases a PRIOR `kb-coverage.md` still sits on disk and
-still satisfies the existing `SOLEUR_KB_SYNC_PRODUCERS` grep — so that grep
-certifies the *previous* run, not this one.
+earlier in the run (the `reason=` token from its marker is the right string).
+
+For a `SOLEUR_SYNC_PRODUCER_MISSING` marker, pass the **subject as well as the
+reason** — write `--degraded "<area>: producer-missing (<producer>)"`, matching the
+area-prefixed house form two lines above. `write-kb-coverage.ts` renders this string
+verbatim, so passing the bare `reason=` token alone would put
+`absent-from-verified-root` in the durable row with no producer and no area — the
+same unattributed signal this guard exists to replace, one layer down.
+
+Two limits, stated once: this carry-forward is unavailable when
+`write-kb-coverage.ts` is itself the missing producer, and for standalone area
+invocations (which write no coverage at all). In both cases a PRIOR
+`kb-coverage.md` still sits on disk and still satisfies the existing
+`SOLEUR_KB_SYNC_PRODUCERS` grep — so that grep certifies the *previous* run, not
+this one.
 
 ```bash
 if [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/write-kb-coverage.ts" ]; then
@@ -481,7 +488,11 @@ are disclosed as blind spots, never counted.
    fi
    ```
 
-   Exit `0` = clean, `1` = drift found, `2` = error, `3` = secret-shape refuse. Present the report verbatim
+   Exit `0` = clean, `1` = drift found, `2` = error, `3` = secret-shape refuse. **This mapping
+   describes the producer's own exit codes and applies only when the producer actually ran.** If
+   the guard above emitted `SOLEUR_SYNC_PRODUCER_MISSING`, the fence still exits `0` because the
+   `echo` succeeded — that is "could not check", NOT "clean". Report it as unchecked; never fold it
+   into the register-agrees-with-source verdict. Present the report verbatim
    to the operator — it has three sections: **stale register citations** (a cited symbol/migration no longer
    resolves), **undocumented source facts** (a table with RLS/constraints the register never names), and a
    **blind-spots** disclosure line. Every report carries the completeness disclaimer.

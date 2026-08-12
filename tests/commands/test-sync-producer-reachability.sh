@@ -394,16 +394,28 @@ else
   rm -f "$MARKERS"/* 2>/dev/null
   ROOT_FAIL="$CUST/root-failing"
   mk_synth_root "$ROOT_FAIL" || { echo "FATAL: synth root failed" >&2; exit 2; }
-  printf '#!/usr/bin/env bash\ntouch "%s/%s"\nexit 1\n' "$MARKERS" "$OMIT_RAN" > "$ROOT_FAIL/$OMIT"
-  chmod +x "$ROOT_FAIL/$OMIT" || { echo "FATAL: chmod failing-producer failed" >&2; exit 2; }
+  # EVERY producer present and failing — not just the fixture target. A
+  # single-producer fixture samples ONE of the six guarded sites, so an `&&`-form
+  # rewrite of any OTHER site ships green: that is exactly how the rejected form
+  # walks back in on site 7. Covering the whole inventory is what makes this case
+  # a property of the guard rather than of which site the fixture happened to pick.
+  for rel in "${PRODUCER_RELS[@]}"; do
+    printf '#!/usr/bin/env bash\ntouch "%s/ran-%s"\nexit 1\n' \
+      "$MARKERS" "$(basename "$rel")" > "$ROOT_FAIL/$rel"
+    chmod +x "$ROOT_FAIL/$rel" || { echo "FATAL: chmod failing-producer failed" >&2; exit 2; }
+  done
   out_fail="$(run_guards "$ROOT_FAIL")"
   ran_fail="$(marker_names)"
-  if [[ "$ran_fail" != *"$OMIT_RAN"* ]]; then
-    fail "T0l: fixture defect — the failing producer never ran, so the assertion below is vacuous"
-  elif grep -Fq "SOLEUR_SYNC_PRODUCER_MISSING producer=$OMIT" <<<"$out_fail"; then
-    fail "T0l: a PRESENT producer that exited non-zero was reported MISSING — the remedy names a cause that is not the operator's"
+  missing_ran=""
+  for rel in "${PRODUCER_RELS[@]}"; do
+    [[ "$ran_fail" == *"ran-$(basename "$rel")"* ]] || missing_ran="$missing_ran $rel"
+  done
+  if [[ -n "$missing_ran" ]]; then
+    fail "T0l: fixture defect — these failing producers never ran, so the assertion is vacuous:$missing_ran"
+  elif grep -Fq "SOLEUR_SYNC_PRODUCER_MISSING" <<<"$out_fail"; then
+    fail "T0l: a PRESENT producer that exited non-zero was reported MISSING ($(grep -oE 'producer=[^ ]+' <<<"$out_fail" | sort -u | tr '\n' ' ')) — the remedy names a cause that is not the operator's"
   else
-    pass "T0l: present-but-failing producer → not reported as missing"
+    pass "T0l: every present-but-failing producer → none reported as missing"
   fi
 fi
 

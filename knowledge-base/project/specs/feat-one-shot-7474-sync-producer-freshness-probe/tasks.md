@@ -130,3 +130,55 @@ Three, each recorded where it happened rather than folded silently into a checke
 | M7 | domain-model guard unwrapped to a bare invocation | P6 parity |
 | M8 | "not with your project" attribution clause deleted | T0m |
 | M9 | headless variant deleted | T0m |
+| M10 | go.md `cleanup-merged` guard unwrapped | P6 |
+| M11 | sibling `TOOLCHAIN_MISSING affects=` typo'd | P7 |
+| M12 | sync.md marker deleted, guard kept | P7 |
+| M13 | a **non-fixtured** site rewritten to the `&&` form | T0l |
+
+## Review round — design-validity pass (2026-08-11)
+
+`code-simplicity-reviewer` + `architecture-strategist`, run before the main panel because the
+diff introduces a mechanism (a new marker vocabulary two files must learn). Dispositions:
+
+**Accepted and fixed inline**
+
+- **go.md carried the identical gap** (architecture, P1-adjacent). Both its anchored
+  invocations were identity-guarded and presence-unguarded, on the highest-traffic surface —
+  and the ADR amendment stated the rule *generally*, which made the gap mine to honor rather
+  than narrow around. Guarded both, reusing go.md's existing monitored marker families
+  (`SOLEUR_GIT_REPO_DIAG`, `SOLEUR_SESSION_START_SKIPPED`) instead of inventing new ones.
+- **P6 generalized to the whole command surface**, so go.md's new guards are pinned rather
+  than exempt; **P7** split out for the sync-specific marker grammar. P7 now also validates
+  the sibling `TOOLCHAIN_MISSING` marker — validating only one of two `affects=` vocabularies
+  let them drift with nothing red. Floor 9 → 10.
+- **T0l widened to every producer** (architecture, Hidden Assumption #2). The single-site
+  fixture could not see an `&&`-form rewrite of any *other* site — exactly how the rejected
+  form walks back in on site 7. M13 confirms it now reds naming the producer.
+- **The `--degraded` carry-forward dropped its subject** (architecture P2 #3). Passing the
+  bare `reason=` token wrote `absent-from-verified-root` into the durable row with no producer
+  and no area — the same unattributed signal the guard replaces, one layer down. Now specified
+  as `<area>: producer-missing (<producer>)`.
+- **"could not check" read as "clean"** (architecture P2 #4, AP-021). The domain-model exit
+  mapping (`0 = clean`) was unqualified, so a missing producer's exit-0 fence read as
+  register-agrees-with-source. Qualified in place.
+- **ADR overclaims** (architecture P2 #1/#2/#5, P3 #7/#8): the decision-5 satisfaction claim
+  (the guard is *co-located*, not fail-closed in isolation — the invocation line alone is
+  byte-identical to the pre-fix line); the `test -d` argument (refuted by sync.md's own gate,
+  which carries that predicate as a conjunct); the marker count (six, not three); heading
+  promotion + frontmatter; `reason=` semantics. Rewritten as a proper `## Amendment` section
+  with the trade and the residual recorded rather than glossed.
+- **The scope claim reasoned from the wrong hypothesis** (architecture P2 #6) — see below.
+
+**Rejected, with evidence**
+
+- `code-simplicity-reviewer` recommended **cutting `affects=` + `PRODUCER_AREAS`** as "a
+  vocabulary the test itself invented". Measured false on three counts: `affects=` is a
+  pre-existing house convention (`SOLEUR_SYNC_TOOLCHAIN_MISSING tool=bun affects=c4,coverage`
+  on `main`), the operator message consumes `<area>`, and a closed-set constant is the
+  established anti-laundering pattern in that same file (`MONOREPO_ONLY_AREAS`).
+  `architecture-strategist` independently called it "the right anti-drift shape" and asked for
+  it to be *extended*, which is what shipped.
+- `code-simplicity-reviewer` recommended **cutting `to_command_position()`**, correctly noting
+  the mutation is caught either way. Kept, because widening T0l to all producers made it
+  load-bearing: without it the `&&`-form producer drops out of the derived inventory and M13
+  fails as "target not in inventory" instead of naming the defect.

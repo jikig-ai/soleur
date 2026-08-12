@@ -37,11 +37,24 @@ withdrawn per `hr-verify-repo-capability-claim-before-assert` — no such consum
   (unscoped it would demand `go.md`'s operands), inserted above P5 (registration-order counter),
   non-vacuous, with remedy-bearing failure strings. Both hand-ratcheted floors bump.
 
-### Scope caveat carried into implementation
-Closing #7474 does not resolve the reporter's original incident. `commands/` and `scripts/` ship in
-one payload at one SHA, so a merely-old install runs its own old `sync.md`. The guard helps torn
-payloads, instruction/payload splits, and every future producer. The item addressing the reporter's
-actual pain (marketplace update != install update) is filed separately into Phase 4.
+### Scope caveat carried into implementation — CORRECTED AT REVIEW
+An earlier draft of this section asserted flatly that closing #7474 does not resolve the
+reporter's incident. That is the **H3** branch, which the plan itself rates *UNKNOWN — probably
+cannot*, while **H2** (instruction/payload split) is rated *PLAUSIBLE and consistent with the
+report* and says the opposite: the reporter observed `SOLEUR_ROOT_OK=1`, a gate that only exists
+post-#7443, while `installed_plugins.json` held a pre-#7443 SHA — so their next run executes a
+`sync.md` carrying these guards against the same stale root, the marker fires, and the incident
+IS resolved.
+
+Stated correctly: resolves the reported incident under H2, does not under H3; the plan's
+evidence favours H2. Independently of which holds, the guard covers torn payloads and every
+future producer, and P6 makes it mandatory for producers that do not exist yet.
+
+Asserting the H3 conclusion as fact was the same error class UC1 refuses on
+`reason=stale-install` — reasoning from the least-supported branch — pointed the other way.
+
+The update-path pain (marketplace update != install update) shipped as docs in this PR, not as a
+separate Phase 4 issue; see `decision-challenges.md` T1 for the CONCUR-gate DISSENT that changed it.
 
 Three operator-stated decisions were changed rather than silently applied — recorded in
 `decision-challenges.md`: the `reason=stale-install` token, the Phase 0 placement, and the remedy

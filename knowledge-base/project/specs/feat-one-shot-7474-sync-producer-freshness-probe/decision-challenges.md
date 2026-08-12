@@ -31,8 +31,15 @@ independently reached the same conclusion.
 **Issue #7474 asked for:** a loop probing all three producers "immediately AFTER the identity
 gate", plus an instruction to the agent to report rather than surface the raw ENOENT.
 
-**Plan does:** guards each of the 6 invocation sites inline
-(`[ -f "…" ] && bun "…" || echo "…"`), with no Phase 0 fence edit at all.
+**Plan does:** guards each of the 6 invocation sites inline, with no Phase 0 fence edit at all.
+
+> **Superseded at /work, 2026-08-11.** The plan specified the one-liner
+> `[ -f "…" ] && bun "…" || echo "…"`. Measured: when the producer is **present but exits
+> non-zero**, that form falls through to the `||` and reports it MISSING — a confidently wrong
+> remedy, which this plan's own `## User-Brand Impact` ranks as the worst outcome. Shipped as
+> `if [ -f "…" ]; then <invoke>; else echo "…"; fi`. `T0l` pins the semantics rather than the
+> syntax, via a form-agnostic block extractor, so reintroducing the rejected form goes RED
+> naming the producer instead of becoming invisible.
 
 **Why challenged:** the Phase 0 form cannot *prevent* the invocation — bash carries no state
 across fences, so the skip could only ever be an instruction, and a marker above a bare death is
@@ -80,8 +87,29 @@ plugin, and nothing says so") is live on the only surface with a real user.
 **Plan does:** keeps the mechanism on #7452, and files the update-path UX defect as its own
 issue in **Phase 4: Validate + Scale**. Also assigns #7474 to Phase 4 (currently no milestone).
 
-**Note:** closing #7474 does **not** resolve the reported incident. The Phase 4 issue is the item
-that addresses it.
+> **Superseded at /work, 2026-08-11.** The mechanism deferral to #7452 landed as planned, and
+> #7474 is assigned to Phase 4. The separate Phase 4 **issue** was NOT filed: the
+> `code-simplicity-reviewer` CONCUR gate DISSENTed, on two grounds verified before adopting —
+> the work is 3 files / ~25 lines (inside the fix-inline threshold), and a milestone issue in
+> *this* tracker could never be closed, because the two-step update behaviour belongs to the
+> Claude Code plugin harness. Shipped instead as docs in the same PR (`README.md` `## Updating`,
+> `plugins/soleur/README.md` `## Known Issues`, `docs/pages/getting-started.njk`), with the
+> harness half sent upstream as `feature-request-plugin-update-surfaces-install-divergence.md`.
+> Net issue flow **−1** rather than 0.
+
+**Note on scope — corrected at review.** Whether closing #7474 resolves the *reported* incident
+depends on which generator was at work, and the plan's own hypothesis table does not settle it:
+
+- Under **H2** (instruction/payload split — rated PLAUSIBLE *and consistent with the report*,
+  since the reporter saw `SOLEUR_ROOT_OK=1`, a gate that only exists post-#7443, while
+  `installed_plugins.json` held a pre-#7443 SHA) the reporter's next run executes a `sync.md`
+  carrying these guards against the same stale root, the marker fires, and the incident **is**
+  resolved.
+- Under **H3** (a merely-old install running its own old `sync.md`) it is not.
+
+An earlier draft of this note asserted the H3 conclusion flatly. That is the same error class
+UC1 refuses on `reason=stale-install` — reasoning from the least-supported branch — pointed the
+other way, and it under-sold the change.
 
 ---
 
