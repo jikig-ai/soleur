@@ -1,0 +1,212 @@
+---
+title: "CLO counsel review — registry zot container-log shipper, Art. 30 PA-8 amendment (#7440)"
+type: clo-attestation
+date: 2026-08-12
+issue: 7440
+pr: 7444
+attestation-authority: clo
+status: WITHHELD (CLO-agent-attested, Soleur-as-tenant-zero v1)
+disposition: BLOCKED
+disposition_history: "BLOCKED at first review (B1-B6) — 2026-08-12"
+tier_classification: "Tier 3 (internal record-keeping) — Art. 30(1)(d)/(g) amendment to an existing Processing Activity. No new recipient, no new sub-processor, no new third-country transfer, no user-facing legal-document surface. `docs/legal/**` untouched, so none of the five mirror/SHA/heading gates are engaged."
+semver: "N/A — no `docs/legal/**` document changed; TC_VERSION unaffected"
+brand_survival_threshold: single-user incident
+attested_commit_range: origin/main...HEAD (legal surface: 3 insertions / 3 deletions across 2 files)
+written_against: the diff as landed and the implementation it describes, not the plan
+re_evaluation_triggers:
+  - "Any change admitting PUBLIC ingress to zot (an inbound rule on `hcloud_firewall.registry`, or a tunnel/proxy topology that puts a forwarded public address into a top-level zot log field). This is the trigger that converts `clientIP` from estate metadata into Art. 4(1) personal data on a path that carries no redaction. It is the single strongest external-counsel candidate on this Activity."
+  - "Execution of the Better Stack s.r.o. Vendor DPA (currently PENDING). Four emitters now rely on an unexecuted Art. 28(3) instrument; execution retires that exposure and should be recorded in the same pass."
+  - "First arms-length (non-Jikigai) principal holding `zot-pull` / `zot-push` credentials. The §(g) basis for declining a general free-text scrubber is that zot's identity model carries only service principals; a human-held credential re-opens that reasoning."
+  - "Any zot version bump that changes the log schema — in particular one that stops self-masking `Authorization`, moves credentials outside the `headers` object, or adds a top-level identifier field."
+---
+
+# CLO counsel review — #7440 / PR #7444 (registry zot container-log shipper)
+
+This audit is the load-bearing evidence for the `/ship` Phase 5.5 Counsel-Review CLO-Attestation Gate on PR #7444. The gate fired because the diff touches `knowledge-base/legal/` and the plan declares `brand_survival_threshold: single-user incident`. No `[DRAFT — pending CLO/counsel review]` markers were present, so this is a pure attestation rather than a marker-clearing pass.
+
+I am the reviewing authority for the Soleur-as-tenant-zero v1 posture. The operator is a non-lawyer founder and does not sign off here.
+
+**Disposition: BLOCKED.**
+
+The safeguards this change describes are real, and I verified them against the code rather than against the prose. The redaction boundary is correctly designed, correctly implemented, and correctly tested. That is not what blocks this.
+
+What blocks it is that the register's headline factual claim about *why this change matters* is false, and the falsity runs in the unsafe direction — it tells a reader the registry host had no direct path to Better Stack before this PR, when it has had two since #6122/#6244, and one of them ships zot log content through no redactor at all. A supervisory authority reading PA-8 §(d)/§(g) as amended would form a materially wrong picture of this host's egress posture, and would form it in the direction of believing more is covered than is.
+
+Every blocker below is small and locally fixable. None requires redesigning anything that was built.
+
+---
+
+## 1. Per-artifact verdicts
+
+| # | Artifact | Verdict | Basis |
+|---|----------|---------|-------|
+| 1 | `knowledge-base/legal/article-30-register.md` — PA-8 §(d) recipients (line 177), `[2026-08-12 UPDATE (#7440 / ADR-184)]` block | **BLOCKED** | **B1.** The block's headline — "the **FIRST** that reaches source 2457081 **WITHOUT** Vector" — is false. See §2. Everything else in the block is verified sound: no new recipient, no new sub-processor, no new third-country transfer, correct Art. 30(1)(d) characterisation, correct INERT statement. |
+| 2 | `knowledge-base/legal/article-30-register.md` — PA-8 §(g) TOMs (line 180), `[2026-08-12 UPDATE (#7440 / ADR-184)]` block | **BLOCKED** | **B2** — the redaction assurance is written at host level ("Because `soleur-registry` runs no Vector agent, ... its own `redact()` is the whole boundary") and is false at host level. **B3** — "each with a mutation arm proving the assertion can fail" is not true of the file it cites. The substantive description of `redact()` itself is **verified correct in every particular**; see §3. |
+| 3 | `knowledge-base/legal/article-30-register.md` — PA-8 §(c) categories of personal data (line 174) | **BLOCKED** | **B4.** The §(d) block states in terms that this edit "makes the phrase 'shipped by Vector' in this cell and in §(c) an incomplete description of this Activity" — and then leaves §(c) unamended. A register that names its own inaccuracy and does not repair it is worse than one that has not noticed. Compounded by the unrecorded `clientIP` category; see §4. |
+| 4 | `knowledge-base/legal/article-30-register.md` — Vendor / Sub-Processor Mapping, Better Stack row (line 446) | **BLOCKED** | **B5.** Still reads "Vector-shipped journald + host_metrics; `userIdHash` pseudonymised at the VRL boundary". Not annotated. The same row already carries the exact annotation pattern this omission needs, added by #7100 for the PA-31 CLI-stderr path. The file's own precedent was available and not followed. |
+| 5 | `knowledge-base/legal/compliance-posture.md` — Better Stack sub-processor row (line 96) | **BLOCKED** | **B6.** The edit created a contradiction inside a single table cell: the new parenthetical says the `pii_scrub_*` transforms "do not cover it", and two sentences later the cell still asserts, unqualified, "Pseudonymisation: `userIdHash` HMAC-SHA256 at the VRL boundary". Style observation at §6.1. |
+| 6 | `apps/web-platform/infra/cloud-init-registry.yml` — `zot-log-shipper.sh` `redact()` | **VERIFIED SOUND** (not a legal artifact; reviewed as the referent of §(g)) | Allowlist, depth-coverage, fail-closed and residual-refusal all confirmed against the code and against a 150/150 suite run. See §3. |
+
+**Overall disposition: BLOCKED.** Six blockers, B1–B6. Recommended wording for all six is drafted at §7.
+
+---
+
+## 2. B1 — the "FIRST without Vector" claim is false
+
+The §(d) block opens:
+
+> **[2026-08-12 UPDATE (#7440 / ADR-184): a FOURTH emitter, and the FIRST that reaches source 2457081 WITHOUT Vector.**
+
+`soleur-registry` has been reaching Better Stack Logs source 2457081 without Vector since well before this PR. On `origin/main`, `apps/web-platform/infra/cloud-init-registry.yml` already contains two direct `curl` POSTs to `${betterstack_ingest_url}`, each with its own `Authorization: Bearer $TOKEN` and no Vector agent anywhere in the path:
+
+- the `SOLEUR_ZOT_DISK` 5-minute cron reporter (#6122 / #6244), and
+- the `SOLEUR_PRIVATE_NIC` guard reporter.
+
+Both are unchanged by this PR. The claim is not merely imprecise; it is the load-bearing premise of the whole entry, and it is wrong.
+
+The distinction that *is* real, and that the register should have recorded instead, is a payload-class distinction rather than a transport one. The pre-existing reporters emit a fixed-schema `key=value` line assembled by the template from values the template chose. The new shipper emits **whole zot journald rows** — variable content, shaped in part by whatever a client puts on the wire. That is the change that carries the data-protection significance, and stating it correctly costs one sentence.
+
+This matters beyond pedantry because B1 and B2 compound. Told that Vector's absence is new, a reader infers that whatever redaction now exists at the emitter is the host's first and therefore complete emitter-side control. Neither half of that inference holds.
+
+---
+
+## 3. The redaction claim, checked against the code
+
+This is the question the gate was convened to answer, so I answer it directly and in full.
+
+**Is "redaction is owned by the emitter itself" true of `redact()`? Yes — every specific property §(g) asserts is true.** I verified each against `apps/web-platform/infra/cloud-init-registry.yml` (the `zot-log-shipper.sh` `write_files` block) and confirmed the behavioural contract by running `apps/web-platform/infra/zot-log-shipper.test.sh`: **150 passed, 0 failed.**
+
+- **Name allowlist, not denylist — confirmed.** `HDR_KEEP` enumerates nine routing headers (`content-type`, `content-length`, `accept`, `accept-encoding`, `user-agent`, `host`, `connection`, `range`, `docker-distribution-api-version`). The jq `scrub` function redacts the value of every key in a `headers` object that is *not* in that list. A header nobody anticipated is redacted by construction. T6 pins this positively with `X-Future-Header`, and — importantly — the suite's earlier form of that assertion was the *inverse* (it asserted an unknown header **survived**) and was corrected under #7444 F-10. The assertion now points the right way.
+- **Depth and case coverage — confirmed.** `walk(...)` reaches every object at any depth and the container key is compared `ascii_downcase`, so `{"request":{"headers":…}}`, `{"Headers":…}`, a top-level array, and a bare top-level `{"Authorization":…}` are all covered. Each of those five shapes leaked in an earlier draft and each now has a T6b fixture.
+- **Fails closed — confirmed, and confirmed at the right seam.** The JSON/non-JSON branch is chosen by an explicit `jq -e 'type == "object" or type == "array"'` probe *before* redaction, not by whether the redaction pipeline happened to exit zero. That distinction is the difference between failing closed and failing open, and the code gets it right. A JSON row whose `headers` value is not an object raises `error("nonobj headers")`; `redact()` returns non-zero; the caller drops the row, accounts it under its own `reason=redact_failed`, and advances the cursor. It is not shipped.
+- **Non-JSON backstop plus residual refusal — confirmed.** A `sed -E … gI` pass covers all five `CRED_HDRS` names across bare, quoted and bracketed renderings, and a following `grep -qiE` refuses to ship any row where a credential-bearing header name still carries a non-`REDACTED` value. `CRED_HDRS` is single-sourced between the two, so they cannot drift apart.
+- **Applied to every shipped row — confirmed.** In the read loop, `redact()` sits ahead of `sanitize()` and `ship()` on the only path that emits row content. The other two things that reach `ship()` are drop-accounting rows and the boot marker, both assembled entirely from template-controlled scalars.
+
+**Is there any path by which an `Authorization` / `Cookie` / `x-api-key` value reaches the POST through this shipper?** Routes to the wire are exhaustive and I walked all four:
+
+1. JSON row with an object-valued `headers` at any depth → allowlist redacts it.
+2. JSON row with a non-object `headers` → `error(…)` → dropped, accounted.
+3. JSON row with no `headers` key and the credential embedded as free text inside some other string value → **not redacted, ships.**
+4. Non-JSON row → `sed` backstop, then residual refusal → redacted or dropped.
+
+Route 3 is a real residual, and §(g) **discloses it accurately**: "the boundary covers the header object and the `Authorization`-shaped renderings a plaintext line can take — it is not a general free-text PII scrubber". The stated basis for accepting it — that zot's identity model carries no email or `user_id`, its accounts being the `zot-pull`/`zot-push` service principals — is confirmed against the zot config (`"auth": {"htpasswd": …}`, deny-by-default `accessControl`). I accept that reasoning for this emitter.
+
+Two smaller observations, neither blocking. `X-Forwarded-For` is not in `HDR_KEEP` and is therefore redacted — a genuine strength worth having on the record, because it is what stops a future proxy topology from leaking a forwarded public address through the *headers* path. And `user-agent`, `range` and `accept` are allowlisted and client-controlled, so a private-net client can place arbitrary text of its own choosing into a shipped row; that is its own data, on a deny-all-public host, and I do not consider it material.
+
+**So the §(g) description of `redact()` is accurate. What is inaccurate is its scope.**
+
+### B2 — the assurance is written at host level and is false at host level
+
+> "Because `soleur-registry` runs no Vector agent, the shared `pii_scrub_*` VRL transforms are structurally unavailable to this emitter and **its own `redact()` is the whole boundary**."
+
+The subject of that sentence is the host. Read at host level it is false, and the counter-example ships the same content to the same source.
+
+The pre-existing `SOLEUR_ZOT_DISK` reporter carries a field `zot_last_err`, built from zot's own log output by a four-tier sample: `panic:`/`fatal error`/`[signal SIG`/`runtime error`, then `"level":"(error|fatal)"`, then a `cannot |failed to |unable to |…` sweep, and finally — when none of those match — `docker logs --tail 3 zot`. It is then passed through `tr '\n\r\t' ' ' | tr -cd '\40-\176' | tr -d '"\\' | head -c 300`.
+
+That pipeline is the *payload-integrity sanitizer*. It is not a redactor, and the template's own comments are scrupulous elsewhere about not conflating the two. There is no `redact()` anywhere on this path — I grepped the first 500 lines of the file and the string does not appear.
+
+The fallback tier is the one that matters. Under ordinary operation zot logs every request at `info`, so `docker logs --tail 3` is routinely three `HTTP API` rows carrying the full `headers` object. zot self-masks `Authorization` on the pinned image — but the template's own measurement note records that a **non-`Authorization` header is logged verbatim** (`"X-Custom":["plainvalue"]`), which is precisely why the new shipper was built around the header object rather than around one header's known masking. So a `Cookie` or `X-Api-Key` value can reach Better Stack through the sibling reporter, within its 300-character cap, having passed through nothing that was trying to stop it.
+
+I want to be exact about what I am and am not saying. **This PR did not introduce that path**, the exposure is bounded (≤300 chars, sampled, and only when such a row lands in the selected tier), the host takes no public ingress, and the credential would be a private-net client's own registry credential. I am not blocking on the existence of the gap. I am blocking because **this PR is the one that writes into the Art. 30 register a host-level sentence asserting a boundary the host does not have**, and I will not attest a security-measures cell that overstates coverage in the direction of safety.
+
+The fix is to scope the sentence to the emitter and disclose the sibling path as a known bounded residual. That is honest, it is short, and it costs the change nothing.
+
+The underlying question — whether `zot_last_err` should route through `redact()` — is an engineering decision and is **referred to the CTO**, not resolved here. It should carry its own issue. My concern is discharged by accurate disclosure either way.
+
+### B3 — the mutation-arm claim is not true of the file it cites
+
+> "Enforced by behavioural tests asserting against the bytes leaving the process, each with a mutation arm proving the assertion can fail (`apps/web-platform/infra/zot-log-shipper.test.sh` §T6/§T6b)."
+
+`zot-log-shipper.test.sh` contains no mutation harness. The word "mutation" appears three times in it, always in prose describing past defects. What the suite actually carries is a harness canary (proving `assert()` registers both verdicts), an assertion floor of 150 enforced from an `EXIT` trap, and per-block non-vacuity controls — for instance T6's "the row shipped (non-vacuity for the four assertions below)" and T6b's "a credential-free plaintext line still ships, content intact". Those are good controls. They are not mutation arms, and they prove a different thing: that the leak assertions are not vacuously satisfied by a dropped or empty row.
+
+The mutation evidence does exist — an 11-mutant battery, all RED against a GREEN baseline — but it was run at development time and is recorded only in the PR's `session-state.md`. An auditor following the citation in the register will not find it.
+
+What makes this more than a slip is where the wording came from. The sibling #6982 block in the same cell says "Enforced by behavioural tests (`apps/web-platform/infra/git-data-emit.test.sh`) that assert against the bytes leaving the process, each carrying a mutation arm proving the assertion can fail" — and **that claim is true**: `git-data-emit.test.sh` carries `mutate_del`, `mutate_sub` and `run_mutant` as resident harness functions, and even guards against a vacuous mutation arm. The #7440 block borrowed a sentence whose assurance was earned by a different file, and pointed it at a file that has not earned it. That is the drift class this authority is specifically charged with catching.
+
+---
+
+## 4. Categories of personal data, and `clientIP`
+
+**Is the categories statement still accurate for this emitter? No — because there isn't one.** §(c) was not amended, and it contains no occurrence of `registry`, `zot`, `IP address`, `client IP` or `remote_addr`. The registry plane is absent from the cell that exists to describe what personal data goes where.
+
+Worse, §(c) as it stands reads:
+
+> "From PR #4279 onward, Vector reads journald … and ships journald + host_metrics to Better Stack Logs as a separate processor under §(d). The VRL `pii_scrub_drop_userdata` + `pii_scrub_structured` + `pii_scrub_string` transforms … provide defense-in-depth Art-9 user-content drop + `userId` → `userIdHash` rename + string-level scrub **before egress**."
+
+A reader confined to §(c) — which is where a supervisory authority goes first — concludes that everything reaching Better Stack passes those transforms. The §(d) block predicts exactly this misreading, names it, and leaves it in place. **The register's pseudonymisation machinery (`SENTRY_USERID_PEPPER`, Recital 26) is a Sentry/Vector-plane property and confers nothing on the registry plane**, and the confirmation asked for is: yes, §(c)'s current wording can be read as claiming protection this path does not have, and it should be read that way, because nothing in the cell tells the reader otherwise.
+
+**Is `clientIP` shipped? Yes, unredacted.** zot emits it as a top-level zerolog field — the measured fixture is `"clientIP":"10.0.1.30:39330"` — and `redact()` touches only `headers` objects and keys named `authorization`. It reaches the POST verbatim.
+
+**Is it personal data? On the current topology, no.** `hcloud_firewall.registry` is declared with zero inbound rules, so the public interface is deny-all; ingress is intra-`10.0.1.0/24`, and the Cloudflare tunnel's origin is `tcp://10.0.1.30:5000`, which means even a tunnelled pull presents the connector's private address to zot rather than the initiator's public one. Every `clientIP` zot can observe is therefore an RFC1918 address belonging to a host in the controller's own estate. Under *Breyer* the analysis turns on whether the controller can combine the address with additional data to reach a natural person; here the only additional data is the estate's own IaC, and it resolves `10.0.1.30` to a server. It identifies a machine. It is not Art. 4(1) personal data.
+
+**But that conclusion rests entirely on a firewall invariant that appears nowhere in the legal record**, and §(g)'s stated basis for declining a free-text scrubber reasons only about zot's identity model carrying no email or `user_id`. That is true and it is also beside the point for the one identifier class present in every single row. A future inbound rule, or a proxy configuration that lands a forwarded public address in a top-level field, silently converts `clientIP` into personal data on a path with no redaction and no disclosure. The register must state the category, state the conclusion, and state the condition the conclusion depends on. That is why it is a re-evaluation trigger in this audit's frontmatter, and why the §(c) fix at §7 carries it.
+
+---
+
+## 5. Art. 30(1) characterisation and Art. 33/34 — CONFIRMED
+
+**The characterisation is right and I confirm it.** This is an Art. 30(1)(d)/(g) record-keeping discharge. Nothing here engages Art. 33 or Art. 34.
+
+- **No personal data breach.** Art. 4(12) requires a breach of security leading to accidental or unlawful destruction, loss, alteration, or unauthorised disclosure of or access to personal data. Nothing was destroyed, lost, altered, or disclosed to an unauthorised party. Better Stack is an existing PA-8 recipient on this exact source, under processor terms, and the transfer is intra-EU (CZ controller → DE `eu-fsn-3`).
+- **No new recipient, sub-processor, or third-country transfer** — verified. The host is in the existing Hetzner EU account under the same AVV; the source ID is unchanged.
+- **The `#6982` precedent is correctly invoked.** That block recorded a third emitting host on the ground that "the SET of hosts that can emit personal-data-adjacent context grew, which is an Art. 30(1)(d) record-keeping fact even when the recipient list is unchanged". #7440 generalises "hosts" to "emitters", which is the more precise framing given that this host was already counted. Characterisation accurate.
+- **The INERT statement is accurate** — verified against `apps/web-platform/infra/zot-registry.tf` and `apply-web-platform-infra.yml`: `hcloud_server.registry` is cloud-init-only per ADR-096 and the registry resources are `OPERATOR_APPLIED_EXCLUSION`s, so merging applies nothing and delivery rides a subsequent operator-authorized host replace. This is also what keeps B2's residual from crystallising on merge.
+- **Lawful basis is adequate and unchanged.** PA-8 rests on Art. 6(1)(f) (legitimate interest in service security and integrity, balanced against confidentiality and mitigated by access scoping and short retention) and Art. 6(1)(c) (Art. 33 clock-anchor evidence). A new emitter within the same purpose set requires no new basis and no fresh LIA. Purpose (b)(vi) — off-host long-tail operational log aggregation for diagnostic recall without SSH — covers this squarely.
+
+One Art. 28(3) observation, recorded rather than blocking. The Better Stack Vendor DPA is still `PENDING` in `compliance-posture.md`. This change adds a fourth emitter's worth of reliance on an unexecuted processor instrument. The gap is pre-existing and independently tracked (AC15 escalation to `compliance/critical`), and the INERT posture means no additional data flows on merge — so it does not block this diff. It is in the frontmatter triggers.
+
+---
+
+## 6. Non-blocking observations
+
+**6.1 — House style: the `compliance-posture.md` edit is in-place rather than appended.** The sub-processor table's convention, visible in the Hetzner row directly above at line 85, is a dated bracketed block: `**[2026-07-17 (Ref #6538/#6463): …]**`. The #7440 edit instead splices a parenthetical into the middle of prose written on 2026-05-22. It carries its own `#7440/ADR-184` provenance, so the trail is reconstructible and I do not treat it as an audit-trail failure — but it silently changes what a dated row asserts, and the file has a better pattern available. Worth conforming when B6 is fixed, since that cell is being edited anyway.
+
+**6.2 — ADR renumbering: CLEAN.** The shipper's ADR was renumbered 179 → 182 → 184 during review, so I checked for stragglers. `ADR-179`, `ADR-182` and `ADR-185` have **zero** occurrences in either legal file. Both files reference `ADR-184` only, and only in the new blocks. `ADR-179` on `origin/main` is claimed by an unrelated decision (bare-plugin-root anchor), so a stale reference would have pointed somewhere real and wrong — it does not. Nothing to fix. Correctly, ADR-185 (`user_data` headroom policy) is not referenced from the legal corpus; it has no legal surface.
+
+**6.3 — CI gates: none engaged.** The diff touches no `docs/legal/**` file and no `plugins/soleur/docs/pages/legal/**` mirror, so the scope-block placement linter, the mirror-drift ratchet, the `check-tc-document-sha.sh` pin, the heading-parity vitest and the `EXPECTED_COUNT` sentinel are all out of scope. No re-pin is required and no `SOLEUR_LEGAL_DRIFT_ACCEPT` is needed. `knowledge-base/legal/` is the internal accountability corpus and is not a published surface.
+
+**6.4 — The `SOLEUR_ZOT_LOG_BOOT` marker is clean.** The `runcmd` boot reporter added by this PR ships `boot_id`, hostname, and two enum flags (`shipper_cron`, `journald_storage`). No personal data, no client-influenced content. It needs no §(c) entry and does not change the emitter count in any way that matters to §(d).
+
+---
+
+## 7. Drafted wording for the six blockers
+
+Offered as drafts, not as mandated text. Any wording that states the same facts accurately discharges the blocker.
+
+**B1 — PA-8 §(d), replace the opening clause.** Replace "a FOURTH emitter, and the FIRST that reaches source 2457081 WITHOUT Vector." with:
+
+> a FOURTH emitter, and the first to carry VARIABLE, CLIENT-INFLUENCED log content to source 2457081 without Vector. `soleur-registry` has reached this source without Vector since #6122/#6244 — the `SOLEUR_ZOT_DISK` reporter and the `SOLEUR_PRIVATE_NIC` guard both `curl`-POST directly, and both are unchanged here. What is new is the payload class, not the transport: a fixed-schema `key=value` line assembled by the template is joined by whole zot journald rows whose content is shaped in part by what a client puts on the wire. That is the change with data-protection significance.
+
+**B2 — PA-8 §(g), scope the assurance and disclose the sibling path.** Replace "its own `redact()` is the whole boundary" with "its own `redact()` is the whole boundary **for this emitter**", and append before the closing sentence:
+
+> **It is NOT the whole boundary for the host, and that is recorded rather than left to inference.** The pre-existing `SOLEUR_ZOT_DISK` reporter POSTs to this same source and carries `zot_last_err`, a ≤300-character sample of zot's own log output (tiered: `panic:`/`fatal error`/signal/`runtime error`, then `level:error|fatal`, then a `cannot|failed to|unable to` sweep, then a `docker logs --tail 3` fallback). That sample passes through the payload-integrity sanitizer only and through no `redact()` at all. On the fallback tier it is routinely an `info`-level `HTTP API` row carrying the `headers` object; zot self-masks `Authorization` on the pinned image but does not mask `Cookie`, `X-Api-Key` or arbitrary headers. Recorded as a known, bounded residual on a host that takes no public ingress; remediation tracked at #<TBD>.
+
+**B3 — PA-8 §(g), correct the test-assurance sentence.** Replace it with:
+
+> Enforced by behavioural tests asserting against the bytes leaving the process, each block paired with a non-vacuity control proving the assertion is not satisfied by a dropped or empty row (`apps/web-platform/infra/zot-log-shipper.test.sh` §T6/§T6b; 150/150 at attestation, with a harness canary and a 150-assertion floor). Validated additionally at development time against an 11-mutant battery (all RED against a GREEN baseline). Unlike `git-data-emit.test.sh` in the #6982 entry above, that battery is **not** resident in the suite.
+
+**B4 — PA-8 §(c), append a bracketed block** (the cell currently has none for this Activity):
+
+> **[2026-08-12 UPDATE (#7440 / ADR-184): the Vector framing above is an incomplete description of this Activity.** Not every path to Better Stack Logs source 2457081 traverses Vector. `soleur-registry` POSTs directly by `curl`: the pre-existing `SOLEUR_ZOT_DISK` and `SOLEUR_PRIVATE_NIC` reporters, and from #7440 the zot container-log shipper. The `pii_scrub_*` VRL transforms named above do NOT run on those paths and no `userIdHash` pseudonymisation occurs on them — **the Recital 26 basis stated in this cell is a Sentry/Vector-plane property and must not be read as covering the registry plane.** Categories on the registry plane: OCI image references and digests, HTTP method / path / status / latency / byte-count, `User-Agent`, and `clientIP`. **`clientIP` is shipped unredacted** (zot emits it as a top-level field; the emitter's redaction covers header objects, not top-level scalars). It is not Art. 4(1) personal data on the current topology: `hcloud_firewall.registry` carries zero inbound rules, so ingress is intra-`10.0.1.0/24` plus a Cloudflare tunnel whose origin is `tcp://10.0.1.30:5000` — every observable `clientIP` is an RFC1918 address of a host in the controller's own estate, identifying a machine and not a natural person. **That conclusion is TOPOLOGY-DEPENDENT.** Any inbound rule admitting public ingress to zot, or any configuration that lands a forwarded public address in a top-level zot field, converts `clientIP` into personal data on a path carrying no redaction, and requires this cell, §(g) and the emitter to be revisited. `X-Forwarded-For` is not in the emitter's header allowlist and is therefore redacted, which bounds — but does not close — the proxy case. Recorded as a re-evaluation trigger.**]
+
+**B5 — Vendor / Sub-Processor Mapping, Better Stack row (line 446), append** — following the #7100 pattern already resident in that row:
+
+> **[2026-08-12 (#7440): PA-8 §(d)/§(g) record `soleur-registry` as a DIRECT, non-Vector emitter to source 2457081 — the pre-existing `SOLEUR_ZOT_DISK`/`SOLEUR_PRIVATE_NIC` reporters and the zot container-log shipper. "Vector-shipped … pseudonymised at the VRL boundary" above describes the Vector plane and does not hold for these paths: no VRL transform runs and no `userIdHash` is computed. Emitter-side redaction on the log-shipper path is a header-object name allowlist that fails closed; on the `SOLEUR_ZOT_DISK` path it is a payload-integrity sanitizer only.]**
+
+**B6 — `compliance-posture.md` line 96, qualify the pseudonymisation sentence.** Replace "Pseudonymisation: `userIdHash` HMAC-SHA256 at the VRL boundary (`apps/web-platform/infra/vector.toml` `pii_scrub_*` transforms)." with:
+
+> Pseudonymisation: `userIdHash` HMAC-SHA256 at the VRL boundary (`apps/web-platform/infra/vector.toml` `pii_scrub_*` transforms) — **on the Vector-shipped paths only. The direct `soleur-registry` emitters noted above traverse no VRL transform and carry no `userIdHash` pseudonymisation.**
+
+Per §6.1, consider recasting the whole #7440 amendment in that cell as a dated `**[2026-08-12 (Ref #7440/ADR-184): …]**` block, matching the Hetzner row's convention.
+
+---
+
+## 8. Re-review path
+
+Fix B1–B6 and re-invoke this gate. Re-review is confined to the two legal files and should take one pass — I do not need to re-verify `redact()`, the Art. 30(1) characterisation, the lawful basis, the recipient/sub-processor/transfer analysis, the INERT posture, or the ADR cross-references. All are recorded as sound in §§3–6 above and are not re-litigable absent a change to the implementation they describe.
+
+On a clean re-review this becomes `status: SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)` / `disposition: DISCHARGED`, with `disposition_history` extended.
+
+**Referred out of this domain:** whether `zot_last_err` should route through `redact()` on the `SOLEUR_ZOT_DISK` path is a CTO decision (§3, B2). My gate is discharged by accurate disclosure regardless of which way it goes, but it should carry its own issue rather than being folded into a docs fix.
+
+**Standing note.** This attestation is the v1 *internal* sign-off under the Soleur-as-tenant-zero posture. The operator retains an optional veto. External counsel re-review is reserved for the frontmatter triggers, of which the public-ingress trigger is the strongest candidate.
