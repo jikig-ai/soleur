@@ -147,8 +147,18 @@ const WEB_GZIP_FLOOR = 10_000;
 // level differences + CI jitter, tight enough to catch a re-inlined script re-ballooning the raw
 // payload. The FLOOR (10,000 B) is non-vacuity: the modeled render must gzip to something real,
 // so a broken model that gzips near-nothing (e.g. accidentally x-run placeholders) fails loudly.
-const GIT_DATA_BUDGET = 28_000;
-const GIT_DATA_FLOOR = 10_000;
+// (#7264) RETUNED for the STRIPPED render. These bracketed the unstripped document until
+// the template strip landed, so they measured a payload no host receives.
+//
+// TWO DIFFERENT NUMBERS, deliberately. terraform's own base64gzip of the real render is
+// 12,588 B (git-data-userdata-budget.sh, the authoritative gate). THIS model computes
+// 6,040 B, because it approximates variable-length values from SECRET_LENGTHS rather than
+// substituting real secrets — the same systematic gap the registry arm carries. So the
+// bracket is set against the MODEL's output, not against the artifact's: 9,000 keeps a
+// ~1.5x re-inlining tripwire, 3,000 is non-vacuity (a model that stopped substituting
+// content, or a strip that ate the payload, gzips to near-nothing and reds here).
+const GIT_DATA_BUDGET = 9_000;
+const GIT_DATA_FLOOR = 3_000;
 // (#7278) registry base64gzip'd budget. THE REGISTRY HAD NO ARM HERE AT ALL until #7278, and
 // that absence is the whole finding: `hcloud_server.registry` has rendered
 // `base64gzip(templatefile("cloud-init-registry.yml", …))` since #6122 with no comment strip and
@@ -472,6 +482,61 @@ function registryStripIsApplied(tfSrc: string): boolean {
   return /local\.registry_rationale_strip/.test(src.slice(open, end + 1));
 }
 
+// (#7264) THE GIT-DATA PAIR. Mirrors the registry treatment directly above, because #7264
+// gave git-data the same shape: a SECOND local (`git_data_template_rationale_strip`, distinct
+// from the payload-only `git_data_rationale_strip` — ADR-152 forbids sharing them) wrapping
+// the render in `replace()`. Before this, the git-data arm below modelled the UNSTRIPPED
+// document, so its budget bracketed a payload no host receives.
+//
+// The render lives in the module, not a root, and is assigned to `rendered` rather than
+// `user_data` (the roots wrap `base64gzip(module.git_data_userdata.rendered)`), so the anchor
+// differs from the registry's — the balanced-paren bound is the same.
+function gitDataStripRegex(tfSrc: string): RegExp {
+  const src = stripHclLineComments(tfSrc);
+  const all = [...src.matchAll(/git_data_template_rationale_strip\s*=\s*"((?:[^"\\]|\\.)*)"/g)];
+  if (all.length === 0) {
+    throw new Error("local.git_data_template_rationale_strip not found in the render module");
+  }
+  if (all.length > 1) {
+    throw new Error(
+      `local.git_data_template_rationale_strip must be declared exactly once, found ${all.length}`,
+    );
+  }
+  let body = all[0][1];
+  if (!body.startsWith("/") || !body.endsWith("/")) {
+    throw new Error(
+      `git_data_template_rationale_strip must be a slash-delimited terraform regex literal, got: ${body}`,
+    );
+  }
+  body = body.slice(1, -1);
+  if (!body.startsWith("(?m)")) {
+    throw new Error(
+      `git_data_template_rationale_strip must be multiline-anchored ((?m)), got: ${body}`,
+    );
+  }
+  return new RegExp(toNewlineOnlyMultiline(body.slice("(?m)".length)), "g");
+}
+
+function gitDataStripIsApplied(tfSrc: string): boolean {
+  const src = stripHclLineComments(tfSrc);
+  const anchor = /rendered\s*=\s*replace\(\s*templatefile\(/.exec(src);
+  if (anchor === null) return false;
+  const open = src.indexOf("(", anchor.index + anchor[0].indexOf("replace"));
+  let depth = 0;
+  let end = open;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === "(") depth++;
+    else if (src[i] === ")") {
+      depth--;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  return /local\.git_data_template_rationale_strip/.test(src.slice(open, end + 1));
+}
+
 // The registry render is `base64gzip(replace(templatefile(...), local.registry_rationale_strip, ""))`
 // — render FIRST, then strip, then gzip. Modeled in that exact order: stripping before
 // substitution would measure a different payload than terraform produces, and the substituted
@@ -528,10 +593,27 @@ describe("rendered user_data size (Hetzner 32,768 B cap)", () => {
     // git-data is a no-docker host: #5921's bake-and-extract does not apply. Post-#5918 its RAW
     // render is ~41.7 KB (over cap), so git-data.tf wraps it in base64gzip(). We model the
     // base64gzip OUTPUT (the string Hetzner stores against the cap) with REAL script content.
-    const size = renderedGzipB64Len("cloud-init-git-data.yml", gitDataTf);
+    // (#7264) STRIPPED, like the registry arm. The template is now comment-stripped at render
+    // time, so modelling the raw document measured a payload no host receives — the budget
+    // bracketed ~28 KB against an actual stored 12,588 B.
+    const gdApplied = gitDataStripIsApplied(gitDataTf);
+    const size = renderedGzipB64LenStripped(
+      "cloud-init-git-data.yml",
+      gitDataTf,
+      gdApplied ? gitDataStripRegex(gitDataTf) : null,
+    );
     expect(size).toBeLessThan(HETZNER_CAP);
     expect(size).toBeLessThan(GIT_DATA_BUDGET);
     expect(size).toBeGreaterThan(GIT_DATA_FLOOR); // non-vacuity: model must gzip real content
+  });
+
+  test("git-data user_data applies the template strip through the shared local (#7264)", () => {
+    // The same two one-edit reverts the registry arm pins, on the host whose user_data is
+    // ForceNew: drop the `replace()` wrapper (terraform accepts an orphaned local, and
+    // fmt/validate are blind to it), or keep `replace()` with an INLINE literal so the local
+    // becomes decoration. The plausible inline expression is the PAYLOAD one, which deletes
+    // `#cloud-config` and boots the host dark.
+    expect(gitDataStripIsApplied(gitDataTf)).toBe(true);
   });
 
   test("registry host base64gzip'd user_data is under the Hetzner cap (#7278)", () => {

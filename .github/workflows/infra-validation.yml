@@ -1233,6 +1233,17 @@ jobs:
       - name: Verify the git-data render-strip contract (parity + shebang + no-op guards)
         run: bash apps/web-platform/infra/git-data-render-strip-parity.test.sh
 
+      # (#7264) The TEMPLATE half of the same contract. The suite above proves the two
+      # hand-mirrored copies of each EXPRESSION agree; this one proves the expression applied
+      # to the cloud-init BODY does the right thing to the DOCUMENT — that the stripped render
+      # still opens with `#cloud-config` (ADR-152 names deleting it as a dark-host defect: the
+      # apply succeeds, the host boots, cloud-init never recognises the payload), that every
+      # shebang survives, that the strip is not a no-op, that each write_files/runcmd entry
+      # differs ONLY by strip-matching lines, and that no interpolated payload delivers a line
+      # the template strip would eat. Both suites are required; neither is sufficient.
+      - name: Verify the git-data cloud-init template strip (header + per-entry + interpolation)
+        run: bash apps/web-platform/infra/git-data-template-strip.test.sh
+
       # (#7025) The rung-2 rehearsal route's drift-guards: root purity, the distinct state
       # key, the no-auto-commit permission set, the dry-run default, the shared concurrency
       # literal, and the trailing hyphen on the rehearsal name prefix. Registered HERE

@@ -23,13 +23,24 @@
 #
 # Exit 0 under cap, 1 over, 2 if the render itself failed.
 #
-# Usage: bash apps/web-platform/infra/git-data-userdata-budget.sh [--json] [out-rendered]
+# Usage: bash apps/web-platform/infra/git-data-userdata-budget.sh [--json] [out-rendered] [out-raw]
+#   out-rendered receives the STRIPPED render — the bytes the host is actually given, after
+#                local.git_data_template_rationale_strip. This is the host-truth artifact and
+#                is what every boot-fidelity predicate must read.
+#   out-raw      receives the UNSTRIPPED render. Optional. Its consumer is
+#                git-data-template-strip.test.sh, which needs both documents to compare them
+#                (shebang survival, the saving bound, and the per-entry diff). An earlier
+#                version of this comment claimed it existed so the runcmd rehearsal could
+#                "keep one arm on a corpus that still contains comments" -- that suite reads
+#                it only for a comment-count sanity check, and no predicate arm runs against
+#                it, so the discriminating power that sentence promised does not exist.
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JSON=0
 [ "${1:-}" = "--json" ] && { JSON=1; shift; }
 OUT="${1:-}"
+RAW_OUT="${2:-}"
 
 command -v terraform >/dev/null 2>&1 || {
   echo "git-data-userdata-budget: SKIP — terraform not on PATH" >&2
@@ -49,7 +60,8 @@ trap 'rm -rf "$TFDIR"' EXIT
 # the real pubkeys/ids/token are all shorter than or equal to these.
 cat > "$TFDIR/main.tf" <<EOF
 locals {
-  git_data_rationale_strip = "/(?m)^[ \\t]*#([^!\\n][^\\n]*)?\\n/"
+  git_data_rationale_strip          = "/(?m)^[ \\t]*#([^!\\n][^\\n]*)?\\n/"
+  git_data_template_rationale_strip = "/(?m)^[ \\t]*#([ \\t][^\\n]*)?\\n/"
   vars = {
     git_data_bootstrap               = replace(file("${DIR}/git-data-bootstrap.sh"), local.git_data_rationale_strip, "")
     git_data_pre_receive_placeholder = replace(file("${DIR}/git-data-pre-receive-placeholder.sh"), local.git_data_rationale_strip, "")
@@ -80,7 +92,8 @@ locals {
   }
 
   rendered = templatefile("${DIR}/cloud-init-git-data.yml", local.vars)
-  stored   = base64gzip(local.rendered)
+  stripped = replace(local.rendered, local.git_data_template_rationale_strip, "")
+  stored   = base64gzip(local.stripped)
 }
 EOF
 
@@ -96,24 +109,59 @@ if [ -s "$TFDIR/err" ] || printf '%s' "$raw" | grep -q 'known after apply'; then
   exit 2
 fi
 
+raw_render="$TFDIR/raw.yml"
+printf '%s\n' "$raw" | sed -e '1{/^<<EOT$/d}' -e '${/^EOT$/d}' > "$raw_render"
+
+# The STRIPPED render is the host-truth artifact. Read it from terraform rather than
+# re-implementing the strip here: a second implementation is exactly the restatement
+# ADR-152's registry precedent records as the defect that produced a phantom cap breach.
+stripped_raw=$(console 'local.stripped')
+# CHECKED, because the guard below would otherwise blame the wrong thing. A failed console
+# here yields an empty render, the `#cloud-config` header guard fires, and it tells the
+# reader to go look at local.git_data_template_rationale_strip -- for a terraform fault. The
+# sibling `stored` read is guarded; this one was not.
+if [ -z "$stripped_raw" ] || [ -s "$TFDIR/err" ]; then
+  echo "git-data-userdata-budget: terraform console failed evaluating local.stripped" >&2
+  sed 's/\x1b\[[0-9;]*m//g' "$TFDIR/err" >&2
+  exit 2
+fi
 rendered="$TFDIR/rendered.yml"
-printf '%s\n' "$raw" | sed -e '1{/^<<EOT$/d}' -e '${/^EOT$/d}' > "$rendered"
+printf '%s\n' "$stripped_raw" | sed -e '1{/^<<EOT$/d}' -e '${/^EOT$/d}' > "$rendered"
 
 stored=$(console 'local.stored' | tr -d '"')
 [ -n "$stored" ] || { echo "git-data-userdata-budget: base64gzip failed" >&2; exit 2; }
 
-raw_bytes=$(wc -c < "$rendered")
+raw_bytes=$(wc -c < "$raw_render")
+stripped_bytes=$(wc -c < "$rendered")
 stored_bytes=${#stored}
 cap=32768
 headroom=$(( cap - stored_bytes ))
 
+# THE HEADER GUARD. `#cloud-config` is a directive that is a comment by syntax, so a strip
+# expression one character too permissive deletes it. Nothing downstream fails loudly: the
+# apply succeeds, the host boots, and cloud-init never recognises the payload. Assert the
+# first line of the STRIPPED render, because that is the document the host is handed.
+if [ "$(head -1 "$rendered")" != "#cloud-config" ]; then
+  echo "git-data-userdata-budget: the stripped render does not begin with '#cloud-config' — cloud-init would not execute it and the host would boot dark. Check local.git_data_template_rationale_strip." >&2
+  exit 1
+fi
+
+# THE NOT-A-NO-OP GUARD (ADR-152's third verification arm). A strip that matched nothing
+# satisfies every preservation check while delivering none of the saving, and the only
+# symptom is a cap breach much later.
+if [ "$stripped_bytes" -ge "$raw_bytes" ]; then
+  echo "git-data-userdata-budget: the strip removed nothing (raw ${raw_bytes} B -> stripped ${stripped_bytes} B). local.git_data_template_rationale_strip is not matching." >&2
+  exit 1
+fi
+
 [ -n "$OUT" ] && cp "$rendered" "$OUT"
+[ -n "$RAW_OUT" ] && cp "$raw_render" "$RAW_OUT"
 
 if [ "$JSON" -eq 1 ]; then
-  printf '{"raw":%s,"stored":%s,"cap":%s,"headroom":%s}\n' \
-    "$raw_bytes" "$stored_bytes" "$cap" "$headroom"
+  printf '{"raw":%s,"stripped":%s,"stored":%s,"cap":%s,"headroom":%s}\n' \
+    "$raw_bytes" "$stripped_bytes" "$stored_bytes" "$cap" "$headroom"
 else
-  echo "git-data user_data: stored=${stored_bytes} B / cap=${cap} B (headroom ${headroom} B, raw ${raw_bytes} B)"
+  echo "git-data user_data: stored=${stored_bytes} B / cap=${cap} B (headroom ${headroom} B, raw ${raw_bytes} B, stripped ${stripped_bytes} B)"
 fi
 
 if [ "$stored_bytes" -ge "$cap" ]; then
