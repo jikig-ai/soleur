@@ -7,7 +7,7 @@ related_adrs: [ADR-074, ADR-091, ADR-093, ADR-151, ADR-155, ADR-171]
 related: [7442, 7450, 6222, 7474, 7452, 7453, 7502]
 amended_by:
   - "#7474 (2026-08-11) — producer presence as a fourth precondition; see ## Amendment 2026-08-11"
-  - "#7450 (2026-08-12) — the skills secret-gate subset, then decisions 8/9/10 and the §R1 settlement from the CTO ruling; see ## Amendment — 2026-08-12"
+  - "#7450 (2026-08-12) — the skills secret-gate subset; decisions 8/9/10 and the §R1 settlement from the CTO ruling; then amendment items A10 (§R3 measured on the skill surface) and A11 (root-outside-worktree REJECTED); see ## Amendment — 2026-08-12"
 related_plans:
   - knowledge-base/project/plans/2026-08-11-fix-sync-plugin-root-anchoring-plan.md
   - knowledge-base/project/plans/archive/20260812-125433-2026-08-11-fix-sync-producer-freshness-probe-plan.md
@@ -256,8 +256,19 @@ the workspace.
   and legal drafts safe to publish. And the failure would be **invisible in aggregate** —
   observability layer 7 (ADR-171) has no durable artifact on this path, so the only evidence
   is each operator's terminal. That is why §R3 was gated on a *measurement* rather than an
-  argument, and why the halt messages now carry `SOLEUR_*_HALT` markers: a mass halt should
-  be visible in telemetry on the first occurrence, not inferred from support volume.
+  argument, and why the halt messages now carry `SOLEUR_*_HALT` markers.
+  **Corrected 2026-08-12 (round-2 review).** This bullet first read *"a mass halt should be
+  visible in telemetry on the first occurrence, not inferred from support volume"*, and that
+  was **false as written**: the markers had been added to payload markdown while NO consumer
+  matched them, on either surface. What they buy, and only this: on the **hosted** surface they
+  are now in `MARKER_RE` (mirrored, deliberately not paged — a customer with no plugin
+  installed must not page anyone); on the **CLI** surface they make each halt individually
+  self-describing and machine-discriminable *in the operator's session*, so a caller can branch
+  on `reason=redaction-ineffective` versus `reason=plugin-root-unverified` instead of parsing
+  prose. They do **not** make halts countable across the installed base — that needs a durable
+  artifact, which layer 7 does not have here, and it remains open at **#7452**, exactly as this
+  §Consequences list already records for `SOLEUR_SYNC_ROOT_UNRESOLVED` three bullets above. Two
+  markers of identical construction had contradictory claims in one document.
   **The branch did not occur** — §R3 is measured positive on both surfaces (see
   `## Amendment — 2026-08-12`) — but the residual is recorded because the measurement is
   construction-specific, not a flat proof.
@@ -295,7 +306,7 @@ the workspace.
 - **R2.** `exit 2` halts the bash subprocess, not the agent. The "run the block, not the
   bare command" construction is what makes the halt load-bearing; guard condition 5 keeps it
   from being edited away.
-- **R3.** **The substitution mechanism is CORROBORATED, not proven.** An in-session A/B
+- **R3.** **The substitution mechanism is CORROBORATED, not proven.** *(SUPERSEDED 2026-08-12 by amendment item **A10**: the direct arm was executed on both the command and skill surfaces, with an ambient-decoy control. Read A10 before relying on this paragraph.)* An in-session A/B
   observed the harness substituting a bare token in plugin markdown while leaving `:-`
   literal, but its two arms differed in *two* variables (bare-vs-`:-` **and**
   prose-inline-span-vs-bash-fence), so that observation alone does not separate them. The
@@ -748,7 +759,7 @@ carries a planted-decoy positive control and a corpus-wide zero.
 
 ### Amendment continued — 2026-08-12 (#7450 review remediation): §R3 measured on the skill surface, and the root-outside-worktree form REJECTED
 
-**10. §R3 is measured positive on the SKILL surface, by direct execution.** The original
+**A10. §R3 is measured positive on the SKILL surface, by direct execution.** The original
 measurement covered the *command* surface (`commands/go.md`) and bridged to the skill surface
 by an inference the review panel correctly called void: non-substitution of a *non-matching*
 literal cannot distinguish "the pass ran and declined" from "the pass never ran here" — both
@@ -774,7 +785,7 @@ value from the install path, not from the environment. Evidence:
 This also makes the pre-fix `:-` form a **reproduced** exploit rather than a modelled one: in
 the same session it resolved this repo's own redaction gate to an attacker-chosen root.
 
-**11. REJECTED — asserting the resolved root lies outside the working tree.** The review panel
+**A11. REJECTED — asserting the resolved root lies outside the working tree.** The review panel
 prescribed, at each secret gate:
 
 ```bash
@@ -784,7 +795,7 @@ case "$(cd "${CLAUDE_PLUGIN_ROOT}" && pwd -P)/" in "$(git rev-parse --show-tople
 Its diagnosis is right — manifest-plus-name is a shape check and a `gh pr checkout` tree
 satisfies it byte-for-byte. Its prescription is rejected on three grounds:
 
-1. **It guards an unreachable operand.** Per decision 10 there is no environment-supplied
+1. **It guards an unreachable operand.** Per **A10 above** there is no environment-supplied
    value at these sites to constrain.
 2. **It breaks dogfooding on every plain clone.** On a normal `git clone` the plugin root *is*
    inside the working tree, so the assertion halts every invocation. It appeared to pass only
@@ -808,3 +819,54 @@ landing quietly; reversing this decision means superseding `b1-disposition.md` f
 in plugin markdown is substituted there is **unmeasured**. If it is not, the operand becomes
 attacker-reachable on that surface and decision 11 must be revisited — with cost 2 solved first,
 since a naive `case` would halt every contributor there too.
+
+### Amendment numbering — a note, because a cross-reference already broke on it
+
+This document carries **two** independent numbered series and they collide. `### Decision N`
+headings are the ADR's decisions; the bolded `**N.**` items inside the 2026-08-12 amendments are
+amendment *items*. Both reached 10, and both had 6, 7, 8 and 9 before that.
+
+That is not cosmetic: `A11`'s first ground cited "decision 10", and a reader following it landed
+on `### Decision 10` — the option-(e) scoping section about `resolve-git-root.sh` as a workspace
+root, which says nothing about environment-supplied values. So **the first ground of the B1
+rejection read as unsupported**, in the one place where the argument most needed to hold.
+
+The trailing amendment items are therefore prefixed `A10`, `A11`, and any further amendment item
+should continue that series. Cite `### Decision N` headings as "decision N" and amendment items as
+"A*N*"; never as a bare number.
+
+### Amendment item A12 — the widened 18c ratchet: DECLINED, and why (recorded, not silent)
+
+The CTO ruling's item 2 had two halves. The **stakes-keyed** half shipped (Test 24, and it found
+live sites). The other half — *"widen 18c to any `${CLAUDE_PLUGIN_ROOT:-` under the payload with a
+monotonically-shrinking allowlist for the ~105 sites deferred to #7453, not a flat zero"* — did
+**not**, and nothing recorded that either way. A binding item with no disposition is a silent
+non-discharge, which is the same class as recording a design as a delivered control (§R5's C6).
+
+**Declined here, deliberately, and routed to #7453 with the migration it ratchets.** The ruling's
+stated purpose for that half was to stop the deferred population GROWING; it buys drift-prevention,
+not vulnerability closure, and the security-load-bearing half is delivered by Test 24 with no
+allowlist at all. Building an anti-rot allowlist format, wiring its parse and proving it shrinks is
+more new machinery than the P0 needs, and it belongs with the migration whose progress it would
+measure.
+
+Measured residual at the time of writing: **~105 `${CLAUDE_PLUGIN_ROOT:-` occurrences across 33
+files**, in three distinct default arms (`:-./plugins/soleur`, `:-plugins/soleur`,
+`:-../../plugins/soleur`).
+
+### Amendment item A13 — a FOURTH anchor pattern, previously unrecorded
+
+`ship/SKILL.md` carries `"${CLAUDE_PLUGIN_ROOT:-.}/../../scripts/…"`. Neither §R4's enumeration nor
+amendment item 8's "Pattern C" (the unconditional `git rev-parse` shape) covers it, and it is worse
+than either: with the variable unset it is `./../../scripts/…`, CWD-relative and **escaping the
+tree**; with it set, it escapes the payload upward. It is the same enumeration-by-syntax blind spot
+ruling item 2 exists to close, one syntax further out. Routed to **#7453** as a named pattern so the
+migration does not have to rediscover it.
+
+### Amendment item A14 — `community` belongs in the migrated set
+
+The migrated set is recorded in two places (this ADR and ADR-093) and both omitted `community`,
+which this PR migrated to the bare quoted anchor at five sites: the `community-router.sh` dispatch
+plus four `*-setup.sh` operator instructions that were **bare repo-relative** — strictly worse than
+a `:-` arm, since a bare path is CWD-relative unconditionally. Those four were found by Test 24's
+invariant-keyed rewrite, not by review.

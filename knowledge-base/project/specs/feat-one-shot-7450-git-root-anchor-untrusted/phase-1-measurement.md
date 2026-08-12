@@ -106,8 +106,29 @@ CLAUDE_PLUGIN_ROOT=/tmp/DECOY-EVIL-ROOT claude -p \
    a literal fixed by the trusted loader before bash ever sees the text. This is the control that
    makes the claim non-confoundable — without it, "ambient ignored" and "ambient never propagated"
    are indistinguishable.
-3. **The pre-fix `:-` form is a reproduced exploit, not a theorised one.** In the same session,
-   same environment, it resolved this repo's own redaction gate to an attacker-chosen root.
+3. **The pre-fix `:-` form expands to an attacker-chosen root** — observed, not modelled. In the
+   same session and environment it produced
+   `/tmp/DECOY-EVIL-ROOT/skills/incident/scripts/redact-sentinel.sh`.
+
+**Scope of that third claim, stated precisely because an earlier draft overstated it.** It first
+read *"a reproduced exploit … it resolved this repo's own redaction gate to an attacker-chosen
+root."* Two corrections:
+
+- What executed was a **synthetic single-skill probe plugin** carrying the same construction, not
+  `incident/SKILL.md`. The real gate was never run and no script was planted at the decoy path, so
+  what was measured is the **expansion**, not an end-to-end compromise.
+- The vector reproduced is the **ambient-environment** variant (an attacker exports
+  `CLAUDE_PLUGIN_ROOT`). The **`gh pr checkout` git-root** variant — the one #7450 is titled for,
+  where `$(git rev-parse --show-toplevel)` becomes the reviewed party's tree — is **not** what this
+  arm executed. It remains modelled, and its premise (`review/SKILL.md` instructs `gh pr checkout`)
+  is verifiable by reading that file rather than by this measurement.
+
+Both vectors are closed by the same change, because both reach the operand through the removed
+default arm. But they are different vectors and only one was run.
+
+**Re-runnable.** The probe is committed at [`arm4-probe/`](./arm4-probe/) rather than described —
+`<sandbox>` in the table above was a placeholder path, and a measurement nobody can re-execute is
+a claim.
 
 **§R3 is upgraded to "proven for the measured construction" on BOTH surfaces** — a bare token in a
 fenced `bash` block in plugin markdown, on the command surface (Arm 1) and on the skill surface

@@ -45,12 +45,18 @@ the wrong instrument — see cost 1, which lands hardest on exactly the populati
 
 ## The three costs
 
-1. **It breaks dogfooding on any plain clone.** On a normal (non-bare) `git clone` of this repo the
-   plugin root *is* inside the working tree, so the assertion halts every invocation. It passes on
-   the machine where §B1 was measured only by accident of local layout: the install is the bare
-   root while review runs in `.worktrees/`, so the two paths happen not to nest.
+1. **It breaks dogfooding on any plain clone.** On a normal `git clone` of this repo the plugin
+   root *is* inside the working tree, so the assertion halts every invocation.
+   *(Corrected at round-2 review: it appeared to pass on the machine where §B1 was measured
+   because review runs in a **linked worktree** whose toplevel does not contain the install path —
+   NOT because that install root is **bare**, which the first draft claimed. An ordinary non-bare
+   clone using `.worktrees/` passes on the review path too. The conclusion is unaffected: a session
+   rooted at the clone top level, which is the common entry point, halts on every invocation.)*
 2. **It reintroduces the banned construct into the exact files this PR de-git-roots.** The three
-   gate files currently carry **zero** `git rev-parse` occurrences (verified). `case` puts
+   gate files carry **zero `git rev-parse` in executable (fenced `bash`) positions** — the single
+   textual occurrence is the prose *documenting* the ban, which is why Test 21 is fence-scoped.
+   *(An earlier draft said "zero occurrences", flatly, which is false and contradicted the PR
+   body's own correctly-scoped wording.)* `case` puts
    `git rev-parse --show-toplevel` back into all three, forcing the guard to allowlist its own
    subjects — the "guard that must exempt the thing it guards" shape.
 3. **It re-adds a CWD-resident trust decision that the binding ruling removed.** The CTO ruling §4

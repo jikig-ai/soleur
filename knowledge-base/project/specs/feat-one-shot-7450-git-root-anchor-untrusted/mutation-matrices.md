@@ -66,9 +66,9 @@ reproduced here, because inventing them after the fact would be exactly the self
 failure this project has already been bitten by twice
 (`learnings/2026-07-19-a-self-graded-mutation-battery-went-vacuous-twice-in-one-pr…`).
 
-## Battery 3 — the three assertions added by the review remediation
+## Battery 3 — the four assertions added by the review remediation (Tests 21, 22, 23, 24)
 
-Guard 2 Tests 21 (B1 invariant), 22 (C10 telemetry markers), 23 (C12 / AC5d).
+Guard 2 Tests 21 (B1 invariant), 22 (C10 telemetry markers), 23 (C12 / AC5d), 24 (stakes-keyed).
 
 Harness: `cp -r` to a temp sandbox — every `${REPO_ROOT}`-relative read enumerated **from the
 guard itself** rather than guessed, because a sandbox missing one produces a RED control that is
@@ -76,7 +76,7 @@ indistinguishable from a real regression (this happened on the first run and was
 worked around). Un-mutated control run FIRST and required GREEN. Each mutation compared against a
 pristine backup before its verdict is believed.
 
-**Control: GREEN, 96 pass / 0 fail. Result: 9/9 RED. Zero survivors.**
+**Control: GREEN, 96 pass / 0 fail. Result: 15/15 RED. Zero survivors, zero void rows.**
 
 | # | Mutation | Target | Required | Observed |
 | --- | --- | --- | --- | --- |
@@ -89,6 +89,37 @@ pristine backup before its verdict is believed.
 | M-G | Revert `community`'s router anchor to the `:-` form — **the site Test 24 found** | SUT | RED at Test 24 | **RED** |
 | M-H | **Harness mutation** — gut the credential predicate so discovery returns nothing | **guard** | RED at Test 24's floor | **RED** |
 | M-I | **Harness mutation, PARTIAL** — narrow the predicate so one required member vanishes while the COUNT stays healthy | **guard** | RED at Test 24's floor | **RED** |
+| M-J | **A credential-setup invocation reverted to the BARE repo-relative form** — the shape the `:-`-keyed predicate could not see at all | SUT | RED at Test 24 | **RED** |
+| M-K | Gate fence relabelled ` ```sh `, with B1's `case` planted inside it — one word, still executable to the agent | SUT | RED at Test 21 | **RED** |
+| M-L | **Comment laundering** — delete the non-empty arm, leave its text in a comment | SUT | RED at Test 23 | **RED** |
+| M-M | `exit 2; } >&2` — the redirect on the enclosing BRACE GROUP, marker line clean | SUT | RED at Test 22 | **RED** |
+| M-N | **Population growth** — a NEW unmarked fail-closed halt added to a gate fence | SUT | RED at Test 22's growth floor | **RED** |
+| M-O | **Harness dispatch** — every PASS/FAIL counter neutered (a suite that asserts nothing) | **guard** | RED at the EXPECTED_MIN floor | **RED** |
+
+### Round 2 — the axes the first nine rows never edited
+
+The nine rows above were written against the pre-review predicates and reported 9/9. Review then
+found **15 vacuities on eight axes none of them touched**, having verified its own instruments
+first (a known-positive and a known-negative both fired), so every survivor it reported was real
+rather than a mutation that failed to land. `M-J`…`M-O` are those axes: invocation SHAPE (bare vs
+`:-`), fence SYNTAX, comment laundering, redirect PLACEMENT, population GROWTH, and harness
+DISPATCH.
+
+**Five rows had to be re-pointed** after their landing checks reported `NOT APPLIED` against the
+rewritten code. Reported here rather than silently repaired, because a stale mutation reports the
+baseline and a baseline is indistinguishable from a pass.
+
+`M-G` was re-pointed for a different and more interesting reason: its original target,
+`community-router.sh`, correctly **LEAVES** the population under acquisition-keying (its only
+credential mention is inside a routing-table string), so the row had been passing for the wrong
+reason. It now targets `trigger-cron`, which is in the population — and in that form it initially
+**SURVIVED**, exposing the assign-then-invoke gap described below.
+
+The assign-then-invoke gap M-G exposed is worth its own line: Test 24's execution-context check
+required a verb on the SAME line, so it missed `TRIGGER="…"` followed by `bash "$TRIGGER"` —
+THE dominant shape in this corpus, and the reason Guard 1 needs G2 at all. All three of
+`trigger-cron`'s sites are one assignment and two bare quoted-path invocations, so reverting its
+anchor to `:-` was invisible until the check learned both shapes.
 
 M-B is the row that answers the panel's post-mortem directly: *harness/guard mutation* was one of
 the seven axes M1–M10 never touched, and it is the axis on which a guard silently stops guarding.
@@ -110,8 +141,13 @@ Both are recorded because each fails in the direction of false confidence.
    indistinguishable from a real one, in a battery whose whole purpose is to be believed.
    `restore()` is now total rather than per-row.
 2. **The anti-vacuity floor was a COUNT, and counts fail open on shrinkage.** Test 24's floor
-   was `>= 5` against a real population of 21. M-H — which guts three-quarters of the credential
-   predicate — **SURVIVED it**. That is finding A10 (`GATE_REF_FLOOR` fails open on additions) in
+   was `>= 5` against a real population of 21, and a PARTIAL predicate mutation survived it.
+   *(Corrected at round-2 review: this paragraph credited **M-H**, and re-measurement shows M-H
+   as committed EMPTIES the population — 0 < 5, which a count floor catches trivially. The row
+   that actually survives a count floor is **M-I**, which drops the population to 9 while one
+   required member vanishes. The conclusion — membership beats a count — is unchanged; the
+   evidence row cited for it was wrong, and the battery script's own comment for M-H said
+   "so the population goes empty", contradicting the narrative.)* That is finding A10 (`GATE_REF_FLOOR` fails open on additions) in
    another guise, reintroduced by me in the same PR that fixed it. The floor is now **required
    membership**: three pinned scripts, each a distinct credential-acquisition shape (secrets-manager
    read / ambient bot token / platform API key set). **M-I exists specifically to prove the

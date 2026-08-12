@@ -118,8 +118,8 @@ export interface BuildAgentEnvOptions {
    * The ~105 non-gate skills still emit `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}`
    * (deferred to #7453) — for those, this injection is what stops the `:-` arm
    * resolving into the connected repo, and it is load-bearing. The secret gates
-   * (`incident`, `legal-generate`, `linear-fetch`, `trigger-cron`) were migrated
-   * by #7450 to the BARE `${CLAUDE_PLUGIN_ROOT}` with no default arm, so on those
+   * (`incident`, `legal-generate`, `linear-fetch`, `trigger-cron`) and `community`
+   * were migrated by #7450 to the BARE `${CLAUDE_PLUGIN_ROOT}` with no default arm, so on those
    * this injection is defence-in-depth rather than the sole control: with the var
    * absent the bare form yields a root-anchored nonexistent path and the gate
    * refuses, instead of silently resolving into the tree. Do not read the
