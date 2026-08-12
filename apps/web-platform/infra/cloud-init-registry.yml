@@ -427,8 +427,8 @@ write_files:
         while IFS='=' read -r _lsk _lsv; do
           case "$_lsk" in
             post_fail) LOG_SHIPPER_POST_FAIL="$_lsv" ;;
-            dropped_cum) LOG_SHIPPER_DROPPED_CUM="$_lsv" ;;
-            drop_seq)    LOG_SHIPPER_DROP_SEQ="$_lsv" ;;
+            dropped_cum) case "$_lsv" in ''|*[!0-9]*) : ;; *) LOG_SHIPPER_DROPPED_CUM="$_lsv" ;; esac ;;
+            drop_seq)    case "$_lsv" in ''|*[!0-9]*) : ;; *) LOG_SHIPPER_DROP_SEQ="$_lsv" ;; esac ;;
             last_ok_epoch)
               case "$_lsv" in
                 ''|*[!0-9]*) : ;;
@@ -574,7 +574,7 @@ write_files:
   # block below), so the lines are ALREADY on the host as CONTAINER_NAME=zot. Nothing about zot's
   # own configuration changes here, which keeps this clear of ADR-172 §3's write-surface deadlock.
   #
-  # WHY NOT VECTOR (the issue's literal framing). Decided in ADR-182. The binding reason is
+  # WHY NOT VECTOR (the issue's literal framing). Decided in ADR-184. The binding reason is
   # PAYLOAD DESTRUCTION, not credentials: the shared vector.toml drops any top-level `message` key
   # as an Art-9 user-content key, and zerolog's log text IS a top-level `message` — so a
   # Vector-shipped zot line would arrive with its message deleted. Nominally shipping, actually
@@ -632,7 +632,7 @@ write_files:
       # 5000 * 300 / 86400 = 17 per 5-minute window; both literals are explicit so the suite can
       # assert them (a derived-at-runtime value would not be assertable).
       #
-      # THE TICK IS THE WINDOW. This runs as a 5-minute cron one-shot (ADR-182 §4), so INTERVAL_S
+      # THE TICK IS THE WINDOW. This runs as a 5-minute cron one-shot (ADR-184 §4), so INTERVAL_S
       # describes the cron cadence rather than an in-process rolling window. That is what dissolves
       # the "a line crossing the cap mid-interval is attributable to either interval" ambiguity a
       # long-lived process has to paper over: a tick's count starts at zero and ends at exit.
@@ -675,11 +675,17 @@ write_files:
       if [ -r "$STATE_FILE" ]; then
         while IFS='=' read -r k v; do
           case "$k" in
-            post_fail)     POST_FAIL="$v" ;;
+            # DIGIT-GUARDED (#7444 R22). These feed $(( )) arithmetic; last_ok_epoch was guarded
+            # and its neighbours were not. Measured: `dropped_cum=N/A` made the script die inside
+            # emit_drops with `unbound variable` on EVERY tick forever, while rows kept shipping
+            # and the cursor kept advancing — the channel looked healthy and drop accounting was
+            # permanently dead. A value containing a space also corrupts the reporter's
+            # key=value LINE for every field after it.
+            post_fail)     case "$v" in ''|*[!0-9]*) : ;; *) POST_FAIL="$v" ;; esac ;;
             last_ok_epoch) LAST_OK_EPOCH="$v" ;;
-            shipped_cum)   SHIPPED_CUM="$v" ;;
-            dropped_cum)   DROPPED_CUM="$v" ;;
-            drop_seq)      DROP_SEQ="$v" ;;
+            shipped_cum)   case "$v" in ''|*[!0-9]*) : ;; *) SHIPPED_CUM="$v" ;; esac ;;
+            dropped_cum)   case "$v" in ''|*[!0-9]*) : ;; *) DROPPED_CUM="$v" ;; esac ;;
+            drop_seq)      case "$v" in ''|*[!0-9]*) : ;; *) DROP_SEQ="$v" ;; esac ;;
           esac
         done < "$STATE_FILE"
       fi
@@ -736,7 +742,7 @@ write_files:
       # CREDENTIAL BACKSTOP — anchored on the RAW QUOTED shape measured above, and applied BEFORE
       # the sanitizer (which strips the very quotes this pattern needs). Both header renderings are
       # covered: the array form zot actually emits, and a bare-string form a future version might.
-      # ANCHORED ON THE HEADER OBJECT WITH A NAME ALLOWLIST (#7444 F-10), which is what ADR-182 §3
+      # ANCHORED ON THE HEADER OBJECT WITH A NAME ALLOWLIST (#7444 F-10), which is what ADR-184 §3
       # and this template have always CLAIMED. The previous form keyed on the literal
       # `[Aa]uthorization`, so it was header-NAME-anchored: measured survivors shipped verbatim
       # and silently — `Cookie`, `X-Api-Key`, `X-Amz-Security-Token` — and `Proxy-Authorization`
@@ -885,7 +891,7 @@ write_files:
         return 1
       }
 
-      # THE TICK IS THE WINDOW (ADR-182 §4). A cron one-shot starts each counter at zero and ends
+      # THE TICK IS THE WINDOW (ADR-184 §4). A cron one-shot starts each counter at zero and ends
       # at exit, so there is no rolling-window boundary to arbitrate and no `maybe_roll_window`.
       WIN_COUNT=0
       WIN_EXEMPT=0
@@ -907,9 +913,17 @@ write_files:
       # behind the ordinary-traffic reason.
       emit_drops() {
         local reason="$1" n="$2"
-        [ "$n" -gt 0 ] || [ "$reason" = "cursor_invalidated" ] || return 0
+        # `n` may be the literal `unknown` on the cursor_invalidated path, where the lost span is
+        # genuinely unbounded and reporting a number would be a lie. Only a numeric count moves
+        # the cumulative total; `unknown` still emits a row and still advances drop_seq, so the
+        # discontinuity is detectable even though its magnitude is not.
+        case "$n" in
+          unknown) : ;;
+          ''|*[!0-9]*) return 0 ;;
+          0) [ "$reason" = "cursor_invalidated" ] || return 0 ;;
+        esac
         DROP_SEQ=$(( DROP_SEQ + 1 ))
-        DROPPED_CUM=$(( DROPPED_CUM + n ))
+        [ "$n" = "unknown" ] || DROPPED_CUM=$(( DROPPED_CUM + n ))
         ship "SOLEUR_ZOT_LOG_DROPPED n=$n interval_s=$INTERVAL_S boot_id=$BOOT_ID seq=$DROP_SEQ cum=$DROPPED_CUM reason=$reason" || POST_FAIL=$(( POST_FAIL + 1 ))
         write_state
       }
@@ -923,8 +937,13 @@ write_files:
       # restart loop or silently gap. Instead it says so and restarts from a BOUNDED recent window.
       if [ -n "$CURSOR" ]; then
         if ! journalctl CONTAINER_NAME=zot --output=json --after-cursor "$CURSOR" -n 0 >/dev/null 2>&1; then
-          emit_drops cursor_invalidated "$WIN_DROPPED"
-          WIN_DROPPED=0
+          # n=unknown, not n=0 (#7444 R21). WIN_DROPPED is initialised to 0 and this runs BEFORE
+          # the read loop, so the count was unconditionally zero — on the ONE reason where the
+          # loss is genuinely unbounded (everything between the dead cursor and --since=-5m).
+          # A reader saw "0 rows lost" across a total-loss event, and dropped_cum never moved.
+          # Only drop_seq changed, and nothing reads that alone. `unknown` is its own state, the
+          # same discrimination F-7 established for post_fail.
+          emit_drops cursor_invalidated unknown
           CURSOR=""
           CURSOR_WAS_INVALIDATED=1
           rm -f "$CURSOR_FILE" 2>/dev/null || true
@@ -1062,14 +1081,19 @@ write_files:
       WIN_DROPPED_EMPTY=0
       write_state
 
-      # A tick that left a row undelivered exits non-zero so the failure is visible from the
-      # journal and from cron's own mail/status, rather than only from the state file.
+      # A tick that left a row undelivered exits non-zero. That exit is visible because the cron
+      # line pipes this program's output through `logger -t zot-log-shipper` — NOT because cron
+      # reports it. The claim that used to sit here ("visible from the journal and from cron's
+      # own mail/status") was false in both halves and three review lenses said so
+      # independently: vixie cron logs job START, not exit status, and `packages:` installs no
+      # MTA, so cron's mail path discards job output entirely. The durable signal remains
+      # post_fail in the state file, which the 5-minute reporter carries on its own egress path.
       [ "$UNDELIVERED" = "0" ] || exit 1
       exit 0
     owner: root:root
     permissions: '0755'
 
-  # A 5-MINUTE CRON ONE-SHOT, NOT A DAEMON (ADR-182 §4). Every unit on this host is Type=oneshot
+  # A 5-MINUTE CRON ONE-SHOT, NOT A DAEMON (ADR-184 §4). Every unit on this host is Type=oneshot
   # and every recurring job is a cron.d line wrapped in `doppler run`; this is the third such line
   # rather than the host's first Restart=always unit.
   #
@@ -1683,7 +1707,7 @@ runcmd:
   # through.
   - systemctl restart systemd-journald || true
   # #7440: the container-log shipper needs no arming step — it is an /etc/cron.d drop-in, and cron
-  # is already enabled above. That absence of a unit to enable is the point (ADR-182 §4): there is
+  # is already enabled above. That absence of a unit to enable is the point (ADR-184 §4): there is
   # no start that can fail, no `failed` state to latch, and nothing to restart.
   # #7440 IN-SURFACE DELIVERY SIGNAL. This host is cloud-init-only, so "was this change ever
   # actually delivered?" is otherwise unanswerable from the observability layer — and it is the

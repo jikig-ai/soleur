@@ -193,7 +193,7 @@ provisioning event, and while the LUKS recut is unfired (#7287) there is no safe
 corollary is that the *read-only* surface is currently the only instrumentable one — so read-only
 instrumentation is not a lesser version of the work, it is the entire near side of the deadlock.
 
-> **Superseded 2026-08-11 (#7440), by ADR-182 §6 — the premise above no longer holds.** The body of
+> **Superseded 2026-08-11 (#7440), by ADR-184 §6 — the premise above no longer holds.** The body of
 > this section is left exactly as written because it was true when written and is the reason this
 > ADR took the shape it did; the correction is appended rather than substituted.
 >
@@ -203,11 +203,11 @@ instrumentation is not a lesser version of the work, it is the entire near side 
 > `registry-host-replace` of the zot-pin ordered path.
 >
 > So the corollary — that the read-only surface is *the only* instrumentable one — is retired.
-> ADR-182 ships a host-side container-log shipper into `cloud-init-registry.yml` that rides that
+> ADR-184 ships a host-side container-log shipper into `cloud-init-registry.yml` that rides that
 > replace. What remains true is the *first* clause: a host-side capability still waits for a
 > provisioning event, and merging one applies nothing.
 >
-> **§3's write-surface finding is undisturbed.** ADR-182 changes no `accessControl` and grants no
+> **§3's write-surface finding is undisturbed.** ADR-184 changes no `accessControl` and grants no
 > `delete`; it reads the journal the container already writes. The deadlock this ADR routed around
 > was about the registry's *write* surface, and that half has not moved.
 

@@ -324,7 +324,7 @@ Recorded in place, because each was a premise a future reader would otherwise re
 | **A7** | Four of six redaction rules **cannot fire** (no email in zot's identity model; no `sync`/`extensions`/`credentialsFile` in the config, so no credentialed upstream URL; htpasswd values never echoed; `Authorization` masked upstream). The `tr` pipeline is **payload integrity**, not redaction, and was mislabelled | **Reduced to sanitizer + one backstop**, with the reframing named so a future reader does not restore five dead rules believing they were safety |
 | **A8** | Phase 5.1's premise was already false — both registry runbooks already declare no-SSH — and it would have pointed operators at a **dark** channel | **Phase cut.** Replaced by an edit to `betterstack-log-query.md`, the reader's actual entry point, which was missing from Files to Edit |
 | **A9** | Nothing wrote into the downstream issue whose criterion this exists to unblock | **Phase 4.3 added** |
-| **A10** | **The C4 finding was false.** An earlier draft asserted `zotRegistry -> betterstack` did not exist; it is at `model.c4:562`. The probe's character class was lowercase-only and could not match the camelCase element name, and the AC built on it **passed on `main` unmodified** | **Corrected to an amendment**, and the AC now asserts amended *content*. The real work was found inside line 562: it asserts the unfired-recut blocker that ADR-179 retires, so the two would have shipped contradicting each other |
+| **A10** | **The C4 finding was false.** An earlier draft asserted `zotRegistry -> betterstack` did not exist; it is at `model.c4:562`. The probe's character class was lowercase-only and could not match the camelCase element name, and the AC built on it **passed on `main` unmodified** | **Corrected to an amendment**, and the AC now asserts amended *content*. The real work was found inside line 562: it asserts the unfired-recut blocker that ADR-184 retires, so the two would have shipped contradicting each other |
 | **A11** | **Wrong test registration point.** `scripts/test-all.sh` does not register infra suites; `run-registered-suites.sh` derives its list from `infra-validation.yml`, which appeared in no Files list. Following the plan literally produced a silent orphan suite | **`infra-validation.yml` added to Files to Edit**, and AC 1 now asserts the suite actually ran rather than that the runner was green |
 | **A12** | **ADR-178 was also taken** — the plan applied the ordinal lesson to 177 and then walked into 178 | **Moved to 179**, with the measurement across all 2,984 refs and the note that `check-adr-ordinals.sh` has no remote-ref logic |
 | **A13** | **The discriminator could never match**: ClickHouse stores `raw` double-encoded, so `caller:zotregistry.dev` becomes a `LIKE` that matches nothing | **Encoding-safe grep token + decode-then-field-isolate** |
@@ -334,7 +334,7 @@ Recorded in place, because each was a premise a future reader would otherwise re
 
 ### ADR
 
-**ADR-179 (provisional ordinal) — "The registry host ships container logs with a self-contained
+**ADR-184 (ordinal settled at implementation time; the plan drafted it as 179) — "The registry host ships container logs with a self-contained
 journald shipper, not a Vector agent."**
 
 1. Container logs leave this host through a **purpose-built journald→ingest shipper** reusing the
@@ -401,7 +401,7 @@ asserts
 > — #7287) and darks the sole pull path. CI-side emission is the entire near side of that deadlock
 > (ADR-172 §8)`
 
-That is **the same premise ADR-179 amends.** Left as-is, `model.c4` and the new ADR ship
+That is **the same premise ADR-184 amends.** Left as-is, `model.c4` and the new ADR ship
 contradicting each other. The amendment must add the container-log channel to the description and
 retire the unfired-recut blocker clause.
 
@@ -424,7 +424,7 @@ undefined-element reference fails there, not at `tsc`.
 
 ### Sequencing
 
-ADR-179 is authored now at `status: adopting`. Its flip to `accepted` is owned by the follow-through
+ADR-184 is authored now at `status: adopting`. Its flip to `accepted` is owned by the follow-through
 probe on the dedicated tracker — which is also why finding A3 mattered: on a closed tracker a real
 PASS produces no artifact, so nothing would ever have flipped it.
 
@@ -618,7 +618,7 @@ discoverability_test:
   shipping PR and the sweeper lists `--state open`, whose reopen path fires only on exit 1, so a
   correct exit-2 probe hosted there would be a permanent silent no-op."* Traced in
   `scripts/sweep-followthroughs.sh`: on a **closed** issue `rc=0` → no action **and no comment**, so
-  even the eventual real PASS would leave no artifact to flip ADR-179; `rc=2` → no action, no
+  even the eventual real PASS would leave no artifact to flip ADR-184; `rc=2` → no action, no
   comment; and `CLOSED_LOOKBACK_DAYS=14` removes the issue from the candidate set entirely after two
   weeks. The PR still carries `Closes #7440`.
 - **Directive** on the dedicated tracker, with the `follow-through` label:
@@ -900,7 +900,7 @@ Per `cq-write-failing-tests-before`. Fixture values are synthesized
 
 ### Phase 4 — Decision records and downstream writes
 
-4.1 Author `ADR-179` (`status: adopting`) with the corrected §2 reason, the first-`Restart=always`
+4.1 Author `ADR-184` (`status: adopting`) with the corrected §2 reason, the first-`Restart=always`
    note, the containment rationale, and the ADR-172 §8 amendment. Include the retraction of the
    pepper argument explicitly.
 4.2 Edit `model.c4`: add `zotRegistry -> betterstack`. Run `c4-code-syntax.test.ts` +
@@ -1000,7 +1000,7 @@ channel and a documented query path.
     Assert the directive's host issue ≠ 7440. The three `BETTERSTACK_QUERY_*` names already exist in
     `scheduled-followthrough-sweeper.yml`; assert their presence and add no workflow edit.
 17. The directive carries the 90-day escalation horizon and the expected-comment-noise note.
-18. `ADR-179` exists (`status: adopting`) with the corrected reason, the explicit retraction of the
+18. `ADR-184` exists (`status: adopting`) with the corrected reason, the explicit retraction of the
     pepper argument, and the ADR-172 §8 amendment. **Ordinal re-derived across all refs and the
     reachable object graph immediately before merge** — 177 is doubly claimed and 178 is taken, and
     `scripts/check-adr-ordinals.sh` has no remote-ref logic, so the plan supplies the command. On
@@ -1035,7 +1035,7 @@ channel and a documented query path.
 27. Measured row volume is compared against the 5,000/day cap and the ~1,440/day floor. **Retuning
     the cap requires another cloud-init edit and therefore another provisioning event**, so the
     follow-up filed in 4.3 owns any retune rather than this AC implying a free adjustment.
-28. ADR-179 flips `adopting → accepted` on the probe's first PASS.
+28. ADR-184 flips `adopting → accepted` on the probe's first PASS.
 
 ## Alternative Approaches Considered
 
@@ -1055,7 +1055,7 @@ channel and a documented query path.
 | **Rehearse on a throwaway Hetzner host** | **Rejected** | Documented stock volatility (`cx23` in `hel1` flipped availability twice in twelve days) adds a scheduling dependency without coverage the local rehearsal lacks |
 | **Assert liveness in a pre-merge AC** | **Rejected** | Structurally impossible; any pre-merge "logs are queryable" claim is an inert-until-dispatched false green |
 | **Request a host replace in this PR** | **Rejected** | A destructive replace of the sole pull path is separately authorized, and #7287 owns the ordered path. This change rides its step 6 |
-| **Enroll the probe on #7440** | **Rejected — it would have been a silent no-op** | The sweeper lists `--state open`; on a closed issue `rc=0` and `rc=2` both take "no action, no comment", and `CLOSED_LOOKBACK_DAYS=14` drops it entirely after two weeks. Even a real PASS would leave nothing to flip ADR-179 |
+| **Enroll the probe on #7440** | **Rejected — it would have been a silent no-op** | The sweeper lists `--state open`; on a closed issue `rc=0` and `rc=2` both take "no action, no comment", and `CLOSED_LOOKBACK_DAYS=14` drops it entirely after two weeks. Even a real PASS would leave nothing to flip ADR-184 |
 
 ## Domain Review
 
@@ -1087,7 +1087,7 @@ The mechanical override does not fire and the semantic sweep agrees. Product tie
 | `apps/web-platform/infra/zot-log-shipper.test.sh` | Shipper invariants: post-strip execution, field-match lockstep, feedback-loop guard, singleton, unit hardening, journald caps, sanitizer vs redaction, envelope schema, rate cap + class exemption, cursor durability |
 | `scripts/followthroughs/zot-log-channel-7440.sh` | The readback verification gate |
 | `tests/scripts/test-zot-log-channel-probe.sh` | Probe fixture suite, including the false-green and PASS-reachability fixtures |
-| `knowledge-base/engineering/architecture/decisions/ADR-179-registry-host-container-log-shipper.md` | Decision + ADR-172 §8 amendment (ordinal provisional — 178 is taken) |
+| `knowledge-base/engineering/architecture/decisions/ADR-184-registry-host-container-log-shipper.md` | Decision + ADR-172 §8 amendment (ordinal provisional — 178 is taken) |
 | A **dedicated follow-through tracker issue** | Hosts the probe directive; must NOT be #7440 |
 
 ## Files to Edit
@@ -1111,7 +1111,7 @@ runners: the #3366 orphan-suite class, silent and green.
 
 **Deliberately NOT edited:** `.github/workflows/scheduled-followthrough-sweeper.yml` (all three
 `BETTERSTACK_QUERY_*` names already present at lines 72–74 — verified, so the edit is a no-op),
-`zot-registry.tf` (no Terraform change), `ADR-096` (restated in one ADR-179 sentence rather than
+`zot-registry.tf` (no Terraform change), `ADR-096` (restated in one ADR-184 sentence rather than
 separately amended).
 
 ## Risks & Mitigations
@@ -1186,3 +1186,32 @@ separately amended).
 - **A plan whose `## User-Brand Impact` section is empty or omits the threshold fails `deepen-plan`
   Phase 4.6.** This plan's threshold is `single-user incident`, which escalates plan-review and
   invokes `user-impact-reviewer`.
+
+
+---
+
+## Addendum — 2026-08-12 (#7444 review round 2)
+
+**Ordinal.** This plan drafted the ADR as `ADR-179`. That ordinal is taken on `origin/main` by
+`ADR-179-bare-plugin-root-anchor-for-customer-facing-executables`, and the shipped decision is
+**ADR-184**. Every reference in the body above has been swept to 182, including a deliverables row
+that named `ADR-179-registry-host-container-log-shipper.md` — a file that has never existed and
+would have resolved to an unrelated ADR.
+
+**The mechanism changed after this plan was written.** A binding CTO ruling replaced the
+`Restart=always` systemd daemon with a 5-minute `/etc/cron.d` one-shot. Where the body above
+describes a unit, `MemoryMax`/`CPUQuota`/`IOWeight` caps, `StartLimitIntervalSec`, or "three
+permanently-resident processes", read ADR-184 §4 instead — those are the artefacts of a shape that
+was not shipped, and the containment the `## User-Brand Impact` section leans on was deleted with
+the unit. The replacement containment is a bounded tick: `timeout 240` inside `flock -n`, on a
+cron slot chosen for forward clearance.
+
+**`error_reporting.fail_loud` is superseded.** It describes "retries once then breadcrumbs to
+journald, mirroring the reporter's `post || post || echo`". The shipper POSTs **once** and breaks
+at the first undelivered row; every shipper row is replayable from the cursor, so an immediate
+second attempt buys nothing the five-minute gap does not. The breadcrumb reaches journald via
+`logger -t` on the cron line, not via cron itself.
+
+**`failure_modes` → "Delivered and dead" is superseded.** Its detection still reads `boot_id`
+drift. Delivery is gated on the presence of the `log_shipper_post_fail=` key; drift is not
+evidence on a host whose NIC guard reboots it as a convergence primitive (#7444 F-7).

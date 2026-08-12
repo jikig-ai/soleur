@@ -305,7 +305,7 @@ printf '%s\n' "$TEST_HOST"
 EOS
 chmod +x "$BIN/hostname"
 
-# Run the shipper once over a fixture journal. The shipper is a cron ONE-SHOT (ADR-182 §4), so
+# Run the shipper once over a fixture journal. The shipper is a cron ONE-SHOT (ADR-184 §4), so
 # there is no ONESHOT override to pass any more — production runs exactly this shape, which is
 # what removes the "the suite drives a mode production does not run" seam.
 run_shipper() {
@@ -417,7 +417,7 @@ assert "T6 redaction: an ALLOWLISTED routing header is preserved (User-Agent is 
 # and was satisfied by an arbitrary UNKNOWN header surviving — which LOCKED THE GAP IN: the rule
 # was header-NAME-anchored on the literal [Aa]uthorization, so Cookie, X-Api-Key and
 # X-Amz-Security-Token all shipped verbatim and silently, while Proxy-Authorization shipped and
-# THEN tripped the probe's own leak detector. Meanwhile ADR-182 §3 and the cloud-init comment both
+# THEN tripped the probe's own leak detector. Meanwhile ADR-184 §3 and the cloud-init comment both
 # claimed anchoring on "the header-object shape rather than trusting one header name's known
 # masking". The redaction is now a name ALLOWLIST over the whole headers object, so the failure
 # mode of an unanticipated header is over-redaction rather than silent leakage.
@@ -700,7 +700,7 @@ assert "T11b BOTH rows were delivered on recovery — nothing was skipped" \
 assert "T11b the previously-failing row came FIRST (order preserved, no reordering)" \
   "head -1 '$H2P' | grep -qF 'FAILME first row'"
 
-# --- T12: CRON CONTRACT — the shape that replaced the daemon (ADR-182 §4) ----------------
+# --- T12: CRON CONTRACT — the shape that replaced the daemon (ADR-184 §4) ----------------
 # This block used to assert a Restart=always unit's resource governance, on the reasoning that
 # caps were "the only containment available" on a host with no in-place execution path. Review
 # disproved the containment itself: IOWeight was a no-op without BFQ and on the wrong cgroup,
@@ -831,7 +831,7 @@ assert "T13 journald SystemMaxUse is exactly 512M (the retention arithmetic depe
   "[[ '$SMU' == '512M' ]]"
 # RuntimeMaxUse is ABSENT ON PURPOSE. journald's default is 10% of /run = ~38MB on this 3,814MB
 # host, so the previous RuntimeMaxUse=64M RAISED the volatile ceiling it was documented as
-# lowering — ADR-182 cites that defect as an argument for deleting the daemon while the template
+# lowering — ADR-184 cites that defect as an argument for deleting the daemon while the template
 # shipped the identical line. Under Storage=persistent the volatile journal is only a fallback,
 # so the correct value is no line at all.
 assert "T13 journald sets NO RuntimeMaxUse (64M raised the ~38M default it claimed to lower)" \

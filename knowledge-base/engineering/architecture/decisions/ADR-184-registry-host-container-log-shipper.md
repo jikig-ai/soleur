@@ -190,7 +190,11 @@ part of the original streaming design that is load-bearing independent of the sc
 
 A tick ends at its first undelivered row and exits non-zero. **Recovery is not the exit code** — it
 is that the cursor was never advanced past the hole, so the next tick resumes exactly there. The
-exit code exists only so a failing tick is visible without SSH. This is also why the shipper posts
+exit code is surfaced by piping the tick through `logger -t zot-log-shipper` on the cron line —
+not by cron, which logs job start rather than exit status and has no MTA on this host to mail
+output to. An earlier draft of this section claimed the exit code alone made a failing tick
+visible without SSH; that was false, and the durable signal is `post_fail` in the state file,
+carried off-box by the 5-minute reporter on its own egress path. This is also why the shipper posts
 each row **once**: the disk reporter retries (`post || post || echo`) because its value is not
 replayable, whereas every shipper row is replayable from the cursor, so an immediate second attempt
 against a briefly-500ing ingest buys nothing the five-minute gap does not buy better — and
@@ -273,13 +277,34 @@ another cloud-init edit and therefore another provisioning event.
 
 ## Ordinal derivation
 
-`scripts/check-adr-ordinals.sh` contains no remote-ref logic, so the ordinal was re-derived here.
-**Quantified over all 2,986 refs** plus the local tree: `ADR-177` is claimed twice
-(`shared-bash-primitives-ship-in-plugin`, `test-runner-result-taxonomy-unresolved-is-not-failed`)
-and `ADR-178` is claimed twice (`guard-contract-as-plan-time-deliverable`,
-`local-gate-declines-are-counted-verdicts`). **179 is the next free.**
+`scripts/check-adr-ordinals.sh` contains no remote-ref logic, so the ordinal has to be re-derived
+by hand — and re-derived **immediately before merge**, because the contended range moves.
 
-A narrower first pass over `refs/remotes/origin` only (65 refs) reported 178 as free — both claims
-live on **local-only branches invisible to origin entirely**, which is a wider blind spot than the
-pushed-branch case the plan warned about. An ordinal probe that does not quantify over local heads
-returns a confidently wrong answer.
+This ADR is **184**, and it has been renumbered **twice**: 179 -> 182 -> 184. The second renumber
+is the point. The 182 derivation was run at the start of this review round and was correct then;
+by the end of the round `feat-one-shot-7471-plugin-delivery-path` had claimed 182
+(`keyless-manifests-and-a-dedicated-marketplace-source`) and another branch had claimed 183. A
+review round is long enough for the contended range to move underneath you, which is why the
+discipline is re-deriving late rather than deriving carefully.
+
+The derivation recorded here previously concluded "179 is the next free",
+which was wrong twice over: `ADR-179` is claimed on `origin/main` by
+`bare-plugin-root-anchor-for-customer-facing-executables`, and the two contenders that derivation
+named as double-claimed (`guard-contract-as-plan-time-deliverable`,
+`local-gate-declines-are-counted-verdicts`) have since settled at **180** and **181**. Preserving a
+derivation that reached the wrong answer, in the ADR's own voice, teaches the method as sound.
+
+The lesson the earlier note drew was also the wrong one. It concluded that the danger was
+*local-only branches invisible to `origin`* — but the collision that actually occurred was **on
+`origin`**, inside the narrow scope that note dismissed as too narrow. So the operative discipline
+is not a wider sweep, it is re-deriving late:
+
+```
+git ls-remote origin 'refs/heads/*' >/dev/null   # refresh
+git for-each-ref --format='%(refname)' | while read -r r; do
+  git ls-tree -r --name-only "$r" -- knowledge-base/engineering/architecture/decisions/ 2>/dev/null
+done | grep -oE 'ADR-[0-9]+' | sort -u | tail -5
+```
+
+Re-run it immediately before merge. An ordinal derived at plan time is stale by the time a review
+round finishes; this one was.

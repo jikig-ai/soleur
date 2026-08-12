@@ -175,7 +175,7 @@ reports the inverted root cause.
 | F-27 | T3/T7's `journalctl…CONTAINER_NAME=zot` greps resolve against the **cursor-probe** line, not the streaming `JARGS` array — anti-correlated with what they name. T10b's `--follow` assertion is anchored on `notail=1`. T8's `flock -n` grep reads `$CI` (3 other matches) not `$UNITBLK`. C12's `--no-archive` is satisfied by the probe's own header prose. | test-design |
 | F-28 | Stale-claim sweep gaps: `ADR-096:575` still says "the **isolated** Better Stack Logs source 2457081"; `ADR-172:76` and `model.c4:301` still assert "**every** host-side emitter reaches this source through a Vector agent that redacts" — which this PR falsifies, and `model.c4:301` is where the PII-safety inference lives. One block got a supersede note while its peer did not. | code-quality, architecture |
 | F-29 | Replicated literals with no parity gate across the emit/readback seam: the envelope prefix has 6 copies, the four evidence classes 4–5 each, `zotregistry.dev/zot/v2/pkg/api` 6 (with **no** producer-side pin — it appears only in a comment). Editing the prefix silently yields `delivered_but_silent`, indistinguishable from a dead shipper. | code-quality |
-| F-30 | Prose volume: 66% of +3392 is comments/docs, with 5 rationales each restated in 4–9 artifacts. ADR-182 should own them; the rest point at it. ~590 LOC reducible. | code-simplicity |
+| F-30 | Prose volume: 66% of +3392 is comments/docs, with 5 rationales each restated in 4–9 artifacts. ADR-184 should own them; the rest point at it. ~590 LOC reducible. | code-simplicity |
 
 ## OWED — P3 (see reports)
 Unvalidated `post_fail` interpolated **before** the free-text `zot_last_err` (breaking that field's
@@ -197,7 +197,7 @@ Fold the shipper into the **existing 5-minute cron** instead of a daemon. That d
 §5, the cursor protocol, the cross-process state channel, window bookkeeping, and ~45 assertions
 (~230 LOC), because a cron one-shot is precisely the sequential-invocation pattern `--cursor-file`
 is documented for — as the ADR's own alternatives row concedes. Cost: ≤5 min latency. If the daemon
-is kept, ADR-182's timer row must state the real trade (seconds-latency vs the host's first
+is kept, ADR-184's timer row must state the real trade (seconds-latency vs the host's first
 always-on unit on the host that darks every deploy), which it currently does not.
 
 ## Verified sound (on the record, so a future pass does not re-litigate)

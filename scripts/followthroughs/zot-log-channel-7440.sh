@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# #7440 / ADR-182 — post-delivery readback for the registry host's zot container-log channel.
+# #7440 / ADR-184 — post-delivery readback for the registry host's zot container-log channel.
 #
 # TRACKER: **#7455** (dedicated). **NOT #7440** — that issue is closed by the shipping PR, and
 # scripts/sweep-followthroughs.sh lists `--state open`, so a probe hosted there would be a
 # permanent silent no-op: on a closed issue rc=0 takes "no action, no comment" and rc=2 likewise,
-# so even the eventual real PASS would leave NO artifact to flip ADR-182 — and CLOSED_LOOKBACK_DAYS
+# so even the eventual real PASS would leave NO artifact to flip ADR-184 — and CLOSED_LOOKBACK_DAYS
 # removes the issue from the candidate set entirely after two weeks. The sweeper resolves the host
 # from the directive comment on #7455, so this reference is for a human reader; changing it does not
 # re-route the probe.
 #
-# WHAT IT CLOSES. ADR-182 ships at status `adopting`. Its flip condition is an OBSERVED
+# WHAT IT CLOSES. ADR-184 ships at status `adopting`. Its flip condition is an OBSERVED
 # envelope-stamped row read back OUT of the warehouse. That cannot happen before merge:
 # hcloud_server.registry is cloud-init-only (ADR-096, ADR-172 §8), every registry resource is an
 # OPERATOR_APPLIED_EXCLUSION, and merging this applies NOTHING. Delivery rides the pending step-6
@@ -159,7 +159,7 @@ decoded=$(printf '%s\n' "$raw_log" | decode_messages)
 # R18). `grep -F` has NO anchor, so the comment that used to sit here claiming "a fixed prefix at
 # offset 0 … can never sit at offset 0" described a property the code did not have. Measured: a
 # warehouse row that merely MENTIONS the envelope mid-line satisfied it, and 30 such rows clear
-# FLOOR_ROWS and exit 0 — auto-flipping ADR-182 to accepted on prose. The three sibling marker
+# FLOOR_ROWS and exit 0 — auto-flipping ADR-184 to accepted on prose. The three sibling marker
 # greps below were anchored all along, which is what made this read as an omission.
 #
 # The prefix contains no ERE metacharacter, so -E changes nothing except adding the anchor.
@@ -380,7 +380,7 @@ echo "      ${n_zot_token} of ${n_envelope} row(s) carry ${ZOT_ONLY_TOKEN}, the 
 echo "      own output produces."
 echo "      The gc start/complete ratio (${n_gc_start}/${n_gc_done}) is now readable, which is what"
 echo "      makes the downstream growth-attribution question answerable from telemetry at all."
-echo "      ADR-182 may now flip adopting -> accepted."
+echo "      ADR-184 may now flip adopting -> accepted."
 # NO ROW EXCERPT. sweep-followthroughs.sh captures this stdout with 2>&1 and posts it as a comment
 # on a PUBLIC repo issue, so anything printed here is published. A raw zot row carries internal
 # 10.0.1.x topology, service usernames, OCI repo names, digests, filesystem paths and User-Agent,

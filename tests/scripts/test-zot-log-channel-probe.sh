@@ -17,7 +17,7 @@
 # THE HIGHEST-VALUE CASE IS C9, THE FALSE-GREEN. Its fixture is TODAY'S ACTUAL PRODUCTION STATE: a
 # window containing nothing but SOLEUR_ZOT_DISK heartbeat rows whose `zot_last_err` field echoes
 # `zotregistry.dev/...`. A bare `--grep zotregistry.dev` returns 53 such rows over 6h right now. If
-# the probe PASSes on that fixture it would auto-close its own tracker and flip ADR-182 on an echo
+# the probe PASSes on that fixture it would auto-close its own tracker and flip ADR-184 on an echo
 # of the very absence it exists to detect.
 #
 # Run: bash tests/scripts/test-zot-log-channel-probe.sh
@@ -359,7 +359,7 @@ C13B_CTL="$TMP/c13b.ctl"; control_row "$DRIFTED_BOOT" 0 > "$C13B_CTL"
 run_probe "$C13B_LOG" "$C13B_CTL"
 assert "C13b 30 rows MENTIONING the envelope mid-line do NOT count as delivery" \
   "[[ '$CASE_RC' -ne 0 ]]"
-assert "C13b and it does not PASS (a prose mention must never flip ADR-182)" \
+assert "C13b and it does not PASS (a prose mention must never flip ADR-184)" \
   "! grep -q 'PASS:' <<<\"\$CASE_OUT\""
 # Non-vacuity in the other direction: the same count of REAL rows must still pass, so this
 # fixture cannot be satisfied by a probe that simply rejects everything.

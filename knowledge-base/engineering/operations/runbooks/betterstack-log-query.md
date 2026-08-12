@@ -271,7 +271,7 @@ single-arg path) silently returns empty strings. Use the multi-key form
 object. When a tag extraction unexpectedly groups everything under one empty
 key, sample one raw row (`SELECT raw ... LIMIT 1`) before trusting the path.
 
-## Querying the zot CONTAINER log channel (`SOLEUR_ZOT_LOG`) — registry, #7440 / ADR-182
+## Querying the zot CONTAINER log channel (`SOLEUR_ZOT_LOG`) — registry, #7440 / ADR-184
 
 > **⚠️ THIS CHANNEL IS LIVE ONLY AFTER DELIVERY. Read this box before following the
 > queries below mid-incident.** The `soleur-registry` host is cloud-init-only (ADR-096),
@@ -348,13 +348,29 @@ defect reproduced one layer up.
 … --grep SOLEUR_ZOT_LOG_BOOT     # boot_id=, shipper_cron=<present|absent>
 
 # 2. The reporter's INDEPENDENT path — it survives a totally dead shipper egress.
-… --grep SOLEUR_ZOT_DISK | … | grep -oE 'log_shipper_post_fail=[0-9]+|log_shipper_last_ok_age_s=-?[0-9]+|boot_id=[0-9a-f-]+'
+… --grep SOLEUR_ZOT_DISK | … | grep -oE 'log_shipper_post_fail=[^ ]+|log_shipper_last_ok_age_s=-?[0-9]+|log_shipper_dropped_cum=[^ ]+|log_shipper_drop_seq=[^ ]+|boot_id=[0-9a-f-]+'
+
+`log_shipper_post_fail=` takes `unknown` when the shipper's state file is unreadable — that is
+**not** zero. The previous `[0-9]+` form could not match it, so a never-run shipper read as "no
+POST failures", which is the inverted root cause. `log_shipper_last_ok_age_s=-1` means no row has
+ever shipped. Drop reasons on `SOLEUR_ZOT_LOG_DROPPED` rows are `rate_cap`, `exempt_cap`,
+`redact_failed`, `sanitized_empty` and `cursor_invalidated`; the last carries `n=unknown` because
+the lost span between a rotated-past cursor and the bounded restart is genuinely unbounded.
 ```
 
 - **No boot marker AND `boot_id` still `bc135d5b-…`** → not delivered. Expected; wait.
-- **Boot marker present (or `boot_id` drifted) but zero envelope rows** → *delivered and
-  dead*. **This is the state that means act, not wait.** The unit crashed, latched its
-  start-limit, or its journald match is wrong.
+- **`log_shipper_post_fail=` present on a `SOLEUR_ZOT_DISK` row but zero envelope rows** →
+  *delivered and dead*. **This is the state that means act, not wait.** The cron tick is
+  failing, its journald match is wrong, or `jq` is missing on the host.
+
+  **`boot_id` drift is NOT evidence of delivery on this host** and must not be used as one.
+  The private-NIC guard calls `reboot` as a convergence primitive and cloud-init's `runcmd` is
+  per-instance, so a plain reboot of the current, un-replaced host drifts `boot_id` while
+  delivering nothing — reading that as "delivered" starts the 90-day escalation clock against
+  a host that was never replaced. The `log_shipper_post_fail=` key exists only in the reporter
+  this change ships, so its presence is positive proof and its absence is positive proof of the
+  opposite. There is no systemd unit, no `failed` state and no start-limit to reset: the shipper
+  is an `/etc/cron.d` one-shot.
 - **`log_shipper_post_fail` climbing** → the unit runs but its POSTs fail; an egress or
   token fault, not a dead unit. That counter deliberately rides the 5-min reporter rather
   than the shipper's own channel, because a counter surfaced on the channel it monitors is
