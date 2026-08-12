@@ -6,7 +6,9 @@ branch: feat-one-shot-7228-inngest-host-dark-bind-failure
 lane: cross-domain
 type: fix
 issue: 7228
-closes: [7228, 6617, 7308]
+# Corrected at ship time: this plan is a necessary part of all three and the whole of
+# none — #7228 needs the #7462 host restore before it can close. `closes:` over-claimed.
+refs: [7228, 6617, 7308]
 priority: p1
 domain: engineering
 brand_survival_threshold: single-user incident
@@ -444,7 +446,7 @@ none is deferred — this is a decision, not an omission.
 scrub by design. Every field routes through `inngest-redact.sh`; `journal_tail` stays on the
 once-per-boot marker rather than the recurring one, so the highest-risk field is not amplified.
 
-**Brand-survival threshold:** single-user incident.
+- **Brand-survival threshold:** single-user incident
 
 ## Observability
 
