@@ -13,6 +13,51 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-12. Two rounds: a four-agent plan review (architecture, spec-flow, simplicity,
+scoped strong-model advisor), then a deepen pass (verify-the-negative sweep, post-edit self-audit,
+spec-flow re-check). Every finding below was verified against the repo or the live CLI before it was
+applied — none was taken on assertion.
+
+### What the rounds changed
+
+1. **The canary became a second job, not extra steps.** The first draft assumed it could append to the
+   drift step's `findings` array; that array and `sanitize()` are shell locals of the `check` step, and
+   `scripts/marketplace-drift-check.test.sh` extracts that step and re-executes it hermetically without
+   network. Verified count-neutral against `c4-count-parity.test.sh`, which counts workflow *files* and
+   *distinct* slug values.
+2. **The alarm was blind to the thing it was being given.** The filing step and the heartbeat both gate
+   on `steps.check.*` only, so a canary-only failure would have filed nothing and checked in `ok`. Both
+   expressions are now in scope, and mutation row 8 tests it.
+3. **The content assertion split into three independent conjuncts.** A declared-subset byte comparison
+   cannot see under-delivery — which is the defect that produced ADR-182 (64 skills against 96). The
+   reference is now pinned at the delivered commit (measured working, byte-identical), freshness is
+   exact rather than tolerance-bounded, and completeness compares sets with a cardinality assertion.
+4. **The metadata boundary was cosmetic and is now honest.** Measurement showed `claude plugin list
+   --json` is a projection of `installed_plugins.json` — mutating the file changed the CLI output
+   verbatim. The exclusion is now over *fields*, not files, and the runbook's own "content, not
+   metadata" block is corrected for the same reason.
+5. **The decision changed hands.** The legacy install is project-scoped to a different repository, so
+   migrating it is not this repo's tidy-up. Headless execution was withdrawn, the recorded decision was
+   made non-provisional so the tracker closes honestly, and the arms are conditioned by a three-valued
+   rule because Phase 2 can return unverified as well as true or false.
+6. **A pre-existing observability defect surfaced and is repaired here.** `actionlint` reports the
+   heartbeat step missing three inputs its composite declares required — the very check-in this plan's
+   liveness signal depends on. Confirmed byte-identical to `origin/main`; fixed in Phase 4.5b because
+   shipping a canary whose alarm cannot check in reproduces the failure the canary exists to catch.
+
+### New considerations discovered
+
+- The CLI carries **seven** `CLAUDE_CODE_PLUGIN_*` variables, two of which bear directly on the failure
+  modes both trackers describe — the trackers name one.
+- The steady-state refresh is `git pull`, not a clone, so the standing cost is small and the **tail
+  risk** is the real subject.
+- The settings precedence chain has more declaration sites than one machine reveals; the probe is
+  written against the chain and mutation-tests the managed-policy and project-scope sites.
+
+---
+
 ## Overview
 
 Two consolidated trackers left open by the plugin-delivery fix that merged earlier today (ADR-182).
@@ -113,7 +158,7 @@ All commands were run non-interactively. Scratch-`HOME` runs wrote nothing to th
 - `knowledge-base/engineering/architecture/principles-register.md` AP-021, enforced by `scripts/lint-diagnosis-claims.sh`: a CI-emitted message may only name a cause the job measured.
 - `scripts/check-adr-ordinals.sh` exists and gates ADR ordinals.
 - Follow-through directive: `<!-- soleur:followthrough script=scripts/followthroughs/<name>-<issue>.sh earliest=<ISO> secrets=<NAME> -->` plus the `follow-through` label; exit 0 = PASS, 1 = FAIL, anything else = TRANSIENT. `scripts/followthroughs/` holds 62 files.
-- No script anywhere reads local plugin install state. Searched `scripts/` and its subdirectories, `plugins/soleur/scripts/`, all 40 `plugins/soleur/skills/*/scripts/`, `.claude/hooks/`, `tests/`, `.github/`. The `claude plugin list --json` invocations that exist are runbook and README prose.
+- No script anywhere reads local plugin install state. Searched `scripts/` and its subdirectories, `plugins/soleur/scripts/`, every `plugins/soleur/skills/*/scripts/` directory (42 at plan time), `.claude/hooks/`, `tests/`, `.github/`. The `claude plugin list --json` invocations that exist are runbook and README prose.
 - The runbook's `--sparse` guidance lives under **Symptom 2**, headed "If the legacy channel must be kept, use `--sparse` rather than raising the timeout" — not in the persistence section. The same undifferentiated advice appears in `README.md` and `plugins/soleur/README.md`.
 - Root `.claude-plugin/marketplace.json` — `plugins[0]` is keyless; the top-level `"version": "1.0.0"` is the manifest-format version.
 
@@ -175,25 +220,44 @@ not a chore, and it is the single question this plan surfaces.
   mechanism for it.
 - **C — keep it as it is,** with the tail risk recorded as accepted and unmitigated.
 
-**Arm B is conditional on Phase 2 and the plan says so up front.** If Phase 2 measures that a
-settings-file `env` block does not reach the plugin git path, `KEEP_MARKETPLACE_ON_FAILURE` has no
-persistent mechanism the plan has found; if it also measures that `autoUpdate: false` does not suppress
-the refresh, arm B has no working mitigation at all and **collapses into arm C**. Phase 3 presents the
-arms with Phase 2's verdicts attached, and withdraws any arm whose mechanism was falsified rather than
-offering a choice known to be inert.
+**Every arm is conditional on Phase 2, and the conditioning rule is three-valued because Phase 2 is.**
+Phase 2 can return `measured-true`, `measured-false`, or `unverified` for each mechanism, and the
+distinction matters: 2.3 and 2.4 share one instrument (a backdated `lastUpdated` fixture), so a single
+instrument failure leaves *both* of arm B's mechanisms unverified rather than falsified. A binary
+"withdraw if falsified" rule would then offer arm B as a live choice resting on two unmeasured
+mechanisms — the exact shape the cited "unverified inference stated as fact" learning names. The rule:
 
-**Mode handling.** Phase 3 detects attachment the same way the rest of this repo's skills do
-(`HEADLESS_MODE`, absence of a TTY, a plan-file-path argument, or a `/soleur:one-shot` context) and
-records which branch it took. Attached: ask once via `AskUserQuestion`, execute the answer, record it.
-Headless: **do not execute any arm.** Append the question, with Phase 2's verdicts and the measured
-`projectPath`, to `knowledge-base/project/specs/<branch>/decision-challenges.md`, which `ship` renders
-into the PR body and files as an `action-required` issue.
+| Phase 2 verdict for an arm's mechanism | Phase 3 treatment |
+|---|---|
+| `measured-true` | Offer the arm normally. |
+| `measured-false` | **Withdraw the arm.** If every mechanism an arm depends on is falsified, it collapses into arm C and is not presented. |
+| `unverified` | Offer the arm **with the unverified label carried in the arm's own text**, naming which mechanism is unmeasured and what would measure it. Never present it as equivalent to a measured arm. |
 
-**This does not defer the close.** #7489's own second closing condition is "a decision to leave the
-entry live indefinitely with that consequence accepted and recorded". The recorded decision — arm C by
-default, superseded if the operator answers otherwise — is written in this PR as an ADR amendment plus
-a committed probe reading, both pre-merge artefacts. The migration is an offer, not the close
-condition, which is why the tracker can close honestly at merge.
+Arm A is conditioned too, not just arm B. Phase 2.7 measures whether `marketplace remove` cleans both
+declaration sites; if it does not, arm A's "no resolver remains" outcome is false as stated, and the arm
+is offered only with the additional hand-removal step named — or withdrawn if that step is not
+established.
+
+**Mode handling.** Two independent signals make a session headless, and the plan states both because the
+first is not sufficient. (i) The repo's executable classifier, `[[ ! -t 0 ]] && [[ -n "${CLAUDECODE:-}" ]]`
+(`.claude/hooks/session-rules-loader.sh`) — a **conjunction**, not a disjunction. (ii) Execution inside a
+Task subagent, which is headless regardless of the TTY because `AskUserQuestion` cannot reach an operator
+from there. **A `/soleur:one-shot` context or a plan-file-path argument is not by itself a headless
+signal**; treating it as one would make the attached branch dead code in exactly the pipeline that runs
+this plan. Phase 3 records which signal fired. Attached: ask once via `AskUserQuestion`, execute the
+answer, record it. Headless: **execute no arm**; append the question, Phase 2's verdicts and the measured
+`projectPath` to `knowledge-base/project/specs/<branch>/decision-challenges.md`, which `ship` renders into
+the PR body and files as an `action-required` issue.
+
+**The recorded decision is not provisional, and that is what makes the close honest.** #7489's own second
+closing condition is "a decision to leave the entry live indefinitely with that consequence accepted and
+recorded". That decision is **taken** in this PR under every branch: the entry stays live, its consequences
+are enumerated and accepted in the ADR amendment, and the machine state it applies to is committed as a
+probe reading. Arms A and B are *additive cleanups an operator may choose later*, not competing answers
+that would retract the acceptance — migrating one project's install afterwards does not make "the entry
+stays live" false, because the entry and every other install remain. So the question Phase 3 asks is
+"do you also want this project migrated?", not "which of three answers closes the issue". Both artefacts
+are pre-merge; nothing about the close waits on the answer.
 
 ## Implementation Phases
 
@@ -216,6 +280,10 @@ its script is written, because the shape determines how findings leave the job.
      repo-predicate cannot be applied to them directly.
    - An alias it cannot resolve is reported as an **explicit unknown**, never as clean.
    - It emits the site **list**, not only a count, so a later-discovered site cannot silently shrink it.
+   - It emits each registration's **`autoUpdate` value per site**. Without this the probe cannot
+     distinguish "arm B executed" from "arm B silently no-op'd" — arm B's only machine write *is* an
+     `autoUpdate` value, so its pre-state and post-state readings would otherwise be byte-identical. The
+     same field is what Phase 2.4 needs to answer which site is authoritative.
 2. Write `scripts/plugin-legacy-resolver-probe.test.sh` implementing Guard 2's mutation matrix against
    synthesized `HOME` fixtures. Fixtures are synthesized, never copied from the operator's machine.
 3. Register both suites with explicit `run_suite` lines in `scripts/test-all.sh`.
@@ -290,19 +358,32 @@ without network; and the canary needs a different privilege and timeout profile 
 
 1. Write `scripts/plugin-delivery-canary.sh`. It obtains a **version-pinned** Claude Code CLI, installs
    `soleur@soleur-marketplace` into a scratch `HOME` with `CLAUDE_CODE_PLUGIN_PREFER_HTTPS` set, resolves
-   `installPath`, and makes two distinct assertions:
+   `installPath`, and makes **three independent assertions** — the same three conjuncts Guard 1
+   quantifies over, in the same order:
+   - **Completeness** — the delivered file list is compared as a **set** against the file list `main`
+     serves under `plugins/soleur`, with an explicit cardinality assertion. The historical defect was
+     under-delivery (64 skills against 96); a subset comparison cannot see it. Two parameters this
+     conjunct needs and which are **not** yet measured, so Phase 4.2 measures them before the script is
+     written: (i) **the reference-listing mechanism.** `raw.githubusercontent.com` serves single files,
+     not directory listings — it is the only reference transport measured at plan time, and it cannot
+     produce this list. The candidate is the unauthenticated GitHub trees API
+     (`/repos/jikig-ai/soleur/git/trees/<sha>?recursive=1`), which must be probed for whether it works
+     unauthenticated at the required depth and whether its rate limit is survivable from a shared runner
+     IP. If it is not, the canary declares the completeness conjunct unavailable rather than silently
+     downgrading to a subset. (ii) **the inherent delta.** The plan-time scratch install materialised 891
+     files against 894 tracked; that delta is determined once, and each excluded path is named and
+     justified individually. The exclusion set is capped at the measured delta and an AC asserts the cap.
    - **Integrity** — every delivered file's digest equals the digest of the same path fetched from
      `raw.githubusercontent.com/jikig-ai/soleur/<delivered-sha>/plugins/soleur/…`, pinned to the commit
      the install resolved. Pinning removes the race and the CDN-staleness ambiguity that comparing
      against `main` would introduce; both halves were verified working at plan time.
-   - **Freshness** — the delivered commit equals `main` HEAD, or is within a stated tolerance.
-     Integrity without freshness passes forever on a stale self-consistent mirror; freshness without
-     integrity passes on a correct label over wrong bytes. Both are required.
-   - **Completeness** — the delivered file list is compared as a **set** against the file list `main`
-     serves under `plugins/soleur`, with an explicit cardinality assertion. The historical defect was
-     under-delivery (64 skills against 96); a subset comparison cannot see it. Any inherent delta
-     between the two listings is determined once and encoded as a named, justified exclusion rather
-     than absorbed into a tolerance.
+   - **Freshness** — the delivered commit **equals** `main` HEAD. There is no tolerance window: a
+     tolerance that is never stated cannot be tested, and a loose one makes the conjunct inert, which is
+     the failure splitting it out was meant to prevent. The one sanctioned exception is a merge landing
+     between the install and the freshness read; the script detects that by re-reading `main` HEAD once
+     and treating "HEAD moved during the run" as a distinct, non-alarming outcome rather than as
+     staleness. Integrity without freshness passes forever on a stale self-consistent mirror; freshness
+     without integrity passes on a correct label over wrong bytes.
    - **No metadata field participates in any verdict.** The exclusion is about fields, not files:
      `claude plugin list --json` is a projection of `installed_plugins.json`, so reading the CLI does
      not escape the metadata. `installPath` is consumed as a location and `gitCommitSha` only as the
@@ -321,6 +402,16 @@ without network; and the canary needs a different privilege and timeout profile 
    this plan's own cited learning names. Both expressions change to consider the canary job's verdict
    via `needs:`, and every new condition referencing job outputs keeps the `outcome == 'success'`
    conjunct that `scripts/marketplace-drift-check.test.sh` asserts.
+5b. **Repair the heartbeat step's missing inputs, which is a pre-existing defect in the liveness signal
+   this plan depends on.** `actionlint` reports that the `Sentry check-in (final)` step omits
+   `sentry-ingest-domain`, `sentry-project-id` and `sentry-public-key`, all three declared
+   `required: true` by `./.github/actions/sentry-heartbeat`, while every sibling scheduled workflow
+   passes them from secrets. The composite fail-softs when secrets are missing, so the symptom is a
+   check-in that silently never lands rather than a red run — which would make the `## Observability`
+   block's liveness claim false on arrival. Confirmed byte-identical to `origin/main`, so it is
+   pre-existing rather than introduced here; it is fixed in this PR because the plan already edits this
+   exact step's `status:` expression and because shipping a canary whose alarm cannot check in would be
+   the same silent-observability failure the canary exists to prevent.
 6. Branch the issue's title and remediation by finding class. AP-021 forbids a CI message naming a cause
    the job did not measure, and the existing title and its five remediation steps are all about the
    manifest; filing them for a `content_mismatch` would misdiagnose it.
@@ -335,15 +426,21 @@ without network; and the canary needs a different privilege and timeout profile 
 ### Phase 5 — Upstream defect reports
 
 1. Search first, with the List API and client-side `jq` filtering rather than `--search`.
-2. Compose four report bodies in `knowledge-base/project/specs/<branch>/upstream-reports.md`, one section
-   each, so the evidence is durable here regardless of what upstream does with it. Each cites only
-   measured readings with the command that produced them.
+2. Compose four evidence sections in `knowledge-base/project/specs/<branch>/upstream-reports.md`, one
+   per row of the routing table below, so the evidence is durable here regardless of what upstream does
+   with it. Each cites only measured readings with the command that produced them. **Four sections, three
+   postings:** the two rows routed to 77927 are posted as a single combined comment, because they are one
+   root-cause argument split for readability rather than two independent reports. `upstream-reports.md`
+   records the section-to-posting mapping explicitly so the counts in AC23 are unambiguous.
 3. **Scrub, then read back.** Remove home paths in both `/home/...` and `~` form, the names and layout of
    unrelated local repositories, install timestamps and machine identifiers — all four categories named
    in `## User-Brand Impact`, not just the first. Re-read each body against the rule as a discrete step.
-4. Route per this table. **If step 1's search contradicts a row, the rule is: prefer a comment on the
-   existing issue over a new one, and record the contradiction and the substitution in
-   `upstream-reports.md`.** A contradiction is not a stall.
+4. Route per this table. Contradictions between the table and step 1's search are resolved by rule, not
+   by improvisation, and the rule covers both directions: **table says new issue, search finds an
+   existing open one → comment on the existing one. Table says comment, but the target is closed or
+   locked → open a new issue that links the closed one rather than reviving it.** Either way, record the
+   contradiction and the substitution in `upstream-reports.md`. A contradiction is not a stall. Both
+   directions are live shapes here: the table itself records 42306 and 28040 as already-closed siblings.
 
    | Evidence | Destination | Reason |
    |---|---|---|
@@ -356,8 +453,16 @@ without network; and the canary needs a different privilege and timeout profile 
    and the transport evidence adds to it, that posting gets its own section in `upstream-reports.md` so
    it is scrubbed and counted like the rest.
 6. **Sending is operator-gated.** These are posts to a third party's public repository and they are this
-   plan's named leak vector. Attached: send after the read-back. Headless: commit the bodies, send
-   nothing, and let the follow-through below carry the send.
+   plan's named leak vector. Attached: send after the read-back, then fetch each posted body back via
+   `gh api` and re-run the scrub grep against what upstream actually stores — the posted body is the
+   artefact that leaks, and the local copy is not proof about it.
+7. **Headless: send nothing, and make the unsent state visible rather than pending.** Commit the bodies,
+   then append the send request to `decision-challenges.md` alongside Phase 3's question so `ship` files
+   it as an `action-required` issue. The follow-through does **not** carry the send: it observes state
+   and has no send capability, so treating it as the carrier would leave canary-green-plus-postings-unsent
+   evaluating to neither PASS nor FAIL — a permanent TRANSIENT that re-runs forever and alarms never.
+   The follow-through's role here is limited to *reporting* which routes landed; the operator-visible
+   artefact is the issue.
 
 ### Phase 6 — Records: ADR, C4, runbook, disclosure
 
@@ -493,8 +598,11 @@ exists to prevent.
 | 1 | Register the target repo under a different local alias, e.g. `"legacy"` | Still reported — alias-key matching would miss it |
 | 2 | Declare it only in `extraKnownMarketplaces` in a settings file, absent from `known_marketplaces.json` | Still reported — the second declaration site, which is live on this machine |
 | 3 | Declare it only in `settings.local.json`, absent from both of the above | Still reported — the site the plan-time enumeration missed |
-| 4 | Leave an install in `installed_plugins.json` whose alias no longer resolves to any registration | Reported as an explicit unknown, never as clean — the join has no repo field to match on |
-| 5 | Point the probe at a `HOME` with no `.claude` directory (guard's own dispatch) | Emits the site list with read statuses and an explicit absent verdict; "no file" must never render as "no legacy install" |
+| 4 | Declare it only in the **managed-policy** file | Still reported — this is the precedence-winning site, the one place a declaration cannot be overridden, and the one a chain-derived probe must not skip |
+| 5 | Declare it only in a **project-scope** settings file, with the user scope clean | Still reported, with the project path named — the live install is project-scoped, so a user-scope-only walk is blind to the actual population |
+| 6 | Leave an install in `installed_plugins.json` whose alias no longer resolves to any registration | Reported as an explicit unknown, never as clean — the join has no repo field to match on |
+| 7 | Point the probe at a `HOME` with no `.claude` directory (guard's own dispatch) | Emits the site list with read statuses and an explicit absent verdict; "no file" must never render as "no legacy install" |
+| 8 | Flip `autoUpdate` from `true` to `false` at one site, leaving every registration otherwise identical | The reading changes — otherwise arm B's execution is indistinguishable from arm C's non-execution |
 
 ## Observability
 
@@ -544,16 +652,50 @@ discoverability_test:
 credentials, so it runs unchanged in a sandbox. No `credentials_required` declaration: the canary's real
 path was measured to need none.
 
+## Hypotheses
+
+Gate 4.5 fires on this plan (`SSH`, `timeout`), so the L3→L7 discipline applies. The network surface
+here is not a host under this project's control — it is a GitHub-hosted runner reaching `github.com`
+and `raw.githubusercontent.com`, and the "outage" under analysis is the CLI's transport choice rather
+than an unreachable host. Each layer is answered with an artifact or an opt-out citing one, in order.
+
+1. **L3 — firewall allow-list.** Not applicable, with an artifact rather than an assertion: no host in
+   this project's firewall scope participates. The endpoints are GitHub's public HTTPS and SSH
+   frontends, reached from a GitHub-hosted runner. Verification artifact: the unauthenticated
+   `marketplace add` completing rc=0 in 7 s from an unprivileged scratch `HOME`, and again in 7 s with
+   the local gitconfig neutralised.
+2. **L3 — DNS / routing.** Verified. `git ls-remote https://github.com/jikig-ai/soleur.git HEAD`
+   resolved and returned `43c7d3d79542e0909b3825ec17a3d58e193524de`, and
+   `git ls-remote …/soleur-marketplace.git HEAD` returned `d0dc506e…`. Both endpoints resolve and route.
+3. **L7 — TLS / proxy.** Verified. `curl -fsS --proto '=https' --max-redirs 0` against
+   `raw.githubusercontent.com/jikig-ai/soleur/<sha>/plugins/soleur/.claude-plugin/plugin.json` returned
+   `http=200 bytes=1027`, and the body's `sha256` matched the delivered file byte for byte. The
+   certificate chain and the redirect ceiling were exercised by the same command the canary will use.
+4. **L7 — application (the CLI's transport selection).** Verified from the service's own log lines,
+   which is where the actual finding lives. The CLI emits `Cloning via SSH: git@github.com:…` and, when
+   that attempt terminates, `SSH clone failed, retrying with HTTPS`. On the operator machine the SSH
+   form never reaches the network because `~/.gitconfig` rewrites it. **The hypothesis this ordering
+   produces, and which the plan carries upstream:** the fallback is reached only *after* the SSH attempt
+   terminates, so an environment where SSH stalls rather than fails fast consumes the clone budget
+   before HTTPS is ever tried — which is the shape upstream 77927 reports. This is a hypothesis about
+   the CLI's timeout accounting, **not verified**: the planning probes forced SSH to fail fast
+   (`BatchMode=yes`), so the stall case was not reproduced. Phase 2 does not attempt it either; it is
+   reported upstream as a mechanism proposal with the fail-fast measurement attached, and labelled as
+   such.
+
+No layer above the application layer is unverified, so no service-layer hypothesis here rests on an
+unchecked lower layer. The canary's mitigation — `CLAUDE_CODE_PLUGIN_PREFER_HTTPS` — acts at layer 4
+by removing the SSH attempt rather than by waiting for it to fail.
+
 ## Encryption Posture
 
-No persistent store is introduced. The new cross-component connections are the canary's outbound clone
-and reference fetches.
+No persistent store is introduced, so `at_rest` has no entries: the canary writes only to a scratch
+`HOME` on an ephemeral runner, discarded with the job, and nothing in this change creates a volume,
+bucket, table, queue, cache, backup target or log sink. The new cross-component connections are the
+canary's outbound clone and its reference fetches.
 
 ```yaml
-at_rest:
-  - store: none introduced
-    mechanism: n/a
-    evidence: the canary writes only to a scratch HOME on an ephemeral runner, discarded with the job
+at_rest: []   # no persistent store introduced; scratch HOME on an ephemeral runner only
 in_transit:
   - connection: runner -> github.com (git clone of the marketplace repo and the plugin subtree)
     tls: TLS 1.2+ via git over HTTPS, forced by CLAUDE_CODE_PLUGIN_PREFER_HTTPS so the SSH attempt is skipped
@@ -616,8 +758,8 @@ Both records ship in this PR. Neither is gated on a later slice.
 
 ### Pre-merge
 
-1. `scripts/plugin-legacy-resolver-probe.sh --json` emits a `sites` array in which every element carries a resolved path and a read status, and the array is derived from the settings precedence chain rather than a hardcoded literal — assert by running the probe against a fixture `HOME` that adds a settings site and confirming the array grows.
-2. `bash scripts/plugin-legacy-resolver-probe.test.sh` passes with all five Guard 2 mutation rows implemented as named cases, each demonstrated to fail the probe when applied and pass when reverted.
+1. `scripts/plugin-legacy-resolver-probe.sh --json` emits a `sites` array in which every element carries a resolved path, a read status and (for registration sites) each registration's `autoUpdate` value. The array is derived from the settings precedence chain rather than a hardcoded literal — assert by running the probe against a fixture `HOME` where a settings site is *absent* and then *present*, and confirming the entry's **read status changes while the array length stays constant**. Length growth is the wrong assertion: Guard 2 row 7 requires absent sites to be listed, so they are already present as entries.
+2. `bash scripts/plugin-legacy-resolver-probe.test.sh` passes with all eight Guard 2 mutation rows implemented as named cases, each demonstrated to change the probe's verdict when applied and restore it when reverted. Rows 4 and 5 (managed-policy site, project-scope site) are the two the plan-time enumeration missed and are not optional.
 3. The probe reports an install whose alias resolves to no registration as an explicit unknown: a fixture with `installed_plugins.json` carrying `soleur@soleur` and no registration anywhere yields a non-clean verdict.
 4. `bash scripts/plugin-delivery-canary.sh --self-test` prints `SELF-TEST OK:` with a non-zero assertion count and `0 unexpected`, exits 0, with no network access and no credentials available.
 5. `bash scripts/plugin-delivery-canary.test.sh` passes with all eight Guard 1 mutation rows implemented as named cases. Row 2 (a deleted file) and row 5 (an older but internally consistent commit) each fail exactly one conjunct, demonstrating that completeness, integrity and freshness are independently observable.
@@ -628,27 +770,27 @@ Both records ship in this PR. Neither is gated on a later slice.
 10. Every new step condition that references job or step outputs carries the `outcome == 'success'` conjunct that `scripts/marketplace-drift-check.test.sh` requires; `bash scripts/marketplace-drift-check.test.sh` passes.
 11. The drift issue's title and remediation branch by finding class; a canary-only finding produces a title that does not claim the published manifest changed. `bash scripts/lint-diagnosis-claims.sh` passes.
 12. `grep -c 'sole control\|only control' knowledge-base/engineering/architecture/diagrams/model.c4` returns 0.
-13. The five count-anchored literals in `model.c4`'s `github -> sentry` edge are byte-identical to `origin/main`: `git diff origin/main -- knowledge-base/engineering/architecture/diagrams/model.c4 | grep -cE 'check-ins from [0-9]+ workflows|[0-9]+ GHA-|Of [0-9]+ cron monitors|[0-9]+ check in from here|[0-9]+ from webapp'` returns 0 for removed lines carrying a *changed* count.
+13. After the Phase 6.3 edit lands, the five count-anchored literals in `model.c4`'s `github -> sentry` edge are byte-identical to `origin/main`: `git diff origin/main -- knowledge-base/engineering/architecture/diagrams/model.c4 | grep -cE 'check-ins from [0-9]+ workflows|[0-9]+ GHA-|Of [0-9]+ cron monitors|[0-9]+ check in from here|[0-9]+ from webapp'` returns 0 for removed lines carrying a *changed* count.
 14. `bash plugins/soleur/test/c4-count-parity.test.sh` and `bash plugins/soleur/test/c4-model-freshness.test.sh` both pass against the committed `model.likec4.json`.
 15. The runbook's **Symptom 2** section distinguishes the fresh-add `--sparse` case from the existing-checkout case, and both READMEs carry the same distinction. Assert by locating the correction within the Symptom 2 heading's own body, not anywhere in the file: `awk '/^\*\*If the legacy channel must be kept/{f=1} f&&/^---$/{exit} f' <runbook> | grep -c 'existing checkout'` returns at least 1.
 16. The runbook's **Symptom 1** block states that `claude plugin list --json` is a projection of `installed_plugins.json` and gives a cross-check that does not depend on it.
-17. The runbook's persistence section contains one labelled claim per Phase 2 arm, each beginning `measured:` or `unverified:`; `grep -cE '^\s*[-*] +(measured|unverified):' <section>` returns at least 4, and the section still exists (deleting it does not satisfy this).
+17. The runbook's persistence section contains one labelled claim per Phase 2 arm, each beginning `measured:` or `unverified:`. Assert against the section, not the file: `awk '/^## Making the timeout persistent/{f=1;next} f&&/^## /{exit} f' <runbook> | grep -cE '^\s*[-*] +(measured|unverified):'` returns at least 4, and `grep -c '^## Making the timeout persistent' <runbook>` returns 1 (deleting the section does not satisfy this).
 18. The runbook contains a row for every canary finding token: `for t in content_mismatch incomplete_delivery stale_delivery install_failed installpath_unresolved reference_unreadable cli_unavailable; do grep -qF "$t" <runbook> || echo MISSING "$t"; done` prints nothing.
-19. `measurements.md` records, for each of Phase 2's arms 1-7, the command run and a verdict of `measured` with a result or `unverified` with a statement of what would verify it. An arm recorded as neither fails this criterion, so writing `unmeasured` everywhere does not satisfy it.
+19. `measurements.md` records, for each of Phase 2's arms 1-7, the command run and a verdict of `measured` with a result or `unverified` with a statement of what would verify it. An arm recorded as neither fails this criterion, so writing `unmeasured` everywhere does not satisfy it. **Arms 1, 2, 6 and 7 must carry `measured`** — each has a deterministic instrument already validated at plan time (the tiny-timeout falsification for 1 and 2, a scratch checkout for 6, an add/remove round trip for 7), so an `unverified` verdict there is a gap rather than a finding. Only arms 3, 4 and 5, which depend on triggering a background refresh, may land `unverified`.
 20. `measurements.md` carries the Phase 1 pre-state probe reading and the Phase 3 post-state reading, both dated, under every arm and under the headless branch.
 21. ADR-182 carries the amendment (Context correction, Decision 5 disposition, rejected alternative) **and** a numbered Decision 6 for the canary with its alternatives and its #7493 relationship stated. `bash scripts/check-adr-ordinals.sh` passes.
 22. The recorded decision names the arm actually taken and the mode branch (attached or headless) it was taken under, and matches what `decision-challenges.md` says when the headless branch fired.
-23. `upstream-reports.md` contains one section per posting the plan authorises, and each is scrubbed against all four exposure categories: `grep -cE '/home/|/Users/|~/\.claude|/git-repositories/|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:' <file> || true` returns 0.
+23. `upstream-reports.md` contains four evidence sections and an explicit section-to-posting mapping, and every section is scrubbed against all four exposure categories: `grep -cE '/home/|/Users/|~/\.claude|/git-repositories/|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:' <file> || true` returns 0. The same grep is re-run against each body **as posted** (fetched back via `gh api`), not only against the local copy — the posted body is the artefact that leaks.
 24. `scripts/followthroughs/plugin-delivery-canary-7490.sh` exists, is executable, and its header states the exit contract (0 PASS / 1 FAIL / other TRANSIENT). The tracker carries the `follow-through` label and a `soleur:followthrough` directive whose `earliest` is after the merge date.
 25. `python3 scripts/lint-guard-contract.py <this plan>` exits 0.
 26. `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` exits 0 — the gate's own invocation, not a hand-enumerated path list.
-27. `bash scripts/lint-workflows.sh` and `actionlint` pass on the edited workflow.
+27. `bash scripts/lint-workflows.sh` exits 0, and `actionlint .github/workflows/scheduled-marketplace-drift.yml` exits 0 **with no `missing input` findings** — which requires Phase 4.5b's repair, because on `origin/main` that command reports three (`sentry-ingest-domain`, `sentry-project-id`, `sentry-public-key`). Measured at plan time; the AC is written against the post-repair state deliberately, not against a wrapper whose ratchet tolerates the finding.
 28. `bash scripts/test-all.sh` passes, or every failure is confirmed pre-existing on `origin/main`.
 
 ### Post-merge (carried by the Phase 6.6 follow-through, not by memory)
 
-29. The first scheduled or dispatched run of `scheduled-marketplace-drift.yml` completes with the canary job green and a non-zero comparison count, verified from the run log. If it is red, the follow-through exits 1 and leaves the tracker open with the failure recorded — that is the defined path, and no phase treats a red first run as terminal.
-30. The upstream postings the plan authorises are made and their URLs recorded in `upstream-reports.md`. Partial success is recorded as partial: the follow-through reports which routes landed, and unsent routes remain carried rather than lost.
+29. The first scheduled or dispatched run of `scheduled-marketplace-drift.yml` completes with the canary job green and a non-zero comparison count, verified from the run log. If it is red, the follow-through exits 1 and **comments the failure on the (already-closed) tracker and files an `action-required` issue** — it cannot "leave the tracker open", because `closes:` fires at merge, and no exit code in the sweeper contract reopens an issue. That is the defined path; no phase treats a red first run as terminal.
+30. The upstream postings the plan authorises are made and their URLs recorded in `upstream-reports.md`, and each posted body is fetched back via `gh api` and re-scrubbed. Partial success is recorded as partial: the follow-through reports which routes landed, and unsent routes surface as an `action-required` issue rather than as a re-running TRANSIENT.
 
 ## Domain Review
 

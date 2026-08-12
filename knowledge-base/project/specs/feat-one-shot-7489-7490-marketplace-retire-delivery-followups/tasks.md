@@ -30,7 +30,7 @@ is settled before its script is written.
   precedence chain (not a frozen site list), two-stage predicate (`source.repo` at registration sites,
   then an alias join for `installed_plugins.json` and `enabledPlugins`), unresolvable alias reported as
   explicit unknown, site **list** with per-site resolved path and read status, `--json` mode.
-- [ ] 1.2 Write `scripts/plugin-legacy-resolver-probe.test.sh` with all five Guard 2 mutation rows as
+- [ ] 1.2 Write `scripts/plugin-legacy-resolver-probe.test.sh` with all eight Guard 2 mutation rows as
   named cases against synthesized `HOME` fixtures. Fixtures are synthesized, never copied.
 - [ ] 1.3 Register both suites in `scripts/test-all.sh` with explicit `run_suite` lines.
 - [ ] 1.4 Run the probe on this machine; commit the dated pre-state reading into
@@ -59,10 +59,14 @@ statement of what would verify it.
 
 ## Phase 3 — The decision, recorded
 
-- [ ] 3.1 Detect attachment (`HEADLESS_MODE`, no TTY, plan-file-path argument, one-shot context) and
-  record the branch taken.
-- [ ] 3.2 Compose the question with Phase 2's verdicts attached; withdraw any arm whose mechanism Phase 2
-  falsified rather than offering a choice known to be inert.
+- [ ] 3.1 Detect attachment by the repo's own conjunction — `[[ ! -t 0 ]] && [[ -n "${CLAUDECODE:-}" ]]`
+  (`.claude/hooks/session-rules-loader.sh`) — OR execution inside a Task subagent, which is headless
+  regardless of TTY. A one-shot context or a plan-file-path argument is NOT by itself a headless signal.
+  Record which signal fired.
+- [ ] 3.2 Compose the question with Phase 2's verdicts attached and apply the three-valued rule:
+  measured-true → offer; measured-false → withdraw (collapse to arm C if every mechanism is falsified);
+  unverified → offer only with the unverified label carried in the arm's own text. Arm A is conditioned
+  on 2.7 just as arm B is on 2.4/2.5.
 - [ ] 3.3 Attached: ask once, execute the answer, record it. Arm A runs the four commands with
   `--scope project` from the install's own `projectPath`, then the orphan-cache reclaim behind the
   runbook's print-then-delete guard. Arm B writes `autoUpdate: false` to the authoritative site and
@@ -71,6 +75,8 @@ statement of what would verify it.
   `knowledge-base/project/specs/<branch>/decision-challenges.md`.
 - [ ] 3.5 Re-run the probe and commit the post-state reading under every arm and under the headless
   branch.
+- [ ] 3.6 Record the decision — the arm, the reason, and the mode branch taken — for the Phase 6.1 ADR
+  amendment to carry. Checked by AC22.
 
 ## Phase 4 — Delivery canary
 
@@ -79,13 +85,18 @@ statement of what would verify it.
   comparison of the delivered listing against what `main` serves, with a cardinality assertion),
   integrity (per-file digest against the reference pinned at the **delivered commit**), freshness
   (delivered commit against `main` HEAD). No metadata field participates in any verdict.
-- [ ] 4.2 Determine the inherent delta between the delivered listing and the source listing once, and
-  encode it as named justified exclusions rather than a tolerance.
+- [ ] 4.2 Measure the two unmeasured completeness parameters BEFORE writing the script: the
+  reference-listing mechanism (raw.githubusercontent serves files, not listings — probe the
+  unauthenticated trees API for depth and rate limit) and the inherent delta (891 vs 894 at plan time),
+  encoded as named justified exclusions capped at the measured delta.
 - [ ] 4.3 Add `--self-test` (no network, no credentials) and the `compared=<N>` / `expected=<M>`
   anti-vacuity floor.
 - [ ] 4.4 Add the `canary` job to `.github/workflows/scheduled-marketplace-drift.yml`:
   `permissions: contents: read`, its own `timeout-minutes`, `actions/checkout` scoped to this job only,
   findings out via sanitized job outputs.
+- [ ] 4.4b Repair the pre-existing missing `sentry-heartbeat` inputs (`sentry-ingest-domain`,
+  `sentry-project-id`, `sentry-public-key`) on the check-in step — the liveness signal this plan's
+  Observability block claims. Checked by AC27.
 - [ ] 4.5 Wire the verdict into the alarm — the filing step's condition and the heartbeat's status
   expression must both consider the canary job, keeping the `outcome == 'success'` conjunct that
   `scripts/marketplace-drift-check.test.sh` asserts.
@@ -98,13 +109,21 @@ statement of what would verify it.
 ## Phase 5 — Upstream reports
 
 - [ ] 5.1 Duplicate search using the List API plus client-side `jq` (not `--search`).
-- [ ] 5.2 Compose four report bodies in `knowledge-base/project/specs/<branch>/upstream-reports.md`.
+- [ ] 5.2 Compose four evidence sections in `knowledge-base/project/specs/<branch>/upstream-reports.md`
+  — four sections, three postings (the two rows routed to 77927 go as one combined comment). Record the
+  section-to-posting mapping explicitly so AC23's counts are unambiguous.
 - [ ] 5.3 Scrub all four exposure categories (`/home/...` and `~` forms, unrelated repository names and
   layout, install timestamps, machine identifiers), then read back as a discrete step.
-- [ ] 5.4 Route per the plan's table. On contradiction: prefer a comment on the existing issue over a
-  new one, and record the contradiction and substitution.
-- [ ] 5.5 Sending is operator-gated. Headless: commit the bodies, send nothing, let the follow-through
-  carry the send.
+- [ ] 5.4 Route per the plan's table. On contradiction, both directions have a rule: table says new but
+  an open issue exists → comment on it; table says comment but the target is closed or locked → open a
+  new issue linking it. Record the contradiction and substitution either way.
+- [ ] 5.5 Do not open a DOCS issue for `_PREFER_HTTPS` — 58859 already tracks it. If the search shows it
+  open and the transport evidence adds to it, that posting gets its own section so it is scrubbed and
+  counted like the rest.
+- [ ] 5.6 Sending is operator-gated. Attached: send, then fetch each posted body back via `gh api` and
+  re-scrub it. Headless: commit the bodies, send nothing, and append the send request to
+  `decision-challenges.md` so `ship` files it as an `action-required` issue — the follow-through reports
+  which routes landed but cannot send, so it must not be treated as the carrier.
 
 ## Phase 6 — Records
 
