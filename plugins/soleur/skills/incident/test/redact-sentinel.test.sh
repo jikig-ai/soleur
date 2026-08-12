@@ -611,15 +611,51 @@ fi
 # attacker-chosen payload executed.
 PREFLIGHT_NEEDLE='grep -q '"'"'"name"[[:space:]]*:[[:space:]]*"soleur"'"'"''
 missing_preflight=""
+unbound_halt=""
+
+# STRENGTHENED, not cut (#7450 review). Guard 1 asserts the same property in
+# TypeScript, but `scripts/test-all.sh` shards the two suites separately — Guard 1
+# with the web-platform group, this file with the scripts group — so they do not
+# always run together and neither is redundant with the other.
+#
+# Presence of the manifest check was never the property worth asserting: every gate
+# carries a SECOND fail-closed check (`[[ -r "$SENTINEL" ]] || { …; exit 2; }`)
+# immediately below, so "the file contains a preflight AND contains an exit 2" is
+# satisfied with the preflight's own arm converted to a no-op. This now requires the
+# halt to sit inside the preflight's OWN brace group, tracked by brace depth.
+preflight_halts_in_own_arm() {
+  awk '
+    index($0, "\"${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json\"") && !started { started = 1 }
+    started {
+      stmt = stmt $0 "\n"
+      n = gsub(/\{/, "{"); depth += n
+      n = gsub(/\}/, "}"); depth -= n
+      # Statement ends when braces balance and no continuation is pending.
+      if (depth <= 0 && $0 !~ /\\[[:space:]]*$/) {
+        print (stmt ~ /exit 2/) ? "BOUND" : "UNBOUND"
+        exit
+      }
+    }
+    END { if (!started) print "ABSENT" }
+  ' "$1"
+}
+
 for gate_file in "${INCIDENT_SKILL}" "${LEGAL_SKILL}" "${LINEAR_SKILL}"; do
   n=$(grep -Fc "${PREFLIGHT_NEEDLE}" "${gate_file}" 2>/dev/null || true)
-  [[ "${n}" -ge 1 ]] || missing_preflight="${missing_preflight} ${gate_file##*/skills/}"
+  if [[ "${n}" -lt 1 ]]; then
+    missing_preflight="${missing_preflight} ${gate_file##*/skills/}"
+    continue
+  fi
+  verdict="$(preflight_halts_in_own_arm "${gate_file}")"
+  [[ "${verdict}" == "BOUND" ]] || unbound_halt="${unbound_halt} ${gate_file##*/skills/}(${verdict})"
 done
-if [[ -z "${missing_preflight}" ]]; then
-  echo "PASS: Test 18b: identity preflight (manifest name check) present at all 3 secret-gate sites"
+
+if [[ -z "${missing_preflight}" && -z "${unbound_halt}" ]]; then
+  echo "PASS: Test 18b: identity preflight present at all 3 secret-gate sites, and each HALTS IN ITS OWN ARM"
   PASS=$((PASS + 1))
 else
-  echo "FAIL: Test 18b: identity preflight missing at:${missing_preflight} — the bare anchor is NOT safe by construction; the preflight is what carries it (ADR-179 decision 2)"
+  [[ -n "${missing_preflight}" ]] && echo "FAIL: Test 18b: identity preflight missing at:${missing_preflight} — the bare anchor is NOT safe by construction; the preflight is what carries it (ADR-179 decision 2)"
+  [[ -n "${unbound_halt}" ]] && echo "FAIL: Test 18b: identity preflight present but its own arm does not exit 2 at:${unbound_halt} — a sibling halt elsewhere in the fence does not make THIS check fail-closed"
   FAIL=$((FAIL + 1))
 fi
 
@@ -634,14 +670,31 @@ fi
 # while its own assertion passed. Do not restore the literal to this comment for readability: a
 # body-grep cannot tell an explanation from an occurrence.
 FORBIDDEN='${CLAUDE_PLUGIN_ROOT:-$(git rev-parse ''--show-toplevel)'
-residual=$(grep -rlF "${FORBIDDEN}" "${REPO_ROOT}/plugins/soleur/" 2>/dev/null || true)
-if [[ -z "${residual}" ]]; then
-  echo "PASS: Test 18c: zero git-root-defaulted plugin-root anchors remain anywhere under plugins/soleur/"
-  PASS=$((PASS + 1))
-else
-  echo "FAIL: Test 18c: the rejected git-root-default form survives at:"
-  echo "${residual}" | sed 's/^/         /'
+SEARCH_ROOT="${REPO_ROOT}/plugins/soleur/"
+
+# ANTI-VACUITY FLOOR (#7450 review-finding A12). `grep -r` on a nonexistent root exits
+# 2, `|| true` swallows it, `residual` is empty and the assertion reports a clean
+# corpus — a PASS that means "the scan could not run", which is the one outcome a
+# corpus-wide negative must never render as good. Two positive controls: the root must
+# exist, and a literal KNOWN to be present must actually be found. If the apparatus is
+# broken, the control fails loudly instead of the negative passing quietly.
+control_hits=$(grep -rlF '${CLAUDE_PLUGIN_ROOT}' "${SEARCH_ROOT}" 2>/dev/null | grep -c . || true)
+if [[ ! -d "${SEARCH_ROOT}" ]]; then
+  echo "FAIL: Test 18c: search root ${SEARCH_ROOT} does not exist — the corpus-wide negative cannot be evaluated (a vacuous PASS is not a clean corpus)"
   FAIL=$((FAIL + 1))
+elif [[ "${control_hits}" -lt 10 ]]; then
+  echo "FAIL: Test 18c: positive control found only ${control_hits} files containing the bare anchor under ${SEARCH_ROOT} — expected >=10; the scan apparatus is broken, so its empty result proves nothing"
+  FAIL=$((FAIL + 1))
+else
+  residual=$(grep -rlF "${FORBIDDEN}" "${SEARCH_ROOT}" 2>/dev/null || true)
+  if [[ -z "${residual}" ]]; then
+    echo "PASS: Test 18c: zero git-root-defaulted plugin-root anchors remain anywhere under plugins/soleur/ (control: ${control_hits} files scanned and matched)"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL: Test 18c: the rejected git-root-default form survives at:"
+    echo "${residual}" | sed 's/^/         /'
+    FAIL=$((FAIL + 1))
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -664,7 +717,10 @@ fi
 # proves nothing.
 # ---------------------------------------------------------------------------
 t19_tree="${TMP_DIR}/t19-contributor-tree"
-mkdir -p "${t19_tree}/plugins/soleur/skills/incident/scripts"
+mkdir -p "${t19_tree}/plugins/soleur/skills/incident/scripts" || {
+  echo "FAIL: Test 19: could not build the contributor-tree sandbox — a harness that cannot SET UP must abort, not report a verdict about the SUT" >&2
+  exit 2
+}
 git -C "${t19_tree}" init -q >/dev/null 2>&1
 # Compare physical paths: mktemp may hand back a symlinked prefix while
 # `git rev-parse --show-toplevel` always reports the resolved one, which would make the
@@ -690,33 +746,128 @@ else
 fi
 
 # 19b — extract the anchor from the committed producer, and refuse to run vacuously.
-# The grep -Fq is the anti-hardcode assertion: a future edit that stops reading the producer
-# and pins a literal here goes RED as soon as the SKILL.md drifts away from it.
-t19_expr=$(sed -n 's/^[[:space:]]*SENTINEL="\(.*\)"[[:space:]]*$/\1/p' "${INCIDENT_SKILL}" | head -1)
-if [[ -n "${t19_expr}" ]] && grep -Fq "${t19_expr}" "${INCIDENT_SKILL}"; then
-  echo "PASS: Test 19b: anchor expression extracted from the committed incident/SKILL.md"
-  PASS=$((PASS + 1))
-else
-  echo "FAIL: Test 19b: anchor extraction is vacuous — no SENTINEL= assignment found in ${INCIDENT_SKILL##*/}, or the extracted text is not present in it"
-  FAIL=$((FAIL + 1))
-fi
+#
+# THREE hardenings over the original (#7450 review):
+#
+#   (1) BASH FENCES ONLY, and exactly one assignment per file. The old extractor was a
+#       whole-file `sed … | head -1`, so an EARLIER ```text doc example carrying a
+#       well-formed assignment became the oracle and silently retargeted 19b/19c away
+#       from the live gate — oracle shadowing, measured. `head -1` is what made it
+#       silent: a second match was not a conflict, it was simply discarded.
+#   (2) (SENTINEL|SCRUBBER), not SENTINEL alone. The decoy control never reached
+#       linear-fetch, which the PR body calls the highest residual risk, because its
+#       variable is named SCRUBBER.
+#   (3) Both gate files are driven, not just incident.
+extract_gate_anchor() {
+  awk '
+    /^[[:space:]]*```bash[[:space:]]*$/ { infence = 1; next }
+    /^[[:space:]]*```/                  { infence = 0; next }
+    infence && /^[[:space:]]*(SENTINEL|SCRUBBER)="[^"]*"[[:space:]]*$/ {
+      line = $0
+      sub(/^[[:space:]]*(SENTINEL|SCRUBBER)="/, "", line)
+      sub(/"[[:space:]]*$/, "", line)
+      print line
+    }
+  ' "$1"
+}
 
-# 19c — expand the committed expression the way a reviewer's session would: plugin root
-# unresolved, CWD inside the checked-out contributor tree. The resolved path must not land
-# inside that tree.
-t19_expand="${TMP_DIR}/t19-expand.sh"
-printf 'printf "%%s" "%s"\n' "${t19_expr}" > "${t19_expand}"
-t19_resolved=$(cd "${t19_tree}" && env -u CLAUDE_PLUGIN_ROOT bash "${t19_expand}" 2>/dev/null)
-case "${t19_resolved}" in
-  "${t19_tree}"/*|"${t19_tree}") t19_inside=1 ;;
-  *)                             t19_inside=0 ;;
-esac
-if [[ -n "${t19_resolved}" && "${t19_inside}" -eq 0 ]]; then
-  echo "PASS: Test 19c: committed anchor resolves outside the contributor tree (${t19_resolved})"
-  PASS=$((PASS + 1))
-else
-  echo "FAIL: Test 19c: committed anchor resolves INTO the reviewed party's tree — a hostile PR's redact-sentinel.sh would run as the gate (resolved=${t19_resolved:-<empty>}, decoy=${t19_decoy})"
+for t19_gate in "${INCIDENT_SKILL}" "${LINEAR_SKILL}"; do
+  t19_name="${t19_gate##*/skills/}"
+  t19_anchors="$(extract_gate_anchor "${t19_gate}")"
+  t19_n=$(printf '%s\n' "${t19_anchors}" | grep -c . || true)
+
+  if [[ "${t19_n}" -ne 1 ]]; then
+    echo "FAIL: Test 19b[${t19_name}]: expected exactly ONE gate-anchor assignment in a bash fence, found ${t19_n} — an extractor that takes the first of several is shadowable by a doc example"
+    FAIL=$((FAIL + 1))
+    continue
+  fi
+  t19_expr="${t19_anchors}"
+
+  if grep -Fq "${t19_expr}" "${t19_gate}"; then
+    echo "PASS: Test 19b[${t19_name}]: anchor expression extracted from the committed SKILL.md"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL: Test 19b[${t19_name}]: anchor extraction is vacuous — extracted text absent from the file"
+    FAIL=$((FAIL + 1))
+    continue
+  fi
+
+  # 19c — resolve the committed expression the way a reviewer's session would: plugin
+  # root UNRESOLVED, CWD inside the checked-out contributor tree.
+  #
+  # (a) NEVER bash-expand this text. On the review path the SKILL.md is the CONTRIBUTOR's
+  #     file, so the previous form — writing the expression into a script and running it
+  #     — handed arbitrary command substitution from a hostile PR straight to bash inside
+  #     the reviewer's own test run. The guard for the untrusted-anchor vector was itself
+  #     an untrusted-input execution sink. Metacharacters are now a REFUSAL, not input.
+  #
+  # (b) RESOLVE BEFORE CONTAINMENT. The old `case` compared an UNRESOLVED string against
+  #     an absolute `${t19_tree}/*` prefix, so a bare RELATIVE path never matched the
+  #     prefix and therefore always "passed" — while resolving, by definition, against
+  #     the caller's CWD, which is the contributor tree. The relative case is the
+  #     failure, so it must be tested as one.
+  case "${t19_expr}" in
+    *'$('*|*'`'*|*';'*|*'|'*|*'&'*|*'>'*|*'<'*)
+      echo "FAIL: Test 19c[${t19_name}]: anchor expression carries shell metacharacters (${t19_expr}) — refusing to expand contributor-controlled text"
+      FAIL=$((FAIL + 1))
+      continue ;;
+    *'${CLAUDE_PLUGIN_ROOT:'*)
+      echo "FAIL: Test 19c[${t19_name}]: anchor uses a :- / :? default (${t19_expr}) — ADR-179 rejects both; the default arm is the vector"
+      FAIL=$((FAIL + 1))
+      continue ;;
+  esac
+
+  # Pure textual substitution of the unresolved root — no shell evaluation.
+  t19_resolved="${t19_expr//\$\{CLAUDE_PLUGIN_ROOT\}/}"
+  case "${t19_resolved}" in
+    /*) case "${t19_resolved}/" in
+          "${t19_tree}"/*) t19_inside=1 ;;
+          *)               t19_inside=0 ;;
+        esac ;;
+    # Relative: resolves against the caller's CWD, i.e. INTO the contributor tree.
+    *)  t19_inside=1 ;;
+  esac
+
+  if [[ -n "${t19_resolved}" && "${t19_inside}" -eq 0 ]]; then
+    echo "PASS: Test 19c[${t19_name}]: committed anchor resolves outside the contributor tree (${t19_resolved})"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL: Test 19c[${t19_name}]: committed anchor resolves INTO the reviewed party's tree — a hostile PR's gate script would run as the gate (resolved=${t19_resolved:-<empty>}, tree=${t19_tree})"
+    FAIL=$((FAIL + 1))
+  fi
+done
+
+# ---------------------------------------------------------------------------
+# Test 20 — CROSS-FILE anti-vacuity floor for the Guard 1 skills-axis block.
+#
+# Guard 1's own floor is closure-scoped to its `describe`, so DELETING THE WHOLE
+# #7450 BLOCK was measured green at 9 tests: the floor died with the thing it
+# counted. An in-file floor structurally cannot survive the deletion of its own
+# file or block, so the floor that can must live somewhere else.
+#
+# Here specifically, and not in a sibling vitest file: `scripts/test-all.sh` shards
+# these two suites differently (Guard 1 under the web-platform group, this one under
+# the scripts group), so they do not always run together. A floor in the same shard
+# would be reaped by the same skip that reaped the thing it guards.
+# ---------------------------------------------------------------------------
+T20_GUARD="${REPO_ROOT}/apps/web-platform/test/plugin-root-anchoring.test.ts"
+T20_FLOOR=15
+
+if [[ ! -f "${T20_GUARD}" ]]; then
+  echo "FAIL: Test 20: Guard 1 is GONE (${T20_GUARD}) — the skills-axis anchoring assertions no longer exist"
   FAIL=$((FAIL + 1))
+elif ! grep -Fq 'skills secret-gate subset (#7450)' "${T20_GUARD}"; then
+  echo "FAIL: Test 20: Guard 1 no longer contains the #7450 skills secret-gate describe block — deleting it is exactly what its own in-file floor cannot detect"
+  FAIL=$((FAIL + 1))
+else
+  t20_declared=$(sed -n 's/^[[:space:]]*expect(assertions)\.toBe(\([0-9]\+\));[[:space:]]*$/\1/p' "${T20_GUARD}" | tail -1)
+  if [[ "${t20_declared}" != "${T20_FLOOR}" ]]; then
+    echo "FAIL: Test 20: Guard 1's #7450 assertion floor is '${t20_declared:-<none>}', expected ${T20_FLOOR} — a floor lowered in the same commit that removes assertions is the failure mode this pins"
+    FAIL=$((FAIL + 1))
+  else
+    echo "PASS: Test 20: Guard 1's #7450 block is present and still declares ${T20_FLOOR} decided assertions (cross-file, cross-shard floor)"
+    PASS=$((PASS + 1))
+  fi
 fi
 
 echo
