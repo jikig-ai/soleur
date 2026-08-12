@@ -645,9 +645,24 @@ assert "#6617 probe arms touch NO flip/quiesce/rearm hook" "! grep -qE 'inngest-
 # the same comment-vs-code collision cq-assert-anchor-not-bare-token warns about.
 assert "#6617 probe arms add NO retry loop" "! grep -qE '^[[:space:]]*(for|while|until)[[:space:]]' '$PROBE_ARMS_FILE'"
 
-# --- No reviewer-gate widening (B-AC3). The environment: expression must stay
-# byte-identical; both new ops fall through to '' (no approval gate). ---
-assert "#6617 environment: expression unchanged (no gate widening)" "grep -qFx \"    environment: \\\${{ (inputs.op == 'arm' || inputs.op == 'rollback') && 'inngest-cutover' || '' }}\" '$WF'"
+# --- Reviewer-gate membership (B-AC3, amended #7228) -----------------------------------------
+# This was a byte-identity pin on the environment: expression, whose purpose is to stop the
+# approval gate being WIDENED — i.e. to stop ops being added that write prod without review.
+# #7228 adds op=resume, which writes INNGEST_CUTOVER_FLIP=flushed and therefore AUTHORIZES a prod
+# scheduler start: it must be INSIDE the gate, not outside it. A byte-identity pin cannot express
+# "this set may only grow toward MORE review", so it is replaced by a membership assertion in
+# both directions — every prod-writing op is gated, and the read-only probe ops still are not.
+# That is strictly stronger than the byte pin: it would also catch a REMOVAL, which byte identity
+# only caught incidentally.
+ENV_EXPR=$(grep -E '^[[:space:]]+environment:' "$WF" | head -1 || true)
+assert "#7228 the environment: expression was located (else these pins are vacuous)" \
+  "[[ -n \"\$ENV_EXPR\" ]]"
+for _op in arm rollback resume; do
+  assert "#7228 prod-writing op '\$_op' is INSIDE the required-reviewer gate" \
+    "printf '%s' \"\$ENV_EXPR\" | grep -qF \"inputs.op == '\$_op'\""
+done
+assert "#7228 the gate still resolves to the inngest-cutover environment" \
+  "printf '%s' \"\$ENV_EXPR\" | grep -qF \"'inngest-cutover'\""
 assert "#6617 neither probe op appears in the environment: expression" "! grep -E '^[[:space:]]+environment:' '$WF' | grep -qE 'registry-probe|doublefire-probe'"
 
 # --- Scope caveat carried verbatim from op=verify 2.6 (B-AC7) ---

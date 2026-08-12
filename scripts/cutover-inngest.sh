@@ -1687,6 +1687,55 @@ case "$OP" in
     echo "::notice::rollback complete (LB-reachable host verified enabled via deploy-status). SCOPE (DI-C3): web-2 is re-enabled by the fan-out but not individually VERIFIED here — confirm web-2 via its freeze/recreate lifecycle."
     ;;
 
+  resume)
+    # --- #7228: the POST-FLUSH re-entry, and the ONLY recovery the flip guard names -----------
+    # WHY THIS VERB HAD TO EXIST. inngest-server-flip-guard.sh refuses a prod start when the flag
+    # is `done` and this host carries no done-owner marker — the inherited-`done` case, i.e. every
+    # REPLACED host. Its refusal message prescribes INNGEST_CUTOVER_FLIP=flushed. Nothing wrote
+    # that value: op=arm writes `armed`, op=rollback writes `rollback`, and op=arm's G1 explicitly
+    # REFUSES when the flag is already armed/flipping/flushed/done. So the named recovery was a
+    # bare out-of-band Doppler write against a deny-all-public host — an unowned operator step of
+    # exactly the class hr-no-ssh-fallback-in-runbooks and
+    # hr-never-label-any-step-as-manual-without forbid, on the critical recovery path.
+    #
+    # WHY `flushed` AND NOT A RE-ARM. Re-arming is refused by design: the monotonic flush latch
+    # lives on /mnt/data and SURVIVES the replace, so the armed arm hits refuse_rearm_after_done
+    # and drives the flag terminal — correctly, because post-flush that Redis holds the live prod
+    # queue and re-flushing is the #5450 catastrophe. The `flushed` arm is the safe re-entry: it
+    # starts the server, verifies it actually serves, records the owner marker and completes to
+    # `done` WITHOUT re-running FLUSHALL.
+    #
+    # GATED, because `flushed` authorises a prod start. Two preconditions, both fail-closed:
+    #  G1 the flag must currently be a TERMINAL non-serving state (done/aborted/rolled-back).
+    #     Writing `flushed` over an in-flight armed/flipping flip would race the running FSM.
+    #  G2 the durable flush latch must EXIST. `flushed` asserts "the flush already happened"; if
+    #     no latch is recorded that assertion is unfounded, and starting the server would adopt a
+    #     queue that was never flushed. Read no-SSH via the deploy-status hook, never by SSH.
+    if [[ -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
+      echo "::error::op=resume: DOPPLER_TOKEN_INNGEST_ARM is empty — the repo secret did not resolve (approve the inngest-cutover environment required-reviewer gate on this dispatch). Refusing the post-flush re-entry write."; exit 1
+    fi
+    RS_CUR=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --plain 2>/dev/null || echo "__READ_FAILED__")
+    # SCOPED TO `done`, and that scoping IS the safety argument. `done` is the only value that
+    # evidences a COMPLETED flip, i.e. that a FLUSHALL actually happened — which is exactly what
+    # writing `flushed` asserts. Widening this to aborted/rolled-back would let the resume arm
+    # start a scheduler against a queue that was never flushed, and those states have a correct
+    # verb already: op=arm, whose monotonic-latch refusal is the intended answer there.
+    # It is also precisely the guard's case: a REPLACED host inherits `done` and carries no
+    # done-owner marker, which is the only state whose named recovery had no dispatchable verb.
+    case "$RS_CUR" in
+      __READ_FAILED__)
+        echo "::error::op=resume: cannot read INNGEST_CUTOVER_FLIP from soleur-inngest/prd. Refusing FAIL-CLOSED — a swallowed read must not be mistaken for a terminal state. Do NOT SSH the host."; exit 1 ;;
+      done)
+        echo "::notice::op=resume: G1 — flag is 'done', which evidences a completed flip; the post-flush re-entry is permitted." ;;
+      armed|flipping|flushed)
+        echo "::error::op=resume: G1 REFUSING — INNGEST_CUTOVER_FLIP is '$RS_CUR', an IN-FLIGHT state. The on-host FSM is mid-flip; writing 'flushed' now would race it. Let it reach a terminal state, then re-dispatch."; exit 1 ;;
+      *)
+        echo "::error::op=resume: G1 REFUSING — INNGEST_CUTOVER_FLIP is '${RS_CUR:-unset}', not 'done'. op=resume exists for ONE case: a replaced host that inherited a completed flip's 'done' and carries no done-owner marker, so the flip guard refuses its start. Only 'done' evidences that a FLUSHALL happened; from any other state, writing 'flushed' would start a scheduler against a queue that may never have been flushed. Use op=arm for a fresh cutover — its monotonic-latch refusal is the correct answer if a flush already occurred."; exit 1 ;;
+    esac
+    printf '%s' 'flushed' | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=resume: writing INNGEST_CUTOVER_FLIP=flushed FAILED. Re-dispatch op=resume. Do NOT SSH the host."; exit 1; }
+    echo "::notice::op=resume: wrote INNGEST_CUTOVER_FLIP=flushed to soleur-inngest/prd. The enabled 30s on-host timer takes the post-flush resume arm: start -> verify it SERVES -> record the done-owner marker -> done, with NO re-FLUSHALL."
+    ;;
+
   *)
     echo "::error::unknown op '$OP'"; exit 1
     ;;
