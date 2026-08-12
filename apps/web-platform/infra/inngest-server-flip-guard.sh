@@ -114,18 +114,22 @@ fi
 # co-located scheduler is still serving the registry that is precisely the double-fire race
 # ADR-100's P1-5 guard exists to prevent — reached through the guard rather than around it.
 #
-# The stamp lives in its OWN Doppler key, never appended to the flag value: `done@hetzner-123`
-# would fall through the exact `case` match above and block a legitimately-completed host on
-# every reboot, and would break this file's own lockstep test, which parses `flag_set` literals.
+# NOTHING HERE TOUCHES THE FLAG VALUE. Appending the owner to it (`done@hetzner-123`) would fall
+# through the exact `case` match above and block a legitimately-completed host on every reboot,
+# and would break this file's own lockstep test, which parses `flag_set` literals.
 #
 # SCOPED TO `done`, deliberately. The other allowlisted states are transient and belong to a flip
 # that is actively in progress on THIS host; only `done` is terminal and therefore inheritable.
 # Gating the transient states on a stamp the FSM has not written yet would deadlock the cutover.
 #
-# FAIL CLOSED on an unresolvable identity, but only when it CHANGES the verdict: if this host
-# cannot learn its own instance id it cannot prove the `done` is its own. The FSM refuses to
-# write an unstamped `done` for the same reason, so an absent stamp against a `done` flag means
-# either a pre-#7228 completion or an inherited one — neither is provably this host's.
+# FAIL CLOSED on an absent marker: an absent marker against a `done` flag means either a
+# pre-#7228 completion or an inherited one, and neither is provably this host's. The FSM refuses
+# to write an unowned `done` for the same reason.
+#
+# NOTE: diagnostic boot sets is_prod=false ABOVE, which bypasses this gate as well as the flag
+# allowlist. That is intended — a SQLite-only start cannot be a second prod scheduler whatever
+# the flag or the marker say — but it is a SECOND gate that relaxation now covers, so both are
+# named here rather than only the allowlist.
 # EXISTENCE ON THE ROOT DISK, not an identity comparison. The marker is written by
 # inngest-cutover-flip.sh at the moment a verified flip completes, and /mnt/data is the only
 # mount on this host — so the file has exactly host-lifetime persistence, which IS the predicate:

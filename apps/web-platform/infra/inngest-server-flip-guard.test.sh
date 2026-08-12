@@ -153,6 +153,36 @@ assert_rc "flag=done with a durable unit and diagnostic off still allows (no reg
   "0" "$(run_guard_diag "$PROD_URI" done 0 "$DURABLE_UNIT")"
 rm -rf "$DIAG_TMP"
 
+# --- #7228: the done-owner PATH must agree between writer and reader ------------------------
+# The writer (inngest-cutover-flip.sh) and the reader (this guard) each declare the default
+# independently. Nothing pinned them, which is the one cross-file invariant in this change whose
+# divergence is SILENT AND FAIL-OPEN: if the guard's path drifts onto anything that exists on a
+# fresh host — most cheaply the parent directory the writer's own `mkdir -p` creates — the `-e`
+# test becomes a permanent ALLOW and the inherited-`done` prod start this whole gate exists to
+# refuse sails through, with every suite green.
+#
+# Every OTHER cross-file invariant in this PR is already pinned this way (the GQL query byte
+# identity, the verify window vs --poll-interval, DURABLE_SENTINEL vs BACKEND_FLAGS). This one
+# was the omission. Both operands extracted BY SHAPE — a restated literal would agree with
+# itself while disagreeing with the file it came from.
+echo "TEST: the done-owner marker path agrees between the FSM writer and this guard (#7228)"
+FLIP_SH="$SCRIPT_DIR/inngest-cutover-flip.sh"
+GUARD_PATH=$(grep -oE '^DONE_OWNER_MARKER="\$\{GUARD_DONE_OWNER_MARKER:-[^}]+\}"' "$TARGET" \
+  | sed -E 's/.*:-([^}]+)\}"/\1/' | head -1 || true)
+FLIP_PATH=$(grep -oE '^DONE_OWNER_MARKER="\$\{CUTOVER_DONE_OWNER_MARKER:-[^}]+\}"' "$FLIP_SH" \
+  | sed -E 's/.*:-([^}]+)\}"/\1/' | head -1 || true)
+if [[ -z "$GUARD_PATH" || -z "$FLIP_PATH" ]]; then
+  fail "could not extract the marker path from both files by shape (guard='$GUARD_PATH' flip='$FLIP_PATH') — this pin is vacuous"
+elif [[ "$GUARD_PATH" != "$FLIP_PATH" ]]; then
+  fail "done-owner path DRIFT: the guard reads '$GUARD_PATH' but the FSM writes '$FLIP_PATH' — the guard would never see a legitimately-recorded owner, or would see a path that always exists"
+else
+  pass "done-owner marker path agrees across writer and reader ($GUARD_PATH)"
+fi
+# And it must not be a bare directory: `-e` on the parent that record_done_owner mkdir -p's would
+# be true on every host that ever ran the FSM, including a replaced one.
+assert_rc "the marker path is a FILE under its directory, not the directory itself" \
+  "0" "$([[ "$(basename "$FLIP_PATH")" != "$(basename "$(dirname "$FLIP_PATH")")" && "$FLIP_PATH" == */*/* ]] && echo 0 || echo 1)"
+
 # --- #7228 (3.7): a `done` INHERITED from another host must not authorize a prod start -------
 # THE HAZARD THE ALLOWLIST CANNOT SEE. The flag lives in Doppler, which OUTLIVES THE HOST.
 # `done` says the flip completed — it does not say on WHICH machine. The 2026-07-30 host recorded

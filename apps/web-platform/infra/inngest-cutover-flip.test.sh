@@ -435,7 +435,7 @@ rc=$(run_flip armed CUTOVER_REDIS_DBSIZE=0 CUTOVER_DONE_OWNER_MARKER=/proc/canno
 order=$(trace_csv)
 assert_eq "serving but marker unwritable => non-zero exit (fails CLOSED)" "1" "$rc"
 assert_absent "serving but marker unwritable => flag NEVER reached done" "$order" "flag:done"
-assert_eq "serving but marker unwritable => state reason is verify-instance-unknown" \
+assert_eq "serving but marker unwritable => state reason is verify-owner-unrecordable" \
   "verify-owner-unrecordable" "$(jq -r '.reason' "$STATE")"
 teardown_case
 
@@ -537,10 +537,29 @@ assert_eq "non-vacuity: the GQL endpoint was polled more than once (the loop ret
   "yes" "$([[ $(wc -c < "$STATE_COUNTER") -ge 2 ]] && echo yes || echo no)"
 teardown_case
 
-echo "TEST: #7228 the verify window dominates inngest-server's --poll-interval"
-BOOTSTRAP_SH="$SCRIPT_DIR/inngest-bootstrap.sh"
+# --- #7228: the window must also fit UNDER the unit's start timeout -------------------------
+# A Type=oneshot with no TimeoutStartSec inherits DefaultTimeoutStartUSec (90s on this image),
+# so raising the window above it does not lengthen the wait — it makes systemd SIGTERM the unit
+# mid-verify, AFTER the FLUSHALL has committed, with no verify-* marker emitted (the script traps
+# ERR, not TERM). The window was drift-pinned to the poll interval it must EXCEED and unpinned to
+# the ceiling that KILLS it, which is the more dangerous of the two directions.
+echo "TEST: #7228 the verify window fits under the unit's TimeoutStartSec"
 WINDOW_DEFAULT=$(grep -oE '^CUTOVER_VERIFY_WINDOW_S="\$\{CUTOVER_VERIFY_WINDOW_S:-[0-9]+\}"' "$TARGET" \
   | grep -oE '[0-9]+' | tail -1 || true)
+FLIP_UNIT="$SCRIPT_DIR/inngest-cutover-flip.service"
+UNIT_TIMEOUT=$(grep -oE '^TimeoutStartSec=[0-9]+' "$FLIP_UNIT" | grep -oE '[0-9]+' | head -1 || true)
+if [[ -z "$UNIT_TIMEOUT" ]]; then
+  fail "inngest-cutover-flip.service declares no TimeoutStartSec — the oneshot inherits the 90s default and will be killed mid-verify"
+elif [[ -z "$WINDOW_DEFAULT" ]]; then
+  fail "could not extract the verify window default — this pin is vacuous"
+elif [[ $(( WINDOW_DEFAULT )) -ge $(( UNIT_TIMEOUT )) ]]; then
+  fail "verify window ${WINDOW_DEFAULT}s >= TimeoutStartSec ${UNIT_TIMEOUT}s: systemd kills the oneshot mid-verify, after the FLUSHALL, emitting no marker"
+else
+  pass "verify window ${WINDOW_DEFAULT}s < TimeoutStartSec ${UNIT_TIMEOUT}s (the wait can actually complete)"
+fi
+
+echo "TEST: #7228 the verify window dominates inngest-server's --poll-interval"
+BOOTSTRAP_SH="$SCRIPT_DIR/inngest-bootstrap.sh"
 POLL_INTERVAL=$(grep -oE -- '--poll-interval [0-9]+' "$BOOTSTRAP_SH" | grep -oE '[0-9]+' | sort -u | head -1 || true)
 if [[ -z "$WINDOW_DEFAULT" || -z "$POLL_INTERVAL" ]]; then
   fail "could not extract both operands by shape (window='$WINDOW_DEFAULT' poll='$POLL_INTERVAL') — the pin is vacuous"

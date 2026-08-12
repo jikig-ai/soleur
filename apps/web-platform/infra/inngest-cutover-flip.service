@@ -12,6 +12,21 @@ RequiresMountsFor=/mnt/data
 
 [Service]
 Type=oneshot
+# BOUNDS AN OTHERWISE UNBOUNDED ONESHOT. Note the direction carefully, because two review
+# agents got it backwards and agreed with each other: for Type=oneshot systemd does NOT apply
+# DefaultTimeoutStartSec — systemd.service(5) says the timeout is "disabled by default" for
+# exactly this type. So the risk here was never that the 240s verify window gets truncated at
+# 90s; it is that a hang ANYWHERE in this script (a stalled `doppler secrets set`, a wedged
+# `systemctl stop`) leaves the unit in `activating` FOREVER. The 30s timer cannot re-fire while
+# the unit is active, so the FSM stops polling with no marker emitted and no terminal flag —
+# and op=arm's G6 then reports "no terminal FSM flag within 600s", which is the same
+# non-convergence signature #7228 produced.
+# 420 clears the 240s window plus the stop/flush/assert work preceding it, so a legitimate slow
+# cutover completes while a genuine hang is killed and retried on the next timer tick.
+# Every sibling oneshot in this directory bounds itself (cron-egress-firewall 300, git-data-gc
+# 3600, container-restart-monitor 120); this unit was the outlier.
+# inngest-cutover-flip.test.sh pins window < TimeoutStartSec, extracting both operands by shape.
+TimeoutStartSec=420
 # Runs as ROOT (no User=): the flip must `systemctl stop/start inngest-server.service`
 # and write the /var/lock state slot — a privileged control op, unlike the deploy-scoped
 # server/heartbeat units. HOME=/root is set so the Doppler CLI's os.UserHomeDir() init

@@ -471,8 +471,8 @@ run_preflush_flip() {
   # re-FLUSHALL — write the checkpoint BEFORE start_server so the window is covered.
   flag_set flushed
   start_server
-  # #7228: `done` is now PROBE-DERIVED. confirm_and_finish either verifies the host actually
-  # serves and stamps the instance, or drives the flag terminal-aborted and exits non-zero.
+  # #7228: `done` is now PROBE-DERIVED. verify_or_abort either verifies the host actually
+  # serves and records this host as the owner, or drives the flag terminal-aborted and exits non-zero.
   # It contains no start_server call and no flag_set before its probe, so the flip-guard
   # lockstep derivation still attributes this start site to `flushed`.
   verify_or_abort "$dbsize"
