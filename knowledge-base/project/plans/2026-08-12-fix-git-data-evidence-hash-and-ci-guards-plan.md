@@ -173,7 +173,7 @@ merely a filter.
 | Module ships three `.tf` → glob contributes 2 | Confirmed | Fix removes the need to count siblings |
 | 9 payload references | Confirmed | Floor becomes a payload floor of 9 |
 | The `-lt 11` floor is a second stale literal | True **and understated** — it tolerates losing 2 of 9 | Recorded as a tightening |
-| "33/33 green" | Suite is **58/58**; 33 is the capture-script suite's floor | Floor bump 58 → 63 |
+| "33/33 green" | Suite is **58/58**; 33 is the capture-script suite's floor | Floor bump 58 → 68 |
 | **Only production caller is the capture script** | **False** — `git_data_rung2_rehearsal_gate()` is a second caller, and it is the birth interlock | Both callers swept |
 | The suite never touches the live file | **False** — it already reads it as a non-asserting NOTE | That precedent justifies A1 |
 | Header's countdown-timer premise (#6982 pending) | **#6982 is CLOSED and the live gate now reports RELEASED** | Header amended; A1's stakes raised |
@@ -399,7 +399,9 @@ is recorded in DC-1 for the operator, not argued away.
   the selector.
 - `marketplace-drift-check.test.sh`: correct the default-shell comment.
 - `test-all.sh`: `run_suite` for the new suite in `want_scripts`.
-- Floors: gate 58 → 63, capture-script 33 → 34, rehearsal unchanged at 44.
+- Floors: gate 58 → 68, capture-script 33 → 34, rehearsal 44 → 45, new closure-guard suite
+  exactly 13. (This line carried the pre-deepen figures — 63, and "rehearsal unchanged" — until
+  #7485's implementation reconciled it against §Test Scenarios, which is authoritative.)
 
 ### Phase 3 — Mutation verification and record
 
@@ -452,7 +454,7 @@ so this is the interlock that would gate the birth #6977 tracks.
 
 ```yaml
 liveness_signal:
-  what: "each suite's verdict line and anti-vacuity floor — the gate suite's `=== N passed, M failed ===` (floor 63), the capture-script suite (floor 34), the rehearsal's `N passed, M failed (T assertions)` (floor 44), and the new closure-guard suite's floor line (9)"
+  what: "each suite's verdict line and anti-vacuity floor — the gate suite's `=== N passed, M failed ===` (floor 68), the capture-script suite (floor 34), the rehearsal's `N passed, M failed (T assertions)` (floor 45), and the new closure-guard suite's count line (exactly 13)"
   cadence: "per-run: ci.yml `test-scripts` on every push; infra-validation.yml on every infra-touching diff"
   alert_target: "the workflow run log of the failing job; on push to main, infra-validation.yml's notify-main-failure"
   configured_in: "scripts/test-all.sh (run_suite registrations), .github/workflows/ci.yml (test-scripts job), .github/workflows/infra-validation.yml (the rehearsal step)"
@@ -686,8 +688,13 @@ file, so it stays an assertion rather than a lint.
       and the extraction comment that justified the family regex by reference to that check is
       updated rather than left describing a check that no longer exists.
 - [ ] **AC7** — `bash tests/scripts/test-git-data-birth-readiness-gate.sh` prints
-      `=== 68 passed, 0 failed ===` (exact equality, not a floor), and the existing arms pinning
-      the `ABORT`/`drifted` needles still pass.
+      `=== 68 passed, 0 failed ===`, and the existing arms pinning the `ABORT`/`drifted` needles
+      still pass. **AMENDED at implementation (DC-3):** this AC originally required the suite's
+      internal anti-vacuity check to become an exact equality "matching the suite's existing
+      form". That justification is false — the existing form is a **floor** (`-lt 58`), carrying
+      an explicit in-file rationale against equality, and both sibling suites use a floor too.
+      The floor is raised 58 → 68 and left a floor; the `68 passed, 0 failed` line above is
+      asserted directly and is unaffected. See DC-3.
 - [ ] **AC8** — The capture script's derivation-fault arm no longer reads as transient and still
       exits 2 — asserted by an **executing arm** in the capture-script suite (floor 33 → 34), not a
       grep, since a grep is satisfied whether or not the branch is reachable.
@@ -797,7 +804,9 @@ check, and A4/A5/A7 are exactly the arms that would silently disarm.
   `git_data_rung2_user_data_sha256 "$R2/ci.yml"` — the equivalence arm that makes a third mirror
   drift unshippable, replacing the first draft's one-time byte-identity measurement.
 
-Floor moves 58 → 68, asserted as exact equality, matching the suite's existing form.
+Floor moves 58 → 68, and stays a **floor** — see DC-3. (This line previously read "asserted as
+exact equality, matching the suite's existing form"; the suite's existing form is a floor, so
+the stated justification did not hold.)
 
 ### B — rehearsal suite (floor 44 → 45)
 

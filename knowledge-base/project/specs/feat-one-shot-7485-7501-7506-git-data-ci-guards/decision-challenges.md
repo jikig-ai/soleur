@@ -61,3 +61,42 @@ diagnoses in #7501 were actually spent on.
 **Operator decision available.** Accept the divergence, or require a literal skip-and-pass — in
 which case the `PASS`-for-exit-0 laundering in `run-registered-suites.sh` must be fixed first, and
 that becomes a prerequisite change with its own consumers rather than part of this PR.
+
+## DC-3 — The gate suite's anti-vacuity check stays a FLOOR, against AC7 as written
+
+**Plan's stated direction.** AC7 and §Test Scenarios A required the gate suite's anti-vacuity
+check to become an **exact equality** at 68, "matching the suite's existing form".
+
+**Why that was not implemented as written.** The justification is factually wrong, and the
+contradiction is in the file the plan was describing. The existing form is a floor:
+
+```
+# A floor, not equality: it is developer-incremented, so `-eq` would redden the suite on every
+# legitimately added assertion and train the next person to bump it unread.
+if [[ "$_ran" -lt 58 ]]; then
+```
+
+So "matching the suite's existing form" argues for a floor, not against one. Both sibling
+suites (`test-git-data-rung2-evidence-capture.sh`, `git-data-runcmd-rehearsal.test.sh`) also
+use floors. Switching this one to `-eq` would have deleted a documented decision, made the
+gate suite inconsistent with its two siblings, and done so on a rationale that inverts on
+inspection.
+
+**What was implemented.** The floor is raised 58 → 68 and stays a floor. AC7's *observable*
+claim — that a healthy run prints `=== 68 passed, 0 failed ===` — is unaffected and is
+asserted directly; it was never the contested part.
+
+**The real argument for `-eq` is not the one the plan made,** and is recorded here so the
+operator can weigh it rather than have it disappear: a floor cannot see a
+delete-one-arm-add-one-arm edit, which is the `2026-08-04-a-count-framed-ratchet-cannot-see-a-rename`
+class this PR cites elsewhere. That is a genuine gap in **all three** suites, and closing it
+in one of them by contradicting its own recorded reasoning would be the least coherent option
+available.
+
+**Where it IS applied.** The new `scripts/follow-through-closure-guard.test.sh` asserts an
+exact 13, because its arms are a closed enumerated set (C1–C13) fixed by the Guard 3 matrix
+rather than a running total — so equality is a specification there, not a tax on future
+contributors.
+
+**Operator decision available.** Accept the floor, or require `-eq` across all three suites as
+a separate consistency change with its own review.

@@ -10,22 +10,22 @@ is one commit (see DC-1).
 
 ## Phase 0 — Preconditions (no product edits)
 
-- [ ] 0.1 Re-run the #7485 reproduction on a fresh `origin/main` extract; confirm rc=1 and the
+- [x] 0.1 Re-run the #7485 reproduction on a fresh `origin/main` extract; confirm rc=1 and the
       9-vs-11 text. If it no longer reproduces, stop and re-scope.
-- [ ] 0.2 Confirm `python3 -c 'import yaml'` succeeds.
-- [ ] 0.3 Confirm the closure-guard step still declares **no** `shell:` key. If one has appeared, the
+- [x] 0.2 Confirm `python3 -c 'import yaml'` succeeds.
+- [x] 0.3 Confirm the closure-guard step still declares **no** `shell:` key. If one has appeared, the
       faithful harness becomes `bash --noprofile --norc -eo pipefail` and Guard 3 row 4 flips — the
       premise is directional and the first draft got the direction wrong.
-- [ ] 0.4 Re-run the assembly grep over the rehearsal file. Expect **four** call sites; the fourth is
+- [x] 0.4 Re-run the assembly grep over the rehearsal file. Expect **four** call sites; the fourth is
       the R4 MUTATION arm's own liveness marker and is **excluded**, not folded in.
-- [ ] 0.4b Confirm no `shopt -s nullglob` in the gate lib, so the sibling loop must test for a matched
+- [x] 0.4b Confirm no `shopt -s nullglob` in the gate lib, so the sibling loop must test for a matched
       directory entry (`-e` OR `-L`) before testing readability. A bare `-r || abort` aborts the live
       tree on the unexpanded `*.tf.json` literal.
-- [ ] 0.4c Unreadability fixtures use dangling symlinks, never `chmod 000` — root bypasses the mode
+- [x] 0.4c Unreadability fixtures use dangling symlinks, never `chmod 000` — root bypasses the mode
       check and would disarm A4/A5/A7 silently.
-- [ ] 0.5 Read `scripts/lint-shell-capture-exit.baseline.txt` (7 entries for the rehearsal file). Plan
+- [x] 0.5 Read `scripts/lint-shell-capture-exit.baseline.txt` (7 entries for the rehearsal file). Plan
       for it to stay unchanged or shrink, never grow.
-- [ ] 0.6 Record floors: gate suite 58, rehearsal 44, capture-script suite 33.
+- [x] 0.6 Record floors: gate suite 58, rehearsal 44, capture-script suite 33.
 
 ---
 
@@ -33,50 +33,50 @@ is one commit (see DC-1).
 
 ### 1.1 Gate suite (`tests/scripts/test-git-data-birth-readiness-gate.sh`)
 
-- [ ] 1.1.1 Repair `_r2_hash()`: add the sibling `.tf` glob and widen the regex to the
+- [x] 1.1.1 Repair `_r2_hash()`: add the sibling `.tf` glob and widen the regex to the
       `file(base64|sha256|sha512|md5)?` family. Verify `R2_SHA` is byte-identical and the suite is
       still 58/58 — measured hash-neutral, because no current fixture has a sibling or a
       `filebase64` binding. Then add the **equivalence arm** (A10) so a third drift is unshippable.
-- [ ] 1.1.2 Extend the fixture builder so a fixture can be given sibling `.tf` files. Sibling
+- [x] 1.1.2 Extend the fixture builder so a fixture can be given sibling `.tf` files. Sibling
       basenames must not collide with any payload basename, or the basename-uniqueness check reddens
       the arms for the wrong reason.
-- [ ] 1.1.3 Add A1 (live tree → 0, 64-hex) and A2 (two-sibling fixture → 0) on a **separate copied
+- [x] 1.1.3 Add A1 (live tree → 0, 64-hex) and A2 (two-sibling fixture → 0) on a **separate copied
       tree**, calling the function directly, never through `r2check`/`R2_SHA`. Both **must be RED**.
-- [ ] 1.1.4 Add A3 — three-sibling fixture → 0 (sibling-count independence).
-- [ ] 1.1.5 Add A4/A5 — a `.tf` and a `.tf.json` sibling, each a dangling symlink → 1 naming the
+- [x] 1.1.4 Add A3 — three-sibling fixture → 0 (sibling-count independence).
+- [x] 1.1.5 Add A4/A5 — a `.tf` and a `.tf.json` sibling, each a dangling symlink → 1 naming the
       file. **A4 must be RED against the first draft's shape** (measured rc=0 there).
-- [ ] 1.1.6 Add A6 — a readable `.tf.json` sibling → 0, digest differs from the fixture without it.
-- [ ] 1.1.7 Add A7/A8 — a referenced payload as a dangling symlink, and one deleted outright, each
+- [x] 1.1.6 Add A6 — a readable `.tf.json` sibling → 0, digest differs from the fixture without it.
+- [x] 1.1.7 Add A7/A8 — a referenced payload as a dangling symlink, and one deleted outright, each
       → 1 naming it. A8 inherits the job the deleted counting check used to do.
-- [ ] 1.1.8 Add A9 — a module binding only 2 payloads with siblings present → 1 naming the drifted
+- [x] 1.1.8 Add A9 — a module binding only 2 payloads with siblings present → 1 naming the drifted
       extraction and the payload count.
 
 ### 1.2 Capture-script suite (`tests/scripts/test-git-data-rung2-evidence-capture.sh`)
 
-- [ ] 1.2.1 Add one **executing** arm for the derivation-fault path: break a payload in the existing
+- [x] 1.2.1 Add one **executing** arm for the derivation-fault path: break a payload in the existing
       minimal fixture tree, assert rc=2 and the corrected text. Replaces the first draft's grep,
       which would be satisfied whether or not the branch is reachable.
 
 ### 1.3 Closure-guard suite (`scripts/follow-through-closure-guard.test.sh`, new)
 
-- [ ] 1.3.1 Scaffold: PyYAML hard-exit 2; an EXIT trap for its `mktemp` allocations (rule (c) gates
+- [x] 1.3.1 Scaffold: PyYAML hard-exit 2; an EXIT trap for its `mktemp` allocations (rule (c) gates
       added lines); a column-0 `FAIL`-shaped failure marker naming which arm failed; floor 9.
-- [ ] 1.3.2 Extract the step body by name with a one-step cardinality check (C6); assert no `shell:`
+- [x] 1.3.2 Extract the step body by name with a one-step cardinality check (C6); assert no `shell:`
       key (C7) and no `${{ }}` (C8).
-- [ ] 1.3.3 `gh` stub on `PATH` recording argv to a log file.
-- [ ] 1.3.4 C1–C3 — incomplete comment under **`bash -e`** → rc=0, exactly one reopen, checklist line
+- [x] 1.3.3 `gh` stub on `PATH` recording argv to a log file.
+- [x] 1.3.4 C1–C3 — incomplete comment under **`bash -e`** → rc=0, exactly one reopen, checklist line
       rendered. Two fixtures exercise **both** conditional arms, with URLs derived from the
       workflow's own `required_urls` array so drift cannot collapse them onto one arm. **RED.**
-- [ ] 1.3.5 C4 — complete comment → rc=0, zero reopens.
-- [ ] 1.3.6 C5/C6 — a bot reopen body newest, once above a **complete** human comment (→ zero
+- [x] 1.3.5 C4 — complete comment → rc=0, zero reopens.
+- [x] 1.3.6 C5/C6 — a bot reopen body newest, once above a **complete** human comment (→ zero
       reopens, discriminating on count) and once above an **incomplete** one (→ one reopen whose
       body lists the missing URLs, discriminating on content). The naive "bot body → zero reopens"
       arm is WRONG: measured, the unfixed guard reopens once there, because the bot body satisfies
       field 1 but not fields 2 or 3.
-- [ ] 1.3.6b C7/C8/C9 — a human comment carrying the guard's own heading is NOT excluded (identity
+- [x] 1.3.6b C7/C8/C9 — a human comment carrying the guard's own heading is NOT excluded (identity
       filter, not content); a 31-comment fixture selects the newest (pagination); no qualifying
       comment reopens rather than falling back to the issue body.
-- [ ] 1.3.7 C9/C10 — the standing sweep with `[[:space:]]` (not `\s`), a non-zero scanned-file
+- [x] 1.3.7 C9/C10 — the standing sweep with `[[:space:]]` (not `\s`), a non-zero scanned-file
       assertion, its three documented bounds, and a planted-violation fixture proving it fires.
 
 ### 1.4 Rehearsal suite (`apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh`)
@@ -106,29 +106,29 @@ is one commit (see DC-1).
 
 ## Phase 2 — GREEN
 
-- [ ] 2.1 `tests/scripts/lib/git-data-birth-readiness-gate.sh`:
-  - [ ] 2.1.1 Payload loop aborts on the first unresolvable reference, naming it; retain the
+- [x] 2.1 `tests/scripts/lib/git-data-birth-readiness-gate.sh`:
+  - [x] 2.1.1 Payload loop aborts on the first unresolvable reference, naming it; retain the
         `-n "$_f"` guard (a bare `-r` test on an empty `_f` is true for the directory); increment
         `_n_payloads` on each success.
-  - [ ] 2.1.2 Sibling glob: `[[ -e || -L ]] || continue` (skip the unexpanded literal) then
+  - [x] 2.1.2 Sibling glob: `[[ -e || -L ]] || continue` (skip the unexpanded literal) then
         `[[ -r ]] || abort` (catch present-but-unreadable AND dangling symlinks), extended to
         `*.tf.json`, which Terraform loads and the current glob misses. **No sibling floor.**
-  - [ ] 2.1.3 Floor on `_n_payloads` (`-lt 9`); message names the count and where the literal must
+  - [x] 2.1.3 Floor on `_n_payloads` (`-lt 9`); message names the count and where the literal must
         move when the payload set grows.
-  - [ ] 2.1.4 Delete the referenced-vs-resolved block, `_n_resolved` and both literals.
-  - [ ] 2.1.5 Update the extraction comment that justified the family regex by reference to the
+  - [x] 2.1.4 Delete the referenced-vs-resolved block, `_n_resolved` and both literals.
+  - [x] 2.1.5 Update the extraction comment that justified the family regex by reference to the
         now-deleted check. Leave the basename-uniqueness check intact — it is the sole detector of a
         module referencing its own sibling.
-- [ ] 2.2 `scripts/followthroughs/git-data-rung2-evidence-capture.sh` — re-word the `TRANSIENT:`
+- [x] 2.2 `scripts/followthroughs/git-data-rung2-evidence-capture.sh` — re-word the `TRANSIENT:`
       label on the hash-derivation arm only. **`exit 2` unchanged.**
-- [ ] 2.3 `.github/workflows/follow-through-closure-guard.yml` — `--` on both `printf` calls;
+- [x] 2.3 `.github/workflows/follow-through-closure-guard.yml` — `--` on both `printf` calls;
       exclude bot-authored comments from the closing-comment selector.
-- [ ] 2.4 `scripts/marketplace-drift-check.test.sh` — correct the default-shell comment (it asserts
+- [x] 2.4 `scripts/marketplace-drift-check.test.sh` — correct the default-shell comment (it asserts
       the wrong side of a live repo contradiction, and it is what misled this plan).
-- [ ] 2.5 `scripts/test-all.sh` — `run_suite` line for the new suite in the `want_scripts` block.
+- [x] 2.5 `scripts/test-all.sh` — `run_suite` line for the new suite in the `want_scripts` block.
 - [ ] 2.6 Floors: gate 58 → 68 (exact equality), capture-script 33 → 34, rehearsal 44 → 45, new
       closure-guard suite exactly 13.
-- [ ] 2.7 Amend the gate suite header: record why one live-tree arm is not the countdown timer the
+- [x] 2.7 Amend the gate suite header: record why one live-tree arm is not the countdown timer the
       header forbids, and that #6982 has closed (the live gate now reports RELEASED).
 
 ---
