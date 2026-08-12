@@ -44,7 +44,9 @@ If the tenant has not signed: **STOP here**. Do not proceed to Step 1.
 Counsel review may be required for any tenant whose DPA negotiation
 deviates from the template.
 
-**Verify:** `bash scripts/tenant-dpa-register-guard.sh assert-populated` — exits 0 only once the register holds at least one real tenant row, and exits 1 on the empty register.
+**Verify:** `bash scripts/tenant-dpa-register-guard.sh assert-signed` — exits 0 only once the register holds a row whose Status is exactly `dpa-signed`, and exits 1 otherwise.
+
+> Use `assert-signed`, NOT `assert-populated`. Step 0 asks whether a SIGNED DPA is recorded; `assert-populated` only asks whether the register is non-empty. The register is append-only, so once any row is ever written — including a row for a tenant that has since been offboarded — a row-count gate is permanently green for every future tenant. That is the same vacuous-gate shape this guard replaced, one layer up, and it was found in review of #7349 before the second tenant existed to be harmed by it.
 
 > The earlier form of this gate counted table lines and required at least three, reasoning "header + separator + ≥1 data row". The empty register has exactly three such lines, because the `| _(none yet)_ |` placeholder is itself one — so the gate was vacuously true on the empty set and would have kept passing until the first real tenant. Fixed under #7349; the guard now excludes the placeholder and fails closed. The assertion that the old predicate has not returned lives in `scripts/tenant-dpa-register-guard.test.sh`, which is why this note describes it rather than quoting it.
 

@@ -460,16 +460,28 @@ while IFS= read -r f; do
   [[ -n "$f" ]] || continue
   while IFS= read -r hit; do
     [[ -n "$hit" ]] || continue
-    echo "::error::published mirror link 404s: ${f}:${hit%%:*} -- ${hit#*:}" >&2
-    echo "::error::  served at /legal/<slug>/, so a relative .md target resolves under that route." >&2
-    echo "::error::  Use /legal/<slug>/ on the mirror; the canonical copy keeps .md (GitHub-rendered)." >&2
     badlinks=$((badlinks + 1))
-  done < <(grep -noE '\]\((\./)?[a-z0-9-]+\.md\)' "$f" || true)
+    if (( badlinks <= 12 )); then
+      {
+        echo "  ${f##*/}: PUBLISHED LINK 404s at line ${hit%%:*} -- ${hit#*:}"
+        echo "    served at /legal/<slug>/, so a relative .md target resolves under that route."
+        echo "    Use /legal/<slug>/ on the mirror; the canonical copy keeps .md (GitHub-rendered)."
+      } >> "$report"
+    elif (( badlinks == 13 )); then
+      echo "  ... further published-link findings suppressed (cap 12)" >> "$report"
+    fi
+  done < <(grep -noE '\]\((\.{1,2}/)*([A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+\.md(#[A-Za-z0-9._-]+)?\)' "$f" || true)
 done < <(find "$MIRROR_DIR" -maxdepth 1 -name '*.md' -type f | sort)
 
 if (( badlinks > 0 )); then
-  echo "::error::legal mirror: ${badlinks} published link(s) use the canonical .md form and will 404" >&2
-  exit 1
+  # Fold into `violations` rather than exiting here. An early exit suppressed the drift
+  # report below, so a PR that both grew drift AND shipped a .md link on the mirror was
+  # told only about the link -- it would fix that, push, wait for CI, and only then learn
+  # about the drift. Two serial round-trips for one push, and the SAME regression class
+  # this script's own comment (below) records having already fixed once. Folding in also
+  # puts these findings under SOLEUR_LEGAL_DRIFT_ACCEPT, which an early exit bypassed --
+  # leaving an urgent legal publication with a .md link no way through at all.
+  violations=$((violations + badlinks))
 fi
 
 # A real VIOLATION is reported before the "nothing was evaluated" guard. The guard used to

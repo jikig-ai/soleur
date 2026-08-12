@@ -41,7 +41,7 @@ RUNBOOK="$REPO_ROOT/knowledge-base/engineering/operations/runbooks/tenant-provis
 # real count is deletion headroom: at 26-against-29 three assertions could be removed (including
 # all three that pin the column anchor) and the suite still exited 0. A floor still permits
 # GROWTH, which equality would turn into a spurious failure; it is only the slack that was wrong.
-MIN_ASSERTIONS=37
+MIN_ASSERTIONS=42
 
 passes=0
 fails=0
@@ -163,6 +163,53 @@ fi
 "$GUARD" --register "$reg_empty" assert-empty >/dev/null 2>&1 \
   && pass "A2: assert-empty succeeds on the empty register (the §6.1 clock baseline)" \
   || fail "A2: assert-empty rejected the empty register"
+
+# ---------------------------------------------------------------------------------------
+# A3 -- assert-signed. Step 0 of tenant-provisioning.md asks whether a SIGNED DPA is
+# recorded. It used to run assert-populated, which only asks whether the register is
+# NON-EMPTY. The register is append-only, so once ANY row is ever written -- including a
+# row for a tenant that has since been offboarded -- a row-count gate is permanently green
+# for every future tenant. That is the same vacuous-gate shape this guard was built to
+# replace, one layer up, and it was found in review of #7349 before a second tenant
+# existed to be harmed by it.
+# ---------------------------------------------------------------------------------------
+
+reg_offboarded="$SANDBOX/offboarded-only.md"
+cat > "$reg_offboarded" <<'EOF'
+## Rows
+
+| Tenant | DPA signed | Status | Notes |
+|--------|-----------|--------|-------|
+| acme | 2026-01-01 | offboarded-with-data-deleted | gone |
+EOF
+
+# The exact false-negative: populated, zero signed.
+"$GUARD" --register "$reg_offboarded" assert-populated >/dev/null 2>&1 \
+  && pass "A3: assert-populated is TRUE with zero signed rows (documents why Step 0 cannot use it)" \
+  || fail "A3: fixture wrong -- assert-populated should pass on a non-empty register"
+
+if "$GUARD" --register "$reg_offboarded" assert-signed >/dev/null 2>&1; then
+  fail "A3: assert-signed PASSED with zero dpa-signed rows -- Step 0 gate is vacuous"
+else
+  pass "A3: assert-signed fails closed when no row is dpa-signed"
+fi
+
+"$GUARD" --register "$reg_signed" assert-signed >/dev/null 2>&1 \
+  && pass "A3: assert-signed succeeds once a dpa-signed row exists" \
+  || fail "A3: assert-signed rejected a register holding a signed row"
+
+if "$GUARD" --register "$reg_empty" assert-signed >/dev/null 2>&1; then
+  fail "A3: assert-signed PASSED on the empty register"
+else
+  pass "A3: assert-signed fails closed on the empty register"
+fi
+
+# The runbook must cite the predicate that answers Step 0's question, not the row-count one.
+if grep -q 'tenant-dpa-register-guard.sh assert-signed' "$RUNBOOK"; then
+  pass "A3: tenant-provisioning.md Step 0 cites assert-signed"
+else
+  fail "A3: Step 0 does not cite assert-signed -- the vacuous row-count gate is back"
+fi
 
 if "$GUARD" --register "$reg_signed" assert-empty >/dev/null 2>&1; then
   fail "A2: assert-empty PASSED on a populated register"
@@ -305,7 +352,12 @@ else
   pass "call-site: the vacuous pipe-line-count gate is gone from the runbook"
 fi
 
-grep -qE 'bash scripts/tenant-dpa-register-guard\.sh (assert-populated|assert-empty|count-signed|count-data-rows)' "$RUNBOOK" \
+# Subcommand alternation derived from the guard's own usage block rather than restated:
+# a hand-maintained closed list went stale the moment `assert-signed` was added (#7349
+# review), reporting "the runbook does not invoke the guard" when it did.
+_SUBCMDS=$("$GUARD" --help | awk '/^Subcommands:/{f=1;next} /^$/{f=0} f{print $1}' | paste -sd'|')
+[[ -n "$_SUBCMDS" ]] || fail "call-site: could not derive subcommands from --help"
+grep -qE "bash scripts/tenant-dpa-register-guard\.sh (${_SUBCMDS})" "$RUNBOOK" \
   && pass "call-site: the runbook carries an executable INVOCATION, not a prose mention" \
   || fail "call-site: the runbook mentions the guard but does not invoke it"
 

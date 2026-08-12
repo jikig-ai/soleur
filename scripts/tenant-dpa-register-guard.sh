@@ -51,6 +51,7 @@ Subcommands:
   count-signed       print the number of rows whose Status column is exactly `dpa-signed`
   assert-empty       exit 0 iff the register holds no tenant rows (the DPA template §6.1 baseline)
   assert-populated   exit 0 iff the register holds at least one tenant row
+  assert-signed      exit 0 iff at least one row's Status is exactly `dpa-signed`
 
 Exit codes: 0 ok, 1 assertion failed, 2 cannot decide.
 EOF
@@ -176,9 +177,9 @@ case "$subcommand" in
       exit 0
     fi
     echo "::error::register holds ${count} tenant row(s); expected the empty baseline." >&2
-    echo "::error::If a tenant DPA was genuinely signed, this is EXPECTED: flip the live check in" >&2
-    echo "::error::scripts/test-all.sh from assert-empty to assert-populated in the same PR that adds" >&2
-    echo "::error::the row, and escalate to the CLO -- the DPA template §6.1 30-day sub-processor" >&2
+    echo "::error::If a tenant DPA was genuinely signed, this is EXPECTED. scripts/test-all.sh runs" >&2
+    echo "::error::count-signed (decidability, not a business fact), so no test-all.sh edit is needed;" >&2
+    echo "::error::escalate to the CLO instead -- the DPA template §6.1 30-day sub-processor" >&2
     echo "::error::notification clock starts at the first dpa-signed row." >&2
     exit 1
     ;;
@@ -189,6 +190,19 @@ case "$subcommand" in
       exit 0
     fi
     echo "::error::register holds no tenant rows. Step 0 requires a signed, recorded DPA before any provider account is created on behalf of a tenant. STOP -- do not proceed to Step 1." >&2
+    exit 1
+    ;;
+  assert-signed)
+    count="$(read_count signed)"
+    if (( count >= 1 )); then
+      echo "tenant DPA register holds ${count} row(s) with Status=${SIGNED_STATUS}."
+      exit 0
+    fi
+    echo "::error::register holds no row whose Status is exactly '${SIGNED_STATUS}'." >&2
+    echo "::error::Step 0 requires a SIGNED, recorded DPA before any provider account is created" >&2
+    echo "::error::on behalf of a tenant. A non-empty register is NOT that: the register is" >&2
+    echo "::error::append-only, so rows for offboarded tenants persist forever and would keep a" >&2
+    echo "::error::row-count gate green for every future tenant. STOP -- do not proceed to Step 1." >&2
     exit 1
     ;;
   *)
