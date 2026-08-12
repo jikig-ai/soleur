@@ -170,10 +170,31 @@ failure is neither. That distinction is the ADR's whole burden — see `## Archi
 
 - `_skip()` implements "a gate that cannot run must not report success". It does **not** buy P1: it
   is whole-suite, pre-flight, and `exit`s.
-- **`git-lock-chardevice-sweep.test.sh` already ships the counter idiom** — `SKIPPED=0`,
+- **`git-lock-chardevice-sweep.test.sh` already ships a counter idiom** — `SKIPPED=0`,
   `SKIPPED=$((SKIPPED + 1))`, `echo "Skipped: $SKIPPED"`. Plan v1 claimed no sibling maintained a
-  skip counter; that was false. **The counter is not new — only the ceiling is** — and this plan
-  adopts the sibling's uppercase `SKIPPED` / `Skipped: N` naming rather than inventing its own.
+  skip counter; that was false.
+- **`infra-config-apply.test.sh` ships a RICHER precedent, and it is the one this plan follows.**
+  Found at deepen time; it is the closer match on every axis this plan needs, and adopting it
+  changes the design rather than merely re-citing it:
+  - `SKIPPED_ASSERTIONS=0` — **denominated in assertion cost, not in arms.** One skip site
+    increments by 4 (`SKIPPED_ASSERTIONS=$((SKIPPED_ASSERTIONS + 4))`), because that arm would have
+    made four assertions. This resolves the ceiling's unit ambiguity outright and is
+    forward-compatible with the deferred `run_case()` extension, where a single skipped case
+    suppresses several follow-on assertions at once.
+  - Each skip site carries a **comment declaring its assertion cost** (`# 1: the single "the lint
+    FLAGS the pre-fix handler" assertion the taken branch would make.`), so the number is auditable
+    at the site rather than only at the floor.
+  - The floor already compares the **sum**: `if [[ $((PASS + SKIPPED_ASSERTIONS)) -lt
+    "$APPLY_MIN_ASSERTIONS" ]]` — precisely this plan's `passes + fails + SKIPPED` design, already
+    in the repo.
+  - It emits a **breakdown NOTE** when any skip fired: `NOTE: $SKIPPED_ASSERTIONS assertion(s) were
+    declared-skipped by loud SKIP arms — this run is weaker than a full one.` This is a better
+    mechanism than the `::warning::` annotation v1 cut — it is in-repo precedent, carries no
+    doctrinal tension with the `_skip()` block, and makes a degraded run legible in the same place
+    the counts are read.
+
+  **So the counter, the assertion-cost denomination, the sum-floor and the degraded-run NOTE are all
+  pre-existing.** Only the ceiling is new to this plan.
 - **`git-data-rung2-rehearsal.test.sh` is a counter-precedent and must be distinguished.** It uses
   the doctrine sentence as a per-arm **failure detail** at two sites (`fail "python3 absent — the
   workflow-contract arms did NOT run" "a gate that cannot run must not report success"`). That is a
