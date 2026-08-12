@@ -7,7 +7,8 @@ A full AI organization across engineering, finance, marketing, legal, operations
 Install the plugin:
 
 ```bash
-claude plugin install soleur
+claude plugin marketplace add jikig-ai/soleur-marketplace
+claude plugin install soleur@soleur-marketplace
 ```
 
 ## The Soleur Workflow
@@ -331,15 +332,45 @@ The `agent-browser` skill provides comprehensive documentation on usage.
 **From the marketplace (recommended):**
 
 ```bash
-claude plugin marketplace add jikig-ai/soleur
-claude plugin install soleur
+claude plugin marketplace add jikig-ai/soleur-marketplace
+claude plugin install soleur@soleur-marketplace
 ```
+
+This installs the plugin subtree only — about 10 MiB in well under a minute.
 
 **From GitHub (without cloning):**
 
 ```bash
 claude plugin install --url https://github.com/jikig-ai/soleur/tree/main/plugins/soleur
 ```
+
+<details>
+<summary>Installing from the monorepo directly (slower, and may time out)</summary>
+
+`claude plugin marketplace add jikig-ai/soleur` still works, but it clones the whole repository
+(~181 MiB) and routinely exceeds the CLI's default 120-second git timeout — and a failed refresh
+can leave the local checkout unusable. Raise the timeout if you need this path:
+
+```bash
+CLAUDE_CODE_PLUGIN_GIT_TIMEOUT_MS=900000 claude plugin marketplace add jikig-ai/soleur
+claude plugin install soleur@soleur
+```
+
+**Already installed this way?** Switch to the marketplace above — the migration never clones the
+monorepo, so it is not subject to the timeout:
+
+```bash
+claude plugin marketplace add jikig-ai/soleur-marketplace
+claude plugin install soleur@soleur-marketplace
+claude plugin uninstall soleur@soleur
+claude plugin marketplace remove soleur
+```
+
+Restart the CLI afterwards; plugin changes apply on restart. If your original install used
+`--scope project` or `--scope local`, pass the same `--scope` to every command above — the
+default is `user`, and a scope mismatch silently targets an install that isn't there.
+
+</details>
 
 ## Known Issues
 
