@@ -47,4 +47,45 @@ realism agent.
 
 ## Work Phase
 
-- Status: not started
+- Status: implementation complete; verification in progress
+- Commits: guard test + work/ship/plan SKILL.md, ADR-183, backtick fix, spec deviations
+
+### Sibling landed mid-session
+
+PR #7441 merged 2026-08-11T17:27:07Z. The Phase 0.5 FAIL-HARD rebase (this plan edits
+`ship/SKILL.md`) pulled it in, which satisfies **OD2 H1 + H2**. Consequences:
+
+- Every plan-quoted line number drifted ~+12; content anchors used throughout.
+- `plugins/soleur/test/fanout-suite-scope.test.sh` is now on `main` and its Arm 4 pins two literals
+  inside `work/SKILL.md` (`run only the suites targeting the files they were given`, and
+  `SOLEUR_SUBAGENT=1`). Both verified preserved after the §9 rewrite.
+- #7441 added `test-all.sh` exit 4 (refuse a full-gate run under `SOLEUR_SUBAGENT=1`), which is
+  complementary: it reduces the cost of each run where this change reduces the number of runs.
+
+### Verification status
+
+| Gate | Result |
+|---|---|
+| Guard test | RED (1 pass / 4 fail) → GREEN (5 pass) |
+| Mutation matrix | 6/6 RED, restore byte-identical, post-restore baseline green |
+| `bun test plugins/soleur/` | 2445 pass, 9 skip, 1 environmental fail (#6842) |
+| markdownlint | delta 0 vs `origin/main` (work=12, ship=16, plan=5 on BOTH) |
+| enforcement-tag linter | OK — 31 skill tags resolved, incl. the preserved `work Phase 2 exit` anchor |
+| ADR ordinal checker | pass |
+| credential-path-guard | pass |
+| Phase-2 touched-shard gate (dogfood) | `bun` shard rc=1 on #6842 only; `scripts` shard pending |
+
+### Known-flaky, confirmed three ways — NOT this diff
+
+`changelog-data.test.ts > returns html from GitHub Releases API` fails at ~5000 ms (bun's default
+timeout) only under concurrent load; it fetches the live GitHub Releases API. Confirmed by isolated
+re-run (3/3 pass), by the file being untouched on this branch, and by CI green on `main`. The same
+log carries `SIBLING_RUN_DETECTED` and `LOCK_CONTENDED_PROCEEDING` (lock held 900 s) with two
+sibling worktrees running. Already tracked as **#6842** — no new issue filed, net issue flow 0.
+
+### Deliberately NOT run at Phase 2 exit
+
+The full `TEST_GROUP=all` battery. Running it here would contradict the reordering this PR ships and
+would verify a tree that review is about to change. It belongs at `/ship` Phase 4, which is also
+where **OD2 H3** wants it — on the rebased, post-review tree. An early run was launched, then killed
+(ownership resolved via `/proc/<pid>/cwd`; the three sibling sessions were left untouched).
