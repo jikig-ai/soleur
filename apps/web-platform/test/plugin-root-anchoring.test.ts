@@ -1157,6 +1157,26 @@ describe("plugin-root anchoring — skills secret-gate subset (#7450)", () => {
     check([...covered].sort()).toEqual([null, "anchor", "bare-command", "quoting"].sort());
   });
 
+  it("G8: no operator-config auto-approval carries a rejected anchor form", () => {
+    // ADR-179 decision 8. `.claude/settings.json` is operator config, so decision 1's
+    // "plugin markdown" scope did not reach it — and a `permissions.allow` match executes
+    // with NO prompt at all, which makes it the cheapest exploitation shape in the corpus.
+    // The entry this replaced was measured DEAD (every git-worktree site emits the `:-`
+    // form, so it matched nothing Soleur emits); it was removed for the second reason,
+    // which is that an agent reading settings.json learns the sanctioned shape from it.
+    const settingsPath = resolve(REPO_ROOT, ".claude/settings.json");
+    check(existsSync(settingsPath)).toBe(true);
+    const settings = JSON.parse(readFileSync(settingsPath, "utf8")) as {
+      permissions?: { allow?: string[]; deny?: string[] };
+    };
+    const allow = settings.permissions?.allow ?? [];
+    // Population floor: an empty allow-list would satisfy the ban vacuously.
+    check(allow.length).toBeGreaterThanOrEqual(5);
+    check(allow.filter((e) => e.includes("$(git rev-parse") || e.includes("${CLAUDE_PLUGIN_ROOT:-"))).toEqual(
+      [],
+    );
+  });
+
   it("G7: the suite ran every assertion (anti-vacuity floor)", () => {
     // Absolute, ratcheted by hand — never derived from the assertions themselves,
     // which would simply descend with a deletion. Counts DECIDED assertions.
@@ -1166,6 +1186,6 @@ describe("plugin-root anchoring — skills secret-gate subset (#7450)", () => {
     // CROSS-FILE floor that survives that deletion lives in Guard 2,
     // `plugins/soleur/skills/incident/test/redact-sentinel.test.sh` Test 20, which
     // runs in a DIFFERENT test-all shard (`want_scripts` vs `want_webplat`).
-    expect(assertions).toBe(15);
+    expect(assertions).toBe(18);
   });
 });

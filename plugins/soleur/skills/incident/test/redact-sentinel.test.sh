@@ -851,7 +851,7 @@ done
 # would be reaped by the same skip that reaped the thing it guards.
 # ---------------------------------------------------------------------------
 T20_GUARD="${REPO_ROOT}/apps/web-platform/test/plugin-root-anchoring.test.ts"
-T20_FLOOR=15
+T20_FLOOR=18
 
 if [[ ! -f "${T20_GUARD}" ]]; then
   echo "FAIL: Test 20: Guard 1 is GONE (${T20_GUARD}) — the skills-axis anchoring assertions no longer exist"

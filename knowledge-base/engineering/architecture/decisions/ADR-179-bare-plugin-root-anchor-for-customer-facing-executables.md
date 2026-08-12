@@ -238,10 +238,28 @@ the workspace.
 
 ### Residuals — recorded, deliberately not fixed here
 
-- **R1.** The monorepo sentinel is CWD-relative and therefore shares #7450's threat model:
-  any tree containing `plugins/soleur/.claude-plugin/plugin.json` satisfies it, including a
-  `gh pr checkout` of a contributor PR. Correct for the marketplace customer (who never
-  satisfies it); **not** a defense on the review path. Tracked in #7450.
+- **R1. SETTLED 2026-08-12 by #7450 — scoped, not strengthened.** *(Previously: "the
+  monorepo sentinel is CWD-relative and therefore shares #7450's threat model … not a
+  defense on the review path. Tracked in #7450." That text conflated two claims; the
+  scoping below is the resolution, and the tracking reference is discharged.)*
+
+  The monorepo sentinel answers *"is this a Soleur monorepo checkout?"* — a
+  **surface-selection** predicate, not a **trust** predicate. It correctly excludes the
+  marketplace customer, who never satisfies it. It cannot exclude a `gh pr checkout` of a
+  contributor PR, and **no CWD-resident fact can**, because every byte in the checked-out
+  tree is contributor-writable — including any sentinel added to authenticate it. The
+  correct disposition is therefore not a stronger sentinel but the removal of trust
+  decisions from CWD-resident operands: where the target ships in the payload, decision 1's
+  bare anchor applies; where the target is monorepo-only — `.claude/hooks/lib/incidents.sh`
+  — the invocation is inverted to an inert marker captured hook-side (decision 9), so no
+  operand exists to shadow; and the rejected forms are banned from operator configuration
+  as well (decision 8). Under these, the sentinel is never load-bearing for trust on the
+  review path, which is what R1 was recording.
+
+  **Re-routed, not closed here:** a review session opened *inside* a contributor-checked-out
+  worktree executes that tree's `.claude/hooks/*.sh` on every tool call. That is a
+  **strictly larger** exposure than any path anchor, it is not an anchoring defect, and it
+  must not hold #7450 open. Tracked separately.
 - **R2.** `exit 2` halts the bash subprocess, not the agent. The "run the block, not the
   bare command" construction is what makes the halt load-bearing; guard condition 5 keeps it
   from being edited away.
@@ -532,6 +550,104 @@ a measurement rather than an inference, and it also shows the transform pass run
 be executed. A throwaway skill carrying a bare token was written and invoked; the Skill tool
 returned `Unknown skill`, because the skill registry is built at session start. That arm needs
 a fresh session. **Do not restate this as "proven" flatly.**
+
+---
+
+### Amendment continued — 2026-08-12 (#7450 review panel + CTO ruling)
+
+Items 1–5 above covered the gate subset. The review panel then scoped three further
+surfaces, all of which failed for the same reason, and the binding decision was routed to
+the `soleur:engineering:cto` agent because both instruments this ADR sanctions were blocked
+on its own §R1. The ruling and its rejected alternatives are recorded at
+`knowledge-base/project/specs/feat-one-shot-7450-git-root-anchor-untrusted/cto-ruling-adr179-fork.md`.
+
+**6. §R5 enumerated by SYNTAX, not by STAKES — and that is why the highest-stakes site was
+missed.** §R5's five sites were found by grepping one anchor form. `trigger-cron/SKILL.md`
+sat on `${CLAUDE_PLUGIN_ROOT:-plugins/soleur}` and invokes a script that reads
+`INNGEST_MANUAL_TRIGGER_SECRET` from Doppler at `-c prd` and fires a real production event,
+with **no env-var precondition at all** — strictly cheaper to exploit than the redaction
+gates this issue was filed about. `redact-sentinel.test.sh` test 18c reported "zero …
+remain anywhere under `plugins/soleur/`" while that site stood, because its needle keyed on
+the git-rev-parse variant. Migrated under decision 1; no new instrument was required,
+because the target is IN the payload.
+
+**7. Twenty `source` sites were not enumerable at all by the `SKILL.md` grep.** Three
+payload **scripts** — `gdpr-gate.sh` (itself a compliance gate), `net-issue-flow.sh` (a ship
+gate) and `token-efficiency-report.sh` — derived a root from `git rev-parse --show-toplevel`
+and sourced `.claude/hooks/lib/incidents.sh` from it. Amendment item 7's predecessor had
+already migrated `token-efficiency-report.sh`'s *code* root to the plugin anchor and left
+its lib resolution git-root-derived; the ADR had touched the file and not closed it.
+
+### Decision 8
+
+**The rejected anchor forms are banned in operator configuration, not only in plugin
+markdown.** `.claude/settings.json` `permissions.allow[]` may contain neither
+`$(git rev-parse` nor `${CLAUDE_PLUGIN_ROOT:-`. An auto-approval entry is read by agents as
+documentation of the sanctioned form, and a `permissions.allow` match executes with **no
+prompt at all** — the cheapest exploitation shape in the corpus. The entry removed under
+this decision was measured DEAD before removal (all 22 `git-worktree` invocation sites emit
+the `:-` form, so it matched nothing Soleur emits); it was removed anyway, for the
+documentation-by-example reason. It is deliberately **not replaced** with an anchored
+entry: per item 5 the loader substitutes the token before delivery, so the delivered command
+carries an absolute installed path that no static literal can match, and an anchored allow
+entry would be a dead entry replacing a dead entry. Prompt-suppression for
+`worktree-manager.sh` belongs with the `git-worktree` migration in #7453, where
+`EXACT_LITERAL_SAFE_COMMANDS` must move in the same commit.
+
+### Decision 9
+
+**When the target is monorepo-only and therefore unanchorable, invert the invocation rather
+than choosing an anchor.** Payload markdown emits an inert `printf`/`echo` marker; a
+monorepo-only PostToolUse hook parses the marker and performs the privileged action,
+resolving its own library through `${CLAUDE_PROJECT_DIR}`. **Decision 1 governs *paths*; it
+does not require that every capability be expressed as a path.** That misreading — treating
+this ADR's options table as exhaustive over *designs* when it is exhaustive over *anchor
+forms* — is what made §E read as a deadlock.
+
+Preferred over **relocation into the payload**, which would manufacture on every customer
+machine the exact input decision 4 reason 1 says must not exist there (and would not fix the
+vector: a relocated lib still needs a data root, whose current default is the
+location-derived fail-open this ADR names at decision 3). Preferred over **sentinel
+gating**, which §R1 records as no defense on the review path — gating this vector behind a
+gate the review path satisfies would repeat the error item 2 corrected.
+
+It satisfies decision 5 **maximally**: under line-wise extraction every other governed site
+degrades to a non-resolving operand; this one degrades to printing a string.
+
+A hook consuming a marker **MUST** validate the rule id against a closed corpus and sanitise
+the note to a fixed charset, because the markdown that prompts the marker is
+contributor-writable on the review path. This bounds the worst case to a rejected telemetry
+row. The hook is **PostToolUse, not PreToolUse**: PreToolUse counts *intent* while the
+construction it replaces counted *execution*, so PreToolUse would over-count against every
+row already in the corpus. Verified rather than argued — a marker driven through the hook
+and a direct `emit_incident` call produce byte-identical rows, differing only in timestamp.
+
+### Decision 10
+
+**Scope of option (e).** Option (e) rejects a git-root shim as a **code root / trust
+anchor**. It does **not** reject `plugins/soleur/scripts/resolve-git-root.sh` in its live use
+as a **workspace/data** root by `hooks/stop-hook.sh`, `hooks/welcome-hook.sh`, and
+`.openhands/hooks/stop-hook.sh`, which is correct under item 7's code-root/data-root
+distinction. Stated because a one-line rejection read out of context invites deleting a
+working helper.
+
+### Classification rule for the remaining corpus (#7453 needs no re-deciding)
+
+Every `git rev-parse --show-toplevel` in the payload is exactly one of three things:
+
+| Class | Test | Disposition |
+| --- | --- | --- |
+| **Code root** | Does the resolved path get *executed* (`source`/`bash`/`python3`/`awk`)? | **Ban.** Bare `${CLAUDE_PLUGIN_ROOT}` if the target is in the payload; decision-9 inversion if it is monorepo-only. |
+| **Data root** | Is it only read or written as content? | **Allowed and correct** — the workspace is what it is measuring. |
+| **Repo-root `scripts/` class** | Executes, and the target is outside the payload | Code root. §R4's table. Route to #7453. |
+
+*Implementation note, measured during #7450 and recorded because the obvious form is
+wrong:* a decision-9 hook may rely on `${CLAUDE_PROJECT_DIR}`, which the harness sets for
+hook processes. A payload **script** may not — it is measured UNSET in a plain Claude Code
+Bash call and in git hooks, so a `CLAUDE_PROJECT_DIR`-only resolution silently retires the
+telemetry it was meant to preserve. Payload scripts use `${CLAUDE_PROJECT_DIR}` first and
+then their own `BASH_SOURCE` location (layout-invariant per ADR-178, and not CWD-derived),
+never `git rev-parse`.
 
 *This also dissolves a worry rather than mitigating it:* the identity preflight reads
 `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`, so it was thought to halt on an unset
