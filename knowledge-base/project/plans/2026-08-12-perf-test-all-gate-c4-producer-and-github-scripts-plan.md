@@ -12,6 +12,43 @@ domain: engineering
 brand_survival_threshold: none
 ---
 
+## Verification Ledger (deepen-plan, 2026-08-12)
+
+Every load-bearing claim in this plan was probed live rather than asserted. The four
+**negative** claims are the ones that would silently justify unnecessary work if wrong, so each
+carries its command and result. All halt gates passed.
+
+| Claim | Probe | Result |
+|---|---|---|
+| The `TEST_RELEVANCE_PREFIXES` invariant is enforced by nothing | `grep -c TEST_RELEVANCE_PREFIXES scripts/lint-orphan-test-suites.sh` | **0** — confirms. Phase 4c buys a property nothing else buys. |
+| `SOLEUR_TEST_FORCE_ALL` appears once in the runner and is printed nowhere | `grep -n 'SOLEUR_TEST_FORCE_ALL' scripts/test-all.sh`; `grep -nE '(echo\|printf).*SOLEUR_TEST_FORCE_ALL'` | one hit (the early return), **zero** print sites — confirms. Phase 2c is needed. |
+| `MIN_ASSERTIONS` enumerates two of four arrays | `grep -n 'MIN_ASSERTIONS=' scripts/test-all-infra-coverage-notice.test.sh` | `MIN_FIXED + ${#W7_FILES[@]} + ${#REGISTRY_BATTERY_PATHS[@]} + ${#CF_TUNNEL_BATTERY_PATHS[@]}` — confirms. Phase 3b is needed. |
+| The proposed pairing grep matches neither existing array | the grep, run verbatim against `scripts/test-all.sh` | **NO MATCH ×2** — the cut was correct, not merely cautious |
+| The linter's **blocking** CI route is its suite registration, not the advisory `lint-bot-statuses` step | `grep -n 'run_suite "scripts/lint-orphan-test-suites"' scripts/test-all.sh` | line 761 — confirms `## Observability` |
+| lefthook does not run the linter | `grep -c orphan lefthook.yml` | **0** — the earlier draft's claim was false and is recorded in Premise Validation |
+| `325a1a5c0` is ADR-181's commit and an ancestor of HEAD | `git log -1`, `git merge-base --is-ancestor` | `perf(test-all): path-gate the heavy mutation batteries… (#7441)`; ancestor: yes; touched `test-relevance-paths.sh` (+121) and `test-all.sh` (+273) |
+| #7494 / #7402 / #7484 / #7429 exist with the titles cited | `gh issue view` ×4 | all **OPEN**, titles match |
+| Cited AGENTS rule IDs are active, not retired or fabricated | `grep -E '\[id: <id>\]' AGENTS.md` for each | `cq-write-failing-tests-before`, `cq-ac-must-not-depend-on-concurrent-sessions` — both **ACTIVE** |
+| All nine declared pathspecs resolve, including four directory forms | the Phase 0.2 loop | no `UNRESOLVED:` output |
+
+**Halt gates.** 4.6 User-Brand Impact — heading, valid threshold, scope-out bullet: **PASS**.
+4.7 Observability — all five fields present with children; probe verb `bash` is allowlisted; no
+`ssh`: **PASS**. 4.8 PAT-shaped variable — no matches: **PASS**. 4.11 Guard Contract —
+`python3 scripts/lint-guard-contract.py` → *"scanned 1 plan file(s), 1 with a Guard Contract,
+2 guard entries"*: **PASS**. 4.5 (network), 4.55 (downtime/cutover), 4.9 (UI wireframe) and
+4.10 (encryption posture) did not trigger — no network symptom, no serving surface taken offline,
+no UI surface, no persistent store or new cross-component connection.
+
+**Precedent-diff (Phase 4.4).** Every mechanism this plan adds copies a precedent in the same
+tree rather than inventing a form: the derived floor mirrors `MIN_ASSERTIONS`'s "DERIVED, not a
+hand-typed integer" and `.github/scripts/test/run-all.sh`'s `MIN_SUITES`; the source anchors mirror
+the existing `--name-status -M` anchor; the `${a[@]+"${a[@]}"}` guard mirrors the `EXCLUSIONS`
+loop; the append-only ADR section mirrors the seven `## Addendum — <date>` sections in the corpus,
+including the one ADR-181 itself wrote into ADR-177; and the `if`-block form mirrors what
+`_diff_touches`'s own header mandates. **No mechanism here is novel** — which is the point of D1.
+
+---
+
 ## Overview
 
 `scripts/test-all.sh` already declines suites whose subjects a run's diff cannot reach. ADR-181
