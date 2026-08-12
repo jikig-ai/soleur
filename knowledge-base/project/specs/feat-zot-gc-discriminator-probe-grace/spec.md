@@ -46,9 +46,13 @@ Separately, #7456's opening line cites ADR-179 for the shipper. ADR-179 is
 
 ## Functional Requirements
 
-- **FR1** — A new follow-through probe computes the gc start/complete ratio from the shipped
-  envelope rows: denominator `executing gc`; completion evidence `gc successfully completed` and
-  `garbage collected blobs`; independent orphan evidence `PatchBlobUpload`.
+- **FR1** — A new read-only discriminator script pairs gc starts to completions **per repository**
+  from the shipped envelope rows: denominator `executing gc of orphaned blobs for <path>`;
+  completion `gc successfully completed for <path>`; independent orphan evidence `PatchBlobUpload`.
+  **[Revised 2026-08-12 against live measurement]** `garbage collected blobs` is emitted **bare**
+  (no repository), so it cannot serve as a per-repo numerator — it is reclaim evidence only. A
+  *global* ratio is explicitly insufficient: the zot#4235 signature is gc completing for one
+  repository and never for another, which a global ratio renders as a healthy-looking ~50%.
 - **FR2** — The probe's observation window spans **several gc periods** (gc is hourly; window ≥ 6h)
   and keeps the **archive arm** on. A window shorter than the gc period makes any start near the
   window edge appear completion-less, manufacturing the stall signal the probe exists to detect.
@@ -57,8 +61,11 @@ Separately, #7456's opening line cites ADR-179 for the shipper. ADR-179 is
 - **FR4** — Row matching uses the **positive**, host-isolated envelope prefix
   `SOLEUR_ZOT_LOG shipper=zot-log-shipper host=soleur-registry`. The negative form is forbidden
   (ADR-184 rejects it as fail-open).
-- **FR5** — Greps carry **no quote and no colon** (ClickHouse stores `raw` double-encoded); all
-  judgements are made on the decoded object.
+- **FR5** — Greps carry **no quote and no colon** (ClickHouse stores `raw` double-encoded).
+  **[Revised 2026-08-12 against live measurement]** Judgements are made on the decoded payload,
+  which is **quote-stripped colon-joined text, not JSON** — `cloud-init-registry.yml`'s `JQ_TICK`
+  ships the whole journald `MESSAGE` and `sanitize` strips `"` and `\`. Decode the outer `raw`
+  twice, then parse the inner payload as text; `fromjson` on it fails.
 - **FR6** — Exit contract mirrors the sibling probe: `0` PASS, `2` TRANSIENT with a distinct
   `reason=` per arm, `1` reserved for a genuine regression. `${VAR:?msg}` is banned.
 - **FR7** — `zot-log-channel-7440.sh` gains a verdict `reason=awaiting_first_tick`, distinct from
