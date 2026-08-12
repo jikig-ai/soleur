@@ -320,25 +320,11 @@ If no deviations are detected, output: "Deviation Analyst: no violations found."
 <!-- phase-1.6-start -->
 ## Phase 1.6: Token-Efficiency Analysis (sequential, advisory)
 
-Run the cost-efficiency report, resolved from the **deployed plugin root** (ADR-179's canonical bare anchor, no fallback arm — #7450 removed the git-root default, which resolved this script from the reviewed party's tree after a `gh pr checkout`).
-
-**This guard is deliberately NON-BLOCKING, and it is the one migrated site where fail-closed would be wrong.** The fail-closed asymmetry that justifies halting the redaction gates rests on those gates *authorising secret emission*. This report authorises nothing — it prints an advisory cost table — so halting knowledge capture over a missing report would be a pure operator regression with no security benefit. It skips with a named marker and continues.
+Run the cost-efficiency report (bare anchor — ADR-179):
 
 ```bash
-TE_REPORT="${CLAUDE_PLUGIN_ROOT}/skills/compound/scripts/token-efficiency-report.sh"
-if [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
-   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
-   && [ -r "$TE_REPORT" ]; then
-  bash "$TE_REPORT"
-else
-  # Named marker, not a silent skip: before #7450 an unresolved root produced a raw
-  # `bash: /skills/…: No such file or directory` (127), which reads to a founder as a
-  # corrupted install rather than a skipped advisory step.
-  echo "SOLEUR_TE_REPORT_SKIPPED reason=plugin-root-unverified"
-fi
+bash "${CLAUDE_PLUGIN_ROOT}/skills/compound/scripts/token-efficiency-report.sh"
 ```
-
-The script's own `TE_REPORT_REPO_ROOT` **data** root is separate and is deliberately left git-root-defaulted: the report measures the *workspace*, so its data root should follow the workspace even though its *code* root must not (ADR-179 decision 3).
 
 Prints top-3 cost table; emits `te-*` `warn` to `.claude/.rule-incidents.jsonl` on outliers (rolled up into `knowledge-base/project/rule-metrics.json` by the local compound aggregation in Phase 1.5 step 8 — ADR-091). Proposals route through Phase 1.5 step 7's gate.
 
