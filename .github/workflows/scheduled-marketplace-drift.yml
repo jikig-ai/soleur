@@ -1,0 +1,323 @@
+# <!-- gate-override: new-scheduled-cron-prefer-inngest -->
+# Override justification (#7471). ADR-033 makes Inngest the canonical substrate for new crons.
+# This one must run on GitHub Actions, for the same structural reason as
+# scheduled-prod-version-drift.yml rather than as a style preference:
+#
+#   (i) THE SUBJECT IS OUTSIDE THE PRODUCT. What is watched here is a manifest file in a
+#       DIFFERENT GitHub repository, fetched anonymously over HTTPS. It has no relationship to
+#       the web-platform's database, deploy state, or runtime. Dispatching this from Inngest
+#       would make the plugin's only distribution alarm depend on the web app being deployed and
+#       healthy — coupling two systems that are otherwise independent, so a web-platform outage
+#       would silently take the plugin-distribution alarm down with it.
+#   (ii) IT NEEDS `issues: write` ON THIS REPO AND NOTHING ELSE. The verdict's destination is a
+#       GitHub issue here. That is native to GHA's `GITHUB_TOKEN` and would otherwise require
+#       minting and storing a token for the app to hold.
+#   (iii) NO PRODUCT SECRETS ARE CONSUMED. Unlike scheduled-prod-version-drift.yml — which
+#       acknowledges rather than meets `plugins/soleur/skills/schedule/SKILL.md`'s reservation
+#       that a gate-override be reserved for a genuinely pure-GH op — this workflow consumes only
+#       the automatic `secrets.GITHUB_TOKEN`. It reads two public URLs unauthenticated. It is the
+#       pure-GH-op case the reservation describes.
+#
+# WHAT THIS WATCHES, AND WHY IT IS THE ONLY CONTROL.
+# `jikig-ai/soleur-marketplace` holds one hand-maintained file, `.claude-plugin/marketplace.json`.
+# That repo has NO CI, NO required review, and NO CODEOWNERS — edits to it are unreviewed BY
+# CONSTRUCTION. Terraform (infra/github/repository-marketplace.tf) owns that repo's settings but
+# explicitly NOT its contents. So this workflow is the entire control surface on the artifact
+# every `claude plugin marketplace add` resolves against. Deleting it leaves the manifest
+# ungoverned; nothing else would notice a change to it.
+#
+# The three assertions, and why each earns its place:
+#
+#   1. `.plugins[0]` MUST NOT HAVE A `version` KEY. This is the highest-value assertion and the
+#      reason the workflow exists. The presence of a version key suppresses `gitCommitSha`
+#      tracking, so a ONE-LINE hand edit adding `"version": "..."` silently reverts #7471 for
+#      every new install — with no error, no failed install, and no visible symptom. The revert
+#      is easy, invisible, and total; that asymmetry is what makes an automated assertion the
+#      only workable control.
+#   2. `.plugins[0].source.path` AND `.source.url`. The entry serves `plugins/soleur` out of
+#      `jikig-ai/soleur` via git-subdir. Either field being edited points installs at the wrong
+#      subtree or the wrong repository.
+#   3. A SECOND GET, against `jikig-ai/soleur` itself, proving the path the entry names actually
+#      resolves at `main`. This is the one drift event the marketplace repo cannot observe about
+#      itself: if this monorepo moves `plugins/soleur`, the manifest stays byte-identical and
+#      correct-looking while every install breaks. Assertions 1 and 2 would both still pass.
+#
+# End-to-end install timings and payload size for the published repo are recorded in
+# knowledge-base/project/specs/feat-one-shot-7471-plugin-delivery-path/measurements.md §2B —
+# "The published marketplace, measured against the real repo". Not restated here; a number
+# copied out of a measurement record is a number that goes stale silently.
+#
+# FAIL CLOSED. An unreachable URL, an HTML error page, a truncated read, or a `.plugins[0]` that
+# is not an object are ALL reported as mismatches, never as "no drift". The failure this design
+# refuses is the one where the check cannot see the artifact and reports green.
+#
+# Security: BOTH fetched documents are UNTRUSTED INPUT — that is the premise of the whole
+# workflow, since the marketplace repo is unreviewed. Every value derived from either body passes
+# through `sanitize` (control characters and `##[` removed, length-bounded) before it reaches a
+# run-log line, `$GITHUB_OUTPUT`, or an issue body. No `github.event.*` input is consumed.
+
+name: "Scheduled: Marketplace Manifest Drift"
+
+on:
+  schedule:
+    # Daily. The drift this catches is a human hand-edit to an unreviewed repo, which has no
+    # burst behaviour — a tighter cron would only multiply runs against the same static file.
+    - cron: "37 6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+# cancel-in-progress: false serializes overlapping ticks instead of racing them; two concurrent
+# runs would both miss the other's freshly-filed issue and file duplicates.
+concurrency:
+  group: scheduled-marketplace-drift
+  cancel-in-progress: false
+
+jobs:
+  drift-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # No `actions/checkout`. Every input is fetched over HTTPS, and checking out THIS repo
+      # would be actively misleading: assertion 3 must observe what `main` serves to an installer
+      # on raw.githubusercontent.com, not what the runner's local tree happens to contain.
+      - name: Check the published marketplace manifest
+        id: check
+        run: |
+          set -uo pipefail
+          # `set +e` is REQUIRED and `set -uo pipefail` is NOT a substitute. Actions runs a `run:`
+          # block with no `shell:` key under `bash --noprofile --norc -eo pipefail {0}` — errexit
+          # is ALREADY ON, and `set -uo pipefail` only ADDS flags. Without this, the first curl
+          # that returns non-zero (which is a VERDICT here, not an error) would abort the shell
+          # at that line: rc is never read, no finding is recorded, $GITHUB_OUTPUT is never
+          # written, and every step below reads as "the check passed". That is precisely the
+          # fail-open this workflow exists to prevent. Every capture below ALSO uses the
+          # `|| rc=$?` form, so the property survives a future edit that drops this line.
+          set +e
+
+          MANIFEST_URL="https://raw.githubusercontent.com/jikig-ai/soleur-marketplace/main/.claude-plugin/marketplace.json"
+          PLUGIN_URL="https://raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/.claude-plugin/plugin.json"
+
+          # Applied to EVERY value read out of either fetched document before it is echoed.
+          # Deletes NUL/control characters (which is also what stops a value from forging a line
+          # break inside the heredoc-delimited $GITHUB_OUTPUT write below), rewrites the `##[`
+          # workflow-command prefix to a fixed point, and bounds the length so a long string
+          # cannot bury the rest of a finding.
+          sanitize() {
+            printf '%s' "${1-}" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E ':a; s/##\[/#-[/g; ta' | cut -c1-200
+          }
+
+          findings=()
+
+          # ---- GET 1: the published manifest -------------------------------------------------
+          # `-f` makes an HTTP error status a non-zero exit instead of a body; without it a 404's
+          # HTML page would be handed to jq, which is the classic route to "no drift" on a
+          # deleted file. `--max-time` bounds a hung connection. `--retry` covers transient 5xx
+          # and connection failures only — it does NOT retry a 404, so a genuinely missing file
+          # still reports on the first tick.
+          manifest=""
+          rc=0
+          manifest="$(curl -fsSL --max-time 20 --retry 3 --retry-delay 5 --retry-connrefused "$MANIFEST_URL")" || rc=$?
+
+          if [[ "$rc" -ne 0 ]]; then
+            findings+=("manifest_fetch_failed: curl exited ${rc} for ${MANIFEST_URL}; no body was read, so no assertion below could be evaluated")
+          elif ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$manifest"; then
+            # Gate on `type` BEFORE trusting any value. `jq -e` exits 0 for a `0` or an empty
+            # string and `null | length` is 0, so a value-shaped test on a non-object body can
+            # return success on garbage. A boolean-valued expression is the only form whose
+            # exit code means what it appears to mean.
+            findings+=("manifest_unparseable: the body at ${MANIFEST_URL} did not parse as a JSON object")
+          else
+            entry_shape="$(jq -r 'if (.plugins | type) == "array" and (.plugins | length) > 0 and (.plugins[0] | type) == "object" then "ok" else "bad" end' <<<"$manifest" 2>/dev/null)"
+            if [[ "$entry_shape" != "ok" ]]; then
+              plugins_type="$(sanitize "$(jq -r '.plugins | type' <<<"$manifest" 2>/dev/null)")"
+              findings+=("manifest_shape: .plugins[0] is not an object (.plugins has type '${plugins_type:-<unreadable>}'); the three assertions below are not evaluable")
+            else
+              # ---- Assertion 1: no `version` key on the plugin entry -------------------------
+              # Compared against the literal string "false" rather than negated, so an empty
+              # value from a failed jq invocation reports as drift instead of as a pass.
+              has_version="$(jq -r '.plugins[0] | has("version") | tostring' <<<"$manifest" 2>/dev/null)"
+              if [[ "$has_version" != "false" ]]; then
+                findings+=("version_key_present: .plugins[0] | has(\"version\") is '$(sanitize "$has_version")', expected 'false'. A version key suppresses gitCommitSha tracking, so every NEW install silently stops tracking the branch tip (#7471)")
+              fi
+
+              # ---- Assertion 2: the entry still points at plugins/soleur in jikig-ai/soleur --
+              # The `type == "string"` guard collapses absent / null / object-valued fields to
+              # "", which then fails the comparison. Without it, a `null` would render as the
+              # four-character string "null" and be compared as though it were a real value.
+              src_path="$(jq -r 'if (.plugins[0].source | type) == "object" and (.plugins[0].source.path | type) == "string" then .plugins[0].source.path else "" end' <<<"$manifest" 2>/dev/null)"
+              if [[ "$src_path" != "plugins/soleur" ]]; then
+                findings+=("source_path: .plugins[0].source.path is '$(sanitize "$src_path")', expected 'plugins/soleur' (empty means absent, null, or not a string)")
+              fi
+
+              src_url="$(jq -r 'if (.plugins[0].source | type) == "object" and (.plugins[0].source.url | type) == "string" then .plugins[0].source.url else "" end' <<<"$manifest" 2>/dev/null)"
+              # Accepts the https and ssh spellings, with or without the `.git` suffix or a
+              # trailing slash, because those are the same repository. Anything else — a fork, a
+              # rename, a different org — is drift.
+              if [[ ! "$src_url" =~ ^(https://github\.com/|git@github\.com:)jikig-ai/soleur(\.git)?/?$ ]]; then
+                findings+=("source_url: .plugins[0].source.url is '$(sanitize "$src_url")', expected to point at jikig-ai/soleur (empty means absent, null, or not a string)")
+              fi
+            fi
+          fi
+
+          # ---- GET 2: the plugin manifest the entry points at --------------------------------
+          # Catches a monorepo reorganisation. If `plugins/soleur` moves in jikig-ai/soleur, the
+          # marketplace manifest stays byte-identical and every assertion above still passes,
+          # while every install breaks. This is the only assertion that can see that.
+          plugin_body=""
+          plugin_rc=0
+          plugin_body="$(curl -fsSL --max-time 20 --retry 3 --retry-delay 5 --retry-connrefused "$PLUGIN_URL")" || plugin_rc=$?
+
+          if [[ "$plugin_rc" -ne 0 ]]; then
+            findings+=("plugin_manifest_unresolvable: curl exited ${plugin_rc} for ${PLUGIN_URL}; the subtree the marketplace entry serves does not resolve at main")
+          elif ! jq -e 'type == "object" and (.name | type) == "string"' >/dev/null 2>&1 <<<"$plugin_body"; then
+            findings+=("plugin_manifest_unparseable: the body at ${PLUGIN_URL} did not parse as a JSON object carrying a string .name")
+          fi
+
+          # ---- Verdict -----------------------------------------------------------------------
+          finding_count="${#findings[@]}"
+          if [[ "$finding_count" -eq 0 ]]; then
+            verdict="OK"
+          else
+            verdict="MISMATCH"
+          fi
+
+          if [[ "$finding_count" -gt 0 ]]; then
+            # A constant non-whitespace marker on every line. An indented `::` line is NOT inert
+            # — the runner trims leading whitespace before testing for the prefix — so the marker
+            # rather than the indent is what keeps a finding from being parsed as a command.
+            printf '%s\n' "${findings[@]}" | while IFS= read -r _line; do
+              printf 'marketplace-drift| %s\n' "$_line"
+            done
+          else
+            printf 'marketplace-drift| all three assertions hold against the published manifest\n'
+          fi
+
+          # RE-ARM before the output write, closing the bracket opened at the top. Without this
+          # a failed append would fall through to `exit 0`, leaving outcome='success' with an
+          # EMPTY verdict — and an empty output satisfies no gate below, so the mismatch would
+          # be reported nowhere.
+          set -e
+
+          {
+            echo "verdict=${verdict}"
+            echo "finding_count=${finding_count}"
+            echo "findings<<MARKETPLACE_DRIFT_FINDINGS_EOF"
+            if [[ "$finding_count" -gt 0 ]]; then
+              printf '%s\n' "${findings[@]}"
+            fi
+            echo "MARKETPLACE_DRIFT_FINDINGS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          if [[ "$verdict" == "MISMATCH" ]]; then
+            echo "::error::Marketplace manifest drift: ${finding_count} failing assertion(s); each is printed above on a marketplace-drift| line."
+          fi
+
+          # Always succeed. The verdict travels as DATA in the outputs above; letting a drift
+          # verdict fail the step would conflate "the manifest is wrong" with "the monitor is
+          # broken", and would skip every consumer gated on this step's outcome.
+          exit 0
+
+      # The gate leads with `steps.check.outcome == 'success'`, and that conjunct is load-bearing
+      # rather than defensive. Actions `==` is LOOSE: an unset output is '', which casts to 0, so
+      # a numeric gate like `finding_count == '0'` is satisfied by a step that NEVER RAN. The
+      # verdict is compared as a non-numeric string for the same reason — 'MISMATCH' cannot be
+      # produced by coercion — and the outcome conjunct is what separates "the step ran and found
+      # nothing" from "the step died before writing anything".
+      #
+      # `!cancelled()` is also required for a different gate: an `if:` on an issue-filing step
+      # with no status-check function inherits an implicit `success()`, which silently skips the
+      # filing whenever any earlier step failed (scripts/alarm-issue-filing-guard.test.sh).
+      - name: File or update the drift issue
+        id: issue
+        if: ${{ !cancelled() && steps.check.outcome == 'success' && steps.check.outputs.verdict == 'MISMATCH' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          FINDINGS: ${{ steps.check.outputs.findings }}
+          FINDING_COUNT: ${{ steps.check.outputs.finding_count }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          # Same inherited-errexit bracket as the check step. Without it the `list_rc` handler
+          # below — which exists precisely so a failed lookup is not read as "nothing found" —
+          # is unreachable code.
+          set +e
+
+          TITLE="[ci/marketplace-drift] The published marketplace manifest no longer matches the delivery contract"
+
+          # BOOTSTRAP THE LABEL FIRST, ALWAYS. `gh issue create` with an undefined `--label`
+          # HARD-FAILS, and ci/marketplace-drift does not exist yet. This repo has shipped that
+          # exact failure before (seccomp-unenforced-alert.sh, scheduled-terraform-drift.yml).
+          gh label create "ci/marketplace-drift" --repo "$GH_REPO" \
+            --description "Standing alarm: the published plugin marketplace manifest drifted" \
+            --color "B60205" 2>/dev/null || true
+
+          # A FAILED LOOKUP IS NOT "NOTHING FOUND". Collapsing a `gh issue list` failure into ""
+          # routes to the create branch, so an API blip files a DUPLICATE issue on every
+          # subsequent day the drift persists.
+          EXISTING="$(gh issue list --repo "$GH_REPO" --state open --label "ci/marketplace-drift" -L 100 \
+            --search "in:title \"$TITLE\"" --json number --jq '.[0].number' 2>/dev/null)"
+          list_rc=$?
+
+          # Built by appending indented lines: a multi-line literal with lines at column 0 inside
+          # a `run: |` block terminates the YAML block scalar.
+          BODY="The daily check of the published marketplace manifest reported ${FINDING_COUNT} failing assertion(s)."
+          BODY="${BODY}"$'\n\n'"This repo is the plugin's sole distribution channel and \`jikig-ai/soleur-marketplace\` has no CI, no required review and no CODEOWNERS — this alarm is the only control on that file."
+          BODY="${BODY}"$'\n\n'"### Findings"
+          BODY="${BODY}"$'\n'"\`\`\`"
+          BODY="${BODY}"$'\n'"${FINDINGS}"
+          BODY="${BODY}"$'\n'"\`\`\`"
+          BODY="${BODY}"$'\n\n'"Run: ${RUN_URL}"
+          BODY="${BODY}"$'\n\n'"### Remediation"
+          BODY="${BODY}"$'\n\n'"1. Read what is actually published:"
+          BODY="${BODY}"$'\n'"   \`curl -fsS https://raw.githubusercontent.com/jikig-ai/soleur-marketplace/main/.claude-plugin/marketplace.json | jq .\`"
+          BODY="${BODY}"$'\n'"2. If \`.plugins[0]\` has a \`version\` key, REMOVE it. Its presence suppresses gitCommitSha tracking, so every new install stops following the branch tip (#7471). This is the failure with no visible symptom."
+          BODY="${BODY}"$'\n'"3. \`.plugins[0].source\` must stay \`git-subdir\` on \`https://github.com/jikig-ai/soleur.git\` with \`path: plugins/soleur\`, unpinned (no \`ref\`, no \`sha\`)."
+          BODY="${BODY}"$'\n'"4. If the plugin manifest itself did not resolve, \`plugins/soleur/.claude-plugin/plugin.json\` moved in THIS repo — fix the path in the marketplace manifest, or move it back."
+          BODY="${BODY}"$'\n'"5. Re-run on demand: \`gh workflow run scheduled-marketplace-drift.yml\`"
+          BODY="${BODY}"$'\n\n'"This issue closes automatically on the next run where all three assertions hold."
+
+          if [[ "$list_rc" -ne 0 ]]; then
+            echo "::error::Could not query existing marketplace-drift issues (gh exited ${list_rc}); no issue was filed, because filing without a dedupe result would break the one-issue-per-episode property the close step depends on."
+          elif [[ -n "$EXISTING" && "$EXISTING" != "null" ]]; then
+            if ! gh issue comment "$EXISTING" --repo "$GH_REPO" --body "$BODY"; then
+              echo "::error::Could not comment on marketplace-drift issue #${EXISTING}; the standing issue no longer reflects the current findings."
+            fi
+          else
+            # NEVER report success unconditionally: with `set +e` in effect an unchecked create
+            # would fall through to a line asserting an issue exists when none does.
+            if ! gh issue create --repo "$GH_REPO" --title "$TITLE" --body "$BODY" \
+                 --label "ci/marketplace-drift" --label "action-required"; then
+              echo "::error::marketplace_drift_issue_filing_failed — the drift verdict reached the run log only; no action-required issue exists."
+            fi
+          fi
+
+      - name: Close the drift issue once the manifest matches again
+        if: ${{ !cancelled() && steps.check.outcome == 'success' && steps.check.outputs.verdict == 'OK' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          # Without the bracket, the `list_rc` check below is unreachable and a failed lookup
+          # would be read as "no open issue", which is harmless here but silently so.
+          set +e
+
+          # Closing is what keeps the dedupe guard honest: without it the first episode's issue
+          # stays open forever, and the guard then suppresses the filing for every LATER episode
+          # by matching that stale issue.
+          EXISTING="$(gh issue list --repo "$GH_REPO" --state open --label "ci/marketplace-drift" -L 100 \
+            --json number --jq '.[0].number' 2>/dev/null)"
+          list_rc=$?
+          if [[ "$list_rc" -ne 0 ]]; then
+            echo "::error::Could not query open marketplace-drift issues (gh exited ${list_rc}); a resolved alarm may still be open."
+          elif [[ -n "$EXISTING" && "$EXISTING" != "null" ]]; then
+            gh issue close "$EXISTING" --repo "$GH_REPO" \
+              --comment "All three marketplace-manifest assertions hold again. Closed automatically by ${RUN_URL}." \
+              --reason completed || echo "::error::Could not close marketplace-drift issue #${EXISTING}."
+          fi
