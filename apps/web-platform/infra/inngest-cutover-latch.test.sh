@@ -70,6 +70,12 @@ assert_absent() {
 WORK="" TRACE="" STATE="" LOGTRACE="" LATCH="" MOUNTDIR=""
 SYSCTL="" REDIS="" FLAGSET="" LOGGER=""
 
+# Owning trap (ADR-129). teardown_case already removes $WORK on the happy path, but only
+# there — a die between setup_case and teardown_case (a failed assertion under `set -e`, an
+# interrupt) leaks the whole tempdir. Single-quoted so it resolves $WORK at EXIT time, i.e.
+# the case that was in flight when the script died; empty $WORK is a no-op via the guard.
+trap '[[ -n "$WORK" ]] && rm -rf "$WORK"' EXIT
+
 setup_case() {
   WORK=$(mktemp -d)
   TRACE="$WORK/trace"; STATE="$WORK/state.json"; LOGTRACE="$WORK/logtrace"

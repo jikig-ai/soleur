@@ -969,7 +969,7 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     expect(tf).toContain("soleur-host-bootstrap.sh");
     expect(tf).toContain("journald-soleur.conf");
   });
-  test("the baked set is exactly 23 scripts + hooks.json.tmpl + journald + bootstrap + cosign-trusted-root + vector.toml + 2 sandbox profiles + 5 Phase-2.2-part-1 + 10 Phase-2.2-part-2 fresh-boot-parity files", () => {
+  test("the baked set is exactly 23 scripts + hooks.json.tmpl + journald + bootstrap + cosign-trusted-root + vector.toml + 2 sandbox profiles + 5 Phase-2.2-part-1 + 10 Phase-2.2-part-2 fresh-boot-parity files + 4 inngest consumer-probe files", () => {
     // +1 vs #5921's 25: cron-egress-enforce-probe.sh (fresh-host post-container egress
     // enforcement probe, #5933 item 3).
     // +1 (=27): cosign-trusted-root.json — pinned public trust material baked into the
@@ -995,7 +995,15 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     // web-1 running-host rotation until Phase 5; .service/.timer bodies are byte-identical across
     // both paths by construction (SSH path delivers the same repo files via `provisioner "file"`),
     // and env-file key-set parity is drift-guarded in fresh-boot-parity.test.sh §12.
-    expect(serverTfBakedSet().length).toBe(45);
+    // +4 (=49): the inngest consumer probe (#7228) — inngest-consumer-probe.{sh,service,timer}
+    // plus inngest-registry-probe.sh, which the consumer probe SOURCES for the shared registry
+    // query rather than re-implementing it (so baking the probe without its peer would FATAL on
+    // every tick). This probe is the CONSUMER-side detection for the twelve-day dark-bind outage:
+    // it asserts from the web host that 10.0.1.40 actually SERVES its registry, which the
+    // dedicated host's own heartbeat could not do. It runs on the web host, so it must ride the
+    // web image — this assertion is what caught it being declared in server.tf and baked nowhere,
+    // i.e. a detection mechanism that would have shipped undelivered and reported nothing.
+    expect(serverTfBakedSet().length).toBe(49);
   });
 
   // ASSERTION A (build-integrity). server.tf computes local.host_scripts_content_hash over

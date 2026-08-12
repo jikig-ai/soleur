@@ -25,6 +25,12 @@ fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 # always tested — "does the flag allowlist admit this state?" — rather than silently
 # becoming a test of the new marker check.
 GUARD_OWNER_DIR="$(mktemp -d)"
+# Single owning trap (ADR-129) covering BOTH tempdirs this suite allocates — this one and
+# $DIAG_TMP further down. Deliberately one trap, not two: a second `trap ... EXIT` REPLACES
+# the first rather than adding to it, so registering DIAG_TMP's separately would silently
+# stop cleaning GUARD_OWNER_DIR. DIAG_TMP is empty until its own mktemp runs, and the guards
+# make the unset case a no-op.
+trap '[[ -n "${GUARD_OWNER_DIR:-}" ]] && rm -rf "$GUARD_OWNER_DIR"; [[ -n "${DIAG_TMP:-}" ]] && rm -rf "$DIAG_TMP"' EXIT
 GUARD_OWNER_PRESENT="$GUARD_OWNER_DIR/present"
 : > "$GUARD_OWNER_PRESENT"
 GUARD_OWNER_ABSENT="$GUARD_OWNER_DIR/absent"

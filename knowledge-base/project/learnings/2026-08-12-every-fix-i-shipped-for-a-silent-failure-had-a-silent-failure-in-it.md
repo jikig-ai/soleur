@@ -197,7 +197,29 @@ Four measurements in this session were themselves broken:
     changes the PR body, the plan link, or the diff, every already-cleared body-reading gate
     is stale — re-run them after the last edit, not after the first. This is the same shape as
     error (4): confirm the path still consumes what you verified.
-22. **The plan frontmatter claimed `closes: [7228, 6617, 7308]`.** All three would have closed
+22. **I declared the new consumer probe in `server.tf` and baked it NOWHERE — it would have
+    shipped undelivered.** Delivery to the web host needs THREE surfaces to agree: `server.tf`'s
+    baked set, the `Dockerfile` host-scripts `COPY`, and an `!infra/…` re-include in
+    `.dockerignore` (because `COPY . .` drops whatever the ignore file excludes). I did the
+    first only. The image would not have contained `inngest-consumer-probe.{sh,service,timer}`
+    nor `inngest-registry-probe.sh` (which the probe SOURCES), so the install step would have
+    found nothing and the probe would have reported nothing — forever, silently.
+    **This is #7228 itself, one more time, inside the mechanism built to detect #7228.** The
+    12-agent panel, the 261-suite run and my own registered infra gate all passed it; a
+    NON-REQUIRED check caught it, with auto-merge already queued. I fixed the first two
+    surfaces, and the third only surfaced because the suite failed again — I would have
+    shipped a two-thirds fix otherwise. **Prevention:** when adding a host artifact, enumerate
+    every surface that must list it and check them as a SET before running anything —
+    `git grep -l '<sibling-artifact-name>'` returns the full surface list in one command,
+    because an existing sibling is already registered everywhere. Never conclude from one
+    suite going green that a multi-surface registration is complete.
+23. **Two new test suites allocated `mktemp -d` with no owning `trap … EXIT`.** Both cleaned up
+    on the happy path only, so any mid-run death leaked the tempdir. Caught by
+    `lint-trap-tempfile-ownership.py` (ADR-129), also non-required. **Prevention:** allocation
+    and its trap are one edit, never two. And note the sharp edge in the fix: a second
+    `trap … EXIT` REPLACES the first, so a suite with two tempdirs needs one combined trap —
+    registering a second would have silently stopped cleaning the first.
+24. **The plan frontmatter claimed `closes: [7228, 6617, 7308]`.** All three would have closed
     at merge on a promise; #7228 cannot close until the #7462 host restore lands. Recovery:
     `refs:`, and `Ref` rather than `Closes` in the PR body. **Prevention:** before writing a
     close keyword, ask what post-merge event proves the issue's ask is true — if one exists,
