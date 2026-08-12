@@ -838,12 +838,22 @@ returns 0 because `$`, `{` and `}` are not literal in BRE.
 10. **AC10 — ADR-179 amended.** Contains the scope extension, the no-`safe-bash`-change
     finding, the fail-closed-asymmetry reasoning, the skills-surface substitution evidence,
     and §R5 retired with a pointer to this PR.
-11. **AC11 — ADR-093 §Amendment corrected, section-scoped.**
+11. **AC11 — ADR-093 §Amendment marked falsified, with the premise RETAINED.**
+    **REWRITTEN 2026-08-12 (#7450 review-finding C8).** The original AC asserted
     `awk '/^## Amendments/,0' <ADR-093> | grep -Fc 'git-root = the operator'` returns **0**.
-    **Section-scoped deliberately:** the unscoped count is **2** today — the second occurrence
-    is a *quotation* inside the amended-by header (line 4) that must SURVIVE, so an unscoped
-    "returns 0" AC is unsatisfiable without destroying the cross-reference. The surrounding
-    #6223 export-invariant reasoning is intact (verified by reading, not by count).
+    That AC was satisfiable in exactly one way — *rewording the falsified paragraph* — and that
+    is what happened, four lines below a notice promising the paragraph was "retained as the
+    record of what was believed". It also destroyed a content anchor that BOTH ADRs quote as
+    the falsified premise, so those citations resolved against a phrase that no longer existed
+    anywhere in the body. A "the old wording is gone" AC and a "the old wording is preserved as
+    evidence" notice cannot both be satisfied; the notice is the one worth keeping.
+    The AC now asserts the record is intact AND marked:
+    - `awk '/^## Amendments/,0' <ADR-093> | grep -Fc 'git-root = the operator'` returns **1**
+      — the premise survives verbatim, so the header quotation resolves;
+    - `awk '/^## Amendments/,0' <ADR-093> | grep -Fc 'FALSIFIED 2026-08-12 (#7450'` returns
+      **>= 1**, and the notice precedes the retained paragraph.
+    The surrounding #6223 export-invariant reasoning is intact (verified by reading, not by
+    count).
 11b. **AC11b — ADR-093's header parenthetical corrected too.** Line 4 asserts ADR-179 "scopes
     the … guidance below out of the customer-facing command surface
     (`plugins/soleur/commands/**`)". After this PR that is false — the canonical form also

@@ -53,8 +53,12 @@ For a workspace whose **connected repo ships its own committed `plugins/soleur/`
 
 Surfaced by the `user-impact-reviewer` P1 on the #6156 pull-forward PR (redaction-gate + prod-cron subset) and adjudicated by the CTO (defer, not block). The `${CLAUDE_PLUGIN_ROOT:-<git-root fallback>}` form this ADR mandates is **fail-safe only under one invariant**: the SDK exports a non-empty `CLAUDE_PLUGIN_ROOT` into the Concierge autonomous-bypass bash env. The in-script `[[ -r "$SENTINEL" ]]` fail-closed guard on the redaction gates catches an **absent/unreadable** path (→ exit 2 halt), but it does **not** catch a *readable-but-untrusted* copy: if `CLAUDE_PLUGIN_ROOT` were ever unset on the server, the `:-` fallback would resolve the connected repo's untrusted copy and `[[ -r ]]` would pass — re-opening the exact hole this ADR closes (a silent-leak for `redact-sentinel.sh`; `INNGEST_MANUAL_TRIGGER_SECRET` exfiltration for `trigger.sh`).
 
-> **FALSIFIED 2026-08-12 (#7450, P0). The paragraph below is retained as the record of what
-> was believed; do not follow it.** Its parenthetical asserted that when the variable is
+> **FALSIFIED 2026-08-12 (#7450, P0). The paragraph below is retained VERBATIM as the record
+> of what was believed; do not follow it.** Its wording is evidence and must not be edited:
+> the amended-by header above quotes its parenthetical verbatim, and both this ADR and
+> ADR-179 cite that phrase as the falsified premise. Rewording the
+> paragraph to satisfy a grep would delete the anchor those citations resolve against — which
+> is exactly what happened once and was caught at review (#7450 review-finding C8). Its parenthetical asserted that when the variable is
 > legitimately unset, the git root is the operator's own checkout. That does not hold on the
 > review path: `plugins/soleur/skills/review/SKILL.md` instructs `gh pr checkout`, after which
 > `git rev-parse --show-toplevel` resolves to a tree whose contents are the **PR author's** —
@@ -71,7 +75,7 @@ Surfaced by the `user-impact-reviewer` P1 on the #6156 pull-forward PR (redactio
 > Everything below about the **export invariant** (#6223) remains correct and is unaffected:
 > that reasoning is about the *server* surface, where the value is injected and validated.
 
-The fallback branch **cannot** be made "fail-closed on unset" at the shell layer: it is the *correct, trusted* path for CLI/worktree/local-operator use (var legitimately unset, the git worktree being the operator's own checkout), and the shell cannot distinguish trusted-local-unset from untrusted-server-unset. The distinction *is* this invariant.
+The fallback branch **cannot** be made "fail-closed on unset" at the shell layer: it is the *correct, trusted* path for CLI/worktree/local-operator use (var legitimately unset, git-root = the operator's own checkout), and the shell cannot distinguish trusted-local-unset from untrusted-server-unset. The distinction *is* this invariant.
 
 This premise spans all ~28 anchored sites (Slices B + C + Slice D) plus the SDK/`agent-env.ts` injection layer — so it is an ADR-093-wide platform concern, not a defect of any single doc migration.
 
