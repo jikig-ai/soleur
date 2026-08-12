@@ -80,8 +80,21 @@ else
 
   # A ruleset can be `active` and structurally intact while quantifying over NOTHING. Point
   # ref_name at a branch that does not exist and every "is it enabled" check still passes.
+  #
+  # THE INCLUDE ASSERTION ALONE DOES NOT CLOSE THIS, and the first draft of this script
+  # stated the property above and then asserted only `include`. Two ways to empty the
+  # quantifier while `include` stays correct, both settable by any actor holding
+  # `administration: write` on the marketplace repo, and both scored 7/7 OK before these
+  # two lines existed:
+  #   - `exclude: ["~DEFAULT_BRANCH"]` — subtracts exactly what include adds.
+  #   - `target: "tag"` — the rules now govern tag refs; branches are unprotected.
+  # Terraform reverts either on the next apply, but the daily drift check never inspects
+  # the ruleset (#7511), so the window is bounded only by the next infra push.
+  assert_eq "target" "$(jq -r '.target // "<absent>"' < "$J")" "branch"
   assert_eq "conditions.ref_name.include" \
     "$(jq -c '.conditions.ref_name.include // []' < "$J")" '["~DEFAULT_BRANCH"]'
+  assert_eq "conditions.ref_name.exclude" \
+    "$(jq -c '.conditions.ref_name.exclude // []' < "$J")" '[]'
 
   # bypass_actors as a SET, not a count or a membership test. A FOURTH entry is the widening
   # that matters, and it is invisible to "is OrganizationAdmin present" or "is the array
@@ -94,7 +107,7 @@ fi
 
 # Anti-vacuity. A guard that silently evaluates zero properties and exits 0 is the failure mode
 # every assertion above is written to avoid, so the count is asserted rather than assumed.
-EXPECTED_CHECKS=7
+EXPECTED_CHECKS=9
 if [[ "${#problems[@]}" -eq 0 && "$checked" -ne "$EXPECTED_CHECKS" ]]; then
   echo "verify-marketplace-ruleset: ran ${checked} assertions, expected ${EXPECTED_CHECKS} — the probe itself is broken." >&2
   exit 1

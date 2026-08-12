@@ -42,6 +42,15 @@ findings=()
 
 finding() { findings+=("$1"); }
 
+# Every value below is interpolated from ATTACKER-CONTROLLED JSON — a PR author writes this
+# file. `jq -r` renders a JSON "\n" as a real newline, so an unsanitised value printed to
+# stderr can forge `::error::`/`::add-mask::`/`::stop-commands::` workflow commands. The drift
+# workflow already treats this exact data class as requiring sanitisation and documents it as
+# load-bearing; this gate reads the same class in CI and had no equivalent. U+2028/U+2029 are
+# stripped too — they are not bash line breaks, but the repo's own 2026-04-17 learning records
+# them as separators that leak through byte-oriented filters.
+sanitize() { printf '%s' "$1" | tr -d '\000-\037\177' | sed 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/##\[/#[/g'; }
+
 if [[ -z "$MANIFEST" ]]; then
   finding "no_argument: expected a path to the manifest JSON as \$1"
 elif [[ ! -f "$MANIFEST" ]]; then
@@ -57,6 +66,29 @@ else
   if ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$body"; then
     finding "unparseable: '${MANIFEST}' did not parse as a JSON object"
   else
+    # --- marketplace identity ------------------------------------------------------------------
+    # Asserted OUTSIDE the .plugins shape gate: these two are properties of the marketplace
+    # document itself and stay evaluable even when .plugins is malformed.
+    #
+    # `.name` is not cosmetic — it is the `@`-half of the install and update commands
+    # (`claude plugin install soleur@soleur-marketplace`, `claude plugin update
+    # soleur@soleur-marketplace`), which are printed on three published site pages. Renaming it
+    # breaks the documented install AND update path for every existing user, and nothing else in
+    # this repo or the drift workflow reads it.
+    mp_name="$(jq -r 'if (.name | type) == "string" then .name else "" end' <<<"$body" 2>/dev/null)"
+    if [[ "$mp_name" != "soleur-marketplace" ]]; then
+      finding "marketplace_name: .name is '$(sanitize "$mp_name")', expected 'soleur-marketplace' — this is the @-half of the published install/update command"
+    fi
+
+    # `.owner` is the identity the marketplace presents. An attacker substituting it is a
+    # phishing surface that no byte-diff and no drift assertion would report, because the
+    # published bytes would faithfully match a compromised source.
+    owner_name="$(jq -r 'if (.owner.name | type) == "string" then .owner.name else "" end' <<<"$body" 2>/dev/null)"
+    owner_email="$(jq -r 'if (.owner.email | type) == "string" then .owner.email else "" end' <<<"$body" 2>/dev/null)"
+    if [[ "$owner_name" != "Jean Deruelle" || "$owner_email" != "jean.deruelle@jikigai.com" ]]; then
+      finding "marketplace_owner: .owner is '$(sanitize "$owner_name") <$(sanitize "$owner_email")>', expected the declared Soleur owner identity"
+    fi
+
     entry_shape="$(jq -r 'if (.plugins | type) == "array" and (.plugins[0] | type) == "object" then "ok" else "bad" end' <<<"$body" 2>/dev/null)"
     if [[ "$entry_shape" != "ok" ]]; then
       plugins_type="$(jq -r '.plugins | type' <<<"$body" 2>/dev/null)"
@@ -82,19 +114,19 @@ else
       # --- entry name --------------------------------------------------------------------------
       entry_name="$(jq -r 'if (.plugins[0].name | type) == "string" then .plugins[0].name else "" end' <<<"$body" 2>/dev/null)"
       if [[ "$entry_name" != "soleur" ]]; then
-        finding "entry_name: .plugins[0].name is '${entry_name}', expected 'soleur' (empty means absent, null, or not a string)"
+        finding "entry_name: .plugins[0].name is '$(sanitize "$entry_name")', expected 'soleur' (empty means absent, null, or not a string)"
       fi
 
       # --- source type -------------------------------------------------------------------------
       src_type="$(jq -r 'if (.plugins[0].source.source | type) == "string" then .plugins[0].source.source else "" end' <<<"$body" 2>/dev/null)"
       if [[ "$src_type" != "git-subdir" ]]; then
-        finding "source_type: .plugins[0].source.source is '${src_type}', expected 'git-subdir'. Any other source type restores the whole-repo clone (~181 MiB against the CLI's 120 s default) that #7471 exists to remove"
+        finding "source_type: .plugins[0].source.source is '$(sanitize "$src_type")', expected 'git-subdir'. Any other source type restores the whole-repo clone (~181 MiB against the CLI's 120 s default) that #7471 exists to remove"
       fi
 
       # --- source path -------------------------------------------------------------------------
       src_path="$(jq -r 'if (.plugins[0].source.path | type) == "string" then .plugins[0].source.path else "" end' <<<"$body" 2>/dev/null)"
       if [[ "$src_path" != "plugins/soleur" ]]; then
-        finding "source_path: .plugins[0].source.path is '${src_path}', expected 'plugins/soleur'"
+        finding "source_path: .plugins[0].source.path is '$(sanitize "$src_path")', expected 'plugins/soleur'"
       fi
 
       # --- source url --------------------------------------------------------------------------
@@ -103,13 +135,17 @@ else
       # a repoint.
       src_url="$(jq -r 'if (.plugins[0].source.url | type) == "string" then .plugins[0].source.url else "" end' <<<"$body" 2>/dev/null)"
       if [[ ! "$src_url" =~ ^(https://github\.com/|git@github\.com:)jikig-ai/soleur(\.git)?/?$ ]]; then
-        finding "source_url: .plugins[0].source.url is '${src_url}', expected to point at jikig-ai/soleur"
+        finding "source_url: .plugins[0].source.url is '$(sanitize "$src_url")', expected to point at jikig-ai/soleur"
       fi
 
       # --- no pin ------------------------------------------------------------------------------
-      has_pin="$(jq -r 'if (.plugins[0].source | type) == "object" then ([.plugins[0].source | has("ref"), has("sha"), has("commit"), has("branch"), has("tag")] | any | tostring) else "unreadable" end' <<<"$body" 2>/dev/null)"
-      if [[ "$has_pin" != "false" ]]; then
-        finding "source_pinned: .plugins[0].source carries a ref/sha/commit/branch/tag pin (probe returned '${has_pin}', expected 'false'). The entry is deliberately unpinned — a constant pin freezes every new install at a stale tree, which is #7471's defect 1 by another route"
+      # ALLOWLIST, not a denylist. The first draft enumerated five pin spellings
+      # (ref/sha/commit/branch/tag); `revision` — and any future spelling the CLI grows —
+      # sailed through. The set of keys this source legitimately carries is closed and tiny,
+      # so assert THAT and let everything else be a finding by construction.
+      extra_keys="$(jq -r 'if (.plugins[0].source | type) == "object" then ([.plugins[0].source | keys_unsorted[] | select(. != "source" and . != "url" and . != "path")] | join(",")) else "<unreadable>" end' <<<"$body" 2>/dev/null)"
+      if [[ -n "$extra_keys" ]]; then
+        finding "source_extra_keys: .plugins[0].source carries unexpected key(s) '$(sanitize "$extra_keys")'; only source/url/path are allowed. The entry is deliberately unpinned — any pin (ref, sha, commit, branch, tag, revision, …) freezes every new install at a stale tree, which is #7471's defect 1 by another route"
       fi
     fi
   fi

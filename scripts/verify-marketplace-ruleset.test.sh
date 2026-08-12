@@ -78,7 +78,28 @@ expect() { # $1=label $2=file $3=want-rc
   else fail "$1" "expected exit $3, got $got; output: $(tr '\n' ' ' < "$TMP/out.txt" | cut -c1-240)"; fi
 }
 
-mutate() { jq "$1" "$TMP/baseline.json" > "$TMP/m.json"; echo "$TMP/m.json"; }
+# WHY THIS IS NOT `expect "$label" "$(mutate '<filter>')" <rc>`.
+# The first draft mutated inside a command substitution. A subshell cannot fail the run:
+# a typo'd filter made jq exit non-zero, the substitution yielded an EMPTY path, the
+# verifier fail-closed on the missing input, and every RED row PASSED for a reason that
+# had nothing to do with the mutation. Measured: with mutate() fully broken, 16 of these
+# 18 rows still reported green. So the mutation happens in THIS shell, and both failure
+# modes are asserted before the row is allowed to count.
+expect_mut() { # $1=label $2=jq-filter $3=want-rc
+  if ! jq "$2" "$TMP/baseline.json" > "$TMP/m.json" 2>"$TMP/jqerr.txt"; then
+    fail "$1" "mutate: jq filter failed: $2 :: $(tr '\n' ' ' < "$TMP/jqerr.txt" | cut -c1-160)"
+    return
+  fi
+  # A filter that selects nothing (a renamed key, a changed actor_type) silently produces
+  # the baseline unchanged. That row then asserts "the DECLARED ruleset is rejected",
+  # which is false, and it would fail — but only by accident of direction. For a row
+  # expecting rc 0 it passes while proving nothing. Landing is asserted either way.
+  if cmp -s "$TMP/baseline.json" "$TMP/m.json"; then
+    fail "$1" "mutate: filter produced NO change — the row is vacuous: $2"
+    return
+  fi
+  expect "$1" "$TMP/m.json" "$3"
+}
 
 # --- Positive control -------------------------------------------------------------------------
 # Without this, every RED below is satisfied by a verifier that rejects everything.
@@ -86,12 +107,12 @@ expect "control: the declared ruleset passes" "$TMP/baseline.json" 0
 
 # This is the row that fails on EVERY apply if the normalisation is dropped: Terraform writes 0,
 # the API returns null, and the canonical is API-shaped. Assert the 0-shape is accepted too.
-expect "control: actor_id 0 (Terraform shape) normalises equal to null (API shape)" \
-  "$(mutate '(.bypass_actors[] | select(.actor_type=="OrganizationAdmin") | .actor_id) = 0')" 0
+expect_mut "control: actor_id 0 (Terraform shape) normalises equal to null (API shape)" \
+  '(.bypass_actors[] | select(.actor_type=="OrganizationAdmin") | .actor_id) = 0' 0
 
 # --- G1.1: enforcement / presence (own-dispatch row) -------------------------------------------
-expect "G1.1a enforcement disabled is rejected" "$(mutate '.enforcement = "disabled"')" 1
-expect "G1.1b evaluate-mode enforcement is rejected" "$(mutate '.enforcement = "evaluate"')" 1
+expect_mut "G1.1a enforcement disabled is rejected" '.enforcement = "disabled"' 1
+expect_mut "G1.1b evaluate-mode enforcement is rejected" '.enforcement = "evaluate"' 1
 expect "G1.1c a missing input fails closed" "$TMP/nope.json" 1
 printf 'not json\n' > "$TMP/garbage.json"
 expect "G1.1d an unparseable body fails closed" "$TMP/garbage.json" 1
@@ -101,41 +122,56 @@ expect "G1.1e a non-object body fails closed" "$TMP/array.json" 1
 # --- G1.2: SECOND-MEMBER ROW -------------------------------------------------------------------
 # A FOURTH bypass actor. "OrganizationAdmin is present" and "bypass_actors is non-empty" both
 # still pass here; only full set equality catches the widening.
-expect "G1.2a a 4th bypass actor is rejected (second-member row)" \
-  "$(mutate '.bypass_actors += [{"actor_id": 99, "actor_type": "Integration", "bypass_mode": "always"}]')" 1
-expect "G1.2b a bypass actor removed is rejected" \
-  "$(mutate '.bypass_actors = [.bypass_actors[0]]')" 1
-expect "G1.2c a bypass_mode widened to always->pull_request is rejected" \
-  "$(mutate '(.bypass_actors[] | select(.actor_type=="Integration") | .bypass_mode) = "pull_request"')" 1
-expect "G1.2d a swapped Integration actor_id is rejected" \
-  "$(mutate '(.bypass_actors[] | select(.actor_type=="Integration") | .actor_id) = 122213433')" 1
+expect_mut "G1.2a a 4th bypass actor is rejected (second-member row)" \
+  '.bypass_actors += [{"actor_id": 99, "actor_type": "Integration", "bypass_mode": "always"}]' 1
+expect_mut "G1.2b a bypass actor removed is rejected" \
+  '.bypass_actors = [.bypass_actors[0]]' 1
+# NARROWING, not widening: `always` bypasses in every situation, `pull_request` only inside the
+# PR flow. It must still redden — set equality is the property, and drifting the App's mode in
+# EITHER direction means the live ruleset stopped matching what infra declares.
+expect_mut "G1.2c a bypass_mode narrowed from always to pull_request is rejected" \
+  '(.bypass_actors[] | select(.actor_type=="Integration") | .bypass_mode) = "pull_request"' 1
+expect_mut "G1.2d a swapped Integration actor_id is rejected" \
+  '(.bypass_actors[] | select(.actor_type=="Integration") | .actor_id) = 122213433' 1
 
 # --- G1.3: the approval count — this feature's own shipped defect -------------------------------
-expect "G1.3a required_approving_review_count 0 is rejected" \
-  "$(mutate '(.rules[] | select(.type=="pull_request") | .parameters.required_approving_review_count) = 0')" 1
-expect "G1.3b the pull_request rule removed is rejected" \
-  "$(mutate '.rules = [.rules[] | select(.type != "pull_request")]')" 1
+expect_mut "G1.3a required_approving_review_count 0 is rejected" \
+  '(.rules[] | select(.type=="pull_request") | .parameters.required_approving_review_count) = 0' 1
+expect_mut "G1.3b the pull_request rule removed is rejected" \
+  '.rules = [.rules[] | select(.type != "pull_request")]' 1
 
 # --- G1.4: deletion / non_fast_forward ----------------------------------------------------------
 # Declared in the .tf and asserted nowhere before this. Clearing either leaves every other
 # assertion passing while the property is false.
-expect "G1.4a the deletion rule removed is rejected" \
-  "$(mutate '.rules = [.rules[] | select(.type != "deletion")]')" 1
-expect "G1.4b the non_fast_forward rule removed is rejected" \
-  "$(mutate '.rules = [.rules[] | select(.type != "non_fast_forward")]')" 1
+expect_mut "G1.4a the deletion rule removed is rejected" \
+  '.rules = [.rules[] | select(.type != "deletion")]' 1
+expect_mut "G1.4b the non_fast_forward rule removed is rejected" \
+  '.rules = [.rules[] | select(.type != "non_fast_forward")]' 1
 
-# --- G1.5: the ref condition (active but quantifying over nothing) ------------------------------
-expect "G1.5a a ref_name pointing at a nonexistent branch is rejected" \
-  "$(mutate '.conditions.ref_name.include = ["refs/heads/does-not-exist"]')" 1
-expect "G1.5b an empty ref_name include is rejected" \
-  "$(mutate '.conditions.ref_name.include = []')" 1
+# --- G1.5: the quantifier (active, structurally intact, governing nothing) ----------------------
+# Every row here leaves `enforcement: active`, all three rules present and the bypass set
+# correct. They are the ways a ruleset can be perfectly formed and protect no ref at all.
+expect_mut "G1.5a a ref_name pointing at a nonexistent branch is rejected" \
+  '.conditions.ref_name.include = ["refs/heads/does-not-exist"]' 1
+expect_mut "G1.5b an empty ref_name include is rejected" \
+  '.conditions.ref_name.include = []' 1
+# exclude subtracts exactly what include adds. `include` still reads ["~DEFAULT_BRANCH"], so
+# the include assertion alone reports green — this scored 7/7 OK before the exclude assertion.
+expect_mut "G1.5c an exclude that cancels the include is rejected" \
+  '.conditions.ref_name.exclude = ["~DEFAULT_BRANCH"]' 1
+expect_mut "G1.5d any non-empty exclude is rejected" \
+  '.conditions.ref_name.exclude = ["refs/heads/main"]' 1
+# target: "tag" reparents every rule onto tag refs. Branch pushes become unprotected while
+# enforcement, rules and conditions all still read exactly as declared.
+expect_mut "G1.5e target retargeted to tag refs is rejected" '.target = "tag"' 1
+expect_mut "G1.5f an absent target fails closed" 'del(.target)' 1
 
 # --- Rule order independence --------------------------------------------------------------------
 # Adding a sibling rule reorders `rules[]`; a positional `.rules[0]` reader would break here.
-expect "rule order is irrelevant (selected by .type, never positionally)" \
-  "$(mutate '.rules |= reverse')" 0
+expect_mut "rule order is irrelevant (selected by .type, never positionally)" \
+  '.rules |= reverse' 0
 
-MIN_ASSERTIONS=18
+MIN_ASSERTIONS=22
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   fail "anti-vacuity floor" "only $ASSERTED assertion(s) ran, expected >= $MIN_ASSERTIONS"
 fi

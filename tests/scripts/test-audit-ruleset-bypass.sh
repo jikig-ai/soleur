@@ -886,6 +886,105 @@ t_cla_bypass_canonical_matches_tf() {
   fi
 }
 
+# --- Marketplace ruleset canonical↔terraform sync gates (#7493) --------------------------------
+# WHY THESE EXIST, stated plainly because their absence was the review's worst finding.
+# Guard 1 (scripts/verify-marketplace-ruleset.sh) compares the LIVE ruleset against the canonical,
+# and it runs POST-APPLY. Nothing compared the canonical — or the rule values Guard 1 asserts —
+# against the `.tf` that actually creates the ruleset. Measured on this feature's own branch:
+# setting `required_approving_review_count = 0` AND adding a fourth bypass actor to the `.tf`
+# left ALL FIVE suites green, because every suite reads the canonical or a fixture and none reads
+# the `.tf`. That widening would merge, apply LIVE to the plugin's distribution channel, and only
+# then redden — after the ruleset it weakened was already in force. Both sibling rulesets already
+# carry this gate (T-rsc-9, T-cla-1b); this one shipped without it.
+MP_TF="$REPO_ROOT/infra/github/ruleset-marketplace-pr-required.tf"
+MP_BYPASS_CANONICAL="$REPO_ROOT/scripts/marketplace-ruleset-canonical-bypass-actors.json"
+
+# T-mp-1b: the `.tf` bypass_actors triples MUST equal the canonical, with the `.tf`'s
+# OrganizationAdmin `actor_id = 0` sentinel (provider issue #2536) normalized to the canonical's
+# `null` (the canonical mirrors the LIVE API shape). Same extraction mechanism as T-cla-1b.
+t_mp_bypass_canonical_matches_tf() {
+  if [[ ! -f "$MP_TF" ]]; then
+    _report "T-mp-1b marketplace terraform ruleset source exists" fail "missing $MP_TF"
+    return
+  fi
+  if [[ ! -f "$MP_BYPASS_CANONICAL" ]]; then
+    _report "T-mp-1b marketplace bypass canonical exists" fail "missing $MP_BYPASS_CANONICAL"
+    return
+  fi
+  local tf_triples
+  tf_triples=$(awk '
+    /^[[:space:]]*bypass_actors[[:space:]]*\{/ {blk=1; aid="null"; at=""; bm=""; next}
+    blk && /^[[:space:]]*actor_id[[:space:]]*=/    {v=$0; sub(/#.*/,"",v); sub(/.*=[[:space:]]*/,"",v);  sub(/[[:space:]]*$/,"",v); aid=v}
+    blk && /^[[:space:]]*actor_type[[:space:]]*=/  {v=$0; sub(/#.*/,"",v); sub(/.*=[[:space:]]*"?/,"",v); sub(/"?[[:space:]]*$/,"",v); at=v}
+    blk && /^[[:space:]]*bypass_mode[[:space:]]*=/ {v=$0; sub(/#.*/,"",v); sub(/.*=[[:space:]]*"?/,"",v); sub(/"?[[:space:]]*$/,"",v); bm=v}
+    blk && /^[[:space:]]*\}/ {print aid"|"at"|"bm; blk=0}
+  ' "$MP_TF" | sed 's/^0|/null|/' | sort)
+  local canon_triples
+  canon_triples=$(jq -r '.[] | "\(.actor_id)|\(.actor_type)|\(.bypass_mode)"' "$MP_BYPASS_CANONICAL" | sort)
+  local dup
+  dup=$(jq -r '(map("\(.actor_id)|\(.actor_type)|\(.bypass_mode)")) as $k | ($k | length) - ($k | unique | length)' "$MP_BYPASS_CANONICAL")
+  # Non-vacuity floor (== 3): OrgAdmin + RepoRole 5 + soleur-ai Integration, and NO MORE. An
+  # equality floor rather than `>=` is deliberate here — the whole point is that a FOURTH actor
+  # is the widening that matters, so the floor must not be satisfiable by adding one.
+  local n_canon
+  n_canon=$(jq 'length' "$MP_BYPASS_CANONICAL")
+  if [[ "$tf_triples" == "$canon_triples" && "$dup" == "0" && "$n_canon" -eq 3 ]]; then
+    _report "T-mp-1b marketplace bypass canonical triples == ruleset-marketplace-pr-required.tf (0↔null) + no-dup + exactly 3" ok
+  else
+    _report "T-mp-1b marketplace bypass canonical triples == ruleset-marketplace-pr-required.tf (0↔null) + no-dup + exactly 3" fail \
+      "dup=$dup n_canon=$n_canon diff:$(diff <(echo "$canon_triples") <(echo "$tf_triples") | tr '\n' ' ')"
+  fi
+}
+
+# T-mp-1c: the RULE VALUES Guard 1 asserts at runtime MUST be what the `.tf` declares. Guard 1's
+# fixtures encode the expected values as literals; if the `.tf` drifts from them, Guard 1 keeps
+# passing 22/22 against its fixtures while the live ruleset it verifies is weaker than the
+# fixtures claim. This is the row that catches `required_approving_review_count = 0`.
+t_mp_rule_values_match_tf() {
+  if [[ ! -f "$MP_TF" ]]; then
+    _report "T-mp-1c marketplace terraform ruleset source exists" fail "missing $MP_TF"
+    return
+  fi
+  # Read each value from the `.tf`, stripping trailing comments before the value slice (SE-3).
+  _mp_tf_val() {
+    awk -v key="$1" '
+      $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+        v=$0; sub(/#.*/,"",v); sub(/.*=[[:space:]]*/,"",v)
+        gsub(/^"|"[[:space:]]*$/,"",v); sub(/[[:space:]]*$/,"",v); print v; exit
+      }' "$MP_TF"
+  }
+  local enforcement approvals target include exclude problems=()
+  enforcement="$(_mp_tf_val enforcement)"
+  approvals="$(_mp_tf_val required_approving_review_count)"
+  target="$(_mp_tf_val target)"
+  include="$(_mp_tf_val include)"
+  exclude="$(_mp_tf_val exclude)"
+
+  [[ "$enforcement" == "active" ]] || problems+=("enforcement='$enforcement' expected 'active'")
+  # The literal 1 is this feature's own shipped defect. `required_approving_review_count` has NO
+  # provider default — omitting it yields 0, and a 0-approval PR requirement closes nothing
+  # against actors already holding pull_requests:write.
+  [[ "$approvals" == "1" ]] || problems+=("required_approving_review_count='$approvals' expected '1'")
+  [[ "$target" == "branch" ]] || problems+=("target='$target' expected 'branch'")
+  [[ "$include" == '["~DEFAULT_BRANCH"]' ]] || problems+=("ref_name.include='$include' expected '[\"~DEFAULT_BRANCH\"]'")
+  # A non-empty exclude subtracts exactly what include adds, leaving the ruleset active and
+  # governing nothing. Guard 1 asserts this at runtime; nothing asserted it pre-merge.
+  [[ "$exclude" == "[]" ]] || problems+=("ref_name.exclude='$exclude' expected '[]'")
+  # deletion + non_fast_forward are the only UNCONDITIONAL protections; a PR flow routes around
+  # neither, and an omission reads as false with no other symptom.
+  grep -Eq '^[[:space:]]*deletion[[:space:]]*=[[:space:]]*true' "$MP_TF" \
+    || problems+=("deletion = true not declared")
+  grep -Eq '^[[:space:]]*non_fast_forward[[:space:]]*=[[:space:]]*true' "$MP_TF" \
+    || problems+=("non_fast_forward = true not declared")
+
+  if [[ "${#problems[@]}" -eq 0 ]]; then
+    _report "T-mp-1c marketplace rule values == ruleset-marketplace-pr-required.tf (approvals/target/refs/deletion/nff)" ok
+  else
+    _report "T-mp-1c marketplace rule values == ruleset-marketplace-pr-required.tf (approvals/target/refs/deletion/nff)" fail \
+      "$(printf '%s; ' "${problems[@]}")"
+  fi
+}
+
 if [[ ! -f "$SCRIPT" ]]; then
   echo "ERROR: $SCRIPT does not exist — RED phase expected this." >&2
   exit 1
@@ -932,6 +1031,10 @@ t_mq_stays_reverted
 # CLA ruleset canonical↔terraform sync gates (#6061; Terraform-ified #6072)
 t_cla_rsc_canonical_matches_tf
 t_cla_bypass_canonical_matches_tf
+
+# Marketplace ruleset canonical↔terraform sync gates (#7493)
+t_mp_bypass_canonical_matches_tf
+t_mp_rule_values_match_tf
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

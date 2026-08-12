@@ -89,12 +89,47 @@ jobs:
 
   apply:
     needs: preflight
-    if: needs.preflight.outputs.skip != 'true'
+    # BOTH conjuncts are load-bearing; neither subsumes the other.
+    #
+    # The ref test closes the branch-dispatch hole (#7493 review). Every ruleset on
+    # this repo targets `~DEFAULT_BRANCH` with an empty exclude, so NON-default
+    # branches carry no protection at all: absent this test, anyone holding
+    # `actions: write` could push a branch carrying a rewritten
+    # infra/github/soleur-marketplace-manifest.json and dispatch this workflow.
+    # Terraform reads `content` from the CHECKED-OUT tree and publishes it through the
+    # App's own ruleset bypass, so the marketplace repo is never touched, no PR exists,
+    # and `marketplace-manifest-guard` never runs. That path needs ONE actor holding
+    # only monorepo permissions — not the two colluding Apps this feature advertises.
+    #
+    # Exact `==`, never startsWith(): `refs/heads/main-anything` would satisfy a prefix
+    # test. The kill-switch conjunct is ANDed on, not replaced — it is inert on
+    # dispatch (head_commit is absent, so HEAD_MSG is empty) and covers only pushes.
+    if: needs.preflight.outputs.skip != 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # The ref test above is necessary but NOT sufficient, because it constrains the
+      # ref NAME while the trust-bearing fact is what checkout actually materialised.
+      # `gh run rerun` replays a historical run at its ORIGINAL commit: land a manifest
+      # on main, let it apply, revert it, then re-run the old apply — `github.ref` is
+      # still `refs/heads/main` and the reverted content republishes. So assert the
+      # property directly: the inputs we are about to apply equal main's inputs NOW.
+      # This also re-closes the branch path independently, and it is the assertion that
+      # keeps holding if checkout ever gains an explicit `ref:`.
+      - name: Assert the tree being applied is main's current tree
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin main
+          PATHS=("$INFRA_DIR" tests/scripts/lib/destroy-guard-filter.jq)
+          if ! git diff --quiet FETCH_HEAD -- "${PATHS[@]}"; then
+            echo "::error::Refusing to apply: the checked-out infra inputs differ from origin/main. This run would publish content that never passed marketplace-manifest-guard, CODEOWNERS or review."
+            git diff --stat FETCH_HEAD -- "${PATHS[@]}" >&2
+            exit 1
+          fi
+          echo "Applied inputs are byte-identical to origin/main."
 
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
@@ -481,7 +516,14 @@ jobs:
           fi
 
           echo "marketplace_ruleset_id=$MP_ID" >> "$GITHUB_OUTPUT"
-          echo "Ruleset ${MP_ID} (${MP_REPO}): ${mp_checked}/8 assertions hold."
+          # The assertion COUNT is reported by the script itself ("OK — N/N assertions
+          # hold"), which is the only place it exists. Restating it here would mean
+          # duplicating a number the script owns — and the first draft of this line did
+          # exactly that, interpolating an `mp_checked` that is assigned nowhere. Under
+          # `set -u` that aborted the step on EVERY apply, AFTER all assertions passed,
+          # which in turn skipped the published-manifest verifier below (implicit
+          # success()) on every run. Two guards silently disabled by one echo.
+          echo "Ruleset ${MP_ID} (${MP_REPO}) matches its declaration."
 
       - name: Post-apply verify (published manifest matches its source)
         id: verify_manifest

@@ -78,10 +78,48 @@ expect_rc() {
   fi
 }
 
-# --- Positive control ------------------------------------------------------------------------
+# --- Positive controls -----------------------------------------------------------------------
 # The canonical manifest MUST pass. Without this, every RED below is satisfiable by a validator
 # that rejects everything, and the suite would certify a guard that blocks all merges.
 expect_rc "canonical manifest passes" "$CANONICAL" 0
+#
+# THE CANONICAL ALONE IS NOT ENOUGH, and this suite's first draft had only that row. Every RED
+# fixture below is derived from the canonical by a `jq` edit, so a validator implemented as
+# `diff "$1" "$CANONICAL"` satisfies all of them AND the row above — and ci.yml validates the
+# canonical against itself, so that stub also passes CI with the #7471 `version` key re-added.
+# Measured: 14/14 green, gate green, defect shipped. A guard whose only accepted input is the
+# byte-identical canonical is not a validator, it is a checksum.
+#
+# The fix is must-PASS fixtures that DIFFER from the canonical in ways the contract explicitly
+# permits. Each row below is a spelling the validator's own regex or key set accepts, and none
+# was exercised before. They are what force the guard to encode a contract rather than a hash.
+jq '.plugins[0].source.url = "https://github.com/jikig-ai/soleur"' "$CANONICAL" > "$TMP/ok-no-dotgit.json"
+expect_rc "control: accepts the https URL without the .git suffix" "$TMP/ok-no-dotgit.json" 0
+
+jq '.plugins[0].source.url = "git@github.com:jikig-ai/soleur.git"' "$CANONICAL" > "$TMP/ok-ssh.json"
+expect_rc "control: accepts the ssh URL spelling" "$TMP/ok-ssh.json" 0
+
+jq '.plugins[0].source.url = "https://github.com/jikig-ai/soleur.git/"' "$CANONICAL" > "$TMP/ok-slash.json"
+expect_rc "control: accepts a trailing slash on the URL" "$TMP/ok-slash.json" 0
+
+# Cosmetic metadata is deliberately UNGOVERNED — the delivery contract is the source coordinates
+# and the identity, not the marketing copy. A guard that reddens here would block routine edits
+# and teach the operator to bypass it, which is how a required check stops being read.
+jq '.plugins[0].description = "Rewritten copy." | .plugins[0].category = "developer-tools" | .plugins[0].homepage = "https://soleur.ai/plugin"' \
+  "$CANONICAL" > "$TMP/ok-cosmetic.json"
+expect_rc "control: accepts edits to ungoverned cosmetic metadata" "$TMP/ok-cosmetic.json" 0
+
+# --- G4.0: marketplace identity ---------------------------------------------------------------
+# `.name` is the @-half of `claude plugin install soleur@soleur-marketplace`. Renaming it breaks
+# the documented install AND update path for every existing user, and it passed 14/14 before.
+jq '.name = "evil-marketplace"' "$CANONICAL" > "$TMP/bad-mp-name.json"
+expect_rc "G4.0a rejects a renamed marketplace (.name)" "$TMP/bad-mp-name.json" 1
+
+jq '.owner.name = "Mallory"' "$CANONICAL" > "$TMP/bad-owner-name.json"
+expect_rc "G4.0b rejects a substituted .owner.name" "$TMP/bad-owner-name.json" 1
+
+jq '.owner.email = "mallory@evil.tld"' "$CANONICAL" > "$TMP/bad-owner-email.json"
+expect_rc "G4.0c rejects a substituted .owner.email" "$TMP/bad-owner-email.json" 1
 
 # --- G4.1: a `version` key on the plugin entry ------------------------------------------------
 jq '.plugins[0].version = "1.0.0"' "$CANONICAL" > "$TMP/version-key.json"
@@ -98,7 +136,14 @@ jq '.plugins[0].source.source = "github"' "$CANONICAL" > "$TMP/bad-source-type.j
 expect_rc "G4.2c rejects source.source != git-subdir" "$TMP/bad-source-type.json" 1
 
 jq '.plugins[0].source.ref = "v0.9.0"' "$CANONICAL" > "$TMP/pinned.json"
-expect_rc "G4.2d rejects a ref/sha/commit/branch/tag pin" "$TMP/pinned.json" 1
+expect_rc "G4.2d rejects a ref pin" "$TMP/pinned.json" 1
+
+# The row that falsified the denylist. `revision` is not one of the five spellings the first
+# draft enumerated (ref/sha/commit/branch/tag), so it validated clean while pinning the source
+# exactly as effectively. The assertion is now an ALLOWLIST over source keys, which makes this
+# row and every future spelling red by construction rather than by enumeration.
+jq '.plugins[0].source.revision = "deadbeef"' "$CANONICAL" > "$TMP/pinned-revision.json"
+expect_rc "G4.2e rejects an unenumerated pin spelling (source.revision)" "$TMP/pinned-revision.json" 1
 
 # --- G4.3: SECOND-MEMBER ROW ------------------------------------------------------------------
 # Every assertion in the drift workflow reads `.plugins[0]`, so an APPENDED entry is the shape
@@ -140,7 +185,7 @@ fi
 # --- Anti-vacuity floor -----------------------------------------------------------------------
 # This suite's own dispatch. A harness that silently asserts nothing (a fixture generator that
 # no-ops, an early `return`) would otherwise report a clean 0/0.
-MIN_ASSERTIONS=14
+MIN_ASSERTIONS=22
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   fail "anti-vacuity floor" "only $ASSERTED assertion(s) ran, expected >= $MIN_ASSERTIONS"
 fi
