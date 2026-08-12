@@ -41,6 +41,20 @@ fi
 
 Read `CLAUDE.md` if it exists - apply project conventions during review.
 
+**ASK WHAT A GATE NORMALISES AWAY BEFORE TRUSTING IT AS COVERAGE.** When a check compares two
+artifacts by normalising a dimension away, everything else that lived in that dimension becomes a
+precise, enumerable blind spot — and a PR whose subject is "make these two agree" is exactly the
+PR that writes into it. Name the normalisation, then ask what else those bytes encoded.
+**Why:** #7349 — the legal mirror-drift gate's normaliser collapses `](gdpr-policy.md)` and
+`](/legal/gdpr-policy/)` to one token, which is CORRECT for body equivalence and is what made it
+blind to link FORM; the PR whose headline was "we fixed a legal-doc 404" shipped three new ones
+onto the published surface (`main` had zero, HEAD had three) with every gate green. Corollary for
+the reviewer: a same-text edit applied to BOTH surfaces still fails a drift ratchet when the line
+was ALREADY drifting, and the ratchet's "port the enclosing passage instead" remedy is usually the
+substantive fix in disguise — pre-existing drift on a published surface generally means the public
+copy is the impoverished one. See
+`knowledge-base/project/learnings/2026-08-12-every-blocking-finding-was-the-defect-class-the-pr-existed-to-close.md`.
+
 ### 1. Determine Review Target & Setup (ALWAYS FIRST)
 
 <review_target> #$ARGUMENTS </review_target>

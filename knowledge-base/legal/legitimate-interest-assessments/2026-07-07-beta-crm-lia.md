@@ -6,7 +6,7 @@ plan: knowledge-base/project/plans/2026-07-07-feat-beta-conversation-capture-pla
 adr: knowledge-base/engineering/architecture/decisions/ADR-102-beta-crm-capture-store-per-tenant-owner-private-agent-native.md
 issue: 6165
 status: draft-requires-counsel-review
-controller: "The Web Platform user (operator) is the controller for the third-party personal data recorded; Jikigai SARL (France; 25 rue de Ponthieu, 75008 Paris) is the processor operating the store"
+controller: "Jikigai SARL (France; 25 rue de Ponthieu, 75008 Paris) is the controller for the third-party personal data recorded, as this activity runs today — every store owner is Jikigai personnel (corrected 2026-08-11, #7349 B4; the operator-as-controller / Jikigai-as-processor split assessed at first issue applies only if a non-Jikigai operator ever runs the store)"
 processing_activity: "Owner-private beta-tester / prospect CRM capture store — Article 30 register Processing Activity 30"
 lawful_basis: "Art. 6(1)(f) GDPR — legitimate interest"
 data_subjects: "Beta testers / prospects the operator converses with (involuntary third-party data subjects); the operator (owner)"
@@ -21,7 +21,7 @@ related:
 
 **Draft — requires professional legal review.** This LIA records the Art. 6(1)(f) three-part balancing test for the owner-private beta-tester / prospect CRM capture store (feat-beta-conversation-capture #6165, ADR-102, migration 126). It is the companion to Article 30 Processing Activity 30 and is referenced by the migration's per-column `LAWFUL_BASIS` annotations.
 
-**Controller / processor posture.** The store holds personal data about **third parties** (the people and teams the operator converses with). The **operator is the controller** for that data; **Jikigai is the processor** operating the store on the operator's behalf. This LIA documents the legitimate-interest basis on which that third-party data is processed.
+**Controller / processor posture — corrected 2026-08-11 (#7349 B4).** The store holds personal data about **third parties** (the people and teams the operator converses with). **As this activity runs today, Jikigai is the controller** for that data: every store owner is Jikigai personnel, and Jikigai determines the purposes and means (the 24-month retention horizon, Anthropic PBC as the agent-reasoning recipient, the DSAR export chain, the `crm_erase_contact` path), none of it on documented instructions from another person. Art. 28 presupposes two persons; the earlier framing — *"the operator is the controller; Jikigai is the processor"* — had none, since it would require Jikigai to name itself as its own controller. The roles flip on the **first arms-length (non-Jikigai) store owner**, at which point an Art. 28(3) instrument is owed before processing and `P-2` opens in `knowledge-base/legal/article-30-2-register.md`. This LIA documents the legitimate-interest basis on which that third-party data is processed; the basis analysis below is unaffected by the role correction, because Art. 6(1)(f) is assessed against the controller's interest and Jikigai is now named as that controller.
 
 ---
 
@@ -94,7 +94,7 @@ An individual beta tester's Art. 17 erasure request is fulfilled via the auditab
 
 ### Conclusion
 
-**Balancing outcome: legitimate interest prevails.** Art. 6(1)(f) is the appropriate lawful basis for the operator (as controller) to process third-party contact and conversation data in the owner-private CRM, given the routine business-relationship-management purpose, the least-intrusive owner-only-RLS + human-gated-write architecture, the bounded low impact, the Art. 14 notice, and the implementable erasure path. The processing does not override the fundamental rights and freedoms of the data subject.
+**Balancing outcome: legitimate interest prevails.** Art. 6(1)(f) is the appropriate lawful basis for Jikigai (as controller — see the 2026-08-11 correction above) to process third-party contact and conversation data in the owner-private CRM, given the routine business-relationship-management purpose, the least-intrusive owner-only-RLS + human-gated-write architecture, the bounded low impact, the Art. 14 notice, and the implementable erasure path. The processing does not override the fundamental rights and freedoms of the data subject.
 
 ---
 

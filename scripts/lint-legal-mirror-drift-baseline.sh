@@ -12,11 +12,21 @@
 #
 # WHAT THIS GATE FREEZES, STATED PLAINLY. The frozen divergence is not neutral formatting.
 # The published mirror UNDER-DISCLOSES relative to the canonical record. VERIFIED omissions,
-# each checked against the drift this gate actually computes:
-#   - collected-data categories (team/agent customisation data, turn summaries, message
-#     attachments, workspace logo, BYOK usage audit log, beta-tester CRM);
-#   - lawful bases (several canonical-only Art. 6(1) bullets in gdpr-policy);
-#   - the Art. 15/20 self-serve export route (/dashboard/settings/privacy is canonical-only).
+# each re-measured against the drift this gate actually computes, at #7349 merge sign-off:
+#   - a named sub-processor (Bullet Train Ltd / Flagsmith) in gdpr-policy;
+#   - the Art. 14 information posture and the DPIA-status statement in gdpr-policy;
+#   - the Art. 15/20 request-channel split (self-serve vs email) in gdpr-policy Sec. 8;
+#   - the LinkedIn Company Page data category and its two international-transfer rows, and
+#     the community-digest rights carve-out, in privacy-policy.
+#
+# The PRIOR enumeration here -- "collected-data categories (team/agent customisation data,
+# turn summaries, message attachments, workspace logo, BYOK usage audit log, beta-tester
+# CRM); lawful bases; the Art. 15/20 self-serve export route" -- was CORRECT WHEN WRITTEN and
+# was falsified by #7349, which put all six named categories on the mirror, brought
+# gdpr-policy's Art. 6(1) bullets to 12/12 parity with zero canonical-only bullets, and
+# published /dashboard/settings/privacy. It is restated rather than deleted because a header
+# that silently swaps one omission list for another teaches the next reader nothing about how
+# often this list goes stale. RE-MEASURE THIS LIST WHENEVER DRIFT MOVES; do not inherit it.
 #
 # An earlier version of this header also claimed the mirror omits "a named third-country
 # recipient (Anthropic, US)". That is WITHDRAWN and was wrong: the mirror discloses the
@@ -33,16 +43,16 @@
 # it was written to support. The list came from an issue body and was reproduced here under
 # the word "measured" without being checked. Corrected on #7349 too.
 #
-# That divergence is tracked on #7349, which carries a remediation target of 2026-09-30.
+# That divergence is tracked on #7465, which carries a remediation target of 2026-09-30.
 # The date is part of this gate's contract, not a footnote: a knowingly-retained divergence
 # bears on GDPR Art. 83(2)(b) (intentional or negligent character) and 83(2)(c) (mitigating
 # action taken), and a permanent freeze with no date is documentary evidence that the
-# divergence was measured, understood, and institutionalised. If the date on #7349 moves,
+# divergence was measured, understood, and institutionalised. If the date on #7465 moves,
 # move it here too -- the two are deliberately coupled, and the suite asserts this header
 # still carries both the issue number and the date.
 #
 # WHAT NO OTHER GATE SEES. legal-doc-consistency compares heading SEQUENCE; check-tc-
-# document-sha compares canonical HASHES and its body-equivalence step is T&C-only. Neither
+# document-sha compares canonical HASHES and its body-equivalence step covers terms-and-conditions, acceptable-use-policy and disclaimer (#7349). Neither
 # can see the same content landing in a different POSITION on the mirror -- the published
 # page then presents those rights in a sequence the record does not. All three gates were
 # green while exactly that was true.
@@ -278,7 +288,7 @@ if [[ -n "$expected" && "$live_pairs" != "0" && "$live_pairs" != "$expected" ]];
 fi
 
 # Single source for the remediation date so the header, the PASS message and the expiry
-# check cannot drift apart. Coupled to #7349 by design.
+# check cannot drift apart. Coupled to #7465 by design.
 REMEDIATION_TARGET="2026-09-30"
 
 violations=0
@@ -423,7 +433,7 @@ while IFS= read -r name; do
           echo "    Remediation: this line exists on only ONE surface (it is pre-existing drift),"
           echo "    so 'apply it to both in the same position' may be impossible. Either port the"
           echo "    enclosing passage to the other surface -- which REDUCES drift and always"
-          echo "    passes -- or leave the line unedited until #7349 resyncs the pair."
+          echo "    passes -- or leave the line unedited until #7465 resyncs the pair."
           ;;
         *)
           echo "    Remediation: apply the change to BOTH surfaces in the same commit, in the"
@@ -435,6 +445,44 @@ while IFS= read -r name; do
     violations=$((violations + 1))
   fi
 done <<< "$names"
+
+# ---------------------------------------------------------------------------------------
+# PUBLISHED LINK FORM. Independent of drift, and deliberately so: normalize_*() collapses
+# `(gdpr-policy.md)` and `(/legal/gdpr-policy/)` to the SAME token, because for BODY
+# equivalence they say the same thing. That is what makes the drift check blind to a link
+# that 404s -- the mirror is served at /legal/<slug>/, so a relative `.md` target resolves
+# under the page's own route and dies. The canonical copies keep `.md` on purpose: they are
+# read on GitHub, where it works. #7349 shipped three of these onto the published surface
+# while fixing a 404, and every gate stayed green.
+# ---------------------------------------------------------------------------------------
+badlinks=0
+while IFS= read -r f; do
+  [[ -n "$f" ]] || continue
+  while IFS= read -r hit; do
+    [[ -n "$hit" ]] || continue
+    badlinks=$((badlinks + 1))
+    if (( badlinks <= 12 )); then
+      {
+        echo "  ${f##*/}: PUBLISHED LINK 404s at line ${hit%%:*} -- ${hit#*:}"
+        echo "    served at /legal/<slug>/, so a relative .md target resolves under that route."
+        echo "    Use /legal/<slug>/ on the mirror; the canonical copy keeps .md (GitHub-rendered)."
+      } >> "$report"
+    elif (( badlinks == 13 )); then
+      echo "  ... further published-link findings suppressed (cap 12)" >> "$report"
+    fi
+  done < <(grep -noE '\]\((\.{1,2}/)*([A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+\.md(#[A-Za-z0-9._-]+)?\)' "$f" || true)
+done < <(find "$MIRROR_DIR" -maxdepth 1 -name '*.md' -type f | sort)
+
+if (( badlinks > 0 )); then
+  # Fold into `violations` rather than exiting here. An early exit suppressed the drift
+  # report below, so a PR that both grew drift AND shipped a .md link on the mirror was
+  # told only about the link -- it would fix that, push, wait for CI, and only then learn
+  # about the drift. Two serial round-trips for one push, and the SAME regression class
+  # this script's own comment (below) records having already fixed once. Folding in also
+  # puts these findings under SOLEUR_LEGAL_DRIFT_ACCEPT, which an early exit bypassed --
+  # leaving an urgent legal publication with a .md link no way through at all.
+  violations=$((violations + badlinks))
+fi
 
 # A real VIOLATION is reported before the "nothing was evaluated" guard. The guard used to
 # run first, so on a single-pair corpus a correct one-sided-delete finding was computed,
@@ -453,7 +501,7 @@ if (( violations > 0 )); then
     cat "$report" >&2
     echo "  base=${RESOLVED_REF} merge-base=${MERGE_BASE:0:7}" >&2
     echo "  This run did NOT gate. The accepted drift becomes the new baseline for every" >&2
-    echo "  later PR, so record why in the PR body and on #7349." >&2
+    echo "  later PR, so record why in the PR body and on #7465." >&2
     exit 0
   fi
   echo "::error::legal mirror drift: ${violations} document(s) drifted beyond the baseline" >&2
@@ -480,9 +528,11 @@ echo "legal mirror drift: ${checked} pair(s) checked, drift is within the baseli
 echo "  base=${RESOLVED_REF} merge-base=${MERGE_BASE:0:7}"
 echo "  This is a RATCHET, not a clean bill of health. It asserts drift did not GROW, REORDER"
 echo "  or change CONTENT relative to the merge base. It does NOT assert the two surfaces"
-echo "  agree: the published mirror under-discloses relative to the record on three verified"
-echo "  counts -- collected-data categories, lawful bases, and the Art. 15/20 self-serve"
-echo "  export route. Tracked on #7349, remediation target ${REMEDIATION_TARGET}."
+echo "  agree: the published mirror under-discloses relative to the record. Re-measured at #7349"
+echo "  merge sign-off -- a named sub-processor (Flagsmith), the Art. 14 information posture and"
+echo "  DPIA-status statement, and the Art. 15/20 request-channel split in gdpr-policy; the"
+echo "  LinkedIn Page data category with its two transfer rows and the community-digest carve-out"
+echo "  in privacy-policy. Tracked on #7465, remediation target ${REMEDIATION_TARGET}."
 echo "  NOT CHECKED: a lockstep DELETION. Removing the same disclosure from both surfaces"
 echo "  leaves drift unchanged and passes here; only the SHA pin in legal-doc-shas.ts and"
 echo "  human review catch that."
@@ -494,6 +544,6 @@ echo "  human review catch that."
 # rests on. `date -d` is offline; --today exists so the suite can pin the comparison.
 _today="${SOLEUR_LEGAL_DRIFT_TODAY:-$(date -u +%Y-%m-%d)}"
 if [[ "$_today" > "$REMEDIATION_TARGET" ]] && (( total_drift > 0 )); then
-  echo "::warning::the canonical/mirror drift freeze passed its ${REMEDIATION_TARGET} remediation target on ${_today} and ${total_drift} drift line(s) remain. Re-date #7349 or resync the corpus -- an undated permanent freeze is evidence the divergence was institutionalised, not managed." >&2
+  echo "::warning::the canonical/mirror drift freeze passed its ${REMEDIATION_TARGET} remediation target on ${_today} and ${total_drift} drift line(s) remain. Re-date #7465 or resync the corpus -- an undated permanent freeze is evidence the divergence was institutionalised, not managed." >&2
 fi
 exit 0

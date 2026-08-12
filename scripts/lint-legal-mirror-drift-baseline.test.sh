@@ -18,7 +18,7 @@ BASE_LIB="$REPO_ROOT/scripts/lib/legal-base-ref.sh"
 
 # Floor, not equality. Neutering pass()/fail() used to yield `passed: 0 failed: 0`, exit 0,
 # and run_suite recorded [ok] -- 25 assertions and 0 assertions were indistinguishable.
-MIN_ASSERTIONS=34
+MIN_ASSERTIONS=39
 
 fails=0
 passes=0
@@ -338,7 +338,7 @@ commit_base "$d"
 printf 'unrelated\n' > "$d/README.md"
 commit_all "$d" unrelated
 res=$(run_gate "$d"); out=${res#*|}
-for token in '#7349' '2026-09-30'; do
+for token in '#7465' '2026-09-30'; do
   if grep -qF -- "$token" <<<"$out"; then
     pass "clean-run output carries '$token' (the freeze reads as dated, not permanent)"
   else
@@ -500,7 +500,7 @@ else
   fail "no expiry warning past the target (rc=$rc) -- the freeze reads as managed forever"
 fi
 out=$(cd "$d" && SOLEUR_LEGAL_DRIFT_TODAY=2026-01-01 bash ./scripts/gate.sh --base main 2>&1) && rc=0 || rc=$?
-if grep -qE 'passed its .* remediation target' <<<"$out"; then
+if grep -qE 'passed its .* remediation target' <<<"$out" && grep -qF '#7465' <<<"$out"; then
   fail "the expiry warning fires before the target date"
 else
   pass "before the target date the expiry warning is silent"
@@ -633,6 +633,90 @@ mutate_and_check "order-blind" 's/^ORDER_SENSITIVE=1$/ORDER_SENSITIVE=0/' build_
 mutate_and_check "new-pair-unchecked" 's/^NEW_PAIR_MUST_BE_CLEAN=1$/NEW_PAIR_MUST_BE_CLEAN=0/' build_new_pair
 # The silent-pass shape: a gate that always exits 0.
 mutate_and_check "always-exit-zero" 's/^[[:space:]]*exit 1$/  exit 0/' build_grow
+
+# ---------------------------------------------------------------------------
+# PUBLISHED LINK FORM (#7349). The mirror is served at /legal/<slug>/, so a relative
+# `.md` target resolves under that route and 404s; the canonical copy keeps `.md`
+# because it is read on GitHub. The drift check CANNOT see this -- normalize_*()
+# collapses both link forms to one token, correctly, for body equivalence.
+# ---------------------------------------------------------------------------
+
+# L1: a bare .md link on the MIRROR is caught.
+d=$(new_repo)
+write_pair "$d" cookie-policy "$BODY_A" "$BODY_A"
+commit_base "$d"
+mirror_doc cookie-policy "$BODY_A"$'\n\nSee [the AUP](acceptable-use-policy.md).' \
+  > "$d/plugins/soleur/docs/pages/legal/cookie-policy.md"
+commit_all "$d" link >/dev/null
+r=$(run_gate "$d"); rc="${r%%|*}"; out="${r#*|}"
+if [[ "$rc" != "0" ]] && grep -q "PUBLISHED LINK 404s" <<<"$out"; then
+  pass "L1: bare .md link on the mirror is rejected"
+else
+  fail "L1: bare .md link on the mirror was NOT rejected (rc=$rc)"
+fi
+
+# L2: the ANCHORED form. The first regex missed it, and a cross-reference INTO a rights
+# section is exactly where an anchor gets used -- so the likeliest shape was the blind one.
+d=$(new_repo)
+write_pair "$d" cookie-policy "$BODY_A" "$BODY_A"
+commit_base "$d"
+mirror_doc cookie-policy "$BODY_A"$'\n\nSee [rights](gdpr-policy.md#your-rights).' \
+  > "$d/plugins/soleur/docs/pages/legal/cookie-policy.md"
+commit_all "$d" anchor >/dev/null
+r=$(run_gate "$d"); rc="${r%%|*}"; out="${r#*|}"
+if [[ "$rc" != "0" ]] && grep -q "PUBLISHED LINK 404s" <<<"$out"; then
+  pass "L2: anchored .md link on the mirror is rejected"
+else
+  fail "L2: anchored .md link (#frag) slipped through (rc=$rc)"
+fi
+
+# L3: the ../ form.
+d=$(new_repo)
+write_pair "$d" cookie-policy "$BODY_A" "$BODY_A"
+commit_base "$d"
+mirror_doc cookie-policy "$BODY_A"$'\n\nSee [pp](../legal/privacy-policy.md).' \
+  > "$d/plugins/soleur/docs/pages/legal/cookie-policy.md"
+commit_all "$d" dotdot >/dev/null
+r=$(run_gate "$d"); rc="${r%%|*}"; out="${r#*|}"
+if [[ "$rc" != "0" ]] && grep -q "PUBLISHED LINK 404s" <<<"$out"; then
+  pass "L3: ../ .md link on the mirror is rejected"
+else
+  fail "L3: ../ .md link slipped through (rc=$rc)"
+fi
+
+# L4: the SERVED form passes, and so does a .md link on the CANONICAL side -- the
+# canonical copy is GitHub-rendered, where `.md` is the correct form. A check that
+# flagged it would be wrong, and would push authors to break the record.
+d=$(new_repo)
+canon_doc cookie-policy "$BODY_A"$'\n\nSee [the AUP](acceptable-use-policy.md).' \
+  > "$d/docs/legal/cookie-policy.md"
+mirror_doc cookie-policy "$BODY_A"$'\n\nSee [the AUP](/legal/acceptable-use-policy/).' \
+  > "$d/plugins/soleur/docs/pages/legal/cookie-policy.md"
+commit_base "$d"
+r=$(run_gate "$d"); rc="${r%%|*}"; out="${r#*|}"
+if [[ "$rc" == "0" ]]; then
+  pass "L4: canonical .md + mirror /legal/<slug>/ both pass (no false positive)"
+else
+  fail "L4: FALSE POSITIVE on correct link forms (rc=$rc): $out"
+fi
+
+# L5: BOTH defects at once. The link check used to `exit 1` before the drift report, so a
+# PR with both learned about only the link -- fix, push, wait for CI, learn about the
+# drift. Two serial round-trips, and the same regression class the gate's own comment
+# records having fixed once. This asserts BOTH findings appear in ONE run.
+d=$(new_repo)
+write_pair "$d" cookie-policy "$BODY_A" "$BODY_A_DRIFTED"
+commit_base "$d"
+mirror_doc cookie-policy $'Alpha clause.\n\nDelta clause.'$'\n\nSee [the AUP](acceptable-use-policy.md).' \
+  > "$d/plugins/soleur/docs/pages/legal/cookie-policy.md"
+commit_all "$d" both >/dev/null
+r=$(run_gate "$d"); rc="${r%%|*}"; out="${r#*|}"
+if [[ "$rc" != "0" ]] && grep -q "PUBLISHED LINK 404s" <<<"$out" \
+   && grep -qE "GREW|CONTENT CHANGED|REORDERED" <<<"$out"; then
+  pass "L5: link AND drift findings both reported in a single run"
+else
+  fail "L5: one finding suppressed the other (rc=$rc): $out"
+fi
 
 echo "passed: $passes  failed: $fails"
 
