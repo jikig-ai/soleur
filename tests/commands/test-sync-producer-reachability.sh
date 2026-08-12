@@ -289,9 +289,19 @@ mkdir -p "$GUARDDIR" || { echo "FATAL: guard dir mkdir failed" >&2; exit 2; }
 # make the block invisible and T0j would fail first, for the wrong reason. The
 # property under test is the SEMANTICS (never report a present producer as
 # missing), not which syntax spells it.
+# Whitespace-TOLERANT anchor. A literal single space (`\[ -f "`) is a silent
+# coverage-loss vector: measured, `[ -f  "` (two spaces) drops the site out of
+# GUARD_BLOCKS entirely, so the rejected `&&`-form could be reinstated there with the
+# whole suite green. Also excludes `.claude-plugin/` — that matches the Phase 0 identity
+# preflight, which is not a producer guard, and its presence made the "extracted ZERO
+# guards" floor below unreachable.
 awk -v out="$GUARDDIR" '
-  /^[[:space:]]*(if )?\[ -f "\$\{CLAUDE_PLUGIN_ROOT\}\// {
-    n++; inblk = 1; ifform = ($0 ~ /^[[:space:]]*if /)
+  /^[[:space:]]*(if[[:space:]]+)?\[[[:space:]]+-f[[:space:]]+"\$\{CLAUDE_PLUGIN_ROOT\}\// {
+    if ($0 ~ /\.claude-plugin\//) { inblk = 0 }
+    else {
+      n++; inblk = 1; ifform = ($0 ~ /^[[:space:]]*if[[:space:]]/)
+    }
+    if (!inblk) next
   }
   inblk {
     print > (out "/g" n ".sh")
@@ -300,6 +310,12 @@ awk -v out="$GUARDDIR" '
   }
 ' "$SYNC_MD"
 mapfile -t GUARD_BLOCKS < <(find "$GUARDDIR" -name 'g*.sh' -type f 2>/dev/null | sort)
+
+# Cardinality is per-SITE, and it must equal the anchored invocation count derived from
+# sync.md itself. A `-lt 1` floor is satisfied by a single block, so five of six sites
+# could vanish silently — and PRODUCER_RELS below is deduped by PRODUCER, so it cannot
+# make up the difference (3 producers across 6 sites).
+EXPECTED_SITES="$(grep -cE '^[[:space:]]*(bash|bun) "\$\{CLAUDE_PLUGIN_ROOT\}/' "$SYNC_MD" || true)"
 
 # Producer inventory, derived from sync.md — never hardcoded here, so a fourth
 # producer is covered without editing this suite.
@@ -345,10 +361,10 @@ run_guards() {
 OMIT="scripts/generate-c4-from-components.ts"
 OMIT_RAN="ran-$(basename "$OMIT")"
 
-if [[ "${#GUARD_BLOCKS[@]}" -lt 1 ]]; then
-  fail "T0j: extracted ZERO per-site producer guards from sync.md — the guard is absent or its shape changed, so T0k/T0l below would be vacuous"
-  fail "T0k: skipped — no guard blocks extracted"
-  fail "T0l: skipped — no guard blocks extracted"
+if [[ "${#GUARD_BLOCKS[@]}" -ne "$EXPECTED_SITES" || "$EXPECTED_SITES" -lt 3 ]]; then
+  fail "T0j: extracted ${#GUARD_BLOCKS[@]} guard blocks for $EXPECTED_SITES anchored invocation sites in sync.md — every site must be guarded, and a mismatch means a site's guard was dropped or its shape drifted past the extractor (T0k/T0l below would then be vacuous for it)"
+  fail "T0k: skipped — guard-block/site cardinality mismatch"
+  fail "T0l: skipped — guard-block/site cardinality mismatch"
 elif ! printf '%s\n' "${PRODUCER_RELS[@]}" | grep -Fqx "$OMIT"; then
   fail "T0j: fixture target $OMIT is not in the derived producer inventory — the case would be vacuous"
   fail "T0k: skipped — fixture target not in inventory"
@@ -457,4 +473,8 @@ if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
 fi
 
 echo "=== $PASS passed, $FAIL failed ($CASES/$EXPECTED_CASES cases) ==="
-[[ "$FAIL" -eq 0 && "$CASES" -eq "$EXPECTED_CASES" ]]
+# PASS is asserted too, not just CASES. `EXPECTED_CASES` counts DISPATCHES: neutering
+# fail() to `CASES=$((CASES + 1))` — dropping only the FAIL++ — leaves 13/13 cases with a
+# real defect planted and exits 0. The summary line even prints "12 passed" while CI reads
+# green. Requiring PASS to equal the floor as well closes that in one token.
+[[ "$FAIL" -eq 0 && "$CASES" -eq "$EXPECTED_CASES" && "$PASS" -eq "$EXPECTED_CASES" ]]
