@@ -1,0 +1,172 @@
+---
+title: Plugin identity is the commit SHA, and distribution is a dedicated marketplace repo
+status: active
+date: 2026-08-12
+amends: ADR-017
+related_adrs: [ADR-017, ADR-178]
+---
+
+# ADR-182: Keyless manifests, and a dedicated marketplace source
+
+## Context
+
+The plugin's delivery path could not deliver. Both defects were measured on a real install, not
+inferred (#7471); the full readings live in
+`knowledge-base/project/specs/feat-one-shot-7471-plugin-delivery-path/measurements.md` and are
+cited here by section rather than restated.
+
+**Defect 1 — the updater no-ops and reports success.** `plugin.json` and the marketplace entry both
+carried a frozen `0.0.0-dev` sentinel, per ADR-017. `claude plugin update soleur@soleur` printed
+`✔ soleur is already at the latest version (0.0.0-dev)` and exited **0**, leaving a cache three
+months stale — 64 skills against 96 at source, and `scripts/lib/session-state.sh` absent entirely.
+An operator following the documented upgrade path got a green checkmark and no new code. That is
+the worst shape of failure available, because it is indistinguishable from success.
+
+**Defect 2 — the marketplace refresh cannot complete, and destroys the checkout when it fails.**
+`claude plugin marketplace add jikig-ai/soleur` clones the whole monorepo. Measured at **329 s**
+(§1.6/2B.6) against the CLI's default 120,000 ms timeout — **~2.7× over**, so the failure is
+deterministic rather than flaky. On failure the updater moves the existing checkout to `.bak`,
+starts a fresh clone, and on timeout leaves `~/.claude/plugins/marketplaces/soleur/` holding only a
+`.git` with one object and no HEAD; a later invocation removes the directory and the `.bak` with it.
+
+Defect 1 meant installed users silently ran without the lock/lease layer ADR-178 ships. Defect 2
+meant **no** plugin fix reached them by the documented path, and every future fix inherited it.
+
+## Decision
+
+**1. No plugin manifest carries a `version` key.** Not `plugins/soleur/.claude-plugin/plugin.json`,
+not `.claude-plugin/marketplace.json`'s `plugins[0]`, not the published distribution manifest.
+(`marketplace.json`'s *top-level* `version` is the manifest-format version and stays — different
+field, different meaning.)
+
+The mechanism, measured in a controlled two-arm experiment (§1.9): `claude plugin update` compares
+**version strings**. With no key, the CLI records the plugin's **commit SHA** as its version, so the
+string changes with every commit and the comparison detects the update. With a constant key the
+string never changes, the comparison always comes back equal, and the update short-circuits.
+
+**2. Distribution moves to a dedicated additive marketplace repo, `jikig-ai/soleur-marketplace`.**
+Public, three files, ~39 KB. Its single plugin entry uses a `git-subdir` source pointing at
+`plugins/soleur` in the monorepo, so an install materialises the plugin subtree alone. Measured on
+the published repo (§2B): `marketplace add` **13 s**, `install` **33 s**, **9.66 MiB** total,
+against a 50 MiB fail-closed threshold and the 181 MiB full clone.
+
+The entry is deliberately **unpinned** — no `ref`, no `sha` — diverging from the 42crunch and adobe
+entries in `claude-plugins-official`, which pin both. A constant pin is a frozen sentinel wearing
+different clothes, and it would reintroduce defect 1 by a different route.
+
+**3. The repo is Terraform-managed in the existing `infra/github/` root**, adopted by an idempotent
+first-apply import alongside the existing ruleset imports. It is not managed by `gh repo create`
+after bootstrap, and not by `provision-github` (which provisions *tenants*: DPA gate, deployment
+reviewers, App consent install — none of which apply).
+
+**4. Release and distribution are decoupled.** A release publishes nothing to the marketplace repo.
+Because the entry is keyless, its manifest is release-invariant: it changes only on a deliberate
+shape change.
+
+**5. `jikig-ai/soleur` remains a valid marketplace, de-advertised rather than retired.** Existing
+installs keep working; the documented install path points at the new source, with the monorepo path
+demoted behind a disclosure carrying the timeout mitigation.
+
+## Consequences
+
+**Delivery works, measured on the shipped article rather than a fixture.** Both the falsification
+gate (§1.0) and the published-repo run (§2B) are recorded, and task 6.5 re-runs the threshold after
+merge — a fixture passing while the published thing fails is precisely the gap this ADR closes.
+
+**Minimisation is retired by construction, not by argument.** The subtree boundary was verified as a
+boundary rather than a size coincidence (§1.0): `knowledge-base/` and `scripts/` exist at both
+levels, so file counts were compared directly (16/16/9,045 and 15/15/292). The Art. 30 register and
+the counsel-review memoranda live under repo-root `knowledge-base/` and are no longer delivered to
+every installer. **Not retired:** anyone still on the monorepo entry, whose `autoUpdate: true`
+cannot be revoked remotely.
+
+**The published manifest is unreviewable by construction.** The marketplace repo has no CI, no
+review, and no CODEOWNERS. `scheduled-marketplace-drift.yml` is its sole control — a daily
+unauthenticated check asserting the entry stays keyless, that `source.path`/`source.url` still name
+`plugins/soleur` in `jikig-ai/soleur`, and that the plugin manifest still resolves at `main` (which
+catches a monorepo reorganisation, the one drift event the marketplace repo cannot observe about
+itself). Detection latency is up to 24 h.
+
+**Two marketplaces, two caches, one documented migration.** The plugin id changes to
+`soleur@soleur-marketplace` for new installs. The migration sequence deliberately contains no
+`marketplace add jikig-ai/soleur` step, which is what makes it usable *from* the broken state; it
+was rehearsed end to end (§1.6/2B.6) and all four commands succeed under the default timeout.
+`uninstall` and `marketplace remove` leave ~9.6 MiB of orphaned plugin cache with no CLI verb to
+reclaim it — the same class as the 374 MiB `soleur.bak` orphan the issue reported. And because the
+cache directory is named for the resolved version, which is now a commit SHA, **each update
+materialises a NEW directory and leaves the previous one behind** (measurements.md §1.2/1.3 records
+`0.0.0-dev` surviving the migration). So the orphan is per-update, not one-time. §1.2/1.3 did not
+measure the steady-state footprint, so the growth rate is implied rather than quantified; it is
+recorded here as a known cost rather than discovered later.
+
+**Version metadata leaves the plugin's own record.** `installed_plugins.json` reports the commit SHA
+in place of a semantic version. Release tags remain the human-facing version via GitHub Releases.
+
+**A third manifest exists outside this repo**, reachable by no CI check here except the drift job.
+
+**Accepted trade, stated because it is a real reduction in review coverage.** Three
+`claude-code-action` workflows that ship into users' generated CI — `operator-digest`, both
+`schedule` templates — plus this repo's own `test-pretooluse-hooks` now install the plugin via
+`soleur-marketplace`. Those workflows carry `ANTHROPIC_API_KEY`, a `GITHUB_TOKEN` with
+`issues: write`, and the plugin they install ships executable hooks and skills. `jikig-ai/soleur` is
+protected by the `ci_required` and `cla_required` rulesets managed in `infra/github/`;
+`soleur-marketplace` is protected by nothing but Terraform ownership of its *settings*. The
+mitigating facts: the marketplace repo holds only a **pointer** — the executable code still comes
+from `jikig-ai/soleur` through the `git-subdir` source, which is protected — and the drift job now
+asserts the pointer's url, source type, pin-absence, entry count and entry name, so a repoint is
+detected within 24 h. Detection is not prevention, and the two alternatives above are the
+prevention. Until one of them lands, this is an accepted risk rather than an unnoticed one — tracked at #7493.
+
+## Alternatives considered
+
+- **Publish a real version per release, instead of removing the key.** Rejected: it puts a
+  cross-repo write on the release critical path, creating a half-shipped-release failure mode where
+  the tag exists but delivery is stale. Removing the key makes the manifest release-invariant and
+  deletes the failure mode rather than monitoring it.
+- **Raise the clone timeout only.** Rejected as a fix, retained as a stopgap: it makes a 329 s clone
+  survivable but leaves every install paying it, including the GitHub Actions runners in users'
+  generated workflows, on every scheduled run.
+- **Replace `jikig-ai/soleur` as the marketplace.** Rejected — that breaks every existing install.
+  The additive shape was the point of the challenge that produced this decision.
+- **A new dedicated Terraform root.** Rejected: duplicates a backend, provider, auth path, and apply
+  pipeline that `infra/github/` already has, and would trigger the new-root R2 backend rule.
+- **Terraform owning the manifest's CONTENTS via `github_repository_file`.** Not rejected on
+  merit — deferred, and recorded here because a future reader would otherwise assume it was never
+  considered. It is the one option that converts detection into prevention: the manifest would live
+  in this monorepo under review, CODEOWNERS and required checks, and drift would be auto-reconciled
+  by the next apply instead of surfacing as an issue up to 24 h later. It does not reintroduce
+  release-path coupling, because the write lives in `apply-github-infra.yml` rather than the release
+  path. Costs: the App needs `contents: write` on that repo, and a Terraform-managed file on a
+  default branch interacts with branch protection. Tracked as follow-up work rather than shipped
+  untested inside a delivery fix.
+- **A `github_repository_ruleset` restricting pushes to the marketplace repo.** Same disposition and
+  the same reason. It would be the direct answer to the review finding below, and it is cheap —
+  `infra/github/` already manages two rulesets. It is deferred because an untested ruleset shipped
+  inside this PR could either break the unattended apply pipeline or lock the sole maintainer out of
+  the repo, and neither failure is one this change should risk.
+- **Hand-maintained manifest with no drift check.** Rejected: the artifact is unreviewable and its
+  silent-failure detector would otherwise be "a new user tries to install and it fails", which at a
+  beta population of one may not fire for weeks.
+
+## Amends ADR-017
+
+ADR-017 established version-from-git-tags and, in service of it, froze the manifest version fields
+at `0.0.0-dev`. **The freezing is superseded; the git-tag sourcing is not.** Versions still come
+from tags via `version-bump-and-release.yml`, and feature branches still never bump them. What
+changes is that the fields are *absent* rather than *frozen constants* — ADR-017's own mechanism for
+avoiding drift turned out to be the mechanism that stopped delivery, because a constant is exactly
+what makes the updater's comparison always succeed.
+
+## Rollback
+
+**Not "re-add the key" — and the reason is stronger than it first appears.** For the *pre-fix*
+population that edit is undeliverable, because it would have to travel through the broken refresh.
+For the population this ADR creates it is worse than undeliverable: an install on
+`soleur-marketplace` has a working refresh and its recorded version is a SHA, so re-adding a
+`version` key produces a string that differs from the recorded SHA, the comparison fires, and the
+update **does** deliver — once. It then records the constant, and every subsequent update compares
+equal forever. Re-adding the key is a self-delivering one-way brick, not a no-op; do not read it as
+harmless-because-inert.
+
+The real rollback is `remove → re-add → reinstall` against the new marketplace — which Phase 2B
+makes cheap: re-adding costs ~39 KB rather than 181 MiB.

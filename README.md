@@ -18,17 +18,100 @@ Soleur gives a single founder the leverage of a full organization. **68 agents**
 **From the marketplace (recommended):**
 
 ```bash
-claude plugin marketplace add jikig-ai/soleur
-claude plugin install soleur
+claude plugin marketplace add jikig-ai/soleur-marketplace
+claude plugin install soleur@soleur-marketplace
 ```
 
-**From GitHub:**
+This installs the plugin subtree only — about 10 MiB in well under a minute.
+
+<details>
+<summary>Installing from this repository directly (slower, and may time out)</summary>
+
+A plain `claude plugin marketplace add jikig-ai/soleur` clones the whole repository (~181 MiB),
+which takes about 329 seconds — well past the CLI's 120-second default — and a failed refresh can
+leave the local checkout unusable. Add `--sparse` so it fetches only what a plugin install needs;
+that completes in about 78 seconds, inside the default limit:
 
 ```bash
-claude plugin install --url https://github.com/jikig-ai/soleur/tree/main/plugins/soleur
+claude plugin marketplace add jikig-ai/soleur --sparse .claude-plugin plugins
+claude plugin install soleur@soleur
 ```
 
+**Already installed this way?** Switch to the marketplace above — it does not clone the monorepo,
+so the migration is not subject to the timeout:
+
+```bash
+claude plugin marketplace add jikig-ai/soleur-marketplace
+claude plugin install soleur@soleur-marketplace
+claude plugin uninstall soleur@soleur
+claude plugin marketplace remove soleur
+```
+
+Restart the CLI afterwards; plugin changes apply on restart. If your original install used
+`--scope project` or `--scope local`, pass the same `--scope` to every command above — the
+default is `user`, and a scope mismatch silently targets an install that isn't there.
+
+Removing the marketplace does **not** reclaim the plugin cache. Measured: after `uninstall`
+and `marketplace remove` both succeed, the old plugin cache survives — about 9.6 MiB, with no
+CLI verb to reclaim it.
+
+**Do this only once the migration above has completed.** First confirm the new install is live
+and the old one is gone:
+
+```bash
+claude plugin list
+```
+
+You should see `soleur@soleur-marketplace` and no `soleur@soleur`. If you still see
+`soleur@soleur`, stop — the migration did not finish, and the directory below is still your
+working install.
+
+Then ask the CLI which paths are actually in use, and delete only what is **not** in that list:
+
+```bash
+claude plugin list --json | jq -r '.[].installPath'
+```
+
+```bash
+rm -rf ~/.claude/plugins/cache/soleur
+```
+
+The old and new cache directories differ by a single suffix — `soleur` versus
+`soleur-marketplace` — so compare against the output above rather than typing from memory.
+Note that scope does not change this path: installs made with `--scope project` or
+`--scope local` still cache under your home directory, so the directory above is yours to
+check regardless of how you installed.
+
+
+</details>
+
 **For existing codebases:** Run `/soleur:sync` first to populate your knowledge-base with conventions and patterns.
+
+## Updating
+
+Updating is **two steps**, and the first one looks sufficient on its own:
+
+```bash
+claude plugin marketplace update soleur   # advances the marketplace checkout ONLY
+claude plugin update soleur               # updates the installed plugin (restart to apply)
+```
+
+`marketplace update` moves the marketplace checkout to the new HEAD. It does **not** touch
+the plugin install, which keeps its own `gitCommitSha` in `installed_plugins.json`. Soleur's
+commands resolve `${CLAUDE_PLUGIN_ROOT}` to the *install*, never the marketplace checkout —
+so after step 1 alone you can read a fix as shipped while every run still executes the old
+payload.
+
+**If the fix still isn't taking effect after both steps,** reinstall outright:
+
+```bash
+claude plugin uninstall soleur && claude plugin install soleur
+```
+
+That is not belt-and-braces. Soleur's `plugin.json` carries a frozen `0.0.0-dev` version
+sentinel, so the install directory name never changes and there is no version bump for
+`plugin update` to act on — an install can sit months stale while every command reports
+success. A full reinstall is the only step guaranteed to converge the two SHAs.
 
 ## The Workflow
 

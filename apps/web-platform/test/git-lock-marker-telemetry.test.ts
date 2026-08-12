@@ -166,8 +166,24 @@ describe("extractGitLockMarkers", () => {
       'SOLEUR_GIT_REPO_DIAG ready=false git_dir=dir config_worktree=chardevice config_lock=chardevice rev_parse_rc=128 config_parse_rc=128 err="fatal: bad config line 1 in file .git/config"';
     const [m] = extractGitLockMarkers(repoDiag);
     expect(m?.line).toBe(repoDiag);
-    // SOLEUR_GIT_REPO_DIAG is emitted ONLY on the not-ready path → always a blocked session.
+    // The probe RAN and reported not-ready → a genuinely blocked session.
     expect(m?.wedged).toBe(true);
+  });
+
+  test("SOLEUR_GIT_REPO_DIAG source=probe-unreachable is mirrored but NOT wedged", () => {
+    // #7474. go.md emits this when the probe could not RUN — either the plugin root
+    // did not verify, or it verified and does not carry the probe (a stale install).
+    // Neither says anything about the repo: go.md falls back to inline `git rev-parse`
+    // probes that decide readiness themselves. Classifying these as wedges turns a torn
+    // install on a HEALTHY repo into a platform-integrity error at every session start.
+    for (const reason of ["plugin-root-unverified", "absent-from-verified-root"]) {
+      const line = `SOLEUR_GIT_REPO_DIAG source=probe-unreachable reason=${reason}`;
+      const [m] = extractGitLockMarkers(line);
+      // Still mirrored — the operator can see it.
+      expect(m?.line).toBe(line);
+      // But not paged.
+      expect(m?.wedged).toBe(false);
+    }
   });
 
   test("returns [] for output with no markers, and for empty input", () => {

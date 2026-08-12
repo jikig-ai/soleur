@@ -198,6 +198,17 @@ locals {
     "web-git-data-probe.sh",
     "web-git-data-probe.service",
     "web-git-data-probe.timer",
+    # (#7228) The inngest consumer probe. Baked for the SAME reason as the three above: the SSH
+    # provisioner reaches web-1 only, so without these a rebuilt web-2 would come up with NO
+    # detection for the dedicated inngest host — silently reintroducing the blind spot this whole
+    # change exists to close. web-host-provisioner-parity.test.sh caught exactly that.
+    # inngest-registry-probe.sh is included because the consumer probe SOURCES it for the shared
+    # GQL query; on a fresh host its other delivery path (the infra-config push) has not run yet,
+    # so the probe would FATAL on a missing peer every 60s.
+    "inngest-consumer-probe.sh",
+    "inngest-consumer-probe.service",
+    "inngest-consumer-probe.timer",
+    "inngest-registry-probe.sh",
     "web-probe-envwrite.sh",
   ]
 
@@ -725,6 +736,81 @@ resource "terraform_data" "zot_consumer_probe_install" {
       "systemctl daemon-reload",
       "systemctl enable --now web-zot-consumer-probe.timer",
       "systemctl list-timers web-zot-consumer-probe.timer --no-pager",
+    ]
+  }
+}
+
+# #7228 inngest consumer-perspective serviceability probe.
+#
+# Detection for the twelve-day dark-host outage, installed on the CONSUMER. Nothing here touches
+# 10.0.1.40, which is the point: cloud-init/bootstrap changes reach that host ONLY via
+# `apply_target=inngest-host-replace`, so anything installed there ships no detection until a
+# replace is dispatched. This block is inside the per-merge `-target=` set, so it works on merge.
+resource "terraform_data" "inngest_consumer_probe_install" {
+  # Reload Vector before (re)enabling the timer (see private_nic_guard_install; probe-first
+  # ordering) — the probe's fault classification is only readable off-box once Source 4 carries
+  # the inngest-consumer-probe identifier.
+  depends_on = [terraform_data.journald_persistent]
+
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/inngest-consumer-probe.sh"),
+    file("${path.module}/inngest-consumer-probe.service"),
+    file("${path.module}/inngest-consumer-probe.timer"),
+    # The probe SOURCES this peer for the shared GQL query, so a change to the query must
+    # re-deliver both halves together or the two could assert different things.
+    file("${path.module}/inngest-registry-probe.sh"),
+    local.inngest_private_ip,
+    # Hash the read-scoped probe token so a `-replace` rotation re-fires delivery (see nic-guard).
+    nonsensitive(sha256(doppler_service_token.web_probes.key)),
+  ]))
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key
+    agent       = var.ci_ssh_private_key == null
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/inngest-consumer-probe.sh"
+    destination = "/usr/local/bin/inngest-consumer-probe.sh"
+  }
+  # inngest-registry-probe.sh is ALSO delivered by the infra-config push
+  # (infra-config-install.sh:74). Delivering it here too is deliberate and drift-free: both paths
+  # copy the identical `${path.module}` file, so the content cannot diverge, and it makes this
+  # install self-contained rather than ordered behind a push. The cat-infra-config-state.sh
+  # precedent in this same file is dual-delivered for the same reason. Without it, a fresh web
+  # host would run a probe whose sourced peer is absent — which the probe reports FATAL and loud,
+  # but loudly-broken-on-every-boot is a worse outcome than simply shipping the peer.
+  provisioner "file" {
+    source      = "${path.module}/inngest-registry-probe.sh"
+    destination = "/usr/local/bin/inngest-registry-probe.sh"
+  }
+  provisioner "file" {
+    source      = "${path.module}/inngest-consumer-probe.service"
+    destination = "/etc/systemd/system/inngest-consumer-probe.service"
+  }
+  provisioner "file" {
+    source      = "${path.module}/inngest-consumer-probe.timer"
+    destination = "/etc/systemd/system/inngest-consumer-probe.timer"
+  }
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chmod +x /usr/local/bin/inngest-consumer-probe.sh /usr/local/bin/inngest-registry-probe.sh",
+      # DOPPLER_TOKEN (read-scoped web_probes) + HOME=/root on the unit are the two-fold unit-start
+      # fix — see the web-private-nic-guard install above. umask 0137: never world/group-readable,
+      # the env file holds a live prd read token.
+      #
+      # INNGEST_CONSUMER_URL_KEY is an identity mapping (one dedicated inngest host means one
+      # shared beat, so per-host masking is moot — the git-data probe precedent, C3). The
+      # indirection is kept so all three web probes read identically.
+      "( umask 0137 && printf 'INNGEST_REMOTE_GQL_URL=%s\\nINNGEST_CONSUMER_URL_KEY=%s\\nDOPPLER_TOKEN=%s\\nDOPPLER_ENABLE_VERSION_CHECK=false\\n' 'http://${local.inngest_private_ip}:8288/v0/gql' 'INNGEST_CONSUMER_URL' '${doppler_service_token.web_probes.key}' > /etc/default/inngest-consumer-probe )",
+      "chmod 600 /etc/default/inngest-consumer-probe",
+      "systemctl daemon-reload",
+      "systemctl enable --now inngest-consumer-probe.timer",
+      "systemctl list-timers inngest-consumer-probe.timer --no-pager",
     ]
   }
 }

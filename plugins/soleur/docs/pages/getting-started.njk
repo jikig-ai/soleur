@@ -49,15 +49,19 @@ last_updated: 2026-06-01
 
         <p>Prefer to run it yourself? Soleur is source-available and works in Claude Code today. Install it in two commands, keep every byte of memory on your own machine, and upgrade to the hosted version whenever you&rsquo;re ready.</p>
 
-        <!-- verified: 2026-04-19 source: https://code.claude.com/docs/en/plugins -->
+        <!-- verified: 2026-08-12 source: https://code.claude.com/docs/en/plugins -->
         <div class="quickstart-code">
-          <pre><code>claude plugin marketplace add jikig-ai/soleur
-claude plugin install soleur</code></pre>
+          <pre><code>claude plugin marketplace add jikig-ai/soleur-marketplace
+claude plugin install soleur@soleur-marketplace</code></pre>
         </div>
 
         <div class="callout">
           <strong>Existing project?</strong> Run <code>/soleur:sync</code> to analyze your codebase and populate the knowledge base.<br>
           <strong>Starting fresh?</strong> Run <code>/soleur:go</code> and describe what you need.
+        </div>
+
+        <div class="callout">
+          <strong>Updating later?</strong> It takes two commands, and the first one looks like enough on its own. <code>claude plugin marketplace update soleur</code> advances the marketplace checkout; <code>claude plugin update soleur</code> updates the plugin you actually run. Skipping the second leaves you on the old version while the new one looks installed &mdash; and if a fix still isn&rsquo;t taking effect, <code>claude plugin uninstall soleur &amp;&amp; claude plugin install soleur</code> is the step guaranteed to converge them.
         </div>
 
         <h3 class="section-subtitle" style="margin-top: var(--space-8);">The Workflow</h3>

@@ -7,7 +7,8 @@ A full AI organization across engineering, finance, marketing, legal, operations
 Install the plugin:
 
 ```bash
-claude plugin install soleur
+claude plugin marketplace add jikig-ai/soleur-marketplace
+claude plugin install soleur@soleur-marketplace
 ```
 
 ## The Soleur Workflow
@@ -331,17 +332,105 @@ The `agent-browser` skill provides comprehensive documentation on usage.
 **From the marketplace (recommended):**
 
 ```bash
-claude plugin marketplace add jikig-ai/soleur
-claude plugin install soleur
+claude plugin marketplace add jikig-ai/soleur-marketplace
+claude plugin install soleur@soleur-marketplace
 ```
 
-**From GitHub (without cloning):**
+This installs the plugin subtree only — about 10 MiB in well under a minute.
+
+<details>
+<summary>Installing from the monorepo directly (slower, and may time out)</summary>
+
+A plain `claude plugin marketplace add jikig-ai/soleur` clones the whole repository (~181 MiB),
+which takes about 329 seconds — well past the CLI's 120-second default — and a failed refresh can
+leave the local checkout unusable. Add `--sparse` so it fetches only what a plugin install needs;
+that completes in about 78 seconds, inside the default limit:
 
 ```bash
-claude plugin install --url https://github.com/jikig-ai/soleur/tree/main/plugins/soleur
+claude plugin marketplace add jikig-ai/soleur --sparse .claude-plugin plugins
+claude plugin install soleur@soleur
 ```
 
+**Already installed this way?** Switch to the marketplace above — the migration never clones the
+monorepo, so it is not subject to the timeout:
+
+```bash
+claude plugin marketplace add jikig-ai/soleur-marketplace
+claude plugin install soleur@soleur-marketplace
+claude plugin uninstall soleur@soleur
+claude plugin marketplace remove soleur
+```
+
+Restart the CLI afterwards; plugin changes apply on restart. If your original install used
+`--scope project` or `--scope local`, pass the same `--scope` to every command above — the
+default is `user`, and a scope mismatch silently targets an install that isn't there.
+
+Removing the marketplace does **not** reclaim the plugin cache. Measured: after `uninstall`
+and `marketplace remove` both succeed, the old plugin cache survives — about 9.6 MiB, with no
+CLI verb to reclaim it.
+
+**Do this only once the migration above has completed.** First confirm the new install is live
+and the old one is gone:
+
+```bash
+claude plugin list
+```
+
+You should see `soleur@soleur-marketplace` and no `soleur@soleur`. If you still see
+`soleur@soleur`, stop — the migration did not finish, and the directory below is still your
+working install.
+
+Then ask the CLI which paths are actually in use, and delete only what is **not** in that list:
+
+```bash
+claude plugin list --json | jq -r '.[].installPath'
+```
+
+```bash
+rm -rf ~/.claude/plugins/cache/soleur
+```
+
+The old and new cache directories differ by a single suffix — `soleur` versus
+`soleur-marketplace` — so compare against the output above rather than typing from memory.
+Note that scope does not change this path: installs made with `--scope project` or
+`--scope local` still cache under your home directory, so the directory above is yours to
+check regardless of how you installed.
+
+
+</details>
+
 ## Known Issues
+
+### Updating the Marketplace Does Not Update the Installed Plugin
+
+**Issue:** `/plugin marketplace update soleur` advances the marketplace checkout under
+`~/.claude/plugins/marketplaces/` to the new HEAD, but does **not** re-pull the plugin
+install under `~/.claude/plugins/cache/`. The install keeps its own `gitCommitSha` in
+`installed_plugins.json`, and `${CLAUDE_PLUGIN_ROOT}` resolves to that install — not to the
+marketplace checkout. So a fix verified against the marketplace copy reads as shipped while
+every run still executes the old payload.
+
+**Workaround:** run both steps, then confirm the two agree:
+
+```bash
+claude plugin marketplace update soleur
+claude plugin update soleur
+```
+
+**If that does not converge them, reinstall.** `plugin.json` carries a frozen `0.0.0-dev`
+version sentinel, so the install directory name never changes and there is no version bump
+for `plugin update` to act on (measured in ADR-178: an actively-used install carried 64
+skills against 96 in the repo, three months stale, while reporting success):
+
+```bash
+claude plugin uninstall soleur && claude plugin install soleur
+```
+
+**Symptom to watch for:** `/soleur:sync` emitting
+`SOLEUR_SYNC_PRODUCER_MISSING producer=<path> … reason=absent-from-verified-root` means the
+verified plugin root does not carry a file that run needed — most often an install that
+predates it. That marker is why this failure now names itself instead of surfacing as an
+unattributed interpreter error (#7474).
 
 ### MCP Servers Not Auto-Loading
 

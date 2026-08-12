@@ -23,7 +23,17 @@ Before the session-start preamble and before any routing, confirm a usable git r
 ```bash
 if [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
    && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json"; then
-  bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/git-repo-readiness-diag.sh" 2>&1
+  # Identity is not freshness (#7474): a root that IS ours can still not carry
+  # this probe, and the bare invocation would then die with an unattributed
+  # interpreter error. The fallback below is already the right behaviour for
+  # that case — only the reason differs, so it is reported separately.
+  if [ -f "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/git-repo-readiness-diag.sh" ]; then
+    bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/git-repo-readiness-diag.sh" 2>&1
+  else
+    echo "SOLEUR_GIT_REPO_DIAG source=probe-unreachable reason=absent-from-verified-root"
+    git rev-parse --is-bare-repository 2>/dev/null || true
+    git rev-parse --is-inside-work-tree 2>/dev/null || true
+  fi
 else
   # Distinct from a not-ready workspace: the PROBE could not run. Emitting the
   # same marker family keeps this visible to the telemetry hook instead of
@@ -50,9 +60,14 @@ Before any other work, run the session-start gates from AGENTS.md (`wg-at-sessio
 
 ```bash
 if [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ]; then
-  bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged && \
-    git worktree list && \
-    git show main:.mcp.json > .mcp.json 2>/dev/null || true
+  # Identity is not freshness (#7474) — see the Step 0.0 probe above.
+  if [ -f "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" ]; then
+    bash "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh" cleanup-merged && \
+      git worktree list && \
+      git show main:.mcp.json > .mcp.json 2>/dev/null || true
+  else
+    echo "SOLEUR_SESSION_START_SKIPPED reason=absent-from-verified-root"
+  fi
 else
   # Do not let the session-start gate no-op invisibly: the previous form ended in
   # `|| true`, so an unresolved root skipped cleanup-merged AND the .mcp.json

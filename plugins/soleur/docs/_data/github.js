@@ -11,7 +11,11 @@ const FETCH_TIMEOUT_MS = 5000;
 
 let cached;
 
-export default async function () {
+function __resetCache() {
+  cached = undefined;
+}
+
+async function fetchGithub() {
   if (cached) return cached;
 
   // Hermetic-build hatch (SOLEUR_DOCS_OFFLINE=1): skip the live GitHub fetch
@@ -70,3 +74,12 @@ export default async function () {
   cached = { version, changelog: { html: md.render(changelogMd) } };
   return cached;
 }
+
+// Exported for test isolation: sibling _data modules (plugin.js, changelog.js)
+// statically import this file, so the module-scope `cached` persists across
+// test reloads of the importer — and across test *files*, since bun test runs
+// them in one process. Tests call `default.__resetCache()` in beforeEach to
+// guarantee a fresh resolution per scenario. Mirrors githubStats.js.
+fetchGithub.__resetCache = __resetCache;
+
+export default fetchGithub;
