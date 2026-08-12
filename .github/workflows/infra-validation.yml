@@ -1073,6 +1073,15 @@ jobs:
       - name: Run zot liveness-heartbeat feeder tests (#6537 — private-IP probe, not localhost)
         run: bash apps/web-platform/infra/zot-liveness-heartbeat.test.sh
 
+      # #7440. THIS is the registration point for an infra suite, and getting it wrong ships a
+      # silent orphan: scripts/test-all.sh does not register apps/web-platform/infra/*.test.sh at
+      # all — it registers run-registered-suites.sh as a NESTED suite, and that runner DERIVES its
+      # list from the `run: bash …` steps in THIS file (deliberately, so the runner and CI cannot
+      # fork). A suite added only to test-all.sh would execute in ZERO runners, green and invisible.
+      # Needs only bash + jq + flock + timeout; no terraform, cloud-init, docker, network or root.
+      - name: Run zot container-log shipper tests (#7440 — envelope, cap exemption, cursor durability)
+        run: bash apps/web-platform/infra/zot-log-shipper.test.sh
+
       - name: Run deploy fan-out peer-list parity drift-guard
         run: bash apps/web-platform/infra/web-hosts-fanout-parity.test.sh
 
