@@ -11,6 +11,7 @@ priority: p1
 domain: engineering
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
+plan_revision: v2 (post six-reviewer panel + live bypass probe)
 ---
 
 # Plan: Protect the marketplace repo
@@ -18,598 +19,573 @@ requires_cpo_signoff: true
 ## Overview
 
 `jikig-ai/soleur-marketplace` is the plugin's sole distribution channel and carries **zero**
-rulesets, no branch protection, and one collaborator — verified live on 2026-08-12. ADR-182
-recorded two controls as deferred-not-rejected. Both deferral blockers are now resolved against
-the live API, so this is certify-and-scope.
+rulesets, no branch protection, and one collaborator — verified live 2026-08-12. ADR-182 recorded
+two controls as deferred-not-rejected; both deferral blockers are resolved against the live API.
 
-Three arms land together:
+Three arms:
 
-- **A — a branch ruleset** on `soleur-marketplace` requiring a PR for the default branch, plus
-  deletion and force-push restrictions, declared in `infra/github/`.
-- **B — Terraform owns the manifest contents** via `github_repository_file`, sourced from a file
-  in this monorepo under the already-CODEOWNERS-pinned `/infra/github/` path.
-- **C — a reconcile trigger**: `scheduled-marketplace-drift.yml` dispatches
-  `apply-github-infra.yml` after it files its evidence, so a detected drift is corrected within
-  the daily cycle rather than only reported.
+- **A — a branch ruleset** requiring a PR *with one approval* on the default branch, plus deletion
+  and force-push restrictions.
+- **B — Terraform owns the manifest contents** via `github_repository_file`, sourced from a file in
+  this monorepo under the CODEOWNERS-pinned `/infra/github/` path, **gated by a pre-merge CI check
+  on that source file**.
+- **C — a reconcile trigger**: the daily drift workflow dispatches the apply workflow after filing
+  its evidence.
 
-A and B **must** land in the same apply or the ruleset deadlocks B's write inside the unattended
-pipeline. That is the plan's central sequencing constraint.
+**v2 supersedes v1 after a six-reviewer panel and a live bypass probe.** v1 shipped a ruleset that
+did not close the path it claimed to close, a verifier that read a CDN inside its own cache window,
+and a reconcile loop that would have republished bad content daily while reporting green. Those are
+corrected below; §Panel Corrections records what changed and why.
 
 ## Research Insights
 
-### Premise Validation (Phase 0.6)
-
-Every premise cited by #7493 and ADR-182 was re-checked against live state on 2026-08-12.
+### Premise Validation
 
 | Premise | Verdict | Evidence |
 |---|---|---|
-| App has permission for a ruleset | ✅ holds | `soleur-ai` App: `administration: write`, `repository_selection: all` |
-| App has `contents: write` on the marketplace repo | ✅ holds | same App, `contents: write`, org-wide |
-| A ruleset would lock the sole maintainer out | ❌ **dissolved** | Both sibling rulesets carry `OrganizationAdmin` (`actor_id 0`) + `RepositoryRole 5` bypass actors; `deruelle` has `admin: true`. Mirror that block. |
-| "Drift is auto-reconciled by the next apply" | ❌ **FALSE** | `apply-github-infra.yml` has no `schedule:`. Triggers are `push: main` on `infra/github/*.tf`, `infra/github/.terraform.lock.hcl`, `tests/scripts/lib/destroy-guard-filter.jq`, plus `workflow_dispatch`. Arm C exists because of this. |
-| #7471 is a PR | ❌ it is a **closed issue** | `gh pr view 7471` → not a PR; `gh issue list --state all` → CLOSED |
-| ADR-182 exists and defers both options | ✅ holds | `ADR-182-keyless-manifests-and-a-dedicated-marketplace-source.md` §Alternatives considered |
+| App has permission for a ruleset | ✅ | `soleur-ai`: `administration: write`, `repository_selection: all` |
+| App has `contents: write` on the marketplace repo | ✅ | same App, org-wide |
+| A ruleset would lock the sole maintainer out | ⚠️ **depends on `bypass_mode`** — see the probe below | measured, not reasoned |
+| "Drift is auto-reconciled by the next apply" | ❌ **FALSE** | `apply-github-infra.yml` has no `schedule:`; triggers are `push: main` on `infra/github/*.tf`, `.terraform.lock.hcl`, `tests/scripts/lib/destroy-guard-filter.jq`, plus `workflow_dispatch` |
+| #7471 is a PR | ❌ closed **issue** | `gh pr view 7471` → not a PR |
 
-**Provider facts, resolved empirically rather than assumed** (this is TR4, closed at plan time):
+**Provider facts, resolved empirically at 6.12.1** (locked in `.terraform.lock.hcl`; Terraform
+1.10.5 locally matches the workflow):
 
-- Provider pinned at **6.12.1** (`.terraform.lock.hcl`), constraint `~> 6.10`. Terraform 1.10.5
-  locally matches the workflow's `TERRAFORM_VERSION`.
-- `terraform providers schema -json` at 6.12.1: `github_repository_file.overwrite_on_create` is
-  `optional=true, computed=false` with **no schema default** — the same Optional-no-default bool
-  class `repository-marketplace.tf` already warns about, so omitting it means `false`.
-- `github_repository_ruleset`: `repository` is **required** (so targeting a second repo through
-  the same provider is native); `rules` is `min_items: 1, max_items: 1`; `deletion` and
-  `non_fast_forward` are rules-level bools; `bypass_actors.actor_id` is **not** required.
-- **`terraform validate` PASSES** on the exact proposed HCL for both resources at 6.12.1 (run in
-  a sandbox with the repo's own lockfile, `-backend=false`). No `ExactlyOneOf` / `ConflictsWith`
-  constraint blocks the combination.
+- `github_repository_file.overwrite_on_create`: `optional`, `computed=false`, **no schema default**.
+- Create path at v6.12.1 (`github/resource_github_repository_file.go`): GETs first, and with
+  `overwrite_on_create` true sets `opts.SHA = fileContent.SHA` before writing. **An existing
+  byte-identical file takes an update-shaped path, not a 409.** No import needed.
+- `github_repository_ruleset`: `repository` required; `rules` `min_items: 1, max_items: 1`;
+  `deletion` / `non_fast_forward` are rules-level optional bools; `bypass_actors.actor_id` optional.
+- `rules.pull_request.required_approving_review_count` is optional with **no default → 0**. This is
+  the Optional-no-default class `repository-marketplace.tf` flags for bools, and it is the defect
+  v1 shipped on an int.
+- **`terraform validate` passes** on the proposed HCL.
 
-**Three GitHub Apps can push to the sole distribution channel today** — this is arm A's
-strongest and previously-unstated justification:
+### The three App write paths, enumerated in full
 
-| App | `contents` | `repository_selection` |
+v1 enumerated only the `contents` column and built arm A's justification on it. Full set:
+
+| App | `contents` | `pull_requests` | `administration` | `repository_selection` |
+|---|---|---|---|---|
+| `soleur-ai` (App 3261325) | write | write | **write** | all |
+| `claude` | write | **write** | — | all |
+| `entire` | write | **write** | read | all |
+
+`pull_requests: write` is the column that decides whether arm A works. With
+`required_approving_review_count = 0` and no CODEOWNERS in that repo, `claude` and `entire` can
+branch → PR → self-merge. **A PR requirement alone is not a control here.**
+
+### Live bypass probe (2026-08-12)
+
+The lockout risk ADR-182 deferred on was settled by measurement, on the disposable
+`jikig-ai/test-new-project` (zero code references), with the ruleset and all artifacts removed
+afterward.
+
+| Config | Founder merge | Founder direct-push | `claude` / `entire` |
+|---|---|---|---|
+| `count = 0` | ✅ | ❌ | ✅ **self-merge — v1's defect** |
+| `count = 1`, human bypass `pull_request` | ❌ `REVIEW_REQUIRED`, *"base branch policy prohibits the merge"*; needs `--admin` | ❌ | ❌ |
+| `count = 1`, human bypass **`always`** | ✅ | ✅ | ❌ |
+
+`bypass_mode = "pull_request"` does **not** permit merging a PR that fails the approval rule — the
+observed failure is a hard block with an `--admin` escape. `bypass_mode = "always"` restores full
+access including direct push.
+
+**Chosen: `count = 1` with human bypass actors at `always`.** It is the only configuration that
+both closes the App path and preserves spec G5. It deviates from the sibling rulesets' `pull_request`
+mode; that deviation is deliberate and must be commented in the `.tf`.
+
+**Honest strength claim** (this replaces v1's overclaim): the ruleset raises the bar from *one App
+acting alone* to *two Apps colluding* (`claude` opens, `entire` approves — both hold
+`pull_requests: write`, and GitHub blocks self-approval). Neither holds `administration: write`, so
+neither can use the `--admin` override. `deletion` and `non_fast_forward` are **unroutable-around**
+for any non-bypassing actor and are the part of arm A that is unconditional.
+
+### Property List
+
+- **P1.** No actor outside the declared bypass set can modify the marketplace default branch without
+  a PR carrying an approval; the branch cannot be deleted or force-pushed.
+- **P2.** The manifest's content is reviewed **and validated** before it publishes.
+- **P3.** A drift in the published manifest is corrected within the daily cycle, evidence first.
+- **P4.** The unattended apply pipeline completes with A and B both live.
+- **P5.** The sole maintainer retains a direct emergency path (spec G5).
+
+### Cut List
+
+| Mechanism | Property | Disposition |
 |---|---|---|
-| `soleur-ai` | write | all |
-| `claude` | write | all |
-| `entire` | write | all |
+| `terraform import` of the manifest file (a third `import_*` helper) | clean adoption | **CUT.** Provider source confirms `overwrite_on_create` handles the existing-file case via SHA. A third import id shape in the highest-blast-radius file is unjustified risk. |
+| `terraform import` of the ruleset | adoption | **CUT — N/A.** Zero live rulesets. (`import_ruleset` hardcodes `soleur:$id` and could not express another repo — Sharp Edge for any future adoption.) |
+| A `schedule:` on `apply-github-infra.yml` | P3 + ruleset reconcile | **CUT**, but the v1 rationale was wrong — see §Panel Corrections C3. Real reason: it reverts drift *before* the 06:37 check observes it, so the issue is never filed and the only notice of it disappears. Git history in the *other* repo is not a surfaced channel. |
+| An allowlist of content finding keys | P3 | **CUT**, replaced by a **prefix denylist** — see FR8. |
+| `required_approving_review_count = 0` (v1) | P1 | **CUT.** Measured not to close the App path. |
+| Narrowing the `claude`/`entire` installations to selected repos | P1, directly | **Not cut — deferred to NG6.** It removes the threat rather than gating it, at zero Terraform cost, but it is not IaC-declared, drifts silently, and adds a step per new repo. Recorded so the next reader sees it was priced. |
 
-Arm A with a bypass for `soleur-ai` **only** closes the `claude` and `entire` write paths to the
-manifest. That is concrete prevention, not ceremony, and it is not redundant with arm B.
+## Panel Corrections (v1 → v2)
 
-### Property List (Phase 0.6b)
+Six reviewers. Every item below is a v1 defect, not a refinement.
 
-- **P1.** No actor outside a declared bypass set can change the marketplace default branch
-  without a pull request.
-- **P2.** The published manifest's content is subject to CI, required checks and CODEOWNERS
-  review before it changes.
-- **P3.** A drift in the published manifest is *corrected* within the daily cycle, with its
-  evidence preserved.
-- **P4.** The unattended `apply-github-infra` pipeline still completes end-to-end with A and B
-  both live.
-
-### Cut List (Phase 0.6b)
-
-| Mechanism | Property it would buy | Disposition |
+| # | v1 defect | v2 |
 |---|---|---|
-| `terraform import` of the existing manifest file (a third `import_*` helper in `apply-github-infra.yml`) | "first apply adopts rather than clobbers" | **CUT.** The root's README already flags that the two existing import id shapes differ and "the difference is load-bearing"; a third shape in the highest-blast-radius file is real risk. `overwrite_on_create = true` gets the same end state with zero workflow change, and its semantic — Terraform's content wins — *is* arm B's decision. The no-op property is recovered more strongly by AC8, which diffs the **published artifact** against the source file. |
-| `terraform import` of the ruleset (`import_ruleset`) | "adopt an existing ruleset" | **CUT — not applicable.** `gh api repos/jikig-ai/soleur-marketplace/rulesets` returns `[]`. Arm A is a pure create. (Had it been needed, `import_ruleset` hardcodes `soleur:$id` and could not have expressed `soleur-marketplace:$id` — noted as a Sharp Edge for any future marketplace ruleset adoption.) |
-| A `schedule:` on `apply-github-infra.yml` (whole-root daily reconcile) | P3, plus ruleset-drift reconcile | **CUT.** It reverts drift *before* the 06:37 drift check observes it, so an attack is silently erased with no issue filed — the opposite of `hr-observability-as-plan-quality-gate`. Arm C's ordering (evidence first, then remediate) is the load-bearing difference. |
-| An allowlist of "content finding" keys for the arm C predicate | P3 | **CUT and replaced.** See Research Reconciliation R2 — the correct predicate is a one-item **denylist**, which is strictly more robust. |
-
-### Institutional learnings applied
-
-- `2026-08-12-certifying-a-deferral-means-re-deriving-its-benefit-not-just-its-blockers.md` —
-  this session's own learning; it is why the "auto-reconciled" claim was re-derived.
-- `2026-07-03-brainstorm-re-verify-adr-deferral-triggers-against-live-state.md` — the blocker
-  half of the same discipline.
-- ADR-032 (GitHub branch protection as IaC), ADR-031 (PR merge is the human authorization),
-  ADR-033 (Inngest is the canonical cron substrate; the drift workflow's documented override).
+| C1 | Arm A's `pull_request` rule had no parameters → 0 approvals → did not close `claude`/`entire`. The headline justification was false. | `required_approving_review_count = 1`; human bypass at `always`; strength claim rewritten. |
+| C2 | Denylist named one key; the workflow emits **two** GET-2 keys (`plugin_manifest_unresolvable` `:215`, `plugin_manifest_unparseable` `:217`). | Prefix denylist `plugin_manifest_` — closed under future GET-2 assertions, which is the whole reason a denylist was chosen. |
+| C3 | NG5 justified by "Terraform reverts on the next apply" — contradicting this plan's own Premise Validation two sections earlier. | `scheduled-terraform-drift.yml:47` puts `infra/github` in its matrix and plans it (`workflow_dispatch`, Inngest-driven). Deferral stands; justification replaced. |
+| C4 | Guard 1's probe read `GET /rulesets` — the **list** endpoint returns a summary with no `rules`, `bypass_actors`, or `conditions`. Three of four rows were unimplementable. | Two-hop: list → select by name → `GET /rulesets/{id}`. |
+| C5 | The bypass comparison ignored the `0`-vs-`null` asymmetry — Terraform writes `0`, the API returns `null`. Would have gone **red on every apply**. | Normalize `0 → null` per the existing SE-1 convention (`ruleset-cla-required.tf:22`); expected set lives in `scripts/marketplace-ruleset-canonical-bypass-actors.json` beside its two siblings. |
+| C6 | Published-artifact verifier fetched `raw.githubusercontent.com` inside the apply job. Measured `cache-control: max-age=300`, `source-age: 102`. **Vacuous on the first apply** (passes against the cached old copy) and flaky-red afterward. | Bounded ETag poll with cache-busting, or defer the diff to the next drift tick. |
+| C7 | No pre-merge validation of the source file → a bad manifest merges, publishes, and arm C **republishes it daily forever** while Guard 3 reports `MANIFEST_IN_SYNC`. | New Phase 2: the content assertions run against the source file as a required CI check. |
+| C8 | The drift **issue body** (`:309`, `:316-321`) — the artifact a non-technical founder reads mid-incident — still says the repo has "no CI, no required review and no CODEOWNERS" and tells them to edit the published file, now blocked and futile. Also the gate-override block `:21-27` and justification **(ii)** "`issues: write` … AND NOTHING ELSE". | All rewritten. v1 caught this class twice (FR12, C4 model) and missed the worst instance. |
+| C9 | `liveness_signal` called the Sentry monitor "already wired". The composite declares three `required: true` inputs; the drift workflow passes **none**; Actions does not enforce `required` on composite inputs, so it warns and exits 0. **The check-in has never fired.** AC5 as written *forbade* the fix. | Forward the three secrets (sibling precedent `scheduled-terraform-drift.yml:1258-1260`); reword AC5 and gate-override (iii) — a Sentry ingest URL is not a product secret. |
+| C10 | The A↔B "atomicity" framing. `bypass_actors` are attributes of the ruleset resource in the same POST, so **there is no ordering window** and `depends_on` would buy nothing. Not a deadlock either — a wrong bypass leaves a red run recoverable by a normal merge. | Reframed: the mitigation is AC4 + the bypass-set probe, not "one commit". |
+| C11 | "Blast radius: the marketplace repo only" — false for arm C, which applies the **whole** `infra/github` root including this repo's merge-gate rulesets, triggered by an unauthenticated third-party URL read. | Stated, with the AP-021 deviation acknowledged. |
+| C12 | Guard 2's predicate lived in an Actions `if:`. Expressions have no split/regex/iteration, so `contains()` cannot distinguish a mixed verdict from a GET-2-only one; and the named harness runs only the `check` step's bash, so rows 1–3 were undriveable. | Predicate computed in the `check` step → `dispatch_eligible` output; `if:` is trivial. |
+| C13 | Guard 1's property claimed deletion/force-push protection that no assertion covered. | Both asserted; matrix rows added. |
+| C14 | AC8 grepped a phrase that is **line-wrapped** in ADR-182 → returns 0 on an unmodified file. Vacuous. | Whitespace-normalized match plus a positive marker the edit introduces. |
+| C15 | AC4 forbade the installation id anywhere in the file — blocking the very comment this repo's conventions require (`apply-github-infra.yml:251-262` spends 11 lines on exactly that distinction). | Scoped to the assignment: `actor_id\s*=\s*3261325` present, `actor_id\s*=\s*122413433`-shaped assignment absent. Prose free. |
+| C16 | Destroying `github_repository_file` **deletes the published manifest**; there is no `keep_on_destroy`. `archive_on_destroy` protects the repo, not a file in it. `[ack-destroy]` silently upgraded from "remove a ruleset" to "unpublish the plugin". | Stated in Risks and in the FR12 comment. |
+| C17 | `[skip-github-apply]` reads the same empty `HEAD_MSG` on dispatch, so the documented **kill switch is also inoperative** on every reconcile — the only brake is the daily cron. | Stated in failure_modes. |
+| C18 | AC13 asserted an exact whole-root plan count — shared mutable state, `cq-ac-must-not-depend-on-concurrent-sessions`. | Asserts the two resources' actions, not a root-wide total. |
+| C19 | Every pre-merge AC could pass with Phase 4 entirely unimplemented. The repo already documented this shape (`marketplace-drift-check.test.sh:350-354`). | Structural pre-merge ACs for the verifier steps. |
+| C20 | AC16/AC17 filed as "automatic" required deliberately breaking production. | Moved to the guard test suite; AC17 was a duplicate of Guard 2.1. |
 
 ## Research Reconciliation — Spec vs. Codebase
 
-| Spec claim | Codebase reality | Plan response |
+| Spec claim | Reality | Response |
 |---|---|---|
-| FR6: "adopt both new resources through the existing `import_ruleset` / `import_repository` helper pattern" | The marketplace repo has **zero** rulesets, so arm A is a pure create with nothing to import. `import_ruleset` also hardcodes `soleur:$id` and cannot express another repo. | **FR6 dropped for arm A.** Arm B adopts via `overwrite_on_create = true` instead of a third import helper — see the Cut List. |
-| FR8: dispatch only on an allowlist of content findings (`version_key_present`, `source_path`, …) | The check step also emits `manifest_fetch_failed`, `manifest_unparseable`, `manifest_shape`. A **deleted or corrupted** manifest is exactly what Terraform can fix, and an allowlist would silently skip it. A future assertion would also be silently excluded. | **FR8 inverted to a denylist:** dispatch iff at least one finding is **not** `plugin_manifest_unresolvable`. One excluded key, everything else dispatches, future assertions covered by default. |
-| Spec is silent on where the ruleset's correctness is verified | `apply-github-infra.yml`'s post-apply verify probes `repos/${GITHUB_REPOSITORY}/rulesets/14145388` — hardcoded to *this* repo. Nothing would assert the new ruleset. | New FR11: extend the verify step with a marketplace probe that selects **by name**, not by a ruleset id that does not exist until after the first create. |
-| Spec is silent on `repository-marketplace.tf`'s own comment | Its `OWNERSHIP BOUNDARY` block states "Terraform does NOT own the repo CONTENTS" and "The ONLY control on the artifact is the daily drift guard". **This plan falsifies both sentences.** | New FR12: update that comment in the same PR. A stale ownership comment in the file a future reader consults first is the same defect class as a stale ADR claim. |
-| Spec assumed the ruleset gains drift detection | `audit-ruleset-bypass.sh` hardcodes `repos/jikig-ai/soleur/rulesets/14145388` and now runs from an **Inngest cron** (`cron-ruleset-bypass-audit.ts`), not a GH Actions workflow. Extending it spans the script (337 lines), its test suite (929 lines), and the Inngest function. | **Out of scope, tracked.** See Non-Goals NG5 with an explicit re-evaluation trigger. Residual exposure is *timeliness only* — the marketplace ruleset is Terraform-managed, so any widening is reverted by the next apply (including one arm C dispatches). |
-| CODEOWNERS pins `/.github/workflows/scheduled-ruleset-bypass-audit.yml` | **That file does not exist.** The job migrated to Inngest. A CODEOWNERS row matching no path protects nothing while reading as coverage — the exact failure the file's own header documents for `scheduled-content-vendor-drift.yml`. | Fold in a one-line correction (FR13). This plan's G2 depends on CODEOWNERS being accurate, so its accuracy is in scope here rather than deferred. |
-
-## Open Code-Review Overlap
-
-Scanned 64 open `code-review` issues against every planned path.
-
-- **#7098** — *audit the 56 `run:` bodies whose `set` omits `-e`* — touches
-  `apply-github-infra.yml`. **Disposition: Acknowledge.** Arm C adds a new `run:` body; it must
-  use the explicit `set +e` … `set -e` bracket the drift workflow already models (and which
-  #7304 corrected in the apply workflow's plan step). This plan does not fix the other 56.
-- **#3321** — *CODEOWNERS coverage for `knowledge-base/project/learnings/`* — **Disposition:
-  Acknowledge.** Unrelated concern (missing coverage); FR13 fixes a *stale* row.
+| FR6: adopt via the import helpers | Zero live rulesets (pure create); `import_ruleset` hardcodes `soleur:$id`; provider handles the existing file via SHA | FR6 dropped |
+| FR8: allowlist of content findings | 12 finding keys; a deleted/corrupt manifest is exactly what Terraform fixes; two GET-2 keys | Prefix denylist `plugin_manifest_` |
+| Spec silent on ruleset verification | Post-apply verify is hardcoded to this repo's ruleset 14145388 | FR11 |
+| Spec silent on `repository-marketplace.tf`'s comment | Its `OWNERSHIP BOUNDARY` block is falsified | FR12 |
+| Spec silent on source-file validation | **Nothing validates the source** — `grep -rln "marketplace.json" .github/workflows/ scripts/ tests/` returns only the drift workflow, which reads the *published* URL | **FR14 (new)** — the C7 fix |
+| Spec AC2 "an unprivileged direct push is rejected" | v1 asserted configuration, never behaviour | Now covered by the probe result + Guard 1; behaviour is measured, not asserted |
+| Spec TR5 "`[ack-destroy]` exercised against the new resources" | No task in v1 | FR15 — a destroy-guard fixture, now load-bearing because of C16 |
+| CODEOWNERS pins a workflow that does not exist | Confirmed: exactly **one** stale row of 59 | FR13, scoped |
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** a wedged `apply-github-infra` pipeline (the A↔B
-deadlock), or — worse — a marketplace manifest whose published content silently stops matching
-the source of truth while every check reports green, so `claude plugin marketplace add` resolves
-a stale or wrong entry.
+**If this lands broken, the user experiences:** a wedged `apply-github-infra` pipeline; or a
+published manifest that silently stops matching the source while checks report green; or — the C16
+case — an *unpublished* manifest, breaking `marketplace add` for every new install.
 
-**If this leaks, the user's workflow and credentials are exposed via:** the manifest repoint
-path. An unreviewed push changes the plugin source; every installed user's next update
-materialises attacker-controlled agent code that executes locally holding their
-`ANTHROPIC_API_KEY` and a `GITHUB_TOKEN` with `issues: write`. Four `claude-code-action`
-workflows install from this repo, two of which ship into *users'* generated CI.
+**If this leaks, the user's workflow and credentials are exposed via:** the manifest repoint path.
+An unreviewed push changes the plugin source; every installed user's next update materialises
+attacker-controlled agent code executing locally with their `ANTHROPIC_API_KEY` and a
+`GITHUB_TOKEN` carrying `issues: write`.
 
-**Brand-survival threshold:** `single-user incident`.
-
-Carried forward verbatim from the brainstorm's `## User-Brand Impact` (Phase 0.1 framing).
-`requires_cpo_signoff: true` is set in frontmatter; `user-impact-reviewer` is invoked at review
-time per `review/SKILL.md`.
+**Brand-survival threshold:** `single-user incident`. Carried from the brainstorm.
+`requires_cpo_signoff: true`. **The trade-off requiring sign-off** (v1 hid this): after arm B, the
+durable route to a manifest change is a monorepo PR + full CI + CODEOWNERS + apply + up to 300 s of
+CDN. The founder retains a direct-push emergency path **only because** the human bypass actors are
+set to `always` — that is what spec G5 rests on, and it is why the `always` deviation from the
+sibling rulesets is not cosmetic.
 
 ## Implementation Phases
 
-Phase order is dependency-directed, not file-grouped. Arm A's ruleset and arm B's file write are
-a single atomic unit: **the bypass actor must exist in the same apply that first enforces the
-ruleset.**
+### Phase 1 — Manifest source of truth
 
-### Phase 1 — Source of truth for the manifest (arm B, data)
+1. Fetch the published manifest verbatim into `infra/github/soleur-marketplace-manifest.json`.
+2. Leave `.claude-plugin/marketplace.json` in this monorepo untouched (legacy entry, #7489).
 
-1. Create `infra/github/soleur-marketplace-manifest.json`, **byte-identical** to what is
-   published today (fetch it, do not retype it):
-   `curl -fsS https://raw.githubusercontent.com/jikig-ai/soleur-marketplace/main/.claude-plugin/marketplace.json`
-2. Do **not** touch `.claude-plugin/marketplace.json` in this monorepo — a different file
-   serving the legacy marketplace entry, tracked in #7489.
+### Phase 2 — Pre-merge source validation (FR14 — the C7 fix)
 
-### Phase 2 — Ruleset + file resource (arms A and B, one commit)
+3. Extract the manifest content assertions (no `version` key; `source.path`; `source.url`;
+   `source.source == git-subdir`; no `ref`/`sha`/`commit`/`branch`/`tag` pin; exactly one entry;
+   `entry.name == "soleur"`) into a script that runs against a **local file**.
+4. Wire it as an always-run required check over `infra/github/soleur-marketplace-manifest.json`.
+5. The drift workflow keeps the same assertions against the *published* artifact. They are not
+   redundant: this one gates the **source**, that one gates **publication**. Name them individually
+   rather than by count — the file's own header says "three" and there are more.
 
-3. Create `infra/github/ruleset-marketplace-pr-required.tf` with the validated shape:
-   `name = "Marketplace PR Required"`, `repository = "soleur-marketplace"`, `target = "branch"`,
-   `enforcement = "active"`; `conditions.ref_name.include = ["~DEFAULT_BRANCH"]`; three
-   `bypass_actors` blocks (`OrganizationAdmin`/0/`pull_request`, `RepositoryRole`/5/
-   `pull_request`, `Integration`/**3261325**/`always`); one `rules` block carrying a
-   `pull_request` rule plus `deletion = true` and `non_fast_forward = true`.
-   The header comment must state why the `Integration` bypass is not a hole: the App's write is
-   the *reviewed* path, because its content originates in this monorepo behind CI and CODEOWNERS.
-4. Add `github_repository_file.marketplace_manifest` (same file or a sibling `.tf`):
-   `repository = "soleur-marketplace"`, `branch = "main"`,
-   `file = ".claude-plugin/marketplace.json"`, `content = file("${path.module}/soleur-marketplace-manifest.json")`,
-   `overwrite_on_create = true`, explicit `commit_message` / `commit_author` / `commit_email`.
-5. **FR12** — update `repository-marketplace.tf`'s `OWNERSHIP BOUNDARY` comment: Terraform now
-   owns the contents, and the drift guard is no longer the only control.
+### Phase 3 — Ruleset + file resource (arms A and B)
 
-### Phase 3 — Make the source file publish itself (FR5)
+6. `infra/github/ruleset-marketplace-pr-required.tf`:
+   `repository = github_repository.soleur_marketplace.name` (a reference, not a literal — it
+   supplies the dependency edge and survives a rename), `target = "branch"`,
+   `enforcement = "active"`, `conditions.ref_name.include = ["~DEFAULT_BRANCH"]`.
+7. `bypass_actors`: `OrganizationAdmin`/`0`/**`always`**, `RepositoryRole`/`5`/**`always`**,
+   `Integration`/**`3261325`**/`always`. Comment the `always` deviation from the siblings and the
+   probe result that motivated it, and the App-id-vs-installation-id distinction.
+8. One `rules` block: `pull_request` with `required_approving_review_count = 1` (and the four
+   remaining sub-fields set explicitly, since none has a default), plus `deletion = true` and
+   `non_fast_forward = true`.
+9. `github_repository_file.marketplace_manifest` — same `repository` reference,
+   `branch = "main"`, `overwrite_on_create = true`, explicit commit metadata.
+10. FR12 — rewrite `repository-marketplace.tf`'s `OWNERSHIP BOUNDARY` comment, including the C16
+    warning that a destroy now unpublishes the manifest.
 
-6. Extend `apply-github-infra.yml`'s `on.push.paths` with
-   `infra/github/soleur-marketplace-manifest.json`. The existing `infra/github/*.tf` glob does
-   **not** match a `.json` sibling; without this the manifest edits and never publishes, with no
-   error anywhere.
+### Phase 4 — Publication trigger
 
-### Phase 4 — Verifiers (FR11 + Guard 1 + Guard 3)
+11. Add `infra/github/soleur-marketplace-manifest.json` to `on.push.paths`. The `infra/github/*.tf`
+    glob does not match a `.json` sibling; without this the manifest never publishes, silently.
 
-7. Extend the post-apply verify step with a marketplace ruleset probe: `GET
-   repos/jikig-ai/soleur-marketplace/rulesets`, **select by name** (the id does not exist until
-   after the first create), assert `enforcement == "active"`, assert the canonicalized
-   `bypass_actors` set equals exactly the three declared entries, assert a `pull_request` rule is
-   present, assert `conditions.ref_name.include == ["~DEFAULT_BRANCH"]`. The probe must fail
-   closed on an empty list or a name miss, and must echo a checked-count that the step asserts
-   against the expected count (anti-vacuity).
-8. Add a published-artifact verify: fetch the manifest over
-   `raw.githubusercontent.com` and diff against `infra/github/soleur-marketplace-manifest.json`.
-   **Read the published artifact, never Terraform state** — a state-only check passes while
-   publication silently failed.
+### Phase 5 — Verifiers
 
-### Phase 5 — Reconcile trigger (arm C)
+12. Ruleset probe (C4): list → `select(.name == "Marketplace PR Required") | .id` →
+    `GET /rulesets/{id}`. Assert `enforcement == "active"`; the `0→null`-normalized `bypass_actors`
+    set equals `scripts/marketplace-ruleset-canonical-bypass-actors.json` (C5); a `.type ==
+    "pull_request"` rule with `required_approving_review_count == 1`; `deletion` and
+    `non_fast_forward` both present (C13); `conditions.ref_name.include == ["~DEFAULT_BRANCH"]`.
+    Fail closed on an empty list or a name miss. Must live **inside** the existing verify step —
+    `apply-github-infra.yml:355` traps and shreds the PEM on step exit, so no later step can mint a
+    token.
+13. Published-artifact verifier (C6): bounded ETag poll with `Cache-Control: no-cache`, ~5 min max,
+    then fail. Raw `diff`, not `jq -S` — byte identity is the stated property and is achievable.
 
-9. Add `actions: write` to `scheduled-marketplace-drift.yml`'s `permissions`. **Nothing else** —
-   the automatic `GITHUB_TOKEN` must remain the only credential, or the workflow's ADR-033
-   gate-override justification (iii) "NO PRODUCT SECRETS ARE CONSUMED" becomes false.
-10. After the issue file/comment step, and gated on `steps.issue.outputs.delivered == '1'`, add a
-    dispatch step: `gh workflow run apply-github-infra.yml -f reason="marketplace-drift reconcile
-    from run <id>"`. Ordering is load-bearing — evidence before remediation.
-11. Implement the FR8 predicate as a **denylist**: dispatch iff at least one finding key is not
-    `plugin_manifest_unresolvable`.
-12. Update the workflow's header prose: the six assertions change role from *detector* to
-    *verifier that Terraform's write took effect*. They are retained (FR9), not retired.
+### Phase 6 — Reconcile trigger (arm C)
 
-### Phase 6 — Tests (Guard 2)
+14. `permissions:` gains `actions: write`. Update gate-override justification **(ii)** — it says
+    "`issues: write` … AND NOTHING ELSE" (C8).
+15. Fix the Sentry heartbeat (C9): forward `SENTRY_INGEST_DOMAIN` / `SENTRY_PROJECT_ID` /
+    `SENTRY_PUBLIC_KEY`, and reword gate-override (iii) — these are not product secrets. Add a
+    dispatch conjunct to the status expression so a failed dispatch cannot report `ok`.
+16. The `check` step computes `dispatch_eligible=true|false` (C12): true iff ≥1 finding key does not
+    match the `plugin_manifest_` prefix. Anchored key matching — `manifest_unparseable` is a proper
+    substring of `plugin_manifest_unparseable`.
+17. Dispatch step after the issue step, `if: steps.check.outcome == 'success' && steps.issue.outputs.delivered == '1' && steps.check.outputs.dispatch_eligible == 'true'`.
+    **No `always()` / `!cancelled()`** — the implicit `success()` is load-bearing here and is the
+    opposite of the convention two steps above. Use `set -euo pipefail` (not the `set +e` bracket —
+    non-zero is a real error here), `GH_TOKEN`, `--ref main`, `--repo`, per
+    `inngest-watchdog-restart-dispatch.yml:41-49`.
+18. Verify the dispatched run actually started (spec TR2): `gh workflow run` exits 0 on
+    *acceptance*. Poll for the run id and append it to the issue comment, linking detection to
+    remediation.
+19. Rewrite the issue body's stale claim and remediation steps (C8).
 
-13. Extend `scripts/marketplace-drift-check.test.sh` with the Guard 2 mutation matrix. The
-    harness already extracts the step body and runs it under
-    `bash --noprofile --norc -eo pipefail` with a `curl` shim — reuse it; the dispatch decision
-    must be observable as a step output, or the suite fails rather than passing vacuously.
+### Phase 7 — Guard tests
 
-### Phase 7 — Records
+20. Guard 2 rows in `scripts/marketplace-drift-check.test.sh` (the harness runs the `check` step
+    body, which is now where the predicate lives).
+21. Guard 1 rows as fixture-driven assertions over recorded ruleset JSON — the live mutations cannot
+    be driven in CI, and claiming otherwise is the ceremony the Guard Contract format exists to
+    prevent.
+22. FR15 — destroy-guard fixture for a `github_repository_file` replacement (delete+create trips
+    `resource_deletes`), now load-bearing per C16.
 
-14. **FR10** — amend ADR-182: mark both deferred alternatives shipped, record the resolved
-    preconditions, and **correct** the "auto-reconciled by the next apply" claim in
-    §Alternatives considered.
-15. Update `infra/github/README.md` with the new resources and the A↔B bypass dependency.
-16. C4 edits — see `## Architecture Decision (ADR/C4)`.
-17. **FR13** — CODEOWNERS: correct the stale `/.github/workflows/scheduled-ruleset-bypass-audit.yml`
-    row (the job runs from `cron-ruleset-bypass-audit.ts`).
+### Phase 8 — Records
 
-## Architecture Decision (ADR/C4)
+23. FR10 — amend ADR-182 (both alternatives shipped, preconditions recorded, the reconciliation
+    claim corrected).
+24. C4 model: rewrite `soleurMarketplace`'s description and the `github -> soleurMarketplace` edge
+    label; add the authenticated **write** edge. `views.c4` already includes the element.
+25. `infra/github/README.md`; FR13 CODEOWNERS one-liner; NG5 + NG6 tracking issues.
 
-This changes an ownership boundary (Terraform now owns another repo's contents) and a trust
-boundary (who may write the distribution channel), so a decision record is a deliverable here.
+## Acceptance Criteria
 
-### ADR
+### Pre-merge
 
-**Amend ADR-182** — no new ordinal. The decision extends ADR-182's own `## Alternatives
-considered` entries rather than superseding them. Three edits: mark both deferred alternatives
-shipped; record the preconditions that cleared and how they were verified; **correct** the
-`github_repository_file` entry's benefit claim, which asserted auto-reconciliation the apply
-workflow's trigger set cannot deliver without arm C.
+- **AC1.** `terraform validate` passes on `infra/github/`.
+- **AC2.** The source file is byte-identical to the published manifest at authoring time.
+- **AC3.** `infra/github/soleur-marketplace-manifest.json` appears **inside** `on.push.paths` —
+  `awk` the block, then grep (not a whole-file grep).
+- **AC4.** `grep -cE 'actor_id\s*=\s*3261325'` ≥ 1 and `grep -cE 'actor_id\s*=\s*122213433'` == 0 in
+  the ruleset file. Assignment-scoped; prose may explain the distinction (C15).
+- **AC5.** `permissions:` gains `actions: write`. The workflow may additionally reference the three
+  Sentry ingest secrets (C9) — it must reference no **product** secret.
+- **AC6.** Phase 2's source-validation check is wired as an always-run required check, and fails on
+  a fixture manifest carrying a `version` key.
+- **AC7.** `.claude-plugin/marketplace.json` unmodified.
+- **AC8.** ADR-182 amendment verified by whitespace-normalized match plus a positive marker the edit
+  introduces (C14).
+- **AC9.** `model.c4` no longer asserts "no CI, no review and no CODEOWNERS" as current state; the
+  write edge exists; `c4-code-syntax.test.ts` + `c4-render.test.ts` pass.
+- **AC10.** `repository-marketplace.tf`'s ownership comment updated, including the C16 warning.
+- **AC11.** The FR13 CODEOWNERS row resolves. **Scoped to that row** — not a repo-wide invariant.
+- **AC12.** Structural: the ruleset probe and the published-artifact verifier both exist in
+  `apply-github-infra.yml`, and the dispatch step exists in the drift workflow with the correct
+  `if:` shape and no `always()`/`!cancelled()` (C19).
+- **AC13.** `bash scripts/marketplace-drift-check.test.sh` passes, including all Guard 2 rows.
+- **AC14.** `bash scripts/test-all.sh` green.
 
-*(No new ADR ordinal is claimed, so the ordinal-collision gate does not apply to this PR.)*
+### Post-merge (automatic)
 
-### C4 views
+- **AC15.** The merge-triggered apply is green and its plan shows the two new resources as
+  **creates with zero destroys** — asserted on those two resource addresses, not a whole-root total
+  (C18).
+- **AC16.** `GET /rulesets/{id}` returns `enforcement: active`, the three bypass actors
+  (`0→null`-normalized), `required_approving_review_count: 1`, and both `deletion` and
+  `non_fast_forward`.
+- **AC17.** The published-artifact verifier reports byte-identity after its ETag poll settles.
 
-Checked all three model files (`model.c4`, `views.c4`, `spec.c4`). `soleurMarketplace` is
-already modelled (`model.c4:243`, added by ADR-182) and already included in the view
-(`views.c4:17`), so no new `include` line is required. Two existing statements are **falsified**
-by this change and one edge is missing:
+## Guard Contract
 
-1. **`model.c4:245`** — `soleurMarketplace`'s description ends *"Has no CI, no review and no
-   CODEOWNERS: scheduled-marketplace-drift.yml in jikig-ai/soleur is its only control."* Both
-   clauses become false. Rewrite: contents are Terraform-owned from the monorepo (so they carry
-   that repo's CI, required checks and CODEOWNERS), and a default-branch ruleset restricts direct
-   writes to a single bypassing App identity.
-2. **`model.c4:457`** — the `github -> soleurMarketplace` edge is described as *"Daily
-   unauthenticated drift check … the sole control"*. Still accurate as a *read*, no longer the
-   sole control. Amend the label.
-3. **New edge** — an authenticated **write** relationship from the monorepo's infra apply to
-   `soleurMarketplace`, carrying the manifest content and the ruleset. Today the model shows only
-   reads into this system; the write is the architecturally novel part and is unmodelled.
+### Guard 1 — Marketplace ruleset, and the probe that proves it
 
-**External-actor / external-system / access-relationship enumeration** (the completeness mandate):
-external human actors — none added (`founder` unchanged); external systems — none added
-(`soleurMarketplace`, `github` and `doppler` all already modelled); data stores — none;
-access relationships — **one changed** (read-only → read + authenticated write), which is item 3.
+**Property.** No actor outside the three declared bypass entries can modify `refs/heads/main` on
+`jikig-ai/soleur-marketplace` without a PR carrying one approval, and the branch cannot be deleted
+or force-pushed.
 
-Run `apps/web-platform/test/c4-code-syntax.test.ts` and `c4-render.test.ts` after editing.
+**Assembly.** The chokepoint is GitHub's ruleset evaluation for that ref — structural, not a list.
+The member set is every actor GitHub authenticates for a write there: org members, collaborators,
+and every App installed org-wide with `contents: write` (2026-08-12: `soleur-ai`, `claude`,
+`entire`). The red-driving mechanism reads the **live ruleset detail endpoint**, not the `.tf` and
+not the list endpoint.
+
+**Mutation matrix.**
+
+| # | Mutation | Guard must |
+|---|---|---|
+| 1 | `enforcement → "disabled"`, or ruleset deleted | RED — **own-dispatch row**: an empty list or name miss must fail, never report 0-checked-OK |
+| 2 | A **4th** `bypass_actors` entry after three compliant ones | RED — **second-member row**; only full normalized-set equality catches it |
+| 3 | `required_approving_review_count → 0` | RED — this is v1's shipped defect; "a `pull_request` rule exists" passes here |
+| 4 | `deletion` or `non_fast_forward` → false | RED (C13) — every other assertion still passes while the property is false |
+| 5 | `ref_name.include` → a nonexistent branch | RED — active and intact while quantifying over nothing |
+
+### Guard 2 — The reconcile dispatch predicate
+
+**Property.** A reconcile is dispatched for exactly those verdicts a Terraform apply can fix, and
+never for those it cannot.
+
+**Assembly.** The finding-key set emitted by the `check` step — open-ended by design. The chokepoint
+is the `dispatch_eligible` computation **inside that step's bash**, which is what the named harness
+executes. A `plugin_manifest_` prefix denylist is closed under future GET-2 assertions; matching is
+anchored, because `manifest_unparseable` is a proper substring of `plugin_manifest_unparseable`.
+
+**Mutation matrix.**
+
+| # | Mutation | Guard must |
+|---|---|---|
+| 1 | Predicate forced true | RED — a GET-2-only verdict must not dispatch |
+| 2 | Predicate forced false | RED — `version_key_present` must dispatch |
+| 3 | Add a **new** `plugin_manifest_*` key | RED if implemented as a two-key denylist — **second-member row**, and the reason the prefix form is correct |
+| 4 | Mixed verdict (`plugin_manifest_unresolvable` **and** `version_key_present`) | RED if it does not dispatch — the case an unanchored `contains()` gets wrong |
+| 5 | Decision unobservable | RED — **own-dispatch row**; the suite must fail, not pass vacuously |
+| 6 | Dispatch reordered before issue delivery, or given `always()` | RED — evidence must precede remediation |
+
+### Guard 3 — Published-artifact verifier
+
+**Property.** The bytes served at the canonical raw URL equal
+`infra/github/soleur-marketplace-manifest.json` at `main`.
+
+**Assembly.** The published artifact as an installer resolves it — **behind a 300 s Fastly cache**,
+so the assembly includes the cache, and a single fetch does not observe it. Not Terraform state, not
+the provider's `content` attribute.
+
+**Mutation matrix.**
+
+| # | Mutation | Guard must |
+|---|---|---|
+| 1 | Published bytes differ from source by any cause (source edited without the `paths:` trigger; `file` repointed; file deleted) | RED — one assertion, several causes; fail-closed on 404 |
+| 2 | Verifier reads Terraform state instead of the artifact | RED — **own-dispatch row**; a state check passes while publication failed |
+| 3 | Verifier does a single un-busted fetch | RED (C6) — it would pass against the cached copy on the first apply, which is the run it exists for |
+
+### Guard 4 — Source-file validation (new, the C7 fix)
+
+**Property.** A manifest source that violates the delivery contract cannot merge.
+
+**Assembly.** Every path by which `infra/github/soleur-marketplace-manifest.json` reaches `main` —
+i.e. the required check on the PR. Terraform publishes whatever merges, so this is the only gate
+between an author and every installed user.
+
+**Mutation matrix.**
+
+| # | Mutation | Guard must |
+|---|---|---|
+| 1 | Source gains a `version` key | RED — the #7471 defect, and the case that would otherwise loop forever |
+| 2 | `source.url` / `source.path` / `source.source` changed | RED |
+| 3 | A second `plugins[]` entry appended | RED — **second-member row**; positional assertions miss appends |
+| 4 | The check is wired non-blocking, or its file list is empty | RED — **own-dispatch row** |
 
 ## Infrastructure (IaC)
 
-### Terraform changes
+**Terraform changes.** New: `ruleset-marketplace-pr-required.tf`,
+`github_repository_file.marketplace_manifest`, `soleur-marketplace-manifest.json`,
+`scripts/marketplace-ruleset-canonical-bypass-actors.json`. Edited: `repository-marketplace.tf`,
+`README.md`. Provider `~> 6.10` locked at 6.12.1; no new root, no backend change, no new secrets.
 
-- **New:** `infra/github/ruleset-marketplace-pr-required.tf`
-  (`github_repository_ruleset.marketplace_pr_required`),
-  `github_repository_file.marketplace_manifest`,
-  `infra/github/soleur-marketplace-manifest.json` (the content source).
-- **Edited:** `infra/github/repository-marketplace.tf` (ownership comment), `infra/github/README.md`.
-- **Provider:** `integrations/github ~> 6.10`, locked at **6.12.1**. No new provider, no new root,
-  no backend change — `infra/github/` already has the R2 backend and App auth.
-- **Sensitive variables:** none new. `TF_VAR_github_app_id` / `TF_VAR_github_app_private_key`
-  already flow from Doppler `prd_terraform`.
+**Apply path.** Merge-triggered, no bootstrap. Both resources are creates.
+`repository = github_repository.soleur_marketplace.name` supplies the ordering edge; per C10 there
+is no ordering *window* to protect, since bypass actors ship inside the ruleset's own POST.
 
-### Apply path
+**Blast radius.** Arm A/B: the marketplace repo. **Arm C: the whole `infra/github` root**, including
+this repo's merge-gate rulesets (C11) — the apply has no `-target`. Bounded by the destroy guard,
+which fails closed because `HEAD_MSG` is empty on `workflow_dispatch`; note per C17 that the same
+emptiness disables `[skip-github-apply]`, so the daily cron is the only brake.
 
-**(a) merge-triggered apply, no bootstrap.** Arm A is a pure create (zero live rulesets); arm B
-adopts via `overwrite_on_create = true`, so no import step is required and the merge to `main`
-is the only trigger.
-
-Expected first `terraform plan`: **2 to add, 0 to change, 0 to destroy** — the ruleset and the
-repository file. Any `to destroy` is a defect: the destroy guard fails closed and, because
-`HEAD_MSG` is empty on a `workflow_dispatch`, `[ack-destroy]` is unreachable on a reconcile run.
-That is correct fail-closed behaviour for unattended remediation and must not be "fixed".
-
-Blast radius: the marketplace repo only. Downtime: none — `github_repository_file` writes a
-commit; the raw URL serves the new content immediately.
-
-### Distinctness / drift safeguards
-
-- `archive_on_destroy = true` on `github_repository.soleur_marketplace` stays untouched.
-- The destroy-guard filter counts `required_check` shrinkage on `github_repository_ruleset` only;
-  the new ruleset carries a `pull_request` rule with **no** `required_status_checks`, so
-  `required_check_count` is 0 on both sides and the nested counter is unaffected. Verified by
-  reading `tests/scripts/lib/destroy-guard-filter.jq`.
-- `github_repository_file` replacement is forced by `repository`, `file` or `branch` changes —
-  content edits are in-place updates, so normal operation never trips the resource-delete counter.
-- There is no `-target` scoping on this root, so no allow-list to extend and no orphan scope-guard
-  suite for `infra/github` (`tests/scripts/` has one only for sentry).
-
-### Vendor-tier reality check
-
-Not applicable — repository rulesets and the contents API are available on the org's current plan;
-both sibling rulesets already run on it.
+**AP-021 deviation.** Dispatching on `manifest_fetch_failed` acts on an explicitly unmeasured state
+(the check's own text: *"no body was read"*). Accepted: the apply is deterministic from `main`'s
+`.tf` files and never consumes the fetched body, so a spurious reconcile is a no-op for the file.
 
 ## Observability
 
 ```yaml
 liveness_signal:
-  what: scheduled-marketplace-drift daily run + its Sentry check-in
-  cadence: daily at 06:37 UTC (cron "37 6 * * *")
-  alert_target: Sentry monitor slug scheduled-marketplace-drift (already wired)
-  configured_in: .github/workflows/scheduled-marketplace-drift.yml (sentry-heartbeat step)
+  what: scheduled-marketplace-drift daily run + Sentry check-in
+  cadence: daily 06:37 UTC
+  alert_target: Sentry monitor slug scheduled-marketplace-drift
+  configured_in: .github/workflows/scheduled-marketplace-drift.yml
+  status: BROKEN ON MAIN — the composite's three required inputs are not forwarded, so the
+    check-in has never delivered (C9). Repaired by Phase 6 step 15; until then this signal
+    does not exist.
 
 error_reporting:
-  destination: GitHub issue labelled ci/marketplace-drift + action-required; Sentry check-in
-    status=error; a red workflow run as the fallback channel
-  fail_loud: true — the check step fails closed on unreachable URL, HTML error page, or
-    non-object .plugins[0]; the issue step exits 1 when drift was found but the alarm did not
-    deliver; the reconcile dispatch adds a third failure mode, below
+  destination: GitHub issue labelled ci/marketplace-drift + action-required; Sentry check-in;
+    red workflow run
+  fail_loud: true
 
 failure_modes:
-  - mode: A↔B deadlock — the ruleset blocks the App's github_repository_file write
-    detection: apply-github-infra run fails at the apply step with 403/422 on the contents API
-    alert_route: red workflow run on push to main; the run is the operator-visible surface
-  - mode: manifest source edited but never published (FR5 paths gap)
-    detection: the Phase 4 published-artifact diff — fetch the raw URL and compare to the
-      source file; a state-only check cannot see this
-    alert_route: red apply run; and the next daily drift check reports MISMATCH and files the
-      ci/marketplace-drift issue
-  - mode: reconcile dispatch fails (actions:write missing, workflow renamed, API error)
-    detection: the dispatch step's own exit code, checked rather than swallowed
-    alert_route: ::error:: annotation + the job fails, so the daily run goes red; the Sentry
-      heartbeat carries the same conjunct as the existing delivered gate
-  - mode: reconcile loop — drift persists across days and the dispatch re-fires
-    detection: the standing ci/marketplace-drift issue accumulates a comment per day
-    alert_route: the open issue is the surface; bounded at one dispatch/day by the cron
-  - mode: ruleset silently disabled or bypass set widened
-    detection: the Phase 4 post-apply ruleset probe — on applies only, not daily (see NG5)
-    alert_route: red apply run
+  - mode: wrong bypass actor -> file write 422, ruleset created, run red
+    detection: red merge-triggered run; and scheduled-terraform-drift plans infra/github
+    alert_route: red run at merge time (the merger is watching)
+  - mode: source edited without the paths trigger
+    detection: Guard 3 ETag-polled published diff
+    alert_route: red apply run; next daily check reports MISMATCH
+  - mode: bad source merges and republishes daily (C7)
+    detection: Guard 4 blocks it pre-merge; this mode should be unreachable after Phase 2
+    alert_route: required check on the PR
+  - mode: dispatch accepted but no run starts
+    detection: Phase 6 step 18 run-id poll
+    alert_route: ::error:: + job red + Sentry dispatch conjunct
+  - mode: dispatched apply fails
+    detection: no channel today — see NG7
+    alert_route: NG7
+  - mode: manifest unpublished by a destroy (C16)
+    detection: Guard 3 404 -> fail closed
+    alert_route: red run + daily MISMATCH
 
 logs:
-  where: GitHub Actions run logs for both workflows; Sentry check-ins for the drift monitor
-  retention: GitHub Actions default (90 days); Sentry per its retention
+  where: GitHub Actions run logs (90 days); Sentry check-ins
+  retention: GitHub default
 
 discoverability_test:
   command: >-
-    curl -fsS https://raw.githubusercontent.com/jikig-ai/soleur-marketplace/main/.claude-plugin/marketplace.json
-    | jq -S . > /tmp/pub.json && jq -S . infra/github/soleur-marketplace-manifest.json > /tmp/src.json
-    && diff -u /tmp/src.json /tmp/pub.json && echo MANIFEST_IN_SYNC
+    curl -fsS -H 'Cache-Control: no-cache'
+    https://raw.githubusercontent.com/jikig-ai/soleur-marketplace/main/.claude-plugin/marketplace.json
+    > /tmp/pub.json && diff /tmp/pub.json infra/github/soleur-marketplace-manifest.json
+    && echo MANIFEST_IN_SYNC
   expected_output: "MANIFEST_IN_SYNC"
 ```
 
-The probe's first token is `curl` (on the Check 10 allowlist), needs no credentials, and reads
-the same URL an installer resolves — so it answers the question that matters rather than a proxy.
+Raw `diff`, not `jq -S` — byte identity is the property (C6/L1). Cache-busting header included; a
+reader running this within 300 s of an apply may still see the cached copy, which is why the CI
+verifier polls rather than fetching once.
 
 ## Encryption Posture
 
-Detection fires on `\.tf$`. No persistent data store is introduced and no secret is stored; the
-managed artifact is a **public** manifest in a public repo.
+No persistent store is introduced; the managed artifact is a public manifest.
 
 ```yaml
 at_rest:
-  - store: .claude-plugin/marketplace.json in jikig-ai/soleur-marketplace
+  - store: .claude-plugin/marketplace.json (public repo)
     mechanism: none-required-public-artifact
-    evidence: repo visibility "public" (gh api repos/jikig-ai/soleur-marketplace .private=false);
-      the file's entire content is a plugin pointer, already world-readable over
-      raw.githubusercontent.com
+    evidence: repo visibility public; content is a world-readable plugin pointer
     defends_against: nothing — confidentiality is not a property of this artifact
-    does_not_defend: integrity. Integrity is carried by arm A (ruleset) + arm B (Terraform
-      ownership) + arm C (reconcile), which is what this plan is
+    does_not_defend: integrity, which is what arms A/B/C supply
     disclosed_as: public distribution manifest
-    live_verification: the discoverability_test probe above
-
+    live_verification: the discoverability_test probe
 in_transit:
-  - connection: Terraform (apply-github-infra runner) -> api.github.com contents + rulesets API
-    tls: TLS 1.2+ enforced by api.github.com
-    cert_verification: on (Go stdlib defaults; no -k, no custom transport)
-    does_not_defend: a compromised App private key — the credential is the trust root here
-    disclosed_as: existing GitHub App auth path, unchanged by this plan
-  - connection: scheduled-marketplace-drift runner -> api.github.com (workflow dispatch, NEW)
-    tls: TLS 1.2+ enforced by api.github.com
-    cert_verification: on (gh CLI defaults)
-    does_not_defend: nothing new — the automatic GITHUB_TOKEN is scoped to this repo and to
-      actions:write; no product secret is introduced
+  - connection: Terraform runner -> api.github.com (contents + rulesets)
+    tls: TLS 1.2+; cert_verification: on
+    does_not_defend: a compromised App private key — the trust root
+    disclosed_as: existing GitHub App auth path
+  - connection: drift runner -> api.github.com (workflow dispatch, NEW)
+    tls: TLS 1.2+; cert_verification: on
+    does_not_defend: >-
+      NOT "nothing new" (v1's claim). actions:write permits dispatching ANY workflow in this
+      repo, granted to the workflow explicitly designed around untrusted third-party input.
+      The dispatch target is a literal and the token is repo-scoped, but the grant is broader
+      than the use.
     disclosed_as: internal CI-to-CI dispatch
 ```
-
-No `exception` block: no plaintext exception, no `cert_verification: off`.
-
-## Guard Contract
-
-The deliverable **is** guards, so each carries a property, a structural assembly, and a mutation
-matrix derived from the design rather than from whatever the implementation happens to look like.
-Write the matrices before the guards.
-
-### Guard 1 — Marketplace default-branch ruleset, and the probe that proves it
-
-**Property.** No actor outside the three declared bypass entries can modify
-`refs/heads/main` on `jikig-ai/soleur-marketplace` without a pull request, and the branch cannot
-be deleted or force-pushed.
-
-**Assembly.** The chokepoint is GitHub's ruleset evaluation for that ref — every authenticated
-write passes through it, so it is structural rather than a list. The member set it quantifies
-over is *every actor GitHub will authenticate for a write to that ref*: org members,
-repository collaborators, **and every GitHub App installed org-wide with `contents: write`**.
-Enumerated on 2026-08-12 as `soleur-ai`, `claude`, `entire` — but the assembly is the
-authentication path, not that snapshot, and the guard must not be written against the snapshot.
-The red-driving mechanism is the Phase 4 post-apply probe, which reads the **live ruleset**, not
-the `.tf` file (a config-only check cannot see a dashboard edit).
-
-**Mutation matrix.**
-
-| # | Mutation | Guard must |
-|---|---|---|
-| 1 | Flip `enforcement` to `"disabled"` (or the ruleset is deleted live) | RED — the probe asserts `enforcement == "active"` and fails closed on an empty ruleset list. **Own-dispatch row:** a probe that returns "0 rulesets checked" and exits 0 is vacuous and must fail. |
-| 2 | Add a **4th** `bypass_actors` entry after the three compliant ones | RED — **second-member row.** A probe asserting "OrganizationAdmin is present" or "bypass_actors is non-empty" passes here; only a full canonicalized-set equality catches it. This is the exact widening `audit-ruleset-bypass.sh` exists to catch on the sibling repo. |
-| 3 | Remove the `pull_request` rule, leaving `deletion` + `non_fast_forward` | RED — the probe asserts a rule of type `pull_request` is present, selecting by `.type` (never a positional `.rules[0]`). |
-| 4 | Change `conditions.ref_name.include` to a branch that does not exist | RED — the ruleset is `active` and structurally intact while quantifying over **nothing**. Every "is it enabled" check passes; only the ref-condition assertion catches it. |
-
-### Guard 2 — The reconcile dispatch predicate
-
-**Property.** A reconcile apply is dispatched for exactly those drift verdicts a Terraform apply
-can fix, and never for the one verdict it cannot.
-
-**Assembly.** The `findings` array emitted by the check step — every finding key it can produce
-now *or later*. The chokepoint is the single `if:` expression on the dispatch step. Because the
-assembly is open-ended by design (assertions get added), the predicate must be a **denylist of
-one** (`plugin_manifest_unresolvable`), not an allowlist that silently excludes future members.
-
-**Mutation matrix.** Driven in `scripts/marketplace-drift-check.test.sh`.
-
-| # | Mutation | Guard must |
-|---|---|---|
-| 1 | Force the predicate always-true | RED — a `plugin_manifest_unresolvable`-only verdict must not dispatch (Terraform would rewrite a correct file every tick while the real breakage — a moved `plugins/soleur` — persists). |
-| 2 | Force the predicate always-false | RED — a `version_key_present` verdict must dispatch. |
-| 3 | Add a **new** content finding key, simulating a future assertion | RED **if implemented as an allowlist** — **second-member row.** The denylist passes by construction; this row is what makes the allowlist/denylist choice testable rather than a matter of taste. |
-| 4 | Make the dispatch decision unobservable (step writes no output) | RED — **own-dispatch row.** The suite must fail rather than pass vacuously against a step whose decision it cannot read. |
-| 5 | Reorder so the dispatch precedes the issue file/comment step | RED — evidence must be delivered before remediation erases it. |
-
-### Guard 3 — Published-artifact verifier
-
-**Property.** The content served at
-`raw.githubusercontent.com/jikig-ai/soleur-marketplace/main/.claude-plugin/marketplace.json` is
-byte-identical to `infra/github/soleur-marketplace-manifest.json` at `main`.
-
-**Assembly.** The **published artifact as an installer resolves it** — not Terraform state, not
-the provider's own `content` attribute, not the local file. One fetch-and-diff is the chokepoint.
-
-**Mutation matrix.**
-
-| # | Mutation | Guard must |
-|---|---|---|
-| 1 | Edit the source file without extending `on.push.paths` (the FR5 gap) | RED — the apply never fires and the published content diverges. This is the whole reason the verifier reads the published URL. |
-| 2 | Rewrite the verifier to compare Terraform state instead of the fetched artifact | RED — **own-dispatch row.** A state-only check reports success while publication failed; it must be rejected in review and by the test that pins the probe's source. |
-| 3 | Point `github_repository_file.file` at a different path | RED — the canonical path goes stale while a new path is written; a check scoped to "the resource applied cleanly" passes. |
-| 4 | Delete the published file entirely | RED — the fetch 404s and must report a mismatch, never "no drift" (the existing fail-closed contract). |
-
-## Acceptance Criteria
-
-### Pre-merge (PR)
-
-- **AC1.** `terraform validate` passes on `infra/github/` with both new resources. *(Already
-  demonstrated at plan time against locked 6.12.1 — re-run on the real root.)*
-- **AC2.** `infra/github/soleur-marketplace-manifest.json` is byte-identical to the currently
-  published manifest: `diff <(curl -fsS <raw-url>) infra/github/soleur-marketplace-manifest.json`
-  exits 0.
-- **AC3.** `grep -c 'soleur-marketplace-manifest.json' .github/workflows/apply-github-infra.yml`
-  ≥ 1 **inside the `on.push.paths` list** — assert the anchor, not the bare token
-  (`awk` the `paths:` block, then grep).
-- **AC4.** The `Integration` bypass entry uses `actor_id = 3261325` (App id). A grep for the
-  installation id `122213433` in `ruleset-marketplace-pr-required.tf` returns **0**.
-- **AC5.** `scheduled-marketplace-drift.yml` `permissions:` gains exactly `actions: write`; the
-  workflow still references no secret other than `secrets.GITHUB_TOKEN`
-  (`grep -c 'secrets\.' <file>` counts only `GITHUB_TOKEN` occurrences).
-- **AC6.** `bash scripts/marketplace-drift-check.test.sh` passes, including all five Guard 2
-  mutation rows.
-- **AC7.** `.claude-plugin/marketplace.json` in this monorepo is unmodified:
-  `git diff --name-only origin/main...HEAD -- .claude-plugin/marketplace.json` is empty.
-- **AC8.** ADR-182 contains the corrected reconciliation claim: the string "auto-reconciled by
-  the next apply" no longer appears as an unqualified benefit, and the §Alternatives entries for
-  both options are marked shipped.
-- **AC9.** `model.c4` no longer asserts the marketplace repo "has no CI, no review and no
-  CODEOWNERS" as current state, and a write edge into `soleurMarketplace` exists.
-  `apps/web-platform/test/c4-code-syntax.test.ts` and `c4-render.test.ts` pass.
-- **AC10.** `repository-marketplace.tf`'s `OWNERSHIP BOUNDARY` comment no longer states Terraform
-  does not own the contents.
-- **AC11.** CODEOWNERS contains no row whose path does not resolve:
-  every `^/` path in `.github/CODEOWNERS` either exists or is a glob with ≥1 match.
-- **AC12.** `bash scripts/test-all.sh` green (the full-suite exit gate, which reaches the orphan
-  suites a targeted run misses).
-
-### Post-merge (automatic — no operator step)
-
-- **AC13.** The merge-triggered `apply-github-infra` run is green, and its plan showed
-  `2 to add, 0 to change, 0 to destroy`.
-- **AC14.** `gh api repos/jikig-ai/soleur-marketplace/rulesets` returns the ruleset with
-  `enforcement == "active"` and exactly the three declared bypass actors (Guard 1 rows 1–4).
-- **AC15.** The discoverability probe prints `MANIFEST_IN_SYNC`.
-- **AC16.** A `workflow_dispatch` of `scheduled-marketplace-drift.yml` against an intentionally
-  drifted manifest files the issue **and** triggers an apply that restores it, with the issue
-  body still recording the original findings verbatim (evidence-before-remediation).
-- **AC17.** A simulated `plugin_manifest_unresolvable`-only verdict files an issue and dispatches
-  **nothing**.
 
 ## Risks & Mitigations
 
 | Risk | Mitigation |
 |---|---|
-| Ruleset blocks the App's file write → unattended apply wedges (G4) | The `Integration` bypass ships in the same commit as the ruleset. AC13 is the explicit test. `terraform validate` already confirms the combination is representable. |
-| Auto-remediation destroys forensic evidence | Arm C's step order: issue delivered (findings captured sanitized-verbatim) **then** dispatch. Guard 2 row 5 pins the ordering. The marketplace repo's git history also retains the edit. |
-| The `Integration` bypass widens who can write unreviewed | Net-negative risk. The App can already push that repo unreviewed today, as can `claude` and `entire`. After this change only `soleur-ai` can, and its content originates from a CODEOWNERS-reviewed file. |
-| A reconcile dispatch fires on a transient raw.githubusercontent outage | An apply with no content change is a no-op; the cost is one workflow run. Bounded at one per day by the cron. |
-| Reconcile flapping between Terraform and a human editor | Arm A makes a competing human write require a PR, so the flap cannot form. Revisit only if observed. |
-| Marketplace ruleset drift is not detected daily | Accepted and tracked — NG5. Terraform reverts any widening on the next apply; only detection timeliness is missing. |
-| `overwrite_on_create` clobbers unexpected live content on first apply | AC2 pins the source file byte-identical to what is published, so the first apply is content-neutral; AC15 proves it after the fact. |
+| Wrong bypass id → file write 422 | AC4 + the Guard 1 normalized-set probe. Not a deadlock (C10): red run, recoverable by a normal merge; the rulesets API is not gated by the ruleset. |
+| A destroy unpublishes the manifest (C16) | Stated in the FR12 comment and here; FR15 destroy-guard fixture; `[ack-destroy]` is a deliberate one-line act. |
+| Bypass comparison false-drifts every apply (C5) | `0→null` normalization per SE-1; canonical JSON beside its siblings. |
+| Verifier vacuous behind the CDN (C6) | ETag poll with cache-busting. |
+| Bad source republished forever (C7) | Guard 4 blocks it pre-merge. |
+| Founder locked out | Measured: human bypass at `always` preserves direct push. The probe is the evidence. |
+| Two Apps colluding to approve each other's PR | Residual, stated. `deletion`/`non_fast_forward` unaffected. NG6 removes it entirely if taken. |
+| Arm C applies the whole root (C11) | Destroy guard fails closed; deterministic from `main`. |
 
 ## Non-Goals
 
-- **NG1.** Retiring the legacy `jikig-ai/soleur` marketplace entry — #7489. This plan does not
-  touch `.claude-plugin/marketplace.json` in this monorepo (AC7 pins that).
-- **NG2.** Adding CI or CODEOWNERS *inside* `soleur-marketplace`. Arm B makes it unnecessary.
-- **NG3.** A `schedule:` on `apply-github-infra.yml` — see the Cut List; it erases evidence
-  before the drift check observes it.
-- **NG4.** Generalising `import_ruleset` to accept a repo argument. Not needed (arm A is a pure
-  create); recorded as a Sharp Edge for whoever first needs to *adopt* a marketplace ruleset.
-- **NG5.** Extending `audit-ruleset-bypass.sh` to cover the marketplace ruleset. Spans a
-  337-line CODEOWNERS-pinned script, a 929-line test suite, and the Inngest function that now
-  runs it. **File a tracking issue** with re-evaluation trigger: *"when a second Terraform-managed
-  ruleset exists outside `jikig-ai/soleur`, or when the marketplace ruleset is observed drifting
-  once."* Residual exposure is timeliness only.
+- **NG1.** Retiring the legacy marketplace entry — #7489.
+- **NG2.** CI/CODEOWNERS inside `soleur-marketplace` — arm B + Guard 4 make it unnecessary.
+- **NG3.** A `schedule:` on the apply workflow — see Cut List.
+- **NG4.** Generalising `import_ruleset`.
+- **NG5.** Extending `audit-ruleset-bypass.sh` to the marketplace ruleset (337-line script,
+  929-line suite, plus the Inngest function). **Justification (C3):**
+  `scheduled-terraform-drift.yml:47` already plans `infra/github`, so a widened bypass, a disabled
+  ruleset or a deletion surfaces as a plan diff there. Residual is timeliness, and the coupling
+  caveat: that workflow is `workflow_dispatch`-only, Inngest-driven — the dependency the drift
+  workflow's own gate-override §(i) refuses. **Trigger:** a second Terraform-managed ruleset outside
+  `jikig-ai/soleur`, or one observed ruleset drift.
+- **NG6.** Narrowing the `claude` / `entire` App installations to selected repositories. Removes the
+  threat rather than gating it, at zero Terraform cost; rejected here because it is not IaC-declared,
+  drifts silently, and adds a step per new repo. **File as a tracked issue** — it is the only option
+  that fully closes the two-App collusion residual.
+- **NG7.** An alert channel for a failed `apply-github-infra` run. Today nothing outside the
+  workflow notifies; the merge path relies on the merger watching, which does not hold for arm C's
+  dispatched runs. **File as a tracked issue**; `hr-observability-as-plan-quality-gate` applies.
 
 ## Domain Review
 
-**Domains relevant:** Engineering, Legal, Product
-
-Carried forward from the brainstorm's `## Domain Assessments` (recorded inline by the
-orchestrator at the operator's direction — the two deferral triggers were factual infrastructure
-questions answered against the live GitHub API, not assessment questions).
+**Domains relevant:** Engineering, Legal, Product — carried from the brainstorm.
 
 ### Engineering
-
-**Status:** reviewed
-**Assessment:** The A↔B apply-time deadlock and the `paths:` glob gap are the two defects that
-would otherwise ship silently; both are structural rather than judgement calls. The reconcile
-dispatch is safe because the apply is deterministic from this repo's `.tf` files at `main` and
-never consumes the drifted (untrusted) manifest body.
+**Status:** reviewed. Six-reviewer panel run at plan time; 20 defects corrected (§Panel
+Corrections). The bypass semantics that decide arm A's shape were measured on a disposable repo
+rather than reasoned about, after two reviewers reached opposite conclusions from the same docs.
 
 ### Legal
-
-**Status:** reviewed
-**Assessment:** No new processing surface, no personal data, no vendor terms. Strengthens the
-supply-chain integrity posture already described to alpha testers; creates and discharges no
-disclosure obligation.
+**Status:** reviewed. No new processing surface, no personal data, no vendor terms.
 
 ### Product
-
-**Status:** reviewed
-**Assessment:** Invisible to users when it works, which is correct for a distribution-integrity
-control. No change to install or update UX. The only new user-visible failure mode is a botched
-apply breaking `marketplace add`, bounded by the destroy guard, `archive_on_destroy`, and AC13.
+**Status:** reviewed. Invisible when it works. The one user-visible failure mode it can introduce is
+an unpublished or stale manifest breaking `marketplace add`; C16, Guard 3 and Guard 4 bound it.
 
 ### Product/UX Gate
-
-Not applicable — no file in `## Files to Create` or `## Files to Edit` matches a UI-surface path
-(no `components/**/*.tsx`, no `app/**/page.tsx`, no `app/**/layout.tsx`, no email template).
-Tier: **NONE**.
+Tier **NONE** — no UI-surface path in Files to Create/Edit.
 
 ## Files to Create
 
 - `infra/github/ruleset-marketplace-pr-required.tf`
 - `infra/github/soleur-marketplace-manifest.json`
+- `scripts/marketplace-ruleset-canonical-bypass-actors.json`
+- a source-validation script for Guard 4 (Phase 2)
 
 ## Files to Edit
 
-- `infra/github/repository-marketplace.tf` — ownership-boundary comment (FR12)
-- `infra/github/README.md` — new resources + the A↔B bypass dependency
-- `.github/workflows/apply-github-infra.yml` — `on.push.paths` (FR5) + post-apply verifiers (FR11)
-- `.github/workflows/scheduled-marketplace-drift.yml` — `actions: write`, dispatch step, denylist
-  predicate, header prose (arm C, FR8, FR9)
-- `scripts/marketplace-drift-check.test.sh` — Guard 2 mutation matrix
-- `knowledge-base/engineering/architecture/decisions/ADR-182-keyless-manifests-and-a-dedicated-marketplace-source.md` — FR10
-- `knowledge-base/engineering/architecture/diagrams/model.c4` — description + edge label + new write edge
-- `.github/CODEOWNERS` — stale row (FR13)
+- `infra/github/repository-marketplace.tf` (FR12 + C16)
+- `infra/github/README.md`
+- `.github/workflows/apply-github-infra.yml` (paths, both verifiers)
+- `.github/workflows/scheduled-marketplace-drift.yml` (arm C, heartbeat repair, issue body,
+  gate-override (ii)/(iii), predicate output)
+- `.github/workflows/ci.yml` (Guard 4 required check)
+- `scripts/marketplace-drift-check.test.sh`
+- `tests/scripts/test-destroy-guard-counter.sh` + fixture (FR15)
+- `knowledge-base/engineering/architecture/decisions/ADR-182-keyless-manifests-and-a-dedicated-marketplace-source.md`
+- `knowledge-base/engineering/architecture/diagrams/model.c4`
+- `.github/CODEOWNERS`
 
 ## Test Scenarios
 
-Every scenario is of the shape *mutation → guard reddens*, not *command → terminal output* —
-the deliverable is guards, so the scenarios must test the guards.
+Every scenario is *mutation → guard reddens*. Guard 1's rows run against recorded ruleset JSON
+fixtures; the rest run in the existing harnesses.
 
-1. `enforcement: disabled` on the live ruleset → post-apply probe fails (Guard 1.1)
-2. Empty ruleset list → probe fails closed rather than reporting 0-checked-OK (Guard 1.1)
-3. 4th bypass actor added → canonical-set comparison fails (Guard 1.2)
-4. `pull_request` rule removed → type-selected assertion fails (Guard 1.3)
-5. `ref_name.include` points at a nonexistent branch → condition assertion fails (Guard 1.4)
-6. Predicate forced true + `plugin_manifest_unresolvable`-only findings → no dispatch expected, test fails (Guard 2.1)
-7. Predicate forced false + `version_key_present` → dispatch expected, test fails (Guard 2.2)
-8. New content finding key injected → allowlist implementation fails, denylist passes (Guard 2.3)
-9. Dispatch decision unobservable → suite fails rather than passing (Guard 2.4)
-10. Dispatch moved before issue delivery → ordering assertion fails (Guard 2.5)
-11. Source file edited, `paths:` not extended → published-artifact diff fails (Guard 3.1)
-12. Verifier rewritten to read Terraform state → pinned-source assertion fails (Guard 3.2)
-13. `file` attribute repointed → canonical path diff fails (Guard 3.3)
-14. Published file deleted → fetch 404 reports mismatch, not "no drift" (Guard 3.4)
+1. `enforcement: disabled` → probe fails (G1.1)
+2. Empty ruleset list → fail closed, not 0-checked-OK (G1.1)
+3. 4th bypass actor → normalized-set equality fails (G1.2)
+4. `required_approving_review_count: 0` → probe fails (G1.3 — v1's defect)
+5. `deletion`/`non_fast_forward` cleared → probe fails (G1.4)
+6. `ref_name.include` bogus → condition assertion fails (G1.5)
+7. Bypass fixture with `actor_id: 0` vs API `null` → normalization makes them equal, no false drift (C5)
+8. Predicate forced true, GET-2-only verdict → no dispatch expected (G2.1)
+9. Predicate forced false, `version_key_present` → dispatch expected (G2.2)
+10. New `plugin_manifest_*` key → prefix denylist holds, two-key list fails (G2.3)
+11. Mixed verdict → must dispatch; unanchored `contains()` fails (G2.4)
+12. Dispatch decision unobservable → suite fails (G2.5)
+13. Dispatch given `always()` or moved before issue delivery → fails (G2.6)
+14. Published ≠ source by any cause → diff fails, 404 fail-closed (G3.1)
+15. Verifier reading state → rejected (G3.2)
+16. Single un-busted fetch → passes against cache, must be rejected (G3.3)
+17. Source with a `version` key → required check blocks the merge (G4.1)
+18. `source.url`/`path`/`source` changed in source → blocked (G4.2)
+19. Second `plugins[]` entry appended → blocked (G4.3)
+20. Guard 4 wired non-blocking or empty file list → fails (G4.4)
+21. `github_repository_file` replacement plan → `resource_deletes` trips the destroy guard (FR15/C16)
