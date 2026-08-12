@@ -370,10 +370,17 @@ fi
 # The four measured evidence classes are printed as COUNTS because the gc start/complete RATIO is
 # the discriminator the downstream disk-attribution question needs: a stalled gc emits a start with
 # no completion, and that ratio is unreadable from a channel that admits only completions.
-n_gc_start=$(printf '%s\n' "$envelope_hits" | grep -cF 'executing gc' || true)
-n_gc_done=$(printf '%s\n' "$envelope_hits" | grep -cF 'gc successfully completed' || true)
-n_gc_blobs=$(printf '%s\n' "$envelope_hits" | grep -cF 'garbage collected blobs' || true)
-n_patch=$(printf '%s\n' "$envelope_hits" | grep -cF 'PatchBlobUpload' || true)
+# ANCHORED ON THE PARSED message FIELD, matching the producer (#7444 R33). is_cap_exempt keys on
+# zerolog's `.message`, which is what closed the bypass where any client sending
+# `User-Agent: executing gc` bought cap exemption for every one of its request lines. The reader
+# counted the same four classes with a bare `grep -cF` over the WHOLE row, so that string in a
+# header still counted here — byte-identical literals, different semantics, no gate between them.
+# sanitize() strips quotes, so a shipped zerolog row renders `message:executing gc` while a
+# header-borne one renders `User-Agent:[executing gc]` with `message:HTTP API`.
+n_gc_start=$(printf '%s\n' "$envelope_hits" | grep -cF 'message:executing gc' || true)
+n_gc_done=$(printf '%s\n' "$envelope_hits" | grep -cF 'message:gc successfully completed' || true)
+n_gc_blobs=$(printf '%s\n' "$envelope_hits" | grep -cF 'message:garbage collected blobs' || true)
+n_patch=$(printf '%s\n' "$envelope_hits" | grep -cF 'message:PatchBlobUpload' || true)
 for v in n_gc_start n_gc_done n_gc_blobs n_patch; do
   [[ "${!v}" =~ ^[0-9]+$ ]] || eval "$v=0"
 done

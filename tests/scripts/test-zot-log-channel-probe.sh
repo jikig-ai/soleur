@@ -75,9 +75,9 @@ _final_gate() {
   fi
   _tally
   local ran=$(( PASS + FAIL ))
-  if [[ "$ran" -lt "68" ]]; then
+  if [[ "$ran" -lt "70" ]]; then
     FAIL=$(( FAIL + 1 ))
-    echo "  FAIL: assertion floor — ran $ran assertions, expected >= 68"
+    echo "  FAIL: assertion floor — ran $ran assertions, expected >= 70"
     echo "        (suite truncated, or assert() neutered — this run certified nothing)"
   fi
   echo ""
@@ -344,6 +344,22 @@ row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV level:error,message:upst
 run_probe "$C8C_LOG" "$C1_CTL"
 assert "C8c a Doppler service-token shape -> exit 1" \
   "[[ '$CASE_RC' -eq 1 ]] && grep -q 'token_or_hash_shaped_rows=1' <<<\"\$CASE_OUT\""
+
+# --- C15: evidence-class counts key on the PARSED field, like the producer (#7444 R33) ----
+# is_cap_exempt matches zerolog's .message; the reader counted the same four literals over the
+# WHOLE row, so a header-borne "executing gc" counted downstream even though the producer had
+# stopped exempting it. Byte-identical literals, different semantics. One real gc row and one
+# header-borne decoy: the count must be 1, not 2.
+C15_LOG="$TMP/c15.log"; : > "$C15_LOG"
+for _ in $(seq 1 29); do envelope_row >> "$C15_LOG"; done
+row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV {level:info,message:executing gc,component:gc,caller:zotregistry.dev/zot/v2/pkg/api/x.go:1}" >> "$C15_LOG"
+row "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=$HOSTV {level:info,message:HTTP API,headers:{User-Agent:[executing gc]},caller:zotregistry.dev/zot/v2/pkg/api/x.go:2}" >> "$C15_LOG"
+C15_CTL="$TMP/c15.ctl"; control_row "$DRIFTED_BOOT" 0 > "$C15_CTL"
+run_probe "$C15_LOG" "$C15_CTL"
+assert "C15 a header-borne 'executing gc' is NOT counted as gc evidence (gc_start=1, not 2)" \
+  "grep -qE 'gc_start=1( |\\))' <<<\"\$CASE_OUT\""
+assert "C15 the genuine gc row IS counted (non-vacuity: the count is not simply zero)" \
+  "! grep -qE 'gc_start=0( |\\))' <<<\"\$CASE_OUT\""
 
 # --- C14: the boot marker is queried on its OWN window (#7444 R32) ------------------------
 # It fires once at provision; reading it out of the 30m --no-archive hot window made the field
