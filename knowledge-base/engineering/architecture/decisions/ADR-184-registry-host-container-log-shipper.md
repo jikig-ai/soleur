@@ -6,7 +6,7 @@ amends: [ADR-172]
 related_adrs: [ADR-062, ADR-096, ADR-130, ADR-143, ADR-151, ADR-172]
 related: [7440]
 related_plans:
-  - knowledge-base/project/plans/2026-08-11-fix-registry-zot-log-shipping-plan.md
+  - knowledge-base/project/plans/archive/20260812-194844-2026-08-11-fix-registry-zot-log-shipping-plan.md
 related_specs:
   - knowledge-base/project/specs/feat-one-shot-7440-zot-log-shipping/session-state.md
 brand_survival_threshold: single-user incident
