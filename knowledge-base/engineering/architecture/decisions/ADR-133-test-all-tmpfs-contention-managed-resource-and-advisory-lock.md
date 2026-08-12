@@ -236,3 +236,44 @@ simultaneously. One run measures the *uncontended* case while the lock protects 
 one, so n=1 clears no honest bar for replacing a mutex. Tracked at #7454 item 3.
 
 The named follow-up candidate is a headroom **bypass on top of** the mutex, not a replacement.
+
+## Addendum — 2026-08-12 (#7484): the wait is now measured, not asserted
+
+The addendum above rests on an observation — "the run queued for the **full 900 s**" — that the
+instrument of the day could not actually produce. `tc_acquire` printed
+`LOCK_CONTENDED_PROCEEDING: '<name>' still held after ${timeout_s}s` unconditionally on every
+non-zero return from `acquire_lock`, so the duration in that line was the *budget it was handed*,
+never the time it waited. The 900 s figure was recovered by other means; the banner would have
+printed it either way.
+
+Worse, `acquire_lock` returns the same `99` for "waited the whole budget" and for
+"`flock(1)` is not installed" — so a run that never waited at all reported as contention, and then
+stated a duration for a wait that had not happened. `work/SKILL.md` instructs an agent to grep that
+line to decide whether a RED is trustworthy, which made the false statement load-bearing.
+
+**What changed** (confined to `scripts/lib/test-contention.sh`; `test-all.sh` and
+`session-state.sh` are untouched):
+
+- Both post-wait banners now report the elapsed **measured** across the `acquire_lock` call —
+  `LOCK_ACQUIRED: '<name>' after <N>ms` and
+  `LOCK_CONTENDED_PROCEEDING: '<name>' — gave up after <N>ms of <timeout_s>s`. Where timing is
+  unavailable the banner prints `unknown`, never a fabricated `0ms`: a zero is indistinguishable
+  from a lock that was free, which would re-introduce the same defect one branch over.
+- The `rc=99` ambiguity is removed **at its source** by a `command -v flock` precheck emitting the
+  existing `LOCK_UNAVAILABLE`. This is exact where an elapsed-time threshold would be approximate,
+  and it needs no new outcome name — a missing `flock` is the same class as the two
+  `LOCK_UNAVAILABLE` cases already there: the serialization layer is absent.
+- `LOCK_WAITING` is emitted after every skip path, so its presence is a fact about control flow
+  ("this run reached the wait") and a long block reads as a queue rather than a hang.
+- Both banner **tokens** are byte-identical. Only post-colon text moved, so this ADR's own
+  vocabulary, `work/SKILL.md`'s contention grep and the existing arms all still match.
+
+Every `tc_acquire` exit path still returns `0`. That is Decision 3's fail-open contract and it is now
+asserted structurally over the function body, not merely exercised by the arms that happen to reach
+it: an instrument that could wedge the run it observes would violate the contract it exists to serve.
+
+**What this does NOT settle.** Contended observations are **right-censored** at the fixed budget, so
+they cannot answer "would a longer wait have succeeded?" — and the short-circuit-on-holder-age
+candidate is parameterised by the *holder's* remaining run, while every duration here is the
+*waiter's*. The mechanism question the addendum above opened therefore remains open on the same
+terms; this change makes the waiter's side of it a measured quantity rather than an inferred one.
