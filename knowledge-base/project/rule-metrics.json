@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-08-03T10:27:32Z",
+  "generated_at": "2026-08-12T08:48:40Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -42,7 +42,7 @@
       "rule_text_prefix": ""
     },
     {
-      "id": "cq-agents-md-tier-gate",
+      "id": "cq-ac-must-not-depend-on-concurrent-sessions",
       "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
@@ -55,7 +55,7 @@
       "rule_text_prefix": ""
     },
     {
-      "id": "cq-agents-md-why-single-line",
+      "id": "cq-agents-md-tier-gate",
       "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
@@ -718,6 +718,19 @@
       "rule_text_prefix": ""
     },
     {
+      "id": "hr-third-party-content-grep-on-undertaking",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
       "id": "hr-type-widening-cross-consumer-grep",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -1303,6 +1316,19 @@
       "rule_text_prefix": ""
     },
     {
+      "id": "cq-agents-md-why-single-line",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 1,
+      "warn_count": 0,
+      "fire_count": 1,
+      "prevented_errors": 0,
+      "last_hit": "2026-08-12T08:46:04Z",
+      "first_seen": "2026-08-12T08:46:04Z",
+      "rule_text_prefix": ""
+    },
+    {
       "id": "hr-weigh-every-decision-against-target-user-impact",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -1311,14 +1337,14 @@
       "warn_count": 0,
       "fire_count": 1,
       "prevented_errors": 0,
-      "last_hit": "2026-08-03T10:07:15Z",
-      "first_seen": "2026-08-03T10:07:15Z",
+      "last_hit": "2026-08-12T08:30:17Z",
+      "first_seen": "2026-08-12T08:30:17Z",
       "rule_text_prefix": ""
     }
   ],
   "summary": {
-    "total_rules_tagged": 101,
-    "rules_unused_over_8w": 100,
+    "total_rules_tagged": 103,
+    "rules_unused_over_8w": 101,
     "rules_bypassed_over_baseline": 0,
     "orphan_rule_ids": [],
     "gate_exemptions": [],
@@ -1329,6 +1355,8 @@
     "gate_zero_tagged_warn_count": 0,
     "drops_jq_fail_count": 0,
     "drops_rotation_fail_count": 0,
+    "grep_rewrite_fault_count": 0,
+    "grep_rewrite_fault_reasons": {},
     "hook_input_fault_count": 0,
     "hook_input_fault_reasons": {}
   }
