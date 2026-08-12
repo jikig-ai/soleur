@@ -5,6 +5,11 @@ Recorded headless by `soleur:plan`. `ship` renders these into the PR body and fi
 direction**, or where a sign-off is outstanding. The operator's direction is the default; these
 are surfaced for a decision, not applied silently.
 
+> **All three items were put to the operator on 2026-08-12, before implementation began, and are
+> DISCHARGED.** Dispositions are recorded inline below and in `session-state.md`. `ship` should
+> render them as *resolved* — it must **not** file an `action-required` issue for UC1, UC2 or SO1.
+> They are not to be re-litigated by a downstream reviewer.
+
 ---
 
 ## UC1 — The plan does not use `continue-on-error` on the verify step
@@ -41,6 +46,11 @@ implemented with all seven downstream conditions re-wired. The plan's primary ac
 (the gate still fails closed) is met either way; the deviation is about which shape has the
 smaller surface for getting it wrong.
 
+**DISPOSITION (operator, 2026-08-12): deviation ACCEPTED.** The verify step stays fail-closed by its
+own exit code, with the bounded re-push performed inside it. Points 2, 3 and 4 of the issue's
+suggested shape are honoured as written. `continue-on-error` must **not** appear on the verify step
+(tasks 6.6); the seven downstream status-keyed conditions are left untouched.
+
 ---
 
 ## UC2 — Scope grew beyond the re-POST recovery, and the growth is not optional
@@ -66,6 +76,11 @@ split, the natural cut line is after the discriminator work: PR-A ships `DPF_REP
 saved-plan + host-vs-host freshness (a bug fix for live false-reds, independently valuable), and
 PR-B ships the bounded re-push on top. Shipping the re-push *first* is not an option.
 
+**DISPOSITION (operator, 2026-08-12): SPLIT CONFIRMED — and both PRs ship in this run**, as two
+sequential cycles: PR-A through full review/QA/ship first, then PR-B on top. Shipping PR-A alone
+was explicitly rejected because it would leave the reported defect unfixed. Consequence for
+`ship`: **`Closes #7104` attaches to PR-B, not PR-A.** PR-A references #7104 in prose only.
+
 ---
 
 ## SO1 — CPO sign-off is outstanding
@@ -83,6 +98,10 @@ remediation channel.
 **What the operator is being asked.** Confirm the threshold and provide the sign-off, or downgrade
 the threshold to `aggregate pattern` with a reason. `user-impact-reviewer` is invoked at review
 time either way.
+
+**DISPOSITION (operator, 2026-08-12): threshold CONFIRMED at `single-user incident`; sign-off
+GRANTED.** `requires_cpo_signoff` is discharged — no outstanding sign-off remains.
+`user-impact-reviewer` still runs at review time, as specified.
 
 ---
 
