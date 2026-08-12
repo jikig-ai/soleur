@@ -71,16 +71,69 @@ JOURNALD_DROPIN="/etc/systemd/journald.conf.d/10-zot-log-shipper.conf"
 TEST_INGEST_URL="https://s0000000.eu-fsn-3.example-ingest.invalid/"
 TEST_HOST="soleur-registry"
 
-PASS=0
-FAIL=0
+# COUNTERS ARE DERIVED FROM AN EMITTED RECORD, never from two increments (#7444 R6).
+# A floor over PASS+FAIL certifies the number of assert CALLS, not that any condition was
+# evaluated: moving the increment from the else-branch to the if-branch yields
+# "=== N passed, 0 failed ===" at rc=0 with N literal "FAIL:" lines on screen, and the
+# fully count-preserving form (never evaluate $cond, just increment PASS) does the same.
+# Both are one-token edits. Deriving each verdict from a line appended at decision time
+# makes the count a function of what actually happened.
+RESULTS="$(mktemp)" || { echo "FATAL: mktemp failed" >&2; exit 2; }
 assert() {
   local desc="$1" cond="$2"
-  if eval "$cond"; then PASS=$((PASS + 1)); echo "  PASS: $desc"
-  else FAIL=$((FAIL + 1)); echo "  FAIL: $desc"; echo "        condition: $cond"; fi
+  if eval "$cond"; then printf 'PASS\n' >> "$RESULTS"; echo "  PASS: $desc"
+  else printf 'FAIL\n' >> "$RESULTS"; echo "  FAIL: $desc"; echo "        condition: $cond"; fi
+}
+_tally() { PASS=$(grep -cx PASS "$RESULTS" || true); FAIL=$(grep -cx FAIL "$RESULTS" || true); }
+
+# HARNESS CANARY. Verifies the instrument before trusting any verdict it produces: one
+# assertion that MUST fail and one that MUST pass, both required to register, then the
+# record is reset. Without this, a neutered assert() is indistinguishable from a clean run.
+assert "canary: a false condition MUST register as FAIL" "false"
+assert "canary: a true condition MUST register as PASS"  "true"
+_tally
+if [[ "$FAIL" -ne 1 || "$PASS" -ne 1 ]]; then
+  echo "FATAL: harness canary did not register (PASS=$PASS FAIL=$FAIL) — assert() is neutered;" >&2
+  echo "       every verdict from this run would be meaningless." >&2
+  exit 2
+fi
+: > "$RESULTS"
+CANARY_OK=1
+echo "  [canary ok] assert() registers both verdicts"
+
+# The floor + gate run from an EXIT trap declared HERE, not at EOF (#7444 R7). At EOF they are
+# deleted by the very tail-truncation they exist to detect: cutting the suite from T5 onward
+# removed the floor, the gate and the summary line, and the runner saw only rc=0.
+_final_gate() {
+  local rc=$?
+  [[ "$rc" -eq 2 ]] && return   # FATAL paths already reported
+  # The canary must be LOAD-BEARING, not merely present: without this check, deleting the
+  # canary block is itself an undetected mutation that re-opens the count-preserving
+  # assert() neutering the canary exists to catch. Measured — M4 in the battery.
+  if [[ "${CANARY_OK:-0}" != "1" ]]; then
+    echo "  FAIL: harness canary did not run — assert() is unverified for this whole run" >&2
+    echo ""; echo "=== 0 passed, 1 failed ==="
+    rm -f "$RESULTS"; rm -rf "$TMP"; exit 1
+  fi
+  _tally
+  local ran=$(( PASS + FAIL ))
+  if [[ "$ran" -lt "131" ]]; then
+    FAIL=$(( FAIL + 1 ))
+    echo "  FAIL: assertion floor — ran $ran assertions, expected >= 131"
+    echo "        (suite truncated, or assert() neutered — this run certified nothing)"
+  fi
+  echo ""
+  echo "=== $PASS passed, $FAIL failed ==="
+  rm -f "$RESULTS"; rm -rf "$TMP"
+  [[ "$FAIL" -eq 0 ]] || exit 1
+  exit 0
 }
 
 TMP="$(mktemp -d)" || { echo "FATAL: mktemp -d failed (TMPDIR=$TMPDIR)" >&2; exit 2; }
-trap 'rm -rf "$TMP"' EXIT
+# ONE trap: bash keeps only the LAST handler per signal, so a second
+# `trap ... EXIT` line would silently discard the gate. Cleanup happens
+# inside _final_gate, before it exits.
+trap '_final_gate' EXIT
 
 echo "=== registry zot container-log shipper (#7440) tests ==="
 assert "cloud-init-registry.yml exists" "[[ -f '$CI' ]]"
@@ -795,24 +848,3 @@ assert "T18 it ships nothing rather than shipping empty rows" \
 assert "T18 the template also re-ensures jq in runcmd (packages: alone is non-fatal)" \
   "grep -qE 'dpkg -s jq.*apt-get install -y jq' '$CI'"
 
-# ASSERTION FLOOR (#7444 F-4). An ABSOLUTE LITERAL, never derived from the run it guards: a
-# floor computed from this suite's own output is reduced by the exact truncation it exists to
-# detect. It increments FAIL rather than exiting, so the miss is reported through the same
-# channel as every other failure and the gate below stays the single exit point.
-#
-# Without it, `assert() { return 0; }` and "delete everything from T5 onward" both yield a
-# summary line and rc=0 — CI-green on a suite that asserted nothing. Neither runner catches it:
-# run_suite branches solely on `if ! "$@"`, and the workflow step is pure rc.
-#
-# Raise this literal in the same commit that adds assertions.
-MIN_ASSERTIONS=131
-RAN=$(( PASS + FAIL ))
-if [[ "$RAN" -lt "$MIN_ASSERTIONS" ]]; then
-  FAIL=$(( FAIL + 1 ))
-  echo "  FAIL: assertion floor — ran $RAN assertions, expected >= $MIN_ASSERTIONS"
-  echo "        (suite truncated, or assert() neutered — this run certified nothing)"
-fi
-
-echo ""
-echo "=== $PASS passed, $FAIL failed ==="
-[[ "$FAIL" -eq 0 ]] || exit 1
