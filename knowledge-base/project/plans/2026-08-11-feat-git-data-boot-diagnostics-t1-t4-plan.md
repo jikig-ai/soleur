@@ -530,10 +530,14 @@ mutation-proven:
 after), no new `producer | grep -q`, correct ADR figures, and no `HOST_NAME` injection
 surface.
 
-**Pre-existing, filed separately:** `git-data-birth-readiness-gate.sh` discounts 2 module
-`.tf` files while its glob adds 3, so `_n_resolved` (11) exceeds the ref count (9) and the
-hash derivation aborts. Reproduced on `origin/main`; it blocks #6977's birth path and is not
-this PR's to fix.
+**Pre-existing, filed as #7485:** `git_data_rung2_user_data_sha256()` in
+`tests/scripts/lib/git-data-birth-readiness-gate.sh` aborts on a correct tree. Its
+referenced-vs-resolved check discounts a fixed 2 (`cloud-init` + `main.tf`) while a later
+glob also feeds `_inputs` the module's 2 sibling `.tf` files, so `_n_resolved` lands at 11
+against 9 refs. Reproduced on a pristine `origin/main` archive using the production call
+signature (one arg, as `git-data-rung2-evidence-capture.sh:333` calls it) — rc=1. It is
+fail-closed, so nothing hashes wrongly; it blocks #6977's birth path and is not this PR's to
+fix.
 
 
 ## Non-Goals
