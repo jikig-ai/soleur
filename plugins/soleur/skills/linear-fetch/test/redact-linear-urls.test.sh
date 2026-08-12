@@ -16,6 +16,15 @@
 
 set -euo pipefail
 
+# Owning trap (ADR-129). These files allocated tempfiles with no cleanup for as long as they
+# sat under scripts/, where no runner reached them; relocating them into test/ put them in
+# the lint's scope and surfaced it.
+_LF_TMPS=()
+_lf_cleanup() { [[ ${#_LF_TMPS[@]} -gt 0 ]] && rm -f "${_LF_TMPS[@]}"; return 0; }
+trap _lf_cleanup EXIT INT TERM HUP
+_lf_mktemp() { local t; t="$(mktemp)" || return 1; _LF_TMPS+=("$t"); printf '%s' "$t"; }
+
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)"
 SCRIPT="$SCRIPT_DIR/redact-linear-urls.sh"
 
@@ -35,7 +44,7 @@ fi
 run_redact() {
   local input="$1"
   local err_file
-  err_file="$(mktemp)"
+  err_file="$(_lf_mktemp)"
   OUT="$(printf '%s' "$input" | bash "$SCRIPT" 2>"$err_file")"
   ERR="$(cat "$err_file" | tr -d '[:space:]')"
   rm -f "$err_file"

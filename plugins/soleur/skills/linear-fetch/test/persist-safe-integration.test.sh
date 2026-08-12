@@ -25,6 +25,15 @@
 
 set -eu
 
+# Owning trap (ADR-129). These files allocated tempfiles with no cleanup for as long as they
+# sat under scripts/, where no runner reached them; relocating them into test/ put them in
+# the lint's scope and surfaced it.
+_LF_TMPS=()
+_lf_cleanup() { [[ ${#_LF_TMPS[@]} -gt 0 ]] && rm -f "${_LF_TMPS[@]}"; return 0; }
+trap _lf_cleanup EXIT INT TERM HUP
+_lf_mktemp() { local t; t="$(mktemp)" || return 1; _LF_TMPS+=("$t"); printf '%s' "$t"; }
+
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)"
 REDACT="$SCRIPT_DIR/redact-linear-urls.sh"
 RENDER="$SCRIPT_DIR/render-caller-template.sh"
@@ -71,7 +80,7 @@ synth_count=$({ grep -oE 'uploads\.linear\.app' <<<"$SYNTH" || true; } | wc -l |
 # Step 2: run through redaction primitive (Phase D persist_safe_summary).
 # --------------------------------------------------------------------
 echo "Test 2: redaction primitive on full blob"
-err_file=$(mktemp)
+err_file=$(_lf_mktemp)
 PERSIST_SAFE=$(printf '%s' "$SYNTH" | bash "$REDACT" 2>"$err_file")
 REDACT_COUNT=$(cat "$err_file" | tr -d '[:space:]')
 rm -f "$err_file"
