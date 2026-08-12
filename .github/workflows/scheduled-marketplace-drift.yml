@@ -29,9 +29,15 @@
 # The three assertions, and why each earns its place:
 #
 #   1. `.plugins[0]` MUST NOT HAVE A `version` KEY. This is the highest-value assertion and the
-#      reason the workflow exists. The presence of a version key suppresses `gitCommitSha`
-#      tracking, so a ONE-LINE hand edit adding `"version": "..."` silently reverts #7471 for
-#      every new install — with no error, no failed install, and no visible symptom. The revert
+#      reason the workflow exists. `claude plugin update` compares version STRINGS; with no
+#      version key the CLI records the plugin's commit SHA as its version, so the string changes
+#      with every commit and the update is detected. A constant version never changes, so the
+#      comparison always comes back equal and the update short-circuits — reporting "already at
+#      the latest version" and exiting 0 having delivered nothing. So a ONE-LINE hand edit adding
+#      `"version": "..."` silently reverts #7471 for every install — with no error, no failed
+#      install, and no visible symptom. (Mechanism measured in measurements.md §1.9; an earlier
+#      draft of this file said a version key "suppresses gitCommitSha tracking", which is FALSE —
+#      both arms of the controlled experiment recorded a SHA.) The revert
 #      is easy, invisible, and total; that asymmetry is what makes an automated assertion the
 #      only workable control.
 #   2. `.plugins[0].source.path` AND `.source.url`. The entry serves `plugins/soleur` out of
@@ -120,7 +126,7 @@ jobs:
           # still reports on the first tick.
           manifest=""
           rc=0
-          manifest="$(curl -fsSL --max-time 20 --retry 3 --retry-delay 5 --retry-connrefused "$MANIFEST_URL")" || rc=$?
+          manifest="$(curl -fsS --proto '=https' --max-redirs 0 --max-time 20 --retry 3 --retry-delay 5 --retry-connrefused "$MANIFEST_URL")" || rc=$?
 
           if [[ "$rc" -ne 0 ]]; then
             findings+=("manifest_fetch_failed: curl exited ${rc} for ${MANIFEST_URL}; no body was read, so no assertion below could be evaluated")
@@ -141,7 +147,7 @@ jobs:
               # value from a failed jq invocation reports as drift instead of as a pass.
               has_version="$(jq -r '.plugins[0] | has("version") | tostring' <<<"$manifest" 2>/dev/null)"
               if [[ "$has_version" != "false" ]]; then
-                findings+=("version_key_present: .plugins[0] | has(\"version\") is '$(sanitize "$has_version")', expected 'false'. A version key suppresses gitCommitSha tracking, so every NEW install silently stops tracking the branch tip (#7471)")
+                findings+=("version_key_present: .plugins[0] | has(\"version\") is '$(sanitize "$has_version")', expected 'false'. plugin update compares version strings, so a constant one always compares equal and the update no-ops while reporting success — every install silently stops receiving changes (#7471)")
               fi
 
               # ---- Assertion 2: the entry still points at plugins/soleur in jikig-ai/soleur --
@@ -160,6 +166,40 @@ jobs:
               if [[ ! "$src_url" =~ ^(https://github\.com/|git@github\.com:)jikig-ai/soleur(\.git)?/?$ ]]; then
                 findings+=("source_url: .plugins[0].source.url is '$(sanitize "$src_url")', expected to point at jikig-ai/soleur (empty means absent, null, or not a string)")
               fi
+
+              # ---- Assertion 2b: the source TYPE and the absence of a pin -------------------
+              # Both were previously carried only by the remediation prose in the issue body,
+              # which is not an assertion. Measured: with these absent, flipping source.source
+              # to "github" or adding "ref": "v0.9.0" both reported OK.
+              #   * source.source != git-subdir  -> the install reverts to a whole-repo clone
+              #     (~181 MiB, 329 s against a 120 s default), i.e. defect 2 of #7471.
+              #   * any pin (ref/sha/commit/branch/tag) -> new installs freeze at a stale tree.
+              #     A constant pin is the frozen version sentinel wearing different clothes, so
+              #     this is defect 1 by another route (ADR-182).
+              src_type="$(jq -r 'if (.plugins[0].source.source | type) == "string" then .plugins[0].source.source else "" end' <<<"$manifest" 2>/dev/null)"
+              if [[ "$src_type" != "git-subdir" ]]; then
+                findings+=("source_type: .plugins[0].source.source is '$(sanitize "$src_type")', expected 'git-subdir' (empty means absent, null, or not a string). Any other source type restores the whole-repo clone that #7471 exists to remove")
+              fi
+
+              has_pin="$(jq -r 'if (.plugins[0].source | type) == "object" then ([.plugins[0].source | has("ref"), has("sha"), has("commit"), has("branch"), has("tag")] | any | tostring) else "unreadable" end' <<<"$manifest" 2>/dev/null)"
+              if [[ "$has_pin" != "false" ]]; then
+                findings+=("source_pinned: .plugins[0].source carries a ref/sha/commit/branch/tag pin (probe returned '$(sanitize "$has_pin")', expected 'false'). The entry is deliberately unpinned — a constant pin freezes every new install at a stale tree, which is #7471's defect 1 by another route")
+              fi
+
+              # ---- Assertion 2c: the entry set, not just entry [0] -------------------------
+              # Every assertion above is positional. Measured: APPENDING a second entry
+              # pointing at attacker/evil left the guard reporting OK, so a marketplace
+              # carrying the Soleur name could serve an arbitrary plugin. Insertion at index 0
+              # was already caught; append was not.
+              entry_count="$(jq -r 'if (.plugins | type) == "array" then (.plugins | length | tostring) else "unreadable" end' <<<"$manifest" 2>/dev/null)"
+              if [[ "$entry_count" != "1" ]]; then
+                findings+=("entry_count: .plugins has '$(sanitize "$entry_count")' entries, expected exactly 1. Every other assertion here reads .plugins[0], so an appended entry would otherwise be unguarded")
+              fi
+
+              entry_name="$(jq -r 'if (.plugins[0].name | type) == "string" then .plugins[0].name else "" end' <<<"$manifest" 2>/dev/null)"
+              if [[ "$entry_name" != "soleur" ]]; then
+                findings+=("entry_name: .plugins[0].name is '$(sanitize "$entry_name")', expected 'soleur'. The name is the '@' half of the plugin id every install command names")
+              fi
             fi
           fi
 
@@ -169,7 +209,7 @@ jobs:
           # while every install breaks. This is the only assertion that can see that.
           plugin_body=""
           plugin_rc=0
-          plugin_body="$(curl -fsSL --max-time 20 --retry 3 --retry-delay 5 --retry-connrefused "$PLUGIN_URL")" || plugin_rc=$?
+          plugin_body="$(curl -fsS --proto '=https' --max-redirs 0 --max-time 20 --retry 3 --retry-delay 5 --retry-connrefused "$PLUGIN_URL")" || plugin_rc=$?
 
           if [[ "$plugin_rc" -ne 0 ]]; then
             findings+=("plugin_manifest_unresolvable: curl exited ${plugin_rc} for ${PLUGIN_URL}; the subtree the marketplace entry serves does not resolve at main")
@@ -275,25 +315,40 @@ jobs:
           BODY="${BODY}"$'\n\n'"### Remediation"
           BODY="${BODY}"$'\n\n'"1. Read what is actually published:"
           BODY="${BODY}"$'\n'"   \`curl -fsS https://raw.githubusercontent.com/jikig-ai/soleur-marketplace/main/.claude-plugin/marketplace.json | jq .\`"
-          BODY="${BODY}"$'\n'"2. If \`.plugins[0]\` has a \`version\` key, REMOVE it. Its presence suppresses gitCommitSha tracking, so every new install stops following the branch tip (#7471). This is the failure with no visible symptom."
+          BODY="${BODY}"$'\n'"2. If \`.plugins[0]\` has a \`version\` key, REMOVE it. \`claude plugin update\` compares version strings: with no key the CLI records the commit SHA as the version so it changes every commit, but a constant version always compares equal and the update short-circuits, reporting success while delivering nothing (#7471). This is the failure with no visible symptom."
           BODY="${BODY}"$'\n'"3. \`.plugins[0].source\` must stay \`git-subdir\` on \`https://github.com/jikig-ai/soleur.git\` with \`path: plugins/soleur\`, unpinned (no \`ref\`, no \`sha\`)."
           BODY="${BODY}"$'\n'"4. If the plugin manifest itself did not resolve, \`plugins/soleur/.claude-plugin/plugin.json\` moved in THIS repo — fix the path in the marketplace manifest, or move it back."
           BODY="${BODY}"$'\n'"5. Re-run on demand: \`gh workflow run scheduled-marketplace-drift.yml\`"
           BODY="${BODY}"$'\n\n'"This issue closes automatically on the next run where all three assertions hold."
 
+          delivered=0
           if [[ "$list_rc" -ne 0 ]]; then
             echo "::error::Could not query existing marketplace-drift issues (gh exited ${list_rc}); no issue was filed, because filing without a dedupe result would break the one-issue-per-episode property the close step depends on."
           elif [[ -n "$EXISTING" && "$EXISTING" != "null" ]]; then
-            if ! gh issue comment "$EXISTING" --repo "$GH_REPO" --body "$BODY"; then
+            if gh issue comment "$EXISTING" --repo "$GH_REPO" --body "$BODY"; then
+              delivered=1
+            else
               echo "::error::Could not comment on marketplace-drift issue #${EXISTING}; the standing issue no longer reflects the current findings."
             fi
           else
             # NEVER report success unconditionally: with `set +e` in effect an unchecked create
             # would fall through to a line asserting an issue exists when none does.
-            if ! gh issue create --repo "$GH_REPO" --title "$TITLE" --body "$BODY" \
+            if gh issue create --repo "$GH_REPO" --title "$TITLE" --body "$BODY" \
                  --label "ci/marketplace-drift" --label "action-required"; then
+              delivered=1
+            else
               echo "::error::marketplace_drift_issue_filing_failed — the drift verdict reached the run log only; no action-required issue exists."
             fi
+          fi
+
+          # FAIL THE JOB when drift was found and the alarm did not deliver. Without this the
+          # run is green, the annotation scrolls past, and the only record of a real drift is a
+          # line in a log nobody reads — the alarm channel failing open. A red run is the
+          # fallback channel, and the heartbeat below carries the same conjunct to Sentry.
+          echo "delivered=${delivered}" >> "$GITHUB_OUTPUT"
+          if [[ "$delivered" -ne 1 ]]; then
+            echo "::error::Drift was detected but no issue was delivered; failing the job so this is not silently green."
+            exit 1
           fi
 
       - name: Close the drift issue once the manifest matches again
@@ -311,13 +366,39 @@ jobs:
           # Closing is what keeps the dedupe guard honest: without it the first episode's issue
           # stays open forever, and the guard then suppresses the filing for every LATER episode
           # by matching that stale issue.
-          EXISTING="$(gh issue list --repo "$GH_REPO" --state open --label "ci/marketplace-drift" -L 100 \
-            --json number --jq '.[0].number' 2>/dev/null)"
+          # Dedupe on the SAME key the filing step uses (label + exact title). Matching on the
+          # label alone would auto-close a human-filed issue that merely carries the label, and
+          # closing only .[0] would leave a duplicate open forever — which then satisfies the
+          # filing step's dedupe guard and suppresses every LATER episode.
+          TITLE="[ci/marketplace-drift] The published marketplace manifest no longer matches the delivery contract"
+          OPEN_NUMS="$(gh issue list --repo "$GH_REPO" --state open --label "ci/marketplace-drift" -L 100 \
+            --search "in:title \"$TITLE\"" --json number --jq '.[].number' 2>/dev/null)"
           list_rc=$?
           if [[ "$list_rc" -ne 0 ]]; then
             echo "::error::Could not query open marketplace-drift issues (gh exited ${list_rc}); a resolved alarm may still be open."
-          elif [[ -n "$EXISTING" && "$EXISTING" != "null" ]]; then
-            gh issue close "$EXISTING" --repo "$GH_REPO" \
-              --comment "All three marketplace-manifest assertions hold again. Closed automatically by ${RUN_URL}." \
-              --reason completed || echo "::error::Could not close marketplace-drift issue #${EXISTING}."
+          else
+            while IFS= read -r n; do
+              [[ -z "$n" ]] && continue
+              gh issue close "$n" --repo "$GH_REPO" \
+                --comment "Every marketplace-manifest assertion holds again. Closed automatically by ${RUN_URL}." \
+                --reason completed || echo "::error::Could not close marketplace-drift issue #${n}."
+            done <<< "$OPEN_NUMS"
           fi
+
+      - name: Sentry check-in (final)
+        uses: ./.github/actions/sentry-heartbeat
+        if: always()
+        # Required by the composite's docstring: its curl carries no `|| true`, so without this
+        # a Sentry ingest blip would turn a healthy run red.
+        continue-on-error: true
+        with:
+          monitor-slug: scheduled-marketplace-drift
+          # `ok` means THE MONITOR WORKED, not that the manifest is clean — a detected drift is a
+          # SUCCESSFUL evaluation whose surface is the issue. But a drift that was detected and
+          # NOT delivered is a monitor failure, hence the delivered conjunct.
+          #
+          # This is also the only mechanism that detects the job NOT RUNNING AT ALL: GitHub
+          # disables schedules on repo inactivity and silently drops ticks under load, and a
+          # missed tick leaves no red run to notice. Without this step the guard's own liveness
+          # was unmonitored while every sibling scheduled workflow carries one.
+          status: ${{ (steps.check.outcome == 'success' && (steps.check.outputs.verdict == 'OK' || (steps.check.outputs.verdict == 'MISMATCH' && steps.issue.outputs.delivered == '1'))) && 'ok' || 'error' }}

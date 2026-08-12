@@ -155,21 +155,49 @@ rm -f "$TMP/bin/jq"
 expect_verdict "a jq failure on the version query fails CLOSED rather than reading as absent" "MISMATCH"
 expect_finding "the failed version query is reported as the version assertion, not swallowed" "version_key_present"
 
-WRONG_PATH='{"plugins":[{"source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur-next"}}]}'
+WRONG_PATH='{"name":"soleur-marketplace","plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur-next"}}]}'
 run_check "$WRONG_PATH" 0 "$GOOD_PLUGIN" 0
 expect_verdict "a changed source.path is drift" "MISMATCH"
 expect_finding "the path finding names source_path" "source_path"
 
-WRONG_URL='{"plugins":[{"source":{"source":"git-subdir","url":"https://github.com/someone-else/soleur.git","path":"plugins/soleur"}}]}'
+WRONG_URL='{"name":"soleur-marketplace","plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"https://github.com/someone-else/soleur.git","path":"plugins/soleur"}}]}'
 run_check "$WRONG_URL" 0 "$GOOD_PLUGIN" 0
 expect_verdict "a repointed source.url is drift" "MISMATCH"
 expect_finding "the url finding names source_url" "source_url"
 
 # The ssh spelling and the suffix-less form are the SAME repository, not drift. Without this
 # the alarm would cry wolf on a cosmetic edit, and an alarm that cries wolf gets muted.
-SSH_URL='{"plugins":[{"source":{"source":"git-subdir","url":"git@github.com:jikig-ai/soleur","path":"plugins/soleur"}}]}'
+SSH_URL='{"name":"soleur-marketplace","plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"git@github.com:jikig-ai/soleur","path":"plugins/soleur"}}]}'
 run_check "$SSH_URL" 0 "$GOOD_PLUGIN" 0
 expect_verdict "an equivalent spelling of the same repo URL is not drift" "OK"
+
+# ---- One case per assertion added after the first review pass. Each fixture differs from
+# GOOD_MANIFEST in EXACTLY the property under test, so a green run means that assertion
+# discriminated — not that some other assertion happened to fire.
+# Measured before these existed: every one of the four mutations below reported OK.
+WRONG_TYPE='{"name":"soleur-marketplace","plugins":[{"name":"soleur","source":{"source":"github","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur"}}]}'
+run_check "$WRONG_TYPE" 0 "$GOOD_PLUGIN" 0
+expect_verdict "a non-git-subdir source type is drift (it restores the whole-repo clone)" "MISMATCH"
+expect_finding "the source-type finding names source_type" "source_type"
+
+PINNED='{"name":"soleur-marketplace","plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur","ref":"v0.9.0"}}]}'
+run_check "$PINNED" 0 "$GOOD_PLUGIN" 0
+expect_verdict "a ref pin is drift (a constant pin is the version sentinel in other clothes)" "MISMATCH"
+expect_finding "the pin finding names source_pinned" "source_pinned"
+
+PINNED_SHA='{"name":"soleur-marketplace","plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur","sha":"deadbeef"}}]}'
+run_check "$PINNED_SHA" 0 "$GOOD_PLUGIN" 0
+expect_verdict "a sha pin is drift too — the probe covers every pin spelling" "MISMATCH"
+
+APPENDED='{"name":"soleur-marketplace","plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur"}},{"name":"evil","source":{"source":"git-subdir","url":"https://github.com/attacker/evil.git","path":"plugins/evil"}}]}'
+run_check "$APPENDED" 0 "$GOOD_PLUGIN" 0
+expect_verdict "an APPENDED second entry is drift — every other assertion reads .plugins[0]" "MISMATCH"
+expect_finding "the appended-entry finding names entry_count" "entry_count"
+
+RENAMED='{"name":"soleur-marketplace","plugins":[{"name":"soleur-next","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur"}}]}'
+run_check "$RENAMED" 0 "$GOOD_PLUGIN" 0
+expect_verdict "a renamed entry is drift — the name is the '@' half of every install command" "MISMATCH"
+expect_finding "the rename finding names entry_name" "entry_name"
 
 # ---- fail-closed paths ----------------------------------------------------------------------
 # Each of these is a state where the checker CANNOT SEE the artifact. Every one must report
@@ -218,7 +246,7 @@ expect_verdict "a plugin.json without a string .name is drift" "MISMATCH"
 # The marketplace repo is unreviewed, so its string values are attacker-controlled for this
 # purpose. A workflow-command prefix must not survive into the run log, and an embedded newline
 # must not break out of the heredoc-delimited $GITHUB_OUTPUT write.
-INJECT='{"plugins":[{"source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"##[set-env name=X]evil\nverdict=OK"}}]}'
+INJECT='{"name":"soleur-marketplace","plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"##[set-env name=X]evil\nverdict=OK"}}]}'
 run_check "$INJECT" 0 "$GOOD_PLUGIN" 0
 expect_verdict "a manifest carrying a workflow-command prefix still reports MISMATCH" "MISMATCH"
 if grep -qF '##[' "$TMP/log.txt" || grep -qF '##[' "$TMP/out.txt"; then
@@ -297,7 +325,7 @@ for secret in set(re.findall(r"secrets\.([A-Za-z0-9_]+)", src)):
     if secret != "GITHUB_TOKEN":
         problems.append(f"unexpected secret consumed: {secret}")
 
-if "raw.githubusercontent.com/jikig-ai/soleur-marketplace/main/.claude-plugin/marketplace.json" not in src:
+if not re.search(r'^\s*MANIFEST_URL="https://raw\.githubusercontent\.com/jikig-ai/soleur-marketplace/main/\.claude-plugin/marketplace\.json"', src, re.M):
     problems.append("does not read the published marketplace manifest over raw.githubusercontent.com")
 if "raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/.claude-plugin/plugin.json" not in src:
     problems.append("does not confirm plugins/soleur/.claude-plugin/plugin.json resolves at main")
@@ -318,5 +346,70 @@ else
   while IFS= read -r p; do fail "structural: $p"; done <<<"$structural"
 fi
 
+# ---- The alarm needs a DESTINATION, and the destination needs to be re-armed ------------
+# Measured: deleting the entire "File or update the drift issue" step, or the entire close
+# step, left this suite at 34/34 green. A detector whose filing step is gone still detects and
+# tells nobody; a detector whose CLOSE step is gone files once and then dedupes against its own
+# stale issue forever, suppressing every later episode. Both are the alarm failing open, and
+# neither is observable through the check step this suite otherwise drives.
+filing_structural="$(python3 - "$WORKFLOW" <<'ALARMPY'
+import sys, yaml
+wf = yaml.safe_load(open(sys.argv[1]))
+steps = list(wf["jobs"].values())[0]["steps"]
+problems = []
+
+def step_with(substr):
+    return [st for st in steps if substr in (st.get("run") or "")]
+
+filing = step_with("gh issue create")
+if not filing:
+    problems.append("no step runs `gh issue create` - a detected drift reaches the run log and nobody else")
+else:
+    cond = str(filing[0].get("if", ""))
+    body = filing[0].get("run") or ""
+    if "MISMATCH" not in cond:
+        problems.append("the issue-filing step is not gated on verdict == MISMATCH")
+    if "cancelled" not in cond:
+        problems.append("the issue-filing step lacks a status function, so GitHub ANDs success() in")
+    if "exit 1" not in body:
+        problems.append("the issue-filing step cannot fail the job, so a drift whose alarm did not deliver stays green")
+
+closing = step_with("gh issue close")
+if not closing:
+    problems.append("no step runs `gh issue close` - a standing issue would suppress every later episode")
+elif "OK" not in str(closing[0].get("if", "")):
+    problems.append("the issue-closing step is not gated on verdict == OK")
+
+hb = [st for st in steps if "sentry-heartbeat" in str(st.get("uses", ""))]
+if not hb:
+    problems.append("no Sentry heartbeat - a job that stops running entirely produces no signal at all")
+elif "delivered" not in str(hb[0].get("with", {}).get("status", "")):
+    problems.append("the heartbeat status omits the delivered conjunct, so an undelivered alarm reports healthy")
+
+print("\n".join(problems))
+ALARMPY
+)"
+if [[ -z "$filing_structural" ]]; then
+  pass "the alarm has a destination, a re-arm, and a liveness channel"
+else
+  while IFS= read -r p; do fail "alarm-structure: $p"; done <<<"$filing_structural"
+fi
+
 echo "=== Results: $PASS passed, $FAIL failed ==="
+
+# ---- Anti-vacuity floor -----------------------------------------------------------------
+# Measured: deleting every assertion call left "0 passed, 0 failed" and exit 0, and neutering
+# fail()'s counter increment printed four FAIL lines and still exited 0. The exit code is the
+# ONLY thing scripts/test-all.sh reads, so both are CI-green having asserted nothing.
+#
+# A FLOOR, not equality: an added assertion must not become a spurious failure. Derived from a
+# green run, ratcheted upward deliberately. Treat slack between this and the measured count as
+# attack budget rather than padding.
+MIN_ASSERTIONS=44
+if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
+  echo "ANTI-VACUITY: only $PASS assertions ran, expected at least $MIN_ASSERTIONS." >&2
+  echo "Either assertions were deleted or short-circuited, or the floor needs a deliberate bump." >&2
+  exit 1
+fi
+
 [[ "$FAIL" -eq 0 ]]
