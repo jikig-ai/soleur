@@ -51,10 +51,10 @@ trap 'rm -rf "$TMP"' EXIT
 # track the artifact that actually ships.
 # TWO ARTIFACTS (#7264). `rendered.yml` is the STRIPPED render — the bytes the host is
 # actually handed, and the right corpus for every boot-fidelity predicate below.
-# `rendered-raw.yml` is the unstripped one, kept so this suite retains a corpus that still
-# contains comments: once the render is comment-free, a predicate satisfiable by prose and
-# one satisfiable only by code become indistinguishable, and the discriminating power this
-# suite was built for (a green arm satisfied by a comment block) silently disappears.
+# `rendered-raw.yml` is the unstripped one. It is read ONLY by the sanity check just below,
+# which asserts the strip actually took effect end-to-end. No predicate arm runs against it —
+# an earlier version of this comment claimed it preserved "discriminating power" for the arms,
+# and that was never true: the arms all read the stripped render.
 bash "$DIR/git-data-userdata-budget.sh" "$TMP/rendered.yml" "$TMP/rendered-raw.yml" >/dev/null 2>&1 \
   || { echo "FAIL: render failed" >&2; exit 1; }
 
@@ -109,24 +109,28 @@ open(f"{out}/sshd-stage.sh", "w").write(sshd[0])
 # extractions — a stage that split into two runcmd entries must fail loudly rather than
 # silently extract the first half.
 #
-# TWO FILES, AND THE SPLIT IS LOAD-BEARING.
+# TWO FILES, AND THE SPLIT IS NOW DEGENERATE — kept for shape, not for discrimination.
 #
-# CORRECTION (review, #7204): an earlier revision of this comment claimed "ADR-152 strips
-# whole-line comments at render, so the collision disappears here for free." THAT IS FALSE,
-# and the repo says so verbatim — `modules/git-data-userdata/main.tf` states
-# "cloud-init-git-data.yml itself is NOT stripped." ADR-152's strip applies only to the nine
-# injected `write_files` scripts. Measured on the real render: 81 of the luks stage's 117
-# lines are COMMENTS. Every unanchored grep below was therefore running over prose, and this
-# PR's own comment block — which discusses the seed, the ordering and the emit call at
-# length — is the largest body of prose in the file. Two arms were demonstrably satisfiable
-# by it while the boot-critical property was violated, at a fully green suite
-# (hr-verify-repo-capability-claim-before-assert: the claim was never checked).
+# HISTORY, because both revisions of this comment were wrong in opposite directions. The
+# first claimed "ADR-152 strips whole-line comments at render, so the collision disappears
+# here for free"; #7204 corrected that to "FALSE — main.tf states cloud-init-git-data.yml
+# itself is NOT stripped", and measured 81 of the luks stage's 117 lines as COMMENTS. Both
+# were true when written. NEITHER is true now: #7264 extended the strip to the template, so
+# the render this suite slices arrives comment-free and the sentence #7204 quoted no longer
+# exists in main.tf.
 #
-#   luks-stage.sh       raw, comments intact — ONLY for shlex parsing of the real emit call
-#   luks-stage.code.sh  comments stripped    — for every grep/regex predicate
+# Measured after that change: the luks stage goes 55 -> 55 lines and the runcmd concatenation
+# 170 -> 170. Zero lines removed, so `luks-stage.sh` is byte-identical to `luks-stage.code.sh`
+# and `runcmd-all.sh` to `runcmd-all.code.sh`.
 #
-# This mirrors `_luks_slice()` in git-data-luks.test.sh, which has always stripped comments
-# and is the reason the B16/B17 family was never exposed to this class.
+#   luks-stage.sh       the stage as rendered — now already comment-free
+#   luks-stage.code.sh  the same bytes, kept so every predicate below has one stable name
+#
+# The split is retained rather than collapsed because the predicates are code-anchored and a
+# rename would touch every one of them for no behavioural gain; the vacuity it used to guard
+# against is now covered by the non-vacuity asserts below and by the strip's own guards in
+# git-data-template-strip.test.sh. `_luks_slice()` in git-data-luks.test.sh still slices the
+# RAW template on disk, so it is unaffected by any of this.
 luks = [c for c in d["runcmd"] if isinstance(c, str) and "STAGE=luks_open" in c]
 assert len(luks) == 1, f"expected exactly 1 luks_open runcmd block, found {len(luks)}"
 open(f"{out}/luks-stage.sh", "w").write(luks[0])
@@ -243,7 +247,8 @@ tpl = open(os.path.join(srcdir, "cloud-init-git-data.yml")).read()
 
 # The payloads are delivered with whole-line `#` comments stripped at render time (ADR-152),
 # so the source must be stripped the same way before the bytes are compared. Read the
-# expression FROM git-data.tf rather than restating it: a hand-copied spelling would drift,
+# expression FROM modules/git-data-userdata/main.tf rather than restating it: a hand-copied
+# spelling would drift,
 # and a stripper that silently disagreed with production would make this whole check compare
 # the wrong bytes while still reporting byte-identity.
 # ANCHORED AT LINE START, and non-greedy between the quotes (#7264). The previous form was a

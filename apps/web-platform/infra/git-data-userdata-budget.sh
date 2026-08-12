@@ -27,11 +27,13 @@
 #   out-rendered receives the STRIPPED render — the bytes the host is actually given, after
 #                local.git_data_template_rationale_strip. This is the host-truth artifact and
 #                is what every boot-fidelity predicate must read.
-#   out-raw      receives the UNSTRIPPED render. Optional. It exists so a suite can keep one
-#                arm on a corpus that still contains comments: once the render is
-#                comment-free, a predicate that was satisfiable by prose and one that is
-#                satisfiable only by code become indistinguishable, and the suite silently
-#                loses the discriminating power it was built for (#7264).
+#   out-raw      receives the UNSTRIPPED render. Optional. Its consumer is
+#                git-data-template-strip.test.sh, which needs both documents to compare them
+#                (shebang survival, the saving bound, and the per-entry diff). An earlier
+#                version of this comment claimed it existed so the runcmd rehearsal could
+#                "keep one arm on a corpus that still contains comments" -- that suite reads
+#                it only for a comment-count sanity check, and no predicate arm runs against
+#                it, so the discriminating power that sentence promised does not exist.
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -114,6 +116,15 @@ printf '%s\n' "$raw" | sed -e '1{/^<<EOT$/d}' -e '${/^EOT$/d}' > "$raw_render"
 # re-implementing the strip here: a second implementation is exactly the restatement
 # ADR-152's registry precedent records as the defect that produced a phantom cap breach.
 stripped_raw=$(console 'local.stripped')
+# CHECKED, because the guard below would otherwise blame the wrong thing. A failed console
+# here yields an empty render, the `#cloud-config` header guard fires, and it tells the
+# reader to go look at local.git_data_template_rationale_strip -- for a terraform fault. The
+# sibling `stored` read is guarded; this one was not.
+if [ -z "$stripped_raw" ] || [ -s "$TFDIR/err" ]; then
+  echo "git-data-userdata-budget: terraform console failed evaluating local.stripped" >&2
+  sed 's/\x1b\[[0-9;]*m//g' "$TFDIR/err" >&2
+  exit 2
+fi
 rendered="$TFDIR/rendered.yml"
 printf '%s\n' "$stripped_raw" | sed -e '1{/^<<EOT$/d}' -e '${/^EOT$/d}' > "$rendered"
 
