@@ -499,7 +499,7 @@ assert "T7 the shipper matches CONTAINER_NAME (a field its own journald lines ca
 assert "T7 the shipper does not match on its own SyslogIdentifier (that would be a feedback loop)" \
   "! grep -qE 'journalctl[^|]*(-t|--identifier)[[:space:]=]*zot-log-shipper' '$SHIPPER'"
 
-# --- T8: SINGLETON — flock -n, mirroring both cron siblings on this host ----------------
+# --- T8: SINGLETON — flock -n, mirroring the NIC guard (the disk heartbeat has none) ----
 # Under Restart=always systemd already guaranteed a single instance, so flock was decorative.
 # Under cron it is load-bearing: a tick that outruns its 5-minute slot would otherwise overlap the
 # next one and double-ship every row between their cursors.

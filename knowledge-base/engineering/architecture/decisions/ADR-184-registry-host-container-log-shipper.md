@@ -114,7 +114,12 @@ and were dropped rather than kept as decorative safety.
 
 ### 4. The shipper is a cron one-shot, not a daemon — because this host cannot be fixed in place
 
-Every unit on this host is `Type=oneshot` and every recurring job is a 5-minute `cron.d` line
+Every `.service` on this host is `Type=oneshot`, and the host keeps ZERO `Restart=always` units —
+that is the load-bearing claim, and it is the one that is true. (An earlier draft said "every
+recurring job is a 5-minute `cron.d` line", which the 60-second `zot-liveness-heartbeat.timer`
+falsifies; that timer is deliberately a systemd timer and not `cron.d`, and one of its two stated
+reasons is the very PATH trap §4 pins below.) Every recurring job that wraps `doppler run` is a
+5-minute `cron.d` line
 wrapped in `doppler run`. This change adds a third such line rather than the host's first
 `Restart=always` unit.
 

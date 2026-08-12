@@ -420,15 +420,20 @@ write_files:
       # drop accounting on the independently-working path, where it is readable precisely when the
       # shipper's own egress is not.
       LOG_SHIPPER_POST_FAIL=unknown; LOG_SHIPPER_LAST_OK_AGE_S=-1
-      LOG_SHIPPER_DROPPED_CUM=unknown; LOG_SHIPPER_DROP_SEQ=unknown
+      LOG_SHIPPER_DROPPED_CUM=unknown; LOG_SHIPPER_DROP_SEQ=unknown; LOG_SHIPPER_SHIPPED_CUM=unknown
       if [ -r /var/lib/zot-log-shipper/state ]; then
         LOG_SHIPPER_POST_FAIL=0
-        LOG_SHIPPER_DROPPED_CUM=0; LOG_SHIPPER_DROP_SEQ=0
+        LOG_SHIPPER_DROPPED_CUM=0; LOG_SHIPPER_DROP_SEQ=0; LOG_SHIPPER_SHIPPED_CUM=0
         while IFS='=' read -r _lsk _lsv; do
           case "$_lsk" in
             post_fail) LOG_SHIPPER_POST_FAIL="$_lsv" ;;
             dropped_cum) case "$_lsv" in ''|*[!0-9]*) : ;; *) LOG_SHIPPER_DROPPED_CUM="$_lsv" ;; esac ;;
             drop_seq)    case "$_lsv" in ''|*[!0-9]*) : ;; *) LOG_SHIPPER_DROP_SEQ="$_lsv" ;; esac ;;
+            # shipped_cum was written and incremented with NO reader anywhere (#7444 R28). It is
+            # the cheapest POSITIVE liveness signal available on the independently-working path:
+            # every other field says how things are failing, this one says the channel has ever
+            # worked. Carried rather than deleted for that reason.
+            shipped_cum) case "$_lsv" in ''|*[!0-9]*) : ;; *) LOG_SHIPPER_SHIPPED_CUM="$_lsv" ;; esac ;;
             last_ok_epoch)
               case "$_lsv" in
                 ''|*[!0-9]*) : ;;
@@ -441,7 +446,7 @@ write_files:
       fi
       # zot_last_err is free-text (may contain spaces) → keep it the LAST field so it never corrupts
       # key=value parsing of the fields before it.
-      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE zot_uptime_s=$ZOT_UPTIME_S zot_last_err_src=$ZOT_ERR_SRC oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID zot_image_digest=$ZOT_IMAGE_DIGEST htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH log_shipper_post_fail=$LOG_SHIPPER_POST_FAIL log_shipper_last_ok_age_s=$LOG_SHIPPER_LAST_OK_AGE_S log_shipper_dropped_cum=$LOG_SHIPPER_DROPPED_CUM log_shipper_drop_seq=$LOG_SHIPPER_DROP_SEQ host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
+      LINE="SOLEUR_ZOT_DISK pcent=$PCENT fs_size_gb=$FS_GB block_size_gb=$block_size_gb resize_ok=$resize_ok zot_restarts=$ZOT_RESTARTS ping_rc=$PING_RC mem_total_mb=$MEM_TOTAL zot_anon_mb=$ZOT_ANON_MB zot_memory_cap_mb=$ZOT_MEMORY_CAP_MB zot_memory_capped=$ZOT_MEMORY_CAPPED zot_oom_kills=$ZOT_OOM_KILLS state_status=$STATE_STATUS oom_killed=$OOM_KILLED exit_code=$EXIT_CODE zot_uptime_s=$ZOT_UPTIME_S zot_last_err_src=$ZOT_ERR_SRC oom_kills_5m=$OOM_KILLS_5M boot_id=$BOOT_ID zot_image_digest=$ZOT_IMAGE_DIGEST htpasswd_pull_matches=$HTP_PULL htpasswd_push_matches=$HTP_PUSH log_shipper_post_fail=$LOG_SHIPPER_POST_FAIL log_shipper_last_ok_age_s=$LOG_SHIPPER_LAST_OK_AGE_S log_shipper_dropped_cum=$LOG_SHIPPER_DROPPED_CUM log_shipper_drop_seq=$LOG_SHIPPER_DROP_SEQ log_shipper_shipped_cum=$LOG_SHIPPER_SHIPPED_CUM host=$(hostname) zot_last_err=$ZOT_LAST_ERR"
       TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
       if [ -n "$TOKEN" ]; then
         # Fail-loud-but-not-wedge: retry ONCE, then breadcrumb to journald. ping_rc is carried in
@@ -691,8 +696,11 @@ write_files:
       fi
 
       write_state() {
-        printf 'post_fail=%s\nlast_ok_epoch=%s\nshipped_cum=%s\ndropped_cum=%s\ndrop_seq=%s\nboot_id=%s\n' \
-          "$POST_FAIL" "$LAST_OK_EPOCH" "$SHIPPED_CUM" "$DROPPED_CUM" "$DROP_SEQ" "$BOOT_ID" \
+        # boot_id is NOT persisted: the shipper has no read-back case for it and the reporter has
+        # no case either, so it was write-only. The boot_id that appears in drop rows is read live
+        # from /proc at each tick, which is the one that carries meaning (#7444 R29).
+        printf 'post_fail=%s\nlast_ok_epoch=%s\nshipped_cum=%s\ndropped_cum=%s\ndrop_seq=%s\n' \
+          "$POST_FAIL" "$LAST_OK_EPOCH" "$SHIPPED_CUM" "$DROPPED_CUM" "$DROP_SEQ" \
           > "$STATE_TMP" 2>/dev/null && mv -f "$STATE_TMP" "$STATE_FILE" 2>/dev/null || true
       }
 
