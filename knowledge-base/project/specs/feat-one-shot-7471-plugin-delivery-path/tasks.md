@@ -64,14 +64,14 @@ and no existing task number moves.
 
 ## Phase 2 — Remove the sentinel
 
-- [ ] **2.1** Delete `"version"` from `plugins/soleur/.claude-plugin/plugin.json`. Leave
+- [x] **2.1** Delete `"version"` from `plugins/soleur/.claude-plugin/plugin.json`. Leave
       `mcpServers` untouched (consumed by `session-rules-loader.sh` and `agent-runner.ts`).
-- [ ] **2.2** Delete `plugins[0].version` from `.claude-plugin/marketplace.json`. **Do not touch
+- [x] **2.2** Delete `plugins[0].version` from `.claude-plugin/marketplace.json`. **Do not touch
       the top-level `"version": "1.0.0"`** — different field, different meaning.
-- [ ] **2.3** Guard `plugins/soleur/docs/_data/plugin.js` (`data.version ?? "unknown"`), **in the
+- [x] **2.3** Guard `plugins/soleur/docs/_data/plugin.js` (`data.version ?? "unknown"`), **in the
       same commit**. Without it CI is deterministically red. Note this is an *unconditional
       overwrite*, not a fallback tier — the manifest value is gone, so say so precisely.
-- [ ] **2.4** Cover all **three** `version: null` paths in `github.js`: the offline hatch, the
+- [x] **2.4** Cover all **three** `version: null` paths in `github.js`: the offline hatch, the
       **fetch `catch`**, and the no-release `?? null`. The catch arm means a transient GitHub API
       failure would otherwise kill a *production* docs build.
 
@@ -141,18 +141,18 @@ installs keep working. The plugin ID changes for **new** installs only.
 
 ## Phase 4 — Governance corpus (five sites)
 
-- [ ] **4.1** `AGENTS.rules.md` — `wg-never-bump-version-files-in-feature` trailing clause. **The
+- [x] **4.1** `AGENTS.rules.md` — `wg-never-bump-version-files-in-feature` trailing clause. **The
       id is immutable.** Note the file contains "frozen sentinel" but **not** the literal
       `0.0.0-dev`, so a literal grep cannot verify this edit.
-- [ ] **4.2** `plugins/soleur/AGENTS.md` pre-commit checklist bullet.
-- [ ] **4.3** `plugins/soleur/skills/ship/SKILL.md` "Never edit version fields".
-- [ ] **4.4** `CONTRIBUTING.md` "Plugin changes".
-- [ ] **4.5** ADR-178 — the cache-path passage and the "name never changes" sentence. Anchor on
+- [x] **4.2** `plugins/soleur/AGENTS.md` pre-commit checklist bullet.
+- [x] **4.3** `plugins/soleur/skills/ship/SKILL.md` "Never edit version fields".
+- [x] **4.4** `CONTRIBUTING.md` "Plugin changes".
+- [x] **4.5** ADR-178 — the cache-path passage and the "name never changes" sentence. Anchor on
       **content, not line numbers**. It has no `status:` key (uses `- **Status:** Accepted`).
       **Reconcile against the NEW plugin ID, not just the keyless manifest**: the marketplace
       segment changes for new installs and the version segment changes for everyone. Use the
       `installPath` measured in 1.0 / 2B.4 — see the plan's three-column table in Phase 2.5.
-- [ ] **4.6** Sweep: two greps, the literal **and** the paraphrase. Do not rewrite historical
+- [x] **4.6** Sweep: two greps, the literal **and** the paraphrase. Do not rewrite historical
       records under `plans/`, `plans/archive/`, `specs/`, `brainstorms/`, `learnings/`.
 
 ## Phase 5 — Architecture record
