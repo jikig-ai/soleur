@@ -12,9 +12,13 @@ brand_survival_threshold: single-user incident
 
 # ADR-100: Inngest as a dedicated single-host singleton control plane
 
-> **Status `adopting`** until the Phase-4 soak (7 days, per-`(function_id, startedAt-bucket)`
-> exactly-once) verifies zero double-fire in prod. Flip `adopting → accepted` on soak success
-> (plan Phase 4.3). Amends **ADR-030** (Inngest as durable trigger layer); does not supersede it.
+> **Status `adopting`.** The Phase-4 soak (7 days, per-`(function_id, startedAt-bucket)`
+> exactly-once) is the condition for flipping `adopting → accepted` (plan Phase 4.3).
+> **It has not started.** The cutover did not hold: the dedicated host has served nothing since
+> 2026-07-30 and `INNGEST_CUTOVER_FLIP` rests at `rollback`. See the
+> [2026-08-12 addendum](#addendum--2026-08-12-7228--the-cutover-did-not-hold-and-the-soak-never-started)
+> before treating any statement below as describing a running system. Amends **ADR-030** (Inngest
+> as durable trigger layer); does not supersede it.
 
 ## Context
 
@@ -231,6 +235,35 @@ from web cloud-init.** The following sub-decisions are fixed by this ADR:
      operator confirms `exit_code:0` by pulling that log line, **never** by reading a state file on
      the deny-all-public host (`cat-inngest-cutover-state.sh` is an on-host debug aid only, not the
      gate).
+   - **`done` is PROBE-DERIVED, not asserted (corrected 2026-08-12, Ref #7228).** As originally
+     written, this decision's completion gate was `exit_code:0` on a run whose final act was
+     `start_server` — that is `systemctl start`, which succeeds when systemd **accepted the unit**,
+     not when inngest **bound :8288**. So `done` and its `exit_code:0` asserted a live host
+     condition neither had measured. That is not a hypothetical: the 2026-07-30 host recorded
+     `done`, never bound, and the flag still read `done` twelve days later (#7228).
+     `inngest-cutover-flip.sh` now reaches `done` only through `verify_or_abort`, which requires a
+     **bounded-window `/health` 200 AND a non-empty `v0/gql` registry** — both, because a 200 over
+     an empty registry is a scheduler that serves and owns nothing. Any failure drives the flag to
+     terminal `aborted` with a `verify-*` reason. The `exit_code:0` gate above is unchanged in
+     form and is now worth what it claims, because the run can no longer exit 0 without the probe
+     having passed.
+   - **The `done` flag carries an instance stamp (added 2026-08-12, Ref #7228).** The flag lives in
+     Doppler, which **outlives the host**, so `done` says a flip completed without saying on which
+     machine — and a replaced host boots into a predecessor's `done`, which the `ExecStartPre`
+     allowlist above reads as ALLOW. That reaches the second-prod-scheduler state P1-5 exists to
+     prevent *through* the guard rather than around it. The stamp lives in a **separate** Doppler
+     key (`INNGEST_CUTOVER_DONE_INSTANCE`), never appended to the flag value: `done@hetzner-123`
+     would fall through the guard's exact `case` match and block a legitimately-completed host on
+     every reboot. The guard refuses a prod start when a `done` flag's stamp does not identify the
+     running host, and is scoped to `done` alone — the transient states belong to a flip in
+     progress on this host and have no stamp yet, so gating them would deadlock the cutover.
+   - **Class rule, extracted from both corrections above (added 2026-08-12, Ref #7228 — this is the
+     generalisation, and it is why no separate ADR ordinal was minted for it):**
+     *a terminal state that asserts a live host condition must be re-derived from a probe, and must
+     not outlive the thing it asserts.* Both defects are instances: `done` asserted a bind it never
+     measured, and then survived in Doppler across a host that never performed it. Applying the
+     rule means (a) deriving the state from a measurement at the moment it is written, and (b)
+     scoping it to the identity of the thing measured, so it cannot be inherited.
 7. **Exactly-once soak invariant (DI-C2, demonstrably writable — AC13 satisfied).** The soak probe
    enumerates cron runs against v1.19.4 with:
    ```graphql
@@ -541,3 +574,47 @@ rollback target: `op=arm` overwrites `INNGEST_POSTGRES_URI`, and the `rollback` 
 `INNGEST_CUTOVER_FLIP` — no code path restores the dark DSN. The reason not to drop early is simply
 that the dark host is **live** against soleur-dev until the flip.)
 
+
+## Addendum — 2026-08-12 (#7228) — the cutover did not hold, and the soak never started
+
+Appended rather than folded into the body above: everything before this section describes the
+system this ADR **decided to build**, and it remains the accurate record of that decision. This
+section records what the system **actually did**, which is a different claim, and one that any
+reader of the sections above needs before acting on them.
+
+**Measured, not inferred.** The dedicated host (`soleur-inngest`, 10.0.1.40, created
+2026-07-30T15:13:06Z) boots and runs but has never bound `:8288`. It has shipped **zero** rows to
+Better Stack; the web host's dispatches to it fail `connect ECONNREFUSED` at roughly 600 rows/hour
+(re-measured 2026-08-11 12:15). `INNGEST_CUTOVER_FLIP` rests at **`rollback`** — not
+`rolled-back`: run 31486949232 wrote the brake and then failed to confirm the terminal state
+within 600s, because the confirmation is performed by the on-host FSM and shipped by the on-host
+shipper, and the host ships nothing. It fail-closed correctly and withheld the second half.
+
+**Consequences for the sections above, stated explicitly:**
+
+1. **The Phase-4 soak never started.** Any statement in this ADR written in the present tense
+   about a running dedicated scheduler describes an intention, not an observation.
+2. **The co-located web-host Inngest is still the live scheduler.** It holds the entire function
+   registry and is actively firing crons, which is why the 53 registered crons were **unaffected**
+   by this incident (execution is pinned to web-1, #7230) while every *app-originated* event
+   dispatch failed. The blast radius was fleet-wide for dispatch, not inbound-email only.
+3. **Decision 6a's completion gate was not sufficient**, and is corrected in place above rather
+   than here — the corrections belong with the decision they modify.
+4. **The root cause of the bind failure is UNKNOWN and is deliberately not guessed at.** The
+   deciding datum was an eight-marker `SOLEUR_INNGEST_BOOT_STAGE` boot trace whose sink retention
+   is ~3 days against a 12-day-old boot: it is irrecoverable by construction, so no query can
+   return it. Recording a plausible cause here would be the failure mode this project has
+   already paid for once (`2026-07-16-refuting-a-hypothesis-by-reasoning-while-its-discriminator-is-invisible.md`).
+   Resolution is a **diagnostic boot** — a guard-permitted start against a non-prod backend, so
+   `is_prod=false` takes the guard's ALLOW arm and the host can attempt a bind and emit a
+   discriminating `net-health` row with no path to a second prod scheduler. Tracked as **#7462**.
+
+**What #7228's PR changed, and what it deliberately did not.** It ships detection that does not
+depend on the broken host (a consumer-side probe on the web host, so it works the day it merges,
+with no host replace), makes the host diagnosable when it is next replaced, and makes the
+re-cutover safe. It does **not** restore the host: that is #7462, and #7228 / #6617 / #7308 are
+therefore cited as `Ref` rather than closed by it. The twelve days of failed dispatches are
+**accepted as lost** by operator decision (2026-08-11) — a decision, not an omission; no replay,
+backfill or dead-letter path is in scope. An interim `INNGEST_BASE_URL` repoint was also declined,
+deliberately: the dedicated host is to be fixed properly rather than returned to the co-located
+operating point.
