@@ -780,6 +780,12 @@ if want_scripts; then
   run_suite "scripts/lint-legal-scope-block-placement-live" bash scripts/lint-legal-scope-block-placement.sh
   run_suite "scripts/lint-legal-mirror-drift-baseline-unit" bash scripts/lint-legal-mirror-drift-baseline.test.sh
   run_suite "scripts/lint-legal-mirror-drift-baseline-live" bash scripts/lint-legal-mirror-drift-baseline.sh
+  run_suite "scripts/tenant-dpa-register-guard-unit" bash scripts/tenant-dpa-register-guard.test.sh
+  run_suite "scripts/tenant-dpa-register-guard-live" bash scripts/tenant-dpa-register-guard.sh count-signed
+  # DECIDABILITY, not emptiness. `assert-empty` encoded a BUSINESS fact ("Jikigai has zero
+  # tenants") as a passing test, so onboarding tenant #1 -- the day the guard finally matters --
+  # would red the whole suite, and the under-pressure fix is to delete this line. `count-signed`
+  # exits 0 on any readable register and 2 on one it cannot parse, which is the code property.
   run_suite "scripts/cron-artifact-age" bash scripts/cron-artifact-age.test.sh
   run_suite "scripts/watch-live-verify-pass" bash scripts/watch-live-verify-pass.test.sh
   run_suite "scripts/review-reminder-liveness" bash scripts/review-reminder-liveness.test.sh

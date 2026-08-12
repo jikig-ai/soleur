@@ -4,11 +4,15 @@ status: accepted
 date: 2026-08-11
 amends: [ADR-093]
 related_adrs: [ADR-074, ADR-091, ADR-093, ADR-151, ADR-155, ADR-171]
-related: [7442, 7450, 6222]
+related: [7442, 7450, 6222, 7474, 7452]
+amended_by:
+  - "#7474 (2026-08-11) — producer presence as a fourth precondition; see ## Amendment 2026-08-11"
 related_plans:
   - knowledge-base/project/plans/2026-08-11-fix-sync-plugin-root-anchoring-plan.md
+  - knowledge-base/project/plans/archive/20260812-125433-2026-08-11-fix-sync-producer-freshness-probe-plan.md
 related_specs:
   - knowledge-base/project/specs/feat-one-shot-7442-sync-plugin-root-anchoring/tasks.md
+  - knowledge-base/project/specs/archive/20260812-145032-feat-one-shot-7474-sync-producer-freshness-probe/tasks.md
 brand_survival_threshold: single-user incident
 ---
 
@@ -217,6 +221,9 @@ the workspace.
   the failure still leaves no trace after the session ends. Tracked in #7452. Stated here
   because the issue explicitly raised it and a reader would otherwise take the marker work
   for the whole fix.
+- **A fourth precondition — producer PRESENCE — was added 2026-08-11 (#7474).** Identity is
+  not freshness: a root that is authentically Soleur can still not carry a producer. See
+  `## Amendment 2026-08-11 (#7474)` below.
 - The `~100` `${CLAUDE_PLUGIN_ROOT:-…}` sites under `plugins/soleur/skills/**` are **not**
   migrated here. That migration requires changing `server/safe-bash.ts`'s exact-literal set
   and `plugin-root-list-carveout-coupling.test.ts`'s regex, which does not belong behind a
@@ -329,6 +336,124 @@ the workspace.
 - **R6.** **Deferrals are tracked at #7452** (remaining follow-ups, incl. the unmodelled
   self-hosted-CLI C4 topology) **and #7453** (the `skills/**` convention migration). Named
   here and in the guard's docstring so a reader can find them from either.
+
+## Amendment 2026-08-11 (#7474) — producer PRESENCE is a fourth precondition, guarded at each invocation site
+
+### Decision 7
+
+Every anchored invocation in `plugins/soleur/commands/**` is wrapped in a presence check in
+its own fence, emitting a named marker instead of invoking a file that is not there:
+
+```bash
+if [ -f "${CLAUDE_PLUGIN_ROOT}/<rel>" ]; then
+  <runner> "${CLAUDE_PLUGIN_ROOT}/<rel>"
+else
+  echo "SOLEUR_SYNC_PRODUCER_MISSING producer=<rel> affects=<area> reason=absent-from-verified-root"
+fi
+```
+
+**The marker family is per-surface, not universal.** The template above is the `sync.md`
+instance. `go.md`'s two guards deliberately reuse *its* existing families —
+`SOLEUR_GIT_REPO_DIAG source=probe-unreachable reason=…` and
+`SOLEUR_SESSION_START_SKIPPED reason=…` — because they are not sync producers and because
+`SOLEUR_GIT_REPO_DIAG` is already mirrored by
+`apps/web-platform/server/git-lock-marker-telemetry.ts`. Emitting a `SOLEUR_SYNC_*` marker
+from `/soleur:go` would be wrong. What is universal is the SHAPE: presence check and
+invocation in one subprocess, and an `else` that NAMES the absence.
+
+`sync.md`'s Phase 0 identity fence is **not** edited. (`go.md`'s Step 0.0 identity fence
+*body* is — a presence check is nested inside it. The fence's own predicate is unchanged.)
+
+Pinned by `plugin-root-anchoring.test.ts` P6 (presence-guard parity across the whole command
+surface, guard-precedes-invocation), P7 (`sync.md` marker grammar + producer→area
+correspondence) and P8 (`go.md`'s two markers), and by
+`test-sync-producer-reachability.sh` T0j/T0k/T0l/T0m.
+
+### Why the axes stay separate
+
+The preflight answers *identity*; this answers *freshness*. Three reasons to keep them
+apart, none of which is "adding a path predicate would be the rejected `test -d` shape" —
+that argument does not survive contact with the file, since the shipped gate already
+carries `[ -d "${CLAUDE_PLUGIN_ROOT}/scripts" ]` as a **conjunct**. §Considered Options
+rejected that predicate as *sufficient alone*, never as a conjunct.
+
+1. **Blast radius.** An identity failure means nothing about the root is trustworthy →
+   refuse the whole run. A freshness failure means one file is absent → skip one area and
+   run the rest. Folding freshness into Phase 0 collapses per-area degradation into
+   all-or-nothing refusal. T0j asserts exactly this: a present sibling producer that fails
+   to run is a test failure.
+2. **Area-scoped dispatch.** `/soleur:sync conventions` invokes no producer at all, so a
+   Phase 0 presence loop emits confident wrong markers on a completely healthy run.
+3. **Cross-fence state.** Bash carries no state between markdown fences, so a Phase 0 result
+   can only ever *instruct* a downstream fence — and a marker printed above a bare death is
+   still a bare death.
+
+A single-gate design does exist — a payload-shipped `producers.json` verified wholesale in
+Phase 0 — and it loses on (1) and (2) while adding a manifest that can itself drift.
+
+### What decision 5 does and does not give us
+
+Decision 5's stated property is that **the invocation line, taken alone, is safe**: its
+operand is `"${SOLEUR_MONOREPO:?…}"`, a variable bound only by the gate, so a reader or tool
+that extracts invocations line-wise gets an unset variable rather than a live command.
+
+The guard above does **not** have that property. Its invocation line is
+`<runner> "${CLAUDE_PLUGIN_ROOT}/<rel>"` — byte-identical to the pre-amendment line. The
+guard is **co-located**, not fail-closed in isolation. What decision 5 contributes here is
+its *reasoning*, not its guarantee: a gate separated from its invocation is not a gate, which
+is why the check sits at the call site rather than in Phase 0.
+
+This is a deliberate trade, recorded rather than glossed. Binding the operand to a
+gate-set variable would satisfy decision 5 literally, but a variable operand drops out of
+`extractOperands`, silently vacating P2's `existsSync` residency assertion over every
+anchored operand. Trading a proven residency check for a nominal isolation property is the
+worse deal. **Residual:** under line-wise extraction the guard degrades to the pre-fix bare
+error — not to customer-tree execution, which is what this ADR's threat model is about.
+
+Do not read this amendment as establishing "wrapped in an `if`" as a satisfying predicate
+for decision 5. Decision 6 rejects syntactic self-serve predicates for exactly that reason.
+
+### Marker vocabulary
+
+**Eight** markers cross the surface Decision 7 governs (`plugins/soleur/commands/**`), not the
+three this section originally listed. Six in the `sync.md` + `kb-coverage.ts` family:
+`SOLEUR_SYNC_ROOT_UNRESOLVED` (anchor identity), `SOLEUR_SYNC_TOOLCHAIN_MISSING` (runner
+binary), `SOLEUR_SYNC_PRODUCER_MISSING` (producer file), `SOLEUR_SYNC_AREA_UNAVAILABLE` (area
+not offered on this surface), plus `SOLEUR_KB_SYNC_PRODUCERS` and `SOLEUR_KB_SYNC_ERROR` from
+`plugins/soleur/lib/kb-coverage.ts`. Two more in `go.md`: `SOLEUR_GIT_REPO_DIAG` and
+`SOLEUR_SESSION_START_SKIPPED`.
+
+The **axes** are disjoint and coherent. The **grammar** is not, and this amendment does not
+close it. Target shape:
+
+```text
+SOLEUR_SYNC_<CONDITION> <subject>=<value> [affects=<csv>] reason=<observation>
+```
+
+Pre-existing divergence, recorded so it is not mistaken for new: `AREA_UNAVAILABLE` uses
+`area=` where `TOOLCHAIN_MISSING` and `PRODUCER_MISSING` use `affects=` for the same concept.
+
+`reason=` names an **observation**, never a cause — matching both pre-existing tokens.
+`absent-from-verified-root` identifies *which* root the path is absent from (the one Phase 0
+verified earlier in the same run); it is not a claim that the guard block re-verified
+anything, and it re-checks nothing.
+
+### Scope of the fix
+
+This closes the axis for torn or incomplete payloads, for an instruction/payload split, and
+for every producer added in future — P6 makes the guard mandatory for producers that do not
+exist yet. Whether it resolves the originally-reported incident depends on which generator
+was actually at work there; see the plan's H1/H2/H3 table. It does **not** close the layer-7
+durability residual above: a run whose missing producer is `write-kb-coverage.ts` still has
+no durable channel by construction.
+
+### Additional residual (R1–R3 are in §Residuals above)
+
+**R4.** The command TEXT and `${CLAUDE_PLUGIN_ROOT}` can resolve to **different trees** — the
+harness may load a project-scoped `sync.md` while the anchor points at an installed payload
+at a different SHA. That is the root architectural fact behind #7474 and it is not otherwise
+recorded in this ADR. Nothing in this amendment detects it; the SHA-divergence probe that
+would is deferred (#7452).
 
 ## Relationship to prior decisions
 

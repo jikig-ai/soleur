@@ -127,7 +127,10 @@ extract_legal_doc_sha() {
 # Per-doc loop.
 # ----------------------------------------------------------------------
 
-BODY_EQUIVALENCE_DOCS=("terms-and-conditions")
+BODY_EQUIVALENCE_DOCS=("terms-and-conditions" "acceptable-use-policy" "disclaimer")
+# Enrolled #7349 (6.3) AFTER each reported ZERO normalised drift, never before -- enrolling a
+# drifted document turns a required check red. data-protection-disclosure stays OUT at 4 drift
+# lines (the Last-Updated line and a PR-H comment); it enrols when the successor closes those.
 # data-protection-disclosure: guard infrastructure ready (test at legal-doc-shas-guard.test.ts
 # proves detection); activation deferred until PR #4455-introduced drift is resolved.
 # Add "data-protection-disclosure" to the array once the mirror is re-synced.
@@ -259,6 +262,10 @@ fi
 SEED_SCRIPTS=(
   "apps/web-platform/scripts/seed-dev-users.sh"
   "apps/web-platform/scripts/seed-qa-user.sh"
+  # Added #7349 (A4). This script sat at 2.3.0 while canonical was 2.4.0 and was absent from
+  # this list, so nothing guarded the drift. Correct the literal BEFORE adding a script here:
+  # adding a drifted script turns a required check red.
+  "apps/web-platform/scripts/seed-live-verify-user.sh"
 )
 
 if [ -n "$CANONICAL_TC_VERSION" ]; then
@@ -280,6 +287,27 @@ if [ -n "$CANONICAL_TC_VERSION" ]; then
     fi
   done
 fi
+
+  # The fifth replica. The three seed scripts above are guarded; the compliance register's
+  # T&C row carries the same literal and was NOT, which is precisely the copy that goes
+  # stale silently -- a stale row here is what made #7349's "compliance-posture.md T&C row
+  # stale vs TC_VERSION" defect invisible until someone read the two files side by side.
+  POSTURE_REGISTER="${_TC_SHA_REPO_ROOT}/knowledge-base/legal/compliance-posture.md"
+  if [ -f "$POSTURE_REGISTER" ]; then
+    POSTURE_VERSION=$(grep -oE '^\| Terms & Conditions \|[^|]*\| *[0-9]+\.[0-9]+\.[0-9]+ *\|' "$POSTURE_REGISTER" \
+                      | head -n 1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
+    if [ -z "$POSTURE_VERSION" ]; then
+      echo "::error::compliance-posture.md has no parseable Terms & Conditions version cell" >&2
+      echo "    The row is the compliance register's record of the live T&C version; if its" >&2
+      echo "    shape changed, this guard stops being able to detect drift -- fix the row or" >&2
+      echo "    this check, do not drop it." >&2
+      FAILED=$((FAILED+1)); FAILURES+=("compliance-posture.md: T&C version cell unparseable")
+    elif [ "$POSTURE_VERSION" != "$CANONICAL_TC_VERSION" ]; then
+      echo "::error::compliance-posture.md T&C row version=$POSTURE_VERSION drifted from canonical $CANONICAL_TC_VERSION" >&2
+      echo "    Remediation: update the Version cell in the Terms & Conditions row." >&2
+      FAILED=$((FAILED+1)); FAILURES+=("compliance-posture.md: T&C version drift")
+    fi
+  fi
 
 # ----------------------------------------------------------------------
 # Aggregate exit.

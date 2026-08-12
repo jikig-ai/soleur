@@ -404,21 +404,28 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "and atomically DELETEd by the Custom Access Token Hook. " +
     "Ephemeral by design — no row survives past the mint flow. ON DELETE " +
     "CASCADE from auth.users handles any edge-case orphan on user delete. " +
-    "No user-provided content; user_id is the only column and is already " +
-    "in the DSAR's auth.users export. Per spec FR8 not enumerated as " +
-    "Art. 15 personal data.",
+    "No user-provided content; user_id is the only column. NOTE (#7487): " +
+    "this reason previously said that column is 'already in the DSAR's " +
+    "auth.users export' -- there is no auth.users export in the bundle. " +
+    "The ground is ephemerality (no row survives the mint flow), not " +
+    "duplication. Per spec FR8 not enumerated as Art. 15 personal data.",
   // feat-team-workspace-multi-user — `user_session_state` remains
   // excluded after Phase 7 promotion of organizations + workspaces +
   // workspace_members + workspace_member_attestations. The single row's
-  // `current_organization_id` is duplicated into the JWT custom claim
-  // `app_metadata.current_organization_id` which is already part of the
-  // auth.users export. No user-provided content; transient UX
-  // preference. ON DELETE CASCADE from auth.users handles Art. 17.
+  // `current_organization_id` is injected into the minted token's claims by
+  // migration 060's access-token hook, which READS it from this table. It is
+  // not persisted on auth.users, and there is no auth.users export in the
+  // bundle -- see #7487. No user-provided content; transient UX preference.
+  // ON DELETE CASCADE from auth.users handles Art. 17.
   user_session_state:
-    "Per-user UX preference (current_organization_id) duplicated in JWT " +
-    "custom claim app_metadata.current_organization_id which is already " +
-    "part of the auth.users export. No user-provided content. ON DELETE " +
-    "CASCADE from auth.users handles Art. 17 erasure.",
+    "Per-user UX preference (current_organization_id). NOTE (#7487): the " +
+    "previous reason here claimed this value is 'already part of the " +
+    "auth.users export'. There is NO auth.users export in the bundle, and " +
+    "the value is not on the auth record either -- migration 060's access- " +
+    "token hook reads it from THIS table and injects it into the claims of " +
+    "the token being minted. Do not restate the old ground; it was lifted " +
+    "into published legal text once already. No user-provided content. " +
+    "ON DELETE CASCADE from auth.users handles Art. 17 erasure.",
 
   tenant_deploy_audit:
     "Multi-tenant deploy substrate orchestration-plane meta-audit log " +

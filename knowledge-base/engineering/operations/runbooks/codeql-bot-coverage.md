@@ -75,14 +75,14 @@ A `CodeQL` check-run is posted by an app OTHER than `integration_id: 57789`. Thi
 
 If `neutral` ever stops satisfying the required check (would contradict current GitHub Docs and is unlikely):
 
-1. **Manual unstick:** an org admin merges via `bypass_actors` (`OrganizationAdmin`, `pull_request` mode — see `knowledge-base/engineering/ops/runbooks/skill-security-scan-required-check.md`).
+1. **Manual unstick:** an org admin merges via `bypass_actors` (`OrganizationAdmin`, `pull_request` mode — see `knowledge-base/engineering/operations/runbooks/skill-security-scan-required-check.md`).
 2. **Long-term:** file a GitHub support ticket citing the doc reversal. Audit script's `H3` sub-classification distinguishes "ruleset semantics shifted" from "individual alert needs triage."
 
 ## Cross-references
 
-- `knowledge-base/engineering/ops/runbooks/skill-security-scan-required-check.md` — parent R15 runbook.
-- `knowledge-base/engineering/ops/runbooks/ruleset-bypass-drift.md` — sibling audit (#3544) for `bypass_actors`.
-- `knowledge-base/engineering/ops/runbooks/lint-bot-statuses.md` — sibling lint runbook (#3546) covering pre-merge enforcement of bot-PR synthetic check-run completeness.
+- `knowledge-base/engineering/operations/runbooks/skill-security-scan-required-check.md` — parent R15 runbook.
+- `knowledge-base/engineering/operations/runbooks/ruleset-bypass-drift.md` — sibling audit (#3544) for `bypass_actors`.
+- `knowledge-base/engineering/operations/runbooks/lint-bot-statuses.md` — sibling lint runbook (#3546) covering pre-merge enforcement of bot-PR synthetic check-run completeness.
 - `scripts/required-checks.txt` — synthetic-postable check names (NOT including `CodeQL` by design — see comment block in that file).
 - `scripts/audit-bot-codeql-coverage.sh` — the audit script.
 - [GitHub Docs: About protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches) — `neutral` satisfies required checks.

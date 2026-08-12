@@ -90,7 +90,7 @@ WHEREAS the Grantor operates a Soleur Web Platform workspace and holds a valid B
 
 WHEREAS the Grantor wishes to fund the Grantee's AI agent runs within the shared workspace by delegating access to the Grantor's API key, subject to daily and hourly spending caps;
 
-WHEREAS the BYOK delegation feature (`BYOK_DELEGATIONS_ENABLED`) routes the Grantee's prompt content through the Grantor's API key, creating a joint controllership arrangement under Article 26 of the GDPR for that processing;
+WHEREAS the BYOK delegation feature (runtime flag `byok-delegations`) routes the Grantee's prompt content through the Grantor's API key, creating a joint controllership arrangement under Article 26 of the GDPR for that processing;
 
 WHEREAS the Parties intend the responsibility allocation set out in Section 3 of this text to constitute their Article 26 arrangement, and intend the recorded in-app acceptance to evidence the Grantee's consent under Article 7 of the GDPR;
 

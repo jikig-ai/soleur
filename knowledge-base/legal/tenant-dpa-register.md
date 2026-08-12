@@ -30,6 +30,11 @@ onboards his first non-Soleur tenant under this substrate.
 
 ## Status values
 
+These bare tokens are the **canonical** form: a Status cell carries the token itself, with no
+`status: ` prefix. `scripts/tenant-dpa-register-guard.sh` resolves the Status column by name
+from the header row and compares the trimmed cell against these values, so a tenant slug or a
+Notes cell that happens to contain one of these tokens is not counted.
+
 - `dpa-signed` — DPA executed by both parties; provisioning has not started.
 - `provisioning-in-progress` — Step 1 of `tenant-provisioning.md` has started.
 - `provisioned` — all provisioning runbook steps complete and verified.
@@ -53,7 +58,8 @@ written notice** when adding or replacing an Authorized Sub-processor in
 the Customer DPA's Schedule 2.
 
 **Baseline state at 2026-05-25:** the rows table above is **empty**
-(`status: dpa-signed` count = 0). The §6.1 30-day notification clock
+(signed-row count = 0, per
+`bash scripts/tenant-dpa-register-guard.sh count-signed`). The §6.1 30-day notification clock
 is therefore **not triggered** by any sub-processor addition or
 substrate change recorded against this register today. New sub-processor
 disclosures (e.g., Bullet Train Ltd / Flagsmith via PR #4455 / umbrella
@@ -81,7 +87,7 @@ SCCs Module 3 + DPF where available.
 **PR-2 pre-merge guard (umbrella #4456):** immediately before merging
 PR-2 (the combined per-org capability + WORM audit + both flag
 migrations), the operator MUST re-run
-`awk '/^\| /' knowledge-base/legal/tenant-dpa-register.md | grep -c 'status: dpa-signed'`.
+`bash scripts/tenant-dpa-register-guard.sh count-signed`.
 The expected value is `0`. If non-zero, the §6.1 30-day clock applies
 to PR-2's data-flow expansion (workspace `orgId` identity-trait egress
 to Flagsmith) — pause PR-2 merge and escalate to CLO. Per LC-04 GDPR

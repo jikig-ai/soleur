@@ -47,6 +47,25 @@ Jurisdiction: [jurisdiction]
 Contact: [contact info]"
 ```
 
+**Gates measure agreement, not truth (#7349).** All five gates compare the two surfaces against
+each other. None asks whether the agreed text is correct, so two byte-identical copies of a false
+sentence pass every one of them. Three defects shipped past a full green run in #7349 that way: a
+controllership statement drift-reduction copied onto the published page, a duplicated clause left
+behind by a half-applied replacement, and "eleven processing activities" in a document whose
+register carries thirty-five. Read the prose; do not read the drift number and stop.
+
+**`BODY_EQUIVALENCE_DOCS` is a one-way ratchet.** `terms-and-conditions`, `acceptable-use-policy`
+and `disclaimer` are enrolled; each was verified at ZERO normalised drift immediately before
+enrolment, because enrolling a drifted document turns a required check red on arrival. Once
+enrolled, any edit landing on one surface only reds that check — which is the point. `--print-vocab`
+and a mutation check (inject a line, confirm the guard fails, remove it) are the two ways to prove
+an enrolment is live rather than decorative.
+
+**Two measurement traps that cost real rounds in #7349.** `collapse()` normalises `[0-9]+ AI
+agents` but NOT a bare `[0-9]+ agents`, so count divergence between the record and the published
+page can be invisible to the drift gate. And a grep for `Article ` will not match the corpus's
+plural `Articles 15 through 22` — use `Articles? 1[5-9]`.
+
 ## Phase 2.5: Redaction Gate (BLOCKING — runs BEFORE inline presentation)
 
 A generated legal draft can echo a secret or PII that was passed in as company context (a contact email, an API identifier pasted into a data-practices answer). **Presenting the draft inline in Phase 3 is a transcript write boundary** — the same fail-closed rule the incident skill enforces (`incident/SKILL.md` Phase 6): the sentinel must precede inline-emit, not just file-commit. So the redaction gate runs here, before the operator ever sees the draft.
