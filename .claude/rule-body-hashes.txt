@@ -61,7 +61,7 @@ bcfab9abb9f678ddac38725bac7010de8218dc5908dabc958c3bc61c3d056278  wg-cla-signed-
 e4b4123778b182cc0714b6f7634bcc6ed60da81401da03ce35e5d8eafca93a09  wg-end-of-work-emit-resume-prompt
 695ee8e150a170130d85bfcd007faa8a1cb65944148cbd649f3aa31936178e79  wg-every-feature-listed-in-a-roadmap-phase
 5371eb922a7d2402648dbf68dbe902abf582e97d36e3f9e8f04942ed69443cea  wg-every-session-error-must-produce-either
-1794310613677832e9c691278b479a9c37aaaa6c480003d1814dd76377f8453d  wg-never-bump-version-files-in-feature
+2b511a98582e3841e92287f336522bcde6fb74b454f486c03d6e3edbcde8fe75  wg-never-bump-version-files-in-feature
 080278af90659f4df6abfbebee5c4d98313847557d72eacd5eeb1097234f3ff3  wg-plan-prescribed-skills-must-run-inline
 eff970196e3c179da0a1869e06bc537b74291551d82c5ec1679521bf55e2848e  wg-pm-class-followthrough-for-operator-dogfood
 21ab9039ee82bf0c43b917f3480d26fb03bb83154003395e2cea3708cebee828  wg-record-recurring-vendor-expense-before-ready

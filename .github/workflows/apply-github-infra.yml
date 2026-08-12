@@ -221,14 +221,46 @@ jobs:
               state_list=$(terraform state list 2>/dev/null || true)  # refresh
             fi
           }
-          # `moved {}` caveat: if either resource is later renamed via a `moved {}`
-          # block, update the hardcoded import address here in the same PR (else
-          # `terraform import` errors "resource already managed"). This
+          # Same guard, DIFFERENT import-id shape. A `github_repository` is
+          # imported by the bare repo NAME -- not `owner:id`, not `owner/name`.
+          # Verified against the pinned provider's own docs rather than copied
+          # from import_ruleset: integrations/github v6.12.1 (the version in
+          # infra/github/.terraform.lock.hcl), website/docs/r/repository.html.markdown
+          # -- "Repositories can be imported using the `name`". The owner comes
+          # from the `provider "github"` block's `owner = "jikig-ai"`. Passing
+          # the ruleset's `soleur:14145388` shape here fails at apply.
+          import_repository() {
+            local addr=$1 name=$2
+            if grep -qxF "$addr" <<<"$state_list"; then
+              echo "Resource $addr already in state, skipping import."
+            else
+              echo "Importing repository $name as $addr (one-time bootstrap)."
+              doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+                terraform import "$addr" "$name"
+              state_list=$(terraform state list 2>/dev/null || true)  # refresh
+            fi
+          }
+          # `moved {}` caveat: if any of these resources is later renamed via a
+          # `moved {}` block, update the hardcoded import address here in the same
+          # PR (else `terraform import` errors "resource already managed"). This
           # per-address form replaces the blanket
           # `grep -qE '^github_repository_ruleset\.'` gate that previously served
           # the same defense.
           import_ruleset github_repository_ruleset.ci_required 14145388
           import_ruleset github_repository_ruleset.cla_required 13304872
+          # App-installation scope: the provider authenticates as the soleur-ai
+          # App (installation 122213433). A repository import 404s -- confusingly,
+          # as "Not Found" rather than "Forbidden" -- if the App is installed on
+          # *selected repositories* and soleur-marketplace is not among them.
+          # Verified org-wide at adoption time:
+          #   gh api /orgs/jikig-ai/installations \
+          #     --jq '.installations[] | select(.app_slug=="soleur-ai") | .repository_selection'
+          #   => "all"
+          # If that ever reads "selected", add the repo to the installation
+          # (Settings -> GitHub Apps -> soleur-ai -> Repository access, or
+          # `PUT /user/installations/122213433/repositories/{repository_id}`)
+          # before re-running -- do NOT chase it as a Terraform bug.
+          import_repository github_repository.soleur_marketplace soleur-marketplace
 
       - name: Terraform plan
         id: plan
