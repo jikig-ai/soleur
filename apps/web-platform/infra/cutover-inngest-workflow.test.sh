@@ -544,6 +544,43 @@ assert "#6552 delete is UNCONDITIONAL — NOT nested in the armed|flipping|flush
 assert "#6552 after-inner-esac tail is non-vacuous" "[[ '$TAIL_N' -gt 3 ]]"
 assert "#6552 delete runs in the unconditional Half-B tail (after inner esac) — reached for aborted/unset/re-dispatch" "grep -qE 'doppler secrets delete INNGEST_HEARTBEAT_URL' '$TAIL_FILE'"
 
+# --- #7228: op=rollback PAUSES the consumer heartbeat -----------------------------------------
+# THE FALSE PAGE. betteruptime_heartbeat.inngest_consumer is fed by inngest-consumer-probe.timer
+# on the WEB host, which pings ONLY while 10.0.1.40 serves a non-empty registry and suppresses
+# otherwise — the property that makes it detect #7228, and the reason a DELIBERATE rollback trips
+# it. The rollback exists to stop the dedicated scheduler; the probe correctly suppresses; and
+# ~4min later (period 180 + grace 60) the operator is paged for the state they just requested. A
+# monitor that pages on intended operator actions is one the operator learns to ignore.
+#
+# Same UNCONDITIONAL requirement as the delete above, and proven the same structural way: op=arm
+# can leave the system in aborted / partial-arm / re-dispatch states that the forward-state inner
+# case arm skips, and the feeder is silenced in all of them.
+# Asserted per-token, NOT as one `PATCH.*heartbeats/` regex: grep is line-oriented and the call
+# is wrapped across continuations, so the combined pattern can only ever match by accident of
+# formatting — it would go RED on a `terraform fmt`-style rewrap of correct code, and it proved
+# exactly that during authoring.
+assert "#7228 rollback PAUSEs the consumer heartbeat (else a deliberate rollback pages the operator)" \
+  "grep -qE '^[[:space:]]*(elif )?curl .*-X PATCH' '$ROLLBACK_FILE' && grep -qF 'api/v2/heartbeats/' '$ROLLBACK_FILE' && grep -qF '\"paused\":true' '$ROLLBACK_FILE'"
+assert "#7228 the pause targets the consumer monitor BY NAME (survives a terraform recreate that changes the id)" \
+  "grep -qF 'soleur-inngest-consumer-prd' '$ROLLBACK_FILE'"
+assert "#7228 pause is UNCONDITIONAL — NOT nested in the armed|flipping|flushed|done) case arm" \
+  "! grep -qF 'soleur-inngest-consumer-prd' '$FWD_ARM_FILE'"
+assert "#7228 pause runs in the unconditional Half-B tail — reached for aborted/unset/re-dispatch" \
+  "grep -qF 'soleur-inngest-consumer-prd' '$TAIL_FILE'"
+# Fail-OPEN, matching the URL delete: an un-paused monitor pages the operator, which is strictly
+# less severe than withholding the safety-critical web re-enable. A `curl -f` whose failure
+# aborted the script would invert that trade.
+assert "#7228 a failed pause WARNs and does not block the web re-enable" \
+  "grep -qE '::warning::op=rollback: PATCH paused=true' '$ROLLBACK_FILE'"
+# The API token is masked before any use — the same F7 discipline as the PG/HB captures at G2.
+assert "#7228 BETTERSTACK_API_TOKEN is masked on its own capture line before use" \
+  "grep -A1 'BS_API=\$(doppler secrets get BETTERSTACK_API_TOKEN' '$ROLLBACK_FILE' | grep -qF '::add-mask::'"
+# THE ASYMMETRY IS DELIBERATE. op=arm must NOT unpause: ADR-117 unpauses only after a REAL beat
+# is measured, and arming before the FSM runs is the green-but-inert monitor #6537 spent nine days
+# as. This asserts the arm path contains no unpause, so a future edit "restoring symmetry" reds.
+assert "#7228 op=arm does NOT unpause the consumer heartbeat (ADR-117: never armed ahead of a real beat)" \
+  "! grep -qE '\"paused\":[[:space:]]*false' '$ARM_FILE'"
+
 # ===========================================================================
 # #6617 — standalone read-only probe ops (registry-probe, doublefire-probe)
 #

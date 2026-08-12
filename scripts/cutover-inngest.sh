@@ -1089,6 +1089,15 @@ case "$OP" in
     echo "::notice::op=arm: G4 wrote INNGEST_POSTGRES_URI to soleur-inngest/prd (value not echoed)"
     printf '%s' "$HB" | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_HEARTBEAT_URL -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=arm: G4 — writing INNGEST_HEARTBEAT_URL to soleur-inngest/prd FAILED. armed NOT written. Job aborts (no value echoed)."; exit 1; }
     echo "::notice::op=arm: G4 wrote INNGEST_HEARTBEAT_URL to soleur-inngest/prd (value not echoed)"
+    # #7228: op=arm deliberately does NOT touch betteruptime_heartbeat.inngest_consumer, the
+    # consumer-side monitor its symmetric op=rollback pauses. Unpausing here would arm a monitor
+    # BEFORE the FSM has run, i.e. before any beat exists — the green-but-inert state ADR-117
+    # forbids and #6537 spent nine days in. The ONLY unpause path is the measured-beat arm gate in
+    # apply-web-platform-infra.yml, which PATCHes paused=false, polls for a REAL beat, and rolls
+    # back to paused if none lands. It is self-clearing: the first apply after this host actually
+    # serves will arm it. Nothing to do here — stated because the ASYMMETRY with op=rollback is
+    # deliberate and a future edit "restoring symmetry" would reintroduce the inert monitor.
+    echo "::notice::op=arm: consumer heartbeat left PAUSED by design — the ADR-117 measured-beat gate arms it on the first apply after the host serves (never armed ahead of a real beat)."
 
     # G5 — arm LAST. The enabled 30s on-host .timer picks up `armed` and drives the FSM
     # armed -> flipping -> flushed -> done (ADR-100 Decision 6a). `armed` is a literal, not a
@@ -1546,6 +1555,51 @@ case "$OP" in
     else
       ERR_TAIL=$(printf '%s' "$DELETE_ERR" | tr -d '\r' | tr '\n' ' ' | tail -c 300)
       echo "::warning::op=rollback: could not delete INNGEST_HEARTBEAT_URL from soleur-inngest/prd (already absent, or a transient Doppler error: ${ERR_TAIL:-<no stderr>}). NOT blocking the web re-enable. If a stale URL persists the dedicated host may remain a second heartbeat pusher (monitor false-green) — re-dispatch op=rollback, or verify via cat-deploy-state.sh inngest_heartbeat_dark_arm."
+    fi
+
+    # ---- #7228: PAUSE the consumer heartbeat, the exact inverse of the delete above --------
+    # THE FALSE PAGE THIS PREVENTS. betteruptime_heartbeat.inngest_consumer (inngest.tf) is fed by
+    # inngest-consumer-probe.timer on the WEB host, which pings ONLY while 10.0.1.40 serves a
+    # non-empty registry and SUPPRESSES otherwise, so that absence alarms. That is exactly the
+    # property that makes it detect #7228 — and exactly why a DELIBERATE rollback trips it: the
+    # rollback's whole purpose is to stop the dedicated scheduler, the probe correctly suppresses,
+    # and ~4 minutes later (period 180 + grace 60) the operator is paged for a state they just
+    # asked for. A monitor that pages on intended operator actions is one the operator learns to
+    # ignore, which is how the NEXT real outage goes unnoticed.
+    #
+    # Symmetric to the URL delete above: that one removes the dedicated host's pusher for the
+    # SHARED monitor; this one quiesces the monitor whose feeder the rollback has just silenced.
+    #
+    # PAUSE, never delete: the ADR-117 measured-beat arm gate in apply-web-platform-infra.yml
+    # re-arms it automatically on the first apply after the host serves again, and it gates on a
+    # live `status=="paused"`. Deleting the resource would instead force a terraform recreate and
+    # mint a NEW url, stranding the one already in Doppler under ignore_changes=[value].
+    #
+    # op=arm deliberately does NOT unpause. ADR-117's whole rule is that a monitor is unpaused
+    # only after a REAL beat has been measured; arming it here — before the FSM has even run —
+    # would create precisely the green-but-inert monitor #6537 spent nine days as.
+    #
+    # Resolved BY NAME rather than from an id output: the name is pinned in inngest.tf, and a
+    # name lookup keeps working across a terraform recreate that would change the id. Fail-open
+    # with a WARN, matching the delete above — a monitor left un-paused pages the operator, which
+    # is strictly less severe than withholding the safety-critical web re-enable below.
+    BS_API=$(doppler secrets get BETTERSTACK_API_TOKEN --plain 2>/dev/null || true)
+    printf '::add-mask::%s\n' "$BS_API"
+    if [[ -z "$BS_API" ]]; then
+      echo "::warning::op=rollback: BETTERSTACK_API_TOKEN unreadable from prd_terraform — NOT pausing the consumer heartbeat. It will alarm ~4min after the dedicated scheduler stops, for a state this rollback created on purpose. Pause 'soleur-inngest-consumer-prd' manually if it pages, or re-dispatch once the token reads."
+    else
+      HB_ID=$(curl -fsS --max-time 20 -H "Authorization: Bearer $BS_API" \
+        'https://uptime.betterstack.com/api/v2/heartbeats?per_page=250' 2>/dev/null \
+        | jq -r '.data[] | select(.attributes.name == "soleur-inngest-consumer-prd") | .id' 2>/dev/null | head -1 || true)
+      if [[ -z "$HB_ID" ]]; then
+        echo "::warning::op=rollback: could not resolve the 'soleur-inngest-consumer-prd' heartbeat id from the Better Stack API — NOT pausing it. It will alarm ~4min after the dedicated scheduler stops. NOT blocking the web re-enable."
+      elif curl -fsS --max-time 20 -X PATCH -H "Authorization: Bearer $BS_API" -H 'Content-Type: application/json' \
+             --data-binary '{"paused":true}' \
+             "https://uptime.betterstack.com/api/v2/heartbeats/$HB_ID" >/dev/null 2>&1; then
+        echo "::notice::op=rollback: paused the consumer heartbeat (soleur-inngest-consumer-prd) — its feeder is deliberately silenced by this rollback, so pausing prevents a page for an intended state. The ADR-117 measured-beat arm gate re-arms it on the first apply after the host serves again."
+      else
+        echo "::warning::op=rollback: PATCH paused=true on the consumer heartbeat FAILED. It will alarm ~4min after the dedicated scheduler stops, for a state this rollback created on purpose. NOT blocking the web re-enable; pause 'soleur-inngest-consumer-prd' or re-dispatch op=rollback."
+      fi
     fi
 
     # ---- Half (B): the web re-enable + restart fan-out (the pre-#6369 behaviour).
