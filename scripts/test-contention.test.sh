@@ -442,12 +442,41 @@ lock_env() {
 # Without this control, a broken probe reads as "blocked" and would justify
 # building the stale-holder detection Phase 3.6 proves is dead code (the
 # three-attempt trap in the plan's Sharp Edges).
-out="$(lock_env bash -c "source '$LIB'; tc_acquire 6789-free 3; echo RC=\$?" 2>&1 || true)"
+lock_env bash -c "source '$LIB'; tc_acquire 6789-free 3; echo RC=\$?" \
+  > "$TESTROOT/free.txt" 2>&1 || true
+out="$(cat "$TESTROOT/free.txt")"
 if [[ "$(grep -cE 'LOCK_ACQUIRED' <<<"$out" || true)" -ge 1 ]] \
    && [[ "$(grep -cE 'RC=0' <<<"$out" || true)" -ge 1 ]]; then
   pass "POSITIVE CONTROL: a free lock is acquired (probe is valid)"
 else
   fail "positive control failed — later lock arms are meaningless: $out"
+fi
+
+# AC1 + AC7. The elapsed must be a MEASURED number, and the banner TOKEN must
+# keep its exact shape: `work/SKILL.md`'s contention grep, ADR-133 and arms
+# 10-13 all match on `LOCK_ACQUIRED`, so only post-colon text may move. The
+# regex pins both at once — prefix, token, quoted name, and a digits-plus-`ms`
+# elapsed. It deliberately requires DIGITS: on a host without EPOCHREALTIME the
+# lib prints `unknown` and this arm is expected to red rather than silently
+# accept a fabricated 0 (this repo's runners are bash 5.x; test-all.sh already
+# depends on EPOCHREALTIME for every suite timing).
+acq_line="$(awk '/LOCK_ACQUIRED/{print; exit}' "$TESTROOT/free.txt")"
+if [[ "$acq_line" =~ \[contention\]\ LOCK_ACQUIRED:\ \'[^\']+\'\ after\ ([0-9]+)ms ]]; then
+  pass "AC1/AC7: LOCK_ACQUIRED keeps its token and carries a measured elapsed (${BASH_REMATCH[1]}ms)"
+else
+  fail "AC1/AC7: LOCK_ACQUIRED has no measured elapsed in the expected shape; got: $acq_line"
+fi
+
+# AC5 (ordering half). LOCK_WAITING marks "this run reached the wait", so it
+# must PRECEDE the outcome banner. Line numbers via awk, never `grep | head`:
+# an early match makes head close the pipe and pipefail turns the MATCH into a
+# non-zero pipeline (the #6588 class this file's header documents).
+_w_line="$(awk '/LOCK_WAITING/{print NR; exit}' "$TESTROOT/free.txt")"
+_a_line="$(awk '/LOCK_ACQUIRED/{print NR; exit}' "$TESTROOT/free.txt")"
+if [[ -n "$_w_line" && -n "$_a_line" ]] && (( _w_line < _a_line )); then
+  pass "AC5: LOCK_WAITING precedes the outcome banner (line $_w_line < $_a_line)"
+else
+  fail "AC5: LOCK_WAITING must precede LOCK_ACQUIRED; got waiting='$_w_line' acquired='$_a_line'"
 fi
 
 # --- Arm 11: advisory timeout PROCEEDS, never aborts (AC4) ------------------
@@ -469,6 +498,37 @@ if [[ "$(grep -cE 'LOCK_CONTENDED_PROCEEDING' "$TESTROOT/timeout.txt" || true)" 
 else
   fail "AC4: no advisory banner; got: $(cat "$TESTROOT/timeout.txt")"
 fi
+
+# AC2 + AC7. The contended banner must report the duration it MEASURED, not the
+# budget it was handed. The `>= 1000` floor is the load-bearing part and is what
+# separates this from a shape check: the timeout here is 2 SECONDS, so a real
+# wait reads ~2000ms while the literal `${timeout_s}` reads `2`. Restoring the
+# original lie in EITHER form — `still held after ${timeout_s}s` or a
+# `${timeout_s}ms` substituted into the new text — lands below the floor or
+# fails the shape, so mutation row 1 cannot survive by changing units.
+cont_line="$(awk '/LOCK_CONTENDED_PROCEEDING/{print; exit}' "$TESTROOT/timeout.txt")"
+if [[ "$cont_line" =~ \[contention\]\ LOCK_CONTENDED_PROCEEDING:\ \'[^\']+\'.*gave\ up\ after\ ([0-9]+)ms\ of\ ([0-9]+)s ]] \
+   && (( BASH_REMATCH[1] >= 1000 )); then
+  pass "AC2/AC7: LOCK_CONTENDED_PROCEEDING reports a measured ${BASH_REMATCH[1]}ms against a ${BASH_REMATCH[2]}s budget"
+else
+  fail "AC2/AC7: contended banner does not report a measured elapsed >= 1000ms; got: $cont_line"
+fi
+# The original assertion, negatively. The line above could in principle be
+# satisfied while the old unmeasured claim survives ALONGSIDE it, which would
+# leave the false statement in the operator's terminal and in the transcript
+# `work/SKILL.md` tells an agent to grep.
+if [[ "$(grep -cE 'still held after' "$TESTROOT/timeout.txt" || true)" -eq 0 ]]; then
+  pass "AC2: the unmeasured 'still held after <timeout>s' claim is gone"
+else
+  fail "AC2: the banner still asserts a duration nobody measured: $cont_line"
+fi
+_w_line="$(awk '/LOCK_WAITING/{print NR; exit}' "$TESTROOT/timeout.txt")"
+_c_line="$(awk '/LOCK_CONTENDED_PROCEEDING/{print NR; exit}' "$TESTROOT/timeout.txt")"
+if [[ -n "$_w_line" && -n "$_c_line" ]] && (( _w_line < _c_line )); then
+  pass "AC5: LOCK_WAITING precedes the contended banner too (line $_w_line < $_c_line)"
+else
+  fail "AC5: LOCK_WAITING must precede LOCK_CONTENDED_PROCEEDING; got '$_w_line' / '$_c_line'"
+fi
 kill "$HOLDER" 2>/dev/null || true
 wait "$HOLDER" 2>/dev/null || true
 
@@ -481,6 +541,15 @@ if [[ "$(grep -cE 'RC=0' <<<"$out" || true)" -ge 1 ]] \
 else
   fail "AC3: kill switch not honoured; got: $out"
 fi
+# AC5 (absence half). LOCK_WAITING means "this run reached the wait". A skip path
+# never reaches it, so a LOCK_WAITING here would make the marker fire on every
+# run — the "a banner that always fires carries no information" failure this
+# module's own header exists to prevent.
+if [[ "$(grep -cE 'LOCK_WAITING' <<<"$out" || true)" -eq 0 ]]; then
+  pass "AC5: LOCK_WAITING is absent on the kill-switch skip path"
+else
+  fail "AC5: LOCK_WAITING fired without reaching the wait (kill switch); got: $out"
+fi
 
 # --- Arm 13: CI exemption (AC5) --------------------------------------------
 out="$(lock_env env CI=true \
@@ -490,6 +559,11 @@ if [[ "$(grep -cE 'RC=0' <<<"$out" || true)" -ge 1 ]] \
   pass "AC5: CI set skips acquisition and says so"
 else
   fail "AC5: CI exemption not honoured; got: $out"
+fi
+if [[ "$(grep -cE 'LOCK_WAITING' <<<"$out" || true)" -eq 0 ]]; then
+  pass "AC5: LOCK_WAITING is absent on the CI skip path"
+else
+  fail "AC5: LOCK_WAITING fired without reaching the wait (CI); got: $out"
 fi
 # MUTATION CONTROL: without CI, the CI-skip path must NOT fire — otherwise a lib
 # that always skips passes arm 13 while locking nothing, ever.
@@ -543,6 +617,130 @@ if [[ "$(grep -cE 'kill -0|/proc/[^/]*holder|stale_pid|holder_pid' <<<"$_probe_c
   pass "the stale-holder pattern is live (matches when the shape is present)"
 else
   fail "the stale-holder detection regex matches nothing — the negative arm is vacuous"
+fi
+
+# --- Arm 16: SLOW ACQUIRE — the outcome no other arm can produce (AC3) ------
+# This is the single outcome the whole change exists to make legible, and
+# nothing else in this file reaches it: arm 10 takes a FREE lock (elapsed is
+# single-digit ms) and arm 11's holder outlives the timeout (never acquires).
+# Without this arm the elapsed assertions are satisfied by two constants — near
+# zero and the full budget — and "a wait that was redeemed" stays unproven.
+#
+# The discriminator is the FLOOR, not the presence of LOCK_ACQUIRED: a holder
+# that never releases turns this into a timeout, so asserting the banner alone
+# would pass on any acquisition at all.
+SLOW="$SS_ROOT/locks/6789-slow.lock"
+: > "$SLOW"
+flock -x "$SLOW" -c 'sleep 3' &
+SLOW_HOLDER=$!
+sleep 1
+lock_env bash -c "source '$LIB'; tc_acquire 6789-slow 8; echo RC=\$?" \
+  > "$TESTROOT/slow.txt" 2>&1 || true
+kill "$SLOW_HOLDER" 2>/dev/null || true
+wait "$SLOW_HOLDER" 2>/dev/null || true
+
+slow_line="$(awk '/LOCK_ACQUIRED/{print; exit}' "$TESTROOT/slow.txt")"
+if [[ "$(grep -cE 'RC=0' "$TESTROOT/slow.txt" || true)" -ge 1 ]] \
+   && [[ -n "$slow_line" ]]; then
+  pass "AC3/AC6: a lock released mid-wait is acquired and still returns 0"
+else
+  fail "AC3: mid-wait release did not acquire; got: $(cat "$TESTROOT/slow.txt")"
+fi
+if [[ "$slow_line" =~ after\ ([0-9]+)ms ]] && (( BASH_REMATCH[1] >= 800 )); then
+  pass "AC3: the redeemed wait reports a non-trivial ${BASH_REMATCH[1]}ms (a free lock reads single-digit)"
+else
+  fail "AC3: elapsed is not a non-trivial measured wait (>= 800ms); got: $slow_line"
+fi
+# A slow acquire must be DISTINGUISHABLE from a timeout, not merely non-empty.
+if [[ "$(grep -cE 'LOCK_CONTENDED_PROCEEDING' "$TESTROOT/slow.txt" || true)" -eq 0 ]]; then
+  pass "AC3: a redeemed wait is not reported as a timeout"
+else
+  fail "AC3: mid-wait release also emitted LOCK_CONTENDED_PROCEEDING: $(cat "$TESTROOT/slow.txt")"
+fi
+
+# --- Arm 17: flock(1) unavailable is LOCK_UNAVAILABLE, never a timeout (AC4) -
+# `acquire_lock` returns the SAME 99 for "waited the whole budget" and "flock is
+# not installed", so before this precheck the contended banner fired on a run
+# that never waited at all — asserting a duration against a wait that did not
+# happen. The precheck removes the ambiguity at its source rather than inferring
+# it from an elapsed threshold.
+#
+# The mask SHADOWS the entire real PATH minus flock, rather than curating a
+# minimal allowlist. That matters for the mutation: with the precheck deleted,
+# control must actually REACH `acquire_lock` (which itself fails on missing
+# flock and returns 99). Under a curated PATH, sourcing session-state.sh could
+# fail for an unrelated missing binary and emit LOCK_UNAVAILABLE anyway — the
+# arm would stay green against the mutation for the wrong reason.
+NOFLOCK_BIN="$TESTROOT/noflock-bin"
+mkdir -p "$NOFLOCK_BIN"
+REAL_BASH="$(command -v bash)"
+_pdirs=()
+IFS=: read -r -a _pdirs <<<"$PATH"
+for _d in "${_pdirs[@]}"; do
+  if [[ ! -d "$_d" ]]; then continue; fi
+  for _f in "$_d"/*; do
+    if [[ ! -f "$_f" || ! -x "$_f" ]]; then continue; fi
+    _b="${_f##*/}"
+    if [[ "$_b" == "flock" ]]; then continue; fi
+    if [[ -e "$NOFLOCK_BIN/$_b" ]]; then continue; fi
+    ln -s "$_f" "$NOFLOCK_BIN/$_b" 2>/dev/null || true
+  done
+done
+
+# FIXTURE SELF-CHECK. Without it, a mask that broke the environment wholesale
+# would still produce LOCK_UNAVAILABLE and the arm below would read as proof of
+# a precheck that does not exist. It must hide flock SPECIFICALLY.
+_mask_probe="$(env PATH="$NOFLOCK_BIN" "$REAL_BASH" -c \
+  'command -v flock >/dev/null && echo HAS_FLOCK || echo NO_FLOCK
+   command -v dirname >/dev/null && echo HAS_DIRNAME || echo NO_DIRNAME' 2>&1 || true)"
+if [[ "$(grep -cE '^NO_FLOCK$' <<<"$_mask_probe" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE '^HAS_DIRNAME$' <<<"$_mask_probe" || true)" -ge 1 ]]; then
+  pass "AC4 fixture: the mask hides flock specifically (the rest of PATH survives)"
+else
+  fail "AC4 fixture is invalid — mask probe returned: $_mask_probe"
+fi
+
+env -u CI SOLEUR_SESSION_STATE_ROOT="$SS_ROOT" TC_PROC_ROOT="$FAKE_PROC" \
+    TC_TMPDIR="$FAKE_TMP" TC_XDG_DIR="" PATH="$NOFLOCK_BIN" \
+    "$REAL_BASH" -c "source '$LIB'; tc_acquire 6789-noflock 2; echo RC=\$?" \
+    > "$TESTROOT/noflock.txt" 2>&1 || true
+if [[ "$(grep -cE 'LOCK_UNAVAILABLE' "$TESTROOT/noflock.txt" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'RC=0' "$TESTROOT/noflock.txt" || true)" -ge 1 ]]; then
+  pass "AC4/AC6: a missing flock(1) is LOCK_UNAVAILABLE and still returns 0"
+else
+  fail "AC4: missing flock did not emit LOCK_UNAVAILABLE; got: $(cat "$TESTROOT/noflock.txt")"
+fi
+if [[ "$(grep -cE 'LOCK_CONTENDED_PROCEEDING' "$TESTROOT/noflock.txt" || true)" -eq 0 ]]; then
+  pass "AC4: a missing primitive is not reported as contention"
+else
+  fail "AC4: missing flock was reported as a timeout: $(cat "$TESTROOT/noflock.txt")"
+fi
+if [[ "$(grep -cE 'LOCK_WAITING' "$TESTROOT/noflock.txt" || true)" -eq 0 ]]; then
+  pass "AC5: LOCK_WAITING is absent when the primitive is unavailable"
+else
+  fail "AC5: LOCK_WAITING fired on a run that never waited: $(cat "$TESTROOT/noflock.txt")"
+fi
+
+# --- Arm 18: every tc_acquire exit path returns 0 (AC6, structurally) -------
+# The behavioural arms above cover the paths a fixture can reach. This one
+# covers the ones it cannot: ADR-133 Decision 3 makes the lock fail-OPEN, so a
+# single `return 1` added later would let an instrument wedge the run it exists
+# to observe. Asserted over the function BODY, not assumed from the arms.
+tc_body="$(awk '/^tc_acquire\(\) \{/{f=1} f{print} f && /^\}/{exit}' "$LIB")"
+ret_lines="$(grep -E '^[[:space:]]*return[[:space:]]' <<<"$tc_body" || true)"
+n_ret="$(grep -c . <<<"$ret_lines" || true)"
+n_zero="$(grep -cE '^[[:space:]]*return 0[[:space:]]*$' <<<"$ret_lines" || true)"
+# Minimum-cardinality guard: a failed extraction yields zero return lines, and
+# `0 == 0` would report the property as held over an empty set.
+if (( n_ret >= 6 )) && [[ "$(grep -cE 'LOCK_ACQUIRED' <<<"$tc_body" || true)" -ge 1 ]]; then
+  pass "AC6 extractor is live: $n_ret return statements found inside tc_acquire"
+else
+  fail "AC6 extractor is vacuous — found $n_ret returns and no banner in the extracted body"
+fi
+if (( n_ret == n_zero )); then
+  pass "AC6: all $n_ret tc_acquire exit paths return 0 (fail-open, ADR-133 Decision 3)"
+else
+  fail "AC6: $(( n_ret - n_zero )) tc_acquire exit path(s) do not return 0: $ret_lines"
 fi
 
 echo "=== Phase 4: sibling SUITE probe (SIBLING_SUITE_DETECTED) ==="
@@ -1016,8 +1214,12 @@ fi
 # Raised 68 -> 76 with the ADR-181 per-mount bytes arms (6 attribution + 2 contract). At 68 the floor had exactly the slack
 # to swallow that whole block: deleting it left the suite green and silent, which is the defect
 # this guard exists to prevent, applied to the feature that added it.
-if [[ "$((pass_n + fails))" -lt 76 ]]; then
-  fail "cardinality guard: only $((pass_n + fails)) assertions ran (expected >= 76)"
+# Raised 76 -> 92 with the #7484 measured-wait arms (elapsed assertions on arms 10-11, the
+# slow-acquire arm, the flock-missing arm, the LOCK_WAITING ordering/absence arms and the
+# structural fail-open arm). Derived by running the as-written file, not estimated: a floor
+# guessed from a plan's prose is the same unmeasured claim this change exists to remove.
+if [[ "$((pass_n + fails))" -lt 92 ]]; then
+  fail "cardinality guard: only $((pass_n + fails)) assertions ran (expected >= 92)"
 fi
 
 echo "=== test-contention: $pass_n passed, $fails failed ==="

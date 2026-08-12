@@ -524,6 +524,36 @@ tc_preamble() {
 # and inode-bound, released automatically once the last fd holder dies (proven
 # by AC5b). A "dead pid still holds the lock" state is unreachable with real
 # flock, so code defending it would be dead code.
+
+# Elapsed between two EPOCHREALTIME readings, formatted for a banner:
+# "<N>ms", or the literal "unknown".
+#
+# DELIBERATE DUPLICATION. This is run_suite's arithmetic, lifted from
+# scripts/test-all.sh (find it there by the `local elapsed_ms=0` block). The
+# script SOURCES this lib, so the lib must not depend on the script; the
+# alternative to duplicating ~5 lines is a dependency cycle. Both copies carry
+# the same two non-obvious guards: the `*.*` glob rejects bash 3.x, where
+# EPOCHREALTIME is unset and the captured value is empty or non-dotted, and
+# `10#` forces base-10 so a leading zero in the microseconds substring is not
+# parsed as octal.
+#
+# WHY IT PRINTS "unknown" AND NOT 0. A fabricated zero is indistinguishable
+# from a lock that was free on the first try — it would state, in the banner,
+# that a wait took no time when nothing was in fact measured. That is the exact
+# defect this whole change removes, so the degraded path must not re-introduce
+# it one branch over. run_suite may fabricate 0 for a suite timing because there
+# the number is advisory; here the number IS the claim.
+_tc_ms_since() {
+  local start="$1" end="${2:-$EPOCHREALTIME}"
+  if [[ "$start" == *.* && "$end" == *.* ]]; then
+    local start_us=$(( ${start%.*} * 1000000 + 10#${start#*.} ))
+    local end_us=$(( ${end%.*} * 1000000 + 10#${end#*.} ))
+    printf '%sms' $(( (end_us - start_us) / 1000 ))
+  else
+    printf 'unknown'
+  fi
+}
+
 tc_acquire() {
   local name="$1"
   local timeout_s="${2:-$TC_LOCK_TIMEOUT}"
@@ -542,6 +572,18 @@ tc_acquire() {
     return 0
   fi
 
+  # The serialization primitive itself. acquire_lock returns the SAME 99 for
+  # "waited the whole budget" and "flock(1) is not installed", so without this
+  # precheck a run that never waited at all takes the contended path — and then
+  # reports a duration for a wait that never happened. `command -v` answers the
+  # question exactly where an elapsed-time threshold only approximates it, and
+  # it needs no new outcome name: a missing flock is the same class as the two
+  # cases below, the serialization layer is unavailable.
+  if ! command -v flock >/dev/null 2>&1; then
+    echo "[contention] LOCK_UNAVAILABLE: flock(1) not found on PATH; proceeding without serialization." >&2
+    return 0
+  fi
+
   if [[ ! -f "$TC_SESSION_STATE" ]]; then
     echo "[contention] LOCK_UNAVAILABLE: session-state.sh not found at $TC_SESSION_STATE; proceeding without serialization." >&2
     return 0
@@ -553,13 +595,32 @@ tc_acquire() {
     return 0
   fi
 
+  # Emitted after every skip path, so its PRESENCE is a fact about control flow:
+  # this run reached the wait. It is a live-stderr affordance — a 15-minute
+  # block reads as a queue rather than a hang — and deliberately a plain line
+  # rather than a BANNER, because it fires on every run that gets here and
+  # work/SKILL.md's contention grep is anchored specifically to avoid
+  # always-firing hits.
+  echo "[contention] LOCK_WAITING: '$name' — waiting up to ${timeout_s}s for the advisory lock." >&2
+
+  # The two readings bracket the blocking call and nothing else. `_tc_ms_since`
+  # is called AFTER the end reading is captured, so its command substitution
+  # cannot inflate the number it formats.
+  local t0="$EPOCHREALTIME" t1 waited
   if acquire_lock "$name" "$timeout_s"; then
-    echo "[contention] LOCK_ACQUIRED: '$name' (worktrees of this repo serialize on it)." >&2
+    t1="$EPOCHREALTIME"
+    waited="$(_tc_ms_since "$t0" "$t1")"
+    echo "[contention] LOCK_ACQUIRED: '$name' after $waited (worktrees of this repo serialize on it)." >&2
     return 0
   fi
+  t1="$EPOCHREALTIME"
+  waited="$(_tc_ms_since "$t0" "$t1")"
 
-  # Advisory: proceed, never abort.
-  echo "[contention] LOCK_CONTENDED_PROCEEDING: '$name' still held after ${timeout_s}s; proceeding anyway (advisory). A failure now may be interleaving — re-run the failing suite in isolation before diagnosing." >&2
+  # Advisory: proceed, never abort. Reports the duration that was MEASURED
+  # against the budget it was given. The previous text asserted `still held
+  # after <timeout>s` unconditionally, which was false whenever acquire_lock
+  # returned without waiting — the case the flock precheck above now removes.
+  echo "[contention] LOCK_CONTENDED_PROCEEDING: '$name' — gave up after $waited of ${timeout_s}s; proceeding anyway (advisory). A failure now may be interleaving — re-run the failing suite in isolation before diagnosing." >&2
   return 0
 }
 
