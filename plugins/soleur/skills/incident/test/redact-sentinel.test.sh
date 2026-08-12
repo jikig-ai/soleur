@@ -424,9 +424,9 @@ png        = bytes([0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A]) + b"\x00"*56
 t15a="${TMP_DIR}/t15a.txt"
 python3 -c "${_DER_PY}
 sys.stdout.write('k8s data: ' + b64(priv_short) + '\n')" > "${t15a}"
-bash "${SENTINEL}" "${t15a}" >/tmp/t15a.out 2>&1
+bash "${SENTINEL}" "${t15a}" >${TMP_DIR}/t15a.out 2>&1
 assert_exit "Test 15a: short-form (EC/Ed25519-size) headerless private-key DER caught" 1 $?
-assert_grep "Test 15a: pem_key_body" "matched pattern pem_key_body" /tmp/t15a.out
+assert_grep "Test 15a: pem_key_body" "matched pattern pem_key_body" ${TMP_DIR}/t15a.out
 
 t15b="${TMP_DIR}/t15b.txt"
 python3 -c "${_DER_PY}
@@ -449,8 +449,8 @@ assert_exit "Test 15c: 64-char-wrapped headerless private-key body caught via bl
 t15d="${TMP_DIR}/t15d.txt"
 python3 -c "${_DER_PY}
 sys.stdout.write('cert ' + b64(cert_like) + '\n')" > "${t15d}"
-bash "${SENTINEL}" "${t15d}" >/tmp/t15d.out 2>&1
-if grep -qE 'matched pattern pem_key_body' /tmp/t15d.out; then
+bash "${SENTINEL}" "${t15d}" >${TMP_DIR}/t15d.out 2>&1
+if grep -qE 'matched pattern pem_key_body' ${TMP_DIR}/t15d.out; then
   echo "FAIL: Test 15d: a public-cert-shaped DER (inner SEQUENCE) falsely tripped pem_key_body"; FAIL=$((FAIL + 1))
 else
   echo "PASS: Test 15d: cert/SPKI/encrypted-PKCS#8 shape does NOT trip pem_key_body (private-key discriminator)"; PASS=$((PASS + 1))
@@ -460,8 +460,8 @@ fi
 t15e="${TMP_DIR}/t15e.txt"
 python3 -c "${_DER_PY}
 sys.stdout.write('img ' + b64(png) + '\n')" > "${t15e}"
-bash "${SENTINEL}" "${t15e}" >/tmp/t15e.out 2>&1
-if grep -qE 'matched pattern pem_key_body' /tmp/t15e.out; then
+bash "${SENTINEL}" "${t15e}" >${TMP_DIR}/t15e.out 2>&1
+if grep -qE 'matched pattern pem_key_body' ${TMP_DIR}/t15e.out; then
   echo "FAIL: Test 15e: a PNG body falsely tripped pem_key_body"; FAIL=$((FAIL + 1))
 else
   echo "PASS: Test 15e: PNG image body does NOT trip pem_key_body"; PASS=$((PASS + 1))
@@ -483,9 +483,9 @@ for enc in b64s b64url hexs pcts; do
   f="${TMP_DIR}/t16-${enc}.txt"
   python3 -c "${_SECRET_PY}
 sys.stdout.write('payload: ' + ${enc} + ' trailer\n')" > "${f}"
-  bash "${SENTINEL}" "${f}" >/tmp/t16.out 2>&1
+  bash "${SENTINEL}" "${f}" >${TMP_DIR}/t16.out 2>&1
   assert_exit "Test 16.${enc}: encoded stripe key decoded and caught" 1 $?
-  assert_grep "Test 16.${enc}: stripe_key via decode" "matched pattern stripe_key" /tmp/t16.out
+  assert_grep "Test 16.${enc}: stripe_key via decode" "matched pattern stripe_key" ${TMP_DIR}/t16.out
 done
 
 # Test 16b — decode NO-FALSE-POSITIVE corpus: innocent encoded content must NOT manufacture a match.
@@ -504,11 +504,11 @@ sys.stdout.write('commit ' + 'ab'*20 + ' sha256 ' + 'cd'*32 + '\n')
 sys.stdout.write('token ' + jwtjson + '\n')
 sys.stdout.write('url https://x.example/a%2Fb%2Fc?q=1 done\n')
 " > "${t16b}"
-bash "${SENTINEL}" "${t16b}" >/tmp/t16b.out 2>&1
+bash "${SENTINEL}" "${t16b}" >${TMP_DIR}/t16b.out 2>&1
 if [[ $? -eq 0 ]]; then
   echo "PASS: Test 16b: innocent encoded content (image/SRI/SHA/JWT-JSON-email/percent-URL) does NOT manufacture a match"; PASS=$((PASS + 1))
 else
-  echo "FAIL: Test 16b: decode pass manufactured a false positive on innocent encoded content"; cat /tmp/t16b.out; FAIL=$((FAIL + 1))
+  echo "FAIL: Test 16b: decode pass manufactured a false positive on innocent encoded content"; cat ${TMP_DIR}/t16b.out; FAIL=$((FAIL + 1))
 fi
 
 # Test 16c — malformed base64 candidate must NOT bubble to the exit-2 catch-all (per-candidate guard).
@@ -523,12 +523,12 @@ bash "${SENTINEL}" "${t16c}" >/dev/null 2>&1
 assert_exit "Test 16c: malformed base64 candidate skipped per-candidate (real secret still caught, exit 1 not 2)" 1 $?
 
 # Test 16d — Test-4b invariant on a DECODE-caught finding (new emit path).
-bash "${SENTINEL}" "${TMP_DIR}/t16-b64s.txt" >/tmp/t16d.out 2>&1 || true
-if grep -qE 'matched pattern stripe_key \(decoded' /tmp/t16d.out && \
-   ! grep -qE 'at offset [0-9]+: [^*]{5,}\*\*\*' /tmp/t16d.out; then
+bash "${SENTINEL}" "${TMP_DIR}/t16-b64s.txt" >${TMP_DIR}/t16d.out 2>&1 || true
+if grep -qE 'matched pattern stripe_key \(decoded' ${TMP_DIR}/t16d.out && \
+   ! grep -qE 'at offset [0-9]+: [^*]{5,}\*\*\*' ${TMP_DIR}/t16d.out; then
   echo "PASS: Test 16d: decode finding is tagged and meta-redacted (<=4-char reveal)"; PASS=$((PASS + 1))
 else
-  echo "FAIL: Test 16d: decode finding missing tag or leaked >4 prefix chars"; cat /tmp/t16d.out; FAIL=$((FAIL + 1))
+  echo "FAIL: Test 16d: decode finding missing tag or leaked >4 prefix chars"; cat ${TMP_DIR}/t16d.out; FAIL=$((FAIL + 1))
 fi
 
 # Test 16e — behavioral fan-out bound: a base64-run-flooded input completes without hanging and
@@ -562,11 +562,11 @@ import base64, sys
 blob = bytes(range(0x80, 0x100)) * 2 + b'sk-A1b2C3d4E5f6G7h8I9j0' + bytes(range(0x80, 0x100))
 sys.stdout.write('embedded asset: ' + base64.b64encode(blob).decode() + ' end\n')
 " > "${t16f}"
-bash "${SENTINEL}" "${t16f}" >/tmp/t16f.out 2>&1
+bash "${SENTINEL}" "${t16f}" >${TMP_DIR}/t16f.out 2>&1
 if [[ $? -eq 0 ]]; then
   echo "PASS: Test 16f: a base64 binary asset with an incidental sk- run does NOT fail-close (printable-text gate)"; PASS=$((PASS + 1))
 else
-  echo "FAIL: Test 16f: decode pass fail-closed a legitimate binary asset (over-redaction FP)"; cat /tmp/t16f.out; FAIL=$((FAIL + 1))
+  echo "FAIL: Test 16f: decode pass fail-closed a legitimate binary asset (over-redaction FP)"; cat ${TMP_DIR}/t16f.out; FAIL=$((FAIL + 1))
 fi
 
 # Test 17 — email-class ReDoS bound (#6045 security review P1): a large run of email-class chars with
@@ -1022,93 +1022,174 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test 24 — STAKES-KEYED, discovered on disk, NO allowlist (CTO ruling item 2).
+# Test 24 — STAKES-KEYED discovery, INVARIANT-keyed violation, NO allowlist.
+# (CTO ruling item 2, rewritten at #7450 round-2 review.)
 #
-# Test 18c is keyed to a SYNTAX: the `${CLAUDE_PLUGIN_ROOT:-$(git rev-parse …)}` literal.
-# That is what let review-finding B2 hide. `trigger-cron` invoked a script running
-# `doppler secrets get … -c prd --plain` through the `./`-relative `:-` form, so 18c
-# truthfully printed "zero … remain anywhere under plugins/soleur/" while a cheaper-to-exploit
-# secret site sat one syntax away. A needle keyed to the shape of yesterday's bug cannot see
-# tomorrow's.
+# WHY THIS IS NOT KEYED ON SYNTAX. Test 18c is keyed to one literal,
+# `${CLAUDE_PLUGIN_ROOT:-$(git rev-parse …)}`. That is what let finding B2 hide: `trigger-cron`
+# invoked a script running `doppler secrets get … -c prd --plain` through the `./`-relative
+# `:-` form, so 18c truthfully printed "zero … remain anywhere under plugins/soleur/" while a
+# cheaper-to-exploit secret site sat one syntax away. A needle shaped like yesterday's bug
+# cannot see tomorrow's.
 #
-# So this assertion is keyed to STAKES instead, and the population is DISCOVERED ON DISK
-# rather than pinned: any script under skills/*/scripts/ whose own text handles a credential.
-# A pinned list has the same blind spot as a syntax needle — it cannot contain a site nobody
-# thought to add. G3/G5 in Guard 1 pin their populations deliberately (they assert an exact
-# identity set); this one deliberately does not.
+# The first version of THIS test then made the same mistake one level up: it keyed the
+# violation on `CLAUDE_PLUGIN_ROOT:-`, so it could not see the 16 credential scripts invoked
+# through a BARE repo-relative path — strictly worse, because a bare path is CWD-relative
+# unconditionally. So the assertion below is written as the INVARIANT:
 #
-# NO ALLOWLIST, by ruling. The ~105 non-gate sites deferred to #7453 are allowed to keep the
-# `:-` arm; a site that hands a credential to the resolved script is not, regardless of which
-# migration wave it belongs to.
+#     no credential-ACQUIRING script is reachable through a path that resolves relative to CWD
+#
+# `:-`, bare `plugins/soleur/…` and `./plugins/soleur/…` are three instances of one class. A
+# fourth spelling needs no new clause.
+#
+# WHY ACQUISITION, NOT ADJACENCY. The ruling says "reads a secret". Keying on credential-shaped
+# NAMES instead enrols every redaction engine, because token names are their needles — measured:
+# a name-keyed predicate matched `$SESSION_TOKENS` (LLM tokens), `$TRAILER_KEY` (a map key) and
+# `${LINEAR_CDN_PATTERNS}` (via `_PAT`), inflating the population by 9 with scripts that acquire
+# nothing. It also drags in `worktree-manager.sh`, which copies `.env*` files but acquires no
+# named credential — and which #7453 owns.
+#
+# The boundary, as a DEFINITION rather than an allowlist (so a future member is excluded by
+# reasoning, not by having been omitted from a list): a script that copies files which may
+# contain secrets, on a machine that has already granted it execution, adds no marginal exposure
+# beyond the generic arbitrary-code-execution that #7453 addresses for all ~105 deferred sites.
+# A script whose purpose is to FETCH a named production credential and act with it is a direct
+# exfiltration primitive when substituted.
 # ---------------------------------------------------------------------------
-t24_secret_scripts=()
-while IFS= read -r t24_s; do
-  t24_secret_scripts+=("${t24_s}")
-done < <(
-  find "${REPO_ROOT}/plugins/soleur/skills" -path '*/scripts/*' -type f \
-       \( -name '*.sh' -o -name '*.py' \) 2>/dev/null |
-  while IFS= read -r f; do
-    case "${f}" in *.test.sh) continue;; esac
-    # Credential handling, in the script's OWN text: a secrets-manager read, or a named
-    # credential variable it requires. Deliberately broad — a false positive costs one
-    # migrated anchor, a false negative costs a secret.
-    if grep -qE 'doppler secrets get|gh auth token|(API_KEY|ACCESS_TOKEN|BOT_TOKEN|_SECRET|_PAT|PRIVATE_KEY)[^A-Z_]' "${f}" 2>/dev/null; then
-      printf '%s\n' "${f}"
-    fi
-  done | sort
-)
 
-# Anti-vacuity FIRST: an empty or shrunken discovery set would make the violation loop below
-# pass unconditionally — the false-PASS shape 18c had to fix (A12).
-#
-# The floor is REQUIRED MEMBERSHIP, not a count. A bare `>= N` count is the same defect as
-# `GATE_REF_FLOOR` (A10): it fails OPEN on shrinkage, so a predicate edit that quietly drops
-# 70% of the population still clears a threshold set below the old size. Measured — an early
-# draft of this test used `>= 5` against a real population of 21, and a mutation that gutted
-# three-quarters of the credential predicate SURVIVED it.
-#
-# These three are pinned because each is a distinct credential-acquisition shape: a secrets
-# manager read, an ambient bot token, and a platform-API key set. A predicate that stops
-# seeing any one of them has stopped doing its job, whatever its total.
-t24_required=("trigger-cron/scripts/trigger.sh" "community/scripts/community-router.sh" "flag-create/scripts/create.sh")
+# A credential token inside a COMMENT is a mention, not an acquisition. Without this a
+# `# Never echo the API_KEY` line enrols a script that handles no credential, and the resulting
+# CI failure asserts something untrue about it.
+t24_strip_comments() {
+  case "$1" in
+    *.ts|*.mjs|*.cjs) sed -E 's,//.*,,' "$1" | grep -vE '^[[:space:]]*\*' ;;
+    *)                grep -vE '^[[:space:]]*#' "$1" ;;
+  esac
+}
+
+# Keyed on the ACT of obtaining or presenting a credential. `read -[a-z]*s` (not `read -s`)
+# because the real sites write `read -rs`; that exact miss cost a false-clean during the ruling.
+t24_acq_re='doppler secrets (get|download)|op read |vault kv get|gh auth token|read -[a-z]*s |Authorization: *Bearer|-H .Authorization|process\.env\.[A-Z_]*(TOKEN|_KEY|SECRET|PASSWORD)|env\("[A-Z_]*(TOKEN|_KEY|SECRET|PASSWORD)'
+
+t24_acquirers=()
+while IFS= read -r t24_f; do
+  t24_strip_comments "${t24_f}" | grep -qE "${t24_acq_re}" \
+    && t24_acquirers+=("${t24_f#"${REPO_ROOT}"/plugins/soleur/}")
+done < <(find "${REPO_ROOT}/plugins/soleur" -path '*/scripts/*' -type f \
+           \( -name '*.sh' -o -name '*.py' -o -name '*.ts' -o -name '*.mjs' -o -name '*.cjs' \) \
+           ! -name '*.test.sh' 2>/dev/null | sort)
+
+# ANTI-VACUITY: required MEMBERSHIP, never a count. A bare `>= N` floor fails OPEN on
+# shrinkage — measured, an early draft used `>= 5` against a population of 21 and a mutation
+# that gutted the predicate down to 9 members SURVIVED it. That is finding A10's shape.
+# These three are pinned because each is a DISTINCT acquisition mechanism; a predicate that
+# stops seeing any one of them has stopped doing its job whatever its total.
+#   trigger.sh                — secrets-manager read (`doppler secrets get … -c prd --plain`)
+#   discord-setup.sh          — ambient bot token (`DISCORD_BOT_TOKEN`)
+#   provision-hetzner.sh      — silent interactive prompt (`read -rs`)
+# `community-router.sh` is deliberately NOT pinned: under an acquisition predicate it correctly
+# drops out, because its only credential mention is inside a routing-table string.
+t24_required=(
+  "skills/trigger-cron/scripts/trigger.sh"
+  "skills/community/scripts/discord-setup.sh"
+  "skills/provision-hetzner/scripts/provision-hetzner.sh"
+)
 t24_missing_required=""
 for t24_req in "${t24_required[@]}"; do
   t24_found=0
-  for t24_have in "${t24_secret_scripts[@]}"; do
-    case "${t24_have}" in */"${t24_req}") t24_found=1; break;; esac
+  for t24_have in ${t24_acquirers[@]+"${t24_acquirers[@]}"}; do
+    [[ "${t24_have}" == "${t24_req}" ]] && { t24_found=1; break; }
   done
   [[ "${t24_found}" -eq 1 ]] || t24_missing_required="${t24_missing_required} ${t24_req}"
 done
 
 if [[ -n "${t24_missing_required}" ]]; then
-  echo "FAIL: Test 24: credential-script discovery no longer sees:${t24_missing_required} — each is a distinct credential-acquisition shape (secrets-manager read / ambient bot token / platform API key set), so the predicate is broken and a zero-violation verdict below would be vacuous. Found ${#t24_secret_scripts[@]} members total."
+  echo "FAIL: Test 24: credential-acquisition discovery no longer sees:${t24_missing_required} — each is a DISTINCT acquisition mechanism (secrets-manager read / ambient bot token / silent prompt), so the predicate is broken and the zero-violation verdict below would be vacuous. Population is ${#t24_acquirers[@]}."
   FAIL=$((FAIL + 1))
 else
   t24_violations=""
-  for t24_script in "${t24_secret_scripts[@]}"; do
-    t24_base="${t24_script##*/}"
-    # Every SKILL.md invocation of this script that routes through a `:-` default arm.
+  for t24_rel in ${t24_acquirers[@]+"${t24_acquirers[@]}"}; do
+    # Keyed on the PAYLOAD-RELATIVE PATH, never the basename: `flip.sh` is a suffix of
+    # `audit-flag-flip.sh`, and a bare basename also collides with markdown link targets and
+    # `# Usage:` lines. The full path is the script's unambiguous identity.
+    t24_rel_re="$(printf '%s' "${t24_rel}" | sed 's/[.[\*^$]/\\&/g')"
     while IFS= read -r t24_hit; do
       [[ -n "${t24_hit}" ]] || continue
+      t24_file="${t24_hit%%:*}"; t24_rest="${t24_hit#*:}"
+      t24_lno="${t24_rest%%:*}"; t24_line="${t24_rest#*:}"
+
+      # A script naming its OWN path (a usage header, a self-referential constant) is not a
+      # call to itself.
+      [[ "${t24_file}" == *"${t24_rel}" ]] && continue
+
+      # A path inside a COMMENT is documentation, not an invocation — `audit-flag-flip.sh`
+      # lists its four consumers in a comment block, which is a manifest, not a call.
+      case "${t24_file}" in
+        *.sh|*.py)        printf '%s' "${t24_line}" | grep -qE '^[[:space:]]*#' && continue ;;
+        *.ts|*.mjs|*.cjs) printf '%s' "${t24_line}" | grep -qE '^[[:space:]]*(//|\*)' && continue ;;
+      esac
+
+      # EXECUTION context only. The invariant is about reachability FOR EXECUTION, so a path
+      # merely read or written as CONTENT is a data root and correct as-is (the ruling's
+      # classification table). Measured: `flag-delete/scripts/delete.sh` names `flip.sh` twice
+      # to edit a map entry inside it — a source edit, not a call — and flagging that would
+      # teach the next reader that data roots need anchoring, which inverts the rule.
+      printf '%s' "${t24_line}" \
+        | grep -qE "(^|[[:space:];&|(])(bash|sh|bun|node|python3|python|exec|source|\.)[[:space:]]+[^[:space:]]*${t24_rel_re}|[Rr]un[[:space:]]+[^[:space:]]*${t24_rel_re}" \
+        || continue
+
+      # POSITIVE requirement — the invariant, not a list of bad spellings. TWO prefixes satisfy
+      # it, and both must be accepted or the guard flags correct code (and gets weakened by
+      # whoever hits that next):
+      #   ${CLAUDE_PLUGIN_ROOT}/…      loader-substituted at delivery (ADR-179 decision 1)
+      #   $SCRIPT_DIR / $BASH_SOURCE   layout-invariant per ADR-178, likewise not CWD-derived
+      printf '%s' "${t24_line}" | grep -qE '\$\{CLAUDE_PLUGIN_ROOT\}/' && continue
+      printf '%s' "${t24_line}" | grep -qE '\$\{?(SCRIPT_DIR|BASH_SOURCE)' && continue
+
       t24_violations="${t24_violations}
-    ${t24_hit}"
-    done < <(
-      grep -rn --include='SKILL.md' -E "CLAUDE_PLUGIN_ROOT:-[^}]*}[^\"']*${t24_base}" \
-        "${REPO_ROOT}/plugins/soleur/skills" 2>/dev/null |
-        sed "s|${REPO_ROOT}/plugins/soleur/skills/||"
-    )
+    ${t24_file#"${REPO_ROOT}"/}:${t24_lno}"
+    done < <(grep -rn -F "${t24_rel}" "${REPO_ROOT}/plugins/soleur" \
+               --include='*.md' --include='*.sh' --include='*.json' --include='*.ts' 2>/dev/null \
+               | grep -v '/test/' | grep -v '\.test\.' || true)
   done
 
   if [[ -z "${t24_violations}" ]]; then
-    echo "PASS: Test 24: zero \`:-\` default arms on any of the ${#t24_secret_scripts[@]} discovered secret-handling scripts (stakes-keyed, no allowlist)"
+    echo "PASS: Test 24: none of the ${#t24_acquirers[@]} discovered credential-acquiring scripts is reachable through a CWD-relative path (stakes-keyed discovery, invariant-keyed violation, no allowlist)"
     PASS=$((PASS + 1))
   else
-    echo "FAIL: Test 24: a script that handles a credential is invoked through a \`:-\` default arm, which resolves CWD-relative into whatever tree the session sits in:${t24_violations}"
-    echo "       Migrate the invocation to the bare quoted anchor. This assertion has NO allowlist on purpose (CTO ruling item 2) — deferring to #7453 is for non-gate sites, not for sites that hand over a credential."
+    echo "FAIL: Test 24: a credential-ACQUIRING script is invoked through a path that resolves relative to CWD, so the session's own working directory decides which script runs:${t24_violations}"
+    echo "       Fix: anchor the invocation on the bare quoted \${CLAUDE_PLUGIN_ROOT}, or resolve it \$BASH_SOURCE-relative if the target is a sibling in the payload."
+    echo "       This assertion has NO allowlist by ruling — deferring to #7453 is for non-gate sites, not for sites that hand over a credential."
     FAIL=$((FAIL + 1))
   fi
 fi
 
+
 echo
 echo "Total: ${PASS} pass, ${FAIL} fail"
+
+# ---------------------------------------------------------------------------
+# ANTI-VACUITY FLOOR ON THIS HARNESS'S OWN DISPATCH.
+#
+# `[[ "${FAIL}" -eq 0 ]]` alone is satisfied by a run that asserted NOTHING: delete every
+# assertion between the setup block and here and the file exits 0 at `Total: 0 pass, 0 fail`,
+# which `scripts/test-all.sh` reads as a passing suite. Measured — that is exactly what
+# happened, in the file whose whole purpose is proving OTHER files are not deletable at green.
+# Test 20 gives Guard 1 a cross-file floor and nothing reciprocated for Guard 2.
+#
+# This is not an invented convention: `scripts/lint-guard-contract.test.sh` already ships the
+# identical `EXPECTED_MIN` floor, and it was not reused here.
+#
+# A FLOOR, deliberately, not `-eq`: the count is developer-incremented, so equality turns every
+# added assertion into a spurious failure and the natural fix is to stop adding them. Derive the
+# value from a green run and ratchet it UP when assertions are added — never down to make a
+# failure go away, which is how a floor becomes the thing it was built to prevent.
+# ---------------------------------------------------------------------------
+EXPECTED_MIN=96
+TOTAL_DISPATCHED=$(( PASS + FAIL ))
+if [[ "${TOTAL_DISPATCHED}" -lt "${EXPECTED_MIN}" ]]; then
+  echo "FAIL: harness dispatched only ${TOTAL_DISPATCHED} assertions (expected >= ${EXPECTED_MIN}) — a vacuous run. Assertions were removed or the dispatch was neutered; a suite that asserts nothing exits 0 and reads as PASS." >&2
+  exit 1
+fi
+
 [[ "${FAIL}" -eq 0 ]]

@@ -100,9 +100,9 @@ curl -sS -X PATCH -H "Authorization: Api-Key $TOKEN" -H "Content-Type: applicati
 
 ```bash
 # Read-only — no mutations.
-bash plugins/soleur/skills/flag-set-role/scripts/flip.sh kb-chat-sidebar dev on --dry-run
-bash plugins/soleur/skills/user-set-role/scripts/set-role.sh <your-email> dev --dry-run
-bash plugins/soleur/skills/flag-create/scripts/create.sh _test_probe --dry-run
+bash "${CLAUDE_PLUGIN_ROOT}/skills/flag-set-role/scripts/flip.sh" kb-chat-sidebar dev on --dry-run
+bash "${CLAUDE_PLUGIN_ROOT}/skills/user-set-role/scripts/set-role.sh" <your-email> dev --dry-run
+bash "${CLAUDE_PLUGIN_ROOT}/skills/flag-create/scripts/create.sh" _test_probe --dry-run
 ```
 
 Each should print pre-state + proposed mutations + "(dry-run — exiting 0)"

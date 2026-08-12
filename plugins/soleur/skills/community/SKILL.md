@@ -28,12 +28,17 @@ Platform detection is centralized in [community-router.sh](./scripts/community-r
 bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/community-router.sh" platforms
 ```
 
-The anchor is **bare and quoted** (ADR-179 decision 1), not `${CLAUDE_PLUGIN_ROOT:-plugins/soleur}`.
-The router dispatches to the scripts that consume `DISCORD_BOT_TOKEN`, `X_API_SECRET` and
-`LINKEDIN_ACCESS_TOKEN`, so a `:-` arm resolving CWD-relative would hand those credentials to
-whatever `skills/community/scripts/community-router.sh` exists in the tree the session happens to
-sit in. Pinned by `redact-sentinel.test.sh` Test 24, which discovers credential-handling scripts
-on disk rather than from a list — this site was found by that assertion, not by review (#7450).
+The anchor is **bare and quoted** (ADR-179 decision 1), not `${CLAUDE_PLUGIN_ROOT:-plugins/soleur}`
+and not a bare `plugins/soleur/…` path. The router dispatches to the scripts that consume
+`DISCORD_BOT_TOKEN`, `X_API_SECRET` and `LINKEDIN_ACCESS_TOKEN`, so a CWD-relative resolution would
+hand those credentials to whatever `skills/community/scripts/community-router.sh` exists in the tree
+the session happens to sit in.
+
+The same applies to the four `*-setup.sh` invocations under `platforms` below — those were
+**bare repo-relative** until #7450 review, which is strictly worse than the `:-` form removed here,
+since a bare path is CWD-relative unconditionally. All five are pinned by `redact-sentinel.test.sh`
+Test 24, which discovers credential-**acquiring** scripts on disk and asserts none is reachable
+through a CWD-relative path.
 
 This prints each platform's name, enabled/disabled status, and script filename. The router's `PLATFORMS` array is the single source of truth for platform names, required env vars, and auth checks. To add a new platform, add one entry to the array and create the script.
 
@@ -79,10 +84,10 @@ List all platforms with their configuration status. Does NOT spawn an agent -- r
 
 1. Run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/community-router.sh" platforms`
 2. For disabled platforms, show setup instructions:
-   - Discord: "Run `plugins/soleur/skills/community/scripts/discord-setup.sh` to configure"
-   - X/Twitter: "Run `plugins/soleur/skills/community/scripts/x-setup.sh validate-credentials` to verify, or `x-setup.sh write-env` to save credentials"
-   - Bluesky: "Run `plugins/soleur/skills/community/scripts/bsky-setup.sh write-env` to save credentials, or `bsky-setup.sh verify` to test"
-   - LinkedIn: "Run `plugins/soleur/skills/community/scripts/linkedin-setup.sh generate-token` to set up credentials, or `linkedin-setup.sh verify` to test"
+   - Discord: Run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/discord-setup.sh"` to configure
+   - X/Twitter: Run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/x-setup.sh" validate-credentials` to verify, or `x-setup.sh write-env` to save credentials
+   - Bluesky: Run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/bsky-setup.sh" write-env` to save credentials, or `bsky-setup.sh verify` to test
+   - LinkedIn: Run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/linkedin-setup.sh" generate-token` to set up credentials, or `linkedin-setup.sh verify` to test
 
 ### `engage`
 
