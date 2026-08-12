@@ -64,7 +64,7 @@ EOF
 )
 
 echo "Test 1: synth blob has 3 CDN URLs (sanity)"
-synth_count=$(printf '%s' "$SYNTH" | grep -oE 'uploads\.linear\.app' | wc -l | tr -d '[:space:]')
+synth_count=$({ grep -oE 'uploads\.linear\.app' <<<"$SYNTH" || true; } | wc -l | tr -d '[:space:]')
 [[ "$synth_count" == "3" ]] && pass "synth contains 3 CDN URLs" || fail "synth count=$synth_count, expected 3"
 
 # --------------------------------------------------------------------
@@ -77,7 +77,7 @@ REDACT_COUNT=$(cat "$err_file" | tr -d '[:space:]')
 rm -f "$err_file"
 [[ "$REDACT_COUNT" == "3" ]] && pass "redaction count=3" || fail "redaction count=$REDACT_COUNT"
 
-residue=$(printf '%s' "$PERSIST_SAFE" | grep -oE 'uploads\.linear\.app' | wc -l | tr -d '[:space:]')
+residue=$({ grep -oE 'uploads\.linear\.app' <<<"$PERSIST_SAFE" || true; } | wc -l | tr -d '[:space:]')
 [[ "$residue" == "0" ]] && pass "zero uploads.linear.app in persist_safe_summary" || fail "residue=$residue"
 
 # --------------------------------------------------------------------
@@ -105,7 +105,7 @@ EOF
 
 echo "Test 3: render one-shot template with persist_safe_summary"
 ONE_SHOT_RENDERED=$(printf '%s' "$ONE_SHOT_TPL" | bash "$RENDER" "$PERSIST_SAFE")
-os_residue=$(printf '%s' "$ONE_SHOT_RENDERED" | grep -oE 'uploads\.linear\.app' | wc -l | tr -d '[:space:]')
+os_residue=$({ grep -oE 'uploads\.linear\.app' <<<"$ONE_SHOT_RENDERED" || true; } | wc -l | tr -d '[:space:]')
 [[ "$os_residue" == "0" ]] && pass "one-shot rendered prompt has zero CDN URLs" || fail "os_residue=$os_residue"
 
 # Sanity: rendered prompt should still contain the redacted placeholder marker
@@ -117,7 +117,7 @@ fi
 
 echo "Test 4: render brainstorm template with persist_safe_summary"
 BS_RENDERED=$(printf '%s' "$BRAINSTORM_TPL" | bash "$RENDER" "$PERSIST_SAFE")
-bs_residue=$(printf '%s' "$BS_RENDERED" | grep -oE 'uploads\.linear\.app' | wc -l | tr -d '[:space:]')
+bs_residue=$({ grep -oE 'uploads\.linear\.app' <<<"$BS_RENDERED" || true; } | wc -l | tr -d '[:space:]')
 [[ "$bs_residue" == "0" ]] && pass "brainstorm rendered prompt has zero CDN URLs" || fail "bs_residue=$bs_residue"
 
 # --------------------------------------------------------------------
