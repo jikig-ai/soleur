@@ -338,21 +338,16 @@ claude plugin install soleur@soleur-marketplace
 
 This installs the plugin subtree only — about 10 MiB in well under a minute.
 
-**From GitHub (without cloning):**
-
-```bash
-claude plugin install --url https://github.com/jikig-ai/soleur/tree/main/plugins/soleur
-```
-
 <details>
 <summary>Installing from the monorepo directly (slower, and may time out)</summary>
 
-`claude plugin marketplace add jikig-ai/soleur` still works, but it clones the whole repository
-(~181 MiB) and routinely exceeds the CLI's default 120-second git timeout — and a failed refresh
-can leave the local checkout unusable. Raise the timeout if you need this path:
+A plain `claude plugin marketplace add jikig-ai/soleur` clones the whole repository (~181 MiB),
+which takes about 329 seconds — well past the CLI's 120-second default — and a failed refresh can
+leave the local checkout unusable. Add `--sparse` so it fetches only what a plugin install needs;
+that completes in about 78 seconds, inside the default limit:
 
 ```bash
-CLAUDE_CODE_PLUGIN_GIT_TIMEOUT_MS=900000 claude plugin marketplace add jikig-ai/soleur
+claude plugin marketplace add jikig-ai/soleur --sparse .claude-plugin plugins
 claude plugin install soleur@soleur
 ```
 

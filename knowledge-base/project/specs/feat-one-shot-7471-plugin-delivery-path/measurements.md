@@ -289,3 +289,44 @@ delivery. Without it, "the fix delivers" could have been literally true and usel
 
 `version` becomes a 12-character SHA prefix and `gitCommitSha` the full 40. Consistent with §1.9:
 the key's absence is what makes the identity string *vary*, which is what the comparator reads.
+
+---
+
+## 1.4 — The `--url` install path, and a better legacy mitigation
+
+**Run 2026-08-12. Two findings, one of which changes what the docs should recommend.**
+
+### `claude plugin install --url …` does not exist
+
+Both `README.md` and `plugins/soleur/README.md` documented it as an install path ("From GitHub
+(without cloning)"). On CLI **2.1.227** it fails immediately:
+
+```
+error: unknown option '--url'
+```
+
+`claude plugin install --help` lists exactly three options — `--config`, `-h`, `-s/--scope`. So a
+documented install path had been dead, silently, for an unknown period. Task 1.4 existed to probe
+whether that path was *affected by the version-key deletion*; the answer is that the path does not
+exist to be affected. Removed from both READMEs rather than corrected — `marketplace add` covers it.
+
+### `marketplace add --sparse` fixes the legacy channel at the DEFAULT timeout
+
+`claude plugin marketplace add` carries an undocumented-in-our-docs `--sparse <paths...>` flag
+("Limit checkout to specific directories via git sparse-checkout (for monorepos)").
+
+| Legacy `marketplace add jikig-ai/soleur` | Elapsed | Materialised |
+|---|---|---|
+| plain (§1.6/2B.6) | **329 s** — fails at the 120 s default | 342.7 MiB |
+| `--sparse .claude-plugin plugins` | **78 s** — succeeds at the default | **16.98 MiB** |
+
+`CLAUDE_CODE_PLUGIN_GIT_TIMEOUT_MS` **unset** for the sparse run. 16.98 MiB is exactly the plain-git
+floor recorded in the plan's `## Amendment 2026-08-12`, which is a good consistency check on both.
+
+**This does not undo the decision.** The dedicated marketplace is still better for users — 13 s,
+9.66 MiB (§2B), no flags to remember, and it is the channel the drift guard watches. But it does
+change the *fallback*: anyone who must stay on the monorepo entry should use `--sparse` rather than
+raising the timeout, because it works inside the CLI's own limit instead of arguing with it.
+
+Docs and the recovery runbook updated to lead with `--sparse`; the timeout raise is demoted to the
+already-destroyed-checkout case.

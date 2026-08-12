@@ -83,7 +83,18 @@ rm -rf ~/.claude/plugins/cache/soleur      # NOT .../cache/soleur-marketplace
 
 The same class explains the 374 MiB `soleur.bak` orphan in the issue; check for it too.
 
-**Stopgap if the legacy channel must be used** (raises the timeout for one invocation):
+**If the legacy channel must be kept, use `--sparse` rather than raising the timeout.**
+`claude plugin marketplace add` accepts `--sparse <paths...>` (git sparse-checkout). Measured
+(§1.4): **78 s and 16.98 MiB at the default timeout**, against 329 s and 342.7 MiB plain — so it
+works *inside* the CLI's own limit instead of arguing with it:
+
+```bash
+claude plugin marketplace add jikig-ai/soleur --sparse .claude-plugin plugins
+claude plugin install soleur@soleur
+```
+
+Raising the timeout remains available and is the right tool when the checkout already exists and
+only needs refreshing:
 
 ```bash
 CLAUDE_CODE_PLUGIN_GIT_TIMEOUT_MS=900000 claude plugin marketplace update soleur
@@ -92,6 +103,9 @@ CLAUDE_CODE_PLUGIN_GIT_TIMEOUT_MS=900000 claude plugin marketplace update soleur
 Prefer `marketplace update` over `remove` → `re-add`: it is the non-destructive route and it is the
 one measured to work. Demote `remove → re-add → reinstall` to the case below, where the checkout is
 already destroyed.
+
+**`claude plugin install --url …` does not exist** on CLI 2.1.227 (`error: unknown option '--url'`),
+despite having been documented here previously. Do not reach for it; use `marketplace add`.
 
 ---
 

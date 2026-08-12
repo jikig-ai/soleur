@@ -41,7 +41,7 @@ and no existing task number moves.
 - [x] **1.3** Add a third arm: **update N+1 of a migrated record.** After the migration lands, make
       another commit, refresh, update, and assert the SHA advanced. Without this, "delivers
       exactly once" may be literally true.
-- [ ] **1.4** Probe the **`--url` install path** (`claude plugin install --url .../tree/main/plugins/soleur`,
+- [x] **1.4** Probe the **`--url` install path** (`claude plugin install --url .../tree/main/plugins/soleur`,
       documented in both READMEs). It is a different *source shape*, not a different verb, and the
       control group says nothing about it. Does it record a `gitCommitSha`? Is it affected by the
       deletion? Does it clone only the subtree — in which case it is already a partial P5 answer.
@@ -109,7 +109,7 @@ installs keep working. The plugin ID changes for **new** installs only.
 
 ## Phase 3 — Recovery and stopgap (gates Phase 2 being complete)
 
-- [ ] **3.1** Measure whether an `env` block in `~/.claude/settings.json` is honoured by the plugin
+- [~] **3.1** *(deferred to #7490 — recorded as UNVERIFIED in the runbook rather than asserted; lower value now that the documented path needs no raised timeout)*  Measure whether an `env` block in `~/.claude/settings.json` is honoured by the plugin
       git path **and by the background `autoUpdate` refresh** — those are different claims, and
       the second is the arm the re-scope exists for. Also measure whether `autoUpdate: false`
       survives in `known_marketplaces.json` (no CLI flag sets it).
