@@ -573,8 +573,18 @@ assert "#7228 pause runs in the unconditional Half-B tail — reached for aborte
 assert "#7228 a failed pause WARNs and does not block the web re-enable" \
   "grep -qE '::warning::op=rollback: PATCH paused=true' '$ROLLBACK_FILE'"
 # The API token is masked before any use — the same F7 discipline as the PG/HB captures at G2.
-assert "#7228 BETTERSTACK_API_TOKEN is masked on its own capture line before use" \
-  "grep -A1 'BS_API=\$(doppler secrets get BETTERSTACK_API_TOKEN' '$ROLLBACK_FILE' | grep -qF '::add-mask::'"
+# -A4, not -A1: the mask is now preceded by its own rationale comment. The property is that the
+# mask lands BEFORE any use, not that it is literally the next line.
+assert "#7228 BETTERSTACK_API_TOKEN is masked immediately after capture, before any use" \
+  "grep -A4 'BS_API=\$(doppler secrets get BETTERSTACK_API_TOKEN' '$ROLLBACK_FILE' | grep -qF '::add-mask::'"
+# The read must be SCOPED: this was the only Doppler read in the file without -p/-c, so it
+# depended on ambient config the workflow does not document, while the warning beneath it named
+# prd_terraform explicitly. Fail-open is right here; an unscoped read made it the likely path.
+assert "#7228 the BETTERSTACK_API_TOKEN read is explicitly scoped to soleur/prd_terraform" \
+  "grep -qF 'doppler secrets get BETTERSTACK_API_TOKEN -p soleur -c prd_terraform' '$ROLLBACK_FILE'"
+# And the mask is guarded: an unconditional add-mask on an empty read emits a bare directive.
+assert "#7228 the mask is guarded on a non-empty read (no bare ::add-mask:: on failure)" \
+  "grep -qF '[[ -n \"\$BS_API\" ]] && printf '\"'\"'::add-mask::' '$ROLLBACK_FILE'"
 # THE ASYMMETRY IS DELIBERATE. op=arm must NOT unpause: ADR-117 unpauses only after a REAL beat
 # is measured, and arming before the FSM runs is the green-but-inert monitor #6537 spent nine days
 # as. This asserts the arm path contains no unpause, so a future edit "restoring symmetry" reds.

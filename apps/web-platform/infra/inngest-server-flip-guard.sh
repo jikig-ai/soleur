@@ -81,7 +81,13 @@ if [[ "$diagnostic_requested" == true ]]; then
   # Read the unit rather than believing the flag. A missing unit file is treated as DURABLE
   # (fail closed): if we cannot prove the backend is non-durable, we must not relax the guard.
   unit_is_durable=true
-  if [[ -r "$UNIT_FILE" ]] && ! grep -qF -- "$DURABLE_SENTINEL" "$UNIT_FILE"; then
+  # Anchored on the ExecStart LINE, not the whole file. The unit template ships a ~15-line
+  # comment block INSIDE the emitted unit, and the surrounding bootstrap prose discusses this
+  # sentinel at length — so a whole-file grep is satisfied by a comment that merely NAMES it,
+  # which would pin unit_is_durable=true forever and permanently disable diagnostic boot. It
+  # fails closed, but silently, and diagnostic boot is the only remaining way to learn why
+  # :8288 was never bound. A comment cannot produce `^ExecStart=`.
+  if [[ -r "$UNIT_FILE" ]] && ! grep -qE '^ExecStart=.*--postgres-max-open-conns' "$UNIT_FILE"; then
     unit_is_durable=false
   fi
   if [[ "$unit_is_durable" == true ]]; then

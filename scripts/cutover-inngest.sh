@@ -1583,8 +1583,15 @@ case "$OP" in
     # name lookup keeps working across a terraform recreate that would change the id. Fail-open
     # with a WARN, matching the delete above — a monitor left un-paused pages the operator, which
     # is strictly less severe than withholding the safety-critical web re-enable below.
-    BS_API=$(doppler secrets get BETTERSTACK_API_TOKEN --plain 2>/dev/null || true)
-    printf '::add-mask::%s\n' "$BS_API"
+    # SCOPED explicitly. This was the only Doppler read in the file with no -p/-c, so it depended
+    # on ambient DOPPLER_PROJECT/DOPPLER_CONFIG that the workflow env map does not document —
+    # while the warning below asserts "unreadable from prd_terraform". Fail-open is correct here
+    # (a missed pause pages the operator; blocking would withhold the safety-critical web
+    # re-enable), but the unscoped read made that the LIKELY path rather than the exceptional one.
+    BS_API=$(doppler secrets get BETTERSTACK_API_TOKEN -p soleur -c prd_terraform --plain 2>/dev/null || true)
+    # Mask only a value that exists: an unconditional add-mask on an empty read emits a bare
+    # `::add-mask::`, which is noise in the log and masks nothing.
+    [[ -n "$BS_API" ]] && printf '::add-mask::%s\n' "$BS_API"
     if [[ -z "$BS_API" ]]; then
       echo "::warning::op=rollback: BETTERSTACK_API_TOKEN unreadable from prd_terraform — NOT pausing the consumer heartbeat. It will alarm ~4min after the dedicated scheduler stops, for a state this rollback created on purpose. Pause 'soleur-inngest-consumer-prd' manually if it pages, or re-dispatch once the token reads."
     else

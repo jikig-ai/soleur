@@ -674,6 +674,39 @@ assert "AC4/S3 the gate's default health URL was extracted by shape (else this p
 assert "AC4/S3 the gate's default health URL targets the port the unit BINDS ($BOUND_PORT) on loopback" \
   "[[ '$GATE_DEFAULT_URL' == 'http://127.0.0.1:$BOUND_PORT/health' ]]"
 
+# The suppression row is RATE-LIMITED, and that has to be driven, not assumed. Left unlimited it
+# is ~1,440 rows/day as a PERMANENT steady state on the co-located host post-cutover (dark arm
+# rendered empty there, its heartbeat URL never deleted, its timer never stopped by quiesce) —
+# the exact cost #6617b removed. Asserted behaviourally on its OWN stamp, so it cannot be
+# satisfied by the dark arm's.
+GATE_STAMP="$PING_TMP/gate-rl/gate.stamp"
+mkdir -p "$(dirname "$GATE_STAMP")"
+rm -f "$GATE_STAMP"
+RL_LOG="$PING_TMP/logger-gate-rl.txt"
+: > "$RL_LOG"
+rl_fire() {
+  PATH="$PING_TMP/bin:$PATH" LOGGER_OUT="$RL_LOG" INNGEST_HEARTBEAT_URL="$CANARY_URL" \
+    INNGEST_HEARTBEAT_HEALTH_URL="$HEALTH_404_URL" INNGEST_HEARTBEAT_GATE_STAMP="$GATE_STAMP" \
+    sh "$DEDICATED_PING" >/dev/null 2>&1 || true
+}
+rl_fire; rl_fire; rl_fire; rl_fire
+assert "AC4 four suppressed fires inside one window emit exactly ONE row (was one per 60s)" \
+  "[[ \$(grep -c 'listener=no' '$RL_LOG') -eq 1 ]]"
+# The load-bearing half: an aged stamp must RE-EMIT. A limit that only suppresses is
+# indistinguishable from deleting the row, and then a dark host and a healthy one look the same.
+printf '%s' "$(( $(date +%s) - 7200 ))" > "$GATE_STAMP"
+rl_fire
+assert "AC4 an aged stamp RE-EMITS (rate-limited, not eliminated)" \
+  "[[ \$(grep -c 'listener=no' '$RL_LOG') -eq 2 ]]"
+# And the DECISION is never rate-limited: a suppressed row must not convert a non-serving host
+# into a beating one. Fire again inside the window and assert the beat is still withheld.
+RL_RC=0
+PATH="$PING_TMP/bin:$PATH" LOGGER_OUT="$RL_LOG" INNGEST_HEARTBEAT_URL="$CANARY_URL" \
+  INNGEST_HEARTBEAT_HEALTH_URL="$HEALTH_404_URL" INNGEST_HEARTBEAT_GATE_STAMP="$GATE_STAMP" \
+  sh "$DEDICATED_PING" >/dev/null 2>&1 || RL_RC=$?
+assert "AC4 a rate-limited (silent) fire STILL withholds the beat — the limit governs the row, not the decision" \
+  "[[ '$RL_RC' -eq 0 ]]"
+
 # ORDERING, asserted behaviourally rather than by reading the file. A dark dedicated host has no
 # URL; if the gate ran FIRST it would probe health every 60s and emit listener=no instead of the
 # dark-arm row. Driving it with a health URL that would FAIL makes the two orderings produce

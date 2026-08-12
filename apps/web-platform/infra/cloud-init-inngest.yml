@@ -229,7 +229,15 @@ write_files:
       [ -n "$SOLEUR_INNGEST_BS_TOKEN_FILE" ] && tok="$SOLEUR_INNGEST_BS_TOKEN_FILE"
       # HOME + DOPPLER_CONFIG_DIR come from here; the Doppler CLI aborts without HOME (#6122).
       set -a; . /etc/default/inngest-doppler 2>/dev/null; set +a
-      t="$(doppler secrets get BETTERSTACK_LOGS_TOKEN --project soleur-inngest --config prd --plain 2>/dev/null)"; drc=$?
+      # BOUNDED. Type=oneshot disables systemd's start timeout by default, and this unit is
+      # Before=inngest-server.service — so an unbounded stall here (Doppler outage, DNS, an
+      # egress rule landing before the fetch) leaves the unit `activating` forever and systemd
+      # never runs the server's start job. The host boots and never binds :8288, which is the
+      # failure this whole PR exists to diagnose, reintroduced by the fix for it. `Requires=`
+      # reasoning does not cover it: Before= alone blocks, and a HANG is not a FAILURE, so the
+      # script's own `exit 1` path is never reached. Every other host-path Doppler read in this
+      # repo is `timeout`-wrapped; this was the outlier.
+      t="$(timeout 20 doppler secrets get BETTERSTACK_LOGS_TOKEN --project soleur-inngest --config prd --plain 2>/dev/null)"; drc=$?
       if [ -z "$t" ]; then
         # LOUD, and non-zero so `systemctl is-active` disagrees too. Nothing Requires= this
         # unit, so a failure here cannot wedge the boot — it only makes the dead channel
@@ -272,6 +280,10 @@ write_files:
 
       [Service]
       Type=oneshot
+      # Type=oneshot DISABLES systemd's start timeout by default, and this unit orders itself
+      # Before=inngest-server.service — so without an explicit bound a stalled Doppler read holds
+      # the unit in `activating` forever and the server's start job never runs.
+      TimeoutStartSec=60
       RemainAfterExit=yes
       # WITHOUT this systemd derives SYSLOG_IDENTIFIER from the ExecStart basename, which
       # matches ZERO vector.toml sources and the row never leaves the host — #6536 exactly.

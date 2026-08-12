@@ -260,19 +260,33 @@ dark_arm_emit_due() {
 # classification web-zot-consumer-probe.sh documents. `|| true` keeps a curl failure from being
 # the thing that decides -- the CODE decides, and a code we could not obtain is 000.
 #
-# QUOTA. The row fires only while the listener is DOWN, which is an active outage someone is
-# resolving -- unlike the dark arm above, whose suppressed state is an indefinite HEALTHY steady
-# state and is therefore rate-limited. At 60s an outage costs ~1,440 rows/day against a ~25k/day
-# quota (~5.8%), and that row is the only thing that says WHY the monitor went silent without an
-# SSH (hr-no-ssh-fallback-in-runbooks). Paying 5.8% during an outage to make the outage readable
-# is the trade #6617b made in the other direction for a state that never ends.
+# QUOTA. The first draft of this comment argued the row "fires only while the listener is DOWN,
+# which is an active outage someone is resolving" and left it unlimited. That premise is FALSE for
+# the co-located web host in the intended POST-CUTOVER steady state, which is the state this whole
+# programme is driving toward: the dark arm is rendered EMPTY there so there is no early exit; the
+# web host's INNGEST_HEARTBEAT_URL lives in the `soleur` project and is never deleted by op=arm or
+# op=rollback (both touch soleur-inngest only); and `quiesce inngest` stops inngest-server.service
+# while leaving inngest-heartbeat.timer firing every 60s. URL present + no dark arm + no listener
+# = one row every 60s, indefinitely. That is ~1,440 rows/day as a PERMANENT steady state -- the
+# exact cost #6617b removed, and exactly the "indefinite HEALTHY steady state" the old comment
+# claimed this was not. Measured headroom is ~5.1k/day against a ~19.9k baseline, so this alone
+# would consume ~28% of what is left, and a cutover that lands on terminal `aborted` doubles it.
+# So it is rate-limited on the SAME hourly stamp helper the dark arm uses, which already handles
+# the boot-before-NTP skew case. ~24 rows/day per host in a sustained outage, and the row still
+# says WHY the monitor went silent without an SSH (hr-no-ssh-fallback-in-runbooks).
 INNGEST_HEALTH_URL="${INNGEST_HEARTBEAT_HEALTH_URL:-http://127.0.0.1:8288/health}"
 health_code="$(/usr/bin/curl -gsS -m 5 -o /dev/null -w '%{http_code}' "$INNGEST_HEALTH_URL" 2>/dev/null || true)"
 # curl prints nothing at all when it cannot even start. Normalize to the literal 000 so
 # "no HTTP response" is a VALUE; an empty field reads as missing data on the Better Stack side.
 [ -n "$health_code" ] || health_code=000
 if [ "$health_code" != "200" ]; then
+  # Rate-limited on its own stamp, independent of the dark arm's, so neither can suppress the
+  # other: they answer different questions ("deliberately dark" vs "armed but not serving").
+  if INNGEST_HEARTBEAT_DARK_STAMP="${INNGEST_HEARTBEAT_GATE_STAMP:-/run/inngest-heartbeat/gate.stamp}" dark_arm_emit_due; then
   logger -t "$LOG_TAG" "SOLEUR_INNGEST_HEARTBEAT_SUPPRESSED listener=no health_code=$health_code — refusing to beat: inngest does not serve /health on this host, so a beat would certify only that a timer fired (#7228). Absence-of-beat is the alarm."
+  fi
+  # The exit is OUTSIDE the rate limit: the limit governs the LINE only, never the DECISION, so a
+  # suppressed log row can never convert a non-serving host into a beating one.
   exit 0
 fi
 # -g (--globoff): the URL is a BEARER capability. Without -g, a URL containing [ ] or
@@ -553,7 +567,10 @@ case "$instance_id" in '' | *[!0-9]*) instance_id=unknown ;; *) instance_id="het
 # WHAT IS ACTUALLY RUNNING. inngest.tf pins a version; whether the host runs it is a DIFFERENT
 # claim, and only the host can answer it. A replace that silently landed an older image is
 # indistinguishable from a healthy one without this.
-cli_version="$(/usr/local/bin/inngest version 2>/dev/null | head -1 || true)"
+# Bounded: `inngest version` can perform an update check, and this runs BEFORE the probe's
+# unconditional emit — an unbounded stall here silently stops the hourly positive control, which
+# is indistinguishable from a dead host (the #6617a failure this marker exists to close).
+cli_version="$(timeout 10 /usr/local/bin/inngest version 2>/dev/null | head -1 || true)"
 [ -n "$cli_version" ] || cli_version=unknown
 
 # WHY THE SERVER IS NOT RUNNING, when it is not. inngest-server-flip-guard.sh refuses EVERY
@@ -564,7 +581,7 @@ cli_version="$(/usr/local/bin/inngest version 2>/dev/null | head -1 || true)"
 # itself reads; the slot records the FSM's last write, which is a different question.
 # doppler's stderr is discarded, never shipped: this row's tag is allowlisted, so raw stderr
 # from a credentialed CLI would be a route from the token's own error text to Better Stack.
-cutover_flag="$(doppler secrets get INNGEST_CUTOVER_FLIP --project soleur-inngest --config prd --plain 2>/dev/null || true)"
+cutover_flag="$(timeout 10 doppler secrets get INNGEST_CUTOVER_FLIP --project soleur-inngest --config prd --plain 2>/dev/null || true)"
 cutover_flag="$(printf '%s' "$cutover_flag" | tr -d '[:space:]')"
 [ -n "$cutover_flag" ] || cutover_flag=unknown
 
@@ -602,6 +619,10 @@ Type=oneshot
 # ZERO vector.toml sources and the marker never leaves the host — the #6536 defect exactly.
 # Source 4 (vector.toml host_scripts_journald) carries the matching exact-value entry.
 SyslogIdentifier=inngest-server-probe
+# Type=oneshot disables the start timeout by default; the probe now makes two bounded network
+# calls before its unconditional emit, so bound the unit too — a hung probe holds the unit
+# `activating`, and OnUnitActiveSec cannot re-fire while it is, silently ending the hourly marker.
+TimeoutStartSec=60
 # #7228: the cutover_flag field reads Doppler, which needs DOPPLER_TOKEN + DOPPLER_CONFIG_DIR
 # and — per the #6122 boot fix — HOME, all of which live here.
 #
