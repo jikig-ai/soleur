@@ -338,3 +338,63 @@ fail-closed, and the comment now says so to stop a later reader "simplifying" it
 
 **#7450 may close at ship** — §R1 is fully discharged (ADR text committed AND re-routed as
 #7502, which the ADR names).
+
+---
+
+## Resume session 2026-08-12, part 4 (round-2 review remediation)
+
+Same contract: every row LANDED, with evidence. Corrections to part 3's own numbers are in the
+first table because they were wrong when written.
+
+### Corrections to part 3
+
+| Claim | Measured |
+| --- | --- |
+| row 20 "Guard 2 95/0" | **96/0** |
+| row 25 "Battery 3 6/6 RED" | **9/9** at the time; **15/15** now |
+| "the full-suite exit gate is recorded here" (PR body §Verification) | **It was not.** No part-3 run existed; the only recorded run predated the CTO ruling, the B3 inversion, the capture hook, Tests 20–24, community and Battery 3. A verification claim was written for a run that had not happened. |
+
+### The round-2 panel
+
+6 agents report-only + a CTO consult. Every finding below was re-verified by me against the tree
+before being acted on.
+
+**The pattern, which is the finding:** every blocking defect this round was the defect class this
+PR exists to close, committed while closing it — an assertion narrower than the property it names,
+or a claim asserted rather than measured. Three were introduced by part 3's own commits, two of
+them inside the commit whose stated purpose was removing false-state claims.
+
+### Landed
+
+| # | Work | Evidence |
+| --- | --- | --- |
+| 26 | **linear-fetch was BRICKED.** `$SCRUBBER` defined in the Phase B.0 fence, used in Phase D — separate Bash calls, so the expansion was empty on every invocation and `persist_safe_summary` could never be produced. Fails closed only because the anchor is quoted; unquoted it executes the heredoc. | re-derived in the fence that uses it; 4/4 linear suites |
+| 27 | **`ship/SKILL.md` shipped a bash SYNTAX ERROR** — an apostrophe in `gate's` inside a single-quoted echo, introduced by the decision-9 migration. Only 1 of 20 markers failed `bash -n`. | all 20 parse |
+| 28 | **`review/SKILL.md`'s marker could never be captured** — `rule=cost-of-filing-${DISPOSITION}` against a `[A-Za-z0-9._-]+` needle over PRE-expansion text. Zero rows, permanently. And the guard for it carved an exemption around exactly it, promising to "probe its resolved forms" and probing nothing. | hook parity 10/10, exemption removed |
+| 29 | **`gdpr-gate.sh` executed a git-root path 3× with GH_TOKEN exported**, under a comment I wrote claiming its remaining `REPO_ROOT` uses were data-root reads. Now `$BASH_SOURCE`-relative (a sibling — no root needed). `net-issue-flow.sh` carries the same false comment over a #7453-owned site; comment corrected, deferral named. | gate runs, staleness banner proves the parser resolved |
+| 30 | **The C14 trap was INERT at both gates** — own fence, so it fired on that fence's exit; `$DRAFT` empty at the gate; the gate scanned a literal `<draft-tmpfile>`. All three clauses of its prose were false. | allocation + trap + gate now one fence |
+| 31 | **CTO ruling discharged**: acquisition-keyed (not adjacency — which would have added 9 false positives, since redaction engines match `_TOKEN` because token names are their needles), invariant-keyed violation, no allowlist. 18 sites migrated across 14 files. | population deterministic at 25 |
+| 32 | **Test 24's rewrite then found 4 MORE** — `community`'s `*-setup.sh` instructions, bare repo-relative, four credential-setup scripts, four lines below the `:-` form this PR had just removed. | Test 24 |
+| 33 | **15 guard vacuities closed** on 8 axes my battery never edited, incl. the suite being deletable at green (no dispatch floor — and `lint-guard-contract.test.sh` already shipped that floor). | Battery 3: 15/15 RED, GREEN control, zero void |
+| 34 | **C10's markers reached NO sink** on either surface, and the drift guard built to catch that filtered them out before asserting. Both fixed; trigger-cron (the 4th gate) added. | 27/27; mutation-proven |
+| 35 | **Every false claim corrected**, incl. two of mine from part 3 and the Arm 4 over-claim; the Arm 4 probe is now committed and re-verified. | `arm4-probe/` |
+
+### Two measurement traps I hit, recorded because both fail toward false confidence
+
+- **A mutation that does not land reports the baseline.** Five battery rows read `NOT APPLIED`
+  against the rewritten code and were repaired, not dropped. One row (`M-G`) was passing for the
+  wrong reason: its target correctly LEFT the population under acquisition-keying.
+- **An unexplained ±1 is worth chasing.** Test 24's population read 23/24/25 across runs. It was a
+  mid-edit transient — verified by re-deriving in place and in a sandbox (identical, 25/25, stable
+  across 3 runs) — but "probably fine" was not an acceptable answer for a security guard's
+  population.
+
+### NOT done — exact resume points
+
+1. **Grok Build residual** — whether a bare token is substituted there is UNMEASURED. The one
+   condition that reopens B1. Stated in `b1-disposition.md` and ADR-179 A11.
+2. **#7453 inherits** a structural map from the panel: whole delivery surfaces outside EVERY guard
+   (`agents/**`, `references/**`, `*.workflow.js`, `hooks.json`, script→script edges), populations
+   that fail open on growth (`GATE_SCRIPT_EXTRAS`, `ANCHOR_FIXTURES`, Test 19b/19c which already
+   omits `legal-generate`), the A13 fourth pattern, and the A12 declined ratchet.
+3. Full-suite exit gate on the final tree, then PR body, `/soleur:compound`, `/soleur:ship`.
