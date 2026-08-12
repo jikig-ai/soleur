@@ -231,6 +231,30 @@ entry while writing them.
     issues"; no such consumer exists.
     **Prevention:** `hr-verify-repo-capability-claim-before-assert`, applied at plan time.
 
+### Ship phase (post-review)
+
+14. **A merge-poll filter counted `CANCELLED` as a failed required check**, so a push that
+    superseded an in-flight run self-reported `TERMINAL: required check failed: scan` while
+    `scan` was green on the actual head commit. In a headless pipeline that aborts the ship on
+    a healthy PR. The guidance drilled into these filters is "silence is not success" — widen
+    the alternation so a crash cannot pass unseen — and applying it without thinking produced
+    the mirror defect: a filter so wide that routine churn reads as failure. Both directions
+    cost a run; only one is ever discussed.
+    **Prevention:** in a merge/CI poll, treat `FAILURE`/`TIMED_OUT`/`ERROR` as terminal and
+    `CANCELLED` as churn — a superseding push cancels by design. Before acting on any terminal
+    verdict, re-read the rollup for the *current* head: this one had a SUCCESS row for the same
+    job name sitting alongside the cancelled one.
+
+15. **Archiving the spec directory silently dangled two ADR frontmatter citations**, because
+    `related_plans:`/`related_specs:` record the live authored path and `archive-kb.sh` moves
+    the file out from under them. Nothing checks these — no linter, no CI job. Measuring all
+    four citations in the file (rather than fixing the one that surfaced) showed three dangling,
+    one of them pre-existing and belonging to another branch's work.
+    **Prevention:** after any `archive-kb.sh` run, `grep -rn` the pre-archive path across
+    `--include='*.md'` and repoint what this branch authored. Measure every citation in a
+    frontmatter block you touch — the structural twin of the one that surfaced is usually
+    already broken, and the corpus-wide version of the class is not this PR's to fix.
+
 ## Cross-references
 
 - ADR-179 — bare `${CLAUDE_PLUGIN_ROOT}` anchoring; amended by this PR with Decision 7
