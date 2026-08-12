@@ -79,27 +79,27 @@ RED before GREEN for every behavioral change (`cq-write-failing-tests-before`).
       fatal instead of `2>/dev/null || true`.
 - [x] 3.4 Sweep `cat-inngest-cutover-state.sh` to the new path — it is the no-SSH operator read
       surface and would otherwise report a false "no state".
-- [ ] 3.5 RED: `done` refused on non-200 `/health`; refused on empty registry; guard refuses a
+- [x] 3.5 RED: `done` refused on non-200 `/health`; refused on empty registry; guard refuses a
       foreign instance stamp.
-- [ ] 3.6 GREEN: probe-derived `done` in `inngest-cutover-flip.sh`. Instance stamp in a SEPARATE
+- [x] 3.6 GREEN: probe-derived `done` in `inngest-cutover-flip.sh`. Instance stamp in a SEPARATE
       Doppler key — appending it to the flag value breaks `inngest-server-flip-guard.sh`'s exact
       `case` match and the `EXPECTED_START_SITES` derivation.
-- [ ] 3.7 Make `inngest-server-flip-guard.sh` read both keys and refuse a foreign stamp.
-- [ ] 3.8 Confirm `inngest-server-flip-guard.test.sh` passes its derivation unmodified.
-- [ ] 3.9 Sweep `scripts/cutover-inngest.sh`: `op=arm` copies the shared monitor's URL to the
+- [x] 3.7 Make `inngest-server-flip-guard.sh` read both keys and refuse a foreign stamp.
+- [x] 3.8 Confirm `inngest-server-flip-guard.test.sh` passes its derivation unmodified.
+- [x] 3.9 Sweep `scripts/cutover-inngest.sh`: `op=arm` copies the shared monitor's URL to the
       dedicated host; `op=rollback` unconditionally deletes it. Both need the new heartbeat.
-- [ ] 3.10 `outputs.tf` consumer of `betteruptime_heartbeat.inngest_prd.url`.
+- [x] 3.10 `outputs.tf` consumer of `betteruptime_heartbeat.inngest_prd.url`.
 - [x] 3.11 Register every new suite in `infra-validation.yml`.
 
 ## Phase 4 — Record
 
-- [ ] 4.1 Amend ADR-100 in place: Decision 6a completion criteria; fold in the
+- [x] 4.1 Amend ADR-100 in place: Decision 6a completion criteria; fold in the
       terminal-state-must-be-re-derived rule; addendum that the cutover did not hold and the soak
       never started. Keep `status: adopting`; rewrite the blockquote implying a running soak.
       Mint NO new ordinal.
-- [ ] 4.2 One C4 model line: the web-platform container gains a monitoring probe edge to the
+- [x] 4.2 One C4 model line: the web-platform container gains a monitoring probe edge to the
       dedicated host container. Run `c4-code-syntax.test.ts` + `c4-render.test.ts`.
-- [ ] 4.3 Correct the stale arm64/cax11 prose in `inngest-betterstack-token.tf` and the false
+- [x] 4.3 Correct the stale arm64/cax11 prose in `inngest-betterstack-token.tf` and the false
       `DBSIZE` durability claim at `inngest-host.tf:229`.
 
 ## Phase 5 — Deferrals (must exist before PR-ready)
