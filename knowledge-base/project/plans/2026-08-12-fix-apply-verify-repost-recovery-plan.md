@@ -352,12 +352,18 @@ must name clock skew as a candidate, or the next engineer will chase the race th
 |---|---|
 | `knowledge-base/project/specs/feat-one-shot-7104-apply-verify-repost-recovery/decision-challenges.md` | The `continue-on-error` User-Challenge, the scope-growth challenge, and the CPO sign-off item, for `ship` to render into the PR body and file as an `action-required` issue. |
 | `knowledge-base/engineering/architecture/decisions/ADR-<ordinal>-ci-verification-gate-bounded-self-remediation.md` | The ADR from R8. Ordinal re-derived immediately before merge. |
-| `knowledge-base/engineering/operations/runbooks/infra-config-channel-red.md` | The runbook from R9.4 — the three alert classes, the **two** legitimate `-replace` targets, the one forbidden target (`hcloud_server.web`), and the new automatic recovery. |
+*(An earlier draft also listed `knowledge-base/engineering/operations/runbooks/infra-config-channel-red.md`.
+**R13.10 re-dispositioned it to a filed issue** rather than 150 lines written inline — the same
+disposition R9.1 already had, so the two pre-existing gaps are now handled consistently. The path
+appears elsewhere in this plan as the proposed name for that issue, not as a file this PR creates.)*
 
-**One label must be created, not assumed.** `gh label list` confirms `ci/infra-config-red`,
-`priority/p3-low`, `domain/engineering` and `action-required` all exist, but
-**`ci/infra-config-recovered` does not**. R5 depends on it, so `gh label create ci/infra-config-recovered`
-is a Phase 5 task, not an assumption — a plan that prescribes a non-existent label fails at first fire.
+**A label must be created, not assumed.** `gh label list` confirms `ci/infra-config-red`,
+`priority/p3-low`, `domain/engineering` and `action-required` all exist. The ledger label from
+R14.2 **does not exist** and must be created as an explicit task — a plan that prescribes a
+non-existent label fails at first fire, and under `set -euo pipefail` that either reds an otherwise
+green recovered run or silently drops the only recovery signal. Note R14.2 also moved the ledger
+**out of the `ci/` namespace**, so the name is not `ci/infra-config-recovered`; pick one that reads
+as a tally rather than an alarm.
 
 **Deliberately NOT created: a new `*.test.sh` file, and a new extracted `infra-config-verify.sh`.**
 Both were considered and cut. See `## Alternatives Considered` — the decisive reason is that
