@@ -62,9 +62,10 @@ the tree as it stood before the fix.
 ### 2. The product was more honest than the policy
 
 Published privacy-policy §8.1 stated the self-serve DSAR route unconditionally. The client only
-ever sends `mode:"password"`; the in-app dialog already told users "If you sign in only with
-SSO … email legal@jikigai.com". So an SSO-only user could not complete step 1 of their own
-Art. 15 request, and the newly published policy did not say so — while the running product did.
+ever sends `mode:"password"`; the in-app dialog already told users that SSO-only accounts must
+email the legal address for manual fulfilment. So an SSO-only user could not complete step 1 of
+their own Art. 15 request, and the newly published policy did not say so — while the running
+product did.
 
 **Generalisable:** when publishing a fulfilment route, diff the promise against the UI that
 implements it. The UI's own caveats are a free specification of the preconditions.
