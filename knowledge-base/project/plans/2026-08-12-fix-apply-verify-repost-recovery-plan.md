@@ -27,6 +27,82 @@ This plan adds a bounded, one-shot re-push and re-verify, gated on a status shap
 consistent with that race, while keeping the terminal red intact when both passes
 fail.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-12
+**Halt gates run:** 4.5 (network-outage — fired), 4.6 (user-brand impact — pass), 4.7
+(observability — pass, all five fields, probe verb `bash`, no `ssh`), 4.8 (PAT-shaped — no hits),
+4.9 (UI wireframe — no UI surface, skipped), 4.10 (encryption posture — no store or new connection,
+skipped), 4.11 (guard contract — `python3 scripts/lint-guard-contract.py` green, 2 guard entries),
+4.55 (downtime/cutover — not triggered; no `hcloud_server`/volume replacement, and R3's
+exact-cardinality assert forbids one by construction).
+
+**Agents used:** `repo-research-analyst`, `learnings-researcher`, `functional-discovery`,
+`Explore` (C4 enumeration), `cto`, `coo`, plus the escalated plan-review panel
+(`dhh-rails-reviewer`, `kieran-rails-reviewer`, `code-simplicity-reviewer`,
+`architecture-strategist`, `spec-flow-analyzer`) and `cpo`.
+
+### Key improvements
+
+1. **Three P0 fail-opens caught before implementation**, each inside a revision the plan had
+   already adopted: the `ALLOW_MISSING_STATUS` escape hatch would have been read as "verified"
+   by the orchestrator (R15.1); wrapping the verify body in a function silently disables `set -e`
+   for its whole body (R16.1); and `DPF_REPLACED` had no fail-closed polarity guard while the arm
+   it protects was near-vacuous by construction (R17.1).
+2. **The design pivoted** from a higher-order orchestrator to a **pure predicate** matching the six
+   existing siblings in `infra-config-gate.sh` (R16.2). One change dissolves four findings.
+3. **The scope split** into PR-A (sensor) and PR-B (actuator) on a one-directional dependency —
+   three reviewers converged independently, and CPO made it a sign-off condition (R14.3).
+4. **Two agent claims were rejected on measurement** rather than inherited: a cited ADR-068
+   precedent that does not exist, and a "`server.tf` is not in the paths filter" claim contradicted
+   by the filter itself (R7).
+5. **A live defect on `main` was found and scoped in**: the #7220 freshness pin reds three supported
+   merge classes, and the `host_creates` destroy-guard has been adjudicating a plan the apply
+   discards (R1).
+
+### New considerations discovered
+
+- Two live CI gates the plan had never consulted — AP-022 (`lint-workflow-errexit-capture.py`) and
+  AP-021 (`lint-diagnosis-claims.sh`) — one of which AC7 directly contradicts (R17.2).
+- The alert helper has no class for "the recovery apply failed", so that path would emit a
+  measurably false message to a non-technical operator (R17.2).
+- A deterministic concurrency collision on `systemd-run --unit=webhook-self-restart` (R17.5).
+- `terraform apply <planfile>` rejects `-target` and `-var`, which R4d's reasoning got wrong (R17.3).
+
+### Scoping note, disclosed rather than silent
+
+The generic Phase 5 "run every discovered agent" fan-out was **not** executed. Eleven agents had
+already reviewed this plan — including the full escalated panel this threshold mandates — and they
+converged on a consistent finding set with three P0s. The remaining budget was spent folding those
+findings in (R13–R17) rather than adding breadth that the convergence suggests would be redundant.
+The one deepening action every reviewer asked for — reconciling `## Implementation Phases` and
+`## Test Scenarios` against the revisions — is carried as task 1.1 in `tasks.md` and is the first
+thing `/work` must do.
+
+## Network-Outage Deep-Dive (Phase 4.5)
+
+Triggered on both arms: the plan's prose names `502`, `503`, `unreachable` and `timeout`, **and**
+it drives `terraform apply` against resources whose definitions carry `provisioner "remote-exec"`
+and `connection { type = "ssh" }` (the resource-shape trigger that the prose-only scan misses).
+
+| Layer | Status | Artifact |
+|---|---|---|
+| **L3 — firewall allow-list** | **Verified not applicable** | The recovery opens no new source, port or destination. Its only network call is `push-infra-config.sh`'s `curl` to `https://deploy.<APP_DOMAIN_BASE>/hooks/infra-config`, byte-identical to the one `deploy_pipeline_fix`'s `local-exec` already makes. The host's admin-IP allow-list gates **SSH (port 22)**, not the tunnel — and R3's exact-cardinality assert proves no SSH-provisioned resource is in the recovery's plan. |
+| **L3 — DNS / routing** | **Verified by prior exercise in the same run** | `deploy.<APP_DOMAIN_BASE>` is resolved twice before the gate — by `Verify webhook is alive post-apply` and by the gate's own poll — and both must have succeeded for the classified shape to be reachable, since it requires an HTTP 200. A resolution or routing failure surfaces as `000`, which routes to terminal red with **no** re-push. |
+| **L7 — TLS / proxy (Cloudflare Access)** | **Verified by construction** | The classifier fires only on a **parseable JSON frame**, obtainable only through a 200 past Cloudflare Access. An edge error page, an Access challenge or a 5xx yields an unparseable body → classified `unreachable` → terminal red, no re-push. This is the "listener reachable" half of the issue's own gate condition, satisfied without a second probe. |
+| **L7 — application (`webhook` on `web-1`)** | **The only layer the plan acts on** | The recorded mechanism is `push-infra-config.sh`'s `REDEPLOY NONCE` block (nonce-1). The signal is the checklist's "absence is itself a signal" case: the host's own status endpoint **answers**, and its answer is "the last apply I ran was an earlier one". |
+
+**Gap closed by the deep-dive.** The L7 hypothesis set was initially under-specified in one place:
+`infra-config-apply.sh` has **no `flock` and no serialization**, so `no_new_frame` cannot separate
+"the handler never started" from "the handler is still running". R10 (as revised by R13.4 and
+R15.3) addresses it by widening the *existing* poll loop rather than adding a second one, and
+R17.5 sizes that window against the handler's own timings (+3 s scheduled restart, ~5–8 s listener
+boot) and identifies the deterministic `systemd-run --unit=webhook-self-restart` collision that a
+premature re-push would cause.
+
+**No layer is left unverified, and no service-layer fix is proposed ahead of an L3 check** — the
+ordering discipline `hr-ssh-diagnosis-verify-firewall` exists to enforce.
+
 ## Research Insights
 
 ### Premise validation (Phase 0.6)
@@ -417,7 +493,7 @@ logs:
 
 discoverability_test:
   command: "bash apps/web-platform/infra/infra-config-gate.test.sh"
-  expected_output: "a run ending in `infra-config-gate.test.sh: <N> passed, 0 failed` followed by `OK`, where N is at or above the GATE_MIN_ASSERTIONS floor — this executes the classifier and the full bounded-verify mutation matrix, including the both-passes-fail row, entirely hermetically (no network, no prod, no secrets)"
+  expected_output: "a run ending in `infra-config-gate.test.sh: <N> passed, 0 failed` followed by `OK`, where N is at or above the GATE_MIN_ASSERTIONS floor — this executes the classifier predicate and the full mutation matrix, including the both-passes-fail row and the escape-hatch row, entirely hermetically (no network, no prod, no secrets)"
 ```
 
 The `discoverability_test` is deliberately the suite rather than a live probe: the property that
@@ -579,6 +655,15 @@ The ADR is authored in this PR at `status: accepted` — the decision is true th
 workflow merges, and there is no soak or later slice that makes it true.
 
 ## Implementation Phases
+
+> **SUPERSEDED — do not implement from this section.** It was written before the R13–R17 review
+> revisions and describes the pre-revision machine: it still prescribes the teardown relocation
+> that R3 reversed, it has no step for the `DPF_REPLACED` extraction or the saved-plan rework, and
+> it assumes the higher-order orchestrator that R16.2 replaced with a pure predicate.
+> **The operative artifact is
+> [`../specs/feat-one-shot-7104-apply-verify-repost-recovery/tasks.md`](../specs/feat-one-shot-7104-apply-verify-repost-recovery/tasks.md)**,
+> which encodes the reconciled machine. Regenerating this section from R13–R17 is task 1.1 there.
+> Retained below only as the provenance of what changed and why.
 
 Phase order is load-bearing: the two new functions are a **contract**, and the workflow is their
 **consumer**. Writing the consumer first produces YAML that calls a function that does not exist,
@@ -775,6 +860,13 @@ mis-registered suite is invisible to a single-file run.
 | **The change ships dark** — the workflow does not fire on its own paths. | AC13/AC14 make this explicit and prescribe the automated `workflow_dispatch` verification rather than leaving it to the next unrelated trigger-file merge. |
 
 ## Test Scenarios
+
+> **PARTIALLY SUPERSEDED.** T1 is now **wrong** — a stale frame with `DPF_REPLACED == false` is the
+> expected healthy state and must classify non-zero (R15.2). T2's operand changed if R2 ships
+> (R13.3). T11–T21 are re-derived against the pure predicate rather than stub-driven rows (R16.2),
+> and rows are added for the escape hatch (R15.1), `ALLOW_MISSING_STATUS` fidelity (R4c), the
+> `DPF_REPLACED` polarity guard (R17.1) and the integration-shaped two-pass test (R13.7). See
+> `tasks.md` Phase 4. T3–T10 stand as written.
 
 Every scenario below runs in `apps/web-platform/infra/infra-config-gate.test.sh` unless marked
 otherwise. Scenarios are named by the property they pin, not by the code they touch.
