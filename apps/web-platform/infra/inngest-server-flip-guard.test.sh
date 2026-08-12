@@ -209,10 +209,67 @@ elif [[ "$GUARD_PATH" != "$FLIP_PATH" ]]; then
 else
   pass "done-owner marker path agrees across writer and reader ($GUARD_PATH)"
 fi
+# NO "the marker is a file, not a directory" ASSERTION HERE, deliberately — two attempts at one
+# both survived mutation, and the honest reading is that the mutant is EQUIVALENT rather than that
+# the fixtures were weak. record_done_owner does `mkdir -p "$(dirname "$MARKER")"` and then writes
+# a FILE at $MARKER, so the marker is deeper than the created directory BY CONSTRUCTION and any
+# predicate comparing the two is tautological. Changing BOTH defaults consistently is a benign
+# rename, not a hazard: the writer still creates a file, the guard still tests that file.
+# The real hazard is the two sides DISAGREEING, and the agreement assertion above is what binds
+# it (mutation-proved: drifting the guard alone reds). A decorative second assertion that cannot
+# fail would add a row to the count and nothing to the coverage.
+
+# --- #7228: diagnostic boot must be ADMITTED and DELIVERED, not just read -------------------
+# The lockstep block above asserts both files READ the same variable name. That is necessary and
+# was not sufficient: it is satisfied by a variable nothing ever sets, which is what shipped.
+# Two independent defects, both of which made diagnostic boot — the plan's centerpiece —
+# impossible, and the first of which BRICKS the host the moment an operator follows the runbook:
+#
+#  (a) ADMISSION. cloud-init-inngest.yml's boot isolation self-check is an EXACT-SET match over
+#      the soleur-inngest/prd secret names and FATALs on any name outside it. Setting
+#      INNGEST_DIAGNOSTIC_BOOT=1 (which the recovery procedure instructs) would have made every
+#      subsequent re-provision refuse to bootstrap — the #6178 recurrence this repo has already
+#      paid for twice, and the exact reason the done-owner marker is NOT a Doppler key.
+#  (b) DELIVERY. inngest-bootstrap.sh reads the flag from its ENV, but its runcmd invocation is
+#      not wrapped in `doppler run` and passes an explicit env list. The flag never arrived, so
+#      the bootstrap always emitted the DURABLE ExecStart — while the guard, which DOES run under
+#      `doppler run`, saw the request. Durable unit + diagnostic request is precisely the
+#      "two halves disagree" state the guard refuses, so the result was a guaranteed BLOCK.
+echo "TEST: #7228 diagnostic boot is admitted by the boot self-check AND delivered to the bootstrap"
+CLOUD_INIT_INNGEST="$SCRIPT_DIR/cloud-init-inngest.yml"
+ISO_RE=$(grep -oE "grep -Ec '\^\(INNGEST_\([^']*\)\|BETTERSTACK_LOGS_TOKEN\)\\$'" "$CLOUD_INIT_INNGEST" | head -1 || true)
+assert_rc "the boot isolation allowlist was extracted by shape (else these pins are vacuous)" \
+  "0" "$([[ -n "$ISO_RE" ]] && echo 0 || echo 1)"
+assert_rc "(a) the isolation allowlist ADMITS DIAGNOSTIC_BOOT (an unadmitted name FATALs every re-provision)" \
+  "0" "$(grep -qF 'DIAGNOSTIC_BOOT' <<<"$ISO_RE" && echo 0 || echo 1)"
+# Anchored on the assignment construct in the env list a comment cannot produce.
+assert_rc "(b) the bootstrap invocation DELIVERS the flag (reading it is not the same as receiving it)" \
+  "0" "$(grep -qE '^\s*"INNGEST_DIAGNOSTIC_BOOT=\$DIAG_BOOT" ' "$CLOUD_INIT_INNGEST" && echo 0 || echo 1)"
+# The read that feeds it must be BOUNDED: this sits on the only path that installs the
+# observability stack, so an unreachable Doppler must degrade to a normal boot, never hang it.
+assert_rc "(b) the delivery read is bounded by a timeout (it precedes the observability install)" \
+  "0" "$(grep -qE 'DIAG_BOOT=.*timeout [0-9]+ doppler secrets get INNGEST_DIAGNOSTIC_BOOT' "$CLOUD_INIT_INNGEST" && echo 0 || echo 1)"
+
+echo "TEST: the done-owner marker path agrees between the FSM writer and this guard (#7228)"
+FLIP_SH="$SCRIPT_DIR/inngest-cutover-flip.sh"
+GUARD_PATH=$(grep -oE '^DONE_OWNER_MARKER="\$\{GUARD_DONE_OWNER_MARKER:-[^}]+\}"' "$TARGET" \
+  | sed -E 's/.*:-([^}]+)\}"/\1/' | head -1 || true)
+FLIP_PATH=$(grep -oE '^DONE_OWNER_MARKER="\$\{CUTOVER_DONE_OWNER_MARKER:-[^}]+\}"' "$FLIP_SH" \
+  | sed -E 's/.*:-([^}]+)\}"/\1/' | head -1 || true)
+if [[ -z "$GUARD_PATH" || -z "$FLIP_PATH" ]]; then
+  fail "could not extract the marker path from both files by shape (guard='$GUARD_PATH' flip='$FLIP_PATH') — this pin is vacuous"
+elif [[ "$GUARD_PATH" != "$FLIP_PATH" ]]; then
+  fail "done-owner path DRIFT: the guard reads '$GUARD_PATH' but the FSM writes '$FLIP_PATH' — the guard would never see a legitimately-recorded owner, or would see a path that always exists"
+else
+  pass "done-owner marker path agrees across writer and reader ($GUARD_PATH)"
+fi
 # And it must not be a bare directory: `-e` on the parent that record_done_owner mkdir -p's would
 # be true on every host that ever ran the FSM, including a replaced one.
-assert_rc "the marker path is a FILE under its directory, not the directory itself" \
-  "0" "$([[ "$(basename "$FLIP_PATH")" != "$(basename "$(dirname "$FLIP_PATH")")" && "$FLIP_PATH" == */*/* ]] && echo 0 || echo 1)"
+# The earlier predicate here (depth >= 3 AND basename != parent basename) was true of essentially
+# every absolute path and rejected only `/a/b/b` shapes — so setting BOTH files to the directory
+# itself, the exact hazard this comment names, passed. Bind it to the writer's own mkdir target.
+assert_rc "the marker is strictly DEEPER than the directory the FSM creates (not the dir itself)" \
+  "0" "$([[ "$FLIP_PATH" != "$(dirname "$FLIP_PATH")" && "$FLIP_PATH" == "$(dirname "$FLIP_PATH")"/?* && "$(dirname "$FLIP_PATH")" != "/" ]] && echo 0 || echo 1)"
 
 # --- #7228 (3.7): a `done` INHERITED from another host must not authorize a prod start -------
 # THE HAZARD THE ALLOWLIST CANNOT SEE. The flag lives in Doppler, which OUTLIVES THE HOST.
@@ -335,6 +392,15 @@ else
       pass "guard allowlist [$(printf '%s' "$guard_allow" | tr '\n' ' ')] covers all FSM start-states [$(printf '%s' "$fsm_states" | tr '\n' ' ')] ($start_site_count start sites)"
     fi
   fi
+fi
+
+# --- assertion-count FLOOR (#7228) ---------------------------------------------------------
+# This suite gates only on FAIL, so a deleted or silently-emptied block reports green with fewer
+# rows. Placed BEFORE the summary so a floor breach is counted and PRINTED rather than exiting
+# silently after the totals. A FLOOR, never -eq: adding tests must not red the suite.
+GUARD_MIN_ASSERTIONS=44  # derived from a green run; raise in lockstep when adding assertions
+if [[ "$PASS" -lt "$GUARD_MIN_ASSERTIONS" ]]; then
+  fail "assertion-count floor: only $PASS assertions ran, expected >= $GUARD_MIN_ASSERTIONS — a block was skipped or emptied"
 fi
 
 echo ""

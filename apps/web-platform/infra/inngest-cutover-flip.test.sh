@@ -543,6 +543,37 @@ teardown_case
 # mid-verify, AFTER the FLUSHALL has committed, with no verify-* marker emitted (the script traps
 # ERR, not TERM). The window was drift-pinned to the poll interval it must EXCEED and unpinned to
 # the ceiling that KILLS it, which is the more dangerous of the two directions.
+# --- S1: the /HEALTH retry direction, which was fixtured at cardinality one ------------------
+# The registry case above varies the registry across calls but holds STUB_HEALTH_CODE constant,
+# so no fixture ever exercised health non-200-then-200 — and deleting the health retry left the
+# suite fully green. That is the identical defect just fixed for the registry, in the other
+# operand, and the health retry is the loop's PRIMARY stated rationale ("inngest takes seconds
+# to bind after systemctl start"). Same stateful instrument, applied to the sibling.
+echo "TEST: #7228 the verify window covers /HEALTH retries, not just the registry"
+setup_case
+HEALTH_COUNTER="$WORK/health-calls"
+: > "$HEALTH_COUNTER"
+cat > "$CURLSTUB" <<CURLEOF
+#!/usr/bin/env bash
+for a in "\$@"; do
+  case "\$a" in '%{http_code}')
+    printf 'x' >> "$HEALTH_COUNTER"
+    if [ "\$(wc -c < "$HEALTH_COUNTER")" -le 1 ]; then printf '000'; else printf '200'; fi
+    exit 0 ;;
+  esac
+done
+printf '%s' '{"data":{"functions":[{"id":"fn-1"}]}}'
+CURLEOF
+chmod +x "$CURLSTUB"
+rc=$(run_flip armed CUTOVER_REDIS_DBSIZE=0 CUTOVER_VERIFY_WINDOW_S=30 CUTOVER_VERIFY_INTERVAL_S=0)
+order=$(trace_csv)
+assert_eq "a listener that binds on the SECOND probe still reaches done (exit 0)" "0" "$rc"
+assert_contains "a listener that binds on the SECOND probe still reaches done (flag)" "$order" "flag:done"
+assert_absent "a listener that binds on the SECOND probe is NOT aborted" "$order" "flag:aborted"
+assert_eq "non-vacuity: /health was probed more than once (the loop retried)" \
+  "yes" "$([[ $(wc -c < "$HEALTH_COUNTER") -ge 2 ]] && echo yes || echo no)"
+teardown_case
+
 echo "TEST: #7228 the verify window fits under the unit's TimeoutStartSec"
 WINDOW_DEFAULT=$(grep -oE '^CUTOVER_VERIFY_WINDOW_S="\$\{CUTOVER_VERIFY_WINDOW_S:-[0-9]+\}"' "$TARGET" \
   | grep -oE '[0-9]+' | tail -1 || true)
@@ -569,6 +600,36 @@ elif [[ $(( WINDOW_DEFAULT )) -lt $(( POLL_INTERVAL * 3 )) ]]; then
   fail "verify window ${WINDOW_DEFAULT}s is under 3x the --poll-interval (${POLL_INTERVAL}s): a healthy cutover whose registry lands on a later poll would be driven to TERMINAL aborted"
 else
   pass "verify window ${WINDOW_DEFAULT}s >= 3x --poll-interval ${POLL_INTERVAL}s (registry has room to populate)"
+fi
+
+# --- S2: the production probe URLs are asserted by nothing otherwise ------------------------
+# The curl stub dispatches on argv and never reads the URL, and every fixture injects the seam —
+# so mutating BOTH defaults to a wrong port and path left the suite fully green. A typo there
+# makes verify_serving fail on every host, driving every real cutover to terminal `aborted`
+# AFTER the FLUSHALL: the non-retryable state the window fix exists to avoid. Exactly the class
+# already pinned for CUTOVER_VERIFY_WINDOW_S one line below it; the reasoning was not carried up.
+echo "TEST: #7228 the production probe URLs target the port the server actually binds"
+BOOTSTRAP_FOR_URL="$SCRIPT_DIR/inngest-bootstrap.sh"
+H_URL=$(grep -oE '^CUTOVER_HEALTH_URL="\$\{CUTOVER_HEALTH_URL:-[^}]+\}"' "$TARGET" | sed -E 's/.*:-([^}]+)\}"/\1/' | head -1 || true)
+G_URL=$(grep -oE '^CUTOVER_GQL_URL="\$\{CUTOVER_GQL_URL:-[^}]+\}"' "$TARGET" | sed -E 's/.*:-([^}]+)\}"/\1/' | head -1 || true)
+BIND_PORT=$(grep -oE -- '--port [0-9]+' "$BOOTSTRAP_FOR_URL" | grep -oE '[0-9]+' | sort -u | head -1 || true)
+if [[ -z "$H_URL" || -z "$G_URL" || -z "$BIND_PORT" ]]; then
+  fail "could not extract both probe URLs and the bound port by shape (health='$H_URL' gql='$G_URL' port='$BIND_PORT') — this pin is vacuous"
+elif [[ "$H_URL" != "http://127.0.0.1:$BIND_PORT/health" ]]; then
+  fail "the health probe URL '$H_URL' does not target the bound port $BIND_PORT on loopback — verify_serving would fail on every host"
+elif [[ "$G_URL" != "http://127.0.0.1:$BIND_PORT/v0/gql" ]]; then
+  fail "the GQL probe URL '$G_URL' does not target the bound port $BIND_PORT on loopback"
+else
+  pass "both probe URLs target 127.0.0.1:$BIND_PORT, the port inngest-server binds"
+fi
+
+# --- S8: an assertion-count FLOOR ----------------------------------------------------------
+# Every suite here gates only on FAIL. Deleting a whole test block drops the PASS count and
+# still exits 0, so "all assertions passed" and "fewer assertions ran" are the same signal.
+# A FLOOR, never -eq: adding tests must not red the suite.
+MIN_ASSERTIONS=102  # derived from a green run, never guessed; raise in lockstep when adding tests
+if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
+  fail "assertion floor: only $PASS assertions ran, expected >= $MIN_ASSERTIONS — a block was skipped or silently emptied"
 fi
 
 echo ""

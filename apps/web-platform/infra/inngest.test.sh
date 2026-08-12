@@ -340,8 +340,21 @@ print(s.getsockname()[1])
 s.close()
 PYEOF
 )
-python3 -m http.server "$HEALTH_PORT" --bind 127.0.0.1 --directory "$HEALTH_ROOT" \
-  >/dev/null 2>&1 &
+# A code-MAPPING responder, not a static file server. Two fixtures ({200,404}) cannot tell an
+# allowlist from a blocklist: rewriting the gate's `!= "200"` into `= "404" || = "000"` passed
+# the whole suite, and a 503 — inngest's own not-ready code — would then BEAT while the
+# scheduler serves nothing, which is #7228 restored through the fix for it. A third arm
+# collapses that equivalence.
+python3 - "$HEALTH_PORT" >/dev/null 2>&1 <<'PYSRV' &
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+CODES = {"/health": 200, "/no-such-endpoint": 404, "/unavailable": 503, "/moved": 302}
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(CODES.get(self.path, 404)); self.end_headers()
+    def log_message(self, *a): pass
+HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+PYSRV
 HEALTH_PID=$!
 trap 'rm -rf "$PING_TMP"; [[ -n "$HEALTH_PID" ]] && kill "$HEALTH_PID" 2>/dev/null' EXIT
 # Wait for the listener rather than sleeping a guessed interval: a race here would make the
@@ -352,6 +365,8 @@ for _ in $(seq 1 50); do
 done
 HEALTH_OK_URL="http://127.0.0.1:$HEALTH_PORT/health"
 HEALTH_404_URL="http://127.0.0.1:$HEALTH_PORT/no-such-endpoint"
+HEALTH_503_URL="http://127.0.0.1:$HEALTH_PORT/unavailable"
+HEALTH_302_URL="http://127.0.0.1:$HEALTH_PORT/moved"
 # Port 1 is closed on every runner; curl reports 000 (no HTTP response at all).
 HEALTH_DOWN_URL="http://127.0.0.1:1/health"
 
@@ -632,6 +647,32 @@ assert "AC4 the WEB render still beats when it DOES serve (the gate is a gate, n
 # FILE, so the arithmetic compares a two-line string and the assertion fails on a clean tree.
 assert "AC4/AC3 the suppression row never leaks the heartbeat URL value" \
   "[[ \$(cat '$GATE_LOG' '$GATE_WEB_LOG' | grep -c 'CANARY_SENTINEL') -eq 0 ]]"
+
+# S4: a THIRD and FOURTH code, so the accept condition cannot be a two-member blocklist.
+# 503 is inngest's own not-ready code and 302 is a redirect — under `!= "200"` both suppress;
+# under a `= "404" || = "000"` blocklist both would BEAT while the scheduler serves nothing.
+GATE_503_LOG="$PING_TMP/logger-gate-503.txt"
+GATE_503_OUT=$(run_ping "$DEDICATED_PING" "$CANARY_URL" "$GATE_503_LOG" "$HEALTH_503_URL") \
+  && GATE_503_RC=0 || GATE_503_RC=$?
+assert "AC4 listener 503 (inngest's own not-ready code) -> SUPPRESSED, not beaten" \
+  "[[ '$GATE_503_RC' -eq 0 ]] && grep -q 'health_code=503' '$GATE_503_LOG'"
+GATE_302_LOG="$PING_TMP/logger-gate-302.txt"
+GATE_302_OUT=$(run_ping "$DEDICATED_PING" "$CANARY_URL" "$GATE_302_LOG" "$HEALTH_302_URL") \
+  && GATE_302_RC=0 || GATE_302_RC=$?
+assert "AC4 listener 302 -> SUPPRESSED (only a literal 200 may beat)" \
+  "[[ '$GATE_302_RC' -eq 0 ]] && grep -q 'health_code=302' '$GATE_302_LOG'"
+
+# S3: the PRODUCTION default URL is asserted by nothing otherwise — every run_ping injects the
+# seam, so repointing the default at a wrong port shipped the gate INERT (suppressing on every
+# host forever, turning "absence-of-beat is the alarm" into a permanent page) at full green.
+# Both operands by shape: the gate's default vs the port the unit actually binds.
+GATE_DEFAULT_URL=$(grep -oE '^INNGEST_HEALTH_URL="\$\{INNGEST_HEARTBEAT_HEALTH_URL:-[^}]+\}"' "$BOOTSTRAP_SH" \
+  | sed -E 's/.*:-([^}]+)\}"/\1/' | head -1 || true)
+BOUND_PORT=$(grep -oE -- '--port [0-9]+' "$BOOTSTRAP_SH" | grep -oE '[0-9]+' | sort -u | head -1 || true)
+assert "AC4/S3 the gate's default health URL was extracted by shape (else this pin is vacuous)" \
+  "[[ -n '$GATE_DEFAULT_URL' && -n '$BOUND_PORT' ]]"
+assert "AC4/S3 the gate's default health URL targets the port the unit BINDS ($BOUND_PORT) on loopback" \
+  "[[ '$GATE_DEFAULT_URL' == 'http://127.0.0.1:$BOUND_PORT/health' ]]"
 
 # ORDERING, asserted behaviourally rather than by reading the file. A dark dedicated host has no
 # URL; if the gate ran FIRST it would probe health every 60s and emit listener=no instead of the
