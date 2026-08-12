@@ -10,6 +10,24 @@
 2. `/ship` skill analyzes the diff and sets a `semver:patch`, `semver:minor`, or `semver:major` label
 3. On merge to main, the Action reads the label, computes the next version from the latest release tag, creates a GitHub Release, and posts to Slack
 
+### Manifest versioning
+
+**No plugin manifest carries a `version` key.** Not one of the three, and the reason is functional rather than stylistic.
+
+A `version` key's presence **suppresses `gitCommitSha` tracking** — the CLI records the source commit only for a keyless manifest, and `claude plugin update` compares version strings when a version exists, finds them identical, and short-circuits. That is defect 1 of #7471: a plugin that never updates. The reading is in `knowledge-base/project/specs/feat-one-shot-7471-plugin-delivery-path/measurements.md` §1.0 — cite it there, do not restate the numbers here.
+
+So the rule is not "the version fields are frozen, leave them alone". The fields are **gone**, deliberately, and adding one back to any of the three silently reverts the fix for every new install.
+
+The three manifests:
+
+| Manifest | Where | Purpose |
+|---|---|---|
+| `plugins/soleur/.claude-plugin/plugin.json` | this repo | The plugin manifest itself. Keyless. |
+| `.claude-plugin/marketplace.json` | this repo | The **local-dev** marketplace. Its `plugins[0].source` is `./plugins/soleur`, which is what `claude plugin marketplace add <local-path>` consumes. Its `plugins[0]` entry is keyless; its **top-level** `"version"` is the manifest-*format* version, a different field that stays. |
+| `.claude-plugin/marketplace.json` | `jikig-ai/soleur-marketplace` | The **published distribution** manifest, one `git-subdir` entry pointing back at this repo. Keyless. It lives outside this repo, so **no CI check here can reach it** — it is verified by reading the published file. |
+
+Nothing publishes to the third manifest on release. A GitHub Release creates a tag; it does not write to the marketplace repo. The distribution manifest tracks `main` with no pinned `ref`/`sha`, so new content is delivered by the source commit advancing, not by a version bump.
+
 ### Semver Label Rules
 
 - **MAJOR** (1.0.0 → 2.0.0): Breaking changes, major reorganization
@@ -21,7 +39,7 @@
 Before committing ANY changes:
 
 - [ ] README.md component counts verified (tables accurate)
-- [ ] Do NOT edit: `plugin.json` version field (frozen sentinel `0.0.0-dev`), `marketplace.json` version — these are intentionally static
+- [ ] Do NOT add a `version` key to `plugin.json` or to `marketplace.json`'s `plugins[]` entry — a `version` key's presence suppresses `gitCommitSha` tracking, which silently breaks update delivery for every new install (#7471). See [Manifest versioning](#manifest-versioning)
 - [ ] PR body includes a `## Changelog` section describing changes
 
 ### Directory Structure
