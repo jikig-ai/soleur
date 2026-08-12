@@ -50,6 +50,43 @@ const PREFLIGHT_ANCHOR = '"${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json"';
 
 const ANCHOR_PREFIX = "${CLAUDE_PLUGIN_ROOT}/";
 
+/**
+ * Used by P7 only. P6 (presence-guard parity) deliberately spans the WHOLE command
+ * surface — go.md carried the same gap and is the higher-traffic file. What is
+ * sync-specific is the MARKER GRAMMAR: `SOLEUR_SYNC_PRODUCER_MISSING` with a
+ * `producer=`/`affects=` vocabulary that go.md's own marker families do not share.
+ */
+const SYNC_MD = resolve(COMMANDS_DIR, "sync.md");
+
+/**
+ * The area each producer's `affects=` token MUST declare — a mapping, not a set.
+ *
+ * A membership-only check (`AREAS.has(area)`) is satisfied by ANY permutation once
+ * the producer count equals the area count, which it does here (3 and 3). Measured:
+ * swapping the c4 guard to `affects=domain-model` passed. The operator message
+ * interpolates `<area>` from this token, so a swap tells the user the wrong step of
+ * their sync did not run — a confidently wrong statement about their own project.
+ *
+ * Closed BY CONSTRUCTION: adding a producer means editing this file, which is a
+ * reviewable diff — the same anti-laundering property as MONOREPO_ONLY_AREAS.
+ *
+ * NOTE: `coverage` is a PSEUDO-area — it is not one of sync.md's dispatchable
+ * `<sync_area>` values (`conventions|architecture|testing|debt|project|c4|
+ * domain-model|all`). It names the end-of-run coverage summary, which no
+ * operator invokes directly. Recorded so the mismatch reads as deliberate.
+ */
+const PRODUCER_AREA: ReadonlyMap<string, string> = new Map([
+  ["scripts/generate-c4-from-components.ts", "c4"],
+  ["scripts/write-kb-coverage.ts", "coverage"],
+  ["scripts/domain-model-drift.sh", "domain-model"],
+]);
+
+/**
+ * The area VALUES, for markers that declare a blast radius without naming one
+ * producer (`SOLEUR_SYNC_TOOLCHAIN_MISSING tool=bun affects=c4,coverage`).
+ */
+const KNOWN_AREAS: ReadonlySet<string> = new Set(PRODUCER_AREA.values());
+
 /** Runners whose FIRST operand is a script path. */
 const RUNNERS = "bash|bun|node|sh|python3?|bunx|npx|tsx|deno|exec|source";
 
@@ -235,29 +272,36 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
   const parsed = files.map((f) => ({ file: f, ...parse(f) }));
   const allInvocations = parsed.flatMap((p) => p.invocations);
   let assertions = 0;
-  const seen = () => {
+  /**
+   * Counts a DECIDED assertion.
+   *
+   * The floor must certify that assertions RAN, not that blocks ran. A `seen()` at the
+   * top of an `it` is satisfied by a block whose body was gutted (measured: replacing
+   * P6's assertion with `void violations` left the suite green at the full count), and
+   * moving it to the bottom is satisfied by deleting the assertion above it. Counting
+   * inside the assertion is the only placement a deletion cannot survive.
+   */
+  const check = <T>(actual: T) => {
     assertions += 1;
+    return expect(actual);
   };
 
   it("P0: every command file's fences are balanced", () => {
     // An unbalanced fence silently drops every invocation after it, which makes
     // all downstream assertions vacuous rather than failing.
-    seen();
-    expect(parsed.filter((p) => !p.fencesBalanced).map((p) => p.file)).toEqual([]);
+    check(parsed.filter((p) => !p.fencesBalanced).map((p) => p.file)).toEqual([]);
   });
 
   it("P3: any file with a bash fence yields at least one invocation", () => {
     // Per-file, not global: a global `>= 1` floor stays green while one file
     // contributes and another has been blinded.
-    seen();
     const blind = parsed
       .filter((p) => p.hasBashFence && p.invocations.length === 0)
       .map((p) => p.file.replace(REPO_ROOT + "/", ""));
-    expect(blind).toEqual([]);
+    check(blind).toEqual([]);
   });
 
   it("P1: every producer operand is bare-anchored or monorepo-gated", () => {
-    seen();
     const violations: string[] = [];
     for (const p of parsed) {
       for (const inv of p.invocations) {
@@ -266,33 +310,30 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
         violations.push(`${inv.file.replace(REPO_ROOT + "/", "")}: ${inv.line}`);
       }
     }
-    expect(violations).toEqual([]);
+    check(violations).toEqual([]);
   });
 
   it("P1b: no :- or :? default on CLAUDE_PLUGIN_ROOT in the command surface", () => {
-    seen();
     const violations = files
       .filter((f) => {
         const src = readFileSync(f, "utf8");
         return src.includes("${CLAUDE_PLUGIN_ROOT:-") || src.includes("${CLAUDE_PLUGIN_ROOT:?");
       })
       .map((f) => f.replace(REPO_ROOT + "/", ""));
-    expect(violations).toEqual([]);
+    check(violations).toEqual([]);
   });
 
   it("P1c: every anchored operand is quoted", () => {
     // An unquoted expansion word-splits on an install path containing a space
     // (measured: `/mnt/c/Users/First Last/…`), and the split prefix is what gets
     // executed. The preflight cannot see this — it passes, then the run breaks.
-    seen();
     const unquoted = allInvocations
       .filter((inv) => isAnchored(inv.operand) && !/^["']/.test(inv.operand))
       .map((inv) => `${inv.file.replace(REPO_ROOT + "/", "")}: ${inv.line}`);
-    expect(unquoted).toEqual([]);
+    check(unquoted).toEqual([]);
   });
 
   it("P2: every anchored operand resides INSIDE the plugin payload", () => {
-    seen();
     const bad: string[] = [];
     for (const inv of allInvocations) {
       if (!isAnchored(inv.operand)) continue;
@@ -308,11 +349,10 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
         bad.push(`NOT RESIDENT: plugins/soleur/${rel}`);
       }
     }
-    expect(bad).toEqual([]);
+    check(bad).toEqual([]);
   });
 
   it("P3b: every MONOREPO_ONLY_AREAS member is exercised by a live gated site", () => {
-    seen();
     const exercised = new Set<string>();
     for (const p of parsed) {
       for (const inv of p.invocations) {
@@ -320,14 +360,13 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
         if (area) exercised.add(area);
       }
     }
-    expect([...MONOREPO_ONLY_AREAS].filter((a) => !exercised.has(a))).toEqual([]);
+    check([...MONOREPO_ONLY_AREAS].filter((a) => !exercised.has(a))).toEqual([]);
   });
 
   it("P4: every command file with an anchored producer carries the fail-closed preflight", () => {
     // ADR-179 decision 2 mandates this per command file, and it is the half of
     // the safety argument that carries the bare form. Without this assertion the
     // whole preflight block is deletable with the suite green.
-    seen();
     const missing: string[] = [];
     for (const p of parsed) {
       const anchored = p.invocations.filter((inv) => isAnchored(inv.operand));
@@ -344,13 +383,221 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
         missing.push(`${p.file.replace(REPO_ROOT + "/", "")} (preflight below first producer)`);
       }
     }
-    expect(missing).toEqual([]);
+    check(missing).toEqual([]);
+  });
+
+  it("P6: every anchored invocation in the command surface is presence-guarded", () => {
+    // #7474. P2 above proves an anchored operand RESIDES in this repo's payload
+    // at CI time. It says nothing about the payload on a CUSTOMER's machine: a
+    // root that is genuinely ours but does not carry the file passes the identity
+    // preflight (P4), and the invocation then dies on a bare interpreter error
+    // with no marker and no attribution.
+    //
+    // Scope is the WHOLE command surface, deliberately. Scoping this to sync.md
+    // would have exempted go.md — the higher-traffic entry point, run at every
+    // session start — which carried the identical gap.
+    const violations: string[] = [];
+    let checked = 0;
+    for (const p of parsed) {
+      for (const inv of p.invocations) {
+        // Fence bodies only: Phase 0 prose quotes ADR-179's worked examples as
+        // inline spans. Those are documentation, not invocations, and demanding
+        // guards on them makes the shortest fix "delete the ADR prose".
+        if (inv.fenceIdx === -1 || !isAnchored(inv.operand)) continue;
+        checked += 1;
+        const fence = p.fences[inv.fenceIdx];
+        // The guard must PRECEDE the invocation it guards, not merely share a fence
+        // with it. A `some()` over the whole fence accepted this, measured:
+        //
+        //     bun "${CLAUDE_PLUGIN_ROOT}/scripts/x.ts"      <- hoisted out, unguarded
+        //     if [ -f "${CLAUDE_PLUGIN_ROOT}/scripts/x.ts" ]; then
+        //       bun "${CLAUDE_PLUGIN_ROOT}/scripts/x.ts"
+        //     else … fi
+        //
+        // — which is #7474 reintroduced (the hoisted line dies on the bare interpreter
+        // error, then the guard below politely reports the same file missing) with the
+        // suite fully green. This assertion's own remedy text promises the invocation
+        // and its check "share a subprocess"; ordering is the cheapest thing that
+        // actually tests it.
+        //
+        // Anchored on `[` + `-f` at STATEMENT start, so a `#` comment quoting the guard
+        // cannot satisfy it — `includes("[ -f ")` alone could.
+        const relIdx = inv.lineIdx - (fence.startIdx + 1);
+        const guardIdx = fence.body.findIndex(
+          (l) => /^\s*(?:if\s+)?\[\s+-f\s+/.test(l) && l.includes(inv.operand),
+        );
+        if (guardIdx === -1 || guardIdx >= relIdx) {
+          violations.push(
+            `INVOCATION NOT PRESENCE-GUARDED: ${p.file.replace(REPO_ROOT + "/", "")}: ` +
+              `${inv.line} — wrap it so the presence check and the invocation share a ` +
+              `subprocess: if [ -f ${inv.operand} ]; then <invoke>; else <emit a marker>; fi`,
+          );
+        }
+      }
+    }
+    // Absolute, hand-ratcheted. A floor DERIVED from the parse would simply
+    // descend with a parser that stopped matching, reporting parity it never
+    // checked.
+    check(checked).toBeGreaterThanOrEqual(8);
+    check(violations).toEqual([]);
+  });
+
+  it("P7: every sync.md producer guard emits a marker with a known affects= area", () => {
+    // P6 proves each invocation is guarded. This proves the guard SAYS something
+    // useful when it fires, and that the guard list cannot drift out of sync with
+    // the real invocation inventory.
+    const p = parsed.find((x) => x.file === SYNC_MD);
+    const producers = (p?.invocations ?? []).filter(
+      (inv) => inv.fenceIdx !== -1 && isAnchored(inv.operand),
+    );
+    const relOf = (inv: Invocation) => unquote(inv.operand).slice(ANCHOR_PREFIX.length);
+    const rels = new Set(producers.map(relOf));
+
+    // Non-vacuity BEFORE comparing: `∅` equals `∅`.
+    const vacuity: string[] = [];
+    if (!p) vacuity.push("sync.md is absent from the parsed command surface");
+    if (rels.size < 3) {
+      vacuity.push(
+        `DERIVED ONLY ${rels.size} DISTINCT PRODUCERS from sync.md (expected >= 3) — ` +
+          "the parser stopped matching, so the parity assertion below would be vacuous",
+      );
+    }
+    check(vacuity).toEqual([]);
+
+    const violations: string[] = [];
+    const marked = new Set<string>();
+    // Blast-radius markers that name no single producer are checked for membership only.
+    const checkKnownAreas = (csv: string, where: string) => {
+      // Comma-joined, mirroring `SOLEUR_SYNC_TOOLCHAIN_MISSING … affects=c4,coverage`.
+      for (const area of csv.split(",")) {
+        if (!KNOWN_AREAS.has(area)) {
+          violations.push(
+            `UNKNOWN affects= AREA ${JSON.stringify(area)} on ${where} — use one of ` +
+              `${[...KNOWN_AREAS].join(", ")}, or add it to PRODUCER_AREA in this file ` +
+              "(a reviewable diff, which is the point)",
+          );
+        }
+      }
+    };
+
+    for (const inv of producers) {
+      const rel = relOf(inv);
+      const body = p!.fences[inv.fenceIdx].body;
+      const marker = body.find((l) =>
+        l.includes(`SOLEUR_SYNC_PRODUCER_MISSING producer=${rel}`),
+      );
+      if (!marker) {
+        violations.push(
+          `GUARD EMITS NO MARKER: ${rel} — its else-branch in ` +
+            `plugins/soleur/commands/sync.md must echo ` +
+            `"SOLEUR_SYNC_PRODUCER_MISSING producer=${rel} affects=<area> ` +
+            `reason=absent-from-verified-root"`,
+        );
+        continue;
+      }
+      marked.add(rel);
+      // `[^\s"]+`, not `\S+`: the marker is inside a shell double-quoted string,
+      // so `\S+` swallows the closing quote and every area reads as unknown.
+      const declared = marker.match(/\baffects=([^\s"]+)/);
+      if (!declared) {
+        violations.push(
+          `MARKER MISSING affects=: ${rel} — add affects=<area> to its ` +
+            "SOLEUR_SYNC_PRODUCER_MISSING line in plugins/soleur/commands/sync.md",
+        );
+        continue;
+      }
+      const expected = PRODUCER_AREA.get(rel);
+      if (expected === undefined) {
+        violations.push(
+          `PRODUCER NOT IN THE AREA MAP: ${rel} — add it to PRODUCER_AREA in this file ` +
+            "with the area its absence degrades (a reviewable diff, which is the point)",
+        );
+      } else if (declared[1] !== expected) {
+        violations.push(
+          `WRONG affects= AREA on ${rel}: declares ${JSON.stringify(declared[1])}, ` +
+            `expected ${JSON.stringify(expected)} — the operator message interpolates this ` +
+            "token, so a swap tells the user the wrong step of their sync did not run",
+        );
+      }
+    }
+
+    // The sibling toolchain marker shares this affects= vocabulary. Validating
+    // only one of the two lets them drift with nothing red.
+    const sibling = readFileSync(SYNC_MD, "utf8").match(
+      /SOLEUR_SYNC_TOOLCHAIN_MISSING[^\n]*?\baffects=([^\s"]+)/,
+    );
+    if (!sibling) {
+      violations.push(
+        "SIBLING MARKER NOT FOUND: expected a SOLEUR_SYNC_TOOLCHAIN_MISSING … affects=<areas> " +
+          "line in plugins/soleur/commands/sync.md — if it was renamed, update this assertion",
+      );
+    } else {
+      checkKnownAreas(sibling[1], "SOLEUR_SYNC_TOOLCHAIN_MISSING");
+    }
+
+    check(violations).toEqual([]);
+    // Parity as SET equality, never a count: a count cannot see a rename.
+    check([...marked].sort()).toEqual([...rels].sort());
+  });
+
+  it("P8: go.md's guards name the absence they skip on", () => {
+    // P6 proves go.md's invocations are guarded; P7 is sync.md-scoped. Between them,
+    // go.md's ATTRIBUTION half was pinned by nothing — measured, deleting both `else`
+    // branches (leaving `if [ -f … ]; then <invoke>; fi`) left the whole suite green.
+    // That is exactly the defect #7474 exists to fix — a guard that skips silently —
+    // reintroducible on the surface that runs at EVERY session start.
+    //
+    // go.md deliberately reuses its own marker families rather than SOLEUR_SYNC_*: these
+    // are not sync producers, and SOLEUR_GIT_REPO_DIAG is already mirrored by
+    // apps/web-platform/server/git-lock-marker-telemetry.ts.
+    const GO_MD = resolve(COMMANDS_DIR, "go.md");
+    const REQUIRED: ReadonlyArray<{ producer: string; marker: string }> = [
+      {
+        producer: "skills/git-worktree/scripts/git-repo-readiness-diag.sh",
+        marker: "SOLEUR_GIT_REPO_DIAG source=probe-unreachable reason=absent-from-verified-root",
+      },
+      {
+        producer: "skills/git-worktree/scripts/worktree-manager.sh",
+        // The reason= is load-bearing, not decoration: this fence ALSO carries the
+        // pre-existing identity-failure arm `SOLEUR_SESSION_START_SKIPPED
+        // reason=plugin-root-unverified`, so pinning the bare marker name is satisfied
+        // by that sibling — measured, deleting this else-branch passed.
+        marker: "SOLEUR_SESSION_START_SKIPPED reason=absent-from-verified-root",
+      },
+    ];
+    const p = parsed.find((x) => x.file === GO_MD);
+    const violations: string[] = [];
+    if (!p) violations.push("go.md is absent from the parsed command surface");
+
+    for (const { producer, marker } of REQUIRED) {
+      const inv = (p?.invocations ?? []).find(
+        (i) => i.fenceIdx !== -1 && unquote(i.operand) === `${ANCHOR_PREFIX}${producer}`,
+      );
+      if (!inv) {
+        violations.push(
+          `GO.MD INVOCATION MISSING: ${producer} — this assertion pins its guard; if the ` +
+            "invocation was intentionally removed, remove its entry from REQUIRED here too",
+        );
+        continue;
+      }
+      const emits = p!.fences[inv.fenceIdx].body.some((l) => l.includes(marker));
+      if (!emits) {
+        violations.push(
+          `GO.MD GUARD IS SILENT: ${producer} — its else-branch must echo ${JSON.stringify(marker)} ` +
+            "so a torn install is NAMED rather than skipped without a word, in plugins/soleur/commands/go.md",
+        );
+      }
+    }
+    check(violations).toEqual([]);
   });
 
   it("P5: the suite ran every assertion (anti-vacuity floor)", () => {
-    // Neutering or deleting an assertion block otherwise leaves the file green.
-    // Absolute, ratcheted by hand — never derived from the cases themselves,
+    // Neutering or deleting an assertion otherwise leaves the file green.
+    // Absolute, ratcheted by hand — never derived from the assertions themselves,
     // which would simply descend with a deletion.
-    expect(assertions).toBe(8);
+    //
+    // Counts DECIDED assertions (see `check`), not `it` blocks: a per-block counter is
+    // satisfied by a block whose body was gutted.
+    expect(assertions).toBe(14);
   });
 });
