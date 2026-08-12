@@ -1,14 +1,14 @@
 ---
 title: The registry host ships container logs with a self-contained journald shipper, not a Vector agent
-status: adopting
+status: accepted
 date: 2026-08-11
 amends: [ADR-172]
 related_adrs: [ADR-062, ADR-096, ADR-130, ADR-143, ADR-151, ADR-172]
-related: [7440]
+related: [7440, 7455]
 related_plans:
   - knowledge-base/project/plans/archive/20260812-194844-2026-08-11-fix-registry-zot-log-shipping-plan.md
 related_specs:
-  - knowledge-base/project/specs/feat-one-shot-7440-zot-log-shipping/session-state.md
+  - knowledge-base/project/specs/archive/20260812-194844-feat-one-shot-7440-zot-log-shipping/session-state.md
 brand_survival_threshold: single-user incident
 ---
 
@@ -325,3 +325,55 @@ the written policy and ~32x the largest measure-to-apply divergence ever observe
 
 The ratchet is real regardless: this feature consumed 3,728 compressed bytes, and the next
 `user_data` feature on this host meets the budget one level up.
+
+## Amendment 2026-08-12 — first PASS observed (status ACCEPTED)
+
+**Status flip:** `adopting → accepted`. The condition recorded under *Status flip condition* above —
+the first PASS of `scripts/followthroughs/zot-log-channel-7440.sh` — was met at
+**2026-08-12T21:03:51Z**:
+
+```text
+PASS: envelope rows observed (envelope=37 control=7 gc_start=1 gc_done=1 gc_blobs=1
+      patch_upload=0 dropped_rows=2)
+      Window 30m; expectation ~30 rows, floor 7; delivery evidence: boot_marker(1).
+      27 of 37 row(s) carry zotregistry.dev/zot/v2/pkg/api, the substring only zot's
+      own output produces.
+```
+
+37 envelope rows against a floor of 7, read back OUT of the warehouse through the ClickHouse path.
+`boot_marker(1)` is the one-shot `SOLEUR_ZOT_LOG_BOOT`; the 27-of-37 carrying
+`zotregistry.dev/zot/v2/pkg/api` is the free positive control §4 predicted. The gc start/complete
+ratio reads 1/1 — the Consequences section's growth-attribution claim becoming true rather than
+projected.
+
+### §6 and §7 were falsified by ORDERING — preserved, not rewritten
+
+§6 states that *"a step-6 `registry-host-replace` is the pending event this change rides"*, and §7
+that *"the rider is recorded on the open zot-pin ordered path"*. **Delivery did not ride step 6.**
+
+The ordered path's host replace had already fired — atomically, inside `registry-luks-recut`
+(run 31437037877) — on **2026-08-10T22:08Z**. This shipper merged **2026-08-12T19:38Z**, roughly
+**45 hours later**, so it was inert on a host born before it existed. §7's "merging this applies
+nothing" was exactly right; what it did not anticipate is that the remedy it named had already been
+spent.
+
+Delivery therefore took a separate, dedicated `registry-host-replace` —
+[run 31639782781](https://github.com/jikig-ai/soleur/actions/runs/31639782781) — completing
+**2026-08-12T20:54:12Z**. The OCI store volume, the pinned image digest `95a837a0afac`, and both
+htpasswd matches were preserved across it, and web hosts pulled 200s off the new host throughout.
+
+Boot id moved `bc135d5b-d509-41c4-8129-9181421e845c` → `93c52405-5fd2-462d-8051-fa68b8ab327f`,
+superseding the boot §6 cites as current.
+
+**The generalisable lesson: a rider is only valid while its vehicle is still pending.** The rider
+was recorded correctly and read correctly; what moved underneath it was the vehicle, which departed
+early and carried nothing. Nothing detected that gap, and nothing could have on this channel — the
+probe reported `reason=not_delivered` accurately the whole time, because "not yet delivered" and
+"the delivery mechanism has already come and gone" are the same reading here. Left alone it would
+have reported that for the full 90-day horizon before escalating.
+
+### First operational reading of the drop counter
+
+`dropped_rows=2` of 37 on the first window — comfortably clear of the floor of 7, and most likely
+startup backlog rather than rate-cap pressure. Recorded because it is that counter's first real
+reading, not because it is alarming.

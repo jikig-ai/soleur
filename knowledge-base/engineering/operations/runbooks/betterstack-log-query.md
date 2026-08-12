@@ -273,15 +273,21 @@ key, sample one raw row (`SELECT raw ... LIMIT 1`) before trusting the path.
 
 ## Querying the zot CONTAINER log channel (`SOLEUR_ZOT_LOG`) — registry, #7440 / ADR-184
 
-> **⚠️ THIS CHANNEL IS LIVE ONLY AFTER DELIVERY. Read this box before following the
-> queries below mid-incident.** The `soleur-registry` host is cloud-init-only (ADR-096),
-> so the shipper was **merged inert**: nothing was applied at merge time. It starts
-> emitting only after the host is next re-provisioned, via the step-6
-> `registry-host-replace` of the zot-pin ordered path. Until then every query in this
-> section correctly returns **zero rows**, and that zero is a *not-yet*, not a fault.
-> Check delivery first (below) rather than concluding the registry is silent for some
-> new reason. Enrolled probe:
-> `scripts/followthroughs/zot-log-channel-7440.sh` — run it and read its `reason=`.
+> **⚠️ THIS CHANNEL IS LIVE as of 2026-08-12. Zero rows here is now a FAULT, not a
+> not-yet — read this box before following the queries below mid-incident.** The
+> `soleur-registry` host is cloud-init-only (ADR-096), so the shipper was **merged inert**
+> and stayed inert until the host was next re-provisioned. That happened at
+> **2026-08-12T20:54:12Z** via a dedicated `registry-host-replace`
+> ([run 31639782781](https://github.com/jikig-ai/soleur/actions/runs/31639782781)) — **not**
+> the step-6 replace of the zot-pin ordered path this box previously named, which had
+> already fired ~45h before the shipper merged and therefore carried nothing. The first
+> PASS was read back out of the warehouse at 2026-08-12T21:03:51Z (37 envelope rows against
+> a floor of 7), which is what flipped ADR-184 to `accepted`.
+>
+> **So if the queries below return zero rows, do not read it as a not-yet.** Start with the
+> enrolled probe — `scripts/followthroughs/zot-log-channel-7440.sh` — and read its
+> `reason=`: `delivered_but_silent` means act now, `channel_dark` means the read path itself
+> is not answering, and `credential_shape_in_channel` is the one arm that exits 1.
 
 **What changed.** Before #7440 the only registry telemetry was the 5-minute
 `SOLEUR_ZOT_DISK` heartbeat, which samples **one** `docker logs` line per interval into
