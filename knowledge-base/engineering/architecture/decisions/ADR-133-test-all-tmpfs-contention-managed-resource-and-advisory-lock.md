@@ -31,7 +31,8 @@ implicated suites' documented timeout-flake class fires.
    is observe-only (creates no files, takes no locks, deletes nothing). It prints
    a contention preamble (`/tmp` + runtime-dir headroom, sibling `test-all.sh`
    runs resolved to their worktrees via `/proc/<pid>/cwd`, machine load) and
-   named banners (`LOW_TMP_HEADROOM` / `SIBLING_RUN_DETECTED`) so a contended run
+   named banners (`LOW_TMP_HEADROOM` / `SIBLING_RUN_DETECTED`, joined by
+   `SIBLING_SUITE_DETECTED` in #7424) so a contended run
    is self-identifying and a false RED is never again diagnosed as a regression.
    A per-suite `/tmp` entry-count delta, appended to the existing
    `TEST_TIMING_LOG` channel, is the probe for a residual shared-tempfile
@@ -152,3 +153,86 @@ count-based reaping — so retained `infra-suites.*` dirs were unreapable by con
 to 414 dirs / 23 MB on the author's workstation before anyone looked. The runner now age-reaps
 its own older siblings at startup and reaps the current dir from its `EXIT` trap, mirroring the
 `meta_dir` precedent this ADR set for `skill-security-scan`.
+
+## Addendum — 2026-08-11: the bytes were finally measured, and the lock stays
+
+A post-mortem of a ~45-minute full-gate run proposed replacing Decision 3's advisory mutex with
+**admission control on actual `/tmp` headroom**. This addendum records the measurement that
+proposal asked for, and the verdict. **Decision 3 is unchanged; `status:` stays `active`.**
+Nothing above is edited — this appends.
+
+### Why a new instrument was needed
+
+This ADR's capacity verdict is about **bytes** — it rejected count-based reaping precisely because
+"4,294 small entries held 160 MB (4.5%) while three trees held 3.1 GiB (88%)". But the per-suite
+probe shipped to observe contention records `tmp_delta=<ENTRY COUNT>`. The quantity this decision
+exists to protect had never been measured by the instrument built to measure it.
+
+`scripts/lib/test-contention.sh` now carries `tc_used_bytes`, reading `df -P -k` field 3
+**per mount**, sampled at run boundaries into `TEST_TIMING_LOG` as `bytes_tmp=` / `bytes_tmpdir=`.
+
+`df`, not `du`, and this is not a style preference: measured on the author's workstation,
+`du -sk /tmp` took **2.15 s** and `du -sk /var/tmp` **did not finish in 115 s**. At the per-suite
+hook originally specified that is ~578 recursive walks per mount — an unbounded observer effect on
+the very run being instrumented, and the same objection that got a background sampler rejected.
+
+### The measurement (2026-08-11, one full-gate run, `SOLEUR_TEST_FORCE_ALL=1`)
+
+| Mount | Start | End | Delta |
+|---|---:|---:|---:|
+| `/tmp` (`TC_TMPDIR`, the 4 GiB tmpfs) | 3,553,042,432 B (3.31 GiB, **83%** used) | 3,810,562,048 B (3.55 GiB, **89%** used) | **+245.6 MiB** |
+| `/var/tmp` (`TMPDIR`, disk-backed) | 378,100,240,384 B (352.1 GiB) | 377,556,484,096 B (351.6 GiB) | −518.6 MiB |
+
+**Both figures are quoted deliberately.** One directory alone is incomplete by this addendum's own
+reject condition: the two are different mounts on purpose, and a single number spanning them would
+report health from whichever is roomier — indistinguishable from a healthy mount.
+
+### What the numbers do and do not license
+
+**The premise still holds.** ADR-133 described "a machine-global RAM-backed 4 GiB `/tmp` at 86%
+full". Measured a month later: **83% at run start, 89% at run end**, with available headroom
+dipping to **699 MB — below the runner's own 1024 MB floor**, firing `LOW_TMP_HEADROOM`. This is
+not a historical condition that the `TMPDIR=/var/tmp` migration retired.
+
+**The delta is an upper bound, not an attribution.** Three sibling `test-all.sh` runs were active
+for part of this run (`SIBLING_RUN_DETECTED` fired, naming all three). The +245.6 MiB on `/tmp` is
+the mount's movement, not this run's footprint, and cannot be split without a single-runner
+baseline this budget did not buy.
+
+**A near-zero `/tmp` delta would NOT have meant "no pressure, drop the lock."** It would have meant
+the `TMPDIR=/var/tmp` mitigation works — which is a different claim, and the one this reading
+actually supports. The mount still sat at 83–89% throughout, so the capacity hazard is live.
+
+### The sharper finding: the lock is not currently serialising anything
+
+The run queued on `tc_acquire` for the **full 900 s `TC_LOCK_TIMEOUT`** and then proceeded, while
+**three sibling runs executed concurrently** — 3,775 s, 5,787 s and 5,763 s elapsed at the moment
+of the probe, against a ~45-minute uncontended baseline. Because the lock is advisory and proceeds
+on timeout, it is charging every session up to 15 minutes of delay while delivering no isolation.
+
+That reframes the open question. It is not "mutex versus admission control"; it is **why a mutex
+that proceeds on timeout is being relied on as a mutex**. Raising `TC_LOCK_TIMEOUT`, or making
+acquisition blocking with a documented escape, are candidates the original Alternatives never
+considered because the failure mode had not been observed.
+
+### Verdict: keep the lock
+
+The decision rule was fixed before the data arrived, so the data decides rather than the author.
+The measurement does not clear the bar, and two mechanism-level objections survive any amount of
+measurement:
+
+- **TOCTOU.** Admission control is a point-in-time prediction about a 15-minute future. Two runners
+  both sample abundant headroom, both admit, both allocate. Fixing that needs a reservation — the
+  mutex again.
+- **Non-monotonic degradation.** The mutex degrades to *slow*. Admission control degrades to
+  ENOSPC mid-suite, producing a RED that reads as a code regression — the same
+  "signal that is not evidence" harm this ADR exists to prevent, inverted.
+
+**The evidence bar that was NOT met** (recorded so the next session inherits data rather than an
+argument): an in-suite sampler at <= 2 s resolution; >= 3 single-runner runs for variance; >= 2 runs
+at N=2 and >= 1 at N=3 with the lock disabled via `SOLEUR_DISABLE_SESSION_STATE=1`; a re-verified
+filesystem premise (done — 83%, above); and one adversarial run starting the top-3 consumers
+simultaneously. One run measures the *uncontended* case while the lock protects the *contended*
+one, so n=1 clears no honest bar for replacing a mutex. Tracked at #7454 item 3.
+
+The named follow-up candidate is a headroom **bypass on top of** the mutex, not a replacement.

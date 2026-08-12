@@ -38,7 +38,7 @@ path and none converged.
    `stat .git/config.worktree` = character-special-file.
 
 2. **The fatal give-up was invisible to telemetry (the meta-bug).** The `[error] worktree wedge:`
-   line is emitted via `headless_or_stderr` (`.claude/hooks/lib/session-state.sh`), which in the
+   line is emitted via `headless_or_stderr` (`plugins/soleur/scripts/lib/session-state.sh`; was `.claude/hooks/lib/` until #7409), which in the
    headless sandbox appends to a **per-PID logfile**, not the Bash stdout the PostToolUse telemetry
    hook scans; AND its `[error] ` prefix fails `MARKER_RE`'s `^worktree wedge:` anchor
    (`git-lock-marker-telemetry.ts`). Double-drop → the fatal outcome fired on every wedged run yet

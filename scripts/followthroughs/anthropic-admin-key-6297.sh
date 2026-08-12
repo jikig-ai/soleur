@@ -150,8 +150,11 @@ if (( ROWS == 0 )); then
     # `|| echo 0` must NOT be the failure path: a dead counter would then look
     # identical to "first sweep" and print nothing forever — the same decayed
     # silent state this issue exists to remove. Sentinel the failure instead.
+    # Count only the SWEEPER's own emissions. This counter drives a stall verdict, and the
+    # comments it counts are this script's output echoed back by the sweeper — so on a public repo
+    # an unfiltered count is advanceable by anyone pasting the token. See #7448.
     PRIOR=$(gh issue view "$ISSUE" --json comments \
-      --jq '[.comments[] | select(.body | contains("ZERO_PRODUCER_ROWS"))] | length' 2>/dev/null || echo "ERR")
+      --jq '[.comments[] | select((.author.login // "") as $l | $l == "github-actions" or $l == "github-actions[bot]") | select(.body | contains("ZERO_PRODUCER_ROWS"))] | length' 2>/dev/null || echo "ERR")
     if [[ "$PRIOR" == "ERR" || ! "$PRIOR" =~ ^[0-9]+$ ]]; then
       echo "  Stall counter query FAILED (gh could not read #$ISSUE) — the stall"
       echo "  bound is not being enforced this run."

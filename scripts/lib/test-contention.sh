@@ -44,7 +44,7 @@ _TC_CLK_TCK="$(getconf CLK_TCK 2>/dev/null || echo 100)"
 # session-state.sh supplies the advisory lock (Phase 3). Resolved relative to
 # this lib so it works from any CWD; overridable for tests.
 _tc_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
-TC_SESSION_STATE="${TC_SESSION_STATE:-$_tc_lib_dir/../../.claude/hooks/lib/session-state.sh}"
+TC_SESSION_STATE="${TC_SESSION_STATE:-$_tc_lib_dir/../../plugins/soleur/scripts/lib/session-state.sh}"
 # A test-all.sh run is minutes, not seconds. with_lock's 30s default would fire
 # the advisory path on essentially every genuine overlap, so size the wait to a
 # full suite.
@@ -77,6 +77,37 @@ tc_used_pct() {
   p=$("$TC_DF_CMD" -P -k "$d" 2>/dev/null | awk 'NR==2 {gsub(/%/,"",$5); print $5}') || p=""
   [[ "$p" =~ ^[0-9]+$ ]] || { printf '0\n'; return 0; }
   printf '%s\n' "$p"
+}
+
+# Used BYTES on the mount a directory lives on.
+#
+# WHY THIS EXISTS. The per-suite probe records `tmp_delta=<ENTRY COUNT>`, but
+# ADR-133's capacity verdict is about BYTES -- that ADR explicitly rejected
+# count-based reasoning because 4,294 small entries held 160 MB (4.5%) while
+# three trees held 3.1 GiB (88%). The quantity the advisory lock exists to
+# protect had never been measured by the instrument shipped to measure it.
+#
+# `df`, NOT `du`. ADR-133's question is a MOUNT's capacity ("a machine-global
+# RAM-backed 4 GiB /tmp at 86% full"), not a directory's size, and df answers it
+# in O(1) with no recursive walk. Measured on this machine: `du -sk /tmp` took
+# 2.15 s and `du -sk /var/tmp` did not finish in 115 s, so a du-based probe would
+# have added an unbounded observer effect to the very run it instruments.
+#
+# PER-MOUNT BY CONSTRUCTION. It takes a directory and reports the mount that
+# directory lives on; there is deliberately no "total scratch" variant. TMPDIR
+# (/var/tmp, disk-backed) and TC_TMPDIR (/tmp, the tmpfs) are different mounts ON
+# PURPOSE, and a single number spanning both would report health from whichever
+# is roomier -- indistinguishable from a healthy mount, which is the exact
+# fail-open the comment at test-all.sh:18-29 was written to prevent.
+#
+# Field 3 of `df -P -k` is Used in 1024-blocks. Degrades to 0 rather than
+# failing: callers run inside the gate, so an exception on an unparseable
+# reading would take a whole run down mid-flight.
+tc_used_bytes() {
+  local d="${1:-$TC_TMPDIR}" kb
+  kb=$("$TC_DF_CMD" -P -k "$d" 2>/dev/null | awk 'NR==2 {print $3}') || kb=""
+  [[ "$kb" =~ ^[0-9]+$ ]] || { printf '0\n'; return 0; }
+  printf '%s\n' $(( kb * 1024 ))
 }
 
 # --- Sibling scan ----------------------------------------------------------
@@ -131,8 +162,157 @@ _tc_self_and_ancestors() {
   printf '%s' "$out"
 }
 
-# Emits one TAB-separated "pid<TAB>cwd<TAB>elapsed_s" line per sibling run.
-tc_siblings() {
+# Applies the RUN predicate to one /proc/<pid> directory. Exit 0 on a match.
+#
+# Match on ARGV POSITION, never on the substring anywhere in the joined
+# cmdline (cq-assert-anchor-not-bare-token applied to process matching).
+# A process counts as a RUN only when either:
+#   (a) argv[0] is the runner itself (direct shebang exec), or
+#   (b) argv[0] is a shell AND some later argument is a whitespace-free
+#       path whose basename is test-all.sh.
+#
+# Every weaker rule was tried and rejected against real cmdlines:
+#   - substring over the joined cmdline matches any process that merely
+#     MENTIONS the runner (a `bash -c` with it in a trailing COMMENT
+#     matched itself during development);
+#   - "any token whose basename is test-all.sh" still matches that comment,
+#     because `${tok##*/}` on `... # scripts/test-all.sh` yields exactly
+#     `test-all.sh`, and it also matches `grep -rn test-all.sh scripts/`.
+# A false sibling makes the banner fire on every solo run, and a banner
+# that always fires carries no information.
+#
+# Extracted from the scan loop UNCHANGED (#7424 Phase 4). It is now called from
+# two places — the classifier below and the ancestry walk — and the ancestry
+# walk needs the PREDICATE, not the match SET: an ancestor may legitimately be
+# excluded from the scan (it is in the self/pgid exclusion, or it is $$ itself)
+# and must still cancel its children.
+_tc_is_run_proc() {
+  local d="$1"
+  [[ -r "$d/cmdline" ]] || return 1
+  local -a argv=()
+  mapfile -t -d '' argv < "$d/cmdline" 2>/dev/null || true
+  (( ${#argv[@]} > 0 )) || return 1
+
+  local a0="${argv[0]##*/}" matched=0
+  if [[ "$a0" == "test-all.sh" ]]; then
+    matched=1
+  elif [[ "$a0" == bash || "$a0" == sh || "$a0" == dash || "$a0" == zsh || "$a0" == ksh ]]; then
+    local tok i
+    for (( i = 1; i < ${#argv[@]}; i++ )); do
+      tok="${argv[i]}"
+      [[ "$tok" == *[[:space:]]* ]] && continue
+      if [[ "${tok##*/}" == "test-all.sh" ]]; then matched=1; break; fi
+    done
+  fi
+  (( matched )) || return 1
+  return 0
+}
+
+# Does this path name an INDIVIDUAL suite? `*.test.sh`, or `test-*.sh` that is
+# not the runner.
+#
+# THE `test-all.sh` EXCLUSION. The runner's own basename matches `test-*.sh`, so
+# without it a full run would ALSO read as an individual suite and
+# SIBLING_SUITE_DETECTED would fire on every solo run — the exact "a banner that
+# always fires carries no information" failure the block above exists to prevent.
+#
+# MEASURED CORRECTION (2026-08-11, mutation battery): as _tc_scan_procs is
+# written today the exclusion is the SECOND line of defence, not the first —
+# classification tests the RUN predicate first, and every cmdline that would
+# newly match here already classified as `run`, so deleting this clause changes
+# no verdict through the scan. It is kept, and pinned by a predicate-level arm,
+# because the thing standing between a solo run and a permanently-firing banner
+# would otherwise be the ORDER of one if/elif.
+#
+# Two further scope edges, both measured, neither fatal:
+#   - deliberately OVER-broad in one direction: `scripts/lib/test-contention.sh`
+#     matches `test-*.sh`. It is sourced, never executed, so no process ever
+#     carries it at argv[0] or as a bare token — latent, not live.
+#   - deliberately UNDER-broad in another: `tests/hooks/test_incidents.sh` uses
+#     an underscore and matches neither rule, and `timeout N bash <suite>` puts
+#     a non-shell at argv[0] (a real shape in this repo, as does the webplat
+#     `env … bash -c …` registration). Ancestry cancellation below is what keeps
+#     the under-broad cases from mattering for the run-CHILD case, which is the
+#     one that would otherwise produce a wrong count rather than a missing line.
+_tc_is_suite_basename() {
+  local b="${1##*/}"
+  if [[ "$b" == *.test.sh ]]; then return 0; fi
+  if [[ "$b" == test-*.sh && "$b" != "test-all.sh" ]]; then return 0; fi
+  return 1
+}
+
+# Applies the SUITE predicate to one /proc/<pid> directory, with the SAME
+# argv-position discipline as _tc_is_run_proc: argv[0] itself, or a
+# whitespace-free later token under a shell argv[0]. The whitespace guard is
+# what stops `bash -c 'grep -rn x tests/scripts/test-foo.sh'` — a command
+# STRING, not an invocation — from counting as a running suite.
+_tc_is_suite_proc() {
+  local d="$1"
+  [[ -r "$d/cmdline" ]] || return 1
+  local -a argv=()
+  mapfile -t -d '' argv < "$d/cmdline" 2>/dev/null || true
+  (( ${#argv[@]} > 0 )) || return 1
+
+  local a0="${argv[0]}" matched=0
+  if _tc_is_suite_basename "$a0"; then
+    matched=1
+  else
+    local b0="${a0##*/}"
+    if [[ "$b0" == bash || "$b0" == sh || "$b0" == dash || "$b0" == zsh || "$b0" == ksh ]]; then
+      local tok i
+      for (( i = 1; i < ${#argv[@]}; i++ )); do
+        tok="${argv[i]}"
+        [[ "$tok" == *[[:space:]]* ]] && continue
+        if _tc_is_suite_basename "$tok"; then matched=1; break; fi
+      done
+    fi
+  fi
+  (( matched )) || return 1
+  return 0
+}
+
+# Walks a pid's ppid chain under the same 64-step guard as
+# _tc_self_and_ancestors and reports whether ANY ancestor is a sibling run.
+#
+# WHY ANCESTRY AND NOT A cwd SET-DIFFERENCE. Three measured ways the cwd
+# difference produces a wrong count:
+#   - suites routinely `cd` into a `mktemp -d` sandbox, so one worktree appears
+#     under two unequal cwd strings and the difference FAILS to cancel —
+#     double-reporting the very worktree it existed to protect;
+#   - `<unreadable>` is substituted for every cwd that cannot be read, so all
+#     such processes share one pseudo-worktree and a SINGLE unreadable run would
+#     subtract EVERY unreadable suite;
+#   - a run behind `timeout … bash scripts/test-all.sh` has a non-shell argv[0],
+#     so no run match exists at all while its suite children do — reporting a
+#     full run as "a worktree running an individual suite".
+# Ancestry is invariant under `cd`, immune to `<unreadable>`, and reaches
+# through wrapper processes that match neither predicate.
+_tc_has_run_ancestor() {
+  local pid="$1" guard=0 ppid
+  while [[ "$pid" =~ ^[0-9]+$ ]] && (( pid > 0 && guard < 64 )); do
+    ppid=$(_tc_ppid "$TC_PROC_ROOT/$pid/stat") || ppid=""
+    [[ "$ppid" =~ ^[0-9]+$ ]] || return 1
+    (( ppid > 0 )) || return 1
+    [[ "$ppid" == "$pid" ]] && return 1
+    if _tc_is_run_proc "$TC_PROC_ROOT/$ppid"; then return 0; fi
+    pid="$ppid"
+    guard=$(( guard + 1 ))
+  done
+  return 1
+}
+
+# ONE /proc walk. Emits "class<TAB>pid<TAB>cwd<TAB>elapsed_s", class ∈ run|suite.
+#
+# WHY ONE WALK AND NOT TWO VIEWS: cancellation is a CROSS-BUCKET predicate — a
+# suite match survives only if no run match is its ancestor — so the run set must
+# be in scope during the same pass. Two walks are two non-atomic snapshots, over
+# which a difference is computed on inconsistent sets.
+#
+# Own-suite children cannot self-match here: tc_preamble runs BEFORE the first
+# run_suite, so no child exists yet, and the self_pgrp exclusion below covers
+# this run's children in any case. Both statements are the precondition for any
+# later "call the preamble mid-run" edit.
+_tc_scan_procs() {
   local proc="$TC_PROC_ROOT"
   [[ -d "$proc" ]] || return 0
 
@@ -157,49 +337,29 @@ tc_siblings() {
   self_pgrp=$(_tc_pgrp "$proc/$TC_SELF_PID/stat" 2>/dev/null) || self_pgrp=""
   [[ "$self_pgrp" =~ ^[0-9]+$ ]] || self_pgrp=""
 
-  local d pid cwd starttime elapsed pgrp
+  # Run pgids are accumulated space-delimited so the fallback below is a
+  # substring test on a bounded string rather than a nested loop.
+  local run_pgrps=" "
+  local -a suite_pids=() suite_rows=() suite_pgrps=()
+  local d pid cwd starttime elapsed pgrp kind
   for d in "$proc"/[0-9]*; do
     [[ -d "$d" ]] || continue
     pid="${d##*/}"
     [[ "$excluded" == *" $pid "* ]] && continue
+    pgrp=$(_tc_pgrp "$d/stat") || pgrp=""
     if [[ -n "$self_pgrp" ]]; then
-      pgrp=$(_tc_pgrp "$d/stat") || pgrp=""
       [[ "$pgrp" == "$self_pgrp" ]] && continue
     fi
     [[ -r "$d/cmdline" ]] || continue
 
-    # Match on ARGV POSITION, never on the substring anywhere in the joined
-    # cmdline (cq-assert-anchor-not-bare-token applied to process matching).
-    # A process counts as a RUN only when either:
-    #   (a) argv[0] is the runner itself (direct shebang exec), or
-    #   (b) argv[0] is a shell AND some later argument is a whitespace-free
-    #       path whose basename is test-all.sh.
-    #
-    # Every weaker rule was tried and rejected against real cmdlines:
-    #   - substring over the joined cmdline matches any process that merely
-    #     MENTIONS the runner (a `bash -c` with it in a trailing COMMENT
-    #     matched itself during development);
-    #   - "any token whose basename is test-all.sh" still matches that comment,
-    #     because `${tok##*/}` on `... # scripts/test-all.sh` yields exactly
-    #     `test-all.sh`, and it also matches `grep -rn test-all.sh scripts/`.
-    # A false sibling makes the banner fire on every solo run, and a banner
-    # that always fires carries no information.
-    local -a argv=()
-    mapfile -t -d '' argv < "$d/cmdline" 2>/dev/null || true
-    (( ${#argv[@]} > 0 )) || continue
-
-    local a0="${argv[0]##*/}" matched=0
-    if [[ "$a0" == "test-all.sh" ]]; then
-      matched=1
-    elif [[ "$a0" == bash || "$a0" == sh || "$a0" == dash || "$a0" == zsh || "$a0" == ksh ]]; then
-      local tok i
-      for (( i = 1; i < ${#argv[@]}; i++ )); do
-        tok="${argv[i]}"
-        [[ "$tok" == *[[:space:]]* ]] && continue
-        if [[ "${tok##*/}" == "test-all.sh" ]]; then matched=1; break; fi
-      done
+    kind=""
+    if _tc_is_run_proc "$d"; then
+      kind="run"
+    elif _tc_is_suite_proc "$d"; then
+      kind="suite"
+    else
+      continue
     fi
-    (( matched )) || continue
 
     cwd=$(readlink "$d/cwd" 2>/dev/null) || cwd="<unreadable>"
     [[ -n "$cwd" ]] || cwd="<unreadable>"
@@ -211,10 +371,43 @@ tc_siblings() {
       (( elapsed < 0 )) && elapsed=0
     fi
 
-    printf '%s\t%s\t%s\n' "$pid" "$cwd" "$elapsed"
+    if [[ "$kind" == "run" ]]; then
+      # pgid 0 is not a real process group; admitting it would make every
+      # process whose pgid could not be read cancel every other such process.
+      if [[ "$pgrp" =~ ^[0-9]+$ ]] && (( pgrp > 0 )); then
+        run_pgrps+="$pgrp "
+      fi
+      printf 'run\t%s\t%s\t%s\n' "$pid" "$cwd" "$elapsed"
+    else
+      suite_pids+=("$pid")
+      suite_rows+=("$pid"$'\t'"$cwd"$'\t'"$elapsed")
+      suite_pgrps+=("$pgrp")
+    fi
+  done
+
+  # Cancellation pass. A suite match that belongs to a sibling RUN is that run's
+  # own child, already reported by the run line; emitting it too would count one
+  # worktree twice and label a full run "an individual test suite".
+  local i spg
+  for (( i = 0; i < ${#suite_pids[@]}; i++ )); do
+    if _tc_has_run_ancestor "${suite_pids[i]}"; then continue; fi
+    # Fallback for the reparented case: a run_suite child inherits the runner's
+    # pgid under a non-interactive shell, so a shared pgid still identifies it
+    # after the ppid chain has been cut by the parent's exit.
+    spg="${suite_pgrps[i]}"
+    if [[ "$spg" =~ ^[0-9]+$ ]] && (( spg > 0 )) && [[ "$run_pgrps" == *" $spg "* ]]; then
+      continue
+    fi
+    printf 'suite\t%s\n' "${suite_rows[i]}"
   done
   return 0
 }
+
+# Back-compat views over the single snapshot. Both emit the historical
+# "pid<TAB>cwd<TAB>elapsed_s" shape and take no arguments, so every existing
+# tc_siblings call site keeps working byte-for-byte.
+tc_siblings()       { _tc_scan_procs | awk -F'\t' '$1=="run"   {print $2"\t"$3"\t"$4}'; }
+tc_suite_siblings() { _tc_scan_procs | awk -F'\t' '$1=="suite" {print $2"\t"$3"\t"$4}'; }
 
 # --- Preamble --------------------------------------------------------------
 #
@@ -223,11 +416,16 @@ tc_siblings() {
 # fired — that inference is exactly what turned #6726 into a regression hunt.
 
 tc_preamble() {
-  local used_pct avail_mb entries sibs sib_count load cores memavail_kb
+  local used_pct avail_mb entries scan sibs suite_sibs sib_count suite_count
+  local load cores memavail_kb
   used_pct=$(tc_used_pct)
   avail_mb=$(tc_avail_mb)
   entries=$(tc_tmp_entry_count)
-  sibs=$(tc_siblings || true)
+  # ONE /proc walk, split into the two views here. Calling the two view
+  # functions instead would take two non-atomic snapshots.
+  scan=$(_tc_scan_procs || true)
+  sibs=$(awk -F'\t' '$1=="run"   {print $2"\t"$3"\t"$4}' <<<"$scan")
+  suite_sibs=$(awk -F'\t' '$1=="suite" {print $2"\t"$3"\t"$4}' <<<"$scan")
   # Count DISTINCT worktrees, not raw pids: one logical run legitimately shows
   # up as several processes (the script plus its wrapper shell), so a pid count
   # overstates how many concurrent runs are actually competing for the tmpfs.
@@ -235,6 +433,10 @@ tc_preamble() {
   sib_count=0
   if [[ -n "${sibs//[[:space:]]/}" ]]; then
     sib_count=$(cut -f2 <<<"$sibs" | sort -u | grep -c . || true)
+  fi
+  suite_count=0
+  if [[ -n "${suite_sibs//[[:space:]]/}" ]]; then
+    suite_count=$(cut -f2 <<<"$suite_sibs" | sort -u | grep -c . || true)
   fi
 
   load="?"
@@ -268,7 +470,16 @@ tc_preamble() {
     done <<< "$sibs"
   fi
 
-  # Named banners. Both are advisory: nothing here changes the run's outcome.
+  printf '[contention] suite siblings: %s other worktree(s) running an individual test suite\n' \
+    "$suite_count"
+  if (( suite_count > 0 )); then
+    while IFS=$'\t' read -r p c e; do
+      [[ -n "$p" ]] || continue
+      printf '[contention]   -> pid %s in %s (running %ss)\n' "$p" "$c" "$e"
+    done <<< "$suite_sibs"
+  fi
+
+  # Named banners. All are advisory: nothing here changes the run's outcome.
   if [[ "$avail_mb" =~ ^[0-9]+$ ]] && (( avail_mb < TC_MIN_AVAIL_MB )); then
     printf '[contention] BANNER LOW_TMP_HEADROOM: %sMB avail is below the %sMB floor. A failure in this run may be resource contention, not a regression — re-run the failing suite in isolation before diagnosing.\n' \
       "$avail_mb" "$TC_MIN_AVAIL_MB" >&2
@@ -276,6 +487,13 @@ tc_preamble() {
   if (( sib_count > 0 )); then
     printf '[contention] BANNER SIBLING_RUN_DETECTED: test-all.sh is running in %s other worktree(s) (listed above). Confirm a failure three ways — isolated re-run, the matching CI gate, and a clean full re-run once the sibling exits — before accepting it as real.\n' \
       "$sib_count" >&2
+  fi
+  # A separate banner, NOT a widening of the one above: the two answer different
+  # questions, and folding suites into SIBLING_RUN_DETECTED would silently change
+  # what every already-logged instance of that name meant.
+  if (( suite_count > 0 )); then
+    printf '[contention] BANNER SIBLING_SUITE_DETECTED: an individual test suite is running in %s other worktree(s) (listed above). This runner competes with it for the same tmpfs capacity. Confirm a failure three ways — isolated re-run, the matching CI gate, and a clean full re-run once the sibling exits — before accepting it as real.\n' \
+      "$suite_count" >&2
   fi
   return 0
 }

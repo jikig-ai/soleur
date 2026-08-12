@@ -1711,9 +1711,24 @@ non-failing: `gh api "repos/<o>/<r>/actions/runs?head_sha=$(git rev-parse HEAD)"
 After confirming mergeability, queue auto-merge and let GitHub handle waiting for CI. Wrap the call in the merge-main lock so parallel sessions don't queue auto-merges in the same window:
 
 ```bash
-bash .claude/hooks/lib/session-state.sh with_lock merge-main 600 -- \
+SS_LIB="${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/scripts/lib/session-state.sh"
+if [[ -r "$SS_LIB" ]] && command -v flock >/dev/null 2>&1; then
+  bash "$SS_LIB" with_lock merge-main 600 -- \
+    gh pr merge <number> --squash --auto
+  rc=$?
+else
+  # Degrade open, loudly — the lock is advisory (ADR-178 §5).
+  echo "SOLEUR_SESSION_STATE_UNAVAILABLE path=$SS_LIB reason=running-unlocked"
   gh pr merge <number> --squash --auto
-rc=$?
+  rc=$?
+fi
+# rc=99 comes only from `with_lock` — but it means "the lock could not be
+# TAKEN", which is broader than contention: `acquire_lock` also returns 99 when
+# the lock FILE cannot be opened (EROFS/ENOSPC/EMFILE). The guard above removes
+# the third cause (a missing flock(1)) by routing it to the degrade-open arm,
+# because otherwise a host without util-linux reports ">600s contention" on an
+# uncontended lock and exits 1 forever. Do not report 99 as contention without
+# saying it may be an unopenable lock file.
 if [[ "$rc" -eq 99 ]]; then
   echo "merge-main lock contended >600s — another session is queueing auto-merge. Retry: re-run /ship after that session completes."
   exit 1
@@ -2188,7 +2203,9 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    - **DNS probe**: `dig +short +time=5 +tries=2 TXT example.com | grep -qF "$EXPECTED" && exit 0 || exit 1`
    - **SQL probe** (Supabase prd): scaffold via `/soleur:schedule --once` so the workflow brings its own Doppler env; the follow-through script then queries the workflow run status via `gh run list --workflow <name>.yml --status success`.
    - **GitHub Actions probe**: `gh run list --workflow <wf>.yml --status success --created '>=<earliest>' --json conclusion | jq -e 'length > 0'`
-   - **Operator-confirmed** (CAPTCHA, OAuth consent, subjective design call): the script runs `gh issue view <N> --comments --json comments | jq -re '.comments[].body' | grep -qE '^RESULT: PASS$'` — the operator types `RESULT: PASS` in an issue comment when verification is done. This is the legitimate use of operator-confirmed exit-0: the script reads the human verdict, not the human reads a dashboard.
+   - **Operator-confirmed** (CAPTCHA, OAuth consent, subjective design call): the script reads member-authored comments and branches on the LAST verdict — do **not** inline a one-liner here, copy [cpx22-invoice-reconcile-7431.sh](../../../../scripts/followthroughs/cpx22-invoice-reconcile-7431.sh), which is the reference implementation. A `grep -q '^RESULT: (PASS|FAIL)'` in this section's `… && exit 0 || exit 1` idiom **exits 0 on an explicit FAIL** and closes the tracker on the operator's own rejection; that inversion shipped here once and is why this bullet points at code instead of prose. The operator types `RESULT: PASS` in an issue comment when verification is done. This is the legitimate use of operator-confirmed exit-0: the script reads the human verdict, not the human reads a dashboard.
+
+     **The `authorAssociation` filter is mandatory, not stylistic.** This repo is PUBLIC with issues open, and a probe's exit code makes the sweeper close the tracker — so an unfiltered `.comments[].body` accepts a verdict from any authenticated GitHub user, and the sweeper's own PASS comment then disables the reopen guard that would have caught it. Three further requirements follow from the same fact: anchor with `\b` (`RESULT: PASSing on this for now` matched a bare `^RESULT: PASS`); never echo the matched line unredacted (the sweeper posts probe stdout back as a comment, which the next run re-reads as a verdict, latching the issue unclosable); and hardcode the tracker number rather than self-locating by searching issues for the probe's own filename (issue search matches COMMENT bodies as well as issue bodies, and taking the first hit is relevance-ordered, so the probe can be pointed at another issue while the sweeper closes this one). **Why:** #7448 — all four probes written against the earlier form were forgeable; see the reference implementation linked above.
    - **Self-armed Inngest oneshot** (autonomous — no operator, no GH-Actions): when the verification needs fire-time prd secrets / an installation-token repo write and has bespoke logic, ship a reviewed `oneshot-*.ts` + a `server/index.ts` boot-arm (ADR-046). It fires server-side at a future `ts` and reports to an issue / Sentry on its own. Precedent `oneshot-heartbeat-recovery-verify.ts`; see [`inngest-oneshot-and-reminder-patterns.md`](../../../../knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md).
    - **Generic reminder primitive** (autonomous — **no deploy**): for a one-off issue comment or a *registered* check, arm it via `POST /api/internal/schedule-reminder` (Bearer `INNGEST_MANUAL_TRIGGER_SECRET`, allowlisted `action`) — no new function, no deploy. Same runbook.
 

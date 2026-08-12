@@ -126,6 +126,26 @@ For every issue, blocker, dependency, or prior-art artifact the feature descript
 
 Emit a one-paragraph **Premise Validation** note (what was checked, what held, what was stale) into the research-insights scratch so Phase 1.7 and the plan's "Research Reconciliation" section can carry it forward. If nothing is cited by reference, state "no external premises to validate" and proceed.
 
+### 0.6b. Mechanism Minimality Gate (Always)
+
+Runs after premise validation and before the Phase 1 fan-out, for the same reason Phase 0.7 sits there: a mechanism must be cut **before** anything expensive researches it. Premise validation (0.6) asks whether the plan's cited facts still hold; this asks whether the plan's proposed machinery is needed at all.
+
+**1. Restate the ask as discrete properties — the Property List.** An issue routinely proposes a *mechanism* rather than a property — #7418 asked for an HTML-comment in-progress marker, while the properties underneath were "research survives a stall" and "a consumer can distinguish a half-written plan from a finished one". Write each property as one sentence naming an observable outcome. This restatement is what makes step 2 possible at all: two mechanisms cannot be compared until it is clear what they are both for.
+
+**2. For every mechanism the FEATURE DESCRIPTION or issue proposes, name (a) the property it buys, and (b) whether a mechanism already on `origin/main` buys that property.** Scope this to the mechanisms named in the ask — the plan file does not exist yet and `## Files to Edit` is not written until Step 2, so do not guess at mechanisms the plan has not proposed (the discipline Phase 1.7.5 states for its own file list). Answer (b) by grepping, per `hr-verify-repo-capability-claim-before-assert`. A repo mechanism that already covers a property is the cheapest possible implementation of it. **Grep the AUTHORITY, and say which file you grepped:** a negative result against a *consumer* is indistinguishable from a real gap but carries the authority of a command with an exit code. If the ask itself asserts "the repo does not have X" — briefs written by the session that lived an incident routinely do — that assertion is a claim to verify here, not a premise to build on.
+
+**3. Cut before researching.** Any mechanism that buys no property in the list, or buys one an existing mechanism already covers, is removed here — not researched, not designed, not reviewed. Record each cut in one line (mechanism → property → what already covers it) as the **Cut List**. Emit both lists into the research-insights scratch, exactly as Phase 0.6 emits its Premise Validation note; Phase 1.7 persists them into `## Research Insights`, which is where `plan-review` reads them. A mechanism the ask did not name but the plan later invents is caught by Step 2's re-read of this list, not here.
+
+**Why:** #7418 / ADR-176 — the plan delivered a five-value cursor vocabulary, two decision tables, a resume cap with a strict-advance rule, a bounded-deletion rule, and a branch selector with a tiebreak. The second property was already free: `## Acceptance Criteria` appears in all three detail-level templates, is written last, and `soleur:one-shot` was already asserting on it. The plan never compared its new mechanism against the one already in the codebase; a twelve-agent review then found twelve blocking defects behind a 285/285 green suite, and **nine of them dissolved with the machinery** when the redesign landed. See `knowledge-base/project/learnings/2026-08-10-i-fixed-the-guard-twice-and-my-test-could-not-see-either-fix.md`.
+
+### 0.6c. Value-Proposition Measurement (Conditional)
+
+Fires when a plan's justification is a **cost or performance saving** ("saves an expensive fan-out", "avoids re-running X", "cuts N minutes"). Quantify the saving at plan time and **name the command that produced the number** — the same shape as Phase 1.8's budget check, which records a measured baseline rather than an asserted one.
+
+Measure the thing actually claimed: if the case is "protects an expensive block", identify *which* block is expensive before designing the protection. If the saving cannot be measured at plan time, say so explicitly and record what would measure it — an unquantified saving is a hypothesis, and it must not be the sole justification for a mechanism that survives 0.6b.
+
+**Why:** #7418 / ADR-176 — the plan's stated case was "save an expensive research fan-out", and which fan-out was expensive went unmeasured until *review*, where `performance-oracle` established that the checkpoint boundaries subdivide neither expensive block: all five agents under `plugins/soleur/agents/engineering/research/` are pinned cheap (`grep -l '^model: haiku' plugins/soleur/agents/engineering/research/*.md` returns 5), while the un-pinned eleven-agent Phase 2.5 domain fan-out — the real cost — was unprotected either way. The answer was one grep of agent frontmatter, three phases earlier.
+
 ### 0.7. Skeleton Checkpoint (Always)
 
 Phase 1 dispatches the research fan-out — the most expensive stretch of this skill. Write the plan
@@ -317,8 +337,11 @@ After all research steps complete, consolidate findings:
 **Persist the research to the plan file now — this is the write that makes the Phase 0.7 checkpoint
 pay.** Write a `## Research Insights` section into the plan holding the consolidated findings above:
 the relevant file paths, the applicable institutional learnings, any external documentation and best
-practices, the related issues and PRs, the CLAUDE.md conventions, and the **Premise Validation** note
-carried forward from Phase 0.6.
+practices, the related issues and PRs, the CLAUDE.md conventions, the **Premise Validation** note
+carried forward from Phase 0.6, and the **Property List** plus **Cut List** carried forward from
+Phase 0.6b. The property list is what `plan-review` reads to ask "which requirement does this
+mechanism satisfy?", so it must reach the file — a consumer pointed at an artifact no producer writes
+will silently skip the check.
 
 Everything above this line was bought with the fan-out. A checkpoint that only reserved a filename
 would still lose all of it to a stall here. `deepen-plan` later enriches this section; `plan` is what
@@ -713,6 +736,26 @@ exception:        # present ONLY when mechanism is plaintext-exception OR cert_v
 
 **Why:** ADR-140 and `knowledge-base/project/plans/2026-07-23-feat-encryption-posture-design-time-default-plan.md` (Plan Review Revisions R1-R11) — a new store or connection shipped with no declared encryption posture is undetectable at review time by name-similarity alone (a plaintext `hcloud_volume.workspaces` reads identically to its LUKS-backed sibling `hcloud_volume.workspaces_luks` until the device-binding chain is actually walked). Codifying the posture as a plan deliverable, resolved against real code by `lint-encryption-posture.py` (repo-root `scripts/`), closes the gap at design time instead of at incident time.
 
+### 2.12. Guard Contract Gate
+
+[skill-enforced: plan Phase 2.12 + deepen-plan Phase 4.11 + [lint-guard-contract.py](../../../../scripts/lint-guard-contract.py)]
+
+If the plan's deliverable **includes a guard** — a guard, gate, lint, drift-check, assertion-based CI check, or anti-vacuity control — the plan MUST emit a `## Guard Contract` section carrying one `### Guard <n> — <name>` entry per guard, each with three fields.
+
+**The class this exists to catch:** *a guard's WINDOW, CHOKEPOINT, or IDENTIFIER SET is narrower than the property it names.*
+
+1. **Property** — the invariant in ONE sentence. Not "the sandbox is correct" but "no mount outside the declared set reaches the sandbox."
+2. **Assembly** — every code path, array, file, and call site the property quantifies over. **Members drift; assembly is structural.** An "assembly" enumerated as the list of current members is not an assembly — it is a snapshot, and the next one-line edit invalidates it while the suite stays green. Name the *chokepoint* the members must flow through, and if there is more than one, say so: a guard scoped to one of three injection sites is the defect, not a partial fix.
+3. **Mutation matrix** — **>= 3** edits that MUST drive the guard RED, derivable from the DESIGN rather than from the implementation as it happens to be shaped. At least one row MUST target the guard's **own dispatch** (a guard that reports "0 checked" and exits 0 is vacuous), and at least one MUST add a **second** member after a compliant first (a check that stops at the first member is itself an instance of the class).
+
+**Write the matrix BEFORE the guard.** A matrix derived from finished code tests the code that exists; a matrix derived from the design tests the property. This ordering is the whole point of the gate.
+
+**Reject conditions** (enforced mechanically by [lint-guard-contract.py](../../../../scripts/lint-guard-contract.py), and halted at deepen-plan Phase 4.11): the section missing while detection fires; a `## Guard Contract` heading with zero `### Guard` entries; a missing or placeholder `**Property.**` or `**Assembly.**`; a mutation matrix with fewer than 3 rows. The lint quantifies over EVERY entry, not the first.
+
+**Skip silently** when the deliverable contains no guard — a copy change, a dependency bump, a pure refactor behind existing tests.
+
+**Why:** the preflight Check 10 execution-boundary work (merged 2026-08-10) absorbed FIVE adversarial review rounds; every round found real defects in the previous round's fixes, and ~20 findings reduced to the one class above. Instances: a mount-set closure assertion scoped to `BWRAP_ARGS=( … )` while `GIT_BIND`, `BWRAP_PROC` and the exec line also injected mounts (three separate one-line edits each re-opened the operator's credential surface with the whole suite green — verified against live bwrap reaching the Doppler token, `~/.ssh` and the gh token store); a parity floor counting ITERATIONS rather than distinct shapes; a suppression grep anchored on `test`/`it`/`describe`, which are rebindable; and an anti-vacuity gate with NO floor on its own dispatch. Those were not five discoveries — they were ONE enumeration nobody performed, found five times by different means, at ~880k subagent tokens and five CI cycles. The root cause was at plan time: that plan specified CONTROLS and 13 Test Scenarios all of the shape "command X -> terminal Y", and ZERO of the shape "mutation M -> guard G reddens". For a change whose deliverable WAS guards, the scenarios tested the thing being guarded. See `knowledge-base/project/learnings/2026-08-10-a-guard-that-cannot-be-driven-red-is-vacuous-four-rounds-four-instances.md`.
+
 ### 3. SpecFlow Analysis
 
 **If spec-flow-analyzer was already invoked in Phase 2.5, skip this phase and proceed to Phase 4.**
@@ -1018,6 +1061,8 @@ was interrupted mid-run; Phase 0.7 continues it in place rather than duplicating
 Run `bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/archive-kb/scripts/archive-kb.sh` from the repository root. This moves matching artifacts to `knowledge-base/project/plans/archive/` with timestamp prefixes, preserving git history. Commit with `git commit -m "plan: archive <topic>"`.
 
 ## Sharp Edges
+
+- **When briefing a domain agent (CTO/CLO) for a BINDING ruling, enumerate the facts that would DISQUALIFY your preferred option — not just the ones that support your framing.** A brief is a filter, and the natural filter is "everything I found while reaching my conclusion", which systematically omits the fact that kills the alternative you already rejected. The agent then rules confidently on an incomplete record, and because the ruling is binding you implement it. Cheapest gate before sending: for each option you are NOT proposing, write the one fact that makes it unavailable — if you cannot, you have not checked. **Why:** #7442 — a CTO brief omitted that `rule-prune.sh:52` derives its data root from `$(cd "$SCRIPT_DIR/.." && pwd)`; the ruling instructed relocating it into the plugin payload, which would have broken it everywhere. One correction round-trip retracted the instruction in full — and the agent then found the sibling aggregator carried the identical defect, which the brief had also not mentioned. See `knowledge-base/project/learnings/2026-08-11-i-measured-the-issues-remedy-then-asserted-my-own-without-measuring.md`.
 
 - **An ADR ordinal is PROVISIONAL until merge, and the probe must quantify over pushed branches — not `origin/main`.** A `git ls-tree origin/main` check answers "is this ordinal on the default branch", which is a different question from "is it claimed", and a branch-claimed ordinal is invisible to it. Enumerate across every `origin/*` ref, then **re-run the probe immediately before merge** — `main` moves under a long session. **Why:** #7418 collided twice on one branch: ADR-144 was `origin/main`-scoped and was already claimed by a pushed branch; the replacement ADR-174 was verified free across all 62 refs and then a sibling landed that exact ordinal on `main` mid-session. Neither collision was caught by a gate; both surfaced from a re-fetch. See `knowledge-base/project/learnings/2026-08-10-i-fixed-the-guard-twice-and-my-test-could-not-see-either-fix.md`.
 

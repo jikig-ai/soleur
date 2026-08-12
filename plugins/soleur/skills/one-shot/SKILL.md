@@ -54,9 +54,20 @@ files); the cost came from three habits below, each of which multiplies.
    megabytes on one "line": use `':!*.json'`, `--name-only`, `| cut -c1-200`.
 6. **Delegate wide reads to a subagent** (`cm-delegate-verbose-exploration…`) — keep the
    conclusion, not the file dumps.
-7. **Poll with a bounded, anchored pattern.** Match `^=== N/N suites passed ===$`, never a
-   bare token that also appears in a PASS line, and never `pgrep` a pattern your own poll
-   command contains.
+7. **Poll with a bounded, anchored pattern — on the marker's SHAPE, plus the rc file.** Match
+   `^=== [0-9]+/[0-9]+ suites passed ===$` and read the rc file, never a bare token that also
+   appears in a PASS line, and never `pgrep` a pattern your own poll command contains. Polling
+   the *green* spelling `N/N` only is safe against a false green but not against a false
+   dismissal: a run with a terminated suite is `N<M`, so the poll never matches, the `Monitor`
+   runs out its clock, and `{no marker, clock timeout}` is byte-for-byte the harness-reap
+   signature that `work/SKILL.md` says to walk away from. **Since ADR-181, `N/N` is not even the
+   ordinary LOCAL spelling** — a diff touching neither heavy battery nor `apps/web-platform/infra/`
+   declines three suites, so a healthy local run reads `N-3/N`. Poll the marker's SHAPE and read
+   the rc file. The four cases: marker + rc 0 = green; marker + rc 3 = a suite was terminated
+   (UNRESOLVED — coverage not obtained, re-run that suite in isolation); **no marker + rc 4 =
+   REFUSED before anything ran, because `SOLEUR_SUBAGENT=1` is set — you are a spawned agent and
+   must run your own targeted suites, not the gate**; no marker + no rc file = harness reap, not
+   your diff.
 
 **Report cost honestly.** If a run was disproportionate, say so and name the cause — the
 operator paid for it and cannot see the breakdown.
@@ -112,10 +123,17 @@ If the script exits non-zero and its output contains `NO_GIT_REPOSITORY`, the wo
 
 Then `cd` into the worktree path printed by the script. Parallel agents on the same repo cause silent merge conflicts when both work on main.
 
-The `SOLEUR_SKILL_NAME` + `SOLEUR_EXPECTED_DURATION_MIN` env wire a lease on this worktree (see `.claude/hooks/lib/session-state.sh`). A sibling session's `cleanup-merged` invocation refuses to reap any worktree with an active lease. Release on clean exit:
+The `SOLEUR_SKILL_NAME` + `SOLEUR_EXPECTED_DURATION_MIN` env wire a lease on this worktree (see `<plugin-root>/scripts/lib/session-state.sh`). A sibling session's `cleanup-merged` invocation refuses to reap any worktree with an active lease. Release on clean exit:
 
 ```bash
-bash .claude/hooks/lib/session-state.sh release_lease "$(basename "$PWD")"
+# Degrade open (#7409): releasing is advisory — an unreleased lease expires on
+# its own window — so a missing library must not fail the pipeline here.
+SS_LIB="${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/scripts/lib/session-state.sh"
+if [[ -r "$SS_LIB" ]]; then
+  bash "$SS_LIB" release_lease "$(basename "$PWD")" || true
+else
+  echo "SOLEUR_SESSION_STATE_UNAVAILABLE path=$SS_LIB reason=lease-not-released"
+fi
 ```
 
 **Step 0c: Create draft PR.** After creating the feature branch, create a draft PR from inside the worktree (the script errors with "Cannot run from bare repo root" otherwise — use a single `cd && bash` so the target tree is explicit and cannot be silently redirected by a prior call that `cd`d elsewhere; CWD persists across Bash calls, but relying on ambient CWD is fragile):

@@ -23,7 +23,7 @@ set -euo pipefail
 export LC_ALL=C
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=scripts/lib/domain-model-lib.sh
+# shellcheck source=plugins/soleur/scripts/lib/domain-model-lib.sh
 source "$SCRIPT_DIR/lib/domain-model-lib.sh"
 
 SCHEMA_VERSION=1

@@ -99,7 +99,7 @@ fi
 
 # Notices accumulate and are reported on the allow path. stderr alone is NOT
 # sufficient: Claude Code discards a PreToolUse hook's stderr on exit 0 (the
-# repo's own `headless_or_stderr` in lib/session-state.sh exists for exactly
+# repo's own `headless_or_stderr` in plugins/soleur/scripts/lib/session-state.sh exists for exactly
 # this), so a stderr-only notice is invisible to both operator and agent —
 # which would reinstate, inside this fix, the silent-degradation defect the fix
 # exists to remove. `systemMessage` is the operator-visible exit-0 channel;

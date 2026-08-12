@@ -28,7 +28,8 @@
 #   - size      : at least the size floor
 #   - liveness  : no process cwd inside it, no open file handle
 #   - not protected: /tmp/claude-<uid> belongs to worktree-manager.sh's
-#     cleanup_claude_tmp, and the session-state root belongs to session-state.sh
+#     cleanup_claude_tmp, and the session-state root belongs to
+#     plugins/soleur/scripts/lib/session-state.sh
 #
 # Designed to run as a user cron job every 5 minutes.
 #
@@ -801,7 +802,7 @@ main() {
   fi
 }
 
-# CLI vs. sourced (test harness). Mirrors the session-state.sh idiom.
+# CLI vs. sourced (test harness). Mirrors the plugins/soleur/scripts/lib/session-state.sh idiom.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   # Serialise runs. A pressure-tier pass over a large /tmp can outlast the
   # 5-minute cron interval, and two overlapping runs would race each other's

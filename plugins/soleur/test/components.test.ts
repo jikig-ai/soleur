@@ -418,6 +418,13 @@ const EXEC_SURFACE_GLOBS = [
   "tools/**/*.sh",
   ".claude/hooks/**/*.sh",
   ".openhands/hooks/**/*.sh",
+  // Shipped plugin shell surfaces (#7409). Opportunistic, NOT a regression this
+  // change creates: this lint targets the `gh pr|issue list --search` class, and
+  // the file that moved into plugins/soleur/scripts/lib/ contains zero such
+  // probes — measured, so nothing was lost by the move and nothing is gained
+  // beyond closing a pre-existing gap in coverage of these two directories.
+  "plugins/soleur/scripts/**/*.sh",
+  "plugins/soleur/hooks/**/*.sh",
   ".github/workflows/**/*.yml",
   ".github/workflows/**/*.yaml",
   ".github/actions/**/*.yml",

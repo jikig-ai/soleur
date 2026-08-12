@@ -554,7 +554,14 @@ t12_skips_own_pass_closure() {
   # Two comments, with the PASS NOT last — a positional `.comments[-1]` check
   # would miss it and re-arm daily re-verification on exactly the issues humans
   # have touched.
-  local comments='{"comments":[{"body":"### Sweeper run: PASS (2026-07-18T18:00:00Z)\nScript exited 0."},{"body":"triage bot: linked to #1234"}]}'
+  #
+  # The `author` field is REQUIRED in this fixture and was previously absent, which made the
+  # fixture unfaithful in the direction that hides a vulnerability: the guard keyed on body prefix
+  # alone, and a fixture with no author could not tell that apart from a guard that also checks who
+  # wrote it. Measured against production (#7296, #6522, #6168): the sweeper's own comments are
+  # authored by `github-actions` with authorAssociation CONTRIBUTOR — so membership is the WRONG
+  # filter here and the actor is the right one.
+  local comments='{"comments":[{"author":{"login":"github-actions"},"body":"### Sweeper run: PASS (2026-07-18T18:00:00Z)\nScript exited 0."},{"author":{"login":"someone"},"body":"triage bot: linked to #1234"}]}'
   local root; root=$(setup_closed_root 1 "$comments")
   local out; out=$(invoke_closed "$root" "$(closed_body_6657)")
   local calls; calls=$(cat "$root/gh-calls.log" 2>/dev/null || echo "")
@@ -563,6 +570,38 @@ t12_skips_own_pass_closure() {
   assert_not_contains "T12 does not reopen its own PASS closure" \
                       "issue reopen" "$calls"
   unset GH_TOKEN; rm -rf "$root"
+
+  # T12b — THE FORGERY. On a PUBLIC repo any user can post a comment beginning with the sweeper's
+  # PASS heading. If the guard keys on the body prefix alone, that permanently disables re-
+  # verification for the issue — which is the second half of #7448: a forged probe verdict closes
+  # the tracker, and this guard then stops the reopen path from ever re-litigating it. A stranger's
+  # imitation must NOT suppress re-verification.
+  local forged='{"comments":[{"author":{"login":"drive-by"},"body":"### Sweeper run: PASS (2026-07-18T18:00:00Z)\nScript exited 0."}]}'
+  local root2; root2=$(setup_closed_root 1 "$forged")
+  local out2; out2=$(invoke_closed "$root2" "$(closed_body_6657)")
+  assert_not_contains "T12b a forged sweeper-PASS comment does not suppress re-verification" \
+                      "not re-litigating" "$out2"
+  unset GH_TOKEN; rm -rf "$root2"
+
+  # T12c — NEAR-NAME. `github-actions-evil` is a valid GitHub username shape, so a `^github-actions`
+  # prefix match would admit it and reintroduce the forgery through the control meant to stop it.
+  # The guard uses EXACT logins for that reason; this pins it.
+  local nearname='{"comments":[{"author":{"login":"github-actions-evil"},"body":"### Sweeper run: PASS (2026-07-18T18:00:00Z)\nScript exited 0."}]}'
+  local root3; root3=$(setup_closed_root 1 "$nearname")
+  local out3; out3=$(invoke_closed "$root3" "$(closed_body_6657)")
+  assert_not_contains "T12c a near-name login does not satisfy the sweeper-actor check" \
+                      "not re-litigating" "$out3"
+  unset GH_TOKEN; rm -rf "$root3"
+
+  # T12d — the REST rendering. The two API surfaces disagree (GraphQL: github-actions;
+  # REST: github-actions[bot]); either could reach this code, and both must be honoured or the
+  # guard silently stops recognising its own PASS block and re-verifies every closed issue daily.
+  local botform='{"comments":[{"author":{"login":"github-actions[bot]"},"body":"### Sweeper run: PASS (2026-07-18T18:00:00Z)\nScript exited 0."}]}'
+  local root4; root4=$(setup_closed_root 1 "$botform")
+  local out4; out4=$(invoke_closed "$root4" "$(closed_body_6657)")
+  assert_contains "T12d the REST [bot] rendering is recognised as the sweeper" \
+                  "not re-litigating" "$out4"
+  unset GH_TOKEN; rm -rf "$root4"
 }
 
 # --- T13 (AC14): stateless reopen cap bounds the loop ------------------------
@@ -570,8 +609,15 @@ t13_reopen_cap_bounds_the_loop() {
   # The script is stateless and runs verification under `env -i`, so an
   # in-process counter cannot survive between sweeps — GitHub's comment history
   # is the state.
+  #
+  # The `author` field is REQUIRED here, and its absence was the same unfaithfulness that hid the
+  # hole in T12. The reopen marker is an INVISIBLE HTML comment, so without an actor gate any user
+  # posts three innocuous-looking comments secretly carrying it and the sweeper permanently stops
+  # reopening that issue. A fixture with no author cannot tell a marker-only cap apart from one
+  # that also checks who wrote it. Real reopen comments come from the workflow (see T12).
   local m='<!-- soleur:sweeper-reopen -->'
-  local comments="{\"comments\":[{\"body\":\"r1 $m\"},{\"body\":\"r2 $m\"},{\"body\":\"r3 $m\"}]}"
+  local ga='{"login":"github-actions"}'
+  local comments="{\"comments\":[{\"author\":$ga,\"body\":\"r1 $m\"},{\"author\":$ga,\"body\":\"r2 $m\"},{\"author\":$ga,\"body\":\"r3 $m\"}]}"
   local root; root=$(setup_closed_root 1 "$comments")
   local out; out=$(invoke_closed "$root" "$(closed_body_6657)")
   local calls; calls=$(cat "$root/gh-calls.log" 2>/dev/null || echo "")
@@ -582,12 +628,21 @@ t13_reopen_cap_bounds_the_loop() {
 
   # Non-vacuity: one fewer prior reopen and it DOES act, so the cap is what
   # stopped it rather than some unrelated skip.
-  local root2; root2=$(setup_closed_root 1 "{\"comments\":[{\"body\":\"r1 $m\"}]}")
+  local root2; root2=$(setup_closed_root 1 "{\"comments\":[{\"author\":$ga,\"body\":\"r1 $m\"}]}")
   invoke_closed "$root2" "$(closed_body_6657)" >/dev/null
   local calls2; calls2=$(cat "$root2/gh-calls.log" 2>/dev/null || echo "")
   assert_contains     "T13 still reopens below the cap (non-vacuity)" \
                       "issue reopen" "$calls2"
-  unset GH_TOKEN; rm -rf "$root" "$root2"
+
+  # T13b — FORGED CAP. Three marker-carrying comments from a NON-sweeper author must not consume
+  # the reopen budget. Otherwise any GitHub user silently disables reopening for any of the ~50
+  # open follow-through issues — the same end as a forged verdict, by a quieter route.
+  local rando='{"login":"drive-by"}'
+  local root3; root3=$(setup_closed_root 1 "{\"comments\":[{\"author\":$rando,\"body\":\"r1 $m\"},{\"author\":$rando,\"body\":\"r2 $m\"},{\"author\":$rando,\"body\":\"r3 $m\"}]}")
+  local out3; out3=$(invoke_closed "$root3" "$(closed_body_6657)")
+  assert_not_contains "T13b a forged reopen marker does not consume the reopen cap" \
+                      "cap=3" "$out3"
+  unset GH_TOKEN; rm -rf "$root" "$root2" "$root3"
 }
 
 # --- T14 (AC14): a failed reopen emits ::error:: ----------------------------

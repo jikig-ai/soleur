@@ -55,16 +55,44 @@ mk_gh_stub() {
 #!/usr/bin/env bash
 ARGS="$*"
 case "$1" in
-  pr) ;;
+  pr|issue) ;;
   *) echo "gh-stub: unexpected subcommand: $ARGS" >&2; exit 64 ;;
 esac
 case "$ARGS" in
   *view*) ;;
-  *) echo "gh-stub: expected a 'pr view' read, got: $ARGS" >&2; exit 64 ;;
+  *) echo "gh-stub: expected a 'view' read, got: $ARGS" >&2; exit 64 ;;
 esac
+
+# `issue view` answers describe an OPEN, entirely UNENROLLED tracker — the state
+# that makes the gate deny. Any ref reaching this branch therefore denies, which
+# is what lets the closing-target cases below prove the fix by their verdict
+# alone: if the filter stopped working, the ref would arrive here and flip the
+# expected allow into a deny.
+if [[ "$1" == "issue" ]]; then
+  # Emit the --jq-PROJECTED scalar, not the raw JSON envelope: the gate reads
+  # these through `--jq .state` / `--jq '[.labels[].name]|join(",")'`, so a stub
+  # answering `{"state":"OPEN"}` yields a $state that never equals OPEN and the
+  # tracker is skipped as closed — turning the deny-path control green-by-accident.
+  case "$ARGS" in
+    *--json\ state*)  printf '%s\n' 'OPEN' ;;
+    *--json\ labels*) printf '%s\n' '' ;;
+    *--json\ body*)   printf '%s\n' '' ;;
+    *) echo "gh-stub: unexpected issue read: $ARGS" >&2; exit 64 ;;
+  esac
+  exit 0
+fi
+
 case "${MODE:-nopr}" in
   nopr)   exit 1 ;;                                            # no PR readable
   nosoak) printf '%s\n' '{"body":"ordinary PR body with no soak signal"}' ;;
+  # Soak signal + the SAME issue named as both the closing target and a `Ref`.
+  # This is PR #7426's shape: the plan discussed `Ref #7409` inside a rejected
+  # counterfactual while the PR closes #7409.
+  soakcloses) printf '%s\n' '{"body":"Closes #7409\n\nPost-deploy soak: none. Ref #7409 would apply only under the split we rejected."}' ;;
+  # Control: a genuine third-party tracker alongside the closing target. The
+  # closing target drops out; #9999 must NOT, or the fix has disabled the gate
+  # rather than narrowed it.
+  soakother) printf '%s\n' '{"body":"Closes #7409\n\nPost-deploy soak holds. Ref #9999 tracks the soak."}' ;;
   *)      echo "gh-stub: unknown MODE=${MODE:-}" >&2; exit 64 ;;
 esac
 STUB
@@ -101,6 +129,17 @@ check "gh pr merge --auto, no PR readable → fail-open" "<none>" \
   "$(decision_of 'gh pr merge 1 --squash --auto' "$REPO" nopr)"
 check "PR body carries no soak signal → fail-open" "<none>" \
   "$(decision_of 'gh pr ready' "$REPO" nosoak)"
+
+# --- closing target is never an enrollable soak tracker (PR #7426) ----------
+# The carve-out is reasoned at issue level but was implemented at mention level,
+# so one `Ref #N` re-added the PR's own `Closes` target and restored the #7278
+# deadlock. These two cases pin the ISSUE-level reading. They are a matched
+# pair on purpose: the first alone would also pass if the filter dropped every
+# ref, which would silently disable the gate.
+check "closing target named by BOTH Closes and Ref → allows" "<none>" \
+  "$(decision_of 'gh pr ready' "$REPO" soakcloses)"
+check "third-party unenrolled tracker still DENIES (fix narrows, not disables)" "deny" \
+  "$(decision_of 'gh pr ready' "$REPO" soakother)"
 
 # --- #7164 envelope contract ------------------------------------------------
 # An ARRAY tool_input.command rendered across lines, matched the trigger regex
