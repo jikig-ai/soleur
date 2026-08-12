@@ -1,11 +1,15 @@
 ---
-title: The full suite is the merge gate, not the implementation-exit gate
+title: The full suite runs at ship, not at the implementation exit
 status: active
 date: 2026-08-12
 related_adrs: [ADR-133, ADR-177, ADR-181]
 ---
 
-# ADR-183: The full suite is the merge gate, not the implementation-exit gate
+# ADR-183: The full suite runs at ship, not at the implementation exit
+
+> **Naming.** An earlier draft was titled "the full suite is the merge gate". That is the over-claim
+> this document's own Context refutes and that `ship/SKILL.md` forbids — the merge gate is CI's
+> required `test` context, and no local run is the merge gate. Corrected before merge.
 
 ## Context
 
@@ -15,11 +19,11 @@ Phase 4 after review fixes. Measured on PRs #7344 / #7343:
 | Signal | Measurement |
 |---|---|
 | Touched-file baseline on a 24-file diff | 224 assertions in ~90 s |
-| Full run's infra runner alone | 573 s |
+| Full run's infra runner alone, **on an infra-touching diff only** | 573 s |
 | Harness reaps of that run | 4 |
 | Time serialised behind a sibling worktree holding the advisory lock | 2694 s |
 
-The expensive thing is not running tests twice — it is running 460+ suites twice for a small diff.
+The expensive thing is not running tests twice — it is running the whole registered set twice for a small diff. (Size: ADR-181 measured `=== 289/292 suites passed ===`, and this branch's own `scripts` shard reported 292. An earlier draft said "460+", inherited from a stale pre-#7441 note.)
 Because `test-all.sh` takes a repo-wide advisory lock (ADR-133), the second run also doubles lock
 contention across every concurrent worktree, so the cost is paid by sessions other than the one
 running it.
@@ -32,21 +36,29 @@ checkpoint therefore cannot change what reaches `main` for anything that context
 
 ## Decision
 
-**The full `test-all.sh` battery runs once per PR, at `/ship` Phase 4. The `/work` Phase 2 exit runs
-only the `TEST_GROUP` shards the diff touches.**
+**The full `test-all.sh` battery runs once per PR on the Claude arm, at `/ship` Phase 4. The
+`/work` Phase 2 exit runs only the `TEST_GROUP` shards the diff touches.** The Grok arm keeps a
+second unsharded run at push time (`grok-pre-push-gate.sh`); that is deliberate — it is that arm's
+only pre-push recheck of the tree actually being pushed.
 
 The shard is not a new mechanism: `TEST_GROUP` already exists and is already how CI shards. That
 matters more than it sounds — a shard keeps the contention preamble
 (`SIBLING_RUN_DETECTED` / `SIBLING_SUITE_DETECTED` / `LOW_TMP_HEADROOM`), the `EXIT CONTRACT`, the
-terminal `=== N/M suites passed ===` marker, the rc file, and ADR-177's `rc=3` UNRESOLVED class. A
+terminal `=== N/M suites passed ===` marker, the rc file, ADR-177's `rc=3` UNRESOLVED class, and ADR-181's counted DECLINE class — so `N/N` is not the ordinary local green spelling at either position. A
 hand-derived command set (`vitest run --changed` plus a `git grep` per changed symbol) was specified
 first and cut: it has none of those, and it has an **empty-derived-set** state that fails open.
 
 ### The two ceilings
 
 1. **`/ship` Phase 4 stays `TEST_GROUP=all`.** This is the load-bearing constraint of the whole
-   change. Sharding it for speed would silently delete the only gate the registered
+   change. Sharding it for speed would delete the only BLOCKING gate the registered
    `apps/web-platform/infra/` suites have, because **no required status check runs that shard**.
+   They are not unrun: `infra-validation.yml`'s `deploy-script-tests` executes the same registered
+   set on every PR touching `apps/*/infra/**`, and `main-health-monitor` re-runs `TEST_GROUP=infra`
+   on `main` six-hourly. Both are visible; neither blocks `gh pr merge --auto`. Note also that a
+   LOCAL `TEST_GROUP=all` is not by itself a full battery: `_diff_touches` short-circuits to
+   "relevant" only under `CI` or `SOLEUR_TEST_FORCE_ALL=1`, so the group pin is necessary and not
+   sufficient.
    Pinned by `plugins/soleur/test/fullsuite-merge-gate.test.ts`, whose mutation is *sharding* the
    command, not deleting it — deletion is the easy mutation and the wrong threat.
 2. **Projects with no CI-enforced full-suite gate keep the battery at implementation exit.** Four
@@ -94,7 +106,7 @@ reaped run is UNRESOLVED per ADR-177's three-way split and must be re-run, never
 ### Revert tripwire
 
 If this bites — if escapes start reaching the merge gate that the Phase 2 full run would have caught
-— put the unconditional Phase 2 run back. One line, one place. A quantified tripwire (`N escapes in
+— put the unconditional Phase 2 run back. The behaviour is one line in §9, but the ordering is asserted at roughly a dozen prose sites, so the revert needs a sweep (`grep -rn '#7352'`). A quantified tripwire (`N escapes in
 M PRs`) was drafted and cut: an unspecified `N` with deferred counting is not falsifiability, and
 automated escape-rate measurement needs cross-PR data that is its own work-stream.
 

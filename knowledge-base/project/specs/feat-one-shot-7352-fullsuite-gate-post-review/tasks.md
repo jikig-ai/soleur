@@ -117,7 +117,7 @@ The plan is authoritative for intent, never for line numbers or exact sets. Five
 
 2. **Every plan-quoted line number had drifted ~+12** because PR #7441 merged at 17:27 UTC on
    2026-08-11, between plan-time and /work. Content anchors were used throughout: §9 is at `:755`
-   not `:742`, the four project-agnostic sites at `:245/349/680/862` not `:243/337/668/818`, and
+   not `:742`, the four project-agnostic sites at `:245/349/680/865` not `:243/337/668/818`, and
    `plan/SKILL.md` at `:1098/1114` not `:1076/1092`.
 
 3. **The guard asserts UNSHARDEDNESS, not the absence of a `TEST_GROUP` token.** The plan's Phase 1
@@ -136,7 +136,12 @@ The plan is authoritative for intent, never for line numbers or exact sets. Five
 5. **ADR-183 confirmed free at /work time, not assumed.** `main` tops out at ADR-181; ADR-182 is
    claimed by the open branch `feat-one-shot-7440-zot-log-shipping`. Re-probe before merge per 5.5.
 
-### Mutation matrix (Phase 1.2 / AC2 / AC11) — 6/6 RED, restore verified byte-identical
+### Mutation matrix — ROUND 1 (SUPERSEDED 2026-08-12; see Round 2 below)
+
+> **Superseded.** The claim below — "No surviving mutants" — was FALSE. All six mutants were
+> deletion-or-in-place-inversion, the class chosen *because* it reds. Multi-agent review then
+> found **13 surviving mutants** across five axes the battery never touched. Retained verbatim as
+> the record of what the first battery actually measured.
 
 | # | Mutation | Result |
 |---|---|---|
@@ -149,4 +154,49 @@ The plan is authoritative for intent, never for line numbers or exact sets. Five
 | M6 | delete the C1 conditional | rc=1 |
 | M7 | post-restore baseline | rc=0, 5 pass |
 
-No surviving mutants, so no equivalent-mutant labelling was required.
+No surviving mutants **among the six mutations imagined** — which is a much weaker property than it reads as. See Round 2.
+
+
+### Mutation matrix — ROUND 2 (2026-08-12, post-review) — 13/13 RED
+
+Round 1 had **two axes**, not six: "shard the ship command in a shape my regex parses" and "delete a
+literal my `includes()` names". Review supplied the axes it could not reach. Control green before and
+after; every mutation asserted LANDED against a pristine backup; both files restored byte-identical.
+
+| # | Axis | Mutation | rc |
+|---|---|---|---|
+| — | control | unmutated | 0 |
+| A1 | ceiling / demotion | rewrite Phase 4's prose to "SKIP this run if Phase 2 ran shards", fence untouched | 1 |
+| A2 | ceiling / unparseable shard | `TEST_GROUP=webplat,bun` | 1 |
+| A3 | ceiling / spelling | `env TEST_GROUP=webplat …` | 1 |
+| A4 | ceiling / spelling | `TMPDIR=/var/tmp TEST_GROUP=webplat …` | 1 |
+| A5 | ceiling / computed | `TEST_GROUP=$(bash scripts/derive-shard.sh)` | 1 |
+| A6 | ceiling / indentation | two-space indent | 1 |
+| A7 | slice / region widening | retitle the terminator heading | 1 |
+| A8 | ceiling / rationale | reword the infra reason | 1 |
+| B1 | **floor** | revert §9 to an unsharded battery — the PR's own thesis | 1 |
+| C1 | OD1 polarity | invert the fail-safe default | 1 |
+| C2 | OD1 | delete the C1 conditional | 1 |
+| C3 | OD1 identity | strip the pointer from one real prescription site | 1 |
+| C4 | OD1 ladder | delete the "each rung ends in an action" rule | 1 |
+
+A3-A6 matter disproportionately: `env …` and `TMPDIR=… ` are **this repo's own documented invocation
+idioms** (`work/SKILL.md` prescribes `setsid nohup env TMPDIR=/var/tmp bash -c …`), so an author
+sharding for speed would have evaded the Round-1 guard by following the skill's own guidance.
+
+**Known remaining gap, stated rather than papered over.** The OD1 assertion is per-site over a
+committed list of six known prescriptions. Adding a *seventh* project-agnostic relaxation with no
+pointer is NOT caught — a derived-set assertion would be needed, and deriving "is this line a
+prescription?" from prose is not reliable. The compensating control is that the six sites are
+enumerated in the test, so deleting or renaming one reds.
+
+### Dispatch floor (added post-review)
+
+`fullsuite-merge-gate.test.ts` is auto-discovered by `bun test plugins/soleur/`, and `bun` exits 0
+for a file whose tests are all `test.skip` — so before this change, deleting or skipping the guard
+was a green build, and nothing in the repo detected it. It is now enrolled in
+`preflight-check10-suite-integrity.test.sh`'s `SUITES` manifest (a `.test.sh` in the `scripts` shard,
+so it runs whether or not the bun suites do). Floors ratcheted to the measured values with no slack,
+per that file's own contract: `MIN_TESTS` 122→131, `MIN_ASSERTIONS` 514→537, `MIN_MANIFEST_LINES`
+117→126. Non-vacuity verified: `perl -pi -e 's/^(\s*)test\(/$1test.skip(/'` on the guard reds the
+floor with three distinct `[FAIL]` lines.

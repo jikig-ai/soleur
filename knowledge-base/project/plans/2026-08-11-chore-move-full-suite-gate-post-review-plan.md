@@ -340,7 +340,7 @@ Phase 4 already runs the battery. Three things change, and the naming is deliber
 
 ## Files to Create
 
-- **`knowledge-base/engineering/architecture/decisions/ADR-183-full-suite-is-the-merge-gate-not-the-implementation-exit-gate.md`** — provisional ordinal, see `## Architecture Decision (ADR/C4)`.
+- **`knowledge-base/engineering/architecture/decisions/ADR-183-full-suite-runs-at-ship-not-at-implementation-exit.md`** — provisional ordinal, see `## Architecture Decision (ADR/C4)`.
 - **`plugins/soleur/test/fullsuite-merge-gate.test.ts`** — the guard (auto-discovered by `bun test plugins/soleur/`).
 - **`knowledge-base/project/specs/feat-one-shot-7352-fullsuite-gate-post-review/tasks.md`**.
 
