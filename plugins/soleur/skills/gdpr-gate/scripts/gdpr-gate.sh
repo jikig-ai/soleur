@@ -30,9 +30,17 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 # contributor's checked-out tree. `review/SKILL.md` instructs `gh pr checkout`,
 # and this script is itself a compliance gate, so a same-named file in a hostile
 # PR would run with the gate's authority. CLAUDE_PROJECT_DIR is supplied by the
-# harness rather than by the tree under review. `REPO_ROOT` above stays as-is:
-# its other uses are DATA-root reads of the workspace being audited, which is
-# exactly what they should measure.
+# harness rather than by the tree under review.
+#
+# `REPO_ROOT` above stays, but ONLY for data-root reads of the workspace being
+# audited — which is what they should measure. An earlier revision of this
+# comment claimed *all* its other uses were data-root reads. That was FALSE and
+# is corrected here: `NOTICE_PARSER` below is EXECUTED, so it is a code root by
+# this ADR's own classification, and it was being resolved from `REPO_ROOT` —
+# with `GH_TOKEN` exported into the child. On the review path that handed a
+# GitHub token to a contributor-supplied script, from inside the compliance
+# gate, in the file edited to remove exactly this vector. It now uses the
+# same trust-ordered resolution as the telemetry lib below.
 # Resolution, in trust order, and NEVER from `git rev-parse --show-toplevel`:
 #   1. CLAUDE_PROJECT_DIR — supplied by the harness, not by the tree under review.
 #      Measured 2026-08-12: unset in a plain Claude Code session and in git hooks,
@@ -86,7 +94,12 @@ fi
 # an Inngest-aware liveness source is a different change in a different
 # subsystem. The comment is corrected rather than left asserting a defense
 # that is not running.
-NOTICE_PARSER="$REPO_ROOT/plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh"
+# SIBLING of this script, so it needs no root at all: `$BASH_SOURCE`-relative is
+# layout-invariant (ADR-178) and leaves NO operand for a checked-out tree to shadow —
+# strictly better here than any root-anchored form, including CLAUDE_PROJECT_DIR.
+# It was `"$REPO_ROOT/plugins/soleur/…"` (i.e. `git rev-parse --show-toplevel`) until
+# #7450 review: EXECUTED below, three times, once with GH_TOKEN exported to the child.
+NOTICE_PARSER="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)/notice-frontmatter.sh"
 notice_days_stale=$(NOTICE_FILE="${NOTICE_FILE:-}" \
   bash "$NOTICE_PARSER" days-stale 2>/dev/null || echo 999)
 cron_days_stale=$(NOTICE_FILE="${NOTICE_FILE:-}" \

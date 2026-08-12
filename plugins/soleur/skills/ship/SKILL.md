@@ -1007,7 +1007,7 @@ fi
 Emit rule-application telemetry (records that the retroactive-gate-application branch ran — see AGENTS.md `wg-when-fixing-a-workflow-gates-detection`):
 
 ```bash
-echo 'SOLEUR_RULE_APPLIED rule=wg-when-fixing-a-workflow-gates-detection note=When fixing a workflow gate's detection logic, retr'
+echo "SOLEUR_RULE_APPLIED rule=wg-when-fixing-a-workflow-gates-detection note=When fixing a workflow gate detection logic, retr"
 ```
 
 1. Identify the original missed case from the issue/brainstorm (e.g., "PR #1256 PWA was not assessed for content").

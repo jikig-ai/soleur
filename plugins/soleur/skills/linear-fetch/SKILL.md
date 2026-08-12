@@ -130,6 +130,18 @@ Construct the two return artifacts:
   while the prose two paragraphs up still described the operation as piping.
 
   ```bash
+  # RE-DERIVED, not inherited. Phase B.0 is a SEPARATE Bash call, and shell state does not
+  # persist across calls — so `$SCRUBBER` is EMPTY here unless it is defined in this fence.
+  # Assuming otherwise is not a theoretical risk: it shipped, and it bricked this skill on
+  # every invocation (`bash: : No such file or directory` -> reason=scrubber-nonzero-exit ->
+  # rc 2, so `persist_safe_summary` could never be produced and every caller hard-stopped).
+  # It failed CLOSED only because the anchor is quoted; unquoted, `bash $SCRUBBER <<'…'`
+  # executes the heredoc, i.e. runs Linear issue text as a shell script.
+  # B.0 still owns the identity preflight and the readability check — those are the
+  # blob-independent halts that must precede the fetch. This line is the same bare anchor,
+  # re-stated where it is used.
+  SCRUBBER="${CLAUDE_PLUGIN_ROOT}/skills/linear-fetch/scripts/redact-linear-urls.sh"
+
   # The scrubber reads stdin and writes redacted text to stdout.
   PERSIST_SAFE="$(bash "$SCRUBBER" <<'LINEAR_BLOB'
   <the full markdown blob from Phase B, verbatim>

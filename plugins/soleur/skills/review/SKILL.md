@@ -664,14 +664,23 @@ finding disposition, so the next threshold tuning reads measured flip-vs-file
 ratios instead of re-arguing from intuition. This is the half of the change
 that makes the *next* change cheap:
 
+Emit the marker for the branch you took. **Both ids are STATIC literals, and that is
+load-bearing** — the capture hook reads `.tool_input.command`, i.e. the command text *before*
+the shell expands it, and its needle is `rule=[A-Za-z0-9._-]+ note=`. A `${VAR}` in the id
+position puts `$` and `{` inside that character class, so the marker never matches and the row
+is silently never written. An earlier revision shipped exactly that and produced **zero** rows.
+
 ```bash
-# DISPOSITION is exactly one of: flip-inline | file
-echo "SOLEUR_RULE_APPLIED rule=cost-of-filing-${DISPOSITION} note=review disposition: ${DISPOSITION} (${LINES} lines, ${FILES} files)"
+# Fix-inline disposition (the ≤100-line / ≤4-file auto-flip):
+echo "SOLEUR_RULE_APPLIED rule=cost-of-filing-flip-inline note=review disposition flip-inline"
+
+# Scope-out disposition (CONCUR co-signed, criterion named):
+echo "SOLEUR_RULE_APPLIED rule=cost-of-filing-file note=review disposition file"
 ```
 
-The disposition rides in the **`rule_id`** (`cost-of-filing-flip-inline` vs
-`cost-of-filing-file`) and the event stays `applied`. That is not a stylistic
-choice: the `rule-metrics-aggregate.sh` report keys every counter on `rule_id` and
+The disposition rides in the **`rule_id`** — which is why each branch emits its own static
+literal rather than interpolating a variable into the id — and the event stays `applied`. That
+is not a stylistic choice: the `rule-metrics-aggregate.sh` report keys every counter on `rule_id` and
 gates on `event_type ∈ {deny,bypass,applied,warn}` — it **never reads `.kind`**,
 so a `kind`-based scheme would write rows that no report ever surfaces. Read the
 resulting ratio with `bash scripts/rule-metrics-aggregate.sh` and compare the

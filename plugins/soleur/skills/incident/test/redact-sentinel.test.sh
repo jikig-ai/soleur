@@ -775,13 +775,29 @@ for t19_gate in "${INCIDENT_SKILL}" "${LINEAR_SKILL}"; do
   t19_name="${t19_gate##*/skills/}"
   t19_anchors="$(extract_gate_anchor "${t19_gate}")"
   t19_n=$(printf '%s\n' "${t19_anchors}" | grep -c . || true)
+  # DISTINCT values, not occurrences. The hazard this pins is a doc example or a second,
+  # DIFFERING assignment shadowing the real anchor — so the property is "the file names
+  # exactly one anchor value", not "it names it exactly once".
+  #
+  # Requiring a single occurrence was a proxy, and it was wrong in the fail-CLOSED direction:
+  # `linear-fetch` must legitimately re-derive `SCRUBBER` in its Phase D fence, because each
+  # fenced block is a separate Bash call and shell state does not persist across them. The
+  # single-occurrence form rejected the correct code (and, before it was fixed, accepted the
+  # bricked version that defined the variable in one fence and used it in another).
+  # Two byte-identical assignments cannot shadow each other; two differing ones can, and
+  # still fail here.
+  t19_distinct=$(printf '%s\n' "${t19_anchors}" | grep . | sort -u | grep -c . || true)
 
-  if [[ "${t19_n}" -ne 1 ]]; then
-    echo "FAIL: Test 19b[${t19_name}]: expected exactly ONE gate-anchor assignment in a bash fence, found ${t19_n} — an extractor that takes the first of several is shadowable by a doc example"
+  if [[ "${t19_n}" -lt 1 || "${t19_distinct}" -ne 1 ]]; then
+    echo "FAIL: Test 19b[${t19_name}]: expected exactly ONE DISTINCT gate-anchor value in bash fences, found ${t19_distinct} distinct across ${t19_n} assignment(s) — a differing second assignment can shadow the real anchor, and an extractor that takes the first of several would not notice"
     FAIL=$((FAIL + 1))
     continue
   fi
-  t19_expr="${t19_anchors}"
+  # The UNIQUE value — asserted to be the only distinct one above. Taking the raw multi-line
+  # capture would leave `grep -F` treating the embedded newline as a pattern separator, so a
+  # match on either line would satisfy it; that happens to work while the values are identical
+  # and stops working the moment they are not, which is exactly the case being guarded.
+  t19_expr="$(printf '%s\n' "${t19_anchors}" | grep . | sort -u)"
 
   if grep -Fq "${t19_expr}" "${t19_gate}"; then
     echo "PASS: Test 19b[${t19_name}]: anchor expression extracted from the committed SKILL.md"

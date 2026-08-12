@@ -89,7 +89,15 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 # which on the review path is the contributor's checked-out tree. This is a ship
 # gate, so a same-named file in a hostile PR would run with the gate's authority.
 # CLAUDE_PROJECT_DIR comes from the harness, not from the tree under review.
-# REPO_ROOT above is unchanged: its other uses are DATA-root reads.
+#
+# REPO_ROOT above is unchanged, but NOT because its other uses are all data-root
+# reads — an earlier revision of this comment claimed that and it was FALSE.
+# `python3 "$REPO_ROOT/scripts/lint-rule-bodies.py"` below EXECUTES a repo-root
+# path, which is a code root by ADR-179's classification table. It is the table's
+# "repo-root `scripts/` class: executes, target outside the payload" row, whose
+# stated disposition is **route to #7453** — so it is deferred, not resolved, and
+# this comment must not read as though the file were finished. The `source` above
+# is the part #7450 fixes; the `python3` below is the part #7453 owns.
 # Resolution, in trust order, and NEVER from `git rev-parse --show-toplevel`:
 #   1. CLAUDE_PROJECT_DIR — supplied by the harness, not by the tree under review.
 #      Measured 2026-08-12: unset in a plain Claude Code session and in git hooks,

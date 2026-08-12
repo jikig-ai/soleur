@@ -1020,10 +1020,20 @@ describe("plugin-root anchoring — skills secret-gate subset (#7450)", () => {
   });
 
   it("G3: the gate-reference population is exactly the pinned identity set", () => {
-    const found = refs
-      .filter((r) => !r.bareCommand)
-      .map((r) => `${r.file} -> ${r.script}`)
-      .sort();
+    // DEDUPED, because this assertion is about the identity SET — which (file, script) pairs
+    // exist — not about how many times each is written. Per-OCCURRENCE coverage is G2/G2b's
+    // job (they filter over every ref, which is finding A1's fix) and G4/G4b's, so nothing is
+    // lost here: a second occurrence of an already-pinned pair is still individually checked
+    // for anchoring, quoting, containment and existence.
+    //
+    // The distinction is load-bearing rather than cosmetic. `linear-fetch` must re-derive
+    // `SCRUBBER` in its Phase D fence because each fenced block is a separate Bash call and
+    // shell state does not persist — omitting that is what bricked the skill (#7450 review).
+    // An occurrence-counting comparison rejects the correct code while a NEW pair, which is
+    // the thing this assertion exists to catch, still reds.
+    const found = [
+      ...new Set(refs.filter((r) => !r.bareCommand).map((r) => `${r.file} -> ${r.script}`)),
+    ].sort();
     check(found).toEqual([...EXPECTED_GATE_REFS]);
   });
 

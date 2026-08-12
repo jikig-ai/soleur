@@ -218,22 +218,16 @@ No public artifact is generated in MVP. Re-evaluation criteria are tracked in #3
 
 Resolve the gate from the **deployed plugin root** (`${CLAUDE_PLUGIN_ROOT}`, the platform-trusted copy — ADR-179's canonical bare anchor, with no fallback arm), verify the root is really a Soleur install, fail closed if either check fails, then run it against the unwritten draft. On the Concierge server the deployed-root anchor is load-bearing: a bare CWD-relative path would resolve the connected repo's **untrusted** copy of the sentinel (ADR-093). The default arm was **removed, not re-pointed**: `review/SKILL.md` instructs `gh pr checkout`, after which the git worktree is the *reviewed party's* tree, so that arm resolved this gate's own scanner from a file a hostile PR controls (#7450). The draft lives in `mktemp` only — it has NOT been emitted inline yet AND has not been written to `post-mortems/`.
 
-Register the cleanup trap **in the same block that allocates the draft**, before anything
-can halt. This PR adds an earlier fail-closed exit, so it increases how often the draft is
-abandoned mid-flight — and the abandoned file is the UN-REDACTED text, which is precisely
-what this gate exists to stop escaping. Leaving it in `mktemp` is a leak with a longer
-lifetime than the session (#7450 review-finding C14).
+**Allocate the draft, register the trap, run the gate — all in ONE fence.** That is not
+formatting: each fenced block is a SEPARATE Bash call, so a trap registered in its own block
+fires when *that* block exits, deleting the draft immediately and leaving `$DRAFT` empty for
+every block after it. Splitting them is what review-finding C14 asked for and it does not
+work — the first attempt shipped exactly that shape, and all three of its stated guarantees
+were false: the trap did not cover the halts below, `$DRAFT` was empty by the time the gate
+ran, and the gate scanned a literal `<draft-tmpfile>` placeholder rather than the draft.
 
-```bash
-DRAFT="$(mktemp)" || { echo "SOLEUR_INCIDENT_HALT reason=draft-alloc-failed"
-                       echo "incident: cannot allocate a draft file — stopping before any post-mortem text exists." >&2
-                       exit 2; }
-trap 'rm -f "$DRAFT"' EXIT INT TERM HUP
-```
-
-Every halt path below inherits this trap, so the un-redacted draft is removed whether the
-gate passes, refuses, or the shell dies.
-
+This matters because the abandoned file is the UN-REDACTED text, which is precisely what this
+gate exists to stop escaping — a leak with a longer lifetime than the session.
 
 The two checks below have **different** jobs, and conflating them overstates the second.
 
@@ -244,6 +238,12 @@ The **identity preflight is defence-in-depth** — for surfaces where substituti
 Each halt emits a `SOLEUR_*` marker on stdout so a refusal is visible in telemetry rather than only to whoever was watching the terminal (`hr-observability-as-plan-quality-gate`; same pattern as `go.md`'s `SOLEUR_GIT_REPO_DIAG`). The operator guidance is **state-discriminating**: an empty root and a wrong root need different actions, and "re-run this skill" is not an action for either.
 
 ```bash
+DRAFT="$(mktemp)" || { echo "SOLEUR_INCIDENT_HALT reason=draft-alloc-failed"
+                       echo "incident: cannot allocate a draft file — stopping before any post-mortem text exists." >&2
+                       exit 2; }
+trap 'rm -f "$DRAFT"' EXIT INT TERM HUP
+# Write the drafted post-mortem into "$DRAFT" here, then let the gate below scan it.
+
 [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
   || { echo "SOLEUR_INCIDENT_HALT reason=plugin-root-unverified root=[${CLAUDE_PLUGIN_ROOT}]"
@@ -260,8 +260,11 @@ SENTINEL="${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-sentinel.sh"
        echo "  The install is partial or out of date. Run 'claude plugin update soleur', then reinstall if that does not clear it." >&2
        echo "  Do NOT write this post-mortem by hand — the redaction scanner is what makes it safe to publish." >&2
        exit 2; }
-bash "$SENTINEL" <draft-tmpfile>
+bash "$SENTINEL" "$DRAFT"
 ```
+
+Every halt above sits inside this same shell, so the `EXIT` trap removes the un-redacted draft
+whether the gate passes, refuses, or the shell dies.
 
 `redact-sentinel.sh` is a thin shim over the hardened `redact-engine.py` (#5987): the engine NFKC-normalizes and strips zero-width/bidi/invalid-byte characters BEFORE matching (defeating compatibility-char / zero-width / soft-hyphen / prefix-homoglyph evasion), and fail-closes with a synthetic-HIGH finding on oversize input (raw or NFKC-expanded). The CLI contract — argv, exit codes, and output shape — is unchanged; the shim fails closed (exit 2) if `python3` is absent. See [ADR-095](../../../../knowledge-base/engineering/architecture/decisions/ADR-095-fail-closed-redaction-engine-contract.md) for the scope boundary (named non-goals: full TR39 homoglyph space, whitespace token-splitting, reversibly-encoded secrets).
 

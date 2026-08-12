@@ -78,15 +78,11 @@ abandoned mid-flight — and the abandoned file is the UN-REDACTED text, which i
 what this gate exists to stop escaping. Leaving it in `mktemp` is a leak with a longer
 lifetime than the session (#7450 review-finding C14).
 
-```bash
-DRAFT="$(mktemp)" || { echo "SOLEUR_LEGAL_GENERATE_HALT reason=draft-alloc-failed"
-                       echo "legal-generate: cannot allocate a draft file — stopping before any draft text exists." >&2
-                       exit 2; }
-trap 'rm -f "$DRAFT"' EXIT INT TERM HUP
-```
-
-Every halt path below inherits this trap, so the un-redacted draft is removed whether the
-gate passes, refuses, or the shell dies.
+The allocation, the trap and the gate MUST share **one** fence — each fenced block is a
+separate Bash call, so a trap registered in its own block fires when *that* block exits,
+deleting the draft immediately and leaving `$DRAFT` empty for everything after it. The split
+form shipped once and all three of its guarantees were false. The combined fence is in step 2
+below.
 
 2. Run the shared hardened engine against it. Resolve the path from the **deployed plugin root**
    (`${CLAUDE_PLUGIN_ROOT}`, the platform-trusted copy — ADR-179's canonical bare anchor, with no
@@ -107,6 +103,12 @@ gate passes, refuses, or the shell dies.
    `SOLEUR_*` marker on stdout so refusals reach telemetry:
 
    ```bash
+   DRAFT="$(mktemp)" || { echo "SOLEUR_LEGAL_GENERATE_HALT reason=draft-alloc-failed"
+                          echo "legal-generate: cannot allocate a draft file — stopping before any draft text exists." >&2
+                          exit 2; }
+   trap 'rm -f "$DRAFT"' EXIT INT TERM HUP
+   # Write the generated draft into "$DRAFT" here, then let the gate below scan it.
+
    [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
      && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
      || { echo "SOLEUR_LEGAL_GENERATE_HALT reason=plugin-root-unverified root=[${CLAUDE_PLUGIN_ROOT}]"
@@ -123,7 +125,7 @@ gate passes, refuses, or the shell dies.
           echo "  The install is partial or out of date. Run 'claude plugin update soleur', then reinstall if that does not clear it." >&2
           echo "  Do NOT hand-edit and publish this draft — the redaction scanner is what makes it safe to share." >&2
           exit 2; }
-   bash "$SENTINEL" <draft-tmpfile>
+   bash "$SENTINEL" "$DRAFT"
    ```
 
    The engine is owned by the `incident` skill and shared cross-skill by relative reference (see ADR-095).

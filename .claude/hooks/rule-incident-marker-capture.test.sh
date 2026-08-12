@@ -147,8 +147,23 @@ rejected=""
 while IFS= read -r id; do
   [[ -n "$id" ]] || continue
   emitted=$((emitted + 1))
-  # `cost-of-filing-${DISPOSITION}` is a runtime expansion; probe its resolved forms.
-  case "$id" in *'${'*) continue ;; esac
+  # NO EXEMPTION FOR `${…}` IDS — this line used to read
+  #   case "$id" in *'${'*) continue ;; esac
+  # with a comment promising to "probe its resolved forms", and then probed nothing. That
+  # exemption sat around the one marker in the corpus that was broken: `review/SKILL.md`
+  # emitted `rule=cost-of-filing-${DISPOSITION}`, which can NEVER match this hook's
+  # `rule=[A-Za-z0-9._-]+ note=` needle (`$` and `{` are outside the class), so it produced
+  # zero rows permanently while this test reported the corpus clean.
+  #
+  # An unexpanded `${` in an id is therefore a DEFECT, not a case to skip: the hook reads
+  # `.tool_input.command` — pre-expansion text — so from its vantage there is no runtime
+  # expansion to resolve. A marker id must be a static literal.
+  case "$id" in
+    *'${'*|*'$('*)
+      rejected="${rejected} ${id}(unexpanded-expansion-in-id)"
+      continue
+      ;;
+  esac
   drive "echo 'SOLEUR_RULE_APPLIED rule=${id} note=n'" >/dev/null
   [[ "$(rows)" == "1" ]] || rejected="${rejected} ${id}"
 done < <(grep -rhoE "SOLEUR_RULE_APPLIED rule=[^ ]+" "${REPO_ROOT}/plugins/soleur/skills/" 2>/dev/null \
