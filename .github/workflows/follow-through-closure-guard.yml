@@ -68,14 +68,34 @@ jobs:
             "https://ifsccnjhymdmidffkzhl.supabase.co/auth/v1/callback"
           )
 
-          # Fetch the most recent comment body (the closing comment).
-          # Fall back to the issue body if no comments exist.
+          # Fetch the newest NON-BOT comment body (the closing comment).
+          #
+          # --paginate --slurp IS PART OF THE PRESCRIPTION, not a tidy-up. `gh api` returns 30
+          # comments per page by default, so on a longer thread the bare `.[-1]` selected
+          # comment #30 -- an unrelated historical comment -- and the guard then validated
+          # something nobody had just written. `--paginate` alone is worse than either: it
+          # emits ONE DOCUMENT PER PAGE, so the jq would return the last comment of EVERY
+          # page. `--slurp` is what collapses the pages into a single array-of-arrays, which
+          # is why `[.[][]]` flattens it.
+          #
+          # THE FILTER IS ON IDENTITY, NEVER ON CONTENT. This guard posts its own reopen body
+          # as a comment, and that body prints each missing URL verbatim -- so it satisfies
+          # field 1 on the next run and the guard would read its own output. A body-content
+          # predicate ("skip comments containing '## Closure gate'") would also be a one-line
+          # bypass for anyone who can comment; a login is not, because GitHub logins are
+          # alphanumeric-plus-hyphen and `[bot]` cannot be spelled by a human account.
+          #
+          # NO ISSUE-BODY FALLBACK. It used to fall back to the issue body when no comment was
+          # found, but that body is authored by whoever opened the issue -- and a callback-URL
+          # follow-through issue's body legitimately contains all three URLs (verified on
+          # #1784), so the fallback let an issue satisfy its own gate. Excluding bot comments
+          # makes that path MORE reachable, not less, so the two changes must land together.
+          # With no qualifying comment, `comment_body` is empty, every field is missing, and
+          # the guard reopens -- which is the correct fail-closed direction.
           comment_body=$(gh api "repos/${GH_REPO}/issues/${ISSUE_NUM}/comments" \
-            --jq '.[-1].body // ""' 2>/dev/null || echo "")
-          if [[ -z "$comment_body" ]]; then
-            comment_body=$(gh issue view "$ISSUE_NUM" --repo "$GH_REPO" \
-              --json body --jq .body 2>/dev/null || echo "")
-          fi
+            --paginate --slurp \
+            --jq '[.[][]] | map(select(.user.login != "github-actions[bot]")) | .[-1].body // ""' \
+            2>/dev/null || echo "")
 
           # Field 1: verbatim URLs. Require ALL THREE as substrings.
           missing_urls=()
@@ -127,12 +147,12 @@ jobs:
             printf 'This issue was closed without the verbatim verification required for callback-URL-class follow-through issues. Per `wg-when-fixing-a-workflow-gates-detection`, the gap that allowed #1784 to close-without-verification (and recur as #3183) is now machine-enforced.\n\n'
             printf '### Missing fields\n\n'
             if [[ ${#missing_urls[@]} -gt 0 ]]; then
-              printf '- [ ] **Verbatim callback URLs.** The closing comment must include each of these as a literal substring (paste byte-for-byte from the GitHub App callback list):\n'
+              printf -- '- [ ] **Verbatim callback URLs.** The closing comment must include each of these as a literal substring (paste byte-for-byte from the GitHub App callback list):\n'
               for url in "${missing_urls[@]}"; do
                 printf '    - `%s`\n' "$url"
               done
             else
-              printf '- [x] Verbatim callback URLs\n'
+              printf -- '- [x] Verbatim callback URLs\n'
             fi
             if [[ "$run_ok" != "yes" ]]; then
               printf -- '- [ ] **Workflow run-URL** showing `scheduled-oauth-probe.yml` ran green AFTER the dashboard change. Format: `https://github.com/%s/actions/runs/<id>`. Verified via `gh run view <id> --json conclusion`.\n' "$GH_REPO"
