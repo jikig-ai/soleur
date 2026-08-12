@@ -35,16 +35,46 @@ are stamped server-side and CANNOT be overridden by caller `data`.
 
 The wrapper script is [scripts/trigger.sh](./scripts/trigger.sh):
 
+**Run this preflight first, and abort on a non-zero exit.** `trigger.sh` reads
+`INNGEST_MANUAL_TRIGGER_SECRET` from Doppler at `-c prd` and fires a real production event,
+so this is a secret gate in the sense of ADR-179 decision 2 — and until #7450 it carried no
+env-var precondition at all, which made it **cheaper to exploit than the redaction gates that
+issue was filed about**. A `:-` default resolves into the caller's working tree; on the review
+path that tree is a contributor's PR, so the defaulted form of this path would run *their*
+script with the operator's prod secret in reach. (The rejected literal is deliberately not
+reproduced here: a corpus-wide body-grep cannot tell an explanation from an occurrence, so
+quoting it would make this paragraph a residual site in the sweep that hunts it.)
+
+```bash
+[ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
+  && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
+  || { echo "trigger-cron: cannot verify the Soleur plugin installation — halt (fail closed)" >&2
+       echo "  Resolved plugin root: [${CLAUDE_PLUGIN_ROOT}]" >&2
+       echo "  What to do: re-run from a session where the Soleur plugin is INSTALLED (not a checkout)." >&2
+       echo "  No event has been fired and no secret has been read." >&2
+       exit 2; }
+TRIGGER="${CLAUDE_PLUGIN_ROOT}/skills/trigger-cron/scripts/trigger.sh"
+[ -x "$TRIGGER" ] || { echo "SOLEUR_TRIGGER_CRON_PRODUCER_MISSING producer=scripts/trigger.sh reason=absent-from-verified-root" >&2
+       echo "trigger-cron: the plugin root verifies but does not carry trigger.sh — halt (fail closed)" >&2
+       echo "  Your project is not at fault: the installed Soleur payload is incomplete or stale." >&2
+       echo "  What to do: run 'claude plugin update soleur'; if that reports success and this persists," >&2
+       echo "  reinstall the plugin. Updating the MARKETPLACE alone does not update an INSTALLED plugin." >&2
+       echo "  Do NOT let the agent run the reinstall — it mutates the plugin root under a live run." >&2
+       exit 2; }
+```
+
+With the preflight passed, `$TRIGGER` is the verified producer:
+
 ```bash
 # List the allowlisted manual-trigger events (sourced from the cron manifest).
-${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/trigger-cron/scripts/trigger.sh --list
+"${CLAUDE_PLUGIN_ROOT}/skills/trigger-cron/scripts/trigger.sh" --list
 
 # Dry-run: print the curl without firing.
-${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/trigger-cron/scripts/trigger.sh \
+"${CLAUDE_PLUGIN_ROOT}/skills/trigger-cron/scripts/trigger.sh" \
   --event cron/bug-fixer.manual-trigger --data '{"issue_number":4383}' --dry-run
 
 # Fire (default config: prd).
-${CLAUDE_PLUGIN_ROOT:-plugins/soleur}/skills/trigger-cron/scripts/trigger.sh \
+"${CLAUDE_PLUGIN_ROOT}/skills/trigger-cron/scripts/trigger.sh" \
   --event cron/workspace-sync-health.manual-trigger
 ```
 

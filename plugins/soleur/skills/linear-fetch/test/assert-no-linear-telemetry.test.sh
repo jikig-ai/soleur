@@ -5,7 +5,7 @@
 
 set -eu
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)"
 SCRIPT="$SCRIPT_DIR/assert-no-linear-telemetry.sh"
 
 PASS=0

@@ -20,7 +20,7 @@
 
 set -eu
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../../.." && pwd)"
 REDACTOR="$SCRIPT_DIR/redact-linear-urls.sh"
 WORKFLOW="$REPO_ROOT/.github/workflows/pr-quality-guards.yml"
