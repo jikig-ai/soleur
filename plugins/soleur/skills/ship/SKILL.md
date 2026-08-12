@@ -330,13 +330,25 @@ produced #6969: a green summary read as evidence for infra it never executed, at
 before merge.
 
 ```bash
-bash scripts/test-all.sh
+TEST_GROUP=all bash scripts/test-all.sh
 ```
+
+**What this run is, precisely — and what it is not.** Since #7352 ([ADR-183](../../../../knowledge-base/engineering/architecture/decisions/ADR-183-full-suite-is-the-merge-gate-not-the-implementation-exit-gate.md)) this is the only full-battery run in the pipeline; `/work` Phase 2 now exits on the `TEST_GROUP` shards its diff touches. Three claims, in the order that keeps them honest:
+
+- **The merge gate is CI, not this run.** The required `test` context (ruleset 14145388) aggregates the same three `test-all.sh` shards on the PR head and is what actually blocks merge. Do not describe this local run as the merge gate — that over-claim is what would license a future PR to shard it.
+- **This is the LAST LOCAL fail-fast checkpoint.** It is not the post-all-code-changes position either: Phase 5.5 contains code-mutating gates that run after it.
+- **It is the SOLE gate for `apps/web-platform/infra/`** — `no required status check runs that shard`, so an infra regression that reaches merge reaches production. That is a ruleset gap, tracked separately; until it closes, this run is the only thing standing there.
+
+**`TEST_GROUP=all` is pinned, and that pin is load-bearing.** Sharding this run for speed would silently delete the only gate the registered infra suites have. This is the one ceiling the whole reordering rests on; it is asserted by `plugins/soleur/test/fullsuite-merge-gate.test.ts`, whose mutation is *sharding* the command rather than deleting it.
+
+**A reaped run is UNRESOLVED — never ship on it.** Per the three-way split, `rc=1` with `[FAIL]` lines is a red diff; `rc=3` with `[KILLED]` lines and a terminal marker means a suite's coverage was never obtained (re-run that suite in isolation); no marker and no rc file at all is a harness reap, not a result. With only one full run left in the pipeline there is no second chance downstream, and "unresolved" under ship-time pressure resolves to "ship anyway" far more often than to a re-run. Read the **rc file**, never the background-task completion notification.
+
+**Reading this run is documented once, in [work/SKILL.md](../work/SKILL.md) §9 "Reading a `test-all.sh` run"** — dirty-tree invalidation, the sibling-worktree false RED, harness reaping vs. the three-way split, the Doppler `TEST_GROUP=webplat` caveat, and both coverage-NOTE polarities. Those passages apply verbatim at this position; they are linked rather than restated so the two positions cannot drift.
 
 **Do NOT unconditionally run `run-registered-suites.sh` alongside it.** That instruction was
 correct before the runner was registered and is now actively harmful: both commands default
 `TMPDIR=/var/tmp`, so running them concurrently reproduces the sibling-contention shape
-`work/SKILL.md` documents and can self-inflict a false RED at the last gate before merge — while
+[work/SKILL.md](../work/SKILL.md) documents and can self-inflict a false RED at the last gate before merge — while
 paying ~4-5 minutes twice.
 
 Read the epilogue instead. `test-all.sh` reports which of these happened, keyed on whether the
@@ -366,7 +378,7 @@ Ship Checklist for [branch name]:
 - [x/skip] Artifacts committed (brainstorm/spec/plan)
 - [x/skip] Learnings captured (/compound)
 - [x/skip] README counts synced (`bash scripts/sync-readme-counts.sh`)
-- [x/skip] Tests pass
+- [x/skip] Full suite green (Phase 4, `TEST_GROUP=all`), re-run after any post-Phase-4 change
 - [ ] Preflight passed (Phase 5.4 gate)
 - [ ] Code review completed (Phase 5.5 gate)
 - [ ] Undeferred operator-step gate passed (Phase 5.5 gate)
@@ -1430,7 +1442,7 @@ log=$(mktemp -t grok-pre-push-gate.XXXXXXXX.log)
 bash plugins/soleur/scripts/grok-pre-push-gate.sh > "$log" 2>&1; rc=$?; echo "EXIT=$rc LOG=$log"
 ```
 
-Abort Phase 6 if rc != 0. The gate mirrors reproducible CI: fast required jobs, [scripts/test-all.sh](../../../../scripts/test-all.sh) (the test check), web-platform build, and grok-fidelity. Pushing without it wastes CI cycles. Claude Code: lefthook covers commit-time lint; Grok has no hook equivalent — run this gate here even if Phase 4 test-all.sh already ran (Phase 4 is mid-pipeline; this gate is the push-time recheck).
+Abort Phase 6 if rc != 0. The gate mirrors reproducible CI: fast required jobs, [scripts/test-all.sh](../../../../scripts/test-all.sh) (the test check), web-platform build, and grok-fidelity. Pushing without it wastes CI cycles. Claude Code: lefthook covers commit-time lint; Grok has no hook equivalent — run this gate here even if Phase 4 test-all.sh already ran (Phase 4 is the last local fail-fast checkpoint; this gate is the push-time recheck on the tree actually being pushed, which is what makes the Phase 4 re-run redundant on the Grok arm).
 <!-- grok-pre-push-gate:end -->
 
 Push the branch to remote. Get the branch name first:
