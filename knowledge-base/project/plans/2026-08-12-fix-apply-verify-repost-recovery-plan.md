@@ -1576,6 +1576,135 @@ plain `gh` calls — so the file does **not** enter `## Files to Edit`, and R5's
 claim is withdrawn. The runbook is filed as an issue per R13.10 rather than written here, so it does
 not enter `## Files to Create` either. Both dispositions are now explicit rather than omissions.
 
+## R17 — Blast-radius review: the skip arm is near-vacuous, and two live CI gates were never consulted
+
+`architecture-strategist` independently confirmed R16.1 (errexit suspension), R1's measurements, the
+TOCTOU, R3's no-SSH reasoning, R7's `server.tf` finding (the comment is ~23 lines above the entry,
+not three) and AC13's ships-dark property — and found the structural event this plan had not named:
+**it collapses plan + destroy-guard + narrowness-assert + apply + two verification passes into
+intra-step control flow.** The workflow's safety today comes from *step boundaries* — the
+destroy-guard is unbypassable because it lives in a step whose failure means the apply never runs.
+That collapse, not the retry, is the architectural change the ADR must record.
+
+### R17.1 — P0: `DPF_REPLACED == false` needs a polarity guard, and the arm it protects is near-vacuous
+
+**Polarity.** R1 specified no validation for `DPF_REPLACED`. The workflow already documents this
+exact trap ~200 lines above, in the `host_creates` block: *"The `^[0-9]+$` validation is
+LOAD-BEARING: `jq -r` on a missing key yields the STRING `null` … Without it the guard fails
+OPEN."* Any jq error, address rename, module move or empty `resource_changes[]` yields an empty
+string, `!= "true"` is satisfied, and the freshness pin is skipped — silently and permanently
+restoring #7220's blind spot, invisible to a harness that cannot run terraform. **Required:** a hard
+`^(true|false)$` guard that fails closed on anything else, **plus** a positive control asserting
+`terraform_data.deploy_pipeline_fix` appears in `resource_changes[]` at all, so address drift cannot
+read as a permanent `false`.
+
+**Vacuity — the sharper finding.** R1 said the false arm "adjudicates on count + content only". But
+`adjudicate_infra_config` compares each frame file's `sha256` against the checked-out repo, and DPF
+was not replaced *precisely because none of its 22 hashed files changed*. A content match is
+therefore **guaranteed by construction** on that arm. With the freshness pin also skipped, the arm
+reduces to: *the endpoint answered 200, and some frame of unbounded age reports `exit_code: 0`.*
+
+Worst of all, it is weakest where it matters most: on a `seccomp-bwrap.json` or
+`apparmor-soleur-bwrap.profile` merge, `docker_seccomp_config` / `apparmor_bwrap_profile` **do**
+replace and their SSH provisioners **do** mutate the host. The gate would be at its weakest on
+exactly the runs that change the host. Four reachable consequences: parse/address drift disables
+the pin forever; a post-push tamper of `hooks.json` or the Doppler token becomes invisible until the
+next DPF-replacing merge; a wiped handler still returns 200 with its last frame and greens; and a
+`false` misread on a run that *did* race converts #7104's failure from "red, needs a re-run by hand"
+into "green, silently undelivered" — **strictly worse than the status quo**.
+
+**Fix, and it costs nothing:** do not skip. R2 already puts `PRE_APPLY_FRAME_START_TS` in hand, so
+on the false arm assert **equality** — `FRAME_START_TS == PRE_APPLY_FRAME_START_TS`. That proves the
+endpoint is live, self-consistent, and that no unexpected push occurred, at zero false-red cost, and
+it keeps the arm non-vacuous. This supersedes R1(B)'s "skip the pin" formulation.
+
+### R17.2 — P1: two live CI gates and a principle the plan never consulted
+
+- **AP-022 / `scripts/lint-workflow-errexit-capture.py`** is registered live in `scripts/test-all.sh`
+  and currently scans 74 workflows / 726 `run:` bodies clean. It requires that a step capturing an
+  exit status as data either clear errexit explicitly or protect the capture with `|| rc=$?`. This
+  design does exactly that capture, and **AC7** ("no `|| true` and no `2>/dev/null` on the apply")
+  is in direct tension with the sanctioned `|| rc=$?` form. AC7 must be restated to forbid
+  *status-discarding* constructs while permitting the sanctioned capture.
+- **AP-021 (diagnostic honesty, ADR-166)** and `scripts/lint-diagnosis-claims.sh`. Two violations:
+  (a) the alert helper has exactly **three** classes and none fits "the recovery apply failed" — on
+  that path `/tmp/infra-config-status-response.txt` still holds **pass 1's** stale 200 frame, so the
+  alert classifies `reachable` and tells a non-technical founder that files landed and to run a
+  Better Stack query that will return nothing, on the sole no-SSH channel of an unreplaceable host.
+  **Add a fourth `recovery-failed` class with its own body.** (b) R2 makes skew cancel on the primary
+  path, yet Phase 2, `## Observability` and `## Risks` all still instruct the terminal message to
+  name clock skew — naming an *unmeasured* cause is exactly what AP-021 rejects. Strike all three
+  once task 2.1 settles R2.
+- **The response file is reused across both passes with no reset.** `curl -s -o` on a transport
+  failure can leave the prior body in place, so both the classifier and the alert can adjudicate
+  pass-1 data as pass-2 data. **Truncate explicitly per pass.**
+
+Neither linter, nor AP-021, nor AP-022 appears anywhere in the plan's
+`## Conventions carried from AGENTS.md`. Add them.
+
+### R17.3 — P1: the saved-plan apply is never exercised before its first production run
+
+Phase 0 step 1 is explicitly plan-only. Nothing proves the *apply* invocation works for this root,
+and `deploy_pipeline_fix` carries two `lifecycle.precondition` blocks re-evaluated at apply time.
+Combined with AC13 (ships dark), the first execution of a rewritten production apply invocation
+would be against the unreplaceable host. **Add a Phase 0 step that produces a genuinely zero-change
+`-out=` plan and applies that file** — safe, and it proves the invocation.
+
+R4d's stated reasoning is also wrong and would mislead the implementer: `terraform apply <planfile>`
+**rejects** `-var` and `-target`, and variable *values* come from the plan file. Keeping the doppler
+wrapper is harmless, but "because provider config is re-evaluated at apply time" is not why.
+
+### R17.4 — P1: one existing invariant silently loses coverage
+
+`Verify webhook is alive post-apply` sits between apply and verify, and `id: terraform_apply` exists
+so the alert can distinguish "the gate ran and failed" from "the gate never ran". Both are
+**step-boundary** properties. After this change, apply #2 has no webhook-liveness assertion after
+it, and a terraform failure can now occur *inside* `infra_config_gate`, blurring the distinction
+that step id was created to preserve. The plan's "nothing downstream is re-wired" is true of the
+`if:` expressions and false of the invariants those steps encode. **State it plainly in the ADR:**
+the "assert the webhook is alive after every apply" invariant now covers only apply #1.
+
+### R17.5 — P2: a deterministic concurrency collision R10 missed, and a stronger safety argument it under-sold
+
+`infra-config-apply.sh` schedules its listener restart with a **fixed transient unit name**
+(`systemd-run --collect --on-active=3s --unit=webhook-self-restart …`) under `set -euo pipefail`
+with ERR and EXIT traps. A second handler started by the re-push while the first still runs
+collides on that unit name → non-zero → ERR trap → the EXIT trap publishes a frame with a
+**non-zero `exit_code`** → pass 2 reds. R10's "the per-file outcome is identical either way" is
+right about files and wrong about the verdict: concurrency produces a *deterministic spurious red*.
+Size the settle against the handler's own timings (+3 s scheduled restart, ~5–8 s listener boot).
+
+Conversely the plan under-sold its own safety case. The self-restart is scheduled immediately before
+`exit "$EXIT_CODE"` and the EXIT trap publishes within milliseconds, so **any handler that reached
+the restart also published a frame**. A re-push therefore only fires when no handler completed — and
+by then (8 s + 3×5 s polls + a plan and an apply) the listener has had 90+ seconds to stabilise.
+That is a stronger argument than "the push does not restart the listener", and it belongs in the ADR.
+
+### R17.6 — P2: the gate step's credential surface widens, unlisted
+
+The step's `env:` today carries only `DOPPLER_*` and `ALLOW_MISSING_STATUS`. The observability work
+adds `SENTRY_INGEST_DOMAIN`, `SENTRY_PROJECT_ID`, `SENTRY_PUBLIC_KEY` and `GH_TOKEN` (issues: write)
+to a step that now also runs `terraform apply`. **The step that adjudicates would hold both
+prod-write Terraform credentials and issue-write GitHub credentials.** Not in any file table, not in
+any AC. It needs an ADR sentence and an entry in `## Files to Edit`.
+
+### R17.7 — A new principle to register
+
+The register has no principle for the boundary this change crosses. Propose:
+**a CI verification gate that also actuates production must declare its write sites in-step, and
+must not share a step with its own verdict.** Register it, or amend AP-021 to cover it.
+
+### R17.8 — One unstated positive, worth naming
+
+With `use_lockfile = false`, R1(C)'s saved-plan apply makes a break-glass apply run outside CI (the
+ADR-096 path, which sits in **no** concurrency group) fail closed with a stale-plan error instead of
+silently last-writer-wins. That is a genuine safety improvement this plan gets for free and had not
+claimed. Name it in the ADR.
+
+One unstated negative to balance it: the 90-minute job ceiling already budgets ~70 minutes for the
+ADR-078 cron drain in `Redeploy to load applied profile`. The plan's "low single-digit minutes" is
+asserted, not derived against that budget. Derive it.
+
 ## Domain Review
 
 **Domains relevant:** Engineering, Operations, Product
