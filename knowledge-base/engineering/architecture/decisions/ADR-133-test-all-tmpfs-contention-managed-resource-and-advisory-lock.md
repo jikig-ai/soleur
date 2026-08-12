@@ -268,9 +268,19 @@ line to decide whether a RED is trustworthy, which made the false statement load
 - Both banner **tokens** are byte-identical. Only post-colon text moved, so this ADR's own
   vocabulary, `work/SKILL.md`'s contention grep and the existing arms all still match.
 
-Every `tc_acquire` exit path still returns `0`. That is Decision 3's fail-open contract and it is now
-asserted structurally over the function body, not merely exercised by the arms that happen to reach
-it: an instrument that could wedge the run it observes would violate the contract it exists to serve.
+Every `tc_acquire` exit path still returns `0` — Decision 3's fail-open contract, since an instrument
+that could wedge the run it observes would violate the contract it exists to serve.
+
+**A structural assertion of that contract is not sufficient, and this change is the demonstration.**
+The first cut asserted it by grepping the function body: every `return` is a `return 0`. That check
+passed while the function could still **abort without returning at all** — `test-all.sh` sources this
+lib under `set -euo pipefail`, so the bare `$EPOCHREALTIME` reads the measurement introduced were an
+unbound-variable abort on any shell lacking the variable. It also made the `unknown` branch
+unreachable on precisely the platform it was written for: the abort happens at the read, before the
+guard is entered. Both are fixed (`${EPOCHREALTIME:-}` at every read) and the contract is now asserted
+**behaviourally** as well — an arm that de-specialises `EPOCHREALTIME` under `set -euo pipefail` and
+requires a `0` return plus the honest `unknown` token. The general form, worth carrying forward: a
+grep over exit statements cannot see an exit that is not a statement.
 
 **What this does NOT settle.** Contended observations are **right-censored** at the fixed budget, so
 they cannot answer "would a longer wait have succeeded?" — and the short-circuit-on-holder-age
