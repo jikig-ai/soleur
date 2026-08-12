@@ -79,3 +79,29 @@
 `security-sentinel` (FAILED) · `code-simplicity-reviewer` (FAILED) ·
 `test-design-reviewer` (FAILED) · `spec-flow-analyzer` (FAILED) ·
 `lint-guard-contract.py` · `lint-infra-no-human-steps.py` · `probe-verb-gate.sh`
+
+---
+
+## Work Phase (appended 2026-08-12)
+
+Phases 0-6 complete and committed. PR #7482 pushed with full body; `Closes #7450` in the body.
+
+| Phase | Outcome |
+| --- | --- |
+| 0 Preconditions | All six verified. Two plan corrections: the `redact-*.sh` discovery glob also matches a `.test.sh` harness; Pattern B is 43/45 depending on predicate. |
+| 1 MEASURE (halt gate) | **POSITIVE for the measured construction.** Loader substitutes the bare token at delivery; `:-` arrives unsubstituted. Dissolves F14. Direct SKILL.md arm not runnable (registry built at session start) — residual stated. Found that `commands/go.md` is circular evidence too, which the plan missed. |
+| 2 RED Guard 2 | Decoy resolved onto the planted script byte-for-byte. 86 pass / 1 fail. |
+| 3 RED Guard 1 | G2 enumerated exactly the 4 executable sites; G5 missing preflight. Also surfaced + fixed a pre-existing unterminated fence in `deepen-plan/SKILL.md`. |
+| 4 GREEN | 5 sites migrated + preflights + linear-fetch's missing guard + caller halt contracts. Guard 2 89/0, Guard 1 16/16. |
+| 5 ADRs | ADR-179 amended (Decision-2 block replaced, §R5 corrected in place), ADR-093 premise falsified inline. No new ADR. |
+| 6 Comments | #7453 and #6222 both commented, both verified OPEN. |
+| 7 Exit | Mutation matrices **10/10** (zero survivors). Full `test-all.sh` queued behind 3 sibling runs on the advisory lock. |
+
+**All 17 ACs verified with their literal commands** (see PR body §Verification).
+
+### If resuming
+The only outstanding item is the full-suite result at `/var/tmp/soleur-7450-exitgate/{full.log,rc}`.
+Read the **rc file**, not a completion notification, and read BOTH ends of the log: the preamble
+carries the contention banners (3 sibling `test-all.sh` runs were active at launch, so a RED needs
+three-way confirmation) and the epilogue states whether the infra runner was covered.
+Then `/soleur:review` → `/soleur:compound` → `/soleur:ship`.
