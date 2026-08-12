@@ -282,6 +282,20 @@ guard is entered. Both are fixed (`${EPOCHREALTIME:-}` at every read) and the co
 requires a `0` return plus the honest `unknown` token. The general form, worth carrying forward: a
 grep over exit statements cannot see an exit that is not a statement.
 
+**First two readings from the instrument** (2026-08-12, this repo, real runs on the ship path):
+
+| Run | Banner |
+|---|---|
+| queued behind 2 sibling worktrees | `LOCK_CONTENDED_PROCEEDING: 'test-all' — gave up after 899122ms of 900s` |
+| lock free | `LOCK_ACQUIRED: 'test-all' after 12ms` |
+
+Two orders of magnitude apart, from the same lock on the same machine within the hour. The first
+independently reproduces this ADR's 2026-08-11 "waited the full 900 s" figure — which the banner of
+the day could not have produced, since it printed the budget whether or not a wait occurred. The
+second is the uncontended floor. Note what the pair does **not** establish: two readings are two
+readings, not a distribution, and the contended one is censored (see below). It is evidence that the
+cost is bimodal rather than constant, and nothing more.
+
 **What this does NOT settle.** Contended observations are **right-censored** at the fixed budget, so
 they cannot answer "would a longer wait have succeeded?" — and the short-circuit-on-holder-age
 candidate is parameterised by the *holder's* remaining run, while every duration here is the

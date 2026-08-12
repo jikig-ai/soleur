@@ -151,3 +151,39 @@ under `set -euo pipefail` and asserts `RC=0`, the `unknown` token, and the **abs
 **Mutation battery re-run: 7/7 RED**, adding row 6 (re-bare the reads). RED was verified on the arm
 before the fix landed (2 failures, both naming the unbound abort), so the arm is known to drive the
 defect rather than merely to coexist with the fix.
+
+## Exit gate — 2026-08-12
+
+Two full `scripts/test-all.sh` runs. **`scripts/test-contention`: `[ok] (14274ms)`, 95 passed, 0
+failed** in the gate itself.
+
+**The gate caught a real defect in this branch, and it was not in the files this PR is about.** The
+brainstorm SKILL.md guidance committed at plan time recommended
+`gh issue list --state all --search "<blocker> in:body"` with no `--limit`. `gh` caps the result set
+at 30 rows without one, so an enumerating probe truncates and reads as complete (#6793) — a rule
+about probes that fail open, recommended via a probe that fails open. Fixed (`--limit 200` + a note
+saying why the flag is load-bearing); `components.test.ts` 1297 pass, 0 fail, and it is absent from
+the second run's failures.
+
+**Residual failure is pre-existing and tracked at #6842**, confirmed four ways rather than assumed:
+
+1. **Isolated re-run** fails *worse* than in-suite (2 of 3 vs 1), printing the cause —
+   `[github.js] GitHub API failed, using fallback: The operation was aborted`. A live unmocked fetch
+   against bun's 5s timeout.
+2. **CI is green on `main`** across the last three merges.
+3. **Two full runs**, both with changelog as the only non-mine failure.
+4. **Byte-identity**: `changelog.js`, `changelog-data.test.ts` and `github.js` are all
+   `git diff --quiet origin/main` clean, so the failure is reproducible on `main` *by construction*.
+   This is the decisive one — the other three are inference, this is not.
+
+No new issue filed: #6842 is the same test and the same cause, and a duplicate is backlog noise.
+
+**Coverage boundary read, not assumed:** the epilogue states
+`NOTE: apps/web-platform/infra/ is NOT covered above (diff does not touch it)` — correct, this diff
+carries no infra path, so `rc` accounts for everything it needed to.
+
+**Merge with `main` (6 commits) before the gate.** One conflict, `rule-metrics.json` — a *generated*
+telemetry accumulator. Resolved by taking `main`'s version rather than hand-merging counters, which
+would have fabricated data; it correctly dropped out of the branch diff. Also re-verified after the
+merge that `_tc_ms_since`'s cited anchor (`local elapsed_ms=0` in `test-all.sh`, which a sibling PR
+touched) still resolves, and that AC8 still holds.
