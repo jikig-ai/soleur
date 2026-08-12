@@ -887,84 +887,139 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test 21 — B1: PIN THE ABSENCE of any git-root anchor at the three secret gates.
+# SHARED EXECUTABLE-LINE EXTRACTOR for Tests 21, 22 and 23.
+#
+# THE RECURRING DEFECT THIS CLOSES. Tests 22, 23 and 24 were written in the same two commits
+# as Test 21 and asserted against the file's BYTES, not its executable content — so each was
+# defeated by a COMMENT. Test 21 alone built an extractor, and its own comment argues at
+# length why that scoping is load-bearing. Measured at round-2 review: deleting the real
+# `[ -n "$PERSIST_SAFE" ]` arm and leaving a three-line comment quoting it kept BOTH Test 22
+# and Test 23 green.
+#
+# So the extractor is shared rather than duplicated: a future assertion inherits the immunity
+# instead of having to remember it.
+#
+# FENCE HANDLING, every arm added because a mutation walked through it:
+#   V1  ```sh / ```shell / ```zsh — an agent executes those exactly as it executes ```bash.
+#       This was the cheapest evasion of all: one word.
+#   V2  ~~~ fences, which CommonMark treats identically to ```.
+#   P2  a fence that is opened and never closed, and a stray ``` INSIDE a fence (a heredoc
+#       emitting markdown) closing it early — so the close marker must match the opening
+#       run length, and an unclosed fence is reported rather than silently swallowing the
+#       rest of the file.
+# Info strings (```bash title="x") and CRLF were already handled and are kept.
+# ---------------------------------------------------------------------------
+exec_lines() {
+  awk '
+    # opening fence: ``` or ~~~ (>=3), a shell-ish language, optional info string
+    !infence && match($0, /^[[:space:]]*(`{3,}|~{3,})[[:space:]]*(bash|sh|shell|zsh)([[:space:]]|$)/) {
+      line = $0
+      sub(/^[[:space:]]*/, "", line)
+      run = 0; ch = substr(line, 1, 1)
+      while (substr(line, run + 1, 1) == ch) run++
+      infence = 1; fch = ch; frun = run; next
+    }
+    # a non-shell fence still OPENS a fence — otherwise its contents leak into the scan
+    !infence && match($0, /^[[:space:]]*(`{3,}|~{3,})/) {
+      line = $0; sub(/^[[:space:]]*/, "", line)
+      run = 0; ch = substr(line, 1, 1)
+      while (substr(line, run + 1, 1) == ch) run++
+      infence = 2; fch = ch; frun = run; next
+    }
+    # closing fence: same char, at least the opening run length, nothing but the marker
+    infence && match($0, /^[[:space:]]*(`{3,}|~{3,})[[:space:]]*\r?$/) {
+      line = $0; sub(/^[[:space:]]*/, "", line)
+      run = 0; ch = substr(line, 1, 1)
+      while (substr(line, run + 1, 1) == ch) run++
+      if (ch == fch && run >= frun) { infence = 0 }
+      next
+    }
+    # SHELL COMMENTS INSIDE THE FENCE ARE NOT EXECUTABLE EITHER.
+    # Fence-scoping alone is not enough and this was measured: with the fence scoping in
+    # place, deleting the real `[ -n "$PERSIST_SAFE" ]` arm and leaving a comment quoting it
+    # still passed Test 23, because the comment sits inside the ```bash fence. "Executable
+    # content" has to mean executable, not merely fenced.
+    infence == 1 && /^[[:space:]]*#/ { next }
+    infence == 1 { print }
+    END { if (infence) exit 3 }
+  ' "$1"
+}
+
+# ---------------------------------------------------------------------------
+# Test 21 — B1: PIN THE ABSENCE of any git-root resolution at the three secret gates.
 #
 # Review finding §B1 prescribed adding, at each gate,
 #   case "$(cd "${CLAUDE_PLUGIN_ROOT}" && pwd -P)/" in "$(git rev-parse --show-toplevel)/"*) halt;;
-# to assert the plugin root sits OUTSIDE the working tree. That was measured and REJECTED
-# (specs/.../b1-disposition.md): the loader substitutes the bare token at delivery, so the
-# operand is a literal the adversary cannot reach — while the assertion itself breaks
-# dogfooding on any plain clone (there, the plugin root IS inside the working tree) and puts
-# `git rev-parse --show-toplevel` back into the exact three files this PR exists to remove it
-# from.
+# That was measured and REJECTED (specs/.../b1-disposition.md): the loader substitutes the bare
+# token at delivery, so the operand is a literal the adversary cannot reach — while the
+# assertion breaks dogfooding on any plain clone (there the plugin root IS inside the working
+# tree) and puts `git rev-parse --show-toplevel` back into the exact three files this PR
+# removes it from.
 #
-# The disposition is therefore an INVARIANT, and an invariant that is merely satisfied is not
-# guarded. This pins it: these three files carry ZERO git-root resolution, in any form. A
-# future well-meaning implementation of §B1 reddens here instead of landing quietly.
-#
-# Deliberately broader than Test 18c's needle: 18c is keyed to the `${CLAUDE_PLUGIN_ROOT:-...}`
-# SYNTAX, so a bare `$(git rev-parse --show-toplevel)` with no `:-` arm — which is precisely
-# the shape §B1 proposes — passes it. Keying on stakes rather than syntax is the same
-# correction the CTO ruling made to 18c.
+# A disposition that is merely SATISFIED is not guarded, so this pins it. Deliberately broader
+# than 18c, which is keyed to the `${CLAUDE_PLUGIN_ROOT:-...}` SYNTAX and so cannot see a bare
+# `$(git rev-parse --show-toplevel)` — precisely the shape §B1 proposes.
 # ---------------------------------------------------------------------------
-
-# FENCE-SCOPED, and that scoping is load-bearing rather than tidiness. Prose in these very
-# files legitimately NAMES the construct while explaining why it was removed — the rejection
-# rationale added by this PR does exactly that. An unscoped grep flags the documentation of a
-# ban as a violation of it, which is the oracle-shadowing failure (A7) with the polarity
-# reversed: it does not go vacuous, it goes permanently and uninformatively red, and the
-# cheapest way to "fix" that is to delete the explanation. Only EXECUTABLE lines count.
-t21_exec_lines() {
-  awk '
-    /^[[:space:]]*```bash([[:space:]]|$)/ { in_fence = 1; next }
-    /^[[:space:]]*```[[:space:]]*$/       { in_fence = 0; next }
-    in_fence                              { print }
-  ' "$1"
-}
 t21_offenders=""
+t21_unclosed=""
 for gate_file in "${INCIDENT_SKILL}" "${LEGAL_SKILL}" "${LINEAR_SKILL}"; do
-  n=$(t21_exec_lines "${gate_file}" | grep -c 'git rev-parse' || true)
-  if [[ "${n}" -ne 0 ]]; then
-    t21_offenders="${t21_offenders} ${gate_file##*/skills/}(${n})"
+  if ! exec_lines "${gate_file}" >/dev/null 2>&1; then
+    t21_unclosed="${t21_unclosed} ${gate_file##*/skills/}"
+    continue
   fi
+  n=$(exec_lines "${gate_file}" | grep -c 'git rev-parse' || true)
+  [[ "${n}" -ne 0 ]] && t21_offenders="${t21_offenders} ${gate_file##*/skills/}(${n})"
 done
-# Anti-vacuity: the extractor must actually be seeing code. A scoping bug that yields an empty
-# stream would make the loop above pass unconditionally — the exact "search root does not
-# exist" false-PASS that Test 18c had to fix (A12).
-t21_control=0
+
+# ANTI-VACUITY: PER-FILE required membership, never a total count.
+#
+# A `>= N` total fails OPEN on shrinkage — measured, the previous floor was `>= 3` against a
+# real population of 15 (5 anchor lines per gate), so a one-character regression that blinded
+# every INDENTED fence dropped `legal-generate` to 0 of its 5 while the other two still
+# supplied 10, and B1's `case` planted in the blinded file stayed GREEN. That is finding A10
+# reintroduced — and required-membership was the fix already applied to Test 24's floor in the
+# same commit, and not carried across to its sibling.
+t21_blind=""
 for gate_file in "${INCIDENT_SKILL}" "${LEGAL_SKILL}" "${LINEAR_SKILL}"; do
-  t21_control=$(( t21_control + $(t21_exec_lines "${gate_file}" | grep -c 'CLAUDE_PLUGIN_ROOT' || true) ))
+  c=$(exec_lines "${gate_file}" 2>/dev/null | grep -c 'CLAUDE_PLUGIN_ROOT' || true)
+  [[ "${c}" -ge 1 ]] || t21_blind="${t21_blind} ${gate_file##*/skills/}"
 done
-if [[ "${t21_control}" -lt 3 ]]; then
-  echo "FAIL: Test 21: fence extractor returned ${t21_control} anchor lines across the 3 gates (expected >=3) — the scoping is broken, so the zero-offender result below would be vacuous"
+
+if [[ -n "${t21_unclosed}" ]]; then
+  echo "FAIL: Test 21: unterminated bash fence in:${t21_unclosed} — the extractor cannot bound the executable region, so every verdict over this file would be unreliable"
   FAIL=$((FAIL + 1))
-  t21_offenders="__EXTRACTOR_BROKEN__"
-fi
-if [[ -z "${t21_offenders}" ]]; then
-  echo "PASS: Test 21: all 3 secret gates carry ZERO git-root resolution (the B1 invariant is pinned, not merely satisfied)"
+elif [[ -n "${t21_blind}" ]]; then
+  echo "FAIL: Test 21: the fence extractor sees ZERO anchor lines in:${t21_blind} — it is blind to that gate's executable content, so a zero-offender verdict there is vacuous (per-file floor, not a total: a total lets one gate go dark while its siblings carry the count)"
+  FAIL=$((FAIL + 1))
+elif [[ -z "${t21_offenders}" ]]; then
+  echo "PASS: Test 21: all 3 secret gates carry ZERO git-root resolution in executable positions, and the extractor sees every gate (the B1 invariant is pinned, not merely satisfied)"
   PASS=$((PASS + 1))
 else
-  echo "FAIL: Test 21: git-root resolution reappeared at:${t21_offenders} — see specs/feat-one-shot-7450-git-root-anchor-untrusted/b1-disposition.md. If this is a deliberate reversal, that document must be superseded FIRST; a gate that resolves the git root is the #7450 vector itself"
+  echo "FAIL: Test 21: git-root resolution reappeared in an executable fence at:${t21_offenders} — see specs/feat-one-shot-7450-git-root-anchor-untrusted/b1-disposition.md. If this is a deliberate reversal, that document must be superseded FIRST; a gate that resolves the git root is the #7450 vector itself"
   FAIL=$((FAIL + 1))
 fi
 
 # ---------------------------------------------------------------------------
 # Test 22 — C10: every fail-closed halt on the anchor path emits a SOLEUR_* marker,
-# ON STDOUT.
+# ON STDOUT, FROM AN EXECUTABLE LINE.
 #
 # `go.md` and `sync.md` already emit one and `go.md` documents why: a refusal nobody can see
-# in telemetry is indistinguishable from a run that never happened
-# (hr-observability-as-plan-quality-gate, hr-no-dashboard-eyeball-pull-data-yourself).
+# in telemetry is indistinguishable from a run that never happened.
 #
-# The stdout half is not pedantry. The operator guidance goes to stderr by design; the MARKER
-# is the machine-readable half, and a marker redirected to stderr alongside the prose is the
-# silent-degradation shape this whole PR is about. So the marker line is asserted NOT to carry
-# a `>&2`.
+# THREE evasions this now closes, all measured green against the previous version:
+#   W1  the marker present only in PROSE while the real echo was silenced — the whole point
+#       of `exec_lines`.
+#   W2  `exit 2; } >&2` — the redirect on the BRACE GROUP rather than the marker line, so a
+#       substring test on the marker line alone sees nothing.
+#   W5  `>&"2"` and `1>&2` spellings.
+# And W3, the growth gap: the reason table is hardcoded, so a NEW fail-closed halt added with
+# no marker passed silently. The cardinality check below closes that — the number of halts and
+# the number of markers must agree per file.
 # ---------------------------------------------------------------------------
 t22_missing=""
 t22_on_stderr=""
-# gate file : marker prefix : the reasons that must each be present
-t22_specs="${INCIDENT_SKILL}:SOLEUR_INCIDENT_HALT:plugin-root-unverified,sentinel-unreadable,draft-alloc-failed
+t22_uncovered=""
+t22_specs="${INCIDENT_SKILL}:SOLEUR_INCIDENT_HALT:plugin-root-unverified,sentinel-unreadable,draft-alloc-failed,invalid-calendar-date,mttr-transposed,mttd-transposed
 ${LEGAL_SKILL}:SOLEUR_LEGAL_GENERATE_HALT:plugin-root-unverified,sentinel-unreadable,draft-alloc-failed
 ${LINEAR_SKILL}:SOLEUR_LINEAR_FETCH_HALT:plugin-root-unverified,scrubber-unreadable,scrubber-nonzero-exit,redaction-empty-output,redaction-ineffective"
 
@@ -974,23 +1029,62 @@ while IFS= read -r t22_spec; do
   t22_rest="${t22_spec#*:}"
   t22_prefix="${t22_rest%%:*}"
   t22_reasons="${t22_rest#*:}"
+  t22_exec="$(exec_lines "${t22_file}" 2>/dev/null)"
+
   while IFS= read -r t22_reason; do
     [[ -n "${t22_reason}" ]] || continue
-    t22_line="$(grep -F "${t22_prefix} reason=${t22_reason}" "${t22_file}" 2>/dev/null || true)"
+    # EXECUTABLE lines only, and the marker must be EMITTED (an `echo`/`printf` argument),
+    # not merely mentioned.
+    t22_line="$(printf '%s\n' "${t22_exec}" \
+      | grep -E "(echo|printf)[^|]*${t22_prefix} reason=${t22_reason}" || true)"
     if [[ -z "${t22_line}" ]]; then
       t22_missing="${t22_missing} ${t22_file##*/skills/}:${t22_reason}"
-    elif [[ "${t22_line}" == *'>&2'* ]]; then
-      t22_on_stderr="${t22_on_stderr} ${t22_file##*/skills/}:${t22_reason}"
+    else
+      # Inspect the MARKER'S OWN command segment, not the whole line. A single-line brace
+      # group puts the marker echo and the human-guidance echo (`… >&2`) on one line, so a
+      # line-wide test reports every correctly-written marker as stderr-bound — measured, it
+      # flagged all three date halts the moment they were marked. Cut from the marker's echo
+      # to the next `;`, which is where that command ends.
+      t22_seg="$(printf '%s' "${t22_line}" \
+        | sed -E "s/.*((echo|printf)[^;]*${t22_prefix} reason=${t22_reason}[^;]*).*/\\1/")"
+      # ...AND the enclosing brace group. `{ echo "<marker>"; …; exit 2; } >&2` redirects the
+      # WHOLE arm, including the marker, while leaving the marker's own segment clean — so a
+      # per-command test alone reports it as compliant. Measured: that mutation landed and the
+      # suite stayed green until this arm existed. Walk from the marker to the point where
+      # brace depth returns to zero and inspect the closing line.
+      t22_arm_redir="$(printf '%s\n' "${t22_exec}" | awk -v mark="${t22_prefix} reason=${t22_reason}" '
+        index($0, mark) { armed = 1 }
+        armed {
+          n = gsub(/\{/, "{"); m = gsub(/\}/, "}")
+          depth += n - m
+          if (depth <= 0 && /\}/) {
+            if ($0 ~ /\}[[:space:]]*[0-9]*>&[[:space:]]*"?2"?/) print "REDIR"
+            armed = 0
+          }
+        }')"
+      if printf '%s' "${t22_seg}" | grep -qE '>&[[:space:]]*"?2"?|[0-9]+>&' \
+         || [[ -n "${t22_arm_redir}" ]]; then
+        t22_on_stderr="${t22_on_stderr} ${t22_file##*/skills/}:${t22_reason}"
+      fi
     fi
   done < <(printf '%s\n' "${t22_reasons}" | tr ',' '\n')
+
+  # GROWTH FLOOR (W3): a new fail-closed halt must arrive with a marker. Count `exit 2`
+  # dispatches and distinct markers in the executable region and require agreement.
+  t22_exits=$(printf '%s\n' "${t22_exec}" | grep -c 'exit 2' || true)
+  t22_marks=$(printf '%s\n' "${t22_exec}" | grep -oE "${t22_prefix} reason=[a-z-]+" | sort -u | grep -c . || true)
+  if [[ "${t22_exits}" -gt "${t22_marks}" ]]; then
+    t22_uncovered="${t22_uncovered} ${t22_file##*/skills/}(${t22_exits} halts vs ${t22_marks} markers)"
+  fi
 done < <(printf '%s\n' "${t22_specs}")
 
-if [[ -z "${t22_missing}" && -z "${t22_on_stderr}" ]]; then
-  echo "PASS: Test 22: all 11 fail-closed halts across the 3 gates emit a distinct SOLEUR_*_HALT reason= marker on STDOUT"
+if [[ -z "${t22_missing}" && -z "${t22_on_stderr}" && -z "${t22_uncovered}" ]]; then
+  echo "PASS: Test 22: all 11 fail-closed halts across the 3 gates emit a distinct SOLEUR_*_HALT reason= marker, on STDOUT, from an executable line — and each gate's halt count is covered by its marker count"
   PASS=$((PASS + 1))
 else
-  [[ -n "${t22_missing}" ]] && echo "FAIL: Test 22: fail-closed halt with no SOLEUR_* telemetry marker at:${t22_missing} — a halt nobody can see in Better Stack is indistinguishable from a run that never happened (hr-observability-as-plan-quality-gate)"
-  [[ -n "${t22_on_stderr}" ]] && echo "FAIL: Test 22: SOLEUR_* marker redirected to stderr at:${t22_on_stderr} — the human guidance belongs on stderr, but the MARKER is the machine-readable half and must go to stdout to reach the telemetry mirror"
+  [[ -n "${t22_missing}" ]] && echo "FAIL: Test 22: fail-closed halt with no SOLEUR_* marker EMITTED from an executable line at:${t22_missing} — a marker that appears only in prose or a comment is documentation, and a halt nobody can see in telemetry is indistinguishable from a run that never happened"
+  [[ -n "${t22_on_stderr}" ]] && echo "FAIL: Test 22: SOLEUR_* marker redirected to stderr at:${t22_on_stderr} — the human guidance belongs on stderr, but the MARKER is the machine-readable half and must go to stdout (check the brace group too: \`exit 2; } >&2\` redirects the whole arm)"
+  [[ -n "${t22_uncovered}" ]] && echo "FAIL: Test 22: a gate has more fail-closed halts than distinct markers at:${t22_uncovered} — a new halt was added without one, and the reason table above cannot notice that on its own"
   FAIL=$((FAIL + 1))
 fi
 
@@ -998,26 +1092,35 @@ fi
 # Test 23 — C12/AC5d: the linear-fetch non-empty check is ASSERTED, not merely present.
 #
 # AC5d claimed "asserted by a test, not by inspection" and no test asserted it: deleting
-# `[ -n "$PERSIST_SAFE" ]` from the fence left the whole suite green. The E2E suite defines
-# its OWN PERSIST_SAFE local, which is why grepping the test corpus for the name looked like
-# coverage and was not.
+# `[ -n "$PERSIST_SAFE" ]` left the whole suite green.
 #
-# Empty output matters here specifically: a scrubber that emits nothing exits 0, so without
-# this check an EMPTY string is persisted as `persist_safe_summary` and the callers' absent-
-# artifact contract (which is what stops them substituting the bearer-URL-bearing
-# agent_context) never fires — the artifact is present, just worthless.
+# The first fix used `grep -A6` for the `exit 2`, and review defeated it two ways: a COMMENT
+# quoting the old arm satisfied the presence half (X1b), and `[ -n … ] || true` next to an
+# UNRELATED guard's `exit 2` satisfied the dispatch half (X2) — finding A2 reintroduced inside
+# the assertion whose own comment cites A2. A window cannot tell whose `exit 2` it found.
+#
+# So this reuses `preflight_halts_in_own_arm`'s technique, which already exists in this file
+# and solved exactly this: require the halt inside the check's OWN brace group, by brace depth.
 # ---------------------------------------------------------------------------
 t23_needle='[ -n "$PERSIST_SAFE" ]'
-t23_n=$(grep -Fc "${t23_needle}" "${LINEAR_SKILL}" 2>/dev/null || true)
-# The guard is only fail-closed if the non-empty test DISPATCHES to a halt. Presence alone
-# would be satisfied by `[ -n "$PERSIST_SAFE" ] || true`, which is the A2 defect this suite
-# already had to fix once at 18b.
-t23_dispatches=$(grep -A6 -F "${t23_needle}" "${LINEAR_SKILL}" 2>/dev/null | grep -c 'exit 2' || true)
-if [[ "${t23_n}" -ge 1 && "${t23_dispatches}" -ge 1 ]]; then
-  echo "PASS: Test 23: linear-fetch asserts non-empty redaction output AND dispatches to exit 2 (AC5d is now test-enforced)"
+t23_exec="$(exec_lines "${LINEAR_SKILL}" 2>/dev/null)"
+t23_n=$(printf '%s\n' "${t23_exec}" | grep -Fc "${t23_needle}" || true)
+t23_bound=$(printf '%s\n' "${t23_exec}" | awk -v needle="${t23_needle}" '
+  index($0, needle) { armed = 1 }
+  armed {
+    n = gsub(/\{/, "{"); m = gsub(/\}/, "}")
+    depth += n - m
+    if ($0 ~ /exit[[:space:]]+2/) { found = 1 }
+    if (armed && depth <= 0 && /\}/) { armed = 0 }
+  }
+  END { print (found ? 1 : 0) }
+')
+
+if [[ "${t23_n}" -ge 1 && "${t23_bound}" -eq 1 ]]; then
+  echo "PASS: Test 23: linear-fetch asserts non-empty redaction output on an executable line AND halts inside that check's OWN arm (AC5d is test-enforced)"
   PASS=$((PASS + 1))
 else
-  echo "FAIL: Test 23: the linear-fetch non-empty guard is missing or does not halt (present=${t23_n}, dispatches-to-exit-2=${t23_dispatches}) — empty scrubber output would be persisted as persist_safe_summary, and the callers' absent-artifact contract would never fire"
+  echo "FAIL: Test 23: the linear-fetch non-empty guard is missing from executable lines or does not halt in its own arm (present=${t23_n}, halts-in-own-arm=${t23_bound}) — empty scrubber output would be persisted as persist_safe_summary and the callers' absent-artifact contract, which is what stops them substituting the bearer-URL-bearing agent_context, would never fire"
   FAIL=$((FAIL + 1))
 fi
 
@@ -1134,9 +1237,29 @@ else
       # classification table). Measured: `flag-delete/scripts/delete.sh` names `flip.sh` twice
       # to edit a map entry inside it — a source edit, not a call — and flagging that would
       # teach the next reader that data roots need anchoring, which inverts the rule.
+      t24_is_exec=0
+      # (1) an explicit verb, or a prose "Run <path>" instruction
       printf '%s' "${t24_line}" \
         | grep -qE "(^|[[:space:];&|(])(bash|sh|bun|node|python3|python|exec|source|\.)[[:space:]]+[^[:space:]]*${t24_rel_re}|[Rr]un[[:space:]]+[^[:space:]]*${t24_rel_re}" \
-        || continue
+        && t24_is_exec=1
+      # (2) a BARE quoted-path invocation — `"${CLAUDE_PLUGIN_ROOT}/…/trigger.sh" --list`
+      # relies on the file's exec bit and carries no verb at all.
+      printf '%s' "${t24_line}" | grep -qE "^[[:space:]]*\"?[^[:space:]]*${t24_rel_re}\"?[[:space:]]" \
+        && t24_is_exec=1
+      # (3) ASSIGN-THEN-INVOKE. `TRIGGER="…/trigger.sh"` then `bash "$TRIGGER"` on another
+      # line is THE dominant shape in this corpus — it is why Guard 1 needs G2 at all ("the
+      # anchor lives in an assignment, so an operand rule certifies the invocation while the
+      # assignment points anywhere"). Requiring a verb on the same line missed every one of
+      # them: measured, reverting trigger-cron's anchor to the `:-` form SURVIVED, because
+      # all three of its sites are an assignment and two bare invocations.
+      # The variable must actually be INVOKED somewhere in the file — otherwise this would
+      # re-flag `flag-delete`'s `FLIP_SH`, which is only ever read as content (a data root).
+      t24_var="$(printf '%s' "${t24_line}" | sed -nE "s/^[[:space:]]*(readonly[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=.*${t24_rel_re}.*/\\2/p")"
+      if [[ -n "${t24_var}" ]] \
+         && grep -qE "(^|[[:space:];&|(])(bash|sh|bun|node|python3|python|exec|source|\.)[[:space:]]+\"?\\\$\{?${t24_var}\}?\"?|^[[:space:]]*\"\\\$\{?${t24_var}\}?\"[[:space:]]" "${t24_file}"; then
+        t24_is_exec=1
+      fi
+      [[ "${t24_is_exec}" -eq 1 ]] || continue
 
       # POSITIVE requirement — the invariant, not a list of bad spellings. TWO prefixes satisfy
       # it, and both must be accepted or the guard flags correct code (and gets weakened by

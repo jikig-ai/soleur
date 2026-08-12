@@ -68,18 +68,18 @@ Compute locally (FR7 LLM-trust boundary — never accept these from an LLM-emitt
   ```bash
   iso_to_epoch() {  # halt on a regex-valid-but-calendar-invalid date
     local epoch
-    date -u -d "$1" +%s 2>/dev/null || { echo "incident: not a valid calendar date: $1" >&2; exit 2; }
+    date -u -d "$1" +%s 2>/dev/null || { echo "SOLEUR_INCIDENT_HALT reason=invalid-calendar-date"; echo "incident: not a valid calendar date: $1" >&2; exit 2; }
   }
   if [[ -n "${recovery_at}" ]]; then
     mttr_secs=$(( $(iso_to_epoch "${recovery_at}") - $(iso_to_epoch "${detected_at}") ))
-    (( mttr_secs < 0 )) && { echo "incident: recovery_at precedes detected_at (transposed)" >&2; exit 2; }
+    (( mttr_secs < 0 )) && { echo "SOLEUR_INCIDENT_HALT reason=mttr-transposed"; echo "incident: recovery_at precedes detected_at (transposed)" >&2; exit 2; }
     MTTR=$(printf '%dh%dm' $(( mttr_secs / 3600 )) $(( (mttr_secs % 3600) / 60 )))
   else
     MTTR="TBD (status not resolved)"
   fi
   if [[ "${detection_method}" == "monitoring" && -n "${monitoring_detected_at}" ]]; then
     mttd_secs=$(( $(iso_to_epoch "${monitoring_detected_at}") - $(iso_to_epoch "${detected_at}") ))
-    (( mttd_secs < 0 )) && { echo "incident: monitoring_detected_at precedes detected_at (transposed)" >&2; exit 2; }
+    (( mttd_secs < 0 )) && { echo "SOLEUR_INCIDENT_HALT reason=mttd-transposed"; echo "incident: monitoring_detected_at precedes detected_at (transposed)" >&2; exit 2; }
     MTTD=$(printf '%dh%dm' $(( mttd_secs / 3600 )) $(( (mttd_secs % 3600) / 60 )))
   else
     MTTD="Unknown (external/manual report)"
