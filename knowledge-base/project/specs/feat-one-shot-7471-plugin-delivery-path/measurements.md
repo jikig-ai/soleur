@@ -244,3 +244,48 @@ Modest in absolute terms and worth documenting rather than automating away — b
 "removed the marketplace" does not mean "reclaimed the disk", and the same class explains the
 374 MiB `soleur.bak` orphan the issue reported. The reclaim is a manual `rm -rf` of the stale
 cache directory; there is no CLI verb for it.
+
+---
+
+## 1.2 / 1.3 — The migration shape: does the fix reach an EXISTING install?
+
+**Run 2026-08-12. Verdict: yes, and it keeps working. CPO blocking condition C1 is discharged.**
+
+Everything before this measured *fresh* installs. The control group proves keyless manifests update
+correctly when installed keyless **from the start** — but no existing install is in that state. Every
+one of them has a recorded `"version": "0.0.0-dev"` in `installed_plugins.json` meeting a manifest
+that no longer has the key. Until this run, P1 was **verified for new installs and merely asserted
+for upgrades**, and upgrades are the entire population.
+
+Fixture: a local git marketplace, plugin installed **with** the sentinel, then the key removed at
+source and the content changed — the exact transition this PR performs.
+
+| Stage | recorded `version` | cache dir | delivered content |
+|---|---|---|---|
+| **A** — installed with sentinel (pre-fix) | `0.0.0-dev` | `…/demo/0.0.0-dev` | generation-1 |
+| **B** — after `marketplace update` + `plugin update` | `fedc656ce6f5` | `…/demo/fedc656ce6f5` | **generation-2** |
+| **C** — a further commit, updated again | `6245ba0a3c94` | `…/demo/6245ba0a3c94` | **generation-3** |
+
+The CLI said it plainly at stage B:
+
+```
+✔ Plugin "demo" updated from 0.0.0-dev to fedc656ce6f5 … Restart to apply changes.
+```
+
+**Stage C is the one that could have been missed.** "Delivers once" would satisfy a naive check —
+the migration itself always looks like progress because the version string changes exactly once, from
+the constant to a SHA. Stage C proves the *steady state* works too: a second commit produced a second
+delivery. Without it, "the fix delivers" could have been literally true and useless.
+
+### Two costs this run also measured
+
+- **The orphaned cache directory is real.** `…/cache/mig/demo/0.0.0-dev` **survives** the migration
+  and is never collected — the same class as the ~9.6 MiB orphan in §1.6/2B.6 and the 374 MiB
+  `soleur.bak` in the issue. It belongs in the ADR's consequences, not discovered later.
+- **The restart requirement is in the CLI's own output**, not folklore. Documented in the runbook and
+  both READMEs.
+
+### Where identity lands
+
+`version` becomes a 12-character SHA prefix and `gitCommitSha` the full 40. Consistent with §1.9:
+the key's absence is what makes the identity string *vary*, which is what the comparator reads.
