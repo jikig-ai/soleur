@@ -1,370 +1,286 @@
 ---
-title: "Growth-attribution discriminator + delivery-probe first-tick grace"
+title: "Registry log-channel follow-ups: attribution lead, first-tick softening, stale-arm correction"
 date: 2026-08-12
 slug: feat-zot-gc-attribution-discriminator
 branch: feat-zot-gc-discriminator-probe-grace
 issue: 7456
-closes: 7456
+refs: [7456, 7341, 7455]
 lane: cross-domain
-type: feat
+type: fix
 domain: engineering
 priority: p3
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
-# Growth-attribution discriminator + delivery-probe first-tick grace
+# Registry log-channel follow-ups
+
+**[Rewritten 2026-08-13 after a five-agent plan-review panel.]** The previous revision proposed a
+standalone `scripts/zot-gc-attribution.sh` with an exit-1 stall verdict, a shared parse helper, and
+a clock-gated `awaiting_first_tick` verdict. The panel established that design was not defensible.
+The superseded plan is preserved in this file's git history; §Plan Review Findings records why.
 
 ## Overview
 
-Two deliverables against #7456, both unblocked by a delivery event that landed during the scoping
-session:
+Four small, verified fixes against #7456 item (b) and the delivery probe, all landing in files that
+already exist, are already tested, and are already scheduled:
 
-1. **`scripts/zot-gc-attribution.sh`** — a read-only discriminator that answers *why* the registry
-   store is growing, by pairing zot gc starts to completions **per repository** and counting
-   `PatchBlobUpload` orphan evidence.
-2. **A first-tick grace verdict on `scripts/followthroughs/zot-log-channel-7440.sh`** — the delivery
-   probe currently emits its escalate-immediately verdict against a host too young to have run a
-   shipper tick. Plus the test harness that probe ships without today.
+1. **Attribution lead** inside `zot-fill-rate-7341.sh`'s `FAIL)` arm — best-effort, informational,
+   structurally unable to change the exit code.
+2. **First-tick softening** on `zot-log-channel-7440.sh` — gated on the literal
+   `log_shipper_last_ok_age_s == "-1"`. No clock, no `dt` plumbing, no new verdict name.
+3. **Stale-arm correction** — the `not_delivered` arm still tells an operator to wait for step-6 of
+   an ordered path that closed on 2026-08-12.
+4. **`rc=3` credential message** stops being swallowed by `run_query()`, bounded for a public
+   comment.
 
-Items (a) root-fs LUKS and (c) rate-cap retune remain deferred on #7456 and are Non-Goals here.
+Plus the ADR-184 `## Consequences` correction and #7456's ADR citation.
 
-## Research Insights
+Items (a) root-fs LUKS (dated 2027-02-11) and (c) rate-cap retune remain on #7456, which this PR
+**does not close** (`Refs`, not `Closes`).
 
-### Premise Validation (Phase 0.6)
+## Plan Review Findings — why the previous design was cut
 
-| Cited | Claim in the tracker | Verified state |
-|---|---|---|
-| #7456 | work target | **OPEN** |
-| #7455 | sibling delivery tracker | **OPEN** — owned by a parallel session; untouched here |
-| #7341 | "wire to whichever criterion #7341 carries" | **OPEN**, and its criterion is now concrete — see below |
-| #7287 | "delivery rides step-6 `registry-host-replace` on the **open** ordered path" | **CLOSED** 2026-08-12T20:39Z, COMPLETED, no closing PR. Its closing comment records that the atomic 3-way recut replaced the host on 08-10, so *"ordered-path step 6 did not need a separate `registry-host-replace`"* |
-| #7440 / PR #7444 | shipper | **CLOSED / MERGED** 2026-08-12T19:38Z — two days *after* that host was born, so the shipper was committed and inert |
-| ADR-179 (cited by #7456) | "the shipper ADR" | **WRONG.** ADR-179 is `bare-plugin-root-anchor-for-customer-facing-executables`. The shipper ADR is **ADR-184**, cited correctly by #7455 |
-| `scripts/followthroughs/zot-log-channel-7440.sh` | exists | exists; **has no `.test.sh`** |
-| `apps/web-platform/infra/zot-log-shipper.test.sh` | test precedent | exists, 961 lines, wired into `.github/workflows/infra-validation.yml` |
+Five agents; every finding below independently verified against the code before acceptance.
 
-**Delivery is verified, not assumed.** A parallel session dispatched `registry_host_replace`
-(run 31639782781, success 20:54:12Z). The probe was then run directly:
+### The discriminator could never run
 
-- 20:56:32Z → `TRANSIENT: reason=delivered_but_silent` (the ACT-NOT-WAIT arm)
-- 20:58:45Z → `PASS: envelope=20 control=7 gc_start=1 gc_done=1 gc_blobs=1 patch_upload=0 dropped_rows=1`
+`scripts/sweep-followthroughs.sh:25` sets `SCRIPTS_ROOT="scripts/followthroughs"` and canonicalizes
+each directive's `script=` with `realpath`, rejecting anything outside. The previous plan placed the
+script outside that directory **and** cut the follow-through tracker, the Better Stack alarm, and
+the `workflow_dispatch` lever. Nothing could invoke it. Its Observability block claimed
+`alert_route: exit 1` while declaring `alert_target: none new`.
 
-No intervention occurred between those two readings. ADR-184's flip condition is "the **first PASS**"
-of that probe, so `adopting → accepted` is now earned — landed via **#7455**, not here.
+### Its headline verdict had three independent false-positive paths
 
-### Measured evidence-class shapes (this is what decides FR1)
+| Path | Mechanism |
+|---|---|
+| **Header injection** | `sanitize()` (`cloud-init-registry.yml:839`) strips only `"` and `\`, so `,` `:` `{` `}` survive. A request header rendering `message:executing gc … for /var/lib/zot/x/phantom` injects a phantom repo that never completes → stalled → exit 1. The producer's own `is_cap_exempt` comment requires matching the **parsed `message` field, never the whole line** (#7444 F-5), and C15 pins it for counts — extracting a *name* is strictly more exposed than counting. |
+| **Shipper-side row loss** | Cap-exempt rows have their **own** 17-per-tick ceiling; past it they drop. A `redact()` failure, a sanitize-to-empty, a POST "stop at the hole", or `cursor_invalidated` each removes a completion while its start survives — byte-indistinguishable from a stall. |
+| **`--limit` truncation** | `betterstack-query.sh` is `ORDER BY dt DESC LIMIT n` inside, `ASC` outside — it takes the **newest** rows. Over a ≥6h window the channel carries ~1/min liveness lines, so any plausible limit binds and drops oldest-first: starts vanish while completions remain. |
 
-Queried live against the warehouse rather than derived from the shipper's config:
+A probe whose stall verdict has three ways to lie, on the surface whose User-Brand Impact is *"a
+probe that cries wolf trains the operator to discount the only channel reporting on the fleet's sole
+container-image pull path"*, is self-refuting.
 
-| Class | Carries repository? | Rows / 3h |
-|---|---|---|
-| `executing gc of orphaned blobs for /var/lib/zot/<owner>/<repo>` | **yes** | 1 |
-| `gc successfully completed for /var/lib/zot/<owner>/<repo>` | **yes** | 1 |
-| `garbage collected blobs` | **no** — bare | 1 |
-| `PatchBlobUpload` | — | **0** |
+### The clock the design needed does not exist
 
-Two consequences:
+`decode_messages()` drops `dt` at hop one; the boot marker payload
+(`SOLEUR_ZOT_LOG_BOOT boot_id=… host=… shipper_cron=… journald_storage=…`) carries no timestamp; and
+`grep -c '\bdate\b|EPOCHSECONDS'` on the probe returns **0** — it reads no clock at all. The
+`indeterminate` rule, the span floor, and the whole grace arm were time arithmetic with no clock.
+Worse, the previous AC6 pinned a fixture to a fixed `dt`, so the assertion would **invert
+permanently** as the date advanced.
 
-- **Per-repository pairing is possible**, and it is exactly the zot#4235 signature #7341 names:
-  *"gc completes repeatedly for `soleur-inngest-bootstrap` and never for `soleur-web-platform`"*.
-  A **global** ratio would read ~50% on that failure and look partially healthy.
-- **`garbage collected blobs` cannot be a per-repo numerator** — it is bare. The spec listed it as
-  completion evidence; it is demoted to *reclaim* evidence. `PatchBlobUpload` at zero must read as
-  healthy, not as missing data.
+### A false premise, and my own error
 
-**The shipped payload is quote-stripped and colon-joined, not JSON.** Measured:
+I recorded *"`zot-log-channel-7440.sh` … has no `.test.sh`"*. It has
+`tests/scripts/test-zot-log-channel-probe.sh` — 497 lines, ~55 cases, registered at
+`scripts/test-all.sh:1053`, cited in the probe's own footer. My check was
+`ls scripts/followthroughs/zot-log-channel-7440.test.sh`: one of the repo's **two** test-naming
+conventions, read as absence. `scripts/test-all.sh:1042` carries the anchored instruction
+*"ONLY this fixture suite belongs in this file."* Four of five agents caught it.
 
-```
-SOLEUR_ZOT_LOG shipper=zot-log-shipper host=soleur-registry {time:2026-08-12T20:54:20.797245158Z,
-level:info,message:executing gc of orphaned blobs for /var/lib/zot/jikig-ai/soleur-web-platform,
-module:gc,caller:zotregistry.dev/zot/v2/pkg/storage/gc/gc.go:109,...}
-```
+Two further scope traps this closes: `scripts/lint-orphan-test-suites.sh` globs `scripts/*.test.sh`
+only, so a suite created under `scripts/followthroughs/` can be unregistered and stay green; and
+`scripts/lint-followthrough-varq-ban.sh` is followthroughs-only and non-recursive, so the previous
+AC11 was vacuous for a script at `scripts/`.
 
-`cloud-init-registry.yml`'s `JQ_TICK` ships `$m` — the whole journald `MESSAGE` — and `sanitize`
-strips `"` and `\`. So the parser must treat the inner payload as **text**; `fromjson` on it fails.
-(The outer Better Stack `raw` is separately double-encoded and still needs two decodes.)
+### My Cut List's justification was false
 
-Also observed, recorded but **not** concluded: gc *did* complete for `soleur-web-platform` on the
-fresh host. One cycle against a near-empty store is consistent with the upstream panic being
-content-dependent; it is not evidence the bug is gone.
-
-### Prior art that this plan builds on rather than re-derives
-
-- **`scripts/followthroughs/zot-fill-rate-7341.sh` already exists** and is #7341's enrolled close
-  criterion: it fits a slope over current-boot `pcent` samples, closes only when `pcent < 85` and
-  the trajectory does not reach 85 within 14 days, scopes to `boot_id`, requires a ≥24h span.
-  It is the **detector**. This plan's discriminator is the **attributor**. They are complementary.
-- **#7435 is a 14-defect taxonomy for this exact probe class**, same host, same channel, days old.
-  Every item below is imported as a design constraint, not rediscovered:
-  - **C2 (critical): an unanchored grep over a multiplexed stream is poisonable.** `--grep X`
-    compiles to `raw LIKE '%X%'` over a source every host multiplexes into; one GitHub comment
-    quoting a marker line flipped a measured `FAIL pcent=78` into `PASS pcent=6`. **Anchor on the
-    emission envelope.**
-  - Defect 3: a count floor with no **span** floor extrapolates jitter.
-  - Defect 5 + verification note: *"the fixture mirrored a bug, so it could not see it"* — the zot
-    fixture now emits **production-shaped double-encoded `raw`**; against the old bare-string form a
-    correctly hardened parser scored 3/11, so the bad fixture **blocked the fix**.
-  - Defect 9: the sweeper posts probe stdout back as a comment, which the next run can read as
-    input — self-poisoning.
-  - Plumbing: `2>/dev/null` destroyed `betterstack-query.sh`'s rc=3 credential message.
-    **The existing delivery probe does exactly this** on its query calls.
-  - **`scripts/test-all.sh` registration is by hand** — an unregistered suite never runs in CI,
-    *"making the anti-vacuity floors decoration."*
-- **`scripts/lib/zot-telemetry-parse.sh`** exists (`zot_trusted_region`, `zot_newest_boot`,
-  `zot_scope_to_boot`, `zot_nonsentinel_values`) precisely so consumers cannot drift on these
-  invariants; its header calls duplication *"a maintenance hazard."* #7435 records that
-  `zot_trusted_region` is a line-oriented `sed` that breaks on JSONEachRow (it removes the closing
-  brace; measured n=0 from 144 rows) and that **"a JSON-aware variant belongs in the library."**
-  This plan is the third consumer and ships that variant.
-
-### Property List (Phase 0.6b)
-
-- **P1** — When the registry store grows, the cause is attributable to *stalled per-repo gc* vs
-  *orphaned upload staging* vs *neither*, from telemetry alone.
-- **P2** — The delivery probe does not emit its escalate-immediately verdict during the
-  structurally expected pre-first-tick window.
-- **P3** — #7456 cites the correct ADR.
-
-### Cut List (Phase 0.6b)
-
-| Mechanism | Property it would buy | Why cut |
-|---|---|---|
-| A standing **follow-through tracker** for the discriminator | P1 | Follow-throughs are "wait for X, then close". gc health is a *standing* property with no close event, so the tracker would never close and would post a comment **per sweep forever**. Standing detection is already bought by `zot-fill-rate-7341.sh`. |
-| A **Better Stack standing alarm** on the ratio | P1 | The signal is *absence of a completion within a window* — an alert rule expresses that poorly, it cannot be exercised in CI, and it adds vendor config drift. |
-| **Extending the delivery probe** instead of a new script | P1 | Window classes are incompatible and the probe's own header forbids it: it is deliberately `--no-archive` on a 30m keyhole, and *"do not copy flags between the days-old and minutes-old cases."* |
-| `garbage collected blobs` as a **per-repo completion numerator** | P1 | **Measured bare** — carries no repository. Retained as reclaim evidence only. |
-| A new `workflow_dispatch` lever | P1 | The script reads the warehouse, not the host; it needs no host access and no gated vehicle. Add one only if a cadence proves necessary. |
-
-## Research Reconciliation — Spec vs. Codebase
-
-| Spec claim | Reality | Plan response |
-|---|---|---|
-| FR1: `gc successfully completed` **and** `garbage collected blobs` are completion evidence | `garbage collected blobs` is bare — no repo | FR1 revised: per-repo pairing uses `gc successfully completed for <path>` only; `garbage collected blobs` becomes reclaim evidence |
-| FR1 implies a single global ratio | The zot#4235 signature is **per-repository** | FR1 revised to per-repo pairing; a global ratio is explicitly insufficient |
-| FR5: judgements made "on the decoded object" | The inner payload is quote-stripped text, not JSON | FR5 revised: decode the outer `raw` twice, then parse the inner payload as **text** |
-| Spec is silent on where the discriminator lives | Follow-through shape does not fit (no close event) | New: `scripts/zot-gc-attribution.sh`, not under `followthroughs/` |
-| Spec is silent on a test harness for the delivery probe | **It has none** | New: `scripts/followthroughs/zot-log-channel-7440.test.sh` |
-| Spec is silent on the shared parse library | Exists, with a recorded JSON-aware gap | New: ship the envelope-anchored helper into `scripts/lib/zot-telemetry-parse.sh` |
+It read *"standing detection is already bought by `zot-fill-rate-7341.sh`."* That probe is a
+follow-through: its PASS **closes #7341** (`sweep-followthroughs.sh:203`, `:477`), and the sweeper
+lists `--state open`. Detection is engineered to self-terminate on the first healthy reading.
+Recorded as a successor issue rather than solved here.
 
 ## Implementation Phases
 
-### Phase 1 — Shared envelope-anchored parse helper (contract first)
+### Phase 1 — Attribution lead in the detector that already fires
 
-Add to `scripts/lib/zot-telemetry-parse.sh` a helper that takes raw JSONEachRow on stdin and emits
-only the **inner payloads of envelope-anchored rows**: double-decode `raw` → `.message`, then admit
-only lines whose decoded message starts with
-`SOLEUR_ZOT_LOG shipper=zot-log-shipper host=<host>`. Anchored at offset 0, positively.
+`scripts/followthroughs/zot-fill-rate-7341.sh`, `FAIL)` arm (`:262`). That arm already names both
+hypotheses (zot#4235, orphaned `.uploads/`) and names **no tool**. The same file already carries the
+precedent at `:125`:
 
-This is the C2 fix as a reusable primitive, and it is the JSON-aware variant #7435 says belongs
-here. It lands **before** its consumers so neither consumer duplicates the invariant.
+```
+echo "  Discriminator for producer-silent vs fresh-host vs creds: scripts/zot-restart-loop-alarm.sh"
+```
 
-Regex anchors must cover the **whole** token (defect 2: a character class not covering the whole
-token still matches the longest prefix).
+Append a best-effort attribution lead after the verdict is decided:
 
-### Phase 2 — `scripts/zot-gc-attribution.sh`
+- Query the envelope-anchored gc classes over the trailing window.
+- Print: gc starts, completions, **repositories with unmatched starts**, `PatchBlobUpload` count,
+  and the `SOLEUR_ZOT_LOG_DROPPED` count in the same window.
+- Frame every number as a **lead, not a verdict** — the drop count is printed precisely because
+  row loss is indistinguishable from a stall, so the operator sees the confound rather than a
+  confident wrong answer.
+- On any query error print `attribution_unavailable` and continue.
 
-Consumes the Phase 1 helper. Window ≥ 6h (default 24h), **archive arm ON** (no `--no-archive`).
+**Structural constraints (each closes a panel finding):**
 
-- Discover repositories from the rows; never from a hardcoded list.
-- Pair `executing gc of orphaned blobs for <path>` → `gc successfully completed for <path>` per
-  repository, within the window.
-- **Boundary handling:** a start whose completion would fall outside the window is `indeterminate`,
-  never `stalled`.
-- **Span floor:** refuse a verdict unless the window holds ≥ N gc periods of history (gc is
-  hourly). Zero rows and too-few-rows are distinct reasons.
-- Report `PatchBlobUpload` counts as independent orphan evidence; **zero is healthy**.
-- Do not swallow stderr on query calls — preserve `betterstack-query.sh` rc=3.
-- Exit contract: `0` PASS, `2` TRANSIENT with a distinct `reason=` per arm, `1` genuine regression
-  (a confirmed per-repo stall). `${VAR:?msg}` is banned (lint-enforced).
-- Redact the anchor in echoed content (defect 9) so stdout can never be re-read as input.
+- It runs **after** the verdict and **cannot** change the exit code (`|| true`, no `set -e` path).
+- Anchor with the trailing delimiter: `^SOLEUR_ZOT_LOG shipper=zot-log-shipper host=<host> ` —
+  the space is part of the contract (`zot-log-channel-7440.sh:166`), without which
+  `host=soleur-registry-2` matches.
+- Extract from the **parsed `message` field**, never the whole line (#7444 F-5), so a header-borne
+  `executing gc` cannot inject a repository.
+- Bound the printed output; this text is posted verbatim to a **public** issue comment.
 
-### Phase 3 — First-tick grace on the delivery probe
+### Phase 2 — First-tick softening (no clock)
 
-In `scripts/followthroughs/zot-log-channel-7440.sh`, between "delivery evidence present" and the
-`delivered_but_silent` emit, insert an `awaiting_first_tick` arm (still exit 2) when the shipper has
-provably never completed a tick **and** the host is inside the grace window.
+`scripts/followthroughs/zot-log-channel-7440.sh`. The `delivered_but_silent` arm already prints
+*"last_ok_age_s=-1: the shipper has never delivered a row, so this is a never-worked state, not a
+regression."* Promote that above the `THIS IS THE STATE THAT MEANS ACT, NOT WAIT` sentence and
+soften that sentence when the literal `-1` holds.
 
-Discriminators are already read by the probe: `log_shipper_last_ok_age_s == -1` (no row has ever
-shipped) and `log_shipper_post_fail == unknown` (state file unreadable). Boot recency comes from the
-boot-marker row's own timestamp.
+- Gate on the **literal string `-1`**, never on emptiness — C3b's fixture (`control_row_predelivery`)
+  has no `log_shipper_*` fields at all and asserts `delivered_but_silent`; reading absent as
+  "never ticked" reddens the merge-blocking shard.
+- No new verdict name, no exit-code change, no boot-recency read, no `dt` decode.
 
-**Grace derived, not magic:** the shipper cron is `4-59/5` (5-minute one-shot), so grace = 2 tick
-intervals = 10 minutes. State the derivation in the source.
+### Phase 3 — Stale-arm correction
 
-`delivered_but_silent` must still fire for a host past the grace window (TR3).
+The `not_delivered` arm (`:328`) and the header (`:16`) still read *"Delivery rides the step-6
+`registry-host-replace` of the **open** zot-pin ordered path."* #7287 closed 2026-08-12T20:39Z and
+the host has been replaced. An operator who has just dispatched a replace is currently told to wait
+for a step that no longer exists. Replace with the delivered state and the real remaining wait
+(the shipper's first `4-59/5` tick).
 
-### Phase 4 — Test harnesses
+### Phase 4 — `rc=3` credential message
 
-- `scripts/zot-gc-attribution.test.sh` — new.
-- `scripts/followthroughs/zot-log-channel-7440.test.sh` — new; the probe has none today.
+`run_query()` (`:140`) uses `2>/dev/null`, which destroys `betterstack-query.sh`'s rc=3 credential
+message — the likeliest first-run failure (#7435 plumbing finding). Capture and surface it, bounded
+by the sibling's form (`zot-fill-rate-7341.sh` uses `head -c 600 "$qerr"`) because this output
+reaches a public comment.
 
-Both follow `cpx22-invoice-reconcile-7431.test.sh`: stubs run **real `jq`**, and stubs **assert
-their argv** (without which dropping `--grep`, adding `--no-archive` or shrinking `--limit` all stay
-green while wedging the probe at TRANSIENT forever). Fixtures emit **production-shaped
-double-encoded `raw`** with the quote-stripped inner payload measured above
-(`cq-test-fixtures-synthesized-only`: values synthesized, shape measured).
+### Phase 5 — Tests, ADR, citation
 
-### Phase 5 — Registration, ADR, citation
-
-- Register both suites in `scripts/test-all.sh` via `run_suite` (by hand — an unregistered suite
-  never runs).
-- Amend **ADR-184**: its Consequences claims *"the gc start/complete ratio and `PatchBlobUpload`
-  counts are readable rather than sampled."* Refine with the measured shapes — per-repo pairing is
-  available on the start/complete pair; `garbage collected blobs` is bare; the shipped payload is
-  quote-stripped text. Record the `awaiting_first_tick` verdict.
+- Grace + stale-arm cases go into **`tests/scripts/test-zot-log-channel-probe.sh`** (existing);
+  raise its `>= 70` assertion floor. **No new suite, no new registration.**
+- Attribution-lead cases go into `scripts/followthroughs/zot-fill-rate-7341.test.sh` (existing,
+  20/20, registered at `scripts/test-all.sh:849`); raise its floor.
+- Write the failing cases **before** the edits (`cq-write-failing-tests-before` — the previous plan
+  inverted this).
+- **ADR-184:** correct `## Consequences` only. Its claim that the gc ratio and `PatchBlobUpload`
+  counts are "readable rather than sampled" is refined by measurement: per-repo pairing is available
+  on the start/complete pair; `garbage collected blobs` is **bare**; the payload is comma-separated
+  `key:value` with unescaped colons in values. **Do not touch the frontmatter `status:` or
+  `## Status flip condition`** — #7455 is amending exactly those concurrently, so the scope
+  restriction makes any conflict textual rather than semantic.
 - Correct #7456's ADR-179 → ADR-184 citation.
-
-## Files to Create
-
-- `scripts/zot-gc-attribution.sh`
-- `scripts/zot-gc-attribution.test.sh`
-- `scripts/followthroughs/zot-log-channel-7440.test.sh`
 
 ## Files to Edit
 
-- `scripts/lib/zot-telemetry-parse.sh` — envelope-anchored, JSON-aware helper
-- `scripts/followthroughs/zot-log-channel-7440.sh` — `awaiting_first_tick` arm; stop swallowing rc=3
-- `scripts/test-all.sh` — register two suites
+- `scripts/followthroughs/zot-fill-rate-7341.sh` — attribution lead in the `FAIL)` arm
+- `scripts/followthroughs/zot-fill-rate-7341.test.sh` — attribution cases, floor raised
+- `scripts/followthroughs/zot-log-channel-7440.sh` — softening, stale arm, rc=3
+- `tests/scripts/test-zot-log-channel-probe.sh` — softening + stale-arm cases, floor raised
 - `knowledge-base/engineering/architecture/decisions/ADR-184-registry-host-container-log-shipper.md`
+
+## Files to Create
+
+None. (The previous revision created three files; the panel established each was either duplicate,
+uninvokable, or unnecessary.)
 
 ## Open Code-Review Overlap
 
-**None.** Queried `gh issue list --label code-review --state open --limit 200` against each target
-path (`scripts/followthroughs/zot-log-channel-7440.sh`, `scripts/test-all.sh`,
-`scripts/lib/zot-telemetry-parse.sh`, `ADR-184`) — zero matches.
+**None.** `gh issue list --label code-review --state open --limit 200` against every target path
+returns zero matches.
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** a registry-host probe that cries wolf — either a
-false *"ACT, NOT WAIT"* on a healthy host, or a stall verdict that is a windowing artifact. Both
-train the operator to discount the only channel reporting on the fleet's sole container-image pull
-path.
+**If this lands broken, the user experiences:** a registry probe that either cries wolf on a healthy
+host or prints a confident wrong attribution during an incident.
 
-**If this leaks, the user's data is exposed via:** shipped rows echoed into a **public** GitHub
-comment by the sweeper. Mitigated by the shipper's own `redact()` and by counting-not-quoting; the
-discriminator reports counts and repository names, never raw log content.
+**If this leaks, the user's data is exposed via:** probe stdout posted verbatim to a **public**
+GitHub issue comment by the sweeper. Every phase that widens output (Phase 1's lead, Phase 4's
+stderr) is explicitly bounded for that reason.
 
-**Brand-survival threshold:** `single-user incident`. A discounted alarm on the sole pull path is a
-silent outage of every deploy.
+**Brand-survival threshold:** `single-user incident`.
 
 ## Architecture Decision (ADR/C4)
 
-### ADR
+**ADR:** amend ADR-184 `## Consequences` only (scope restriction above). No new ADR — this
+corrects a claim in an existing one.
 
-**Amend ADR-184** (no new ADR). Its Consequences section asserts the gc ratio and `PatchBlobUpload`
-counts are "readable"; the measurements refine that materially (per-repo pairing available; one
-class bare; payload is quote-stripped text). Also record the `awaiting_first_tick` verdict, since
-ADR-184 documents the probe's exit contract.
-
-### C4 views
-
-**No C4 impact**, on this enumeration — read against all three of `model.c4` (688 lines),
-`views.c4`, `spec.c4`:
-
-- **External human actors:** none added.
-- **External systems:** `betterstack` is already modeled, explicitly as a Logs warehouse that is
-  "ClickHouse-SQL-queryable" and "polled from GitHub Actions via `betterstack-query.sh` for … the
-  zot restart-loop recurrence alarm + follow-through soak probes". `zotRegistry`, `projectZot` and
-  `ghcr` are modeled; `betterstack`'s description already names the #7440/ADR-184 shipper edge.
-- **Containers / data stores:** none added.
-- **Access relationships:** none changed. The discriminator is a **new reader of an
-  already-modeled edge**.
-
-**Filed, not folded — two now-false claims in `zotRegistry`'s description**, both falsified by the
-2026-08-10 recut rather than by this change: (i) *"the LIVE host still runs v2.1.2 and will until
-the registry-host-replace apply fires"* — the observed digest is `95a837a0afac` (v2.1.20); (ii)
-*"The LIVE device is still plaintext ext4 … that vehicle shipped UNFIRED (#6929)"* — the recut fired
-and the volume is LUKS-encrypted. Kept out of scope because `model.c4` carries whole-file-count ACs
-that make unrelated edits regression-prone, and model accuracy is a different concern from probe
-logic (the #7435 precedent for exactly this split: *"scope discipline requires its own PR"*).
+**C4:** **no impact.** Read against `model.c4` (688 lines), `views.c4`, `spec.c4`. No external human
+actor, external system, container/data-store, or access relationship is added: `betterstack` is
+already modeled as a ClickHouse-queryable Logs warehouse "polled from GitHub Actions via
+`betterstack-query.sh` for … follow-through soak probes", and its description already names the
+#7440/ADR-184 shipper edge. Every change here is inside already-modeled scripts. (This conclusion
+held only *conditionally* in the previous revision, which would have added a CI vehicle; cutting the
+vehicle makes it unconditional.)
 
 ## Encryption Posture
 
-**Skipped** — introduces no persistent store and no new cross-component connection. The
-discriminator reads an existing channel through the existing `betterstack-query.sh` credential path.
+**Skipped** — no persistent store, no new cross-component connection.
 
 ## Guard Contract
 
-### Guard 1 — gc attribution discriminator
+### Guard 1 — the attribution lead cannot affect the verdict
 
-**Property.** For every repository that started a gc cycle inside the window, either a completion
-for **that same repository** is observed within the window, or that repository is reported stalled —
-except where the completion would fall outside the window, which is `indeterminate`.
+**Property.** For every input, the exit code of `zot-fill-rate-7341.sh` is identical with and
+without the attribution lead.
 
-**Assembly.** Every envelope-anchored row in the window whose decoded inner payload matches a gc
-evidence class. The chokepoint is the single Phase 1 decode-and-anchor helper; repositories are
-**discovered from the rows**, never enumerated in code, so the assembly is structural rather than a
-snapshot.
-
-**Mutation matrix.**
+**Assembly.** Every exit path of that script — the chokepoint is the single `case` on the computed
+verdict; the lead is appended strictly downstream of it.
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Add a start row for a **second, new** repository with no completion, after a compliant first repo | **RED** — stalled (catches a check that stops at the first member) |
-| 2 | Remove the envelope anchor so an unanchored/pasted row is admitted | **RED** — the C2 poisoning case |
-| 3 | Feed a window containing **zero** gc rows and let the probe exit 0 | **RED** — anti-vacuity: "0 repos checked" must never PASS |
-| 4 | Drop the span floor and feed one hour of history | **RED** — defect 3 |
-| 5 | Move a completion just outside the window boundary | **NOT red** — `indeterminate`, not stalled |
+| 1 | Make the attribution query fail (stub non-zero) | **exit code unchanged**; prints `attribution_unavailable` |
+| 2 | Make the attribution query hang/return garbage | **exit code unchanged** |
+| 3 | Remove the `|| true` guard so the lead can abort the script | **RED** |
+| 4 | Add a **second** verdict arm that also prints the lead, without the guard | **RED** (covers all arms, not the first) |
 
-### Guard 2 — delivery-probe first-tick grace
+### Guard 2 — the softening does not weaken escalation
 
-**Property.** A host that has provably never completed a shipper tick and is inside the grace window
-reports `awaiting_first_tick`; a host past the grace window with zero envelope rows still reports
-`delivered_but_silent`.
+**Property.** A host with delivery evidence, zero envelope rows, and `last_ok_age_s` **not** the
+literal `-1` still reports `delivered_but_silent` with its ACT-NOT-WAIT framing.
 
-**Assembly.** The probe's delivery-discrimination branch — **both** paths that can set
-`delivered=1` (`boot_marker`, and `reporter_carries_shipper_fields`) — plus the single verdict emit
-site.
-
-**Mutation matrix.**
+**Assembly.** Both paths that set `delivered=1` (`boot_marker`, `reporter_carries_shipper_fields`)
+and the single verdict emit site.
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Boot inside grace, `last_ok_age_s=-1` | `awaiting_first_tick`, **not** `delivered_but_silent` |
-| 2 | Boot **past** grace, zero envelope rows | **still** `delivered_but_silent` (grace must not weaken escalation) |
-| 3 | Delivery evidence via the **second** arm (`reporter_carries_shipper_fields`) with no grace handling | **RED** — covers both members, not just `boot_marker` |
-| 4 | Remove the grace check entirely | **RED** |
+| 1 | `last_ok_age_s` **absent** (C3b's `control_row_predelivery`) | **still** `delivered_but_silent` — not softened |
+| 2 | `last_ok_age_s=42` | **still** `delivered_but_silent` |
+| 3 | Soften on emptiness rather than the literal `-1` | **RED** (C3b reddens) |
+| 4 | Delivery evidence via the **second** arm with `-1` | softened — covers both members |
 
 ## Observability
 
 ```yaml
 liveness_signal:
-  what: envelope-anchored SOLEUR_ZOT_LOG rows in the Better Stack Logs warehouse
-  cadence: 5-minute shipper one-shot (cron 4-59/5); gc hourly
-  alert_target: none new — zot-fill-rate-7341.sh remains the standing detector on #7341
-  configured_in: apps/web-platform/infra/cloud-init-registry.yml (unchanged by this plan)
+  what: existing SOLEUR_ZOT_LOG / SOLEUR_ZOT_DISK channels — unchanged by this plan
+  cadence: shipper 5-minute one-shot (cron 4-59/5); sweeper daily 18:00 UTC
+  alert_target: unchanged — zot-fill-rate-7341.sh on #7341; no new route is claimed
+  configured_in: apps/web-platform/infra/cloud-init-registry.yml (untouched)
 error_reporting:
-  destination: stdout/stderr with a distinct reason= per arm; sweeper mirrors probe stdout
-  fail_loud: true — betterstack-query.sh rc=3 (credential fault) is preserved, not swallowed
+  destination: probe stdout/stderr, mirrored by the sweeper into a public issue comment
+  fail_loud: true — betterstack-query.sh rc=3 is surfaced (Phase 4), bounded to 600 bytes
 failure_modes:
-  - mode: per-repo gc stall (upstream zot#4235 signature)
-    detection: start without a same-repo completion inside a >=6h window
-    alert_route: exit 1 from zot-gc-attribution.sh
-  - mode: orphaned .uploads/ staging
-    detection: non-zero PatchBlobUpload counts
-    alert_route: reason=orphaned_upload_staging (exit 2), escalating on sustained counts
-  - mode: read path unavailable / credentials unset
-    detection: betterstack-query.sh non-zero rc surfaced verbatim
-    alert_route: reason=channel_dark or reason=query_failed (exit 2)
-  - mode: too little history to judge
-    detection: span floor unmet
-    alert_route: reason=below_span_floor (exit 2), never PASS
+  - mode: attribution query fails during an incident
+    detection: prints attribution_unavailable
+    alert_route: none — informational by construction; the verdict is unaffected
+  - mode: shipper never completes a first tick after a replace
+    detection: log_shipper_last_ok_age_s == -1 with delivery evidence present
+    alert_route: delivered_but_silent, softened framing (Phase 2)
+  - mode: query credentials unset
+    detection: betterstack-query.sh rc=3, no longer swallowed
+    alert_route: TRANSIENT with the credential message surfaced
 logs:
-  where: Better Stack Logs source 2457081 (ClickHouse-queryable)
-  retention: hot window ~40m; archive arm required for the >=6h window
+  where: Better Stack Logs source 2457081
+  retention: ~3 days; the attribution window must stay inside it
 discoverability_test:
-  command: bash scripts/zot-gc-attribution.sh
-  expected_output: "PASS: <n> repo(s) paired, 0 stalled, patch_upload=0"
-  credentials_required: "BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} — the property is a readback
-    through the warehouse, which by construction has no unauthenticated substitute"
+  command: bash scripts/followthroughs/zot-log-channel-7440.sh
+  expected_output: "PASS: envelope rows observed (envelope=<n> control=<n> ...)"
+  credentials_required: "BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} — a warehouse readback has no
+    unauthenticated substitute"
 ```
 
 ### Soak follow-through enrollment
 
-**Not required.** No acceptance criterion here is time-gated: every AC is decidable at merge against
-fixtures plus one live run. The standing post-deploy question ("does the store refill?") is already
-enrolled — `zot-fill-rate-7341.sh` on #7341, `earliest=2026-08-14`.
+**Not required.** No criterion here is time-gated. `zot-fill-rate-7341.sh` remains enrolled on
+#7341 (`earliest=2026-08-14`).
 
 ## Domain Review
 
@@ -372,83 +288,63 @@ enrolled — `zot-fill-rate-7341.sh` on #7341, `earliest=2026-08-14`.
 
 ### Engineering
 
-**Status:** reviewed (inline — this session's operating instructions forbid Agent-tool invocation
-unless the operator requests it; assessment performed against live telemetry and the ADR/producer
-sources cited throughout).
+**Status:** reviewed — five-agent panel (Kieran, architecture-strategist, spec-flow-analyzer,
+code-simplicity-reviewer, DHH), findings in §Plan Review Findings, all independently verified
+against the code before acceptance.
 
-**Assessment:** Internal observability tooling on an infra host. No user-facing or regulated
-surface, no new vendor, no new persistent store. The material risks are probe-correctness risks,
-which the Guard Contract and the #7435 defect taxonomy address directly.
+**Assessment:** Internal observability on an infra host. The panel's decisive contribution was
+establishing that the previously planned mechanism was both uninvokable and unable to support its
+own headline verdict; scope is now four small edits in already-tested, already-scheduled files.
 
 ## Acceptance Criteria
 
 ### Pre-merge
 
-- **AC1** — Against fixtures, a repo with a start and no same-repo completion reports **stalled**;
-  a repo with a paired start/completion reports **healthy**. Distinct verdicts.
-- **AC2** — A start within one gc period of the window edge reports `indeterminate`, not stalled.
-- **AC3** — A window with zero gc rows exits 2 with a distinct reason; it never exits 0.
-- **AC4** — An unanchored row (a pasted marker line, C2 shape) is **not** admitted; fixtures include
-  a contaminating row and the verdict is unchanged by it.
-- **AC5** — Fixtures emit production-shaped **double-encoded `raw`** with a quote-stripped inner
-  payload; a bare-string fixture form is not used anywhere.
-- **AC6** — Replaying the observed 20:56Z state (boot marker present, `last_ok_age_s=-1`,
-  `post_fail=unknown`, boot < 10 min old) through the patched delivery probe yields
-  `awaiting_first_tick`.
-- **AC7** — Replaying a post-grace silent host still yields `delivered_but_silent`.
-- **AC8** — Both new suites are registered in `scripts/test-all.sh` via `run_suite`, and
-  `grep -c 'run_suite "scripts/zot-gc-attribution"' scripts/test-all.sh` returns 1.
-- **AC9** — Each test stub asserts its argv (flags `--since`, `--limit`, `--grep`, and the
-  presence/absence of `--no-archive`).
-- **AC10** — `shellcheck` clean on all four scripts (bash-only diff).
-- **AC11** — `bash scripts/lint-followthrough-varq-ban.sh` passes; no `${VAR:?}` in either probe.
-- **AC12** — The gc discriminator does **not** pass `--no-archive` (opposite window class from the
-  delivery probe); asserted by the argv stub.
-- **AC13** — ADR-184 amended: Consequences reflect the measured class shapes, and
-  `awaiting_first_tick` is recorded.
-- **AC14** — Full suite green via `bash scripts/test-all.sh`.
+- **AC1** — With the attribution lead stubbed to fail, `zot-fill-rate-7341.sh` returns the same exit
+  code as without it, for every verdict arm.
+- **AC2** — The lead prints the `SOLEUR_ZOT_LOG_DROPPED` count alongside the gc counts, so row loss
+  is visible next to any unmatched start.
+- **AC3** — The lead's row matching uses the envelope anchor **including the trailing space**, and
+  extracts from the parsed `message` field; a fixture with a header-borne `executing gc` injects no
+  repository.
+- **AC4** — A host with `last_ok_age_s` absent still reports `delivered_but_silent` (C3b preserved).
+- **AC5** — A host with the literal `last_ok_age_s=-1` reports the softened framing, same exit code.
+- **AC6** — The `not_delivered` arm no longer references an open ordered path or step-6.
+- **AC7** — `run_query()` surfaces `betterstack-query.sh` rc=3, bounded to 600 bytes.
+- **AC8** — No new test file and no new `run_suite` registration:
+  `git status --porcelain | grep -c '^A.*\.test\.sh'` returns 0, and `scripts/test-all.sh` is
+  unchanged except for assertion floors.
+- **AC9** — Assertion floors raised in both existing suites; both suites green.
+- **AC10** — `shellcheck` clean on both edited probes and both edited suites.
+- **AC11** — ADR-184's frontmatter `status:` and `## Status flip condition` are byte-identical to
+  `origin/main` (the #7455 conflict guard).
+- **AC12** — `bash scripts/test-all.sh` green.
 
 ### Post-merge
 
-- **AC15** — `bash scripts/followthroughs/zot-log-channel-7440.sh` against live production still
-  returns PASS (the channel is live as of 20:58Z 2026-08-12).
-- **AC16** — `bash scripts/zot-gc-attribution.sh` returns a real verdict against live production
-  with credentials from Doppler `prd_terraform`.
-- **AC17** — #7456's ADR-179 citation corrected to ADR-184.
+- **AC13** — #7456's ADR-179 citation corrected to ADR-184.
+- **AC14** — Successor issues filed (below).
 
-## Test Scenarios
+## Successor Issues to File
 
-Framework: `bash` `.test.sh` harnesses (the convention for `scripts/followthroughs/**`, registered
-by hand in `scripts/test-all.sh`). Not bats — not installed.
-
-1. Paired start/completion, single repo → PASS.
-2. Start with no same-repo completion → exit 1, names the repo.
-3. Two repos, one paired and one not → exit 1 (the second-member case).
-4. Completion outside the window → `indeterminate`.
-5. Zero gc rows → exit 2, `reason` distinct from too-few-rows.
-6. Span floor unmet → exit 2, `reason=below_span_floor`.
-7. Contaminating unanchored row present → verdict unchanged.
-8. `PatchBlobUpload` non-zero → orphan evidence reported.
-9. `betterstack-query.sh` rc=3 → surfaced verbatim, exit 2, not conflated with "no rows".
-10. Delivery probe: boot inside grace + `last_ok_age_s=-1` → `awaiting_first_tick`.
-11. Delivery probe: boot past grace, zero envelope rows → `delivered_but_silent`.
-12. Delivery probe: delivery evidence via `reporter_carries_shipper_fields` → grace still applies.
-
-## Risks & Mitigations
-
-| Risk | Mitigation |
-|---|---|
-| Editing the delivery probe destabilises #7455, which a parallel session is closing | No open PR touches the file (verified). Scope limited to inserting one arm ahead of an existing emit; TR3 requires the genuine escalation still fire. Coordinate before merge. |
-| The 6h/24h window plus archive arm adds an S3 failure mode | Distinct `reason=` for query failure; the probe never PASSes on a failed read. Sibling `zot-inventory-marker-7278.sh` already runs 7d with the archive arm. |
-| gc log wording changes on a future zot pin | Anchored on `message:` prefixes that are also the shipper's own cap-exempt keys, so drift breaks both together and is caught by the shipper's suite. |
-| One gc cycle on a near-empty store is not evidence the upstream bug is gone | Explicitly recorded as an observation, not a conclusion. The discriminator is forward-looking. |
+1. **Rate-cap retune (c) needs a trigger.** #7456 keeps the item; nothing schedules a read. The
+   delivery probe prints `dropped_rows=N` with no threshold. File with the drop-count query in the
+   body and a date.
+2. **Standing detection expires when #7341 closes.** `zot-fill-rate-7341.sh` PASS closes the issue
+   and the sweeper lists `--state open`; the only remaining backstop is the ≥85% absence heartbeat,
+   which is the incident rather than a leading indicator.
+3. **Two false claims in `model.c4`'s `zotRegistry` description** — "the LIVE host still runs
+   v2.1.2" (observed digest `95a837a0afac` = v2.1.20) and "the LIVE device is still plaintext ext4
+   … vehicle shipped UNFIRED" (the recut fired 2026-08-10). Separate PR: that file carries
+   whole-file-count ACs.
+4. **`scripts/followthroughs/*.test.sh` is invisible to `lint-orphan-test-suites.sh`**, which globs
+   `scripts/*.test.sh` only — a suite there can be created, never registered, and stay green.
 
 ## Alternative Approaches Considered
 
 | Approach | Verdict |
 |---|---|
-| Extend `zot-log-channel-7440.sh` to compute the ratio | **Rejected** — incompatible window class; the probe's own header forbids copying flags between them. |
-| Enroll the discriminator as a follow-through on its own tracker | **Rejected** — no close event; would post a comment per sweep forever. |
-| Better Stack native alert on the ratio | **Rejected** — absence-within-window is poorly expressible, untestable in CI, adds vendor drift. |
-| Global (not per-repo) gc ratio | **Rejected** — reads ~50% on the exact zot#4235 signature and looks partially healthy. |
-| Couple the discriminator into `zot-fill-rate-7341.sh` | **Rejected** — that probe is #7341's live close criterion; destabilising it to add attribution trades a working detector for a nicety. Wire by reference instead. |
+| Standalone `scripts/zot-gc-attribution.sh` with an exit-1 stall verdict | **Rejected** — uninvokable (sweeper path restriction), and the verdict had three independent false-positive paths. §Plan Review Findings. |
+| `awaiting_first_tick` as a distinct clock-gated verdict | **Rejected** — no clock exists on that path; same exit code either way; the automated caller samples the 10-minute window ~0.7% of the time. |
+| Shared parse helper in `scripts/lib/zot-telemetry-parse.sh` | **Rejected** — one consumer, a different stream from the library's two `SOLEUR_ZOT_DISK` consumers, and its spec omitted the anchor's trailing delimiter. |
+| A dispatch-only workflow on the #7343 shape | **Deferred** — a real vehicle, but it buys standing attribution the inline lead already provides at the moment of failure. Revisit via successor issue 2. |
