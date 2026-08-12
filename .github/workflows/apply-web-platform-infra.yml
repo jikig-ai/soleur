@@ -573,6 +573,9 @@ jobs:
               -target=doppler_secret.cf_api_token_dns_edit \
               -target=betteruptime_heartbeat.web_zot_consumer \
               -target=betteruptime_heartbeat.web_nic_guard \
+              -target=betteruptime_heartbeat.inngest_consumer \
+              -target=doppler_secret.inngest_consumer_url \
+              -target=terraform_data.inngest_consumer_probe_install \
               -target=doppler_secret.web_zot_consumer_url \
               -target=doppler_secret.web_nic_guard_url \
               -target=doppler_service_token.web_probes \
@@ -1038,14 +1041,22 @@ jobs:
               fi
             done
             # No `up` in time: roll back to paused BEFORE the first absence alert, then fail loud.
+            # Returns 2, NOT 1, and the distinction is load-bearing for exactly one caller. Every
+            # other non-zero exit from this function ("GET failed", "PATCH failed") means the gate
+            # could not do its job. THIS one means the gate worked and the FEEDER is not feeding —
+            # an assertion about the monitored system, not about the arming. Callers whose feeder
+            # is expected to be healthy still treat it as fatal (`|| rc=1` catches any non-zero);
+            # the inngest-consumer caller below distinguishes it, because its feeder is knowingly
+            # dark. The rollback is unconditional in both cases: this function NEVER leaves an
+            # unpaused-and-unfed monitor behind, which is the property the softer caller relies on.
             hb_patch_paused "$id" true || echo "::error::${label}: rollback PATCH paused=true ALSO failed — the monitor is unpaused-and-unfed; investigate immediately."
-            echo "::error::${label}: status never reached 'up' within ${deadline}s (probe timer never pinged) — ROLLED BACK to paused and FAILING the apply. A green-but-inert monitor is the #6400 shape this gate exists to prevent. Investigate: is the web-1 timer installed + the private-net path healthy?"
-            return 1
+            echo "::error::${label}: status never reached 'up' within ${deadline}s (probe timer never pinged) — ROLLED BACK to paused. A green-but-inert monitor is the #6400 shape this gate exists to prevent. Investigate: is the web-1 timer installed + the private-net path healthy?"
+            return 2
           }
 
           rc=0
           # deadline = period + grace − 10 (roll back just before the first absence alert):
-          # zot 180+60−10, nic-guard 360+120−10, git-data 60+180−10.
+          # zot 180+60−10, nic-guard 360+120−10, git-data 60+180−10, inngest-consumer 180+60−10.
           arm_one 'betteruptime_heartbeat.web_zot_consumer["web-1"]' 'web-zot-consumer (web-1)' 230 || rc=1
           arm_one 'betteruptime_heartbeat.web_nic_guard["web-1"]'    'web-nic-guard (web-1)'    470 || rc=1
           # (#6459/ADR-143) web-2's per-host heartbeats are born `paused` (web-probe.tf
@@ -1056,6 +1067,36 @@ jobs:
           arm_one 'betteruptime_heartbeat.web_zot_consumer["web-2"]' 'web-zot-consumer (web-2)' 230 || rc=1
           arm_one 'betteruptime_heartbeat.web_nic_guard["web-2"]'    'web-nic-guard (web-2)'    470 || rc=1
           arm_one 'betteruptime_heartbeat.git_data_prd'              'git-data-prd'             230 || rc=1
+
+          # (#7228) inngest-consumer — the ONE caller that distinguishes rc=2 (see arm_one's
+          # terminal branch). Its feeder is inngest-consumer-probe.sh on web-1, which pings only
+          # after reading a NON-EMPTY function registry out of 10.0.1.40:8288. That host has not
+          # bound :8288 since 2026-07-30, and THIS PR DOES NOT FIX THAT — the fix needs
+          # `apply_target=inngest-host-replace` plus a cutover window, both deferred to numbered
+          # issues. So the probe is correctly SUPPRESSING, no beat can land, and arming hard here
+          # would red the infra apply on EVERY merge for the whole deferral window.
+          #
+          # This is not the "best-effort status" anti-pattern the block comment above rejects, and
+          # the difference is that the softness is self-clearing rather than permanent: arm_one
+          # returns 0 via its `already armed (status=…)` branch once the monitor is up, and
+          # ignore_changes=[paused] keeps it that way, so the FIRST apply after 10.0.1.40 actually
+          # serves arms it hard and every later apply is a no-op. The rollback-to-paused inside
+          # arm_one still runs, so we never leave an unpaused-and-unfed monitor. What we are
+          # declining to do is fail an apply because a KNOWN, TRACKED, OPEN outage is still open.
+          #
+          # The plan's AC13 ("a real beat is measured and the monitor is PATCHed unpaused") is
+          # therefore NOT satisfiable at merge for this heartbeat, and saying so is the point:
+          # arming it is a closing condition of the cutover issue, not of this PR. The probe's
+          # fault channel (vector Source 4, SyslogIdentifier=inngest-consumer-probe) is live from
+          # merge regardless, so the outage stays observable off-box the whole time — which is
+          # what distinguishes this from #6537's "shipped inert and forgotten for nine days".
+          arc=0
+          arm_one 'betteruptime_heartbeat.inngest_consumer' 'inngest-consumer (web-1)' 230 || arc=$?
+          if [[ "$arc" -eq 2 ]]; then
+            echo "::warning::inngest-consumer: no beat within 230s; monitor rolled back to paused. This is the EXPECTED state while the 10.0.1.40 bind failure (#7228) is open — the consumer probe suppresses its ping by design when the dedicated host serves nothing. It arms automatically on the first apply after that host serves. If #7228 is CLOSED and you are still seeing this, the probe or the private-net path is broken: check 'systemctl list-timers inngest-consumer-probe.timer' on web-1 and query SyslogIdentifier=inngest-consumer-probe in Better Stack for the classification."
+          elif [[ "$arc" -ne 0 ]]; then
+            rc=1
+          fi
           exit "$rc"
 
       - name: Tear down cloudflared SSH bridge

@@ -122,6 +122,17 @@ _flip_transition_dt() {
     --grep '"reason":"dbsize-nonzero"' \
     --grep '"reason":"flushall-failed"' \
     --grep '"reason":"refuse-rearm-after-done"' \
+    --grep '"reason":"latch-unrecordable"' \
+    `# --- #7228: the probe-derived done refusals. These fire on the path where start_server` \
+    `# SUCCEEDED and the host then failed to serve — i.e. squarely inside the coexistence` \
+    `# region, which is exactly what this anchor must not start after. Omitting them would` \
+    `# return a LATER row and narrow the window, the unsafe direction. A cross-file parity` \
+    `# test pins this set against the emitter, so a new reason without an entry here reds.` \
+    --grep '"reason":"verify-health"' \
+    --grep '"reason":"verify-registry-empty"' \
+    --grep '"reason":"verify-registry-unreadable"' \
+    --grep '"reason":"verify-owner-unrecordable"' \
+    --grep '"reason":"verify-unknown"' \
     --limit "$limit") || rc=$?
   if [[ "$rc" -ne 0 ]]; then
     FSM_FAIL_REASON="query-failed rc=$rc"
@@ -1078,6 +1089,15 @@ case "$OP" in
     echo "::notice::op=arm: G4 wrote INNGEST_POSTGRES_URI to soleur-inngest/prd (value not echoed)"
     printf '%s' "$HB" | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_HEARTBEAT_URL -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=arm: G4 — writing INNGEST_HEARTBEAT_URL to soleur-inngest/prd FAILED. armed NOT written. Job aborts (no value echoed)."; exit 1; }
     echo "::notice::op=arm: G4 wrote INNGEST_HEARTBEAT_URL to soleur-inngest/prd (value not echoed)"
+    # #7228: op=arm deliberately does NOT touch betteruptime_heartbeat.inngest_consumer, the
+    # consumer-side monitor its symmetric op=rollback pauses. Unpausing here would arm a monitor
+    # BEFORE the FSM has run, i.e. before any beat exists — the green-but-inert state ADR-117
+    # forbids and #6537 spent nine days in. The ONLY unpause path is the measured-beat arm gate in
+    # apply-web-platform-infra.yml, which PATCHes paused=false, polls for a REAL beat, and rolls
+    # back to paused if none lands. It is self-clearing: the first apply after this host actually
+    # serves will arm it. Nothing to do here — stated because the ASYMMETRY with op=rollback is
+    # deliberate and a future edit "restoring symmetry" would reintroduce the inert monitor.
+    echo "::notice::op=arm: consumer heartbeat left PAUSED by design — the ADR-117 measured-beat gate arms it on the first apply after the host serves (never armed ahead of a real beat)."
 
     # G5 — arm LAST. The enabled 30s on-host .timer picks up `armed` and drives the FSM
     # armed -> flipping -> flushed -> done (ADR-100 Decision 6a). `armed` is a literal, not a
@@ -1537,6 +1557,58 @@ case "$OP" in
       echo "::warning::op=rollback: could not delete INNGEST_HEARTBEAT_URL from soleur-inngest/prd (already absent, or a transient Doppler error: ${ERR_TAIL:-<no stderr>}). NOT blocking the web re-enable. If a stale URL persists the dedicated host may remain a second heartbeat pusher (monitor false-green) — re-dispatch op=rollback, or verify via cat-deploy-state.sh inngest_heartbeat_dark_arm."
     fi
 
+    # ---- #7228: PAUSE the consumer heartbeat, the exact inverse of the delete above --------
+    # THE FALSE PAGE THIS PREVENTS. betteruptime_heartbeat.inngest_consumer (inngest.tf) is fed by
+    # inngest-consumer-probe.timer on the WEB host, which pings ONLY while 10.0.1.40 serves a
+    # non-empty registry and SUPPRESSES otherwise, so that absence alarms. That is exactly the
+    # property that makes it detect #7228 — and exactly why a DELIBERATE rollback trips it: the
+    # rollback's whole purpose is to stop the dedicated scheduler, the probe correctly suppresses,
+    # and ~4 minutes later (period 180 + grace 60) the operator is paged for a state they just
+    # asked for. A monitor that pages on intended operator actions is one the operator learns to
+    # ignore, which is how the NEXT real outage goes unnoticed.
+    #
+    # Symmetric to the URL delete above: that one removes the dedicated host's pusher for the
+    # SHARED monitor; this one quiesces the monitor whose feeder the rollback has just silenced.
+    #
+    # PAUSE, never delete: the ADR-117 measured-beat arm gate in apply-web-platform-infra.yml
+    # re-arms it automatically on the first apply after the host serves again, and it gates on a
+    # live `status=="paused"`. Deleting the resource would instead force a terraform recreate and
+    # mint a NEW url, stranding the one already in Doppler under ignore_changes=[value].
+    #
+    # op=arm deliberately does NOT unpause. ADR-117's whole rule is that a monitor is unpaused
+    # only after a REAL beat has been measured; arming it here — before the FSM has even run —
+    # would create precisely the green-but-inert monitor #6537 spent nine days as.
+    #
+    # Resolved BY NAME rather than from an id output: the name is pinned in inngest.tf, and a
+    # name lookup keeps working across a terraform recreate that would change the id. Fail-open
+    # with a WARN, matching the delete above — a monitor left un-paused pages the operator, which
+    # is strictly less severe than withholding the safety-critical web re-enable below.
+    # SCOPED explicitly. This was the only Doppler read in the file with no -p/-c, so it depended
+    # on ambient DOPPLER_PROJECT/DOPPLER_CONFIG that the workflow env map does not document —
+    # while the warning below asserts "unreadable from prd_terraform". Fail-open is correct here
+    # (a missed pause pages the operator; blocking would withhold the safety-critical web
+    # re-enable), but the unscoped read made that the LIKELY path rather than the exceptional one.
+    BS_API=$(doppler secrets get BETTERSTACK_API_TOKEN -p soleur -c prd_terraform --plain 2>/dev/null || true)
+    # Mask only a value that exists: an unconditional add-mask on an empty read emits a bare
+    # `::add-mask::`, which is noise in the log and masks nothing.
+    [[ -n "$BS_API" ]] && printf '::add-mask::%s\n' "$BS_API"
+    if [[ -z "$BS_API" ]]; then
+      echo "::warning::op=rollback: BETTERSTACK_API_TOKEN unreadable from prd_terraform — NOT pausing the consumer heartbeat. It will alarm ~4min after the dedicated scheduler stops, for a state this rollback created on purpose. Pause 'soleur-inngest-consumer-prd' manually if it pages, or re-dispatch once the token reads."
+    else
+      HB_ID=$(curl -fsS --max-time 20 -H "Authorization: Bearer $BS_API" \
+        'https://uptime.betterstack.com/api/v2/heartbeats?per_page=250' 2>/dev/null \
+        | jq -r '.data[] | select(.attributes.name == "soleur-inngest-consumer-prd") | .id' 2>/dev/null | head -1 || true)
+      if [[ -z "$HB_ID" ]]; then
+        echo "::warning::op=rollback: could not resolve the 'soleur-inngest-consumer-prd' heartbeat id from the Better Stack API — NOT pausing it. It will alarm ~4min after the dedicated scheduler stops. NOT blocking the web re-enable."
+      elif curl -fsS --max-time 20 -X PATCH -H "Authorization: Bearer $BS_API" -H 'Content-Type: application/json' \
+             --data-binary '{"paused":true}' \
+             "https://uptime.betterstack.com/api/v2/heartbeats/$HB_ID" >/dev/null 2>&1; then
+        echo "::notice::op=rollback: paused the consumer heartbeat (soleur-inngest-consumer-prd) — its feeder is deliberately silenced by this rollback, so pausing prevents a page for an intended state. The ADR-117 measured-beat arm gate re-arms it on the first apply after the host serves again."
+      else
+        echo "::warning::op=rollback: PATCH paused=true on the consumer heartbeat FAILED. It will alarm ~4min after the dedicated scheduler stops, for a state this rollback created on purpose. NOT blocking the web re-enable; pause 'soleur-inngest-consumer-prd' or re-dispatch op=rollback."
+      fi
+    fi
+
     # ---- Half (B): the web re-enable + restart fan-out (the pre-#6369 behaviour).
     echo "::notice::rollback: re-enabling inngest across host-set [$CUTOVER_HOSTS] (${#HOSTS[@]} host(s)) — reverse of 2.2 quiesce (P1-13)"
     # The reverse of 2.2 quiesce is now a SINGLE no-SSH `enable inngest _ _` verb
@@ -1620,6 +1692,55 @@ case "$OP" in
     # web-2 is ACTed by the fan-out but its verdict is acceptance-only (DI-C3, same
     # honesty as quiesce) — the LB-reachable host is the only one CI positively verified.
     echo "::notice::rollback complete (LB-reachable host verified enabled via deploy-status). SCOPE (DI-C3): web-2 is re-enabled by the fan-out but not individually VERIFIED here — confirm web-2 via its freeze/recreate lifecycle."
+    ;;
+
+  resume)
+    # --- #7228: the POST-FLUSH re-entry, and the ONLY recovery the flip guard names -----------
+    # WHY THIS VERB HAD TO EXIST. inngest-server-flip-guard.sh refuses a prod start when the flag
+    # is `done` and this host carries no done-owner marker — the inherited-`done` case, i.e. every
+    # REPLACED host. Its refusal message prescribes INNGEST_CUTOVER_FLIP=flushed. Nothing wrote
+    # that value: op=arm writes `armed`, op=rollback writes `rollback`, and op=arm's G1 explicitly
+    # REFUSES when the flag is already armed/flipping/flushed/done. So the named recovery was a
+    # bare out-of-band Doppler write against a deny-all-public host — an unowned operator step of
+    # exactly the class hr-no-ssh-fallback-in-runbooks and
+    # hr-never-label-any-step-as-manual-without forbid, on the critical recovery path.
+    #
+    # WHY `flushed` AND NOT A RE-ARM. Re-arming is refused by design: the monotonic flush latch
+    # lives on /mnt/data and SURVIVES the replace, so the armed arm hits refuse_rearm_after_done
+    # and drives the flag terminal — correctly, because post-flush that Redis holds the live prod
+    # queue and re-flushing is the #5450 catastrophe. The `flushed` arm is the safe re-entry: it
+    # starts the server, verifies it actually serves, records the owner marker and completes to
+    # `done` WITHOUT re-running FLUSHALL.
+    #
+    # GATED, because `flushed` authorises a prod start. Two preconditions, both fail-closed:
+    #  G1 the flag must currently be a TERMINAL non-serving state (done/aborted/rolled-back).
+    #     Writing `flushed` over an in-flight armed/flipping flip would race the running FSM.
+    #  G2 the durable flush latch must EXIST. `flushed` asserts "the flush already happened"; if
+    #     no latch is recorded that assertion is unfounded, and starting the server would adopt a
+    #     queue that was never flushed. Read no-SSH via the deploy-status hook, never by SSH.
+    if [[ -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
+      echo "::error::op=resume: DOPPLER_TOKEN_INNGEST_ARM is empty — the repo secret did not resolve (approve the inngest-cutover environment required-reviewer gate on this dispatch). Refusing the post-flush re-entry write."; exit 1
+    fi
+    RS_CUR=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --plain 2>/dev/null || echo "__READ_FAILED__")
+    # SCOPED TO `done`, and that scoping IS the safety argument. `done` is the only value that
+    # evidences a COMPLETED flip, i.e. that a FLUSHALL actually happened — which is exactly what
+    # writing `flushed` asserts. Widening this to aborted/rolled-back would let the resume arm
+    # start a scheduler against a queue that was never flushed, and those states have a correct
+    # verb already: op=arm, whose monotonic-latch refusal is the intended answer there.
+    # It is also precisely the guard's case: a REPLACED host inherits `done` and carries no
+    # done-owner marker, which is the only state whose named recovery had no dispatchable verb.
+    case "$RS_CUR" in
+      __READ_FAILED__)
+        echo "::error::op=resume: cannot read INNGEST_CUTOVER_FLIP from soleur-inngest/prd. Refusing FAIL-CLOSED — a swallowed read must not be mistaken for a terminal state. Do NOT SSH the host."; exit 1 ;;
+      done)
+        echo "::notice::op=resume: G1 — flag is 'done', which evidences a completed flip; the post-flush re-entry is permitted." ;;
+      armed|flipping|flushed)
+        echo "::error::op=resume: G1 REFUSING — INNGEST_CUTOVER_FLIP is '$RS_CUR', an IN-FLIGHT state. The on-host FSM is mid-flip; writing 'flushed' now would race it. Let it reach a terminal state, then re-dispatch."; exit 1 ;;
+      *)
+        echo "::error::op=resume: G1 REFUSING — INNGEST_CUTOVER_FLIP is '${RS_CUR:-unset}', not 'done'. op=resume exists for ONE case: a replaced host that inherited a completed flip's 'done' and carries no done-owner marker, so the flip guard refuses its start. Only 'done' evidences that a FLUSHALL happened; from any other state, writing 'flushed' would start a scheduler against a queue that may never have been flushed. Use op=arm for a fresh cutover — its monotonic-latch refusal is the correct answer if a flush already occurred."; exit 1 ;;
+    esac
+    printf '%s' 'flushed' | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=resume: writing INNGEST_CUTOVER_FLIP=flushed FAILED. Re-dispatch op=resume. Do NOT SSH the host."; exit 1; }
+    echo "::notice::op=resume: wrote INNGEST_CUTOVER_FLIP=flushed to soleur-inngest/prd. The enabled 30s on-host timer takes the post-flush resume arm: start -> verify it SERVES -> record the done-owner marker -> done, with NO re-FLUSHALL."
     ;;
 
   *)

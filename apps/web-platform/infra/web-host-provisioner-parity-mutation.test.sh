@@ -262,7 +262,7 @@ fi
 
 # ── §1: resource enumeration and host-pinning ────────────────────────────────────────
 expect_red "M1 (§1 floor: a provisioner deleted)" server.tf \
-  "1: swept only 14 SSH-connected" '
+  "1: swept only 15 SSH-connected" '
 import re
 m = re.search(r"resource \"terraform_data\" \"orphan_reaper_install\" \{", s)
 assert m, "anchor missing"
@@ -674,7 +674,7 @@ s = s.replace(a, a + """
 # Measured: 2 [FAIL] lines. That is the deliberate cost of margin-zero floors on overlapping
 # sweeps -- the anchor still attributes this case to FLOOR_DESTS, which is what the rule requires.
 expect_red "M30 (§2 floor: one delivered artifact removed)" server.tf \
-  "2: swept only 51 destinations" '
+  "2: swept only 56 destinations" '
 blk = """  provisioner "file" {
     source      = "${path.module}/cron-egress-alarm@.service"
     destination = "/etc/systemd/system/cron-egress-alarm@.service"
@@ -771,7 +771,7 @@ s = s.replace(old, ins + old, 1)
 # -- the exact "clean sweep of nothing" the new floor exists to name. §2 co-fires with fifteen
 # uncovered destinations, which is inherent: §3 quantifies over an intersection §2 also owns.
 expect_red "M35 (§3 floor: the seed-baked check quietly stops checking anything)" soleur-host-bootstrap.sh \
-  "3: the seed-baked check ran over only 21" '
+  "3: the seed-baked check ran over only 23" '
 old = "install -D -m 0644 -o root -g root \"$SEED/$f\" \"/etc/systemd/system/$f\""
 assert old in s
 s = s.replace(old, "install -D -m 0644 -o root -g root \"$SEED/$f\" \"/etc/systemd/units.d/$f\"", 1)

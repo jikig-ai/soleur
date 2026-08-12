@@ -51,5 +51,15 @@ chmod 600 /etc/default/web-private-nic-guard
 ( umask 0137 && printf 'ZOT_ENDPOINT=%s\nZOT_PROBE_REPO=%s\nWEB_ZOT_CONSUMER_URL_KEY=%s\nDOPPLER_TOKEN=%s\nDOPPLER_ENABLE_VERSION_CHECK=false\n' "$SOLEUR_ZOT_ENDPOINT" "$SOLEUR_ZOT_PROBE_REPO" "WEB_ZOT_CONSUMER_URL_${HOST_UPPER}" "$SOLEUR_WEB_PROBES_TOKEN" > /etc/default/web-zot-consumer-probe )
 chmod 600 /etc/default/web-zot-consumer-probe
 
+# (#7228) inngest consumer probe. Key set is byte-parallel to the SSH provisioner's write in
+# server.tf (terraform_data.inngest_consumer_probe_install) -- fresh-boot-parity.test.sh section 12
+# drift-guards that parity, so the two must be changed together. INNGEST_CONSUMER_URL_KEY is an
+# identity mapping: one dedicated inngest host means one shared beat, so per-host masking is moot
+# (the git-data probe precedent). The endpoint defaults to the dedicated host's private address --
+# the same default inngest-registry-probe.sh carries -- so a caller that does not set it still
+# gets the correct target rather than an empty one.
+( umask 0137 && printf 'INNGEST_REMOTE_GQL_URL=%s\nINNGEST_CONSUMER_URL_KEY=%s\nDOPPLER_TOKEN=%s\nDOPPLER_ENABLE_VERSION_CHECK=false\n' "${SOLEUR_INNGEST_GQL_URL:-http://10.0.1.40:8288/v0/gql}" "INNGEST_CONSUMER_URL" "$SOLEUR_WEB_PROBES_TOKEN" > /etc/default/inngest-consumer-probe )
+chmod 600 /etc/default/inngest-consumer-probe
+
 ( umask 0137 && printf 'GIT_DATA_ENDPOINT=%s\nGIT_DATA_HEARTBEAT_URL_KEY=%s\nDOPPLER_TOKEN=%s\nDOPPLER_ENABLE_VERSION_CHECK=false\n' "$GIT_DATA_ENDPOINT" 'GIT_DATA_HEARTBEAT_URL' "$SOLEUR_WEB_PROBES_TOKEN" > /etc/default/web-git-data-probe )
 chmod 600 /etc/default/web-git-data-probe
