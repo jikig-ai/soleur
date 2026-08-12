@@ -235,6 +235,16 @@ model {
     #external
     description "Source control, CI/CD, issue tracking, and releases"
   }
+  // The plugin's DISTRIBUTION channel, modelled for the first time (ADR-182, #7471).
+  // Distinct from `github` (which hosts the monorepo source) because the two edges below
+  // carry payloads three orders of magnitude apart, and that asymmetry IS the decision:
+  // adding the monorepo as a marketplace clones ~181 MiB and exceeds the CLI's default
+  // 120s git timeout, so the documented install path could not complete.
+  soleurMarketplace = system "soleur-marketplace (distribution)" {
+    #external
+    description "jikig-ai/soleur-marketplace — a public repo holding ONLY .claude-plugin/marketplace.json, README and LICENSE (~39 KB). Its single plugin entry is a keyless, unpinned git-subdir source pointing at plugins/soleur in the monorepo, so an install materialises the plugin subtree alone (~10 MiB) instead of the whole repository. Has no CI, no review and no CODEOWNERS: scheduled-marketplace-drift.yml in jikig-ai/soleur is its only control."
+  }
+
   cloudflare = system "Cloudflare" {
     #external
     description "DNS, CDN, R2 storage, and zero-trust tunnel"
@@ -439,6 +449,13 @@ model {
   skillloader -> agents "Discovers" { technology "Recursive scan" }
   hooks -> claude "Guards, annotates, and rewrites tool input before execution" { technology "Event hook" }
   claude -> hooks "Tool-call envelope on stdin — MODEL-CONTROLLED, UNTRUSTED (ADR-156): parsed without eval; input that cannot be fully parsed asks, never continues silently (ADR-157)" { technology "stdin JSON" }
+  // Delivery path (ADR-182, #7471). Two edges, deliberately labelled with their measured
+  // payloads — the size asymmetry is the whole point of routing installs through a
+  // dedicated marketplace rather than adding the monorepo directly.
+  founder -> soleurMarketplace "claude plugin marketplace add jikig-ai/soleur-marketplace — fetches the manifest only (~39 KB, ~13s)" { technology "HTTPS (git clone)" }
+  soleurMarketplace -> plugin "git-subdir entry resolves plugins/soleur out of the monorepo at main; the install materialises the plugin subtree alone (~10 MiB, ~33s, well inside the CLI's 120s default). Keyless and unpinned, so identity is the commit SHA and plugin update detects a change" { technology "HTTPS (git-subdir sparse fetch)" }
+  github -> soleurMarketplace "Daily unauthenticated drift check (scheduled-marketplace-drift.yml) asserts the entry stays keyless and still points at plugins/soleur — the sole control on a repo with no CI, no review and no CODEOWNERS" { technology "HTTPS (raw.githubusercontent.com)" }
+
   hooks -> plugin "Sources the shared session-state lock/lease primitives from the deployed plugin root (ADR-178, #7409) — lib/incidents.sh, lib/log-rotation.sh and pre-merge-rebase.sh reach into plugins/soleur/scripts/lib/. The dependency direction is the point: hook code in the repo depends on a file that SHIPS, which is why the file had to live inside the plugin rather than beside its consumers." { technology "Shell source" }
   hooks -> kb "Reads context_queries artifacts (skill-scoped injection)" { technology "File I/O" }
   api -> kb "Reads context_queries artifacts (skill-scoped injection, web in-process)" { technology "File I/O" }
