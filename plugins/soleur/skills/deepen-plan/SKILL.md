@@ -857,7 +857,7 @@ Use React Query for data fetching with optimistic updates.
 
 **After (from /deepen-plan):**
 
-```markdown
+````markdown
 ## Technical Approach
 
 Use React Query for data fetching with optimistic updates.
@@ -899,4 +899,4 @@ const queryClient = new QueryClient({
 - <https://tanstack.com/query/latest/docs/react/guides/optimistic-updates>
 - <https://tkdodo.eu/blog/practical-react-query>
 
-```
+````

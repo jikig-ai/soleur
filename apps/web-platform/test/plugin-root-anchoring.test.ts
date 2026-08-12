@@ -3,25 +3,54 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 /**
- * plugin-root-anchoring.test.ts — #7442.
+ * plugin-root-anchoring.test.ts — #7442, extended by #7450.
  *
- * Guards the CUSTOMER-FACING command surface (`plugins/soleur/commands/ ** /*.md`)
- * so no producer invocation can resolve against the caller's working directory.
- * On any repo that is not this monorepo, a CWD-relative operand resolves into
- * the CUSTOMER's tree — and on a name collision, executes THEIR file.
+ * Guards two customer-facing surfaces so no producer invocation can resolve
+ * against the caller's working directory. On any repo that is not this monorepo,
+ * a CWD-relative operand resolves into the CUSTOMER's tree — and on a name
+ * collision, executes THEIR file.
+ *
+ *   1. `plugins/soleur/commands/ ** /*.md` — every producer invocation (#7442).
+ *   2. `plugins/soleur/skills/ ** /SKILL.md` — the SECRET-GATE SUBSET only
+ *      (#7450 / ADR-179 §R5). These are gates whose exit code decides whether
+ *      secrets are emitted, and `review/SKILL.md` instructs `gh pr checkout`, so
+ *      on the review path the git root IS the reviewed party's tree.
  *
  * Canonical form: bare `${CLAUDE_PLUGIN_ROOT}/<payload-relative-path>`, QUOTED.
  * Rejected: `${CLAUDE_PLUGIN_ROOT:-…}` and `${CLAUDE_PLUGIN_ROOT:?…}`. Neither is
  * the literal token, so neither is substituted; the `:-` form then expands to a
- * customer-controlled relative path (the reported bug).
+ * customer-controlled relative path (the reported bug). Measured 2026-08-12
+ * (#7450): the loader substitutes the bare token at DELIVERY time — `go.md` ships
+ * `${CLAUDE_PLUGIN_ROOT}` and arrives carrying the absolute installed root while
+ * the shell environment has no such variable — which is why the exact-literal
+ * requirement is a fact rather than an inference.
+ *
+ * WHY THE SKILLS AXIS NEEDS ITS OWN EXTRACTOR. The command surface invokes
+ * producers directly (`bash "${CLAUDE_PLUGIN_ROOT}/scripts/x.sh"`), so a
+ * runner-position operand rule sees the anchor. The skills gate surface uses
+ * assignment-then-invoke:
+ *
+ *     SENTINEL="${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-sentinel.sh"
+ *     bash "$SENTINEL"
+ *
+ * The anchor lives in the ASSIGNMENT. A runner-operand rule would certify
+ * `bash "$SENTINEL"` as compliant while the assignment above it pointed anywhere,
+ * so the skills axis matches gate-script references in CODE CONTEXT instead.
+ * Code context (fence bodies + inline spans) is also what keeps markdown link
+ * targets — `[redact-sentinel.sh](../incident/scripts/redact-sentinel.sh)`, of
+ * which there are several — from being read as execution paths.
  *
  * DELIBERATELY OUT OF SCOPE — stated rather than implied:
- *   - `plugins/soleur/skills/ ** ` still carries ~98 `${CLAUDE_PLUGIN_ROOT:-…}`
- *     sites and some bare-CWD-relative `bash plugins/soleur/scripts/…` sites.
- *     Deferred to #7453; that is also an open bypass of THIS guard, since moving
- *     a producer into a SKILL.md escapes the scope below onto a surface that is
- *     equally customer-facing.
+ *   - The NON-gate `plugins/soleur/skills/ ** ` sites (~105 `${CLAUDE_PLUGIN_ROOT:-…}`
+ *     occurrences plus some bare-CWD-relative `bash plugins/soleur/scripts/…`)
+ *     remain deferred to #7453. Only the gate subset is enforced here.
+ *   - `preflight/SKILL.md` carries two UNCONDITIONAL `$(git rev-parse --show-toplevel)`
+ *     anchors (`parse-form-a.awk`, `probe-verb-gate.sh`). Same threat shape,
+ *     arguably worse, but not secret-emission gates — routed to #7453 with a
+ *     severity flag (#7450 DC-1). Their falsified rationale comment was corrected.
  *   - Shipped `.sh`/`.ts` under `plugins/soleur/ ** /scripts/` are not scanned.
+ *   - `redact-sentinel.test.sh` pins the corpus-wide negative instead; it is a
+ *     `.test.sh`, so it is outside this file's SKILL.md axis by construction.
  *   - Remaining follow-ups: #7452.
  */
 
@@ -352,5 +381,219 @@ describe("plugin-root anchoring — customer-facing command surface", () => {
     // Absolute, ratcheted by hand — never derived from the cases themselves,
     // which would simply descend with a deletion.
     expect(assertions).toBe(8);
+  });
+});
+
+/* -------------------------------------------------------------------------- *
+ * #7450 — the skills SECRET-GATE subset (ADR-179 §R5).
+ * -------------------------------------------------------------------------- */
+
+const SKILLS_DIR = resolve(REPO_ROOT, "plugins/soleur/skills");
+
+/**
+ * Gate scripts not discoverable by the `redact-*.sh` shape. CLOSED, deliberately:
+ * widening it is a reviewable diff, which is the ADR-155 / ADR-179-decision-6
+ * closed-vocabulary shape reused here rather than a self-serve syntactic marker.
+ *
+ * NAMED RESIDUAL: a new gate script that is neither `redact-*` nor listed here is
+ * not auto-covered.
+ */
+const GATE_SCRIPT_EXTRAS: ReadonlySet<string> = new Set(["token-efficiency-report.sh"]);
+
+/**
+ * Floor on gate references the scan must actually find. A guard reporting
+ * "0 checked" and exiting 0 is the defect this row exists for.
+ *
+ * FOUR, not the five sites #7450 names: the fifth is
+ * `incident/test/redact-sentinel.test.sh`, a `.test.sh` and therefore outside the
+ * SKILL.md axis by construction (it carries the corpus-wide negative instead).
+ * Derived with, and kept honest by, the command rather than the number alone:
+ *   git grep -oE '/(redact-[A-Za-z0-9._-]*\.sh|token-efficiency-report\.sh)' \
+ *     -- 'plugins/soleur/skills/ * /SKILL.md'   -> 11 path-form hits
+ * of which 7 are markdown link targets and 4 are executable. Absolute and
+ * hand-ratcheted — never derived from the scan, which would descend with a deletion.
+ */
+const GATE_REF_FLOOR = 4;
+
+/** Lines the identity preflight's `exit 2` must appear within, after the manifest probe. */
+const PREFLIGHT_EXIT_WINDOW = 5;
+
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Discovered ON DISK, so a newly added `redact-foo.sh` is covered without editing
+ * this file — the script axis is derived, not a snapshot.
+ *
+ * `.test.sh` is excluded: `redact-linear-urls.test.sh` matches the discovery shape
+ * but is a suite, not a gate. Requiring it to be reached through the anchor would
+ * assert an execution property of a test harness.
+ */
+function secretGateScripts(): Set<string> {
+  const out = new Set<string>();
+  for (const skill of readdirSync(SKILLS_DIR, { withFileTypes: true })) {
+    if (!skill.isDirectory()) continue;
+    const scriptsDir = resolve(SKILLS_DIR, skill.name, "scripts");
+    if (!existsSync(scriptsDir)) continue;
+    for (const e of readdirSync(scriptsDir, { withFileTypes: true })) {
+      if (e.isFile() && /^redact-.+\.sh$/.test(e.name) && !e.name.endsWith(".test.sh")) {
+        out.add(e.name);
+      }
+    }
+  }
+  return out;
+}
+
+/** Every SKILL.md, not the four filenames this was written against. */
+function skillFiles(): string[] {
+  const out: string[] = [];
+  const walk = (dir: string) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const full = resolve(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (e.isFile() && e.name === "SKILL.md") out.push(full);
+    }
+  };
+  walk(SKILLS_DIR);
+  return out.sort();
+}
+
+interface GateRef {
+  file: string;
+  line: string;
+  lineIdx: number;
+  script: string;
+}
+
+/**
+ * Gate-script references in CODE CONTEXT — fence bodies and inline spans only.
+ * Scoping to code context is what excludes markdown link targets such as
+ * `[redact-sentinel.sh](../incident/scripts/redact-sentinel.sh)`, which are
+ * documentation and not execution paths.
+ *
+ * A leading `/` is required so a bare prose mention of the basename (incident's
+ * "`redact-sentinel.sh` is a thin shim over…") is not read as a path.
+ */
+function gateRefs(file: string, gates: Set<string>): GateRef[] {
+  const lines = readFileSync(file, "utf8").split("\n");
+  const { fences } = parse(file);
+  const inFence = (i: number) => fences.some((f) => i > f.startIdx && i < f.endIdx);
+  const out: GateRef[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const segments = inFence(i)
+      ? [lines[i]]
+      : [...lines[i].matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+    for (const seg of segments) {
+      for (const g of gates) {
+        if (!new RegExp(String.raw`/${escapeRe(g)}`).test(seg)) continue;
+        out.push({ file, line: seg.trim(), lineIdx: i, script: g });
+      }
+    }
+  }
+  return out;
+}
+
+/** Compliant shape: the basename is reached THROUGH the bare anchor. */
+function reachedThroughAnchor(seg: string, script: string): boolean {
+  return new RegExp(
+    String.raw`\$\{CLAUDE_PLUGIN_ROOT\}/[A-Za-z0-9._/-]*` + escapeRe(script),
+  ).test(seg);
+}
+
+describe("plugin-root anchoring — skills secret-gate subset (#7450)", () => {
+  const secret = secretGateScripts();
+  const gates = new Set<string>([...secret, ...GATE_SCRIPT_EXTRAS]);
+  const files = skillFiles();
+  const refs = files.flatMap((f) => gateRefs(f, gates));
+  let assertions = 0;
+  const seen = () => {
+    assertions += 1;
+  };
+
+  it("G0: gate-script discovery is non-empty and excludes test harnesses", () => {
+    // If discovery silently yielded nothing, every assertion below quantifies
+    // over an empty set and passes.
+    seen();
+    expect(secret.size).toBeGreaterThanOrEqual(2);
+    expect([...gates].filter((g) => g.endsWith(".test.sh"))).toEqual([]);
+  });
+
+  it("G1: every scanned SKILL.md has balanced fences", () => {
+    // An unbalanced fence drops every reference after it, making the scan
+    // vacuous rather than failing.
+    seen();
+    const unbalanced = files
+      .filter((f) => !parse(f).fencesBalanced)
+      .map((f) => f.replace(REPO_ROOT + "/", ""));
+    expect(unbalanced).toEqual([]);
+  });
+
+  it("G2: every gate-script reference in code context is reached through the bare anchor", () => {
+    seen();
+    const violations = refs
+      .filter((r) => !reachedThroughAnchor(r.line, r.script))
+      .map((r) => `${r.file.replace(REPO_ROOT + "/", "")}:${r.lineIdx + 1}: ${r.line}`);
+    expect(violations).toEqual([]);
+  });
+
+  it("G3: the scan found at least the known gate references (anti-vacuity floor)", () => {
+    seen();
+    expect(refs.length).toBeGreaterThanOrEqual(GATE_REF_FLOOR);
+  });
+
+  it("G4: every gate reference resides INSIDE the plugin payload", () => {
+    seen();
+    const bad: string[] = [];
+    for (const r of refs) {
+      const m = r.line.match(
+        new RegExp(String.raw`\$\{CLAUDE_PLUGIN_ROOT\}/([A-Za-z0-9._/-]*${escapeRe(r.script)})`),
+      );
+      if (!m) continue; // non-anchored refs are already reported by G2
+      const abs = resolve(PAYLOAD_ROOT, m[1]);
+      if (!abs.startsWith(PAYLOAD_ROOT + "/")) {
+        bad.push(`ESCAPES PAYLOAD: ${r.line}`);
+      } else if (!existsSync(abs)) {
+        bad.push(`NOT RESIDENT: plugins/soleur/${m[1]}`);
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it("G5: every SECRET-gate skill carries the identity preflight with a fail-closed exit 2", () => {
+    // ADR-179 decision 2. `[[ -r "$SENTINEL" ]]` is a SHAPE check of exactly the
+    // kind ADR-179 §(a) measured as bypassable — with an ambient CLAUDE_PLUGIN_ROOT
+    // pointing at an attacker-chosen directory, a `test -d` preflight PASSED and the
+    // hostile payload executed. The preflight must verify plugin IDENTITY.
+    //
+    // The exit-2 DISPATCH is the assertion, not the presence of the manifest grep:
+    // `go.md`'s else branch satisfies the condition and then CONTINUES DEGRADED,
+    // so a grep for the condition alone would pass a verbatim copy of a fail-open arm.
+    //
+    // The advisory extras (token-efficiency-report.sh) are deliberately exempt —
+    // that site authorises nothing, so halting there is a pure operator regression.
+    seen();
+    const missing: string[] = [];
+    for (const f of files) {
+      if (gateRefs(f, secret).length === 0) continue;
+      const rel = f.replace(REPO_ROOT + "/", "");
+      const lines = readFileSync(f, "utf8").split("\n");
+      const pIdx = lines.findIndex((l) => l.includes(PREFLIGHT_ANCHOR));
+      if (pIdx === -1) {
+        missing.push(`${rel} (no identity preflight)`);
+        continue;
+      }
+      const hasExit = lines
+        .slice(pIdx, pIdx + PREFLIGHT_EXIT_WINDOW + 1)
+        .some((l) => /\bexit 2\b/.test(l));
+      if (!hasExit) {
+        missing.push(`${rel} (preflight present, but no exit 2 within ${PREFLIGHT_EXIT_WINDOW} lines)`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  it("G6: the suite ran every assertion (anti-vacuity floor)", () => {
+    expect(assertions).toBe(6);
   });
 });
