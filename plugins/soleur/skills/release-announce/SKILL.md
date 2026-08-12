@@ -11,13 +11,25 @@ description: "This skill should be used when announcing a new release. It parses
 
 ## Step 1: Read Version and Changelog
 
-1. Read the current version from `plugins/soleur/.claude-plugin/plugin.json`:
+1. Determine the version to announce. **Do not read it from `plugins/soleur/.claude-plugin/plugin.json` — that manifest carries no `version` key**, deliberately (a `version` key suppresses `gitCommitSha` tracking and breaks update delivery, #7471). Release versions live in git tags:
 
-   Read `plugins/soleur/.claude-plugin/plugin.json` and extract the `version` field value.
+   ```bash
+   # The version already released (latest tag), for the already-exists check in Step 2
+   gh release list --limit 1 --json tagName --jq '.[0].tagName'   # → vX.Y.Z
+   git describe --tags --abbrev=0                                  # offline equivalent
+   ```
 
-2. Extract the `## [<version>]` section from `plugins/soleur/CHANGELOG.md`. Parse from the `## [<version>]` heading to the next `## [` heading (exclusive). If no matching section exists, error with "Changelog section for v<version> not found" and stop. Replace `<version>` with the actual version from step 1.
+   If the operator named a version, use that. Otherwise announce the version the operator is releasing now — this skill is the fallback for when `version-bump-and-release.yml` did not create the release, so the tag may not exist yet. Confirm the version with the operator before creating anything; never infer it from a manifest.
 
-3. Generate a detailed summary of the extracted changelog section:
+2. Assemble the release body from the merged PRs since the previous tag — the CI path uses each PR body's `## Changelog` section, and this fallback must produce the same thing:
+
+   ```bash
+   gh pr list --state merged -L 200 --search "merged:>=<previous-tag-date>" --json number,title,body
+   ```
+
+   **Note:** earlier revisions of this step read `plugins/soleur/CHANGELOG.md`. That file does not exist in this repository — GitHub Releases are the changelog (`plugins/soleur/docs/_data/github.js` renders the docs changelog straight from the Releases API). Do not error out looking for it.
+
+3. Generate a detailed summary of the collected changelog entries:
    - Include all categories present (Added, Changed, Fixed, Removed)
    - Tone: enthusiastic but professional
    - This summary is used as the GitHub Release body
