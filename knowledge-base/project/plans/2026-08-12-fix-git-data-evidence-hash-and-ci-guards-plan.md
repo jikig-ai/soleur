@@ -141,12 +141,29 @@ it inverted a mutation row, and it would supply a `pipefail` production does not
 `scripts/marketplace-drift-check.test.sh` carries a comment asserting the wrong side of this;
 it is corrected here, since it is what misled this plan.
 
-**A latent oracle this fix would activate.** The reopen body prints each missing URL verbatim,
-and the guard selects `.[-1].body` — the *newest* comment, not the closing one. After a reopen,
-if the issue is closed again with no new comment, the newest comment is the guard's own body
-containing all three URLs, so `missing_urls` empties and field 1 is permanently self-satisfied.
-This has never been reachable because no reopen has ever completed; the fix makes it live.
-Closing it (exclude bot-authored comments) is in scope — "the guard works" is what #7506 asks for.
+**A latent defect this fix would activate — and its shape is not the obvious one.** The guard
+selects `.[-1].body`, the *newest* comment rather than the closing one, and its own reopen body
+prints each missing URL verbatim. The natural reading is "field 1 self-satisfies and the guard
+goes quiet". Measured, it is worse. The reopen body renders fields 2 and 3 as the literal
+templates `` `…/actions/runs/<id>` `` and `` `bytes: <N>` `` — no digits — so they fail
+`actions/runs/[0-9]+` and `bytes:[[:space:]]*[0-9]+`:
+
+| Newest comment | field 1 | field 2 | field 3 | reopens |
+|---|---|---|---|---|
+| human junk | miss | miss | miss | 1 |
+| the guard's own reopen body | **match** | miss | miss | **1** |
+
+So the guard reopens *again*, and every close re-triggers it: **an unbounded reopen-and-comment
+loop on the issue**, not a silent pass. This has never been reachable because no reopen has ever
+completed — the fix makes it live, which is why closing it is in scope rather than a follow-up.
+
+Two more selector defects sit in the same three lines. The fetch is **unpaginated**, so on an
+issue with more than 30 comments `.[-1]` is comment #30, not the newest — the guard validates an
+unrelated historical comment. And when no comment qualifies, the step falls back to the **issue
+body**, which is authored by whoever opened the issue; excluding bot comments *widens* that path,
+and a callback-URL follow-through issue's body legitimately contains the three URLs (verified on
+#1784). The fix must therefore be an identity filter plus a reopen-on-no-qualifying-comment, not
+merely a filter.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -165,6 +182,9 @@ Closing it (exclude bot-authored comments) is in scope — "the guard works" is 
 | Lines 130/135 unguarded | Confirmed; they are the two arms of one conditional | — |
 | Sweep finds only those two | Confirmed with `[[:space:]]` (not `\s`, a GNU ERE extension) | Bounds documented |
 | Actions runs `run:` as `--noprofile --norc -eo pipefail` | **False for a step with no `shell:` key** — it is `bash -e {0}` | Harness pinned to `bash -e`; a repo comment corrected |
+| #7485: "the discount and the glob were written in different changes" | **False** — `git log -S` puts both in the same commit, `be7b5a5ee` (#7066, 2026-07-30) | The arithmetic was wrong on arrival, not drifted. The same PR wrote the blind fixture, which is why nothing caught it |
+| #7506: the oracle is a self-satisfying green | **False** — measured, the guard reopens *again*; the defect is an unbounded reopen loop | Hazard restated; C-arms redesigned around reopen **count** and **content** |
+| The comment fetch selects the closing comment | **False** — `gh api` is unpaginated (30/page), so `.[-1]` is comment #30 on a long thread | `--paginate --slurp` is part of the fix |
 | A new `scripts/*.test.sh` is auto-discovered | It is not; the glob covers `scripts/lib/*.test.sh` | Explicit registration is a deliverable |
 | Commit ordering makes the revert clean | **False** — 200/200 recent `main` commits have one parent; a merged PR is one commit | Claim withdrawn; DC-1 restated honestly |
 | #6977 context only, OPEN | Confirmed | Not targeted |
@@ -197,6 +217,24 @@ So the fix is:
 - **sibling glob** — abort on a `.tf` that is present but unreadable, and extend the glob to
   `*.tf.json`, which Terraform loads and the current glob misses. This is a completeness fix, not
   a literal.
+
+  **The absent-vs-unreadable discrimination is load-bearing and must be written explicitly.** The
+  lib sets no `nullglob`, so a pattern that matches nothing yields the literal string. The live
+  module has no `.tf.json` at all, so adding that pattern means the real tree iterates once on an
+  unexpanded literal — and a naive `[[ -r "$_f" ]] || abort` would then **abort on `main`**, which
+  is the very defect being fixed, reintroduced at the new contributor. The correct guard tests
+  whether the glob matched a real directory entry before testing readability:
+
+  | Candidate | `-e` | `-L` | Verdict |
+  |---|---|---|---|
+  | unexpanded literal (`*.tf.json`, no matches) | false | false | **skip** |
+  | present, readable | true | — | hash it |
+  | present, unreadable | true | — | **abort** |
+  | dangling symlink | false | **true** | **abort** |
+
+  So: `[[ -e "$_f" || -L "$_f" ]] || continue`, then `[[ -r "$_f" ]] || abort`. Testing only `-e`
+  would silently skip a dangling symlink — a file Terraform would fail on but the hash would
+  quietly exclude.
 - **no sibling floor.** A deleted sibling is a real directory change the hash correctly reflects,
   and a floor would be exactly the literal this fix removes — it would break the first time
   `variables.tf` is legitimately folded into `main.tf`.
@@ -212,12 +250,25 @@ goes *loose* by one — it does not abort. There is no automatic trigger. The pl
 say so: the abort message names the floor's provenance, a code comment states where the literal
 must move when the payload set grows, and §Non-Goals records the looseness as accepted.
 
-**Repair the mirror in the same commit.** `_r2_hash()` gains the sibling glob and the `file()`
-family regex, making its comment true. Measured: `R2_SHA` is byte-identical before and after and
-the suite stays 58/58, because no current fixture has a sibling or a `filebase64` binding — so
-the repair is hash-neutral and breaks nothing. The new sibling arms are nevertheless built on a
-**separate copied tree**, calling the function directly rather than through `r2check`/`R2_SHA`,
-so they are independent of the mirror entirely.
+**Repair the mirror, and then stop it being a mirror.** `_r2_hash()` gains the sibling glob and
+the `file()` family regex, making its comment true. Measured: `R2_SHA` is byte-identical before
+and after and the suite stays 58/58, because no current fixture has a sibling or a `filebase64`
+binding — so the repair is hash-neutral and breaks nothing.
+
+A one-time byte-identity measurement is not a guard, though, and leaving a hand-maintained
+reimplementation with nothing preventing a third drift would repeat the class this plan exists to
+close. Both hashers emit the same `<digest>  <basename>` line shape over the same fixture, so an
+**equivalence arm** is available today: `_r2_hash "$R2"` must equal
+`git_data_rung2_user_data_sha256 "$R2/ci.yml"`. That makes drift unshippable rather than merely
+measured, and it is the arm that replaces the byte-identity check. The new sibling arms are
+nevertheless built on a **separate copied tree**, calling the function directly rather than
+through `r2check`/`R2_SHA`, so they stay independent of the mirror.
+
+**Fixture unreadability must not be `chmod 000`.** Root bypasses DAC read checks, so `[[ -r ]]`
+is *true* for a mode-000 file under uid 0 — in any root container the arms that catch the
+draft-1 fail-open would silently go green against the unfixed code. A **dangling symlink** is
+unreadable for every uid (measured: `-r` false, `-L` true), so it is the environment-independent
+mechanism for both the payload and the sibling arms.
 
 **Message-only correction to the capture script's `TRANSIENT:` arm**, with `exit 2` unchanged
 (the 0/1/2 verdict contract is consumed by the rehearsal workflow, and no consumer greps the
@@ -253,6 +304,23 @@ the message stop accusing the emitter; that is a string and a precondition.
    cause and make no emitter claim. The first draft's per-arm non-emptiness conjunct is **dropped**:
    it contradicted the plan's own semantics, since an empty capture *after* a proven round trip is
    precisely the emitter finding the arm exists to make.
+
+   **The sentinel must land in a durable artifact, not in `capture.log`.** The driver truncates
+   `/out/capture.log` three times — once before each of the A/B/C orderings — so a sentinel written
+   there is wiped long before the host reads anything. The driver observes the round trip in
+   `capture.log` (which is fine; that happens first) and then `touch /out/sentinel.ok`; the host
+   checks for that file. Written the other way, the gate reddens every healthy run.
+
+   **The gate must emit an explicit `pass` on the healthy path, and the floor moves 44 → 45.** A
+   gate contributing zero assertions when it succeeds is one a future inversion-to-always-pass
+   leaves undetectable — the floor of 44 would still be met. Counting it is the whole point of the
+   instrument.
+
+   **And the gate must be structural, not grep-verified.** An assembly grep counts call sites, so
+   an arm routed *around* the gate leaves the count unchanged and the check green — cardinality
+   standing in for discrimination, the exact anti-pattern this plan cites elsewhere. On failure the
+   gate reports all three arms and skips past them, so bypassing it is a deletion the count does
+   see.
 5. **Preserve forensics.** Modify the existing EXIT trap in place — never add a second, since bash
    keeps only the last handler — to retain the tree and print its path **whenever the suite exits
    non-zero**, not keyed on counters: the suite has hard `exit 1` setup paths with `fails == 0`,
@@ -265,11 +333,30 @@ so under a single apt outage the suite will carry two verdict regimes: R4 naming
 T5/S1/R1 still report emitter-shaped findings. That is a real limit on how much a starved run
 improves, and the PR body must say so rather than imply the class is closed.
 
-### #7506 — two characters, a faithful harness, and the oracle
+### #7506 — two characters, a faithful harness, and three selector defects
 
-Add `--` to the two calls. Exclude bot-authored comments from the closing-comment selector so the
-guard cannot read its own reopen body. Add a regression suite that executes the shipped step body
-under `bash -e` with a `gh` stub recording argv. Keep a standing class sweep, trimmed.
+Add `--` to the two calls. Then repair the closing-comment selector, which carries three defects
+that the `printf` fix would activate together:
+
+- **Paginate.** `gh api … --paginate --slurp --jq '[.[][]] | …'`. A bare `--paginate --jq` emits
+  one document per page and would return the last comment *of every page* — a different wrong
+  answer, so the flag combination is part of the prescription.
+- **Filter on identity, never on content.** `select(.user.login != "github-actions[bot]")`. A
+  login is not registrable by a human (GitHub logins are alphanumeric-plus-hyphen, so `[bot]`
+  cannot be spelled), whereas a body-content predicate such as "skip comments containing
+  `## Closure gate`" is a one-line bypass for anyone who can comment.
+- **No qualifying comment must reopen, not fall back to the issue body.** That body is authored by
+  whoever opened the issue, and a callback-URL follow-through body legitimately contains all three
+  URLs (verified on #1784) — so the fallback lets an issue satisfy its own gate, and excluding bot
+  comments makes that path *more* reachable rather than less.
+
+Then a regression suite that executes the shipped step body **as a child process** under `bash -e`
+with a `gh` stub recording argv. Child, not sourced: the body registers its own `trap … EXIT`
+(which would clobber the suite's) and `exit 0`s on the complete-fixture path (which would end the
+suite early with rc=0 — a vacuous PASS the floor cannot catch, because the floor line never runs).
+The stub must evaluate the body's own `--jq` expression through real `jq` rather than returning
+canned JSON, or `comment_body` becomes a serialized array, every `grep -Fq` matches, and the
+selector under test is never exercised. Keep a standing class sweep, trimmed.
 
 ## Implementation Phases
 
@@ -316,8 +403,9 @@ is recorded in DC-1 for the operator, not argued away.
 
 ### Phase 3 — Mutation verification and record
 
-Execute every row of the three guard matrices and record the observed colour in the PR body. A row
-that does not redden is a defect in the test. Then `bash scripts/test-all.sh`, plus the rehearsal
+Execute every row of **all four** guard matrices and record the observed colour in the PR body,
+with Guard 3's last three rows labelled as controls so a green battery is not misread as mutations
+caught. A row that does not redden is a defect in the test, not a note. Then `bash scripts/test-all.sh`, plus the rehearsal
 suite on a machine with docker.
 
 ## Alternative Approaches Considered
@@ -399,7 +487,7 @@ logs:
 
 discoverability_test:
   command: "bash tests/scripts/test-git-data-birth-readiness-gate.sh && bash scripts/follow-through-closure-guard.test.sh"
-  expected_output: "the gate suite prints `=== 63 passed, 0 failed ===`; the closure-guard suite exits 0 with its floor line reporting at least 9 assertions"
+  expected_output: "the gate suite prints `=== 68 passed, 0 failed ===`; the closure-guard suite exits 0 reporting exactly 13 assertions"
 ```
 
 Both commands are local, credential-free, contact no network, and start with an allowlisted probe
@@ -429,9 +517,17 @@ kind at that altitude.
 ### Guard 1 — the rung-2 user_data hash input set
 
 **Property.** The hash covers exactly the cloud-init template, every Terraform file in the render
-module directory, and every payload the module references via the `file()` family — and the
-function refuses, rather than returning a hash, whenever any of those is present-but-unresolvable
-or the module binds fewer payloads than ship.
+module directory (`*.tf` and `*.tf.json`), and every payload the module references through a
+**single-line literal** `file*("${path.module}/…")` form — and the function refuses, rather than
+returning a hash, whenever any of those is present-but-unresolvable or the module binds fewer
+payloads than ship.
+
+The "single-line literal" bound is deliberate and is the honest limit of the extraction: a
+multi-line `file(\n "…"\n)`, an indirected `file(local.p)`, and a *second* `templatefile()` are
+all invisible to the regex, and each would render into `user_data` while the nine literal payloads
+still resolve and the floor still passes. Deleting the counting check does not cause this — that
+check called the same extractor on both sides and was already blind to it — but the Property must
+not claim completeness the mechanism cannot deliver. Recorded in §Non-Goals.
 
 **Assembly.** `git-data-birth-readiness-gate.sh` › `git_data_rung2_user_data_sha256()`. Four
 contributors feed `_inputs`, and **two of them are loops that append conditionally** — the sibling
@@ -443,16 +539,27 @@ deletion. Two callers, not one: the capture script and `git_data_rung2_rehearsal
 
 **Mutation matrix:**
 
+Unreadability is injected with a **dangling symlink**, never `chmod 000` — root bypasses the mode
+check and would silently disarm rows 1, 2 and 9.
+
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Make one referenced payload unreadable | RED — abort names that payload |
-| 2 | Make one sibling `.tf` unreadable | RED — abort names that file. *(Measured RED on the corrected shape, rc=0 on the first draft.)* |
-| 3 | Add a second sibling `.tf` to a fixture that already has one | GREEN — and RED against the pre-fix code, reproducing the reported defect |
-| 4 | Restore the referenced-vs-resolved counting check alongside the per-reference abort | **RED** on a sibling-bearing fixture (13 inputs, 11 resolved, 9 refs) — the returning defect is caught by the sibling arms |
-| 5 | Shrink a fixture module to bind 2 payloads with siblings present | RED — floor fires, message names the payload count |
-| 6 | Remove the floor, then delete five payload bindings | RED — proving the floor is load-bearing beside the per-reference abort |
-| 7 | Rename a sibling to `variables.tf.json` | GREEN **and the file is in the hash** — the digest must differ from the digest with that file absent |
-| 8 | Replace `_n_payloads` with a fixed literal (the guard's own dispatch) | RED — the shrunken-module arm stops reddening |
+| 1 | Make one referenced payload unreadable (dangling symlink) | RED — abort names that payload |
+| 2 | Make one sibling `.tf` unreadable (dangling symlink) | RED — abort names that file. *(Measured RED on the corrected shape, rc=0 on the first draft.)* |
+| 3 | Delete a referenced payload outright, so the reference resolves to nothing | RED — the deleted counting check was the only detector of "references a payload not on disk"; the abort must inherit that job |
+| 4 | Write the sibling guard as a bare `[[ -r ]] || abort`, dropping the matched-entry test (the guard's own dispatch) | RED — the live tree aborts on the unexpanded `*.tf.json` literal, which A1 must catch |
+| 5 | Write the sibling guard as `[[ -e ]] || continue`, dropping the `-L` arm | RED — a dangling-symlink sibling is silently skipped instead of aborting |
+| 6 | Shrink a fixture module to bind 2 payloads with siblings present | RED — floor fires, message names the payload count |
+| 7 | Remove the floor, then delete five payload bindings | RED — proving the floor is load-bearing beside the per-reference abort |
+| 8 | Rename a sibling to `variables.tf.json` | GREEN **and the file is in the hash** — the digest must differ from the digest with that file absent |
+| 9 | Make a `.tf.json` sibling unreadable | RED — the abort must attach to **both** glob patterns, not just the first |
+| 10 | Replace `_n_payloads` with a fixed literal (the guard's own dispatch) | RED — the shrunken-module arm stops reddening |
+| 11 | Drift `_r2_hash()` away from the lib (drop its sibling glob again) | RED — the equivalence arm fires; this is what stops a third drift |
+
+Two rows were **cut** from the first draft as carrying no information: "add a second sibling to a
+fixture that already has one" (pre-fix, *one* sibling already reddens, so the second changes
+nothing) and "restore the counting check" (it makes the function strictly more refusing, so it
+violates no stated property — it is a regression shape already covered by the sibling arms).
 
 ### Guard 2 — the rehearsal's run-level fixture-liveness gate
 
@@ -470,14 +577,24 @@ arms keep their current behaviour (§Non-Goals).
 
 **Mutation matrix:**
 
+Rows 3–6 require driving the suite from **outside itself** with faults injected. That outer
+harness is a deliverable, not an assumption: a small `--inject <cause>` env hook the suite honours,
+so a mutation row costs one container run rather than a hand edit. Name it in Phase 1 or the rows
+are unexecutable.
+
 | # | Mutation | Expected |
 |---|---|---|
 | 1 | Force the container's `apt-get install` to fail past its retries | RED naming `FIXTURE-FAIL: apt-get install`, with no emitter-worded text in any of the three arms |
 | 2 | Point the capture server at a port nothing binds, so the sentinel never round-trips | RED naming the round trip; all three arms fixture-attributed |
-| 3 | Route one of the three arms around the run-level gate | RED — the assembly grep reports an emitter-claiming call site not under the gate |
-| 4 | Emit the container stdout tail interpolated into a detail string instead of on its own column-0 lines (the guard's own dispatch) | RED — the marker-shape assertion runs against the suite's **rendered output**, not the marker literal |
-| 5 | Make the suite exit 0 with a fixture-attributed failure | RED — a fixture failure must not be laundered to `PASS` by the nested runner |
-| 6 | Delete the sentinel while leaving the rc check | RED — an rc-zero container with a dead capture path must still be caught |
+| 3 | Write the sentinel into `capture.log` instead of a durable artifact (the draft-1 shape) | RED on a **healthy** run — the driver truncates `capture.log` three times, so the host can never observe it |
+| 4 | Invert the run-level gate to always-pass | RED — the gate's own `pass` disappears and the total drops below the floor of 45 |
+| 5 | Emit the container stdout tail interpolated into a detail string instead of on its own column-0 lines (the guard's own dispatch) | RED — the marker-shape assertion runs against the suite's **rendered output**, not the marker literal |
+| 6 | Make the suite exit 0 with a fixture-attributed failure | RED — a fixture failure must not be laundered to `PASS` by the nested runner |
+| 7 | Delete the sentinel check while leaving the rc check | RED — an rc-zero container with a dead capture path must still be caught |
+
+The first draft's "route one arm around the gate → the assembly grep reports it" row is **cut**:
+routing around the gate leaves the call-site count unchanged, so the grep cannot see it. Row 4
+replaces it by making the gate structural — its own `pass` is the thing that goes missing.
 
 ### Guard 3 — the closure guard reaches its reopen, and only when it should
 
@@ -496,15 +613,29 @@ must not read its own output.
 
 **Mutation matrix:**
 
+Rows 5–7 are **controls**, not mutations — labelled so a green battery is not misread as seven
+mutations caught.
+
 | # | Mutation | Expected |
 |---|---|---|
 | 1 | Revert `--` on the first `printf` (the missing-URLs arm) | RED — rc=2, zero reopens |
 | 2 | Revert `--` on the second `printf` (the URLs-present arm) | RED — both arms need their own fixture; one fixture exercises only one |
 | 3 | Run the extracted body under plain `bash` (no `-e`) | RED — the guard's own dispatch; the mutation that would make every other arm vacuous |
-| 4 | Add `shell: bash` to the step | RED — the premise arm fires, because the faithful invocation becomes `--noprofile --norc -eo pipefail` and the harness's `bash -e` is now the stale one |
-| 5 | Feed a complete closing comment | GREEN, zero reopens — without this control an unconditionally-reopening mutant passes |
-| 6 | Make the newest comment the guard's own reopen body | GREEN, zero reopens — the oracle must not self-satisfy |
-| 7 | Rename the step so the extractor matches zero steps | RED — cardinality fires rather than silently testing an empty body |
+| 4 | `source` the body instead of running it as a child | RED — its `exit 0` on the complete fixture ends the suite early with rc=0, and the floor line never runs to catch it |
+| 5 | Revert the selector to `.[-1]` with no identity filter | RED — with a bot body newest and a **complete human comment beneath it**, the reopen count goes 0 → 1 |
+| 6 | Replace the identity filter with a body-content predicate | RED — a human comment carrying the guard's own heading must NOT be excluded |
+| 7 | Drop `--paginate --slurp` | RED — a 31-comment fixture selects comment #30 instead of the newest |
+| 8 | Restore the issue-body fallback when no comment qualifies | RED — an issue whose body carries the three URLs must not satisfy its own gate |
+| 9 | Return canned JSON from the `gh` stub instead of evaluating `--jq` (the harness's own dispatch) | RED — `comment_body` becomes a serialized array, every `grep -Fq` matches, and rows 5–8 all go vacuously green |
+| C1 | Add `shell: bash` to the step | RED — the premise arm fires; the faithful invocation becomes `--noprofile --norc -eo pipefail` and the harness's `bash -e` is now stale |
+| C2 | Feed a complete closing comment | GREEN, zero reopens — without this control an unconditionally-reopening mutant passes |
+| C3 | Rename the step so the extractor matches zero steps | RED — cardinality fires rather than silently testing an empty body |
+
+The first draft's row 6 ("newest comment is the guard's own reopen body → zero reopens") was
+**wrong** and is replaced by row 5. Measured: against the *unfixed* selector that fixture reopens
+**once**, because the bot body satisfies field 1 but not fields 2 or 3 — so "zero reopens" is not
+the pre-fix behaviour and the row could never have reddened. The discriminating fixture puts a
+**complete human comment beneath** the bot comment, where the reopen count genuinely moves.
 
 ### Guard 4 — the standing `printf '-` sweep
 
@@ -536,21 +667,27 @@ file, so it stays an assertion rather than a lint.
 - [ ] **AC1** — On a clean extract of the merge commit, `git_data_rung2_user_data_sha256` against
       the live cloud-init returns 0 and prints a 64-hex digest. Behaviour when the live file is
       absent is defined and does not silently drop the arm below the floor.
-- [ ] **AC2** — An unresolvable payload reference and an unreadable sibling `.tf` each abort naming
-      the offending file; a sibling renamed `.tf.json` is hashed rather than skipped (digest differs
-      from the digest with that file absent).
+- [ ] **AC2** — Each of these aborts naming the offending file: an unresolvable payload reference, a
+      **deleted** payload reference, an unreadable `.tf` sibling, and an unreadable `.tf.json`
+      sibling. A readable `.tf.json` sibling is hashed rather than skipped (digest differs from the
+      digest with that file absent). Unreadability is injected with a dangling symlink, never
+      `chmod 000` — root bypasses the mode check and would disarm these arms silently.
 - [ ] **AC3** — The floor applies to the payload count, its message names that count and where the
       literal must move when the payload set grows; removing the floor while deleting five bindings
       is shown to go undetected without it.
-- [ ] **AC4** — Sibling-count independence: fixtures with zero, two and three siblings all return 0.
+- [ ] **AC4** — Sibling-count independence: fixtures with zero, two and three siblings all return 0;
+      and the live tree (which has no `.tf.json` at all) returns 0 rather than aborting on the
+      unexpanded glob literal.
 - [ ] **AC5** — `_r2_hash()` carries the sibling glob and the `file()` family regex, `R2_SHA` is
-      byte-identical to its pre-change value, and its comment's non-drift claim is now true.
+      byte-identical to its pre-change value, and an **equivalence arm** asserts
+      `_r2_hash "$R2"` == `git_data_rung2_user_data_sha256 "$R2/ci.yml"` — so its comment's
+      non-drift claim is enforced rather than merely measured once.
 - [ ] **AC6** — The counting check is gone: no `_n_resolved`, no `${#_inputs[@]} - 2`, no `-lt 11`;
       and the extraction comment that justified the family regex by reference to that check is
       updated rather than left describing a check that no longer exists.
 - [ ] **AC7** — `bash tests/scripts/test-git-data-birth-readiness-gate.sh` prints
-      `=== 63 passed, 0 failed ===`, and the existing arms pinning the `ABORT`/`drifted` needles
-      still pass.
+      `=== 68 passed, 0 failed ===` (exact equality, not a floor), and the existing arms pinning
+      the `ABORT`/`drifted` needles still pass.
 - [ ] **AC8** — The capture script's derivation-fault arm no longer reads as transient and still
       exits 2 — asserted by an **executing arm** in the capture-script suite (floor 33 → 34), not a
       grep, since a grep is satisfied whether or not the branch is reachable.
@@ -558,7 +695,8 @@ file, so it stays an assertion rather than a lint.
 ### #7501
 
 - [ ] **AC9** — The R4 `docker run` no longer ends in `|| true`; its rc feeds the run-level gate.
-- [ ] **AC10** — A single run-level gate (`docker rc == 0` and sentinel observed) precedes all three
+- [ ] **AC10** — A single run-level gate (`docker rc == 0` and a **durable** `sentinel.ok` artifact,
+      not a `capture.log` line the driver later truncates) precedes all three
       emitter-claiming arms. Verified by the assembly grep, whose fourth call site — the R4 MUTATION
       liveness marker — is excluded by name.
 - [ ] **AC11** — Six container-side causes each emit a distinct `FIXTURE-FAIL:` marker and exit
@@ -568,10 +706,13 @@ file, so it stays an assertion rather than a lint.
       runner's failure-marker regex — not against the marker literal.
 - [ ] **AC13** — With apt forced to fail past its retries, all three arms attribute the fixture, no
       arm renders emitter-worded text, and the suite exits non-zero. With a healthy container the
-      three arms produce their normal verdicts and the total is 44.
+      three arms produce their normal verdicts, the gate emits its own `pass`, and the total is 45.
+      A named fault-injection hook drives these without hand edits.
 - [ ] **AC14** — The forensics tree is retained and its path printed on **any** non-zero exit,
       including the hard `exit 1` setup paths where `fails == 0`; retention is also reachable via
-      `GIT_DATA_REHEARSAL_KEEP_TMP`; an age-reaper bounds accumulation.
+      `GIT_DATA_REHEARSAL_KEEP_TMP`; and an age-reaper — exercised with a `touch -d` back-dated
+      fixture, never by waiting, and glob-bounded so it cannot reap a concurrent run — removes old
+      trees while retaining a fresh one.
 - [ ] **AC15** — Exactly one *executable* top-level `trap … EXIT` remains, asserted with a
       heredoc-aware anchor (a naive `^trap .* EXIT` count returns 4 on this file).
 - [ ] **AC16** — `scripts/lint-shell-capture-exit` passes with its baseline unchanged or smaller.
@@ -579,29 +720,42 @@ file, so it stays an assertion rather than a lint.
 ### #7506
 
 - [ ] **AC17** — Both `printf` calls carry `--`, and the repo-wide sweep returns zero.
-- [ ] **AC18** — The suite extracts the step body by name with a one-step cardinality check and
-      executes it under **`bash -e`**, asserting the step declares no `shell:` key and the body
-      carries no `${{ }}`; it hard-exits 2 without PyYAML and registers an EXIT trap for its
-      `mktemp` allocations.
+- [ ] **AC18** — The suite extracts the step body (via `yaml.safe_load`) by name with a one-step
+      cardinality check and executes it **as a child process** under **`bash -e`** — never sourced,
+      since the body carries its own `trap … EXIT` and an `exit 0` that would end the suite with a
+      vacuous rc=0 the floor cannot catch. It asserts the step declares no `shell:` key, that every
+      `$VAR` the body reads is declared in its `env:`, and that the body carries no `${{ }}`; it
+      hard-exits 2 without PyYAML and registers an EXIT trap for its `mktemp` allocations.
 - [ ] **AC19** — An incomplete closing comment yields rc=0 and exactly one `gh issue reopen`, and
       the rendered body contains the checklist line the defect prevented. **Both** conditional arms
       are exercised by fixtures whose URLs are derived from the workflow's own `required_urls`
       array, so a URL drift cannot silently collapse both fixtures onto one arm.
-- [ ] **AC20** — A complete closing comment yields rc=0 and zero reopens; and a closing comment
-      whose newest entry is the guard's own reopen body also yields zero reopens.
+- [ ] **AC20** — The selector is repaired on all three axes, each pinned by its own arm: it
+      paginates (`--paginate --slurp`, verified against a 31-comment fixture); it excludes bot
+      comments by **login identity**, not body content (verified by a human comment carrying the
+      guard's own heading, which must NOT be excluded); and when no non-bot comment qualifies it
+      **reopens** rather than falling back to the attacker-authored issue body. A complete comment
+      yields zero reopens; a bot body above a complete human comment yields zero; a bot body above
+      an incomplete human comment yields exactly one whose rendered body lists the missing URLs.
 - [ ] **AC21** — The sweep is proven fireable against a planted violation, asserts a non-zero
       scanned-file count, and documents its three bounds.
-- [ ] **AC22** — The suite has an anti-vacuity floor of 9, its failure output names which arm failed,
-      and its failure marker is column-0 `FAIL`-shaped.
+- [ ] **AC22** — The suite asserts an exact assertion count of 13 (not `-ge`), its failure output
+      names which arm failed, its failure marker is column-0 `FAIL`-shaped, and the `gh` stub is
+      verified to be what `command -v gh` resolves to before the body runs — with sentinel
+      `GH_REPO`/`ISSUE_NUM`, an empty `GH_TOKEN` and a temp `GH_CONFIG_DIR`, so a real `gh` could
+      not mutate anything.
 - [ ] **AC23** — `scripts/marketplace-drift-check.test.sh`'s default-shell comment is corrected.
 
 ### Cross-cutting
 
 - [ ] **AC24** — `scripts/test-all.sh` registers the new suite in `want_scripts`, and
       `bash scripts/lint-orphan-test-suites.sh` reports it registered.
-- [ ] **AC25** — `bash scripts/test-all.sh` exits 0 on a machine with docker.
-- [ ] **AC26** — Every row of all three guard matrices was executed and the observed colour matches
-      the Expected column; results recorded in the PR body.
+- [ ] **AC25** — `bash scripts/test-all.sh` exits 0, and on a machine without a docker daemon the
+      rehearsal emits a declared skip whose **reason** is asserted — not merely an exit code, which
+      the nested runner would launder to `PASS`.
+- [ ] **AC26** — Every row of **all four** guard matrices was executed and the observed colour
+      matches the Expected column; results recorded in the PR body, with controls labelled as
+      controls so a green battery is not misread as mutations caught.
 - [ ] **AC27** — `python3 scripts/lint-guard-contract.py` and
       `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` both pass, each
       invoked with the gate's own argument form rather than a hand-enumerated path list.
@@ -615,22 +769,37 @@ file, so it stays an assertion rather than a lint.
 
 ## Test Scenarios
 
-### A — gate suite, 5 new arms (floor 58 → 63)
+### A — gate suite, 10 new arms (floor 58 → 68)
 
 Built on a **separate copied tree**, calling the function directly — never through
 `r2check`/`R2_SHA`, whose mirror the same commit repairs. Fixture siblings must not share a
 basename with any payload, or the basename-uniqueness check reddens them for the wrong reason.
+Unreadability is injected with a **dangling symlink**, never `chmod 000` — root bypasses the mode
+check, and A4/A5/A7 are exactly the arms that would silently disarm.
 
 - **A1** Given the committed tree at real paths, the function returns 0 and prints a 64-hex digest.
-  *(RED before the fix.)*
+  *(RED before the fix. Also the arm that catches an over-broad sibling abort firing on the
+  unexpanded `*.tf.json` literal, so its abort message must name the sibling loop.)*
 - **A2** Given a fixture with two sibling `.tf` files, returns 0. *(RED before the fix.)*
-- **A3** Given a fixture with one sibling made unreadable, returns 1 naming that file.
+- **A3** Given a fixture with **three** siblings, returns 0 — sibling-count independence.
+- **A4** Given a fixture with one `.tf` sibling as a dangling symlink, returns 1 naming that file.
   *(RED against the first draft's shape — measured rc=0.)*
-- **A4** Given a fixture with a referenced payload unreadable, returns 1 naming that payload.
-- **A5** Given a fixture whose module binds only 2 payloads with siblings present, returns 1 naming
+- **A5** Given a fixture with a `.tf.json` sibling as a dangling symlink, returns 1 naming it — the
+  abort attaches to **both** glob patterns, not just the first.
+- **A6** Given a fixture with a readable `.tf.json` sibling, returns 0 **and** its digest differs
+  from the same fixture with that file absent.
+- **A7** Given a fixture with a referenced payload as a dangling symlink, returns 1 naming it.
+- **A8** Given a fixture with a referenced payload **deleted outright**, returns 1 naming it — the
+  job the deleted counting check used to do, and the one an `-r`-only guard could lose.
+- **A9** Given a fixture whose module binds only 2 payloads with siblings present, returns 1 naming
   the drifted extraction and the payload count.
+- **A10** Given the `$R2` fixture, `_r2_hash "$R2"` equals
+  `git_data_rung2_user_data_sha256 "$R2/ci.yml"` — the equivalence arm that makes a third mirror
+  drift unshippable, replacing the first draft's one-time byte-identity measurement.
 
-### B — rehearsal suite (floor unchanged at 44)
+Floor moves 58 → 68, asserted as exact equality, matching the suite's existing form.
+
+### B — rehearsal suite (floor 44 → 45)
 
 RED evidence is **fault injection**, never a natural flake.
 
@@ -638,27 +807,56 @@ RED evidence is **fault injection**, never a natural flake.
   `FIXTURE-FAIL: apt-get install`, container stdout tail present on its own lines, no emitter-worded
   text, suite exits non-zero.
 - **B2** Capture server pointed at an unbound port → sentinel not observed, same attribution.
-- **B3** A container that exits 0 with a dead capture path → still caught by the sentinel.
+- **B3** The sentinel written into `capture.log` rather than a durable artifact → reddens on a
+  **healthy** run, because the driver truncates that file three times. *(This replaces the first
+  draft's "container exits 0 with a dead capture path", which had no reachable middle: dead before
+  the sentinel is B2, and dead after a proven round trip is a genuine emitter finding per §Edge
+  cases.)*
 - **B4** B1's condition → forensics path printed and the tree exists after exit; likewise on a hard
   `exit 1` setup path where `fails == 0`.
-- **B5** Healthy container → three arms produce normal verdicts, total is 44.
-- **B6** A transient `apt-get update` failure that succeeds on retry → suite completes normally.
+- **B5** Healthy container → three arms produce normal verdicts, the run-level gate emits its own
+  `pass`, and the total is 45.
+- **B6** `apt-get` shadowed on `PATH` to fail on first call and succeed on retry → the suite
+  completes normally **and** a retry marker is observed. Without the marker the arm is satisfied by
+  a run where the retry loop was deleted and apt simply worked.
+- **B7** The age-reaper removes a forensics tree back-dated with `touch -d` and retains a fresh one
+  — asserted by fabricated mtimes, never by waiting, and its glob bounded so it cannot reap a
+  concurrent run's tree.
 
-### C — closure-guard suite, 10 arms (floor 9)
+Floor moves 44 → 45 (the gate's own `pass`).
 
-- **C1** Incomplete closing comment under `bash -e` → rc=0.
-- **C2** …exactly one `gh issue reopen`.
+### C — closure-guard suite, 13 arms (floor 13, exact)
+
+Fixtures derive their URLs from the workflow's own `required_urls` array, so a URL drift cannot
+silently collapse two fixtures onto one arm. The `gh` stub evaluates the body's real `--jq`
+expression through `jq`, `exit 99`s on any unrecognised argv, lives in a per-run `mktemp -d`, and
+is asserted to be what `command -v gh` resolves to **before** the body runs. `GH_REPO` is an
+unroutable sentinel, `ISSUE_NUM=0`, `GH_TOKEN` empty, `GH_CONFIG_DIR` a temp dir — so a real `gh`
+that somehow ran could not mutate anything.
+
+- **C1** Incomplete closing comment under `bash -e`, executed as a **child process** → rc=0.
+- **C2** …exactly one `gh issue reopen` (counted with an explicit delimiter, since the body passes a
+  multi-line `--comment` and a line-based argv log would miscount).
 - **C3** …the rendered body contains the checklist line the defect prevented — driven once with URLs
-  missing and once with URLs present but the byte count missing, fixtures deriving their URLs from
-  the workflow's own `required_urls` array.
+  missing and once with URLs present but the byte count missing, so both `printf` arms execute.
 - **C4** Complete closing comment → rc=0, zero reopens.
-- **C5** Newest comment is the guard's own reopen body → rc=0, zero reopens.
-- **C6** Exactly one step matches the step name.
-- **C7** That step declares no `shell:` key.
-- **C8** The body carries no `${{ }}` expression.
-- **C9** The repo-wide sweep returns zero over the scoped directories, having scanned a non-zero
-  number of files.
-- **C10** A planted violation in a synthesized fixture tree makes the sweep return ≥ 1.
+- **C5** A bot reopen body newest with a **complete human comment beneath it** → zero reopens.
+  *(Against the unfixed selector this reopens once — the arm that discriminates on count.)*
+- **C6** A bot reopen body newest with an **incomplete human comment beneath it** → exactly one
+  reopen whose rendered body still lists the missing URLs. *(Both versions reopen once here, so
+  this arm discriminates on content.)*
+- **C7** A **human** comment carrying the guard's own `## Closure gate` heading → NOT excluded,
+  proving the filter is identity-based and not content-based.
+- **C8** A 31-comment fixture → the newest comment is selected, not comment #30.
+- **C9** No qualifying non-bot comment, and an issue body carrying all three URLs → reopens rather
+  than satisfying itself from the body.
+- **C10** Exactly one step matches the step name.
+- **C11** That step declares no `shell:` key, and every `$VAR` the body reads is declared in its
+  `env:` block.
+- **C12** The body carries no `${{ }}` expression.
+- **C13** The repo-wide sweep returns zero over the scoped directories having scanned a non-zero
+  number of files; a planted violation in a synthesized fixture tree makes it return ≥ 1; and a
+  violation planted inside an **excluded** path is not reported.
 
 ### Edge cases
 
@@ -704,6 +902,23 @@ RED evidence is **fault injection**, never a natural flake.
   files.
 - **Fixing `run-registered-suites.sh`'s PASS-for-skip laundering.** Real, documented in its own
   header, and the reason DC-2 resolves as it does — a separate surface with its own consumers.
+- **Payload forms the extraction regex cannot see.** A multi-line `file(` call, an indirected
+  `file(local.p)`, and a *second* `templatefile()` are all invisible to the single-line literal
+  predicate, and each would render into `user_data` while the nine literal payloads still resolve.
+  This is a pre-existing bound, not something the fix introduces — the deleted counting check
+  called the same extractor on both sides and was equally blind. Recorded because Guard 1's
+  Property must not claim completeness the mechanism cannot deliver. One cheap tightening remains
+  available: assert `main.tf` contains exactly one `templatefile(`.
+- **Symlink and path-containment hardening on the hash inputs.** `sha256sum` follows symlinks and
+  payload paths traverse `../../` with no canonicalisation, so a crafted `main.tf` could hash a
+  file outside the infra tree, and a symlinked module directory would silently relocate all nine
+  payloads. Fail-loud today (the paths would not exist) and orthogonal to the reported defect;
+  filed with the `realpath` containment assertion so it is not re-derived.
+- **Two closure-guard field weaknesses that predate this fix.** Field 2 accepts *any* green run in
+  the repo — it checks `conclusion` but neither `workflowName` nor `createdAt`, while the reopen
+  body promises both — and the `if:` job filter admits any issue whose title matches, so anyone can
+  spin the workflow. Both are properties of the guard's design rather than the `printf` defect;
+  filed together so the guard's promises and its mechanism are reconciled in one pass.
 - **Closing #6977.** Context only. This removes one blocker; it opens no birth route and creates no
   evidence file.
 - **Changing the capture script's exit codes.** The 0/1/2 contract is consumed by the workflow.
@@ -714,17 +929,19 @@ RED evidence is **fault injection**, never a natural flake.
   in the glob; payload floor; delete the counting block and both literals; re-word both abort
   messages; update the orphaned extraction comment.
 - `tests/scripts/test-git-data-birth-readiness-gate.sh` — arms A1–A5 on a separate copied tree; the
-  `_r2_hash` mirror repair; the header amendment; floor 58 → 63.
+  `_r2_hash` mirror repair and its equivalence arm; the header amendment; floor 58 → 68.
 - `tests/scripts/test-git-data-rung2-evidence-capture.sh` — one executing arm for the
   derivation-fault path; floor 33 → 34.
 - `scripts/followthroughs/git-data-rung2-evidence-capture.sh` — the `TRANSIENT:` label; exit code
   unchanged.
 - `apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh` — container `FIXTURE-FAIL:` markers
   (five new, one renamed), bounded apt retries, the round-trip sentinel and context-managed write,
-  the `docker run` rc capture, the run-level liveness gate, the column-0 stdout tail, and the
-  in-place EXIT-trap change with a reaper.
-- `.github/workflows/follow-through-closure-guard.yml` — `--` on the two `printf` calls; exclude
-  bot-authored comments from the closing-comment selector.
+  the `docker run` rc capture, the run-level liveness gate (with its own `pass`, floor 44 → 45),
+  the durable `sentinel.ok` artifact, the column-0 stdout tail, a named fault-injection hook for
+  the mutation rows, the suite's exit expression, and the in-place EXIT-trap change with a reaper.
+- `.github/workflows/follow-through-closure-guard.yml` — `--` on the two `printf` calls, plus the
+  three selector repairs: `--paginate --slurp`, a `.user.login` identity filter, and reopening
+  rather than falling back to the issue body when no comment qualifies.
 - `scripts/marketplace-drift-check.test.sh` — correct the default-shell comment.
 - `scripts/test-all.sh` — `run_suite` registration in `want_scripts`.
 
