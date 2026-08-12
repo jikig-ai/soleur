@@ -90,9 +90,7 @@ Then announce: "Tagged as **user-brand-critical** (auto, per #5175). CPO + CLO +
 **Step 3 — Emit telemetry.** Emit rule-application telemetry so the weekly aggregator records that the brainstorm enforcement layer fired (see AGENTS.md `hr-weigh-every-decision-against-target-user-impact`):
 
 ```bash
-source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
-  emit_incident hr-weigh-every-decision-against-target-user-impact applied \
-  "Every plan/PR touching credentials, auth, data, paym"
+echo 'SOLEUR_RULE_APPLIED rule=hr-weigh-every-decision-against-target-user-impact note=Every plan/PR touching credentials, auth, data, paym'
 ```
 
 The gate now fires on every brainstorm by design (per #5175), so this emit records every application of the rule. Accepted tradeoff: the "fired vs. asked" ratio is now constant (always fired) — that diagnostic signal was deliberately traded away for zero operator friction. Do NOT delete the emit; the per-application record is still consumed by the weekly aggregator.
@@ -163,9 +161,7 @@ Assess whether the feature description has implications for specific business do
 Emit rule-application telemetry **only when the brainstorm scope matches the rule's trigger** — i.e., the feature description proposes a new skill, agent, or user-facing capability. For internal infra/CI brainstorms (where the rule does not apply), skip the emit. The telemetry records *rule fires*, not *gate reached* — emitting on every brainstorm pollutes the rule-fire count and breaks the unused-rule reporter.
 
 ```bash
-source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
-  emit_incident hr-new-skills-agents-or-user-facing applied \
-  "New skills, agents, or user-facing capabilities must"
+echo 'SOLEUR_RULE_APPLIED rule=hr-new-skills-agents-or-user-facing note=New skills, agents, or user-facing capabilities must'
 ```
 
 0. **Lane-driven domain-set sizing (spec FR4).** Read `LANE` from Phase 0.4.

@@ -219,9 +219,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    Emit rule-application telemetry (records that the byte-cap / why-single-line policy ran — see AGENTS.md `cq-agents-md-why-single-line`):
 
    ```bash
-   source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
-     emit_incident cq-agents-md-why-single-line applied \
-     'AGENTS.md rules cap at ~600 bytes; `**Why:**` is o'
+   echo 'SOLEUR_RULE_APPLIED rule=cq-agents-md-why-single-line note=AGENTS.md rules cap at ~600 bytes; `**Why:**` is o'
    ```
 
    **Always-loaded verdict — run the linter and capture its exit code:**

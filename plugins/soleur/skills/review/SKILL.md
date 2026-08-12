@@ -665,10 +665,8 @@ ratios instead of re-arguing from intuition. This is the half of the change
 that makes the *next* change cheap:
 
 ```bash
-source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh"
 # DISPOSITION is exactly one of: flip-inline | file
-emit_incident "cost-of-filing-${DISPOSITION}" applied \
-  "review disposition: ${DISPOSITION} (${LINES} lines, ${FILES} files)"
+echo "SOLEUR_RULE_APPLIED rule=cost-of-filing-${DISPOSITION} note=review disposition: ${DISPOSITION} (${LINES} lines, ${FILES} files)"
 ```
 
 The disposition rides in the **`rule_id`** (`cost-of-filing-flip-inline` vs

@@ -282,9 +282,7 @@ The checklist enforces an L3->L7 diagnostic order: firewall allow-list and DNS/r
 When a trigger pattern matches, emit rule-application telemetry so the weekly aggregator records this gate fired (see AGENTS.md `hr-ssh-diagnosis-verify-firewall`):
 
 ```bash
-source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
-  emit_incident hr-ssh-diagnosis-verify-firewall applied \
-  "When a plan addresses an SSH/network-connectivity s"
+echo 'SOLEUR_RULE_APPLIED rule=hr-ssh-diagnosis-verify-firewall note=When a plan addresses an SSH/network-connectivity s'
 ```
 
 This step is a single file read, not a subagent spawn. If the feature description does not match any trigger pattern, skip this step silently.
