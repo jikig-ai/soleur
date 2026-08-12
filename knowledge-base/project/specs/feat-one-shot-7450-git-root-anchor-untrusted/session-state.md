@@ -265,3 +265,76 @@ not.** That distinction is recorded in the ADR.
 
 **§R1 is now fully discharged:** the ADR text is committed AND the re-route is filed as
 **#7502** and named in the ADR. #7450 is no longer blocked on §R1.
+
+---
+
+## Resume session 2026-08-12, part 3 (B1 settled by measurement; records closed)
+
+Same contract as part 2: every row is what LANDED, with evidence. Intent lives in the
+NOT-DONE list only.
+
+### Merged `origin/main` FIRST, before any edit
+
+The branch was **2** behind, not 1: `#7473` (plugin delivery / keyless manifests) and
+`#7458` (git-data template strip) had both landed. Clean merge, no conflicts. Re-checked
+afterwards: neither touches `go.md`, `sync.md`, `plugin-root-anchoring.test.ts`, ADR-179 or
+ADR-093, so no premise of this work moved. `review/SKILL.md` gained 2 lines, unrelated to
+anchoring.
+
+### Landed
+
+| # | Work | Evidence |
+| --- | --- | --- |
+| 18 | **D6 discharged by EXECUTING the deferred arm, not dropping it.** Headless `claude -p --plugin-dir` with a synthetic plugin. The recorded "requires a fresh session" blocker was wrong — it builds its own registry. | `phase-1-measurement.md` Arm 4 |
+| 19 | **B1 SETTLED — not implemented, and that is the finding.** The panel's `case` guards an operand the adversary cannot reach, breaks dogfooding on every plain clone, and re-adds `git rev-parse` to the three gates this PR de-git-roots. | `b1-disposition.md` |
+| 20 | **The B1 invariant is PINNED** (Test 21), fence-scoped so prose explaining the ban is not flagged as violating it. | Guard 2 95/0 |
+| 21 | **C9** halt messages no longer tell the operator to re-run the skill they are inside; each prints the resolved root and discriminates empty-root from wrong-root. | 3 gates |
+| 22 | **C10** all 11 fail-closed halts emit `SOLEUR_*_HALT reason=` on **stdout**; Test 22 asserts the marker is not redirected to stderr. | Guard 2 Test 22 |
+| 23 | **C12/AC5d** now test-enforced — deleting `[ -n "$PERSIST_SAFE" ]` reddens, and so does neutering its halt arm. | Guard 2 Test 23 |
+| 24 | **D3, D4, D7** closed across ADR-093 and ADR-179, plus ADR-179 decisions 10 and 11. | commit `e4f4fd2ed` |
+| 25 | **Battery 3**: GREEN control, **6/6 RED**, incl. a harness mutation. | `battery-3-mutations.sh`, `mutation-matrices.md` |
+
+### The measurement, because it is the load-bearing result of this session
+
+One session, one environment, with `CLAUDE_PLUGIN_ROOT=/tmp/DECOY-EVIL-ROOT` set ambiently:
+
+| Form in a `SKILL.md` bash fence | Result |
+| --- | --- |
+| bare `${CLAUDE_PLUGIN_ROOT}` | **substituted at delivery** with the real install root — decoy ignored |
+| `${CLAUDE_PLUGIN_ROOT:-…}` | literal, then expanded at runtime to **`/tmp/DECOY-EVIL-ROOT/…`** |
+| control: decoy inside the executing Bash subprocess | present, `ENV_GREP=[1]` |
+
+The control is the part that matters. Without it, "ambient ignored" and "ambient never
+propagated" predict identical bytes, and the first reads as safety. With it: at a bare-anchored
+site the token is **not a shell variable at execution time**, and the pre-fix form is a
+**reproduced** exploit rather than a modelled one.
+
+### Two findings re-measured, both corrections to this session's own first answer
+
+- **Test 21 initially reddened on my own prose.** The B1 rationale I had just written names
+  `git rev-parse` while explaining its removal, and an unscoped grep flagged the documentation
+  of a ban as a violation of it. Fixed by scoping to `bash` fences — and an anti-vacuity control
+  was added at the same time, because a scoping bug that yields an empty stream would make the
+  assertion pass unconditionally (the A12 false-PASS shape). M-B proves the control is live.
+- **Battery 3's M-F failed to APPLY on its first run** (a quoting error) and was reported
+  `NOT APPLIED — row VOID`, not as a survivor. Recorded rather than quietly re-run, because the
+  natural response to a "survivor" is to weaken the assertion — a battery whose own bugs push
+  toward deleting real coverage.
+
+### Not from the panel — found while verifying the surface map
+
+`agent-env.ts`'s security comments named the `:-` form as what the injection protects and cited
+`redact-sentinel.sh` and `trigger.sh` as its examples. This PR migrated both. Corrected without
+weakening the invariant: the injection still carries the ~105 unmigrated sites, so it stays
+fail-closed, and the comment now says so to stop a later reader "simplifying" it.
+
+### NOT done — exact resume points
+
+1. **Grok Build residual.** Whether a bare `${CLAUDE_PLUGIN_ROOT}` is substituted on that
+   harness is UNMEASURED; no handling exists in `lib/harness.ts` or `.grok/`. Stated in
+   `b1-disposition.md` and ADR-179 decision 11, not closed. This is the one condition that
+   would reopen B1.
+2. Full-suite exit gate, PR body, then `/soleur:review` → `/soleur:compound` → `/soleur:ship`.
+
+**#7450 may close at ship** — §R1 is fully discharged (ADR text committed AND re-routed as
+#7502, which the ADR names).
