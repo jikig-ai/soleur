@@ -7,17 +7,26 @@
 # (ADR-181, extended by its 2026-08-12 addendum from the two heavy mutation batteries to four
 # suites).
 #
-# HOW TO ADD A RELEVANCE GATE — five sites, all of them enforced:
+# HOW TO ADD A RELEVANCE GATE — SIX sites. Do all six; five is not enough.
 #   1. Declare <NAME>_PATHS here, self-including the suite's own file AND this file.
 #   2. Add "<NAME>_PATHS|<suite-file>" to RELEVANCE_ARRAYS in scripts/lint-orphan-test-suites.sh.
 #   3. Wrap the run_suite call in scripts/test-all.sh with `if _diff_touches "${<NAME>_PATHS[@]}"`.
 #   4. Give it a skip_suite else-arm — the decline must be a counted verdict, never an absence.
 #   5. Ensure every path in 1 lives under a TEST_RELEVANCE_PREFIXES entry below; add the prefix if
-#      not, or the untracked-file arm is blind to it. The linter now checks this.
-# Sites 1-3 and 5 red in scripts/lint-orphan-test-suites.sh; site 4 reds in
-# scripts/test-all-infra-coverage-notice.test.sh, behaviourally. This block exists because three
-# of the five were discoverable only by reading an archived plan, and this file is where a reader
-# adding a gate actually lands.
+#      not, or the untracked-file arm is blind to it.
+#   6. Add "<label>|<NAME>_PATHS" to GATED in scripts/test-all-infra-coverage-notice.test.sh.
+#      <label> is skip_suite's $1, which is NOT always the suite file path — see RELEVANCE_ARRAYS.
+#
+# WHERE EACH SITE REDS. 1, 2, 3, 5 and 6 red in scripts/lint-orphan-test-suites.sh; 6 additionally
+# reds in the harness's own registration floor. Site 4 reds ONLY in
+# scripts/test-all-infra-coverage-notice.test.sh, and ONLY for a suite listed in GATED — which is
+# precisely why 6 is not optional. An earlier revision of this block listed five sites and asserted
+# site 4 "reds behaviourally"; that was FALSE for a new gate, because every behavioural arm
+# quantifies over GATED. Review found it, and the linter now enforces GATED against the runner so
+# the omission cannot recur silently.
+#
+# This block exists because three of the sites were otherwise discoverable only by reading an
+# archived plan, and this file is where a reader adding a gate actually lands.
 #
 # DECLARATIONS ONLY. No `set -e`, no `exit`, no side effects, nothing executed. Two very
 # different consumers source this file and both need it to be inert:
@@ -126,19 +135,19 @@ CF_TUNNEL_BATTERY_PATHS=(
 # of recent commits. Source of truth: the suite's own header — PRODUCER=, FIXTURES=, and the
 # sourced test-helpers.sh.
 #
-# THE DECISION VARIABLE IS THE SKIP RATE, NOT A WALL-CLOCK FIGURE, and that is a measurement
-# result rather than a preference. #7494 was filed quoting 429 s for this suite; three consecutive
-# reps of an UNCHANGED tree measured 23 s / 34 s / 91 s, taken while two sibling test-all.sh runs
-# from another worktree were active. The spread is wider than most effects anyone would compare,
-# so no honest saving figure is available from this machine — while the skip rate is a
-# deterministic `git log` replay that load cannot touch. Re-derive it with:
-#   for sha in $(git log --format=%H -80 origin/main); do
-#     git show --pretty=format: --name-only "$sha" > /tmp/b
-#     armed=0; for p in "${C4_PRODUCER_PATHS[@]}"; do grep -qF -- "$p" /tmp/b && { armed=1; break; }; done
+# THE DECISION VARIABLE IS THE SKIP RATE, NOT A WALL-CLOCK FIGURE. That is a measurement result,
+# not a preference; the full argument and the withdrawn cost figures live once, in ADR-181's
+# `## Addendum — 2026-08-12 (#7494)` §7. Do not restate a per-run saving here.
+#
+# ANCHOR THE REPLAY TO A SHA, NOT TO `origin/main`. `origin/main` is a MOVING window: re-run
+# against the tip and a reader cannot tell "the predicate rotted" from "the window moved". Measured
+# 96% at `fcae560b4` and 95% four commits later, which is the drift, not a regression.
+#   BASE=fcae560b4   # the merge base this rate was measured at
+#   for sha in $(git log --format=%H -80 "$BASE"); do
+#     blob=$(git show --pretty=format: --name-only "$sha"); armed=0
+#     for p in "${C4_PRODUCER_PATHS[@]}"; do grep -qF -- "$p" <<<"$blob" && { armed=1; break; }; done
 #     [[ $armed == 0 ]] && echo skip
 #   done | wc -l
-# Do NOT restate a per-run saving here or in the ADR: cq-ac-must-not-depend-on-concurrent-sessions
-# applies to the justification as much as to an acceptance criterion.
 #
 # WHY THIS SET IS CLOSED where the two batteries above are not: the suite NEVER reads the real
 # tree. seed() builds throwaway roots under $TMPDIR from $FIXTURES and the producer takes its root
@@ -171,20 +180,46 @@ C4_PRODUCER_PATHS=(
   "scripts/lib/test-relevance-paths.sh"                    # THIS FILE — see the self-reference note above
 )
 
-# .github/scripts/test/run-all.sh (test-all.sh) — declined on 56% of recent commits. A nested
+# .github/scripts/test/run-all.sh (test-all.sh) — declined on 15% of recent commits. A nested
 # RUNNER, so the predicate covers what its fixture suites depend on, not just the runner.
-#
-# Same measurement caveat as the block above, and it cuts the OTHER way here: #7494 quoted 95 s,
-# while two reps under sibling load measured 163 s and 205 s. Neither figure is trustworthy on a
-# contended machine; the 56% is a deterministic replay and is the number this gate is justified by.
 #
 # apps/web-platform/infra IS LOAD-BEARING AND WAS NOT OBVIOUS. test-infra-suite-registration.sh
 # derives its expected set from `git ls-files "${INFRA_PREFIX}/*.test.sh"` against the REAL tree, so
 # a commit ADDING an infra suite without registering it in infra-validation.yml is exactly the diff
 # that must run this runner — and a `.github`-only predicate would have declined it.
+#
+# AND IT IS NOT THE ONLY REAL-TREE READ — that framing was wrong and review caught it.
+# test-no-at-mention-credfile-footgun.sh scans committed content with `git ls-files` over
+# plugins/soleur/{skills,agents,commands,docs,hooks}, .claude/hooks, AGENTS.md, AGENTS.*.md,
+# CLAUDE.md and plugins/**/AGENTS*.md — none of which is under .github or apps/web-platform/infra.
+# With a .github-only predicate, a diff touching plugins/soleur/skills/preflight/SKILL.md DECLINED
+# the runner. That guard exists because #6830 leaked an operator's live root token into a
+# transcript from a documentation example in exactly that file class, so declining there is the
+# "declined on the diff that needed it" shape this whole mechanism is built to avoid.
+#
+# THE COST OF DECLARING IT IS DELIBERATE AND LARGE: measured at fcae560b4, the skip rate falls
+# 56% -> 15%. Taken anyway. A slower local run is recoverable; a credential-footgun token reaching
+# a transcript is not, and hr-weigh-every-decision-against-target-user-impact resolves that
+# trade in one direction only. The gate still declines 1 commit in 7, announced and counted.
+#
+# WHY THE BARE `.github` ELEMENT DOES NOT VIOLATE `WHAT BELONGS IN A LIST` above. That rule rejects
+# gating on a battery's COPY set because it "would match nearly every diff and never skip". Here
+# .github is a genuine dependency set, not a copy set, and the measured rate is 15% — it does skip.
+#
+# KNOWN LIMIT — a LOWER BOUND, not a closed set, exactly as the cf-tunnel block above says of
+# itself. `git rev-parse --show-toplevel` means any future suite in this runner can read any path
+# in the repo without editing this array. Bounded by an independent REQUIRED CI home:
+# `guard-script-fixture-tests` in .github/workflows/pr-quality-guards.yml runs this runner directly
+# on pull_request and merge_group with NO paths: filter, so a decline here can slow a local loop
+# but cannot merge an escape.
 GITHUB_SCRIPTS_SUITE_PATHS=(
   ".github"                                                # the SUTs, the suites, and the workflows they derive from
-  "apps/web-platform/infra"                                # the real-tree read above — directory
+  "apps/web-platform/infra"                                # test-infra-suite-registration.sh's real-tree read — directory
+  "plugins/soleur"                                         # the footgun guard's git ls-files scan — directory, see above
+  ".claude/hooks"                                          # same scan
+  "AGENTS.md"                                              # same scan (auto-loaded content surface)
+  "AGENTS.rules.md"                                        # same scan
+  "CLAUDE.md"                                              # same scan
   ".github/scripts/test/run-all.sh"                        # SELF. Dead for MATCHING (".github" already
                                                            # covers it) — present because the linter's
                                                            # self-inclusion check reads this array.
@@ -201,10 +236,20 @@ GITHUB_SCRIPTS_SUITE_PATHS=(
 # make a gate more likely to RUN. `plugins/soleur` was added with C4_PRODUCER_PATHS: without it a
 # session that adds a brand-new UNTRACKED fixture corpus and runs the gate before committing would
 # have the c4 suite declined on the very diff that needed it.
+#
+# ROOT FILES APPEAR HERE TOO, and that is not a category error. The consumer is
+# `git ls-files --others --exclude-standard -- "${TEST_RELEVANCE_PREFIXES[@]}"`, which takes
+# PATHSPECS; a pathspec naming a tracked file simply matches nothing in `--others`, which is the
+# correct no-op. They are listed because the linter's prefix-coverage check requires every declared
+# predicate path to be reachable from this list, and GITHUB_SCRIPTS_SUITE_PATHS declares them.
 TEST_RELEVANCE_PREFIXES=(
   "scripts"
   "tests/scripts"
   ".github"
   "apps/web-platform/infra"
   "plugins/soleur"
+  ".claude/hooks"
+  "AGENTS.md"
+  "AGENTS.rules.md"
+  "CLAUDE.md"
 )

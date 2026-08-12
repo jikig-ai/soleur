@@ -565,6 +565,10 @@ _diff_touches() {
   return 1
 }
 
+# Counted at the RELEVANCE call sites only. `skipped` also carries the infra runner's incident and
+# not_in_diff declines, which SOLEUR_TEST_FORCE_ALL cannot force -- see the epilogue lever.
+_relevance_declined=0
+
 _infra_in_diff=0
 if grep -qF 'apps/web-platform/infra/' <<<"$_diff_names"; then
   _infra_in_diff=1
@@ -987,6 +991,7 @@ if want_scripts; then
   if _diff_touches "${REGISTRY_BATTERY_PATHS[@]}"; then
     run_suite "tests/scripts/registry-gate-mutation-battery" bash tests/scripts/test-registry-gate-mutation-battery.sh
   else
+    _relevance_declined=$((_relevance_declined + 1))
     skip_suite "tests/scripts/registry-gate-mutation-battery" "relevance" \
       "bash tests/scripts/test-registry-gate-mutation-battery.sh"
   fi
@@ -1152,6 +1157,7 @@ if want_scripts; then
   if _diff_touches "${CF_TUNNEL_BATTERY_PATHS[@]}"; then
     run_suite "scripts/cf-tunnel-liveness-gate-mutations" bash scripts/cf-tunnel-liveness-gate-mutations.test.sh
   else
+    _relevance_declined=$((_relevance_declined + 1))
     skip_suite "scripts/cf-tunnel-liveness-gate-mutations" "relevance" \
       "bash scripts/cf-tunnel-liveness-gate-mutations.test.sh"
   fi
@@ -1186,6 +1192,7 @@ if want_scripts; then
     # surface is untouched and the suite is still registered exactly once, by the glob.
     if [[ "$f" == "plugins/soleur/test/c4-from-components.test.sh" ]]; then
       if ! _diff_touches "${C4_PRODUCER_PATHS[@]}"; then
+        _relevance_declined=$((_relevance_declined + 1))
         skip_suite "plugins/soleur/test/c4-from-components.test.sh" "relevance" \
           "bash plugins/soleur/test/c4-from-components.test.sh"
         continue
@@ -1252,6 +1259,7 @@ if want_scripts; then
   if _diff_touches "${GITHUB_SCRIPTS_SUITE_PATHS[@]}"; then
     run_suite ".github/scripts/test/run-all.sh" bash .github/scripts/test/run-all.sh
   else
+    _relevance_declined=$((_relevance_declined + 1))
     skip_suite ".github/scripts/test/run-all.sh" "relevance" \
       "bash .github/scripts/test/run-all.sh"
   fi
@@ -1279,18 +1287,20 @@ tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"
 if (( killed > 0 || skipped > 0 )); then
   echo "=== $suites suites: $((suites - failed - killed - skipped)) passed, $failed failed, $killed killed (unresolved — coverage not obtained), $skipped skipped (declined — not relevant to this diff) ==="
 fi
-# THE LEVER, PRINTED ONCE, ONLY WHEN IT IS ACTIONABLE. SOLEUR_TEST_FORCE_ALL appears exactly once
-# in this whole runner — inside _diff_touches's early return — and until now was printed NOWHERE.
-# A developer who wants full coverage anyway had to run each declined suite's re-run command by
-# hand or already know an undocumented variable, while the infra runner advertises its own lever
-# (SOLEUR_INCIDENT_SKIP) in two places. A decline is only safe while it stays actionable, so the
-# recovery path for ALL of them belongs beside the count of them.
+# THE LEVER, PRINTED ONCE, ONLY WHEN IT CAN ACTUALLY HELP. SOLEUR_TEST_FORCE_ALL appeared exactly
+# once in this runner -- inside _diff_touches's early return -- and was printed nowhere, while the
+# infra runner advertises its own lever in two places. A decline is only safe while it stays
+# actionable, so the recovery path belongs beside the count of declines.
 #
-# Emitted BEFORE the terminal marker, for the same reason the breakdown is: `=== N/M suites
-# passed ===` must remain the last `===` line on every arm, and this line is not `===`-shaped at
-# all, so it cannot be mistaken for a summary by an anchored poll.
-if (( skipped > 0 )); then
-  echo "      To run everything regardless of the diff:"
+# GATED ON RELEVANCE DECLINES, NOT ON `skipped`, and the wording says "relevance-gated" rather than
+# "everything". Both were defects review caught, and they compound: `skipped` also counts the infra
+# runner's incident/not_in_diff declines, which _diff_touches never sees, so the earlier form (a)
+# claimed to recover a suite it cannot, and (b) still fired after the operator obeyed it -- printing
+# the same advice verbatim on the next run, which is advice that does not terminate. Worst case was
+# SOLEUR_INCIDENT_SKIP=1 on an incident path: the only decline is one the operator set deliberately,
+# answered with an unrelated lever. The infra runner keeps advertising its own.
+if (( _relevance_declined > 0 )); then
+  echo "      To run every relevance-gated suite regardless of the diff:"
   echo "        SOLEUR_TEST_FORCE_ALL=1 bash scripts/test-all.sh"
 fi
 echo "=== $((suites - failed - killed - skipped))/$suites suites passed ==="

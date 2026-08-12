@@ -163,7 +163,23 @@ run_arm() {
   return 0
 }
 
-echo "=== test-all.sh infra coverage-notice suite ==="
+# POSITIVE CONTROL, first assertion in the file. MIN_ASSERTIONS counts PASS+FAIL, so a neutered
+# `fail()` drops failing assertions out of the sum and is caught only while slack >= the number of
+# failures -- and slack is 0 only by hand-maintenance of MIN_FIXED. Measured: `fail(){ return 0; }`
+# left this suite at 99/0 rc 0, a no-op oracle that says nothing about the SUT. This control fails
+# loudly instead, and costs one assertion.
+_c_pass=$PASS _c_fail=$FAIL
+pass "[control] pass() moves its counter"
+fail "[control] EXPECTED-FAIL probe -- not a real failure; retracted on the next line"
+if [[ "$PASS" -eq $((_c_pass + 1)) && "$FAIL" -eq $((_c_fail + 1)) ]]; then
+  FAIL=$((FAIL - 1))   # retract the deliberate failure; the counter move is the evidence
+  pass "[control] both counters are live, so a real failure is reportable"
+else
+  echo "FATAL: pass()/fail() do not move their counters -- every verdict below is unreadable." >&2
+  exit 1
+fi
+
+echo "=== test-all.sh infra coverage-notice suite ==="echo "=== test-all.sh infra coverage-notice suite ==="
 
 # --- THE CORE INVARIANT, over the full group x diff matrix ---------------------------------
 # The claim and the invocation must agree in EVERY cell. This is the assertion the defect
@@ -335,11 +351,11 @@ fi
 # hand-named scalars and every assertion below enumerated them, so adding a third gated suite left
 # this suite quantifying over 2 of 3 while its comments silently became false. (Those two
 # identifiers are deliberately not spelled here: an acceptance check greps this file for them to
-# prove they are gone, and a body-grep sees comments too.) Driving every arm from GATED makes the
-# suite
-# quantify over gated suites STRUCTURALLY: a fifth gate inherits every arm here for free, and a
-# gate added to test-all.sh without an entry here reds via the derived floor in
-# scripts/lint-orphan-test-suites.sh rather than sitting unasserted.
+# prove they are gone, and a body-grep sees comments too.) Driving every arm from GATED makes this
+# suite quantify over gated suites STRUCTURALLY: a fifth gate inherits every arm here for free,
+# and a gate added to test-all.sh without a row here reds at the REGISTRATION FLOOR below, which
+# derives the expected set from the runner. The linter's own floor does NOT cover this table --
+# it compares RELEVANCE_ARRAYS against the runner and never reads GATED.
 #
 # label | the predicate array in scripts/lib/test-relevance-paths.sh that gates it.
 # The label MUST be byte-identical to skip_suite's $1 at the call site — that is skip_suite's
@@ -351,13 +367,41 @@ GATED=(
   ".github/scripts/test/run-all.sh|GITHUB_SCRIPTS_SUITE_PATHS"
 )
 
-# DISPATCH FLOOR for this file's own table, mirroring the linter's. GATED=() would make every
-# loop below iterate zero times while the suite still printed "N passed, 0 failed" — the exact
-# vacuity the anti-vacuity floor at the bottom exists to catch, except that floor is DERIVED from
-# ${#GATED[@]} and so would shrink in lockstep with the thing it measures. A separate absolute
-# floor is what breaks that circularity.
-if [[ "${#GATED[@]}" -lt 4 ]]; then
-  echo "FATAL: GATED has ${#GATED[@]} entries, expected >= 4 — every relevance arm below would pass over nothing." >&2
+# REGISTRATION FLOOR, derived from $TARGET — not a hand-typed literal.
+#
+# THE GAP THIS CLOSES, and it was live: `GATED` is a SIXTH declaration site for a gated suite, and
+# nothing kept it in sync with the runner. An earlier revision guarded it with `-lt 4` and a comment
+# claiming "a gate added to test-all.sh without an entry here reds via the derived floor in
+# scripts/lint-orphan-test-suites.sh". That floor compares RELEVANCE_ARRAYS against the runner and
+# never reads GATED. So a fifth gate added by following the HOW-TO block verbatim left the linter
+# green, this file's floor green (5 >= 4), and every arm below quantifying over 4 of 5 — while
+# MIN_ASSERTIONS shrank in lockstep because it derives from ${#GATED[@]}. That is verbatim the
+# defect this table was introduced to remove, one level up. Three independent review agents found
+# it; the comment asserting it could not happen is what made it worth all three.
+#
+# NAMES, not just a count. A cardinality floor cannot see a SUBSTITUTION — swap which array backs
+# which gate and 4 == 4 still holds. Comparing the sorted array names the runner actually
+# dereferences against the names GATED registers catches both directions.
+#
+# NOT a tautology: the expected set comes from $TARGET (scripts/test-all.sh, the artifact under
+# test) while GATED is hand-maintained here, so the two operands have independent lifetimes. The
+# one thing this cannot check is the label<->array PAIRING, which check_element_arms covers
+# behaviourally.
+RUNNER_ARRAYS=$(sed 's/[[:space:]]*#.*$//' "$TARGET" \
+  | grep -oE '_diff_touches +"?\$\{[A-Z0-9_]+\[@\]' \
+  | grep -oE '[A-Z0-9_]+\[@\]' | sed 's/\[@\]//' | sort -u)
+GATED_ARRAYS=$(printf '%s\n' "${GATED[@]}" | sed 's/^[^|]*|//' | sort -u)
+if [[ "$RUNNER_ARRAYS" != "$GATED_ARRAYS" ]]; then
+  echo "FATAL: GATED does not match the predicate arrays scripts/test-all.sh dereferences." >&2
+  echo "  runner: $(printf '%s' "$RUNNER_ARRAYS" | tr '\n' ' ')" >&2
+  echo "  GATED : $(printf '%s' "$GATED_ARRAYS" | tr '\n' ' ')" >&2
+  echo "  Every gated suite needs a GATED row, or its decline is asserted by nothing here." >&2
+  exit 1
+fi
+# Non-vacuity: an extraction that silently yielded nothing would make the comparison above
+# trivially true on both sides. The runner carries at least the two ADR-181 batteries.
+if [[ "$(printf '%s\n' "$RUNNER_ARRAYS" | grep -c .)" -lt 2 ]]; then
+  echo "FATAL: extracted fewer than 2 predicate arrays from $TARGET -- the registration floor certified nothing." >&2
   exit 1
 fi
 
@@ -377,6 +421,11 @@ gate_ran() {
 run_gate_arm() {
   local label="$1" diff_fixture="$2"; shift 2
   local sb="$TMP/test-all-gate-${label}.sh"
+  # Reset BEFORE the build. Every caller uses `|| true`, so an early return here would leave the
+  # PREVIOUS arm's verdicts in GATE_RAN/GATE_OUT and the assertions below would read them as this
+  # arm's. Zeroing first makes a build failure read as "nothing ran", which is true.
+  GATE_RAN=(); GATE_OUT=""
+  local _i; for _i in "${!GATED[@]}"; do GATE_RAN[$_i]=0; done
   build_sandbox "$sb" 0 >/dev/null || { fail "sandbox build failed for gate arm $label"; return 1; }
   export SANDBOX_RECORD="$TMP/record-gate-${label}.txt"
   : > "$SANDBOX_RECORD"
@@ -419,6 +468,29 @@ knowledge-base/project/learnings/2026-01-01-some-learning.md'
 # --- Negative-control PAIR. One arm alone proves nothing: an implementation that always skips
 # --- passes the skip arm, and one that never skips passes the run arm. Only the pair is a gate.
 run_gate_arm docs-only "$DOCS_ONLY_DIFF" || true
+DOCS_GATE_OUT="$GATE_OUT"
+
+# THE DECLINE IS A COUNTED VERDICT, NOT PRINTED TEXT. The per-suite grep below asserts the skip was
+# ANNOUNCED; nothing asserted it was COUNTED. Measured: replacing a gate's skip_suite call with bare
+# echoes emitting byte-identical output left this suite at 99/0 while the denominator dropped 303 ->
+# 302 and `skipped` 5 -> 4 -- the #3366 class (a suite silently leaving the denominator behind a
+# green summary) live for all four ADR-181 gates. The Phase-B denominator arms above cannot see it:
+# they run with SOLEUR_TEST_FORCE_ALL=1, so they measure only the infra gate.
+#
+# Expected skipped = every gated suite + the infra runner's own not_in_diff decline on this fixture.
+if parse_summary "$DOCS_GATE_OUT"; then
+  DOCS_TOTAL="$PARSED_TOTAL"; DOCS_SKIP="$PARSED_SKIP"
+  pass "the docs-only run reports a parseable summary"
+else
+  DOCS_TOTAL=""; DOCS_SKIP=""
+  fail "the docs-only run's summary does not parse"
+fi
+if [[ "$DOCS_SKIP" == "$(( ${#GATED[@]} + 1 ))" ]]; then
+  pass "every relevance decline is COUNTED (skipped=$DOCS_SKIP = ${#GATED[@]} gated + 1 infra)"
+else
+  fail "declines are announced but not counted: skipped=$DOCS_SKIP, expected $(( ${#GATED[@]} + 1 ))"
+fi
+
 for g in "${GATED[@]}"; do
   lbl="${g%%|*}"
   if [[ "$(gate_ran "$lbl")" == 0 ]]; then
@@ -434,6 +506,20 @@ for g in "${GATED[@]}"; do
     pass "$lbl is announced as a counted relevance skip"
   else
     fail "$lbl was declined silently"
+  fi
+  # ACTIONABLE, not merely honest. Measured: pointing a gate's re-run command at a nonexistent file
+  # left the suite green -- the "skip must be ACTIONABLE" trio above was asserted for the infra
+  # label only.
+  #
+  # Read the line FOLLOWING the label, do NOT assume `bash <label>`. The label is a DISPLAY string
+  # and diverges from the suite path for both batteries (`tests/scripts/registry-gate-mutation-
+  # battery` vs `tests/scripts/test-registry-gate-mutation-battery.sh`) -- a first draft of this very
+  # assertion assumed they were equal and red-flagged two correctly-wired suites, which is the same
+  # mistake that got the static pairing check cut at plan time.
+  if grep -A3 -F "[skip] $lbl (relevance)" <<<"$GATE_OUT" | grep -qE '^ +bash .*\.sh( |$)'; then
+    pass "$lbl's decline carries a runnable re-run command"
+  else
+    fail "$lbl's decline has no usable re-run command"
   fi
 done
 
@@ -473,8 +559,9 @@ fi
 # check_element_arms below feeds each declared element LITERALLY, so a directory element proves
 # substring matching on the directory string and nothing more. The "closed under future
 # additions" claim that justifies declaring plugins/soleur/lib as a directory rests entirely on
-# a CHILD path matching, which is what this arm pins. Anchoring _diff_touches's match (grep -qF
-# -> grep -qxF) leaves every other arm green and reds only here.
+# a CHILD path matching, which is what this arm pins. (An earlier comment claimed the
+# grep -qF -> grep -qxF mutation "reds only here"; that is false -- rename-old-path and
+# infra-suite-added red under it too. The mutation is caught, by three arms, not one.)
 run_gate_arm dir-child 'plugins/soleur/lib/anything.ts' || true
 if [[ "$(gate_ran 'plugins/soleur/test/c4-from-components.test.sh')" == 1 ]]; then
   pass "a directory pathspec arms its suite on a CHILD path (plugins/soleur/lib/anything.ts)"
@@ -491,6 +578,23 @@ if [[ "$(gate_ran '.github/scripts/test/run-all.sh')" == 1 ]]; then
   pass "a diff adding an infra suite runs the .github fixture runner"
 else
   fail "apps/web-platform/infra is not in the .github runner's predicate — the real-tree read is ungated"
+fi
+
+# --- WIDENING is a defect too, and it was observable by nothing --------------------------------
+# Every arm above asserts a suite RUNS on a relevant diff, or that all four decline on a docs-only
+# one. None can see a predicate becoming TOO BROAD: measured, adding "scripts" to C4_PRODUCER_PATHS
+# left the suite green at one assertion MORE (the new element earns its own passing element arm),
+# while the c4 gate would then arm on nearly every diff and the 96% skip rate the feature is
+# justified by silently becomes ~0.
+#
+# A targeted negative fixture is the cheap pin: scripts/ is where this runner and its libraries
+# live, it is touched constantly, and no c4 dependency sits there except the predicate data file
+# itself -- which is named in full, so a whole-path element still declines on a sibling file.
+run_gate_arm scripts-only 'scripts/test-all.sh' || true
+if [[ "$(gate_ran 'plugins/soleur/test/c4-from-components.test.sh')" == 0 ]]; then
+  pass "a scripts-only diff still declines the c4 suite (the predicate has not been widened)"
+else
+  fail "the c4 predicate arms on an unrelated scripts/ file -- it has been widened and the skip rate is gone"
 fi
 
 # --- COMPLETENESS: every declared predicate path must actually ARM its battery -----------
@@ -556,7 +660,7 @@ if [[ -n "$W7_LITERAL" ]]; then
   pass "the W7_EXPECTED literal was located in the oracle"
   IFS=',' read -r -a W7_FILES <<<"$W7_LITERAL"
   for wf in "${W7_FILES[@]}"; do
-    if printf '%s\n' "${CF_TUNNEL_BATTERY_PATHS[@]}" | grep -qxF ".github/workflows/${wf}"; then
+    if grep -qxF ".github/workflows/${wf}" <<<"$(printf '%s\n' "${CF_TUNNEL_BATTERY_PATHS[@]}")"; then
       pass "W7 workflow $wf is present in the cf-tunnel predicate"
     else
       fail "W7 workflow $wf is MISSING from the cf-tunnel predicate"
@@ -604,10 +708,67 @@ if grep -qF 'git ls-files --others --exclude-standard -- "${TEST_RELEVANCE_PREFI
 else
   fail "the runner no longer asks git for untracked files, so a new UNTRACKED target is invisible"
 fi
-if printf '%s\n' "${TEST_RELEVANCE_PREFIXES[@]}" | grep -qxF 'plugins/soleur'; then
+if grep -qxF 'plugins/soleur' <<<"$(printf '%s\n' "${TEST_RELEVANCE_PREFIXES[@]}")"; then
   pass "TEST_RELEVANCE_PREFIXES covers plugins/soleur, so the untracked arm can see c4 fixtures"
 else
   fail "TEST_RELEVANCE_PREFIXES lost plugins/soleur — untracked c4 fixtures are invisible to the predicate"
+fi
+
+# --- REAL GIT STATE: the assembly itself, not its spelling -------------------------------------
+# THE GAP THIS CLOSES. Both source anchors above grep $TARGET for a command's TEXT. That pins the
+# spelling and nothing else: measured, renaming the ASSIGNMENT TARGET one line above each of them
+# (`_diff_names="${_diff_names}` -> `_unused=...`) left every anchor matching and this whole suite at
+# 99/0, while a scratch repo showed the .github runner declining on an untracked infra suite and the
+# registry battery declining on a `git mv` of its own SUT -- verbatim the two failures those arms
+# were written for. No fixture arm can see it either, BY CONSTRUCTION: build_sandbox injects
+# `_diff_names="$SANDBOX_DIFF_NAMES"` AFTER the four-source assembly, replacing the blob wholesale.
+#
+# So this arm drives neither. It extracts the real assembly from $TARGET and evaluates it inside a
+# throwaway git repo carrying exactly the two states in question, then asserts the resulting blob
+# contains what the predicates must match. Retarget any assignment in that block and this reds.
+REAL_REPO="$TMP/realstate"
+mkdir -p "$REAL_REPO"
+(
+  set -e
+  cd "$REAL_REPO"
+  git init -q -b main .
+  git config user.email t@t; git config user.name t
+  mkdir -p scripts/lib plugins/soleur/test/fixtures/component-docs apps/web-platform/infra
+  echo x > scripts/registry-pull-path-health.sh
+  git add -A && git commit -q -m base
+  git branch -f origin/main main 2>/dev/null || true
+  git update-ref refs/remotes/origin/main HEAD
+  git mv scripts/registry-pull-path-health.sh scripts/registry-pph.sh
+  git commit -q -am rename
+  # untracked, under a declared prefix
+  echo y > apps/web-platform/infra/brand-new.test.sh
+) >/dev/null 2>&1 || { fail "real-state scratch repo could not be built"; }
+
+if [[ -d "$REAL_REPO/.git" ]]; then
+  ASSEMBLY="$TMP/assembly.sh"
+  awk '/^_diff_detect_ok=0$/,/git ls-files --others/' "$TARGET" > "$ASSEMBLY"
+  # Non-vacuity: an extraction that came back short would make every assertion below pass over an
+  # empty blob. All four sources must be present in what we are about to run.
+  if [[ "$(grep -c 'git ' "$ASSEMBLY")" -ge 4 ]]; then
+    pass "the real _diff_names assembly was extracted from the runner (all four sources)"
+  else
+    fail "could not extract the four-source assembly from $TARGET -- the arms below certify nothing"
+  fi
+  REAL_BLOB=$(cd "$REAL_REPO" && env -u GIT_DIR bash -c "
+    source '$REPO_ROOT/scripts/lib/test-relevance-paths.sh'
+    $(cat "$ASSEMBLY")
+    printf '%s' \"\$_diff_names\"" 2>/dev/null || true)
+
+  if grep -qF 'scripts/registry-pull-path-health.sh' <<<"$REAL_BLOB"; then
+    pass "the assembly really feeds a rename's OLD path into the blob"
+  else
+    fail "a git mv of a declared SUT does not reach _diff_names -- the battery declines on its own rename"
+  fi
+  if grep -qF 'apps/web-platform/infra/brand-new.test.sh' <<<"$REAL_BLOB"; then
+    pass "the assembly really feeds UNTRACKED files into the blob"
+  else
+    fail "an untracked file under a declared prefix does not reach _diff_names -- the gate is blind to uncommitted work"
+  fi
 fi
 
 # --- Fail SAFE, not fail quiet. An undeterminable diff must RUN everything. Skipping on a diff
@@ -627,6 +788,19 @@ done
 # --- have reddened main-health-monitor every six hours, because on `main` both diff refs resolve
 # --- and return empty, so both batteries would skip and the assertion would fire (P0-2).
 run_gate_arm force-all "$DOCS_ONLY_DIFF" SOLEUR_TEST_FORCE_ALL=1 || true
+# THE DENOMINATOR IS THE CONTROLLED VARIABLE. These two arms differ only in whether the gates
+# declined, so `suites` must be identical: a decline that removed its suite from the denominator
+# instead of counting it would show up here as a smaller total on the docs-only side. This is the
+# Phase-B denominator assertion extended to the relevance gates, which it never covered.
+if parse_summary "$GATE_OUT" && [[ -n "$DOCS_TOTAL" ]]; then
+  if [[ "$PARSED_TOTAL" == "$DOCS_TOTAL" ]]; then
+    pass "declining leaves the denominator intact ($DOCS_TOTAL both ways)"
+  else
+    fail "declining changed the denominator: forced=$PARSED_TOTAL declined=$DOCS_TOTAL"
+  fi
+else
+  fail "could not compare denominators across the declining and forcing arms"
+fi
 for g in "${GATED[@]}"; do
   lbl="${g%%|*}"
   if [[ "$(gate_ran "$lbl")" == 1 ]]; then
@@ -635,6 +809,17 @@ for g in "${GATED[@]}"; do
     fail "SOLEUR_TEST_FORCE_ALL=1 did not force $lbl"
   fi
 done
+# THE OTHER SIDE OF THE THRESHOLD. The "exactly once" assertion above is evaluated on an arm that
+# always has declines, so it pins the count and not the CONDITION -- hoisting the lever out of its
+# `if` so it printed on every run left the suite green. This arm has zero RELEVANCE declines (the
+# infra runner still declines with not_in_diff, which the lever cannot recover), so a lever gated on
+# `skipped` rather than on relevance declines reds here, and advice that does not terminate is
+# caught rather than argued about.
+if [[ "$(grep -cF 'SOLEUR_TEST_FORCE_ALL=1 bash scripts/test-all.sh' <<<"$GATE_OUT")" == 0 ]]; then
+  pass "the force-all lever is silent when no relevance decline occurred"
+else
+  fail "the force-all lever printed on a run it cannot help -- obeying it would re-print it verbatim"
+fi
 
 run_gate_arm ci-set "$DOCS_ONLY_DIFF" CI=1 || true
 # CAPTURED IMMEDIATELY. The structural assertion below must read THIS arm's output; the
@@ -680,20 +865,31 @@ fi
 # should ever be edited by hand, and only when a fixed assertion is deliberately added.
 #
 # EVERY VARIABLE-CARDINALITY LOOP MUST APPEAR IN THIS EXPRESSION, or its growth becomes slack that
-# can subsidise a deleted fixed assertion. Since the relevance arms became table-driven there are
-# three such sources, not two:
+# can subsidise a deleted fixed assertion. There are three such sources:
 #
-#   5 * ${#GATED[@]}  — the per-gated-suite arms: docs-only contributes TWO (declined + announced),
-#                       then undeterminable, force-all and ci-set contribute one each.
+#   6 * ${#GATED[@]}  — the per-gated-suite arms: docs-only contributes THREE (declined, announced,
+#                       re-run command), then undeterminable, force-all and ci-set one each.
 #   $ELEM_TOTAL       — one arm per declared predicate element, ACCUMULATED by the loop that ran
 #                       them rather than recomputed here, so the floor cannot drift from reality.
 #   ${#W7_FILES[@]}   — one per workflow the cf-tunnel oracle pins.
 #
-# MIN_FIXED dropped 44 -> 42 because three previously-hand-written relevance assertions (two
-# docs-only declines and one "announced" check) became the 5*GATED term. That is a re-attribution,
-# not a weakening: at four gated suites those three assertions became twenty.
-MIN_FIXED=43
-MIN_ASSERTIONS=$(( MIN_FIXED + (5 * ${#GATED[@]}) + ELEM_TOTAL + ${#W7_FILES[@]} ))
+# MIN_FIXED is the count of assertions produced by NONE of those loops, and it is the only number
+# here that is ever edited by hand. Derivation from the pre-review revision, stated so the next
+# editor can check it rather than trust it: 44 (that revision's MIN_FIXED) − 6 relevance assertions
+# that became per-GATED loop members (two docs-only declines, one "announced", plus one each from
+# the undeterminable / force-all / ci-set arms) + 12 fixed assertions added since (the force-all
+# lever count; dir-child; infra-suite-added; the two source anchors; the two pass()/fail() controls;
+# the docs-only summary parse; the counted-verdict check; the real-state extraction control; and the
+# real-state rename and untracked arms; the cross-arm denominator check; the lever-silent-when-inert check; and the widening guard) = 53.
+#
+# KNOWN, AND DELIBERATE: this floor cannot certify the predicate ARRAYS, because ELEM_TOTAL is
+# derived from the same arrays the element loop walks — trim one and both the observed count and the
+# floor drop together. That completeness question is answered in scripts/lint-orphan-test-suites.sh,
+# which reads the arrays independently (a per-array cardinality floor plus the this-file
+# self-inclusion check). Do not try to fix it here; a floor derived from its own subject is a
+# tautology whichever way it is written.
+MIN_FIXED=53
+MIN_ASSERTIONS=$(( MIN_FIXED + (6 * ${#GATED[@]}) + ELEM_TOTAL + ${#W7_FILES[@]} ))
 if [[ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]]; then
   echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= $MIN_ASSERTIONS — the suite was stranded, not clean." >&2
   exit 1
