@@ -270,7 +270,7 @@ the workspace.
   **Re-routed, not closed here:** a review session opened *inside* a contributor-checked-out
   worktree executes that tree's `.claude/hooks/*.sh` on every tool call. That is a
   **strictly larger** exposure than any path anchor, it is not an anchoring defect, and it
-  must not hold #7450 open. Tracked separately.
+  must not hold #7450 open. **Tracked at #7502.**
 - **R2.** `exit 2` halts the bash subprocess, not the agent. The "run the block, not the
   bare command" construction is what makes the halt load-bearing; guard condition 5 keeps it
   from being edited away.

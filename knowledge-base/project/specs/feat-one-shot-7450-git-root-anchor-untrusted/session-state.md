@@ -185,3 +185,83 @@ ADR-178, not CWD-derived), never git-root.
    seat against the rebuilt guard) → `/soleur:compound` → `/soleur:ship`.
 
 **Do NOT close #7450 until the ADR-179 §R1 replacement text is committed.**
+
+---
+
+## Resume session 2026-08-12, part 2 (post-CTO-ruling implementation)
+
+Appended after the part-1 block. Same contract: every row is what LANDED, with its
+evidence. Intent goes in the NOT-DONE table, never here.
+
+### Landed since part 1
+
+| # | Work | Evidence |
+| --- | --- | --- |
+| 9 | **B3 — the §E blocker, CLOSED.** All 20 `source` sites inverted to inert markers (ADR-179 decision 9) + a validating monorepo-only PostToolUse capture hook. Zero `source "$(git rev-parse …)/…/incidents.sh"` remain under `plugins/`. | capture hook 10/10; marker→hook and direct `emit_incident` produce BYTE-IDENTICAL rows |
+| 10 | **ADR-179 decisions 8, 9, 10** recorded verbatim from the ruling, with rejected alternatives. **§R1 SETTLED** and scoped; its larger half (a review session executing the checked-out tree's `.claude/hooks/*.sh`) re-routed so it cannot hold #7450 open. | ADR-179 amendment, second half |
+| 11 | **D1** — the falsified learning REVERSED. `synced_to: [work, plan]`, so it is agent-retrievable, and it named these three gates explicitly. | banner + frontmatter `superseded_by` + 3 inline markers |
+| 12 | **C8** — ADR-093's premise restored BYTE-IDENTICAL (md5 vs `origin/main`); **AC11 inverted** to assert the record is retained AND marked, since the old AC was satisfiable only by deleting the evidence. | AC11's literal commands run: 1 / 1 |
+| 13 | **C6** — ADR-179 no longer claims `compound` "correctly received" a skip guard that `7840b2a42` descoped. | corrected in place |
+| 14 | **C7** — §(a)'s "command **or skill** file" scoped to SECRET-GATE skill files, matching G5's pinned population. | clause and guard now agree |
+| 15 | **C14** — owning traps at BOTH gates (plan named only `incident`). | `trap 'rm -f "$DRAFT"' EXIT INT TERM HUP` |
+| 16 | **D5** — tasks.md reconciled: 35 checked against evidence, 13 annotated rather than ticked. | addendum table |
+| 17 | Four guard/lint failures the full suite surfaced, all self-inflicted, all fixed AT the guard. | see below |
+
+### The four self-inflicted failures — recorded because the pattern matters
+
+All four were introduced by this session's own changes and NONE was visible from the
+touched-file loop:
+
+1. `lint-shell-capture-exit-live` — the baseline is keyed by PATH, so `git mv` made 4
+   pre-existing S1s read as NEW. Fixed, not re-baselined; dead baseline rows pruned.
+2. `lint-trap-tempfile-ownership` — 3 relocated suites allocated tempfiles with no owning
+   trap. Real leaks, invisible while the files sat where no path-scoped lint reached them.
+3. `ship-undeferred-operator-step-gate.test.ts` — asserted the PRE-inversion
+   `emit_incident` shape. Re-keyed to the marker, plus a negative pinning that the retired
+   construct did not survive.
+4. `scratch-path-collision.test.ts` — a waiver at the pre-`git mv` path. Its own assertion
+   is "a stale waiver cannot absolve a future offender"; it caught this exactly.
+
+### Findings re-measured against the merged tree
+
+- **C7 — I first called this MOOT and was WRONG.** I checked Decision 2 ("per command
+  file") and stopped; the clause the finding names is in §(a). It was live and is now fixed.
+  Check the location a finding names, not the one that sounds like it.
+- **C13 — genuine non-finding.** `sync.md`'s `exit 1` conflicts with no clause the ADR
+  actually states. Recorded as measured, so nobody hunts for an edit that should not exist.
+- **Findings §F is STALE in general.** It was measured before #7475 merged, and #7475
+  touched `plugin-root-anchoring.test.ts` (+287), ADR-179 (+127), `go.md`, `sync.md` and
+  `review/SKILL.md`. Re-measure any §F claim before relying on it.
+
+### Correction to the CTO ruling, measured
+
+The ruling prescribed resolving the incidents lib via `CLAUDE_PROJECT_DIR` alone.
+**Measured: unset in a plain Claude Code Bash call and in git hooks** — and `gdpr-gate.sh`
+runs from lefthook — so a single-arm fix would have silently retired the telemetry while
+looking like a security fix. The cited precedent (`git-commit-secret-scan.sh`) itself falls
+back to `git rev-parse`, the banned construct. Shipped two-armed. **The hook may rely on
+`CLAUDE_PROJECT_DIR`** (the harness sets it for hook processes); **a payload script may
+not.** That distinction is recorded in the ADR.
+
+### NOT done — exact resume points
+
+1. **B1 — root-outside-worktree at all three gates.** Design tension UNRESOLVED and real:
+   on a plain (non-bare) clone the plugin root IS inside the working tree, so the naive
+   assertion breaks dogfooding. It passes on this machine only because the install is the
+   bare root while review runs in `.worktrees/`. Settle it against the CTO's §R1 framing
+   (remove trust from CWD-resident operands rather than authenticate the tree) before
+   implementing — do not just add the `case` from the findings.
+2. **C9** self-contradictory halt messages, **C10** `SOLEUR_*` telemetry markers on the
+   three new halts, **C12** AC5d (no test asserts `[ -n "$PERSIST_SAFE" ]`).
+3. **D3** ADR-093 still asserts the pre-fix state as current; **D4** ADR-179
+   §Relationship/§Consequences/frontmatter; **D7** the negative branch's blast radius.
+4. **D6** — `phase-1-measurement.md` Arm 3's inference is logically void. Run the deferred
+   arm via headless `claude -p` (it builds its own registry, so the recorded "requires a
+   fresh session" blocker is wrong) or drop the leg and rest on the two precedents.
+5. **File the re-routed §R1 P0** — review sessions must not load hooks from a
+   contributor-checked-out tree.
+6. `/soleur:review` (min: security-sentinel, test-design-reviewer, structural-enumeration
+   seat against the REBUILT guard) → `/soleur:compound` → `/soleur:ship`.
+
+**§R1 is now fully discharged:** the ADR text is committed AND the re-route is filed as
+**#7502** and named in the ADR. #7450 is no longer blocked on §R1.
