@@ -105,3 +105,13 @@ Read the **rc file**, not a completion notification, and read BOTH ends of the l
 carries the contention banners (3 sibling `test-all.sh` runs were active at launch, so a RED needs
 three-way confirmation) and the epilogue states whether the infra runner was covered.
 Then `/soleur:review` → `/soleur:compound` → `/soleur:ship`.
+
+### Phase 7 exit gate — CLEAN
+`bash scripts/test-all.sh` → **rc=0, 298/301, 0 FAIL, 0 KILLED**. The 3 non-passes are `[skip]`
+declines (2 relevance, 1 `not_in_diff`). Both guards ran green inside the run.
+
+Two failures from the prior complete run were run down rather than re-run away:
+- `phase-16.test.sh` — MINE. compound Phase 1.6 has a hard 1200-byte budget and was at 1189/1200
+  on main; the skip guard was descoped rather than the threshold raised. Region now 1166.
+- `run-migrations-unmerged-gate.test.ts` — NOT mine. Confirmed three ways: diff touches neither
+  the test nor its subject; 3/3 in isolation; and it did **not recur** on the clean run.
