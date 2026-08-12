@@ -627,7 +627,6 @@ write_files:
     content: |
       #!/usr/bin/env bash
       set -uo pipefail
-
       # Env overrides exist ONLY so apps/web-platform/infra/zot-log-shipper.test.sh can drive this
       # exact program against synthesized fixtures. Production takes every default.
       STATE_DIR="$${ZOT_LOG_SHIPPER_STATE_DIR:-/var/lib/zot-log-shipper}"
@@ -652,9 +651,7 @@ write_files:
       # spend the estate's quota.
       CAP_EXEMPT_PER_INTERVAL="$${ZOT_LOG_SHIPPER_CAP_EXEMPT_PER_INTERVAL:-17}"
       MAXLEN=800
-
       mkdir -p "$STATE_DIR" || exit 1
-
       # FAIL LOUDLY ON A MISSING jq (#7444 F-11). jq is a hard per-line dependency: every row's
       # MESSAGE and __CURSOR come out of it. It is declared in `packages:`, whose own comment
       # records that the stage is NON-FATAL, and only e2fsprogs carries a runcmd `dpkg -s`
@@ -663,19 +660,16 @@ write_files:
       # `post_fail=unknown`, which the probe's [0-9]+ cannot match, so it reports the INVERTED root
       # cause. An absent hard dependency must be an exit code, never a quiet zero.
       if ! command -v jq >/dev/null 2>&1; then
-        echo "[zot-log-shipper] FATAL: jq is not on PATH — every row would be silently dropped" >&2
+        echo "[zot-log-shipper] FATAL: jq not on PATH; every row would drop silently" >&2
         exit 1
       fi
-
       CURSOR_FILE="$STATE_DIR/cursor"
       CURSOR_TMP="$STATE_DIR/cursor.new"
       STATE_FILE="$STATE_DIR/state"
       STATE_TMP="$STATE_DIR/state.new"
-
       TOKEN="$${BETTERSTACK_LOGS_TOKEN:-}"
       HOST_NAME_V="$(hostname)"
       BOOT_ID="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || printf 'unknown')"
-
       POST_FAIL=0; LAST_OK_EPOCH=0; SHIPPED_CUM=0; DROPPED_CUM=0; DROP_SEQ=0
       if [ -r "$STATE_FILE" ]; then
         while IFS='=' read -r k v; do
@@ -694,7 +688,6 @@ write_files:
           esac
         done < "$STATE_FILE"
       fi
-
       write_state() {
         # boot_id is NOT persisted: the shipper has no read-back case for it and the reporter has
         # no case either, so it was write-only. The boot_id that appears in drop rows is read live
@@ -703,7 +696,6 @@ write_files:
           "$POST_FAIL" "$LAST_OK_EPOCH" "$SHIPPED_CUM" "$DROPPED_CUM" "$DROP_SEQ" \
           > "$STATE_TMP" 2>/dev/null && mv -f "$STATE_TMP" "$STATE_FILE" 2>/dev/null || true
       }
-
       # The cursor means DELIVERED, not READ — it is persisted only after a successful POST, with
       # an atomic rename so a torn write can never make the shipper replay or gap silently.
       #
@@ -723,12 +715,10 @@ write_files:
       persist_cursor() {
         printf '%s' "$1" > "$CURSOR_TMP" 2>/dev/null && mv -f "$CURSOR_TMP" "$CURSOR_FILE" 2>/dev/null || true
       }
-
       post_body() {
         curl -fsS -m 10 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
           "${betterstack_ingest_url}" --data-raw "$1" >/dev/null 2>&1
       }
-
       # POST ONCE. The disk reporter retries (`post || post || echo`) because ITS value is not
       # replayable — a missed heartbeat sample is gone. Every shipper row is replayable from the
       # cursor, so an immediate second attempt against a briefly-500ing ingest buys nothing the
@@ -739,14 +729,13 @@ write_files:
         local line="$1" body
         body="{\"message\":\"$line\"}"
         if [ -z "$TOKEN" ]; then
-          echo "[zot-log-shipper] WARN: BETTERSTACK_LOGS_TOKEN unset (run under 'doppler run --project soleur-registry --config prd') — not shipped: $line" >&2
+          echo "[zot-log-shipper] WARN: BETTERSTACK_LOGS_TOKEN unset; not shipped: $line" >&2
           return 1
         fi
         post_body "$body" && return 0
         echo "[zot-log-shipper] egress to Better Stack Logs FAILED: $line" >&2
         return 1
       }
-
       # CREDENTIAL BACKSTOP — anchored on the RAW QUOTED shape measured above, and applied BEFORE
       # the sanitizer (which strips the very quotes this pattern needs). Both header renderings are
       # covered: the array form zot actually emits, and a bare-string form a future version might.
@@ -780,6 +769,8 @@ write_files:
       # walk() reaches every object at any depth; the container key is compared case-folded, the
       # same way the inner keys already were. A headers key whose value is NOT an object is a
       # shape this redactor cannot reason about, so it becomes an error and the row is dropped.
+      # Single-sourced: the sed rule and the residual check below must agree by construction.
+      CRED_HDRS='authorization|cookie|x-api-key|proxy-authorization|x-amz-security-token'
       HDR_KEEP='["content-type","content-length","accept","accept-encoding","user-agent","host","connection","range","docker-distribution-api-version"]'
       # FAILS CLOSED, and the two branches are selected by whether the line IS JSON, decided up
       # front — NOT by whether the pipeline happened to exit zero. Conflating those is a silent
@@ -797,28 +788,16 @@ write_files:
         local line="$1" out
         if printf '%s' "$line" | jq -e 'type == "object" or type == "array"' >/dev/null 2>&1; then
           out="$(printf '%s' "$line" | jq -c --argjson keep "$HDR_KEEP" '
-                  def scrub:
-                    with_entries(
-                      (.key | ascii_downcase) as $k
-                      | if ($keep | index($k)) then .
-                        else .value = (if (.value | type) == "array" then ["REDACTED"] else "REDACTED" end)
-                        end);
-                  walk(
-                    if type == "object" then
-                      with_entries(
-                        if (.key | ascii_downcase) == "headers" then
-                          if (.value | type) == "object" then .value |= scrub
-                          else error("non-object headers value")
-                          end
-                        elif (.key | ascii_downcase) == "authorization" then
-                          .value = (if (.value | type) == "array" then ["REDACTED"] else "REDACTED" end)
-                        else . end)
-                    else . end)' 2>/dev/null)" || {
-            echo "[zot-log-shipper] FATAL: header redaction failed on a JSON row — dropping it rather than shipping unredacted" >&2
+      def r: if type=="array" then ["REDACTED"] else "REDACTED" end;
+      def scrub: with_entries((.key|ascii_downcase) as $k | if ($keep|index($k)) then . else .value|=r end);
+      walk(if type=="object" then with_entries((.key|ascii_downcase) as $k
+      | if $k=="headers" then (if (.value|type)=="object" then .value|=scrub else error("nonobj headers") end)
+      elif $k=="authorization" then .value|=r else . end) else . end)' 2>/dev/null)" || {
+            echo "[zot-log-shipper] FATAL: redaction failed on a JSON row; dropped rather than shipped" >&2
             return 1
           }
           [ -n "$out" ] || {
-            echo "[zot-log-shipper] FATAL: header redaction produced empty output — dropping the row" >&2
+            echo "[zot-log-shipper] FATAL: redaction produced empty output; row dropped" >&2
             return 1
           }
           printf '%s' "$out"
@@ -835,20 +814,19 @@ write_files:
         # because a truncated fragment has neither. That over-redacts the tail of a bare
         # plaintext line; on a credential-bearing line that is the safe direction.
         out="$(printf '%s' "$line" | sed -E \
-          -e 's/("?)([Aa]uthorization|[Cc]ookie|[Xx]-[Aa]pi-[Kk]ey|[Pp]roxy-[Aa]uthorization|[Xx]-[Aa]mz-[Ss]ecurity-[Tt]oken)("?[[:space:]]*:[[:space:]]*)[^,}]*/\1\2\3REDACTED/g')"
+          -e "s/(\"?)($CRED_HDRS)(\"?[[:space:]]*:[[:space:]]*)[^,}]*/\1\2\3REDACTED/gI")"
         # REFUSE ANY RESIDUAL. If a credential-bearing header name still carries anything other
         # than REDACTED, this redactor did not understand the line and must not ship it.
         # `[^R[:space:]]` excludes the space, not just R: with `[^R]` alone the regex backtracks
         # — `[[:space:]]*` matches zero characters and `[^R]` then matches the space itself, so a
         # correctly-redacted `Authorization: REDACTED` was read as a residual and the row dropped.
         # Measured: it discarded a panic trace whose credential had in fact been removed.
-        if printf '%s' "$out" | grep -qiE '(authorization|cookie|x-api-key|x-amz-security-token)"?[[:space:]]*:[[:space:]]*[^R[:space:]]' ; then
-          echo "[zot-log-shipper] FATAL: unredactable credential header in a non-JSON line — dropping the row" >&2
+        if printf '%s' "$out" | grep -qiE "($CRED_HDRS)\"?[[:space:]]*:[[:space:]]*[^R[:space:]]" ; then
+          echo "[zot-log-shipper] FATAL: unredactable credential header (non-JSON); row dropped" >&2
           return 1
         fi
         printf '%s' "$out"
       }
-
       # PAYLOAD INTEGRITY, not redaction. Collapse the whitespace that would break a JSON string,
       # drop anything outside printable ASCII (a mid-sequence-sliced UTF-8 byte is invalid
       # unescaped per RFC 8259 §7, and a tab-indented Go crash trace would make Better Stack
@@ -861,7 +839,6 @@ write_files:
         s="$(printf '%s' "$1" | tr '\n\r\t' ' ' | LC_ALL=C tr -cd '\40-\176' | tr -d '"\\')"
         printf '%s' "$${s:0:MAXLEN}"
       }
-
       # The four measured evidence classes are CAP-EXEMPT. Without this the cap drops the
       # diagnostic evidence preferentially during exactly the flood (crash-loop / pull storm) that
       # accompanies disk growth. `executing gc` is the DENOMINATOR the downstream gc-completion
@@ -869,16 +846,14 @@ write_files:
       # completion lines would make "gc never ran", "gc ran fine" and "the shipper filtered it"
       # indistinguishable — the lower-bound defect reproduced one layer up.
       #
-      # MATCHED ON THE PARSED `message` FIELD, never the whole line (#7444 F-5). Measured, zot
+      # MATCHED ON THE PARSED `message` FIELD, never the whole line (#7444 F-5). The parse now
+      # happens once per tick inside JQ_TICK (the $z field), not in a per-line helper — the
+      # standalone zerolog_message() the single-jq rewrite orphaned has been deleted. Measured, zot
       # emits {"level":"info","message":"executing gc","component":"gc","caller":"…"} and
       # {"level":"error","message":"PatchBlobUpload i/o timeout","caller":"…"}, so all four classes
       # are message-field prefixes. A whole-line substring test instead lets any private-net client
       # send `User-Agent: executing gc` and make EVERY one of its request lines cap-exempt — those
       # lines carry message "HTTP API", so field-anchoring closes the bypass by construction.
-      zerolog_message() {
-        printf '%s' "$1" | jq -r 'if type == "string" then . else (.message // empty) end' 2>/dev/null || printf ''
-      }
-
       is_cap_exempt() {
         case "$1" in
           "executing gc"*)              return 0 ;;
@@ -898,7 +873,6 @@ write_files:
         esac
         return 1
       }
-
       # THE TICK IS THE WINDOW (ADR-184 §4). A cron one-shot starts each counter at zero and ends
       # at exit, so there is no rolling-window boundary to arbitrate and no `maybe_roll_window`.
       WIN_COUNT=0
@@ -908,7 +882,6 @@ write_files:
       WIN_DROPPED_REDACT=0
       WIN_DROPPED_EMPTY=0
       UNDELIVERED=0
-
       # `n` is scoped to THE TICK THIS ROW CLOSES. boot_id + drop_seq remain because two
       # boundaries still make n a lower bound with no marker saying so: a host replace resets these
       # counters on the root fs, and a replay after an undelivered row re-counts re-shipped lines.
@@ -935,11 +908,9 @@ write_files:
         ship "SOLEUR_ZOT_LOG_DROPPED n=$n interval_s=$INTERVAL_S boot_id=$BOOT_ID seq=$DROP_SEQ cum=$DROPPED_CUM reason=$reason" || POST_FAIL=$(( POST_FAIL + 1 ))
         write_state
       }
-
       CURSOR=""
       CURSOR_WAS_INVALIDATED=0
       [ -r "$CURSOR_FILE" ] && CURSOR="$(cat "$CURSOR_FILE" 2>/dev/null || printf '')"
-
       # PROBE the cursor before reading from it. A journal rotated past the persisted cursor during
       # a sink outage makes --after-cursor fail; without this the shipper would either die in a
       # restart loop or silently gap. Instead it says so and restarts from a BOUNDED recent window.
@@ -957,7 +928,6 @@ write_files:
           rm -f "$CURSOR_FILE" 2>/dev/null || true
         fi
       fi
-
       JARGS=( CONTAINER_NAME=zot --output=json )
       # On INVALIDATION the recovery must be bounded (#7444 F-9). journalctl's default with no
       # --lines/--follow is ALL retained entries, and this same change raises SystemMaxUse to 512M
@@ -973,7 +943,6 @@ write_files:
         JARGS+=( --since=-5m )
       fi
       [ -z "$CURSOR" ] || JARGS+=( --after-cursor "$CURSOR" )
-
       # ONE jq FOR THE WHOLE TICK (#7444 R2). Previously this forked three jq processes PER
       # JOURNAL ENTRY — .MESSAGE, .__CURSOR, and the zerolog .message for the exemption test — and
       # all three ran BEFORE the cap was consulted, so the caps bounded EGRESS but not WORK.
@@ -995,12 +964,7 @@ write_files:
       # @tsv escapes embedded tabs and newlines, so a field cannot split a record. The three
       # fields are emitted in a fixed order and `read -r` with IFS=tab takes them positionally;
       # zmsg is LAST because it is the only one that can legitimately be empty.
-      JQ_TICK='
-        (.__CURSOR // "") as $c
-        | (.MESSAGE // "") as $m
-        | (($m | fromjson? | .message?) // "") as $z
-        | [$c, $m, $z] | @tsv
-      '
+      JQ_TICK='(.MESSAGE // "") as $m | [(.__CURSOR // ""), $m, (($m | fromjson? | .message?) // "")] | @tsv'
       while IFS=$'\t' read -r cur msg zmsg; do
         [ -n "$msg" ] || continue
         # THE CURSOR ADVANCES ON EVERY *DECIDED* ROW, not only on delivered ones (#7444 R1).
@@ -1075,20 +1039,15 @@ write_files:
         fi
         write_state
       done < <(journalctl "$${JARGS[@]}" 2>/dev/null | jq -r --unbuffered "$JQ_TICK" 2>/dev/null)
-
       # One reason per cause. A single bucket sent an operator to raise a cap that was never the
       # cause: a jq regression failing redact() on every structured row presented as
       # `reason=rate_cap` with zero envelope rows, whose documented remediation is a no-op.
-      emit_drops rate_cap "$WIN_DROPPED"
-      WIN_DROPPED=0
-      emit_drops exempt_cap "$WIN_DROPPED_EXEMPT"
-      WIN_DROPPED_EXEMPT=0
-      emit_drops redact_failed "$WIN_DROPPED_REDACT"
-      WIN_DROPPED_REDACT=0
-      emit_drops sanitized_empty "$WIN_DROPPED_EMPTY"
-      WIN_DROPPED_EMPTY=0
+      for _rc in "rate_cap $WIN_DROPPED" "exempt_cap $WIN_DROPPED_EXEMPT" \
+                 "redact_failed $WIN_DROPPED_REDACT" "sanitized_empty $WIN_DROPPED_EMPTY"; do
+        emit_drops $_rc
+      done
+      WIN_DROPPED=0; WIN_DROPPED_EXEMPT=0; WIN_DROPPED_REDACT=0; WIN_DROPPED_EMPTY=0
       write_state
-
       # A tick that left a row undelivered exits non-zero. That exit is visible because the cron
       # line pipes this program's output through `logger -t zot-log-shipper` — NOT because cron
       # reports it. The claim that used to sit here ("visible from the journal and from cron's
@@ -1100,7 +1059,6 @@ write_files:
       exit 0
     owner: root:root
     permissions: '0755'
-
   # A 5-MINUTE CRON ONE-SHOT, NOT A DAEMON (ADR-184 §4). Every unit on this host is Type=oneshot
   # and every recurring job is a cron.d line wrapped in `doppler run`; this is the third such line
   # rather than the host's first Restart=always unit.
