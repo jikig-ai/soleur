@@ -102,7 +102,7 @@ installs keep working. The plugin ID changes for **new** installs only.
 - [x] **2B.6** Write the existing-install migration sequence. **It must contain no
       `marketplace add jikig-ai/soleur` step** — that is what makes it usable. Every command
       carries `--scope project` (live install: `projectPath
-      /home/jean/git-repositories/skouer/Skouer`). Include the CLI restart and the `soleur.bak` /
+      <operator-project-path>`). Include the CLI restart and the `soleur.bak` /
       old-cache reclaim.
 - [x] **2B.7** Apply the 1.8 decisions, and fix `operator-digest-workflow.test.sh`'s
       prefix-matching assertion **whether or not** that workflow migrates — it is wrong either way.
@@ -119,7 +119,7 @@ installs keep working. The plugin ID changes for **new** installs only.
       the `.bak` restore step and **the required CLI restart** (`plugin update --help`: "restart
       required to apply").
 - [x] **3.3** Include the install's **scope** in every command. The live install is
-      `scope: project`, `projectPath: /home/jean/git-repositories/skouer/Skouer`; a bare
+      `scope: project`, `projectPath: <operator-project-path>`; a bare
       `claude plugin update soleur@soleur` targets user scope and finds nothing.
 - [x] **3.4** Put the mitigation **adjacent to the failing command**, not in a footer — a new user
       hits the 120s clone on `marketplace add`, before anything shippable is in their possession.

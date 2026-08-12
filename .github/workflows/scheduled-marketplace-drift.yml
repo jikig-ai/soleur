@@ -140,7 +140,7 @@ jobs:
             entry_shape="$(jq -r 'if (.plugins | type) == "array" and (.plugins | length) > 0 and (.plugins[0] | type) == "object" then "ok" else "bad" end' <<<"$manifest" 2>/dev/null)"
             if [[ "$entry_shape" != "ok" ]]; then
               plugins_type="$(sanitize "$(jq -r '.plugins | type' <<<"$manifest" 2>/dev/null)")"
-              findings+=("manifest_shape: .plugins[0] is not an object (.plugins has type '${plugins_type:-<unreadable>}'); the three assertions below are not evaluable")
+              findings+=("manifest_shape: .plugins[0] is not an object (.plugins has type '${plugins_type:-<unreadable>}'); the assertions below are not evaluable")
             else
               # ---- Assertion 1: no `version` key on the plugin entry -------------------------
               # Compared against the literal string "false" rather than negated, so an empty
@@ -233,7 +233,7 @@ jobs:
               printf 'marketplace-drift| %s\n' "$_line"
             done
           else
-            printf 'marketplace-drift| all three assertions hold against the published manifest\n'
+            printf 'marketplace-drift| every assertion holds against the published manifest\n'
           fi
 
           # RE-ARM before the output write, closing the bracket opened at the top. Without this
@@ -319,7 +319,7 @@ jobs:
           BODY="${BODY}"$'\n'"3. \`.plugins[0].source\` must stay \`git-subdir\` on \`https://github.com/jikig-ai/soleur.git\` with \`path: plugins/soleur\`, unpinned (no \`ref\`, no \`sha\`)."
           BODY="${BODY}"$'\n'"4. If the plugin manifest itself did not resolve, \`plugins/soleur/.claude-plugin/plugin.json\` moved in THIS repo — fix the path in the marketplace manifest, or move it back."
           BODY="${BODY}"$'\n'"5. Re-run on demand: \`gh workflow run scheduled-marketplace-drift.yml\`"
-          BODY="${BODY}"$'\n\n'"This issue closes automatically on the next run where all three assertions hold."
+          BODY="${BODY}"$'\n\n'"This issue closes automatically on the next run where every assertion holds."
 
           delivered=0
           if [[ "$list_rc" -ne 0 ]]; then

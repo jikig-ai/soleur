@@ -313,6 +313,15 @@ frozen sentinel wearing different clothes.
 > `code-review` is keyless yet has no `gitCommitSha` (its SHA landed in `version`), and
 > §1.0's own gate recorded a SHA from a *versioned* manifest.
 >
+> **Second correction, same date — the version SEGMENT.** The table above predicts the cache
+> path's version segment becomes `unknown`, "refreshed in place". Both halves are refuted by
+> `measurements.md` §1.2/1.3, which measured Soleur's own migration rather than inferring from the
+> control group: the segment resolves to a 12-character **commit SHA prefix**
+> (`0.0.0-dev` → `fedc656ce6f5` → `6245ba0a3c94`), and each update materialises a **new** directory
+> while the previous one survives — so it is not refreshed in place, and the stale directory is an
+> orphan. The `unknown` prediction came from one reading of a control-group plugin, which is the
+> same class of unmeasured inference the first correction retired.
+>
 > This correction is appended rather than applied in place because the passage above is a
 > dated record. The provenance matters: the refuted claim reached six governance sites and
 > a published README before anyone tested it.

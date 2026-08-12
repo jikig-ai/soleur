@@ -367,16 +367,34 @@ default is `user`, and a scope mismatch silently targets an install that isn't t
 
 Removing the marketplace does **not** reclaim the plugin cache. Measured: after `uninstall`
 and `marketplace remove` both succeed, the old plugin cache survives — about 9.6 MiB, with no
-CLI verb to reclaim it. Delete it explicitly, checking the path first:
+CLI verb to reclaim it.
+
+**Do this only once the migration above has completed.** First confirm the new install is live
+and the old one is gone:
 
 ```bash
-ls -d ~/.claude/plugins/cache/soleur          # confirm this is the OLD entry before deleting
-rm -rf ~/.claude/plugins/cache/soleur         # NOT .../cache/soleur-marketplace, which is the new one
+claude plugin list
 ```
 
-The two directory names differ by one suffix, so read the path before running `rm -rf`. Project-
-and local-scope installs cache under the project directory instead; `claude plugin list` shows
-the scope.
+You should see `soleur@soleur-marketplace` and no `soleur@soleur`. If you still see
+`soleur@soleur`, stop — the migration did not finish, and the directory below is still your
+working install.
+
+Then ask the CLI which paths are actually in use, and delete only what is **not** in that list:
+
+```bash
+claude plugin list --json | jq -r '.[].installPath'
+```
+
+```bash
+rm -rf ~/.claude/plugins/cache/soleur
+```
+
+The old and new cache directories differ by a single suffix — `soleur` versus
+`soleur-marketplace` — so compare against the output above rather than typing from memory.
+Note that scope does not change this path: installs made with `--scope project` or
+`--scope local` still cache under your home directory, so the directory above is yours to
+check regardless of how you installed.
 
 
 </details>

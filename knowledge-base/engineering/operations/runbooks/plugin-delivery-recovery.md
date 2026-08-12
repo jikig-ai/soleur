@@ -5,6 +5,14 @@ Recovery for the three failure shapes in #7471. All figures cite
 decision and rationale are in
 [ADR-182](../../architecture/decisions/ADR-182-keyless-manifests-and-a-dedicated-marketplace-source.md).
 
+**There is no telemetry from the delivery path.** When an install, refresh, or update fails on
+a user's machine, nothing reaches this repo — no Sentry event, no log line, no marker. The user's
+report is the only detection channel, and that is a property of the surface rather than an
+oversight: the plugin runs on their machine, not ours. The daily drift alarm covers the published
+*manifest* only, at up to 24 h latency, and says nothing about whether anyone's install succeeded.
+An install canary is tracked at #7490. So when someone reports a delivery failure, treat their
+account as the primary evidence — there is no dashboard to check against it.
+
 **Scope matters in every command here.** `claude plugin install|update|uninstall` defaults to
 `--scope user`. A bare `claude plugin update soleur@soleur` therefore targets the *user*-scope
 install and silently finds nothing when the real install is project-scoped. Read the scope first:
@@ -13,8 +21,9 @@ install and silently finds nothing when the real install is project-scoped. Read
 claude plugin list          # shows Scope per installed plugin
 ```
 
-The live operator install is `scope: project`, `projectPath /home/jean/git-repositories/skouer/Skouer`.
-Pass `--scope project` to every command below when operating on it.
+The live operator install is `scope: project` against the operator's own project checkout
+(`claude plugin list` prints the path). Pass `--scope project` to every command below when
+operating on it.
 
 **Plugin changes apply on CLI restart.** `claude plugin update --help` says so explicitly. An
 update that reports success and appears to change nothing is usually an un-restarted CLI, not a
@@ -41,7 +50,7 @@ not a cosmetic difference.
 Then confirm the install actually advanced — **on content, not on metadata**:
 
 ```bash
-P=$(claude plugin list --json 2>/dev/null | jq -r '.[] | select(.name=="soleur") | .installPath')
+P=$(claude plugin list --json | jq -r '.[] | select(.id|startswith("soleur@")) | .installPath')
 ls "$P/scripts/lib/session-state.sh"      # present since #7426
 ls "$P/skills" | wc -l                     # compare against the source tree
 ```
@@ -76,12 +85,24 @@ Add `--scope project` to each if that is the install's scope.
 plugin cache behind — ~9.6 MiB, with no CLI verb to reclaim it (§1.6/2B.6). The old and new cache
 directories differ by one suffix, so print the path before deleting:
 
+Only once `claude plugin list` shows `soleur@soleur-marketplace` and no `soleur@soleur`. Ask
+the CLI which paths are live, and delete only what is not among them:
+
 ```bash
-ls -d ~/.claude/plugins/cache/soleur       # the OLD entry
-rm -rf ~/.claude/plugins/cache/soleur      # NOT .../cache/soleur-marketplace
+claude plugin list --json | jq -r '.[].installPath'
 ```
 
-The same class explains the 374 MiB `soleur.bak` orphan in the issue; check for it too.
+```bash
+rm -rf ~/.claude/plugins/cache/soleur
+```
+
+Deliberately two blocks: a single fenced block gets one copy button in every renderer, which
+would execute the check and the delete in the same paste and defeat the check.
+
+A `~/.claude/plugins/marketplaces/soleur.bak` may also be present — the issue reported one at
+374 MiB. **Do not delete it while Symptom 3 is a possibility:** the updater moves the existing
+checkout aside before re-cloning, so that `.bak` is the primary recovery source below. Reclaim it
+only once `claude plugin list` shows a working install on the new marketplace.
 
 **If the legacy channel must be kept, use `--sparse` rather than raising the timeout.**
 `claude plugin marketplace add` accepts `--sparse <paths...>` (git sparse-checkout). Measured

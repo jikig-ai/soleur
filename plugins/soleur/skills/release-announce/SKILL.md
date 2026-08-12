@@ -11,7 +11,7 @@ description: "This skill should be used when announcing a new release. It parses
 
 ## Step 1: Read Version and Changelog
 
-1. Determine the version to announce. **Do not read it from `plugins/soleur/.claude-plugin/plugin.json` — that manifest carries no `version` key**, deliberately (a `version` key suppresses `gitCommitSha` tracking and breaks update delivery, #7471). Release versions live in git tags:
+1. Determine the version to announce. **Do not read it from `plugins/soleur/.claude-plugin/plugin.json` — that manifest carries no `version` key**, deliberately (`plugin update` compares version strings, so a constant one always compares equal and the update no-ops while reporting success, #7471). Release versions live in git tags:
 
    ```bash
    # The version already released (latest tag), for the already-exists check in Step 2

@@ -92,7 +92,12 @@ itself). Detection latency is up to 24 h.
 `marketplace add jikig-ai/soleur` step, which is what makes it usable *from* the broken state; it
 was rehearsed end to end (§1.6/2B.6) and all four commands succeed under the default timeout.
 `uninstall` and `marketplace remove` leave ~9.6 MiB of orphaned plugin cache with no CLI verb to
-reclaim it — the same class as the 374 MiB `soleur.bak` orphan the issue reported.
+reclaim it — the same class as the 374 MiB `soleur.bak` orphan the issue reported. And because the
+cache directory is named for the resolved version, which is now a commit SHA, **each update
+materialises a NEW directory and leaves the previous one behind** (measurements.md §1.2/1.3 records
+`0.0.0-dev` surviving the migration). So the orphan is per-update, not one-time. §1.2/1.3 did not
+measure the steady-state footprint, so the growth rate is implied rather than quantified; it is
+recorded here as a known cost rather than discovered later.
 
 **Version metadata leaves the plugin's own record.** `installed_plugins.json` reports the commit SHA
 in place of a semantic version. Release tags remain the human-facing version via GitHub Releases.
@@ -127,6 +132,14 @@ what makes the updater's comparison always succeed.
 
 ## Rollback
 
-Not "re-add the key". A source-side revert cannot self-deliver, because the broken refresh is what
-it would have to travel through. The real rollback is `remove → re-add → reinstall` against the new
-marketplace — which Phase 2B makes cheap: re-adding costs ~39 KB rather than 181 MiB.
+**Not "re-add the key" — and the reason is stronger than it first appears.** For the *pre-fix*
+population that edit is undeliverable, because it would have to travel through the broken refresh.
+For the population this ADR creates it is worse than undeliverable: an install on
+`soleur-marketplace` has a working refresh and its recorded version is a SHA, so re-adding a
+`version` key produces a string that differs from the recorded SHA, the comparison fires, and the
+update **does** deliver — once. It then records the constant, and every subsequent update compares
+equal forever. Re-adding the key is a self-delivering one-way brick, not a no-op; do not read it as
+harmless-because-inert.
+
+The real rollback is `remove → re-add → reinstall` against the new marketplace — which Phase 2B
+makes cheap: re-adding costs ~39 KB rather than 181 MiB.

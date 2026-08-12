@@ -2,6 +2,7 @@
 title: Version From Git Tags
 status: active
 date: 2026-03-27
+amended_by: [ADR-182]
 ---
 
 # ADR-017: Version From Git Tags
@@ -18,7 +19,7 @@ Version derived from git tags at merge time via CI (version-bump-and-release.yml
 
 Zero manual version management. Eliminates version drift. Requires semver label on every PR touching plugins/soleur/. CI is the single source of truth for versioning.
 
-## Amendment (2026-08-11) — the frozen sentinels are removed; see ADR-182
+## Amendment (2026-08-12) — the frozen sentinels are removed; see ADR-182
 
 **Superseded:** the `## Decision` sentence "plugin.json and marketplace.json versions are frozen
 sentinels (0.0.0-dev)". **Still current:** everything else — version derived from git tags at merge
