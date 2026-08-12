@@ -343,6 +343,37 @@ claude plugin install --url https://github.com/jikig-ai/soleur/tree/main/plugins
 
 ## Known Issues
 
+### Updating the Marketplace Does Not Update the Installed Plugin
+
+**Issue:** `/plugin marketplace update soleur` advances the marketplace checkout under
+`~/.claude/plugins/marketplaces/` to the new HEAD, but does **not** re-pull the plugin
+install under `~/.claude/plugins/cache/`. The install keeps its own `gitCommitSha` in
+`installed_plugins.json`, and `${CLAUDE_PLUGIN_ROOT}` resolves to that install — not to the
+marketplace checkout. So a fix verified against the marketplace copy reads as shipped while
+every run still executes the old payload.
+
+**Workaround:** run both steps, then confirm the two agree:
+
+```bash
+claude plugin marketplace update soleur
+claude plugin update soleur
+```
+
+**If that does not converge them, reinstall.** `plugin.json` carries a frozen `0.0.0-dev`
+version sentinel, so the install directory name never changes and there is no version bump
+for `plugin update` to act on (measured in ADR-178: an actively-used install carried 64
+skills against 96 in the repo, three months stale, while reporting success):
+
+```bash
+claude plugin uninstall soleur && claude plugin install soleur
+```
+
+**Symptom to watch for:** `/soleur:sync` emitting
+`SOLEUR_SYNC_PRODUCER_MISSING producer=<path> … reason=absent-from-verified-root` means the
+verified plugin root does not carry a file that run needed — most often an install that
+predates it. That marker is why this failure now names itself instead of surfacing as an
+unattributed interpreter error (#7474).
+
 ### MCP Servers Not Auto-Loading
 
 **Issue:** The bundled MCP servers (Context7, Vercel) may not load automatically when the plugin is installed.

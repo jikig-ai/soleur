@@ -129,7 +129,7 @@ const MARKER_RE =
 // page becomes noise. Same category as SOLEUR_GIT_LOCK_IDENTITY_DIAG.
 //
 // ensure_bare_config give-up, a failed identity set-from-global write, a readiness-gate
-// rejection (SOLEUR_GIT_REPO_DIAG is only emitted on the not-ready path), a repo-less
+// rejection (SOLEUR_GIT_REPO_DIAG, EXCEPT its source=probe-unreachable arms — see below), a repo-less
 // workspace (NO_GIT_REPOSITORY), OR a failed feature push (SOLEUR_FEATURE_PUSH_FAILED →
 // local-only branch), OR a rejected worktree (SOLEUR_GIT_WORKTREE_VERIFY_FAILED → creation
 // aborted with exit 1). EXCLUDED (benign, mirrored-not-paged): SOLEUR_GIT_LOCK_IDENTITY_DIAG
@@ -171,8 +171,24 @@ const MARKER_RE =
 // than a reserved branch value, so paging cannot be re-armed by a future author "tidying"
 // its branch string — the name is what keeps it out, and the drift guard derives names
 // from the script automatically.
+// SOLEUR_GIT_REPO_DIAG carries TWO distinct classes and only one is a wedge.
+//
+//   ready=false …                      → the probe RAN and said the workspace is not usable. A wedge.
+//   source=probe-unreachable reason=…  → the probe could NOT run, because go.md could not resolve or
+//                                        could not find it. That says nothing about the repo, and
+//                                        go.md falls back to inline `git rev-parse` probes which
+//                                        decide readiness on their own.
+//
+// The second class must not page. Its `reason=absent-from-verified-root` arm (#7474) fires when the
+// plugin root verified but does not carry the probe — i.e. a stale install on a perfectly healthy
+// repo — and go.md runs at EVERY session start, so an unqualified match turns a torn install into a
+// recurring platform-integrity error for every affected customer. Both arms stay in MARKER_RE, so
+// they are still mirrored; they are simply not classified as blocked sessions.
+//
+// Discriminating with a lookahead rather than a separate marker name matches what this file already
+// does for SOLEUR_GIT_BARE_SELFHEAL (branch=failed) and SOLEUR_SESSION_STATE_UNAVAILABLE.
 const WEDGE_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:UNREMOVABLE|TEMP_WEDGED)\b|SOLEUR_GIT_LOCK_IDENTITY_WEDGED\b|SOLEUR_GIT_CONFIG_TARGET_MASKED\b|SOLEUR_GIT_BARE_SELFHEAL\b(?=[^\n]*\sbranch=failed\s*$)|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b|SOLEUR_GIT_REPO_DIAG\b|SOLEUR_FEATURE_PUSH_FAILED\b|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b|SOLEUR_SESSION_STATE_UNAVAILABLE\b(?=[^\n]*\sreason=worktree-UNLEASED-and-reapable\s*$)|NO_GIT_REPOSITORY\b|worktree wedge:)/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:UNREMOVABLE|TEMP_WEDGED)\b|SOLEUR_GIT_LOCK_IDENTITY_WEDGED\b|SOLEUR_GIT_CONFIG_TARGET_MASKED\b|SOLEUR_GIT_BARE_SELFHEAL\b(?=[^\n]*\sbranch=failed\s*$)|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b|SOLEUR_GIT_REPO_DIAG\b(?![^\n]*\ssource=probe-unreachable\b)|SOLEUR_FEATURE_PUSH_FAILED\b|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b|SOLEUR_SESSION_STATE_UNAVAILABLE\b(?=[^\n]*\sreason=worktree-UNLEASED-and-reapable\s*$)|NO_GIT_REPOSITORY\b|worktree wedge:)/;
 
 // Bounds: scan at most this many lines, keep at most this many matched markers, and
 // truncate any single marker line to this many chars. A wedged run emits a handful of

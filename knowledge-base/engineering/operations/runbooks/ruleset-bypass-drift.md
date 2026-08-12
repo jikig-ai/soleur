@@ -282,7 +282,7 @@ ruleset — outward-facing and risky. Prefer the safe path:
 - `tests/scripts/test-audit-ruleset-bypass.sh` — `T-rsc-9` keeps the snapshots
   in lockstep with the `.tf`.
 - `plugins/soleur/skills/trigger-cron/SKILL.md` — fire the audit on demand.
-- `knowledge-base/engineering/ops/runbooks/skill-security-scan-required-check.md`
+- `knowledge-base/engineering/operations/runbooks/skill-security-scan-required-check.md`
   — parent R15 runbook.
 - `knowledge-base/legal/compliance-posture.md` `#2719` row.
 - GitHub Rulesets API: https://docs.github.com/en/rest/repos/rules

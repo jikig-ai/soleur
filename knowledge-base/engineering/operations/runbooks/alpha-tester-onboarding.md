@@ -258,15 +258,53 @@ State the surface alongside any finding.
 
 ---
 
+## Standing step — re-notify the cohort on every `TC_VERSION` bump
+
+**Why this exists.** The Web Platform forces every principal through `/accept-terms` when
+`TC_VERSION` changes. **That mechanism cannot reach a self-hosted CLI tester** — there is no
+session, no middleware, and no acceptance record to invalidate. Every tester on the Self-hosted CLI
+surface is therefore invisible to the bump, and without this step a version bump silently leaves
+the cohort on superseded terms.
+
+**Trigger:** any change to `TC_VERSION` in `apps/web-platform/lib/legal/tc-version.ts`.
+
+**Do this in the same PR as the bump:**
+
+1. Set the `Terms` cell to `superseded-resend-required` for **every** tester currently at `agreed`
+   or `sent-awaiting-reply` whose Surface is anything other than Hosted platform.
+2. Send each of them the notice below. It is outward-facing correspondence with a named person, so
+   the operator sends it — but the text is drafted here so it is never re-authored under time
+   pressure, and `TC_BUMP_METADATA.substantiveChange` is the single source for the summary line.
+3. On reply, set the cell to `agreed`. A tester left at `superseded-resend-required` has **not**
+   been notified, and the gap is visible in this table rather than implied by its absence.
+
+**Drafted notice** — substitute the summary from `TC_BUMP_METADATA.substantiveChange`:
+
+> Subject: Soleur terms updated — no action needed unless you disagree
+>
+> Hi <name>,
+>
+> The Soleur Terms & Conditions changed on <date> (version <TC_VERSION>). Because you run Soleur
+> on your own machine rather than through the hosted platform, the app cannot show you this in a
+> banner, so I am sending it directly.
+>
+> What changed, in plain terms: <TC_BUMP_METADATA.substantiveChange>.
+>
+> The full terms are at https://soleur.ai/legal/terms-and-conditions/. Nothing you need to do —
+> continuing to use Soleur means the updated terms apply. If anything in them does not work for
+> you, reply and tell me; I would rather hear it than not.
+>
+> — Jean
+
 ## Recruitment mix tally
 
 Update this table at Step 1 of every onboarding.
 
 | Tester | Company | Claude Code user? | Surface | Onboarded | Terms |
 |---|---|---|---|---|---|
-| #1 | Skouer | Yes | Self-hosted CLI | 2026-08-06 | `sent-awaiting-reply` (sent retroactively — onboarding began before the terms existed) |
+| #1 | Skouer | Yes | Self-hosted CLI | 2026-08-06 | `superseded-resend-required` (was `sent-awaiting-reply`; the terms sent predate `TC_VERSION` 2.5.0 — see the standing step below; send tracked at #7459) |
 
-**`Terms` values:** `agreed` (tester replied), `sent-awaiting-reply`, or `not-required`. Update at
+**`Terms` values:** `agreed` (tester replied), `sent-awaiting-reply`, `superseded-resend-required` (a `TC_VERSION` bump landed after the terms were sent; a fresh notice is owed), or `not-required`. Update at
 Step 1. A tester at `sent-awaiting-reply` may still be worked with; a tester at blank has not been
 sent anything and that is the state this column exists to make visible.
 

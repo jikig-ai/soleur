@@ -54,6 +54,18 @@ The instrument now being put in place is effective **forward**. A recital acknow
 - **Review cadence:** on every new operator-assisted engagement, on every new sub-processor, and quarterly alongside the Art. 30(1) register.
 - **Custodian:** Soleur CLO role.
 - **Precondition for tester #2:** re-run the controller/processor determination **before** onboarding a second tester under the same motion, not after. The determination's whole cost is avoided at tester #2 only if it is consulted in advance (determination C9).
+- **`P-2` — RESERVED, not yet open (#7349 B4).** Reserved for the **first arms-length (non-Jikigai)
+  owner of a beta-tester / prospect CRM store**. Until that trigger fires, the beta-CRM activity is
+  recorded as **PA-30 in the Art. 30(1) register**, where Jikigai is the controller: every store
+  owner today is Jikigai personnel, and Art. 30(2)(a) requires naming *"each controller on behalf
+  of which the processor is acting"* — which a Jikigai-only store cannot satisfy without Jikigai
+  naming itself as its own controller. **Do not open `P-2` by moving PA-30 here.** Art. 30(2)
+  carries no purposes, data-subject-category, personal-data-category, retention or DSAR limbs, so
+  the move would silently drop six of PA-30's limbs, and the mirror-drift gate passes a lockstep
+  deletion. When the trigger fires, an **Art. 28(3) instrument is owed before processing begins**;
+  open `P-2` fresh against that instrument and re-characterise PA-30's role sentence rather than
+  relocating it. Trigger already named as a re-evaluation condition in
+  `knowledge-base/legal/audits/2026-07-counsel-review-6172.md`.
 - **Outstanding counsel-review items:**
   1. Confirm that a separate Art. 30(2) file — rather than a section of the 30(1) register — is the right structure for this corpus.
   2. Confirm the Art. 30(5) analysis above (derogation not relied on because operator-assisted onboarding is designed to repeat).
