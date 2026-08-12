@@ -58,7 +58,19 @@
 #     its evidence is filed. Ordering is load-bearing — see the dispatch step.
 # Deleting it removes the only daily, credential-free view of what is actually published.
 #
-# The three assertions, and why each earns its place:
+# The assertions, and why each earns its place. NAMED rather than counted (#7493): this header
+# said "three" while the checker emits twelve distinct finding keys, and a count in prose goes
+# stale silently the moment an assertion is added. The keys are the contract; the two families
+# below are what the reconcile predicate discriminates on.
+#
+# FAMILY A — the published MARKETPLACE manifest (GET 1). Terraform can fix every one of these by
+# republishing from source, so a verdict containing any of them dispatches a reconcile:
+#   version_key_present, entry_count, entry_name, source_type, source_path, source_url,
+#   source_pinned, manifest_shape, manifest_unparseable, manifest_fetch_failed
+#
+# FAMILY B — THIS monorepo's own plugin.json (GET 2), reached by the `plugin_manifest_` prefix.
+# Republishing the marketplace manifest cannot fix these, so they never dispatch:
+#   plugin_manifest_unresolvable, plugin_manifest_unparseable
 #
 #   1. `.plugins[0]` MUST NOT HAVE A `version` KEY. This is the highest-value assertion and the
 #      reason the workflow exists. `claude plugin update` compares version STRINGS; with no

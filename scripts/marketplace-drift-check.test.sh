@@ -350,6 +350,18 @@ run_check 'not json at all' 0 "$GOOD_PLUGIN" 0
 expect_verdict "G2.5 an unparseable MARKETPLACE manifest is MISMATCH" "MISMATCH"
 expect_dispatch "G2.5 manifest_unparseable DOES dispatch (it is not plugin_manifest_unparseable)" "true"
 
+# UNMEASURED-STATE ROW (AP-021). `manifest_fetch_failed` fires when the fetch itself failed, so
+# the check's own finding text says "no body was read, so no assertion below could be evaluated".
+# Dispatching on it therefore acts on an explicitly UNKNOWN state rather than a known-bad one,
+# which AP-021 normally forbids. It is deliberate here and pinned so it is not rediscovered as a
+# surprise: the apply is deterministic from this repo's .tf files at main and NEVER consumes the
+# fetched body, so a spurious reconcile is a no-op for the manifest. The alternative — treating a
+# transient CDN 5xx as "nothing to do" — is the fail-open shape this workflow exists to refuse,
+# and a deleted manifest (which also lands here) is exactly what a reconcile SHOULD restore.
+run_check "" 22 "$GOOD_PLUGIN" 0
+expect_verdict "G2.6 an unfetchable marketplace manifest is MISMATCH" "MISMATCH"
+expect_dispatch "G2.6 manifest_fetch_failed DOES dispatch (deliberate AP-021 deviation: the apply never reads the fetched body)" "true"
+
 # ---------------------------------------------------------------------------------------------
 # Structural assertions on the workflow itself. These cover the parts GitHub evaluates, which
 # no runtime driver can reach.
@@ -540,7 +552,7 @@ echo "=== Results: $PASS passed, $FAIL failed ==="
 # A FLOOR, not equality: an added assertion must not become a spurious failure. Derived from a
 # green run, ratcheted upward deliberately. Treat slack between this and the measured count as
 # attack budget rather than padding.
-MIN_ASSERTIONS=56
+MIN_ASSERTIONS=58
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   echo "ANTI-VACUITY: only $PASS assertions ran, expected at least $MIN_ASSERTIONS." >&2
   echo "Either assertions were deleted or short-circuited, or the floor needs a deliberate bump." >&2
