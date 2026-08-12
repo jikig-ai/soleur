@@ -466,70 +466,20 @@ jobs:
             exit 1
           }
 
-          mp_fail=0
-          mp_checked=0
-          mp_assert() { # $1=label $2=actual $3=expected
-            mp_checked=$((mp_checked + 1))
-            if [[ "$2" != "$3" ]]; then
-              echo "::error::marketplace ruleset ${1}: got '${2}', expected '${3}'."
-              mp_fail=1
-            fi
-          }
-
-          mp_assert "enforcement" "$(echo "$MP_JSON" | jq -r '.enforcement // "<absent>"')" "active"
-
-          # required_approving_review_count == 1 is the assertion that would have caught
-          # this PR's own first draft: `pull_request` present with the count defaulting to
-          # 0 does not close an actor holding pull_requests:write. Selected by .type, never
-          # a positional .rules[0].
-          mp_assert "pull_request rule present" \
-            "$(echo "$MP_JSON" | jq -r '[.rules[]? | select(.type=="pull_request")] | length')" "1"
-          mp_assert "required_approving_review_count" \
-            "$(echo "$MP_JSON" | jq -r '[.rules[]? | select(.type=="pull_request") | .parameters.required_approving_review_count] | first // "<absent>"')" "1"
-
-          # deletion + non_fast_forward are declared in the .tf and are the only
-          # unconditional protections here, so they get their own assertions. An omission
-          # or a hand-edit clearing either reads as false with NO other symptom:
-          # enforcement stays active, the pull_request rule stays present, the ref
-          # condition stays correct, and every other assertion passes.
-          mp_assert "deletion rule present" \
-            "$(echo "$MP_JSON" | jq -r '[.rules[]? | select(.type=="deletion")] | length')" "1"
-          mp_assert "non_fast_forward rule present" \
-            "$(echo "$MP_JSON" | jq -r '[.rules[]? | select(.type=="non_fast_forward")] | length')" "1"
-
-          # A ruleset can be `active` and structurally intact while quantifying over
-          # NOTHING — point ref_name at a branch that does not exist and every
-          # "is it enabled" check still passes.
-          mp_assert "conditions.ref_name.include" \
-            "$(echo "$MP_JSON" | jq -c '.conditions.ref_name.include // []')" '["~DEFAULT_BRANCH"]'
-
-          # bypass_actors as a SET, not a count. A 4th entry is the widening that matters
-          # and it is invisible to "is OrganizationAdmin present" or "is the array
-          # non-empty". Terraform writes actor_id = 0 for OrganizationAdmin and the API
-          # reads it back as null (provider issue #2536), so the canonical is stored
-          # API-shaped and BOTH sides are normalised 0 -> null before comparing —
-          # without that, this probe reddens on every single apply.
-          MP_CANON="${GITHUB_WORKSPACE}/scripts/marketplace-ruleset-canonical-bypass-actors.json"
-          if [[ ! -f "$MP_CANON" ]]; then
-            echo "::error::canonical bypass-actors file missing at ${MP_CANON}."
-            exit 1
-          fi
-          NORM='map({actor_type, actor_id: (if .actor_id == 0 then null else .actor_id end), bypass_mode}) | sort_by(.actor_type, (.actor_id // "null" | tostring), .bypass_mode)'
-          mp_assert "bypass_actors set" \
-            "$(echo "$MP_JSON" | jq -c ".bypass_actors // [] | ${NORM}")" \
-            "$(jq -c "${NORM}" < "$MP_CANON")"
-
-          # Anti-vacuity: assert the probe actually evaluated every property. A guard that
-          # silently checks zero things and exits 0 is the failure mode all of the above
-          # is written to avoid.
-          if [[ "$mp_checked" -ne 8 ]]; then
-            echo "::error::marketplace ruleset probe ran ${mp_checked} assertions, expected 8 — the probe itself is broken."
-            exit 1
-          fi
-          if [[ "$mp_fail" -ne 0 ]]; then
+          # The assertions live in scripts/verify-marketplace-ruleset.sh, NOT inline here, and
+          # that is deliberate: a guard that cannot be driven RED is vacuous, and the mutations
+          # that matter (flip enforcement, add a fourth bypass actor, clear non_fast_forward)
+          # are mutations of a LIVE ruleset that CI cannot perform. Extracting them makes the
+          # matrix drivable against recorded fixtures in the sibling .test.sh, which also means
+          # this probe is exercised on every PR rather than only after an apply.
+          printf '%s' "$MP_JSON" > "${RUNNER_TEMP}/marketplace-ruleset.json"
+          if ! bash "${GITHUB_WORKSPACE}/scripts/verify-marketplace-ruleset.sh" \
+                 "${RUNNER_TEMP}/marketplace-ruleset.json" \
+                 "${GITHUB_WORKSPACE}/scripts/marketplace-ruleset-canonical-bypass-actors.json"; then
             echo "::error::marketplace ruleset (${MP_REPO} #${MP_ID}) does not match its declaration."
             exit 1
           fi
+
           echo "marketplace_ruleset_id=$MP_ID" >> "$GITHUB_OUTPUT"
           echo "Ruleset ${MP_ID} (${MP_REPO}): ${mp_checked}/8 assertions hold."
 

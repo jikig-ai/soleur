@@ -704,6 +704,10 @@ if want_scripts; then
   # published-vs-source byte-diff reports in-sync, so the merge boundary is the only place that
   # loop can be broken.
   run_suite "scripts/marketplace-manifest-validate" bash scripts/marketplace-manifest-validate.test.sh
+  # Guard 1 (#7493): the marketplace ruleset probe, driven against recorded ruleset-detail
+  # fixtures. Its live mutations (flip enforcement, add a 4th bypass actor) cannot be performed
+  # in CI, so fixtures are the only honest way to prove the probe reddens.
+  run_suite "scripts/verify-marketplace-ruleset" bash scripts/verify-marketplace-ruleset.test.sh
   # ADR-140: Layer A encryption-posture detector (the mechanical resolver behind
   # the "encryption at rest + in transit" design-time gate). TS-1..8,15..17 +
   # the MB-1..MB-12 mutation battery (fixture-isolated, not suite-pass-count).

@@ -297,6 +297,11 @@ jobs:
         run: bash scripts/marketplace-manifest-validate.sh infra/github/soleur-marketplace-manifest.json
       - name: Guard 4 self-test (mutation matrix)
         run: bash scripts/marketplace-manifest-validate.test.sh
+      # Guard 1's probe runs post-apply against the live ruleset, so without this its
+      # assertions would first execute AFTER merge. Driving it against recorded fixtures here
+      # is what makes "the verifier exists and works" a pre-merge fact.
+      - name: Guard 1 self-test (marketplace ruleset probe, fixture-driven)
+        run: bash scripts/verify-marketplace-ruleset.test.sh
 
   # PR-B §1.6 — Service-role allowlist gate. Rejects any importer of
   # `createServiceClient` / `getServiceClient` in apps/web-platform/{server,lib}
