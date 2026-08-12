@@ -129,6 +129,22 @@ runbook stated the invariant as `headroom > 0` strictly, the sibling host ran at
 under a 4× looser budget, and the fingerprint was two constants travelling together where one kept
 its referent and one did not. Fixed by **deriving** the floor from the single owning constant.
 
+**Then that very evidence went stale mid-merge, which is the same lesson one level up.** During the
+merge poll a BEHIND auto-sync pulled #7264, whose amendment applies the same rationale-strip to
+git-data's own cloud-init template and re-measures it at **20,180 B headroom** — so ADR-185's
+"a 20,000 B headroom floor would red git-data on contact" became false, by 180 B, hours after it was
+written. The measurement had propagated to four sites (the ADR body, its References, a comment in
+`registry-userdata-budget.test.sh`, and this file). Corrected everywhere by restating the claim as
+what the owning constant *authorises* (`GIT_DATA_BUDGET = 28_000` → headroom as low as 4,768 B),
+which is the part that encodes a policy and does not drift.
+
+Two rules fall out. **Cite the constant, not the reading** — a measurement pinned into prose is
+false the moment someone else's PR moves it, and the one that moves is disproportionately the one
+you leaned on. And **a claim of the form "X would fail this gate" is a measurement wearing an
+argument's clothes**: it reads as reasoning and behaves as a reading. The corrected bullet is
+stronger than the original, because a host that clears an arbitrary floor by 180 B — and only via an
+unrelated compression change — demonstrates the floor is arbitrary better than a host that misses it.
+
 **Ask of any threshold in a standing gate: was this authored as a policy, or as a one-time proof
 that something landed?**
 

@@ -119,7 +119,8 @@ render chain rather than about this number.
 
 ## References
 
-- ADR-152 (git-data `user_data` budget, the 12,312 B operating precedent)
+- ADR-152 (git-data `user_data` budget — the `GIT_DATA_BUDGET = 28_000` precedent, which permits
+  headroom as low as 4,768 B; its 2026-08-11 amendment re-measured the host at 20,180 B headroom)
 - ADR-184 (the zot log shipper whose growth surfaced this)
 - ADR-096 (registry host is cloud-init-only; no in-place execution path)
 - `#7299` / `dff874e05` — the plan whose AC1 became this arm

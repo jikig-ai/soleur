@@ -105,8 +105,14 @@ ts_budget=$(grep -oE '^const REGISTRY_GZIP_BUDGET = [0-9_]+' "$TS_TEST" | grep -
 # actually runs before a destructive replace) fails only on `stored >= cap`; the recut runbook
 # states the operational invariant as "headroom must be > 0, strictly"; the #7299 plan's own
 # rejected-alternatives table records "production is 71% under cap"; and the sibling git-data host
-# operates at 12,312 B headroom under a budget permitting 4,768 — 4x less conservative on the same
-# 32,768 B ForceNew cap.
+# runs under GIT_DATA_BUDGET = 28_000, which PERMITS headroom as low as 4,768 — 4x less conservative
+# on the same 32,768 B ForceNew cap.
+#
+# That last clause is stated as what the budget AUTHORISES, not as a measurement, and deliberately
+# so: git-data's measured headroom was 12,312 B when ADR-185 was written and became 20,180 B four
+# days later when #7264 applied the same rationale-strip to git-data's own template. A comment
+# pinned to the measurement would have been false within the week; the budget constant is the part
+# that actually encodes a policy. See ADR-185 evidence 4.
 #
 # The ONE number authored as a policy is in the TS oracle: REGISTRY_GZIP_BUDGET < HETZNER_CAP -
 # 8_000, i.e. "preserve at least 8,000 B of real headroom". Largest measure-time-to-apply-time
