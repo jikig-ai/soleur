@@ -14,6 +14,22 @@
 # So the fixtures below encode the CONTRACT (sentinel present => release, absent => hold,
 # comment does not count, escaped literal does not count), and the contract keeps holding
 # after #6982 lands.
+#
+# AMENDED 2026-08-12 (#7485). #6982 HAS SINCE CLOSED and the live gate now reports RELEASED,
+# so the countdown the paragraph above warns about has run out — and the warning was correct:
+# a suite asserting `HOLD` on the live template would be red today.
+#
+# The rule this header states is therefore narrowed to what it always meant: no arm asserts
+# the GATE'S VERDICT on the live template. Arm A1 does read the live cloud-init, and it is
+# the one exception, deliberately: it asserts that a DIFFERENT function
+# (`git_data_rung2_user_data_sha256`) can derive a digest at all from the tree as committed.
+# That property is invariant under the emitter landing — it was false before #6982 and false
+# after, for the same reason — so its green does not depend on any work being unfinished.
+#
+# A1 is also the only fixture that can catch an over-broad sibling abort: the live module has
+# no `.tf.json` at all, so it is the sole tree exercising the unexpanded-glob path. The suite
+# already read the live file as a non-asserting NOTE, so reading it is not new; asserting on
+# it is, and this is why.
 
 set -uo pipefail
 
@@ -266,11 +282,23 @@ _r2_hash() {  # $1 = dir holding ci.yml + modules/git-data-userdata/main.tf + pa
   # boots and left the hash BYTE-IDENTICAL on the live tree. Mirrors the gate's own set, and
   # shares its extraction rule so the two cannot drift.
   ins+=("$md/main.tf")
+  # AND THE SIBLING .tf / .tf.json FILES, because the lib binds the whole module directory.
+  # This mirror had DRIFTED FROM THE LIB TWICE while its comment above claimed it could not:
+  # it had no sibling glob at all, and it matched a bare `file\(` where the lib matches the
+  # whole `file(base64|sha256|sha512|md5)?` family. Both are repaired here, and A10 below
+  # asserts equivalence against the lib so a third drift is unshippable rather than merely
+  # measured once. Measured: this repair is hash-neutral — `R2_SHA` is byte-identical at
+  # 6dcbe339… before and after — because no fixture carries a sibling or a `filebase64`
+  # binding today. That is exactly why a one-time measurement is not a guard.
+  for f in "$md"/*.tf "$md"/*.tf.json; do
+    [[ -e "$f" || -L "$f" ]] || continue          # unexpanded glob literal (no nullglob here)
+    [[ -r "$f" && "$f" != "$md/main.tf" ]] && ins+=("$f")
+  done
   while IFS= read -r f; do
     [[ -n "$f" && -r "$md/$f" ]] && ins+=("$md/$f")
   done < <(sed 's/^[[:space:]]*#.*$//' "$md/main.tf" \
-           | grep -oE '(^|[^A-Za-z])file\("\$\{path\.module\}/[^"]+"' \
-           | sed -E 's/.*file\("\$\{path\.module\}\///; s/"$//' | sort -u)
+           | grep -oE '(^|[^A-Za-z])file(base64|sha256|sha512|md5)?\("\$\{path\.module\}/[^"]+"' \
+           | sed -E 's/.*\("\$\{path\.module\}\///; s/"$//' | sort -u)
   { for f in "${ins[@]}"; do
       printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$(basename "$f")"
     done; } | LC_ALL=C sort | sha256sum | cut -d' ' -f1
@@ -633,6 +661,163 @@ sed -i 's|^RUNG2_BOOT_REHEARSAL=PASS$|RUNG2_BOOT_REHEARSAL=PASS   # rehearsed on
 grep -q '#' "$R2/trailing.env" || fail "fixture setup: trailing comment was not applied" "n/a" ""
 r2check "trailing comments on valid evidence => still RELEASED" 0 "RELEASED" "$R2/ci.yml" "$R2/trailing.env"
 
+# ── A1–A10 — the rung-2 user_data hash input set (#7485) ──────────────────────────────
+#
+# These arms call `git_data_rung2_user_data_sha256` DIRECTLY, on a SEPARATE COPIED TREE —
+# never through `r2check`/`R2_SHA`, whose `_r2_hash` mirror this same commit repairs. That
+# independence is the point: a mirror and the thing it mirrors must not be each other's
+# only witness.
+#
+# UNREADABILITY IS INJECTED WITH A DANGLING SYMLINK, NEVER `chmod 000`. Root bypasses the
+# DAC mode check, so `[[ -r ]]` is TRUE for a mode-000 file under uid 0 — in any root
+# container A4, A5 and A7 would go silently green against the unfixed code, which is the
+# exact inverse of what they exist to prove. A dangling symlink is unreadable for every uid
+# (measured: `-r` false, `-L` true), so it is the environment-independent mechanism.
+#
+# SIBLING BASENAMES MUST NOT COLLIDE WITH ANY PAYLOAD BASENAME, or the basename-uniqueness
+# check downstream reddens these arms for the wrong reason.
+
+_a_setup_fail() { printf '\n  HARNESS ABORT: %s\n' "$1" >&2; exit 2; }
+
+_a_tree() {  # $1 = arm name -> prints the path to a fresh copy of the R2 fixture tree
+  local d="$TMP/a_$1"
+  rm -rf "$d" || _a_setup_fail "could not clear $d"
+  cp -r "$R2" "$d" || _a_setup_fail "could not copy the R2 fixture into $d"
+  printf '%s' "$d"
+}
+
+_a_sibling_var() { printf 'variable "doppler_config_name" {\n  default = "prd_git_data"\n}\n' > "$1"; }
+_a_sibling_out() { printf 'output "rendered" {\n  value = local.rendered\n}\n' > "$1"; }
+
+# Asserts rc=1 and that the diagnostic names the offending file.
+_a_abort() {  # $1=name $2=needle $3=cloud-init
+  local name="$1" needle="$2" ci="$3" out rc
+  out="$(git_data_rung2_user_data_sha256 "$ci" 2>&1)"; rc=$?
+  if [[ "$rc" -eq 1 && "$out" == *"$needle"* ]]; then
+    pass "$name"
+  else
+    fail "$name (want rc=1 containing '$needle')" "$rc" "$out"
+  fi
+}
+
+# Asserts rc=0 and a well-formed digest, and publishes it in _A_DIGEST for A6's comparison.
+# Called directly, never in a command substitution, so the global survives.
+_A_DIGEST=""
+_a_hash() {  # $1=name $2=cloud-init
+  local name="$1" ci="$2" out rc
+  out="$(git_data_rung2_user_data_sha256 "$ci" 2>&1)"; rc=$?
+  _A_DIGEST=""
+  if [[ "$rc" -eq 0 && "$out" =~ ^[0-9a-f]{64}$ ]]; then
+    _A_DIGEST="$out"; pass "$name"
+  else
+    fail "$name (want rc=0 and a 64-hex digest)" "$rc" "$out"
+  fi
+}
+
+# A1 — THE COMMITTED TREE. The header above forbids asserting the GATE'S VERDICT on the live
+# template, because that verdict's green depended on #6982 being unfinished. This asserts a
+# DIFFERENT function's self-consistency: that the hash derivation can run at all on the tree
+# as committed. It is invariant under the emitter landing (#6982 has since closed and the
+# live gate now reports RELEASED), so it is not the countdown timer the header rejects. It is
+# also the arm that catches an over-broad sibling abort firing on the unexpanded `*.tf.json`
+# literal, which the live tree — having no `.tf.json` at all — is the only fixture to exercise.
+#
+# A MISSING LIVE FILE IS A LOUD FAILURE, never a silently skipped arm: skipping would drop the
+# suite one below its floor and report as anti-vacuity rather than as the relocation it is.
+_A1_LIVE="${ROOT}/apps/web-platform/infra/cloud-init-git-data.yml"
+if [[ ! -f "$_A1_LIVE" ]]; then
+  fail "A1: the live cloud-init template exists where this derivation binds it" "n/a" \
+       "not found: $_A1_LIVE — if the template moved, this derivation and every consumer move with it"
+else
+  _a_hash "A1: the committed tree derives a 64-hex digest (rc=0)" "$_A1_LIVE"
+fi
+
+# A2 — two siblings, the live module's own shape.
+_a2="$(_a_tree a2)"
+_a_sibling_var "$_a2/modules/git-data-userdata/variables.tf"
+_a_sibling_out "$_a2/modules/git-data-userdata/outputs.tf"
+_a_hash "A2: a module directory with two sibling .tf files returns 0" "$_a2/ci.yml"
+
+# A3 — sibling-count independence. Three siblings must behave exactly like two.
+_a3="$(_a_tree a3)"
+_a_sibling_var "$_a3/modules/git-data-userdata/variables.tf"
+_a_sibling_out "$_a3/modules/git-data-userdata/outputs.tf"
+printf 'terraform {\n  required_version = ">= 1.5.0"\n}\n' > "$_a3/modules/git-data-userdata/versions.tf"
+_a_hash "A3: sibling-count independence — three siblings also return 0" "$_a3/ci.yml"
+
+# A4 — a present-but-unreadable sibling must ABORT, not be silently dropped. Measured rc=0
+# against the first draft's payload-loop-only shape: the hash was well-formed over a NARROWER
+# set, which is the fail-open this whole change exists to prevent.
+_a4="$(_a_tree a4)"
+ln -s /nonexistent/dangling-a4 "$_a4/modules/git-data-userdata/variables.tf" \
+  || _a_setup_fail "could not create the A4 dangling symlink"
+_a_abort "A4: an unreadable .tf sibling aborts, naming the file" \
+         "variables.tf' is present but cannot be read" "$_a4/ci.yml"
+
+# A5 — the abort must attach to BOTH glob patterns, not just the first.
+_a5="$(_a_tree a5)"
+ln -s /nonexistent/dangling-a5 "$_a5/modules/git-data-userdata/extra.tf.json" \
+  || _a_setup_fail "could not create the A5 dangling symlink"
+_a_abort "A5: an unreadable .tf.json sibling aborts, naming the file" \
+         "extra.tf.json' is present but cannot be read" "$_a5/ci.yml"
+
+# A6 — a readable .tf.json is HASHED, not merely tolerated. Terraform loads .tf.json, so a
+# knob written there decides what boots; asserting rc=0 alone would pass against a glob that
+# skipped the file entirely. The digest must MOVE.
+_a6="$(_a_tree a6)"
+_a6_before="$(git_data_rung2_user_data_sha256 "$_a6/ci.yml" 2>&1)"
+printf '{"variable":{"extra_knob":{"default":"prd_git_data"}}}\n' \
+  > "$_a6/modules/git-data-userdata/extra.tf.json"
+_a6_after="$(git_data_rung2_user_data_sha256 "$_a6/ci.yml" 2>&1)"; _a6_rc=$?
+if [[ "$_a6_rc" -eq 0 && "$_a6_after" =~ ^[0-9a-f]{64}$ && "$_a6_after" != "$_a6_before" ]]; then
+  pass "A6: a readable .tf.json sibling is hashed (digest differs from the tree without it)"
+else
+  fail "A6: a readable .tf.json sibling is hashed (digest differs from the tree without it)" \
+       "$_a6_rc" "before=${_a6_before} after=${_a6_after}"
+fi
+
+# A7 — a referenced payload that is present-but-unreadable.
+_a7="$(_a_tree a7)"
+rm -f "$_a7/git-data-gc.timer" || _a_setup_fail "could not remove the A7 payload"
+ln -s /nonexistent/dangling-a7 "$_a7/git-data-gc.timer" \
+  || _a_setup_fail "could not create the A7 dangling symlink"
+# The needle carries the `../../` prefix deliberately: that is the reference AS WRITTEN in
+# main.tf, and echoing it back verbatim is what lets a reader grep the module for the failing
+# binding. A needle of the bare basename would pass against a message that had lost the
+# binding's actual spelling.
+_a_abort "A7: an unreadable referenced payload aborts, naming it" \
+         "references payload '../../git-data-gc.timer'" "$_a7/ci.yml"
+
+# A8 — a referenced payload DELETED OUTRIGHT. This is the job the deleted referenced-vs-
+# resolved counting check used to do, and the one an `-r`-only guard could lose: the abort
+# must inherit it rather than let the reference resolve to nothing.
+_a8="$(_a_tree a8)"
+rm -f "$_a8/git-data-gc.service" || _a_setup_fail "could not remove the A8 payload"
+_a_abort "A8: a deleted referenced payload aborts, naming it" \
+         "references payload '../../git-data-gc.service'" "$_a8/ci.yml"
+
+# A9 — the floor is on the PAYLOAD count, and its message names that count. Siblings are
+# present so the arm proves the floor is not merely counting `_inputs` again.
+_a9="$(_a_tree a9)"
+_a_sibling_var "$_a9/modules/git-data-userdata/variables.tf"
+_a_sibling_out "$_a9/modules/git-data-userdata/outputs.tf"
+_r2_write_module "$_a9" git-data-bootstrap.sh git-data-gc.sh
+_a_abort "A9: a module binding only 2 payloads aborts, naming the payload count" \
+         "resolved only 2 payload(s)" "$_a9/ci.yml"
+
+# A10 — EQUIVALENCE. `_r2_hash()` is a hand-maintained reimplementation of the lib's input
+# set whose comment claims the two "cannot drift" — and it had drifted twice (no sibling glob,
+# a bare `file\(` where the lib matches the whole family). Byte-identity was measured once at
+# repair time; a one-time measurement is not a guard. This arm makes a third drift unshippable.
+_a10_mirror="$(_r2_hash "$R2")"
+_a10_lib="$(git_data_rung2_user_data_sha256 "$R2/ci.yml" 2>&1)"; _a10_rc=$?
+if [[ "$_a10_rc" -eq 0 && -n "$_a10_mirror" && "$_a10_mirror" == "$_a10_lib" ]]; then
+  pass "A10: _r2_hash equals the lib's derivation over the same fixture (mirror non-drift)"
+else
+  fail "A10: _r2_hash equals the lib's derivation over the same fixture (mirror non-drift)" \
+       "$_a10_rc" "mirror=${_a10_mirror} lib=${_a10_lib}"
+fi
+
 # MINIMUM-CARDINALITY FLOOR. This suite had none, and it now covers TWO gates: an early
 # `exit`, a helper that silently stopped being called, or a fixture-setup failure would
 # otherwise report "0 failed" — the vacuous green every guard in this file exists to reject.
@@ -640,12 +825,13 @@ r2check "trailing comments on valid evidence => still RELEASED" 0 "RELEASED" "$R
 # legitimately added assertion and train the next person to bump it unread. Counts
 # passes+fails, so a genuine failure still counts as HAVING RUN and reports as a failure
 # rather than masquerading as an empty suite.
+# RAISED 58 -> 68 WITH THE ARMS THAT MADE IT NECESSARY (#7485): A1–A10 above.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 58 ]]; then
+if [[ "$_ran" -lt 68 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 58. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 68. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 58)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 68)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"

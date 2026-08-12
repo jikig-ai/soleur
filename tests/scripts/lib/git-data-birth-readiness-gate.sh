@@ -299,8 +299,40 @@ git_data_rung2_user_data_sha256() {
   # default would decide what boots for any caller that stops passing it explicitly, and
   # outputs.tf is where a second arch derivation could be written unseen. Binding the
   # directory costs one glob and is free only while no evidence file exists yet.
-  for _f in "${module_dir}"/*.tf; do
-    [[ -r "$_f" && "$_f" != "$module_tf" ]] && _inputs+=("$_f")
+  #
+  # THIS LOOP APPENDS CONDITIONALLY, so it is a chokepoint and must ABORT rather than drop.
+  # Measured on the shipped code: with one sibling made unreadable the function returned rc=0
+  # and a WELL-FORMED digest over a narrower set — a fail-open, not a refusal. The
+  # referenced-vs-resolved arithmetic below happened to mask it on the live tree only because
+  # its two literals cancelled there.
+  #
+  # ABSENT vs UNREADABLE IS LOAD-BEARING AND IS WRITTEN EXPLICITLY. No `nullglob` is set here,
+  # so a pattern matching nothing yields the literal string — and the live module has no
+  # `.tf.json` at all, so `*.tf.json` iterates once on an unexpanded literal. A naive
+  # `[[ -r ]] || abort` would therefore abort on `main`: the very defect being fixed,
+  # reintroduced at the new contributor. Testing only `-e` is the opposite error — it silently
+  # skips a dangling symlink, a file Terraform fails on but the hash would quietly exclude.
+  #
+  #   candidate                        -e     -L     verdict
+  #   unexpanded literal (no matches)  false  false  skip
+  #   present, readable                true   —      hash it
+  #   present, unreadable              true   —      abort
+  #   dangling symlink                 false  true   abort
+  #
+  # `.tf.json` IS INCLUDED because Terraform loads it exactly as it loads `.tf`; the old glob
+  # missed it, so a render knob written there decided what boots while staying out of the hash.
+  #
+  # NO SIBLING FLOOR. A deleted sibling is a real directory change the hash correctly reflects,
+  # and a floor here would be precisely the stale literal this change removes — it would break
+  # the first time `variables.tf` is legitimately folded into `main.tf`.
+  for _f in "${module_dir}"/*.tf "${module_dir}"/*.tf.json; do
+    [[ -e "$_f" || -L "$_f" ]] || continue
+    [[ "$_f" == "$module_tf" ]] && continue
+    if [[ ! -r "$_f" ]]; then
+      echo "git_data_rung2_user_data_sha256: ABORT — module Terraform file '${_f}' is present but cannot be read, so the render inputs backing the evidence hash are incomplete. Hashing the rest would produce a well-formed digest over a NARROWER set than ships. Fail-closed."
+      return 1
+    fi
+    _inputs+=("$_f")
   done
   # Payload paths are written relative to the MODULE (`${path.module}/../../<name>`), so they
   # resolve against module_dir — not against tf_dir, which would land two levels too high and
@@ -309,49 +341,69 @@ git_data_rung2_user_data_sha256() {
   # Key class is `[A-Za-z0-9_]+`, not `[a-z_]+`: a binding named `boot_probe2` or `bootProbe`
   # was silently unextracted, so its payload rendered into user_data while edits to it left the
   # hash unchanged (the floor did not fire — the original ten were all still present).
-  # ONE RULE, used for both the extraction and the count below: every `file("${path.module}/…")`
-  # on a NON-COMMENT line, excluding `templatefile(` (the template is added separately, above).
+  # ONE RULE: every `file("${path.module}/…")` on a NON-COMMENT line, excluding `templatefile(`
+  # (the template is added separately, above). It had a second consumer — a referenced-vs-
+  # resolved count — which #7485 deleted, because counting a drop is strictly weaker than
+  # refusing at the drop: the count could report that two integers disagreed, never WHICH
+  # payload was missing. Comment-stripping and the `templatefile(` exclusion remain load-bearing
+  # for the extraction itself, independently of that deleted consumer.
   # Deliberately wrapper-agnostic — `replace(file(…))`, bare `file(…)`, `trimspace(file(…))`,
   # `base64encode(file(…))` all resolve, because the previous key-anchored form silently
   # skipped any binding whose wrapper or key shape it did not anticipate, and a skipped payload
   # renders into user_data while edits to it leave the evidence hash unchanged.
-  # THE WHOLE `file`-FAMILY, not just `file(`. `filebase64(` was invisible to BOTH sides of
-  # the referenced-vs-resolved check below (9 refs, 9 resolved, floor satisfied at 11), so a
-  # tenth payload bound that way rendered into user_data while edits to it left the hash
-  # unchanged — measured. The count check could never catch it, because its blind spot WAS
-  # this regex's blind spot; widening the regex is the only fix that closes both sides.
+  # THE WHOLE `file`-FAMILY, not just `file(`. A payload bound via `filebase64(` was invisible
+  # to the extraction, so it rendered into user_data while edits to it left the hash unchanged
+  # — measured. This was ALSO the standing argument for why the referenced-vs-resolved count
+  # could never catch that class: the count called this same extractor on both sides, so its
+  # blind spot WAS this regex's blind spot. Widening the regex is what closed it; the count
+  # contributed nothing and is gone.
+  #
+  # THE HONEST BOUND on this predicate is a SINGLE-LINE LITERAL form. A multi-line `file(\n
+  # "…"\n)`, an indirected `file(local.p)`, and a second `templatefile()` are all invisible to
+  # it, and each would render into user_data while the nine literal payloads still resolve and
+  # the floor still passes. That is pre-existing, not introduced by deleting the count — which
+  # was equally blind — and it is recorded so this mechanism is not read as complete.
   _payload_refs() {
     sed 's/^[[:space:]]*#.*$//' "$module_tf" \
       | grep -oE '(^|[^A-Za-z])file(base64|sha256|sha512|md5)?\("\$\{path\.module\}/[^"]+"' \
       | sed -E 's/.*\("\$\{path\.module\}\///; s/"$//'
   }
+  #
+  # THE SECOND CONDITIONAL CHOKEPOINT, and the one the deleted arithmetic below used to police
+  # by counting. Aborting HERE — where the drop actually happens — names the offending payload,
+  # which the count never could: it could only report that two integers disagreed.
+  #
+  # THE `-n "$_f"` GUARD IS RETAINED. Written as a bare `-r` test, an empty `_f` yields
+  # `-r "${module_dir}/"`, which is TRUE for a directory — so a blank extraction line would
+  # append the module directory itself to the hash input set.
+  local _n_payloads=0
   while IFS= read -r _f; do
-    [[ -n "$_f" && -r "${module_dir}/${_f}" ]] && _inputs+=("${module_dir}/${_f}")
+    [[ -n "$_f" ]] || continue
+    if [[ ! -r "${module_dir}/${_f}" ]]; then
+      echo "git_data_rung2_user_data_sha256: ABORT — ${module_tf} references payload '${_f}', but '${module_dir}/${_f}' cannot be read (absent, or present and unreadable). That payload renders into user_data, so hashing without it would bind the evidence to fewer files than ship. Fail-closed."
+      return 1
+    fi
+    _inputs+=("${module_dir}/${_f}")
+    _n_payloads=$((_n_payloads + 1))
   done < <(_payload_refs | sort -u)
 
-  # A floor: the template + the module .tf + nine payloads.
-  if [[ "${#_inputs[@]}" -lt 11 ]]; then
-    echo "git_data_rung2_user_data_sha256: ABORT — resolved only ${#_inputs[@]} user_data input(s) (expected the template + the render module + 9 payloads). The payload-set extraction from ${module_tf} drifted. Fail-closed."
-    return 1
-  fi
-
-  # REFERENCED vs RESOLVED. Both sides now use `_payload_refs`, so this is NOT a tautology
-  # over the same predicate: extraction additionally requires each referent to be READABLE, so
-  # a difference means the module references a payload that is not on disk. That is a genuine
-  # signal — a missing payload would otherwise silently shrink what the evidence binds to,
-  # and the floor cannot see it once the module also grows a replacement.
-  local _n_refs _n_resolved
-  # COMMENTS STRIPPED, and `templatefile(` excluded. Both were live defects in the first
-  # version of this very check: it matched `templatefile("${path.module}/…` (a substring) AND
-  # matched the header comment in this module that DOCUMENTS the mechanism — reporting 11
-  # references against 9 payloads and aborting on a correct tree. The extraction `sed` above
-  # is comment-safe by anchoring on `^[[:space:]]*[A-Za-z0-9_]+=`, so the count has to be too,
-  # or the two disagree the moment anyone explains the mechanism in prose.
-  # (cq-assert-anchor-not-bare-token — the same trap, in the guard added to catch a different one.)
-  _n_refs="$(_payload_refs | sort -u | grep -c . || true)"
-  _n_resolved=$(( ${#_inputs[@]} - 2 ))   # minus the cloud-init and the module .tf itself
-  if [[ "$_n_refs" -ne "$_n_resolved" ]]; then
-    echo "git_data_rung2_user_data_sha256: ABORT — ${module_tf} contains ${_n_refs} file(\${path.module}/…) reference(s) but only ${_n_resolved} resolved into the hash input set. A payload the extraction cannot see would render into user_data while edits to it left the evidence hash unchanged. Fail-closed."
+  # A FLOOR ON THE PAYLOAD COUNT — not on `#_inputs`, whose composition is what went stale.
+  #
+  # The old floor was `#_inputs -lt 11`. With two siblings present that reads `4 + N < 11`, so
+  # it fired only when N < 7: the shipped floor TOLERATED LOSING TWO OF THE NINE PAYLOADS. It
+  # was loose, not merely stale.
+  #
+  # THIS IS HONESTLY STILL A LITERAL, and the honest statement is that it goes LOOSE by one
+  # when a tenth payload lands — it will not abort, it will tolerate losing one. There is no
+  # automatic trigger for that and this code does not pretend otherwise: when the payload set
+  # grows, THIS LITERAL IS WHERE THE NEW COUNT GOES. It is one literal instead of two, which is
+  # an improvement, not immunity.
+  #
+  # It stays alongside the per-reference abort because the two are orthogonal: deleting five
+  # bindings from main.tf leaves every REMAINING reference resolving perfectly while the hash
+  # binds four files fewer than ship.
+  if [[ "$_n_payloads" -lt 9 ]]; then
+    echo "git_data_rung2_user_data_sha256: ABORT — the payload extraction from ${module_tf} resolved only ${_n_payloads} payload(s); ship binds 9. The extraction drifted, or bindings were removed. If the payload set legitimately grew or shrank, the floor literal in git_data_rung2_user_data_sha256() is where the new count belongs. Fail-closed."
     return 1
   fi
 
