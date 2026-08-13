@@ -430,7 +430,12 @@ jobs:
           # WHY A SEPARATE STEP rather than folding this into the verify step: it must observe
           # the frame BEFORE the apply mutates the host, and the verify step runs after. It is
           # also the right boundary on principle — this step SENSES, the verify step ADJUDICATES,
-          # and a verification gate should not share a step with its own verdict.
+          # and a verification gate should not share a step with its own verdict — nor, since
+          # #7104, with the remediation it triggers: the re-push is planned and graded in one
+          # step and applied in the next, and a second invocation of infra-config-verify.sh
+          # renders the terminal verdict. PR-B is this principle's first fully compliant
+          # instance; infra-config-verify.sh polls, adjudicates and emits a verdict, and never
+          # writes production.
           #
           # WHY A SEPARATE RESPONSE FILE: the red-gate alert step below hardcodes
           # RESP=/tmp/infra-config-status-response.txt and runs `jq -e .` on it. A pre-poller
