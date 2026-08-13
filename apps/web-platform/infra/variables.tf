@@ -608,42 +608,6 @@ variable "ghcr_read_token" {
   sensitive   = true
 }
 
-# #7462 (ADR-096) — zot PULL credential, BAKED into the dedicated inngest host's user_data.
-#
-# WHY BAKED RATHER THAN READ FROM DOPPLER AT BOOT, as cloud-init.yml's web-host arm does.
-# The dedicated host's Doppler token is scoped to project `soleur-inngest`, config `prd`. It
-# holds no token for project `soleur`, so ZOT_REGISTRY_URL / ZOT_PULL_* are unreadable from
-# that host. Adding them to `soleur-inngest/prd` is not the fix either: that host runs a
-# fail-CLOSED boot isolation self-check asserting every visible non-DOPPLER secret is a known
-# inngest name (n_total == n_inngest), so three new keys make the assertion false and the host
-# refuses to bootstrap at all. The bake path avoids the check by construction, and it is the
-# precedent already set on this exact host by ghcr_read_user / ghcr_read_token /
-# betterstack_logs_token (inngest-host.tf) for the same stated reason: cold boot must not
-# depend on Doppler answering at the boot instant.
-#
-# NO default (hr-tf-variable-no-operator-mint-default). Both values already exist in Doppler
-# `prd_terraform` as ZOT_PULL_USER / ZOT_PULL_TOKEN — `doppler run --name-transformer tf-var`
-# ADDS the TF_VAR_ prefix, so they resolve as TF_VAR_zot_pull_user / TF_VAR_zot_pull_token
-# with no operator step. That matters beyond convenience: Terraform resolves ALL root
-# variables before `-target` pruning, so a no-default var that is unprovisioned fails the
-# whole merge-triggered apply even though the inngest resources are `-target`-excluded.
-#
-# Trust boundary: identical to the ghcr_read_token / betterstack_logs_token bakes already in
-# this host's user_data — retrievable via the Hetzner metadata API by anyone with host access.
-# The credential is read-only against a private-net registry behind a deny-all-public
-# firewall, so this widens nothing.
-variable "zot_pull_user" {
-  description = "htpasswd login with PULL-only access to the self-hosted zot registry (10.0.1.30:5000). Mirrors Doppler soleur/prd ZOT_PULL_USER; baked into the dedicated inngest host's user_data so its cold-boot bootstrap pull can prefer zot. NO default."
-  type        = string
-  sensitive   = true
-}
-
-variable "zot_pull_token" {
-  description = "Password for zot_pull_user. Mirrors Doppler soleur/prd ZOT_PULL_TOKEN; baked into the dedicated inngest host's user_data for the pre-bootstrap `docker login`, because the bootstrap image's own zot_login runs too late to authorize the pull that fetches that very image. NO default."
-  type        = string
-  sensitive   = true
-}
-
 # #6178 — post-cutover web-host scheduling toggle. When true, a freshly-CREATED web
 # host bootstraps + enables the co-located inngest-server.service (pre-cutover
 # behavior). Default false: scheduling lives on the dedicated soleur-inngest host

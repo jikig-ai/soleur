@@ -481,7 +481,16 @@ runcmd:
   # without reloading config. Unconditional — a restart with no daemon.json written is a
   # harmless no-op, and making it conditional would put a second copy of the endpoint test
   # between the write and the thing that reads it.
-  - systemctl restart docker
+  - |
+    set +e
+    if systemctl restart docker; then
+      /usr/local/bin/inngest-boot-phone-home.sh docker-restarted "active=$(systemctl is-active docker)"
+    else
+      # No off-box channel otherwise: `cloud-init` is not in vector.toml's Source-4 allowlist,
+      # and Vector ships INSIDE the image this boot has not pulled yet. Without this the failure
+      # surfaces later as a registry-blaming pull tail on a host with no SSH.
+      /usr/local/bin/inngest-boot-phone-home.sh docker-restart-FAILED "active=$(systemctl is-active docker) jl=[$(journalctl -u docker -n 5 --no-pager 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' | head -c 300)]"
+    fi
 
   # Install the nftables scoping now + on every boot (a reboot clears nftables).
   - systemctl enable --now inngest-nftables.service
@@ -511,8 +520,12 @@ runcmd:
   # The endpoint rides the same file rather than being re-interpolated at each use site: two
   # copies of a template var are two things that can disagree, and the pull path already has
   # enough of those.
-  - printf 'ZOT_REGISTRY_ENDPOINT=%s\nZOT_PULL_USER=%s\nZOT_PULL_TOKEN=%s\n' '${zot_registry_endpoint}' '${zot_pull_user}' '${zot_pull_token}' > /etc/default/soleur-zot-read
-  - chmod 600 /etc/default/soleur-zot-read
+  # `( umask 0177 && … )` rather than write-then-chmod: a bare redirect CREATES the file 0644
+  # under root's umask with the token already in it, and only narrows afterwards. Short window,
+  # but every daemon already running from the base image can read it and there is no reason to
+  # accept it — the precedent is `( umask 0137 && printf … > /etc/default/inngest-server )`
+  # below. (The GHCR bake above has the same defect; left alone here as pre-existing.)
+  - ( umask 0177 && printf 'ZOT_REGISTRY_ENDPOINT=%s\nZOT_PULL_USER=%s\nZOT_PULL_TOKEN=%s\n' '${zot_registry_endpoint}' '${zot_pull_user}' '${zot_pull_token}' > /etc/default/soleur-zot-read )
 
   # zot login from the baked creds. PLACEMENT IS LOAD-BEARING: the bootstrap image ships its
   # own zot_login, but that runs AFTER the image has been pulled — it cannot authorize the pull
@@ -523,16 +536,20 @@ runcmd:
   # boot: this host's GHCR-only path is what is broken today, and a change that can brick the
   # boot on a registry hiccup would be strictly worse than the state it replaces. The three
   # stages mirror the GHCR trio one-for-one so a boot trace reads the same on both legs.
-  # Every runcmd `- |` item is its OWN shell, so ZOT_EP is re-derived here from the baked file
-  # rather than inherited from the daemon.json item above. The two sites read the SAME source
-  # (the template var, via that file), so they cannot disagree.
+  # ZOT_EP is re-derived from the baked file rather than relied on from the daemon.json item.
+  # NOT because items are separate shells — they are NOT: cloud-init's `shellify()` concatenates
+  # every runcmd string item into ONE /bin/sh, which is why cloud-init.yml warns "runcmd is ONE
+  # /bin/sh, so `set -e` +" and why the 2026-07-06 errexit-leak post-mortem exists. The reason is
+  # locality: this item does not depend on an assignment made several items earlier in a shared
+  # shell, and both sites read the SAME source (the template var, via that file), so they cannot
+  # disagree.
   - |
     set +e
     . /etc/default/soleur-zot-read 2>/dev/null || true
     ZOT_EP="$ZOT_REGISTRY_ENDPOINT"
     if [ -n "$ZOT_EP" ]; then
       if [ -n "$ZOT_PULL_USER" ] && [ -n "$ZOT_PULL_TOKEN" ]; then
-        if printf '%s' "$ZOT_PULL_TOKEN" | docker login "$ZOT_EP" -u "$ZOT_PULL_USER" --password-stdin >/dev/null 2>&1; then
+        if printf '%s' "$ZOT_PULL_TOKEN" | timeout 60 docker login "$ZOT_EP" -u "$ZOT_PULL_USER" --password-stdin >/dev/null 2>&1; then
           echo "[inngest] zot login ok"; /usr/local/bin/inngest-boot-phone-home.sh zot-login-ok "$ZOT_EP"
         else
           echo "[inngest] zot login failed (bootstrap pull falls back to GHCR)"; /usr/local/bin/inngest-boot-phone-home.sh zot-login-FAILED "$ZOT_EP"
@@ -685,9 +702,18 @@ runcmd:
     # and `crane validate --remote` PASSed, which fetches every blob rather than HEADing the
     # manifest — a reclaimed layer yields green digest parity and `blob unknown` on this pull.
     #
-    # DARK-SAFE BY CONSTRUCTION. An empty endpoint skips the leg entirely and the path below is
-    # byte-for-byte today's. A configured-but-missing zot costs one failed pull and falls back.
-    # Neither is a worse boot than the current GHCR-only one.
+    # WHAT THE GHCR LEG IS NOW. Not a fallback: AP-016 LAPSED 2026-07-30 (#7071) — the interim
+    # read PAT is REVOKED, so the GHCR leg cannot authenticate and returns a guaranteed 401.
+    # It is retained as the structure a restored credential would slot into, and it costs one
+    # failing pull per boot. Say this plainly rather than "break-glass", because after this
+    # change THIS HOST'S BOOT DEPENDS ENTIRELY ON ZOT: a zot miss does not degrade to GHCR, it
+    # fails the boot. "Never a worse boot than today" is true only because today's path is
+    # 100% broken — it is not the stronger property it sounds like.
+    #
+    # DARK-SAFE arm: an empty endpoint skips the leg and the path below is byte-for-byte today's.
+    # Note that `local.registry_endpoint` is a compile-time constant, so that arm is unreachable
+    # in this root — there is no runtime kill switch; disabling the leg needs a code change plus
+    # a host replace.
     ZOT_LEG=unconfigured
     . /etc/default/soleur-zot-read 2>/dev/null || true
     ZOT_EP="$ZOT_REGISTRY_ENDPOINT"
@@ -696,7 +722,12 @@ runcmd:
       /usr/local/bin/inngest-boot-phone-home.sh pre-zot-pull "$ZIREF"
       set +e
       install -m 600 /dev/null /var/log/inngest-zot-pull.log
-      docker pull "$ZIREF" > /var/log/inngest-zot-pull.log 2>&1
+      # BOUNDED. This is the optional leg; the web host caps its zot probe at `--max-time 3`
+      # and this arm has no probe at all, so without a timeout an unreachable-but-routable zot
+      # (firewall DROP, daemon down) stalls cloud-init for minutes on the SOLE scheduler, where
+      # boot latency is outage duration. rc 124 lands on the miss arm and falls back, which is
+      # the behaviour the surrounding comment already claims ("costs one failed pull").
+      timeout 180 docker pull "$ZIREF" > /var/log/inngest-zot-pull.log 2>&1
       zot_rc=$?
       set -e
       zot_tail="$(tail -n 4 /var/log/inngest-zot-pull.log 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' || true)"
@@ -707,18 +738,21 @@ runcmd:
       else
         # The fallback-rate signal. This host has NO soleur-boot-emit (that emitter ships with
         # the WEB host's host-script bundle), and inngest-boot-phone-home.sh takes no severity
-        # argument — the STAGE NAME is the whole signal. The name is deliberately identical to
-        # the web host's so one query covers both. Note the CHANNELS differ: the web host's
-        # marker reaches Sentry, this one reaches Better Stack only, so the Sentry-based
-        # zot-soak fallback query does NOT count this host. Queryable via
-        # `betterstack-query.sh --grep inngest_ghcr_fallback`.
+        # argument — the STAGE NAME is the whole signal. The name matches the web host's, but
+        # that does NOT mean one query covers both, and an earlier draft of this comment claimed
+        # it did: `soleur-boot-emit` POSTs to Sentry and nothing else, this emitter POSTs to
+        # Better Stack and nothing else. So the web host's fallback exists ONLY in Sentry and
+        # this one ONLY in Better Stack — no single query in either system sees both. The shared
+        # name buys future convenience, not a query today. Read this host via
+        # `betterstack-query.sh --grep inngest_ghcr_fallback`; the Sentry-based zot-soak
+        # `[freshboot]` count is web-host-only.
         ZOT_LEG="failed rc=$zot_rc tail=$zot_tail"
         /usr/local/bin/inngest-boot-phone-home.sh inngest_ghcr_fallback "zot miss ep=$ZOT_EP rc=$zot_rc tail=$zot_tail"
       fi
     fi
     # #6178 boot observability: bracket the OCI pull so a pull hang/401 self-reports the STAGE
     # (pre-oci-pull with no oci-pull-rc-* = hung; oci-pull-rc-N!=0 = failed, with masked tail).
-    /usr/local/bin/inngest-boot-phone-home.sh pre-oci-pull "$IREF"
+    /usr/local/bin/inngest-boot-phone-home.sh pre-oci-pull "$IREF zotleg=$ZOT_LEG"
     set +e
     install -m 600 /dev/null /var/log/inngest-oci-pull.log   # 0600 pre-create so the redirect can't leave secrets world-readable
     docker pull "$IREF" > /var/log/inngest-oci-pull.log 2>&1

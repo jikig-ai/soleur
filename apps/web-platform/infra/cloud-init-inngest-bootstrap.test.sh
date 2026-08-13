@@ -678,7 +678,14 @@ L_ZIREF=$(zg_line '^[[:space:]]*ZIREF=')
 L_PRE=$(zg_line 'inngest-boot-phone-home\.sh pre-oci-pull')
 L_IPULL=$(zg_line 'docker pull "\$IREF"')
 L_DAEMON=$(zg_line 'insecure-registries')
-L_DOCKER_RESTART=$(zg_line '^[[:space:]]*- systemctl restart docker')
+# Anchored on the RESTART ITSELF, not on the runcmd-item form it happened to have. The restart
+# was a bare `- systemctl restart docker` item until it was wrapped to report its own failure
+# (it had no off-box channel: `cloud-init` is not in vector.toml's Source-4 allowlist and Vector
+# ships inside the image this boot has not pulled). A `^\s*- ` anchor pinned the YAML shape
+# rather than the command, so making the restart OBSERVABLE reddened the guard — the anchor
+# tracked the wrong thing. `^\s*(- )?(if )?systemctl restart docker` accepts either form and
+# still cannot be satisfied by a comment.
+L_DOCKER_RESTART=$(zg_line '^[[:space:]]*(- )?(if )?systemctl restart docker')
 
 assert "Row1 offsets: the GHCR seed assignment was found" "[[ -n '$L_IREF_SEED' ]]"
 assert "Row1 offsets: the zot ref assignment (ZIREF=) was found" "[[ -n '$L_ZIREF' ]]"
@@ -724,8 +731,10 @@ assert "Row2: both legs pin the SAME digest (crane copy is digest-preserving)" \
 # This host has NO `soleur-boot-emit` (grep: zero occurrences) — that emitter is delivered by
 # the WEB host's host-script bundle. Its only channel is inngest-boot-phone-home.sh, whose
 # signature is `<stage> [detail]` with NO severity argument, so the STAGE NAME carries the
-# whole signal. The names are deliberately identical to the web host's (`inngest_zot`,
-# `inngest_ghcr_fallback`) so one Better Stack query covers both hosts.
+# whole signal. The names match the web host's (`inngest_zot`, `inngest_ghcr_fallback`) — but
+# that does NOT mean one query covers both, and an earlier draft of this comment said it did:
+# `soleur-boot-emit` POSTs to Sentry only, this emitter to Better Stack only, so no single
+# query in either system sees both hosts.
 assert "Row3: a zot HIT emits inngest_zot" \
   "grep -qF 'inngest-boot-phone-home.sh inngest_zot' '$DED_CODE_FILE'"
 assert "Row3: the zot->GHCR flip emits inngest_ghcr_fallback (the fallback-rate signal)" \

@@ -167,10 +167,13 @@ case_mutate row1-ghcr-attempted-first \
   "$SRC" '
 import sys
 p=sys.argv[1]; s=open(p).read()
-emit="    /usr/local/bin/inngest-boot-phone-home.sh pre-oci-pull \"$IREF\"\n"
+import re as _re
+m=_re.search(r"^    /usr/local/bin/inngest-boot-phone-home\.sh pre-oci-pull .*\n", s, _re.M)
+assert m, "pre-oci-pull emit not found"
+emit=m.group(0)
 anchor="    ZOT_LEG=unconfigured\n"
-assert emit in s and anchor in s, "anchors not found"
-s=s.replace(emit,"",1)
+assert anchor in s, "ZOT_LEG anchor not found"
+s=s[:m.start()]+s[m.end():]
 s=s.replace(anchor,emit+anchor,1)
 open(p,"w").write(s)
 '
@@ -268,7 +271,7 @@ case_mutate extra-docker-not-restarted \
 import sys
 p=sys.argv[1]; s=open(p).read()
 lines=s.split("\n")
-out=[l for l in lines if l.strip()!="- systemctl restart docker"]
+out=[l for l in lines if "systemctl restart docker" not in l or l.strip().startswith("#")]
 assert len(out)<len(lines), "systemctl restart docker line not found"
 open(p,"w").write("\n".join(out))
 '
@@ -281,7 +284,7 @@ case_mutate extra-zot-login-after-pull \
   "$SRC" '
 import re,sys
 p=sys.argv[1]; s=open(p).read()
-m=re.search(r"^ *if printf .%s. \"\$ZOT_PULL_TOKEN\" \| docker login \"\$ZOT_EP\".*$",s,re.M)
+m=re.search(r"^ *if printf .*docker login \"\$ZOT_EP\" -u \"\$ZOT_PULL_USER\".*$",s,re.M)
 assert m, "zot login line not found"
 line=m.group(0).strip()
 s=s[:m.start()]+"        if true; then"+s[m.end():]
@@ -289,9 +292,9 @@ s=s[:m.start()]+"        if true; then"+s[m.end():]
 # inserting there relocates the login to a DIFFERENT place that is still before the pull --
 # a mutation that does not reproduce the defect it names, and its survival would read as a
 # gap in the guard rather than a bug in this case. It did, on the first run.
-anchor = "      docker pull \"$ZIREF\" > /var/log/inngest-zot-pull.log 2>&1\n"
-assert anchor in s, "zot pull anchor not found"
-s=s.replace(anchor, anchor + "      " + line + " :; fi\n", 1)
+pm=re.search(r"^ *(timeout [0-9]+ )?docker pull \"\$ZIREF\" > /var/log/inngest-zot-pull\.log 2>&1\n",s,re.M)
+assert pm, "zot pull anchor not found"
+s=s[:pm.end()] + "      " + line + " :; fi\n" + s[pm.end():]
 open(p,"w").write(s)
 '
 

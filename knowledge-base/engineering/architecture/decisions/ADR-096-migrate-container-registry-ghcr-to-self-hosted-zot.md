@@ -1050,7 +1050,12 @@ this an architectural fact rather than a preference:
 
 1. This host's Doppler token is scoped to project `soleur-inngest`, so keys in project
    `soleur` are unreadable from it.
-2. **Adding the keys to `soleur-inngest/prd` cannot work.** This host runs a fail-**closed**
+2. **Adding the keys to `soleur-inngest/prd` would require widening the fail-closed check**
+   — "cannot work" (an earlier draft's wording) is too strong: the admitted-name regex is a code
+   artifact in the same file, and its own comment records that `BETTERSTACK_LOGS_TOKEN` was
+   admitted on exactly the "a name this host's runtime consumes" argument. What makes the bake
+   the right call is the measured cold-boot fact the web host records — Doppler answers EMPTY at
+   the boot instant — with the isolation check as the second reason. This host runs a fail-**closed**
    boot isolation self-check asserting every visible non-`DOPPLER_` secret is a known inngest
    name (`n_total == n_inngest`). Three new keys make that assertion false → `FATAL` → no
    Vector, no inngest-server, no boot at all. This is exactly what #6500's title records:
@@ -1069,7 +1074,9 @@ that same fail-closed floor forbidding the fleet's standard zot-enrollment path.
 
 ### What this does and does NOT do
 
-**Does:** gives the host a zot-primary arm carrying the `@sha256` digest unchanged onto both
+**Does:** arms a zot-primary path IN SOURCE — the running host still carries the old
+`user_data` until the gated `apply_target=inngest-host-replace` dispatch, so nothing below is
+true of the live host at merge. It carries the `@sha256` digest unchanged onto both
 legs (`crane copy` is digest-preserving, so one digest resolves on both registries — verified
 live on 2026-08-13 by run `31681702541`, whose `crane validate --remote` PASS proves the
 **blobs** are present, not merely the manifest); allowlists zot as an insecure registry in the
@@ -1092,4 +1099,13 @@ docker daemon config; authenticates before the pull; and reports `inngest_zot` /
   channel and was deliberately cut. Whoever authorizes 5.3–5.5 must therefore treat the soak's
   inngest-freshboot count as covering the **web** host only, and read this host's fallback rate
   from Better Stack separately. This is a live gap, not a resolved one.
-- **Retire the GHCR leg.** It is retained as break-glass, per Phase 5's staged retirement.
+- **Retire the GHCR leg** — but "retained as break-glass" would be false, and an earlier draft
+  of this amendment said exactly that. AP-016 **LAPSED 2026-07-30 (#7071)**: the interim read PAT
+  is REVOKED, so the GHCR leg cannot authenticate and returns a guaranteed 401. It is retained as
+  the structure a restored credential would slot into, at the cost of one failing pull per boot.
+  **The consequence for whoever authorises 5.3–5.5 is the inverse of what "break-glass" implies:
+  after this change the dedicated host's boot depends ENTIRELY on zot reachability** — a zot miss
+  does not degrade to GHCR, it fails the boot — **and on the freshness of a baked credential that
+  has no refresh channel** (rotation requires an `inngest-host-replace`; ADR-135's signed
+  config-refresh channel covers host scripts, not `user_data`). Restoring a GHCR pull leg remains
+  open debt, per AP-016.

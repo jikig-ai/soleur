@@ -109,6 +109,24 @@ run_soak() {
     soleur-boot-emit inngest_zot info
 FIXED
     soak="$d/repo/scripts/followthroughs/$(basename "$SOAK")"
+  elif [[ "$inngest_fixed" == "old" ]]; then
+    # Synthetic fixture: the host BEFORE any zot arm — GHCR-only, no off-box report of a zot
+    # outcome. Case 7 used to get this state from the REAL repo, which was true until #7462
+    # gave that file a zot arm; the case then failed because its PREMISE had gone stale, not
+    # because the gate broke. A gate's negative case must instantiate the condition it tests
+    # rather than depend on the repo happening to still be in it. The comment lines are
+    # deliberate: they name `zot` and `soleur-boot-emit`, so this fixture also re-proves the
+    # syntax-anchoring rule (a comment can satisfy no `^\s*`-anchored alternative).
+    mkdir -p "$d/repo/scripts/followthroughs" "$d/repo/apps/web-platform/infra"
+    cp "$SOAK" "$d/repo/scripts/followthroughs/"
+    cat > "$d/repo/apps/web-platform/infra/cloud-init-inngest.yml" <<'OLD'
+# Synthetic fixture: the dedicated inngest host BEFORE #6500 — hard-pinned GHCR, no zot path.
+# TODO: add zot support here one day
+# soleur-boot-emit would report this if it existed on this host
+    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.24
+    docker pull "$IREF"
+OLD
+    soak="$d/repo/scripts/followthroughs/$(basename "$SOAK")"
   fi
   make_stubs "$d" "$counts_spec" "$gh_state" "$http_code" "$fail_url_substr" "$gh_reason"
   # Assert the stub actually SHADOWS the real binaries. Without this, a silent stub-creation
@@ -233,10 +251,12 @@ fi
 
 # 7. CLOSED is not FIXED. The blocker arm reads issue STATE, so a careless close would
 #    authorize the revoke; the code-corroboration conjunct is what stops it. This harness runs
-#    against the REAL repo, where cloud-init-inngest.yml still has no zot path — so a CLOSED
-#    #6500 today MUST still fail. When the host is genuinely fixed this arm flips to PASS on
-#    its own, which is the point: the gate tracks the code, not the issue tracker.
-r="$(run_soak "$HEALTHY" CLOSED)"
+#    against a SYNTHETIC GHCR-only fixture. It used to run against the REAL repo and rely on
+#    cloud-init-inngest.yml still having no zot path — which #7462 made false, so the case
+#    started failing on a stale premise rather than a broken gate. A negative case must
+#    instantiate the condition it tests; depending on the corpus staying in that condition is
+#    corpus accident, and it expires silently the moment someone fixes the thing.
+r="$(run_soak "$HEALTHY" CLOSED 200 "" old)"
 rc="${r%%|*}"; out="${r#*|}"
 if [[ "$rc" == "1" && "$out" == *"blocker-closed-but-condition-unmet"* ]]; then
   pass "#6500 CLOSED but the inngest host still GHCR-only -> exit 1, closing the issue cannot bypass"
