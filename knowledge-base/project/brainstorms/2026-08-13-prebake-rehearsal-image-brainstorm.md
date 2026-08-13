@@ -36,6 +36,13 @@ local host. On GitHub-hosted runners apt is Azure-mirrored. The whole rehearsal 
 **110–119 s (n=6, mean ~114 s)**, so eight spins at 108 s (=864 s) is impossible. The issue's
 value case is off by roughly an order of magnitude.
 
+> **Superseded 2026-08-13 (#7535):** the `110–119 s (n=6)` band above is a narrow draw, not the
+> distribution. Eight consecutive green runs on unchanged code gave `88 123 123 99 88 102 119 113`
+> — an **88–123 s** spread — and `infra-validation.yml` already committed **96 s** for this step
+> before any of it was measured. The conclusion the band supports is unchanged and if anything
+> strengthened; only the band is wrong. Recorded here rather than edited in place, per the
+> append-only rule for dated records.
+
 **Publishing buys almost nothing once the number is corrected.** Inline build collapses eight
 apt cycles to one; a published image collapses them to a pull. The gap between those two is
 ~10 s/run — and it is the entire benefit publishing would purchase.
