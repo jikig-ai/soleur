@@ -43,10 +43,16 @@ construction; a bare-path rule would have reported documentation as a vulnerabil
 ## Incidental fix: `deepen-plan/SKILL.md` unterminated fence
 
 G1 surfaced a pre-existing defect unrelated to this PR's subject. `deepen-plan/SKILL.md`'s
-"Example Enhancement" section shows an "After" **markdown** example that CONTAINS a nested
-```` ```typescript ```` block. Equal-length fences cannot nest in CommonMark, so the bare
-closer at line 889 ended the outer block early and left the fence at line 902 dangling — 34
-balanced pairs plus one orphan, which an even 72-line fence count hides.
+"Example Enhancement" section shows an "After" **markdown** example that CONTAINS a
+nested ```` ```typescript ```` block. Equal-length fences cannot nest in CommonMark, so the
+bare closer at line 889 ended the outer block early and left the fence at line 902 dangling —
+34 balanced pairs plus one orphan, which an even 72-line fence count hides.
+
+(The span above is deliberately mid-line. A fence can interrupt a paragraph in CommonMark, so
+a four-backtick span at column 0 opens a code block instead of quoting one — which is exactly
+what this section was written to describe, and it did it to itself. Caught by
+`lint-infra-no-human-steps.py`, which fails closed on malformed markdown rather than scanning
+a document it cannot parse.)
 
 Fixed by promoting the outer fence to four backticks, which is the construct the guard's own
 parser docstring already anticipates. Intent-preserving and two lines.
