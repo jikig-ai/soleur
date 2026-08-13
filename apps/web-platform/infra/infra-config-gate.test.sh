@@ -988,19 +988,37 @@ fi
 # ok status with a non-numeric or absent pre timestamp is INCOHERENT — the step claimed a
 # reading it did not supply. Fail closed rather than silently degrading, or a bug in the
 # pre-capture step would present as a routine degrade forever.
+# Assert the VERDICT, not just the return code. Without the guard bash coerces the empty
+# pre_ts to 0, the comparison yields `unexpected_push`, and the function still returns
+# non-zero -- so an rc-only assertion cannot tell a guard rejection from a bogus verdict.
+# That distinction is the whole point: `unexpected_push` drives an operator message claiming
+# a push landed, which is a cause nobody measured (AP-021). A guard rejection emits its
+# reason on stderr and NOTHING on stdout.
 FS_OUT=$(infra_config_frame_stability 1786001951 "" ok "$FS_NOW" 2>/dev/null); FS_RC=$?
-if [[ "$FS_RC" -ne 0 ]]; then
-  pass "#7104 stability: pre_status=ok with no pre timestamp fails CLOSED (incoherent input)"
+if [[ "$FS_RC" -ne 0 && -z "$FS_OUT" ]]; then
+  pass "#7104 stability: pre_status=ok with no pre timestamp is REJECTED, not misverdicted"
 else
-  fail "#7104 stability FAIL-OPEN: ok+empty pre_ts returned rc=0 out='$FS_OUT'"
+  fail "#7104 stability: ok+empty pre_ts gave rc=$FS_RC out='$FS_OUT', expected non-zero with empty stdout"
 fi
 
 # A non-numeric POST timestamp must never be compared as a string.
-FS_OUT=$(infra_config_frame_stability "not-a-number" 1786001951 ok "$FS_NOW" 2>/dev/null); FS_RC=$?
-if [[ "$FS_RC" -ne 0 ]]; then
-  pass "#7104 stability: a non-numeric post timestamp fails CLOSED"
+# A non-numeric post timestamp must be REJECTED BY NAME, and the assertion has to be on the
+# DIAGNOSTIC rather than on the return code. Measured: deleting this guard does not change the
+# return code or stdout at all, because callers run under `set -u` (this harness and the
+# workflow step both do) and bash's arithmetic evaluation of `not-a-number` dereferences three
+# unset names, so the shell aborts. Same rc, same empty stdout -- the mutation is invisible to
+# any rc-or-stdout assertion.
+#
+# What the guard actually buys under `set -u` is therefore the MESSAGE: without it the function
+# dies mute mid-comparison, and in the workflow that kills the step before the ::error:: branches
+# that would explain why. A gate that fails closed but silently is the failure shape this whole
+# change exists to remove, so the guard is load-bearing and this is what pins it.
+FS_ERR="$TMP/fs-nonnumeric.err"
+FS_OUT=$(infra_config_frame_stability "not-a-number" 1786001951 ok "$FS_NOW" 2>"$FS_ERR"); FS_RC=$?
+if [[ "$FS_RC" -ne 0 && -z "$FS_OUT" ]] && grep -qF 'post_ts' "$FS_ERR"; then
+  pass "#7104 stability: a non-numeric post timestamp is rejected with a diagnostic naming post_ts"
 else
-  fail "#7104 stability FAIL-OPEN: non-numeric post_ts returned rc=0 out='$FS_OUT'"
+  fail "#7104 stability: non-numeric post_ts gave rc=$FS_RC out='$FS_OUT' stderr='$(cat "$FS_ERR" 2>/dev/null)'; expected non-zero, empty stdout, and a message naming post_ts"
 fi
 
 if declare -F infra_config_frame_stability >/dev/null; then
