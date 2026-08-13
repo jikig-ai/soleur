@@ -269,6 +269,40 @@ jobs:
       - name: Lint conversations update callsites (R8 wrapper enforcement)
         run: bash scripts/lint-conversations-update-callsites.sh
 
+  # Guard 4 (#7493) — validates the marketplace manifest SOURCE that
+  # `infra/github/` publishes to jikig-ai/soleur-marketplace. This job's name IS
+  # the `marketplace-manifest-guard` required context pinned in
+  # infra/github/ruleset-ci-required.tf + scripts/required-checks.txt +
+  # scripts/ci-required-ruleset-canonical-required-status-checks.json — a rename
+  # requires a paired terraform apply.
+  #
+  # MUST stay ALWAYS-RUN (no `paths:`/`if:` event gate): a path-gated required
+  # context never posts on unrelated PRs -> permanent `pending` -> wedges every
+  # human PR (the `rule-body-lint` / `enforce` / `tenant-integration-required`
+  # precedent). The validator is green on the no-op path because it re-asserts
+  # the committed manifest, so no explicit short-circuit is needed.
+  #
+  # Content-scoped, and its bot-PR synthetic green is SOUND-BY-UNREACHABILITY
+  # rather than earned: SCAN_DIRS here is the single file
+  # infra/github/soleur-marketplace-manifest.json, and the composite action's
+  # ALLOWED_PATHS is {weakness-digest.md, rule-metrics.json} — intersection
+  # EMPTY. Re-derived per ADR-139 rather than inherited from rule-body-lint. If
+  # ALLOWED_PATHS ever gains an infra/github path, reproduce this gate in the
+  # action's Phase-4 ceiling BEFORE that lands.
+  marketplace-manifest-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Validate the marketplace manifest source (Guard 4)
+        run: bash scripts/marketplace-manifest-validate.sh infra/github/soleur-marketplace-manifest.json
+      - name: Guard 4 self-test (mutation matrix)
+        run: bash scripts/marketplace-manifest-validate.test.sh
+      # Guard 1's probe runs post-apply against the live ruleset, so without this its
+      # assertions would first execute AFTER merge. Driving it against recorded fixtures here
+      # is what makes "the verifier exists and works" a pre-merge fact.
+      - name: Guard 1 self-test (marketplace ruleset probe, fixture-driven)
+        run: bash scripts/verify-marketplace-ruleset.test.sh
+
   # PR-B §1.6 — Service-role allowlist gate. Rejects any importer of
   # `createServiceClient` / `getServiceClient` in apps/web-platform/{server,lib}
   # that is not enumerated in apps/web-platform/.service-role-allowlist.

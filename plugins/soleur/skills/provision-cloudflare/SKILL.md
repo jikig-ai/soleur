@@ -27,7 +27,7 @@ soleur:provision-cloudflare <tenant-slug> <cf-zone-id> <cf-account-id> [--dry-ru
 ## Execution
 
 ```bash
-bash plugins/soleur/skills/provision-cloudflare/scripts/provision-cloudflare.sh <slug> <zone-id> <account-id> [--dry-run]
+bash "${CLAUDE_PLUGIN_ROOT}/skills/provision-cloudflare/scripts/provision-cloudflare.sh" <slug> <zone-id> <account-id> [--dry-run]
 ```
 
 The script:

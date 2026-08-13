@@ -156,6 +156,36 @@ sentry-destroy-required
 # tripwires above watch only ALLOWED_PATHS. See ADR-139.
 credential-path-guard
 
+# #7493 — ci.yml `marketplace-manifest-guard` job. Always-run validation of
+# infra/github/soleur-marketplace-manifest.json, the SOURCE that
+# `github_repository_file.marketplace_manifest` publishes to
+# jikig-ai/soleur-marketplace (the plugin's sole distribution channel).
+#
+# BORN BLOCKING, not promoted from advisory. Once Terraform owns the manifest's
+# contents AND scheduled-marketplace-drift.yml dispatches a reconcile apply on a
+# drift verdict, a bad manifest that MERGES is published, detected, and then
+# REPUBLISHED every day — while a published-vs-source byte-diff reports in-sync
+# throughout, because published genuinely does match source. A red-but-mergeable
+# check would hand the reconcile loop a wrong state to defend indefinitely.
+#
+# ⚠ CONTENT-SCOPED — cleared under the #6049 ceiling by the UNREACHABILITY
+# argument (rule-body-lint / sentry-destroy-required shape), NOT the earned-green
+# argument that credential-path-guard above required. Re-derived here rather than
+# inherited, per the ADR-139 instruction that the intersection test is per-gate:
+#
+#   SCAN_DIRS  = { infra/github/soleur-marketplace-manifest.json }  (one file)
+#   ALLOWED_PATHS = { knowledge-base/project/weakness-digest.md,
+#                     knowledge-base/project/rule-metrics.json }
+#   ALLOWED_PATHS ∩ SCAN_DIRS = ∅
+#
+# So no bot PR can modify this gate's guarded surface, and its synthetic green
+# asserts nothing false. Before adding ANY infra/github path to ALLOWED_PATHS,
+# reproduce `bash scripts/marketplace-manifest-validate.sh <manifest>` over the
+# bot diff in the action's Phase-4 ceiling — this gate's surface is a single
+# fixed file, so unlike weakness-digest.md its reachability cannot widen via a
+# generator's output format, only via ALLOWED_PATHS itself.
+marketplace-manifest-guard
+
 # CLA Required ruleset
 cla-check
 cla-evidence

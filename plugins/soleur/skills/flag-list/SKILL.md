@@ -45,7 +45,7 @@ Optional: `--json` (emit a JSON array instead of the formatted table).
 ## Procedure
 
 ```bash
-bash plugins/soleur/skills/flag-list/scripts/list.sh [--json]
+bash "${CLAUDE_PLUGIN_ROOT}/skills/flag-list/scripts/list.sh" [--json]
 ```
 
 The script (full in [scripts/list.sh](./scripts/list.sh)):

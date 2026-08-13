@@ -1,0 +1,26 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "soleur-marketplace",
+  "description": "Distribution channel for the Soleur plugin. Serves plugins/soleur out of the jikig-ai/soleur monorepo via a git-subdir source, so an install materialises the plugin subtree rather than the whole repository.",
+  "owner": {
+    "name": "Jean Deruelle",
+    "email": "jean.deruelle@jikigai.com"
+  },
+  "plugins": [
+    {
+      "name": "soleur",
+      "description": "A full AI organization across engineering, finance, marketing, legal, operations, product, sales, and support. Agents, skills, and MCP servers that compound your company knowledge over time.",
+      "author": {
+        "name": "Jean Deruelle",
+        "email": "jean.deruelle@jikigai.com"
+      },
+      "category": "productivity",
+      "homepage": "https://soleur.ai",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/jikig-ai/soleur.git",
+        "path": "plugins/soleur"
+      }
+    }
+  ]
+}

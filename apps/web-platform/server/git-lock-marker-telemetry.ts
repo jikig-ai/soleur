@@ -115,7 +115,21 @@ const log = createChildLogger("git-lock-marker-telemetry");
 //     refusal is the safe outcome; genuine git breakage surfaces as a wedge via the
 //     creation path's own SOLEUR_GIT_LOCK_*/SOLEUR_GIT_CONFIG_* markers.
 const MARKER_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_(?:INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|TRIGGER_CRON)_HALT\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+
+// MIRRORED-NOT-PAGED, deliberately: the four SOLEUR_*_HALT families (#7450).
+//
+// These are the secret gates' fail-closed refusals — `incident`, `legal-generate`,
+// `linear-fetch`, `trigger-cron`. They belong in MARKER_RE because a refusal that reaches no
+// sink is indistinguishable from a run that never happened, and the gate's whole purpose is to
+// refuse. They must NOT go in WEDGE_RE: the dominant cause is a customer whose plugin simply
+// is not installed, and paging an operator for that is how a page becomes noise.
+//
+// They were added at round-2 review, where the honest measurement was that C10 shipped these
+// markers into payload markdown while NO consumer matched them — so the ADR's claim that a mass
+// halt would be "visible in telemetry on the first occurrence" was false on both surfaces. This
+// closes the hosted half. On the CLI surface they remain session-scoped (ADR-171 layer 7), which
+// is the same residual `SOLEUR_SYNC_ROOT_UNRESOLVED` already carries at #7452.
 
 // A wedge (vs. a benign DIAG) is any marker that indicates git operations could not
 // proceed: an unremovable/masked lock, a temp-wedge, a config-TARGET-masked give-up, an

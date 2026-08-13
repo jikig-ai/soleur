@@ -211,6 +211,15 @@ instrumentation is not a lesser version of the work, it is the entire near side 
 > `delete`; it reads the journal the container already writes. The deadlock this ADR routed around
 > was about the registry's *write* surface, and that half has not moved.
 
+> **[Appended 2026-08-12 (#7455) — the "rides that replace" clause above is RETRACTED.]** Delivery
+> did NOT ride the step-6 `registry-host-replace`: that replace had already fired atomically inside
+> `registry_luks_recut` on 2026-08-10T22:08Z, ~45h BEFORE the shipper merged (2026-08-12T19:38Z), so
+> the shipper sat inert on a host born before it existed. A dedicated `registry_host_replace` job
+> (run 31639782781) delivered it 2026-08-12T20:54:12Z, and the first warehouse readback at
+> 21:03:51Z flipped ADR-184 `adopting → accepted`. The boot cited above (`bc135d5b-…`) is superseded
+> by `93c52405-5fd2-462d-8051-fa68b8ab327f`. Everything else in this block stands — including that a
+> host-side capability still waits for a provisioning event and that merging one applies nothing.
+
 ## Alternatives Considered
 
 | Alternative | Verdict | Reason |

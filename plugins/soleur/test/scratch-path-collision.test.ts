@@ -88,7 +88,7 @@ const ALLOWLIST: readonly Waiver[] = [
     reason: "Comment referencing the same harness dir (menu help text). Documentation, not a prescribed scratch path.",
   },
   {
-    file: "skills/linear-fetch/scripts/persist-safe-integration.test.sh",
+    file: "skills/linear-fetch/test/persist-safe-integration.test.sh",
     text: "/tmp/wt",
     reason:
       "Test-fixture template: an illustrative WORKING DIRECTORY inside a synthesized prompt that mirrors the one-shot subagent shape. Input data under test, not a prescribed scratch path.",

@@ -282,9 +282,7 @@ The checklist enforces an L3->L7 diagnostic order: firewall allow-list and DNS/r
 When a trigger pattern matches, emit rule-application telemetry so the weekly aggregator records this gate fired (see AGENTS.md `hr-ssh-diagnosis-verify-firewall`):
 
 ```bash
-source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
-  emit_incident hr-ssh-diagnosis-verify-firewall applied \
-  "When a plan addresses an SSH/network-connectivity s"
+echo 'SOLEUR_RULE_APPLIED rule=hr-ssh-diagnosis-verify-firewall note=When a plan addresses an SSH/network-connectivity s'
 ```
 
 This step is a single file read, not a subagent spawn. If the feature description does not match any trigger pattern, skip this step silently.
@@ -747,6 +745,8 @@ If the plan's deliverable **includes a guard** — a guard, gate, lint, drift-ch
 1. **Property** — the invariant in ONE sentence. Not "the sandbox is correct" but "no mount outside the declared set reaches the sandbox."
 2. **Assembly** — every code path, array, file, and call site the property quantifies over. **Members drift; assembly is structural.** An "assembly" enumerated as the list of current members is not an assembly — it is a snapshot, and the next one-line edit invalidates it while the suite stays green. Name the *chokepoint* the members must flow through, and if there is more than one, say so: a guard scoped to one of three injection sites is the defect, not a partial fix.
 3. **Mutation matrix** — **>= 3** edits that MUST drive the guard RED, derivable from the DESIGN rather than from the implementation as it happens to be shaped. At least one row MUST target the guard's **own dispatch** (a guard that reports "0 checked" and exits 0 is vacuous), and at least one MUST add a **second** member after a compliant first (a check that stops at the first member is itself an instance of the class).
+
+4. **Harness rows** — at least one edit to the SUITE (not the guard) that MUST drive it RED, plus at least one must-PASS input that is NOT the canonical, differing in a way the contract explicitly permits. A matrix that mutates only the system under test cannot see a vacuous harness, and RED rows cannot detect a guard that rejects everything — only must-PASS rows can. **Why:** #7493 — four guards were each satisfiable by a stub: `diff "$1" canonical` scored 14/14 AND passed CI with the defect restored (every RED fixture was a `jq` edit OF the canonical, and the only must-PASS fixture WAS the canonical); a `mutate()` helper running inside `$( )` left 16 of 18 rows green while fully broken; a suite whose success was `fail == 0` exited 0 on `0 passed, 0 failed`; and a `pass()` count was blind to ~35 predicates embedded in Python. See `knowledge-base/project/learnings/2026-08-13-every-guard-i-shipped-was-satisfiable-by-a-guard-that-asserts-nothing.md`.
 
 **Write the matrix BEFORE the guard.** A matrix derived from finished code tests the code that exists; a matrix derived from the design tests the property. This ordering is the whole point of the gate.
 

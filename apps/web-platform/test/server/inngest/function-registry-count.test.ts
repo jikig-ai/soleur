@@ -85,8 +85,10 @@ const NON_INNGEST_MONITORS = new Set([
   // #7471: GHA-fired on its own `schedule:` (scheduled-marketplace-drift.yml). It checks the
   // PUBLISHED marketplace manifest with two unauthenticated raw GETs and no product secrets, so
   // there is deliberately no Inngest cron function and therefore no SENTRY_MONITOR_SLUG — same
-  // class as scheduled-terraform-drift. The monitor exists because that workflow is the sole
-  // control on a repo with no CI, no review and no CODEOWNERS: without a heartbeat, a schedule
+  // class as scheduled-terraform-drift. The monitor exists because that workflow is the only
+  // check on the bytes actually SERVED (amended #7493: the repo now carries a PR-required
+  // ruleset and Terraform owns the manifest, so the older "no CI, no review and no CODEOWNERS"
+  // framing no longer holds; the publication gap does): without a heartbeat, a schedule
   // that stops firing is indistinguishable from a manifest that has stayed clean, and there is
   // no red run to notice because there is no run.
   "scheduled-marketplace-drift",

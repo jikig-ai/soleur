@@ -5,7 +5,16 @@
 
 set -eu
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Owning trap (ADR-129). These files allocated tempfiles with no cleanup for as long as they
+# sat under scripts/, where no runner reached them; relocating them into test/ put them in
+# the lint's scope and surfaced it.
+_LF_TMPS=()
+_lf_cleanup() { [[ ${#_LF_TMPS[@]} -gt 0 ]] && rm -f "${_LF_TMPS[@]}"; return 0; }
+trap _lf_cleanup EXIT INT TERM HUP
+_lf_mktemp() { local t; t="$(mktemp)" || return 1; _LF_TMPS+=("$t"); printf '%s' "$t"; }
+
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)"
 SCRIPT="$SCRIPT_DIR/assert-no-linear-telemetry.sh"
 
 PASS=0
@@ -79,7 +88,7 @@ run_assert "sol-39 is lowercase"
 # File-path arg mode.
 # ------------------------------------------------------------------------
 echo "Test 11: file-path argument with clean content"
-tmp=$(mktemp)
+tmp=$(_lf_mktemp)
 printf 'linear-fetch applied\n' > "$tmp"
 set +e
 bash "$SCRIPT" "$tmp" >/dev/null 2>/dev/null
@@ -89,7 +98,7 @@ rm -f "$tmp"
 [[ "$RC" == "0" ]] && pass "exit 0 on clean file" || fail "rc=$RC"
 
 echo "Test 12: file-path argument with forbidden content"
-tmp=$(mktemp)
+tmp=$(_lf_mktemp)
 printf 'SOL-39 in file\n' > "$tmp"
 set +e
 bash "$SCRIPT" "$tmp" >/dev/null 2>/dev/null

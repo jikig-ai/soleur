@@ -24,14 +24,14 @@ often as needed; it mutates nothing.
 
 ```bash
 # Baseline / re-check — probe the four ADR-130 retained scopes:
-bash plugins/soleur/skills/cf-token-scope/scripts/cf-token-scope.sh
+bash "${CLAUDE_PLUGIN_ROOT}/skills/cf-token-scope/scripts/cf-token-scope.sh"
 
 # After a widen — also assert the newly-added scope is live:
-bash plugins/soleur/skills/cf-token-scope/scripts/cf-token-scope.sh \
+bash "${CLAUDE_PLUGIN_ROOT}/skills/cf-token-scope/scripts/cf-token-scope.sh" \
   --target-entrypoint http_config_settings
 
 # Print the probe commands without running them (token stays unexpanded):
-bash plugins/soleur/skills/cf-token-scope/scripts/cf-token-scope.sh --dry-run
+bash "${CLAUDE_PLUGIN_ROOT}/skills/cf-token-scope/scripts/cf-token-scope.sh" --dry-run
 ```
 
 The token / zone / account (`CF_API_TOKEN_RULESETS`, `CF_ZONE_ID`,
