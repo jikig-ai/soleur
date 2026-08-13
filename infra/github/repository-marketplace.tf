@@ -12,14 +12,30 @@
 # this file merges (see the `import_repository` helper in that workflow and
 # infra/github/README.md), exactly like the two sibling rulesets.
 #
-# OWNERSHIP BOUNDARY -- read before editing:
-#   Terraform owns:     visibility, description, topics, archival/destroy.
-#   Terraform does NOT own the repo CONTENTS. `.claude-plugin/marketplace.json`
-#   is hand-maintained in that repo and has no CI, no review, and no CODEOWNERS
-#   there. The ONLY control on the artifact is the daily drift guard
-#   `.github/workflows/scheduled-marketplace-drift.yml` in THIS repo, which
-#   re-reads the published manifest over raw.githubusercontent.com and opens an
-#   issue on mismatch. Deleting that workflow leaves the manifest ungoverned.
+# OWNERSHIP BOUNDARY -- read before editing (REWRITTEN by #7493; the previous
+# text is now false in both of its clauses and is quoted below so the change is
+# legible rather than silent):
+#   Terraform owns:     visibility, description, topics, archival/destroy, AND
+#                       the repo's default-branch ruleset + the CONTENTS of
+#                       `.claude-plugin/marketplace.json`.
+#
+#   Superseded 2026-08-12 (#7493): "Terraform does NOT own the repo CONTENTS ...
+#   The ONLY control on the artifact is the daily drift guard". Both clauses were
+#   retired together. The manifest's content is now declared by
+#   `github_repository_file.marketplace_manifest` in
+#   ruleset-marketplace-pr-required.tf, sourced from
+#   `infra/github/soleur-marketplace-manifest.json` in THIS repo — so it carries
+#   this repo's CI (the always-run `marketplace-manifest-guard` context), its
+#   required checks, and the CODEOWNERS pin on `/infra/github/`. The daily drift
+#   guard remains, with its role changed from sole control to publication
+#   verifier, and it now dispatches a reconcile apply on a content-drift verdict.
+#
+#   ⚠ A DESTROY NOW UNPUBLISHES THE PLUGIN. `github_repository_file` has no
+#   `keep_on_destroy` at provider 6.12.1, so destroying that resource DELETES the
+#   published manifest and breaks `marketplace add` for every new install.
+#   `archive_on_destroy` below does NOT cover it — that protects the repository,
+#   not a file inside it. The `[ack-destroy]` line in a merge commit therefore
+#   carries more weight than it did when it could only remove a ruleset.
 #
 # Attribute-by-attribute provenance (all read from the live API with
 # `gh api repos/jikig-ai/soleur-marketplace` before this file was written, so
@@ -62,4 +78,27 @@ resource "github_repository" "soleur_marketplace" {
   # the apply workflow's `[ack-destroy]` gate, which catches the plan; this
   # catches the apply.
   archive_on_destroy = true
+}
+
+# THE RULESET'S QUANTIFIER, PINNED (#7493 review).
+#
+# `ruleset-marketplace-pr-required.tf` conditions on `~DEFAULT_BRANCH` rather than a literal
+# branch name — which is correct, because it survives a rename. But nothing declared WHICH branch
+# the default is, and that is the assumption the whole control rests on.
+#
+# The gap: any actor with `administration: write` on this repo — which includes the `soleur-ai`
+# App that Terraform itself authenticates as — can `PATCH /repos/jikig-ai/soleur-marketplace
+# {"default_branch": "..."}`. The ruleset then follows the NEW default, leaving `refs/heads/main`
+# unprotected, while `github_repository_file.marketplace_manifest` still writes to `main` and
+# raw.githubusercontent.com still serves `main`. Every assertion in Guard 1 stays green
+# throughout, because `conditions.ref_name.include == ["~DEFAULT_BRANCH"]` is exactly what it
+# checks — the pivot is invisible to a probe that reads the ruleset alone.
+#
+# `github_branch_default` rather than `github_repository.default_branch`: the latter is deprecated
+# in the 6.x provider. Create is a PATCH of the repository, so it is idempotent against the
+# already-correct live state and needs no import. Declaring it makes a pivot show as drift on the
+# next plan and reverts it on the next apply.
+resource "github_branch_default" "soleur_marketplace" {
+  repository = github_repository.soleur_marketplace.name
+  branch     = "main"
 }

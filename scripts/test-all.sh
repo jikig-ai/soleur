@@ -705,10 +705,13 @@ if want_scripts; then
   run_suite "scripts/lint-shell-capture-exit" bash scripts/lint-shell-capture-exit.test.sh
   run_suite "scripts/lint-shell-capture-exit-live" python3 scripts/lint-shell-capture-exit.py \
     --baseline scripts/lint-shell-capture-exit.baseline.txt
-  # #7471: the published distribution manifest in jikig-ai/soleur-marketplace is the
-  # ONLY artifact in the delivery path that no CI check in this repo can reach — that
-  # repo has no CI, no review, and no CODEOWNERS. scheduled-marketplace-drift.yml is its
-  # sole guard; this suite is the guard's guard. Registered explicitly because
+  # #7471, amended #7493: the published distribution manifest in jikig-ai/soleur-marketplace
+  # is the only artifact in the delivery path no CI check here can reach DIRECTLY. Its SOURCE
+  # is now reachable (Terraform owns the content; marketplace-manifest-guard validates it
+  # pre-merge, and that repo now carries a PR-required ruleset), so the "no CI, no review, no
+  # CODEOWNERS" framing this comment used to carry no longer holds.
+  # scheduled-marketplace-drift.yml remains the only check on what is actually SERVED;
+  # this suite is that guard's guard. Registered explicitly because
   # scripts/*.test.sh is NOT auto-globbed here — an unregistered gate never runs.
   run_suite "scripts/marketplace-drift-check" bash scripts/marketplace-drift-check.test.sh
   # #7489: the legacy `soleur@soleur` marketplace entry carries client-side
@@ -723,6 +726,16 @@ if want_scripts; then
   # skill directories where 96 were expected with every metadata field reading
   # correct, which is the defect a manifest check structurally cannot see.
   run_suite "scripts/plugin-delivery-canary" bash scripts/plugin-delivery-canary.test.sh
+  # Guard 4 (#7493): validates the manifest SOURCE that Terraform publishes, as opposed to the
+  # sibling above which validates the PUBLISHED artifact. Neither subsumes the other — once the
+  # drift workflow dispatches a reconcile, a bad SOURCE is republished daily while a
+  # published-vs-source byte-diff reports in-sync, so the merge boundary is the only place that
+  # loop can be broken.
+  run_suite "scripts/marketplace-manifest-validate" bash scripts/marketplace-manifest-validate.test.sh
+  # Guard 1 (#7493): the marketplace ruleset probe, driven against recorded ruleset-detail
+  # fixtures. Its live mutations (flip enforcement, add a 4th bypass actor) cannot be performed
+  # in CI, so fixtures are the only honest way to prove the probe reddens.
+  run_suite "scripts/verify-marketplace-ruleset" bash scripts/verify-marketplace-ruleset.test.sh
   # ADR-140: Layer A encryption-posture detector (the mechanical resolver behind
   # the "encryption at rest + in transit" design-time gate). TS-1..8,15..17 +
   # the MB-1..MB-12 mutation battery (fixture-isolated, not suite-pass-count).
