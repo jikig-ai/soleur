@@ -874,6 +874,141 @@ else
   fail "#7104 dpf FAIL-OPEN: duplicated address returned rc=0 out='$DPF_OUT' — the contradicting entry was discarded"
 fi
 
+# --- #7104 PR-A: infra_config_frame_stability (the no-push arm's verdict) -------------------
+#
+# Runs only when DPF_REPLACED == false: no push was expected, so no NEW frame should exist and
+# the #7220 freshness pin (FRAME_START_TS >= APPLY_START_EPOCH) would red a correct run.
+#
+# WHAT THIS ESTABLISHES, precisely — the plan review (R17.1) overclaimed it and the CTO ruling
+# corrected it, so the narrow version is pinned here rather than the flattering one:
+#   * IT DOES prove frame STABILITY across this run: the endpoint answered, the frame parses,
+#     and it is the same frame it was before the apply — i.e. no unexpected push occurred.
+#   * IT DOES NOT detect a wiped handler. A wiped handler leaves the last frame IN PLACE, so
+#     PRE == POST and this passes.
+#   * IT DOES NOT detect a post-push tamper of hooks.json or the Doppler token. The frame
+#     records the LAST WRITE; it is not a re-read of the bytes on disk.
+# Those two holes stay open and are tracked separately. A test that asserted otherwise would be
+# pinning a claim nobody measured.
+#
+# ASYMMETRY, deliberately: the sentinel (no pre-reading) arm DEGRADES rather than failing closed.
+# It is reachable only when the pre-poll failed AND the post-poll returned 200 — so the channel
+# is demonstrably reachable now, and the missing evidence bears only on an anomaly detector, not
+# on the dying-handler shape the gate exists to catch (that lives on the DPF_REPLACED == true
+# arm, where APPLY_START_EPOCH still applies). Failing closed here would red correct runs on a
+# network blip, on the very workflow whose false-reds are this PR's subject.
+#
+# NO LOWER BOUND ON FRAME AGE. On a no-push run the frame is legitimately ancient — the
+# 2026-08-06 frame was CORRECT on 2026-08-12. Any max-age assert re-introduces the exact
+# false-red this PR removes. The upper bound is different: a frame claiming to start in the
+# FUTURE is a host-clock anomaly or a fabricated frame, and it reds on BOTH sub-arms.
+
+FS_NOW=1786600000
+FS_SKEW=300   # tolerance shared with the implementation
+
+# ok + equal -> stable, pass.
+FS_OUT=$(infra_config_frame_stability 1786001951 1786001951 ok "$FS_NOW" 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -eq 0 && "$FS_OUT" == "stable" ]]; then
+  pass "#7104 stability: an unchanged frame on a no-push run is stable (the live 31636951749 shape)"
+else
+  fail "#7104 stability: equal pre/post gave rc=$FS_RC out='$FS_OUT', expected rc=0 stable"
+fi
+
+# ok + post > pre -> a push landed on a run whose plan said none would.
+FS_OUT=$(infra_config_frame_stability 1786001999 1786001951 ok "$FS_NOW" 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -ne 0 && "$FS_OUT" == "unexpected_push" ]]; then
+  pass "#7104 stability: a NEWER frame with no push expected fails CLOSED (plan/apply divergence)"
+else
+  fail "#7104 stability: post>pre gave rc=$FS_RC out='$FS_OUT', expected non-zero unexpected_push"
+fi
+
+# ok + post < pre -> the frame went backwards. State rollback or a host clock jump.
+FS_OUT=$(infra_config_frame_stability 1786001900 1786001951 ok "$FS_NOW" 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -ne 0 && "$FS_OUT" == "frame_regressed" ]]; then
+  pass "#7104 stability: a frame that moved BACKWARDS fails CLOSED"
+else
+  fail "#7104 stability: post<pre gave rc=$FS_RC out='$FS_OUT', expected non-zero frame_regressed"
+fi
+
+# Future-dated frame reds on the ok arm...
+FS_OUT=$(infra_config_frame_stability $((FS_NOW + FS_SKEW + 60)) 1786001951 ok "$FS_NOW" 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -ne 0 && "$FS_OUT" == "future_frame" ]]; then
+  pass "#7104 stability: a future-dated frame fails CLOSED on the ok arm"
+else
+  fail "#7104 stability: future frame (ok) gave rc=$FS_RC out='$FS_OUT', expected non-zero future_frame"
+fi
+
+# ...and on the degraded arm too, where it is the ONLY freshness evidence left.
+FS_OUT=$(infra_config_frame_stability $((FS_NOW + FS_SKEW + 60)) "" unreachable "$FS_NOW" 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -ne 0 && "$FS_OUT" == "future_frame" ]]; then
+  pass "#7104 stability: a future-dated frame fails CLOSED on the DEGRADED arm as well"
+else
+  fail "#7104 stability: future frame (degraded) gave rc=$FS_RC out='$FS_OUT', expected non-zero future_frame"
+fi
+
+# The skew boundary is INCLUSIVE: future means strictly greater than now+skew. Isolate it by
+# making pre == post, so the ok arm would return `stable` and any non-zero result can only be
+# the future check firing. (A fixture with pre != post here would red as `unexpected_push` and
+# the assertion would pass for the wrong reason — it would not test the boundary at all.)
+FS_OUT=$(infra_config_frame_stability $((FS_NOW + FS_SKEW)) $((FS_NOW + FS_SKEW)) ok "$FS_NOW" 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -eq 0 && "$FS_OUT" == "stable" ]]; then
+  pass "#7104 stability: exactly now+skew is NOT future (inclusive boundary)"
+else
+  fail "#7104 stability: boundary gave rc=$FS_RC out='$FS_OUT', expected rc=0 stable"
+fi
+
+# One second past the boundary IS future — the pair above and below pins the comparison
+# operator, which a single-sided fixture cannot do.
+FS_OUT=$(infra_config_frame_stability $((FS_NOW + FS_SKEW + 1)) $((FS_NOW + FS_SKEW + 1)) ok "$FS_NOW" 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -ne 0 && "$FS_OUT" == "future_frame" ]]; then
+  pass "#7104 stability: one second past now+skew IS future (pins the operator, not just the side)"
+else
+  fail "#7104 stability: boundary+1 gave rc=$FS_RC out='$FS_OUT', expected non-zero future_frame"
+fi
+
+# Each degraded status echoes its OWN token. A generic token would let the workflow print a
+# message naming a cause it did not measure (AP-021).
+for st in http404 unreachable malformed error; do
+  FS_OUT=$(infra_config_frame_stability 1786001951 "" "$st" "$FS_NOW" 2>/dev/null); FS_RC=$?
+  if [[ "$FS_RC" -eq 0 && "$FS_OUT" == "degraded:$st" ]]; then
+    pass "#7104 stability: pre_status=$st degrades and passes, carrying its own token"
+  else
+    fail "#7104 stability: pre_status=$st gave rc=$FS_RC out='$FS_OUT', expected rc=0 degraded:$st"
+  fi
+done
+
+# An unrecognised status fails CLOSED — allow-list, so a typo'd or newly-added status can never
+# fall through to a silent pass.
+FS_OUT=$(infra_config_frame_stability 1786001951 "" weird "$FS_NOW" 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -ne 0 ]]; then
+  pass "#7104 stability: an unknown pre_status fails CLOSED (allow-list)"
+else
+  fail "#7104 stability FAIL-OPEN: unknown pre_status returned rc=0 out='$FS_OUT'"
+fi
+
+# ok status with a non-numeric or absent pre timestamp is INCOHERENT — the step claimed a
+# reading it did not supply. Fail closed rather than silently degrading, or a bug in the
+# pre-capture step would present as a routine degrade forever.
+FS_OUT=$(infra_config_frame_stability 1786001951 "" ok "$FS_NOW" 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -ne 0 ]]; then
+  pass "#7104 stability: pre_status=ok with no pre timestamp fails CLOSED (incoherent input)"
+else
+  fail "#7104 stability FAIL-OPEN: ok+empty pre_ts returned rc=0 out='$FS_OUT'"
+fi
+
+# A non-numeric POST timestamp must never be compared as a string.
+FS_OUT=$(infra_config_frame_stability "not-a-number" 1786001951 ok "$FS_NOW" 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -ne 0 ]]; then
+  pass "#7104 stability: a non-numeric post timestamp fails CLOSED"
+else
+  fail "#7104 stability FAIL-OPEN: non-numeric post_ts returned rc=0 out='$FS_OUT'"
+fi
+
+if declare -F infra_config_frame_stability >/dev/null; then
+  pass "#7104 stability: the adjudicator is defined (anti-vacuity for the fail-closed arms above)"
+else
+  fail "#7104 stability: infra_config_frame_stability is NOT defined — arms above are vacuous"
+fi
+
 # 16. NON-VACUITY of the whole block: the function must actually exist. Without this, renaming
 #     it would make every arm above collapse to "command not found" -> non-zero -> and the six
 #     fail-CLOSED arms would all still PASS while the four positive arms failed. Assert the
@@ -888,7 +1023,7 @@ fi
 # Nothing asserted that the assertions RAN. Measured: deleting the entire #7220 block took the
 # suite 53 -> 40 passed, 0 failed, exit 0 — a silent truncation that reads exactly like a clean
 # run. A floor (not equality — the count is developer-incremented) makes arm deletion loud.
-GATE_MIN_ASSERTIONS=80
+GATE_MIN_ASSERTIONS=95
 if [[ "$pass" -lt "$GATE_MIN_ASSERTIONS" ]]; then
   fail "assertion-count floor: only $pass assertions ran, expected >= $GATE_MIN_ASSERTIONS — arms were deleted or skipped"
 fi

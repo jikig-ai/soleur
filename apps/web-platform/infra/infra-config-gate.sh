@@ -115,6 +115,95 @@ infra_config_dpf_replaced() {
   return 0
 }
 
+# Verdict for the no-push arm: DPF_REPLACED == false, so no NEW frame should exist. (#7104 PR-A)
+#
+#   infra_config_frame_stability <post_ts> <pre_ts> <pre_status> <now_epoch>
+#
+# Echoes one verdict token and returns 0 to PASS, non-zero to fail closed. Extracted rather than
+# left inline in the workflow for the same reason #6594 extracted adjudicate_infra_config: logic
+# that lives only in YAML is logic nothing drives.
+#
+# WHAT A `stable` VERDICT ESTABLISHES — the narrow version, because the plan review's prose
+# overclaimed it and the CTO ruling corrected it:
+#   * IT DOES prove frame STABILITY across this run — the endpoint answered, the frame parses,
+#     and it is the same frame it was before the apply, i.e. no unexpected push occurred.
+#   * IT DOES NOT detect a wiped handler: a wiped handler leaves the last frame IN PLACE, so
+#     pre == post and this passes.
+#   * IT DOES NOT detect a post-push tamper of hooks.json or the Doppler token: the frame
+#     records the LAST WRITE, it is not a re-read of the bytes on disk.
+# Those two holes are real, open, and tracked separately. Callers must not describe this as
+# "verified delivery" (AP-021).
+#
+# WHY THE DEGRADED ARM PASSES INSTEAD OF FAILING CLOSED. It is reachable only when the pre-poll
+# failed AND the post-poll returned 200 — so the channel is demonstrably reachable now, and the
+# missing evidence bears only on an anomaly detector, not on the dying-handler shape the gate
+# exists to catch (that lives on the DPF_REPLACED == true arm, where APPLY_START_EPOCH still
+# applies). Failing closed here would red correct runs on a pre-apply network blip, on the very
+# workflow whose false-reds are the subject of this change. The general rule, worth keeping:
+# fail-closed is proportionate to what the MISSING EVIDENCE would have proven, not to the mere
+# fact that some evidence is missing.
+#
+# THERE IS DELIBERATELY NO LOWER BOUND ON FRAME AGE. On a no-push run the frame is legitimately
+# ancient — the 2026-08-06 frame was CORRECT on 2026-08-12. A max-age assert would re-introduce
+# the exact false-red this change removes. The upper bound is a different claim: a frame that
+# says it started in the FUTURE is a host-clock anomaly or a fabricated frame, so it fails
+# closed on BOTH sub-arms, where it is the only freshness evidence the degraded arm has left.
+infra_config_frame_stability() {
+  local post_ts="$1" pre_ts="$2" pre_status="$3" now_epoch="$4"
+  local skew=300   # tolerance for NTP jitter between the host and the runner
+
+  if [[ ! "$post_ts" =~ ^[0-9]+$ ]]; then
+    echo "infra_config_frame_stability: post_ts '$post_ts' is not numeric" >&2
+    return 1
+  fi
+  if [[ ! "$now_epoch" =~ ^[0-9]+$ ]]; then
+    echo "infra_config_frame_stability: now_epoch '$now_epoch' is not numeric" >&2
+    return 1
+  fi
+
+  # Checked before the status split: it is the only assert the degraded arm still carries.
+  if [[ "$post_ts" -gt $((now_epoch + skew)) ]]; then
+    echo "future_frame"
+    return 1
+  fi
+
+  case "$pre_status" in
+    ok)
+      # `ok` asserts the pre-capture step obtained a reading. If it did not also supply the
+      # timestamp, the input is incoherent — fail closed rather than degrade, or a bug in that
+      # step would present as a routine degrade forever and nobody would look.
+      if [[ ! "$pre_ts" =~ ^[0-9]+$ ]]; then
+        echo "infra_config_frame_stability: pre_status=ok but pre_ts '$pre_ts' is not numeric" >&2
+        return 1
+      fi
+      if [[ "$post_ts" -eq "$pre_ts" ]]; then
+        echo "stable"
+        return 0
+      elif [[ "$post_ts" -gt "$pre_ts" ]]; then
+        # A push landed on a run whose plan said none would: plan/apply divergence, or a second
+        # writer on the sole credential channel of an unreplaceable host.
+        echo "unexpected_push"
+        return 1
+      else
+        # The frame moved BACKWARDS — state rollback or a host clock jump. Arguably the more
+        # alarming of the two directions, so it gets its own token rather than sharing one.
+        echo "frame_regressed"
+        return 1
+      fi
+      ;;
+    http404|unreachable|malformed|error)
+      # One token per measured status so the caller can print a message naming only what it
+      # actually measured, never a generic "something went wrong" that guesses at a cause.
+      echo "degraded:$pre_status"
+      return 0
+      ;;
+    *)
+      echo "infra_config_frame_stability: unknown pre_status '$pre_status' — failing CLOSED rather than treating an unrecognised status as a routine degrade" >&2
+      return 1
+      ;;
+  esac
+}
+
 # Units the repo's RESTART_MAP expects a reconciliation verdict for (#7103 R2 3.8). Derived
 # from the handler exactly as the file count is, so adding a unit ratchets the contract rather
 # than silently widening what the gate accepts as complete. One unit per line.
