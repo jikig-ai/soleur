@@ -100,11 +100,11 @@ sole pull path.
 
 ## Phase 5 — Verification
 
-- [ ] 5.1 Walk every pre-merge AC (1-18) and record its command + output.
-- [ ] 5.2 `python3 scripts/lint-guard-contract.py <plan path>` (path-scoped).
-- [ ] 5.3 `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main`.
-- [ ] 5.4 `grep -rn '<new-issue>\|<tracker>'` over the diff returns nothing.
-- [ ] 5.5 Re-verify the ADR ordinal across all `origin/*` refs immediately before merge; on any
+- [x] 5.1 Walk every pre-merge AC (1-18) and record its command + output.
+- [x] 5.2 `python3 scripts/lint-guard-contract.py <plan path>` (path-scoped).
+- [x] 5.3 `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main`.
+- [x] 5.4 `grep -rn '<new-issue>\|<tracker>'` over the diff returns nothing.
+- [x] 5.5 Re-verify the ADR ordinal across all `origin/*` refs immediately before merge; on any
       renumber, sweep the plan, this file, and every AC naming it.
 - [ ] 5.6 PR body: `Closes #<new-issue>` and `Ref #7341`; **not** `Closes #7341`.
 
