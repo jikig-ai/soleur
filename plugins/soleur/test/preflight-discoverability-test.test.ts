@@ -2060,7 +2060,29 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // Note the waiver is orthogonal to `hr-observability-as-plan-quality-gate`'s no-SSH
   // requirement, which that probe satisfies: it is a warehouse query, not a host login.
   //
-  // 1 -> 2 on 2026-08-13 (#7462/#7516). Second genuine adoption, same warehouse.
+  // 1 -> 2 on 2026-08-13 (#7455). SECOND REVIEWABLE DIFF LINE.
+  //
+  // Declaring plan: `2026-08-12-chore-adr-184-status-flip-accepted-plan.md` (archived).
+  // This is the ADR-184 `adopting -> accepted` flip, and it declares the SAME probe as the
+  // #7440 plan above — deliberately, because it is the same channel's readback. Confirmed
+  // intentional on the same three counts:
+  //   1. PLACEMENT — correctly-indented child of the `discoverability_test:` sub-block.
+  //      Verified with the gate's own sub-block-scoped awk, not a whole-file grep.
+  //   2. TRUTH — same probe, same three BETTERSTACK_QUERY_* secrets.
+  //   3. NO SUBSTITUTE — unchanged from the #7440 reasoning. An unauthenticated variant
+  //      could only prove the host is up, which is a different claim and is already
+  //      covered by the SOLEUR_ZOT_DISK heartbeat.
+  // Why a second plan declares the same probe at all: the flip PR began as docs-only and
+  // needed no `## Observability` block. Review folded in a comment-only
+  // `cloud-init-registry.yml` correction, which put an `apps/*/infra/` path in the diff and
+  // armed preflight Check 10 — so the block was authored during ship, and the honest
+  // discoverability test for "is that channel live?" is the probe that reads it back.
+
+  // 2 -> 3 on 2026-08-13 (#7462/#7516). THIRD reviewable diff line. Renumbered at merge:
+  //
+  // #7455 landed its own 1 -> 2 on main while this branch was open, so this entry is the
+  // THIRD adoption, not the second — the all-members-baseline class that turns main RED when a
+  // sibling PR adds a member to the guarded set. Caught at the ship-time sync, not by CI.
   //
   // Declaring plan: `2026-08-12-fix-inngest-zot-primary-bootstrap-pull-plan.md` (archived
   // by that PR's compound step; this walk is deliberately recursive, so `archive/` counts
@@ -2084,9 +2106,10 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // WHY THIS SURFACED LATE, so the next reader does not misdiagnose it as archival drift:
   // the declaration landed with the plan at the branch's first commit, but every CI run on
   // that branch until the last was CANCELLED by the next push, so this gate never completed
-  // until then. Measured both ways — the count is 2 with the plan at its live path and 2
-  // with it archived; the move is not the cause.
-  const BASELINE_DECLARED_PROBES = 2;
+  // until then. Measured both ways — this plan contributes exactly ONE declaration whether it
+  // sits at its live path or under archive/; the move is not the cause. (The absolute count at
+  // the time of that measurement was 2; it is 3 here only because #7455 merged in between.)
+  const BASELINE_DECLARED_PROBES = 3;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

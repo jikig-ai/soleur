@@ -29,7 +29,7 @@ soleur:provision-doppler <tenant-slug> <tenant-org> <tenant-repo> [--dry-run]
 Run the provisioning script:
 
 ```bash
-bash plugins/soleur/skills/provision-doppler/scripts/provision-doppler.sh <slug> <org> <repo> [--dry-run]
+bash "${CLAUDE_PLUGIN_ROOT}/skills/provision-doppler/scripts/provision-doppler.sh" <slug> <org> <repo> [--dry-run]
 ```
 
 The script:

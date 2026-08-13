@@ -273,15 +273,35 @@ key, sample one raw row (`SELECT raw ... LIMIT 1`) before trusting the path.
 
 ## Querying the zot CONTAINER log channel (`SOLEUR_ZOT_LOG`) — registry, #7440 / ADR-184
 
-> **⚠️ THIS CHANNEL IS LIVE ONLY AFTER DELIVERY. Read this box before following the
-> queries below mid-incident.** The `soleur-registry` host is cloud-init-only (ADR-096),
-> so the shipper was **merged inert**: nothing was applied at merge time. It starts
-> emitting only after the host is next re-provisioned, via the step-6
-> `registry-host-replace` of the zot-pin ordered path. Until then every query in this
-> section correctly returns **zero rows**, and that zero is a *not-yet*, not a fault.
-> Check delivery first (below) rather than concluding the registry is silent for some
-> new reason. Enrolled probe:
-> `scripts/followthroughs/zot-log-channel-7440.sh` — run it and read its `reason=`.
+> **⚠️ THIS CHANNEL IS LIVE as of 2026-08-12. Zero rows here is now a FAULT, not a
+> not-yet — read this box before following the queries below mid-incident.** The
+> `soleur-registry` host is cloud-init-only (ADR-096), so the shipper was **merged inert**
+> and stayed inert until the host was next re-provisioned. That happened at
+> **2026-08-12T20:54:12Z** via a dedicated `registry-host-replace`
+> ([run 31639782781](https://github.com/jikig-ai/soleur/actions/runs/31639782781)) — **not**
+> the step-6 replace of the zot-pin ordered path this box previously named, which had
+> already fired ~45h before the shipper merged and therefore carried nothing. The first
+> PASS was read back out of the warehouse at 2026-08-12T21:03:51Z (37 envelope rows against
+> a floor of 7), which is what flipped ADR-184 to `accepted`.
+>
+> **So if the queries below return zero rows, do not reflexively read it as a not-yet.** Start with
+> the enrolled probe — `scripts/followthroughs/zot-log-channel-7440.sh` — and read its `reason=`;
+> it discriminates cases a bare query cannot:
+>
+> - **Your own read is broken** — `credentials_unset`, `query_tool_missing`, `query_failed`. In all
+>   three your manual query below ALSO returns zero, for a read-side reason. Check these first:
+>   they point at your Doppler credential, not at the registry host.
+> - **The channel answered and was empty** — `channel_dark` (zero envelope AND zero control rows:
+>   the read path is not answering at all), `delivered_but_silent` (**act now** — the host is
+>   provisioned and the shipper is not emitting), `shipper_state_unreadable` / `shipper_post_failing`
+>   (the unit runs; its state file or its POSTs are failing), `not_delivered` (**post-delivery this
+>   means a REGRESSION**, not a not-yet — see the boot-id bullet below).
+> - `credential_shape_in_channel` is the sole `exit 1`, but it is computed from shipped rows, so it
+>   **cannot** occur on a zero-row window. It is not a candidate for the case this box is about.
+>
+> **Zeros that are still legitimate**, and the probe will not save you from either: any window whose
+> start predates **2026-08-12T20:54:12Z** (the channel did not exist yet), and any `--no-archive`
+> query reaching outside the ~40-minute hot window. Check your `--since` before concluding anything.
 
 **What changed.** Before #7440 the only registry telemetry was the 5-minute
 `SOLEUR_ZOT_DISK` heartbeat, which samples **one** `docker logs` line per interval into
@@ -358,7 +378,13 @@ ever shipped. Drop reasons on `SOLEUR_ZOT_LOG_DROPPED` rows are `rate_cap`, `exe
 the lost span between a rotated-past cursor and the bounded restart is genuinely unbounded.
 ```
 
-- **No boot marker AND `boot_id` still `bc135d5b-…`** → not delivered. Expected; wait.
+- **No boot marker AND `boot_id` still `bc135d5b-…`** → **since 2026-08-12 this is a FAULT, not a
+  wait.** It previously read "not delivered. Expected; wait", which was correct until delivery.
+  `bc135d5b-…` is the PRE-shipper boot; the host delivered on 2026-08-12T20:54:12Z is
+  `93c52405-5fd2-462d-8051-fa68b8ab327f`. Seeing the old boot now means the host regressed to a
+  pre-shipper image — investigate rather than wait. Prefer the `log_shipper_post_fail=` presence
+  test in the next bullet as the positive/negative proof; it does not depend on remembering which
+  boot is current.
 - **`log_shipper_post_fail=` present on a `SOLEUR_ZOT_DISK` row but zero envelope rows** →
   *delivered and dead*. **This is the state that means act, not wait.** The cron tick is
   failing, its journald match is wrong, or `jq` is missing on the host.
