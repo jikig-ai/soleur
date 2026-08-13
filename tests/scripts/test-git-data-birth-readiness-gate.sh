@@ -679,11 +679,19 @@ r2check "trailing comments on valid evidence => still RELEASED" 0 "RELEASED" "$R
 
 _a_setup_fail() { printf '\n  HARNESS ABORT: %s\n' "$1" >&2; exit 2; }
 
-_a_tree() {  # $1 = arm name -> prints the path to a fresh copy of the R2 fixture tree
+# SETS A GLOBAL; IT DOES NOT PRINT. Called as `_aN="$(_a_tree aN)"` the helper runs in a
+# COMMAND-SUBSTITUTION SUBSHELL, so `_a_setup_fail`'s `exit 2` terminated only that subshell and
+# the suite carried on with `_aN=""` — building fixtures at absolute paths like `/ci.yml` and
+# reporting a nonsense cause instead of the loud abort the helper's contract promises. That is
+# the same subshell hazard `_a_hash` two helpers down already calls out by name ("Called
+# directly, never in a command substitution, so the global survives"); this one had it.
+_A_TREE=""
+_a_tree() {  # $1 = arm name -> sets _A_TREE to a fresh copy of the R2 fixture tree
   local d="$TMP/a_$1"
   rm -rf "$d" || _a_setup_fail "could not clear $d"
   cp -r "$R2" "$d" || _a_setup_fail "could not copy the R2 fixture into $d"
-  printf '%s' "$d"
+  [[ -d "$d" ]] || _a_setup_fail "fixture tree $d was not created"
+  _A_TREE="$d"
 }
 
 _a_sibling_var() { printf 'variable "doppler_config_name" {\n  default = "prd_git_data"\n}\n' > "$1"; }
@@ -700,15 +708,13 @@ _a_abort() {  # $1=name $2=needle $3=cloud-init
   fi
 }
 
-# Asserts rc=0 and a well-formed digest, and publishes it in _A_DIGEST for A6's comparison.
-# Called directly, never in a command substitution, so the global survives.
-_A_DIGEST=""
+# Asserts rc=0 and a well-formed digest. A6 does its own before/after comparison with locals,
+# so nothing is published here — an earlier draft set a global that no arm ever read.
 _a_hash() {  # $1=name $2=cloud-init
   local name="$1" ci="$2" out rc
   out="$(git_data_rung2_user_data_sha256 "$ci" 2>&1)"; rc=$?
-  _A_DIGEST=""
   if [[ "$rc" -eq 0 && "$out" =~ ^[0-9a-f]{64}$ ]]; then
-    _A_DIGEST="$out"; pass "$name"
+    pass "$name"
   else
     fail "$name (want rc=0 and a 64-hex digest)" "$rc" "$out"
   fi
@@ -733,13 +739,13 @@ else
 fi
 
 # A2 — two siblings, the live module's own shape.
-_a2="$(_a_tree a2)"
+_a_tree a2; _a2="$_A_TREE"
 _a_sibling_var "$_a2/modules/git-data-userdata/variables.tf"
 _a_sibling_out "$_a2/modules/git-data-userdata/outputs.tf"
 _a_hash "A2: a module directory with two sibling .tf files returns 0" "$_a2/ci.yml"
 
 # A3 — sibling-count independence. Three siblings must behave exactly like two.
-_a3="$(_a_tree a3)"
+_a_tree a3; _a3="$_A_TREE"
 _a_sibling_var "$_a3/modules/git-data-userdata/variables.tf"
 _a_sibling_out "$_a3/modules/git-data-userdata/outputs.tf"
 printf 'terraform {\n  required_version = ">= 1.5.0"\n}\n' > "$_a3/modules/git-data-userdata/versions.tf"
@@ -748,23 +754,23 @@ _a_hash "A3: sibling-count independence — three siblings also return 0" "$_a3/
 # A4 — a present-but-unreadable sibling must ABORT, not be silently dropped. Measured rc=0
 # against the first draft's payload-loop-only shape: the hash was well-formed over a NARROWER
 # set, which is the fail-open this whole change exists to prevent.
-_a4="$(_a_tree a4)"
+_a_tree a4; _a4="$_A_TREE"
 ln -s /nonexistent/dangling-a4 "$_a4/modules/git-data-userdata/variables.tf" \
   || _a_setup_fail "could not create the A4 dangling symlink"
 _a_abort "A4: an unreadable .tf sibling aborts, naming the file" \
-         "variables.tf' is present but cannot be read" "$_a4/ci.yml"
+         "variables.tf' cannot be read" "$_a4/ci.yml"
 
 # A5 — the abort must attach to BOTH glob patterns, not just the first.
-_a5="$(_a_tree a5)"
+_a_tree a5; _a5="$_A_TREE"
 ln -s /nonexistent/dangling-a5 "$_a5/modules/git-data-userdata/extra.tf.json" \
   || _a_setup_fail "could not create the A5 dangling symlink"
 _a_abort "A5: an unreadable .tf.json sibling aborts, naming the file" \
-         "extra.tf.json' is present but cannot be read" "$_a5/ci.yml"
+         "extra.tf.json' cannot be read" "$_a5/ci.yml"
 
 # A6 — a readable .tf.json is HASHED, not merely tolerated. Terraform loads .tf.json, so a
 # knob written there decides what boots; asserting rc=0 alone would pass against a glob that
 # skipped the file entirely. The digest must MOVE.
-_a6="$(_a_tree a6)"
+_a_tree a6; _a6="$_A_TREE"
 _a6_before="$(git_data_rung2_user_data_sha256 "$_a6/ci.yml" 2>&1)"
 printf '{"variable":{"extra_knob":{"default":"prd_git_data"}}}\n' \
   > "$_a6/modules/git-data-userdata/extra.tf.json"
@@ -777,7 +783,7 @@ else
 fi
 
 # A7 — a referenced payload that is present-but-unreadable.
-_a7="$(_a_tree a7)"
+_a_tree a7; _a7="$_A_TREE"
 rm -f "$_a7/git-data-gc.timer" || _a_setup_fail "could not remove the A7 payload"
 ln -s /nonexistent/dangling-a7 "$_a7/git-data-gc.timer" \
   || _a_setup_fail "could not create the A7 dangling symlink"
@@ -791,19 +797,33 @@ _a_abort "A7: an unreadable referenced payload aborts, naming it" \
 # A8 — a referenced payload DELETED OUTRIGHT. This is the job the deleted referenced-vs-
 # resolved counting check used to do, and the one an `-r`-only guard could lose: the abort
 # must inherit it rather than let the reference resolve to nothing.
-_a8="$(_a_tree a8)"
+_a_tree a8; _a8="$_A_TREE"
 rm -f "$_a8/git-data-gc.service" || _a_setup_fail "could not remove the A8 payload"
 _a_abort "A8: a deleted referenced payload aborts, naming it" \
          "references payload '../../git-data-gc.service'" "$_a8/ci.yml"
 
 # A9 — the floor is on the PAYLOAD count, and its message names that count. Siblings are
 # present so the arm proves the floor is not merely counting `_inputs` again.
-_a9="$(_a_tree a9)"
+_a_tree a9; _a9="$_A_TREE"
 _a_sibling_var "$_a9/modules/git-data-userdata/variables.tf"
 _a_sibling_out "$_a9/modules/git-data-userdata/outputs.tf"
 _r2_write_module "$_a9" git-data-bootstrap.sh git-data-gc.sh
 _a_abort "A9: a module binding only 2 payloads aborts, naming the payload count" \
          "resolved only 2 payload(s)" "$_a9/ci.yml"
+
+# A11 — THE FLOOR'S NEAR BOUNDARY. A9 alone pins the floor only at the far extreme: with every
+# floor fixture binding 2 payloads, any literal in 3..9 passes the suite. Measured — changing
+# `-lt 9` to `-lt 3` left the suite fully green, so the one literal the lib's own comment
+# singles out ("THIS LITERAL IS WHERE THE NEW COUNT GOES") was free to drift more than half its
+# range while a real shrink from 9 to 4 bindings produced a well-formed digest over a narrower
+# set. The per-reference abort cannot cover this: DELETING a binding leaves every remaining
+# reference resolving perfectly. n=8 is the smallest shrink that must still refuse.
+_a_tree a11; _a11="$_A_TREE"
+_r2_write_module "$_a11" git-data-bootstrap.sh git-data-provision.sh git-data-transport-wrapper.sh \
+                         git-data-remove.sh git-data-gc.sh git-data-pre-receive-placeholder.sh \
+                         git-data-gc.service git-data-gc-failure.service
+_a_abort "A11: losing ONE payload (9 -> 8) still aborts — the floor is pinned at its boundary" \
+         "resolved only 8 payload(s)" "$_a11/ci.yml"
 
 # A10 — EQUIVALENCE. `_r2_hash()` is a hand-maintained reimplementation of the lib's input
 # set whose comment claims the two "cannot drift" — and it had drifted twice (no sibling glob,
@@ -817,7 +837,7 @@ _a_abort "A9: a module binding only 2 payloads aborts, naming the payload count"
 # the mirror it guards: a fixture sharing the blind spot of the thing it tests. So the
 # comparison runs over a tree with a sibling `.tf` AND a sibling `.tf.json`, which is where the
 # two implementations actually had drifted.
-_a10="$(_a_tree a10)"
+_a_tree a10; _a10="$_A_TREE"
 _a_sibling_var "$_a10/modules/git-data-userdata/variables.tf"
 printf '{"variable":{"a10_knob":{"default":"x"}}}\n' > "$_a10/modules/git-data-userdata/extra.tf.json"
 _a10_mirror="$(_r2_hash "$_a10")"
@@ -836,14 +856,19 @@ fi
 # legitimately added assertion and train the next person to bump it unread. Counts
 # passes+fails, so a genuine failure still counts as HAVING RUN and reports as a failure
 # rather than masquerading as an empty suite.
-# RAISED 58 -> 68 WITH THE ARMS THAT MADE IT NECESSARY (#7485): A1–A10 above.
+# RAISED 58 -> 69 WITH THE ARMS THAT MADE IT NECESSARY (#7485): A1–A11 above (A11 pins the payload floor at its near boundary).
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 68 ]]; then
+if [[ "$_ran" -lt 69 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 68. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 69. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 68)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 69)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"
-[[ "$fails" -eq 0 ]]
+# THE VERDICT IS AN `exit`, NOT A TRAILING TEST EXPRESSION. A bare `[[ "$fails" -eq 0 ]]` as the
+# final statement makes the exit status a property of which line happens to be LAST: measured,
+# appending any single command after it (a printf, a stray echo) permanently greens the suite
+# while it goes on printing accurate failure text, and run_suite() classifies on the exit code
+# alone. Deleting the line has the same effect. An explicit exit cannot be defeated by an append.
+exit $(( fails > 0 ))

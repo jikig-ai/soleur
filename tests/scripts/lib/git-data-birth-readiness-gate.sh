@@ -301,10 +301,26 @@ git_data_rung2_user_data_sha256() {
   # directory costs one glob and is free only while no evidence file exists yet.
   #
   # THIS LOOP APPENDS CONDITIONALLY, so it is a chokepoint and must ABORT rather than drop.
-  # Measured on the shipped code: with one sibling made unreadable the function returned rc=0
-  # and a WELL-FORMED digest over a narrower set — a fail-open, not a refusal. The
-  # referenced-vs-resolved arithmetic below happened to mask it on the live tree only because
-  # its two literals cancelled there.
+  #
+  # Measured against `origin/main`, and stated precisely because an earlier draft of this
+  # comment got it wrong in the flattering direction: on the LIVE tree the shipped code aborted
+  # (`contains 9 … but only 11 resolved`) whether or not a sibling was readable — that abort IS
+  # #7485. The rc=0-over-a-narrower-set fail-open reproduced on a module directory with ONE
+  # sibling (inputs 11, resolved 9, refs 9, old floor `-lt 11` satisfied), and on one with the
+  # siblings absent entirely. So the two literals did NOT cancel on the live tree, and the
+  # shipped code was more broken than "it happened to work here" implies.
+  #
+  # THE ENUMERATION IS GUARDED, NOT JUST THE FILES. A directory that is executable but not
+  # readable (`chmod 111`) leaves `main.tf` openable BY NAME — so the `-r "$module_tf"` check
+  # above passes — while pathname expansion silently yields the unexpanded patterns, both fail
+  # `[[ -e || -L ]]`, and every sibling drops. Measured: rc=0 with digest 3a1d7198…, which is
+  # byte-identical to the digest with both siblings DELETED. The function cannot distinguish
+  # "deleted, and the hash correctly reflects it" from "present but unenumerable", so the
+  # unreadable-directory case has to refuse before the loop runs.
+  if [[ ! -r "$module_dir" || ! -x "$module_dir" ]]; then
+    echo "git_data_rung2_user_data_sha256: ABORT — the render module directory '${module_dir}' cannot be listed (needs both read and execute). Its Terraform files would be silently omitted from the hash, producing a well-formed digest over a NARROWER set than ships. Fail-closed."
+    return 1
+  fi
   #
   # ABSENT vs UNREADABLE IS LOAD-BEARING AND IS WRITTEN EXPLICITLY. No `nullglob` is set here,
   # so a pattern matching nothing yields the literal string — and the live module has no
@@ -329,7 +345,7 @@ git_data_rung2_user_data_sha256() {
     [[ -e "$_f" || -L "$_f" ]] || continue
     [[ "$_f" == "$module_tf" ]] && continue
     if [[ ! -r "$_f" ]]; then
-      echo "git_data_rung2_user_data_sha256: ABORT — module Terraform file '${_f}' is present but cannot be read, so the render inputs backing the evidence hash are incomplete. Hashing the rest would produce a well-formed digest over a NARROWER set than ships. Fail-closed."
+      echo "git_data_rung2_user_data_sha256: ABORT — module Terraform file '${_f}' cannot be read (present and unreadable, or a dangling symlink), so the render inputs backing the evidence hash are incomplete. Hashing the rest would produce a well-formed digest over a NARROWER set than ships. Fail-closed."
       return 1
     fi
     _inputs+=("$_f")

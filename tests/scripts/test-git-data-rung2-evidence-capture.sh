@@ -488,4 +488,9 @@ else
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"
-[[ "$fails" -eq 0 ]]
+# THE VERDICT IS AN `exit`, NOT A TRAILING TEST EXPRESSION. A bare `[[ "$fails" -eq 0 ]]` as the
+# final statement makes the exit status a property of which line happens to be LAST: measured,
+# appending any single command after it (a printf, a stray echo) permanently greens the suite
+# while it goes on printing accurate failure text, and run_suite() classifies on the exit code
+# alone. Deleting the line has the same effect. An explicit exit cannot be defeated by an append.
+exit $(( fails > 0 ))

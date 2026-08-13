@@ -91,13 +91,33 @@ if len(hits) == 1:
     s = hits[0]
     body = s.get("run", "")
     env = s.get("env", {}) or {}
-    meta["has_shell"] = "shell" in s
+    # A `shell:` key at JOB or WORKFLOW level changes what Actions invokes just as surely as a
+    # step-level one, and `"shell" in s` cannot see either. Adding `defaults: {run: {shell:
+    # bash}}` one level up silently swaps the invocation to
+    # `--noprofile --norc -eo pipefail` while this premise arm stays green — which is exactly
+    # the staleness the arm exists to prevent, arriving through the door it does not watch.
+    def _defaults_shell(obj):
+        return ((obj or {}).get("defaults", {}) or {}).get("run", {}).get("shell")
+    job_shell = None
+    for j in d["jobs"].values():
+        if any(st is s for st in j.get("steps", [])):
+            job_shell = _defaults_shell(j)
+    meta["has_shell"] = ("shell" in s) or _defaults_shell(d) is not None or job_shell is not None
     meta["has_expr"] = "${{" in body
+    # SCAN THE CODE, NOT THE COMMENTS. Both extractions below run over the step body, and the
+    # body documents its own mechanism — so a comment mentioning `$VAR` in prose was read as an
+    # undeclared variable (measured: this arm failed with `undeclared=[VAR]` against a body
+    # whose only `$VAR` was inside a comment explaining this very rule), and a comment line
+    # holding nothing but a quoted URL would be counted as a required URL, either tripping the
+    # `-ne 3` cardinality abort or silently substituting for a real one in the fixtures.
+    # The collision is structural: the moment a body must both DECLARE a thing and EXPLAIN it,
+    # any assertion that reads the raw text sees both.
+    code = "\n".join(re.sub(r'#.*$', '', ln) for ln in body.splitlines())
     # Every UPPERCASE $VAR the body READS must be declared in the step's env:. Lowercase
     # names are the body's own locals and are out of scope.
-    read = set(re.findall(r'\$\{?([A-Z_][A-Z0-9_]*)\}?', body))
+    read = set(re.findall(r'\$\{?([A-Z_][A-Z0-9_]*)\}?', code))
     meta["undeclared"] = sorted(read - set(env.keys()))
-    meta["required_urls"] = re.findall(r'^\s*"(https://[^"]+)"\s*$', body, re.M)
+    meta["required_urls"] = re.findall(r'^\s*"(https://[^"]+)"\s*$', code, re.M)
     (tmp / "body.sh").write_text(body)
 (tmp / "meta.json").write_text(json.dumps(meta))
 PY
@@ -270,6 +290,12 @@ fi
 
 # ── Fixture builders ──────────────────────────────────────────────────────────────
 BOT='github-actions[bot]'
+# FIXTURES CARRY `.user.type`, because that is what the selector reads. GitHub returns
+# `type: "Bot"` for every App/bot-authored comment and `type: "User"` for a human, and the
+# guard filters on that rather than on one hardcoded login — a login is not stable
+# (`hr-github-app-auth-not-pat` mandates moving CI writes to a GitHub App, and this repo
+# already runs `claude[bot]` and `soleur-ai[bot]`). A fixture that only set `.login` would
+# make every comment invisible to the filter and every arm pass for the wrong reason.
 mk_comments() {  # $1=dest; remaining: login::body pairs, oldest first
   local dest="$1"; shift
   local first=1
@@ -277,7 +303,10 @@ mk_comments() {  # $1=dest; remaining: login::body pairs, oldest first
     for spec in "$@"; do
       [[ "$first" -eq 1 ]] || printf ','
       first=0
-      jq -cn --arg l "${spec%%::*}" --arg b "${spec#*::}" '{user:{login:$l},body:$b}'
+      local _login="${spec%%::*}" _type=User
+      [[ "$_login" == *'[bot]' ]] && _type=Bot
+      jq -cn --arg l "$_login" --arg t "$_type" --arg b "${spec#*::}" \
+        '{user:{login:$l,type:$t},body:$b}'
     done
     printf ']'
   } > "$dest"
@@ -416,6 +445,56 @@ else
        "$GUARD_RC" "reopens=${GUARD_REOPENS} — the issue body must not satisfy its own gate"
 fi
 
+# ── C14: "ALL THREE URLs" is the requirement, and a 2-of-3 fixture is what pins it ─
+#
+# Without this arm the guard's CENTRAL requirement is unpinned. Measured: changing the
+# workflow's `for url in "${required_urls[@]}"` to `"${required_urls[0]}"` — i.e. requiring
+# only the FIRST callback URL — left the suite at 13 passed, 0 failed. Every other fixture
+# carries all three URLs or none, so "requires all three" and "requires any one" are
+# behaviourally identical across them. The `-ne 3` precondition above pins the ARRAY's
+# cardinality, not the PREDICATE's: shrinking the array reddens, ignoring two of its members
+# does not.
+C_TWO_OF_THREE="$TMP/c-two-of-three.json"
+mk_comments "$C_TWO_OF_THREE" \
+  "someone::$(printf '%s\n%s\nhttps://github.com/o/r/actions/runs/12345\nbytes: 4096\n' "${REQ_URLS[0]}" "${REQ_URLS[1]}")"
+run_guard "$C_TWO_OF_THREE" "$ISSUE_PLAIN" "success"
+if [[ "$GUARD_REOPENS" -eq 1 \
+      && "$GUARD_BODY" == *"${REQ_URLS[2]}"* \
+      && "$GUARD_BODY" != *"${REQ_URLS[0]}"* ]]; then
+  pass "C14: two of the three URLs is INCOMPLETE — reopens once, listing only the missing one"
+else
+  fail "C14: two of the three URLs is INCOMPLETE — reopens once, listing only the missing one" \
+       "$GUARD_RC" "reopens=${GUARD_REOPENS} body=${GUARD_BODY:0:400}"
+fi
+
+# ── C15: field 2 must check the run's CONCLUSION, not merely that a run URL exists ─
+#
+# This arm does two jobs, both previously unpinned.
+#
+# (a) The conclusion check was untested. Measured: deleting the `gh run view … --json
+# conclusion` call and its `== "success"` comparison outright left the suite at 13 passed, 0
+# failed, because every fixture that REACHED field 2 passed "success" — the only fixtures
+# passing "failure" carried no run URL at all, so `run_id` was empty and the call was never
+# made. `GH_STUB_RUN_CONCLUSION` was inert. Live consequence: a closing comment citing a RED
+# run satisfied the field.
+#
+# (b) It is the only fixture that renders the `- [x] Byte count` arm. That branch was dark:
+# no other case yields bytes-present WHILE another field is missing, so reverting its `--`
+# guard was caught by nothing but C13's repo-wide grep — the very "pins spelling, not
+# behaviour" mechanism this suite's header rejects.
+C_RED_RUN="$TMP/c-red-run.json"
+mk_comments "$C_RED_RUN" "someone::${COMPLETE_BODY}"
+run_guard "$C_RED_RUN" "$ISSUE_PLAIN" "failure"
+if [[ "$GUARD_REOPENS" -eq 1 \
+      && "$GUARD_BODY" == *"- [ ] **Workflow run-URL**"* \
+      && "$GUARD_BODY" == *"- [x] Byte count"* \
+      && "$GUARD_BODY" == *"- [x] Verbatim callback URLs"* ]]; then
+  pass "C15: a run URL whose conclusion is NOT success reopens once, and renders the checked Byte-count arm"
+else
+  fail "C15: a run URL whose conclusion is NOT success reopens once, and renders the checked Byte-count arm" \
+       "$GUARD_RC" "reopens=${GUARD_REOPENS} body=${GUARD_BODY:0:500}"
+fi
+
 # ── C13: the standing repo-wide sweep ─────────────────────────────────────────────
 #
 # THREE BOUNDS, STATED RATHER THAN LEFT FOR A READER TO INFER — this is a floor on the class,
@@ -429,32 +508,56 @@ fi
 # The repo's bar for minting a `scripts/lint-*` gate was six occurrences across six files;
 # this class has two in one file, so it stays an assertion here rather than a lint.
 SWEEP_RE='^[[:space:]]*printf[[:space:]]+.-'
-sweep() {  # $1 = root to scan; prints matching "file:line" records
-  grep -rnE --binary-files=without-match --exclude-dir=archive \
-    "$SWEEP_RE" "$1" 2>/dev/null | grep -E "printf[[:space:]]+'-" || true
+sweep() {  # reads NUL-delimited paths on stdin; prints matching "file:line" records
+  xargs -0 -r grep -nE --binary-files=without-match "$SWEEP_RE" 2>/dev/null \
+    | grep -E "printf[[:space:]]+'-" || true
 }
-_scanned=0
-for _d in .github scripts plugins tests apps; do
-  [[ -d "$ROOT/$_d" ]] || continue
-  _scanned=$((_scanned + $(find "$ROOT/$_d" -type f 2>/dev/null | wc -l)))
-done
-_real_hits="$(for _d in .github scripts plugins tests apps; do
-    [[ -d "$ROOT/$_d" ]] && sweep "$ROOT/$_d"
-  done | wc -l | tr -d ' ')"
 
-# Fireability: a planted violation must be found, and one planted in an EXCLUDED path must not.
+# THE CORPUS IS EVERY TRACKED SHELL FILE, not a hand-listed set of directories.
+#
+# The Property says "no shell call site IN THE REPOSITORY". A five-root walk
+# (.github scripts plugins tests apps) does not deliver that: measured, 93 tracked shell files
+# live outside it — 82 of them under `.claude/hooks`, which is the PreToolUse/SessionStart
+# execution surface, plus `.openhands/`, `test/`, `bin/` and any repo-root script. Planting the
+# hazard in any of them was invisible.
+#
+# Deriving from `git ls-files` fixes three things at once and removes a hand-maintained list:
+#   - coverage equals the property's own noun (the repository), and grows by itself;
+#   - vendored `node_modules`/`.next`/`dist` are excluded BY CONSTRUCTION, where the directory
+#     walk scanned 88,730 files under apps/ and would redden this repo's guard on a third-party
+#     script it does not own;
+#   - `_scanned` counts exactly what the sweep visited. It previously came from `find` while the
+#     sweep used `grep -r`, so the reported number described a different traversal than the one
+#     that produced the verdict — and because it SUMMED across roots, deleting any single root
+#     (including `.github`, where the guarded workflow lives) left it comfortably non-zero and
+#     the arm green. That is the arm's own dispatch row, defeated.
+_tracked_sh() {  # NUL-delimited, archive-excluded
+  git -C "$ROOT" ls-files -z -- '*.sh' '*.bash' '*.zsh' 2>/dev/null \
+    | tr '\0' '\n' | grep -vE '(^|/)archive/' | tr '\n' '\0'
+}
+_scanned="$(_tracked_sh | tr '\0' '\n' | grep -c . || true)"
+_real_hits="$( { cd "$ROOT" && _tracked_sh | sweep; } | wc -l | tr -d ' ')"
+
+# Fireability, boundedness, and COMPLETENESS. Two violations in two files, because a single
+# planted violation cannot distinguish a sweep that finds them all from one that stops at the
+# first: measured, appending `| head -1` to the pipeline left the one-plant version at
+# 13 passed, 0 failed. 1-of-1 is indistinguishable from all-of-1.
 PLANT="$TMP/plant"; mkdir -p "$PLANT/archive"
-printf "printf '\\055 x\\\\n'\n" | sed 's/\\055/-/' > "$PLANT/violation.sh"
-printf "printf '\\055 x\\\\n'\n" | sed 's/\\055/-/' > "$PLANT/archive/violation.sh"
+_mk_violation() { printf "printf '\\055 x\\\\n'\n" | sed 's/\\055/-/' > "$1"; }
+_mk_violation "$PLANT/a-violation.sh"
+_mk_violation "$PLANT/b-violation.sh"
+_mk_violation "$PLANT/archive/excluded.sh"
 printf "# prose: never write printf '\\055 …' without the guard\n" | sed 's/\\055/-/' > "$PLANT/prose.sh"
-_plant_hits="$(sweep "$PLANT" | wc -l | tr -d ' ')"
-_plant_files="$(sweep "$PLANT" | cut -d: -f1 | sort -u | xargs -r -n1 basename | paste -sd, -)"
+_plant_paths() { find "$PLANT" -name '*.sh' -type f -print0 | tr '\0' '\n' | grep -vE '(^|/)archive/' | tr '\n' '\0'; }
+_plant_hits="$(_plant_paths | sweep | wc -l | tr -d ' ')"
+_plant_files="$(_plant_paths | sweep | cut -d: -f1 | sort -u | xargs -r -n1 basename | paste -sd, -)"
 
-if [[ "$_real_hits" -eq 0 && "$_scanned" -gt 0 && "$_plant_hits" -eq 1 && "$_plant_files" == "violation.sh" ]]; then
-  pass "C13: the repo-wide printf '- sweep returns zero over ${_scanned} scanned files, fires on a planted violation, and ignores excluded paths and prose"
+if [[ "$_real_hits" -eq 0 && "$_scanned" -gt 0 \
+      && "$_plant_hits" -eq 2 && "$_plant_files" == "a-violation.sh,b-violation.sh" ]]; then
+  pass "C13: the sweep returns zero over ${_scanned} tracked shell files, finds BOTH planted violations, and ignores excluded paths and prose"
 else
-  fail "C13: the repo-wide printf '- sweep is clean, fireable, and correctly bounded" "n/a" \
-       "real_hits=${_real_hits} scanned=${_scanned} plant_hits=${_plant_hits} plant_files=[${_plant_files}] (want real=0 scanned>0 plant=1 files=violation.sh)"
+  fail "C13: the sweep is clean, fully fireable, and correctly bounded" "n/a" \
+       "real_hits=${_real_hits} scanned=${_scanned} plant_hits=${_plant_hits} plant_files=[${_plant_files}] (want real=0 scanned>0 plant=2 files=a-violation.sh,b-violation.sh)"
 fi
 
 # ── Anti-vacuity floor ────────────────────────────────────────────────────────────
@@ -465,12 +568,21 @@ fi
 # the count is a specification rather than a running total: an arm that stops running is the
 # failure mode, and delete-one-add-one is exactly what a floor cannot see.
 _ran=$((passes + fails))
-if [[ "$_ran" -ne 13 ]]; then
+if [[ "$_ran" -ne 15 ]]; then
   fails=$((fails + 1))
-  printf 'FAIL: ANTI-VACUITY: %s assertions ran, expected exactly 13 (C1-C13). An arm was deleted, skipped, added without updating this count, or the suite exited early.\n' "$_ran"
+  printf 'FAIL: ANTI-VACUITY: %s assertions ran, expected exactly 15 (C1-C15). An arm was deleted, skipped, added without updating this count, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity: exactly %s assertions ran (C1-C13)\n' "$_ran"
+  printf '  ok   anti-vacuity: exactly %s assertions ran (C1-C15)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"
-[[ "$fails" -eq 0 ]]
+
+# THE VERDICT IS AN `exit`, NOT A TRAILING TEST EXPRESSION.
+#
+# `[[ "$fails" -eq 0 ]]` as the final statement makes the suite's exit status a property of
+# WHICH LINE HAPPENS TO BE LAST. Measured on the sibling suites: appending any one command
+# after it — a `printf`, a stray `echo` — permanently greens the suite while it goes on
+# printing accurate failure text, and `run_suite()` in scripts/test-all.sh classifies on the
+# exit code alone. Deleting the line has the same effect. An explicit `exit` cannot be
+# defeated by an append.
+exit $(( fails > 0 ))

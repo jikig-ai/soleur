@@ -92,10 +92,43 @@ jobs:
           # makes that path MORE reachable, not less, so the two changes must land together.
           # With no qualifying comment, `comment_body` is empty, every field is missing, and
           # the guard reopens -- which is the correct fail-closed direction.
-          comment_body=$(gh api "repos/${GH_REPO}/issues/${ISSUE_NUM}/comments" \
-            --paginate --slurp \
-            --jq '[.[][]] | map(select(.user.login != "github-actions[bot]")) | .[-1].body // ""' \
-            2>/dev/null || echo "")
+          # FILTER ON `.user.type`, NOT ON ONE LITERAL LOGIN. The login this workflow posts
+          # under is not stable: `hr-github-app-auth-not-pat` requires infra/CI GitHub writes to
+          # move to a GitHub App, and this repo already runs `claude[bot]` and `soleur-ai[bot]`
+          # alongside `github-actions[bot]`. Pinned to one literal, the guard resumes reading its
+          # OWN reopen body the day that migration happens — silently, because the body satisfies
+          # field 1. `.user.type == "Bot"` is the property that actually matters, and no human
+          # verification comment can carry it (the audit requires a person to paste the callback
+          # list byte-for-byte).
+          #
+          # A FAILED FETCH IS NOT "NO QUALIFYING COMMENT". Collapsing both into "" made the guard
+          # reopen and post a public comment asserting the issue "was closed without the verbatim
+          # verification required" — a cause it never measured — on an auth failure, a rate limit
+          # or a network blip. Reopening is still the right fail-closed direction; asserting an
+          # unmeasured cause is not. The stderr is captured and surfaced so the run log
+          # distinguishes the two.
+          # THE DISCRIMINATOR IS THE EXIT STATUS, not whether stderr happened to be non-empty:
+          # a `gh` that fails silently would otherwise fall straight through and re-create the
+          # conflation this block exists to remove. `mktemp` rather than a fixed path — a
+          # predictable name under /tmp is pre-plantable as a symlink on a self-hosted runner,
+          # and this shell's `2>` would follow it. No new env var is read here: every `$VAR` the
+          # body reads must be declared in the step's `env:`, which the suite's C11 arm asserts.
+          api_err=""
+          api_err_file="$(mktemp)"
+          if comment_body=$(gh api "repos/${GH_REPO}/issues/${ISSUE_NUM}/comments" \
+                --paginate --slurp \
+                --jq '[.[][]] | map(select(.user.type != "Bot")) | .[-1].body // ""' \
+                2>"$api_err_file"); then
+            :
+          else
+            api_err="$(tr '\n' ' ' < "$api_err_file" 2>/dev/null || true)"
+            [[ -n "$api_err" ]] || api_err="gh api exited non-zero with no stderr"
+          fi
+          rm -f "$api_err_file"
+          if [[ -n "$api_err" ]]; then
+            echo "::warning::gh api could not list comments for #${ISSUE_NUM}; reopening fail-closed. This is NOT evidence the closing comment was incomplete. Error: ${api_err}"
+            comment_body=""
+          fi
 
           # Field 1: verbatim URLs. Require ALL THREE as substrings.
           missing_urls=()
@@ -144,7 +177,11 @@ jobs:
           trap "rm -f '$reopen_body_file'" EXIT
           {
             printf '## Closure gate: re-opening per /ship Phase 7 Step 3.5 callback-URL audit anchor\n\n'
-            printf 'This issue was closed without the verbatim verification required for callback-URL-class follow-through issues. Per `wg-when-fixing-a-workflow-gates-detection`, the gap that allowed #1784 to close-without-verification (and recur as #3183) is now machine-enforced.\n\n'
+            if [[ -n "$api_err" ]]; then
+              printf 'This issue was reopened **fail-closed because the comment list could not be read**, NOT because the closing comment was found incomplete. The guard could not measure the closing comment at all. Re-close once the fields below are confirmed present.\n\n'
+            else
+              printf 'This issue was closed without the verbatim verification required for callback-URL-class follow-through issues. Per `wg-when-fixing-a-workflow-gates-detection`, the gap that allowed #1784 to close-without-verification (and recur as #3183) is now machine-enforced.\n\n'
+            fi
             printf '### Missing fields\n\n'
             if [[ ${#missing_urls[@]} -gt 0 ]]; then
               printf -- '- [ ] **Verbatim callback URLs.** The closing comment must include each of these as a literal substring (paste byte-for-byte from the GitHub App callback list):\n'
