@@ -2060,22 +2060,12 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // Note the waiver is orthogonal to `hr-observability-as-plan-quality-gate`'s no-SSH
   // requirement, which that probe satisfies: it is a warehouse query, not a host login.
   //
-  // 1 -> 2 on 2026-08-13 (#7456). THE SECOND REVIEWABLE DIFF LINE. Declaring plan:
-  // `2026-08-12-feat-zot-gc-attribution-discriminator-plan.md`, whose deliverable is a set of
-  // edits to that same probe plus its sibling `zot-fill-rate-7341.sh`. Against this gate's own
-  // three counts:
-  //   1. PLACEMENT — a correctly-indented child of the `discoverability_test:` sub-block, beside
-  //      `command:` and `expected_output:`.
-  //   2. TRUTH — the same probe and the same three variables, exercised live on 2026-08-13:
-  //      `bash scripts/followthroughs/zot-log-channel-7440.sh` returned rc=0 / `PASS:
-  //      envelope=102` with BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} exported from Doppler
-  //      `prd_terraform`, and returns rc=2 `reason=query_failed` without them.
-  //   3. NO SUBSTITUTE — unchanged from the baseline above: the property under test is "a row
-  //      reached THIS source", unverifiable from outside it.
-  // Same probe as the baseline entry, so this adds no NEW credential surface — but the count is
-  // over declaring PLANS, and the declaration does real work here: without it preflight Check 10
-  // EXECUTES the command instead of recording SKIP-DECLARED.
-  const BASELINE_DECLARED_PROBES = 2;
+  // WITHDRAWN 2026-08-13 (#7456). That plan briefly declared the waiver for the same probe, and
+  // review established the declaration was spent on the wrong thing: the probe's PASS arm is
+  // untouched by that change, so a credentialed run verified a property the PR did not alter. Its
+  // discoverability_test now points at the credential-free fixture suite instead, which exercises
+  // all four of its changes. Baseline stays 1.
+  const BASELINE_DECLARED_PROBES = 1;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

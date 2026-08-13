@@ -118,10 +118,11 @@ control_row() {
 # A control row whose shipper has NEVER completed a tick: last_ok_age_s is the literal -1 the
 # reporter emits when no row has ever shipped. Distinct from control_row_predelivery, which has no
 # log_shipper_* fields AT ALL — that difference is the whole point of C3g.
-# $2 = zot_uptime_s. Load-bearing: -1 is the reporter's DEFAULT when the state file is unreadable,
-# so it is ALSO what a permanently dead shipper emits (jq off PATH -> exit 1 -> state never
-# written). Uptime is the only field on this row that separates "born four minutes ago" from
-# "dead for a week", which is why the softening is bounded by it.
+# $2 = zot_uptime_s, carried only so a case can prove the probe does NOT read it as host age:
+# it is the zot CONTAINER's current-run age, so under a restart loop it is permanently small.
+# -1 is the reporter's DEFAULT on an unreadable state file, so it is ALSO what a permanently dead
+# shipper emits. No field here separates "born four minutes ago" from "dead for a week", which is
+# why the ACT framing is never suppressed and the first-tick note is additive.
 control_row_never_ticked() {
   local boot="$1" uptime="${2:-240}"
   row "SOLEUR_ZOT_DISK pcent=8 zot_restarts=0 ping_rc=0 state_status=running zot_uptime_s=$uptime boot_id=$boot log_shipper_post_fail=unknown log_shipper_last_ok_age_s=-1 log_shipper_dropped_cum=unknown log_shipper_drop_seq=unknown host=$HOSTV zot_last_err={time:2026-08-11T10:04:34Z,level:info,message:HTTP API,caller:zotregistry.dev/zot/v2/pkg/api/session.go:92,func:zotregistry.dev/}"
@@ -285,10 +286,10 @@ assert "C3c the reported counter value comes from the reporter's own line" \
 C3F_CTL="$TMP/c3f.ctl"; control_row_never_ticked "$DRIFTED_BOOT" > "$C3F_CTL"
 run_probe "$EMPTY" "$C3F_CTL"
 assert "C3f last_ok_age_s=-1 still exits 2 (softening is not a pass)" "[[ '$CASE_RC' -eq 2 ]]"
-assert "C3f a never-ticked shipper is NOT told to ACT NOT WAIT" \
-  "! grep -q 'ACT, NOT WAIT' <<<\"\$CASE_OUT\""
-assert "C3f the never-worked framing leads the arm" \
-  "grep -q 'never delivered a row' <<<\"\$CASE_OUT\""
+assert "C3f the ACT framing is NEVER suppressed, even on a never-ticked shipper" \
+  "grep -q 'ACT, NOT WAIT' <<<\"\$CASE_OUT\""
+assert "C3f a never-ticked shipper additionally gets the first-tick note" \
+  "grep -q 'rule out a first tick' <<<\"\$CASE_OUT\""
 
 # C3f2: THE BOUND. Same never-ticked pair, but the host has been up for hours. `-1` is the
 # reporter's DEFAULT on an unreadable state file, so this is ALSO the permanently-dead-shipper
@@ -299,14 +300,14 @@ C3F2_CTL="$TMP/c3f2.ctl"; control_row_never_ticked "$DRIFTED_BOOT" 86400 > "$C3F
 run_probe "$EMPTY" "$C3F2_CTL"
 assert "C3f2 a never-ticked shipper on an OLD host is told to ACT, not to wait" \
   "grep -q 'ACT, NOT WAIT' <<<\"\$CASE_OUT\""
-assert "C3f2 the young-host reassurance is absent once uptime is large" \
-  "! grep -q 'EXPECTED until its first' <<<\"\$CASE_OUT\""
+assert "C3f2 uptime is NOT used as host age (zot_uptime_s is container-run age)" \
+  "! grep -q 'zot_uptime_s=' <<<\"\$CASE_OUT\""
 
 # C3f3: absence is not youth. A missing zot_uptime_s must not soften.
 C3F3_CTL="$TMP/c3f3.ctl"
 row "SOLEUR_ZOT_DISK pcent=8 zot_restarts=0 ping_rc=0 state_status=running boot_id=$DRIFTED_BOOT log_shipper_post_fail=unknown log_shipper_last_ok_age_s=-1 host=$HOSTV" > "$C3F3_CTL"
 run_probe "$EMPTY" "$C3F3_CTL"
-assert "C3f3 a MISSING zot_uptime_s does not soften (absence is not youth)" \
+assert "C3f3 a control row without last_ok_age_s=-1 gets no first-tick note" \
   "grep -q 'ACT, NOT WAIT' <<<\"\$CASE_OUT\""
 
 # C3g: THE REGRESSION GUARD. control_row_predelivery has NO log_shipper_* fields; reading absent
@@ -320,7 +321,8 @@ assert "C3g an ABSENT last_ok_age_s does NOT soften (absence != the literal -1)"
 # C3h: a finite age is a delivering shipper with a drifted prefix — the loudest arm, unsoftened.
 C3H_CTL="$TMP/c3h.ctl"; control_row "$DRIFTED_BOOT" 0 > "$C3H_CTL"
 run_probe "$EMPTY" "$C3H_CTL"
-assert "C3h a finite last_ok_age_s does NOT soften" "grep -q 'ACT, NOT WAIT' <<<\"\$CASE_OUT\""
+assert "C3h a finite last_ok_age_s gets ACT and NO first-tick note" \
+  "grep -q 'ACT, NOT WAIT' <<<\"\$CASE_OUT\" && ! grep -q 'rule out a first tick' <<<\"\$CASE_OUT\""
 
 # C3i: the not_delivered arm sent an operator who had JUST dispatched a replace to wait for step-6
 # of an ordered path that closed 2026-08-12T20:39Z, on a host replaced 15 minutes later.

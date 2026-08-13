@@ -238,15 +238,6 @@ current_boot_id=$(printf '%s\n' "$control_decoded" | grep -oE 'boot_id=[0-9a-f-]
 # -1 means no row has EVER shipped, while a small age with zero envelope rows means the shipper
 # works and the envelope/grep drifted.
 shipper_last_ok_age=$(printf '%s\n' "$control_decoded" | grep -oE 'log_shipper_last_ok_age_s=-?[0-9]+' | tail -1 | sed 's/^log_shipper_last_ok_age_s=//' || true)
-# THE SOFTENING'S SECOND DISCRIMINATOR, and it is not optional. `-1` is the reporter's DEFAULT
-# (cloud-init-registry.yml sets LOG_SHIPPER_LAST_OK_AGE_S=-1 BEFORE the `[ -r .../state ]` block),
-# so it is emitted forever whenever the state file is unreadable — which is exactly what a
-# PERMANENTLY DEAD shipper looks like: jq off PATH makes the shipper exit 1 before writing state,
-# so it never appears. A four-minute-old host and a host whose shipper has been dead for a week
-# emit the identical `post_fail=unknown last_ok_age_s=-1` pair. Softening on that pair alone would
-# reassure forever and nothing would ever escalate. zot_uptime_s is on the SAME control row and
-# separates them, so the softening is bounded by it.
-shipper_host_uptime=$(printf '%s\n' "$control_decoded" | grep -oE 'zot_uptime_s=[0-9]+' | tail -1 | sed 's/^zot_uptime_s=//' || true)
 shipper_dropped_cum=$(printf '%s\n' "$control_decoded" | grep -oE 'log_shipper_dropped_cum=[^ ]+' | tail -1 | sed 's/^log_shipper_dropped_cum=//' || true)
 shipper_drop_seq=$(printf '%s\n' "$control_decoded" | grep -oE 'log_shipper_drop_seq=[^ ]+' | tail -1 | sed 's/^log_shipper_drop_seq=//' || true)
 
@@ -333,23 +324,29 @@ if [[ "$n_envelope" -eq 0 ]]; then
     # carries no timestamp. The test MUST be the literal "-1", never emptiness: the pre-delivery
     # reporter emits no log_shipper_* fields at all, and softening on absence would weaken the
     # genuine escalation that case pins (C3g).
-    # SOFTEN ONLY WHEN THE HOST IS ALSO YOUNG. Two conditions, and the second is what stops this
-    # from reassuring forever — see the `shipper_host_uptime` derivation above. The window is two
-    # tick intervals (2 x 300s = 600s) plus slack for boot and first ingest: past it, a shipper
-    # that has still never delivered is the ACT state, which is what the old text said and was
-    # right about for that case. A MISSING uptime does not soften: absence is not youth.
-    if [[ "${shipper_last_ok_age:-}" == "-1" \
-       && "${shipper_host_uptime:-}" =~ ^[0-9]+$ && "${shipper_host_uptime}" -lt 900 ]]; then
-      echo "           last_ok_age_s=-1: the shipper has never delivered a row, and with" >&2
-      echo "           zot_uptime_s=${shipper_host_uptime} the host is young — so this is EXPECTED until its first" >&2
-      echo "           4-59/5 cron tick. Re-run after the next 5-minute boundary before acting —" >&2
-      echo "           measured 2026-08-12, a host born 20:54:12Z read silent at 20:56 and PASSed at" >&2
-      echo "           20:58 with no intervention. Past ~900s of uptime this arm STOPS softening and" >&2
-      echo "           reports ACT, because -1 is also what a permanently dead shipper emits." >&2
-    else
-      echo "           THIS IS THE STATE THAT MEANS ACT, NOT WAIT, and it is deliberately NOT" >&2
-      echo "           collapsed into 'not delivered': the shipper's cron tick is failing, its" >&2
-      echo "           journald match is wrong, or jq is missing on the host." >&2
+    # THE ACT FRAMING IS NEVER SUPPRESSED. An earlier revision replaced it with a reassuring
+    # "expected until its first tick" whenever last_ok_age_s was the literal -1. That is unsafe and
+    # NOT FIXABLE ON THIS ROW: -1 is the reporter's DEFAULT on an unreadable state file, so a host
+    # born four minutes ago and a host whose shipper died a week ago (jq off PATH -> exit 1 -> state
+    # never written) emit an identical `post_fail=unknown last_ok_age_s=-1` pair. The obvious
+    # discriminator is wrong too — zot_uptime_s is the zot CONTAINER's current-run age, not host
+    # age, so under the restart loop this channel exists to diagnose it is permanently small and
+    # would soften forever on the exact incident that matters. No field here carries host age, and
+    # adding one costs a provisioning event on the sole image-pull path.
+    #
+    # So the first-tick case is served ADDITIVELY: the escalation still reads ACT, and a young host
+    # gets an extra line telling the operator what to check. Fail-safe direction — a freshly
+    # replaced host costs one re-run, a dead shipper still escalates.
+    echo "           THIS IS THE STATE THAT MEANS ACT, NOT WAIT, and it is deliberately NOT" >&2
+    echo "           collapsed into 'not delivered': the shipper's cron tick is failing, its" >&2
+    echo "           journald match is wrong, or jq is missing on the host." >&2
+    if [[ "${shipper_last_ok_age:-}" == "-1" ]]; then
+      echo "           BEFORE ACTING, rule out a first tick: last_ok_age_s=-1 means no row has EVER" >&2
+      echo "           shipped, which is also the state of a host replaced minutes ago — the shipper" >&2
+      echo "           is a 4-59/5 cron one-shot. Measured 2026-08-12: a host born 20:54:12Z read" >&2
+      echo "           silent at 20:56 and PASSed at 20:58 with no intervention. If this host was" >&2
+      echo "           just replaced, re-run after the next 5-minute boundary. If it has been up" >&2
+      echo "           longer than that, -1 is a DEAD shipper and the arms below name the cause." >&2
     fi
     if [[ "$shipper_post_fail_unknown" -eq 1 ]]; then
       echo "           The reporter says log_shipper_post_fail=unknown, which is NOT zero: it means" >&2

@@ -314,7 +314,8 @@ def msg_field(payload):
         if f.startswith("message:"):
             return f[len("message:"):]
     return None
-starts, dones = set(), set()
+from collections import Counter
+starts, dones = Counter(), Counter()
 n_patch = 0
 drop_sum = 0; drop_markers = 0; drop_unknown = 0
 rows_in = rows_decoded = rows_envelope = 0
@@ -346,25 +347,25 @@ for line in sys.stdin:
     rows_envelope += 1
     mf = msg_field(msg[len(ENV):])
     if mf is None: continue
-    if mf.startswith(START_LIT): starts.add(mf[len(START_LIT):]); continue
-    if mf.startswith(DONE_LIT):  dones.add(mf[len(DONE_LIT):]);  continue
+    if mf.startswith(START_LIT): starts[mf[len(START_LIT):]] += 1; continue
+    if mf.startswith(DONE_LIT):  dones[mf[len(DONE_LIT):]] += 1;  continue
     if mf.startswith("PatchBlobUpload"): n_patch += 1
-unmatched = sorted(starts - dones)
+lagging = sorted(r for r in starts if dones[r] < starts[r])
 drop_txt = str(drop_sum) + ("+unbounded" if drop_unknown else "")
-print("  gc_starts=%d gc_completions=%d patch_blob_upload=%d dropped_rows=%s (markers=%d)"
-      % (len(starts), len(dones), n_patch, drop_txt, drop_markers))
+print("  gc_start_events=%d gc_completion_events=%d over %d repo(s); patch_blob_upload=%d dropped_rows=%s (markers=%d)"
+      % (sum(starts.values()), sum(dones.values()), len(set(starts) | set(dones)), n_patch, drop_txt, drop_markers))
 print("  rows_in=%d rows_decoded=%d rows_envelope=%d%s"
       % (rows_in, rows_decoded, rows_envelope, "  LIMIT REACHED (window truncated)" if rows_in >= 5000 else ""))
-if unmatched:
-    shown = [u.rsplit("/", 1)[-1][:48] for u in unmatched[:5]]
-    more = "" if len(unmatched) <= 5 else " (+%d more)" % (len(unmatched) - 5)
-    print("  unmatched gc starts (no same-repo completion in this window): %s%s"
+if lagging:
+    shown = ["%s %d/%d" % (re.sub(r"[^A-Za-z0-9._-]", "?", r.rsplit("/", 1)[-1])[:48], dones[r], starts[r]) for r in lagging[:5]]
+    more = "" if len(lagging) <= 5 else " (+%d more)" % (len(lagging) - 5)
+    print("  repos completing FEWER gc cycles than they started (done/started): %s%s"
           % (", ".join(shown), more))
     print("  A LEAD, NOT A VERDICT: dropped_rows above can remove a completion while its start")
     print("  survives, and the trailing window edge cuts gc cycles that had not finished yet.")
     print("  zot#4235 is the standing suspect (gc completing for one repo and never another);")
     print("  .uploads/ staging is the other.")
-elif len(starts) == 0:
+elif sum(starts.values()) == 0:
     # NOT an exoneration. starts==dones==0 is also what a dead shipper, an unparseable row shape
     # and a hostname change all produce, so the earlier "growth is not a gc stall" line asserted a
     # negative the parse cannot support -- and asserted it hardest when the channel was down.
@@ -372,7 +373,7 @@ elif len(starts) == 0:
     print("  a silent shipper, a changed host token or a drifted row shape all land here. Check the")
     print("  channel first: bash scripts/followthroughs/zot-log-channel-7440.sh")
 else:
-    print("  every gc start in this window has a same-repo completion; growth is not a gc stall.")
+    print("  every repo completed at least as many gc cycles as it started; not a gc stall.")
 ' 2>"$aperr"; prc=$?
   if (( prc != 0 )); then
     echo "  attribution_unavailable: the gc rows could not be parsed (python exited ${prc}): $(head -c 300 "$aperr" | tr '\n\r\t' '   ')"

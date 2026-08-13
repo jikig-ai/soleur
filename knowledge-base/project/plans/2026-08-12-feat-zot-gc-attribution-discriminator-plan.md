@@ -256,11 +256,23 @@ liveness_signal:
   configured_in: apps/web-platform/infra/cloud-init-registry.yml (untouched)
 error_reporting:
   destination: probe stdout/stderr, mirrored by the sweeper into a public issue comment
-  fail_loud: true — betterstack-query.sh rc=3 is surfaced (Phase 4), bounded to 600 bytes
+  fail_loud: true — betterstack-query.sh rc=3 is surfaced (Phase 4), bounded to 400 bytes
 failure_modes:
-  - mode: attribution query fails during an incident
-    detection: prints attribution_unavailable
-    alert_route: none — informational by construction; the verdict is unaffected
+  # LAYER: this host runs no Vector and no Sentry. Every signal below lands on the layer-6
+  # synchronous consumer — the sweeper's GH Actions run log plus the verbatim issue comment it
+  # posts (last 4 KB of stdout+stderr). There is no other route, and none is claimed.
+  - mode: attribution query fails or times out during an incident
+    detection: prints attribution_unavailable with the query rc and bounded stderr
+    alert_route: layer 6 — sweeper run log + issue comment on #7341; verdict unaffected
+  - mode: attribution parses zero gc rows (dead shipper, host rename, row-shape drift)
+    detection: rows_in/rows_decoded/rows_envelope printed; the arm states it is NOT an all-clear
+    alert_route: layer 6 — points the operator at zot-log-channel-7440.sh
+  - mode: a repo completes fewer gc cycles than it starts (intermittent zot#4235)
+    detection: per-repo done/started ratio, not a set difference
+    alert_route: layer 6 — named in the FAIL comment beside the drop count
+  - mode: shipper never ticked vs shipper dead — NOT separable on this row
+    detection: last_ok_age_s=-1 is the reporter default; ACT framing is never suppressed
+    alert_route: layer 6 — first-tick note is additive, so escalation is preserved
   - mode: shipper never completes a first tick after a replace
     detection: log_shipper_last_ok_age_s == -1 with delivery evidence present
     alert_route: delivered_but_silent, softened framing (Phase 2)
@@ -271,10 +283,12 @@ logs:
   where: Better Stack Logs source 2457081
   retention: ~3 days; the attribution window must stay inside it
 discoverability_test:
-  command: bash scripts/followthroughs/zot-log-channel-7440.sh
-  expected_output: "PASS: envelope rows observed (envelope=<n> control=<n> ...)"
-  credentials_required: "BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} — a warehouse readback has no
-    unauthenticated substitute"
+  # The live probe needs warehouse credentials AND its PASS arm is untouched by this change, so a
+  # credentialed run would verify a property this PR does not alter. The fixture suite is
+  # credential-free and exercises all four changes (softened arm, stale arm, rc=3, and — via its
+  # sibling — the attribution lead). No credentials_required waiver is claimed.
+  command: bash tests/scripts/test-zot-log-channel-probe.sh
+  expected_output: "=== 82 passed, 0 failed ==="
 ```
 
 ### Soak follow-through enrollment
@@ -310,7 +324,7 @@ own headline verdict; scope is now four small edits in already-tested, already-s
 - **AC4** — A host with `last_ok_age_s` absent still reports `delivered_but_silent` (C3b preserved).
 - **AC5** — A host with the literal `last_ok_age_s=-1` reports the softened framing, same exit code.
 - **AC6** — The `not_delivered` arm no longer references an open ordered path or step-6.
-- **AC7** — `run_query()` surfaces `betterstack-query.sh` rc=3, bounded to 600 bytes.
+- **AC7** — `run_query()` surfaces `betterstack-query.sh` rc=3, bounded to 400 bytes.
 - **AC8** — No new test file and no new `run_suite` registration:
   `git status --porcelain | grep -c '^A.*\.test\.sh'` returns 0, and `scripts/test-all.sh` is
   unchanged except for assertion floors.

@@ -238,9 +238,9 @@ $(gcrow "$ENVP $(zpay "gc successfully completed for $WEB")")
 $(gcrow "$ENVP $(zpay "executing gc of orphaned blobs for $BOOTSTRAP")")"
 run "$FAILSPEC" 0 "" "" "" "$GC_OK"
 expect "an unmatched gc start names its repository" 1 "soleur-inngest-bootstrap"
-if [[ "$OUT" == *"gc_starts=2 gc_completions=1"* && "$OUT" == *"unmatched"* && "$OUT" != *"soleur-web-platform,"* ]]
-then pass "counts are 2 starts / 1 completion and only the unpaired repo is listed"
-else fail "expected gc_starts=2 gc_completions=1 with one unmatched repo. Output: $OUT"
+if [[ "$OUT" == *"gc_start_events=2 gc_completion_events=1 over 2 repo(s)"* && "$OUT" == *"soleur-inngest-bootstrap 0/1"* ]]
+then pass "EVENT counts are 2/1 over 2 repos, and the lagging repo shows done/started"
+else fail "expected gc_start_events=2 gc_completion_events=1 with soleur-inngest-bootstrap 0/1. Output: $OUT"
 fi
 
 # 22. INJECTION. sanitize() strips only quotes and backslashes, so a header value survives with its
@@ -264,7 +264,7 @@ expect "the SUMMED dropped-row count is printed beside the unmatched start" 1 "d
 # 24. The envelope anchor carries a TRAILING SPACE. Without it host=soleur-registry-2 matches.
 GC_HOST2="$(gcrow "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=soleur-registry-2 $(zpay "executing gc of orphaned blobs for /var/lib/zot/x/other")")"
 run "$FAILSPEC" 0 "" "" "" "$GC_HOST2"
-if [[ "$OUT" == *"rows_envelope=0"* && "$OUT" == *"gc_starts=0"* ]]
+if [[ "$OUT" == *"rows_envelope=0"* && "$OUT" == *"gc_start_events=0"* ]]
 then pass "a neighbouring host's rows are not admitted (trailing-space anchor; rows_envelope=0)"
 else fail "host=soleur-registry-2 was admitted. Output: $OUT"
 fi
@@ -285,7 +285,20 @@ then pass "zero parsed gc rows is reported as no-evidence, not as an all-clear"
 else fail "an empty parse produced an exoneration. Output: $OUT"
 fi
 
-MIN_CHECKS=28
+# 27. THE INTERMITTENT SHAPE. Same repo starts 3 gc cycles and completes 1. A set-difference lead
+#     reported this HEALTHY (the repo is present in `dones`), which is precisely the zot#4235
+#     degradation the lead exists to surface.
+GC_LAG="$(gcrow "$ENVP $(zpay "executing gc of orphaned blobs for $WEB")")
+$(gcrow "$ENVP $(zpay "executing gc of orphaned blobs for $WEB")")
+$(gcrow "$ENVP $(zpay "executing gc of orphaned blobs for $WEB")")
+$(gcrow "$ENVP $(zpay "gc successfully completed for $WEB")")"
+run "$FAILSPEC" 0 "" "" "" "$GC_LAG"
+if [[ "$OUT" == *"soleur-web-platform 1/3"* && "$OUT" != *"not a gc stall"* ]]
+then pass "a repo completing 1 of 3 started cycles is reported, not called healthy"
+else fail "the intermittent under-completion shape read as healthy. Output: $OUT"
+fi
+
+MIN_CHECKS=29
 if (( checks < MIN_CHECKS )); then
   echo "FAIL: only $checks assertions ran, expected >= $MIN_CHECKS" >&2
   fails=$((fails + 1))
