@@ -221,6 +221,9 @@ were true when written and are no longer.** The recut has fired: the live heartb
 (down from 100 across 2026-08-04 → 2026-08-10) on boot `bc135d5b-…`, and a step-6
 `registry-host-replace` is the pending event this change rides.
 
+> **[RETRACTED 2026-08-12 (#7455) — delivery did NOT ride step 6, and the boot cited above is
+> superseded. See *Amendment 2026-08-12* at the end of this ADR.]**
+
 §3's write-surface finding is **undisturbed**: this plan changes no `accessControl` and grants no
 `delete`. ADR-096's cloud-init-only posture is restated here rather than amended separately — it
 still holds, and it is why §7 below exists.
@@ -232,6 +235,11 @@ still holds, and it is why §7 below exists.
 is named as one rather than hidden: the rider is recorded on the open zot-pin ordered path, and the
 follow-through probe carries a 90-day escalation horizon so an indefinitely-undelivered change
 escalates instead of reporting TRANSIENT forever.
+
+> **[The "merging this applies nothing" finding STANDS and still governs the next change to this
+> host. The RIDER clause is RETRACTED 2026-08-12 (#7455) — the ordered path's replace had already
+> fired, so the rider had no vehicle left. Delivery came from a dedicated replace instead; see
+> *Amendment 2026-08-12* at the end of this ADR. The 90-day horizon never elapsed.]**
 
 ## Alternatives Considered
 
@@ -250,7 +258,7 @@ escalates instead of reporting TRANSIENT forever.
 | Batched JSON-array POSTs | **Rejected** | Flush-trigger ambiguity, partial-batch loss across restarts, an unbounded in-memory buffer under a sink outage, and a second JSON-escaping surface. Per-line POST is the proven transport |
 | A negative discriminator ("`raw` does not begin with the heartbeat prefix") | **Rejected** | Fail-open: under any `raw`-encoding drift every echo row reclassifies as genuine and the probe auto-PASSes on the exact state it exists to reject. The same literal used positively fails visibly instead |
 | Enroll the probe on #7440 | **Rejected — it would have been a silent no-op** | The sweeper lists `--state open`; on a closed issue both `rc=0` and `rc=2` take "no action, no comment", and the closed-lookback drops it entirely after two weeks. Even a real PASS would leave nothing to flip this ADR |
-| Request a host replace in this PR | **Rejected** | A destructive replace of the sole pull path is separately authorized (`hr-menu-option-ack-not-prod-write-auth`), and the zot-pin ordered path owns it |
+| Request a host replace in this PR | **Rejected** | A destructive replace of the sole pull path is separately authorized (`hr-menu-option-ack-not-prod-write-auth`), and the zot-pin ordered path owns it. **[The ownership clause is RETRACTED 2026-08-12 (#7455): the ordered path did NOT own it — its replace had already fired, and delivery came from a separately-authorized dedicated replace. The rejection itself stands. See *Amendment 2026-08-12*.]** |
 | Assert liveness in a pre-merge AC | **Rejected** | Structurally impossible; any pre-merge "logs are queryable" claim is an inert-until-dispatched false green |
 
 ## Consequences
@@ -270,6 +278,7 @@ escalates instead of reporting TRANSIENT forever.
 
 `adopting → accepted` on the **first PASS** of `scripts/followthroughs/zot-log-channel-7440.sh` —
 an envelope-stamped row read back OUT of the warehouse, which no exit code on the host can fake.
+**(This condition FIRED 2026-08-12T21:03:51Z — see *Amendment 2026-08-12* at the end of this ADR.)**
 
 The probe is enrolled on a **dedicated tracker (#7455)**, never on #7440. That is not a preference:
 the sweeper lists `--state open`, and on the closed issue this PR's `Closes` produces, a correct
@@ -340,30 +349,59 @@ PASS: envelope rows observed (envelope=37 control=7 gc_start=1 gc_done=1 gc_blob
       own output produces.
 ```
 
-37 envelope rows against a floor of 7, read back OUT of the warehouse through the ClickHouse path.
-`boot_marker(1)` is the one-shot `SOLEUR_ZOT_LOG_BOOT`; the 27-of-37 carrying
-`zotregistry.dev/zot/v2/pkg/api` is the free positive control §4 predicted. The gc start/complete
-ratio reads 1/1 — the Consequences section's growth-attribution claim becoming true rather than
-projected.
+37 envelope rows against a floor of 7 (`FLOOR_ROWS` gates envelope rows only), read back OUT of the
+warehouse through the ClickHouse path. `boot_marker(1)` is the one-shot `SOLEUR_ZOT_LOG_BOOT`.
 
-### §6 and §7 were falsified by ORDERING — preserved, not rewritten
+Two things in that line are easy to conflate, and an earlier draft of this amendment did conflate
+them. The **positive control** is `control=7` — the `SOLEUR_ZOT_DISK` rows proving the read path
+answers at all; it is the 60s liveness beat the Alternatives table calls "the free 60s positive
+control", **not** anything §4 predicts (§4 is about cron-vs-daemon and predicts no control). The
+27-of-37 carrying `zotregistry.dev/zot/v2/pkg/api` is a separate **provenance** assertion. §3 warns
+specifically that a discriminator anchored on `caller:zotregistry.dev` matches ONLY the echo, so
+that token is emphatically not a control — the probe requires the full
+`zotregistry.dev/zot/v2/pkg/api` substring for exactly that reason.
+
+The gc start/complete ratio reads 1/1 — the Consequences section's growth-attribution claim
+becoming true rather than projected.
+
+Evidence is posted on **#7455** (comment `5277913318`) rather than living only in this file, so the
+observation is checkable independently of the PR that cites it.
+
+### What ORDERING falsified — preserved, not rewritten
+
+Three sites carried the superseded rider claim, and each now carries its own inline retraction
+marker at the point of the claim (this file's house style — §2, §4, §5, the Alternatives table and
+the Ordinal derivation all retract in place): **§6**, **§7**, and the Alternatives row *"Request a
+host replace in this PR"*. Enumerated here so this subsection is not read as a complete list of two.
 
 §6 states that *"a step-6 `registry-host-replace` is the pending event this change rides"*, and §7
 that *"the rider is recorded on the open zot-pin ordered path"*. **Delivery did not ride step 6.**
 
-The ordered path's host replace had already fired — atomically, inside `registry-luks-recut`
-(run 31437037877) — on **2026-08-10T22:08Z**. This shipper merged **2026-08-12T19:38Z**, roughly
+The ordered path's host replace had already fired — atomically, inside the `registry_luks_recut`
+job of [run 31437037877](https://github.com/jikig-ai/soleur/actions/runs/31437037877), dispatched
+**2026-08-10T22:08Z** and running to 22:19Z. This shipper merged **2026-08-12T19:38Z**, roughly
 **45 hours later**, so it was inert on a host born before it existed. §7's "merging this applies
 nothing" was exactly right; what it did not anticipate is that the remedy it named had already been
 spent.
 
-Delivery therefore took a separate, dedicated `registry-host-replace` —
+That run's OVERALL conclusion is `failure`, and this amendment states it rather than leaving a
+reader to find a red X: the `registry_luks_recut` job — the part this claim rests on — succeeded,
+while a later `registry_store_restore` job failed. #7287's closing comment discloses that in full.
+
+Delivery therefore took a separate, dedicated `registry_host_replace` job —
 [run 31639782781](https://github.com/jikig-ai/soleur/actions/runs/31639782781) — completing
-**2026-08-12T20:54:12Z**. The OCI store volume, the pinned image digest `95a837a0afac`, and both
-htpasswd matches were preserved across it, and web hosts pulled 200s off the new host throughout.
+**2026-08-12T20:54:12Z**. (Both are *jobs* of the same `Apply web-platform infra …` workflow, not
+separate workflows.)
 
 Boot id moved `bc135d5b-d509-41c4-8129-9181421e845c` → `93c52405-5fd2-462d-8051-fa68b8ab327f`,
 superseding the boot §6 cites as current.
+
+**Post-replace state was read back off the NEW host**, not inherited from the pre-replace readings
+in #7287 (which were taken ~20:30Z, before this replace ran). `SOLEUR_ZOT_DISK` at 20:54:23Z and
+20:55:01Z reports `boot_id=93c52405-…`, `zot_uptime_s=4→42`, `state_status=running`, `ping_rc=0`,
+`zot_restarts=0`, `pcent=12`, `fs_size_gb=59`, `zot_image_digest=95a837a0afac`, and both htpasswd
+matches true — so the OCI store and the pinned digest survived the replace, and web hosts pulled
+200s off the new host. Full rows on #7455.
 
 **The generalisable lesson: a rider is only valid while its vehicle is still pending.** The rider
 was recorded correctly and read correctly; what moved underneath it was the vehicle, which departed
@@ -374,6 +412,9 @@ have reported that for the full 90-day horizon before escalating.
 
 ### First operational reading of the drop counter
 
-`dropped_rows=2` of 37 on the first window — comfortably clear of the floor of 7, and most likely
-startup backlog rather than rate-cap pressure. Recorded because it is that counter's first real
-reading, not because it is alarming.
+`dropped_rows=2` of 37 on the first window — most likely startup backlog rather than rate-cap
+pressure. Recorded because it is that counter's first real reading, not because it is alarming.
+
+An earlier draft called this "comfortably clear of the floor of 7", which compares two unrelated
+counters: `FLOOR_ROWS` is a MINIMUM for `n_envelope` and the probe never applies it to `n_drop`.
+The meaningful comparison for a drop count is the shipper's per-tick rate cap, not the floor.
