@@ -1363,11 +1363,149 @@ else
   fi
 fi
 
+# --- #7104 GUARD 1: workflow `if:` literals vs the shell that produces them -----------------
+#
+# A mis-keyed `if:` skips every re-push step, pass 2 never runs, and the five
+# success()-gated steps downstream re-arm — one closes the founder's GitHub issues, one
+# swaps the running container. The job greens having verified nothing: #6594's latched
+# false-green, reintroduced by its own remedy.
+#
+# MEASURED at actionlint 1.7.7: a mistyped STEP ID is caught, but a mistyped OUTPUT NAME
+# produces NO finding at all, because `outputs` types as {string => string} so every name
+# is valid. And CI's actionlint job treats rc=1 as acceptable and is absent from
+# scripts/required-checks.txt — so nothing in CI can fail a PR for this today. This guard
+# is therefore the only thing standing between a typo and a silent false-green.
+#
+# Not hypothetical: while writing the pass-2 step, `DPF_REPLACED: ${{ steps.terraform_plan
+# .outputs.dpf_replaced }}` was added against a step that carries no `id:`. It would have
+# resolved to the empty string and OVERRIDDEN the working job-level env var.
+GUARD1=$(python3 - "$APPLY_WF" "$REPO_ROOT/apps/web-platform/infra/infra-config-verify.sh" <<'PYEOF'
+import sys, re, yaml
+
+wf = yaml.safe_load(open(sys.argv[1], encoding='utf-8'))
+sh = open(sys.argv[2], encoding='utf-8').read()
+
+steps = []
+for job in (wf.get('jobs') or {}).values():
+    steps.extend(job.get('steps') or [])
+ids = {s.get('id') for s in steps if s.get('id')}
+
+# What the SCRIPT can emit, per output name. A value containing a shell expansion is
+# recorded as dynamic (its literal set is unbounded, so a literal comparison against it
+# cannot be validated this way).
+emitted = {}
+for m in re.finditer(r'echo\s+"([a-z_]+)=([^"]*)"\s*>>\s*"\$GITHUB_OUTPUT"', sh):
+    name, val = m.group(1), m.group(2)
+    emitted.setdefault(name, set()).add('<dynamic>' if '$' in val else val)
+
+# Outputs produced by the workflow's own inline run: bodies (not by the script).
+wf_emitted = {}
+for s in steps:
+    body = s.get('run')
+    if not isinstance(body, str) or not s.get('id'):
+        continue
+    for m in re.finditer(r'echo\s+"([a-z_]+)=([^"]*)"\s*>>\s*"\$GITHUB_OUTPUT"', body):
+        wf_emitted.setdefault(s['id'], {}).setdefault(m.group(1), set()).add(
+            '<dynamic>' if '$' in m.group(2) else m.group(2))
+
+SCRIPT_STEPS = {'infra_config_gate', 'infra_config_gate_pass2'}
+ref = re.compile(r"steps\.([A-Za-z0-9_-]+)\.outputs\.([A-Za-z0-9_-]+)\s*==\s*'([^']*)'")
+
+problems, checked = [], 0
+for s in steps:
+    cond = s.get('if')
+    if not isinstance(cond, str):
+        continue
+    for sid, out, lit in ref.findall(cond):
+        checked += 1
+        if sid not in ids:
+            problems.append("if: names step id '%s', which does not exist" % sid)
+            continue
+        if sid in SCRIPT_STEPS:
+            vals = emitted.get(out)
+            if vals is None:
+                problems.append("if: compares steps.%s.outputs.%s, which infra-config-verify.sh never writes" % (sid, out))
+            elif '<dynamic>' not in vals and lit not in vals:
+                problems.append("if: compares %s == '%s' but the script only emits %s" % (out, lit, sorted(vals)))
+        else:
+            vals = (wf_emitted.get(sid) or {}).get(out)
+            if vals is None:
+                problems.append("if: compares steps.%s.outputs.%s, which step '%s' never writes" % (sid, out, sid))
+
+# Every `env:` expression naming a step output must resolve too — this is the shape that
+# silently yields the empty string rather than erroring.
+envref = re.compile(r"steps\.([A-Za-z0-9_-]+)\.outputs\.([A-Za-z0-9_-]+)")
+for s in steps:
+    for v in (s.get('env') or {}).values():
+        if not isinstance(v, str):
+            continue
+        for sid, out in envref.findall(v):
+            checked += 1
+            if sid not in ids:
+                problems.append("env: names step id '%s', which does not exist" % sid)
+            elif sid in SCRIPT_STEPS and out not in emitted:
+                problems.append("env: reads steps.%s.outputs.%s, which infra-config-verify.sh never writes" % (sid, out))
+
+# The backstop must exist and must be always()-keyed.
+backstop = [s for s in steps
+            if isinstance(s.get('run'), str) and 'NO TERMINAL VERDICT' in s['run']]
+if not backstop:
+    problems.append("the terminal-verdict backstop step is absent")
+elif 'always()' not in str(backstop[0].get('if', '')):
+    problems.append("the terminal-verdict backstop exists but is not keyed on always()")
+
+print("CHECKED=%d" % checked)
+for p in problems:
+    print("PROBLEM=%s" % p)
+PYEOF
+) || GUARD1="PROBLEM=guard 1 could not run (python3/pyyaml unavailable or the workflow did not parse)"
+
+g1_checked=$(printf '%s\n' "$GUARD1" | sed -n 's/^CHECKED=//p')
+g1_problems=$(printf '%s\n' "$GUARD1" | grep -c '^PROBLEM=' || true)
+if [[ "$g1_problems" -eq 0 && "${g1_checked:-0}" -ge 4 ]]; then
+  pass "#7104 Guard 1: all $g1_checked workflow if:/env: references resolve, and every compared literal is one the producer can emit"
+else
+  fail "#7104 Guard 1: $g1_problems problem(s) over ${g1_checked:-0} reference(s):"
+  printf '%s\n' "$GUARD1" | sed -n 's/^PROBLEM=/      - /p' >&2
+fi
+# GUARD 3's LITERAL IS THE MEASUREMENT, so it is pinned to the measured value and not
+# merely to "some literal". Mutation measured: flipping `repush_graded == '1'` to `'2'`
+# passed every check above, because the generic literal check cannot validate an output
+# whose producer writes it dynamically. But that literal is the ONLY thing bounding the
+# recovery's blast radius: task 4.0 measured the re-push plan against live prd state as
+# exactly ONE changing managed resource with host_creates=0, and deploy_pipeline_fix
+# depends_on infra_config_handler_bootstrap, which carries an SSH remote-exec that
+# -target reaches transitively. A widened literal is a production write against a bridge
+# this job tears down three steps later.
+#
+# Changing the bound therefore requires re-running task 4.0 and editing this line, which
+# is the two-producer property the guard is for.
+TASK_40_MEASURED_CARDINALITY=1
+if grep -qE "steps\.repush_plan\.outputs\.repush_graded == '${TASK_40_MEASURED_CARDINALITY}'" "$APPLY_WF"; then
+  pass "#7104 Guard 3: the apply is keyed on the task-4.0-measured cardinality ('${TASK_40_MEASURED_CARDINALITY}'), not on success()"
+else
+  fail "#7104 Guard 3: the apply step's if: does not compare repush_graded against the measured cardinality '${TASK_40_MEASURED_CARDINALITY}'. Widening it re-opens the transitive -target blast radius task 4.0 measured shut; narrowing it disables the recovery silently."
+fi
+# The apply must not be keyed on success() — that is the failure mode Guard 3 replaces.
+if grep -nE '^\s+id: repush_apply$' -A2 "$APPLY_WF" | grep -qE "if: success\(\)"; then
+  fail "#7104 Guard 3: the re-push apply is keyed on success(), so a grading step that fails to assert still lets it write production"
+else
+  pass "#7104 Guard 3: the re-push apply is not keyed on success()"
+fi
+
+# Cardinality floor: if the reference extractor silently matches nothing, the clean
+# result above would be a statement about the empty set.
+if [[ "${g1_checked:-0}" -ge 4 ]]; then
+  pass "#7104 Guard 1: examined $g1_checked step-output references (extractor is not matching the empty set)"
+else
+  fail "#7104 Guard 1: only ${g1_checked:-0} references examined — the extractor stopped matching, so its verdict is vacuous"
+fi
+
 # --- #7220 review: ASSERTION-COUNT FLOOR ---------------------------------------------------
 # Nothing asserted that the assertions RAN. Measured: deleting the entire #7220 block took the
 # suite 53 -> 40 passed, 0 failed, exit 0 — a silent truncation that reads exactly like a clean
 # run. A floor (not equality — the count is developer-incremented) makes arm deletion loud.
-GATE_MIN_ASSERTIONS=120
+GATE_MIN_ASSERTIONS=124
 # Adjudicated DIRECTLY, not through fail(). Measured: `fail() { return 0; }` made this suite
 # report `94 passed, 0 failed` / `OK` / exit 0 WITH a genuinely broken assertion present — and
 # the floor built to make truncation loud was itself dispatched through the neutered function,

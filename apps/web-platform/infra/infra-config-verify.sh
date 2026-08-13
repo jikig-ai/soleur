@@ -1,5 +1,32 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
+# #7104 PR-B — WHICH PASS IS THIS?
+#
+# The same artifact runs twice: once to sense, and once after the bounded re-push to
+# render the terminal verdict. Running the SAME tested file twice is the whole reason
+# the body was extracted from the workflow (plan R22.2) — the alternative was 240
+# duplicated lines of untestable YAML across two steps.
+#
+#   pass 1  senses. On the ONE recoverable shape — a push was expected and the host's
+#           frame predates this apply — it SOFT-FAILS: emits verdict=pending plus the
+#           observed start_ts and exits 0, handing off to the re-push steps. Every
+#           other failure still exits non-zero exactly as before.
+#   pass 2  renders the terminal verdict and fails closed. It never soft-fails, because
+#           there is no third push: boundedness is structural (a step cannot run twice
+#           in a job), not a latch.
+#
+# Pass 1's soft-fail is the one new failure mode the split introduces, and it is the
+# catastrophic one if it goes wrong: a job that greens having verified nothing, which
+# is #6594's latched false-green reintroduced by its own remedy. Two things contain it
+# — the terminal-verdict backstop step (`if: always()`), and Guard 1 pinning every
+# consumer `if:` literal against the strings this file can actually emit.
+VERIFY_PASS="${VERIFY_PASS:-1}"
+if [[ ! "$VERIFY_PASS" =~ ^(1|2)$ ]]; then
+  echo "::error::VERIFY_PASS is '${VERIFY_PASS}', not 1 or 2. Refusing to guess which verification semantic applies — pass 1 may defer to a re-push, pass 2 may not, and picking either by accident is how a gate greens without adjudicating." >&2
+  exit 1
+fi
+
 APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
 WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain)
 CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain)
@@ -31,6 +58,16 @@ sleep 8
 # (infra-config-gate.sh; infra-config-gate.test.sh drives it). CWD is INFRA_DIR.
 # shellcheck source=/dev/null
 source ./infra-config-gate.sh
+# #7104 task 6.11 — anti-vacuity, mirroring the existing `declare -F infra_config_red_alert`
+# pattern. If the source above ever stops providing the predicate (a rename, a partial
+# revert, a merge that drops the function), `infra_config_should_repush` would be an
+# unbound command. Under `set -e` that aborts the step, which is safe — but it aborts it
+# with `command not found`, mid-poll, looking like an infrastructure fault rather than a
+# missing safety contract. Fail here instead, before any polling, naming the actual cause.
+if ! declare -F infra_config_should_repush >/dev/null; then
+  echo "::error::infra_config_should_repush is not defined after sourcing infra-config-gate.sh — the predicate that authorises the bounded re-push is missing, so this gate cannot distinguish the recoverable shape from an unrecoverable one. Failing closed."
+  exit 1
+fi
 # `|| true`: infra_config_expected_count ends in `grep -c`, which exits 1 on
 # zero matches. Without this, a zero-row FILE_MAP would abort the step here
 # under `set -eo pipefail` BEFORE the numeric guard below can emit its
@@ -143,13 +180,56 @@ elif [[ "$HTTP_CODE" == "200" ]]; then
       echo "::error::APPLY_START_EPOCH was not recorded by the apply step — the freshness pin cannot run, and silently skipping it would restore the stale-frame blind spot. Failing closed."
       exit 1
     fi
-    if [[ "$FRAME_START_TS" -lt "$APPLY_START_EPOCH" ]]; then
+    if [[ "$VERIFY_PASS" == "2" ]]; then
+      # PASS 2 — did the bounded re-push actually move the frame?
+      #
+      # The baseline is the start_ts PASS 1 OBSERVED, handed over as a step output —
+      # an argument, not a re-read (task 6.10 / R19.3). That matters for a reason
+      # beyond plumbing: both operands are now HOST-clock, so host/runner skew
+      # cancels exactly instead of needing the 300 s tolerance the runner-clock
+      # comparison carries.
+      #
+      # And the comparison is STRICTLY GREATER, not `-lt` inverted. An unchanged
+      # frame means the re-push delivered nothing, which is the failure this whole
+      # PR exists to catch — reading equality as success here would make the
+      # recovery self-certifying.
+      if [[ ! "${REPUSH_BASELINE_TS:-}" =~ ^[0-9]+$ ]]; then
+        echo "::error::REPUSH_BASELINE_TS is '${REPUSH_BASELINE_TS:-<unset>}', not numeric — pass 1's observed start_ts did not reach pass 2, so 'the frame moved' cannot be evaluated. Failing closed rather than falling back to the runner-clock baseline, which would silently change what this pass proves."
+        echo "verdict=failed" >> "$GITHUB_OUTPUT"
+        exit 1
+      fi
+      if [[ "$FRAME_START_TS" -gt "$REPUSH_BASELINE_TS" ]]; then
+        echo "Re-push VERIFIED: frame advanced ${REPUSH_BASELINE_TS} -> ${FRAME_START_TS} (host clock, both operands)."
+        echo "freshness_evidence=verified" >> "$GITHUB_OUTPUT"
+      else
+        echo "::error::RE-PUSH DID NOT DELIVER: the frame still reads start_ts=${FRAME_START_TS} against the ${REPUSH_BASELINE_TS} observed before the re-push — it did not advance. The bounded recovery is spent (one attempt by construction) and this run is terminally red. Do NOT re-run expecting a different result: -target SELECTS resources, it does not force replacement."
+        echo "verdict=failed" >> "$GITHUB_OUTPUT"
+        cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+        exit 1
+      fi
+    elif [[ "$FRAME_START_TS" -lt "$APPLY_START_EPOCH" ]]; then
+      # PASS 1, stale frame — the documented webhook-restart race, or something else
+      # entirely. The predicate decides which, and it is the ONLY thing that may
+      # authorise a production write: allow-list semantics, so anything it cannot
+      # classify falls through to the terminal error below rather than to a re-push.
+      if infra_config_should_repush /tmp/infra-config-status-response.txt "$DPF_REPLACED" "$APPLY_START_EPOCH"; then
+        echo "::warning::STALE FRAME at ${FRAME_START_TS} (apply began ${APPLY_START_EPOCH}) — this matches the documented webhook-restart race. Deferring the verdict to a single bounded re-push; pass 2 renders the terminal result and fails closed."
+        # These three outputs ARE the handoff. Written before anything that can exit,
+        # and the run is only safe because the always() backstop step fails the job if
+        # no pass ever renders a terminal verdict.
+        echo "verdict=pending" >> "$GITHUB_OUTPUT"
+        echo "repush_needed=true" >> "$GITHUB_OUTPUT"
+        echo "observed_start_ts=${FRAME_START_TS}" >> "$GITHUB_OUTPUT"
+        exit 0
+      fi
       echo "::error::STALE FRAME: the status endpoint reports an apply that started at ${FRAME_START_TS}, BEFORE this workflow's apply began at ${APPLY_START_EPOCH}. The handler did not publish a new frame for this run — every green value above belongs to a previous apply. This is the #7220 failure shape: delivery reported against a frame the dying handler never overwrote."
+      echo "verdict=failed" >> "$GITHUB_OUTPUT"
       cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
       exit 1
+    else
+      echo "Frame freshness OK: start_ts=${FRAME_START_TS} postdates this apply's start (${APPLY_START_EPOCH})."
+      echo "freshness_evidence=verified" >> "$GITHUB_OUTPUT"
     fi
-    echo "Frame freshness OK: start_ts=${FRAME_START_TS} postdates this apply's start (${APPLY_START_EPOCH})."
-    echo "freshness_evidence=verified" >> "$GITHUB_OUTPUT"
   else
     # NO push was expected, so no new frame should exist. Requiring a newer frame here
     # is what reds a correct run (measured: run 31636951749, 2026-08-12). Assert the
@@ -239,3 +319,14 @@ else
   cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
   exit 1
 fi
+
+# Terminal verdict. Reached only on a path that did NOT exit: the fresh-frame arm, the
+# unchanged-frame arm (DPF_REPLACED=false), the 404 escape hatch, and pass 2's verified
+# arm. Pass 1's soft-fail exits 0 above having already written verdict=pending, so it
+# never reaches here.
+#
+# Emitted at the tail rather than inside each branch for a specific reason: AC20 licenses
+# citing production run 31714143720 as task 10.4's evidence, and it does so only while the
+# DPF_REPLACED == "false" branch is unchanged by this PR. Writing the verdict inside that
+# branch would have invalidated the one piece of production evidence PR-B has.
+echo "verdict=verified" >> "$GITHUB_OUTPUT"

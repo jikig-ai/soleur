@@ -731,7 +731,200 @@ jobs:
           # vector for the 2026-05-21 freeze, #4804). Set the boolean input on a
           # manual workflow_dispatch ONLY for a documented first bootstrap.
           ALLOW_MISSING_STATUS: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_missing_status_endpoint }}
+          VERIFY_PASS: "1"
         run: bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/infra-config-verify.sh"
+
+      # --- #7104 PR-B: the bounded re-push -------------------------------------------------
+      #
+      # SENSING, ADJUDICATION AND ACTUATION ARE SEPARATE STEPS. This is not stylistic: the
+      # workflow ALREADY uses exactly this boundary for its FIRST apply (`Terraform plan`
+      # plans and grades; `Terraform apply` consumes the saved plan), roughly 400 lines
+      # above. Actuating a SECOND production apply from inside the verification step would
+      # have collapsed a boundary this file already relies on for the first one, and it is
+      # what made four separate fail-opens (plan R20.3-R20.6) possible. Under the split they
+      # are dissolved rather than patched: "a write was attempted" becomes a native step
+      # outcome, the 404 escape hatch cannot green a run that already wrote, and boundedness
+      # is structural because a step cannot run twice in a job.
+      - name: Plan and grade the bounded re-push (#7104)
+        id: repush_plan
+        if: steps.infra_config_gate.outputs.repush_needed == 'true'
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          # tfplan-repush.json carries the live prd Doppler token and the webhook HMAC in
+          # CLEARTEXT (terraform's JSON serialization ignores `sensitive`). The trap is the
+          # only form that survives all of the exits below.
+          trap 'rm -f tfplan-repush.json' EXIT
+
+          if [[ -z "${AWS_ACCESS_KEY_ID:-}" || -z "${AWS_SECRET_ACCESS_KEY:-}" ]]; then
+            echo "::error::S3 backend credentials are empty — the re-push plan would run against no state at all."
+            exit 1
+          fi
+          if [[ ! -s "${CI_SSH_PUB:-}" ]]; then
+            echo "::error::CI_SSH_PUB is empty or missing. -target is transitive and deploy_pipeline_fix reaches hcloud_server.web, whose public_key is file(var.ssh_key_path); variables.tf defaults that to ~/.ssh/id_ed25519.pub, which does not exist on the runner, so the plan would ERROR under -input=false."
+            exit 1
+          fi
+
+          # -replace= AND -target= both naming the same resource: -replace alone would plan
+          # the whole graph, -target alone would plan a no-op (nothing changed since apply #1).
+          # -lock-timeout so a cancelled re-push cannot leave the S3 backend lock held and
+          # block every later apply on the sole no-SSH remediation path.
+          rc=0
+          doppler run --name-transformer tf-var -- \
+            terraform plan \
+              -replace=terraform_data.deploy_pipeline_fix \
+              -target=terraform_data.deploy_pipeline_fix \
+              -var="ssh_key_path=${CI_SSH_PUB}" \
+              -no-color -input=false -lock-timeout=120s -out=tfplan-repush || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::The re-push plan failed (rc=$rc). No production write was attempted."
+            exit 1
+          fi
+
+          terraform show -json tfplan-repush > tfplan-repush.json || {
+            echo "::error::Could not serialize the re-push plan for grading. Refusing to apply an ungraded plan."
+            exit 1
+          }
+
+          # THE GRADE. Measured 2026-08-13 against live prd state: this plan replaces exactly
+          # ONE managed resource, terraform_data.deploy_pipeline_fix (delete,create), with
+          # host_creates=0. That number is not decoration — deploy_pipeline_fix depends_on
+          # infra_config_handler_bootstrap, which carries an SSH remote-exec, and -target is
+          # transitive at the resource level, so a plan that reached it would run a
+          # remote-exec against the cloudflared bridge this job tears down three steps later.
+          GRADED=$(jq '[.resource_changes[] | select(.change.actions != ["no-op"]) | select(.mode == "managed")] | length' tfplan-repush.json)
+          if [[ ! "$GRADED" =~ ^[0-9]+$ ]]; then
+            echo "::error::Could not count changing managed resources in the re-push plan (got '${GRADED}'). Failing closed rather than applying an ungraded plan."
+            exit 1
+          fi
+
+          # The destroy-guard, over the SAME shared filter the first plan uses.
+          counts=$(jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq" tfplan-repush.json)
+          host_creates=$(echo "$counts" | jq -r '.host_creates')
+          if [[ ! "$host_creates" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed on the re-push plan (host_creates='${host_creates}') — the guard did not evaluate, so it cannot be read as clean."
+            exit 1
+          fi
+          if [[ "$host_creates" -gt 0 ]]; then
+            echo "::error::The re-push plan would CREATE ${host_creates} hcloud_server resource(s). This path must never birth a host."
+            exit 1
+          fi
+
+          echo "Re-push plan graded: ${GRADED} changing managed resource(s), host_creates=0."
+          jq -r '.resource_changes[] | select(.change.actions != ["no-op"]) | "  \(.address) | \(.mode) | \(.change.actions|join(","))"' tfplan-repush.json
+          echo "repush_graded=${GRADED}" >> "$GITHUB_OUTPUT"
+
+      # GUARD 3 — the apply is keyed on the GRADE, never on success().
+      #
+      # Keyed on success(), a grading step whose cardinality assert was written as an `echo`
+      # without `exit 1` — or loosened later by an editor "making it work" — would let this
+      # apply run anyway. Keying on the measured literal means loosening the assert also
+      # requires editing this `if:`, so two independent producers must agree, and a grader
+      # that fails to set the output at all skips the apply and trips the backstop below.
+      - name: Apply the bounded re-push (#7104)
+        id: repush_apply
+        if: steps.repush_plan.outputs.repush_graded == '1'
+        working-directory: ${{ env.INFRA_DIR }}
+        run: |
+          set -euo pipefail
+          # No doppler wrapper and no -target/-var here: `terraform apply <planfile>` rejects
+          # both and takes every value from the graded plan file. That is the property the
+          # split buys — what is applied is exactly what was graded.
+          rc=0
+          terraform apply -no-color -input=false -lock-timeout=120s tfplan-repush || rc=$?
+          rm -f tfplan-repush
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::The bounded re-push apply FAILED (rc=$rc). The recovery is spent; pass 2 will render the terminal verdict."
+            exit 1
+          fi
+          echo "Bounded re-push applied."
+
+      # R22.7's free win: the "assert the webhook is alive after every apply" invariant
+      # covered apply #1 only. Under the inline shape that was unfixable; under the split it
+      # is one duplicated step with an `if:`.
+      - name: Verify webhook is alive post-re-push (#7104)
+        if: steps.repush_apply.outcome == 'success'
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+          CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain)
+          CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain)
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+            -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
+            -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
+            "https://deploy.${APP_DOMAIN_BASE}/hooks/infra-config-status" 2>/dev/null || echo "000")
+          if [[ "$code" == "000" || "$code" == "502" || "$code" == "503" ]]; then
+            echo "::error::The webhook listener is DOWN (HTTP $code) after the re-push apply — the re-push bricked the only no-SSH remediation channel."
+            exit 1
+          fi
+          echo "Webhook listener alive after the re-push (HTTP $code)."
+
+      # PASS 2 — the terminal verdict, rendered by a second invocation of the SAME artifact.
+      - name: Verify infra-config apply succeeded (pass 2, post-re-push) (#7104)
+        id: infra_config_gate_pass2
+        if: steps.repush_apply.outcome == 'success'
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+          # HARDCODED false, and this one line is R20.4's entire fix. The escape hatch is a
+          # first-bootstrap affordance; letting it green a run that has ALREADY written
+          # production would be strictly worse than the race it recovers from. Pass 2 is a
+          # different step and never reads the dispatch input.
+          ALLOW_MISSING_STATUS: "false"
+          VERIFY_PASS: "2"
+          # The baseline is pass 1's OBSERVED start_ts, handed over as an argument rather
+          # than re-read. Both operands are then host-clock, so skew cancels.
+          REPUSH_BASELINE_TS: ${{ steps.infra_config_gate.outputs.observed_start_ts }}
+          # DPF_REPLACED is deliberately NOT re-declared here. The `Terraform plan` step
+          # exports it to $GITHUB_ENV, so it reaches this step as a job-level env var
+          # already. An `env:` entry sourcing it from a step output would need that step to
+          # carry an `id:` — it does not — and the expression would silently resolve to the
+          # EMPTY STRING and OVERRIDE the working job env, failing pass 2 closed on
+          # "DPF_REPLACED is '', not true/false". That mistake was made and caught here
+          # while writing this step; it is the exact class Guard 1 pins, because actionlint
+          # reports nothing for it.
+        run: bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/infra-config-verify.sh"
+
+      # THE BACKSTOP. Pass 1's soft-fail is only safe because of this step.
+      #
+      # If a consumer `if:` is ever mis-keyed — a renamed step id, a typo'd output name —
+      # every re-push step SKIPS, pass 2 never runs, and the five success()-gated steps
+      # downstream re-arm: one closes the founder's GitHub issues, one swaps the running
+      # container. The job would go green having verified nothing, which is precisely
+      # #6594's latched false-green reintroduced by its own remedy. actionlint cannot catch
+      # it (a mistyped output name types as {string => string}, so every name is valid, and
+      # the actionlint job is not a required check), so the guarantee has to be here.
+      - name: Terminal verdict backstop (#7104)
+        if: always()
+        env:
+          PASS1_VERDICT: ${{ steps.infra_config_gate.outputs.verdict }}
+          PASS2_VERDICT: ${{ steps.infra_config_gate_pass2.outputs.verdict }}
+          GATE_OUTCOME: ${{ steps.infra_config_gate.outcome }}
+        run: |
+          set -euo pipefail
+          # A step that FAILED has already reddened the job; this backstop exists for the
+          # case where everything reports success and no pass ever adjudicated.
+          if [[ "$GATE_OUTCOME" != "success" ]]; then
+            echo "The gate step did not succeed; the job is already red. Backstop has nothing to add."
+            exit 0
+          fi
+          if [[ "$PASS1_VERDICT" == "verified" || "$PASS2_VERDICT" == "verified" ]]; then
+            echo "Terminal verdict rendered (pass1='${PASS1_VERDICT:-<none>}' pass2='${PASS2_VERDICT:-<none>}')."
+            exit 0
+          fi
+          echo "::error::NO TERMINAL VERDICT was rendered (pass1='${PASS1_VERDICT:-<none>}' pass2='${PASS2_VERDICT:-<none>}'). Pass 1 deferred to a re-push and pass 2 never returned a verdict — the recovery steps were skipped or mis-keyed. This job verified NOTHING; failing closed rather than letting the downstream success()-gated steps re-arm."
+          exit 1
 
       # #7104 — a green run with DEGRADED freshness evidence must still reach someone.
       #
