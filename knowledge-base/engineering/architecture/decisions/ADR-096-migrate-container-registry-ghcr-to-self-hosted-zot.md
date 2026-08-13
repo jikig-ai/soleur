@@ -1029,3 +1029,67 @@ runbook still lists it — by the live-input check now beside it: run the deriva
 build the `/health` URL **from its output**, and assert a `200`. A hand-typed URL tests your
 typing, not the gate's input.
 
+
+## Amendment 2026-08-13 (#7462/#7516) — the inngest cold-boot pull site is migrated, by BAKE not Doppler
+
+This ADR named `cloud-init-inngest.yml` as the last unmigrated pull site in three places
+(§Amendment 2026-07-30 (h), the Phase-3 residuals list, and the Phase-5 blocker note) and
+predicted the failure precisely: *"Task 5.3 revokes the PAT ⇒ its next fresh boot 401s ⇒ the
+host never comes up."*
+
+**The prediction came true early.** The credential stopped working ahead of the deliberate
+Phase-5 retirement it was scheduled for, so the host has been dark — nothing binds `:8288`,
+and every app-originated dispatch fails (#7228). The pull site is now migrated.
+
+### The mechanism DIVERGES from every other pull site, and the divergence is forced
+
+Everywhere else in the fleet, zot config is read **from Doppler at boot**
+(`doppler secrets get ZOT_REGISTRY_URL --project soleur --config prd`). On this host that is
+structurally unavailable, for two independent reasons — and the second is the one that makes
+this an architectural fact rather than a preference:
+
+1. This host's Doppler token is scoped to project `soleur-inngest`, so keys in project
+   `soleur` are unreadable from it.
+2. **Adding the keys to `soleur-inngest/prd` cannot work.** This host runs a fail-**closed**
+   boot isolation self-check asserting every visible non-`DOPPLER_` secret is a known inngest
+   name (`n_total == n_inngest`). Three new keys make that assertion false → `FATAL` → no
+   Vector, no inngest-server, no boot at all. This is exactly what #6500's title records:
+   *"adding ZOT_* trips the 5/5 boot-isolation floor."*
+
+So the config is **baked into `user_data` as terraform template vars**
+(`zot_registry_endpoint`, `zot_pull_user`, `zot_pull_token`), joining the `ghcr_read_*` and
+`betterstack_logs_token` bakes this host already carries for the same stated reason: cold boot
+must not depend on Doppler answering at the boot instant. A future reader comparing the two
+cloud-inits would otherwise read the divergence as an oversight; it is a consequence of the
+credential-isolation decision recorded in the 2026-07-07 amendment above.
+
+Recorded because it is the second load-bearing consequence of that isolation decision: the
+first was that deleting `BETTERSTACK_LOGS_TOKEN` post-cutover FATALs the bootstrap; this is
+that same fail-closed floor forbidding the fleet's standard zot-enrollment path.
+
+### What this does and does NOT do
+
+**Does:** gives the host a zot-primary arm carrying the `@sha256` digest unchanged onto both
+legs (`crane copy` is digest-preserving, so one digest resolves on both registries — verified
+live on 2026-08-13 by run `31681702541`, whose `crane validate --remote` PASS proves the
+**blobs** are present, not merely the manifest); allowlists zot as an insecure registry in the
+docker daemon config; authenticates before the pull; and reports `inngest_zot` /
+`inngest_ghcr_fallback` / a per-leg total-failure marker.
+
+**Does NOT:**
+
+- **Close #6500.** That issue is an *authorization act* gating Phase 5.3–5.5, and the soak's
+  blocker arm reads its state via `gh`. The code landing is necessary, not sufficient: the
+  host must actually be delivered and observed pulling from zot. Delivery is the gated
+  `apply_target=inngest-host-replace` dispatch, out of scope for #7516.
+- **Close the soak's structural blindness to this host.** The Phase-3 residuals list above
+  records that this host reports to Better Stack, not the Sentry `stage:` schema, so *"every
+  query in the soak is structurally blind to it."* **That remains true after this change.**
+  The new markers use stage names identical to the web host's, so one Better Stack query
+  covers both — but the soak's `[freshboot]='stage:"inngest_ghcr_fallback"'` entry is a
+  **Sentry** query, and this host has zero `soleur-boot-emit` occurrences (that emitter ships
+  with the web host's host-script bundle). Routing these markers to Sentry would be a new
+  channel and was deliberately cut. Whoever authorizes 5.3–5.5 must therefore treat the soak's
+  inngest-freshboot count as covering the **web** host only, and read this host's fallback rate
+  from Better Stack separately. This is a live gap, not a resolved one.
+- **Retire the GHCR leg.** It is retained as break-glass, per Phase 5's staged retirement.
