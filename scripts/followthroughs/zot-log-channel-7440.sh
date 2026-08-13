@@ -9,13 +9,21 @@
 # from the directive comment on #7455, so this reference is for a human reader; changing it does not
 # re-route the probe.
 #
-# WHAT IT CLOSES. ADR-184 ships at status `adopting`. Its flip condition is an OBSERVED
+# STATUS AS OF 2026-08-12 (#7455): CLOSED. The condition below was met — first PASS 21:03:51Z, and
+# ADR-184 is now `accepted`. This probe stays enrolled as a REGRESSION detector: a future replace
+# can legitimately return the channel to not-delivered, and the arms below must keep working.
+# Everything from here to the exit contract is the ORIGINAL pre-delivery framing, kept because the
+# arms are still live; read it as history, not as current state.
+#
+# WHAT IT CLOSED. ADR-184 shipped at status `adopting`. Its flip condition is an OBSERVED
 # envelope-stamped row read back OUT of the warehouse. That cannot happen before merge:
 # hcloud_server.registry is cloud-init-only (ADR-096, ADR-172 §8), every registry resource is an
 # OPERATOR_APPLIED_EXCLUSION, and merging this applies NOTHING. Delivery rides the pending step-6
 # `registry-host-replace` of the open zot-pin ordered path.
 #
-# SO TRANSIENT IS THE EXPECTED STEADY STATE UNTIL THAT REPLACE, AND THAT IS NOT A BUG. The
+# SO TRANSIENT WAS THE EXPECTED STEADY STATE UNTIL THAT REPLACE, AND THAT WAS NOT A BUG. (Retired
+# 2026-08-12 (#7455): the replace happened, so a TRANSIENT now means a regression — do not discount
+# one on the strength of this paragraph.) The
 # escalation horizon lives in the tracker body: `delivered_but_silent`, or any undelivered state
 # persisting past 90 days, is an escalation rather than a steady state. Known cost, stated rather
 # than discovered: on the open path the sweeper comments unconditionally before deciding, so a
@@ -323,11 +331,13 @@ if [[ "$n_envelope" -eq 0 ]]; then
   echo "           guard, and runcmd is per-instance, so drift without a replace proves nothing)." >&2
   echo "           The read path IS alive (${n_control} control row(s)), so" >&2
   echo "           this is a MEASURED absence rather than a dark channel." >&2
-  echo "           This is the EXPECTED steady state until the host is replaced: the registry host" >&2
-  echo "           is cloud-init-only, so merging the shipper applied nothing. Delivery rides the" >&2
-  echo "           step-6 registry-host-replace of the open zot-pin ordered path." >&2
-  echo "           Next: nothing to do here. Past the 90-day horizon in the tracker body this" >&2
-  echo "           becomes an escalation rather than a steady state." >&2
+  echo "           SINCE 2026-08-12 THIS IS A REGRESSION, NOT A NOT-YET. The channel was DELIVERED" >&2
+  echo "           2026-08-12T20:54:12Z (run 31639782781) and first read back 21:03:51Z, which" >&2
+  echo "           flipped ADR-184 to accepted. Reaching this arm now means the reporter has" >&2
+  echo "           stopped carrying log_shipper_* fields — i.e. the host regressed to a" >&2
+  echo "           pre-shipper image, or was re-provisioned from one." >&2
+  echo "           Next: INVESTIGATE. Do not wait. (Before delivery this arm correctly read as the" >&2
+  echo "           expected steady state; that advice is retired, not merely dated.)" >&2
   exit 2
 fi
 
