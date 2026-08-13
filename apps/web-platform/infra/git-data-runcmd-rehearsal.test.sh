@@ -946,9 +946,30 @@ PY
 
     cat > "$TMP/r1-drive.sh" <<'R1DRV'
 set -e
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq >/dev/null 2>&1
-apt-get install -y -qq e2fsprogs >/dev/null 2>&1
+# NO apt HERE, DELIBERATELY (#7535). ubuntu:24.04 already ships e2fsprogs at
+# Priority: required — `docker run --rm ubuntu:24.04 dpkg -s e2fsprogs` reports
+# 1.47.0-2.4~exp1ubuntu4.1 — so the `apt-get update && apt-get install e2fsprogs`
+# this replaced installed a package that was already present, at the cost of a full
+# apt cycle against an external mirror. Do not restore it.
+#
+# What changed is the BINDING, not the value. The install ran AFTER `apt-get update`,
+# so it resolved against the LIVE archive and COULD serve a build the image layer does
+# not carry; R1's mke2fs now comes from the image layer instead — mirror-current
+# narrowed to image-current. Measured 2026-08-13: the archive candidate was identical
+# to the image at 1.47.0-2.4~exp1ubuntu4.1 (`apt-get install -s` reported 0 upgraded),
+# so today the value is the same either way — only the binding moved.
+#
+# That is the faithful direction because the e2fsprogs whose output the fingerprint
+# must PREDICT is the cloud image's own (git-data-birth-fs-fingerprint.txt, "WHY AN
+# ALLOWLIST AND NOT SET-EQUALITY"). The fingerprint asserts nothing about e2fsprogs
+# versions — that block is marked CONTEXT FOR FAILURE MESSAGES ONLY — not asserted;
+# its subject is the birth filesystem's mount-time module dependency.
+#
+# This does NOT make R1 bump-immune. The allowlist is FAIL-CLOSED: a bump emitting only
+# already-classified features (orphan_file, metadata_csum_seed — both pre-classified
+# in-tree) stays green, but a bump emitting a NOVEL feature still reds R1(a) as
+# unclassified, by design. The remedy there is a one-line classification with a
+# rationale, never a wholesale fixture refresh.
 for arm in shipped mutant prefix unclass; do
   img="/tmp/$arm.img"
   # 10G sparse. Measured: a backing file under ~3MB falls into mke2fs's `floppy` bucket and
@@ -1012,7 +1033,11 @@ PY
     # (a) fail-closed against any FUTURE flag, not just the one that bit us.
     case "$_r1_ship" in
       *:unclassified=-:*) pass ;;
-      "") fail "R1(a): no verdict for the shipped arm — the container produced no feature line" \
+      # NOFEATURES FIRST, for the same reason the three controls below do it (see the
+      # note above them): without it, an arm that produced NO FILESYSTEM AT ALL falls to
+      # `*)` and prints the allowlist message with the raw token interpolated — blaming
+      # the template for what is an environmental fault (mke2fs absent from the image).
+      *NOFEATURES*|"") fail "R1(a): the shipped arm produced no filesystem — R1 makes NO claim about the template here (is mke2fs present in the image?)" \
                "$(tail -5 "$TMP/r1out/stdout" 2>/dev/null)" ;;
       *) fail "R1(a): the birth filesystem carries feature(s) absent from the allowlist: ${_r1_ship#*unclassified=}" \
               "Classify each in $_r1_fix with its mount-time class before shipping. Do NOT 'refresh' the fixture wholesale — the point is the classification, not the diff. (mke2fs measured 1.47.0 in ubuntu:24.04 / 1.47.2 on the authoring host.)" ;;
@@ -1020,7 +1045,11 @@ PY
     # (b) THE invariant, stated directly.
     case "$_r1_ship" in
       *:moduledep=-:*) pass ;;
-      "") fail "R1(b): no verdict for the shipped arm" "$(tail -5 "$TMP/r1out/stdout" 2>/dev/null)" ;;
+      # NOFEATURES FIRST — same reason as (a), and it matters more here: the `*)` message
+      # below is the #7204 boots-dark claim, so an absent mke2fs would otherwise be
+      # reported as a template regression that never happened.
+      *NOFEATURES*|"") fail "R1(b): the shipped arm produced no filesystem — R1 makes NO claim about the template here (is mke2fs present in the image?)" \
+               "$(tail -5 "$TMP/r1out/stdout" 2>/dev/null)" ;;
       *) fail "R1(b): the birth filesystem carries a module-dep feature: ${_r1_ship##*moduledep=}" \
               "This is the #7204 defect class: mounting it makes ext4 request a kernel module the target image does not ship, so the host boots dark with mount(8) rc=32. See $_r1_fix." ;;
     esac
