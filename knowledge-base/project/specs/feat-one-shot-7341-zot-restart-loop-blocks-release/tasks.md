@@ -11,15 +11,15 @@ established and must not be re-derived.
 
 ## Phase 0 — Setup
 
-- [ ] 0.1 File the distinct tracker issue: *"P1: releases blocked at the zot mirror — large-layer
+- [x] 0.1 File the distinct tracker issue: *"P1: releases blocked at the zot mirror — large-layer
       blob uploads are cut at zot's 60 s HTTP deadline"*. Labels `priority/p1-high`, `type/bug`,
-      `domain/engineering`. Record its number as `<new-issue>`.
-- [ ] 0.2 File a **second, dedicated** follow-through tracker (`<tracker>`), label `follow-through`.
+      `domain/engineering`. Record its number as `<new-issue>` = **#7555**.
+- [x] 0.2 File a **second, dedicated** follow-through tracker (`<tracker>` = **#7556**), label `follow-through`.
       It must NOT be `<new-issue>` — the PR closes that one and `sweep-followthroughs.sh` lists
       `--state open`, so a probe hosted there would never run.
-- [ ] 0.3 Comment on #7341 with the two refutations (stale `100% full`; `zot_restarts=0` across 48 h).
+- [x] 0.3 Comment on #7341 with the two refutations (stale `100% full`; `zot_restarts=0` across 48 h).
       Do **not** close it; do **not** touch `scripts/followthroughs/zot-fill-rate-7341.sh`.
-- [ ] 0.4 Push an `ADR-189` stub early to claim the ordinal. Re-verify across **all** `origin/*` refs
+- [x] 0.4 Push an `ADR-189` stub early to claim the ordinal. Re-verify across **all** `origin/*` refs
       first — ADR-187 is already double-claimed on two branches.
 
 ## Phase 1 — Make the copy arm diagnose itself (no host replace)
