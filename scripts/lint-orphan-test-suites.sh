@@ -143,8 +143,27 @@ sed -nE 's/^[[:space:]]*run_suite[[:space:]].*[[:space:]]bash[[:space:]]+"?([A-Z
 # With the kill switch set, a moved handler still fails CLOSED and fast: the flag reads as an
 # unknown TEST_GROUP, the runner exits 2, and the `globs_rc != 0` branch below fires. The switch
 # removes the 900 s wait, never the detection.
+# `env -u TEST_GROUP` is the OTHER half, and it is the one that matters most.
+#
+# The fallback this whole block relies on is "an unhandled `--print-suite-globs` reads as an
+# unknown TEST_GROUP, so the runner exits 2 and we fail closed". That sentence is only true when
+# TEST_GROUP is UNSET. This linter runs as a registered suite inside `test-all.sh`, which exports
+# `TEST_GROUP=<shard>` — so the child inherits a *valid* group, the unknown-group branch is never
+# reached, and instead of exiting 2 the mutant RUNS THE ENTIRE SHARD. That shard contains this
+# suite, which mutates and re-invokes again: unbounded recursion.
+#
+# Measured 2026-08-13, and it is not subtle:
+#   TEST_GROUP unset    -> 17 rows, 65 passed, 10 s
+#   TEST_GROUP=scripts  -> still running at 120 s, three nested copies of the suite alive at once
+#
+# It reproduces in CI, which sets TEST_GROUP per shard, and in the documented local exit gate
+# (`TEST_GROUP=scripts bash scripts/test-all.sh`). It did NOT reproduce standalone, which is
+# exactly why it survived: the suite's own green run leaves TEST_GROUP unset.
+#
+# Clearing it makes the fail-closed path unconditional — independent of whatever the caller's
+# environment happens to hold, which is the only form of "fail closed" worth the name.
 globs_rc=0
-SOLEUR_DISABLE_SESSION_STATE=1 bash "$RUNNER" --print-suite-globs > "$WORK/globs" 2>/dev/null || globs_rc=$?
+env -u TEST_GROUP SOLEUR_DISABLE_SESSION_STATE=1 bash "$RUNNER" --print-suite-globs > "$WORK/globs" 2>/dev/null || globs_rc=$?
 globs_n=$(wc -l < "$WORK/globs" | tr -d ' ')
 if (( globs_rc != 0 )) || (( globs_n < 1 )); then
   echo "ERROR: 'bash scripts/test-all.sh --print-suite-globs' exited ${globs_rc} and printed ${globs_n} pattern(s) -- this linter derives the auto-discovery surface from that flag, so without it every glob-registered suite would be reported as an orphan. Restore the flag rather than re-copying the patterns here." >&2

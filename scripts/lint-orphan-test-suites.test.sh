@@ -535,8 +535,33 @@ assert_lacks "M16 — and the suite is not also reported as an orphan" "tools/no
 # rather than restated. MIN_FIXED is the count produced by no loop, and it is the only number
 # here ever edited by hand: 1 harness + 3 C0 + 3 M1 + 3 M2 + 3 M3 + 2 M4 + 1 M5 + 3 M6 + 2 M7
 # + 3 M8 + 4 M9 + 3 M10 + 2 M11 + 2 M12 + 4 M13 + 3 M14 + 3 M15 + 3 M16 + 1 normalisation = 49.
-MIN_ROWS=17
-MIN_FIXED=49
+# --- R1: the linter must not inherit the caller's TEST_GROUP ------------------------------
+#
+# WHY THIS IS A ROW AND NOT A COMMENT. The linter's fail-closed path for an unanswered
+# `--print-suite-globs` is "the flag reads as an unknown TEST_GROUP, so the runner exits 2".
+# That holds ONLY when TEST_GROUP is unset. This suite runs as a registered suite inside
+# `test-all.sh`, which exports `TEST_GROUP=<shard>` — so the child inherits a VALID group, never
+# reaches the unknown-group branch, and runs the whole shard instead. The shard contains this
+# suite. It mutates and re-invokes. Unbounded recursion.
+#
+# Measured 2026-08-13: TEST_GROUP unset -> 65 passed in 10 s; TEST_GROUP=scripts -> still running
+# at 120 s with three nested copies alive. It reproduces in CI (which sets TEST_GROUP per shard)
+# and in the documented local exit gate, and it did NOT reproduce standalone — which is precisely
+# why a green run of this very suite could not see it.
+#
+# Asserted structurally, on the invocation construct rather than a bare token: a comment
+# mentioning TEST_GROUP must not satisfy it. cq-assert-anchor-not-bare-token.
+_r1_line=$(grep -nE '^[[:space:]]*env -u TEST_GROUP .*bash "\$RUNNER" --print-suite-globs' \
+             "$REPO_ROOT/scripts/lint-orphan-test-suites.sh" || true)
+if [[ -n "$_r1_line" ]]; then
+  pass "R1 — the runner query clears TEST_GROUP (no shard inheritance, no recursion)"
+else
+  fail "R1 — scripts/lint-orphan-test-suites.sh queries the runner WITHOUT 'env -u TEST_GROUP'. Inside test-all.sh the child inherits a valid shard name, the unknown-group fail-closed branch is unreachable, and an unanswered --print-suite-globs runs the whole shard recursively."
+fi
+ROWS=$(( ROWS + 1 ))
+
+MIN_ROWS=18
+MIN_FIXED=50
 MIN_ASSERTIONS=$(( MIN_FIXED + (2 * ${GLOB_MEMBER_N:-0}) ))
 echo ""
 if (( ROWS < MIN_ROWS )); then
