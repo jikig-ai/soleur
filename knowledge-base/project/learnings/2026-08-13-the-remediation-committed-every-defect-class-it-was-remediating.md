@@ -183,6 +183,26 @@ script's own comment contradicted my narrative.
     A guard that green-lights while a subprocess dies is reporting on a check it did not run, and
     this whole PR is the argument for why that is the same defect as no check at all.
 
+16. **I destroyed the PR body with a read-modify-write over an unverified read.** `gh pr view
+    --json body > /tmp/pb.md` hit `TLS handshake timeout`; the READ failed and left the file
+    near-empty. I appended a new section to that empty file and pushed it back as the body,
+    replacing ~32 kB — including `Closes #7450` — with 1.3 kB. The `&&` chain still fired,
+    because the *edit* succeeded; only the read had failed, and nothing was checking it. Auto-merge
+    was queued at the time, so a merge would have landed without closing the issue it exists to
+    close. **Prevention:** a read-modify-write whose read crosses a network needs a completeness
+    gate on the READ, not just a success check on the WRITE — assert a floor (bytes, and a sentinel
+    substring the artifact must contain) and abort before writing. Then verify by reading back and
+    grepping for the sentinel; an exit code from the writer is not evidence the content survived.
+    Generalisation: `A && B` proves B ran, never that A produced what B consumed.
+17. **A spec artifact opened an unterminated fence in the paragraph describing how it fixed an
+    unterminated fence.** A four-backtick inline span sat at column 0; a fence can interrupt a
+    paragraph in CommonMark, so it opened a code block instead of quoting one.
+    `lint-infra-no-human-steps.py` fails CLOSED on unparseable markdown, so it declined to scan
+    the file at all — the cost was suppressed coverage, not a cosmetic nit, and the green it
+    denied was the honest signal. **Prevention:** when prose must QUOTE a fence, keep the span
+    mid-line, and read a fail-closed lint's message as "I could not check this" rather than "this
+    is wrong" — the two demand opposite responses.
+
 ## Disposition
 
 The mechanical gate this class actually needs — *every `*.test.sh` whose final gate is
