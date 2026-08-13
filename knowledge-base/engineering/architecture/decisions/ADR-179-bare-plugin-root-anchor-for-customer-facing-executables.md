@@ -4,15 +4,18 @@ status: accepted
 date: 2026-08-11
 amends: [ADR-093]
 related_adrs: [ADR-074, ADR-091, ADR-093, ADR-151, ADR-155, ADR-171]
-related: [7442, 7450, 6222, 7474, 7452]
+related: [7442, 7450, 6222, 7474, 7452, 7453, 7502]
 amended_by:
   - "#7474 (2026-08-11) — producer presence as a fourth precondition; see ## Amendment 2026-08-11"
+  - "#7450 (2026-08-12) — the skills secret-gate subset; decisions 8/9/10 and the §R1 settlement from the CTO ruling; then amendment items A10 (§R3 measured on the skill surface) and A11 (root-outside-worktree REJECTED); see ## Amendment — 2026-08-12"
 related_plans:
   - knowledge-base/project/plans/2026-08-11-fix-sync-plugin-root-anchoring-plan.md
   - knowledge-base/project/plans/archive/20260812-125433-2026-08-11-fix-sync-producer-freshness-probe-plan.md
+  - knowledge-base/project/plans/2026-08-12-fix-git-root-fallback-untrusted-anchor-plan.md
 related_specs:
   - knowledge-base/project/specs/feat-one-shot-7442-sync-plugin-root-anchoring/tasks.md
   - knowledge-base/project/specs/archive/20260812-145032-feat-one-shot-7474-sync-producer-freshness-probe/tasks.md
+  - knowledge-base/project/specs/feat-one-shot-7450-git-root-anchor-untrusted/tasks.md
 brand_survival_threshold: single-user incident
 ---
 
@@ -103,14 +106,35 @@ The path is **payload-relative** — the root already *is* `plugins/soleur`, so
 `${CLAUDE_PLUGIN_ROOT}/plugins/soleur/scripts/foo.sh`. This is the highest-frequency way to
 get the migration wrong.
 
-Mandatory companion, one per command file, before the first producer:
+Mandatory companion, before the first producer, in every command file and in every
+**secret-gate** skill file (scope extended by the 2026-08-12 amendment):
+
+> **Scoped to SECRET-GATE skill files on 2026-08-12 (#7450 review-finding C7).** The
+> amendment first widened this to "command **or skill** file", which the amending PR then
+> violated with a site it shipped: `compound/SKILL.md` is a skill file with a producer
+> (`token-efficiency-report.sh`) and no companion preflight. The wider wording was also
+> wrong on the merits — that producer prints an advisory cost table and its exit code
+> authorises nothing, so halting there is a pure operator regression with no security
+> benefit, which is the same asymmetry §R5's correction records. The population is now the
+> one `plugin-root-anchoring.test.ts` G5 actually pins: `incident`, `legal-generate`,
+> `linear-fetch`. The ~105 remaining non-gate `skills/**` sites stay deferred to #7453.
+
 
 ```bash
-test -d "${CLAUDE_PLUGIN_ROOT}/scripts" || {
-  echo "soleur:sync — plugin root unresolved; refusing to run producers CWD-relative (ADR-179)." >&2
-  exit 1
-}
+[ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
+  && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
+  || { echo "soleur — cannot verify the Soleur plugin installation; refusing to run producers (ADR-179)." >&2
+       exit 2; }
 ```
+
+> **This block was REPLACED on 2026-08-12 (#7450).** It previously shipped
+> `test -d "${CLAUDE_PLUGIN_ROOT}/scripts" || { …; exit 1; }` — the exact directory-shape
+> check that §(a) *Correction (review, measured)* above records as **bypassable**, where a
+> `test -d` preflight passed and an attacker-chosen payload executed. The defeated form was
+> therefore prescribed by this ADR's own Decision while being refuted 30 lines above it, and
+> it appeared **nowhere** in `plugins/` — what actually shipped was the manifest+name check
+> now written here. An agent following Decision 2 literally would have implemented the
+> bypassable guard. Extending the scope without replacing the block would have propagated it.
 
 ### (b) `${CLAUDE_PLUGIN_ROOT:?<message>}` — rejected
 
@@ -214,11 +238,40 @@ the workspace.
 - **A fourth precondition — producer PRESENCE — was added 2026-08-11 (#7474).** Identity is
   not freshness: a root that is authentically Soleur can still not carry a producer. See
   `## Amendment 2026-08-11 (#7474)` below.
-- The `~100` `${CLAUDE_PLUGIN_ROOT:-…}` sites under `plugins/soleur/skills/**` are **not**
-  migrated here. That migration requires changing `server/safe-bash.ts`'s exact-literal set
-  and `plugin-root-list-carveout-coupling.test.ts`'s regex, which does not belong behind a
-  P1 customer bug fix — bundling an allowlist edit with a bug fix is how allowlist
-  regressions ship. Deferred, blocked on this ADR.
+- ~~The `~100` `${CLAUDE_PLUGIN_ROOT:-…}` sites under `plugins/soleur/skills/**` are **not**
+  migrated here … Deferred, blocked on this ADR.~~ **Superseded 2026-08-12 (#7450).** The
+  skills surface is no longer wholly deferred and is no longer "blocked on this ADR" — the
+  ADR is accepted, so nothing is blocked on it. The **secret-gate subset** is migrated (see
+  `## Amendment — 2026-08-12`); the remaining ~105 non-gate sites stay deferred to **#7453**,
+  for the reason above that survives: that migration edits `safe-bash.ts`'s exact-literal set
+  and `plugin-root-list-carveout-coupling.test.ts`'s regex, and bundling an allowlist edit
+  with a security fix is how allowlist regressions ship. Those ~105 are **unmigrated, not
+  endorsed** — a new site must use the bare anchor.
+- **The negative branch of §R3 has a larger blast radius than "the operator-experience
+  calculus" implies, and it is stated here rather than left to the halt-gate note.** If the
+  loader did not substitute, four skills — `incident`, `legal-generate`, `linear-fetch`,
+  `trigger-cron` — would halt on **every invocation, for every CLI operator, permanently**,
+  because the bare form expands to a root-anchored path that cannot exist. Not a degraded
+  mode: a total loss of those skills, including the redaction gates that make post-mortems
+  and legal drafts safe to publish. And the failure would be **invisible in aggregate** —
+  observability layer 7 (ADR-171) has no durable artifact on this path, so the only evidence
+  is each operator's terminal. That is why §R3 was gated on a *measurement* rather than an
+  argument, and why the halt messages now carry `SOLEUR_*_HALT` markers.
+  **Corrected 2026-08-12 (round-2 review).** This bullet first read *"a mass halt should be
+  visible in telemetry on the first occurrence, not inferred from support volume"*, and that
+  was **false as written**: the markers had been added to payload markdown while NO consumer
+  matched them, on either surface. What they buy, and only this: on the **hosted** surface they
+  are now in `MARKER_RE` (mirrored, deliberately not paged — a customer with no plugin
+  installed must not page anyone); on the **CLI** surface they make each halt individually
+  self-describing and machine-discriminable *in the operator's session*, so a caller can branch
+  on `reason=redaction-ineffective` versus `reason=plugin-root-unverified` instead of parsing
+  prose. They do **not** make halts countable across the installed base — that needs a durable
+  artifact, which layer 7 does not have here, and it remains open at **#7452**, exactly as this
+  §Consequences list already records for `SOLEUR_SYNC_ROOT_UNRESOLVED` three bullets above. Two
+  markers of identical construction had contradictory claims in one document.
+  **The branch did not occur** — §R3 is measured positive on both surfaces (see
+  `## Amendment — 2026-08-12`) — but the residual is recorded because the measurement is
+  construction-specific, not a flat proof.
 - `EXACT_LITERAL_SAFE_COMMANDS` in `safe-bash.ts` is **prompt-suppression, not an execution
   gate** — the committed docstring at `plugin-root-list-carveout-coupling.test.ts:26-29`
   says trust comes from the path anchor and that drift is "UX friction, never untrusted-code
@@ -228,14 +281,32 @@ the workspace.
 
 ### Residuals — recorded, deliberately not fixed here
 
-- **R1.** The monorepo sentinel is CWD-relative and therefore shares #7450's threat model:
-  any tree containing `plugins/soleur/.claude-plugin/plugin.json` satisfies it, including a
-  `gh pr checkout` of a contributor PR. Correct for the marketplace customer (who never
-  satisfies it); **not** a defense on the review path. Tracked in #7450.
+- **R1. SETTLED 2026-08-12 by #7450 — scoped, not strengthened.** *(Previously: "the
+  monorepo sentinel is CWD-relative and therefore shares #7450's threat model … not a
+  defense on the review path. Tracked in #7450." That text conflated two claims; the
+  scoping below is the resolution, and the tracking reference is discharged.)*
+
+  The monorepo sentinel answers *"is this a Soleur monorepo checkout?"* — a
+  **surface-selection** predicate, not a **trust** predicate. It correctly excludes the
+  marketplace customer, who never satisfies it. It cannot exclude a `gh pr checkout` of a
+  contributor PR, and **no CWD-resident fact can**, because every byte in the checked-out
+  tree is contributor-writable — including any sentinel added to authenticate it. The
+  correct disposition is therefore not a stronger sentinel but the removal of trust
+  decisions from CWD-resident operands: where the target ships in the payload, decision 1's
+  bare anchor applies; where the target is monorepo-only — `.claude/hooks/lib/incidents.sh`
+  — the invocation is inverted to an inert marker captured hook-side (decision 9), so no
+  operand exists to shadow; and the rejected forms are banned from operator configuration
+  as well (decision 8). Under these, the sentinel is never load-bearing for trust on the
+  review path, which is what R1 was recording.
+
+  **Re-routed, not closed here:** a review session opened *inside* a contributor-checked-out
+  worktree executes that tree's `.claude/hooks/*.sh` on every tool call. That is a
+  **strictly larger** exposure than any path anchor, it is not an anchoring defect, and it
+  must not hold #7450 open. **Tracked at #7502.**
 - **R2.** `exit 2` halts the bash subprocess, not the agent. The "run the block, not the
   bare command" construction is what makes the halt load-bearing; guard condition 5 keeps it
   from being edited away.
-- **R3.** **The substitution mechanism is CORROBORATED, not proven.** An in-session A/B
+- **R3.** **The substitution mechanism is CORROBORATED, not proven.** *(SUPERSEDED 2026-08-12 by amendment item **A10**: the direct arm was executed on both the command and skill surfaces, with an ambient-decoy control. Read A10 before relying on this paragraph.)* An in-session A/B
   observed the harness substituting a bare token in plugin markdown while leaving `:-`
   literal, but its two arms differed in *two* variables (bare-vs-`:-` **and**
   prose-inline-span-vs-bash-fence), so that observation alone does not separate them. The
@@ -289,7 +360,11 @@ the workspace.
   | `social-distribute` | `bash scripts/lint-distribution-content.sh` |
   | `release-docs` | `bash scripts/sync-readme-counts.sh` |
 
-- **R5.** **A severity-distinct subset of #7453, called out so it is not processed in file
+- **R5. CLOSED 2026-08-12 by #7450** — see the amendment at the foot of this ADR. Retained
+  in full because the enumeration is what the amendment closes against, and because one of
+  its own claims was measured false.
+
+  **A severity-distinct subset of #7453, called out so it is not processed in file
   order.** Four shipped sites plus one test carry the **rejected option (d)** form
   `${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}` — not merely the
   `:-` form, but the git-root variant this ADR rejects as strictly worse because it *looks*
@@ -304,6 +379,29 @@ the workspace.
   and after `gh pr checkout` the git root is the contributor's tree. Tracked at #7450 (P0).
   #7453's framing as a "~98-site convention migration" flattens that severity; this subset
   goes first.
+
+  > **Correction (2026-08-12, #7450): the sentence above is false for one of the four.**
+  > `token-efficiency-report.sh` is **not** a secret-handling gate — it prints an advisory
+  > top-3 cost table and appends `te-*` warnings to `.claude/.rule-incidents.jsonl`. Its exit
+  > code authorises nothing. The four shipped sites are **three classes, not one**: two
+  > secret gates that already had a `[[ -r ]]` guard (`incident`, `legal-generate`); one
+  > secret gate that had **no guard at all** (`linear-fetch` — an unresolved root yielded
+  > exit 127 and empty stdout, which is the shape an agent persists as "the redacted text");
+  > and one advisory reporter (`compound`). The distinction is load-bearing rather than
+  > pedantic: the fail-closed asymmetry that justifies halting rests on the gate authorising
+  > secret emission, so a **non-blocking** skip guard is the right shape for `compound` and a
+  > halt is not. Halting knowledge capture over a missing cost table would be a pure operator
+  > regression with no security benefit. Flattening the four into one class is what would have
+  > produced that regression.
+  >
+  > **Correction (2026-08-12, #7450 review-finding C6): that guard was NOT shipped.** An
+  > earlier revision of this paragraph said `compound` "correctly received" it. It did not —
+  > `7840b2a42` descoped the guard to stay inside a byte budget and landed the anchor swap
+  > only, so `compound/SKILL.md` carries a bare, unguarded invocation today. The class
+  > analysis above is unchanged and still correct; what was wrong was the tense. Recording a
+  > design as a delivered control is precisely the defect class this PR exists to close, so
+  > it is corrected here rather than quietly satisfied by shipping the guard late.
+  > Tracked with the other non-gate `skills/**` work at #7453.
 
 - **R6.** **Deferrals are tracked at #7452** (remaining follow-ups, incl. the unmodelled
   self-hosted-CLI C4 topology) **and #7453** (the `skills/**` convention migration). Named
@@ -431,8 +529,22 @@ would is deferred (#7452).
 
 - **Amends ADR-093.** Its `${CLAUDE_PLUGIN_ROOT:-<preserved-anchor>}` guidance remains
   correct for the server surface it was written against; this ADR scopes it out of the
-  customer-facing command surface. ADR-093 §Amendment's premise that "git-root = the
-  operator's own checkout" is falsified on the review path — see #7450.
+  customer-facing command surface **and, since 2026-08-12 (#7450), out of the secret-gate
+  subset of the skills surface** — the scope is no longer command-surface-only. ADR-093
+  §Amendment's premise that "git-root = the operator's own checkout" is falsified on the
+  review path — see #7450. That paragraph is deliberately retained byte-identical in ADR-093
+  and carries an inline falsification notice, because it is the record of what was believed;
+  two ADRs quote its wording as a content anchor, so it must not be reworded to satisfy a
+  grep.
+- **Supersedes the 2026-07-08 plugin-root-migration learning** on one point:
+  `learnings/best-practices/2026-07-08-plugin-root-migration-ac-grep-scope-and-anchor-preservation.md`
+  instructed *"preserve the EXACT original fallback anchor per site — never homogenize"* and
+  named the git-root form for these three redaction gates specifically. It carries
+  `synced_to: [work, plan]`, so it was agent-retrievable and would have been followed. It now
+  carries a superseding banner and inline markers.
+- **#7502** carries the half of §R1 that is not an anchoring defect: a review session opened
+  inside a contributor-checked-out worktree executes that tree's `.claude/hooks/*.sh` on every
+  tool call. Strictly larger than any path anchor, and deliberately not held inside #7450.
 - **ADR-091** establishes the rule-metrics producer as local, which is the substantive
   reason `rule-prune` is monorepo-only.
 - **ADR-155** supplies the closed-vocabulary-over-free-form-token precedent reused in
@@ -453,3 +565,308 @@ would is deferred (#7452).
 - **State what is out of scope rather than implying closure.** The guard's docstring names
   its blind spots (skills corpus, shipped payload scripts) instead of reading as full
   coverage.
+
+## Amendment — 2026-08-12 (#7450): the skills secret-gate subset
+
+`status: accepted` is unchanged. This amendment **retires a deferral; it does not extend a
+scope.** Decision 1 already says "every customer-facing executable path in **plugin
+markdown**", which governs `SKILL.md`. What deferred the *work* was the Consequences ("the
+`~100` … sites under `plugins/soleur/skills/**` are **not** migrated here … Deferred, blocked
+on this ADR"), and §R5 named these five sites by path. So this subset was already governed
+both normatively and by name.
+
+**1. Deferral retired for the gate subset only.** The five §R5 sites now carry the canonical
+bare anchor. The remaining ~105 non-gate `skills/**` sites stay deferred to #7453.
+
+**2. Decision 2's code block was replaced, not merely rescoped.** See the note under §(a).
+This is the substantive correction: the ADR prescribed the shape its own review had measured
+as bypassable.
+
+**3. This subset needed NO `safe-bash.ts` change, so that coupling never blocked it.**
+Measured: `EXACT_LITERAL_SAFE_COMMANDS` is a closed set of exactly two literals, both
+`worktree-manager.sh list|ls`; none of `redact-sentinel.sh`, `redact-linear-urls.sh` or
+`token-efficiency-report.sh` appears anywhere in that file (0 hits each), and
+`SAFE_BASH_PATTERNS` carries no `^bash <path>` regex at all. All three therefore fall to the
+review gate both before and after the migration — behaviour-neutral on that surface under
+**either** branch of §R3. `plugin-root-list-carveout-coupling.test.ts` is likewise unaffected
+(it scopes to `worktree-manager.sh list|ls`). The Consequences cite both as blockers for the
+wider migration; they block the `list`/`ls` sites, not this subset.
+
+**4. The fail-closed asymmetry — why a secret gate is SAFER to migrate than `/soleur:sync`
+was.** §R3a scopes the "becomes runnable" claim to the substitution branch because a refusing
+`/soleur:sync` is a broken feature. For a gate whose exit code authorises secret emission, a
+refusal **is** the correct unresolved-root behaviour: an unresolved gate that halts leaks
+nothing, whereas the form it replaces silently resolved the reviewed party's scanner and
+reported a pass. This subset is therefore sound under **both** branches of §R3 — strictly
+stronger than this ADR's position on its original surface. That is the substantive new
+reasoning, and it is why the migration did not wait on item 5.
+
+**5. §R3 upgraded from "corroborated" to "proven for the measured construction" — by
+measurement, not argument.** Measured 2026-08-12 in a live CLI session: `commands/go.md`
+ships a bare `${CLAUDE_PLUGIN_ROOT}` inside a fenced `bash` block and the text **delivered to
+the agent** carried the absolute installed root, while `echo "[${CLAUDE_PLUGIN_ROOT:-<UNSET>}]"`
+in that same session printed `[<UNSET>]`. Substitution is therefore a **loader text-transform
+performed before the text is ever executed**, not a shell expansion. In the same session the
+`:-` form arrived **unsubstituted** in two `SKILL.md` files, which confirms empirically that
+the transform is **exact-literal** — the reasoning behind rejecting options (b) and (d) is now
+a measurement rather than an inference, and it also shows the transform pass runs over
+`SKILL.md` text.
+
+*Scope of the claim, stated honestly:* the direct bare-token-inside-a-`SKILL.md` arm could not
+be executed. A throwaway skill carrying a bare token was written and invoked; the Skill tool
+returned `Unknown skill`, because the skill registry is built at session start. That arm needs
+a fresh session. **Do not restate this as "proven" flatly.**
+
+---
+
+### Amendment continued — 2026-08-12 (#7450 review panel + CTO ruling)
+
+Items 1–5 above covered the gate subset. The review panel then scoped three further
+surfaces, all of which failed for the same reason, and the binding decision was routed to
+the `soleur:engineering:cto` agent because both instruments this ADR sanctions were blocked
+on its own §R1. The ruling and its rejected alternatives are recorded at
+`knowledge-base/project/specs/feat-one-shot-7450-git-root-anchor-untrusted/cto-ruling-adr179-fork.md`.
+
+**6. §R5 enumerated by SYNTAX, not by STAKES — and that is why the highest-stakes site was
+missed.** §R5's five sites were found by grepping one anchor form. `trigger-cron/SKILL.md`
+sat on `${CLAUDE_PLUGIN_ROOT:-plugins/soleur}` and invokes a script that reads
+`INNGEST_MANUAL_TRIGGER_SECRET` from Doppler at `-c prd` and fires a real production event,
+with **no env-var precondition at all** — strictly cheaper to exploit than the redaction
+gates this issue was filed about. `redact-sentinel.test.sh` test 18c reported "zero …
+remain anywhere under `plugins/soleur/`" while that site stood, because its needle keyed on
+the git-rev-parse variant. Migrated under decision 1; no new instrument was required,
+because the target is IN the payload.
+
+**7. Twenty `source` sites were not enumerable at all by the `SKILL.md` grep.** Three
+payload **scripts** — `gdpr-gate.sh` (itself a compliance gate), `net-issue-flow.sh` (a ship
+gate) and `token-efficiency-report.sh` — derived a root from `git rev-parse --show-toplevel`
+and sourced `.claude/hooks/lib/incidents.sh` from it. Amendment item 7's predecessor had
+already migrated `token-efficiency-report.sh`'s *code* root to the plugin anchor and left
+its lib resolution git-root-derived; the ADR had touched the file and not closed it.
+
+### Decision 8
+
+**The rejected anchor forms are banned in operator configuration, not only in plugin
+markdown.** `.claude/settings.json` `permissions.allow[]` may contain neither
+`$(git rev-parse` nor `${CLAUDE_PLUGIN_ROOT:-`. An auto-approval entry is read by agents as
+documentation of the sanctioned form, and a `permissions.allow` match executes with **no
+prompt at all** — the cheapest exploitation shape in the corpus. The entry removed under
+this decision was measured DEAD before removal (all 22 `git-worktree` invocation sites emit
+the `:-` form, so it matched nothing Soleur emits); it was removed anyway, for the
+documentation-by-example reason. It is deliberately **not replaced** with an anchored
+entry: per item 5 the loader substitutes the token before delivery, so the delivered command
+carries an absolute installed path that no static literal can match, and an anchored allow
+entry would be a dead entry replacing a dead entry. Prompt-suppression for
+`worktree-manager.sh` belongs with the `git-worktree` migration in #7453, where
+`EXACT_LITERAL_SAFE_COMMANDS` must move in the same commit.
+
+### Decision 9
+
+**When the target is monorepo-only and therefore unanchorable, invert the invocation rather
+than choosing an anchor.** Payload markdown emits an inert `printf`/`echo` marker; a
+monorepo-only PostToolUse hook parses the marker and performs the privileged action,
+resolving its own library through `${CLAUDE_PROJECT_DIR}`. **Decision 1 governs *paths*; it
+does not require that every capability be expressed as a path.** That misreading — treating
+this ADR's options table as exhaustive over *designs* when it is exhaustive over *anchor
+forms* — is what made §E read as a deadlock.
+
+Preferred over **relocation into the payload**, which would manufacture on every customer
+machine the exact input decision 4 reason 1 says must not exist there (and would not fix the
+vector: a relocated lib still needs a data root, whose current default is the
+location-derived fail-open this ADR names at decision 3). Preferred over **sentinel
+gating**, which §R1 records as no defense on the review path — gating this vector behind a
+gate the review path satisfies would repeat the error item 2 corrected.
+
+It satisfies decision 5 **maximally**: under line-wise extraction every other governed site
+degrades to a non-resolving operand; this one degrades to printing a string.
+
+A hook consuming a marker **MUST** validate the rule id against a closed corpus and sanitise
+the note to a fixed charset, because the markdown that prompts the marker is
+contributor-writable on the review path. This bounds the worst case to a rejected telemetry
+row. The hook is **PostToolUse, not PreToolUse**: PreToolUse counts *intent* while the
+construction it replaces counted *execution*, so PreToolUse would over-count against every
+row already in the corpus. Verified rather than argued — a marker driven through the hook
+and a direct `emit_incident` call produce byte-identical rows, differing only in timestamp.
+
+### Decision 10
+
+**Scope of option (e).** Option (e) rejects a git-root shim as a **code root / trust
+anchor**. It does **not** reject `plugins/soleur/scripts/resolve-git-root.sh` in its live use
+as a **workspace/data** root by `hooks/stop-hook.sh`, `hooks/welcome-hook.sh`, and
+`.openhands/hooks/stop-hook.sh`, which is correct under item 7's code-root/data-root
+distinction. Stated because a one-line rejection read out of context invites deleting a
+working helper.
+
+### Classification rule for the remaining corpus (#7453 needs no re-deciding)
+
+Every `git rev-parse --show-toplevel` in the payload is exactly one of three things:
+
+| Class | Test | Disposition |
+| --- | --- | --- |
+| **Code root** | Does the resolved path get *executed* (`source`/`bash`/`python3`/`awk`)? | **Ban.** Bare `${CLAUDE_PLUGIN_ROOT}` if the target is in the payload; decision-9 inversion if it is monorepo-only. |
+| **Data root** | Is it only read or written as content? | **Allowed and correct** — the workspace is what it is measuring. |
+| **Repo-root `scripts/` class** | Executes, and the target is outside the payload | Code root. §R4's table. Route to #7453. |
+
+*Implementation note, measured during #7450 and recorded because the obvious form is
+wrong:* a decision-9 hook may rely on `${CLAUDE_PROJECT_DIR}`, which the harness sets for
+hook processes. A payload **script** may not — it is measured UNSET in a plain Claude Code
+Bash call and in git hooks, so a `CLAUDE_PROJECT_DIR`-only resolution silently retires the
+telemetry it was meant to preserve. Payload scripts use `${CLAUDE_PROJECT_DIR}` first and
+then their own `BASH_SOURCE` location (layout-invariant per ADR-178, and not CWD-derived),
+never `git rev-parse`.
+
+*This also dissolves a worry rather than mitigating it:* the identity preflight reads
+`${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json`, so it was thought to halt on an unset
+variable regardless of substitution — a second, independent unknown. Because substitution
+happens at delivery, there is no unset-variable state at the point the preflight runs.
+
+**6. Evidence correction — two of this ADR's own citations are circular.** §R3's supporting
+evidence must **not** cite `preflight/SKILL.md` or `review/SKILL.md`; both bare-token sites
+landed in `98ad03aa8`, the commit that introduced this ADR. **The same defect applies to
+`commands/go.md` and `commands/sync.md`,** which were treated as independent command-surface
+precedent and are from that same commit (`git log -1 -S'${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json' -- plugins/soleur/commands/go.md`
+→ `98ad03aa8`). The genuinely independent precedents are `plugins/soleur/hooks/hooks.json`
+(three bare tokens since `6893c7941`, 2026-04-03 — four months earlier, and its hooks fired
+successfully in the measuring session) and the 2026-02-22 bundling learning, which states the
+loader expands the token "in all command/skill text" and names the skill surface explicitly.
+
+**7. Code root vs data root, so the `compound` migration does not read as inconsistent.**
+Its **code** root moved to `${CLAUDE_PLUGIN_ROOT}`; its script-internal `TE_REPORT_REPO_ROOT`
+**data** root correctly stays git-root-defaulted, because the report measures the *workspace*.
+This is decision 3 applied honestly: the two roots answer different questions, and only one
+of them is a trust anchor.
+
+**8. New residual — Pattern C, not previously recorded here.** `preflight/SKILL.md` carries
+**two unconditional** `$(git rev-parse --show-toplevel)/plugins/soleur/…` anchors
+(`parse-form-a.awk`, `probe-verb-gate.sh`) — a *third* form, with no `${CLAUDE_PLUGIN_ROOT}`
+arm at all, so neither §R4 nor §R5 enumerated it. Same threat model, and arguably worse than
+gate-bypass since `probe-verb-gate.sh` is itself a gate and the awk parser is executed.
+Neither is a secret-emission gate, so both are **routed to #7453 flagged
+severity-above-baseline** rather than folded in (#7450 DC-1). Their committed rationale
+comment — which argued *for* git-root resolution — was corrected in this PR: its premise
+(the variable is unset in a plain session) is true and is this ADR's headline finding, but its
+conclusion holds only for the `:-plugins/soleur` form it was written against, not for the bare
+form, whose unset expansion is root-anchored rather than CWD-relative.
+
+**9. Guard coverage.** `plugin-root-anchoring.test.ts` now enforces this subset structurally
+on both axes — every `skills/**/SKILL.md`, and a gate-script set discovered on disk
+(`redact-*.sh`, excluding `*.test.sh`) plus a closed extras constant. Two shape facts made a
+copy of the command-surface rule unusable: the anchor lives in an **assignment**
+(`SENTINEL="…"` then `bash "$SENTINEL"`), so an operand rule certifies the invocation while
+the assignment points anywhere; and most path-form references in the corpus are **markdown
+links**, so a bare-path rule reports documentation as a vulnerability. `redact-sentinel.test.sh`
+carries a planted-decoy positive control and a corpus-wide zero.
+
+### Amendment continued — 2026-08-12 (#7450 review remediation): §R3 measured on the skill surface, and the root-outside-worktree form REJECTED
+
+**A10. §R3 is measured positive on the SKILL surface, by direct execution.** The original
+measurement covered the *command* surface (`commands/go.md`) and bridged to the skill surface
+by an inference the review panel correctly called void: non-substitution of a *non-matching*
+literal cannot distinguish "the pass ran and declined" from "the pass never ran here" — both
+predict identical bytes.
+
+The direct arm was run. The recorded blocker ("requires a fresh session", because the skill
+registry is built at session start) was **wrong**: a headless `claude -p --plugin-dir` builds
+its own registry. With a synthetic single-skill plugin, in one session and one environment:
+
+| Form, in a fenced `bash` block in `SKILL.md` | Result |
+| --- | --- |
+| bare `${CLAUDE_PLUGIN_ROOT}/x.sh` | **substituted at delivery** with the real install root |
+| `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/…` | literal; expanded at runtime to **`/tmp/DECOY-EVIL-ROOT/…`** |
+| control: the decoy inside the executing Bash subprocess | present — `ENV_GREP=[1]` |
+
+The control is the load-bearing part. Without it, "the ambient value was ignored" and "the
+ambient value never propagated" are indistinguishable, and the first reads as safety. With it,
+the conclusion is unambiguous: **at a bare-anchored site the token is not a shell variable at
+execution time.** The loader fixes it to a literal before bash sees the text, and it takes the
+value from the install path, not from the environment. Evidence:
+`specs/feat-one-shot-7450-git-root-anchor-untrusted/phase-1-measurement.md` Arm 4.
+
+This also makes the pre-fix `:-` form a **reproduced** exploit rather than a modelled one: in
+the same session it resolved this repo's own redaction gate to an attacker-chosen root.
+
+**A11. REJECTED — asserting the resolved root lies outside the working tree.** The review panel
+prescribed, at each secret gate:
+
+```bash
+case "$(cd "${CLAUDE_PLUGIN_ROOT}" && pwd -P)/" in "$(git rev-parse --show-toplevel 2>/dev/null)/"*) halt;; esac
+```
+
+Its diagnosis is right — manifest-plus-name is a shape check and a `gh pr checkout` tree
+satisfies it byte-for-byte. Its prescription is rejected on three grounds:
+
+1. **It guards an unreachable operand.** Per **A10 above** there is no environment-supplied
+   value at these sites to constrain.
+2. **It breaks dogfooding on every plain clone.** On a normal `git clone` the plugin root *is*
+   inside the working tree, so the assertion halts every invocation. It appeared to pass only
+   on a machine where the install is a **bare** root while review runs in `.worktrees/`, so the
+   two paths happen not to nest — a local-layout accident, not a property.
+3. **It re-adds a CWD-resident trust decision.** It reintroduces `git rev-parse --show-toplevel`
+   into the exact three files this amendment removes it from, and §R1's settlement is precisely
+   *"not a stronger sentinel but the removal of trust decisions from CWD-resident operands."*
+   Authenticating a tree from inside that tree is what §R1 rules out.
+
+Consequently the identity preflight is **defence-in-depth**, not the load-bearing control, and
+the prose at all three gates now says so. The bare anchor is what carries the security claim.
+
+**Recorded as an invariant, not a preference.** `redact-sentinel.test.sh` Test 21 pins the three
+gates at **zero** git-root resolution, fence-scoped so that prose explaining the ban is not
+flagged as a violation of it. A future implementation of the rejected form reddens rather than
+landing quietly; reversing this decision means superseding `b1-disposition.md` first.
+
+**Residual, stated not closed.** Grok Build is a supported harness and neither
+`plugins/soleur/lib/harness.ts` nor `.grok/` handles `CLAUDE_PLUGIN_ROOT`. Whether a bare token
+in plugin markdown is substituted there is **unmeasured**. If it is not, the operand becomes
+attacker-reachable on that surface and decision 11 must be revisited — with cost 2 solved first,
+since a naive `case` would halt every contributor there too.
+
+### Amendment numbering — a note, because a cross-reference already broke on it
+
+This document carries **two** independent numbered series and they collide. `### Decision N`
+headings are the ADR's decisions; the bolded `**N.**` items inside the 2026-08-12 amendments are
+amendment *items*. Both reached 10, and both had 6, 7, 8 and 9 before that.
+
+That is not cosmetic: `A11`'s first ground cited "decision 10", and a reader following it landed
+on `### Decision 10` — the option-(e) scoping section about `resolve-git-root.sh` as a workspace
+root, which says nothing about environment-supplied values. So **the first ground of the B1
+rejection read as unsupported**, in the one place where the argument most needed to hold.
+
+The trailing amendment items are therefore prefixed `A10`, `A11`, and any further amendment item
+should continue that series. Cite `### Decision N` headings as "decision N" and amendment items as
+"A*N*"; never as a bare number.
+
+### Amendment item A12 — the widened 18c ratchet: DECLINED, and why (recorded, not silent)
+
+The CTO ruling's item 2 had two halves. The **stakes-keyed** half shipped (Test 24, and it found
+live sites). The other half — *"widen 18c to any `${CLAUDE_PLUGIN_ROOT:-` under the payload with a
+monotonically-shrinking allowlist for the ~105 sites deferred to #7453, not a flat zero"* — did
+**not**, and nothing recorded that either way. A binding item with no disposition is a silent
+non-discharge, which is the same class as recording a design as a delivered control (§R5's C6).
+
+**Declined here, deliberately, and routed to #7453 with the migration it ratchets.** The ruling's
+stated purpose for that half was to stop the deferred population GROWING; it buys drift-prevention,
+not vulnerability closure, and the security-load-bearing half is delivered by Test 24 with no
+allowlist at all. Building an anti-rot allowlist format, wiring its parse and proving it shrinks is
+more new machinery than the P0 needs, and it belongs with the migration whose progress it would
+measure.
+
+Measured residual at the time of writing: **~105 `${CLAUDE_PLUGIN_ROOT:-` occurrences across 33
+files**, in three distinct default arms (`:-./plugins/soleur`, `:-plugins/soleur`,
+`:-../../plugins/soleur`).
+
+### Amendment item A13 — a FOURTH anchor pattern, previously unrecorded
+
+`ship/SKILL.md` carries `"${CLAUDE_PLUGIN_ROOT:-.}/../../scripts/…"`. Neither §R4's enumeration nor
+amendment item 8's "Pattern C" (the unconditional `git rev-parse` shape) covers it, and it is worse
+than either: with the variable unset it is `./../../scripts/…`, CWD-relative and **escaping the
+tree**; with it set, it escapes the payload upward. It is the same enumeration-by-syntax blind spot
+ruling item 2 exists to close, one syntax further out. Routed to **#7453** as a named pattern so the
+migration does not have to rediscover it.
+
+### Amendment item A14 — `community` belongs in the migrated set
+
+The migrated set is recorded in two places (this ADR and ADR-093) and both omitted `community`,
+which this PR migrated to the bare quoted anchor at five sites: the `community-router.sh` dispatch
+plus four `*-setup.sh` operator instructions that were **bare repo-relative** — strictly worse than
+a `:-` arm, since a bare path is CWD-relative unconditionally. Those four were found by Test 24's
+invariant-keyed rewrite, not by review.

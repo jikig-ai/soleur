@@ -46,7 +46,7 @@ Flag `--dry-run` runs lookup + diff (no writes).
 ## Procedure
 
 ```bash
-bash plugins/soleur/skills/user-set-role/scripts/set-role.sh <email|uuid> <prd|dev> [--dry-run]
+bash "${CLAUDE_PLUGIN_ROOT}/skills/user-set-role/scripts/set-role.sh" <email|uuid> <prd|dev> [--dry-run]
 ```
 
 The script (full procedure in [scripts/set-role.sh](./scripts/set-role.sh)):

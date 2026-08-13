@@ -219,9 +219,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    Emit rule-application telemetry (records that the byte-cap / why-single-line policy ran — see AGENTS.md `cq-agents-md-why-single-line`):
 
    ```bash
-   source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
-     emit_incident cq-agents-md-why-single-line applied \
-     'AGENTS.md rules cap at ~600 bytes; `**Why:**` is o'
+   echo 'SOLEUR_RULE_APPLIED rule=cq-agents-md-why-single-line note=AGENTS.md rules cap at ~600 bytes; `**Why:**` is o'
    ```
 
    **Always-loaded verdict — run the linter and capture its exit code:**
@@ -320,10 +318,10 @@ If no deviations are detected, output: "Deviation Analyst: no violations found."
 <!-- phase-1.6-start -->
 ## Phase 1.6: Token-Efficiency Analysis (sequential, advisory)
 
-Run the cost-efficiency report:
+Run the cost-efficiency report (bare anchor — ADR-179):
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}/skills/compound/scripts/token-efficiency-report.sh"
+bash "${CLAUDE_PLUGIN_ROOT}/skills/compound/scripts/token-efficiency-report.sh"
 ```
 
 Prints top-3 cost table; emits `te-*` `warn` to `.claude/.rule-incidents.jsonl` on outliers (rolled up into `knowledge-base/project/rule-metrics.json` by the local compound aggregation in Phase 1.5 step 8 — ADR-091). Proposals route through Phase 1.5 step 7's gate.

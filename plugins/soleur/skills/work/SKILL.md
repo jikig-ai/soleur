@@ -533,9 +533,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    Emit rule-application telemetry (records that the TDD gate was reached — see AGENTS.md `cq-write-failing-tests-before`):
 
    ```bash
-   source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
-     emit_incident cq-write-failing-tests-before applied \
-     "Write failing tests BEFORE implementation code whe"
+   echo 'SOLEUR_RULE_APPLIED rule=cq-write-failing-tests-before note=Write failing tests BEFORE implementation code whe'
    ```
 
    1. **Check:** Does the plan have a "Test Scenarios" or "Acceptance Criteria" section that covers this task? If yes, this task requires test-first.

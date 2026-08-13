@@ -90,9 +90,7 @@ Then announce: "Tagged as **user-brand-critical** (auto, per #5175). CPO + CLO +
 **Step 3 — Emit telemetry.** Emit rule-application telemetry so the weekly aggregator records that the brainstorm enforcement layer fired (see AGENTS.md `hr-weigh-every-decision-against-target-user-impact`):
 
 ```bash
-source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
-  emit_incident hr-weigh-every-decision-against-target-user-impact applied \
-  "Every plan/PR touching credentials, auth, data, paym"
+echo 'SOLEUR_RULE_APPLIED rule=hr-weigh-every-decision-against-target-user-impact note=Every plan/PR touching credentials, auth, data, paym'
 ```
 
 The gate now fires on every brainstorm by design (per #5175), so this emit records every application of the rule. Accepted tradeoff: the "fired vs. asked" ratio is now constant (always fired) — that diagnostic signal was deliberately traded away for zero operator friction. Do NOT delete the emit; the per-application record is still consumed by the weekly aggregator.
@@ -144,6 +142,8 @@ Scan `$ARGUMENTS` for substrings matching `[A-Z]{2,}-[0-9]+` or `linear\.app/[^/
 2. The brainstorm parent conversation retains `agent_context` for Phase 2 Synthesis and Phase 3 Capture — when synthesizing or writing the brainstorm doc, you may reference the visual content directly but MUST NOT write any `uploads.linear.app` URL into the brainstorm file. Use `persist_safe_summary` for any direct quotation of issue body text in the brainstorm doc.
 3. When Phase 0.5 spawns domain leaders via Task, embed `persist_safe_summary` (NOT `agent_context`, NOT `$ARGUMENTS`) in the leader prompt's context section. Task subagents inherit prompt text only — they do not receive image content blocks (see `knowledge-base/project/learnings/best-practices/2026-05-12-task-subagent-prompt-text-only.md`). The leaders' assessment will be text-only-aware; the brainstorm parent retains the visual context for its own synthesis.
 
+4. **Absent-artifact halt contract (#7450).** If `linear-fetch` halted at its redaction gate, `persist_safe_summary` **does not exist**. STOP and report the skill's halt message. Do **NOT** fall back to `agent_context` or to the raw `$ARGUMENTS` issue text for either the brainstorm doc or a leader prompt. Rule 2's "MUST NOT write any `uploads.linear.app` URL" is an *instruction to the author*, not a guard — the redaction primitive is the guard, and when it has refused to run there is nothing enforcing that rule. `agent_context` carries the signed bearer URLs the primitive exists to remove, so substituting it converts the gate's refusal into the leak. A halted fetch is a hard stop, never a degraded continue.
+
 Phase 0.4 must complete before Phase 0.5 spawns leaders. The two phases are sequential despite Phase 0.5 internally parallelizing leader spawns. If no Linear references match in `$ARGUMENTS`, Phase 0.4 is a no-op and the brainstorm proceeds directly to Phase 0.5 unchanged.
 
 ### Phase 0.5: Domain Leader Assessment
@@ -161,9 +161,7 @@ Assess whether the feature description has implications for specific business do
 Emit rule-application telemetry **only when the brainstorm scope matches the rule's trigger** — i.e., the feature description proposes a new skill, agent, or user-facing capability. For internal infra/CI brainstorms (where the rule does not apply), skip the emit. The telemetry records *rule fires*, not *gate reached* — emitting on every brainstorm pollutes the rule-fire count and breaks the unused-rule reporter.
 
 ```bash
-source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
-  emit_incident hr-new-skills-agents-or-user-facing applied \
-  "New skills, agents, or user-facing capabilities must"
+echo 'SOLEUR_RULE_APPLIED rule=hr-new-skills-agents-or-user-facing note=New skills, agents, or user-facing capabilities must'
 ```
 
 0. **Lane-driven domain-set sizing (spec FR4).** Read `LANE` from Phase 0.4.

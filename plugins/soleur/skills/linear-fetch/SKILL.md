@@ -56,6 +56,41 @@ For each identifier in the working set:
 2. Invoke `mcp__linear-server__list_comments(issueId=<identifier>, orderBy="createdAt", limit=250)`. The MCP schema (verified at Phase 0 of the plan) supports `orderBy: createdAt | updatedAt` and `limit` up to 250. The schema does NOT expose an order-direction parameter, so the response order is treated as ambiguous: parse each comment's `createdAt` field and sort client-side **descending**, then take the first 10 entries as "10 most-recent by creation time." If the response contains 10 or fewer comments, skip the sort.
 3. Concatenate the issue description and the 10 most-recent comment bodies into a single markdown blob, delimited as `\n\n--- comment by <author.displayName> on <createdAt> ---\n\n` between each block.
 
+### Phase B.0 — Pre-fetch preflight (blob-independent; runs BEFORE Phase C)
+
+**Run this fence before invoking `extract_images`, and abort the whole skill on a non-zero exit.**
+
+Both checks below are **blob-independent** — they interrogate the plugin installation, not the
+issue. Until #7450 they sat in Phase D, *after* Phase C had already streamed the issue's image
+content blocks into the conversation. So on every halt path the signed `uploads.linear.app`
+bearer URLs were already in the parent transcript, and the "fail closed" refusal protected only
+the artifact nobody had produced yet. A guard that cannot run before the exposure is not a guard
+against it. Nothing here depends on the blob, so nothing forced that ordering.
+
+```bash
+[ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
+  && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
+  || { echo "SOLEUR_LINEAR_FETCH_HALT reason=plugin-root-unverified root=[${CLAUDE_PLUGIN_ROOT}]"
+       echo "linear-fetch: cannot verify the Soleur plugin installation — stopping before anything is fetched." >&2
+       echo "  Resolved plugin root: [${CLAUDE_PLUGIN_ROOT}]" >&2
+       echo "  If that is EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session — re-running here resolves the same empty root." >&2
+       echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur', then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
+       echo "  Nothing has been fetched yet, so nothing has leaked." >&2
+       exit 2; }
+SCRUBBER="${CLAUDE_PLUGIN_ROOT}/skills/linear-fetch/scripts/redact-linear-urls.sh"
+[[ -r "$SCRUBBER" ]] || { echo "SOLEUR_LINEAR_FETCH_HALT reason=scrubber-unreadable scrubber=[$SCRUBBER]"
+       echo "linear-fetch: the redaction primitive is missing from an otherwise valid Soleur install — stopping." >&2
+       echo "  Expected at: [$SCRUBBER]" >&2
+       echo "  The install is partial or out of date. Run 'claude plugin update soleur', then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
+       echo "  Nothing has been fetched yet, so nothing has leaked." >&2
+       exit 2; }
+echo "SOLEUR_LINEAR_FETCH_PREFLIGHT_OK scrubber=present"
+```
+
+If this fence exits non-zero, **stop**: do not invoke `extract_images`, do not emit
+`agent_context`, and do not emit a disclosure line. The correct operator-visible outcome is the
+halt message above, not a partially-fetched issue.
+
 ### Phase C — Image passthrough
 
 For each issue's combined markdown blob from Phase B, invoke `mcp__linear-server__extract_images(markdown=<blob>)`. The MCP server resolves Linear-authenticated CDN URLs server-side and streams the underlying image bytes back into the active conversation as image content blocks. The skill never sees the bytes, never writes them to disk, never re-fetches them.
@@ -76,7 +111,76 @@ For each issue, emit exactly one disclosure line to stdout based on the Phase C 
 Construct the two return artifacts:
 
 - **agent_context** — emit the full markdown blob inline in the conversation, so the parent's message history holds both the text and the image content blocks from `extract_images`. The parent retains these for downstream phases (one-shot Steps 3+, brainstorm Phase 2 Synthesis, brainstorm Phase 3 Capture). Per `2026-05-12-task-subagent-prompt-text-only.md`, image content blocks do NOT propagate to Task subagents — design accordingly.
-- **persist_safe_summary** — produce by piping the full markdown blob through `bash "${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}/skills/linear-fetch/scripts/redact-linear-urls.sh"`. The redacted text is the only artifact callers may persist. Return it as a fenced text block clearly labeled `PERSIST-SAFE SUMMARY (use this for any write to disk):` so the parent skill cannot confuse it with the agent_context.
+- **persist_safe_summary** — produce by piping the full markdown blob through the redaction primitive, resolved from the **deployed plugin root** (ADR-179's canonical bare anchor, no fallback arm). The redacted text is the only artifact callers may persist. Return it as a fenced text block clearly labeled `PERSIST-SAFE SUMMARY (use this for any write to disk):` so the parent skill cannot confuse it with the agent_context.
+
+  **The exit-code dispatch below is load-bearing, and this site had none before #7450.** With no
+  guard, an unresolved root yields exit `127` and **empty stdout** — and empty stdout is exactly
+  the shape an agent can mistake for "the redacted text" and persist. Empty output is a failure,
+  never a clean summary. The default arm was removed, not re-pointed: `review/SKILL.md` instructs
+  `gh pr checkout`, so that arm resolved this scrubber from the reviewed party's tree.
+
+  The identity and readability checks are NOT repeated here — they ran in **Phase B.0**, before
+  anything was fetched. What remains is the blob-dependent half.
+
+  Substitute the full markdown blob verbatim between the heredoc delimiters. **The delimiter is
+  quoted (`<<'LINEAR_BLOB'`), which is load-bearing twice over**: it stops the shell expanding
+  issue text that Linear users control, and it keeps the blob off disk. The pre-#7450 form
+  (`bash "$SCRUBBER" <blob-tmpfile>`) wrote the **un-redacted, bearer-URL-bearing** blob to a file
+  that was never created, named, or removed by any step in this skill, on all four halt paths —
+  while the prose two paragraphs up still described the operation as piping.
+
+  ```bash
+  # RE-DERIVED, not inherited. Phase B.0 is a SEPARATE Bash call, and shell state does not
+  # persist across calls — so `$SCRUBBER` is EMPTY here unless it is defined in this fence.
+  # Assuming otherwise is not a theoretical risk: it shipped, and it bricked this skill on
+  # every invocation (`bash: : No such file or directory` -> reason=scrubber-nonzero-exit ->
+  # rc 2, so `persist_safe_summary` could never be produced and every caller hard-stopped).
+  # It failed CLOSED only because the anchor is quoted; unquoted, `bash $SCRUBBER <<'…'`
+  # executes the heredoc, i.e. runs Linear issue text as a shell script.
+  # B.0 still owns the identity preflight and the readability check — those are the
+  # blob-independent halts that must precede the fetch. This line is the same bare anchor,
+  # re-stated where it is used.
+  SCRUBBER="${CLAUDE_PLUGIN_ROOT}/skills/linear-fetch/scripts/redact-linear-urls.sh"
+
+  # The scrubber reads stdin and writes redacted text to stdout.
+  PERSIST_SAFE="$(bash "$SCRUBBER" <<'LINEAR_BLOB'
+  <the full markdown blob from Phase B, verbatim>
+  LINEAR_BLOB
+  )" || { echo "SOLEUR_LINEAR_FETCH_HALT reason=scrubber-nonzero-exit"
+          echo "linear-fetch: the redaction primitive exited non-zero — stopping." >&2
+          echo "  Nothing is persisted. Do NOT fall back to agent_context; it carries the bearer URLs." >&2
+          echo "  What to do: re-run once. If it repeats, this is a Soleur defect — file it with the exit status; do not hand-copy the issue text." >&2
+          exit 2; }
+
+  [ -n "$PERSIST_SAFE" ] \
+    || { echo "SOLEUR_LINEAR_FETCH_HALT reason=redaction-empty-output"
+         echo "linear-fetch: redaction produced EMPTY output — stopping." >&2
+         echo "  Empty output is a failure, not a clean summary. Do NOT persist it." >&2
+         echo "  What to do: re-run once. If it repeats, this is a Soleur defect — file it; do not paste the issue text by hand." >&2
+         exit 2; }
+
+  # Redaction must have HAPPENED, not merely have run. A scrubber that returns its input
+  # unchanged is non-empty and exits 0, so every other guard here stays green while the
+  # artifact labelled PERSIST-SAFE still carries the signed bearer URLs. This is also the
+  # only check on this path that does not depend on the anchor being trustworthy.
+  # Herestring, not a pipe: under `set -o pipefail` a `grep -q` that matches early closes
+  # the pipe, the producer takes SIGPIPE, and the pipeline reports failure on a match.
+  if grep -qiE 'uploads\.linear\.app' <<<"$PERSIST_SAFE"; then
+    echo "SOLEUR_LINEAR_FETCH_HALT reason=redaction-ineffective"
+    echo "linear-fetch: redaction did NOT remove the signed uploads.linear.app URLs — stopping." >&2
+    echo "  The scrubber ran and returned output, but the output still carries bearer credentials." >&2
+    echo "  Do NOT persist this text." >&2
+    echo "  This is a SOLEUR DEFECT, not a problem with your issue: the scrubber ran and returned bearer URLs anyway." >&2
+    echo "  What to do: do NOT retry — a retry will produce the same result. File this with the issue identifier (not its contents)." >&2
+    exit 2
+  fi
+
+  # Emit it. Shell state does not persist across Bash calls, so a block that assigns
+  # PERSIST_SAFE and never prints it cannot produce the artifact it exists to produce.
+  printf '%s\n' "$PERSIST_SAFE"
+  ```
+
+  On any halt above, `persist_safe_summary` **does not exist**. Callers must treat its absence as a hard stop and MUST NOT substitute `agent_context` — see the absent-artifact contract in [one-shot](../one-shot/SKILL.md) Step 0a and [brainstorm](../brainstorm/SKILL.md) Phase 0.4. `agent_context` carries the signed `uploads.linear.app` bearer URLs this primitive exists to remove, so falling back to it converts a refusal into the exact leak.
 
 **Telemetry redaction (TR7).** This skill MUST NOT include the matched Linear identifier, the issue title, any image URL, or any signed-URL fragment in incident telemetry (`.claude/hooks/lib/incidents.sh emit_incident`). If telemetry is ever emitted from inside this skill, use generic strings only (e.g., `linear-fetch applied`). The current implementation has zero `emit_incident` call sites; a future maintainer adding one must pass the [assert-no-linear-telemetry.sh](./scripts/assert-no-linear-telemetry.sh) assertion or extend the assertion to cover the new emission shape.
 

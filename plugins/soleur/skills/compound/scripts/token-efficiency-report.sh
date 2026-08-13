@@ -236,18 +236,29 @@ if (( SUM_ENVELOPES > 0 && LINES > 0 )); then
 fi
 
 # ---- Outlier detection — emit incidents.sh warn -------------------------
-# Lib resolution: REPO_ROOT first (production + most fixtures), then the
-# upstream repo via `git rev-parse` from this script's location (covers
-# fixture-mode tests that run from a throwaway repo without the lib).
-# Avoids the 5-segment relative-path trap flagged by pattern review.
-INCIDENTS_LIB="$REPO_ROOT/.claude/hooks/lib/incidents.sh"
-if [[ ! -f "$INCIDENTS_LIB" ]]; then
-  SELF_REPO="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null \
-    && git rev-parse --show-toplevel 2>/dev/null)"
-  [[ -n "$SELF_REPO" ]] && INCIDENTS_LIB="$SELF_REPO/.claude/hooks/lib/incidents.sh"
-fi
+# CODE ROOT, not a data root (#7450; ADR-179's classification). Sourced, so it
+# executes in THIS shell. Both previous resolution arms were git-root-derived —
+# REPO_ROOT from the caller's CWD and SELF_REPO from a rev-parse at this script's
+# own location — so on the review path both land in the contributor's checked-out
+# tree. ADR-179 amendment item 7 migrated this file's CODE root to the plugin
+# anchor and left this lib resolution behind; that is the gap #7450 closes.
+# CLAUDE_PROJECT_DIR comes from the harness, not from the tree under review.
+# TE_REPORT_REPO_ROOT / REPO_ROOT stay git-root-derived: they are DATA roots, and
+# the workspace is precisely what this report is measuring.
+# Resolution, in trust order, and NEVER from `git rev-parse --show-toplevel`:
+#   1. CLAUDE_PROJECT_DIR — supplied by the harness, not by the tree under review.
+#      Measured 2026-08-12: unset in a plain Claude Code session and in git hooks,
+#      so it cannot be the ONLY arm without silently retiring this telemetry.
+#   2. This script's OWN location. Layout-invariant per ADR-178, and crucially NOT
+#      CWD-derived: a `gh pr checkout` cannot redirect it, because by the time this
+#      line runs the anchor decision has already been made — if a hostile script
+#      were executing, sourcing its sibling lib adds nothing. On a plugin INSTALL
+#      the walk lands somewhere with no such lib, so it no-ops, which is correct.
+# The `-f` test is the safety net for both arms: a wrong root simply no-ops.
+_incidents_root="${CLAUDE_PROJECT_DIR:-$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../../../../.." 2>/dev/null && pwd -P)}"
+INCIDENTS_LIB="${_incidents_root:+${_incidents_root}/.claude/hooks/lib/incidents.sh}"
 # shellcheck source=/dev/null
-[[ -f "$INCIDENTS_LIB" ]] && source "$INCIDENTS_LIB"
+[[ -n "$INCIDENTS_LIB" && -f "$INCIDENTS_LIB" ]] && source "$INCIDENTS_LIB"
 
 if (( MAX_ENVELOPE > SUBAGENT_OVERSHOOT_TOKENS )); then
   emit_incident te-subagent-overshoot warn \
