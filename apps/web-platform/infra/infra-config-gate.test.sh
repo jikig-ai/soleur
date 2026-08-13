@@ -301,9 +301,9 @@ else
   #     the file (cq-assert-anchor-not-bare-token).
   invoke_line=$(grep -nE '^[[:space:]]*run:[[:space:]]+bash[[:space:]]+.*infra-config-verify\.sh' "$APPLY_WF" | head -1 | cut -d: -f1)
   # (2) the terminal adjudication is called at all, inside the extracted body
-  adj_line=$(grep -nE '(^|[^_[:alnum:]])adjudicate_infra_config[[:space:]]+/tmp/' "$VERIFY_SH" | head -1 | cut -d: -f1)
+  adj_line=$(grep -nE '(^|[^_[:alnum:]])adjudicate_infra_config[[:space:]]+"\$STATUS_RESPONSE"' "$VERIFY_SH" | head -1 | cut -d: -f1)
   # (3) the in-loop fast-path uses count_invariant (NOT adjudicate)
-  ci_line=$(grep -nE 'infra_config_count_invariant[[:space:]]+/tmp/' "$VERIFY_SH" | head -1 | cut -d: -f1)
+  ci_line=$(grep -nE 'infra_config_count_invariant[[:space:]]+"\$STATUS_RESPONSE"' "$VERIFY_SH" | head -1 | cut -d: -f1)
   if [[ -z "$invoke_line" ]]; then
     fail "apply-deploy-pipeline-fix.yml does NOT invoke infra-config-verify.sh — the extracted gate is DEAD in production"
   elif [[ -z "$adj_line" ]]; then

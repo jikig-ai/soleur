@@ -73,6 +73,21 @@ fi
 # under `set -eo pipefail` BEFORE the numeric guard below can emit its
 # diagnostic (review, code-quality P-low). The guard still fails closed —
 # an empty EXPECTED_COUNT trips the regex check.
+# #7104 PR-B — THE RESPONSE PATH IS INJECTABLE, and the default is the FIXED path on purpose.
+#
+# This body used to hardcode "$STATUS_RESPONSE" at 20 sites. That was safe
+# while it was a `run:` block executing once per job, and became unsafe the moment the verbatim
+# extraction made it an artifact a suite drives six times per run: the AC17 cases drive the REAL
+# script, so two concurrent drives clobber each other's frame. Measured by three independent
+# reviewers — 6 concurrent runs produced 5 red, and the mutation battery then aborts on its own
+# mandatory green baseline, killing all 17 rows. The verbatim move is what imported the
+# single-run assumption; byte-identity proved behavioural identity and carried that with it.
+#
+# The default MUST stay the fixed literal. `Alert on a red infra-config gate (#7220)` is a
+# DIFFERENT STEP in a different process and reads the frame back from that exact path to build
+# its diagnosis; a mktemp default would leave it reading nothing on every red run. Only the test
+# harness overrides this.
+STATUS_RESPONSE="${INFRA_CONFIG_STATUS_RESPONSE:-/tmp/infra-config-status-response.txt}"
 EXPECTED_COUNT=$(infra_config_expected_count infra-config-apply.sh || true)
 if [[ ! "$EXPECTED_COUNT" =~ ^[0-9]+$ || "$EXPECTED_COUNT" -eq 0 ]]; then
   echo "::error::Could not derive EXPECTED FILE_MAP count from infra-config-apply.sh (got '$EXPECTED_COUNT')."
@@ -90,9 +105,9 @@ for attempt in 1 2 3; do
   # and `jq -e .`s it, so it would classify a dead listener as "reachable, activation
   # failure" and tell the operator app health is unaffected. The pre-apply poller has
   # done this since it was written; this is the sibling that was missed.
-  : > /tmp/infra-config-status-response.txt
+  : > "$STATUS_RESPONSE"
   HMAC=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
-  HTTP_CODE=$(curl -s -o /tmp/infra-config-status-response.txt -w '%{http_code}' \
+  HTTP_CODE=$(curl -s -o "$STATUS_RESPONSE" -w '%{http_code}' \
     --max-time 10 \
     -H "X-Signature-256: sha256=${HMAC}" \
     -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
@@ -100,17 +115,17 @@ for attempt in 1 2 3; do
     "https://deploy.${APP_DOMAIN_BASE}/hooks/infra-config-status" 2>/dev/null || echo "000")
 
   if [[ "$HTTP_CODE" == "200" ]]; then
-    EXIT_CODE=$(jq -r '.exit_code' /tmp/infra-config-status-response.txt 2>/dev/null || echo "MISSING")
-    FILES_FAILED=$(jq -r '.files_failed' /tmp/infra-config-status-response.txt 2>/dev/null || echo "MISSING")
-    FILES_WRITTEN=$(jq -r '.files_written' /tmp/infra-config-status-response.txt 2>/dev/null || echo "MISSING")
-    FILES_TOTAL=$(jq -r '.files_total' /tmp/infra-config-status-response.txt 2>/dev/null || echo "MISSING")
+    EXIT_CODE=$(jq -r '.exit_code' "$STATUS_RESPONSE" 2>/dev/null || echo "MISSING")
+    FILES_FAILED=$(jq -r '.files_failed' "$STATUS_RESPONSE" 2>/dev/null || echo "MISSING")
+    FILES_WRITTEN=$(jq -r '.files_written' "$STATUS_RESPONSE" 2>/dev/null || echo "MISSING")
+    FILES_TOTAL=$(jq -r '.files_total' "$STATUS_RESPONSE" 2>/dev/null || echo "MISSING")
     # Poll fast-path: stop polling once the COUNT invariant holds (single-
     # sourced in infra-config-gate.sh). The CONTENT assert is deliberately NOT
     # here — it runs once after the loop (terminal). Asserting content inside
     # the loop would retry across fresh connector selections = any-of-3 (#6594).
-    if infra_config_count_invariant /tmp/infra-config-status-response.txt infra-config-apply.sh; then
+    if infra_config_count_invariant "$STATUS_RESPONSE" infra-config-apply.sh; then
       echo "Infra-config apply count invariant holds (exit_code=0, files_written=${FILES_WRITTEN}/${FILES_TOTAL}, expected=${EXPECTED_COUNT}, files_failed=0 on attempt $attempt); running terminal adjudication."
-      cat /tmp/infra-config-status-response.txt
+      cat "$STATUS_RESPONSE"
       break
     fi
     echo "Attempt $attempt: exit_code=$EXIT_CODE files_failed=$FILES_FAILED files_written=$FILES_WRITTEN files_total=$FILES_TOTAL expected=$EXPECTED_COUNT (retrying in 5s...)"
@@ -135,7 +150,7 @@ if [[ "$HTTP_CODE" == "404" ]]; then
     echo "freshness_evidence=none" >> "$GITHUB_OUTPUT"
   else
     echo "::error::infra-config-status returned HTTP 404 after all retries — the host's hooks.json predates the status endpoint and the apply did NOT verify. This is the false-success freeze vector (#4804). For a genuine first bootstrap, re-run via workflow_dispatch with allow_missing_status_endpoint=true."
-    cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+    cat "$STATUS_RESPONSE" >&2 2>/dev/null || true
     exit 1
   fi
 elif [[ "$HTTP_CODE" == "200" ]]; then
@@ -147,8 +162,8 @@ elif [[ "$HTTP_CODE" == "200" ]]; then
   # stale-but-same-count host: 15/15 clean while ci-deploy.sh was never re-
   # delivered (the exact #6594 false-green). Single-sourced in
   # infra-config-gate.sh; driven by infra-config-gate.test.sh.
-  if ! adjudicate_infra_config /tmp/infra-config-status-response.txt . infra-config-apply.sh; then
-    cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+  if ! adjudicate_infra_config "$STATUS_RESPONSE" . infra-config-apply.sh; then
+    cat "$STATUS_RESPONSE" >&2 2>/dev/null || true
     exit 1
   fi
   # #7220 AC20 — FRESHNESS PIN. Everything adjudicated above is satisfiable by a
@@ -158,10 +173,10 @@ elif [[ "$HTTP_CODE" == "200" ]]; then
   # a handler that dies before publishing is exactly what leaves the previous frame
   # in place, which is the #7220 shape. Same guard as
   # scripts/followthroughs/ac12-telemetry-positive-control-7103.sh Guard 1.
-  FRAME_START_TS=$(jq -r '.start_ts // empty' /tmp/infra-config-status-response.txt 2>/dev/null || true)
+  FRAME_START_TS=$(jq -r '.start_ts // empty' "$STATUS_RESPONSE" 2>/dev/null || true)
   if [[ ! "$FRAME_START_TS" =~ ^[0-9]+$ ]]; then
     echo "::error::infra-config frame carries no numeric start_ts ('${FRAME_START_TS:-<absent>}') — freshness cannot be established, so a stale frame cannot be distinguished from this apply's. Failing closed."
-    cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+    cat "$STATUS_RESPONSE" >&2 2>/dev/null || true
     exit 1
   fi
   # #7104 — WHICH freshness assertion applies depends on whether a push was expected.
@@ -204,7 +219,7 @@ elif [[ "$HTTP_CODE" == "200" ]]; then
       else
         echo "::error::RE-PUSH DID NOT DELIVER: the frame still reads start_ts=${FRAME_START_TS} against the ${REPUSH_BASELINE_TS} observed before the re-push — it did not advance. The bounded recovery is spent (one attempt by construction) and this run is terminally red. Do NOT re-run expecting a different result: -target SELECTS resources, it does not force replacement."
         echo "verdict=failed" >> "$GITHUB_OUTPUT"
-        cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+        cat "$STATUS_RESPONSE" >&2 2>/dev/null || true
         exit 1
       fi
     elif [[ "$FRAME_START_TS" -lt "$APPLY_START_EPOCH" ]]; then
@@ -212,7 +227,7 @@ elif [[ "$HTTP_CODE" == "200" ]]; then
       # entirely. The predicate decides which, and it is the ONLY thing that may
       # authorise a production write: allow-list semantics, so anything it cannot
       # classify falls through to the terminal error below rather than to a re-push.
-      if infra_config_should_repush /tmp/infra-config-status-response.txt "$DPF_REPLACED" "$APPLY_START_EPOCH"; then
+      if infra_config_should_repush "$STATUS_RESPONSE" "$DPF_REPLACED" "$APPLY_START_EPOCH"; then
         echo "::warning::STALE FRAME at ${FRAME_START_TS} (apply began ${APPLY_START_EPOCH}) — this matches the documented webhook-restart race. Deferring the verdict to a single bounded re-push; pass 2 renders the terminal result and fails closed."
         # These three outputs ARE the handoff. Written before anything that can exit,
         # and the run is only safe because the always() backstop step fails the job if
@@ -224,7 +239,7 @@ elif [[ "$HTTP_CODE" == "200" ]]; then
       fi
       echo "::error::STALE FRAME: the status endpoint reports an apply that started at ${FRAME_START_TS}, BEFORE this workflow's apply began at ${APPLY_START_EPOCH}. The handler did not publish a new frame for this run — every green value above belongs to a previous apply. This is the #7220 failure shape: delivery reported against a frame the dying handler never overwrote."
       echo "verdict=failed" >> "$GITHUB_OUTPUT"
-      cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+      cat "$STATUS_RESPONSE" >&2 2>/dev/null || true
       exit 1
     else
       echo "Frame freshness OK: start_ts=${FRAME_START_TS} postdates this apply's start (${APPLY_START_EPOCH})."
@@ -266,7 +281,7 @@ elif [[ "$HTTP_CODE" == "200" ]]; then
           echo "::error::Frame-stability adjudication failed (verdict='${STABILITY}'). Failing closed."
           ;;
       esac
-      cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+      cat "$STATUS_RESPONSE" >&2 2>/dev/null || true
       exit 1
     fi
 
@@ -281,7 +296,7 @@ elif [[ "$HTTP_CODE" == "200" ]]; then
       # adding one `case` arm to infra_config_frame_stability was enough to create a
       # brand-new exit-0 path with no edit to this file at all.
       echo "::error::Frame-stability returned an unrecognised verdict '${STABILITY}'. A verdict this gate cannot interpret must never be treated as a pass. Failing closed."
-      cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+      cat "$STATUS_RESPONSE" >&2 2>/dev/null || true
       exit 1
     else
       # degraded:<measured-status>. Pass, but say exactly what was and was not shown —
@@ -312,11 +327,11 @@ elif [[ "$HTTP_CODE" == "000" || "$HTTP_CODE" == "502" || "$HTTP_CODE" == "503" 
   # bricked remediation channel reading as a stale-host cosmetic.
   echo "::error::infra-config-status is UNREACHABLE (HTTP $HTTP_CODE) after 3 attempts — this is the webhook listener being DOWN, not a missing endpoint. Do NOT re-run with allow_missing_status_endpoint=true: that flag suppresses exactly this failure."
   echo "::error::RECOVERY — the bounded automatic re-push added by #7104 does NOT cover this shape: it fires only on a stale FRAME from a live listener, and this branch means the listener itself is DOWN, so there is nothing to re-push through. A plain workflow_dispatch re-run does NOT fix it either. -target SELECTS resources, it does not force replacement, and this branch fires after a SUCCESSFUL apply, so the provisioners are clean and their remote-exec never re-runs. The route back is an explicit replace: terraform apply -replace=terraform_data.infra_config_handler_bootstrap (root SSH over the CF Tunnel, which does not depend on the webhook being alive), or a nonce bump in push-infra-config.sh. webhook.service itself is delivered by terraform_data.deploy_pipeline_fix, not by the bridge. The webhook is the ONLY no-SSH remediation channel on this host and the host cannot be replaced (cx33, orderable in 0 of 3 EU DCs), so treat a persistent unreachable state as a P1."
-  cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+  cat "$STATUS_RESPONSE" >&2 2>/dev/null || true
   exit 1
 else
   echo "::error::infra-config-status did not respond with HTTP 200 after 3 attempts (last HTTP $HTTP_CODE). The handler is async behind a 202 trigger-and-forget, so a non-responding status endpoint cannot be treated as success."
-  cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+  cat "$STATUS_RESPONSE" >&2 2>/dev/null || true
   exit 1
 fi
 

@@ -172,14 +172,14 @@ elif case == 'G2-1':
     sub(VERIFY,
         '  if [[ "$attempt" -lt 3 ]]; then\n    sleep 5\n  fi\ndone\n',
         '  if [[ "$attempt" -lt 3 ]]; then\n    sleep 5\n  fi\n'
-        '  adjudicate_infra_config /tmp/infra-config-status-response.txt . infra-config-apply.sh || true\n'
+        '  adjudicate_infra_config "$STATUS_RESPONSE" . infra-config-apply.sh || true\n'
         'done\n')
 
 elif case == 'G2-2':
     # Row 2 — delete the predicate call and inline an equivalent condition. Guard 1's entire
     # matrix would then certify a predicate production does not run.
     sub(VERIFY,
-        'if infra_config_should_repush /tmp/infra-config-status-response.txt "$DPF_REPLACED" "$APPLY_START_EPOCH"; then',
+        'if infra_config_should_repush "$STATUS_RESPONSE" "$DPF_REPLACED" "$APPLY_START_EPOCH"; then',
         'if [[ "$DPF_REPLACED" == "true" ]]; then')
 
 elif case == 'G2-3':
@@ -196,9 +196,9 @@ elif case == 'G2-4':
     # suspends errexit for a CONDITION context and the suspension propagates into the function
     # body, so a production terraform apply downstream of it would run with -e off.
     sub(VERIFY,
-        '      if infra_config_should_repush /tmp/infra-config-status-response.txt "$DPF_REPLACED" "$APPLY_START_EPOCH"; then',
+        '      if infra_config_should_repush "$STATUS_RESPONSE" "$DPF_REPLACED" "$APPLY_START_EPOCH"; then',
         '      repush_once() { infra_config_should_repush "$@"; }\n'
-        '      if repush_once /tmp/infra-config-status-response.txt "$DPF_REPLACED" "$APPLY_START_EPOCH"; then')
+        '      if repush_once "$STATUS_RESPONSE" "$DPF_REPLACED" "$APPLY_START_EPOCH"; then')
 
 elif case == 'G2-5':
     # Row 5 — REGION BOUNDARY. Add a nested loop between the pinned anchors. The pin's original

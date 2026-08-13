@@ -1151,8 +1151,23 @@ jobs:
       # `failure() && outcome != 'success'` reads as "the job failed and the gate did not pass",
       # which is the actual alerting condition. `failure()` is false on cancellation, so a
       # cancelled run does not page; `!= 'success'` covers both `failure` and `skipped`.
+      #
+      # #7104 PR-B — RE-KEYED ONTO THE TERMINAL VERDICT, because the step-outcome form above
+      # became false the moment pass 1 gained a soft-fail. Pass 1 now writes `verdict=pending`
+      # and exits **0** on the recoverable shape, so `steps.infra_config_gate.outcome` is
+      # `success` on EVERY re-push path — and the condition `outcome != 'success'` was therefore
+      # FALSE on all four new terminal-red paths: a failed re-push plan, a failed production
+      # apply, a red pass 2, and the backstop firing. Measured: this step was skipped on each,
+      # so the founder's only notification route went dark on exactly the failures this PR adds.
+      # That is the same outcome the comment above describes ("increasing the share of red runs
+      # that notify nobody"), reintroduced by a different mechanism.
+      #
+      # Keying on the VERDICT rather than on which step reddened is what makes this robust to
+      # the next step added: `verdict` is the contract both passes render, and an unset output
+      # (the gate never ran) is `''`, which `!= 'verified'` correctly treats as alertable. It
+      # also needs no `id:` on the backstop step, which has none.
       - name: Alert on a red infra-config gate (#7220)
-        if: failure() && steps.infra_config_gate.outcome != 'success'
+        if: failure() && steps.infra_config_gate.outputs.verdict != 'verified' && steps.infra_config_gate_pass2.outputs.verdict != 'verified'
         working-directory: ${{ env.INFRA_DIR }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1174,6 +1189,16 @@ jobs:
           # frame that looks healthy on exactly these failures. Empty on every other red path,
           # which is what selects the pre-existing frame-derived branches.
           STABILITY_VERDICT: ${{ steps.infra_config_gate.outputs.stability_verdict }}
+          # #7104 PR-B — the re-push phase outcomes. The phase IS the step (plan R22.1), so no
+          # `repush_failed=<phase>` output is plumbed; these three native outcomes name the phase
+          # between them. Read by the RE-PUSH arm below, which must precede every frame-derived
+          # branch: on a re-push failure the frame looks HEALTHY (200, parses, fatal_line=0), so
+          # every branch below would misdiagnose it as a cosmetic activation failure and route the
+          # operator to a Better Stack query that returns nothing.
+          REPUSH_PLAN_OUTCOME: ${{ steps.repush_plan.outcome }}
+          REPUSH_APPLY_OUTCOME: ${{ steps.repush_apply.outcome }}
+          PASS2_OUTCOME: ${{ steps.infra_config_gate_pass2.outcome }}
+          PASS2_VERDICT: ${{ steps.infra_config_gate_pass2.outputs.verdict }}
         run: |
           set -uo pipefail
           source "$GITHUB_WORKSPACE/scripts/infra-config-red-alert.sh"
@@ -1190,6 +1215,35 @@ jobs:
           # newline or control character can survive) and is used here only as a shell VALUE
           # passed as a function argument — never eval'd, never interpolated into a command.
           RESP=/tmp/infra-config-status-response.txt
+
+          # THE BOUNDED RE-PUSH FAILED (#7104 PR-B). Handled BEFORE the gate-never-ran arm and
+          # before every frame-derived branch, and the ordering is the whole point: on this path
+          # pass 1 exited 0, so GATE_OUTCOME is `success` and the arm below would tell the
+          # operator "the infra-config gate never ran" — which is false, the gate ran, graded,
+          # and deferred. The frame also still reads HEALTHY (200, parses, fatal_line=0), so the
+          # reachable/activation branches further down would tell a non-technical founder that
+          # "the files that landed are on the host and app health is unaffected" and hand them a
+          # Better Stack query that returns nothing. Every clause of that is false when the
+          # TERRAFORM half failed mid-gate.
+          #
+          # NOTE ON THE LOCK: this backend has NO state lock (`use_lockfile = false` in main.tf —
+          # R2 does not support S3 conditional writes), so there is nothing to force-unlock. The
+          # shared `terraform-apply-web-platform-host` concurrency group is the sole serializer.
+          # Say that rather than routing the operator to a lock that cannot exist.
+          if [[ "${REPUSH_PLAN_OUTCOME:-}" == "failure" || "${REPUSH_APPLY_OUTCOME:-}" == "failure" || "${PASS2_OUTCOME:-}" == "failure" ]]; then
+            if [[ "${REPUSH_PLAN_OUTCOME:-}" == "failure" ]]; then
+              PHASE="planning the re-push (no production write was attempted)"
+              LEVER="Nothing was written. Re-run the workflow; if it fails here again, the re-push plan's shape has drifted from the 2026-08-13 measurement and the recovery is correctly refusing to write."
+            elif [[ "${REPUSH_APPLY_OUTCOME:-}" == "failure" ]]; then
+              PHASE="applying the re-push (a production write was ATTEMPTED and did not complete)"
+              LEVER="Terraform state may hold a tainted terraform_data.deploy_pipeline_fix. There is no backend lock to clear. Run a plan first to see the current state, then the documented lever is: terraform apply -replace=terraform_data.infra_config_handler_bootstrap . Do NOT run terraform apply -replace=hcloud_server.web — that host cannot be re-provisioned (cx33, 0/6 stock)."
+            else
+              PHASE="re-verifying after the re-push (the write completed; the host still did not publish a new frame)"
+              LEVER="The bounded recovery is spent — it is one attempt by construction, so re-running will not retry it. The documented lever is: terraform apply -replace=terraform_data.infra_config_handler_bootstrap . Do NOT run terraform apply -replace=hcloud_server.web — that host cannot be re-provisioned (cx33, 0/6 stock)."
+            fi
+            infra_config_red_alert "The automatic config re-push FAILED while ${PHASE}. This is NOT the ordinary activation failure: the gate detected the documented webhook-restart race, deferred its verdict, and the recovery it triggered did not deliver. Ignore any suggestion that app health is unaffected — that is only known for the delivery half, and this failed on the terraform half. ${LEVER}" "reachable" || true
+            exit 0
+          fi
 
           # THE GATE NEVER RAN. Handled FIRST, because every branch below reads a frame the host
           # publishes and reasons about what the gate measured — and if the gate was skipped

@@ -281,6 +281,12 @@ drive() { # $1 = pass, $2 = frame, $3 = GITHUB_OUTPUT path, $4 = baseline (pass 
   ( cd "$SCRIPT_DIR" || exit 99
     export PATH="$I_TMP/bin:$PATH"
     export STUB_FRAME="$2" STUB_HTTP_CODE=200
+    # Per-case status path (#7104 PR-B). The SUT used to write a machine-global fixed
+    # /tmp path, so two concurrent drives clobbered each other's frame — measured by three
+    # reviewers at 5-of-6 red under 6-way concurrency, and the mutation battery then aborts
+    # on its own mandatory green baseline. Both suites are registered in a runner that
+    # fans out, and the battery re-invokes this one, so the collision reaches CI.
+    export INFRA_CONFIG_STATUS_RESPONSE="$I_TMP/status-$1-$$.json"
     export GITHUB_OUTPUT="$3"
     export VERIFY_PASS="$1"
     export ALLOW_MISSING_STATUS=false
