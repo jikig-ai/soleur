@@ -27,15 +27,27 @@ This installs the plugin subtree only — about 10 MiB in well under a minute.
 <details>
 <summary>Installing from this repository directly (slower, and may time out)</summary>
 
-A plain `claude plugin marketplace add jikig-ai/soleur` clones the whole repository (~181 MiB),
-which takes about 329 seconds — well past the CLI's 120-second default — and a failed refresh can
-leave the local checkout unusable. Add `--sparse` so it fetches only what a plugin install needs;
-that completes in about 78 seconds, inside the default limit:
+A first-time `claude plugin marketplace add jikig-ai/soleur` clones the whole repository
+(~181 MiB), which takes about 329 seconds — well past the CLI's 120-second default. Add `--sparse`
+so it fetches only what a plugin install needs; that completes in about 78 seconds, inside the
+default limit:
 
 ```bash
 claude plugin marketplace add jikig-ai/soleur --sparse .claude-plugin plugins
 claude plugin install soleur@soleur
 ```
+
+**Only on a first add.** If you already have a plain `~/.claude/plugins/marketplaces/soleur`
+checkout, do **not** add `--sparse` to it: applying `--sparse` to an existing checkout does not
+convert it in place, it forces a full re-clone — which on this repository is the 329-second
+operation that cannot finish under the 120-second default. Migrate instead, using the commands
+below. Details and recovery: the
+[plugin delivery runbook](knowledge-base/engineering/operations/runbooks/plugin-delivery-recovery.md),
+under `## Symptom 2`.
+
+Once the checkout exists, routine refreshes are incremental `git pull`s rather than fresh clones, so
+the 329 seconds is a one-time cost of adding this way — but it is paid again whenever a refresh
+cannot update in place and restarts as a re-clone.
 
 **Already installed this way?** Switch to the marketplace above — it does not clone the monorepo,
 so the migration is not subject to the timeout:
@@ -51,9 +63,11 @@ Restart the CLI afterwards; plugin changes apply on restart. If your original in
 `--scope project` or `--scope local`, pass the same `--scope` to every command above — the
 default is `user`, and a scope mismatch silently targets an install that isn't there.
 
-Removing the marketplace does **not** reclaim the plugin cache. Measured: after `uninstall`
-and `marketplace remove` both succeed, the old plugin cache survives — about 9.6 MiB, with no
-CLI verb to reclaim it.
+Removing the marketplace does **not** reclaim the plugin cache — though it does remove the
+marketplace checkout itself. Measured: after `uninstall` and `marketplace remove` both succeed, the
+378 MiB checkout is gone and the old plugin **cache** survives — 26 MiB on the machine this was
+measured on, with no CLI verb to reclaim it. Expect more the longer the install has been updating:
+each update caches into a new directory and leaves the previous one behind.
 
 **Do this only once the migration above has completed.** First confirm the new install is live
 and the old one is gone:
@@ -108,10 +122,21 @@ payload.
 claude plugin uninstall soleur && claude plugin install soleur
 ```
 
-That is not belt-and-braces. Soleur's `plugin.json` carries a frozen `0.0.0-dev` version
-sentinel, so the install directory name never changes and there is no version bump for
-`plugin update` to act on — an install can sit months stale while every command reports
-success. A full reinstall is the only step guaranteed to converge the two SHAs.
+That used to be the only step that worked, and the reason no longer holds. The manifests are
+keyless as of 2026-08-12, so the CLI now records a **compound version whose leading half is the
+delivered commit** — measured across two installs on the same day as `43c7d3d79542-31fddb37` then
+`0d6443960662-31fddb37`. The string therefore changes with every commit, the install directory
+name changes with it, and `plugin update` has something to compare. The old frozen `0.0.0-dev`
+sentinel is what made an install sit months stale while every command reported success; that is
+the defect the keyless manifests removed.
+
+Two consequences worth knowing:
+
+- A full reinstall is still the surest way to converge a stubborn install, but it is a fallback
+  now rather than the only mechanism.
+- Because the directory name is derived from that changing version, **each update leaves the
+  previous cache directory behind**. There is no CLI verb to reclaim them. See the reclaim section
+  of `knowledge-base/engineering/operations/runbooks/plugin-delivery-recovery.md`.
 
 ## The Workflow
 

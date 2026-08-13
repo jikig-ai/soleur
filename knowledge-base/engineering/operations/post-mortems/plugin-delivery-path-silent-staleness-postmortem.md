@@ -89,7 +89,9 @@ and the operator's own report was, and remains, the only detection channel.
    `plugins/soleur` alone — install 33 s / 9.66 MiB against 329 s / 342.7 MiB.
 3. Adopted the repo into the existing `infra/github/` Terraform root.
 4. Added `scheduled-marketplace-drift.yml` as the sole control on the published manifest, with a
-   Sentry heartbeat so a schedule that stops firing is itself detectable.
+   Sentry heartbeat so a schedule that stops firing is itself detectable. *(Superseded 2026-08-12,
+   #7490: it is no longer sole — a second job in the same workflow installs the published plugin and
+   asserts delivered content. ADR-182, Decision 6.)*
 5. Documented recovery, including a migration sequence that never re-clones the monorepo and so
    works *from* the broken state.
 

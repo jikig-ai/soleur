@@ -160,9 +160,149 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  canary:
+    runs-on: ubuntu-24.04
+    # Sized for CLI acquisition plus the measured ~27 s add+install, with headroom.
+    # Deliberately larger than drift-check's 5: acquisition is the new and slowest
+    # dependency, and a canary that times out mid-install would report a finding it
+    # did not measure.
+    timeout-minutes: 15
+    # `contents: read` ONLY. The write-capable token stays with drift-check, which
+    # consumes this job's verdict through outputs. This job executes a downloaded
+    # CLI and materialises plugin content; it must not also be able to write.
+    permissions:
+      contents: read
+    outputs:
+      verdict: ${{ steps.canary.outputs.verdict }}
+      finding_count: ${{ steps.canary.outputs.finding_count }}
+      findings: ${{ steps.canary.outputs.findings }}
+      counts: ${{ steps.canary.outputs.counts }}
+    steps:
+      # Unlike drift-check — which deliberately does NOT check out, because it must
+      # observe what raw.githubusercontent serves rather than the runner's tree —
+      # this job needs the committed canary script. The checkout is scoped to this
+      # job alone, so drift-check's no-checkout property is undisturbed.
+      - name: Check out this repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Claude Code CLI
+        id: cli
+        env:
+          # Pinned, never `latest`: an unpinned CLI makes every canary verdict a
+          # function of whatever shipped that morning, so a red run could not be
+          # attributed to this repo's delivery path.
+          CLI_VERSION: "2.1.228"
+        run: |
+          set -uo pipefail
+          # Inherited errexit is ON in a `run:` block with no `shell:` key. A failed
+          # install is a FINDING to report, not a reason to abort before reporting
+          # it, so the bracket is required for the `available=false` path to be
+          # reachable at all.
+          set +e
+          npm install -g "@anthropic-ai/claude-code@${CLI_VERSION}" >/dev/null 2>&1
+          install_rc=$?
+          set -e
+
+          if [[ "$install_rc" -ne 0 ]] || ! command -v claude >/dev/null 2>&1; then
+            echo "::warning::Could not install the pinned Claude Code CLI (npm exited ${install_rc}); the canary will report cli_unavailable."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+          # Always succeed: acquisition failure travels as data to the step below,
+          # which turns it into a finding. Failing here would skip the reporting.
+          exit 0
+
+      - name: Assert the published channel delivers this repo's plugin
+        id: canary
+        if: ${{ !cancelled() }}
+        env:
+          # Measured: the CLI clones via SSH first and reaches HTTPS only after the
+          # SSH attempt terminates. On a runner that attempt is dead weight against
+          # the clone budget, so it is skipped rather than survived.
+          CLAUDE_CODE_PLUGIN_PREFER_HTTPS: "1"
+          CLI_AVAILABLE: ${{ steps.cli.outputs.available }}
+        run: |
+          set -uo pipefail
+          set +e
+
+          if [[ "${CLI_AVAILABLE:-false}" != "true" ]]; then
+            # AP-021: name only what was measured. Nothing about delivery was
+            # evaluated here, so the finding says exactly that.
+            findings="cli_unavailable: the pinned Claude Code CLI could not be obtained; no delivery assertion was evaluated"
+            finding_count=1
+            verdict="MISMATCH"
+            counts="compared=0 expected=0"
+          else
+            raw="$(bash scripts/plugin-delivery-canary.sh 2>/dev/null)"
+            canary_rc=$?
+
+            findings="$(printf '%s\n' "$raw" | sed -n 's/^canary-finding| //p')"
+            counts="$(printf '%s\n' "$raw" | sed -n 's/^canary-counts| //p' | head -1)"
+            [[ -n "$counts" ]] || counts="compared=0 expected=0"
+
+            compared="$(printf '%s' "$counts" | sed -n 's/.*compared=\([0-9]*\).*/\1/p')"
+            [[ -n "$compared" ]] || compared=0
+
+            if [[ "$canary_rc" -eq 0 && "$compared" -gt 0 ]]; then
+              verdict="OK"
+              finding_count=0
+              findings=""
+            else
+              verdict="MISMATCH"
+              # A zero comparison count with a zero exit is a contradiction, not a
+              # pass: "0 differences" and "nothing was compared" are the same bytes
+              # and only one of them is green.
+              if [[ "$canary_rc" -eq 0 && "$compared" -eq 0 ]]; then
+                findings="installpath_unresolved: the canary exited 0 having compared 0 files; a zero comparison count is not a clean result"
+              fi
+              [[ -n "$findings" ]] || findings="install_failed: the canary exited ${canary_rc} without emitting a finding"
+              finding_count="$(printf '%s\n' "$findings" | grep -c . || true)"
+            fi
+          fi
+
+          printf 'marketplace-canary| %s\n' "$counts"
+          if [[ "$verdict" == "OK" ]]; then
+            printf 'marketplace-canary| every delivery assertion holds\n'
+          else
+            printf '%s\n' "$findings" | while IFS= read -r _l; do
+              [[ -n "$_l" ]] && printf 'marketplace-canary| %s\n' "$_l"
+            done
+          fi
+
+          # RE-ARM before the output write, mirroring the sibling step: a failed
+          # append must not fall through to exit 0 leaving an EMPTY verdict, which
+          # satisfies no gate and would report the finding nowhere.
+          set -e
+
+          {
+            echo "verdict=${verdict}"
+            echo "finding_count=${finding_count}"
+            echo "counts=${counts}"
+            echo "findings<<MARKETPLACE_CANARY_FINDINGS_EOF"
+            [[ "$verdict" != "OK" ]] && printf '%s\n' "$findings"
+            echo "MARKETPLACE_CANARY_FINDINGS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          if [[ "$verdict" == "MISMATCH" ]]; then
+            echo "::error::Delivery canary: ${finding_count} failing assertion(s); each is printed above on a marketplace-canary| line."
+          fi
+
+          # The verdict travels as DATA. Failing the step would conflate "delivery
+          # is broken" with "the canary is broken" and skip its consumers.
+          exit 0
+
   drift-check:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    # `needs` is what lets the alarm see BOTH verdicts. `!cancelled()` is
+    # load-bearing with it: a `needs:` dependency that FAILS would otherwise skip
+    # this job entirely, silently disabling the manifest assertions because an
+    # unrelated CLI download broke. The manifest check must survive a broken canary.
+    needs: [canary]
+    if: ${{ !cancelled() }}
     steps:
       # No `actions/checkout`. Every input is fetched over HTTPS, and checking out THIS repo
       # would be actively misleading: assertion 3 must observe what `main` serves to an installer
@@ -422,6 +562,13 @@ jobs:
           # apply-github-infra.yml, found in this same review.) Defaulted at the use site too, so
           # a check step that died before emitting the output cannot abort the filing.
           DISPATCH_ELIGIBLE: ${{ steps.check.outputs.dispatch_eligible }}
+          CHECK_OUTCOME: ${{ steps.check.outcome }}
+          CHECK_VERDICT: ${{ steps.check.outputs.verdict }}
+          CANARY_RESULT: ${{ needs.canary.result }}
+          CANARY_VERDICT: ${{ needs.canary.outputs.verdict }}
+          CANARY_FINDINGS: ${{ needs.canary.outputs.findings }}
+          CANARY_COUNT: ${{ needs.canary.outputs.finding_count }}
+          CANARY_COUNTS: ${{ needs.canary.outputs.counts }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
@@ -600,11 +747,117 @@ jobs:
               echo "::warning::could not link the dispatched run on issue #${EXISTING_ISSUE}"
           fi
 
-      - name: Close the drift issue once the manifest matches again
-        if: ${{ !cancelled() && steps.check.outcome == 'success' && steps.check.outputs.verdict == 'OK' }}
+      # Closes PER CLASS. The two classes are independent, so a run where the manifest is clean
+      # and delivery is broken must close the manifest issue and leave the delivery one open.
+      # Closing on a single combined verdict would either strand a resolved alarm open (which
+      # then dedupes every later episode into silence) or close an alarm that is still true.
+      # Delivery-class filing is its OWN step, not a branch inside the manifest step above.
+      # That step is gated on `verdict == 'MISMATCH'`, so folding the canary into it would make a
+      # canary-only failure file NOTHING — the exact silent-green shape the canary exists to
+      # catch. Keeping them separate also leaves #7493's reconcile-dispatch wiring untouched:
+      # a delivery failure must never dispatch a manifest republish, which cannot fix it.
+      - name: File or update the delivery issue
+        id: delivery_issue
+        if: ${{ !cancelled() && (needs.canary.result != 'success' || needs.canary.outputs.verdict != 'OK') }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CANARY_RESULT: ${{ needs.canary.result }}
+          CANARY_VERDICT: ${{ needs.canary.outputs.verdict }}
+          CANARY_FINDINGS: ${{ needs.canary.outputs.findings }}
+          CANARY_COUNT: ${{ needs.canary.outputs.finding_count }}
+          CANARY_COUNTS: ${{ needs.canary.outputs.counts }}
+        run: |
+          set -uo pipefail
+          set +e
+
+          DELIVERY_TITLE="[ci/marketplace-drift] The published channel no longer delivers this repository's plugin"
+          delivered=1
+          needed=0
+
+          file_or_update() {
+            # $1 = title, $2 = findings, $3 = body preamble, $4 = remediation.
+            # The finding COUNT is deliberately not a parameter: each class states its own count
+            # inside its preamble, in that class's own words, so passing it separately would give
+            # two places to disagree about one number.
+            local TITLE="$1" FIND="$2" PREAMBLE="$3" REMEDIATION="$4"
+            local EXISTING list_rc BODY
+            needed=1
+
+            # A FAILED LOOKUP IS NOT "NOTHING FOUND". Collapsing a `gh issue list` failure into ""
+            # routes to the create branch, so an API blip files a DUPLICATE issue on every
+            # subsequent day the condition persists.
+            EXISTING="$(gh issue list --repo "$GH_REPO" --state open --label "ci/marketplace-drift" -L 100 \
+              --search "in:title \"$TITLE\"" --json number --jq '.[0].number' 2>/dev/null)"
+            list_rc=$?
+
+            BODY="${PREAMBLE}"
+            BODY="${BODY}"$'\n\n'"### Findings"
+            BODY="${BODY}"$'\n'"\`\`\`"
+            BODY="${BODY}"$'\n'"${FIND}"
+            BODY="${BODY}"$'\n'"\`\`\`"
+            BODY="${BODY}"$'\n\n'"Run: ${RUN_URL}"
+            BODY="${BODY}"$'\n\n'"### Remediation"
+            BODY="${BODY}"$'\n'"${REMEDIATION}"
+            BODY="${BODY}"$'\n\n'"This issue closes automatically on the next run where this class of assertion holds."
+
+            if [[ "$list_rc" -ne 0 ]]; then
+              echo "::error::Could not query existing marketplace-drift issues (gh exited ${list_rc}); no issue was filed, because filing without a dedupe result would break the one-issue-per-episode property the close step depends on."
+              delivered=0
+            elif [[ -n "$EXISTING" && "$EXISTING" != "null" ]]; then
+              if ! gh issue comment "$EXISTING" --repo "$GH_REPO" --body "$BODY"; then
+                echo "::error::Could not comment on marketplace-drift issue #${EXISTING}; the standing issue no longer reflects the current findings."
+                delivered=0
+              fi
+            else
+              # NEVER report success unconditionally: with `set +e` in effect an unchecked create
+              # would fall through to a line asserting an issue exists when none does.
+              if ! gh issue create --repo "$GH_REPO" --title "$TITLE" --body "$BODY" \
+                   --label "ci/marketplace-drift" --label "action-required"; then
+                echo "::error::marketplace_drift_issue_filing_failed — the verdict reached the run log only; no action-required issue exists."
+                delivered=0
+              fi
+            fi
+          }
+
+          # ---- Class 2: actual DELIVERY ------------------------------------------------------
+          # Deliberately says nothing about the manifest. A delivery failure with a clean
+          # manifest is the #7471 shape: every metadata field correct, 64 skill directories
+          # delivered where 96 were expected.
+          if [[ "$CANARY_RESULT" != "success" || "$CANARY_VERDICT" != "OK" ]]; then
+            if [[ "$CANARY_RESULT" != "success" ]]; then
+              C_FIND="${CANARY_FINDINGS:-canary_job_${CANARY_RESULT}: the canary job did not complete, so no delivery assertion was evaluated}"
+              C_PRE="The delivery canary job did not complete (job result: \`${CANARY_RESULT}\`). No delivery assertion was evaluated on this run."
+            else
+              C_FIND="${CANARY_FINDINGS:-<no findings were emitted>}"
+              C_PRE="The delivery canary reported ${CANARY_COUNT:-?} failing assertion(s) against a fresh install of \`soleur@soleur-marketplace\`. Comparison counts: \`${CANARY_COUNTS:-unavailable}\`."
+            fi
+            C_PRE="${C_PRE}"$'\n\n'"This asserts what an installing user actually RECEIVES, which the manifest assertions structurally cannot see: a correct manifest can point at a channel that delivers an incomplete or stale tree."
+            C_REM="1. Reproduce locally — this needs no credentials:"
+            C_REM="${C_REM}"$'\n'"   \`bash scripts/plugin-delivery-canary.sh\`"
+            C_REM="${C_REM}"$'\n'"2. Look up the finding token in \`knowledge-base/engineering/operations/runbooks/plugin-delivery-recovery.md\`; every token this canary emits has a row there."
+            C_REM="${C_REM}"$'\n'"3. \`incomplete_delivery\` means the delivered file SET is smaller than what \`main\` serves — the #7471 under-delivery shape. \`content_mismatch\` means bytes differ at the delivered commit. \`stale_delivery\` means the delivered commit is behind \`main\`."
+            C_REM="${C_REM}"$'\n'"4. \`installpath_unresolved\` or \`reference_unreadable\` mean the canary could not form expectations — treat as the canary failing closed, not as evidence about delivery."
+            C_REM="${C_REM}"$'\n'"5. Re-run on demand: \`gh workflow run scheduled-marketplace-drift.yml\`"
+            file_or_update "$DELIVERY_TITLE" "$C_FIND" "$C_PRE" "$C_REM"
+          fi
+
+          echo "delivered=${delivered}" >> "$GITHUB_OUTPUT"
+          if [[ "$needed" -eq 1 && "$delivered" -ne 1 ]]; then
+            echo "::error::A delivery finding was detected but no issue was delivered; failing the job so this is not silently green."
+            exit 1
+          fi
+
+      - name: Close the drift issues whose assertions hold again
+        if: ${{ !cancelled() && ( (steps.check.outcome == 'success' && steps.check.outputs.verdict == 'OK') || (needs.canary.result == 'success' && needs.canary.outputs.verdict == 'OK') ) }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          CHECK_OUTCOME: ${{ steps.check.outcome }}
+          CHECK_VERDICT: ${{ steps.check.outputs.verdict }}
+          CANARY_RESULT: ${{ needs.canary.result }}
+          CANARY_VERDICT: ${{ needs.canary.outputs.verdict }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
@@ -619,19 +872,32 @@ jobs:
           # label alone would auto-close a human-filed issue that merely carries the label, and
           # closing only .[0] would leave a duplicate open forever — which then satisfies the
           # filing step's dedupe guard and suppresses every LATER episode.
-          TITLE="[ci/marketplace-drift] The published marketplace manifest no longer matches the delivery contract"
-          OPEN_NUMS="$(gh issue list --repo "$GH_REPO" --state open --label "ci/marketplace-drift" -L 100 \
-            --search "in:title \"$TITLE\"" --json number --jq '.[].number' 2>/dev/null)"
-          list_rc=$?
-          if [[ "$list_rc" -ne 0 ]]; then
-            echo "::error::Could not query open marketplace-drift issues (gh exited ${list_rc}); a resolved alarm may still be open."
-          else
+          MANIFEST_TITLE="[ci/marketplace-drift] The published marketplace manifest no longer matches the delivery contract"
+          DELIVERY_TITLE="[ci/marketplace-drift] The published channel no longer delivers this repository's plugin"
+
+          close_class() {
+            # $1 = title, $2 = the sentence naming what holds again
+            local TITLE="$1" REASON="$2" OPEN_NUMS list_rc n
+            OPEN_NUMS="$(gh issue list --repo "$GH_REPO" --state open --label "ci/marketplace-drift" -L 100 \
+              --search "in:title \"$TITLE\"" --json number --jq '.[].number' 2>/dev/null)"
+            list_rc=$?
+            if [[ "$list_rc" -ne 0 ]]; then
+              echo "::error::Could not query open marketplace-drift issues (gh exited ${list_rc}); a resolved alarm may still be open."
+              return
+            fi
             while IFS= read -r n; do
               [[ -z "$n" ]] && continue
               gh issue close "$n" --repo "$GH_REPO" \
-                --comment "Every marketplace-manifest assertion holds again. Closed automatically by ${RUN_URL}." \
+                --comment "${REASON} Closed automatically by ${RUN_URL}." \
                 --reason completed || echo "::error::Could not close marketplace-drift issue #${n}."
             done <<< "$OPEN_NUMS"
+          }
+
+          if [[ "$CHECK_OUTCOME" == "success" && "$CHECK_VERDICT" == "OK" ]]; then
+            close_class "$MANIFEST_TITLE" "Every marketplace-manifest assertion holds again."
+          fi
+          if [[ "$CANARY_RESULT" == "success" && "$CANARY_VERDICT" == "OK" ]]; then
+            close_class "$DELIVERY_TITLE" "A fresh install from the published channel delivers this repository's plugin completely, byte-correctly and at current main."
           fi
 
       - name: Sentry check-in (final)
@@ -665,4 +931,10 @@ jobs:
           # workflow's job is detect-then-correct, and a half-completed correction reported as
           # `ok` is the shape this expression exists to refuse. `steps.dispatch.outcome` is
           # 'skipped' when the dispatch was not eligible, which correctly reads as no-failure.
-          status: ${{ (steps.check.outcome == 'success' && steps.dispatch.outcome != 'failure' && (steps.check.outputs.verdict == 'OK' || (steps.check.outputs.verdict == 'MISMATCH' && steps.issue.outputs.delivered == '1'))) && 'ok' || 'error' }}
+          # BOTH controls are conjuncts (#7490), on top of #7493's dispatch conjunct.
+          # Keyed on the manifest check alone, a canary-only failure checked in `ok` — the
+          # alarm reporting healthy through the exact defect the canary was added to catch.
+          # `needs.canary.result == 'success'` is a separate conjunct from the verdict so a
+          # canary job that ABORTS before emitting any finding (the `cli_unavailable` shape,
+          # or an infrastructure failure) checks in `error` rather than being silently absent.
+          status: ${{ (steps.check.outcome == 'success' && steps.dispatch.outcome != 'failure' && (steps.check.outputs.verdict == 'OK' || (steps.check.outputs.verdict == 'MISMATCH' && steps.issue.outputs.delivered == '1')) && needs.canary.result == 'success' && (needs.canary.outputs.verdict == 'OK' || steps.delivery_issue.outputs.delivered == '1')) && 'ok' || 'error' }}
