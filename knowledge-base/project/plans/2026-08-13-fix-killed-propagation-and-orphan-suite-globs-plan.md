@@ -14,6 +14,48 @@ brand_survival_threshold: none
 
 # fix(ci): signal-shape propagation through the wrappers + whole-repo orphan walk
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-13
+**Review panel:** DHH, Kieran, code-simplicity, architecture-strategist, scoped strong-model
+advisor, test-design-reviewer. 31 findings recorded and dispositioned in
+`## Plan Review Revisions` (R1-R31).
+
+### Key improvements
+
+1. **Two P0 correctness defects in the core mechanism.** `RED` already counts signal-killed
+   children (`:339`), so the originally-proposed killed branch was **dead code**; and the
+   `.meta` read loop sits inside a `{ … } | sed` pipeline subshell, where any counter
+   incremented would evaporate. Both verified by direct reading, both fixed (Phase A1 D1/D2).
+2. **The dominant OOM shape was left misclassified.** If the wrapping shim is killed, no `.meta`
+   is written, the suite lands in UNACCOUNTED, and it renders `[FAIL]`. Measured: `xargs`
+   returns **125** and *stops dispatching*, cascading one kill into many unaccounted suites.
+   Now Phase A1 D3 + AC9b, with the xargs rc (currently lost to `| tee`) as the discriminator.
+3. **The A6 deferral rationale was inverted.** `xargs` *is* a layer that cannot observe rc, and
+   the `.meta` files *are already* the sideband A6 describes — shipped as "telemetry" by #7423.
+   The stated re-evaluation trigger had already fired before the ADR was written.
+4. **The empirical premise was re-measured, not inherited.** npm propagates 137/143 through the
+   real `test:ci` chain, so the issue's third wrapper row is struck; and the orphan set is **6**,
+   not 7, across **six** registration surfaces — surface 6 (`sudo bash` inside a multi-line
+   `run: |` block) was missing from the first spec and is what makes AC10 satisfiable.
+5. **Guard hardening.** The mutation sandbox must be a real git repo (else `git ls-files` returns
+   nothing and every row is vacuous); glob patterns must be *derived* from the runner, not
+   duplicated; exclusions re-keyed from basename to path (verified collisions on
+   `parity.test.sh` and `argv-ceiling.test.sh` — one of which this PR turns on).
+
+### Corrections to this plan's own earlier revisions
+
+Recorded rather than silently swapped, because this repo pays for re-derived facts:
+
+- **Phase A0 asserted the opposite of the truth** about `run-registered-suites.test.sh`'s
+  sandbox (`:586` *does* single-file `cp`), which inverted the inline-vs-source rationale.
+- The learnings table claimed the runner "already sidesteps" the subshell trap while the plan
+  was violating it.
+- `#7409` was a PR-vs-issue conflation (the glob landed in **PR #7426**, which closed #7409).
+- An intermediate fix over-corrected the loopback suite into an exclusion; it is genuinely
+  **covered**.
+- The `ADR-093` elevated-stakes citation is real but lives at `:38`, not in the title.
+
 ## Overview
 
 Two gates currently report a colour over work they never did, and this PR closes both.
@@ -27,7 +69,9 @@ most alarming available reading, and a false one.
 **Scope B (#7402, #7523)** — `scripts/lint-orphan-test-suites.sh` walks only
 `scripts/*.test.sh` and `tests/commands/*.sh`. Six tracked suites run in **zero** runners,
 four of them under `plugins/soleur/skills/linear-fetch/scripts/` including
-`redact-linear-urls.test.sh`, a secret-redaction gate ADR-093 classifies as elevated-stakes.
+`redact-linear-urls.test.sh`, a secret-redaction gate classified as elevated-stakes at
+**ADR-093:38** (in its residual-untrusted-exec bullet — *not* its title, which is about plugin
+roots; verified, because grepping the ADR's heading alone makes this citation look wrong).
 The linter's own header already claims "EMPTY IS THE GOAL STATE"; this widens its domain to
 match its claim.
 
@@ -49,7 +93,7 @@ Run before any research was dispatched. Five referenced artifacts, four correcti
 | All four target files exist | `test -f` on each | HOLDS |
 | **"ADR-175 — the taxonomy"** (#7429 body + Scope section) | ADR-175 is `preflight-probe-execution-boundary`; the taxonomy is **ADR-177** | **CORRECTED** |
 | **"npm does not propagate 128+N"** (#7429 table row 3) | Re-measured against the real `test:ci` — see below | **REFUTED** |
-| **`.claude/hooks/lib/` blind spot** (#7402, 2 of 7 orphans) | `test-all.sh:1205` already includes `.claude/hooks/lib/*.test.sh` (landed via #7409) | **ALREADY FIXED** |
+| **`.claude/hooks/lib/` blind spot** (#7402, 2 of 7 orphans) | `test-all.sh:1205` already includes `.claude/hooks/lib/*.test.sh` — added by commit `9b8cea08b`, **PR #7426** (which closed issue #7409). An earlier revision credited "#7409", conflating the issue with the PR | **ALREADY FIXED** |
 | **`set-board-status.test.sh` "run by board-status-sync.yml"** (#7402 note) | That workflow runs `set-board-status.**sh**` (the script under test) at `:119`; the `.test.sh` appears only in a comment at `:5` | **REFUTED — it is a genuine orphan** |
 
 ### The npm row does not reproduce — struck
@@ -205,9 +249,12 @@ secret-redaction gate for `uploads.linear.app` URLs, currently runs in zero runn
 redaction regression can ship undetected. This PR turns it on.
 
 **Brand-survival threshold:** `none` — internal CI tooling; no user-facing surface, no
-persistent store, no external data movement. Sensitive-path scope-out: `threshold: none,
-reason: the diff touches only test-runner and lint scripts plus one ADR; it creates no schema,
-route, auth flow, or migration, and moves no user data.`
+persistent store, no external data movement.
+
+**Sensitive-path scope-out.** The diff touches `apps/web-platform/infra/`, which matches the
+canonical sensitive-path regex, so the scope-out is required rather than optional:
+
+- `threshold: none, reason: the only file under a sensitive path is the test-runner script apps/web-platform/infra/run-registered-suites.sh, which executes test suites and provisions nothing — the diff creates no schema, route, auth flow, migration, secret, or Terraform resource, and moves no user data.`
 
 ## Architecture Decision (ADR/C4)
 
@@ -392,9 +439,14 @@ them, for every derived suite, not the first RED found. The classification choke
 
 **Deterministic selection rule (required).** With more than one killed child the runner MUST emit
 a reproducible rc, or two runs of the same failure report different numbers. Rule: **the
-signal-shaped rc of the lexicographically-first suite key among the killed set** — derived from
-the already-sorted `.meta` iteration, so it needs no extra state. State it in the runner's header
-and pin it with M6.
+signal-shaped rc of the lexicographically-first suite key among the killed set.**
+
+This is genuinely deterministic under `xargs -P` parallelism, and the runner already supplies the
+ordering — it does not need inventing. Verified: `SUITES` is built through `sort -u` (`:146`) and
+the RED walk consumes `… | LC_ALL=C sort` (`:364`). Selection is therefore over a **sorted set**,
+never over completion order, so the rc does not vary with scheduling. Keep the `LC_ALL=C` pin when
+adding the killed walk — dropping it reintroduces locale-dependent ordering, the same class as the
+`comm` finding recorded above. State the rule in the runner's header and pin it with M6.
 
 ### Guard 3 — `.github/scripts/test/run-all.sh` signal propagation
 
