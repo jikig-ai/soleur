@@ -488,12 +488,27 @@ logs:
   retention: "Actions default log retention; the local forensics tree is age-reaped after 12 hours by the same mechanism the sibling runner uses"
 
 discoverability_test:
-  command: "bash tests/scripts/test-git-data-birth-readiness-gate.sh && bash scripts/follow-through-closure-guard.test.sh"
-  expected_output: "the gate suite prints `=== 69 passed, 0 failed ===`; the closure-guard suite exits 0 reporting exactly 15 assertions"
+  command: bash tests/scripts/test-git-data-birth-readiness-gate.sh
+  expected_output: "=== 69 passed, 0 failed ==="
 ```
 
-Both commands are local, credential-free, contact no network, and start with an allowlisted probe
-verb. The rehearsal suite is excluded: it needs a docker daemon and minutes of wall-clock.
+The command scalar is deliberately **unquoted**. `parse-form-a.awk` — the production parser — does
+not strip YAML quotes, so a quoted scalar reaches `bash -c` as one quoted word and exits 127, which
+Check 10 reports as "the probe's program is not on the sandbox PATH". Measured 2026-08-13 in the
+real sandbox: quoted `rc=127`, unquoted `rc=0`. Tracked as #7548.
+
+The command is local, credential-free, contacts no network, and starts with an allowlisted probe
+verb. Two exclusions, both deliberate:
+
+- **The closure-guard suite is no longer chained here.** This field read
+  `… gate.sh && bash scripts/follow-through-closure-guard.test.sh` until ship time, and `&&` is a
+  shell-active token that preflight Check 10's own reject refuses — so the declared probe could
+  not be executed by the gate that exists to execute it. That is this PR's subject class (a check
+  that cannot report), reached in the plan describing the fix. The closure-guard suite still runs
+  in the same CI job and carries its own exactly-15 floor; only the *probe* narrowed, to the one
+  command Check 10 can actually run. Verified 2026-08-13 inside the real bwrap sandbox: rc=0,
+  stdout `=== 69 passed, 0 failed ===`.
+- **The rehearsal suite is excluded**: it needs a docker daemon and minutes of wall-clock.
 
 ## Architecture Decision (ADR/C4)
 
