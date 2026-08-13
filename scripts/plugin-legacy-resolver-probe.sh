@@ -238,10 +238,17 @@ def redact_path:
 
 | ( $installs_raw
     | map(. + {
+        # The parentheses around `if` are REQUIRED, not stylistic: an object
+        # VALUE must be a term, and a bare `if ... end` there is a jq 1.8
+        # relaxation. On jq 1.7 (what CI runs) it is `syntax error, unexpected
+        # if` at compile time, so the probe dies before evaluating anything and
+        # the whole suite fails in 42ms. Local jq 1.8 accepted all three sites,
+        # which is why this only surfaced in CI. Note the already-correct
+        # `alias:` value below, which has always been parenthesized.
         resolution:
-          if (.alias as $a | $matched_aliases | index($a)) != null then "target"
-          elif (.alias as $a | $known_aliases | index($a)) != null then "other"
-          else "unknown" end
+          ( if (.alias as $a | $matched_aliases | index($a)) != null then "target"
+            elif (.alias as $a | $known_aliases | index($a)) != null then "other"
+            else "unknown" end )
       }) ) as $installs
 
 | ( [ $sites[] | .enabled[] ]
@@ -249,9 +256,9 @@ def redact_path:
     | map({ key: ., alias: (. | split("@") | if length > 1 then last else "" end) })
     | map(. + {
         resolution:
-          if (.alias as $a | $matched_aliases | index($a)) != null then "target"
-          elif (.alias as $a | $known_aliases | index($a)) != null then "other"
-          else "unknown" end
+          ( if (.alias as $a | $matched_aliases | index($a)) != null then "target"
+            elif (.alias as $a | $known_aliases | index($a)) != null then "other"
+            else "unknown" end )
       }) ) as $enabled
 
 | ([ $sites[] | select(.status == "unreadable") ] | length) as $unreadable_count
@@ -278,9 +285,10 @@ def redact_path:
   verdict:
     # A positive resolution outranks an ambiguous one: if anything definitely
     # points at the target, that is the finding, and the unknowns are detail.
-    if ($matched_reg_count + $target_install_count + $target_enabled_count) > 0 then "legacy-present"
-    elif ($unknown_install_count + $unknown_enabled_count + $unreadable_count) > 0 then "unknown-present"
-    else "clean" end,
+    # Parenthesized for the jq-1.7 object-value reason documented above.
+    ( if ($matched_reg_count + $target_install_count + $target_enabled_count) > 0 then "legacy-present"
+      elif ($unknown_install_count + $unknown_enabled_count + $unreadable_count) > 0 then "unknown-present"
+      else "clean" end ),
   sites: ( $sites | map({
             site, kind, status,
             path: (.path | redact_path),
