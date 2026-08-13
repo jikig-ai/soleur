@@ -120,6 +120,31 @@ a filed issue and needed two correcting comments. A single error is a slip; thre
 direction is motivated reading, and the tell is that none of them were checked *against the
 paragraph they sat in*.
 
+## Observed in `git-data-runcmd-rehearsal.test.sh`, deliberately not fixed here
+
+Surfaced by the review panel on the #7535 Phase-1 PR. All pre-existing, none blocking, all
+recorded here rather than filed — that PR closes no issue, so filing would have been
+net-positive backlog for polish. Whoever next touches this file's R1 or floor region:
+
+- **The floor ledger's standalone claim is stale.** It asserts *"R1 emits exactly 7 on all
+  three of ITS paths (healthy, extraction-failed, precondition-missing)"*; the healthy path
+  emits **8** (`:833` extraction, `:849` mutation-landed, plus six case blocks). The
+  accounting across the `RAISED` blocks does reconcile — `R1 7` is the 19→33 era and the
+  33→36 block separately records R1's unclassified control — so only the standalone sentence
+  is wrong. Consequence is mild but real: a skip path yields `total=43` against the `-lt 44`
+  floor, so it reports "harness did not execute fully" instead of the intended parity.
+  Correcting it means auditing the whole ledger, which is why it was left alone.
+- **`:895` discards the string that names the cause.** `sh -c "$cmd" >/dev/null 2>&1 || true`
+  swallows `mkfs.ext4: not found` (rc=127). The R1(a)/(b) `*NOFEATURES*` branches added in
+  that PR now say *what* happened; capturing that stderr to a per-arm file under `/out` would
+  say *why*. Costs nothing on the green path.
+- **The T5 networking note's apt claim is imprecise.** It says "with no network `apt-get`
+  exits 100"; measured, that is true of installing an *absent* package — `apt-get update`
+  offline returns **rc=0**. Different arm, prose only.
+- **`--network none` is newly possible for R1's spin**, which now makes zero network calls.
+  Explicitly out of scope there (the plan's NG2), and the `:532` note stays accurate because
+  it scopes the `run_case` spins ~350 lines above.
+
 ## Session Errors
 
 1. **Routing carried a false premise.** The `/soleur:go` args asserted a referenced retry
