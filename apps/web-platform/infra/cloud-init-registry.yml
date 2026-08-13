@@ -612,12 +612,21 @@ write_files:
   # config, so no credentialed upstream URL; htpasswd values are never echoed) and were dropped
   # rather than kept as decorative safety.
   #
-  # INERT UNTIL PROVISIONED, AND THAT IS STATED RATHER THAN HIDDEN. hcloud_server.registry is
+  # WAS INERT UNTIL PROVISIONED — DELIVERED 2026-08-12T20:54:12Z (#7455). hcloud_server.registry is
   # cloud-init-only (ADR-096, amended by ADR-172 §8): no config webhook, no provisioner, no
   # cloud-init re-run, and every registry resource is an OPERATOR_APPLIED_EXCLUSION. Merging this
-  # applies NOTHING. Delivery rides the pending step-6 `registry-host-replace` of the open
-  # zot-pin ordered path; this change does not request that replace. Liveness is owned by
-  # scripts/followthroughs/zot-log-channel-7440.sh on a DEDICATED tracker.
+  # applies NOTHING — that rule is UNCHANGED and governs the NEXT change to this file.
+  #
+  # What is retracted is only the vehicle: an earlier form of this block said delivery "rides the
+  # pending step-6 `registry-host-replace` of the open zot-pin ordered path". It did not. That
+  # replace had already fired atomically inside registry_luks_recut on 2026-08-10T22:08Z, ~45h
+  # BEFORE this shipper merged (2026-08-12T19:38Z), so the shipper sat inert on a host born before
+  # it existed and the rider had no vehicle left. A dedicated registry_host_replace job
+  # (run 31639782781) delivered it; first warehouse readback 21:03:51Z flipped ADR-184 to accepted.
+  # A rider is only valid while its vehicle is still pending.
+  #
+  # Liveness is owned by scripts/followthroughs/zot-log-channel-7440.sh on a DEDICATED tracker,
+  # which now runs as a REGRESSION detector rather than a delivery wait.
   #
   # betterstack_ingest_url is terraform-interpolated (non-secret host routing, same class as the
   # reporter above); BETTERSTACK_LOGS_TOKEN is injected AT UNIT START by `doppler run` from the

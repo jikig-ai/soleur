@@ -9,7 +9,7 @@ status: SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)
 disposition: DISCHARGED
 signed_off_at: 2026-08-12
 signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v1 posture; operator retains an optional veto)"
-disposition_history: "BLOCKED at first review (B1-B6) — 2026-08-12 -> B1-B6 VERIFIED FIXED at re-review (22f298dde) -> BLOCKED at re-review on B7, a table-breaking defect introduced by this authority's own §7 B2 draft -> B7 VERIFIED FIXED (649f983dd) and DISCHARGED 2026-08-12, verified against the RENDERED cell split rather than the raw line"
+disposition_history: "BLOCKED at first review (B1-B6) — 2026-08-12 -> B1-B6 VERIFIED FIXED at re-review (22f298dde) -> BLOCKED at re-review on B7, a table-breaking defect introduced by this authority's own §7 B2 draft -> B7 VERIFIED FIXED (649f983dd) and DISCHARGED 2026-08-12, verified against the RENDERED cell split rather than the raw line -> 2026-08-13 (#7455): DISCHARGE STANDS on a spent premise. The change no longer ships INERT — delivered 2026-08-12T20:54:12Z, live since 21:03:51Z. The three INERT-dependent passages are annotated at §11; none was load-bearing on the substantive holdings, which are re-confirmed. NOT re-opened."
 attested_commits: "22f298dde (B1-B6), 649f983dd (B7)"
 tier_classification: "Tier 3 (internal record-keeping) — Art. 30(1)(d)/(g) amendment to an existing Processing Activity. No new recipient, no new sub-processor, no new third-country transfer, no user-facing legal-document surface. `docs/legal/**` untouched, so none of the five mirror/SHA/heading gates are engaged."
 semver: "N/A — no `docs/legal/**` document changed; TC_VERSION unaffected"
@@ -21,6 +21,7 @@ re_evaluation_triggers:
   - "Execution of the Better Stack s.r.o. Vendor DPA (currently PENDING). Four emitters now rely on an unexecuted Art. 28(3) instrument; execution retires that exposure and should be recorded in the same pass."
   - "First arms-length (non-Jikigai) principal holding `zot-pull` / `zot-push` credentials. The §(g) basis for declining a general free-text scrubber is that zot's identity model carries only service principals; a human-held credential re-opens that reasoning."
   - "Any zot version bump that changes the log schema — in particular one that stops self-masking `Authorization`, moves credentials outside the `headers` object, or adds a top-level identifier field."
+  - "Any `clientIP` value observed on Better Stack source 2457081 from the `soleur-registry` plane that is not an RFC1918 address. Post-delivery (2026-08-12T20:54:12Z) this is the observable signature of the public-ingress trigger above having fired, on rows already in flight. The §(c) re-attestation of 2026-08-13 verifies the topology that bounds observable values; it does not audit shipped values."
 ---
 
 # CLO counsel review — #7440 / PR #7444 (registry zot container-log shipper)
@@ -316,3 +317,94 @@ No Art. 33 or Art. 34 notification is warranted. No new recipient, sub-processor
 ### 10.2 Note for the next author of a fix draft
 
 Two of the seven blockers in this review — B7, and the imprecision at §9.4 — originated in wording I drafted, not in the change under review. Drafted remediation text is convenient and it is also unreviewed text entering a regulator-facing record. It should be checked against the target file's own conventions before it is applied. `article-30-register.md` carried ten correctly escaped pipes before mine arrived; the convention was there to be read.
+
+---
+
+## 11. Premise expiry — 2026-08-13 (#7455): the change no longer ships INERT
+
+**Disposition: DISCHARGED — UNCHANGED. This section annotates a spent premise; it does not re-open the attestation.**
+
+The shipper merged INERT on 2026-08-12T19:38Z exactly as §5 recorded, and applied nothing. It was
+then **delivered** by a separate, dedicated `registry_host_replace` job (workflow run 31639782781)
+completing **2026-08-12T20:54:12Z**, with first warehouse readback at **21:03:51Z** — 37 envelope
+rows read back out of Better Stack Logs source 2457081. Delivery did not ride the step-6 replace
+this review saw as pending; that replace had already fired 2026-08-10T22:08Z, ~45h before the merge.
+Whole zot journald rows now flow continuously to source 2457081 by direct host POST.
+
+Three passages in this audit rest on inertness. I take them separately, because they are not
+equally load-bearing.
+
+**(1) §5, "This is also what keeps B2's residual from crystallising on merge."** Premise spent.
+Disposition unaffected: the word "also" is doing exactly the work it appears to do, and §3/B2 states
+in terms that "I am **not** blocking on the existence of the gap". The block was on the register's
+host-level *sentence*, which was fixed at 22f298dde and remains fixed. What genuinely changes is
+that the `SOLEUR_ZOT_DISK` `zot_last_err` residual is now a **LIVE** bounded residual rather than a
+prospective one. Its bounds are unchanged (≤300 chars, sampled, fallback tier only, deny-all-public
+host, credential would be a private-net client's own). Its **priority** is not: #7500 should be
+treated as live-exposure remediation rather than engineering hygiene. Still a CTO decision, still
+non-blocking on this gate, which is discharged by accurate disclosure either way.
+
+**(2) §5, the Better Stack Art. 28(3) paragraph — "the INERT posture means no additional data flows
+on merge — so it does not block this diff."** This is the one passage where inertness was genuinely
+load-bearing, and the ground is now spent. It is **replaced, not restated**. The correct and durable
+ground: reliance on this unexecuted instrument is pre-existing and predates the registry emitter by
+roughly three months (Better Stack has received Vector-shipped journald and host_metrics on source
+2457081 since #4279 merged 2026-05-21, a materially richer personal-data payload); and the registry
+plane's incremental payload carries no Art. 4(1) personal data on the current topology, re-attested
+at PA-8 §(c). Going live adds no new personal data to the exposure. **Still a tracked risk, still
+not a blocker — but no longer open-ended.** The AC15 `compliance/critical` escalation that
+`compliance-posture.md` announces has never been filed: a 2026-08-13 search of issue titles and of
+the `compliance/critical` label returns no Better Stack DPA item. Directed at
+`compliance-posture.md` line 96, with re-evaluation on execution or 2026-11-13, whichever is first.
+
+**(3) §10.1, "The change ships INERT."** Surplusage, and its expiry changes nothing. Art. 33 and
+Art. 34 turn on Art. 4(12), not on inertness. Authorised disclosure to an existing processor on an
+existing source under processor terms, intra-EU, is not a personal data breach whether the channel
+is live or inert. **Re-confirmed on live traffic: no Art. 33 or Art. 34 notification is warranted.**
+
+### 11.1 What is re-verified rather than inherited
+
+The `clientIP` Art. 4(1) conclusion at §4 was reasoned prospectively about a channel carrying
+nothing. It now governs live rows, so it is re-attested against the IaC the replace applied rather
+than carried forward:
+
+- `apps/web-platform/infra/zot-registry.tf` — `resource "hcloud_firewall" "registry"` declares a
+  name and labels and **no `rule` block of any kind**. Deny-all public ingress survives the replace.
+- `local.registry_private_ip` remains pinned to `10.0.1.30`, single-sourced, consumed by
+  `network.tf` and by the `tunnel.tf` `ingress_rule` origin `tcp://10.0.1.30:5000`.
+
+Conclusion unchanged: every observable `clientIP` is an RFC1918 address of a host in the
+controller's own estate; it identifies a machine and is not Art. 4(1) personal data.
+
+**Stated rather than implied:** this verifies the topology that bounds which values are
+*observable*. It is not an observed-value audit of rows shipped since 21:03:51Z. Converting the
+topology-dependence into a continuously-enforced invariant — an RFC1918 assertion on the readback
+path, so drift fails a probe instead of silently reclassifying a field already in flight — is
+**referred to the CTO** and should carry its own issue. It is recorded as a new frontmatter trigger.
+
+### 11.2 Everything else, re-confirmed on live traffic
+
+No new recipient. No new sub-processor. No new third-country transfer. Lawful basis unchanged and
+adequate — Art. 6(1)(f) plus Art. 6(1)(c), with purpose (b)(vi) covering this squarely; a described
+operation starting requires no new basis and no fresh LIA. The `redact()` verification at §3, the
+Art. 30(1) characterisation at §5, and the ADR cross-reference check at §6.2 are undisturbed and
+are not re-litigable absent a change to the implementation they describe.
+
+### 11.3 Scope note on PR #7514
+
+PR #7514 (ADR-184 `adopting → accepted`) touches seven files, **none** under
+`knowledge-base/legal/**` or `docs/legal/**`. It did not cause the delivery and is not the trigger
+for this correction — the Art. 30(1)/Art. 5(2) currency duty arose at 20:54:12Z and would exist
+identically had #7514 never been opened. It is **not blocked**. The register amendments are
+directed to land with it, because splitting the record of one event across two PRs is how currency
+gaps are born; failing that, within 24 hours in a dedicated PR.
+
+### 11.4 The generalisable lesson
+
+An attestation written against a pending change acquires a **shelf life at the moment of delivery**,
+and nothing in the pipeline detects its expiry — the same structural blindness ADR-184's own
+amendment records about the spent rider. Two guards follow from this. A compliance record must never
+assert deployment state in a tense that silently becomes false; state it as dated fact about the
+merge, as the amendment above now does. And a topology-dependent legal conclusion reasoned against
+an inert channel is a **prediction**, not an attestation — it must be re-verified, and visibly
+re-dated, on the day the channel starts carrying traffic.
