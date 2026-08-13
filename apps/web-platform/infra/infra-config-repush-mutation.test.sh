@@ -29,7 +29,7 @@
 # AXES THIS BATTERY DOES **NOT** EDIT:
 #   demotion — leaving asserted bytes identical and rewording the prose above them so the
 #     prescription reads as conditional. Nothing in this diff is a prose prescription that a gate
-#     enforces; ADR-187 is a decision record, not an enforced contract. Not applicable rather
+#     enforces; ADR-189 is a decision record, not an enforced contract. Not applicable rather
 #     than skipped.
 #   fixture direction — the far side of a transform. Guard 1's predicate is a one-directional
 #     allow-list (exactly one input shape returns 0), and G1-7 IS the opposite-direction fixture.

@@ -19,7 +19,7 @@
 # prescribed baseline (`git show origin/main:<the workflow>`) FLIPS at merge:
 # post-merge that revision carries the one-line `run:`, so the guard would
 # either fail or pass vacuously for the next contributor. The move's
-# verbatim-ness is instead pinned by the SHA-256 recorded in ADR-187 and in
+# verbatim-ness is instead pinned by the SHA-256 recorded in ADR-189 and in
 # commit 1's message (both sides 2a23f958…, 19774 bytes).
 set -euo pipefail
 

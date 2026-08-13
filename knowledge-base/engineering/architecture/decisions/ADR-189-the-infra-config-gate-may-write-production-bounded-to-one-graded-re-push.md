@@ -6,7 +6,7 @@ issue: 7104
 supersedes_claim: "R18.11: the ADR should record the step-boundary collapse — the boundaries were RESTORED instead"
 ---
 
-# ADR-187 — A bounded, graded re-push, and no verification surface that actuates
+# ADR-189 — A bounded, graded re-push, and no verification surface that actuates
 
 ## Context
 

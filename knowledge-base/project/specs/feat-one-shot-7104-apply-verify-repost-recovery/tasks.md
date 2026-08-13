@@ -118,7 +118,7 @@ sourceable library of quiet, pure adjudicators. Exit status is the verdict; noth
       provisioners, and `-target` is transitive at the resource level. If the count is not 1, the
       cardinality assert would abort **every** recovery on the failure path of a real incident, and
       because the path ships dark nobody would ever learn. Shape the I1–I3 fixtures from the measured
-      addresses and state the number in ADR-187 as the invariant the assert pins.
+      addresses and state the number in ADR-189 as the invariant the assert pins.
 
       **MEASURED 2026-08-13 against live prd state. The cardinality is 1. The design does not
       change, and guard 3's literal is `1`.**
@@ -168,7 +168,7 @@ sourceable library of quiet, pure adjudicators. Exit status is the verdict; noth
       plan R18.10.
 - [x] **4.2** `dpf-replaced == false` must return non-zero regardless of frame shape (R1(A)), and
       the `^(true|false)$` polarity guard must reject `null`, empty, `TRUE` and absent (R17.1).
-- [ ] **4.3** Guard 1 matrix re-derived against the predicate: each row is "input X → wrong
+- [x] **4.3** Guard 1 matrix re-derived against the predicate: each row is "input X → wrong
       verdict", which is **stronger** than a stub-driven row because it exercises the real decision.
       **The rewritten matrix is in the plan's `## Guard Contract` §Guard 1** — seven rows, including
       the allow-list row (5), the vacuity row (6) and the positive control (7).
@@ -180,14 +180,14 @@ sourceable library of quiet, pure adjudicators. Exit status is the verdict; noth
       two rows invite writing the test twice. **Re-scoped to what P7 does not cover (R20.4):** assert
       the hatch is **unavailable once the latch is set** — a 404 on the last poll after a re-push
       must not fall through to `exit 0`.
-- [ ] **4.6** **PRIMARY (promoted — R18.4).** One integration-shaped test that drives the **real**
+- [x] **4.6** **PRIMARY (promoted — R18.4).** One integration-shaped test that drives the **real**
       extracted `run:` body twice against fixture responses and proves pass 2 was reached (plan
       R13.7). Cases **I1–I3** in plan R18.10. Promoted from "one test" to the primary acceptance
       criterion because R18.4 establishes the recovery path is **not producible in production on
       demand** — this test is the only verification that the wired decision behaves. Locate and
       reuse the repo's existing `run:`-block extractor (PR-A syntax-checked 19 extracted blocks);
       do not write a second one. Stub `curl`, `terraform` and `doppler` on `PATH`.
-- [ ] **4.7** Assert each pass's verdict **independently** — no case may collapse to "the last
+- [x] **4.7** Assert each pass's verdict **independently** — no case may collapse to "the last
       attempt passed". Related: no case's expected verdict may be derived from the fixture builder's
       own defaults (Guard 1 row 6).
 
@@ -221,8 +221,8 @@ sourceable library of quiet, pure adjudicators. Exit status is the verdict; noth
       `.github/workflows/infra-validation.yml` in the **same commit**. The directory convention is
       `<name>.sh` + `<name>.test.sh` (~12 pairs, 105 registered suites), and this fixes ADR-150's own
       recorded regret that `scripts/cutover-inngest.sh` shipped without a companion suite. Record the
-      placement deviation from ADR-150 (`scripts/`) in ADR-187 so it does not read as an oversight.
-- [x] **6.3** **[DONE, with a stated deviation.]** The byte-compare was performed at commit 1 (pre-move `run:` block parsed from the base revision with PyYAML, no whitespace normalization; both sides sha256 `2a23f958…`, 19774 bytes) and `bash -n` runs on the extracted file in `infra-config-verify.test.sh`. It is deliberately NOT committed as a standing suite assertion: the prescribed baseline `git show origin/main:<workflow>` BECOMES the post-move revision at merge, so the baseline flips and the guard would fail or pass vacuously for the next contributor — and commit 2 parameterises the script, so a permanent byte-identity assert would be RED by the end of this same PR. The hashes are recorded in ADR-187 and commit 1 instead. Original text: **Guard 2 (verbatim gate).** Port ADR-150's technique — the working reference is
+      placement deviation from ADR-150 (`scripts/`) in ADR-189 so it does not read as an oversight.
+- [x] **6.3** **[DONE, with a stated deviation.]** The byte-compare was performed at commit 1 (pre-move `run:` block parsed from the base revision with PyYAML, no whitespace normalization; both sides sha256 `2a23f958…`, 19774 bytes) and `bash -n` runs on the extracted file in `infra-config-verify.test.sh`. It is deliberately NOT committed as a standing suite assertion: the prescribed baseline `git show origin/main:<workflow>` BECOMES the post-move revision at merge, so the baseline flips and the guard would fail or pass vacuously for the next contributor — and commit 2 parameterises the script, so a permanent byte-identity assert would be RED by the end of this same PR. The hashes are recorded in ADR-189 and commit 1 instead. Original text: **Guard 2 (verbatim gate).** Port ADR-150's technique — the working reference is
       `apps/web-platform/infra/cutover-inngest-workflow.test.sh`, same directory. Parse the `run:`
       block from the **base** revision with PyYAML and compare **byte-for-byte** against the new file
       minus its shebang, with **no whitespace normalization** (normalization is the transform that
@@ -340,7 +340,7 @@ sourceable library of quiet, pure adjudicators. Exit status is the verdict; noth
 
 ## Phase 8 — PR-B: Guard 2 and the floor
 
-- [ ] **8.1** Extend the production call-site pin. **[Corrected — R18.3]** ~~the workflow calls
+- [x] **8.1** Extend the production call-site pin. **[Corrected — R18.3]** ~~the workflow calls
       `infra_config_bounded_verify`, and `verify_once` is invoked at most twice~~ — neither exists.
       The added clauses are: the workflow calls **`infra_config_should_repush`**; the re-push block
       appears exactly **once**; it is latch-guarded; and the loop still has exactly **one** `done`.
@@ -362,7 +362,7 @@ sourceable library of quiet, pure adjudicators. Exit status is the verdict; noth
       contains no command-position `terraform`, `curl`, `ssh`, `systemctl`, a mutating `doppler`
       subcommand, or `gh issue` (command position, not bare token — 20+ comment-only occurrences
       exist; `cq-assert-anchor-not-bare-token`).
-- [ ] **8.2** Add the Guard 2 mutation rows. **[Corrected]** the rewritten matrix has **seven**
+- [x] **8.2** Add the Guard 2 mutation rows. **[Corrected]** the rewritten matrix has **seven**
       rows (plan `## Guard Contract` §Guard 2); the old "row 4 is cut" note referred to the
       pre-rewrite table.
 - [x] **8.3** Raise `GATE_MIN_ASSERTIONS` to the post-change **measured** count, with no slack.
@@ -408,19 +408,35 @@ sourceable library of quiet, pure adjudicators. Exit status is the verdict; noth
 
 ## Phase 10 — Exit gate
 
-- [ ] **10.1** `bash scripts/test-all.sh` green. **[Corrected — R18.8 §2]**
+- [x] **10.1** `bash scripts/test-all.sh` green. **[Corrected — R18.8 §2]**
       ~~`run-registered-suites.sh` reports no new orphan~~ — `scripts/run-registered-suites.sh` does
       not exist (the real file is `apps/web-platform/infra/run-registered-suites.sh`, a different
       artifact). The orphan gate is **`scripts/lint-orphan-test-suites.sh`**, run as a registered
       suite by `test-all.sh`; it must report no new orphan. Also run
       `python3 scripts/lint-guard-contract.py` over the plan and
       `python3 scripts/lint-workflow-errexit-capture.py`.
-- [ ] **10.2** `actionlint` clean on the workflow; extracted `run:` snippets checked with `bash -n`
+- [x] **10.2** `actionlint` clean on the workflow; extracted `run:` snippets checked with `bash -n`
       **on the extracted file** — never `bash -n` on the `.yml`, and never `bash -c`, which would
       *execute* the snippet and perform a production apply (R16.3).
 - [ ] **10.3** Re-derive the ADR ordinal against freshly-fetched `origin/main` immediately before
       merge, and sweep the plan, this file and every AC if it changes.
-- [ ] **10.4** Post-merge: confirm the `DPF_REPLACED == false` path — explicit `::notice::`, no
+
+      **IT COLLIDED, and the ADR is renumbered 187 → 189 (2026-08-14).** Re-derived across all
+      **66** `origin/*` refs, not just `origin/main`: `origin/feat-one-shot-7429-7402-killed-signal-
+      and-orphan-globs` also carries an **ADR-187** (a different decision —
+      `nested-runner-signals-unresolved-by-exit-shape-from-observed-rc-only`) and
+      `origin/feat-one-shot-7291-t5-mutation-network-flake` carries **ADR-188**. Neither is on
+      `origin/main`, so all three claims are provisional; **189** is the lowest free ordinal.
+
+      Swept: the filename plus **15** references across 6 files (battery, verify suite, the ADR's
+      own H1, plan ×7, session-state ×2, this file ×3). Residual `ADR-187` in the branch: **0**.
+      The sweep was scoped to the enumerated files rather than run repo-wide — a blanket renumber
+      is how another branch's work gets rewritten, and a count certifies it either way.
+
+      **This row stays OPEN deliberately.** Its instruction is "immediately before merge", and it
+      is not discharged by having been run once: a sibling could land 189 during review. `/ship`'s
+      ADR-Ordinal Collision Gate must re-run this enumeration and re-sweep if it moved again.
+- [x] **10.4** Post-merge: confirm the `DPF_REPLACED == false` path — explicit `::notice::`, no
       re-push, green job. **[SATISFIED — R18.5.]** Evidence: GitHub Actions run **31714143720**
       (`workflow_dispatch` on `main`, 2026-08-13T15:12:19Z, conclusion `success`), which logs
       `DPF_REPLACED: false` at every step and emits
@@ -428,6 +444,16 @@ sourceable library of quiet, pure adjudicators. Exit status is the verdict; noth
       this apply (start_ts=1786001951, identical to the pre-apply reading)`. **Do not re-dispatch.**
       The evidence transfers only under **AC20**: the diff must not touch the
       `DPF_REPLACED == "false"` branch of the freshness pin. Verify AC20, then tick.
+
+      **AC20 VERIFIED 2026-08-14 against freshly-fetched `origin/main`: the arm is byte-identical,
+      7269 bytes, sha256 `83d8e73ee8518502` on BOTH sides.** The `## Work Phase` section of
+      `session-state.md` records **7403**; that figure measured a looser boundary, and both readings
+      are kept rather than one overwriting the other. Reproducible definition, so this is not a
+      number anyone has to take on trust: extract the gate step's `run:` body from `origin/main`
+      **with PyYAML** (which dedents the block scalar), find the single line carrying `NO push was
+      expected, so no new frame should exist.`, take the nearest preceding `else` and its matching
+      `fi` **at the same indentation**, strip that indentation, and apply the identical extraction
+      to `infra-config-verify.sh`. Run 31714143720 therefore measures the code that ships.
 - [ ] **10.5** **[Added — R18.4.]** The PR body carries `Closes #7104`. `ship`'s post-merge dispatch
       expects a **green no-op run on the `false` arm with zero `op=infra-config-repush-attempted`
       emissions** (AC14′) — a regression check on the arm PR-A shipped, **not** an exercise of the

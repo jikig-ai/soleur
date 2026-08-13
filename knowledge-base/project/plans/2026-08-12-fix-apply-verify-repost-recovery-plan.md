@@ -436,7 +436,8 @@ No open code-review issue mentions `.github/workflows/apply-deploy-pipeline-fix.
   `FRAME_START_TS >= APPLY_START_EPOCH`. The degraded arm passes on weaker evidence. It is
   bounded by a runner-side `APPLY_START_EPOCH` assert the host cannot influence, and by the
   future-frame check, but it is genuinely a new way to be green.
-- **Making a red run green ARMS six previously-unreachable `if: success()` steps.** Two of them
+- **Making a red run green ARMS five previously-unreachable `if: success()` steps.**
+  **[Corrected 2026-08-13 — R19.4 §4; this said *six*.]** Two of them
   close the operator's GitHub issues asserting server state was re-aligned with HEAD. On a
   zero-change apply that assertion is false, so both are now gated on `PLAN_HAS_CHANGES`. This
   was the review's top finding and it is the concrete user-facing artifact: the founder's drift
@@ -2428,7 +2429,7 @@ Replaces T11–T21. All run in `infra-config-gate.test.sh` unless marked.
 
 ## R18.11 — Architecture Decision
 
-**ADR-187** (provisional; re-derive at merge). One decision: *the infra-config apply gate may now
+**ADR-189** (provisional; re-derive at merge). One decision: *the infra-config apply gate may now
 write production, bounded to a single shape-gated re-push, and the terminal verdict never leaves the
 step that fails closed.*
 
@@ -2459,8 +2460,13 @@ optional; if taken, `scripts/regenerate-c4-model.sh` must run in the same commit
 - **If this lands broken, the user experiences:** a green `apply-deploy-pipeline-fix` run while the
   production host still runs the previous config — #6594's latched false-green. The specific
   fail-open PR-B could introduce is a re-push whose *success* is read as a verified *delivery*: an
-  HTTP 202 that started this incident class is exactly "the push succeeded". Six `success()`-gated
-  steps re-arm behind it; two close the founder's GitHub issues, one swaps the running container.
+  HTTP 202 that started this incident class is exactly "the push succeeded". **Five**
+  `success()`-gated steps re-arm behind it; two close the founder's GitHub issues, one swaps the
+  running container. **[Corrected 2026-08-13 — R19.4 §4.]** This bullet said *six*. Five is the
+  measured count, and it is now pinned by `AC18_SUCCESS_STEPS` in `infra-config-gate.test.sh`,
+  which re-derives it from the parsed workflow rather than restating it — the backstop's whole
+  justification is sized on this number, so a stale one here understates the blast radius the
+  reviewer is asked to weigh.
 - **If this leaks, the user's workflow and credentials are exposed via:** the channel this gate
   protects carries `/etc/default/soleur-doppler-token` and `/etc/webhook/hooks.json`. #7095 records
   that a malformed value there bricks the only no-SSH remediation path on a host that cannot be
@@ -2494,7 +2500,7 @@ optional; if taken, `scripts/regenerate-c4-model.sh` must run in the same commit
 | `apps/web-platform/infra/infra-config-gate.sh` | Add `infra_config_should_repush` only. No existing function changes behaviour |
 | `apps/web-platform/infra/infra-config-gate.test.sh` | Predicate cases P1–P8, integration cases I1–I3, Guard 2 rows, raised `GATE_MIN_ASSERTIONS` |
 | `.github/workflows/apply-deploy-pipeline-fix.yml` | Widen the poll loop; inline latched re-push; `declare -F infra_config_should_repush` anti-vacuity check; a `repush_attempted` step output; a **new separate step** emitting the Sentry event and maintaining the ledger; step-summary line; corrected 000/502/503 recovery prose |
-| `knowledge-base/engineering/architecture/decisions/ADR-187-*.md` | **Create.** Provisional ordinal |
+| `knowledge-base/engineering/architecture/decisions/ADR-189-*.md` | **Create.** Provisional ordinal |
 | `knowledge-base/project/specs/feat-one-shot-7104-apply-verify-repost-recovery/tasks.md` | Tick Phases 4–10 |
 
 **Not edited, deliberately:** `scripts/infra-config-red-alert.sh` (R14.2/R16.5 — fail-open helper,
@@ -2841,7 +2847,7 @@ run the scoped `-replace` + `-target` plan under the existing doppler wrapper wi
 JSON, which carries the live prd Doppler token and the webhook HMAC in cleartext (the workflow says
 so at its own `rm -f tfplan.json` site). Then run the `destroy-guard-filter-web-platform.jq` filter
 over it. Shape the I1–I3 fixtures from the measured addresses, and state the measured cardinality in
-ADR-187 as the invariant the assert pins. **If it is not 1, the design changes before it is built.**
+ADR-189 as the invariant the assert pins. **If it is not 1, the design changes before it is built.**
 
 This also narrows R18.4 honestly. What cannot be produced on demand is *"the handler published no
 frame"*. Everything downstream of that decision — the `-replace`/`-target` plan, the destroy-guard
@@ -3169,7 +3175,7 @@ path that resolves only from `INFRA_DIR` (which stays the step's `working-direct
 convention is `<name>.sh` + `<name>.test.sh` registered in `infra-validation.yml`, which fixes
 ADR-150's own recorded regret that `scripts/cutover-inngest.sh` shipped **without** a companion suite;
 and the orphan-suite lint makes the registration impossible to skip silently. State the deviation in
-ADR-187.
+ADR-189.
 
 ## R22.3 — One PR, two commits
 
@@ -3206,7 +3212,7 @@ satisfies in full:
 > `# with the remediation it triggers: the re-push is planned and graded in one step and applied`
 > `# in the next, and a second invocation of infra-config-verify.sh renders the terminal verdict.`
 
-**The stronger consequence, and it belongs in ADR-187's opening: PR-B ships no verification surface
+**The stronger consequence, and it belongs in ADR-189's opening: PR-B ships no verification surface
 that actuates.** `infra-config-verify.sh` polls, adjudicates and emits a verdict; it never writes
 production. R20.8's dilemma is **dissolved**, not resolved. R20.7 §1's command-position sweep
 therefore extends to **two** files — `infra-config-gate.sh` and the new `infra-config-verify.sh`.
@@ -3261,7 +3267,7 @@ two-copies-of-one-machine drift this plan warns about elsewhere.
   re-push exists. Its consequence 2 — duplicated `FRAME_START_TS` extraction and polarity guard —
   disappears, exactly as R19.1 predicted it would if the extraction fork were taken. **R19.1's
   *finding* stands** and is why the fixture shape in R21.2 is pinned.
-- **R20.3, R20.4, R20.5, R20.6 as mechanisms.** Keep each finding's **measurement** as ADR-187
+- **R20.3, R20.4, R20.5, R20.6 as mechanisms.** Keep each finding's **measurement** as ADR-189
   context — especially R20.5's 6 s + 3 s = 9 s against an 11 s window, which is the evidence that a
   fresh invocation's `sleep 8` is load-bearing. Delete the fixes: the `REPUSH_DONE` hatch conditional,
   the `DEADLINE` while-loop, the `repush_failed=<phase>` output, and the output-ordering rule.
@@ -3269,7 +3275,7 @@ two-copies-of-one-machine drift this plan warns about elsewhere.
 - **R20.8 option (b)** and its AP-019-style deviation registration — that paperwork existed only for
   the shape not taken.
 
-**Reverse in ADR-187.** R18.11's first bullet asks the ADR to record "the step-boundary collapse R17
+**Reverse in ADR-189.** R18.11's first bullet asks the ADR to record "the step-boundary collapse R17
 named". The ADR now records the **opposite**: the boundaries were **restored**, and the workflow's
 existing plan→apply grading shape was reused rather than re-implemented inline. R18.11's "why the
 re-push is inline rather than a function" bullet is deleted.

@@ -52,7 +52,7 @@ in prose only, and #7104 is still OPEN with `closedByPullRequestsReferences: []`
 - `#7104`: OPEN, `closedByPullRequestsReferences: []`. PR #7509 (PR-A) merged with
   `closingIssuesReferences: []` — the split held.
 - ADR ordinal enumerated across all **67** `origin/*` refs: highest is ADR-186 (PR-A's), so PR-B is
-  provisionally **ADR-187**, re-derived immediately before merge.
+  provisionally **ADR-189**, re-derived immediately before merge.
 
 ## Components Invoked
 
@@ -89,7 +89,7 @@ does not re-derive them:
   prescribed baseline is `git show origin/main:<workflow>`, which BECOMES the post-move
   revision at merge — the baseline flips. And commit 2 parameterises the script, so a
   permanent byte-identity assert would be RED by the end of this same PR. Hashes recorded in
-  ADR-187 instead.
+  ADR-189 instead.
 - **The F1 pin uses an explicit two-clause form rather than the precedent's
   reconstruct-the-single-file-view trick.** That precedent exists because ~120 of its
   assertions are anchored on YAML indentation; none of the gate suite's are (`$1=="done"` is
@@ -103,10 +103,108 @@ does not re-derive them:
 
 ### Still open
 
-`4.3`, `8.1`, `8.2` — the **committed** Guard 1 / Guard 2 mutation rows. Every guard in this
-PR has been mutation-proven in-session and the results are recorded in the commit messages,
-but AC21 asks for the rows as committed artifacts, which is stronger. Plus Phase 10's ticks
-and the `/review` → `/qa` → `/compound` → `/ship` tail.
+~~`4.3`, `8.1`, `8.2` — the **committed** Guard 1 / Guard 2 mutation rows.~~ **CLOSED — see the
+2026-08-14 addendum below.** Original text: Every guard in this PR has been mutation-proven
+in-session and the results are recorded in the commit messages, but AC21 asks for the rows as
+committed artifacts, which is stronger. Plus Phase 10's ticks and the `/review` → `/qa` →
+`/compound` → `/ship` tail.
+
+## Addendum — 2026-08-14 (tasks 4.3 / 8.1 / 8.2 and Phase 10)
+
+Appended rather than folded into the sections above: the readings below **correct** two numbers
+those sections record, and overwriting them would destroy the evidence for how each was reached.
+
+### Tasks 8.1, 4.3, 8.2 — delivered
+
+- **8.1** — the production call-site pin gained four clauses: the intervening `done` is now
+  **counted** rather than first-matched (R19.2 — the old `awk '… $1=="done" {print NR; exit}'` was
+  satisfied by any nested loop, and on the pre-split design reported PASS at
+  `ci=2 adj=6 between_done=5` with the content assert moved *into* the loop); the predicate is
+  invoked exactly once and directly as the `if` condition (no inline reimplementation, no wrapper —
+  bash suspends `errexit` into a wrapper body, R16.1); exactly one step writes production from
+  `tfplan-repush` (two producers must agree); and the **sourced library** carries no
+  command-position production write, which converts "pure adjudicator" from convention into
+  contract (R20.7 §1). Measured on the as-written library: **0** hits, with a positive control
+  proving the detector can report a non-empty set.
+- **4.3 / 8.2** — `apps/web-platform/infra/infra-config-repush-mutation.test.sh`, **17/17 rows
+  behaved as expected**, registered in `infra-validation.yml` (suite **39 of 107**, derivable by
+  `run-registered-suites.sh --list`). The file header states which axes it edits AND which it does
+  not, so the omissions are visible rather than implied.
+- **`GATE_MIN_ASSERTIONS` re-measured 127 → 130**, flush, no slack (task 8.3's instruction re-run
+  because the count moved).
+
+### Guard 2's matrix is RE-DERIVED, and this is the deviation to read first
+
+The plan's `## Guard Contract` §Guard 2 rows **3, 4 and 5** quantify over a latch, a per-iteration
+re-push and a duplicated verify block. Plan **R22.6 PRUNES R18.3 outright**, replacing "the block
+appears once plus a latch" with *exactly one step in the job invokes `terraform apply` against
+`tfplan-repush`*. Under the split there is no latch and no widened loop, so those rows have no
+referent as written; **row 6 (the function wrapper) is the one R22.6 says to KEEP** and it survives
+as the shipped clause. The battery's rows are re-derived accordingly and each names its detector.
+
+Note also that the plan uses **two different guard numberings**: `## Guard Contract` numbers
+Guard 1 = the predicate and Guard 2 = the call-site pin (tasks 4.3 / 8.1 / 8.2), while **R22.5**
+numbers Guard 1 = the `if:`-literal pin, Guard 2 = the verbatim-move gate, Guard 3 = the graded
+cardinality (tasks 6.12 / 6.3 / 6.7). Both sets ship. The suite's assertion strings follow R22.5;
+this addendum and the battery follow `## Guard Contract`.
+
+### Two corrections to numbers recorded above
+
+- **AC20 re-derived against freshly-fetched `origin/main`: the arm is byte-identical, 7269 bytes,
+  sha256 `83d8e73ee8518502` on both sides.** The `## Work Phase` section above records **7403**;
+  that figure measured a looser boundary. The reproducible definition, so the next reader does not
+  have to guess: extract the gate step's `run:` body from `origin/main` **with PyYAML** (which
+  dedents the block scalar), locate the single line carrying `NO push was expected, so no new frame
+  should exist.`, take the nearest preceding `else` and its matching `fi` **at the same
+  indentation**, and strip that indentation. Applying the identical extraction to
+  `infra-config-verify.sh` yields the same bytes. AC20 therefore HOLDS and run **31714143720**
+  measures the code that ships.
+- **Five `success()`-gated steps downstream, not six.** R19.4 §4 already recorded this, but the two
+  **operative** sites in the plan (§the-armed-steps bullet and R18.12's User-Brand Impact) still
+  asserted *six* — the correction had not reached the text a reviewer actually reads. Both are
+  corrected in place with the citation. The number is pinned by `AC18_SUCCESS_STEPS` in
+  `infra-config-gate.test.sh`, which re-derives it from the parsed workflow.
+
+### A defect found in this PR's own harness
+
+The suite's known-negative self-test **could not fail**. It redefined `fail()` inside its own
+subshell, so it proved that a function written two lines earlier increments a counter. Measured on a
+sandbox copy: `fail() { :; }` left the suite reporting `127 passed, 0 failed`, **exit 0**, with the
+self-test **GREEN** — the guard's-own-dispatch mutation passing through the one assertion whose
+entire purpose is to catch it. It now drives the real `fail()`, and battery row **D1** pins it.
+
+Two of the battery's own rows also failed first, and both failures were the mutations', not the
+guards': **G1-5** deleted a numeric guard, which under `set -u` lets `notanumber` reach
+`[[ -lt ]]` where bash's arithmetic context reads it as a *variable name* — a fatal abort, printing
+no verdict, which the battery correctly refuses to score as detection. **G2-5** used a one-line
+`for … do … done`, leaving `$1` equal to `for`; it landed and perturbed nothing.
+
+### Phase 10
+
+- **10.1** — `TEST_GROUP=scripts`: `304 suites: 302 passed, 0 failed, 0 killed, 2 skipped
+  (declined — not relevant to this diff)`, rc=0. `TEST_GROUP=bun`: `7/7`, rc=0. Both preambles carry
+  the honest `apps/web-platform/infra/ is NOT covered above` NOTE — that half runs at `/ship`
+  Phase 4 via `run-registered-suites.sh` (ADR-183 ordering). `lint-orphan-test-suites`,
+  `lint-workflow-errexit-capture` (744 `run:` bodies), `lint-guard-contract`,
+  `test-infra-suite-registration` all clean. One `FAIL: harness self-test: fail() increments
+  (EXPECTED)` line in the scripts log belongs to `plugins/soleur/test/proc.test.sh`'s own
+  known-negative probe; that suite reports `0 failed`.
+- **10.2** — `actionlint` rc=0 on both workflows; `bash -n` on the **extracted file** (never the
+  `.yml`, never `bash -c`).
+- **10.3 — the ordinal collided and the ADR is renumbered 187 → 189.** Re-derived across all **66**
+  `origin/*` refs: `origin/feat-one-shot-7429-7402-killed-signal-and-orphan-globs` also carries an
+  `ADR-187` (a different decision, `nested-runner-signals-unresolved-by-exit-shape…`) and
+  `origin/feat-one-shot-7291-t5-mutation-network-flake` carries `ADR-188`. Neither is on
+  `origin/main`, so all three claims are provisional and 189 is the lowest free ordinal. Swept:
+  filename + **15** references across 6 files; residual `ADR-187` in the branch is **0**. The sweep
+  was scoped to the enumerated files rather than run repo-wide, because a blanket renumber is how
+  another branch's work gets rewritten.
+- **10.4** — SATISFIED under AC20 (above). **Do not re-dispatch.**
+- **10.5** — the PR body carries `Closes #7104`; #7104 is OPEN with
+  `closedByPullRequestsReferences: []` and already on milestone **Phase 4: Validate + Scale**.
+- **AC27 — ships dark, asserted:** the workflow's `push` paths filter names **none** of the files
+  this PR changes, so merging cannot auto-trigger a production apply. AC14′'s post-merge check is
+  therefore an explicit `workflow_dispatch`.
 
 ### Environment note
 
@@ -117,5 +215,11 @@ plus `TF_CLI_CONFIG_FILE=/var/tmp/tfcli.hcl`; the worktree's infra dir is alread
 
 ## Next
 
-- Commit the mutation rows (4.3, 8.1, 8.2), close Phase 10, then `/review` → `/qa` →
-  `/compound` → `/ship`. PR #7546 must carry `Closes #7104`.
+- Phases 4–10 are CLOSED. Remaining: `/review` (must include `user-impact-reviewer` — the
+  threshold is `single-user incident` and this PR adds a production write) → `/qa` → `/compound`
+  → `/ship` → `/postmerge`. PR #7546 must carry `Closes #7104`.
+- At `/ship`: re-derive the ADR ordinal **again** immediately before merge (189 is free as of
+  2026-08-14 across 66 `origin/*` refs, but two siblings hold provisional 187/188 claims and a
+  third could land 189), and run `apps/web-platform/infra/run-registered-suites.sh` — that
+  directory has **no required CI status check**, so it is the one half of this diff no gate
+  covers automatically.
