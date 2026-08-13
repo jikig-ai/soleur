@@ -19,6 +19,15 @@
 # (the inner loop while editing the canary) would otherwise inherit the bare
 # /tmp tmpfs, and a full-tmpfs sandbox turns setup failures into confident wrong
 # verdicts rather than missing ones.
+# `canary_run $(seam ...)` at every call site below is intentionally UNQUOTED:
+# `seam` emits one KEY=VAL per line and they must word-split into separate `env`
+# operands. Quoting would pass the whole block as ONE argument, so every fixture
+# variable would be unset and each case would silently exercise the NETWORK path
+# instead of the fixture — a suite that still passes while testing nothing it
+# claims to. Declared at file scope because SC2046 fires at the call sites, not
+# at seam's definition, so a directive above the function covers none of them.
+# shellcheck disable=SC2046
+
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 set -euo pipefail

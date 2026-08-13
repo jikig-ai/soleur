@@ -541,7 +541,17 @@ load_exclusions() {
 is_excluded() { # <relpath>
   local p="$1" g
   for g in ${EXCLUSIONS[@]+"${EXCLUSIONS[@]}"}; do
-    # shellcheck disable=SC2053 — glob match is the intent, not string equality.
+    # The unquoted right operand is deliberate: `==` inside `[[ ]]` performs a
+    # GLOB match, which is what an exclusion pattern like `.in_use/*` needs.
+    # Quoting it would silently turn every exclusion into an exact-string
+    # comparison, so no excluded path would ever match and the guard would
+    # report the CLI's own lock directory as under-delivery on every run.
+    #
+    # The directive below must carry no prose: shellcheck parses the rest of the
+    # line as further key=value directives, so an em-dash or an explanatory
+    # clause makes the whole thing SC1125 and the suppression is never applied —
+    # which is exactly what this line did before. The reason lives above it.
+    # shellcheck disable=SC2053
     [[ "$p" == $g ]] && return 0
   done
   return 1
