@@ -81,6 +81,15 @@ stylistic: PR-B's recovery would fire on the wrong runs without PR-A's discrimin
 > Three names appear below that must **not** be built: `infra_config_bounded_verify`,
 > `infra_config_no_new_frame`, and a `repush_once` *function*. The one function PR-B adds is the
 > pure predicate `infra_config_should_repush` (R18.1, R18.2).
+>
+> **STOP — read `# R19` and `# R20` in the plan before starting Phase 4.** An escalated five-agent
+> review found that the design as described below does not work: the poll loop's break condition
+> cannot see a stale frame, so the re-push block is **unreachable on the exact shape it was built
+> for** (R19.1, confirmed independently three times). Four further fail-opens were found (R20.3–R20.6),
+> the assert that bounds the production write has **never been evaluated** (R20.1, now blocking task
+> **4.0**), and **two design forks are open** — extract the step body to a script (R18.16) and split
+> the recovery into graded steps (R20.2). `/soleur:deepen-plan` adjudicates the forks. Do not start
+> Phase 5 until task 4.0 has a number in it.
 
 ## Phase 4 — PR-B RED: the contract's tests, before the contract
 
@@ -96,6 +105,18 @@ infra_config_should_repush <response-file> <pre-frame-start-ts> <apply-start-epo
 Measured convention it must match: `infra-config-gate.sh` carries **no `set` directives** — it is a
 sourceable library of quiet, pure adjudicators. Exit status is the verdict; nothing is echoed.
 
+- [ ] **4.0** **BLOCKING (R20.1) — measure the recovery plan's cardinality before anything else is
+      built.** Read-only, no apply: run `terraform plan -replace=terraform_data.deploy_pipeline_fix
+      -target=<the same four targets> -var="ssh_key_path=${CI_SSH_PUB}" -out=tfplan-repush` under
+      `doppler run --name-transformer tf-var`, then `terraform show -json tfplan-repush`, and record
+      **counts and addresses only** — never the JSON, which carries the live prd Doppler token and
+      the webhook HMAC in cleartext. Run `destroy-guard-filter-web-platform.jq` over it. Delete the
+      JSON immediately. The whole design rests on this being **exactly one** replaced managed
+      resource: `deploy_pipeline_fix` `depends_on` two resources that carry SSH `remote-exec`
+      provisioners, and `-target` is transitive at the resource level. If the count is not 1, the
+      cardinality assert would abort **every** recovery on the failure path of a real incident, and
+      because the path ships dark nobody would ever learn. Shape the I1–I3 fixtures from the measured
+      addresses and state the number in ADR-187 as the invariant the assert pins.
 - [ ] **4.1** Predicate cases — one per row of the discriminator table, including the
       `start_ts == baseline` boundary (equality is fresh, matching the existing `-lt`). Three
       clauses only: parses, numeric `start_ts`, not newer than the baseline (plan R13.8 — the
@@ -110,7 +131,11 @@ sourceable library of quiet, pure adjudicators. Exit status is the verdict; noth
 - [ ] **4.4** The escape-hatch case (R15.1): an `ALLOW_MISSING_STATUS` 404 fall-through must never
       be readable as "verified". Under the predicate design this is structural rather than a
       return-code convention — assert it anyway.
-- [ ] **4.5** `ALLOW_MISSING_STATUS=true` fall-through fidelity (R4c).
+- [ ] **4.5** ~~`ALLOW_MISSING_STATUS=true` fall-through fidelity (R4c).~~ **[MERGED into 4.4 —
+      R19.6.]** 4.4 and 4.5 target the same single scenario, which R18.10 lists exactly once as P7;
+      two rows invite writing the test twice. **Re-scoped to what P7 does not cover (R20.4):** assert
+      the hatch is **unavailable once the latch is set** — a 404 on the last poll after a re-push
+      must not fall through to `exit 0`.
 - [ ] **4.6** **PRIMARY (promoted — R18.4).** One integration-shaped test that drives the **real**
       extracted `run:` body twice against fixture responses and proves pass 2 was reached (plan
       R13.7). Cases **I1–I3** in plan R18.10. Promoted from "one test" to the primary acceptance
@@ -139,10 +164,22 @@ sourceable library of quiet, pure adjudicators. Exit status is the verdict; noth
       second `count_invariant`, `done` and `adjudicate`, and the call-site pin takes `head -1` of
       each grep, so it would silently pin the first copy and stop quantifying over the second.
 - [ ] **6.2** Widen the **existing** poll loop's attempt count rather than adding a second loop
-      (plan R13.4 — a second `done` would make Guard 2's "strictly between" clause ambiguous). The
-      widened loop's own break condition *is* the re-verify R15.3 requires. Measured shape today:
-      `for attempt in 1 2 3` with `infra_config_count_invariant` as the in-loop break and
-      `adjudicate_infra_config` terminal after the `done`.
+      (plan R13.4 — a second `done` would make Guard 2's "strictly between" clause ambiguous).
+      ~~The widened loop's own break condition *is* the re-verify R15.3 requires.~~
+      **[FALSE — R19.1, the review's top finding.]** `infra_config_count_invariant` reads
+      `exit_code`, `files_failed`, `files_written` and `files_total` — **never `start_ts`**. On the
+      #7220 shape the frame on disk is a *previous, complete* apply (`exit_code=0`, 19/19,
+      `files_failed=0`), so the invariant **holds**, the loop breaks on attempt 1, and a re-push
+      placed after the break is unreachable on the very shape it exists for. The predicate must be
+      consulted **before** the break:
+      `if count_invariant …; then if [[ latch unset ]] && should_repush …; then <re-push>; continue; fi; break; fi`.
+      Keep the `infra_config_count_invariant /tmp/` token textually before the `done` so the pin's
+      `ci_line` still resolves. The bound still widens, but to give the post-latch passes somewhere
+      to run — and per R20.5 the budget must be a function of the latch (`while` + a counter granting
+      a fixed further budget once it fires), not a fixed list, or a re-push on a late attempt yields
+      a **false red on a successful recovery**. Add an integration fixture whose pass-1 frame is
+      **complete, healthy and stale** — the real production shape — and assert the re-push fires on
+      it; without that fixture the fix is unverified.
 - [ ] **6.3** Retain the last **HTTP 200** response separately from the last response overall, and
       feed the classifier that artifact (R15.4). **Truncate the response file per pass**
       (R17.2/R18.8 §7) — `curl -s -o` on a transport failure leaves the prior body in place, so
@@ -159,7 +196,12 @@ sourceable library of quiet, pure adjudicators. Exit status is the verdict; noth
       - run the scoped `-replace` + `-target` plan **wrapped in `doppler run --name-transformer
         tf-var`** — ~~wrap the apply~~ **[Corrected — R18.8 §3]**: `terraform apply <planfile>`
         rejects `-target=`/`-var` and takes values from the plan file, so the wrapper belongs on the
-        **plan** invocation and is inert on the apply;
+        **plan** invocation and is inert on the apply. **The plan invocation must also pass
+        `-var="ssh_key_path=${CI_SSH_PUB}"` (R19.4 §1)** — `variables.tf` defaults `ssh_key_path` to
+        `~/.ssh/id_ed25519.pub`, which does not exist on the runner, and `server.tf` does
+        `public_key = file(var.ssh_key_path)`; `-target` is transitive and `deploy_pipeline_fix`
+        reaches `hcloud_server.web` through its `depends_on`. Without it the recovery plan **errors
+        under `-input=false`**;
       - assert `[[ -s "$CI_SSH_PUB" ]]` **and** that the S3 backend credentials
         (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, exported by the `Extract backend
         credentials` step) are non-empty — `--name-transformer tf-var` would rename them, so they
@@ -171,8 +213,33 @@ sourceable library of quiet, pure adjudicators. Exit status is the verdict; noth
         **using** the AP-022-sanctioned `|| rc=$?` capture and an explicit
         `|| { echo "::error::…"; exit 1; }` branch — without it the step dies mute under `set -e`
         (R17.2, R18.8 §5). `scripts/lint-workflow-errexit-capture.py` enforces this.
-      - add **no bare `sleep`** for the handler settle: the re-push's own plan and apply already
-        exceed R17.5's 3 s + 5–8 s window before the next poll runs (R18.8 §9).
+      - ~~add **no bare `sleep`** for the handler settle~~ **[WITHDRAWN — R20.5.]** Reinstate the
+        settle. The premise was wrong twice: measured on run 31714143720, plan (6 s) + apply (3 s) =
+        **9 s** against a window of up to **11 s**, so "far longer" is false; and the interval is
+        measured in the wrong place anyway, because `push-infra-config.sh` is a `local-exec`
+        provisioner whose 202 fires at the **end** of the apply, so the 5–8 s settle starts *there*.
+        Use the same constant the step's own opening `sleep 8` already documents;
+      - write `repush_attempted=true` to `$GITHUB_OUTPUT` **before the first abort point**, not with
+        the latch (R20.3). `$GITHUB_OUTPUT` writes survive a later `exit 1`, but a write that is
+        never reached does not — and tying it to the latch makes it absent on exactly the runs where
+        a production write was attempted and went wrong. Write `repush_failed=<phase>` before each
+        `exit 1` in the block (R20.6). The latch stays where it is, after the apply, because its
+        property is boundedness;
+      - disable the `ALLOW_MISSING_STATUS` escape hatch once the latch is set (R20.4) —
+        `[[ "$ALLOW_MISSING_STATUS" == "true" && "$REPUSH_DONE" != "true" ]]`. Without this, a last
+        poll of 404 after a re-push falls through to `exit 0`: the job goes **green** having
+        performed a production write and adjudicated nothing, re-arming the five `success()` steps
+        including the one that closes the founder's drift issues;
+      - name the artifacts `tfplan-repush` / `tfplan-repush.json` so the graded apply-#1 plan cannot
+        be clobbered, and delete the JSON via `trap 'rm -f tfplan-repush.json' EXIT` — the only form
+        that survives all six abort paths. It carries the live prd Doppler token and the webhook HMAC
+        in cleartext; never `cat` it on an error branch (R20.7 §2);
+      - pass `-lock-timeout` on both the plan and the apply, so a killed or cancelled re-push cannot
+        leave the S3 backend lock held and block every subsequent apply on the sole no-SSH
+        remediation path (R20.7 §3);
+      - `echo` one line at the `should_repush` call site naming the branch taken, so a run that
+        declined can be told apart from one where the block was skipped or where an unvalidated
+        `APPLY_START_EPOCH` silently suppressed the recovery (R20.7 §8).
 - [ ] **6.5** Add the `declare -F` anti-vacuity check, mirroring the existing
       `declare -F infra_config_red_alert` pattern. **[Corrected — R18.1]** it targets
       ~~`infra_config_bounded_verify`~~ **`infra_config_should_repush`** — the sourced predicate is
@@ -191,6 +258,12 @@ sourceable library of quiet, pure adjudicators. Exit status is the verdict; noth
       `SENTRY_*` and `GH_TOKEN` out of the step that holds prod-write Terraform credentials and
       renders the verdict, which dissolves R17.6. `tags.feature` is **mandatory** — every
       `issue-alerts.tf` rule filters `feature` + `op` as a `filter_match="all"` pair.
+      **The step must be `if: always() && …outputs.repush_attempted == 'true'` (R19.4 §3)** — the
+      report matters *most* on the terminal-red path, where the gate step exits 1; a bare
+      `success()` gate would drop it on exactly the runs worth counting. "Outcome" is unknowable at
+      output-write time, so derive it from `steps.infra_config_gate.outcome`, not a second output.
+      Guard the whole step with `set +e` / a terminal `exit 0` — never `continue-on-error`, which
+      AC18 bans (R20.7 §10).
 - [ ] **7.2** Create the ledger issue **closed**, outside the `ci/` namespace, titled as a running
       tally; widen its dedupe query to `--state all`. Write it with plain `gh issue` calls —
       **do not touch `scripts/infra-config-red-alert.sh`** (measured: three labels hardcoded across
@@ -204,12 +277,21 @@ sourceable library of quiet, pure adjudicators. Exit status is the verdict; noth
       **`infra-config-recovery-ledger`**. Guard the emission so a failure can never red a run that
       actually recovered.
 - [ ] **7.4** Exclude dispatch-triggered runs from the counter (R15.8).
-- [ ] **7.5** Add the ≥3-in-30-days escalation. **[Corrected — R18.7]** it ships as a **queryable
+- [ ] **7.5** **[FOLDED into 7.2/7.3 — R19.6.]** Once corrected it names no mechanism 7.2/7.3 do not already build — the same shape as the cut 7.7 and the discharged 9.3. Its acceptance moves into 7.2/7.3's definition of done. Add the ≥3-in-30-days escalation. **[Corrected — R18.7]** it ships as a **queryable
       counter plus the ledger title**, and must **not** be described as an alert route: no
       `sentry_issue_alert` rule matches a new `op=`, exactly as #7527 already records for
       `op=infra-config-preframe-degraded`. Claiming otherwise is the AP-021 violation this plan
       exists to avoid. Add the paging rule to #7527's scope with a re-evaluation trigger.
-- [ ] **7.6** One `$GITHUB_STEP_SUMMARY` line naming both attempts.
+- [ ] **7.6** ~~One `$GITHUB_STEP_SUMMARY` line naming both attempts.~~ **[REPLACED — R20.7 §7.]**
+      Written standalone it renders *orphaned above* the `Post-apply summary` step's own heading, and
+      a summary line is the least durable of the three channels. Instead add a `**Self-healed:**`
+      line **inside** `Post-apply summary` (which already runs `if: always()` and is the one artifact
+      the founder actually sees), reading `repush_attempted` and linking the ledger issue. This is
+      the only thing that converts property (4) from pull-only to push: as designed, a recovered run
+      is a green job, a summary identical to a normal run, a Sentry event matching no alert rule, and
+      a ledger issue deliberately built not to notify — so the honest answer to "can the operator
+      tell a recovered run from a never-failed one" was **no**. It also gives the ledger its only
+      inbound path.
 - [ ] **7.7** ~~Verify the repo watch setting.~~ **[CUT — R18.7.]** The setting is not readable with
       the credentials available (`gh api repos/:owner/:repo/subscription` → `HTTP 404`, "needs the
       `notifications` scope"). The property it protected — *the ledger never notifies* — is bought
@@ -228,6 +310,20 @@ sourceable library of quiet, pure adjudicators. Exit status is the verdict; noth
       `adjudicate_infra_config`) **byte-identical**. Follow the shape of the existing "#7104
       PRODUCTION CALL-SITE PIN" block, which already pins `infra_config_dpf_replaced` before
       `infra_config_frame_stability` by resolved line number.
+      **Required, or Guard 2 row 1 cannot be driven RED (R19.2, measured):** the pin resolves its
+      `done` with `awk '… $1=="done" {print NR; exit}'` — first match, first *field*, so indentation
+      is irrelevant and any nested `for`/`while`/`until` (or a `done < <(…)`) inside the re-push
+      block satisfies it. With `adjudicate_infra_config` moved into the loop and a nested `done`
+      above it, the pin still reports PASS (`ci=2 adj=6 between_done=5`), so the #6594 coin-flip
+      mutation stays green and **AC21 fails at implementation time**. Replace the first-match scan
+      with a **counting** pass asserting **exactly one** `$1=="done"` strictly between the anchors.
+      That also makes "the re-push block contains no nested loop" enforced rather than hoped for.
+      **Also add the library clause (R20.7 §1):** Guard 2's assembly claims total quantification over
+      production writes but `source ./infra-config-gate.sh` is invisible to it — and PR-B adds a
+      function to that library, which is a pure adjudicator by *convention only*. Assert the library
+      contains no command-position `terraform`, `curl`, `ssh`, `systemctl`, a mutating `doppler`
+      subcommand, or `gh issue` (command position, not bare token — 20+ comment-only occurrences
+      exist; `cq-assert-anchor-not-bare-token`).
 - [ ] **8.2** Add the Guard 2 mutation rows. **[Corrected]** the rewritten matrix has **seven**
       rows (plan `## Guard Contract` §Guard 2); the old "row 4 is cut" note referred to the
       pre-rewrite table.
@@ -242,6 +338,18 @@ sourceable library of quiet, pure adjudicators. Exit status is the verdict; noth
       remedy is attached to the failure shape it belongs to. Never print a bare
       `terraform apply -replace=` fragment without its full resource address; keep the
       `hcloud_server.web` prohibition in every body.
+      **Add a fourth alert class (R20.6 — R18.8 §7's cut is withdrawn).** A failed re-push currently
+      lands in the #7220 alert's final `else`, which tells a non-technical founder *"the handler did
+      not die… the files that landed are on the host, and app health is unaffected — this is an
+      ACTIVATION failure"* and routes them to a Better Stack query that returns nothing. Every clause
+      is false when the *terraform* half failed mid-gate. It costs **no edit** to the fail-open
+      helper: follow the `STABILITY_VERDICT` precedent 40 lines above — a new discriminator added as
+      a branch in the **caller**, keyed on a new gate-step output. Add one
+      `elif [[ -n "${REPUSH_FAILED:-}" ]]` arm above the frame-derived branches naming the phase,
+      warning that state may hold a tainted resource or a held lock, and routing to the
+      `-replace=terraform_data.infra_config_handler_bootstrap` lever. Branch the STALE FRAME message
+      on the latch too, so a run whose re-push already failed is not told to try a DPF replacement
+      (R20.7 §6).
 - [ ] **9.2** Write the ADR — **provisional ordinal 187** (PR-A took 186; re-derived across all 67
       `origin/*` refs). One decision (the gate may now write production, bounded to one shape-gated
       re-push; the terminal verdict never leaves the step that fails closed), plus the **ADR-072

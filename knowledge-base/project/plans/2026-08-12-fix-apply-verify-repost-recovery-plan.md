@@ -2292,6 +2292,33 @@ this repo is a red alarm). Proposed: **`infra-config-recovery-ledger`**, created
     `Redeploy to load applied profile` budgets ~70 minutes for the ADR-078 cron drain. The re-push
     adds one scoped plan plus one apply of a single `terraform_data` recreation plus three extra
     5 s polls — on the order of two minutes, and only on the failing path. 70 + 2 < 90.
+11. **The loop bound is written twice, and widening one is a silent defect.** Measured: the step
+    contains `for attempt in 1 2 3; do` **and**, near the bottom of the body,
+    `if [[ "$attempt" -lt 3 ]]; then sleep 5; fi`. Widening only the `for` list leaves the sleep
+    guard pinned at 3, so attempts 4+ run back-to-back with no spacing and the re-push gets no
+    settle window at all — the very thing R18.8 §9 argues is satisfied by construction. Both
+    producers of that number must be widened together, and a test must assert they agree
+    (`2026-07-19-a-self-graded-mutation-battery-went-vacuous-twice-in-one-pr-and-the-two-producer-count-that-fixed-it.md`:
+    one derived number is self-referential; count two independent producers and require they match).
+12. **The F1 pin's `done` scan degrades if the re-push block contains a nested loop.** Measured
+    anchors today: `infra_config_count_invariant` at L807, the first `done` at L822, and
+    `adjudicate_infra_config` at L846, so `807 < 822 < 846` holds. But the scan is
+    `awk '… $1=="done" {print NR; exit}'` — it matches on the first **field**, so indentation is
+    irrelevant and **any** `done` at any nesting depth between the anchors satisfies it. The
+    re-push block is inserted between L807 and L822; if it introduced a nested `for`/`while`/`until`,
+    that nested `done` would be found first and the pin would keep passing even if the outer loop's
+    `done` later moved past the adjudication. Two consequences, both required:
+    - the re-push block must contain **no nested loop** — a Guard 2 row;
+    - the pin is hardened to require **exactly one** `done` between the anchors, not merely one,
+      which restores the discriminating power the widening would otherwise erode. Keep the three
+      original clauses byte-identical and add this as a fourth, so `tasks.md` 8.1's byte-identity
+      requirement is still met.
+13. **`$GITHUB_OUTPUT` writes survive a later `exit 1`, and the re-push flag must exploit that.**
+    Actions reads the output file after the step ends regardless of exit status, and the shipped
+    step already relies on this (`freshness_evidence` is written on both the passing and degraded
+    arms). Write `repush_attempted=true` **at the moment the re-push fires**, before any path that
+    can exit non-zero — otherwise the separate emitting step (R18.6) goes dark on exactly the runs
+    that failed after re-pushing, which are the ones worth counting.
 
 ## R18.9 — Acceptance Criteria (PR-B)
 
@@ -2441,3 +2468,534 @@ so the three-way sync with `ship`'s `DEPLOY_PIPELINE_FIX_TRIGGERS` and
 **Open code-review overlap:** re-queried across all 63 open `code-review` issues for every PR-B
 path. One hit, `#3216`, matched only on `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts`,
 a file PR-B does not edit. **Disposition: acknowledge** — different concern, no shared surface.
+
+## R18.15 — Three claims the strong-model consult demanded, measured rather than reasoned
+
+The Phase 4.5 consult refused to accept three load-bearing properties as asserted. All three were
+measured, and two of them change what is on the table.
+
+**(a) A re-push is NOT a secret rotation — it re-delivers the same bytes.** The consult flagged that
+if replacing `terraform_data.deploy_pipeline_fix` regenerated the live Doppler token or the webhook
+HMAC secret, the recovery would be an unplanned credential rotation on the host that #7095 says a
+malformed credential bricks. Measured in `apps/web-platform/infra/server.tf`: the push payload is two
+`templatefile()` renders — `hooks_json` fed by `var.webhook_deploy_secret`, and
+`webhook_doppler_token_env` fed by `var.doppler_token` plus the parsed Sentry DSN parts. Every input
+is a Doppler-sourced `var.*`. The root's `random_*` resources
+(`git_data_luks`, `github_webhook_secret`, the six `inngest_*`) feed unrelated resources and none
+reaches this payload. **The re-push is payload-idempotent.** This is what makes a supervised
+rehearsal cheap, and it belongs in the ADR.
+
+**(b) The status frame is published unconditionally, so an idempotent re-push still moves
+`start_ts`.** The consult's sharpest technical objection: if the handler skips no-op writes and only
+bumps the frame when bytes change, then re-delivering identical content would never produce a newer
+frame and pass 2 could never go green — the recovery would be inert by construction. Measured in
+`apps/web-platform/infra/infra-config-apply.sh`: the frame is written by `trap on_exit EXIT`, an
+unconditional exit trap, and the file's own header records an incident where it "published a frame of
+hardcoded zeros" precisely because it fires regardless of what the body did. **The objection is
+refuted, and the design survives it.** Add a test scenario pinning it, because the day someone makes
+that trap conditional the recovery goes silently inert.
+
+**(c) The gate step's `run:` body satisfies ADR-150's verbatim-extraction precondition.** Measured by
+parsing the block scalar: **241 body lines, 0 `${{ }}` GitHub expressions, 0 heredocs, 0
+herestrings.** ADR-150 (*Accepted*, 2026-07-28, CTO consult + six-agent panel, #7002) established
+exactly this move for a sibling workflow and its verification technique — parse the `run:` block with
+PyYAML and compare byte-for-byte against the script minus its shebang, **with no whitespace
+normalization**, since normalization is the transform that would hide a dedent error. See R18.16.
+
+## R18.16 — OPEN FORK: inline YAML, or extract the step body to a script (ADR-150 shape)
+
+**This is the one decision left open, deliberately.** It is recorded as a fork rather than settled,
+because it reverses a prior escalated-panel decision and the reversal is well-evidenced enough that
+settling it silently at the end of a planning run would be the wrong way to make it.
+
+The plan's `## Alternatives Considered` rejected extraction, and R16.2 kept the consumer in YAML. The
+Phase 4.5 consult challenged both, and the measurements above make the challenge serious.
+
+**The case for extracting** (`apps/web-platform/infra/infra-config-verify.sh`, or `scripts/`
+per ADR-150's placement ruling):
+
+1. **It dissolves R16.1 at the root rather than routing around it.** The errexit hazard exists only
+   because the code is one YAML blob in which any wrapping lands in a condition context. A script
+   opens with its own `set -euo pipefail` and its statements are top-level. The pure predicate is
+   then the only thing that ever sits in a condition — which is exactly what it was designed for.
+2. **It makes the primary acceptance criterion test the artifact instead of a copy of it.** As the
+   plan stands, `tasks.md` 4.6 extracts the `run:` body from YAML at test time and executes the
+   extraction. That extraction — step index, block-scalar dedent, quoting — is the most fragile link
+   in the entire verification story, and it is the *only* verification, because R18.4 establishes the
+   path cannot be exercised in production. If the body is a file, the hermetic test runs the real
+   file and `PATH`-stubbing `curl`/`terraform`/`doppler` becomes trustworthy.
+3. **The reason for rejecting it is a test that this PR is allowed to edit.** "Extraction reds the
+   F1 pin" is true, and the plan's fear — that re-pointing the grep at the new script silently drops
+   the property that *production* calls it — is answered by splitting the pin into two clauses that
+   together are **stronger** than today's: (i) the workflow invokes the script, exactly once; (ii)
+   inside the script, `count_invariant` precedes a loop-closing `done` which precedes the terminal
+   `adjudicate_infra_config`. Today's single-file grep proves (ii) only.
+4. **R18.8 §12's hazard disappears.** No `awk`-over-YAML scan, so no nested-`done` erosion.
+5. **Repo precedent is accepted and its precondition is measured green** (R18.15(c)).
+
+**The case for staying inline:**
+
+1. It is a 241-line move on a P1 gate in the same PR as a behavioural change. ADR-150's byte-for-byte
+   check makes the move *provably* verbatim, which is what makes this bearable, but the diff is still
+   large and PR-A only just rewrote parts of this body.
+2. The three F1 clauses stay byte-identical, which `tasks.md` 8.1 currently requires.
+3. R16.2's "duplication over complexity, and it is what the rest of that file already does" still
+   describes the workflow's prevailing style.
+
+**Recommendation, stated so it can be overruled cheaply:** extract, and do it as its own commit
+inside this PR — a provably-verbatim move first (ADR-150's PyYAML byte-comparison as the gate),
+then the behavioural change on top. The verbatim commit is reviewable by machine, and the behavioural
+commit then shows only the re-push. If the fork is resolved the other way, R18.8 §12's nested-loop
+constraint and the hardened one-`done` clause become mandatory rather than belt-and-braces.
+
+**Whichever way it resolves, these do not change:** the pure predicate and its Guard 1 matrix; the
+latch and its "set only after the re-push executes" rule; the widened-loop-not-duplicated-block
+decision; the separate observability step; and every acceptance criterion in R18.9 except AC17's
+description of *how* the integration test reaches the body.
+
+## R18.17 — Ships-dark, revisited: a supervised rehearsal is now cheap
+
+R18.4 concluded the recovery ships dark because the race is not producible on demand. The consult
+accepted the reasoning and rejected the conclusion as final: *a prod-write path against an
+irreplaceable host whose first execution is during an incident is the one place to insist on a
+supervised first run.*
+
+R18.15(a) is what changes the economics — the re-push is payload-idempotent, so a rehearsal costs
+**one redundant delivery of bytes the host already has**, not a credential rotation. R13.2 cut R6's
+rehearsal input when that cost was unknown; it is now measured.
+
+**Re-opened as a scoped question for `/soleur:deepen-plan`,** not decided here: add a
+`workflow_dispatch` input that forces the adjudicator to treat pass 1 as stale on an otherwise
+healthy run, so the real `-replace` plan and apply execute once, watched, at merge time. It must be
+**dispatch-only** (never reachable from `on: push`), excluded from the counter alongside the other
+dispatch runs (`tasks.md` 7.4), and it must force only the *classification*, never bypass the
+cardinality assert or the destroy-guard. If taken, the ADR upgrades from "ships dark; the Sentry
+counter is the only evidence it ever fires" to "exercised end-to-end once, then dark", and AC17's
+hermetic test is demoted from sole verification to regression harness.
+
+**One residual the ADR must state either way.** If the listener restart is *caused by the push
+itself* rather than being an independent timing race, then pass 2 races at the same rate as pass 1
+and the latch halves the failure rate rather than removing it. R17.5 measured the mechanism — the
+self-restart is scheduled immediately before `exit "$EXIT_CODE"` and the EXIT trap publishes within
+milliseconds, so any handler that reached the restart also published a frame, and a re-push fires
+only when no handler completed. That supports "independent race", but the residual probability
+should be named in the ADR so a recurrence is not read as a regression.
+
+# R19 — PR-B plan review consolidation
+
+**[2026-08-13.]** Escalated panel at the `single-user incident` threshold: `kieran-rails-reviewer`
+(mechanical correctness, all claims re-measured against the live code), `architecture-strategist`
+(boundary), `code-simplicity-reviewer` (YAGNI), `spec-flow-analyzer` (control flow), plus the
+Phase 4.5 strong-model consult. **R19 supersedes R18 wherever they disagree.**
+
+## R19.1 — P0: widening the loop is INERT, because its break condition cannot see the stale frame
+
+The single most important finding, and it invalidates R18.2/R18.3 and `tasks.md` 6.2 as written.
+
+The loop's break is `if infra_config_count_invariant /tmp/… infra-config-apply.sh; then … break; fi`
+(`apply-deploy-pipeline-fix.yml`, the `Attempt $attempt` block). **`infra_config_count_invariant`
+adjudicates `exit_code`, `files_failed`, `files_written` and `files_total` only — it never reads
+`start_ts`.** On the #7220 shape the frame on disk is a *previous, complete* apply: `exit_code=0`,
+19/19 written, `files_failed=0`. The invariant therefore **holds**, and the loop `break`s on
+**attempt 1**. Widening `for attempt in 1 2 3` to any bound changes nothing — the freshness verdict
+that would classify the frame as stale does not run until well after the loop's `done`.
+
+So `tasks.md` 6.2's "the widened loop's own break condition *is* the re-verify R15.3 requires" is
+false, and R18.2's picture of the re-push firing on a later iteration never happens.
+
+**The correction: gate the *break* on the re-push decision.** The re-push goes inside the break arm,
+before the break:
+
+```
+if infra_config_count_invariant /tmp/infra-config-status-response.txt infra-config-apply.sh; then
+  if [[ "$REPUSHED" != "1" ]] && infra_config_should_repush /tmp/… "$BASELINE" "$APPLY_START_EPOCH" "${DPF_REPLACED:-}"; then
+    <inline re-push>; REPUSHED=1; continue
+  fi
+  break
+fi
+```
+
+Three consequences, all of which must be carried:
+
+1. **`errexit` is still live where it matters.** The predicate sits in a `&&` condition — which is
+   exactly what a *pure* predicate is for, since it has no body to protect (R16.2's whole point).
+   The `<inline re-push>` is in the `then` **body**, which is not a condition context, so `set -e`
+   is active inside it. Guard 2 row 6 still applies to any future attempt to wrap it in a function.
+2. **`FRAME_START_TS` extraction and the `^(true|false)$` polarity guard now exist in two places** —
+   once in-loop for the decision, once terminally for the verdict. That is real duplication, and
+   R18.2 claimed to have avoided duplication. State it plainly rather than let a reader discover it:
+   the duplication is of two cheap reads, not of the ~90-line adjudication body, and it is the price
+   of the break-arm placement. If R18.16 resolves toward extraction, both reads become local
+   variables in one script and the duplication disappears — which is a further argument for the fork.
+3. **The loop bound still widens**, but for a different reason than 6.2 gave: after `continue`, the
+   next iteration must be able to re-poll. Both producers of the bound must move together
+   (R18.8 §11).
+
+## R19.2 — P1: Guard 2 row 1 cannot be driven RED under the accepted design
+
+Confirmed by measurement, independently of the R18.8 §12 analysis: with `adjudicate_infra_config`
+moved *inside* the loop and any nested `for…done` above it, the pin still reports PASS
+(`ci=2 adj=6 between_done=5`). The pin requires only `-n "$between_done"`, so the mutation Guard 2
+row 1 describes — the #6594 coin flip, the whole reason F1 exists — **would not redden the suite**,
+and **AC21 would fail at implementation time**.
+
+**Required fix (`tasks.md` 8.1):** replace the first-match scan
+(`$1=="done" {print NR; exit}`) with a **counting** pass asserting **exactly one** `$1=="done"` line
+strictly between `ci_line` and `adj_line`. This is the fourth clause R18.8 §12 proposed, now
+mandatory rather than belt-and-braces, and it makes "the re-push block contains no nested
+`for`/`while`/`until`" an enforced constraint instead of a hoped-for one. Note `done < <(…)` also
+has `done` as `$1`.
+
+## R19.3 — P1: the predicate's two baselines are conflated, and as written it can never return 0
+
+`infra_config_should_repush <response-file> <pre-frame-start-ts> <apply-start-epoch> <dpf-replaced>`
+passes two scalars, R18.8 §6 introduces a **third** notion ("the observed stale frame's own
+`start_ts`") as the pass-2 baseline, and `PRE_APPLY_FRAME_START_TS` is a real fourth value the
+workflow already produces at the `Capture pre-apply infra-config frame (#7104)` step. R18.10's P3/P4
+say "the baseline" without saying which. If `<pre-frame-start-ts>` *is* the pass-2 baseline set to
+the observed stale `start_ts`, then on pass 1 `start_ts == baseline`, P4 says non-zero, and **the
+predicate can never return 0 on any input.**
+
+**Required:** name the arguments unambiguously and state the two rules separately —
+pass 1 compares `start_ts` against `apply_start_epoch`; pass 2 compares `start_ts` against the
+`start_ts` observed before the re-push fired. Add a test asserting a *sequence*: the same fixture
+must classify 0 on pass 1 and non-zero once the frame moves.
+
+## R19.4 — P1: five further mechanical corrections, each measured
+
+1. **The second plan must pass `-var="ssh_key_path=${CI_SSH_PUB}"`.** `variables.tf` defaults
+   `ssh_key_path` to `~/.ssh/id_ed25519.pub`, which does not exist on the runner, and `server.tf`
+   does `public_key = file(var.ssh_key_path)`. `-target` is transitive and `deploy_pipeline_fix`
+   reaches `hcloud_server.web` via its `depends_on`. Without the `-var` the recovery plan **errors
+   under `-input=false`**. `tasks.md` 6.4 only says *assert* `[[ -s "$CI_SSH_PUB" ]]`, and AC19
+   enumerates only `-replace=` and `-target=`. Add it to both.
+2. **The second plan must not write `tfplan`/`tfplan.json`.** The gate step's `working-directory` is
+   the same `INFRA_DIR`, and `tfplan` is the artifact the first apply consumed. Name the recovery
+   artifacts `tfplan-repush` / `tfplan-repush.json`, so nothing downstream can adjudicate the wrong
+   bytes — the same reasoning the plan step already applies to its two `terraform show` invocations.
+3. **The reporting step needs `if: always() && …`.** Found independently by the consult and by
+   Kieran. PR-A's model step is `if: always() && steps.infra_config_gate.outputs.freshness_evidence
+   == 'degraded'`. The re-push report matters **most** on the terminal-red path (scenarios I2/I3),
+   where the gate step exits 1 — without `always()` the step is skipped and the only evidence the
+   recovery ever fired is lost, on exactly the runs worth counting. `tasks.md` 7.1 must carry it,
+   paired with R18.8 §13's "write the output before any path that can exit non-zero".
+4. **R18.12's "six `success()`-gated steps" is wrong; the measured count is five.** The gate-downstream
+   status-keyed steps are seven in total (one `always() &&`, one `failure() &&`, five `success()`).
+   AC18 must say *that* rather than an unenumerated "seven".
+5. **A missing frame is unclassifiable, not stale.** A host whose handler never wrote any frame must
+   surface as a distinct hard failure, not as something that reads like "frame unchanged". The
+   allow-list already refuses to re-push there; the requirement is that the message discriminates.
+
+## R19.5 — P1: three acceptance criteria are not runnable as written
+
+- **AC18** literally contains `grep -c 'continue-on-error' … is 0`, which **exits 1** and aborts a
+  `set -e` harness — the exact defect the AC's own parenthetical warns about. Write it only as
+  `! grep -q 'continue-on-error' .github/workflows/apply-deploy-pipeline-fix.yml`. Delete the
+  `grep -c` phrasing so it cannot be pasted.
+- **AC24**'s `grep -rn 'ADR-<ordinal>' knowledge-base/project/{plans,specs}/` exits 1 on zero
+  matches, and "consistent with the file that exists" is not mechanically decidable. Restate as a
+  negative `! grep -rn 'ADR-186\|ADR-188'` plus a positive `grep -q` on the chosen ordinal.
+- **AC20** — the sole licence for ticking `tasks.md` 10.4 against run 31714143720 — is a judgement,
+  not a command. Make it mechanical: extract the `DPF_REPLACED == "false"` block from both
+  revisions, anchored on the content string `::notice::No config push was expected` rather than on
+  line numbers (`cq-cite-content-anchor-not-line-number`), and `diff` them asserting empty.
+
+## R19.6 — Simplification, accepted
+
+- **`tasks.md` 7.5 is folded into 7.2/7.3.** Once corrected by R18.7 it names no mechanism 7.2/7.3
+  do not already build — the same shape as the already-cut 7.7 and the already-discharged 9.3.
+- **`tasks.md` 7.6 is demoted** to non-gating. A `$GITHUB_STEP_SUMMARY` line is reachable only by
+  opening that one run before log retention expires; 7.1 and 7.2 are both more durable.
+- **`tasks.md` 4.4 and 4.5 merge** — both target the single `ALLOW_MISSING_STATUS` fall-through
+  scenario, which R18.10 lists exactly once as P7. Two rows invite writing the test twice.
+- **`tasks.md` 4.3 authors no new cases.** A mutation matrix is killed *by* the base suite. 4.3 is a
+  coverage check over P1–P8 plus a mapping note, not seven additional tests.
+- **Guard 2 row 1 is pre-existing #6594 coverage carried forward**, not new authorship — though
+  R19.2 means it now needs a real fix to remain drivable.
+- **Guard 2 row 7 restates the global `GATE_MIN_ASSERTIONS` floor** rather than a Guard-2-specific
+  property. Kept (the floor requirement is ≥3 and there is headroom) but it must not be counted as
+  evidence of a seventh distinct property — Guard 2 has six.
+- **Two things to state as explicit invariants rather than leave as premises:** (a) *Sentry is
+  write-only for this `op=`* — the whole reason the ledger issue exists rather than a Sentry alert;
+  #7527 anticipates wiring an alert rule, and when that lands someone must re-derive whether the
+  ledger is still needed. (b) `tasks.md` 7.4's dispatch-run exclusion assumes a dispatch run cannot
+  coincide with a genuine DPF replacement. R18.4 does not establish that. Either justify it at the
+  exclusion site or drop it — as written it could silently suppress real incidents from the counter.
+
+## R19.7 — What the panel confirmed, so it is not re-litigated
+
+Measured and correct as stated: bash suspends `errexit` inside a function body invoked as
+`if ! f`, and a **bare** call inside a `for` body preserves it (both executed, not reasoned);
+`terraform apply <planfile>` rejects `-target=`/`-var`, so the doppler wrapper belongs on the plan;
+the S3 backend credentials reach the gate step as plain `$GITHUB_ENV` names that
+`--name-transformer tf-var` does not touch; `CI_SSH_PUB` is still `/tmp/ci_ssh_key.pub` and nothing
+removes it; the re-push opens **no SSH** because `deploy_pipeline_fix`'s provisioner is `local-exec`
+with no `connection` block, and its two SSH-carrying `depends_on` predecessors are no-ops after
+apply #1 (with the cardinality assert as the backstop if they are not); `GATE_MIN_ASSERTIONS=106`
+with the suite flush at 106; `infra_config_should_repush` has zero hits in code; and the
+`|| STABILITY_RC=$?` form at the freshness pin is the AP-022-sanctioned precedent.
+
+The two-guard split is also endorsed: Guard 1 is a property of a pure function, which structurally
+has no notion of how often its caller acts on it, so boundedness could not live there.
+
+# R20 — architecture + flow review: the shape is not settled, and one measurement gates it
+
+**[2026-08-13.]** `architecture-strategist` and `spec-flow-analyzer` landed after R19 and found more
+than R19 folded in. **R20 supersedes R18 and R19 wherever they disagree.** The headline: three
+independent agents converged on R19.1 (the loop break is inert), and two more fail-opens were found
+that R18 did not have. **PR-B must not go to `/work` on R18's shape.**
+
+## R20.1 — BLOCKING: the assert that bounds the production write has never been evaluated
+
+The one mechanism bounding the recovery's blast radius — "exactly one replaced resource,
+`mode == "managed"`" — is asserted at every point in the chain and **measured at none**. The
+hermetic test stubs `terraform`, so it certifies the stub; production cannot reach it (R18.4).
+
+This is not hypothetical: `terraform_data.deploy_pipeline_fix` carries
+`depends_on = [terraform_data.apparmor_bwrap_profile, terraform_data.infra_config_handler_bootstrap]`,
+`-target` is transitive at the resource level (the workflow's own plan step records this — it is why
+the `host_creates` guard exists), and `infra_config_handler_bootstrap` carries a **`remote-exec`**
+provisioner over SSH.
+
+- Cardinality **1** → the recovery works and R18.8 §8's no-SSH argument holds.
+- Cardinality **> 1** → the assert aborts **every** recovery, on the failure path of a real
+  incident, and because the path ships dark nobody ever learns. Worse, a future editor who loosens
+  the assert to "make it work" gets a `handler_bootstrap` `remote-exec` running against a bridge
+  torn down three steps earlier.
+
+R18.8 §8 is **circular**: the no-SSH claim rests on the cardinality assert, and the cardinality
+assert rests on nothing.
+
+**`tasks.md` gains task 4.0, and it blocks Phases 4–10.** Read-only, no apply, no new affordance:
+run the scoped `-replace` + `-target` plan under the existing doppler wrapper with
+`-out=tfplan-repush`, `terraform show -json` it, and record **counts and addresses only** — never the
+JSON, which carries the live prd Doppler token and the webhook HMAC in cleartext (the workflow says
+so at its own `rm -f tfplan.json` site). Then run the `destroy-guard-filter-web-platform.jq` filter
+over it. Shape the I1–I3 fixtures from the measured addresses, and state the measured cardinality in
+ADR-187 as the invariant the assert pins. **If it is not 1, the design changes before it is built.**
+
+This also narrows R18.4 honestly. What cannot be produced on demand is *"the handler published no
+frame"*. Everything downstream of that decision — the `-replace`/`-target` plan, the destroy-guard
+over its JSON, the cardinality assert — is deterministically exercisable **today, read-only, with
+zero production write**. And `terraform apply <planfile>` is already proven in production by run
+31714143720 (15:13:26→15:13:29Z). The genuine first-run-in-production residual is therefore *"one
+apply of a plan whose shape was measured"*, not *"the whole recovery"* — a far more defensible ADR
+sentence than R18.4's.
+
+## R20.2 — OPEN FORK 2: the step split, whose stated blocker is measurably false
+
+R18 records the step-boundary collapse in an ADR and never evaluates the alternative, on the premise
+that seven downstream status-keyed conditions would need re-wiring. **Measured: only two of eight
+reference `steps.infra_config_gate`.** The five `success()` gates are *job-cumulative* — "no previous
+step has failed" — so a later pass-2 step failing skips them automatically, with no edit.
+
+| Condition | Re-wiring under a split |
+|---|---|
+| `always() && steps.infra_config_gate.outputs.freshness_evidence == 'degraded'` | yes — widen with pass 2's outputs |
+| `failure() && steps.infra_config_gate.outcome != 'success'` | yes |
+| five × `success()` (+ unrelated clauses) | **none** |
+| `always()` (post-apply summary) | none |
+
+The proposed shape — gate (pass 1) → plan the re-push → **grade it** → apply it → gate (pass 2) →
+`if: always()` assert-a-verdict-was-rendered — restores an *unbypassable* boundary: the grading
+step's failure means the apply step never runs, because the apply is keyed on `success()`. All of it
+sits between the existing steps, so nothing moves relative to the five cumulative gates. Cost: two
+condition widenings, one backstop step, and the loss of the widened-loop trick.
+
+**It also dissolves, for free, three of the defects below:** the `repush_attempted` output problem
+(R20.3), the escape-hatch fail-open (R20.4), and the alert misclassification (R20.6) all become
+step-boundary questions with existing answers.
+
+Recorded as a fork, not decided, for the same reason as R18.16 — and the two forks interact: if the
+step body is extracted to a script (R18.16), the split becomes cheaper still, because pass 1 and
+pass 2 are two invocations of one tested file. **`/soleur:deepen-plan` adjudicates both together.**
+
+## R20.3 — P0: `repush_attempted` is unwritten on every *failed* recovery
+
+The plan ties the output to the latch, and the latch is set "only after the re-push actually
+executes". Every abort point — the `CI_SSH_PUB` assert, the backend-credential assert, the plan, the
+destroy-guard, the cardinality assert, the apply — precedes it. A `$GITHUB_OUTPUT` write after
+`exit 1` never happens, so both consumer steps are skipped and **the only evidence a production write
+was attempted is absent on exactly the runs where one went wrong** — including the case where
+`local-exec` already fired and the push landed.
+
+This is the defect PR-A already fixed one layer up, at the 404 arm: *"leaving it unwritten made it
+indistinguishable from `verified` to every consumer — absence reading as good news."*
+
+**Fix:** separate the two concerns R18 conflates. The **latch** (boundedness, Guard 2 row 4) is set
+after the apply. The **output** is written **before the first abort point**, because its property is
+"a write was attempted here". Both consumers take `if: always() && …repush_attempted == 'true'`.
+Task 7.1's "outcome" is unknowable at write time — derive it from `steps.infra_config_gate.outcome`,
+not from a second output.
+
+## R20.4 — P0: the `ALLOW_MISSING_STATUS` hatch goes GREEN after a production write
+
+P7 holds narrowly (`freshness_evidence=none`, never `verified`) and asserts the wrong property.
+404-after-re-push is a **re-push-induced** state: the re-push re-delivers `/etc/webhook/hooks.json`,
+and a hooks.json that lands without the status hook, or before reload, answers 404 on a live
+listener. `HTTP_CODE` holds the last observed value, so: last poll 404 + `ALLOW_MISSING_STATUS=true`
+→ the 404 arm → `freshness_evidence=none` → **fall through to end of step, exit 0**.
+
+The step is green. The five `success()` steps re-arm — including the one that comments *"Server state
+was re-aligned with HEAD"* on the founder's issues and **closes them** — and the container swaps.
+R18.12's named fail-open is real and this is its concrete instance.
+
+**Fix:** make the hatch unavailable once the latch is set —
+`[[ "$ALLOW_MISSING_STATUS" == "true" && "$REPUSH_DONE" != "true" ]]`. The hatch's charter is a host
+whose hooks.json *predates* the status endpoint; a run that just re-pushed hooks.json cannot be in
+that state by construction, so a 404 there means the re-push broke the endpoint. The `else` must say
+that.
+
+## R20.5 — P0: the settle premise is backwards, and the post-latch window is unbounded from below
+
+R18.8 §9 cut the settle on the grounds that plan+apply "take far longer" than the 3 s + 5–8 s window.
+Two independent refutations:
+
+1. **Measured, from the very run R18 cites three times.** Run 31714143720: `Terraform plan`
+   15:13:18→15:13:24 = **6 s**; `Terraform apply` 15:13:26→15:13:29 = **3 s**. Total **9 s** against a
+   window of up to **11 s**. "Far longer" is false — the margin is negative.
+2. **It measures the wrong interval anyway.** `push-infra-config.sh` is a `local-exec` provisioner,
+   so the 202 fires at the **end** of the apply. The 5–8 s state-write/sync/restart window starts
+   *there*. The plan+apply time is spent **before** the trigger. The first post-re-push poll lands
+   ~0 s after the 202 — precisely what the step's own opening `sleep 8` exists to prevent
+   ("polling immediately wastes attempt 1"). The re-push gets no equivalent.
+
+And with a fixed `for attempt in 1 2 3 4 5 6` list, the passes remaining after the latch depend on
+*which* attempt classified: fire on 5 → one pass, ~5 s, for a delivery needing 5–8 s just to
+schedule; fire on 6 → the loop ends immediately. That is a **false red on a successful recovery**,
+which then fires the #7220 P1 alert and tells a non-technical founder their sole remediation channel
+is broken.
+
+**Fix:** make the bound a function of the latch — a `while` with a counter where setting the latch
+grants a fixed further budget (`DEADLINE=$((attempt + 4))`). A `while … done` satisfies the
+single-`done` clause identically. **Reinstate the settle**: it is not a magic sleep, it is the same
+documented constant already at the top of this step, applied to the second trigger for the same
+measured reason. R18.8 §9 is **withdrawn**; §10's "two minutes" is a ~10× overestimate from the same
+unmeasured source and should be re-derived in the same pass.
+
+## R20.6 — P0: a failed re-push is actively misdiagnosed by the #7220 alert
+
+Trace a re-push failure into `Alert on a red infra-config gate (#7220)`: `GATE_OUTCOME == failure`
+so the ungraded arm is skipped; `jq -e .` on the response file **succeeds** (the frame is a valid 200
+— that is why the classifier fired); `FATAL_LINE` is 0; `STABILITY_VERDICT` is empty. It lands in the
+final `else` and files an issue saying *"the handler did not die — the failure is in what was
+delivered… the files that landed are on the host, and app health is unaffected — this is an
+ACTIVATION failure, not a delivery one. Next: betterstack-query.sh --grep SOLEUR_INFRA_CONFIG_FATAL"*.
+
+**Every clause is false.** A second production `terraform apply` was attempted mid-gate and failed;
+the resource may be tainted; the push may have half-landed; the Better Stack query returns nothing
+because no fatal occurred. This is a **new** misclassification PR-B introduces — before it, no
+terraform write could fail inside this step. It is the AP-021 class the plan invokes elsewhere.
+
+**R18.8 §7's cut of the fourth class is withdrawn, and its reasoning was wrong on both grounds.**
+Per-pass truncation fixes reachable-vs-unreachable confusion only; it does nothing when the frame is
+a valid 200 and the *terraform* half failed. And it does **not** require editing the fail-open
+helper: `STABILITY_VERDICT` is the existence proof, 40 lines above in the same file — PR-A added a
+new discriminator purely as a `case` arm in the **caller**, keyed on a new gate-step output, with
+zero edits to `scripts/infra-config-red-alert.sh`.
+
+**Fix, following that precedent exactly:** the gate writes `repush_failed=<phase>` before each
+`exit 1` in the re-push block (and before it, per R20.3); the alert step gains one
+`elif [[ -n "${REPUSH_FAILED:-}" ]]` arm above the frame-derived branches, naming the phase, warning
+that terraform state may hold a tainted resource or a held lock, and routing to the
+`-replace=terraform_data.infra_config_handler_bootstrap` lever rather than to Better Stack. No helper
+edit, no new label.
+
+## R20.7 — P1 set, all measured
+
+1. **Guard 2's "total quantification" claim is false.** Two production-reachable paths are invisible
+   to a grep over the workflow: `source ./infra-config-gate.sh` — the very library PR-B adds a
+   function to, which is a pure-adjudicator **by convention only**, with no `set` directives and no
+   gate enforcing write-freedom — and the `cf-tunnel-ssh-bridge` composite action (seven `run:`
+   bodies, `sudo iptables` NAT, root SSH to prod). **Fix:** re-word the assembly to "every statement
+   in this job's inline `run:` bodies", and add a Guard 2 clause asserting `infra-config-gate.sh`
+   contains no **command-position** `terraform`, `curl`, `ssh`, `systemctl`, a mutating `doppler`
+   subcommand, or `gh issue` (command position, not bare token — the file has 20+ comment-only
+   occurrences; `cq-assert-anchor-not-bare-token`). That converts "pure adjudicator" from convention
+   to contract, closing the escape PR-B itself widens.
+2. **The re-push's plan JSON is secret-bearing and nothing deletes it.** It must be named
+   `tfplan-repush` / `tfplan-repush.json` so it cannot clobber the graded apply-#1 artifact, and
+   removed via `trap 'rm -f tfplan-repush.json' EXIT` — the only form that survives all six `exit 1`
+   paths — and never `cat`ed on an error branch.
+3. **No terraform lock handling.** A killed or cancelled re-push leaves the S3 backend lock held,
+   blocking **every** subsequent apply on the sole no-SSH remediation path. R18.11 asks the ADR to
+   *record* R15.6's cancellation consequence; recording is not mitigating. Add `-lock-timeout` to the
+   re-push plan and apply, and have R20.6's branch print the lock ID and the `force-unlock` route.
+4. **Post-merge covers only the arm AC20 freezes.** AC14′ verifies the `false` arm while AC20
+   guarantees that arm is unchanged; the arm PR-B actually modifies gets zero production exercise.
+   Add **AC14″**: one post-merge run with `DPF_REPLACED == true` (a nonce bump, or the next routine
+   trigger-file merge) asserting green, latch unset, zero `op=infra-config-repush-attempted`. If
+   deferred to the next natural merge, say so with the re-evaluation trigger.
+5. **AC14′ is a vacuous negative and AC20 pins too narrow a region.** "Zero emissions" is satisfied
+   identically by correct code, by dead code (R19.1), and by a misplaced output write (R20.3). Make
+   the gate `echo` one line at the `should_repush` call site naming the branch taken, and assert that
+   line is **present with a negative decision** — a reachability probe, not an absence. And extend
+   AC20's diff assertion to the **whole `run:` body** of the gate step: run 31714143720 measured a
+   loop that PR-B is widening and giving an in-loop production write, so freezing only the `false`
+   branch of the freshness pin is one level too shallow.
+6. **STALE FRAME prose must branch on the latch.** When a re-push fired and no frame followed, the
+   terminal message currently implies a DPF replacement is the remedy — the lever that just failed
+   automatically. Route to the handler-bootstrap replace instead.
+7. **Property (4) has no push mechanism at all.** A silently-recovered run yields a green job, a
+   `Post-apply summary` identical to a normal run, a Sentry event matching no alert rule, and a
+   ledger issue deliberately designed not to notify. All pull-only, two deliberately silenced.
+   Against a `single-user incident` threshold and a non-technical operator, the honest answer to
+   "can they tell a recovered run from a never-failed one" is **no**. **One-line fix:**
+   `Post-apply summary` already runs `if: always()` and is the artifact the founder sees — add a
+   `**Self-healed:**` line reading `repush_attempted` and linking the ledger. Pull becomes push, no
+   notification is added, and the ledger gains its only inbound path. This also subsumes
+   `tasks.md` 7.6, whose line would otherwise render orphaned *above* the summary's heading.
+8. **The quiet-predicate contract means the log can never say why it declined.** On a run that reds
+   with STALE FRAME and did not re-push, the log cannot distinguish "the predicate declined" from
+   "the block was skipped" from "`APPLY_START_EPOCH` was unset so it failed closed" — and note the
+   numeric guard on `APPLY_START_EPOCH` runs *after* the loop, so inside the loop it is unvalidated
+   and its absence silently suppresses the recovery. The call-site `echo` in item 5 closes both.
+9. **Task 7.3's label creation site is unspecified**, and both readings are bad: inside the workflow
+   it first runs on an already-degraded run; outside it is an undeferred operator step, which
+   `wg-block-pr-ready-on-undeferred-operator-steps` forbids. Create it **idempotently inside the
+   emitting step**, which must be non-blocking end to end.
+10. **AC18 and task 7.3 contradict each other.** AC18 bans `continue-on-error`; 7.3 requires the
+    emission be guarded so it cannot red a recovered run — and the obvious implementation of the
+    latter is the thing the former bans. Name the sanctioned form explicitly (`set +e` /
+    `set -uo pipefail` / terminal `exit 0`, as the degraded-freshness step already does).
+11. **Task 7.4's dispatch exclusion now suppresses the highest-attention runs.** Its motivating case
+    was R6's rehearsal input, which R13.2 cut. The remaining effect is that a manual remediation
+    dispatch — the one run a human is watching — gets no ledger entry and no Sentry event. Narrow it
+    to "excluded from the ≥3-in-30-days tally, still emitted".
+12. **R18.7's no-notify claim has one unmeasured residual.** GitHub *does* notify on an `@mention`
+    introduced by a body edit. Close it with a grep, not an API call: assert the ledger body contains
+    no `@`. Add to AC18.
+
+## R20.8 — P0: the in-file principle PR-B would falsify
+
+`.github/workflows/apply-deploy-pipeline-fix.yml` **already states R17.7's principle as an in-file
+invariant**, written by PR-A in the same file PR-B edits:
+
+> *"It is also the right boundary on principle — this step SENSES, the verify step ADJUDICATES, and
+> a verification gate should not share a step with its own verdict."*
+
+R18.6 claims moving the Sentry emission to its own step satisfies R17.7 "without amending it". It
+satisfies the **credential-surface** clause (which was R17.6's finding) and leaves the **verdict**
+clause untouched: the `terraform apply` still shares the step with the verdict. PR-B would ship a
+design under which PR-A's comment is true of the sensing step and false of the adjudicating one, in
+the same file. Neither R17 nor R18 noticed.
+
+**Pick one, explicitly — dropping the principle is not available, since the register has nothing
+covering a verification surface that actuates and this PR is the first instance:**
+
+- **(a)** Take R20.2's split. The principle holds as worded, the in-file comment stays true, and the
+  principle registers with this design as its first compliant instance.
+- **(b)** Keep the inline shape. Then reword the principle before registering (*"…must declare its
+  write sites in-step, must keep its escalation credentials in a different step, and must bound each
+  write site with an assert that has been evaluated against a real plan"*), amend the comment so the
+  file does not assert an invariant it breaks, and register the deviation the way **AP-019**
+  registers its AP-001 carve-out — narrow, bounded, named, with the bounding properties enumerated.
+
+## R20.9 — Disposition
+
+**`tasks.md` gains a blocking task 4.0** (R20.1's read-only cardinality measurement) and its Phase 4
+now depends on it. **Two design forks are open and interacting** — R18.16 (extract the step body to
+a script, ADR-150 shape) and R20.2 (split the recovery into graded steps) — and R20.8's choice
+follows from R20.2's. All three are routed to `/soleur:deepen-plan`, which is the next pipeline step,
+with the measured costs above on the table. Everything in R20.3–R20.7 is a correction that applies
+under **either** fork resolution and should be folded regardless.
