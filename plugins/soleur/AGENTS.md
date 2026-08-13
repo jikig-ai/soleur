@@ -28,7 +28,7 @@ The three manifests:
 |---|---|---|
 | `plugins/soleur/.claude-plugin/plugin.json` | this repo | The plugin manifest itself. Keyless. |
 | `.claude-plugin/marketplace.json` | this repo | The **local-dev** marketplace. Its `plugins[0].source` is `./plugins/soleur`, which is what `claude plugin marketplace add <local-path>` consumes. Its `plugins[0]` entry is keyless; its **top-level** `"version"` is the manifest-*format* version, a different field that stays. |
-| `.claude-plugin/marketplace.json` | `jikig-ai/soleur-marketplace` | The **published distribution** manifest, one `git-subdir` entry pointing back at this repo. Keyless. It lives outside this repo, so **no CI check here can reach it** — it is verified by reading the published file. |
+| `.claude-plugin/marketplace.json` | `jikig-ai/soleur-marketplace` | The **published distribution** manifest, one `git-subdir` entry pointing back at this repo. Keyless. Since #7493 its **source** is `infra/github/soleur-marketplace-manifest.json` here, published by Terraform and validated pre-merge by the blocking `marketplace-manifest-guard`; that repo also carries a PR-required ruleset. The **published bytes** still live outside this repo, so they are verified by reading the published file (`scheduled-marketplace-drift.yml`). |
 
 Nothing publishes to the third manifest on release. A GitHub Release creates a tag; it does not write to the marketplace repo. The distribution manifest tracks `main` with no pinned `ref`/`sha`, so new content is delivered by the source commit advancing, not by a version bump.
 

@@ -238,6 +238,33 @@ resource "github_repository_ruleset" "ci_required" {
         context        = "credential-path-guard"
         integration_id = var.actions_integration_id
       }
+
+      # #7493 adds `marketplace-manifest-guard` (22nd) — the ci.yml always-run
+      # job validating `infra/github/soleur-marketplace-manifest.json`, the
+      # SOURCE that `github_repository_file.marketplace_manifest` publishes to
+      # jikig-ai/soleur-marketplace. First apply (this PR's merge via
+      # apply-github-infra.yml) makes it LIVE-required.
+      #
+      # BORN BLOCKING, deliberately. Advisory would not do here and the reason
+      # is mechanical rather than stylistic: once Terraform owns the manifest's
+      # contents AND scheduled-marketplace-drift.yml dispatches a reconcile
+      # apply, a bad manifest that MERGES is published, detected, and then
+      # REPUBLISHED every day — while a published-vs-source byte-diff reports
+      # in-sync the whole time, because published genuinely does match source.
+      # The merge boundary is the only place that loop can be broken, so a
+      # red-but-mergeable check would hand automation a wrong state to defend.
+      #
+      # Content-scoped. Its bot-PR green is SOUND-BY-UNREACHABILITY (the
+      # rule-body-lint argument), NOT earned like credential-path-guard above:
+      # SCAN_DIRS here is the single file soleur-marketplace-manifest.json and
+      # the composite action's ALLOWED_PATHS is {weakness-digest.md,
+      # rule-metrics.json} — intersection EMPTY, re-derived per ADR-139 rather
+      # than inherited. If ALLOWED_PATHS ever gains an infra/github path, the
+      # gate must be reproduced in the action's Phase-4 ceiling BEFORE it lands.
+      required_check {
+        context        = "marketplace-manifest-guard"
+        integration_id = var.actions_integration_id
+      }
     }
 
     # Merge queue REVERTED (#5780 kill-switch, 2026-06-30). The queue was

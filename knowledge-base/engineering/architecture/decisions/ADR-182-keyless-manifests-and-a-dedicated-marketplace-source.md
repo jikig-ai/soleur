@@ -139,11 +139,56 @@ prevention. Until one of them lands, this is an accepted risk rather than an unn
   path. Costs: the App needs `contents: write` on that repo, and a Terraform-managed file on a
   default branch interacts with branch protection. Tracked as follow-up work rather than shipped
   untested inside a delivery fix.
+
+  > **SHIPPED 2026-08-12 (#7493)**, with one clause of the above CORRECTED rather than carried
+  > forward. Both stated costs cleared against the live API: the `soleur-ai` App holds
+  > `contents: write` at `repository_selection: all`, and the branch-protection interaction is
+  > resolved by declaring the App an `Integration` bypass actor — so its write is the *reviewed*
+  > path, since the content originates in this monorepo behind CI and CODEOWNERS.
+  >
+  > **The correction: "drift would be auto-reconciled by the next apply" was false as written.**
+  > `apply-github-infra.yml` carries no `schedule:` — it fires on `push: main` touching
+  > `infra/github/*.tf`, `infra/github/.terraform.lock.hcl`, `infra/github/soleur-marketplace-manifest.json`
+  > (added by #7493 — the `*.tf` glob does not match a `.json` sibling) or the destroy-guard
+  > filter, plus `workflow_dispatch`. "The next apply" could therefore be weeks away, so this option as
+  > described bought *ownership without timeliness*, and the daily drift check remained the faster
+  > signal. #7493 makes the claim true by shipping the reconcile arm below rather than by
+  > restating it.
+  >
+  > A cost this entry did not anticipate: `github_repository_file` has no `keep_on_destroy`, so
+  > destroying it DELETES the published manifest. `archive_on_destroy` on the repository does not
+  > cover a file inside it.
+  >
+  > A gap it also did not anticipate: putting the manifest under Terraform makes a bad SOURCE
+  > publishable, and — once the reconcile arm exists — *republishable daily* while a
+  > published-vs-source byte-diff reports in-sync. #7493 therefore also ships
+  > `marketplace-manifest-guard`, an always-run blocking check on the source file. Ownership
+  > without a pre-merge gate would have been a downgrade.
 - **A `github_repository_ruleset` restricting pushes to the marketplace repo.** Same disposition and
   the same reason. It would be the direct answer to the review finding below, and it is cheap —
   `infra/github/` already manages two rulesets. It is deferred because an untested ruleset shipped
   inside this PR could either break the unattended apply pipeline or lock the sole maintainer out of
   the repo, and neither failure is one this change should risk.
+
+  > **SHIPPED 2026-08-12 (#7493).** The lock-out risk was the real one, and it was settled by
+  > MEASUREMENT on a disposable repo rather than by reasoning — two reviewers reached opposite
+  > conclusions from the same documentation.
+  >
+  > Measured: a `pull_request` rule with `required_approving_review_count = 1` and the human bypass
+  > actors in `bypass_mode = "pull_request"` REFUSED the sole maintainer's own merge
+  > (`reviewDecision: REVIEW_REQUIRED`, *"the base branch policy prohibits the merge"*), leaving
+  > only an `--admin` override. Moving those actors to `bypass_mode = "always"` restores direct
+  > push, which is what preserves the emergency path on the repo a broken install is fixed
+  > *through*. That deviates from the two sibling rulesets and the deviation is deliberate.
+  >
+  > The approval count is not optional: `required_approving_review_count` has no schema default at
+  > provider 6.12.1, so omitting it yields 0 — and `claude` and `entire` hold `pull_requests: write`
+  > alongside `contents: write`, so a zero-approval PR requirement does not close their write paths
+  > at all. A first implementation shipped exactly that and claimed otherwise.
+  >
+  > Honest scope: this raises the bar from one App acting alone to two Apps colluding. Fully closing
+  > that residual requires narrowing the `claude` / `entire` installations to selected repositories,
+  > which is tracked separately. `deletion` and `non_fast_forward` are the unconditional part.
 - **Hand-maintained manifest with no drift check.** Rejected: the artifact is unreviewable and its
   silent-failure detector would otherwise be "a new user tries to install and it fails", which at a
   beta population of one may not fire for weeks.
