@@ -14,11 +14,25 @@
 # manifest) lands on MISMATCH rather than on OK.
 #
 # HOW IT DRIVES THE CHECKER. The logic lives inline in the workflow's `check` step, so the step
-# body IS the unit under test: it is extracted from the YAML and executed under the exact shell
-# GitHub uses for a `run:` block with no `shell:` key — `bash --noprofile --norc -eo pipefail`.
-# Running it under a plain `bash` would defeat the point: the inherited `-e` is the specific
+# body IS the unit under test: it is extracted from the YAML and executed with errexit already
+# on. Running it under a plain `bash` would defeat the point: the inherited `-e` is the specific
 # thing that has silently killed capture logic in this repo's workflows before (#7304), and a
 # test that clears it cannot observe the defect it exists to catch.
+#
+# CORRECTED (#7506). This comment previously said `bash --noprofile --norc -eo pipefail` was
+# "the exact shell GitHub uses for a `run:` block with no `shell:` key". That is the mapping
+# for an EXPLICIT `shell: bash`. A block declaring NO `shell:` key is invoked as
+# `/usr/bin/bash -e {0}` — errexit, and no pipefail. This repo's own
+# `scripts/lint-workflow-errexit-capture.py` records both mappings correctly; this file
+# asserted the wrong side of that contradiction, and it is what misled the #7506 plan into
+# pinning the wrong harness for a different workflow.
+#
+# THE HARNESS BELOW IS LEFT AS IT IS, DELIBERATELY, and the discrepancy is recorded rather
+# than papered over: the steps in scheduled-marketplace-drift.yml declare no `shell:` key, so
+# this suite runs them under a STRICTER shell than production (it adds `pipefail`). That
+# direction is safe for a guard — `pipefail` can only ADD failures, so it may raise a false
+# alarm but cannot manufacture a false green — and re-pinning another workflow's suite is not
+# in #7506's scope. A suite that ran it under a LOOSER shell would be the dangerous inverse.
 #
 # Network is stubbed with a `curl` shim on PATH, so no scenario touches the network and the
 # fixtures are synthesized JSON rather than captured responses.
