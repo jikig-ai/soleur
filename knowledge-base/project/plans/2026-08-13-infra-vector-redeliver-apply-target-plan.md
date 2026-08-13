@@ -477,6 +477,30 @@ restart, no application downtime, no host reboot.
 Not applicable — no vendor resource is created. Better Stack and Cloudflare are read/traversed,
 not provisioned.
 
+### Conditional-gate determinations
+
+Two deepen-plan gates were evaluated and found not to fire. Recording the reasoning so a later
+reader does not have to re-derive it, and so a wrong call is visible rather than silent.
+
+**Downtime & Cutover (deepen Phase 4.55) — does not fire.** None of the three trigger classes
+match. *Infra reboot/replace:* no `hcloud_server`, volume or attachment is replaced — the gate
+actively **refuses** such a plan (M3), so the arm cannot reach that state. *Database lock:* no
+migration. *Deploy/router:* no container swap, no tunnel restructure, no drain-less connector
+restart on a serving connector — Vector and journald are the observability plane, not the serving
+path, and the application container is untouched. The journal-daemon and agent reloads are
+sub-second and gapless by design (`sd_journal` cursor resumption, `server.tf:1040-1043`). Note
+this is the *inverse* of the class the gate guards: the arm exists to restore observability, and
+the one serving-adjacent hazard (a botched render darkening the agent) is already held by the
+resource's own pre-touch render-sanity gate.
+
+**Encryption Posture (deepen Phase 4.10) — does not fire.** No file in Files to Create/Edit
+matches `\.tf$`, `supabase/migrations/.*\.sql$`, `cloud-init.*\.ya?ml$`, or
+`docker-compose.*\.ya?ml$`. The prose does name a log sink (`[sinks.betterstack]`), which is why
+this determination is written down rather than assumed — but the gate's own skip condition is "a
+change confined to an already-provisioned surface", and that is exactly what this is: no store is
+introduced, no connection is created, and the Better Stack sink and its transport already exist
+and are unchanged by this plan.
+
 ## Architecture Decision (ADR/C4)
 
 ### ADR
