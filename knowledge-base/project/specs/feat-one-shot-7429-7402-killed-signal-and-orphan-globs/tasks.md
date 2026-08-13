@@ -23,7 +23,9 @@ in earlier revisions were falsified at review — do not reintroduce them.
 
 ## Phase A1 — `run-registered-suites.sh` propagation (RED first)
 
-- [ ] 1.1 Add Guard 2 mutation rows to `run-registered-suites.test.sh`. **M1 must use a real signal (`kill -KILL $$`), never `exit 137`** — it is the A6 tripwire. Confirm RED.
+- [ ] 1.1 Add Guard 2 rows to `run-registered-suites.test.sh` **in the existing `run_mutant` vocabulary** (`:583-691`): python mutator on the pristine `cp`, a named `[FAIL] <id>` to kill, the DID-NOT-LAND diff, a noop-control. Confirm RED.
+- [ ] 1.1a **The A6 tripwire is row M1b, at the SHIM — not inside the fixture suite.** Measured: at the suite position `kill -KILL $$` and `exit 137` are identical (`rc=$?` 137, xargs 0); at the shim, a real signal gives xargs **125** vs **123** for a deliberate exit. Assert 125. Use the house fixture shape `kill -TERM $$` + `sleep 5` (`test-all-killed-classification.test.sh:149`) — the sleep prevents an async-kill race.
+- [ ] 1.1b **Pay the T9 integration debt in the same commit:** rewrite the `drop-accounting` mutator (`:673-674` — its literal is deleted by task 1.5), raise `MIN_ASSERTIONS` (`:716`) **and** the `>= 7` matrix floor (`:686`), and decide how G2 M5 is scored (its mutation and killing assertion are in different files; the harness cannot span them today).
 - [ ] 1.2 Add the end-to-end arm in `scripts/test-all-killed-classification.test.sh` (it owns `build_sandbox`): assert `[KILLED]` in real `run_suite` output **and** `test-all.sh` exit 3.
 - [ ] 1.3 Inline a **two-guard** classifier (`rc > 128` + non-empty `kill -l $((rc-128))`). Do NOT copy `<= 192` (ADR-177: not load-bearing). Keep rc 124 → failed.
 - [ ] 1.4 Count `killed` **in the parent**, right after `RED=`/`PASS=` at `:346-347` — outside `dump_reds`, outside the `{…} | sed` pipeline. Derive `failed=$(( RED - killed ))` and a deterministic `kill_rc` (lexicographically-first killed suite key).
@@ -50,7 +52,9 @@ in earlier revisions were falsified at review — do not reintroduce them.
 
 ## Phase B1 — widen the orphan linter (RED first)
 
-- [ ] 4.1 Create `scripts/lint-orphan-test-suites.test.sh` with Guard 1's M1-M7. **`git init` + `git add` the sandbox tree** and assert non-empty enumeration before any row runs — otherwise every row is vacuous.
+- [ ] 4.1 Create `scripts/lint-orphan-test-suites.test.sh` with Guard 1's **M1-M11** against a **synthetic** git repo (path-shaped empty files + the three real inputs) — not a tree copy: the worktree is 13,630 files / 258 MB and 11 copies is ~2.8 GB on a loaded box. It must still be a real git repo (`git init` + `git add`) or `git ls-files` returns nothing and every row is vacuous; assert non-empty enumeration before any row runs.
+- [ ] 4.1a Include the four rows added at review: **M8** producer partial-narrowing (revert to `scripts/*.test.sh` — clears every floor and prints `none`; highest-value row), **M9** surface 4, **M10** surface 5, **M11** exclusion key matching zero files.
+- [ ] 4.1b Give M1/M3/M5/M9/M10 a **single-surface precondition** — assert the target suite is covered by exactly one surface before mutating, else a union match makes the mutation a silent no-op.
 - [ ] 4.2 Widen to the whole-repo walk: `git ls-files '*.test.sh'` diffed against the **six**-surface union. Pin `LC_ALL=C` for all sort/comm.
 - [ ] 4.3 **Derive glob patterns from `test-all.sh`** — add `--print-suite-globs`; never duplicate the nine patterns into the linter (else M5 passes green).
 - [ ] 4.4 Re-key exclusions from **basename to repo-relative path**; fail closed when a key matches 0 or ≥2 tracked files. (Collisions verified: `parity.test.sh`, `argv-ceiling.test.sh`.) Keep the `#NNNN` requirement.

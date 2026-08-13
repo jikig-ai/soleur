@@ -39,9 +39,17 @@ advisor, test-design-reviewer. 31 findings recorded and dispositioned in
    not 7, across **six** registration surfaces — surface 6 (`sudo bash` inside a multi-line
    `run: |` block) was missing from the first spec and is what makes AC10 satisfiable.
 5. **Guard hardening.** The mutation sandbox must be a real git repo (else `git ls-files` returns
-   nothing and every row is vacuous); glob patterns must be *derived* from the runner, not
-   duplicated; exclusions re-keyed from basename to path (verified collisions on
-   `parity.test.sh` and `argv-ceiling.test.sh` — one of which this PR turns on).
+   nothing and every row is vacuous) but **synthetic** (13,630 files / 258 MB × 11 rows is ~2.8 GB
+   on a loaded box); glob patterns must be *derived* from the runner, not duplicated; exclusions
+   re-keyed from basename to path (verified collisions on `parity.test.sh` and
+   `argv-ceiling.test.sh` — one of which this PR turns on).
+6. **The A6 tripwire was on a row that could not fire it — measured, then moved.** Inside the
+   fixture suite, `kill -KILL $$` and `exit 137` are byte-identical at every chokepoint
+   (`rc=$?` 137, `xargs` 0); the distinction lives only at the **shim**, where a real signal gives
+   `xargs` **125** against **123** for a deliberate exit. This is the same defect class the PR
+   exists to fix — a guard that cannot detect what it claims to — found in the plan's own guard.
+   Guard 1 gained the matching row (**M8**, producer partial-narrowing: reverting to the pre-PR
+   producer clears every floor and prints `none`).
 
 ### Corrections to this plan's own earlier revisions
 
@@ -416,6 +424,16 @@ There is more than one chokepoint, and that is the point: a guard scoped to only
 | M5 | Delete one glob pattern from `test-all.sh:1205` | the suites it covered become orphans — **only reds if the patterns are derived from the runner, never duplicated into the linter** (see Phase B1 step 2) |
 | M6 | Neuter the walk so it enumerates zero files (**own dispatch**) | the anti-vacuity floor must fire — a guard reporting "0 checked" and exiting 0 is vacuous. This is the single most valuable row here: it is the only one covering the direction where failure is byte-identical to success |
 | M7 | Add an exclusion with a reason but **no** `#NNNN` | fail-closed exclusion discipline preserved |
+| **M8** | Narrow the producer from `git ls-files '*.test.sh'` back to `git ls-files 'scripts/*.test.sh'` | **the highest-value row, and it was missing.** M6 covers "enumerates zero"; nothing covered "enumerates a plausible SUBSET". This mutation is literally the pre-PR state: it clears every `< 1` floor, prints `orphan test suites: none`, and reads as a clean repo |
+| **M9** | Delete the per-app `main.test.sh` hook step (surface 4) from the sandbox workflow | surfaces 1/2/3 had rows; 4, 5 and 6 had none. R4 is the proof this matters — surface 6's absence was invisible until someone counted orphans by hand |
+| **M10** | Delete a `run: bash …test.sh` step from a workflow **other than** `infra-validation.yml` (surface 5) | same reasoning as M9 |
+| **M11** | Add an exclusion key matching **zero** tracked files | M7 covers the missing issue-ref and AC26 the ambiguous (≥2) direction; a **stale** key that masks nothing while looking disciplined is a third, distinct failure |
+
+**Precondition required on M1, M3, M5, M9 and M10 — otherwise they can pass green while working.**
+The covered set is a **union** of six surfaces, so de-registering a suite on one surface is a no-op
+if another surface also matches it. Each of these rows MUST first assert its target suite is
+covered by **exactly one** surface, and red loudly if not. This is the semantic analogue of the
+battery's DID-NOT-LAND `diff` check, which guards the same class syntactically.
 
 ### Guard 2 — `run-registered-suites.sh` signal propagation
 
@@ -430,7 +448,8 @@ them, for every derived suite, not the first RED found. The classification choke
 
 | # | Mutation | Must fail because |
 | --- | --- | --- |
-| M1 | A child dies by a **real signal** (`kill -KILL $$` inside the fixture suite — **not** `exit 137`), none fail → assert **end-to-end** `[KILLED]` in `test-all.sh` output **and** top-level exit 3 | the operator constraint: assert the classification is reached. A hardcoded `exit 137` tests the arithmetic, **not** the propagation chain — only a real signal proves rc survives `xargs`, the `.meta` write, and the read loop |
+| M1 | A **fixture suite** exits 137, none fail → assert **end-to-end** `^\[KILLED\] <name> ` (anchored, with a count) in `test-all.sh` output **and** top-level exit 3 | the operator constraint: assert the classification is reached, not that a different number came back. See M1b for the real-signal arm — at *this* position a real kill and `exit 137` are provably identical, so this row does not need one |
+| **M1b** | The **`bash -c` shim** (not the suite) dies by a real signal → assert `xargs` returns **125** and the runner classifies killed | **the A6 tripwire.** This is the only position where "real signal" is observable; see the measurement below |
 | M2 | One child 137 **and** one child 1 | failure dominates — must be exit 1, mirroring ADR-177's top-level contract |
 | M3 | A child exits **124** (GNU `timeout`) | must stay `[FAIL]` — an attributed verdict, per `suite_exit_class` parity |
 | M4 | A child exits 137 **and** a suite is UNACCOUNTED | unaccounted must keep forcing 1 |
@@ -441,12 +460,28 @@ them, for every derived suite, not the first RED found. The classification choke
 a reproducible rc, or two runs of the same failure report different numbers. Rule: **the
 signal-shaped rc of the lexicographically-first suite key among the killed set.**
 
-This is genuinely deterministic under `xargs -P` parallelism, and the runner already supplies the
-ordering — it does not need inventing. Verified: `SUITES` is built through `sort -u` (`:146`) and
-the RED walk consumes `… | LC_ALL=C sort` (`:364`). Selection is therefore over a **sorted set**,
-never over completion order, so the rc does not vary with scheduling. Keep the `LC_ALL=C` pin when
-adding the killed walk — dropping it reintroduces locale-dependent ordering, the same class as the
-`comm` finding recorded above. State the rule in the runner's header and pin it with M6.
+> **CORRECTION — the earlier determinism argument cited the wrong walk.** It defended the rule by
+> pointing at `SUITES` built through `sort -u` (`:146`) and the RED walk's `LC_ALL=C sort` (`:364`).
+> Both facts are true and **neither is the walk the implementation uses**: `:364` lives inside
+> `dump_reds`, i.e. inside the `{ … } | sed` pipeline that D2 forbids counting in. Phase A1 step 3
+> deliberately moves the count to the **parent**, iterating `"$SOLEUR_SUITE_LOGDIR"/*.meta` — a
+> bare glob whose order is `LC_COLLATE`-dependent and pinned nowhere in the runner today.
+
+Three things must therefore be nailed down rather than assumed:
+
+1. **Pin `LC_ALL=C` on the parent-side `*.meta` glob**, not only in the linter (AC29). Without it
+   the rule is locale-dependent — the same class as the `comm` finding recorded above.
+2. **Say whether the rule sorts the munged KEY or the suite PATH, and assert the one you name.**
+   The child writes `key="${s//\//_}"`, and `_` is `0x5F` — it sorts *after* `.` and after every
+   uppercase letter, so "lexicographically-first key" and "lexicographically-first path" diverge
+   the moment subdirectories are involved.
+3. **Scope the determinism claim honestly.** It holds for *suite*-kills, where every `.meta` is
+   written and the killed set is stable. Under the D3 **shim**-kill shape `xargs` stops
+   dispatching, so which suites even reach UNACCOUNTED genuinely varies run to run — the killed
+   set itself is not deterministic there. Never assert on the UNACCOUNTED **count**; AC9b asserts
+   only the binary exit, and should stay that way.
+
+State the rule in the runner's header and pin it with M6 + AC24.
 
 ### Guard 3 — `.github/scripts/test/run-all.sh` signal propagation
 
@@ -460,24 +495,48 @@ not discarded by `if ! bash "$t"`. Chokepoints: the loop body and the terminal e
 
 | # | Mutation | Must fail because |
 | --- | --- | --- |
-| M1 | A fixture suite dies by a **real signal** (`kill -KILL $$`, not `exit 137`) → assert end-to-end `[KILLED]` + exit 3 | same constraint as Guard 2 — a hardcoded exit tests arithmetic, not propagation |
+| M1 | A fixture suite dies by a **real signal** — `kill -TERM $$` + `sleep 5`, the house shape at `test-all-killed-classification.test.sh:149` → assert end-to-end `^\[KILLED\] <name> ` (anchored, counted) + exit 3 | here the real signal **is** load-bearing, unlike Guard 2 M1: `run-all.sh` invokes the suite directly (`bash "$t"`) with no `xargs` or shim between, so the suite's death IS the child death the loop observes |
 | M2 | One killed **and** one failed | failure dominates → exit 1 |
 | M3 | Restore `if ! bash "$t"` | the end-to-end assertion must red |
 | M4 | Killed suite present **and** `RAN < MIN_SUITES` | the pre-existing floor must still dominate |
 | M5 | Two killed suites, different signals | must not stop at the first; same deterministic rule as Guard 2 |
 
-### The A6 tripwire — why the deferral in ADR-187 is safe rather than hopeful
+### The A6 tripwire — and the measurement that moved it
 
 Signal-shape mimicry is an **in-band** channel with no alarm of its own: its correctness depends
 on every present *and future* layer propagating raw rc, and the failure mode is invisible, because
-"no kills occurred" and "a kill was swallowed" render identically. ADR-187's stated re-evaluation
-trigger ("the first wrapper that cannot know its children's rc") is phrased in terms nothing
-automated checks — it fires only if a future author happens to remember it.
+"no kills occurred" and "a kill was swallowed" render identically. ADR-187's re-evaluation trigger
+is phrased in terms nothing automated checks — it fires only if a future author remembers it. A
+canary is what converts it from a memory into a detection.
 
-The **real-signal** M1 rows in Guards 2 and 3 are what convert that trigger from a memory into a
-detection. The day a new absorbing layer is introduced anywhere between `run_suite` and a suite,
-the canary reds and points at ADR-187. This is load-bearing: without it, decision 1 is a bet with
-no tripwire. It is also why M1 must use `kill -KILL $$` and never `exit 137`.
+> **CORRECTION — the canary was in a position where it could not fire.** An earlier revision put
+> the real-signal row *inside the fixture suite* and insisted on `kill -KILL $$` over `exit 137`,
+> claiming only a real signal "proves rc survives `xargs`". **Measured on this box, that claim is
+> false**, and it contradicts the very ADR premise decision 1 rests on (`$?` cannot distinguish a
+> signal death from a deliberate one):
+>
+> | Position | shape | shim's `rc=$?` | `xargs` rc |
+> | --- | --- | --- | --- |
+> | inner **suite** killed by real signal | `kill -KILL $$` | 137 | 0 |
+> | inner **suite** exits deliberately | `exit 137` | 137 | 0 |
+> | **shim** killed by real signal | — | n/a | **125** |
+> | **shim** exits deliberately | — | n/a | **123** |
+>
+> At the suite position the two shapes are identical at *every* chokepoint — same `rc=$?`, same
+> `.meta` bytes, same `xargs` rc. The rc never reaches `xargs` at all: it is captured by `rc=$?`
+> before `xargs` sees anything.
+
+**The tripwire therefore lives at the shim (M1b), not at the suite.** `xargs` returning **125**
+("a child was killed by a signal") versus **123** (a child exited non-zero) is the one place the
+distinction is real — and it is the same signal D3 needs, which is why M1b and AC9b are the same
+arm viewed from two directions.
+
+**Fixture shape — follow the house precedent, do not invent one.**
+`scripts/test-all-killed-classification.test.sh:149` uses `kill -TERM $$` followed by `sleep 5`.
+Both halves matter: **SIGTERM is strictly more discriminating** than SIGKILL for detecting a
+trap-absorbing layer (nothing can trap SIGKILL, so a KILL canary only catches rc-*discarding*
+wrappers — which a plain `exit 137` already catches), and the trailing `sleep` is not decoration —
+the kill is asynchronous, and without it the fixture can reach EOF and exit 0.
 
 ## Implementation Phases
 
@@ -655,12 +714,21 @@ apps/web-platform/scripts/lib/*.test.sh
 scripts/lib/*.test.sh
 ```
 
-1. **Create `scripts/lint-orphan-test-suites.test.sh`** with Guard 1's seven mutation rows.
-   **The sandbox tree copy MUST be `git init`-ed and the fixture files `git add`-ed.** The
-   widened linter's producer is `git ls-files`, which returns **nothing** outside a repo — so a
-   plain `cp -r` sandbox makes every mutation row pass against an empty walk. The suite would
-   then reproduce, inside its own harness, the exact vacuity M6 exists to catch. Assert
-   non-empty enumeration in the harness itself before any row runs.
+1. **Create `scripts/lint-orphan-test-suites.test.sh`** with Guard 1's eleven mutation rows,
+   against a **synthetic** git repo — not a copy of this tree.
+
+   **It must be a git repo at all.** The widened linter's producer is `git ls-files`, which
+   returns **nothing** outside a repo, so a plain `cp -r` sandbox makes every row pass against an
+   empty walk — the suite would reproduce, inside its own harness, the exact vacuity M6 exists to
+   catch. Assert non-empty enumeration before any row runs.
+
+   **It must be synthetic, for cost and control.** Measured: the worktree is **13,630 tracked
+   files / 258 MB**; copying it per row is ~2.8 GB of I/O plus eleven `git add` of 13.6k files,
+   inside a suite registered in `test-all.sh`, on a box whose resting load is already high.
+   Build instead a small repo of **path-shaped empty files** plus the three real inputs the
+   linter reads (the linter itself, `test-all.sh`, and the workflow set). This is also what
+   `cq-test-fixtures-synthesized-only` asks for, and it makes M2's "two files under directories
+   no glob covers" and M8's producer-narrowing directly controllable rather than incidental.
 2. Widen the linter to the whole-repo walk: `git ls-files '*.test.sh'` diffed against the
    **six**-surface union in Guard 1's Assembly. Pin `LC_ALL=C` for all sorting and `comm`.
 3. **Derive the glob patterns from `test-all.sh`; never duplicate them into the linter.** If the
@@ -739,7 +807,11 @@ dir that will need adjusting") is discharged by Phase B1 step 4.
 - `scripts/test-all.sh` — add one glob pattern `:1205`; two explicit `run_suite` lines; register the new linter suite; add `--print-suite-globs` (Phase B1 step 3); refresh the stale registration comments at `:917`, `:957`, `:1004`, `:1014`, `:1033` that describe the pre-widening glob set
 - `scripts/lint-orphan-test-suites.sh` — whole-repo walk, **six**-surface covered set, path-keyed exclusions, re-keyed floors, corrected header
 - `apps/web-platform/infra/run-registered-suites.sh` — classify `.meta` rcs in the **parent**; gated killed breakdown line; signal-shaped exit at `:481`; D3 xargs-`125` disposition; **`report_orphans` `:179-205`** currently uses the naive basename grep this plan rejects — reconcile or delegate (Phase B1 step 8); add `--list`
-- `apps/web-platform/infra/run-registered-suites.test.sh` — Guard 2 mutation rows (note `:586` single-file `cp`, `:252` byte-shape pin, `:442` exact summary-line match)
+- `apps/web-platform/infra/run-registered-suites.test.sh` — Guard 2 rows, expressed in the **existing `run_mutant` vocabulary** rather than as a parallel mechanism. This file already carries a 9-row mutation battery (`:583-691`) with conventions the plan must adopt, not reinvent: a python mutator against a pristine single-file `cp` (`:586`), a **DID-NOT-LAND** `diff` check (`:607`) so a mutator whose pattern stopped matching reds instead of scoring a phantom kill, keying on the `[FAIL] ` prefix (`:616-618`), and a `noop-control` positive control (`:679`). Three concrete debts, all verified:
+  - **`drop-accounting` (`:673-674`) breaks.** Its mutator is `s.replace('(( RED == 0 && ${#UNACCOUNTED[@]} == 0 ))\n', …)` — the exact terminal literal Phase A1 step 4 replaces. After the edit it matches nothing and reds as DID-NOT-LAND. Rewrite it in the same commit. (`invert-reap` at `:652` targets the `:469-470` retention block, which this plan deliberately leaves alone — no debt there.)
+  - **Both floors must be raised together:** `MATRIX_RAN >= 7 && MATRIX_RAN == MATRIX_CALLS` (`:686`) and `MIN_ASSERTIONS=36/44` (`:716`). Leaving them makes the new rows silently deletable — the de-existability failure both floors exist to prevent.
+  - **G2 M5 has no mechanism today.** `run_mutant` re-invokes this suite with `SUT=$m` and greps *its own* `[FAIL]` lines; M5 mutates `run-registered-suites.sh` while its killing assertion lives in `test-all-killed-classification.test.sh`. Cross-file mutation kill must be designed or M5 dropped.
+  - Also note `:252` (byte-shape pin) and `:442` (exact summary-line match), and that `killed_two` (`:190-196`) already documents why 1-of-1 cannot distinguish `killed=$((killed+1))` from `killed=1` — that is G2 M6's rationale, already written down; cite it rather than re-deriving.
 - `.github/scripts/test/run-all.sh` — rc capture, classification, signal-shaped exit; `MIN_SUITES=10` means **every** Guard 3 fixture arm must stage ≥10 suites or the floor fires first and masks the row
 - `.github/scripts/test/test-infra-suite-registration.sh` — cross-check its exclusion list (incl. the `#7076` entry) against the linter's, so one domain does not carry two disagreeing exclusion sets
 - `scripts/test-all-killed-classification.test.sh` — **home for both end-to-end arms** (AC2, AC6). It already owns the `build_sandbox` harness that drives the real `run_suite`; putting the E2E assertions anywhere else means rebuilding that harness. Note its sandbox is single-file `cp` + a python rewrite and pins `TEST_GROUP=all`
@@ -749,7 +821,7 @@ dir that will need adjusting") is discharged by Phase B1 step 4.
 
 ## Files to Create
 
-- `scripts/lint-orphan-test-suites.test.sh` — Guard 1's seven mutation rows
+- `scripts/lint-orphan-test-suites.test.sh` — Guard 1's eleven mutation rows
 - `knowledge-base/engineering/architecture/decisions/ADR-187-…md` — provisional ordinal
 - a fixture suite for Guard 3 (home decided in A2.1)
 
@@ -811,7 +883,7 @@ discoverability_test:
 - [ ] AC10 — The **linter's own invocation** reports zero unexplained orphans. Do **not** hand-roll a second derivation of the six-surface diff in the AC: an AC that reimplements the gate is pinned to a different scope than the gate and can stay green while CI reds (the `2026-07-28` "my AC verified four paths while CI verified five" class). AC1 runs the gate; this AC asserts the *content* of its report — every tracked suite either registered or explicitly excluded.
 - [ ] AC11 — Each of the six named orphans is registered and executes: assert each appears in `TEST_TIMING_LOG` (or the runner's suite list) after a run, not merely that a `run_suite` line exists.
 - [ ] AC12 — The four linear-fetch suites pass, or carry an exclusion with a reason and a `#NNNN`.
-- [ ] AC13 — Every Guard 1 mutation row (M1–M7), applied **individually** to a tree copy, drives the linter RED. M1 and M6 are the load-bearing rows: M1 re-introduces a real orphan; M6 proves the guard cannot report "0 checked" and exit 0.
+- [ ] AC13 — Every Guard 1 mutation row (M1–M11), applied **individually** to a synthetic git sandbox, drives the linter RED. Three are load-bearing: **M1** re-introduces a real orphan (verify-the-verifier); **M6** proves the guard cannot report "0 checked" and exit 0; **M8** proves it cannot report a *plausible subset* — the pre-PR state, which clears every floor and prints `none`. Rows M1/M3/M5/M9/M10 must each first assert their target is covered by exactly one surface, or a union match lets the mutation land with no effect.
 - [ ] AC14 — Adding an exclusion whose reason lacks `#NNNN` fails the linter (discipline preserved).
 - [ ] AC15 — The new glob's newly-swept set is enumerated in the PR body, and every member is registered, passing, or excluded.
 - [ ] AC16 — `scripts/lint-orphan-test-suites.test.sh` is registered in `test-all.sh` and executes. *(It is **not** added to `REQUIRED_RUNNERS`: that array holds runner scripts the linter checks registration against, and a `.test.sh` is not a runner. The first revision of this AC was a category error.)*
@@ -828,8 +900,9 @@ discoverability_test:
 - [ ] AC20 — The ADR ordinal is re-verified free across all `origin/*` refs immediately before merge; on renumber, this plan, `tasks.md`, and every AC naming it are swept in the same edit.
 - [ ] AC21 — PR body uses `Closes #7429`, `Closes #7402`, `Closes #7523`.
 - [ ] AC22 — `main-health-monitor.yml:580`'s operator guidance no longer claims only "the six suites … via `bun`/`node` directly" can surface a signal-shaped exit; it names the widened set (both wrappers). Asserted by grepping the updated ACTIONS text, not by eyeballing.
-- [ ] AC23 — Guard 2 M1 and Guard 3 M1 use a **real** signal (`kill -KILL $$`) and not `exit 137`, asserted by grepping the suites for the absence of a hardcoded `exit 137` in the E2E arms. This is the A6 tripwire; a simulated exit would make it vacuous.
-- [ ] AC24 — With two children killed by different signals, the runner's rc is **reproducible across repeated runs** (deterministic selection rule), asserted by running the fixture twice and comparing.
+- [ ] AC23 — The A6 tripwire is at the **shim**, where the distinction is observable: Guard 2 **M1b** drives a real signal into the `bash -c` shim and asserts `xargs` returns **125** (a deliberate `exit 137` there returns **123**). Guard 3 M1 uses the house fixture shape `kill -TERM $$` + `sleep 5`. *(An earlier AC23 demanded a real signal inside the fixture suite and forbade `exit 137` there — measured indistinguishable at that position, so it asserted nothing.)*
+- [ ] AC24 — The multi-kill selection rule is asserted by **content, not by repetition**. Name the fixtures so lexicographic order and completion order are deliberately **opposed** — the lexicographically-first suite takes SIGTERM and sleeps *longer* than the SIGKILL one, so it finishes last — then assert the runner's rc is **exactly 143**. This one assertion kills "first-completed", "last-completed", and "max rc". *(The earlier AC ran the fixture twice and compared, which asserts stability rather than the rule: a "first-completed" implementation passes it on a quiet box and flakes under contention.)*
+- [ ] AC29 — `LC_ALL=C` is pinned on **both** sorts that the implementation actually uses: the linter's walk/diff, **and** the parent-side `"$SOLEUR_SUITE_LOGDIR"/*.meta` glob that Phase A1 step 3 introduces. Asserted by grep, not by inspection. *(The plan's `## Research Insights` claimed "an AC asserts it" while no such AC existed — recorded rather than quietly added.)*
 
 ### Post-merge
 
@@ -918,11 +991,20 @@ the operator constraint and this repo's cost history on re-derived facts.
 | R24 | **"Must not stop at the first" rows are vacuous under a set-difference impl** | DHH, simplicity | **Merged** — G1 M2 now plants **two** orphans and asserts both, which is strictly stronger and stays meaningful |
 | R25 | **Per-surface floors over-built as ratcheting counts** | DHH, simplicity | **Adopted as `< 1` zero-checks** — maintenance-free, catches one surface dying while the total stays plausible |
 | R26 | **`<= 192` guard is documented non-load-bearing**; don't copy it into two new files | simplicity (P1) | **Adopted** — two-guard classifier |
-| R27 | **A6 trigger stated in terms nothing checks**; needs a real-signal canary | advisor | **Adopted** — G2/G3 M1 use `kill -KILL $$`, never `exit 137`; AC23 + the tripwire subsection |
+| R27 | **A6 trigger stated in terms nothing checks**; needs a real-signal canary | advisor | **Adopted in principle, but its first implementation was wrong — SUPERSEDED by R32/R33.** The canary was placed inside the fixture suite, where the distinction it asserts does not exist. The principle (a trigger needs a detection, not a memory) stands and is now carried by M1b at the shim |
 | R28 | **Multi-kill rc is nondeterministic** as specified | advisor | **Adopted** — lexicographically-first killed key; AC24 |
 | R29 | **Stale `test-all.sh` comments** (`:917`, `:957`, `:1004`, `:1014`, `:1033`) describe the pre-widening glob set | Kieran (P2) | **Adopted** — Files to Edit |
 | R30 | **AP-021 diagnostic-honesty principle** engaged, hook-enforced by `lint-diagnosis-claims.sh`; plan cited neither | architecture (P2) | **Noted** — the observed-rc-only rule (R8) is the substantive compliance; /work to confirm the hook passes |
 | R31 | `git ls-files '*.test.sh'` does not reach `test-<name>.sh`-convention suites (e.g. `.github/scripts/test/test-*.sh`) | simplicity (P2) | **Scope note** — Guard 1's Property is scoped to the `*.test.sh` convention; the `test-*.sh` family is governed by `run-all.sh`'s own `MIN_SUITES` floor. Recorded so the gap is deliberate, not assumed away |
+| **R32** | **The A6 tripwire sat on a row that cannot fire it.** Guard 2 M1 put the real-signal kill *inside the fixture suite*, where `kill -KILL $$` and `exit 137` are byte-identical at every chokepoint — contradicting the ADR premise decision 1 rests on | test-design (P0) | **Fixed + measured.** Suite position: both → `rc=$?` 137, `xargs` 0. Shim position: real signal → **125**, deliberate exit → **123**. Tripwire moved to new row **M1b** at the shim; AC23 rewritten |
+| R33 | `kill -KILL` is the weaker canary — nothing can trap SIGKILL, so it only catches rc-*discarding* wrappers, which `exit 137` already catches. House precedent is `kill -TERM $$` + `sleep 5`, and the sleep prevents an async-kill race | test-design (P1) | **Adopted** — house shape at `test-all-killed-classification.test.sh:149` |
+| R34 | **AC2 contradicted M1/AC23** — AC2 said "exiting 137", the others forbade it | test-design (P1) | **Fixed** — M1 now uses `exit 137` deliberately; the real-signal arm is M1b |
+| R35 | **The determinism argument cited the wrong walk** — `:364` is inside the forbidden subshell; the implementation uses a bare parent-side `*.meta` glob, `LC_COLLATE`-dependent and unpinned. Plus `key="${s//\//_}"` munges `/`→`_` (0x5F), so first-*key* ≠ first-*path* | test-design (P1) | **Fixed** — three explicit requirements + AC29; determinism scoped to suite-kills only |
+| R36 | **AC24 asserted stability, not the rule** — a "first-completed" impl passes it on a quiet box and flakes under contention | test-design (P1) | **Fixed** — opposed-order fixture asserting rc == 143 exactly |
+| R37 | **Adjacent-battery blindness.** A 9-row `run_mutant` harness with DID-NOT-LAND, a noop-control and a dispatch floor sits in the file this PR edits; the plan cited none of it and proposed rows that break its `drop-accounting` mutator (`:673-674` targets the literal Phase A1 step 4 deletes). `MIN_ASSERTIONS` (`:716`) and the `>= 7` matrix floor (`:686`) must rise together; G2 M5 has no cross-file kill mechanism | test-design (P1) | **Adopted** — all four debts added to Files to Edit, verified against the file |
+| R38 | **Guard 1 had no row for producer partial-narrowing** — reverting to `git ls-files 'scripts/*.test.sh'` clears every floor and prints `none`. Also no rows for surfaces 4/5/6, and no exclusion-key-matches-zero row | test-design (P1) | **Adopted** — M8 (highest-value), M9, M10, M11 |
+| R39 | **Union-match makes de-registration rows no-ops** — a suite covered by two surfaces survives a single-surface mutation, passing green | test-design (P1) | **Adopted** — single-surface precondition on M1/M3/M5/M9/M10 |
+| R40 | **Sandbox cost**: 13,630 files / 258 MB copied per row × 11 rows ≈ 2.8 GB on a loaded box; and the `LC_ALL=C` AC the plan claimed existed did not | test-design (P1) | **Adopted** — synthetic git repo per `cq-test-fixtures-synthesized-only`; AC29 added |
 
 ## Domain Review
 
