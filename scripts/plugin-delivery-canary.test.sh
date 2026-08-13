@@ -113,6 +113,18 @@ canary_run() { # <KEY=VAL...>
   set -e
 }
 
+# Runs the canary with its CWD inside a given directory. materialize_reference
+# derives the repository root from the PROCESS CWD (`git rev-parse --show-toplevel`),
+# so the git-archive transport cannot be exercised through the env seam alone. The
+# subshell keeps the cd from leaking into the rest of the suite.
+canary_run_in() { # <dir> <KEY=VAL...>
+  local dir="$1"; shift
+  set +e
+  OUT="$( cd "$dir" && env "$@" bash "$CANARY" 2>&1 )"
+  RC=$?
+  set -e
+}
+
 canary_stdout() { # <KEY=VAL...>
   set +e
   OUT="$(env "$@" bash "$CANARY" 2>/dev/null)"
@@ -915,6 +927,108 @@ canary_run $(seam "$r" "$SHA_CURRENT" "$SHA_CURRENT")
 assert_eq   "exclusion-direction control: a delivered-MORE path is excused" "0" "$RC"
 assert_has  "exclusion-direction control: the run is clean"                 '^canary-finding\| every delivery assertion holds'
 rm -rf "$r"
+
+# ---------------------------------------------------------------------------
+# materialize_reference() — the git-archive transport.
+#
+# WHY THIS WAS UNREACHABLE. `seam()` sets CANARY_REFERENCE_DIR on EVERY row above,
+# and reference_list() only calls materialize_reference when that variable is
+# empty. So the whole fetch-if-missing -> git archive -> tar -x chain — the
+# transport chosen after three were measured, and the one every integrity verdict
+# now depends on — was never executed by this battery. Worse, a broken
+# materialize_reference does not fail: reference_list falls through to the
+# api.github.com trees transport, which was MEASURED non-viable (~890 sequential
+# requests, unfinished at 30 min against a 15 min job budget). A silent downgrade
+# to it is indistinguishable from success until the job times out.
+#
+# These rows drop CANARY_REFERENCE_DIR and run the canary with its CWD inside a
+# SYNTHESIZED git repository (cq-test-fixtures-synthesized-only — nothing is
+# cloned, and the shas are whatever the fixture's own commits produce). No network
+# is reachable from any arm: the fixture repo has no remote, so the fetch branch
+# and the trees-API fallback both fail by construction rather than by luck.
+# ---------------------------------------------------------------------------
+new_git_fixture() { # -> prints <root>; <root>/repo is a git repo holding plugins/soleur
+  local root f d
+  root="$(mktemp -d "${SUITE_TMP}/canary-git.XXXXXXXX")" || {
+    echo "FATAL: mktemp failed" >&2; exit 2; }
+  mkdir -p "$root/repo/${PLUGIN_SUBDIR_LIT}" || { echo "FATAL: mkdir failed" >&2; exit 2; }
+  for f in "${FIXTURE_FILES[@]}"; do
+    d="$(dirname "$f")"
+    mkdir -p "$root/repo/${PLUGIN_SUBDIR_LIT}/$d" || exit 2
+    printf 'the tracked content of %s\n' "$f" > "$root/repo/${PLUGIN_SUBDIR_LIT}/$f" || exit 2
+  done
+  git -C "$root/repo" init -q 2>/dev/null || { echo "FATAL: git init failed" >&2; exit 2; }
+  git -C "$root/repo" config user.email t@example.invalid
+  git -C "$root/repo" config user.name "fixture"
+  git -C "$root/repo" add -A >/dev/null 2>&1
+  git -C "$root/repo" commit -qm "fixture" >/dev/null 2>&1 || { echo "FATAL: commit failed" >&2; exit 2; }
+  # The delivered tree is a byte-identical copy, so a clean run proves the
+  # materialized reference was actually used for the comparison.
+  mkdir -p "$root/del" && cp -R "$root/repo/${PLUGIN_SUBDIR_LIT}/." "$root/del/" || exit 2
+  printf '%s' "$root"
+}
+PLUGIN_SUBDIR_LIT="plugins/soleur"
+
+# Row A — the sha IS in the checkout. materialize_reference must produce the
+# reference from git objects, with no network, and the run must come out clean.
+r="$(new_git_fixture)"
+sha="$(git -C "$r/repo" rev-parse HEAD)"
+canary_run_in "$r/repo" CANARY_DELIVERED_ROOT="$r/del" \
+           CANARY_DELIVERED_SHA="$sha" \
+           CANARY_MAIN_HEAD="$sha" \
+           CANARY_CLI=/nonexistent/claude-binary
+assert_eq  "materialize: a sha present in the checkout yields a clean run" "0" "$RC"
+assert_eq  "materialize: every fixture member was compared from the git-archive reference" \
+           "compared=4 expected=4" "$(counts)"
+assert_has "materialize: integrity is asserted against the materialized tree" \
+           '^canary-conjuncts\| .*integrity=green'
+
+# Row B — the sha is NOT in the checkout and cannot be fetched (no remote). The
+# transport must fail CLOSED with a named finding. The forbidden outcome is a
+# clean run: that would mean the integrity conjunct was declared green while the
+# reference it compares against could not be formed.
+r2="$(new_git_fixture)"
+absent_sha="4444444444444444444444444444444444444444"
+canary_run_in "$r2/repo" CANARY_DELIVERED_ROOT="$r2/del" \
+           CANARY_DELIVERED_SHA="$absent_sha" \
+           CANARY_MAIN_HEAD="$absent_sha" \
+           CANARY_CLI=/nonexistent/claude-binary
+assert_eq    "materialize: an unmaterializable reference does not exit 0" "1" "$RC"
+assert_has   "materialize: it is REPORTED as a transport failure, not inferred from delivery" \
+             '^canary-finding\| reference_unreadable'
+assert_lacks "materialize: it never claims the delivery assertions hold" \
+             '^canary-finding\| every delivery assertion holds'
+assert_lacks "materialize: integrity is not declared green without a reference" \
+             '^canary-conjuncts\| .*integrity=green'
+# Row C — the sha RESOLVES but the commit does not contain the plugin subdir.
+# `git archive <sha> -- plugins/soleur` then succeeds and extracts NOTHING, so the
+# destination exists while the subdir inside it does not. Rows A and B both miss
+# this: A's archive is complete, and B never reaches the archive at all. Found by
+# mutating away `[[ -d "$dest/${PLUGIN_SUBDIR}" ]] || return 1` and observing that
+# the suite stayed green — an uncovered mutant in the arm written to cover this
+# function. Without the check, list_tree runs against a directory that is not
+# there and the comparison proceeds against an empty reference, which is the
+# under-delivery shape the whole canary exists to refuse.
+r3="$(mktemp -d "${SUITE_TMP}/canary-git-nosubdir.XXXXXXXX")"
+mkdir -p "$r3/repo/unrelated" "$r3/del"
+printf 'not the plugin\n' > "$r3/repo/unrelated/file.txt"
+printf 'the tracked content of a/one.md\n' > "$r3/del/placeholder"
+git -C "$r3/repo" init -q 2>/dev/null
+git -C "$r3/repo" config user.email t@example.invalid
+git -C "$r3/repo" config user.name "fixture"
+git -C "$r3/repo" add -A >/dev/null 2>&1
+git -C "$r3/repo" commit -qm "no plugin subdir" >/dev/null 2>&1
+nosub_sha="$(git -C "$r3/repo" rev-parse HEAD)"
+canary_run_in "$r3/repo" CANARY_DELIVERED_ROOT="$r3/del" \
+           CANARY_DELIVERED_SHA="$nosub_sha" \
+           CANARY_MAIN_HEAD="$nosub_sha" \
+           CANARY_CLI=/nonexistent/claude-binary
+assert_eq    "materialize: a commit lacking the plugin subdir does not exit 0" "1" "$RC"
+assert_lacks "materialize: it never claims the delivery assertions hold on an empty reference" \
+             '^canary-finding\| every delivery assertion holds'
+assert_lacks "materialize: integrity is not green against a subdir that was never extracted" \
+             '^canary-conjuncts\| .*integrity=green'
+rm -rf "$r" "$r2" "$r3"
 
 # ---------------------------------------------------------------------------
 # Minimum-cardinality vacuity guard. If the fixture builder or the seam silently

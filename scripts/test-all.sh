@@ -726,6 +726,12 @@ if want_scripts; then
   # skill directories where 96 were expected with every metadata field reading
   # correct, which is the defect a manifest check structurally cannot see.
   run_suite "scripts/plugin-delivery-canary" bash scripts/plugin-delivery-canary.test.sh
+  # Meta-guard over the two suites above: both end in an anti-vacuity floor, and
+  # both originally enforced that floor by calling `fail` — the function whose
+  # failure the floor exists to survive. This pins the fix by mutation (stub
+  # `fail`, assert the floor still exits non-zero) rather than by inspection.
+  # Registered explicitly: it lives under scripts/, which is not auto-globbed.
+  run_suite "scripts/guard-vacuity-floor" bash scripts/guard-vacuity-floor.test.sh
   # Guard 4 (#7493): validates the manifest SOURCE that Terraform publishes, as opposed to the
   # sibling above which validates the PUBLISHED artifact. Neither subsumes the other — once the
   # drift workflow dispatches a reconcile, a bad SOURCE is republished daily while a
