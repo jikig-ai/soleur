@@ -33,16 +33,18 @@ Unblocked. Verified conflict-free with PR #7507 (`e2fsprogs` appears 0 times in 
       cloud image's own `e2fsprogs` (`git-data-birth-fs-fingerprint.txt:22`).
       Do **not** describe `fingerprint.txt:57` as a pin — `:56` marks that block
       `CONTEXT FOR FAILURE MESSAGES ONLY — not asserted`.
-- [ ] **1.5** Re-run the suite; confirm R1's four arms produce verdicts identical to 1.1 (AC4).
-- [ ] **1.6** Confirm the assertion floor at `:1448` and the reported `total` are **unchanged**
-      (AC5) — this phase adds and removes no assertion.
+- [x] **1.5** R1's arms identical (AC4) — CI run 31711619961 (main) and 31717913686 (PR) both
+      report `44 passed, 0 failed (44 assertions)`. Verified on CI rather than locally: three
+      sibling sessions at load 11.6 made one local apt cycle exceed 19 min.
+- [x] **1.6** Floor at `:1448` and reported `total` unchanged at 44 (AC5) — still exactly on the
+      `-lt 44` boundary.
 - [x] **1.7** Run `bash apps/web-platform/infra/git-data-render-strip-parity.test.sh` (AC6).
 - [x] **1.8** Verify AC1 (`→ 7` ✓), AC2 (non-comment `e2fsprogs` **2 → 1** ✓ — the AC originally
       demanded 0, which was unreachable: a pre-existing `fail()` message legitimately names the
       package; corrected in the plan), AC3 (`DEBIAN_FRONTEND` 3 → 2 ✓).
-- [ ] **1.9** Push. PR body uses **`Refs #7535`, never `Closes`** — this does not remove the apt
+- [x] **1.9** Push. PR body uses **`Refs #7535`, never `Closes`** — this does not remove the apt
       dependency, and the issue stays open at residual scope.
-- [ ] **1.10** Post the plan's `## Why the image was cut` measurements as a comment on #7535, and
+- [x] **1.10** Post the plan's `## Why the image was cut` measurements as a comment on #7535, and
       retitle it to the residual scope.
 
 ## Phase 2 — name the remaining apt failures (BLOCKED on #7507 merging)
@@ -73,8 +75,8 @@ site and ships the `fixture_fail` helper this phase reuses.
 
 ## Verification
 
-- [ ] **3.1** Run `bash apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh` (AC7).
-- [ ] **3.2** Confirm the diff touches exactly one file and adds no workflow, `.tf`, Dockerfile,
-      registry step, secret or scheduled job.
-- [ ] **3.3** Confirm no `_skip` call site was added — a failed provisioning step must never route
-      through `_skip`, which exits 0 off-CI (`:37-38`).
+- [x] **3.1** AC7 green via CI run 31717913686 (`completed/success`); wall time 123 s -> 124 s,
+      i.e. no measurable change, consistent with the noise-dominated timing finding.
+- [x] **3.2** Diff touches one product file (+14/-3); no workflow, `.tf`, Dockerfile, registry
+      step, secret or scheduled job.
+- [x] **3.3** No `_skip` call site added.
