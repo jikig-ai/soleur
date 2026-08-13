@@ -84,6 +84,28 @@ write_files:
   # MANIFEST_INVALID unless this compat flag is set. The inngest-bootstrap image is built by
   # plain `docker build` → docker-schema2, so it needs this; the web image is OCI (buildx) and
   # does not. (project-zot pkg/compat/compat.go DockerManifestV2SchemaV2 = "docker2s2".)
+  #
+  # http.readTimeout / http.writeTimeout "1800s" (#7555, ADR-189): zot v2.1.20 supplies BOTH
+  # deadlines as 60000000000 ns (60.000 s) when the "http" block omits them — read off the
+  # PINNED digest's own boot config, not from docs. At 60 s a 703_724_542 B layer must sustain
+  # 11.73 MB/s, and three concurrent layers ~280 Mbit/s through one tunnel; when it does not,
+  # zot closes mid-PATCH and the runner reports `connection reset by peer`. MEASURED 2026-08-13
+  # off-box against the pinned digest over a docker bridge with NO tunnel and NO Cloudflare
+  # edge, by dribbling a 4 MB blob over 100 s: same message, same routes.go:2078, same
+  # statusCode:500, same latency:1m0s. So the tunnel is exonerated and this is a TIME wall, not
+  # a size wall — the 272_236_549 B layer died at the same deadline (< 4.54 MB/s effective).
+  #
+  #   Arm A  both keys set      -> upload completes; zot answers the client
+  #   Arm B  neither key set    -> the 60 s default; the failure above
+  #   Arm C  readTimeout ALONE  -> zot-side 202 with NO response to the client
+  #
+  # Arm C is why these two MOVE TOGETHER and never one without the other: its failure mode is
+  # SILENT SUCCESS, which is strictly worse than Arm B's honest 500. The upper bound is
+  # gcDelay (1h above): a deadline at or above it lets gc reclaim staging for an upload still
+  # in flight, so 1800s sits strictly below. Both bounds are enforced by
+  # apps/web-platform/infra/zot-config-deadlines.test.sh against the RENDERED config, because
+  # this host is cloud-init-only (ADR-096) — a config zot rejects fails AFTER the destroy and
+  # create, on a host with no SSH. Re-measure on every zot bump, never re-word.
   - path: /etc/zot/config.json
     content: |
       {
@@ -116,6 +138,8 @@ write_files:
           "address": "0.0.0.0",
           "port": "5000",
           "compat": ["docker2s2"],
+          "readTimeout": "1800s",
+          "writeTimeout": "1800s",
           "auth": { "htpasswd": { "path": "/etc/zot/htpasswd" } },
           "accessControl": {
             "repositories": {

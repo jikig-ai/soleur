@@ -47,12 +47,12 @@ established and must not be re-derived.
 Everything in this phase lands in one merge — it is one `user_data` ForceNew replace of the fleet's
 sole pull path.
 
-- [ ] 2.1 **RED first:** write the rendered-config guard (Guard 3) and confirm it fails against the
+- [x] 2.1 **RED first:** write the rendered-config guard (Guard 3) and confirm it fails against the
       current config, which has no timeout keys.
-- [ ] 2.2 Set BOTH `"readTimeout": "1800s"` and `"writeTimeout": "1800s"` in the `"http"` block of
+- [x] 2.2 Set BOTH `"readTimeout": "1800s"` and `"writeTimeout": "1800s"` in the `"http"` block of
       `apps/web-platform/infra/cloud-init-registry.yml` (anchor `"compat": ["docker2s2"]`).
       **Never one without the other** — Arm C yields a zot-side `202` with no response to the client.
-- [ ] 2.3 Add the `#7282`-house-style comment: what was measured (the Arm A/B/C table), the `gcDelay`
+- [x] 2.3 Add the `#7282`-house-style comment: what was measured (the Arm A/B/C table), the `gcDelay`
       upper bound, and *re-measure on every zot bump, never re-word*.
 - [ ] 2.4 Widen `JQ_TICK` to carry `statusCode` and `path`, appended **after** `zmsg`, and widen the
       `read -r` in the **same edit**. A mismatch folds fields into `zmsg` and prefix-matching keeps
@@ -62,10 +62,10 @@ sole pull path.
       5xx — a broad 5xx arm starves crash traces in the shared 17-slot exempt lane.
       Do **not** change `is_cap_exempt()`'s signature.
 - [ ] 2.6 Guard 2 mutation matrix rows 1-7 + harness H1: apply each, observe RED/PASS, revert.
-- [ ] 2.7 Guard 3 mutation matrix rows 1-6 + harness H1, including the typo'd-key negative control.
+- [x] 2.7 Guard 3 mutation matrix rows 1-6 + harness H1, including the typo'd-key negative control.
 - [ ] 2.8 Update the shadow reader `scripts/followthroughs/zot-log-channel-7440.sh` (and its pin
       `tests/scripts/test-zot-log-channel-probe.sh`) — or record in-file why it stays four-class.
-- [ ] 2.9 `bash apps/web-platform/infra/registry-userdata-budget.sh --json` — confirm `stored_bytes`
+- [x] 2.9 `bash apps/web-platform/infra/registry-userdata-budget.sh --json` — confirm `stored_bytes`
       under `cap` with headroom above the ADR-185 floor.
 - [ ] 2.10 `bash apps/web-platform/infra/zot-log-shipper.test.sh` passes with its `>= 150` floor and
       `CANARY_OK` canary **intact** — do not lower the floor.
