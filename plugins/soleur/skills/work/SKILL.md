@@ -766,6 +766,23 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    Skip silently if the cumulative diff does not match the `hr-gdpr-gate-on-regulated-data-surfaces` canonical regex.
 
+**Before claiming a battery proves anything — "mutation-proven", "N/N caught", "no surviving mutants" — count AXES, not rows.** A battery's value is the number of DISTINCT things it perturbs; N mutations of one shape is one mutation, and the axes an author omits are the ones they were not thinking about. The axes below are the consolidated union; [review/SKILL.md](../review/SKILL.md) carries the evidence for each, distributed across its defect-class and sharp-edge bullets rather than in one catalogue section, so treat this list as the index and that file as the case law:
+
+- **dispatch** — neuter the assertion helpers themselves; a suite whose only gate is a failure counter exits 0 having asserted nothing.
+- **fixture shape** / **fixture direction** — the producer's shapes no fixture instantiates, and the far side of any transform (a suite whose fixtures all assert must-trip cannot see a matcher becoming too aggressive).
+- **member cardinality** — a set sampled once cannot distinguish `1-of-1` from `all-of-1`.
+- **assertion count** — an anti-vacuity floor that shares a lifetime with what it guards is not a floor.
+- **harness stubbing** — a stub that infers the verdict from a value the case also sets measures the wrong thing.
+- **authority/root input** — the source the verifier extracts from, not just the leaves it compares.
+- **region boundaries** — a closure assertion over a regex-extracted window pins only what the window spans.
+- **population growth** — ADD a member to the guarded set, do not only edit one.
+- **demotion** — leave the asserted bytes byte-identical and reword the prose above them to make the prescription conditional. Retained deliberately: `ship/SKILL.md` and `plugins/soleur/test/fullsuite-merge-gate.test.ts` both actively guard this mutation, so dropping it from the list would leave the repo testing for an axis it no longer tells authors to mutate.
+- **the floor** — revert the PR's own thesis and confirm the suite reddens.
+
+State plainly which axes your battery did NOT edit. Two mechanical companions: run the UNMUTATED control first (a red baseline voids every row), and assert each mutation LANDED against a pristine backup, because a mutation that does not land reports the BASELINE and that is indistinguishable from a pass. **Why:** PR #7470 (issue #7352) — a battery reported 6/6 RED and "no surviving mutants"; it had two axes, and the retraction ran a 13-mutation Round 2 across axes it never touched. Recorded in `knowledge-base/project/learnings/2026-08-12-my-ladder-rung-ended-in-a-label-so-it-fell-through-to-the-unsafe-branch.md`.
+
+**And every causal or universal claim your prose ADDS needs its falsifying command run BEFORE you write it** — "the only X", "reaches production", "N suites", "gated by W". Each has a command that settles it in seconds, and a false one propagates into ADRs, PR bodies and runbooks where a reviewer must re-derive it. See `knowledge-base/project/learnings/2026-08-12-my-ladder-rung-ended-in-a-label-so-it-fell-through-to-the-unsafe-branch.md`, which enumerates seven that shipped in one skill rewrite. This is honour-system today; the mechanical form is a diff-lint over added lines flagging superlative/quantifier shapes with no adjacent citation.
+
 9. **Touched-Shard Exit Gate (single pass, end of Phase 2)**
 
    [skill-enforced: work Phase 2 exit]
