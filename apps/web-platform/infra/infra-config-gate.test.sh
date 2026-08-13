@@ -692,11 +692,187 @@ else
   fail "#7220 fatal-only: no attribution rendered"
 fi
 
+# --- #7104 PR-A: infra_config_dpf_replaced (the SENSOR) -------------------------------------
+#
+# Was terraform_data.deploy_pipeline_fix REPLACED by the plan this apply consumed? If it was
+# not, no push fired, no frame was published, and the #7220 freshness pin reds a run that did
+# nothing wrong. Measured on run 31636951749 (2026-08-12, main @ 0d644396): `Plan: No changes`
+# / `Apply complete! Resources: 0 added, 0 changed, 0 destroyed` — and the gate red with
+# STALE FRAME naming the 2026-08-06 frame. That is a live false-red, not a hypothetical.
+#
+# The function is a PURE ADJUDICATOR over a `terraform show -json` plan file, matching this
+# file's six existing siblings: it echoes exactly "true" or "false" and returns non-zero on
+# anything it cannot classify. Polarity is therefore guaranteed BY CONSTRUCTION rather than by
+# a downstream `^(true|false)$` regex (R17.1 asked for the regex; a function that can only emit
+# those two strings is strictly stronger, and the caller still validates).
+#
+# The `jq -r` null trap the workflow documents ~200 lines above the call site applies here too:
+# `jq -r '.resource_changes'` on a missing key yields the STRING "null", and `null | length` is
+# 0 — so a degraded plan file would read as "no changes found" == false == skip the pin,
+# silently and permanently restoring #7220's blind spot. Every arm below that returns non-zero
+# exists to make that impossible.
+
+DPF_ADDR="terraform_data.deploy_pipeline_fix"
+mkplan() { printf '%s\n' "$1" > "$TMP/plan-$2.json"; echo "$TMP/plan-$2.json"; }
+
+# 1. Replaced (delete+create) — the healthy push path.
+P_REPL=$(mkplan '{"resource_changes":[{"address":"terraform_data.deploy_pipeline_fix","change":{"actions":["delete","create"]}}]}' repl)
+DPF_OUT=$(infra_config_dpf_replaced "$P_REPL" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -eq 0 && "$DPF_OUT" == "true" ]]; then
+  pass "#7104 dpf: delete+create classifies as replaced (true)"
+else
+  fail "#7104 dpf: delete+create gave rc=$DPF_RC out='$DPF_OUT', expected rc=0 true"
+fi
+
+# 2. no-op — THE case this PR exists for. Must be a clean false, not an error.
+P_NOOP=$(mkplan '{"resource_changes":[{"address":"terraform_data.deploy_pipeline_fix","change":{"actions":["no-op"]}}]}' noop)
+DPF_OUT=$(infra_config_dpf_replaced "$P_NOOP" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -eq 0 && "$DPF_OUT" == "false" ]]; then
+  pass "#7104 dpf: no-op classifies as NOT replaced (false)"
+else
+  fail "#7104 dpf: no-op gave rc=$DPF_RC out='$DPF_OUT', expected rc=0 false"
+fi
+
+# 3. POSITIVE CONTROL (R17.1). The address is absent from resource_changes[] entirely — an
+#    address rename, a module move, a -target that no longer selects it. Without this arm that
+#    reads as a permanent, silent "false" and the pin is disabled forever.
+P_ABSENT=$(mkplan '{"resource_changes":[{"address":"terraform_data.something_else","change":{"actions":["no-op"]}}]}' absent)
+DPF_OUT=$(infra_config_dpf_replaced "$P_ABSENT" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -ne 0 ]]; then
+  pass "#7104 dpf: address absent from resource_changes[] fails CLOSED (address drift)"
+else
+  fail "#7104 dpf FAIL-OPEN: absent address returned rc=0 out='$DPF_OUT' — drift reads as a permanent false"
+fi
+
+# 4. `resource_changes` key missing — the `jq -r` -> "null" -> length 0 trap, explicitly.
+P_NOKEY=$(mkplan '{"format_version":"1.2"}' nokey)
+DPF_OUT=$(infra_config_dpf_replaced "$P_NOKEY" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -ne 0 ]]; then
+  pass "#7104 dpf: missing resource_changes key fails CLOSED (not 'false')"
+else
+  fail "#7104 dpf FAIL-OPEN: missing resource_changes returned rc=0 out='$DPF_OUT'"
+fi
+
+# 5. `resource_changes: null` — same trap, different shape.
+P_NULL=$(mkplan '{"resource_changes":null}' null)
+DPF_OUT=$(infra_config_dpf_replaced "$P_NULL" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -ne 0 ]]; then
+  pass "#7104 dpf: resource_changes:null fails CLOSED"
+else
+  fail "#7104 dpf FAIL-OPEN: resource_changes:null returned rc=0 out='$DPF_OUT'"
+fi
+
+# 6. Not an array: an OBJECT map whose values are well-formed change records. The fixture shape
+#    matters — a naive `{"resource_changes":{"address":...}}` errors downstream anyway (jq
+#    cannot index a string), so it would pass with the type guard REMOVED and the arm would be
+#    vacuous. Measured: mutation M2 (delete the type guard) survived against that shape. This
+#    shape does not survive it, because `.resource_changes[]` over an object iterates its VALUES
+#    and would classify this as a clean "true" with no guard in place.
+P_OBJ=$(mkplan '{"resource_changes":{"r0":{"address":"terraform_data.deploy_pipeline_fix","change":{"actions":["create"]}}}}' obj)
+DPF_OUT=$(infra_config_dpf_replaced "$P_OBJ" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -ne 0 ]]; then
+  pass "#7104 dpf: resource_changes of the wrong type fails CLOSED"
+else
+  fail "#7104 dpf FAIL-OPEN: object resource_changes returned rc=0 out='$DPF_OUT'"
+fi
+
+# 7. Malformed JSON.
+P_BAD=$(mkplan '{this is not json' bad)
+DPF_OUT=$(infra_config_dpf_replaced "$P_BAD" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -ne 0 ]]; then
+  pass "#7104 dpf: unparseable plan JSON fails CLOSED"
+else
+  fail "#7104 dpf FAIL-OPEN: malformed JSON returned rc=0 out='$DPF_OUT'"
+fi
+
+# 8. Unreadable / absent plan file.
+DPF_OUT=$(infra_config_dpf_replaced "$TMP/does-not-exist.json" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -ne 0 ]]; then
+  pass "#7104 dpf: missing plan file fails CLOSED"
+else
+  fail "#7104 dpf FAIL-OPEN: missing plan file returned rc=0 out='$DPF_OUT'"
+fi
+
+# 9. create-only (first birth of the resource).
+P_CREATE=$(mkplan '{"resource_changes":[{"address":"terraform_data.deploy_pipeline_fix","change":{"actions":["create"]}}]}' create)
+DPF_OUT=$(infra_config_dpf_replaced "$P_CREATE" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -eq 0 && "$DPF_OUT" == "true" ]]; then
+  pass "#7104 dpf: create-only classifies as replaced (true)"
+else
+  fail "#7104 dpf: create-only gave rc=$DPF_RC out='$DPF_OUT', expected rc=0 true"
+fi
+
+# 10. create_before_destroy orders the actions the other way. Order must not matter.
+P_CBD=$(mkplan '{"resource_changes":[{"address":"terraform_data.deploy_pipeline_fix","change":{"actions":["create","delete"]}}]}' cbd)
+DPF_OUT=$(infra_config_dpf_replaced "$P_CBD" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -eq 0 && "$DPF_OUT" == "true" ]]; then
+  pass "#7104 dpf: create+delete (create_before_destroy) is order-insensitive"
+else
+  fail "#7104 dpf: create+delete gave rc=$DPF_RC out='$DPF_OUT', expected rc=0 true"
+fi
+
+# 11. ALLOW-LIST semantics: an action token terraform does not currently emit must fail closed
+#     rather than fall through to "false". A future action verb that means "this was rebuilt"
+#     would otherwise silently disable the pin.
+P_UNK=$(mkplan '{"resource_changes":[{"address":"terraform_data.deploy_pipeline_fix","change":{"actions":["teleport"]}}]}' unk)
+DPF_OUT=$(infra_config_dpf_replaced "$P_UNK" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -ne 0 ]]; then
+  pass "#7104 dpf: an unknown action verb fails CLOSED (allow-list, not deny-list)"
+else
+  fail "#7104 dpf FAIL-OPEN: unknown action 'teleport' returned rc=0 out='$DPF_OUT'"
+fi
+
+# 12. Empty actions array.
+P_EMPTY=$(mkplan '{"resource_changes":[{"address":"terraform_data.deploy_pipeline_fix","change":{"actions":[]}}]}' empty)
+DPF_OUT=$(infra_config_dpf_replaced "$P_EMPTY" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -ne 0 ]]; then
+  pass "#7104 dpf: empty actions[] fails CLOSED"
+else
+  fail "#7104 dpf FAIL-OPEN: empty actions[] returned rc=0 out='$DPF_OUT'"
+fi
+
+# 13. `forget` (a `removed {}` block drops the resource from state without destroying it).
+#     No push fires, so the sensor must say false — and the pin must therefore still run.
+#     R13.5 records that PR-B's exact-cardinality assert is what ABORTS on this shape; the
+#     sensor's job is only to report that nothing was pushed.
+P_FORGET=$(mkplan '{"resource_changes":[{"address":"terraform_data.deploy_pipeline_fix","change":{"actions":["forget"]}}]}' forget)
+DPF_OUT=$(infra_config_dpf_replaced "$P_FORGET" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -eq 0 && "$DPF_OUT" == "false" ]]; then
+  pass "#7104 dpf: forget classifies as NOT replaced (no push fired)"
+else
+  fail "#7104 dpf: forget gave rc=$DPF_RC out='$DPF_OUT', expected rc=0 false"
+fi
+
+# 14. The real multi-resource shape: this workflow -targets four resources, so DPF must be
+#     selected by ADDRESS and not by position. A sibling being replaced must not leak into
+#     DPF's verdict.
+P_MULTI=$(mkplan '{"resource_changes":[
+  {"address":"terraform_data.docker_seccomp_config","change":{"actions":["delete","create"]}},
+  {"address":"terraform_data.deploy_pipeline_fix","change":{"actions":["no-op"]}},
+  {"address":"terraform_data.apparmor_bwrap_profile","change":{"actions":["delete","create"]}}
+]}' multi)
+DPF_OUT=$(infra_config_dpf_replaced "$P_MULTI" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -eq 0 && "$DPF_OUT" == "false" ]]; then
+  pass "#7104 dpf: DPF is selected by address, not by a sibling's replacement"
+else
+  fail "#7104 dpf: multi-resource plan gave rc=$DPF_RC out='$DPF_OUT', expected rc=0 false"
+fi
+
+# 15. NON-VACUITY of the whole block: the function must actually exist. Without this, renaming
+#     it would make every arm above collapse to "command not found" -> non-zero -> and the six
+#     fail-CLOSED arms would all still PASS while the four positive arms failed. Assert the
+#     dispatch itself, mirroring the workflow's own `declare -F infra_config_red_alert` pattern.
+if declare -F infra_config_dpf_replaced >/dev/null; then
+  pass "#7104 dpf: the adjudicator is defined (anti-vacuity for the fail-closed arms above)"
+else
+  fail "#7104 dpf: infra_config_dpf_replaced is NOT defined — the fail-closed arms above are vacuous"
+fi
+
 # --- #7220 review: ASSERTION-COUNT FLOOR ---------------------------------------------------
 # Nothing asserted that the assertions RAN. Measured: deleting the entire #7220 block took the
 # suite 53 -> 40 passed, 0 failed, exit 0 — a silent truncation that reads exactly like a clean
 # run. A floor (not equality — the count is developer-incremented) makes arm deletion loud.
-GATE_MIN_ASSERTIONS=64
+GATE_MIN_ASSERTIONS=79
 if [[ "$pass" -lt "$GATE_MIN_ASSERTIONS" ]]; then
   fail "assertion-count floor: only $pass assertions ran, expected >= $GATE_MIN_ASSERTIONS — arms were deleted or skipped"
 fi

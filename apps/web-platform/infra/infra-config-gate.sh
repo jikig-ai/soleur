@@ -30,6 +30,91 @@ infra_config_expected_count() {
   sed -n '/^FILE_MAP=(/,/^)/p' "$apply_script" | grep -cE '_B64\|'
 }
 
+# Did the plan this apply consumed REPLACE terraform_data.deploy_pipeline_fix? (#7104 PR-A)
+#
+# WHY THIS EXISTS. The push that publishes a status frame is a provisioner ON that resource, so
+# it fires only when the resource is replaced. Three merge classes fire this workflow WITHOUT
+# replacing it — a change to seccomp-bwrap.json, apparmor-soleur-bwrap.profile or server.tf
+# touches none of its 22 hashed triggers — and a plain no-op dispatch is a fourth. On those runs
+# no push happens, no frame is published, and #7220's freshness pin reds a run that did nothing
+# wrong. Measured on run 31636951749 (2026-08-12, main @ 0d644396): `Plan: No changes` and
+# `Apply complete! Resources: 0 added, 0 changed, 0 destroyed`, then STALE FRAME against the
+# 2026-08-06 frame. Knowing whether a push was even expected is what separates "the handler died"
+# from "nothing was sent".
+#
+# CONTRACT. Echoes exactly the string "true" or "false" and returns 0; returns non-zero and
+# echoes nothing on ANY input it cannot classify. Polarity is therefore a property of the
+# function rather than of a regex at the call site — the caller still validates, but a bug there
+# cannot manufacture a third value.
+#
+# FAIL-CLOSED IS THE WHOLE POINT. `jq -r '.resource_changes'` on a missing key yields the STRING
+# "null" and `null | length` is 0, so the natural implementation reads a degraded plan file as
+# "nothing changed" == false == skip the freshness pin — silently and permanently restoring the
+# #7220 blind spot on a host that cannot be re-provisioned. The workflow documents this exact
+# trap ~200 lines above the call site for `host_creates`. Every non-zero return below is that
+# lesson applied: a plan we cannot read must never resolve to "no push was expected".
+#
+# Allow-list, not deny-list: an action verb terraform does not currently emit fails closed
+# rather than falling through to "false", so a future verb meaning "this was rebuilt" cannot
+# quietly disable the pin.
+infra_config_dpf_replaced() {
+  local plan_json="$1"
+  local address="${2:-terraform_data.deploy_pipeline_fix}"
+
+  if [[ ! -r "$plan_json" ]]; then
+    echo "infra_config_dpf_replaced: plan JSON '$plan_json' is not readable" >&2
+    return 1
+  fi
+
+  # One jq pass. Every rejection is an explicit error() so a malformed plan can never
+  # reach the classification below. Declared-then-assigned deliberately: `local x=$(...)`
+  # takes the exit status of `local`, not of the substitution, so the guard would never fire.
+  local actions
+  actions=$(jq -r --arg addr "$address" '
+    if (.resource_changes | type) != "array" then
+      error("resource_changes is absent or not an array")
+    else
+      [ .resource_changes[] | select(.address == $addr) ] as $matched
+      | if ($matched | length) == 0 then
+          error("address not present in resource_changes[]")
+        elif ($matched | length) > 1 then
+          error("address matched more than once")
+        elif (($matched[0].change.actions | type) != "array")
+             or (($matched[0].change.actions | length) == 0) then
+          error("change.actions is absent, mistyped or empty")
+        else
+          $matched[0].change.actions | join(" ")
+        end
+    end' "$plan_json" 2>/dev/null) || {
+    echo "infra_config_dpf_replaced: cannot adjudicate '$address' from '$plan_json' — failing CLOSED so an unreadable plan is never read as 'no push was expected'" >&2
+    return 1
+  }
+
+  # Allow-list every token before deciding. terraform's plan JSON action verbs are
+  # no-op / create / read / update / delete / forget.
+  local a
+  for a in $actions; do
+    case "$a" in
+      no-op|create|read|update|delete|forget) ;;
+      *)
+        echo "infra_config_dpf_replaced: unknown action verb '$a' for '$address' — failing CLOSED rather than assuming no push fired" >&2
+        return 1
+        ;;
+    esac
+  done
+
+  # `create` in any position means the resource was (re)built, so its push provisioner ran.
+  # Order-insensitive: create_before_destroy emits ["create","delete"].
+  for a in $actions; do
+    if [[ "$a" == "create" ]]; then
+      echo "true"
+      return 0
+    fi
+  done
+  echo "false"
+  return 0
+}
+
 # Units the repo's RESTART_MAP expects a reconciliation verdict for (#7103 R2 3.8). Derived
 # from the handler exactly as the file count is, so adding a unit ratchets the contract rather
 # than silently widening what the gate accepts as complete. One unit per line.
