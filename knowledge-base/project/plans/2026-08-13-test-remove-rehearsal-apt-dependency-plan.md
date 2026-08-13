@@ -137,9 +137,9 @@ let a git-data boot regression ship believing it was rehearsed.
 
 **If this leaks:** not applicable. No data surface, no credential, no network egress added.
 
-**Brand-survival threshold:** `none`.
-**threshold: none, reason:** test-fixture-only change with no production code path, no data
-surface and no credential; the diff adds error messages and deletes a redundant package install.
+- **Brand-survival threshold:** `none`.
+- **threshold: none, reason:** test-fixture-only change with no production code path, no data
+  surface and no credential; the diff adds error messages and deletes a redundant package install.
 
 > **This diverges from the brainstorm's framing, deliberately.** The brainstorm set
 > `single-user incident`, reasoning from the *suite's* importance. Review established that this
@@ -220,7 +220,7 @@ logs:
   retention: 90 days (GitHub default)
 
 discoverability_test:
-  command: "grep -cE '^[^#]*apt-get (update|install)' apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh"
+  command: grep -cE -e '^[^#]*apt-get update' -e '^[^#]*apt-get install' apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh
   expected_output: "7"
 ```
 
@@ -228,6 +228,14 @@ The probe's first token is `grep` (allowlisted), needs no credentials, no `ssh` 
 it is deterministic in preflight Check 10's sandbox. It asserts Phase 1's outcome — 9 → 7 apt
 cycles. It is deliberately not `bash …test.sh`: without docker that script's `_skip` exits 0 in a
 non-CI sandbox, which would make the probe vacuous.
+
+Two shapes here are forced by Check 10's runtime, and both were found by running it rather than
+reading it. The alternation is spelled as two `-e` patterns instead of `(update|install)` because
+the check rejects a literal `|` anywhere in the command — a reject aimed at pipe-chaining, which a
+regex alternation trips identically. And the scalar is UNQUOTED: `parse-form-a.awk` returns the
+inline value verbatim, so surrounding double quotes survive into `bash -c` and the whole probe
+becomes one quoted word that resolves to "command not found". Both forms count the same lines —
+verified 7 on this branch against 9 on `origin/main`.
 
 ## Issue disposition
 
