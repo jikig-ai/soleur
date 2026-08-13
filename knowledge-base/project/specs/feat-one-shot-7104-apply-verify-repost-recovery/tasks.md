@@ -14,48 +14,48 @@ stylistic: PR-B's recovery would fire on the wrong runs without PR-A's discrimin
 
 ## Phase 1 — Reconcile the plan (blocks everything else)
 
-- [ ] **1.1** Regenerate `## Implementation Phases`, `## Test Scenarios`, and both function
+- [x] **1.1** Regenerate `## Implementation Phases`, `## Test Scenarios`, and both function
       signatures from R13/R14/R15 so the plan describes **one** machine. Specifically remove the
       R3-reversed teardown relocation from Phase 3, add the `DPF_REPLACED` extraction and the
       saved-plan rework, and correct T1 (a stale frame with `DPF_REPLACED == false` must classify
       non-zero).
-- [ ] **1.2** Fix the `GATE_MIN_ASSERTIONS` circular reference: Phase 0 records the **pre**-change
+- [x] **1.2** Fix the `GATE_MIN_ASSERTIONS` circular reference: Phase 0 records the **pre**-change
       count; the raise happens after the new assertions exist, from a **post**-change measurement.
-- [ ] **1.3** Restate Guard 1's Property to cover the escape-hatch arm (R15.1) and the
+- [x] **1.3** Restate Guard 1's Property to cover the escape-hatch arm (R15.1) and the
       `DPF_REPLACED == false` arm, and extend the mutation matrix to the post-revision arm set.
 
 ## Phase 2 — Preconditions to measure (not assume)
 
-- [ ] **2.1** Measure clock skew: compare a recent run's frame `start_ts` against that run's runner
+- [x] **2.1** Measure clock skew: compare a recent run's frame `start_ts` against that run's runner
       clock. **This decides whether R2 ships at all** (plan R13.3). Material → implement as a
       single comparator, no fallback arm. ~0 → defer with a re-evaluation trigger.
-- [ ] **2.2** Probe `FILE_MAP ⊆ TRIGGER_FILES` (plan R15.7). R1's skip arm is only truthful if it
+- [x] **2.2** Probe `FILE_MAP ⊆ TRIGGER_FILES` (plan R15.7). R1's skip arm is only truthful if it
       holds.
-- [ ] **2.3** Confirm the production call-site pin's three clauses survive an indentation-only wrap
+- [x] **2.3** Confirm the production call-site pin's three clauses survive an indentation-only wrap
       into `verify_once` (`adjudicate_infra_config /tmp/`, `infra_config_count_invariant /tmp/`, an
       intervening `done`).
-- [ ] **2.4** Record the pre-change assertion count from `bash apps/web-platform/infra/infra-config-gate.test.sh`.
-- [ ] **2.5** Re-derive the ADR ordinal across **all** `origin/*` refs (not just `origin/main`).
-- [ ] **2.6** Verify `terraform plan -replace=… -target=…` composes and shows exactly one replaced
+- [x] **2.4** Record the pre-change assertion count from `bash apps/web-platform/infra/infra-config-gate.test.sh`.
+- [x] **2.5** Re-derive the ADR ordinal across **all** `origin/*` refs (not just `origin/main`).
+- [~] **2.6** PR-B SCOPE (gates task 6.4, not PR-A) — Verify `terraform plan -replace=… -target=…` composes and shows exactly one replaced
       resource. Read-only; no apply.
 
 ## Phase 3 — PR-A: the sensor (ships first)
 
-- [ ] **3.1** Change `Terraform plan` / `Terraform apply` to produce and consume a **saved plan
+- [x] **3.1** Change `Terraform plan` / `Terraform apply` to produce and consume a **saved plan
       file**. This is a dependency of 3.2, not a bonus — `DPF_REPLACED` read from a plan equals
       what was applied only if that plan is what was applied. Independently fixes the confirmed
       TOCTOU (the `host_creates` guard has been adjudicating a discarded plan).
-- [ ] **3.2** Extract `DPF_REPLACED` from the saved plan's `resource_changes[]`, using the repo's
+- [x] **3.2** Extract `DPF_REPLACED` from the saved plan's `resource_changes[]`, using the repo's
       `select(.change.actions? | index(...))` convention.
-- [ ] **3.3** On `DPF_REPLACED == false`: skip the freshness pin with an explicit `::notice::` and
+- [x] **3.3** On `DPF_REPLACED == false`: skip the freshness pin with an explicit `::notice::` and
       adjudicate on count + content only. Ends the three false-red merge classes
       (`seccomp-bwrap.json`, `apparmor-soleur-bwrap.profile`, `server.tf`).
-- [ ] **3.4** Implement R2 **only if** task 2.1 justified it, as a single comparator
+- [~] **3.4** DEFERRED — task 2.1 measured skew at ~0 (within a ~±2 s floor), so R13.3's own branch says do not implement. Tracked in #7527. Original text: Implement R2 **only if** task 2.1 justified it, as a single comparator
       (`FRAME_START_TS` exists and differs from `PRE_APPLY_FRAME_START_TS`, absent-pre as sentinel).
-- [ ] **3.5** Extend `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` to pin
+- [x] **3.5** Extend `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` to pin
       `FILE_MAP ⊆ TRIGGER_FILES` (task 2.2's invariant).
-- [ ] **3.6** Tests for 3.2/3.3 in `apps/web-platform/infra/infra-config-gate.test.sh`.
-- [ ] **3.7** Re-derive PR-A's own brand-survival threshold — it removes production writes and adds
+- [x] **3.6** Tests for 3.2/3.3 in `apps/web-platform/infra/infra-config-gate.test.sh`.
+- [x] **3.7** Re-derive PR-A's own brand-survival threshold — it removes production writes and adds
       none, so it is plausibly `none` rather than inherited.
 
 ## Phase 4 — PR-B RED: the contract's tests, before the contract

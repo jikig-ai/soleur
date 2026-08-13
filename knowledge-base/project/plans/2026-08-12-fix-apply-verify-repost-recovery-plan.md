@@ -662,7 +662,14 @@ workflow merges, and there is no soak or later slice that makes it true.
 
 ## Implementation Phases
 
-> **SUPERSEDED — do not implement from this section.** It was written before the R13–R17 review
+> **SUPERSEDED — do not implement from this section, and it was NOT regenerated in place.**
+> What was actually built is recorded once, in `## Implementation Findings (PR-A)` at the end
+> of this document; `tasks.md` carries the reconciled task machine. Regenerating this section
+> would produce a third copy of the same decisions, and copies drift — two copies of one probe
+> table contradicting each other is a documented failure mode in this repo. Read the findings
+> section instead. Original banner follows.
+>
+> It was written before the R13–R17 review
 > revisions and describes the pre-revision machine: it still prescribes the teardown relocation
 > that R3 reversed, it has no step for the `DPF_REPLACED` extraction or the saved-plan rework, and
 > it assumes the higher-order orchestrator that R16.2 replaced with a pure predicate.
@@ -1872,3 +1879,86 @@ bucket, table, queue, cache, backup target or log sink) and no new cross-compone
 created — the re-push reuses the existing HTTPS + Cloudflare Access + HMAC channel that
 `push-infra-config.sh` already opens. No `.tf`, `supabase/migrations/*.sql`, `cloud-init*.yml` or
 `docker-compose*.yml` file appears in `## Files to Edit`, so the detection globs do not fire either.
+
+## Implementation Findings (PR-A)
+
+Recorded at `/work` time. Where a measurement contradicted the plan, the measurement wins and the
+superseded position is named rather than quietly dropped.
+
+### The defect is live, and its cause is one of the three named classes
+
+Run `31636951749` (2026-08-12, `main` @ `0d644396`). Paths-filter ∩ commit-files intersection =
+**exactly `apps/web-platform/infra/server.tf`**; `terraform plan` → `No changes`; `terraform apply`
+→ `Apply complete! Resources: 0 added, 0 changed, 0 destroyed`; gate → `STALE FRAME` against the
+2026-08-06 frame. The gate was red on `main` when this work began. PR-A turns that run green
+*correctly*: nothing was pushed, so the pre/post frames are equal.
+
+### Task 2.1 — clock skew is immaterial, so R2 does NOT ship
+
+| Run | Apply start (runner) | Apply complete (runner) | Frame `start_ts` (host) | host − runner at push |
+|---|---|---|---|---|
+| 31049971942 | 21:46:30.95 | 21:46:52.39 | 21:46:51 | ≈ −1.4 s |
+| 31081679510 | 07:38:54.51 | 07:39:11.90 | 07:39:11 | ≈ −0.9 s |
+
+`APPLY_START_EPOCH` matches the runner's own log timestamp exactly (the sanity check on the
+method). Resolution is ~±2 s (`start_ts` is whole-second; push→handler latency is ~0–2 s and not
+separately measured), and both readings sit inside that floor. Per R13.3's own branch: **do not
+implement R2**; deferred with a re-evaluation trigger in #7527. The pre-apply *capture* still
+ships — it is what the no-push arm compares against. Only the `true` arm's comparator swap is
+deferred.
+
+### Task 2.2 — `FILE_MAP ⊆ TRIGGER_FILES` HOLDS, and the first reading of it was wrong
+
+A first extraction reported two violations (`hooks.json`, `soleur-doppler-token`). **Falsified on
+re-check at the right granularity:** both are covered by rendered locals in `triggers_replace`
+(`local.hooks_json` at `server.tf:1621`, `local.webhook_doppler_token_env` at `:1636`), which a
+`${path.module}/` path-literal extraction cannot see. Containment holds **20/20** (18 path
+literals + 2 rendered locals) and is now pinned by a test. This *confirms* R17.1's vacuity finding:
+content match on the `false` arm really is guaranteed by construction.
+
+### R17.1's justification is partly false — corrected, not inherited
+
+R17.1 argued the equality assert also catches a wiped handler and a post-push tamper. It catches
+neither: a wiped handler leaves the last frame **in place** (`PRE == POST`, assert passes), and the
+frame records the **last write**, not a re-read of the bytes on disk. Equality establishes **frame
+stability only**. Both holes stay open (#7527). What it *does* buy, which R17.1 did not claim: it
+reds a **plan/apply divergence**, which is a stronger argument than the one given.
+
+### The sentinel arm was an unresolved fork — routed to the CTO agent, ruled Option C
+
+R17.1 said "absent-pre as sentinel" without saying what that arm *does*. Routed as an architecture
+decision (fail-open/fail-closed boundary on a gate protecting an unreplaceable host). Ruling:
+**degrade, escalate, pass — never red**, because the arm is reachable only when the pre-poll failed
+*and* the post-poll returned 200, so a genuinely-down endpoint still reds via the existing
+`000/502/503` branch. Failing closed there would trade one false-red class for another. The
+governing rule is recorded in ADR-186: *fail-closed is proportionate to what the missing evidence
+would have proven, not to the fact that some evidence is missing.*
+
+### ADR-072 was mischaracterised in R13.10
+
+R13.10 described the needed distinction as "different hook, different lock". ADR-072 governs
+`await-ci` waiting on a CI check-run for the prod deploy cutover; that phrase does not describe it.
+ADR-186 states the real distinction: ADR-072 waited on a signal that *was* going to arrive, so
+adaptive waiting was the fix; here the newer frame is **never coming**, so waiting longer converts
+a fast false-red into a slow one and the predicate itself must change.
+
+### Task 3.7 — PR-A's threshold stays `single-user incident`
+
+Task 3.7 speculated PR-A might be `none` since it "removes production writes and adds none". It
+adds none, but it **rewrites the production apply invocation** (saved-plan) and **changes which
+freshness assertion guards the credential channel**. A wrong `DPF_REPLACED` disables the stale-frame
+pin on a host that cannot be re-provisioned. Downgrading the threshold on the PR that touches the
+gate's own predicate would be self-serving. Held at `single-user incident`.
+
+### Verification performed
+
+- `infra-config-gate.test.sh`: **95 passed, 0 failed** (baseline was 64; floor raised to 95).
+- Mutation battery, 16 mutants against a sandbox copy: **all RED, no vacuous arms**. Three
+  survivors were caught and fixed *during* the work — M2 and M8 were fixture gaps, and S8 revealed
+  that under `set -u` the guard's value is the **diagnostic**, not the return code (without it the
+  step dies mute before the `::error::` branches run), so that fixture now asserts stderr.
+- `actionlint` clean; `lint-workflow-errexit-capture.py` clean over 728 `run:` bodies; all 19
+  extracted `run:` blocks syntax-check under `bash --noprofile --norc -eo pipefail`.
+- Production call-site pin intact and self-deriving: `count_invariant` in-loop (L740),
+  `adjudicate_infra_config` terminal after the loop's `done` (L755 < L775).
+- Filed: **#7526** (paths-filter contradiction), **#7527** (consolidated follow-ups).
