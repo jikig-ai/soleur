@@ -961,6 +961,17 @@ jobs:
       - name: "Run infra-config verification-body guard (#7104 extracted body does not actuate)"
         run: bash apps/web-platform/infra/infra-config-verify.test.sh
 
+      # AC21 — the Guard 1 + Guard 2 mutation matrices, executable rather than tabulated. This job
+      # lists its tests explicitly (no glob), so an unregistered battery is a CLAIM: no gate sees
+      # it, no runner enumerates it, and no orphan reporter names it. The rows drive the two suites
+      # above against 17 single-mutation sandboxes and assert the expected exit code AND that a
+      # check naming the property reported — "some assertion failed" is not detection.
+      #
+      # ~85 s wall clock: 17 rows over the ~13 s gate suite, fanned out 4 at a time (the battery
+      # caps itself at min(4, nproc-2), and each row is hermetic in its own mktemp sandbox).
+      - name: "Run infra-config re-push Guard 1 + Guard 2 mutation battery (#7104 AC21)"
+        run: bash apps/web-platform/infra/infra-config-repush-mutation.test.sh
+
       - name: Run ci-deploy-wrapper.sh tests
         run: bash apps/web-platform/infra/ci-deploy-wrapper.test.sh
 

@@ -224,15 +224,30 @@ EOS
 exit 0
 EOS
   # curl writes the frame the case wants to the -o path and reports the HTTP code.
+  #
+  # ARGV FIDELITY, not a fixture-returning shim. A stub that answers identically regardless
+  # of its arguments puts the test seam ABOVE the code under test: the query SHAPE then ships
+  # unpinned, and corrupting the URL, dropping the HMAC header or losing `-w '%{http_code}'`
+  # leaves every case green. So the stub `exit 64`s on a missing REQUIRED argument, which the
+  # body's own `|| echo "000"` turns into a transport-failure verdict — loud, and attributable.
   cat > "$I_TMP/bin/curl" <<'EOS'
 #!/usr/bin/env bash
 out=""
 prev=""
+have_w=0; have_maxtime=0; have_sig=0; have_url=0
 for a in "$@"; do
   [[ "$prev" == "-o" ]] && out="$a"
+  [[ "$a" == "-w" || "$a" == "--write-out" ]] && have_w=1
+  [[ "$a" == "--max-time" ]] && have_maxtime=1
+  [[ "$a" == X-Signature-256:* ]] && have_sig=1
+  [[ "$a" == */hooks/infra-config-status ]] && have_url=1
   prev="$a"
 done
-[[ -n "$out" && -n "${STUB_FRAME:-}" ]] && cp "$STUB_FRAME" "$out"
+if [[ -z "$out" || "$have_w" -ne 1 || "$have_maxtime" -ne 1 || "$have_sig" -ne 1 || "$have_url" -ne 1 ]]; then
+  echo "curl-stub: required argv missing (o='${out:-}' w=$have_w max-time=$have_maxtime sig=$have_sig url=$have_url)" >&2
+  exit 64
+fi
+[[ -n "${STUB_FRAME:-}" ]] && cp "$STUB_FRAME" "$out"
 printf '%s' "${STUB_HTTP_CODE:-200}"
 EOS
   chmod +x "$I_TMP/bin/doppler" "$I_TMP/bin/sleep" "$I_TMP/bin/curl"
