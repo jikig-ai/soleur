@@ -71,8 +71,12 @@ consumer references them, or the consumer is dead code.
 - [x] 6.2 Endpoint non-empty → try `<endpoint>/jikig-ai/soleur-inngest-bootstrap@<same-sha256>`.
 - [x] 6.3 Success → emit `inngest_zot` (info); use that ref for the pull **and** the
       `docker create` / `docker cp` extract **and** `/etc/default/soleur-inngest-image`.
-- [x] 6.4 Miss → emit `inngest_ghcr_fallback` (**warning**, consumed by the fallback-rate alarm)
-      and fall back to the unchanged GHCR ref.
+- [x] 6.4 Miss → emit `inngest_ghcr_fallback` and fall back to the unchanged GHCR ref.
+      **Amended 2026-08-13:** done deliberately DIFFERENTLY from the parenthetical this row
+      carried ("**warning**, consumed by the fallback-rate alarm"). `inngest-boot-phone-home.sh`
+      takes no severity argument, so no "warning" is emitted; and the fallback-rate alarm is
+      Sentry-based, which this host does not reach. Checked as done-as-implemented, not
+      done-as-specified.
 - [x] 6.5 Endpoint empty/unset → skip the zot leg entirely; today's GHCR path exactly.
 - [x] 6.6 Carry the `sha256:` digest unchanged on both legs.
 

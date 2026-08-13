@@ -59,7 +59,7 @@ deliberately. This mechanism is the ADR's own prescription, not an unconsidered 
 
 | Mechanism considered | Property it would buy | Why cut |
 |---|---|---|
-| A new `/v2/` health-probe helper | #1 | `cloud-init.yml`'s arm already probes-then-falls-back; reuse its shape rather than invent a second one |
+| A new `/v2/` health-probe helper | #1 | `cloud-init.yml`'s arm already probes-then-falls-back; reuse its shape rather than invent a second one. **Deviation (2026-08-13):** the implementation reuses NO probe — it goes straight to `docker pull "$ZIREF"`. `cloud-init.yml` caps its probe at `--max-time 3`; the pull has no equivalent ceiling, so the leg is instead bounded by an explicit `timeout 180` (login `timeout 60`). Recorded because the row as written implies a probe is present. |
 | A retry/backoff loop around the zot pull | #1 | Two independent registry legs already provide the redundancy; a retry adds boot latency on the dark path for no new property |
 | A new Better Stack marker family | #2, #3 | `inngest-boot-phone-home.sh` already exists, already survives reboot (`bs-token-restage-enabled`), and is the channel that made this diagnosis possible. Extend its stage vocabulary; do not add a channel |
 | Removing the GHCR leg entirely | — | Buys no property in the list and front-runs ADR-096's staged Phase-5 retirement |
@@ -161,8 +161,10 @@ own `zot_login` runs too late to authorize the pull that fetches that very image
 - When the baked endpoint is non-empty, try `<endpoint>/jikig-ai/soleur-inngest-bootstrap@<same-sha256>`.
 - On success, emit `inngest_zot` (info) and use that ref for the pull **and** the subsequent
   `docker create`/`docker cp` extract, so every step follows one registry.
-- On zot miss, emit `inngest_ghcr_fallback` (**warning** — this is what the fallback-rate alarm
-  consumes) and fall back to the unchanged GHCR ref.
+- On zot miss, emit `inngest_ghcr_fallback` and fall back to the unchanged GHCR ref. (Superseded
+  detail: this bullet said "**warning** — this is what the fallback-rate alarm consumes". Both
+  halves are wrong for this host — `inngest-boot-phone-home.sh` takes no severity argument, and
+  the fallback-rate alarm is Sentry-based. See Addendum 2026-08-13.)
 - When the endpoint is empty/unset, skip the zot leg entirely and take today's GHCR path.
 - The `sha256:` digest is carried unchanged on both legs. The mirror is crane-copied
   digest-preserving, so the same digest must resolve on both.
@@ -180,6 +182,8 @@ explicit rather than incidental.
 - `apps/web-platform/infra/inngest-host.tf`
 - `apps/web-platform/infra/cloud-init-inngest.yml`
 - `apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh`
+- `.github/workflows/infra-validation.yml` (added 2026-08-13 — registers the mutation suite; the original list omitted it)
+- `scripts/followthroughs/zot-soak-6122.sh` + its harness (added 2026-08-13 — this PR falsifies that gate's corroboration anchors and two of its header claims)
 
 ## Files to Create
 
@@ -197,9 +201,11 @@ outcome yields a boot worse than today's GHCR-only path.
 that computes the effective ref before `pre-oci-pull`. Every consumer of the image ref
 downstream of that point must read the resolved value, not re-derive it: the `docker pull`, the
 `docker create ... -extract` container, and the `/etc/default/soleur-inngest-image` record.
-There is exactly one such region and three such consumers — the guard quantifies over all
-three, because a second consumer re-deriving the GHCR literal is precisely how a "zot-primary"
-change ships while still pulling from GHCR.
+There is exactly one such region and — as implemented — **four** such consumers, the fourth
+being `docker inspect "$IREF"` (it sources INNGEST_CLI_VERSION/SHA256 from the image env). The
+guard quantifies over all four, because a second consumer re-deriving the GHCR literal is
+precisely how a "zot-primary" change ships while still pulling from GHCR. (This paragraph said
+"three" when written from the plan's example list; the property is over the CLASS.)
 
 **Mutation matrix.**
 
@@ -241,8 +247,8 @@ error_reporting:
   fail_loud: true
 failure_modes:
   - mode: zot configured but miss (digest absent, endpoint unreachable)
-    detection: inngest_ghcr_fallback (warning)
-    alert_route: zot fallback-rate alarm
+    detection: inngest_ghcr_fallback (the emitter takes NO severity arg — the stage name is the signal)
+    alert_route: Better Stack marker query (betterstack-query.sh --grep inngest_ghcr_fallback). NOT the Sentry zot-soak [freshboot] count, which is web-host-only — see Addendum 2026-08-13.
   - mode: zot authentication fails
     detection: zot-login-FAILED
     alert_route: Better Stack marker query
@@ -334,7 +340,7 @@ insecure-registry entry in Phase 4 is what makes the existing posture usable fro
 
 1. The baked-endpoint reference appears in `cloud-init-inngest.yml` where `grep -c '${zot_registry_endpoint}'` previously returned 0. **Amended 2026-08-13 (#7516)** — this AC originally named `ZOT_REGISTRY_URL`, which is the *Doppler key* the web host reads. It is a leftover from the superseded "mirror the arm in `cloud-init.yml`" framing that this plan's own Research Reconciliation rejected: the bake path never reads that key, so the literal command could not pass against a correct implementation. Verified command: `grep -c '\${zot_registry_endpoint}' apps/web-platform/infra/cloud-init-inngest.yml` → **2**, against **0** on `origin/main` (same command). The two sites are the docker daemon-config gate and the credential bake; the ref-resolution region deliberately reads the endpoint back from `/etc/default/soleur-zot-read` rather than re-interpolating the template var, so two copies of it cannot disagree.
 2. The `sha256:` digest is byte-identical on the zot and GHCR refs; no mutable-tag form appears on either leg.
-3. All three downstream ref consumers (pull, extract container, `/etc/default/soleur-inngest-image`) read the single resolved ref.
+3. All **four** downstream ref consumers (pull, extract container, `docker inspect`, `/etc/default/soleur-inngest-image`) read the single resolved ref. Amended 2026-08-13: the plan's list of three omitted `docker inspect`.
 4. `zot_pull_user` / `zot_pull_token` are declared `sensitive = true` with no default.
 5. Every Guard Contract mutation row drives the suite RED; the vacuity row (6) is included.
 6. `terraform validate` passes on the infra root.
@@ -426,3 +432,67 @@ host-local packet filter on `:5000`.
    grep aborted the whole script under `set -e`, so the run exited 1 having printed no
    `=== Results ===` line and no failing assertion. Fixed inline with the `|| true` convention
    AC6 already uses. This is also what makes the row-6 anti-vacuity accounting reachable.
+
+## Addendum — 2026-08-13, review round (#7516)
+
+An 8-agent panel (one stalled: `git-history-analyzer`, so provenance coverage is incomplete)
+found defects in the PR's own guards and in three claims the PR published. Recorded because two
+of them were assertions I made to the operator, not merely code.
+
+### The guard certified placement, not behaviour
+
+Inverting ONE character in the arm's gate — `[ -n "$ZOT_EP" ]` → `[ -z ... ]`, which runs the
+zot leg only when zot is UNCONFIGURED and skips it exactly when configured — left the guard at
+**117/117** and the battery at **9/9**. Every property this plan claims was inverted and nothing
+went red, because the assertion grepped the whole file for a token that occurs three times. It
+now anchors positionally to the `if [` preceding the `ZIREF=` assignment and is mutation-proven.
+
+Three more of the same class, all measured:
+
+| Defect | Consequence |
+|---|---|
+| The battery's attribution grepped the log for the assertion DESCRIPTION, and `assert()` echoes that on PASS as well as FAIL | 7 of 9 rows reported KILLED with their named assertion neutered to `true`; one was misrouting on the unmutated tree. "9/9 killed" did not mean what the PR body said it meant |
+| The comment strip `sed 's/#.*$//'` destroyed executable lines — `#` is sed's delimiter in this file's redaction expressions | The phone-home's and `inngest-redact.sh`'s entire scrub patterns were deleted from what every assertion reads |
+| `grep -c` counts LINES; no floor over the section's own assertions | Two GHCR literals on one line evaded the "one resolution" guard; deleting **all** Guard-1 assertions exited 0 |
+
+### Three published claims that were false
+
+1. **"GHCR retained as break-glass."** AP-016 **LAPSED 2026-07-30 (#7071)** — the PAT is REVOKED,
+   so that leg returns a guaranteed 401. The consequence is the inverse of what "break-glass"
+   implies: this host's boot now depends **entirely** on zot reachability plus a baked credential
+   with no refresh channel. "Never a worse boot than today" is true only because today's path is
+   100% broken.
+2. **"Each runcmd `- |` item is its own shell."** cloud-init's `shellify()` concatenates them into
+   ONE `/bin/sh`; `cloud-init.yml` says so twice, `nic-wait-gate.test.sh` says so, and the
+   2026-07-06 errexit-leak post-mortem exists because of it. The `docker login ""` defect this
+   plan's first addendum reports catching was therefore **misdescribed** — `$ZOT_EP` would have
+   been inherited. The fix (re-deriving from the baked file) is still correct; the reason given
+   was not.
+3. **"One query covers both hosts."** `soleur-boot-emit` POSTs to Sentry only; this emitter to
+   Better Stack only. No single query in either system sees both.
+
+### A design defect the plan did not anticipate
+
+`zot-registry.tf` already declares `local.zot_pull_user` and `random_password.zot_pull` **in this
+same root**. Phase 2 added two operator-supplied `TF_VAR_*` variables for values Terraform
+already owns — which (a) goes stale on rotation, reintroducing the exact "baked credential with
+no refresh channel" failure #7462 exists to fix, (b) created the whole-apply hazard Phase 2.3
+documented and accepted, and (c) broke every `terraform test` run block. Both variables are
+deleted; the credential is now read from the in-root owner.
+
+### This PR falsified a downstream gate
+
+`zot-soak-6122.sh`'s code-corroboration arm anchors on the WEB host's syntax (`IREF=.*$ZURL`,
+`soleur-boot-emit`). Measured against this implementation both return **zero** hits, so once
+#6500 is legitimately closed the ADR-096 Phase-5 blocker would have emitted
+`blocker-closed-but-condition-unmet` **forever**, on a false premise. Anchors widened to accept
+either host's shape; its harness case 7 (which relied on the real repo still being GHCR-only —
+corpus accident) now uses a synthetic fixture.
+
+### Process
+
+CI caught what the local gate could not: adding required no-default root variables breaks every
+`terraform test` run block, while `terraform validate` passes throughout because it never
+resolves variable VALUES. That trap is documented in this repo's own work-phase guidance. Local
+verification also ran `terraform fmt -check .` without `-recursive`, so it never looked at
+`tests/` at all.
