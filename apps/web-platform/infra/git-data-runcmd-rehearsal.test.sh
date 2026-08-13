@@ -32,11 +32,40 @@ pass() { passes=$((passes + 1)); }
 FAILURES=()
 fail() { fails=$((fails + 1)); FAILURES+=("$1"); echo "FAIL: $1" >&2; [ -n "${2:-}" ] && echo "      $2" >&2; }
 
-# B5: A SKIP IS NOT A PASS, AND UNDER CI IT IS NOT EVEN A SKIP. Every guard below exits 0 when
-# a tool is missing, which is right on a laptop and wrong in CI: the runner is the one place
-# this suite is REQUIRED to execute, and a missing dependency there silently converts a
-# runtime gate into a green no-op that nothing distinguishes from a real pass. Under CI=true
-# the absence is a FAILURE of the runner's provisioning, reported as such.
+# SKIPPED is denominated in ASSERTION COST, not in arms: a declaring arm increments by the
+# number of assertions it would have made, so `passes + fails + SKIPPED` is invariant across
+# environments and the floor below can stay absolute. Precedent is infra-config-apply.test.sh,
+# which already ships the counter, this denomination, the sum-floor and the degraded-run NOTE;
+# the NAMING follows git-lock-chardevice-sweep.test.sh (uppercase counter, `Skipped: N` in the
+# summary) rather than minting a third vocabulary for the same idea. See ADR-188.
+SKIPPED=0
+arm_skip() { SKIPPED=$((SKIPPED + ${2:-1})); echo "SKIP (loud): $1" >&2; }
+
+# B5: A SKIP IS NOT A PASS, AND UNDER CI IT IS NOT EVEN A SKIP — FOR A DECLINE WHOSE INPUT IS
+# COMPUTABLE. Every guard below exits 0 when a tool is missing, which is right on a laptop and
+# wrong in CI: the runner is the one place this suite is REQUIRED to execute, and a missing
+# dependency there silently converts a runtime gate into a green no-op that nothing
+# distinguishes from a real pass. Under CI=true the absence is a FAILURE of the runner's
+# provisioning, reported as such.
+#
+# AMENDED (#7291, ADR-188). The paragraph above asserted a TWO-VALUED world, and `arm_skip()`
+# makes that false, so it is restated rather than left to contradict the code. The line is not
+# skip-vs-no-skip; it is WHAT THE DECLINE IS A PROPERTY OF:
+#
+#   _skip()    whole-suite, DEPENDENCY ABSENCE — computable before the suite runs, and stable
+#              until someone acts. A runner without docker stays without docker, so failing is
+#              actionable: it stays a hard exit 1 under CI, exactly as above.
+#   arm_skip() per-arm, TRANSIENT ENVIRONMENT — a property of the network at that instant,
+#              which nothing computable at dispatch determines. No flag can make it
+#              unreachable under CI; forcing it would only restore the false FAIL of #7291.
+#
+# An arm may reach arm_skip() only under all three mechanical conditions, each demonstrated by
+# a failing direction in the mutation matrix: (1) it is past the capture-integrity
+# precondition, so a missing measurement is a harness bug and not an environment skip;
+# (2) it is past the deterministic fixture test, so a fixture defect cannot be absorbed into
+# the environment bucket; and (3) it has POSITIVE corroboration that the driver never
+# executed — never mere absence of the success marker. The count is then capped by a counted
+# ceiling at the floor below.
 _skip() {
   if [ "${CI:-}" = "true" ]; then
     echo "$1 — and CI=true, so this is a FAILURE: the runner must provide this dependency. A gate that cannot run must not report success." >&2
@@ -596,6 +625,14 @@ STAGE=doppler_dl
 # not abort — measured: the checksum failed, the child exited non-zero, and the driver
 # still exited 0. A harness that models the block as a subprocess tests the opposite of
 # what ships.
+#
+# EXECUTION MARKER (#7291). Emitted immediately above the source line and BELOW the
+# capture-server guard, so "the driver never reached the download block" is a POSITIVE
+# observation rather than an inference from the absence of CHMOD_RAN. Its position is the
+# whole point: above the source line it cannot be reached by a run that died in apt or at the
+# image pull, and below the :8099 guard it stays distinguishable from a fixture failure —
+# which the T5 mutation verdict tests separately, and earlier.
+echo DRIVER_REACHED_DL
 . /work/doppler-dl.sh
 DRIVE
 
@@ -778,8 +815,23 @@ grep -q '^chmod +x /usr/local/bin/doppler && echo CHMOD_RAN$' "$TMP/dl.case.sh" 
 # `tar xzf` + `chmod +x /usr/local/bin/doppler` on an UNVERIFIED tarball that then executes
 # as root. So this arm reproduces the supply-chain defect the fix closes, and CHMOD_RAN
 # must appear.
+# The T5 PRIMARY arm's own execution evidence, read BEFORE the rm below destroys it.
+# EVIDENCE ONLY, never a gate: the two arms are separate containers started minutes apart, so
+# the primary reaching the driver does not prove the mutant could have. It is carried into the
+# skip reason because the asymmetry is the first thing a reader wants when triaging a skip.
+_t5_primary_reached=no
+grep -q 'DRIVER_REACHED_DL' "$TMP/out/stdout" 2>/dev/null && _t5_primary_reached=yes
+
 rm -rf "$TMP/out"; mkdir -p "$TMP/out"; : > "$TMP/out/capture.log"
 sed 's/^set -e$/true/' "$TMP/drive.sh" > "$TMP/drive.noerrexit.sh"
+# STRUCTURAL (hard-exit, uncounted): the marker must be present on the MOUNTED artifact, not
+# merely in the source heredoc. This pins the transform's APPLICATION rather than only its
+# correctness — a sed that silently dropped the line would make the verdict below read EVERY
+# run as a non-execution and skip forever, which is precisely the #7291 defect relocated one
+# level up. Anchored on the whole line so prose naming the marker cannot satisfy it.
+grep -q '^echo DRIVER_REACHED_DL$' "$TMP/drive.noerrexit.sh" || {
+  echo "FAIL: the execution marker is absent from the mounted driver — the T5 mutation verdict would read every run as a non-execution" >&2
+  exit 1; }
 if diff -q "$TMP/drive.sh" "$TMP/drive.noerrexit.sh" >/dev/null; then
   fail "T5 MUTATION did not land: 'set -e' not found in the driver"
 else
@@ -811,25 +863,45 @@ else
       cp /work/git-data-emit-src /work/git-data-emit
       apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq curl python3 >/dev/null 2>&1
       bash /work/drive.sh
-    ' >"$TMP/out/stdout" 2>&1 || true
-  # THE ARM'S OWN PRECONDITION, ASSERTED. Everything below is about a chain that CONTINUED past
-  # a REJECTED checksum, and until now nothing checked the rejection actually happened — the
-  # `sed -i` above is the only thing making the digest wrong, and its landing was unasserted
-  # (contrast the driver mutation, which `diff -q`s). If that sed ever no-ops, the genuine
-  # checksum PASSES, the chain completes legitimately, CHMOD_RAN prints, and this arm reports a
-  # cheerful pass having reproduced nothing. Fail-open, and invisible.
-  if grep -qxF "${_DL_TARBALL}: FAILED" "$TMP/out/stdout" 2>/dev/null; then pass; else
-    fail "T5 MUTATION: sha256sum's rejection verdict for ${_DL_TARBALL} is absent — this arm's premise (a wrong digest) did not hold, so its CHMOD_RAN result proves nothing" \
-         "$(tail -5 "$TMP/out/stdout" 2>/dev/null)"; fi
-  # `-x`, and a message that names only what was measured. Under the old `;` form this arm was
-  # green whatever happened; `&&` makes it honest, which also makes it newly reachable — a
-  # blocked CDN now lands HERE. So it must not say "T5's check is vacuous": that names a
-  # harness defect for what is usually an environment failure, and it is precisely the
-  # misattribution this PR removed from the primary arm (ADR-166). The assertion above
-  # discriminates the two cases; this one reports the marker and nothing more.
-  if grep -qx 'CHMOD_RAN' "$TMP/out/stdout" 2>/dev/null; then pass; else
-    fail "T5 MUTATION: with set -e stripped and the checksum rejected, the chain did not reach a SUCCEEDING chmod — the marker is unreachable, so T5's absence check above proves nothing" \
-         "$(tail -5 "$TMP/out/stdout" 2>/dev/null)"; fi
+    ' >"$TMP/out/stdout" 2>&1
+  # rc is CAPTURED AND USED, restoring the pattern run_case() already follows. The trailing
+  # `|| true` this replaces discarded the one datum that classifies a non-execution. NOT
+  # `local` — this arm is top-level, where `local` errors, leaves the variable unset, and
+  # `set -u` then kills the suite mid-run.
+  _t5m_rc=$?
+
+  # CAPTURE INTEGRITY, ahead of the verdict branch. A missing or empty capture alongside a
+  # ZERO exit is a HARNESS defect, never an environment skip: the container reported success
+  # and produced nothing to derive a verdict from. Skipping here would relocate #7291 rather
+  # than close it — a missing measurement restated as a claim about the environment.
+  if [ "$_t5m_rc" -eq 0 ] && [ ! -s "$TMP/out/stdout" ]; then
+    fail "T5 MUTATION: docker exited 0 but the capture is missing or empty — harness defect, not an environment skip" \
+         "expected a non-empty $TMP/out/stdout"
+  else
+    _t5m_tail="$(tail -5 "$TMP/out/stdout" 2>/dev/null)"
+    # AP-021/ADR-166: the verdict is derived from MARKER ABSENCE, which is not itself a cause.
+    # The rc is therefore OFFERED with its measured classes and never asserted as the reason —
+    # this arm did not measure why a download failed and does not claim to.
+    _t5m_rc_note="docker rc=${_t5m_rc} (measured classes: 125 docker CLI/image pull, 100 apt under the container's outer set -e, 2 capture-server guard — offered as classification, not asserted as cause)"
+    # ORDER IS LOAD-BEARING, and each position is the failing direction of the one before:
+    #   CHMOD_RAN first — a slow but SUCCESSFUL run must pass, never skip.
+    #   FIXTURE: second — the capture server failing to bind is deterministic and actionable,
+    #                     so it must FAIL rather than be absorbed into the environment bucket.
+    #   marker third    — only past both is absence evidence that the driver never ran.
+    #   else            — the driver DID run and did not reach chmod: the genuine vacuity.
+    if grep -q 'CHMOD_RAN' "$TMP/out/stdout" 2>/dev/null; then
+      pass
+    elif grep -q 'FIXTURE:' "$TMP/out/stdout" 2>/dev/null; then
+      fail "T5 MUTATION: the capture server never bound :8099 — deterministic fixture defect, not an environment skip" \
+           "${_t5m_rc_note}; tail: ${_t5m_tail}"
+    elif ! grep -q 'DRIVER_REACHED_DL' "$TMP/out/stdout" 2>/dev/null; then
+      # 1: the single reachability assertion the taken branch would have made.
+      arm_skip "T5 MUTATION did not run: the driver never reached the download block, so this arm demonstrated nothing about CHMOD_RAN's reachability. ${_t5m_rc_note}; T5 primary reached the driver: ${_t5_primary_reached}; tail: ${_t5m_tail}" 1
+    else
+      fail "T5 MUTATION: the driver RAN and without set -e the chain still did not reach chmod — T5's check is vacuous" \
+           "${_t5m_rc_note}; tail: ${_t5m_tail}"
+    fi
+  fi
 fi
 
 # ── T17 — a HEALTHY run emits ZERO fatals ──────────────────────────────────────────
@@ -1838,7 +1910,25 @@ else
   fail "R3(2d): skipped (concatenated runcmd not extracted)"
 fi
 
-total=$((passes + fails))
+# SKIP CEILING — a COUNTED assertion, which is what gives it a failing direction: deleting it
+# drops `total` below the floor, so its own removal reddens the suite. Derivation: exactly ONE
+# skip-eligible arm exists (the T5 mutation arm) and it declares a cost of 1 assertion, so no
+# legitimate run — healthy or degraded — can exceed 1.
+#
+# STATED RESIDUAL (ADR-188): RAISING this constant is not mechanically detectable. Any check
+# over its value would be text-matching the source, the antipattern this file rejects, so the
+# mitigation is procedural and declared rather than pretended: the value and its derivation
+# live here, inside the floor's itemisation, where this file's culture already forces review of
+# any count change. The stale in-file "four plain docker run" comment — wrong since the real
+# count reached six — is measured proof that hand-maintained numbers here drift silently.
+if [ "$SKIPPED" -le 1 ]; then pass; else
+  fail "skip ceiling exceeded: ${SKIPPED} assertion(s) declared-skipped, ceiling is 1 (one skip-eligible arm)"; fi
+
+# TOTAL INCLUDES DECLARED SKIPS. A loud skip that declares its assertion cost leaves the floor
+# satisfied; an arm that stops running WITHOUT declaring anything still reds. That is the
+# distinction `passes + fails` alone could not draw — it read a legitimate declared skip and a
+# silently vanished arm as the same number.
+total=$((passes + fails + SKIPPED))
 # Floor = the ACTUAL assertion count (B1: 1, B2: 1, D1: 2, T5: 4 + 1 mutation, T17: 2 + 1
 # mutation, S1: 3 + 4 mutation). THIS LIST IS THE FROZEN 19-ERA BASELINE, not a running total —
 # it sums to 19 and is what "19 pre-existing" in the #7204 stanza below is checked against, so
@@ -1848,6 +1938,16 @@ total=$((passes + fails))
 # `exit 0` from a skip guard, or a docker run that never produced output — not to be an
 # aspirational target. S1 emits exactly 7 on ALL THREE of its paths (healthy, mutation-did-
 # not-land, extraction-failed) so no short-circuit can satisfy the floor.
+#
+# RAISED 46 -> 47 WITH THE ARM THAT MADE IT NECESSARY (#7291), itemised (rebased onto #7501's
+# 44 -> 46; the increment is +1 regardless of the base):
+#   skip ceiling 1  SKIPPED <= 1, counted so that DELETING it reddens the suite via this very
+#                   floor. Nothing else in #7291 is counted: the execution-marker guard on the
+#                   mounted driver is STRUCTURAL (hard exit), the capture-integrity check is a
+#                   precondition ahead of the branch, and the rewritten T5 mutation verdict
+#                   re-shapes that arm's ONE existing assertion rather than adding one — it
+#                   still contributes exactly 1 to `total` on every path (pass, fail, declared
+#                   skip, and the preserved mutation-did-not-land pre-branch).
 #
 # RAISED 36 -> 44 WITH THE ARMS THAT MADE IT NECESSARY (#7227), itemised. The single old
 # R3(3b) arm is REPLACED, so the sum is 36 - 1 + 9 = 44 (measured: 44 passed, 0 failed):
@@ -1888,35 +1988,19 @@ total=$((passes + fails))
 # R1 emits exactly 7 on all three of ITS paths (healthy, extraction-failed,
 # precondition-missing) for the same reason S1 does. The floor must move with the suite or it
 # only ever guards the work that predates it.
-# RAISED 44 -> 46 (#7501, then +1 for the AC15 trap-count arm added at review): the R4/R3 run-level fixture-liveness gate emits its own `pass` on
-# the healthy path. Counting it is the whole point of the instrument — a gate that contributes
-# nothing when it succeeds is one that an inversion-to-always-pass leaves undetectable,
-# because the old floor of 44 would still be met.
-#
-# RAISED 46 -> 48 WITH THE ARMS THAT MADE IT NECESSARY (#7565), itemised:
-#   T5 primary   1  the CHECKSUM'S OWN VERDICT (`<tarball>: FAILED` whole-line, on captured
-#                   container stdout). The four assertions that predate it — rc, stage, level,
-#                   CHMOD_RAN-absent — are ALL satisfied by the download failing, so the arm
-#                   could report 4/4 green with sha256sum never having run. This assertion is
-#                   the one that names which command aborted.
-#   T5 mutation  1  the same verdict asserted PRESENT (added at review). This arm's whole
-#                   premise is "a wrong digest was rejected and the chain continued anyway",
-#                   and its `sed -i` — the only thing making the digest wrong — had no landing
-#                   assertion. A no-op sed meant the genuine checksum passed, the chain
-#                   completed, CHMOD_RAN printed, and the arm passed having reproduced nothing.
-# Deleting either must not be indistinguishable from an arm that ran, which is what this floor
-# buys: total falls to 47 and fires here.
-# Measured after the raise: 48 passed, 0 failed.
-#
-# REBASE NOTE (#7291 / draft PR 7510): that branch ALSO raises this floor by +1, for its skip
-# ceiling. The two raises are for different assertions, so the composed total is 49 — taking
-# either side of a textual conflict here leaves the floor one below the real count, which
-# silently re-permits exactly one deleted assertion. Whichever lands second must re-derive.
-if [ "$total" -lt 48 ]; then
-  echo "FAIL: ran only ${total} assertions (<48) — harness did not execute fully" >&2
+# RAISED 44 -> 46 (#7501, then +1 for the AC15 trap-count arm added at review): the R4/R3 run-level
+# fixture-liveness gate emits on the healthy path. Counting it is the whole point of the instrument
+# — a gate that contributes nothing when it succeeds is one that an inversion-to-always-pass leaves
+# undetectable, because the old floor of 44 would still be met.
+if [ "$total" -lt 47 ]; then
+  echo "FAIL: ran only ${total} assertions (<47) — harness did not execute fully" >&2
   exit 1
 fi
-echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed (${total} assertions)"
+_suite_rel="$( (cd "$DIR" && git rev-parse --show-prefix 2>/dev/null) || true )$(basename "${BASH_SOURCE[0]}")"
+echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed, Skipped: ${SKIPPED} (${total} assertions) [${_suite_rel}]"
+if [ "$SKIPPED" -gt 0 ]; then
+  echo "  NOTE: ${SKIPPED} assertion(s) were declared-skipped by loud SKIP arms — this run is weaker than a full one."
+fi
 # THE VERDICT IS AN `exit`, NOT A TRAILING TEST EXPRESSION -- a bare test as the final
 # statement makes the exit status a property of which line happens to be LAST, so a single
 # appended command permanently greens the suite while it still prints accurate failure text.

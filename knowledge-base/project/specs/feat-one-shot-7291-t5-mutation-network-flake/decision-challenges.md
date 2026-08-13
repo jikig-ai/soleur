@@ -54,4 +54,4 @@ a verdict class that fires once a quarter earns less machinery than one firing w
 if the arm skips regularly, because then ADR-177's noise-training argument dominates.
 
 **Decision needed from the operator:** proceed with the counted SKIP verdict (plan as written), or
-re-scope to the two-branch FAIL and drop the counter, ceiling, floor change and ADR-186.
+re-scope to the two-branch FAIL and drop the counter, ceiling, floor change and ADR-188.

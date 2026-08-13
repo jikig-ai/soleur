@@ -415,9 +415,9 @@ tracking issue with its re-evaluation criterion.
 
 ## Architecture Decision (ADR/C4)
 
-### ADR — ADR-186, amending ADR-181
+### ADR — ADR-188, amending ADR-181
 
-**Create `ADR-186`, frontmatter `amends: ADR-181`, `related_adrs: [ADR-177, ADR-180, ADR-166]`**,
+**Create `ADR-188`, frontmatter `amends: ADR-181`, `related_adrs: [ADR-177, ADR-180, ADR-166]`**,
 matching the convention ADR-181/182/184 already use. Plan v1 proposed a standalone ADR on the
 premise that no ADR governed the area; that premise was false, and a third independently-derived
 verdict taxonomy is exactly the divergence an ADR should prevent.
@@ -431,11 +431,20 @@ failure is a property of the network at that instant and is not. The ADR must al
 `git-data-rung2-rehearsal.test.sh` per-arm-FAIL counter-precedent with the deterministic-vs-transient
 line that distinguishes it.
 
-`ADR-186` re-verified free across all **67** `origin/*` refs (max observed ADR-185, zero refs carry
-186). Provisional until merge — re-derive immediately before, and if it moves, sweep this plan,
-`tasks.md`, the ADR body and every reference in one edit. Note that the local corpus lags origin
-(ADR-183 exists on origin, not in this worktree), so the re-derivation must run against fetched refs,
-never a local `ls`.
+**Ordinal history — the provisional check fired, as designed.** At plan time `ADR-186` was verified
+free across all 67 `origin/*` refs (max observed ADR-185). By implementation time it was **taken**:
+`ADR-186-infra-config-gate-freshness-depends-on-whether-a-push-was-expected.md` merged to
+`origin/main` in the interim, and `ADR-187` had also landed on a ref. Re-derived against freshly
+fetched refs, `ADR-188` is free and is the ordinal this plan ships; the rename plus every reference
+in the suite, this plan and `decision-challenges.md` were swept in one edit.
+
+References carrying `ADR-186` in the `feat-one-shot-7104-apply-verify-repost-recovery` plan and
+tasks are a **different** feature's ADR and were deliberately left untouched — a blanket
+find-and-replace across the repo would have rewritten another session's record.
+
+Re-derive again immediately before merge: this ordinal is provisional for exactly the reason above,
+and the re-derivation must run against fetched refs, never a local `ls` (the local corpus lags
+origin).
 
 ### C4 views
 
@@ -503,7 +512,7 @@ the dependencies `_skip()` already gates — and no credentials, so no `credenti
 
 ## Files to Create
 
-- `knowledge-base/engineering/architecture/decisions/ADR-186-*.md` (ordinal provisional).
+- `knowledge-base/engineering/architecture/decisions/ADR-188-*.md` (ordinal provisional).
 
 ## Acceptance Criteria
 
@@ -543,7 +552,7 @@ the dependencies `_skip()` already gates — and no credentials, so no `credenti
     exactly as the B5 doctrine forbids. `shellcheck` output, if present, is advisory only.
 15. New greps follow the in-file `#7005` prohibition (no `head … | grep -q`) and the
     `$(grep -c … || true)` idiom.
-16. `ADR-186-*.md` exists with `amends: ADR-181`, argues the reversal of ADR-181 property 4,
+16. `ADR-188-*.md` exists with `amends: ADR-181`, argues the reversal of ADR-181 property 4,
     reconciles with AP-021/ADR-166, and records the rung-2 counter-precedent. Its ordinal is unique
     among `ADR-*.md` on the merge base and no other file in the PR names a different ordinal. (The
     pre-merge re-derivation against fetched refs is a ship step, not an AC — an AC whose outcome
