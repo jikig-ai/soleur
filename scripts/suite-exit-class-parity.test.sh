@@ -114,8 +114,16 @@ done
 
 # rc domain. 193..255 is load-bearing (see header). The malformed and empty cases
 # pin the fail-closed contract. Keep this list append-only.
-RC_DOMAIN=(0 1 2 3 124 128 129 130 137 143 154 159 192 193 200 254 255 abc "")
-MIN_RC_CASES=15
+# 160 and 161 are the load-bearing pair and were MISSING from the first cut of this domain.
+# On this shell `kill -l 32` (rc 160) and `kill -l 33` (rc 161) succeed with EMPTY output —
+# glibc's internal SIGCANCEL/SIGSETXID — so the `[[ -n "$name" ]]` guard is the ONLY thing
+# rejecting them, natively, with no synthesized shell required. test-all.sh's own classifier
+# comment already documented 160 for exactly this reason; the domain here simply skipped it,
+# so the permissive-kill arm below was reaching for a property this shell exhibits two values
+# away. Measured: without these rows, mutating the infra guard to `return 0` produced ZERO
+# in-domain disagreements. Found by structural enumeration at review.
+RC_DOMAIN=(0 1 2 3 124 128 129 130 137 143 154 159 160 161 192 193 200 254 255 abc "")
+MIN_RC_CASES=17
 if (( ${#RC_DOMAIN[@]} < MIN_RC_CASES )); then
   bad "rc-domain floor: ${#RC_DOMAIN[@]} cases (< $MIN_RC_CASES) — the domain was narrowed"
 else

@@ -14,8 +14,13 @@
 # been outgrown by a suite added one directory over. Scope note (deliberate, not an
 # oversight): the producer is keyed on the `*.test.sh` SUFFIX, so the `test-<name>.sh`
 # convention used under tests/scripts/ and tests/commands/ is outside it. tests/commands/ has
-# its own dedicated loop at the bottom of this file; tests/scripts/ is floored by
-# .github/scripts/test/run-all.sh's own MIN_SUITES.
+# its own dedicated loop at the bottom of this file. tests/scripts/ (45 `test-*.sh`) is
+# currently registered in full by explicit `run_suite` lines, but NOTHING guards that
+# membership -- an earlier revision of this comment claimed it was "floored by
+# .github/scripts/test/run-all.sh's own MIN_SUITES", which is false: that runner globs
+# `$DIR/test-*.sh` with DIR=.github/scripts/test and never looks at tests/scripts/. Recorded
+# as a known gap rather than left as a false assurance; closing it needs a second producer
+# keyed on the `test-*.sh` convention.
 #
 # THE COVERED SET IS A UNION OF SIX REGISTRATION SURFACES, enumerated below at their point of
 # use. Six, not one: a linter that only knew test-all.sh would report all 98 infra suites as
