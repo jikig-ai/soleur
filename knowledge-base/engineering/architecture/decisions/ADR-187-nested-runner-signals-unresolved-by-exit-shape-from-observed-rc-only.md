@@ -81,9 +81,29 @@ would be absent from that copy, the runner's degradation path would fire, and ev
 assertion in the mutation battery would silently exercise the fallback instead of the classifier.
 That is ADR-177 §A3's constraint, and it binds this file.
 
-A parity pin asserting the inlined classifier stays byte-identical across its sites is the
-mitigation. Duplication under a pin is the lesser evil against a guard that certifies the wrong
-code path.
+Duplication under a pin is the lesser evil against a guard that certifies the wrong code path.
+The pin is `scripts/suite-exit-class-parity.test.sh`.
+
+**The pin could not be what was first specified, and the reason is worth recording.** The plan
+called for a single assertion that the classifier is byte-identical across all three files. It is
+not, and should not be: the infra runner's call site already counts every non-zero child, so it
+needs a **boolean** "is this rc in the killed subset?", while the other two classify a bare rc and
+need a **tri-state** `ok`/`killed`/`failed`. Forcing one shape on both call sites would add
+adapter code at one of them — a third thing to drift. So the pin asserts byte-identity only where
+the shape is genuinely shared (`test-all.sh` ↔ `run-all.sh`) and **behavioural** agreement across
+all three over the rc domain. The behavioural arm is the load-bearing one: it catches a change to
+one classifier's *logic* in a file whose body was never expected to match the others byte-for-byte
+— which a byte comparison is structurally blind to.
+
+**A measured aside the pin exists to keep true.** The `<= 192` bound present in the tri-state form
+and absent from the boolean form produces no disagreement: for rc 193..255 the `kill -l` operand
+is 65..127, and on this shell `kill -l 65` exits **1**, so the preceding failure branch already
+rejects them. That also makes the `[[ -n "$name" ]]` guard unreachable-as-decider here — mutating
+it out survives every ordinary row. It is still correct to keep, because POSIX does not require
+that exit status; the pin therefore synthesizes a permissive shell (shadowing `kill` to return
+0-with-empty) so the guard is on the decision path in at least one arm, with a fixture self-check
+asserting the shadow actually took effect. Without that arm the guard is untested in both files
+and could be deleted from either with every suite green.
 
 > **Recorded because it was got wrong first.** An earlier revision of this decision asserted that
 > `run-registered-suites.test.sh` does *not* sandbox via single-file `cp`, citing `:21` and `:614`
