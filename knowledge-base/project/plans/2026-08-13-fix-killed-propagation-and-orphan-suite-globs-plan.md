@@ -583,7 +583,12 @@ notably `infra-validation.yml`'s invocation and `run-registered-suites.test.sh`.
 **Consumer drift found at plan time — must be fixed in this PR.**
 `.github/workflows/main-health-monitor.yml:580` tells the operator, in the issue body it files
 for a KILLED run, that "the six suites this runner starts via `bun`/`node` directly can surface
-one". After this PR that set grows by **108** — 98 infra suites behind `run-registered-suites.sh`
+one". After this PR that set grows by **108**
+> **CORRECTED AT IMPLEMENTATION: 109, not 108.** The fixture count is **11**, not 10 — this
+> change adds the signal-propagation guard as the 11th suite and raises that runner's
+> `MIN_SUITES` to match. The shipped artifacts (ADR-187, `main-health-monitor.yml`) carry 109;
+> this line is left as the planned figure, per the append-only convention for dated records.
+ — 98 infra suites behind `run-registered-suites.sh`
 plus 10 fixture suites behind `run-all.sh`. Left unedited, the guidance under-states the search
 space on exactly the issue an operator reads when a suite is terminated.
 
