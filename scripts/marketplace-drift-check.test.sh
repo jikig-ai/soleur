@@ -697,7 +697,16 @@ fi
 # MIN_ASSERTIONS cannot see, and it is stated rather than implied so the next reader does not
 # over-trust it.
 MIN_PREDICATES=35
-predicate_count="$(grep -c 'problems\.append(' "${BASH_SOURCE[0]}")"
+# `|| true` is load-bearing, not defensive. `grep -c` exits 1 on a zero count, and this suite
+# runs under `set -euo pipefail` — so with every predicate deleted (the exact state this floor
+# exists to catch) the script would DIE here instead of reporting the floor breach. The
+# anti-vacuity check would itself have been vacuous.
+#
+# `|| true` and NOT `|| echo 0`: grep -c PRINTS `0` before exiting 1, so an `echo` appends a
+# SECOND line and the variable becomes "0\n0", which breaks the -lt comparison below. Both the
+# original bug and the wrong first fix were caught by scripts/lint-shell-capture-exit.py (S1
+# then S2), which is written for exactly this pair of mistakes.
+predicate_count="$(grep -c 'problems\.append(' "${BASH_SOURCE[0]}" || true)"
 if [[ "$predicate_count" -lt "$MIN_PREDICATES" ]]; then
   echo "ANTI-VACUITY: the structural blocks declare only $predicate_count predicates, expected at least $MIN_PREDICATES." >&2
   echo "A python block was deleted or gutted; \$PASS cannot see that, because those blocks report through a single pass() call each." >&2
