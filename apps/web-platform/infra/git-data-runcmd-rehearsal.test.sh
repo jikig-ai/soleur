@@ -1148,6 +1148,13 @@ fixture_fail() { echo "FIXTURE-FAIL: $1" >&2; exit 2; }
 # is a row that does not get executed.
 INJECT="${GIT_DATA_REHEARSAL_INJECT:-}"
 
+# rc0-dead-capture: exit ZERO having produced no captures at all. This is the one shape that
+# separates the two halves of the host-side gate — a container whose rc says "fine" while the
+# capture path is dead. Without it, deleting the sentinel check and keeping the rc check is an
+# undetectable mutation, because every other injected fault also makes the container exit
+# non-zero and the rc check alone would catch it.
+[ "$INJECT" = "rc0-dead-capture" ] && exit 0
+
 # BOUNDED APT. `-o Acquire::Retries=3` covers transient mirror failures inside apt itself;
 # the backoff loop covers the ones it does not retry. This does NOT add Ubuntu's mirrors to
 # the merge gate -- they were already there, because a dead container yields 0 for all three
