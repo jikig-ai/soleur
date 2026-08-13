@@ -77,6 +77,49 @@ of the six apt sites installs `e2fsprogs`, which `ubuntu:24.04` already ships at
 version the fixture's fingerprint pins — a pure no-op, deletable today for free. The issue's
 image-and-registry framing had obscured it for the whole design cycle.
 
+## Addendum — what plan-review found after this was first written
+
+The learning above was written from the brainstorm. A seven-agent plan review then falsified the
+*replacement* measurement too, and found two things that matter more than the original insight.
+
+**A correctly-measured sample can still be unrepresentative — and the repo may already hold the
+number.** Having caught the local-vs-CI error, the corrected figure was "110–119 s, n=6". Eight
+consecutive green runs on unchanged code gave **88 123 123 99 102 115 119 113** — an 88–123 s
+distribution. Worse, `infra-validation.yml:513` had committed **"git-data runcmd rehearsal 96 s"**
+before any of this work began. The right first move was `grep` for the number in the repo, not
+`gh api` for a fresh sample. And a range from a small n is not a band: report the spread, and
+compare any proposed saving against the noise floor. Here a ~50 s target sat barely above ~35 s of
+ambient variance.
+
+**Before valuing a CI optimization at all, ask two questions that can zero it.** Both were
+answerable in one command each and neither was asked:
+
+```bash
+gh repo view <owner>/<repo> --json visibility     # PUBLIC + standard runner => minutes are unbilled
+gh api "repos/<o>/<r>/actions/runs?head_sha=$SHA" \
+  --jq '.workflow_runs[]|"\((.updated_at|fromdate)-(.run_started_at|fromdate))s \(.name)"'
+```
+
+The saving here was ~4–6 runner-hours/week — arithmetically right, and worth **$0** (public repo,
+standard runners) and **0 operator-visible seconds** (the workflow was never the critical path;
+`CI` and `Main Health Monitor` always finished after it). A whole design cycle rested on a number
+that two commands reduce to zero.
+
+**Removing a dependency can remove an accidental guard.** The strongest finding: the apt line
+being removed sat under `set -e` *upstream* of the test driver, so a container that could not
+provision exited 100 and the supply-chain arm reported "exit 100, expected 1" — RED. Moving
+provisioning to build time would have made a TLS-broken `curl` satisfy *every* assertion in that
+arm with the checksum never evaluated. The dependency was load-bearing in a way nothing named.
+Before deleting a failure mode, ask what currently fails *because* of it.
+
+**Three of my citation errors all pointed the same direction.** The unrepresentative band, "R1
+detects an e2fsprogs bump" (it is an allowlist built so a benign bump does *not* red), and
+"`fingerprint.txt:57` pins the version" (line 56 says `CONTEXT FOR FAILURE MESSAGES ONLY — not
+asserted`) — each independently made the work look more justified than it was. Two of them reached
+a filed issue and needed two correcting comments. A single error is a slip; three sharing a
+direction is motivated reading, and the tell is that none of them were checked *against the
+paragraph they sat in*.
+
 ## Session Errors
 
 1. **Routing carried a false premise.** The `/soleur:go` args asserted a referenced retry
