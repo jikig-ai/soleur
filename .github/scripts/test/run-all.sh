@@ -31,7 +31,7 @@
 # nothing in between, so the child's rc IS the observation — it never has to infer one, and it
 # must never synthesize one from a wall-clock guess or a log scrape.
 #
-# The value 3 is deliberately never emitted from this file (AC9 greps for it): 3 is a
+# The value 3 is deliberately never emitted from this file: 3 is a
 # TOP-LEVEL contract owned by scripts/test-all.sh (ADR-177 §Consequences), and a nested runner
 # emitting it would be indistinguishable from a suite that legitimately returned 3.
 #
@@ -51,10 +51,14 @@ KILLED_RECORD=()
 
 # INLINED VERBATIM from scripts/test-all.sh, byte-for-byte, and pinned as such by
 # test-run-all-signal-propagation.sh — the three copies of this classifier cannot drift
-# silently. It is NOT sourced from a shared lib: ADR-177 §A3 measured that fatal for
-# test-all.sh (its own suites sandbox it with a single-file `cp`, so a sourced lib would be
-# ABSENT under test and every KILLED assertion would quietly exercise the fallback instead),
-# and the same argument is stronger here — `guard-script-fixture-tests` runs this file on a
+# silently. It is NOT sourced from a shared lib: ADR-177 §A3 makes this fatal to SHARE, but not for the reason first recorded: the binding
+# constraint is that run-registered-suites.test.sh drives a python SINGLE-FILE mutator over the
+# copy, so the two rows that mutate the classifier BODY (drop-rc128-guard, drop-name-guard)
+# could not be applied at all if it lived elsewhere. (The original reason — "a sourced lib
+# would be absent from the copy" — does not follow: the runner cd's to $ROOT first, so a
+# $ROOT-anchored source resolves fine. Corrected in ADR-187 at review; this copy is the
+# propagation of that correction.)
+# The independent argument for THIS file is stronger still — `guard-script-fixture-tests` runs this file on a
 # bare runner with nothing but `actions/checkout`. Do not "improve" one copy.
 suite_exit_class() {
   local rc="${1-}" name

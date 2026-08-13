@@ -416,9 +416,14 @@ PASS=$(grep -c '^PASS ' "$LOG" || true)
 # ── Signal classification, IN THE PARENT (#7429) ──────────────────────────────
 #
 # INLINED, NOT SOURCED FROM scripts/lib/ — ADR-177 §A3. run-registered-suites.test.sh sandboxes
-# this file with a SINGLE-FILE `cp "$SUT" "$PRISTINE"`, so a sourced helper would be absent from
-# every mutant copy: the degradation path would fire and each KILLED assertion would silently
-# exercise a fallback instead of the classifier. This body is a BOOLEAN predicate and is NOT
+# this file with a SINGLE-FILE `cp "$SUT" "$PRISTINE"` and then a python single-file MUTATOR.
+# ADR-177 §A3 makes this fatal to SHARE, but not for the reason first recorded: the binding
+# constraint is that run-registered-suites.test.sh drives a python SINGLE-FILE mutator over the
+# copy, so the two rows that mutate the classifier BODY (drop-rc128-guard, drop-name-guard)
+# could not be applied at all if it lived elsewhere. (The original reason — "a sourced lib
+# would be absent from the copy" — does not follow: the runner cd's to $ROOT first, so a
+# $ROOT-anchored source resolves fine. Corrected in ADR-187 at review; this copy is the
+# propagation of that correction.) This body is a BOOLEAN predicate and is NOT
 # byte-identical to the tri-state `suite_exit_class` in test-all.sh / run-all.sh -- the call
 # site here already counts every non-zero child, so it needs "is this rc the killed subset?",
 # not a three-way classification. `scripts/suite-exit-class-parity.test.sh` byte-compares only

@@ -292,7 +292,28 @@ TOTAL=$(( PASS + FAIL ))
 echo ""
 echo "run-all signal propagation: $PASS passed, $FAIL failed ($TOTAL assertions)"
 
-MIN_ASSERTIONS=34
+
+# POSITIVE CONTROL on the dispatch. Measured at review: rewriting `fail()` to increment PASS
+# left this suite fully green (rc 0) while a real regression was live in the SUT. Every
+# assertion here is observed THROUGH these two helpers, so nothing above can see them go
+# silent -- and an assertion-count floor cannot either, because a rewritten fail() still
+# counts. Ported from run-registered-suites.test.sh, the only suite that already had it.
+_ctl_p=$PASS; _ctl_f=$FAIL
+pass "positive control: pass() increments the pass counter"
+fail "positive control: fail() increments the fail counter" "this FAIL line is expected"
+if (( PASS == _ctl_p + 1 && FAIL == _ctl_f + 1 )); then
+  PASS=$_ctl_p; FAIL=$_ctl_f
+  pass "positive control: pass()/fail() both move their own counters"
+else
+  PASS=$_ctl_p; FAIL=$((_ctl_f + 1))
+  echo "FAIL: positive control -- pass()/fail() do NOT move their counters; every verdict in this file is unreliable" >&2
+fi
+
+# Floor set to the CURRENT measured count, not below it: slack is deletion budget.
+# TOTAL is recomputed HERE, after the positive control above: it was captured before the
+# control ran, so the control's own assertions were outside the floor it feeds.
+TOTAL=$(( PASS + FAIL ))
+MIN_ASSERTIONS=37
 if (( TOTAL < MIN_ASSERTIONS )); then
   echo "FAIL: only $TOTAL assertions ran (floor $MIN_ASSERTIONS) — arms were removed or short-circuited" >&2
   exit 1

@@ -9,12 +9,14 @@
 #   .github/scripts/test/run-all.sh                suite_exit_class()        tri-state
 #   apps/web-platform/infra/run-registered-suites.sh  suite_rc_is_signal_shaped()  boolean
 #
-# They are duplicated rather than shared because ADR-177 §A3 binds:
-# run-registered-suites.test.sh sandboxes its subject with a SINGLE-FILE
-# `cp "$SUT" "$PRISTINE"`, so a sourced lib would be absent from the pristine copy,
-# the runner's degradation path would fire, and every KILLED assertion in that
-# battery would silently exercise the fallback instead of the classifier. A guard
-# that certifies the wrong code path is worse than no guard.
+# They are duplicated rather than shared because ADR-177 §A3 binds — and for the
+# reason ADR-187 records after review, not the one first written here:
+# run-registered-suites.test.sh drives a python SINGLE-FILE mutator over its
+# `cp "$SUT" "$PRISTINE"` copy, so the two rows that mutate the classifier BODY
+# (drop-rc128-guard, drop-name-guard) could not be applied AT ALL if it lived in
+# scripts/lib/. The originally-stated reason — "a sourced lib would be absent from
+# the copy" — does not follow: the runner cd's to $ROOT first, so a $ROOT-anchored
+# source resolves fine from the sandbox.
 #
 # Duplication under a pin is the lesser evil — but only while the pin exists. This
 # is that pin.
@@ -130,7 +132,20 @@ else
   ok "rc-domain floor: ${#RC_DOMAIN[@]} cases"
 fi
 
+# EXPECTED VALUES, not just agreement. Measured at review: collapsing ALL THREE classifiers
+# to "never signal-shaped" passed this suite 35/0, because every row asked only whether they
+# agreed and they agreed on `killed=0` for everything. Agreement is a tautology in the accept
+# direction unless something says what the answer must BE. `\1` = must classify killed,
+# `0` = must not. Derived from the taxonomy, not from any classifier's output.
+declare -A RC_EXPECT=(
+  [0]=0 [1]=0 [2]=0 [3]=0 [124]=0        # 124 is GNU timeout's own attributed verdict
+  [128]=0                                 # kill -l 0 yields EXIT; rc>128 is what excludes it
+  [129]=1 [130]=1 [137]=1 [143]=1 [154]=1 [159]=1 [192]=1
+  [160]=0 [161]=0                         # kill -l 32/33: rc 0 with EMPTY name -> the -n guard
+  [193]=0 [200]=0 [254]=0 [255]=0         # kill -l 65..127 fails -> rejected earlier
+)
 compared=0
+expected_checked=0
 for rc in "${RC_DOMAIN[@]}"; do
   ta=$(suite_exit_class "$rc");    [[ "$ta" == killed ]] && ta=1 || ta=0
   ra=$(ra_suite_exit_class "$rc"); [[ "$ra" == killed ]] && ra=1 || ra=0
@@ -141,7 +156,24 @@ for rc in "${RC_DOMAIN[@]}"; do
   else
     bad "parity rc=[$rc]: DISAGREE — test-all=$ta run-all=$ra infra=$inf"
   fi
+  # The absolute half. Only numeric rows have an expectation; `abc`/"" are the
+  # fail-closed shapes and are pinned by agreement alone.
+  # `[[ -n "${A[$k]+set}" ]]` errors on an EMPTY subscript, and "" is deliberately in the
+  # domain as a fail-closed shape — so gate on numeric-ness first.
+  if [[ "$rc" =~ ^[0-9]+$ ]] && [[ -n "${RC_EXPECT[$rc]+set}" ]]; then
+    expected_checked=$((expected_checked+1))
+    if [[ "$ta" == "${RC_EXPECT[$rc]}" ]]; then
+      ok "expected rc=[$rc]: classified killed=${RC_EXPECT[$rc]} as required"
+    else
+      bad "expected rc=[$rc]: classified killed=$ta, taxonomy requires ${RC_EXPECT[$rc]} — all three may agree and all three be wrong"
+    fi
+  fi
 done
+if (( expected_checked == ${#RC_EXPECT[@]} )); then
+  ok "expected-value accounting: checked all ${expected_checked} pinned rc values"
+else
+  bad "expected-value accounting: checked ${expected_checked} of ${#RC_EXPECT[@]} pinned values — RC_DOMAIN and RC_EXPECT have drifted apart"
+fi
 
 # --- The defensive name-guard, under the only shell that makes it decide -----
 #
@@ -220,6 +252,28 @@ if (( compared == ${#RC_DOMAIN[@]} )); then
   ok "loop accounting: compared $compared of ${#RC_DOMAIN[@]} rc values"
 else
   bad "loop accounting: compared $compared but the domain holds ${#RC_DOMAIN[@]} — the comparison loop did not run over its input"
+fi
+
+# POSITIVE CONTROL on the dispatch itself. Measured at review: rewriting `bad()` to increment
+# pass_n left this suite 35/0 and rc 0 while a real classifier drift was live. Nothing above can
+# see that — every assertion is observed THROUGH these two helpers. Ported from
+# run-registered-suites.test.sh, the only suite in this PR that already had it.
+_ctl_p=$pass_n; _ctl_f=$fail_n
+ok "positive control: ok() increments the pass counter"
+bad "positive control: bad() increments the fail counter (this FAIL line is expected)"
+if (( pass_n == _ctl_p + 1 && fail_n == _ctl_f + 1 )); then
+  pass_n=$_ctl_p; fail_n=$_ctl_f
+  ok "positive control: ok()/bad() both move their own counters"
+else
+  pass_n=$_ctl_p; fail_n=$((_ctl_f + 1))
+  echo "[FAIL] positive control: ok()/bad() do NOT move their counters — every verdict in this file is unreliable" >&2
+fi
+
+# Assertion floor. Deleting a whole arm dropped this suite 35 -> 31 and still exited 0.
+MIN_PARITY_ASSERTIONS=36
+if (( pass_n + fail_n < MIN_PARITY_ASSERTIONS )); then
+  echo "[FAIL] anti-vacuity: only $((pass_n + fail_n)) assertions ran, expected >= ${MIN_PARITY_ASSERTIONS} — an arm was deleted" >&2
+  fail_n=$((fail_n + 1))
 fi
 
 echo ""
