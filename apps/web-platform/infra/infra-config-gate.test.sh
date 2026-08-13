@@ -313,13 +313,153 @@ else
   else
     # (4) the count_invariant call is inside a loop that CLOSES before the adjudicate call:
     #     require a `done` line strictly between them → adjudicate is terminal, outside the loop.
+    #
+    #     COUNTING, not first-match (plan R19.2, measured — task 8.1). The original scan was
+    #     `awk '… $1=="done" {print NR; exit}'`: first match, first FIELD, so indentation is
+    #     irrelevant and ANY nested `for`/`while`/`until` (or a `done < <(…)`) between the two
+    #     anchors satisfies it. Measured against the pre-split design: with
+    #     adjudicate_infra_config moved INTO the loop and a nested `done` above it, the pin
+    #     still reported PASS (`ci=2 adj=6 between_done=5`) — #6594's coin-flip mutation stayed
+    #     green and AC21 failed at implementation time. Asserting EXACTLY ONE `done` strictly
+    #     between the anchors also makes "this region contains no nested loop" enforced rather
+    #     than hoped for, which is what row 5 of Guard 2's matrix mutates.
     between_done=$(awk -v a="$ci_line" -v b="$adj_line" 'NR>a && NR<b && $1=="done"{print NR; exit}' "$VERIFY_SH")
-    if [[ "$ci_line" -lt "$adj_line" && -n "$between_done" ]]; then
-      pass "gate is wired into prod: workflow invokes infra-config-verify.sh (L$invoke_line); inside it count_invariant is in-loop (L$ci_line) and adjudicate_infra_config is terminal after the loop's done (L$between_done < L$adj_line) — content assert is NOT any-of-3 (F1)"
+    done_count=$(awk -v a="$ci_line" -v b="$adj_line" 'NR>a && NR<b && $1=="done"{n++} END{print n+0}' "$VERIFY_SH")
+    if [[ "$ci_line" -lt "$adj_line" && "$done_count" -eq 1 ]]; then
+      pass "gate is wired into prod: workflow invokes infra-config-verify.sh (L$invoke_line); inside it count_invariant is in-loop (L$ci_line) and adjudicate_infra_config is terminal after the loop's SINGLE done (L$between_done < L$adj_line) — content assert is NOT any-of-3 (F1)"
     else
-      fail "adjudicate_infra_config is not terminal in infra-config-verify.sh: count L$ci_line, adjudicate L$adj_line, loop-done-between=${between_done:-none}. A content assert inside the retry loop is the #6594 coin flip."
+      fail "adjudicate_infra_config is not terminal in infra-config-verify.sh: count L$ci_line, adjudicate L$adj_line, done-lines-strictly-between=$done_count (expected exactly 1). A content assert inside the retry loop is the #6594 coin flip; a SECOND done means a nested loop the first-match scan was structurally unable to see (R19.2)."
     fi
   fi
+fi
+
+# ===================================================================================
+# #7104 PR-B — GUARD 2: the production call-site pin, EXTENDED to the re-push (task 8.1)
+# ===================================================================================
+# PROPERTY. Production invokes the TERMINAL content assert — not an any-of-N variant polled
+# inside a retry loop (clauses 1-4 above) — invokes the TESTED predicate rather than an
+# inline reimplementation of its decision, and re-pushes AT MOST ONCE per run.
+#
+# Boundedness is asserted HERE and nowhere else, because it is a property of the CALLER and
+# this is the only guard that quantifies over the caller (plan R18.3). A pure predicate has
+# no notion of how often its caller acts on it, which is why Guard 1's matrix cannot carry it.
+#
+# WHAT DEVIATES FROM THE PLAN'S LITERAL MATRIX, AND WHY. `## Guard Contract` §Guard 2 was
+# written under R18.3 — an inline latched block inside a widened poll loop — so its rows 3, 4
+# and 5 quantify over a latch, a per-iteration re-push and a duplicated verify block. Plan R22
+# ruled BOTH forks TAKEN and R22.6 PRUNES R18.3 outright, replacing "the block appears once
+# plus a latch" with: exactly one step in the job invokes `terraform apply` against
+# `tfplan-repush`. There is no latch to delete and no loop to widen, so those rows have no
+# referent as written; row 6 (the function wrapper) is the one R22.6 says to KEEP, and it
+# survives as clause (6) below. The re-derived rows and their detectors are executable in
+# `infra-config-repush-mutation.test.sh`.
+#
+# ASSEMBLY — TWO members, because the one-member claim was measurably false (R20.7 §1):
+#   (i)  every statement in this job's inline `run:` bodies plus the extracted verify body,
+#        quantified by the greps below;
+#   (ii) the SOURCED library `infra-config-gate.sh` — production-reachable via
+#        `source ./infra-config-gate.sh`, invisible to any grep over the workflow, a pure
+#        adjudicator by CONVENTION only (no `set` directives, no gate enforcing
+#        write-freedom), and the very file this PR adds a function to. Clause (7) converts
+#        that convention into a contract.
+# The `cf-tunnel-ssh-bridge` composite action is the third production-reachable path and is
+# deliberately OUT of scope: pre-existing, unmodified by this PR, and pinning it would assert
+# something this PR has not measured.
+
+# (5)/(6) the predicate is invoked, exactly once, DIRECTLY as the re-push condition.
+#
+# (5) is the "assertion adjacent to the property" row: if the workflow inlines an equivalent
+# condition instead of calling the predicate, Guard 1's whole matrix certifies a function
+# production does not run. Anchored on the `if` condition shape rather than a bare token —
+# infra-config-verify.sh names the predicate in two comments and in its own `declare -F`
+# anti-vacuity check, so a bare grep would pass against a body that had inlined the decision
+# (cq-assert-anchor-not-bare-token).
+#
+# (6) is the function-wrapper row R22.6 keeps from R18.2, and it is not stylistic: bash
+# suspends `errexit` for a CONDITION context and the suspension PROPAGATES INTO THE FUNCTION
+# BODY (R16.1). `if ! repush_once; then` is therefore how a production `terraform apply` ends
+# up running with `-e` off. Requiring the total command-position count to equal the
+# direct-condition count is what rules a wrapper out — and it also catches the second
+# producer, a re-push decision evaluated in two places.
+REPUSH_IF_SITES=$(grep -cE '^[[:space:]]*if[[:space:]]+infra_config_should_repush[[:space:]]' "$VERIFY_SH" || true)
+# Command position = line start, or immediately after a separator / opener / if-family
+# keyword / negation. `declare -F infra_config_should_repush` is a builtin's ARGUMENT and is
+# correctly excluded; comment lines are dropped before matching.
+REPUSH_CMD_SITES=$(grep -vE '^[[:space:]]*#' "$VERIFY_SH" \
+  | grep -cE '(^[[:space:]]*|[;&|][[:space:]]*|[({][[:space:]]*|\b(if|elif|then|else|do|while|until)[[:space:]]+|![[:space:]]*)infra_config_should_repush[[:space:]]' || true)
+if [[ "$REPUSH_IF_SITES" -eq 1 && "$REPUSH_CMD_SITES" -eq 1 ]]; then
+  pass "#7104 Guard 2 (5)(6): production invokes infra_config_should_repush exactly once, directly as the re-push condition — no inline reimplementation, no function wrapper"
+else
+  fail "#7104 Guard 2 (5)(6): infra-config-verify.sh has $REPUSH_IF_SITES direct 'if infra_config_should_repush' condition(s) and $REPUSH_CMD_SITES command-position call(s); both must be 1. Zero direct conditions means the decision was inlined (Guard 1 then certifies a predicate production does not run) or wrapped in a function (errexit suspends into the wrapper body, R16.1); a higher count means the re-push decision has two producers."
+fi
+
+# (7) BOUNDEDNESS. Exactly ONE step in the job writes production from the re-push plan.
+#
+# This is R22.6's replacement for R18.3's latch: under the step split the honest statement of
+# "at most one re-push per run" is a COUNT over apply sites, and each extra site is an
+# unbounded production write against a host this repo treats as unreplaceable.
+#
+# TWO INDEPENDENT PRODUCERS must agree, because neither is sufficient alone: a line grep
+# cannot see two applies inside ONE step, and a step-level count cannot see an apply in a
+# step whose body it mis-parses.
+REPUSH_APPLY_LINES=$(grep -cE '(^|[[:space:]])terraform[[:space:]]+apply[[:space:]].*tfplan-repush' "$APPLY_WF" || true)
+REPUSH_APPLY_STEPS=$(python3 - "$APPLY_WF" <<'PYEOF'
+import sys, re, yaml
+wf = yaml.safe_load(open(sys.argv[1], encoding='utf-8'))
+pat = re.compile(r'(?:^|\s)terraform\s+apply\s[^\n]*tfplan-repush')
+n = 0
+for job in (wf.get('jobs') or {}).values():
+    for s in (job.get('steps') or []):
+        body = s.get('run')
+        if isinstance(body, str) and pat.search(body):
+            n += 1
+print(n)
+PYEOF
+) || REPUSH_APPLY_STEPS="ERR"
+if [[ "$REPUSH_APPLY_LINES" -eq 1 && "$REPUSH_APPLY_STEPS" == "1" ]]; then
+  pass "#7104 Guard 2 (7): exactly one site writes production from tfplan-repush (1 line, 1 step) — the re-push is bounded to one attempt per run"
+else
+  fail "#7104 Guard 2 (7): re-push apply sites measured as $REPUSH_APPLY_LINES line(s) across $REPUSH_APPLY_STEPS step(s); both must be 1. More than one is an unbounded production write; zero means the recovery cannot fire at all and every Guard 1 row is decoration."
+fi
+
+# (8) THE SOURCED LIBRARY IS PART OF THE ASSEMBLY (R20.7 §1).
+#
+# COMMAND POSITION, not bare token: infra-config-gate.sh carries 20+ occurrences of these
+# verbs inside the prose that explains the very traps they name, so a bare-token assert would
+# fail on correct code (cq-assert-anchor-not-bare-token). Measured on the as-written file: 0.
+#
+# The detector carries its own POSITIVE CONTROL. A sweep that matches nothing is
+# indistinguishable from a sweep whose regex silently stopped matching — and this sweep
+# exists precisely to report an empty set, so it must prove it can report a non-empty one.
+LIB_SWEEP=$(python3 - "$SCRIPT_DIR/infra-config-gate.sh" <<'PYEOF'
+import sys, re
+
+VERBS = r'(?:terraform|curl|ssh|systemctl|gh\s+issue|doppler\s+secrets\s+(?:set|delete|unset|upload))'
+CMD = re.compile(
+    r'(?:^\s*|[;&|]\s*|[({]\s*|\b(?:if|elif|then|else|do|while|until)\s+|!\s*)' + VERBS + r'\b')
+
+def sweep(text):
+    hits = []
+    for i, line in enumerate(text.splitlines(), 1):
+        if line.lstrip().startswith('#'):
+            continue
+        if CMD.search(line):
+            hits.append((i, line.strip()[:110]))
+    return hits
+
+control = sweep('_mutant() {\n  terraform apply -auto-approve\n}\n')
+if len(control) != 1:
+    print('CONTROL-FAILED (the detector cannot see an obvious command-position write, so its verdict on the real file would be a statement about the regex)')
+    sys.exit(0)
+
+hits = sweep(open(sys.argv[1], encoding='utf-8').read())
+print('OK' if not hits else 'HITS=' + '; '.join('L%d %s' % h for h in hits))
+PYEOF
+) || LIB_SWEEP="SWEEP-ERROR (python3/regex unavailable)"
+if [[ "$LIB_SWEEP" == "OK" ]]; then
+  pass "#7104 Guard 2 (8): the sourced library contains no command-position production write (terraform/curl/ssh/systemctl/mutating doppler/gh issue) — pure-adjudicator is now enforced, not merely conventional"
+else
+  fail "#7104 Guard 2 (8): infra-config-gate.sh is production-reachable via 'source' and invisible to every grep over the workflow. Sweep: $LIB_SWEEP"
 fi
 
 # ===================================================================================
@@ -1554,7 +1694,7 @@ fi
 # Nothing asserted that the assertions RAN. Measured: deleting the entire #7220 block took the
 # suite 53 -> 40 passed, 0 failed, exit 0 — a silent truncation that reads exactly like a clean
 # run. A floor (not equality — the count is developer-incremented) makes arm deletion loud.
-GATE_MIN_ASSERTIONS=127
+GATE_MIN_ASSERTIONS=130
 # Adjudicated DIRECTLY, not through fail(). Measured: `fail() { return 0; }` made this suite
 # report `94 passed, 0 failed` / `OK` / exit 0 WITH a genuinely broken assertion present — and
 # the floor built to make truncation loud was itself dispatched through the neutered function,
@@ -1569,10 +1709,22 @@ fi
 # Known-negative self-test: prove the instrument can still report a failure before trusting any
 # verdict it produced. An assertion harness that has never been shown to emit a FAIL has not
 # returned a pass. Runs in a subshell so it cannot perturb the real counters.
-if ( fail_probe=0; fail() { fail_probe=$((fail_probe + 1)); }; fail "self-test"; [[ "$fail_probe" -eq 1 ]] ); then
+#
+# MEASURED AND CORRECTED (#7104 PR-B, task 8.2's dispatch row). The previous form REDEFINED
+# fail() inside the subshell, so it proved only that a function written two lines earlier
+# increments a counter — it was structurally unable to observe the REAL fail() being neutered.
+# Measured on a sandbox copy: `fail() { :; }` left this suite reporting `127 passed, 0 failed`,
+# exit 0, with the self-test GREEN. That is the guard's-own-dispatch mutation passing through
+# the one assertion whose entire purpose is to catch it.
+#
+# The fix is to drive the REAL fail(). The subshell keeps its side effects (the printed FAIL
+# line, the counter increment) off the parent's tally, while the function under test is the one
+# production uses. The assertion-count floor above is the second producer: with fail() neutered
+# AND a genuine defect present, the failing arm's `pass` never fires and the floor reddens.
+if ( f0="$fail"; fail "self-test (expected — this line proves fail() records)" >/dev/null; [[ "$fail" -eq $((f0 + 1)) ]] ); then
   :
 else
-  echo "  FAIL: harness self-test — fail() does not record a failure; every verdict above is unverifiable" >&2
+  echo "  FAIL: harness self-test — the REAL fail() does not record a failure; every verdict above is unverifiable" >&2
   exit 1
 fi
 
