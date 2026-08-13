@@ -167,6 +167,21 @@ script's own comment contradicted my narrative.
     the measurement invalid. **Prevention:** a script that derives paths from `BASH_SOURCE` cannot
     be relocated for debugging; instrument in place and revert.
 14. **Chased an unexplained ±1** in a guard's population. **Prevention:** keep chasing them.
+15. **The fix for item 9 was DEAD ON ARRIVAL, and the suite reported 96/0 over it for two review
+    rounds.** The assign-then-invoke arm added to close item 9 interpolates the acquirer's
+    payload-relative path into a `sed -nE "s/…${path}…/\2/p"`. That path always contains `/` —
+    the `s///` delimiter — so sed aborted with `unknown option to 's'` for **every** member of the
+    population, `t24_var` was unconditionally empty, and the arm never executed once. Proven by a
+    three-point matrix rather than by reading: unmutated control PASS; a planted
+    assign-CWD-relative-then-invoke mutation PASS against the pre-fix test (green while the
+    property is false); the same mutation FAIL against the fixed one. Found only because the
+    suite printed `sed:` on stderr **while passing** — the run was green, the diagnostic was not.
+    **Prevention:** two rules, and the second is the general one. (a) A path interpolated into a
+    `s///` must have the delimiter escaped for sed specifically — not via the shared regex-escape
+    helper, which correctly escapes regex metacharacters and `/` is not one. (b) **Treat any
+    stderr output from a PASSING guard as a failure to investigate before believing its verdict.**
+    A guard that green-lights while a subprocess dies is reporting on a check it did not run, and
+    this whole PR is the argument for why that is the same defect as no check at all.
 
 ## Disposition
 

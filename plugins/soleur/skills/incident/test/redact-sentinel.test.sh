@@ -1258,7 +1258,15 @@ else
       # all three of its sites are an assignment and two bare invocations.
       # The variable must actually be INVOKED somewhere in the file — otherwise this would
       # re-flag `flag-delete`'s `FLIP_SH`, which is only ever read as content (a data root).
-      t24_var="$(printf '%s' "${t24_line}" | sed -nE "s/^[[:space:]]*(readonly[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=.*${t24_rel_re}.*/\\2/p")"
+      # `t24_rel_re` is a PAYLOAD-RELATIVE PATH, so it always contains `/` — which is this
+      # `s///`'s own delimiter. Interpolating it raw ended the expression early and sed died
+      # with `unknown option to 's'` for EVERY acquirer, leaving `t24_var` empty and this whole
+      # arm dead while the suite still read 96/0. That is the vacuity class this file exists to
+      # catch, in the arm whose comment says the mutation it guards already SURVIVED once.
+      # Escape the delimiter for sed only: `t24_rel_re` is reused verbatim in the `grep -E`
+      # arms above, where `\/` is not portable.
+      t24_rel_sed="${t24_rel_re//\//\\/}"
+      t24_var="$(printf '%s' "${t24_line}" | sed -nE "s/^[[:space:]]*(readonly[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=.*${t24_rel_sed}.*/\\2/p")"
       if [[ -n "${t24_var}" ]] \
          && grep -qE "(^|[[:space:];&|(])(bash|sh|bun|node|python3|python|exec|source|\.)[[:space:]]+\"?\\\$\{?${t24_var}\}?\"?|^[[:space:]]*\"\\\$\{?${t24_var}\}?\"[[:space:]]" "${t24_file}"; then
         t24_is_exec=1
