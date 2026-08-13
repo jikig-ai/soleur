@@ -11,11 +11,6 @@
 # unscoped pattern is a cross-session destructive action. Prose does not
 # execute; this does. See #7525.
 #
-# SELECTION CRITERION (why this one command is encoded and most are not). All
-# three must hold: (1) it has recurred across sessions; (2) getting it wrong is
-# silent or destructive; (3) the correct form is counterintuitive. Most fumbled
-# incantations hit at most one and should stay prose.
-#
 # WHY BRACKET-SAFETY IS A CATEGORY ERROR HERE. `[t]est-all` is a pgrep/`ps|grep`
 # idiom: it stops the MATCHER from matching itself. A /proc walk has no pattern
 # for a bracket to fool, and the invoker's own command line still contains the
@@ -23,12 +18,26 @@
 # performing the enumeration") is bought by the three exclusions below instead.
 #
 # HIDDEN ASSUMPTION, stated because the design depends on it: proc.sh's own
-# command line MATCHES proc.sh's own predicate. `bash …/proc.sh kill_mine
-# test-all.sh` carries `test-all.sh` as a whitespace-free later token under a
-# shell argv[0]. That is the entire reason the process-group exclusion is
-# required — proc.sh's command-substitution forks match the predicate and are
-# NOT ancestors. Do not remove it on the grounds that ancestry already covers
-# the invoking shell.
+# command line MATCHES proc.sh's own predicate. That is the entire reason the
+# process-group exclusion is required — proc.sh's command-substitution forks
+# match the predicate and are NOT ancestors. Do not remove it on the grounds
+# that ancestry already covers the invoking shell.
+#
+# THE SCAN->SIGNAL CHANNEL CARRIES NO PATHS. This is the file's single most
+# important structural property and it was learned the hard way: the first
+# revision emitted `class<TAB>pid<TAB>cwd` and read it back with
+# `IFS=$'\t' read`. A directory name may legally contain a newline, and
+# /proc/<pid>/cwd reports it verbatim — so a process whose cwd was a directory
+# named $'evil\nsignal\t31337\t/pwned' injected a FORGED `signal` row into the
+# protocol. Measured: pid 31337 reached the kill site having never matched the
+# pattern, never been classified, and never had its cwd tested, while the
+# carrier process itself was correctly refused. The refusal path WAS the
+# injection vector, so a correct boundary check did not help.
+#
+# Therefore the channel now carries only (a) a class token from a closed set of
+# literals and (b) a pid, which is numeric by construction and re-validated
+# before use. Paths are re-read by the consumer for DISPLAY only, and sanitized.
+# Do not put a filesystem path back into this channel.
 #
 # The /proc primitives below are MIRRORED from scripts/lib/test-contention.sh
 # (search that file for `_tc_stat_field`), deliberately not sourced: this file
@@ -39,6 +48,13 @@
 # Location: ships INSIDE the plugin (ADR-178, ADR-179) so a marketplace install
 # resolves it, and so a customer's own `scripts/` directory cannot shadow a file
 # whose advertised contract is to send signals.
+#
+# PORTABILITY: bash 3.2 (the /bin/bash macOS ships). `mapfile -d` is bash 4.4+
+# and is deliberately NOT used — when it is absent the error is swallowed, argv
+# stays empty, nothing ever matches, and `kill_mine` prints `killed=0`, which
+# reads as "nothing to kill" and sends the operator back to pkill. That is this
+# file's own failure mode reappearing one level down, so the NUL read below is
+# written the portable way on purpose.
 
 # Guard against double-source within a single shell.
 if [[ "${_SOLEUR_PROC_LOADED:-}" == "1" ]]; then
@@ -50,6 +66,14 @@ _SOLEUR_PROC_LOADED=1
 # bare PROC_ROOT and this file is sourceable.
 PROC_SH_ROOT="${PROC_SH_ROOT:-/proc}"
 PROC_SH_SELF_PID="${PROC_SH_SELF_PID:-$$}"
+
+# Wrapper commands that legitimately precede a shell on the command line.
+# Without this, `timeout 600 bash scripts/test-all.sh` has argv[0]=timeout and
+# is INVISIBLE to both verbs — and `timeout … bash <suite>` is a real shape in
+# this repo (scripts/lib/test-contention.sh says so in its own comments). An
+# invisible run is a silent `killed=0`, i.e. the D6 failure mode.
+_PROC_WRAPPERS='timeout env nohup nice ionice setsid stdbuf time taskset flock script unbuffer'
+_PROC_SHELLS='bash sh dash zsh ksh mksh ash busybox'
 
 # --- /proc primitives (mirrored from scripts/lib/test-contention.sh) --------
 #
@@ -98,7 +122,8 @@ _proc_self_and_ancestors() {
 
 # Canonicalize a directory so a symlinked worktree path compares equal to the
 # resolved cwd /proc reports. Without this, kill_mine refuses EVERYTHING and
-# looks correct; the positive control in the suite is what catches that.
+# looks correct — a failure the suite must have a fixture for, because a
+# positive control whose paths are already canonical cannot see it.
 _proc_canon() {
   local p="$1"
   if [[ -d "$p" ]]; then
@@ -111,50 +136,133 @@ _proc_canon() {
 # no ownership boundary would classify every match as foreign or, worse, as
 # mine — and this file's whole contract is that boundary.
 _proc_worktree() {
-  if [[ -n "${PROC_SH_WORKTREE:-}" ]]; then
-    _proc_canon "$PROC_SH_WORKTREE"
-    return 0
-  fi
   local root
-  root=$(git rev-parse --show-toplevel 2>/dev/null) || root=""
-  if [[ -z "$root" ]]; then
-    echo "proc.sh: cannot resolve the current worktree (not inside a git repository and PROC_SH_WORKTREE is unset)." >&2
-    echo "proc.sh: refusing to scan — without an ownership boundary this cannot tell your processes from another session's." >&2
+  if [[ -n "${PROC_SH_WORKTREE:-}" ]]; then
+    root=$(_proc_canon "$PROC_SH_WORKTREE")
+  else
+    root=$(git rev-parse --show-toplevel 2>/dev/null) || root=""
+    if [[ -z "$root" ]]; then
+      echo "proc.sh: cannot resolve the current worktree (not inside a git repository and PROC_SH_WORKTREE is unset)." >&2
+      echo "proc.sh: refusing to scan — without an ownership boundary this cannot tell your processes from another session's." >&2
+      return 1
+    fi
+    root=$(_proc_canon "$root")
+  fi
+
+  # The boundary must be an absolute path below the filesystem root. An empty
+  # root would make the prefix test `/*`, which matches EVERY absolute path;
+  # a bare `/` is a boundary that owns the whole machine. Both are refused
+  # structurally rather than relying on the prefix test's incidental behaviour.
+  if [[ "$root" != /* || "$root" == "/" ]]; then
+    echo "proc.sh: refusing to scan — ownership boundary '$root' is not an absolute path below /." >&2
     return 1
   fi
-  _proc_canon "$root"
+  printf '%s' "$root"
+}
+
+# Sibling worktrees nested UNDER the current root (this repo keeps them in
+# .worktrees/), space-delimited and canonicalized.
+#
+# WHY: in the ordinary non-bare layout the main checkout's toplevel is a strict
+# PREFIX of every worktree beneath it, so `kill_mine` run from the main checkout
+# would classify every sibling worktree's processes as `mine` — the exact
+# cross-session kill this file exists to prevent, arriving through the boundary
+# rather than around it. Enumerated from git, never from a hardcoded directory
+# name. Empty (and harmless) when git is unavailable or the seam is in use.
+_proc_nested_worktrees() {
+  local root="$1" line p out=""
+  while IFS= read -r line; do
+    p="${line%% *}"
+    [[ -n "$p" ]] || continue
+    p=$(_proc_canon "$p")
+    [[ "$p" == "$root" ]] && continue
+    [[ "$p" == "$root"/* ]] && out+="$p "
+  done < <(git worktree list 2>/dev/null || true)
+  printf '%s' "$out"
+}
+
+# Does this pid's own cwd lie inside the ownership boundary?
+#
+# The SINGLE source of truth for the boundary — called once during the walk and
+# again immediately before the signal, which is what collapses the pid-reuse
+# window and means a forged pid could not survive even if the channel were
+# compromised again.
+_proc_owns() {
+  local pid="$1" root="$2" nested="$3" cwd n
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  cwd=$(readlink "$PROC_SH_ROOT/$pid/cwd" 2>/dev/null) || return 1
+  [[ -n "$cwd" ]] || return 1
+  # A deleted cwd is reported by the kernel as `<path> (deleted)`, with rc 0.
+  # That is a "could not establish where this process is" state, not a path, so
+  # it is refused rather than string-matched — no positive proof, no signal.
+  [[ "$cwd" == *' (deleted)' ]] && return 1
+  cwd=$(_proc_canon "$cwd")
+  for n in $nested; do
+    [[ "$cwd" == "$n" || "$cwd" == "$n"/* ]] && return 1
+  done
+  # The trailing `/` is the whole prefix boundary: without it a sibling
+  # worktree named `<ROOT>-two` is selected as ours.
+  [[ "$cwd" == "$root" || "$cwd" == "$root"/* ]]
+}
+
+# A path rendered safe to print. Control characters in a directory name must
+# never reach the operator's terminal verbatim, and must never be mistaken for
+# structure in this tool's own output.
+_proc_show_cwd() {
+  local pid="$1" cwd
+  cwd=$(readlink "$PROC_SH_ROOT/$pid/cwd" 2>/dev/null) || cwd=""
+  [[ -n "$cwd" ]] || { printf '<unreadable>'; return 0; }
+  printf '%s' "$cwd" | tr '\n\t\r' '???'
 }
 
 # --- Matching --------------------------------------------------------------
 
 # Does this /proc/<pid> match PATTERN, by ARGV POSITION rather than by substring
 # anywhere in the joined command line (cq-assert-anchor-not-bare-token applied
-# to process matching)? A process matches only when either:
-#   (a) argv[0]'s basename IS the pattern (direct exec), or
-#   (b) argv[0] is a shell AND some later argument is a whitespace-free path
-#       whose basename is the pattern.
+# to process matching)?
 #
-# Every weaker rule was tried and rejected against real command lines: a
-# substring over the joined cmdline matches any process that merely MENTIONS
+# A substring over the joined cmdline matches any process that merely MENTIONS
 # the target — including `grep -rn test-all.sh scripts/`, so `kill_mine
 # test-all.sh` would kill the operator's own grep.
 _proc_is_match() {
   local d="$1" pat="$2"
   [[ -r "$d/cmdline" ]] || return 1
+
+  # Portable NUL-separated argv read. NOT `mapfile -d ''` — see PORTABILITY.
   local -a argv=()
-  mapfile -t -d '' argv < "$d/cmdline" 2>/dev/null || true
+  local arg
+  while IFS= read -r -d '' arg; do
+    argv+=("$arg")
+  done < "$d/cmdline"
   (( ${#argv[@]} > 0 )) || return 1
 
-  local a0="${argv[0]##*/}"
-  [[ "$a0" == "$pat" ]] && return 0
-  case "$a0" in
-    bash | sh | dash | zsh | ksh) ;;
-    *) return 1 ;;
-  esac
+  local i=0 b seen_wrapper=0
+  # Step over leading wrapper commands so `timeout 600 bash suite.sh` and
+  # `env FOO=1 bash suite.sh` are not invisible. Stop at the first shell, or at
+  # a direct exec of the target itself.
+  #
+  # A wrapper's OWN arguments must be stepped over too — `timeout` takes a
+  # duration, `env` takes VAR=value pairs — so once a wrapper has been seen the
+  # scan tolerates intervening tokens until a shell or the pattern appears.
+  # Without that, `timeout 600 bash suite.sh` stops at `600` and the run is
+  # invisible, which is the silent `killed=0` this file exists to prevent.
+  #
+  # The tolerance is gated on `seen_wrapper` so the no-wrapper case keeps the
+  # strict rule: argv[0] must itself be a shell or the target. That strictness
+  # is what stops `grep -rn test-all.sh scripts/` from being selected.
+  while (( i < ${#argv[@]} )); do
+    b="${argv[i]##*/}"
+    [[ "$b" == "$pat" ]] && return 0
+    case " $_PROC_SHELLS " in *" $b "*) break ;; esac
+    case " $_PROC_WRAPPERS " in *" $b "*) seen_wrapper=1; i=$(( i + 1 )); continue ;; esac
+    (( seen_wrapper )) || return 1
+    i=$(( i + 1 ))
+  done
+  (( i < ${#argv[@]} )) || return 1
 
-  local tok i
-  for (( i = 1; i < ${#argv[@]}; i++ )); do
-    tok="${argv[i]}"
+  local tok j
+  for (( j = i + 1; j < ${#argv[@]}; j++ )); do
+    tok="${argv[j]}"
     [[ "$tok" == *[[:space:]]* ]] && continue
     [[ "${tok##*/}" == "$pat" ]] && return 0
   done
@@ -164,33 +272,30 @@ _proc_is_match() {
 # --- The single walk -------------------------------------------------------
 #
 # ONE walk, shared by both verbs, so there is exactly one place where a pid can
-# be classified. Emits tab-separated rows; every field is non-empty (refusal
-# reasons are sentinelled) because tab is IFS-WHITESPACE, so a reader's
-# `IFS=$'\t' read` would collapse runs and drop empty middle fields, shifting
-# every later field one position left.
-#
-#   signal <TAB> <pid> <TAB> <cwd>      -- owned by this worktree
-#   refuse <TAB> <pid> <TAB> <cwd>      -- owned by something else
-#   skip   <TAB> <pid> <TAB> <reason>   -- excluded by our own guard
-#   total  <TAB> <n>   <TAB> -          -- pids examined
+# be classified. Emits `<class><TAB><pid>` where class is one of the literals
+# below and pid is numeric — NO PATHS (see the header). `total` carries a count
+# rather than a pid.
 _proc_scan() {
-  local pat="$1" root="$2"
-  local excluded self_pgrp d pid pgrp cwd scanned=0
+  local pat="$1" root="$2" nested="$3"
+  local excluded self_pgrp d pid pgrp scanned=0
 
   excluded=" $(_proc_self_and_ancestors)"
 
   # Own process GROUP. The command-substitution subshells and `&`-backgrounded
   # forks of THIS very invocation share its pgid but are NOT in the ancestor
   # chain, so ancestry alone lets proc.sh select a transient fork of itself. A
-  # genuinely separate session — another worktree, another terminal — has a
-  # DIFFERENT pgid, so pgid is the exact discriminator. Empty when self has no
-  # readable stat (the synthetic-self test path), which correctly disables it.
+  # genuinely separate session has a DIFFERENT pgid, so pgid is the exact
+  # discriminator.
   self_pgrp=$(_proc_pgrp "$PROC_SH_ROOT/$PROC_SH_SELF_PID/stat" 2>/dev/null) || self_pgrp=""
   [[ "$self_pgrp" =~ ^[0-9]+$ ]] || self_pgrp=""
 
   for d in "$PROC_SH_ROOT"/[0-9]*; do
     [[ -d "$d" ]] || continue
     pid="${d##*/}"
+    # The glob only guarantees a LEADING digit: `12abc` and `0` both match it,
+    # and `kill -TERM 0` signals the caller's whole process group. Validated
+    # here so no non-pid can reach the signal site.
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || continue
     scanned=$(( scanned + 1 ))
 
     [[ "$excluded" == *" $pid "* ]] && continue
@@ -198,27 +303,36 @@ _proc_scan() {
 
     pgrp=$(_proc_pgrp "$d/stat") || pgrp=""
     if [[ -n "$self_pgrp" ]] && [[ "$pgrp" == "$self_pgrp" ]]; then
-      printf 'skip\t%s\t%s\n' "$pid" "same-process-group"
+      printf 'skip\t%s\n' "$pid"
       continue
     fi
 
-    cwd=$(readlink "$d/cwd" 2>/dev/null) || cwd="<unreadable>"
-    [[ -n "$cwd" ]] || cwd="<unreadable>"
-    if [[ "$cwd" != "<unreadable>" ]]; then
-      cwd=$(_proc_canon "$cwd")
-    fi
-
-    # The trailing `/` is the whole prefix boundary: without it a sibling
-    # worktree named `<ROOT>-two` is selected as ours. Highest-risk
-    # one-character defect in this file.
-    if [[ "$cwd" == "$root" || "$cwd" == "$root"/* ]]; then
-      printf 'signal\t%s\t%s\n' "$pid" "$cwd"
+    if _proc_owns "$pid" "$root" "$nested"; then
+      printf 'signal\t%s\n' "$pid"
     else
-      printf 'refuse\t%s\t%s\n' "$pid" "$cwd"
+      printf 'refuse\t%s\n' "$pid"
     fi
   done
 
-  printf 'total\t%s\t-\n' "$scanned"
+  printf 'total\t%s\n' "$scanned"
+}
+
+# Reject a pattern that can never match, loudly. Both comparisons are against a
+# BASENAME, so a pattern containing `/` matches nothing — and would print
+# `killed=0`, which reads as "nothing to kill" and sends the operator back to
+# pkill.
+_proc_check_pattern() {
+  local pat="$1" verb="$2"
+  if [[ -z "$pat" ]]; then
+    echo "usage: $verb <pattern> [signal]" >&2
+    return 2
+  fi
+  if [[ "$pat" == */* ]]; then
+    echo "proc.sh: pattern '$pat' contains '/' and can never match — matching is on the BASENAME." >&2
+    echo "proc.sh: use '${pat##*/}' instead." >&2
+    return 2
+  fi
+  return 0
 }
 
 # --- Verbs -----------------------------------------------------------------
@@ -229,22 +343,20 @@ _proc_scan() {
 # it. Signals nothing — this is the dry run, and the thing to reach for first.
 list_runs() {
   local pat="${1:-}"
-  if [[ -z "$pat" ]]; then
-    echo "usage: list_runs <pattern>" >&2
-    return 2
-  fi
-  local root
+  _proc_check_pattern "$pat" list_runs || return $?
+  local root nested
   root=$(_proc_worktree) || return 1
+  nested=$(_proc_nested_worktrees "$root")
 
-  local cls pid info n=0
-  while IFS=$'\t' read -r cls pid info; do
+  local cls pid n=0
+  while IFS=$'\t' read -r cls pid; do
     case "$cls" in
-      signal) printf '%s\tmine\t%s\n' "$pid" "$info"; n=$(( n + 1 )) ;;
-      refuse) printf '%s\tforeign\t%s\n' "$pid" "$info"; n=$(( n + 1 )) ;;
-      skip) printf '%s\tskipped\t%s\n' "$pid" "$info"; n=$(( n + 1 )) ;;
+      signal) printf '%s\tmine\t%s\n' "$pid" "$(_proc_show_cwd "$pid")"; n=$(( n + 1 )) ;;
+      refuse) printf '%s\tforeign\t%s\n' "$pid" "$(_proc_show_cwd "$pid")"; n=$(( n + 1 )) ;;
+      skip) printf '%s\tskipped\tsame-process-group\n' "$pid"; n=$(( n + 1 )) ;;
       *) ;;
     esac
-  done < <(_proc_scan "$pat" "$root")
+  done < <(_proc_scan "$pat" "$root" "$nested")
 
   (( n > 0 )) || echo "no processes match '$pat'"
   return 0
@@ -257,51 +369,81 @@ list_runs() {
 # is indistinguishable from a match that never happened.
 #
 # Individual pids are signalled, never a process group: `kill -TERM 0` can
-# reach the parent. Default TERM, no escalation to KILL.
+# reach the parent. Default TERM; the caller may pass another signal, and no
+# escalation to KILL happens on its own.
 kill_mine() {
   local pat="${1:-}" sig="${2:-TERM}"
-  if [[ -z "$pat" ]]; then
-    echo "usage: kill_mine <pattern> [signal]" >&2
-    return 2
-  fi
-  local root
+  _proc_check_pattern "$pat" kill_mine || return $?
+  local root nested
   root=$(_proc_worktree) || return 1
+  nested=$(_proc_nested_worktrees "$root")
 
-  local killed=0 refused=0 skipped=0 scanned=0
-  local cls pid info
-  while IFS=$'\t' read -r cls pid info; do
+  # Fail SAFE, not open: anything other than an explicit off value means dry
+  # run. The previous form matched only the literal `1`, so PROC_SH_DRY_RUN=true
+  # performed a REAL kill on an operator who had asked for a rehearsal.
+  local dry=0
+  case "${PROC_SH_DRY_RUN:-0}" in
+    0 | false | "") dry=0 ;;
+    *) dry=1 ;;
+  esac
+
+  local killed=0 refused=0 skipped=0 failed=0 scanned=0
+  local cls pid rc
+  while IFS=$'\t' read -r cls pid; do
     case "$cls" in
       signal)
-        if [[ "${PROC_SH_DRY_RUN:-0}" == "1" ]]; then
-          printf 'would-signal %s %s\n' "$pid" "$info" >> "${PROC_SH_DRY_RUN_LOG:-/dev/null}"
-        else
-          kill -"$sig" "$pid" 2>/dev/null || true
+        # Re-verify ownership at the signal site. The walk's verdict is about a
+        # pid at scan time; a pid can die and be recycled onto an unrelated
+        # process before this line runs. One extra readlink collapses that
+        # window, and makes the boundary structural rather than a claim about
+        # a value that travelled through a channel.
+        if ! _proc_owns "$pid" "$root" "$nested"; then
+          refused=$(( refused + 1 ))
+          printf 'refused   pid=%s reason=%s\n' "$pid" "ownership-changed-before-signal"
+          continue
         fi
-        killed=$(( killed + 1 ))
-        printf 'signalled pid=%s cwd=%s\n' "$pid" "$info"
+        if (( dry )); then
+          printf 'would-signal pid=%s cwd=%s\n' "$pid" "$(_proc_show_cwd "$pid")"
+          killed=$(( killed + 1 ))
+          continue
+        fi
+        rc=0
+        kill -"$sig" "$pid" 2>/dev/null || rc=$?
+        if (( rc == 0 )); then
+          killed=$(( killed + 1 ))
+          printf 'signalled pid=%s cwd=%s\n' "$pid" "$(_proc_show_cwd "$pid")"
+        else
+          # A swallowed failure counted as a kill is a lie in the direction
+          # that matters: the operator reads killed=1 and stops looking.
+          failed=$(( failed + 1 ))
+          printf 'FAILED    pid=%s rc=%s (signal not delivered)\n' "$pid" "$rc"
+        fi
         ;;
       refuse)
         refused=$(( refused + 1 ))
-        printf 'refused   pid=%s cwd=%s\n' "$pid" "$info"
+        printf 'refused   pid=%s cwd=%s\n' "$pid" "$(_proc_show_cwd "$pid")"
         ;;
       skip)
         skipped=$(( skipped + 1 ))
-        printf 'refused   pid=%s reason=%s\n' "$pid" "$info"
+        printf 'refused   pid=%s reason=%s\n' "$pid" "same-process-group"
         ;;
       total) scanned="$pid" ;;
       *) ;;
     esac
-  done < <(_proc_scan "$pat" "$root")
+  done < <(_proc_scan "$pat" "$root" "$nested")
 
-  # Printed on EVERY invocation, and skipped_same_pgroup is counted SEPARATELY
-  # on purpose. The pgid exclusion can legitimately suppress a real target —
-  # under a non-interactive shell without job control, a run launched with `&`
-  # from the same shell shares this pgid. A bare `killed=0` would then read as
+  # Printed on EVERY invocation. `skipped_same_pgroup` is counted SEPARATELY
+  # because the pgid exclusion can legitimately suppress a real target — under
+  # a non-interactive shell without job control, a run launched with `&` from
+  # the same shell shares this pgid. A bare `killed=0` would then read as
   # "nothing to kill" and send the operator straight back to pkill, which is
   # the precise failure this file exists to prevent, one level down. The
   # documented workaround is to launch under `setsid`, which creates a new pgid.
-  printf 'killed=%s refused=%s skipped_same_pgroup=%s scanned=%s\n' \
-    "$killed" "$refused" "$skipped" "$scanned"
+  # `mode` is on the line because output alone could not previously distinguish
+  # a rehearsal from a real kill.
+  printf 'killed=%s failed=%s refused=%s skipped_same_pgroup=%s scanned=%s mode=%s\n' \
+    "$killed" "$failed" "$refused" "$skipped" "$scanned" \
+    "$( (( dry )) && printf 'dry-run' || printf 'live' )"
   return 0
 }
 
