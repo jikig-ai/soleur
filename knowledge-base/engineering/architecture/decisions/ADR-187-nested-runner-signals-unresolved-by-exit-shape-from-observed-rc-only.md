@@ -120,8 +120,11 @@ instead and a comment at the emit site records why.
 
 `.github/workflows/main-health-monitor.yml` told the operator that only "the six suites this
 runner starts via `bun`/`node` directly" could surface a signal-shaped exit. After this ADR the
-set grows by **108** — the 98 infra suites behind `run-registered-suites.sh` plus the 10 fixture
-suites behind `.github/scripts/test/run-all.sh`. Left unedited, that guidance would under-state
+set grows by **109** — the 98 infra suites behind `run-registered-suites.sh` plus the 11 fixture
+suites behind `.github/scripts/test/run-all.sh`. (Both figures are re-derived from the as-written
+tree, not from the plan: the fixture count is 11 rather than the plan's 10 because this same
+change adds the propagation guard as an 11th suite and raises that runner's `MIN_SUITES` floor to
+match.) Left unedited, that guidance would under-state
 the search space on exactly the issue an operator reads when a suite is terminated. It is updated
 in the same change.
 
