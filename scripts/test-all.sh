@@ -65,8 +65,17 @@ export TC_TMPDIR="${TC_TMPDIR:-/tmp}"
 # Elapsed time uses bash 5.0+ EPOCHREALTIME (microsecond precision, no
 # coreutils dependency, portable across Linux + Homebrew bash on macOS).
 # CI runs ubuntu-latest (bash 5.x). macOS default /bin/bash is 3.2 — install
-# bash 5 from Homebrew if you need timing locally; otherwise EPOCHREALTIME
-# resolves to empty and elapsed_ms computes 0 silently.
+# bash 5 from Homebrew if you need timing locally; otherwise EPOCHREALTIME is
+# unset and elapsed_ms computes 0 silently.
+#
+# Both reads below are `${EPOCHREALTIME:-}`, never bare. This file runs under
+# `set -euo pipefail` (line 2), so a BARE read on a shell without the variable
+# is an unbound-variable ABORT in run_suite — the runner would die on its FIRST
+# suite with no summary, no rc file and no [FAIL], which is exactly the shape
+# work/SKILL.md's triage table attributes to a harness REAP, sending the
+# operator into a relaunch loop that reproduces it forever. The `*.*` guard
+# below only works if the read reaches it. (#7484 review; the same class was
+# found and fixed in scripts/lib/test-contention.sh.)
 
 # --- Version Check ---
 # Gated on bun being installed so the script runs cleanly in a bun-free
@@ -334,7 +343,7 @@ run_suite() {
   if [[ -n "${TEST_TIMING_LOG:-}" ]]; then
     tmp_before=$(tc_tmp_entry_count)
   fi
-  local start="$EPOCHREALTIME"
+  local start="${EPOCHREALTIME:-}"
   echo "--- $label ---"
   # Capture the exit code rather than testing it. `if ! "$@"` is a boolean test:
   # it discards WHICH non-zero the suite returned, which is precisely the
@@ -368,7 +377,7 @@ run_suite() {
   # and the captured value is empty or non-dotted) and exits elapsed_ms=0
   # gracefully instead of arithmetic-overflowing on `${start#*.}` returning
   # the whole string.
-  local end="$EPOCHREALTIME"
+  local end="${EPOCHREALTIME:-}"
   local elapsed_ms=0
   if [[ "$start" == *.* && "$end" == *.* ]]; then
     local start_us=$(( ${start%.*} * 1000000 + 10#${start#*.} ))
@@ -564,6 +573,10 @@ _diff_touches() {
   done
   return 1
 }
+
+# Counted at the RELEVANCE call sites only. `skipped` also carries the infra runner's incident and
+# not_in_diff declines, which SOLEUR_TEST_FORCE_ALL cannot force -- see the epilogue lever.
+_relevance_declined=0
 
 _infra_in_diff=0
 if grep -qF 'apps/web-platform/infra/' <<<"$_diff_names"; then
@@ -1006,6 +1019,7 @@ if want_scripts; then
   if _diff_touches "${REGISTRY_BATTERY_PATHS[@]}"; then
     run_suite "tests/scripts/registry-gate-mutation-battery" bash tests/scripts/test-registry-gate-mutation-battery.sh
   else
+    _relevance_declined=$((_relevance_declined + 1))
     skip_suite "tests/scripts/registry-gate-mutation-battery" "relevance" \
       "bash tests/scripts/test-registry-gate-mutation-battery.sh"
   fi
@@ -1186,6 +1200,7 @@ if want_scripts; then
   if _diff_touches "${CF_TUNNEL_BATTERY_PATHS[@]}"; then
     run_suite "scripts/cf-tunnel-liveness-gate-mutations" bash scripts/cf-tunnel-liveness-gate-mutations.test.sh
   else
+    _relevance_declined=$((_relevance_declined + 1))
     skip_suite "scripts/cf-tunnel-liveness-gate-mutations" "relevance" \
       "bash scripts/cf-tunnel-liveness-gate-mutations.test.sh"
   fi
@@ -1202,6 +1217,30 @@ if want_scripts; then
   # and freeze-lock.test.sh had never gated CI.
   for f in plugins/soleur/test/*.test.sh plugins/soleur/skills/*/test/*.test.sh plugins/soleur/scripts/*.test.sh .claude/hooks/*.test.sh .claude/hooks/lib/*.test.sh apps/cla-evidence/scripts/*.test.sh apps/web-platform/scripts/*.test.sh apps/web-platform/scripts/lib/*.test.sh scripts/lib/*.test.sh; do
     [[ -f "$f" ]] || continue
+    # RELEVANCE-GATED (ADR-181) — declined on 96% of recent commits, and the only suite this loop
+    # registers whose cost justifies a predicate. The justification is the SKIP RATE, not a
+    # wall-clock figure: see the measurement caveat in scripts/lib/test-relevance-paths.sh, where
+    # three reps of an unchanged tree spanned 23-91 s under sibling load. A per-file `if` rather
+    # than a lookup table: bash 3.2 has no associative arrays and one gated member does not earn a
+    # mapping.
+    #
+    # The label is written LITERALLY, not as "$f". skip_suite's contract is "$1 = label (must
+    # match the label the suite would have run under)" and this loop's label IS the path, so the
+    # two agree byte-for-byte — TEST_TIMING_LOG rows and any anchored reader stay stable.
+    #
+    # An `if` block, never `[[ … ]] && continue`: _diff_touches's own header forbids the short
+    # form because under `set -e` its exit status depends on the call site.
+    #
+    # `run_suite "$f" bash "$f"` below is left byte-for-byte unchanged, so the glob's discovery
+    # surface is untouched and the suite is still registered exactly once, by the glob.
+    if [[ "$f" == "plugins/soleur/test/c4-from-components.test.sh" ]]; then
+      if ! _diff_touches "${C4_PRODUCER_PATHS[@]}"; then
+        _relevance_declined=$((_relevance_declined + 1))
+        skip_suite "plugins/soleur/test/c4-from-components.test.sh" "relevance" \
+          "bash plugins/soleur/test/c4-from-components.test.sh"
+        continue
+      fi
+    fi
     run_suite "$f" bash "$f"
   done
 fi
@@ -1248,8 +1287,25 @@ fi
 # The guard-script fixture runner. Its own MIN_SUITES floor (10) is what makes a silently
 # empty run fail rather than pass, so registering it here inherits that floor instead of
 # re-implementing one.
+#
+# THE FLOOR AND A DECLINE ARE DIFFERENT OUTCOMES. The floor still applies whenever the runner
+# runs, but it is not evaluated at all when the runner is DECLINED — nothing inside it executes.
+# What distinguishes "declined" from "ran and found nothing" is skip_suite's output, which names
+# the suite, the reason, and the exact re-run command. Reading the floor as coverage of a run
+# that never happened is the same green-that-is-not-evidence shape ADR-181 closes one level up.
+#
+# RELEVANCE-GATED (ADR-181) — declined on 56% of recent commits. `run_suite … bash
+# .github/scripts/test/run-all.sh` keeps its
+# command shape byte-for-byte because scripts/lint-orphan-test-suites.sh's REQUIRED_RUNNERS check
+# anchors on the COMMAND, not the label.
 if want_scripts; then
-  run_suite ".github/scripts/test/run-all.sh" bash .github/scripts/test/run-all.sh
+  if _diff_touches "${GITHUB_SCRIPTS_SUITE_PATHS[@]}"; then
+    run_suite ".github/scripts/test/run-all.sh" bash .github/scripts/test/run-all.sh
+  else
+    _relevance_declined=$((_relevance_declined + 1))
+    skip_suite ".github/scripts/test/run-all.sh" "relevance" \
+      "bash .github/scripts/test/run-all.sh"
+  fi
 fi
 
 _emit_bytes_probe "__run_boundary_end__"
@@ -1273,6 +1329,22 @@ tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"
 # that added the gate.
 if (( killed > 0 || skipped > 0 )); then
   echo "=== $suites suites: $((suites - failed - killed - skipped)) passed, $failed failed, $killed killed (unresolved — coverage not obtained), $skipped skipped (declined — not relevant to this diff) ==="
+fi
+# THE LEVER, PRINTED ONCE, ONLY WHEN IT CAN ACTUALLY HELP. SOLEUR_TEST_FORCE_ALL appeared exactly
+# once in this runner -- inside _diff_touches's early return -- and was printed nowhere, while the
+# infra runner advertises its own lever in two places. A decline is only safe while it stays
+# actionable, so the recovery path belongs beside the count of declines.
+#
+# GATED ON RELEVANCE DECLINES, NOT ON `skipped`, and the wording says "relevance-gated" rather than
+# "everything". Both were defects review caught, and they compound: `skipped` also counts the infra
+# runner's incident/not_in_diff declines, which _diff_touches never sees, so the earlier form (a)
+# claimed to recover a suite it cannot, and (b) still fired after the operator obeyed it -- printing
+# the same advice verbatim on the next run, which is advice that does not terminate. Worst case was
+# SOLEUR_INCIDENT_SKIP=1 on an incident path: the only decline is one the operator set deliberately,
+# answered with an unrelated lever. The infra runner keeps advertising its own.
+if (( _relevance_declined > 0 )); then
+  echo "      To run every relevance-gated suite regardless of the diff:"
+  echo "        SOLEUR_TEST_FORCE_ALL=1 bash scripts/test-all.sh"
 fi
 echo "=== $((suites - failed - killed - skipped))/$suites suites passed ==="
 
