@@ -30,6 +30,235 @@ infra_config_expected_count() {
   sed -n '/^FILE_MAP=(/,/^)/p' "$apply_script" | grep -cE '_B64\|'
 }
 
+# Did the plan this apply consumed REPLACE terraform_data.deploy_pipeline_fix? (#7104 PR-A)
+#
+# WHY THIS EXISTS. The push that publishes a status frame is a provisioner ON that resource, so
+# it fires only when the resource is replaced. Three merge classes fire this workflow WITHOUT
+# replacing it — a change to seccomp-bwrap.json, apparmor-soleur-bwrap.profile or server.tf
+# touches none of its 24 hashed triggers — and a plain no-op dispatch is a fourth. On those runs
+# no push happens, no frame is published, and #7220's freshness pin reds a run that did nothing
+# wrong. Measured on run 31636951749 (2026-08-12, main @ 0d644396): `Plan: No changes` and
+# `Apply complete! Resources: 0 added, 0 changed, 0 destroyed`, then STALE FRAME against the
+# 2026-08-06 frame. Knowing whether a push was even expected is what separates "the handler died"
+# from "nothing was sent".
+#
+# CONTRACT. Echoes exactly the string "true" or "false" and returns 0; returns non-zero and
+# echoes nothing on ANY input it cannot classify. Polarity is therefore a property of the
+# function rather than of a regex at the call site — the caller still validates, but a bug there
+# cannot manufacture a third value.
+#
+# FAIL-CLOSED IS THE WHOLE POINT. `jq -r '.resource_changes'` on a missing key yields the STRING
+# "null" and `null | length` is 0, so the natural implementation reads a degraded plan file as
+# "nothing changed" == false == skip the freshness pin — silently and permanently restoring the
+# #7220 blind spot on a host that cannot be re-provisioned. The workflow documents this exact
+# trap ~200 lines above the call site for `host_creates`. Every non-zero return below is that
+# lesson applied: a plan we cannot read must never resolve to "no push was expected".
+#
+# Allow-list, not deny-list: an action verb terraform does not currently emit fails closed
+# rather than falling through to "false", so a future verb meaning "this was rebuilt" cannot
+# quietly disable the pin.
+infra_config_dpf_replaced() {
+  local plan_json="$1"
+  local address="${2:-terraform_data.deploy_pipeline_fix}"
+
+  if [[ ! -r "$plan_json" ]]; then
+    echo "infra_config_dpf_replaced: plan JSON '$plan_json' is not readable" >&2
+    return 1
+  fi
+
+  # One jq pass. Every rejection is an explicit error() so a malformed plan can never
+  # reach the classification below. Declared-then-assigned deliberately: `local x=$(...)`
+  # takes the exit status of `local`, not of the substitution, so the guard would never fire.
+  local actions
+  actions=$(jq -r --arg addr "$address" '
+    if (.resource_changes | type) != "array" then
+      error("resource_changes is absent or not an array")
+    elif (.resource_changes | length) == 0 then
+      # A plan with NO resource_changes at all is a genuine zero-change plan, and the honest
+      # answer is "no push was expected" — not an abort.
+      #
+      # This case is split from address-absent DELIBERATELY, and the asymmetry is the whole
+      # point. Failing closed here would mean the plan step exits 1, the apply NEVER RUNS, and
+      # the gate is skipped — strictly worse than the false-red this change removes, on the sole
+      # no-SSH remediation channel of a host that cannot be re-provisioned. Address drift, by
+      # contrast, is only diagnosable when there ARE entries to have drifted away from.
+      #
+      # Evidence is genuinely split on whether terraform emits `["no-op"]` rows for
+      # targeted-but-unchanged resources, so this arm does not depend on the answer:
+      #   * tests/scripts/fixtures/tfplan-web-platform-real-baseline.json — a REAL captured plan —
+      #     carries 73 entries, all `["no-op"]`, so terraform clearly CAN emit them.
+      #   * tests/scripts/fixtures/tfplan-web-platform-no-changes.json — the repo'"'"'s own
+      #     synthesized model of a no-changes plan — is `"resource_changes": []`.
+      # Neither is a targeted no-changes plan for THIS workflow'"'"'s four resources, and capturing
+      # one needs a prod credential this branch does not have. So both shapes are handled and
+      # neither can abort the apply.
+      "no-op"
+    else
+      [ .resource_changes[] | select(.address == $addr) ] as $matched
+      | if ($matched | length) == 0 then
+          error("address not present in resource_changes[]")
+        elif ($matched | length) > 1 then
+          error("address matched more than once")
+        elif (($matched[0].change.actions | type) != "array")
+             or (($matched[0].change.actions | length) == 0) then
+          error("change.actions is absent, mistyped or empty")
+        else
+          $matched[0].change.actions | join(" ")
+        end
+    end' "$plan_json" 2>/dev/null) || {
+    echo "infra_config_dpf_replaced: cannot adjudicate '$address' from '$plan_json' — failing CLOSED so an unreadable plan is never read as 'no push was expected'" >&2
+    return 1
+  }
+
+  # Allow-list every token before deciding. terraform's plan JSON action verbs are
+  # no-op / create / read / update / delete / forget.
+  # `read -ra` rather than `for a in $actions`: an unquoted expansion word-splits AND GLOBS
+  # against the caller's CWD (INFRA_DIR), so a terraform verb containing * ? or [ would expand
+  # to filenames. Fail-closed in practice via the allow-list, but the allow-list should not be
+  # the only thing standing between a plan verb and a path expansion.
+  local -a action_list=()
+  read -ra action_list <<<"$actions"
+  local a
+  for a in "${action_list[@]}"; do
+    case "$a" in
+      no-op|create|read|update|delete|forget) ;;
+      *)
+        echo "infra_config_dpf_replaced: unknown action verb '$a' for '$address' — failing CLOSED rather than assuming no push fired" >&2
+        return 1
+        ;;
+    esac
+  done
+
+  # `create` in any position means the resource was (re)built, so its push provisioner ran.
+  # Order-insensitive: create_before_destroy emits ["create","delete"].
+  for a in "${action_list[@]}"; do
+    if [[ "$a" == "create" ]]; then
+      echo "true"
+      return 0
+    fi
+  done
+  echo "false"
+  return 0
+}
+
+# Verdict for the no-push arm: DPF_REPLACED == false, so no NEW frame should exist. (#7104 PR-A)
+#
+#   infra_config_frame_stability <post_ts> <pre_ts> <pre_status> <now_epoch> [apply_start_epoch]
+#
+# Echoes one verdict token and returns 0 to PASS, non-zero to fail closed. Extracted rather than
+# left inline in the workflow for the same reason #6594 extracted adjudicate_infra_config: logic
+# that lives only in YAML is logic nothing drives.
+#
+# WHAT A `stable` VERDICT ESTABLISHES — the narrow version, because the plan review's prose
+# overclaimed it and the CTO ruling corrected it:
+#   * IT DOES prove that NO NEW STATUS FRAME WAS PUBLISHED across this run — the endpoint
+#     answered, the frame parses, and it is the same frame it was before the apply. Stated that
+#     narrowly on purpose: an earlier draft glossed it as "i.e. no unexpected push occurred",
+#     which is a stronger claim than the measurement supports. A push whose handler died before
+#     publishing also leaves pre == post, and that is precisely the #7220 dying-handler shape.
+#   * IT DOES NOT detect an apply-handler wipe THAT LEAVES BOTH the status-hook registration
+#     and the state file intact — that shape leaves the last frame in place, so pre == post and
+#     this passes. Stated that narrowly because the broader claim ("does not detect a wiped
+#     handler") is ALSO wrong, in the other direction: a wipe reaching /etc/webhook/hooks.json
+#     reds via the 404 branch, and a wiped state file reds twice over (cat-infra-config-state.sh
+#     returns exit_code -2 with no start_ts, which fails both adjudicate_infra_config and the
+#     numeric start_ts guard). Under-claiming is the same AP-021 miss as over-claiming.
+#   * IT DOES NOT detect a post-push tamper of hooks.json or the Doppler token: the frame
+#     records the LAST WRITE, it is not a re-read of the bytes on disk. Note this limitation is
+#     NOT specific to this verdict — infra_config_content_assert compares the digest the handler
+#     took of its own staged tmpfile at write time, so the whole content tier shares it.
+# Those two holes are real, open, and tracked separately. Callers must not describe this as
+# "verified delivery" (AP-021).
+#
+# WHY THE DEGRADED ARM PASSES INSTEAD OF FAILING CLOSED. It is reachable only when the pre-poll
+# failed AND the post-poll returned 200 — so the channel is demonstrably reachable now, and the
+# missing evidence bears only on an anomaly detector, not on the dying-handler shape the gate
+# exists to catch (that lives on the DPF_REPLACED == true arm, where APPLY_START_EPOCH still
+# applies). Failing closed here would red correct runs on a pre-apply network blip, on the very
+# workflow whose false-reds are the subject of this change. The general rule, worth keeping:
+# fail-closed is proportionate to what the MISSING EVIDENCE would have proven, not to the mere
+# fact that some evidence is missing.
+#
+# THERE IS DELIBERATELY NO LOWER BOUND ON FRAME AGE. On a no-push run the frame is legitimately
+# ancient — the 2026-08-06 frame was CORRECT on 2026-08-12. A max-age assert would re-introduce
+# the exact false-red this change removes. The upper bound is a different claim: a frame that
+# says it started in the FUTURE is a host-clock anomaly or a fabricated frame, so it fails
+# closed on BOTH sub-arms, where it is the only freshness evidence the degraded arm has left.
+infra_config_frame_stability() {
+  local post_ts="$1" pre_ts="$2" pre_status="$3" now_epoch="$4"
+  local apply_start_epoch="${5:-}"
+  local skew=300   # tolerance for NTP jitter between the host and the runner
+
+  if [[ ! "$post_ts" =~ ^[0-9]+$ ]]; then
+    echo "infra_config_frame_stability: post_ts '$post_ts' is not numeric" >&2
+    return 1
+  fi
+  if [[ ! "$now_epoch" =~ ^[0-9]+$ ]]; then
+    echo "infra_config_frame_stability: now_epoch '$now_epoch' is not numeric" >&2
+    return 1
+  fi
+
+  # Checked before the status split: it is the only assert the degraded arm still carries.
+  if [[ "$post_ts" -gt $((now_epoch + skew)) ]]; then
+    echo "future_frame"
+    return 1
+  fi
+
+  case "$pre_status" in
+    ok)
+      # `ok` asserts the pre-capture step obtained a reading. If it did not also supply the
+      # timestamp, the input is incoherent — fail closed rather than degrade, or a bug in that
+      # step would present as a routine degrade forever and nobody would look.
+      if [[ ! "$pre_ts" =~ ^[0-9]+$ ]]; then
+        echo "infra_config_frame_stability: pre_status=ok but pre_ts '$pre_ts' is not numeric" >&2
+        return 1
+      fi
+      if [[ "$post_ts" -eq "$pre_ts" ]]; then
+        echo "stable"
+        return 0
+      elif [[ "$post_ts" -gt "$pre_ts" ]]; then
+        # A push landed on a run whose plan said none would: plan/apply divergence, or a second
+        # writer on the sole credential channel of an unreplaceable host.
+        echo "unexpected_push"
+        return 1
+      else
+        # The frame moved BACKWARDS — state rollback or a host clock jump. Arguably the more
+        # alarming of the two directions, so it gets its own token rather than sharing one.
+        echo "frame_regressed"
+        return 1
+      fi
+      ;;
+    http404|unreachable|malformed|secret_unavailable|error)
+      # THE DEGRADED ARM IS NOT EVIDENCE-FREE, and it must not be — which arm runs here is
+      # decided by `pre_status`, and `pre_status` is derived from the HOST BEING VERIFIED. A
+      # host that is wedged, compromised, or merely unlucky can therefore decline to be
+      # verified by answering 404, answering 200 without a numeric start_ts, or not answering
+      # at all. Without the assert below, the subject picks its own exam.
+      #
+      # `APPLY_START_EPOCH` is a RUNNER-side timestamp captured before terraform ran, so it is
+      # not host-selectable. On a no-push run no new frame should exist at all, so a frame that
+      # postdates the apply is an unexpected push regardless of what the pre-reading said.
+      #
+      # This compares the host's clock to the runner's, which the equality arm deliberately
+      # avoids — but that objection does not apply at this tolerance: the `future_frame` check
+      # above ALREADY compares those two clocks at the same 300 s allowance, so the cross-clock
+      # comparison is one this function has accepted from the start. Requiring a full `skew`
+      # of daylight past the apply start makes it conservative in the safe direction: it can
+      # miss a push inside the skew window, and it can never false-red a stale frame.
+      if [[ "$apply_start_epoch" =~ ^[0-9]+$ ]] && [[ "$post_ts" -ge $((apply_start_epoch + skew)) ]]; then
+        echo "unexpected_push"
+        return 1
+      fi
+      echo "degraded:$pre_status"
+      return 0
+      ;;
+    *)
+      echo "infra_config_frame_stability: unknown pre_status '$pre_status' — failing CLOSED rather than treating an unrecognised status as a routine degrade" >&2
+      return 1
+      ;;
+  esac
+}
+
 # Units the repo's RESTART_MAP expects a reconciliation verdict for (#7103 R2 3.8). Derived
 # from the handler exactly as the file count is, so adding a unit ratchets the contract rather
 # than silently widening what the gate accepts as complete. One unit per line.
