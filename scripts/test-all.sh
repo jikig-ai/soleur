@@ -696,6 +696,12 @@ if want_scripts; then
   run_suite "scripts/lint-shell-capture-exit" bash scripts/lint-shell-capture-exit.test.sh
   run_suite "scripts/lint-shell-capture-exit-live" python3 scripts/lint-shell-capture-exit.py \
     --baseline scripts/lint-shell-capture-exit.baseline.txt
+  # #7471: the published distribution manifest in jikig-ai/soleur-marketplace is the
+  # ONLY artifact in the delivery path that no CI check in this repo can reach — that
+  # repo has no CI, no review, and no CODEOWNERS. scheduled-marketplace-drift.yml is its
+  # sole guard; this suite is the guard's guard. Registered explicitly because
+  # scripts/*.test.sh is NOT auto-globbed here — an unregistered gate never runs.
+  run_suite "scripts/marketplace-drift-check" bash scripts/marketplace-drift-check.test.sh
   # ADR-140: Layer A encryption-posture detector (the mechanical resolver behind
   # the "encryption at rest + in transit" design-time gate). TS-1..8,15..17 +
   # the MB-1..MB-12 mutation battery (fixture-isolated, not suite-pass-count).
@@ -1035,6 +1041,21 @@ if want_scripts; then
   run_suite "tests/scripts/zot-inventory" bash tests/scripts/test-zot-inventory.sh
   run_suite "tests/scripts/zot-inventory-assert-marker" bash tests/scripts/test-zot-inventory-assert-marker.sh
   run_suite "tests/scripts/zot-disk-sample" bash tests/scripts/test-zot-disk-sample.sh
+  # (#7440) The zot CONTAINER-LOG channel's readback probe. Registered HERE for the same reason as
+  # its #7278 siblings above: nothing auto-discovers tests/scripts/.
+  #
+  # ONLY this fixture suite belongs in this file. The shipper's own suite is an INFRA suite and its
+  # registration point is `.github/workflows/infra-validation.yml`, from which
+  # apps/web-platform/infra/run-registered-suites.sh DERIVES its list — adding it here instead
+  # would run it in ZERO runners (#3366), silent and green.
+  #
+  # The probe is INERT UNTIL DISPATCHED (the registry host is cloud-init-only, so merging applies
+  # nothing), which makes every one of its arms a false-green candidate: a probe that can never PASS
+  # is indistinguishable from one correctly reporting a not-yet. Its highest-value case is the
+  # FALSE-GREEN — a window holding nothing but SOLEUR_ZOT_DISK heartbeat rows whose zot_last_err
+  # echoes `zotregistry.dev` must NOT pass. That is not hypothetical: it is the state production is
+  # in right now, where a bare grep for that string returns 53 rows over 6h and every one is an echo.
+  run_suite "tests/scripts/zot-log-channel-probe" bash tests/scripts/test-zot-log-channel-probe.sh
   # git-data-host-replace scoped-recreate destroy-guard (#6242; 5-target, preserves BOTH data volumes + LUKS passphrase by omission).
   run_suite "tests/scripts/git-data-host-replace-gate" bash tests/scripts/test-git-data-host-replace-gate.sh
   # workspaces-luks-cutover FIRST-PROVISION destroy-guard (#6604). Permits the +create of the

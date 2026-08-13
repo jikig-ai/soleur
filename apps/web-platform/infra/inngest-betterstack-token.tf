@@ -1,6 +1,12 @@
-# Better Stack Logs ingest token for the dedicated arm64 Inngest host's Vector shipper (#6197).
+# Better Stack Logs ingest token for the dedicated Inngest host's Vector shipper (#6197).
 #
-# The dedicated host (cax11, arm64, 10.0.1.40) runs vector.service under
+# ARCH CORRECTED 2026-08-11 (#7228). This header described the host as "cax11, arm64". It is
+# neither: arch is DERIVED (`local.inngest_arch`, inngest-host.tf:62) from `var.inngest_server_type`,
+# which defaults to `cpx22` — so the live host is amd64 and the arm64 checksum is the unused arm
+# of the ternary. cax11 was the intended type at #6178 provision time and was EU-wide out of
+# stock, so the fleet never ran it. Do not re-derive the arch here; read it from that local.
+#
+# The dedicated host (cpx22, amd64, 10.0.1.40) runs vector.service under
 # `doppler run --config prd` (the soleur-inngest project resolves from
 # EnvironmentFile=/etc/default/inngest-server, #6555), so BETTERSTACK_LOGS_TOKEN must live in
 # the ISOLATED soleur-inngest project's `prd` root config — it currently exists only in
@@ -17,7 +23,7 @@
 # soleur/prd_terraform (the TF runner's TF_VAR source) → verify read-only via `doppler secrets get`
 # → THEN the additive `inngest_host` dispatch applies this pure-create resource. TF_VAR_betterstack_logs_token
 # has NO default (hr-tf-variable-no-operator-mint-default). dev is intentionally NOT provisioned:
-# the dark arm64 host reads `--config prd` exclusively (hr-dev-prd-distinct).
+# the dark host reads `--config prd` exclusively (hr-dev-prd-distinct).
 
 resource "doppler_secret" "inngest_betterstack_logs_token" {
   # Reference the TF-managed project + env (NOT string literals) so Terraform builds the

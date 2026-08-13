@@ -63,12 +63,12 @@
 #
 # Every section carries a NON-VACUITY FLOOR: a parse that silently matches nothing must fail
 # loudly rather than report a clean sweep of an empty set. The SWEEP-SIZE floors (FLOOR_RESOURCES
-# 15, FLOOR_DESTS 52, FLOOR_IDENTITY 5, FLOOR_SEEDED 36) are pinned at the EXACT baseline rather
+# 16, FLOOR_DESTS 57, FLOOR_IDENTITY 5, FLOOR_SEEDED 40) are pinned at the EXACT baseline rather
 # than baseline-minus-slack: any slack is a silent-erosion window, and removing a provisioner or a
 # delivered artifact is a Phase-5-class change that should cost a deliberate edit here. The §0
 # PARSE floors keep slack on purpose -- cloud-init.yml and the bake list legitimately shrink as
-# artifacts move onto the image. That slack is real and worth naming: baked 45 vs floor 40,
-# write_files 13 vs floor 10, bootstrap installs 42 vs floor 30. Inside each window an extraction
+# artifacts move onto the image. That slack is real and worth naming: baked 49 vs floor 40,
+# write_files 13 vs floor 10, bootstrap installs 46 vs floor 30. Inside each window an extraction
 # can go partially blind without tripping the floor (review demonstrated three write_files paths
 # hidden at 13->10), so the §0 floors detect a COLLAPSED parse, not a degraded one. The
 # per-destination checks in §2/§3 are what cover the degraded case.
@@ -214,7 +214,7 @@ for name, body in hcl_blocks(srv, "terraform_data"):
     if re.search(r'connection\s*\{[^{}]*?\btype\s*=\s*"ssh"', body, re.S):
         ssh_resources[name] = body
 
-FLOOR_RESOURCES = 15
+FLOOR_RESOURCES = 16
 if len(ssh_resources) >= FLOOR_RESOURCES:
     ok(f"1: swept {len(ssh_resources)} SSH-connected terraform_data resources (floor {FLOOR_RESOURCES})")
 else:
@@ -577,7 +577,7 @@ for dest in sorted(all_dests):
 # the sweep quietly covers 50 while reporting a clean run (#7014 gap 1). Removing a delivered
 # artifact is a Phase-5-class change (plan §5.3(c)), so it SHOULD cost an explicit edit here --
 # same margin-zero rationale as FLOOR_RESOURCES and FLOOR_IDENTITY.
-FLOOR_DESTS = 52
+FLOOR_DESTS = 57
 if len(all_dests) >= FLOOR_DESTS:
     if not uncovered:
         ok(f"2: all {len(all_dests)} SSH-written destinations have a fresh-boot writer "
@@ -617,7 +617,7 @@ else:
 # theorem: give a bootstrap-installed destination a second fresh-boot writer and §3's floor
 # becomes independently trippable. Its value either way is that an intersection collapse is
 # named HERE rather than inferred from a neighbour.
-FLOOR_SEEDED = 36
+FLOOR_SEEDED = 40
 if n_checked >= FLOOR_SEEDED:
     ok(f"3: the seed-baked check ran over {n_checked} bootstrap-installed destinations "
        f"(floor {FLOOR_SEEDED})")

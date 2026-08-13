@@ -71,6 +71,14 @@ infra/
 !infra/web-git-data-probe.service
 !infra/web-git-data-probe.timer
 !infra/web-probe-envwrite.sh
+# (#7228) Consumer-side detection for the dark-bind outage. Three coupled surfaces must agree
+# or the probe ships undelivered: server.tf's baked set, the Dockerfile COPY, and this
+# re-include — `COPY . .` drops anything the ignore file excludes, so a file baked in the two
+# places above and missing here is silently absent from the image.
+!infra/inngest-consumer-probe.sh
+!infra/inngest-consumer-probe.service
+!infra/inngest-consumer-probe.timer
+!infra/inngest-registry-probe.sh
 scripts/
 # Allow the post-build dev-signin grep gate (R3 / feat-dev-signin-bypass).
 # The Dockerfile builder stage runs `bash scripts/assert-dev-signin-eliminated.sh`

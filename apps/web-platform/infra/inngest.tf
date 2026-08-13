@@ -366,6 +366,71 @@ resource "doppler_secret" "inngest_heartbeat_url_prd" {
   }
 }
 
+# ---------------- #7228: consumer-side serviceability heartbeat ----------------
+# WHY A SECOND HEARTBEAT RATHER THAN REPOINTING THE FIRST. `inngest_prd` above is fed by a
+# systemd timer that runs `curl "$INNGEST_HEARTBEAT_URL"` on the host — it asserts A TIMER FIRED
+# and nothing else. That is why it stayed green for the twelve days (2026-07-30 → 2026-08-11) in
+# which the dedicated host never bound :8288 and every app dispatch failed with ECONNREFUSED
+# (#7228). Splitting or repointing it would mint a second signal with the same defect. This beat
+# is fed from the CONSUMER side instead — inngest-consumer-probe.sh on the web host, which pings
+# only after reading a NON-EMPTY function registry out of 10.0.1.40:8288/v0/gql — so a green beat
+# here means the scheduler actually serves.
+#
+# AND IT MUST BE A NEW `doppler_secret`, NEVER A VALUE EDIT. Every doppler_secret in this file
+# carries `ignore_changes = [value]` (see the header note above). Repointing
+# `inngest_heartbeat_url_prd.value` at a different heartbeat would therefore plan NO change and
+# apply NOTHING, while every acceptance check that greps for the new wiring still passed — a
+# silent no-op wearing a green badge, which is the same class of failure as the monitor it
+# replaces.
+#
+# Independent of the dedicated host by construction: the feeder runs on web-1, so this ships
+# detection on MERGE, with no `apply_target=inngest-host-replace` and no cutover window.
+resource "betteruptime_heartbeat" "inngest_consumer" {
+  name = "soleur-inngest-consumer-prd"
+  # period/grace mirror web_zot_consumer (web-probe.tf): a 60s probe cadence with a 180s period
+  # tolerates three consecutive missed runs, so a single slow GQL response or timer skew never
+  # pages, while a genuine outage alarms inside ~4 minutes.
+  period    = 180
+  grace     = 60
+  call      = false
+  sms       = false
+  email     = true
+  push      = false
+  team_wait = 0
+  team_name = "Your team"
+  policy_id = var.betterstack_paid_tier ? betteruptime_policy.inngest[0].id : null
+  # `paused` in SOURCE; the ONLY unpause path is the ADR-117 measured-beat arm gate in
+  # apply-web-platform-infra.yml, which PATCHes paused=false, polls for status=up (proving a REAL
+  # beat landed), and rolls back to paused if none arrives. Deliberately NOT the UI step the
+  # `inngest_prd` comment above still offers — that predates ADR-117, and an operator UI step
+  # would be an undeferred manual action (hr-never-label-any-step-as-manual-without). #6537 is
+  # the precedent this guards against: a probe that "claimed to have shipped" and left its
+  # monitor inert for nine days.
+  paused     = true
+  sort_index = 0
+
+  lifecycle {
+    # The arm gate's unpause MUST NOT be reverted by a later apply.
+    ignore_changes = [paused]
+  }
+}
+
+resource "doppler_secret" "inngest_consumer_url" {
+  project = "soleur"
+  config  = "prd"
+  # Consumed by inngest-consumer-probe.service via indirect expansion over
+  # INNGEST_CONSUMER_URL_KEY (server.tf bakes the name into /etc/default/inngest-consumer-probe),
+  # so this is a GENUINELY read secret, not the reserved-but-inert shape that
+  # doppler_secret.zot_heartbeat_url_prd was deleted for (#6438 B3).
+  name       = "INNGEST_CONSUMER_URL"
+  value      = betteruptime_heartbeat.inngest_consumer.url
+  visibility = "masked"
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
 # ---------------- Vector observability shipper → Better Stack Logs ----------------
 # After ~6 PR cycles of Vector ↔ Sentry envelope-format interop issues
 # (#4250 ship → #4257, #4259, #4263, #4267, #4268, #4269, #4271, #4272),

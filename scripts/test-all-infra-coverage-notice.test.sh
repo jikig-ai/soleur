@@ -71,9 +71,12 @@ s = open(path).read()
 # 1. Force the diff verdict deterministically: this suite is about the NOTICE, not about
 #    git plumbing, and deriving it from the real repo would make the arms depend on whatever
 #    the working tree happens to touch today.
-#    The two SANDBOX_* seams below are injected at the same anchor, which sits AFTER the whole
-#    three-source detection block — so an override here cannot be overwritten by a later `git`
-#    arm, and the relevance predicate downstream reads exactly the fixture this arm declared.
+#    The anchor is the INITIALISATION, which sits BEFORE the re-derivation immediately below
+#    it — so forcing the value here is not sufficient on its own. Step 1b neuters that
+#    re-derivation; without it the force is silently overwritten on any branch whose real diff
+#    touches apps/web-platform/infra/, and every arm then measures the runner RUNNING when the
+#    fixture declared it declined. That is a false RED on exactly the PRs this suite is meant
+#    to protect, and it is invisible on a branch that happens not to touch infra.
 old = '_infra_in_diff=0'
 assert s.count(old) == 1, f"expected exactly one '{old}', found {s.count(old)}"
 s = s.replace(old, (
@@ -82,6 +85,17 @@ s = s.replace(old, (
     '[[ -n "${SANDBOX_DIFF_NAMES:-}" ]] && _diff_names="$SANDBOX_DIFF_NAMES"\n'
     '[[ -n "${SANDBOX_DETECT_OK:-}" ]] && _diff_detect_ok="$SANDBOX_DETECT_OK"\n'
 ))
+
+# 1b. Neuter the re-derivation that follows the initialisation. `run_arm` does not set
+#     SANDBOX_DIFF_NAMES, so `$_diff_names` still holds the REAL diff — and a real diff that
+#     touches apps/web-platform/infra/ sets _infra_in_diff back to 1, defeating step 1.
+old1b = """if grep -qF 'apps/web-platform/infra/' <<<"$_diff_names"; then
+  _infra_in_diff=1
+fi"""
+assert s.count(old1b) == 1, f"expected exactly one infra re-derivation, found {s.count(old1b)}"
+s = s.replace(old1b, """if [[ -z "${_SANDBOX_FORCED_DIFF:-}" ]] && grep -qF 'apps/web-platform/infra/' <<<"$_diff_names"; then
+  _infra_in_diff=1
+fi""")
 
 # 2. Neuter the detection block so it cannot overwrite the forced value. SANDBOX_DETECT_OK can
 #    still force it back to 0 for the fail-SAFE arm.

@@ -237,6 +237,58 @@ dark_arm_emit_due() {
 # correct THERE and only there. The co-located web host is TODAY'S live pusher and gets no
 # arm at all -- an absent URL there is always a real fault and must stay loud.
 @@DARK_ARM@@
+#
+# --- #7228: LISTENER GATE -------------------------------------------------------------------
+# Everything above decides WHETHER THIS HOST SHOULD BEAT AT ALL. This decides whether it has
+# anything to beat ABOUT, and it is the whole of #7228.
+#
+# The beat below is `curl "$INNGEST_HEARTBEAT_URL"` fired by a 60s systemd timer: it proves a
+# TIMER FIRED, and asserts nothing whatsoever about :8288. That is why one correctly-armed,
+# correctly-scoped, unpaused monitor stayed GREEN for twelve days while the dedicated host
+# served nothing and every app dispatch failed with ECONNREFUSED. The tempting fix -- give the
+# dedicated host its own monitor -- mints a SECOND meaningless green; the monitor has to be
+# gated on a listener or it is decoration.
+#
+# NOT DEDICATED-ONLY, DELIBERATELY. This heredoc is the shared renderer for both hosts, and both
+# run inngest-server.service on loopback 127.0.0.1:8288 (:782). inngest-server-probe.sh already
+# probes that exact URL from this same file. So the gate is meaningful on both, and on the
+# co-located web host -- TODAY's live pusher, the one actually feeding the monitor -- it is what
+# converts that monitor from "a timer fired" into "the scheduler serves".
+#
+# NO `curl -f`, and `-w '%{http_code}'` is the point: -f makes curl exit non-zero and print
+# NOTHING on 4xx/5xx, collapsing every distinguishable failure into one empty string. Same
+# classification web-zot-consumer-probe.sh documents. `|| true` keeps a curl failure from being
+# the thing that decides -- the CODE decides, and a code we could not obtain is 000.
+#
+# QUOTA. The first draft of this comment argued the row "fires only while the listener is DOWN,
+# which is an active outage someone is resolving" and left it unlimited. That premise is FALSE for
+# the co-located web host in the intended POST-CUTOVER steady state, which is the state this whole
+# programme is driving toward: the dark arm is rendered EMPTY there so there is no early exit; the
+# web host's INNGEST_HEARTBEAT_URL lives in the `soleur` project and is never deleted by op=arm or
+# op=rollback (both touch soleur-inngest only); and `quiesce inngest` stops inngest-server.service
+# while leaving inngest-heartbeat.timer firing every 60s. URL present + no dark arm + no listener
+# = one row every 60s, indefinitely. That is ~1,440 rows/day as a PERMANENT steady state -- the
+# exact cost #6617b removed, and exactly the "indefinite HEALTHY steady state" the old comment
+# claimed this was not. Measured headroom is ~5.1k/day against a ~19.9k baseline, so this alone
+# would consume ~28% of what is left, and a cutover that lands on terminal `aborted` doubles it.
+# So it is rate-limited on the SAME hourly stamp helper the dark arm uses, which already handles
+# the boot-before-NTP skew case. ~24 rows/day per host in a sustained outage, and the row still
+# says WHY the monitor went silent without an SSH (hr-no-ssh-fallback-in-runbooks).
+INNGEST_HEALTH_URL="${INNGEST_HEARTBEAT_HEALTH_URL:-http://127.0.0.1:8288/health}"
+health_code="$(/usr/bin/curl -gsS -m 5 -o /dev/null -w '%{http_code}' "$INNGEST_HEALTH_URL" 2>/dev/null || true)"
+# curl prints nothing at all when it cannot even start. Normalize to the literal 000 so
+# "no HTTP response" is a VALUE; an empty field reads as missing data on the Better Stack side.
+[ -n "$health_code" ] || health_code=000
+if [ "$health_code" != "200" ]; then
+  # Rate-limited on its own stamp, independent of the dark arm's, so neither can suppress the
+  # other: they answer different questions ("deliberately dark" vs "armed but not serving").
+  if INNGEST_HEARTBEAT_DARK_STAMP="${INNGEST_HEARTBEAT_GATE_STAMP:-/run/inngest-heartbeat/gate.stamp}" dark_arm_emit_due; then
+  logger -t "$LOG_TAG" "SOLEUR_INNGEST_HEARTBEAT_SUPPRESSED listener=no health_code=$health_code — refusing to beat: inngest does not serve /health on this host, so a beat would certify only that a timer fired (#7228). Absence-of-beat is the alarm."
+  fi
+  # The exit is OUTSIDE the rate limit: the limit governs the LINE only, never the DECISION, so a
+  # suppressed log row can never convert a non-serving host into a beating one.
+  exit 0
+fi
 # -g (--globoff): the URL is a BEARER capability. Without -g, a URL containing [ ] or
 # { } makes curl print the FULL URL in its glob-parse error (`curl: (3) bad range in URL
 # position N:` followed by the URL) — measured, curl 8.18 — which FR4's SyslogIdentifier
@@ -496,8 +548,45 @@ boot_id="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
 image_ref="$(sed -n 's/^INNGEST_BOOTSTRAP_IMAGE=//p' /etc/default/soleur-inngest-image 2>/dev/null | head -1 || true)"
 [ -n "$image_ref" ] || image_ref=unknown
 
+# --- #7228: three fields whose absence cost this incident the most time -----------------
+# WHICH HOST IS THIS. 1,459 of the 1,839 rows naming inngest-server.service in a 72h window
+# came from the CO-LOCATED web host, so a substring query over the shared source table returns
+# healthy-looking rows FROM THE WRONG HOST and manufactures a false all-clear — the #7228 title
+# ("health probe certified a different server") reproduced one layer down, in the telemetry.
+# This field makes a row self-identifying instead of depending on the reader field-isolating
+# correctly. Hetzner IMDS only, deliberately: cat-deploy-state.sh's resolve_host_id() falls back
+# to /etc/machine-id and must HASH it, because machine-id(5) says the value is confidential and
+# this row's destination is a third-party vendor. Rather than carry that obligation into a
+# POSIX-sh heredoc, an unreachable IMDS degrades to `unknown` — honest, and never a leak.
+# (Fourth site to resolve a host id; cat-deploy-state.sh:32 names a 4th copy as the #6465
+# extraction trigger. Not a copy of that bash helper — no machine-id arm, no hashing — but the
+# same question, so it belongs on that ticket rather than being extracted mid-incident.)
+instance_id="$(curl -sf --max-time 3 http://169.254.169.254/hetzner/v1/metadata/instance-id 2>/dev/null || true)"
+case "$instance_id" in '' | *[!0-9]*) instance_id=unknown ;; *) instance_id="hetzner-$instance_id" ;; esac
+
+# WHAT IS ACTUALLY RUNNING. inngest.tf pins a version; whether the host runs it is a DIFFERENT
+# claim, and only the host can answer it. A replace that silently landed an older image is
+# indistinguishable from a healthy one without this.
+# Bounded: `inngest version` can perform an update check, and this runs BEFORE the probe's
+# unconditional emit — an unbounded stall here silently stops the hourly positive control, which
+# is indistinguishable from a dead host (the #6617a failure this marker exists to close).
+cli_version="$(timeout 10 /usr/local/bin/inngest version 2>/dev/null | head -1 || true)"
+[ -n "$cli_version" ] || cli_version=unknown
+
+# WHY THE SERVER IS NOT RUNNING, when it is not. inngest-server-flip-guard.sh refuses EVERY
+# prod-URI start on a flag outside {armed, flipping, flushed, done}, so this field is the
+# difference between "the host is broken" and "the host is refusing on purpose". During this
+# incident the flag sat at `rollback` — outside the allowlist — and nothing off-box could say
+# so. Read from Doppler rather than the local state slot because Doppler is what the guard
+# itself reads; the slot records the FSM's last write, which is a different question.
+# doppler's stderr is discarded, never shipped: this row's tag is allowlisted, so raw stderr
+# from a credentialed CLI would be a route from the token's own error text to Better Stack.
+cutover_flag="$(timeout 10 doppler secrets get INNGEST_CUTOVER_FLIP --project soleur-inngest --config prd --plain 2>/dev/null || true)"
+cutover_flag="$(printf '%s' "$cutover_flag" | tr -d '[:space:]')"
+[ -n "$cutover_flag" ] || cutover_flag=unknown
+
 # --- emit: unconditional, one event, all fields. NO `if` may precede this line. ---
-logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref"
+logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag"
 
 # --- second channel, AFTER the unconditional emit above (ADR-117 unaffected) ---
 # vector_active is the ONE field whose only off-box path is Vector itself: this marker reaches
@@ -514,7 +603,7 @@ logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_ac
 # branching BEFORE the unconditional emit, not after it. Fail-open: the emitter exits 0 on any
 # error and is absent on the co-located web host, so `[ -x ]` guards it.
 if [ "$vector_active" != "active" ] && [ -x /usr/local/bin/inngest-boot-phone-home.sh ]; then
-  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref" || true
+  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag" || true
 fi
 exit 0
 PROBESCRIPTEOF
@@ -530,6 +619,20 @@ Type=oneshot
 # ZERO vector.toml sources and the marker never leaves the host — the #6536 defect exactly.
 # Source 4 (vector.toml host_scripts_journald) carries the matching exact-value entry.
 SyslogIdentifier=inngest-server-probe
+# Type=oneshot disables the start timeout by default; the probe now makes two bounded network
+# calls before its unconditional emit, so bound the unit too — a hung probe holds the unit
+# `activating`, and OnUnitActiveSec cannot re-fire while it is, silently ending the hourly marker.
+TimeoutStartSec=60
+# #7228: the cutover_flag field reads Doppler, which needs DOPPLER_TOKEN + DOPPLER_CONFIG_DIR
+# and — per the #6122 boot fix — HOME, all of which live here.
+#
+# The leading `-` is load-bearing, not decoration. This bootstrap is the SHARED renderer for
+# both hosts, and /etc/default/inngest-doppler is written by cloud-init-inngest.yml, which is
+# the DEDICATED host's userdata only. Without the `-`, systemd fails the unit outright on the
+# co-located web host and the probe stops firing there entirely — a change made to add
+# observability would delete it on one of the two hosts. With it, the web host simply reports
+# cutover_flag=unknown, which is honest: that host has no cutover flag.
+EnvironmentFile=-/etc/default/inngest-doppler
 ExecStart=/usr/local/bin/inngest-server-probe.sh
 PROBEUNITEOF
 
@@ -789,12 +892,18 @@ EnvironmentFile=/etc/default/inngest-server
 # @@FLIP_GUARD_EXECSTARTPRE@@ — the P1-5 arm-atomicity guard (#6178), substituted to an
 # ExecStartPre line ON THE DEDICATED HOST ONLY (empty on the co-located web host). Wrapped
 # in `doppler run` so the guard sees INNGEST_POSTGRES_URI + INNGEST_CUTOVER_FLIP; blocks a
-# prod-URI start when the flip flag is not in {armed, flipping, done} — the guard's ACTUAL
-# allowlist, verbatim from inngest-server-flip-guard.sh's case. #6536: that is deliberately
-# NOT the full FSM (ADR-100's is armed → flipping → flushed → done), so `flushed` is omitted
-# — fail-closed + self-healing, tracked separately. Do NOT add `flushed` here to "reconcile"
-# it: this documents the guard's code, and a comment describing behaviour the code lacks is
-# the #6536 defect itself.
+# prod-URI start when the flip flag is not in {armed, flipping, flushed, done} — the guard's
+# ACTUAL allowlist, verbatim from inngest-server-flip-guard.sh's case.
+#
+# CORRECTED 2026-08-11 (#7228). This comment used to read `{armed, flipping, done}` and warned
+# against adding `flushed` to "reconcile" it, on the grounds that a comment describing behaviour
+# the code lacks is the #6536 defect itself. That reasoning is right and the comment had since
+# become an instance of it: #6553 added `flushed` to the guard's case (the FSM starts the server
+# AT flag=flushed, so without it the guard blocked the FSM's own controlled start), and this
+# prose kept asserting the older, narrower set — actively warning a future editor away from the
+# code's real behaviour. The allowlist is now quoted from the guard as it stands, and
+# inngest-server-flip-guard.test.sh derives both sets from source so the pair cannot drift again
+# without a suite failure.
 @@FLIP_GUARD_EXECSTARTPRE@@
 ExecStart=/usr/bin/doppler run --config prd -- /usr/bin/bash -c 'export INNGEST_SIGNING_KEY="$${INNGEST_SIGNING_KEY#signkey-prod-}"; @@BACKEND_ENV@@exec /usr/local/bin/inngest start --host 0.0.0.0 --port 8288 --sqlite-dir /var/lib/inngest @@BACKEND_FLAGS@@ --poll-interval 60 --sdk-url @@SDK_URL@@'
 Restart=on-failure
@@ -840,7 +949,40 @@ UNITEOF
 # stays literal until systemd unescapes $$→$ and the doppler-wrapped bash -c expands the
 # injected env (same $${...} contract as before). The `exec` in the ExecStart keeps
 # inngest as the unit's main PID (Type=simple signal/drain/`inngest pause` semantics).
-if [[ "$REDIS_READY" == "1" ]]; then
+# #7228 DIAGNOSTIC BOOT takes precedence over Redis readiness. After the 2026-08-11 rollback
+# the cutover flag rests at `rollback`, outside the flip guard's allowlist, so the guard refuses
+# every prod-URI start — and a replaced host could therefore never attempt a bind, leaving every
+# hypothesis about the original failure permanently UNKNOWN. Selecting the SQLite-only form here
+# is what makes the host startable: prod Postgres is unreachable, so no second scheduler is
+# possible, and inngest can bind :8288 and emit the discriminating `net-health` row.
+#
+# This is one HALF of a two-half agreement. The other half is inngest-server-flip-guard.sh, which
+# does NOT trust this variable: it verifies the emitted unit lacks the `--postgres-max-open-conns`
+# durable sentinel before relaxing, and BLOCKS if diagnostic is requested while the unit is still
+# durable. Both halves read INNGEST_DIAGNOSTIC_BOOT, and inngest-server-flip-guard.test.sh pins
+# that they agree — changing the variable in one place alone fails the suite rather than silently
+# producing a host that starts durably while believing it is diagnostic.
+DIAGNOSTIC_BOOT="$(printf '%s' "${INNGEST_DIAGNOSTIC_BOOT:-}" | tr -d '[:space:]')"
+case "$DIAGNOSTIC_BOOT" in
+  1 | true | TRUE | yes | YES) DIAGNOSTIC_BOOT=1 ;;
+  *) DIAGNOSTIC_BOOT=0 ;;
+esac
+
+if [[ "$DIAGNOSTIC_BOOT" == "1" ]]; then
+  BACKEND_ENV='unset INNGEST_POSTGRES_URI; '
+  BACKEND_FLAGS=''
+  # AND NEUTRALISE REGISTRY ADOPTION. The durable sentinel governs where the QUEUE lives; it does
+  # not govern whether this host discovers and OWNS the function registry. Left pointing at the
+  # live web-platform, a diagnostic host polls --sdk-url every 60s, adopts the PRODUCTION registry
+  # into its local SQLite, and then independently fires the schedule for every cron in it against
+  # the prod app — while the co-located scheduler does the same. Two independent schedulers, two
+  # run ids, one production app: duplicate cron execution, which is the double-fire this whole
+  # guard exists to prevent, reached through the diagnostic escape hatch.
+  # The diagnostic objective — does the process bind :8288, and what does net-health say — is
+  # fully satisfied with an EMPTY registry, so point the sync at a closed loopback port.
+  SDK_URL='http://127.0.0.1:1/api/inngest'
+  log "inngest-server ExecStart: DIAGNOSTIC BOOT (#7228) — SQLite-only by request; prod Postgres unreachable so no second scheduler is possible. --sdk-url is pointed at a closed loopback port so the host adopts NO registry and cannot double-fire prod crons. The host can now bind :8288 and emit net-health. This is NOT a cutover state: clear INNGEST_DIAGNOSTIC_BOOT before arming."
+elif [[ "$REDIS_READY" == "1" ]]; then
   BACKEND_ENV='export INNGEST_REDIS_URI="redis://:$${INNGEST_REDIS_PASSWORD}@127.0.0.1:6379"; '
   BACKEND_FLAGS='--postgres-max-open-conns 5 --postgres-max-idle-conns 2 --postgres-conn-max-idle-time 1'
   log "inngest-server ExecStart: durable backend (env-delivered URIs; bounded per-pool footprint open=5/idle=2/idle-time=1min; --postgres-max-open-conns sentinel FIRST) #6258"
@@ -885,7 +1027,31 @@ systemctl daemon-reload
 # pause above runs before the binary replace; this restart subsumes the start
 # and the resume below runs after.
 systemctl enable inngest-server.service 2>/dev/null || true
-systemctl restart inngest-server.service
+# --- #7228: a REFUSED start must not take the observability stack down with it -------------
+# This was the only unguarded systemctl call in this block, and under `set -euo pipefail` a
+# non-zero restart aborted the ENTIRE bootstrap here — before Vector, the server-probe timer and
+# the cutover flip timer install, all of which are sequenced below.
+#
+# That became reachable on the NORMAL replace path the moment the flip guard learned to refuse an
+# inherited `done` (inngest-server-flip-guard.sh): a replaced host boots, inherits `done` from
+# Doppler, carries no done-owner marker, the ExecStartPre BLOCKS, the restart exits non-zero, and
+# the host ends up with no shipper and no flip timer — i.e. DARK and with the recovery FSM
+# unarmed, so the `flushed` re-entry the guard's own message prescribes cannot even be polled.
+# The guard would have been protecting the host by bricking it.
+#
+# Fail-closed on the SCHEDULER (it stays stopped — that is the guard's whole point) and fail-OPEN
+# on the BOOTSTRAP, so the machinery that makes the refusal visible and recoverable still lands.
+# A dark server with working observability is the outcome #7228 exists to buy; a dark server with
+# no observability is #7228 itself.
+if ! systemctl restart inngest-server.service; then
+  # Vector may not be up yet at this point in the bootstrap, so the marker rides the
+  # Vector-INDEPENDENT direct-curl emitter as well as the log.
+  if [[ -x /usr/local/bin/inngest-boot-phone-home.sh ]]; then
+    /usr/local/bin/inngest-boot-phone-home.sh inngest-server-start-REFUSED \
+      "ExecStartPre refused or the unit failed; bootstrap CONTINUES so vector + the probe + the flip timer still install" || true
+  fi
+  log "warn: inngest-server did not start (flip guard refusal or unit failure) — continuing the bootstrap so observability and the flip timer install; read the guard's BLOCK line for the reason"
+fi
 systemctl enable --now inngest-heartbeat.timer
 # Force one heartbeat tick now so a unit-shape change (e.g. ExecStart) takes
 # effect immediately rather than waiting up to 60s for the next timer fire.

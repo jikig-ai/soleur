@@ -35,6 +35,11 @@ on:
           - arm
           - verify
           - rollback
+          # #7228: the post-flush re-entry. The flip guard refuses a prod start on a REPLACED
+          # host that inherited a completed flip's `done` without the done-owner marker, and it
+          # names INNGEST_CUTOVER_FLIP=flushed as the recovery — which no verb wrote, making the
+          # only documented recovery a bare out-of-band Doppler write against a deny-all host.
+          - resume
       cron_period_seconds:
         description: "Bucket width for the exactly-once check (op=doublefire-probe / op=verify). MUST be <= the SHORTEST registered cron period, hour-aligned. Default 3600."
         required: false
@@ -65,7 +70,12 @@ jobs:
     # secret, not an environment secret — the TF App cannot write env secrets; the reviewer gate on
     # the JOB is what enforces the ack.) Every other op evaluates to '' (no environment gate),
     # preserving their existing behaviour.
-    environment: ${{ (inputs.op == 'arm' || inputs.op == 'rollback') && 'inngest-cutover' || '' }}
+    # #7228: op=resume writes INNGEST_CUTOVER_FLIP=flushed, which AUTHORIZES a prod scheduler
+    # start on the dedicated host — the same class of prod write as arm/rollback, so it takes the
+    # same required-reviewer gate. That approval IS the prod-write ack
+    # (hr-menu-option-ack-not-prod-write-auth); omitting it here would have let a flag that starts
+    # a production scheduler be dispatched with no second pair of eyes.
+    environment: ${{ (inputs.op == 'arm' || inputs.op == 'rollback' || inputs.op == 'resume') && 'inngest-cutover' || '' }}
     # SAME group as deploy/restart — these inngest host ops share the host state
     # slot and must not interleave (P1a).
     concurrency:
@@ -110,7 +120,7 @@ jobs:
           # It is a repo secret; the op=arm/op=rollback JOB declares `environment: inngest-cutover`,
           # which holds the run for the required-reviewer approval before any step (incl. this write)
           # runs — the gate is on the JOB, not the secret (the TF App cannot write env secrets).
-          DOPPLER_TOKEN_INNGEST_ARM: ${{ (inputs.op == 'arm' || inputs.op == 'rollback') && secrets.DOPPLER_TOKEN_INNGEST_ARM || '' }}
+          DOPPLER_TOKEN_INNGEST_ARM: ${{ (inputs.op == 'arm' || inputs.op == 'rollback' || inputs.op == 'resume') && secrets.DOPPLER_TOKEN_INNGEST_ARM || '' }}
           # #6258: read-only pg_stat_activity for the op=execute 2.-1 pool pre-check
           # (same secret + endpoint scheduled-inngest-health.yml uses; TF
           # github_actions_secret.supabase_access_token). Read-only Management-API scope.

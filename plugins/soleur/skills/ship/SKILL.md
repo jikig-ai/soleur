@@ -323,20 +323,33 @@ For each new source file, check if a corresponding test file exists (e.g., `foo.
 
 **Interactive mode:** Ask the user whether to write tests now or continue without them. Do not silently proceed.
 
-Then run the project's full test suite. A default (`TEST_GROUP=all`) run now INVOKES
+Then run the project's full test suite. An unsharded (`TEST_GROUP=all`) run now INVOKES
 `apps/web-platform/infra/run-registered-suites.sh` as a nested suite whenever the diff touches
 that directory, so the summary accounts for it. Calling `test-all.sh` alone "matches CI" is what
 produced #6969: a green summary read as evidence for infra it never executed, at the last gate
 before merge.
 
 ```bash
-bash scripts/test-all.sh
+TEST_GROUP=all bash scripts/test-all.sh
 ```
+
+**What this run is, precisely — and what it is not.** Since #7352 ([ADR-183](../../../../knowledge-base/engineering/architecture/decisions/ADR-183-full-suite-runs-at-ship-not-at-implementation-exit.md)) this is the pipeline's only unsharded local run on the Claude arm; `/work` Phase 2 now exits on the `TEST_GROUP` shards its diff touches. On the **Grok** arm [grok-pre-push-gate.sh](../../scripts/grok-pre-push-gate.sh) runs [scripts/test-all.sh](../../../../scripts/test-all.sh) again at push time with no `TEST_GROUP`, so that arm has two. Four claims, in the order that keeps them honest:
+
+- **The merge gate is CI, not this run.** The required `test` context (ruleset 14145388) aggregates the same three `test-all.sh` shards on the PR head and is what actually blocks merge. Do not describe this local run as the merge gate — that over-claim is what would license a future PR to shard it.
+- **This is the LAST LOCAL fail-fast checkpoint.** It is not the post-all-code-changes position either: Phase 5.5 contains code-mutating gates that run after it.
+- **It is the sole BLOCKING gate for `apps/web-platform/infra/`** — `no required status check runs that shard`, so nothing here stops `gh pr merge --auto`. It is NOT the only place those suites run: `infra-validation.yml`'s `deploy-script-tests` job executes the same registered set on every PR touching `apps/*/infra/**` (it carries no `needs:`/`if:`), and `main-health-monitor` re-runs `TEST_GROUP=infra` on `main` every six hours. Both are visible and neither blocks. So the accurate statement is that an infra regression can reach `main` past a red-but-non-required check — not that it reaches production unobserved. Promoting `infra-validate-required` into the required set is the real fix; tracked separately.
+- **`TEST_GROUP=all` is not, by itself, a full battery on a local run.** `_diff_touches` in [scripts/test-all.sh](../../../../scripts/test-all.sh) short-circuits to "relevant" only under `CI` or `SOLEUR_TEST_FORCE_ALL=1`, neither of which holds here — so a local `TEST_GROUP=all` still DECLINES the two heavy mutation batteries and the nested infra runner when the diff does not touch their paths (ADR-181). A healthy local run therefore reads `N-k/N`, not `N/N`. If you need the declined suites to actually execute, set `SOLEUR_TEST_FORCE_ALL=1`; and note `SOLEUR_INCIDENT_SKIP=1` drops the infra set entirely while leaving this pin satisfied.
+
+**`TEST_GROUP=all` is pinned, and that pin is load-bearing.** Sharding this run for speed would delete the only *blocking* gate the registered infra suites have. It is asserted by `plugins/soleur/test/fullsuite-merge-gate.test.ts`, whose mutation is *sharding* the command rather than deleting it. Read the pin honestly, though: `TEST_GROUP` selects the shard, and `_infra_in_diff` decides whether the infra runner executes at all — so the group pin is necessary and not sufficient, and the epilogue NOTE is what tells you which happened.
+
+**A reaped run is UNRESOLVED — never ship on it, and rc=4 is not a reap.** The outcome space is four-way, not three: `rc=1` with `[FAIL]` lines is a red diff; `rc=3` with `[KILLED]` lines and a terminal marker means a suite's coverage was never obtained (re-run that suite in isolation); **`rc=4` is REFUSED — `SOLEUR_SUBAGENT=1` was set without `SOLEUR_ALLOW_FULL_GATE=1`, so nothing ran at all**; and no marker with no rc file is a harness reap. The rc=4 case exits in under a second with no `[FAIL]` lines, which makes it the easiest to misread as a reap — and ship reached from a spawned agent (a drain fan-out delegating to one-shot) inherits exactly that variable. Check for the rc file before concluding anything. With only one full run left in the pipeline there is no second chance downstream, and "unresolved" under ship-time pressure resolves to "ship anyway" far more often than to a re-run. Read the **rc file**, never the background-task completion notification.
+
+**Reading this run is documented once, in [work/SKILL.md](../work/SKILL.md) §9 "Reading a `test-all.sh` run"** — dirty-tree invalidation, the sibling-worktree false RED, harness reaping vs. the three-way split, the Doppler `TEST_GROUP=webplat` caveat, and both coverage-NOTE polarities. Those passages apply verbatim at this position; they are linked rather than restated so the two positions cannot drift.
 
 **Do NOT unconditionally run `run-registered-suites.sh` alongside it.** That instruction was
 correct before the runner was registered and is now actively harmful: both commands default
 `TMPDIR=/var/tmp`, so running them concurrently reproduces the sibling-contention shape
-`work/SKILL.md` documents and can self-inflict a false RED at the last gate before merge — while
+[work/SKILL.md](../work/SKILL.md) documents and can self-inflict a false RED at the last gate before merge — while
 paying ~4-5 minutes twice.
 
 Read the epilogue instead. `test-all.sh` reports which of these happened, keyed on whether the
@@ -366,7 +379,7 @@ Ship Checklist for [branch name]:
 - [x/skip] Artifacts committed (brainstorm/spec/plan)
 - [x/skip] Learnings captured (/compound)
 - [x/skip] README counts synced (`bash scripts/sync-readme-counts.sh`)
-- [x/skip] Tests pass
+- [x/skip] Full suite green (Phase 4, `TEST_GROUP=all`), re-run after any post-Phase-4 change
 - [ ] Preflight passed (Phase 5.4 gate)
 - [ ] Code review completed (Phase 5.5 gate)
 - [ ] Undeferred operator-step gate passed (Phase 5.5 gate)
@@ -1430,7 +1443,7 @@ log=$(mktemp -t grok-pre-push-gate.XXXXXXXX.log)
 bash plugins/soleur/scripts/grok-pre-push-gate.sh > "$log" 2>&1; rc=$?; echo "EXIT=$rc LOG=$log"
 ```
 
-Abort Phase 6 if rc != 0. The gate mirrors reproducible CI: fast required jobs, [scripts/test-all.sh](../../../../scripts/test-all.sh) (the test check), web-platform build, and grok-fidelity. Pushing without it wastes CI cycles. Claude Code: lefthook covers commit-time lint; Grok has no hook equivalent — run this gate here even if Phase 4 test-all.sh already ran (Phase 4 is mid-pipeline; this gate is the push-time recheck).
+Abort Phase 6 if rc != 0. The gate mirrors reproducible CI: fast required jobs, [scripts/test-all.sh](../../../../scripts/test-all.sh) (the test check), web-platform build, and grok-fidelity. Pushing without it wastes CI cycles. Claude Code: lefthook covers commit-time lint; Grok has no hook equivalent — run this gate here even if Phase 4 test-all.sh already ran (Phase 4 is the last local fail-fast checkpoint; this gate is the push-time recheck on the tree actually being pushed, which is what makes the Phase 4 re-run redundant on the Grok arm).
 <!-- grok-pre-push-gate:end -->
 
 Push the branch to remote. Get the branch name first:
@@ -2390,7 +2403,7 @@ The practical consequence: **compound is the last point at which archival can ha
 ## Important Rules
 
 - **Always set a semver label.** Every PR that touches `plugins/soleur/` must have a `semver:patch`, `semver:minor`, or `semver:major` label. CI uses this label to bump the version at merge time.
-- **Never edit version fields.** `plugin.json` and `marketplace.json` versions are frozen sentinels (`0.0.0-dev`). Version is derived from git tags via GitHub Releases at build time.
+- **Never add a `version` key to a plugin manifest.** None of the three carries one — `plugins/soleur/.claude-plugin/plugin.json`, this repo's local-dev `.claude-plugin/marketplace.json` (`plugins[0]`; its *top-level* `version` is the manifest-format version and stays), and the published distribution manifest in `jikig-ai/soleur-marketplace`. The reason is functional: `plugin update` compares **version strings**, and with no key the CLI records the plugin's **commit SHA** as its version, so the string changes with every commit and the update is detected. A constant version never changes, so the comparison always comes back equal and the update short-circuits — reporting success while delivering nothing (#7471). Measurement record: `knowledge-base/project/specs/feat-one-shot-7471-plugin-delivery-path/measurements.md` **§1.9** (the controlled experiment establishing the comparator), plus §1.0 and §2B. Adding a key back to any of the three silently reverts the fix for every new install. Release versions live in git tags via GitHub Releases; a release publishes nothing to any manifest.
 - **Ask before running /compound.** The user may have already documented learnings.
 - **Do not block on missing artifacts.** Not every change needs a brainstorm or plan.
 - **A resume prompt's gate list must cite commands verified to RESOLVE** (`wg-end-of-work-emit-resume-prompt`). Before writing `<suite> -> N/0` into a handoff, re-run the command or at minimum `git ls-files | grep -E '<name>'` it — a remembered path is not a measured one. **Why:** #6730's RESUME.md reported two suites green whose paths did not exist (wrong extension, wrong directory), so the resuming session's first two gate commands both died on "No such file or directory".

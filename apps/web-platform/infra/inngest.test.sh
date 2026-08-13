@@ -313,10 +313,77 @@ render_ping_script() {
     bash -c "log() { :; }; $DARK_ARM_RENDER_BLOCK"
 }
 
+# --- #7228: a REAL local health endpoint, because the listener gate is the point -------------
+# The gate below decides whether to beat by asking 127.0.0.1:8288/health for a 200. Faking that
+# answer through an injected-status seam would test the branch and not the probe: the whole
+# defect #7228 names is a health signal that certified a DIFFERENT server, and an injected code
+# reproduces that shape inside the test. So the 200 arm drives the real /usr/bin/curl against a
+# real listener. python3 is already a hard dependency of this suite (:198, :229).
+#
+# `http.server` answers 200 for a file that exists and 404 for one that does not, so ONE server
+# serves both arms by path selection -- no second process, and the 404 is genuinely produced by
+# an HTTP server rather than asserted about one. The third arm (000, "no listener at all") is a
+# closed port, which is the LIVE state of 10.0.1.40 this whole PR exists for.
+HEALTH_ROOT="$PING_TMP/health-root"
+mkdir -p "$HEALTH_ROOT"
+: > "$HEALTH_ROOT/health"
+HEALTH_PORT=""
+HEALTH_PID=""
+# Bind to port 0 and read back what the kernel assigned: a hardcoded port collides with the
+# sibling worktrees this repo runs in parallel, and the collision surfaces as a suppressed beat
+# -- i.e. as a plausible SUT failure rather than as a harness one.
+HEALTH_PORT=$(python3 - <<'PYEOF'
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PYEOF
+)
+# A code-MAPPING responder, not a static file server. Two fixtures ({200,404}) cannot tell an
+# allowlist from a blocklist: rewriting the gate's `!= "200"` into `= "404" || = "000"` passed
+# the whole suite, and a 503 — inngest's own not-ready code — would then BEAT while the
+# scheduler serves nothing, which is #7228 restored through the fix for it. A third arm
+# collapses that equivalence.
+python3 - "$HEALTH_PORT" >/dev/null 2>&1 <<'PYSRV' &
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+CODES = {"/health": 200, "/no-such-endpoint": 404, "/unavailable": 503, "/moved": 302}
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(CODES.get(self.path, 404)); self.end_headers()
+    def log_message(self, *a): pass
+HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+PYSRV
+HEALTH_PID=$!
+trap 'rm -rf "$PING_TMP"; [[ -n "$HEALTH_PID" ]] && kill "$HEALTH_PID" 2>/dev/null' EXIT
+# Wait for the listener rather than sleeping a guessed interval: a race here would make the
+# 200 arm flake as a suppression, which is the failure this suite reports as a SUT defect.
+for _ in $(seq 1 50); do
+  curl -fsS -m 1 -o /dev/null "http://127.0.0.1:$HEALTH_PORT/health" 2>/dev/null && break
+  sleep 0.1
+done
+HEALTH_OK_URL="http://127.0.0.1:$HEALTH_PORT/health"
+HEALTH_404_URL="http://127.0.0.1:$HEALTH_PORT/no-such-endpoint"
+HEALTH_503_URL="http://127.0.0.1:$HEALTH_PORT/unavailable"
+HEALTH_302_URL="http://127.0.0.1:$HEALTH_PORT/moved"
+# Port 1 is closed on every runner; curl reports 000 (no HTTP response at all).
+HEALTH_DOWN_URL="http://127.0.0.1:1/health"
+
+# Precondition, asserted rather than assumed: if the mock never came up, every "suppressed"
+# result below is a harness artifact and the whole gate section proves nothing.
+assert "harness precondition: the mock health endpoint serves 200 (else every gate leg is vacuous)" \
+  "[[ \"\$(curl -s -o /dev/null -w '%{http_code}' -m 5 '$HEALTH_OK_URL')\" == '200' ]]"
+assert "harness precondition: the mock health endpoint serves 404 on an absent path" \
+  "[[ \"\$(curl -s -o /dev/null -w '%{http_code}' -m 5 '$HEALTH_404_URL')\" == '404' ]]"
+
 run_ping() {
-  # $1 = rendered script, $2 = INNGEST_HEARTBEAT_URL, $3 = logger sink
+  # $1 = rendered script, $2 = INNGEST_HEARTBEAT_URL, $3 = logger sink,
+  # $4 = health URL (optional; defaults to the SERVING mock so a caller that predates the
+  #      listener gate keeps testing what it always tested -- "given a host that serves").
   : > "$3"
   PATH="$PING_TMP/bin:$PATH" LOGGER_OUT="$3" INNGEST_HEARTBEAT_URL="$2" \
+    INNGEST_HEARTBEAT_HEALTH_URL="${4:-$HEALTH_OK_URL}" \
     sh "$1" 2>&1
 }
 
@@ -506,6 +573,149 @@ assert "AC3 non-vacuity: the harness observes a leaked canary when one IS emitte
 assert "AC3 secondary: no logger/echo/printf line references the URL value (both renders)" \
   "! grep -qE '^[[:space:]]*(logger|echo|printf)[[:space:]].*INNGEST_HEARTBEAT_URL' '$DEDICATED_PING' '$WEB_PING'"
 
+# --- #7228 AC4: the LISTENER GATE ------------------------------------------------------------
+# THE DEFECT. This pusher is `curl "$INNGEST_HEARTBEAT_URL"` fired by a systemd timer. It proves
+# A TIMER FIRED and asserts nothing about :8288. One correctly-armed, correctly-scoped monitor
+# therefore stayed green for twelve days while the dedicated host served nothing -- and the fix
+# the first plan draft proposed (split the monitor in two) would have minted a SECOND meaningless
+# green. The only thing that makes a beat mean anything is gating it on a local listener check.
+#
+# THE GATE IS NOT DEDICATED-ONLY, AND THAT IS DELIBERATE. inngest-bootstrap.sh is the SHARED
+# renderer for both hosts (which is why plan-review AC2 was struck as structurally unsatisfiable
+# -- no grep can isolate "web-host code paths" here). Both hosts run inngest-server.service on
+# loopback 127.0.0.1:8288 (:782, and inngest-server-probe.sh:472 already probes exactly that URL
+# on this same shared script), so the gate is meaningful on both. On the co-located web host --
+# TODAY's live pusher and the one actually feeding the monitor -- it is the change that converts
+# that monitor from "a timer fired" into "the scheduler serves". That is the #7228 fix proper.
+#
+# ORDERING IS LOAD-BEARING: the gate sits AFTER the dark arm. A dark dedicated host must exit on
+# url-absence BEFORE spending a health probe every 60s, and the dark arm's hourly rate limit must
+# keep governing that path. The A6 legs above pin it from the other side -- they drive the dark
+# arm with no health URL at all and would break if the gate ran first.
+echo ""
+echo "--- #7228 (AC4): heartbeat listener gate (a green beat must mean :8288 SERVES) ---"
+
+# The discriminator across all three arms is rc plus the ping's own side effect: the heartbeat
+# URL is a CLOSED port, so an UNGATED script reaches curl and exits 7. rc=0 means the gate
+# short-circuited before curl. That is a real behavioural distinction, not a grep.
+GATE_LOG="$PING_TMP/logger-gate.txt"
+
+GATE_OK_OUT=$(run_ping "$DEDICATED_PING" "$CANARY_URL" "$GATE_LOG" "$HEALTH_OK_URL") \
+  && GATE_OK_RC=0 || GATE_OK_RC=$?
+assert "AC4 listener 200 -> the beat is SENT (rc=7 vs the closed heartbeat port; gate does not block a serving host)" \
+  "[[ '$GATE_OK_RC' -eq 7 ]]"
+assert "AC4 listener 200 -> no suppression row (a serving host must stay silent, per the quota note)" \
+  "! grep -q 'listener=no' '$GATE_LOG'"
+
+GATE_404_OUT=$(run_ping "$DEDICATED_PING" "$CANARY_URL" "$GATE_LOG" "$HEALTH_404_URL") \
+  && GATE_404_RC=0 || GATE_404_RC=$?
+assert "AC4 listener 404 -> the beat is SUPPRESSED (rc=0: curl never reached the heartbeat URL)" \
+  "[[ '$GATE_404_RC' -eq 0 ]]"
+assert "AC4 listener 404 -> curl never ran against the heartbeat URL (no curl error on output)" \
+  "! printf '%s' \"\$GATE_404_OUT\" | grep -qi '^curl:'"
+# Loud, not silent: cq-silent-fallback-must-mirror-to-sentry. Absence-of-beat is the ALARM, but
+# the journal row is the only thing that says WHY without an SSH (hr-no-ssh-fallback-in-runbooks).
+assert "AC4 listener 404 -> emits a loud listener=no row naming the code (never a silent exit 0)" \
+  "grep -q 'listener=no' '$GATE_LOG' && grep -q 'health_code=404' '$GATE_LOG'"
+
+# The LIVE state of 10.0.1.40 as measured 2026-08-11: nothing listening at all. curl produces no
+# HTTP response, and the field must be the literal 000 rather than empty -- an empty field reads
+# as missing data on the Better Stack side, which is how a diagnosis becomes unreadable.
+GATE_DOWN_OUT=$(run_ping "$DEDICATED_PING" "$CANARY_URL" "$GATE_LOG" "$HEALTH_DOWN_URL") \
+  && GATE_DOWN_RC=0 || GATE_DOWN_RC=$?
+assert "AC4 listener UNREACHABLE (the live #7228 state) -> the beat is SUPPRESSED" \
+  "[[ '$GATE_DOWN_RC' -eq 0 ]]"
+assert "AC4 listener UNREACHABLE -> health_code is the literal 000, never an empty field" \
+  "grep -q 'health_code=000' '$GATE_LOG'"
+
+# The shared-renderer half. Without this leg the gate could be rendered into the dedicated arm
+# only and every assertion above would still pass, leaving the LIVE pusher ungated -- i.e. #7228
+# unfixed on the one host that actually feeds the monitor.
+GATE_WEB_LOG="$PING_TMP/logger-gate-web.txt"
+GATE_WEB_OUT=$(run_ping "$WEB_PING" "$CANARY_URL" "$GATE_WEB_LOG" "$HEALTH_404_URL") \
+  && GATE_WEB_RC=0 || GATE_WEB_RC=$?
+assert "AC4 the gate is present on the WEB render too (shared renderer; the live pusher is gated)" \
+  "[[ '$GATE_WEB_RC' -eq 0 ]] && grep -q 'listener=no' '$GATE_WEB_LOG'"
+GATE_WEB_OK_LOG="$PING_TMP/logger-gate-web-ok.txt"
+GATE_WEB_OK_OUT=$(run_ping "$WEB_PING" "$CANARY_URL" "$GATE_WEB_OK_LOG" "$HEALTH_OK_URL") \
+  && GATE_WEB_OK_RC=0 || GATE_WEB_OK_RC=$?
+assert "AC4 the WEB render still beats when it DOES serve (the gate is a gate, not a mute)" \
+  "[[ '$GATE_WEB_OK_RC' -eq 7 ]]"
+
+# AC3 still holds through the new branch: the suppression row must not carry the bearer URL.
+# `cat | grep -c`, never `grep -c f1 f2`: the multi-file form prints one `path:count` line PER
+# FILE, so the arithmetic compares a two-line string and the assertion fails on a clean tree.
+assert "AC4/AC3 the suppression row never leaks the heartbeat URL value" \
+  "[[ \$(cat '$GATE_LOG' '$GATE_WEB_LOG' | grep -c 'CANARY_SENTINEL') -eq 0 ]]"
+
+# S4: a THIRD and FOURTH code, so the accept condition cannot be a two-member blocklist.
+# 503 is inngest's own not-ready code and 302 is a redirect — under `!= "200"` both suppress;
+# under a `= "404" || = "000"` blocklist both would BEAT while the scheduler serves nothing.
+GATE_503_LOG="$PING_TMP/logger-gate-503.txt"
+GATE_503_OUT=$(run_ping "$DEDICATED_PING" "$CANARY_URL" "$GATE_503_LOG" "$HEALTH_503_URL") \
+  && GATE_503_RC=0 || GATE_503_RC=$?
+assert "AC4 listener 503 (inngest's own not-ready code) -> SUPPRESSED, not beaten" \
+  "[[ '$GATE_503_RC' -eq 0 ]] && grep -q 'health_code=503' '$GATE_503_LOG'"
+GATE_302_LOG="$PING_TMP/logger-gate-302.txt"
+GATE_302_OUT=$(run_ping "$DEDICATED_PING" "$CANARY_URL" "$GATE_302_LOG" "$HEALTH_302_URL") \
+  && GATE_302_RC=0 || GATE_302_RC=$?
+assert "AC4 listener 302 -> SUPPRESSED (only a literal 200 may beat)" \
+  "[[ '$GATE_302_RC' -eq 0 ]] && grep -q 'health_code=302' '$GATE_302_LOG'"
+
+# S3: the PRODUCTION default URL is asserted by nothing otherwise — every run_ping injects the
+# seam, so repointing the default at a wrong port shipped the gate INERT (suppressing on every
+# host forever, turning "absence-of-beat is the alarm" into a permanent page) at full green.
+# Both operands by shape: the gate's default vs the port the unit actually binds.
+GATE_DEFAULT_URL=$(grep -oE '^INNGEST_HEALTH_URL="\$\{INNGEST_HEARTBEAT_HEALTH_URL:-[^}]+\}"' "$BOOTSTRAP_SH" \
+  | sed -E 's/.*:-([^}]+)\}"/\1/' | head -1 || true)
+BOUND_PORT=$(grep -oE -- '--port [0-9]+' "$BOOTSTRAP_SH" | grep -oE '[0-9]+' | sort -u | head -1 || true)
+assert "AC4/S3 the gate's default health URL was extracted by shape (else this pin is vacuous)" \
+  "[[ -n '$GATE_DEFAULT_URL' && -n '$BOUND_PORT' ]]"
+assert "AC4/S3 the gate's default health URL targets the port the unit BINDS ($BOUND_PORT) on loopback" \
+  "[[ '$GATE_DEFAULT_URL' == 'http://127.0.0.1:$BOUND_PORT/health' ]]"
+
+# The suppression row is RATE-LIMITED, and that has to be driven, not assumed. Left unlimited it
+# is ~1,440 rows/day as a PERMANENT steady state on the co-located host post-cutover (dark arm
+# rendered empty there, its heartbeat URL never deleted, its timer never stopped by quiesce) —
+# the exact cost #6617b removed. Asserted behaviourally on its OWN stamp, so it cannot be
+# satisfied by the dark arm's.
+GATE_STAMP="$PING_TMP/gate-rl/gate.stamp"
+mkdir -p "$(dirname "$GATE_STAMP")"
+rm -f "$GATE_STAMP"
+RL_LOG="$PING_TMP/logger-gate-rl.txt"
+: > "$RL_LOG"
+rl_fire() {
+  PATH="$PING_TMP/bin:$PATH" LOGGER_OUT="$RL_LOG" INNGEST_HEARTBEAT_URL="$CANARY_URL" \
+    INNGEST_HEARTBEAT_HEALTH_URL="$HEALTH_404_URL" INNGEST_HEARTBEAT_GATE_STAMP="$GATE_STAMP" \
+    sh "$DEDICATED_PING" >/dev/null 2>&1 || true
+}
+rl_fire; rl_fire; rl_fire; rl_fire
+assert "AC4 four suppressed fires inside one window emit exactly ONE row (was one per 60s)" \
+  "[[ \$(grep -c 'listener=no' '$RL_LOG') -eq 1 ]]"
+# The load-bearing half: an aged stamp must RE-EMIT. A limit that only suppresses is
+# indistinguishable from deleting the row, and then a dark host and a healthy one look the same.
+printf '%s' "$(( $(date +%s) - 7200 ))" > "$GATE_STAMP"
+rl_fire
+assert "AC4 an aged stamp RE-EMITS (rate-limited, not eliminated)" \
+  "[[ \$(grep -c 'listener=no' '$RL_LOG') -eq 2 ]]"
+# And the DECISION is never rate-limited: a suppressed row must not convert a non-serving host
+# into a beating one. Fire again inside the window and assert the beat is still withheld.
+RL_RC=0
+PATH="$PING_TMP/bin:$PATH" LOGGER_OUT="$RL_LOG" INNGEST_HEARTBEAT_URL="$CANARY_URL" \
+  INNGEST_HEARTBEAT_HEALTH_URL="$HEALTH_404_URL" INNGEST_HEARTBEAT_GATE_STAMP="$GATE_STAMP" \
+  sh "$DEDICATED_PING" >/dev/null 2>&1 || RL_RC=$?
+assert "AC4 a rate-limited (silent) fire STILL withholds the beat — the limit governs the row, not the decision" \
+  "[[ '$RL_RC' -eq 0 ]]"
+
+# ORDERING, asserted behaviourally rather than by reading the file. A dark dedicated host has no
+# URL; if the gate ran FIRST it would probe health every 60s and emit listener=no instead of the
+# dark-arm row. Driving it with a health URL that would FAIL makes the two orderings produce
+# different observable output, so this leg cannot pass under the wrong one.
+ORDER_LOG="$PING_TMP/logger-gate-order.txt"
+ORDER_OUT=$(run_ping "$DEDICATED_PING" "" "$ORDER_LOG" "$HEALTH_DOWN_URL") && ORDER_RC=0 || ORDER_RC=$?
+assert "AC4 ordering: dark arm precedes the gate (URL-absent dedicated host emits url_present=no, NOT listener=no)" \
+  "[[ '$ORDER_RC' -eq 0 ]] && grep -q 'url_present=no' '$ORDER_LOG' && ! grep -q 'listener=no' '$ORDER_LOG'"
+
 # --- #6617a (A4): the inngest-server POSITIVE liveness probe -------------------------
 # The probe ships three artifacts (script, .service, .timer) plus an `enable --now`, and had
 # exactly two string assertions against it (both in journald-config.test.sh, both about the
@@ -630,7 +840,19 @@ assert "A4 a failed curl degrades http_code to the literal 000, not to an empty 
   "grep -qE 'http_code=000( |\$)' '$PROBE_LOG'"
 # Every field present and non-empty. An empty field silently reads as "no data" in Better
 # Stack, which is the same ambiguity a missing row creates.
-for _f in server_active vector_active redis_active uptime_s boot_id image_ref; do
+# #7228 adds instance_id, cli_version and cutover_flag. The three answer questions the existing
+# fields structurally cannot, and each one was needed during this incident and unavailable:
+#   instance_id  — WHICH host emitted this. 1,459 of 1,839 rows naming inngest-server.service
+#                  came from the CO-LOCATED web host, so a substring query over the shared source
+#                  table manufactures a false all-clear. This is the field that makes a row
+#                  self-identifying instead of requiring the query to get field-isolation right.
+#   cli_version  — the running binary, not the pinned one. inngest.tf pins a version; whether the
+#                  host actually runs it is a different claim, and only the host can answer it.
+#   cutover_flag — the FSM state the flip guard will actually read at the next start. The guard
+#                  refuses every prod-URI start outside {armed, flipping, flushed, done}, so this
+#                  is the difference between "the host is broken" and "the host is refusing on
+#                  purpose" — the distinction that cost this incident the most time.
+for _f in server_active vector_active redis_active uptime_s boot_id image_ref instance_id cli_version cutover_flag; do
   assert "A4 probe marker carries a non-empty $_f= field" \
     "grep -qE '$_f=[^ ]+' '$PROBE_LOG'"
 done
@@ -641,6 +863,60 @@ done
 # exists to close. Both sides pinned so a rename on either drifts loudly.
 assert "A4 the image field is named image_ref (it carries a full ref, not a bare sha)" \
   "grep -qE 'image_ref=' '$PROBE_LOG' && ! grep -qE 'image_sha=' '$PROBE_LOG'"
+
+# --- #7228: the three new fields must COST NOTHING in cadence or quota -----------------------
+# The obvious way to ship instance_id/cli_version/cutover_flag is a second, faster timer with its
+# own SYSLOG_IDENTIFIER — and the plan review struck exactly that from the first draft. Source 4
+# applies NO PRIORITY filter, so every fire ships a row: at 60s a single marker costs ~1,440
+# rows/day against a ~25k/day quota, which is precisely the cost #6617b removed from the
+# heartbeat in this same subsystem. vector.toml calls any new timer-driven tag "a fresh quota
+# decision". The fields therefore ride the EXISTING hourly marker, and these assertions are what
+# stop a later edit from quietly reintroducing the cost.
+#
+# The "exactly ONE marker row per fire" assertion above already proves the fields ride the
+# existing row rather than a new one; these pin the artifacts.
+assert "A4/#7228 the bootstrap declares exactly ONE probe timer (no second, faster timer was added)" \
+  "[[ \$(grep -cE '^readonly PROBE_TIMER=' '$BOOTSTRAP_SH') -eq 1 ]]"
+# --- #7228: a REFUSED inngest-server start must not abort the bootstrap ---------------------
+# THE CASCADE THIS PINS. inngest-bootstrap.sh is `set -euo pipefail`, and the
+# `systemctl restart inngest-server.service` was the ONE unguarded systemctl call in its block.
+# Every sibling around it carries `|| true` or `|| log`. Once the flip guard learned to refuse an
+# inherited `done`, a replaced host — which by construction has no done-owner marker — makes that
+# ExecStartPre BLOCK, the restart exit non-zero, and the bootstrap die BEFORE vector, the
+# server-probe timer and the cutover flip timer install. The host is then dark with the recovery
+# FSM unarmed, so the `flushed` re-entry the guard's own message prescribes cannot be polled.
+# Anchored on the guarded CONSTRUCT (`if ! systemctl restart …`), which a comment cannot produce.
+echo ""
+echo "--- #7228: a refused inngest-server start does not abort the bootstrap ---"
+assert "#7228 the inngest-server restart is GUARDED (a guard refusal must not kill the bootstrap)" \
+  "grep -qE '^if ! systemctl restart inngest-server\.service; then$' '$BOOTSTRAP_SH'"
+# The load-bearing half: the units that make the refusal OBSERVABLE and RECOVERABLE are sequenced
+# after the restart, so if the guard ever regresses to an unguarded call they go down with it.
+# Assert the ordering rather than mere presence — presence alone is satisfied by the broken order.
+# `|| true` on each capture, matching this file's established idiom (see DOPPLER_BIN_LINE,
+# HEARTBEAT_UNIT_LINE, ENV_FILE_LINE). It is load-bearing, not decoration: a no-match here is a
+# NORMAL answer that the very next assertion is written to report ("else this pin is vacuous").
+# Without it the capture aborts the script on exactly the failure that assertion exists to catch,
+# so the guard could never run on its own trigger — and an aborted suite reads as an error rather
+# than as the clear "the anchor moved" verdict the assertion would have printed.
+RESTART_LINE=$(grep -nE '^if ! systemctl restart inngest-server\.service; then$' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
+PROBE_TIMER_LINE=$(grep -nE '^systemctl enable --now inngest-server-probe\.timer$' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
+FLIP_TIMER_LINE=$(grep -nE '^[[:space:]]*systemctl enable --now inngest-cutover-flip\.timer$' "$BOOTSTRAP_SH" | head -1 | cut -d: -f1 || true)
+assert "#7228 the restart and both downstream timers were located by shape (else this pin is vacuous)" \
+  "[[ -n '$RESTART_LINE' && -n '$PROBE_TIMER_LINE' && -n '$FLIP_TIMER_LINE' ]]"
+assert "#7228 the probe + flip timers are DOWNSTREAM of the restart, so a refusal cannot strand them" \
+  "[[ '$PROBE_TIMER_LINE' -gt '$RESTART_LINE' && '$FLIP_TIMER_LINE' -gt '$RESTART_LINE' ]]"
+assert "#7228 a refused start is reported on the Vector-INDEPENDENT channel (vector may not be up yet)" \
+  "grep -qE 'inngest-boot-phone-home\.sh inngest-server-start-REFUSED' '$BOOTSTRAP_SH'"
+
+assert "A4/#7228 the probe unit still ships exactly ONE SyslogIdentifier, unchanged (no new Source 4 tag)" \
+  "[[ \$(printf '%s\n' \"\$PROBE_UNIT_BLOCK\" | grep -cE '^SyslogIdentifier=') -eq 1 ]] && printf '%s\n' \"\$PROBE_UNIT_BLOCK\" | grep -qE '^SyslogIdentifier=inngest-server-probe$'"
+# The cutover_flag read needs Doppler credentials, and the ONLY safe way to give a shared-renderer
+# unit an env file that exists on just one of the two hosts is the `-` prefix. Without it systemd
+# fails the unit outright on the co-located web host — a change made to ADD observability would
+# silently DELETE it on one host. Anchored on the `=-` construct, which a comment cannot produce.
+assert "A4/#7228 the probe unit's EnvironmentFile is OPTIONAL (\`=-\`), so the co-located host's probe still runs" \
+  "printf '%s\n' \"\$PROBE_UNIT_BLOCK\" | grep -qE '^EnvironmentFile=-/etc/default/inngest-doppler$'"
 assert "A4 cloud-init writes INNGEST_BOOTSTRAP_IMAGE from the full \$IREF (what image_ref reports)" \
   "grep -qF \"printf 'INNGEST_BOOTSTRAP_IMAGE=%s\\\\n' \\\"\\\$IREF\\\"\" '$SCRIPT_DIR/cloud-init-inngest.yml'"
 
@@ -687,7 +963,7 @@ assert "P2-B vector_active=inactive ALSO reaches the Vector-independent phone-ho
   "[[ -s '$PROBE_PH_LOG' ]] && grep -qF 'vector_active=inactive' '$PROBE_PH_LOG'"
 # Same fields on both channels — an off-box consumer reading only the phone-home row must be
 # able to make the same call as one reading the journald row.
-for _f in http_code server_active redis_active uptime_s boot_id image_ref; do
+for _f in http_code server_active redis_active uptime_s boot_id image_ref instance_id cli_version cutover_flag; do
   assert "P2-B the phone-home payload carries the same $_f= field as the journald marker" \
     "grep -qE '$_f=[^ ]+' '$PROBE_PH_LOG'"
 done
@@ -900,8 +1176,11 @@ GUARD_CLOSE_LINE=$(grep -nE '^fi  # end SKIP_BINARY_INSTALL guard' "$BOOTSTRAP_S
 SERVER_UNIT_WRITE_LINE=$(grep -nE 'cat > "\$UNIT_FILE" <<' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
 assert "server unit write is OUTSIDE the SKIP_BINARY_INSTALL guard (reconcile-always)" \
   "[[ -n '$GUARD_CLOSE_LINE' && -n '$SERVER_UNIT_WRITE_LINE' && '$GUARD_CLOSE_LINE' -lt '$SERVER_UNIT_WRITE_LINE' ]]"
+# #7228: the restart is now GUARDED (`if ! systemctl restart …; then`) so a flip-guard refusal
+# cannot abort the bootstrap and strand vector + the flip timer. The property asserted here is
+# unchanged — the restart still happens — so the anchor moves to the guarded construct.
 assert "bootstrap restarts inngest-server.service (new ExecStart loads on redeploy)" \
-  "grep -qE '^systemctl restart inngest-server.service' '$BOOTSTRAP_SH'"
+  "grep -qE '^if ! systemctl restart inngest-server\.service; then$' '$BOOTSTRAP_SH'"
 # The upgrade-drain resume must still run after the restart (R2 — restart must
 # not orphan the pause/resume pairing). Match the actual resume COMMAND
 # (`"$INSTALL_PATH" resume`) precisely — no broad `|| grep resume` fallback,
@@ -961,7 +1240,7 @@ assert "INNGEST_REDIS_PASSWORD doppler_secret"      "grep -qE 'name[[:space:]]+=
 # `inngest-redis-bootstrap.sh` and a `$`-anchored `tail -1` could pick it; the
 # invocation is the line whose ordering vs the restart actually matters.
 REDIS_RUN_LINE=$(grep -nE 'if /usr/local/bin/inngest-redis-bootstrap.sh; then' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
-RESTART_LINE=$(grep -nE '^systemctl restart inngest-server.service' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
+RESTART_LINE=$(grep -nE '^if ! systemctl restart inngest-server\.service; then$' "$BOOTSTRAP_SH" 2>/dev/null | head -1 | cut -d: -f1 || true)
 assert "bootstrap runs inngest-redis-bootstrap.sh (REDIS_READY probe) BEFORE the inngest-server restart" \
   "[[ -n '$REDIS_RUN_LINE' && -n '$RESTART_LINE' && '$REDIS_RUN_LINE' -lt '$RESTART_LINE' ]]"
 
