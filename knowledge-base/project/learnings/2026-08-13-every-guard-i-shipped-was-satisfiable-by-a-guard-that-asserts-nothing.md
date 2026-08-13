@@ -51,7 +51,10 @@ permits that are not byte-identical to the canonical:
 
 ```bash
 # Each of these is a spelling the validator's own regex accepts, and none was exercised.
-jq '.plugins[0].source.url = "git@github.com:jikig-ai/soleur.git"' "$CANONICAL" > ok-ssh.json
+# The ssh form is elided here as $SSH_FORM: `lint-fixture-content.mjs` scans learning files
+# for `user@host` and cannot tell an ssh git URL from an email address. The literal lives in
+# scripts/marketplace-manifest-validate.test.sh, which is not in that lint's scope.
+jq --arg u "$SSH_FORM" '.plugins[0].source.url = $u' "$CANONICAL" > ok-ssh.json
 expect_rc "control: accepts the ssh URL spelling" ok-ssh.json 0
 # ... plus: no .git suffix, trailing slash, and edits to deliberately UNGOVERNED cosmetic fields
 ```
