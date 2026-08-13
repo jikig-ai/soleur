@@ -46,6 +46,18 @@ cat > "$WORK/stub-query" <<'STUB'
 #!/usr/bin/env bash
 [[ "${STUB_RC:-0}" == "0" ]] || exit "${STUB_RC}"
 argv="$*"
+# The stub DISPATCHES on --grep, because the probe now issues a SECOND query: the attribution
+# lead in the FAIL arm reads the SOLEUR_ZOT_LOG channel. Answering both from one fixture would put
+# the seam above the code under test — the lead could query the wrong channel and stay green.
+# GCROWS is emitted verbatim so a case can inject a contaminating row the parser must reject.
+if [[ "$argv" == *"--grep SOLEUR_ZOT_LOG"* ]]; then
+  [[ "${GC_RC:-0}" == "0" ]] || exit "${GC_RC}"
+  [[ "$argv" == *"--since"* ]] || { echo "stub: attribution query missing --since (argv: $argv)" >&2; exit 64; }
+  # `|| [[ -n "$l" ]]` is load-bearing: GCROWS has no trailing newline, so a bare `while read`
+  # drops its LAST row — which in these fixtures is the unmatched start under test.
+  printf '%s' "${GCROWS:-}" | while IFS= read -r l || [[ -n "$l" ]]; do [[ -n "$l" ]] && printf '%s\n' "$l"; done
+  exit 0
+fi
 [[ "$argv" == *"--grep SOLEUR_ZOT_DISK"* ]] || { echo "stub: missing --grep SOLEUR_ZOT_DISK (argv: $argv)" >&2; exit 64; }
 [[ "$argv" == *"--since"* ]]                || { echo "stub: missing --since (argv: $argv)" >&2; exit 64; }
 [[ "$argv" == *"--no-archive"* ]]           && { echo "stub: --no-archive gives a ~40min hot keyhole" >&2; exit 64; }
@@ -84,8 +96,9 @@ for extra in os.environ.get("EXTRA", "").split("\n"):
 STUB
 chmod +x "$WORK/stub-query"
 
-run() { # run <spec> [stub_rc] [extra] [tail] [glitch]
+run() { # run <spec> [stub_rc] [extra] [tail] [glitch] [gcrows] [gc_rc]
   OUT="$(SPEC="$1" STUB_RC="${2:-0}" EXTRA="${3:-}" TAIL="${4:-}" GLITCH="${5:-}" \
+         GCROWS="${6:-}" GC_RC="${7:-0}" \
          ZOT_FILL_QUERY="$WORK/stub-query" bash "$PROBE" 2>&1)"
   RC=$?
 }
@@ -199,7 +212,93 @@ expect "query transport failure is TRANSIENT" 2 "query_rc=7"
 run "$GOOD,48,0,5,5,144" 3
 expect "the credential-guard rc is named, not collapsed into 'transport'" 2 "credential guard"
 
-MIN_CHECKS=20
+# ── ATTRIBUTION LEAD (#7456 item b) ──────────────────────────────────────────────────────────
+# The lead answers "why is it filling?" in the same comment the FAIL arm posts. It is
+# INFORMATIONAL: it runs after the verdict and must not be able to move the exit code, because a
+# stall and a dropped completion row are byte-indistinguishable (see case 24).
+ENVP="SOLEUR_ZOT_LOG shipper=zot-log-shipper host=soleur-registry"
+WEB=/var/lib/zot/jikig-ai/soleur-web-platform
+BOOTSTRAP=/var/lib/zot/jikig-ai/soleur-inngest-bootstrap
+gcrow() { python3 -c 'import json,sys
+print(json.dumps({"dt":"2026-08-12 20:54:20.000000",
+ "raw":json.dumps({"message":sys.argv[1]},separators=(",",":"))},separators=(",",":")))' "$1"; }
+zpay() { printf '{time:2026-08-12T20:54:20.797245158Z,level:info,message:%s,module:gc,caller:zotregistry.dev/zot/v2/pkg/storage/gc/gc.go:109}' "$1"; }
+
+FAILSPEC="$GOOD,48,0,10,40,144"
+
+# 20. The lead CANNOT change the verdict when its own query dies. This is the whole safety
+#     argument for putting attribution in a FAIL arm rather than in a probe with its own exit code.
+run "$FAILSPEC" 0 "" "" "" "" 3
+expect "a dead attribution query leaves the FAIL verdict intact" 1 "attribution_unavailable"
+
+# 21. Paired start/completion is healthy; an unmatched start names its repository. Per-repo is the
+#     point: a GLOBAL ratio reads 50% here and looks half-healthy.
+GC_OK="$(gcrow "$ENVP $(zpay "executing gc of orphaned blobs for $WEB")")
+$(gcrow "$ENVP $(zpay "gc successfully completed for $WEB")")
+$(gcrow "$ENVP $(zpay "executing gc of orphaned blobs for $BOOTSTRAP")")"
+run "$FAILSPEC" 0 "" "" "" "$GC_OK"
+expect "an unmatched gc start names its repository" 1 "soleur-inngest-bootstrap"
+if [[ "$OUT" == *"gc_start_events=2 gc_completion_events=1 over 2 repo(s)"* && "$OUT" == *"soleur-inngest-bootstrap 0/1"* ]]
+then pass "EVENT counts are 2/1 over 2 repos, and the lagging repo shows done/started"
+else fail "expected gc_start_events=2 gc_completion_events=1 with soleur-inngest-bootstrap 0/1. Output: $OUT"
+fi
+
+# 22. INJECTION. sanitize() strips only quotes and backslashes, so a header value survives with its
+#     commas and colons intact. Anchoring on the parsed message field (level: then message:) is
+#     what stops a crafted User-Agent from minting a repository that never completes -> false stall.
+GC_INJ="$(gcrow "$ENVP {time:2026-08-12T20:54:20Z,level:info,message:HTTP API,module:http,headers:{User-Agent:[curl,message:executing gc of orphaned blobs for /var/lib/zot/x/phantom]},caller:zotregistry.dev/zot/v2/pkg/api/session.go:92}")"
+run "$FAILSPEC" 0 "" "" "" "$GC_INJ"
+if [[ "$OUT" != *phantom* ]]
+then pass "a header-borne 'executing gc' mints no repository"
+else fail "header injection minted a phantom repository. Output: $OUT"
+fi
+
+# 23. The drop count travels WITH the unmatched start. Cap-exempt rows have their own 17/tick
+#     ceiling, so a dropped completion looks exactly like a stall; printing the confound is the
+#     difference between a lead and a wrong answer.
+GC_DROP="$GC_OK
+$(gcrow "SOLEUR_ZOT_LOG_DROPPED n=3 interval_s=300 boot_id=$GOOD seq=2 cum=5 reason=rate_cap")"
+run "$FAILSPEC" 0 "" "" "" "$GC_DROP"
+expect "the SUMMED dropped-row count is printed beside the unmatched start" 1 "dropped_rows=3"
+
+# 24. The envelope anchor carries a TRAILING SPACE. Without it host=soleur-registry-2 matches.
+GC_HOST2="$(gcrow "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=soleur-registry-2 $(zpay "executing gc of orphaned blobs for /var/lib/zot/x/other")")"
+run "$FAILSPEC" 0 "" "" "" "$GC_HOST2"
+if [[ "$OUT" == *"rows_envelope=0"* && "$OUT" == *"gc_start_events=0"* ]]
+then pass "a neighbouring host's rows are not admitted (trailing-space anchor; rows_envelope=0)"
+else fail "host=soleur-registry-2 was admitted. Output: $OUT"
+fi
+
+# 25. The lead is FAIL-only: a PASS verdict must not pay for a second query.
+run "$GOOD,48,0,6,8,144" 0 "" "" "" "$GC_OK"
+if [[ "$RC" == "0" && "$OUT" != *"gc_starts"* ]]
+then pass "a PASS verdict does not run the attribution lead"
+else fail "the lead ran on PASS (rc=$RC). Output: $OUT"
+fi
+
+# 26. NOT AN EXONERATION. starts==dones==0 is also what a dead shipper, a changed host token and a
+#     drifted row shape produce. The earlier text asserted "growth is not a gc stall" here — a
+#     negative the parse cannot support, asserted hardest exactly when the channel is down.
+run "$FAILSPEC" 0 "" "" "" ""
+if [[ "$OUT" == *"NOT evidence that gc is healthy"* && "$OUT" != *"growth is not a gc stall"* ]]
+then pass "zero parsed gc rows is reported as no-evidence, not as an all-clear"
+else fail "an empty parse produced an exoneration. Output: $OUT"
+fi
+
+# 27. THE INTERMITTENT SHAPE. Same repo starts 3 gc cycles and completes 1. A set-difference lead
+#     reported this HEALTHY (the repo is present in `dones`), which is precisely the zot#4235
+#     degradation the lead exists to surface.
+GC_LAG="$(gcrow "$ENVP $(zpay "executing gc of orphaned blobs for $WEB")")
+$(gcrow "$ENVP $(zpay "executing gc of orphaned blobs for $WEB")")
+$(gcrow "$ENVP $(zpay "executing gc of orphaned blobs for $WEB")")
+$(gcrow "$ENVP $(zpay "gc successfully completed for $WEB")")"
+run "$FAILSPEC" 0 "" "" "" "$GC_LAG"
+if [[ "$OUT" == *"soleur-web-platform 1/3"* && "$OUT" != *"not a gc stall"* ]]
+then pass "a repo completing 1 of 3 started cycles is reported, not called healthy"
+else fail "the intermittent under-completion shape read as healthy. Output: $OUT"
+fi
+
+MIN_CHECKS=29
 if (( checks < MIN_CHECKS )); then
   echo "FAIL: only $checks assertions ran, expected >= $MIN_CHECKS" >&2
   fails=$((fails + 1))
