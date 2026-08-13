@@ -54,20 +54,20 @@ sole pull path.
       **Never one without the other** — Arm C yields a zot-side `202` with no response to the client.
 - [x] 2.3 Add the `#7282`-house-style comment: what was measured (the Arm A/B/C table), the `gcDelay`
       upper bound, and *re-measure on every zot bump, never re-word*.
-- [ ] 2.4 Widen `JQ_TICK` to carry `statusCode` and `path`, appended **after** `zmsg`, and widen the
+- [x] 2.4 Widen `JQ_TICK` to carry `statusCode` and `path`, appended **after** `zmsg`, and widen the
       `read -r` in the **same edit**. A mismatch folds fields into `zmsg` and prefix-matching keeps
       returning 0 — green over a corrupted record.
-- [ ] 2.5 Add `is_upload_failure_evidence "$zstatus" "$zpath"` as a sibling predicate at the single
+- [x] 2.5 Add `is_upload_failure_evidence "$zstatus" "$zpath"` as a sibling predicate at the single
       call site (`if is_cap_exempt "$zmsg" || …`). Match the `/blobs/uploads/` **pairing**, not all
       5xx — a broad 5xx arm starves crash traces in the shared 17-slot exempt lane.
       Do **not** change `is_cap_exempt()`'s signature.
-- [ ] 2.6 Guard 2 mutation matrix rows 1-7 + harness H1: apply each, observe RED/PASS, revert.
+- [x] 2.6 Guard 2 mutation matrix rows 1-7 + harness H1: apply each, observe RED/PASS, revert.
 - [x] 2.7 Guard 3 mutation matrix rows 1-6 + harness H1, including the typo'd-key negative control.
-- [ ] 2.8 Update the shadow reader `scripts/followthroughs/zot-log-channel-7440.sh` (and its pin
+- [x] 2.8 Update the shadow reader `scripts/followthroughs/zot-log-channel-7440.sh` (and its pin
       `tests/scripts/test-zot-log-channel-probe.sh`) — or record in-file why it stays four-class.
 - [x] 2.9 `bash apps/web-platform/infra/registry-userdata-budget.sh --json` — confirm `stored_bytes`
       under `cap` with headroom above the ADR-185 floor.
-- [ ] 2.10 `bash apps/web-platform/infra/zot-log-shipper.test.sh` passes with its `>= 150` floor and
+- [x] 2.10 `bash apps/web-platform/infra/zot-log-shipper.test.sh` passes with its `>= 150` floor and
       `CANARY_OK` canary **intact** — do not lower the floor.
 
 ## Phase 3 — Build the dispatcher

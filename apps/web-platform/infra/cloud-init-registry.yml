@@ -906,6 +906,31 @@ write_files:
         esac
         return 1
       }
+      # The HTTP-API HALF of an upload-failure PAIRING is cap-exempt too (#7555). zot reports a
+      # failed blob upload as TWO rows: the `PatchBlobUpload` error line (already exempt above)
+      # and an ordinary HTTP-API row carrying `statusCode`, `latency` and `Content-Length`. Only
+      # the pairing carries the numbers that distinguish a DEADLINE from an origin fault, and
+      # only the first half was surviving the cap. Measured in the 2026-08-13 failure tick:
+      # `SOLEUR_ZOT_LOG_DROPPED n=124 cum=5743 reason=rate_cap` against a baseline of n=8, and
+      # cumulatively `dropped_cum=5841` vs `shipped_cum=5151` — so the deciding evidence survived
+      # by luck of its class, not by design.
+      #
+      # MATCHED ON THE `/blobs/uploads/` PAIRING, never on 5xx alone. A broad 5xx arm would admit
+      # ordinary health-probe and pull-storm failures into the SHARED 17-slot exempt lane and
+      # starve the panic traces out of it — reinstating the #7444 R12 priority inversion one
+      # layer down, in the fix for it.
+      is_upload_failure_evidence() {
+        # $1 = statusCode, $2 = path. Any 5xx: 502/503/504 are as much a cut upload as 500, and
+        # pinning 500 alone would make the guard blind to exactly the proxy-side shapes.
+        case "$1" in
+          5??) ;;
+          *) return 1 ;;
+        esac
+        case "$2" in
+          */blobs/uploads/*) return 0 ;;
+        esac
+        return 1
+      }
       # THE TICK IS THE WINDOW (ADR-184 §4). A cron one-shot starts each counter at zero and ends
       # at exit, so there is no rolling-window boundary to arbitrate and no `maybe_roll_window`.
       WIN_COUNT=0
@@ -994,11 +1019,34 @@ write_files:
       # docker daemon lines, pre-logger startup errors — the highest-value evidence) vanished at
       # the jq stage with no drop row and no stderr. `(...) // ""` applies the alternative to the
       # empty stream instead. Caught by T6b's non-vacuity fixture, not by any leak fixture.
-      # @tsv escapes embedded tabs and newlines, so a field cannot split a record. The three
-      # fields are emitted in a fixed order and `read -r` with IFS=tab takes them positionally;
-      # zmsg is LAST because it is the only one that can legitimately be empty.
-      JQ_TICK='(.MESSAGE // "") as $m | [(.__CURSOR // ""), $m, (($m | fromjson? | .message?) // "")] | @tsv'
-      while IFS=$'\t' read -r cur msg zmsg; do
+      # @tsv escapes embedded tabs and newlines, so a field cannot split a record. The fields are
+      # emitted in a fixed order and `read -r` with IFS=tab takes them positionally.
+      #
+      # EVERY FIELD IS SENTINELLED WITH `-`, and that is load-bearing rather than tidy (#7555).
+      # `IFS=$'\t'` makes tab an IFS-*WHITESPACE* character, so `read` COLLAPSES runs of tabs and
+      # strips leading ones: one empty field does not read back as empty, it SHIFTS every later
+      # field one position LEFT. Measured on this exact record — with an empty `message`,
+      # zstatus lands in zmsg and zpath lands in zstatus, so is_cap_exempt classifies a status
+      # code and the upload predicate reads a path as a status. Prefix matching still returns 0
+      # and the suite stays GREEN over a corrupted record, which is the fail-open this
+      # sentinelling removes by construction. `-` matches no is_cap_exempt arm and is neither a
+      # legal statusCode nor a legal path, so "absent" stays representable and unambiguous.
+      #
+      # `(($m | fromjson?) // {})` and the per-field `// null` are the same empty-stream trap the
+      # comment above describes: `fromjson?` on a plaintext line yields EMPTY, not null, and an
+      # empty stream inside an array literal makes the element VANISH — a 5-field contract would
+      # silently emit 4. `// null` converts empty to null so `s` can sentinel it.
+      #
+      # statusCode and path are appended AFTER zmsg so existing positional reads keep their
+      # meaning; the `read -r` arity below is widened IN THE SAME EDIT, because a field list and
+      # an arity that disagree is exactly the corruption described above.
+      JQ_TICK='def s: if (. == null or . == "") then "-" else (. | tostring) end; (.MESSAGE // "") as $m | (($m | fromjson?) // {}) as $j | [((.__CURSOR // null) | s), (($m // null) | s), ((($j.message?) // null) | s), ((($j.statusCode?) // null) | s), ((($j.path?) // null) | s)] | @tsv'
+      while IFS=$'\t' read -r cur msg zmsg zstatus zpath; do
+        # Translate sentinels back to the empty string the downstream code expects. Done here,
+        # once, so no consumer has to know about the wire representation.
+        [ "$cur" = "-" ] && cur=""
+        [ "$zmsg" = "-" ] && zmsg=""
+        [ "$msg" = "-" ] && msg=""
         [ -n "$msg" ] || continue
         # THE CURSOR ADVANCES ON EVERY *DECIDED* ROW, not only on delivered ones (#7444 R1).
         #
@@ -1015,7 +1063,22 @@ write_files:
         # A capped row is DECIDED and ACCOUNTED (emit_drops carries it), not undelivered. Only an
         # undelivered row may hold the cursor, which is exactly what F-3 established.
         decided=0
-        if is_cap_exempt "$zmsg"; then
+        # PLAINTEXT CRASH EVIDENCE (#7555, pre-existing since #7444 R12). `zmsg` is the PARSED
+        # zerolog `message` field, so it is EMPTY for any line that is not zot JSON — and a Go
+        # panic is written to stderr as PLAINTEXT. So the four crash arms of is_cap_exempt
+        # (panic:, fatal error, runtime error, [signal) could never match the input they were
+        # added for: measured on origin/main, a `panic: runtime error: …` journald line yields
+        # zmsg="" and classifies as ORDINARY, i.e. the crash class was droppable at the cap
+        # during exactly the crash flood R12 exists to survive. The suite missed it because its
+        # panic fixtures wrap the panic text INSIDE a JSON `message`.
+        #
+        # The fallback fires ONLY when zmsg is empty — that is, only for a line that is not zot
+        # JSON — so the #7444 F-5 whole-line bypass stays closed by construction: an attacker's
+        # `User-Agent: executing gc` rides on an HTTP-API row, which always parses and therefore
+        # always has a non-empty zmsg and never reaches this arm. T19 pins both directions.
+        _zclass="$zmsg"
+        [ -n "$_zclass" ] || _zclass="$msg"
+        if is_cap_exempt "$_zclass" || is_upload_failure_evidence "$zstatus" "$zpath"; then
           if [ "$WIN_EXEMPT" -ge "$CAP_EXEMPT_PER_INTERVAL" ]; then
             WIN_DROPPED_EXEMPT=$(( WIN_DROPPED_EXEMPT + 1 )); decided=1
           else
