@@ -411,7 +411,7 @@ No open code-review issue mentions `.github/workflows/apply-deploy-pipeline-fix.
   apply. It is a fourth Doppler-reading step. All three values are now `::add-mask::`ed.
 - **The production apply invocation is rewritten** (saved plan rather than re-plan). That is the
   reason the threshold stays `single-user incident` even though PR-A adds no production write.
-- **Brand-survival threshold:** `single-user incident` (unchanged).
+- **Brand-survival threshold:** `single-user incident` — unchanged by PR-A.
 
 ### Original (PR-B) text follows
 
