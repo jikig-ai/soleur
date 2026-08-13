@@ -312,8 +312,12 @@ jobs:
         run: |
           set -uo pipefail
           # `set +e` is REQUIRED and `set -uo pipefail` is NOT a substitute. Actions runs a `run:`
-          # block with no `shell:` key under `bash --noprofile --norc -eo pipefail {0}` — errexit
-          # is ALREADY ON, and `set -uo pipefail` only ADDS flags. Without this, the first curl
+          # block with no `shell:` key under `/usr/bin/bash -e {0}` — errexit is ALREADY ON, and
+          # `set -uo pipefail` only ADDS flags. (`bash --noprofile --norc -eo pipefail {0}` is the
+          # mapping for an EXPLICIT `shell: bash`; this comment asserted that one until #7506,
+          # and it is the copy that misled that plan into pinning the wrong test harness for a
+          # different workflow. `scripts/lint-workflow-errexit-capture.py` records both mappings
+          # correctly and is the authority.) Without this, the first curl
           # that returns non-zero (which is a VERDICT here, not an error) would abort the shell
           # at that line: rc is never read, no finding is recorded, $GITHUB_OUTPUT is never
           # written, and every step below reads as "the check passed". That is precisely the
