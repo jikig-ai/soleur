@@ -541,10 +541,25 @@ chmod +x "$FIXDIR8"/*.test.sh
 mkfixture_wf "$FIXDIR8/wf.yml" "$FIXDIR8/aaa-killed.test.sh" "$FIXDIR8/bbb-fail.test.sh"
 rc10d=0
 OUT10D="$(INFRA_WF="$FIXDIR8/wf.yml" SOLEUR_INFRA_DIR="$FIXDIR8" timeout 60 bash "$SUT" 2>&1)" || rc10d=$?
+# TWO assertions, deliberately. `rc == 1` alone is VACUOUS w.r.t. the property this arm
+# names: the runner exits 1 for `failed>0 || UNACCOUNTED>0`, so a classifier that detects NO
+# kills at all puts both suites in `failed` and exits 1 too. Measured 2026-08-13 — neutering
+# the classifier (`suite_rc_is_signal_shaped … || continue` -> `continue`) left this arm
+# reporting `[ok]` while T10a/T10c/T10h all correctly reddened. An exit code is a BUCKET
+# several outcomes share; asserting it proves precedence only once detection is pinned
+# separately. Its sibling T10e already did this correctly, which is what made the gap legible.
 if (( rc10d == 1 )); then
   ok "T10d: one killed + one failed exits 1 — an attributed failure dominates (ADR-177's contract)"
 else
   no "T10d: a mixed run exited ${rc10d}, expected 1 — a real assertion failure was reported as a termination"
+fi
+# The DETECTION half: the kill must still have been seen and reported, not silently absorbed
+# into `failed`. Without this, "failure dominates" is indistinguishable from "kills are
+# invisible" — and the second is the defect this whole PR exists to remove.
+if printf '%s\n' "$OUT10D" | grep -qF '1 were TERMINATED BY A SIGNAL'; then
+  ok "T10d: the dominated kill is still DETECTED and reported (breakdown names 1 terminated suite)"
+else
+  no "T10d: exit 1 was reached with NO killed breakdown — the termination was absorbed into the failure count, so the runner cannot distinguish a starved suite from a regression"
 fi
 
 # ── T10e: rc 124 is an ATTRIBUTED verdict, never a kill (M3 / AC4) ────────────
@@ -967,7 +982,10 @@ fi
 # (parent 72, child 49), not estimated — leaving the old numbers would have let the whole
 # propagation battery be deleted without either floor noticing, which is the one failure both
 # floors exist to prevent.
-if [[ -n "${SOLEUR_MUTATION_CHILD:-}" ]]; then MIN_ASSERTIONS=49; else MIN_ASSERTIONS=72; fi
+# Ratcheted to the CURRENT measured count, never left with slack: slack is deletion budget,
+# so a floor trailing the real count silently permits removing exactly that many assertions.
+# 73/50 after T10d gained its detection half (see the T10d block).
+if [[ -n "${SOLEUR_MUTATION_CHILD:-}" ]]; then MIN_ASSERTIONS=50; else MIN_ASSERTIONS=73; fi
 TOTAL=$(( pass + fail ))
 if (( TOTAL < MIN_ASSERTIONS )); then
   echo "[FAIL] anti-vacuity: only ${TOTAL} assertion(s) ran, expected >= ${MIN_ASSERTIONS}" >&2
