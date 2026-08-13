@@ -78,7 +78,8 @@ republishes it daily forever while Guard 3 reports in-sync.
 - [x] **5.5** Fail closed on an empty list or name miss
 - [x] **5.6** Probe must live **inside** the existing verify step —
       `apply-github-infra.yml:355` traps and shreds the PEM on step exit
-- [x] **5.7** Published-artifact verifier (C6): bounded ETag poll with `Cache-Control: no-cache`,
+- [x] **5.7** Published-artifact verifier (C6): bounded cache-busted BODY poll with `Cache-Control: no-cache`
+      (the plan said "ETag poll"; no ETag/If-None-Match was used — see plan Addendum A1),
       ~5 min cap, then fail. Measured `max-age=300`, `source-age: 102` — a single fetch inside the
       apply job reads the **cached old copy**, making the verifier vacuous on the very first run
 - [x] **5.8** Raw `diff`, never `jq -S` — byte identity is the stated property

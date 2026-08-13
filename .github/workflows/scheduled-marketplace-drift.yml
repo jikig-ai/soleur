@@ -45,7 +45,9 @@
 #       the foot of this file reads — and that heartbeat was found in this same PR to have never
 #       delivered a single check-in. Re-topologising the plugin's only distribution alarm in the
 #       PR that repaired it is the change most likely to break it unobserved, so it lands
-#       separately, where a failed heartbeat is attributable. See the tracked follow-up.
+#       separately, where a failed heartbeat is attributable. Tracked in #7520, whose
+#       trigger is: before a second dispatch is added here, or on the next change to this
+#       permissions block.
 #   (iii) NO PRODUCT SECRETS ARE CONSUMED. Unlike scheduled-prod-version-drift.yml — which
 #       acknowledges rather than meets `plugins/soleur/skills/schedule/SKILL.md`'s reservation
 #       that a gate-override be reserved for a genuinely pure-GH op — this workflow consumes the

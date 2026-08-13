@@ -589,3 +589,46 @@ fixtures; the rest run in the existing harnesses.
 19. Second `plugins[]` entry appended → blocked (G4.3)
 20. Guard 4 wired non-blocking or empty file list → fails (G4.4)
 21. `github_repository_file` replacement plan → `resource_deletes` trips the destroy guard (FR15/C16)
+
+## Addendum — 2026-08-13 (#7493 review)
+
+Appended rather than edited in place: the body above is the record of what was planned, and
+several of its prescriptions turned out to be wrong or under-specified. Each correction below
+names the plan text it supersedes.
+
+**A1 — "bounded ETag poll" (§Implementation step 13, AC17, tasks 5.7, and the C6 row) was never
+built, and should not have been prescribed.** The implementation is a cache-busted **body** poll:
+`curl -H 'Cache-Control: no-cache' -H 'Pragma: no-cache'` into a temp file, `diff -u` against the
+source, `sleep 15`, repeat. There is no `ETag` or `If-None-Match` anywhere in the repo. The
+property the plan wanted — do not be satisfied by the CDN's cached copy — is met; the mechanism
+named is not the one used. The prescription propagated into `infra/github/README.md` and into the
+review brief before anyone read the code.
+
+**A2 — the plan's Guard Contract had no row for the assembly that actually matters.** Every
+guard was specified against its own artifact, and each one holds. What none of them covered:
+the apply job had no ref guard, so a branch push plus a `workflow_dispatch` published arbitrary
+manifest content through the App's own ruleset bypass — no PR, no approval, `marketplace-manifest-guard`
+never invoked, and the marketplace repo never touched. The plan's threat model assumed writes
+reach the published file *through* the marketplace repo. They do not have to.
+
+**A3 — three guards were satisfiable by implementations that assert nothing**, none of which the
+plan's mutation matrix could see, because the matrix specified mutations of the SUT and not of
+the harness:
+- Guard 4's only must-PASS fixture was the canonical file, and `ci.yml` validates the canonical
+  against itself, so `diff "$1" canonical` scored 14/14 and passed CI with the #7471 `version`
+  key restored.
+- Guard 1's `mutate()` ran inside a command substitution, so a failed `jq` yielded an empty path
+  and the RED row passed on the fail-closed branch — 16 of 18 rows green with it fully broken.
+- No canonical↔`.tf` lockstep existed, so `required_approving_review_count = 0` plus a fourth
+  bypass actor left all five suites green. Both sibling rulesets already had this gate.
+
+**A4 — `~DEFAULT_BRANCH` needed a pinned default branch, which the plan did not identify.**
+The ruleset's condition follows whatever the default branch is; nothing declared it. The pivot is
+invisible to Guard 1 by construction.
+
+**A5 — deferred, with the trigger stated.** Narrowing `actions: write` off the untrusted-input job
+in `scheduled-marketplace-drift.yml` requires relocating `steps.dispatch.outcome`, which the Sentry
+status expression reads — and that heartbeat was found in this same PR to have never delivered a
+check-in. Re-topologising the plugin's only distribution alarm in the PR that repaired it is the
+change most likely to break it unobserved, so it ships separately — tracked in #7520. Trigger: before any second
+dispatch is added to that workflow, or on the next change to its permissions block.
