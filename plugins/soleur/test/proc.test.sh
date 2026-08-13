@@ -163,24 +163,43 @@ make_fake_proc "$FAKE_PROC" 1010 "$EVIL_DIR" 1    5008 bash scripts/test-all.sh 
 # A process whose cwd reaches the worktree THROUGH a symlink. Owned, but only
 # once canonicalized — the M9 fixture.
 make_fake_proc "$FAKE_PROC" 1011 "$LINKED/sub" 1  5010 bash scripts/test-all.sh || exit 2
+# A WRAPPER prefixed onto a command that merely MENTIONS the pattern. Fixture
+# 1003 covers the bare form; without this one the wrapper-tolerance path is
+# unmeasured, and a revision that let it match `timeout 600 grep -rn
+# test-all.sh` passed every existing arm including M4.
+make_fake_proc "$FAKE_PROC" 1012 "$WT"       1    5011 timeout 600 grep -rn test-all.sh scripts/ || exit 2
+# An UNTERMINATED cmdline (no trailing NUL). Processes that rewrite argv in
+# place routinely leave it off; a `read -d ''` loop without an EOF fallback
+# discards the final element and the process becomes invisible.
+make_fake_proc "$FAKE_PROC" 1013 "$WT"       1    5012 bash scripts/test-all.sh || exit 2
+truncate -s -1 "$FAKE_PROC/1013/cmdline" || { echo "ERROR: truncate fixture failed" >&2; exit 2; }
+# A cwd containing an ESC sequence that would erase the line above it in a
+# terminal. Outside the boundary, so it is refused — and its path must reach
+# the operator neutralized.
+ESC_DIR="$FP_ROOT/$(printf 'esc\033[2K\033[1Aoverwritten')"
+mkdir -p "$ESC_DIR" || { echo "ERROR: esc fixture mkdir failed" >&2; exit 2; }
+make_fake_proc "$FAKE_PROC" 1014 "$ESC_DIR" 1     5013 bash scripts/test-all.sh || exit 2
 # pid `0` — matches the `[0-9]*` glob, and `kill -TERM 0` signals the caller's
 # whole process group. The M7 fixture.
 make_fake_proc "$FAKE_PROC" 0    "$WT"       1    5009 bash scripts/test-all.sh || exit 2
 
 # The one line every mutation must move.
 #   excluded by ancestry: 9997/9998/9999.
-#   signalled: 1001, 1006 (subdir), 1007 (sh), 1008 (wrapper), 1011 (symlink).
-#   refused: 1002 (sibling), 1005 (<unreadable>), 1009 (deleted), 1010 (evil).
-#   skipped: 1004 (pgid).  unmatched: 1003.  rejected before scan: 0.
-#   scanned counts the 14 valid pids (pid 0 fails the numeric guard).
+#   would-signal: 1001, 1006 (subdir), 1007 (sh), 1008 (wrapper), 1011
+#     (symlink), 1013 (unterminated cmdline).
+#   refused: 1002 (sibling), 1005 (<unreadable>), 1009 (deleted), 1010 (evil),
+#     1014 (ESC in path).
+#   skipped: 1004 (pgid).  unmatched: 1003, 1012 (wrapper + mention).
+#   rejected before scan: pid 0.  scanned counts the 17 valid pids.
 #
-# `late_refusals` is part of the oracle, not decoration. The signal site
+# `late_refused` is part of the oracle, not decoration. The signal site
 # RE-VERIFIES ownership before signalling, which is correct defence-in-depth
 # and has an awkward consequence for measurement: flipping the classification
-# fork (M6) is then re-caught downstream and the counts do not move, so the
-# fork reads as non-load-bearing. Counting the re-verification's own refusals
-# separates the two enforcement points, so each is pinned independently.
-BASELINE_COUNTS='killed=5 failed=0 refused=4 skipped_same_pgroup=1 scanned=14 mode=dry-run late_refusals=0'
+# fork (M6) is then re-caught downstream and the totals do not move, so the
+# fork reads as non-load-bearing. A separate counter keeps the two enforcement
+# points independently pinned — and it is now printed by the TOOL, not derived
+# by this suite, so an operator sees the same split a mutation does.
+BASELINE_COUNTS='killed=0 would_signal=6 failed=0 refused=5 late_refused=0 skipped_same_pgroup=1 scanned=17 mode=dry-run'
 
 run_fake() {
   local helper="$1"; shift
@@ -203,13 +222,21 @@ run_linked() {
       bash "$helper" "$@"
 }
 
-_signature() {
-  awk '/^killed=/ { c = $0 }
-       /reason=ownership-changed-before-signal/ { n++ }
-       END { if (c == "") exit 0; printf "%s late_refusals=%d\n", c, n + 0 }'
-}
+_signature() { grep -E '^killed=' | tail -1; }
 counts_of()        { run_fake   "$1" kill_mine test-all.sh 2>/dev/null | _signature; }
 counts_of_linked() { run_linked "$1" kill_mine test-all.sh 2>/dev/null | _signature; }
+
+# Oracle for the output sanitizer: a mutation there does not move any counter,
+# so the signature has to be about the BYTES that reach the operator.
+counts_esc() {
+  local o
+  o=$(run_fake "$1" list_runs test-all.sh 2>/dev/null)
+  if printf '%s' "$o" | LC_ALL=C grep -q $'\033'; then
+    printf 'RAW-CONTROL-BYTE-PRESENT'
+  else
+    printf '%s' "$BASELINE_COUNTS"
+  fi
+}
 
 echo "== proc.sh =="
 _harness_selfcheck
@@ -274,6 +301,21 @@ check_row 1006 mine    "T-CARD: a SECOND owned process, in a subdirectory, is se
 check_row 1007 mine    "T-SH: a run under sh (not just bash) is selected"
 check_row 1008 mine    "T-WRAP: 'timeout 600 bash <suite>' is selected (wrapper argv[0])"
 check_row 1011 mine    "T-SYMCWD: a cwd reaching the worktree through a symlink is owned"
+check_row 1013 mine    "T-NONUL: a process with an unterminated cmdline is still matched"
+check_row 1014 foreign "T-ESC: a process whose cwd holds an ESC sequence is refused"
+if grep -qE "^1012	" <<<"$out"; then
+  fail "T-WRAPMENTION: 'timeout 600 grep -rn test-all.sh' was selected — the wrapper walk must not match inside its own tolerance region"
+else
+  pass "T-WRAPMENTION: a wrapper prefixed onto a command that merely mentions the pattern is not selected"
+fi
+# The sanitizer must be a CLASS, not a hand-picked list: \n \t \r were covered
+# from the start and ESC was not, and an ESC in a printed path can erase the
+# line above it in the operator's terminal.
+if printf '%s' "$out" | LC_ALL=C grep -q $'\033'; then
+  fail "T-ESC-B: a raw ESC byte reached the output"
+else
+  pass "T-ESC-B: no raw control bytes in the output (sanitizer is a class, not a list)"
+fi
 check_row 1009 foreign "T-DEL: a cwd reported as ' (deleted)' is refused, not string-matched"
 check_row 1010 foreign "T-EVIL: the newline-cwd carrier itself is refused"
 
@@ -323,7 +365,7 @@ else
   fail "T-baseline: expected '$BASELINE_COUNTS', got '$got'"
 fi
 if run_fake "$HELPER" kill_mine no-such-pattern-xyz 2>/dev/null \
-   | grep -qE '^killed=0 failed=0 refused=0 skipped_same_pgroup=0 scanned=14 mode=dry-run$'; then
+   | grep -qE '^killed=0 would_signal=0 failed=0 refused=0 late_refused=0 skipped_same_pgroup=0 scanned=17 mode=dry-run$'; then
   pass "T-D6: counter line printed even when nothing matched"
 else
   fail "T-D6: counter line missing/wrong on a zero-match run"
@@ -368,6 +410,40 @@ if [[ "$lout" == "$BASELINE_COUNTS" ]]; then
   pass "T-CANON: a symlinked worktree root canonicalizes and still selects its own runs"
 else
   fail "T-CANON: symlinked root changed the verdict: '$lout'"
+fi
+
+# --- T-NEST: a nested worktree is excluded even when its path holds a space -
+# Needs a REAL git repo: the exclusion is derived from `git worktree list`, and
+# the defect this pins was a parse (`${line%% *}` truncating at the first space)
+# that no synthesized fixture can express. Under-exclusion is the dangerous
+# direction and it is the one that occurred — the space-named worktree was
+# classified as ours from the parent checkout.
+GITR="$(mktemp -d -t proc-nest.XXXXXXXX)" || exit 2
+ROOTS+=("$GITR")
+NEST_OK=1
+git -C "$GITR" init -q -b main >/dev/null 2>&1 || NEST_OK=0
+git -C "$GITR" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init >/dev/null 2>&1 || NEST_OK=0
+git -C "$GITR" worktree add -q ".worktrees/my branch" -b feat-space >/dev/null 2>&1 || NEST_OK=0
+if [[ "$NEST_OK" != "1" ]]; then
+  fail "T-NEST: fixture error — could not build the git worktree fixture"
+else
+  GITR_C=$(cd "$GITR" && pwd -P)
+  NPROC_DIR="$GITR/fakeproc"; mkdir -p "$NPROC_DIR"
+  make_fake_proc "$NPROC_DIR" 2001 "$GITR_C"                        1 6001 bash scripts/test-all.sh || exit 2
+  make_fake_proc "$NPROC_DIR" 2002 "$GITR_C/.worktrees/my branch"   1 6002 bash scripts/test-all.sh || exit 2
+  nout=$(env PROC_SH_ROOT="$NPROC_DIR" PROC_SH_SELF_PID=2999 \
+             PROC_SH_WORKTREE="$GITR_C" PROC_SH_DRY_RUN=1 \
+             bash "$HELPER" list_runs test-all.sh 2>/dev/null)
+  if grep -qE '^2001	mine	' <<<"$nout"; then
+    pass "T-NEST-A: a process in the parent checkout is owned (positive control)"
+  else
+    fail "T-NEST-A: parent-checkout process not owned: $nout"
+  fi
+  if grep -qE '^2002	foreign	' <<<"$nout"; then
+    pass "T-NEST-B: a nested worktree whose path contains a space is excluded"
+  else
+    fail "T-NEST-B: space-named nested worktree NOT excluded (cross-worktree kill): $nout"
+  fi
 fi
 
 # --- AC7: mirrored primitives pinned against drift, over CODE only ---------
@@ -435,11 +511,20 @@ if [[ -z "$SLEEP_PID" ]]; then
   fail "T3: fixture error — spawned sleep never appeared in list_runs (cannot test the kill path)"
 else
   SPAWNED+=("$SLEEP_PID")
-  real=$(env PROC_SH_WORKTREE="$SANDBOX" bash "$HELPER" kill_mine sleep 2>/dev/null | grep -E '^killed=' | tail -1)
-  if [[ "$real" == killed=1\ failed=0\ * && "$real" == *mode=live* ]]; then
+  real_full=$(env PROC_SH_WORKTREE="$SANDBOX" bash "$HELPER" kill_mine sleep 2>/dev/null)
+  real=$(grep -E '^killed=' <<<"$real_full" | tail -1)
+  if [[ "$real" == killed=1\ would_signal=0\ failed=0\ * && "$real" == *mode=live* ]]; then
     pass "T3: positive control — worktree-owned process signalled (killed=1, mode=live)"
   else
-    fail "T3: expected 'killed=1 failed=0 … mode=live', got '$real'"
+    fail "T3: expected 'killed=1 would_signal=0 failed=0 … mode=live', got '$real'"
+  fi
+  # The audit line must carry the path. Re-reading cwd AFTER the kill loses it
+  # exactly when the signal succeeds — the process is gone, readlink fails, and
+  # the record degrades to <unreadable> on the one line that matters.
+  if grep -qE "^signalled pid=$SLEEP_PID cwd=$SANDBOX\$" <<<"$real_full"; then
+    pass "T3d: the signalled line records the path the ownership check passed on"
+  else
+    fail "T3d: signalled line lost its path: $(grep -E '^signalled' <<<"$real_full" || echo MISSING)"
   fi
   gone=0
   for _ in $(seq 1 40); do
@@ -481,7 +566,7 @@ if [[ -z "$V3" ]]; then
 else
   SPAWNED+=("$V3")
   f_out=$(env PROC_SH_WORKTREE="$SB3" bash "$HELPER" kill_mine sleep NOSUCHSIG 2>/dev/null | grep -E '^killed=' | tail -1)
-  if [[ "$f_out" == killed=0\ failed=1\ * ]]; then
+  if [[ "$f_out" == killed=0\ would_signal=0\ failed=1\ * ]]; then
     pass "T-FAILED: an undeliverable signal counts as failed=1, not killed=1"
   else
     fail "T-FAILED: expected 'killed=0 failed=1 …', got '$f_out'"
@@ -553,8 +638,14 @@ mutate M2 'guard < 64' 'guard < 2' \
   && expect_red M2 "a 3-deep wrapper must still be excluded; \$\$ + \$PPID alone is insufficient (pins R1)"
 mutate M3 '"$pgrp" == "$self_pgrp"' '"$pgrp" == "__never__"' \
   && expect_red M3 "a same-pgid fork of proc.sh must not be selected"
-mutate M4 '    (( seen_wrapper )) || return 1' '    :' \
-  && expect_red M4 "a process merely mentioning the pattern must not be selected — the strict no-wrapper rule is what excludes 'grep -rn test-all.sh'"
+mutate M4 '  case " $_PROC_SHELLS " in
+    *" $b "*) ;;
+    *) return 1 ;;
+  esac' '  case " $_PROC_SHELLS " in
+    *" $b "*) ;;
+    *) ;;
+  esac' \
+  && expect_red M4 "a process merely mentioning the pattern must not be selected — the effective command must be the target or a shell"
 mutate M5 '  rest="${line##*'"'"') '"'"'}"
   awk -v i="$idx" '"'"'{print $i}'"'"' <<<"$rest"' \
   '  awk -v i="$(( idx + 2 ))" '"'"'{print $i}'"'"' <<<"$line"' \
@@ -573,6 +664,18 @@ mutate M9 '_proc_canon "$cwd"' 'printf "%s" "$cwd"' \
 # to measure it properly.
 mutate M10 'root=$(_proc_canon "$PROC_SH_WORKTREE")' 'root="$PROC_SH_WORKTREE"' \
   && expect_red M10 "a symlinked ownership boundary must canonicalize (root-side)" counts_of_linked
+# The wrapper walk must STEP OVER wrappers, never MATCH inside its tolerance
+# region. Reverting to the tolerant form re-selects `timeout 600 grep -rn
+# test-all.sh` — the harm the whole argv-position rule exists to prevent, and
+# the form a previous revision of this file actually shipped.
+mutate M11 '            -* | *=* | [0-9]*) i=$(( i + 1 )) ;;
+            *) break ;;' '            *) i=$(( i + 1 )) ;;' \
+  && expect_red M11 "a wrapper must not license a bare basename match over the whole argv"
+# The sanitizer must be a character CLASS. Reverting it to the hand-picked
+# three-character list lets an ESC sequence through, which can rewrite the
+# operator's terminal above the line that reports what was killed.
+mutate M12 "LC_ALL=C tr -c '[:print:]' '?'" "tr '\\n\\t\\r' '???'" \
+  && expect_red M12 "the output sanitizer must be a class, not a hand-picked list" counts_esc
 
 # ---------------------------------------------------------------------------
 # AC5 — auto-discovery, not hand-registration.
@@ -593,7 +696,7 @@ fi
 # Set to the FULL current count from a green run, and ratcheted up by hand when
 # arms are added. Any slack between the floor and the real count is budget for
 # a future edit to delete assertions unnoticed, so there is none.
-MIN_ASSERTIONS=49
+MIN_ASSERTIONS=58
 TOTAL=$((PASS + FAIL))
 echo
 echo "  Total: $TOTAL  pass: $PASS  FAIL: $FAIL"

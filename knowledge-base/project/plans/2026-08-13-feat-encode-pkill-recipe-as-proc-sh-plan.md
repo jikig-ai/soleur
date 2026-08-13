@@ -263,6 +263,32 @@ before the fix.
 | M8 | Delete the ` (deleted)` refusal | A cwd the kernel reports as deleted is a *could-not-establish* state, not a path. String-matching it signals on no positive proof. |
 | M9 | Drop canonicalization of the process's cwd | A cwd reaching the worktree through a symlink must still be owned. Requires a fixture on the far side of the transform — every path in the original suite was already canonical, so this mutation survived until one was added. |
 | M10 | Drop canonicalization of the ownership boundary | A symlinked worktree root must still own its runs. Evaluated against the **symlinked-root oracle**: under an already-canonical root this mutation changes nothing, so the default oracle would report it survived and the "fix" would have been to weaken the guard. |
+| M11 | Revert the wrapper walk to tolerating arbitrary tokens | A wrapper prefix must not license a bare basename match over the whole argv. Measured on the reverted form: `timeout 600 grep -rn test-all.sh scripts/` classified as **ours**. |
+| M12 | Revert the output sanitizer to the hand-picked `\n\t\r` list | An ESC sequence in a directory name must not reach the terminal. Evaluated against a **byte-level oracle**, because a sanitizer mutation moves no counter. |
+
+**Two defects were re-created by the fixes for the first round's findings, and both are
+recorded rather than quietly corrected, because in each case the repaired code reproduced the
+class it had just closed.**
+
+*The wrapper walk (M11).* Closing "a `timeout`-wrapped run is invisible" was done by tolerating
+tokens after a wrapper until a shell or the pattern appeared. That degenerated the
+argv-position rule into a bare basename match over every argument — the rule the design
+document explicitly says was "tried and rejected". Measured: `env FOO=1 grep -rn test-all.sh`,
+`nice -n 10 cat notes/test-all.sh` and `env EDITOR=vim vim scripts/test-all.sh` all classified
+as ours. **M4 still passed throughout**, because its fixture is the bare `grep` with no
+wrapper — the guard was intact while the property was gone. The fix consumes only what a
+wrapper can plausibly take and then re-applies the strict rule; an unmatched run is invisible
+(fail closed), which is the survivable direction.
+
+*The nesting exclusion (R2).* Closing "a main checkout owns every worktree beneath it" was done
+by parsing `git worktree list` with `${line%% *}` and joining the results into a
+space-delimited string, then re-splitting with an unquoted `for`. That is **the F1 defect class
+— a path in a text channel — inside the guard written to close a different instance of it**.
+Measured: a worktree at `.worktrees/my branch` truncated to `.worktrees/my`, matched nothing,
+and was not excluded, so the cross-worktree kill returned through the new guard. Now a bash
+array populated from `git -C "$root" worktree list --porcelain`, iterated quoted, and a missing
+git repo **warns** instead of silently yielding an empty exclusion set — the previous comment
+called that state "harmless" and it is the exact state the function exists to prevent.
 
 ### Guard 2 — neither verb ever self-matches
 
