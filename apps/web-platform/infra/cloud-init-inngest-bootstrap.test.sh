@@ -629,13 +629,14 @@ assert "the cosign correction states registry's role is RETAINING the sha256-* t
 # rewrites lines in place, never deletes them), so the ORDERING assertions below are computed
 # against real file offsets.
 echo ""
+ZG_TOTAL_BEFORE="$TOTAL"
 echo "--- Guard 1 (#7462): zot-primary bootstrap pull arm (dedicated host) ---"
 
 DED_CODE_FILE="$(mktemp -t inngest-ci-code-XXXXXX.yml)"
 DED_BLOCK_FILE="$(mktemp -t inngest-ci-block-XXXXXX.sh)"
 # The existing EXIT trap already removes SNIPPET_FILE; extend it rather than replace it.
 trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE"' EXIT
-sed -E 's/#.*$//' "$INNGEST_CI_YML" > "$DED_CODE_FILE"
+sed -E 's/^[[:space:]]*#.*$//' "$INNGEST_CI_YML" > "$DED_CODE_FILE"
 
 # The bootstrap runcmd block, isolated. Used ONLY for the anti-vacuity floor: every other
 # assertion runs against the whole comment-stripped file, because the zot LOGIN and the
@@ -747,7 +748,10 @@ assert "Row3: the hit and the flip are DIFFERENT emit sites (one line cannot rep
   "[[ '$L_ZOTHIT' != '$L_FALLBACK' ]]"
 
 # --- Row 4: one resolution, every consumer follows it -------------------------------------
-ZG_GHCR_LITERALS=$(grep -cE 'ghcr\.io/jikig-ai/soleur-inngest-bootstrap' "$DED_CODE_FILE" || true)
+# OCCURRENCES, not lines. `grep -c` counts matching LINES, so a second literal appended to the
+# same line kept this at 1 and the whole "one resolution, every consumer follows it" property
+# was evadable by a one-line edit. Measured: two literals on one line -> grep -c returns 1.
+ZG_GHCR_LITERALS=$(grep -oE 'ghcr\.io/jikig-ai/soleur-inngest-bootstrap' "$DED_CODE_FILE" | wc -l || true)
 assert "Row4: exactly ONE GHCR literal survives comment-stripping (the IREF seed); found $ZG_GHCR_LITERALS" \
   "(( ZG_GHCR_LITERALS == 1 ))"
 assert "Row4: consumer 1/4 — the pull reads \$IREF" \
@@ -828,6 +832,16 @@ DED_PIN_REF_COUNT=$(grep -coE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+'
 DED_DISTINCT_PINS=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$DED_CODE_FILE" | sort -u | wc -l || true)
 assert "dedicated-host pin-consistency: both refs (IREF + ZIREF) present and share one tag (found $DED_PIN_REF_COUNT refs, $DED_DISTINCT_PINS distinct)" \
   "(( DED_PIN_REF_COUNT == 2 && DED_DISTINCT_PINS == 1 ))"
+
+# --- Guard 1 anti-vacuity FLOOR: the section's own assertion count ------------------------
+# Row6 above floors the guard's INPUTS. Nothing floored its ASSERTIONS, so deleting every
+# `assert` in this section left the suite exit 0 with a clean summary — the headline claim
+# ("the arm is pinned") resting on nothing. Measured. EXACT rather than `>=`: a `>=` floor with
+# slack is attack budget, and one derived from what it guards descends with it. When you add an
+# assertion here, bump this number in the same edit — that is the point, not friction.
+ZG_SECTION_ASSERTIONS=$(( TOTAL - ZG_TOTAL_BEFORE ))
+assert "Guard 1 anti-vacuity: the section ran its full assertion inventory (expected 40, ran $ZG_SECTION_ASSERTIONS)" \
+  "(( ZG_SECTION_ASSERTIONS == 40 ))"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="
