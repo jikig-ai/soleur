@@ -224,27 +224,36 @@ without the attribution lead.
 **Assembly.** Every exit path of that script — the chokepoint is the single `case` on the computed
 verdict; the lead is appended strictly downstream of it.
 
-| # | Mutation | Expected |
-|---|---|---|
-| 1 | Make the attribution query fail (stub non-zero) | **exit code unchanged**; prints `attribution_unavailable` |
-| 2 | Make the attribution query hang/return garbage | **exit code unchanged** |
-| 3 | Remove the `|| true` guard so the lead can abort the script | **RED** |
-| 4 | Add a **second** verdict arm that also prints the lead, without the guard | **RED** (covers all arms, not the first) |
-
-### Guard 2 — the softening does not weaken escalation
-
-**Property.** A host with delivery evidence, zero envelope rows, and `last_ok_age_s` **not** the
-literal `-1` still reports `delivered_but_silent` with its ACT-NOT-WAIT framing.
-
-**Assembly.** Both paths that set `delivered=1` (`boot_marker`, `reporter_carries_shipper_fields`)
-and the single verdict emit site.
+**Mutation matrix.**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | `last_ok_age_s` **absent** (C3b's `control_row_predelivery`) | **still** `delivered_but_silent` — not softened |
-| 2 | `last_ok_age_s=42` | **still** `delivered_but_silent` |
-| 3 | Soften on emptiness rather than the literal `-1` | **RED** (C3b reddens) |
-| 4 | Delivery evidence via the **second** arm with `-1` | softened — covers both members |
+| 1 | Make the attribution query fail (stub non-zero) | exit code unchanged; prints `attribution_unavailable` |
+| 2 | Make the attribution query return garbage the parser cannot decode | exit code unchanged; prints `attribution_unavailable` |
+| 3 | Remove the `|| true` guard so the lead can abort the script | RED |
+| 4 | Add a second verdict arm that also prints the lead, without the guard | RED (covers all arms, not the first) |
+| 5 | Remove the trailing space from the envelope anchor | RED (a neighbouring host's rows are admitted) |
+
+### Guard 2 — the escalation framing is never suppressed
+
+**Property.** Every `delivered_but_silent` arm reports ACT-NOT-WAIT regardless of
+`log_shipper_last_ok_age_s`; the first-tick guidance is ADDITIVE and appears only on the literal
+`-1`. Revised from the original design, which suppressed the framing on `-1` — unsafe, because `-1`
+is the reporter's default on an unreadable state file and no field on that row separates a young
+host from a dead shipper.
+
+**Assembly.** Both paths that set `delivered=1` (`boot_marker` and
+`reporter_carries_shipper_fields`) and the single verdict emit site.
+
+**Mutation matrix.**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | `last_ok_age_s` absent (C3b's `control_row_predelivery`) | ACT present, no first-tick note |
+| 2 | `last_ok_age_s=42` | ACT present, no first-tick note |
+| 3 | Suppress ACT when the value is `-1` (the original design) | RED |
+| 4 | Gate the note on `zot_uptime_s` as host age | RED — that field is the container's current-run age |
+| 5 | Delivery evidence via the second arm with `-1` | ACT plus the note — covers both members |
 
 ## Observability
 
