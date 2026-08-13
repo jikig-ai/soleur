@@ -135,7 +135,10 @@ For each conflicted file, apply the appropriate resolution strategy:
 |-------------|----------|
 | `plugins/soleur/CHANGELOG.md` | Merge both sides -- see 3.2 |
 | `plugins/soleur/README.md` | Accept feature branch component counts |
+| Generated artifacts | Take `--theirs`, then re-run the owning generator -- see 3.2b |
 | Everything else | Claude-assisted resolution -- see 3.3 |
+
+**Generated artifacts (3.2b).** A generated file has no authorial intent to preserve, so 3.3 does not apply to it: hand-picking hunks produces an artifact that matches neither side's source and that no generator would emit. Resolve by discarding both sides and regenerating from the merged source. Known members and their owning generators: `knowledge-base/engineering/architecture/diagrams/model.likec4.json` → `scripts/regenerate-c4-model.sh` (verify with `plugins/soleur/test/c4-model-freshness.test.sh`, which is exactly the in-sync assertion), and `knowledge-base/project/rule-metrics.json` → `scripts/rule-metrics-aggregate.sh`. Lockfiles follow the same shape with a pinned toolchain — see `drain-prs/SKILL.md` §6(a).
 
 **For README.md (accept feature branch):**
 
