@@ -18,6 +18,49 @@ requires_cpo_signoff: true
 > `knowledge-base/project/specs/feat-one-shot-7341-zot-restart-loop-blocks-release/spec.md` exists;
 > this plan is the first artifact on the branch.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-14
+**Review inputs:** `cto` domain leader (which *ran* the discriminating probe rather than reasoning
+from docs), plus the escalated 5-agent panel required at the `single-user incident` threshold —
+`dhh-rails-reviewer`, `kieran-rails-reviewer`, `code-simplicity-reviewer`,
+`architecture-strategist`, `spec-flow-analyzer`.
+
+### Key improvements over the first draft
+
+1. **The cause moved from hypothesis to measurement.** The draft planned a probe-first phase to
+   discover who owned the 60 s. The probe was then actually run against the pinned digest with
+   Cloudflare absent: zot's own defaults are `ReadTimeout`/`WriteTimeout` = 60 s. The tunnel is
+   exonerated; the discovery phase collapsed into a regression gate.
+2. **The chokepoint was wrong.** The draft targeted `scripts/zot-mirror-diagnosis.sh`, which has no
+   stage concept and **is not on the copy path at all** — it is reached only inside the
+   bridge-failure branch. The live defect is one unconditional line in `degraded()`. Retargeting
+   deleted an entire library arm and made Guard 1's assembly true.
+3. **The consumer enumeration was wrong in the section that warns against exactly that.** The draft
+   claimed three call sites; there are six sourcing sites and three *invocations*, two of them in
+   `.github/actions/` — invisible to a `.github/workflows/`-scoped grep.
+4. **An operator step was booked as automation.** `registry-host-replace` is `workflow_dispatch`-only
+   and nothing fires it. Building the dispatcher (with a pull-path pre-check) became a deliverable
+   rather than an assumption.
+5. **The evidence-durability fix was a priority inversion.** Exempting all 5xx would have let health-
+   probe traffic crowd panic traces out of a shared 17-slot lane — reinstating the #7444 R12 defect.
+   Narrowed to the `/blobs/uploads/` pairing, and the real hazard (a `JQ_TICK`/`read -r` arity
+   mismatch that fails *open*) became Guard 2's primary row.
+6. **Two claims of my own were falsified by my own follow-up measurement** and are recorded as
+   corrections rather than quietly dropped: the pipeline is intermittent (~1 in 13), not hard-blocked
+   — a release succeeded an hour later; and the retry loop is not futile, because it genuinely clears
+   a second sub-mode (`unexpected EOF`) that this plan does not claim to fix.
+
+### New considerations surfaced by the deepen gates
+
+- **Downtime & Cutover** — blue-green is structurally blocked (single volume attachment, and the
+  store has no upstream to repopulate from since GHCR's pull leg is revoked). The bounded window is
+  measured at ~2 min from a prior replace, and Guard 3 is what makes a destroy-then-create survivable.
+- **Encryption Posture** — declared rather than waived, including what LUKS here does *not* defend.
+- **Self-grep trap** — AC17 as first written would have failed against its own plan.
+
+---
+
 ## Overview
 
 A `Web Platform Release` failed at the release-blocking `zot mirror` step on 2026-08-13. The cause is
@@ -257,6 +300,28 @@ Triggered by `plan-network-outage-checklist.md` (`connection reset`, `timeout`).
 **Open and explicitly not claimed:** the `unexpected EOF` sub-mode has **no** established owner. This
 plan does not fix it and does not assert the deadline change will.
 
+### Network-Outage Deep-Dive
+
+Per `hr-ssh-diagnosis-verify-firewall`, the L3 layers are verified **before** any service-layer fix is
+proposed. The unusual feature of this incident is that the L7 artifact is what closes the L3
+questions, and it does so more strongly than an allow-list dump would.
+
+| Layer | Status | Verification artifact |
+|---|---|---|
+| **L3 — firewall allow-list** | **verified (by positive service evidence)** | zot's own row shows the request *served*: `username:zot-push` authenticated, an upload UUID issued, and 60 s of `latency` consumed. A dropped packet cannot produce a server-side `PatchBlobUpload` row. Per the checklist's own rule that *"absence of a lower-layer signal is itself a signal"*, presence of an L7 signal is the stronger inverse. |
+| **L3 — DNS / routing** | **verified** | Continuous `10.0.1.x → statusCode:200` on `tags/list` every ~15 s throughout the failure window, from three distinct private-NIC clients. Routing was healthy while the upload failed. |
+| **L7 — TLS / proxy (Cloudflare)** | **REFUTED as the cause** | The failure reproduces byte-for-byte on a local docker bridge with Cloudflare **absent** from the path (§2a). Not "unlikely" — measured. |
+| **L7 — application (zot)** | **CONFIRMED as the cause** | zot's own boot config reports `ReadTimeout: 60000000000` / `WriteTimeout: 60000000000` ns, and a 4 MB blob dribbled over 100 s reproduces the exact production row. |
+
+**No egress-IP / admin-allowlist check is required or performed.** That check exists for the
+operator-SSH class; this path is a CI runner reaching a Cloudflare Access hostname with a service
+token, and the runner's egress is not in any `var.admin_ips` allow-list to begin with. The token
+verdict for the failing run was independently `live`.
+
+**Gap:** none against the checklist. The one genuinely open question — the owner of the
+`unexpected EOF` sub-mode — is an L7 question on a *different* failure shape and is carried as an
+explicit non-goal rather than as an unverified layer.
+
 ---
 
 ## User-Brand Impact
@@ -468,8 +533,19 @@ ADR per `## Architecture Decision`; follow-through per `## Observability`.
 15. `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` passes.
 16. The dispatcher workflow exists, is `actionlint`-clean, and its pull-path pre-check is exercised
     by a test with a synthesized red reading.
-17. No `<tracker>` or `<new-issue>` placeholder remains: `grep -rn '<new-issue>\|<tracker>'` over the
-    diff returns nothing.
+17. No `<tracker>` or `<new-issue>` placeholder remains in **shipped** files. The sweep MUST exclude
+    this feature's own planning artifacts, which legitimately retain the placeholders as a
+    point-in-time record — this plan contains 8 such lines by design, so an unscoped grep fails
+    against a correct implementation:
+
+    ```bash
+    grep -rn '<new-issue>\|<tracker>' \
+      --exclude-dir=knowledge-base/project/specs/feat-one-shot-7341-zot-restart-loop-blocks-release \
+      --exclude=2026-08-13-fix-zot-mirror-large-layer-upload-timeout-plan.md \
+      -- .github/ scripts/ apps/ knowledge-base/engineering/
+    ```
+
+    returns nothing.
 18. PR body carries `Closes #<new-issue>` and `Ref #7341`, and does **not** carry `Closes #7341`.
 
 ### Post-merge (automated by the Phase 3 dispatcher — no human step)
@@ -781,6 +857,47 @@ infrastructure, no user-facing surface, no regulated data, no new vendor, no rec
 
 ---
 
+## Downtime & Cutover
+
+**The offline-inducing operation.** Phase 2 changes `user_data` on `hcloud_server.registry`, which is
+`ForceNew`. Delivery is `terraform apply -replace='hcloud_server.registry'` — a **destroy-then-create**
+of the host that serves the fleet's sole container-image pull path (and, once #7516 merges, the
+Inngest host's bootstrap pull).
+
+**Zero-downtime paths evaluated, and why each is unavailable here.**
+
+| Path | Verdict |
+|---|---|
+| **Blue-green** (provision green, drain, cut over, retire blue) | **Structurally blocked.** `hcloud_volume_attachment.registry` binds `server_id = hcloud_server.registry.id` — one volume, one server. A green host cannot mount the store while blue serves it. And the store is the **sole source of truth for every image**: the GHCR pull leg is revoked (AP-016), so a green host cannot be populated from an upstream. Blue-green would mean a second volume plus a full re-mirror of every kept tag from a registry that has no upstream. |
+| **`terraform state mv` / state-only re-address** | Not applicable. This is a real `user_data` change, not a re-address — the running host genuinely must re-run cloud-init to pick up the new zot config. |
+| **Rolling** | No pool to roll. The registry is a singleton by design (ADR-096). |
+| **Drain-then-act** | No load balancer or connector pool in front of the registry to drain. |
+
+**Accepted: a bounded maintenance window, with the bound measured rather than asserted.** The prior
+volume-preserving replace — dispatch `registry_host_replace`, run `31639782781` on 2026-08-12 — ran
+**20:52 → 20:54, ~2 minutes**. That is the expected order of the window: cloud-init boot, LUKS open,
+volume re-attach, zot start. The volume is preserved throughout, so no image is lost.
+
+**Why the residual window is acceptable here.** Pulls are only on the critical path during a deploy
+or a host bootstrap, both of which are discrete events rather than continuous serving. A ~2-minute
+window in which no *new* deploy can pull is materially different from a user-facing outage: the
+web-platform containers already running are untouched. The alternative — leaving the deadline at 60 s
+— leaves every release exposed to a ~1-in-13 failure indefinitely.
+
+**Per-stage verification and rollback.**
+
+| Stage | Verification | Rollback |
+|---|---|---|
+| Pre-fire | Phase 3 dispatcher's `registry-pull-path-health.sh` pre-check is green; refuses to fire into an already-degraded path (#6400) | Do not fire; the old host keeps serving the old config |
+| Config validity | **Guard 3 has already run pre-merge** against the *rendered* config with the pinned digest. This is the load-bearing rollback substitute: destroy-then-create means the blue host is gone before the green one boots, so a config zot rejects would leave an unreachable dark host with no SSH. Validating the render pre-merge is what makes the window survivable | Merge is blocked, so the replace never fires |
+| Post-boot | `SOLEUR_ZOT_DISK` reports a fresh `boot_id` with `resize_ok=true`; zot's boot line reports both deadlines at `1800000000000` ns | Re-fire the dispatcher; if zot is dark, the config guard's own fixtures identify which key is at fault |
+| Steady state | The follow-through probe's 7-day soak (AC21) | Revert the two config lines and re-fire |
+
+**Sequencing.** Exactly one replace is booked for this work: Phase 1 carries no cloud-init change and
+Phase 2's two edits are batched into one merge. A split would double the window to buy nothing.
+
+---
+
 ## GDPR / Compliance
 
 Skipped — the canonical regulated-data regex matches no file in scope and none of the four expansion
@@ -789,8 +906,50 @@ triggers fire. Phase 2 widens *which* rows ship, not *what* they contain; `Autho
 
 ## Encryption Posture
 
-Skipped — no persistent store and no cross-component connection is introduced. `/var/lib/zot` is
-already a LUKS-backed volume; the Better Stack POST path and the Cloudflare tunnel both pre-exist.
+The gate fires on the `cloud-init.*\.ya?ml$` path match. This plan introduces **no new store and no
+new connection** — but the posture of the surfaces it touches is declared rather than waved through,
+because "unchanged" is a claim about existing state that should be readable here.
+
+```yaml
+at_rest:
+  - store: /var/lib/zot on hcloud_volume.registry (60 GB)
+    mechanism: guest-side LUKS (cryptsetup luksFormat/luksOpen at cloud-init), live since 2026-08-10
+    evidence: apps/web-platform/infra/zot-registry.tf — the #6895 / ADR-096-amendment / ADR-140 block;
+      passphrase injected as the Doppler env REGISTRY_LUKS_KEY, never an argv positional and never
+      baked into user_data. Boot isolation self-check asserts n_admitted includes REGISTRY_LUKS_KEY.
+    defends_against: recovery of container images and their layers from the detached or decommissioned
+      Hetzner volume, and from provider-side disk reuse after the volume is destroyed
+    does_not_defend: a live host. Once cloud-init has opened the LUKS device, any code executing on
+      the running host — including a compromised zot — reads plaintext. It also does not defend the
+      root filesystem, which remains unencrypted under a dated exception running to 2027-02-11
+      (#7456 item (a)); journald and the shipper's spool live there.
+    disclosed_as: unchanged by this plan — the existing registry-volume entry in the encryption
+      posture ledger
+    live_verification: SOLEUR_ZOT_DISK reports resize_ok and fs_size_gb against the opened mapper
+      device each tick; a volume that failed to unlock produces no heartbeat at all
+    changed_by_this_plan: no
+
+in_transit:
+  - connection: GitHub runner -> Cloudflare edge -> tunnel connector -> zot (the mirror write path)
+    tls: yes — Cloudflare Access over the cloudflared tunnel; the origin leg terminates on the
+      private NIC (10.0.1.x), which never traverses the public internet
+    cert_verification: on
+    does_not_defend: anyone holding a valid Access service token plus the zot htpasswd push
+      credential. The deadline change in Phase 2 does not widen this surface — it changes how long
+      an already-authenticated request may take, not who may make one.
+    disclosed_as: unchanged by this plan
+  - connection: registry host -> Better Stack Logs ingest (SOLEUR_ZOT_DISK, SOLEUR_ZOT_LOG)
+    tls: yes — HTTPS POST to the ingest endpoint (ADR-184; direct POST, no Vector on this host)
+    cert_verification: on
+    does_not_defend: the content of the shipped rows, which are readable by anyone with Better Stack
+      access. This is why Authorization headers are [REDACTED] at the source and why Phase 2 widens
+      only WHICH rows ship, never WHAT they contain.
+    disclosed_as: unchanged by this plan
+```
+
+No `exception` block is required: no store in scope is `plaintext-exception`, and no connection has
+`cert_verification: off`. The root-filesystem plaintext exception is a **different** surface, already
+carries its own dated exception to 2027-02-11 under #7456 item (a), and is not re-opened here.
 
 ---
 
