@@ -1048,7 +1048,39 @@ jobs:
               echo "::group::zot mirror diagnosis (full)"
               printf '%s\n' "$detail"
               printf '%s\n' "$SAFE_TO_RERUN"
-              echo "Registry-host health (disk AND zot_restarts/exit_code, which is what an origin flap shows up in): see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd."
+              # MEASURED-BY: #7555 — zot v2.1.20's built-in ReadTimeout/WriteTimeout of
+              # 60000000000 ns was read off the pinned digest's own boot config, and the
+              # failure was reproduced off-box over a docker bridge with Cloudflare absent
+              # (ADR-189). The restart-loop framing this line used to point at was refuted in
+              # the same window: zot_restarts=0, uptime monotonic, none in 48 h.
+              #
+              # The pointer BRANCHES ON THE STAGE. It was one unconditional line appended to
+              # every stage, which is an ADR-166 violation for the copy family: a copy_*
+              # failure is an UPLOAD failure — the bytes were in flight to zot — and sending
+              # that reader at registry-host disk/restart telemetry names a cause the job did
+              # not measure. A wrong pointer is not a missing diagnosis; it is a false one.
+              #
+              # Matched on the copy_* GLOB rather than the three reasons the TAG_SPEC loop
+              # generates today, so a fourth tag inherits the correct pointer.
+              # plugins/soleur/test/reusable-release-degraded-pointer.test.sh derives the
+              # reason set from that loop and reds if a tag is added whose reason label does
+              # not match this glob.
+              case "$reason" in
+                copy_*|verify)
+                  echo "Upload evidence — this stage failed while PUSHING bytes to zot, so registry-host disk/restart telemetry is not the channel to read. In Better Stack, read SOLEUR_ZOT_LOG for PatchBlobUpload rows and the paired HTTP-API row; the pairing carries statusCode, latency and Content-Length. A row at latency:1m0s against a large Content-Length is zot's HTTP deadline expiring mid-upload (ADR-189), which is a throughput ceiling rather than an origin fault — 703724542 B in 60 s requires 11.73 MB/s sustained."
+                  ;;
+                bridge|crane_install)
+                  echo "Registry-host health (disk AND zot_restarts/exit_code, which is what an origin flap shows up in): see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd."
+                  ;;
+                *)
+                  # Fail-safe union. An unclassified stage names BOTH channels and asserts
+                  # NEITHER as the cause, rather than silently inheriting whichever pointer
+                  # happens to be written first — which is how this defect arose. `sign` is
+                  # the live member: the copy already succeeded, so neither channel is a
+                  # measured cause for it.
+                  echo "Stage '${reason}' is not classified into an evidence family, so both channels are named and NEITHER is asserted as the cause. Upload evidence: SOLEUR_ZOT_LOG PatchBlobUpload rows with their paired statusCode/latency/Content-Length. Registry-host health: SOLEUR_ZOT_DISK / Better Stack registry_disk_prd."
+                  ;;
+              esac
               echo "::endgroup::"
             fi
             {
@@ -1195,9 +1227,20 @@ jobs:
             # is exactly the PRODUCER-SILENT state this repo alarms on, and a registry host
             # sick enough to break the bridge is a plausible producer of a dark stream.
             RESTART_SUMMARY="(not queried)"
-            if [[ -n "${BETTERSTACK_QUERY_HOST:-}" ]]; then
+            # ALL THREE credentials, not just the host. betterstack-query.sh needs
+            # BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} and exits 3 when any is missing;
+            # guarding on HOST alone let a partially-injected job take the query arm and
+            # then classify its own failure as a measurement. Which of the three is absent
+            # is named, because "could not query" without a reason is the message that sent
+            # a reader looking for a broken channel when the channel was fine (#7555).
+            bs_missing=""
+            [[ -z "${BETTERSTACK_QUERY_HOST:-}" ]] && bs_missing="${bs_missing} BETTERSTACK_QUERY_HOST"
+            [[ -z "${BETTERSTACK_QUERY_USERNAME:-}" ]] && bs_missing="${bs_missing} BETTERSTACK_QUERY_USERNAME"
+            [[ -z "${BETTERSTACK_QUERY_PASSWORD:-}" ]] && bs_missing="${bs_missing} BETTERSTACK_QUERY_PASSWORD"
+            if [[ -z "$bs_missing" ]]; then
               bs_log="$(mktemp -t zot-restarts.XXXXXXXX 2>/dev/null || true)"
-              if [[ -n "$bs_log" ]] && bash scripts/betterstack-query.sh --since 3h --grep SOLEUR_ZOT_DISK > "$bs_log" 2>&1; then
+              if [[ -n "$bs_log" ]] && bash scripts/betterstack-query.sh --since 3h --grep SOLEUR_ZOT_DISK > "$bs_log" 2>&1 \
+                 && ! grep -qiE 'exception|DB::Err|Code: [0-9]+|syntax error' "$bs_log"; then
                 # BOOT-SCOPED. `zot_restarts` RESETS on host reboot, so a min->max across a
                 # 3h window that spans a reboot reports "0 -> 41" when the truth may be "was
                 # 41, host rebooted, now flat at 0" — a FABRICATED climb, on the one message
@@ -1231,11 +1274,19 @@ jobs:
                 fi
                 [[ "$scoped_log" != "$bs_log" && -n "$scoped_log" ]] && rm -f "$scoped_log"
               else
-                RESTART_SUMMARY="could not query Better Stack for SOLEUR_ZOT_DISK (the query itself failed) — no conclusion drawn about the registry host."
+                # A FAILED READ, not a measurement. betterstack-query.sh runs `set -uo
+                # pipefail` WITHOUT `-e`, so an internal failure can exit 0 while stdout
+                # carries a ClickHouse error payload; without the grep above that payload
+                # contains no `zot_restarts=` rows and fell through to the no-samples arm —
+                # reporting "no samples in the last 3h" for a query that never ran. That is
+                # the same class of lie as naming an unmeasured cause (ADR-166). The error
+                # signature mirrors scripts/betterstack-assert-absence.sh's detection rather
+                # than inventing a second one.
+                RESTART_SUMMARY="could not read SOLEUR_ZOT_DISK from Better Stack (the query failed, or returned an error payload) — this is a FAILED READ, not a measurement, so nothing follows about the registry host either way."
               fi
               [[ -n "$bs_log" ]] && rm -f "$bs_log"
             else
-              RESTART_SUMMARY="BETTERSTACK_QUERY_HOST is not set in this job, so the registry-host restart series was not read — no conclusion drawn about the registry host."
+              RESTART_SUMMARY="the registry-host restart series was NOT read because these credentials are absent from this job:${bs_missing}. This is a FAILED READ, not a measurement — no conclusion follows about the registry host."
             fi
 
             if declare -F zot_mirror_diagnosis >/dev/null 2>&1; then

@@ -1727,8 +1727,9 @@ jobs:
   # (var.registry_location change) is ForceNew on hcloud_volume.registry: the zot store volume is
   # DESTROYED in the old region and RECREATED in the new one. registry-host-replace forbids that
   # (store_destroyed==0); this path PERMITS it because the 35 GB store is a DISPOSABLE GHCR MIRROR
-  # that re-fills from GHCR on the next CI dual-push (pulls fall through to GHCR meanwhile —
-  # non-release-blocking, ADR-096). It exists because the #6288 OOM remediation needs an 8 GB host
+  # that re-fills on the next CI dual-push. That window is NOT covered: #7071 retracted the
+  # host->GHCR fallback (read PAT revoked 401, minter disabled 403 DENIED), so pulls do NOT fall
+  # through to GHCR and a restart during the window cannot pull (ADR-096). It exists because the #6288 OOM remediation needs an 8 GB host
   # and the real 8 GB type (cx33) is offered in hel1 but NOT nbg1 (the plan's cx32 target does not
   # exist). No -replace flag: with the new location in variables.tf, the volume ForceNew + the host
   # create (the old host was already torn down by the failed cx32 -replace) happen naturally from a
@@ -1926,7 +1927,7 @@ jobs:
             echo ""
             echo "\`soleur-registry-disk-prd\` status: **${STATUS}**"
             echo ""
-            echo "_The fresh hel1 store is EMPTY on first boot; pulls fall through to GHCR until the next CI dual-push re-mirrors. This line is informational._"
+            echo "_The fresh hel1 store is EMPTY on first boot and NOTHING covers it: the host->GHCR fallback is dead (#7071), so pulls do not fall through until the next CI dual-push re-mirrors. Already-running containers keep serving; any restart in this window cannot pull._"
           } >> "$GITHUB_STEP_SUMMARY"
           exit 0
 

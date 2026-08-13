@@ -24,22 +24,22 @@ established and must not be re-derived.
 
 ## Phase 1 — Make the copy arm diagnose itself (no host replace)
 
-- [ ] 1.1 **RED:** add a test asserting `degraded()` emits the upload-ceiling pointer for `copy_v`.
+- [x] 1.1 **RED:** add a test asserting `degraded()` emits the upload-ceiling pointer for `copy_v`.
       Confirm it fails against current `main`.
-- [ ] 1.2 Retarget `degraded()`'s trailing telemetry pointer in
+- [x] 1.2 Retarget `degraded()`'s trailing telemetry pointer in
       `.github/workflows/reusable-release.yml` to branch on `$reason`. `copy_*`/`verify` → upload
       evidence; `bridge`/`crane_install` → host health. Anchor: the line beginning
       `Registry-host health (disk AND zot_restarts/exit_code`.
       **Do not** add a stage parameter to `zot_mirror_diagnosis()` — the copy path never calls it.
-- [ ] 1.3 Repair the bridge arm's read (anchor: the comment beginning `# BOOT-SCOPED.`): require all
+- [x] 1.3 Repair the bridge arm's read (anchor: the comment beginning `# BOOT-SCOPED.`): require all
       three `BETTERSTACK_QUERY_*` values; treat an error payload as a failed read.
-- [ ] 1.4 Sweep the three `zot_mirror_diagnosis` **invocation** sites — one in `reusable-release.yml`,
+- [x] 1.4 Sweep the three `zot_mirror_diagnosis` **invocation** sites — one in `reusable-release.yml`,
       **two** in `.github/actions/cf-tunnel-registry-bridge/action.yml`. Derive the set with
       `grep -rn 'zot_mirror_diagnosis' --include=*.yml --include=*.sh`.
-- [ ] 1.5 Add `# MEASURED-BY:` markers to any new causal sentence; confirm
+- [x] 1.5 Add `# MEASURED-BY:` markers to any new causal sentence; confirm
       `bash scripts/lint-diagnosis-claims.sh` passes with its `.highwater` baseline unchanged.
-- [ ] 1.6 Guard 1 mutation matrix rows 1-5 + harness H1: apply each, observe RED/PASS, revert.
-- [ ] 1.7 Correct the stale *"pulls fall through to GHCR"* comment in
+- [x] 1.6 Guard 1 mutation matrix rows 1-5 + harness H1: apply each, observe RED/PASS, revert.
+- [x] 1.7 Correct the stale *"pulls fall through to GHCR"* comment in
       `apps/web-platform/infra/variables.tf` (false since #7071).
 
 ## Phase 2 — Raise the deadline and keep the paired evidence (ONE host replace)
