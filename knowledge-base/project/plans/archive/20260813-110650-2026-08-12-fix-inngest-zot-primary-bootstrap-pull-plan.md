@@ -222,17 +222,28 @@ Row 6 targets the guard's own dispatch; row 4 adds a second member after a compl
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** nothing new at merge — the change is inert until
-delivered. If delivered broken, the dedicated host stays dark exactly as it is now, so
-app-originated dispatch (inbound email, PR-review events) continues to fail silently.
+- **If this lands broken, the user experiences:** nothing new at merge — the change is inert until
+  delivered. If delivered broken, the dedicated host stays dark exactly as it is now, so
+  app-originated dispatch (inbound email, PR-review events) continues to fail silently.
+- **If this leaks, the user's data is exposed via:** the zot pull credential is baked into
+  `user_data`, retrievable via the Hetzner metadata API by anyone with host access. This is the
+  same trust boundary the existing `ghcr_read_token` and `betterstack_logs_token` bakes already
+  occupy, and the credential is read-only against a private-net registry. No widening.
+- **Brand-survival threshold:** `none` — this is a restoration of a currently-dark path. The
+  failure mode of the change is "stays dark", not "new user-facing breakage". No CPO sign-off
+  required.
 
-**If this leaks, the user's data is exposed via:** the zot pull credential is baked into
-`user_data`, retrievable via the Hetzner metadata API by anyone with host access. This is the
-same trust boundary the existing `ghcr_read_token` and `betterstack_logs_token` bakes already
-occupy, and the credential is read-only against a private-net registry. No widening.
+*Scope-out override:* `threshold: none, reason: the diff's only user-reachable effect is on a
+host that is 100% non-booting today, so no post-change state is worse for a user than the
+status quo — the sensitive paths it touches are all boot-time registry resolution on that one
+dark host, never an app-serving surface.*
 
-**Brand-survival threshold:** none — this is a restoration of a currently-dark path. The failure
-mode of the change is "stays dark", not "new user-facing breakage". No CPO sign-off required.
+> **Correction — 2026-08-13, review round (#7516).** The `none` threshold was originally reasoned
+> partly from "GHCR is retained as break-glass". That premise is FALSE: AP-016 lapsed 2026-07-30
+> (#7071) and the PAT is revoked. The threshold is unchanged, but the surviving reason is the
+> narrower one now stated in the scope-out above — not the presence of a working second leg.
+> After delivery the host's boot depends entirely on zot reachability plus a baked credential
+> with no refresh channel.
 
 ## Observability
 
