@@ -177,3 +177,170 @@ de-registered one.
   named, where previously it was invisible.
 - It does **not** apply to CI, the merge gate, or `main-health-monitor`. In all three the decline
   is unreachable by construction, not by convention.
+
+## Addendum — 2026-08-12 (#7494)
+
+Append-only, per the corpus convention this ADR itself used when it wrote
+`## Addendum — 2026-08-11 (ADR-181)` into ADR-177. The body above records what was decided on
+2026-08-11; nothing in it is edited here. Where this addendum corrects a figure or a sentence in
+that body, it says so explicitly rather than rewriting it — citation-by-date is what
+`principles-register.md` relies on.
+
+### 1. The gated set grows from two batteries to four suites
+
+`C4_PRODUCER_PATHS` gates `plugins/soleur/test/c4-from-components.test.sh`; `GITHUB_SCRIPTS_SUITE_PATHS`
+gates `.github/scripts/test/run-all.sh`. Measured skip rates over the last 80 commits on
+`origin/main`, replayed with the runtime matcher's own semantics (unanchored `grep -F` of each
+declared path against the commit's unioned name blob): **96%** and **56%**. These are **ceilings** —
+the runtime unit also folds in uncommitted and untracked work, which can only make a gate arm more
+often.
+
+**Predicate-shape rule this change establishes: prefer a directory pathspec over a file
+enumeration when the skip rate is unchanged.** A directory is closed under future additions; a file
+list is a snapshot that rots on the next arrival. `plugins/soleur/lib` and `.github` are declared
+as directories, and the cost was measured at zero (96% either way, because `plugins/soleur/lib/`
+appears in 1 of the last 80 commits).
+
+### 2. `N-3/N` in the Decision above is now `N-5/N`
+
+The Decision states *"the marker now reads `N-3/N`, so `N/N` is no longer the ordinary local green
+spelling"*, and its worked example shows `3 skipped`. With four relevance-gated suites plus the
+infra runner's `not_in_diff` decline, an ordinary docs-only local run declines **five**. This is the
+highest-traffic sentence in the ADR: an operator anchored on `N-3/N` reads a healthy run as a
+defect. Corrected here rather than silently in the body.
+
+`scripts/test-all.sh` now also prints the recovery lever once when anything was declined
+(`SOLEUR_TEST_FORCE_ALL=1 bash scripts/test-all.sh`). It previously appeared exactly once in the
+whole runner — inside `_diff_touches`'s early return — and was printed nowhere, while the infra
+runner advertised its own lever in two places. A decline is only safe while it stays actionable.
+
+### 3. Mitigation layer 3 does not generalise — the stack is four layers for the batteries and three for the new suites
+
+The Consequences list gives *"Both batteries already hard-abort on a missing declared path"* as one
+of four stale-predicate mitigations. The c4 suite does the **opposite**: it *degrades*
+(`status=degraded reason=likec4-unavailable` → SKIP). So that layer is unavailable for the two
+newly gated suites, and the mitigation stack must be read per-suite, not as a blanket four.
+
+**Corollary, and it is the sharper half: the re-run command `skip_suite` prints for the c4 suite
+can exit 0 while producing no evidence.** In a degraded `likec4` state the recovery path itself
+carries the green-that-is-not-evidence shape this ADR exists to close. A reader who follows the
+printed command and sees exit 0 has not necessarily obtained the coverage the decline withheld.
+
+### 4. Two soundness gaps closed in `scripts/lint-orphan-test-suites.sh`
+
+- **`RELEVANCE_ARRAYS` had no dispatch floor.** Emptying it made the entire anti-rot block iterate
+  zero times while the linter printed `orphan test suites: none`. The floor is now **derived** from
+  the runner (`grep -c` of the `_diff_touches "${ARRAY[@]}"` call shape), not a literal — which
+  catches strictly more: a literal can only see the list shrink, while a derived `want` also
+  catches a gate added to `test-all.sh` and never registered.
+  **The character class is `[A-Z0-9_]+`, not `[A-Z_]+`.** Measured during implementation: the
+  digit-free form counted 3 of 4 gates, because `C4_PRODUCER_PATHS` carries a digit. That
+  under-counts `want`, so the floor is satisfied by a shorter list and passes over exactly the gate
+  it could not see — the worst possible failure shape for a floor.
+- **The `TEST_RELEVANCE_PREFIXES` invariant was enforced by nothing.** `test-relevance-paths.sh`
+  states it in prose (*"the union of the top-level prefixes every declared path lives under"*);
+  measured, the linter referenced that array **0** times. A declared path outside every prefix is
+  invisible to the untracked-file arm, so a session that ADDS a target there and runs the gate
+  before committing gets the suite declined on the one diff that needed it.
+
+### 5. The declaration contract is FIVE sites, not four
+
+Decision 3 above enumerates the contract. The fifth is `TEST_RELEVANCE_PREFIXES`. The full list now
+lives in a `HOW TO ADD A RELEVANCE GATE` block at the top of `scripts/lib/test-relevance-paths.sh`,
+where a reader adding a gate actually lands — three of the five were previously discoverable only
+by reading an archived plan.
+
+### 6. Alternatives Considered (additions)
+
+- **Gate the `apps/web-platform` vitest suite — REJECTED on measurement.** Its honest predicate is
+  reached by 75 of the last 80 commits (~6-7% skip), because the suite contains genuine repo-wide
+  parity guards that pin the rate near-constant. The originally proposed lever does not exist:
+  `vitest --shard=K/N` partitions the *collected* set arithmetically and cannot select by path. And
+  the cheap-looking derivation is unsound — 156 test files reference `knowledge-base/`, 54 of those
+  also call `readFileSync`, and the literals are synthetic in-memory fixtures indistinguishable by
+  grep from real reads. Tracked as a **sized** deferral in **#7498**, against a live 48%
+  counterfactual (39 of 80 commits touch no `apps/web-platform/` file), not a floor that cannot
+  fire.
+- **A static `skip_suite` pairing check in the linter — REJECTED, and it was broken on arrival.**
+  `RELEVANCE_ARRAYS` maps an array to its battery's **file path**; `skip_suite`'s first argument is
+  a **display label**, and in this repo the two differ for both existing batteries. Verified: the
+  proposed grep matched **neither**. It would have reddened a clean tree for two correctly-wired
+  suites — and because the two new arrays happen to have `label == path`, 2 of 4 would have passed,
+  so the failure would have read as real drift. The property is already asserted behaviourally, and
+  a behavioural assertion that the skip *fires with the right label* is strictly stronger than a
+  static grep.
+
+### 7. Consequences — and an explicit refusal to state a wall-clock saving
+
+**No aggregate per-run saving is claimed, and none should be quoted from this change.** #7494 was
+filed quoting 429 s for the c4 suite and 95 s for the `.github` runner. Re-measured during
+implementation, three consecutive reps of an **unchanged** tree gave 23 s / 34 s / 91 s for the
+first and 163 s / 205 s for the second — taken while two sibling `test-all.sh` runs from another
+worktree were active. The spread is wider than the quantities being compared, and it moves in
+*both* directions relative to the filed figures, so this machine cannot resolve the cost.
+`cq-ac-must-not-depend-on-concurrent-sessions` is applied here to the *justification*, not only to
+an acceptance criterion: the decision variable is the **skip rate**, which is a deterministic
+`git log` replay that load cannot touch. Decision 5 of this ADR already records a measured 1.9x
+contention inflation; this is the same effect, observed again.
+
+**The two new suites' CI protection is ASYMMETRIC.** `.github/scripts/test/run-all.sh` has a
+second, independent CI home — the `guard-script-fixture-tests` job in `pr-quality-guards.yml`,
+required and path-filter-free. The c4 suite has **exactly one**: `bash scripts/test-all.sh scripts`
+in `ci.yml`. Its CI coverage therefore rests entirely on the `CI` early return *inside the file
+this change edits*. If those early returns were altered, that suite would run in zero runners
+everywhere at once and nothing outside `test-all.sh` would notice — which is why the merge-base
+byte-identity check on `run_suite` / `skip_suite` / `_diff_touches` is the load-bearing criterion
+for changes in this area, not the skip rates.
+
+### 8. Corrections to this addendum (same date, review pass on PR #7495)
+
+Appended rather than edited above, for the reason the addendum itself gives. An eight-agent review
+falsified four claims in §1–§7 and one in the runner they describe.
+
+**§3 mis-states WHY mitigation layer 3 narrows, and undersells the stack.** Every declared element
+of `C4_PRODUCER_PATHS` *does* hard-abort: the producer via `assert_file_exists`, `test-helpers.sh`
+via `source` under `set -euo pipefail`, the fixture corpora via an explicit `FATAL: fixture copy
+failed`, and `plugins/soleur/lib` via a stack trace that fails the `status=ok` assertion.
+`status=degraded reason=likec4-unavailable` fires on a missing **CLI binary**, which the array
+comment explicitly declares as *not* a predicate path — so the original text cited an undeclared
+dependency to retire a mitigation defined over declared ones. The true, narrower statement: because
+the degrade branch exits at the first arm, declared paths exercised only by *later* arms go
+unvalidated on a likec4-less host. Layer 3 is **conditionally available**, not unavailable. The §3
+corollary — that the printed re-run command can exit 0 having rendered nothing — is unaffected and
+remains the real finding. Also unrecorded and material: `run_suite "plugins/soleur" bun test
+plugins/soleur/` runs the **ungated** unit suite `c4-from-components.test.ts` on every local run, so
+the producer's pure logic never loses coverage; only the e2e render arms are gated.
+
+**§7's "the c4 suite has exactly one CI home" is an undercount.** `main-health-monitor.yml` runs
+`bash scripts/test-all.sh` with `TEST_GROUP` defaulting to `all` and installs both `bun` and the
+pinned `likec4`, so the e2e suite genuinely executes there every six hours. The conclusion is
+unchanged and in fact strengthened: both homes are `test-all.sh`-mediated, so c4's CI coverage still
+rests entirely on the `CI` early return inside the edited file, which is why the merge-base
+byte-identity check remains the load-bearing criterion.
+
+**§1's `.github` skip rate is now 15%, not 56%, and the change is deliberate.**
+`GITHUB_SCRIPTS_SUITE_PATHS` was missing a real-tree read: `test-no-at-mention-credfile-footgun.sh`
+scans `plugins/soleur/{skills,agents,commands,docs,hooks}`, `.claude/hooks` and the root
+`AGENTS`/`CLAUDE` markdown via `git ls-files`. A diff touching
+`plugins/soleur/skills/preflight/SKILL.md` declined the runner — and that guard exists because a
+documentation example in exactly that file class leaked an operator's live root token into a
+transcript. The surface is now declared, at a measured cost of 56% → 15%.
+`hr-weigh-every-decision-against-target-user-impact` resolves that trade in one direction only.
+
+**Every skip rate in §1 is anchored to `fcae560b4`.** `origin/main` is a moving window: the same
+recipe returns 95%/51% four commits later. The figures are 96% (c4) and 15% (`.github`, post-fix)
+at that SHA; re-derive against the SHA, never the tip.
+
+**The three-list shape has a justification §4 did not state, and it is not duplication.** The linter
+keys array name → *suite file path*; the harness keys *display label* → array name; the runner keys
+neither. Label and path genuinely differ for both batteries. More importantly the split is
+**fail-closed**: three independent vacuity surfaces must each be satisfied, where a single shared
+registry would let one deleted row satisfy all three consumers at once.
+
+**Two known residuals, disclosed rather than fixed.** (a) `_diff_touches` called with zero arguments
+returns 1 (decline) rather than 0 — self-inconsistent with its own fail-SAFE header, but bounded:
+an emptied array reds both the linter's vacuity guard and the harness's, so the run exits non-zero.
+It is not fixed here because the fix lands inside a function this change pins byte-identical to the
+merge base. (b) This addendum's own gate harness is registered **ungated** and grew from 19 to ~45
+sandbox arms, so the change adds unconditional local cost in service of removing conditional cost.
+That trade is not measurable on a contended machine and is stated rather than quantified.
