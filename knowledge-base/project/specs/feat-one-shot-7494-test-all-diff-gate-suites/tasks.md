@@ -205,3 +205,21 @@ Also corrected here, because the panel proved these claims false rather than mer
 unmutated control at both ends. It targets only the guards the review pass added — a review-driven
 fix is exactly as unpinned as the blind spot it closes, and the first run of this battery reported
 four false FATALs from its own landing-check bug, which is why the landing assertion exists.
+
+## Final gate result (post-review)
+
+`bash scripts/test-all.sh` at `2ad20d7e4`: **303 suites, 301 passed, 1 failed, 0 killed, 1 skipped.**
+
+- **Both newly-gated suites RAN** — `[ok] plugins/soleur/test/c4-from-components.test.sh` and
+  `[ok] .github/scripts/test/run-all.sh`. This PR edits `scripts/lib/test-relevance-paths.sh`, which
+  every predicate array declares, so all four gates match their own PR. Zero relevance declines.
+- The single `[skip]` is the infra runner's `not_in_diff`, correctly announced and attributed.
+- The one `[FAIL]` is **`plugins/soleur`**, and it is **pre-existing and already tracked as #6842**
+  ("changelog-data 'returns html from GitHub Releases API' flakes on live unmocked fetch, 5s
+  timeout"). Confirmed three ways rather than assumed: (a) this branch changes **no**
+  `plugins/soleur/**` file — `git diff --name-only origin/main...HEAD -- plugins/soleur/` is empty;
+  (b) the same file run from a **pristine `origin/main` worktree** fails 2 of 3, i.e. WORSE than on
+  this branch (1 of 3); (c) `ci.yml` is green on main's last three commits. No new issue filed —
+  the tracker exists.
+- `SIBLING_RUN_DETECTED` (2 other worktrees) and `LOCK_CONTENDED_PROCEEDING` (900 s) both fired, so
+  the run is contended; the isolated re-run above is what settles the verdict, not the summary.
