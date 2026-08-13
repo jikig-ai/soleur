@@ -568,7 +568,7 @@ jobs:
           done
 
           if [[ "$matched" -ne 1 ]]; then
-            echo "::error::Published manifest does not match ${SRC} after ${attempt} attempt(s) over ~300s (CDN TTL is 300s, so this is past a full cache cycle). Either the apply did not publish, or the published bytes diverge."
+            echo "::error::Published manifest does not match ${SRC} after ${attempt} attempt(s) over ~300s (one full CDN cache cycle; the TTL is 300s). Either the apply did not publish, or the published bytes diverge."
             pub="$(mktemp)"
             if curl -fsS --proto '=https' --max-time 20 -H 'Cache-Control: no-cache' "$RAW_URL" -o "$pub"; then
               diff -u "$SRC" "$pub" | head -40 >&2 || true

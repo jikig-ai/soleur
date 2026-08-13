@@ -1113,9 +1113,12 @@ resource "sentry_cron_monitor" "scheduled_heartbeat_reconcile" {
 # (#7471) Liveness for the DAILY published-marketplace-manifest drift check
 # (.github/workflows/scheduled-marketplace-drift.yml, on.schedule "37 6 * * *").
 #
-# WHY IT EXISTS. `jikig-ai/soleur-marketplace` is the plugin's sole distribution channel and has
-# no CI, no required review and no CODEOWNERS — edits to it are unreviewed by construction, and
-# that workflow is the only control on it. So the control needed a control: without this monitor,
+# WHY IT EXISTS. `jikig-ai/soleur-marketplace` is the plugin's sole distribution channel.
+# AMENDED by #7493: this note previously said the repo "has no CI, no required review and no
+# CODEOWNERS" and that the workflow was "the only control on it". Both held when written; the
+# repo now carries a PR-required ruleset and Terraform owns the manifest's contents. What is
+# unchanged is why this MONITOR exists — the workflow is still the only check on the bytes
+# actually served, so the control needs a control: without this monitor,
 # a workflow that stops being scheduled (GitHub disables schedules on repo inactivity and drops
 # ticks under load) is indistinguishable from a manifest that has stayed clean. There is no red
 # run to notice, because there is no run.

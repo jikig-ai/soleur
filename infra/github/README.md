@@ -294,7 +294,7 @@ test-destroy-guard-counter.sh` T8 pins that a replacement counts as a destroy.
 |---|---|---|
 | `marketplace-manifest-guard` (source validity) | `scripts/marketplace-manifest-validate.sh` | every PR, blocking |
 | ruleset matches its declaration | `scripts/verify-marketplace-ruleset.sh` | post-apply; fixtures on every PR |
-| published bytes match source | `apply-github-infra.yml` verify step | post-apply (ETag-polled — the raw CDN caches 300 s) |
+| published bytes match source | `apply-github-infra.yml` verify step | post-apply (cache-busted body poll — the raw CDN caches 300 s) |
 | published manifest still correct | `scheduled-marketplace-drift.yml` | daily; dispatches a reconcile on content drift |
 
 The source gate and the drift gate are not redundant. The drift gate reads the PUBLISHED

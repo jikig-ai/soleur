@@ -239,7 +239,7 @@ resource "github_repository_ruleset" "ci_required" {
         integration_id = var.actions_integration_id
       }
 
-      # #7493 adds `marketplace-manifest-guard` (21st) — the ci.yml always-run
+      # #7493 adds `marketplace-manifest-guard` (22nd) — the ci.yml always-run
       # job validating `infra/github/soleur-marketplace-manifest.json`, the
       # SOURCE that `github_repository_file.marketplace_manifest` publishes to
       # jikig-ai/soleur-marketplace. First apply (this PR's merge via

@@ -692,10 +692,13 @@ if want_scripts; then
   run_suite "scripts/lint-shell-capture-exit" bash scripts/lint-shell-capture-exit.test.sh
   run_suite "scripts/lint-shell-capture-exit-live" python3 scripts/lint-shell-capture-exit.py \
     --baseline scripts/lint-shell-capture-exit.baseline.txt
-  # #7471: the published distribution manifest in jikig-ai/soleur-marketplace is the
-  # ONLY artifact in the delivery path that no CI check in this repo can reach — that
-  # repo has no CI, no review, and no CODEOWNERS. scheduled-marketplace-drift.yml is its
-  # sole guard; this suite is the guard's guard. Registered explicitly because
+  # #7471, amended #7493: the published distribution manifest in jikig-ai/soleur-marketplace
+  # is the only artifact in the delivery path no CI check here can reach DIRECTLY. Its SOURCE
+  # is now reachable (Terraform owns the content; marketplace-manifest-guard validates it
+  # pre-merge, and that repo now carries a PR-required ruleset), so the "no CI, no review, no
+  # CODEOWNERS" framing this comment used to carry no longer holds.
+  # scheduled-marketplace-drift.yml remains the only check on what is actually SERVED;
+  # this suite is that guard's guard. Registered explicitly because
   # scripts/*.test.sh is NOT auto-globbed here — an unregistered gate never runs.
   run_suite "scripts/marketplace-drift-check" bash scripts/marketplace-drift-check.test.sh
   # Guard 4 (#7493): validates the manifest SOURCE that Terraform publishes, as opposed to the

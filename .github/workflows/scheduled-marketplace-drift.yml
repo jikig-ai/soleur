@@ -386,6 +386,13 @@ jobs:
           GH_REPO: ${{ github.repository }}
           FINDINGS: ${{ steps.check.outputs.findings }}
           FINDING_COUNT: ${{ steps.check.outputs.finding_count }}
+          # Forwarded because the remediation text below branches on it. `dispatch_eligible` is
+          # computed in the CHECK step's shell, which is a different process — reading a bare
+          # `$dispatch_eligible` here would be an unbound variable under `set -u`, aborting the
+          # alarm's own filing step. (That is exactly how `${mp_checked}` disabled two guards in
+          # apply-github-infra.yml, found in this same review.) Defaulted at the use site too, so
+          # a check step that died before emitting the output cannot abort the filing.
+          DISPATCH_ELIGIBLE: ${{ steps.check.outputs.dispatch_eligible }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
@@ -420,8 +427,12 @@ jobs:
           BODY="${BODY}"$'\n'"\`\`\`"
           BODY="${BODY}"$'\n\n'"Run: ${RUN_URL}"
           BODY="${BODY}"$'\n\n'"### Remediation"
-          BODY="${BODY}"$'\n\n'"**Do not hand-edit the published file.** Since #7493 the marketplace repo's default branch requires a pull request, and Terraform reverts any out-of-band change on the next apply — so a hand-fix is both blocked and futile. Fix the SOURCE in this repo instead."
-          BODY="${BODY}"$'\n\n'"**In most cases you need do nothing.** A content-drift verdict automatically dispatches \`apply-github-infra.yml\`, which republishes the manifest from source. This issue closes itself on the next run where every assertion holds. If it is still open a day later, the reconcile is not working — that is the thing to investigate."
+          BODY="${BODY}"$'\n\n'"**Do not hand-edit the published file.** Since #7493 the marketplace repo's default branch requires a pull request, and Terraform reverts any out-of-band change on the next apply — so a hand-fix is futile even where it is possible. It IS possible: the org-admin and Admin-role bypasses are \\`always\\`, deliberately, so the maintainer keeps a direct emergency path. Use it for an emergency, not for this. Fix the SOURCE in this repo instead."
+          if [[ "${DISPATCH_ELIGIBLE:-}" == "true" ]]; then
+            BODY="${BODY}"$'\n\n'"**In most cases you need do nothing.** This verdict automatically dispatches \`apply-github-infra.yml\`, which republishes the manifest from source. This issue closes itself on the next run where every assertion holds. If it is still open a day later, the reconcile is not working — that is the thing to investigate."
+          else
+            BODY="${BODY}"$'\n\n'"**This one needs you.** No reconcile was dispatched: every finding above is in the \`plugin_manifest_*\` family, which republishing cannot fix — they mean \`plugins/soleur/.claude-plugin/plugin.json\` no longer resolves at \`main\` in THIS repo, so the manifest is correct and its target is not. Fix the target; the manifest is not the problem."
+          fi
           BODY="${BODY}"$'\n\n'"If the SOURCE is what is wrong:"
           BODY="${BODY}"$'\n'"1. Read what is actually published:"
           BODY="${BODY}"$'\n'"   \`curl -fsS -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/jikig-ai/soleur-marketplace/main/.claude-plugin/marketplace.json | jq .\`"

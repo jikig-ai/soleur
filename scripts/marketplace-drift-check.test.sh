@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # Behavioural + structural gate for .github/workflows/scheduled-marketplace-drift.yml.
 #
-# WHY THIS EXISTS. That workflow is the ONLY control on the published marketplace manifest:
-# `jikig-ai/soleur-marketplace` has no CI, no required review and no CODEOWNERS, so every edit
-# to it is unreviewed by construction. A drift checker that silently reports "no drift" is
+# WHY THIS EXISTS. AMENDED by #7493 — this header previously said `jikig-ai/soleur-marketplace`
+# "has no CI, no required review and no CODEOWNERS, so every edit to it is unreviewed by
+# construction", and that this workflow was "the ONLY control". Both were true when written and
+# are now false: that repo carries the `Marketplace PR Required` ruleset, Terraform owns the
+# manifest's contents, and `marketplace-manifest-guard` validates the source pre-merge here.
+# This workflow is now the PUBLICATION verifier — it asserts what is actually being served, which
+# no pre-merge gate can do. A drift checker that silently reports "no drift" is
 # therefore worse than no checker — it converts an unguarded artifact into one that looks
 # guarded. The scenarios below drive the checker's own logic against synthesized manifests and
 # assert that every degenerate input (404, HTML error page, null `.plugins`, missing plugin
@@ -457,6 +461,60 @@ else:
         problems.append("dispatch step's poll does not require a run id strictly greater than the pre-dispatch baseline — a stale run would satisfy it")
     if "::error::" not in dbody:
         problems.append("dispatch step cannot fail loud when no run appears — an accept-then-nothing dispatch would report green")
+
+# UNBOUND-VARIABLE LINT (#7493 review). Every step here runs under `set -u`, so a reference to a
+# name the step does not define is not a typo — it aborts the step. The failure is silent in the
+# worst way: it fires AFTER the useful work, so the step's own assertions all pass first, and the
+# next step is then skipped by its implicit success().
+#
+# This is not hypothetical and it is not one bug. The same review found `${mp_checked}` in
+# apply-github-infra.yml — assigned nowhere, on the LAST line of the verify step — which aborted
+# every apply after all assertions passed and silently skipped the published-manifest verifier on
+# every run. And writing the fix for THIS file reintroduced the identical shape: a remediation
+# branch reading `$dispatch_eligible`, which is computed in the `check` step's shell and does not
+# exist in the `issue` step's. Two instances, two files, one review. So it gets a lint.
+#
+# A name counts as defined if the step's env declares it, or the workflow/job env does, or the
+# body assigns it, or it is a runner/GitHub builtin.
+BUILTIN_ENV = {
+    "GITHUB_OUTPUT", "GITHUB_ENV", "GITHUB_PATH", "GITHUB_STEP_SUMMARY", "GITHUB_WORKSPACE",
+    "GITHUB_SERVER_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_SHA", "GITHUB_REF",
+    "GITHUB_EVENT_NAME", "GITHUB_TOKEN", "GITHUB_ACTOR", "GITHUB_API_URL",
+    "RUNNER_TEMP", "RUNNER_OS", "RUNNER_ARCH", "HOME", "PATH", "TMPDIR", "IFS", "SECONDS",
+}
+wf_env = set((wf.get("env") or {}).keys()) | set((job.get("env") or {}).keys())
+# CASE-INSENSITIVE, deliberately. The first draft of this lint matched uppercase names only and
+# therefore did NOT catch the bug it was written for: `dispatch_eligible` is lowercase, like every
+# shell local in these steps. It caught the `mp_checked` shape and missed its own motivating case
+# — a lint whose alphabet excludes the defect class it exists to find.
+VAR_REF = re.compile(r'\$\{([A-Za-z_]\w*)(?::-[^}]*)?\}|\$([A-Za-z_]\w+)\b')
+# `name=`, `local name=`, `export name=`, `for name in`, `read -r name`, `name+=(`
+VAR_DEF = re.compile(
+    r'(?:^|\n)\s*(?:local\s+|export\s+|declare\s+(?:-\w+\s+)*)?([A-Za-z_]\w*)\s*(?:\+?=|\()'
+    r'|(?:^|\n)\s*for\s+([A-Za-z_]\w*)\s+in\b'
+    r'|read\s+(?:-\w+\s+)*([A-Za-z_]\w*)'
+)
+for st in steps:
+    body = st.get("run") or ""
+    if not body:
+        continue
+    name = st.get("name") or st.get("id") or "<unnamed>"
+    defined = set(BUILTIN_ENV) | wf_env | set((st.get("env") or {}).keys())
+    for m in VAR_DEF.finditer(body):
+        defined.update(g for g in m.groups() if g)
+    referenced = set()
+    for m in VAR_REF.finditer(body):
+        # A `${VAR:-default}` reference is explicitly guarded; it cannot abort under -u.
+        if m.group(1) and ":-" in (m.group(0) or ""):
+            continue
+        referenced.add(m.group(1) or m.group(2))
+    unbound = sorted(referenced - defined)
+    if unbound:
+        problems.append(
+            f"step {name!r} references {unbound} which it neither declares in `env:` nor assigns; "
+            "under `set -u` that aborts the step AFTER its assertions pass, and silently skips "
+            "every step gated on its success"
+        )
 
 # The reconcile predicate must be computed in the `check` step's bash, not in an Actions
 # expression. Actions has no split/regex/iteration, so `contains(findings, ...)` cannot tell a

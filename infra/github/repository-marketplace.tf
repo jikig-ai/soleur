@@ -79,3 +79,26 @@ resource "github_repository" "soleur_marketplace" {
   # catches the apply.
   archive_on_destroy = true
 }
+
+# THE RULESET'S QUANTIFIER, PINNED (#7493 review).
+#
+# `ruleset-marketplace-pr-required.tf` conditions on `~DEFAULT_BRANCH` rather than a literal
+# branch name — which is correct, because it survives a rename. But nothing declared WHICH branch
+# the default is, and that is the assumption the whole control rests on.
+#
+# The gap: any actor with `administration: write` on this repo — which includes the `soleur-ai`
+# App that Terraform itself authenticates as — can `PATCH /repos/jikig-ai/soleur-marketplace
+# {"default_branch": "..."}`. The ruleset then follows the NEW default, leaving `refs/heads/main`
+# unprotected, while `github_repository_file.marketplace_manifest` still writes to `main` and
+# raw.githubusercontent.com still serves `main`. Every assertion in Guard 1 stays green
+# throughout, because `conditions.ref_name.include == ["~DEFAULT_BRANCH"]` is exactly what it
+# checks — the pivot is invisible to a probe that reads the ruleset alone.
+#
+# `github_branch_default` rather than `github_repository.default_branch`: the latter is deprecated
+# in the 6.x provider. Create is a PATCH of the repository, so it is idempotent against the
+# already-correct live state and needs no import. Declaring it makes a pivot show as drift on the
+# next plan and reverts it on the next apply.
+resource "github_branch_default" "soleur_marketplace" {
+  repository = github_repository.soleur_marketplace.name
+  branch     = "main"
+}

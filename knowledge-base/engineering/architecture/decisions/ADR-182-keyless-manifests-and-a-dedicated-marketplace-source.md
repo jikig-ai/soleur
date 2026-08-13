@@ -148,8 +148,9 @@ prevention. Until one of them lands, this is an accepted risk rather than an unn
   >
   > **The correction: "drift would be auto-reconciled by the next apply" was false as written.**
   > `apply-github-infra.yml` carries no `schedule:` — it fires on `push: main` touching
-  > `infra/github/*.tf`, `infra/github/.terraform.lock.hcl` or the destroy-guard filter, plus
-  > `workflow_dispatch`. "The next apply" could therefore be weeks away, so this option as
+  > `infra/github/*.tf`, `infra/github/.terraform.lock.hcl`, `infra/github/soleur-marketplace-manifest.json`
+  > (added by #7493 — the `*.tf` glob does not match a `.json` sibling) or the destroy-guard
+  > filter, plus `workflow_dispatch`. "The next apply" could therefore be weeks away, so this option as
   > described bought *ownership without timeliness*, and the daily drift check remained the faster
   > signal. #7493 makes the claim true by shipping the reconcile arm below rather than by
   > restating it.
