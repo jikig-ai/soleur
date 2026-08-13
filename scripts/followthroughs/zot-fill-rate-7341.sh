@@ -104,7 +104,12 @@ command -v python3 >/dev/null || { echo "TRANSIENT: python3 is not on PATH"; exi
 # an unprovisioned secret resolves to "", the sweeper still forwards it (it tests for SET, not
 # non-empty), betterstack-query.sh exits 3 with an actionable "creds not injected" message — and
 # the operator's issue comment said only "failed (transport)".
-qerr="$(mktemp)"; WORK_BOOT="$(mktemp)"; trap 'rm -f "$qerr" "$WORK_BOOT"' EXIT
+qerr="$(mktemp)"; WORK_BOOT="$(mktemp)"
+# AERR/APERR belong to the attribution lead (FAIL arm only) but are allocated here so this ONE
+# trap owns every tempfile the script creates (ADR-129 rule (c)) rather than each call site
+# hand-rolling its own rm on each exit path.
+AERR="$(mktemp)"; APERR="$(mktemp)"
+trap 'rm -f "$qerr" "$WORK_BOOT" "$AERR" "$APERR"' EXIT INT TERM
 # Capture rc on its OWN line. Inside `if ! cmd; then`, `$?` is the negated test result, not the
 # command's exit status, so `qrc` read 0 for every failure and the rc=3 credential branch below
 # was unreachable. The harness caught it; a live run would have printed "exited 0".
@@ -259,13 +264,139 @@ else:
     print(f"PASS pcent={cur:.0f}_slope={slope:+.2f}pp/day_proj{horizon:.0f}d={proj:.0f}_{ends}")
 ')"
 
+# ── ATTRIBUTION LEAD (#7456 item b) ──────────────────────────────────────────────────────────
+# WHY IT LIVES HERE AND NOT IN ITS OWN PROBE. This answers "why is the store filling?" — the
+# question #7341 criterion 2 asks and the recut reset before it was answered. It was originally
+# planned as a standalone scripts/zot-gc-attribution.sh with its own exit-1 stall verdict; review
+# established that script could never RUN (sweep-followthroughs.sh canonicalizes every directive's
+# script= under scripts/followthroughs/ and rejects anything outside), and that a stall VERDICT is
+# not defensible on this channel at all — see the three false-positive paths below. Printed from
+# the FAIL arm it fires exactly when the detector fires, needs no vehicle, and carries no
+# authority it cannot support.
+#
+# IT IS A LEAD, NOT A VERDICT, AND THAT IS THE SAFETY ARGUMENT. Three independent mechanisms make
+# an unmatched start indistinguishable from a stall:
+#   1. Shipper-side loss. The four gc classes are cap-exempt against their OWN 17-per-tick ceiling
+#      and drop past it; a redact failure, a sanitize-to-empty, a POST "stop at the hole" or a
+#      cursor invalidation each removes a completion while its start survives. So the drop count
+#      is printed BESIDE the unmatched set rather than left for the reader to go find.
+#   2. --limit truncation. betterstack-query.sh is ORDER BY dt DESC LIMIT n inside, ASC outside,
+#      so truncation drops the window's OLDEST rows first: starts vanish, completions remain.
+#   3. Window edges. gc is hourly; a start near the trailing edge has not had time to complete.
+# Reporting counts and letting the operator judge is honest under all three. Exiting 1 on them
+# would not be, and this probe's exit code is already spoken for by the fill-rate slope.
+#
+# ANCHORING. sanitize() in cloud-init-registry.yml strips ONLY quotes and backslashes, so commas,
+# colons and braces survive: the payload is comma-separated key:value with unescaped colons INSIDE
+# values (caller:.../gc.go:109). It is not JSON and must not be split on ':'. The repo is read from
+# the parsed message FIELD, anchored through {time:...,level:<word>,message:, never from the whole
+# line — a header value can otherwise carry ",message:executing gc ... for /var/lib/zot/x/phantom"
+# and mint a repository that never completes. The envelope anchor keeps its TRAILING SPACE, or
+# host=soleur-registry-2 matches (zot-log-channel-7440.sh:166 carries the same delimiter).
+ZOT_ATTR_HOST="${ZOT_ATTR_HOST:-soleur-registry}"
+attribution_lead() {
+  local araw arc prc
+  araw="$("$QUERY" --since "$WINDOW" --grep SOLEUR_ZOT_LOG --limit 5000 2>"$AERR")"; arc=$?
+  if (( arc != 0 )); then
+    echo "  attribution_unavailable: the gc-channel query exited ${arc}: $(head -c 300 "$AERR" | tr '\n\r\t' '   ')"
+    return 0
+  fi
+  # Python stderr is CAPTURED, not discarded. `2>/dev/null` here would be the same defect this
+  # change removes from zot-log-channel-7440.sh's run_query twelve lines of diff away, and the one
+  # this file's own header at the query call already documents as a measured incident.
+  printf '%s\n' "$araw" | ZOT_ATTR_HOST="$ZOT_ATTR_HOST" python3 -c '
+import sys, json, os, re
+ENV = "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=" + os.environ["ZOT_ATTR_HOST"] + " "  # trailing space: load-bearing
+# FIELD-SCANNING, NOT POSITIONAL. An earlier form required `level:` to be field 2
+# (`^\{[^,]*,level:[a-z]+,message:`). That matches the row measured 2026-08-12, whose first field
+# is `time:`, but it is pinned to one field ORDER — a gc call site emitting message earlier or
+# later silently NOMATCHes, and the terminal state below would then read as "gc is fine". Scan
+# comma-delimited fields for the message field instead, and terminate the repo on a comma OR
+# end-of-string: sanitize() truncates at 800 chars with NO marker, so the trailing comma a
+# positional anchor depends on is not guaranteed to survive.
+START_LIT = "executing gc of orphaned blobs for "
+DONE_LIT  = "gc successfully completed for "
+def msg_field(payload):
+    for f in payload.lstrip("{").rstrip("}").split(","):
+        if f.startswith("message:"):
+            return f[len("message:"):]
+    return None
+from collections import Counter
+starts, dones = Counter(), Counter()
+n_patch = 0
+drop_sum = 0; drop_markers = 0; drop_unknown = 0
+rows_in = rows_decoded = rows_envelope = 0
+DROP_N = re.compile(r"^SOLEUR_ZOT_LOG_DROPPED n=([0-9]+|unknown)\b")
+for line in sys.stdin:
+    line = line.strip()
+    if not line: continue
+    rows_in += 1
+    try:
+        outer = json.loads(line)
+        raw = outer.get("raw", "")
+        inner = raw if isinstance(raw, dict) else json.loads(raw)
+        msg = inner.get("message", "")
+    except Exception:
+        continue
+    if not isinstance(msg, str): continue
+    rows_decoded += 1
+    d = DROP_N.match(msg)
+    if d:
+        drop_markers += 1
+        # The MARKER count is not the ROW count. n= is the number of rows that tick discarded, and
+        # on the cursor_invalidated path the producer emits the literal `unknown` because the lost
+        # span is genuinely unbounded. Counting markers rendered n=417 as "1" -- two orders of
+        # magnitude wrong in exactly the case the confound exists to surface.
+        if d.group(1) == "unknown": drop_unknown += 1
+        else: drop_sum += int(d.group(1))
+        continue
+    if not msg.startswith(ENV): continue
+    rows_envelope += 1
+    mf = msg_field(msg[len(ENV):])
+    if mf is None: continue
+    if mf.startswith(START_LIT): starts[mf[len(START_LIT):]] += 1; continue
+    if mf.startswith(DONE_LIT):  dones[mf[len(DONE_LIT):]] += 1;  continue
+    if mf.startswith("PatchBlobUpload"): n_patch += 1
+lagging = sorted(r for r in starts if dones[r] < starts[r])
+drop_txt = str(drop_sum) + ("+unbounded" if drop_unknown else "")
+print("  gc_start_events=%d gc_completion_events=%d over %d repo(s); patch_blob_upload=%d dropped_rows=%s (markers=%d)"
+      % (sum(starts.values()), sum(dones.values()), len(set(starts) | set(dones)), n_patch, drop_txt, drop_markers))
+print("  rows_in=%d rows_decoded=%d rows_envelope=%d%s"
+      % (rows_in, rows_decoded, rows_envelope, "  LIMIT REACHED (window truncated)" if rows_in >= 5000 else ""))
+if lagging:
+    shown = ["%s %d/%d" % (re.sub(r"[^A-Za-z0-9._-]", "?", r.rsplit("/", 1)[-1])[:48], dones[r], starts[r]) for r in lagging[:5]]
+    more = "" if len(lagging) <= 5 else " (+%d more)" % (len(lagging) - 5)
+    print("  repos completing FEWER gc cycles than they started (done/started): %s%s"
+          % (", ".join(shown), more))
+    print("  A LEAD, NOT A VERDICT: dropped_rows above can remove a completion while its start")
+    print("  survives, and the trailing window edge cuts gc cycles that had not finished yet.")
+    print("  zot#4235 is the standing suspect (gc completing for one repo and never another);")
+    print("  .uploads/ staging is the other.")
+elif sum(starts.values()) == 0:
+    # NOT an exoneration. starts==dones==0 is also what a dead shipper, an unparseable row shape
+    # and a hostname change all produce, so the earlier "growth is not a gc stall" line asserted a
+    # negative the parse cannot support -- and asserted it hardest when the channel was down.
+    print("  NO gc start rows were parsed in this window. This is NOT evidence that gc is healthy:")
+    print("  a silent shipper, a changed host token or a drifted row shape all land here. Check the")
+    print("  channel first: bash scripts/followthroughs/zot-log-channel-7440.sh")
+else:
+    print("  every repo completed at least as many gc cycles as it started; not a gc stall.")
+' 2>"$APERR"; prc=$?
+  if (( prc != 0 )); then
+    echo "  attribution_unavailable: the gc rows could not be parsed (python exited ${prc}): $(head -c 300 "$APERR" | tr '\n\r\t' '   ')"
+  fi
+  return 0
+}
+
 # boot= on EVERY verdict: the correctness argument of this check is boot scoping, so the artifact
 # an operator reads must say which boot was measured, or a stale-vs-recut ambiguity is not
 # checkable from the issue comment alone.
 echo "zot-fill-rate[#7341]: ${verdict} ${detail} samples=${n} boot=${boot:0:8} window=${WINDOW}"
 case "$verdict" in
   PASS) exit 0 ;;
-  FAIL) echo "The store is refilling toward the threshold. zot#4235 is unfixed in v2.1.20; also weigh the orphaned .uploads/ lead (i/o timeout during PatchBlobUpload cleanup, observed 2026-08-10)."; exit 1 ;;
+  FAIL) echo "The store is refilling toward the threshold. zot#4235 is unfixed in v2.1.20; also weigh the orphaned .uploads/ lead (i/o timeout during PatchBlobUpload cleanup, observed 2026-08-10)."
+        attribution_lead || true
+        exit 1 ;;
   TRANSIENT) echo "TRANSIENT: the store's state could not be established. NOT a pass."; exit 2 ;;
   *)    echo "TRANSIENT: could not classify — the verdict stage produced no parseable output, most likely a python failure whose traceback is above."; exit 2 ;;
 esac

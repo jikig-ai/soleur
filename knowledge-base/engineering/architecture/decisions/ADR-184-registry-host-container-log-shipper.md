@@ -267,6 +267,28 @@ escalates instead of reporting TRANSIENT forever.
   becomes satisfiable for it rather than merely declared.
 - The downstream growth-attribution question becomes answerable from telemetry: the gc
   start/complete ratio and `PatchBlobUpload` counts are readable rather than sampled.
+
+  **Refined 2026-08-13 against the live channel (#7456).** Measured once delivery landed, three
+  corrections to the sentence above — each changes what a consumer can actually build:
+
+  - **The pairing is available PER REPOSITORY, which is the signal that matters.** Both
+    `executing gc of orphaned blobs for /var/lib/zot/<owner>/<repo>` and `gc successfully
+    completed for /var/lib/zot/<owner>/<repo>` carry the repo path. That is the zot#4235
+    signature — gc completing for one repository and never another — and a *global* ratio renders
+    it as a healthy-looking ~50%.
+  - **`garbage collected blobs` is emitted BARE**, with no repository. It cannot serve as a
+    per-repo completion numerator; it is reclaim evidence only.
+  - **The shipped payload is not JSON and must not be split on `:`.** `sanitize()` strips only
+    `"` and `\`, so the inner payload is comma-separated `key:value` with unescaped colons inside
+    values (`caller:zotregistry.dev/…/gc.go:109`). A consumer must anchor on the parsed `message`
+    field — through `{time:…,level:<word>,message:` — never on the whole line, or a header value
+    can mint a repository that never completes.
+
+  Consumed by the attribution lead in `scripts/followthroughs/zot-fill-rate-7341.sh`'s `FAIL`
+  arm, which reports counts and unmatched repositories as a **lead rather than a verdict**:
+  shipper-side row loss (the four classes are cap-exempt against their own 17-per-tick ceiling),
+  `--limit` truncation dropping the window's oldest rows first, and the trailing window edge each
+  remove a completion while its start survives, so an unmatched start is not by itself a stall.
 - New standing row volume on a shared source, bounded by an explicit 5,000/day cap with the four
   measured evidence classes cap-exempt so the diagnostic evidence is not dropped preferentially
   during exactly the flood that accompanies disk growth.

@@ -2078,6 +2078,11 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // armed preflight Check 10 — so the block was authored during ship, and the honest
   // discoverability test for "is that channel live?" is the probe that reads it back.
 
+  // #7456 (2026-08-13) briefly declared the waiver for this same probe and WITHDREW it before
+  // merge: that PR does not change the probe's PASS arm, so a credentialed run would have
+  // verified a property it did not alter. Its discoverability_test points at the
+  // credential-free fixture suite instead. The count is therefore unchanged by it.
+
   // 2 -> 3 on 2026-08-13 (#7462/#7516). THIRD reviewable diff line. Renumbered at merge:
   //
   // #7455 landed its own 1 -> 2 on main while this branch was open, so this entry is the

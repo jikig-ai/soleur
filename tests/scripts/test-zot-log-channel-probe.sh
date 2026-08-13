@@ -115,6 +115,19 @@ control_row() {
   row "SOLEUR_ZOT_DISK pcent=8 zot_restarts=0 ping_rc=0 state_status=running boot_id=$boot log_shipper_post_fail=$postfail log_shipper_last_ok_age_s=42 log_shipper_dropped_cum=0 log_shipper_drop_seq=0 host=$HOSTV zot_last_err={time:2026-08-11T10:04:34Z,level:info,message:HTTP API,caller:zotregistry.dev/zot/v2/pkg/api/session.go:92,func:zotregistry.dev/}"
 }
 
+# A control row whose shipper has NEVER completed a tick: last_ok_age_s is the literal -1 the
+# reporter emits when no row has ever shipped. Distinct from control_row_predelivery, which has no
+# log_shipper_* fields AT ALL — that difference is the whole point of C3g.
+# $2 = zot_uptime_s, carried only so a case can prove the probe does NOT read it as host age:
+# it is the zot CONTAINER's current-run age, so under a restart loop it is permanently small.
+# -1 is the reporter's DEFAULT on an unreadable state file, so it is ALSO what a permanently dead
+# shipper emits. No field here separates "born four minutes ago" from "dead for a week", which is
+# why the ACT framing is never suppressed and the first-tick note is additive.
+control_row_never_ticked() {
+  local boot="$1" uptime="${2:-240}"
+  row "SOLEUR_ZOT_DISK pcent=8 zot_restarts=0 ping_rc=0 state_status=running zot_uptime_s=$uptime boot_id=$boot log_shipper_post_fail=unknown log_shipper_last_ok_age_s=-1 log_shipper_dropped_cum=unknown log_shipper_drop_seq=unknown host=$HOSTV zot_last_err={time:2026-08-11T10:04:34Z,level:info,message:HTTP API,caller:zotregistry.dev/zot/v2/pkg/api/session.go:92,func:zotregistry.dev/}"
+}
+
 # A control row from the reporter running on the host TODAY, i.e. BEFORE this change is delivered.
 # It has no log_shipper_* fields at all, because the reporter that emits them ships with the
 # shipper. This is what makes "not delivered" a POSITIVE, measured observation rather than an
@@ -141,7 +154,12 @@ done
 printf 'grep=%s since=%s noarchive=%s\n' "$grep_arg" "$since" "$has_noarchive" >> "$STUB_QCALLS"
 [[ -n "$grep_arg" ]] || { echo "stub: no --grep" >&2; exit 64; }
 [[ -n "$since"    ]] || { echo "stub: no --since" >&2; exit 64; }
-if [[ -n "${STUB_QUERY_RC:-}" && "${STUB_QUERY_RC}" != 0 ]]; then exit "$STUB_QUERY_RC"; fi
+if [[ -n "${STUB_QUERY_RC:-}" && "${STUB_QUERY_RC}" != 0 ]]; then
+  # Emit on STDERR the way betterstack-query.sh does. Without this the rc=3 credential message
+  # cannot be asserted at all, and `2>/dev/null` in the probe stays invisible.
+  echo "betterstack-query.sh: credentials not injected (BETTERSTACK_QUERY_HOST/USERNAME/PASSWORD)" >&2
+  exit "$STUB_QUERY_RC"
+fi
 # The boot marker is queried SEPARATELY (#7444 R32) on its own 72h archive-inclusive window,
 # because it fires once at provision and cannot be found in the 30m hot window sized for the
 # steady envelope stream. The stub must model that dispatch or the probe's boot arm is untested.
@@ -261,6 +279,69 @@ assert "C3c a non-zero log_shipper_post_fail is surfaced as shipper_post_failing
   "grep -q 'reason=shipper_post_failing' <<<\"\$CASE_OUT\""
 assert "C3c the reported counter value comes from the reporter's own line" \
   "grep -q 'log_shipper_post_fail=17' <<<\"\$CASE_OUT\""
+
+# --- C3f-C3j: FIRST-TICK SOFTENING + STALE-ARM + rc=3 (#7456) ------------------------------
+# Measured 2026-08-12: the host was replaced at 20:54:12Z, this probe said delivered_but_silent
+# ("ACT, NOT WAIT") at 20:56:32Z, and PASSed unassisted at 20:58:45Z. The shipper is a 4-59/5 cron
+# one-shot, so a host born at 20:54 has its first tick at 20:59 — the escalation fired against a
+# host that had simply never run one. The softening reads the LITERAL -1 the reporter already
+# emits; it adds no clock, because this probe has none (decode_messages drops dt, the boot marker
+# carries no timestamp, and adding one would touch all five call sites of the shared decoder).
+C3F_CTL="$TMP/c3f.ctl"; control_row_never_ticked "$DRIFTED_BOOT" > "$C3F_CTL"
+run_probe "$EMPTY" "$C3F_CTL"
+assert "C3f last_ok_age_s=-1 still exits 2 (softening is not a pass)" "[[ '$CASE_RC' -eq 2 ]]"
+assert "C3f the ACT framing is NEVER suppressed, even on a never-ticked shipper" \
+  "grep -q 'ACT, NOT WAIT' <<<\"\$CASE_OUT\""
+assert "C3f a never-ticked shipper additionally gets the first-tick note" \
+  "grep -q 'rule out a first tick' <<<\"\$CASE_OUT\""
+
+# C3f2: THE BOUND. Same never-ticked pair, but the host has been up for hours. `-1` is the
+# reporter's DEFAULT on an unreadable state file, so this is ALSO the permanently-dead-shipper
+# signature (jq off PATH -> shipper exits 1 -> state never written). Without the uptime bound the
+# sweeper would post the reassuring "expected until its first tick" line every day, forever, and
+# nothing would escalate.
+C3F2_CTL="$TMP/c3f2.ctl"; control_row_never_ticked "$DRIFTED_BOOT" 86400 > "$C3F2_CTL"
+run_probe "$EMPTY" "$C3F2_CTL"
+assert "C3f2 a never-ticked shipper on an OLD host is told to ACT, not to wait" \
+  "grep -q 'ACT, NOT WAIT' <<<\"\$CASE_OUT\""
+assert "C3f2 uptime is NOT used as host age (zot_uptime_s is container-run age)" \
+  "! grep -q 'zot_uptime_s=' <<<\"\$CASE_OUT\""
+
+# C3f3: absence is not youth. A missing zot_uptime_s must not soften.
+C3F3_CTL="$TMP/c3f3.ctl"
+row "SOLEUR_ZOT_DISK pcent=8 zot_restarts=0 ping_rc=0 state_status=running boot_id=$DRIFTED_BOOT log_shipper_post_fail=unknown log_shipper_last_ok_age_s=-1 host=$HOSTV" > "$C3F3_CTL"
+run_probe "$EMPTY" "$C3F3_CTL"
+assert "C3f3 a control row without last_ok_age_s=-1 gets no first-tick note" \
+  "grep -q 'ACT, NOT WAIT' <<<\"\$CASE_OUT\""
+
+# C3g: THE REGRESSION GUARD. control_row_predelivery has NO log_shipper_* fields; reading absent
+# as "never ticked" would soften the arm here and silently weaken the escalation C3b pins.
+C3G_LOG="$TMP/c3g.log"
+row "SOLEUR_ZOT_LOG_BOOT boot_id=$DRIFTED_BOOT host=$HOSTV shipper_cron=present journald_storage=persistent" > "$C3G_LOG"
+run_probe "$C3G_LOG" "$C2_CTL"
+assert "C3g an ABSENT last_ok_age_s does NOT soften (absence != the literal -1)" \
+  "grep -q 'ACT, NOT WAIT' <<<\"\$CASE_OUT\""
+
+# C3h: a finite age is a delivering shipper with a drifted prefix — the loudest arm, unsoftened.
+C3H_CTL="$TMP/c3h.ctl"; control_row "$DRIFTED_BOOT" 0 > "$C3H_CTL"
+run_probe "$EMPTY" "$C3H_CTL"
+assert "C3h a finite last_ok_age_s gets ACT and NO first-tick note" \
+  "grep -q 'ACT, NOT WAIT' <<<\"\$CASE_OUT\" && ! grep -q 'rule out a first tick' <<<\"\$CASE_OUT\""
+
+# C3i: the not_delivered arm sent an operator who had JUST dispatched a replace to wait for step-6
+# of an ordered path that closed 2026-08-12T20:39Z, on a host replaced 15 minutes later.
+run_probe "$EMPTY" "$C2_CTL"
+assert "C3i not_delivered no longer cites an OPEN ordered path" \
+  "! grep -qE 'open zot-pin ordered path' <<<\"\$CASE_OUT\""
+assert "C3i not_delivered no longer instructs a wait on step-6" \
+  "! grep -q 'step-6 registry-host-replace' <<<\"\$CASE_OUT\""
+
+# C3j: rc=3 is betterstack-query.sh's credential guard and the likeliest first-run failure. The
+# probe's run_query swallowed it with 2>/dev/null, so the operator's comment said only "exited 3".
+run_probe "$EMPTY" "$C2_CTL" STUB_QUERY_RC=3
+assert "C3j a query rc is still TRANSIENT" "[[ '$CASE_RC' -eq 2 ]]"
+assert "C3j the credential message reaches the operator, not /dev/null" \
+  "grep -q 'credentials not injected' <<<\"\$CASE_OUT\""
 
 # --- C4: below_expected_floor -------------------------------------------------------------
 C4_LOG="$TMP/c4.log"; : > "$C4_LOG"
