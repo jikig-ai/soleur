@@ -83,7 +83,18 @@
 /scripts/audit-ruleset-bypass.sh                        @deruelle
 /scripts/update-ci-required-ruleset.sh                  @deruelle
 /scripts/create-ci-required-ruleset.sh                  @deruelle
-/.github/workflows/scheduled-ruleset-bypass-audit.yml   @deruelle
+# CORRECTED #7493: the row here previously pinned
+# /.github/workflows/scheduled-ruleset-bypass-audit.yml, which does not exist — the audit
+# migrated to an Inngest cron. A CODEOWNERS row matching no path protects nothing while
+# reading as coverage, which is the exact failure this file's header documents for
+# scheduled-content-vendor-drift.yml.
+/apps/web-platform/server/inngest/functions/cron-ruleset-bypass-audit.ts @deruelle
+# #7493 — the marketplace ruleset's canonical bypass set + its verifier. Same reasoning as
+# the ci_required canonicals above: a self-edited canonical would let a widened bypass on the
+# plugin's distribution channel green its own audit.
+/scripts/marketplace-ruleset-canonical-bypass-actors.json @deruelle
+/scripts/verify-marketplace-ruleset.sh                   @deruelle
+/scripts/marketplace-manifest-validate.sh                @deruelle
 
 # Auto-apply for github branch-protection terraform (#3895/#3896 replacement).
 # The merge IS the human authorization, so CODEOWNERS is the load-bearing

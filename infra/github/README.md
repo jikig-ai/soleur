@@ -254,8 +254,53 @@ the new repo before re-running; the failure aborts the step under `set -euo pipe
 than falling through to a `plan` that would propose CREATE against a name that already exists.
 
 Terraform owns the repo's settings — visibility, description, topics, `archive_on_destroy` —
-and deliberately **not** its contents. The manifest inside it is hand-maintained and guarded
-by `.github/workflows/scheduled-marketplace-drift.yml`, not by this root.
+**and, since #7493, its default-branch ruleset and the contents of
+`.claude-plugin/marketplace.json`.** The sentence this paragraph used to carry ("deliberately
+**not** its contents ... hand-maintained") is superseded.
+
+### `ruleset-marketplace-pr-required.tf` (#7493)
+
+Two resources, which must be read together:
+
+- `github_repository_ruleset.marketplace_pr_required` — requires a PR with **one approval** on
+  the default branch, and blocks deletion and force-push. A pure CREATE: that repo had zero
+  rulesets, so there is nothing to import and `import_ruleset` is not involved. (It could not be,
+  incidentally — that helper hardcodes `soleur:$id` and cannot express another repo's ruleset.)
+- `github_repository_file.marketplace_manifest` — publishes
+  `infra/github/soleur-marketplace-manifest.json` to that repo. Adopted via
+  `overwrite_on_create = true` rather than a third import shape; at provider 6.12.1 the create
+  path GETs the file first and reuses its SHA, so an existing byte-identical file takes an
+  update-shaped path rather than 422-ing.
+
+**The two are coupled by the bypass actor, not by ordering.** `bypass_actors` are attributes of
+the ruleset resource and ship inside its own POST, so there is no window in which the ruleset
+exists without them and a `depends_on` would buy nothing. What breaks is a WRONG bypass — the
+App id `3261325` versus the installation id `122213433` — which leaves the file write rejected
+and the run red. That is recoverable by a normal merge (the rulesets API is not gated by the
+ruleset), so it is a red pipeline, not a deadlock.
+
+**The human bypass actors use `bypass_mode = "always"`, unlike the two sibling rulesets.** This is
+deliberate and was measured: in `pull_request` mode the sole maintainer's own merge is refused
+(`reviewDecision: REVIEW_REQUIRED`) and requires an `--admin` override, which would make every
+routine change an administrator action on the repo a broken install is fixed *through*.
+
+**A destroy unpublishes the plugin.** `github_repository_file` has no `keep_on_destroy`, and
+`archive_on_destroy` protects the repository rather than a file inside it. `tests/scripts/
+test-destroy-guard-counter.sh` T8 pins that a replacement counts as a destroy.
+
+### What guards what
+
+| Guard | Where | Runs |
+|---|---|---|
+| `marketplace-manifest-guard` (source validity) | `scripts/marketplace-manifest-validate.sh` | every PR, blocking |
+| ruleset matches its declaration | `scripts/verify-marketplace-ruleset.sh` | post-apply; fixtures on every PR |
+| published bytes match source | `apply-github-infra.yml` verify step | post-apply (cache-busted body poll — the raw CDN caches 300 s) |
+| published manifest still correct | `scheduled-marketplace-drift.yml` | daily; dispatches a reconcile on content drift |
+
+The source gate and the drift gate are not redundant. The drift gate reads the PUBLISHED
+artifact, so it can only report a bad manifest after it is live — and with the reconcile arm in
+place, a bad SOURCE would be republished daily while a published-vs-source byte-diff reported
+in-sync, because published genuinely does match source.
 
 If you want to reproduce the local-terminal plan-diff probe before merge
 (sanity check that the diff is the expected set of additions), the

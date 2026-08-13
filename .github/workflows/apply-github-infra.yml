@@ -39,6 +39,13 @@ on:
     paths:
       - "infra/github/*.tf"
       - "infra/github/.terraform.lock.hcl"
+      # #7493 — the CONTENT source for `github_repository_file.marketplace_manifest`.
+      # The `infra/github/*.tf` glob above does NOT match a `.json` sibling (a `*`
+      # in a GitHub path filter is extension-literal), so without this line an edit
+      # to the manifest source would merge and never publish — with no error
+      # anywhere, because nothing else reads the file. That is the whole failure
+      # mode: a source of truth that silently is not the source of what ships.
+      - "infra/github/soleur-marketplace-manifest.json"
       # Defense-in-depth: re-fire on filter mutations so a PR that mutates
       # the destroy-guard filter without touching infra still runs the
       # apply step against `main`'s captured baseline (#4419).
@@ -82,12 +89,47 @@ jobs:
 
   apply:
     needs: preflight
-    if: needs.preflight.outputs.skip != 'true'
+    # BOTH conjuncts are load-bearing; neither subsumes the other.
+    #
+    # The ref test closes the branch-dispatch hole (#7493 review). Every ruleset on
+    # this repo targets `~DEFAULT_BRANCH` with an empty exclude, so NON-default
+    # branches carry no protection at all: absent this test, anyone holding
+    # `actions: write` could push a branch carrying a rewritten
+    # infra/github/soleur-marketplace-manifest.json and dispatch this workflow.
+    # Terraform reads `content` from the CHECKED-OUT tree and publishes it through the
+    # App's own ruleset bypass, so the marketplace repo is never touched, no PR exists,
+    # and `marketplace-manifest-guard` never runs. That path needs ONE actor holding
+    # only monorepo permissions — not the two colluding Apps this feature advertises.
+    #
+    # Exact `==`, never startsWith(): `refs/heads/main-anything` would satisfy a prefix
+    # test. The kill-switch conjunct is ANDed on, not replaced — it is inert on
+    # dispatch (head_commit is absent, so HEAD_MSG is empty) and covers only pushes.
+    if: needs.preflight.outputs.skip != 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # The ref test above is necessary but NOT sufficient, because it constrains the
+      # ref NAME while the trust-bearing fact is what checkout actually materialised.
+      # `gh run rerun` replays a historical run at its ORIGINAL commit: land a manifest
+      # on main, let it apply, revert it, then re-run the old apply — `github.ref` is
+      # still `refs/heads/main` and the reverted content republishes. So assert the
+      # property directly: the inputs we are about to apply equal main's inputs NOW.
+      # This also re-closes the branch path independently, and it is the assertion that
+      # keeps holding if checkout ever gains an explicit `ref:`.
+      - name: Assert the tree being applied is main's current tree
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin main
+          PATHS=("$INFRA_DIR" tests/scripts/lib/destroy-guard-filter.jq)
+          if ! git diff --quiet FETCH_HEAD -- "${PATHS[@]}"; then
+            echo "::error::Refusing to apply: the checked-out infra inputs differ from origin/main. This run would publish content that never passed marketplace-manifest-guard, CODEOWNERS or review."
+            git diff --stat FETCH_HEAD -- "${PATHS[@]}" >&2
+            exit 1
+          fi
+          echo "Applied inputs are byte-identical to origin/main."
 
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
@@ -428,6 +470,117 @@ jobs:
           echo "cla_actual_count=$CLA_ACTUAL" >> "$GITHUB_OUTPUT"
           echo "Ruleset 13304872 (CLA): required_status_checks count = ${CLA_ACTUAL}."
 
+          # ---- Step 5: marketplace ruleset probe (#7493) ------------------------------------
+          # Lives INSIDE this step deliberately: the EXIT trap at the top shreds
+          # $APP_PEM_FILE when the step ends, so no later step can mint an
+          # installation token. Reuses INSTALL_TOKEN for the same reason.
+          #
+          # TWO-HOP, and the hop is load-bearing. The rulesets LIST endpoint returns a
+          # SUMMARY — id/name/target/enforcement only, with NO `rules`, NO
+          # `bypass_actors`, NO `conditions`. Only GET /rulesets/{id} carries them, so a
+          # one-hop probe over the list would silently assert nothing on three of the
+          # four properties below while looking thorough. Selecting by NAME rather than a
+          # hardcoded id is what makes this work on the FIRST apply, when the id does not
+          # yet exist; it also means a rename reddens, which is correct.
+          MP_REPO="jikig-ai/soleur-marketplace"
+          MP_NAME="Marketplace PR Required"
+          MP_LIST=$(GH_TOKEN="$INSTALL_TOKEN" gh api "repos/${MP_REPO}/rulesets" 2>&1) || {
+            echo "::error::gh api repos/${MP_REPO}/rulesets failed — App lacks Administration:Read on the marketplace repo. Response: ${MP_LIST}"
+            exit 1
+          }
+          MP_ID=$(echo "$MP_LIST" | jq -r --arg n "$MP_NAME" '[.[]? | select(.name == $n) | .id] | first // empty')
+          # FAIL CLOSED on an empty list or a name miss. "The ruleset is gone" and "the
+          # ruleset is fine" must never produce the same verdict — a probe that reports
+          # 0-checked-OK is the vacuity this assertion exists to refuse.
+          if [[ ! "$MP_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::No ruleset named '${MP_NAME}' on ${MP_REPO} (got id '${MP_ID}'). The marketplace branch protection is ABSENT — this is the state #7493 exists to prevent."
+            exit 1
+          fi
+          MP_JSON=$(GH_TOKEN="$INSTALL_TOKEN" gh api "repos/${MP_REPO}/rulesets/${MP_ID}" 2>&1) || {
+            echo "::error::gh api repos/${MP_REPO}/rulesets/${MP_ID} failed. Response: ${MP_JSON}"
+            exit 1
+          }
+
+          # The assertions live in scripts/verify-marketplace-ruleset.sh, NOT inline here, and
+          # that is deliberate: a guard that cannot be driven RED is vacuous, and the mutations
+          # that matter (flip enforcement, add a fourth bypass actor, clear non_fast_forward)
+          # are mutations of a LIVE ruleset that CI cannot perform. Extracting them makes the
+          # matrix drivable against recorded fixtures in the sibling .test.sh, which also means
+          # this probe is exercised on every PR rather than only after an apply.
+          printf '%s' "$MP_JSON" > "${RUNNER_TEMP}/marketplace-ruleset.json"
+          if ! bash "${GITHUB_WORKSPACE}/scripts/verify-marketplace-ruleset.sh" \
+                 "${RUNNER_TEMP}/marketplace-ruleset.json" \
+                 "${GITHUB_WORKSPACE}/scripts/marketplace-ruleset-canonical-bypass-actors.json"; then
+            echo "::error::marketplace ruleset (${MP_REPO} #${MP_ID}) does not match its declaration."
+            exit 1
+          fi
+
+          echo "marketplace_ruleset_id=$MP_ID" >> "$GITHUB_OUTPUT"
+          # The assertion COUNT is reported by the script itself ("OK — N/N assertions
+          # hold"), which is the only place it exists. Restating it here would mean
+          # duplicating a number the script owns — and the first draft of this line did
+          # exactly that, interpolating an `mp_checked` that is assigned nowhere. Under
+          # `set -u` that aborted the step on EVERY apply, AFTER all assertions passed,
+          # which in turn skipped the published-manifest verifier below (implicit
+          # success()) on every run. Two guards silently disabled by one echo.
+          echo "Ruleset ${MP_ID} (${MP_REPO}) matches its declaration."
+
+      - name: Post-apply verify (published manifest matches its source)
+        id: verify_manifest
+        env:
+          RAW_URL: https://raw.githubusercontent.com/jikig-ai/soleur-marketplace/main/.claude-plugin/marketplace.json
+          SRC: infra/github/soleur-marketplace-manifest.json
+        run: |
+          set -uo pipefail
+          # Reads the PUBLISHED artifact as an installer resolves it — never Terraform
+          # state and never the provider's own `content` attribute. A state-only check
+          # reports success while publication silently failed, which is precisely the
+          # case worth catching (e.g. the `paths:` trigger not matching the source file).
+          #
+          # THE CDN IS PART OF THE ASSEMBLY. raw.githubusercontent.com serves
+          # `cache-control: max-age=300` through Fastly, and this job finishes well inside
+          # that window — measured 2026-08-12 with `source-age: 102` on a live response.
+          # A single fetch here would read the PRE-APPLY copy and pass on the very first
+          # apply (the run this verifier exists for, since the source is seeded
+          # byte-identical), then flake red on every later content change. So: poll on the
+          # body, cache-busted, until it matches or the budget expires.
+          #
+          # Raw `diff`, never `jq -S`: byte identity is the stated property and it is
+          # achievable, because github_repository_file writes `content` verbatim. Key-order
+          # normalisation would quietly weaken the guard to canonical-JSON equality.
+          deadline=$(( SECONDS + 300 ))
+          attempt=0
+          matched=0
+          while [[ "$SECONDS" -lt "$deadline" ]]; do
+            attempt=$((attempt + 1))
+            pub="$(mktemp)"
+            rc=0
+            curl -fsS --proto '=https' --max-time 20 \
+              -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+              "$RAW_URL" -o "$pub" || rc=$?
+            if [[ "$rc" -eq 0 ]] && diff -u "$SRC" "$pub" > /dev/null 2>&1; then
+              matched=1
+              rm -f "$pub"
+              break
+            fi
+            rm -f "$pub"
+            sleep 15
+          done
+
+          if [[ "$matched" -ne 1 ]]; then
+            echo "::error::Published manifest does not match ${SRC} after ${attempt} attempt(s) over ~300s (one full CDN cache cycle; the TTL is 300s). Either the apply did not publish, or the published bytes diverge."
+            pub="$(mktemp)"
+            if curl -fsS --proto '=https' --max-time 20 -H 'Cache-Control: no-cache' "$RAW_URL" -o "$pub"; then
+              diff -u "$SRC" "$pub" | head -40 >&2 || true
+            else
+              echo "::error::and the published manifest could not be fetched at all — it may have been deleted." >&2
+            fi
+            rm -f "$pub"
+            exit 1
+          fi
+          echo "attempts=$attempt" >> "$GITHUB_OUTPUT"
+          echo "Published manifest is byte-identical to ${SRC} (settled after ${attempt} attempt(s))."
+
       - name: Post-apply summary
         if: always()
         env:
@@ -438,6 +591,8 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           ACTUAL: ${{ steps.verify.outputs.actual_count }}
           CLA_ACTUAL: ${{ steps.verify.outputs.cla_actual_count }}
+          MP_ID: ${{ steps.verify.outputs.marketplace_ruleset_id }}
+          MP_ATTEMPTS: ${{ steps.verify_manifest.outputs.attempts }}
         run: |
           {
             echo "## Apply github infra (rulesets)"
@@ -448,5 +603,7 @@ jobs:
             echo "**Status:** ${JOB_STATUS}"
             echo "**Ruleset 14145388 (CI) required_status_checks count:** ${ACTUAL:-n/a}"
             echo "**Ruleset 13304872 (CLA) required_status_checks count:** ${CLA_ACTUAL:-n/a}"
+            echo "**Marketplace ruleset (jikig-ai/soleur-marketplace):** ${MP_ID:-n/a}"
+            echo "**Published manifest byte-match:** ${MP_ATTEMPTS:+settled after ${MP_ATTEMPTS} attempt(s)}${MP_ATTEMPTS:-n/a}"
             echo "**Run:** ${RUN_URL}"
           } >> "$GITHUB_STEP_SUMMARY"
