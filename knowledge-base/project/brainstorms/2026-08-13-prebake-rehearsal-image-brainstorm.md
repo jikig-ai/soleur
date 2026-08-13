@@ -78,7 +78,9 @@ one."
 | D3 | **Do not** convert any site to `--network none` in this change | T5's recorded rationale has a second reason pre-baking does not dissolve (below) |
 | D4 | Do not touch #7501's retry logic | Separate PR, actively in flight on PR #7507 |
 | D5 | Sequence implementation **after PR #7507 merges** | #7507 is editing this same file; it bounds the R4 site |
-| D6 | Split the `ubuntu:24.04` digest pin into its own issue | Independent correctness defect (all sites use the floating tag); should land on its own merits |
+| D0 | **Delete the `e2fsprogs` site (`:872-873`) outright** | `ubuntu:24.04` already ships `e2fsprogs 1.47.0-2.4~exp1ubuntu4.1`, the exact version `fingerprint.txt:57` pins — the apt cycle is a no-op. Free, and independent of #7507 |
+| D6 | ~~Split the digest pin into its own issue as an independent correctness fix~~ **REVISED** — pinning is contraindicated for R1 | R1(a) is calibrated *against* drift and currently detects an upstream `e2fsprogs` bump; pinning removes that detector. #7544 corrected and retitled; the defensible remainder is a `mke2fs -V` assertion |
+| D11 | Build **in the test**, not in the workflow | `sandbox-canary-regression.test.sh:162-168` is the closer precedent — inline Dockerfile + `docker build -q` guarded by `docker image inspect`; keeps the suite runnable locally with no workflow-step coordination |
 | D7 | Re-derive `deploy-script-tests`' `timeout-minutes: 8` budget | The workflow explicitly requires this when steps are added |
 | D8 | Guard against silent fallback to `ubuntu:24.04` | A missing local image must fail loudly, not quietly re-acquire the apt dependency |
 | D9 | Rewrite the networking note at `git-data-runcmd-rehearsal.test.sh:532-537` | It is the recorded rationale the change partially invalidates; leaving it stale misleads the next reader |
@@ -122,19 +124,32 @@ task is to measure it — time the eight apt cycles inside one CI run before com
 change. If apt turns out to be ~30 s of the 114 s, the saving does not justify even a
 Dockerfile.
 
-**Q2 — Does pre-baking reduce what the rehearsal proves?**
-The rehearsal rehearses cloud-init `runcmd` on a fresh Hetzner host, where real cloud-init
-*does* pay apt. The argument that the fixture's apt is scaffolding (not the system under test)
-looks right — the assertions target the runcmd chain's abort ordering and rc guard, not
-package acquisition — but the CTO assessment did not return before this document was written,
-so this has not had an adversarial read. `2026-07-03-faithful-canary-capture-must-run-in-the-deploy-base-image.md`
-is the learning that would argue against; it should be answered explicitly at plan time.
+**Q2 — Does pre-baking reduce what the rehearsal proves? — ANSWERED: no, it moves the fixture
+toward the target.**
+The real target already has these packages at runcmd time. `cloud-init-git-data.yml:11-16`
+lists only `git, util-linux, cryptsetup, curl` under `packages:`; `python3`, `openssh-server`
+and `e2fsprogs` are absent because the Hetzner Ubuntu 24.04 **server** image ships them — S1's
+own comment (`:659-662`) confirms ssh is preinstalled and socket-activated. The fixture's apt
+only restores what Docker's *minimal* `ubuntu:24.04` stripped.
+`2026-07-03-faithful-canary-capture-must-run-in-the-deploy-base-image.md` therefore cuts **for**
+pre-baking (capture-env == replay-env), but sharpens the spec: define the image as *the target
+cloud image's package set*, not *whatever the six apt lines name* — otherwise the fixture
+becomes a third environment that is neither. Carried into the spec as TR2.
 
-**Q3 — Does digest-pinning `ubuntu:24.04` disturb the R1 mount-class assertions?**
-`:940` records "mke2fs measured 1.47.0 in ubuntu:24.04 / 1.47.2 on the authoring host", so R1
-is already version-sensitive. Pinning makes it deterministic, which is probably an improvement
-— but it freezes a specific `e2fsprogs`, and the fixture's classification comment warns against
-refreshing wholesale. To be resolved in the D6 follow-up, not here.
+**Q3 — Does digest-pinning disturb R1? — ANSWERED: yes, it removes a live detector.**
+`git-data-birth-fs-fingerprint.txt:21-22` and `:84-85` record that `e2fsprogs >= 1.47.1` emits
+`orphan_file`/`metadata_csum_seed` and 1.47.0 does not. R1(a) is calibrated *against* the
+floating tag, so it currently **detects** the upstream bump. Pinning freezes 1.47.0 and removes
+that, leaving only `R1-EXPIRY` (`:1007-1010`) — a wall-clock date deliberately outside the
+pass/fail path. This **reverses decision D6's framing**; #7544 has been corrected and retitled
+accordingly, with the defensible remainder being an explicit `mke2fs -V` vs `fingerprint.txt:57`
+assertion that converts drift into a named failure.
+
+**Q4 — New, from the late CTO assessment: the `/run` persistence class.**
+Docker layers persist build-time `/run` writes; the real host boots a fresh tmpfs `/run`. That
+is S1's load-bearing precondition — its mutation (`:768-775`) depends on `sshd -t` failing with
+`Missing privilege separation directory`. A runtime install does not currently leak
+`/run/sshd`, but a build-time one could. Spec TR3 requires asserting `! test -e /run/sshd`.
 
 **Q4 — Vacuous-green regression risk.** Several institutional learnings warn that changing a
 fixture's base can make tests pass without exercising the mechanism. The plan must include a
