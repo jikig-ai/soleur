@@ -389,6 +389,33 @@ No open code-review issue mentions `.github/workflows/apply-deploy-pipeline-fix.
 
 ## User-Brand Impact
 
+> **The bullets below describe PR-B (the bounded re-push) and were NOT rewritten for what PR-A
+> actually shipped.** Review caught this: the named fail-open is "a verdict that returns 0 when
+> neither pass verified", and PR-A has no passes. The PR-A version is immediately below; the
+> original is kept because PR-B still needs it.
+
+### PR-A as shipped
+
+- **The change adds a new PASSING path.** Before it, every green run had asserted
+  `FRAME_START_TS >= APPLY_START_EPOCH`. The degraded arm passes on weaker evidence. It is
+  bounded by a runner-side `APPLY_START_EPOCH` assert the host cannot influence, and by the
+  future-frame check, but it is genuinely a new way to be green.
+- **Making a red run green ARMS six previously-unreachable `if: success()` steps.** Two of them
+  close the operator's GitHub issues asserting server state was re-aligned with HEAD. On a
+  zero-change apply that assertion is false, so both are now gated on `PLAN_HAS_CHANGES`. This
+  was the review's top finding and it is the concrete user-facing artifact: the founder's drift
+  issues silently closing with a comment about a remediation that did not occur.
+- **A new exposure surface exists, contrary to the original bullet's "no new exposure vector".**
+  The `pre_frame` step reads `WEBHOOK_DEPLOY_SECRET` and both CF Access credentials from Doppler
+  and makes an authenticated HTTPS call to the prod credential-delivery endpoint before the
+  apply. It is a fourth Doppler-reading step. All three values are now `::add-mask::`ed.
+- **The production apply invocation is rewritten** (saved plan rather than re-plan). That is the
+  reason the threshold stays `single-user incident` even though PR-A adds no production write.
+- **Brand-survival threshold:** `single-user incident` (unchanged).
+
+### Original (PR-B) text follows
+
+
 - **If this lands broken, the user experiences:** a deploy that reports success while the
   production host is still running the previous config. The concrete artifact is a green
   `apply-deploy-pipeline-fix` run in the Actions tab with no `ci/infra-config-red` issue filed —
@@ -464,6 +491,24 @@ Not applicable. No provider resource is created, so no free-tier creation limit 
 The only consumption change is GitHub Actions minutes (see `## Risks`).
 
 ## Observability
+
+> **The `failure_modes:` block below enumerates PR-B's re-push failures** (`infra_config_bounded_verify`,
+> `repush_once`, `op=infra-config-repush-attempted`) — none of which are in PR-A. Review found
+> zero entries for the eight modes PR-A actually ships. They are enumerated here.
+
+### PR-A failure modes as shipped
+
+| Mode | Detection | Route |
+|---|---|---|
+| `pre_frame` → `unreachable` / `http404` / `malformed` / `secret_unavailable` | `::warning::` in the step | layer 6 only; carried out of band by the degraded event below |
+| verify → `future_frame` | `::error::` + step exit 1 | layer 6 + the #7220 red-gate issue/Sentry step, which now has its own branch for these verdicts |
+| verify → `unexpected_push` | `::error::` + exit 1 | same |
+| verify → `frame_regressed` | `::error::` + exit 1 | same |
+| `DPF_REPLACED` unreadable | plan step exits 1 | the apply never runs; red-gate alert's "ungraded" branch |
+| green-but-degraded | `freshness_evidence=degraded` output | Sentry event `feature=infra-config`, `op=infra-config-preframe-degraded`. **No `sentry_issue_alert` rule matches it yet**, so today this is a queryable counter and NOT an alert route — the rule is tracked in #7527. Saying otherwise would be the AP-021 failure this plan exists to avoid. |
+
+### Original (PR-B) text follows
+
 
 ```yaml
 liveness_signal:
