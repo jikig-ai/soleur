@@ -467,7 +467,13 @@ jobs:
       # files, rather than coercing its way to silence.
       - name: File or update the drift issue
         id: issue
-        if: ${{ !cancelled() && ( (steps.check.outcome == 'success' && steps.check.outputs.verdict == 'MISMATCH') || needs.canary.result != 'success' || needs.canary.outputs.verdict != 'OK' ) }}
+        # The `steps.check.outcome != 'success'` disjunct closes a hole the first
+        # version of this gate had: a check step that DIED (its 5-minute job budget
+        # against two curls each allowed ~200 s of retries, or a failed
+        # `>> "$GITHUB_OUTPUT"` append) while the canary was green filed NOTHING of
+        # either class, leaving a red scheduled run nobody watches as the only signal.
+        # "The check could not run" is its own finding, not the absence of one.
+        if: ${{ !cancelled() && ( (steps.check.outcome == 'success' && steps.check.outputs.verdict == 'MISMATCH') || steps.check.outcome != 'success' || needs.canary.result != 'success' || needs.canary.outputs.verdict != 'OK' ) }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -554,6 +560,21 @@ jobs:
 
           # Built by appending indented lines: a multi-line literal with lines at column 0 inside
           # a `run: |` block terminates the YAML block scalar.
+
+          # ---- Class 0: the manifest check did not COMPLETE ---------------------------------
+          # AP-021: name only what was measured. Nothing about the manifest was
+          # evaluated on this path, so the finding says exactly that and nothing
+          # about drift. Filed under the manifest title because that is the
+          # assertion set which failed to run, and closing it requires the same
+          # check to come back green.
+          if [[ "$CHECK_OUTCOME" != "success" ]]; then
+            Z_PRE="The manifest check step did not complete (outcome: \`${CHECK_OUTCOME:-<unset>}\`). **No manifest assertion was evaluated on this run** — this is not a report of drift, it is a report that the detector did not run."
+            Z_PRE="${Z_PRE}"$'\n\n'"The published manifest is unguarded until this clears."
+            Z_REM="1. Open the run and read the \`Check the published marketplace manifest\` step."
+            Z_REM="${Z_REM}"$'\n'"2. The usual causes are the job's \`timeout-minutes\` against curl's retry budget, or a failed \`\$GITHUB_OUTPUT\` append."
+            Z_REM="${Z_REM}"$'\n'"3. Re-run on demand: \`gh workflow run scheduled-marketplace-drift.yml\`"
+            file_or_update "$MANIFEST_TITLE" "check_did_not_run: the manifest check step ended with outcome '${CHECK_OUTCOME:-<unset>}'" "$Z_PRE" "$Z_REM"
+          fi
 
           # ---- Class 1: the published MANIFEST ----------------------------------------------
           if [[ "$CHECK_OUTCOME" == "success" && "$CHECK_VERDICT" == "MISMATCH" ]]; then
@@ -655,6 +676,30 @@ jobs:
           if [[ "$CANARY_RESULT" == "success" && "$CANARY_VERDICT" == "OK" ]]; then
             close_class "$DELIVERY_TITLE" "A fresh install from the published channel delivers this repository's plugin completely, byte-correctly and at current main."
           fi
+
+      # THE HEARTBEAT NEEDS THE REPO ON DISK, AND THIS JOB DELIBERATELY HAS NO CHECKOUT.
+      # A `./`-relative composite action is resolved from the runner WORKSPACE, so without
+      # this step the heartbeat below dies with "Can't find 'action.yml' … Did you forget to
+      # run actions/checkout?" — and `continue-on-error: true` swallows it, leaving a green
+      # run and a monitor reading "Last successful check-in: Never". Machine-checked at
+      # #7490: this was the ONLY one of eleven heartbeat-calling jobs in the repo whose job
+      # lacked a checkout.
+      #
+      # It sits HERE, after every assertion step, on purpose. The job's no-checkout property
+      # exists so assertion 3 observes what raw.githubusercontent serves an installer rather
+      # than the runner's local tree; checking out afterwards cannot affect steps that have
+      # already run. `sparse-checkout` keeps it to the action itself so nothing else lands.
+      #
+      # An earlier pass at #7490 repaired this step's three missing composite inputs, which
+      # actionlint reported and which were genuinely absent — but that was a second defect,
+      # not this one. The inputs being present does not help an action that cannot be found.
+      - name: Check out the composite action the heartbeat needs
+        if: always()
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
 
       - name: Sentry check-in (final)
         uses: ./.github/actions/sentry-heartbeat

@@ -26,11 +26,23 @@ set -euo pipefail
 # operator reading "unrelated local repository path" acts faster than one reading a
 # character class.
 PATTERNS=(
-  'absolute home path|/home/[A-Za-z0-9._-]+|/Users/[A-Za-z0-9._-]+'
-  'tilde-form claude state path|~/\.claude'
+  'absolute home path|/home/[A-Za-z0-9._-]+|/Users/[A-Za-z0-9._-]+|[A-Za-z]:\\Users\\'
+  'tilde-form home path|~/[A-Za-z0-9._-]+'
   'local repository layout|/git-repositories/'
-  'install timestamp|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}'
+  'install timestamp|[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}'
+  'machine identifier|Linux [0-9]+\.[0-9]+\.[0-9]+|[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-generic|\bxps[0-9]{4}\b'
 )
+
+# WHAT THIS CANNOT DO, stated because the header used to claim four categories
+# while implementing three. A hostname, a username in a novel position, or a
+# machine name that looks like an ordinary word are not mechanically separable
+# from prose — the `machine identifier` row above catches the shapes this repo's
+# readings actually produce (a `uname -r` string, a kernel flavour, this
+# operator's laptop model) and nothing more. Treat a clean exit as "none of the
+# ENUMERATED shapes is present", never as "no machine identifier is present":
+# the remaining category needs a human read of the body before posting. The
+# earlier spelling was worse than useless — it asserted coverage it did not have
+# for exactly the category hardest to see by eye.
 
 [[ $# -ge 1 ]] || { echo "usage: $(basename "$0") <file> [<file>...]" >&2; exit 2; }
 command -v grep >/dev/null 2>&1 || { echo "FATAL: grep unavailable" >&2; exit 2; }
