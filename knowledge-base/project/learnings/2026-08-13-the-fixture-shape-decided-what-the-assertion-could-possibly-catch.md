@@ -66,12 +66,20 @@ Two further disciplines this PR settled on:
   from the probe's own `site_json` calls would make a *deletion* shrink both sides at once and
   pass. A second assertion pins the probe's declarations against the same literal, so an
   *addition* fails until someone updates the test deliberately. Cardinality alone is not
-  enough either: a rename keeps the count, which is why the arms compare joined names — and
-  the rename mutation is in the suite precisely to prove that.
+  enough either: a rename keeps the count, which is why the arms compare joined names.
+  (Verified by hand during review. An earlier draft said a rename mutation lived in the
+  suite; that was false — only a comment does.)
 - **A floor must not route through the machinery it audits.** Both suites' anti-vacuity floors
   called `fail`, whose increment the exit status reads — so neutering `fail` silenced the rows
-  *and* the floor. They now `exit 1` directly, pinned by a meta-suite that stubs `fail` and
-  asserts a non-zero exit, with a negative control reproducing the pre-fix shape.
+  *and* the floor. They now `exit 1` directly. But the floor alone is NOT sufficient, and
+  review measured why: `cases` is incremented by the assert helpers, never by `fail`, so
+  neutering `fail` in the real suite leaves `cases` at full value, the floor is satisfied, and
+  the run exits 0 with failures silenced (`45 passed, 0 failed (48 assertions)`, RC=0). The
+  meta-suite only ever exercised the conjunction *`fail` neutered AND `cases=0`*, which its own
+  mutant-builder manufactures and no real edit produces. The arm that actually catches it is an
+  accounting conservation check — `passes + fails` MUST equal `cases` — reported directly for
+  the same reason as the floor. The detector was in the output the whole time: every survivor
+  printed its own contradiction and nothing read it.
 
 ## Key insight
 
@@ -83,21 +91,35 @@ asserted, given what I feed it?", and only the second one is about coverage.
 
 The corollary is that mutation testing must mutate the *code*, not the assertions. Every real
 finding this session came from breaking the implementation and watching whether anything went
-red — including the finding that one mutant **cannot** be killed.
+red. Note what that does NOT license: the one mutant I concluded was unkillable turned out
+to be killable, twice over — see below.
 
-## Not every surviving mutant is a gap
+## I called a mutant equivalent twice, and it was killable both times
 
-Removing `[[ -d "$dest/${PLUGIN_SUBDIR}" ]] || return 1` from `materialize_reference` reddens
-nothing, and no test can make it: `reference_list` checks `[[ -d "$REFERENCE_DIR" ]]` against
-the same path a few lines later. The two are redundant, so the mutant is **equivalent** — it
-cannot change observable behaviour.
+Removing `[[ -d "$dest/${PLUGIN_SUBDIR}" ]] || return 1` from `materialize_reference`
+reddens nothing in the suite as shipped. I first claimed a new row (a commit with no
+plugin subdir) killed it — it does not. I then claimed it was an **equivalent mutant**,
+reasoning that `reference_list` checks `[[ -d "$REFERENCE_DIR" ]]` against the same path
+a few lines later, so the two are redundant.
 
-Worth recording because the reflex on a surviving mutant is to add a test, and here that
-reflex produced a row (a commit with no plugin subdir) written in the belief it would kill the
-mutant. It does not. The row was kept for the input shape it genuinely covers and the false
-kill-claim was removed. **An equivalent mutant is a fact about the code's redundancy, not a
-debt against the suite** — and recording which is which is what stops the next reader
-re-deriving it.
+Review refuted that too, and the refutation is the interesting part:
+
+- **With** the check, `materialize_reference` returns 1, `REFERENCE_DIR` stays empty, and
+  control falls through to the **trees-API transport**.
+- **Without** it, `REFERENCE_DIR` is set to a non-existent path and `reference_list`
+  returns 1 before reaching the fallback.
+
+Those are different observable behaviours, so the mutant is killable — and the suite
+already owns the seam to kill it (`mk_curl_shim`, which serves `*/git/trees/*` from a
+fixture). "No test can kill it" was false about machinery in the same file I was editing.
+
+The lesson is not about this mutant. It is that **"equivalent mutant" is a claim requiring
+proof, and it is the most comfortable possible conclusion** — it converts a gap in your
+tests into a property of the code, at zero cost, with no command to run. I reached for it
+immediately after a wrong kill-claim, which is exactly when a comfortable conclusion should
+be least trusted. The discipline: before writing "equivalent", trace both branches to a
+difference in OBSERVABLE output, and grep the test file for a seam that would discriminate
+them. Both steps here would have taken a minute and both would have refuted me.
 
 ## Session Errors
 

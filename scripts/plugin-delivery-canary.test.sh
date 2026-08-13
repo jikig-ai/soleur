@@ -943,9 +943,17 @@ rm -rf "$r"
 #
 # These rows drop CANARY_REFERENCE_DIR and run the canary with its CWD inside a
 # SYNTHESIZED git repository (cq-test-fixtures-synthesized-only — nothing is
-# cloned, and the shas are whatever the fixture's own commits produce). No network
-# is reachable from any arm: the fixture repo has no remote, so the fetch branch
-# and the trees-API fallback both fail by construction rather than by luck.
+# cloned, and the shas are whatever the fixture's own commits produce).
+#
+# NETWORK, STATED ACCURATELY. The fixture repo has no remote, so `git fetch` fails
+# by construction. That argument does NOT extend to the trees-API fallback: `REPO`
+# is hardcoded in the canary with no env seam, so rows B and C DO reach
+# api.github.com and take their `reference_unreadable` from a 404 rather than from
+# an unreachable network. An earlier revision of this comment claimed both failed
+# by construction; review measured otherwise. The canary's curls now carry
+# `--max-time`, so a stalled endpoint fails the row instead of hanging the job —
+# but these two rows are network-touching, and a future `CANARY_REPO` seam should
+# be taken so they are not.
 # ---------------------------------------------------------------------------
 new_git_fixture() { # -> prints <root>; <root>/repo is a git repo holding plugins/soleur
   local root f d
@@ -1044,10 +1052,26 @@ rm -rf "$r" "$r2" "$r3"
 # exits 0. A floor enforced through the suspect cannot witness the suspect. Report
 # and exit DIRECTLY. Proven by scripts/guard-vacuity-floor.test.sh, which neuters
 # `fail` and asserts the floor still exits non-zero.
-if [[ "$cases" -lt 75 ]]; then
-  printf '\n[FATAL] vacuity guard: only %d assertions ran; expected >= 75.\n' "$cases" >&2
+if [[ "$cases" -lt 121 ]]; then
+  printf '\n[FATAL] vacuity guard: only %d assertions ran; expected >= 121.\n' "$cases" >&2
   printf 'Either assertions were deleted or short-circuited, or the floor needs a deliberate bump.\n' >&2
   printf 'Total: %d passed, %d failed (%d assertions)\n' "$passes" "$fails" "$cases"
+  exit 1
+fi
+
+# ACCOUNTING CONSERVATION — the arm that actually catches a neutered `fail()`.
+# The floor above catches "no assertions RAN". It cannot catch "assertions ran and
+# their verdicts were discarded", because `cases` is incremented by the assert
+# HELPERS and never by `fail` — so stubbing `fail` to a no-op leaves `cases` at its
+# full value, the floor is satisfied, and the suite exits 0 with real failures
+# silenced. Measured during review: `fail() { :; }` plus a genuine defect printed
+# `45 passed, 0 failed (48 assertions)` and RC=0.
+#
+# Every assertion must record exactly one verdict, so passes+fails MUST equal cases.
+# Reported directly, never through `fail`, for the same reason as the floor.
+if [[ $((passes + fails)) -ne "$cases" ]]; then
+  printf '\n[FATAL] accounting: passes+fails (%d) != cases (%d) — an assertion was counted but its verdict was not recorded. That is what a neutered pass()/fail() looks like.\n' \
+    "$((passes + fails))" "$cases" >&2
   exit 1
 fi
 

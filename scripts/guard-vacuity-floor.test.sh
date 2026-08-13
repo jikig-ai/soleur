@@ -17,9 +17,9 @@
 #
 # This meta-suite pins the fix by MUTATION, not by inspection. Reading the source
 # for `exit 1` would pass against a floor whose condition can never be true, so
-# each arm builds a mutant of the real suite — `fail` stubbed to a no-op AND the
-# floor raised above any achievable count — and asserts the mutant still exits
-# non-zero. Against the pre-fix form those arms exit 0, which is the whole point.
+# each arm builds a mutant of the real suite — `fail` stubbed to a no-op and
+# `cases` forced to 0 — and asserts the mutant still exits non-zero. Against the
+# pre-fix form those arms exit 0, which is the whole point.
 #
 # NOTHING HERE RUNS THE REAL SUITES TO COMPLETION. Each mutant is truncated to its
 # harness plus the floor, so this suite costs milliseconds and cannot be made slow
@@ -65,7 +65,6 @@ build_mutant() { # <suite-path> <out-path>
     printf '%s\n' '#!/usr/bin/env bash'
     printf '%s\n' 'set -euo pipefail'
     printf '%s\n' 'passes=0; fails=0; cases=0'
-    printf '%s\n' 'pass() { :; }'
     # THE NEUTERING. This is the fault under test.
     printf '%s\n' 'fail() { :; }'
     sed -n "${start},${end}p" "$src"
@@ -121,8 +120,11 @@ control="$SUITE_TMP/prefix-shape.sh"
   printf '%s\n' 'set -euo pipefail'
   printf '%s\n' 'passes=0; fails=0; cases=0'
   printf '%s\n' 'fail() { :; }'
-  printf '%s\n' 'if [[ "$cases" -lt 75 ]]; then'
-  printf '%s\n' '  fail "vacuity guard: only $cases assertions ran; expected >= 75"'
+  # `-lt 1` deliberately, not a copy of either suite's real floor: `cases=0` fires
+  # any positive threshold, so restating 75/121 here would only go stale when a
+  # floor is ratcheted, while testing exactly the same thing.
+  printf '%s\n' 'if [[ "$cases" -lt 1 ]]; then'
+  printf '%s\n' '  fail "vacuity guard: only $cases assertions ran"'
   printf '%s\n' 'fi'
   printf '%s\n' '[[ "$fails" -eq 0 ]]'
 } > "$control"
@@ -144,6 +146,22 @@ fi
 if [[ "$cases" -lt 7 ]]; then
   printf '\n[FATAL] meta-guard vacuity: only %d assertions ran; expected >= 7.\n' "$cases" >&2
   printf 'Total: %d passed, %d failed (%d assertions)\n' "$passes" "$fails" "$cases"
+  exit 1
+fi
+
+# ACCOUNTING CONSERVATION — the arm that actually catches a neutered `fail()`.
+# The floor above catches "no assertions RAN". It cannot catch "assertions ran and
+# their verdicts were discarded", because `cases` is incremented by the assert
+# HELPERS and never by `fail` — so stubbing `fail` to a no-op leaves `cases` at its
+# full value, the floor is satisfied, and the suite exits 0 with real failures
+# silenced. Measured during review: `fail() { :; }` plus a genuine defect printed
+# `45 passed, 0 failed (48 assertions)` and RC=0.
+#
+# Every assertion must record exactly one verdict, so passes+fails MUST equal cases.
+# Reported directly, never through `fail`, for the same reason as the floor.
+if [[ $((passes + fails)) -ne "$cases" ]]; then
+  printf '\n[FATAL] accounting: passes+fails (%d) != cases (%d) — an assertion was counted but its verdict was not recorded. That is what a neutered pass()/fail() looks like.\n' \
+    "$((passes + fails))" "$cases" >&2
   exit 1
 fi
 

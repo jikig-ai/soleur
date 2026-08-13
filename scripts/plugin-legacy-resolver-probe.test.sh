@@ -471,12 +471,14 @@ rm -rf "$r"
 # THE EXPECTED LIST IS PINNED, NOT DERIVED, and that is load-bearing. Deriving it
 # from the probe's own `site_json` calls would make a DELETION shrink both sides
 # at once and pass — the mistake this block exists to prevent. So:
-#   * assertion 1 pins the JSON output against a literal list -> a deleted site
-#     is a mismatch;
-#   * assertion 2 pins the probe's own declarations against the same literal ->
-#     an ADDED site fails until someone updates this test deliberately.
-# Neither alone is sufficient; together they make the chain's membership a
-# reviewed decision rather than something the harness absorbs.
+# The join below covers BOTH directions on its own, because `site_json` emits one
+# object per site UNCONDITIONALLY (probe, "Emits one JSON object per site, ALWAYS"):
+# a deleted site shortens the joined list, an ADDED one lengthens it, and either is
+# a mismatch against the literal. An earlier revision carried a second arm grepping
+# `site_json "..."` out of the probe source to "catch additions"; review established
+# that claim was false (the join already does), that the grep was comment-blind, and
+# that its `[a-z-]+` would false-red on any future site name carrying a digit or
+# underscore. Removed rather than repaired.
 #
 # Cardinality alone would NOT do: a renamed site keeps the count. These compare
 # the joined NAMES, in the probe's own precedence order.
@@ -489,8 +491,15 @@ assert_jq "sites: every declared site appears in --json, in precedence order" \
 
 # Each site must carry the two fields an operator reads to act on it. A site
 # present as a bare name, with no resolved path or read status, is not a reading.
+# PATHS, not just non-emptiness. A non-empty check is satisfied by ANY path, so
+# re-aiming a site at another file (project-settings-local -> settings.json) left
+# all 48 assertions green — the site was "present" while reading the wrong file.
+# Verified by mutation during review.
 assert_jq "sites: each one reports a resolved path and a read status" \
   "$out" '[.sites[] | select((.path // "") != "" and (.status // "") != "")] | length' "7"
+assert_jq "sites: each site resolves to its OWN documented file, not merely to something" \
+  "$out" '[.sites[] | "\(.site)=\(.path | sub("^.*/(?<t>(\\.claude|managed)[^ ]*)$"; "\(.t)"))"] | join(",")' \
+  "managed-settings=managed.json,user-settings=.claude/settings.json,user-settings-local=.claude/settings.local.json,project-settings=.claude/settings.json,project-settings-local=.claude/settings.local.json,known-marketplaces=.claude/plugins/known_marketplaces.json,installed-plugins=.claude/plugins/installed_plugins.json"
 
 # Absent-vs-unreadable must stay distinguishable per site. On a fresh fixture
 # nothing exists, so every site is `absent` — never `unreadable` (which means the
@@ -498,17 +507,6 @@ assert_jq "sites: each one reports a resolved path and a read status" \
 assert_jq "sites: an untouched machine reports every site absent, none unreadable" \
   "$out" '[.sites[] | select(.status == "absent")] | length' "7"
 rm -rf "$r"
-
-# The probe's OWN declarations, pinned against the same literal. This is the half
-# that catches an ADDED site: without it, a new precedence site would ship with
-# no row of its own and the assertions above would still pass.
-cases=$((cases + 1))
-declared="$(grep -oE 'site_json "[a-z-]+"' "$PROBE" | sed 's/site_json "//; s/"//' | paste -sd, -)"
-if [[ "$declared" == "$EXPECTED_SITES" ]]; then
-  pass "sites: the probe declares exactly the pinned chain (added/removed sites force a test update)"
-else
-  fail "sites: probe declares '$declared' but this suite pins '$EXPECTED_SITES' — update BOTH deliberately"
-fi
 
 # Minimum-cardinality guard. If the fixture builder or the probe silently
 # stopped producing cases, every loop above would vanish and the suite would
@@ -520,10 +518,26 @@ fi
 # `fail` would silence every row above AND this floor, leaving the suite to exit 0
 # having asserted nothing. Report and exit DIRECTLY, so the floor survives the exact
 # fault it exists to detect. Proven by scripts/guard-vacuity-floor.test.sh.
-if [[ "$cases" -lt 28 ]]; then
-  printf '\n[FATAL] vacuity guard: only %d assertions ran; expected >= 28.\n' "$cases" >&2
+if [[ "$cases" -lt 48 ]]; then
+  printf '\n[FATAL] vacuity guard: only %d assertions ran; expected >= 48.\n' "$cases" >&2
   printf 'Either assertions were deleted or short-circuited, or the floor needs a deliberate bump.\n' >&2
   printf 'Total: %d passed, %d failed (%d assertions)\n' "$passes" "$fails" "$cases"
+  exit 1
+fi
+
+# ACCOUNTING CONSERVATION — the arm that actually catches a neutered `fail()`.
+# The floor above catches "no assertions RAN". It cannot catch "assertions ran and
+# their verdicts were discarded", because `cases` is incremented by the assert
+# HELPERS and never by `fail` — so stubbing `fail` to a no-op leaves `cases` at its
+# full value, the floor is satisfied, and the suite exits 0 with real failures
+# silenced. Measured during review: `fail() { :; }` plus a genuine defect printed
+# `45 passed, 0 failed (48 assertions)` and RC=0.
+#
+# Every assertion must record exactly one verdict, so passes+fails MUST equal cases.
+# Reported directly, never through `fail`, for the same reason as the floor.
+if [[ $((passes + fails)) -ne "$cases" ]]; then
+  printf '\n[FATAL] accounting: passes+fails (%d) != cases (%d) — an assertion was counted but its verdict was not recorded. That is what a neutered pass()/fail() looks like.\n' \
+    "$((passes + fails))" "$cases" >&2
   exit 1
 fi
 
