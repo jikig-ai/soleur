@@ -449,11 +449,20 @@ logs:
   retention: GitHub default
 
 discoverability_test:
-  command: >-
-    curl -fsS -H 'Cache-Control: no-cache'
-    https://raw.githubusercontent.com/jikig-ai/soleur-marketplace/main/.claude-plugin/marketplace.json
-    > /tmp/pub.json && diff /tmp/pub.json infra/github/soleur-marketplace-manifest.json
-    && echo MANIFEST_IN_SYNC
+  # SUPERSEDED 2026-08-13 (#7493 review). The original command is preserved verbatim below
+  # rather than deleted. It could never run: folded, it joins to a single line carrying `>` and
+  # `&&`, and preflight Check 10 rejects any shell-active token — so the gate that exists to
+  # EXECUTE the discoverability test skipped this one every time. Check 10's own documented
+  # remedy for that shape is to wrap the command in a repo-relative script, which is what the
+  # replacement does. The property under test is unchanged, and it verifies today:
+  # MANIFEST_IN_SYNC, published byte-identical to source.
+  #
+  # original_command: >-
+  #   curl -fsS -H 'Cache-Control: no-cache'
+  #   https://raw.githubusercontent.com/jikig-ai/soleur-marketplace/main/.claude-plugin/marketplace.json
+  #   > /tmp/pub.json && diff /tmp/pub.json infra/github/soleur-marketplace-manifest.json
+  #   && echo MANIFEST_IN_SYNC
+  command: bash scripts/verify-published-manifest.sh
   expected_output: "MANIFEST_IN_SYNC"
 ```
 
