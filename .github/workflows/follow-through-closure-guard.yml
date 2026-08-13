@@ -192,7 +192,7 @@ jobs:
               printf -- '- [x] Verbatim callback URLs\n'
             fi
             if [[ "$run_ok" != "yes" ]]; then
-              printf -- '- [ ] **Workflow run-URL** showing `scheduled-oauth-probe.yml` ran green AFTER the dashboard change. Format: `https://github.com/%s/actions/runs/<id>`. Verified via `gh run view <id> --json conclusion`.\n' "$GH_REPO"
+              printf -- '- [ ] **A green workflow run-URL recorded AFTER the dashboard change.** Format: `https://github.com/%s/actions/runs/<id>`. NOTE: this gate verifies only that the run id exists and its `conclusion` is `success` (`gh run view <id> --json conclusion`) — it does NOT check which workflow ran or when, so the run you cite must be chosen honestly. The OAuth probe itself is no longer a GitHub Actions workflow: it moved to Inngest cron in #4227 and reports to the Sentry monitor slug `scheduled-oauth-probe`, so confirm the probe is green THERE and cite a run that post-dates the change.\n' "$GH_REPO"
             else
               printf -- '- [x] Workflow run-URL (green)\n'
             fi

@@ -899,7 +899,11 @@ that somehow ran could not mutate anything.
   across six apt-bearing sites. Scoped out — it touches all six, invalidates the recorded rationale
   for not using `--network none`, and is not a small change. Follow-up trigger: **any R3/R4 arm
   reports a fixture-starvation failure in a CI run after this lands.**
-- **The rehearsal workflow's 20 × 30 s retry on a non-clearable `rc=2`.** Measured cost: ~10 minutes
+- **The rehearsal workflow's bounded retry on a non-clearable `rc=2`.** Corrected at review: the
+  bound is `deadline=$(( SECONDS + 16 * 60 ))`, not 20 × 30 s, and the rc=2 step-summary is not
+  hardcoded — it interpolates the observed rc. The residual, stated accurately: on a derivation
+  fault the summary still reads `TRANSIENT (no verdict)` while the corrected step log reads
+  `DERIVATION FAULT (deterministic, NOT transient)`. Measured cost: up to ~16 minutes
   of a paid cpx22 per occurrence, re-running a deterministic failure, after `boot_complete` was
   already observed. The workflow already carries the right pattern (a fast-fail on repeated wrapper
   failures). Out of scope because changing a paid-host dispatch's retry semantics deserves its own
@@ -911,14 +915,19 @@ that somehow ran could not mutate anything.
   files.
 - **Fixing `run-registered-suites.sh`'s PASS-for-skip laundering.** Real, documented in its own
   header, and the reason DC-2 resolves as it does — a separate surface with its own consumers.
-- **Payload forms the extraction regex cannot see.** A multi-line `file(` call, an indirected
+- **Payload forms the extraction regex cannot see.** (A `.tf` in a SUBDIRECTORY of the module
+  directory is NOT one of them, contrary to three review findings: Terraform does not recurse,
+  and the module declares no `module {}` block, so such a file is inert and the digest is
+  correctly unmoved. Withdrawn at review.) A multi-line `file(` call, an indirected
   `file(local.p)`, and a *second* `templatefile()` are all invisible to the single-line literal
   predicate, and each would render into `user_data` while the nine literal payloads still resolve.
   This is a pre-existing bound, not something the fix introduces — the deleted counting check
   called the same extractor on both sides and was equally blind. Recorded because Guard 1's
   Property must not claim completeness the mechanism cannot deliver. One cheap tightening remains
   available: assert `main.tf` contains exactly one `templatefile(`.
-- **Symlink and path-containment hardening on the hash inputs.** `sha256sum` follows symlinks and
+- **Path-containment hardening on the hash inputs.** (Symlink FOLLOWING is not part of this:
+  Terraform's own `file()` follows symlinks, so hashing the target's content is the correct
+  binding, not a gap. Withdrawn at review.) `sha256sum` follows symlinks and
   payload paths traverse `../../` with no canonicalisation, so a crafted `main.tf` could hash a
   file outside the infra tree, and a symlinked module directory would silently relocate all nine
   payloads. Fail-loud today (the paths would not exist) and orthogonal to the reported defect;

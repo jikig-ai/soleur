@@ -486,7 +486,7 @@ C_RED_RUN="$TMP/c-red-run.json"
 mk_comments "$C_RED_RUN" "someone::${COMPLETE_BODY}"
 run_guard "$C_RED_RUN" "$ISSUE_PLAIN" "failure"
 if [[ "$GUARD_REOPENS" -eq 1 \
-      && "$GUARD_BODY" == *"- [ ] **Workflow run-URL**"* \
+      && "$GUARD_BODY" == *"recorded AFTER the dashboard change"* \
       && "$GUARD_BODY" == *"- [x] Byte count"* \
       && "$GUARD_BODY" == *"- [x] Verbatim callback URLs"* ]]; then
   pass "C15: a run URL whose conclusion is NOT success reopens once, and renders the checked Byte-count arm"
