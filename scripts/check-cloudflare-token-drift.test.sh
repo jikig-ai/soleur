@@ -1795,6 +1795,23 @@ W7_N=$(grep -rEc '^\s+uses: \./\.github/actions/cf-tunnel-ssh-bridge\s*$' "$GH_D
 # The FILE list is unchanged (that workflow was already a caller), so only the count moves —
 # which is precisely the substitution-blind case the membership check above exists to cover,
 # and why both halves are asserted rather than either alone.
+# PER-FILE counts, and they are load-bearing since #7542 made a second file multi-site.
+# MEASURED REGRESSION: with only (sorted file list + total) asserted, the battery's M4 arm
+# SURVIVED. M4 repoints one call site in apply-web-platform-infra.yml at a different action and
+# adds a compensating site in git-data-cutover.yml. While that workflow had exactly ONE site,
+# removing it dropped the file from the list and membership caught it; with TWO, the file
+# remains listed, the total is held constant by the donor, and both halves go quiet — a
+# workflow that SSHes to a host silently loses the liveness gate. Pinning the per-file
+# distribution subsumes membership AND cardinality and closes that.
+W7_PERFILE_EXPECTED="apply-deploy-pipeline-fix.yml:1,apply-web-platform-infra.yml:2,git-data-cutover.yml:1,workspaces-luks-cutover.yml:2,workspaces-luks-verify.yml:1"
+W7_PERFILE_ACTUAL=$(grep -rEc '^\s+uses: \./\.github/actions/cf-tunnel-ssh-bridge\s*$' "$GH_DIR/workflows" 2>/dev/null \
+  | awk -F: '$NF > 0 {n=split($1,a,"/"); print a[n] ":" $NF}' | sort -u | paste -sd, -)
+if [[ "$W7_PERFILE_ACTUAL" == "$W7_PERFILE_EXPECTED" ]]; then
+  pass "bridge call sites are distributed exactly as pinned, per file"
+else
+  fail "bridge call-site DISTRIBUTION drifted. Expected [$W7_PERFILE_EXPECTED]; got [$W7_PERFILE_ACTUAL]. A file keeping its membership while losing or gaining a call site lands here — that is a workflow silently losing (or double-arming) the liveness gate."
+fi
+
 if [[ "$W7_ACTUAL" == "$W7_EXPECTED" && "$W7_N" == "7" ]]; then
   pass "5 workflows / 7 call sites (workspaces-luks-cutover uses it twice; apply-web-platform-infra.yml uses it twice since #7542)"
 else
