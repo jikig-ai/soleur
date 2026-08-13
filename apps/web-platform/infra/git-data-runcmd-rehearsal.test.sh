@@ -111,6 +111,16 @@ arm_skip() {
 # path to EMIT something, which is the deferred /out/setup.log capture.
 #
 # The count is then capped by a counted ceiling at the floor below.
+#
+# WHAT THIS DOES NOT CLOSE, stated here because the paragraph above could be read as implying the
+# arm is now sound. A stable environment where egress to the tarball host fails while apt SUCCEEDS
+# produces a silent false PASS in this same arm, and none of the machinery above can see it: the
+# driver DOES reach the download block, so the marker prints, so the skip never fires; and the
+# instrumentation is `;`-chained (`chmod …; echo CHMOD_RAN`), so with `set -e` stripped the marker
+# prints whether or not curl succeeded. The primary arm passes too — it asserts that SOMETHING in
+# the doppler_dl stage aborted, never that the CHECKSUM did. So this change closes the loud
+# false-FAIL door and leaves the silent false-PASS door open. Tracked separately; do not infer
+# soundness from the three conditions above.
 _skip() {
   if [ "${CI:-}" = "true" ]; then
     echo "$1 — and CI=true, so this is a FAILURE: the runner must provide this dependency. A gate that cannot run must not report success." >&2
@@ -2074,6 +2084,20 @@ total=$((passes + fails + SKIPPED_ASSERTIONS))
 # R1 emits exactly 7 on all three of ITS paths (healthy, extraction-failed,
 # precondition-missing) for the same reason S1 does. The floor must move with the suite or it
 # only ever guards the work that predates it.
+#
+# WHY `-lt` AND NOT `-ne` (#7291 review, considered and REJECTED). An exact `-ne` would also
+# catch an arm that accidentally executes twice, which a floor cannot. It is rejected on two
+# grounds, neither of which is "it might break something":
+#   1. `-ne`'s only detection over `-lt` is total > floor. The mutation class that motivated the
+#      suggestion — a substitution mutant, an arm replaced by a bare `pass` — holds the total
+#      CONSTANT and is caught by neither.
+#   2. `-lt` fails on deletion; `-ne` fails on deletion OR addition, and addition is the normal
+#      course of development here: #7501 moved this count 44 -> 46 and #7291 46 -> 47 within a
+#      single day. Every sibling PR would red the suite for everyone until updated in lockstep,
+#      to buy the narrow case in (1).
+# Note for anyone re-raising it: "I cannot validate -ne across environment variance" is NOT a
+# reason — the header above asserts `passes + fails + SKIPPED_ASSERTIONS` IS environment-
+# invariant, and the dash branch's `pass; pass` counterweight exists to keep it so.
 # RAISED 44 -> 46 (#7501, then +1 for the AC15 trap-count arm added at review): the R4/R3 run-level
 # fixture-liveness gate emits on the healthy path. Counting it is the whole point of the instrument
 # — a gate that contributes nothing when it succeeds is one that an inversion-to-always-pass leaves

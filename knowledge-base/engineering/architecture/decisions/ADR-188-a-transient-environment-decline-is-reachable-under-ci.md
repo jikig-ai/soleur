@@ -122,12 +122,19 @@ is contracted to provide docker, not because it is computable.
 This is also why the suite's existing `_skip()` is left untouched and un-renamed: a runner without
 docker is a provisioning defect against a contract, so ADR-181's logic applies to it in full.
 
-**Category note.** ADR-181's decline means *"we chose not to run"*; this one means *"we ran and could
-not conclude"*. Those are different verdict classes, and naming this one `INCONCLUSIVE` rather than
-`SKIP` would have made the distinction self-evident and this section largely unnecessary. That rename
-is deferred rather than dismissed — it touches the summary spelling shared with
-`git-lock-chardevice-sweep.test.sh` and every recorded mutation-matrix verdict — and is tracked with
-the other deferred items.
+**Category note — `SKIP` vs `INCONCLUSIVE`, considered and REJECTED (not deferred).** ADR-181's
+decline means *"we chose not to run"*; this one means *"we ran and could not conclude"*. Those are
+different verdict classes, and `INCONCLUSIVE` would name the second one better.
+
+It is rejected rather than deferred, because deferring a rename past the point where the vocabulary
+ships into recorded verdicts is the most expensive of the three options. The reason is not churn
+cost: it is that the carve-out framing above turned out to be **correct and load-bearing**, not dead
+weight. Both of its claims about ADR-181 were independently verified — ADR-181's Scope does exempt
+the infra runner's decline from CI-forcing, so this genuinely is a second carve-out on an opened
+axis. A rename would remove the section that records *when* a CI-reachable decline is legitimate,
+which is the part a future author needs; it would not remove the question.
+
+Recorded here so the next reader meets the decision rather than re-raising it.
 
 ## Reconciliation with AP-021 / ADR-166
 
