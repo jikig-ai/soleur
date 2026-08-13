@@ -107,7 +107,7 @@ infra_config_should_repush <response-file> <pre-frame-start-ts> <apply-start-epo
 Measured convention it must match: `infra-config-gate.sh` carries **no `set` directives** — it is a
 sourceable library of quiet, pure adjudicators. Exit status is the verdict; nothing is echoed.
 
-- [ ] **4.0** **BLOCKING (R20.1) — measure the recovery plan's cardinality before anything else is
+- [x] **4.0** **BLOCKING (R20.1) — measure the recovery plan's cardinality before anything else is
       built.** Read-only, no apply: run `terraform plan -replace=terraform_data.deploy_pipeline_fix
       -target=<the same four targets> -var="ssh_key_path=${CI_SSH_PUB}" -out=tfplan-repush` under
       `doppler run --name-transformer tf-var`, then `terraform show -json tfplan-repush`, and record
@@ -119,6 +119,48 @@ sourceable library of quiet, pure adjudicators. Exit status is the verdict; noth
       cardinality assert would abort **every** recovery on the failure path of a real incident, and
       because the path ships dark nobody would ever learn. Shape the I1–I3 fixtures from the measured
       addresses and state the number in ADR-187 as the invariant the assert pins.
+
+      **MEASURED 2026-08-13 against live prd state. The cardinality is 1. The design does not
+      change, and guard 3's literal is `1`.**
+
+      ```
+      PLAN_RC=0
+      changing_resources_total: 1
+      managed_mode_changing:    1
+      terraform_data.deploy_pipeline_fix | managed | delete,create
+      destroy-guard: resource_deletes=1  nested_deletes=0  reboot_updates=0  host_creates=0
+                     web2_retire_out_of_scope_changes=1  (all web2_* destroy counters 0)
+      ```
+
+      **`host_creates=0` is the load-bearing number**, and it is the one R20.1 could not assume.
+      `deploy_pipeline_fix` `depends_on` `apparmor_bwrap_profile` and
+      `infra_config_handler_bootstrap`, the latter carrying an SSH `remote-exec`; `-target` is
+      transitive at the resource level, so a plan that reached either would have put a
+      `remote-exec` against a bridge the recovery tears down three steps earlier. It does not.
+      R18.8 §8's no-SSH argument therefore HOLDS on measurement rather than on assertion, and
+      the circularity R20.1 named — the no-SSH claim resting on the cardinality assert, the
+      cardinality assert resting on nothing — is broken.
+
+      `web2_retire_out_of_scope_changes=1` is informational, not a halt: it counts changes
+      outside the web2-retire scope, and this workflow consumes only `host_creates` as a halt
+      condition (`apply-deploy-pipeline-fix.yml`, the `host_creates HALT (#6718)` block).
+
+      **Scope deviation, stated.** This task's text says `-target=<the same four targets>`,
+      mirroring the FIRST apply's four targets. The re-push that actually ships names
+      `terraform_data.deploy_pipeline_fix` in both `-replace=` and `-target=` — singular, per
+      the rewritten 6.9 and AC19. The measurement was taken with the singular form, because
+      the number that licenses guard 3 has to be a measurement of the command that ships, not
+      of a neighbouring one.
+
+      **Method note, for whoever repeats this.** `terraform init` could not complete on the
+      authoring machine: `releases.hashicorp.com` answers 200 on its root but resets
+      (IPv6, ~4.5 s) or times out (IPv4, >20 s) on the `hashicorp/tls` provider ZIP, hanging
+      init indefinitely rather than failing. Resolved by fetching the ZIP with
+      `curl -4 --retry 5 --retry-all-errors` and serving it from a `filesystem_mirror` via
+      `TF_CLI_CONFIG_FILE`, with `direct` excluding that one provider. No lock-file or version
+      change was involved. The plan artifacts (`tfplan-repush`, `tfplan-repush.json`) were
+      removed by an `EXIT` trap covering every abort path, and no plan body ever reached
+      stdout.
 - [ ] **4.1** Predicate cases — one per row of the discriminator table, including the
       `start_ts == baseline` boundary (equality is fresh, matching the existing `-lt`). Three
       clauses only: parses, numeric `start_ts`, not newer than the baseline (plan R13.8 — the
