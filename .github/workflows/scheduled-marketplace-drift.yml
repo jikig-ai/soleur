@@ -9,24 +9,96 @@
 #       would make the plugin's only distribution alarm depend on the web app being deployed and
 #       healthy — coupling two systems that are otherwise independent, so a web-platform outage
 #       would silently take the plugin-distribution alarm down with it.
-#   (ii) IT NEEDS `issues: write` ON THIS REPO AND NOTHING ELSE. The verdict's destination is a
-#       GitHub issue here. That is native to GHA's `GITHUB_TOKEN` and would otherwise require
-#       minting and storing a token for the app to hold.
+#   (ii) IT NEEDS ONLY GHA-NATIVE PERMISSIONS ON THIS REPO. Amended by #7493 — this clause
+#       previously read "`issues: write` ON THIS REPO AND NOTHING ELSE", which the reconcile
+#       dispatch below falsified. The set is now `issues: write` (the verdict's destination is a
+#       GitHub issue here) plus `actions: write` (to dispatch apply-github-infra.yml on a
+#       content-drift verdict). Both are native to GHA's automatic `GITHUB_TOKEN`; neither
+#       requires minting or storing a token for the app to hold, which is the property this
+#       clause exists to assert.
+#
+#       Named consequences, so they are not discovered later. This list was CORRECTED during
+#       #7493 review: it previously named dispatch as the only consequence, which understated
+#       the grant. Repository `actions: write` also permits, on this repo:
+#         - `POST /actions/workflows/{id}/dispatches` on ANY workflow, not only the one below;
+#         - `DELETE /actions/runs/{id}` and `DELETE /actions/artifacts/{id}` — run, log and
+#           artifact deletion;
+#         - `PUT /actions/workflows/{id}/disable` — silencing any scheduled alarm in the repo,
+#           including this one;
+#         - `POST /actions/runs/{id}/rerun` — replaying a historical run AT ITS ORIGINAL COMMIT.
+#
+#       Two of those bear directly on arguments this file makes elsewhere, and are recorded
+#       rather than smoothed over:
+#         - The dispatch step below rules out an alternative design specifically on "the
+#           evidence-destruction shape". Run deletion reintroduces that capability one layer up,
+#           in the same job. The ordering argument still holds (evidence is filed before
+#           remediation is requested); what does not hold is any claim that this job cannot
+#           destroy evidence.
+#         - Rerun composes with apply-github-infra.yml's ref guard: that guard tests
+#           `github.ref`, and a rerun replays the original ref AND commit. The tree-equals-
+#           origin/main assertion added to that workflow in #7493 is what closes it; without
+#           that assertion this token could republish any previously-applied manifest.
+#
+#       The grant is workflow-level, so the untrusted-input `check` step holds `actions: write`
+#       while never using it. NARROWING IS TRACKED, NOT DONE HERE: moving the dispatch into its
+#       own job would relocate `steps.dispatch.outcome`, which the Sentry status expression at
+#       the foot of this file reads — and that heartbeat was found in this same PR to have never
+#       delivered a single check-in. Re-topologising the plugin's only distribution alarm in the
+#       PR that repaired it is the change most likely to break it unobserved, so it lands
+#       separately, where a failed heartbeat is attributable. Tracked in #7520, whose
+#       trigger is: before a second dispatch is added here, or on the next change to this
+#       permissions block.
 #   (iii) NO PRODUCT SECRETS ARE CONSUMED. Unlike scheduled-prod-version-drift.yml — which
 #       acknowledges rather than meets `plugins/soleur/skills/schedule/SKILL.md`'s reservation
-#       that a gate-override be reserved for a genuinely pure-GH op — this workflow consumes only
-#       the automatic `secrets.GITHUB_TOKEN`. It reads two public URLs unauthenticated. It is the
-#       pure-GH-op case the reservation describes.
+#       that a gate-override be reserved for a genuinely pure-GH op — this workflow consumes the
+#       automatic `secrets.GITHUB_TOKEN` plus the three Sentry Crons INGEST values
+#       (`SENTRY_INGEST_DOMAIN` / `SENTRY_PROJECT_ID` / `SENTRY_PUBLIC_KEY`). Amended by #7493:
+#       those three were ALWAYS required by the `sentry-heartbeat` composite and were never
+#       forwarded, so the check-in silently never delivered (see the heartbeat step). A Sentry
+#       ingest URL is a public-by-design write-only beacon, not a product secret — the sibling
+#       `scheduled-terraform-drift.yml` forwards the same three. The reservation this clause
+#       tracks is about product/tenant data, and that remains untouched: the workflow still
+#       reads two public URLs unauthenticated and touches no tenant surface.
 #
-# WHAT THIS WATCHES, AND WHY IT IS THE ONLY CONTROL.
-# `jikig-ai/soleur-marketplace` holds one hand-maintained file, `.claude-plugin/marketplace.json`.
-# That repo has NO CI, NO required review, and NO CODEOWNERS — edits to it are unreviewed BY
-# CONSTRUCTION. Terraform (infra/github/repository-marketplace.tf) owns that repo's settings but
-# explicitly NOT its contents. So this workflow is the entire control surface on the artifact
-# every `claude plugin marketplace add` resolves against. Deleting it leaves the manifest
-# ungoverned; nothing else would notice a change to it.
+# WHAT THIS WATCHES, AND WHAT ITS ROLE IS NOW.
+# `jikig-ai/soleur-marketplace` holds one file, `.claude-plugin/marketplace.json`.
 #
-# The three assertions, and why each earns its place:
+# REWRITTEN by #7493; the previous text said this workflow was "the entire control surface" and
+# that Terraform owned the repo's settings "but explicitly NOT its contents". Both are now false.
+# `github_repository_file.marketplace_manifest` (infra/github/ruleset-marketplace-pr-required.tf)
+# declares that file's contents from `infra/github/soleur-marketplace-manifest.json` in THIS
+# repo, so the artifact carries this repo's CI (the always-run `marketplace-manifest-guard`
+# context), its required checks, and the CODEOWNERS pin on `/infra/github/`. A default-branch
+# ruleset on that repo restricts direct writes to a single bypassing App identity.
+#
+# This workflow's ROLE changed accordingly, and it did not shrink:
+#   * It is the PUBLICATION verifier — it observes what is actually served to an installer over
+#     raw.githubusercontent.com, which neither Terraform state nor the provider's own `content`
+#     attribute can tell you. A publish that silently did not happen looks identical to a
+#     successful one from inside Terraform.
+#   * It runs DAILY, unauthenticated, and depends on nothing but two public URLs — so it still
+#     observes the artifact when the apply pipeline, Doppler, or the App credential is broken.
+#   * Assertion 3 (GET 2) remains unique to it: nothing else in the system can see
+#     `plugins/soleur` moving inside THIS monorepo.
+#   * Since #7493 it also REMEDIATES: on a content-drift verdict it dispatches the apply, after
+#     its evidence is filed. Ordering is load-bearing — see the dispatch step.
+# Deleting it removes the only daily, credential-free view of what is actually published.
+#
+# The assertions, and why each earns its place. NAMED rather than counted (#7493): this header
+# said "three" while the checker emitted a dozen distinct finding keys, and a count in prose goes
+# stale silently the moment an assertion is added — so no number appears here, deliberately.
+# The keys are the contract; the two families below are what the reconcile predicate
+# discriminates on.
+#
+# FAMILY A — the published MARKETPLACE manifest (GET 1). Terraform can fix every one of these by
+# republishing from source, so a verdict containing any of them dispatches a reconcile:
+#   marketplace_name, marketplace_owner, version_key_present, entry_count, entry_name,
+#   source_type, source_path, source_url, source_pinned, manifest_shape, manifest_unparseable,
+#   manifest_fetch_failed
+#
+# FAMILY B — THIS monorepo's own plugin.json (GET 2), reached by the `plugin_manifest_` prefix.
+# Republishing the marketplace manifest cannot fix these, so they never dispatch:
+#   plugin_manifest_unresolvable, plugin_manifest_unparseable
 #
 #   1. `.plugins[0]` MUST NOT HAVE A `version` KEY. This is the highest-value assertion and the
 #      reason the workflow exists. `claude plugin update` compares version STRINGS; with no
@@ -74,6 +146,12 @@ on:
 permissions:
   contents: read
   issues: write
+  # #7493 — dispatch apply-github-infra.yml on a content-drift verdict, so a detected
+  # drift is CORRECTED within the daily cycle rather than only reported. `workflow_dispatch`
+  # is one of the two documented exceptions to the rule that a GITHUB_TOKEN-triggered event
+  # does not create a new workflow run, so no PAT or App credential is needed. See the
+  # amended gate-override clause (ii) above for the named blast radius of this grant.
+  actions: write
 
 # cancel-in-progress: false serializes overlapping ticks instead of racing them; two concurrent
 # runs would both miss the other's freshly-filed issue and file duplicates.
@@ -137,6 +215,31 @@ jobs:
             # exit code means what it appears to mean.
             findings+=("manifest_unparseable: the body at ${MANIFEST_URL} did not parse as a JSON object")
           else
+            # ---- Marketplace identity (#7493 review) -----------------------------------------
+            # Asserted OUTSIDE the .plugins shape gate, because these are properties of the
+            # marketplace document itself and stay evaluable when .plugins is malformed.
+            #
+            # WHY THE PUBLICATION SIDE NEEDS THESE TOO. Guard 4 asserts them on the SOURCE, and
+            # Terraform makes published == source, so it is tempting to treat this as redundant.
+            # It is not: the org-admin and Admin-role ruleset bypasses are `always` (deliberately
+            # — spec G5's emergency path), so a hand-edit to the published file is possible and
+            # would be seen by neither Guard 4 (which never reads the published bytes) nor the
+            # byte-diff verifier (which only runs post-apply). Adding them here and not there,
+            # or there and not here, is how the two assertion sets drift apart — which review
+            # found had already happened three ways.
+            #
+            # Both are Family A (content findings a republish fixes), so they dispatch a
+            # reconcile, which is exactly the right remediation for a hand-edit.
+            mp_name="$(jq -r 'if (.name | type) == "string" then .name else "" end' <<<"$manifest" 2>/dev/null)"
+            if [[ "$mp_name" != "soleur-marketplace" ]]; then
+              findings+=("marketplace_name: .name is '$(sanitize "$mp_name")', expected 'soleur-marketplace'. This is the '@' half of the published install AND update commands (claude plugin install soleur@soleur-marketplace), printed on three site pages — renaming it breaks both for every existing user")
+            fi
+            owner_name="$(jq -r 'if (.owner.name | type) == "string" then .owner.name else "" end' <<<"$manifest" 2>/dev/null)"
+            owner_email="$(jq -r 'if (.owner.email | type) == "string" then .owner.email else "" end' <<<"$manifest" 2>/dev/null)"
+            if [[ "$owner_name" != "Jean Deruelle" || "$owner_email" != "jean.deruelle@jikigai.com" ]]; then
+              findings+=("marketplace_owner: .owner is '$(sanitize "$owner_name") <$(sanitize "$owner_email")>', expected the declared Soleur owner identity. A substituted owner is a phishing surface the byte-diff cannot report, because published would still match a compromised source")
+            fi
+
             entry_shape="$(jq -r 'if (.plugins | type) == "array" and (.plugins | length) > 0 and (.plugins[0] | type) == "object" then "ok" else "bad" end' <<<"$manifest" 2>/dev/null)"
             if [[ "$entry_shape" != "ok" ]]; then
               plugins_type="$(sanitize "$(jq -r '.plugins | type' <<<"$manifest" 2>/dev/null)")"
@@ -236,6 +339,38 @@ jobs:
             printf 'marketplace-drift| every assertion holds against the published manifest\n'
           fi
 
+          # ---- Reconcile eligibility (#7493) --------------------------------------------------
+          # COMPUTED HERE, IN BASH, and emitted as an output the dispatch step's `if:` reads.
+          # It cannot live in the `if:` expression itself, and that is a hard constraint rather
+          # than a preference: Actions expressions have no split, no regex and no iteration, so
+          # the only available test is `contains(findings, '...')` over one multi-line blob —
+          # which is TRUE both for a GET-2-only verdict and for a MIXED verdict carrying a real
+          # content finding alongside it. Those two cases require opposite decisions, so that
+          # predicate is not merely awkward, it is wrong. Computing it here also puts it inside
+          # the step `scripts/marketplace-drift-check.test.sh` extracts and executes, which is
+          # what makes the mutation matrix drivable at all.
+          #
+          # DENYLIST, BY PREFIX. Terraform republishing the manifest can fix every finding
+          # EXCEPT the GET-2 family, which are statements about `plugins/soleur/.claude-plugin/
+          # plugin.json` in THIS monorepo — a file `github_repository_file` cannot touch.
+          # Dispatching on those would rewrite an already-correct manifest every tick while the
+          # real breakage persists. There are TWO such keys today
+          # (`plugin_manifest_unresolvable`, `plugin_manifest_unparseable`), so a denylist naming
+          # one is short by one; the PREFIX form is also closed under a future third, which is
+          # the whole reason a denylist beats an allowlist here.
+          #
+          # Matching is ANCHORED on the extracted key, never a substring search over the blob:
+          # `manifest_unparseable` is a proper substring of `plugin_manifest_unparseable`, so an
+          # unanchored `contains()` is unsound in BOTH directions.
+          dispatch_eligible=false
+          for _f in ${findings[@]+"${findings[@]}"}; do
+            _key="${_f%%:*}"
+            case "$_key" in
+              plugin_manifest_*) : ;;   # GET-2 family — not fixable by republishing
+              *) dispatch_eligible=true; break ;;
+            esac
+          done
+
           # RE-ARM before the output write, closing the bracket opened at the top. Without this
           # a failed append would fall through to `exit 0`, leaving outcome='success' with an
           # EMPTY verdict — and an empty output satisfies no gate below, so the mismatch would
@@ -245,6 +380,7 @@ jobs:
           {
             echo "verdict=${verdict}"
             echo "finding_count=${finding_count}"
+            echo "dispatch_eligible=${dispatch_eligible}"
             echo "findings<<MARKETPLACE_DRIFT_FINDINGS_EOF"
             if [[ "$finding_count" -gt 0 ]]; then
               printf '%s\n' "${findings[@]}"
@@ -279,6 +415,13 @@ jobs:
           GH_REPO: ${{ github.repository }}
           FINDINGS: ${{ steps.check.outputs.findings }}
           FINDING_COUNT: ${{ steps.check.outputs.finding_count }}
+          # Forwarded because the remediation text below branches on it. `dispatch_eligible` is
+          # computed in the CHECK step's shell, which is a different process — reading a bare
+          # `$dispatch_eligible` here would be an unbound variable under `set -u`, aborting the
+          # alarm's own filing step. (That is exactly how `${mp_checked}` disabled two guards in
+          # apply-github-infra.yml, found in this same review.) Defaulted at the use site too, so
+          # a check step that died before emitting the output cannot abort the filing.
+          DISPATCH_ELIGIBLE: ${{ steps.check.outputs.dispatch_eligible }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
@@ -306,36 +449,53 @@ jobs:
           # Built by appending indented lines: a multi-line literal with lines at column 0 inside
           # a `run: |` block terminates the YAML block scalar.
           BODY="The daily check of the published marketplace manifest reported ${FINDING_COUNT} failing assertion(s)."
-          BODY="${BODY}"$'\n\n'"This repo is the plugin's sole distribution channel and \`jikig-ai/soleur-marketplace\` has no CI, no required review and no CODEOWNERS — this alarm is the only control on that file."
+          BODY="${BODY}"$'\n\n'"\`jikig-ai/soleur-marketplace\` is the plugin's sole distribution channel. Its manifest is OWNED BY TERRAFORM: the source of truth is \`infra/github/soleur-marketplace-manifest.json\` in this repo, published by \`github_repository_file.marketplace_manifest\`. So this finding means the PUBLISHED file has diverged from that source, or the source itself is wrong."
           BODY="${BODY}"$'\n\n'"### Findings"
           BODY="${BODY}"$'\n'"\`\`\`"
           BODY="${BODY}"$'\n'"${FINDINGS}"
           BODY="${BODY}"$'\n'"\`\`\`"
           BODY="${BODY}"$'\n\n'"Run: ${RUN_URL}"
           BODY="${BODY}"$'\n\n'"### Remediation"
-          BODY="${BODY}"$'\n\n'"1. Read what is actually published:"
-          BODY="${BODY}"$'\n'"   \`curl -fsS https://raw.githubusercontent.com/jikig-ai/soleur-marketplace/main/.claude-plugin/marketplace.json | jq .\`"
-          BODY="${BODY}"$'\n'"2. If \`.plugins[0]\` has a \`version\` key, REMOVE it. \`claude plugin update\` compares version strings: with no key the CLI records the commit SHA as the version so it changes every commit, but a constant version always compares equal and the update short-circuits, reporting success while delivering nothing (#7471). This is the failure with no visible symptom."
-          BODY="${BODY}"$'\n'"3. \`.plugins[0].source\` must stay \`git-subdir\` on \`https://github.com/jikig-ai/soleur.git\` with \`path: plugins/soleur\`, unpinned (no \`ref\`, no \`sha\`)."
-          BODY="${BODY}"$'\n'"4. If the plugin manifest itself did not resolve, \`plugins/soleur/.claude-plugin/plugin.json\` moved in THIS repo — fix the path in the marketplace manifest, or move it back."
-          BODY="${BODY}"$'\n'"5. Re-run on demand: \`gh workflow run scheduled-marketplace-drift.yml\`"
+          BODY="${BODY}"$'\n\n'"**Do not hand-edit the published file.** Since #7493 the marketplace repo's default branch requires a pull request, and Terraform reverts any out-of-band change on the next apply — so a hand-fix is futile even where it is possible. It IS possible: the org-admin and Admin-role bypasses are \\`always\\`, deliberately, so the maintainer keeps a direct emergency path. Use it for an emergency, not for this. Fix the SOURCE in this repo instead."
+          if [[ "${DISPATCH_ELIGIBLE:-}" == "true" ]]; then
+            BODY="${BODY}"$'\n\n'"**In most cases you need do nothing.** This verdict automatically dispatches \`apply-github-infra.yml\`, which republishes the manifest from source. This issue closes itself on the next run where every assertion holds. If it is still open a day later, the reconcile is not working — that is the thing to investigate."
+          else
+            BODY="${BODY}"$'\n\n'"**This one needs you.** No reconcile was dispatched: every finding above is in the \`plugin_manifest_*\` family, which republishing cannot fix — they mean \`plugins/soleur/.claude-plugin/plugin.json\` no longer resolves at \`main\` in THIS repo, so the manifest is correct and its target is not. Fix the target; the manifest is not the problem."
+          fi
+          BODY="${BODY}"$'\n\n'"If the SOURCE is what is wrong:"
+          BODY="${BODY}"$'\n'"1. Read what is actually published:"
+          BODY="${BODY}"$'\n'"   \`curl -fsS -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/jikig-ai/soleur-marketplace/main/.claude-plugin/marketplace.json | jq .\`"
+          BODY="${BODY}"$'\n'"2. Edit \`infra/github/soleur-marketplace-manifest.json\` in this repo and open a PR. The \`marketplace-manifest-guard\` check validates it before merge; merging publishes it."
+          BODY="${BODY}"$'\n'"3. \`.plugins[0]\` must have NO \`version\` key. \`claude plugin update\` compares version strings: with no key the CLI records the commit SHA so it changes every commit, but a constant version always compares equal and the update short-circuits, reporting success while delivering nothing (#7471). This is the failure with no visible symptom."
+          BODY="${BODY}"$'\n'"4. \`.plugins[0].source\` must stay \`git-subdir\` on \`https://github.com/jikig-ai/soleur.git\` with \`path: plugins/soleur\`, unpinned (no \`ref\`, no \`sha\`), and \`.plugins\` must hold exactly one entry."
+          BODY="${BODY}"$'\n'"5. If a \`plugin_manifest_*\` finding fired, the marketplace manifest is CORRECT and \`plugins/soleur/.claude-plugin/plugin.json\` moved or broke in THIS repo. No reconcile is dispatched for that case, deliberately — republishing a correct file would not fix it. Restore the path here."
+          BODY="${BODY}"$'\n'"6. Re-run on demand: \`gh workflow run scheduled-marketplace-drift.yml\`"
           BODY="${BODY}"$'\n\n'"This issue closes automatically on the next run where every assertion holds."
 
           delivered=0
+          # #7493 — the issue NUMBER is emitted alongside `delivered` so the reconcile dispatch
+          # can link the apply run back onto the standing issue. Set on BOTH delivery branches
+          # (comment-on-existing and create-new); left empty when nothing was delivered, and the
+          # consumer guards on empty.
+          issue_number=""
           if [[ "$list_rc" -ne 0 ]]; then
             echo "::error::Could not query existing marketplace-drift issues (gh exited ${list_rc}); no issue was filed, because filing without a dedupe result would break the one-issue-per-episode property the close step depends on."
           elif [[ -n "$EXISTING" && "$EXISTING" != "null" ]]; then
             if gh issue comment "$EXISTING" --repo "$GH_REPO" --body "$BODY"; then
               delivered=1
+              issue_number="$EXISTING"
             else
               echo "::error::Could not comment on marketplace-drift issue #${EXISTING}; the standing issue no longer reflects the current findings."
             fi
           else
             # NEVER report success unconditionally: with `set +e` in effect an unchecked create
             # would fall through to a line asserting an issue exists when none does.
-            if gh issue create --repo "$GH_REPO" --title "$TITLE" --body "$BODY" \
-                 --label "ci/marketplace-drift" --label "action-required"; then
+            if created_url=$(gh issue create --repo "$GH_REPO" --title "$TITLE" --body "$BODY" \
+                 --label "ci/marketplace-drift" --label "action-required"); then
               delivered=1
+              # `gh issue create` prints the issue URL; the trailing path segment is the number.
+              issue_number="${created_url##*/}"
+              [[ "$issue_number" =~ ^[0-9]+$ ]] || issue_number=""
             else
               echo "::error::marketplace_drift_issue_filing_failed — the drift verdict reached the run log only; no action-required issue exists."
             fi
@@ -346,9 +506,98 @@ jobs:
           # line in a log nobody reads — the alarm channel failing open. A red run is the
           # fallback channel, and the heartbeat below carries the same conjunct to Sentry.
           echo "delivered=${delivered}" >> "$GITHUB_OUTPUT"
+          echo "issue_number=${issue_number}" >> "$GITHUB_OUTPUT"
           if [[ "$delivered" -ne 1 ]]; then
             echo "::error::Drift was detected but no issue was delivered; failing the job so this is not silently green."
             exit 1
+          fi
+
+      - name: Dispatch the reconcile apply
+        id: dispatch
+        # ORDERING IS LOAD-BEARING: this runs AFTER the issue step, and is gated on that step
+        # having DELIVERED. Remediation republishes the manifest and erases the drifted bytes,
+        # so if it ran first the attack/mistake would be silently corrected with no record —
+        # the evidence-destruction shape that ruled out simply scheduling the apply daily.
+        #
+        # NO `always()` / `!cancelled()` HERE. Two steps above, the issue-filing step carries
+        # `!cancelled()` because an issue MUST be filed even when an earlier step failed — and
+        # copying that idiom down here would invert this step's whole point, because the issue
+        # step `exit 1`s when it could not deliver. The IMPLICIT `success()` is what keeps
+        # "evidence first" true, so it is deliberate rather than omitted.
+        #
+        # `steps.check.outcome == 'success'` leads for the reason the file documents above:
+        # Actions `==` is LOOSE, an unset output is '' which casts to 0, so a gate reading only
+        # a step output is satisfiable by a step that never ran.
+        if: ${{ steps.check.outcome == 'success' && steps.check.outputs.verdict == 'MISMATCH' && steps.check.outputs.dispatch_eligible == 'true' && steps.issue.outputs.delivered == '1' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EXISTING_ISSUE: ${{ steps.issue.outputs.issue_number }}
+        run: |
+          # `set -euo pipefail`, NOT the `set +e` bracket the check/issue steps use. There, a
+          # non-zero exit is a VERDICT to be captured; here it is a genuine error and must fail
+          # the job.
+          set -euo pipefail
+
+          # BASELINE BEFORE DISPATCH. `gh workflow run` exits 0 on ACCEPTANCE and returns no run
+          # id — it confirms the API took the request, never that a run started. A disabled
+          # workflow, a renamed file or a quota block all accept-then-nothing, so the poll below
+          # is the only thing standing between that and a green job with no reconcile.
+          #
+          # The poll must therefore identify OUR run, not merely A run. The first draft read
+          # `.[0].databaseId` off a `--limit 5` listing with no time bound, which returns the
+          # most recent workflow_dispatch run of that workflow whenever it happened: verified
+          # against live state, run 26386154924 from 2026-05-25 satisfied it on the first tick,
+          # ~6s in. Every accept-then-nothing case the comment above describes would have passed
+          # green, and the stale URL would then be commented onto the operator's drift issue as
+          # the remediation record. (The first draft selected `createdAt` and discarded it, which
+          # is the tell.)
+          #
+          # databaseId is monotonic per repository, so "strictly greater than what existed a
+          # moment ago" identifies a new run exactly — no clock comparison, and immune to runner
+          # vs GitHub skew that a createdAt cutoff would inherit.
+          before_id="$(gh run list --repo "$GH_REPO" --workflow=apply-github-infra.yml \
+            --event workflow_dispatch --limit 1 \
+            --json databaseId --jq '.[0].databaseId // 0' 2>/dev/null || echo 0)"
+          # Fail CLOSED on an unreadable baseline: an empty or non-numeric value must not become
+          # a 0 that makes every historical run "newer".
+          if [[ ! "$before_id" =~ ^[0-9]+$ ]]; then
+            echo "::error::Could not read the pre-dispatch run baseline for apply-github-infra.yml (got '${before_id}'). Refusing to dispatch, because the post-dispatch poll could not then tell a new run from an old one."
+            exit 1
+          fi
+
+          # `--ref main` is explicit rather than relying on workflow_dispatch's default-branch
+          # default, and `--repo` mirrors the sibling dispatcher in
+          # inngest-watchdog-restart-dispatch.yml.
+          gh workflow run apply-github-infra.yml \
+            --repo "$GH_REPO" \
+            --ref main \
+            -f reason="marketplace-drift reconcile from ${RUN_URL}"
+
+          run_id=""
+          for _ in $(seq 1 20); do
+            sleep 6
+            run_id="$(gh run list --repo "$GH_REPO" --workflow=apply-github-infra.yml \
+              --event workflow_dispatch --limit 20 \
+              --json databaseId --jq "[.[].databaseId | select(. > ${before_id})] | max // empty" 2>/dev/null || true)"
+            [[ -n "$run_id" ]] && break
+          done
+
+          if [[ -z "$run_id" ]]; then
+            echo "::error::apply-github-infra.yml dispatch was ACCEPTED but no NEW workflow_dispatch run (id > ${before_id}) appeared within ~120s. The manifest was NOT reconciled; the drift issue remains the only record."
+            exit 1
+          fi
+
+          dispatched_url="${GITHUB_SERVER_URL}/${GH_REPO}/actions/runs/${run_id}"
+          echo "Dispatched reconcile apply: ${dispatched_url}"
+
+          # Link detection to remediation on the artifact the operator actually reads. Without
+          # this the drift issue and the apply run are two unconnected records.
+          if [[ -n "${EXISTING_ISSUE:-}" ]]; then
+            gh issue comment "$EXISTING_ISSUE" --repo "$GH_REPO" \
+              --body "Reconcile apply dispatched automatically: ${dispatched_url}" || \
+              echo "::warning::could not link the dispatched run on issue #${EXISTING_ISSUE}"
           fi
 
       - name: Close the drift issue once the manifest matches again
@@ -392,6 +641,15 @@ jobs:
         # a Sentry ingest blip would turn a healthy run red.
         continue-on-error: true
         with:
+          # #7493 — these three were ALWAYS `required: true` on the composite and were NEVER
+          # forwarded. Actions does not enforce `required` on composite-action inputs, so the
+          # composite hit its own empty-guard, printed a `::warning::` and exited 0: this
+          # monitor's check-in has never been delivered, and the "detects the job NOT RUNNING
+          # AT ALL" property the note below claims did not exist. Mirrors the sibling
+          # scheduled-terraform-drift.yml, which forwards the same three.
+          sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
+          sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}
           monitor-slug: scheduled-marketplace-drift
           # `ok` means THE MONITOR WORKED, not that the manifest is clean — a detected drift is a
           # SUCCESSFUL evaluation whose surface is the issue. But a drift that was detected and
@@ -401,4 +659,10 @@ jobs:
           # disables schedules on repo inactivity and silently drops ticks under load, and a
           # missed tick leaves no red run to notice. Without this step the guard's own liveness
           # was unmonitored while every sibling scheduled workflow carries one.
-          status: ${{ (steps.check.outcome == 'success' && (steps.check.outputs.verdict == 'OK' || (steps.check.outputs.verdict == 'MISMATCH' && steps.issue.outputs.delivered == '1'))) && 'ok' || 'error' }}
+          #
+          # #7493 adds the DISPATCH conjunct. A reconcile that was eligible but failed to
+          # dispatch is a monitor failure by the same logic as an undelivered issue: the
+          # workflow's job is detect-then-correct, and a half-completed correction reported as
+          # `ok` is the shape this expression exists to refuse. `steps.dispatch.outcome` is
+          # 'skipped' when the dispatch was not eligible, which correctly reads as no-failure.
+          status: ${{ (steps.check.outcome == 'success' && steps.dispatch.outcome != 'failure' && (steps.check.outputs.verdict == 'OK' || (steps.check.outputs.verdict == 'MISMATCH' && steps.issue.outputs.delivered == '1'))) && 'ok' || 'error' }}

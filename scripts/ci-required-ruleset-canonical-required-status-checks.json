@@ -82,5 +82,9 @@
   {
     "context": "credential-path-guard",
     "integration_id": 15368
+  },
+  {
+    "context": "marketplace-manifest-guard",
+    "integration_id": 15368
   }
 ]
