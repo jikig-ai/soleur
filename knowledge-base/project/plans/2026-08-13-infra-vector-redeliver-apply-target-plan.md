@@ -132,10 +132,324 @@ disruption that is invisible to a mutex scoped to terraform runs alone.
 (`:5160-5161`). The group is shared across pipelines: `apply-deploy-pipeline-fix.yml:213`,
 `web-platform-release.yml:519`, `workspaces-luks-cutover.yml:74`.
 
-**Open check for /work:** `apps/web-platform/infra/web-1-swap-concurrency-parity.test.sh` is a
-drift-guard over this group (invoked at `infra-validation.yml:1088-1089`). I have not read it.
-If it enumerates the set of jobs required to hold the group, the new job must be registered
-there — an orphan-suite miss of exactly the class the `-target`-allowlist learning warns about.
+**RESOLVED (was an open check) — and it caught a gap in this plan's own file list.**
+`apps/web-platform/infra/web-1-swap-concurrency-parity.test.sh` (invoked at
+`infra-validation.yml:1088-1089`) is not a passive guard. It is an **explicit allow-list with an
+exact-count assertion**:
+
+- Seven `assert_member` calls (`:107`, `:108`, `:109`, `:113`, `:119`, `:126`, `:137`) — the last
+  being `ci_ssh_token_replace`, our structural model. (The header comment still says "SIX"; it is
+  stale by one.)
+- `:173` — `if [ "$web1_count" -eq 7 ]`, an **equality** check, with `:165` instructing
+  *"KEEP THIS NUMBER EQUAL TO THE assert_member COUNT ABOVE."*
+
+So enrolling `vector_redeliver` in the group **fails this suite** at count 8 ≠ 7 unless the same
+change adds an `assert_member` line and bumps the literal to 8. That makes
+`web-1-swap-concurrency-parity.test.sh` a **mandatory** entry in Files to Edit — it was missing
+from this plan until the check was actually run, which is precisely the orphan-suite class the
+`-target`-allowlist learning warns about.
+
+**The membership question itself is a genuine judgment call, so both sides are recorded.** The
+suite carries a *negative* assertion (`:201-210`): the routine `apply` job must NOT be enrolled,
+or it is an *"over-serialization trap"*. That matters here because the routine `apply` job's SSH
+step performs the **identical** `terraform_data.journald_persistent` delivery this arm performs
+(`:935`) — so the repo has already ruled that this specific work is not, by itself, web-1-swap
+class.
+
+**Position taken: enroll.** The exclusion's stated rationale is explicitly about *frequency* —
+*"enrolling it would over-serialize every routine release behind every routine infra apply"* — not
+about whether the work mutates web-1. That rationale does not transfer to a rare, deliberately
+fired arm. The nearest sibling on that axis, `ci_ssh_token_replace`, is a rare non-container-swap
+dispatch and **is** enrolled (`:137`). Serialization cost here is negligible; the cost of a
+logging-plane reload racing a LUKS cutover or a release swap is not.
+
+**If review disagrees**, the reversal is mechanical and cheap: drop the `concurrency:` block from
+the job and make no parity-test change at all. The two options are exactly symmetric in effort, so
+this decision does not need to be right the first time — it needs to be visible. Flagged for the
+review panel rather than settled by assertion.
+
+### F9 — P0, PREMISE CORRECTION: the #7228 boot-trace identifiers are NOT web-1 identifiers, so AC27 as briefed is unsatisfiable
+
+**This falsifies a premise carried in on the brief**, and it is the most important finding of the
+review pass — the runbook's verification section, AC27, AC28 and the issue-close condition were all
+built on it.
+
+The brief states: *"#7457's change is file-only and never reached web-1, so #7228's boot-trace
+SyslogIdentifiers are dark on the host."* The first half holds. The second does not.
+
+Commit `0d6443960` added exactly two identifiers under its "#7228 boot-trace" comment blocks —
+`inngest-boot-phone-home` (`vector.toml:194`) and `inngest-bs-token-restage` (`vector.toml:202`).
+**Both emitters live on the dedicated inngest host, not web-1:** `cloud-init-inngest.yml:150,155,170`
+(the only `logger -t inngest-boot-phone-home` sites), `cloud-init-inngest.yml:245,255` plus `:290`
+(`SyslogIdentifier=inngest-bs-token-restage`), and further sites in `inngest-bootstrap.sh:598-1237`.
+Grepping the **web** host's provisioning (`cloud-init.yml`, `soleur-host-bootstrap.sh`) for either
+name returns zero hits. This arm delivers to one host only — `connection { host =
+hcloud_server.web["web-1"].ipv4_address }` (`server.tf:992-998`) — while the inngest host's config
+arrives via `apply_target=inngest-host-replace` (`server.tf:745-748`). A *successful*
+`vector-redeliver` cannot light those two channels on any host.
+
+They are also **boot-scoped and silent-on-success even on the right host**: `vector.toml:188-189`
+says so verbatim — *"the emitter is SILENT ON SUCCESS, so a healthy host pays zero rows."* Nothing
+in this plan causes a boot.
+
+**The one #7228 tag that IS web-1-scoped is blocked by this plan's own AC24.**
+`inngest-consumer-probe` (`vector.toml:244`) is emitted by a unit installed by
+`terraform_data.inngest_consumer_probe_install`, which provisions **web-1** (`server.tf:767-772`,
+timer at `:812`) — one of the pending creates AC24 forbids. So after a successful dispatch web-1
+carries the Source-4 allow-list entry with **no unit emitting it** — exactly what
+`vector.toml:246-248` warns about: *"an entry whose unit does not set that literal
+SyslogIdentifier= is a permanently-dead no-op that reads like coverage."*
+
+**Second defect, same area:** the Observability block claimed delivery failure "cannot occur
+silently" thanks to the post-restart assertions. Those grep only `web-zot-consumer-probe`,
+`web-git-data-probe`, `web-nic-guard` (`server.tf:1082-1085`) — the #6438 tags. **No #7228 tag is
+asserted.**
+
+**Resolution — AC27 is rewritten to assert what the arm can actually cause:** (1) extend the
+resource's post-restart assertions with `grep -q 'inngest-consumer-probe' /etc/vector/vector.toml`,
+making delivery a property of the apply itself; (2) keep the cat-deploy-state webhook check, which
+was always sound; (3) add a **positive control** — an identifier web-1 genuinely emits (`sshd`,
+`ci-deploy`) for `host_name=soleur-web-platform` after the restart timestamp, because **absence of
+rows must never be the assertion** (an empty query is indistinguishable from a dead sink); (4) move
+boot-trace verification to `inngest-host-replace` under #7462, stated in Known Residual rather than
+silently dropped. Verified CLI shape, from the script's own no-credential message:
+`doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep <marker>`.
+
+### F10 — P0: the prescribed step order cannot authenticate SSH; AC12 and AC13 were jointly unsatisfiable
+
+The first draft prescribed `plan -out=tfplan` → gate → **bridge** → `apply tfplan`. That cannot work.
+
+`.github/actions/cf-tunnel-ssh-bridge/action.yml:161-163` notes the secret name
+(`DEPLOY_SSH_PRIVATE_KEY`) does **not** map to the var name via `--name-transformer tf-var`, so the
+action sets it explicitly — writing `TF_VAR_ci_ssh_private_key` into `$GITHUB_ENV` at `:199-203`,
+i.e. only **after** the bridge step. `variables.tf:468-472` defaults it to `null`, and
+`server.tf:992-998` resolves `agent = var.ci_ssh_private_key == null`. A plan produced *before* the
+bridge therefore bakes `null` → `agent = true` → ssh-agent auth on an agent-less runner. And
+`terraform apply <savedplan>` uses the variable values recorded in the plan file and accepts no
+variable input, so the bridge's later export is inert.
+
+The repo already encodes this at `apply-web-platform-infra.yml:917-925`: the SSH apply is *"a
+SEPARATE `terraform apply` (not the saved tfplan) … TF_VAR_ci_ssh_private_key is exported by the
+bridge action → agent=false."* No existing arm combines a saved plan with the bridge; all twelve
+saved-plan applies sit in jobs with no bridge and no SSH provisioner.
+
+**Resolution: move the bridge BEFORE the plan step.** The credential is then in env at plan time,
+gets baked into `tfplan`, and `apply tfplan` works — preserving the Guard Contract's single-artifact
+chokepoint, which is load-bearing. **AC12 is rewritten to "the gate runs before the *apply*"**, and
+its original goal costs nothing to give up: the bridge is read-only setup (a cloudflared forward, a
+NAT rule, a token-liveness assertion), and the `ci_ssh` arm's own doctrine (`:5203-5217`) argues for
+proving the channel *before* the consequential step. The alternative — keep gate-before-bridge and
+use a fresh `terraform apply -target=` — dissolves the Assembly's central claim and AC13. Rejected.
+
+### F11 — P0: a successful dispatch UN-WEDGES the push apply, releasing the four pending creates unattended
+
+An emergent consequence the first draft did not analyse.
+
+The push destroy-guard halts on `destroy_count = resource_deletes + nested_deletes + reboot_updates`
+(`apply-web-platform-infra.yml:667`), and the journald replace is the **only** destroy in the
+pending plan. Once this arm applies that replace outside the merge path, the next push plan becomes
+**4 add / 1 change / 0 destroy** → `destroy_count = 0`, `host_creates = 0` → **the guard passes and
+the push apply proceeds unattended**, applying all four creates plus the `cloudflare_bot_management`
+update, on an arbitrary future merge by an unrelated author.
+
+AC24 forbids acking those at merge time; this arm removes the barrier one dispatch later. Whether
+that is desirable is arguable — per **F9** it is what would finally make `inngest-consumer-probe`
+live — but the plan must **state the intended end state** rather than let it emerge.
+
+**Correcting AC24's rationale, which was factually wrong.** The first draft said
+`terraform_data.inngest_consumer_probe_install` *"provisions a host currently under repair."* It
+provisions **web-1** (`server.tf:767-772`), and its own header says the opposite: *"Nothing here
+touches 10.0.1.40, which is the point … This block is inside the per-merge `-target=` set, so it
+works on merge"* (`:743-748`). The scope-out may still be right; the reason given was not.
+
+**Recurring obligation:** after this PR merges, *every* subsequent merge touching a
+`paths:`-matching file halts on the same guard and needs its own `[skip-web-platform-apply]` until
+the dispatch fires. #7462, PR #7516 and #7539 are all still open, so the window is not short. Name
+an owner and a deadline.
+
+### F12 — P1: failing the no-op is wrong here; the cited precedent is `-replace`-specific
+
+The first draft justified failing on `journald_delivered == 0` by citing
+`apply-web-platform-infra.yml:5353-5355` (*"a plan with zero replaces means the `-replace` silently
+did nothing"*). That premise is `-replace`-specific: there the flag **is** the instruction, so zero
+replaces means the instruction was lost. **This arm deliberately has no `-replace`.** Here
+`journald_delivered == 0` means the desired state is *already realised* — the arm's own success
+condition, one dispatch later. Legitimate states that hit it: a re-dispatch to re-verify after a
+successful AC26; the push apply delivering first; a cancelled run after state was updated.
+
+In-repo precedent points the other way — `destroy-guard-filter-web-platform.jq` splits
+`retire_firewall_attachment_updates` from `…_deletes` precisely so a retry finding the work already
+done *"must not fail closed."*
+
+**Resolution:** keep the counter and the distinct message, change the **outcome**. `== 0` →
+**NO-OP SUCCESS**: exit 0, skip the bridge and the apply, write *"nothing to redeliver"* to
+`$GITHUB_STEP_SUMMARY`. Keep strict-red for `>= 2`. **M4 flips from RED to a distinct
+green-with-summary** and needs its own assertion; AC26 must state `journald_delivered=1` is
+assertable **only on the first dispatch** — as written it depended on run history, the
+`cq-ac-must-not-depend-on-concurrent-sessions` shape.
+
+### F13 — P1: the transitive closure is ~9 addresses, not one; and it has a dated future brick
+
+**F3** named only `hcloud_server.web["web-1"]`. The real closure of
+`-target=terraform_data.journald_persistent` also pulls `hcloud_server.web["web-2"]` (dependency
+inclusion is resource-scoped, and `variables.tf:96-99` declares both), `hcloud_ssh_key.default`
+(`server.tf:264`), `hcloud_placement_group.web_spread` (`:273`),
+`cloudflare_zero_trust_tunnel_cloudflared.web` (`:322`) → `random_id.tunnel_secret`,
+`doppler_service_token.web_probes` (`:410`), `hcloud_volume.workspaces[each.key]`, and
+`tls_private_key.ci_ssh` via `local.ci_ssh_pubkey` (`ci-ssh-key.tf:48`).
+
+This does not break the design — grading the whole plan is exactly the right response, and the
+closure is empirically clean today. Three consequences: (1) the Risks row should read "any of ~9
+closure addresses carries a pending change", not "web-1"; (2) **`host_destroyed` must also name
+`hcloud_volume.*`** — the workspaces volumes are sole-copy user data, are in the closure, and are
+actively mutated by the LUKS arms; (3) **a dated future brick** — the arm's cleanliness rests on
+`hcloud_server.web`'s `lifecycle { ignore_changes = [user_data, ssh_keys, image,
+placement_group_id] }`, which `server.tf` documents as a temporary GA deferral (*"REMOVE this entry
+in the GA maintenance-window PR as its FIRST diff"*). When `placement_group_id` leaves that list,
+web-1 plans a pending in-place update on every dispatch and the gate refuses forever — F2's own
+"a gate that always fails is an outage" hazard, with a scheduled date. Belongs in Known Residual.
+
+Also: `host_destroyed` must use a **type-scoped** `select(.type == "hcloud_server")`
+(`destroy-guard-filter-web-platform.jq:185` — *"TYPE-scoped select (not address)"*), not an
+address-prefix match, which would collide with the exact-equality rule.
+
+### F14 — P1: four gate-refusal states have no documented remedy, one terminal
+
+Phase 4's `## If it fails` is scoped to SSH-step failures; nothing covers a gate refusal. The
+runbook needs an `## If the gate refuses` section *ahead of* it, with a per-counter table:
+
+1. **`vector_out_of_scope_changes ≥ 1` from pending drift in the closure** — not hypothetical
+   (**F13**). The remedy is **circular**: clearing that drift needs the push apply (wedged) or a
+   full apply outside CI. This is the terminal dead end — `vector.toml` becomes undeliverable by
+   any route, the exact #7228-prolonging condition the arm exists to end. Needs a named break-glass;
+   the workflow's own halt text already points at the OPERATOR_APPLIED_EXCLUSIONS contract /
+   ADR-096 (`:663-664`).
+2. Any other closure address arriving with a change — enumerate the plausible ones.
+3. Fail-closed preamble aborts — a tooling fault that reads like an infra fault. Needs an explicit
+   *"re-dispatch once; if it repeats, the gate or `terraform show` is broken"* line.
+4. `journald_delivered ≥ 2` — anomalous; needs a stated next action.
+
+### F15 — additional required edits surfaced by review
+
+- **`if: always()` bridge teardown step is mandatory.** `action.yml:33-58`: *"Every caller MUST add
+  an `if: always()` teardown step."* The first draft's step list ended at the apply. It is also
+  where `tail -n 200 /tmp/cloudflared.log` surfaces — without it, the L3 "tunnel unhealthy"
+  hypothesis in `## Hypotheses` has no evidence to run on. Reference: `:1102`.
+- **`timeout-minutes` is missing.** Every sibling has one (`ci_ssh_token_replace` `:5148` = 15).
+  Omitted, GitHub applies 360 minutes — on a job holding **two** mutexes, one of which
+  (`web-1-swap`) the in-band credential-repair arm also needs. Add `timeout-minutes: 15`.
+- **AC21's `bash -c` would EXECUTE the snippet** (firing `terraform plan`/`apply` and the bridge).
+  Correct form: `yq` the `run:` scalar to a temp file, then `bash -n` on the extracted snippet.
+- **AC9 is not grep-able as written** — `REDELIVER-VECTOR` legitimately appears in the job header,
+  the comparison, the error string, the runbook, this plan and the suite. Use a structured read:
+  `yq '.on.workflow_dispatch.inputs.confirm.description'` piped to a negative grep.
+- **The `apply_target` description enumeration must gain the option** (`:189-194`), and
+  `terraform-target-parity.test.ts:2705-2716` enforces description→enum parity. But per `:181-187`
+  the *detail* belongs in the job header, not that field — add the option to the enumeration only.
+- **`scripts/lint-workflow-errexit-capture.py`** and **`scripts/lint-infra-no-human-steps.py`**
+  (whose `SCAN_DIRS` covers both `runbooks/` and `decisions/`) belong in AC21.
+- **CODEOWNERS** enumerates gate libs individually (`.github/CODEOWNERS:98-117`); the new gate needs
+  a row.
+- **M6/T13 must anchor on the `source` command, not the filename** —
+  `stock-preflight-coverage.test.ts:207-215` records that a bare `.includes("…-gate.sh")` is
+  satisfied by the `# shellcheck source=` directive alone, and *"deleting all five real `source`
+  lines left this suite green."*
+- **The dummy-key comment must not be copied verbatim.** `ci_ssh_token_replace`'s says
+  *"hcloud_ssh_key.default is not in the target set and is never consumed"*; here it **is** in the
+  closure (`server.tf:264`) and stays a no-op only via `lifecycle { ignore_changes = [public_key] }`
+  (`:242-244`).
+
+### F7 — P0: the arm needs `environment: web-platform-infra-apply`, because that environment is a MAIN-BRANCH PIN, not merely a reviewer click
+
+**This reverses a design decision the first draft asserted**, and the reasoning it was asserted on
+was a misreading.
+
+The draft said: *"No `environment:` reviewer gate — consistent with every non-birth/non-recut arm
+(`:112`)."* Line `:112` does describe `environment:` as a reviewer gate — but for the environment
+the birth/replace arms actually use, that is only half of what it is.
+`web_host_create` (`:3735`), `web_host_replace` (`:4201`) and `git_data_host_create` (`:4675`)
+declare `environment: web-platform-infra-apply`, and
+`apps/web-platform/infra/web-host-birth-environment.tf:63-66` + `:73-78` bind that environment to
+`deployment_branch_policy { custom_branch_policies = true }` with `branch_pattern = "main"`.
+
+That same file (`:35-39`) states this arm's threat model verbatim:
+
+> `workflow_dispatch` runs the SELECTED REF's workflow and its scripts, and the birth job sources
+> its only check from `${GITHUB_WORKSPACE}`. Without the branch policy, anyone who can dispatch can
+> point the run at a branch carrying a neutered gate, and the reviewer prompt shows a branch name,
+> not a diff.
+
+**The new arm is that shape exactly.** Its gate (`tests/scripts/lib/vector-redeliver-gate.sh`), the
+job that calls it, the `server.tf` provisioner bodies and the `vector.toml` payload all come from
+`${GITHUB_WORKSPACE}` at the **dispatched ref**. `grep -n 'github\.ref'` over the workflow returns
+**zero hits** — there is no ref guard anywhere in the file. And this is the **first
+`workflow_dispatch`-only job in the file that opens the CF Tunnel SSH bridge and runs root
+`remote-exec` on web-1**: `grep -n cf-tunnel-ssh-bridge` returns three hits, two comments (`:19`,
+`:288`) and one invocation (`:897`) — inside the push/`manual-rerun` `apply` job. Every existing
+dispatch arm is cloud-init only; `:1153` says so for the class, and `ci_ssh_token_replace` is
+described at `:256-259` as reaching *"NO host, NO volume, and NO terraform_data."*
+
+`hr-menu-option-ack-not-prod-write-auth` is correctly applied as an authorization model, but it
+authorizes the operator's **intent**, not the **code that runs** — and for the first time in this
+file that code is root commands on production.
+
+**Resolution: add `environment: web-platform-infra-apply` to the job.** It is already
+Terraform-managed, already carries the main-only pin, and yields the reviewer prompt as a
+by-product. A first-step `github.ref` guard was considered and rejected as strictly weaker: the
+guard would itself be supplied by the branch it is meant to police.
+
+Note this also explains a resource in the pending plan — `github_repository_environment_deployment_policy.web_platform_infra_apply_main`
+is one of the four out-of-scope creates. The environment exists; the *policy* pinning it to `main`
+is among the changes the wedge is holding. That ordering must be checked at dispatch time.
+
+### F8 — P0: two more guard suites enumerate what this change adds
+
+Both are orphan-suite misses of the class this plan names — and then committed twice more.
+
+1. **`plugins/soleur/test/stock-preflight-coverage.test.ts`** enumerates `apply_target.options` and
+   asserts each option either carries `stock_preflight_gate` or is **explicitly declared** in
+   `EXCLUSION_ALLOWLIST` (`:15` — *"Silence is not an option — which is the whole point"*;
+   `:243-251` — `expect(unguarded).toEqual([])`). Adding `vector-redeliver` makes it an unguarded,
+   undeclared option, so **AC22 fails** (the suite runs under
+   `run_suite "plugins/soleur" bun test plugins/soleur/`, `scripts/test-all.sh:1145`). Needs one
+   `EXCLUSION_ALLOWLIST` entry with a reason — the arm targets a `terraform_data` and creates no
+   `hcloud_server`, so the stock gate's `select(.type == "hcloud_server")` is a legitimate no-op,
+   the same class as the existing `workspaces-luks-cutover` entry. `:270-277` also asserts no
+   *excluded* target carries the gate, so the exclusion and the job body must agree.
+2. **`apps/web-platform/infra/web-1-swap-concurrency-parity.test.sh`** — see **F4**. Exact-count
+   allow-list; independently confirmed by two reviewers.
+
+### F6 — The brief's "refuse any nested-block removal" clause is UNIMPLEMENTABLE for this resource type; the allow-set already subsumes it
+
+**This is the second place a constraint as literally worded cannot be met** (F2 is the first), so it
+is recorded here rather than quietly dropped.
+
+The brief specifies the gate must refuse "any other address, any host delete, **any nested-block
+removal**". The first two are implemented. The third cannot be, and a counter for it would be
+**vacuous** — the precise defect the Guard Contract gate exists to prevent, introduced by this
+plan's own first draft.
+
+**Why it cannot fire.** "Nested-block removal" is not a schema-agnostic primitive in this repo. The
+only implementation is `tests/scripts/lib/destroy-guard-filter-web-platform.jq:148-165`, which is
+five hand-written, **Cloudflare-provider-schema-shaped** array-length deltas (`cloudflare_ruleset.rules`,
+`…tunnel_cloudflared_config.config[0].ingress_rule`, `cloudflare_zone_settings_override.settings[0].security_header`,
+…). A `terraform_data` resource has a schema of exactly `input`, `output`, `triggers_replace`, `id` —
+no nested block arrays at all. `connection` and `provisioner` are not attributes and never appear in
+plan JSON; `triggers_replace` is a scalar `sha256(...)` (`server.tf:987-990`). A `nested_removals`
+counter on `terraform_data.journald_persistent` is therefore **definitionally 0 for every plan
+Terraform can emit**, and its matrix row could only be exercised by hand-writing a plan document
+Terraform could never produce — a green row that proves nothing.
+
+**The repo has already ruled on exactly this**, and the first draft cited the wrong sibling.
+`tests/scripts/lib/web-host-birth-gate.sh:77-83`: *"WHY AN ALLOW-SET RATHER THAN NESTED-BLOCK
+COUNTERS. … This path changes NONE of them, so the stronger and simpler contract is that no such
+address may appear in the plan at all. That subsumes nested-block shrinkage without re-implementing
+five provider-schema-shaped counters that would drift on the next provider major."*
+
+**Resolution.** The *property* the brief asked for is preserved in full and by a stronger mechanism:
+a single-member allow-set means no address capable of carrying a nested block can appear in the plan
+at all. The counter is cut; the guarantee is not. A replacement mutation row (**M9**, a superstring
+address) tests the allow-set's exact-equality matching, which is the real failure mode.
 
 ### F5 — Zero new `workflow_dispatch` inputs are available, and none are needed
 
@@ -268,6 +582,10 @@ checklist exists to prevent.
 |---|---|
 | `.github/workflows/apply-web-platform-infra.yml` | Add `vector-redeliver` to the `apply_target` options list + a short clause in its description; add the `vector_redeliver` job |
 | `scripts/test-all.sh` | Register the new suite in the gate cluster (`:982-1090`) |
+| `apps/web-platform/infra/web-1-swap-concurrency-parity.test.sh` | **Mandatory if the job is enrolled in `web-1-swap`** (F4): add an eighth `assert_member` line for `vector_redeliver` and bump the exact-count literal at `:173` from 7 to 8. The suite asserts equality, so an unlisted member fails it. Also correct the stale "SIX"/"== 6" prose. Note this suite runs only via `infra-validation.yml:1089` — **not** in `scripts/test-all.sh`, so AC22 will not catch it locally |
+| `plugins/soleur/test/stock-preflight-coverage.test.ts` | **Mandatory (F8).** It reads the live `apply_target.options` enum and asserts every option is gated by `stock_preflight_gate` **or** declared in `EXCLUSION_ALLOWLIST` (`:224`, `:243-253`). Add an exclusion entry with a reason — the arm creates/replaces no `hcloud_server`, so the gate's `select(.type == "hcloud_server")` is a legitimate no-op. Mirror the `ci-ssh-token-replace` entry at `:108-129`. `:270-277` also asserts no *excluded* target carries the gate, so exclusion and job body must agree |
+| `apps/web-platform/infra/server.tf` | Extend the post-restart assertions (`:1082-1085`) with `grep -q 'inngest-consumer-probe' /etc/vector/vector.toml`, so delivery of the #7228 web-1 tag is a property of the apply (**F9**). This is the only `.tf` edit, and it adds an assertion — no resource, provider or variable changes |
+| `.github/CODEOWNERS` | Add a row for `tests/scripts/lib/vector-redeliver-gate.sh`; gate libs are enumerated individually at `:98-117` (**F15**) |
 
 There is **no** `knowledge-base/engineering/operations/runbooks/README.md` (verified — the
 directory carries no index file), so no index edit is required and none is prescribed.
@@ -291,19 +609,27 @@ Write `tests/scripts/lib/vector-redeliver-gate.sh` modelled on
   guard (`inngest-host-replace-gate.sh:60-64`).
 - `plan_gate_assert_readable` + `plan_gate_assert_classifiable` as the function's first
   statements, each `|| return 1`.
-- One `jq -n --slurpfile p` evaluation emitting four counters:
+- One `jq -n --slurpfile p` evaluation emitting **three** counters (not four — see **F6**):
   - `vector_out_of_scope_changes` — resource_changes with any of create/update/delete/forget
     whose address is not `IN(.address; allow[])`, where `allow` is the single-member list
     `["terraform_data.journald_persistent"]`.
-  - `host_destroyed` — named backstop: any `hcloud_server.*` with delete/forget.
-  - `nested_removals` — named backstop for nested-block shrinkage on an in-allow-set address.
+  - `host_destroyed` — named backstop: any `hcloud_server.*` with delete/forget. Subsumed by the
+    out-of-scope counter, but kept for the same reason `redis_volume_destroyed` is
+    (`inngest-host-replace-gate.sh:45-47`): it gives a specific, legible "this dispatch would
+    destroy web-1" line. Unlike the cut counter it is genuinely *reachable* — **F3** puts
+    `hcloud_server.web["web-1"]` in this arm's plan.
   - `journald_delivered` — count of entries at the allowed address whose sorted actions are
     `["create","delete"]` **or** `["create"]` (per **F2**).
-- `plan_gate_assert_numeric` over all four before any arithmetic comparison.
-- **PASS iff** `vector_out_of_scope_changes==0 && host_destroyed==0 && nested_removals==0 && journald_delivered==1`.
-- Distinct, actionable ABORT messages per failure mode — in particular a `journald_delivered==0`
-  message that says *nothing to redeliver: the committed vector.toml already matches state*,
-  so a no-op is never mistaken for a gate defect.
+- `plan_gate_assert_numeric` over all three before any arithmetic comparison.
+- **PASS iff** `vector_out_of_scope_changes==0 && host_destroyed==0 && journald_delivered==1`.
+- Distinct, actionable ABORT messages per failure mode. The `journald_delivered==0` message must
+  say **"no entry matched the allow-set"**, NOT "state already matches" — if the address is ever
+  moved under `for_each`, exact-equality stops matching `…journald_persistent["web-1"]` and the
+  counter reads 0 for a *broken allow-set*. Asserting "nothing to redeliver" there would emit the
+  reassuring message for the alarming condition.
+- **Gate header must record** (the decision content that would otherwise have gone in an ADR): the
+  saved-`tfplan` assembly argument, why a bare `["create"]` is admitted (**F2**), why the
+  `depends_on` edge was not removed (**F3**), and the un-indexed-address assumption above.
 
 ### Phase 2 — The mutation-matrix suite
 
@@ -327,13 +653,23 @@ Add `vector_redeliver` to `apply-web-platform-infra.yml`, modelled structurally 
   (`hr-menu-option-ack-not-prod-write-auth`); `confirm=REDELIVER-VECTOR` is only a typo-guard;
   the plan-reading gate is the mechanical protection; the token is recorded here and in the
   runbook, not in the `confirm` input description.
-- Steps: checkout → setup-terraform → Doppler CLI → typo-guard (`REDELIVER-VECTOR` + non-empty
-  `reason`, both env-routed, reason echoed to `$GITHUB_STEP_SUMMARY`) → ephemeral SSH pubkey for
-  `var.ssh_key_path` → extract R2 backend creds → `terraform init` → `terraform plan -out=tfplan
-  -target=terraform_data.journald_persistent` → **gate** (`terraform show -json tfplan` → source
-  the lib → `vector_redeliver_gate`) → CF Tunnel SSH bridge → `terraform apply tfplan`.
-- The bridge is required because the resource's provisioners are SSH-borne (`server.tf:992-998`);
-  it is placed **after** the gate so a refused plan never opens a tunnel.
+- `environment: web-platform-infra-apply` (**F7**) — the main-branch pin, not merely a reviewer
+  click. This reverses the first draft.
+- `timeout-minutes: 15`, matching `ci_ssh_token_replace` (**F15**).
+- `permissions: contents: read` declared job-level, as the sibling does (`:5167-5168`).
+- Steps, in this order (**corrected per F10**): checkout → setup-terraform → Doppler CLI →
+  typo-guard (`REDELIVER-VECTOR` + non-empty `reason`, both env-routed, reason echoed to
+  `$GITHUB_STEP_SUMMARY`) → ephemeral SSH pubkey for `var.ssh_key_path` → extract R2 backend creds →
+  `terraform init` → **CF Tunnel SSH bridge** → `terraform plan -out=tfplan
+  -target=terraform_data.journald_persistent` → **gate** (`terraform show -json tfplan` → source the
+  lib → `if ! vector_redeliver_gate …`) → `terraform apply tfplan` → **`if: always()` bridge
+  teardown**.
+- **The bridge must precede the plan**, not follow the gate. It exports
+  `TF_VAR_ci_ssh_private_key` into `$GITHUB_ENV` (`action.yml:199-203`); a plan produced before it
+  bakes `null` → `agent = true` on an agent-less runner, and `apply <savedplan>` accepts no
+  variable input, so the later export is inert. Full reasoning: **F10**.
+- The teardown step is a caller obligation the composite action declares mandatory
+  (`action.yml:33-58`), and is where the cloudflared log surfaces for the `## Hypotheses` L3 check.
 
 ### Phase 4 — Runbook
 
@@ -371,19 +707,78 @@ feeding one apply — is structural and does not.
 **Mutation matrix.** Each row is an edit that MUST drive the guard RED. Derived from the design,
 before the gate is written.
 
-| # | Mutation to the graded plan (or to the wiring) | Must go RED via |
-|---|---|---|
-| M1 | **Second member:** a compliant journald delivery **plus** one more changed resource (e.g. `cloudflare_bot_management.soleur_ai` with `["update"]`) | `vector_out_of_scope_changes ≥ 1` — proves the gate does not stop at the first compliant entry |
-| M2 | Journald entry's actions changed from `["delete","create"]` to `["update"]` | `journald_delivered == 0` |
-| M3 | `hcloud_server.web["web-1"]` present with `["delete","create"]` | `host_destroyed ≥ 1` (and out-of-scope) |
-| M4 | Journald entry absent entirely (no-op plan) | `journald_delivered == 0`, with the "nothing to redeliver" message |
-| M5 | Plan document unreadable / not classifiable (`{}`, invalid JSON, no `resource_changes` key) | fail-closed preamble asserts |
-| M6 | **Own dispatch:** the workflow's gate step stops invoking `vector_redeliver_gate` (removed call, or a return before counters evaluate) | wiring assertion that the job's gate step sources the lib **and** calls the function, plus the suite's own non-vacuity floor (cases-executed > 0) |
-| M7 | Two entries for the allowed address in one document | `journald_delivered == 2 ≠ 1` |
-| M8 | Nested-block removal on the allowed address | `nested_removals ≥ 1` |
+**Rows are grouped by AXIS, because N edits on one axis is one mutation.** The first draft had
+eight rows that were really three axes, one of which was broken. Four axes are exercised below:
+fixture *content*, fixture *shape*, the *SUT itself* (mutating the gate file), and the *workflow
+wiring*. A redundant backstop can only be pinned by a **layered SUT mutation** — a fixture row for
+it is vacuous by construction, because the counter that subsumes it reddens first.
 
-M1 satisfies the second-member requirement; M6 satisfies the own-dispatch requirement; the matrix
-is 8 rows against a floor of 3.
+**Axis A — fixture content** (jq fixtures via `gate-suite-harness.sh`):
+
+| # | Mutation to the graded plan | Must go RED via |
+|---|---|---|
+| M1 | **Second member:** a compliant journald delivery **plus** one more changed resource (`cloudflare_bot_management.soleur_ai`, `["update"]`) | `vector_out_of_scope_changes ≥ 1` — proves the gate does not stop at the first compliant entry |
+| M2 | Journald entry's actions `["delete","create"]` → `["update"]` | `journald_delivered == 0` |
+| M4 | Journald entry absent entirely (no-op plan) | `journald_delivered == 0`, with the "no entry matched the allow-set" message |
+| M7 | Two entries for the allowed address | `journald_delivered == 2 ≠ 1` |
+| M9 | **Near-miss addresses** (exact-equality discriminator): `terraform_data.journald_persistent_v2` with `["update"]`, and separately `module.staging.terraform_data.journald_persistent` | `vector_out_of_scope_changes ≥ 1`. **This is the only row that distinguishes `IN(.address; allow[])` from `inside`/`contains`.** With a one-member allow-set, a first-match / prefix-match / `contains` implementation is otherwise indistinguishable from the specified one. Models `test-inngest-host-replace-gate.sh:60-70` |
+| M10 | **The measured D5 shape at the address F3 predicts:** `rc_empty_actions 'hcloud_server.web["web-1"]'` — `"actions": []`, `"after": null` (`gate-suite-harness.sh:73-85`) | `vector_out_of_scope_changes ≥ 1`. This is a *measured* production hole — a hidden destroy of the singleton behind app.soleur.ai that scored zeroes and PASSED a sibling gate. **F3** establishes this exact address will be in this arm's plan, making it the most production-representative fixture available. Add `rc_scalar_change` (`:93-96`) alongside |
+| M11 | Lone `["delete"]` (and separately `["forget"]`) at the **allowed** address | `journald_delivered != 1`. The most destructive single-address shape the arm can emit; `host_destroyed` is scoped to `hcloud_server.*` and out-of-scope excludes the allowed address, so nothing else catches it. M2 tests only the benign counterpart |
+
+**Axis B — fixture shape** (fail-closed preamble). M5 is split, because `{}`, invalid JSON and a
+missing `resource_changes` key are **one** shape — all three fail `plan_gate_assert_readable`
+(`plan-gate-preamble.sh:92-96`), leaving the other two mandated asserts unpinned:
+
+| # | Mutation | Must go RED via |
+|---|---|---|
+| M5a | Unreadable document (`{}` / invalid JSON / no `resource_changes`) | `plan_gate_assert_readable` |
+| M5b | An unclassifiable plan entry | `plan_gate_assert_classifiable` — anchored on its `"unclassifiable plan entry"` text, per `test-inngest-host-replace-gate.sh:153-156` |
+| M5c | A counter that fails to evaluate (empty string) | `plan_gate_assert_numeric`, naming the offending counter |
+
+**Axis C — SUT mutation** (`gate_mutate_layered`, `gate-suite-harness.sh:208-229`). This is the
+axis the first draft never touched, and the only one that can prove a redundant backstop is
+load-bearing:
+
+| # | Mutation to the gate file | Must go RED / prove |
+|---|---|---|
+| M3 | Neuter the `host_destroyed` clause, then feed `hcloud_server.web["web-1"]` with `["delete","create"]` | The plan is **still refused** (by out-of-scope), the `host_destroyed`-specific text is **gone**, and the out-of-scope text **appears**. That is the honest contract for a deliberately-redundant backstop — a *fixture* row for M3 is vacuous, because out-of-scope reddens first. Models `test-inngest-host-replace-gate.sh:153-156` |
+| M6b | Insert an early `return 0` in the gate | Already reddened by M1/M2/M4/M7 — stated as **covered**, not claimed as an independent detector |
+
+**Axis D — workflow wiring** (a **separate suite**, modelled on
+`tests/scripts/test-registry-d10-workflow-wiring.sh`, not on `gate-suite-harness.sh` — that harness
+has no workflow-reading capability at all, no YAML/step extractor, and its mutation helpers `sed`
+the gate file only):
+
+| # | Mutation to the workflow | Must go RED via |
+|---|---|---|
+| M6a | The gate step stops invoking the gate, or discards its status (`vector_redeliver_gate "$P" \|\| true`), or the step gains `continue-on-error: true` | `_strip` comments first (`:49`), extract the job + gate step (`:51-67`), hard vacuity floor if the extractor returns empty (`:71-82`), then anchor on the **call form** `^\s*if ! vector_redeliver_gate ` — never a bare token (`cq-assert-anchor-not-bare-token`) — plus a negative assertion that the step carries no `continue-on-error`. **A bare presence grep is satisfied by prose**: AC-mandated job-header comments and the gate file's own `# Usage:` line both contain the function name. `plan-gate-preamble.sh:19-24` records this exact failure ("a gate that SOURCES this file and never CALLS it satisfied the old form and reported clean"), and `:35-46` records the discard-status variant as fail-open |
+| M6c | `terraform apply tfplan` rewritten to a re-plan (`-target=… -auto-approve`) | Assert `terraform plan -out=tfplan` occurs exactly once in the job and the apply consumes the **saved** plan. **This converts AC12/AC13 from checklist items into gate rows** — the Assembly's structural claim rests entirely on them, and nothing else makes it true |
+
+Axis coverage: A (content), B (shape), C (SUT), D (wiring). M1 is the second-member row; M6a is the
+own-dispatch row. **The suite's non-vacuity floor must be a numeric floor derived from a green run**
+(`gate-suite-harness.sh:113-114`) and **self-contained** (bash builtins + the suite's own counters,
+no harness call) — `test-inngest-host-replace-gate.sh:169-176` records a measured failure where a
+harness-based floor whose `source` sat inside the deleted block exited 127 and the suite passed. A
+bare `> 0` floor survives deleting all but one assertion, and counting assertions in the *test file*
+has no bearing on whether the *workflow* invokes the gate — that was a category error in the first
+draft's M6.
+
+**M8 was cut, deliberately.** The first draft carried a "nested-block removal" row. It is
+unfixturable for a `terraform_data` resource and would have been a green row proving nothing — the
+vacuity this contract exists to prevent. Full reasoning and the preserved guarantee: **F6**.
+
+**Two design corrections that follow from the matrix:**
+
+1. **Use a NEGATIVE action filter**, not the positive four-member one. `vector_out_of_scope_changes`
+   filtering positively on create/update/delete/forget silently admits any action verb Terraform
+   adds later (ephemeral `open`/`close`, a future verb) at a non-allowed address. Mirror the ci_ssh
+   gate's negative form (`apply-web-platform-infra.yml:5312-5316`): treat everything **except**
+   `["no-op"]` and `["read"]` as a change. This matters more here than at the sibling gate, because
+   with `host_destroyed` subsumed and the nested counter cut, out-of-scope is the *only* live
+   address boundary.
+2. **T1 must assert the PASS-path counter line.** `liveness_signal` and AC26 both depend on the gate
+   printing its `name=value` tokens; nothing currently asserts it does
+   (compare `inngest-host-replace-gate.sh:127`).
 
 ## Observability
 
@@ -687,9 +1082,16 @@ All fixtures synthesized, never captured from a live plan (`cq-test-fixtures-syn
       (confirmed live at run 31708799547). `[skip-web-platform-apply]` is the documented unwedge
       and skips the apply without performing it.
 - [ ] **AC24** — **The merge commit must NOT carry `[ack-destroy]`.** That would apply the four
-      pending creates — including `terraform_data.inngest_consumer_probe_install`, which
-      provisions a host currently under repair — plus the `cloudflare_bot_management` update. All
-      of those belong to #7462 / PR #7516 / #7539 and are out of scope here.
+      pending creates plus the `cloudflare_bot_management` update, all of which belong to #7462 /
+      PR #7516 / #7539 and are out of scope here. *(Rationale corrected per **F11**: the first draft
+      said `terraform_data.inngest_consumer_probe_install` "provisions a host currently under
+      repair". It provisions **web-1** — `server.tf:767-772`, and `:743-748` states "Nothing here
+      touches 10.0.1.40, which is the point". The scope-out stands on ownership — those resources
+      belong to another PR — not on host risk.)*
+- [ ] **AC24b** — The plan states the **intended end state** for the four pending creates, per
+      **F11**: a successful dispatch drops `destroy_count` to 0, so the next merge touching a
+      `paths:` file will apply them unattended. Name an owner and a deadline, or state explicitly
+      that this is the intended release path.
 - [ ] **AC25** — PR body uses `Closes #7542`.
 
 ### Post-merge (dispatch-gated)
@@ -702,7 +1104,18 @@ an authorization boundary, not an un-automatable step.*
 - [ ] **AC26** — Dispatch `apply_target=vector-redeliver` with `confirm=REDELIVER-VECTOR` and a
       reason; the run succeeds and its gate line reports
       `vector_out_of_scope_changes=0 host_destroyed=0 nested_removals=0 journald_delivered=1`.
-- [ ] **AC27** — Off-host confirmation, no SSH: the #7228 boot-trace `SyslogIdentifier`s appear in
-      Better Stack for web-1 (dark before this dispatch), **and** the cat-deploy-state webhook
-      reports `vector_journal_tail` non-empty with `journald_storage.persistent=true`.
+- [ ] **AC27** — Off-host confirmation, no SSH (**rewritten per F9** — the briefed version was
+      unsatisfiable, because the #7228 boot-trace identifiers are emitted on the *inngest* host,
+      not web-1). Three checks, none of which asserts an absence:
+      (a) the apply's own extended post-restart assertion confirms `inngest-consumer-probe` is
+      present in web-1's `/etc/vector/vector.toml`;
+      (b) the cat-deploy-state webhook reports `vector_journal_tail` non-empty and
+      `journald_storage.persistent=true`;
+      (c) **positive control** — Better Stack returns rows for an identifier web-1 genuinely emits
+      (`sshd` / `ci-deploy`) at `host_name=soleur-web-platform` with a timestamp after the restart,
+      proving the agent returned and the sink still works. Via
+      `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep <marker>`.
+      Verification of `inngest-boot-phone-home` / `inngest-bs-token-restage` belongs to
+      `apply_target=inngest-host-replace` under #7462 and is recorded in the runbook's Known
+      Residual, not asserted here.
 - [ ] **AC28** — `gh issue close 7542` only after AC26 + AC27 both hold.
