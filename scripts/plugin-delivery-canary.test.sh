@@ -554,10 +554,39 @@ rm -rf "$r"
 # ---------------------------------------------------------------------------
 r="$(new_fixture)"
 cases=$((cases + 1))
-if grep -qE -- '^EXCLUSION_CAP=[0-9]+$' "$CANARY" && grep -qE -- '^DEFAULT_EXCLUSIONS=\(\)$' "$CANARY"; then
-  pass "exclusions: the cap is declared and the default list is empty"
+if grep -qE -- '^EXCLUSION_CAP=[0-9]+$' "$CANARY"; then
+  pass "exclusions: a numeric cap is declared"
 else
-  fail "exclusions: no declared cap, or the default exclusion list is pre-populated"
+  fail "exclusions: no declared EXCLUSION_CAP"
+fi
+
+# The list started EMPTY and an earlier version of this assertion required it to
+# STAY empty. That was too strong: it also forbade recording a path that has been
+# measured and individually justified, which is the only sanctioned way an entry
+# is ever supposed to appear. `.in_use/*` is the first — a lock directory the CLI
+# writes INTO the install path (observed member `.in_use/143463`, the name a pid),
+# so it is delivered-MORE and can never exist in the reference.
+#
+# The property actually worth guarding is not "no entries" but "no entry broad
+# enough to swallow an under-delivery". A catch-all would let 32 missing skill
+# directories through while every count still reconciled, which is the exact
+# blindness this guard exists to prevent. So: bounded by the cap, and no entry may
+# be a bare wildcard or match at the tree root.
+cases=$((cases + 1))
+excl_count="$(awk '/^DEFAULT_EXCLUSIONS=\(/{f=1;next} f&&/^\)/{exit} f&&/^[[:space:]]*'"'"'/{n++} END{print n+0}' "$CANARY")"
+excl_cap="$(sed -n 's/^EXCLUSION_CAP=\([0-9]*\)$/\1/p' "$CANARY" | head -1)"
+if [[ "${excl_count:-0}" -le "${excl_cap:-0}" ]]; then
+  pass "exclusions: the default list ($excl_count) is within the declared cap ($excl_cap)"
+else
+  fail "exclusions: the default list ($excl_count) exceeds the declared cap ($excl_cap)"
+fi
+
+cases=$((cases + 1))
+if awk '/^DEFAULT_EXCLUSIONS=\(/{f=1;next} f&&/^\)/{exit} f' "$CANARY" \
+     | grep -qE "^[[:space:]]*'(\*|\*\*|\*/\*|\*\*/\*)'"; then
+  fail "exclusions: a catch-all glob is declared — it would swallow an under-delivery"
+else
+  pass "exclusions: no catch-all glob is declared"
 fi
 
 # Excusing more paths than the cap allows must itself be a finding, even when

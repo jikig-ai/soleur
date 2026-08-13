@@ -109,7 +109,21 @@ PLUGIN_SUBDIR="plugins/soleur"
 # this guard exists to prevent — 32 missing skill directories would fit inside a
 # generous one. The cap is asserted whether or not the list is populated.
 EXCLUSION_CAP=4
-DEFAULT_EXCLUSIONS=()
+DEFAULT_EXCLUSIONS=(
+  # MEASURED on a live run, and the only entry that has earned its place so far.
+  # The CLI writes a lock directory INTO the install path — an observed member was
+  # `.in_use/143463`, the name being a pid. It is runtime bookkeeping owned by the
+  # CLI, not content the repository serves, so it appears in the delivered tree and
+  # can never appear in the reference. Excluding it is not forgiving a delta: it is
+  # declining to compare a file that is not part of the artefact under test.
+  #
+  # Note the DIRECTION. This is delivered-MORE. The 891-vs-894 delivered-FEWER
+  # delta noted above is a different question and stays unattributed, so it will
+  # still surface as `incomplete_delivery` with each path named. Excusing an extra
+  # file says nothing about a missing one, and conflating the two is how a missing
+  # skill directory would get waved through.
+  '.in_use/*'
+)
 
 # ---------------------------------------------------------------------------
 # THE HERMETIC SEAM. Each of these replaces exactly one ACQUISITION step. None
@@ -285,16 +299,44 @@ classify_body() { # <file> -> empty | html | bytes
 # extracted tree then flows through the LOCAL reference path — the branch the
 # battery already covers — so this changes the transport without changing the
 # comparison logic or what any conjunct means.
+# THREE TRANSPORTS WERE MEASURED. Only the third is viable, and the two that are
+# not are recorded here so nobody re-derives them:
+#
+#   * Per-file over raw.githubusercontent: ~890 sequential requests. Unfinished
+#     after 30 min against a 15 min job budget, with intermittent failures on
+#     files that return 200 in isolation.
+#   * Whole-repo tarball from codeload: timed out at 300 s having received only
+#     28 MB of a ~181 MiB archive. Worse than what it replaced.
+#   * `git archive` from the checkout this job already has: no network at all,
+#     and exact.
+#
+# WHAT THIS CHANGES ABOUT THE ASSERTION, STATED PLAINLY. The reference now comes
+# from the repository's own git objects at the delivered commit rather than from
+# what a CDN serves for that commit. Content-wise those are the same thing — a
+# commit sha is a content address, so a tree that hashes to it cannot differ —
+# and it is what the integrity conjunct actually means: delivered bytes equal the
+# repo's bytes at the commit the install resolved. What it no longer covers is a
+# CDN that serves something other than git for the same sha, which was never this
+# guard's threat model; the delivery path it watches is the CLI's clone, and that
+# reads git too.
 materialize_reference() { # <sha> -> prints the plugin subdir on success
-  local sha="$1"
-  local tarball="$SCRATCH/reference.tar.gz" dest="$SCRATCH/reference" code
-  code="$(curl -sSL -o "$tarball" -w '%{http_code}' --max-time 180 --retry 2 --retry-delay 3 \
-    "https://codeload.github.com/${REPO}/tar.gz/${sha}" 2>/dev/null || true)"
-  [[ "$code" == "200" ]] || return 1
-  [[ -s "$tarball" ]] || return 1
+  local sha="$1" dest="$SCRATCH/reference" root
+  command -v git >/dev/null 2>&1 || return 1
+  root="$(git rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [[ -n "$root" ]] || return 1
+
+  # The delivered commit is usually `main` HEAD, which a default checkout has.
+  # It is NOT guaranteed: a stale delivery resolves to an older commit, and a
+  # shallow checkout will not carry it. Fetch it rather than failing, so the
+  # freshness conjunct can still report staleness instead of the whole run
+  # collapsing into `reference_unreadable` — which would report the canary as
+  # broken in exactly the case it is supposed to catch.
+  if ! git -C "$root" cat-file -e "${sha}^{commit}" 2>/dev/null; then
+    git -C "$root" fetch --depth 1 origin "$sha" >/dev/null 2>&1 || return 1
+  fi
+
   mkdir -p "$dest" || return 1
-  # --strip-components=1 removes the `<repo>-<sha>/` wrapper the archive adds.
-  tar -xzf "$tarball" -C "$dest" --strip-components=1 >/dev/null 2>&1 || return 1
+  git -C "$root" archive "$sha" -- "$PLUGIN_SUBDIR" 2>/dev/null | tar -x -C "$dest" 2>/dev/null || return 1
   [[ -d "$dest/${PLUGIN_SUBDIR}" ]] || return 1
   printf '%s' "$dest/${PLUGIN_SUBDIR}"
 }

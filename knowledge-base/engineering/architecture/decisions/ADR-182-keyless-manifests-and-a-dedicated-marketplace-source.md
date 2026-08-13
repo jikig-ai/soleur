@@ -115,8 +115,20 @@ receives. It installs `soleur@soleur-marketplace` into a scratch `HOME` on a CI 
 three independent assertions — **completeness** (the delivered file list compared as a *set* against
 what `main` serves under `plugins/soleur`, with an explicit cardinality assertion, because the
 historical defect was under-delivery at 64 skills against 96 and a subset comparison cannot see it),
-**integrity** (per-file digest against `raw.githubusercontent.com` pinned to the commit the install
-resolved), and **freshness** (the delivered commit equals `main` HEAD, no tolerance window). No
+**integrity** (per-file digest against the repository's own tree at the commit the install resolved,
+materialised with `git archive` from the checkout the job already holds), and **freshness** (the
+delivered commit equals `main` HEAD, no tolerance window).
+
+The integrity transport was chosen by measurement, after two alternatives were tried and rejected in
+that order: per-file fetches from `raw.githubusercontent.com` (~890 sequential requests — unfinished
+after 30 minutes against a 15-minute job budget, with intermittent failures on files that return 200
+in isolation), then a whole-repo `codeload` tarball (timed out at 300 s having received 28 MB of
+~181 MiB). `git archive` needs no network at all and completes the full comparison in **117 s**,
+measured green at `compared=896 expected=896`. The tradeoff is stated rather than buried: the
+reference is now the repository's git objects rather than what a CDN serves for the same commit.
+Those cannot differ in content — a commit sha is a content address — and the delivery path under
+watch is the CLI's clone, which reads git too. What is no longer covered is a CDN serving something
+other than git for a given sha, which was never this guard's threat model. No
 metadata field participates in any verdict: `claude plugin list --json` is a **projection** of
 `installed_plugins.json` — verified by mutating that file and watching the CLI output change verbatim
 — so reading the CLI does not escape the metadata. `installPath` is consumed as a location and

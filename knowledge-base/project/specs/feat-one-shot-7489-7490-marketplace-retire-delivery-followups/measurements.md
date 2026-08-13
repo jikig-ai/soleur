@@ -262,6 +262,42 @@ runbook: four knobs nobody will set, in a document read during an outage, is ant
 
 ---
 
+## Phase 4 — The canary's reference transport, decided by measurement
+
+The plan prescribed per-file fetches from `raw.githubusercontent.com`, pinned to the delivered
+commit. That was correct about the *semantics* and wrong about the *transport*, which only a live
+run could show. Three transports were measured against the real published channel:
+
+| Transport | Result |
+|---|---|
+| Per-file over `raw.githubusercontent.com` (~890 sequential requests) | **Unusable.** Not finished after 30 min against a 15-min job budget. Raised intermittent `reference_unreadable` findings on files that return HTTP 200 in isolation (verified: the named file returns 200, and 10 rapid fetches all succeed). |
+| Whole-repo tarball from `codeload.github.com` | **Worse.** `curl` timed out at 300 s having received 28,382,559 bytes of a ~181 MiB archive; the extract failed and no plugin subdir materialised. |
+| `git archive <sha> -- plugins/soleur` from the checkout the job already holds | **Viable.** No network. Full run **117 s**, `compared=896 expected=896`, all three conjuncts green. |
+
+Final live reading, against the real channel:
+
+```console
+$ bash scripts/plugin-delivery-canary.sh
+canary-counts| compared=896 expected=896
+canary-conjuncts| completeness=green integrity=green freshness=green
+canary-finding| every delivery assertion holds at 154302d32114abba3165ce47daefe5bfe508d02f
+rc=0, 117 s
+```
+
+**Why the first two failures are recorded rather than just fixed.** Both produced findings that
+*named the delivery channel* while the fault was in the canary's own invocation — an alarm that
+blames the thing it watches. On a daily schedule that is the cry-wolf failure, and it would have
+trained the operator to ignore the one signal this change adds.
+
+**One exclusion earned its place, measured.** The delivered tree carries `.in_use/<pid>` — a lock
+directory the CLI writes *into* the install path (observed member `.in_use/143463`). It is runtime
+bookkeeping owned by the CLI, not content the repository serves, so it can never appear in the
+reference. Note the direction: this is delivered-**more**. The 891-vs-894 delivered-**fewer** delta
+the plan cited is a different question and stays unattributed, so it would still surface as
+`incomplete_delivery` with each path named.
+
+---
+
 ## Phase 3 — The decision, and the post-state reading
 
 ### Mode branch
