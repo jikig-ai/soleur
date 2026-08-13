@@ -56,7 +56,12 @@ trap cleanup_suite EXIT
 build_mutant() { # <suite-path> <out-path>
   local src="$1" out="$2" start
   # First line of the floor's `if`, and everything to the closing `fi`.
-  start="$(grep -n '^if \[\[ "\$cases" -lt ' "$src" | head -1 | cut -d: -f1)"
+  # `{ grep || true; }` — NOT a bare pipeline. Under `set -euo pipefail` a no-match
+  # grep (exit 1) propagates through pipefail and `set -e` kills the script AT THIS
+  # ASSIGNMENT, so the FATAL guard on the next line is unreachable: the suite dies
+  # closed but silent, and "the floor moved" is indistinguishable from a crash.
+  # A no-match here is a normal answer (the floor was reshaped), not an error.
+  start="$( { grep -n '^if \[\[ "\$cases" -lt ' "$src" || true; } | head -1 | cut -d: -f1)"
   [[ -n "$start" ]] || { echo "FATAL: no floor found in $src" >&2; exit 2; }
   local end
   end="$(awk -v s="$start" 'NR>=s && /^fi$/ {print NR; exit}' "$src")"
