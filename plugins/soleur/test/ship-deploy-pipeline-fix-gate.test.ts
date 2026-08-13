@@ -534,18 +534,10 @@ describe("deploy_pipeline_fix orders after the handler bridge (#5515)", () => {
     const yml = readFileSync(APPLY_DPF_WORKFLOW, "utf8");
     // Bound to the `terraform apply` invocation (the durable apply, not the plan
     // step) so a future plan-only -target= change cannot satisfy this vacuously.
-    const applyIdx = yml.indexOf("terraform apply -target=");
-    expect(applyIdx).toBeGreaterThanOrEqual(0);
-    // The multi-line `\`-continued apply command ends at the first non-continued
-    // line; bound generously to the next 800 chars (the command spans a handful
-    // of -target= lines plus trailing flags — the two needed -target=s are adjacent).
-    const applyBlock = yml.slice(applyIdx, applyIdx + 800);
-    expect(applyBlock).toContain(
-      "-target=terraform_data.deploy_pipeline_fix",
-    );
-    expect(applyBlock).toContain(
-      "-target=terraform_data.infra_config_handler_bootstrap",
-    );
+    assertPlannedAndAppliedTogether(yml, [
+      "terraform_data.deploy_pipeline_fix",
+      "terraform_data.infra_config_handler_bootstrap",
+    ]);
   });
 
   // Test 3 — cross-workflow blast-radius guard (deepen P2-2). The OTHER infra
@@ -593,6 +585,42 @@ describe("deploy_pipeline_fix orders after the handler bridge (#5515)", () => {
   });
 });
 
+// #7104 — the apply no longer carries its own `-target=` list: it applies the SAVED PLAN
+// (`terraform apply ... tfplan`) that the plan step produced. The co-targeting invariant these
+// three tests exist to protect is therefore now guaranteed BY CONSTRUCTION — the applied target
+// set cannot differ from the planned one, because they are the same artifact — but the old
+// assertion (string-match a `terraform apply -target=` command line) no longer has anything to
+// match and would pass vacuously if left as `indexOf(...) >= 0` on a missing needle.
+//
+// This helper re-expresses it so BOTH mutation paths still red:
+//   * dropping a resource from the PLAN's -target= list  -> the target assertion fails
+//   * making the apply re-plan with its own targets      -> the saved-plan assertion fails
+// which is strictly stronger than comparing two command lines that could always drift apart.
+function assertPlannedAndAppliedTogether(yml: string, targets: string[]): void {
+  const planIdx = yml.indexOf("terraform plan -target=");
+  const applyIdx = yml.indexOf("terraform apply ");
+  expect(planIdx).toBeGreaterThanOrEqual(0);
+  expect(applyIdx).toBeGreaterThan(planIdx);
+  // Bound PRECISELY at the step boundary, not by a fixed char window (#5875's finding:
+  // a fixed window spills across the plan -> apply boundary, and the last -target= in a
+  // list could then satisfy the wrong assertion). The plan block ends where the apply
+  // invocation begins; the apply block ends at the next step.
+  const planBlock = yml.slice(planIdx, applyIdx);
+  for (const t of targets) {
+    expect(planBlock).toContain(`-target=${t}`);
+  }
+  // The plan must be SAVED, and the apply must consume that saved plan rather than re-planning.
+  expect(planBlock).toContain("-out=tfplan");
+  const applyRest = yml.slice(applyIdx);
+  const applyStepEnd = applyRest.indexOf("\n      - name:");
+  const applyBlock = applyStepEnd >= 0 ? applyRest.slice(0, applyStepEnd) : applyRest;
+  expect(applyBlock).toContain("tfplan");
+  // A re-planning apply would carry its own -target=/-var, which is exactly the divergence
+  // (and the TOCTOU) the saved-plan design removes.
+  expect(applyBlock).not.toContain("-target=");
+  expect(applyBlock).not.toContain("-var=");
+}
+
 // #5873 — the seccomp coupling triangle. The container seccomp profile
 // (seccomp-bwrap.json) is delivered by terraform_data.docker_seccomp_config,
 // a DIFFERENT resource from deploy_pipeline_fix. For a profile-only edit to
@@ -604,17 +632,7 @@ describe("seccomp profile auto-apply coupling (#5873)", () => {
   test("apply-deploy-pipeline-fix.yml co-targets docker_seccomp_config in BOTH plan and apply", () => {
     expect(existsSync(APPLY_DPF_WORKFLOW)).toBe(true);
     const yml = readFileSync(APPLY_DPF_WORKFLOW, "utf8");
-    const planIdx = yml.indexOf("terraform plan -target=");
-    const applyIdx = yml.indexOf("terraform apply -target=");
-    expect(planIdx).toBeGreaterThanOrEqual(0);
-    expect(applyIdx).toBeGreaterThanOrEqual(0);
-    // Bound each invocation to its own -target= run of lines (generous 800 chars).
-    expect(yml.slice(planIdx, planIdx + 800)).toContain(
-      "-target=terraform_data.docker_seccomp_config",
-    );
-    expect(yml.slice(applyIdx, applyIdx + 800)).toContain(
-      "-target=terraform_data.docker_seccomp_config",
-    );
+    assertPlannedAndAppliedTogether(yml, ["terraform_data.docker_seccomp_config"]);
   });
 
   test("docker_seccomp_config triggers_replace hashes seccomp-bwrap.json (edit re-fires the apply)", () => {
@@ -651,28 +669,9 @@ describe("apparmor profile auto-apply parity (#5875)", () => {
   test("apply-deploy-pipeline-fix.yml co-targets apparmor_bwrap_profile in BOTH plan and apply", () => {
     expect(existsSync(APPLY_DPF_WORKFLOW)).toBe(true);
     const yml = readFileSync(APPLY_DPF_WORKFLOW, "utf8");
-    const planIdx = yml.indexOf("terraform plan -target=");
-    const applyIdx = yml.indexOf("terraform apply -target=");
-    expect(planIdx).toBeGreaterThanOrEqual(0);
-    expect(applyIdx).toBeGreaterThan(planIdx);
-    // Bound PRECISELY, not with a fixed window: the plan invocation ends where the
-    // apply invocation begins, and the apply invocation ends at the next step. A
-    // fixed 800-char window spills across the plan→apply boundary and — because
-    // apparmor_bwrap_profile is the LAST -target= in each list — could let the apply
-    // block's target satisfy the plan assertion, masking a dropped plan -target
-    // (pattern-review finding, #5875). This is the same precise bounding the
-    // loaded-verification describe uses.
-    const planBlock = yml.slice(planIdx, applyIdx);
-    const applyRest = yml.slice(applyIdx);
-    const applyStepEnd = applyRest.indexOf("\n      - name:");
-    const applyBlock =
-      applyStepEnd >= 0 ? applyRest.slice(0, applyStepEnd) : applyRest;
-    expect(planBlock).toContain(
-      "-target=terraform_data.apparmor_bwrap_profile",
-    );
-    expect(applyBlock).toContain(
-      "-target=terraform_data.apparmor_bwrap_profile",
-    );
+    // The precise bounding this test introduced now lives in the shared helper, which
+    // every co-target assertion uses.
+    assertPlannedAndAppliedTogether(yml, ["terraform_data.apparmor_bwrap_profile"]);
   });
 
   test("apparmor_bwrap_profile triggers_replace hashes apparmor-soleur-bwrap.profile (edit re-fires the apply)", () => {
