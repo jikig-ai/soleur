@@ -67,7 +67,55 @@ the escalated panel and the strong-model consult had converged (three agents ind
 found the same P0), and the remaining budget went to fork adjudication and execution-verified
 re-checking instead. Recorded in the plan's Enhancement Summary.
 
+## Work Phase (PR-B) — 2026-08-13
+
+Phases 4–9 are delivered across eight commits. The measured facts, so a resumed session
+does not re-derive them:
+
+- **Task 4.0 (was blocking):** the re-push plan replaces **exactly 1** managed resource,
+  `terraform_data.deploy_pipeline_fix` (`delete,create`), `host_creates=0`. Measured against
+  live prd state, read-only. Guard 3's literal is `1`. **Do not re-run the terraform plan.**
+- **The extraction is byte-identical:** both sides sha256 `2a23f958…`, 19774 bytes, 240 lines.
+  Note the plan's R22.2 quotes 19,710 — that figure is stale; 19,774 is measured.
+- **AC20 holds across the extraction:** the `DPF_REPLACED == "false"` branch is byte-identical
+  to `origin/main`'s, 7403 bytes both sides. This is what licenses citing run 31714143720.
+- **R19.4 §4 confirmed:** five `success()`-gated steps downstream of the gate, not the plan's
+  "six". Two close the founder's issues; one swaps the running container.
+- Suites: `infra-config-gate.test.sh` 127/0, `infra-config-verify.test.sh` 23/0.
+
+### Deviations from the plan, each deliberate and stated
+
+- **Guard 2 (task 6.3) is a commit-time verification, not a standing assert.** R22.5's
+  prescribed baseline is `git show origin/main:<workflow>`, which BECOMES the post-move
+  revision at merge — the baseline flips. And commit 2 parameterises the script, so a
+  permanent byte-identity assert would be RED by the end of this same PR. Hashes recorded in
+  ADR-187 instead.
+- **The F1 pin uses an explicit two-clause form rather than the precedent's
+  reconstruct-the-single-file-view trick.** That precedent exists because ~120 of its
+  assertions are anchored on YAML indentation; none of the gate suite's are (`$1=="done"` is
+  field-based), so the reconstruction buys nothing here while the two-clause form proves both
+  (i) production invokes the script and (ii) the script carries the wiring.
+- **Task 4.0 was measured with the SINGULAR `-target` form that ships** (6.9/AC19), not this
+  task's "same four targets" text, which mirrors the first apply.
+- **AC17 re-read under the split.** The re-push is a workflow step now, so "the re-push stub
+  was invoked exactly once" is unobservable in-script; boundedness is structural and pinned by
+  Guard 3 + the backstop. AC17 here drives the real script through both passes instead.
+
+### Still open
+
+`4.3`, `8.1`, `8.2` — the **committed** Guard 1 / Guard 2 mutation rows. Every guard in this
+PR has been mutation-proven in-session and the results are recorded in the commit messages,
+but AC21 asks for the rows as committed artifacts, which is stronger. Plus Phase 10's ticks
+and the `/review` → `/qa` → `/compound` → `/ship` tail.
+
+### Environment note
+
+`terraform init` cannot complete on this machine: `releases.hashicorp.com` answers 200 on its
+root but resets over IPv6 and times out over IPv4 on the `hashicorp/tls` provider ZIP, and it
+HANGS rather than failing. Worked around with a `filesystem_mirror` at `/var/tmp/tfmirror`
+plus `TF_CLI_CONFIG_FILE=/var/tmp/tfcli.hcl`; the worktree's infra dir is already initialised.
+
 ## Next
 
-- Plan and deepen are both **complete** (deepen recorded at commit `70e1493dc`).
-- `/soleur:work` against Phases 4–10 is the next step.
+- Commit the mutation rows (4.3, 8.1, 8.2), close Phase 10, then `/review` → `/qa` →
+  `/compound` → `/ship`. PR #7546 must carry `Closes #7104`.
