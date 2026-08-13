@@ -995,6 +995,10 @@ if want_scripts; then
   run_suite "tests/scripts/inngest-host-replace-gate" bash tests/scripts/test-inngest-host-replace-gate.sh
   # registry-host-replace scoped-recreate destroy-guard (5-target; preserves the zot store volume).
   run_suite "tests/scripts/registry-host-replace-gate" bash tests/scripts/test-registry-host-replace-gate.sh
+  # #7542: vector-redeliver scoped-delivery gate. Unlike the -replace arms above it permits a bare
+  # ["create"] as well as ["delete","create"] (a delivery, not a replace), and its no-op outcome is
+  # SUCCESS rather than a refusal — so "nothing to redeliver" cannot be reported for a lone delete.
+  run_suite "tests/scripts/vector-redeliver-gate" bash tests/scripts/test-vector-redeliver-gate.sh
   # registry-region-migrate destroy-guard (#6288; permits the registry's OWN store-volume replace across regions, forbids all out-of-scope destroys).
   run_suite "tests/scripts/registry-region-migrate-gate" bash tests/scripts/test-registry-region-migrate-gate.sh
   # registry-luks-recut destroy-guard (#6929). The INVERSE of registry-host-replace: it REQUIRES
