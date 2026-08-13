@@ -152,6 +152,39 @@ printf '#!/usr/bin/env bash\nkill -TERM $$\nsleep 5\n'     > "$FIXTURES/selfterm
 # implementation.
 printf '#!/usr/bin/env bash\nsleep 0.05\n'                 > "$FIXTURES/slow.sh"
 
+# --- E2E fixtures: the REAL nested infra runner (#7429, AC2) ---------------------------------
+# `run_suite` does not only wrap `bun`/`node` — two of the suites it registers are themselves
+# shell RUNNERS that dispatch further suites, and each was flattening a terminated child into
+# exit 1. Asserting the wrapper "returns a different number" is not the property; the property
+# is that the number reaches THIS runner's classifier and comes out as `[KILLED]`, so the arms
+# below drive the real apps/web-platform/infra/run-registered-suites.sh, unmodified, through
+# the real run_suite. A sandbox copy of the runner would test the copy.
+#
+# The infra runner derives its suite list from a workflow file, so a fixture needs a workflow
+# and a directory of its own — INFRA_WF and SOLEUR_INFRA_DIR are that runner's documented test
+# seams. TWO dirs, because one workflow registers everything in its own.
+#
+# The inner suite exits 137 DELIBERATELY rather than calling `kill -KILL $$`. Measured: at that
+# position the two are indistinguishable at every chokepoint (the dispatch shim captures `rc=$?`
+# before anything else can observe it), so a real signal here would assert nothing extra. The
+# position where a real signal IS observable is the shim, and that arm lives in
+# apps/web-platform/infra/run-registered-suites.test.sh (T10g).
+INFRA_RUNNER="$REPO_ROOT/apps/web-platform/infra/run-registered-suites.sh"
+mk_infra_fixture() {  # mk_infra_fixture <dir> <inner-exit-code> <wrapper-name>
+  local dir="$1" code="$2" wrapper="$3"
+  mkdir -p "$dir"
+  printf '#!/usr/bin/env bash\nexit %s\n' "$code" > "$dir/aaa-fixture.test.sh"
+  chmod +x "$dir/aaa-fixture.test.sh"
+  { echo "jobs:"; echo "  deploy-script-tests:"; echo "    steps:"
+    echo "      - run: bash $dir/aaa-fixture.test.sh"
+  } > "$dir/wf.yml"
+  printf '#!/usr/bin/env bash\nexec env INFRA_WF=%q SOLEUR_INFRA_DIR=%q bash %q\n' \
+    "$dir/wf.yml" "$dir" "$INFRA_RUNNER" > "$FIXTURES/$wrapper"
+  chmod +x "$FIXTURES/$wrapper"
+}
+mk_infra_fixture "$TMP/infra-killed" 137 infra-killed.sh
+mk_infra_fixture "$TMP/infra-failed" 1   infra-failed.sh
+
 # Build a sandbox copy of the runner. $1 = out path, $2 = arm (fixture set), $3 = mutation.
 # Every anchor is asserted to occur exactly once, so a rename fails LOUDLY here rather than
 # silently no-op'ing and leaving the arm to pass against an unmutated file.
@@ -198,6 +231,12 @@ calls = {
     "budget_hit":  [("budgetfixture", "slow.sh")],
     "budget_miss": [("budgetfixture", "slow.sh")],
     "budget_undeclared": [("undeclared-label", "slow.sh")],
+    # E2E (#7429): the fixture IS the real nested infra runner. `infra_failed` is its negative
+    # control — same wrapper, same code path, an inner suite that merely FAILS — so the
+    # [KILLED] assertion below cannot be satisfied by a wrapper that renders [KILLED]
+    # unconditionally.
+    "infra_killed": [("infrarunner", "infra-killed.sh")],
+    "infra_failed": [("infrarunner", "infra-failed.sh")],
 }[arm]
 body = "\n" + "".join(
     f'run_suite "{label}" bash "{fixtures}/{script}"\n' for label, script in calls
@@ -564,6 +603,64 @@ else
   fail "AC22/A9 — $stray column-0 runner-marker line(s) survived the dump indent"
 fi
 
+# --- E2E: a terminated suite BEHIND THE NESTED INFRA RUNNER (#7429, AC2) --------------------
+# The whole point of the wrapper change: run-registered-suites.sh used to collapse every
+# non-zero child into 1, so a terminated infra suite arrived here as an ordinary failure and
+# rendered `[FAIL] infra-suites` — a line asserting that an assertion broke, on a run where
+# none did. These arms assert the classification is REACHED end-to-end, not that some other
+# number came back.
+run_arm infra_killed none || true
+E2E_OUT="$ARM_OUT"; E2E_RC="$ARM_RC"
+
+e2e_killed=$(grep -cE '^\[KILLED\] infrarunner ' <<<"$E2E_OUT" || true)
+if [[ "$e2e_killed" == "1" ]]; then
+  pass "AC2/E2E — a suite terminated behind the nested infra runner renders exactly one [KILLED] line"
+else
+  fail "AC2/E2E — expected 1 '^[KILLED] infrarunner ' line, found $e2e_killed"; dump "$E2E_OUT"
+fi
+
+# The DECODE, not just the marker: the wrapper must propagate the rc VERBATIM, so 137 has to
+# survive as 137 and decode to SIGKILL. A wrapper that fabricated some other signal shape would
+# still print [KILLED] and would still exit 3 — this is the assertion that tells them apart.
+if grep -qE '^\[KILLED\] infrarunner \(exit=137, signal-shaped 128\+9 = SIGKILL, [0-9]+ms\)' <<<"$E2E_OUT"; then
+  pass "AC2/E2E — the inner suite's 137 reaches run_suite verbatim and decodes to SIGKILL"
+else
+  fail "AC2/E2E — the [KILLED] line does not carry exit=137/SIGKILL; the wrapper altered the rc"; dump "$E2E_OUT"
+fi
+
+if grep -qE '^\[FAIL\] infrarunner' <<<"$E2E_OUT"; then
+  fail "AC2/E2E — the nested runner ALSO rendered as [FAIL]"
+else
+  pass "AC2/E2E — the nested runner did not render as [FAIL] (the #7429 misreading is gone)"
+fi
+
+if [[ "$E2E_RC" == "3" ]]; then
+  pass "AC2/E2E — a kill behind the nested runner exits 3 at top level"
+else
+  fail "AC2/E2E — exited $E2E_RC, expected 3"; dump "$E2E_OUT"
+fi
+
+if grep -qE '^=== 1 suites: 0 passed, 0 failed, 1 killed \(unresolved' <<<"$E2E_OUT"; then
+  pass "AC2/E2E — the terminated nested runner is counted killed, not failed"
+else
+  fail "AC2/E2E — breakdown line absent or wrong"; dump "$E2E_OUT"
+fi
+
+# Negative control on the SAME wrapper. Without it, every assertion above is also satisfied by a
+# wrapper that reports a kill unconditionally — and "always [KILLED]" is a worse false green
+# than "always [FAIL]", because exit 3 reads as "not a failure".
+run_arm infra_failed none || true
+if grep -qE '^\[FAIL\] infrarunner ' <<<"$ARM_OUT" && ! grep -qE '^\[KILLED\] infrarunner' <<<"$ARM_OUT"; then
+  pass "AC2/E2E control — an inner suite that merely FAILS still renders [FAIL], never [KILLED]"
+else
+  fail "AC2/E2E control — an ordinary inner failure was reported as a termination"; dump "$ARM_OUT"
+fi
+if [[ "$ARM_RC" == "1" ]]; then
+  pass "AC2/E2E control — an ordinary inner failure still exits 1"
+else
+  fail "AC2/E2E control — exited $ARM_RC, expected 1"
+fi
+
 # --- Budgets (T14 / T14b / T14c) ------------------------------------------------------------
 run_arm budget_hit none || true
 if grep -qE '^\[budget\] budgetfixture ran [0-9]+ms against its declared 1ms budget' <<<"$ARM_OUT"; then
@@ -654,7 +751,10 @@ fi
 # the count is developer-incremented and `-eq` turns every added assertion into a false red.
 # Set to the CURRENT count, not a round number below it: slack in this floor is exactly the
 # budget a neutered dispatcher has to work with (#7220's class).
-MIN_ASSERTIONS=70
+# 70 -> 77 with the seven end-to-end arms added for #7429. Measured on the green run that added
+# them, per the paragraph above: slack here is exactly the budget a neutered dispatcher works
+# with, so a floor left at 70 would let all seven be deleted without this file noticing.
+MIN_ASSERTIONS=77
 if [[ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]]; then
   echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= $MIN_ASSERTIONS — the suite was stranded, not clean." >&2
   exit 1
