@@ -30,9 +30,15 @@ RUNNER="$REPO_ROOT/scripts/test-all.sh"
 EXCLUSIONS=()
 
 fails=0
+# Minimum-cardinality guard, mirroring the tests/commands one below. Without it, a glob that matches
+# nothing (a renamed directory, a changed suffix convention) reports a clean pass having certified
+# zero suites -- the asymmetry was the finding: the newer loop had this guard and the original,
+# which covers far more files, did not.
+scripts_seen=0
 for f in "$REPO_ROOT"/scripts/*.test.sh; do
   [[ -e "$f" ]] || continue
   base=$(basename "$f")
+  scripts_seen=$((scripts_seen + 1))
 
   excluded=""
   # `${a[@]+"${a[@]}"}` so an EMPTY exclusion list does not trip `set -u` on
@@ -60,6 +66,11 @@ for f in "$REPO_ROOT"/scripts/*.test.sh; do
   fi
 done
 
+if (( scripts_seen < 1 )); then
+  echo "ERROR: scripts/*.test.sh matched zero suites -- the glob is broken, so this check certified nothing" >&2
+  fails=$((fails + 1))
+fi
+
 # --- Required nested runners (#7103 R5(a)) ---------------------------------------------
 # The loop above answers "is every scripts/*.test.sh registered?". This answers the inverse
 # question one level up: "is every nested RUNNER still registered?"
@@ -83,12 +94,24 @@ done
 # corpus. Dropping the live line leaves the unit suite green and the corpus ungated -- the
 # same "named but not run" shape this file's tombstone exists to catch, one level down.
 REQUIRED_RUNNERS=(
+  # THIS FILE. Without the entry, deleting its run_suite line from test-all.sh silently
+  # removes every check below from the blocking gate -- the exact "named but not run" shape
+  # this list exists to catch, applied to the catcher.
+  "scripts/lint-orphan-test-suites.sh"
   "apps/web-platform/infra/run-registered-suites.sh"
   ".github/scripts/test/run-all.sh"
   "scripts/lint-legal-scope-block-placement.sh"
   "scripts/lint-legal-mirror-drift-baseline.sh"
 )
-for r in "${REQUIRED_RUNNERS[@]}"; do
+# FLOOR. `RELEVANCE_ARRAYS` got a derived floor and this list, the same shape, got none --
+# `REQUIRED_RUNNERS=()` exited 0 printing `orphan test suites: none` over zero checks. Absolute and
+# hand-ratcheted: unlike the gate count there is nothing in the runner to derive it from, and the
+# set only ever grows.
+if (( ${#REQUIRED_RUNNERS[@]} < 5 )); then
+  echo "ERROR: REQUIRED_RUNNERS has ${#REQUIRED_RUNNERS[@]} entries, expected >= 5 -- an emptied or trimmed list makes every runner-registration check below pass over nothing." >&2
+  fails=$((fails + 1))
+fi
+for r in ${REQUIRED_RUNNERS[@]+"${REQUIRED_RUNNERS[@]}"}; do
   # Escape regex metacharacters in the path (`.` in particular) so the anchor matches the
   # literal path and not an any-character wildcard.
   r_re="${r//./\\.}"
@@ -137,14 +160,103 @@ else
   # array name | the battery file that array gates. bash 3.2 has no associative arrays and no
   # `declare -n` (macOS ships 3.2 and lefthook runs this locally), so the mapping is a
   # pipe-delimited list and the arrays are expanded by name via eval.
+  #
+  # The mapped value is the array's own SUITE FILE, which the self-inclusion check requires to be
+  # an element of the array. It is NOT the skip_suite display label, and in this repo the two
+  # differ for both batteries (`tests/scripts/test-registry-gate-mutation-battery.sh` vs the label
+  # `tests/scripts/registry-gate-mutation-battery`). Anything anchoring on this field as a label
+  # would red two correctly-wired suites.
+  # array name | the battery file it gates | MINIMUM element count
+  #
+  # THE THIRD FIELD IS LOAD-BEARING. Every other check here tolerates a SHORTER array: declared,
+  # non-empty, resolves, self-includes, de-referenced and prefix-covered all still pass after an
+  # element is deleted, and the harness cannot help because its floor derives ELEM_TOTAL from the
+  # same arrays. Measured: dropping `scripts/zot-mirror-diagnosis.sh` from the registry predicate
+  # left the linter green and the harness green at one assertion fewer. The floor makes a deliberate
+  # removal an explicit, reviewable edit to this number instead of a silent narrowing.
   RELEVANCE_ARRAYS=(
-    "REGISTRY_BATTERY_PATHS|tests/scripts/test-registry-gate-mutation-battery.sh"
-    "CF_TUNNEL_BATTERY_PATHS|scripts/cf-tunnel-liveness-gate-mutations.test.sh"
+    "REGISTRY_BATTERY_PATHS|tests/scripts/test-registry-gate-mutation-battery.sh|9"
+    "CF_TUNNEL_BATTERY_PATHS|scripts/cf-tunnel-liveness-gate-mutations.test.sh|12"
+    "C4_PRODUCER_PATHS|plugins/soleur/test/c4-from-components.test.sh|6"
+    "GITHUB_SCRIPTS_SUITE_PATHS|.github/scripts/test/run-all.sh|9"
   )
 
-  for entry in "${RELEVANCE_ARRAYS[@]}"; do
+  # TEST_RELEVANCE_PREFIXES VACUITY. It is the one array with no fail-closed guard of its own,
+  # yet the untracked arm expands it BARE. Emptied, that arm silently scopes to nothing (or aborts
+  # cryptically on bash 3.2), and the prefix-coverage check below would red for every declared path
+  # with a misleading message. Check the cause, not the symptom.
+  if [[ "${#TEST_RELEVANCE_PREFIXES[@]}" -eq 0 ]]; then
+    echo "ERROR: TEST_RELEVANCE_PREFIXES is EMPTY -- test-all.sh's untracked-file arm is scoped to nothing, so every predicate goes blind to uncommitted work." >&2
+    fails=$((fails + 1))
+  fi
+
+  # DISPATCH FLOOR, DERIVED FROM THE RUNNER — not a hand-typed literal.
+  #
+  # Today RELEVANCE_ARRAYS=() makes the ENTIRE anti-rot block below iterate zero times while this
+  # script still prints `orphan test suites: none`. That is the same vacuity the two guards below
+  # exist to catch, reproduced inside the guard itself.
+  #
+  # Derived rather than literal for the reason the neighbouring MIN_ASSERTIONS comment in
+  # scripts/test-all-infra-coverage-notice.test.sh gives: "a fixed literal acquires slack every
+  # time a list grows". It also catches strictly MORE — a literal floor can only see the list
+  # SHRINK, while deriving `want` from the runner catches a gate ADDED to test-all.sh and never
+  # registered here, which a literal cannot see at all. Verified: this pattern matches only the
+  # four real `_diff_touches "${ARRAY[@]}"` call sites and no comment in test-all.sh.
+  #
+  # `[A-Z0-9_]+`, NOT `[A-Z_]+`. Measured: the first form counted 3 of 4 gates, because
+  # C4_PRODUCER_PATHS carries a DIGIT and a digit-free class silently skips it. The failure is the
+  # worst possible shape for a floor -- it under-counts `want`, so the floor is satisfied by a
+  # SHORTER list and the guard passes over exactly the gate it could not see. Any future array
+  # whose name contains a digit depends on this class.
+  #
+  # `grep -c` EXITS 1 ON A ZERO COUNT, and this script runs under `set -e`. A bare
+  # `want=$(grep -c …)` therefore ABORTS here -- and it aborts in precisely the catastrophic case
+  # this floor exists to catch: every `_diff_touches` gate removed from test-all.sh. The script
+  # would die at this line with no message, and every check below it (the whole per-array block,
+  # the tests/commands loop, its cardinality guard) would never run, while the non-zero exit read
+  # as "the linter found something". Caught by scripts/lint-shell-capture-exit.py, which is
+  # registered in this same runner.
+  #
+  # NOT `|| true`: that collapses grep's two distinct non-zero meanings into one. Exit 1 is "zero
+  # matches", a legitimate answer; exit >= 2 is a real error (an unreadable or missing runner), and
+  # silently reading that as a count of 0 would make the floor pass VACUOUSLY on a file it could
+  # not open -- the same fail-open shape the floor is here to close.
+  # STRIPPED, and BOTH expansion shapes. `grep -c` counts LINES over unstripped source, so a future
+  # doc comment quoting a gate inflates `want` into a false red -- in the very file this PR adds
+  # comment blocks to. And the pattern must accept `${NAME[@]+"${NAME[@]}"}`, the set-u-safe form
+  # this repo mandates elsewhere: matching only the bare shape re-creates the digit bug one idiom
+  # over, under-counting `want` so a SHORTER registry satisfies the floor.
+  # Match ANY dereference of a name, not an enumeration of spellings. Two earlier forms each
+  # under-counted: `[A-Z_]+` missed the array whose name carries a digit, and an explicit two-shape
+  # alternation still missed `"${NAME[@]:-}"`. Every miss is the same failure -- `want` drops, so a
+  # SHORTER registry satisfies the floor and the unseen gate is the one that rots.
+  want=$(sed 's/[[:space:]]*#.*$//' "$RUNNER" \
+         | grep -cE '_diff_touches +[^#]*\$\{[A-Z0-9_]+\[@\]') || {
+    grep_rc=$?
+    if (( grep_rc > 1 )); then
+      echo "ERROR: could not read ${RUNNER} to count _diff_touches gates (grep exit ${grep_rc}) -- the dispatch floor could not be derived, so it is not evidence about anything." >&2
+      fails=$((fails + 1))
+    fi
+    want=0
+  }
+  # A zero `want` needs no floor error of its own: if the runner truly has no gates while arrays
+  # are registered here, the DE-REFERENCE ANCHOR check below fires once per array, which is the
+  # more specific message.
+  if (( ${#RELEVANCE_ARRAYS[@]} < want )); then
+    echo "ERROR: RELEVANCE_ARRAYS has ${#RELEVANCE_ARRAYS[@]} entries but test-all.sh has ${want} _diff_touches gates -- an unregistered gate rots unchecked, and an emptied list makes every check below pass over nothing." >&2
+    fails=$((fails + 1))
+  fi
+
+  # `${a[@]+"${a[@]}"}` for the SAME reason the EXCLUSIONS loop above already carries it: under
+  # `set -u` on bash 3.2 an EMPTY array under `[@]` aborts the script. Without it the floor's
+  # message above would be followed two lines later by an `unbound variable` crash, so the
+  # RELEVANCE_ARRAYS=() mutation would exit non-zero for a reason unrelated to the check under
+  # test -- a guard that appears to fire while actually crashing.
+  for entry in ${RELEVANCE_ARRAYS[@]+"${RELEVANCE_ARRAYS[@]}"}; do
     arr_name="${entry%%|*}"
-    battery="${entry#*|}"
+    _rest="${entry#*|}"
+    battery="${_rest%%|*}"
+    min_elems="${_rest#*|}"
 
     # `declare -p` rather than `${#arr[@]}`: on bash 3.2 an UNSET array under `set -u` aborts the
     # script instead of reporting, which would turn a renamed array into a crash with no message.
@@ -168,11 +280,43 @@ else
       continue
     fi
 
+    if [[ "${#rel_elems[@]}" -lt "$min_elems" ]]; then
+      echo "ERROR: ${arr_name} has ${#rel_elems[@]} elements but declares a floor of ${min_elems} -- a predicate path was removed, which every other check here tolerates. Restore it, or lower the floor deliberately in RELEVANCE_ARRAYS." >&2
+      fails=$((fails + 1))
+    fi
+
     # Each declared path must still exist in the tree. `git -C` because this linter is invocable
     # from any cwd (lefthook runs it from the repo root; a developer may not).
     for p in "${rel_elems[@]}"; do
       if ! git -C "$REPO_ROOT" ls-files --error-unmatch -- "$p" >/dev/null 2>&1; then
         echo "ERROR: ${arr_name} declares '${p}', which is not a tracked file -- the predicate can never match it, so its suite is declined locally forever." >&2
+        fails=$((fails + 1))
+      fi
+    done
+
+    # PREFIX COVERAGE. scripts/lib/test-relevance-paths.sh states this invariant in its own prose
+    # -- TEST_RELEVANCE_PREFIXES is "the union of the top-level prefixes every declared path lives
+    # under" -- and until now NOTHING enforced it. Measured: `grep -c TEST_RELEVANCE_PREFIXES` in
+    # this file was 0.
+    #
+    # WHY IT MATTERS. test-all.sh's untracked-file arm is `git ls-files --others -- "${PREFIXES}"`,
+    # so a declared path outside every prefix is invisible to the predicate WHILE UNTRACKED. The
+    # failure is precisely inverted from useful: a session that ADDS a new fixture or mutation
+    # target under that path and runs the gate before committing gets the suite DECLINED on the
+    # one diff that needed it, and the decline reads as intentional in the summary.
+    #
+    # Prefix match, not equality: the prefixes are directory roots and the declared paths are
+    # files or subdirectories beneath them.
+    for p in "${rel_elems[@]}"; do
+      covered=""
+      # `$pre` OR `$pre/` -- never a bare `$pre*`. git's pathspec is path-component scoped, so
+      # `scripts` matches `scripts` and `scripts/**` but NOT `scriptsx/thing.sh`. The looser form
+      # certified coverage the untracked arm does not actually have.
+      for pre in "${TEST_RELEVANCE_PREFIXES[@]}"; do
+        [[ "$p" == "$pre" || "$p" == "$pre"/* ]] && covered=1
+      done
+      if [[ -z "$covered" ]]; then
+        echo "ERROR: ${arr_name} declares '${p}', which lives under no TEST_RELEVANCE_PREFIXES entry -- an UNTRACKED file there is invisible to the predicate, so the suite declines on the diff that adds it." >&2
         fails=$((fails + 1))
       fi
     done
@@ -184,6 +328,19 @@ else
     for p in "${rel_elems[@]}"; do
       [[ "$p" == "$battery" ]] && self_ok=1
     done
+    # THE DATA FILE ITSELF. The HOW-TO block's site 1 says "self-including the suite's own file AND
+    # this file"; only the first half was checked. Deleting the scripts/lib/test-relevance-paths.sh
+    # element left every check green while a PR editing ONLY the predicate data stopped arming the
+    # suite -- which is the property AC5's demonstration rests on.
+    lib_ok=""
+    for p in "${rel_elems[@]}"; do
+      [[ "$p" == "scripts/lib/test-relevance-paths.sh" ]] && lib_ok=1
+    done
+    if [[ -z "$lib_ok" ]]; then
+      echo "ERROR: ${arr_name} does not contain 'scripts/lib/test-relevance-paths.sh' -- a commit editing only the predicate data would not re-arm the suite, so a narrowed predicate ships unexercised." >&2
+      fails=$((fails + 1))
+    fi
+
     if [[ -z "$self_ok" ]]; then
       echo "ERROR: ${arr_name} does not contain its own battery '${battery}' -- without it, a commit adding a mutation target does not re-arm the predicate and the new target is never exercised locally." >&2
       fails=$((fails + 1))
