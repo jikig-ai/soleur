@@ -889,6 +889,34 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# EXCLUSION DIRECTION. The three assertions above quantify over the exclusion
+# list's SHAPE (cap declared, within cap, no catch-all). None quantifies over its
+# EFFECT, and review demonstrated that gap is total: adding one REAL tracked path
+# to the list passed all three while masking that exact file going missing —
+# stripping it from both sides removes it from the EXPECTED set, so a file the
+# channel never delivered reconciles as correctly-absent.
+# ---------------------------------------------------------------------------
+r="$(new_fixture)"
+rm -f "$r/del/a/two.md"                     # the channel fails to deliver it
+canary_run "CANARY_DELIVERED_ROOT=$r/del" "CANARY_REFERENCE_DIR=$r/ref" \
+           "CANARY_DELIVERED_SHA=$SHA_CURRENT" "CANARY_MAIN_HEAD=$SHA_CURRENT" \
+           "CANARY_CLI=/nonexistent/claude-binary" "CANARY_EXCLUDE=a/two.md"
+assert_eq   "exclusion-direction: excusing a SERVED path exits 1"   "1" "$RC"
+assert_has  "exclusion-direction: the finding names the served path" '^canary-finding\| incomplete_delivery: exclusion matches 1 path\(s\) the repository SERVES'
+assert_lacks "exclusion-direction: it never claims the assertions hold" '^canary-finding\| every delivery assertion holds'
+rm -rf "$r"
+
+# Direction control: an exclusion for a path the delivery has and the reference
+# does NOT (the real `.in_use/<pid>` shape) must still be excused, or the fix
+# above would have closed the hole by making every exclusion useless.
+r="$(new_fixture)"
+mkdir -p "$r/del/.in_use" && printf 'x' > "$r/del/.in_use/143463"
+canary_run $(seam "$r" "$SHA_CURRENT" "$SHA_CURRENT")
+assert_eq   "exclusion-direction control: a delivered-MORE path is excused" "0" "$RC"
+assert_has  "exclusion-direction control: the run is clean"                 '^canary-finding\| every delivery assertion holds'
+rm -rf "$r"
+
+# ---------------------------------------------------------------------------
 # Minimum-cardinality vacuity guard. If the fixture builder or the seam silently
 # stopped producing cases, every row above would vanish and this suite would
 # exit 0 having asserted nothing.

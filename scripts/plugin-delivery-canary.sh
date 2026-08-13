@@ -574,12 +574,38 @@ evaluate_completeness() { # <ref-list-file> <delivered-list-file> <out: kept-lis
   # count of what was stripped is capped. Stripping from one side only would
   # turn an exclusion into a licence to deliver anything.
   local ref_kept="$SCRATCH/ref.kept" del_kept="$SCRATCH/del.kept"
-  local excluded=0 p
+  local excluded=0 ref_excluded=0 ref_excluded_paths="" p
   : > "$ref_kept"; : > "$del_kept"
   while IFS= read -r p; do
     [[ -n "$p" ]] || continue
-    if is_excluded "$p"; then excluded=$((excluded + 1)); else printf '%s\n' "$p" >> "$ref_kept"; fi
+    if is_excluded "$p"; then
+      excluded=$((excluded + 1))
+      # DIRECTION CHECK. An exclusion exists to excuse a path the DELIVERY has
+      # and the repository does not — CLI runtime state like `.in_use/<pid>`.
+      # By construction such a path cannot appear in the reference listing, so
+      # an exclusion that matches a REFERENCE path is misconfigured, and it is
+      # the one misconfiguration that defeats this guard completely: stripping
+      # the path from both sides removes it from the EXPECTED set, so a file the
+      # channel failed to deliver reconciles as correctly-absent and the run
+      # reports `every delivery assertion holds`.
+      #
+      # Demonstrated during review: adding one real tracked path to the
+      # exclusion list passed every static assertion (cap declared, count within
+      # cap, no catch-all glob) while masking that exact file going missing. The
+      # static assertions quantify over the list's SHAPE; this is the only check
+      # that quantifies over its EFFECT, which is what the guard's completeness
+      # claim actually rests on.
+      ref_excluded=$((ref_excluded + 1))
+      [[ "$ref_excluded" -le 10 ]] && ref_excluded_paths="${ref_excluded_paths}${ref_excluded_paths:+, }$(sanitize "$p")"
+    else
+      printf '%s\n' "$p" >> "$ref_kept"
+    fi
   done < "$reflist"
+
+  if [[ "$ref_excluded" -gt 0 ]]; then
+    finding incomplete_delivery "exclusion matches ${ref_excluded} path(s) the repository SERVES (${ref_excluded_paths}); an exclusion may only excuse a delivered path absent from the reference, so this one removes files from the expected set and would mask their non-delivery"
+    COMPLETENESS="red"
+  fi
   while IFS= read -r p; do
     [[ -n "$p" ]] || continue
     if is_excluded "$p"; then excluded=$((excluded + 1)); else printf '%s\n' "$p" >> "$del_kept"; fi
