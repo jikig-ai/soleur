@@ -216,11 +216,23 @@ it. Detection fires on "a reversal or extension of an existing ADR".
 
 ### ADR
 
-**Create `ADR-187` — nested runners signal UNRESOLVED by exit-shape, not by a new contract.**
-Extends ADR-177 (which stays authoritative for the taxonomy) and appends a two-line pointer
-addendum to ADR-177 in the same commit, matching the precedent ADR-181 set there.
+**The artifact is SPLIT, because only part of this is a new decision.** Three reviewers
+independently argued the whole thing should collapse into an ADR-177 addendum; the architectural
+lens argued decision 1 is a genuine new rule. Both are right about different halves:
 
-The three decisions ADR-187 records:
+- **`ADR-187` (new) — "a nested runner signals UNRESOLVED by exit-shape, and only from an
+  observed rc".** This is a real, new, binding constraint on every future runner in the repo
+  (decisions 1 and 3 below). It did not exist before and is not a footnote to the taxonomy.
+- **An ADR-177 addendum (append-only)** carries the rest: the npm correction, the
+  re-affirmation that exit 3 stays top-level-only (decision 2 — a *non*-change, which is exactly
+  what an addendum is for), and the A6 status correction (decision 4).
+
+**The ADR-177 edit MUST be append-only.** Its existing addendum states verbatim *"Nothing above
+is edited — this appends."* An earlier revision of this plan instructed editing its §Consequences
+wrapper list in place, which would violate the file's own stated contract and rewrite the record
+a later reader relies on. Strike-through and correct **in the addendum**, never in the body.
+
+The decisions recorded:
 
 1. **A nested runner that observed a signal-killed child, and no assertion failure, exits with
    that child's signal-shaped rc (`128+N`).** `run_suite` then classifies it `[KILLED]` with no
@@ -235,16 +247,37 @@ The three decisions ADR-187 records:
    to emit 3, because it emits `128+N`. Recording this as a deliberate re-affirmation is the
    answer to the brief's "record the decision either way".
 
-3. **A6 (the sideband `TEST_TIMING_LOG` KILLED channel) is considered and deferred, with the
-   trigger named.** It is the only design that buys P2 (composition through arbitrary wrapper
-   depth). P2 buys nothing today: npm is refuted, and each remaining wrapper **already observes
-   its children's raw rc** — `run-registered-suites.sh` via the `.meta` files it writes across
-   `xargs`, `run-all.sh` by capturing the rc it currently discards. A layer that *cannot* observe
-   rc is the case A6 exists for, and none remains in scope. Its cost is real —
-   `TEST_TIMING_LOG` becomes a CONTRACT rather than ad-hoc telemetry, and three files must be
-   taught to write it. **Re-evaluation trigger:** the first wrapper that cannot know its
-   children's rc (a runner shelling out through a tool that itself discards rc), or a third
-   nesting level appearing between `run_suite` and a suite.
+3. **A nested runner may exit `128+N` only for an `N` it DIRECTLY OBSERVED in a child's `$?`.**
+   It must never synthesize a signal shape from an inference (a wall-clock guess, a log scrape,
+   an "it probably OOMed"). This single sentence is what keeps decision 1 honest: without it,
+   "exit the signal shape" degrades into "fabricate a plausible one", and the marker stops
+   meaning anything — which is the exact defect ADR-177 exists to prevent, reintroduced one layer
+   down. It is also precisely **why the UNACCOUNTED arm (D3) cannot be fixed by mimicry**: with
+   no `.meta` there is no observed rc, so mimicry is not available there *by construction*, and
+   the honest options are the xargs-125 discriminator or a sideband.
+
+4. **A6 (the sideband KILLED channel) — the earlier deferral rationale was wrong and is
+   corrected here.** The first revision deferred A6 on the grounds that "no layer that cannot
+   observe rc remains in scope". That is false in two ways, both found at plan review:
+
+   - **`xargs` is exactly such a layer, and it is already in the path.** `run_suite` →
+     `run-registered-suites.sh` → `xargs -P` → `bash -c` shim → suite is *three* levels, not one.
+     When the shim dies, xargs absorbs the rc and returns its own `125`; the per-suite rc is
+     unrecoverable from the exit code alone.
+   - **A6 is already built, undocumented.** The `.meta` files ARE a file-backed sideband carrying
+     per-suite rc across `xargs` at file granularity — the very mechanism A6 describes, shipped
+     by PR #7423 as "telemetry". The choice was never "adopt a sideband or not"; it is "recognise
+     the one already load-bearing, or keep it undeclared".
+
+   So the stated re-evaluation trigger — "the first wrapper that cannot know its children's rc" —
+   **has already fired**, before the ADR was written. Record that plainly. The remaining decision
+   is narrower and honest: adopt the `.meta` sideband *as a declared contract* for the
+   `run-registered-suites.sh` domain (which this PR does by classifying its field 1), and defer
+   only the **generalisation** of that channel to `TEST_TIMING_LOG` across all three runners,
+   whose cost — making an ad-hoc telemetry file a cross-runner contract — is what remains genuinely
+   unearned today. **Re-evaluation trigger (restated so it can actually fire):** a second runner
+   needing to report a killed suite it cannot exit-encode, i.e. the moment `run-all.sh` or
+   `test-all.sh` acquires an absorbing layer of its own.
 
 Per `wg-defer-only-after-inline-triage`, the per-wrapper WHY and the reader's conclusion:
 
@@ -298,6 +331,29 @@ under-reports coverage and cries wolf:
 3. `run: bash <path>.test.sh` steps in `.github/workflows/infra-validation.yml`
 4. the per-app `main.test.sh` hook, `infra-validation.yml:357-364`
 5. `run: bash <path>.test.sh` in every other `.github/workflows/*.yml`
+6. **`bash <path>.test.sh` appearing anywhere inside a multi-line `run: |` block**, including
+   under a prefix such as `sudo` — **not** only the single-line `run: bash …` form
+
+**Surface 6 was missing from this plan's first revision and its absence changes the headline
+number.** `infra-validation.yml:942` registers
+`apps/web-platform/infra/workspaces-luks-loopback.test.sh` as `sudo bash …` inside a multi-line
+`run: |` block. Surfaces 1-5 as originally written do not match it, so a linter built to that
+spec reports **7** orphans, not 6, and AC10 ("zero orphans") would be unsatisfiable on the
+first CI run.
+
+**With surface 6 present it is COVERED, and needs no exclusion.** Re-measured across all six
+surfaces: **6 orphans, and `workspaces-luks-loopback.test.sh` is not among them** — it genuinely
+runs in CI, just not via a form surfaces 1-5 could see. An intermediate revision of this plan
+briefly instructed carrying it as an exclusion; that was an over-correction, and an exclusion
+would have been a false statement about a suite that does run.
+
+Two authorities must not be confused here. `.github/scripts/test/test-infra-suite-registration.sh:98`
+does exclude it — but from **`run-registered-suites.sh`'s derivation**, for an unrelated reason
+recorded verbatim: it needs root for `losetup`/`luksFormat` and **exits 2 unprivileged**, so
+deriving it into the local runner "would turn that mandated ship gate permanently RED for any
+operator without passwordless sudo" (proper derive-but-do-not-execute is tracked in **#7076**).
+That is a statement about *local execution*, not about *registration*. The orphan linter asks
+only "does anything run this?" — and the answer is yes.
 
 There is more than one chokepoint, and that is the point: a guard scoped to only
 `test-all.sh` would classify all 98 infra suites as orphans.
@@ -391,17 +447,27 @@ notably `infra-validation.yml`'s invocation and `run-registered-suites.test.sh`.
 
 **Two A0 questions are already answered at plan time; do not re-litigate them, verify they still hold:**
 
-1. **Does `run-registered-suites.test.sh` sandbox via single-file `cp`?** **No.** It takes
-   `SUT="${SUT:-apps/web-platform/infra/run-registered-suites.sh}"` (`:21`) and drives mutants as
-   whole files via `SUT="$m"` (`:614`). So ADR-177 §A3's single-file-`cp` constraint — which is
-   what forbids a sourced lib for `test-all.sh` — **does not bind this file**. The decision to
-   inline the classifier here therefore rests on the cross-tree-dependency argument
-   (`apps/web-platform/infra/` sourcing `scripts/lib/`) and on parity with `run-all.sh`, **not**
-   on §A3. Record it that way rather than citing a constraint that does not apply.
+1. **Does `run-registered-suites.test.sh` sandbox via single-file `cp`?** **YES — it does.**
 
-2. **Does any CI layer special-case 137/143?** Measured: no auto-retry, no OOM annotation, no
-   exit-code branching in `.github/workflows/*.yml` that would intercept a signal-shaped rc from
-   these runners.
+   > **CORRECTION (recorded, not silently swapped).** An earlier revision of this plan asserted
+   > **"No"** here, citing `:21` (`SUT="${SUT:-…}"`) and `:614` (`SUT="$m"`), and concluded that
+   > ADR-177 §A3 "does not bind this file". **That answer was inverted and its rationale was
+   > wrong.** `:586` does `PRISTINE="$MUTDIR/pristine.sh"; cp "$SUT" "$PRISTINE"` — a
+   > **single-file** copy, exactly the §A3 shape. The `SUT=` indirection at `:21`/`:614` is real
+   > but is not the sandbox mechanism; reading only those two lines and stopping is what produced
+   > the false negative. The original probe grepped `cp .*TARGET|SUT=|mktemp -d` and never matched
+   > `cp "$SUT"`, so the grep's own pattern manufactured the wrong answer.
+
+   **Consequence:** ADR-177 §A3 **binds this file**. The classifier MUST be inlined, not sourced —
+   a sourced lib would be absent from the pristine copy, the degradation path would fire, and
+   every KILLED assertion would silently exercise the fallback instead of the classifier. That is
+   the §A3 failure mode reproduced verbatim. Inlining is therefore *required*, not a stylistic
+   preference, and the cross-tree-dependency argument the earlier revision leaned on is a
+   secondary consideration at best.
+
+2. **Does any CI layer special-case 137/143?** Re-measured: **no** auto-retry, no OOM annotation,
+   no exit-code branching in `.github/workflows/*.yml` that would intercept a signal-shaped rc
+   from these runners.
 
 **Consumer drift found at plan time — must be fixed in this PR.**
 `.github/workflows/main-health-monitor.yml:580` tells the operator, in the issue body it files
@@ -426,6 +492,28 @@ were fatal; do not reintroduce either.**
 > `} 2>&1 | sed "s/^/${SENTINEL_PREFIX}/"` at `:465`. Any counter incremented there evaporates
 > at `:466`. Counting killed suites in that loop is the `2026-07-27` subshell trap recurring
 > inside the plan that cites it.
+>
+> **D3 — the dominant OOM shape inside this runner is UNACCOUNTED, and steps 1-5 pin it to
+> `[FAIL]`.** A `.meta` file is written by the xargs child *after* its suite returns. If the
+> kernel OOM-kills the wrapping `bash -c` shim itself — the likeliest victim under memory
+> pressure, since it is the process holding the suite — **no `.meta` is ever written**, the suite
+> lands in `UNACCOUNTED`, and the precedence above returns 1. So the single most plausible
+> instance of #7429's own class, inside the runner this PR is fixing, still renders `[FAIL]`.
+>
+> Worse, it cascades. **Measured on this box:** `printf 'a\nb\nc\n' | xargs -P2 -I{} bash -c
+> '…kill -9 $$…'` prints `xargs: bash: terminated by signal 9`, **stops dispatching further
+> work** (`c` never ran), and **exits 125**. One OOM kill therefore converts an arbitrary number
+> of never-dispatched suites into UNACCOUNTED entries. `125` is a precise, documented
+> discriminator meaning "a child was killed by a signal" — and today it is **discarded**, because
+> the pipeline ends `| tee "$LOG"` so `$?` is `tee`'s.
+>
+> **Disposition (must be decided in this PR, not inherited).** Either (a) capture the xargs rc
+> via `PIPESTATUS` and treat `125` + a non-empty UNACCOUNTED set as the killed shape, or
+> (b) record explicitly, per `wg-defer-only-after-inline-triage`, that the UNACCOUNTED arm stays
+> `[FAIL]` and *why*, so a reader seeing `[FAIL]` on an unaccounted suite is not misled into
+> believing a kill was ruled out. Option (a) is preferred: it is the arm that actually closes
+> #7429 for this runner. What is **not** acceptable is shipping steps 1-5, claiming #7429 closed,
+> and leaving the dominant instance silently misclassified.
 
 The corrected design keeps `RED` as the **superset** (total non-zero) and derives `killed` as a
 subset, rather than re-partitioning `RED`. That choice is what preserves four things a
@@ -487,11 +575,17 @@ external tooling.
 
 ### Phase A3 — ADR-187 + ADR-177 amendment + issue-body correction
 
-1. Write `ADR-187`, recording the three decisions above.
-2. Append a pointer addendum to ADR-177 and **correct its §Consequences wrapper list** — strike
-   the npm row, cite the 2026-08-13 measurement, and remove the now-unnecessary
-   `exec node_modules/.bin/vitest` remedy and its drift pin.
+1. Write `ADR-187`, recording decisions 1 and 3 (exit-shape signalling + observed-rc-only).
+2. **Append** an addendum to ADR-177 — never edit its body — carrying decision 2 (exit 3 stays
+   top-level-only), decision 4 (A6 status correction), the npm measurement, and a note that the
+   `exec node_modules/.bin/vitest` remedy and its drift pin are unnecessary.
 3. Strike the npm row from #7429's body (the brief's explicit instruction: strike, do not carry).
+4. **Reconcile with ADR-178** before inlining the classifier a third time: ADR-178 governs where
+   shared bash primitives live. Inlining is forced here by ADR-177 §A3 (see Phase A0), so the two
+   ADRs must be shown to be consistent rather than silently in tension — and the inlined copies
+   need a **textual parity pin** (assert the classifier body is byte-identical across the three
+   files) so three copies cannot drift. A parity assertion survives the single-file-`cp` sandbox
+   that forbids a shared lib in the first place.
 
 ### Phase B1 — widen the orphan linter (RED first)
 
@@ -509,20 +603,51 @@ apps/web-platform/scripts/lib/*.test.sh
 scripts/lib/*.test.sh
 ```
 
-1. **Create `scripts/lint-orphan-test-suites.test.sh`** with Guard 1's seven mutation rows
-   against a sandboxed tree copy. Confirm RED against the current linter.
+1. **Create `scripts/lint-orphan-test-suites.test.sh`** with Guard 1's seven mutation rows.
+   **The sandbox tree copy MUST be `git init`-ed and the fixture files `git add`-ed.** The
+   widened linter's producer is `git ls-files`, which returns **nothing** outside a repo — so a
+   plain `cp -r` sandbox makes every mutation row pass against an empty walk. The suite would
+   then reproduce, inside its own harness, the exact vacuity M6 exists to catch. Assert
+   non-empty enumeration in the harness itself before any row runs.
 2. Widen the linter to the whole-repo walk: `git ls-files '*.test.sh'` diffed against the
-   five-surface union in Guard 1's Assembly. Pin `LC_ALL=C` for all sorting.
-3. Preserve the `"name|reason"` + `#NNNN` fail-closed exclusion discipline verbatim.
-4. **Re-key the anti-vacuity floors.** `scripts_seen < 1` `:69` is keyed on the old
-   `scripts/*.test.sh` walk and becomes meaningless; replace with a floor on the whole-repo
-   count **and** a floor on each of the five covered-set surfaces (a surface that silently stops
-   contributing makes real suites look orphaned). Keep `cmd_seen` and `REQUIRED_RUNNERS`.
-5. Rewrite the stale `:11-13` header rationale ("deliberately ~20 lines with NO companion
+   **six**-surface union in Guard 1's Assembly. Pin `LC_ALL=C` for all sorting and `comm`.
+3. **Derive the glob patterns from `test-all.sh`; never duplicate them into the linter.** If the
+   linter carries its own copy of the nine patterns, M5 (delete a pattern from the runner) leaves
+   the linter's copy intact and the row passes green while real suites go unrun — a guard that
+   cannot see the mutation it is specified to catch. Preferred mechanism: have `test-all.sh` emit
+   its own pattern list behind a flag (e.g. `--print-suite-globs`) so the linter *asks the runner*
+   rather than parsing it. Fallback: parse `:1205` with an assertion that ≥9 patterns were
+   extracted. The flag is strongly preferred — it turns a parsing dependency into a contract.
+4. **Re-key the exclusion mechanism from basename to repo-relative path.** The existing
+   `"name|reason"` format is basename-keyed, which was safe over one flat directory and is
+   **unsafe repo-wide**: `git ls-files '*.test.sh' | xargs -n1 basename | sort | uniq -d` returns
+   **`argv-ceiling.test.sh`** (`drain-prs/test/`, `skill-security-scan/test/`) and
+   **`parity.test.sh`** (`constraint-scaffold/test/`, `linear-fetch/scripts/`). Excluding one
+   would silently exclude its twin — and `linear-fetch/scripts/parity.test.sh` is one of the
+   orphans this PR exists to turn ON, so the collision lands exactly on the work. Switch the key
+   to the repo-relative path and **fail closed if any exclusion key matches zero or ≥2 tracked
+   files**. Keep the `#NNNN` requirement verbatim.
+5. **Re-key the anti-vacuity floors.** `scripts_seen < 1` `:69` is keyed on the old
+   `scripts/*.test.sh` walk and becomes meaningless. Replace with a floor on the producer-side
+   whole-repo count, plus a **`< 1` zero-check per registration surface** — not a ratcheting
+   count. A zero-check costs nothing to maintain, needs no hand-updating as suites are added, and
+   catches the one failure a producer-side floor cannot: a single surface silently stopping while
+   the others keep the total plausible. Keep `cmd_seen`.
+6. Rewrite the stale `:11-13` header rationale ("deliberately ~20 lines with NO companion
    .test.sh") — it is false at 396 lines and is cited as precedent by `scripts/lint-workflows.sh:25`.
    Update that citation too.
-6. Register the new suite in `test-all.sh` (`scripts/*.test.sh` is hand-registered) and add it to
-   the linter's own `REQUIRED_RUNNERS`.
+7. Register the new suite in `test-all.sh` (`scripts/*.test.sh` is hand-registered). **Do not add
+   it to `REQUIRED_RUNNERS`** — see the AC16 correction; that array holds *runners*, and a
+   `.test.sh` is not one.
+8. **Reconcile the third registration authority.** `run-registered-suites.sh:179-205`
+   (`report_orphans`) already reports orphans over the infra domain using a **naive basename
+   grep** — precisely the technique #7402 records as wrong and this plan rejects as A5. And
+   `.github/scripts/test/test-infra-suite-registration.sh` is a REQUIRED gate over the same
+   domain with its own exclusion list (including the `#7076` entry above). Three authorities over
+   one domain, disagreeing on method, is the drift this PR would otherwise institutionalise.
+   Surface 3 MUST delegate to `run-registered-suites.sh`'s own derivation (add a `--list` flag)
+   rather than re-grepping `infra-validation.yml` independently, and the two exclusion lists must
+   be cross-checked so an entry retired in one is not silently live in the other.
 
 ### Phase B2 — close the remaining orphans to zero
 
@@ -559,14 +684,16 @@ dir that will need adjusting") is discharged by Phase B1 step 4.
 
 ## Files to Edit
 
-- `scripts/test-all.sh` — add one glob pattern `:1205`; two explicit `run_suite` lines; register the new linter suite
-- `scripts/lint-orphan-test-suites.sh` — whole-repo walk, five-surface covered set, re-keyed floors, corrected header
-- `apps/web-platform/infra/run-registered-suites.sh` — classify `.meta` rcs; signal-shaped exit at `:481`
-- `apps/web-platform/infra/run-registered-suites.test.sh` — Guard 2 mutation rows + end-to-end arm
-- `.github/scripts/test/run-all.sh` — rc capture, classification, signal-shaped exit
+- `scripts/test-all.sh` — add one glob pattern `:1205`; two explicit `run_suite` lines; register the new linter suite; add `--print-suite-globs` (Phase B1 step 3); refresh the stale registration comments at `:917`, `:957`, `:1004`, `:1014`, `:1033` that describe the pre-widening glob set
+- `scripts/lint-orphan-test-suites.sh` — whole-repo walk, **six**-surface covered set, path-keyed exclusions, re-keyed floors, corrected header
+- `apps/web-platform/infra/run-registered-suites.sh` — classify `.meta` rcs in the **parent**; gated killed breakdown line; signal-shaped exit at `:481`; D3 xargs-`125` disposition; **`report_orphans` `:179-205`** currently uses the naive basename grep this plan rejects — reconcile or delegate (Phase B1 step 8); add `--list`
+- `apps/web-platform/infra/run-registered-suites.test.sh` — Guard 2 mutation rows (note `:586` single-file `cp`, `:252` byte-shape pin, `:442` exact summary-line match)
+- `.github/scripts/test/run-all.sh` — rc capture, classification, signal-shaped exit; `MIN_SUITES=10` means **every** Guard 3 fixture arm must stage ≥10 suites or the floor fires first and masks the row
+- `.github/scripts/test/test-infra-suite-registration.sh` — cross-check its exclusion list (incl. the `#7076` entry) against the linter's, so one domain does not carry two disagreeing exclusion sets
+- `scripts/test-all-killed-classification.test.sh` — **home for both end-to-end arms** (AC2, AC6). It already owns the `build_sandbox` harness that drives the real `run_suite`; putting the E2E assertions anywhere else means rebuilding that harness. Note its sandbox is single-file `cp` + a python rewrite and pins `TEST_GROUP=all`
 - `scripts/lint-workflows.sh` — update the stale `:25` precedent citation
 - `.github/workflows/main-health-monitor.yml` — `:580` under-states which suites can surface a signal-shaped exit once both wrappers propagate (see Phase A0)
-- `knowledge-base/engineering/architecture/decisions/ADR-177-…md` — addendum + corrected wrapper list
+- `knowledge-base/engineering/architecture/decisions/ADR-177-…md` — **append-only** addendum
 
 ## Files to Create
 
@@ -624,23 +751,28 @@ discoverability_test:
 - [ ] AC6 — Same end-to-end assertion as AC2 for `.github/scripts/test/run-all.sh`.
 - [ ] AC7 — `run-all.sh` with a killed suite **and** `RAN < MIN_SUITES` still fails on the floor.
 - [ ] AC8 — Every Guard 2 and Guard 3 mutation row, applied **individually**, drives its suite RED. Recorded as a row-by-row table in the PR body, not asserted in aggregate.
-- [ ] AC9 — `test-all-killed-classification.test.sh`'s executed row pinning `3 → failed` is **unchanged**, proving exit 3 stayed top-level-only.
+- [ ] AC9 — `test-all-killed-classification.test.sh`'s executed row pinning `3 → failed` is **unchanged**, AND neither wrapper emits a literal `exit 3`: `grep -nE '(^|[^0-9])exit[[:space:]]+3([^0-9]|$)' apps/web-platform/infra/run-registered-suites.sh .github/scripts/test/run-all.sh` returns nothing. *(The unchanged row alone does not prove the property — it proves the classifier still maps 3→failed, not that no wrapper emits 3. The grep is the half that actually checks it.)*
+- [ ] AC9b — The D3 disposition is implemented and asserted: either the xargs-`125` + non-empty-UNACCOUNTED arm classifies as killed end-to-end, or the plan's `[FAIL]` rationale is recorded in the runner's header and a test pins that an unaccounted-after-signal run exits 1 **deliberately**. Silence on D3 fails this AC.
 
 **Scope B**
 
-- [ ] AC10 — `git ls-files '*.test.sh'` diffed (under `LC_ALL=C`) against the five-surface union returns **zero** orphans.
+- [ ] AC10 — The **linter's own invocation** reports zero unexplained orphans. Do **not** hand-roll a second derivation of the six-surface diff in the AC: an AC that reimplements the gate is pinned to a different scope than the gate and can stay green while CI reds (the `2026-07-28` "my AC verified four paths while CI verified five" class). AC1 runs the gate; this AC asserts the *content* of its report — every tracked suite either registered or explicitly excluded.
 - [ ] AC11 — Each of the six named orphans is registered and executes: assert each appears in `TEST_TIMING_LOG` (or the runner's suite list) after a run, not merely that a `run_suite` line exists.
 - [ ] AC12 — The four linear-fetch suites pass, or carry an exclusion with a reason and a `#NNNN`.
 - [ ] AC13 — Every Guard 1 mutation row (M1–M7), applied **individually** to a tree copy, drives the linter RED. M1 and M6 are the load-bearing rows: M1 re-introduces a real orphan; M6 proves the guard cannot report "0 checked" and exit 0.
 - [ ] AC14 — Adding an exclusion whose reason lacks `#NNNN` fails the linter (discipline preserved).
 - [ ] AC15 — The new glob's newly-swept set is enumerated in the PR body, and every member is registered, passing, or excluded.
-- [ ] AC16 — `scripts/lint-orphan-test-suites.test.sh` is itself registered in `test-all.sh` and listed in `REQUIRED_RUNNERS`.
+- [ ] AC16 — `scripts/lint-orphan-test-suites.test.sh` is registered in `test-all.sh` and executes. *(It is **not** added to `REQUIRED_RUNNERS`: that array holds runner scripts the linter checks registration against, and a `.test.sh` is not a runner. The first revision of this AC was a category error.)*
+- [ ] AC25 — Surface 6 is implemented and load-bearing: `apps/web-platform/infra/workspaces-luks-loopback.test.sh` (registered as `sudo bash …` inside a multi-line `run: |` block at `infra-validation.yml:942`) is reported **covered, not orphaned, and not excluded**. Proven by a mutation removing surface 6 and asserting the linter then reports it as an orphan — i.e. the surface is verified by its absence, not merely present in the code.
+- [ ] AC26 — Exclusion keys are repo-relative paths, and the linter **fails closed** when a key matches zero or ≥2 tracked files. Proven by adding a bare-basename key (`parity.test.sh`) and asserting the linter rejects it as ambiguous.
+- [ ] AC27 — The mutation-suite sandbox is a real git repo: the harness asserts `git ls-files '*.test.sh'` returns a non-empty set **before** any mutation row runs. Without this every row is vacuous.
+- [ ] AC28 — Deleting a glob pattern from `test-all.sh:1205` reddens the linter (M5), proving the patterns are **derived** from the runner and not duplicated into the linter.
 
 **Cross-cutting**
 
 - [ ] AC17 — ADR-187 exists, records all three decisions, and ADR-177 carries the pointer addendum with its wrapper list corrected (npm row struck, citing the measurement).
 - [ ] AC18 — #7429's body no longer asserts the npm row; the measurement is recorded there.
-- [ ] AC19 — No stale `ADR-175`-as-taxonomy citation remains in the touched files.
+- [ ] AC19 — *(Cut as measured-vacuous.)* The original AC asserted "no stale ADR-175-as-taxonomy citation in the touched files". Probed at plan time: every tracked `ADR-175` reference is a legitimate preflight-boundary citation (`ADR-176` amended_by, `INDEX.md`, `model.c4`, `principles-register.md`, two learnings, two plans) — there is no stale taxonomy citation in code to remove, so the grep would pass without checking anything. The real correction is the **issue body**, covered by AC18.
 - [ ] AC20 — The ADR ordinal is re-verified free across all `origin/*` refs immediately before merge; on renumber, this plan, `tasks.md`, and every AC naming it are swept in the same edit.
 - [ ] AC21 — PR body uses `Closes #7429`, `Closes #7402`, `Closes #7523`.
 - [ ] AC22 — `main-health-monitor.yml:580`'s operator guidance no longer claims only "the six suites … via `bun`/`node` directly" can surface a signal-shaped exit; it names the widened set (both wrappers). Asserted by grepping the updated ACTIONS text, not by eyeballing.
@@ -698,6 +830,47 @@ Claude Code sessions alone, and 14.89 at the time of this plan's probes.
 
 - **A6 sideband channel** — deferred in ADR-187 with a named trigger. No new issue: the
   decision and its trigger live in the ADR, which is the durable record, and #7429 closes here.
+
+## Plan Review Revisions
+
+Five reviewers (DHH, Kieran, code-simplicity, architecture-strategist, plus a scoped strong-model
+advisor). Every finding and its disposition, so nothing is lost between revisions. **Two findings
+were falsified statements in the plan itself** — recorded here rather than silently swapped, per
+the operator constraint and this repo's cost history on re-derived facts.
+
+| # | Finding | Source | Disposition |
+| --- | --- | --- | --- |
+| R1 | **`RED` already counts killed children** (`:339` emits `RED` for any non-zero), so the proposed `RED>0 → exit 1` precedence made the killed branch dead code | DHH, Kieran (P0) | **Fixed** — Phase A1 D1. Verified by reading `:339`/`:346`. `RED` kept as superset; `failed = RED - killed` |
+| R2 | **The `:360` `.meta` loop is inside a pipeline subshell** (`dump_reds` → `{…} 2>&1 \| sed` at `:442-465`), so counters there evaporate | DHH, Kieran (P0) | **Fixed** — Phase A1 D2, count moved to parent. The plan had cited the very learning it was violating; learnings table corrected |
+| R3 | **Phase A0 asserted "No" to single-file `cp`; the truth is YES** (`:586 cp "$SUT" "$PRISTINE"`), inverting the whole inline-vs-source rationale | Kieran (P0) | **Fixed + recorded as a correction.** ADR-177 §A3 **does** bind; inlining is required, not stylistic |
+| R4 | **Surfaces 1-5 miss `sudo bash …` in multi-line `run: \|` blocks** → linter reports 7 orphans, AC10 unsatisfiable | Kieran (P0) | **Fixed** — surface 6 added. Re-measured: 6 orphans, loopback covered |
+| R5 | An intermediate fix carried loopback as an **exclusion** — an over-correction; it genuinely runs | self-caught on re-measurement | **Fixed** — covered, not excluded. AC25 now verifies surface 6 by *removing* it |
+| R6 | **UNACCOUNTED is the dominant OOM shape and was pinned to `[FAIL]`**; `xargs` returns `125` and stops dispatching, cascading one kill into many unaccounted suites | Kieran (P1), architecture (P0) | **Fixed** — Phase A1 D3 + AC9b. Measured: `xargs` rc `125`, `c` never dispatched |
+| R7 | **A6 deferral rationale inverted**: `xargs` *is* a layer that cannot observe rc, and `.meta` *is already* a sideband. The stated trigger had already fired | architecture (P0) | **Fixed** — ADR decision 4 rewritten; deferral narrowed to the `TEST_TIMING_LOG` generalisation |
+| R8 | Missing **observed-rc-only** constraint — without it "exit the signal shape" degrades to "fabricate one" | architecture (P1) | **Adopted** as ADR decision 3; also explains why D3 cannot be fixed by mimicry |
+| R9 | **Exclusions are basename-keyed** → repo-wide collisions on `parity.test.sh` and `argv-ceiling.test.sh`, one of which this PR turns on | Kieran (P1) | **Fixed** — path-keyed + fail-closed on 0 or ≥2 matches. Collisions verified via `uniq -d` |
+| R10 | **Mutation sandbox must be a git repo** or `git ls-files` returns nothing and every row is vacuous | code-simplicity (P0) | **Adopted** — Phase B1 step 1 + AC27 |
+| R11 | **Glob patterns must be derived from the runner**, else M5 passes green | code-simplicity (P0) | **Adopted** — `--print-suite-globs` preferred; AC28 |
+| R12 | **No mutation row for surface 3**, the largest contributor (98 of 339) | code-simplicity (P1) | **Adopted** — Guard 1 M3 |
+| R13 | **`report_orphans` (`:179-205`) uses the naive basename grep** this plan rejects as A5; plus `test-infra-suite-registration.sh` is a third authority over the same domain | architecture (P1) | **Adopted** — Phase B1 step 8, delegate via `--list` + cross-check exclusion lists |
+| R14 | **ADR-177 must be append-only** ("Nothing above is edited — this appends") | architecture (P1) | **Fixed** — Phase A3 step 2 |
+| R15 | **ADR-187 vs amendment**: three reviewers said fold, architecture said decision 1 is genuinely new | DHH, simplicity, architecture | **Split** — ADR-187 carries decisions 1+3; ADR-177 addendum carries 2+4+npm |
+| R16 | **Classifier inlined in 3 files can drift**; ADR-178 governs shared bash primitives | architecture (P1) | **Adopted** — textual parity pin + ADR-178 reconciliation (Phase A3 step 4) |
+| R17 | **E2E arms belong in `test-all-killed-classification.test.sh`**, which already owns the `build_sandbox` harness | Kieran (P1) | **Adopted** — Files to Edit |
+| R18 | **`MIN_SUITES=10`** means every Guard 3 arm needs ≥10 staged suites or the floor masks the row | Kieran (P1) | **Adopted** — Files to Edit note |
+| R19 | **AC16 category error** — `REQUIRED_RUNNERS` holds runners, not `.test.sh` | Kieran, simplicity (P2) | **Fixed** |
+| R20 | **AC9 inference does not follow** — an unchanged row proves the classifier, not that no wrapper emits 3 | Kieran (P2) | **Fixed** — grep added |
+| R21 | **AC10 hand-rolled a second derivation** of the gate it claims | Kieran (P2) | **Fixed** — asserts the linter's own report |
+| R22 | **AC19 measured vacuous** — no stale ADR-175 taxonomy citation exists in code | simplicity (P2) | **Cut**, with the probe recorded |
+| R23 | **Mutation rows that "revert the feature"** (G2 M5, G3 M3) restate the RED-first step | DHH, simplicity | **Noted, retained** — cheap and they pin the E2E arm against silent removal. Lint floor is 3/guard; these are above it |
+| R24 | **"Must not stop at the first" rows are vacuous under a set-difference impl** | DHH, simplicity | **Merged** — G1 M2 now plants **two** orphans and asserts both, which is strictly stronger and stays meaningful |
+| R25 | **Per-surface floors over-built as ratcheting counts** | DHH, simplicity | **Adopted as `< 1` zero-checks** — maintenance-free, catches one surface dying while the total stays plausible |
+| R26 | **`<= 192` guard is documented non-load-bearing**; don't copy it into two new files | simplicity (P1) | **Adopted** — two-guard classifier |
+| R27 | **A6 trigger stated in terms nothing checks**; needs a real-signal canary | advisor | **Adopted** — G2/G3 M1 use `kill -KILL $$`, never `exit 137`; AC23 + the tripwire subsection |
+| R28 | **Multi-kill rc is nondeterministic** as specified | advisor | **Adopted** — lexicographically-first killed key; AC24 |
+| R29 | **Stale `test-all.sh` comments** (`:917`, `:957`, `:1004`, `:1014`, `:1033`) describe the pre-widening glob set | Kieran (P2) | **Adopted** — Files to Edit |
+| R30 | **AP-021 diagnostic-honesty principle** engaged, hook-enforced by `lint-diagnosis-claims.sh`; plan cited neither | architecture (P2) | **Noted** — the observed-rc-only rule (R8) is the substantive compliance; /work to confirm the hook passes |
+| R31 | `git ls-files '*.test.sh'` does not reach `test-<name>.sh`-convention suites (e.g. `.github/scripts/test/test-*.sh`) | simplicity (P2) | **Scope note** — Guard 1's Property is scoped to the `*.test.sh` convention; the `test-*.sh` family is governed by `run-all.sh`'s own `MIN_SUITES` floor. Recorded so the gap is deliberate, not assumed away |
 
 ## Domain Review
 
