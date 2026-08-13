@@ -283,25 +283,41 @@ fi
 # deleting or in-loop-moving the call reds the suite — not just the workflow.
 # ===================================================================================
 APPLY_WF="$REPO_ROOT/.github/workflows/apply-deploy-pipeline-fix.yml"
+# #7104 PR-B: the ~240-line gate body moved verbatim out of the workflow into
+# infra-config-verify.sh (plan R22.2, ADR-150 shape). The pin therefore has TWO
+# clauses now, and BOTH are load-bearing: clause (1) proves production still
+# reaches this code at all, clause (2) proves the code it reaches still wires
+# count_invariant in-loop and adjudicate terminally. Asserting only (2) would
+# certify a script no step invokes — the exact vacuity F1 exists to prevent,
+# one indirection deeper.
+VERIFY_SH="$REPO_ROOT/apps/web-platform/infra/infra-config-verify.sh"
 if [[ ! -f "$APPLY_WF" ]]; then
   fail "apply-deploy-pipeline-fix.yml not found — cannot verify the gate is wired into prod"
+elif [[ ! -f "$VERIFY_SH" ]]; then
+  fail "infra-config-verify.sh not found — the extracted gate body is missing, so production runs nothing"
 else
-  # (a) the terminal adjudication is called at all
-  adj_line=$(grep -nE '(^|[^_[:alnum:]])adjudicate_infra_config[[:space:]]+/tmp/' "$APPLY_WF" | head -1 | cut -d: -f1)
-  # (b) the in-loop fast-path uses count_invariant (NOT adjudicate)
-  ci_line=$(grep -nE 'infra_config_count_invariant[[:space:]]+/tmp/' "$APPLY_WF" | head -1 | cut -d: -f1)
-  if [[ -z "$adj_line" ]]; then
-    fail "apply-deploy-pipeline-fix.yml does NOT call adjudicate_infra_config — the #6594 content assert is DEAD in production"
+  # (1) production INVOKES the extracted body. Anchored on the `run:` command
+  #     shape, not a bare basename: a bare grep would match a comment naming
+  #     the file (cq-assert-anchor-not-bare-token).
+  invoke_line=$(grep -nE '^[[:space:]]*run:[[:space:]]+bash[[:space:]]+.*infra-config-verify\.sh' "$APPLY_WF" | head -1 | cut -d: -f1)
+  # (2) the terminal adjudication is called at all, inside the extracted body
+  adj_line=$(grep -nE '(^|[^_[:alnum:]])adjudicate_infra_config[[:space:]]+/tmp/' "$VERIFY_SH" | head -1 | cut -d: -f1)
+  # (3) the in-loop fast-path uses count_invariant (NOT adjudicate)
+  ci_line=$(grep -nE 'infra_config_count_invariant[[:space:]]+/tmp/' "$VERIFY_SH" | head -1 | cut -d: -f1)
+  if [[ -z "$invoke_line" ]]; then
+    fail "apply-deploy-pipeline-fix.yml does NOT invoke infra-config-verify.sh — the extracted gate is DEAD in production"
+  elif [[ -z "$adj_line" ]]; then
+    fail "infra-config-verify.sh does NOT call adjudicate_infra_config — the #6594 content assert is DEAD in production"
   elif [[ -z "$ci_line" ]]; then
-    fail "apply-deploy-pipeline-fix.yml does NOT use infra_config_count_invariant as the poll-loop break"
+    fail "infra-config-verify.sh does NOT use infra_config_count_invariant as the poll-loop break"
   else
-    # (c) the count_invariant call is inside a loop that CLOSES before the adjudicate call:
+    # (4) the count_invariant call is inside a loop that CLOSES before the adjudicate call:
     #     require a `done` line strictly between them → adjudicate is terminal, outside the loop.
-    between_done=$(awk -v a="$ci_line" -v b="$adj_line" 'NR>a && NR<b && $1=="done"{print NR; exit}' "$APPLY_WF")
+    between_done=$(awk -v a="$ci_line" -v b="$adj_line" 'NR>a && NR<b && $1=="done"{print NR; exit}' "$VERIFY_SH")
     if [[ "$ci_line" -lt "$adj_line" && -n "$between_done" ]]; then
-      pass "gate is wired into prod: count_invariant in-loop (L$ci_line), adjudicate_infra_config terminal after the loop's done (L$between_done < L$adj_line) — content assert is NOT any-of-3 (F1)"
+      pass "gate is wired into prod: workflow invokes infra-config-verify.sh (L$invoke_line); inside it count_invariant is in-loop (L$ci_line) and adjudicate_infra_config is terminal after the loop's done (L$between_done < L$adj_line) — content assert is NOT any-of-3 (F1)"
     else
-      fail "adjudicate_infra_config is not terminal: count L$ci_line, adjudicate L$adj_line, loop-done-between=${between_done:-none}. A content assert inside the retry loop is the #6594 coin flip."
+      fail "adjudicate_infra_config is not terminal in infra-config-verify.sh: count L$ci_line, adjudicate L$adj_line, loop-done-between=${between_done:-none}. A content assert inside the retry loop is the #6594 coin flip."
     fi
   fi
 fi
@@ -1107,28 +1123,42 @@ fi
 # suite at 100 passed / 0 failed — while pinning EVERY run onto the no-push arm, permanently
 # disabling #7220's freshness pin. That is the precise blind spot this PR exists not to restore,
 # and it was deletable at full green.
-APPLY_WF="$REPO_ROOT/.github/workflows/apply-deploy-pipeline-fix.yml"
-if [[ -r "$APPLY_WF" ]]; then
+# PR-B: the two sensors now sit on OPPOSITE sides of the extraction boundary, and
+# conflating them is what makes this pin easy to get wrong. `infra_config_dpf_replaced`
+# is read in the `Terraform plan` step, which stays inline in the workflow;
+# `infra_config_frame_stability` ran in the ~240-line gate body, which moved to
+# infra-config-verify.sh. So each clause is pinned against its REAL producer.
+#
+# The ordering property is unchanged in substance — the sensor is still read before
+# the verdict that branches on it — but it is now a STEP ordering rather than a
+# line ordering within one body: the step that reads the sensor must precede the
+# step that invokes the verification body. Comparing line numbers across two files
+# would be meaningless.
+VERIFY_SH="$REPO_ROOT/apps/web-platform/infra/infra-config-verify.sh"
+if [[ ! -r "$APPLY_WF" ]]; then
+  fail "#7104 call-site: cannot read $APPLY_WF — the production pin cannot be evaluated"
+elif [[ ! -r "$VERIFY_SH" ]]; then
+  fail "#7104 call-site: cannot read $VERIFY_SH — the production pin cannot be evaluated"
+else
   if grep -qE '\$\(infra_config_dpf_replaced[[:space:]]' "$APPLY_WF"; then
     pass "#7104 call-site: production INVOKES infra_config_dpf_replaced (not a hardcoded verdict)"
   else
     fail "#7104 call-site: the workflow does not call infra_config_dpf_replaced — the sensor's tests certify a function production does not run"
   fi
-  if grep -qE '\$\(infra_config_frame_stability[[:space:]]' "$APPLY_WF"; then
+  if grep -qE '\$\(infra_config_frame_stability[[:space:]]' "$VERIFY_SH"; then
     pass "#7104 call-site: production INVOKES infra_config_frame_stability"
   else
-    fail "#7104 call-site: the workflow does not call infra_config_frame_stability"
+    fail "#7104 call-site: infra-config-verify.sh does not call infra_config_frame_stability"
   fi
-  # Ordering: the sensor must be read before the verdict that branches on it.
+  # Ordering across the boundary: the sensor read must precede the step that runs
+  # the verification body.
   DPF_LINE=$(grep -nE '\$\(infra_config_dpf_replaced[[:space:]]' "$APPLY_WF" | head -1 | cut -d: -f1)
-  FS_LINE=$(grep -nE '\$\(infra_config_frame_stability[[:space:]]' "$APPLY_WF" | head -1 | cut -d: -f1)
-  if [[ -n "$DPF_LINE" && -n "$FS_LINE" && "$DPF_LINE" -lt "$FS_LINE" ]]; then
-    pass "#7104 call-site: the sensor is read (L$DPF_LINE) before the verdict that branches on it (L$FS_LINE)"
+  INVOKE_LINE=$(grep -nE '^[[:space:]]*run:[[:space:]]+bash[[:space:]]+.*infra-config-verify\.sh' "$APPLY_WF" | head -1 | cut -d: -f1)
+  if [[ -n "$DPF_LINE" && -n "$INVOKE_LINE" && "$DPF_LINE" -lt "$INVOKE_LINE" ]]; then
+    pass "#7104 call-site: the sensor is read (L$DPF_LINE) before the step that runs the verification body (L$INVOKE_LINE)"
   else
-    fail "#7104 call-site: sensor/verdict ordering not established (dpf=$DPF_LINE stability=$FS_LINE)"
+    fail "#7104 call-site: sensor/verdict ordering not established (dpf=$DPF_LINE invoke=$INVOKE_LINE)"
   fi
-else
-  fail "#7104 call-site: cannot read $APPLY_WF — the production pin cannot be evaluated"
 fi
 
 if declare -F infra_config_frame_stability >/dev/null; then

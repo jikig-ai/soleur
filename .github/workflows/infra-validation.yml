@@ -958,6 +958,9 @@ jobs:
       - name: Run infra-config apply gate adjudicator guard (#6594 content assert vs stale-same-count)
         run: bash apps/web-platform/infra/infra-config-gate.test.sh
 
+      - name: "Run infra-config verification-body guard (#7104 extracted body does not actuate)"
+        run: bash apps/web-platform/infra/infra-config-verify.test.sh
+
       - name: Run ci-deploy-wrapper.sh tests
         run: bash apps/web-platform/infra/ci-deploy-wrapper.test.sh
 
