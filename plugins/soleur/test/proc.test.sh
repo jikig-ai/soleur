@@ -680,10 +680,20 @@ mutate M12 "LC_ALL=C tr -c '[:print:]' '?'" "tr '\\n\\t\\r' '???'" \
 # ---------------------------------------------------------------------------
 # AC5 — auto-discovery, not hand-registration.
 # ---------------------------------------------------------------------------
-if git -C "$REPO_ROOT" diff --stat origin/main...HEAD -- scripts/test-all.sh 2>/dev/null | grep -q .; then
-  fail "AC5: scripts/test-all.sh was modified — this suite must be auto-globbed, not hand-registered"
+# Asserts THIS SUITE is not hand-registered. The first form asserted that
+# `scripts/test-all.sh` was UNMODIFIED on the branch at all —
+# `git diff origin/main...HEAD -- scripts/test-all.sh | grep -q .` — which is a much
+# broader claim than the property, and false for a legitimate reason: only
+# `plugins/soleur/test/*.test.sh` is auto-globbed, so every suite living under
+# `scripts/` MUST be hand-registered there. That form red-failed any branch adding one
+# — including #7490's two probe/canary suites, and it would equally have failed #7493's
+# own two, which are registered a few lines apart in that same file. Narrowed to grep for
+# a registration OF THIS FILE, which is what the surrounding comment (and the double-run
+# hazard it names) actually describes.
+if grep -qE '(run_suite[^#]*|["'"'"' ])plugins/soleur/test/proc\.test\.sh' "$REPO_ROOT/scripts/test-all.sh" 2>/dev/null; then
+  fail "AC5: proc.test.sh is hand-registered in scripts/test-all.sh — it is already auto-globbed, so a second registration double-runs it"
 else
-  pass "AC5: scripts/test-all.sh untouched (suite is auto-globbed)"
+  pass "AC5: proc.test.sh is not hand-registered (auto-globbed exactly once)"
 fi
 
 # ---------------------------------------------------------------------------
