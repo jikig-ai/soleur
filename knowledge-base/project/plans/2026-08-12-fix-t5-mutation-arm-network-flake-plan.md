@@ -339,7 +339,7 @@ would otherwise pass vacuously.
 
 **Stated residual, not papered over.** *Raising* the ceiling constant is not mechanically
 detectable — any source-level grep asserting its value would be text-matching rather than behaviour,
-the antipattern this contract rejects, and the in-file `"four plain docker run"` comment (stale since
+the antipattern this contract rejects, and the in-file `"four plain docker run"` comment (which was stale since
 the real count reached six) is measured proof that hand-maintained numbers here drift silently. The
 mitigation is procedural and declared: the ceiling's value and derivation live in the floor's
 itemisation comment, where the file's culture already forces review of any count change. Plan v1's
@@ -538,7 +538,7 @@ the dependencies `_skip()` already gates — and no credentials, so no `credenti
 7. **AMENDED at review (#7291).** A counted skip reporter exists alongside `pass()`/`fail()`,
    `_skip()` is not renamed, and the name collision is avoided. The counter is named
    **`SKIPPED_ASSERTIONS`**, NOT the plan's original `SKIPPED`: `git-lock-chardevice-sweep.test.sh`'s
-   `SKIPPED` counts **arms** (one increment for an arm carrying three assertions) and that suite has
+   `SKIPPED` counts **arms** (one increment for an arm carrying six assertions) and that suite has
    no assertion floor, so reusing the identifier would import no compatibility while putting two
    different denominations behind one name in one directory. The `Skipped: N` summary spelling still
    matches the sibling; only the variable diverges, following `infra-config-apply.test.sh`.
@@ -591,7 +591,7 @@ Every scenario is *mutation → guard reddens*, not *command → terminal output
 | 7 | Second `arm_skip` call site added without raising the ceiling; both forced | Suite non-zero at the ceiling |
 | 8 | `set -e` restored so the mutation does not land | FAIL at the existing pre-branch |
 | 9 | Marker present on the source heredoc but stripped from the mounted artifact | Structural guard hard-exits |
-| 10 | Nothing mutated (control) | `45 passed, 0 failed, Skipped: 0`, path printed, exit 0 |
+| 10 | Nothing mutated (control) | `45 passed, 0 failed, Skipped: 0`, exit 0 (the suite-path suffix was cut at review — see AC11) |
 
 ## Risks & Mitigations
 
@@ -643,7 +643,7 @@ applying.
 - **R7 — four hard-failure states routed.** A fixture that cannot bind, a missing/empty capture, a
   vanished marker, and a mutation that did not land were each named in v1's prose and never routed.
 - **R8 — the ceiling's un-raisable half removed**; residual stated, with the in-file stale
-  `"four plain docker run"` comment cited as measured proof the drift risk is real.
+  `"four plain docker run"` comment cited as measured proof the drift risk is real (and corrected in this PR).
 - **R9 — bounds reduced from three to one.** The "at least one container arm executed" floor was not
   computable as specified — every arm `rm -rf "$TMP/out"` destroys the evidence it would read.
 - **R10 — the pairwise primary/mutant gate was proposed and rejected with a reason.** Gating SKIP on

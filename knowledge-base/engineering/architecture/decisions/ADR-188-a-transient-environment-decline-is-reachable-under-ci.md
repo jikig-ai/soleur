@@ -45,12 +45,16 @@ the network). Both produced the same verdict, and only one of them is about this
 The arm gains a third verdict, `SKIP`, reachable **only** on positive corroboration that the driver
 never executed, and bounded by a counted ceiling. Four properties are load-bearing.
 
-**1. The skip corroborates; it never infers from absence.** The driver's `drive.sh` emits an
+**1. The skip turns on the absence of a DISTINCT, EARLIER marker — not on the absence of the success marker.** The driver's `drive.sh` emits an
 execution marker immediately above its `. /work/doppler-dl.sh` line and **below** the capture-server
 guard. The verdict reads that marker, not the exit code alone. Absence of `CHMOD_RAN` plus presence
 of the marker is a genuine vacuity and stays a `FAIL`; absence of both is the environment decline.
-Inferring the decline from a non-zero docker rc alone would have re-created the original defect one
-level up — a missing signal read as a verdict about the SUT.
+This is still an absence test — the code reads `! grep` — and calling it positive corroboration
+would be false. What makes it sound is WHICH absence: a distinct marker emitted earlier in the
+driver, localising the failure upstream of the download block rather than merely observing that
+the success marker did not appear. Inferring the decline from a non-zero docker rc alone would
+have re-created the original defect one level up — a missing signal read as a verdict about the
+SUT.
 
 **2. A missing measurement ALONGSIDE A ZERO EXIT is a harness bug, never an environment skip.** A
 capture-integrity precondition runs *ahead* of the verdict branch: an empty `$TMP/out/stdout` **with
@@ -177,9 +181,9 @@ training is the actual cost, and it is the cost ADR-180 warns about from the oth
   detectable by any assertion that would not be text-matching the source, which is the antipattern
   this suite rejects. The mitigation is procedural and declared: the ceiling's value and derivation
   live inside the floor's itemisation comment, where this file's culture already forces review of
-  any count change. This is stated rather than papered over, because the in-file `"four plain docker
-  run"` comment — stale since the real count reached six — is measured proof that hand-maintained
-  numbers here drift silently.
+  any count change. This is stated rather than papered over: the file's `"four plain docker run"` comment had been
+  stale since the count reached six, which is measured proof that hand-maintained numbers here
+  drift silently. That comment is corrected in this PR rather than left standing as a live example.
 
 ## Alternatives Considered
 
