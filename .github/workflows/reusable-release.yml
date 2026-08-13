@@ -1282,7 +1282,10 @@ jobs:
                 # the same class of lie as naming an unmeasured cause (ADR-166). The error
                 # signature mirrors scripts/betterstack-assert-absence.sh's detection rather
                 # than inventing a second one.
-                RESTART_SUMMARY="could not read SOLEUR_ZOT_DISK from Better Stack (the query failed, or returned an error payload) — this is a FAILED READ, not a measurement, so nothing follows about the registry host either way."
+                # The "could not query Better Stack" phrasing is load-bearing, not stylistic:
+                # reusable-release-zot-mirror-retry.test.sh T20 asserts it as the fail-soft
+                # contract for an instrument that cannot report. Keep the literal.
+                RESTART_SUMMARY="could not query Better Stack for SOLEUR_ZOT_DISK (the query failed, or answered with an error payload) — this is a FAILED READ, not a measurement, so nothing follows about the registry host either way."
               fi
               [[ -n "$bs_log" ]] && rm -f "$bs_log"
             else
