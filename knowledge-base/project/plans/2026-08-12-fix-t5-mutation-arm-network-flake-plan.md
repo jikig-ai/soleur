@@ -25,7 +25,8 @@ a precedent-diff sweep.
    after the simplification and correctness panels both fired on it; the retry it contained was
    replaced by a deferred image pre-bake, which measurement showed to be the better remedy.
 2. **A prior-art miss corrected.** ADR-177, ADR-181 and AP-021/ADR-166 already govern multi-valued
-   test verdicts. The ADR is reframed from standalone to `amends: ADR-181` with one argued reversal.
+   test verdicts. The ADR is reframed from standalone to `amends: ADR-181`. (At review the "reversal" framing was
+   corrected to a second carve-out, and its axis from computability to contractual ownership.)
 3. **Three false claims of my own found and fixed** — sibling-suite count, skip-counter precedent,
    and ADR coverage. All three are recorded rather than quietly corrected.
 4. **Four hard-failure states routed** that v1 named in prose and never gave a verdict.
@@ -328,7 +329,7 @@ would otherwise pass vacuously.
 | # | Mutation | Guard must |
 |---|---|---|
 | 1 | Environment healthy; neuter the sourced block so the driver runs and returns before chmod | **FAIL**, not SKIP. P2 — the SKIP branch cannot swallow a genuine vacuity. |
-| 2 | Force container setup to fail with a **bogus package name** (not `--network none`, which would also break the download and conflate two changes) | **SKIP**; `SKIPPED` increments to exactly 1; floor still met. P1. |
+| 2 | Force container setup to fail with a **bogus package name** (not `--network none`, which would also break the download and conflate two changes) | **SKIP**; `SKIPPED_ASSERTIONS` increments to exactly 1; floor still met. P1. |
 | 3 | Delete the execution-marker line, environment healthy | **FAIL.** The marker's absence must not read as non-execution when the run in fact succeeded. Without this row the marker could vanish and every later run would SKIP. |
 | 4 | Pre-bind :8099 so the driver exits at the `FIXTURE:` guard | **FAIL**, never SKIP. P6. |
 | 5 | Truncate/remove `$TMP/out/stdout` before the verdict evaluates | **FAIL.** A missing measurement is a harness bug, not an environment skip — this is the #7291 defect one level up, and the row that stops the fix relocating the bug. |
@@ -368,7 +369,8 @@ defect appearing inside the artifact invoking ADR-180.
 
 ### Phase 2 — The counted verdict, and an honest floor
 
-1. Add a `SKIPPED` counter and an `arm_skip()` reporter alongside `pass()`/`fail()`, following
+1. Add a `SKIPPED_ASSERTIONS` counter (renamed from the plan's original `SKIPPED` at review — see
+   AC7) and an `arm_skip()` reporter alongside `pass()`/`fail()`, following
    `git-lock-chardevice-sweep.test.sh`'s existing idiom (uppercase counter, `Skipped: N` in the
    summary) and ADR-181's counted-verdict vocabulary rather than minting a third taxonomy.
 2. Add the capture-integrity precondition **before** the verdict branch: a missing or empty
@@ -387,8 +389,9 @@ defect appearing inside the artifact invoking ADR-180.
    file's existing itemisation style. Nothing else in Phases 1-2 is counted: the marker guard and the
    capture-integrity precondition are structural, and the verdict branch re-shapes the arm's single
    existing assertion.
-7. Extend the summary line to report `Skipped: N` and the **resolved suite path** — the 44-vs-44
-   floor collision with `git-data-emit.test.sh`.
+7. Extend the summary line to report `Skipped: N`. **The resolved-suite-path half was CUT at
+   review (AC11)** — each summary line already opens with its own suite name, so the claimed
+   44-vs-44 ambiguity never existed, and after this PR the floors differ (44 vs 45) as well.
 8. **Amend the B5 doctrine comment in the same edit.** The `_skip()` banner asserts a two-valued
    world and becomes self-contradictory the moment `arm_skip()` lands. This file's culture treats a
    comment that no longer describes the code as a defect; the amended block states the three
@@ -469,7 +472,7 @@ requires:
 
 ```yaml
 liveness_signal:
-  what: the suite's summary line, extended with Skipped:N and the resolved suite path
+  what: the suite's summary line, extended with Skipped:N plus a breakdown NOTE on a degraded run
   cadence: every PR and every push to main whose diff matches apps/*/infra/**
   alert_target: the deploy-script-tests job in .github/workflows/infra-validation.yml
   configured_in: .github/workflows/infra-validation.yml (the step invoking the suite)
@@ -500,7 +503,7 @@ logs:
   retention: 90 days (repository default)
 discoverability_test:
   command: bash apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh
-  expected_output: "git-data-runcmd-rehearsal: 45 passed, 0 failed, Skipped: 0 (45 assertions) [apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh]"
+  expected_output: "git-data-runcmd-rehearsal: 45 passed, 0 failed, Skipped: 0 (45 assertions)"
 ```
 
 First token is `bash`, on the preflight Check 10 allowlist. Requires docker, terraform and python3 —
@@ -532,16 +535,25 @@ the dependencies `_skip()` already gates — and no credentials, so no `credenti
    and R1. Guard row 8.
 6. All eight Guard rows executed against the real suite, each producing the required verdict,
    recorded in the PR body with observed output.
-7. `SKIPPED` counter and `arm_skip()` follow the `git-lock-chardevice-sweep.test.sh` idiom;
-   `_skip()` is not renamed and the name collision is avoided.
+7. **AMENDED at review (#7291).** A counted skip reporter exists alongside `pass()`/`fail()`,
+   `_skip()` is not renamed, and the name collision is avoided. The counter is named
+   **`SKIPPED_ASSERTIONS`**, NOT the plan's original `SKIPPED`: `git-lock-chardevice-sweep.test.sh`'s
+   `SKIPPED` counts **arms** (one increment for an arm carrying three assertions) and that suite has
+   no assertion floor, so reusing the identifier would import no compatibility while putting two
+   different denominations behind one name in one directory. The `Skipped: N` summary spelling still
+   matches the sibling; only the variable diverges, following `infra-config-apply.test.sh`.
 8. The ceiling is a counted assertion with its derivation in a comment; `total` is
    `passes + fails + SKIPPED`.
 9. The floor is **45** with a `RAISED 44 -> 45` itemisation stanza in the file's existing style.
 10. The B5 doctrine comment block is amended in the same commit and cites the ADR.
-11. **Diff property (deterministic).** The summary line carries passes, fails, `Skipped:` and the
-    resolved path `apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh` — asserted against the
-    emitted format, not a particular count, because `git-data-emit.test.sh` carries the identical
-    floor and a count alone does not identify the suite.
+11. **AMENDED at review (#7291) — the suite-path clause is WITHDRAWN, its premise was false.** The
+    summary line carries passes, fails and `Skipped: N`, asserted against the emitted format rather
+    than a particular count. The original criterion also demanded a derived suite path, justified by
+    "`git-data-emit.test.sh` carries the identical floor and a count alone does not identify the
+    suite". Both halves are false: each summary line already opens with its own suite name
+    (`git-data-emit:` vs `git-data-runcmd-rehearsal:`), so the count was never the identifier; and
+    after this PR the floors are 44 vs 45, so they are not identical either. The derived path was a
+    `git rev-parse` subshell buying no information, and was cut.
 12. **Environment smoke (labelled separately, ambient by nature).** A healthy local run reports
     `45 passed, 0 failed, Skipped: 0`. Recorded as an environment observation, **not** a diff
     property — a concurrent sibling container can flip the skip count without a line of the diff

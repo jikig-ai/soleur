@@ -52,51 +52,78 @@ of the marker is a genuine vacuity and stays a `FAIL`; absence of both is the en
 Inferring the decline from a non-zero docker rc alone would have re-created the original defect one
 level up — a missing signal read as a verdict about the SUT.
 
-**2. A missing measurement is a harness bug, never an environment skip.** A capture-integrity
-precondition runs *ahead* of the verdict branch: a missing or empty `$TMP/out/stdout` alongside a
-zero exit code hard-fails. This is the row that stops the fix relocating the bug it closes. The
-guard's own mutation matrix drives it (row 5).
+**2. A missing measurement ALONGSIDE A ZERO EXIT is a harness bug, never an environment skip.** A
+capture-integrity precondition runs *ahead* of the verdict branch: an empty `$TMP/out/stdout` **with
+`rc == 0`** hard-fails. This is the row that stops the fix relocating the bug it closes (matrix
+row 5).
+
+The `rc == 0` conjunct is load-bearing and the property is deliberately **not** stated
+unconditionally. A degraded container legitimately exits non-zero *and* produces an empty capture —
+measured, matrix row 2 (the only real skip in the matrix) recorded `docker rc=100` with an empty
+tail. Widening this precondition to fire on an empty capture regardless of rc would convert that
+skip back into the false FAIL this ADR exists to remove. "The container said it succeeded and
+produced nothing" is a harness bug; "the container said it failed and produced nothing" is the
+environment.
 
 **3. The branch order is load-bearing and commented.** `CHMOD_RAN` → `FIXTURE:` → marker → else
 fail. Testing the marker before `CHMOD_RAN` would skip a slow-but-successful run; testing it before
 the `FIXTURE:` literal would absorb a deterministic fixture defect (the capture server failing to
 bind :8099) into the environment bucket, where nothing would ever act on it.
 
-**4. The skip is counted, denominated in assertion cost, and capped.** `SKIPPED` increments by the
-number of assertions the skipped arm would have made, the floor compares `passes + fails + SKIPPED`,
-and a counted ceiling asserts `SKIPPED <= 1` — one skip-eligible arm exists. This follows
+**4. The skip is counted, denominated in assertion cost, and capped.** `SKIPPED_ASSERTIONS` increments by the
+number of assertions the skipped arm would have made, the floor compares `passes + fails + SKIPPED_ASSERTIONS`,
+and a counted ceiling asserts `SKIPPED_ASSERTIONS <= 1` — one skip-eligible arm exists. This follows
 `infra-config-apply.test.sh`, which already ships the counter, the assertion-cost denomination, the
 sum-floor and a degraded-run `NOTE`. Only the ceiling is new here. Denominating in assertion cost
 rather than in arms resolves the ceiling's unit ambiguity outright and is forward-compatible with
 the deferred `run_case()` / `_s1_run()` extension, where one skipped case suppresses several
 follow-on assertions at once.
 
-## The reversal this ADR argues
+## The carve-out this ADR adds, and the axis it turns on
 
 ADR-181 property 4 holds that **"a decline is UNREACHABLE under CI, not merely detected"**, and
-makes it so: `_diff_touches` returns true unconditionally when `CI` is set. That reasoning is sound
-for the decline ADR-181 governs and does not transfer to this one.
+makes it so: `_diff_touches` returns true unconditionally when `CI` is set.
 
-The distinction is **what the decline is a property of**:
+**This is a second carve-out on an axis ADR-181 already opened, not a reversal.** ADR-181's own
+Scope paragraph already exempts one decline from CI-forcing — *"The infra runner's own pre-existing
+decline is deliberately **not** forced under CI"* — justified on coverage-ownership grounds. So a
+CI-reachable decline is not a new category; what this ADR owes is the rule for *when* one is
+legitimate.
 
-| | ADR-181's decline | This ADR's decline |
+**The axis is contractual ownership, not computability.** An earlier draft of this ADR argued that
+a decline may stay CI-reachable when its input is not computable at dispatch (the diff is knowable,
+the apt archive's mood is not). That rule is refuted by the precedent this ADR leans on for its
+denomination. `infra-config-apply.test.sh` declines on two inputs that are both **fully computable**,
+and treats them **oppositely**:
+
+| Decline | Computable? | Under CI | Why |
+|---|---|---|---|
+| pinned blob absent (shallow clone) | yes | **hard FAIL** — `elif [[ -n "${CI:-}" ]]` | CI *is* contracted to `fetch-depth: 0`; its own message says so |
+| not root | yes | **SKIP (loud)**, ungated | CI is *not* contracted to run as root |
+
+Same suite, same computability, opposite verdicts. So the discriminator is: **who owns the missing
+precondition?**
+
+| Decline | Owner of the missing precondition | Right verdict |
 |---|---|---|
-| Property of | the **diff** | the **network at that instant** |
-| Computable in advance | yes, always | no |
-| Forcing it off under CI | correct — the answer is known, so run everything | impossible — there is no flag that makes a download succeed |
+| relevance (ADR-181) | the harness — it *chose* not to run | force off under CI |
+| docker / terraform / python3 absent (`_skip()`) | the runner, **contracted** to supply them | hard fail under CI |
+| `:8099` never bound (the `FIXTURE:` test) | this harness | fail, always |
+| the apt archive at that instant | **nobody** | counted skip |
 
-A *relevance* decline is deterministic: the diff is fully known before the suite runs, so declining
-is a choice, and under CI the right choice is always "run it". A *container-setup* decline is
-transient: nothing computable at dispatch time determines whether the apt archive answers. Setting
-`CI=true` cannot make it unreachable — it can only convert it back into the false FAIL this ADR
-exists to remove. So ADR-181 property 4 is **narrowed, not overturned**: it continues to bind every
-decline whose input is computable, and does not bind a decline whose input is the state of a remote
-network.
+Computability co-varies with ownership in the two cases the earlier draft examined, and comes apart
+in the third — which is why it read as the axis and was not. Docker's absence hard-fails because CI
+is contracted to provide docker, not because it is computable.
 
-This is also why the suite's existing `_skip()` is left untouched and un-renamed. It governs a
-*dependency-absence* decline (docker, terraform, python3) which IS computable at dispatch, and
-ADR-181's logic applies to it in full — under `CI=true` it correctly hard-fails, because a runner
-missing docker is a provisioning defect, not weather.
+This is also why the suite's existing `_skip()` is left untouched and un-renamed: a runner without
+docker is a provisioning defect against a contract, so ADR-181's logic applies to it in full.
+
+**Category note.** ADR-181's decline means *"we chose not to run"*; this one means *"we ran and could
+not conclude"*. Those are different verdict classes, and naming this one `INCONCLUSIVE` rather than
+`SKIP` would have made the distinction self-evident and this section largely unnecessary. That rename
+is deferred rather than dismissed — it touches the summary spelling shared with
+`git-lock-chardevice-sweep.test.sh` and every recorded mutation-matrix verdict — and is tracked with
+the other deferred items.
 
 ## Reconciliation with AP-021 / ADR-166
 
@@ -123,16 +150,29 @@ training is the actual cost, and it is the cost ADR-180 warns about from the oth
 
 ## Consequences
 
-- The required check stops flaking on unrelated PRs. That is the whole user-visible effect.
+- The required check stops flaking **in the one measured direction** — the T5 mutation arm. That is
+  the whole user-visible effect, and it is deliberately narrower than "the suite stops flaking":
+  `run_case()` (2 callers) and `_s1_run()` (2 callers) carry the same exposure and are explicitly
+  deferred, so one of ~6 container invocations gains the verdict.
 - The suite's floor moves 44 → 45 for the one new counted assertion (the ceiling).
-- A degraded run is now legible rather than silent: the summary line reports `Skipped: N` alongside
-  the resolved suite path.
-- **Accepted residual — no persistence bound.** The three mechanical conditions bound a skip *per
-  run*; nothing bounds it *across* runs. An arm that skips on 100% of runs forever satisfies all
-  three and reports green. ADR-181 paired its decline with a compensating un-gated run every six
-  hours; this ADR has no analogue and does not pretend to. The declared observation window is: if
-  the arm skips on more than 1 in 20 post-merge runs, the skip is masking a persistent defect and
-  the deferred pre-baked container image is owed immediately.
+- A degraded run is now legible rather than silent: the summary line reports `Skipped: N`, and a
+  degraded run additionally emits a breakdown NOTE.
+- **Accepted residual — no persistence bound, but a narrower hole than it first appears.** The three
+  mechanical conditions bound a skip *per run*; nothing bounds it *across* runs, and ADR-181 paired
+  its decline with a compensating un-gated run every six hours where this has no analogue.
+
+  One bound does exist and is recorded here rather than left implicit: the T5 **primary** arm runs
+  the identical container recipe through `run_case … want=1`. Under a genuinely degraded apt the
+  container exits 100 (or 125 on an image pull) and the primary arm **FAILS** the suite. So "skips
+  forever behind a green check" is not reachable by a *persistently* degraded environment — it
+  requires a condition that hits only the mutant container's window while leaving the primary's
+  intact. That is a much narrower hole than "nothing bounds it across runs", and it costs nothing.
+
+  The residual that survives: the skip's only carrier is `Skipped: N` plus a NOTE on the stdout of a
+  green required check — no greppable marker reaches an observability layer, and nothing counts
+  across runs. The declared observation window is therefore manual: if the arm skips on more than
+  1 in 20 post-merge runs, the skip is masking a persistent defect and the deferred pre-baked
+  container image is owed immediately.
 - **Accepted residual — the ceiling constant is not mechanically drift-proof.** Raising it is not
   detectable by any assertion that would not be text-matching the source, which is the antipattern
   this suite rejects. The mitigation is procedural and declared: the ceiling's value and derivation

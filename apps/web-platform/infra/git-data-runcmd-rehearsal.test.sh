@@ -32,14 +32,21 @@ pass() { passes=$((passes + 1)); }
 FAILURES=()
 fail() { fails=$((fails + 1)); FAILURES+=("$1"); echo "FAIL: $1" >&2; [ -n "${2:-}" ] && echo "      $2" >&2; }
 
-# SKIPPED is denominated in ASSERTION COST, not in arms: a declaring arm increments by the
-# number of assertions it would have made, so `passes + fails + SKIPPED` is invariant across
-# environments and the floor below can stay absolute. Precedent is infra-config-apply.test.sh,
-# which already ships the counter, this denomination, the sum-floor and the degraded-run NOTE;
-# the NAMING follows git-lock-chardevice-sweep.test.sh (uppercase counter, `Skipped: N` in the
-# summary) rather than minting a third vocabulary for the same idea. See ADR-188.
-SKIPPED=0
-arm_skip() { SKIPPED=$((SKIPPED + ${2:-1})); echo "SKIP (loud): $1" >&2; }
+# SKIPPED_ASSERTIONS is denominated in ASSERTION COST, not in arms: a declaring arm increments by
+# the number of assertions it would have made, so `passes + fails + SKIPPED_ASSERTIONS` is invariant
+# across environments and the floor below can stay absolute. Precedent — counter, denomination,
+# sum-floor and degraded-run NOTE — is infra-config-apply.test.sh. See ADR-188.
+#
+# NAMED FOR THE DENOMINATION, deliberately NOT `SKIPPED` (#7291 review). The sibling
+# git-lock-chardevice-sweep.test.sh spells its summary `Skipped: N` and this file matches that,
+# but its `SKIPPED` counts ARMS — one increment for an arm carrying three assertions — and that
+# suite has no assertion floor, so its counter is decorative. Reusing the identifier would import
+# no compatibility and would put two DIFFERENT denominations behind one name in one directory,
+# which is exactly the collision a shared name is supposed to prevent.
+SKIPPED_ASSERTIONS=0
+# The cost is declared at the CALL SITE, never defaulted: a default is a silent 1 for an arm whose
+# taken branch made three assertions, and the floor would then under-count by two.
+arm_skip() { SKIPPED_ASSERTIONS=$((SKIPPED_ASSERTIONS + $2)); echo "SKIP (loud): $1" >&2; }
 
 # B5: A SKIP IS NOT A PASS, AND UNDER CI IT IS NOT EVEN A SKIP — FOR A DECLINE WHOSE INPUT IS
 # COMPUTABLE. Every guard below exits 0 when a tool is missing, which is right on a laptop and
@@ -876,7 +883,7 @@ else
   # than close it — a missing measurement restated as a claim about the environment.
   if [ "$_t5m_rc" -eq 0 ] && [ ! -s "$TMP/out/stdout" ]; then
     fail "T5 MUTATION: docker exited 0 but the capture is missing or empty — harness defect, not an environment skip" \
-         "expected a non-empty $TMP/out/stdout"
+         "docker rc=${_t5m_rc}; expected a non-empty $TMP/out/stdout"
   else
     _t5m_tail="$(tail -5 "$TMP/out/stdout" 2>/dev/null)"
     # AP-021/ADR-166: the verdict is derived from MARKER ABSENCE, which is not itself a cause.
@@ -1921,14 +1928,14 @@ fi
 # live here, inside the floor's itemisation, where this file's culture already forces review of
 # any count change. The stale in-file "four plain docker run" comment — wrong since the real
 # count reached six — is measured proof that hand-maintained numbers here drift silently.
-if [ "$SKIPPED" -le 1 ]; then pass; else
-  fail "skip ceiling exceeded: ${SKIPPED} assertion(s) declared-skipped, ceiling is 1 (one skip-eligible arm)"; fi
+if [ "$SKIPPED_ASSERTIONS" -le 1 ]; then pass; else
+  fail "skip ceiling exceeded: ${SKIPPED_ASSERTIONS} assertion(s) declared-skipped, ceiling is 1 (one skip-eligible arm)"; fi
 
 # TOTAL INCLUDES DECLARED SKIPS. A loud skip that declares its assertion cost leaves the floor
 # satisfied; an arm that stops running WITHOUT declaring anything still reds. That is the
 # distinction `passes + fails` alone could not draw — it read a legitimate declared skip and a
 # silently vanished arm as the same number.
-total=$((passes + fails + SKIPPED))
+total=$((passes + fails + SKIPPED_ASSERTIONS))
 # Floor = the ACTUAL assertion count (B1: 1, B2: 1, D1: 2, T5: 4 + 1 mutation, T17: 2 + 1
 # mutation, S1: 3 + 4 mutation). THIS LIST IS THE FROZEN 19-ERA BASELINE, not a running total —
 # it sums to 19 and is what "19 pre-existing" in the #7204 stanza below is checked against, so
@@ -1941,7 +1948,7 @@ total=$((passes + fails + SKIPPED))
 #
 # RAISED 46 -> 47 WITH THE ARM THAT MADE IT NECESSARY (#7291), itemised (rebased onto #7501's
 # 44 -> 46; the increment is +1 regardless of the base):
-#   skip ceiling 1  SKIPPED <= 1, counted so that DELETING it reddens the suite via this very
+#   skip ceiling 1  SKIPPED_ASSERTIONS <= ceiling, counted so that DELETING it reddens the suite via this very
 #                   floor. Nothing else in #7291 is counted: the execution-marker guard on the
 #                   mounted driver is STRUCTURAL (hard exit), the capture-integrity check is a
 #                   precondition ahead of the branch, and the rewritten T5 mutation verdict
@@ -1996,10 +2003,9 @@ if [ "$total" -lt 47 ]; then
   echo "FAIL: ran only ${total} assertions (<47) — harness did not execute fully" >&2
   exit 1
 fi
-_suite_rel="$( (cd "$DIR" && git rev-parse --show-prefix 2>/dev/null) || true )$(basename "${BASH_SOURCE[0]}")"
-echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed, Skipped: ${SKIPPED} (${total} assertions) [${_suite_rel}]"
-if [ "$SKIPPED" -gt 0 ]; then
-  echo "  NOTE: ${SKIPPED} assertion(s) were declared-skipped by loud SKIP arms — this run is weaker than a full one."
+echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed, Skipped: ${SKIPPED_ASSERTIONS} (${total} assertions)"
+if [ "$SKIPPED_ASSERTIONS" -gt 0 ]; then
+  echo "  NOTE: ${SKIPPED_ASSERTIONS} assertion(s) were declared-skipped by loud SKIP arms — this run is weaker than a full one."
 fi
 # THE VERDICT IS AN `exit`, NOT A TRAILING TEST EXPRESSION -- a bare test as the final
 # statement makes the exit status a property of which line happens to be LAST, so a single
