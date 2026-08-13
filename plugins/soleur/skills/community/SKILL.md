@@ -83,11 +83,15 @@ Display community health metrics across all enabled platforms. Spawns the `commu
 List all platforms with their configuration status. Does NOT spawn an agent -- runs directly.
 
 1. Run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/community-router.sh" platforms`
-2. For disabled platforms, show setup instructions:
+2. For disabled platforms, **run** the platform's setup script for the operator — do not print
+   the command for them to paste. These are execution sites, not display strings: the anchor
+   below is loader-substituted for the AGENT, but `CLAUDE_PLUGIN_ROOT` is unset in the
+   operator's own shell, so a pasted `bash "${CLAUDE_PLUGIN_ROOT}/…"` resolves to `/skills/…`
+   and fails. Run it and relay what it asks for:
    - Discord: Run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/discord-setup.sh"` to configure
-   - X/Twitter: Run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/x-setup.sh" validate-credentials` to verify, or `x-setup.sh write-env` to save credentials
-   - Bluesky: Run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/bsky-setup.sh" write-env` to save credentials, or `bsky-setup.sh verify` to test
-   - LinkedIn: Run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/linkedin-setup.sh" generate-token` to set up credentials, or `linkedin-setup.sh verify` to test
+   - X/Twitter: Run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/x-setup.sh" validate-credentials` to verify, or run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/x-setup.sh" write-env` to save credentials
+   - Bluesky: Run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/bsky-setup.sh" write-env` to save credentials, or run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/bsky-setup.sh" verify` to test
+   - LinkedIn: Run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/linkedin-setup.sh" generate-token` to set up credentials, or run `bash "${CLAUDE_PLUGIN_ROOT}/skills/community/scripts/linkedin-setup.sh" verify` to test
 
 ### `engage`
 

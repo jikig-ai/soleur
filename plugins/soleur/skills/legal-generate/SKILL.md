@@ -107,7 +107,15 @@ below.
                           echo "legal-generate: cannot allocate a draft file — stopping before any draft text exists." >&2
                           exit 2; }
    trap 'rm -f "$DRAFT"' EXIT INT TERM HUP
-   # Write the generated draft into "$DRAFT" here, then let the gate below scan it.
+
+   # Write the generated draft into "$DRAFT" here — in THIS fence, before the gate below.
+   # Use a QUOTED heredoc delimiter (`<<'DRAFT_EOF'`): company-context answers can contain
+   # `$(…)`, backticks and `$VAR`, and an unquoted delimiter would EXECUTE the substitutions
+   # on the operator's machine and expand `$VAR` to empty — mutating the text the sentinel is
+   # about to scan, so a secret's shape can be destroyed by the shell instead of the redactor.
+   #   cat > "$DRAFT" <<'DRAFT_EOF'
+   #   <the generated draft, verbatim>
+   #   DRAFT_EOF
 
    [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
      && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
@@ -115,15 +123,23 @@ below.
           echo "legal-generate: cannot verify the Soleur plugin installation — stopping before any draft is written." >&2
           echo "  Resolved plugin root: [${CLAUDE_PLUGIN_ROOT}]" >&2
           echo "  If that is EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session — re-running here resolves the same empty root." >&2
-          echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur', then reinstall if that does not clear it." >&2
+          echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur', then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
           echo "  Do NOT hand-edit and publish this draft — the redaction scanner is what makes it safe to share." >&2
           exit 2; }
    SENTINEL="${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-sentinel.sh"
    [[ -r "$SENTINEL" ]] || { echo "SOLEUR_LEGAL_GENERATE_HALT reason=sentinel-unreadable sentinel=[$SENTINEL]"
           echo "legal-generate: the redaction sentinel is missing from an otherwise valid Soleur install — stopping." >&2
           echo "  Expected at: [$SENTINEL]" >&2
-          echo "  The install is partial or out of date. Run 'claude plugin update soleur', then reinstall if that does not clear it." >&2
+          echo "  The install is partial or out of date. Run 'claude plugin update soleur', then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
           echo "  Do NOT hand-edit and publish this draft — the redaction scanner is what makes it safe to share." >&2
+          exit 2; }
+   # EMPTINESS IS A FAILURE, NOT A CLEAN SCAN — the sentinel exits 0 on zero bytes, so an
+   # unwritten draft passes the gate vacuously and Phase 3 presents the un-redacted text
+   # inline. Sibling of `linear-fetch`'s `[ -n "$PERSIST_SAFE" ]`.
+   [ -s "$DRAFT" ] || { echo "SOLEUR_LEGAL_GENERATE_HALT reason=draft-empty draft=[$DRAFT]"
+          echo "legal-generate: the draft file is empty — nothing was scanned, so nothing is safe to share." >&2
+          echo "  Write the draft into \"\$DRAFT\" in the SAME fence as this gate, then re-run." >&2
+          echo "  An empty file is a failure, not a clean scan: the sentinel exits 0 on zero bytes." >&2
           exit 2; }
    bash "$SENTINEL" "$DRAFT"
    ```

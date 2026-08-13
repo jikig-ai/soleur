@@ -74,14 +74,14 @@ against it. Nothing here depends on the blob, so nothing forced that ordering.
        echo "linear-fetch: cannot verify the Soleur plugin installation — stopping before anything is fetched." >&2
        echo "  Resolved plugin root: [${CLAUDE_PLUGIN_ROOT}]" >&2
        echo "  If that is EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session — re-running here resolves the same empty root." >&2
-       echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur', then reinstall if that does not clear it." >&2
+       echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur', then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
        echo "  Nothing has been fetched yet, so nothing has leaked." >&2
        exit 2; }
 SCRUBBER="${CLAUDE_PLUGIN_ROOT}/skills/linear-fetch/scripts/redact-linear-urls.sh"
 [[ -r "$SCRUBBER" ]] || { echo "SOLEUR_LINEAR_FETCH_HALT reason=scrubber-unreadable scrubber=[$SCRUBBER]"
        echo "linear-fetch: the redaction primitive is missing from an otherwise valid Soleur install — stopping." >&2
        echo "  Expected at: [$SCRUBBER]" >&2
-       echo "  The install is partial or out of date. Run 'claude plugin update soleur', then reinstall if that does not clear it." >&2
+       echo "  The install is partial or out of date. Run 'claude plugin update soleur', then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
        echo "  Nothing has been fetched yet, so nothing has leaked." >&2
        exit 2; }
 echo "SOLEUR_LINEAR_FETCH_PREFLIGHT_OK scrubber=present"
@@ -149,12 +149,14 @@ Construct the two return artifacts:
   )" || { echo "SOLEUR_LINEAR_FETCH_HALT reason=scrubber-nonzero-exit"
           echo "linear-fetch: the redaction primitive exited non-zero — stopping." >&2
           echo "  Nothing is persisted. Do NOT fall back to agent_context; it carries the bearer URLs." >&2
+          echo "  What to do: re-run once. If it repeats, this is a Soleur defect — file it with the exit status; do not hand-copy the issue text." >&2
           exit 2; }
 
   [ -n "$PERSIST_SAFE" ] \
     || { echo "SOLEUR_LINEAR_FETCH_HALT reason=redaction-empty-output"
          echo "linear-fetch: redaction produced EMPTY output — stopping." >&2
          echo "  Empty output is a failure, not a clean summary. Do NOT persist it." >&2
+         echo "  What to do: re-run once. If it repeats, this is a Soleur defect — file it; do not paste the issue text by hand." >&2
          exit 2; }
 
   # Redaction must have HAPPENED, not merely have run. A scrubber that returns its input
@@ -168,6 +170,8 @@ Construct the two return artifacts:
     echo "linear-fetch: redaction did NOT remove the signed uploads.linear.app URLs — stopping." >&2
     echo "  The scrubber ran and returned output, but the output still carries bearer credentials." >&2
     echo "  Do NOT persist this text." >&2
+    echo "  This is a SOLEUR DEFECT, not a problem with your issue: the scrubber ran and returned bearer URLs anyway." >&2
+    echo "  What to do: do NOT retry — a retry will produce the same result. File this with the issue identifier (not its contents)." >&2
     exit 2
   fi
 

@@ -1022,8 +1022,8 @@ fi
 t22_missing=""
 t22_on_stderr=""
 t22_uncovered=""
-t22_specs="${INCIDENT_SKILL}:SOLEUR_INCIDENT_HALT:plugin-root-unverified,sentinel-unreadable,draft-alloc-failed,invalid-calendar-date,mttr-transposed,mttd-transposed
-${LEGAL_SKILL}:SOLEUR_LEGAL_GENERATE_HALT:plugin-root-unverified,sentinel-unreadable,draft-alloc-failed
+t22_specs="${INCIDENT_SKILL}:SOLEUR_INCIDENT_HALT:plugin-root-unverified,sentinel-unreadable,draft-alloc-failed,draft-empty,invalid-calendar-date,mttr-transposed,mttd-transposed
+${LEGAL_SKILL}:SOLEUR_LEGAL_GENERATE_HALT:plugin-root-unverified,sentinel-unreadable,draft-alloc-failed,draft-empty
 ${LINEAR_SKILL}:SOLEUR_LINEAR_FETCH_HALT:plugin-root-unverified,scrubber-unreadable,scrubber-nonzero-exit,redaction-empty-output,redaction-ineffective
 ${TRIGGER_SKILL}:SOLEUR_TRIGGER_CRON_HALT:plugin-root-unverified,producer-missing"
 
@@ -1083,7 +1083,7 @@ while IFS= read -r t22_spec; do
 done < <(printf '%s\n' "${t22_specs}")
 
 if [[ -z "${t22_missing}" && -z "${t22_on_stderr}" && -z "${t22_uncovered}" ]]; then
-  echo "PASS: Test 22: all 16 fail-closed halts across the 4 gates (incident 6, legal-generate 3, linear-fetch 5, trigger-cron 2) emit a distinct SOLEUR_*_HALT reason= marker, on STDOUT, from an executable line — and each gate's halt count is covered by its marker count"
+  echo "PASS: Test 22: all 18 fail-closed halts across the 4 gates (incident 7, legal-generate 4, linear-fetch 5, trigger-cron 2) emit a distinct SOLEUR_*_HALT reason= marker, on STDOUT, from an executable line — and each gate's halt count is covered by its marker count"
   PASS=$((PASS + 1))
 else
   [[ -n "${t22_missing}" ]] && echo "FAIL: Test 22: fail-closed halt with no SOLEUR_* marker EMITTED from an executable line at:${t22_missing} — a marker that appears only in prose or a comment is documentation, and a halt nobody can see in telemetry is indistinguishable from a run that never happened"

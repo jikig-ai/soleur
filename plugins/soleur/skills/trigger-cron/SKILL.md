@@ -52,7 +52,7 @@ quoting it would make this paragraph a residual site in the sweep that hunts it.
        echo "trigger-cron: cannot verify the Soleur plugin installation — stopping before any event fires." >&2
        echo "  Resolved plugin root: [${CLAUDE_PLUGIN_ROOT}]" >&2
        echo "  If that is EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session — re-running here resolves the same empty root." >&2
-       echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur', then reinstall if that does not clear it." >&2
+       echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur', then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
        echo "  No event has been fired and no secret has been read." >&2
        exit 2; }
 TRIGGER="${CLAUDE_PLUGIN_ROOT}/skills/trigger-cron/scripts/trigger.sh"
@@ -60,7 +60,8 @@ TRIGGER="${CLAUDE_PLUGIN_ROOT}/skills/trigger-cron/scripts/trigger.sh"
        echo "SOLEUR_TRIGGER_CRON_PRODUCER_MISSING producer=scripts/trigger.sh reason=absent-from-verified-root"
        echo "trigger-cron: the plugin root verifies but does not carry trigger.sh — halt (fail closed)" >&2
        echo "  Your project is not at fault: the installed Soleur payload is incomplete or stale." >&2
-       echo "  What to do: run 'claude plugin update soleur'; if that reports success and this persists," >&2
+       echo "  What to do: run 'claude plugin update soleur', then RESTART Claude Code (updates apply only on restart);" >&2
+       echo "  if you installed with --scope project or --scope local, pass the same scope. If it still persists," >&2
        echo "  reinstall the plugin. Updating the MARKETPLACE alone does not update an INSTALLED plugin." >&2
        echo "  Do NOT let the agent run the reinstall — it mutates the plugin root under a live run." >&2
        exit 2; }

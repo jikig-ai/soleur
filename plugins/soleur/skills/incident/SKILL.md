@@ -66,19 +66,38 @@ Compute locally (FR7 LLM-trust boundary — never accept these from an LLM-emitt
 - File path — derived from slug: `knowledge-base/engineering/operations/post-mortems/${slug}-postmortem.md`.
 - `MTTR` (mean time to recovery) / `MTTD` (mean time to detect) — computed from validated timestamps, NEVER an LLM-emitted duration. The ISO regex gates FORMAT but not calendar validity (it accepts month 13 / day 40 / hour 25), so `date -u -d` can still reject a regex-passing value — capture the epoch with explicit failure handling and HALT on a bad date or a transposed (negative) pair rather than emitting a garbage/empty duration:
   ```bash
-  iso_to_epoch() {  # halt on a regex-valid-but-calendar-invalid date
-    local epoch
-    date -u -d "$1" +%s 2>/dev/null || { echo "SOLEUR_INCIDENT_HALT reason=invalid-calendar-date"; echo "incident: not a valid calendar date: $1" >&2; exit 2; }
+  # Returns the epoch on stdout and FAILS on a regex-valid-but-calendar-invalid date.
+  # It must not print a marker and must not `exit`: every call site below is a COMMAND
+  # SUBSTITUTION, so stdout is captured into an arithmetic operand and `exit` leaves only
+  # the subshell. Both were measured. An earlier revision added the marker echo here and
+  # thereby DESTROYED this guard: the marker text landed inside `$(( … ))`, and the run
+  # either died on `SOLEUR_INCIDENT_HALT: unbound variable` (under `set -u`) or continued
+  # past the check and rendered a fabricated `MTTR=0h0m` into a published post-mortem.
+  # The pre-marker shape reached the transposed-date halt correctly at rc 2.
+  # The halt therefore dispatches in the CALLER frame, where `exit` exits the script.
+  iso_to_epoch() {
+    date -u -d "$1" +%s 2>/dev/null || return 1
+  }
+  halt_bad_date() {
+    echo "SOLEUR_INCIDENT_HALT reason=invalid-calendar-date value=[$1]"
+    echo "incident: not a valid calendar date: $1" >&2
+    echo "  Dates must be ISO-8601 UTC and must exist on the calendar (e.g. 2026-02-30 does not)." >&2
+    echo "  Re-run /soleur:incident and supply a real date; nothing has been written." >&2
+    exit 2
   }
   if [[ -n "${recovery_at}" ]]; then
-    mttr_secs=$(( $(iso_to_epoch "${recovery_at}") - $(iso_to_epoch "${detected_at}") ))
+    r_epoch=$(iso_to_epoch "${recovery_at}") || halt_bad_date "${recovery_at}"
+    d_epoch=$(iso_to_epoch "${detected_at}") || halt_bad_date "${detected_at}"
+    mttr_secs=$(( r_epoch - d_epoch ))
     (( mttr_secs < 0 )) && { echo "SOLEUR_INCIDENT_HALT reason=mttr-transposed"; echo "incident: recovery_at precedes detected_at (transposed)" >&2; exit 2; }
     MTTR=$(printf '%dh%dm' $(( mttr_secs / 3600 )) $(( (mttr_secs % 3600) / 60 )))
   else
     MTTR="TBD (status not resolved)"
   fi
   if [[ "${detection_method}" == "monitoring" && -n "${monitoring_detected_at}" ]]; then
-    mttd_secs=$(( $(iso_to_epoch "${monitoring_detected_at}") - $(iso_to_epoch "${detected_at}") ))
+    m_epoch=$(iso_to_epoch "${monitoring_detected_at}") || halt_bad_date "${monitoring_detected_at}"
+    d_epoch=$(iso_to_epoch "${detected_at}") || halt_bad_date "${detected_at}"
+    mttd_secs=$(( m_epoch - d_epoch ))
     (( mttd_secs < 0 )) && { echo "SOLEUR_INCIDENT_HALT reason=mttd-transposed"; echo "incident: monitoring_detected_at precedes detected_at (transposed)" >&2; exit 2; }
     MTTD=$(printf '%dh%dm' $(( mttd_secs / 3600 )) $(( (mttd_secs % 3600) / 60 )))
   else
@@ -242,7 +261,16 @@ DRAFT="$(mktemp)" || { echo "SOLEUR_INCIDENT_HALT reason=draft-alloc-failed"
                        echo "incident: cannot allocate a draft file — stopping before any post-mortem text exists." >&2
                        exit 2; }
 trap 'rm -f "$DRAFT"' EXIT INT TERM HUP
-# Write the drafted post-mortem into "$DRAFT" here, then let the gate below scan it.
+
+# Write the drafted post-mortem into "$DRAFT" here — in THIS fence, before the gate below.
+# Use a QUOTED heredoc delimiter (`<<'PIR_EOF'`), which is load-bearing twice over: production
+# log excerpts routinely contain `$(…)`, backticks and `$VAR`, and an unquoted delimiter would
+# (a) EXECUTE the command substitutions on the operator's machine, and (b) expand `$VAR`
+# fragments to empty — mutating the very text the sentinel is about to scan, so a secret whose
+# shape the redactor matches can be destroyed by the shell instead of by the redactor.
+#   cat > "$DRAFT" <<'PIR_EOF'
+#   <the drafted post-mortem, verbatim>
+#   PIR_EOF
 
 [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
@@ -250,15 +278,26 @@ trap 'rm -f "$DRAFT"' EXIT INT TERM HUP
        echo "incident: cannot verify the Soleur plugin installation — stopping before any post-mortem is written." >&2
        echo "  Resolved plugin root: [${CLAUDE_PLUGIN_ROOT}]" >&2
        echo "  If that is EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session — re-running here resolves the same empty root." >&2
-       echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur', then reinstall if that does not clear it." >&2
+       echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur', then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
        echo "  Do NOT write this post-mortem by hand — the redaction scanner is what makes it safe to publish." >&2
        exit 2; }
 SENTINEL="${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-sentinel.sh"
 [[ -r "$SENTINEL" ]] || { echo "SOLEUR_INCIDENT_HALT reason=sentinel-unreadable sentinel=[$SENTINEL]"
        echo "incident: the redaction sentinel is missing from an otherwise valid Soleur install — stopping." >&2
        echo "  Expected at: [$SENTINEL]" >&2
-       echo "  The install is partial or out of date. Run 'claude plugin update soleur', then reinstall if that does not clear it." >&2
+       echo "  The install is partial or out of date. Run 'claude plugin update soleur', then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
        echo "  Do NOT write this post-mortem by hand — the redaction scanner is what makes it safe to publish." >&2
+       exit 2; }
+# EMPTINESS IS A FAILURE, NOT A CLEAN SCAN. The sentinel exits 0 on a zero-byte file, so if the
+# draft was never written into "$DRAFT" (composed in the conversation and written by a LATER tool
+# call, which is the natural agent behaviour) the gate passes vacuously and Phase 7 emits the
+# un-redacted text inline. That is a fail-OPEN, and strictly worse than the loudly-broken
+# `<draft-tmpfile>` placeholder it replaced. `linear-fetch` already pins the identical
+# precondition on its own artifact (`[ -n "$PERSIST_SAFE" ]`); this is that guard's sibling.
+[ -s "$DRAFT" ] || { echo "SOLEUR_INCIDENT_HALT reason=draft-empty draft=[$DRAFT]"
+       echo "incident: the draft file is empty — nothing was scanned, so nothing is safe to publish." >&2
+       echo "  Write the post-mortem into \"\$DRAFT\" in the SAME fence as this gate, then re-run." >&2
+       echo "  An empty file is a failure, not a clean scan: the sentinel exits 0 on zero bytes." >&2
        exit 2; }
 bash "$SENTINEL" "$DRAFT"
 ```

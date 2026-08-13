@@ -17,7 +17,13 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(git rev-parse --show-toplevel)"
+# REPO_ROOT was REMOVED here (#7450 round-2 review). After `NOTICE_PARSER` moved to
+# $BASH_SOURCE-relative resolution it had ZERO remaining expansions, leaving a bare
+# `git rev-parse --show-toplevel` as the only statement in this file that could abort the
+# run: it sits under `set -euo pipefail`, and this gate is documented at the top as
+# "always exits 0 ... never blocking". It fails on a non-repo CWD, a broken .git worktree
+# pointer, or a `safe.directory` ownership refusal — all routine on a fresh install or a
+# container mount — and would have aborted the operator's `git commit` via lefthook.
 
 # Source telemetry helper if present. Downstream installs of the Soleur plugin
 # may not ship .claude/hooks/lib/incidents.sh — preserve the always-exit-0
@@ -32,15 +38,17 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 # PR would run with the gate's authority. CLAUDE_PROJECT_DIR is supplied by the
 # harness rather than by the tree under review.
 #
-# `REPO_ROOT` above stays, but ONLY for data-root reads of the workspace being
-# audited — which is what they should measure. An earlier revision of this
-# comment claimed *all* its other uses were data-root reads. That was FALSE and
-# is corrected here: `NOTICE_PARSER` below is EXECUTED, so it is a code root by
-# this ADR's own classification, and it was being resolved from `REPO_ROOT` —
-# with `GH_TOKEN` exported into the child. On the review path that handed a
-# GitHub token to a contributor-supplied script, from inside the compliance
-# gate, in the file edited to remove exactly this vector. It now uses the
-# same trust-ordered resolution as the telemetry lib below.
+# There is no `REPO_ROOT` in this file any more (see above). Two successive revisions of
+# this comment were wrong about it, and both are recorded because the second was written
+# to correct the first:
+#   1. It first claimed every remaining `REPO_ROOT` use was a data-root read. FALSE —
+#      `NOTICE_PARSER` below is EXECUTED (a code root by this ADR's classification) and was
+#      resolved from it, with `GH_TOKEN` exported into the child. On the review path that
+#      handed a GitHub token to a contributor-supplied script from inside the compliance
+#      gate, in the very file edited to remove that vector.
+#   2. The correction then claimed `REPO_ROOT` "stays for data-root reads". Also FALSE —
+#      once `NOTICE_PARSER` moved to $BASH_SOURCE-relative there were no reads left at all,
+#      so the assignment was dead code that could still abort the operator's commit.
 # Resolution, in trust order, and NEVER from `git rev-parse --show-toplevel`:
 #   1. CLAUDE_PROJECT_DIR — supplied by the harness, not by the tree under review.
 #      Measured 2026-08-12: unset in a plain Claude Code session and in git hooks,
