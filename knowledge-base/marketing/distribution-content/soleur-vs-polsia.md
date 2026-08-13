@@ -1,9 +1,9 @@
 ---
 title: "Soleur vs. Polsia: Two Architectures for Running a Company with AI"
 type: pillar
-publish_date: ""
+publish_date: 2026-09-10
 channels: discord, x, bluesky, linkedin-company
-status: draft
+status: scheduled
 ---
 
 ## Discord
