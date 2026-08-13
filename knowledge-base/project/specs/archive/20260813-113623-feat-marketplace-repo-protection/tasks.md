@@ -152,4 +152,5 @@ republishes it daily forever while Guard 3 reports in-sync.
       NOT a full `scripts/test-all.sh` run: five sibling worktrees were running it concurrently
       against the same tmpfs, which is the configuration that produced the unreproducible
       `changelog.js` flake earlier in this feature. CI is the authoritative uncontended signal.
-- [ ] **9.2** `/review` → `/compound` → `/ship`
+- [x] **9.2** `/review` (5 agents; all findings PR-introduced, fixed inline) → `/compound`
+      (learning + convergent route to plan/review skills) → `/ship` (in progress)
