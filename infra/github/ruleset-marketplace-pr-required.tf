@@ -48,12 +48,49 @@
 # while `claude` and `entire` stay blocked — neither carries `administration: write`,
 # so neither can reach the `--admin` override that made row 2 survivable.
 #
-# HONEST STRENGTH CLAIM. This raises the bar from ONE App acting alone to TWO Apps
-# colluding: `claude` could open a PR and `entire` approve it (both hold
-# `pull_requests: write`, and GitHub blocks self-approval). Closing that residual
-# needs the App installations narrowed to selected repositories, which is tracked
-# separately — it removes the threat rather than gating it. What IS unconditional
-# here is `deletion` and `non_fast_forward`: no PR flow routes around either.
+# HONEST STRENGTH CLAIM — CORRECTED during #7493 review, because the first version of
+# this paragraph was false in the direction that flatters the control.
+#
+# It read: "this raises the bar from ONE App acting alone to TWO Apps colluding."
+# That is true ONLY of writes that go THROUGH this repository. It is not true of the
+# published manifest, which is what actually reaches users, because this ruleset is
+# not the only path to those bytes:
+#
+#   `claude` holds `contents: write` + `actions: write` on the MONOREPO and nothing
+#   this ruleset governs. Non-default branches of the monorepo carry no protection at
+#   all (every ruleset there targets `~DEFAULT_BRANCH` with an empty exclude), so it
+#   could push a branch carrying a rewritten
+#   infra/github/soleur-marketplace-manifest.json and dispatch apply-github-infra.yml.
+#   Terraform reads `content` from the checked-out tree and publishes it through the
+#   `soleur-ai` bypass declared below. One App, no collusion, no PR, no approval, and
+#   `soleur-marketplace` never touched.
+#
+# That path is closed in the same PR, in apply-github-infra.yml, by a `github.ref`
+# test AND an assertion that the applied tree equals origin/main's — not here. State
+# it that way round: the two-App floor is a property of the ASSEMBLY (this ruleset
+# plus that apply-time guard plus Guard 4), never of this resource alone.
+#
+# The residual the original paragraph did name is real and unchanged: `claude` opens a
+# PR, `entire` approves it (both hold `pull_requests: write`; GitHub blocks
+# self-approval). Closing it needs the App installations narrowed to selected
+# repositories, tracked separately — that removes the threat rather than gating it.
+#
+# One further limit, so the approval is not read as stronger than it is:
+# `dismiss_stale_reviews_on_push` and `require_last_push_approval` are both `false`
+# below, so the approval does NOT attach to the merged commit — `entire` could approve
+# commit A and `claude` then push commit B and merge it. Both are deliberate: on a
+# one-collaborator repo, `true` on either turns every routine change into a re-approval
+# cycle the maintainer cannot self-serve. The point is that "a PR carrying one approval"
+# is a weaker statement than it reads as, and this is where it is written down.
+#
+# Guard 1 asserts all six `pull_request` sub-fields plus `allowed_merge_methods` against
+# the live ruleset (it read only the approval count until #7493 review), and T-mp-1c
+# pins the declaration side pre-merge. So a drift in either direction reddens — but that
+# is drift detection, not a security property: it proves the live ruleset matches THIS
+# file, and this file is what the paragraph above qualifies.
+#
+# What IS unconditional here is `deletion` and `non_fast_forward`: no PR flow routes
+# around either, and no actor below can reach them except by bypass.
 # ────────────────────────────────────────────────────────────────────────────────
 resource "github_repository_ruleset" "marketplace_pr_required" {
   name = "Marketplace PR Required"

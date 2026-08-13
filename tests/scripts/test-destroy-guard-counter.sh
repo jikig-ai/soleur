@@ -191,5 +191,17 @@ t_real_baseline_zero
 t_ack_destroy_substring_rejected
 t_mixed_delete_and_nested
 
-echo "=== $pass passed, $fail failed ==="
+# ANTI-VACUITY FLOOR (#7493 review). Without it this suite's success condition was `fail == 0`,
+# which an EMPTY suite satisfies: deleting all eight invocations above printed
+# "0 passed, 0 failed" and exited 0. That is the failure mode every guard in this repo is written
+# to refuse, and it was absent from the harness asserting the guard that protects the published
+# manifest from being deleted. The floor is an equality, not a `>=`: a dropped test and a silently
+# skipped one are the same defect, and a `>=` is satisfiable by adding an unrelated row.
+MIN_ASSERTIONS=8
+asserted=$(( pass + fail ))
+if [[ "$asserted" -ne "$MIN_ASSERTIONS" ]]; then
+  _report "anti-vacuity floor" fail "only $asserted assertion(s) ran, expected exactly $MIN_ASSERTIONS"
+fi
+
+echo "=== $pass passed, $fail failed ($asserted assertions) ==="
 [[ "$fail" -eq 0 ]]

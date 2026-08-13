@@ -140,6 +140,25 @@ expect_mut "G1.3a required_approving_review_count 0 is rejected" \
 expect_mut "G1.3b the pull_request rule removed is rejected" \
   '.rules = [.rules[] | select(.type != "pull_request")]' 1
 
+# The five sub-fields the .tf declares and the probe did not read until #7493 review. Each is
+# explicit in the declaration because none has a provider default, so a live value diverging
+# from it is drift by definition — and the approval-count row above passes through all of them.
+expect_mut "G1.3c require_last_push_approval flipped is rejected" \
+  '(.rules[] | select(.type=="pull_request") | .parameters.require_last_push_approval) = true' 1
+expect_mut "G1.3d dismiss_stale_reviews_on_push flipped is rejected" \
+  '(.rules[] | select(.type=="pull_request") | .parameters.dismiss_stale_reviews_on_push) = true' 1
+# `false` is the DECLARED value for four of these, and jq's `//` fires on false as well as null.
+# A probe reading them with `first // "<absent>"` mismatches on every input, including the
+# canonical — invisible to any RED row, since a probe that rejects everything satisfies them all.
+# This row is the direction that catches it.
+expect_mut "G1.3e a REMOVED sub-field is rejected (not silently read as its false default)" \
+  'del(.rules[] | select(.type=="pull_request") | .parameters.require_code_owner_review)' 1
+expect_mut "G1.3f a narrowed allowed_merge_methods is rejected" \
+  '(.rules[] | select(.type=="pull_request") | .parameters.allowed_merge_methods) = ["squash"]' 1
+# Order is not promised by the API; the assertion sorts. This must NOT redden.
+expect_mut "G1.3g allowed_merge_methods order is irrelevant" \
+  '(.rules[] | select(.type=="pull_request") | .parameters.allowed_merge_methods) = ["rebase","squash","merge"]' 0
+
 # --- G1.4: deletion / non_fast_forward ----------------------------------------------------------
 # Declared in the .tf and asserted nowhere before this. Clearing either leaves every other
 # assertion passing while the property is false.
@@ -171,7 +190,7 @@ expect_mut "G1.5f an absent target fails closed" 'del(.target)' 1
 expect_mut "rule order is irrelevant (selected by .type, never positionally)" \
   '.rules |= reverse' 0
 
-MIN_ASSERTIONS=22
+MIN_ASSERTIONS=27
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   fail "anti-vacuity floor" "only $ASSERTED assertion(s) ran, expected >= $MIN_ASSERTIONS"
 fi

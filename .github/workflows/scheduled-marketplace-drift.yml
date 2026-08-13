@@ -17,11 +17,35 @@
 #       requires minting or storing a token for the app to hold, which is the property this
 #       clause exists to assert.
 #
-#       Named consequence, so it is not discovered later: `actions: write` permits dispatching
-#       ANY workflow in this repo, not only the one named below. The dispatch target is a
-#       literal and the token is repo-scoped, but the grant is broader than the use — and it is
-#       granted to the workflow explicitly designed around untrusted third-party input. A second
-#       dispatch added here would inherit that grant silently.
+#       Named consequences, so they are not discovered later. This list was CORRECTED during
+#       #7493 review: it previously named dispatch as the only consequence, which understated
+#       the grant. Repository `actions: write` also permits, on this repo:
+#         - `POST /actions/workflows/{id}/dispatches` on ANY workflow, not only the one below;
+#         - `DELETE /actions/runs/{id}` and `DELETE /actions/artifacts/{id}` — run, log and
+#           artifact deletion;
+#         - `PUT /actions/workflows/{id}/disable` — silencing any scheduled alarm in the repo,
+#           including this one;
+#         - `POST /actions/runs/{id}/rerun` — replaying a historical run AT ITS ORIGINAL COMMIT.
+#
+#       Two of those bear directly on arguments this file makes elsewhere, and are recorded
+#       rather than smoothed over:
+#         - The dispatch step below rules out an alternative design specifically on "the
+#           evidence-destruction shape". Run deletion reintroduces that capability one layer up,
+#           in the same job. The ordering argument still holds (evidence is filed before
+#           remediation is requested); what does not hold is any claim that this job cannot
+#           destroy evidence.
+#         - Rerun composes with apply-github-infra.yml's ref guard: that guard tests
+#           `github.ref`, and a rerun replays the original ref AND commit. The tree-equals-
+#           origin/main assertion added to that workflow in #7493 is what closes it; without
+#           that assertion this token could republish any previously-applied manifest.
+#
+#       The grant is workflow-level, so the untrusted-input `check` step holds `actions: write`
+#       while never using it. NARROWING IS TRACKED, NOT DONE HERE: moving the dispatch into its
+#       own job would relocate `steps.dispatch.outcome`, which the Sentry status expression at
+#       the foot of this file reads — and that heartbeat was found in this same PR to have never
+#       delivered a single check-in. Re-topologising the plugin's only distribution alarm in the
+#       PR that repaired it is the change most likely to break it unobserved, so it lands
+#       separately, where a failed heartbeat is attributable. See the tracked follow-up.
 #   (iii) NO PRODUCT SECRETS ARE CONSUMED. Unlike scheduled-prod-version-drift.yml — which
 #       acknowledges rather than meets `plugins/soleur/skills/schedule/SKILL.md`'s reservation
 #       that a gate-override be reserved for a genuinely pure-GH op — this workflow consumes the
@@ -476,6 +500,33 @@ jobs:
           # the job.
           set -euo pipefail
 
+          # BASELINE BEFORE DISPATCH. `gh workflow run` exits 0 on ACCEPTANCE and returns no run
+          # id — it confirms the API took the request, never that a run started. A disabled
+          # workflow, a renamed file or a quota block all accept-then-nothing, so the poll below
+          # is the only thing standing between that and a green job with no reconcile.
+          #
+          # The poll must therefore identify OUR run, not merely A run. The first draft read
+          # `.[0].databaseId` off a `--limit 5` listing with no time bound, which returns the
+          # most recent workflow_dispatch run of that workflow whenever it happened: verified
+          # against live state, run 26386154924 from 2026-05-25 satisfied it on the first tick,
+          # ~6s in. Every accept-then-nothing case the comment above describes would have passed
+          # green, and the stale URL would then be commented onto the operator's drift issue as
+          # the remediation record. (The first draft selected `createdAt` and discarded it, which
+          # is the tell.)
+          #
+          # databaseId is monotonic per repository, so "strictly greater than what existed a
+          # moment ago" identifies a new run exactly — no clock comparison, and immune to runner
+          # vs GitHub skew that a createdAt cutoff would inherit.
+          before_id="$(gh run list --repo "$GH_REPO" --workflow=apply-github-infra.yml \
+            --event workflow_dispatch --limit 1 \
+            --json databaseId --jq '.[0].databaseId // 0' 2>/dev/null || echo 0)"
+          # Fail CLOSED on an unreadable baseline: an empty or non-numeric value must not become
+          # a 0 that makes every historical run "newer".
+          if [[ ! "$before_id" =~ ^[0-9]+$ ]]; then
+            echo "::error::Could not read the pre-dispatch run baseline for apply-github-infra.yml (got '${before_id}'). Refusing to dispatch, because the post-dispatch poll could not then tell a new run from an old one."
+            exit 1
+          fi
+
           # `--ref main` is explicit rather than relying on workflow_dispatch's default-branch
           # default, and `--repo` mirrors the sibling dispatcher in
           # inngest-watchdog-restart-dispatch.yml.
@@ -484,27 +535,21 @@ jobs:
             --ref main \
             -f reason="marketplace-drift reconcile from ${RUN_URL}"
 
-          # `gh workflow run` exits 0 on ACCEPTANCE and returns no run id — it confirms the API
-          # took the request, never that a run started. A disabled workflow, a renamed file or a
-          # quota block all accept-then-nothing, which would leave this job green, the Sentry
-          # check-in `ok`, an issue filed, and NO reconcile. So poll for the run the dispatch
-          # created and fail loud if none appears.
           run_id=""
           for _ in $(seq 1 20); do
             sleep 6
             run_id="$(gh run list --repo "$GH_REPO" --workflow=apply-github-infra.yml \
-              --event workflow_dispatch --limit 5 \
-              --json databaseId,createdAt --jq '.[0].databaseId // empty' 2>/dev/null || true)"
+              --event workflow_dispatch --limit 20 \
+              --json databaseId --jq "[.[].databaseId | select(. > ${before_id})] | max // empty" 2>/dev/null || true)"
             [[ -n "$run_id" ]] && break
           done
 
           if [[ -z "$run_id" ]]; then
-            echo "::error::apply-github-infra.yml dispatch was ACCEPTED but no workflow_dispatch run appeared within ~120s. The manifest was NOT reconciled; the drift issue remains the only record."
+            echo "::error::apply-github-infra.yml dispatch was ACCEPTED but no NEW workflow_dispatch run (id > ${before_id}) appeared within ~120s. The manifest was NOT reconciled; the drift issue remains the only record."
             exit 1
           fi
 
           dispatched_url="${GITHUB_SERVER_URL}/${GH_REPO}/actions/runs/${run_id}"
-          echo "dispatched_run_url=${dispatched_url}" >> "$GITHUB_OUTPUT"
           echo "Dispatched reconcile apply: ${dispatched_url}"
 
           # Link detection to remediation on the artifact the operator actually reads. Without

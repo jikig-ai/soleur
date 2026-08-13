@@ -70,6 +70,39 @@ else
   assert_eq "required_approving_review_count" \
     "$(jq -r '[.rules[]? | select(.type=="pull_request") | .parameters.required_approving_review_count] | first // "<absent>"' < "$J")" "1"
 
+  # THE REMAINING pull_request SUB-FIELDS. Added by #7493 review: the probe asserted the
+  # approval COUNT and stopped, so five of the six sub-fields the .tf declares were unverified
+  # against the live ruleset. Each is set explicitly in the declaration precisely because none
+  # has a provider default, and a live value drifting away from the declaration is exactly what
+  # this probe exists to report — "matches its declaration" has to mean the whole declaration.
+  #
+  # The two `false` values below are DELIBERATE and load-bearing on a one-collaborator repo
+  # (they keep the maintainer's own flow workable), which is also why they are asserted rather
+  # than assumed: they are the sub-fields whose silent flip to `true` would lock the sole
+  # maintainer out, and whose being `false` means the approval does NOT attach to the merged
+  # commit. Either way, the declaration is the authority, not the live state.
+  for _pr_field in \
+    "dismiss_stale_reviews_on_push=false" \
+    "require_code_owner_review=false" \
+    "require_last_push_approval=false" \
+    "required_review_thread_resolution=false"; do
+    _k="${_pr_field%%=*}"; _want="${_pr_field#*=}"
+    # NOT `first // "<absent>"`. jq's `//` fires on false AS WELL AS null, so every field here —
+    # all of which are legitimately `false` — read as "<absent>" and mismatched on every input.
+    # Caught by the positive controls, which is precisely what they are for: all fourteen RED
+    # rows still passed, because a probe that rejects everything satisfies them.
+    assert_eq "pull_request.${_k}" \
+      "$(jq -r --arg k "$_k" '[.rules[]? | select(.type=="pull_request") | .parameters[$k]] | if length == 0 then "<absent>" else (.[0] | tostring) end' < "$J")" \
+      "$_want"
+  done
+
+  # Sorted, because the API does not promise the order the .tf declares. A NARROWED set is the
+  # drift that matters (dropping "squash" changes how every merge lands); a widened one cannot
+  # occur without a declaration change, which T-mp-1c catches pre-merge.
+  assert_eq "pull_request.allowed_merge_methods" \
+    "$(jq -c '[.rules[]? | select(.type=="pull_request") | .parameters.allowed_merge_methods // []] | first // [] | sort' < "$J")" \
+    '["merge","rebase","squash"]'
+
   # deletion + non_fast_forward are the only UNCONDITIONAL protections here (no PR flow routes
   # around either), and an omission reads as false with no other symptom: enforcement stays
   # active, the pull_request rule stays present, the ref condition stays correct.
@@ -107,7 +140,7 @@ fi
 
 # Anti-vacuity. A guard that silently evaluates zero properties and exits 0 is the failure mode
 # every assertion above is written to avoid, so the count is asserted rather than assumed.
-EXPECTED_CHECKS=9
+EXPECTED_CHECKS=14
 if [[ "${#problems[@]}" -eq 0 && "$checked" -ne "$EXPECTED_CHECKS" ]]; then
   echo "verify-marketplace-ruleset: ran ${checked} assertions, expected ${EXPECTED_CHECKS} — the probe itself is broken." >&2
   exit 1
