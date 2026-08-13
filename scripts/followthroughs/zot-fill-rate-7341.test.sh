@@ -238,9 +238,9 @@ $(gcrow "$ENVP $(zpay "gc successfully completed for $WEB")")
 $(gcrow "$ENVP $(zpay "executing gc of orphaned blobs for $BOOTSTRAP")")"
 run "$FAILSPEC" 0 "" "" "" "$GC_OK"
 expect "an unmatched gc start names its repository" 1 "soleur-inngest-bootstrap"
-if [[ "$OUT" != *"$WEB,"* && "$OUT" == *"unmatched"* ]]
-then pass "the paired repository is not reported as unmatched"
-else fail "the paired repository leaked into the unmatched set. Output: $OUT"
+if [[ "$OUT" == *"gc_starts=2 gc_completions=1"* && "$OUT" == *"unmatched"* && "$OUT" != *"soleur-web-platform,"* ]]
+then pass "counts are 2 starts / 1 completion and only the unpaired repo is listed"
+else fail "expected gc_starts=2 gc_completions=1 with one unmatched repo. Output: $OUT"
 fi
 
 # 22. INJECTION. sanitize() strips only quotes and backslashes, so a header value survives with its
@@ -259,13 +259,13 @@ fi
 GC_DROP="$GC_OK
 $(gcrow "SOLEUR_ZOT_LOG_DROPPED n=3 interval_s=300 boot_id=$GOOD seq=2 cum=5 reason=rate_cap")"
 run "$FAILSPEC" 0 "" "" "" "$GC_DROP"
-expect "the dropped-row count is printed beside the unmatched start" 1 "dropped"
+expect "the SUMMED dropped-row count is printed beside the unmatched start" 1 "dropped_rows=3"
 
 # 24. The envelope anchor carries a TRAILING SPACE. Without it host=soleur-registry-2 matches.
 GC_HOST2="$(gcrow "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=soleur-registry-2 $(zpay "executing gc of orphaned blobs for /var/lib/zot/x/other")")"
 run "$FAILSPEC" 0 "" "" "" "$GC_HOST2"
-if [[ "$OUT" != *"/x/other"* ]]
-then pass "a neighbouring host's rows are not admitted (trailing-space anchor)"
+if [[ "$OUT" == *"rows_envelope=0"* && "$OUT" == *"gc_starts=0"* ]]
+then pass "a neighbouring host's rows are not admitted (trailing-space anchor; rows_envelope=0)"
 else fail "host=soleur-registry-2 was admitted. Output: $OUT"
 fi
 
@@ -276,7 +276,16 @@ then pass "a PASS verdict does not run the attribution lead"
 else fail "the lead ran on PASS (rc=$RC). Output: $OUT"
 fi
 
-MIN_CHECKS=27
+# 26. NOT AN EXONERATION. starts==dones==0 is also what a dead shipper, a changed host token and a
+#     drifted row shape produce. The earlier text asserted "growth is not a gc stall" here — a
+#     negative the parse cannot support, asserted hardest exactly when the channel is down.
+run "$FAILSPEC" 0 "" "" "" ""
+if [[ "$OUT" == *"NOT evidence that gc is healthy"* && "$OUT" != *"growth is not a gc stall"* ]]
+then pass "zero parsed gc rows is reported as no-evidence, not as an all-clear"
+else fail "an empty parse produced an exoneration. Output: $OUT"
+fi
+
+MIN_CHECKS=28
 if (( checks < MIN_CHECKS )); then
   echo "FAIL: only $checks assertions ran, expected >= $MIN_CHECKS" >&2
   fails=$((fails + 1))

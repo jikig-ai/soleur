@@ -282,57 +282,102 @@ else:
 # line — a header value can otherwise carry ",message:executing gc ... for /var/lib/zot/x/phantom"
 # and mint a repository that never completes. The envelope anchor keeps its TRAILING SPACE, or
 # host=soleur-registry-2 matches (zot-log-channel-7440.sh:166 carries the same delimiter).
+ZOT_ATTR_HOST="${ZOT_ATTR_HOST:-soleur-registry}"
 attribution_lead() {
-  local aerr araw arc
-  aerr="$(mktemp)"
+  local aerr aperr araw arc prc
+  aerr="$(mktemp)" || { echo "  attribution_unavailable: mktemp failed (no query was attempted)"; return 0; }
+  aperr="$(mktemp)" || { rm -f "$aerr"; echo "  attribution_unavailable: mktemp failed (no query was attempted)"; return 0; }
   araw="$("$QUERY" --since "$WINDOW" --grep SOLEUR_ZOT_LOG --limit 5000 2>"$aerr")"; arc=$?
   if (( arc != 0 )); then
-    echo "  attribution_unavailable: the gc-channel query exited ${arc}: $(head -c 200 "$aerr" | tr '\n' ' ')"
-    rm -f "$aerr"
+    echo "  attribution_unavailable: the gc-channel query exited ${arc}: $(head -c 300 "$aerr" | tr '\n\r\t' '   ')"
+    rm -f "$aerr" "$aperr"
     return 0
   fi
   rm -f "$aerr"
-  printf '%s\n' "$araw" | python3 -c '
-import sys, json, re
-ENV = "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=soleur-registry "   # trailing space: load-bearing
-def field(literal):
-    return re.compile(r"^\{[^,]*,level:[a-z]+,message:" + literal + r"([^,]+),")
-START = field(r"executing gc of orphaned blobs for ")
-DONE  = field(r"gc successfully completed for ")
-PATCH = re.compile(r"^\{[^,]*,level:[a-z]+,message:PatchBlobUpload")
+  # Python stderr is CAPTURED, not discarded. `2>/dev/null` here would be the same defect this
+  # change removes from zot-log-channel-7440.sh's run_query twelve lines of diff away, and the one
+  # this file's own header at the query call already documents as a measured incident.
+  printf '%s\n' "$araw" | ZOT_ATTR_HOST="$ZOT_ATTR_HOST" python3 -c '
+import sys, json, os, re
+ENV = "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=" + os.environ["ZOT_ATTR_HOST"] + " "  # trailing space: load-bearing
+# FIELD-SCANNING, NOT POSITIONAL. An earlier form required `level:` to be field 2
+# (`^\{[^,]*,level:[a-z]+,message:`). That matches the row measured 2026-08-12, whose first field
+# is `time:`, but it is pinned to one field ORDER — a gc call site emitting message earlier or
+# later silently NOMATCHes, and the terminal state below would then read as "gc is fine". Scan
+# comma-delimited fields for the message field instead, and terminate the repo on a comma OR
+# end-of-string: sanitize() truncates at 800 chars with NO marker, so the trailing comma a
+# positional anchor depends on is not guaranteed to survive.
+START_LIT = "executing gc of orphaned blobs for "
+DONE_LIT  = "gc successfully completed for "
+def msg_field(payload):
+    for f in payload.lstrip("{").rstrip("}").split(","):
+        if f.startswith("message:"):
+            return f[len("message:"):]
+    return None
 starts, dones = set(), set()
-n_patch = n_drop = 0
+n_patch = 0
+drop_sum = 0; drop_markers = 0; drop_unknown = 0
+rows_in = rows_decoded = rows_envelope = 0
+DROP_N = re.compile(r"^SOLEUR_ZOT_LOG_DROPPED n=([0-9]+|unknown)\b")
 for line in sys.stdin:
     line = line.strip()
     if not line: continue
+    rows_in += 1
     try:
-        msg = json.loads(json.loads(line).get("raw", "")).get("message", "")
+        outer = json.loads(line)
+        raw = outer.get("raw", "")
+        inner = raw if isinstance(raw, dict) else json.loads(raw)
+        msg = inner.get("message", "")
     except Exception:
         continue
-    if msg.startswith("SOLEUR_ZOT_LOG_DROPPED n="):
-        n_drop += 1
+    if not isinstance(msg, str): continue
+    rows_decoded += 1
+    d = DROP_N.match(msg)
+    if d:
+        drop_markers += 1
+        # The MARKER count is not the ROW count. n= is the number of rows that tick discarded, and
+        # on the cursor_invalidated path the producer emits the literal `unknown` because the lost
+        # span is genuinely unbounded. Counting markers rendered n=417 as "1" -- two orders of
+        # magnitude wrong in exactly the case the confound exists to surface.
+        if d.group(1) == "unknown": drop_unknown += 1
+        else: drop_sum += int(d.group(1))
         continue
     if not msg.startswith(ENV): continue
-    payload = msg[len(ENV):]
-    m = START.match(payload)
-    if m: starts.add(m.group(1)); continue
-    m = DONE.match(payload)
-    if m: dones.add(m.group(1)); continue
-    if PATCH.match(payload): n_patch += 1
+    rows_envelope += 1
+    mf = msg_field(msg[len(ENV):])
+    if mf is None: continue
+    if mf.startswith(START_LIT): starts.add(mf[len(START_LIT):]); continue
+    if mf.startswith(DONE_LIT):  dones.add(mf[len(DONE_LIT):]);  continue
+    if mf.startswith("PatchBlobUpload"): n_patch += 1
 unmatched = sorted(starts - dones)
-print("  gc_starts=%d gc_completions=%d patch_blob_upload=%d dropped_rows=%d"
-      % (len(starts), len(dones), n_patch, n_drop))
+drop_txt = str(drop_sum) + ("+unbounded" if drop_unknown else "")
+print("  gc_starts=%d gc_completions=%d patch_blob_upload=%d dropped_rows=%s (markers=%d)"
+      % (len(starts), len(dones), n_patch, drop_txt, drop_markers))
+print("  rows_in=%d rows_decoded=%d rows_envelope=%d%s"
+      % (rows_in, rows_decoded, rows_envelope, "  LIMIT REACHED (window truncated)" if rows_in >= 5000 else ""))
 if unmatched:
     shown = [u.rsplit("/", 1)[-1][:48] for u in unmatched[:5]]
     more = "" if len(unmatched) <= 5 else " (+%d more)" % (len(unmatched) - 5)
     print("  unmatched gc starts (no same-repo completion in this window): %s%s"
           % (", ".join(shown), more))
-    print("  A LEAD, NOT A VERDICT: dropped_rows above, --limit truncation and the trailing window")
-    print("  edge each remove a completion while its start survives. zot#4235 is the standing")
-    print("  suspect (gc completing for one repo and never another); .uploads/ staging is the other.")
+    print("  A LEAD, NOT A VERDICT: dropped_rows above can remove a completion while its start")
+    print("  survives, and the trailing window edge cuts gc cycles that had not finished yet.")
+    print("  zot#4235 is the standing suspect (gc completing for one repo and never another);")
+    print("  .uploads/ staging is the other.")
+elif len(starts) == 0:
+    # NOT an exoneration. starts==dones==0 is also what a dead shipper, an unparseable row shape
+    # and a hostname change all produce, so the earlier "growth is not a gc stall" line asserted a
+    # negative the parse cannot support -- and asserted it hardest when the channel was down.
+    print("  NO gc start rows were parsed in this window. This is NOT evidence that gc is healthy:")
+    print("  a silent shipper, a changed host token or a drifted row shape all land here. Check the")
+    print("  channel first: bash scripts/followthroughs/zot-log-channel-7440.sh")
 else:
     print("  every gc start in this window has a same-repo completion; growth is not a gc stall.")
-' 2>/dev/null || echo "  attribution_unavailable: the gc rows could not be parsed"
+' 2>"$aperr"; prc=$?
+  if (( prc != 0 )); then
+    echo "  attribution_unavailable: the gc rows could not be parsed (python exited ${prc}): $(head -c 300 "$aperr" | tr '\n\r\t' '   ')"
+  fi
+  rm -f "$aperr"
   return 0
 }
 
