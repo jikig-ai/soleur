@@ -81,11 +81,12 @@ Each row is a temporary local edit, observed, then reverted. Record observed out
 ## Phase 5 — Verification and close
 
 - [x] 5.1 `bash -n` on the edited file — unconditional, must be clean.
-- [ ] 5.2 Full suite run on a healthy machine. A clean control recorded `45 passed, 0 failed,
-      Skipped: 0` on the PRE-REVIEW artifact. Both the review pass AND the #7501/#7540 rebases have
-      since changed the file (floor 44 → 46 upstream, so 47 here), so that result describes bytes
-      that will not ship; re-running against final bytes before ship.
-- [x] 5.3 Verify every AC in the plan's `## Acceptance Criteria` → Pre-merge.
+- [x] 5.2 Full suite run on a healthy machine, RE-RUN against final post-rebase bytes:
+      `47 passed, 0 failed, Skipped: 0 (47 assertions)`, rc=0, 2347s.
+      Skip path re-verified too: `46 passed, 0 failed, Skipped: 1 (47 assertions)`, rc=0, 638s,
+      with the degraded-run NOTE emitted. Two earlier clean controls (45/0 and an interrupted
+      run) described trees invalidated by #7540 and #7501/#7507 landing mid-flight and are NOT
+      the evidence of record.
 - [ ] 5.4 File a tracking issue for each `## Deferred Scope` row with its re-evaluation criterion
       (pre-bake, retry, `run_case`/`_s1_run` extension, T17 capture, P4 persistence window).
 - [ ] 5.5 Confirm `decision-challenges.md` (UC-1) is carried into the PR body by `ship`.
