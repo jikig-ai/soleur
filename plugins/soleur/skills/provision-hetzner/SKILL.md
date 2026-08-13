@@ -25,7 +25,7 @@ soleur:provision-hetzner <tenant-slug> [--dry-run]
 ## Execution
 
 ```bash
-bash plugins/soleur/skills/provision-hetzner/scripts/provision-hetzner.sh <slug> [--dry-run]
+bash "${CLAUDE_PLUGIN_ROOT}/skills/provision-hetzner/scripts/provision-hetzner.sh" <slug> [--dry-run]
 ```
 
 The script:

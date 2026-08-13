@@ -272,7 +272,14 @@ describe("drift guard: every sentinel the shell script emits is mirrored", () =>
     // demanded `SOLEUR_PREFLIGHT_CHECK10_NOSANDBOX` (preflight's sandbox
     // diagnostic, landed on main by a sibling PR) be mirrored as a git-lock marker.
     // Scope the SKILL.md half to the domains extractGitLockMarkers actually covers.
-    const DOMAIN_RE = /^(SOLEUR_GIT_|SOLEUR_WORKTREE_|SOLEUR_SESSION_STATE_)/;
+    // `_HALT` is in-domain (#7450). The four secret gates' fail-closed refusals are exactly
+    // the "sentinel authored in prose, mirrored nowhere" class this guard exists to catch —
+    // and the guard did NOT catch them, because this prefix filter dropped every one before
+    // the mirror assertion ran. It stayed green while the thing it names happened, which is
+    // the #7409 gap reopened one filter layer down. The comment above is right that an
+    // UNSCOPED filter over-reaches; the fix is to widen the domain deliberately, not to leave
+    // a family the extractor now mirrors sitting outside the check that proves it does.
+    const DOMAIN_RE = /^(SOLEUR_GIT_|SOLEUR_WORKTREE_|SOLEUR_SESSION_STATE_|SOLEUR_[A-Z_]+_HALT$)/;
     const skillSentinels = skillDocs.flatMap(collect).filter((n) => DOMAIN_RE.test(n));
 
     const unique = [...new Set([...scriptSentinels, ...skillSentinels])];
