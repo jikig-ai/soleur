@@ -141,11 +141,64 @@ plan adds no store, no connection, no credential, and no processing activity. Th
 documents was already delivered and already disclosed (counsel review 2026-08-12 recorded PA-8
 recipients and TOMs as DISCHARGED for this emitter).
 
-**Brand-survival threshold:** `none`
+- **Brand-survival threshold:** `none`
+- threshold: none, reason: docs-only with no runtime surface — the one `apps/*/infra/` path in the
+  diff (`cloud-init-registry.yml`) is a comment-only edit that `registry_rationale_strip`
+  (`zot-registry.tf:405,563`) removes before `base64gzip`, measured byte-identical (delta 0), so no
+  regulated-data path, credential, store, or user-facing artifact changes.
 
 Rationale for `none`: docs-only, no runtime surface, no regulated-data path, no user-facing artifact.
 The runbook staleness above is an operator-facing correctness issue, not a user-facing one — which is
 precisely why it is fixed here rather than deferred.
+
+**[Amended 2026-08-13 during /ship preflight.]** The threshold line was originally prose, not the
+canonical `- **Brand-survival threshold:**` bullet, and carried no `threshold: none, reason:`
+scope-out. Preflight Check 6 correctly failed it once the late `cloud-init-registry.yml` edit put an
+`apps/*/infra/` path in the diff — a path the plan did not touch when the section was written.
+
+## Observability
+
+**[Added 2026-08-13 during /ship preflight.]** The plan originally omitted this section, reasoning
+the diff was docs-only. That was true at authoring time and stopped being true when review folded in
+the `cloud-init-registry.yml` correction; Check 10 caught the gap.
+
+```yaml
+liveness_signal:
+  what: SOLEUR_ZOT_LOG envelope rows on Better Stack Logs source 2457081
+  cadence: 5-minute cron one-shot (/etc/cron.d/zot-log-shipper), ~1,440 control rows/day
+  alert_target: the enrolled follow-through probe on #7455 (daily sweeper)
+  configured_in: apps/web-platform/infra/cloud-init-registry.yml
+error_reporting:
+  destination: SOLEUR_ZOT_DISK log_shipper_post_fail / log_shipper_last_ok_age_s, on the reporter's
+    INDEPENDENT egress path (a counter surfaced on the channel it monitors is unobservable exactly
+    when it is non-zero)
+  fail_loud: true
+failure_modes:
+  - mode: shipper delivered but emitting nothing
+    detection: probe reason=delivered_but_silent
+    alert_route: follow-through sweeper comments on #7455; post-delivery this arm means act now
+  - mode: shipper running, POSTs failing
+    detection: log_shipper_post_fail climbing on the 5-min reporter
+    alert_route: same
+  - mode: host regressed to a pre-shipper image
+    detection: probe reason=not_delivered (post-delivery this is a REGRESSION, corrected in this PR)
+    alert_route: same
+  - mode: read path not answering
+    detection: probe reason=channel_dark (zero envelope AND zero control rows)
+    alert_route: same
+logs:
+  where: Better Stack Logs source 2457081
+  retention: ~40-minute hot window; archive beyond
+discoverability_test:
+  command: doppler run -p soleur -c prd_terraform -- bash scripts/followthroughs/zot-log-channel-7440.sh
+  expected_output: "PASS: envelope rows observed"
+  credentials_required: "BETTERSTACK_QUERY_HOST/USERNAME/PASSWORD (Doppler soleur/prd_terraform) —
+    the property under test is an envelope-stamped row read back OUT of the ClickHouse warehouse,
+    which is the whole point of the probe (no exit code on the host can fake it). Better Stack's
+    query API has no unauthenticated form, so there is no substitute probe that verifies the same
+    property; an unauthenticated variant could only check that the host is up, which is a different
+    claim and is already covered by the SOLEUR_ZOT_DISK heartbeat."
+```
 
 ## Implementation Phases
 
