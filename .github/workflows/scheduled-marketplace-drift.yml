@@ -85,14 +85,16 @@
 # Deleting it removes the only daily, credential-free view of what is actually published.
 #
 # The assertions, and why each earns its place. NAMED rather than counted (#7493): this header
-# said "three" while the checker emits twelve distinct finding keys, and a count in prose goes
-# stale silently the moment an assertion is added. The keys are the contract; the two families
-# below are what the reconcile predicate discriminates on.
+# said "three" while the checker emitted a dozen distinct finding keys, and a count in prose goes
+# stale silently the moment an assertion is added — so no number appears here, deliberately.
+# The keys are the contract; the two families below are what the reconcile predicate
+# discriminates on.
 #
 # FAMILY A — the published MARKETPLACE manifest (GET 1). Terraform can fix every one of these by
 # republishing from source, so a verdict containing any of them dispatches a reconcile:
-#   version_key_present, entry_count, entry_name, source_type, source_path, source_url,
-#   source_pinned, manifest_shape, manifest_unparseable, manifest_fetch_failed
+#   marketplace_name, marketplace_owner, version_key_present, entry_count, entry_name,
+#   source_type, source_path, source_url, source_pinned, manifest_shape, manifest_unparseable,
+#   manifest_fetch_failed
 #
 # FAMILY B — THIS monorepo's own plugin.json (GET 2), reached by the `plugin_manifest_` prefix.
 # Republishing the marketplace manifest cannot fix these, so they never dispatch:
@@ -213,6 +215,31 @@ jobs:
             # exit code means what it appears to mean.
             findings+=("manifest_unparseable: the body at ${MANIFEST_URL} did not parse as a JSON object")
           else
+            # ---- Marketplace identity (#7493 review) -----------------------------------------
+            # Asserted OUTSIDE the .plugins shape gate, because these are properties of the
+            # marketplace document itself and stay evaluable when .plugins is malformed.
+            #
+            # WHY THE PUBLICATION SIDE NEEDS THESE TOO. Guard 4 asserts them on the SOURCE, and
+            # Terraform makes published == source, so it is tempting to treat this as redundant.
+            # It is not: the org-admin and Admin-role ruleset bypasses are `always` (deliberately
+            # — spec G5's emergency path), so a hand-edit to the published file is possible and
+            # would be seen by neither Guard 4 (which never reads the published bytes) nor the
+            # byte-diff verifier (which only runs post-apply). Adding them here and not there,
+            # or there and not here, is how the two assertion sets drift apart — which review
+            # found had already happened three ways.
+            #
+            # Both are Family A (content findings a republish fixes), so they dispatch a
+            # reconcile, which is exactly the right remediation for a hand-edit.
+            mp_name="$(jq -r 'if (.name | type) == "string" then .name else "" end' <<<"$manifest" 2>/dev/null)"
+            if [[ "$mp_name" != "soleur-marketplace" ]]; then
+              findings+=("marketplace_name: .name is '$(sanitize "$mp_name")', expected 'soleur-marketplace'. This is the '@' half of the published install AND update commands (claude plugin install soleur@soleur-marketplace), printed on three site pages — renaming it breaks both for every existing user")
+            fi
+            owner_name="$(jq -r 'if (.owner.name | type) == "string" then .owner.name else "" end' <<<"$manifest" 2>/dev/null)"
+            owner_email="$(jq -r 'if (.owner.email | type) == "string" then .owner.email else "" end' <<<"$manifest" 2>/dev/null)"
+            if [[ "$owner_name" != "Jean Deruelle" || "$owner_email" != "jean.deruelle@jikigai.com" ]]; then
+              findings+=("marketplace_owner: .owner is '$(sanitize "$owner_name") <$(sanitize "$owner_email")>', expected the declared Soleur owner identity. A substituted owner is a phishing surface the byte-diff cannot report, because published would still match a compromised source")
+            fi
+
             entry_shape="$(jq -r 'if (.plugins | type) == "array" and (.plugins | length) > 0 and (.plugins[0] | type) == "object" then "ok" else "bad" end' <<<"$manifest" 2>/dev/null)"
             if [[ "$entry_shape" != "ok" ]]; then
               plugins_type="$(sanitize "$(jq -r '.plugins | type' <<<"$manifest" 2>/dev/null)")"

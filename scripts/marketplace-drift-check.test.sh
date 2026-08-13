@@ -84,7 +84,7 @@ STUB
 chmod +x "$TMP/bin/curl"
 
 GOOD_PLUGIN='{"name":"soleur","description":"synthesized fixture"}'
-GOOD_MANIFEST='{"name":"soleur-marketplace","plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur"}}]}'
+GOOD_MANIFEST='{"name":"soleur-marketplace","owner":{"name":"Jean Deruelle","email":"jean.deruelle@jikigai.com"},"plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur"}}]}'
 
 # run_check <manifest_body> <manifest_rc> <plugin_body> <plugin_rc>
 # Leaves the parsed step outputs in VERDICT / FINDING_COUNT / FINDINGS and the raw
@@ -155,7 +155,7 @@ expect_verdict "a conforming manifest reports OK" "OK"
   || fail "the check step always exits 0 (the verdict travels as data)" "rc=$STEP_RC"
 
 # THE ASSERTION THE WORKFLOW EXISTS FOR. One added key, no other change, no visible symptom.
-VERSIONED='{"name":"soleur-marketplace","plugins":[{"name":"soleur","version":"1.2.3","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur"}}]}'
+VERSIONED='{"name":"soleur-marketplace","owner":{"name":"Jean Deruelle","email":"jean.deruelle@jikigai.com"},"plugins":[{"name":"soleur","version":"1.2.3","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur"}}]}'
 run_check "$VERSIONED" 0 "$GOOD_PLUGIN" 0
 expect_verdict "a hand-added version key is drift" "MISMATCH"
 expect_finding "the version-key finding names the key" "version_key_present"
@@ -179,19 +179,19 @@ rm -f "$TMP/bin/jq"
 expect_verdict "a jq failure on the version query fails CLOSED rather than reading as absent" "MISMATCH"
 expect_finding "the failed version query is reported as the version assertion, not swallowed" "version_key_present"
 
-WRONG_PATH='{"name":"soleur-marketplace","plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur-next"}}]}'
+WRONG_PATH='{"name":"soleur-marketplace","owner":{"name":"Jean Deruelle","email":"jean.deruelle@jikigai.com"},"plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur-next"}}]}'
 run_check "$WRONG_PATH" 0 "$GOOD_PLUGIN" 0
 expect_verdict "a changed source.path is drift" "MISMATCH"
 expect_finding "the path finding names source_path" "source_path"
 
-WRONG_URL='{"name":"soleur-marketplace","plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"https://github.com/someone-else/soleur.git","path":"plugins/soleur"}}]}'
+WRONG_URL='{"name":"soleur-marketplace","owner":{"name":"Jean Deruelle","email":"jean.deruelle@jikigai.com"},"plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"https://github.com/someone-else/soleur.git","path":"plugins/soleur"}}]}'
 run_check "$WRONG_URL" 0 "$GOOD_PLUGIN" 0
 expect_verdict "a repointed source.url is drift" "MISMATCH"
 expect_finding "the url finding names source_url" "source_url"
 
 # The ssh spelling and the suffix-less form are the SAME repository, not drift. Without this
 # the alarm would cry wolf on a cosmetic edit, and an alarm that cries wolf gets muted.
-SSH_URL='{"name":"soleur-marketplace","plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"git@github.com:jikig-ai/soleur","path":"plugins/soleur"}}]}'
+SSH_URL='{"name":"soleur-marketplace","owner":{"name":"Jean Deruelle","email":"jean.deruelle@jikigai.com"},"plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"git@github.com:jikig-ai/soleur","path":"plugins/soleur"}}]}'
 run_check "$SSH_URL" 0 "$GOOD_PLUGIN" 0
 expect_verdict "an equivalent spelling of the same repo URL is not drift" "OK"
 
@@ -199,29 +199,53 @@ expect_verdict "an equivalent spelling of the same repo URL is not drift" "OK"
 # GOOD_MANIFEST in EXACTLY the property under test, so a green run means that assertion
 # discriminated — not that some other assertion happened to fire.
 # Measured before these existed: every one of the four mutations below reported OK.
-WRONG_TYPE='{"name":"soleur-marketplace","plugins":[{"name":"soleur","source":{"source":"github","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur"}}]}'
+WRONG_TYPE='{"name":"soleur-marketplace","owner":{"name":"Jean Deruelle","email":"jean.deruelle@jikigai.com"},"plugins":[{"name":"soleur","source":{"source":"github","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur"}}]}'
 run_check "$WRONG_TYPE" 0 "$GOOD_PLUGIN" 0
 expect_verdict "a non-git-subdir source type is drift (it restores the whole-repo clone)" "MISMATCH"
 expect_finding "the source-type finding names source_type" "source_type"
 
-PINNED='{"name":"soleur-marketplace","plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur","ref":"v0.9.0"}}]}'
+PINNED='{"name":"soleur-marketplace","owner":{"name":"Jean Deruelle","email":"jean.deruelle@jikigai.com"},"plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur","ref":"v0.9.0"}}]}'
 run_check "$PINNED" 0 "$GOOD_PLUGIN" 0
 expect_verdict "a ref pin is drift (a constant pin is the version sentinel in other clothes)" "MISMATCH"
 expect_finding "the pin finding names source_pinned" "source_pinned"
 
-PINNED_SHA='{"name":"soleur-marketplace","plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur","sha":"deadbeef"}}]}'
+PINNED_SHA='{"name":"soleur-marketplace","owner":{"name":"Jean Deruelle","email":"jean.deruelle@jikigai.com"},"plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur","sha":"deadbeef"}}]}'
 run_check "$PINNED_SHA" 0 "$GOOD_PLUGIN" 0
 expect_verdict "a sha pin is drift too — the probe covers every pin spelling" "MISMATCH"
 
-APPENDED='{"name":"soleur-marketplace","plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur"}},{"name":"evil","source":{"source":"git-subdir","url":"https://github.com/attacker/evil.git","path":"plugins/evil"}}]}'
+APPENDED='{"name":"soleur-marketplace","owner":{"name":"Jean Deruelle","email":"jean.deruelle@jikigai.com"},"plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur"}},{"name":"evil","source":{"source":"git-subdir","url":"https://github.com/attacker/evil.git","path":"plugins/evil"}}]}'
 run_check "$APPENDED" 0 "$GOOD_PLUGIN" 0
 expect_verdict "an APPENDED second entry is drift — every other assertion reads .plugins[0]" "MISMATCH"
 expect_finding "the appended-entry finding names entry_count" "entry_count"
 
-RENAMED='{"name":"soleur-marketplace","plugins":[{"name":"soleur-next","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur"}}]}'
+RENAMED='{"name":"soleur-marketplace","owner":{"name":"Jean Deruelle","email":"jean.deruelle@jikigai.com"},"plugins":[{"name":"soleur-next","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur"}}]}'
 run_check "$RENAMED" 0 "$GOOD_PLUGIN" 0
 expect_verdict "a renamed entry is drift — the name is the '@' half of every install command" "MISMATCH"
 expect_finding "the rename finding names entry_name" "entry_name"
+
+# ---- marketplace identity (#7493 review) -----------------------------------------------------
+# `.name` and `.owner` are properties of the marketplace DOCUMENT, not of .plugins[0], and both
+# were unasserted on the published side. They are not redundant with Guard 4: that gate reads the
+# SOURCE, and the ruleset's human bypasses are `always` (spec G5's emergency path), so a hand-edit
+# to the published file is reachable and would be invisible to every other check here.
+MP_RENAMED='{"name":"evil-marketplace","owner":{"name":"Jean Deruelle","email":"jean.deruelle@jikigai.com"},"plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur"}}]}'
+run_check "$MP_RENAMED" 0 "$GOOD_PLUGIN" 0
+expect_verdict "a renamed MARKETPLACE is drift — it is the '@' half of install AND update" "MISMATCH"
+expect_finding "the marketplace-rename finding names marketplace_name" "marketplace_name"
+expect_dispatch "marketplace_name DOES dispatch (a republish restores it)" "true"
+
+MP_OWNER='{"name":"soleur-marketplace","owner":{"name":"Mallory","email":"mallory@evil.tld"},"plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur"}}]}'
+run_check "$MP_OWNER" 0 "$GOOD_PLUGIN" 0
+expect_verdict "a substituted owner is drift — a phishing surface the byte-diff cannot report" "MISMATCH"
+expect_finding "the owner finding names marketplace_owner" "marketplace_owner"
+expect_dispatch "marketplace_owner DOES dispatch (a republish restores it)" "true"
+
+# An ABSENT owner must not read as clean: `jq` yields "" for a missing key, and comparing an
+# empty string against the expected value is what makes absence a finding rather than a pass.
+MP_NO_OWNER='{"name":"soleur-marketplace","plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur"}}]}'
+run_check "$MP_NO_OWNER" 0 "$GOOD_PLUGIN" 0
+expect_verdict "an ABSENT owner is drift, not a pass" "MISMATCH"
+expect_finding "the absent-owner finding names marketplace_owner" "marketplace_owner"
 
 # ---- fail-closed paths ----------------------------------------------------------------------
 # Each of these is a state where the checker CANNOT SEE the artifact. Every one must report
@@ -239,11 +263,11 @@ expect_verdict "an empty 200 body fails CLOSED" "MISMATCH"
 
 # `null | length` is 0 and `jq -e` exits 0 on a `0` — the two traps that turn a missing array
 # into a passing check. The shape gate must run before any value is trusted.
-run_check '{"name":"soleur-marketplace","plugins":null}' 0 "$GOOD_PLUGIN" 0
+run_check '{"name":"soleur-marketplace","owner":{"name":"Jean Deruelle","email":"jean.deruelle@jikigai.com"},"plugins":null}' 0 "$GOOD_PLUGIN" 0
 expect_verdict "a null .plugins fails CLOSED rather than reading as empty" "MISMATCH"
 expect_finding "the shape failure is named" "manifest_shape"
 
-run_check '{"name":"soleur-marketplace","plugins":[]}' 0 "$GOOD_PLUGIN" 0
+run_check '{"name":"soleur-marketplace","owner":{"name":"Jean Deruelle","email":"jean.deruelle@jikigai.com"},"plugins":[]}' 0 "$GOOD_PLUGIN" 0
 expect_verdict "an empty .plugins array fails CLOSED" "MISMATCH"
 
 run_check '{"plugins":[{"source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":null}}]}' 0 "$GOOD_PLUGIN" 0
@@ -270,7 +294,7 @@ expect_verdict "a plugin.json without a string .name is drift" "MISMATCH"
 # The marketplace repo is unreviewed, so its string values are attacker-controlled for this
 # purpose. A workflow-command prefix must not survive into the run log, and an embedded newline
 # must not break out of the heredoc-delimited $GITHUB_OUTPUT write.
-INJECT='{"name":"soleur-marketplace","plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"##[set-env name=X]evil\nverdict=OK"}}]}'
+INJECT='{"name":"soleur-marketplace","owner":{"name":"Jean Deruelle","email":"jean.deruelle@jikigai.com"},"plugins":[{"name":"soleur","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"##[set-env name=X]evil\nverdict=OK"}}]}'
 run_check "$INJECT" 0 "$GOOD_PLUGIN" 0
 expect_verdict "a manifest carrying a workflow-command prefix still reports MISMATCH" "MISMATCH"
 if grep -qF '##[' "$TMP/log.txt" || grep -qF '##[' "$TMP/out.txt"; then
@@ -321,7 +345,7 @@ expect_verdict "G2 control: a clean manifest is OK" "OK"
 expect_dispatch "G2 control: a clean manifest does not dispatch a reconcile" "false"
 
 # A content finding Terraform CAN fix -> dispatch.
-VERSIONED_MANIFEST='{"name":"soleur-marketplace","plugins":[{"name":"soleur","version":"1.0.0","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur"}}]}'
+VERSIONED_MANIFEST='{"name":"soleur-marketplace","owner":{"name":"Jean Deruelle","email":"jean.deruelle@jikigai.com"},"plugins":[{"name":"soleur","version":"1.0.0","source":{"source":"git-subdir","url":"https://github.com/jikig-ai/soleur.git","path":"plugins/soleur"}}]}'
 run_check "$VERSIONED_MANIFEST" 0 "$GOOD_PLUGIN" 0
 expect_verdict "G2.2 a version key is MISMATCH" "MISMATCH"
 expect_dispatch "G2.2 a version key dispatches a reconcile" "true"
@@ -652,7 +676,7 @@ echo "=== Results: $PASS passed, $FAIL failed ==="
 # A FLOOR, not equality: an added assertion must not become a spurious failure. Derived from a
 # green run, ratcheted upward deliberately. Treat slack between this and the measured count as
 # attack budget rather than padding.
-MIN_ASSERTIONS=58
+MIN_ASSERTIONS=66
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   echo "ANTI-VACUITY: only $PASS assertions ran, expected at least $MIN_ASSERTIONS." >&2
   echo "Either assertions were deleted or short-circuited, or the floor needs a deliberate bump." >&2
