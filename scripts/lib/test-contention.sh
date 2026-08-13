@@ -524,9 +524,61 @@ tc_preamble() {
 # and inode-bound, released automatically once the last fd holder dies (proven
 # by AC5b). A "dead pid still holds the lock" state is unreachable with real
 # flock, so code defending it would be dead code.
+
+# Elapsed between two EPOCHREALTIME readings, formatted for a banner:
+# "<N>ms", or the literal "unknown".
+#
+# DELIBERATE DUPLICATION of run_suite's arithmetic in scripts/test-all.sh (find
+# it there by the `local elapsed_ms=0` block). Not shared, and the reason is NOT
+# a dependency cycle — the de-duplicating direction is script->lib, which is the
+# direction that already exists. It is that test-all.sh degrades this lib to a
+# silent noop stub when it cannot be sourced (`tc_acquire() { :; }`), so routing
+# run_suite's REQUIRED timing through an OPTIONALLY-present function would trade
+# 5 duplicated lines for a new silent-zero failure mode in the most load-bearing
+# script in the repo.
+#
+# WHY "unknown" AND NOT 0: a fabricated zero is indistinguishable from a lock
+# that was free on the first try — the exact false claim this change removes.
+# Enforced behaviourally by the degraded-timing arm in scripts/test-contention.test.sh
+# (search it for `unset EPOCHREALTIME`), which also pins the `${EPOCHREALTIME:-}`
+# discipline below.
+#
+# EVERY read of EPOCHREALTIME here and in tc_acquire is `${EPOCHREALTIME:-}`,
+# never bare: test-all.sh sources this lib under `set -euo pipefail`, where a
+# bare read is an unbound-variable ABORT inside the one function whose contract
+# is that it cannot abort (ADR-133 Decision 3).
+_tc_ms_since() {
+  local start="${1:-}" end="${2:-}"
+  # The separator is LOCALE-dependent: bash renders EPOCHREALTIME using
+  # LC_NUMERIC's radix, so a comma-locale operator (fr_FR, de_DE, ru_RU, pt_BR …)
+  # gets `1786573806,515545`. Accept both, and require PURE DIGITS on each side.
+  # The previous `*.*` glob was a SHAPE test, not a numeric one, so `100.` and
+  # `x.1` passed it and reached the arithmetic — where they abort the caller
+  # under `set -e`. Measured: comma locale blanked every banner to `unknown`
+  # AND reddened three gate arms on a healthy bash 5 with a working clock.
+  local re='^([0-9]+)[.,]([0-9]+)$'
+  [[ "$start" =~ $re ]] || { printf 'unknown'; return 0; }
+  local s_i="${BASH_REMATCH[1]}" s_f="${BASH_REMATCH[2]}"
+  [[ "$end" =~ $re ]] || { printf 'unknown'; return 0; }
+  local e_i="${BASH_REMATCH[1]}" e_f="${BASH_REMATCH[2]}"
+  # `10#` forces base-10 so a leading zero in the microseconds field is not read
+  # as octal.
+  printf '%sms' $(( (e_i * 1000000 + 10#$e_f - s_i * 1000000 - 10#$s_f) / 1000 ))
+}
+
 tc_acquire() {
-  local name="$1"
+  # `${1:-}`, never bare `$1`. Under the `set -euo pipefail` that test-all.sh
+  # sources this lib into, a zero-arg call is an unbound-variable ABORT one line
+  # into the function whose whole contract is that it cannot abort — the same
+  # class as the EPOCHREALTIME reads, one construct further out, and `|| true`
+  # at the call site does not rescue it (a `set -u` expansion error is not
+  # suppressible that way).
+  local name="${1:-}"
   local timeout_s="${2:-$TC_LOCK_TIMEOUT}"
+  if [[ -z "$name" ]]; then
+    echo "[contention] LOCK_UNAVAILABLE: tc_acquire called with no lock name; proceeding without serialization." >&2
+    return 0
+  fi
 
   # Kill switch — honoured before anything else so an operator can always
   # disable the layer in an emergency.
@@ -546,6 +598,29 @@ tc_acquire() {
     echo "[contention] LOCK_UNAVAILABLE: session-state.sh not found at $TC_SESSION_STATE; proceeding without serialization." >&2
     return 0
   fi
+
+  # The serialization primitive itself. acquire_lock returns the SAME 99 for
+  # "waited the whole budget" and "flock(1) is not installed", so without this
+  # precheck a run that never waited at all takes the contended path and then
+  # reports a duration for a wait that never happened.
+  #
+  # It removes the DOMINANT such source, not all of them: `exec {fd}>>` failing
+  # on an unwritable lock dir also returns 99 and still reports as contention
+  # (measured: `gave up after 5ms of 900s`). The measured elapsed is what keeps
+  # that case self-diagnosing rather than a flat lie — classifying it by an
+  # elapsed threshold was considered and rejected as approximate where
+  # `command -v` is exact.
+  #
+  # Placed AFTER the session-state check so a flock-less host still reports a
+  # MISSING LIB when that is also true — that line is the tell for the
+  # #7426 / ADR-178 plugin-path regression class, and checking flock first
+  # masked it. Carries session-state's own remediation, which this early return
+  # means we never reach.
+  if ! command -v flock >/dev/null 2>&1; then
+    echo "[contention] LOCK_UNAVAILABLE: flock(1) not found on PATH; proceeding without serialization." >&2
+    echo "[contention]   macOS: brew install util-linux && add \$(brew --prefix util-linux)/sbin to PATH" >&2
+    return 0
+  fi
   # shellcheck source=/dev/null
   source "$TC_SESSION_STATE" 2>/dev/null || true
   if ! declare -F acquire_lock >/dev/null 2>&1; then
@@ -553,13 +628,32 @@ tc_acquire() {
     return 0
   fi
 
+  # Emitted after every skip path, so its PRESENCE is a fact about control flow:
+  # this run reached the wait. It is a live-stderr affordance — a 15-minute
+  # block reads as a queue rather than a hang — and deliberately a plain line
+  # rather than a BANNER, because it fires on every run that gets here and
+  # work/SKILL.md's contention grep is anchored specifically to avoid
+  # always-firing hits.
+  echo "[contention] LOCK_WAITING: '$name' — waiting up to ${timeout_s}s for the advisory lock." >&2
+
+  # The two readings bracket the blocking call and nothing else. `_tc_ms_since`
+  # is called AFTER the end reading is captured, so its command substitution
+  # cannot inflate the number it formats.
+  local t0="${EPOCHREALTIME:-}" t1 waited
   if acquire_lock "$name" "$timeout_s"; then
-    echo "[contention] LOCK_ACQUIRED: '$name' (worktrees of this repo serialize on it)." >&2
+    t1="${EPOCHREALTIME:-}"
+    waited="$(_tc_ms_since "$t0" "$t1")"
+    echo "[contention] LOCK_ACQUIRED: '$name' after $waited (worktrees of this repo serialize on it)." >&2
     return 0
   fi
+  t1="${EPOCHREALTIME:-}"
+  waited="$(_tc_ms_since "$t0" "$t1")"
 
-  # Advisory: proceed, never abort.
-  echo "[contention] LOCK_CONTENDED_PROCEEDING: '$name' still held after ${timeout_s}s; proceeding anyway (advisory). A failure now may be interleaving — re-run the failing suite in isolation before diagnosing." >&2
+  # Advisory: proceed, never abort. Reports the duration that was MEASURED
+  # against the budget it was given. The previous text asserted `still held
+  # after <timeout>s` unconditionally, which was false whenever acquire_lock
+  # returned without waiting — the case the flock precheck above now removes.
+  echo "[contention] LOCK_CONTENDED_PROCEEDING: '$name' — gave up after $waited of ${timeout_s}s; proceeding anyway (advisory). A failure now may be interleaving — re-run the failing suite in isolation before diagnosing." >&2
   return 0
 }
 

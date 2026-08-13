@@ -236,3 +236,93 @@ simultaneously. One run measures the *uncontended* case while the lock protects 
 one, so n=1 clears no honest bar for replacing a mutex. Tracked at #7454 item 3.
 
 The named follow-up candidate is a headroom **bypass on top of** the mutex, not a replacement.
+
+## Addendum — 2026-08-12 (#7484): the wait is now measured, not asserted
+
+The addendum above rests on an observation — "the run queued for the **full 900 s**" — that the
+instrument of the day could not actually produce. `tc_acquire` printed
+`LOCK_CONTENDED_PROCEEDING: '<name>' still held after ${timeout_s}s` unconditionally on every
+non-zero return from `acquire_lock`, so the duration in that line was the *budget it was handed*,
+never the time it waited. The 900 s figure was recovered by other means; the banner would have
+printed it either way.
+
+Worse, `acquire_lock` returns the same `99` for "waited the whole budget" and for
+"`flock(1)` is not installed" — so a run that never waited at all reported as contention, and then
+stated a duration for a wait that had not happened. `work/SKILL.md` instructs an agent to grep that
+line to decide whether a RED is trustworthy, which made the false statement load-bearing.
+
+**What changed** (confined to `scripts/lib/test-contention.sh`; `test-all.sh` and
+`session-state.sh` are untouched):
+
+- Both post-wait banners now report the elapsed **measured** across the `acquire_lock` call —
+  `LOCK_ACQUIRED: '<name>' after <N>ms` and
+  `LOCK_CONTENDED_PROCEEDING: '<name>' — gave up after <N>ms of <timeout_s>s`. Where timing is
+  unavailable the banner prints `unknown`, never a fabricated `0ms`: a zero is indistinguishable
+  from a lock that was free, which would re-introduce the same defect one branch over.
+- The **dominant** `rc=99` source is removed by a `command -v flock` precheck emitting the existing
+  `LOCK_UNAVAILABLE`. This is exact where an elapsed-time threshold would be approximate, and it
+  needs no new outcome name — a missing `flock` is the same class as the two `LOCK_UNAVAILABLE`
+  cases already there: the serialization layer is absent.
+
+  **It removes one of three, and the residue is recorded rather than implied.** `_acquire_lock_impl`
+  returns `99` from three places: the `flock` precondition (now precluded), the `exec {fd}>>` open of
+  the lock file, and the genuine `flock -w` timeout. An unwritable lock directory therefore still
+  reports `LOCK_CONTENDED_PROCEEDING` — measured on this branch as
+  `gave up after 5ms of 900s`. That is a **non-timeout failure still classified as a timeout**, so
+  the second half of the Guard Contract's property is enforced for one cause rather than all of
+  them. What changed is that the case is now self-diagnosing: 5 ms against a 900 s budget is legible
+  as a precondition failure, where the previous text printed the identical flat lie
+  `still held after 900s` whether or not anything was ever held. Classifying the residue by an
+  elapsed threshold was considered and rejected — approximate where `command -v` is exact — and
+  closing it properly means reaching into `session-state.sh`'s internals, which is a separate change.
+- `LOCK_WAITING` is emitted after every skip path, so its presence is a fact about control flow
+  ("this run reached the wait") and a long block reads as a queue rather than a hang.
+- Both banner **tokens** are byte-identical. Only post-colon text moved, so this ADR's own
+  vocabulary, `work/SKILL.md`'s contention grep and the existing arms all still match.
+
+Every `tc_acquire` exit path still returns `0` — Decision 3's fail-open contract, since an instrument
+that could wedge the run it observes would violate the contract it exists to serve.
+
+**A structural assertion of that contract is not sufficient, and this change is the demonstration.**
+The first cut asserted it by grepping the function body: every `return` is a `return 0`. That check
+passed while the function could still **abort without returning at all** — `test-all.sh` sources this
+lib under `set -euo pipefail`, so the bare `$EPOCHREALTIME` reads the measurement introduced were an
+unbound-variable abort on any shell lacking the variable. It also made the `unknown` branch
+unreachable on precisely the platform it was written for: the abort happens at the read, before the
+guard is entered. Both are fixed (`${EPOCHREALTIME:-}` at every read) and the contract is now asserted
+**behaviourally** as well — an arm that de-specialises `EPOCHREALTIME` under `set -euo pipefail` and
+requires a `0` return plus the honest `unknown` token. The general form, worth carrying forward: a
+grep over exit statements cannot see an exit that is not a statement.
+
+**First two readings from the instrument** (2026-08-12, this repo, real runs on the ship path):
+
+| Run | Banner | Outcome |
+|---|---|---|
+| queued behind 2 sibling worktrees | `LOCK_CONTENDED_PROCEEDING: 'test-all' — gave up after 899122ms of 900s` | abandoned at budget |
+| lock free | `LOCK_ACQUIRED: 'test-all' after 12ms` | uncontended floor |
+| queued behind 2 sibling worktrees | `LOCK_ACQUIRED: 'test-all' after 616310ms` | **redeemed at 616 s** |
+
+The first independently reproduces this ADR's 2026-08-11 "waited the full 900 s" figure — which the
+banner of the day could not have produced, since it printed the budget whether or not a wait
+occurred. The second is the uncontended floor.
+
+**The third is the one the instrument was built for, and it is the first of its kind in this repo.**
+It is an *uncensored* observation of a redeemed wait: the run queued, waited **616 s**, and then
+acquired — it was not truncated at the budget. So the plan's honest question ("does the wait ever
+pay off, and what is the longest wait that was redeemed?") now has a first answer: **yes, and at
+least 616 s.** Before this change that run and the 12 ms run printed the identical
+`LOCK_ACQUIRED: 'test-all'` line with no duration, so the two were indistinguishable and this datum
+did not exist.
+
+Its immediate consequence is negative, which is why it is worth recording: a `TC_LOCK_TIMEOUT`
+lowered to any value under ~620 s would have converted this run from *serialized* into *interleaved*.
+The option the measurement most directly supports is therefore **not** the one a censored reading
+suggested. That is a single observation, not a distribution, and it does not license a mechanism
+change on its own — but it is the first evidence that the budget's current value is doing work
+rather than merely being waited out.
+
+**What this does NOT settle.** Contended observations are **right-censored** at the fixed budget, so
+they cannot answer "would a longer wait have succeeded?" — and the short-circuit-on-holder-age
+candidate is parameterised by the *holder's* remaining run, while every duration here is the
+*waiter's*. The mechanism question the addendum above opened therefore remains open on the same
+terms; this change makes the waiter's side of it a measured quantity rather than an inferred one.
