@@ -50,7 +50,7 @@ always gates a real delete.
 ## Procedure
 
 ```bash
-bash plugins/soleur/skills/flag-delete/scripts/delete.sh <flag-name> [--dry-run]
+bash "${CLAUDE_PLUGIN_ROOT}/skills/flag-delete/scripts/delete.sh" <flag-name> [--dry-run]
 ```
 
 The script (full in [scripts/delete.sh](./scripts/delete.sh)) deletes from **5

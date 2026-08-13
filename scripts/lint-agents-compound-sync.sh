@@ -233,7 +233,7 @@ if [[ -f "$COMPOUND_ABS" ]]; then
   fi
 
   # (ii) No threshold literal in step 8's tier-decision region. Region-scoped,
-  #      NOT whole-file: the retained emit_incident snippet legitimately
+  #      NOT whole-file: the retained rule-marker snippet legitimately
   #      contains "~600 bytes", and a whole-file negative would false-fail a
   #      correct implementation.
   #

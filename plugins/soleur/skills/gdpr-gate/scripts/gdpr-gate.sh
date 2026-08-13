@@ -17,14 +17,51 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(git rev-parse --show-toplevel)"
+# REPO_ROOT was REMOVED here (#7450 round-2 review). After `NOTICE_PARSER` moved to
+# $BASH_SOURCE-relative resolution it had ZERO remaining expansions, leaving a bare
+# `git rev-parse --show-toplevel` as the only statement in this file that could abort the
+# run: it sits under `set -euo pipefail`, and this gate is documented at the top as
+# "always exits 0 ... never blocking". It fails on a non-repo CWD, a broken .git worktree
+# pointer, or a `safe.directory` ownership refusal — all routine on a fresh install or a
+# container mount — and would have aborted the operator's `git commit` via lefthook.
 
 # Source telemetry helper if present. Downstream installs of the Soleur plugin
 # may not ship .claude/hooks/lib/incidents.sh — preserve the always-exit-0
 # advisory contract by no-op'ing emit_incident in that case rather than
 # letting `set -e` abort before the breadcrumb.
-INCIDENTS_LIB="$REPO_ROOT/.claude/hooks/lib/incidents.sh"
-if [[ -f "$INCIDENTS_LIB" ]]; then
+#
+# CODE ROOT, not a data root (#7450; ADR-179's classification). This path gets
+# SOURCED, so it executes in THIS shell — and it must therefore never be derived
+# from `git rev-parse --show-toplevel`, which on the review path resolves to the
+# contributor's checked-out tree. `review/SKILL.md` instructs `gh pr checkout`,
+# and this script is itself a compliance gate, so a same-named file in a hostile
+# PR would run with the gate's authority. CLAUDE_PROJECT_DIR is supplied by the
+# harness rather than by the tree under review.
+#
+# There is no `REPO_ROOT` in this file any more (see above). Two successive revisions of
+# this comment were wrong about it, and both are recorded because the second was written
+# to correct the first:
+#   1. It first claimed every remaining `REPO_ROOT` use was a data-root read. FALSE —
+#      `NOTICE_PARSER` below is EXECUTED (a code root by this ADR's classification) and was
+#      resolved from it, with `GH_TOKEN` exported into the child. On the review path that
+#      handed a GitHub token to a contributor-supplied script from inside the compliance
+#      gate, in the very file edited to remove that vector.
+#   2. The correction then claimed `REPO_ROOT` "stays for data-root reads". Also FALSE —
+#      once `NOTICE_PARSER` moved to $BASH_SOURCE-relative there were no reads left at all,
+#      so the assignment was dead code that could still abort the operator's commit.
+# Resolution, in trust order, and NEVER from `git rev-parse --show-toplevel`:
+#   1. CLAUDE_PROJECT_DIR — supplied by the harness, not by the tree under review.
+#      Measured 2026-08-12: unset in a plain Claude Code session and in git hooks,
+#      so it cannot be the ONLY arm without silently retiring this telemetry.
+#   2. This script's OWN location. Layout-invariant per ADR-178, and crucially NOT
+#      CWD-derived: a `gh pr checkout` cannot redirect it, because by the time this
+#      line runs the anchor decision has already been made — if a hostile script
+#      were executing, sourcing its sibling lib adds nothing. On a plugin INSTALL
+#      the walk lands somewhere with no such lib, so it no-ops, which is correct.
+# The `-f` test is the safety net for both arms: a wrong root simply no-ops.
+_incidents_root="${CLAUDE_PROJECT_DIR:-$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../../../../.." 2>/dev/null && pwd -P)}"
+INCIDENTS_LIB="${_incidents_root:+${_incidents_root}/.claude/hooks/lib/incidents.sh}"
+if [[ -n "$INCIDENTS_LIB" && -f "$INCIDENTS_LIB" ]]; then
   # shellcheck source=/dev/null
   source "$INCIDENTS_LIB"
 else
@@ -65,7 +102,12 @@ fi
 # an Inngest-aware liveness source is a different change in a different
 # subsystem. The comment is corrected rather than left asserting a defense
 # that is not running.
-NOTICE_PARSER="$REPO_ROOT/plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh"
+# SIBLING of this script, so it needs no root at all: `$BASH_SOURCE`-relative is
+# layout-invariant (ADR-178) and leaves NO operand for a checked-out tree to shadow —
+# strictly better here than any root-anchored form, including CLAUDE_PROJECT_DIR.
+# It was `"$REPO_ROOT/plugins/soleur/…"` (i.e. `git rev-parse --show-toplevel`) until
+# #7450 review: EXECUTED below, three times, once with GH_TOKEN exported to the child.
+NOTICE_PARSER="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)/notice-frontmatter.sh"
 notice_days_stale=$(NOTICE_FILE="${NOTICE_FILE:-}" \
   bash "$NOTICE_PARSER" days-stale 2>/dev/null || echo 999)
 cron_days_stale=$(NOTICE_FILE="${NOTICE_FILE:-}" \

@@ -664,16 +664,23 @@ finding disposition, so the next threshold tuning reads measured flip-vs-file
 ratios instead of re-arguing from intuition. This is the half of the change
 that makes the *next* change cheap:
 
+Emit the marker for the branch you took. **Both ids are STATIC literals, and that is
+load-bearing** — the capture hook reads `.tool_input.command`, i.e. the command text *before*
+the shell expands it, and its needle is `rule=[A-Za-z0-9._-]+ note=`. A `${VAR}` in the id
+position puts `$` and `{` inside that character class, so the marker never matches and the row
+is silently never written. An earlier revision shipped exactly that and produced **zero** rows.
+
 ```bash
-source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh"
-# DISPOSITION is exactly one of: flip-inline | file
-emit_incident "cost-of-filing-${DISPOSITION}" applied \
-  "review disposition: ${DISPOSITION} (${LINES} lines, ${FILES} files)"
+# Fix-inline disposition (the ≤100-line / ≤4-file auto-flip):
+echo "SOLEUR_RULE_APPLIED rule=cost-of-filing-flip-inline note=review disposition flip-inline"
+
+# Scope-out disposition (CONCUR co-signed, criterion named):
+echo "SOLEUR_RULE_APPLIED rule=cost-of-filing-file note=review disposition file"
 ```
 
-The disposition rides in the **`rule_id`** (`cost-of-filing-flip-inline` vs
-`cost-of-filing-file`) and the event stays `applied`. That is not a stylistic
-choice: the `rule-metrics-aggregate.sh` report keys every counter on `rule_id` and
+The disposition rides in the **`rule_id`** — which is why each branch emits its own static
+literal rather than interpolating a variable into the id — and the event stays `applied`. That
+is not a stylistic choice: the `rule-metrics-aggregate.sh` report keys every counter on `rule_id` and
 gates on `event_type ∈ {deny,bypass,applied,warn}` — it **never reads `.kind`**,
 so a `kind`-based scheme would write rows that no report ever surfaces. Read the
 resulting ratio with `bash scripts/rule-metrics-aggregate.sh` and compare the
@@ -1331,6 +1338,8 @@ Multi-agent parallel review has been shown to catch bugs in shipped, green-CI co
 - **A REWORK that removes instances of a defect class is where that class recurs — review its ADDITIONS harder than the original implementation.** The author is holding the removed instances in mind, not the new prose, and the new prose is written fast because it feels like cleanup rather than authorship. Three questions catch most of it. (a) **What is each gate's INPUT, and does it survive a compaction?** A gate reading its trigger from "the plan you already have in context" is absent after compaction and was never present on the standalone entry path, so "no record in context" becomes indistinguishable from "no record exists" — require a durable artifact and stop on an unreachable one rather than reading absence as an all-clear. (b) **When prose DISCLAIMS a mechanism, check whether its own exception uses that mechanism** — a classifier stating "a step's NAME is a string, and mapping a name to a role is exactly the guess this rule exists to replace" defined its sole exception with `Install <tool>` name patterns, and measured against the repo's own `ci.yml` five of six dependency-install steps matched the exception while escaping the counter-exception's quoted literal. (c) **Re-read every interim mitigation against the failure mode its own paragraph just named** — "treat a shrinking pending-count as evidence the set was still filling" is inverted (shrinking pending means runs are COMPLETING) and silent in its target case (pending sits at 0 and never shrinks). Reviewer-side companions: a **git hunk header is not the enclosing structure** (`xfuncname` picks the nearest column-0 line, which across a long file is often a different section entirely — resolve the real heading before building a finding on it), and **rate a renumber finding only after enumerating its by-ordinal citations**, since severity is a function of the consumer set and that set is frequently empty. **Why:** #7515 — a rework that cut 61 lines to remove three instances of its own class shipped four more, one day after the same class was documented. See `knowledge-base/project/learnings/2026-08-13-the-rework-that-removed-three-instances-shipped-four-more.md`.
 
 See `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs-tests-miss.md` for the full pattern catalogue.
+
+- **A CORRECTION PR's own sweep-AC false-FIRES on the retraction quoting what it corrected — and a technical-sounding scope-out premise is still a claim to MEASURE.** Two shapes that co-occur whenever a PR's deliverable is a correction. (a) An AC asserting a survivor COUNT over a claim-class grep is unsatisfiable by construction once the fix lands, because a file-level grep cannot distinguish a live claim from prose *quoting* the claim it retracts, and a retraction quotes it by design — the documented "grep assertion false-matches its own comments" class, INVERTED (there a guard false-*passes* on its own comment; here a sweep false-*fires* on its own retraction). Require a line-level disposition per survivor, never a count, and amend the AC explicitly when the count is wrong rather than quietly satisfying a looser check. (b) When a scope-out is justified on a mechanism rather than on bookkeeping, run the CONCUR gate BEFORE filing and make it measure the premise: "any edit to a `templatefile` source is an infra change" is FALSE wherever a render-time strip sits between the template and the consumer. Also check the criterion's own conjuncts — `contested-design` requires the review agent to name **≥2** approaches AND recommend a design cycle, so a finding that names one fix and no cycle fails it on its face regardless of the premise. And `pre-existing-unrelated` fails its second conjunct whenever the PR corrected the paraphrases and left the ORIGIN standing: that converts a uniformly-stale repo into a self-contradictory one, which is exacerbation. **Why:** #7455 — an AC predicted one survivor and got six; a `cloud-init-registry.yml` deferral rested on `user_data` being ForceNew with no `ignore_changes` (both true) while `registry_rationale_strip` made the rendered delta **byte-identical, 0 bytes**; and a deferred `model.c4` clause the same PR had made self-contradictory fanned out **12×** in the generated JSON (`grep -c` on that one-line file reports 1 — use `grep -o … | wc -l`). See `knowledge-base/project/learnings/2026-08-13-a-rider-is-only-valid-while-its-vehicle-is-still-pending.md`.
 
 ### Sharp Edges: Review Agent Limitations
 

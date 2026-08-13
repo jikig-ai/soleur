@@ -27,7 +27,7 @@ soleur:provision-github <tenant-slug> <tenant-org> <reviewer-github-username> [-
 ## Execution
 
 ```bash
-bash plugins/soleur/skills/provision-github/scripts/provision-github.sh <slug> <org> <reviewer> [--dry-run]
+bash "${CLAUDE_PLUGIN_ROOT}/skills/provision-github/scripts/provision-github.sh" <slug> <org> <reviewer> [--dry-run]
 ```
 
 The script:
