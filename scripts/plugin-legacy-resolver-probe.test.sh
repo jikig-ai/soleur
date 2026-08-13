@@ -337,12 +337,58 @@ assert_jq "unparseable site does not read clean"          "$out" '.verdict'     
 rm -rf "$r"
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# CASE FOLDING. GitHub repository names are case-insensitive, so `JiKiG-AI/Soleur`
+# denotes the same repository as `jikig-ai/soleur`. The probe normalises with
+# ascii_downcase; nothing exercised it, and review demonstrated the consequence:
+# with the fold removed this machine reads `clean` while a legacy registration is
+# live. A false clean here is not a test nicety -- the probe verdict is the
+# evidence #7489 closes on.
+# ---------------------------------------------------------------------------
+r="$(new_fixture)"
+km_github "soleur" "JiKiG-AI/Soleur" true > "$r/home/.claude/plugins/known_marketplaces.json"
+out="$(run_probe "$r")"
+assert_jq "case-fold: a differently-cased repo is still the target" "$out" '.verdict' "legacy-present"
+assert_jq "case-fold: the alias is reported"                        "$out" '.matched_aliases | join(",")' "soleur"
+rm -rf "$r"
+
+# Direction control: a genuinely different repository that merely shares a prefix
+# must NOT fold into the target.
+r="$(new_fixture)"
+km_github "other" "jikig-ai/soleur-marketplace" true > "$r/home/.claude/plugins/known_marketplaces.json"
+out="$(run_probe "$r")"
+assert_jq "case-fold control: a different repo is not the target" "$out" '.verdict' "clean"
+rm -rf "$r"
+
+# ---------------------------------------------------------------------------
+# THE enabledPlugins JOIN. `enabledPlugins` is a `plugin@alias` boolean map and is
+# the third site a machine can resolve to the target from. Review demonstrated
+# that emptying the join makes a machine carrying
+# `enabledPlugins: {"soleur@soleur": true}` read `clean`.
+# ---------------------------------------------------------------------------
+r="$(new_fixture)"
+jq -n '{enabledPlugins: {"soleur@soleur": true}}' > "$r/home/.claude/settings.json"
+out="$(run_probe "$r")"
+assert_jq "enabledPlugins: an enabled plugin is not clean"   "$out" '.verdict' "unknown-present"
+assert_jq "enabledPlugins: the entry resolves as an unknown" "$out" '[.enabled[] | select(.alias == "soleur") | .resolution] | join(",")' "unknown"
+rm -rf "$r"
+
+# When the alias DOES resolve to the target, the enabled entry must be reported
+# as a target hit and counted, not merely as an unknown.
+r="$(new_fixture)"
+km_github "soleur" "jikig-ai/soleur" true > "$r/home/.claude/plugins/known_marketplaces.json"
+jq -n '{enabledPlugins: {"soleur@soleur": true}}' > "$r/home/.claude/settings.json"
+out="$(run_probe "$r")"
+assert_jq "enabledPlugins: a resolvable enabled plugin is a target hit" "$out" '[.enabled[] | select(.alias == "soleur") | .resolution] | join(",")' "target"
+assert_jq "enabledPlugins: it counts toward the summary"                "$out" '.summary.target_enabled_count' "1"
+rm -rf "$r"
+
 # Minimum-cardinality guard. If the fixture builder or the probe silently
 # stopped producing cases, every loop above would vanish and the suite would
 # exit 0 having asserted nothing.
 # ---------------------------------------------------------------------------
-if [[ "$cases" -lt 20 ]]; then
-  fail "vacuity guard: only $cases assertions ran; expected >= 20"
+if [[ "$cases" -lt 28 ]]; then
+  fail "vacuity guard: only $cases assertions ran; expected >= 28"
 fi
 
 printf '\nTotal: %d passed, %d failed (%d assertions)\n' "$passes" "$fails" "$cases"
