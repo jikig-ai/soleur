@@ -5533,8 +5533,23 @@ jobs:
   vector_redeliver:
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'vector-redeliver'
     runs-on: ubuntu-24.04
-    # 15, matching ci_ssh_token_replace (:5148). Omitted, GitHub grants 360 — on a job holding
-    # TWO mutexes, one of which (web-1-swap) the in-band credential-repair arm also needs.
+    # 15, matching ci_ssh_token_replace (:5148). Omitted, GitHub grants 360.
+    #
+    # THIS DOES NOT BOUND THE MUTEX HOLD, and an earlier revision of this comment claimed it
+    # did. `timeout-minutes` starts when the job begins EXECUTING; a job held in `waiting` for
+    # the `environment:` approval below has not started, and a pending GitHub deployment
+    # approval survives for up to 30 days — while already holding its concurrency group. This
+    # file's own header records the measurement (`:44-47`): PR #4220 dropped an `environment:`
+    # reviewer gate after apply runs sat in `waiting` up to 13h blocking sibling applies
+    # through exactly this mechanism.
+    #
+    # Consequence to know before dispatching: an unapproved dispatch of THIS arm holds
+    # `web-1-swap`, which `ci_ssh_token_replace` also takes — and that arm is deliberately
+    # environment-free (`:5142-5148`) so credential recovery is never behind a click. Approve
+    # or CANCEL a dispatch you are not going to complete; do not leave it pending. The runbook
+    # says so under Preconditions. Pre-existing and repo-wide (web_host_create and
+    # web_host_replace pair the same environment with the same group) — tracked separately, not
+    # papered over here.
     timeout-minutes: 15
     # A MAIN-BRANCH PIN (F7) — see the gate chain above. Not decorative.
     environment: web-platform-infra-apply
@@ -5677,6 +5692,19 @@ jobs:
             terraform show -no-color tfplan \
               | grep -E 'will be destroyed|must be replaced|will be updated in-place|will be created|Plan:' \
               | head -30 >&2 || true
+            exit 1
+          fi
+          # FAIL-CLOSED ON A MISSING VERDICT. The gate sets VECTOR_REDELIVER_OUTCOME as its
+          # first statement, so an empty value here means the sourced lib is not the one this
+          # step thinks it is — a rename, a partial source, a shadowed function. Two things
+          # would otherwise happen, both bad: `set -u` kills the step at the printf with a
+          # message that names bash rather than the cause, or a `:-` default silently publishes
+          # an empty outcome that reads as "not pass" and skips the apply without saying why.
+          # Asserted explicitly instead. (This guard is also what satisfies
+          # scripts/lint-workflow-step-env-refs.py, which cannot see that a sourced function
+          # sets the variable — its docstring names exactly this shape.)
+          if [[ -z "${VECTOR_REDELIVER_OUTCOME:-}" ]]; then
+            echo "::error::vector_redeliver_gate returned success but set no VECTOR_REDELIVER_OUTCOME. Refusing to apply on a verdict that does not exist. NOTHING has been changed."
             exit 1
           fi
           printf 'outcome=%s\n' "$VECTOR_REDELIVER_OUTCOME" >> "$GITHUB_OUTPUT"

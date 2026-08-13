@@ -113,7 +113,7 @@ fi
 
 vector_redeliver_gate() {
   local plan_json="$1"
-  local counts oos hdel entries delivered
+  local counts oos hdel entries noop family delivered
 
   # Caller-visible outcome. Reset on EVERY invocation: a stale `pass` from a previous call
   # in the same shell must never be read as this call's verdict.
@@ -162,6 +162,37 @@ vector_redeliver_gate() {
               | select(IN(.address; allow[])) ]
             | length
           ),
+          # THE ALREADY-DELIVERED SHAPE, and the counter that stops it reading as a destroy.
+          # Terraform emits ["no-op"] rows for targeted-but-unchanged resources — measured on
+          # a real captured plan in this repo (tests/scripts/fixtures/
+          # tfplan-web-platform-real-baseline.json: 73 resource_changes, ALL ["no-op"]). So a
+          # re-dispatch after a successful delivery does NOT yield an absent address; it
+          # yields this. NOTE: no apostrophes in this block — it sits inside a single-quoted
+          # bash string, and one would terminate the jq program mid-comment.
+          journald_noop: (
+            [ $plan.resource_changes[]?
+              | select(IN(.address; allow[]))
+              | select((.change.actions? // []) == ["no-op"]) ]
+            | length
+          ),
+          # INDEX-AGNOSTIC identity: the allow-set address, optionally carrying a for_each or
+          # count subscript. This is the only counter that can still see the resource after a
+          # `for_each`/`count` move, when the address becomes
+          # terraform_data.journald_persistent["web-1"] and exact equality stops matching.
+          # Without it, that move is indistinguishable from "absent".
+          #
+          # Keyed on .address, NOT on .type+.name. Real plan JSON carries .name, but the
+          # shared fixture builder (gate-suite-harness.sh rc_entry) emits only address+type,
+          # so a .name predicate would read 0 on every fixture in this repo — a counter that
+          # is structurally dead under test is exactly the vacuity the Guard Contract forbids.
+          # Anchored at both ends so the M9a/M9b near-miss addresses (…_v2, module-prefixed)
+          # stay OUT, which the suite pins.
+          journald_family: (
+            [ $plan.resource_changes[]?
+              | select((.address? // "")
+                       | test("^terraform_data\\.journald_persistent(\\[.*\\])?$")) ]
+            | length
+          ),
           journald_delivered: (
             [ $plan.resource_changes[]?
               | select(IN(.address; allow[]))
@@ -177,6 +208,8 @@ vector_redeliver_gate() {
   oos=$(echo "$counts" | jq -r '.vector_out_of_scope_changes')
   hdel=$(echo "$counts" | jq -r '.host_destroyed')
   entries=$(echo "$counts" | jq -r '.journald_entries')
+  noop=$(echo "$counts" | jq -r '.journald_noop')
+  family=$(echo "$counts" | jq -r '.journald_family')
   delivered=$(echo "$counts" | jq -r '.journald_delivered')
 
   # Every counter is a non-negative integer BEFORE any arithmetic compares one.
@@ -185,11 +218,12 @@ vector_redeliver_gate() {
   # helper names WHICH counter failed rather than reporting them all.
   plan_gate_assert_numeric "vector_redeliver_gate" \
     "vector_out_of_scope_changes=${oos}" "host_destroyed=${hdel}" \
-    "journald_entries=${entries}" "journald_delivered=${delivered}" || return 1
+    "journald_entries=${entries}" "journald_noop=${noop}" \
+    "journald_family=${family}" "journald_delivered=${delivered}" || return 1
 
   # The PASS-path counter line. Asserted by the suite and consumed as the liveness signal —
   # a gate that decides correctly but prints nothing is unobservable after the fact.
-  echo "vector_out_of_scope_changes=${oos} host_destroyed=${hdel} journald_entries=${entries} journald_delivered=${delivered}"
+  echo "vector_out_of_scope_changes=${oos} host_destroyed=${hdel} journald_entries=${entries} journald_noop=${noop} journald_family=${family} journald_delivered=${delivered}"
 
   # Named, specific refusals FIRST, so an operator sees the alarming thing by name rather
   # than a generic "not the expected shape".
@@ -197,6 +231,20 @@ vector_redeliver_gate() {
     echo "vector_redeliver_gate: ABORT — this dispatch would DESTROY a server or volume (host_destroyed=${hdel}). web-1 and the workspaces volumes are in this arm's target closure; a delivery must never remove them."
     return 1
   fi
+  # THE STALE-ALLOW-SET REFUSAL, ahead of every absence branch. Zero entries at the exact
+  # address WHILE the type+name family is present means the resource still exists but has
+  # moved off the address this gate matches — the `for_each`/`count` case the header's
+  # un-indexed-address note predicted. Reporting "nothing to redeliver" there would print the
+  # reassuring sentence for the alarming condition, which is the exact inversion this gate is
+  # written to avoid. It is now a counter, not a comment.
+  if [[ "$entries" -eq 0 && "$family" -gt 0 ]]; then
+    echo "vector_redeliver_gate: ABORT — the allow-set is STALE. ${family} entr(y/ies) of type terraform_data named journald_persistent are in this plan, but NONE is at the exact address the allow-set matches. The resource has almost certainly moved under for_each/count (address is now terraform_data.journald_persistent[\"...\"]). This arm delivers NOTHING until the allow-set in tests/scripts/lib/vector-redeliver-gate.sh is updated to the indexed address."
+    return 1
+  fi
+  # AFTER the stale-allow-set check, deliberately. A moved resource is ALSO an out-of-scope
+  # address by construction, so with this branch first the operator was told to go clear
+  # "pending drift elsewhere in the closure" — drift that does not exist — for what is really
+  # a stale allow-set. Measured on an indexed-address fixture before the reorder.
   if [[ "$oos" -gt 0 ]]; then
     echo "vector_redeliver_gate: ABORT — ${oos} change(s) outside the allow-set. This arm may only deliver terraform_data.journald_persistent; pending drift elsewhere in the closure must be cleared through the push apply, not through this arm."
     return 1
@@ -204,15 +252,29 @@ vector_redeliver_gate() {
   if [[ "$entries" -eq 0 ]]; then
     # Deliberately NOT "state already matches": with an exact-equality allow-set, zero
     # entries is ALSO what a broken allow-set looks like (see the un-indexed-address note).
+    # The family counter above rules out the one form of breakage that is mechanically
+    # detectable; this branch is the residual, so the message still refuses to reassure.
     echo "vector_redeliver_gate: NO-OP — no entry matched the allow-set, so there is nothing to redeliver. If a delivery was expected, verify terraform_data.journald_persistent is still un-indexed at that exact address."
     VECTOR_REDELIVER_OUTCOME="noop"
     return 0
   fi
-  if [[ "$entries" -ne 1 || "$delivered" -ne 1 ]]; then
-    echo "vector_redeliver_gate: ABORT — the allow-set address is present but this is not exactly one delivery (journald_entries=${entries} journald_delivered=${delivered}). A lone delete/forget, an update-in-place, or duplicate entries all land here; only [\"create\",\"delete\"] or [\"create\"] is a delivery."
-    return 1
+  if [[ "$entries" -eq 1 && "$delivered" -eq 1 ]]; then
+    echo "vector_redeliver_gate: PASS — exactly one delivery of terraform_data.journald_persistent, nothing else changed"
+    VECTOR_REDELIVER_OUTCOME="pass"
+    return 0
   fi
-  echo "vector_redeliver_gate: PASS — exactly one delivery of terraform_data.journald_persistent, nothing else changed"
-  VECTOR_REDELIVER_OUTCOME="pass"
-  return 0
+  # THE ALREADY-DELIVERED BRANCH, and the one F12 actually needs. The first cut of this gate
+  # keyed "already delivered" on journald_entries==0, which is WRONG and was measured wrong:
+  # terraform emits ["no-op"] rows for targeted-but-unchanged resources, so a re-dispatch
+  # after a successful delivery scores entries=1 delivered=0 and fell through to the ABORT
+  # below — telling the operator to hunt a destroy that does not exist, on the single most
+  # routine dispatch this arm has. Meanwhile entries==0 could then only mean the address was
+  # ABSENT, i.e. the alarming case, which is why the two had to stop sharing a branch.
+  if [[ "$entries" -eq 1 && "$noop" -eq 1 ]]; then
+    echo "vector_redeliver_gate: NO-OP — terraform_data.journald_persistent is in the plan as a no-op, so the committed vector.toml/journald drop-in are ALREADY delivered to the host. Nothing to redeliver."
+    VECTOR_REDELIVER_OUTCOME="noop"
+    return 0
+  fi
+  echo "vector_redeliver_gate: ABORT — the allow-set address is present but this is neither a delivery nor an already-delivered no-op (journald_entries=${entries} journald_noop=${noop} journald_delivered=${delivered}). A lone delete/forget, an update-in-place, or duplicate entries all land here; only [\"create\",\"delete\"] or [\"create\"] is a delivery."
+  return 1
 }

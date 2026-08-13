@@ -1780,7 +1780,7 @@ else
   fail "the gate must be the composite's final step (gate step starts at line ${W6_GATE_STEP:-none}, last step starts at line ${W6_LAST_STEP:-none})"
 fi
 
-echo "W7: the six bridge call sites are the expected six, by NAME"
+echo "W7: the seven bridge call sites are the expected seven, by NAME"
 # MEMBERSHIP, not cardinality. A count is invariant under substitution: MEASURED, pointing
 # one caller at a different action and adding a spare `uses:` elsewhere kept the total at 6
 # while a workflow that SSHes to a host silently lost the gate — and the failure string
@@ -1790,10 +1790,15 @@ echo "W7: the six bridge call sites are the expected six, by NAME"
 W7_ACTUAL=$(grep -rlE '^\s+uses: \./\.github/actions/cf-tunnel-ssh-bridge\s*$' "$GH_DIR/workflows" 2>/dev/null | xargs -r -n1 basename | sort -u | paste -sd, -)
 W7_EXPECTED="apply-deploy-pipeline-fix.yml,apply-web-platform-infra.yml,git-data-cutover.yml,workspaces-luks-cutover.yml,workspaces-luks-verify.yml"
 W7_N=$(grep -rEc '^\s+uses: \./\.github/actions/cf-tunnel-ssh-bridge\s*$' "$GH_DIR/workflows" 2>/dev/null | awk -F: '{s+=$NF} END {print s+0}')
-if [[ "$W7_ACTUAL" == "$W7_EXPECTED" && "$W7_N" == "6" ]]; then
-  pass "5 workflows / 6 call sites (workspaces-luks-cutover uses it twice)"
+# #7542 took this 6 -> 7: apply-web-platform-infra.yml gained a SECOND call site, the
+# `vector_redeliver` job, which bridges to web-1 to replace terraform_data.journald_persistent.
+# The FILE list is unchanged (that workflow was already a caller), so only the count moves —
+# which is precisely the substitution-blind case the membership check above exists to cover,
+# and why both halves are asserted rather than either alone.
+if [[ "$W7_ACTUAL" == "$W7_EXPECTED" && "$W7_N" == "7" ]]; then
+  pass "5 workflows / 7 call sites (workspaces-luks-cutover uses it twice; apply-web-platform-infra.yml uses it twice since #7542)"
 else
-  fail "bridge callers drifted. Expected files [$W7_EXPECTED] with 6 call sites; got [$W7_ACTUAL] with $W7_N. If you ADDED a caller, add it to W7_EXPECTED and bump the count; if a file disappeared from the list, that workflow silently lost the liveness gate."
+  fail "bridge callers drifted. Expected files [$W7_EXPECTED] with 7 call sites; got [$W7_ACTUAL] with $W7_N. If you ADDED a caller, add it to W7_EXPECTED and bump the count; if a file disappeared from the list, that workflow silently lost the liveness gate."
 fi
 
 echo "W8: no -replace target names the .deploy service token"

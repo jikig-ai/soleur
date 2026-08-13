@@ -66,13 +66,24 @@ _job_body() {
 # The name match is WHOLE-LINE, not a prefix. Measured: with `index(...) == 1`, renaming the
 # step to `CF Tunnel SSH bridge (late)` left every row green — the prefix still matched, so a
 # renamed-and-repurposed step could satisfy the ordering rows it was supposed to break.
+# Stops after the FIRST match, and never reopens. Measured: without the `fin` latch this
+# CONCATENATED every step sharing the name while _step_line below read only the first, so a
+# duplicate `- name: CF Tunnel SSH bridge` (legal in Actions — only `id` must be unique) let
+# the real bridge sit AFTER the gate while both the ordering row and the "it is really the
+# bridge" row stayed green. The cardinality row below is the other half of that fix.
 _step_body() {
   awk -v want="      - name: $1" '
-    $0 == want { inb = 1; print; next }
-    inb && /^      - name: / { inb = 0 }
-    inb && /^  [a-zA-Z_][a-zA-Z0-9_-]*:/ { inb = 0 }
+    fin { next }
+    $0 == want && !seen { inb = 1; seen = 1; print; next }
+    inb && /^      - name: / { inb = 0; fin = 1 }
+    inb && /^  [a-zA-Z_][a-zA-Z0-9_-]*:/ { inb = 0; fin = 1 }
     inb { print }
   ' <<<"$JOB_BODY"
+}
+
+# How many steps carry this exact name. Anything but 1 breaks the extractors' agreement.
+_step_count() {
+  grep -c -x -- "      - name: $1" <<<"$JOB_BODY"
 }
 
 # 1-based line index of a step's `- name:` line within the job body. Used for ORDER rows.
@@ -134,15 +145,25 @@ else
   _report "V2 job declares environment: web-platform-infra-apply (F7 main-branch pin)" fail "absent — the ref-pin is gone"
 fi
 
-if grep -qxE '      group: web-1-swap' <<<"$JOB_BODY"; then
-  _report "V3 job-level concurrency group is web-1-swap (F4)" ok
+# BLOCK-SCOPED, using the same technique the D10 suite applies to its abort block. Measured:
+# as bare job-wide line greps, adding `env:` with a `group: web-1-swap` key underneath left
+# both rows green while `concurrency.group` was `vector-redeliver-${{ github.run_id }}` — i.e.
+# per-run, serializing against nothing. The job would then root-remote-exec on web-1
+# concurrently with a container swap or a LUKS cutover, which is the F4 hazard exactly.
+conc_block="$(awk '
+  /^    concurrency:[[:space:]]*$/ { inb = 1; next }
+  inb && /^    [a-zA-Z_]/ { inb = 0 }
+  inb { print }
+' <<<"$JOB_BODY")"
+if [[ -n "$conc_block" ]] && grep -qxE '      group: web-1-swap' <<<"$conc_block"; then
+  _report "V3 the job's concurrency.group is web-1-swap (F4), read from the concurrency block" ok
 else
-  _report "V3 job-level concurrency group is web-1-swap (F4)" fail "absent"
+  _report "V3 the job's concurrency.group is web-1-swap (F4)" fail "the concurrency: block is absent or its group is not web-1-swap"
 fi
-if grep -qxE '      cancel-in-progress: false' <<<"$JOB_BODY"; then
-  _report "V4 cancel-in-progress: false (a cancelled half-apply is the worse split state)" ok
+if [[ -n "$conc_block" ]] && grep -qxE '      cancel-in-progress: false' <<<"$conc_block"; then
+  _report "V4 concurrency.cancel-in-progress is false (a cancelled half-apply is the worse split state)" ok
 else
-  _report "V4 cancel-in-progress: false" fail "absent"
+  _report "V4 concurrency.cancel-in-progress is false" fail "absent from the concurrency: block"
 fi
 if grep -qxE '    timeout-minutes: 15' <<<"$JOB_BODY"; then
   _report "V5 timeout-minutes: 15 (F15 — omitted, GitHub grants 360 on a job holding two mutexes)" ok
@@ -197,14 +218,32 @@ else
   _report "M6a gate step publishes VECTOR_REDELIVER_OUTCOME to \$GITHUB_OUTPUT" fail "the apply cannot be gated on a verdict that is never exported"
 fi
 
-if grep -qE 'nothing to redeliver' <<<"$GATE_BODY" && grep -qE 'GITHUB_STEP_SUMMARY' <<<"$GATE_BODY"; then
-  _report "M6a the no-op outcome writes 'nothing to redeliver' to \$GITHUB_STEP_SUMMARY (F12)" ok
+# BLOCK-SCOPED. Two independent greps over the whole step were satisfiable by an unrelated
+# summary write elsewhere in it — measured: moving the redirect into the ABORT branch and
+# leaving the no-op branch echoing to stdout kept this row green, which is the identical
+# defect the D10 suite records at its own W3 row. Extract the `== "noop"` block and require
+# the redirect INSIDE it.
+noop_block="$(awk '
+  /^[[:space:]]*if \[\[ "\$VECTOR_REDELIVER_OUTCOME" == "noop" \]\]; then/ { inb = 1 }
+  inb { print }
+  inb && /^[[:space:]]*fi[[:space:]]*$/ { exit }
+' <<<"$GATE_BODY")"
+if [[ -n "$noop_block" ]] \
+   && grep -qE 'nothing to redeliver' <<<"$noop_block" \
+   && grep -qE 'GITHUB_STEP_SUMMARY' <<<"$noop_block"; then
+  _report "M6a the no-op branch itself writes 'nothing to redeliver' to \$GITHUB_STEP_SUMMARY (F12)" ok
 else
-  _report "M6a the no-op outcome writes 'nothing to redeliver' to \$GITHUB_STEP_SUMMARY" fail "a silent green run is indistinguishable from a delivery"
+  _report "M6a the no-op branch itself writes 'nothing to redeliver' to \$GITHUB_STEP_SUMMARY" fail "block empty, or the text/redirect is not INSIDE the noop branch — a silent green run is indistinguishable from a delivery"
 fi
 
 # ── M6c: ONE plan artifact, graded whole, feeding ONE apply ────────────────────────────────
-n_plan=$(grep -cE '(^|[[:space:]])terraform plan([[:space:]]|$)' <<<"$JOB_BODY")
+# The subcommand may be separated from `terraform` by global flags (`-chdir=`, `-help`-style)
+# or by extra whitespace. Measured: a literal `terraform plan` two-token match let
+# `terraform -chdir=. plan -out=tfplan` inside the APPLY step through with n_plan still 1 —
+# the gate then graded a document the apply never read, which is the defect this file names
+# in its own header.
+_TF='(^|[[:space:]])terraform([[:space:]]+-[^[:space:]]+)*[[:space:]]+'
+n_plan=$(grep -cE "${_TF}plan([[:space:]]|\$)" <<<"$JOB_BODY")
 if [[ "$n_plan" -eq 1 ]]; then
   _report "M6c the job runs 'terraform plan' exactly once" ok
 else
@@ -224,7 +263,7 @@ else
   _report "M6c the plan carries exactly one -target=terraform_data.journald_persistent" fail "found ${n_target} -target= flag(s); a widened request enlarges the closure the gate must then refuse"
 fi
 
-n_apply=$(grep -cE '(^|[[:space:]])terraform apply([[:space:]]|$)' <<<"$JOB_BODY")
+n_apply=$(grep -cE "${_TF}apply([[:space:]]|\$)" <<<"$JOB_BODY")
 if [[ "$n_apply" -eq 1 ]]; then
   _report "M6c the job runs 'terraform apply' exactly once" ok
 else
@@ -240,18 +279,35 @@ else
   _report "M6c the apply consumes the SAVED tfplan positionally (AC13)" fail "no anchored 'terraform apply -no-color -input=false -auto-approve tfplan' line — a re-plan dissolves the chokepoint"
 fi
 
-# NOT line-anchored: measured, `apply -no-color -input=false -auto-approve -target=…` puts the
-# flag mid-line, where a `^\s*-target=` row never sees it.
-if grep -qE '(^|[[:space:]])-target=' <<<"$APPLY_BODY"; then
-  _report "M6c the apply passes no -target= (a saved plan takes none)" fail "found a -target= on the apply step — it is re-planning"
+# JOB-scoped, and NOT line-anchored. Two measured evasions this covers: `apply -no-color
+# -input=false -auto-approve -target=…` puts the flag mid-line where a `^\s*-target=` row
+# never sees it; and an entirely SEPARATE follow-up apply step carrying `-target=` is
+# invisible to a row scoped to $APPLY_BODY. The plan step is the only place a -target may
+# appear, so assert that every -target= in the job is one of the plan step's.
+n_target_job=$(grep -cE '(^|[[:space:]])-target=' <<<"$JOB_BODY")
+n_target_plan=$(grep -cE '(^|[[:space:]])-target=' <<<"$PLAN_BODY")
+if [[ "$n_target_job" -eq "$n_target_plan" ]]; then
+  _report "M6c every -target= in the job belongs to the plan step (no re-planning apply)" ok
 else
-  _report "M6c the apply passes no -target= (a saved plan takes none)" ok
+  _report "M6c every -target= in the job belongs to the plan step" fail "job has ${n_target_job} -target= but the plan step only ${n_target_plan} — another step is targeting, i.e. re-planning"
 fi
 
-if grep -qxE "        if: steps\.vector_gate\.outputs\.outcome == 'pass'" <<<"$JOB_BODY"; then
-  _report "M6c the apply step runs ONLY on the gate's 'pass' outcome" ok
+# Read from the APPLY step, not the job. Measured: job-scoped, a decoy step carrying this
+# exact `if:` satisfied the row while the apply itself was given `if: always()` — and an
+# always() step runs AFTER a failed one, so the production apply proceeded on a plan the gate
+# had explicitly refused. That is the whole property this file exists to pin.
+if grep -qxE "        if: steps\.vector_gate\.outputs\.outcome == 'pass'" <<<"$APPLY_BODY"; then
+  _report "M6c the apply step itself runs ONLY on the gate's 'pass' outcome" ok
 else
-  _report "M6c the apply step runs ONLY on the gate's 'pass' outcome" fail "the apply is not gated on steps.vector_gate.outputs.outcome"
+  _report "M6c the apply step itself runs ONLY on the gate's 'pass' outcome" fail "the apply step body does not carry the steps.vector_gate.outputs.outcome condition"
+fi
+
+# The `if:` above names steps.vector_gate. Nothing else pinned that id ONTO the gate step, so
+# the reference could dangle — an unresolvable step id evaluates to empty, not to an error.
+if grep -qxE '        id: vector_gate' <<<"$GATE_BODY"; then
+  _report "M6c the gate step carries id: vector_gate (the id the apply's condition resolves)" ok
+else
+  _report "M6c the gate step carries id: vector_gate" fail "the apply gates on an id no step declares — it would resolve to empty and never equal 'pass'"
 fi
 
 # ── M6d: step ORDER, which no unit test can see ────────────────────────────────────────────
@@ -284,6 +340,22 @@ _order "M6d the plan precedes the gate (the gate grades a document that exists)"
 _order "M6d the gate precedes the apply (AC12 as rewritten by F10)" "$ln_gate" "$ln_apply"
 _order "M6d the teardown follows the apply" "$ln_apply" "$ln_teardown"
 
+# CARDINALITY, and the other half of the duplicate-name fix. _step_line reads the FIRST match
+# and _step_body now stops at the first match; both are only meaningful while each pinned name
+# occurs exactly once. Duplicate step names are legal in Actions (only `id` must be unique), and
+# a second `- name: CF Tunnel SSH bridge` after the gate is how the F10 ordering row was
+# defeated while every other row stayed green.
+_dupes=""
+for _n in "$BRIDGE_STEP_NAME" "$PLAN_STEP_NAME" "$GATE_STEP_NAME" "$APPLY_STEP_NAME" "$TEARDOWN_STEP_NAME"; do
+  _c=$(_step_count "$_n")
+  [[ "$_c" -eq 1 ]] || _dupes+="${_n} x${_c}; "
+done
+if [[ -z "$_dupes" ]]; then
+  _report "M6d each of the five pinned step names occurs EXACTLY once (the extractors only agree if so)" ok
+else
+  _report "M6d each of the five pinned step names occurs EXACTLY once" fail "$_dupes"
+fi
+
 # The composite action declares this MANDATORY (action.yml:33-58) — it cannot register a
 # post-job hook. It is also where /tmp/cloudflared.log surfaces, which is the evidence the
 # runbook's L3 "tunnel unhealthy" hypothesis runs on.
@@ -310,17 +382,24 @@ d = yaml.safe_load(open(sys.argv[1]))
 # `on:` parses to the boolean True in YAML 1.1 — read both spellings rather than assume.
 on = d.get("on", d.get(True)) or {}
 inputs = ((on.get("workflow_dispatch") or {}).get("inputs") or {})
-desc = (inputs.get("confirm") or {}).get("description")
-if desc is None:
+if not inputs or "confirm" not in inputs:
     print("MISSING")
 else:
-    print("HIT" if "REDELIVER-VECTOR" in desc else "CLEAN")
+    # EVERY input's description AND default, not just confirm's. Measured: scoped to
+    # `confirm`, moving the token into `reason.description` left the row green while putting
+    # it back on the dispatch form one field over — the leak this row exists to stop.
+    hits = [
+        n for n, spec in inputs.items()
+        for field in ("description", "default")
+        if "REDELIVER-VECTOR" in str((spec or {}).get(field) or "")
+    ]
+    print("HIT:" + ",".join(sorted(set(hits))) if hits else "CLEAN")
 PYX
 ) || _desc_out="RC_FAIL"
 case "$_desc_out" in
-  CLEAN)   _report "M6e REDELIVER-VECTOR is absent from the confirm input's description (F5/AC9)" ok ;;
-  HIT)     _report "M6e REDELIVER-VECTOR is absent from the confirm input's description" fail "the token leaked into the field label the operator reads" ;;
-  *)       _report "M6e REDELIVER-VECTOR is absent from the confirm input's description" fail "could not read the description (${_desc_out}) — no verdict" ;;
+  CLEAN)   _report "M6e REDELIVER-VECTOR is absent from EVERY workflow_dispatch input description/default (F5/AC9)" ok ;;
+  HIT:*)   _report "M6e REDELIVER-VECTOR is absent from every input description/default" fail "the token leaked into the field label(s) the operator reads: ${_desc_out#HIT:}" ;;
+  *)       _report "M6e REDELIVER-VECTOR is absent from every input description/default" fail "could not read the inputs (${_desc_out}) — no verdict" ;;
 esac
 
 if grep -qE 'REDELIVER-VECTOR' <<<"$JOB_BODY"; then
@@ -334,8 +413,11 @@ fi
 # which lines are inside a `run:` block, this inverts the test: EVERY `${{ inputs.* }}` in the
 # job must be an `env:` mapping line (`          NAME_RAW: ${{ inputs.x }}`). Anything else —
 # a bare interpolation in a shell body, a `-var=` argument — is a violation by construction.
-bad_interp="$(grep -nE '\$\{\{[[:space:]]*inputs\.' <<<"$JOB_BODY" \
-  | grep -vE '^[0-9]+:[[:space:]]+[A-Z_]+:[[:space:]]*\$\{\{[[:space:]]*inputs\.[a-z_]+[[:space:]]*\}\}$' || true)"
+# `github.event.inputs.*` is the fully-supported legacy alias for `inputs.*` and was invisible
+# to the earlier pattern — measured, `echo "reason: ${{ github.event.inputs.reason }}"` inside
+# a run: body left this row green while interpolating operator text straight into a shell.
+bad_interp="$(grep -nE '\$\{\{[[:space:]]*(github\.event\.)?inputs\.' <<<"$JOB_BODY" \
+  | grep -vE '^[0-9]+:[[:space:]]+[A-Z_]+:[[:space:]]*\$\{\{[[:space:]]*(github\.event\.)?inputs\.[a-z_]+[[:space:]]*\}\}$' || true)"
 if [[ -n "$bad_interp" ]]; then
   _report "M6e every \${{ inputs.* }} in the job is an env: mapping, never a shell body" fail "$bad_interp"
 else
@@ -356,7 +438,7 @@ fi
 # Pinned EXACTLY, per the neighbouring suite's measurement: neutering `_report` to `return 0`
 # reports "0 passed, 0 failed" and exits 0, because `fails` is a single unguarded integer. A
 # `>=` re-opens that hole the next time a row is added.
-EXPECTED_ASSERTIONS=32
+EXPECTED_ASSERTIONS=34
 if [[ "$fails" -eq 0 && "$passes" -ne "$EXPECTED_ASSERTIONS" ]]; then
   printf '  FAIL anti-vacuity: %d assertions passed, expected exactly %d — rows were added, removed, or silenced\n' \
     "$passes" "$EXPECTED_ASSERTIONS"
