@@ -16,7 +16,7 @@ so it lands before either consumer.
       capture the exact query dialect for the runbook (CLI-verification gate).
 - [ ] 0.4 Confirm the cat-deploy-state webhook invocation shape and that its payload carries
       `vector_journal_tail` and `journald_storage.persistent`.
-- [ ] 0.5 Re-derive the next free ADR ordinal across all `origin/*` refs (187 is provisional).
+- [ ] 0.5 Confirm no ADR is required (see plan Architecture Decision: the trigger does not fire).
 
 ## Phase 1 — The gate (contract first)
 
@@ -73,10 +73,10 @@ so it lands before either consumer.
 - [ ] 4.5 `## Known residual` records the deliberate no-`-replace` limitation.
 - [ ] 4.6 No runbooks index exists — no index edit required.
 
-## Phase 5 — ADR + sweep
+## Phase 5 — Guard-suite sweep
 
-- [ ] 5.1 Write the ADR at the re-derived ordinal, with all five Alternatives rows.
-- [ ] 5.2 Sweep for stale ordinal references across plan, tasks and ACs if it moved.
+- [ ] 5.1 Run `apps/web-platform/infra/web-1-swap-concurrency-parity.test.sh` (NOT in test-all.sh).
+- [ ] 5.2 Run `bun test plugins/soleur/` (covers stock-preflight-coverage + terraform-target-parity).
 - [ ] 5.3 Run `plugins/soleur/test/terraform-target-parity.test.ts` (F1).
 - [ ] 5.4 Run `bash tests/scripts/test-destroy-guard-regex-parity.sh`.
 - [ ] 5.5 Run `actionlint` on the workflow; `bash -c` each new `run:` snippet.

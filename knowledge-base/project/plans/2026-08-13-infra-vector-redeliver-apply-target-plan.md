@@ -574,7 +574,6 @@ checklist exists to prevent.
 | `tests/scripts/lib/vector-redeliver-gate.sh` | The sourced gate: `vector_redeliver_gate <plan-json>` → 0 = PASS, 1 = ABORT |
 | `tests/scripts/test-vector-redeliver-gate.sh` | Mutation-matrix suite; sources the same gate bytes CI runs |
 | `knowledge-base/engineering/operations/runbooks/vector-redeliver.md` | Operator runbook for the new target |
-| `knowledge-base/engineering/architecture/decisions/ADR-187-scoped-vector-config-redelivery-arm.md` | The decision record (ordinal **provisional** — see Architecture Decision below) |
 
 ## Files to Edit
 
@@ -680,10 +679,11 @@ each step` / `## If it fails` / `## After it succeeds` / `## Known residual`) �
 `ci-ssh-token-replace.md`, which carries no YAML frontmatter. `## If it fails` MUST follow the
 L3→L7 order from `## Hypotheses`. Verification is off-host only (see Observability).
 
-### Phase 5 — ADR + wiring sweep
+### Phase 5 — Guard-suite sweep
 
-Write the ADR; re-verify the ordinal against freshly-fetched `origin/*` immediately before merge.
-Run the sweep suites named in Acceptance Criteria.
+Run every suite named in Acceptance Criteria, including the two that live OUTSIDE `scripts/test-all.sh`:
+`web-1-swap-concurrency-parity.test.sh` (via `infra-validation.yml:1089`) and the vitest suites under
+`plugins/soleur/test/`. No ADR is written — see Architecture Decision.
 
 ## Guard Contract
 
@@ -707,55 +707,33 @@ feeding one apply — is structural and does not.
 **Mutation matrix.** Each row is an edit that MUST drive the guard RED. Derived from the design,
 before the gate is written.
 
-**Rows are grouped by AXIS, because N edits on one axis is one mutation.** The first draft had
-eight rows that were really three axes, one of which was broken. Four axes are exercised below:
-fixture *content*, fixture *shape*, the *SUT itself* (mutating the gate file), and the *workflow
-wiring*. A redundant backstop can only be pinned by a **layered SUT mutation** — a fixture row for
-it is vacuous by construction, because the counter that subsumes it reddens first.
+Rows carry an **Axis** column, because N edits on one axis is one mutation. The first draft had
+eight rows that were really three axes, one of which was broken. Four axes are exercised: fixture
+*content* (A), fixture *shape* (B), the *SUT itself* (C — mutating the gate file), and the
+*workflow wiring* (D). A redundant backstop can only be pinned by a layered SUT mutation; a fixture
+row for it is vacuous by construction, because the counter that subsumes it reddens first.
 
-**Axis A — fixture content** (jq fixtures via `gate-suite-harness.sh`):
+| # | Axis | Mutation | Must go RED via |
+|---|---|---|---|
+| M1 | A | **Second member:** a compliant journald delivery **plus** one more changed resource (`cloudflare_bot_management.soleur_ai`, `["update"]`) | `vector_out_of_scope_changes ≥ 1` — proves the gate does not stop at the first compliant entry |
+| M2 | A | Journald entry's actions `["delete","create"]` → `["update"]` | `journald_delivered == 0` |
+| M4 | A | Journald entry absent entirely (no-op plan) | `journald_delivered == 0` → **NO-OP SUCCESS** per **F12**: exit 0, skip bridge and apply, distinct step-summary line. Asserted as a green-with-summary, not a red |
+| M7 | A | Two entries for the allowed address | `journald_delivered == 2 ≠ 1` |
+| M9 | A | **Near-miss addresses:** `terraform_data.journald_persistent_v2` with `["update"]`, and separately `module.staging.terraform_data.journald_persistent` | `vector_out_of_scope_changes ≥ 1`. **The only row distinguishing `IN(.address; allow[])` from `inside`/`contains`** — with a one-member allow-set a prefix/`contains` implementation is otherwise indistinguishable. Models `test-inngest-host-replace-gate.sh:60-70` |
+| M10 | A | **The measured D5 shape at an address F13 puts in the closure:** `rc_empty_actions 'hcloud_server.web["web-1"]'` — `"actions": []`, `"after": null` (`gate-suite-harness.sh:73-85`) | `vector_out_of_scope_changes ≥ 1`. A *measured* production hole — a hidden destroy of the singleton behind app.soleur.ai that scored zeroes and PASSED a sibling gate. Add `rc_scalar_change` (`:93-96`) alongside |
+| M11 | A | Lone `["delete"]` (and separately `["forget"]`) at the **allowed** address | `journald_delivered != 1`. The most destructive single-address shape the arm can emit; `host_destroyed` is type-scoped to `hcloud_server` and out-of-scope excludes the allowed address, so nothing else catches it. M2 covers only the benign counterpart |
+| M12 | A | A `hcloud_volume.workspaces[*]` delete in the closure | `host_destroyed ≥ 1` — the counter is extended to name volumes too (**F13**); these are sole-copy user data |
+| M5a | B | Unreadable document (`{}` / invalid JSON / no `resource_changes`) | `plan_gate_assert_readable` |
+| M5b | B | An unclassifiable plan entry | `plan_gate_assert_classifiable`, anchored on its `"unclassifiable plan entry"` text (`test-inngest-host-replace-gate.sh:153-156`) |
+| M5c | B | A counter that fails to evaluate (empty string) | `plan_gate_assert_numeric`, naming the offending counter |
+| M3 | C | `gate_mutate_layered`: neuter the `host_destroyed` clause, then feed `hcloud_server.web["web-1"]` with `["delete","create"]` | Plan **still refused** (by out-of-scope), `host_destroyed` text **gone**, out-of-scope text **appears**. The honest contract for a deliberately-redundant backstop — a *fixture* row here would be vacuous |
+| M6b | C | Insert an early `return 0` in the gate | Already reddened by M1/M2/M7 — stated as **covered**, not claimed as an independent detector |
+| M6a | D | The gate step stops invoking the gate, discards its status (`… \|\| true`), or gains `continue-on-error: true` | Separate wiring suite modelled on `test-registry-d10-workflow-wiring.sh`: `_strip` comments (`:49`), extract job + step (`:51-67`), hard vacuity floor if the extractor returns empty (`:71-82`), then anchor on the **call form** `^\s*if ! vector_redeliver_gate ` and on `^\s*source\s+\S*vector-redeliver-gate\.sh` — never a bare filename token (`stock-preflight-coverage.test.ts:207-215`: a bare `.includes` was satisfied by the `# shellcheck source=` directive alone), plus a negative assertion on `continue-on-error` |
+| M6c | D | `terraform apply tfplan` rewritten to a re-plan (`-target=… -auto-approve`) | Assert `terraform plan -out=tfplan` occurs exactly once and the apply consumes the **saved** plan. Converts AC12/AC13 from checklist items into gate rows — the Assembly's claim rests on them and nothing else makes it true |
+| M6d | D | The bridge step moved *after* the plan step | Assert bridge precedes plan (**F10**) — that ordering is what makes SSH auth possible at all |
 
-| # | Mutation to the graded plan | Must go RED via |
-|---|---|---|
-| M1 | **Second member:** a compliant journald delivery **plus** one more changed resource (`cloudflare_bot_management.soleur_ai`, `["update"]`) | `vector_out_of_scope_changes ≥ 1` — proves the gate does not stop at the first compliant entry |
-| M2 | Journald entry's actions `["delete","create"]` → `["update"]` | `journald_delivered == 0` |
-| M4 | Journald entry absent entirely (no-op plan) | `journald_delivered == 0`, with the "no entry matched the allow-set" message |
-| M7 | Two entries for the allowed address | `journald_delivered == 2 ≠ 1` |
-| M9 | **Near-miss addresses** (exact-equality discriminator): `terraform_data.journald_persistent_v2` with `["update"]`, and separately `module.staging.terraform_data.journald_persistent` | `vector_out_of_scope_changes ≥ 1`. **This is the only row that distinguishes `IN(.address; allow[])` from `inside`/`contains`.** With a one-member allow-set, a first-match / prefix-match / `contains` implementation is otherwise indistinguishable from the specified one. Models `test-inngest-host-replace-gate.sh:60-70` |
-| M10 | **The measured D5 shape at the address F3 predicts:** `rc_empty_actions 'hcloud_server.web["web-1"]'` — `"actions": []`, `"after": null` (`gate-suite-harness.sh:73-85`) | `vector_out_of_scope_changes ≥ 1`. This is a *measured* production hole — a hidden destroy of the singleton behind app.soleur.ai that scored zeroes and PASSED a sibling gate. **F3** establishes this exact address will be in this arm's plan, making it the most production-representative fixture available. Add `rc_scalar_change` (`:93-96`) alongside |
-| M11 | Lone `["delete"]` (and separately `["forget"]`) at the **allowed** address | `journald_delivered != 1`. The most destructive single-address shape the arm can emit; `host_destroyed` is scoped to `hcloud_server.*` and out-of-scope excludes the allowed address, so nothing else catches it. M2 tests only the benign counterpart |
-
-**Axis B — fixture shape** (fail-closed preamble). M5 is split, because `{}`, invalid JSON and a
-missing `resource_changes` key are **one** shape — all three fail `plan_gate_assert_readable`
-(`plan-gate-preamble.sh:92-96`), leaving the other two mandated asserts unpinned:
-
-| # | Mutation | Must go RED via |
-|---|---|---|
-| M5a | Unreadable document (`{}` / invalid JSON / no `resource_changes`) | `plan_gate_assert_readable` |
-| M5b | An unclassifiable plan entry | `plan_gate_assert_classifiable` — anchored on its `"unclassifiable plan entry"` text, per `test-inngest-host-replace-gate.sh:153-156` |
-| M5c | A counter that fails to evaluate (empty string) | `plan_gate_assert_numeric`, naming the offending counter |
-
-**Axis C — SUT mutation** (`gate_mutate_layered`, `gate-suite-harness.sh:208-229`). This is the
-axis the first draft never touched, and the only one that can prove a redundant backstop is
-load-bearing:
-
-| # | Mutation to the gate file | Must go RED / prove |
-|---|---|---|
-| M3 | Neuter the `host_destroyed` clause, then feed `hcloud_server.web["web-1"]` with `["delete","create"]` | The plan is **still refused** (by out-of-scope), the `host_destroyed`-specific text is **gone**, and the out-of-scope text **appears**. That is the honest contract for a deliberately-redundant backstop — a *fixture* row for M3 is vacuous, because out-of-scope reddens first. Models `test-inngest-host-replace-gate.sh:153-156` |
-| M6b | Insert an early `return 0` in the gate | Already reddened by M1/M2/M4/M7 — stated as **covered**, not claimed as an independent detector |
-
-**Axis D — workflow wiring** (a **separate suite**, modelled on
-`tests/scripts/test-registry-d10-workflow-wiring.sh`, not on `gate-suite-harness.sh` — that harness
-has no workflow-reading capability at all, no YAML/step extractor, and its mutation helpers `sed`
-the gate file only):
-
-| # | Mutation to the workflow | Must go RED via |
-|---|---|---|
-| M6a | The gate step stops invoking the gate, or discards its status (`vector_redeliver_gate "$P" \|\| true`), or the step gains `continue-on-error: true` | `_strip` comments first (`:49`), extract the job + gate step (`:51-67`), hard vacuity floor if the extractor returns empty (`:71-82`), then anchor on the **call form** `^\s*if ! vector_redeliver_gate ` — never a bare token (`cq-assert-anchor-not-bare-token`) — plus a negative assertion that the step carries no `continue-on-error`. **A bare presence grep is satisfied by prose**: AC-mandated job-header comments and the gate file's own `# Usage:` line both contain the function name. `plan-gate-preamble.sh:19-24` records this exact failure ("a gate that SOURCES this file and never CALLS it satisfied the old form and reported clean"), and `:35-46` records the discard-status variant as fail-open |
-| M6c | `terraform apply tfplan` rewritten to a re-plan (`-target=… -auto-approve`) | Assert `terraform plan -out=tfplan` occurs exactly once in the job and the apply consumes the **saved** plan. **This converts AC12/AC13 from checklist items into gate rows** — the Assembly's structural claim rests entirely on them, and nothing else makes it true |
-
-Axis coverage: A (content), B (shape), C (SUT), D (wiring). M1 is the second-member row; M6a is the
-own-dispatch row. **The suite's non-vacuity floor must be a numeric floor derived from a green run**
+Axis coverage A/B/C/D; M1 is the second-member row, M6a the own-dispatch row; 16 rows against a
+floor of 3. **The suite's non-vacuity floor must be a numeric floor derived from a green run**
 (`gate-suite-harness.sh:113-114`) and **self-contained** (bash builtins + the suite's own counters,
 no harness call) — `test-inngest-host-replace-gate.sh:169-176` records a measured failure where a
 harness-based floor whose `source` sat inside the deleted block exited 127 and the suite passed. A
@@ -898,21 +876,39 @@ and are unchanged by this plan.
 
 ## Architecture Decision (ADR/C4)
 
-### ADR
+### ADR — none. The trigger does not fire, and the first draft's two justifications were both false.
 
-**Create `ADR-187` — "Scoped vector-config redelivery arm".** Every sibling dispatch arm carries
-one (ADR-145 web-host-create, ADR-148 web-host-replace, ADR-154 ci-ssh-token-replace), and the
-runbook template's metadata block has a required **ADR:** field, so omitting it leaves a
-structural hole. The decision to record: *a config artifact whose delivery is coupled to an
-unrelated apply plan gets its own gated delivery arm, rather than being unblocked by acking
-through the shared plan.* Its `## Alternatives Considered` must carry the five entries in
-Alternative Approaches below.
+The first draft proposed `ADR-187`. Review falsified both reasons it gave:
 
-**The ordinal is provisional.** ADR-186 is the highest present across `origin/main` **and** all
-`origin/*` refs as of this writing, so 187 is the next free one — but a sibling PR can claim it
-mid-pipeline, and these only surface together post-squash. Re-derive against a fresh fetch
-immediately before merge, and if it moves, sweep this plan, `tasks.md`, and any AC naming the
-ordinal in the same edit.
+1. *"The runbook template's metadata block has a required **ADR:** field."* **There is no runbook
+   template** — no `*runbook*template*` file exists. Of the **61** runbooks in
+   `knowledge-base/engineering/operations/runbooks/`, exactly **one** carries a `- **ADR:**`
+   bullet: `ci-ssh-token-replace.md`, the single file the first draft happened to read. Its nearest
+   sibling `web-host-replace.md` has no metadata block at all. A "required field" generalized
+   from n=1.
+2. *"Every sibling dispatch arm carries one."* Three named out of fourteen `apply_target` options.
+   The unnamed ones are the counterexample: **`registry-host-replace` — a destructive production
+   host replace — has no arm ADR**, and neither do `git-data-host-replace` or
+   `inngest-host-replace`. Only ADR-148 is a true "new arm ⇒ new ADR" precedent, and it granted the
+   capability to destroy a production host. This arm re-runs create-time provisioners on a
+   `terraform_data` that the push path already runs on every merge.
+
+**`wg-architecture-decision-is-a-plan-deliverable` does not fire**, by this plan's own C4 analysis
+below: no ownership or tenancy boundary moves, no new substrate, no trust-boundary change, no
+reversal or extension of an existing ADR. The plan proved the trigger absent and then proposed the
+ADR anyway.
+
+**Where the decision content goes instead:** the gate file header — which is where every other gate
+in `tests/scripts/lib/` records its reasoning, and where the person changing the gate will actually
+read it. It must carry the saved-`tfplan` assembly argument, the **F2** bare-create admission, the
+**F10** bridge-before-plan ordering, the **F13** closure and its dated `ignore_changes` brick, and
+the **F6** note that a nested-removal backstop is not applicable to a `terraform_data` address (so
+nobody re-adds it).
+
+**This also removes an AC that could not be satisfied deterministically.** The draft's AC18 pinned a
+provisional ordinal that a concurrent, unrelated PR could invalidate with no line of this diff
+changing — the `cq-ac-must-not-depend-on-concurrent-sessions` shape. Cutting the ADR deletes the
+AC, the ordinal-collision risk row, the re-derivation ceremony, and half of Phase 5 in one move.
 
 ### C4 views
 
@@ -1013,7 +1009,6 @@ All fixtures synthesized, never captured from a live plan (`cq-test-fixtures-syn
 | A botched `vector.toml` render darks all web-1 observability | Pre-touch render-sanity gate runs before the live agent is touched (`server.tf:1068-1078`); post-restart positive assertions fail the apply if the agent does not return (`:1082-1085`). Both already exist |
 | Concurrent LUKS cutover or release deploy mutating web-1 | `web-1-swap` mutex, `cancel-in-progress: false` (**F4**) |
 | Gate too tight → arm bricked when most needed | **F2** refinement admits the bare-create recovery shape; M4's distinct message distinguishes "nothing to do" from "gate is broken" |
-| ADR ordinal collision mid-pipeline | Re-derive against fresh `origin/*` before merge; sweep plan + tasks + ACs in the same edit if it moves |
 | Merging this PR re-fires the still-wedged push apply | The `[skip-web-platform-apply]` merge-commit requirement, carried as a first-class AC below |
 
 ## Acceptance Criteria
@@ -1063,10 +1058,6 @@ All fixtures synthesized, never captured from a live plan (`cq-test-fixtures-syn
       non-empty + `journald_storage.persistent=true`.
 - [ ] **AC17** — Every CLI invocation the runbook embeds is verified at authoring time (a real
       `--help` output or an existing caller cited), per the CLI-verification gate.
-- [ ] **AC18** — `ADR-187` (or its re-derived ordinal) exists, records the decision, and its
-      `## Alternatives Considered` carries all five rows from Alternative Approaches. If the
-      ordinal moved, `grep -rn 'ADR-187' knowledge-base/project/{plans,specs}/` returns no stale
-      hits.
 - [ ] **AC19** — `plugins/soleur/test/terraform-target-parity.test.ts` passes (**F1**).
 - [ ] **AC20** — `bash tests/scripts/test-destroy-guard-regex-parity.sh` passes — the new arm adds
       no `[ack-destroy]` regex site, so the seven-site pin is unchanged.
