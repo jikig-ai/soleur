@@ -253,13 +253,98 @@ else:
     print(f"PASS pcent={cur:.0f}_slope={slope:+.2f}pp/day_proj{horizon:.0f}d={proj:.0f}_{ends}")
 ')"
 
+# ── ATTRIBUTION LEAD (#7456 item b) ──────────────────────────────────────────────────────────
+# WHY IT LIVES HERE AND NOT IN ITS OWN PROBE. This answers "why is the store filling?" — the
+# question #7341 criterion 2 asks and the recut reset before it was answered. It was originally
+# planned as a standalone scripts/zot-gc-attribution.sh with its own exit-1 stall verdict; review
+# established that script could never RUN (sweep-followthroughs.sh canonicalizes every directive's
+# script= under scripts/followthroughs/ and rejects anything outside), and that a stall VERDICT is
+# not defensible on this channel at all — see the three false-positive paths below. Printed from
+# the FAIL arm it fires exactly when the detector fires, needs no vehicle, and carries no
+# authority it cannot support.
+#
+# IT IS A LEAD, NOT A VERDICT, AND THAT IS THE SAFETY ARGUMENT. Three independent mechanisms make
+# an unmatched start indistinguishable from a stall:
+#   1. Shipper-side loss. The four gc classes are cap-exempt against their OWN 17-per-tick ceiling
+#      and drop past it; a redact failure, a sanitize-to-empty, a POST "stop at the hole" or a
+#      cursor invalidation each removes a completion while its start survives. So the drop count
+#      is printed BESIDE the unmatched set rather than left for the reader to go find.
+#   2. --limit truncation. betterstack-query.sh is ORDER BY dt DESC LIMIT n inside, ASC outside,
+#      so truncation drops the window's OLDEST rows first: starts vanish, completions remain.
+#   3. Window edges. gc is hourly; a start near the trailing edge has not had time to complete.
+# Reporting counts and letting the operator judge is honest under all three. Exiting 1 on them
+# would not be, and this probe's exit code is already spoken for by the fill-rate slope.
+#
+# ANCHORING. sanitize() in cloud-init-registry.yml strips ONLY quotes and backslashes, so commas,
+# colons and braces survive: the payload is comma-separated key:value with unescaped colons INSIDE
+# values (caller:.../gc.go:109). It is not JSON and must not be split on ':'. The repo is read from
+# the parsed message FIELD, anchored through {time:...,level:<word>,message:, never from the whole
+# line — a header value can otherwise carry ",message:executing gc ... for /var/lib/zot/x/phantom"
+# and mint a repository that never completes. The envelope anchor keeps its TRAILING SPACE, or
+# host=soleur-registry-2 matches (zot-log-channel-7440.sh:166 carries the same delimiter).
+attribution_lead() {
+  local aerr araw arc
+  aerr="$(mktemp)"
+  araw="$("$QUERY" --since "$WINDOW" --grep SOLEUR_ZOT_LOG --limit 5000 2>"$aerr")"; arc=$?
+  if (( arc != 0 )); then
+    echo "  attribution_unavailable: the gc-channel query exited ${arc}: $(head -c 200 "$aerr" | tr '\n' ' ')"
+    rm -f "$aerr"
+    return 0
+  fi
+  rm -f "$aerr"
+  printf '%s\n' "$araw" | python3 -c '
+import sys, json, re
+ENV = "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=soleur-registry "   # trailing space: load-bearing
+def field(literal):
+    return re.compile(r"^\{[^,]*,level:[a-z]+,message:" + literal + r"([^,]+),")
+START = field(r"executing gc of orphaned blobs for ")
+DONE  = field(r"gc successfully completed for ")
+PATCH = re.compile(r"^\{[^,]*,level:[a-z]+,message:PatchBlobUpload")
+starts, dones = set(), set()
+n_patch = n_drop = 0
+for line in sys.stdin:
+    line = line.strip()
+    if not line: continue
+    try:
+        msg = json.loads(json.loads(line).get("raw", "")).get("message", "")
+    except Exception:
+        continue
+    if msg.startswith("SOLEUR_ZOT_LOG_DROPPED n="):
+        n_drop += 1
+        continue
+    if not msg.startswith(ENV): continue
+    payload = msg[len(ENV):]
+    m = START.match(payload)
+    if m: starts.add(m.group(1)); continue
+    m = DONE.match(payload)
+    if m: dones.add(m.group(1)); continue
+    if PATCH.match(payload): n_patch += 1
+unmatched = sorted(starts - dones)
+print("  gc_starts=%d gc_completions=%d patch_blob_upload=%d dropped_rows=%d"
+      % (len(starts), len(dones), n_patch, n_drop))
+if unmatched:
+    shown = [u.rsplit("/", 1)[-1][:48] for u in unmatched[:5]]
+    more = "" if len(unmatched) <= 5 else " (+%d more)" % (len(unmatched) - 5)
+    print("  unmatched gc starts (no same-repo completion in this window): %s%s"
+          % (", ".join(shown), more))
+    print("  A LEAD, NOT A VERDICT: dropped_rows above, --limit truncation and the trailing window")
+    print("  edge each remove a completion while its start survives. zot#4235 is the standing")
+    print("  suspect (gc completing for one repo and never another); .uploads/ staging is the other.")
+else:
+    print("  every gc start in this window has a same-repo completion; growth is not a gc stall.")
+' 2>/dev/null || echo "  attribution_unavailable: the gc rows could not be parsed"
+  return 0
+}
+
 # boot= on EVERY verdict: the correctness argument of this check is boot scoping, so the artifact
 # an operator reads must say which boot was measured, or a stale-vs-recut ambiguity is not
 # checkable from the issue comment alone.
 echo "zot-fill-rate[#7341]: ${verdict} ${detail} samples=${n} boot=${boot:0:8} window=${WINDOW}"
 case "$verdict" in
   PASS) exit 0 ;;
-  FAIL) echo "The store is refilling toward the threshold. zot#4235 is unfixed in v2.1.20; also weigh the orphaned .uploads/ lead (i/o timeout during PatchBlobUpload cleanup, observed 2026-08-10)."; exit 1 ;;
+  FAIL) echo "The store is refilling toward the threshold. zot#4235 is unfixed in v2.1.20; also weigh the orphaned .uploads/ lead (i/o timeout during PatchBlobUpload cleanup, observed 2026-08-10)."
+        attribution_lead || true
+        exit 1 ;;
   TRANSIENT) echo "TRANSIENT: the store's state could not be established. NOT a pass."; exit 2 ;;
   *)    echo "TRANSIENT: could not classify — the verdict stage produced no parseable output, most likely a python failure whose traceback is above."; exit 2 ;;
 esac

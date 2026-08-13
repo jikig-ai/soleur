@@ -12,11 +12,17 @@
 # WHAT IT CLOSES. ADR-184 ships at status `adopting`. Its flip condition is an OBSERVED
 # envelope-stamped row read back OUT of the warehouse. That cannot happen before merge:
 # hcloud_server.registry is cloud-init-only (ADR-096, ADR-172 §8), every registry resource is an
-# OPERATOR_APPLIED_EXCLUSION, and merging this applies NOTHING. Delivery rides the pending step-6
-# `registry-host-replace` of the open zot-pin ordered path.
+# OPERATOR_APPLIED_EXCLUSION, and merging this applied NOTHING.
 #
-# SO TRANSIENT IS THE EXPECTED STEADY STATE UNTIL THAT REPLACE, AND THAT IS NOT A BUG. The
-# escalation horizon lives in the tracker body: `delivered_but_silent`, or any undelivered state
+# DELIVERY HAS SINCE LANDED, so the pending-forever framing this header used to carry is retired.
+# The zot-pin ordered path closed 2026-08-12T20:39Z WITHOUT firing its step-6 `registry-host-replace`
+# — the atomic 3-way recut had already replaced the host on 08-10, two days BEFORE the shipper
+# merged, so the shipper missed that window and sat inert. A separate `registry_host_replace`
+# dispatch (run 31639782781) succeeded at 20:54:12Z and this probe PASSed at 20:58:45Z. TRANSIENT
+# is therefore no longer the expected steady state: `not_delivered` now means a host is running
+# cloud-init older than the shipper, which is a provisioning question rather than a wait.
+#
+# The escalation horizon lives in the tracker body: `delivered_but_silent`, or any undelivered state
 # persisting past 90 days, is an escalation rather than a steady state. Known cost, stated rather
 # than discovered: on the open path the sweeper comments unconditionally before deciding, so a
 # correctly-behaving exit-2 probe posts one comment per sweep until delivery.
@@ -135,20 +141,43 @@ count_lines() {
 
 # betterstack-query.sh exits 3 on unset credentials and 64 on an unknown flag; ANY non-zero maps to
 # TRANSIENT, because a failed query is not an absence.
+# THE FAILURE MESSAGE TRAVELS ON STDOUT, and that is forced rather than stylistic: every caller
+# is `x=$(run_query ...)`, a COMMAND SUBSTITUTION, so the function runs in a SUBSHELL and any
+# global it assigns is discarded in the parent. A `QUERY_LAST_ERR` global here reports empty at
+# every call site — measured, and caught by C3j.
+#
+# `2>/dev/null` previously destroyed the LIKELIEST first-run failure: an unprovisioned secret
+# resolves to "", the sweeper still forwards it (it tests for SET, not non-empty),
+# betterstack-query.sh exits 3 with an actionable "credentials not injected" message — and the
+# operator's issue comment said only "exited 3". The sibling probe already learned this
+# (zot-fill-rate-7341.sh keeps stderr and bounds it with `head -c 600`).
+#
+# BOUNDED, and the bound is not cosmetic: the sweeper posts this stdout VERBATIM into a comment on
+# a PUBLIC issue. The trailing space after %s keeps the rc field splittable when the message is
+# empty, so `${rest%% *}` is always exactly the rc.
 run_query() {
-  local out rc
-  out=$("$QUERY" --since "$WINDOW" --no-archive --limit "$LIMIT" --grep "$1" 2>/dev/null)
+  local out rc qerr msg
+  qerr="$(mktemp)"
+  out=$("$QUERY" --since "$WINDOW" --no-archive --limit "$LIMIT" --grep "$1" 2>"$qerr")
   rc=$?
   if [[ $rc -ne 0 ]]; then
-    printf 'QUERYFAIL %s' "$rc"
+    msg="$(head -c 400 "$qerr" | tr '\n\r\t' '   ')"
+    rm -f "$qerr"
+    printf 'QUERYFAIL %s %s' "$rc" "$msg"
     return 0
   fi
+  rm -f "$qerr"
   printf '%s' "$out"
 }
 
+# Split a QUERYFAIL payload into its rc and its bounded stderr.
+queryfail_rc()  { local r="${1#QUERYFAIL }"; printf '%s' "${r%% *}"; }
+queryfail_msg() { local r="${1#QUERYFAIL }"; [[ "$r" == *" "* ]] && printf '%s' "${r#* }"; }
+
 raw_log=$(run_query "SOLEUR_ZOT_LOG")
 if [[ "$raw_log" == QUERYFAIL* ]]; then
-  echo "TRANSIENT: reason=query_failed — betterstack-query.sh exited ${raw_log#QUERYFAIL } querying" >&2
+  echo "TRANSIENT: reason=query_failed — betterstack-query.sh exited $(queryfail_rc "$raw_log") querying" >&2
+  [[ -n "$(queryfail_msg "$raw_log")" ]] && echo "           $(queryfail_msg "$raw_log")" >&2
   echo "           SOLEUR_ZOT_LOG over $WINDOW. No claim is made about the channel." >&2
   exit 2
 fi
@@ -182,7 +211,8 @@ n_drop=$(printf '%s\n' "$drop_hits" | count_lines)
 # --- positive control: is the READ PATH alive at all? ---------------------------------------
 control_raw=$(run_query "$CONTROL_MARKER")
 if [[ "$control_raw" == QUERYFAIL* ]]; then
-  echo "TRANSIENT: reason=query_failed — the control query exited ${control_raw#QUERYFAIL }." >&2
+  echo "TRANSIENT: reason=query_failed — the control query exited $(queryfail_rc "$control_raw")." >&2
+  [[ -n "$(queryfail_msg "$control_raw")" ]] && echo "           $(queryfail_msg "$control_raw")" >&2
   exit 2
 fi
 control_decoded=$(printf '%s\n' "$control_raw" | decode_messages | grep -E "^${CONTROL_MARKER} " || true)
@@ -286,9 +316,26 @@ if [[ "$n_envelope" -eq 0 ]]; then
     echo "TRANSIENT: reason=delivered_but_silent — the host HAS been provisioned since this change" >&2
     echo "           was authored (${delivery_evidence}), yet zero envelope rows arrived in the last" >&2
     echo "           ${WINDOW} while the read path is alive (${n_control} control row(s))." >&2
-    echo "           THIS IS THE STATE THAT MEANS ACT, NOT WAIT, and it is deliberately NOT" >&2
-    echo "           collapsed into 'not delivered': the shipper's cron tick is failing, its" >&2
-    echo "           journald match is wrong, or jq is missing on the host." >&2
+    # FIRST-TICK SOFTENING, GATED ON THE LITERAL -1 (#7456). The shipper is a 4-59/5 cron one-shot,
+    # so between a host's birth and its first tick this arm was firing "ACT, NOT WAIT" at a host
+    # that had simply never run one. Measured 2026-08-12: replaced 20:54:12Z, this arm at 20:56:32Z,
+    # unassisted PASS at 20:58:45Z. The discriminator is the reporter's OWN last_ok_age_s, so no
+    # clock is introduced — this probe reads none, decode_messages drops dt, and the boot marker
+    # carries no timestamp. The test MUST be the literal "-1", never emptiness: the pre-delivery
+    # reporter emits no log_shipper_* fields at all, and softening on absence would weaken the
+    # genuine escalation that case pins (C3g).
+    if [[ "${shipper_last_ok_age:-}" == "-1" ]]; then
+      echo "           last_ok_age_s=-1: the shipper has never delivered a row. On a freshly" >&2
+      echo "           replaced host that is EXPECTED until its first 4-59/5 cron tick, so re-run" >&2
+      echo "           after the next 5-minute boundary before acting — measured 2026-08-12, a host" >&2
+      echo "           born 20:54:12Z read silent at 20:56 and PASSed at 20:58 with no intervention." >&2
+      echo "           If it persists well beyond one tick, the arms below name the cause and this" >&2
+      echo "           becomes the ACT state rather than the wait one." >&2
+    else
+      echo "           THIS IS THE STATE THAT MEANS ACT, NOT WAIT, and it is deliberately NOT" >&2
+      echo "           collapsed into 'not delivered': the shipper's cron tick is failing, its" >&2
+      echo "           journald match is wrong, or jq is missing on the host." >&2
+    fi
     if [[ "$shipper_post_fail_unknown" -eq 1 ]]; then
       echo "           The reporter says log_shipper_post_fail=unknown, which is NOT zero: it means" >&2
       echo "           the shipper's state file was unreadable, so the shipper may never have run a" >&2
@@ -306,10 +353,9 @@ if [[ "$n_envelope" -eq 0 ]]; then
     echo "             log_shipper_post_fail=${shipper_post_fail_raw:-<absent>}" >&2
     echo "             log_shipper_last_ok_age_s=${shipper_last_ok_age:-<absent>}  (-1 = no row has EVER shipped)" >&2
     echo "             log_shipper_dropped_cum=${shipper_dropped_cum:-<absent>}  drop_seq=${shipper_drop_seq:-<absent>}" >&2
-    if [[ "${shipper_last_ok_age}" == "-1" ]]; then
-      echo "           last_ok_age_s=-1: the shipper has never delivered a row, so this is a" >&2
-      echo "           never-worked state, not a regression." >&2
-    elif [[ -n "${shipper_last_ok_age}" ]]; then
+    if [[ "${shipper_last_ok_age:-}" == "-1" ]]; then
+      : # already led with above — a never-worked state, not a regression.
+    elif [[ -n "${shipper_last_ok_age:-}" ]]; then
       echo "           A finite last_ok_age_s with zero envelope rows means the shipper IS" >&2
       echo "           delivering and the envelope prefix or the probe's grep has drifted." >&2
     fi
@@ -323,11 +369,15 @@ if [[ "$n_envelope" -eq 0 ]]; then
   echo "           guard, and runcmd is per-instance, so drift without a replace proves nothing)." >&2
   echo "           The read path IS alive (${n_control} control row(s)), so" >&2
   echo "           this is a MEASURED absence rather than a dark channel." >&2
-  echo "           This is the EXPECTED steady state until the host is replaced: the registry host" >&2
-  echo "           is cloud-init-only, so merging the shipper applied nothing. Delivery rides the" >&2
-  echo "           step-6 registry-host-replace of the open zot-pin ordered path." >&2
-  echo "           Next: nothing to do here. Past the 90-day horizon in the tracker body this" >&2
-  echo "           becomes an escalation rather than a steady state." >&2
+  echo "           THIS IS NO LONGER THE EXPECTED STEADY STATE. Delivery landed 2026-08-12: the" >&2
+  echo "           host was replaced at 20:54:12Z and this probe PASSed at 20:58:45Z, so a live" >&2
+  echo "           channel has been observed. Reaching this arm now means a host is running" >&2
+  echo "           cloud-init OLDER than the shipper — a replace that rolled back, or a fresh host" >&2
+  echo "           born from a stale template. That is a provisioning question, not a wait." >&2
+  echo "           (Historical note: this arm used to say delivery was pending step-6 of the" >&2
+  echo "           zot-pin ordered path. That path closed 2026-08-12T20:39Z WITHOUT firing step-6 —" >&2
+  echo "           the atomic recut had already replaced the host — so an operator who had just" >&2
+  echo "           dispatched a replace was being told to wait for a step that no longer exists.)" >&2
   exit 2
 fi
 
