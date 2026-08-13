@@ -858,7 +858,23 @@ else
   fail "#7104 dpf: multi-resource plan gave rc=$DPF_RC out='$DPF_OUT', expected rc=0 false"
 fi
 
-# 15. NON-VACUITY of the whole block: the function must actually exist. Without this, renaming
+# 15. Two entries carrying the SAME address. A well-formed `terraform show -json` should never
+#     emit this, which is exactly why it must not be adjudicated silently: without the guard the
+#     function classifies on $matched[0] and a second, contradicting entry is discarded unseen.
+#     Added because mutation M8 (delete the duplicate-address guard) SURVIVED the suite — the
+#     arm had no fixture at all, so the guard was unfalsifiable rather than equivalent.
+P_DUP=$(mkplan '{"resource_changes":[
+  {"address":"terraform_data.deploy_pipeline_fix","change":{"actions":["no-op"]}},
+  {"address":"terraform_data.deploy_pipeline_fix","change":{"actions":["delete","create"]}}
+]}' dup)
+DPF_OUT=$(infra_config_dpf_replaced "$P_DUP" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -ne 0 ]]; then
+  pass "#7104 dpf: a duplicated address fails CLOSED (never adjudicate on the first of two)"
+else
+  fail "#7104 dpf FAIL-OPEN: duplicated address returned rc=0 out='$DPF_OUT' — the contradicting entry was discarded"
+fi
+
+# 16. NON-VACUITY of the whole block: the function must actually exist. Without this, renaming
 #     it would make every arm above collapse to "command not found" -> non-zero -> and the six
 #     fail-CLOSED arms would all still PASS while the four positive arms failed. Assert the
 #     dispatch itself, mirroring the workflow's own `declare -F infra_config_red_alert` pattern.
@@ -872,7 +888,7 @@ fi
 # Nothing asserted that the assertions RAN. Measured: deleting the entire #7220 block took the
 # suite 53 -> 40 passed, 0 failed, exit 0 — a silent truncation that reads exactly like a clean
 # run. A floor (not equality — the count is developer-incremented) makes arm deletion loud.
-GATE_MIN_ASSERTIONS=79
+GATE_MIN_ASSERTIONS=80
 if [[ "$pass" -lt "$GATE_MIN_ASSERTIONS" ]]; then
   fail "assertion-count floor: only $pass assertions ran, expected >= $GATE_MIN_ASSERTIONS — arms were deleted or skipped"
 fi
