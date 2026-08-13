@@ -328,6 +328,95 @@ describe("Trigger array and server.tf are in sync (path-glob verification)", () 
   });
 });
 
+// #7104 PR-A — FILE_MAP ⊆ TRIGGER_FILES.
+//
+// The infra-config gate's `DPF_REPLACED == false` arm rests on this containment. When
+// terraform_data.deploy_pipeline_fix is NOT replaced, no push fires and no frame is published,
+// so the gate adjudicates a frame of unbounded age. That is only safe because DPF was not
+// replaced PRECISELY BECAUSE none of its hashed triggers changed — which means no FILE_MAP file
+// changed either, so the per-file content match is guaranteed by construction.
+//
+// If a FILE_MAP dest ever ships from a repo file that is NOT a DPF trigger, that reasoning
+// breaks: the repo file could change while DPF stays un-replaced, the host would keep serving
+// stale content, and the gate would adjudicate it against a repo that has moved on. Measured at
+// implementation time as holding 20/20 (18 direct `file()` triggers + 2 rendered locals), so
+// this test pins a property that is true today rather than asserting an aspiration.
+//
+// Containment is by BASENAME, with the template indirection made explicit: a dest is either
+// delivered verbatim from a repo file of the same basename, or rendered from `<basename>.tmpl`
+// (hooks.json ← hooks.json.tmpl, /etc/default/soleur-doppler-token ← soleur-doppler-token.tmpl).
+describe("infra-config FILE_MAP is contained in TRIGGER_FILES (#7104)", () => {
+  const INFRA_CONFIG_APPLY = resolve(
+    REPO_ROOT,
+    "apps/web-platform/infra/infra-config-apply.sh",
+  );
+
+  // Parsed once so an empty/unparseable FILE_MAP is a loud failure rather than a
+  // vacuously-passing `test.each([])` — a zero-row table reports as a clean run.
+  let fileMapDests: string[];
+
+  beforeAll(() => {
+    expect(existsSync(INFRA_CONFIG_APPLY)).toBe(true);
+    const src = readFileSync(INFRA_CONFIG_APPLY, "utf8");
+    const block = src.match(/^FILE_MAP=\(\s*$([\s\S]*?)^\)\s*$/m);
+    if (!block) {
+      throw new Error(
+        `Could not locate a FILE_MAP=( ... ) block in ${INFRA_CONFIG_APPLY}. ` +
+          "The containment this suite pins cannot be evaluated, so it fails closed " +
+          "rather than reporting a clean run over zero rows.",
+      );
+    }
+    // Entries are "ENV_KEY_B64|/abs/dest/path|mode|owner:group"; comment lines are skipped.
+    fileMapDests = Array.from(
+      block[1].matchAll(/^\s*"[A-Z0-9_]+\|([^|]+)\|/gm),
+    ).map((m) => m[1]);
+  });
+
+  // Extracted so the negative control drives the SAME code path as the real assertion. A
+  // containment check whose fixture never places a dest on the uncovered side cannot report,
+  // and three mutations proved that concretely: a partial parse (`.slice(0, 1)`), a predicate
+  // hardwired to `false &&`, and a trigger set that `has()`-es everything all left this file at
+  // 112 pass / 0 fail.
+  function uncoveredIn(dests: string[]): string[] {
+    const triggerBasenames = new Set(
+      TRIGGER_FILES.map((p) => p.split("/").pop()!),
+    );
+    return dests.filter((dest) => {
+      const base = dest.split("/").pop()!;
+      return !triggerBasenames.has(base) && !triggerBasenames.has(`${base}.tmpl`);
+    });
+  }
+
+  test("FILE_MAP parses EVERY dest, not merely a non-empty prefix", () => {
+    // Cardinality, not `> 0`: a partial parse satisfies a non-empty check while making the
+    // containment hold over a subset. Counted against the block's own rows so it tracks
+    // FILE_MAP growth instead of pinning a literal that would rot.
+    const src = readFileSync(INFRA_CONFIG_APPLY, "utf8");
+    const block = src.match(/^FILE_MAP=\(\s*$([\s\S]*?)^\)\s*$/m)!;
+    const rows = (block[1].match(/^\s*"[A-Z0-9_]+\|/gm) ?? []).length;
+    expect(rows).toBeGreaterThan(0);
+    expect(fileMapDests.length).toBe(rows);
+  });
+
+  test("the containment predicate can actually REPORT an uncovered dest", () => {
+    // Known-negative control. Without it every assertion below is true of a predicate that
+    // structurally cannot report, which is indistinguishable from one that found nothing.
+    expect(uncoveredIn(["/usr/local/bin/definitely-not-a-dpf-trigger.sh"])).toEqual([
+      "/usr/local/bin/definitely-not-a-dpf-trigger.sh",
+    ]);
+    // ...and a known-positive, so the control is not merely "it returns its input".
+    expect(uncoveredIn(["/usr/local/bin/ci-deploy.sh"])).toEqual([]);
+  });
+
+  test("every FILE_MAP dest is covered by a DPF trigger (verbatim or via .tmpl)", () => {
+    const uncovered = uncoveredIn(fileMapDests);
+    // Named rather than counted: a bare length check tells the next reader that
+    // something drifted but not what, and this failure is load-bearing enough to
+    // deserve the dest paths in the message.
+    expect(uncovered).toEqual([]);
+  });
+});
+
 describe("postmerge runbook updates (#3034)", () => {
   let runbook: string;
 
@@ -471,18 +560,10 @@ describe("deploy_pipeline_fix orders after the handler bridge (#5515)", () => {
     const yml = readFileSync(APPLY_DPF_WORKFLOW, "utf8");
     // Bound to the `terraform apply` invocation (the durable apply, not the plan
     // step) so a future plan-only -target= change cannot satisfy this vacuously.
-    const applyIdx = yml.indexOf("terraform apply -target=");
-    expect(applyIdx).toBeGreaterThanOrEqual(0);
-    // The multi-line `\`-continued apply command ends at the first non-continued
-    // line; bound generously to the next 800 chars (the command spans a handful
-    // of -target= lines plus trailing flags — the two needed -target=s are adjacent).
-    const applyBlock = yml.slice(applyIdx, applyIdx + 800);
-    expect(applyBlock).toContain(
-      "-target=terraform_data.deploy_pipeline_fix",
-    );
-    expect(applyBlock).toContain(
-      "-target=terraform_data.infra_config_handler_bootstrap",
-    );
+    assertPlannedAndAppliedTogether(yml, [
+      "terraform_data.deploy_pipeline_fix",
+      "terraform_data.infra_config_handler_bootstrap",
+    ]);
   });
 
   // Test 3 — cross-workflow blast-radius guard (deepen P2-2). The OTHER infra
@@ -530,6 +611,42 @@ describe("deploy_pipeline_fix orders after the handler bridge (#5515)", () => {
   });
 });
 
+// #7104 — the apply no longer carries its own `-target=` list: it applies the SAVED PLAN
+// (`terraform apply ... tfplan`) that the plan step produced. The co-targeting invariant these
+// three tests exist to protect is therefore now guaranteed BY CONSTRUCTION — the applied target
+// set cannot differ from the planned one, because they are the same artifact — but the old
+// assertion (string-match a `terraform apply -target=` command line) no longer has anything to
+// match and would pass vacuously if left as `indexOf(...) >= 0` on a missing needle.
+//
+// This helper re-expresses it so BOTH mutation paths still red:
+//   * dropping a resource from the PLAN's -target= list  -> the target assertion fails
+//   * making the apply re-plan with its own targets      -> the saved-plan assertion fails
+// which is strictly stronger than comparing two command lines that could always drift apart.
+function assertPlannedAndAppliedTogether(yml: string, targets: string[]): void {
+  const planIdx = yml.indexOf("terraform plan -target=");
+  const applyIdx = yml.indexOf("terraform apply ");
+  expect(planIdx).toBeGreaterThanOrEqual(0);
+  expect(applyIdx).toBeGreaterThan(planIdx);
+  // Bound PRECISELY at the step boundary, not by a fixed char window (#5875's finding:
+  // a fixed window spills across the plan -> apply boundary, and the last -target= in a
+  // list could then satisfy the wrong assertion). The plan block ends where the apply
+  // invocation begins; the apply block ends at the next step.
+  const planBlock = yml.slice(planIdx, applyIdx);
+  for (const t of targets) {
+    expect(planBlock).toContain(`-target=${t}`);
+  }
+  // The plan must be SAVED, and the apply must consume that saved plan rather than re-planning.
+  expect(planBlock).toContain("-out=tfplan");
+  const applyRest = yml.slice(applyIdx);
+  const applyStepEnd = applyRest.indexOf("\n      - name:");
+  const applyBlock = applyStepEnd >= 0 ? applyRest.slice(0, applyStepEnd) : applyRest;
+  expect(applyBlock).toContain("tfplan");
+  // A re-planning apply would carry its own -target=/-var, which is exactly the divergence
+  // (and the TOCTOU) the saved-plan design removes.
+  expect(applyBlock).not.toContain("-target=");
+  expect(applyBlock).not.toContain("-var=");
+}
+
 // #5873 — the seccomp coupling triangle. The container seccomp profile
 // (seccomp-bwrap.json) is delivered by terraform_data.docker_seccomp_config,
 // a DIFFERENT resource from deploy_pipeline_fix. For a profile-only edit to
@@ -541,17 +658,7 @@ describe("seccomp profile auto-apply coupling (#5873)", () => {
   test("apply-deploy-pipeline-fix.yml co-targets docker_seccomp_config in BOTH plan and apply", () => {
     expect(existsSync(APPLY_DPF_WORKFLOW)).toBe(true);
     const yml = readFileSync(APPLY_DPF_WORKFLOW, "utf8");
-    const planIdx = yml.indexOf("terraform plan -target=");
-    const applyIdx = yml.indexOf("terraform apply -target=");
-    expect(planIdx).toBeGreaterThanOrEqual(0);
-    expect(applyIdx).toBeGreaterThanOrEqual(0);
-    // Bound each invocation to its own -target= run of lines (generous 800 chars).
-    expect(yml.slice(planIdx, planIdx + 800)).toContain(
-      "-target=terraform_data.docker_seccomp_config",
-    );
-    expect(yml.slice(applyIdx, applyIdx + 800)).toContain(
-      "-target=terraform_data.docker_seccomp_config",
-    );
+    assertPlannedAndAppliedTogether(yml, ["terraform_data.docker_seccomp_config"]);
   });
 
   test("docker_seccomp_config triggers_replace hashes seccomp-bwrap.json (edit re-fires the apply)", () => {
@@ -588,28 +695,9 @@ describe("apparmor profile auto-apply parity (#5875)", () => {
   test("apply-deploy-pipeline-fix.yml co-targets apparmor_bwrap_profile in BOTH plan and apply", () => {
     expect(existsSync(APPLY_DPF_WORKFLOW)).toBe(true);
     const yml = readFileSync(APPLY_DPF_WORKFLOW, "utf8");
-    const planIdx = yml.indexOf("terraform plan -target=");
-    const applyIdx = yml.indexOf("terraform apply -target=");
-    expect(planIdx).toBeGreaterThanOrEqual(0);
-    expect(applyIdx).toBeGreaterThan(planIdx);
-    // Bound PRECISELY, not with a fixed window: the plan invocation ends where the
-    // apply invocation begins, and the apply invocation ends at the next step. A
-    // fixed 800-char window spills across the plan→apply boundary and — because
-    // apparmor_bwrap_profile is the LAST -target= in each list — could let the apply
-    // block's target satisfy the plan assertion, masking a dropped plan -target
-    // (pattern-review finding, #5875). This is the same precise bounding the
-    // loaded-verification describe uses.
-    const planBlock = yml.slice(planIdx, applyIdx);
-    const applyRest = yml.slice(applyIdx);
-    const applyStepEnd = applyRest.indexOf("\n      - name:");
-    const applyBlock =
-      applyStepEnd >= 0 ? applyRest.slice(0, applyStepEnd) : applyRest;
-    expect(planBlock).toContain(
-      "-target=terraform_data.apparmor_bwrap_profile",
-    );
-    expect(applyBlock).toContain(
-      "-target=terraform_data.apparmor_bwrap_profile",
-    );
+    // The precise bounding this test introduced now lives in the shared helper, which
+    // every co-target assertion uses.
+    assertPlannedAndAppliedTogether(yml, ["terraform_data.apparmor_bwrap_profile"]);
   });
 
   test("apparmor_bwrap_profile triggers_replace hashes apparmor-soleur-bwrap.profile (edit re-fires the apply)", () => {

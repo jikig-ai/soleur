@@ -692,13 +692,485 @@ else
   fail "#7220 fatal-only: no attribution rendered"
 fi
 
+# --- #7104 PR-A: infra_config_dpf_replaced (the SENSOR) -------------------------------------
+#
+# Was terraform_data.deploy_pipeline_fix REPLACED by the plan this apply consumed? If it was
+# not, no push fired, no frame was published, and the #7220 freshness pin reds a run that did
+# nothing wrong. Measured on run 31636951749 (2026-08-12, main @ 0d644396): `Plan: No changes`
+# / `Apply complete! Resources: 0 added, 0 changed, 0 destroyed` — and the gate red with
+# STALE FRAME naming the 2026-08-06 frame. That is a live false-red, not a hypothetical.
+#
+# The function is a PURE ADJUDICATOR over a `terraform show -json` plan file, matching this
+# file's six existing siblings: it echoes exactly "true" or "false" and returns non-zero on
+# anything it cannot classify. Polarity is therefore guaranteed BY CONSTRUCTION rather than by
+# a downstream `^(true|false)$` regex (R17.1 asked for the regex; a function that can only emit
+# those two strings is strictly stronger, and the caller still validates).
+#
+# The `jq -r` null trap the workflow documents ~200 lines above the call site applies here too:
+# `jq -r '.resource_changes'` on a missing key yields the STRING "null", and `null | length` is
+# 0 — so a degraded plan file would read as "no changes found" == false == skip the pin,
+# silently and permanently restoring #7220's blind spot. Every arm below that returns non-zero
+# exists to make that impossible.
+
+DPF_ADDR="terraform_data.deploy_pipeline_fix"
+mkplan() { printf '%s\n' "$1" > "$TMP/plan-$2.json"; echo "$TMP/plan-$2.json"; }
+
+# 1. Replaced (delete+create) — the healthy push path.
+P_REPL=$(mkplan '{"resource_changes":[{"address":"terraform_data.deploy_pipeline_fix","change":{"actions":["delete","create"]}}]}' repl)
+DPF_OUT=$(infra_config_dpf_replaced "$P_REPL" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -eq 0 && "$DPF_OUT" == "true" ]]; then
+  pass "#7104 dpf: delete+create classifies as replaced (true)"
+else
+  fail "#7104 dpf: delete+create gave rc=$DPF_RC out='$DPF_OUT', expected rc=0 true"
+fi
+
+# 2. no-op — THE case this PR exists for. Must be a clean false, not an error.
+P_NOOP=$(mkplan '{"resource_changes":[{"address":"terraform_data.deploy_pipeline_fix","change":{"actions":["no-op"]}}]}' noop)
+DPF_OUT=$(infra_config_dpf_replaced "$P_NOOP" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -eq 0 && "$DPF_OUT" == "false" ]]; then
+  pass "#7104 dpf: no-op classifies as NOT replaced (false)"
+else
+  fail "#7104 dpf: no-op gave rc=$DPF_RC out='$DPF_OUT', expected rc=0 false"
+fi
+
+# 3. POSITIVE CONTROL (R17.1). The address is absent from resource_changes[] entirely — an
+#    address rename, a module move, a -target that no longer selects it. Without this arm that
+#    reads as a permanent, silent "false" and the pin is disabled forever.
+P_ABSENT=$(mkplan '{"resource_changes":[{"address":"terraform_data.something_else","change":{"actions":["no-op"]}}]}' absent)
+DPF_OUT=$(infra_config_dpf_replaced "$P_ABSENT" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -ne 0 ]]; then
+  pass "#7104 dpf: address absent from resource_changes[] fails CLOSED (address drift)"
+else
+  fail "#7104 dpf FAIL-OPEN: absent address returned rc=0 out='$DPF_OUT' — drift reads as a permanent false"
+fi
+
+# 4. `resource_changes` key missing — the `jq -r` -> "null" -> length 0 trap, explicitly.
+P_NOKEY=$(mkplan '{"format_version":"1.2"}' nokey)
+DPF_OUT=$(infra_config_dpf_replaced "$P_NOKEY" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -ne 0 ]]; then
+  pass "#7104 dpf: missing resource_changes key fails CLOSED (not 'false')"
+else
+  fail "#7104 dpf FAIL-OPEN: missing resource_changes returned rc=0 out='$DPF_OUT'"
+fi
+
+# 5. `resource_changes: null` — same trap, different shape.
+P_NULL=$(mkplan '{"resource_changes":null}' null)
+DPF_OUT=$(infra_config_dpf_replaced "$P_NULL" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -ne 0 ]]; then
+  pass "#7104 dpf: resource_changes:null fails CLOSED"
+else
+  fail "#7104 dpf FAIL-OPEN: resource_changes:null returned rc=0 out='$DPF_OUT'"
+fi
+
+# 6. Not an array: an OBJECT map whose values are well-formed change records. The fixture shape
+#    matters — a naive `{"resource_changes":{"address":...}}` errors downstream anyway (jq
+#    cannot index a string), so it would pass with the type guard REMOVED and the arm would be
+#    vacuous. Measured: mutation M2 (delete the type guard) survived against that shape. This
+#    shape does not survive it, because `.resource_changes[]` over an object iterates its VALUES
+#    and would classify this as a clean "true" with no guard in place.
+P_OBJ=$(mkplan '{"resource_changes":{"r0":{"address":"terraform_data.deploy_pipeline_fix","change":{"actions":["create"]}}}}' obj)
+DPF_OUT=$(infra_config_dpf_replaced "$P_OBJ" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -ne 0 ]]; then
+  pass "#7104 dpf: resource_changes of the wrong type fails CLOSED"
+else
+  fail "#7104 dpf FAIL-OPEN: object resource_changes returned rc=0 out='$DPF_OUT'"
+fi
+
+# 7. Malformed JSON.
+P_BAD=$(mkplan '{this is not json' bad)
+DPF_OUT=$(infra_config_dpf_replaced "$P_BAD" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -ne 0 ]]; then
+  pass "#7104 dpf: unparseable plan JSON fails CLOSED"
+else
+  fail "#7104 dpf FAIL-OPEN: malformed JSON returned rc=0 out='$DPF_OUT'"
+fi
+
+# 8. Unreadable / absent plan file.
+DPF_OUT=$(infra_config_dpf_replaced "$TMP/does-not-exist.json" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -ne 0 ]]; then
+  pass "#7104 dpf: missing plan file fails CLOSED"
+else
+  fail "#7104 dpf FAIL-OPEN: missing plan file returned rc=0 out='$DPF_OUT'"
+fi
+
+# 9. create-only (first birth of the resource).
+P_CREATE=$(mkplan '{"resource_changes":[{"address":"terraform_data.deploy_pipeline_fix","change":{"actions":["create"]}}]}' create)
+DPF_OUT=$(infra_config_dpf_replaced "$P_CREATE" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -eq 0 && "$DPF_OUT" == "true" ]]; then
+  pass "#7104 dpf: create-only classifies as replaced (true)"
+else
+  fail "#7104 dpf: create-only gave rc=$DPF_RC out='$DPF_OUT', expected rc=0 true"
+fi
+
+# 10. create_before_destroy orders the actions the other way. Order must not matter.
+P_CBD=$(mkplan '{"resource_changes":[{"address":"terraform_data.deploy_pipeline_fix","change":{"actions":["create","delete"]}}]}' cbd)
+DPF_OUT=$(infra_config_dpf_replaced "$P_CBD" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -eq 0 && "$DPF_OUT" == "true" ]]; then
+  pass "#7104 dpf: create+delete (create_before_destroy) is order-insensitive"
+else
+  fail "#7104 dpf: create+delete gave rc=$DPF_RC out='$DPF_OUT', expected rc=0 true"
+fi
+
+# 11. ALLOW-LIST semantics: an action token terraform does not currently emit must fail closed
+#     rather than fall through to "false". A future action verb that means "this was rebuilt"
+#     would otherwise silently disable the pin.
+P_UNK=$(mkplan '{"resource_changes":[{"address":"terraform_data.deploy_pipeline_fix","change":{"actions":["teleport"]}}]}' unk)
+DPF_OUT=$(infra_config_dpf_replaced "$P_UNK" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -ne 0 ]]; then
+  pass "#7104 dpf: an unknown action verb fails CLOSED (allow-list, not deny-list)"
+else
+  fail "#7104 dpf FAIL-OPEN: unknown action 'teleport' returned rc=0 out='$DPF_OUT'"
+fi
+
+# 12. Empty actions array.
+P_EMPTY=$(mkplan '{"resource_changes":[{"address":"terraform_data.deploy_pipeline_fix","change":{"actions":[]}}]}' empty)
+DPF_OUT=$(infra_config_dpf_replaced "$P_EMPTY" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -ne 0 ]]; then
+  pass "#7104 dpf: empty actions[] fails CLOSED"
+else
+  fail "#7104 dpf FAIL-OPEN: empty actions[] returned rc=0 out='$DPF_OUT'"
+fi
+
+# 13. `forget` (a `removed {}` block drops the resource from state without destroying it).
+#     No push fires, so the sensor must say false — and the pin must therefore still run.
+#     R13.5 records that PR-B's exact-cardinality assert is what ABORTS on this shape; the
+#     sensor's job is only to report that nothing was pushed.
+P_FORGET=$(mkplan '{"resource_changes":[{"address":"terraform_data.deploy_pipeline_fix","change":{"actions":["forget"]}}]}' forget)
+DPF_OUT=$(infra_config_dpf_replaced "$P_FORGET" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -eq 0 && "$DPF_OUT" == "false" ]]; then
+  pass "#7104 dpf: forget classifies as NOT replaced (no push fired)"
+else
+  fail "#7104 dpf: forget gave rc=$DPF_RC out='$DPF_OUT', expected rc=0 false"
+fi
+
+# 14. The real multi-resource shape: this workflow -targets four resources, so DPF must be
+#     selected by ADDRESS and not by position. A sibling being replaced must not leak into
+#     DPF's verdict.
+P_MULTI=$(mkplan '{"resource_changes":[
+  {"address":"terraform_data.docker_seccomp_config","change":{"actions":["delete","create"]}},
+  {"address":"terraform_data.deploy_pipeline_fix","change":{"actions":["no-op"]}},
+  {"address":"terraform_data.apparmor_bwrap_profile","change":{"actions":["delete","create"]}}
+]}' multi)
+DPF_OUT=$(infra_config_dpf_replaced "$P_MULTI" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -eq 0 && "$DPF_OUT" == "false" ]]; then
+  pass "#7104 dpf: DPF is selected by address, not by a sibling's replacement"
+else
+  fail "#7104 dpf: multi-resource plan gave rc=$DPF_RC out='$DPF_OUT', expected rc=0 false"
+fi
+
+# 14b. `update` and `read` are in the allow-list and had NO fixture, so both narrowing the list
+#      (a false-red on the workflow whose false-reds are this PR's subject) and widening the
+#      create-detector to include them (wrong polarity) survived. Both directions pinned here.
+for verb in update read; do
+  P_VERB=$(mkplan "{\"resource_changes\":[{\"address\":\"terraform_data.deploy_pipeline_fix\",\"change\":{\"actions\":[\"$verb\"]}}]}" "verb$verb")
+  DPF_OUT=$(infra_config_dpf_replaced "$P_VERB" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+  if [[ "$DPF_RC" -eq 0 && "$DPF_OUT" == "false" ]]; then
+    pass "#7104 dpf: '$verb' is accepted by the allow-list and is NOT a push (false)"
+  else
+    fail "#7104 dpf: '$verb' gave rc=$DPF_RC out='$DPF_OUT', expected rc=0 false"
+  fi
+done
+
+# 15. Two entries carrying the SAME address. A well-formed `terraform show -json` should never
+#     emit this, which is exactly why it must not be adjudicated silently: without the guard the
+#     function classifies on $matched[0] and a second, contradicting entry is discarded unseen.
+#     Added because mutation M8 (delete the duplicate-address guard) SURVIVED the suite — the
+#     arm had no fixture at all, so the guard was unfalsifiable rather than equivalent.
+P_DUP=$(mkplan '{"resource_changes":[
+  {"address":"terraform_data.deploy_pipeline_fix","change":{"actions":["no-op"]}},
+  {"address":"terraform_data.deploy_pipeline_fix","change":{"actions":["delete","create"]}}
+]}' dup)
+DPF_OUT=$(infra_config_dpf_replaced "$P_DUP" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -ne 0 ]]; then
+  pass "#7104 dpf: a duplicated address fails CLOSED (never adjudicate on the first of two)"
+else
+  fail "#7104 dpf FAIL-OPEN: duplicated address returned rc=0 out='$DPF_OUT' — the contradicting entry was discarded"
+fi
+
+# --- #7104 PR-A: infra_config_frame_stability (the no-push arm's verdict) -------------------
+#
+# Runs only when DPF_REPLACED == false: no push was expected, so no NEW frame should exist and
+# the #7220 freshness pin (FRAME_START_TS >= APPLY_START_EPOCH) would red a correct run.
+#
+# WHAT THIS ESTABLISHES, precisely — the plan review (R17.1) overclaimed it and the CTO ruling
+# corrected it, so the narrow version is pinned here rather than the flattering one:
+#   * IT DOES prove frame STABILITY across this run: the endpoint answered, the frame parses,
+#     and it is the same frame it was before the apply — i.e. no unexpected push occurred.
+#   * IT DOES NOT detect a wiped handler. A wiped handler leaves the last frame IN PLACE, so
+#     PRE == POST and this passes.
+#   * IT DOES NOT detect a post-push tamper of hooks.json or the Doppler token. The frame
+#     records the LAST WRITE; it is not a re-read of the bytes on disk.
+# Those two holes stay open and are tracked separately. A test that asserted otherwise would be
+# pinning a claim nobody measured.
+#
+# ASYMMETRY, deliberately: the sentinel (no pre-reading) arm DEGRADES rather than failing closed.
+# It is reachable only when the pre-poll failed AND the post-poll returned 200 — so the channel
+# is demonstrably reachable now, and the missing evidence bears only on an anomaly detector, not
+# on the dying-handler shape the gate exists to catch (that lives on the DPF_REPLACED == true
+# arm, where APPLY_START_EPOCH still applies). Failing closed here would red correct runs on a
+# network blip, on the very workflow whose false-reds are this PR's subject.
+#
+# NO LOWER BOUND ON FRAME AGE. On a no-push run the frame is legitimately ancient — the
+# 2026-08-06 frame was CORRECT on 2026-08-12. Any max-age assert re-introduces the exact
+# false-red this PR removes. The upper bound is different: a frame claiming to start in the
+# FUTURE is a host-clock anomaly or a fabricated frame, and it reds on BOTH sub-arms.
+
+FS_NOW=1786600000
+FS_SKEW=300   # tolerance shared with the implementation
+
+# ok + equal -> stable, pass.
+FS_OUT=$(infra_config_frame_stability 1786001951 1786001951 ok "$FS_NOW" 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -eq 0 && "$FS_OUT" == "stable" ]]; then
+  pass "#7104 stability: an unchanged frame on a no-push run is stable (the live 31636951749 shape)"
+else
+  fail "#7104 stability: equal pre/post gave rc=$FS_RC out='$FS_OUT', expected rc=0 stable"
+fi
+
+# ok + post > pre -> a push landed on a run whose plan said none would.
+FS_OUT=$(infra_config_frame_stability 1786001999 1786001951 ok "$FS_NOW" 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -ne 0 && "$FS_OUT" == "unexpected_push" ]]; then
+  pass "#7104 stability: a NEWER frame with no push expected fails CLOSED (plan/apply divergence)"
+else
+  fail "#7104 stability: post>pre gave rc=$FS_RC out='$FS_OUT', expected non-zero unexpected_push"
+fi
+
+# ok + post < pre -> the frame went backwards. State rollback or a host clock jump.
+FS_OUT=$(infra_config_frame_stability 1786001900 1786001951 ok "$FS_NOW" 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -ne 0 && "$FS_OUT" == "frame_regressed" ]]; then
+  pass "#7104 stability: a frame that moved BACKWARDS fails CLOSED"
+else
+  fail "#7104 stability: post<pre gave rc=$FS_RC out='$FS_OUT', expected non-zero frame_regressed"
+fi
+
+# Future-dated frame reds on the ok arm...
+FS_OUT=$(infra_config_frame_stability $((FS_NOW + FS_SKEW + 60)) 1786001951 ok "$FS_NOW" 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -ne 0 && "$FS_OUT" == "future_frame" ]]; then
+  pass "#7104 stability: a future-dated frame fails CLOSED on the ok arm"
+else
+  fail "#7104 stability: future frame (ok) gave rc=$FS_RC out='$FS_OUT', expected non-zero future_frame"
+fi
+
+# ...and on the degraded arm too, where it is the ONLY freshness evidence left.
+FS_OUT=$(infra_config_frame_stability $((FS_NOW + FS_SKEW + 60)) "" unreachable "$FS_NOW" 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -ne 0 && "$FS_OUT" == "future_frame" ]]; then
+  pass "#7104 stability: a future-dated frame fails CLOSED on the DEGRADED arm as well"
+else
+  fail "#7104 stability: future frame (degraded) gave rc=$FS_RC out='$FS_OUT', expected non-zero future_frame"
+fi
+
+# The skew boundary is INCLUSIVE: future means strictly greater than now+skew. Isolate it by
+# making pre == post, so the ok arm would return `stable` and any non-zero result can only be
+# the future check firing. (A fixture with pre != post here would red as `unexpected_push` and
+# the assertion would pass for the wrong reason — it would not test the boundary at all.)
+FS_OUT=$(infra_config_frame_stability $((FS_NOW + FS_SKEW)) $((FS_NOW + FS_SKEW)) ok "$FS_NOW" 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -eq 0 && "$FS_OUT" == "stable" ]]; then
+  pass "#7104 stability: exactly now+skew is NOT future (inclusive boundary)"
+else
+  fail "#7104 stability: boundary gave rc=$FS_RC out='$FS_OUT', expected rc=0 stable"
+fi
+
+# One second past the boundary IS future — the pair above and below pins the comparison
+# operator, which a single-sided fixture cannot do.
+FS_OUT=$(infra_config_frame_stability $((FS_NOW + FS_SKEW + 1)) $((FS_NOW + FS_SKEW + 1)) ok "$FS_NOW" 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -ne 0 && "$FS_OUT" == "future_frame" ]]; then
+  pass "#7104 stability: one second past now+skew IS future (pins the operator, not just the side)"
+else
+  fail "#7104 stability: boundary+1 gave rc=$FS_RC out='$FS_OUT', expected non-zero future_frame"
+fi
+
+# Each degraded status echoes its OWN token. A generic token would let the workflow print a
+# message naming a cause it did not measure (AP-021).
+for st in http404 unreachable malformed error; do
+  FS_OUT=$(infra_config_frame_stability 1786001951 "" "$st" "$FS_NOW" 2>/dev/null); FS_RC=$?
+  if [[ "$FS_RC" -eq 0 && "$FS_OUT" == "degraded:$st" ]]; then
+    pass "#7104 stability: pre_status=$st degrades and passes, carrying its own token"
+  else
+    fail "#7104 stability: pre_status=$st gave rc=$FS_RC out='$FS_OUT', expected rc=0 degraded:$st"
+  fi
+done
+
+# An unrecognised status fails CLOSED — allow-list, so a typo'd or newly-added status can never
+# fall through to a silent pass.
+FS_OUT=$(infra_config_frame_stability 1786001951 "" weird "$FS_NOW" 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -ne 0 ]]; then
+  pass "#7104 stability: an unknown pre_status fails CLOSED (allow-list)"
+else
+  fail "#7104 stability FAIL-OPEN: unknown pre_status returned rc=0 out='$FS_OUT'"
+fi
+
+# ok status with a non-numeric or absent pre timestamp is INCOHERENT — the step claimed a
+# reading it did not supply. Fail closed rather than silently degrading, or a bug in the
+# pre-capture step would present as a routine degrade forever.
+# Assert the VERDICT, not just the return code. Without the guard bash coerces the empty
+# pre_ts to 0, the comparison yields `unexpected_push`, and the function still returns
+# non-zero -- so an rc-only assertion cannot tell a guard rejection from a bogus verdict.
+# That distinction is the whole point: `unexpected_push` drives an operator message claiming
+# a push landed, which is a cause nobody measured (AP-021). A guard rejection emits its
+# reason on stderr and NOTHING on stdout.
+FS_OUT=$(infra_config_frame_stability 1786001951 "" ok "$FS_NOW" 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -ne 0 && -z "$FS_OUT" ]]; then
+  pass "#7104 stability: pre_status=ok with no pre timestamp is REJECTED, not misverdicted"
+else
+  fail "#7104 stability: ok+empty pre_ts gave rc=$FS_RC out='$FS_OUT', expected non-zero with empty stdout"
+fi
+
+# A non-numeric POST timestamp must never be compared as a string.
+# A non-numeric post timestamp must be REJECTED BY NAME, and the assertion has to be on the
+# DIAGNOSTIC rather than on the return code. Measured: deleting this guard does not change the
+# return code or stdout at all, because callers run under `set -u` (this harness and the
+# workflow step both do) and bash's arithmetic evaluation of `not-a-number` dereferences three
+# unset names, so the shell aborts. Same rc, same empty stdout -- the mutation is invisible to
+# any rc-or-stdout assertion.
+#
+# What the guard actually buys under `set -u` is therefore the MESSAGE: without it the function
+# dies mute mid-comparison, and in the workflow that kills the step before the ::error:: branches
+# that would explain why. A gate that fails closed but silently is the failure shape this whole
+# change exists to remove, so the guard is load-bearing and this is what pins it.
+# The now_epoch guard is the sibling of the post_ts one and had no fixture at all. Deleting it
+# makes an empty now_epoch evaluate arithmetically to 0, so post_ts > 0+skew and the function
+# emits `future_frame` — driving an operator ::error:: about a "host-clock anomaly or fabricated
+# frame" on a cause nobody measured. Assert the diagnostic, for the same reason as post_ts.
+FS_NOWERR="$TMP/fs-nownonnumeric.err"
+FS_OUT=$(infra_config_frame_stability 1786001951 1786001951 ok "not-a-number" 2>"$FS_NOWERR"); FS_RC=$?
+if [[ "$FS_RC" -ne 0 && -z "$FS_OUT" ]] && grep -qF 'now_epoch' "$FS_NOWERR"; then
+  pass "#7104 stability: a non-numeric now_epoch is rejected with a diagnostic naming now_epoch"
+else
+  fail "#7104 stability: non-numeric now_epoch gave rc=$FS_RC out='$FS_OUT' err='$(cat "$FS_NOWERR" 2>/dev/null)'"
+fi
+
+FS_ERR="$TMP/fs-nonnumeric.err"
+FS_OUT=$(infra_config_frame_stability "not-a-number" 1786001951 ok "$FS_NOW" 2>"$FS_ERR"); FS_RC=$?
+if [[ "$FS_RC" -ne 0 && -z "$FS_OUT" ]] && grep -qF 'post_ts' "$FS_ERR"; then
+  pass "#7104 stability: a non-numeric post timestamp is rejected with a diagnostic naming post_ts"
+else
+  fail "#7104 stability: non-numeric post_ts gave rc=$FS_RC out='$FS_OUT' stderr='$(cat "$FS_ERR" 2>/dev/null)'; expected non-zero, empty stdout, and a message naming post_ts"
+fi
+
+# --- #7104 review round: arms added because the panel found them missing --------------------
+
+# A plan with an EMPTY resource_changes is a genuine zero-change plan. It must classify as
+# "no push expected", NOT abort: aborting means the plan step exits 1, the apply never runs and
+# the gate is skipped — strictly worse than the false-red this change removes, on the sole
+# no-SSH remediation channel. The repo's own synthesized no-changes fixture has exactly this
+# shape, so this is the case a real no-op dispatch is most likely to produce.
+P_EMPTYRC=$(mkplan '{"format_version":"1.2","resource_changes":[]}' emptyrc)
+DPF_OUT=$(infra_config_dpf_replaced "$P_EMPTYRC" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -eq 0 && "$DPF_OUT" == "false" ]]; then
+  pass "#7104 dpf: an empty resource_changes[] is a zero-change plan (false), never an abort"
+else
+  fail "#7104 dpf: empty resource_changes gave rc=$DPF_RC out='$DPF_OUT', expected rc=0 false"
+fi
+
+# The degraded arm is SELECTED BY THE HOST BEING VERIFIED (it picks the pre_status by how it
+# answers), so it must still carry one assertion the host cannot choose. APPLY_START_EPOCH is a
+# runner-side timestamp: a frame postdating the apply on a no-push run is an unexpected push
+# regardless of what the pre-reading said.
+FS_OUT=$(infra_config_frame_stability $((FS_NOW - 100)) "" unreachable "$FS_NOW" $((FS_NOW - 100 - FS_SKEW)) 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -ne 0 && "$FS_OUT" == "unexpected_push" ]]; then
+  pass "#7104 stability: degraded arm still reds a frame that postdates the apply (host cannot opt out)"
+else
+  fail "#7104 stability: degraded+postdating gave rc=$FS_RC out='$FS_OUT', expected non-zero unexpected_push"
+fi
+
+# ...and the same arm must NOT red an ordinary stale frame, or it re-creates the false-red.
+FS_OUT=$(infra_config_frame_stability 1786001951 "" unreachable "$FS_NOW" $((FS_NOW - 60)) 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -eq 0 && "$FS_OUT" == "degraded:unreachable" ]]; then
+  pass "#7104 stability: degraded arm passes a stale frame (no lower bound on frame age)"
+else
+  fail "#7104 stability: degraded+stale gave rc=$FS_RC out='$FS_OUT', expected rc=0 degraded:unreachable"
+fi
+
+# secret_unavailable is its own token: the step RAN and measured a specific cause (Doppler read
+# failed), which is a different incident from "no reading was recorded".
+FS_OUT=$(infra_config_frame_stability 1786001951 "" secret_unavailable "$FS_NOW" 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -eq 0 && "$FS_OUT" == "degraded:secret_unavailable" ]]; then
+  pass "#7104 stability: a Doppler read failure carries its own token, not the generic error"
+else
+  fail "#7104 stability: secret_unavailable gave rc=$FS_RC out='$FS_OUT', expected rc=0 degraded:secret_unavailable"
+fi
+
+# An EMPTY pre_status means the producing STEP did not run. A missing step is not the same thing
+# as missing evidence, and the asymmetry rule covers only the latter — so it fails closed, the
+# same way the sibling carrier DPF_REPLACED does on unset.
+FS_OUT=$(infra_config_frame_stability 1786001951 "" "" "$FS_NOW" 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -ne 0 && -z "$FS_OUT" ]]; then
+  pass "#7104 stability: an EMPTY pre_status (step never ran) fails CLOSED, not degrade-and-pass"
+else
+  fail "#7104 stability: empty pre_status gave rc=$FS_RC out='$FS_OUT', expected non-zero, empty stdout"
+fi
+
+# --- #7104: PRODUCTION CALL-SITE PIN for the two new sensors --------------------------------
+#
+# The F1 pin above exists because testing an adjudicator in isolation is vacuous if production
+# does not call it. That reasoning was not carried to the new code, and the gap was live:
+# replacing `DPF_REPLACED=$(infra_config_dpf_replaced ...)` with `DPF_REPLACED=false` left this
+# suite at 100 passed / 0 failed — while pinning EVERY run onto the no-push arm, permanently
+# disabling #7220's freshness pin. That is the precise blind spot this PR exists not to restore,
+# and it was deletable at full green.
+APPLY_WF="$REPO_ROOT/.github/workflows/apply-deploy-pipeline-fix.yml"
+if [[ -r "$APPLY_WF" ]]; then
+  if grep -qE '\$\(infra_config_dpf_replaced[[:space:]]' "$APPLY_WF"; then
+    pass "#7104 call-site: production INVOKES infra_config_dpf_replaced (not a hardcoded verdict)"
+  else
+    fail "#7104 call-site: the workflow does not call infra_config_dpf_replaced — the sensor's tests certify a function production does not run"
+  fi
+  if grep -qE '\$\(infra_config_frame_stability[[:space:]]' "$APPLY_WF"; then
+    pass "#7104 call-site: production INVOKES infra_config_frame_stability"
+  else
+    fail "#7104 call-site: the workflow does not call infra_config_frame_stability"
+  fi
+  # Ordering: the sensor must be read before the verdict that branches on it.
+  DPF_LINE=$(grep -nE '\$\(infra_config_dpf_replaced[[:space:]]' "$APPLY_WF" | head -1 | cut -d: -f1)
+  FS_LINE=$(grep -nE '\$\(infra_config_frame_stability[[:space:]]' "$APPLY_WF" | head -1 | cut -d: -f1)
+  if [[ -n "$DPF_LINE" && -n "$FS_LINE" && "$DPF_LINE" -lt "$FS_LINE" ]]; then
+    pass "#7104 call-site: the sensor is read (L$DPF_LINE) before the verdict that branches on it (L$FS_LINE)"
+  else
+    fail "#7104 call-site: sensor/verdict ordering not established (dpf=$DPF_LINE stability=$FS_LINE)"
+  fi
+else
+  fail "#7104 call-site: cannot read $APPLY_WF — the production pin cannot be evaluated"
+fi
+
+if declare -F infra_config_frame_stability >/dev/null; then
+  pass "#7104 stability: the adjudicator is defined (anti-vacuity for the fail-closed arms above)"
+else
+  fail "#7104 stability: infra_config_frame_stability is NOT defined — arms above are vacuous"
+fi
+
+# 16. NON-VACUITY of the whole block: the function must actually exist. Without this, renaming
+#     it would make every arm above collapse to "command not found" -> non-zero -> and the six
+#     fail-CLOSED arms would all still PASS while the four positive arms failed. Assert the
+#     dispatch itself, mirroring the workflow's own `declare -F infra_config_red_alert` pattern.
+if declare -F infra_config_dpf_replaced >/dev/null; then
+  pass "#7104 dpf: the adjudicator is defined (anti-vacuity for the fail-closed arms above)"
+else
+  fail "#7104 dpf: infra_config_dpf_replaced is NOT defined — the fail-closed arms above are vacuous"
+fi
+
 # --- #7220 review: ASSERTION-COUNT FLOOR ---------------------------------------------------
 # Nothing asserted that the assertions RAN. Measured: deleting the entire #7220 block took the
 # suite 53 -> 40 passed, 0 failed, exit 0 — a silent truncation that reads exactly like a clean
 # run. A floor (not equality — the count is developer-incremented) makes arm deletion loud.
-GATE_MIN_ASSERTIONS=64
+GATE_MIN_ASSERTIONS=106
+# Adjudicated DIRECTLY, not through fail(). Measured: `fail() { return 0; }` made this suite
+# report `94 passed, 0 failed` / `OK` / exit 0 WITH a genuinely broken assertion present — and
+# the floor built to make truncation loud was itself dispatched through the neutered function,
+# so the one-line mutation that disarms every assertion also disarmed its own backstop.
 if [[ "$pass" -lt "$GATE_MIN_ASSERTIONS" ]]; then
-  fail "assertion-count floor: only $pass assertions ran, expected >= $GATE_MIN_ASSERTIONS — arms were deleted or skipped"
+  echo "  FAIL: assertion-count floor: only $pass assertions ran, expected >= $GATE_MIN_ASSERTIONS — arms were deleted or skipped" >&2
+  echo "---"
+  echo "infra-config-gate.test.sh: $pass passed, $fail failed (FLOOR BREACHED)"
+  exit 1
+fi
+
+# Known-negative self-test: prove the instrument can still report a failure before trusting any
+# verdict it produced. An assertion harness that has never been shown to emit a FAIL has not
+# returned a pass. Runs in a subshell so it cannot perturb the real counters.
+if ( fail_probe=0; fail() { fail_probe=$((fail_probe + 1)); }; fail "self-test"; [[ "$fail_probe" -eq 1 ]] ); then
+  :
+else
+  echo "  FAIL: harness self-test — fail() does not record a failure; every verdict above is unverifiable" >&2
+  exit 1
 fi
 
 echo "---"
