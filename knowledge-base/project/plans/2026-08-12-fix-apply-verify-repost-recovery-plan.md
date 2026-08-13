@@ -638,10 +638,21 @@ caller acts on it. It moved to Guard 2, which quantifies over production (R18.3)
 inside a retry loop — invokes the *tested* predicate rather than an inline reimplementation of its
 decision, and re-pushes **at most once per run**.
 
-**Assembly.** The pin quantifies over one artifact, `.github/workflows/apply-deploy-pipeline-fix.yml`,
-resolving line numbers by grep and requiring `count_invariant < done < adjudicate`. The chokepoint is
-that single file: every statement that can cause a production write in this job is textually present
-in it, so a grep over it is a total quantification rather than a sample. The three pre-existing
+**Assembly.** The pin quantifies over `.github/workflows/apply-deploy-pipeline-fix.yml`, resolving
+line numbers by grep and requiring `count_invariant < done < adjudicate`. ~~The chokepoint is that
+single file: every statement that can cause a production write in this job is textually present in
+it, so a grep over it is a total quantification rather than a sample.~~ **[Corrected 2026-08-13 —
+R20.7 §1: that claim is false.]** Two production-reachable paths are invisible to a grep over the
+workflow: `source ./infra-config-gate.sh` — the very library this change adds a function to, which is
+a pure adjudicator **by convention only** (no `set` directives, no gate enforcing write-freedom) — and
+the `cf-tunnel-ssh-bridge` composite action, seven `run:` bodies that NAT via `sudo iptables` and
+establish root SSH to prod. The honest assembly is therefore **two** members: (i) every statement in
+this job's inline `run:` bodies, quantified by the grep; and (ii) the sourced library, quantified by
+a second clause asserting it contains no command-position `terraform`, `curl`, `ssh`, `systemctl`, a
+mutating `doppler` subcommand, or `gh issue` — command position, not bare token, since the file has
+20+ comment-only occurrences (`cq-assert-anchor-not-bare-token`). That second clause converts "pure
+adjudicator" from a convention into an enforced contract, closing the one escape this change itself
+widens. The three pre-existing
 clauses survive **byte-identical**, which is why the loop is widened rather than duplicated — a
 second copy of the block would add a second `count_invariant`, `done` and `adjudicate`, and the pin
 takes `head -1` of each grep, so it would silently pin the first copy and stop quantifying over the
