@@ -85,6 +85,46 @@ investigation at the refuted framing above.
 - The existing 3x retry loop stays exactly as written. It cannot clear a deterministic deadline, but
   it does clear the EOF sub-mode; removing it as "futile" would be a regression.
 
+## Why the replace pre-check is not the D10 recut gate
+
+Delivery needs a pre-check — firing a host replace into an already-degraded pull path is the
+#6400 hazard, where a degraded fallback turned a registry outage into a total deploy outage. The
+plan for #7555 proposed reusing `scripts/registry-pull-path-health.sh`. **That is rejected**, and
+the reason is recorded here because a negative decision that lives only in a PR comment gets
+re-litigated — the D10 script's own header is itself proof of that pattern.
+
+`registry-pull-path-health.sh` is the **pre-destroy authorization gate for `registry-luks-recut`**.
+Three independent grounds disqualify it for a volume-preserving replace:
+
+1. **Its A1/A2 authorize a destroy on "the store can be re-materialised from GHCR."** That is
+   earned for a recut, where GHCR is the restore source. `registry-host-replace` **preserves** the
+   volume — its own gate aborts unless `store_destroyed==0` — so the restore source is the volume.
+   Wiring A1/A2 would abort this fix on a GHCR condition the replace does not depend on.
+2. **Its A4 aborts on a measured-dead CF Access push credential.** But `/etc/zot/htpasswd` is baked
+   at boot from Doppler by `cloud-init-registry.yml`, so a pre-replace credential rejection means
+   the running host's bake has diverged — and the remedy for that divergence *is* a host replace.
+   It would block the recovery on the condition the recovery cures.
+3. **Its A2 renders a verdict by executing a restore, i.e. by pushing images.** A precondition that
+   mutates the registry it is about to replace is not a health check.
+
+The hazard the plan cites is recorded at `scheduled-zot-restart-loop.yml`, whose remediation block
+prescribes a **read-only** Better Stack query and never mentions that script. So the read-only
+route is faithful to the cited authority; reusing D10 would have been the departure.
+
+`scripts/registry-replace-preflight.sh` implements it. Two of its five predicates are worth stating
+here because both are counter-intuitive and both will be "fixed" by a future reader otherwise:
+
+- **P2 (`registry=ghcr-fallback`) is advisory and must never gate.** That event is emitted only
+  inside the *success* branch of a GHCR pull, and #7071 revoked the host→GHCR read PAT, so the
+  branch cannot succeed and the event cannot fire. A gate keyed on it reads CLEAN whether the fleet
+  is healthy or its fallback is destroyed — a dark operand, which is the defect class the D10
+  rewrite existed to remove.
+- **P4 (a live zot serving probe) is deliberately absent.** On this transport a bad handshake does
+  not distinguish an edge refusal from an origin that is down (#7242/ADR-166 measured CF Access
+  admitting every request while zot crash-looped). It is worse here than for a recut: this fix's
+  *motivating symptom* is a degraded zot, so a serving predicate would refuse precisely when the
+  fix is most needed. Same reasoning that removed D10's A5.
+
 ## Relationship to ADR-167
 
 ADR-167 (container-registry write-path topology) is CPO-gated at this same threshold over this same

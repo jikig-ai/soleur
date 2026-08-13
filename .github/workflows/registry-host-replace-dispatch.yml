@@ -1,0 +1,137 @@
+# Delivery dispatcher for registry-host user_data changes (#7555, ADR-189).
+#
+# WHY THIS EXISTS. `apps/web-platform/infra/cloud-init-registry.yml` is the registry host's
+# user_data, and the host is cloud-init-only (ADR-096) with no SSH edit path. So a merged change
+# to that file is INERT until a `registry-host-replace` runs — and `registry-host-replace` is
+# `workflow_dispatch`-only, with nothing in the repo firing it. Every reference to it was a
+# command printed for a human to type.
+#
+# Booking that as a post-merge operator step trips `hr-never-label-any-step-as-manual-without`
+# and `wg-block-pr-ready-on-undeferred-operator-steps`, and automation is available, so
+# `hr-exhaust-all-automated-options-before` makes it mandatory. The target carries no
+# `environment:` reviewer gate and no `confirm=` token (verified against the job's own guard), so
+# `reason` is the only required input and nothing here is deferred.
+#
+# ── THE PREFLIGHT IS NOT THE D10 RECUT GATE ────────────────────────────────────────────────
+# It is `scripts/registry-replace-preflight.sh`, which is read-only. Do not swap in
+# `scripts/registry-pull-path-health.sh`: that is the PRE-DESTROY gate for `registry-luks-recut`,
+# it renders its verdict by EXECUTING a restore rehearsal (i.e. by pushing images), and its pass
+# condition is about re-materialising an EMPTY store — whereas this replace PRESERVES the volume
+# (`store_destroyed==0`). Full rationale: ADR-189 §"Why the replace pre-check is not the D10
+# recut gate", and the preflight script's own header.
+#
+# ── FIRING BLIND IS THE #6400 HAZARD ───────────────────────────────────────────────────────
+# In #6400 the fallback was ALSO degraded, which is what turned a registry outage into a total
+# deploy outage. The preflight refuses when the fleet is already serving off its last tier, and
+# it fails CLOSED when it cannot read — a failed query is never read as "no events found".
+name: Registry host replace — Delivery Dispatch
+
+on:
+  # The delivery trigger. A merged user_data change is inert until this fires, so the merge IS
+  # the intent to deliver.
+  push:
+    branches: [main]
+    paths:
+      - 'apps/web-platform/infra/cloud-init-registry.yml'
+      # Registration only (see the note on the job guard below). A workflow with no push trigger
+      # can take 30+ minutes to appear in the Actions UI, and this path lets an edit to THIS file
+      # register it without also dispatching a production host replace as a side effect.
+      - '.github/workflows/registry-host-replace-dispatch.yml'
+  # Manual re-fire, for when a preflight refusal has been resolved.
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why re-fire the replace (e.g. 'P1 refusal resolved: local-cache pulls stopped')"
+        required: true
+        type: string
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  # Never let two replaces of the same host queue up behind each other.
+  group: registry-host-replace-dispatch
+  cancel-in-progress: false
+
+jobs:
+  dispatch-replace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # THE REGISTRATION PATH MUST NOT DELIVER. A push that touched only this workflow file is a
+      # registration event, not a user_data change, and replacing production because someone
+      # edited a comment here would be the #6425 defect. Computed from the actual changed files
+      # rather than trusted from the paths filter, which is an OR across both entries.
+      - name: Decide whether this push carries a user_data change
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "deliver=true" >> "$GITHUB_OUTPUT"
+            echo "Manual dispatch — proceeding."
+            exit 0
+          fi
+          # rc is captured on its own line: inside `if ! cmd`, `$?` is the negated test result.
+          changed=""
+          rc=0
+          changed="$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" 2>/dev/null)" || rc=$?
+          if [[ "$rc" -ne 0 || -z "$changed" ]]; then
+            # A push whose base is unavailable (force-push, first push) cannot be classified.
+            # Fail CLOSED: do not replace a production host on an unreadable diff.
+            echo "::error::could not determine the changed files for this push (rc=$rc). Refusing to dispatch a registry host replace on an unclassifiable diff — re-fire manually via workflow_dispatch once verified."
+            exit 1
+          fi
+          if grep -qx 'apps/web-platform/infra/cloud-init-registry.yml' <<<"$changed"; then
+            echo "deliver=true" >> "$GITHUB_OUTPUT"
+            echo "user_data change detected — the merged change is inert until a replace runs."
+          else
+            echo "deliver=false" >> "$GITHUB_OUTPUT"
+            echo "Registration-only push (this workflow file changed, user_data did not). Not dispatching."
+          fi
+
+      - name: Pull-path preflight (read-only; refuses rather than firing blind)
+        if: steps.gate.outputs.deliver == 'true'
+        id: preflight
+        env:
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          bash scripts/registry-replace-preflight.sh | tee "$GITHUB_STEP_SUMMARY"
+
+      # No `if: always()` here, and no fallback arm: a refused preflight must stop the job with
+      # the preflight's own ::error:: as the last word. It files nothing and dispatches nothing.
+      - name: Dispatch registry-host-replace
+        if: steps.gate.outputs.deliver == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MERGE_SHA: ${{ github.sha }}
+          MANUAL_REASON: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          # The reason names the commit whose user_data this delivers, so the apply's own audit
+          # trail answers "which change is this host carrying" without a human correlating runs.
+          if [[ -n "${MANUAL_REASON:-}" ]]; then
+            REASON="registry-host-replace re-fired manually: ${MANUAL_REASON} (delivering user_data at ${MERGE_SHA})"
+          else
+            REASON="Delivering the cloud-init-registry.yml user_data merged at ${MERGE_SHA} (#7555 / ADR-189 — zot HTTP deadlines). Inert until this replace runs; the store volume is preserved."
+          fi
+          gh workflow run apply-web-platform-infra.yml --ref main \
+            --repo "${GITHUB_REPOSITORY}" \
+            -f apply_target=registry-host-replace \
+            -f reason="${REASON}"
+          {
+            echo "### Dispatched \`registry-host-replace\`"
+            echo ""
+            echo "Delivering the user_data merged at \`${MERGE_SHA}\`. The store volume is preserved"
+            echo "(the target's own gate aborts unless \`store_destroyed==0\`)."
+            echo ""
+            echo "Verification is enrolled on #7556 and runs from Better Stack — no dashboard, no SSH."
+          } >> "$GITHUB_STEP_SUMMARY"

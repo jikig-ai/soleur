@@ -466,7 +466,26 @@ Build a dispatch workflow that, on merge of a `cloud-init-registry.yml` change:
 
 1. **Pre-checks pull-path health before firing.** Firing blind is the #6400 hazard recorded at
    `scheduled-zot-restart-loop.yml` — *"in #6400 the GHCR fallback was ALSO degraded, which is what
-   turned a registry outage into a total deploy outage."* Reuse `scripts/registry-pull-path-health.sh`.
+   turned a registry outage into a total deploy outage."*
+
+   > **Superseded 2026-08-14 (#7555), by CTO decision at implementation.** This item originally
+   > read *"Reuse `scripts/registry-pull-path-health.sh`."* That was measured at /work and does not
+   > fit: it is the D10 **pre-destroy** gate for `registry-luks-recut`, it renders a verdict only by
+   > **executing a restore rehearsal** (i.e. pushing images), and its pass condition is about
+   > re-materialising an **empty** store — whereas `registry-host-replace` **preserves** the volume
+   > (`store_destroyed==0`). Its A4 arm would also abort on a stale `htpasswd` bake, whose remedy
+   > *is* a host replace, blocking the recovery on the condition it cures.
+   >
+   > Note the authority this item CITES — `scheduled-zot-restart-loop.yml:277` — already prescribes
+   > a **read-only** betterstack query and never mentions that script, so the read-only route is
+   > faithful to this plan's intent and reusing D10 was the deviation.
+   >
+   > Implemented as `scripts/registry-replace-preflight.sh` with predicates **P0** query readable
+   > (gating, fail-closed), **P1** no sustained `registry=local-cache` pulls (gating — the #6400
+   > hazard), **P2** `registry=ghcr-fallback` count (**advisory only, must never gate**: its emitter
+   > has been unreachable since #7071, so a zero is not evidence), **P3** no in-progress release run
+   > (gating), and **P4** a live-serving probe **deliberately excluded** (ADR-169 ground 2 — it
+   > would refuse precisely when the fix is most needed). AC16 is unaffected: it names no module.
 2. Fires `apply-web-platform-infra.yml` with `apply_target=registry-host-replace` and a `reason`
    naming the merge commit, sourcing the ack token rather than requiring it to be typed.
 3. Fails loudly, and files nothing silently, if the pre-check is red.

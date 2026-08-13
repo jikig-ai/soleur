@@ -72,30 +72,30 @@ sole pull path.
 
 ## Phase 3 — Build the dispatcher
 
-- [ ] 3.1 Create `.github/workflows/registry-host-replace-dispatch.yml`, modelled on
+- [x] 3.1 Create `.github/workflows/registry-host-replace-dispatch.yml`, modelled on
       `inngest-watchdog-restart-dispatch.yml` / `registry-zot-inventory-dispatch.yml`.
-- [ ] 3.2 Pre-check pull-path health via `scripts/registry-pull-path-health.sh` before firing.
+- [x] 3.2 Pre-check pull-path health via `scripts/registry-pull-path-health.sh` before firing.
       Firing blind is the #6400 hazard — a degraded fallback turned a registry outage into a total
       deploy outage.
-- [ ] 3.3 Fire `apply-web-platform-infra.yml` with `apply_target=registry-host-replace` and a `reason`
+- [x] 3.3 Fire `apply-web-platform-infra.yml` with `apply_target=registry-host-replace` and a `reason`
       naming the merge commit; source the ack token rather than requiring it typed.
-- [ ] 3.4 Fail loudly on a red pre-check; file nothing silently.
-- [ ] 3.5 Test the pre-check against a synthesized red reading (T7).
-- [ ] 3.6 `actionlint` the new workflow. Do **not** run `actionlint` against the composite action.
+- [x] 3.4 Fail loudly on a red pre-check; file nothing silently.
+- [x] 3.5 Test the pre-check against a synthesized red reading (T7).
+- [x] 3.6 `actionlint` the new workflow. Do **not** run `actionlint` against the composite action.
 
 ## Phase 4 — Record and enrol
 
-- [ ] 4.1 Write `ADR-189-zot-http-deadlines-sized-to-largest-layer.md`. Cite ADR-166 for the
+- [x] 4.1 Write `ADR-189-zot-http-deadlines-sized-to-largest-layer.md`. Cite ADR-166 for the
       message-honesty half rather than restating it. Status `adopting` until the soak passes.
       State the ADR-167 relationship (this measurement fires its re-open trigger); do not decide it.
-- [ ] 4.2 Write `scripts/followthroughs/zot-upload-ceiling-<tracker>.sh` with the numeric exit
+- [x] 4.2 Write `scripts/followthroughs/zot-upload-ceiling-<tracker>.sh` with the numeric exit
       contract from the plan's Observability block: `0` PASS (≥7 d window, ≥12 samples on the newest
       `boot_id`, both deadlines `1800000000000`, zero `i/o timeout` pairings), `1` FAIL, `2`
       TRANSIENT with a distinct `reason=`. `${VAR:?msg}` is banned.
-- [ ] 4.3 Add the `<!-- soleur:followthrough script=… earliest=<replace+7d> secrets=… -->` directive
+- [x] 4.3 Add the `<!-- soleur:followthrough script=… earliest=<replace+7d> secrets=… -->` directive
       to `<tracker>`. Confirm those secrets are already wired in
       `.github/workflows/scheduled-followthrough-sweeper.yml` — do not re-add.
-- [ ] 4.4 C4: read all three `.c4` files in full against the plan's enumeration. Expected outcome is
+- [x] 4.4 C4: read all three `.c4` files in full against the plan's enumeration. Expected outcome is
       no edit — the change alters a property of an existing edge, not the graph.
 
 ## Phase 5 — Verification
