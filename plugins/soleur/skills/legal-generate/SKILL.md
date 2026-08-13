@@ -71,17 +71,77 @@ plural `Articles 15 through 22` — use `Articles? 1[5-9]`.
 A generated legal draft can echo a secret or PII that was passed in as company context (a contact email, an API identifier pasted into a data-practices answer). **Presenting the draft inline in Phase 3 is a transcript write boundary** — the same fail-closed rule the incident skill enforces (`incident/SKILL.md` Phase 6): the sentinel must precede inline-emit, not just file-commit. So the redaction gate runs here, before the operator ever sees the draft.
 
 1. Write the generated draft to a `mktemp` file (do NOT emit it inline yet).
+
+Register the cleanup trap **in the same block that allocates the draft**, before anything
+can halt. This PR adds an earlier fail-closed exit, so it increases how often the draft is
+abandoned mid-flight — and the abandoned file is the UN-REDACTED text, which is precisely
+what this gate exists to stop escaping. Leaving it in `mktemp` is a leak with a longer
+lifetime than the session (#7450 review-finding C14).
+
+The allocation, the trap and the gate MUST share **one** fence — each fenced block is a
+separate Bash call, so a trap registered in its own block fires when *that* block exits,
+deleting the draft immediately and leaving `$DRAFT` empty for everything after it. The split
+form shipped once and all three of its guarantees were false. The combined fence is in step 2
+below.
+
 2. Run the shared hardened engine against it. Resolve the path from the **deployed plugin root**
-   (`${CLAUDE_PLUGIN_ROOT}`, the platform-trusted copy), falling back to the git-root for CLI/worktree
-   use — NOT a bare `../incident/...` relative path, which depends on the current working directory and,
-   from the wrong CWD, exits `127` *outside* the shim (bypassing the shim's fail-closed exit-2
-   normalization). On the Concierge server the deployed-root anchor is load-bearing: a bare CWD-relative
-   path would resolve the connected repo's **untrusted** copy of the sentinel (ADR-093):
+   (`${CLAUDE_PLUGIN_ROOT}`, the platform-trusted copy — ADR-179's canonical bare anchor, with no
+   fallback arm) — NOT a bare `../incident/...` relative path, which depends on the current working
+   directory and, from the wrong CWD, exits `127` *outside* the shim (bypassing the shim's fail-closed
+   exit-2 normalization). On the Concierge server the deployed-root anchor is load-bearing: a bare
+   CWD-relative path would resolve the connected repo's **untrusted** copy of the sentinel (ADR-093).
+   The default arm was **removed, not re-pointed**: `review/SKILL.md` instructs `gh pr checkout`, after
+   which the git worktree is the *reviewed party's* tree, so that arm resolved this gate's own scanner
+   from a file a hostile PR controls (#7450). The **bare anchor is the load-bearing control** — the
+   loader substitutes it with the installed root at delivery, so no ambient environment value reaches
+   this site (measured: `specs/feat-one-shot-7450-git-root-anchor-untrusted/phase-1-measurement.md`
+   Arm 4). The identity preflight below is **defence-in-depth** for surfaces where substitution does
+   not govern: it is a *shape* check and cannot tell an install from a checkout carrying the same
+   manifest, which is why ADR-179 §(a) measured a shape check passing while an attacker-chosen payload
+   executed. The stronger root-outside-the-worktree form was evaluated and rejected — see
+   `specs/feat-one-shot-7450-git-root-anchor-untrusted/b1-disposition.md`. Each halt emits a
+   `SOLEUR_*` marker on stdout so refusals reach telemetry:
 
    ```bash
-   SENTINEL="${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}/skills/incident/scripts/redact-sentinel.sh"
-   [[ -r "$SENTINEL" ]] || { echo "legal-generate: redaction sentinel not found — halt (fail closed)"; exit 2; }
-   bash "$SENTINEL" <draft-tmpfile>
+   DRAFT="$(mktemp)" || { echo "SOLEUR_LEGAL_GENERATE_HALT reason=draft-alloc-failed"
+                          echo "legal-generate: cannot allocate a draft file — stopping before any draft text exists." >&2
+                          exit 2; }
+   trap 'rm -f "$DRAFT"' EXIT INT TERM HUP
+
+   # Write the generated draft into "$DRAFT" here — in THIS fence, before the gate below.
+   # Use a QUOTED heredoc delimiter (`<<'DRAFT_EOF'`): company-context answers can contain
+   # `$(…)`, backticks and `$VAR`, and an unquoted delimiter would EXECUTE the substitutions
+   # on the operator's machine and expand `$VAR` to empty — mutating the text the sentinel is
+   # about to scan, so a secret's shape can be destroyed by the shell instead of the redactor.
+   #   cat > "$DRAFT" <<'DRAFT_EOF'
+   #   <the generated draft, verbatim>
+   #   DRAFT_EOF
+
+   [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
+     && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
+     || { echo "SOLEUR_LEGAL_GENERATE_HALT reason=plugin-root-unverified root=[${CLAUDE_PLUGIN_ROOT}]"
+          echo "legal-generate: cannot verify the Soleur plugin installation — stopping before any draft is written." >&2
+          echo "  Resolved plugin root: [${CLAUDE_PLUGIN_ROOT}]" >&2
+          echo "  If that is EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session — re-running here resolves the same empty root." >&2
+          echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur', then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
+          echo "  Do NOT hand-edit and publish this draft — the redaction scanner is what makes it safe to share." >&2
+          exit 2; }
+   SENTINEL="${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-sentinel.sh"
+   [[ -r "$SENTINEL" ]] || { echo "SOLEUR_LEGAL_GENERATE_HALT reason=sentinel-unreadable sentinel=[$SENTINEL]"
+          echo "legal-generate: the redaction sentinel is missing from an otherwise valid Soleur install — stopping." >&2
+          echo "  Expected at: [$SENTINEL]" >&2
+          echo "  The install is partial or out of date. Run 'claude plugin update soleur', then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
+          echo "  Do NOT hand-edit and publish this draft — the redaction scanner is what makes it safe to share." >&2
+          exit 2; }
+   # EMPTINESS IS A FAILURE, NOT A CLEAN SCAN — the sentinel exits 0 on zero bytes, so an
+   # unwritten draft passes the gate vacuously and Phase 3 presents the un-redacted text
+   # inline. Sibling of `linear-fetch`'s `[ -n "$PERSIST_SAFE" ]`.
+   [ -s "$DRAFT" ] || { echo "SOLEUR_LEGAL_GENERATE_HALT reason=draft-empty draft=[$DRAFT]"
+          echo "legal-generate: the draft file is empty — nothing was scanned, so nothing is safe to share." >&2
+          echo "  Write the draft into \"\$DRAFT\" in the SAME fence as this gate, then re-run." >&2
+          echo "  An empty file is a failure, not a clean scan: the sentinel exits 0 on zero bytes." >&2
+          exit 2; }
+   bash "$SENTINEL" "$DRAFT"
    ```
 
    The engine is owned by the `incident` skill and shared cross-skill by relative reference (see ADR-095).

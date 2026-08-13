@@ -25,7 +25,16 @@
 
 set -eu
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Owning trap (ADR-129). These files allocated tempfiles with no cleanup for as long as they
+# sat under scripts/, where no runner reached them; relocating them into test/ put them in
+# the lint's scope and surfaced it.
+_LF_TMPS=()
+_lf_cleanup() { [[ ${#_LF_TMPS[@]} -gt 0 ]] && rm -f "${_LF_TMPS[@]}"; return 0; }
+trap _lf_cleanup EXIT INT TERM HUP
+_lf_mktemp() { local t; t="$(mktemp)" || return 1; _LF_TMPS+=("$t"); printf '%s' "$t"; }
+
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)"
 REDACT="$SCRIPT_DIR/redact-linear-urls.sh"
 RENDER="$SCRIPT_DIR/render-caller-template.sh"
 TELEMETRY="$SCRIPT_DIR/assert-no-linear-telemetry.sh"
@@ -64,20 +73,20 @@ EOF
 )
 
 echo "Test 1: synth blob has 3 CDN URLs (sanity)"
-synth_count=$(printf '%s' "$SYNTH" | grep -oE 'uploads\.linear\.app' | wc -l | tr -d '[:space:]')
+synth_count=$({ grep -oE 'uploads\.linear\.app' <<<"$SYNTH" || true; } | wc -l | tr -d '[:space:]')
 [[ "$synth_count" == "3" ]] && pass "synth contains 3 CDN URLs" || fail "synth count=$synth_count, expected 3"
 
 # --------------------------------------------------------------------
 # Step 2: run through redaction primitive (Phase D persist_safe_summary).
 # --------------------------------------------------------------------
 echo "Test 2: redaction primitive on full blob"
-err_file=$(mktemp)
+err_file=$(_lf_mktemp)
 PERSIST_SAFE=$(printf '%s' "$SYNTH" | bash "$REDACT" 2>"$err_file")
 REDACT_COUNT=$(cat "$err_file" | tr -d '[:space:]')
 rm -f "$err_file"
 [[ "$REDACT_COUNT" == "3" ]] && pass "redaction count=3" || fail "redaction count=$REDACT_COUNT"
 
-residue=$(printf '%s' "$PERSIST_SAFE" | grep -oE 'uploads\.linear\.app' | wc -l | tr -d '[:space:]')
+residue=$({ grep -oE 'uploads\.linear\.app' <<<"$PERSIST_SAFE" || true; } | wc -l | tr -d '[:space:]')
 [[ "$residue" == "0" ]] && pass "zero uploads.linear.app in persist_safe_summary" || fail "residue=$residue"
 
 # --------------------------------------------------------------------
@@ -105,7 +114,7 @@ EOF
 
 echo "Test 3: render one-shot template with persist_safe_summary"
 ONE_SHOT_RENDERED=$(printf '%s' "$ONE_SHOT_TPL" | bash "$RENDER" "$PERSIST_SAFE")
-os_residue=$(printf '%s' "$ONE_SHOT_RENDERED" | grep -oE 'uploads\.linear\.app' | wc -l | tr -d '[:space:]')
+os_residue=$({ grep -oE 'uploads\.linear\.app' <<<"$ONE_SHOT_RENDERED" || true; } | wc -l | tr -d '[:space:]')
 [[ "$os_residue" == "0" ]] && pass "one-shot rendered prompt has zero CDN URLs" || fail "os_residue=$os_residue"
 
 # Sanity: rendered prompt should still contain the redacted placeholder marker
@@ -117,7 +126,7 @@ fi
 
 echo "Test 4: render brainstorm template with persist_safe_summary"
 BS_RENDERED=$(printf '%s' "$BRAINSTORM_TPL" | bash "$RENDER" "$PERSIST_SAFE")
-bs_residue=$(printf '%s' "$BS_RENDERED" | grep -oE 'uploads\.linear\.app' | wc -l | tr -d '[:space:]')
+bs_residue=$({ grep -oE 'uploads\.linear\.app' <<<"$BS_RENDERED" || true; } | wc -l | tr -d '[:space:]')
 [[ "$bs_residue" == "0" ]] && pass "brainstorm rendered prompt has zero CDN URLs" || fail "bs_residue=$bs_residue"
 
 # --------------------------------------------------------------------

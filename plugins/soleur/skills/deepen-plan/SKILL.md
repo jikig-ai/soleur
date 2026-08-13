@@ -346,9 +346,7 @@ Per AGENTS.md `hr-ssh-diagnosis-verify-firewall`, plans addressing SSH/network-c
 When a trigger pattern matches, emit rule-application telemetry so the weekly aggregator records the deepen-plan enforcement layer fired (see AGENTS.md `hr-ssh-diagnosis-verify-firewall`):
 
 ```bash
-source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
-  emit_incident hr-ssh-diagnosis-verify-firewall applied \
-  "When a plan addresses an SSH/network-connectivity s"
+echo 'SOLEUR_RULE_APPLIED rule=hr-ssh-diagnosis-verify-firewall note=When a plan addresses an SSH/network-connectivity s'
 ```
 
 ### 4.55. Downtime & Cutover Halt — Zero-Downtime-First (Conditional)
@@ -365,9 +363,7 @@ Soleur users are a live single-operator surface; an unexpected outage of the web
 Emit telemetry when the gate fires (records the enforcement layer for the weekly aggregator, mirroring the sibling halts 4.5/4.6; reuses the brand-survival rule this gate invokes):
 
 ```bash
-source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
-  emit_incident hr-weigh-every-decision-against-target-user-impact applied \
-  "Downtime & Cutover halt: plan must default to a zero-"
+echo 'SOLEUR_RULE_APPLIED rule=hr-weigh-every-decision-against-target-user-impact note=Downtime & Cutover halt: plan must default to a zero-'
 ```
 
 **Why:** #5887 — a `moved`-block migration was framed as a rebooting full `terraform apply`; the actual wedge cleared with a **zero-downtime `terraform state mv`** (state-only re-address, no reboot), and the real web-2 cutover is blue-green (a fresh host is born into the placement group with no reboot; only the old host needs a power-off, done while drained). The rebooting path was the *default* only because no gate forced a zero-downtime evaluation first. See `knowledge-base/project/learnings/2026-07-02-zero-downtime-first-moved-block-statemv-and-blue-green-cutover.md`.
@@ -408,9 +404,7 @@ On rejection, HALT with the same error message as Step 1, replacing the first li
 **Step 3 — Emit telemetry.** When the halt fires (Step 1 OR Step 2), emit rule-application telemetry so the weekly aggregator records the deepen-plan enforcement layer fired:
 
 ```bash
-source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
-  emit_incident hr-weigh-every-decision-against-target-user-impact applied \
-  "Every plan/PR touching credentials, auth, data, paym"
+echo 'SOLEUR_RULE_APPLIED rule=hr-weigh-every-decision-against-target-user-impact note=Every plan/PR touching credentials, auth, data, paym'
 ```
 
 **Step 4 — Pass-through.** If the section is present, non-empty, has a valid threshold, and (when `none`) has a scope-out line for sensitive-path diffs, deepen-plan proceeds normally. No telemetry is emitted on pass — the gate only records when it activates.
@@ -460,9 +454,7 @@ On rejection, HALT with a message naming the specific field and its failure mode
 **Step 4 — Emit telemetry.** When the halt fires (Step 2 OR Step 3), emit:
 
 ```bash
-source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
-  emit_incident hr-observability-as-plan-quality-gate applied \
-  "Every plan touching production code/infra MUST declar"
+echo 'SOLEUR_RULE_APPLIED rule=hr-observability-as-plan-quality-gate note=Every plan touching production code/infra MUST declar'
 ```
 
 **Step 5 — Pass-through.** If the section is present, all 5 fields exist with non-placeholder values, no field is empty, `discoverability_test.command` does not require SSH and starts with an allowlisted probe verb — or the block carries a non-placeholder `credentials_required` declaration — deepen-plan proceeds normally. No telemetry on pass.
@@ -501,9 +493,7 @@ Halt deepen-plan; do NOT proceed to Phase 5.
 **Step 4 — Emit telemetry.** When the halt fires, emit:
 
 ```bash
-source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
-  emit_incident hr-github-app-auth-not-pat applied \
-  "Infra/CI GitHub writes auth via GitHub App, never PAT"
+echo 'SOLEUR_RULE_APPLIED rule=hr-github-app-auth-not-pat note=Infra/CI GitHub writes auth via GitHub App, never PAT'
 ```
 
 **Step 5 — Pass-through.** If no PAT-shaped patterns match, deepen-plan proceeds normally. No telemetry on pass.
@@ -534,9 +524,7 @@ Halt deepen-plan; do NOT proceed to Phase 5.
 **Step 4 — Emit telemetry.** When the halt fires:
 
 ```bash
-source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
-  emit_incident wg-ui-feature-requires-pen-wireframe applied \
-  "UI feature must ship a committed .pen wireframe, never skipped"
+echo 'SOLEUR_RULE_APPLIED rule=wg-ui-feature-requires-pen-wireframe note=UI feature must ship a committed .pen wireframe, never skipped'
 ```
 
 ### 4.10. Encryption Posture Halt (Conditional)
@@ -569,9 +557,7 @@ On rejection, HALT with a message naming the specific field and its failure mode
 **Step 4 — Emit telemetry.** When the halt fires (Step 2 OR Step 3), emit:
 
 ```bash
-source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
-  emit_incident encryption-posture-design-time-default applied \
-  "Every new store/connection MUST declare a verified encryption posture at plan time"
+echo 'SOLEUR_RULE_APPLIED rule=encryption-posture-design-time-default note=Every new store/connection MUST declare a verified encryption posture at plan time'
 ```
 
 **Step 5 — Pass-through.** If the section is present, all required fields exist with non-boilerplate values, `does_not_defend` is non-empty, and every `exception` block carries both `tracking_issue` and `expires_on`, deepen-plan proceeds normally. No telemetry on pass.
@@ -857,7 +843,7 @@ Use React Query for data fetching with optimistic updates.
 
 **After (from /deepen-plan):**
 
-```markdown
+````markdown
 ## Technical Approach
 
 Use React Query for data fetching with optimistic updates.
@@ -899,4 +885,4 @@ const queryClient = new QueryClient({
 - <https://tanstack.com/query/latest/docs/react/guides/optimistic-updates>
 - <https://tkdodo.eu/blog/practical-react-query>
 
-```
+````

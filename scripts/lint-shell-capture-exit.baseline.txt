@@ -142,10 +142,6 @@ apps/web-platform/test/infra/vector-pii-scrub.test.sh	S1	binpath=$(grep -m1 -oE 
 plugins/soleur/skills/compound/scripts/token-efficiency-report.sh	S1	LINES=$(grep -oE '[0-9]+ (insertion|deletion)' "$SHORTSTAT_TMP" | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
 plugins/soleur/skills/linear-fetch/scripts/assert-no-linear-telemetry.sh	S1	match=$(printf '%s' "$input" | grep -oE '\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b' | head -n 1)
 plugins/soleur/skills/linear-fetch/scripts/assert-no-linear-telemetry.sh	S1	match=$(printf '%s' "$input" | grep -oE '\b[A-Z]{2,}-[0-9]+\b' | head -n 1)
-plugins/soleur/skills/linear-fetch/scripts/persist-safe-integration.test.sh	S1	bs_residue=$(printf '%s' "$BS_RENDERED" | grep -oE 'uploads\.linear\.app' | wc -l | tr -d '[:space:]')
-plugins/soleur/skills/linear-fetch/scripts/persist-safe-integration.test.sh	S1	os_residue=$(printf '%s' "$ONE_SHOT_RENDERED" | grep -oE 'uploads\.linear\.app' | wc -l | tr -d '[:space:]')
-plugins/soleur/skills/linear-fetch/scripts/persist-safe-integration.test.sh	S1	residue=$(printf '%s' "$PERSIST_SAFE" | grep -oE 'uploads\.linear\.app' | wc -l | tr -d '[:space:]')
-plugins/soleur/skills/linear-fetch/scripts/persist-safe-integration.test.sh	S1	synth_count=$(printf '%s' "$SYNTH" | grep -oE 'uploads\.linear\.app' | wc -l | tr -d '[:space:]')
 plugins/soleur/skills/linear-fetch/scripts/redact-linear-urls.sh	S1	matches=$(printf '%s' "$output" | grep -oE "$pattern" | wc -l | tr -d '[:space:]')
 plugins/soleur/skills/model-launch-review/scripts/audit-models.sh	S1	_pin_sha="$(grep -ohE 'claude-code-action@[a-f0-9]{40}' "${pins[@]}" 2>/dev/null | head -1 | cut -d@ -f2)"
 plugins/soleur/skills/model-launch-review/scripts/audit-models.sh	S1	ids="$(grep -oE "$(autofix_from_re)" "$f" | sort -u | tr '\n' ' ')"
