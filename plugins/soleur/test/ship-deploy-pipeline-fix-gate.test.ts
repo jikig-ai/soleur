@@ -328,6 +328,69 @@ describe("Trigger array and server.tf are in sync (path-glob verification)", () 
   });
 });
 
+// #7104 PR-A — FILE_MAP ⊆ TRIGGER_FILES.
+//
+// The infra-config gate's `DPF_REPLACED == false` arm rests on this containment. When
+// terraform_data.deploy_pipeline_fix is NOT replaced, no push fires and no frame is published,
+// so the gate adjudicates a frame of unbounded age. That is only safe because DPF was not
+// replaced PRECISELY BECAUSE none of its hashed triggers changed — which means no FILE_MAP file
+// changed either, so the per-file content match is guaranteed by construction.
+//
+// If a FILE_MAP dest ever ships from a repo file that is NOT a DPF trigger, that reasoning
+// breaks: the repo file could change while DPF stays un-replaced, the host would keep serving
+// stale content, and the gate would adjudicate it against a repo that has moved on. Measured at
+// implementation time as holding 20/20 (18 direct `file()` triggers + 2 rendered locals), so
+// this test pins a property that is true today rather than asserting an aspiration.
+//
+// Containment is by BASENAME, with the template indirection made explicit: a dest is either
+// delivered verbatim from a repo file of the same basename, or rendered from `<basename>.tmpl`
+// (hooks.json ← hooks.json.tmpl, /etc/default/soleur-doppler-token ← soleur-doppler-token.tmpl).
+describe("infra-config FILE_MAP is contained in TRIGGER_FILES (#7104)", () => {
+  const INFRA_CONFIG_APPLY = resolve(
+    REPO_ROOT,
+    "apps/web-platform/infra/infra-config-apply.sh",
+  );
+
+  // Parsed once so an empty/unparseable FILE_MAP is a loud failure rather than a
+  // vacuously-passing `test.each([])` — a zero-row table reports as a clean run.
+  let fileMapDests: string[];
+
+  beforeAll(() => {
+    expect(existsSync(INFRA_CONFIG_APPLY)).toBe(true);
+    const src = readFileSync(INFRA_CONFIG_APPLY, "utf8");
+    const block = src.match(/^FILE_MAP=\(\s*$([\s\S]*?)^\)\s*$/m);
+    if (!block) {
+      throw new Error(
+        `Could not locate a FILE_MAP=( ... ) block in ${INFRA_CONFIG_APPLY}. ` +
+          "The containment this suite pins cannot be evaluated, so it fails closed " +
+          "rather than reporting a clean run over zero rows.",
+      );
+    }
+    // Entries are "ENV_KEY_B64|/abs/dest/path|mode|owner:group"; comment lines are skipped.
+    fileMapDests = Array.from(
+      block[1].matchAll(/^\s*"[A-Z0-9_]+\|([^|]+)\|/gm),
+    ).map((m) => m[1]);
+  });
+
+  test("FILE_MAP parses to a non-empty dest list (anti-vacuity)", () => {
+    expect(fileMapDests.length).toBeGreaterThan(0);
+  });
+
+  test("every FILE_MAP dest is covered by a DPF trigger (verbatim or via .tmpl)", () => {
+    const triggerBasenames = new Set(
+      TRIGGER_FILES.map((p) => p.split("/").pop()!),
+    );
+    const uncovered = fileMapDests.filter((dest) => {
+      const base = dest.split("/").pop()!;
+      return !triggerBasenames.has(base) && !triggerBasenames.has(`${base}.tmpl`);
+    });
+    // Named rather than counted: a bare length check tells the next reader that
+    // something drifted but not what, and this failure is load-bearing enough to
+    // deserve the dest paths in the message.
+    expect(uncovered).toEqual([]);
+  });
+});
+
 describe("postmerge runbook updates (#3034)", () => {
   let runbook: string;
 
