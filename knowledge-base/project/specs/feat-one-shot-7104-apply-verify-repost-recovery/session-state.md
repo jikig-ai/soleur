@@ -65,3 +65,31 @@ All three items in `decision-challenges.md` were put to the operator before impl
 - Status: starting
 - Delivery order: PR-A = tasks Phases 1, 2, 3 (+ the Phase 9/10 items scoped to it).
   PR-B = tasks Phases 4–10.
+
+## Review Phase
+- Status: complete. 7 agents, report-only (fixes applied by the lead from a known SHA).
+- Panel: security-sentinel, test-design-reviewer, general-purpose (structural-enumeration seat),
+  user-impact-reviewer, observability-coverage-reviewer, architecture-strategist,
+  code-quality-analyst. Three stalled on the stream watchdog and were RESUMED with bounded read
+  scopes (all three returned with transcripts intact); one died on a transient API error and was
+  likewise resumed.
+- Six P1s, all pr-introduced, all fixed inline. No `code-review` issues filed.
+- One inter-agent disagreement (`always()` vs `success()` on the reporting step) resolved in favour
+  of the dissent, which was correct.
+
+## Compound Phase
+- Learning: `knowledge-base/project/learnings/2026-08-13-making-a-red-gate-green-arms-everything-it-was-silently-gating.md`
+- Routed to definition: `review/SKILL.md` (an anti-vacuity floor must not be dispatched through the
+  helper it backstops) and `work/SKILL.md` (stopping a background runner means killing the tree,
+  not the PIDs you launched). Rule budget is `[WARN] B_ALWAYS=45319 >= 44000`, so nothing was added
+  to `AGENTS.rules.md`; both insights are domain-scoped and route to skills by the placement gate.
+- **Archival deliberately REVERTED.** `archive-kb.sh` moved this spec dir to `specs/archive/`; that
+  is wrong for PR-A, which is the first of two PRs the operator authorised. `tasks.md` still holds
+  35 unchecked tasks (PR-B Phases 4-10) and `decision-challenges.md` is what `ship` renders into the
+  PR body. The plan file was not matched by the script's `*<slug>*` glob at all (the documented gap)
+  and is likewise still live. Both archive when PR-B lands, not before.
+
+## Next
+- PR-A (#7509): ship. `Closes #7104` does NOT attach here — it attaches to PR-B per the operator's
+  UC2 disposition. PR-A references #7104 in prose only.
+- PR-B: tasks.md Phases 4-10 (the bounded re-push), on a sibling branch after PR-A merges.
