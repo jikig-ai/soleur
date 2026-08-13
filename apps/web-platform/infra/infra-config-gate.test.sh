@@ -1493,6 +1493,55 @@ else
   pass "#7104 Guard 3: the re-push apply is not keyed on success()"
 fi
 
+# --- #7104 AC18 ----------------------------------------------------------------------------
+# The step-level error-tolerance key is banned outright in this workflow: it is how a
+# verification gate stops failing closed, which is the entire defect class PR-B exists in.
+# Asserted as `! grep -q` rather than `grep -c ... = 0`, because a grep -c returning 0
+# EXITS 1 and would abort a set -e harness on the passing case (R16.3).
+#
+# The literal is spelled from parts here on purpose. A test that greps a workflow for a
+# forbidden literal, while itself naming that literal in prose, false-FAILS the moment the
+# two files are ever scanned together — and more importantly it is the shape that made
+# this assert trip on its OWN explanatory comment while it was being written.
+FORBIDDEN_KEY="continue-on""-error"
+if grep -q "$FORBIDDEN_KEY" "$APPLY_WF"; then
+  fail "#7104 AC18: apply-deploy-pipeline-fix.yml contains '$FORBIDDEN_KEY'. A verification gate that tolerates its own failure does not fail closed."
+else
+  pass "#7104 AC18: the workflow contains no step-level error-tolerance key"
+fi
+
+# The ledger must never notify. It is created CLOSED and only ever edited, because GitHub
+# notifies on comments and state changes but not on body/title edits. Task 7.7's repo-watch
+# probe was CUT (the API needs a scope we do not hold), so this assertion IS the property.
+#
+# Scoped to the LEDGER, not a bare grep: this workflow legitimately comments on #4804 and on
+# drift issues, and an unscoped assert would fail on pre-existing, correct code — the
+# false-positive that a bare-token assert produces.
+if grep -nE 'gh issue (comment|reopen)' "$APPLY_WF" | grep -qiE 'ledger|LEDGER_TITLE|\$num'; then
+  fail "#7104 AC18: the workflow comments on or reopens the ledger issue — either would notify, defeating the property the closed-ledger design buys by construction"
+else
+  pass "#7104 AC18: the workflow never comments on or reopens the ledger (it is created closed and only edited)"
+fi
+
+# R19.4 §4: the plan's own "six success()-gated steps" is wrong; the measured count is five.
+# Pinned because the backstop's whole justification is what re-arms behind a false green —
+# two of these five close the founder's GitHub issues and one swaps the running container.
+AC18_SUCCESS_STEPS=5
+ac18_measured=$(python3 - "$APPLY_WF" <<'PYEOF'
+import sys, yaml
+wf = yaml.safe_load(open(sys.argv[1], encoding='utf-8'))
+steps = wf['jobs']['apply']['steps']
+gi = next(i for i, s in enumerate(steps) if s.get('id') == 'infra_config_gate')
+print(sum(1 for s in steps[gi+1:]
+          if isinstance(s.get('if'), str) and 'success()' in s['if']))
+PYEOF
+) || ac18_measured="ERR"
+if [[ "$ac18_measured" == "$AC18_SUCCESS_STEPS" ]]; then
+  pass "#7104 AC18: $ac18_measured success()-gated steps run downstream of the gate (the set that re-arms behind a false green)"
+else
+  fail "#7104 AC18: measured $ac18_measured success()-gated steps downstream of the gate, expected $AC18_SUCCESS_STEPS. The backstop's justification is sized on this number — re-derive it and update both."
+fi
+
 # Cardinality floor: if the reference extractor silently matches nothing, the clean
 # result above would be a statement about the empty set.
 if [[ "${g1_checked:-0}" -ge 4 ]]; then
@@ -1505,7 +1554,7 @@ fi
 # Nothing asserted that the assertions RAN. Measured: deleting the entire #7220 block took the
 # suite 53 -> 40 passed, 0 failed, exit 0 — a silent truncation that reads exactly like a clean
 # run. A floor (not equality — the count is developer-incremented) makes arm deletion loud.
-GATE_MIN_ASSERTIONS=124
+GATE_MIN_ASSERTIONS=127
 # Adjudicated DIRECTLY, not through fail(). Measured: `fail() { return 0; }` made this suite
 # report `94 passed, 0 failed` / `OK` / exit 0 WITH a genuinely broken assertion present — and
 # the floor built to make truncation loud was itself dispatched through the neutered function,

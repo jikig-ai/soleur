@@ -926,6 +926,137 @@ jobs:
           echo "::error::NO TERMINAL VERDICT was rendered (pass1='${PASS1_VERDICT:-<none>}' pass2='${PASS2_VERDICT:-<none>}'). Pass 1 deferred to a re-push and pass 2 never returned a verdict — the recovery steps were skipped or mis-keyed. This job verified NOTHING; failing closed rather than letting the downstream success()-gated steps re-arm."
           exit 1
 
+      # --- #7104 PR-B: observability for a recovery that fires -----------------------------
+      #
+      # A SEPARATE STEP, deliberately. R17.6 flags that the gate step's credential surface is
+      # already unlisted, and it now also holds prod-write Terraform credentials; putting
+      # SENTRY_* and GH_TOKEN on it would widen that further. Keeping escalation out of the
+      # step that renders the verdict is the same principle the split itself encodes.
+      #
+      # `always() && ... != 'skipped'` and not `success()`: this report matters MOST on the
+      # terminal-red path, where the gate exits 1. A success()-gated report would be dropped
+      # on exactly the runs worth counting. "Attempted" is a native step outcome under the
+      # split, so no output plumbing and no ordering rule is needed.
+      - name: Report the bounded re-push to Sentry (#7104)
+        if: always() && steps.repush_apply.outcome != 'skipped'
+        env:
+          SENTRY_INGEST_DOMAIN: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          SENTRY_PROJECT_ID: ${{ secrets.SENTRY_PROJECT_ID }}
+          SENTRY_PUBLIC_KEY: ${{ secrets.SENTRY_PUBLIC_KEY }}
+          APPLY_OUTCOME: ${{ steps.repush_apply.outcome }}
+          PASS2_OUTCOME: ${{ steps.infra_config_gate_pass2.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_SHA: ${{ github.sha }}
+        run: |
+          # Degrade-never-block, same contract as the sibling report step. `set +e` rather
+          # than the step-level error-tolerance key, which AC18 bans outright by literal.
+          set +e
+          set -uo pipefail
+          if [[ -z "${SENTRY_INGEST_DOMAIN:-}" || -z "${SENTRY_PROJECT_ID:-}" || -z "${SENTRY_PUBLIC_KEY:-}" ]]; then
+            echo "::warning::Sentry is not configured for this repo, so the re-push event could not be sent."
+            exit 0
+          fi
+          # `feature` is REQUIRED, not decoration: every rule in issue-alerts.tf is a
+          # filter_match="all" AND over a `feature` + `op` pair, so an event without it cannot
+          # match any rule that exists or any added later.
+          #
+          # NOTE, so this is not over-read: NO sentry_issue_alert rule currently matches
+          # op=infra-config-repush-attempted, exactly as #7527 already records for
+          # op=infra-config-preframe-degraded. This is a breadcrumb and a counter input, NOT
+          # an alert route. Claiming otherwise would be the AP-021 violation this plan exists
+          # to avoid; the paging rule belongs to #7527's scope.
+          payload=$(jq -nc \
+            --arg msg "infra-config bounded re-push attempted (apply=${APPLY_OUTCOME}, verify=${PASS2_OUTCOME:-not-reached})" \
+            --arg apply "${APPLY_OUTCOME}" \
+            --arg verify "${PASS2_OUTCOME:-not-reached}" \
+            --arg url "${RUN_URL}" \
+            --arg sha "${RUN_SHA}" \
+            '{level:"warning",
+              message:$msg,
+              release:$sha,
+              tags:{feature:"infra-config", op:"infra-config-repush-attempted", apply_outcome:$apply, verify_outcome:$verify},
+              extra:{run_url:$url, sha:$sha}}')
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+            -X POST "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+            -H "Content-Type: application/json" \
+            -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+            -d "$payload" 2>/dev/null || echo "000")
+          if [[ "$code" =~ ^2 ]]; then
+            echo "Sentry re-push event accepted (HTTP ${code}, op=infra-config-repush-attempted)."
+          else
+            echo "::error::The re-push Sentry event could not be delivered (HTTP ${code}). A production write happened on this run and the out-of-band record of it did not."
+          fi
+          exit 0
+
+      # The ledger body is composed in its OWN step, never batched with the `gh issue edit`
+      # that consumes it: a write and a read of the same file in one step is the documented
+      # 2026-05-12 race. Built with printf to a temp file rather than a flush-left heredoc
+      # inside `run: |`, which YAML block-scalar indentation mangles.
+      - name: Compose the re-push ledger entry (#7104)
+        id: ledger_body
+        if: always() && steps.repush_apply.outcome != 'skipped' && github.event_name != 'workflow_dispatch'
+        env:
+          APPLY_OUTCOME: ${{ steps.repush_apply.outcome }}
+          PASS2_OUTCOME: ${{ steps.infra_config_gate_pass2.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          f="$(mktemp)"
+          {
+            printf '%s\n' "This issue is a running tally of every time the infra-config apply gate"
+            printf '%s\n' "recovered itself with a bounded re-push (#7104). It is created CLOSED and is"
+            printf '%s\n' "only ever edited, so it does not notify."
+            printf '%s\n\n' "It is a counter you can look at, not an alert."
+            printf '%s\n' "| when (UTC) | run | sha | apply | verify |"
+            printf '%s\n' "|---|---|---|---|---|"
+            printf '| %s | %s | %s | %s | %s |\n' \
+              "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${RUN_URL}" "${RUN_SHA:0:12}" \
+              "${APPLY_OUTCOME}" "${PASS2_OUTCOME:-not-reached}"
+          } >> "$f"
+          echo "path=$f" >> "$GITHUB_OUTPUT"
+
+      - name: Maintain the re-push ledger issue (#7104)
+        if: always() && steps.ledger_body.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BODY_PATH: ${{ steps.ledger_body.outputs.path }}
+          LEDGER_LABEL: infra-config-recovery-ledger
+          LEDGER_TITLE: "infra-config bounded re-push ledger (#7104)"
+        run: |
+          # Never reds a run that actually recovered: a bookkeeping failure must not convert a
+          # successful self-heal into a red job.
+          set +e
+          set -uo pipefail
+
+          # The label lives OUTSIDE the ci/ namespace (R14.2) and is created here rather than
+          # assumed. scripts/infra-config-red-alert.sh is deliberately NOT touched: it
+          # hardcodes three labels across five sites and is fail-open by contract, so widening
+          # the P1 helper is exposure this avoids.
+          gh label create "$LEDGER_LABEL" \
+            --description "Running tally of infra-config gate self-recoveries (#7104). Never pages." \
+            --color ededed 2>/dev/null || true
+
+          # --state all: a ledger created closed is invisible to the default open-only search,
+          # so a narrower query would file a duplicate on every recovery.
+          num=$(gh issue list --state all --label "$LEDGER_LABEL" --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null)
+          if [[ -z "$num" ]]; then
+            url=$(gh issue create --title "$LEDGER_TITLE" --label "$LEDGER_LABEL" --body-file "$BODY_PATH" 2>/dev/null)
+            num="${url##*/}"
+            # Created CLOSED. This is what buys "the ledger never notifies" by construction:
+            # GitHub notifies on comments and state changes, not on body or title edits.
+            [[ -n "$num" ]] && gh issue close "$num" 2>/dev/null
+            echo "Ledger issue created and closed: ${url:-<none>}"
+          else
+            prev=$(gh issue view "$num" --json body --jq .body 2>/dev/null)
+            merged="$(mktemp)"
+            printf '%s\n' "$prev" > "$merged"
+            tail -n 1 "$BODY_PATH" >> "$merged"
+            gh issue edit "$num" --body-file "$merged" 2>/dev/null
+            echo "Ledger issue #${num} appended."
+          fi
+          exit 0
+
       # #7104 — a green run with DEGRADED freshness evidence must still reach someone.
       #
       # A `::warning::` inside a green run is a log line in a run nobody opens — the same
@@ -1562,6 +1693,8 @@ jobs:
           REASON: ${{ inputs.reason }}
           EVENT_NAME: ${{ github.event_name }}
           MERGE_SHA: ${{ github.sha }}
+          REPUSH_OUTCOME: ${{ steps.repush_apply.outcome }}
+          REPUSH_VERIFY: ${{ steps.infra_config_gate_pass2.outcome }}
         run: |
           {
             echo "## Apply deploy-pipeline-fix"
@@ -1571,4 +1704,17 @@ jobs:
             echo "**Reason (manual only):** ${REASON:-n/a}"
             echo "**Status:** ${{ job.status }}"
             echo "**Run:** ${RUN_URL}"
+            # #7104 R20.7 §7 — the ONLY channel that makes a recovery visible by PUSH.
+            #
+            # As otherwise designed, a run that self-healed is: a green job, a step summary
+            # identical to a normal run, a Sentry event matching no alert rule, and a ledger
+            # issue deliberately built not to notify. So the honest answer to "can the
+            # operator tell a recovered run from one that never failed?" was NO. This line
+            # is what changes that, and it lives INSIDE this step rather than standing alone
+            # because a standalone summary block renders orphaned above this heading — and
+            # this is the one artifact the founder actually reads.
+            if [[ "${REPUSH_OUTCOME:-skipped}" != "skipped" ]]; then
+              echo ""
+              echo "**Self-healed:** the infra-config gate hit the documented webhook-restart race and recovered itself with one bounded re-push (apply=${REPUSH_OUTCOME}, re-verify=${REPUSH_VERIFY:-not-reached}). This run wrote production a second time. Running tally: see the \`infra-config-recovery-ledger\` issue."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
