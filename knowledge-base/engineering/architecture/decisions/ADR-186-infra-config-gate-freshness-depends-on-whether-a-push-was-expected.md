@@ -16,7 +16,7 @@ describing the last handler run, and adjudicates: count invariant, per-file cont
 **freshness pin** requiring `FRAME_START_TS >= APPLY_START_EPOCH` (#7220).
 
 The push is a `provisioner` **on** `terraform_data.deploy_pipeline_fix` (DPF), so it fires only when
-DPF is replaced. But this workflow's `on.push.paths` filter is a **superset** of DPF's 22 hashed
+DPF is replaced. But this workflow's `on.push.paths` filter is a **superset** of DPF's 24 hashed
 triggers — it also contains `server.tf`, `seccomp-bwrap.json` and `apparmor-soleur-bwrap.profile`
 (pinned as set equality by `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts`). A merge
 touching only those fires the workflow, replaces nothing, pushes nothing, and publishes no new

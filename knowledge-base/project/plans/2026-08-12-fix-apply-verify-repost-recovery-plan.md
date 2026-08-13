@@ -1705,7 +1705,7 @@ read as a permanent `false`.
 
 **Vacuity — the sharper finding.** R1 said the false arm "adjudicates on count + content only". But
 `adjudicate_infra_config` compares each frame file's `sha256` against the checked-out repo, and DPF
-was not replaced *precisely because none of its 22 hashed files changed*. A content match is
+was not replaced *precisely because none of its 24 hashed files changed*. A content match is
 therefore **guaranteed by construction** on that arm. With the freshness pin also skipped, the arm
 reduces to: *the endpoint answered 200, and some frame of unbounded age reports `exit_code: 0`.*
 

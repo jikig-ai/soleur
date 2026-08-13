@@ -318,7 +318,15 @@ jobs:
           # invocations could in principle disagree, and one of them decides whether a
           # production write is expected.
           terraform show -json tfplan > tfplan.json
-          counts=$(jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq" tfplan.json)
+          # Guarded capture: an unguarded `x=$(...)` under errexit dies AT THE ASSIGNMENT, so the
+          # `::error::` below that exists to explain a filter failure would never print. Same
+          # mute-abort class the stability capture in the verify step documents.
+          counts_rc=0
+          counts=$(jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq" tfplan.json) || counts_rc=$?
+          if [[ "$counts_rc" -ne 0 ]]; then
+            echo "::error::The destroy-guard jq filter failed against tfplan.json (rc=${counts_rc}). The guard CANNOT evaluate, so this run aborts fail-CLOSED."
+            exit 1
+          fi
           host_creates=$(echo "$counts" | jq -r '.host_creates')
           if [[ ! "$host_creates" =~ ^[0-9]+$ ]]; then
             echo "::error::destroy-guard counter parse failed (host_creates='${host_creates}'). The shared jq filter did not emit that key; the guard CANNOT evaluate, so this run aborts fail-CLOSED. Fix the filter or its consumer — do NOT re-run."
@@ -340,7 +348,7 @@ jobs:
           # terraform_data.deploy_pipeline_fix, so it fires only when that resource is replaced.
           # Three merge classes fire this workflow WITHOUT replacing it — server.tf,
           # seccomp-bwrap.json and apparmor-soleur-bwrap.profile are in this workflow's
-          # on.push.paths but in none of DPF's 22 hashed triggers — and a no-op dispatch is a
+          # on.push.paths but in none of DPF's 24 hashed triggers — and a no-op dispatch is a
           # fourth. On those runs nothing is pushed, no frame is published, and the #7220
           # freshness pin reds a run that did nothing wrong.
           #
@@ -365,6 +373,35 @@ jobs:
             exit 1
           }
           echo "DPF_REPLACED=${DPF_REPLACED}" >> "$GITHUB_ENV"
+
+          # Did this plan change ANYTHING? Downstream steps close GitHub issues asserting that
+          # server state was re-aligned with HEAD. Before this PR those steps were unreachable on
+          # a no-push run because the gate red first; making the gate correctly GREEN arms them,
+          # and on a zero-change apply their assertion is false. Measured on run 31636951749:
+          # `Apply complete! Resources: 0 added, 0 changed, 0 destroyed` — nothing was re-aligned
+          # with anything, and that run would now auto-close the operator's drift issues.
+          #
+          # Deliberately NOT keyed on DPF_REPLACED: a seccomp or apparmor merge genuinely does
+          # re-align the host without replacing deploy_pipeline_fix, so keying on the push would
+          # wrongly stop closing issues those runs really did resolve.
+          plan_changes_rc=0
+          PLAN_CHANGED_COUNT=$(jq -r '[.resource_changes[]? | select((.change.actions // []) != ["no-op"])] | length' tfplan.json) || plan_changes_rc=$?
+          if [[ "$plan_changes_rc" -ne 0 || ! "$PLAN_CHANGED_COUNT" =~ ^[0-9]+$ ]]; then
+            echo "::error::Could not count non-no-op resource changes in tfplan.json. Steps that auto-close issues read this, and a value we cannot derive must never read as 'changes happened'. Failing CLOSED."
+            exit 1
+          fi
+          # `terraform show -json` emits the root-module `variables` block UNREDACTED, so this
+          # file holds the live prd Doppler token, the webhook HMAC secret and the CI SSH key in
+          # cleartext. Both readers (the destroy-guard filter and the sensor) are in THIS step,
+          # so it never needs to outlive it. Gitignored and the runner is ephemeral, but the
+          # window costs nothing to close.
+          rm -f tfplan.json
+          if [[ "$PLAN_CHANGED_COUNT" -gt 0 ]]; then
+            echo "PLAN_HAS_CHANGES=true" >> "$GITHUB_ENV"
+          else
+            echo "PLAN_HAS_CHANGES=false" >> "$GITHUB_ENV"
+            echo "::notice::This plan changes nothing (0 non-no-op resource changes). Steps that auto-close drift issues will be skipped — closing them would assert a re-alignment that did not occur."
+          fi
           if [[ "$DPF_REPLACED" == "true" ]]; then
             echo "::notice::deploy_pipeline_fix WILL be replaced by this plan — a config push is expected, and the verify step will require a frame newer than this apply."
           else
@@ -410,11 +447,22 @@ jobs:
 
           APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
           WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain 2>/dev/null)
+          # Mask before any of these can reach a log line. This repo is PUBLIC and this same
+          # workflow already does exactly this ~200 lines below for the same credential class;
+          # the omission here was an inconsistency, not a considered exception.
+          [[ -n "${WEBHOOK_SECRET:-}" ]] && echo "::add-mask::${WEBHOOK_SECRET}"
           CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain 2>/dev/null)
           CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain 2>/dev/null)
+          [[ -n "${CF_ACCESS_SECRET:-}" ]] && echo "::add-mask::${CF_ACCESS_SECRET}"
+          [[ -n "${CF_ACCESS_ID:-}" ]] && echo "::add-mask::${CF_ACCESS_ID}"
 
           if [[ -z "${WEBHOOK_SECRET:-}" ]]; then
-            echo "::warning::Pre-apply frame capture could not read WEBHOOK_DEPLOY_SECRET from Doppler; recording pre_frame_status=error. The apply proceeds — this reading is corroborating evidence, not the verification."
+            # Its OWN token, not the generic `error`. The step ran and measured a specific
+            # cause; collapsing that into "no result recorded" would name a cause nobody
+            # measured (AP-021), and a prd credential read failing on the workflow that
+            # delivers /etc/default/soleur-doppler-token is its own incident.
+            PRE_STATUS="secret_unavailable"
+            echo "::warning::Pre-apply frame capture could not read WEBHOOK_DEPLOY_SECRET from Doppler; recording pre_frame_status=secret_unavailable. The apply proceeds — this reading is corroborating evidence, not the verification."
           else
             HTTP_CODE="000"
             for attempt in 1 2 3; do
@@ -453,7 +501,6 @@ jobs:
             echo "PRE_FRAME_STATUS=${PRE_STATUS}"
             echo "PRE_APPLY_FRAME_START_TS=${PRE_TS}"
           } >> "$GITHUB_ENV"
-          echo "pre_frame_status=${PRE_STATUS}" >> "$GITHUB_OUTPUT"
           # Terminal exit 0: this step never blocks, and `set +e` above means an earlier
           # non-zero must not leak into the step's status.
           exit 0
@@ -491,9 +538,22 @@ jobs:
           # the plan review gave.)
           #
           # `terraform apply <planfile>` REJECTS -var and -target: the targets are already baked
-          # into the saved plan and the variable VALUES come from the plan file. The doppler
-          # wrapper stays because provider configuration is still read from the environment at
-          # apply time — not, as an earlier draft claimed, because variables are re-evaluated.
+          # into the saved plan and the variable VALUES come from the plan file.
+          #
+          # THE DOPPLER WRAPPER IS A NO-OP HERE, and saying so is the point. An earlier draft
+          # claimed it was needed "because variables are re-evaluated at apply time"; that was
+          # wrong. The correction claimed "provider configuration is still read from the
+          # environment"; review measured that and it is ALSO wrong — every provider in this root
+          # takes its credential from a Terraform VARIABLE (`var.hcloud_token`, `var.cf_api_token`,
+          # `var.doppler_token_tf`, `var.betterstack_api_token`, the github app_auth pair), the
+          # DPF provisioner's `environment {}` block is likewise all `var.*`/`local.*`, and a
+          # saved plan carries those values. `terraform init` above runs with no wrapper at all,
+          # so the backend does not need it either.
+          #
+          # It is RETAINED rather than removed because removing it changes the invocation on the
+          # sole no-SSH remediation path of an unreplaceable host, which is a behaviour change
+          # this PR is not scoped to validate. Removal is tracked as a follow-up. Recording the
+          # measured truth here rather than a third plausible-sounding reason.
           #
           # Free safety improvement worth naming: with `use_lockfile = false`, a break-glass
           # apply run outside CI now fails closed with a stale-plan error instead of silently
@@ -720,6 +780,13 @@ jobs:
           FILES_WRITTEN=""
           FILES_TOTAL=""
           for attempt in 1 2 3; do
+            # Truncate per attempt. `curl -s -o` leaves the PRIOR body in place on a transport
+            # failure, so without this a 000 on the last attempt leaves an EARLIER attempt's
+            # valid 200 frame on disk — and the red-gate alert step below reads that same path
+            # and `jq -e .`s it, so it would classify a dead listener as "reachable, activation
+            # failure" and tell the operator app health is unaffected. The pre-apply poller has
+            # done this since it was written; this is the sibling that was missed.
+            : > /tmp/infra-config-status-response.txt
             HMAC=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
             HTTP_CODE=$(curl -s -o /tmp/infra-config-status-response.txt -w '%{http_code}' \
               --max-time 10 \
@@ -757,7 +824,11 @@ jobs:
           # --- Final adjudication (fail loud; no silent pass) ---
           if [[ "$HTTP_CODE" == "404" ]]; then
             if [[ "$ALLOW_MISSING_STATUS" == "true" ]]; then
-              echo "::warning::infra-config-status returned 404; tolerated via allow_missing_status_endpoint (documented first-bootstrap escape hatch)."
+              echo "::warning::infra-config-status returned 404; tolerated via allow_missing_status_endpoint (documented first-bootstrap escape hatch). NOTHING was adjudicated on this run — no count invariant, no content assert, no freshness assertion."
+              # Write the output on this path too. It is the WEAKEST evidence the whole design
+              # can exit green on, and leaving it unwritten made it indistinguishable from
+              # `verified` to every consumer — absence reading as good news.
+              echo "freshness_evidence=none" >> "$GITHUB_OUTPUT"
             else
               echo "::error::infra-config-status returned HTTP 404 after all retries — the host's hooks.json predates the status endpoint and the apply did NOT verify. This is the false-success freeze vector (#4804). For a genuine first bootstrap, re-run via workflow_dispatch with allow_missing_status_endpoint=true."
               cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
@@ -824,11 +895,19 @@ jobs:
               # and every branch below — including the ::error:: that explains why — would never
               # run. The step would still fail closed, but it would fail mute.
               STABILITY_RC=0
-              STABILITY=$(infra_config_frame_stability "$FRAME_START_TS" "${PRE_APPLY_FRAME_START_TS:-}" "${PRE_FRAME_STATUS:-error}" "$(date -u +%s)") || STABILITY_RC=$?
+              NOW_EPOCH=$(date -u +%s)
+              STABILITY=$(infra_config_frame_stability "$FRAME_START_TS" "${PRE_APPLY_FRAME_START_TS:-}" "${PRE_FRAME_STATUS:-}" "$NOW_EPOCH" "${APPLY_START_EPOCH:-}") || STABILITY_RC=$?
               if [[ "$STABILITY_RC" -ne 0 ]]; then
+                # Publish the verdict for the red-gate alert. Without it that step re-derives a
+                # diagnosis from the frame, and for these three verdicts the frame looks HEALTHY
+                # (200, parses, fatal_line=0), so it lands in the "no fatal attribution" arm and
+                # tells the operator this is a cosmetic ACTIVATION failure with app health
+                # unaffected — while handing them a Better Stack query that returns nothing
+                # because no fatal occurred. For `unexpected_push` every clause of that is false.
+                echo "stability_verdict=${STABILITY}" >> "$GITHUB_OUTPUT"
                 case "$STABILITY" in
                   future_frame)
-                    echo "::error::FRAME FROM THE FUTURE: the status endpoint reports an apply that started at ${FRAME_START_TS}, more than five minutes ahead of this runner's clock. On a run that pushed nothing, that is a host-clock anomaly or a fabricated frame — not a delivery this gate can vouch for."
+                    echo "::error::FRAME FROM THE FUTURE: the status endpoint reports an apply that started at ${FRAME_START_TS}, which is more than the 300s skew allowance ahead of this runner's clock (now=${NOW_EPOCH}, delta=$((FRAME_START_TS - NOW_EPOCH))s). On a run that pushed nothing, that is a host-clock anomaly or a fabricated frame — not a delivery this gate can vouch for."
                     ;;
                   unexpected_push)
                     echo "::error::UNEXPECTED PUSH: this run's plan did not replace terraform_data.deploy_pipeline_fix, so no config push should have fired — but the status frame moved forward (pre=${PRE_APPLY_FRAME_START_TS}, post=${FRAME_START_TS}). Either the applied plan diverged from the graded one, or something other than this workflow wrote to the host's sole credential channel. Both are terminal."
@@ -845,20 +924,31 @@ jobs:
               fi
 
               if [[ "$STABILITY" == "stable" ]]; then
-                echo "::notice::No config push was expected on this run (deploy_pipeline_fix was not replaced), so no new status frame should exist. VERIFIED: the frame is unchanged across this apply (start_ts=${FRAME_START_TS}, identical to the pre-apply reading), its per-file digests match this commit, and its start_ts is not in the future. This establishes that the delivery channel answered and that nothing pushed unexpectedly. It does NOT re-verify the bytes currently on disk — the frame records the last write, not a fresh read."
+                echo "::notice::No config push was expected on this run (deploy_pipeline_fix was not replaced), so no new status frame should exist. VERIFIED: the frame is unchanged across this apply (start_ts=${FRAME_START_TS}, identical to the pre-apply reading) and its start_ts is not in the future. This establishes that the delivery channel answered and that NO NEW STATUS FRAME WAS PUBLISHED across this apply. Stated that narrowly on purpose: it does NOT prove nothing was written to the host (a seccomp or apparmor merge writes to the host while the frame correctly does not move), and it does NOT re-verify the bytes currently on disk — the frame records the last write, not a fresh read. The per-file digest match is NOT listed as evidence here: deploy_pipeline_fix was not replaced precisely because none of its hashed files changed, so on this arm a content match is guaranteed by construction and proves nothing."
                 echo "freshness_evidence=verified" >> "$GITHUB_OUTPUT"
+              elif [[ "$STABILITY" != "degraded:"* ]]; then
+                # FAIL CLOSED on an unrecognised verdict. This arm exists because the previous
+                # shape was a bare `else`: any token the adjudicator returns with rc 0 that is
+                # not literally "stable" landed in the PASSING branch below. The failing side of
+                # this dispatch already had a fail-closed default; the passing side did not, so
+                # adding one `case` arm to infra_config_frame_stability was enough to create a
+                # brand-new exit-0 path with no edit to this file at all.
+                echo "::error::Frame-stability returned an unrecognised verdict '${STABILITY}'. A verdict this gate cannot interpret must never be treated as a pass. Failing closed."
+                cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+                exit 1
               else
                 # degraded:<measured-status>. Pass, but say exactly what was and was not shown —
                 # and escalate out of band, because a ::warning:: in a green run is a log line
                 # nobody reads (the same criticism #7220 AC17 levelled at ::error:: annotations).
                 PRE_WHY="${STABILITY#degraded:}"
                 case "$PRE_WHY" in
-                  unreachable) PRE_DETAIL="the reading taken BEFORE the apply got no response (3 attempts over ~15s)" ;;
+                  unreachable) PRE_DETAIL="the reading taken BEFORE the apply got no response (3 attempts over ~15s). Two readings are consistent with that and this run cannot distinguish them: a transient network blip, OR something restarted or reconfigured the listener outside this workflow — note the apply changed nothing on the host, so a listener that was down before and up after is not explained by this run" ;;
                   http404)     PRE_DETAIL="the pre-apply reading returned HTTP 404 (no status endpoint) while the post-apply reading returned 200. On a run that pushed nothing the endpoint should not have appeared — treat this as a host changed outside this workflow, or a transient edge 404" ;;
                   malformed)   PRE_DETAIL="the pre-apply reading returned HTTP 200 but carried no numeric start_ts" ;;
-                  *)           PRE_DETAIL="the pre-apply reading step did not record a result at all" ;;
+                  secret_unavailable) PRE_DETAIL="the pre-apply reading never fired because WEBHOOK_DEPLOY_SECRET could not be read from Doppler — the step DID run and DID record that. A prd credential read failing on the workflow that delivers /etc/default/soleur-doppler-token is its own incident, separate from a missing reading" ;;
+                  *)           PRE_DETAIL="the pre-apply reading step did not record a result at all (the step did not run, or its result did not reach this step)" ;;
                 esac
-                echo "::warning::Freshness evidence is DEGRADED on this run. No config push was expected (deploy_pipeline_fix was not replaced) and the status endpoint answered 200 after the apply — but ${PRE_DETAIL}, so this run cannot show the frame was unchanged. VERIFIED: the endpoint answered, the frame parses, its per-file digests match this commit, and its start_ts is not in the future. NOT VERIFIED: that no unexpected push occurred during this run. The delivery channel is reachable now; the pre-apply gap is recorded in Sentry as infra-config-preframe-degraded."
+                echo "::warning::Freshness evidence is DEGRADED on this run. No config push was expected (deploy_pipeline_fix was not replaced) and the status endpoint answered 200 after the apply — but ${PRE_DETAIL}, so this run cannot show the frame was unchanged. VERIFIED: the endpoint answered, the frame parses, its start_ts is not in the future, and no frame postdating this apply was published. NOT VERIFIED: that the frame is byte-identical to the one that preceded this apply. (The per-file digest match is omitted from the VERIFIED list deliberately — on a no-push arm it is guaranteed by construction and is not independent evidence.) The delivery channel is reachable now; this run is recorded in Sentry as op=infra-config-preframe-degraded."
                 echo "freshness_evidence=degraded" >> "$GITHUB_OUTPUT"
                 echo "preframe_status=${PRE_WHY}" >> "$GITHUB_OUTPUT"
               fi
@@ -909,6 +999,7 @@ jobs:
           SENTRY_PUBLIC_KEY: ${{ secrets.SENTRY_PUBLIC_KEY }}
           PREFRAME_STATUS: ${{ steps.infra_config_gate.outputs.preframe_status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_SHA: ${{ github.sha }}
         run: |
           # Never blocks: this reports on an otherwise-green run, so a reporting failure must not
           # invent a red. Same degrade-never-block contract as the pre-apply capture.
@@ -920,20 +1011,34 @@ jobs:
           fi
           # `warning`, not `error`: the gate PASSED. Levelling this as an error would train the
           # operator to ignore the channel that carries real gate failures.
+          # `feature` is REQUIRED, not decoration: every rule in issue-alerts.tf is a
+          # filter_match="all" AND over a `feature` + `op` tagged_event pair, so an event without
+          # `feature` cannot match any rule that exists OR any rule added later in the house
+          # shape. The sibling scripts/infra-config-red-alert.sh emits the same pair.
           payload=$(jq -nc \
             --arg msg "infra-config freshness evidence degraded (no pre-apply frame reading; no push was expected on this run)" \
             --arg status "${PREFRAME_STATUS:-unknown}" \
             --arg url "${RUN_URL}" \
+            --arg sha "${RUN_SHA}" \
             '{level:"warning",
               message:$msg,
-              tags:{op:"infra-config-preframe-degraded", preframe_status:$status},
-              extra:{run_url:$url}}')
+              release:$sha,
+              tags:{feature:"infra-config", op:"infra-config-preframe-degraded", preframe_status:$status},
+              extra:{run_url:$url, sha:$sha}}')
           code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
             -X POST "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
             -H "Content-Type: application/json" \
             -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
             -d "$payload" 2>/dev/null || echo "000")
-          echo "Sentry degraded-freshness event POST returned HTTP ${code} (op=infra-config-preframe-degraded, preframe_status=${PREFRAME_STATUS:-unknown})."
+          if [[ "$code" =~ ^2 ]]; then
+            echo "Sentry degraded-freshness event accepted (HTTP ${code}, op=infra-config-preframe-degraded, preframe_status=${PREFRAME_STATUS:-unknown})."
+          else
+            # ::error:: rather than a bare echo: this is the out-of-band channel FAILING, so the
+            # in-band annotation is the only signal left. ::error:: surfaces on the run summary
+            # card; a ::warning:: buried mid-log in a green run is what this step exists to
+            # replace, so degrading to one would be circular.
+            echo "::error::The degraded-freshness Sentry event could not be delivered (HTTP ${code}). This run passed on thinner evidence than usual (preframe_status=${PREFRAME_STATUS:-unknown}) and the out-of-band record of that FAILED, so this annotation is the only remaining signal."
+          fi
           exit 0
 
       # #7220 AC17 (P0) — A RED INFRA-CONFIG GATE MUST NOTIFY SOMEONE.
@@ -976,6 +1081,10 @@ jobs:
           INFRA_CONFIG_ALERT_SHA: ${{ github.sha }}
           GATE_OUTCOME: ${{ steps.infra_config_gate.outcome }}
           APPLY_OUTCOME: ${{ steps.terraform_apply.outcome }}
+          # #7104 — the no-push-arm verdict, so this step stops inferring a diagnosis from a
+          # frame that looks healthy on exactly these failures. Empty on every other red path,
+          # which is what selects the pre-existing frame-derived branches.
+          STABILITY_VERDICT: ${{ steps.infra_config_gate.outputs.stability_verdict }}
         run: |
           set -uo pipefail
           source "$GITHUB_WORKSPACE/scripts/infra-config-red-alert.sh"
@@ -1050,6 +1159,20 @@ jobs:
             # one apply — so it is labelled as such rather than rendered as a repo coordinate.
             # The command is the durable half and leads.
             WHERE="The config handler died running: ${FATAL_CMD} (rc=${FATAL_RC}, at line ${FATAL_LINE} of the handler as deployed on the host — that number may not match the current checkout). Every step after it did not run, so units were not reconciled. ${FILES_W} of ${FILES_T} files had already been delivered."
+          elif [[ -n "${STABILITY_VERDICT:-}" ]]; then
+            # #7104 — the gate reached a no-push-arm verdict. The frame is deliberately NOT
+            # consulted for the diagnosis here: on these verdicts it is well-formed and carries
+            # no fatal, so every frame-derived branch below would describe a healthy delivery.
+            case "$STABILITY_VERDICT" in
+              unexpected_push)
+                WHERE="A config push landed on a run whose plan did not replace terraform_data.deploy_pipeline_fix, so this workflow did not send one. Either the applied plan diverged from the graded plan, or something other than this workflow wrote to the host's credential channel. This is NOT an activation failure and the delivered files are NOT known-good." ;;
+              frame_regressed)
+                WHERE="The host's status frame moved BACKWARDS across this apply — it now reports an EARLIER apply than it did before. That is a state rollback or a host clock jump, not a delivery failure." ;;
+              future_frame)
+                WHERE="The host's status frame claims an apply that starts in the future relative to this runner, beyond the 300s skew allowance. That is a host-clock anomaly or a fabricated frame." ;;
+              *)
+                WHERE="The gate returned the no-push-arm verdict '${STABILITY_VERDICT}', which this alert does not have a specific diagnosis for." ;;
+            esac
           elif ! jq -e 'has("fatal_rc")' "$RESP" >/dev/null 2>&1; then
             # No fatal_rc KEY at all is the one state that genuinely proves an old handler; the
             # earlier version asserted this whenever fatal_line was 0, which also covers a
@@ -1440,8 +1563,10 @@ jobs:
             exit 1
           fi
 
+      # #7104 — same reasoning as the drift auto-close below: this closes an issue on the
+      # strength of a self-heal, and a zero-change apply performed none.
       - name: Close #4804 after self-heal verified
-        if: success() && steps.check_4804.outputs.open == 'true'
+        if: success() && env.PLAN_HAS_CHANGES == 'true'  && steps.check_4804.outputs.open == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MERGE_SHA: ${{ github.sha }}
@@ -1456,8 +1581,13 @@ jobs:
             echo "#4804 is ${STATE} (not OPEN); skipping close."
           fi
 
+      # #7104 — gated on the apply having actually CHANGED something. This step comments
+      # "Server state was re-aligned with HEAD" and closes the operator's drift issues; on a
+      # zero-change apply nothing was re-aligned, and before this PR the step was unreachable on
+      # such a run only because the gate red first. Making the gate correctly green arms it, so
+      # the gate has to carry the condition the red was standing in for.
       - name: Auto-close any open drift issues for this stack
-        if: success()
+        if: success() && env.PLAN_HAS_CHANGES == 'true' 
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MERGE_SHA: ${{ github.sha }}

@@ -1021,6 +1021,59 @@ else
   fail "#7104 stability: non-numeric post_ts gave rc=$FS_RC out='$FS_OUT' stderr='$(cat "$FS_ERR" 2>/dev/null)'; expected non-zero, empty stdout, and a message naming post_ts"
 fi
 
+# --- #7104 review round: arms added because the panel found them missing --------------------
+
+# A plan with an EMPTY resource_changes is a genuine zero-change plan. It must classify as
+# "no push expected", NOT abort: aborting means the plan step exits 1, the apply never runs and
+# the gate is skipped — strictly worse than the false-red this change removes, on the sole
+# no-SSH remediation channel. The repo's own synthesized no-changes fixture has exactly this
+# shape, so this is the case a real no-op dispatch is most likely to produce.
+P_EMPTYRC=$(mkplan '{"format_version":"1.2","resource_changes":[]}' emptyrc)
+DPF_OUT=$(infra_config_dpf_replaced "$P_EMPTYRC" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+if [[ "$DPF_RC" -eq 0 && "$DPF_OUT" == "false" ]]; then
+  pass "#7104 dpf: an empty resource_changes[] is a zero-change plan (false), never an abort"
+else
+  fail "#7104 dpf: empty resource_changes gave rc=$DPF_RC out='$DPF_OUT', expected rc=0 false"
+fi
+
+# The degraded arm is SELECTED BY THE HOST BEING VERIFIED (it picks the pre_status by how it
+# answers), so it must still carry one assertion the host cannot choose. APPLY_START_EPOCH is a
+# runner-side timestamp: a frame postdating the apply on a no-push run is an unexpected push
+# regardless of what the pre-reading said.
+FS_OUT=$(infra_config_frame_stability $((FS_NOW - 100)) "" unreachable "$FS_NOW" $((FS_NOW - 100 - FS_SKEW)) 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -ne 0 && "$FS_OUT" == "unexpected_push" ]]; then
+  pass "#7104 stability: degraded arm still reds a frame that postdates the apply (host cannot opt out)"
+else
+  fail "#7104 stability: degraded+postdating gave rc=$FS_RC out='$FS_OUT', expected non-zero unexpected_push"
+fi
+
+# ...and the same arm must NOT red an ordinary stale frame, or it re-creates the false-red.
+FS_OUT=$(infra_config_frame_stability 1786001951 "" unreachable "$FS_NOW" $((FS_NOW - 60)) 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -eq 0 && "$FS_OUT" == "degraded:unreachable" ]]; then
+  pass "#7104 stability: degraded arm passes a stale frame (no lower bound on frame age)"
+else
+  fail "#7104 stability: degraded+stale gave rc=$FS_RC out='$FS_OUT', expected rc=0 degraded:unreachable"
+fi
+
+# secret_unavailable is its own token: the step RAN and measured a specific cause (Doppler read
+# failed), which is a different incident from "no reading was recorded".
+FS_OUT=$(infra_config_frame_stability 1786001951 "" secret_unavailable "$FS_NOW" 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -eq 0 && "$FS_OUT" == "degraded:secret_unavailable" ]]; then
+  pass "#7104 stability: a Doppler read failure carries its own token, not the generic error"
+else
+  fail "#7104 stability: secret_unavailable gave rc=$FS_RC out='$FS_OUT', expected rc=0 degraded:secret_unavailable"
+fi
+
+# An EMPTY pre_status means the producing STEP did not run. A missing step is not the same thing
+# as missing evidence, and the asymmetry rule covers only the latter — so it fails closed, the
+# same way the sibling carrier DPF_REPLACED does on unset.
+FS_OUT=$(infra_config_frame_stability 1786001951 "" "" "$FS_NOW" 2>/dev/null); FS_RC=$?
+if [[ "$FS_RC" -ne 0 && -z "$FS_OUT" ]]; then
+  pass "#7104 stability: an EMPTY pre_status (step never ran) fails CLOSED, not degrade-and-pass"
+else
+  fail "#7104 stability: empty pre_status gave rc=$FS_RC out='$FS_OUT', expected non-zero, empty stdout"
+fi
+
 if declare -F infra_config_frame_stability >/dev/null; then
   pass "#7104 stability: the adjudicator is defined (anti-vacuity for the fail-closed arms above)"
 else
@@ -1041,7 +1094,7 @@ fi
 # Nothing asserted that the assertions RAN. Measured: deleting the entire #7220 block took the
 # suite 53 -> 40 passed, 0 failed, exit 0 — a silent truncation that reads exactly like a clean
 # run. A floor (not equality — the count is developer-incremented) makes arm deletion loud.
-GATE_MIN_ASSERTIONS=95
+GATE_MIN_ASSERTIONS=100
 if [[ "$pass" -lt "$GATE_MIN_ASSERTIONS" ]]; then
   fail "assertion-count floor: only $pass assertions ran, expected >= $GATE_MIN_ASSERTIONS — arms were deleted or skipped"
 fi
