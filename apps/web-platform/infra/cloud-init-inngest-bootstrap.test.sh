@@ -581,7 +581,14 @@ assert "cloud-init-registry.yml's cosign mentions are about sha256-* signature-t
 # The claim under guard. The sentence WRAPS across comment lines, so a line-based grep
 # matches nothing and passes vacuously against the false text — measured. Flatten the comment
 # prose to one line first, then assert on the joined sentence.
-INNGEST_CI_PROSE="$(grep -E '^[[:space:]]*#' "$INNGEST_CI_YML" | sed -E 's/^[[:space:]]*#[[:space:]]?//' | tr '\n' ' ' | tr -s ' ')"
+# `|| true` INSIDE the substitution, mirroring the convention AC6's PIN extraction already
+# uses. Without it a zero-match grep exits 1, pipefail promotes the pipeline, the assignment
+# fails and `set -e` kills the WHOLE script here — before the anti-vacuity accounting below and
+# before the results summary, so the run exits 1 having printed no `=== Results ===` line and
+# no failing assertion at all. Measured while mutation-proving Guard 1: pointing this file at
+# an empty source produced exactly that silent abort, which is strictly worse than a named
+# FAIL because it destroys the diagnosis rather than reporting it.
+INNGEST_CI_PROSE="$(grep -E '^[[:space:]]*#' "$INNGEST_CI_YML" | sed -E 's/^[[:space:]]*#[[:space:]]?//' | tr '\n' ' ' | tr -s ' ' || true)"
 assert "harness non-vacuity: the flattened prose carries the cosign correction sentence at all" \
   "grep -qF 'verification exists only in' <<<\"\$INNGEST_CI_PROSE\""
 # Asserted on the false CONJUNCTION rather than on proximity: the corrected sentence still
