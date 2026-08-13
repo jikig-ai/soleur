@@ -1271,13 +1271,27 @@ fi
 cp /work/git-data-emit-src /work/git-data-emit || fixture_fail "could not stage git-data-emit into the container"
 sed -i "s#^DSN='.*'#DSN='https://k@127.0.0.1:8099/1'#" /work/git-data-emit \
   || fixture_fail "could not repoint the emitter DSN at the capture server"
-sed -i "s#^DSN='.*'#DSN='https://k@127.0.0.1:8099/1'#" /work/git-data-emit
-python3 - <<'FIX'
+python3 - <<'FIX' || fixture_fail "could not rewrite the emitter store URL to http"
 p="/work/git-data-emit"; s=open(p).read()
-s=s.replace('"https://${SHOST}/api/${PROJ}/store/"','"http://${SHOST}/api/${PROJ}/store/"')
+old = '"https://${SHOST}/api/${PROJ}/store/"'
+assert old in s, "store-URL anchor not found in git-data-emit"
+s = s.replace(old, '"http://${SHOST}/api/${PROJ}/store/"')
 open(p,"w").write(s)
 FIX
-chmod +x /work/git-data-emit
+chmod +x /work/git-data-emit || fixture_fail "could not make the staged emitter executable"
+[ -x /work/git-data-emit ] || fixture_fail "the staged emitter is not executable after chmod"
+
+# THE SENTINEL IS TOUCHED HERE, LAST — after the round trip is proven AND the emitter is
+# installed. It is the host's single proof that this container run was fully live, so it must
+# be the final thing that happens on the healthy path; anything it precedes is unproven.
+#
+# `sentinel-in-capture-log` is Guard 2 row 3: it reproduces the draft-1 shape where the
+# sentinel was written into /out/capture.log instead of a durable artifact. The driver
+# truncates capture.log three times below, so that shape must redden the host gate on an
+# otherwise HEALTHY run.
+if [ "$INJECT" != "sentinel-in-capture-log" ]; then
+  touch /out/sentinel.ok || fixture_fail "could not create the durable /out/sentinel.ok artifact"
+fi
 
 MOUNTERR='mount: /mnt/git-data-luks: mount(2) system call failed: No such process.'
 mk_dmesg() { i=1; while [ "$i" -le 20 ]; do echo "[   12.3456$i] EXT4-fs (dm-0): mounting with quota feature but no quota format module line $i"; i=$((i+1)); done; }
