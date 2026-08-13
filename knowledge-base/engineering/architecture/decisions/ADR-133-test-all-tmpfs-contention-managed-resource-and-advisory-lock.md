@@ -296,17 +296,30 @@ grep over exit statements cannot see an exit that is not a statement.
 
 **First two readings from the instrument** (2026-08-12, this repo, real runs on the ship path):
 
-| Run | Banner |
-|---|---|
-| queued behind 2 sibling worktrees | `LOCK_CONTENDED_PROCEEDING: 'test-all' — gave up after 899122ms of 900s` |
-| lock free | `LOCK_ACQUIRED: 'test-all' after 12ms` |
+| Run | Banner | Outcome |
+|---|---|---|
+| queued behind 2 sibling worktrees | `LOCK_CONTENDED_PROCEEDING: 'test-all' — gave up after 899122ms of 900s` | abandoned at budget |
+| lock free | `LOCK_ACQUIRED: 'test-all' after 12ms` | uncontended floor |
+| queued behind 2 sibling worktrees | `LOCK_ACQUIRED: 'test-all' after 616310ms` | **redeemed at 616 s** |
 
-Two orders of magnitude apart, from the same lock on the same machine within the hour. The first
-independently reproduces this ADR's 2026-08-11 "waited the full 900 s" figure — which the banner of
-the day could not have produced, since it printed the budget whether or not a wait occurred. The
-second is the uncontended floor. Note what the pair does **not** establish: two readings are two
-readings, not a distribution, and the contended one is censored (see below). It is evidence that the
-cost is bimodal rather than constant, and nothing more.
+The first independently reproduces this ADR's 2026-08-11 "waited the full 900 s" figure — which the
+banner of the day could not have produced, since it printed the budget whether or not a wait
+occurred. The second is the uncontended floor.
+
+**The third is the one the instrument was built for, and it is the first of its kind in this repo.**
+It is an *uncensored* observation of a redeemed wait: the run queued, waited **616 s**, and then
+acquired — it was not truncated at the budget. So the plan's honest question ("does the wait ever
+pay off, and what is the longest wait that was redeemed?") now has a first answer: **yes, and at
+least 616 s.** Before this change that run and the 12 ms run printed the identical
+`LOCK_ACQUIRED: 'test-all'` line with no duration, so the two were indistinguishable and this datum
+did not exist.
+
+Its immediate consequence is negative, which is why it is worth recording: a `TC_LOCK_TIMEOUT`
+lowered to any value under ~620 s would have converted this run from *serialized* into *interleaved*.
+The option the measurement most directly supports is therefore **not** the one a censored reading
+suggested. That is a single observation, not a distribution, and it does not license a mechanism
+change on its own — but it is the first evidence that the budget's current value is doing work
+rather than merely being waited out.
 
 **What this does NOT settle.** Contended observations are **right-censored** at the fixed budget, so
 they cannot answer "would a longer wait have succeeded?" — and the short-circuit-on-holder-age
