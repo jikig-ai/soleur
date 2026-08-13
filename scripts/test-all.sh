@@ -905,6 +905,21 @@ if want_scripts; then
   # original order). It also pins the accept-shape against the peers' `$`-anchored form, which
   # would reject the figure this issue requires the operator to state.
   run_suite "scripts/cpx22-invoice-reconcile-7431" bash scripts/followthroughs/cpx22-invoice-reconcile-7431.test.sh
+  # Dedicated inngest host zot-primary boot readback (#7462/#7228). Two properties decide whether
+  # this probe can be trusted to auto-close two P1 trackers, and both are pinned: PASS requires
+  # `bootstrap-done` and not merely `inngest_zot`, because the pull half succeeding while nothing
+  # installs IS the #7228 incident; and every count is taken from the DECODED `.stage` field, so a
+  # row whose message merely echoes a stage name cannot supply it. The suite also pins the jq
+  # stream shape — without `-R` + `fromjson?` one malformed warehouse line aborts the whole parse
+  # and a clean PASS window reports as `channel_dark`, i.e. "the host never booted".
+  run_suite "scripts/inngest-zot-boot-7462" bash scripts/followthroughs/inngest-zot-boot-7462.test.sh
+  # Operator authorization for enrolling soleur-inngest as a zot client (#6500). This probe closes
+  # the issue that GATES retiring GHCR push/egress, so the suite pins the two properties the #7437
+  # sibling shipped wrong: the verdict is anchored at line start (an unanchored grep authorizes on
+  # a comment ASKING about the criterion), and FAIL is evaluated before PASS (checking PASS first
+  # lets a retraction lose to the string it retracts). Deliberately reads a HUMAN verdict rather
+  # than telemetry — a green boot marker must not authorize a supply-chain retirement.
+  run_suite "scripts/inngest-zot-client-authz-6500" bash scripts/followthroughs/inngest-zot-client-authz-6500.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.

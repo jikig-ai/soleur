@@ -979,6 +979,14 @@ jobs:
       - name: Run cloud-init inngest-bootstrap pin drift-guard
         run: bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
 
+      # #7462: proves the guard ABOVE can fail. It asserts the zot-primary pull arm is shaped
+      # correctly; only this proves those assertions are not unmatchable. Sandboxes the tree,
+      # applies one Guard Contract mutation per case, and requires the guard to go RED on the
+      # assertion that row targets. Needs python3 (preinstalled on ubuntu-24.04) and the
+      # terraform this job already sets up — the guard's render leg runs inside each case.
+      - name: Run zot-primary bootstrap pull mutation battery
+        run: bash apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh
+
       - name: Run inngest-bootstrap mirror_only false-green guard
         run: bash apps/web-platform/infra/inngest-bootstrap-mirror-only.test.sh
 

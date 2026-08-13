@@ -2077,11 +2077,44 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // `cloud-init-registry.yml` correction, which put an `apps/*/infra/` path in the diff and
   // armed preflight Check 10 — so the block was authored during ship, and the honest
   // discoverability test for "is that channel live?" is the probe that reads it back.
+
   // #7456 (2026-08-13) briefly declared the waiver for this same probe and WITHDREW it before
   // merge: that PR does not change the probe's PASS arm, so a credentialed run would have
   // verified a property it did not alter. Its discoverability_test points at the
   // credential-free fixture suite instead. The count is therefore unchanged by it.
-  const BASELINE_DECLARED_PROBES = 2;
+
+  // 2 -> 3 on 2026-08-13 (#7462/#7516). THIRD reviewable diff line. Renumbered at merge:
+  //
+  // #7455 landed its own 1 -> 2 on main while this branch was open, so this entry is the
+  // THIRD adoption, not the second — the all-members-baseline class that turns main RED when a
+  // sibling PR adds a member to the guarded set. Caught at the ship-time sync, not by CI.
+  //
+  // Declaring plan: `2026-08-12-fix-inngest-zot-primary-bootstrap-pull-plan.md` (archived
+  // by that PR's compound step; this walk is deliberately recursive, so `archive/` counts
+  // — an archived plan's waiver is still an adopted waiver). Confirmed intentional on the
+  // same three counts:
+  //   1. PLACEMENT — a correctly-indented child of the `discoverability_test:` sub-block,
+  //      verified by parsing rather than by grep (a bare grep also hits the plan that
+  //      INTRODUCED the field, which declares nothing).
+  //   2. TRUTH — the probe is
+  //      `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h
+  //      --grep inngest_zot --grep inngest_ghcr_fallback`, i.e. the SAME Better Stack
+  //      ClickHouse warehouse as the entry above, needing the same
+  //      BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}. The script is committed and +x, and
+  //      the equivalent query was executed successfully during that PR's review.
+  //   3. NO SUBSTITUTE — the dedicated inngest host (10.0.1.40) is deny-all-public and
+  //      not SSH-inspectable by policy, and its ONLY off-box channel is a direct-curl POST
+  //      to that warehouse. The property under test is "this host's boot markers reached
+  //      that source", which is unverifiable from outside it. Also a warehouse query, not
+  //      a host login, so the no-SSH requirement is satisfied.
+  //
+  // WHY THIS SURFACED LATE, so the next reader does not misdiagnose it as archival drift:
+  // the declaration landed with the plan at the branch's first commit, but every CI run on
+  // that branch until the last was CANCELLED by the next push, so this gate never completed
+  // until then. Measured both ways — this plan contributes exactly ONE declaration whether it
+  // sits at its live path or under archive/; the move is not the cause. (The absolute count at
+  // the time of that measurement was 2; it is 3 here only because #7455 merged in between.)
+  const BASELINE_DECLARED_PROBES = 3;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
