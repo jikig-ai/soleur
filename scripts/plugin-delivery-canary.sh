@@ -363,7 +363,7 @@ reference_list() {
   fi
 
   local body="$SCRATCH/trees.json" code
-  code="$(curl -sS -o "$body" -w '%{http_code}' \
+  code="$(curl -sS --max-time 20 -o "$body" -w '%{http_code}' \
     "https://api.github.com/repos/${REPO}/git/trees/${DELIVERED_SHA}?recursive=1" 2>/dev/null || true)"
   [[ "$code" == "200" ]] || return 1
 
@@ -403,7 +403,7 @@ reference_fetch() {
     # PINNED TO THE DELIVERED COMMIT, never to `main`. See the header: an
     # unpinned reference makes a mid-run merge look like corruption.
     local code
-    code="$(curl -sS -o "$out" -w '%{http_code}' \
+    code="$(curl -sS --max-time 20 -o "$out" -w '%{http_code}' \
       "https://raw.githubusercontent.com/${REPO}/${DELIVERED_SHA}/${PLUGIN_SUBDIR}/${rel}" 2>/dev/null || true)"
     [[ "$code" == "200" ]] || { printf 'transport\n'; return 0; }
   fi
@@ -420,7 +420,7 @@ read_main_head() { # <first|recheck>
   if [[ -n "$MAIN_HEAD" ]]; then printf '%s\n' "$MAIN_HEAD"; return 0; fi
 
   local body="$SCRATCH/head-$1.json" code
-  code="$(curl -sS -o "$body" -w '%{http_code}' \
+  code="$(curl -sS --max-time 20 -o "$body" -w '%{http_code}' \
     "https://api.github.com/repos/${REPO}/commits/main" 2>/dev/null || true)"
   [[ "$code" == "200" ]] || return 0
   jq -r '.sha // empty' -- "$body" 2>/dev/null || true
