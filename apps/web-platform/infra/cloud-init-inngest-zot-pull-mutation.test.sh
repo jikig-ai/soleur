@@ -58,12 +58,24 @@ PRISTINE="$SANDBOX_ROOT/$INFRA_REL"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)" || die "could not resolve repo root"
 mkdir -p "$PRISTINE" "$SANDBOX_ROOT/.github/workflows" "$SANDBOX_ROOT/.github/scripts" \
   || die "could not create sandbox tree"
-cp -a "$SCRIPT_DIR/." "$PRISTINE/" || die "could not copy $SCRIPT_DIR to $PRISTINE"
+# EXCLUDE `.terraform` (162 MB of provider plugins) rather than copying it and deleting it
+# after. This runner's own header records that suites copying that tree are the heaviest bulk
+# writers in the repo and can exhaust the shared tmpfs — producing a RED that looks like a real
+# regression and is really a full disk. Nothing here needs it: the guard's render legs call
+# `terraform console` in a fresh scratch dir, and `templatefile()` is a builtin that loads no
+# provider. tar rather than rsync because tar is always present; `set -o pipefail` above makes
+# a failure in EITHER half of the pipe reach the `||`.
+(cd "$SCRIPT_DIR" && tar -cf - --exclude=./.terraform --exclude=./.terraform.lock.hcl .) \
+  | (cd "$PRISTINE" && tar -xf -) \
+  || die "could not copy $SCRIPT_DIR to $PRISTINE"
 cp -a "$REPO_ROOT/.github/workflows/infra-validation.yml" "$SANDBOX_ROOT/.github/workflows/" \
   || die "could not copy infra-validation.yml into the sandbox"
 cp -a "$REPO_ROOT/.github/scripts/validate-infra-templates.sh" "$SANDBOX_ROOT/.github/scripts/" \
   || die "could not copy validate-infra-templates.sh into the sandbox"
-rm -rf "$PRISTINE/.terraform" 2>/dev/null || true
+# Assert the exclusion actually held. A tar --exclude whose pattern stops matching (a leading
+# `./` dropped, say) silently reinstates 162 MB per case, and the only symptom is a battery
+# that gets mysteriously slower and starts failing on capacity somewhere else.
+[[ -d "$PRISTINE/.terraform" ]] && die "the .terraform exclusion did not hold — the sandbox copy would be ~162 MB per case"
 [[ -f "$PRISTINE/$GUARD" ]] || die "sandbox is missing $GUARD"
 [[ -f "$PRISTINE/$SRC" ]]   || die "sandbox is missing $SRC"
 
