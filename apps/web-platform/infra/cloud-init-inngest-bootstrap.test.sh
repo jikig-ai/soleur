@@ -24,6 +24,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLOUD_INIT="$SCRIPT_DIR/cloud-init.yml"
 
+# NO `producer | grep -q` ANYWHERE IN THIS FILE. Under `set -o pipefail` (above) `grep -q`
+# closes the pipe on its FIRST match, the producer takes SIGPIPE (141), and pipefail fails the
+# pipeline EVEN THOUGH GREP MATCHED — a false NEGATIVE that fires only when the match is early
+# enough for the producer to still be writing, so it presents as an unreproducible flake. Four
+# sites carried it; one surfaced as the mutation battery's sandbox baseline going RED while the
+# SAME assertion passed in the worktree seconds earlier. Use `grep -cE … -gt 0` (reads all
+# input) or a herestring — never `| grep -q`.
 PASS=0
 FAIL=0
 TOTAL=0
@@ -78,7 +85,7 @@ echo "--- AC1: trap still calls cleanup (composite form OK, #6090) ---"
 # here is that the EXIT trap STILL runs cleanup (no orphaned extract container) — assert
 # the composite-or-plain shape, not the exact 'trap cleanup EXIT' literal.
 assert "Inngest block EXIT trap still calls cleanup" \
-  "awk '/Bootstrap Inngest server on first boot/,/^[^[:space:]]/' '$CLOUD_INIT' | grep -qE 'trap .*cleanup.* EXIT'"
+  "[ \"\$(awk '/Bootstrap Inngest server on first boot/,/^[^[:space:]]/' '$CLOUD_INIT' | grep -cE 'trap .*cleanup.* EXIT' || true)\" -gt 0 ]"
 
 # --- AC2: drift comment ---
 echo ""
@@ -196,7 +203,7 @@ assert "INNGEST_ENABLE alias pins exact enable argv"      "grep -qE '^Cmnd_Alias
 assert "INNGEST_ENABLE granted NOPASSWD to deploy"        "grep -qE '^deploy ALL=\\(root\\) NOPASSWD: INNGEST_ENABLE\$' '$SUDOERS_SRC'"
 # sudo-rs rejects wildcards — the new alias lines must contain no literal '*'.
 QE_LINES=$(grep -E '^Cmnd_Alias INNGEST_(QUIESCE|ENABLE) = ' "$SUDOERS_SRC" || true)
-assert "new quiesce/enable alias argv are wildcard-free" "[[ -n \"\$QE_LINES\" ]] && ! printf '%s' \"\$QE_LINES\" | grep -qF '*'"
+assert "new quiesce/enable alias argv are wildcard-free" "[[ -n \"\$QE_LINES\" ]] && ! grep -qF '*' <<<\"\$QE_LINES\""
 
 # --- AC6: pin matches latest published vinngest-v* git tag (#4675 drift-guard) ---
 # Durable mechanical replacement for the manual "bump the cloud-init pin on each
@@ -317,7 +324,7 @@ assert "endif-directive follows the block's trap disarm"    "(( ENDIF_LINE > TRA
 # ("condition must be of type bool"). `type = bool` pins the variable-boundary contract;
 # the render leg's "false" (string) case exercises the coercion end-to-end.
 assert "web_colocate_inngest declared type = bool (load-bearing string→bool coercion)" \
-  "awk '/variable \"web_colocate_inngest\"/,/^}/' '$VARS_TF' | grep -qE 'type[[:space:]]*=[[:space:]]*bool'"
+  "[ \"\$(awk '/variable \"web_colocate_inngest\"/,/^}/' '$VARS_TF' | grep -cE 'type[[:space:]]*=[[:space:]]*bool' || true)\" -gt 0 ]"
 
 # --- AC7: web_colocate_inngest gate — terraform render authority ---
 # The single behavioral authority for the gate's effect. A real `terraform templatefile`
@@ -779,7 +786,7 @@ assert "Row5: the all-legs-failed detail names the ghcr leg" \
 assert "Phase4: the docker daemon config allowlists an insecure registry" \
   "grep -qF 'insecure-registries' '$DED_CODE_FILE'"
 assert "Phase4: the allowlisted entry is the BAKED endpoint, never a hardcoded address" \
-  "grep -E 'insecure-registries' '$DED_CODE_FILE' | grep -qF 'ZOT_EP'"
+  "[ \"\$(grep -E 'insecure-registries' '$DED_CODE_FILE' | grep -cF 'ZOT_EP' || true)\" -gt 0 ]"
 assert "Phase4: docker is RESTARTED after the daemon config is written (the package starts it during \`packages:\`, before runcmd)" \
   "[[ -n '$L_DAEMON' && -n '$L_DOCKER_RESTART' ]] && (( L_DAEMON < L_DOCKER_RESTART && L_DOCKER_RESTART < L_ZPULL ))"
 
