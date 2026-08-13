@@ -43,7 +43,7 @@ SIGPIPE prohibition, and the `$(grep -c … || true)` idiom).
 - [x] 2.4 Change `total` to `passes + fails + SKIPPED`.
 - [x] 2.5 Add the ceiling as a **counted** assertion (`SKIPPED <= 1`) with its derivation in a
       comment.
-- [x] 2.6 Raise the floor 44 → 45 and add a `RAISED 44 -> 45` itemisation stanza in the file's
+- [x] 2.6 Raise the floor by +1 (46 → 47 after the #7501 rebase) and add a `RAISED` stanza in the file's
       existing style.
 - [x] 2.7 Extend the summary line with `Skipped: N`. (The resolved-suite-path half was CUT at review — its premise was false; see plan AC11.)
 - [x] 2.8 Amend the B5 doctrine comment block in the same commit; cite the ADR.
@@ -62,7 +62,7 @@ Each row is a temporary local edit, observed, then reverted. Record observed out
 - [x] 3.7 Row 7 — add a second `arm_skip` call site without raising the ceiling ⇒ non-zero.
 - [x] 3.8 Row 8 — restore `set -e` so the mutation does not land ⇒ FAIL at the existing pre-branch.
 - [x] 3.9 Row 9 — marker present in source, stripped from the mounted artifact ⇒ structural hard-exit.
-- [x] 3.10 Row 10 — control, nothing mutated ⇒ `45 passed, 0 failed, Skipped: 0`, exit 0.
+- [x] 3.10 Row 10 — control, nothing mutated ⇒ `47 passed, 0 failed, Skipped: 0`, exit 0 (re-running post-rebase).
 
 ## Phase 4 — ADR
 
@@ -82,8 +82,9 @@ Each row is a temporary local edit, observed, then reverted. Record observed out
 
 - [x] 5.1 `bash -n` on the edited file — unconditional, must be clean.
 - [ ] 5.2 Full suite run on a healthy machine. A clean control recorded `45 passed, 0 failed,
-      Skipped: 0` on the PRE-REVIEW artifact; the review pass changed the file, so this re-runs
-      against final bytes before ship.
+      Skipped: 0` on the PRE-REVIEW artifact. Both the review pass AND the #7501/#7540 rebases have
+      since changed the file (floor 44 → 46 upstream, so 47 here), so that result describes bytes
+      that will not ship; re-running against final bytes before ship.
 - [x] 5.3 Verify every AC in the plan's `## Acceptance Criteria` → Pre-merge.
 - [ ] 5.4 File a tracking issue for each `## Deferred Scope` row with its re-evaluation criterion
       (pre-bake, retry, `run_case`/`_s1_run` extension, T17 capture, P4 persistence window).

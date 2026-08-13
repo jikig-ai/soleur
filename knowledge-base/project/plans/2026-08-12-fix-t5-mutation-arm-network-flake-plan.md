@@ -385,7 +385,8 @@ defect appearing inside the artifact invoking ADR-180.
 4. Change the floor's total to `passes + fails + SKIPPED`.
 5. Add the ceiling as a **counted** assertion (`SKIPPED <= 1`, one skip-eligible arm), derivation in
    a comment — Guard row 6 depends on it being counted.
-6. Raise the floor 44 → **45** for that one counted assertion, with a `RAISED 44 -> 45` stanza in the
+6. Raise the floor by **+1** for that one counted assertion (44 → 45 as planned; rebased to 46 → 47
+   after #7501 raised the base mid-flight), with a `RAISED` stanza in the
    file's existing itemisation style. Nothing else in Phases 1-2 is counted: the marker guard and the
    capture-integrity precondition are structural, and the verdict branch re-shapes the arm's single
    existing assertion.
@@ -503,7 +504,7 @@ logs:
   retention: 90 days (repository default)
 discoverability_test:
   command: bash apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh
-  expected_output: "git-data-runcmd-rehearsal: 45 passed, 0 failed, Skipped: 0 (45 assertions)"
+  expected_output: "git-data-runcmd-rehearsal: 47 passed, 0 failed, Skipped: 0 (47 assertions)"
 ```
 
 First token is `bash`, on the preflight Check 10 allowlist. Requires docker, terraform and python3 —
@@ -544,7 +545,8 @@ the dependencies `_skip()` already gates — and no credentials, so no `credenti
    matches the sibling; only the variable diverges, following `infra-config-apply.test.sh`.
 8. The ceiling is a counted assertion with its derivation in a comment; `total` is
    `passes + fails + SKIPPED`.
-9. The floor is **45** with a `RAISED 44 -> 45` itemisation stanza in the file's existing style.
+9. The floor is main's floor **+1** — **47** after the #7501 rebase — with a `RAISED` itemisation
+   stanza in the file's existing style. Stated as a delta because the base moved mid-flight.
 10. The B5 doctrine comment block is amended in the same commit and cites the ADR.
 11. **AMENDED at review (#7291) — the suite-path clause is WITHDRAWN, its premise was false.** The
     summary line carries passes, fails and `Skipped: N`, asserted against the emitted format rather
@@ -555,7 +557,7 @@ the dependencies `_skip()` already gates — and no credentials, so no `credenti
     after this PR the floors are 44 vs 45, so they are not identical either. The derived path was a
     `git rev-parse` subshell buying no information, and was cut.
 12. **Environment smoke (labelled separately, ambient by nature).** A healthy local run reports
-    `45 passed, 0 failed, Skipped: 0`. Recorded as an environment observation, **not** a diff
+    `47 passed, 0 failed, Skipped: 0`. Recorded as an environment observation, **not** a diff
     property — a concurrent sibling container can flip the skip count without a line of the diff
     changing (`cq-ac-must-not-depend-on-concurrent-sessions`).
 13. A run with setup forced to fail via a bogus package name reports the arm as SKIP, exits 0, floor
@@ -591,7 +593,7 @@ Every scenario is *mutation → guard reddens*, not *command → terminal output
 | 7 | Second `arm_skip` call site added without raising the ceiling; both forced | Suite non-zero at the ceiling |
 | 8 | `set -e` restored so the mutation does not land | FAIL at the existing pre-branch |
 | 9 | Marker present on the source heredoc but stripped from the mounted artifact | Structural guard hard-exits |
-| 10 | Nothing mutated (control) | `45 passed, 0 failed, Skipped: 0`, exit 0 (the suite-path suffix was cut at review — see AC11) |
+| 10 | Nothing mutated (control) | `47 passed, 0 failed, Skipped: 0`, exit 0 (the suite-path suffix was cut at review — see AC11; the count is 47 after the #7501 rebase) |
 
 ## Risks & Mitigations
 
@@ -609,7 +611,8 @@ Every scenario is *mutation → guard reddens*, not *command → terminal output
 - **P4 is bought only for the observed mode.** A setup failure in the T5 *primary* arm or T17 still
   fails the suite, because extending the verdict there is a net regression without skip propagation.
   Deliberate, deferred, tracked.
-- **Floor drift.** The floor moves 44 → 45 with the one counted assertion; floor and itemisation
+- **Floor drift.** The floor moves by +1 with the one counted assertion (46 → 47 post-rebase);
+  floor and itemisation
   comment must move together.
 
 ## Plan Review Revisions

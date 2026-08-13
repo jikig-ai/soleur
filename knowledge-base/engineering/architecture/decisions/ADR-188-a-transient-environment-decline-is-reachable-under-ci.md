@@ -158,7 +158,9 @@ training is the actual cost, and it is the cost ADR-180 warns about from the oth
   the whole user-visible effect, and it is deliberately narrower than "the suite stops flaking":
   `run_case()` (2 callers) and `_s1_run()` (2 callers) carry the same exposure and are explicitly
   deferred, so one of ~6 container invocations gains the verdict.
-- The suite's floor moves 44 → 45 for the one new counted assertion (the ceiling).
+- The suite's floor moves **46 → 47** for the one new counted assertion (the ceiling). The base was
+  44 when this ADR was drafted; #7501 raised it to 46 mid-flight, so the number changed while the
+  increment (+1) did not — the floor is stated as a delta for exactly that reason.
 - A degraded run is now legible rather than silent: the summary line reports `Skipped: N`, and a
   degraded run additionally emits a breakdown NOTE.
 - **Accepted residual — no persistence bound, but a narrower hole than it first appears.** The three
