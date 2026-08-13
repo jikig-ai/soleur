@@ -100,7 +100,7 @@ have no coverage. That is ADR-177 §A3's constraint as it applies here.
 > the paragraph that describes it. It was caught by `architecture-strategist` at review.
 >
 > That version also cited a bare line number (`:586`), which had already drifted to `:782` when
-> the mutation battery grew by 262 lines in the same PR. Cite a content anchor, never a
+> the mutation battery grew by 276 added lines in the same PR (`git diff --numstat` = `276 4`). Cite a content anchor, never a
 > coordinate (`cq-cite-content-anchor-not-line-number`).
 
 Duplication under a pin is the lesser evil against a guard that certifies the wrong code path.

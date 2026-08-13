@@ -73,6 +73,14 @@ existing `tmp_delta=` field already applies.
 lists live in `scripts/lib/test-relevance-paths.sh` as declarations only — no `set -e`, no side
 effects — and are sourced by `test-all.sh` and by `scripts/lint-orphan-test-suites.sh`.
 
+> **PARTLY SUPERSEDED 2026-08-13 (#7402).** The scope described below — "any `scripts/*.test.sh`
+> appearing after the `run_suite ` token" — is no longer accurate: `lint-orphan-test-suites.sh`
+> now walks EVERY tracked `*.test.sh` repo-wide and extracts from COMMAND position, not from any
+> token following `run_suite `. **The rule itself still holds and is still load-bearing** (a path
+> literal on a `run_suite` line can still satisfy registration for a different suite than the one
+> executed); only the stated mechanism is out of date. Body left intact, per the append-only
+> convention for dated records.
+
 - **No path literal may appear on a `run_suite` line.** `lint-orphan-test-suites.sh`'s per-suite
   anchor is satisfied by any `scripts/*.test.sh` appearing after the `run_suite ` token, so an
   inline predicate list would satisfy the registration check for a **different** suite than the
