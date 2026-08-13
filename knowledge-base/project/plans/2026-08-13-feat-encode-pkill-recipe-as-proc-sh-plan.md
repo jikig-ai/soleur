@@ -487,17 +487,57 @@ None. Every criterion is executable in-session.
 
 ## Test Scenarios
 
+All of these are executed by `plugins/soleur/test/proc.test.sh` against a synthesized procfs,
+except T3 / T-DRYSAFE / T-FAILED, which spawn their own `setsid sleep` in a fresh mktemp
+sandbox, and T-NEST, which builds a real throwaway git repo. There are no `Browser:` or
+`API verify:` steps — this is a shell library with no UI and no network surface — so `/qa`
+degrades to the suite by its own graceful-degradation rule.
+
+**Ownership boundary**
+
 | # | Scenario | Expected |
 |---|---|---|
-| T1 | `list_runs` with the pattern present in its own argv | zero self rows; synthesized sibling still listed |
-| T2 | Sibling worktree at `<ROOT>-two` | refused (M1 boundary) |
-| T3 | Run owned by the current worktree | signalled; `killed=1` **(positive control / anti-vacuity)** |
-| T4 | 3-deep wrapper invocation | wrapper excluded (M2) |
-| T5 | Process merely mentioning the pattern | not selected (M4) |
-| T6 | Process whose `comm` contains a space | ppid resolves (M5) |
-| T7 | Target sharing the invoker's pgid | refused, and counted in `skipped_same_pgroup` — never silently absorbed into `killed=0` |
+| T2 | Sibling worktree at `<ROOT>-two` | refused (M1) |
+| T-CARD | A **second** owned process, in a subdirectory | signalled — one owned fixture cannot distinguish "signals mine" from "signals exactly one thing" |
+| T-SYMCWD | cwd reaching the worktree through a symlink | owned (M9) |
+| T-CANON | Ownership boundary reached through a symlink | owned (M10) |
+| T-DEL | cwd the kernel reports as ` (deleted)` | refused — a could-not-establish state, not a path (M8) |
 | T8 | `<unreadable>` cwd | refused and printed, never signalled |
+| T-NEST | A nested worktree whose path contains a **space** | excluded — needs a real git repo; no synthesized fixture can express the parse defect |
+| T-ROOT | Boundary of `/` or a relative path | refused loudly |
 | T9 | Outside a git repo with `PROC_SH_WORKTREE` unset | fails loudly, non-zero, signals nothing |
+
+**Self-exclusion**
+
+| # | Scenario | Expected |
+|---|---|---|
+| T1 | `list_runs` with the pattern present in its own argv | zero self rows |
+| T4 | 3-deep wrapper invocation | whole ancestor chain excluded (M2) |
+| T7 | Target sharing the invoker's pgid | refused, counted in `skipped_same_pgroup` — never absorbed into `killed=0` (M3) |
+| T6 | Process whose `comm` contains a space | ppid still resolves (M5) |
+
+**Matching**
+
+| # | Scenario | Expected |
+|---|---|---|
+| T5 | Process merely mentioning the pattern | not selected (M4) |
+| T-WRAP | `timeout 600 bash <suite>` | selected — a wrapper must not make a real run invisible |
+| T-WRAPMENTION | `timeout 600 grep -rn test-all.sh scripts/` | **not** selected — a wrapper must not license a bare basename match (M11) |
+| T-SH | A run under `sh` rather than `bash` | selected — the shell set has more than one member |
+| T-NONUL | Unterminated cmdline (no trailing NUL) | still matched — argv-rewriting processes routinely omit it |
+| T-PID0 | `/proc/0` | never classified; `kill -TERM 0` would signal the caller's group (M7) |
+| T-SLASH | Pattern containing `/` | rejected with a usage error, never a silent `killed=0` |
+
+**Output integrity**
+
+| # | Scenario | Expected |
+|---|---|---|
+| T3 | Run owned by the current worktree | really signalled, really terminated, `killed=1 … mode=live` **(positive control)** |
+| T3d | The `signalled` line for that run | carries the path the ownership check passed on, not a third re-read that fails once the process is gone |
+| T-INJECT | cwd containing a newline and a forged row | cannot produce a signal line for a pid the walk never classified |
+| T-ESC | cwd containing an ESC sequence | refused, and no raw control byte reaches the operator's terminal (M12) |
+| T-DRYSAFE | `PROC_SH_DRY_RUN=true` | treated as a rehearsal; the process survives; `mode=dry-run` is reported |
+| T-FAILED | An undeliverable signal | `failed=1`, never `killed=1` |
 
 ## Observability
 
