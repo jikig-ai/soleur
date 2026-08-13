@@ -71,7 +71,7 @@ so it lands before either consumer.
       fail2ban hypothesis first.
 - [ ] 4.4 `## After it succeeds` carries both off-host verifications; zero `ssh ` invocations.
 - [ ] 4.5 `## Known residual` records the deliberate no-`-replace` limitation.
-- [ ] 4.6 Add to the runbooks index if one exists.
+- [ ] 4.6 No runbooks index exists — no index edit required.
 
 ## Phase 5 — ADR + sweep
 

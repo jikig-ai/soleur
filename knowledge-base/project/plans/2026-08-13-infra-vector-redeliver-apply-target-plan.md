@@ -268,7 +268,9 @@ checklist exists to prevent.
 |---|---|
 | `.github/workflows/apply-web-platform-infra.yml` | Add `vector-redeliver` to the `apply_target` options list + a short clause in its description; add the `vector_redeliver` job |
 | `scripts/test-all.sh` | Register the new suite in the gate cluster (`:982-1090`) |
-| `knowledge-base/engineering/operations/runbooks/README.md` *(only if it carries an index)* | Add the new runbook to the index |
+
+There is **no** `knowledge-base/engineering/operations/runbooks/README.md` (verified — the
+directory carries no index file), so no index edit is required and none is prescribed.
 
 Deliberately **not** edited: the `confirm` input description (F5), the main plan step's
 `-target=` allow-list (this arm has its own plan step), and
