@@ -47,14 +47,22 @@ stylistic: PR-B's recovery would fire on the wrong runs without PR-A's discrimin
       TOCTOU (the `host_creates` guard has been adjudicating a discarded plan).
 - [x] **3.2** Extract `DPF_REPLACED` from the saved plan's `resource_changes[]`, using the repo's
       `select(.change.actions? | index(...))` convention.
-- [x] **3.3** On `DPF_REPLACED == false`: skip the freshness pin with an explicit `::notice::` and
-      adjudicate on count + content only. Ends the three false-red merge classes
+- [x] **3.3** On `DPF_REPLACED == false`: assert the frame is UNCHANGED across the apply
+      (equality against a pre-apply reading), plus a runner-side `APPLY_START_EPOCH` assert on
+      the degraded sub-arm. **Rewritten at review:** the original text said *skip the freshness
+      pin and adjudicate on count + content only* — the design ADR-186 lists under
+      *Alternatives considered* as REJECTED, because on this arm a content match is guaranteed
+      by construction. Task 1.1 was meant to reconcile superseded plan text into one machine
+      and this line escaped it; left as-was, a future reader would conclude the implementation
+      drifted from the plan when in fact the plan text was stale. Ends the three false-red merge classes
       (`seccomp-bwrap.json`, `apparmor-soleur-bwrap.profile`, `server.tf`).
 - [~] **3.4** DEFERRED — task 2.1 measured skew at ~0 (within a ~±2 s floor), so R13.3's own branch says do not implement. Tracked in #7527. Original text: Implement R2 **only if** task 2.1 justified it, as a single comparator
       (`FRAME_START_TS` exists and differs from `PRE_APPLY_FRAME_START_TS`, absent-pre as sentinel).
 - [x] **3.5** Extend `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` to pin
       `FILE_MAP ⊆ TRIGGER_FILES` (task 2.2's invariant).
 - [x] **3.6** Tests for 3.2/3.3 in `apps/web-platform/infra/infra-config-gate.test.sh`.
+- [x] **3.8** Write ADR-186 (the PR-A decision record). Added at review — Phase 3 had no row
+      for it, and task 9.2 is a DIFFERENT ADR belonging to PR-B.
 - [x] **3.7** Re-derive PR-A's own brand-survival threshold — it removes production writes and adds
       none, so it is plausibly `none` rather than inherited.
 
@@ -148,7 +156,10 @@ infra_config_should_repush <response-file> <pre-frame-start-ts> <apply-start-epo
       `hcloud_server.web` prohibition in every body.
 - [ ] **9.2** Write the ADR — **one decision** (the gate may now write production, bounded to one
       shape-gated re-push; the terminal verdict never leaves the step that fails closed), plus the
-      **ADR-072 distinction** (different hook, different lock) and R15.6's cancellation/timeout
+      **ADR-072 distinction** — NOT "different hook, different lock" (ADR-186 measured that and
+      it does not describe ADR-072, which governs `await-ci` waiting on a CI check-run); state it
+      as ADR-186 does: ADR-072 waited on a signal that WAS going to arrive, so adaptive waiting
+      was the fix, whereas here the newer frame is never coming and R15.6's cancellation/timeout
       consequence. Cite `decision-challenges.md` for the `continue-on-error` rejection rather than
       restating it. Implementation rationale goes in code comments beside the orchestrator.
 - [ ] **9.3** File the follow-up issues: the `server.tf`-in-paths-filter contradiction (R9.1); the

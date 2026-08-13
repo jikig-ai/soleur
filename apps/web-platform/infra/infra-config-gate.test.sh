@@ -858,6 +858,19 @@ else
   fail "#7104 dpf: multi-resource plan gave rc=$DPF_RC out='$DPF_OUT', expected rc=0 false"
 fi
 
+# 14b. `update` and `read` are in the allow-list and had NO fixture, so both narrowing the list
+#      (a false-red on the workflow whose false-reds are this PR's subject) and widening the
+#      create-detector to include them (wrong polarity) survived. Both directions pinned here.
+for verb in update read; do
+  P_VERB=$(mkplan "{\"resource_changes\":[{\"address\":\"terraform_data.deploy_pipeline_fix\",\"change\":{\"actions\":[\"$verb\"]}}]}" "verb$verb")
+  DPF_OUT=$(infra_config_dpf_replaced "$P_VERB" "$DPF_ADDR" 2>/dev/null); DPF_RC=$?
+  if [[ "$DPF_RC" -eq 0 && "$DPF_OUT" == "false" ]]; then
+    pass "#7104 dpf: '$verb' is accepted by the allow-list and is NOT a push (false)"
+  else
+    fail "#7104 dpf: '$verb' gave rc=$DPF_RC out='$DPF_OUT', expected rc=0 false"
+  fi
+done
+
 # 15. Two entries carrying the SAME address. A well-formed `terraform show -json` should never
 #     emit this, which is exactly why it must not be adjudicated silently: without the guard the
 #     function classifies on $matched[0] and a second, contradicting entry is discarded unseen.
@@ -1013,6 +1026,18 @@ fi
 # dies mute mid-comparison, and in the workflow that kills the step before the ::error:: branches
 # that would explain why. A gate that fails closed but silently is the failure shape this whole
 # change exists to remove, so the guard is load-bearing and this is what pins it.
+# The now_epoch guard is the sibling of the post_ts one and had no fixture at all. Deleting it
+# makes an empty now_epoch evaluate arithmetically to 0, so post_ts > 0+skew and the function
+# emits `future_frame` — driving an operator ::error:: about a "host-clock anomaly or fabricated
+# frame" on a cause nobody measured. Assert the diagnostic, for the same reason as post_ts.
+FS_NOWERR="$TMP/fs-nownonnumeric.err"
+FS_OUT=$(infra_config_frame_stability 1786001951 1786001951 ok "not-a-number" 2>"$FS_NOWERR"); FS_RC=$?
+if [[ "$FS_RC" -ne 0 && -z "$FS_OUT" ]] && grep -qF 'now_epoch' "$FS_NOWERR"; then
+  pass "#7104 stability: a non-numeric now_epoch is rejected with a diagnostic naming now_epoch"
+else
+  fail "#7104 stability: non-numeric now_epoch gave rc=$FS_RC out='$FS_OUT' err='$(cat "$FS_NOWERR" 2>/dev/null)'"
+fi
+
 FS_ERR="$TMP/fs-nonnumeric.err"
 FS_OUT=$(infra_config_frame_stability "not-a-number" 1786001951 ok "$FS_NOW" 2>"$FS_ERR"); FS_RC=$?
 if [[ "$FS_RC" -ne 0 && -z "$FS_OUT" ]] && grep -qF 'post_ts' "$FS_ERR"; then
@@ -1074,6 +1099,38 @@ else
   fail "#7104 stability: empty pre_status gave rc=$FS_RC out='$FS_OUT', expected non-zero, empty stdout"
 fi
 
+# --- #7104: PRODUCTION CALL-SITE PIN for the two new sensors --------------------------------
+#
+# The F1 pin above exists because testing an adjudicator in isolation is vacuous if production
+# does not call it. That reasoning was not carried to the new code, and the gap was live:
+# replacing `DPF_REPLACED=$(infra_config_dpf_replaced ...)` with `DPF_REPLACED=false` left this
+# suite at 100 passed / 0 failed — while pinning EVERY run onto the no-push arm, permanently
+# disabling #7220's freshness pin. That is the precise blind spot this PR exists not to restore,
+# and it was deletable at full green.
+APPLY_WF="$REPO_ROOT/.github/workflows/apply-deploy-pipeline-fix.yml"
+if [[ -r "$APPLY_WF" ]]; then
+  if grep -qE '\$\(infra_config_dpf_replaced[[:space:]]' "$APPLY_WF"; then
+    pass "#7104 call-site: production INVOKES infra_config_dpf_replaced (not a hardcoded verdict)"
+  else
+    fail "#7104 call-site: the workflow does not call infra_config_dpf_replaced — the sensor's tests certify a function production does not run"
+  fi
+  if grep -qE '\$\(infra_config_frame_stability[[:space:]]' "$APPLY_WF"; then
+    pass "#7104 call-site: production INVOKES infra_config_frame_stability"
+  else
+    fail "#7104 call-site: the workflow does not call infra_config_frame_stability"
+  fi
+  # Ordering: the sensor must be read before the verdict that branches on it.
+  DPF_LINE=$(grep -nE '\$\(infra_config_dpf_replaced[[:space:]]' "$APPLY_WF" | head -1 | cut -d: -f1)
+  FS_LINE=$(grep -nE '\$\(infra_config_frame_stability[[:space:]]' "$APPLY_WF" | head -1 | cut -d: -f1)
+  if [[ -n "$DPF_LINE" && -n "$FS_LINE" && "$DPF_LINE" -lt "$FS_LINE" ]]; then
+    pass "#7104 call-site: the sensor is read (L$DPF_LINE) before the verdict that branches on it (L$FS_LINE)"
+  else
+    fail "#7104 call-site: sensor/verdict ordering not established (dpf=$DPF_LINE stability=$FS_LINE)"
+  fi
+else
+  fail "#7104 call-site: cannot read $APPLY_WF — the production pin cannot be evaluated"
+fi
+
 if declare -F infra_config_frame_stability >/dev/null; then
   pass "#7104 stability: the adjudicator is defined (anti-vacuity for the fail-closed arms above)"
 else
@@ -1094,9 +1151,26 @@ fi
 # Nothing asserted that the assertions RAN. Measured: deleting the entire #7220 block took the
 # suite 53 -> 40 passed, 0 failed, exit 0 — a silent truncation that reads exactly like a clean
 # run. A floor (not equality — the count is developer-incremented) makes arm deletion loud.
-GATE_MIN_ASSERTIONS=100
+GATE_MIN_ASSERTIONS=106
+# Adjudicated DIRECTLY, not through fail(). Measured: `fail() { return 0; }` made this suite
+# report `94 passed, 0 failed` / `OK` / exit 0 WITH a genuinely broken assertion present — and
+# the floor built to make truncation loud was itself dispatched through the neutered function,
+# so the one-line mutation that disarms every assertion also disarmed its own backstop.
 if [[ "$pass" -lt "$GATE_MIN_ASSERTIONS" ]]; then
-  fail "assertion-count floor: only $pass assertions ran, expected >= $GATE_MIN_ASSERTIONS — arms were deleted or skipped"
+  echo "  FAIL: assertion-count floor: only $pass assertions ran, expected >= $GATE_MIN_ASSERTIONS — arms were deleted or skipped" >&2
+  echo "---"
+  echo "infra-config-gate.test.sh: $pass passed, $fail failed (FLOOR BREACHED)"
+  exit 1
+fi
+
+# Known-negative self-test: prove the instrument can still report a failure before trusting any
+# verdict it produced. An assertion harness that has never been shown to emit a FAIL has not
+# returned a pass. Runs in a subshell so it cannot perturb the real counters.
+if ( fail_probe=0; fail() { fail_probe=$((fail_probe + 1)); }; fail "self-test"; [[ "$fail_probe" -eq 1 ]] ); then
+  :
+else
+  echo "  FAIL: harness self-test — fail() does not record a failure; every verdict above is unverifiable" >&2
+  exit 1
 fi
 
 echo "---"

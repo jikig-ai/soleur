@@ -58,9 +58,17 @@ tamper of `hooks.json` or the Doppler token"* and *"a wiped handler [that] still
 its last frame"*. **Both claims are false, and shipping them would have put an unmeasured claim in
 this ADR — the AP-021 failure this ADR exists to avoid.**
 
-- A **wiped handler leaves the last frame in place**, so `PRE == POST` and equality **passes**.
+- An **apply-handler wipe that leaves both the status-hook registration and the state file
+  intact** leaves the last frame in place, so `PRE == POST` and equality **passes**. That is the
+  narrow, measured statement. The broader "does not detect a wiped handler" is itself wrong in
+  the opposite direction and was corrected at review: a wipe reaching `/etc/webhook/hooks.json`
+  reds via the 404 branch, and a wiped state file reds twice (`cat-infra-config-state.sh` serves
+  `exit_code: -2` with no `start_ts`, failing both `adjudicate_infra_config` and the numeric
+  `start_ts` guard). **Under-claiming is the same AP-021 miss as over-claiming.**
 - The frame records **the last write**; it is not a re-read of the bytes on disk, so a post-push
-  tamper does not move it either.
+  tamper does not move it either. This is **not specific to the equality assert** — the digest
+  is taken by the handler from its own staged tmpfile at write time, so the entire pre-existing
+  content tier shares the limitation.
 
 Equality establishes exactly one property: **frame stability across this run** — the endpoint
 answered, the frame parses, and it is the same frame it was before the apply, i.e. *no unexpected
@@ -93,8 +101,14 @@ the exact false-red this change removes. The **upper** bound is a different clai
 on both sub-arms: a frame claiming to start in the future is a host-clock anomaly or a fabricated
 frame.
 
-A green-but-degraded run escalates to Sentry (`op=infra-config-preframe-degraded`, level `warning`)
-from **its own step**, not by widening the gate step's `env:`. It does **not** reuse
+A green-but-degraded run emits a Sentry event (`feature=infra-config`,
+`op=infra-config-preframe-degraded`, level `warning`) from **its own step**, not by widening the
+gate step's `env:`. **Say "emits", not "escalates":** review measured that no `sentry_issue_alert`
+rule matches this workflow's events at all, and every rule in `issue-alerts.tf` is a
+`filter_match="all"` AND over a `feature` + `op` pair — so the original wording claimed a routing
+that does not exist. The `feature` tag was added so the event *can* be routed; landing the rule is
+tracked in #7527. Until it lands this is a **queryable counter, not an alert route**, and the
+counter is what #7527's own re-evaluation trigger reads. It does **not** reuse
 `infra_config_red_alert`: that helper hardcodes the prefix `"infra-config delivery gate RED: "` and
 files a `ci/infra-config-red` issue, both measurably false on a green run. Keeping that helper
 monotonic — it means red — is worth more than reusing it.
@@ -128,6 +142,20 @@ path.
 - **Free safety improvement:** with `use_lockfile = false`, applying a saved plan makes a
   break-glass apply run outside CI (the ADR-096 path, in no concurrency group) fail closed with a
   stale-plan error instead of silently last-writer-wins.
+- **The credentials pushed to the host are now the plan-time snapshot** the two
+  `lifecycle.precondition` blocks graded, rather than an apply-time re-read. This closes the
+  precondition-side TOCTOU as well as the destroy-guard one — a rotation landing between plan and
+  apply is no longer pushed ungraded. The preconditions themselves are unaffected: they are pure
+  functions of input variables, so Terraform evaluates them at plan.
+- **The degraded arm is a new PASSING path with weaker proof than any prior green run.** Before
+  this change every green run had asserted `FRAME_START_TS >= APPLY_START_EPOCH`. Naming it here
+  rather than only in the reasoning above, because it is a consequence a future reader inherits.
+- **The doppler wrapper on the apply is a measured no-op.** Two successive drafts gave two wrong
+  reasons for keeping it ("variables are re-evaluated", then "provider config is read from the
+  environment"); review falsified both — every provider takes `var.*`, the provisioner's
+  `environment {}` is all `var.`/`local.`, and a saved plan carries the values. It is retained
+  because removing it changes the invocation on the sole no-SSH remediation path, not because it
+  is needed. Removal is tracked in #7527.
 - **One existing invariant narrows.** `Verify webhook is alive post-apply` sits between apply and
   verify; the pre-apply capture adds no SSH dependency (it is HTTPS through the same ingress as
   verify) and so does not constrain the teardown placement, but the "assert the webhook is alive

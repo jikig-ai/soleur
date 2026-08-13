@@ -156,10 +156,17 @@ infra_config_dpf_replaced() {
 #     narrowly on purpose: an earlier draft glossed it as "i.e. no unexpected push occurred",
 #     which is a stronger claim than the measurement supports. A push whose handler died before
 #     publishing also leaves pre == post, and that is precisely the #7220 dying-handler shape.
-#   * IT DOES NOT detect a wiped handler: a wiped handler leaves the last frame IN PLACE, so
-#     pre == post and this passes.
+#   * IT DOES NOT detect an apply-handler wipe THAT LEAVES BOTH the status-hook registration
+#     and the state file intact — that shape leaves the last frame in place, so pre == post and
+#     this passes. Stated that narrowly because the broader claim ("does not detect a wiped
+#     handler") is ALSO wrong, in the other direction: a wipe reaching /etc/webhook/hooks.json
+#     reds via the 404 branch, and a wiped state file reds twice over (cat-infra-config-state.sh
+#     returns exit_code -2 with no start_ts, which fails both adjudicate_infra_config and the
+#     numeric start_ts guard). Under-claiming is the same AP-021 miss as over-claiming.
 #   * IT DOES NOT detect a post-push tamper of hooks.json or the Doppler token: the frame
-#     records the LAST WRITE, it is not a re-read of the bytes on disk.
+#     records the LAST WRITE, it is not a re-read of the bytes on disk. Note this limitation is
+#     NOT specific to this verdict — infra_config_content_assert compares the digest the handler
+#     took of its own staged tmpfile at write time, so the whole content tier shares it.
 # Those two holes are real, open, and tracked separately. Callers must not describe this as
 # "verified delivery" (AP-021).
 #

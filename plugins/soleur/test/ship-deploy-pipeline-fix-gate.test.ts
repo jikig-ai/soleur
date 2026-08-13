@@ -372,18 +372,44 @@ describe("infra-config FILE_MAP is contained in TRIGGER_FILES (#7104)", () => {
     ).map((m) => m[1]);
   });
 
-  test("FILE_MAP parses to a non-empty dest list (anti-vacuity)", () => {
-    expect(fileMapDests.length).toBeGreaterThan(0);
-  });
-
-  test("every FILE_MAP dest is covered by a DPF trigger (verbatim or via .tmpl)", () => {
+  // Extracted so the negative control drives the SAME code path as the real assertion. A
+  // containment check whose fixture never places a dest on the uncovered side cannot report,
+  // and three mutations proved that concretely: a partial parse (`.slice(0, 1)`), a predicate
+  // hardwired to `false &&`, and a trigger set that `has()`-es everything all left this file at
+  // 112 pass / 0 fail.
+  function uncoveredIn(dests: string[]): string[] {
     const triggerBasenames = new Set(
       TRIGGER_FILES.map((p) => p.split("/").pop()!),
     );
-    const uncovered = fileMapDests.filter((dest) => {
+    return dests.filter((dest) => {
       const base = dest.split("/").pop()!;
       return !triggerBasenames.has(base) && !triggerBasenames.has(`${base}.tmpl`);
     });
+  }
+
+  test("FILE_MAP parses EVERY dest, not merely a non-empty prefix", () => {
+    // Cardinality, not `> 0`: a partial parse satisfies a non-empty check while making the
+    // containment hold over a subset. Counted against the block's own rows so it tracks
+    // FILE_MAP growth instead of pinning a literal that would rot.
+    const src = readFileSync(INFRA_CONFIG_APPLY, "utf8");
+    const block = src.match(/^FILE_MAP=\(\s*$([\s\S]*?)^\)\s*$/m)!;
+    const rows = (block[1].match(/^\s*"[A-Z0-9_]+\|/gm) ?? []).length;
+    expect(rows).toBeGreaterThan(0);
+    expect(fileMapDests.length).toBe(rows);
+  });
+
+  test("the containment predicate can actually REPORT an uncovered dest", () => {
+    // Known-negative control. Without it every assertion below is true of a predicate that
+    // structurally cannot report, which is indistinguishable from one that found nothing.
+    expect(uncoveredIn(["/usr/local/bin/definitely-not-a-dpf-trigger.sh"])).toEqual([
+      "/usr/local/bin/definitely-not-a-dpf-trigger.sh",
+    ]);
+    // ...and a known-positive, so the control is not merely "it returns its input".
+    expect(uncoveredIn(["/usr/local/bin/ci-deploy.sh"])).toEqual([]);
+  });
+
+  test("every FILE_MAP dest is covered by a DPF trigger (verbatim or via .tmpl)", () => {
+    const uncovered = uncoveredIn(fileMapDests);
     // Named rather than counted: a bare length check tells the next reader that
     // something drifted but not what, and this failure is load-bearing enough to
     // deserve the dest paths in the message.
