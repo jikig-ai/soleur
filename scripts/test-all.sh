@@ -26,6 +26,48 @@ set -euo pipefail
 # {success,failure,cancelled,skipped} — so the REQUIRED context cannot carry 3. CI collapses
 # killed into failure, and the distinction survives in the shard log and the [KILLED] lines.
 
+# --- Auto-discovered suite globs (the ONLY declaration; see --print-suite-globs) ---------
+#
+# These are the patterns the glob loop further down expands. They live HERE, in an array with
+# a machine-readable accessor, for one reason: scripts/lint-orphan-test-suites.sh must diff
+# `git ls-files '*.test.sh'` against what this runner actually registers, and the only safe way
+# for it to know these patterns is to ASK. A second copy of the list inside the linter would
+# make the linter blind to the one mutation it exists to catch — delete a pattern here and the
+# suites it covered stop running while the linter, reading its own stale copy, still reports
+# `orphan test suites: none` (Guard 1 row M5). Deriving turns a duplicated list into a contract.
+#
+# QUOTED, individually. An unquoted array literal is pathname-expanded AT ASSIGNMENT, which
+# would freeze today's matches into the array and silently stop registering files added later.
+#
+# `plugins/soleur/skills/*/scripts/*.test.sh` is deliberately NOT here: measured, it matches
+# zero tracked files (the four linear-fetch suites #7402 recorded under `scripts/` were
+# `git mv`d to `.../test/` by #7482 and are covered by the `skills/*/test/` entry above it).
+# A glob matching nothing is not coverage — it is a line that makes a future suite
+# auto-register without anyone deciding to. The linter's orphan report is that decision point.
+SUITE_GLOBS=(
+  'plugins/soleur/test/*.test.sh'
+  'plugins/soleur/skills/*/test/*.test.sh'
+  'plugins/soleur/scripts/*.test.sh'
+  '.claude/hooks/*.test.sh'
+  # `.claude/hooks/lib/*.test.sh` is a separate entry because shell globs do not cross `/`:
+  # the `.claude/hooks/*.test.sh` entry above never reached the lib/ subdirectory and
+  # freeze-lock.test.sh had never gated CI (#7409).
+  '.claude/hooks/lib/*.test.sh'
+  'apps/cla-evidence/scripts/*.test.sh'
+  'apps/web-platform/scripts/*.test.sh'
+  'apps/web-platform/scripts/lib/*.test.sh'
+  'scripts/lib/*.test.sh'
+)
+
+# Answer the linter's question and exit, BEFORE anything with a side effect: no TMPDIR export,
+# no bare-repo guard, no TEST_GROUP validation (which would reject this argv as a group name and
+# exit 2), no tc_acquire — the linter runs INSIDE the advisory lock this runner holds, so a code
+# path that blocks on it would deadlock the gate on itself.
+if [[ "${1:-}" == "--print-suite-globs" ]]; then
+  printf '%s\n' "${SUITE_GLOBS[@]}"
+  exit 0
+fi
+
 # Default TMPDIR to /var/tmp (disk-backed) rather than /tmp.
 #
 # /tmp on this machine class is a ~4 GiB SHARED tmpfs, and parallel worktrees are this
@@ -433,8 +475,8 @@ run_suite() {
 # distinguishable without reading the log body.
 #
 # A SIBLING of run_suite, deliberately NOT an option on it. scripts/lint-orphan-test-suites.sh
-# anchors suite registration on the literal `run_suite ` token, and its per-suite check is
-# satisfied by ANY scripts/*.test.sh appearing after that token — so a
+# anchors suite registration on the literal `run_suite ` token, and extracts the registered
+# path from COMMAND position (the token after `bash`) on that line — so a
 # `run_suite --skip-if-not-relevant "<paths>"` shape would let a path in the predicate list
 # satisfy the registration check for a DIFFERENT suite than the one executed, and deleting that
 # suite's real registration would still report `orphan test suites: none`. `skip_suite ` cannot
@@ -809,6 +851,16 @@ if want_scripts; then
   # Registered explicitly: scripts/*.test.sh is NOT auto-globbed by this runner.
   run_suite "scripts/rules-loader-stamp-probe" bash scripts/rules-loader-stamp-probe.test.sh
   run_suite "scripts/lint-orphan-test-suites" bash scripts/lint-orphan-test-suites.sh
+  # Guard 1 (#7402). The LIVE line above points the linter at this working tree; this one is
+  # its mutation battery, which builds a synthetic git repo and proves each of the eleven rows
+  # reddens. Both are needed for the same reason the legal-corpus pair below states: the unit
+  # suite proves the guard can detect a planted defect, the live line is the only thing that
+  # ever points it at the real repo.
+  #
+  # NOT added to the linter's own REQUIRED_RUNNERS list: that array holds RUNNERS (files that
+  # dispatch other suites), and a `.test.sh` is not one. The `scripts/*.test.sh` walk — now the
+  # whole-repo walk — is what keeps THIS line honest.
+  run_suite "scripts/lint-orphan-test-suites-mutations" bash scripts/lint-orphan-test-suites.test.sh
   # #7387 legal-corpus write-time gates. Each gate registers its unit suite AND a LIVE run
   # against the working tree: the unit suite proves the gate detects a planted defect in a
   # sandbox, the live line is the only thing that ever points it at the real corpus. The unit
@@ -966,7 +1018,10 @@ if want_scripts; then
   run_suite "tests/scripts/stock-preflight-gate" bash tests/scripts/test-stock-preflight-gate.sh
 
   # (#6977) The git-data birth route's gates. NOTHING else runs these:
-  # lint-orphan-test-suites.sh walks only scripts/*.test.sh, and
+  # lint-orphan-test-suites.sh's producer is `git ls-files '*.test.sh'`, which the
+  # `test-<name>.sh` convention used under tests/scripts/ does not match (#7402 widened that
+  # walk from scripts/*.test.sh to the whole repo, but the SUFFIX convention is the producer's
+  # scope and tests/scripts/ is deliberately outside it), and
   # apps/web-platform/infra/run-registered-suites.sh DERIVES its list from
   # infra-validation.yml's `run: bash apps/web-platform/infra/<name>.test.sh` steps, so a
   # tests/scripts/ suite is structurally invisible to both. These three run_suite lines
@@ -1005,10 +1060,11 @@ if want_scripts; then
   run_suite "tests/scripts/audit-bot-codeql-coverage" bash tests/scripts/test-audit-bot-codeql-coverage.sh
   run_suite "tests/commands/sync-rule-prune" bash tests/commands/test-sync-rule-prune.sh
   run_suite "tests/commands/sync-domain-model" bash tests/commands/test-sync-domain-model.sh
-  # tests/commands/ is registered by these explicit lines ONLY — there is no glob
-  # here, and lint-orphan-test-suites.sh iterates scripts/*.test.sh, so it does
-  # not cover this directory either. A new suite added below without a run_suite
-  # line silently never gates (#7442).
+  # tests/commands/ is registered by these explicit lines ONLY — there is no glob here, and
+  # lint-orphan-test-suites.sh's whole-repo walk is keyed on the `*.test.sh` SUFFIX, which the
+  # `test-<name>.sh` convention in this directory does not carry. That linter covers the
+  # directory through a SEPARATE dedicated loop (#7442) rather than through its main walk; a
+  # new suite added below without a run_suite line silently never gates.
   run_suite "tests/commands/sync-producer-reachability" bash tests/commands/test-sync-producer-reachability.sh
   run_suite "tests/scripts/kb-drift-walker" bash tests/scripts/test-kb-drift-walker.sh
   # Destroy-guard counters (apply-* workflow trio). Pre-existing gap from
@@ -1053,8 +1109,11 @@ if want_scripts; then
   # RELEVANCE-GATED (ADR-181). At ~860 s this is the single most expensive suite in the runner —
   # about 32% of a full local run — and it guards a script most PRs never touch. The predicate is
   # referenced BY NAME: no path literal may appear on a `run_suite` line, because
-  # lint-orphan-test-suites.sh's per-suite anchor is satisfied by any scripts/*.test.sh appearing
-  # after that token, so an inline list would register a DIFFERENT suite than the one executed.
+  # lint-orphan-test-suites.sh reads registration out of those lines and a `*.test.sh` literal
+  # sitting there would be extracted as a registration, so an inline list would certify a
+  # DIFFERENT suite than the one this gate executes. (Since #7402 the extraction is anchored on
+  # the COMMAND — the token after `bash` — not on the whole line, which narrows but does not
+  # remove the hazard: a path literal in command position is still read as a registration.)
   if _diff_touches "${REGISTRY_BATTERY_PATHS[@]}"; then
     run_suite "tests/scripts/registry-gate-mutation-battery" bash tests/scripts/test-registry-gate-mutation-battery.sh
   else
@@ -1063,9 +1122,9 @@ if want_scripts; then
       "bash tests/scripts/test-registry-gate-mutation-battery.sh"
   fi
   # Registered explicitly, next to its D10 sibling. Nothing auto-discovers tests/scripts/: this
-  # file's *.test.sh glob cannot match the `test-*` prefix, and scripts/lint-orphan-test-suites.sh
-  # covers scripts/*.test.sh only. An unregistered suite here runs in ZERO runners and is silent
-  # and green (#3366).
+  # file's *.test.sh globs cannot match the `test-*` prefix, and scripts/lint-orphan-test-suites.sh
+  # walks the whole repo but only for the `*.test.sh` SUFFIX, which this file does not carry. An
+  # unregistered suite here runs in ZERO runners and is silent and green (#3366).
   run_suite "tests/scripts/registry-restore-from-ghcr" bash tests/scripts/test-registry-restore-from-ghcr.sh
   # D10 WIRING (not logic). The suites above prove the gate's logic; none of them proves the
   # workflow USES it. That gap is exactly how the gate shipped reading a Doppler secret which
@@ -1082,8 +1141,9 @@ if want_scripts; then
   run_suite "tests/scripts/registry-heartbeat-poll" bash tests/scripts/test-registry-heartbeat-poll.sh
   # (#7278) The read-only zot disk-inventory lever's two suites. Registered HERE for the same
   # reason as every line around them — nothing auto-discovers tests/scripts/, this file's
-  # *.test.sh glob cannot match the `test-*` prefix, and lint-orphan-test-suites.sh covers
-  # scripts/*.test.sh only, so an unregistered suite runs in ZERO runners while looking covered.
+  # *.test.sh globs cannot match the `test-*` prefix, and lint-orphan-test-suites.sh's whole-repo
+  # walk is keyed on that same suffix, so an unregistered suite here runs in ZERO runners while
+  # looking covered.
   #
   # The FIRST is the enumerator: dedup-by-digest arithmetic against hand-computed literals, index
   # recursion, the partial/unreadable/empty-catalog verdict taxonomy, verb and egress confinement
@@ -1162,6 +1222,17 @@ if want_scripts; then
   # ubuntu-latest node (no setup-node — same bare-`node` precedent as
   # secret-scan.yml). node --test ships in Node >=18.
   run_suite "scripts/md-to-mrkdwn" node --test scripts/md-to-mrkdwn.test.mjs
+  # Gitleaks-allowlist parser harness (#7402). It shells out to `node` for the parser under
+  # test, so it sits beside md-to-mrkdwn above under the same stock-node precedent rather than
+  # in the bun shard. It ran in ZERO runners until now: `apps/web-platform/test/` is under no
+  # glob in this file and appears in no workflow step, which is exactly the shape the widened
+  # scripts/lint-orphan-test-suites.sh walk exists to surface. Measured 0.8 s, 18 assertions.
+  run_suite "apps/web-platform/test/parse-gitleaks-allowlists" bash apps/web-platform/test/__synthesized__/parse-gitleaks-allowlists.test.sh
+  # Board-status mapper (#7402). #7402's body claims board-status-sync.yml runs this suite;
+  # that is REFUTED — the workflow runs scripts/board/set-board-status.sh, the SCRIPT, and
+  # names the .test.sh nowhere. `scripts/board/` is covered by no glob here, so this explicit
+  # line is the suite's only registration anywhere. Mocks `gh` on PATH; needs no token.
+  run_suite "scripts/board/set-board-status" bash scripts/board/set-board-status.test.sh
 fi
 
 # Named bun-test entries — bun shard.
@@ -1251,10 +1322,22 @@ if want_scripts; then
   # want_bun for the same reason as its neighbours — it shells out to python3 to build its
   # sandbox, and `test-scripts` is the shard documented as "bash + python3".
   run_suite "scripts/test-all-killed-classification" bash scripts/test-all-killed-classification.test.sh
-  # `.claude/hooks/lib/*.test.sh` is this branch's addition (#7409): shell globs do not cross
-  # `/`, so the `.claude/hooks/*.test.sh` entry beside it never reached the lib/ subdirectory
-  # and freeze-lock.test.sh had never gated CI.
-  for f in plugins/soleur/test/*.test.sh plugins/soleur/skills/*/test/*.test.sh plugins/soleur/scripts/*.test.sh .claude/hooks/*.test.sh .claude/hooks/lib/*.test.sh apps/cla-evidence/scripts/*.test.sh apps/web-platform/scripts/*.test.sh apps/web-platform/scripts/lib/*.test.sh scripts/lib/*.test.sh; do
+  # ADR-178/ADR-187 textual parity pin (#7429): the signal-shape classifier is inlined in three
+  # runners, and this asserts the three copies still agree. Registered explicitly beside its
+  # sibling above — scripts/*.test.sh is NOT auto-globbed here, and this suite arrived
+  # unregistered, which the widened scripts/lint-orphan-test-suites.sh walk caught on its first
+  # run against the branch. A parity pin nothing executes is three copies with no pin at all.
+  # Measured 0.1 s, 32 assertions, bash-only.
+  run_suite "scripts/suite-exit-class-parity" bash scripts/suite-exit-class-parity.test.sh
+  # The patterns are declared ONCE, at the top of this file, and published by
+  # `--print-suite-globs` so scripts/lint-orphan-test-suites.sh reads the same list this loop
+  # expands. Nested loop rather than one flat `for f in ${SUITE_GLOBS[@]}`: the flat form
+  # depends on unquoted word-splitting, so a pattern containing a space would expand into two
+  # broken patterns silently. Iteration order is unchanged (pattern 1's matches, then 2's, …),
+  # so TEST_TIMING_LOG rows and suite ordering are byte-identical to the inline list this
+  # replaced.
+  for _suite_glob in "${SUITE_GLOBS[@]}"; do
+  for f in $_suite_glob; do
     [[ -f "$f" ]] || continue
     # RELEVANCE-GATED (ADR-181) — declined on 96% of recent commits, and the only suite this loop
     # registers whose cost justifies a predicate. The justification is the SKIP RATE, not a
@@ -1282,6 +1365,7 @@ if want_scripts; then
     fi
     run_suite "$f" bash "$f"
   done
+  done
 fi
 
 # --- Nested CI-registered runners (#7103 R5(a)) -----------------------------------------
@@ -1291,10 +1375,15 @@ fi
 # #6969). Each registration counts as ONE suite at the aggregate level; the nested runner
 # reports its own per-suite counts inside that line.
 #
-# The infra RUNNER is registered, never its 87 suites individually. run-registered-suites.sh
-# DERIVES its list from .github/workflows/infra-validation.yml and reports unregistered
-# orphans; enumerating the suites here would fork that list and recreate the very drift the
-# derivation prevents.
+# The infra RUNNER is registered, never its 98 suites individually (re-derived 2026-08-13 via
+# `bash apps/web-platform/infra/run-registered-suites.sh --list`; the previous figure of 87 had
+# drifted). run-registered-suites.sh DERIVES its list from
+# .github/workflows/infra-validation.yml and reports unregistered orphans; enumerating the
+# suites here would fork that list and recreate the very drift the derivation prevents.
+#
+# Do not hand-edit that count: `--list` prints it, and scripts/lint-orphan-test-suites.sh reads
+# the same command for its infra registration surface, so the number above is checkable in one
+# second rather than trusted.
 if want_infra; then
   # Relevance gate (2.2). The infra runner is the expensive one, so a docs-only run should
   # not pay for it. Reuses the preamble's `_infra_in_diff` verdict rather than re-deriving

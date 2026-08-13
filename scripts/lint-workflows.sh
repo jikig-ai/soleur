@@ -22,11 +22,16 @@
 # discoverability chain in this repo's `discoverability_test` convention, where this script
 # is chained after scripts/test-all.sh. Only a HANG is failure here.
 #
-# NO COMPANION .test.sh, DELIBERATELY. Precedent: scripts/lint-orphan-test-suites.sh:10-12.
-# This is a ~20-line invocation wrapper with no decision logic of its own; the property
-# that matters — "actionlint terminates on this repo's workflows" — is enforced in CI by
-# the actionlint hang guard step in .github/workflows/ci.yml, which is where a regression
-# would actually be caught. A suite here would test `timeout`.
+# NO COMPANION .test.sh, DELIBERATELY — and NO LONGER BY PRECEDENT. This paragraph used to
+# cite scripts/lint-orphan-test-suites.sh's "deliberately ~20 lines with NO companion
+# .test.sh" header. That file grew to 396 lines and four independent checks while the header
+# stayed, and #7402 both corrected it and gave it the companion suite it needed; the citation
+# was borrowing authority from a claim that had stopped being true. The argument stands on its
+# own facts instead: this is a ~20-line invocation wrapper with no decision logic of its own,
+# and the property that matters — "actionlint terminates on this repo's workflows" — is
+# enforced in CI by the actionlint hang guard step in .github/workflows/ci.yml, which is where
+# a regression would actually be caught. A suite here would test `timeout`. If this file ever
+# acquires decision logic, that reasoning expires with it.
 #
 # Usage:  bash scripts/lint-workflows.sh [<path>…]     # default: .github/workflows/
 
