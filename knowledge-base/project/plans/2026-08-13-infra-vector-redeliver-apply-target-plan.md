@@ -573,6 +573,7 @@ checklist exists to prevent.
 |---|---|
 | `tests/scripts/lib/vector-redeliver-gate.sh` | The sourced gate: `vector_redeliver_gate <plan-json>` → 0 = PASS, 1 = ABORT |
 | `tests/scripts/test-vector-redeliver-gate.sh` | Mutation-matrix suite; sources the same gate bytes CI runs |
+| `tests/scripts/test-vector-redeliver-wiring.sh` | Axis-D wiring suite (added at implementation time, modelled on `test-registry-d10-workflow-wiring.sh`). The gate suite proves the gate DECIDES correctly; nothing proved the workflow CALLS it, calls it on the artifact the apply consumes, or is gated on its verdict — and step ORDER (**F10**) is invisible to every unit test |
 | `knowledge-base/engineering/operations/runbooks/vector-redeliver.md` | Operator runbook for the new target |
 
 ## Files to Edit
@@ -1024,11 +1025,24 @@ All fixtures synthesized, never captured from a live plan (`cq-test-fixtures-syn
       (exact equality), not `inside`/`contains`.
 - [ ] **AC3** — The gate PASSES a single-delivery plan in **both** shapes: actions
       `["delete","create"]` and actions `["create"]` (**F2**).
-- [ ] **AC4** — Every mutation-matrix row M1–M8 drives the gate RED. Verified by
+- [ ] **AC4** — Every mutation-matrix row drives the gate RED. Verified by
       `bash tests/scripts/test-vector-redeliver-gate.sh` exiting 0 with all cases asserted, and
       by the suite reporting a non-zero executed-case count (anti-vacuity).
+      *(Two rows moved at implementation time, both measured. **M4** is green-with-summary rather
+      than RED, per **F12**. **M10a** asserts "unclassifiable plan entry" rather than "outside the
+      allow-set": the design predicted out-of-scope, but the fail-closed preamble refuses the
+      empty-actions shape first — measured, the negative filter counts that shape (1) and the
+      positive filter scores 0.)*
 - [ ] **AC5** — `bash tests/scripts/test-vector-redeliver-gate.sh` is registered in
       `scripts/test-all.sh` and runs in the gate cluster.
+- [ ] **AC5b** — `bash tests/scripts/test-vector-redeliver-wiring.sh` exists, is registered in
+      `scripts/test-all.sh` beside the gate suite, and pins its own assertion count EXACTLY
+      (anti-vacuity). Its rows anchor on the CALL FORM (`^\s*if ! vector_redeliver_gate "…"` and
+      `^\s*source "…/vector-redeliver-gate.sh"`), never a bare filename token — the hole
+      `stock-preflight-coverage.test.ts:207-215` records, where a `# shellcheck source=` directive
+      alone satisfied the check. Mutation-proved against the job: a re-planning apply, a
+      `continue-on-error` gate step, a deleted `environment:` pin, a renamed/gutted bridge step and
+      a bridge physically MOVED after the gate each drive it RED.
 - [ ] **AC6** — The `vector_redeliver` job's `if:` is exactly
       `github.event_name == 'workflow_dispatch' && inputs.apply_target == 'vector-redeliver'`,
       and `vector-redeliver` is present in the `apply_target` `options:` list.
@@ -1044,8 +1058,12 @@ All fixtures synthesized, never captured from a live plan (`cq-test-fixtures-syn
       authorization; `confirm` is a typo-guard only; the plan-reading gate is the mechanical
       protection.
 - [ ] **AC11** — No new `workflow_dispatch` input is added; the input count remains 7 (**F5**).
-- [ ] **AC12** — The gate step runs **before** the CF Tunnel SSH bridge step, so a refused plan
-      never opens a tunnel.
+- [ ] **AC12** — *(rewritten by **F10**, which supersedes the original "gate before bridge"
+      wording — that ordering cannot authenticate SSH, and F10 records why the original goal costs
+      nothing to give up.)* The gate step runs **before the apply**, and the CF Tunnel SSH bridge
+      runs **before the plan**. Asserted mechanically by
+      `tests/scripts/test-vector-redeliver-wiring.sh` (rows `M6d`), which reads the step order out
+      of the job body — the one property no unit test can see.
 - [ ] **AC13** — The apply step consumes the **saved** `tfplan` graded by the gate, not a
       re-plan (Guard Contract assembly).
 - [ ] **AC14** — `knowledge-base/engineering/operations/runbooks/vector-redeliver.md` exists and
@@ -1094,7 +1112,18 @@ an authorization boundary, not an un-automatable step.*
 
 - [ ] **AC26** — Dispatch `apply_target=vector-redeliver` with `confirm=REDELIVER-VECTOR` and a
       reason; the run succeeds and its gate line reports
-      `vector_out_of_scope_changes=0 host_destroyed=0 nested_removals=0 journald_delivered=1`.
+      `vector_out_of_scope_changes=0 host_destroyed=0 journald_entries=1 journald_delivered=1`.
+      *(Counter list corrected at implementation time. The first draft wrote `nested_removals=0`,
+      a counter **F6** had already cut as unimplementable for a `terraform_data` — so as written
+      this AC asserted a string the gate can never print. The shipped gate emits FOUR counters,
+      the fourth being `journald_entries`, which is a different counter and does not reopen the F6
+      cut: it exists because a lone `["delete"]` at the allowed address scores
+      `journald_delivered=0` while `host_destroyed` is type-scoped and out-of-scope excludes the
+      allowed address — so under three counters the most destructive shape this arm can emit would
+      have hit **F12**'s NO-OP SUCCESS and printed "nothing to redeliver" for a plan that destroys
+      the delivery resource.)*
+      Per **F12**, `journald_delivered=1` is assertable only on the **first** dispatch; a
+      re-dispatch legitimately reports the NO-OP line instead, which is also a success.
 - [ ] **AC27** — Off-host confirmation, no SSH (**rewritten per F9** — the briefed version was
       unsatisfiable, because the #7228 boot-trace identifiers are emitted on the *inngest* host,
       not web-1). Three checks, none of which asserts an absence:
