@@ -127,8 +127,24 @@ sed -nE 's/^[[:space:]]*run_suite[[:space:]].*[[:space:]]bash[[:space:]]+"?([A-Z
 # Fail CLOSED if the flag is gone: a runner that does not answer prints nothing on stdout and
 # exits 2 (the flag reads as an unknown TEST_GROUP), so an unchecked capture would silently
 # yield an empty pattern set and turn every glob-registered suite into a phantom orphan.
+# SOLEUR_DISABLE_SESSION_STATE=1 is LOAD-BEARING, not hygiene. This is a read-only metadata
+# query and must never serialize on anything — but the handler it targets sits before
+# `tc_acquire` by placement alone, and placement is exactly what a future edit can change.
+#
+# Measured 2026-08-13: with the handler moved (or mutated) past `tc_acquire`, this invocation
+# falls through into the advisory lock. When the linter runs as a registered suite INSIDE
+# `test-all.sh`, the lock is held by its own parent, so the child can never acquire it — it
+# waits the full `TC_LOCK_TIMEOUT` (900 s) and only then proceeds. Observed with four such
+# children parked in `do_wait` at once, adding tens of minutes to a local shard.
+#
+# CI never sees it (`tc_acquire` returns early when `CI` is set), so this can only ever punish
+# the local gate — which is the gate people stop running when it gets slow.
+#
+# With the kill switch set, a moved handler still fails CLOSED and fast: the flag reads as an
+# unknown TEST_GROUP, the runner exits 2, and the `globs_rc != 0` branch below fires. The switch
+# removes the 900 s wait, never the detection.
 globs_rc=0
-bash "$RUNNER" --print-suite-globs > "$WORK/globs" 2>/dev/null || globs_rc=$?
+SOLEUR_DISABLE_SESSION_STATE=1 bash "$RUNNER" --print-suite-globs > "$WORK/globs" 2>/dev/null || globs_rc=$?
 globs_n=$(wc -l < "$WORK/globs" | tr -d ' ')
 if (( globs_rc != 0 )) || (( globs_n < 1 )); then
   echo "ERROR: 'bash scripts/test-all.sh --print-suite-globs' exited ${globs_rc} and printed ${globs_n} pattern(s) -- this linter derives the auto-discovery surface from that flag, so without it every glob-registered suite would be reported as an orphan. Restore the flag rather than re-copying the patterns here." >&2
