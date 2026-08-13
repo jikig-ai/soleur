@@ -136,10 +136,11 @@ When one of these fires, report to the user verbatim:
 
 Give the commands, not just the advice. The message names the marketplace-vs-install
 distinction, and a founder who is told that and handed no command is left exactly where the
-report that opened #7474 started. The reinstall fallback is not belt-and-braces either:
-`plugin.json` carries a frozen `0.0.0-dev` sentinel, so there is no version bump for
-`plugin update` to act on and an install can sit months stale while reporting success
-(measured in ADR-178).
+report that opened #7474 started. The reinstall fallback is still worth naming, though it is no
+longer the only thing that can converge an install: `plugin.json` carried a frozen `0.0.0-dev`
+sentinel until 2026-08-12, which is why an install could sit months stale while reporting success
+(measured in ADR-178). The manifests are keyless now and the recorded version changes with every
+delivered commit, so `plugin update` has something to act on — see ADR-182.
 
 **Do not attempt the reinstall yourself.** It mutates `${CLAUDE_PLUGIN_ROOT}` underneath a
 run that is still executing. Report it and let the operator run it between sessions.
