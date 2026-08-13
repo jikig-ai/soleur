@@ -173,6 +173,45 @@ net-positive backlog for polish. Whoever next touches this file's R1 or floor re
 7. **`gh issue create` was hook-blocked for a missing `--milestone`.** Recovered by adding
    `Post-MVP / Later`. Working as intended; one-off.
 
+### Implementation + review phase
+
+8. **I stopped at a pipeline checkpoint twice, and the operator had to ask "why did you stop?"
+   both times.** After `/plan` I emitted a resume prompt and ended the turn, when plan's handoff
+   contract says invoke `/work`. After `/review` I wrote *"Continuing the implementation tail:
+   /compound → /ship"* as the last line and ended the turn — which is the anti-pattern
+   `work/SKILL.md` documents verbatim ("*is not a handoff, it is an abandoned pipeline*").
+   **Prevention:** the prose rule already existed and did not hold. A phase-complete marker must
+   be followed by the successor's **tool call in the same response**; a sentence naming the
+   successor is the failure, not the handoff. Enforcement escalation proposed below — this is
+   the class where "hooks beat documentation" applies, since the documentation was already there.
+9. **The comment I wrote to prevent a future misreading introduced three new ones.** Two review
+   agents converged independently: (a) "a later e2fsprogs bump still classifies rather than reds"
+   inverted a FAIL-CLOSED guarantee and pointed at the fixture-refresh reflex the fingerprint
+   exists to prevent; (b) "the fingerprint's subject is the cloud image's own e2fsprogs" — the
+   subject is the birth filesystem's mount-time module dependency, e2fsprogs is the *producer*;
+   (c) the mirror-current→image-current claim was reasoned until an agent measured it.
+   **Prevention:** a comment added by a fix PR is review surface with the same standard as the
+   fix. For each claim the prose ADDS, name the command that would falsify it — the reflex that
+   catches a wrong *assertion* is not automatically applied to a wrong *sentence*.
+10. **My own mutation fixture was malformed.** I hand-typed the verdict as
+    `shipped:unclassified=-:moduledep=-`; the producer emits
+    `{name}:unclassified=…:moduledep=…:hasjournal=…`, and the dropped trailing field is exactly
+    what `*:moduledep=-:*` needs, so the healthy case "failed" for a fixture reason.
+    **Prevention:** derive a fixture's SHAPE by reading the producer's emit line, never by
+    typing what it plausibly looks like. Caught only because the *healthy* control failed —
+    a fixture set without a positive control would have hidden it.
+11. **Burned ~20 minutes on local verification that could not finish**, then hit the `pgrep`
+    self-match trap: `pgrep -f 'git-data-runcmd-rehearsal'` matched the shell running it,
+    reporting a false "still running" and killing its own invoking shell.
+    **Prevention:** when a suite needs a contended resource, check contention FIRST
+    (`uptime`, sibling worktrees via `/proc/<pid>/cwd`) and prefer CI as the instrument — it is
+    uncontended and is the authoritative gate anyway. For process probes use the bracket form
+    (`ps -ef | grep '[g]it-data-…'`), which cannot match itself.
+12. **A third unreachable absence-grep AC in one session.** AC2 demanded non-comment
+    `e2fsprogs` reach 0; a pre-existing `fail()` message legitimately names the package.
+    **Prevention:** before writing any `grep -c X == 0` criterion, run it on `main` — if the
+    baseline is non-zero for legitimate reasons, the AC is a delta assertion, not an absence one.
+
 ## Triage
 
 | Item | Recurring? | Disposition |
