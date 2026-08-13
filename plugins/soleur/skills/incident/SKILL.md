@@ -66,20 +66,39 @@ Compute locally (FR7 LLM-trust boundary — never accept these from an LLM-emitt
 - File path — derived from slug: `knowledge-base/engineering/operations/post-mortems/${slug}-postmortem.md`.
 - `MTTR` (mean time to recovery) / `MTTD` (mean time to detect) — computed from validated timestamps, NEVER an LLM-emitted duration. The ISO regex gates FORMAT but not calendar validity (it accepts month 13 / day 40 / hour 25), so `date -u -d` can still reject a regex-passing value — capture the epoch with explicit failure handling and HALT on a bad date or a transposed (negative) pair rather than emitting a garbage/empty duration:
   ```bash
-  iso_to_epoch() {  # halt on a regex-valid-but-calendar-invalid date
-    local epoch
-    date -u -d "$1" +%s 2>/dev/null || { echo "incident: not a valid calendar date: $1" >&2; exit 2; }
+  # Returns the epoch on stdout and FAILS on a regex-valid-but-calendar-invalid date.
+  # It must not print a marker and must not `exit`: every call site below is a COMMAND
+  # SUBSTITUTION, so stdout is captured into an arithmetic operand and `exit` leaves only
+  # the subshell. Both were measured. An earlier revision added the marker echo here and
+  # thereby DESTROYED this guard: the marker text landed inside `$(( … ))`, and the run
+  # either died on `SOLEUR_INCIDENT_HALT: unbound variable` (under `set -u`) or continued
+  # past the check and rendered a fabricated `MTTR=0h0m` into a published post-mortem.
+  # The pre-marker shape reached the transposed-date halt correctly at rc 2.
+  # The halt therefore dispatches in the CALLER frame, where `exit` exits the script.
+  iso_to_epoch() {
+    date -u -d "$1" +%s 2>/dev/null || return 1
+  }
+  halt_bad_date() {
+    echo "SOLEUR_INCIDENT_HALT reason=invalid-calendar-date value=[$1]"
+    echo "incident: not a valid calendar date: $1" >&2
+    echo "  Dates must be ISO-8601 UTC and must exist on the calendar (e.g. 2026-02-30 does not)." >&2
+    echo "  Re-run /soleur:incident and supply a real date; nothing has been written." >&2
+    exit 2
   }
   if [[ -n "${recovery_at}" ]]; then
-    mttr_secs=$(( $(iso_to_epoch "${recovery_at}") - $(iso_to_epoch "${detected_at}") ))
-    (( mttr_secs < 0 )) && { echo "incident: recovery_at precedes detected_at (transposed)" >&2; exit 2; }
+    r_epoch=$(iso_to_epoch "${recovery_at}") || halt_bad_date "${recovery_at}"
+    d_epoch=$(iso_to_epoch "${detected_at}") || halt_bad_date "${detected_at}"
+    mttr_secs=$(( r_epoch - d_epoch ))
+    (( mttr_secs < 0 )) && { echo "SOLEUR_INCIDENT_HALT reason=mttr-transposed"; echo "incident: recovery_at precedes detected_at (transposed)" >&2; exit 2; }
     MTTR=$(printf '%dh%dm' $(( mttr_secs / 3600 )) $(( (mttr_secs % 3600) / 60 )))
   else
     MTTR="TBD (status not resolved)"
   fi
   if [[ "${detection_method}" == "monitoring" && -n "${monitoring_detected_at}" ]]; then
-    mttd_secs=$(( $(iso_to_epoch "${monitoring_detected_at}") - $(iso_to_epoch "${detected_at}") ))
-    (( mttd_secs < 0 )) && { echo "incident: monitoring_detected_at precedes detected_at (transposed)" >&2; exit 2; }
+    m_epoch=$(iso_to_epoch "${monitoring_detected_at}") || halt_bad_date "${monitoring_detected_at}"
+    d_epoch=$(iso_to_epoch "${detected_at}") || halt_bad_date "${detected_at}"
+    mttd_secs=$(( m_epoch - d_epoch ))
+    (( mttd_secs < 0 )) && { echo "SOLEUR_INCIDENT_HALT reason=mttd-transposed"; echo "incident: monitoring_detected_at precedes detected_at (transposed)" >&2; exit 2; }
     MTTD=$(printf '%dh%dm' $(( mttd_secs / 3600 )) $(( (mttd_secs % 3600) / 60 )))
   else
     MTTD="Unknown (external/manual report)"
@@ -216,13 +235,75 @@ No public artifact is generated in MVP. Re-evaluation criteria are tracked in #3
 
 ## Phase 6 — Redaction sentinel (BLOCKING, pre-inline-emit)
 
-Resolve the gate from the **deployed plugin root** (`${CLAUDE_PLUGIN_ROOT}`, the platform-trusted copy; git-root fallback for CLI/worktree), fail closed if it is unreadable, then run it against the unwritten draft. On the Concierge server the deployed-root anchor is load-bearing: a bare CWD-relative path would resolve the connected repo's **untrusted** copy of the sentinel (ADR-093). The draft lives in `mktemp` only — it has NOT been emitted inline yet AND has not been written to `post-mortems/`.
+Resolve the gate from the **deployed plugin root** (`${CLAUDE_PLUGIN_ROOT}`, the platform-trusted copy — ADR-179's canonical bare anchor, with no fallback arm), verify the root is really a Soleur install, fail closed if either check fails, then run it against the unwritten draft. On the Concierge server the deployed-root anchor is load-bearing: a bare CWD-relative path would resolve the connected repo's **untrusted** copy of the sentinel (ADR-093). The default arm was **removed, not re-pointed**: `review/SKILL.md` instructs `gh pr checkout`, after which the git worktree is the *reviewed party's* tree, so that arm resolved this gate's own scanner from a file a hostile PR controls (#7450). The draft lives in `mktemp` only — it has NOT been emitted inline yet AND has not been written to `post-mortems/`.
+
+**Allocate the draft, register the trap, run the gate — all in ONE fence.** That is not
+formatting: each fenced block is a SEPARATE Bash call, so a trap registered in its own block
+fires when *that* block exits, deleting the draft immediately and leaving `$DRAFT` empty for
+every block after it. Splitting them is what review-finding C14 asked for and it does not
+work — the first attempt shipped exactly that shape, and all three of its stated guarantees
+were false: the trap did not cover the halts below, `$DRAFT` was empty by the time the gate
+ran, and the gate scanned a literal `<draft-tmpfile>` placeholder rather than the draft.
+
+This matters because the abandoned file is the UN-REDACTED text, which is precisely what this
+gate exists to stop escaping — a leak with a longer lifetime than the session.
+
+The two checks below have **different** jobs, and conflating them overstates the second.
+
+The **bare anchor is the load-bearing control.** The loader substitutes `${CLAUDE_PLUGIN_ROOT}` with the installed root at delivery, *before* this text reaches bash — so at this site there is no shell variable for an ambient `direnv` / `.bashrc` / `postinstall` value to poison. Measured directly, with a decoy value simultaneously live in the executing subprocess and ignored: [`phase-1-measurement.md`](../../../../knowledge-base/project/specs/feat-one-shot-7450-git-root-anchor-untrusted/phase-1-measurement.md) Arm 4.
+
+The **identity preflight is defence-in-depth** — for surfaces where substitution does *not* govern and the environment does. It is a *shape* check: it cannot distinguish an installed plugin from a checkout carrying the same manifest, and ADR-179 §(a) measured a shape check passing while an attacker-chosen payload executed. It is retained because it is the only control on an unsubstituted surface; it is not what makes the bare anchor safe. The stronger "assert the root is outside the working tree" form was evaluated and **rejected** — it guards an operand the adversary cannot reach here, breaks dogfooding on any plain clone, and reintroduces `git rev-parse` into the very gate this PR de-git-roots: [`b1-disposition.md`](../../../../knowledge-base/project/specs/feat-one-shot-7450-git-root-anchor-untrusted/b1-disposition.md).
+
+Each halt emits a `SOLEUR_*` marker on stdout so a refusal is visible in telemetry rather than only to whoever was watching the terminal (`hr-observability-as-plan-quality-gate`; same pattern as `go.md`'s `SOLEUR_GIT_REPO_DIAG`). The operator guidance is **state-discriminating**: an empty root and a wrong root need different actions, and "re-run this skill" is not an action for either.
 
 ```bash
-SENTINEL="${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/plugins/soleur}/skills/incident/scripts/redact-sentinel.sh"
-[[ -r "$SENTINEL" ]] || { echo "incident: redaction sentinel not found — halt (fail closed)"; exit 2; }
-bash "$SENTINEL" <draft-tmpfile>
+DRAFT="$(mktemp)" || { echo "SOLEUR_INCIDENT_HALT reason=draft-alloc-failed"
+                       echo "incident: cannot allocate a draft file — stopping before any post-mortem text exists." >&2
+                       exit 2; }
+trap 'rm -f "$DRAFT"' EXIT INT TERM HUP
+
+# Write the drafted post-mortem into "$DRAFT" here — in THIS fence, before the gate below.
+# Use a QUOTED heredoc delimiter (`<<'PIR_EOF'`), which is load-bearing twice over: production
+# log excerpts routinely contain `$(…)`, backticks and `$VAR`, and an unquoted delimiter would
+# (a) EXECUTE the command substitutions on the operator's machine, and (b) expand `$VAR`
+# fragments to empty — mutating the very text the sentinel is about to scan, so a secret whose
+# shape the redactor matches can be destroyed by the shell instead of by the redactor.
+#   cat > "$DRAFT" <<'PIR_EOF'
+#   <the drafted post-mortem, verbatim>
+#   PIR_EOF
+
+[ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
+  && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
+  || { echo "SOLEUR_INCIDENT_HALT reason=plugin-root-unverified root=[${CLAUDE_PLUGIN_ROOT}]"
+       echo "incident: cannot verify the Soleur plugin installation — stopping before any post-mortem is written." >&2
+       echo "  Resolved plugin root: [${CLAUDE_PLUGIN_ROOT}]" >&2
+       echo "  If that is EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session — re-running here resolves the same empty root." >&2
+       echo "  If it names a path: that path is not a Soleur install (a repo checkout is not an install). Run 'claude plugin update soleur', then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
+       echo "  Do NOT write this post-mortem by hand — the redaction scanner is what makes it safe to publish." >&2
+       exit 2; }
+SENTINEL="${CLAUDE_PLUGIN_ROOT}/skills/incident/scripts/redact-sentinel.sh"
+[[ -r "$SENTINEL" ]] || { echo "SOLEUR_INCIDENT_HALT reason=sentinel-unreadable sentinel=[$SENTINEL]"
+       echo "incident: the redaction sentinel is missing from an otherwise valid Soleur install — stopping." >&2
+       echo "  Expected at: [$SENTINEL]" >&2
+       echo "  The install is partial or out of date. Run 'claude plugin update soleur', then RESTART Claude Code — plugin changes apply only on restart. If you installed with --scope project or --scope local, pass the same scope. Reinstall only if that does not clear it." >&2
+       echo "  Do NOT write this post-mortem by hand — the redaction scanner is what makes it safe to publish." >&2
+       exit 2; }
+# EMPTINESS IS A FAILURE, NOT A CLEAN SCAN. The sentinel exits 0 on a zero-byte file, so if the
+# draft was never written into "$DRAFT" (composed in the conversation and written by a LATER tool
+# call, which is the natural agent behaviour) the gate passes vacuously and Phase 7 emits the
+# un-redacted text inline. That is a fail-OPEN, and strictly worse than the loudly-broken
+# `<draft-tmpfile>` placeholder it replaced. `linear-fetch` already pins the identical
+# precondition on its own artifact (`[ -n "$PERSIST_SAFE" ]`); this is that guard's sibling.
+[ -s "$DRAFT" ] || { echo "SOLEUR_INCIDENT_HALT reason=draft-empty draft=[$DRAFT]"
+       echo "incident: the draft file is empty — nothing was scanned, so nothing is safe to publish." >&2
+       echo "  Write the post-mortem into \"\$DRAFT\" in the SAME fence as this gate, then re-run." >&2
+       echo "  An empty file is a failure, not a clean scan: the sentinel exits 0 on zero bytes." >&2
+       exit 2; }
+bash "$SENTINEL" "$DRAFT"
 ```
+
+Every halt above sits inside this same shell, so the `EXIT` trap removes the un-redacted draft
+whether the gate passes, refuses, or the shell dies.
 
 `redact-sentinel.sh` is a thin shim over the hardened `redact-engine.py` (#5987): the engine NFKC-normalizes and strips zero-width/bidi/invalid-byte characters BEFORE matching (defeating compatibility-char / zero-width / soft-hyphen / prefix-homoglyph evasion), and fail-closes with a synthetic-HIGH finding on oversize input (raw or NFKC-expanded). The CLI contract — argv, exit codes, and output shape — is unchanged; the shim fails closed (exit 2) if `python3` is absent. See [ADR-095](../../../../knowledge-base/engineering/architecture/decisions/ADR-095-fail-closed-redaction-engine-contract.md) for the scope boundary (named non-goals: full TR39 homoglyph space, whitespace token-splitting, reversibly-encoded secrets).
 

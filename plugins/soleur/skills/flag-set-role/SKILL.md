@@ -50,9 +50,9 @@ Invoke the script:
 
 ```bash
 # Dry-run to see the matrix:
-bash plugins/soleur/skills/flag-set-role/scripts/flip.sh <flag> <role> <on|off> --dry-run
+bash "${CLAUDE_PLUGIN_ROOT}/skills/flag-set-role/scripts/flip.sh" <flag> <role> <on|off> --dry-run
 # After AskUserQuestion confirmation:
-bash plugins/soleur/skills/flag-set-role/scripts/flip.sh <flag> <role> <on|off> --confirmed
+bash "${CLAUDE_PLUGIN_ROOT}/skills/flag-set-role/scripts/flip.sh" <flag> <role> <on|off> --confirmed
 ```
 
 **Agent-driven flow (recommended):**

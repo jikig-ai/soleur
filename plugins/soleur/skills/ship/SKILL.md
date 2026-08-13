@@ -410,9 +410,7 @@ Invoke the preflight skill via the **Skill tool**:
 Emit rule-application telemetry (records that the conditional-domain-gates phase was entered — see AGENTS.md `hr-before-shipping-ship-phase-5-5-runs`):
 
 ```bash
-source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
-  emit_incident hr-before-shipping-ship-phase-5-5-runs applied \
-  'Before shipping, `/ship` Phase 5.5 runs conditional'
+echo 'SOLEUR_RULE_APPLIED rule=hr-before-shipping-ship-phase-5-5-runs note=Before shipping, `/ship` Phase 5.5 runs conditional'
 ```
 
 ### Code Review Completion Gate (mandatory)
@@ -440,9 +438,7 @@ remain unresolved — neither fixed inline nor formally scoped out with a
 Emit rule-application telemetry (records that the fix-inline-default gate ran — see AGENTS.md `rf-review-finding-default-fix-inline`):
 
 ```bash
-source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
-  emit_incident rf-review-finding-default-fix-inline applied \
-  "Review findings default to fix-inline on the PR bra"
+echo 'SOLEUR_RULE_APPLIED rule=rf-review-finding-default-fix-inline note=Review findings default to fix-inline on the PR bra'
 ```
 
 **Detection:** Resolve the current PR number, then query for open, unresolved
@@ -710,9 +706,7 @@ Enforces workflow gate `wg-record-recurring-vendor-expense-before-ready` at the 
 Emit rule-application telemetry (records the gate fired):
 
 ```bash
-source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
-  emit_incident wg-record-recurring-vendor-expense-before-ready applied \
-  '`/ship` Phase 5.5 blocks PR-ready on an unrecorded recurring vendor expense'
+echo 'SOLEUR_RULE_APPLIED rule=wg-record-recurring-vendor-expense-before-ready note=`/ship` Phase 5.5 blocks PR-ready on an unrecorded recurring vendor expense'
 ```
 
 **Detection.** A recurring-vendor-cost signal fires when the change introduces any of: a new dependency in a `package.json` that the agent judges to be a *paid* vendor (`git diff origin/main...HEAD -- '*package.json' | grep -E '^\+'`), a new vendor credential env var (added `*_API_KEY`/`*_TOKEN`/`*_SECRET` lines in `.env.example` or Doppler-write steps), or a plan-tier string in the PR body. Capture the PR body and **strip fenced code blocks** before grepping — this gate body and the AGENTS rule quote `Pro`/`subscription`/`upgrade`, which inside ``` fences MUST NOT count. The block below is **self-contained**: it captures + strips the body itself rather than depending on the Undeferred Operator-Step Gate's `$PR_BODY_FILE` (defined later in this file — running these blocks in document order would otherwise leave it unset and the grep would silently no-op). Bash ERE has no `(?i)` — use `grep -iE`.
@@ -1026,9 +1020,7 @@ fi
 Emit rule-application telemetry (records that the retroactive-gate-application branch ran — see AGENTS.md `wg-when-fixing-a-workflow-gates-detection`):
 
 ```bash
-source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
-  emit_incident wg-when-fixing-a-workflow-gates-detection applied \
-  "When fixing a workflow gate's detection logic, retr"
+echo "SOLEUR_RULE_APPLIED rule=wg-when-fixing-a-workflow-gates-detection note=When fixing a workflow gate detection logic, retr"
 ```
 
 1. Identify the original missed case from the issue/brainstorm (e.g., "PR #1256 PWA was not assessed for content").
@@ -1117,9 +1109,7 @@ Enforces hard rule `hr-never-label-any-step-as-manual-without` at the `gh pr rea
 Emit rule-application telemetry (records the gate fired):
 
 ```bash
-source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
-  emit_incident wg-block-pr-ready-on-undeferred-operator-steps applied \
-  '`/ship` Phase 5.5 blocks PR-ready when the PR body has operator-action'
+echo 'SOLEUR_RULE_APPLIED rule=wg-block-pr-ready-on-undeferred-operator-steps note=`/ship` Phase 5.5 blocks PR-ready when the PR body has operator-action'
 ```
 
 **Detection.** Capture the PR body once, **strip fenced code blocks** (the gate body and `AC-PM` example snippets in PRs that edit this skill would otherwise self-trip), then run a multi-pattern grep with LIST-ANCHORED patterns. Bash ERE has no `(?i)` modifier — use `grep -iE`.
@@ -1231,9 +1221,7 @@ This is the soak-class counterpart to Phase 7 Step 3.5's `⏳`-marked test-plan 
 Emit rule-application telemetry (records the gate fired):
 
 ```bash
-source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
-  emit_incident wg-pm-class-followthrough-for-operator-dogfood applied \
-  '`/ship` Phase 5.5 blocks PR-ready on an unenrolled soak-gated follow-up'
+echo 'SOLEUR_RULE_APPLIED rule=wg-pm-class-followthrough-for-operator-dogfood note=`/ship` Phase 5.5 blocks PR-ready on an unenrolled soak-gated follow-up'
 ```
 
 **Detection.** Capture the PR body (strip fenced code blocks, fail-closed on an unbalanced fence — reuse the Undeferred Operator-Step Gate's awk), concatenate the linked plan/spec (Shared Plan-File Resolution shape from preflight), then scan the combined text for a soak signal. Bash ERE has no `(?i)` — use `grep -iE`.
@@ -2011,9 +1999,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    Emit rule-application telemetry (records that the post-merge release/deploy verification ran — see AGENTS.md `wg-after-a-pr-merges-to-main-verify-all`):
 
    ```bash
-   source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
-     emit_incident wg-after-a-pr-merges-to-main-verify-all applied \
-     "After a PR merges to main, verify all release/depl"
+   echo 'SOLEUR_RULE_APPLIED rule=wg-after-a-pr-merges-to-main-verify-all note=After a PR merges to main, verify all release/depl'
    ```
 
    **Step 1:** Get the merge commit SHA. Use the PR number from Phase 6:

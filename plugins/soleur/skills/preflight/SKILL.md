@@ -763,10 +763,23 @@ Detection: find the first `discoverability_test` line in the Observability block
 PREFLIGHT_TMP="$(git rev-parse --git-dir)"
 # Form A first (anchored YAML key — strongest signal).
 #
-# The parser lives in a real file so the parity harness can execute it. Resolve via
-# `git rev-parse --show-toplevel`, NOT `${CLAUDE_PLUGIN_ROOT:-plugins/soleur}` —
-# CLAUDE_PLUGIN_ROOT is unset in a plain session, which would silently make the path
-# CWD-relative.
+# The parser lives in a real file so the parity harness can execute it.
+#
+# RATIONALE CORRECTED (#7450). This comment used to argue FOR `git rev-parse
+# --show-toplevel` and AGAINST `${CLAUDE_PLUGIN_ROOT:-plugins/soleur}`, on the grounds
+# that CLAUDE_PLUGIN_ROOT is unset in a plain session and the `:-` default would silently
+# make the path CWD-relative. The PREMISE is true and is ADR-179's own headline finding.
+# The CONCLUSION does not follow: it is true of the `:-plugins/soleur` form it was written
+# against, but NOT of the canonical BARE `${CLAUDE_PLUGIN_ROOT}` form, whose unset
+# expansion is root-anchored rather than CWD-relative — and the loader substitutes the
+# bare token at delivery time, so it is not unset at the point of use (measured, #7450).
+# Resolving via the git root is ADR-179's explicitly-rejected option (d): after a
+# `gh pr checkout` the git root is the REVIEWED PARTY's tree.
+#
+# The two operands in this file are deliberately NOT migrated here (#7450 DC-1) — they are
+# not secret-emission gates, so they are routed to #7453 with a severity flag. Only this
+# falsified argument is corrected, so the next reader does not take it as authority and
+# propagate the rejected form.
 #
 # Hard-fail on a load error. `awk -f <missing>` exits 2 with EMPTY stdout, and
 # `set -uo pipefail` does NOT abort on it (command-substitution rc is discarded), so a

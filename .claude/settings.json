@@ -6,7 +6,6 @@
       "Bash(git add && git commit:*)",
       "Bash(git commit -m:*)",
       "Bash(git commit -F:*)",
-      "Bash(bash $(git rev-parse --show-toplevel)/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh *)",
       "Bash(gh pr merge:*)"
     ],
     "deny": [
@@ -364,6 +363,15 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/skill-context-queries.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/rule-incident-marker-capture.sh"
           }
         ]
       }

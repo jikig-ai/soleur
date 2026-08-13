@@ -45,7 +45,7 @@ with `soleur:flag-set-role <flag> <env> on --org <orgId>`.
 ## Procedure
 
 ```bash
-bash plugins/soleur/skills/flag-create/scripts/create.sh <flag-name> \
+bash "${CLAUDE_PLUGIN_ROOT}/skills/flag-create/scripts/create.sh" <flag-name> \
   [--description "..."] [--dev-on] [--prd-on] [--dry-run]
 ```
 
