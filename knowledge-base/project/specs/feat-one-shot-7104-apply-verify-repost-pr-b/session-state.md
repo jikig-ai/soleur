@@ -54,6 +54,20 @@ in prose only, and #7104 is still OPEN with `closedByPullRequestsReferences: []`
 - ADR ordinal enumerated across all **67** `origin/*` refs: highest is ADR-186 (PR-A's), so PR-B is
   provisionally **ADR-187**, re-derived immediately before merge.
 
+## Components Invoked
+
+`soleur:plan`, `soleur:deepen-plan`; agents `Explore`, `learnings-researcher`,
+`kieran-rails-reviewer`, `architecture-strategist`, `code-simplicity-reviewer`,
+`spec-flow-analyzer`, `cto`, plus a Phase-4.5 strong-model consult and an execution-verified
+refutation pass; gates `lint-guard-contract.py`, `lint-infra-no-human-steps.py`, deepen-plan
+halts 4.5–4.11, kb-citation and rule-ID sweeps.
+
+Disclosed shortfall: the generic "run every discovered agent" fan-out was **not** executed —
+the escalated panel and the strong-model consult had converged (three agents independently
+found the same P0), and the remaining budget went to fork adjudication and execution-verified
+re-checking instead. Recorded in the plan's Enhancement Summary.
+
 ## Next
 
-- `/soleur:deepen-plan` on the shared plan, then `/soleur:work` against Phases 4–10.
+- Plan and deepen are both **complete** (deepen recorded at commit `70e1493dc`).
+- `/soleur:work` against Phases 4–10 is the next step.
