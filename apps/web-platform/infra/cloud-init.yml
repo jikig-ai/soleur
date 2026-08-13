@@ -667,6 +667,7 @@ runcmd:
   - systemctl daemon-reload
   - systemctl enable --now web-private-nic-guard.timer
   - systemctl enable --now web-zot-consumer-probe.timer
+  - systemctl enable --now inngest-consumer-probe.timer
   - systemctl enable --now web-git-data-probe.timer
 
   # Weekly Docker image cleanup -- keeps only images used by running containers.

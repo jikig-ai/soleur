@@ -36,6 +36,7 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 SUITES=(
   plugins/soleur/test/preflight-discoverability-test.test.ts
   plugins/soleur/test/observability-schema-parity.test.ts
+  plugins/soleur/test/fullsuite-merge-gate.test.ts
 )
 
 # QUANTITY floors are a secondary tripwire only. On their own they were defeated
@@ -64,9 +65,9 @@ MANIFEST="plugins/soleur/test/fixtures/check10-test-manifest.txt"
 # same rule. An EMPTY manifest previously passed vacuously as
 # "[ok] all 0 manifest tests still declared", so this floor is what makes the
 # primary identity control non-vacuous.
-MIN_TESTS=122
-MIN_ASSERTIONS=514
-MIN_MANIFEST_LINES=117
+MIN_TESTS=131
+MIN_ASSERTIONS=537
+MIN_MANIFEST_LINES=126
 
 PASS=0
 FAIL=0

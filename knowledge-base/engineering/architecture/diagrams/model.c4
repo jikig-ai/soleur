@@ -530,6 +530,16 @@ model {
   // the registry self-ping cannot see: the private net broken from a CONSUMER's view while the
   // registry thinks its own NIC is fine (#6400 shape). Feeds web_zot_consumer via a systemd timer.
   hetzner -> zotRegistry "CONSUMER serviceability probe (#6438 §1): web-zot-consumer-probe.sh HEADs a known manifest over the private net (authenticated htpasswd Basic auth) and pings the per-host web_zot_consumer heartbeat only on a 200; 404 (empty/detached store) suppresses the ping so absence alarms; 401 is a HARD auth failure, not 'alive'. Distinct from the pull edge above — this proves the store SERVES, not just that the auth gate answers" { technology "curl -u (private-net, plain-HTTP HEAD /v2/<repo>/manifests/<tag>)" }
+  // #7228 — the inngest CONSUMER probe. The relationship this ADR-100 amendment adds, and the
+  // reason it is a SEPARATE edge from `api -> inngest` below: that one is the dispatch path (the
+  // app sending events), while this is the web host asserting, from its OWN vantage, that the
+  // dedicated scheduler SERVES. Nothing in the fleet made that assertion — the only monitor in the
+  // path was a systemd-timer curl to a Better Stack heartbeat, which proves A TIMER FIRED and says
+  // nothing about :8288. That is why one correctly-armed, correctly-scoped, unpaused monitor stayed
+  // green for twelve days while 10.0.1.40 served nothing and every app dispatch failed
+  // ECONNREFUSED. Same shape as the zot probe above, and deliberately so: it runs on the CONSUMER,
+  // so it has no dependency on the dedicated host's bootstrap having run and needs no host replace.
+  hetzner -> inngest "CONSUMER serviceability probe (#7228): inngest-consumer-probe.sh sources inngest-registry-probe.sh and sends its functions-id GQL query to 10.0.1.40:8288/v0/gql over the private net, pinging the inngest_consumer heartbeat ONLY on a non-empty registry; a transport failure, a GraphQL error envelope, an unrecognised shape, and — decisively — a well-formed but EMPTY registry all SUPPRESS the ping so absence alarms. The response SHAPE is the discriminator, not the HTTP code: a GraphQL server answers 200 with an errors envelope, and a host serving an empty registry passes every reachability check while owning nothing. Distinct from the api -> inngest dispatch edge — this proves the scheduler SERVES, not that the app can reach it" { technology "curl POST (private-net, plain-HTTP /v0/gql)" }
   // #6548 — the git-data CONSUMER probe (fail-soft overlay). A bounded SSH connect-and-close to
   // 10.0.1.20:22 proves the private-net path to git transport is reachable; git-data is an OVERLAY
   // (not a hard dependency), so a single transient blip must not page — grace is relaxed and it
