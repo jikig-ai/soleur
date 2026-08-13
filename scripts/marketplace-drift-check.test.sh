@@ -659,4 +659,25 @@ if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   exit 1
 fi
 
+# ---- Second floor: the PREDICATES the structural blocks evaluate --------------------------
+# The floor above counts pass()/fail() calls, and the three embedded python blocks make exactly
+# THREE of them between them while evaluating ~35 predicates. So that floor is blind to the
+# thing it looks like it protects: deleting the entire dispatch-pin block, or the unbound-variable
+# lint, or every alarm-structure check, changes $PASS by at most one and can change it by zero —
+# measured during #7493 review, where removing a whole block left the suite at 58/58 green.
+#
+# WHAT THIS DOES AND DOES NOT PROVE. It is a static count of `problems.append(` sites, so it
+# catches DELETION — the failure mode that actually happens when a block is refactored or a
+# conflict is resolved badly. It does not prove each predicate is reachable or meaningful; a dead
+# append would satisfy it. That is the same guarantee MIN_ASSERTIONS gives, applied to the layer
+# MIN_ASSERTIONS cannot see, and it is stated rather than implied so the next reader does not
+# over-trust it.
+MIN_PREDICATES=35
+predicate_count="$(grep -c 'problems\.append(' "${BASH_SOURCE[0]}")"
+if [[ "$predicate_count" -lt "$MIN_PREDICATES" ]]; then
+  echo "ANTI-VACUITY: the structural blocks declare only $predicate_count predicates, expected at least $MIN_PREDICATES." >&2
+  echo "A python block was deleted or gutted; \$PASS cannot see that, because those blocks report through a single pass() call each." >&2
+  exit 1
+fi
+
 [[ "$FAIL" -eq 0 ]]

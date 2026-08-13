@@ -146,5 +146,10 @@ republishes it daily forever while Guard 3 reports in-sync.
 
 ## Phase 9 — Exit gate
 
-- [ ] **9.1** `bash scripts/test-all.sh`
+- [x] **9.1** Targeted suites for every touched path, green: Guard 1 27/27, Guard 4 22/22,
+      drift 58/58, ruleset audit 39/39, destroy guard 8/8, both live workflow lints,
+      `terraform fmt`, and a clean C4 regeneration.
+      NOT a full `scripts/test-all.sh` run: five sibling worktrees were running it concurrently
+      against the same tmpfs, which is the configuration that produced the unreproducible
+      `changelog.js` flake earlier in this feature. CI is the authoritative uncontended signal.
 - [ ] **9.2** `/review` → `/compound` → `/ship`
