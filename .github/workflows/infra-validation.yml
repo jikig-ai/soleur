@@ -741,6 +741,23 @@ jobs:
       - name: Run inngest-cutover-flip FSM guard (#7068 adopting an unregistered suite)
         run: bash apps/web-platform/infra/inngest-cutover-flip.test.sh
 
+      # (#7228 P0-5) The monotonic re-flush latch — the guard that decides whether a FLUSHALL may
+      # run at all. Separate from the FSM suite above because it owns a different contract: the
+      # FSM suite covers state transitions, this covers the catastrophe guard across them.
+      - name: Run inngest cutover monotonic re-flush latch tests
+        run: bash apps/web-platform/infra/inngest-cutover-latch.test.sh
+
+      # #7228: inngest-boot-phone-home.sh is the SINGLE delivery path for all eight
+      # SOLEUR_INNGEST_BOOT_STAGE markers — the entire diagnosis of a boot failure on a host
+      # with no SSH — and all three of its failure modes used to be `exit 0` with no output.
+      # This suite drives the extracted emitter through each of them plus the happy path, and
+      # holds the tag<->vector.toml allowlist pair from the emitter's side (a tag that is not
+      # allowlisted is silence that reads as health). Registered HERE because
+      # run-registered-suites.sh DERIVES its list from this file: an unregistered suite runs in
+      # no runner at all, locally or in CI, while reading as coverage.
+      - name: Run inngest boot-trace emitter loudness tests
+        run: bash apps/web-platform/infra/inngest-boot-emitter.test.sh
+
       # inngest-server-flip-guard.sh is the live ExecStartPre guard, in documented lockstep with
       # the cutover FSM above (#6553). Registering this makes that ADR-100 lockstep CI-enforced
       # for the first time. DELIBERATE TRIPWIRE: the suite awk-derives the FSM's start_server
@@ -1056,6 +1073,15 @@ jobs:
       - name: Run zot liveness-heartbeat feeder tests (#6537 — private-IP probe, not localhost)
         run: bash apps/web-platform/infra/zot-liveness-heartbeat.test.sh
 
+      # #7440. THIS is the registration point for an infra suite, and getting it wrong ships a
+      # silent orphan: scripts/test-all.sh does not register apps/web-platform/infra/*.test.sh at
+      # all — it registers run-registered-suites.sh as a NESTED suite, and that runner DERIVES its
+      # list from the `run: bash …` steps in THIS file (deliberately, so the runner and CI cannot
+      # fork). A suite added only to test-all.sh would execute in ZERO runners, green and invisible.
+      # Needs only bash + jq + flock + timeout; no terraform, cloud-init, docker, network or root.
+      - name: Run zot container-log shipper tests (#7440 — envelope, cap exemption, cursor durability)
+        run: bash apps/web-platform/infra/zot-log-shipper.test.sh
+
       - name: Run deploy fan-out peer-list parity drift-guard
         run: bash apps/web-platform/infra/web-hosts-fanout-parity.test.sh
 
@@ -1127,6 +1153,13 @@ jobs:
 
       - name: Run inngest-registry-probe.sh tests
         run: bash apps/web-platform/infra/inngest-registry-probe.test.sh
+
+      # (#7228) The web-host consumer probe that asserts 10.0.1.40 actually SERVES its registry.
+      # Registration is not a formality here: run-registered-suites.sh DERIVES its suite list from
+      # THIS FILE (:128), so an unregistered suite runs in no runner, locally or in CI, and reports
+      # nothing while reading as coverage.
+      - name: Run inngest-consumer-probe.sh tests
+        run: bash apps/web-platform/infra/inngest-consumer-probe.test.sh
 
       - name: Run git-lock-chardevice-sweep.sh tests
         run: bash apps/web-platform/infra/git-lock-chardevice-sweep.test.sh

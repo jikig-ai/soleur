@@ -117,15 +117,58 @@ write_files:
       set +e
       stage="$1"; detail="$2"
       tok_file=/run/inngest-bs-logs-token
-      [ -r "$tok_file" ] || exit 0
+      # Test seam (never set in production). Deliberately brace-FREE: this file is rendered by
+      # Terraform templatefile(), where a bare $${...} would have to be escaped and the escaped
+      # form is what a source-reading test would then see. `[ -n "$UNSET" ]` is safe here — this
+      # script runs under `set +e` with no `set -u`.
+      [ -n "$SOLEUR_INNGEST_BS_TOKEN_FILE" ] && tok_file="$SOLEUR_INNGEST_BS_TOKEN_FILE"
+      # --- #7228: this emitter must be able to report its OWN death ------------------------
+      # These three arms were `|| exit 0` and `curl >/dev/null 2>&1` — exit 0, no output, no
+      # trace. This script is the SINGLE delivery path for all eight SOLEUR_INNGEST_BOOT_STAGE
+      # markers, i.e. the entire diagnosis of a boot failure on a host with no SSH, so a silent
+      # failure here does not degrade the trace, it DELETES it. Paired with the tmpfs defect
+      # (every write of this token file lives in `runcmd:`, which cloud-init runs on FIRST BOOT
+      # ONLY, and /run is cleared on reboot), one reboot made the host dark forever and the
+      # silence was indistinguishable from health.
+      #
+      # journald, NOT the POST, because the POST is the thing that failed. The two channels are
+      # independent at the credential level: this script reads the staged token file, while
+      # vector.service resolves BETTERSTACK_LOGS_TOKEN from Doppler at ExecStart — so exactly
+      # the failure that silences this emitter leaves journald -> Vector -> Better Stack up.
+      # The tag is in vector.toml's Source 4 allowlist; without that entry these rows would
+      # never leave the box, which is #6536 rather than a fix.
+      #
+      # SILENT ON SUCCESS: a row per call site per boot on a HEALTHY host would be ~15 rows of
+      # pure duplication (the POST already carries the marker). Only the failure arms emit, so
+      # the channel costs zero in steady state.
+      #
+      # $detail NEVER rides these rows. On the missing-token arm the redaction below has not
+      # run yet, and this tag opens a route from this script's output to Better Stack (the
+      # P1-SEC lesson from the inngest-redis allowlist entry). Stage names are call-site
+      # literals; the reason fields are numeric.
+      if [ ! -r "$tok_file" ]; then
+        logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=token-file-missing path=$tok_file — the Better Stack boot-trace channel is DEAD for this boot and every marker after this one is lost. Expected after any reboot if the per-boot re-stage unit did not run (/run is tmpfs; cloud-init runcmd is first-boot only). #7228"
+        exit 0
+      fi
       bs_token="$(cat "$tok_file" 2>/dev/null)"
-      [ -n "$bs_token" ] || exit 0
+      if [ -z "$bs_token" ]; then
+        logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=token-file-empty path=$tok_file — the token file exists but is EMPTY, so the boot-trace channel is dead. A Doppler fetch that failed after the file was created leaves exactly this state. #7228"
+        exit 0
+      fi
       host="$(hostname 2>/dev/null)"
       ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
       detail="$(printf '%s' "$detail" | sed -E 's#(://[^:@/]+:)[^@]+(@)#\1REDACTED\2#g; s#dp\.[a-z0-9]+\.[A-Za-z0-9_-]{10,}#REDACTED#g; s#[0-9a-f]{32,}#REDACTED#g; s#(signkey-[a-z]+-)[0-9a-f]*#\1REDACTED#g' 2>/dev/null)"
       payload="$(jq -nc --arg m SOLEUR_INNGEST_BOOT_STAGE --arg s "$stage" --arg d "$detail" --arg h "$host" --arg t "$ts" '{message:($m+" stage="+$s+" "+$d), marker:$m, stage:$s, detail:$d, host:$h, dt:$t, shipper:"cloud-init-phone-home"}' 2>/dev/null)"
       [ -n "$payload" ] || payload="{\"message\":\"SOLEUR_INNGEST_BOOT_STAGE stage=$stage\",\"marker\":\"SOLEUR_INNGEST_BOOT_STAGE\",\"stage\":\"$stage\",\"host\":\"$host\"}"
       curl -fsS --max-time 8 -X POST "https://s2457081.eu-fsn-3.betterstackdata.com/" -H "Authorization: Bearer $bs_token" -H "Content-Type: application/json" -d "$payload" >/dev/null 2>&1
+      crc=$?
+      # The third silent arm. `>/dev/null 2>&1` discarded curl's own diagnosis, so an ingest
+      # outage, a revoked token (401) or a clock-skewed TLS failure all presented as a boot
+      # that simply stopped reporting. rc alone is enough to separate them: 6/7 = egress, 22 =
+      # HTTP >=400 under -f, 28 = the 8s timeout, 35/60 = TLS.
+      if [ "$crc" -ne 0 ]; then
+        logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=post-failed rc=$crc — the marker was built and the POST to Better Stack failed, so this stage is missing from the boot trace even though the host reached it. curl rc: 6/7 egress, 22 HTTP>=400 (revoked token), 28 timeout, 35/60 TLS. #7228"
+      fi
       exit 0
     owner: root:root
     permissions: '0755'
@@ -157,6 +200,100 @@ write_files:
       printf '%s' "$data" | sed -E 's#(://[^:@/]+:)[^@]+(@)#\1REDACTED\2#g; s#[0-9a-f]{32,}#REDACTED#g; s#[A-Za-z0-9_+/-]{40,}#REDACTED#g'
     owner: root:root
     permissions: '0755'
+
+  # --- #7228: re-stage the boot-trace token on EVERY boot, not just the first ------------
+  # THE DEFECT. Every write of /run/inngest-bs-logs-token lives inside `runcmd:`. cloud-init
+  # runs runcmd on FIRST BOOT ONLY, and /run is tmpfs — cleared on every reboot. No unit
+  # re-staged it. So after ANY reboot the token was gone, inngest-boot-phone-home.sh took its
+  # `[ -r "$tok_file" ] || exit 0` arm, and the ENTIRE boot-trace channel was permanently and
+  # silently dead. A host that reboots once is dark forever, with no signal that the channel
+  # died. Combined with ~3-day sink retention against a 12-day-old boot, that is the whole
+  # reason #7228's diagnosis was unrecoverable.
+  #
+  # RE-FETCH, NEVER A BAKED RE-STAMP. Writing the templatefile's `betterstack_logs_token`
+  # into a unit file would make the token durable on the ROOT DISK, which is exactly the
+  # property the tmpfs staging exists to avoid, and would pin the value at image-build time so
+  # a rotation could never reach this host. Fetching from Doppler each boot keeps the only
+  # durable copy in Doppler and makes rotation take effect on the next boot.
+  #
+  # This unit is the precondition for the emitter's loudness fix being reachable at all: the
+  # emitter can only report "the channel is dead" if something is expected to have kept it
+  # alive. The two ship together.
+  - path: /usr/local/bin/inngest-bs-token-restage.sh
+    content: |
+      #!/usr/bin/env bash
+      set +e
+      tok=/run/inngest-bs-logs-token
+      # Test seam (never set in production). Brace-free for the same templatefile reason as
+      # inngest-boot-phone-home.sh above.
+      [ -n "$SOLEUR_INNGEST_BS_TOKEN_FILE" ] && tok="$SOLEUR_INNGEST_BS_TOKEN_FILE"
+      # HOME + DOPPLER_CONFIG_DIR come from here; the Doppler CLI aborts without HOME (#6122).
+      set -a; . /etc/default/inngest-doppler 2>/dev/null; set +a
+      # BOUNDED. Type=oneshot disables systemd's start timeout by default, and this unit is
+      # Before=inngest-server.service — so an unbounded stall here (Doppler outage, DNS, an
+      # egress rule landing before the fetch) leaves the unit `activating` forever and systemd
+      # never runs the server's start job. The host boots and never binds :8288, which is the
+      # failure this whole PR exists to diagnose, reintroduced by the fix for it. `Requires=`
+      # reasoning does not cover it: Before= alone blocks, and a HANG is not a FAILURE, so the
+      # script's own `exit 1` path is never reached. Every other host-path Doppler read in this
+      # repo is `timeout`-wrapped; this was the outlier.
+      t="$(timeout 20 doppler secrets get BETTERSTACK_LOGS_TOKEN --project soleur-inngest --config prd --plain 2>/dev/null)"; drc=$?
+      if [ -z "$t" ]; then
+        # LOUD, and non-zero so `systemctl is-active` disagrees too. Nothing Requires= this
+        # unit, so a failure here cannot wedge the boot — it only makes the dead channel
+        # visible instead of silent, which is the entire point of the change.
+        logger -t inngest-bs-token-restage "SOLEUR_INNGEST_BS_TOKEN_RESTAGE_FAILED drc=$drc — could not re-fetch BETTERSTACK_LOGS_TOKEN from Doppler, so /run/inngest-bs-logs-token is EMPTY for this boot and every SOLEUR_INNGEST_BOOT_STAGE marker will be lost. #7228"
+        exit 1
+      fi
+      umask 077
+      printf '%s' "$t" > "$tok"
+      chmod 600 "$tok" 2>/dev/null
+      # Emitted on SUCCESS too, unlike the emitter's failure-only rows. This fires once per
+      # BOOT, not per call site, so the cost is ~1 row per reboot — and without it a healthy
+      # host and a host whose unit never ran produce the identical observation (no rows),
+      # which is the ADR-117 failure this whole PR is about.
+      logger -t inngest-bs-token-restage "SOLEUR_INNGEST_BS_TOKEN_RESTAGED ok=1 path=$tok — boot-trace channel re-armed for this boot. #7228"
+      # AND on the VECTOR-INDEPENDENT channel. The line above rides journald -> Vector, which is
+      # the one path that is dead on a host whose Vector never came up — and this unit IS the
+      # positive control that separates "channel healthy" from "channel never re-armed". Reported
+      # only through Vector, its success and its absence are the same observation on exactly the
+      # host it exists to speak for, which is the ADR-117 shape displaced one unit sideways.
+      # The token has just been staged, so the direct-curl emitter works here by construction.
+      # ~1 POST per boot. `[ -x ]` mirrors inngest-server-probe.sh's guard.
+      if [ -x /usr/local/bin/inngest-boot-phone-home.sh ]; then
+        /usr/local/bin/inngest-boot-phone-home.sh bs-token-restaged "ok=1 boot-trace channel re-armed" || true
+      fi
+      exit 0
+    owner: root:root
+    permissions: '0755'
+
+  - path: /etc/systemd/system/inngest-bs-token-restage.service
+    content: |
+      [Unit]
+      Description=Re-stage the Better Stack boot-trace token into tmpfs /run on every boot (#7228)
+      # Doppler needs the network. Before= inngest-server so a marker emitted around the
+      # server's start has a token to ship with; ordering only, never a Requires=, so a failed
+      # re-stage degrades the trace instead of blocking the thing being traced.
+      After=network-online.target
+      Wants=network-online.target
+      Before=inngest-server.service
+
+      [Service]
+      Type=oneshot
+      # Type=oneshot DISABLES systemd's start timeout by default, and this unit orders itself
+      # Before=inngest-server.service — so without an explicit bound a stalled Doppler read holds
+      # the unit in `activating` forever and the server's start job never runs.
+      TimeoutStartSec=60
+      RemainAfterExit=yes
+      # WITHOUT this systemd derives SYSLOG_IDENTIFIER from the ExecStart basename, which
+      # matches ZERO vector.toml sources and the row never leaves the host — #6536 exactly.
+      SyslogIdentifier=inngest-bs-token-restage
+      ExecStart=/usr/local/bin/inngest-bs-token-restage.sh
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root:root
+    permissions: '0644'
 
 runcmd:
   # --- #6178 boot observability: EARLIEST marker (Doppler-INDEPENDENT) -------------------
@@ -224,7 +361,13 @@ runcmd:
   # Reached only if the volume mount + Doppler CLI install + scoped-token auth all succeeded,
   # so a received `doppler-token-fetched` marker proves the boot got this far AND Doppler auth
   # works; TOTAL marker absence localizes the failure to those earlier stages (or lost egress).
-  # 0600 in tmpfs /run (re-fetched every boot; the phone-home reads it). set +e: fail-open.
+  # 0600 in tmpfs /run; the phone-home reads it. set +e: fail-open.
+  #
+  # CORRECTED (#7228): this comment used to say "re-fetched every boot", which no line of this
+  # file performed. runcmd runs on FIRST BOOT ONLY and /run is tmpfs, so the token was staged
+  # exactly once and lost on the first reboot — the defect that made the boot trace
+  # unrecoverable. It is true NOW, and it is inngest-bs-token-restage.service (enabled below,
+  # written in write_files above) that makes it true, not this block.
   - |
     set +e
     set -a; . /etc/default/inngest-doppler; set +a
@@ -238,6 +381,21 @@ runcmd:
       /usr/local/bin/inngest-boot-phone-home.sh doppler-token-fetched "arch=${inngest_cli_arch} apiprobe=[$api_probe]"
     else
       /usr/local/bin/inngest-boot-phone-home.sh doppler-token-fetch-FAILED "drc=$drc apiprobe=[$api_probe] derr=[$(printf %s "$derr" | head -c 200)]"
+    fi
+
+  # --- #7228: arm the per-boot re-stage so the block above stops being a one-shot ---------
+  # `enable`, not `enable --now`: the token is already staged by the block above on THIS boot,
+  # so starting it here would spend a redundant Doppler round-trip. What matters is that it is
+  # WantedBy=multi-user.target from the SECOND boot onward, which is the boot the old code
+  # never survived. Failure to enable is loud rather than swallowed — a silently unenabled
+  # unit reproduces the exact defect, and would do so invisibly.
+  - |
+    set +e
+    systemctl daemon-reload
+    if systemctl enable inngest-bs-token-restage.service; then
+      /usr/local/bin/inngest-boot-phone-home.sh bs-token-restage-enabled "boot-trace channel now survives reboot"
+    else
+      /usr/local/bin/inngest-boot-phone-home.sh bs-token-restage-enable-FAILED "the boot-trace channel will die on the next reboot (#7228)"
     fi
 
   # --- Bake scoped GHCR read-creds (#6179/#6161) --------------------------------------
@@ -349,7 +507,7 @@ runcmd:
     set -euo pipefail
     names="$(doppler secrets --only-names --json | jq -r 'keys[]' | grep -v '^DOPPLER_' || true)"
     n_total="$(printf '%s\n' "$names" | grep -c . || true)"
-    n_inngest="$(printf '%s\n' "$names" | grep -Ec '^(INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|CUTOVER_FLIP|CONFIG_DIGEST|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' || true)"
+    n_inngest="$(printf '%s\n' "$names" | grep -Ec '^(INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|CUTOVER_FLIP|DIAGNOSTIC_BOOT|CONFIG_DIGEST|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' || true)"
     if [ "$n_total" -ne "$n_inngest" ] || [ "$n_inngest" -lt 5 ]; then
       echo "[inngest] FATAL: boot credential not isolated (sees $n_total non-DOPPLER, $n_inngest INNGEST_) — refusing to bootstrap"; exit 1
     fi
@@ -505,9 +663,20 @@ runcmd:
     /usr/local/bin/inngest-boot-phone-home.sh pre-bootstrap-run
     set +e
     install -m 600 /dev/null /var/log/inngest-bootstrap.log   # 0600 pre-create (secrets in the tail; see inngest-redact.sh)
+    # #7228: DELIVER THE DIAGNOSTIC FLAG. inngest-bootstrap.sh reads INNGEST_DIAGNOSTIC_BOOT from
+    # its ENV to choose the SQLite-only ExecStart, but this runcmd is NOT wrapped in `doppler run`
+    # and the explicit env list below is the only thing it inherits — so the flag never arrived and
+    # the bootstrap always emitted the DURABLE form. The GUARD, by contrast, runs under
+    # `doppler run --config prd` and DOES see it, so requesting a diagnostic boot produced exactly
+    # the "two halves disagree" state the guard is built to refuse: durable unit + diagnostic
+    # request => BLOCK, every time. Diagnostic boot could never have worked.
+    # Read best-effort with a bounded timeout: an unreachable Doppler must degrade to a normal
+    # (durable) boot, never hang the only path that installs the observability stack.
+    DIAG_BOOT="$(timeout 20 doppler secrets get INNGEST_DIAGNOSTIC_BOOT --project soleur-inngest --config prd --plain 2>/dev/null || true)"
     env "INNGEST_CLI_VERSION=$INNGEST_CLI_VERSION" "INNGEST_CLI_SHA256=$INNGEST_CLI_SHA256" \
         "INNGEST_CLI_ARCH=${inngest_cli_arch}" "SDK_URL=${sdk_url}" \
         "DOPPLER_PROJECT=soleur-inngest" \
+        "INNGEST_DIAGNOSTIC_BOOT=$DIAG_BOOT" \
         "VECTOR_CLI_VERSION=$VECTOR_CLI_VERSION" "VECTOR_CLI_SHA256=${vector_sha256}" "VECTOR_CLI_ARCH=${inngest_cli_arch}" \
       bash "$EXTRACT_DIR/inngest-bootstrap.sh" > /var/log/inngest-bootstrap.log 2>&1
     boot_rc=$?

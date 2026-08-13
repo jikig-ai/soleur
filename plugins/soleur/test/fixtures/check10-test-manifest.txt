@@ -32,6 +32,7 @@ D6 the not-allowlisted fixture FAILs without executing
 E1 fold header with no continuations returns empty, not the indicator
 E1 sandbox unavailable => SKIP naming the sandbox, executor never called
 E2 sandbox available => the executor IS reached (E1 is not vacuous)
+EVERY project-agnostic prescription carries the conditional on its own line
 F1 AC1 — Step 10.4 delegates to the extracted gate, not to inline bash
 F1c the runtime normalizes $CMD ONCE, before the gate, the reject and the exec
 F2 AC2 — the sandbox carries the load-bearing binds
@@ -68,6 +69,8 @@ P2 known divergence — CRLF (TS splits on /\\r?\\n/, awk leaves the \\r)
 P2 known divergence — inline quote stripping (TS strips, awk does not)
 P3 every parity fixture is Form-A-only (has `command:`, no fenced block)
 Phase 2 aggregate table includes Discoverability Test Execution row
+Phase 4 states WHY it stays unsharded
+Phase 4's prescription is imperative, not conditional
 R1 block scalar carrying a second command line is rejected (newline is shell-active)
 R2 a folded credentialed command is rejected by the verb allowlist
 R2b the retired denylist's verbs stay rejected, and so do verbs it never named
@@ -89,7 +92,9 @@ Step 10.4 hard-fails on awk rc≠0 instead of falling through to Form B
 Step 10.5 reject set includes newline
 awk interpreter is a known implementation (mawk or gawk)
 classifier returns FAIL with DNS reason when stub executor returns (rc=6, stdout='')
+each rung of the detection ladder ends in an action
 empty Form A block scalar (`command: |` with no continuation) returns empty
+every fenced test-all.sh invocation in Phase 4 is unsharded, in any spelling
 list match (comma-joined)
 list match (or-joined)
 normalizes trailing newline before comparing
@@ -110,8 +115,12 @@ surface 2 (plan-issue-templates.md) — exactly 3 blocks, each set-equal to cano
 surface 2b — discoverability_test sub-fields agree across canonical + all 3 template blocks
 surface 3 (deepen-plan/SKILL.md §4.7) — field enumeration set-equals canonical
 surface 4 (AGENTS.rules.md rule) — count parity + no-SSH invariant (names intentionally absent)
+the default under uncertainty is the full battery, and covers ENFORCEMENT not just existence
 the gate and rejectReason agree on verdict and reason for every shape
 the generated fold-indicator matrix is pinned (manifest sees one entry for all six)
 the parity table is non-vacuous — it contains both accepts and rejects
 the skip predicate is pinned — widening it cannot silently shrink coverage
 triple-SSOT: preflight + deepen-plan literals are byte-identical (whitespace-normalized)
+work/SKILL.md defines the fallback once, with the conditional stated
+§9 prescribes NO unsharded battery run
+§9 prescribes at least one sharded invocation

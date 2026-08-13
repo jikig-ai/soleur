@@ -2042,7 +2042,24 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // `## Observability` block — never a bare `grep -c credentials_required:`,
   // which counts the prose in the plan that INTRODUCED the field (measured: 5
   // line-hits, 0 declarations) and would read as adoption that never happened.
-  const BASELINE_DECLARED_PROBES = 0;
+  //
+  // 0 -> 1 on 2026-08-11 (#7440). THIS IS THE REVIEWABLE DIFF LINE THE COMMENT ABOVE
+  // ASKS FOR — the first genuine adoption of the waiver.
+  //
+  // Declaring plan: `2026-08-11-fix-registry-zot-log-shipping-plan.md`. Confirmed
+  // intentional against this gate's own instruction (delete a stray line, baseline only a
+  // genuine one) on three counts:
+  //   1. PLACEMENT — it is a correctly-indented child of the `discoverability_test:`
+  //      sub-block, not a leftover template comment or a stray top-level line.
+  //   2. TRUTH — the probe it describes
+  //      (`scripts/followthroughs/zot-log-channel-7440.sh`) reads the Better Stack Logs
+  //      ClickHouse warehouse, which needs BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}.
+  //   3. NO SUBSTITUTE — the warehouse exposes no public read surface, and the property
+  //      under test is "a row reached THIS specific source", which is unverifiable from
+  //      outside it. So this is not a probe that could have been written credential-free.
+  // Note the waiver is orthogonal to `hr-observability-as-plan-quality-gate`'s no-SSH
+  // requirement, which that probe satisfies: it is a warehouse query, not a host login.
+  const BASELINE_DECLARED_PROBES = 1;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

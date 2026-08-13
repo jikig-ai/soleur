@@ -76,6 +76,7 @@ for f in ci-deploy.sh ci-deploy-wrapper.sh cat-deploy-state.sh canary-bundle-cla
          cron-egress-postapply-assert.sh cron-egress-enforce-probe.sh \
          orphan-reaper.sh \
          web-private-nic-guard.sh web-zot-consumer-probe.sh web-git-data-probe.sh \
+         inngest-consumer-probe.sh inngest-registry-probe.sh \
          web-probe-envwrite.sh; do
   FAILED_FILE="$f"; install -D -m 0755 -o root -g root "$SEED/$f" "/usr/local/bin/$f"
 done
@@ -89,7 +90,8 @@ for f in container-restart-monitor.service container-restart-monitor.timer \
          orphan-reaper.service orphan-reaper.timer bwrap-userns-sysctl.service \
          web-private-nic-guard.service web-private-nic-guard.timer \
          web-zot-consumer-probe.service web-zot-consumer-probe.timer \
-         web-git-data-probe.service web-git-data-probe.timer; do
+         web-git-data-probe.service web-git-data-probe.timer \
+         inngest-consumer-probe.service inngest-consumer-probe.timer; do
   FAILED_FILE="$f"; install -D -m 0644 -o root -g root "$SEED/$f" "/etc/systemd/system/$f"
 done
 for f in cron-egress-allowlist.txt cron-egress-allowlist-cidr.txt; do

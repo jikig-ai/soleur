@@ -298,13 +298,41 @@ assert "vector side: Source 4 allowlists \"inngest-nftables\"" \
 assert "vector side: Source 4 allowlists \"inngest-server-probe\"" \
   "grep -qE '^[[:space:]]*\"inngest-server-probe\",\$' <<<\"\$HSJ\""
 
-# CF-4 negative: inngest-boot-phone-home.sh is a pure `curl` POST straight to the Better Stack
-# HTTP ingest — it never calls `logger`, so it has NO journald channel and an allowlist entry
-# for it would be a permanently-dead no-op that reads like coverage. Keep it out.
-assert "CF-4: \"inngest-boot-phone-home\" is NOT in the Source 4 allowlist (no journald channel)" \
-  "! grep -qE '^[[:space:]]*\"inngest-boot-phone-home\",\$' <<<\"\$HSJ\""
-assert "CF-4 corroboration: inngest-boot-phone-home.sh never calls logger" \
-  "! grep -qE '^[[:space:]]*logger[[:space:]]' <<<\"\$(awk '/^  - path: \/usr\/local\/bin\/inngest-boot-phone-home\.sh\$/{f=1;next} f&&/^  - path: /{f=0} f' '$INNGEST_CI')\""
+# CF-4 (#7228): INVERTED from a negative pair to a POSITIVE one, in the direction the EMITTER
+# dictates. It used to assert that "inngest-boot-phone-home" was ABSENT from the allowlist, on
+# the explicitly stated condition that the script "never calls logger, so an allowlist entry
+# would be a permanently-dead no-op that reads like coverage". That condition no longer holds:
+# the emitter is the single delivery path for every SOLEUR_INNGEST_BOOT_STAGE marker and all
+# three of its failure modes were `exit 0` with no output, so it could not report that the boot
+# trace had died — the cq-silent-fallback-must-mirror-to-sentry violation #7228 exists to fix.
+# It now emits on its own failure arms, so the entry is live rather than dead.
+#
+# journald is the correct channel BECAUSE the emitter's own POST is what failed, and the two are
+# independent at the credential level: the emitter reads the cloud-init-staged token file, while
+# vector.service resolves BETTERSTACK_LOGS_TOKEN from Doppler at ExecStart. The failure that
+# silences the emitter therefore leaves this channel up.
+#
+# Same lockstep shape as R1-1.8 below: an allowlist entry with no matching emitter is a dead
+# no-op, and an emitter whose tag is not allowlisted is silence that reads as health. Both
+# halves are asserted, and the tag is DERIVED from the emitter on one side rather than restated
+# twice — two hardcoded copies would agree with each other while both disagreeing with reality.
+PHONE_HOME_BODY="$(awk '/^  - path: \/usr\/local\/bin\/inngest-boot-phone-home\.sh$/{f=1;next} f&&/^  - path: /{f=0} f' "$INNGEST_CI")"
+PHONE_HOME_TAG="$(grep -oP '^[[:space:]]*logger -t \K[a-z0-9-]+' <<<"$PHONE_HOME_BODY" | head -1 || true)"
+assert "CF-4a: inngest-boot-phone-home.sh DOES call logger on its failure arms (it must report its own death)" \
+  "[[ -n \"\$PHONE_HOME_TAG\" ]]"
+assert "CF-4b: its tag ('${PHONE_HOME_TAG:-<none>}') IS in the Source 4 allowlist (an unallowlisted tag is silence that reads as health)" \
+  "[[ -n \"\$PHONE_HOME_TAG\" ]] && grep -qE \"^[[:space:]]*\\\"\$PHONE_HOME_TAG\\\",\\\$\" <<<\"\$HSJ\""
+# The half that keeps the channel BOUNDED. Every marker call site would otherwise ship a journald
+# row on a perfectly healthy boot (~15/boot of pure duplication — the POST already carries the
+# marker), converting a failure channel into a standing quota cost. The success path must not
+# reach a logger call: assert every logger invocation in the body sits inside a failure branch.
+assert "CF-4c: the emitter is SILENT ON SUCCESS (every logger call is inside a failure arm, not the main path)" \
+  "[[ \$(grep -cP '^[[:space:]]*logger -t ' <<<\"\$PHONE_HOME_BODY\") -eq \$(grep -cP '^[[:space:]]*logger -t .*reason=' <<<\"\$PHONE_HOME_BODY\") ]]"
+# P1-SEC, applied to the tag this change opens: the new route carries this script's output to
+# Better Stack, and on the missing-token arm the redaction at :125 has not run yet. So $detail
+# must never appear on a logger line.
+assert "CF-4d: no logger row in the emitter carries \$detail (redaction has not run on the early arms)" \
+  "! grep -qP '^[[:space:]]*logger -t .*\\\$detail' <<<\"\$PHONE_HOME_BODY\""
 
 echo ""
 echo "--- P1-SEC: the inngest-redis channel opened above is a CREDENTIAL path ---"
