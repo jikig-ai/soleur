@@ -383,12 +383,148 @@ assert_jq "enabledPlugins: a resolvable enabled plugin is a target hit" "$out" '
 assert_jq "enabledPlugins: it counts toward the summary"                "$out" '.summary.target_enabled_count' "1"
 rm -rf "$r"
 
+# ---------------------------------------------------------------------------
+# REDACTION (`--redact`). Untested before this block, though it is the function
+# that keeps the operator's home path and the names of UNRELATED local
+# repositories out of `measurements.md` and out of bodies posted upstream. Its
+# correctness is a disclosure property, so "it seemed to work when I ran it" is
+# not evidence.
+#
+# THE ORDERING ARM IS THE POINT. `redact_path` tries the project prefix BEFORE
+# the home prefix, because a project normally lives UNDER the home directory and
+# a home-first substitution would consume it — the project branch could then
+# never match. Every other fixture in this suite makes `home` and `project`
+# SIBLINGS under the fixture root, so none of them can exercise that ordering at
+# all: with siblings, either order gives the same answer. This arm nests the
+# project inside the home so the two orders disagree, and pins the right one.
+# ---------------------------------------------------------------------------
+r="$(new_fixture)"
+mkdir -p "$r/home/nested-project/.claude"
+km_github "soleur" "jikig-ai/soleur" true > "$r/home/.claude/plugins/known_marketplaces.json"
+# Point the probe at a project that lives INSIDE the home dir. `--managed` is also
+# aimed under the home root here, deliberately: the DEFAULT managed path is a fixed
+# system location (/etc/claude-code/... or the macOS equivalent) that is byte-identical
+# on every machine and so discloses nothing about the operator — it is correctly left
+# unredacted, and is not one of the four categories redaction covers. Passing a temp
+# path for it would put a string in the output that no production run ever produces,
+# and the whole-output sweep below would then fail on the harness's own artefact
+# rather than on a real disclosure.
+out="$(HOME="$r/home" bash "$PROBE" --json --redact \
+  --home "$r/home" --project "$r/home/nested-project" \
+  --managed "$r/home/.claude/managed-settings.json")"
+assert_jq "redact: a nested project is redacted as <project>, not swallowed by <home>" \
+  "$out" '[.sites[] | select(.site == "project-settings") | .path] | join(",")' \
+  "<project>/.claude/settings.json"
+assert_jq "redact: a home-rooted site still redacts to <home>" \
+  "$out" '[.sites[] | select(.site == "user-settings") | .path] | join(",")' \
+  "<home>/.claude/settings.json"
+# The whole point of redaction: no real path may survive anywhere in the output.
+cases=$((cases + 1))
+if grep -qF -- "$r" <<<"$out"; then
+  fail "redact: the fixture's real absolute path leaked into --redact output"
+else
+  pass "redact: no real absolute path survives anywhere in the --redact output"
+fi
+rm -rf "$r"
+
+# CONTROL: without --redact the real paths MUST be present. Without this, a
+# `redact_path` that returned the empty string for everything would satisfy the
+# leak assertion above and look like perfect redaction.
+r="$(new_fixture)"
+km_github "soleur" "jikig-ai/soleur" true > "$r/home/.claude/plugins/known_marketplaces.json"
+out="$(run_probe "$r")"
+cases=$((cases + 1))
+if grep -qF -- "$r/home/.claude/settings.json" <<<"$out"; then
+  pass "redact control: without --redact the real path IS reported (redaction is doing work)"
+else
+  fail "redact control: the unredacted run does not carry the real path — the leak assertion above proves nothing"
+fi
+rm -rf "$r"
+
+# An UNRELATED local project (outside the probed project) must be reported as a
+# stable placeholder, never by name. This is the second disclosure category and
+# it is separate from the home/project prefixes.
+r="$(new_fixture)"
+km_github "soleur" "jikig-ai/soleur" true > "$r/home/.claude/plugins/known_marketplaces.json"
+installed "soleur@soleur" "/somewhere/else/a-private-client-repo" \
+  > "$r/home/.claude/plugins/installed_plugins.json"
+out="$(HOME="$r/home" bash "$PROBE" --json --redact \
+  --home "$r/home" --project "$r/project" --managed "$r/managed.json")"
+cases=$((cases + 1))
+if grep -qF 'a-private-client-repo' <<<"$out"; then
+  fail "redact: an unrelated repository NAME leaked into --redact output"
+else
+  pass "redact: an unrelated repository name is replaced by a placeholder"
+fi
+assert_jq "redact: the unrelated project gets a stable numbered placeholder" \
+  "$out" '[.installs[] | .projectPath] | join(",")' "<unrelated-local-project-1>"
+rm -rf "$r"
+
+# ---------------------------------------------------------------------------
+# SITE-CHAIN COVERAGE. The probe declares SEVEN precedence sites; before this
+# block only four were ever named in an assertion, so `project-settings-local`,
+# `known-marketplaces` and `installed-plugins` could be deleted from the chain
+# and all 38 assertions still passed — the probe would silently stop reading the
+# sites it exists to read, which is the under-coverage shape it was written to
+# catch in OTHERS.
+#
+# THE EXPECTED LIST IS PINNED, NOT DERIVED, and that is load-bearing. Deriving it
+# from the probe's own `site_json` calls would make a DELETION shrink both sides
+# at once and pass — the mistake this block exists to prevent. So:
+#   * assertion 1 pins the JSON output against a literal list -> a deleted site
+#     is a mismatch;
+#   * assertion 2 pins the probe's own declarations against the same literal ->
+#     an ADDED site fails until someone updates this test deliberately.
+# Neither alone is sufficient; together they make the chain's membership a
+# reviewed decision rather than something the harness absorbs.
+#
+# Cardinality alone would NOT do: a renamed site keeps the count. These compare
+# the joined NAMES, in the probe's own precedence order.
+EXPECTED_SITES="managed-settings,user-settings,user-settings-local,project-settings,project-settings-local,known-marketplaces,installed-plugins"
+
+r="$(new_fixture)"
+out="$(run_probe "$r")"
+assert_jq "sites: every declared site appears in --json, in precedence order" \
+  "$out" '[.sites[].site] | join(",")' "$EXPECTED_SITES"
+
+# Each site must carry the two fields an operator reads to act on it. A site
+# present as a bare name, with no resolved path or read status, is not a reading.
+assert_jq "sites: each one reports a resolved path and a read status" \
+  "$out" '[.sites[] | select((.path // "") != "" and (.status // "") != "")] | length' "7"
+
+# Absent-vs-unreadable must stay distinguishable per site. On a fresh fixture
+# nothing exists, so every site is `absent` — never `unreadable` (which means the
+# probe found something and could not read it) and never silently omitted.
+assert_jq "sites: an untouched machine reports every site absent, none unreadable" \
+  "$out" '[.sites[] | select(.status == "absent")] | length' "7"
+rm -rf "$r"
+
+# The probe's OWN declarations, pinned against the same literal. This is the half
+# that catches an ADDED site: without it, a new precedence site would ship with
+# no row of its own and the assertions above would still pass.
+cases=$((cases + 1))
+declared="$(grep -oE 'site_json "[a-z-]+"' "$PROBE" | sed 's/site_json "//; s/"//' | paste -sd, -)"
+if [[ "$declared" == "$EXPECTED_SITES" ]]; then
+  pass "sites: the probe declares exactly the pinned chain (added/removed sites force a test update)"
+else
+  fail "sites: probe declares '$declared' but this suite pins '$EXPECTED_SITES' — update BOTH deliberately"
+fi
+
 # Minimum-cardinality guard. If the fixture builder or the probe silently
 # stopped producing cases, every loop above would vanish and the suite would
 # exit 0 having asserted nothing.
 # ---------------------------------------------------------------------------
+#
+# NOT ROUTED THROUGH `fail` — see the identical note in plugin-delivery-canary.test.sh.
+# `fail` increments `fails` and the exit status below reads `fails`, so a neutered
+# `fail` would silence every row above AND this floor, leaving the suite to exit 0
+# having asserted nothing. Report and exit DIRECTLY, so the floor survives the exact
+# fault it exists to detect. Proven by scripts/guard-vacuity-floor.test.sh.
 if [[ "$cases" -lt 28 ]]; then
-  fail "vacuity guard: only $cases assertions ran; expected >= 28"
+  printf '\n[FATAL] vacuity guard: only %d assertions ran; expected >= 28.\n' "$cases" >&2
+  printf 'Either assertions were deleted or short-circuited, or the floor needs a deliberate bump.\n' >&2
+  printf 'Total: %d passed, %d failed (%d assertions)\n' "$passes" "$fails" "$cases"
+  exit 1
 fi
 
 printf '\nTotal: %d passed, %d failed (%d assertions)\n' "$passes" "$fails" "$cases"

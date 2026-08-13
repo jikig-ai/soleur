@@ -921,8 +921,20 @@ rm -rf "$r"
 # stopped producing cases, every row above would vanish and this suite would
 # exit 0 having asserted nothing.
 # ---------------------------------------------------------------------------
+#
+# THE FLOOR DOES NOT ROUTE THROUGH `fail`, AND THAT IS THE WHOLE POINT.
+# It used to, and that put the detector inside the blast radius of the fault it
+# detects: `fail` increments `fails`, and the exit status below reads `fails`, so
+# neutering `fail` (redefining it, breaking its arithmetic, losing it to an editing
+# slip) silences every row above AND this floor, and the suite prints a total and
+# exits 0. A floor enforced through the suspect cannot witness the suspect. Report
+# and exit DIRECTLY. Proven by scripts/guard-vacuity-floor.test.sh, which neuters
+# `fail` and asserts the floor still exits non-zero.
 if [[ "$cases" -lt 75 ]]; then
-  fail "vacuity guard: only $cases assertions ran; expected >= 75"
+  printf '\n[FATAL] vacuity guard: only %d assertions ran; expected >= 75.\n' "$cases" >&2
+  printf 'Either assertions were deleted or short-circuited, or the floor needs a deliberate bump.\n' >&2
+  printf 'Total: %d passed, %d failed (%d assertions)\n' "$passes" "$fails" "$cases"
+  exit 1
 fi
 
 printf '\nTotal: %d passed, %d failed (%d assertions)\n' "$passes" "$fails" "$cases"
