@@ -301,6 +301,25 @@ resource "hcloud_server" "inngest" {
     # instant (else 401 → 226/NAMESPACE abort).
     ghcr_read_user  = var.ghcr_read_user
     ghcr_read_token = var.ghcr_read_token
+    # #7462 (ADR-096) — the zot-primary arm for the SAME cold-boot pull, baked for the SAME
+    # reason as the GHCR creds directly above: cold boot must not depend on Doppler answering
+    # at the boot instant. The mechanism DIVERGES from cloud-init.yml's web-host arm, which
+    # reads ZOT_REGISTRY_URL / ZOT_PULL_* from Doppler at boot. That path is structurally
+    # unavailable here — this host's Doppler token is scoped to project `soleur-inngest`, so
+    # those keys are unreadable, and adding them to `soleur-inngest/prd` would break the
+    # fail-closed boot isolation self-check (n_total != n_inngest → FATAL, no boot at all).
+    # Recorded in variables.tf on zot_pull_user and amended into ADR-096; a future reader
+    # comparing the two hosts would otherwise read this as an oversight.
+    #
+    # The endpoint is the EXISTING local, not a new derivation — zot-registry.tf already
+    # computes `local.registry_endpoint = "${local.registry_private_ip}:5000"` in this same
+    # root. Reachability: `hcloud_server_network.inngest` (10.0.1.40) and
+    # `hcloud_server_network.registry` (10.0.1.30) share one subnet; Hetzner firewalls filter
+    # only the PUBLIC interface, and this host's nftables declares an `input` chain only, so
+    # egress to the registry is unrestricted.
+    zot_registry_endpoint = local.registry_endpoint
+    zot_pull_user         = var.zot_pull_user
+    zot_pull_token        = var.zot_pull_token
     # nftables allowlist for the :8288/:8289 control API — web hosts only (SEC-H2).
     web_host_private_ips = local.web_host_private_ips
     # #6178 boot observability: bake the write-only Better Stack Logs ingest token so the

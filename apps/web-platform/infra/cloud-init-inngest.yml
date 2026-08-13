@@ -190,6 +190,11 @@ write_files:
       vals=()
       [ -r /run/inngest-bs-logs-token ] && vals+=("$(cat /run/inngest-bs-logs-token 2>/dev/null)")
       . /etc/default/soleur-ghcr-read 2>/dev/null; vals+=("$GHCR_READ_TOKEN")
+      # #7462: the zot pull credential is baked the same way, and the zot leg's failure tail is
+      # SHIPPED by inngest_ghcr_fallback / oci-pull-ALL-LEGS-FAILED. A registry auth failure is
+      # exactly the case that produces a tail worth shipping, so omitting this value would leak
+      # the credential in clear on the one path that carries it.
+      . /etc/default/soleur-zot-read 2>/dev/null; vals+=("$ZOT_PULL_TOKEN")
       . /etc/default/inngest-doppler 2>/dev/null; vals+=("$DOPPLER_TOKEN")
       if [ -n "$DOPPLER_TOKEN" ]; then
         while IFS= read -r v; do vals+=("$v"); done < <(doppler secrets download --no-file --format json --project soleur-inngest --config prd 2>/dev/null | jq -r 'to_entries[]|select(.key|startswith("DOPPLER_")|not)|.value' 2>/dev/null)
@@ -440,8 +445,43 @@ runcmd:
   - printf 'GHCR_READ_USER=%s\nGHCR_READ_TOKEN=%s\n' '${ghcr_read_user}' '${ghcr_read_token}' > /etc/default/soleur-ghcr-read
   - chmod 600 /etc/default/soleur-ghcr-read
 
+  # --- #7462 (ADR-096): allowlist zot as an insecure (plain-HTTP) registry ---------------
+  # zot serves plain HTTP on the private net behind a deny-all-public firewall, and docker
+  # REFUSES a non-TLS registry unless it is allowlisted here. Without this entry the zot leg
+  # below cannot succeed even with correct credentials, so the "zot-primary" arm would fall
+  # back on every single boot and the change would be inert by accident rather than by design.
+  # Integrity rests on the @sha256 digest pin, not on TLS (ADR-096 Phase-0 spike) — the pin is
+  # content-addressing, so it holds regardless of which registry served the bytes or how.
+  #
+  # Mirrors the equivalent block in cloud-init.yml, with one difference that is load-bearing:
+  # the web host installs docker-ce inside runcmd and writes daemon.json in the same sequence,
+  # whereas this host installs `docker.io` via cloud-config `packages:` — which runs BEFORE
+  # runcmd and STARTS the daemon. So `systemctl enable --now docker` below is a no-op against
+  # an already-running daemon, and without the explicit restart the file would sit on disk
+  # unread for the entire boot.
+  #
+  # Gated on a non-empty endpoint: writing `"insecure-registries": [""]` would be a worse boot
+  # than today's, and "never worse than today" is the property this whole arm is held to.
+  - |
+    set +e
+    ZOT_EP='${zot_registry_endpoint}'
+    if [ -n "$ZOT_EP" ]; then
+      mkdir -p /etc/docker
+      printf '{\n  "insecure-registries": ["%s"]\n}\n' "$ZOT_EP" > /etc/docker/daemon.json
+      chmod 644 /etc/docker/daemon.json
+      echo "[inngest] zot allowlisted as an insecure registry: $ZOT_EP"
+    else
+      echo "[inngest] no zot endpoint baked — GHCR-only pull path (unchanged)"
+    fi
+
   # Ensure docker is up before the login + container extract.
   - systemctl enable --now docker
+  # Re-read /etc/docker/daemon.json. `enable --now` above cannot do it: the docker.io package
+  # started the daemon during `packages:`, so the unit is already active and `--now` returns
+  # without reloading config. Unconditional — a restart with no daemon.json written is a
+  # harmless no-op, and making it conditional would put a second copy of the endpoint test
+  # between the write and the thing that reads it.
+  - systemctl restart docker
 
   # Install the nftables scoping now + on every boot (a reboot clears nftables).
   - systemctl enable --now inngest-nftables.service
@@ -459,6 +499,47 @@ runcmd:
       fi
     else
       echo "[inngest] WARN: baked GHCR creds empty — bootstrap pull may 401"; /usr/local/bin/inngest-boot-phone-home.sh ghcr-creds-EMPTY
+    fi
+
+  # --- #7462 (ADR-096): bake the scoped zot PULL creds ----------------------------------
+  # Same 0600 protection and the same trust boundary as /etc/default/soleur-ghcr-read above:
+  # both are retrievable via the Hetzner metadata API by anyone with host access, and this one
+  # is read-only against a private-net registry behind a deny-all-public firewall. The value
+  # list in inngest-redact.sh sources THIS file, so the token is scrubbed from every log tail
+  # the phone-home ships.
+  #
+  # The endpoint rides the same file rather than being re-interpolated at each use site: two
+  # copies of a template var are two things that can disagree, and the pull path already has
+  # enough of those.
+  - printf 'ZOT_REGISTRY_ENDPOINT=%s\nZOT_PULL_USER=%s\nZOT_PULL_TOKEN=%s\n' '${zot_registry_endpoint}' '${zot_pull_user}' '${zot_pull_token}' > /etc/default/soleur-zot-read
+  - chmod 600 /etc/default/soleur-zot-read
+
+  # zot login from the baked creds. PLACEMENT IS LOAD-BEARING: the bootstrap image ships its
+  # own zot_login, but that runs AFTER the image has been pulled — it cannot authorize the pull
+  # that fetches the image containing it. The same ordering argument the web host's cloud-init
+  # records at "bootstrap's zot_login is too late".
+  #
+  # Fail-open in every arm. A zot login failure must degrade to the GHCR leg, never abort the
+  # boot: this host's GHCR-only path is what is broken today, and a change that can brick the
+  # boot on a registry hiccup would be strictly worse than the state it replaces. The three
+  # stages mirror the GHCR trio one-for-one so a boot trace reads the same on both legs.
+  # Every runcmd `- |` item is its OWN shell, so ZOT_EP is re-derived here from the baked file
+  # rather than inherited from the daemon.json item above. The two sites read the SAME source
+  # (the template var, via that file), so they cannot disagree.
+  - |
+    set +e
+    . /etc/default/soleur-zot-read 2>/dev/null || true
+    ZOT_EP="$ZOT_REGISTRY_ENDPOINT"
+    if [ -n "$ZOT_EP" ]; then
+      if [ -n "$ZOT_PULL_USER" ] && [ -n "$ZOT_PULL_TOKEN" ]; then
+        if printf '%s' "$ZOT_PULL_TOKEN" | docker login "$ZOT_EP" -u "$ZOT_PULL_USER" --password-stdin >/dev/null 2>&1; then
+          echo "[inngest] zot login ok"; /usr/local/bin/inngest-boot-phone-home.sh zot-login-ok "$ZOT_EP"
+        else
+          echo "[inngest] zot login failed (bootstrap pull falls back to GHCR)"; /usr/local/bin/inngest-boot-phone-home.sh zot-login-FAILED "$ZOT_EP"
+        fi
+      else
+        echo "[inngest] WARN: baked zot creds empty — bootstrap pull falls back to GHCR"; /usr/local/bin/inngest-boot-phone-home.sh zot-creds-EMPTY "$ZOT_EP"
+      fi
     fi
 
   # --- Fail-closed boot isolation self-check (mirrors registry) ------------------------
@@ -578,6 +659,63 @@ runcmd:
     # v1.1.25 tag pinned to v1.1.24's bytes — silently, since the drift guard only reads tags.
     IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.24@sha256:6cdaa63d1496642e681898a831234b712f75d3b09bd0844bcabec3de74b0a0f8
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
+    # --- #7462 (ADR-096): resolve the effective ref ONCE, zot-primary ---------------------
+    # THE DEFECT THIS CLOSES. Every other pull site in the fleet was flipped to prefer the
+    # self-hosted zot registry in the ADR-096 Phase-3 dark launch; this one was missed. ADR-096
+    # named this exact file as the gap and predicted this exact failure — that the GHCR read
+    # credential would stop working before the Phase-5 task that was meant to retire it
+    # deliberately. It did: the pull 401s six seconds into every boot, inngest-bootstrap.sh
+    # ships INSIDE the image so nothing installs, nothing binds :8288, and every app-originated
+    # dispatch fails.
+    #
+    # ONE resolution, then every consumer follows $IREF — the pull, the `docker create` extract,
+    # the `docker inspect` that sources INNGEST_CLI_VERSION/SHA256, and the
+    # /etc/default/soleur-inngest-image record. A second consumer re-deriving the GHCR literal
+    # is precisely how a "zot-primary" change ships while still pulling from GHCR, so the
+    # bootstrap suite counts the surviving GHCR literals and asserts all four consumers.
+    #
+    # THE DIGEST IS CARRIED UNCHANGED ONTO THE ZOT REF. `crane copy` is registry-to-registry
+    # and preserves the manifest bytes, so a single @sha256 resolves on BOTH registries — that
+    # is what makes the mirror pinnable at all. It is also what keeps this arm from weakening
+    # the control the GHCR leg already had: what follows is `docker pull` -> `docker create`/`cp`
+    # -> `bash inngest-bootstrap.sh` EXECUTED AS ROOT, and the pin is the only integrity control
+    # on that payload. A mutable-tag zot ref would hand its identity to whoever can re-point the
+    # tag, over plain HTTP. Verified live before this landed: build-inngest-bootstrap-image.yml
+    # run 31681702541 (mirror_only) reported ghcr and zot digests IDENTICAL to the pin above,
+    # and `crane validate --remote` PASSed, which fetches every blob rather than HEADing the
+    # manifest — a reclaimed layer yields green digest parity and `blob unknown` on this pull.
+    #
+    # DARK-SAFE BY CONSTRUCTION. An empty endpoint skips the leg entirely and the path below is
+    # byte-for-byte today's. A configured-but-missing zot costs one failed pull and falls back.
+    # Neither is a worse boot than the current GHCR-only one.
+    ZOT_LEG=unconfigured
+    . /etc/default/soleur-zot-read 2>/dev/null || true
+    ZOT_EP="$ZOT_REGISTRY_ENDPOINT"
+    if [ -n "$ZOT_EP" ]; then
+      ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.24@sha256:6cdaa63d1496642e681898a831234b712f75d3b09bd0844bcabec3de74b0a0f8"
+      /usr/local/bin/inngest-boot-phone-home.sh pre-zot-pull "$ZIREF"
+      install -m 600 /dev/null /var/log/inngest-zot-pull.log
+      set +e
+      docker pull "$ZIREF" > /var/log/inngest-zot-pull.log 2>&1
+      zot_rc=$?
+      set -e
+      zot_tail="$(tail -n 4 /var/log/inngest-zot-pull.log 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' || true)"
+      if [ "$zot_rc" -eq 0 ]; then
+        IREF="$ZIREF"
+        ZOT_LEG=ok
+        /usr/local/bin/inngest-boot-phone-home.sh inngest_zot "bootstrap image served by zot ep=$ZOT_EP"
+      else
+        # The fallback-rate signal. This host has NO soleur-boot-emit (that emitter ships with
+        # the WEB host's host-script bundle), and inngest-boot-phone-home.sh takes no severity
+        # argument — the STAGE NAME is the whole signal. The name is deliberately identical to
+        # the web host's so one query covers both. Note the CHANNELS differ: the web host's
+        # marker reaches Sentry, this one reaches Better Stack only, so the Sentry-based
+        # zot-soak fallback query does NOT count this host. Queryable via
+        # `betterstack-query.sh --grep inngest_ghcr_fallback`.
+        ZOT_LEG="failed rc=$zot_rc tail=$zot_tail"
+        /usr/local/bin/inngest-boot-phone-home.sh inngest_ghcr_fallback "zot miss ep=$ZOT_EP rc=$zot_rc tail=$zot_tail"
+      fi
+    fi
     # #6178 boot observability: bracket the OCI pull so a pull hang/401 self-reports the STAGE
     # (pre-oci-pull with no oci-pull-rc-* = hung; oci-pull-rc-N!=0 = failed, with masked tail).
     /usr/local/bin/inngest-boot-phone-home.sh pre-oci-pull "$IREF"
@@ -588,7 +726,24 @@ runcmd:
     set -e
     pull_tail="$(tail -n 8 /var/log/inngest-oci-pull.log 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' || true)"
     /usr/local/bin/inngest-boot-phone-home.sh oci-pull-rc-$pull_rc "$pull_tail"
-    [ "$pull_rc" -eq 0 ] || { echo "FATAL: OCI pull failed rc=$pull_rc" >&2; exit "$pull_rc"; }
+    # --- #7462: a total pull failure names WHICH legs were tried and why each failed --------
+    # #7462's entire diagnosis rode on `oci-pull-rc-1` happening to carry the 401 in its tail —
+    # the marker was never designed to say "both registries were tried and here is each one's
+    # reason", it just happened to be the last thing the boot said before going dark. That is a
+    # property to state, not to inherit by luck. Each leg reports its own outcome, including
+    # the two cases that are NOT "both failed": an unconfigured zot, and a zot that resolved
+    # and was primary (where GHCR was never attempted at all and saying otherwise would send
+    # the next reader to the wrong registry).
+    if [ "$pull_rc" -ne 0 ]; then
+      if [ "$ZOT_LEG" = ok ]; then
+        ghcr_leg="not-attempted (zot resolved and was primary; the pull on the zot ref failed rc=$pull_rc tail=$pull_tail)"
+      else
+        ghcr_leg="failed rc=$pull_rc tail=$pull_tail"
+      fi
+      /usr/local/bin/inngest-boot-phone-home.sh oci-pull-ALL-LEGS-FAILED "zot=[$ZOT_LEG] ghcr=[$ghcr_leg]"
+      echo "FATAL: OCI pull failed rc=$pull_rc" >&2
+      exit "$pull_rc"
+    fi
     # #6617a: record WHICH image produced this host, for the liveness probe's image_ref field.
     # Named image_REF on the probe side because this writes the FULL $IREF — registry, repo,
     # tag AND digest — not a bare sha256. A consumer keying on `image_sha=sha256:` never matched.
