@@ -24,6 +24,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLOUD_INIT="$SCRIPT_DIR/cloud-init.yml"
 
+# NO `producer | grep -q` ANYWHERE IN THIS FILE. Under `set -o pipefail` (above) `grep -q`
+# closes the pipe on its FIRST match, the producer takes SIGPIPE (141), and pipefail fails the
+# pipeline EVEN THOUGH GREP MATCHED — a false NEGATIVE that fires only when the match is early
+# enough for the producer to still be writing, so it presents as an unreproducible flake. Four
+# sites carried it; one surfaced as the mutation battery's sandbox baseline going RED while the
+# SAME assertion passed in the worktree seconds earlier. Use `grep -cE … -gt 0` (reads all
+# input) or a herestring — never `| grep -q`.
 PASS=0
 FAIL=0
 TOTAL=0
@@ -78,7 +85,7 @@ echo "--- AC1: trap still calls cleanup (composite form OK, #6090) ---"
 # here is that the EXIT trap STILL runs cleanup (no orphaned extract container) — assert
 # the composite-or-plain shape, not the exact 'trap cleanup EXIT' literal.
 assert "Inngest block EXIT trap still calls cleanup" \
-  "awk '/Bootstrap Inngest server on first boot/,/^[^[:space:]]/' '$CLOUD_INIT' | grep -qE 'trap .*cleanup.* EXIT'"
+  "[ \"\$(awk '/Bootstrap Inngest server on first boot/,/^[^[:space:]]/' '$CLOUD_INIT' | grep -cE 'trap .*cleanup.* EXIT' || true)\" -gt 0 ]"
 
 # --- AC2: drift comment ---
 echo ""
@@ -196,7 +203,7 @@ assert "INNGEST_ENABLE alias pins exact enable argv"      "grep -qE '^Cmnd_Alias
 assert "INNGEST_ENABLE granted NOPASSWD to deploy"        "grep -qE '^deploy ALL=\\(root\\) NOPASSWD: INNGEST_ENABLE\$' '$SUDOERS_SRC'"
 # sudo-rs rejects wildcards — the new alias lines must contain no literal '*'.
 QE_LINES=$(grep -E '^Cmnd_Alias INNGEST_(QUIESCE|ENABLE) = ' "$SUDOERS_SRC" || true)
-assert "new quiesce/enable alias argv are wildcard-free" "[[ -n \"\$QE_LINES\" ]] && ! printf '%s' \"\$QE_LINES\" | grep -qF '*'"
+assert "new quiesce/enable alias argv are wildcard-free" "[[ -n \"\$QE_LINES\" ]] && ! grep -qF '*' <<<\"\$QE_LINES\""
 
 # --- AC6: pin matches latest published vinngest-v* git tag (#4675 drift-guard) ---
 # Durable mechanical replacement for the manual "bump the cloud-init pin on each
@@ -317,7 +324,7 @@ assert "endif-directive follows the block's trap disarm"    "(( ENDIF_LINE > TRA
 # ("condition must be of type bool"). `type = bool` pins the variable-boundary contract;
 # the render leg's "false" (string) case exercises the coercion end-to-end.
 assert "web_colocate_inngest declared type = bool (load-bearing string→bool coercion)" \
-  "awk '/variable \"web_colocate_inngest\"/,/^}/' '$VARS_TF' | grep -qE 'type[[:space:]]*=[[:space:]]*bool'"
+  "[ \"\$(awk '/variable \"web_colocate_inngest\"/,/^}/' '$VARS_TF' | grep -cE 'type[[:space:]]*=[[:space:]]*bool' || true)\" -gt 0 ]"
 
 # --- AC7: web_colocate_inngest gate — terraform render authority ---
 # The single behavioral authority for the gate's effect. A real `terraform templatefile`
@@ -581,7 +588,14 @@ assert "cloud-init-registry.yml's cosign mentions are about sha256-* signature-t
 # The claim under guard. The sentence WRAPS across comment lines, so a line-based grep
 # matches nothing and passes vacuously against the false text — measured. Flatten the comment
 # prose to one line first, then assert on the joined sentence.
-INNGEST_CI_PROSE="$(grep -E '^[[:space:]]*#' "$INNGEST_CI_YML" | sed -E 's/^[[:space:]]*#[[:space:]]?//' | tr '\n' ' ' | tr -s ' ')"
+# `|| true` INSIDE the substitution, mirroring the convention AC6's PIN extraction already
+# uses. Without it a zero-match grep exits 1, pipefail promotes the pipeline, the assignment
+# fails and `set -e` kills the WHOLE script here — before the anti-vacuity accounting below and
+# before the results summary, so the run exits 1 having printed no `=== Results ===` line and
+# no failing assertion at all. Measured while mutation-proving Guard 1: pointing this file at
+# an empty source produced exactly that silent abort, which is strictly worse than a named
+# FAIL because it destroys the diagnosis rather than reporting it.
+INNGEST_CI_PROSE="$(grep -E '^[[:space:]]*#' "$INNGEST_CI_YML" | sed -E 's/^[[:space:]]*#[[:space:]]?//' | tr '\n' ' ' | tr -s ' ' || true)"
 assert "harness non-vacuity: the flattened prose carries the cosign correction sentence at all" \
   "grep -qF 'verification exists only in' <<<\"\$INNGEST_CI_PROSE\""
 # Asserted on the false CONJUNCTION rather than on proximity: the corrected sentence still
@@ -594,6 +608,247 @@ assert "the cosign correction names ci-deploy.sh as the sole real verification p
   "grep -qF 'verification exists only in ci-deploy.sh' <<<\"\$INNGEST_CI_PROSE\""
 assert "the cosign correction states registry's role is RETAINING the sha256-* tags verify depends on" \
   "grep -qF 'cloud-init-registry.yml only retains the sha256-* signature tags' <<<\"\$INNGEST_CI_PROSE\""
+
+# =========================================================================================
+# GUARD 1 (#7462) — zot-primary bootstrap pull arm on the DEDICATED inngest host
+# =========================================================================================
+# PROPERTY. The dedicated inngest host resolves its bootstrap image from zot whenever zot is
+# configured and serving that digest; every registry outcome is reported off-box; and no
+# registry outcome yields a boot worse than today's GHCR-only path.
+#
+# ASSEMBLY. The chokepoint is the single ref-resolution region that computes the effective
+# ref before `pre-oci-pull`. Every consumer of the image ref DOWNSTREAM of that point must
+# read the resolved value rather than re-derive it. The plan named three consumers (pull,
+# extract container, /etc/default record); the file carries a FOURTH — `docker inspect
+# "$IREF"`, which sources INNGEST_CLI_VERSION/SHA256 from the image env. The guard quantifies
+# over all FOUR, because a second consumer re-deriving the GHCR literal is precisely how a
+# "zot-primary" change ships while still pulling from GHCR. Enumerating the CLASS (every site
+# that consumes the ref) rather than the plan's example list is the point.
+#
+# WHY THE COUNT AND THE SET ARE BOTH ASSERTED. `GHCR_LITERAL_COUNT == 1` is blind to a rename
+# (a consumer switched from "$IREF" to "$SOMETHING_ELSE" keeps the count at 1), so the four
+# per-consumer greps assert the SET. Neither alone is sufficient.
+#
+# ALL GREPS RUN OVER A COMMENT-STRIPPED COPY. This file's prose names `ghcr.io/jikig-ai/
+# soleur-inngest-bootstrap`, `insecure-registries` and every stage literal below, so a
+# body-grep over the raw source is satisfied by the explanation of the thing rather than the
+# thing (cq-assert-anchor-not-bare-token). Line numbers survive the strip (`sed s/#.*$//`
+# rewrites lines in place, never deletes them), so the ORDERING assertions below are computed
+# against real file offsets.
+echo ""
+ZG_TOTAL_BEFORE="$TOTAL"
+echo "--- Guard 1 (#7462): zot-primary bootstrap pull arm (dedicated host) ---"
+
+DED_CODE_FILE="$(mktemp -t inngest-ci-code-XXXXXX.yml)"
+DED_BLOCK_FILE="$(mktemp -t inngest-ci-block-XXXXXX.sh)"
+# The existing EXIT trap already removes SNIPPET_FILE; extend it rather than replace it.
+trap 'rm -f "$SNIPPET_FILE" "$DED_CODE_FILE" "$DED_BLOCK_FILE"' EXIT
+sed -E 's/^[[:space:]]*#.*$//' "$INNGEST_CI_YML" > "$DED_CODE_FILE"
+
+# The bootstrap runcmd block, isolated. Used ONLY for the anti-vacuity floor: every other
+# assertion runs against the whole comment-stripped file, because the zot LOGIN and the
+# docker-daemon allowlist deliberately live in earlier runcmd items (they must precede the
+# pull, which is the whole point of Phase 5).
+awk '
+  /^  # --- Extract \+ run inngest-bootstrap\.sh from the baked OCI image/ { found = 1 }
+  found && /^  - \|/ && !in_block { in_block = 1; next }
+  in_block && /^  - / { exit }
+  in_block && /^[^[:space:]]/ { exit }
+  in_block { print }
+' "$INNGEST_CI_YML" > "$DED_BLOCK_FILE"
+
+# --- Row 6 (anti-vacuity): the guard must be unable to certify zero input -----------------
+# A guard whose extraction silently yields nothing reports a clean PASS on every assertion
+# below (`grep -q` over an empty file is simply false, and a `! grep -q` NEGATIVE passes).
+# So the input is accounted for explicitly, and the floor is a LINE COUNT rather than
+# `-s`: a one-line extract is non-empty and still proves nothing.
+ZG_FILES_CHECKED=0
+for _zf in "$INNGEST_CI_YML" "$DED_CODE_FILE" "$DED_BLOCK_FILE"; do
+  [[ -s "$_zf" ]] && ZG_FILES_CHECKED=$((ZG_FILES_CHECKED + 1))
+done
+ZG_BLOCK_LINES=$(wc -l < "$DED_BLOCK_FILE")
+assert "Row6 anti-vacuity: the guard examined all 3 of its inputs (a guard over zero files certifies nothing)" \
+  "(( ZG_FILES_CHECKED == 3 ))"
+assert "Row6 anti-vacuity: the bootstrap block extraction is substantive (>=40 lines, found $ZG_BLOCK_LINES)" \
+  "(( ZG_BLOCK_LINES >= 40 ))"
+assert "Row6 anti-vacuity: the comment strip preserved line numbering (code file line count == source line count)" \
+  "(( \$(wc -l < '$DED_CODE_FILE') == \$(wc -l < '$INNGEST_CI_YML') ))"
+
+# --- Offsets the ordering rows are computed from ------------------------------------------
+# `|| true` on every extraction: under `set -euo pipefail` a zero-match grep would abort the
+# whole script here, before the results summary. Let an empty offset fall through to a
+# clean FAIL (the same convention AC6 above already uses for PIN).
+zg_line() { grep -nE "$1" "$DED_CODE_FILE" | head -1 | cut -d: -f1 || true; }
+L_IREF_SEED=$(zg_line '^[[:space:]]*IREF=ghcr\.io/jikig-ai/soleur-inngest-bootstrap:')
+L_ZLOGIN=$(zg_line 'docker login "\$ZOT_EP"')
+L_ZPULL=$(zg_line 'docker pull "\$ZIREF"')
+L_ZIREF=$(zg_line '^[[:space:]]*ZIREF=')
+L_PRE=$(zg_line 'inngest-boot-phone-home\.sh pre-oci-pull')
+L_IPULL=$(zg_line 'docker pull "\$IREF"')
+L_DAEMON=$(zg_line 'insecure-registries')
+# Anchored on the RESTART ITSELF, not on the runcmd-item form it happened to have. The restart
+# was a bare `- systemctl restart docker` item until it was wrapped to report its own failure
+# (it had no off-box channel: `cloud-init` is not in vector.toml's Source-4 allowlist and Vector
+# ships inside the image this boot has not pulled). A `^\s*- ` anchor pinned the YAML shape
+# rather than the command, so making the restart OBSERVABLE reddened the guard — the anchor
+# tracked the wrong thing. `^\s*(- )?(if )?systemctl restart docker` accepts either form and
+# still cannot be satisfied by a comment.
+L_DOCKER_RESTART=$(zg_line '^[[:space:]]*(- )?(if )?systemctl restart docker')
+
+assert "Row1 offsets: the GHCR seed assignment was found" "[[ -n '$L_IREF_SEED' ]]"
+assert "Row1 offsets: the zot ref assignment (ZIREF=) was found" "[[ -n '$L_ZIREF' ]]"
+assert "Row1 offsets: the zot leg's docker pull was found" "[[ -n '$L_ZPULL' ]]"
+assert "Row1 offsets: the pre-oci-pull emit was found" "[[ -n '$L_PRE' ]]"
+assert "Row1 offsets: the effective docker pull \"\\\$IREF\" was found" "[[ -n '$L_IPULL' ]]"
+
+# --- Row 1: zot is PRIMARY — the GHCR ref must not be attempted first ----------------------
+# The seed assignment must precede the zot leg (so the fallback is a single atomic
+# reassignment, never a re-derivation), the zot pull must precede `pre-oci-pull` (the plan's
+# "resolve the effective ref ONCE, before pre-oci-pull"), and the effective pull must follow
+# the resolution. Swapping the two legs inverts all three.
+# EVERY arithmetic comparison is guarded on BOTH operands being non-empty. bash arithmetic
+# coerces an empty string to 0, so a bare `(( L_ZPULL < L_PRE ))` with an unmatched L_ZPULL
+# evaluates `0 < 583` and reports PASS — a guard that certifies an ordering between a line
+# that exists and one that does not. Measured on this very suite's first RED run: two
+# ordering rows passed while the code they order had not been written yet.
+assert "Row1: the GHCR ref is SEEDED before the zot leg runs (atomic fallback, not a re-derivation)" \
+  "[[ -n '$L_IREF_SEED' && -n '$L_ZPULL' ]] && (( L_IREF_SEED < L_ZPULL ))"
+assert "Row1: the zot leg is attempted BEFORE pre-oci-pull (zot-primary, not GHCR-first)" \
+  "[[ -n '$L_ZPULL' && -n '$L_PRE' ]] && (( L_ZPULL < L_PRE ))"
+assert "Row1: the effective pull runs AFTER the resolution region" \
+  "[[ -n '$L_PRE' && -n '$L_IPULL' ]] && (( L_PRE < L_IPULL ))"
+assert "Row1: the zot ref is ASSIGNED before it is pulled" \
+  "[[ -n '$L_ZIREF' && -n '$L_ZPULL' ]] && (( L_ZIREF < L_ZPULL ))"
+
+# --- Row 2: the digest pin governs BOTH legs ----------------------------------------------
+# `crane copy` is digest-preserving, so the SAME @sha256 resolves on both registries. A
+# mutable-tag zot ref would hand a root-executed shell script's identity back to whoever can
+# re-point the tag — the exact control the GHCR leg's pin exists to provide.
+ZG_GHCR_REF=$(grep -oE 'ghcr\.io/jikig-ai/soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}' "$DED_CODE_FILE" | head -1 || true)
+ZG_GHCR_DIGEST="${ZG_GHCR_REF##*@}"
+ZG_ZOT_LINE=$(grep -E '^[[:space:]]*ZIREF=' "$DED_CODE_FILE" | head -1 || true)
+ZG_ZOT_DIGEST=$(grep -oE 'sha256:[0-9a-f]{64}' <<<"$ZG_ZOT_LINE" | head -1 || true)
+assert "Row2: the GHCR leg carries a full sha256 digest pin" \
+  "[[ '$ZG_GHCR_DIGEST' =~ ^sha256:[0-9a-f]{64}$ ]]"
+assert "Row2: the zot leg carries a full sha256 digest pin (no mutable-tag form)" \
+  "[[ '$ZG_ZOT_DIGEST' =~ ^sha256:[0-9a-f]{64}$ ]]"
+assert "Row2: both legs pin the SAME digest (crane copy is digest-preserving)" \
+  "[[ -n '$ZG_ZOT_DIGEST' && '$ZG_ZOT_DIGEST' == '$ZG_GHCR_DIGEST' ]]"
+
+# --- Row 3: every registry outcome is reported off-box ------------------------------------
+# This host has NO `soleur-boot-emit` (grep: zero occurrences) — that emitter is delivered by
+# the WEB host's host-script bundle. Its only channel is inngest-boot-phone-home.sh, whose
+# signature is `<stage> [detail]` with NO severity argument, so the STAGE NAME carries the
+# whole signal. The names match the web host's (`inngest_zot`, `inngest_ghcr_fallback`) — but
+# that does NOT mean one query covers both, and an earlier draft of this comment said it did:
+# `soleur-boot-emit` POSTs to Sentry only, this emitter to Better Stack only, so no single
+# query in either system sees both hosts.
+assert "Row3: a zot HIT emits inngest_zot" \
+  "grep -qF 'inngest-boot-phone-home.sh inngest_zot' '$DED_CODE_FILE'"
+assert "Row3: the zot->GHCR flip emits inngest_ghcr_fallback (the fallback-rate signal)" \
+  "grep -qF 'inngest-boot-phone-home.sh inngest_ghcr_fallback' '$DED_CODE_FILE'"
+L_ZOTHIT=$(zg_line 'inngest-boot-phone-home\.sh inngest_zot')
+L_FALLBACK=$(zg_line 'inngest-boot-phone-home\.sh inngest_ghcr_fallback')
+assert "Row3: both registry-outcome emits sit INSIDE the resolution region (after the zot pull, before pre-oci-pull)" \
+  "[[ -n '$L_ZOTHIT' && -n '$L_FALLBACK' && -n '$L_ZPULL' && -n '$L_PRE' ]] && (( L_ZPULL < L_ZOTHIT && L_ZOTHIT < L_PRE && L_ZPULL < L_FALLBACK && L_FALLBACK < L_PRE ))"
+assert "Row3: the hit and the flip are DIFFERENT emit sites (one line cannot report both outcomes)" \
+  "[[ '$L_ZOTHIT' != '$L_FALLBACK' ]]"
+
+# --- Row 4: one resolution, every consumer follows it -------------------------------------
+# OCCURRENCES, not lines. `grep -c` counts matching LINES, so a second literal appended to the
+# same line kept this at 1 and the whole "one resolution, every consumer follows it" property
+# was evadable by a one-line edit. Measured: two literals on one line -> grep -c returns 1.
+ZG_GHCR_LITERALS=$(grep -oE 'ghcr\.io/jikig-ai/soleur-inngest-bootstrap' "$DED_CODE_FILE" | wc -l || true)
+assert "Row4: exactly ONE GHCR literal survives comment-stripping (the IREF seed); found $ZG_GHCR_LITERALS" \
+  "(( ZG_GHCR_LITERALS == 1 ))"
+assert "Row4: consumer 1/4 — the pull reads \$IREF" \
+  "grep -qF 'docker pull \"\$IREF\"' '$DED_CODE_FILE'"
+assert "Row4: consumer 2/4 — the extract container reads \$IREF" \
+  "grep -qF 'docker create --name soleur-inngest-bootstrap-extract \"\$IREF\"' '$DED_CODE_FILE'"
+assert "Row4: consumer 3/4 — /etc/default/soleur-inngest-image records \$IREF" \
+  "grep -qE 'INNGEST_BOOTSTRAP_IMAGE=%s.*\"\\\$IREF\".*/etc/default/soleur-inngest-image' '$DED_CODE_FILE'"
+assert "Row4: consumer 4/4 — the Config.Env inspect reads \$IREF" \
+  "grep -qF 'docker inspect \"\$IREF\"' '$DED_CODE_FILE'"
+
+# --- Row 5: a total pull failure names which legs were tried and why each failed -----------
+# #7462's whole diagnosis rode on `oci-pull-rc-1`'s incidental tail. Make that explicit.
+assert "Row5: a distinct all-legs-failed stage exists" \
+  "grep -qF 'inngest-boot-phone-home.sh oci-pull-ALL-LEGS-FAILED' '$DED_CODE_FILE'"
+ZG_ALLLEGS_LINE=$(grep -F 'inngest-boot-phone-home.sh oci-pull-ALL-LEGS-FAILED' "$DED_CODE_FILE" | head -1 || true)
+assert "Row5: the all-legs-failed detail names the zot leg" \
+  "grep -qF 'zot=' <<<\"\$ZG_ALLLEGS_LINE\""
+assert "Row5: the all-legs-failed detail names the ghcr leg" \
+  "grep -qF 'ghcr=' <<<\"\$ZG_ALLLEGS_LINE\""
+
+# --- Phase 4: docker must be willing to talk to a plain-HTTP private-net registry ----------
+# Without the allowlist the zot leg cannot succeed even with correct credentials, so a
+# "zot-primary" arm would fall back on EVERY boot and the change would be inert-by-accident.
+assert "Phase4: the docker daemon config allowlists an insecure registry" \
+  "grep -qF 'insecure-registries' '$DED_CODE_FILE'"
+assert "Phase4: the allowlisted entry is the BAKED endpoint, never a hardcoded address" \
+  "[ \"\$(grep -E 'insecure-registries' '$DED_CODE_FILE' | grep -cF 'ZOT_EP' || true)\" -gt 0 ]"
+assert "Phase4: docker is RESTARTED after the daemon config is written (the package starts it during \`packages:\`, before runcmd)" \
+  "[[ -n '$L_DAEMON' && -n '$L_DOCKER_RESTART' ]] && (( L_DAEMON < L_DOCKER_RESTART && L_DOCKER_RESTART < L_ZPULL ))"
+
+# --- Phase 5: the zot login must precede the pull it authorizes ----------------------------
+# Load-bearing placement: the bootstrap image's OWN zot_login runs too late to authorize the
+# pull that fetches that very image.
+assert "Phase5: the host logs in to zot from the baked creds" "[[ -n '$L_ZLOGIN' ]]"
+assert "Phase5: the zot login precedes the zot pull" \
+  "[[ -n '$L_ZLOGIN' ]] && (( L_ZLOGIN < L_ZPULL ))"
+for _zs in zot-login-ok zot-login-FAILED zot-creds-EMPTY; do
+  assert "Phase5: phone-home stage '$_zs' is emitted (mirrors the GHCR trio)" \
+    "grep -qF 'inngest-boot-phone-home.sh $_zs' '$DED_CODE_FILE'"
+done
+
+# --- Dark-safety: an unconfigured endpoint must degrade to TODAY's path, never to a worse one
+# ANCHORED TO THE GATE THAT GUARDS THE ARM, not to any occurrence of the token. `[ -n "$ZOT_EP" ]`
+# appears three times (docker daemon config, zot login, ref resolution), so the previous
+# whole-file grep was satisfied by any of them — and inverting the ONE that gates the resolution
+# region to `[ -z ... ]`, which runs the zot leg only when zot is UNCONFIGURED and skips it
+# exactly when zot is configured, left the ENTIRE suite green at 117/117 and the mutation
+# battery at 9/9. Measured, not hypothesised. That inversion negates every property this arm
+# claims, so the gate is pinned positionally: it must be the `if [` immediately preceding the
+# ZIREF assignment. This is the placement-vs-behaviour class — the old assertion pinned that a
+# token existed somewhere, never that the branch it controls has the right sense.
+ZG_ARM_GATE="$(grep -B2 '^[[:space:]]*ZIREF=' "$DED_CODE_FILE" | grep -E '^[[:space:]]*if \[' | tail -1 || true)"
+assert "Dark-safe: the resolution region's OWN gate was found (an unmatched gate must not pass vacuously)" \
+  "[[ -n \"\$ZG_ARM_GATE\" ]]"
+assert "Dark-safe: that gate is a NON-EMPTY test (an inverted gate runs the arm only when zot is unconfigured)" \
+  "grep -qE '\\[ -n \"\\\$ZOT_EP\" \\]' <<<\"\$ZG_ARM_GATE\""
+
+# --- The baked pull credential must be redactable ------------------------------------------
+# The pull log tail is SHIPPED off-box by `oci-pull-rc-N`. inngest-redact.sh redacts by KNOWN
+# VALUE, so a credential absent from its value list is a credential that ships in clear on an
+# auth failure — which is exactly the failure mode that produces a log tail worth shipping.
+# SCOPED to the script body, not the file. `ZOT_PULL_TOKEN` occurs 4x in the yml (the bake
+# printf, the login item, the redact list), so a whole-file grep stayed green with the redact
+# line deleted — a cq-assert-anchor-not-bare-token violation on SCOPE rather than on comments.
+ZG_REDACT_BODY="$(awk '/^  - path: \/usr\/local\/bin\/inngest-redact\.sh$/{f=1;next} f&&/^  - path: /{f=0} f' "$INNGEST_CI_YML")"
+assert "the zot pull token is in inngest-redact.sh's known-value list" \
+  "grep -qF 'ZOT_PULL_TOKEN' <<<\"\$ZG_REDACT_BODY\""
+assert "the zot token reaches that list via the same sourced-file shape as GHCR_READ_TOKEN" \
+  "grep -qF 'ZOT_PULL_TOKEN' <<<\"\$ZG_REDACT_BODY\" && grep -qF 'GHCR_READ_TOKEN' <<<\"\$ZG_REDACT_BODY\""
+
+# --- Pin consistency on the DEDICATED file (AC6b's sibling) --------------------------------
+# AC6b asserts count==2 && distinct==1 for cloud-init.yml (web host: IREF + ZIREF). The
+# dedicated host now has the same two-ref shape, so it inherits the same partial-bump risk:
+# bumping IREF and leaving ZIREF stale would 404 the zot leg on every fresh boot and fall
+# back silently to GHCR forever.
+DED_PIN_REF_COUNT=$(grep -coE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$DED_CODE_FILE" || true)
+DED_DISTINCT_PINS=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$DED_CODE_FILE" | sort -u | wc -l || true)
+assert "dedicated-host pin-consistency: both refs (IREF + ZIREF) present and share one tag (found $DED_PIN_REF_COUNT refs, $DED_DISTINCT_PINS distinct)" \
+  "(( DED_PIN_REF_COUNT == 2 && DED_DISTINCT_PINS == 1 ))"
+
+# --- Guard 1 anti-vacuity FLOOR: the section's own assertion count ------------------------
+# Row6 above floors the guard's INPUTS. Nothing floored its ASSERTIONS, so deleting every
+# `assert` in this section left the suite exit 0 with a clean summary — the headline claim
+# ("the arm is pinned") resting on nothing. Measured. EXACT rather than `>=`: a `>=` floor with
+# slack is attack budget, and one derived from what it guards descends with it. When you add an
+# assertion here, bump this number in the same edit — that is the point, not friction.
+ZG_SECTION_ASSERTIONS=$(( TOTAL - ZG_TOTAL_BEFORE ))
+assert "Guard 1 anti-vacuity: the section ran its full assertion inventory (expected 40, ran $ZG_SECTION_ASSERTIONS)" \
+  "(( ZG_SECTION_ASSERTIONS == 40 ))"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="

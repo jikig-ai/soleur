@@ -301,6 +301,60 @@ resource "hcloud_server" "inngest" {
     # instant (else 401 → 226/NAMESPACE abort).
     ghcr_read_user  = var.ghcr_read_user
     ghcr_read_token = var.ghcr_read_token
+    # #7462 (ADR-096) — the zot-primary arm for the SAME cold-boot pull, baked for the SAME
+    # reason as the GHCR creds directly above: cold boot must not depend on Doppler answering
+    # at the boot instant. The mechanism DIVERGES from cloud-init.yml's web-host arm, which
+    # reads ZOT_REGISTRY_URL / ZOT_PULL_* from Doppler at boot. That path is structurally
+    # unavailable here — this host's Doppler token is scoped to project `soleur-inngest`, so
+    # those keys are unreadable, and adding them to `soleur-inngest/prd` would break the
+    # fail-closed boot isolation self-check (n_total != n_inngest → FATAL, no boot at all).
+    # Amended into ADR-096; a future reader comparing the two hosts would otherwise read the
+    # divergence as an oversight. Precision, because #6500's title is easy to misread: what
+    # three new keys trip is the IDENTITY assertion `n_total -ne n_inngest`, NOT the `-lt 5`
+    # floor (`n_inngest` stays 5). The file's own note — "The floor stays 5 ON PURPOSE" — warns
+    # against exactly that confusion.
+    #
+    # ALL THREE VALUES COME FROM THIS ROOT — none is a new root variable. zot-registry.tf
+    # already declares `local.registry_endpoint`, `local.zot_pull_user` (a non-secret constant)
+    # and `random_password.zot_pull`, whose `.result` it feeds to `doppler_secret.zot_pull_token`
+    # and to the registry host's own htpasswd. An earlier draft of this block re-imported the
+    # two credential values as `sensitive` `TF_VAR_*` variables. That was wrong three ways, and
+    # it is recorded because the endpoint comment directly below already had the right rule and
+    # the credential lines did not follow it:
+    #
+    #   1. ROTATION STALENESS. `doppler run --name-transformer tf-var` snapshots the environment
+    #      before Terraform starts, so an apply carrying `-replace=random_password.zot_pull`
+    #      writes the NEW password into the registry's htpasswd while templating this user_data
+    #      from the OLD snapshot — the replaced host then boots with a credential that cannot
+    #      log in. That is the same "baked credential goes stale with no refresh channel"
+    #      failure #7462 exists to fix, reintroduced on a second credential.
+    #   2. WHOLE-APPLY HAZARD. Terraform resolves ALL root variables before `-target` pruning,
+    #      so an unprovisioned no-default var fails the entire merge-triggered apply even though
+    #      the inngest resources are `-target`-excluded. Reading the in-root resource removes
+    #      that failure mode instead of accepting and documenting it.
+    #   3. It broke every `terraform test` run block, which must resolve every root variable
+    #      before evaluating any run block. `terraform validate` passes throughout — it never
+    #      resolves variable VALUES — so only CI caught it.
+    #
+    # `-target` prunes DEPENDENTS, not dependencies, so both resources stay in the graph for the
+    # `inngest-host-replace` dispatch; neither carries a pending diff there, so this is a no-op.
+    #
+    # Trust boundary vs the ghcr_read_* bake above: the metadata-API exposure is identical, but
+    # this is NOT confidentiality-equivalent. The insecure-registry allowlist means docker sends
+    # this credential as cleartext HTTP Basic on 10.0.1.0/24, where the GHCR credential travels
+    # under TLS. That is ADR-096's Phase-0 accepted posture for the private net, newly extended
+    # to this host — stated rather than implied, because the digest pin protects the PAYLOAD and
+    # not the CREDENTIAL.
+    #
+    # The endpoint is the EXISTING local, not a new derivation — zot-registry.tf already
+    # computes `local.registry_endpoint = "${local.registry_private_ip}:5000"` in this same
+    # root. Reachability: `hcloud_server_network.inngest` (10.0.1.40) and
+    # `hcloud_server_network.registry` (10.0.1.30) share one subnet; Hetzner firewalls filter
+    # only the PUBLIC interface, and this host's nftables declares an `input` chain only, so
+    # egress to the registry is unrestricted.
+    zot_registry_endpoint = local.registry_endpoint
+    zot_pull_user         = local.zot_pull_user
+    zot_pull_token        = random_password.zot_pull.result
     # nftables allowlist for the :8288/:8289 control API — web hosts only (SEC-H2).
     web_host_private_ips = local.web_host_private_ips
     # #6178 boot observability: bake the write-only Better Stack Logs ingest token so the
