@@ -103,6 +103,13 @@ variables {
   resend_receiving_api_key     = "dummy"
   supabase_access_token        = "dummy"
   webhook_deploy_secret        = "dummy"
+  # #7462: required (no-default) since the dedicated inngest host's zot-primary
+  # bootstrap pull. Unused by the validation under test — present only to satisfy
+  # the required-variable check, per this block's header. `terraform validate`
+  # does NOT catch their absence; only `terraform test` does, because it must
+  # resolve every root variable before evaluating any run block.
+  zot_pull_user  = "dummy"
+  zot_pull_token = "dummy"
   # command=plan evaluates file(var.ssh_key_path) (hcloud_ssh_key.default). The
   # default ~/.ssh/id_ed25519.pub does not exist in CI, so point at a committed
   # fixture (content is irrelevant — the hcloud provider is mocked). Path is
