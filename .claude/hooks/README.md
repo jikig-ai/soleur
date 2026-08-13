@@ -658,6 +658,16 @@ A PreToolUse(Bash) hook on `gh pr merge`. GitHub's issue-closing parser reads th
 **PR title, the PR body and the squash commit body**, so a closing keyword in any
 of the three auto-closes on merge. Two checks, evaluated in this order:
 
+**Squash-body override.** On `--squash`, a `--body-file <path>` replaces the
+concatenated branch commit messages, so those never land on `main`. The hook
+scans that file **instead of** the commit bodies — the override is scanned, never
+trusted, so a contaminated one is denied exactly as a contaminated commit body
+is. It must be `--body-file`, not inline `--body`: quoted command bodies are
+blanked before scanning, so an inline override is one the hook cannot read.
+Non-`--squash` merges, and unreadable paths, fall back to the commit bodies.
+Added in #7516, where the hook denied the very remedy its own deny text
+prescribed.
+
 1. **follow-through label gate** — denies a close of any form (standalone or
    prose-embedded) when the target issue is **OPEN** and carries
    `follow-through`. Closing such a tracker makes the daily sweeper skip it — it
