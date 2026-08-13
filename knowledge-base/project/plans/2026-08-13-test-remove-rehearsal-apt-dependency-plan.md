@@ -156,8 +156,12 @@ surface and no credential; the diff adds error messages and deletes a redundant 
 - **AC1** — `grep -cE '^[^#]*apt-get (update|install)' apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh`
   returns **7** (from 9). Scoped to executable lines: a bare `grep -c 'apt-get'` returns 10,
   because `:533` legitimately discusses apt in prose.
-- **AC2** — `grep -c 'e2fsprogs' <file>` returns **0** outside comments; the replacement comment
-  names the shipped version and the mirror-current→image-current narrowing.
+- **AC2** — `grep -cE '^[^#]*e2fsprogs' <file>` drops **2 → 1**. *(Corrected at implementation:
+  this AC originally demanded **0**, which was unreachable. `main` carries two non-comment
+  occurrences — the apt install at `:873` and a pre-existing `fail()` message at `:1010` that
+  legitimately names the package. Only the first is in scope.)* The survivor must be that
+  R1-EXPIRY message; the replacement comment names the shipped version and the
+  mirror-current→image-current narrowing.
 - **AC3** — `grep -c 'DEBIAN_FRONTEND' <file>` drops by exactly 1 (the dead export at `:871`).
 - **AC4** — R1's four arms produce identical verdicts before and after; both runs' R1 output
   quoted in the PR body.

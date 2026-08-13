@@ -21,12 +21,12 @@ Target file for every task: `apps/web-platform/infra/git-data-runcmd-rehearsal.t
 
 Unblocked. Verified conflict-free with PR #7507 (`e2fsprogs` appears 0 times in its diff).
 
-- [ ] **1.1** Record the pre-change baseline for comparison:
+- [x] **1.1** Record the pre-change baseline for comparison:
       `grep -cE '^[^#]*apt-get (update|install)' <file>` → expect **9**;
       run the suite and save R1's four arm verdicts.
-- [ ] **1.2** Delete `apt-get update -qq` and `apt-get install -y -qq e2fsprogs` (`:872-873`).
-- [ ] **1.3** Delete the now-dead `export DEBIAN_FRONTEND=noninteractive` (`:871`).
-- [ ] **1.4** Add a replacement comment stating: `ubuntu:24.04` ships
+- [x] **1.2** Delete `apt-get update -qq` and `apt-get install -y -qq e2fsprogs` (`:872-873`).
+- [x] **1.3** Delete the now-dead `export DEBIAN_FRONTEND=noninteractive` (`:871`).
+- [x] **1.4** Add a replacement comment stating: `ubuntu:24.04` ships
       `e2fsprogs 1.47.0-2.4~exp1ubuntu4.1` at `Priority: required`; and that removing the install
       narrows R1's `e2fsprogs` source from **mirror-current to image-current** — a behaviour
       change, not a no-op, and a faithfulness improvement because the fingerprint's subject is the
@@ -36,9 +36,10 @@ Unblocked. Verified conflict-free with PR #7507 (`e2fsprogs` appears 0 times in 
 - [ ] **1.5** Re-run the suite; confirm R1's four arms produce verdicts identical to 1.1 (AC4).
 - [ ] **1.6** Confirm the assertion floor at `:1448` and the reported `total` are **unchanged**
       (AC5) — this phase adds and removes no assertion.
-- [ ] **1.7** Run `bash apps/web-platform/infra/git-data-render-strip-parity.test.sh` (AC6).
-- [ ] **1.8** Verify AC1 (`→ 7`), AC2 (`e2fsprogs` gone outside comments), AC3
-      (`DEBIAN_FRONTEND` count −1).
+- [x] **1.7** Run `bash apps/web-platform/infra/git-data-render-strip-parity.test.sh` (AC6).
+- [x] **1.8** Verify AC1 (`→ 7` ✓), AC2 (non-comment `e2fsprogs` **2 → 1** ✓ — the AC originally
+      demanded 0, which was unreachable: a pre-existing `fail()` message legitimately names the
+      package; corrected in the plan), AC3 (`DEBIAN_FRONTEND` 3 → 2 ✓).
 - [ ] **1.9** Push. PR body uses **`Refs #7535`, never `Closes`** — this does not remove the apt
       dependency, and the issue stays open at residual scope.
 - [ ] **1.10** Post the plan's `## Why the image was cut` measurements as a comment on #7535, and

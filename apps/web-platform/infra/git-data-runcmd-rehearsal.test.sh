@@ -868,9 +868,20 @@ PY
 
     cat > "$TMP/r1-drive.sh" <<'R1DRV'
 set -e
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq >/dev/null 2>&1
-apt-get install -y -qq e2fsprogs >/dev/null 2>&1
+# NO apt HERE, DELIBERATELY (#7535). ubuntu:24.04 already ships e2fsprogs at
+# Priority: required — `docker run --rm ubuntu:24.04 dpkg -s e2fsprogs` reports
+# 1.47.0-2.4~exp1ubuntu4.1 — so the `apt-get update && apt-get install e2fsprogs`
+# this replaced installed a package that was already present, at the cost of a full
+# apt cycle against an external mirror. Do not restore it.
+#
+# Removing it is NOT a pure no-op, and the difference is the point: the install ran
+# AFTER `apt-get update`, so it resolved against the LIVE archive and could serve a
+# build the image layer does not carry. R1's mke2fs now comes from the image layer
+# instead — mirror-current narrowed to image-current. That is the faithful direction,
+# because the fingerprint's subject is the cloud image's own e2fsprogs (see
+# git-data-birth-fs-fingerprint.txt, "WHY AN ALLOWLIST AND NOT SET-EQUALITY").
+# R1 classifies FEATURES against an allowlist rather than pinning a version, so a
+# later e2fsprogs bump still classifies rather than reds.
 for arm in shipped mutant prefix unclass; do
   img="/tmp/$arm.img"
   # 10G sparse. Measured: a backing file under ~3MB falls into mke2fs's `floppy` bucket and
