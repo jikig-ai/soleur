@@ -43,8 +43,78 @@ docker info >/dev/null 2>&1 || _skip "git-data-runcmd-rehearsal: SKIP — docker
 command -v terraform >/dev/null 2>&1 || _skip "git-data-runcmd-rehearsal: SKIP — terraform absent"
 command -v python3 >/dev/null 2>&1 || _skip "git-data-runcmd-rehearsal: SKIP — python3 absent"
 
-TMP="$(mktemp -d -t gdreh.XXXXXXXX)"
-trap 'rm -rf "$TMP"' EXIT
+# DEFAULT TMPDIR HERE, not only in the runners. scripts/test-all.sh and run-registered-suites.sh
+# both export TMPDIR=/var/tmp, but a DIRECT invocation — the shape this file's own header
+# documents, and the one infra-validation.yml uses — inherits the bare /tmp. Without this the
+# forensics trees land in /tmp while the age-reaper below sweeps /var/tmp, so the reaper is a
+# no-op in exactly the retention case the forensics path creates.
+export TMPDIR="${TMPDIR:-/var/tmp}"
+
+TMP="$(mktemp -d -t gdreh.XXXXXXXX)" || { echo "FIXTURE-FAIL: mktemp -d failed" >&2; exit 2; }
+
+# FORENSICS ON ANY NON-ZERO EXIT — and this MODIFIES THE EXISTING HANDLER IN PLACE rather
+# than adding a second `trap ... EXIT`. Bash keeps only the LAST handler registered for a
+# signal, so a second `trap` here would silently discard the cleanup above it (or be
+# discarded by it), which is the shape AC15 pins.
+#
+# KEYED ON THE EXIT STATUS, NOT ON THE COUNTERS. This suite has hard `exit 1` setup paths
+# that fire while `fails == 0`, and those are exactly where forensics matter most: the tree
+# is the only evidence of a fixture that never got far enough to assert anything.
+# Reproducing #7501 required hand-patching the trap precisely because it removed the tree
+# unconditionally.
+#
+# ON CI THIS IS A LOCAL-ONLY AID: infra-validation.yml has no upload-artifact step, so the
+# retained tree does not survive the runner. The CI signal remains the run log.
+_reh_cleanup() {
+  _rc=$?
+  if [ "$_rc" -ne 0 ] || [ -n "${GIT_DATA_REHEARSAL_KEEP_TMP:-}" ]; then
+    echo "FORENSICS: retained the rehearsal tree at ${TMP} (exit ${_rc})" >&2
+    echo "FORENSICS: container stdout is at ${TMP}/r4out/stdout" >&2
+  else
+    rm -rf "$TMP"
+  fi
+  # AGE-REAPER, mirroring the sibling runner's, which records the measured cost of omitting
+  # one (414 dirs / 23 MB). GLOB-BOUNDED to this suite's own `gdreh.` prefix and gated on
+  # mtime, so it can never reap a CONCURRENT run's tree — parallel worktrees are this repo's
+  # documented workflow, and a reaper that takes a live sibling's fixtures out from under it
+  # produces exactly the nondeterministic starvation #7501 is about.
+  find "${TMPDIR:-/var/tmp}" -maxdepth 1 -type d -name 'gdreh.*' -mmin +720 \
+    -exec rm -rf {} + 2>/dev/null || true
+}
+trap _reh_cleanup EXIT
+
+# ── AC15: exactly ONE executable top-level `trap … EXIT` in this file ──────────────
+#
+# Bash keeps only the LAST handler registered for a signal, so a second top-level
+# `trap … EXIT` silently discards the forensics/cleanup handler above (or is discarded by
+# it) — and the retained-tree-on-failure path would then vanish without a single test going
+# red. This was specified and, until now, only ever checked by hand.
+#
+# THE COUNT IS HEREDOC-AWARE, which is the whole difficulty. This file embeds driver scripts
+# that legitimately arm their own traps inside quoted heredocs, and the B2SPEC table lists
+# `trap on_err EXIT` as DATA. Measured: a naive `grep -cE '^trap .*EXIT'` returns 4 here, so
+# an assertion built on it would either fail on a correct file or pass only by accident of
+# which copies happen to be indented.
+_ac15_traps="$(python3 - "${BASH_SOURCE[0]}" <<'PY'
+import re, sys
+out, delim = [], None
+for l in open(sys.argv[1]).read().splitlines():
+    if delim is None:
+        out.append(l)
+        m = re.search(r"<<-?'?([A-Za-z_][A-Za-z0-9_]*)'?", l)
+        if m:
+            delim = m.group(1)
+    elif l.strip() == delim:
+        delim = None
+print(sum(1 for l in out if re.match(r'^trap .*EXIT', l)))
+PY
+)"
+if [ "${_ac15_traps:-0}" -eq 1 ]; then
+  pass
+else
+  fail "AC15: expected exactly 1 executable top-level 'trap … EXIT', found ${_ac15_traps:-?}" \
+       "Bash keeps only the last EXIT handler, so a second one silently replaces the forensics handler. Heredoc bodies and table text are excluded from this count by construction."
+fi
 
 # Render the REAL template, then extract the emitter and the Doppler-download runcmd block
 # from it. Extracting from the render (not from a hand-written fixture) is what makes this
@@ -402,7 +472,15 @@ import http.server, socketserver
 class H(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
-        open("/out/capture.log", "ab").write(self.rfile.read(n) + b"\n")
+        body = self.rfile.read(n)
+        # CONTEXT-MANAGED, so the bytes are flushed and the file closed BEFORE the response
+        # is sent. The round-trip sentinel below polls this file from the same container, so
+        # a write left buffered in a CPython file object that only closes at GC would make
+        # the poll race the flush -- and a sentinel that intermittently fails to appear is
+        # indistinguishable from a capture path that is genuinely dead, which is the exact
+        # ambiguity this whole change exists to remove.
+        with open("/out/capture.log", "ab") as f:
+            f.write(body + b"\n")
         self.send_response(200); self.end_headers(); self.wfile.write(b"{}")
     def log_message(self, *a): pass
 socketserver.TCPServer(("127.0.0.1", 8099), H).serve_forever()
@@ -868,9 +946,30 @@ PY
 
     cat > "$TMP/r1-drive.sh" <<'R1DRV'
 set -e
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq >/dev/null 2>&1
-apt-get install -y -qq e2fsprogs >/dev/null 2>&1
+# NO apt HERE, DELIBERATELY (#7535). ubuntu:24.04 already ships e2fsprogs at
+# Priority: required — `docker run --rm ubuntu:24.04 dpkg -s e2fsprogs` reports
+# 1.47.0-2.4~exp1ubuntu4.1 — so the `apt-get update && apt-get install e2fsprogs`
+# this replaced installed a package that was already present, at the cost of a full
+# apt cycle against an external mirror. Do not restore it.
+#
+# What changed is the BINDING, not the value. The install ran AFTER `apt-get update`,
+# so it resolved against the LIVE archive and COULD serve a build the image layer does
+# not carry; R1's mke2fs now comes from the image layer instead — mirror-current
+# narrowed to image-current. Measured 2026-08-13: the archive candidate was identical
+# to the image at 1.47.0-2.4~exp1ubuntu4.1 (`apt-get install -s` reported 0 upgraded),
+# so today the value is the same either way — only the binding moved.
+#
+# That is the faithful direction because the e2fsprogs whose output the fingerprint
+# must PREDICT is the cloud image's own (git-data-birth-fs-fingerprint.txt, "WHY AN
+# ALLOWLIST AND NOT SET-EQUALITY"). The fingerprint asserts nothing about e2fsprogs
+# versions — that block is marked CONTEXT FOR FAILURE MESSAGES ONLY — not asserted;
+# its subject is the birth filesystem's mount-time module dependency.
+#
+# This does NOT make R1 bump-immune. The allowlist is FAIL-CLOSED: a bump emitting only
+# already-classified features (orphan_file, metadata_csum_seed — both pre-classified
+# in-tree) stays green, but a bump emitting a NOVEL feature still reds R1(a) as
+# unclassified, by design. The remedy there is a one-line classification with a
+# rationale, never a wholesale fixture refresh.
 for arm in shipped mutant prefix unclass; do
   img="/tmp/$arm.img"
   # 10G sparse. Measured: a backing file under ~3MB falls into mke2fs's `floppy` bucket and
@@ -934,7 +1033,11 @@ PY
     # (a) fail-closed against any FUTURE flag, not just the one that bit us.
     case "$_r1_ship" in
       *:unclassified=-:*) pass ;;
-      "") fail "R1(a): no verdict for the shipped arm — the container produced no feature line" \
+      # NOFEATURES FIRST, for the same reason the three controls below do it (see the
+      # note above them): without it, an arm that produced NO FILESYSTEM AT ALL falls to
+      # `*)` and prints the allowlist message with the raw token interpolated — blaming
+      # the template for what is an environmental fault (mke2fs absent from the image).
+      *NOFEATURES*|"") fail "R1(a): the shipped arm produced no filesystem — R1 makes NO claim about the template here (is mke2fs present in the image?)" \
                "$(tail -5 "$TMP/r1out/stdout" 2>/dev/null)" ;;
       *) fail "R1(a): the birth filesystem carries feature(s) absent from the allowlist: ${_r1_ship#*unclassified=}" \
               "Classify each in $_r1_fix with its mount-time class before shipping. Do NOT 'refresh' the fixture wholesale — the point is the classification, not the diff. (mke2fs measured 1.47.0 in ubuntu:24.04 / 1.47.2 on the authoring host.)" ;;
@@ -942,7 +1045,11 @@ PY
     # (b) THE invariant, stated directly.
     case "$_r1_ship" in
       *:moduledep=-:*) pass ;;
-      "") fail "R1(b): no verdict for the shipped arm" "$(tail -5 "$TMP/r1out/stdout" 2>/dev/null)" ;;
+      # NOFEATURES FIRST — same reason as (a), and it matters more here: the `*)` message
+      # below is the #7204 boots-dark claim, so an absent mke2fs would otherwise be
+      # reported as a template regression that never happened.
+      *NOFEATURES*|"") fail "R1(b): the shipped arm produced no filesystem — R1 makes NO claim about the template here (is mke2fs present in the image?)" \
+               "$(tail -5 "$TMP/r1out/stdout" 2>/dev/null)" ;;
       *) fail "R1(b): the birth filesystem carries a module-dep feature: ${_r1_ship##*moduledep=}" \
               "This is the #7204 defect class: mounting it makes ext4 request a kernel module the target image does not ship, so the host boots dark with mount(8) rc=32. See $_r1_fix." ;;
     esac
@@ -1089,23 +1196,131 @@ cat > "$TMP/r4-drive.sh" <<'R4DRV'
 #!/bin/bash
 set -uo pipefail
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq >/dev/null 2>&1
-apt-get install -y -qq curl python3 >/dev/null 2>&1
+
+# EVERY STEP THAT CAN LEAVE THE CAPTURE PATH DEAD NOW NAMES ITSELF.
+#
+# Six causes, each a distinct `FIXTURE-FAIL:` marker on stderr followed by a non-zero exit.
+# Before this, `apt-get update` and `install` carried no rc check at all under a driver
+# running `set -uo pipefail` with no `-e`, so a failed apt continued on to start a capture
+# server with no python3 -- and the host discarded the container's rc with `|| true`. The
+# three downstream arms then reported that the EMITTER had changed behaviour. It had not; the
+# container had never run. That misattribution is #7501, and it cost ~4 hours and two
+# confidently-wrong diagnoses in opposite directions.
+#
+# The marker is `FIXTURE-FAIL:` rather than the old `FIXTURE:` so it matches the nested
+# runner's failure-marker regex; the bind marker below is RENAMED to match, which is why this
+# is six causes and not five new ones.
+fixture_fail() { echo "FIXTURE-FAIL: $1" >&2; exit 2; }
+
+# NAMED FAULT INJECTION, so every Guard 2 mutation row costs one container run instead of a
+# hand edit to this heredoc. A row that can only be executed by editing the file under test
+# is a row that does not get executed.
+INJECT="${GIT_DATA_REHEARSAL_INJECT:-}"
+
+# rc0-dead-capture: exit ZERO having produced no captures at all — a container whose rc says
+# "fine" while the capture path is dead, which is the shape that separates the two halves of
+# the host-side gate (delete the sentinel check, keep the rc check, and only this class is
+# still caught).
+#
+# An earlier comment here claimed this was the ONLY such shape because "every other injected
+# fault also makes the container exit non-zero". That is false: `no-roundtrip` skips the whole
+# round-trip block and `sentinel-in-capture-log` skips only the `touch`, and BOTH let the
+# container run to completion and exit 0 with sentinel.ok absent — host-observably identical.
+# Three of the eight injections produce this verdict shape, not one.
+[ "$INJECT" = "rc0-dead-capture" ] && exit 0
+
+# BOUNDED APT. `-o Acquire::Retries=3` covers transient mirror failures inside apt itself;
+# the backoff loop covers the ones it does not retry. This does NOT add Ubuntu's mirrors to
+# the merge gate -- they were already there, because a dead container yields 0 for all three
+# arms and the suite already exited non-zero. What changes is that the failure now says so.
+[ "$INJECT" = "apt-update" ] && fixture_fail "apt-get update (injected)"
+apt-get update -qq -o Acquire::Retries=3 >/dev/null 2>&1 \
+  || fixture_fail "apt-get update failed (mirror unreachable or index corrupt)"
+
+_apt_ok=0
+for _try in 1 2 3; do
+  if [ "$INJECT" = "apt-install" ]; then break; fi
+  if apt-get install -y -qq -o Acquire::Retries=3 curl python3 >/dev/null 2>&1; then
+    _apt_ok=1
+    [ "$_try" -gt 1 ] && echo "FIXTURE-RETRY: apt-get install succeeded on attempt ${_try}" >&2
+    break
+  fi
+  sleep $(( _try * 2 ))
+done
+[ "$_apt_ok" -eq 1 ] || fixture_fail "apt-get install curl python3 failed past 3 attempts"
+
+[ "$INJECT" = "no-python3" ] && fixture_fail "python3 absent after install (injected)"
+command -v python3 >/dev/null 2>&1 || fixture_fail "python3 absent after a successful apt-get install"
+[ "$INJECT" = "no-curl" ] && fixture_fail "curl absent after install (injected)"
+command -v curl >/dev/null 2>&1 || fixture_fail "curl absent after a successful apt-get install"
+
 python3 /work/capture.py &
 # BOUNDED POLL, not a fixed `sleep 1`. Under CPU contention (several of these containers
 # run concurrently on a dev box) python3 can miss a 1s window, curl gets connection-refused,
 # capture.log stays empty, and R3(3a) fails -- which reads as a substantive finding about
 # the emitter rather than as a starved fixture. Fail loud if it never comes up.
-for _i in $(seq 50); do (echo > /dev/tcp/127.0.0.1/8099) 2>/dev/null && break; sleep 0.1; done
-(echo > /dev/tcp/127.0.0.1/8099) 2>/dev/null || { echo 'FIXTURE: capture server never bound :8099' >&2; exit 2; }
-cp /work/git-data-emit-src /work/git-data-emit
-sed -i "s#^DSN='.*'#DSN='https://k@127.0.0.1:8099/1'#" /work/git-data-emit
-python3 - <<'FIX'
+_PORT=8099
+[ "$INJECT" = "no-bind" ] && _PORT=8098   # nothing binds here, so the poll must exhaust
+for _i in $(seq 50); do (echo > /dev/tcp/127.0.0.1/$_PORT) 2>/dev/null && break; sleep 0.1; done
+(echo > /dev/tcp/127.0.0.1/$_PORT) 2>/dev/null \
+  || fixture_fail "capture server never bound :${_PORT}"
+
+# THE BIND IS NOT THE ROUND TRIP. A bound socket proves python3 started listening; it does
+# not prove a POST is accepted, written and flushed where the host can see it. The bind poll
+# was already here and #7501 still happened, so the readiness proof is widened to cover the
+# whole path the emitter actually uses.
+#
+# THE DURABLE ARTIFACT IS `/out/sentinel.ok`, NOT A LINE IN capture.log. The driver truncates
+# /out/capture.log THREE times below -- once before each of the A/B/C orderings -- so a
+# sentinel written there is wiped long before the host reads anything, and the gate would
+# redden on every healthy run. Observe the round trip in capture.log (which happens first,
+# and is fine), then touch a file nothing truncates.
+if [ "$INJECT" != "no-roundtrip" ]; then
+  : > /out/capture.log
+  curl -sf --max-time 5 -X POST --data 'SOLEUR_RUNCMD_REHEARSAL_SENTINEL' \
+    "http://127.0.0.1:8099/api/1/store/" >/dev/null 2>&1 || true
+  _rt=0
+  for _i in $(seq 50); do
+    if grep -q 'SOLEUR_RUNCMD_REHEARSAL_SENTINEL' /out/capture.log 2>/dev/null; then _rt=1; break; fi
+    sleep 0.1
+  done
+  [ "$_rt" -eq 1 ] || fixture_fail "capture round trip never observed (bound, but a POST never reached the log)"
+fi
+
+# THE EMITTER MUST BE INSTALLED BEFORE THE SENTINEL IS TOUCHED, and every step of installing it
+# is rc-checked.
+#
+# This block used to sit BELOW the sentinel with all four steps unchecked. Under `set -uo
+# pipefail` with no `-e`, with the three emit calls guarded by `|| true` and the driver's last
+# command a `cp` that returns 0, a failure anywhere here yielded docker rc=0 AND sentinel.ok
+# present -- so the host gate read the fixture as LIVE and all three arms made emitter-worded
+# claims about a container that never had an emitter. That is exactly the #7501 misattribution,
+# reachable as shipped, inside the fix for it. The six FIXTURE-FAIL causes covered apt, python3,
+# curl, bind and the round trip; they did not cover emit-prep.
+cp /work/git-data-emit-src /work/git-data-emit || fixture_fail "could not stage git-data-emit into the container"
+sed -i "s#^DSN='.*'#DSN='https://k@127.0.0.1:8099/1'#" /work/git-data-emit \
+  || fixture_fail "could not repoint the emitter DSN at the capture server"
+python3 - <<'FIX' || fixture_fail "could not rewrite the emitter store URL to http"
 p="/work/git-data-emit"; s=open(p).read()
-s=s.replace('"https://${SHOST}/api/${PROJ}/store/"','"http://${SHOST}/api/${PROJ}/store/"')
+old = '"https://${SHOST}/api/${PROJ}/store/"'
+assert old in s, "store-URL anchor not found in git-data-emit"
+s = s.replace(old, '"http://${SHOST}/api/${PROJ}/store/"')
 open(p,"w").write(s)
 FIX
-chmod +x /work/git-data-emit
+chmod +x /work/git-data-emit || fixture_fail "could not make the staged emitter executable"
+[ -x /work/git-data-emit ] || fixture_fail "the staged emitter is not executable after chmod"
+
+# THE SENTINEL IS TOUCHED HERE, LAST — after the round trip is proven AND the emitter is
+# installed. It is the host's single proof that this container run was fully live, so it must
+# be the final thing that happens on the healthy path; anything it precedes is unproven.
+#
+# `sentinel-in-capture-log` is Guard 2 row 3: it reproduces the draft-1 shape where the
+# sentinel was written into /out/capture.log instead of a durable artifact. The driver
+# truncates capture.log three times below, so that shape must redden the host gate on an
+# otherwise HEALTHY run.
+if [ "$INJECT" != "sentinel-in-capture-log" ]; then
+  touch /out/sentinel.ok || fixture_fail "could not create the durable /out/sentinel.ok artifact"
+fi
 
 MOUNTERR='mount: /mnt/git-data-luks: mount(2) system call failed: No such process.'
 mk_dmesg() { i=1; while [ "$i" -le 20 ]; do echo "[   12.3456$i] EXT4-fs (dm-0): mounting with quota feature but no quota format module line $i"; i=$((i+1)); done; }
@@ -1130,28 +1345,112 @@ cp /out/capture.log /out/capture-c.log
 R4DRV
 
 rm -rf "$TMP/r4out"; mkdir -p "$TMP/r4out"; : > "$TMP/r4out/capture.log"
+# THE CONTAINER'S VERDICT IS NO LONGER DISCARDED. This was `|| true`, which threw away the rc
+# AND any reason to open the stdout file -- referenced only inside failure-message details,
+# so nothing ever read it. Reproducing #7501 required patching the EXIT trap by hand.
+_r4_rc=0
 docker run --rm \
+  -e "GIT_DATA_REHEARSAL_INJECT=${GIT_DATA_REHEARSAL_INJECT:-}" \
   -v "$TMP/git-data-emit:/work/git-data-emit-src:ro" \
   -v "$TMP/capture.py:/work/capture.py:ro" \
   -v "$TMP/r4-drive.sh:/work/r4-drive.sh:ro" \
   -v "$TMP/r4out:/out" \
-  ubuntu:24.04 bash /work/r4-drive.sh >"$TMP/r4out/stdout" 2>&1 || true
+  ubuntu:24.04 bash /work/r4-drive.sh >"$TMP/r4out/stdout" 2>&1 || _r4_rc=$?
 
 _r4_a=$(grep -c 'No such process' "$TMP/r4out/capture-a.log" 2>/dev/null || true)
 _r4_b=$(grep -c 'No such process' "$TMP/r4out/capture-b.log" 2>/dev/null || true)
 _r3_c=$(grep -c 'xyzzy' "$TMP/r4out/capture-c.log" 2>/dev/null || true)
 
-if [ "${_r4_a:-0}" -ge 1 ]; then pass; else
-  fail "R4: the mount error did NOT survive the emitter's tail -n 20 | tail -c 180 under the shipped ordering" \
-       "Write dmesg FIRST and the failing command's stderr LAST. capture-a=[$(head -c 300 "$TMP/r4out/capture-a.log" 2>/dev/null)]"; fi
+# ── R4/R3 RUN-LEVEL FIXTURE-LIVENESS GATE ─────────────────────────────────────────
+#
+# ONE gate, not three per-arm preconditions: there is one container and one capture path, so
+# "the fixture was starved" is a RUN-level fact and three copies of it would be three places
+# to drift.
+#
+# IT IS STRUCTURAL, NOT GREP-VERIFIED. An assembly grep counts call sites, so an arm routed
+# AROUND the gate leaves the count unchanged and the check green -- cardinality standing in
+# for discrimination. Here the gate REPORTS all three arms itself and skips past them on
+# failure, so bypassing it is a deletion the assertion count does see.
+#
+# IT EMITS EXACTLY ONE ASSERTION ON EVERY PATH, and so does each arm below — see `_r4_arm`.
+# PATH-INVARIANT CARDINALITY IS THE POINT, and getting it wrong was a live defect: the first
+# shape of this gate emitted 1 `pass` when healthy and 3 `fail`s when starved, so a STARVED run
+# totalled 44 against a floor of 45 and the suite's terminal line read
+# `ran only 44 assertions (<45) — harness did not execute fully`, exiting before the summary.
+# That message names a cause the run did not measure — the harness executed fully and the gate
+# worked — which is the misattribution class this whole change exists to remove, reproduced by
+# the instrument built to remove it. Four review agents converged on it independently.
+#
+# THERE IS DELIBERATELY NO NON-EMPTINESS CONJUNCT. An empty capture AFTER a proven round trip
+# is a genuine emitter finding -- precisely the finding these arms exist to make -- so
+# requiring non-emptiness here would suppress it. The gate proves the PATH was live; what came
+# down it is the arms' business.
+_r4_live=1
+[ "$_r4_rc" -eq 0 ] || _r4_live=0
+[ -f "$TMP/r4out/sentinel.ok" ] || _r4_live=0
+
+# EVERY EMITTER-CLAIMING ARM ROUTES THROUGH THIS. A bare `if [ "$_r4_live" -eq 0 ]; then :`
+# prefix repeated per arm is a convention, not a chokepoint: a fourth arm written without it
+# bypasses the gate silently and nothing counts the omission. Routing through one helper makes
+# the bypass a visible deviation from the block's only idiom, and keeps cardinality
+# path-invariant for free.
+# THE STARVED MESSAGE CARRIES A NEUTRAL ID, NEVER THE EMITTER-WORDED NAME.
+#
+# The arm names below are diagnoses ("the mount error did NOT survive the emitter's tail…",
+# "the emitter no longer leaks a literal path…") and they are the right text for a REAL
+# finding. Printing them on the starved path put that diagnosis first and the disclaimer
+# second, so a reader scanning FAIL lines still saw an emitter accusation for a container that
+# never ran — which is verbatim what #7501 reports as the misleading output. Measured by the
+# Guard 2 matrix: rows 1, 2 and 3 all surfaced the correct cause AND still led with the
+# emitter phrasing. Softening the accusation is not removing it.
+#
+#   $1 = 1 if the arm's own predicate held, else 0
+#   $2 = short neutral id, used ONLY on the starved path
+#   $3 = the emitter-worded arm name, used ONLY for a genuine finding
+#   $4 = failure detail
+_r4_arm() {
+  if [ "$_r4_live" -eq 0 ]; then
+    fail "$2: fixture starved — no claim made about the emitter" \
+         "See the FIXTURE-FAIL lines above for the container's own cause."
+    return 0
+  fi
+  if [ "$1" -eq 1 ]; then pass; else fail "$3" "$4"; fi
+}
+
+if [ "$_r4_live" -eq 0 ]; then
+  # THE CONTAINER'S OWN STDOUT, ON ITS OWN COLUMN-0 LINES, EACH ONE ITS OWN MARKER MATCH.
+  #
+  # The prefix is `FIXTURE-FAIL: `, not `FIXTURE-FAIL| `, and that is a measured requirement
+  # rather than a style choice. `run-registered-suites.sh` selects excerpt lines with
+  #   MARKER_ERE='^[[:space:]]*(\[FAIL\]|[A-Z][A-Z0-9]*-FAIL|FAIL)([[:space:]:_-]|$)'
+  # in which `|` is NOT a member of the trailing class, so `FIXTURE-FAIL| ` matches nothing.
+  # Under the `| ` spelling only the three header lines below were selected and the tail
+  # survived solely through the excerpt's `-A3` window — and because `fixture_fail` prints the
+  # cause LAST and exits, the discriminating line was the first thing dropped on any run with
+  # preceding output. That is the blind tail this design exists to remove.
+  echo "FIXTURE-FAIL: the R4/R3 capture fixture was starved — the three arms below make NO claim about the emitter."
+  echo "FIXTURE-FAIL: docker rc=${_r4_rc}; sentinel.ok $( [ -f "$TMP/r4out/sentinel.ok" ] && echo present || echo absent )"
+  echo "FIXTURE-FAIL: container stdout tail follows"
+  tail -n 25 "$TMP/r4out/stdout" 2>/dev/null | sed 's/^/FIXTURE-FAIL: /'
+  fail "R4/R3 fixture liveness gate: the capture path was not proven live for this container run" \
+       "docker rc=${_r4_rc}; sentinel.ok $( [ -f "$TMP/r4out/sentinel.ok" ] && echo present || echo absent ). See the FIXTURE-FAIL lines above."
+else
+  pass
+fi
+
+_r4_arm "$( [ "${_r4_a:-0}" -ge 1 ] && echo 1 || echo 0 )" \
+  "R4" \
+  "R4: the mount error did NOT survive the emitter's tail -n 20 | tail -c 180 under the shipped ordering" \
+  "Write dmesg FIRST and the failing command's stderr LAST. capture-a=[$(head -c 300 "$TMP/r4out/capture-a.log" 2>/dev/null)]"
 # NON-EMPTINESS FIRST: `grep -c … || true` on a missing or empty capture-b.log yields 0,
 # which satisfies "the mount error did not survive" for the wrong reason — the arm would pass
 # because nothing was captured at all. Assert the reversed capture DID happen by requiring the
 # dmesg marker that must survive under that ordering, then assert the mount error did not.
 _r4_b_alive=$(grep -c 'quota feature but no quota format module' "$TMP/r4out/capture-b.log" 2>/dev/null || true)
-if [ "${_r4_b_alive:-0}" -ge 1 ] && [ "${_r4_b:-0}" -eq 0 ]; then pass; else
-  fail "R4 MUTATION: reversed-ordering arm is inconclusive (dmesg-marker=${_r4_b_alive:-0} mount-error=${_r4_b:-0})" \
-       "Expected marker>=1 (the capture ran) AND mount-error=0 (the ordering pushed it out). marker=0 means the container produced nothing and the arm proves nothing; mount-error>=1 means R4 cannot detect an ordering regression."; fi
+_r4_arm "$( [ "${_r4_b_alive:-0}" -ge 1 ] && [ "${_r4_b:-0}" -eq 0 ] && echo 1 || echo 0 )" \
+  "R4 MUTATION" \
+  "R4 MUTATION: reversed-ordering arm is inconclusive (dmesg-marker=${_r4_b_alive:-0} mount-error=${_r4_b:-0})" \
+  "Expected marker>=1 (the capture ran) AND mount-error=0 (the ordering pushed it out). marker=0 means the container produced nothing and the arm proves nothing; mount-error>=1 means R4 cannot detect an ordering regression."
 # R3(3a) — POSITIVE CONTROL for the hazard, not a defect report. The emitter's
 # `[ -n ] && [ -r ]` branch falls through to `_san "$DETAIL_SRC"`, so handing it a
 # non-empty-but-unreadable path ships THE LITERAL PATH as the "cause". We deliberately do
@@ -1159,9 +1458,10 @@ if [ "${_r4_b_alive:-0}" -ge 1 ] && [ "${_r4_b:-0}" -eq 0 ]; then pass; else
 # this PR's scope. Instead we PROVE the hazard is live, which is what makes the stage-side
 # guard in R3(3b) load-bearing rather than decorative. If this control ever stops leaking,
 # the emitter changed and R3(3b)'s rationale must be re-derived.
-if [ "${_r3_c:-0}" -ge 1 ]; then pass; else
-  fail "R3(3a) POSITIVE CONTROL: the emitter no longer leaks a literal path for an unreadable detail source" \
-       "R3(3b) below guards a hazard that may no longer exist — re-derive it against the emitter's current branch. capture-c=[$(head -c 300 "$TMP/r4out/capture-c.log" 2>/dev/null)]"; fi
+_r4_arm "$( [ "${_r3_c:-0}" -ge 1 ] && echo 1 || echo 0 )" \
+  "R3(3a)" \
+  "R3(3a) POSITIVE CONTROL: the emitter no longer leaks a literal path for an unreadable detail source" \
+  "R3(3b) below guards a hazard that may no longer exist — re-derive it against the emitter's current branch. capture-c=[$(head -c 300 "$TMP/r4out/capture-c.log" 2>/dev/null)]"
 
 # R3(3b) — THE GUARD, WIDENED (#7227) TO EVERY FATAL EMIT SITE IN THE CONCATENATED runcmd.
 #
@@ -1445,9 +1745,16 @@ total=$((passes + fails))
 # R1 emits exactly 7 on all three of ITS paths (healthy, extraction-failed,
 # precondition-missing) for the same reason S1 does. The floor must move with the suite or it
 # only ever guards the work that predates it.
-if [ "$total" -lt 44 ]; then
-  echo "FAIL: ran only ${total} assertions (<44) — harness did not execute fully" >&2
+# RAISED 44 -> 46 (#7501, then +1 for the AC15 trap-count arm added at review): the R4/R3 run-level fixture-liveness gate emits its own `pass` on
+# the healthy path. Counting it is the whole point of the instrument — a gate that contributes
+# nothing when it succeeds is one that an inversion-to-always-pass leaves undetectable,
+# because the old floor of 44 would still be met.
+if [ "$total" -lt 46 ]; then
+  echo "FAIL: ran only ${total} assertions (<46) — harness did not execute fully" >&2
   exit 1
 fi
 echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed (${total} assertions)"
-[ "$fails" -eq 0 ]
+# THE VERDICT IS AN `exit`, NOT A TRAILING TEST EXPRESSION -- a bare test as the final
+# statement makes the exit status a property of which line happens to be LAST, so a single
+# appended command permanently greens the suite while it still prints accurate failure text.
+exit $(( fails > 0 ))

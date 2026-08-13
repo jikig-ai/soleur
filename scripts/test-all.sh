@@ -842,6 +842,12 @@ if want_scripts; then
   # proof (both RED directions) that the guard can catch the banned form.
   run_suite "scripts/followthrough-varq-ban-live" bash scripts/lint-followthrough-varq-ban.sh
   run_suite "scripts/followthrough-varq-ban" bash scripts/lint-followthrough-varq-ban.test.sh
+  # #7506: the callback-URL closure guard EXECUTES its shipped workflow step body under
+  # `bash -e` (the shell Actions uses for a `run:` block with no `shell:` key). Registered
+  # explicitly for the same reason as the two lines above — scripts/*.test.sh is not globbed,
+  # and this suite existing-but-unregistered would gate exactly nothing, which is the failure
+  # mode the guard it protects had in production.
+  run_suite "scripts/follow-through-closure-guard" bash scripts/follow-through-closure-guard.test.sh
   # Was an ORPHAN until #6698 — the suite existed and passed locally but was
   # registered in no runner, so it gated nothing (exactly the class the comment
   # above warns about). It covers the sweeper's path-traversal/symlink rejection

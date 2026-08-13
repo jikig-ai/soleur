@@ -330,8 +330,22 @@ fi
 # this script writes and the gate later reads.
 # shellcheck source=/dev/null
 source "$GATE_LIB"
+# THE EXIT CODE STAYS 2; THE LABEL DOES NOT. The 0/1/2 verdict contract is consumed by the
+# rehearsal workflow and no consumer greps this literal, so re-labelling is safe — and it is
+# necessary, because a derivation fault is the one rc=2 arm that is NOT transient. It is a
+# deterministic repo-side condition: the module's payload set or its render inputs are
+# unresolvable, and the identical failure reproduces on every attempt. Calling it TRANSIENT
+# told the reader to wait, and the workflow duly re-ran it ~20 times over ~10 minutes of a
+# paid host before reporting "do not simply re-dispatch" (#7485).
+#
+# That retry loop is the workflow's, not this script's, and changing a paid-host dispatch's
+# retry semantics is scoped out here (§Non-Goals) — so the honest move is to stop the message
+# implying the wait is worth anything.
+#
+# REACHES THE STEP LOG AND THE capture-log ARTIFACT, NOT $GITHUB_STEP_SUMMARY: that workflow
+# hardcodes its own rc=2 summary text, which this change does not edit.
 if ! TEMPLATE_SHA="$(git_data_rung2_user_data_sha256 "$CLOUD_INIT")"; then
-  echo "TRANSIENT: could not derive the user_data hash, so there is nothing to bind evidence to."
+  echo "DERIVATION FAULT (deterministic, NOT transient): could not derive the user_data hash from ${CLOUD_INIT}, so there is nothing to bind evidence to. The render inputs or the module's payload set are unresolvable in THIS TREE — re-dispatching reproduces it identically, so do not wait for it to clear. The fail-closed diagnostic below names the offending file."
   printf '%s\n' "$TEMPLATE_SHA"
   exit 2
 fi

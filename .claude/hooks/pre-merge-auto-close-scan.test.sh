@@ -437,8 +437,16 @@ run_case "T23 explicit PR number is the ref gh is asked about → allow" allow \
 # messages, so those messages never land on main and cannot auto-close anything.
 # Before #7516 the hook scanned them regardless, which denied the exact remedy
 # its own deny text prescribes: the only contaminated surface was one commit
-# ("It does not close #6500" — the parser is negation-blind) and the merge
-# already carried a clean --body-file.
+# whose message paired a NEGATED close-keyword with a tracker number, and the
+# merge already carried a clean --body-file. The parser is negation-blind, so it
+# reads such a line as a close regardless.
+#
+# The literal is described rather than pasted in THIS comment, but the fixtures
+# below paste contaminated strings freely — that is not an inconsistency. File
+# contents are safe (GitHub parses commit messages and PR bodies, not diffs), so
+# the fixtures must carry real contaminated text to test anything. The prose is
+# the part that gets copied INTO a PR body while someone explains the guard, and
+# there it would be live.
 #
 # The override is SCANNED, never trusted. T25-T27 are the three ways a weaker
 # implementation would fail open, and each is a real reachable state, not a
@@ -470,6 +478,27 @@ run_case "T26 --body-file WITHOUT --squash does not excuse the commit bodies →
 OPT_FT="6617" \
 run_case "T27 unreadable --body-file path falls back to commit bodies → deny" deny \
   "gh pr merge 1 --squash --body-file $OVR_DIR/does-not-exist.txt" \
+  $'fix: thing\n\nIt does not close #6617' ""
+
+# T28-T30 — SHORT FLAGS. `gh pr merge` spells these -s/--squash, -F/--body-file, -b/--body, and a
+# hand-typed merge reaches for the short forms. Matching only the long spellings falls back to the
+# commit bodies and denies a legitimate merge — fail-closed, but that IS the defect this block
+# removes, in a different spelling. Found by re-reading the diff, not by the first pass.
+OPT_FT="6617" \
+run_case "T28 short flags -s -F behave as --squash --body-file → allow" allow \
+  "gh pr merge 1 -s -F $OVR_DIR/clean.txt" \
+  $'fix: thing\n\nIt does not close #6617' ""
+
+OPT_FT="6617" \
+run_case "T29 short flags do not weaken the scan: contaminated -F → deny" deny \
+  "gh pr merge 1 -s -F $OVR_DIR/dirty.txt" \
+  $'fix: thing\n\nclean commit body' ""
+
+# `-F -` reads the body from stdin, which this hook has already consumed. Treating it as readable
+# would hand the scanner an EMPTY corpus, which clears every surface and fails OPEN.
+OPT_FT="6617" \
+run_case "T30 --body-file - (stdin) is unreadable, not an empty corpus → deny" deny \
+  "gh pr merge 1 --squash --body-file -" \
   $'fix: thing\n\nIt does not close #6617' ""
 
 # ---------------------------------------------------------------------------
