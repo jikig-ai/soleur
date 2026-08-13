@@ -2060,12 +2060,28 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // Note the waiver is orthogonal to `hr-observability-as-plan-quality-gate`'s no-SSH
   // requirement, which that probe satisfies: it is a warehouse query, not a host login.
   //
-  // WITHDRAWN 2026-08-13 (#7456). That plan briefly declared the waiver for the same probe, and
-  // review established the declaration was spent on the wrong thing: the probe's PASS arm is
-  // untouched by that change, so a credentialed run verified a property the PR did not alter. Its
-  // discoverability_test now points at the credential-free fixture suite instead, which exercises
-  // all four of its changes. Baseline stays 1.
-  const BASELINE_DECLARED_PROBES = 1;
+  // 1 -> 2 on 2026-08-13 (#7455). SECOND REVIEWABLE DIFF LINE.
+  //
+  // Declaring plan: `2026-08-12-chore-adr-184-status-flip-accepted-plan.md` (archived).
+  // This is the ADR-184 `adopting -> accepted` flip, and it declares the SAME probe as the
+  // #7440 plan above — deliberately, because it is the same channel's readback. Confirmed
+  // intentional on the same three counts:
+  //   1. PLACEMENT — correctly-indented child of the `discoverability_test:` sub-block.
+  //      Verified with the gate's own sub-block-scoped awk, not a whole-file grep.
+  //   2. TRUTH — same probe, same three BETTERSTACK_QUERY_* secrets.
+  //   3. NO SUBSTITUTE — unchanged from the #7440 reasoning. An unauthenticated variant
+  //      could only prove the host is up, which is a different claim and is already
+  //      covered by the SOLEUR_ZOT_DISK heartbeat.
+  // Why a second plan declares the same probe at all: the flip PR began as docs-only and
+  // needed no `## Observability` block. Review folded in a comment-only
+  // `cloud-init-registry.yml` correction, which put an `apps/*/infra/` path in the diff and
+  // armed preflight Check 10 — so the block was authored during ship, and the honest
+  // discoverability test for "is that channel live?" is the probe that reads it back.
+  // #7456 (2026-08-13) briefly declared the waiver for this same probe and WITHDREW it before
+  // merge: that PR does not change the probe's PASS arm, so a credentialed run would have
+  // verified a property it did not alter. Its discoverability_test points at the
+  // credential-free fixture suite instead. The count is therefore unchanged by it.
+  const BASELINE_DECLARED_PROBES = 2;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

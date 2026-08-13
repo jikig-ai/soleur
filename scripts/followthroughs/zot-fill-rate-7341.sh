@@ -11,7 +11,11 @@
 # unmerged, so it is NOT fixed in the v2.1.20 pin this host runs. A refill is therefore the
 # EXPECTED outcome to measure. A second candidate — orphaned `.uploads/` staging, seen as
 # `i/o timeout ... PatchBlobUpload` during the recut — is not discriminable from here; attribution
-# is blocked by #7440 (the registry ships no zot logs; this heartbeat is its only instrument).
+# was blocked by #7440 (the registry shipped no zot logs; this heartbeat was its only instrument).
+# UNBLOCKED 2026-08-12 (#7455): the zot container-log channel is LIVE, and it counts
+# message:PatchBlobUpload as one of its four evidence classes — which is the very discriminator
+# named as missing below. Attribution is now answerable; this script has not yet been rewritten to
+# use it.
 #
 # ── EVERY PARSE STEP BELOW IS A GUARD. DO NOT REGEX THE WHOLE ROW. ───────────────────────────
 #
@@ -126,7 +130,9 @@ if [[ "${rows_env:-0}" -eq 0 ]]; then
   echo "zot-fill-rate[#7341]: TRANSIENT no_emission_rows rows_returned=${rows_total} window=${WINDOW}"
   echo "TRANSIENT: the query answered but ZERO rows matched the emission envelope. A MEASURED"
   echo "  absence, not a query failure: the heartbeat is not landing, so the registry is currently"
-  echo "  UNOBSERVABLE (it is the only instrument — #7440). A dead heartbeat is not a low disk."
+  echo "  UNOBSERVABLE from THIS instrument. A dead heartbeat is not a low disk. (Since 2026-08-12"
+  echo "  the zot container-log channel is live and carries PatchBlobUpload — query SOLEUR_ZOT_LOG"
+  echo "  rather than concluding unobservable; see #7455.)"
   echo "  Discriminator for producer-silent vs fresh-host vs creds: scripts/zot-restart-loop-alarm.sh"
   exit 2
 fi

@@ -215,8 +215,12 @@ C2_CTL="$TMP/c2.ctl"; control_row_predelivery "$BASELINE_BOOT" > "$C2_CTL"
 run_probe "$EMPTY" "$C2_CTL"
 assert "C2 zero envelope + baseline boot_id -> exit 2" "[[ '$CASE_RC' -eq 2 ]]"
 assert "C2 reason=not_delivered" "grep -q 'reason=not_delivered' <<<\"\$CASE_OUT\""
-assert "C2 says so is the EXPECTED steady state (so the operator does not chase it)" \
-  "grep -qi 'expected steady state' <<<\"\$CASE_OUT\""
+# Post-delivery (2026-08-12, #7455) this arm is reachable only through a REGRESSION, so the advice
+# inverted: it must tell the operator to investigate, not to wait. The old assertion pinned
+# 'expected steady state' — a green test locking in an instruction that is now wrong, and one the
+# sweeper republishes verbatim as a public issue comment on every tick.
+assert "C2 says INVESTIGATE, not wait (post-delivery this arm is a regression)" \
+  "grep -qi 'REGRESSION, NOT A NOT-YET' <<<\"\$CASE_OUT\" && grep -qi 'Next: INVESTIGATE' <<<\"\$CASE_OUT\""
 
 # --- C3: delivered_but_silent — reporter carries log_shipper_* fields, zero envelope rows --
 # This is the state that separates ACT from WAIT, and collapsing it into 'not delivered' is the

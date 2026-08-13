@@ -9,18 +9,26 @@
 # from the directive comment on #7455, so this reference is for a human reader; changing it does not
 # re-route the probe.
 #
-# WHAT IT CLOSES. ADR-184 ships at status `adopting`. Its flip condition is an OBSERVED
+# STATUS AS OF 2026-08-12 (#7455): CLOSED. The condition below was met — first PASS 21:03:51Z, and
+# ADR-184 is now `accepted`. This probe stays enrolled as a REGRESSION detector: a future replace
+# can legitimately return the channel to not-delivered, and the arms below must keep working.
+# Everything from here to the exit contract is the ORIGINAL pre-delivery framing, kept because the
+# arms are still live; read it as history, not as current state.
+#
+# WHAT IT CLOSED. ADR-184 shipped at status `adopting`. Its flip condition is an OBSERVED
 # envelope-stamped row read back OUT of the warehouse. That cannot happen before merge:
 # hcloud_server.registry is cloud-init-only (ADR-096, ADR-172 §8), every registry resource is an
 # OPERATOR_APPLIED_EXCLUSION, and merging this applied NOTHING.
 #
-# DELIVERY HAS SINCE LANDED, so the pending-forever framing this header used to carry is retired.
-# The zot-pin ordered path closed 2026-08-12T20:39Z WITHOUT firing its step-6 `registry-host-replace`
-# — the atomic 3-way recut had already replaced the host on 08-10, two days BEFORE the shipper
-# merged, so the shipper missed that window and sat inert. A separate `registry_host_replace`
-# dispatch (run 31639782781) succeeded at 20:54:12Z and this probe PASSed at 20:58:45Z. TRANSIENT
-# is therefore no longer the expected steady state: `not_delivered` now means a host is running
-# cloud-init older than the shipper, which is a provisioning question rather than a wait.
+# DELIVERY LANDED, AND THE MECHANISM IS WORTH RECORDING because the pending-forever framing this
+# header carried was retired by an event nobody scheduled. The zot-pin ordered path closed
+# 2026-08-12T20:39Z WITHOUT firing its step-6 `registry-host-replace` — the atomic 3-way recut had
+# already replaced the host on 08-10, two days BEFORE the shipper merged, so the shipper missed that
+# window and sat inert. A separate `registry_host_replace` dispatch (run 31639782781) succeeded at
+# 20:54:12Z, and the channel has read PASS since. So a TRANSIENT now means a REGRESSION — do not
+# discount one on the strength of the pre-delivery paragraphs above — and `not_delivered`
+# specifically means a host is running cloud-init older than the shipper, which is a provisioning
+# question rather than a wait.
 #
 # The escalation horizon lives in the tracker body: `delivered_but_silent`, or any undelivered state
 # persisting past 90 days, is an escalation rather than a steady state. Known cost, stated rather
@@ -386,15 +394,16 @@ if [[ "$n_envelope" -eq 0 ]]; then
   echo "           guard, and runcmd is per-instance, so drift without a replace proves nothing)." >&2
   echo "           The read path IS alive (${n_control} control row(s)), so" >&2
   echo "           this is a MEASURED absence rather than a dark channel." >&2
-  echo "           THIS IS NO LONGER THE EXPECTED STEADY STATE. Delivery landed 2026-08-12: the" >&2
-  echo "           host was replaced at 20:54:12Z and this probe PASSed at 20:58:45Z, so a live" >&2
-  echo "           channel has been observed. Reaching this arm now means a host is running" >&2
-  echo "           cloud-init OLDER than the shipper — a replace that rolled back, or a fresh host" >&2
-  echo "           born from a stale template. That is a provisioning question, not a wait." >&2
-  echo "           (Historical note: this arm used to say delivery was pending step-6 of the" >&2
-  echo "           zot-pin ordered path. That path closed 2026-08-12T20:39Z WITHOUT firing step-6 —" >&2
-  echo "           the atomic recut had already replaced the host — so an operator who had just" >&2
-  echo "           dispatched a replace was being told to wait for a step that no longer exists.)" >&2
+  echo "           SINCE 2026-08-12 THIS IS A REGRESSION, NOT A NOT-YET. The channel was DELIVERED" >&2
+  echo "           2026-08-12T20:54:12Z (run 31639782781) and first read back 21:03:51Z, which" >&2
+  echo "           flipped ADR-184 to accepted. Reaching this arm now means the reporter has" >&2
+  echo "           stopped carrying log_shipper_* fields — i.e. the host regressed to a" >&2
+  echo "           pre-shipper image, or was re-provisioned from one." >&2
+  echo "           Next: INVESTIGATE. Do not wait. (Before delivery this arm correctly read as the" >&2
+  echo "           expected steady state; that advice is retired, not merely dated. It also named" >&2
+  echo "           step-6 of the zot-pin ordered path as the delivery vehicle — that path closed" >&2
+  echo "           WITHOUT firing step-6, so an operator who had just dispatched a replace was" >&2
+  echo "           being told to wait for a step that no longer existed.)" >&2
   exit 2
 fi
 
