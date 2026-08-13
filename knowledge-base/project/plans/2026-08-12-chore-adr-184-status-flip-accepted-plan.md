@@ -226,7 +226,23 @@ None.
 7. `git grep -c 'INERT UNTIL A PROVISIONING EVENT' -- knowledge-base/engineering/architecture/diagrams/model.c4` returns `0`.
 8. `bash plugins/soleur/test/c4-model-freshness.test.sh` exits 0 (this is the authority; it byte-diffs the regenerated JSON against a fresh render).
 9. The full-suite gate runs at its usual point in `/work`; no suite regresses.
-10. No file under `apps/web-platform/infra/`, `scripts/followthroughs/`, or `.tf` appears in `git diff origin/main...HEAD --name-only`.
+10. No file under `apps/web-platform/infra/` or matching `.tf` appears in `git diff origin/main...HEAD --name-only`.
+
+    **[Amended 2026-08-12 during /review — `scripts/followthroughs/` removed from this exclusion.]**
+    The original AC also excluded `scripts/followthroughs/`, on the plan's reasoning that the probe
+    was out of scope. Two review agents independently found that reasoning wrong: post-delivery the
+    probe's `not_delivered` arm is reachable only through a REGRESSION, yet its advice still read
+    *"This is the EXPECTED steady state … Next: nothing to do here"* — and the sweeper republishes
+    that stdout verbatim as a public issue comment on every tick. A green test (`C2`) was pinning
+    the now-false instruction. Probe advice + header + the C2 assertion corrected together; exit
+    codes, `reason=` tokens and queries untouched; fixture suite 70/70.
+
+    `apps/web-platform/infra/cloud-init-registry.yml` stays excluded, and for a stronger reason than
+    the plan originally gave: `zot-registry.tf` sets
+    `user_data = base64gzip(replace(templatefile("…/cloud-init-registry.yml", …)))` with **no
+    `ignore_changes`**, so *any* edit to that file — including a comment — is ForceNew on
+    `hcloud_server.registry`. It is an infrastructure change requiring a provisioning event, not a
+    doc edit. Tracked as follow-up.
 
 ### Post-merge
 
@@ -283,12 +299,28 @@ no `app/**/layout.tsx`). Product tier resolves to **NONE**.
 
 ### Legal
 
-**Not relevant — verified, not assumed.** ADR-184 is cited by `article-30-register.md`,
-`compliance-posture.md` and `legal/audits/2026-08-counsel-review-7440.md`, so this was checked rather
-than skipped. Those citations reference the shipper's *existence* as a non-Vector emitter (PA-8
-recipients + TOMs, recorded **DISCHARGED** by the 2026-08-12 counsel review) and are independent of
-the ADR's status field. A grep for the not-yet-delivered claim class across the legal corpus returned
-only unrelated Sentry/Hetzner rows.
+**[Amended 2026-08-12 during /review — the original "not relevant" verdict was wrong, and the sweep
+that produced it had a pattern hole.]**
+
+The original text read: *"Not relevant — verified, not assumed. … A grep for the not-yet-delivered
+claim class across the legal corpus returned only unrelated Sentry/Hetzner rows."* That observation
+was accurate **for the pattern used** and false as a conclusion. The legal corpus never uses the
+engineering corpus's phrasings: widening to `Ships INERT|delivery rides|no additional data flows`
+returns **4** hits the original three literals missed — `article-30-register.md` PA-8 §(d)
+(`Ships INERT`), and three in `legal/audits/2026-08-counsel-review-7440.md`. This is the *same*
+failure shape this plan documents one section earlier for Test Scenario 4 (a string-scoped grep
+proves the absence of strings, not of the claim); the second instance was not caught.
+
+What survives: the substantive conclusions. No new recipient, no new sub-processor, no new
+third-country transfer, no Art. 33/34 trigger — the citations do reference the shipper's *existence*
+as a non-Vector emitter, which is status-independent. What does not survive is "not relevant": the
+Art. 30 register records **current** processing and still says processing has not started, and the
+counsel review's `DISCHARGED` disposition rests on two premises (`B2` non-crystallisation, and "the
+INERT posture means no additional data flows on merge" against a `PENDING` Better Stack DPA) that
+expired at 2026-08-12T20:54:12Z.
+
+Because this is legal posture rather than a typo, it was routed to the `clo` agent for a binding
+ruling with drafted replacement wording rather than hand-edited here — see the Follow-ups section.
 
 ## Test Scenarios
 
