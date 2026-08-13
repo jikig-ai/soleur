@@ -3094,3 +3094,185 @@ shape**, which claim 1 now makes precise: a frame with `exit_code=0`, `files_wri
 == expected`, `files_failed=0` **and a stale `start_ts`**. That frame satisfies
 `infra_config_count_invariant` completely. Any test whose pass-1 fixture fails the count invariant is
 testing a state the #7220 race does not produce, and would let the R19.1 defect survive green.
+
+# R22 — RULING on both forks: take them, and prune what they obsolete
+
+**[2026-08-13, CTO adjudication at the `single-user incident` threshold.] R22 is the final word on
+PR-B's shape and supersedes R18, R19 and R20 wherever they disagree.** Both forks are TAKEN. They
+were never two decisions: Fork 2 forces Fork 1, and together they **dissolve four of R20's five P0s
+structurally** rather than mitigating each with a bespoke conditional.
+
+## R22.1 — Fork 2 (the step split): TAKE
+
+**The decisive reason is that this workflow already uses the split for the *first* apply of the same
+resource.** `Terraform plan` plans and grades in one step — destroy-guard, `host_creates` halt, DPF
+sensor — and `Terraform apply` consumes the saved plan in the next. The unbypassable boundary between
+grading and applying already exists, is already tested, and sits ~400 lines above the step PR-B was
+about to actuate a *second* production apply from without it.
+
+R20.2's measurement re-confirmed independently: `steps.infra_config_gate` is referenced at exactly
+**two** `if:` sites plus three `env:` reads; the remaining six status-keyed steps are five ×
+`success()` and one `always()`, all job-cumulative, **zero edits**.
+
+| R20 defect | Under the split |
+|---|---|
+| R20.3 — `repush_attempted` unwritten on a failed recovery | **Dissolved.** "A write was attempted" is `steps.repush_apply.outcome != 'skipped'` — a native fact, no output-before-abort ordering rule |
+| R20.4 — the `ALLOW_MISSING_STATUS` hatch greens after a write | **Dissolved.** Pass 2 is its own step; hardcode `ALLOW_MISSING_STATUS: false` in its `env:`. No in-body `REPUSH_DONE` conditional |
+| R20.5 — post-latch window unbounded from below | **Dissolved.** Pass 2 is a fresh invocation carrying the existing documented `sleep 8` preamble and a full attempt budget. No `DEADLINE` arithmetic, no reinstated settle, no two-producer loop bound |
+| R20.6 — a failed re-push misdiagnosed by the #7220 alert | **Reduced** to a `case` over `steps.repush_plan.outcome` / `steps.repush_apply.outcome`. No `repush_failed=<phase>` plumbing — **the phase *is* the step** |
+| R18.3 — boundedness | **Structural.** A step cannot run twice in a job. The latch and its "set only after execution" rule are deleted outright |
+
+**The one new failure mode, and it is the catastrophic one:** pass 1 must soft-fail and hand off via
+an output. Guard 1 below exists solely for it.
+
+## R22.2 — Fork 1 (extract the `run:` body): TAKE, forced
+
+Under the split, pass 1 and pass 2 run **the same ~240 lines**. Inline, that means duplicating the
+body across two YAML steps — exactly the duplication R18.2 rejected, breaking the F1 pin's `head -1`
+anchoring precisely as R18.2 predicted. So the choice is not "script vs. YAML"; it is **one tested
+file invoked twice** vs. **240 duplicated lines of untestable YAML**.
+
+Precondition re-measured independently: **240 body lines, 19,710 bytes, 0 `${{ }}`, 0 heredocs, 0
+herestrings**, and all four `env:` keys are step-level and inherited by a child `bash`. ADR-150's
+verbatim-move precondition is satisfied exactly.
+
+**Placement — a named deviation from ADR-150, not an oversight.** `apps/web-platform/infra/infra-config-verify.sh`,
+not `scripts/`. Three measured reasons: the body does `source ./infra-config-gate.sh`, a relative
+path that resolves only from `INFRA_DIR` (which stays the step's `working-directory`); the directory's
+convention is `<name>.sh` + `<name>.test.sh` registered in `infra-validation.yml`, which fixes
+ADR-150's own recorded regret that `scripts/cutover-inngest.sh` shipped **without** a companion suite;
+and the orphan-suite lint makes the registration impossible to skip silently. State the deviation in
+ADR-187.
+
+## R22.3 — One PR, two commits
+
+The operator's UC2 disposition (PR-A + PR-B, `Closes #7104` on PR-B) is not reopened. Inside PR-B:
+
+- **Commit 1 — the verbatim move, and nothing else.** Body byte-identical; the step becomes
+  `run: bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/infra-config-verify.sh"`;
+  `working-directory` unchanged; companion `.test.sh` registered in `infra-validation.yml`; the F1
+  pin re-pointed to the two-clause form. **Zero behaviour change**, gated by ADR-150's PyYAML
+  byte-compare against the pre-move `run:` block with no whitespace normalization.
+- **Commit 2 — everything else.** Parameterise the script for pass 1 / pass 2, split the steps, add
+  the re-push plan/grade/apply, fold R20.7.
+
+**Scheduling win:** commit 1 has **no dependency on task 4.0**, so the verbatim move can be authored
+and machine-verified *while* the blocking cardinality measurement runs. Task 4.0 gates commit 2 —
+and gates it harder under this shape, because the measured number becomes a literal in the apply
+step's `if:` (guard 3).
+
+## R22.4 — Fork 3: option (a). The principle is registered as stated
+
+No rewording, no carve-out; PR-B becomes its first compliant instance. Register with one corollary
+the split now makes true:
+
+> **A verification gate does not share a step with its own verdict, and does not share a step with
+> the write it triggers.** Sensing, adjudication and actuation are separate steps. The gate senses
+> and adjudicates; when its verdict is *remediate*, the remediation is planned and graded in one step
+> and applied in the next; a second invocation of the same verification artifact renders the terminal
+> verdict; and the escalation credentials live in none of them.
+
+Amend PR-A's in-file comment by appending one clause, so the file states the invariant it now
+satisfies in full:
+
+> `# ...and a verification gate should not share a step with its own verdict — nor, since #7104,`
+> `# with the remediation it triggers: the re-push is planned and graded in one step and applied`
+> `# in the next, and a second invocation of infra-config-verify.sh renders the terminal verdict.`
+
+**The stronger consequence, and it belongs in ADR-187's opening: PR-B ships no verification surface
+that actuates.** `infra-config-verify.sh` polls, adjudicates and emits a verdict; it never writes
+production. R20.8's dilemma is **dissolved**, not resolved. R20.7 §1's command-position sweep
+therefore extends to **two** files — `infra-config-gate.sh` and the new `infra-config-verify.sh`.
+
+## R22.5 — The three guards, each closing a measured hole
+
+**Guard 1 — a mis-keyed `if:` skips every re-push step and the job greens having verified nothing.**
+The five `success()` steps re-arm; one closes the founder's GitHub issues, one swaps the container.
+That is #6594's latched false-green, reintroduced by the remedy. **Measured, at actionlint 1.7.7:** a
+mistyped **step id** is caught (`property "…" is not defined in object type`, rc=1); a mistyped
+**output name** produces **no finding at all**, because `outputs` types as `{string => string}` so
+every name is valid. And CI's own invocation treats rc=1 as acceptable and that job is **absent from
+`scripts/required-checks.txt`** — so even the half actionlint catches cannot fail a PR today.
+
+*Cheapest guard:* a PyYAML pin inside `infra-config-gate.test.sh` — the file this PR already edits,
+already carrying F1, already floored by `GATE_MIN_ASSERTIONS`. Assert three things: every consumer
+`if:` naming `steps.<id>.outputs.<name>` resolves to a step that exists; every literal compared
+against is one the script can emit (`grep -o "verdict=[a-z_]*"` over `infra-config-verify.sh`); and
+the `if: always()` terminal-verdict backstop step exists. ~15 lines, two independent producers
+required to agree. **Do not rely on actionlint for this.**
+
+**Guard 2 — the "verbatim" move is not verbatim** (block-scalar dedent, stripped trailing newline,
+shebang offset) — 19,710 bytes into a P1 gate with no CI signal on the production path.
+*Cheapest guard:* ADR-150's technique as a commit-1 merge gate, not as prose — parse the `run:` block
+from the base revision with PyYAML, compare byte-for-byte against the new file minus its shebang, **no
+whitespace normalization**. Plus `bash -n` on the extracted file (never on the `.yml`, never `bash -c`).
+
+**Guard 3 — the re-push applies against an ungraded plan.** Keyed on `success()`, a grading step whose
+cardinality assert was written as an `echo` without `exit 1` — or loosened later by an editor "making
+it work" — lets the apply run, with the `-target`-transitive `remote-exec` consequence task 4.0 names.
+*Cheapest guard:* **do not key the apply on `success()`.** Have the grading step write
+`repush_graded=<n>` (the measured replaced-resource count) and key the apply
+`if: steps.repush_plan.outputs.repush_graded == '1'`, with task 4.0's measured value as a literal in
+the YAML. Loosening the assert then requires editing the `if:` too — two producers — and a grader that
+fails to set the output skips the apply and trips the backstop.
+
+## R22.6 — PRUNE: delete these rather than layering over them
+
+**Delete outright.** Every item below has had its premise removed; leaving them produces the
+two-copies-of-one-machine drift this plan warns about elsewhere.
+
+- **R18.2** entirely (inline latched block, the `repush_once`-as-function cut, the
+  errexit-in-condition reasoning). R19.1 killed its premise; the split removes the hazard
+  structurally. **Keep only** the Guard 2 row forbidding a function wrapper around the predicate call.
+- **R18.3** (boundedness via "the block appears once" + a latch). Replaced by: exactly one step in the
+  job invokes `terraform apply` against `tfplan-repush`.
+- **R18.8 §9, §10, §11, §12.** §9/§10 were already withdrawn by R20.5; §11 (two producers of the loop
+  bound) and §12 (nested-`done` erosion) both presuppose loop widening, which is gone.
+- **R18.8 §13** (`$GITHUB_OUTPUT` survives `exit 1`; write the flag before the aborts). Superseded by
+  step outcomes — R20.3's fix and its premise both go.
+- **R19.1's *correction*** (consult the predicate inside the break arm, then `continue`). No in-loop
+  re-push exists. Its consequence 2 — duplicated `FRAME_START_TS` extraction and polarity guard —
+  disappears, exactly as R19.1 predicted it would if the extraction fork were taken. **R19.1's
+  *finding* stands** and is why the fixture shape in R21.2 is pinned.
+- **R20.3, R20.4, R20.5, R20.6 as mechanisms.** Keep each finding's **measurement** as ADR-187
+  context — especially R20.5's 6 s + 3 s = 9 s against an 11 s window, which is the evidence that a
+  fresh invocation's `sleep 8` is load-bearing. Delete the fixes: the `REPUSH_DONE` hatch conditional,
+  the `DEADLINE` while-loop, the `repush_failed=<phase>` output, and the output-ordering rule.
+- **R18.16's fallback paragraph** ("if the fork resolves the other way, §12 becomes mandatory").
+- **R20.8 option (b)** and its AP-019-style deviation registration — that paperwork existed only for
+  the shape not taken.
+
+**Reverse in ADR-187.** R18.11's first bullet asks the ADR to record "the step-boundary collapse R17
+named". The ADR now records the **opposite**: the boundaries were **restored**, and the workflow's
+existing plan→apply grading shape was reused rather than re-implemented inline. R18.11's "why the
+re-push is inline rather than a function" bullet is deleted.
+
+**Restate rather than delete.**
+
+- **R19.3** (conflated baselines) survives and simplifies: pass 1 compares `start_ts` against
+  `APPLY_START_EPOCH`; pass 2 compares against the pass-1 observed `start_ts`, passed explicitly as a
+  step output into the second invocation — **an argument, not a re-read**.
+- **R19.2 / R18.8 §12's counting-`done` hardening** is still worth taking inside the script but is no
+  longer load-bearing for the re-push. **Demote P1 → housekeeping.**
+- **AC17 is rewritten as R18.16 anticipated:** the hermetic test drives the real
+  `infra-config-verify.sh` twice with `curl`/`terraform`/`doppler` stubbed on `PATH`, with **no YAML
+  extraction at test time**. This is the single largest gain in the ruling — the plan's *primary*
+  acceptance criterion stops testing a copy of the artifact.
+- **R20.7 §1's command-position sweep** now scopes to two files.
+
+**Untouched and still binding:** task 4.0 / R20.1 (blocking, and load-bearing for guard 3); R18.6
+(the separate observability step — the split extends its principle rather than replacing it); R18.7;
+R19.6; R20.7 §§2–12; boundedness to one re-push; `Closes #7104` on PR-B; `single-user incident`.
+
+## R22.7 — A free win the split unlocks, and one capability gap to file
+
+**Free win.** R17.4's residual — *"assert the webhook is alive after every apply" now covers apply #1
+only* — becomes closable: reuse the existing `Verify webhook is alive post-apply` step keyed to the
+re-push apply. Under the inline shape that was impossible; under the split it is one duplicated step
+with an `if:`. Add it, and R17.4 stops being an ADR caveat and becomes a fixed defect.
+
+**Capability gap, for #7527 and *not* for PR-B.** The repo has no gate pinning agreement between a
+workflow `if:` output literal and the shell that produces it — measured above as precisely the class
+actionlint cannot see, on a linter that is advisory and not a required check. Guard 1 closes it
+locally inside `infra-config-gate.test.sh`; a general `scripts/lint-workflow-output-literals.py`,
+sibling to `lint-workflow-errexit-capture.py`, belongs in #7527's scope.

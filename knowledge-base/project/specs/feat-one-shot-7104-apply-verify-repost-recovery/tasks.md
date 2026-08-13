@@ -87,9 +87,11 @@ stylistic: PR-B's recovery would fire on the wrong runs without PR-A's discrimin
 > cannot see a stale frame, so the re-push block is **unreachable on the exact shape it was built
 > for** (R19.1, confirmed independently three times). Four further fail-opens were found (R20.3–R20.6),
 > the assert that bounds the production write has **never been evaluated** (R20.1, now blocking task
-> **4.0**), and **two design forks are open** — extract the step body to a script (R18.16) and split
-> the recovery into graded steps (R20.2). `/soleur:deepen-plan` adjudicates the forks. Do not start
-> Phase 5 until task 4.0 has a number in it.
+> **4.0**). **Both design forks are now RESOLVED — plan R22 ruled TAKE on both:** the ~240-line gate
+> body is extracted verbatim to `apps/web-platform/infra/infra-config-verify.sh`, and the recovery is
+> split into graded steps reusing the plan->grade->apply boundary this workflow already uses for its
+> first apply. **Phase 6 is rewritten accordingly and is the shape to build.** R22.6 lists what that
+> prunes. Do not start commit 2 until task 4.0 has a number in it.
 
 ## Phase 4 — PR-B RED: the contract's tests, before the contract
 
@@ -157,101 +159,91 @@ sourceable library of quiet, pure adjudicators. Exit status is the verdict; noth
 
 ## Phase 6 — PR-B: the consumer (workflow wiring)
 
-- [ ] **6.1** Keep the poll loop + terminal adjudication + freshness pin **in the step body, not in
-      a function** (R16.1 — a function called from a condition context silently disables `set -e`
-      for its whole body). ~~The second pass re-runs the block; accept the duplication.~~
-      **[Corrected — R18.2.]** Do **not** duplicate the block: task 6.2 wins. Duplication adds a
-      second `count_invariant`, `done` and `adjudicate`, and the call-site pin takes `head -1` of
-      each grep, so it would silently pin the first copy and stop quantifying over the second.
-- [ ] **6.2** Widen the **existing** poll loop's attempt count rather than adding a second loop
-      (plan R13.4 — a second `done` would make Guard 2's "strictly between" clause ambiguous).
-      ~~The widened loop's own break condition *is* the re-verify R15.3 requires.~~
-      **[FALSE — R19.1, the review's top finding.]** `infra_config_count_invariant` reads
-      `exit_code`, `files_failed`, `files_written` and `files_total` — **never `start_ts`**. On the
-      #7220 shape the frame on disk is a *previous, complete* apply (`exit_code=0`, 19/19,
-      `files_failed=0`), so the invariant **holds**, the loop breaks on attempt 1, and a re-push
-      placed after the break is unreachable on the very shape it exists for. The predicate must be
-      consulted **before** the break:
-      `if count_invariant …; then if [[ latch unset ]] && should_repush …; then <re-push>; continue; fi; break; fi`.
-      Keep the `infra_config_count_invariant /tmp/` token textually before the `done` so the pin's
-      `ci_line` still resolves. The bound still widens, but to give the post-latch passes somewhere
-      to run — and per R20.5 the budget must be a function of the latch (`while` + a counter granting
-      a fixed further budget once it fires), not a fixed list, or a re-push on a late attempt yields
-      a **false red on a successful recovery**. Add an integration fixture whose pass-1 frame is
-      **complete, healthy and stale** — the real production shape — and assert the re-push fires on
-      it; without that fixture the fix is unverified. **R21 pins the fixture's exact shape:**
-      `exit_code=0`, `files_written == files_total == expected`, `files_failed=0`, and a **stale
-      `start_ts`** — that frame satisfies `infra_config_count_invariant` in full. Any pass-1 fixture
-      that *fails* the count invariant is testing a state the #7220 race does not produce and would
-      let this defect survive green.
-- [ ] **6.3** Retain the last **HTTP 200** response separately from the last response overall, and
-      feed the classifier that artifact (R15.4). **Truncate the response file per pass**
-      (R17.2/R18.8 §7) — `curl -s -o` on a transport failure leaves the prior body in place, so
-      pass 2 can otherwise adjudicate pass-1 bytes, and the #7220 alert step reads the same file.
-- [ ] **6.4** Add the re-push as an **inline latched block** inside the widened loop — *not* a
-      function (R18.2: a function invites `if ! repush_once`, which kills `errexit` for a body
-      containing a production `terraform apply`). It must:
-      - re-record the baseline as a **plain shell assignment**, never `$GITHUB_ENV` (R4a), using
-        the **observed stale frame's own `start_ts`**, recorded **once before** the re-push fires
-        and never re-read (R15.5, R18.8 §6 — both operands are then host-clock, so skew cancels
-        without shipping R2, and the baseline cannot advance out from under the single retry);
-      - set the latch **only after the re-push actually executes**, never on first sight of the
-        classifying shape (Guard 2 row 4);
-      - run the scoped `-replace` + `-target` plan **wrapped in `doppler run --name-transformer
-        tf-var`** — ~~wrap the apply~~ **[Corrected — R18.8 §3]**: `terraform apply <planfile>`
-        rejects `-target=`/`-var` and takes values from the plan file, so the wrapper belongs on the
-        **plan** invocation and is inert on the apply. **The plan invocation must also pass
-        `-var="ssh_key_path=${CI_SSH_PUB}"` (R19.4 §1)** — `variables.tf` defaults `ssh_key_path` to
-        `~/.ssh/id_ed25519.pub`, which does not exist on the runner, and `server.tf` does
-        `public_key = file(var.ssh_key_path)`; `-target` is transitive and `deploy_pipeline_fix`
-        reaches `hcloud_server.web` through its `depends_on`. Without it the recovery plan **errors
-        under `-input=false`**;
-      - assert `[[ -s "$CI_SSH_PUB" ]]` **and** that the S3 backend credentials
-        (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, exported by the `Extract backend
-        credentials` step) are non-empty — `--name-transformer tf-var` would rename them, so they
-        must be read as plain env vars (R18.8 §4);
-      - apply R3's **exact-cardinality** assert, pinning `mode == "managed"` and exactly one
-        replaced resource, and re-run the `host_creates` destroy-guard against the second plan's
-        JSON with the same `destroy-guard-filter-web-platform.jq`;
-      - use **no status-discarding constructs** (`|| true`, `2>/dev/null` on the apply) while
-        **using** the AP-022-sanctioned `|| rc=$?` capture and an explicit
-        `|| { echo "::error::…"; exit 1; }` branch — without it the step dies mute under `set -e`
-        (R17.2, R18.8 §5). `scripts/lint-workflow-errexit-capture.py` enforces this.
-      - ~~add **no bare `sleep`** for the handler settle~~ **[WITHDRAWN — R20.5.]** Reinstate the
-        settle. The premise was wrong twice: measured on run 31714143720, plan (6 s) + apply (3 s) =
-        **9 s** against a window of up to **11 s**, so "far longer" is false; and the interval is
-        measured in the wrong place anyway, because `push-infra-config.sh` is a `local-exec`
-        provisioner whose 202 fires at the **end** of the apply, so the 5–8 s settle starts *there*.
-        Use the same constant the step's own opening `sleep 8` already documents;
-      - write `repush_attempted=true` to `$GITHUB_OUTPUT` **before the first abort point**, not with
-        the latch (R20.3). `$GITHUB_OUTPUT` writes survive a later `exit 1`, but a write that is
-        never reached does not — and tying it to the latch makes it absent on exactly the runs where
-        a production write was attempted and went wrong. Write `repush_failed=<phase>` before each
-        `exit 1` in the block (R20.6). The latch stays where it is, after the apply, because its
-        property is boundedness;
-      - disable the `ALLOW_MISSING_STATUS` escape hatch once the latch is set (R20.4) —
-        `[[ "$ALLOW_MISSING_STATUS" == "true" && "$REPUSH_DONE" != "true" ]]`. Without this, a last
-        poll of 404 after a re-push falls through to `exit 0`: the job goes **green** having
-        performed a production write and adjudicated nothing, re-arming the five `success()` steps
-        including the one that closes the founder's drift issues;
-      - name the artifacts `tfplan-repush` / `tfplan-repush.json` so the graded apply-#1 plan cannot
-        be clobbered, and delete the JSON via `trap 'rm -f tfplan-repush.json' EXIT` — the only form
-        that survives all six abort paths. It carries the live prd Doppler token and the webhook HMAC
-        in cleartext; never `cat` it on an error branch (R20.7 §2);
-      - pass `-lock-timeout` on both the plan and the apply, so a killed or cancelled re-push cannot
-        leave the S3 backend lock held and block every subsequent apply on the sole no-SSH
-        remediation path (R20.7 §3);
-      - `echo` one line at the `should_repush` call site naming the branch taken, so a run that
-        declined can be told apart from one where the block was skipped or where an unvalidated
-        `APPLY_START_EPOCH` silently suppressed the recovery (R20.7 §8).
-- [ ] **6.5** Add the `declare -F` anti-vacuity check, mirroring the existing
-      `declare -F infra_config_red_alert` pattern. **[Corrected — R18.1]** it targets
-      ~~`infra_config_bounded_verify`~~ **`infra_config_should_repush`** — the sourced predicate is
-      the only thing a `declare -F` check can meaningfully guard.
-- [ ] **6.6** The step's exit code remains the single terminal verdict. **No `continue-on-error`.**
-- [ ] **6.7** Do **not** relocate the bridge teardown (R3 reversed this). The re-push needs no SSH:
-      `deploy_pipeline_fix`'s push is a `local-exec` provisioner, and the cardinality assert aborts
-      if the second plan touches anything else (R18.8 §8).
+> **[REWRITTEN 2026-08-13 — plan R22 ruled BOTH forks TAKEN.]** The inline latched block inside a
+> widened poll loop is **gone**. The ~240-line gate body is extracted verbatim to
+> `apps/web-platform/infra/infra-config-verify.sh` and the recovery is split into graded steps,
+> reusing the plan->grade->apply boundary this same workflow already uses for the first apply.
+> This dissolves four P0s (R20.3-R20.6) structurally instead of patching each. Ship as **two
+> commits**: a verbatim move, then the behaviour.
+
+### Commit 1 — the verbatim move (no behaviour change; does NOT depend on task 4.0)
+
+- [ ] **6.1** Move the `Verify infra-config apply succeeded` step's `run:` body **verbatim** to
+      `apps/web-platform/infra/infra-config-verify.sh`. Measured precondition (ADR-150's): 240 body
+      lines, 19,710 bytes, **0** `${{ }}` expressions, **0** heredocs, **0** herestrings; all four
+      `env:` keys are step-level and inherited by a child `bash`. The step becomes
+      `run: bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/infra-config-verify.sh"` with
+      `working-directory` **unchanged** — the body's `source ./infra-config-gate.sh` is relative and
+      resolves only from `INFRA_DIR`.
+- [ ] **6.2** Add `apps/web-platform/infra/infra-config-verify.test.sh` and register it in
+      `.github/workflows/infra-validation.yml` in the **same commit**. The directory convention is
+      `<name>.sh` + `<name>.test.sh` (~12 pairs, 105 registered suites), and this fixes ADR-150's own
+      recorded regret that `scripts/cutover-inngest.sh` shipped without a companion suite. Record the
+      placement deviation from ADR-150 (`scripts/`) in ADR-187 so it does not read as an oversight.
+- [ ] **6.3** **Guard 2 (verbatim gate).** Port ADR-150's technique — the working reference is
+      `apps/web-platform/infra/cutover-inngest-workflow.test.sh`, same directory. Parse the `run:`
+      block from the **base** revision with PyYAML and compare **byte-for-byte** against the new file
+      minus its shebang, with **no whitespace normalization** (normalization is the transform that
+      hides a dedent error). Plus `bash -n` on the extracted file — never on the `.yml`, never
+      `bash -c`, which would execute a production apply.
+- [ ] **6.4** Re-point the F1 production call-site pin to its two-clause form: (i) the workflow
+      invokes the script, exactly once per pass; (ii) **inside the script**, `count_invariant`
+      precedes a loop-closing `done` which precedes the terminal `adjudicate_infra_config`. Reuse the
+      precedent's reconstruct-the-single-file-view trick (`cutover-inngest-workflow.test.sh` re-indents
+      the extracted body back into a reconstructed workflow) so the pin keeps quantifying over what
+      production runs. This is strictly stronger than today's single-file grep, which proves only (ii).
+
+### Commit 2 — the split and the recovery (BLOCKED on task 4.0)
+
+- [ ] **6.5** Parameterise the script for pass 1 / pass 2 and split the recovery into steps, placed
+      between the existing gate step and the existing status-keyed consumers:
+      gate (pass 1) -> plan the re-push -> **grade it** -> apply it -> gate (pass 2) -> a backstop.
+      Pass 1 soft-fails **only** on the one recoverable shape, emitting `verdict=pending` and
+      `repush_needed=true`; every other failure still exits non-zero. Pass 2 renders the terminal
+      verdict and fails closed.
+- [ ] **6.6** Add the `if: always()` **terminal-verdict backstop step**: fail the job if neither gate
+      invocation rendered a terminal verdict. This is what makes pass 1's deferral safe rather than a
+      new fail-open, and it is not optional.
+- [ ] **6.7** **Guard 3 — do NOT key the apply on `success()`.** The grading step writes
+      `repush_graded=<n>`, the measured replaced-resource count; the apply step is keyed
+      `if: steps.repush_plan.outputs.repush_graded == '1'`, with task 4.0's measured value as a
+      **literal in the YAML**. Loosening the cardinality assert then requires editing the `if:` too —
+      two producers — and a grader that fails to set the output skips the apply and trips 6.6.
+- [ ] **6.8** Hardcode `ALLOW_MISSING_STATUS: false` in pass 2's `env:`. This is R20.4's fix, reduced
+      to one line by the split: the escape hatch cannot green a run that already wrote production,
+      because pass 2 is a different step and never reads the dispatch input.
+- [ ] **6.9** Re-push plan/apply mechanics: `-replace=` **and** `-target=` both naming
+      `terraform_data.deploy_pipeline_fix`; `-var="ssh_key_path=${CI_SSH_PUB}"` (without it the plan
+      **errors under `-input=false`** — the default `~/.ssh/id_ed25519.pub` does not exist on the
+      runner); `doppler run --name-transformer tf-var` on the **plan** only (`terraform apply
+      <planfile>` rejects `-target=`/`-var` and takes values from the plan file); assert the S3
+      backend credentials are non-empty; artifacts named `tfplan-repush` / `tfplan-repush.json` so
+      the graded apply-#1 plan cannot be clobbered; `trap 'rm -f tfplan-repush.json' EXIT` because
+      that JSON carries the live prd Doppler token and the webhook HMAC in cleartext; `-lock-timeout`
+      on both so a cancelled re-push cannot hold the backend lock and block every later apply. No
+      status-discarding constructs on the apply; the AP-022-sanctioned `|| rc=$?` and an explicit
+      `|| { echo "::error::..."; exit 1; }` are required, not forbidden.
+- [ ] **6.10** Pass 2's freshness baseline is the **pass-1 observed `start_ts`**, handed over as a
+      step output — an argument, not a re-read (R19.3). Both operands are then host-clock, so skew
+      cancels without shipping R2.
+- [ ] **6.11** Add the `declare -F infra_config_should_repush` anti-vacuity check, mirroring the
+      existing `declare -F infra_config_red_alert` pattern.
+- [ ] **6.12** **Guard 1 — pin the workflow's `if:` output literals against the shell that produces
+      them.** Measured: at actionlint 1.7.7 a mistyped **step id** is caught but a mistyped **output
+      name** produces **no finding** (`outputs` types as `{string => string}`), and CI's actionlint
+      job treats rc=1 as acceptable and is **not** in `scripts/required-checks.txt` — so nothing in
+      CI can currently fail a PR for this. In `infra-config-gate.test.sh`, assert: every consumer
+      `if:` naming `steps.<id>.outputs.<name>` resolves to a step that exists; every literal compared
+      against is one the script can emit; and 6.6's backstop step exists. Two independent producers
+      must agree. Without this, a mis-keyed `if:` skips every re-push step and the job greens having
+      verified nothing — #6594's latched false-green, reintroduced by the remedy.
+- [ ] **6.13** **Free win (R22.7):** duplicate the existing `Verify webhook is alive post-apply` step,
+      keyed to the re-push apply, closing R17.4's residual — the liveness invariant currently covers
+      apply #1 only. Impossible under the inline shape; one step with an `if:` under the split.
+- [ ] **6.14** Do **not** relocate the bridge teardown (R3 reversed this). The re-push opens no SSH:
+      `deploy_pipeline_fix`'s push is a `local-exec` provisioner with no `connection` block, and 6.7's
+      graded cardinality is the backstop if that is ever untrue.
+- [ ] **6.15** **No `continue-on-error`, anywhere.**
 
 ## Phase 7 — PR-B: observability
 
