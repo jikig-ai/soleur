@@ -1177,11 +1177,197 @@ else
   fail "#7104 dpf: infra_config_dpf_replaced is NOT defined — the fail-closed arms above are vacuous"
 fi
 
+# --- #7104 PR-B: infra_config_should_repush ------------------------------------------------
+#
+# The pure predicate that decides whether the documented webhook-restart race happened
+# and a bounded re-push is warranted. Allow-list semantics: it returns 0 on exactly one
+# shape and non-zero on everything else, including everything it cannot classify.
+#
+# THE BASELINE IS AN ARGUMENT, AND THAT IS THE WHOLE POINT (plan R19.3). The design as
+# first written passed both a pre-frame timestamp AND an apply-start epoch, then
+# described a third notion as the pass-2 baseline; under that reading pass 1 always sees
+# start_ts == baseline, P4 says equality is fresh, and THE PREDICATE CAN NEVER RETURN 0
+# ON ANY INPUT — a re-push that is unreachable by construction, which is the same defect
+# class R19.1 found in the loop design. So there is ONE baseline parameter and ONE rule
+# (`start_ts -lt baseline` — strictly older), and the CALLER supplies the right value:
+#
+#   pass 1  baseline = APPLY_START_EPOCH        "the frame predates this apply"
+#   pass 2  baseline = the start_ts observed on pass 1, passed in as a step output
+#                                               "the frame still has not moved"
+#
+# Equality is FRESH in both readings, matching the `-lt` the verification body already
+# uses. On pass 2 that means the predicate declines a second re-push, which is the
+# boundedness property — pass 2's terminal verdict is rendered by adjudicate_infra_config,
+# not by this predicate.
+mkresp() { # $1 = file, $2 = start_ts value (raw; may be non-numeric or the literal ABSENT)
+  if [[ "$2" == "ABSENT" ]]; then
+    printf '{"exit_code":0}\n' > "$1"
+  else
+    printf '{"exit_code":0,"start_ts":%s}\n' "$2" > "$1"
+  fi
+}
+
+if ! declare -F infra_config_should_repush >/dev/null; then
+  fail "#7104 should_repush: the predicate is not defined — every case below is vacuous"
+else
+  pass "#7104 should_repush: the predicate is defined (anti-vacuity for the arms below)"
+
+  R="$TMP/repush-response.json"
+
+  # P3 — the ONE arm that re-pushes. Asserted first so a predicate that simply
+  # returns non-zero always (the R19.3 failure) cannot look correct on P1/P2/P4-P7.
+  mkresp "$R" 1000
+  if infra_config_should_repush "$R" true 2000 2>/dev/null; then
+    pass "#7104 P3: dpf-replaced=true + frame strictly older than baseline -> re-push (exit 0)"
+  else
+    fail "#7104 P3: the one re-pushing arm did not return 0 — the recovery is unreachable"
+  fi
+
+  # P1 — dpf-replaced=false must refuse regardless of frame shape (R1(A), tasks 4.2).
+  p1=0
+  for ts in 1 1000 1999 3000; do
+    mkresp "$R" "$ts"
+    infra_config_should_repush "$R" false 2000 2>/dev/null && p1=1
+  done
+  if [[ "$p1" -eq 0 ]]; then
+    pass "#7104 P1: dpf-replaced=false refuses for every frame shape tried (4 shapes)"
+  else
+    fail "#7104 P1: dpf-replaced=false returned 0 — no push was expected, so no frame can be stale"
+  fi
+
+  # P2 — the ^(true|false)$ polarity guard (R17.1). Anything that is not exactly
+  # `true` or `false` is unclassifiable, NOT a synonym for false.
+  p2=0
+  p2n=0
+  for v in "" null TRUE True yes 1 0 "true "; do
+    mkresp "$R" 1000
+    p2n=$((p2n + 1))
+    infra_config_should_repush "$R" "$v" 2000 2>/dev/null && p2=1
+  done
+  if [[ "$p2" -eq 0 && "$p2n" -eq 8 ]]; then
+    pass "#7104 P2: non-canonical dpf-replaced values all refuse ($p2n shapes)"
+  else
+    fail "#7104 P2: a non-canonical dpf-replaced value returned 0 (tried=$p2n) — the polarity guard is not allow-list"
+  fi
+
+  # P4 — equality is FRESH, matching the existing `-lt`.
+  mkresp "$R" 2000
+  if infra_config_should_repush "$R" true 2000 2>/dev/null; then
+    fail "#7104 P4: start_ts == baseline returned 0 — equality must read as fresh, not stale"
+  else
+    pass "#7104 P4: start_ts == baseline refuses (equality is fresh)"
+  fi
+
+  # P5 — an unparseable / absent / non-numeric frame is unclassifiable. A missing
+  # frame must NOT read as "unchanged" (R19.4 §5).
+  p5=0
+  p5n=0
+  for ts in ABSENT '"notanumber"' 'null' '-5' '1.5'; do
+    mkresp "$R" "$ts"
+    p5n=$((p5n + 1))
+    infra_config_should_repush "$R" true 2000 2>/dev/null && p5=1
+  done
+  printf 'not json at all\n' > "$R"
+  p5n=$((p5n + 1))
+  infra_config_should_repush "$R" true 2000 2>/dev/null && p5=1
+  rm -f "$R"
+  p5n=$((p5n + 1))
+  infra_config_should_repush "$R" true 2000 2>/dev/null && p5=1
+  if [[ "$p5" -eq 0 && "$p5n" -eq 7 ]]; then
+    pass "#7104 P5: unparseable/absent/non-numeric frames all refuse ($p5n shapes)"
+  else
+    fail "#7104 P5: an unclassifiable frame returned 0 (tried=$p5n) — a frame that cannot be read is not a stale frame"
+  fi
+
+  # P6 — a baseline that cannot be trusted is not a baseline.
+  p6=0
+  p6n=0
+  for base in "" abc null -1 2.5; do
+    mkresp "$R" 1000
+    p6n=$((p6n + 1))
+    infra_config_should_repush "$R" true "$base" 2>/dev/null && p6=1
+  done
+  if [[ "$p6" -eq 0 && "$p6n" -eq 5 ]]; then
+    pass "#7104 P6: non-numeric baseline refuses ($p6n shapes)"
+  else
+    fail "#7104 P6: a non-numeric baseline returned 0 (tried=$p6n)"
+  fi
+
+  # P8/R19.3 — THE SEQUENCE. One fixture, driven through both passes, with each
+  # pass's verdict asserted INDEPENDENTLY so no case can pass by "the last attempt
+  # succeeded" (tasks 4.7). This is the assertion the conflated-baseline design
+  # could not satisfy.
+  mkresp "$R" 1000                       # frame published before the apply began
+  seq1=1; infra_config_should_repush "$R" true 2000 2>/dev/null && seq1=0
+  # ... the re-push fires and the handler publishes a NEW frame ...
+  mkresp "$R" 2500
+  seq2=1; infra_config_should_repush "$R" true 1000 2>/dev/null && seq2=0
+  if [[ "$seq1" -eq 0 && "$seq2" -eq 1 ]]; then
+    pass "#7104 P8: sequence — stale frame re-pushes (pass 1 = 0), moved frame declines a second re-push (pass 2 != 0)"
+  else
+    fail "#7104 P8: sequence wrong (pass1=$seq1 expected 0; pass2=$seq2 expected non-zero)"
+  fi
+
+  # ... and the frame that did NOT move must still decline a second re-push
+  # (boundedness), even though it is genuinely still stale.
+  mkresp "$R" 1000
+  if infra_config_should_repush "$R" true 1000 2>/dev/null; then
+    fail "#7104 P8b: an unmoved frame authorised a SECOND re-push — boundedness is broken"
+  else
+    pass "#7104 P8b: an unmoved frame declines a second re-push (bounded to one attempt)"
+  fi
+
+  # The two input guards must DISCRIMINATE, not merely refuse (R19.4 §5). Mutation
+  # measured: deleting either guard leaves every P2/P6 exit status unchanged — the
+  # later `== "true"` allow-list check refuses non-canonical values on its own, and
+  # bash coerces a non-numeric baseline to 0 inside `[[ -lt ]]`, which also refuses.
+  # So an exit-status fixture cannot see these guards at all, and asserting only
+  # exit status would certify two guards that could be deleted silently. What they
+  # actually buy is a message that tells an operator WHICH input was unreadable,
+  # instead of a run that looks like a routine no-push.
+  mkresp "$R" 1000
+  err_unclass=$(infra_config_should_repush "$R" TRUE 2000 2>&1 >/dev/null || true)
+  err_false=$(infra_config_should_repush "$R" false 2000 2>&1 >/dev/null || true)
+  if [[ "$err_unclass" == *"dpf-replaced"* && "$err_unclass" == *"not exactly true|false"* ]]; then
+    pass "#7104 P2b: an unclassifiable dpf-replaced names itself on stderr"
+  else
+    fail "#7104 P2b: unclassifiable dpf-replaced produced no discriminating message (got: '${err_unclass:-<silence>}')"
+  fi
+  if [[ -z "$err_false" ]]; then
+    pass "#7104 P2c: a plain dpf-replaced=false is SILENT — the ordinary no-push arm is not an anomaly"
+  else
+    fail "#7104 P2c: dpf-replaced=false emitted '$err_false'; it must be indistinguishable from a routine run"
+  fi
+  err_base=$(infra_config_should_repush "$R" true abc 2>&1 >/dev/null || true)
+  if [[ "$err_base" == *"baseline"* && "$err_base" == *"not numeric"* ]]; then
+    pass "#7104 P6b: a non-numeric baseline names itself on stderr"
+  else
+    fail "#7104 P6b: non-numeric baseline produced no discriminating message (got: '${err_base:-<silence>}')"
+  fi
+  err_frame=$(infra_config_should_repush "$R" true 2000 2>&1 >/dev/null || true)
+  mkresp "$R" ABSENT
+  err_noframe=$(infra_config_should_repush "$R" true 2000 2>&1 >/dev/null || true)
+  if [[ "$err_noframe" == *"no numeric start_ts"* && "$err_noframe" != "$err_frame" ]]; then
+    pass "#7104 P5b: a host that published NO frame is reported distinctly from a stale one"
+  else
+    fail "#7104 P5b: a missing frame does not discriminate itself (got: '${err_noframe:-<silence>}')"
+  fi
+
+  # Quiet on the success path: the exit status is the verdict (R18.1 convention).
+  mkresp "$R" 1000
+  out=$(infra_config_should_repush "$R" true 2000 2>/dev/null || true)
+  if [[ -z "$out" ]]; then
+    pass "#7104 should_repush: emits nothing on stdout — the exit status is the verdict"
+  else
+    fail "#7104 should_repush: wrote '$out' to stdout; the convention is quiet"
+  fi
+fi
+
 # --- #7220 review: ASSERTION-COUNT FLOOR ---------------------------------------------------
 # Nothing asserted that the assertions RAN. Measured: deleting the entire #7220 block took the
 # suite 53 -> 40 passed, 0 failed, exit 0 — a silent truncation that reads exactly like a clean
 # run. A floor (not equality — the count is developer-incremented) makes arm deletion loud.
-GATE_MIN_ASSERTIONS=106
+GATE_MIN_ASSERTIONS=120
 # Adjudicated DIRECTLY, not through fail(). Measured: `fail() { return 0; }` made this suite
 # report `94 passed, 0 failed` / `OK` / exit 0 WITH a genuinely broken assertion present — and
 # the floor built to make truncation loud was itself dispatched through the neutered function,
