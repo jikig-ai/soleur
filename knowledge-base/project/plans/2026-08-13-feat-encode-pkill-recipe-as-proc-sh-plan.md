@@ -231,20 +231,38 @@ close that gap rather than to reach a floor.
 ### Guard 1 — `kill_mine` signals only processes this worktree owns
 
 **Property.** No process whose resolved cwd lies outside the current worktree is ever
-signalled, and no process that merely *mentions* the pattern is ever signalled.
+signalled; no process that merely *mentions* the pattern is ever signalled; and nothing that
+was not produced by the walk can reach the signal site at all.
 
 **Assembly.** Every pid produced by the single `/proc` walk reaches exactly one of
-`{signal, refuse}`, and only `signal` rows reach the **one and only `kill` call site in the
-file**. The assembly is structural — a second `kill` site anywhere in `proc.sh` is a contract
-violation, asserted over non-comment lines by AC8.
+`{signal, refuse, skip}`, and only `signal` rows reach the **one and only `kill` call site in
+the file** — where ownership is **re-verified** before the signal. Two structural properties
+carry it, both asserted over non-comment lines: the scan→signal channel carries **only** a
+class token from a closed set and a numeric pid (never a path), and the kill target is a bare
+`"$pid"`.
+
+**The channel clause is the one this contract got wrong on the first revision**, and it is
+recorded here rather than silently corrected because the failure is the whole reason the
+guard needs a contract. The channel emitted `class<TAB>pid<TAB>cwd`. A directory name may
+legally contain a newline; `/proc/<pid>/cwd` reports it verbatim; so a process whose cwd was
+a directory named `evil\nsignal\t31337\t/pwned` injected a **forged `signal` row**, and pid
+31337 reached the kill site having never matched the pattern, never been classified, and
+never had its cwd tested. The carrier was correctly *refused* — the refusal path was the
+injection vector, so a correct boundary check did not help, and `list_runs` rendered the
+forged row as a genuine `mine` entry so the dry run confirmed the lie. Reproduced end-to-end
+before the fix.
 
 **Mutation matrix:**
 
 | # | Mutation | Must drive RED because |
 |---|---|---|
 | M1 | Drop the `/` boundary from the prefix test (`"$cwd" == "$root"*`) | A sibling worktree at `<ROOT>-two` must not be selected when ROOT is `<ROOT>`. The highest-risk one-character defect in the file. |
-| M4 | Remove the argv-position discipline (fall through to a bare token match) | A process merely *mentioning* the pattern (`grep -rn test-all.sh scripts/`) must not be selected — otherwise `kill_mine test-all.sh` kills the operator's own grep, from inside their own worktree, where the cwd test cannot save them. |
-| M6 | Rewrite the `refuse` arm of the classification fork to emit `signal` | The fork itself must be load-bearing. Without this row, "every pid reaches exactly one of `{signal, refuse}`" is asserted by reading rather than by measurement, and a collapsed fork would leave M1 and M4 both green. |
+| M4 | Remove the strict no-wrapper rule (`(( seen_wrapper )) || return 1`) | A process merely *mentioning* the pattern (`grep -rn test-all.sh scripts/`) must not be selected — otherwise `kill_mine test-all.sh` kills the operator's own grep, from inside their own worktree, where the cwd test cannot save them. |
+| M6 | Rewrite the `refuse` arm of the classification fork to emit `signal` | The fork must be load-bearing. Its oracle counts the **re-verification's own refusals** separately, because the signal-site re-check would otherwise absorb this mutation and make the fork read as inert — two enforcement points need two measurements. |
+| M7 | Delete the `^[1-9][0-9]*$` pid validation in the walk | The `[0-9]*` glob guarantees only a *leading* digit, so `/proc/0` passes it and `kill -TERM 0` signals the caller's **entire process group** — the form D5 forbids. Measured: `kill -0 -1` exits 0, so an unvalidated pid is a broadcast primitive. |
+| M8 | Delete the ` (deleted)` refusal | A cwd the kernel reports as deleted is a *could-not-establish* state, not a path. String-matching it signals on no positive proof. |
+| M9 | Drop canonicalization of the process's cwd | A cwd reaching the worktree through a symlink must still be owned. Requires a fixture on the far side of the transform — every path in the original suite was already canonical, so this mutation survived until one was added. |
+| M10 | Drop canonicalization of the ownership boundary | A symlinked worktree root must still own its runs. Evaluated against the **symlinked-root oracle**: under an already-canonical root this mutation changes nothing, so the default oracle would report it survived and the "fix" would have been to weaken the guard. |
 
 ### Guard 2 — neither verb ever self-matches
 
@@ -265,11 +283,42 @@ here.
 | M3 | Delete the own-pgid exclusion | A same-cmdline fork of `proc.sh` sharing its pgid must not be selected. Command-substitution forks are not ancestors, so ancestry alone does not cover them. |
 | M5 | Replace the `') '` last-occurrence strip with the naive whole-line index (`awk '{print $4}'`) | A process whose `comm` contains a space must still resolve its ppid. Both exclusions above read ppid/pgrp through this parser, so breaking it silently disables *both*. **Pins R4** — the bug in the `/proc` recipe currently recommended in `git-worktree/SKILL.md`. |
 
+### Guard 3 — the suite can report a failure
+
+**Property.** Disabling any part of this suite's own reporting path makes the suite exit
+non-zero, rather than silently asserting nothing.
+
+**Assembly.** Three independent mechanisms, because no one of them covers the others: an
+**absolute** assertion floor equal to the current green count (slack is budget for a future
+edit to delete assertions unnoticed); a **harness self-test** that calls `pass()` and `fail()`
+once each before anything else and verifies both counters moved; and a `mutate()` helper that
+sets a global instead of echoing, so its own failures increment `FAIL` in the **parent**.
+
+This guard exists because the first revision had none of it. Every mutation in Guards 1 and 2
+is observed *through* these helpers, so a battery that only mutates the SUT is structurally
+incapable of detecting their absence — the reason the review's test seat was told to find what
+the battery missed rather than re-run it.
+
+**Mutation matrix:**
+
+| # | Mutation | Must drive RED because |
+|---|---|---|
+| D1a | Neuter `pass()` (and `pass()` + `fail()` together) | The count collapses to 0. Measured before the floor existed: `Total: 0 pass: 0 FAIL: 0`, **exit 0** — CI green having asserted nothing. |
+| D1b | Neuter `fail()` **alone** | The floor cannot see this: `PASS` still climbs to its full value and the floor is satisfied while the suite loses the ability to go red. Measured at `Total: 49 pass: 49 FAIL: 0`, rc=0 with the floor in place — which is why the self-test is a separate mechanism and not a redundant one. |
+| D2 | Break a `mutate()` anchor so the edit cannot land | A mutation that does not land reports the BASELINE, which is byte-indistinguishable from a pass. The previous `t=$(mutate …)` form ran the helper in a **command substitution**, so its `fail` incremented `FAIL` in a subshell: the suite printed `FAIL: mutation did not land` and still exited 0. That is the subshell defect `work/SKILL.md` documents, committed three lines from the pointer to the rule. |
+
 **Anti-vacuity.** T3 is a positive control that no mutation row can substitute for: it spawns
 a real `setsid sleep` inside a fresh mktemp sandbox, proves `list_runs` finds it, proves
-`kill_mine` reports `killed=1`, and proves the process actually terminated. Any mutation that
-makes the walk emit nothing fails it, and it is the only arm that exercises the real signal
-path rather than the dry-run seam.
+`kill_mine` reports `killed=1 … mode=live`, and proves the process actually terminated. Any
+mutation that makes the walk emit nothing fails it, and it is one of only two arms that
+exercise the real signal path rather than the dry-run seam (the other, T-FAILED, proves an
+undeliverable signal is counted as `failed=`, not `killed=`).
+
+**A note on measuring this suite.** Every mutation must be applied to a copy **beside the real
+suite**, not in an arbitrary sandbox: `$SCRIPT_DIR/../scripts/lib/proc.sh` does not resolve
+elsewhere, so a relocated copy aborts at the helper check and returns rc=1 that reads exactly
+like the guard firing. That produced three false "caught" results during this work before a
+green control caught it.
 
 ## Implementation Phases
 
@@ -363,9 +412,20 @@ Run the suite directly, then confirm auto-discovery through the runner.
    too: the suite's own stdout may echo its path, and only a full-line match excludes that.
    Exactly-one is the assertion because D2's glob asymmetry makes `0` a live failure mode and a
    stray hand-registration would make it `2`.
-6. Mutation rows M1–M6 are each proven: baseline GREEN, mutant RED, mutation confirmed landed
-   via `diff -q` against a pristine backup, in the same harness, against a sandbox copy of the
-   **real** `proc.sh`.
+6. Mutation rows M1–M10 **and** D1a/D1b/D2 are each proven: baseline GREEN, mutant RED,
+   mutation confirmed landed via `diff -q` against a pristine backup and an
+   exactly-one-occurrence anchor assertion, in the same harness, against a copy of the
+   **real** file placed beside the real suite so its relative paths resolve.
+6b. The scan→signal channel carries no filesystem paths: `_proc_scan`'s emissions are
+   `<class><TAB><pid>` only, every pid is validated `^[1-9][0-9]*$` at emit **and** before the
+   signal, and ownership is re-verified at the signal site. A cwd containing a newline cannot
+   produce a `signalled`/`would-signal` line for a pid the walk did not classify (T-INJECT).
+6c. `PROC_SH_DRY_RUN` is fail-safe: any value other than `0`/`false`/empty is a dry run, the
+   effective mode appears on the counter line, and a real kill is never performed on an
+   operator who asked for a rehearsal (T-DRYSAFE).
+6d. An undeliverable signal is reported as `failed=`, never counted as `killed=` (T-FAILED).
+6e. The suite cannot silently assert nothing: an absolute assertion floor equal to the current
+   green count, plus a harness self-test proving both counters move (Guard 3).
 6a. `python3 scripts/lint-guard-contract.py` passes on this plan — every guard entry above
    carries a non-placeholder property, a non-placeholder assembly, and its own mutation matrix
    of at least three rows.

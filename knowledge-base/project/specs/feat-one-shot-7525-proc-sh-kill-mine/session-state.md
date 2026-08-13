@@ -58,6 +58,64 @@
   "excluded by my own pgid guard" never renders identically to "nothing matched" and send the
   operator back to `pkill`.
 
+## Review Phase
+
+- Status: **BLOCK, resolved.** The panel found that the tool shipped the defect class it
+  exists to close. Every finding was `pr-introduced`, so every one was fixed inline — no
+  scope-out is available for a finding the PR itself introduced.
+- Fix commit: `9891e5da5`.
+
+### Panel
+
+Classified **code** class, **design-risk yes**. 8 agents spawned report-only (with 8
+concurrent agents and a fix-inline default, agents read each other's uncommitted edits and
+misattribute them). `semgrep-sast` replaced by `shellcheck` — this is a bash-only diff and
+OSS semgrep's tree-sitter bash parser matches ~0 rules, so its "0 findings" would be vacuous.
+
+**All 8 agents died**: 7 on a session limit, 1 on the 600s stall watchdog. They were
+**resumed from transcript**, not respawned — two had partial results that a fresh spawn would
+have re-derived. Resumed in a batch of 3 (highest-value seats for a guard PR: structural
+enumeration, test-design, security) rather than all 8, since 8 at once is what exhausted the
+quota. Batches 2 and 3 were never run: `proc.sh` was substantially rewritten by the fixes, so
+reviewing the pre-fix design would have been reviewing machinery that no longer exists.
+
+### Findings (all fixed inline)
+
+1. **P1 — row injection.** `_proc_scan` emitted `class<TAB>pid<TAB>cwd` and `kill_mine` parsed
+   it back. A directory name may contain a newline, so a process whose cwd was a directory
+   named `evil\nsignal\t31337\t/pwned` forged a `signal` row; pid 31337 reached the kill site
+   never having matched the pattern. Reproduced independently before fixing. The carrier was
+   correctly *refused* — the refusal path was the vector.
+2. **P1 — pid never validated numeric.** `kill -0 -1` exits 0, so a forged `-1` builds
+   `kill -TERM -1`. `/proc/0` also passed the glob, and `kill -TERM 0` signals the caller's
+   process group.
+3. **P1 — dry-run seam wrong in both directions.** `PROC_SH_DRY_RUN=true` performed a REAL
+   kill; an inherited `=1` silently sent nothing.
+4. **P1 — failed kill swallowed** and counted as `killed=1`.
+5. **P1 (test) — the suite could not fail.** No assertion floor; and `mutate()` ran inside a
+   command substitution so its `fail()` incremented `FAIL` in a **subshell** — the suite
+   printed a FAIL and exited 0. That is the subshell defect `work/SKILL.md` documents,
+   committed three lines from the pointer to the rule this PR adds.
+6. Also fixed: ` (deleted)` cwd string-matched instead of refused; boundary accepted `/` and
+   relative paths; nested worktrees under the boundary classified as ours; a pattern
+   containing `/` could never match and reported `killed=0`; `mapfile -d` needs bash 4.4 while
+   macOS ships 3.2 (silent total failure on a file that ships to customers);
+   `timeout`/`env`-wrapped runs invisible.
+
+### Errors made during the review pass
+
+- **A backtick inside a double-quoted test label is command substitution.** Two labels
+  executed their own contents; one produced a syntax error that masked a real wrapper-matching
+  bug. Same trap `work/SKILL.md` documents for commit messages.
+- **A grep assertion matched its own pattern string.** `AC11a` scanned this suite for
+  `pkill|killall` and was satisfied by the literal inside the sibling assertion's own regex.
+  Fixed by anchoring on command position **and** using the bracket trick — the one place it is
+  the right tool, since this is a grep over source.
+- **The first floor-verification instrument was broken.** Mutated copies were placed in a
+  sandbox where `../scripts/lib/proc.sh` does not resolve, so all three runs aborted at the
+  helper check and returned rc=1 that read exactly like the guard firing. A green control
+  caught it. Copies must sit beside the real suite.
+
 ### Components Invoked
 
 - `soleur:plan` (via isolated planning subagent)
