@@ -1529,13 +1529,15 @@ Replace `BRANCH_NAME` with the actual branch name.
 
    On non-zero exit, set the real conventional-commit title (`gh pr edit PR_NUMBER --title "feat(scope): …"`) and re-run the guard before proceeding. Do NOT mark ready or queue auto-merge while the title starts with `WIP:`. **Why:** PR #5373 (#5371) merged with the squash subject `WIP: feat-one-shot-5371-cc-durability (#5373)` because Phase 6 updated `--body-file` but omitted `--title`; the blemish is immutable on `main`. This guard makes the omission fail loudly instead of silently shipping a `WIP:` commit.
 
-5. If the PR is a draft, mark it ready:
+5. **A recorded operator HOLD is a condition, not an outcome — evaluate it here, at the draft exit.** If the operator asked to hold ("wait for #N", "after the soak", "once the migration applies"), that is a condition with a discharge test. **Record it in the plan file under `## Operator Holds` the moment it is given, and read it from there here — not from conversation.** A hold that lives only in context is gone after compaction and was never present when `/ship` is invoked standalone (the "no PR" fallback below explicitly supports entry via `/plan` or `/work`), and "no hold in context" is then indistinguishable from "no hold was given" — the reports-clean-because-it-could-not-look shape this gate exists to end. If the plan file is unreachable, say so and stop; do not read its absence as an all-clear. Evaluate each condition NOW: a sibling PR is `MERGED` **and** `git merge-base --is-ancestor <its-sha> HEAD`; a named verification is green **on the current tree** (re-run it — an inherited "it was green" describes a tree that may no longer exist); a state change (migration applied, flag flipped) is confirmed by probing the state, not by assuming the step ran. **If you cannot evaluate a condition — for any reason, including a failed probe — the hold STANDS.** Scope that rule precisely: if `## Operator Holds` is absent or empty, **no hold was recorded and this step is a no-op — proceed**. It is only once a hold IS recorded that an empty or unevaluated condition set must never be treated as discharged. A hold recorded with no stated test is not dischargeable here either — route it to the Undeferred Operator-Step Gate rather than improvising a condition to name. Record each condition's verdict and the command that produced it in the PR body, so a discharge is auditable and "four conditions probed green" is distinguishable from "no conditions found". All conditions discharged ⇒ continue to `gh pr ready` and the merge below, which remain gated by review having run (`rf-never-skip-qa-review-before-merging`) and by the required checks — those are the merge authority, not the hold. Any condition unmet ⇒ stop and name **that condition**; "the PR is a draft" is not a reason, "#7441 has not merged" is. A condition only a human can settle (a subjective call, an external party) is a genuine operator gate — file it per the Undeferred Operator-Step Gate, because a PR body is not an operator-visible surface. **Why:** PR #7470 — the operator's "wait for #7441, then verify" was transcribed as "the PR stays a draft"; all its conditions cleared during the same session and the pipeline still handed the merge to a non-technical operator who had no way to know.
+
+6. If the PR is a draft, mark it ready:
 
    ```bash
    gh pr ready PR_NUMBER
    ```
 
-6. Present the PR URL to the user.
+7. Present the PR URL to the user.
 
 **If no open PR exists:**
 
@@ -1905,6 +1907,36 @@ Do **not** use this hatch for a change with real conflict surface — there, the
 
 **Expected side effect: the post-merge `web-platform-release` run goes RED with `deploy: skipped`.** An admin-merge lands the squash commit *before* its merge-commit CI can run, so the release workflow's `await-ci` job (which polls for CI's `test` green on that exact SHA, then gates the prod `deploy` on `needs.await-ci.result == 'success'`) times out → fails → the `deploy` job is **skipped** → the release run concludes `failure`. This is NOT a deploy failure and NOT a silent-outage class under `wg-after-a-pr-merges-to-main-verify-all`: for the zero-conflict-surface changes this hatch is scoped to (test/docs/skill/additive), there is **nothing runtime to cut over** — prod keeps running the prior commit, which is byte-identical at runtime. Confirm three things and move on: (1) the merge-commit `CI` workflow concludes `success` (main HEAD is verified green), (2) the skipped job is `deploy` (not a failed build/migrate), (3) `/health` is 200. Do not re-run or "fix" the red release. See `knowledge-base/project/learnings/best-practices/2026-06-29-admin-merge-skips-deploy-via-await-ci-gate.md` (PR #5707).
 
+**Classify the failing STEP before exiting — a setup failure is not a red diff.** The exit below is correct to stop on a required-check failure, but the check NAME does not say whether your code failed or a tool download did. Before treating an exit as a diagnosis, read the failing step:
+
+```bash
+# The poll loop exits holding a CHECK NAME, not a run id. Derive the run id first —
+# `gh pr checks` returns neither, so nothing upstream hands it to you:
+gh run list --commit "$(gh pr view <number> --json headRefOid --jq .headRefOid)" \
+  -L 200 --json databaseId,name,conclusion
+
+# <job-id> is NOT the run id. `--paginate` is load-bearing, not decoration:
+# `gh api` does NOT auto-paginate and the API defaults to 30 jobs per page, so a
+# run with more jobs than that silently returns a partial set — the same
+# truncated-page false-clean this file fixes for `gh run list` below. Measured on
+# this repo: 23-24 jobs on a ci.yml run, i.e. 6 jobs of headroom. `--paginate`
+# raises the request to per_page=100. Keep the `.jobs[]` STREAM shape: --jq runs
+# per page, so an aggregate (`.jobs | length`) would print one number per page.
+gh api --paginate repos/{owner}/{repo}/actions/runs/<run-id>/jobs \
+  --jq '.jobs[] | select(.conclusion=="failure" or .conclusion=="timed_out" or .conclusion=="cancelled") | {id, name, conclusion}'
+gh api repos/{owner}/{repo}/actions/jobs/<job-id> \
+  --jq '{conclusion, failed: [.steps[] | select(.conclusion=="failure") | {name, conclusion}]}'
+```
+
+Both work **while the run is still in progress**, which `gh run view --log-failed` refuses to do — use that to start diagnosing early. But **an in-progress snapshot is not a verdict**: a run with jobs still `queued` can fail later for an unrelated reason, so re-run the classification once the run reaches `completed` and classify on THAT result before acting. Measured on one live run: 5 jobs completed, 2 in progress, 14 queued — two thirds of the run had not executed, so a "setup failure" read at that moment could be superseded by a real red. Note also that neither command returns log text, so the output test below is only decidable once the failing job completes. Then:
+
+- **Default: treat it as a real red.** Exit and diagnose. Everything below is a narrow exception to this, and anything you cannot confidently place is a red.
+- The one exception: a failure **fetching a third-party artifact from the network**, where the failing step's own output is an HTTP error, a connection reset, or a checksum mismatch on a JUST-DOWNLOADED archive — **and only when the diff does not touch that pin**. Rerun once (`gh run rerun <run-id> --failed`; it operates on completed runs, so wait for the run to finish first), then **re-enter the poll loop at the top** — the loop has already exited by this point, so "continue polling" means restarting it, not resuming the tick that exited.
+- **A dependency install is NOT in that exception, whatever the step is called.** Read the failing step's COMMAND: if it is `bun install`, `npm ci`, `npm install`, `yarn install`, or `pnpm install`, it is lockfile drift — a red your diff caused (`cq-before-pushing-package-json-changes`). So is a `sha256sum -c` mismatch when the PR bumps that pin. Rerunning those wastes two cycles and then reports a code failure to the operator as an infrastructure outage, steering them away from the diff that caused it.
+- If the same step fails again after one rerun, stop and diagnose — do not keep rerunning, and do not assert "infrastructure" unless the failing output actually shows a network/HTTP error.
+
+Do NOT invert this into "ignore failures that look transient". The discriminator is the failing step's **command** and whether your diff touches what it fetches — never the step's name, which is author-chosen prose the API returns verbatim. This is not hypothetical: measured on this repo's `ci.yml`, `Install root dependencies` and `Install web-platform dependencies` run `bun install --frozen-lockfile` and `npm ci`, so any name-shaped rule reads five of six dependency-install steps as tool downloads and classifies lockfile drift as a CDN outage. The step name narrows where to look; it never decides. **Why:** PR #7470 — one GitHub release-CDN outage broke the Doppler CLI download (`cla-evidence`), `gitleaks.tgz`'s sha (three `smoke` jobs) and `actionlint`'s sha (`lint-bot-statuses`) simultaneously. Every failure was at setup, none in a gate, and the merge still cost three rerun cycles because the loop keyed on check names.
+
 **Required-check failure exit.** Each tick, the loop intersects `gh pr checks --json name,bucket` failures (`bucket == "fail"`) with the repo's required-check name set (fetched once at loop entry via `gh api 'repos/{owner}/{repo}/rules/branches/main'`). On the first intersection, the loop exits and prints the failing check name + a pointer to `gh pr checks <number>` / `gh run view --log-failed`. This replaces the silent 15-minute heartbeat that occurs when a required check fails mid-poll but auto-merge sits queued waiting for a state transition that will never come. If the required-check fetch fails (no auth, no ruleset, archived repo), the scan is a no-op and the existing CLOSED-on-CI-failure fallback below still catches the terminal case — fail-open is deliberate, do NOT "harden" to fail-closed.
 
 **DIRTY exit (server-side merge conflict).** When `mergeStateStatus == DIRTY`, GitHub has computed a merge conflict that may or may not be visible locally (operator may not have fetched the conflicting push). The loop exits, runs `git diff --name-only --diff-filter=U` for the local conflict view (often empty for server-side conflicts), and prints a `git fetch origin && git merge origin/main` recovery pointer. The operator must resolve before re-queueing auto-merge.
@@ -1979,15 +2011,19 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    **Step 2:** Wait 15 seconds for workflows to trigger, then count pending runs on the merge commit:
 
    ```bash
-   gh run list --branch main --commit <merge-sha> --json databaseId,workflowName,status,conclusion --jq '[.[] | select(.status != "completed")] | length'
+   gh run list --branch main --commit <merge-sha> -L 200 --json databaseId,workflowName,status,conclusion --jq '[.[] | select(.status != "completed")] | length'
    ```
 
    This outputs a single integer (the count of non-completed runs). If the output is empty or non-numeric, re-run the command once. If still invalid, report an error and abort.
 
+   **`-L 200` is load-bearing, not decoration.** `gh run list` defaults to **20**. Measured on PR #7470's merge commit: the default returned exactly its cap of 20 while a larger page returned more than twice that, and the truncated page reported `pending: 0` while `CI` and `Web Platform Release` were both `in_progress`. State it as the invariant, not a fixed integer — the run set on a live commit keeps growing (that same query has since returned 44), so a hard count here would rot into a false claim the way the figures this PR removes did. A truncated page is indistinguishable from a clean result, so this is a FALSE ALL-CLEAR on the one step that exists to catch a silent outage. `200` matches the page size the issue-side gates in this file already use; do not pick a new number.
+
+   **Truncation is not the only way this step lies, and the page size does not fix the other one.** A workflow that has not REGISTERED by the time you query is absent from the result set entirely, so `select(.status != "completed") | length` is `0` and the fallback below reads it as "all runs completed". The durable check is a SET comparison, not a count: the workflows that trigger on push to `main` are enumerable from `.github/workflows/*.yml`, so "did every expected workflow register and complete on this SHA" is decidable and immune to both failure modes. Until that lands, never accept a `pending: 0` from a single query. Re-query the **total** run count (the `--json databaseId --jq 'length'` call below), at least 60s apart, and treat a **growing total** as proof the set was still filling — then keep re-querying until the total holds steady across two consecutive checks. Do NOT read a *shrinking pending* count as that signal: pending shrinking is the ordinary evidence that runs are **completing**, it says nothing about whether more are still registering, and in the failure mode named here pending sits at `0` throughout and never shrinks at all.
+
    **Empty-result fallback:** If the pending count is `0`, verify that runs actually exist:
 
    ```bash
-   gh run list --branch main --commit <merge-sha> --json databaseId --jq 'length'
+   gh run list --branch main --commit <merge-sha> -L 200 --json databaseId --jq 'length'
    ```
 
    - If total runs > 0 and pending = 0: all runs completed. Proceed to Step 4.
