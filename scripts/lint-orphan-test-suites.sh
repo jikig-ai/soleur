@@ -254,6 +254,18 @@ infra_rc=0
 infra_declared=$(sed -nE 's/^Derived ([0-9]+) registered infra suite.*/\1/p' "$WORK/infra_list" | head -1)
 sed -nE 's/^  ([A-Za-z0-9._\/-]+\.test\.sh)$/\1/p' "$WORK/infra_list" | LC_ALL=C sort -u > "$WORK/raw3"
 infra_parsed=$(wc -l < "$WORK/raw3" | tr -d ' ')
+# SURFACE-3 FLOOR. The declared-vs-parsed check below compares two numbers that move TOGETHER:
+# narrow run-registered-suites.sh's derivation and both shrink, they still agree, and surface 5
+# (defined as "all workflow bash matches MINUS surface 3's output") grows by exactly the paths
+# surface 3 dropped -- so s3+s5 is unchanged, covered is unchanged, orphans stay 0. Surface 3 is
+# the only surface backed by a runner that actually EXECUTES its list, so its silent shrinkage is
+# the most consequential blind spot in the union. Absolute, hand-ratcheted, and deliberately not
+# derived from raw3 (that would be the floor deriving itself from its own subject).
+MIN_INFRA_DERIVED=90
+if (( infra_parsed < MIN_INFRA_DERIVED )); then
+  echo "ERROR: surface 3 derived only ${infra_parsed} infra suites, below the floor of ${MIN_INFRA_DERIVED} -- run-registered-suites.sh's derivation has narrowed. This is invisible to the declared-vs-parsed check (both numbers shrink together) and to the totals (surface 5's subtraction absorbs exactly the dropped paths), so nothing else in this file can see it." >&2
+  fails=$((fails + 1))
+fi
 if (( infra_rc != 0 )) || [[ -z "$infra_declared" ]] || [[ "$infra_declared" != "$infra_parsed" ]]; then
   echo "ERROR: 'run-registered-suites.sh --list' exited ${infra_rc} and declared '${infra_declared:-<no header>}' derived suites while this parse recovered ${infra_parsed} -- the infra registration surface is not readable, so every infra suite would be judged against an incomplete covered set." >&2
   fails=$((fails + 1))
@@ -284,7 +296,16 @@ fi
 # pinned as KNOWN_UNDERIVABLE in .github/scripts/test/test-infra-suite-registration.sh).
 # Excluding the file would have dropped all seven and reported them as orphans.
 #
-# Disjointness is not cosmetic: the covered set is a UNION, so two surfaces matching one suite
+# Disjointness is DESIRABLE but NOT achieved, and the difference is asserted rather than
+# claimed. Measured 2026-08-13: five suites are legitimately covered twice -- registered both
+# locally (test-all.sh) and in a CI workflow, which is belt-and-braces, not a defect. They are
+# listed in DOUBLE_COVERED_ACK below and the check fails on any SIXTH.
+#
+# An earlier revision of this comment asserted disjointness flatly while the live tree carried
+# violations of it, and enforced the invariant only inside the companion suite's synthetic
+# battery -- so the guarantee existed in prose and nowhere else. That matters because the next
+# author reads it when deciding whether a mutation row proves anything. The residual hazard is
+# real and now visible: the covered set is a UNION, so two surfaces matching one suite
 # make a single-surface de-registration a silent no-op, and any mutation row aimed at it
 # passes green while the suite stops running.
 grep -hEo 'run:[[:space:]]+(sudo[[:space:]]+)?bash[[:space:]]+[A-Za-z0-9._/-]+\.test\.sh' \
@@ -346,6 +367,43 @@ if [[ "${SOLEUR_LINT_ORPHAN_DUMP_SURFACES:-}" == "1" ]]; then
     while IFS= read -r p; do [[ -n "$p" ]] && echo "SURFACE${i} ${p}"; done < "$WORK/s${i}"
   done
 fi
+
+# --- Disjointness, asserted against the LIVE repo ---------------------------------------------
+#
+# The comment at the surface-5 subtraction states that disjointness "is not cosmetic": the
+# covered set is a UNION, so two surfaces matching one suite make a single-surface
+# de-registration a silent no-op. That was asserted in prose and enforced ONLY inside the
+# companion suite's synthetic battery (`require_single_surface`), which cannot see the real
+# repo -- so the live tree carried three violations while the file claimed the invariant.
+# A written guarantee the code does not provide is worse than no guarantee: it is the thing a
+# future author will rely on when deciding a mutation row proves something.
+#
+# ACK list, not a threshold. Double coverage is occasionally legitimate (a suite genuinely
+# registered two ways), and a count bound would silently absorb the next one. Each entry is a
+# recorded decision in the same shape as EXCLUSIONS: path | reason citing an issue.
+DOUBLE_COVERED_ACK=(
+  "scripts/lib/frontmatter-strip.test.sh|explicit run_suite AND the scripts/lib glob -- belt-and-braces local registration, #7402"
+  "scripts/marketplace-manifest-validate.test.sh|explicit run_suite AND a ci.yml step -- registered locally and in CI on purpose, #7402"
+  "scripts/verify-marketplace-ruleset.test.sh|explicit run_suite AND a ci.yml step -- registered locally and in CI on purpose, #7402"
+  "plugins/soleur/test/gdpr-gate-self-test.test.sh|test-all glob AND its own gdpr-gate-self-test.yml workflow, #7402"
+  "apps/web-platform/scripts/sandbox-canary-regression.test.sh|test-all glob AND an infra-validation.yml step, #7402"
+)
+: > "$WORK/dupes"
+cat "$WORK"/s1 "$WORK"/s2 "$WORK"/s3 "$WORK"/s4 "$WORK"/s5 "$WORK"/s6 2>/dev/null \
+  | grep -v '^$' | LC_ALL=C sort | LC_ALL=C uniq -d > "$WORK/dupes" || true
+while IFS= read -r dup; do
+  [[ -n "$dup" ]] || continue
+  acked=0
+  for a in ${DOUBLE_COVERED_ACK[@]+"${DOUBLE_COVERED_ACK[@]}"}; do
+    [[ "${a%%|*}" == "$dup" ]] && { acked=1; break; }
+  done
+  if (( acked == 0 )); then
+    surfaces=""
+    for i in 1 2 3 4 5 6; do grep -qxF "$dup" "$WORK/s${i}" 2>/dev/null && surfaces="${surfaces}${i} "; done
+    echo "ERROR: '${dup}' is covered by MORE THAN ONE registration surface (${surfaces% }). The covered set is a union, so de-registering it from any single surface is a silent no-op -- it keeps reporting as covered while one of the things that ran it has stopped. Either narrow a surface so they are disjoint, or add it to DOUBLE_COVERED_ACK with a reason and a tracking issue." >&2
+    fails=$((fails + 1))
+  fi
+done < "$WORK/dupes"
 
 # --- Exclusions -----------------------------------------------------------------------------
 # Validated BEFORE they are applied, and fail-closed in three independent directions. Each is
