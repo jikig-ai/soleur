@@ -1365,16 +1365,27 @@ _r4_live=1
 # bypasses the gate silently and nothing counts the omission. Routing through one helper makes
 # the bypass a visible deviation from the block's only idiom, and keeps cardinality
 # path-invariant for free.
+# THE STARVED MESSAGE CARRIES A NEUTRAL ID, NEVER THE EMITTER-WORDED NAME.
+#
+# The arm names below are diagnoses ("the mount error did NOT survive the emitter's tail…",
+# "the emitter no longer leaks a literal path…") and they are the right text for a REAL
+# finding. Printing them on the starved path put that diagnosis first and the disclaimer
+# second, so a reader scanning FAIL lines still saw an emitter accusation for a container that
+# never ran — which is verbatim what #7501 reports as the misleading output. Measured by the
+# Guard 2 matrix: rows 1, 2 and 3 all surfaced the correct cause AND still led with the
+# emitter phrasing. Softening the accusation is not removing it.
+#
 #   $1 = 1 if the arm's own predicate held, else 0
-#   $2 = arm name (used in both the starved and the failing message)
-#   $3 = failure detail
+#   $2 = short neutral id, used ONLY on the starved path
+#   $3 = the emitter-worded arm name, used ONLY for a genuine finding
+#   $4 = failure detail
 _r4_arm() {
   if [ "$_r4_live" -eq 0 ]; then
     fail "$2: fixture starved — no claim made about the emitter" \
          "See the FIXTURE-FAIL lines above for the container's own cause."
     return 0
   fi
-  if [ "$1" -eq 1 ]; then pass; else fail "$2" "$3"; fi
+  if [ "$1" -eq 1 ]; then pass; else fail "$3" "$4"; fi
 }
 
 if [ "$_r4_live" -eq 0 ]; then
@@ -1399,6 +1410,7 @@ else
 fi
 
 _r4_arm "$( [ "${_r4_a:-0}" -ge 1 ] && echo 1 || echo 0 )" \
+  "R4" \
   "R4: the mount error did NOT survive the emitter's tail -n 20 | tail -c 180 under the shipped ordering" \
   "Write dmesg FIRST and the failing command's stderr LAST. capture-a=[$(head -c 300 "$TMP/r4out/capture-a.log" 2>/dev/null)]"
 # NON-EMPTINESS FIRST: `grep -c … || true` on a missing or empty capture-b.log yields 0,
@@ -1407,6 +1419,7 @@ _r4_arm "$( [ "${_r4_a:-0}" -ge 1 ] && echo 1 || echo 0 )" \
 # dmesg marker that must survive under that ordering, then assert the mount error did not.
 _r4_b_alive=$(grep -c 'quota feature but no quota format module' "$TMP/r4out/capture-b.log" 2>/dev/null || true)
 _r4_arm "$( [ "${_r4_b_alive:-0}" -ge 1 ] && [ "${_r4_b:-0}" -eq 0 ] && echo 1 || echo 0 )" \
+  "R4 MUTATION" \
   "R4 MUTATION: reversed-ordering arm is inconclusive (dmesg-marker=${_r4_b_alive:-0} mount-error=${_r4_b:-0})" \
   "Expected marker>=1 (the capture ran) AND mount-error=0 (the ordering pushed it out). marker=0 means the container produced nothing and the arm proves nothing; mount-error>=1 means R4 cannot detect an ordering regression."
 # R3(3a) — POSITIVE CONTROL for the hazard, not a defect report. The emitter's
@@ -1417,6 +1430,7 @@ _r4_arm "$( [ "${_r4_b_alive:-0}" -ge 1 ] && [ "${_r4_b:-0}" -eq 0 ] && echo 1 |
 # guard in R3(3b) load-bearing rather than decorative. If this control ever stops leaking,
 # the emitter changed and R3(3b)'s rationale must be re-derived.
 _r4_arm "$( [ "${_r3_c:-0}" -ge 1 ] && echo 1 || echo 0 )" \
+  "R3(3a)" \
   "R3(3a) POSITIVE CONTROL: the emitter no longer leaks a literal path for an unreadable detail source" \
   "R3(3b) below guards a hazard that may no longer exist — re-derive it against the emitter's current branch. capture-c=[$(head -c 300 "$TMP/r4out/capture-c.log" 2>/dev/null)]"
 
