@@ -513,7 +513,7 @@ ADR per `## Architecture Decision`; follow-through per `## Observability`.
 ## Files to Create
 
 - `.github/workflows/registry-host-replace-dispatch.yml` — Phase 3.
-- `knowledge-base/engineering/architecture/decisions/ADR-189-zot-http-deadlines-sized-to-largest-layer.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-190-zot-http-deadlines-sized-to-largest-layer.md`
   (ordinal **provisional**).
 - A committed guard running the pinned zot digest against the **rendered** `config.json`.
 - `scripts/followthroughs/zot-upload-ceiling-<tracker>.sh`.
@@ -791,7 +791,7 @@ All fixtures are synthesized against shapes measured in this plan (`cq-test-fixt
 
 ### ADR
 
-**ADR-189 — zot HTTP deadlines are sized to the largest layer, not left at the 60 s default**
+**ADR-190 — zot HTTP deadlines are sized to the largest layer, not left at the 60 s default**
 (ordinal **provisional**).
 
 A review position argued for deleting this ADR as "a value, not a road-choice", partly because its
@@ -813,7 +813,7 @@ someone violates the invariant.
 **Ordinal hygiene.** `origin/main` tops out at ADR-186; 187 and 188 exist only on unmerged branches,
 and **ADR-187 is double-claimed under two different titles on two branches** (as is ADR-167). So
 re-verification alone cannot reserve: if either ADR-187 claimant renumbers upward it lands on 188 and
-pushes the next onto 189. This plan therefore **pushes an ADR-189 stub early to claim the ordinal**,
+pushes the next onto 189. This plan therefore **pushes an ADR-190 stub early to claim the ordinal**,
 and on collision the later-pushed branch renumbers. Any renumber sweeps this plan, `tasks.md`, and
 every AC naming it.
 

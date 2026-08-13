@@ -5,9 +5,9 @@ the PR body and files an `action-required` issue. Each entry is surfaced, not si
 
 ---
 
-## DC1 — Keep or delete ADR-189 (Taste; reviewers split)
+## DC1 — Keep or delete ADR-190 (Taste; reviewers split)
 
-**The split.** `dhh-rails-reviewer` argued to delete ADR-189 outright: *"'The timeout is N seconds' is
+**The split.** `dhh-rails-reviewer` argued to delete ADR-190 outright: *"'The timeout is N seconds' is
 a value, not an architecture decision"*, and noted that deleting it also dissolves an AC, a risk row,
 the ordinal Sharp Edge and part of a phase. The `cto` domain leader independently recommended
 creating it (*"it is a production host-config change with a documented coupling to `gcDelay`, it
@@ -20,9 +20,9 @@ that had not happened, and the measurement had by then been performed. What the 
 the number (which lives next to the setting in `cloud-init-registry.yml`) but three things a value
 cannot: the tunnel's exoneration, the cross-subsystem `gcDelay` coupling, and the Arm C split-brain.
 `code-simplicity-reviewer` independently converged on "keep, narrowed" — its finding was that
-ADR-189's *message-honesty half* duplicates ADR-166, which the plan now cites rather than restates.
+ADR-190's *message-honesty half* duplicates ADR-166, which the plan now cites rather than restates.
 
-**Operator decision available:** delete ADR-189 and rely on Guard 3 alone. The plan is written so
+**Operator decision available:** delete ADR-190 and rely on Guard 3 alone. The plan is written so
 that removal touches only the ADR section and AC set.
 
 ---

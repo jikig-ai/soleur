@@ -8,7 +8,7 @@
 ### Errors
 None. All gates pass: `lint-guard-contract` (3 entries), `lint-infra-no-human-steps`, the
 4.6/4.7/4.8/4.55/4.10/4.11 deepen-plan halts, cited rule IDs active, prescribed labels exist.
-Two unresolved KB citations are intentional (ADR-189 is to be created; `spec.md` declared absent).
+Two unresolved KB citations are intentional (ADR-190 is to be created; `spec.md` declared absent).
 
 ### Decisions
 - **Cause measured, not inherited.** zot v2.1.20 ships `ReadTimeout`/`WriteTimeout` = 60s. A 703 MB

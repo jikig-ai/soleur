@@ -1051,7 +1051,7 @@ jobs:
               # MEASURED-BY: #7555 — zot v2.1.20's built-in ReadTimeout/WriteTimeout of
               # 60000000000 ns was read off the pinned digest's own boot config, and the
               # failure was reproduced off-box over a docker bridge with Cloudflare absent
-              # (ADR-189). The restart-loop framing this line used to point at was refuted in
+              # (ADR-190). The restart-loop framing this line used to point at was refuted in
               # the same window: zot_restarts=0, uptime monotonic, none in 48 h.
               #
               # The pointer BRANCHES ON THE STAGE. It was one unconditional line appended to
@@ -1067,7 +1067,7 @@ jobs:
               # not match this glob.
               case "$reason" in
                 copy_*|verify)
-                  echo "Upload evidence — this stage failed while PUSHING bytes to zot, so registry-host disk/restart telemetry is not the channel to read. In Better Stack, read SOLEUR_ZOT_LOG for PatchBlobUpload rows and the paired HTTP-API row; the pairing carries statusCode, latency and Content-Length. A row at latency:1m0s against a large Content-Length is zot's HTTP deadline expiring mid-upload (ADR-189), which is a throughput ceiling rather than an origin fault — 703724542 B in 60 s requires 11.73 MB/s sustained."
+                  echo "Upload evidence — this stage failed while PUSHING bytes to zot, so registry-host disk/restart telemetry is not the channel to read. In Better Stack, read SOLEUR_ZOT_LOG for PatchBlobUpload rows and the paired HTTP-API row; the pairing carries statusCode, latency and Content-Length. A row at latency:1m0s against a large Content-Length is zot's HTTP deadline expiring mid-upload (ADR-190), which is a throughput ceiling rather than an origin fault — 703724542 B in 60 s requires 11.73 MB/s sustained."
                   ;;
                 bridge|crane_install)
                   echo "Registry-host health (disk AND zot_restarts/exit_code, which is what an origin flap shows up in): see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd."

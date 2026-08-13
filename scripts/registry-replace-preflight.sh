@@ -20,7 +20,7 @@
 # The plan for #7555 said "reuse registry-pull-path-health.sh". The authority that plan CITES for
 # the hazard — scheduled-zot-restart-loop.yml's remediation block — prescribes a read-only
 # betterstack query instead, and does not mention that script. This file implements the cited
-# mechanism. Decision + the three grounds: ADR-189 §"Why the replace pre-check is not the D10
+# mechanism. Decision + the three grounds: ADR-190 §"Why the replace pre-check is not the D10
 # recut gate".
 #
 # ── WHAT IT CHECKS ─────────────────────────────────────────────────────────────────────────

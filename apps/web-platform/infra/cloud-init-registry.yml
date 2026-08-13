@@ -85,7 +85,7 @@ write_files:
   # plain `docker build` → docker-schema2, so it needs this; the web image is OCI (buildx) and
   # does not. (project-zot pkg/compat/compat.go DockerManifestV2SchemaV2 = "docker2s2".)
   #
-  # http.readTimeout / http.writeTimeout "1800s" (#7555, ADR-189): zot v2.1.20 supplies BOTH
+  # http.readTimeout / http.writeTimeout "1800s" (#7555, ADR-190): zot v2.1.20 supplies BOTH
   # deadlines as 60000000000 ns (60.000 s) when the "http" block omits them — read off the
   # PINNED digest's own boot config, not from docs. At 60 s a 703_724_542 B layer must sustain
   # 11.73 MB/s, and three concurrent layers ~280 Mbit/s through one tunnel; when it does not,

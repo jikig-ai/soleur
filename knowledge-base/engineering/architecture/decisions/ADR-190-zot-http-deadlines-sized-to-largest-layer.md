@@ -5,7 +5,7 @@ date: 2026-08-14
 issue: 7555
 ---
 
-# ADR-189 — zot HTTP deadlines are sized to the largest layer, not left at the 60 s default
+# ADR-190 — zot HTTP deadlines are sized to the largest layer, not left at the 60 s default
 
 ## Context
 

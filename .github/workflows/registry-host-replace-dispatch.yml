@@ -1,4 +1,4 @@
-# Delivery dispatcher for registry-host user_data changes (#7555, ADR-189).
+# Delivery dispatcher for registry-host user_data changes (#7555, ADR-190).
 #
 # WHY THIS EXISTS. `apps/web-platform/infra/cloud-init-registry.yml` is the registry host's
 # user_data, and the host is cloud-init-only (ADR-096) with no SSH edit path. So a merged change
@@ -17,7 +17,7 @@
 # `scripts/registry-pull-path-health.sh`: that is the PRE-DESTROY gate for `registry-luks-recut`,
 # it renders its verdict by EXECUTING a restore rehearsal (i.e. by pushing images), and its pass
 # condition is about re-materialising an EMPTY store — whereas this replace PRESERVES the volume
-# (`store_destroyed==0`). Full rationale: ADR-189 §"Why the replace pre-check is not the D10
+# (`store_destroyed==0`). Full rationale: ADR-190 §"Why the replace pre-check is not the D10
 # recut gate", and the preflight script's own header.
 #
 # ── FIRING BLIND IS THE #6400 HAZARD ───────────────────────────────────────────────────────
@@ -121,7 +121,7 @@ jobs:
           if [[ -n "${MANUAL_REASON:-}" ]]; then
             REASON="registry-host-replace re-fired manually: ${MANUAL_REASON} (delivering user_data at ${MERGE_SHA})"
           else
-            REASON="Delivering the cloud-init-registry.yml user_data merged at ${MERGE_SHA} (#7555 / ADR-189 — zot HTTP deadlines). Inert until this replace runs; the store volume is preserved."
+            REASON="Delivering the cloud-init-registry.yml user_data merged at ${MERGE_SHA} (#7555 / ADR-190 — zot HTTP deadlines). Inert until this replace runs; the store volume is preserved."
           fi
           gh workflow run apply-web-platform-infra.yml --ref main \
             --repo "${GITHUB_REPOSITORY}" \

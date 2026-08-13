@@ -2,7 +2,7 @@
 # Follow-through verification for #7556 — did the raised zot HTTP deadlines LAND, and did the
 # deadline sub-mode STOP?
 #
-# WHY TWO SIGNALS AND NOT ONE. The change (#7555, ADR-189) is delivered by a `user_data` ForceNew
+# WHY TWO SIGNALS AND NOT ONE. The change (#7555, ADR-190) is delivered by a `user_data` ForceNew
 # replace, so "the config in the repo says 1800s" proves nothing about the running host. And a
 # quiet log proves nothing either, because the failure is INTERMITTENT at roughly 1 in 13 — a
 # window with zero failures is the expected outcome ~92% of the time even fully unfixed. So this
@@ -47,7 +47,7 @@ QUERY="${ZOT_CEILING_QUERY:-${REPO_ROOT}/scripts/betterstack-query.sh}"
 PARSE_LIB="${REPO_ROOT}/scripts/lib/zot-telemetry-parse.sh"
 
 # The intended value, in the nanoseconds zot itself reports. Derived from the 1800s setting in
-# cloud-init-registry.yml; if that setting changes, this must change with it and the ADR-189
+# cloud-init-registry.yml; if that setting changes, this must change with it and the ADR-190
 # comment there is the single source for WHY the number is what it is.
 DEADLINE_NS="${ZOT_CEILING_DEADLINE_NS:-1800000000000}"
 WINDOW="${ZOT_CEILING_WINDOW:-7d}"
@@ -110,7 +110,7 @@ if [[ "$read_ns" != "$DEADLINE_NS" || "$write_ns" != "$DEADLINE_NS" ]]; then
   echo "FAIL: the running host does not carry the intended deadlines."
   echo "  Expected both at ${DEADLINE_NS} ns. If both read 60000000000, this host predates the"
   echo "  #7555 replace and the change has not been delivered — dispatch registry-host-replace."
-  echo "  If exactly ONE matches, that is the Arm C split-brain ADR-189 exists to prevent."
+  echo "  If exactly ONE matches, that is the Arm C split-brain ADR-190 exists to prevent."
   exit 1
 fi
 

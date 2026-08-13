@@ -19,7 +19,7 @@ established and must not be re-derived.
       `--state open`, so a probe hosted there would never run.
 - [x] 0.3 Comment on #7341 with the two refutations (stale `100% full`; `zot_restarts=0` across 48 h).
       Do **not** close it; do **not** touch `scripts/followthroughs/zot-fill-rate-7341.sh`.
-- [x] 0.4 Push an `ADR-189` stub early to claim the ordinal. Re-verify across **all** `origin/*` refs
+- [x] 0.4 Push an `ADR-190` stub early to claim the ordinal. Re-verify across **all** `origin/*` refs
       first — ADR-187 is already double-claimed on two branches.
 
 ## Phase 1 — Make the copy arm diagnose itself (no host replace)
@@ -85,7 +85,7 @@ sole pull path.
 
 ## Phase 4 — Record and enrol
 
-- [x] 4.1 Write `ADR-189-zot-http-deadlines-sized-to-largest-layer.md`. Cite ADR-166 for the
+- [x] 4.1 Write `ADR-190-zot-http-deadlines-sized-to-largest-layer.md`. Cite ADR-166 for the
       message-honesty half rather than restating it. Status `adopting` until the soak passes.
       State the ADR-167 relationship (this measurement fires its re-open trigger); do not decide it.
 - [x] 4.2 Write `scripts/followthroughs/zot-upload-ceiling-<tracker>.sh` with the numeric exit
