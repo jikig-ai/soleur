@@ -694,8 +694,8 @@ runcmd:
     if [ -n "$ZOT_EP" ]; then
       ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.24@sha256:6cdaa63d1496642e681898a831234b712f75d3b09bd0844bcabec3de74b0a0f8"
       /usr/local/bin/inngest-boot-phone-home.sh pre-zot-pull "$ZIREF"
-      install -m 600 /dev/null /var/log/inngest-zot-pull.log
       set +e
+      install -m 600 /dev/null /var/log/inngest-zot-pull.log
       docker pull "$ZIREF" > /var/log/inngest-zot-pull.log 2>&1
       zot_rc=$?
       set -e

@@ -733,7 +733,7 @@ assert "Row3: the zot->GHCR flip emits inngest_ghcr_fallback (the fallback-rate 
 L_ZOTHIT=$(zg_line 'inngest-boot-phone-home\.sh inngest_zot')
 L_FALLBACK=$(zg_line 'inngest-boot-phone-home\.sh inngest_ghcr_fallback')
 assert "Row3: both registry-outcome emits sit INSIDE the resolution region (after the zot pull, before pre-oci-pull)" \
-  "[[ -n '$L_ZOTHIT' && -n '$L_FALLBACK' ]] && (( L_ZPULL < L_ZOTHIT && L_ZOTHIT < L_PRE && L_ZPULL < L_FALLBACK && L_FALLBACK < L_PRE ))"
+  "[[ -n '$L_ZOTHIT' && -n '$L_FALLBACK' && -n '$L_ZPULL' && -n '$L_PRE' ]] && (( L_ZPULL < L_ZOTHIT && L_ZOTHIT < L_PRE && L_ZPULL < L_FALLBACK && L_FALLBACK < L_PRE ))"
 assert "Row3: the hit and the flip are DIFFERENT emit sites (one line cannot report both outcomes)" \
   "[[ '$L_ZOTHIT' != '$L_FALLBACK' ]]"
 
@@ -782,16 +782,31 @@ for _zs in zot-login-ok zot-login-FAILED zot-creds-EMPTY; do
 done
 
 # --- Dark-safety: an unconfigured endpoint must degrade to TODAY's path, never to a worse one
-assert "Dark-safe: the whole zot arm is gated on a non-empty baked endpoint" \
-  "grep -qE '\\[ -n \"\\\$ZOT_EP\" \\]' '$DED_CODE_FILE'"
+# ANCHORED TO THE GATE THAT GUARDS THE ARM, not to any occurrence of the token. `[ -n "$ZOT_EP" ]`
+# appears three times (docker daemon config, zot login, ref resolution), so the previous
+# whole-file grep was satisfied by any of them — and inverting the ONE that gates the resolution
+# region to `[ -z ... ]`, which runs the zot leg only when zot is UNCONFIGURED and skips it
+# exactly when zot is configured, left the ENTIRE suite green at 117/117 and the mutation
+# battery at 9/9. Measured, not hypothesised. That inversion negates every property this arm
+# claims, so the gate is pinned positionally: it must be the `if [` immediately preceding the
+# ZIREF assignment. This is the placement-vs-behaviour class — the old assertion pinned that a
+# token existed somewhere, never that the branch it controls has the right sense.
+ZG_ARM_GATE="$(grep -B2 '^[[:space:]]*ZIREF=' "$DED_CODE_FILE" | grep -E '^[[:space:]]*if \[' | tail -1 || true)"
+assert "Dark-safe: the resolution region's OWN gate was found (an unmatched gate must not pass vacuously)" \
+  "[[ -n \"\$ZG_ARM_GATE\" ]]"
+assert "Dark-safe: that gate is a NON-EMPTY test (an inverted gate runs the arm only when zot is unconfigured)" \
+  "grep -qE '\\[ -n \"\\\$ZOT_EP\" \\]' <<<\"\$ZG_ARM_GATE\""
 
 # --- The baked pull credential must be redactable ------------------------------------------
 # The pull log tail is SHIPPED off-box by `oci-pull-rc-N`. inngest-redact.sh redacts by KNOWN
 # VALUE, so a credential absent from its value list is a credential that ships in clear on an
 # auth failure — which is exactly the failure mode that produces a log tail worth shipping.
-assert "the zot pull token is in inngest-redact.sh's known-value list" \
-  "grep -qF 'ZOT_PULL_TOKEN' '$DED_CODE_FILE'"
+# SCOPED to the script body, not the file. `ZOT_PULL_TOKEN` occurs 4x in the yml (the bake
+# printf, the login item, the redact list), so a whole-file grep stayed green with the redact
+# line deleted — a cq-assert-anchor-not-bare-token violation on SCOPE rather than on comments.
 ZG_REDACT_BODY="$(awk '/^  - path: \/usr\/local\/bin\/inngest-redact\.sh$/{f=1;next} f&&/^  - path: /{f=0} f' "$INNGEST_CI_YML")"
+assert "the zot pull token is in inngest-redact.sh's known-value list" \
+  "grep -qF 'ZOT_PULL_TOKEN' <<<\"\$ZG_REDACT_BODY\""
 assert "the zot token reaches that list via the same sourced-file shape as GHCR_READ_TOKEN" \
   "grep -qF 'ZOT_PULL_TOKEN' <<<\"\$ZG_REDACT_BODY\" && grep -qF 'GHCR_READ_TOKEN' <<<\"\$ZG_REDACT_BODY\""
 
@@ -801,7 +816,7 @@ assert "the zot token reaches that list via the same sourced-file shape as GHCR_
 # bumping IREF and leaving ZIREF stale would 404 the zot leg on every fresh boot and fall
 # back silently to GHCR forever.
 DED_PIN_REF_COUNT=$(grep -coE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$DED_CODE_FILE" || true)
-DED_DISTINCT_PINS=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$DED_CODE_FILE" | sort -u | wc -l)
+DED_DISTINCT_PINS=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$DED_CODE_FILE" | sort -u | wc -l || true)
 assert "dedicated-host pin-consistency: both refs (IREF + ZIREF) present and share one tag (found $DED_PIN_REF_COUNT refs, $DED_DISTINCT_PINS distinct)" \
   "(( DED_PIN_REF_COUNT == 2 && DED_DISTINCT_PINS == 1 ))"
 

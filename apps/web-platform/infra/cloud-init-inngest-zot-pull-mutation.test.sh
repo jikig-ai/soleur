@@ -141,7 +141,11 @@ case_mutate() {
     echo "            (b) the mutant is EQUIVALENT — prove no verdict changes, and say so here."
     return
   fi
-  if ! grep -qF "$expect" "$log"; then
+  # Scope to FAILURE lines. `assert()` echoes the description on PASS as well as FAIL, so an
+  # unscoped grep matched the PASS line of the very assertion the row claims went RED — 7 of 9
+  # rows passed with their named assertion neutered to `true`, and one was misrouting on the
+  # unmutated tree. The row's contract is "THIS assertion failed", not "the guard exited 1".
+  if ! grep -E '^  FAIL' "$log" | grep -qF "$expect"; then
     FAIL=$((FAIL + 1))
     echo "  MISROUTED: $id — the guard went RED, but NOT on the assertion this row targets."
     echo "             expected a failure naming: $expect"
