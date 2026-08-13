@@ -2553,6 +2553,37 @@ per ADR-150's placement ruling):
 3. R16.2's "duplication over complexity, and it is what the rest of that file already does" still
    describes the workflow's prevailing style.
 
+**[Added 2026-08-13 — the objection dissolves entirely.]** The case against extraction rested on one
+claim: *"extraction moves both calls out of the YAML and reds the pin, and re-pointing the grep at
+the new script silently drops the property that **production** calls it."* Both horns are real, and
+the repo already implements the third option nobody considered — **reconstruct the single-file view
+and grep that.** `apps/web-platform/infra/cutover-inngest-workflow.test.sh:50` does exactly this for
+ADR-150's extraction:
+
+```
+sed -n '/^set -euo pipefail$/,$p' "$BODY_SH" | sed 's/^./          &/' >> "$WF"
+```
+
+— it re-indents the extracted script body and splices it back into a reconstructed workflow, so every
+pre-existing YAML-shape assertion keeps running against *what production runs*, unmodified. Applied
+here, the F1 pin keeps its three clauses **byte-identical** and keeps quantifying over production;
+nothing is re-pointed and no property is dropped.
+
+The precedent stack is therefore stronger than R18.16 first recorded, and all of it is measured:
+
+| Precedent | Status |
+|---|---|
+| ADR-150 — extract a `run:` body to a checked-in script | **Accepted**, CTO consult + six-agent panel |
+| Verbatim precondition (0 `${{ }}`, 0 heredocs, 0 herestrings) | **Measured green** on this step's 241-line body |
+| A working byte-compare + reconstruct verifier | `apps/web-platform/infra/cutover-inngest-workflow.test.sh` — **same directory** |
+| `X.sh` + `X.test.sh` convention in the target directory | ~12 pairs already |
+| Sibling suites registered in `infra-validation.yml` | **105**, so no orphan risk |
+| The workflow's `working-directory` | already `INFRA_DIR`, so `bash ./infra-config-verify.sh` needs no path gymnastics |
+
+Placement note: ADR-150 ruled `scripts/` over `.github/scripts/` for a repo-root cutover driver. The
+local convention here is stronger — put it beside its siblings in `apps/web-platform/infra/`, with
+`infra-config-verify.test.sh` registered in `infra-validation.yml` in the same commit.
+
 **Recommendation, stated so it can be overruled cheaply:** extract, and do it as its own commit
 inside this PR — a provably-verbatim move first (ADR-150's PyYAML byte-comparison as the gate),
 then the behavioural change on top. The verbatim commit is reviewable by machine, and the behavioural
