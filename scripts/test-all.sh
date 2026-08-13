@@ -1412,9 +1412,11 @@ if want_infra; then
   fi
 fi
 
-# The guard-script fixture runner. Its own MIN_SUITES floor (10) is what makes a silently
-# empty run fail rather than pass, so registering it here inherits that floor instead of
-# re-implementing one.
+# The guard-script fixture runner. Its own MIN_SUITES floor (11 as of #7429, which added the
+# signal-propagation guard as the 11th fixture suite) is what makes a silently empty run fail
+# rather than pass, so registering it here inherits that floor instead of re-implementing one.
+# The number is stated here for the reader; the runner is the authority — re-derive with
+# `grep '^MIN_SUITES=' .github/scripts/test/run-all.sh` rather than trusting this comment.
 #
 # THE FLOOR AND A DECLINE ARE DIFFERENT OUTCOMES. The floor still applies whenever the runner
 # runs, but it is not evaluated at all when the runner is DECLINED — nothing inside it executes.
