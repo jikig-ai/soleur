@@ -155,18 +155,23 @@ count_lines() {
 # BOUNDED, and the bound is not cosmetic: the sweeper posts this stdout VERBATIM into a comment on
 # a PUBLIC issue. The trailing space after %s keeps the rc field splittable when the message is
 # empty, so `${rest%% *}` is always exactly the rc.
+# ONE owning trap for the whole script (ADR-129 rule (c)). The stderr capture below cannot own its
+# own cleanup: run_query is called as `x=$(run_query ...)`, i.e. in a SUBSHELL, so a trap declared
+# inside it would fire on the subshell's exit and a bare `rm -f` leaks whenever the script dies
+# between mktemp and cleanup. Hoisting the tempfile to script scope gives it a single owner in the
+# parent. The two callers are sequential, never concurrent, so reuse is safe.
+QERR="$(mktemp)" || { echo "TRANSIENT: mktemp failed — no query attempted" >&2; exit 2; }
+trap 'rm -f "$QERR"' EXIT INT TERM
+
 run_query() {
-  local out rc qerr msg
-  qerr="$(mktemp)"
-  out=$("$QUERY" --since "$WINDOW" --no-archive --limit "$LIMIT" --grep "$1" 2>"$qerr")
+  local out rc msg
+  out=$("$QUERY" --since "$WINDOW" --no-archive --limit "$LIMIT" --grep "$1" 2>"$QERR")
   rc=$?
   if [[ $rc -ne 0 ]]; then
-    msg="$(head -c 400 "$qerr" | tr '\n\r\t' '   ')"
-    rm -f "$qerr"
+    msg="$(head -c 400 "$QERR" | tr '\n\r\t' '   ')"
     printf 'QUERYFAIL %s %s' "$rc" "$msg"
     return 0
   fi
-  rm -f "$qerr"
   printf '%s' "$out"
 }
 

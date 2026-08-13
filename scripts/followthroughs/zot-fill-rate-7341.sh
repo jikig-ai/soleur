@@ -100,7 +100,12 @@ command -v python3 >/dev/null || { echo "TRANSIENT: python3 is not on PATH"; exi
 # an unprovisioned secret resolves to "", the sweeper still forwards it (it tests for SET, not
 # non-empty), betterstack-query.sh exits 3 with an actionable "creds not injected" message — and
 # the operator's issue comment said only "failed (transport)".
-qerr="$(mktemp)"; WORK_BOOT="$(mktemp)"; trap 'rm -f "$qerr" "$WORK_BOOT"' EXIT
+qerr="$(mktemp)"; WORK_BOOT="$(mktemp)"
+# AERR/APERR belong to the attribution lead (FAIL arm only) but are allocated here so this ONE
+# trap owns every tempfile the script creates (ADR-129 rule (c)) rather than each call site
+# hand-rolling its own rm on each exit path.
+AERR="$(mktemp)"; APERR="$(mktemp)"
+trap 'rm -f "$qerr" "$WORK_BOOT" "$AERR" "$APERR"' EXIT INT TERM
 # Capture rc on its OWN line. Inside `if ! cmd; then`, `$?` is the negated test result, not the
 # command's exit status, so `qrc` read 0 for every failure and the rc=3 credential branch below
 # was unreachable. The harness caught it; a live run would have printed "exited 0".
@@ -284,16 +289,12 @@ else:
 # host=soleur-registry-2 matches (zot-log-channel-7440.sh:166 carries the same delimiter).
 ZOT_ATTR_HOST="${ZOT_ATTR_HOST:-soleur-registry}"
 attribution_lead() {
-  local aerr aperr araw arc prc
-  aerr="$(mktemp)" || { echo "  attribution_unavailable: mktemp failed (no query was attempted)"; return 0; }
-  aperr="$(mktemp)" || { rm -f "$aerr"; echo "  attribution_unavailable: mktemp failed (no query was attempted)"; return 0; }
-  araw="$("$QUERY" --since "$WINDOW" --grep SOLEUR_ZOT_LOG --limit 5000 2>"$aerr")"; arc=$?
+  local araw arc prc
+  araw="$("$QUERY" --since "$WINDOW" --grep SOLEUR_ZOT_LOG --limit 5000 2>"$AERR")"; arc=$?
   if (( arc != 0 )); then
-    echo "  attribution_unavailable: the gc-channel query exited ${arc}: $(head -c 300 "$aerr" | tr '\n\r\t' '   ')"
-    rm -f "$aerr" "$aperr"
+    echo "  attribution_unavailable: the gc-channel query exited ${arc}: $(head -c 300 "$AERR" | tr '\n\r\t' '   ')"
     return 0
   fi
-  rm -f "$aerr"
   # Python stderr is CAPTURED, not discarded. `2>/dev/null` here would be the same defect this
   # change removes from zot-log-channel-7440.sh's run_query twelve lines of diff away, and the one
   # this file's own header at the query call already documents as a measured incident.
@@ -374,11 +375,10 @@ elif sum(starts.values()) == 0:
     print("  channel first: bash scripts/followthroughs/zot-log-channel-7440.sh")
 else:
     print("  every repo completed at least as many gc cycles as it started; not a gc stall.")
-' 2>"$aperr"; prc=$?
+' 2>"$APERR"; prc=$?
   if (( prc != 0 )); then
-    echo "  attribution_unavailable: the gc rows could not be parsed (python exited ${prc}): $(head -c 300 "$aperr" | tr '\n\r\t' '   ')"
+    echo "  attribution_unavailable: the gc rows could not be parsed (python exited ${prc}): $(head -c 300 "$APERR" | tr '\n\r\t' '   ')"
   fi
-  rm -f "$aperr"
   return 0
 }
 
