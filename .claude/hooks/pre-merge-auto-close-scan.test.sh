@@ -431,6 +431,48 @@ run_case "T23 explicit PR number is the ref gh is asked about → allow" allow \
   "gh pr merge 4321 --squash" "fix: thing" "clean body"
 
 # ---------------------------------------------------------------------------
+# T24-T27 — squash-body override (--body-file).
+#
+# On a SQUASH merge, --body-file replaces the concatenated branch commit
+# messages, so those messages never land on main and cannot auto-close anything.
+# Before #7516 the hook scanned them regardless, which denied the exact remedy
+# its own deny text prescribes: the only contaminated surface was one commit
+# ("It does not close #6500" — the parser is negation-blind) and the merge
+# already carried a clean --body-file.
+#
+# The override is SCANNED, never trusted. T25-T27 are the three ways a weaker
+# implementation would fail open, and each is a real reachable state, not a
+# hypothetical: a contaminated override, a non-squash merge where the commit
+# bodies ARE the live surface, and an override this hook cannot read.
+# ---------------------------------------------------------------------------
+OVR_DIR="$(mktemp -d)"; _TMP_ARTIFACTS+=("$OVR_DIR")
+printf 'fix: thing\n\nRef #6617 — stays open.\n' > "$OVR_DIR/clean.txt"
+printf 'fix: thing\n\nCloses #6617\n' > "$OVR_DIR/dirty.txt"
+
+OPT_FT="6617" \
+run_case "T24 squash + clean --body-file overrides a contaminated commit → allow" allow \
+  "gh pr merge 1 --squash --body-file $OVR_DIR/clean.txt" \
+  $'fix: thing\n\nIt does not close #6617' ""
+
+OPT_FT="6617" \
+run_case "T25 squash + CONTAMINATED --body-file → deny (override is scanned, not trusted)" deny \
+  "gh pr merge 1 --squash --body-file $OVR_DIR/dirty.txt" \
+  $'fix: thing\n\nclean commit body' ""
+
+# NOT a squash: a merge commit puts the branch commits on main verbatim, so the
+# override does not exist there and the commit bodies remain the live surface.
+OPT_FT="6617" \
+run_case "T26 --body-file WITHOUT --squash does not excuse the commit bodies → deny" deny \
+  "gh pr merge 1 --merge --body-file $OVR_DIR/clean.txt" \
+  $'fix: thing\n\nIt does not close #6617' ""
+
+# An override this hook cannot READ is an override it cannot clear.
+OPT_FT="6617" \
+run_case "T27 unreadable --body-file path falls back to commit bodies → deny" deny \
+  "gh pr merge 1 --squash --body-file $OVR_DIR/does-not-exist.txt" \
+  $'fix: thing\n\nIt does not close #6617' ""
+
+# ---------------------------------------------------------------------------
 # Gate scoping.
 # ---------------------------------------------------------------------------
 

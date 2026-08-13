@@ -152,8 +152,41 @@ GH_ERR=$(mktemp 2>/dev/null) || { notice "SKIPPED — mktemp failed"; allow_exit
 GH_DEADLINE=$(( SECONDS + 8 ))
 gh_budget() { local r=$(( GH_DEADLINE - SECONDS )); (( r > 0 )) || r=1; printf '%s' "$r"; }
 
-if ! git -C "$WORK_DIR" log origin/main..HEAD --format=%B 2>/dev/null >>"$SCAN_FILE"; then
-  notice "scanned WITHOUT branch commit bodies (git log origin/main..HEAD failed)"
+# SQUASH-BODY OVERRIDE. On a squash merge `--body-file <path>` REPLACES the concatenated branch
+# commit messages, so those messages never land on main and cannot auto-close anything. Scanning
+# them anyway denies the very remedy this hook's own deny text prescribes — measured on PR #7516,
+# where the ONLY contaminated surface was one branch commit ("It does not close #6500", which the
+# parser reads negation-blind) and the merge already carried a verified-clean --body-file. Scan the
+# OVERRIDE instead: identical protection, correct surface. The override is SCANNED, never trusted.
+#
+# FOUR THINGS ARE DELIBERATE, and each is a way this could have been made weaker:
+#   * `--squash` is REQUIRED. A merge commit or rebase merge puts the branch commits on main
+#     verbatim, so there is no override there and the commit bodies remain the live surface.
+#   * The path comes from $SCAN, whose quoted/heredoc bodies are already blanked — never from $CMD.
+#     A path recoverable only from the raw command could have been forged by text INSIDE a commit
+#     message, which is the exact confusion strip_command_bodies exists to prevent.
+#   * An unreadable path, or an inline `--body` whose text $SCAN has necessarily blanked, FALLS
+#     BACK to the commit bodies. An override this hook cannot READ is an override it cannot clear.
+#   * The override's content is appended to $SCAN_FILE and goes through the same scanner. A
+#     contaminated --body-file is denied exactly as a contaminated commit body is.
+COMMIT_SURFACE="a commit message"
+BODY_OVERRIDE=""
+if grep -qE '(^|[[:space:]])--squash([[:space:]]|$)' <<<"$SCAN"; then
+  BODY_OVERRIDE=$(grep -oE '(^|[[:space:]])--body-file[[:space:]]+[^[:space:]]+' <<<"$SCAN" \
+                  | awk '{print $NF}' | head -1)
+fi
+if [[ -n "$BODY_OVERRIDE" && -r "$BODY_OVERRIDE" ]] && cat "$BODY_OVERRIDE" >>"$SCAN_FILE" 2>/dev/null; then
+  COMMIT_SURFACE="the --body-file squash message"
+  notice "squash body overridden via --body-file: scanned THAT as the commit surface, because branch commit bodies do not reach main on a squash merge"
+else
+  if grep -qE '(^|[[:space:]])--body-file([[:space:]]|$)' <<<"$SCAN"; then
+    notice "a --body-file override was present but unreadable from this hook — fell back to branch commit bodies (fail-closed)"
+  elif grep -qE '(^|[[:space:]])--body([[:space:]]|$)' <<<"$SCAN"; then
+    notice "an inline --body override was present but its text is blanked before scanning — fell back to branch commit bodies (fail-closed). Use --body-file to make an override verifiable."
+  fi
+  if ! git -C "$WORK_DIR" log origin/main..HEAD --format=%B 2>/dev/null >>"$SCAN_FILE"; then
+    notice "scanned WITHOUT branch commit bodies (git log origin/main..HEAD failed)"
+  fi
 fi
 COMMIT_LINES=$(wc -l < "$SCAN_FILE" 2>/dev/null | tr -d '[:space:]')
 [[ "$COMMIT_LINES" =~ ^[0-9]+$ ]] || COMMIT_LINES=0
@@ -221,12 +254,12 @@ EMBEDDED=$(printf '%s\n' "$RAW" | grep -viE "$DIRECTIVE" || true)
 # merge path (bulk-close PRs from the drain skills reach this in practice).
 # Surface is attributed from the line number so the deny says WHICH text to
 # scrub — the whole lesson of #6775 was that the keyword lived in two places.
-REFERENCED=$(printf '%s\n' "$RAW" | awk -v cl="$COMMIT_LINES" '
+REFERENCED=$(printf '%s\n' "$RAW" | awk -v cl="$COMMIT_LINES" -v csurf="$COMMIT_SURFACE" '
 {
   n = $0; sub(/:.*/, "", n)
   text = substr($0, index($0, ":") + 1)
-  if (n !~ /^[0-9]+$/)      surface = "a commit message"
-  else if (n+0 <= cl+0)     surface = "a commit message"
+  if (n !~ /^[0-9]+$/)      surface = csurf
+  else if (n+0 <= cl+0)     surface = csurf
   else if (n+0 == cl+1)     surface = "the PR title"
   else                      surface = "the PR body"
   low = tolower(text)
@@ -312,7 +345,7 @@ $(printf '%s' "$PROTECTED")
 
 Those issues are protected because closing one makes the daily sweeper skip it — the sweeper only evaluates OPEN issues — so the soak verification the tracker exists to enforce silently never runs. GitHub's parser reads the PR title, the PR body AND the squash commit body, so the keyword may have to be removed from more than one of them.
 
-Fix: change the closing keyword to a non-closing reference ('Ref #N', 'Tracks #N') in each surface named above. 'Ref #N' deliberately keeps the tracker in the soak gate's scope — that is intended, not a new problem. For a surface that is 'a commit message', you do not need an interactive rebase: 'gh pr merge --squash --body <clean text>' overrides the squash message without rewriting history.
+Fix: change the closing keyword to a non-closing reference ('Ref #N', 'Tracks #N') in each surface named above. 'Ref #N' deliberately keeps the tracker in the soak gate's scope — that is intended, not a new problem. For a surface that is 'a commit message', you do not need an interactive rebase: 'gh pr merge --squash --body-file <path>' overrides the squash message without rewriting history, and this hook scans that file INSTEAD of the branch commit bodies (they do not reach main on a squash merge). It must be --body-file and not inline --body: quoted command bodies are blanked before scanning, so an inline override is one this hook cannot read, and an unreadable override falls back to the commit bodies rather than clearing them.
 
 If this PR genuinely resolves the tracker, re-run with SOLEUR_ACK_FOLLOWTHROUGH_CLOSE=1 — that hatch is scoped to THIS check and leaves the prose-embedded guard armed.
 
@@ -327,12 +360,12 @@ fi
 # Attribute each match to its surface. The raw scanner prefix is a line number
 # into a temp file this hook deletes on exit, so quoting it verbatim would hand
 # the reader an offset that indexes nothing.
-EMBEDDED_RENDERED=$(printf '%s\n' "$EMBEDDED" | awk -v cl="$COMMIT_LINES" '
+EMBEDDED_RENDERED=$(printf '%s\n' "$EMBEDDED" | awk -v cl="$COMMIT_LINES" -v csurf="$COMMIT_SURFACE" '
 {
   n = $0; sub(/:.*/, "", n)
   text = substr($0, index($0, ":") + 1)
-  if (n !~ /^[0-9]+$/)      surface = "a commit message"
-  else if (n+0 <= cl+0)     surface = "a commit message"
+  if (n !~ /^[0-9]+$/)      surface = csurf
+  else if (n+0 <= cl+0)     surface = csurf
   else if (n+0 == cl+1)     surface = "the PR title"
   else                      surface = "the PR body"
   printf "  %s: %s\n", surface, text
