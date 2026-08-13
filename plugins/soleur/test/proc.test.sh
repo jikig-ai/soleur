@@ -351,6 +351,9 @@ fi
 if t=$(mutate M4 '*) return 1 ;;' '*) ;;'); then
   expect_red M4 "a process merely mentioning the pattern must not be selected" "$t"
 fi
+if t=$(mutate M6 "printf 'refuse\\t%s\\t%s\\n' \"\$pid\" \"\$cwd\"" "printf 'signal\\t%s\\t%s\\n' \"\$pid\" \"\$cwd\""); then
+  expect_red M6 "the signal/refuse classification fork must be load-bearing, not asserted by reading" "$t"
+fi
 if t=$(mutate M5 \
   '  rest="${line##*'"'"') '"'"'}"
   awk -v i="$idx" '"'"'{print $i}'"'"' <<<"$rest"' \

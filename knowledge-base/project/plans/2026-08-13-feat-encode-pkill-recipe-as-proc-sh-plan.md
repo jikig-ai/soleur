@@ -217,13 +217,34 @@ planned path against every issue body via `jq --arg`: zero matches.
 
 ## Guard Contract
 
-### Guard 1 — `kill_mine` worktree scoping
+Every mutation below is applied to a **copy** of the real `proc.sh` in a sandbox, proven
+landed with `diff -q` against a pristine backup, and run in the same harness that produced a
+GREEN baseline. The anchor is asserted present before replacement, so an anchor that drifts
+fails loudly rather than silently no-opping into a mutation that never landed and a mutant
+that "survives".
 
-**Property.** No process whose cwd is outside the current worktree is ever signalled.
+Each guard carries its own matrix. That is not bookkeeping: carving the mutations per guard
+is what surfaced that Guard 1 had only **two** rows under the original single shared table
+(M1 and M4), while M5 — filed under "the parse" — actually buys Guard 2. M6 was added to
+close that gap rather than to reach a floor.
+
+### Guard 1 — `kill_mine` signals only processes this worktree owns
+
+**Property.** No process whose resolved cwd lies outside the current worktree is ever
+signalled, and no process that merely *mentions* the pattern is ever signalled.
 
 **Assembly.** Every pid produced by the single `/proc` walk reaches exactly one of
-`{signal, refuse}`. The chokepoint is the **one and only `kill` call site in the file**; the
-assembly is structural — a second `kill` site anywhere in `proc.sh` is a contract violation.
+`{signal, refuse}`, and only `signal` rows reach the **one and only `kill` call site in the
+file**. The assembly is structural — a second `kill` site anywhere in `proc.sh` is a contract
+violation, asserted over non-comment lines by AC8.
+
+**Mutation matrix:**
+
+| # | Mutation | Must drive RED because |
+|---|---|---|
+| M1 | Drop the `/` boundary from the prefix test (`"$cwd" == "$root"*`) | A sibling worktree at `<ROOT>-two` must not be selected when ROOT is `<ROOT>`. The highest-risk one-character defect in the file. |
+| M4 | Remove the argv-position discipline (fall through to a bare token match) | A process merely *mentioning* the pattern (`grep -rn test-all.sh scripts/`) must not be selected — otherwise `kill_mine test-all.sh` kills the operator's own grep, from inside their own worktree, where the cwd test cannot save them. |
+| M6 | Rewrite the `refuse` arm of the classification fork to emit `signal` | The fork itself must be load-bearing. Without this row, "every pid reaches exactly one of `{signal, refuse}`" is asserted by reading rather than by measurement, and a collapsed fork would leave M1 and M4 both green. |
 
 ### Guard 2 — neither verb ever self-matches
 
@@ -232,27 +253,23 @@ any ancestor, or a fork sharing its process group — **even though the pattern 
 verbatim in the invoker's own command line**.
 
 **Assembly.** The exclusion block at the top of the walk's loop body, before classification.
-Every emitted row passes through it.
+Every emitted row passes through it. Both exclusions depend on `/proc/<pid>/stat` parsing, so
+the parse is part of this assembly rather than a separate concern — which is why M5 is filed
+here.
 
-### Mutation matrix
-
-Each mutation is applied to a **copy** of the real `proc.sh` in a sandbox, proven landed with
-`diff -q` against a pristine backup, and run in the same harness that produced a GREEN
-baseline. Five rows, each buying a distinct property.
+**Mutation matrix:**
 
 | # | Mutation | Must drive RED because |
 |---|---|---|
-| M1 | Drop the `/` boundary from the prefix test (`"$cwd" == "$ROOT"*`) | Sibling worktree `…-kill-mine-two` must not be selected when ROOT is `…-kill-mine`. The highest-risk one-character defect in the plan. |
-| M2 | Narrow ancestry exclusion to `$$` + `$PPID` | A 3-deep invocation (`bash -c 'bash proc.sh kill_mine <pat>'`) must still exclude the wrapper. **Pins R1.** |
-| M3 | Delete the own-pgid exclusion | A same-cmdline fork of `proc.sh` sharing its pgid must not be selected. |
-| M4 | Remove the argv-position discipline (bare substring match) | A process merely *mentioning* the pattern (`grep -rn test-all.sh scripts/`) must not be selected — otherwise `kill_mine test-all.sh` kills the operator's own grep. |
-| M5 | Replace the `') '` last-occurrence strip with naive `awk '{print $4}'` | A synthesized process whose `comm` contains a space must still resolve its ppid. **Pins R4** — the bug in the currently-recommended prose. |
+| M2 | Narrow the ancestry exclusion to `$$` + `$PPID` (`guard < 2`) | A 3-deep invocation (`bash -c 'bash proc.sh kill_mine <pat>'`) must still exclude the wrapper. **Pins R1** — the issue's own prescribed exclusion set is what this row falsifies. |
+| M3 | Delete the own-pgid exclusion | A same-cmdline fork of `proc.sh` sharing its pgid must not be selected. Command-substitution forks are not ancestors, so ancestry alone does not cover them. |
+| M5 | Replace the `') '` last-occurrence strip with the naive whole-line index (`awk '{print $4}'`) | A process whose `comm` contains a space must still resolve its ppid. Both exclusions above read ppid/pgrp through this parser, so breaking it silently disables *both*. **Pins R4** — the bug in the `/proc` recipe currently recommended in `git-worktree/SKILL.md`. |
 
-**Anti-vacuity, asserted once rather than as two mutation rows:** T3 is a positive control —
-a synthesized run owned by the current worktree **must** be signalled and reported
-`killed=1`. Any mutation that makes the walk emit nothing fails it. The single-chokepoint
-property is a one-line structural assertion (`grep -c '\bkill ' proc.sh` returns 1), not a
-mutation-ritual row.
+**Anti-vacuity.** T3 is a positive control that no mutation row can substitute for: it spawns
+a real `setsid sleep` inside a fresh mktemp sandbox, proves `list_runs` finds it, proves
+`kill_mine` reports `killed=1`, and proves the process actually terminated. Any mutation that
+makes the walk emit nothing fails it, and it is the only arm that exercises the real signal
+path rather than the dry-run seam.
 
 ## Implementation Phases
 
@@ -346,9 +363,12 @@ Run the suite directly, then confirm auto-discovery through the runner.
    too: the suite's own stdout may echo its path, and only a full-line match excludes that.
    Exactly-one is the assertion because D2's glob asymmetry makes `0` a live failure mode and a
    stray hand-registration would make it `2`.
-6. Mutation rows M1–M5 are each proven: baseline GREEN, mutant RED, mutation confirmed landed
+6. Mutation rows M1–M6 are each proven: baseline GREEN, mutant RED, mutation confirmed landed
    via `diff -q` against a pristine backup, in the same harness, against a sandbox copy of the
    **real** `proc.sh`.
+6a. `python3 scripts/lint-guard-contract.py` passes on this plan — every guard entry above
+   carries a non-placeholder property, a non-placeholder assembly, and its own mutation matrix
+   of at least three rows.
 7. The four mirrored primitives are pinned against drift from `scripts/lib/test-contention.sh`
    by code-anchored `grep -F` assertions (not bare tokens, per `cq-assert-anchor-not-bare-token`).
 8. **Single chokepoint (Guard 1), asserted over code only.**
