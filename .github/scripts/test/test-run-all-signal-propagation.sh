@@ -54,8 +54,20 @@ assert_eq() { # <id> <want> <got>
 # this runner's own explanatory comments, which is how guards in this repo have historically
 # passed by matching their own prose.
 count_re() { # <ere> <file>
-  local n=0
-  n=$(grep -cE -- "$1" "$2") || n=0
+  # `|| n=0` would collapse grep's TWO non-zero exits into one clean answer:
+  # rc 1 is "no match" (a legitimate 0) and rc >= 2 is "could not read the file /
+  # bad regex" (an error). Six assertions in this suite read a 0 from here as their
+  # PASS verdict, so folding rc 2 into 0 makes every negative row report clean
+  # having measured nothing — the exact fail-open shape `lint-orphan-test-suites.sh`
+  # refuses `|| true` for, a few files over. Abort loudly instead; a counting helper
+  # that cannot count must not answer.
+  local n=0 rc=0
+  n=$(grep -cE -- "$1" "$2") || rc=$?
+  if (( rc >= 2 )); then
+    printf '[FATAL] count_re: grep exited %s on %s (unreadable file or bad ERE: %s) — refusing to report a count nothing measured\n' \
+      "$rc" "$2" "$1" >&2
+    exit 2
+  fi
   printf '%s\n' "$n"
 }
 

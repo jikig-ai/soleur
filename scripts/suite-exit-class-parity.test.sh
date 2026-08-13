@@ -190,8 +190,20 @@ _parity_name_guard_arm() {
     bad "name-guard fixture self-check: shadow NOT in effect (kill -l 65 rc=$prc out=[$probe]) — the three rows above were vacuous"
   fi
   (( examined == 3 )) || bad "name-guard arm: examined $examined of 3"
+  # bash function definitions are GLOBAL regardless of nesting, so without this the
+  # permissive-kill shadow survives the arm's return for the rest of the process and any
+  # arm appended below would silently run against a synthesized shell — passing for the
+  # wrong reason. Latent today (nothing follows), live the moment someone appends.
+  unset -f kill
 }
 _parity_name_guard_arm
+# Fixture teardown must actually have happened: a shadow that outlived the arm would make
+# every later assertion in this file suspect, so prove the real builtin is back.
+if [[ "$(kill -l 65 2>/dev/null; echo "rc=$?")" == "rc=1" ]]; then
+  ok "name-guard teardown: the real kill builtin is restored (shadow did not leak)"
+else
+  bad "name-guard teardown: the permissive-kill shadow LEAKED past its arm — assertions below it may pass for the wrong reason"
+fi
 
 # Loop-accounting floor. A `pass()`-counting floor cannot see a loop whose body
 # never executed: a gutted loop still leaves the earlier ok() calls counted. So

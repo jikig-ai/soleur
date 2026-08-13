@@ -418,7 +418,12 @@ PASS=$(grep -c '^PASS ' "$LOG" || true)
 # INLINED, NOT SOURCED FROM scripts/lib/ — ADR-177 §A3. run-registered-suites.test.sh sandboxes
 # this file with a SINGLE-FILE `cp "$SUT" "$PRISTINE"`, so a sourced helper would be absent from
 # every mutant copy: the degradation path would fire and each KILLED assertion would silently
-# exercise a fallback instead of the classifier. Keep this body byte-identical to the copy in
+# exercise a fallback instead of the classifier. This body is a BOOLEAN predicate and is NOT
+# byte-identical to the tri-state `suite_exit_class` in test-all.sh / run-all.sh -- the call
+# site here already counts every non-zero child, so it needs "is this rc the killed subset?",
+# not a three-way classification. `scripts/suite-exit-class-parity.test.sh` byte-compares only
+# the two tri-state copies and pins THIS one behaviourally across the rc domain. Do not "restore
+# parity" by copying the tri-state body in. Formerly this line said to keep it byte-identical to
 # .github/scripts/test/run-all.sh so the parity pin can compare them.
 #
 # TWO guards, and both are load-bearing:

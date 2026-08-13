@@ -99,13 +99,62 @@ tracked_n=$(wc -l < "$WORK/tracked" | tr -d ' ')
 #
 # ABSOLUTE and hand-ratcheted, like REQUIRED_RUNNERS' floor below and for the same stated
 # reason: there is no second producer in the tree to derive it from, and deriving it from
-# `git ls-files` would be deriving the floor from its own subject. 250 against 340 measured on
-# 2026-08-13 -- deliberate slack, because suites are legitimately deleted and this must not
-# red on a real cleanup; it only has to be far enough above the largest single directory (70)
-# that no narrowing survives it.
-MIN_TRACKED_SUITES=250
+# `git ls-files` would be deriving the floor from its own subject.
+#
+# 320 against 342 measured 2026-08-13. It was 250, and that was too loose: measured at review,
+# narrowing the producer to `-- apps plugins scripts` drops all 43 `.claude/**` suites, still
+# enumerates 299, clears a 250 floor, leaves every per-surface zero-check non-zero (s3/s4/s6
+# all live under `apps/`), and prints `0 orphaned` over a repo it stopped walking. Slack in a
+# floor is not safety margin, it is narrowing budget. Keep just enough for a real cleanup.
+MIN_TRACKED_SUITES=320
 if (( tracked_n < MIN_TRACKED_SUITES )); then
   echo "ERROR: the *.test.sh walk enumerated ${tracked_n} tracked suites, below the floor of ${MIN_TRACKED_SUITES} -- the producer is narrowed or broken, so every check below certified a SUBSET of the repo while reporting on all of it." >&2
+  fails=$((fails + 1))
+fi
+
+# A COUNT cannot see a narrowing that stays above the floor, and it cannot see a SUBSTITUTION
+# at all -- the defect class this very PR exists to close, one level up. So assert the SET of
+# top-level roots the producer reached, not how many files it returned. A narrowing that drops
+# an entire root reds here even when the count survives, and it names the root.
+#
+# Derived from the producer's own output and compared against an explicit expected set: the
+# expected side is the decision point, so adding a root is a deliberate edit rather than a
+# silent widening.
+# Measured, not guessed: the first cut of this line listed `tests` from memory and the check
+# reddened on its own first run -- `tests/` uses a `test-*.sh` convention this producer does
+# not match. Re-derive with:
+#   git ls-files '*.test.sh' | awk -F/ 'NF{print $1}' | LC_ALL=C sort -u
+EXPECTED_SUITE_ROOTS=".claude apps plugins scripts"
+actual_roots="$(awk -F/ 'NF{print $1}' "$WORK/tracked" | LC_ALL=C sort -u | tr '\n' ' ')"
+actual_roots="${actual_roots% }"
+# Non-vacuity: an empty derivation must never be compared as a legitimate set. (It was, on the
+# first cut of this check -- the producer's output is a FILE, not an array, so `${tracked[@]}`
+# expanded to nothing. It reddened rather than passing, which is the only reason it was cheap.)
+if [[ -z "$actual_roots" ]]; then
+  echo "ERROR: the root derivation produced an EMPTY set from ${WORK}/tracked -- the extraction broke, so the comparison below would be meaningless." >&2
+  fails=$((fails + 1))
+fi
+# SUPERSET, not equality — and the asymmetry is the whole point.
+#
+# The hazard this closes is a root DISAPPEARING: the producer silently stops walking it and
+# every "covered" verdict below excludes it while the report still says 0 orphaned. So every
+# expected root must be PRESENT.
+#
+# A root APPEARING is a different and much weaker concern, and it is already covered: a suite
+# under a brand-new root matches no surface, so the orphan walk itself reports it by name (rows
+# M2 and M16 in the companion suite create suites under `tools/` and `docs/deep/nested/` and
+# assert exactly that). Demanding equality here would therefore red on a legitimate new
+# directory AND break those two fixtures — which is precisely what it did on its first run,
+# caught by M16 rather than by review.
+_missing_roots=""
+for _r in $EXPECTED_SUITE_ROOTS; do
+  case " $actual_roots " in
+    *" $_r "*) ;;
+    *) _missing_roots="${_missing_roots}${_r} " ;;
+  esac
+done
+if [[ -n "$_missing_roots" ]]; then
+  echo "ERROR: the *.test.sh walk reached roots [${actual_roots}] but did NOT reach [${_missing_roots% }] -- the producer stopped walking a root it is expected to cover, so every 'covered' verdict below silently excludes it. A count floor cannot see this: dropping .claude/** leaves 299 suites, above any floor loose enough not to red on a real cleanup." >&2
   fails=$((fails + 1))
 fi
 
@@ -272,7 +321,12 @@ for i in 1 2 3 4 5 6; do
   # going dark (a renamed workflow, a changed step shape) while the other five keep the total
   # plausible and the report clean.
   if (( n < 1 )); then
-    echo "ERROR: registration surface ${i} matched ZERO tracked suites -- it has silently stopped matching, so every suite that depended on it is being judged against a covered set that no longer contains it." >&2
+    # A surface with exactly ONE member (surface 6 today: workspaces-luks-loopback.test.sh)
+    # makes this check double as a tripwire on that single suite, and the two causes need
+    # opposite remedies -- re-derive a broken extractor, versus drop a surface whose last
+    # member legitimately went away. Naming both is the difference between a 30-second fix and
+    # an investigation into an extractor that was never broken.
+    echo "ERROR: registration surface ${i} matched ZERO tracked suites. Either it silently stopped matching (so every suite that depended on it is now judged against a covered set that no longer contains it -- re-derive the extractor), OR its last remaining member was legitimately deleted or relocated (in which case retire the surface deliberately, in the same commit). Check which before fixing: a surface that had exactly one member cannot tell these apart on its own." >&2
     fails=$((fails + 1))
   fi
 done
@@ -307,7 +361,18 @@ for e in ${EXCLUSIONS[@]+"${EXCLUSIONS[@]}"}; do
   # nothing, reads as discipline, and survives the deletion or rename of the suite it was
   # written for. Two or more is an AMBIGUOUS key -- the basename-collision failure this
   # mechanism was re-keyed to prevent, which would excuse a suite nobody named.
-  match_n=$(git -C "$REPO_ROOT" ls-files -- "$key" | wc -l | tr -d ' ')
+  # rc captured, never bare: under this file's `set -euo pipefail` a git failure (a key git
+  # rejects as a pathspec -- `../x`, a bad magic prefix) makes the pipeline non-zero and the
+  # BARE assignment aborts the whole linter with git's fatal on stderr and no message of our
+  # own -- before REQUIRED_RUNNERS, the relevance-array block and the tests/commands loop ever
+  # run. A malformed exclusion key must fail THIS key loudly, not silently truncate the run.
+  _ls_rc=0
+  match_n=$(git -C "$REPO_ROOT" ls-files -- "$key" 2>/dev/null | wc -l | tr -d ' ') || _ls_rc=$?
+  if (( _ls_rc != 0 )); then
+    echo "ERROR: exclusion key '${key}' was rejected by git as a pathspec (rc ${_ls_rc}) -- fix the key; the walk below is otherwise unaffected." >&2
+    fails=$((fails + 1))
+    continue
+  fi
   if [[ "$match_n" != "1" ]]; then
     echo "ERROR: exclusion key '${key}' matches ${match_n} tracked files, expected exactly 1 -- a key matching none is stale and masks nothing while looking deliberate; a key matching several excuses suites nobody named. Use the repo-relative path." >&2
     fails=$((fails + 1))
