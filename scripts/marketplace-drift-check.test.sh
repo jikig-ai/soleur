@@ -438,6 +438,26 @@ else:
     if not (ii >= 0 and di > ii):
         problems.append("dispatch step does not run AFTER the issue-filing step — evidence must precede remediation")
 
+    # THE BODY, not only the `if:` and the position. Everything above pins the step's GATING;
+    # nothing read what the step actually does, so replacing the entire body with `echo` left
+    # this suite at 58/58 — and so did rewriting the run-detection poll, which is how the stale
+    # -run defect below survived review-by-harness.
+    dbody = dispatch.get("run") or ""
+    if "gh workflow run apply-github-infra.yml" not in dbody:
+        problems.append("dispatch step does not actually dispatch apply-github-infra.yml — its body is unpinned, so the gating above guards nothing")
+    if "--ref main" not in dbody:
+        problems.append("dispatch step does not pin --ref main; a reconcile from any other ref would apply an unreviewed tree")
+    # The run-detection poll. `gh workflow run` exits 0 on ACCEPTANCE and returns no run id, so
+    # without a poll a disabled/renamed/quota-blocked workflow leaves the job green with no
+    # reconcile. And the poll must identify OUR run: the first draft took `.[0].databaseId` off
+    # an unbounded listing and was satisfied by a run from three months earlier, ~6s in.
+    if "before_id" not in dbody:
+        problems.append("dispatch step does not baseline the newest run BEFORE dispatching — its poll cannot distinguish a new run from a historical one")
+    if "select(. > ${before_id})" not in dbody:
+        problems.append("dispatch step's poll does not require a run id strictly greater than the pre-dispatch baseline — a stale run would satisfy it")
+    if "::error::" not in dbody:
+        problems.append("dispatch step cannot fail loud when no run appears — an accept-then-nothing dispatch would report green")
+
 # The reconcile predicate must be computed in the `check` step's bash, not in an Actions
 # expression. Actions has no split/regex/iteration, so `contains(findings, ...)` cannot tell a
 # GET-2-only verdict from a MIXED one — and those need opposite decisions. Computing it in the
@@ -502,8 +522,30 @@ fi
 filing_structural="$(python3 - "$WORKFLOW" <<'ALARMPY'
 import sys, yaml
 wf = yaml.safe_load(open(sys.argv[1]))
-steps = list(wf["jobs"].values())[0]["steps"]
 problems = []
+
+# KEYED BY NAME, never `list(wf["jobs"].values())[0]`. This extractor used the positional form
+# while the two other extractors in this file key on "drift-check", and the two disagreeing is
+# the whole defect: adding a decoy job ABOVE drift-check (any job at all, even an empty one)
+# repointed this block at the decoy, every `step_with()` returned nothing... and the alarm
+# assertions below would then be evaluated against the wrong job. Measured during #7493 review:
+# gutting the real filing step AND adding a decoy left this suite 58/58 green.
+if "drift-check" not in wf.get("jobs", {}):
+    problems.append("the workflow has no `drift-check` job - this suite's extractors key on it by name")
+    steps = []
+else:
+    steps = wf["jobs"]["drift-check"]["steps"]
+    # A second job is legitimate (the dispatch may be narrowed into its own job), but it must
+    # never silently take over this extractor. Assert the set of jobs explicitly so ADDING one
+    # is a decision this harness sees rather than a change it absorbs.
+    known_jobs = {"drift-check"}
+    unexpected = set(wf["jobs"]) - known_jobs
+    if unexpected:
+        problems.append(
+            f"unexpected job(s) {sorted(unexpected)} - add them to known_jobs AND extend the "
+            "structural assertions to cover them; an unreviewed job can hold permissions or "
+            "steps this suite never inspects"
+        )
 
 def step_with(substr):
     return [st for st in steps if substr in (st.get("run") or "")]
