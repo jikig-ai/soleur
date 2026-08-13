@@ -179,7 +179,11 @@ sourceable library of quiet, pure adjudicators. Exit status is the verdict; noth
       a fixed further budget once it fires), not a fixed list, or a re-push on a late attempt yields
       a **false red on a successful recovery**. Add an integration fixture whose pass-1 frame is
       **complete, healthy and stale** — the real production shape — and assert the re-push fires on
-      it; without that fixture the fix is unverified.
+      it; without that fixture the fix is unverified. **R21 pins the fixture's exact shape:**
+      `exit_code=0`, `files_written == files_total == expected`, `files_failed=0`, and a **stale
+      `start_ts`** — that frame satisfies `infra_config_count_invariant` in full. Any pass-1 fixture
+      that *fails* the count invariant is testing a state the #7220 race does not produce and would
+      let this defect survive green.
 - [ ] **6.3** Retain the last **HTTP 200** response separately from the last response overall, and
       feed the classifier that artifact (R15.4). **Truncate the response file per pass**
       (R17.2/R18.8 §7) — `curl -s -o` on a transport failure leaves the prior body in place, so

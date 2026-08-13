@@ -3041,3 +3041,56 @@ a script, ADR-150 shape) and R20.2 (split the recovery into graded steps) — an
 follows from R20.2's. All three are routed to `/soleur:deepen-plan`, which is the next pipeline step,
 with the measured costs above on the table. Everything in R20.3–R20.7 is a correction that applies
 under **either** fork resolution and should be folded regardless.
+
+# R21 — deepen-plan verification pass: every load-bearing claim re-checked by execution
+
+**[2026-08-13.]** The R19/R20 findings were re-verified against the live files by an independent
+agent instructed to prefer refutations. **Six of six confirmed**, one with a refinement that makes
+the underlying defect *worse* than R20.6 recorded. Anchors are content-first, with line numbers as
+corroboration only (`cq-cite-content-anchor-not-line-number`).
+
+| # | Claim | Verdict | Decisive evidence |
+|---|---|---|---|
+| 1 | R19.1 — the loop's break condition cannot see a stale frame | **CONFIRMED** | `infra_config_count_invariant()` (gate.sh, ~L309–323) reads exactly four fields — `.exit_code`, `.files_failed`, `.files_written`, `.files_total` — and returns 0 when all hold. **No `start_ts`, no timestamp field of any kind** in the 15-line body |
+| 2 | The freshness verdict runs only after the loop closes | **CONFIRMED** | `for attempt in 1 2 3; do` (L782) → `done` (L822) → `elif [[ "$HTTP_CODE" == "200" ]]` (L837) → `# #7220 AC20 — FRESHNESS PIN.` (L850). `822 < 837 < 850` |
+| 3 | R20.4 — the 404 + `ALLOW_MISSING_STATUS=true` arm exits **0** after a production write | **CONFIRMED** | The arm sets `freshness_evidence=none` and warns *"NOTHING was adjudicated on this run"*; `adjudicate_infra_config` is called **only** in the sibling 200 branch; the step's `run:` block ends at its closing `fi` with **no trailing `exit`**, so the step's status is the `echo`'s — zero |
+| 4 | R20.6 — a failed re-push is misdiagnosed by the #7220 alert | **CONFIRMED, and worse** — see below | — |
+| 5 | R18.8 §11 — the loop bound is written twice | **CONFIRMED** | `for attempt in 1 2 3; do` (L782) and `if [[ "$attempt" -lt 3 ]]; then sleep 5; fi` (L819–821), same step body |
+| 6 | R20.5 — the settle margin is negative | **CONFIRMED** | `gh run view 31714143720 --json jobs`: `Terraform plan` 15:13:18Z→15:13:24Z = **6 s**; `Terraform apply` 15:13:26Z→15:13:29Z = **3 s**. Total 9 s against a window of up to 11 s |
+
+## R21.1 — The Claim-4 refinement: the misleading text is a shared suffix, not a branch body
+
+R20.6 attributed *"the files that landed are on the host, and app health is unaffected — this is an
+ACTIVATION failure… Next: betterstack-query.sh"* to the alert step's final `else` body. **That
+framing is wrong, and the truth is worse.** The classification chain selects a `WHERE` string across
+four branches, and then a **single** `infra_config_red_alert "${WHERE} What is still true: the files
+that landed are on the host, and app health is unaffected …"` call fires **after the whole chain
+closes**, appending that text identically **regardless of which branch was selected** — including the
+`fatal_line > 0` "the handler died" branch.
+
+Two consequences:
+
+1. **The defect is pre-existing and broader than PR-B.** The suffix already asserts "the files landed
+   and app health is unaffected" on branches where that is not established. PR-B does not create it;
+   PR-B creates a **new** way to reach it that is flatly false (a second production `terraform apply`
+   failed mid-gate, so the resource may be tainted and the push may have half-landed).
+2. **R20.6's prescribed fix is necessary but not sufficient.** Adding an
+   `elif [[ -n "${REPUSH_FAILED:-}" ]]` arm sets a correct `WHERE` — and the shared suffix then
+   contradicts it in the same sentence. The suffix must become **branch-aware**: either move it into
+   the branches that have earned it, or gate it on the re-push latch. This stays a caller-side edit;
+   `scripts/infra-config-red-alert.sh` is still not touched.
+
+**The caller-side precedent is confirmed and is exactly what PR-B should copy.** `STABILITY_VERDICT`
+is read as a step `env:` from `steps.infra_config_gate.outputs.stability_verdict` (L1087) and consumed
+as `elif [[ -n "${STABILITY_VERDICT:-}" ]]` (L1162) — a whole new discriminator added in the caller,
+keyed on a new gate-step output, with **zero** edits to the fail-open helper. R18.8 §7's claim that a
+fourth class "means editing a fail-open P1 helper with three labels across five sites" is therefore
+**refuted by the file itself**, and its cut of that class stays withdrawn.
+
+## R21.2 — What this pins for `/work`
+
+Task 4.1's predicate cases and task 4.6's integration fixtures must include the **real production
+shape**, which claim 1 now makes precise: a frame with `exit_code=0`, `files_written == files_total
+== expected`, `files_failed=0` **and a stale `start_ts`**. That frame satisfies
+`infra_config_count_invariant` completely. Any test whose pass-1 fixture fails the count invariant is
+testing a state the #7220 race does not produce, and would let the R19.1 defect survive green.
