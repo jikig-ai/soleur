@@ -2,7 +2,9 @@
 title: "fix: apply-deploy-pipeline-fix verify step re-polls but never re-POSTs, so it cannot recover from the documented webhook-restart race"
 date: 2026-08-12
 slug: fix-apply-verify-repost-recovery
-branch: feat-one-shot-7104-apply-verify-repost-recovery
+branch: feat-one-shot-7104-apply-verify-repost-pr-b
+prior_branch: feat-one-shot-7104-apply-verify-repost-recovery
+lane: cross-domain
 type: fix
 issue: 7104
 closes: 7104
@@ -26,6 +28,13 @@ by hand.
 This plan adds a bounded, one-shot re-push and re-verify, gated on a status shape
 consistent with that race, while keeping the terminal red intact when both passes
 fail.
+
+> **[Updated 2026-08-13] This plan covers two PRs, and PR-A has shipped.** PR-A (#7509, merged
+> 2026-08-13, deployed and verified live) delivered the discriminator — `tasks.md` Phases 1–3.
+> **PR-B is the bounded re-push, and its authoritative section is
+> [`# R18 — PR-B`](#r18--pr-b-the-bounded-re-push-reconciled-against-what-pr-a-shipped) at the end
+> of this document.** R18 supersedes every forward-looking statement above it wherever they
+> disagree, and it names each disagreement. `Closes #7104` attaches to PR-B, not PR-A.
 
 ## Enhancement Summary
 
@@ -341,9 +350,9 @@ must name clock skew as a candidate, or the next engineer will chase the race th
 | Path | Change |
 |---|---|
 | `.github/workflows/apply-deploy-pipeline-fix.yml` | In the step `Verify infra-config apply succeeded` (`id: infra_config_gate`): wrap the existing poll-loop + terminal adjudication + freshness pin into a shell function `verify_once`, add a `repush_once` function, and make the step's last statement a call to the tested orchestrator. **Superseded in part — see `## Plan Revisions`: the `Terraform plan`/`Terraform apply` steps also change to produce and consume a saved plan file, and the bridge teardown is NOT relocated.** |
-| `apps/web-platform/infra/infra-config-gate.sh` | Add `infra_config_no_new_frame` (the classifier) and `infra_config_bounded_verify` (the orchestrator + terminal verdict). No existing function changes behaviour. |
-| `apps/web-platform/infra/infra-config-gate.test.sh` | Add the classifier cases, the orchestrator mutation matrix, the re-pointed production call-site pin, and raise `GATE_MIN_ASSERTIONS`. |
-| `knowledge-base/engineering/architecture/decisions/` | New ADR (provisional ordinal **186** — re-derive before merge) recording the bounded-re-push invariant. |
+| `apps/web-platform/infra/infra-config-gate.sh` | **[Corrected 2026-08-13 — R18.1.]** Add **`infra_config_should_repush`** only. `infra_config_no_new_frame` and `infra_config_bounded_verify` are both dead names from the pre-R16.2 design and must not be built. No existing function changes behaviour. |
+| `apps/web-platform/infra/infra-config-gate.test.sh` | Add the predicate cases (P1–P8), the integration cases (I1–I3), the extended production call-site pin, and raise `GATE_MIN_ASSERTIONS` from its measured **106** to the post-change count. |
+| `knowledge-base/engineering/architecture/decisions/` | **[Corrected 2026-08-13.]** PR-A took **ADR-186**. PR-B's is a new ADR at provisional ordinal **187** — re-derived against freshly-fetched `origin/main` before merge. |
 | `knowledge-base/project/specs/feat-one-shot-7104-apply-verify-repost-recovery/tasks.md` | Task breakdown (written by Save Tasks). |
 
 ## Files to Create
@@ -495,6 +504,15 @@ The only consumption change is GitHub Actions minutes (see `## Risks`).
 > **The `failure_modes:` block below enumerates PR-B's re-push failures** (`infra_config_bounded_verify`,
 > `repush_once`, `op=infra-config-repush-attempted`) — none of which are in PR-A. Review found
 > zero entries for the eight modes PR-A actually ships. They are enumerated here.
+>
+> **[Updated 2026-08-13 — R18.1/R18.6.]** The PR-B block's *detection* column names
+> `infra_config_bounded_verify`, `infra_config_no_new_frame` and a `repush_once` function; none is
+> built. Read the mode descriptions, which are correct, and substitute the built shapes: the
+> predicate `infra_config_should_repush`, an inline latched re-push block, and a `repush_attempted`
+> **step output** consumed by a separate emitting step rather than a Sentry POST inside the gate
+> step. The `alert_route` for `op=infra-config-repush-attempted` is a **queryable counter only** —
+> no `sentry_issue_alert` rule matches it, exactly as #7527 already records for
+> `op=infra-config-preframe-degraded` (R18.7).
 
 ### PR-A failure modes as shipped
 
@@ -570,59 +588,77 @@ The deliverable **is** a guard, so Phase 2.12 applies. Two guards ship, and the 
 one most likely to be got wrong, because it is a pre-existing guard whose assembly this change
 moves.
 
-### Guard 1 — `infra_config_bounded_verify` (the terminal verdict)
+### Guard 1 — `infra_config_should_repush` (the re-push decision)
 
-**Property.** The `Verify infra-config apply succeeded` step exits zero if and only if at least
-one of its two verification passes verified this apply's delivery.
+> **[Rewritten 2026-08-13 — R18.1.]** This entry previously named `infra_config_bounded_verify` and
+> drove a higher-order orchestrator with **injected stubs**. R16.2 deleted that function; R16.2's
+> own closing paragraph mandated this re-derivation and it was not carried out until now. A
+> stub-driven matrix certifies stubs; the rows below exercise the real decision, which is strictly
+> stronger. The terminal-verdict property has not been dropped — it moved to Guard 2, where the
+> assertion is adjacent to production rather than to a hermetic harness that cannot execute the
+> workflow.
 
-**Assembly.** Every path by which this step can reach exit 0. Structurally that is the set of
-`return 0` statements in `infra_config_bounded_verify` plus the step's trailing statement that
-propagates its status. The chokepoint is the function: the step must have exactly one exit-status-
-determining statement, and it must be the call to this function. The function's only success arms
-are the two `"$verify_fn"` invocations; the classifier arm, the re-push arm, and the fall-through
-all `return 1`. Naming the chokepoint rather than the current arm list is deliberate — an arm list
-is a snapshot, and the next edit that adds an arm would invalidate it silently. The test asserts
-over the function's *behaviour under injected stubs*, so a new arm that returns 0 without a passing
-verify is caught by the matrix rather than by an enumeration that has to be maintained.
+**Property.** The gate re-pushes **only** when a push was expected and the host published no frame
+for it — and never on any other shape, including every shape it cannot classify.
+
+**Assembly.** Every input tuple on which `infra_config_should_repush` can return 0. Structurally
+that is the set of `return 0` statements in the predicate, and the chokepoint is the predicate
+itself: the workflow has exactly one site that decides whether to re-push, and it is a call to this
+function. Naming the chokepoint rather than today's clause list is deliberate — a clause list is a
+snapshot. The predicate is a pure adjudicator over paths and scalars, matching all seven existing
+siblings in `infra-config-gate.sh`, so the matrix drives the production decision directly and no
+stub stands between the assertion and the property. Allow-list semantics: every input the predicate
+cannot classify returns non-zero.
 
 **Mutation matrix.** Each row is an edit derivable from the design, and each must drive
 `infra-config-gate.test.sh` RED.
 
 | # | Mutation | Must go RED because |
 |---|---|---|
-| 1 | Make both injected verify stubs fail, with the classifier stub reporting the `no_new_frame` shape and the re-push stub succeeding | **The primary acceptance criterion.** Both passes failed; the verdict must be 1 |
-| 2 | Make the first verify stub fail and the classifier stub report "not the race" | Pass 2 must not run, and the verdict must be 1 — not 0 by fall-through |
-| 3 | Make the first verify stub fail, the classifier report the race, and the **re-push stub fail** | The verdict must be 1, and pass 2 must never have been invoked (assert the stub's call counter, not just the return code) |
-| 4 | Delete or rename `infra_config_bounded_verify` so the workflow's `declare -F` anti-vacuity check is the only thing standing | The workflow must fail loudly with a named `::error::`, mirroring the existing `declare -F infra_config_red_alert` pattern — **this is the guard's own dispatch row**; a verdict function that is silently absent must not read as success |
-| 5 | Add a **second** member to the success set: make the classifier return 0 and the re-push return 0 while both verifies fail, and have the orchestrator `return 0` on "the re-push succeeded" | A successful *push* is not a verified *delivery*. This is the compliant-first-member-then-a-second-member row: the HTTP 202 that started this whole incident class is exactly "the push succeeded" |
-| 6 | Make the first verify stub **succeed** | Positive control: the verdict must be 0 and neither the classifier nor the re-push may be invoked (assert both call counters are zero) |
-| 7 | Make the first verify fail, the classifier report the race, the re-push succeed, and the second verify succeed | Positive control for the recovery path: the verdict must be 0 and the re-push counter must be exactly 1 — never 2 |
+| 1 | Drop the `dpf-replaced` clause, so the predicate decides on frame shape alone | **The primary row.** Three merge classes replace no DPF and legitimately publish no frame; without this clause each becomes a spurious production re-push, which is the exact defect PR-A shipped to prevent |
+| 2 | Relax the polarity guard from `^(true\|false)$` to `!= "true"` | `jq -r` on a missing key yields the string `null`; an address rename or an empty `resource_changes[]` then reads as "no push expected" **permanently and silently**, restoring #7220's blind spot (R17.1). The workflow already documents this trap in its `host_creates` block |
+| 3 | Change the freshness comparison from `-lt` to `-le`, so `start_ts == baseline` re-pushes | Equality is fresh. A frame published in the same whole second as the baseline is a *delivered* frame; re-pushing on it writes production for a run that already succeeded |
+| 4 | Delete or rename `infra_config_should_repush` while leaving the workflow's call site in place | **The guard's own dispatch row.** The `declare -F infra_config_should_repush` anti-vacuity check must fail loudly with a named `::error::`, mirroring the existing `declare -F infra_config_red_alert` pattern. A decision function that is silently absent must never read as "do not re-push" *or* as success |
+| 5 | Add a **second** member to the success set: make an unparseable body return 0 "because we cannot rule the race out" | Compliant-first-member-then-a-second-member. Allow-list semantics are the whole contract — a body we cannot parse is not evidence of a race, and treating uncertainty as licence to write production inverts the polarity (`2026-07-03-enforcement-probe-must-discriminate-exit-codes-not-any-failure-as-safe.md`) |
+| 6 | Make the fixture builder's default supply the value the case also asserts on | Vacuity row. Six cases that return the same verdict under two *different* decision rules measure nothing (`2026-08-01-my-mutation-battery-inferred-the-verdict-from-the-input-under-test.md`); each case's expected verdict must be written independently of the builder's defaults |
+| 7 | Positive control: `dpf-replaced == "true"` with a frame strictly older than the baseline | Must return 0. Without a passing row the predicate could be `return 1` unconditionally and every other row would still be green |
 
-Row 7 is what pins **boundedness**: an implementation that loops would pass a naive "it recovered"
-assertion and fail this one.
+Row 5 is what keeps the predicate an allow-list; row 7 is what stops it degenerating into a
+constant. Boundedness is **not** pinned here — a pure predicate has no notion of how often its
+caller acts on it. It moved to Guard 2, which quantifies over production (R18.3).
 
 ### Guard 2 — the production call-site pin (pre-existing, re-pointed)
 
-**Property.** Production invokes the *terminal* content assert — not an any-of-N variant polled
-inside a retry loop — and, after this change, invokes the *tested* orchestrator rather than an
-inline reimplementation of it.
+> **[Rewritten 2026-08-13 — R18.3.]** Rows 2 and 3 named `infra_config_bounded_verify` and
+> `verify_once`, neither of which is built (R18.1, R18.2). Boundedness moved here from Guard 1,
+> because it is a property of the *caller*, and this is the only guard that quantifies over the
+> caller.
 
-**Assembly.** The pin currently quantifies over one artifact: `apply-deploy-pipeline-fix.yml`,
-which it greps for `adjudicate_infra_config /tmp/` and `infra_config_count_invariant /tmp/` and
-then requires a loop-closing `done` strictly between them. This change keeps both calls in that
-file (inside the new `verify_once` function), so the existing three clauses survive **unmodified**
-— that is the whole reason the extraction into a separate script was cut. The assembly gains one
-member: the workflow must also call `infra_config_bounded_verify`, or the tested decision tree is
-not the one production runs.
+**Property.** Production invokes the *terminal* content assert — not an any-of-N variant polled
+inside a retry loop — invokes the *tested* predicate rather than an inline reimplementation of its
+decision, and re-pushes **at most once per run**.
+
+**Assembly.** The pin quantifies over one artifact, `.github/workflows/apply-deploy-pipeline-fix.yml`,
+resolving line numbers by grep and requiring `count_invariant < done < adjudicate`. The chokepoint is
+that single file: every statement that can cause a production write in this job is textually present
+in it, so a grep over it is a total quantification rather than a sample. The three pre-existing
+clauses survive **byte-identical**, which is why the loop is widened rather than duplicated — a
+second copy of the block would add a second `count_invariant`, `done` and `adjudicate`, and the pin
+takes `head -1` of each grep, so it would silently pin the first copy and stop quantifying over the
+second. The assembly gains three members: the `infra_config_should_repush` call site, the re-push
+block, and the latch that guards it.
 
 **Mutation matrix.**
 
 | # | Mutation | Must go RED because |
 |---|---|---|
-| 1 | Move the `adjudicate_infra_config` call inside the poll loop (delete the intervening `done`) | The pre-existing #6594 any-of-3 coin flip — the pin's original property must still hold after the refactor |
-| 2 | Delete the `infra_config_bounded_verify` call from the workflow and inline an equivalent `if/else` in YAML | The mutation matrix in Guard 1 would then certify a function production does not run — the "assertion adjacent to the property" class |
-| 3 | Call `verify_once` a third time in the workflow | Boundedness is a property of production, not only of the orchestrator; a caller that adds its own retry defeats it |
-| 4 | Delete the pin block itself | The suite's `GATE_MIN_ASSERTIONS` floor must red on the lost assertions — the anti-vacuity backstop the #7220 review added for exactly this |
+| 1 | Move the `adjudicate_infra_config` call inside the poll loop (delete the intervening `done`) | The pre-existing #6594 any-of-3 coin flip — the pin's original property must still hold after the widening |
+| 2 | Delete the `infra_config_should_repush` call and inline an equivalent condition in YAML | Guard 1's matrix would then certify a predicate production does not run — the "assertion adjacent to the property" class |
+| 3 | Delete the latch, so the re-push fires on every loop iteration that classifies | **The boundedness row.** Unbounded retry is explicitly out of scope, and each iteration is a production write |
+| 4 | Set the latch on first *sight* of the classifying shape rather than after the re-push *executes* | The single retry becomes unreachable while the suite stays green (`…2026-07-05-bounded-retry-off-host-verify-and-fail-loud-guard-detection-command-exit.md`) |
+| 5 | Duplicate the verify block for pass 2 instead of widening the loop | Adds a second `done`; the pin's `head -1` anchors then quantify over the first copy only, and the second copy is ungoverned |
+| 6 | Wrap the re-push in a function and invoke it as `if ! repush_once; then` | Bash suspends `errexit` for a condition context **and the suspension propagates into the function body** (R16.1) — a production `terraform apply` would then run with `-e` off. This is the reason the block is inline (R18.2) |
+| 7 | Delete the pin block itself | The suite's `GATE_MIN_ASSERTIONS` floor must red on the lost assertions — the anti-vacuity backstop the #7220 review added for exactly this |
 
 ## Architecture Decision (ADR/C4)
 
@@ -876,6 +912,11 @@ mis-registered suite is invisible to a single-file run.
 
 ### Post-merge (automated, no operator step)
 
+> **[AC14 WITHDRAWN 2026-08-13 — R18.4.]** AC14's premise ("a no-op dispatch exercises the entire
+> new path") was true before PR-A and is **false** after it: on a no-op dispatch `DPF_REPLACED` is
+> `false`, so the frame-stability arm applies and pass 1 **passes**. Measured on run
+> **31714143720**. AC14 is replaced by **AC14′** in R18.9. AC15 stands.
+
 13. The workflow does **not** fire on this PR's merge — none of the edited paths
     (`.github/workflows/apply-deploy-pipeline-fix.yml`, `apps/web-platform/infra/infra-config-gate*.sh`)
     is in its own `on: push: paths:` filter, and adding them is out of scope (`server.tf` is
@@ -908,7 +949,7 @@ mis-registered suite is invisible to a single-file run.
 | Risk | Mitigation |
 |---|---|
 | **The verdict fails open** — the change's whole downside. | Guard 1's mutation matrix, with row 1 as the primary AC and row 4 covering the guard's own absence. The orchestrator's only `return 0`s are the two verify successes; every other path returns 1 by construction, including the unclassifiable one. |
-| **The second apply needs the SSH bridge, which was already torn down.** `terraform_data.deploy_pipeline_fix` `depends_on` two resources whose provisioners are SSH `remote-exec` over the tunnel. | Two independent mitigations, because the underlying claim (Terraform opens no SSH connection for a resource with no planned action, and `-replace` on a resource does not replace its `depends_on` predecessors) is *believed* correct but is not worth betting a P1 path on. **(a)** The teardown step is relocated to after the recovery, so the bridge is alive if it is needed. **(b)** The narrowness assertion aborts the recovery if the second plan touches anything other than `deploy_pipeline_fix` — so if the belief is wrong, the failure mode is a clean terminal red, not a hung SSH dial. Phase 0 step 1 measures which it is. |
+| **The second apply needs the SSH bridge, which was already torn down.** `terraform_data.deploy_pipeline_fix` `depends_on` two resources whose provisioners are SSH `remote-exec` over the tunnel. | **[Corrected 2026-08-13 — R18.8 §8.]** Mitigation (a) — "relocate the teardown" — is **struck**: R3 reversed the relocation and `tasks.md` 6.7 forbids it, so the bridge is genuinely down (the teardown step is `if: always()` at position 10, three steps before the gate). The row now rests on two measured facts. **(a′)** `deploy_pipeline_fix`'s push is a **`local-exec`** provisioner — `server.tf`'s `push-infra-config.sh` invocation block carries no `connection` block and no `remote-exec`, so replacing it opens no SSH. **(b)** The exact-cardinality assert (`mode == "managed"`, exactly one replaced resource) aborts the recovery if the second plan touches anything else, so if (a′) is somehow wrong the failure mode is a clean terminal red, not a hung SSH dial. `tasks.md` 2.6 measures the composition read-only before any apply. |
 | **`-replace` is silently a no-op** because the resource is not in the `-target` set. | AC5 asserts the resource appears in both arguments. Documented class: `2026-07-17-target-scoped-terraform-apply-makes-resource-deletion-a-silent-noop.md`. |
 | **The second apply births a host.** `-target` is transitive, and this workflow passes no `-var image_name`. | The `host_creates` destroy-guard is re-run against the second plan (AC6), plus the narrowness assertion. |
 | **Clock skew makes every run re-push.** | Bounded to one extra idempotent push per run, then a terminal red. The terminal message names skew as a candidate. The `op=infra-config-repush-attempted` counter makes a systemic skew visible as a ~100% re-push rate rather than as folklore. |
@@ -2007,3 +2048,396 @@ gate's own predicate would be self-serving. Held at `single-user incident`.
 - Production call-site pin intact and self-deriving: `count_invariant` in-loop (L740),
   `adjudicate_infra_config` terminal after the loop's `done` (L755 < L775).
 - Filed: **#7526** (paths-filter contradiction), **#7527** (consolidated follow-ups).
+
+---
+
+# R18 — PR-B: the bounded re-push, reconciled against what PR-A shipped
+
+**[Added 2026-08-13.]** This section is **authoritative for PR-B**. Where it disagrees with anything
+above it, this section wins, and the disagreement is named rather than left for a reader to
+discover. It covers `tasks.md` Phases 4–10. PR-A (#7509) merged 2026-08-13 14:10:51Z as
+`c723e4519`, is deployed and verified live, and closed `tasks.md` Phases 1–3.
+
+`Closes #7104` attaches **here**, per the operator's UC2 disposition. PR-A referenced the issue in
+prose only.
+
+## R18.0 — Premise validation (Phase 0.6), re-run for PR-B
+
+| Premise | Probe | Result |
+|---|---|---|
+| #7104 is still open and unclaimed | `gh issue view 7104 --json state,closedByPullRequestsReferences` | `OPEN`, `closedByPullRequestsReferences: []`. Milestone is still `Post-MVP / Later` (#6), so task 9.4 is live |
+| PR-A merged and did not claim the issue | `gh pr view 7509 --json state,mergedAt,closingIssuesReferences` | `MERGED` 2026-08-13T14:10:51Z, `closingIssuesReferences: []` — the split held |
+| The PR-B branch has an open draft PR | `gh pr view 7546 --json state,isDraft,headRefName` | `OPEN`, draft, head `feat-one-shot-7104-apply-verify-repost-pr-b` |
+| The follow-up issues task 9.3 would file already exist | `gh issue view 7526 / 7527` | Both **OPEN**. #7526 = the paths-filter contradiction (R9.1). #7527 = consolidated follow-ups, and its body already carries the R2 deferral and the `infra-config-channel-red` runbook. **Task 9.3 is therefore already discharged** — see R18.7 |
+| ADR ordinal 187 is free | enumerated `knowledge-base/engineering/architecture/decisions/` across **all 67** `origin/*` refs | highest observed is **ADR-186** (PR-A's). **187 is provisional**, re-derived at merge |
+| The predicate does not already exist | `grep -rn 'infra_config_should_repush\|infra_config_bounded_verify'` over `*.sh`/`*.yml`/`*.ts` | zero hits outside planning docs. Both are unbuilt |
+| `scripts/run-registered-suites.sh` (named by task 10.1) exists | `ls` | **FALSE.** The file is `apps/web-platform/infra/run-registered-suites.sh`, and the orphan gate is a different artifact, `scripts/lint-orphan-test-suites.sh`, invoked from `scripts/test-all.sh`. Task 10.1 is corrected in R18.8 |
+
+## R18.1 — The design names in `tasks.md` Phases 6 and 8 are pre-pivot and must not be built
+
+R16.2 replaced the higher-order orchestrator with a pure predicate. That pivot was applied to
+`tasks.md` Phase 4's preamble and to `tasks.md` task 5.2 — and **nowhere else**. Four artifacts
+still describe the design R16.2 deleted:
+
+| Artifact | Stale text | Corrected to |
+|---|---|---|
+| `tasks.md` 6.5 | `declare -F infra_config_bounded_verify` | `declare -F infra_config_should_repush` — the sourced predicate is the only thing a `declare -F` check can meaningfully guard, and it is the exact shape of the existing `declare -F infra_config_red_alert` pattern |
+| `tasks.md` 8.1 | "the workflow calls `infra_config_bounded_verify`, and `verify_once` is **invoked** at most twice" | see R18.3 — neither function exists, and boundedness is pinned over the re-push block instead |
+| `## Guard Contract` Guard 1 | property + 7-row matrix over `infra_config_bounded_verify` with **injected stubs** | rewritten in place over the predicate |
+| `## Files to Edit` | "Add `infra_config_no_new_frame` and `infra_config_bounded_verify`" | rewritten in place |
+
+`infra_config_no_new_frame` is likewise a dead name: R13.8 trimmed the classifier to three clauses
+and R16.2 renamed it. The one function PR-B adds to `infra-config-gate.sh` is:
+
+```
+infra_config_should_repush <response-file> <pre-frame-start-ts> <apply-start-epoch> <dpf-replaced>
+```
+
+Measured convention it must match (`apps/web-platform/infra/infra-config-gate.sh`, which carries
+**no** `set` directives — it is a sourceable library of pure adjudicators): `infra_config_dpf_replaced`
+takes `plan_json` + an address and echoes exactly `true`/`false`, returning 1 and echoing nothing on
+anything unclassifiable; `infra_config_frame_stability` takes `post_ts pre_ts pre_status now_epoch
+[apply_start_epoch]` and echoes a single verdict token. The new predicate is closest in shape to
+`infra_config_frame_stability` and must be **quiet** — exit status is the verdict, allow-list
+semantics, every unclassifiable input non-zero.
+
+## R18.2 — `verify_once` does not exist either, and the reason is load-bearing
+
+R16.1 established that bash suspends `errexit` for a command in a condition context **and that the
+suspension propagates into function bodies invoked from there**. `tasks.md` 6.1 draws the right
+conclusion (keep the poll loop, the terminal adjudication and the freshness pin in the step body,
+not in a function) but then says "the second pass re-runs the block; accept the duplication".
+`tasks.md` 6.2 says the opposite and is correct: **widen the existing loop; do not duplicate the
+block.** 6.2 wins, and the measured call-site pin is why.
+
+The pin (`infra-config-gate.test.sh`, section `# apply-deploy-pipeline-fix.yml INVOKES the content
+assert TERMINALLY`, referred to in-file as **F1**) resolves three line numbers and requires
+`ci_line < between_done < adj_line`:
+
+- `infra_config_count_invariant /tmp/…` — the **in-loop** break condition
+- a bare `done` strictly between
+- `adjudicate_infra_config /tmp/…` — **terminal**, after the loop
+
+Duplicating the block would produce a second `count_invariant`, a second `done` and a second
+`adjudicate` — and the pin takes `head -1` of each grep, so it would silently pin the *first* copy
+and stop quantifying over the second. That is the plan's own "assembly is a snapshot" defect class,
+introduced by the fix. Widening `for attempt in 1 2 3` to a longer bound and firing the re-push
+**inside** the loop under a latch keeps exactly one of each anchor and leaves all three clauses
+byte-identical, which is what `tasks.md` 8.1 requires.
+
+**The re-push therefore has no function wrapper.** It is an inline latched block inside the widened
+loop. A `repush_once` *function* was considered and cut: it would have to be invoked as a bare
+statement to keep `errexit` alive inside it, and nothing stops a later editor writing
+`if ! repush_once; then` — which silently disables `set -e` for a body containing a production
+`terraform apply`. An inline block cannot acquire that defect. The name `repush_once` is retained
+as the block's comment anchor so `tasks.md` 6.4 still resolves.
+
+## R18.3 — Boundedness becomes countable over the re-push, not over a phantom function
+
+`tasks.md` 8.1's "`verify_once` is invoked at most twice" is unbuildable once R18.2 lands. The
+property it was reaching for survives, restated over artifacts that exist:
+
+- the widened loop has exactly **one** `done` (the F1 clause, unchanged);
+- the re-push block appears exactly **once** in the workflow;
+- it is guarded by a latch that is set **only after the re-push actually executes** — never on first
+  sight of the classifying shape
+  (`knowledge-base/project/learnings/best-practices/2026-07-05-bounded-retry-off-host-verify-and-fail-loud-guard-detection-command-exit.md`);
+- the terminal `adjudicate_infra_config` still runs exactly once, after the loop.
+
+## R18.4 — AC14 is falsified by PR-A, and the recovery path cannot be exercised in production
+
+AC14 asserts that a no-op `workflow_dispatch` "exercises the *entire* new path: pass 1 fails on the
+stale frame, the classifier fires, the bounded re-push runs, and pass 2 goes green." **That was true
+before PR-A and is false now.** On a no-op dispatch `DPF_REPLACED` is `false`, so the shipped
+frame-stability arm applies and pass 1 **passes**.
+
+Measured, not reasoned — run **31714143720** (`workflow_dispatch` on `main`, 2026-08-13T15:12:19Z,
+i.e. after PR-A merged, conclusion `success`): every step logs `DPF_REPLACED: false`, and the verify
+step emits `##[notice]No config push was expected on this run … VERIFIED: the frame is unchanged
+across this apply (start_ts=1786001951, identical to the pre-apply reading)`.
+
+The consequence is structural and must be stated in the ADR rather than discovered later: **the
+re-push fires only when a push was expected AND the handler published no frame — a race that is
+rare and not producible on demand.** There is no dispatch input that forces it (R6's rehearsal
+input was cut entirely by R13.2), and forcing a DPF replacement would produce a *successful* push,
+not a raced one. So:
+
+- AC14 is **withdrawn** and replaced by AC14′ (R18.9).
+- The hermetic two-pass integration test (`tasks.md` 4.6) is not a nice-to-have. It is the **only**
+  verification that the wired decision behaves, and it is promoted to a primary acceptance
+  criterion.
+- The recovery ships dark by construction, and `op=infra-config-repush-attempted` is the only
+  evidence that it ever fires. That is the specific reason the counter is a deliverable.
+
+## R18.5 — Task 10.4 is discharged by run 31714143720, under a stated invariance claim
+
+`tasks.md` 10.4 asks for a post-merge dispatch confirming the `DPF_REPLACED == false` path. Run
+**31714143720** already did that, live, on merged PR-A code: explicit `::notice::`, no re-push,
+green job. Re-dispatching would re-verify PR-A, not PR-B.
+
+The evidence transfers **only** if PR-B does not change that arm. That is not an assumption; it is
+**AC20** (R18.9): the diff must not touch the `DPF_REPLACED == false` branch of the freshness pin.
+Ticking 10.4 without that assertion would be citing a measurement of code other than the code
+shipping.
+
+## R18.6 — Observability moves out of the verdict step, which dissolves R17.6
+
+R17.6 warned that adding `SENTRY_INGEST_DOMAIN`, `SENTRY_PROJECT_ID`, `SENTRY_PUBLIC_KEY` and
+`GH_TOKEN` to the gate step would put prod-write Terraform credentials and issue-write GitHub
+credentials in the same step as the verdict.
+
+PR-A shipped the pattern that avoids this: **`Report degraded freshness evidence (#7104)`** is its
+own step, `if: always() && steps.infra_config_gate.outputs.freshness_evidence == 'degraded'`, and it
+holds the Sentry credentials while the gate step does not. PR-B follows it exactly — the gate step
+sets a `repush_attempted` **output** and nothing else; a separate step reads the output and emits.
+
+This is strictly better than the plan's original shape and it satisfies R17.7's proposed principle
+without amending it: the step that adjudicates does not also hold the escalation credentials.
+
+Measured emit convention (from that step): a raw POST to
+`https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/` with
+`tags:{feature:"infra-config", op:"…"}`. **`tags.feature` is mandatory** — every rule in
+`issue-alerts.tf` filters `feature` + `op` as a `filter_match="all"` pair.
+
+**Level is `warning`, and the steady-state check that justifies it was run.**
+`2026-06-01-loud-breadcrumb-over-warns-when-guarded-state-is-default-steady-state.md` requires
+proving the emitting condition is not the default state. It is not: the predicate requires
+`DPF_REPLACED == true` **and** no newer frame, and on a normal DPF-replacing merge the push
+succeeds and publishes a fresh frame. R2's clock-skew scenario — the one shape that would have made
+this fire on ~100% of runs — was **measured away** in PR-A (skew ≈ 0 within a ±2 s floor).
+
+## R18.7 — Task 9.3 is already discharged; task 7.5 must not claim an alert route it does not have
+
+**9.3.** All three filings exist: #7526 (paths-filter contradiction, R9.1) and #7527, whose body
+already carries the R2 deferral and the `infra-config-channel-red` runbook. Nothing new is filed;
+the task is ticked with those two numbers as evidence.
+
+**7.5.** The ≥3-in-30-days escalation cannot honestly be called an alert route.
+`scripts/infra-config-red-alert.sh` is the P1 channel, and R14.2/R16.5 deliberately leave it
+untouched (it is fail-open by contract, always `return 0`, with three labels hardcoded across five
+sites). And a new Sentry `op=` has **no matching `sentry_issue_alert` rule** — exactly the gap
+#7527 already records for `op=infra-config-preframe-degraded`. Claiming otherwise is the AP-021
+violation this plan exists to avoid. **7.5 ships as a queryable counter plus the ledger title**, and
+the paging rule is added to #7527's scope with the same re-evaluation trigger PR-A used.
+
+**7.7 is cut, and the property it protected is bought a cheaper way.** The task asks to check the
+repo watch setting so an *All Activity* watcher is not spammed by the ledger. That setting is not
+readable with the credentials available (`gh api repos/:owner/:repo/subscription` → `HTTP 404`,
+"needs the `notifications` scope"). The property — *the ledger never notifies* — is instead bought
+by construction: the ledger issue is created **closed**, and the workflow only ever edits its title
+and body. GitHub does not notify on title or body edits; it notifies on comments and on state
+changes. So the workflow must contain **no** `gh issue comment` and **no** `gh issue reopen`
+targeting the ledger, which is a grep, not an unavailable API call. (AC18.)
+
+**The ledger label does not exist.** `gh label list --limit 300` returns nothing matching
+`ledger`/`recover`, and R14.2 moved the ledger out of the `ci/` namespace (every `ci/*` label in
+this repo is a red alarm). Proposed: **`infra-config-recovery-ledger`**, created explicitly as
+`tasks.md` 7.3 requires — a prescribed label that does not exist fails at first fire, and under
+`set -euo pipefail` that reds a run which actually recovered.
+
+## R18.8 — Corrections to `tasks.md` Phases 6, 8 and 10 that would otherwise fail at `/work`
+
+1. **`GATE_MIN_ASSERTIONS` is 106, not 95.** The PR-A findings above record 95; the file on disk
+   says `GATE_MIN_ASSERTIONS=106` and the suite reports `106 passed, 0 failed`. The floor is
+   **flush** — zero headroom, so any deleted assertion reds today. Task 8.3 raises it to the exact
+   post-change measured count, with **no slack**
+   (`2026-08-10-a-guard-that-cannot-be-driven-red-is-vacuous-four-rounds-four-instances.md`:
+   slack is budget an attacker spends). Re-measure; do not carry 106 or 95 forward.
+2. **Task 10.1 names a file that does not exist.** `scripts/run-registered-suites.sh` is not in the
+   repo. The orphan gate is `scripts/lint-orphan-test-suites.sh`, run as a registered suite by
+   `scripts/test-all.sh`. Restated: `bash scripts/test-all.sh` is green and its
+   `lint-orphan-test-suites` suite reports no new orphan.
+3. **Task 6.4's doppler wrapper is on the wrong invocation.** `terraform apply <planfile>` rejects
+   `-target=` and `-var`, and takes variable values from the plan file — PR-A's shipped apply step
+   documents its own `doppler run` wrapper as a no-op for exactly this reason. The wrapper is
+   **required on the `terraform plan -replace=… -target=…` invocation** and is inert on the apply.
+4. **The re-push needs the S3 backend credentials, and `--name-transformer tf-var` would rename
+   them.** `2026-03-21-ci-terraform-plan-workflow.md` records the collision. The workflow already
+   extracts `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in its `Extract backend credentials` step
+   and they persist via `$GITHUB_ENV`, so they are in scope at the gate step — but this must be
+   **asserted** before the re-push plan runs, alongside the existing `[[ -s "$CI_SSH_PUB" ]]` guard
+   (`CI_SSH_PUB=/tmp/ci_ssh_key.pub`, exported at the `Generate CI public SSH key` step).
+5. **Task 6.4's "no `|| true`, no `2>/dev/null`" collides with a live linter.** AP-022
+   (`scripts/lint-workflow-errexit-capture.py`, registered in `scripts/test-all.sh`, currently clean
+   over 728 `run:` bodies) *requires* that a step capturing an exit status as data protect the
+   capture. The shipped gate step already uses the sanctioned form
+   (`STABILITY_RC=0; … || STABILITY_RC=$?`). Restated: the re-push must not use **status-discarding**
+   constructs (`|| true`, `2>/dev/null` on the apply); the sanctioned `|| rc=$?` capture and the
+   `|| { echo "::error::…"; exit 1; }` form are required, not forbidden. Without the explicit error
+   branch the step dies mute under `set -e` — the S8 finding PR-A hit during its own mutation run.
+6. **Pass 2's baseline is the observed stale frame's own `start_ts`, recorded once.** Both operands
+   are then host-clock, so skew cancels without shipping R2. It is recorded **before** the re-push
+   fires and never re-read — `…2026-07-05-bounded-retry…` warns that advancing a staleness baseline
+   on re-trigger makes the retry unreachable. It is a plain shell assignment; `$GITHUB_ENV` takes
+   effect only in *subsequent* steps and would be inert here (R4a).
+7. **The response file must be truncated per pass.** `curl -s -o` on a transport failure leaves the
+   prior body in place, so pass 2 can adjudicate pass-1 bytes — and the #7220 alert step, which
+   reads the same file, would then classify a recovery-failed run as `reachable` and tell a
+   non-technical founder that files landed (R17.2). Truncation is the load-bearing fix; the fourth
+   `recovery-failed` alert class is **not** taken, because it means editing a fail-open P1 helper
+   with three labels across five sites for a message improvement.
+8. **The SSH bridge is down at re-push time, and that is fine — but the argument changed.** The
+   `Tear down cloudflared SSH bridge` step is `if: always()` and sits at position 10, three steps
+   before the gate. `tasks.md` 6.7 correctly says do not relocate it (R3 reversed that), but the
+   `## Risks & Mitigations` row still claims relocation as mitigation (a). The real argument is
+   measured: `terraform_data.deploy_pipeline_fix`'s push is a **`local-exec`** provisioner
+   (`server.tf`, the `push-infra-config.sh` invocation block — no `connection` block, no
+   `remote-exec`), and the exact-cardinality assert aborts the recovery if the second plan touches
+   anything besides that one resource. Mitigation (a) is struck; (b) carries the row alone.
+9. **Settle time is satisfied by construction, so no bare `sleep` is added.** R17.5 sizes the
+   handler's self-restart collision window at +3 s scheduled restart plus ~5–8 s listener boot. The
+   re-push's own plan and apply take far longer than that before the next poll runs, and the widened
+   loop then polls with the existing 5 s spacing. State the derivation; do not add a magic sleep.
+10. **Wall-clock, derived rather than asserted (R17.8).** Job ceiling is `timeout-minutes: 90`, and
+    `Redeploy to load applied profile` budgets ~70 minutes for the ADR-078 cron drain. The re-push
+    adds one scoped plan plus one apply of a single `terraform_data` recreation plus three extra
+    5 s polls — on the order of two minutes, and only on the failing path. 70 + 2 < 90.
+
+## R18.9 — Acceptance Criteria (PR-B)
+
+These supersede AC1–AC15 above for PR-B. AC14 is withdrawn per R18.4.
+
+### Pre-merge (PR)
+
+1. **AC16.** `bash apps/web-platform/infra/infra-config-gate.test.sh` exits 0 and reports
+   `<N> passed, 0 failed` with `N` equal to the raised `GATE_MIN_ASSERTIONS`, measured post-change.
+2. **AC17 — the primary criterion.** The hermetic two-pass integration test drives the **real**
+   extracted `run:` body of `Verify infra-config apply succeeded` against fixture responses, with
+   `curl`, `terraform` and `doppler` stubbed on `PATH`, and asserts: the re-push stub was invoked
+   **exactly once**; the loop reached a second `count_invariant` success; and each pass's verdict is
+   asserted **independently**, so no case can pass by "the last attempt succeeded"
+   (`tasks.md` 4.6/4.7).
+3. **AC18.** `grep -c 'continue-on-error' .github/workflows/apply-deploy-pipeline-fix.yml` is 0
+   (asserted as `! grep -q`, per R16.3 — a `grep -c` returning 0 *exits 1* and aborts a `set -e`
+   harness); all seven downstream conditions are present verbatim; and the workflow contains no
+   `gh issue comment` and no `gh issue reopen` against the ledger issue.
+4. **AC19.** The second-pass plan invocation names `terraform_data.deploy_pipeline_fix` in **both**
+   `-replace=` and `-target=`; the `host_creates` destroy-guard runs against the second plan's JSON
+   using the same `tests/scripts/lib/destroy-guard-filter-web-platform.jq`; and the exact-cardinality
+   assert pins `mode == "managed"` and exactly one replaced resource.
+5. **AC20 — what licenses citing run 31714143720.** `git diff origin/main...HEAD` shows no change
+   inside the `DPF_REPLACED == "false"` branch of the freshness pin. Without this, task 10.4's
+   evidence is a measurement of code other than the code shipping (R18.5).
+6. **AC21.** Every Guard 1 and Guard 2 mutation row is committed and drives the suite RED when
+   applied, including the two rows that target the guard's own dispatch.
+7. **AC22.** `actionlint` clean on the workflow; `scripts/lint-workflow-errexit-capture.py` clean;
+   every extracted `run:` snippet syntax-checks via `bash -n` **on the extracted file** — never
+   `bash -n` on the `.yml`, and never `bash -c`, which would *run* a production apply (R16.3).
+8. **AC23.** `bash scripts/test-all.sh` green, with `lint-orphan-test-suites` reporting no new
+   orphan and `python3 scripts/lint-guard-contract.py` green over this plan.
+9. **AC24.** ADR exists at the ordinal re-derived against freshly-fetched `origin/main` immediately
+   before merge, and `grep -rn 'ADR-<ordinal>' knowledge-base/project/{plans,specs}/` is consistent
+   with the file that exists.
+10. **AC25.** The label `infra-config-recovery-ledger` is created by an explicit task, and the ledger
+    issue is created in the **closed** state with a dedupe query widened to `--state all`.
+11. **AC26.** The PR body carries `Closes #7104`, and #7104 is moved to milestone **Phase 4:
+    Validate + Scale** (number 4) — CPO condition C2, `tasks.md` 9.4.
+
+### Post-merge (automated, no operator step)
+
+12. **AC27.** The workflow still does not fire on its own paths, so PR-B ships dark. This is
+    asserted, not remedied — adding the path would make every workflow edit auto-write production.
+13. **AC14′.** `ship` dispatches `apply-deploy-pipeline-fix.yml` and reads the result. The expected
+    outcome is a **green no-op run on the `DPF_REPLACED == false` arm with no re-push and zero
+    `op=infra-config-repush-attempted` emissions** — the same shape as run 31714143720. This
+    verifies that PR-B did not regress the arm PR-A shipped. It explicitly does **not** exercise the
+    recovery path, which R18.4 establishes is not producible on demand.
+
+## R18.10 — Test Scenarios (PR-B)
+
+Replaces T11–T21. All run in `infra-config-gate.test.sh` unless marked.
+
+| # | Scenario | Expected |
+|---|---|---|
+| P1 | `dpf-replaced == "false"`, any frame shape | non-zero (`tasks.md` 4.2 — R1(A)) |
+| P2 | `dpf-replaced` is empty, `null`, `TRUE`, or absent | non-zero — the `^(true\|false)$` polarity guard (R17.1) |
+| P3 | `dpf-replaced == "true"`, frame `start_ts` strictly older than the baseline | **0** — the one arm that re-pushes |
+| P4 | `start_ts == baseline` | non-zero — equality is fresh, matching the existing `-lt` |
+| P5 | `start_ts` absent / non-numeric / body unparseable / response file absent | non-zero (the three clauses R13.8 kept) |
+| P6 | non-numeric `apply-start-epoch` | non-zero — a freshness input that cannot be trusted |
+| P7 | `ALLOW_MISSING_STATUS=true` 404 fall-through | never readable as "verified" (R15.1, `tasks.md` 4.4/4.5) |
+| P8 | Two competing decision rules would disagree on the fixture | each case's expected verdict is written independently of the fixture builder's defaults (`2026-08-01-my-mutation-battery-inferred-the-verdict-from-the-input-under-test.md`) |
+| I1 (integration) | Extracted `run:` body, stale-then-fresh fixture pair | re-push stub invoked exactly once; pass 2 verdict asserted independently |
+| I2 (integration) | Extracted `run:` body, stale-then-still-stale | terminal exit 1; re-push stub invoked exactly once, never twice |
+| I3 (integration) | Re-push stub fails | terminal exit 1 with a named `::error::` on stderr — not a mute death (the S8 class) |
+
+## R18.11 — Architecture Decision
+
+**ADR-187** (provisional; re-derive at merge). One decision: *the infra-config apply gate may now
+write production, bounded to a single shape-gated re-push, and the terminal verdict never leaves the
+step that fails closed.*
+
+It must record, beyond `tasks.md` 9.2's list:
+
+- The **step-boundary collapse** R17 named: plan, destroy-guard, narrowness assert, apply and both
+  verification passes now live in intra-step control flow, where the workflow's safety previously
+  came from step boundaries.
+- R17.4: the "assert the webhook is alive after every apply" invariant now covers **apply #1 only**.
+- R18.4: the recovery **ships dark by construction** and cannot be exercised on demand; the hermetic
+  integration test and the Sentry counter are the entire verification story.
+- R18.2: why the re-push is inline rather than a function — the errexit-in-condition-context hazard,
+  one level deeper than R16.1 found it.
+- R17.8's free win: with `use_lockfile = false`, the saved-plan apply makes a break-glass apply
+  outside CI fail closed on a stale plan instead of silently last-writer-wins.
+- The ADR-072 distinction stated as ADR-186 states it (ADR-072 waited on a signal that *was* going
+  to arrive; here the newer frame is never coming), citing `decision-challenges.md` for the
+  `continue-on-error` rejection rather than restating it.
+
+**C4: no edit.** The enumeration in `## Architecture Decision (ADR/C4)` above was performed against
+all three model files in full and holds unchanged for PR-B — no new external actor, external system,
+container or access relationship. The optional `github -> tunnel` label precision edit remains
+optional; if taken, `scripts/regenerate-c4-model.sh` must run in the same commit because
+`plugins/soleur/test/c4-model-freshness.test.sh` gates it.
+
+## R18.12 — User-Brand Impact (PR-B)
+
+- **If this lands broken, the user experiences:** a green `apply-deploy-pipeline-fix` run while the
+  production host still runs the previous config — #6594's latched false-green. The specific
+  fail-open PR-B could introduce is a re-push whose *success* is read as a verified *delivery*: an
+  HTTP 202 that started this incident class is exactly "the push succeeded". Six `success()`-gated
+  steps re-arm behind it; two close the founder's GitHub issues, one swaps the running container.
+- **If this leaks, the user's workflow and credentials are exposed via:** the channel this gate
+  protects carries `/etc/default/soleur-doppler-token` and `/etc/webhook/hooks.json`. #7095 records
+  that a malformed value there bricks the only no-SSH remediation path on a host that cannot be
+  re-provisioned. PR-B adds a **new production write** (the second apply) to a step that previously
+  only read — that is the material change from PR-A, and it is why the threshold does not move.
+  R18.6 keeps the escalation credentials out of that step.
+- **Brand-survival threshold:** `single-user incident`. `requires_cpo_signoff` was discharged by the
+  operator on 2026-08-12 (SO1); `user-impact-reviewer` still runs at review time.
+
+## R18.13 — Property list and Cut list (Phase 0.6b, PR-B)
+
+**Properties.** (1) A run that hit the webhook-restart race recovers without human intervention.
+(2) The gate still fails closed when both passes fail. (3) The recovery is bounded to one attempt.
+(4) A recovery that fires is visible afterwards. (5) The ledger never pages or notifies.
+
+**Cut list.**
+
+| Mechanism | Property it bought | What already covers it |
+|---|---|---|
+| `infra_config_bounded_verify` (higher-order orchestrator) | 2 | The step's own exit code under `set -e`, with the four-line `if`/`else` in YAML (R16.2) |
+| `verify_once` function + duplicated block | 2 | The widened loop; duplication would break the F1 pin's `head -1` anchors (R18.2) |
+| `repush_once` function | 3 | An inline latched block — a function invites `if ! repush_once`, which kills `errexit` for a production apply (R18.2) |
+| Task 7.7's repo-watch probe | 5 | Creating the ledger closed and never commenting/reopening; the API needs a scope we do not hold (R18.7) |
+| A fourth `recovery-failed` alert class | truthful alerting | Per-pass truncation of the response file, which fixes the misclassification at its source (R18.8 §7) |
+| A bare `sleep` for the handler settle | 1 | The re-push's own plan+apply already exceeds the 3 s + 5–8 s window (R18.8 §9) |
+
+## R18.14 — Files (PR-B)
+
+| Path | Change |
+|---|---|
+| `apps/web-platform/infra/infra-config-gate.sh` | Add `infra_config_should_repush` only. No existing function changes behaviour |
+| `apps/web-platform/infra/infra-config-gate.test.sh` | Predicate cases P1–P8, integration cases I1–I3, Guard 2 rows, raised `GATE_MIN_ASSERTIONS` |
+| `.github/workflows/apply-deploy-pipeline-fix.yml` | Widen the poll loop; inline latched re-push; `declare -F infra_config_should_repush` anti-vacuity check; a `repush_attempted` step output; a **new separate step** emitting the Sentry event and maintaining the ledger; step-summary line; corrected 000/502/503 recovery prose |
+| `knowledge-base/engineering/architecture/decisions/ADR-187-*.md` | **Create.** Provisional ordinal |
+| `knowledge-base/project/specs/feat-one-shot-7104-apply-verify-repost-recovery/tasks.md` | Tick Phases 4–10 |
+
+**Not edited, deliberately:** `scripts/infra-config-red-alert.sh` (R14.2/R16.5 — fail-open helper,
+three labels across five sites), `apps/web-platform/infra/server.tf` (no `triggers_replace` change,
+so the three-way sync with `ship`'s `DEPLOY_PIPELINE_FIX_TRIGGERS` and
+`plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` stays untouched), and the workflow's
+`on.push.paths` (AC27).
+
+**Open code-review overlap:** re-queried across all 63 open `code-review` issues for every PR-B
+path. One hit, `#3216`, matched only on `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts`,
+a file PR-B does not edit. **Disposition: acknowledge** — different concern, no shared surface.
