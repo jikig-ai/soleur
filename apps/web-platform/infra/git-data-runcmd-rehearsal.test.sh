@@ -83,6 +83,39 @@ _reh_cleanup() {
 }
 trap _reh_cleanup EXIT
 
+# ── AC15: exactly ONE executable top-level `trap … EXIT` in this file ──────────────
+#
+# Bash keeps only the LAST handler registered for a signal, so a second top-level
+# `trap … EXIT` silently discards the forensics/cleanup handler above (or is discarded by
+# it) — and the retained-tree-on-failure path would then vanish without a single test going
+# red. This was specified and, until now, only ever checked by hand.
+#
+# THE COUNT IS HEREDOC-AWARE, which is the whole difficulty. This file embeds driver scripts
+# that legitimately arm their own traps inside quoted heredocs, and the B2SPEC table lists
+# `trap on_err EXIT` as DATA. Measured: a naive `grep -cE '^trap .*EXIT'` returns 4 here, so
+# an assertion built on it would either fail on a correct file or pass only by accident of
+# which copies happen to be indented.
+_ac15_traps="$(python3 - "${BASH_SOURCE[0]}" <<'PY'
+import re, sys
+out, delim = [], None
+for l in open(sys.argv[1]).read().splitlines():
+    if delim is None:
+        out.append(l)
+        m = re.search(r"<<-?'?([A-Za-z_][A-Za-z0-9_]*)'?", l)
+        if m:
+            delim = m.group(1)
+    elif l.strip() == delim:
+        delim = None
+print(sum(1 for l in out if re.match(r'^trap .*EXIT', l)))
+PY
+)"
+if [ "${_ac15_traps:-0}" -eq 1 ]; then
+  pass
+else
+  fail "AC15: expected exactly 1 executable top-level 'trap … EXIT', found ${_ac15_traps:-?}" \
+       "Bash keeps only the last EXIT handler, so a second one silently replaces the forensics handler. Heredoc bodies and table text are excluded from this count by construction."
+fi
+
 # Render the REAL template, then extract the emitter and the Doppler-download runcmd block
 # from it. Extracting from the render (not from a hand-written fixture) is what makes this
 # track the artifact that actually ships.
@@ -1155,11 +1188,16 @@ fixture_fail() { echo "FIXTURE-FAIL: $1" >&2; exit 2; }
 # is a row that does not get executed.
 INJECT="${GIT_DATA_REHEARSAL_INJECT:-}"
 
-# rc0-dead-capture: exit ZERO having produced no captures at all. This is the one shape that
-# separates the two halves of the host-side gate — a container whose rc says "fine" while the
-# capture path is dead. Without it, deleting the sentinel check and keeping the rc check is an
-# undetectable mutation, because every other injected fault also makes the container exit
-# non-zero and the rc check alone would catch it.
+# rc0-dead-capture: exit ZERO having produced no captures at all — a container whose rc says
+# "fine" while the capture path is dead, which is the shape that separates the two halves of
+# the host-side gate (delete the sentinel check, keep the rc check, and only this class is
+# still caught).
+#
+# An earlier comment here claimed this was the ONLY such shape because "every other injected
+# fault also makes the container exit non-zero". That is false: `no-roundtrip` skips the whole
+# round-trip block and `sentinel-in-capture-log` skips only the `touch`, and BOTH let the
+# container run to completion and exit 0 with sentinel.ok absent — host-observably identical.
+# Three of the eight injections produce this verdict shape, not one.
 [ "$INJECT" = "rc0-dead-capture" ] && exit 0
 
 # BOUNDED APT. `-o Acquire::Retries=3` covers transient mirror failures inside apt itself;
@@ -1650,12 +1688,12 @@ total=$((passes + fails))
 # R1 emits exactly 7 on all three of ITS paths (healthy, extraction-failed,
 # precondition-missing) for the same reason S1 does. The floor must move with the suite or it
 # only ever guards the work that predates it.
-# RAISED 44 -> 45 (#7501): the R4/R3 run-level fixture-liveness gate emits its own `pass` on
+# RAISED 44 -> 46 (#7501, then +1 for the AC15 trap-count arm added at review): the R4/R3 run-level fixture-liveness gate emits its own `pass` on
 # the healthy path. Counting it is the whole point of the instrument — a gate that contributes
 # nothing when it succeeds is one that an inversion-to-always-pass leaves undetectable,
 # because the old floor of 44 would still be met.
-if [ "$total" -lt 45 ]; then
-  echo "FAIL: ran only ${total} assertions (<45) — harness did not execute fully" >&2
+if [ "$total" -lt 46 ]; then
+  echo "FAIL: ran only ${total} assertions (<46) — harness did not execute fully" >&2
   exit 1
 fi
 echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed (${total} assertions)"

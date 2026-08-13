@@ -840,6 +840,12 @@ _a_abort "A11: losing ONE payload (9 -> 8) still aborts — the floor is pinned 
 _a_tree a10; _a10="$_A_TREE"
 _a_sibling_var "$_a10/modules/git-data-userdata/variables.tf"
 printf '{"variable":{"a10_knob":{"default":"x"}}}\n' > "$_a10/modules/git-data-userdata/extra.tf.json"
+# THE ARM'S OWN PRECONDITION IS ASSERTED, not just stated above. If either write silently
+# failed, the comparison would run over a sibling-less tree — which is precisely the fixture
+# shape measured to leave this arm GREEN with the mirror's sibling glob deleted. An
+# equivalence arm whose fixture cannot express the difference is the defect it exists to catch.
+[[ -s "$_a10/modules/git-data-userdata/variables.tf" && -s "$_a10/modules/git-data-userdata/extra.tf.json" ]] \
+  || _a_setup_fail "A10 fixture lost a sibling — the equivalence arm would be vacuous"
 _a10_mirror="$(_r2_hash "$_a10")"
 _a10_lib="$(git_data_rung2_user_data_sha256 "$_a10/ci.yml" 2>&1)"; _a10_rc=$?
 if [[ "$_a10_rc" -eq 0 && -n "$_a10_mirror" && "$_a10_mirror" == "$_a10_lib" ]]; then

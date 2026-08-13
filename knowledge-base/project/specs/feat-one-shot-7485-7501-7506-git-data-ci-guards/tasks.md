@@ -60,7 +60,7 @@ is one commit (see DC-1).
 ### 1.3 Closure-guard suite (`scripts/follow-through-closure-guard.test.sh`, new)
 
 - [x] 1.3.1 Scaffold: PyYAML hard-exit 2; an EXIT trap for its `mktemp` allocations (rule (c) gates
-      added lines); a column-0 `FAIL`-shaped failure marker naming which arm failed; floor 9.
+      added lines); a column-0 `FAIL`-shaped failure marker naming which arm failed; exact count 15.
 - [x] 1.3.2 Extract the step body by name with a one-step cardinality check (C6); assert no `shell:`
       key (C7) and no `${{ }}` (C8).
 - [x] 1.3.3 `gh` stub on `PATH` recording argv to a log file.
@@ -100,7 +100,7 @@ is one commit (see DC-1).
 - [ ] 1.4.6 Forensics: modify the **existing** EXIT trap in place — never add a second — to retain
       the tree and print its path on **any** non-zero exit, including the hard `exit 1` setup paths
       where `fails == 0`. Add the `GIT_DATA_REHEARSAL_KEEP_TMP` opt-in and an age-reaper.
-- [ ] 1.4.7 B1–B6 fault-injection scenarios. Failures are **injected**, never awaited.
+- [ ] 1.4.7 B1–B7 fault-injection scenarios. Failures are **injected**, never awaited.
 
 ---
 
@@ -126,8 +126,8 @@ is one commit (see DC-1).
 - [x] 2.4 `scripts/marketplace-drift-check.test.sh` — correct the default-shell comment (it asserts
       the wrong side of a live repo contradiction, and it is what misled this plan).
 - [x] 2.5 `scripts/test-all.sh` — `run_suite` line for the new suite in the `want_scripts` block.
-- [ ] 2.6 Floors: gate 58 → 68 (exact equality), capture-script 33 → 34, rehearsal 44 → 45, new
-      closure-guard suite exactly 13.
+- [ ] 2.6 Floors: gate 58 → 69 (a FLOOR, not equality — see DC-3), capture-script 33 → 34,
+      rehearsal 44 → 45, new closure-guard suite exactly 15 (C1–C15).
 - [x] 2.7 Amend the gate suite header: record why one live-tree arm is not the countdown timer the
       header forbids, and that #6982 has closed (the live gate now reports RELEASED).
 
@@ -137,7 +137,7 @@ is one commit (see DC-1).
 
 - [ ] 3.1 Execute all 11 rows of Guard 1 and record observed colours.
 - [ ] 3.2 Execute all 7 rows of Guard 2 (via the fault-injection hook).
-- [ ] 3.3 Execute all 12 rows of Guard 3, labelling its last three as controls.
+- [ ] 3.3 Execute all 12 rows of Guard 3 (9 mutations + C1–C3, which are the controls).
 - [ ] 3.4 Execute all 3 rows of Guard 4.
 - [ ] 3.5 Any row that does not redden is a defect in the test, not a note — fix and re-run.
 - [ ] 3.6 `python3 scripts/lint-guard-contract.py` and

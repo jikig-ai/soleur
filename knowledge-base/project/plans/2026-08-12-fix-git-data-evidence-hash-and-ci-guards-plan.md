@@ -381,7 +381,7 @@ is recorded in DC-1 for the operator, not argued away.
 
 ### Phase 1 — RED (tests first, `cq-write-failing-tests-before`)
 
-- Gate suite: five arms A1–A5 on a **separate copied tree**, plus the `_r2_hash` repair. A1, A2 and
+- Gate suite: arms A1–A11 on a **separate copied tree**, plus the `_r2_hash` repair. A1, A2 and
   the sibling-unreadable arm must be RED first.
 - Capture-script suite: one executing arm for the derivation-fault path (rc=2 and the corrected
   text), replacing the first draft's grep. Bump its floor 33 → 34.
@@ -400,7 +400,7 @@ is recorded in DC-1 for the operator, not argued away.
 - `marketplace-drift-check.test.sh`: correct the default-shell comment.
 - `test-all.sh`: `run_suite` for the new suite in `want_scripts`.
 - Floors: gate 58 → 68, capture-script 33 → 34, rehearsal 44 → 45, new closure-guard suite
-  exactly 13. (This line carried the pre-deepen figures — 63, and "rehearsal unchanged" — until
+  exactly 15 (C1–C15). (This line carried the pre-deepen figures — 63, and "rehearsal unchanged" — until
   #7485's implementation reconciled it against §Test Scenarios, which is authoritative.)
 
 ### Phase 3 — Mutation verification and record
@@ -454,7 +454,7 @@ so this is the interlock that would gate the birth #6977 tracks.
 
 ```yaml
 liveness_signal:
-  what: "each suite's verdict line and anti-vacuity floor — the gate suite's `=== N passed, M failed ===` (floor 68), the capture-script suite (floor 34), the rehearsal's `N passed, M failed (T assertions)` (floor 45), and the new closure-guard suite's count line (exactly 13)"
+  what: "each suite's verdict line and anti-vacuity floor — the gate suite's `=== N passed, M failed ===` (floor 69), the capture-script suite (floor 34), the rehearsal's `N passed, M failed (T assertions)` (floor 45), and the new closure-guard suite's count line (exactly 15)"
   cadence: "per-run: ci.yml `test-scripts` on every push; infra-validation.yml on every infra-touching diff"
   alert_target: "the workflow run log of the failing job; on push to main, infra-validation.yml's notify-main-failure"
   configured_in: "scripts/test-all.sh (run_suite registrations), .github/workflows/ci.yml (test-scripts job), .github/workflows/infra-validation.yml (the rehearsal step)"
@@ -489,7 +489,7 @@ logs:
 
 discoverability_test:
   command: "bash tests/scripts/test-git-data-birth-readiness-gate.sh && bash scripts/follow-through-closure-guard.test.sh"
-  expected_output: "the gate suite prints `=== 68 passed, 0 failed ===`; the closure-guard suite exits 0 reporting exactly 13 assertions"
+  expected_output: "the gate suite prints `=== 69 passed, 0 failed ===`; the closure-guard suite exits 0 reporting exactly 15 assertions"
 ```
 
 Both commands are local, credential-free, contact no network, and start with an allowlisted probe
@@ -688,12 +688,12 @@ file, so it stays an assertion rather than a lint.
       and the extraction comment that justified the family regex by reference to that check is
       updated rather than left describing a check that no longer exists.
 - [ ] **AC7** — `bash tests/scripts/test-git-data-birth-readiness-gate.sh` prints
-      `=== 68 passed, 0 failed ===`, and the existing arms pinning the `ABORT`/`drifted` needles
+      `=== 69 passed, 0 failed ===`, and the existing arms pinning the `ABORT`/`drifted` needles
       still pass. **AMENDED at implementation (DC-3):** this AC originally required the suite's
       internal anti-vacuity check to become an exact equality "matching the suite's existing
       form". That justification is false — the existing form is a **floor** (`-lt 58`), carrying
       an explicit in-file rationale against equality, and both sibling suites use a floor too.
-      The floor is raised 58 → 68 and left a floor; the `68 passed, 0 failed` line above is
+      The floor is raised 58 → 69 and left a floor; the `69 passed, 0 failed` line above is
       asserted directly and is unaffected. See DC-3.
 - [ ] **AC8** — The capture script's derivation-fault arm no longer reads as transient and still
       exits 2 — asserted by an **executing arm** in the capture-script suite (floor 33 → 34), not a
@@ -776,7 +776,7 @@ file, so it stays an assertion rather than a lint.
 
 ## Test Scenarios
 
-### A — gate suite, 10 new arms (floor 58 → 68)
+### A — gate suite, 10 new arms (floor 58 → 69)
 
 Built on a **separate copied tree**, calling the function directly — never through
 `r2check`/`R2_SHA`, whose mirror the same commit repairs. Fixture siblings must not share a
@@ -804,7 +804,7 @@ check, and A4/A5/A7 are exactly the arms that would silently disarm.
   `git_data_rung2_user_data_sha256 "$R2/ci.yml"` — the equivalence arm that makes a third mirror
   drift unshippable, replacing the first draft's one-time byte-identity measurement.
 
-Floor moves 58 → 68, and stays a **floor** — see DC-3. (This line previously read "asserted as
+Floor moves 58 → 69, and stays a **floor** — see DC-3. (This line previously read "asserted as
 exact equality, matching the suite's existing form"; the suite's existing form is a floor, so
 the stated justification did not hold.)
 
@@ -834,7 +834,7 @@ RED evidence is **fault injection**, never a natural flake.
 
 Floor moves 44 → 45 (the gate's own `pass`).
 
-### C — closure-guard suite, 13 arms (floor 13, exact)
+### C — closure-guard suite, 15 arms (exact count 15)
 
 Fixtures derive their URLs from the workflow's own `required_urls` array, so a URL drift cannot
 silently collapse two fixtures onto one arm. The `gh` stub evaluates the body's real `--jq`
@@ -937,8 +937,8 @@ that somehow ran could not mutate anything.
 - `tests/scripts/lib/git-data-birth-readiness-gate.sh` — abort in both conditional loops; `*.tf.json`
   in the glob; payload floor; delete the counting block and both literals; re-word both abort
   messages; update the orphaned extraction comment.
-- `tests/scripts/test-git-data-birth-readiness-gate.sh` — arms A1–A5 on a separate copied tree; the
-  `_r2_hash` mirror repair and its equivalence arm; the header amendment; floor 58 → 68.
+- `tests/scripts/test-git-data-birth-readiness-gate.sh` — arms A1–A11 on a separate copied tree; the
+  `_r2_hash` mirror repair and its equivalence arm; the header amendment; floor 58 → 69.
 - `tests/scripts/test-git-data-rung2-evidence-capture.sh` — one executing arm for the
   derivation-fault path; floor 33 → 34.
 - `scripts/followthroughs/git-data-rung2-evidence-capture.sh` — the `TRANSIENT:` label; exit code
