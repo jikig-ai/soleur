@@ -452,10 +452,16 @@ grep -Fq "does not update an installed plugin" <<<"$NORM_SYNC" || missing_props=
 # (4) an explicit fallback for when the remedy does not clear it.
 grep -Fq "this is a bug in Soleur" <<<"$NORM_SYNC" || missing_props="$missing_props fallback"
 # (4b) the remedy must carry RUNNABLE COMMANDS, and the right verbs. `claude plugin install`
-# is not the update verb (`claude plugin update` is), and neither is guaranteed to converge a
-# stale install because plugin.json's version sentinel is frozen — so the uninstall+install
-# fallback is load-bearing, not decoration. Pinned because a wrong command here is worse than
-# no command: the operator runs it, sees success, and hits the identical marker.
+# is not the update verb (`claude plugin update` is). The uninstall+install fallback stays
+# pinned because a wrong command here is worse than no command: the operator runs it, sees
+# success, and hits the identical marker.
+#
+# The ORIGINAL rationale for pinning the fallback — that plugin.json's version sentinel is
+# frozen, so `update` can never converge anything — stopped being true on 2026-08-12, when the
+# manifests became keyless and the recorded version began tracking the delivered commit
+# (ADR-182). The assertions below are unchanged: they pin COMMANDS, not that rationale, and a
+# reinstall is still the surest fallback. The comment is corrected rather than deleted so a
+# reader does not re-derive a superseded mechanism from it.
 grep -Fq "claude plugin marketplace update soleur" <<<"$NORM_SYNC" || missing_props="$missing_props remedy-command-marketplace"
 grep -Fq "claude plugin update soleur" <<<"$NORM_SYNC" || missing_props="$missing_props remedy-command-update"
 grep -Fq "claude plugin uninstall soleur" <<<"$NORM_SYNC" || missing_props="$missing_props remedy-command-reinstall"

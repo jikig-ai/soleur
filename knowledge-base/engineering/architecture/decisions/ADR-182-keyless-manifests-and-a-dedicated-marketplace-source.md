@@ -29,6 +29,27 @@ deterministic rather than flaky. On failure the updater moves the existing check
 starts a fresh clone, and on timeout leaves `~/.claude/plugins/marketplaces/soleur/` holding only a
 `.git` with one object and no HEAD; a later invocation removes the directory and the `.bak` with it.
 
+> **Corrected 2026-08-12 (#7489).** The paragraph above is kept verbatim rather than rewritten,
+> because deleting it would destroy the datum the correction is about. It is right on cost and wrong
+> on mechanism, and the destruction half is now un-reproduced. Readings in
+> `knowledge-base/project/specs/feat-one-shot-7489-7490-marketplace-retire-delivery-followups/measurements.md`.
+>
+> - **The steady-state refresh is an incremental `git pull`, not a clone.** The marketplace
+>   checkout's reflog on the live operator install records one clone followed by repeated
+>   `Fast-forward` pulls. So `clones the whole monorepo` describes the ADD path, not every refresh.
+> - **The 181 MiB / 329 s figures stand where they were measured** — the initial
+>   `marketplace add`, and the re-clone the CLI falls back to when a refresh cannot reconcile in
+>   place. Applying `--sparse` to an EXISTING checkout is one such trigger, measured three ways
+>   (planted sentinel gone, `.git` inode changed, `sparse-checkout` file appeared; arm 6). On the
+>   monorepo that forced re-clone is the 329 s operation, which cannot finish under the 120 s
+>   default. A FRESH add with `--sparse` is unaffected and fast.
+> - **The destruction half is NOT REPRODUCED on CLI 2.1.228.** Three independent forced-failure
+>   instruments each left the checkout and a planted sentinel intact and produced no `.bak` (arm 5).
+>   The `.bak` rename and the paired `rm` exist as strings in the 2.1.228 bundle, but a string is not
+>   a behaviour, and the branch never executed. The claim is recorded as un-reproduced on this
+>   version rather than withdrawn — the asymmetry favours keeping the warning. Operator-facing
+>   consequence: the runbook, `## Symptom 2`.
+
 Defect 1 meant installed users silently ran without the lock/lease layer ADR-178 ships. Defect 2
 meant **no** plugin fix reached them by the documented path, and every future fix inherited it.
 
@@ -67,6 +88,78 @@ shape change.
 installs keep working; the documented install path points at the new source, with the monorepo path
 demoted behind a disclosure carrying the timeout mitigation.
 
+**Disposition, 2026-08-12 (#7489).** `scripts/plugin-legacy-resolver-probe.sh` found exactly one
+install still resolving to `jikig-ai/soleur` — project-scoped to a repository other than this one —
+and two registrations, both carrying `autoUpdate: true`. The arm taken was **migrate that install
+onto the published channel**, run from its own `projectPath` with `--scope project`.
+
+**Taken under the ATTACHED branch**, and the branch is recorded because it determines who decided.
+The session ran in the main agent loop with an operator present rather than inside a subagent, so
+the question was put once and answered by the operator. Because the install was project-scoped to a
+*different* repository, migrating it changes another project's tooling — that is a judgment call,
+not a chore, and executing it unasked would have been the wrong default. Had the run been headless
+the arm executed would have been **C** (write nothing), with the question and Phase 2's verdicts
+appended to `decision-challenges.md` for the operator instead. The two arms that were offered
+alongside A carried their measurement status with them: arm B was presented with an explicit
+`unverified` label on both mechanisms it depends on, rather than as an equal option. What was
+**accepted**, and is the other half of this decision, is that the monorepo marketplace entry stays
+live and published (see the rejected retire-the-entry alternative below for why removing it buys
+nothing). The probe now returns `clean` — 0 registrations, 0 installs, 0 unresolvable installs — so
+#7489's stronger closing condition is met by measurement rather than by decision. `clean` is a
+statement about the machines probed; the beta population is one machine, and that coincidence stops
+holding the moment it grows.
+
+**6. The published distribution path gets a SECOND control: a delivery canary that asserts delivered
+CONTENT.** The drift check above reads the **pointer**; the canary reads what an installer actually
+receives. It installs `soleur@soleur-marketplace` into a scratch `HOME` on a CI runner and makes
+three independent assertions — **completeness** (the delivered file list compared as a *set* against
+what `main` serves under `plugins/soleur`, with an explicit cardinality assertion, because the
+historical defect was under-delivery at 64 skills against 96 and a subset comparison cannot see it),
+**integrity** (per-file digest against the repository's own tree at the commit the install resolved,
+materialised with `git archive` from the checkout the job already holds), and **freshness** (the
+delivered commit equals `main` HEAD, no tolerance window).
+
+The integrity transport was chosen by measurement, after two alternatives were tried and rejected in
+that order: per-file fetches from `raw.githubusercontent.com` (~890 sequential requests — unfinished
+after 30 minutes against a 15-minute job budget, with intermittent failures on files that return 200
+in isolation), then a whole-repo `codeload` tarball (timed out at 300 s having received 28 MB of
+~181 MiB). `git archive` needs no network at all and completes the full comparison in **117 s**,
+measured green at `compared=896 expected=896`. The tradeoff is stated rather than buried: the
+reference is now the repository's git objects rather than what a CDN serves for the same commit.
+Those cannot differ in content — a commit sha is a content address — and the delivery path under
+watch is the CLI's clone, which reads git too. What is no longer covered is a CDN serving something
+other than git for a given sha, which was never this guard's threat model. No
+metadata field participates in any verdict: `claude plugin list --json` is a **projection** of
+`installed_plugins.json` — verified by mutating that file and watching the CLI output change verbatim
+— so reading the CLI does not escape the metadata. `installPath` is consumed as a location and
+`gitCommitSha` only as the reference pin.
+
+This is **not** a refinement of Decision 5, which is about the legacy monorepo entry. It changes the
+**control topology** of the published path: until now a single daily two-`curl` manifest check was the
+entire control surface, and it can pass in full while every install receives nothing — which is
+defect 1's exact shape, a green signal over an undelivered tree. Its shape is a **second job** in the
+existing `scheduled-marketplace-drift.yml`, publishing findings as job outputs, with the issue-filing
+step and the Sentry heartbeat both extended to consider its verdict (as written, both gated on the
+manifest step alone, so a canary-only failure would have filed nothing and checked in `ok`).
+
+**Accepted risk of Decision 6.** The canary downloads a Claude Code CLI and materialises executable
+plugin content inside a workflow that also holds `issues: write`. That is a real widening of what runs
+in a token-bearing workflow, and the workflow header's "pure GH op … reads two public URLs
+unauthenticated" characterisation does not survive it. The mitigation is topological rather than
+procedural: the canary job carries `permissions: contents: read` only and consumes no secrets
+(measured — `marketplace add` and `install` both succeed with `ANTHROPIC_API_KEY`,
+`ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` all unset), while the write-capable filing step
+stays in the sibling job and consumes the canary's verdict through **job outputs** rather than sharing
+its process.
+
+**Bearing on the posture tracked at #7493.** That issue's alternatives frame the space as **detection
+versus prevention**, and its two deferred options — Terraform owning the manifest's contents, and a
+push ruleset on the marketplace repo — are the prevention. The canary is a second **detection**
+control, on a different signal (delivered bytes, not the pointer), so it removes the case where the
+pointer is correct and the delivery is not. It does **not** convert detection into prevention:
+nothing here stops an unreviewed edit, it only makes a wider class of them observable within a day.
+#7493 stays open on its own terms.
+
 ## Consequences
 
 **Delivery works, measured on the shipped article rather than a fixture.** Both the falsification
@@ -81,11 +174,12 @@ every installer. **Not retired:** anyone still on the monorepo entry, whose `aut
 cannot be revoked remotely.
 
 **The published manifest is unreviewable by construction.** The marketplace repo has no CI, no
-review, and no CODEOWNERS. `scheduled-marketplace-drift.yml` is its sole control — a daily
+review, and no CODEOWNERS. `scheduled-marketplace-drift.yml` carries its controls — a daily
 unauthenticated check asserting the entry stays keyless, that `source.path`/`source.url` still name
 `plugins/soleur` in `jikig-ai/soleur`, and that the plugin manifest still resolves at `main` (which
 catches a monorepo reorganisation, the one drift event the marketplace repo cannot observe about
-itself). Detection latency is up to 24 h.
+itself), plus the delivery canary of Decision 6, which asserts what an install actually receives
+rather than what the manifest claims. Detection latency is up to 24 h on both.
 
 **Two marketplaces, two caches, one documented migration.** The plugin id changes to
 `soleur@soleur-marketplace` for new installs. The migration sequence deliberately contains no
@@ -98,6 +192,12 @@ materialises a NEW directory and leaves the previous one behind** (measurements.
 `0.0.0-dev` surviving the migration). So the orphan is per-update, not one-time. §1.2/1.3 did not
 measure the steady-state footprint, so the growth rate is implied rather than quantified; it is
 recorded here as a known cost rather than discovered later.
+
+> **Corrected 2026-08-12 (#7489), on the migration actually performed.** Two figures above are
+> narrower than the reading. `marketplace remove` reclaimed the **378 MiB checkout itself** — only
+> the plugin cache was orphaned — and that orphan measured **26 MiB**, not ~9.6 MiB, because two
+> version directories had accumulated, which is the per-update growth this paragraph predicted
+> observed once. Reclaim procedure: the runbook's `## Symptom 2`, print-then-delete.
 
 **Version metadata leaves the plugin's own record.** `installed_plugins.json` reports the commit SHA
 in place of a semantic version. Release tags remain the human-facing version via GitHub Releases.
@@ -192,6 +292,36 @@ prevention. Until one of them lands, this is an accepted risk rather than an unn
 - **Hand-maintained manifest with no drift check.** Rejected: the artifact is unreviewable and its
   silent-failure detector would otherwise be "a new user tries to install and it fails", which at a
   beta population of one may not fire for weeks.
+- **Retire the `jikig-ai/soleur` marketplace entry** — delete or empty its
+  `.claude-plugin/marketplace.json` so the legacy channel stops resolving (Decision 5's other arm).
+  Rejected on a measured reason rather than a preference: **the marketplace checkout is cloned before
+  the manifest is read**, so removing the manifest reduces nobody's clone cost. A stranded install
+  still pays the same 181 MiB / 329 s and then finds no entry at the end of it — strictly worse than
+  finding one. Retiring would only block NEW installs on the slow path, and the READMEs already
+  de-advertise that path behind a disclosure. It buys nothing for the population it would aim at, and
+  breaks the population Decision 5 exists to protect.
+
+Alternatives for **Decision 6** (the delivery canary), kept separate because they are about the
+control topology of the published path rather than about the manifest:
+
+- **Extra steps inside the existing `check` step or job.** Not implementable rather than merely
+  worse: `findings=()` and `sanitize()` are shell locals of that step's `run:` block and do not
+  survive a step boundary, and `scripts/marketplace-drift-check.test.sh` extracts that step by id and
+  executes it hermetically with no network — canary logic placed there would run in that suite with
+  no `claude` binary present.
+- **A whole new workflow.** Rejected: the existing file already carries the cron, the
+  `sentry-heartbeat` check-in, the issue file/close loop and the serialised concurrency group. A new
+  file would move `c4-count-parity.test.sh`'s workflow counts, need a new `sentry_cron_monitor`, and
+  need a full-root `apply-sentry-infra.yml` apply. A second **job** in the existing file is
+  count-neutral — those counters count workflow *files* and distinct slug values — and was verified
+  as such.
+- **Scheduling `test-pretooluse-hooks.yml`, which already installs the published plugin.** The
+  nearest existing mechanism, and kept as prior art. Rejected because it asserts hook *behaviour*
+  rather than delivered content, and it runs through `claude-code-action` with `ANTHROPIC_API_KEY`,
+  where the canary was measured to need no credentials at all.
+- **A second job — accepted.** It is the only one of the four that gets a different privilege and
+  timeout profile from a two-`curl` check while keeping the write-capable filing step out of the
+  process that materialises executable content.
 
 ## Amends ADR-017
 
