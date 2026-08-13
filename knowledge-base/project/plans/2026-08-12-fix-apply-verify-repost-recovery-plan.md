@@ -38,6 +38,33 @@ fail.
 
 ## Enhancement Summary
 
+### PR-B pass — deepened 2026-08-13
+
+**Halt gates run:** 4.5 (network-outage — fired; task 4.0's `-target`-transitive `remote-exec` chain
+is the new L3 finding), 4.6 (user-brand impact — pass, `single-user incident`), 4.7 (observability —
+pass, all five fields, probe verb `bash`, no `ssh`), 4.8 (PAT-shaped — one match, **adjudicated a
+false positive**: `var.doppler_token` is a pre-existing Doppler service token at `variables.tf:487`,
+not GitHub auth, and PR-B edits no `.tf`), 4.9 (UI — no surface, skipped), 4.10 (encryption posture —
+no new store or connection, skipped), 4.11 (guard contract — lint green, and the **adequacy read
+failed**: Guard 2's "total quantification" claim was false, corrected in place).
+
+**Agents:** `Explore` (surface map), `learnings-researcher`, escalated plan-review panel
+(`kieran-rails-reviewer`, `architecture-strategist`, `code-simplicity-reviewer`,
+`spec-flow-analyzer`), a Phase 4.5 strong-model consult, a `cto` fork adjudication, and an
+execution-verified refutation pass.
+
+**Scoping disclosed:** the generic "run every discovered agent" fan-out was **not** executed. The
+escalated panel plus the consult had already converged, three agents independently found the same
+P0, and the remaining budget went to adjudicating the two design forks and re-verifying every
+load-bearing claim by execution (R21). `dhh-rails-reviewer` was skipped — a Rails-taste lens on a
+bash/YAML/Terraform CI change.
+
+**What changed:** four pre-pivot dead names excavated (R18.1–R18.2); AC14 falsified against a live
+run (R18.4); the loop design found **inert** and confirmed three times (R19.1); four further
+fail-opens (R20.3–R20.6); one **blocking** unmeasured assert promoted to task 4.0 (R20.1); and both
+design forks **ruled TAKE**, which dissolves four of the five P0s structurally and prunes ~8 sections
+rather than layering over them (R22).
+
 **Deepened on:** 2026-08-12
 **Halt gates run:** 4.5 (network-outage — fired), 4.6 (user-brand impact — pass), 4.7
 (observability — pass, all five fields, probe verb `bash`, no `ssh`), 4.8 (PAT-shaped — no hits),
