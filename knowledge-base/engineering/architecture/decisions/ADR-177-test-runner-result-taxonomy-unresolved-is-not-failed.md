@@ -122,6 +122,12 @@ decision. The classification suite pins this with an executed row.
 
 ### Wrapper absorption — the class is only visible when the process `run_suite` forks is the one that dies
 
+> **SUPERSEDED IN PART — see the 2026-08-13 addendum (#7429), D1.** The `npm` row below is
+> **false**: measured end-to-end, `npm` propagates `128+N` (rc 137 under a SIGKILL of the
+> largest-RSS node in the real `test:ci` chain). The absorbing set is the **two shell wrappers**.
+> The paragraphs below are left intact as the record of how the error survived; do not act on
+> the `npm` claim or on the `exec node_modules/.bin/vitest run` remedy it motivates.
+
 Three in-repo wrappers swallow the signal shape:
 
 - `apps/web-platform/infra/run-registered-suites.sh` — returns a plain `1`;

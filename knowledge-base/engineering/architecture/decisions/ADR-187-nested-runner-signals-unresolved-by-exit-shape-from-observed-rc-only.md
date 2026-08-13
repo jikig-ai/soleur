@@ -50,9 +50,17 @@ the rendered `[KILLED]` line already says "exit $rc is also what a suite calling
 reports". The marker has always meant **signal-shaped** — never "was killed by". A wrapper
 re-emitting a shape it observed is therefore making exactly the claim the marker already encodes.
 
-Precedence, where a run has both: a real assertion failure **dominates** a terminated suite. A run
-carrying both a `[FAIL]` and a `[KILLED]` is a failing run, and reporting it as merely
-"terminated" would hide the failure the operator can act on.
+Precedence is a **three-way ladder**, not a pair: `failed > UNACCOUNTED > killed`.
+
+| outcome present | exit | why it outranks the next rung |
+| --- | --- | --- |
+| a real assertion failure | `1` | a failing run is the one the operator can act on; reporting it as merely "terminated" hides that |
+| a suite the runner could not account for | `1` | **unmeasured outranks terminated.** A terminated suite is a named suite whose coverage was not obtained; an unaccounted one means the runner cannot even enumerate what ran, so it is a weaker claim about a larger set |
+| a terminated suite | `128+N` | UNRESOLVED — coverage not obtained, but attributed to a named suite |
+
+The middle rung was implemented but recorded only in the runner's header, so an implementer
+reading this ADR alone would have ranked an unmeasured suite *below* a terminated one — the
+opposite of the code. Found by `architecture-strategist` at review.
 
 ### 2. A nested runner may exit `128+N` only for an `N` it DIRECTLY OBSERVED in a child's `$?`
 
@@ -74,12 +82,26 @@ or a file-backed sideband; inventing a signal number is not among them.
 ### Why the classifier is inlined three times rather than shared
 
 ADR-178 would ordinarily push a repeated primitive into `scripts/lib/`. It is **not** applicable
-here, and the reason is measured rather than stylistic:
-`apps/web-platform/infra/run-registered-suites.test.sh:586` sandboxes its subject with
-`PRISTINE="$MUTDIR/pristine.sh"; cp "$SUT" "$PRISTINE"` — a **single-file** copy. A sourced lib
-would be absent from that copy, the runner's degradation path would fire, and every `[KILLED]`
-assertion in the mutation battery would silently exercise the fallback instead of the classifier.
-That is ADR-177 §A3's constraint, and it binds this file.
+here. `apps/web-platform/infra/run-registered-suites.test.sh` sandboxes its subject with
+`PRISTINE="$MUTDIR/pristine.sh"; cp "$SUT" "$PRISTINE"` — a **single-file** copy — and then drives
+a **python single-file mutator** over that copy.
+
+The binding constraint is the mutator, not the copy. Two rows (`drop-rc128-guard`,
+`drop-name-guard`) mutate the classifier's **body**; if the classifier lived in
+`scripts/lib/`, those rows could not be applied **at all**, and the two guards they pin would
+have no coverage. That is ADR-177 §A3's constraint as it applies here.
+
+> **The first version of this paragraph gave a falsifiable reason, and it is corrected rather
+> than replaced.** It argued that "a sourced lib would be absent from that copy, so the
+> degradation path would fire." That does not follow: the runner does
+> `ROOT="$(git rev-parse --show-toplevel)"; cd "$ROOT"` before anything else, so a `$ROOT`-anchored
+> `source` resolves perfectly well from `$MUTDIR/pristine.sh`. The conclusion (inline it) was
+> right and the stated reason was wrong — the same defect this ADR's Phase A0 note describes, in
+> the paragraph that describes it. It was caught by `architecture-strategist` at review.
+>
+> That version also cited a bare line number (`:586`), which had already drifted to `:782` when
+> the mutation battery grew by 262 lines in the same PR. Cite a content anchor, never a
+> coordinate (`cq-cite-content-anchor-not-line-number`).
 
 Duplication under a pin is the lesser evil against a guard that certifies the wrong code path.
 The pin is `scripts/suite-exit-class-parity.test.sh`.
