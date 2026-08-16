@@ -139,6 +139,25 @@ FIX_CONTROL="$ROW_FORGED" FIX_CONTROL_RC=0 \
 FIX_CONTROL="$ROW_JOURNALD" FIX_CONTROL_RC=0 \
   assert_classify "genuine journald producer row DOES satisfy the control" "LIVE"
 
+echo "--- any-row anchor: warehouse liveness, the account-wide-refusal instrument ---"
+# The alarm's control is a bare `--limit 1` with no grep. It answers "is the warehouse taking
+# ANYTHING", which is the correct question for an account-wide 402 and the wrong one to
+# producer-anchor: a live warehouse carrying only other hosts' rows must read LIVE, not dark.
+ROW_UNRELATED="$(mkfix unrelated '{"dt":"2026-08-14 19:06:58","raw":"some unrelated app log row"}')"
+
+BS_CONTROL_ANCHOR=any-row FIX_CONTROL="$EMPTY" FIX_CONTROL_RC=0 \
+  assert_classify "any-row: zero rows of any kind" "INGEST_DARK"
+BS_CONTROL_ANCHOR=any-row FIX_CONTROL="$ROW_UNRELATED" FIX_CONTROL_RC=0 \
+  assert_classify "any-row: an unrelated app row counts as warehouse liveness" "LIVE"
+BS_CONTROL_ANCHOR=any-row FIX_CONTROL="$EMPTY" FIX_CONTROL_RC=6 \
+  assert_classify "any-row: rc=6 is still a probe fault, never darkness" "TRANSPORT_FAIL"
+
+# Whitespace-only output is emptiness, not a row. Without this the `-n` test would read a
+# trailing newline from the query wrapper as evidence the channel is alive.
+WS="$(mkfix ws '   ')"
+BS_CONTROL_ANCHOR=any-row FIX_CONTROL="$WS" FIX_CONTROL_RC=0 \
+  assert_classify "any-row: whitespace-only body is not a row" "INGEST_DARK"
+
 echo "--- Anti-vacuity floor ---"
 # A classifier that evaluated zero arms must not report a healthy verdict.
 CASES=$((CASES + 1))
@@ -152,8 +171,8 @@ fi
 # A loop or fixture source that silently yields nothing would otherwise exit 0 having asserted
 # nothing at all.
 # Derived from the as-written file, not a mental tally:
-#   grep -c 'assert_classify "' → 8, plus the anti-vacuity case = 9.
-EXPECTED_CASES=9
+#   grep -c 'assert_classify "' → 12, plus the anti-vacuity case = 13.
+EXPECTED_CASES=13
 echo
 echo "cases=$CASES passed=$PASS failed=$FAIL"
 if [[ "$CASES" -lt "$EXPECTED_CASES" ]]; then

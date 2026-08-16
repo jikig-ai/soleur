@@ -65,8 +65,30 @@ bs_absence_query_script() {
 # Window for the control read. Kept small: the control proves liveness, not history.
 : "${BS_CONTROL_WINDOW:=6h}"
 
+# TWO ANCHOR MODES, because the two callers' controls measure DIFFERENT things and conflating
+# them would be a silent behaviour change rather than a hardening:
+#
+#   marker   — "did THIS producer's heartbeat come back?" (betterstack-assert-absence.sh, which
+#              greps a canary marker scoped to a host). F14 applies here: the predicate must pin
+#              producer identity, because a marker match is a claim about a specific emitter.
+#
+#   any-row  — "is the warehouse receiving ANYTHING at all?" (zot-restart-loop-alarm.sh, whose
+#              control is a bare `--limit 1` with no grep). This is the right instrument for an
+#              ACCOUNT-WIDE refusal: when every producer's writes are 402'd, no row of any kind
+#              lands, and that is exactly what #7569 looked like. Producer-anchoring this one
+#              would not harden it — it would change what it measures and misreport a live
+#              warehouse carrying only other hosts' rows as dark.
+#
+# Residual, recorded rather than papered over: in any-row mode a single forged row masks
+# darkness (F15's suppression shape), because an unauthenticated party can write into this
+# shared source. Rate-capping that write path is tracked separately as a security control; it
+# is not fixable from the reader side, and claiming otherwise here would be the false-coverage
+# the incident was made of.
+: "${BS_CONTROL_ANCHOR:=marker}"
+
 # bs_absence_control_satisfied <query-output>
-# TRUE only when the output carries a row whose message VALUE BEGINS with the control marker.
+# In any-row mode: TRUE when the output is non-empty.
+# In marker mode: TRUE only when a row's message VALUE BEGINS with the control marker.
 #
 # Two envelope shapes are legitimate, both measured against production bytes:
 #   - direct POST      : raw = {"message":"<MARKER> …"}
@@ -78,6 +100,10 @@ bs_absence_query_script() {
 # backslash-escaped and a naive pattern would need escaping we would get wrong once.
 bs_absence_control_satisfied() {
   local out="$1"
+  if [[ "$BS_CONTROL_ANCHOR" == "any-row" ]]; then
+    [[ -n "${out//[[:space:]]/}" ]]
+    return
+  fi
   # Read from a herestring, never `printf | grep -q`: under `set -o pipefail` an early match
   # makes grep close the pipe, the producer takes SIGPIPE (141), and the pipeline reports
   # failure even though the pattern matched.

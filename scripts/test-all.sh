@@ -1052,6 +1052,11 @@ if want_scripts; then
   # short answer. That silently starved every soak gate built on it (#6288's needs 2h of
   # span and could never PASS). Hermetic: stubs curl, asserts SQL shape, never live rows.
   run_suite "tests/scripts/betterstack-query-archive" bash tests/scripts/test-betterstack-query-archive.sh
+  # #7569 — the ingest-refusal discriminator and its cause-annotation probe. tests/scripts/ is
+  # NOT auto-globbed by this runner, so an unregistered suite gates nothing, silently and
+  # greenly. Both are registered here in the same commit that adds them.
+  run_suite "tests/scripts/betterstack-absence-classifier" bash tests/scripts/test-betterstack-absence-classifier.sh
+  run_suite "tests/scripts/betterstack-ingest-probe" bash tests/scripts/test-betterstack-ingest-probe.sh
   run_suite "tests/scripts/rule-id-regex-parity" python3 -m unittest tests.scripts.test_rule_id_regex_parity
   run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh
   run_suite "scripts/rule-metrics-aggregate" bash scripts/rule-metrics-aggregate.test.sh

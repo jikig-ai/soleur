@@ -261,10 +261,24 @@ reset_fix
 export ZOT_FIX_MAIN="$TMP/s8.json"
 assert_case "S8 all -1 sentinel restarts" 2 TRANSIENT
 
-# --- Scenario 9: empty window + control empty → TRANSIENT(2) (never a recurrence page) ----
+# --- Scenario 9: empty window + control ANSWERED empty → INGEST_DARK(4) ------------------
+# CONTRACT CHANGE (#7569), deliberate. This case previously asserted TRANSIENT(2), which
+# encoded the defect: control_rc is 0 here, so the query SUCCEEDED and reported that the
+# warehouse holds no row of any kind. That is not a probe fault. It is the exact state
+# production was in from 2026-08-14 19:06:58Z, when Better Stack began 402'ing every ingest
+# POST while the read path kept answering 200 — and this arm reported the non-alarming
+# TRANSIENT every 30 minutes for two days. A test that pins a non-alarming verdict on the
+# outage state is a test that certifies the bug, so it moves with the fix.
 reset_fix
-export ZOT_FIX_MAIN="" ZOT_FIX_CONTROL=""   # both empty; control_rc 0
-assert_case "S9 empty window + empty control" 2 TRANSIENT
+export ZOT_FIX_MAIN="" ZOT_FIX_CONTROL=""   # both empty; control_rc 0 → the query ANSWERED
+assert_case "S9 empty window + control answered empty → ingest dark" 4 INGEST_DARK
+
+# --- Scenario 9c: the discriminator's other side — control read FAILS → TRANSIENT(2) ------
+# The must-PASS twin of S9. Without it, S9 is satisfiable by an implementation that calls
+# every empty control INGEST_DARK, which would page the operator on every probe fault.
+reset_fix
+export ZOT_FIX_MAIN="" ZOT_FIX_CONTROL="" ZOT_FIX_CONTROL_RC=6
+assert_case "S9c empty window + control read errored (rc=6)" 2 TRANSIENT
 
 # --- Scenario 9b: main query FAILS (rc!=0) → TRANSIENT ------------------------------------
 reset_fix
@@ -401,8 +415,9 @@ assert_nic_case "N6 NIC silent while SOLEUR_ZOT_DISK flows (AC7 regression)" SIL
 
 # --- N7 (AC8 REGRESSION): a zot early-exit must NOT skip the NIC check ---------------------
 # All-'-1' zot sentinels → the zero-evidence leg → exit 2, which terminates BEFORE anything
-# appended. The NIC verdict must still be present and correct, and the exit code must stay
-# within the {0,1,2,3} contract (no exit 4 — the workflow maps anything else to a Sentry error).
+# appended. The NIC verdict must still be present and correct, and the zero-evidence leg must
+# keep exiting 2 — NOT the new INGEST_DARK 4 (#7569). Zero VALID evidence (all-'-1' sentinels)
+# and zero ROWS are different states: rows arrived here, they just carried no usable sample.
 reset_fix
 {
   zline "2026-07-10 10:00:00" "$BOOT_NEW" -1 0 0 false none
@@ -411,7 +426,7 @@ reset_fix
 export ZOT_FIX_MAIN="$TMP/n7zot.json"
 { nline "2026-07-10 10:05:00" "$BOOT_NEW" false none 0 1 0 99999 "eth0:203.0.113.10/32"; } > "$TMP/n7.json"
 export NIC_FIX_MAIN="$TMP/n7.json"
-assert_case     "N7 zot zero-evidence still exits 2 (contract unchanged, no exit 4)" 2 TRANSIENT
+assert_case     "N7 zot zero-evidence still exits 2 (rows present, none valid — not INGEST_DARK)" 2 TRANSIENT
 assert_nic_case "N7 NIC still evaluated despite the zot early-exit (AC8 regression)" FIRE
 
 # --- N8: newest-boot scoping — an old failed boot must not page after a healthy replace ----
