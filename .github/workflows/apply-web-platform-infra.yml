@@ -911,8 +911,26 @@ jobs:
         # when present-but-empty; the `-z` guard catches both.
         run: |
           set -euo pipefail
-          TOKEN_ID=$(doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain 2>/dev/null || true)
-          if [[ -z "$TOKEN_ID" ]]; then
+          # #7539: `|| true` collapsed EVERY failure — expired DOPPLER_TOKEN, wrong
+          # config, network fault, Doppler outage — into "the secret is absent", and
+          # the notification below then stated that as fact and prescribed a re-dispatch
+          # that cannot fix an auth fault. `doppler secrets get --plain` rc is itself
+          # ambiguous (rc=1 for absent, rc=0+empty for present-but-empty), so the
+          # discriminator is a separate reachability probe, not the rc alone.
+          rc=0
+          TOKEN_ID=$(doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain 2>/dev/null) || rc=$?
+          SKIP_CAUSE=none
+          if [[ "$rc" -ne 0 ]]; then
+            if doppler secrets --only-names -p soleur -c prd_terraform >/dev/null 2>&1; then
+              SKIP_CAUSE=absent
+            else
+              SKIP_CAUSE=unreadable
+            fi
+          elif [[ -z "$TOKEN_ID" ]]; then
+            SKIP_CAUSE=empty
+          fi
+          echo "ssh_skip_cause=${SKIP_CAUSE}" >> "$GITHUB_OUTPUT"
+          if [[ "$SKIP_CAUSE" != "none" ]]; then
             echo "ssh_apply_skip=true" >> "$GITHUB_OUTPUT"
             echo "::warning::first-bootstrap: CI_SSH_ACCESS_TOKEN_ID absent in Doppler prd_terraform — every SSH-provisioned resource is deferred to the next run after the token sync lands. The non-SSH apply + token sync above still succeeded."
           else
@@ -981,7 +999,9 @@ jobs:
       # reproduce the same problem in email form. Mirrors the notify-ops-email idiom used by
       # infra-validation.yml, weakness-miner.yml and reusable-release.yml.
       - name: Notify ops — SSH stage skipped, nothing delivered (#7539)
-        if: always() && steps.ssh_token_gate.outputs.ssh_apply_skip == 'true'
+        # `!cancelled()` not `always()`: always() also fires on a CANCELLED run, where the
+        # body's "completed green" headline is false.
+        if: ${{ !cancelled() && steps.ssh_token_gate.outputs.ssh_apply_skip == 'true' }}
         uses: ./.github/actions/notify-ops-email
         with:
           subject: "Apply web-platform infra: SSH stage SKIPPED — infrastructure not delivered"
@@ -990,9 +1010,15 @@ jobs:
             <p>The <strong>Apply web-platform infra</strong> run completed <strong>green</strong>,
             but its SSH stage did not run, so <strong>no SSH-provisioned resource reached
             web-1</strong>. A green run here does not mean the change was delivered.</p>
-            <p><strong>Cause:</strong> <code>CI_SSH_ACCESS_TOKEN_ID</code> is absent from Doppler
-            <code>soleur/prd_terraform</code>, so the CF Tunnel SSH bridge, the post-bridge
-            terraform apply, and the Better Stack heartbeat ARM gate were all skipped.</p>
+            <p><strong>Cause (measured, not assumed):</strong>
+            <code>${{ steps.ssh_token_gate.outputs.ssh_skip_cause }}</code> —
+            <code>absent</code> means the secret is genuinely missing and the recovery below fixes
+            it; <code>empty</code> means it exists but holds no value; <code>unreadable</code>
+            means Doppler itself could not be reached or the workflow's
+            <code>DOPPLER_TOKEN</code> is expired or mis-scoped, in which case the re-dispatch
+            below will skip again and the token is what needs attention. In every case the CF
+            Tunnel SSH bridge, the post-bridge terraform apply, and the Better Stack heartbeat ARM
+            gate were all skipped.</p>
             <p><strong>What did NOT land:</strong> every <code>terraform_data.*</code> resource in
             the post-bridge target set — the host monitors, the probe installs, the journald and
             Vector delivery.</p>

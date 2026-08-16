@@ -436,45 +436,100 @@ describe("bridge-less stage may not target an SSH-provisioned resource (#7539)",
 // nothing. These assert the notification arm is actually wired, so it cannot be
 // silently un-wired: an arm that exists but references a dead output, or whose
 // body omits the recovery command, reproduces the ::warning:: problem in email.
+/**
+ * One `- name: <title>` step within a job block, bounded at the next same-indent
+ * step header (or the end of the job). Returns null when absent.
+ *
+ * Bounded by the NEXT HEADER rather than by a length comparison: the first draft
+ * asserted `slice.length < remainder.length` as its non-vacuity guard, which
+ * false-REDs when the step is legitimately the LAST one in the job — coupling the
+ * guard to step ORDER, which is not the property.
+ */
+function extractStep(jobText: string, titleMatch: RegExp): string | null {
+  const lines = jobText.split("\n");
+  const start = lines.findIndex(
+    (l) => /^ {6}- name:/.test(l) && titleMatch.test(l),
+  );
+  if (start === -1) return null;
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^ {6}- name:/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  return lines.slice(start, end).join("\n");
+}
+
+// The green-skip channel (#7539). When CI_SSH_ACCESS_TOKEN_ID cannot be read,
+// ssh_token_gate sets ssh_apply_skip=true and the bridge, the post-bridge apply
+// AND the heartbeat ARM gate all skip — the run goes GREEN having delivered
+// nothing.
+//
+// Every assertion here is scoped to the NOTIFY STEP and anchored on syntax a
+// comment cannot produce. The first draft used job-wide `toContain` on bare
+// tokens, under which the `if:` could be moved to a decoy step and the whole
+// SSH_STAGE branch deleted, both at full green.
 describe("the ssh_token_gate green-skip has a channel (#7539)", () => {
   const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
   const applyJob = extractJobBlock(wf, "apply");
+  const notify = extractStep(applyJob, /Notify ops/);
+  const summary = extractStep(applyJob, /Post-apply summary/);
+  const gate = extractStep(applyJob, /Check CI-SSH token presence/);
 
-  test("a notify-ops-email step is gated on the skip output, inside the apply job", () => {
-    expect(applyJob).toContain("uses: ./.github/actions/notify-ops-email");
-    expect(applyJob).toMatch(
-      /if:\s*always\(\)\s*&&\s*steps\.ssh_token_gate\.outputs\.ssh_apply_skip\s*==\s*'true'/,
-    );
+  test("the notify step exists and USES the ops-email action (anchored, not a substring)", () => {
+    expect(notify).not.toBeNull();
+    expect(notify!).toMatch(/^\s*uses:\s*\.\/\.github\/actions\/notify-ops-email\s*$/m);
   });
 
-  test("the gate it references is a real step id (not a dead output)", () => {
+  test("the skip gate is ON that step — not on a decoy elsewhere in the job", () => {
+    // Anchored on the `if:` LINE, not the step body. The body carries a comment
+    // explaining why this is `!cancelled()` and not `always()` — a body-wide
+    // `not.toContain("always()")` is satisfied by that comment, which is the exact
+    // collision this file documents (cq-assert-anchor-not-bare-token). Measured:
+    // the first draft of this assertion failed on its own explanatory comment.
+    const ifLine = notify!
+      .split("\n")
+      .find((l) => /^\s*if:/.test(stripLineComment(l)));
+    expect(ifLine).toBeDefined();
+    expect(ifLine!).toMatch(
+      /steps\.ssh_token_gate\.outputs\.ssh_apply_skip\s*==\s*'true'/,
+    );
+    // `!cancelled()`, never `always()`: always() also fires on a CANCELLED run,
+    // where the body's "completed green" headline is false.
+    expect(ifLine!).toContain("!cancelled()");
+    expect(ifLine!).not.toContain("always()");
+  });
+
+  test("it references a real step id, and that gate emits BOTH outputs it is read for", () => {
+    expect(gate).not.toBeNull();
     expect(applyJob).toMatch(/^\s*id:\s*ssh_token_gate\s*$/m);
+    expect(gate!).toContain('echo "ssh_apply_skip=true" >> "$GITHUB_OUTPUT"');
+    expect(gate!).toContain('echo "ssh_skip_cause=${SKIP_CAUSE}" >> "$GITHUB_OUTPUT"');
   });
 
-  test("the notification names the recovery lever, not merely the fact of skipping", () => {
-    // A body that says only "skipped" is the ::warning:: problem in email form.
-    //
-    // Scoped to the notify STEP, not the job: `apply_target=manual-rerun` also
-    // appears in the job's recovery COMMENT, so a job-wide toContain would pass
-    // with the lever absent from the email — vacuous exactly the way a bare-token
-    // grep is (cq-assert-anchor-not-bare-token).
-    const notifyIdx = applyJob.indexOf(
-      "uses: ./.github/actions/notify-ops-email",
-    );
-    expect(notifyIdx).toBeGreaterThan(-1);
-    const afterNotify = applyJob.slice(notifyIdx);
-    // Bound the slice at the next step header so it cannot swallow later steps.
-    const nextStep = afterNotify.slice(1).search(/\n {6}- name:/);
-    const notifyStep =
-      nextStep === -1 ? afterNotify : afterNotify.slice(0, nextStep + 1);
-    expect(notifyStep).toContain("apply_target=manual-rerun");
-    // Non-vacuity: the bounded slice must be a step, not the rest of the file.
-    expect(notifyStep.length).toBeLessThan(afterNotify.length);
+  test("the gate MEASURES the cause instead of assuming it (no bare `|| true` collapse)", () => {
+    // A `|| true` here folds an expired DOPPLER_TOKEN into "the secret is absent",
+    // and the email then states that as fact.
+    expect(gate!).not.toMatch(/TOKEN_ID=\$\(doppler secrets get [^)]*\|\| true\)/);
+    expect(gate!).toContain("SKIP_CAUSE=unreadable");
+    expect(gate!).toContain("SKIP_CAUSE=absent");
   });
 
-  test("the run summary surfaces the SSH stage state (job.status alone reads success)", () => {
-    expect(applyJob).toMatch(/SSH_SKIP:\s*\$\{\{\s*steps\.ssh_token_gate\.outputs\.ssh_apply_skip/);
-    expect(applyJob).toContain("**SSH stage:**");
+  test("the email carries a RUNNABLE recovery command, not a pointer to one", () => {
+    expect(notify!).toContain("gh workflow run apply-web-platform-infra.yml");
+    expect(notify!).toContain("apply_target=manual-rerun");
+    // and it reports the measured cause rather than a hardcoded one
+    expect(notify!).toContain("ssh_skip_cause");
+  });
+
+  test("the run summary BRANCHES on the skip (job.status alone reads success)", () => {
+    expect(summary).not.toBeNull();
+    // Assert the branch itself, not just the echo literal: deleting the whole
+    // if/elif/else leaves `**SSH stage:**` matching while SSH_STAGE renders empty.
+    expect(summary!).toMatch(/if\s+\[\s*"\$\{SSH_SKIP\}"\s*=\s*"true"\s*\]/);
+    expect(summary!).toContain("SSH_STAGE=");
+    expect(summary!).toContain("**SSH stage:**");
   });
 });
 
