@@ -634,13 +634,23 @@ logs:
   retention: GitHub Actions default log retention for the repository.
 
 discoverability_test:
-  # `CI=true` IS LOAD-BEARING. Without it the four `_skip` guards exit 0 before a single
-  # assertion, so on any host without a docker daemon the probe reports success having
-  # verified nothing — this plan's own thesis, reproduced in its only executable proof.
-  # Under CI=true those guards become `exit 1` with a named reason, so a docker-less
-  # sandbox FAILS instead of false-greening, which is the correct direction for a
-  # supply-chain gate.
+  # THE OPERATOR'S COMMAND, and why preflight Check 10 does not execute it.
+  #
+  # Bare `bash <suite>` is the wrong probe: without CI set, the four `_skip` guards
+  # exit 0 before a single assertion, so on any host without a docker daemon it reports
+  # success having verified nothing — this plan's own thesis, reproduced in its only
+  # executable proof. Prefixing `CI=true` fixes that and breaks two other things: it
+  # leads with an env-assignment rather than an allowlisted probe verb, and the suite
+  # then legitimately FAILS anywhere docker is absent.
+  #
+  # Neither form is runnable inside Check 10's sandbox, which has no docker socket and a
+  # 15s wall-clock cap against a ~3min, 8-container probe. So this declares the
+  # requirement instead of pretending to a verification it cannot perform.
   command: CI=true bash apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh
+  # ONE LINE, deliberately. Check 10's reader is a flat awk over the key line, so a
+  # folded (`>-`) or block (`|`) scalar extracts as the bare indicator and is then
+  # treated as ABSENT — the probe would execute and fail the verb gate. Verified.
+  credentials_required: a docker daemon plus ~3 minutes of wall clock — the probe runs 8 ubuntu:24.04 containers that download the genuine Doppler tarball from the GitHub release CDN and assert the checksum aborts the chain before tar/chmod. Check 10's bwrap sandbox binds no docker socket and caps at 15s, so executing it there would fail for want of the daemon and prove nothing about the guard. There is no unauthenticated, sandbox-runnable substitute: the property under test IS the container-level abort ordering, and the CI job that does run it is `deploy-script-tests` in infra-validation.yml.
   expected_output: >
     A terminal line `git-data-runcmd-rehearsal: <N> passed, 0 failed (<N> assertions)` with `<N>` at
     or above 48, and exit status 0.
