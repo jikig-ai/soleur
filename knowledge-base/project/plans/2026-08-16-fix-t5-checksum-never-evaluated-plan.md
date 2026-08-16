@@ -12,6 +12,65 @@ priority: p1-high
 brand_survival_threshold: none
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-16
+**Panel:** Step 4.5 scoped advisor consult (fable) + `dhh-rails-reviewer`, `kieran-rails-reviewer`,
+`code-simplicity-reviewer`, `architecture-strategist`. Research: `repo-research-analyst`,
+`learnings-researcher`.
+
+### Key improvements from the deepen pass
+
+1. **The plan's central design was falsified and cut.** A probe the panel demanded — `main`'s exact
+   `;`-chained instrumentation, CDN blocked, apt healthy — showed the mutation arm **passes**, so
+   #7291's flake is apt, not the CDN. The `DL_CURL_OK` marker, the `arm_skip`/`SKIPPED_ASSERTIONS`
+   /ceiling apparatus, the `run_case` split, a new ADR, and the supersession of PR 7510 all
+   dissolved. Roughly two-thirds of the plan went with them.
+2. **Four reviewers converged independently on the same cut**, from four different directions:
+   over-engineering (DHH), per-mechanism requirement mapping (code-simplicity), doctrinal conflict
+   with ADR-181 property 4 (architecture-strategist), and measurement (the advisor's "cut Phase 2
+   unless a decline cell shows a different rc").
+3. **Placement constraints that would have broken the suite were found before implementation.**
+   `$TMP/dl.case.sh` does not exist at the instrumentation site, and T17 mounts a marker-free copy —
+   so an unconditional mounted-artifact check inside `run_case` hard-exits the suite on T17. The
+   check is pinned to the mutation arm instead.
+4. **Two enumerations offered as exhaustive were wrong and are corrected**: `$CAPTURE` has six
+   readers, not three; the file runs eight `docker run --rm`, not the four its own comment claims
+   nor the six PR 7510 corrects it to.
+5. **Acceptance criteria were re-scoped so each command answers its own question**: AC1's grep
+   (a bare `grep -c 'echo CHMOD_RAN'` is non-zero after a *correct* fix), AC11's `lint-guard-contract`
+   path pin (a bare invocation sweeps every plan and is flippable by a concurrent session), AC10's
+   `git diff --stat` scoping, and AC13's shard scoping.
+
+### Verifications executed in this pass
+
+| Check | Result |
+|---|---|
+| Halt 4.6 — User-Brand Impact | Initially **FAILED**: threshold `none` with a sensitive-path match (`apps/[^/]+/infra/`) and no literal scope-out bullet. Bullet added; now passes |
+| Halt 4.7 — Observability | Passes. All 5 fields present, none an empty key, probe verb `bash` is on the Check 10 allowlist, no `ssh` |
+| Halt 4.8 — PAT-shaped variables | Clean, no matches |
+| Halt 4.11 — Guard Contract | `lint-guard-contract.py` green: 2 guard entries, both with structural (chokepoint-based) assemblies |
+| Halts 4.9 / 4.10 / 4.55 | Do not fire — no UI surface, no persistent store or new cross-component connection, no downtime-inducing operation |
+| Halt 4.5 — network outage | Keyword `unreachable` matches, but the plan proposes no network or SSH fix and diagnoses no outage; the L3→L7 ordering has nothing to order. Recorded rather than skipped silently |
+| Cited AGENTS rule IDs | All 4 verified ACTIVE in `AGENTS.md` and absent from `scripts/retired-rule-ids.txt` |
+| Commit attribution `933635603` | Verified an ancestor of `origin/main`; its subject matches the claim quoted from it verbatim |
+| Cited issues/PRs #7565 / #7291 / #7510 | State verified live via `gh` |
+| String literals across plan + `tasks.md` | Consistent; floor `47` appears in 6 places with no stale `48` |
+| **The AC pattern executed against real captured output** | `grep -q '/tmp/doppler\.tar\.gz: FAILED$'` MATCHES the genuine-mismatch cell and does NOT match either the missing-file cell (`FAILED open or read`) or the curl-failure cell — the discrimination the whole fix rests on |
+| Locale sensitivity of the verdict token | Probed under unset `LANG`, `LC_ALL=C` and `LC_ALL=fr_FR.UTF-8`; not translated in the pinned image |
+
+### New considerations discovered
+
+- A curl rc of **22** (the pinned release asset deleted or retagged) is a definitive, actionable
+  defect in the artifact production boots from — never an environment decline. Harmless under this
+  design because no decline path exists; recorded on #7291 so a future decline does not
+  reintroduce it.
+- The C4 model has the release-CDN **element** but no `gitDataStore -> github` **edge**, so the
+  host's boot-time dependency on GitHub Releases is unmodelled. Pre-existing; flagged so it is not
+  misread as covered.
+- A pre-existing `set -u` hazard (D1 reads `$CAPTURE` before any `run_case` defines it) gets a
+  tracking issue rather than a silent fix (`wg-when-an-audit-identifies-pre-existing`).
+
 ## Overview
 
 The T5 arms of `apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh` are the rehearsal's
@@ -264,8 +323,17 @@ credential, no network destination, no persisted artifact is added.
 
 **Brand-survival threshold:** `none`.
 
-*Reason for `none` on a security-adjacent change:* the diff touches no sensitive path under the
-preflight Check 6 regex — no schema, migration, auth flow, API route, `.sql`, or credential
+- `threshold: none, reason: the diff is confined to a CI test harness's assertion logic and adds no
+  credential, network destination, persisted artifact, or runtime code path — the guard it repairs
+  defends a host that is declared-but-unprovisioned, so no live user data sits behind this change.`
+
+**Scope-out note.** `apps/web-platform/infra/` is inside the preflight Check 6 sensitive-path regex
+(`apps/[^/]+/infra/`), which is why the explicit scope-out bullet above is required rather than
+optional. It is a path-shaped match, not a substance-shaped one: the diff touches a `.test.sh` in
+that directory and no `.tf`, no cloud-init, no secret, and no provisioning surface.
+
+*Why `none` is nonetheless right for a security-adjacent change:* the diff touches no sensitive
+surface under the same regex's substance — no schema, migration, auth flow, API route, `.sql`, or credential
 handling. The host the guard defends is declared-but-unprovisioned (`model.c4`: `claude ->
 gitDataStore`, "TARGET state — the store is declared but unprovisioned, #6977/ADR-149"), so no live
 user data currently sits behind it. The threshold measures *this diff's* blast radius, not the
