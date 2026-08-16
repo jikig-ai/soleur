@@ -571,7 +571,13 @@ the dependencies `_skip()` already gates — and no credentials, so no `credenti
     among `ADR-*.md` on the merge base and no other file in the PR names a different ordinal. (The
     pre-merge re-derivation against fetched refs is a ship step, not an AC — an AC whose outcome
     another PR can flip is not an acceptance criterion.)
-17. A tracking issue exists for each `## Deferred Scope` row with its re-evaluation criterion.
+17. **AMENDED at review.** Every `## Deferred Scope` row is dispositioned — but three were
+    RESOLVED rather than filed, which is the better outcome and the one the CONCUR gate forced.
+    Filed: #7565 (P1, discovered defect), #7572 (the S1 instance, as a bug not an asymmetry),
+    #7574 (persistence bound, criterion 3, follow-through wired). Resolved-not-filed: the `-ne`
+    floor and the INCONCLUSIVE rename (both rejected with reasons recorded in the code and the
+    ADR), and the bounded retry (wontfix, folded into #7535). Pre-bake points at #7535 rather
+    than restating it.
 18. The PR body carries `Closes #7291`.
 
 ### Post-merge (operator)

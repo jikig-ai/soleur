@@ -87,7 +87,19 @@ Each row is a temporary local edit, observed, then reverted. Record observed out
       with the degraded-run NOTE emitted. Two earlier clean controls (45/0 and an interrupted
       run) described trees invalidated by #7540 and #7501/#7507 landing mid-flight and are NOT
       the evidence of record.
-- [ ] 5.4 File a tracking issue for each `## Deferred Scope` row with its re-evaluation criterion
-      (pre-bake, retry, `run_case`/`_s1_run` extension, T17 capture, P4 persistence window).
+- [x] 5.4 Deferred-scope rows dispositioned. Six proposed rows became **three filings and three
+      resolved decisions**, after two CONCUR rounds (both DISSENTed, both correctly):
+        - #7565 P1 (separate, discovered defect): the vacuous-PASS path — egress blocked while apt
+          works leaves both T5 arms green with the checksum never evaluated. Cross-linked from the
+          doctrine block so no reader infers soundness from the three skip conditions.
+        - #7572 (bug): the S1 arm's live instance of the #7291 class, measured in this PR's own
+          control run. Filed as the DEFECT, not as "S1 lacks arm_skip" — that asymmetry is
+          PR-introduced and the review gate forbids filing it as pre-existing.
+        - #7574 (deferred-scope-out, criterion 3, CONCUR'd): the persistence bound, wired to
+          scripts/followthroughs/t5-skip-persistence-bound-7510.sh with an event-grep trigger that
+          fires on a GREEN run.
+        - RESOLVED not filed: `-lt` -> `-ne` (rejected in the floor comment), SKIP -> INCONCLUSIVE
+          (rejected in ADR-188), bounded retry (wontfix, folded into #7535 as a comment).
+        - Pre-bake + /out/setup.log: covered by #7535 in another session; pointed at, not restated.
 - [ ] 5.5 Confirm `decision-challenges.md` (UC-1) is carried into the PR body by `ship`.
 - [ ] 5.6 PR body carries `Closes #7291`.
