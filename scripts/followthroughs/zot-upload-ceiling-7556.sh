@@ -73,6 +73,27 @@ fi
 qerr="$(mktemp)"
 trap 'rm -f "$qerr"' EXIT INT TERM
 
+# ── DECODE BEFORE MATCHING. The warehouse stores rows DOUBLE-ENCODED, and the producer's
+# sanitize() runs `tr -d '"\\'` before shipping. So the bytes a naive grep sees are neither what
+# zot emitted nor what this probe was written against. MEASURED against 200 real PatchBlobUpload
+# rows: `grep -c 'PatchBlobUpload'` = 25, `grep -c 'i/o timeout'` = 0, and the same rows decoded
+# give 21. A probe that greps the raw envelope computes deadline_hits=0 on data where 21 of 25
+# uploads are deadline failures — and this exit code AUTO-CLOSES #7556.
+#
+# Same decode the #7440 channel probe uses; not re-derived here.
+decode() {
+  jq -R -r 'fromjson? | .raw // empty' 2>/dev/null \
+    | jq -R -r 'fromjson? | .message // empty' 2>/dev/null
+}
+
+# A ClickHouse error payload can arrive on a ZERO exit (betterstack-query.sh runs `set -uo
+# pipefail` without `-e`). Without this the payload carries no PatchBlobUpload rows and falls
+# through to the too-few-samples MEASUREMENT — reporting a sample shortage for a query that never
+# ran. Same discriminator as the release workflow's bridge arm.
+is_error_payload() {
+  grep -qiE 'exception|DB::Err|Code: [0-9]+|syntax error' "$1"
+}
+
 # ── Signal 1: DELIVERY. zot's boot `configuration settings` line. ──────────────────────────
 raw_cfg="$("$QUERY" --since "$WINDOW" --grep 'configuration settings' --limit 2000 2>"$qerr")"; crc=$?
 if (( crc != 0 )); then
@@ -83,7 +104,17 @@ if (( crc != 0 )); then
   exit 2
 fi
 
-cfg_rows="$(printf '%s\n' "$raw_cfg" | grep -c '[^[:space:]]' || true)"
+CFG_RAW_F="$(mktemp)"; CFG_DEC_F="$(mktemp)"
+trap 'rm -f "$qerr" "$CFG_RAW_F" "$CFG_DEC_F"' EXIT INT TERM
+printf '%s\n' "$raw_cfg" > "$CFG_RAW_F"
+if is_error_payload "$CFG_RAW_F"; then
+  verdict "TRANSIENT reason=query-error-payload-config"
+  echo "TRANSIENT: the config query returned an ERROR PAYLOAD on a zero exit, not rows."
+  echo "  A failed read is not a measurement. NOT a pass."
+  exit 2
+fi
+decode < "$CFG_RAW_F" > "$CFG_DEC_F"
+cfg_rows="$(grep -c '[^[:space:]]' < "$CFG_DEC_F" || true)"
 if [[ "${cfg_rows:-0}" -eq 0 ]]; then
   verdict "TRANSIENT reason=no-config-line window=${WINDOW}"
   echo "TRANSIENT: no zot 'configuration settings' line in the window. The host may not have been"
@@ -94,8 +125,16 @@ fi
 
 # Both deadlines, read off the NEWEST such line. zot reports them as integer nanoseconds under
 # the HTTP object, e.g. "ReadTimeout":1800000000000.
-read_ns="$(printf '%s\n' "$raw_cfg" | grep -oE '"ReadTimeout":[0-9]+' | tail -1 | cut -d: -f2)"
-write_ns="$(printf '%s\n' "$raw_cfg" | grep -oE '"WriteTimeout":[0-9]+' | tail -1 | cut -d: -f2)"
+# POST-SANITIZE FORM. The producer strips every `"` before shipping, so the shipped text reads
+# `ReadTimeout:1800000000000`; a `"ReadTimeout":` pattern can never match and the probe would
+# return TRANSIENT reason=deadlines-unparseable forever, accreting a daily comment on #7556 and
+# never rendering a verdict.
+#
+# Both values are taken from the SAME newest line: a genuine Arm-C split across two different
+# boot lines would otherwise read as a match — the split-brain this FAIL text claims to catch.
+CFG_LINE="$(grep -E 'ReadTimeout:[0-9]+' "$CFG_DEC_F" | tail -1)"
+read_ns="$(printf '%s' "$CFG_LINE" | grep -oE 'ReadTimeout:[0-9]+' | head -1 | cut -d: -f2)"
+write_ns="$(printf '%s' "$CFG_LINE" | grep -oE 'WriteTimeout:[0-9]+' | head -1 | cut -d: -f2)"
 
 if [[ -z "$read_ns" || -z "$write_ns" ]]; then
   verdict "TRANSIENT reason=deadlines-unparseable read=${read_ns:-<none>} write=${write_ns:-<none>}"
@@ -126,7 +165,17 @@ fi
 # SAMPLE FLOOR. A window with too few rows cannot support an absence claim: zero failures out of
 # three uploads is not evidence. Counted over PatchBlobUpload rows of ANY shape — the denominator
 # is "did uploads happen at all", not "did they fail".
-patch_rows="$(printf '%s\n' "$raw_log" | grep -c 'PatchBlobUpload' || true)"
+LOG_RAW_F="$(mktemp)"; LOG_DEC_F="$(mktemp)"
+trap 'rm -f "$qerr" "$CFG_RAW_F" "$CFG_DEC_F" "$LOG_RAW_F" "$LOG_DEC_F"' EXIT INT TERM
+printf '%s\n' "$raw_log" > "$LOG_RAW_F"
+if is_error_payload "$LOG_RAW_F"; then
+  verdict "TRANSIENT reason=query-error-payload-log"
+  echo "TRANSIENT: the PatchBlobUpload query returned an ERROR PAYLOAD on a zero exit."
+  echo "  The DELIVERY half passed, but absence was NOT established. NOT a pass."
+  exit 2
+fi
+decode < "$LOG_RAW_F" > "$LOG_DEC_F"
+patch_rows="$(grep -c 'PatchBlobUpload' < "$LOG_DEC_F" || true)"
 if [[ "${patch_rows:-0}" -lt "$MIN_SAMPLES" ]]; then
   verdict "TRANSIENT reason=too-few-samples patch_rows=${patch_rows:-0} min=${MIN_SAMPLES} window=${WINDOW}"
   echo "TRANSIENT: only ${patch_rows:-0} PatchBlobUpload rows in ${WINDOW}; need >= ${MIN_SAMPLES} before"
@@ -138,11 +187,10 @@ fi
 # network fault; `latency:1m0s` alone would match any slow-but-successful request. The PAIRING is
 # what identifies the 60 s deadline specifically — and after this fix a genuine 1800s cut would
 # read `latency:30m0s`, so this pattern deliberately does NOT generalise to "any timeout".
-deadline_hits="$(printf '%s\n' "$raw_log" | { grep 'PatchBlobUpload' || true; } | { grep -c 'i/o timeout' || true; })"
-latency_hits="$(printf '%s\n' "$raw_log" | { grep 'PatchBlobUpload' || true; } | { grep -c 'latency:1m0s' || true; })"
+deadline_hits="$(grep 'PatchBlobUpload' < "$LOG_DEC_F" 2>/dev/null | { grep -c 'i/o timeout' || true; })"
 
 if [[ "${deadline_hits:-0}" -gt 0 ]]; then
-  verdict "FAIL reason=deadline-submode-present hits=${deadline_hits} latency_1m_hits=${latency_hits} window=${WINDOW}"
+  verdict "FAIL reason=deadline-submode-present hits=${deadline_hits} window=${WINDOW}"
   echo "FAIL: ${deadline_hits} PatchBlobUpload row(s) carrying 'i/o timeout' in ${WINDOW}, on a host whose"
   echo "  deadlines DO read ${DEADLINE_NS} ns. The deadline was raised and uploads are still being cut,"
   echo "  so the ceiling is not the (only) constraint — re-open the diagnosis rather than raising the"
@@ -150,7 +198,43 @@ if [[ "${deadline_hits:-0}" -gt 0 ]]; then
   exit 1
 fi
 
-verdict "PASS deadlines_ns=${DEADLINE_NS} patch_rows=${patch_rows} deadline_hits=0 window=${WINDOW}"
+# RETENTION MUST COVER THE WINDOW, or the PASS asserts an absence the warehouse cannot support.
+# MEASURED 2026-08-14: the archive held ~1.3 days (oldest 08-13 11:43 -> newest 08-14 19:07),
+# while this probe requests --since 7d. Reporting "zero in 7d" off 1.3 days of data is a claim
+# about six days nobody looked at. Derive the OBSERVED span from the rows themselves.
+SPAN_H="$(printf '%s\n' "$raw_log" | jq -R -r 'fromjson? | .dt // empty' 2>/dev/null \
+  | sort | awk 'NR==1{f=$0} {l=$0} END{if(f=="")exit; print f"\t"l}' \
+  | python3 -c '
+import sys,datetime
+line=sys.stdin.readline().strip()
+if not line: sys.exit(0)
+parts=line.split("\t")
+if len(parts)!=2: sys.exit(0)
+def parse(x):
+    for f in ("%Y-%m-%d %H:%M:%S","%Y-%m-%dT%H:%M:%S"):
+        try: return datetime.datetime.strptime(x[:19],f)
+        except ValueError: pass
+    return None
+a,b=parse(parts[0]),parse(parts[1])
+if a and b: print(int((b-a).total_seconds()//3600))
+' 2>/dev/null || true)"
+if [[ -n "$SPAN_H" ]] && [[ "$SPAN_H" =~ ^[0-9]+$ ]]; then
+  MIN_SPAN_H=$(( MIN_WINDOW_DAYS * 24 ))
+  if [[ "$SPAN_H" -lt "$MIN_SPAN_H" ]]; then
+    verdict "TRANSIENT reason=retention-shorter-than-window observed_h=${SPAN_H} required_h=${MIN_SPAN_H}"
+    echo "TRANSIENT: the rows span only ${SPAN_H}h but this verdict requires ${MIN_SPAN_H}h."
+    echo "  Warehouse retention cannot support a ${WINDOW} absence claim. NOT a pass — asserting"
+    echo "  'zero in ${WINDOW}' off ${SPAN_H}h of data is a claim about time nobody observed."
+    exit 2
+  fi
+else
+  verdict "TRANSIENT reason=span-underivable"
+  echo "TRANSIENT: could not derive the observed time span from the returned rows, so the"
+  echo "  window this PASS would assert is unknown. NOT a pass."
+  exit 2
+fi
+
+verdict "PASS deadlines_ns=${DEADLINE_NS} patch_rows=${patch_rows} deadline_hits=0 observed_span_h=${SPAN_H} window=${WINDOW}"
 echo "PASS: both zot HTTP deadlines report ${DEADLINE_NS} ns on the running host, and across ${patch_rows}"
 echo "  PatchBlobUpload rows in ${WINDOW} there are ZERO carrying 'i/o timeout'."
 echo "  SCOPE: this grades the DEADLINE sub-mode only. 'unexpected EOF' is a separate shape, was"
