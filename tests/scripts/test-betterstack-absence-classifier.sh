@@ -75,8 +75,6 @@ mkfix() { local f="$TMP/fix.$1"; shift; printf '%s\n' "$@" > "$f"; printf '%s' "
 EMPTY="$(mkfix empty "")"
 : > "$EMPTY"
 
-# A genuine Vector-shipped journald row: `raw` is an envelope whose FIRST key is PRIORITY.
-ROW_JOURNALD="$(mkfix journald '{"dt":"2026-08-14 19:06:58","raw":"{\"PRIORITY\":\"6\",\"host_name\":\"soleur-registry\",\"message\":\"SOLEUR_PROBE_CANARY ok\"}"}')"
 # A direct-POST producer row: the host POSTs {"message":"<marker> …"} and Better Stack stores
 # THAT as raw, so the envelope starts with the message key.
 ROW_DIRECT="$(mkfix direct '{"dt":"2026-08-14 19:06:58","raw":"{\"message\":\"SOLEUR_PROBE_CANARY host=soleur-registry\"}"}')"

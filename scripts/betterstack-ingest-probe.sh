@@ -43,13 +43,27 @@ if [[ -z "${BETTERSTACK_LOGS_TOKEN:-}" ]]; then
   exit 2
 fi
 
+# BETTERSTACK_INGEST_URL is env-overridable and this request carries a bearer credential, so the
+# destination is validated before the token is forwarded: `--proto '=https'` refuses a plaintext
+# override outright, and the host assertion refuses one pointed anywhere but the vendor. Neither
+# is hypothetical — the same variable name is already exported into host environments elsewhere
+# in this repo, so an http:// value would put the ingest token on the wire in cleartext. No `-L`,
+# so a 30x cannot forward the header either.
+case "$BETTERSTACK_INGEST_URL" in
+  https://*.betterstackdata.com/*) : ;;
+  *)
+    emit "INGEST_PROBE_UNCONFIGURED" "-" "BETTERSTACK_INGEST_URL is not an https betterstackdata.com endpoint; refusing to forward the ingest credential to it"
+    exit 2
+    ;;
+esac
+
 # `-o /dev/null -w '%{http_code}'` and NOT `-f`: a 402 body is the answer, so failing the
 # request on an HTTP error would discard the very thing being measured.
 #
 # The empty batch is the whole point — see the header. Keep it literal so the test's source
 # grep can pin it.
 rc=0
-http="$(curl -sS -m "$TIMEOUT" -o /dev/null -w '%{http_code}' \
+http="$(curl -sS -m "$TIMEOUT" --proto '=https' -o /dev/null -w '%{http_code}' \
   -H "Authorization: Bearer ${BETTERSTACK_LOGS_TOKEN}" \
   -H 'Content-Type: application/json' \
   "$BETTERSTACK_INGEST_URL" \

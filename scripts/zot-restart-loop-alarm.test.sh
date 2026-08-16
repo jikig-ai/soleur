@@ -273,6 +273,21 @@ reset_fix
 export ZOT_FIX_MAIN="" ZOT_FIX_CONTROL=""   # both empty; control_rc 0 → the query ANSWERED
 assert_case "S9 empty window + control answered empty → ingest dark" 4 INGEST_DARK
 
+# --- S9-NIC: the NIC leg's new arms, which shipped with zero cases -------------------------
+# Review proved both `evaluate_nic` arms added by #7569 (INGEST_DARK and TRANSPORT_FAIL) were
+# deletable, and invertible, with the whole suite green. The zot leg's twin was covered by S9;
+# its NIC counterpart — the leg where the SAME `||` collapse lived — was not. The workflow
+# consumes NIC_ALARM_VERDICT at its `case` arm, so an inverted verdict reaches the operator.
+reset_fix
+export NIC_FIX_MAIN="" ZOT_FIX_CONTROL=""      # warehouse answered with nothing
+assert_nic_case "S9-NIC control answered empty → NIC reads ingest dark" INGEST_DARK
+
+# The must-PASS twin: a FAILED control read is a probe fault on the NIC leg too, not darkness.
+# Without it the arm above is satisfiable by reporting INGEST_DARK for every empty control.
+reset_fix
+export NIC_FIX_MAIN="" ZOT_FIX_CONTROL="" ZOT_FIX_CONTROL_RC=6
+assert_nic_case "S9-NIC control read errored (rc=6) → probe fault, not darkness" TRANSIENT
+
 # --- Scenario 9d (F15): a CONTAMINATED row must not suppress the dark verdict --------------
 # The plan's F15. `--grep SOLEUR_ZOT_DISK` is an unanchored `raw LIKE '%SOLEUR_ZOT_DISK%'`, so a
 # row that merely QUOTES the marker — the measured 2026-07-15 GitHub-webhook shape, which is why
@@ -585,7 +600,10 @@ export NIC_FIX_MAIN="" NIC_FIX_LOOKBACK=""
 assert_nic_case "N19 both producers silent → transient (not a NIC-specific page)" TRANSIENT
 
 # --- Minimum-cardinality guard -----------------------------------------------------------
-EXPECTED_MIN=45
+# Derived from a green run, not from a remembered figure. This was 45 while 57 assertions ran —
+# twelve cases of slack, i.e. S9 and S9c among a dozen that were silently deletable. Ratchet it
+# in lockstep whenever cases are added.
+EXPECTED_MIN=59
 echo "----"
 printf 'cases=%s pass=%s fail=%s\n' "$CASES" "$PASS" "$FAIL"
 if [[ "$CASES" -lt "$EXPECTED_MIN" ]]; then
