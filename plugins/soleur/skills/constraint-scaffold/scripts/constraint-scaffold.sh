@@ -71,7 +71,7 @@ detect_nextjs || die "target $TARGET_REL is not a Next.js app (need next.config.
 # single-client-dir app does not error on a missing dir.
 capture_baseline() {
   local app_root="$1"
-  [[ -x "$DEPCRUISE" ]] || die "dependency-cruiser not found at $DEPCRUISE — run 'bun install' in $TARGET_REL first" 68
+  [[ -x "$DEPCRUISE" ]] || die "dependency-cruiser not found at $DEPCRUISE — run 'npm ci --ignore-scripts' in $TARGET_REL first" 68
   local scan_dirs=()
   local d
   for d in app components server; do

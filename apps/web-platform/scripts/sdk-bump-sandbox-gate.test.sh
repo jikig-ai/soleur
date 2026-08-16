@@ -6,7 +6,7 @@
 # glob in scripts/test-all.sh (→ the branch-protection `test` required context).
 #
 # All fixtures are synthesized inline (cq-test-fixtures-synthesized-only): minimal
-# package-lock.json + bun.lock shapes carrying only the two SDK entries the gate reads.
+# package-lock.json shapes carrying only the two SDK entries the gate reads.
 
 set -eu
 
@@ -39,31 +39,30 @@ write_pkglock() {
 JSON
 }
 
-# write_bunlock <path> <agent-sdk-ver> <claude-code-ver>  (JSONC packages-map shape)
-write_bunlock() {
+# write_pkglock_missing_agent <path> <claude-code-ver> — the shape the PRESENCE arm
+# exists to catch: an SDK package that has VANISHED from the deploy-authoritative
+# lockfile. Section 2's bump detection reads this as an empty head_v and short-circuits
+# to green, so without section 1 it ships silently (#5849).
+write_pkglock_missing_agent() {
   cat >"$1" <<JSON
 {
-  "lockfileVersion": 1,
+  "name": "web-platform",
   "packages": {
-    "@anthropic-ai/claude-agent-sdk": ["@anthropic-ai/claude-agent-sdk@$2", {}, "sha512-x=="],
-    "@anthropic-ai/claude-agent-sdk-linux-x64": ["@anthropic-ai/claude-agent-sdk-linux-x64@$2", {}, "sha512-y=="],
-    "@anthropic-ai/claude-code": ["@anthropic-ai/claude-code@$3", {}, "sha512-z=="],
+    "node_modules/@anthropic-ai/claude-code": { "version": "$2" }
   }
 }
 JSON
 }
 
 # run_gate — invoke the gate with fixture overrides; captures rc + output.
-# args: head_agent head_code bun_agent bun_code base_agent base_code ack
+# args: head_agent head_code <unused> <unused> base_agent base_code ack
 run_gate() {
   write_pkglock "$T/head-pkg.json" "$1" "$2"
-  write_bunlock "$T/bun.lock" "$3" "$4"
   write_pkglock "$T/base-pkg.json" "$5" "$6"
   # SDK_GATE_CHANGED_FILES="" keeps the #5913 capture gate dormant for the
   # parity/bump-ack cases (T1-T7); the capture-gate cases (T8+) set it + creds
   # + a mock verify command explicitly.
   SDK_GATE_PKG_LOCK="$T/head-pkg.json" \
-  SDK_GATE_BUN_LOCK="$T/bun.lock" \
   SDK_GATE_BASE_PKG_LOCK="$T/base-pkg.json" \
   SDK_GATE_ACK_TEXT="$7" \
   SDK_GATE_CHANGED_FILES="" \
@@ -77,7 +76,6 @@ run_gate() {
 # args: changed_files creds(1|0) verdict_json ack
 run_capture_gate() {
   write_pkglock "$T/head-pkg.json" "0.3.197" "2.1.197"
-  write_bunlock "$T/bun.lock" "0.3.197" "2.1.197"
   write_pkglock "$T/base-pkg.json" "0.3.197" "2.1.197"
   printf '%s\n' "$3" > "$T/verdict.json"
   local creds_env=()
@@ -85,7 +83,6 @@ run_capture_gate() {
   env "${creds_env[@]}" \
     SANDBOX_CANARY_GATE_ENABLED=1 \
     SDK_GATE_PKG_LOCK="$T/head-pkg.json" \
-    SDK_GATE_BUN_LOCK="$T/bun.lock" \
     SDK_GATE_BASE_PKG_LOCK="$T/base-pkg.json" \
     SDK_GATE_ACK_TEXT="$4" \
     SDK_GATE_CHANGED_FILES="$1" \
@@ -104,13 +101,19 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# T2 — parity mismatch (bun agent-sdk != package-lock) → exit 1, cites parity.
+# T2 (was: bun.lock parity, retired with bun.lock in ADR-191) — an SDK package ABSENT
+# from package-lock.json must fail loud. This is the arm that stops section 2's
+# short-circuit-to-green on an empty head_v; lint-dual-lockfile.test.sh row 8 asserts
+# the arm still exists, and this asserts it still WORKS.
 # ---------------------------------------------------------------------------
-echo "T2: parity mismatch → fail loud"
-if run_gate "0.3.197" "2.1.197" "0.3.150" "2.1.197" "0.3.197" "2.1.197" ""; then
-  fail "T2 expected non-zero, got 0"
+echo "T2: SDK package missing from package-lock.json → fail loud"
+write_pkglock_missing_agent "$T/head-pkg.json" "2.1.197"
+write_pkglock "$T/base-pkg.json" "0.3.197" "2.1.197"
+if SDK_GATE_PKG_LOCK="$T/head-pkg.json" SDK_GATE_BASE_PKG_LOCK="$T/base-pkg.json" \
+   SDK_GATE_ACK_TEXT="" SDK_GATE_CHANGED_FILES="" bash "$GATE" >"$T/out.txt" 2>&1; then
+  fail "T2 expected non-zero, got 0 — a vanished SDK package shipped green (#5849)"
 else
-  if grep -q "PARITY MISMATCH" "$T/out.txt"; then pass "T2 fails with parity error"; else fail "T2 wrong message: $(tail -1 "$T/out.txt")"; fi
+  if grep -q "not found in" "$T/out.txt"; then pass "T2 fails on a vanished SDK package"; else fail "T2 wrong message: $(tail -1 "$T/out.txt")"; fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -152,10 +155,8 @@ echo "T6: SDK package absent from package-lock → fail"
 cat >"$T/head-pkg.json" <<'JSON'
 { "packages": { "node_modules/@anthropic-ai/claude-code": { "version": "2.1.197" } } }
 JSON
-write_bunlock "$T/bun.lock" "0.3.197" "2.1.197"
 write_pkglock "$T/base-pkg.json" "0.3.197" "2.1.197"
-if SDK_GATE_PKG_LOCK="$T/head-pkg.json" SDK_GATE_BUN_LOCK="$T/bun.lock" \
-   SDK_GATE_BASE_PKG_LOCK="$T/base-pkg.json" SDK_GATE_ACK_TEXT="" \
+if SDK_GATE_PKG_LOCK="$T/head-pkg.json"   SDK_GATE_BASE_PKG_LOCK="$T/base-pkg.json" SDK_GATE_ACK_TEXT="" \
    SDK_GATE_CHANGED_FILES="" \
    bash "$GATE" >"$T/out.txt" 2>&1; then
   fail "T6 expected non-zero, got 0"
@@ -164,14 +165,18 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# T7 (non-vacuity) — an ack token present but NO bump must NOT short-circuit the
-# parity check: parity mismatch still fails even with the ack present.
+# T7 (non-vacuity) — an ack token present must NOT short-circuit the PRESENCE check.
+# Otherwise a commit carrying the ack could make a vanished SDK package pass.
 # ---------------------------------------------------------------------------
-echo "T7: ack present + parity mismatch (no bump) → still fails on parity"
-if run_gate "0.3.197" "2.1.197" "0.3.150" "2.1.197" "0.3.197" "2.1.197" "sdk-bump-verified: whatever"; then
-  fail "T7 expected non-zero (parity), got 0"
+echo "T7: ack present + missing SDK package → still fails on presence"
+write_pkglock_missing_agent "$T/head-pkg.json" "2.1.197"
+write_pkglock "$T/base-pkg.json" "0.3.197" "2.1.197"
+if SDK_GATE_PKG_LOCK="$T/head-pkg.json" SDK_GATE_BASE_PKG_LOCK="$T/base-pkg.json" \
+   SDK_GATE_ACK_TEXT="sdk-bump-verified: whatever" SDK_GATE_CHANGED_FILES="" \
+   bash "$GATE" >"$T/out.txt" 2>&1; then
+  fail "T7 expected non-zero (presence), got 0"
 else
-  if grep -q "PARITY MISMATCH" "$T/out.txt"; then pass "T7 parity still enforced under ack"; else fail "T7 wrong message: $(tail -1 "$T/out.txt")"; fi
+  if grep -q "not found in" "$T/out.txt"; then pass "T7 presence still enforced under ack"; else fail "T7 wrong message: $(tail -1 "$T/out.txt")"; fi
 fi
 
 # ===========================================================================
@@ -240,11 +245,9 @@ fi
 # capture / false-block a routine canary-script edit).
 echo "T14: capture gate flag OFF → section 3 dormant → pass"
 write_pkglock "$T/head-pkg.json" "0.3.197" "2.1.197"
-write_bunlock "$T/bun.lock" "0.3.197" "2.1.197"
 write_pkglock "$T/base-pkg.json" "0.3.197" "2.1.197"
 if env ANTHROPIC_API_KEY="sk-test" \
-   SDK_GATE_PKG_LOCK="$T/head-pkg.json" SDK_GATE_BUN_LOCK="$T/bun.lock" \
-   SDK_GATE_BASE_PKG_LOCK="$T/base-pkg.json" SDK_GATE_ACK_TEXT="" \
+   SDK_GATE_PKG_LOCK="$T/head-pkg.json"   SDK_GATE_BASE_PKG_LOCK="$T/base-pkg.json" SDK_GATE_ACK_TEXT="" \
    SDK_GATE_CHANGED_FILES="$FIX" SDK_GATE_VERIFY_CMD="echo SHOULD_NOT_RUN" \
    bash "$GATE" >"$T/out.txt" 2>&1; then
   if grep -q "SHOULD_NOT_RUN\|verify" "$T/out.txt"; then fail "T14 section 3 ran despite flag off"; else pass "T14 dormant with flag unset"; fi
@@ -263,12 +266,10 @@ fi
 echo "T15: verify command stderr reaches the gate output"
 T15_FIX="apps/web-platform/infra/sandbox-canary-argv.json"
 write_pkglock "$T/head-pkg.json" "0.3.197" "2.1.197"
-write_bunlock "$T/bun.lock" "0.3.197" "2.1.197"
 write_pkglock "$T/base-pkg.json" "0.3.197" "2.1.197"
 env ANTHROPIC_API_KEY="sk-test" \
   SANDBOX_CANARY_GATE_ENABLED=1 \
   SDK_GATE_PKG_LOCK="$T/head-pkg.json" \
-  SDK_GATE_BUN_LOCK="$T/bun.lock" \
   SDK_GATE_BASE_PKG_LOCK="$T/base-pkg.json" \
   SDK_GATE_ACK_TEXT="" \
   SDK_GATE_CHANGED_FILES="$T15_FIX" \

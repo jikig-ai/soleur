@@ -965,10 +965,18 @@ jobs:
       - name: Install bun
         if: steps.gate.outputs.triggered == '1'
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+      - name: Setup Node.js
+        if: steps.gate.outputs.triggered == '1'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web-platform/package-lock.json
+
       - name: Install web-platform deps
         if: steps.gate.outputs.triggered == '1'
         working-directory: apps/web-platform
-        run: bun install --frozen-lockfile
+        run: npm ci --ignore-scripts
       - name: Install Playwright chromium (+ OS deps)
         if: steps.gate.outputs.triggered == '1'
         working-directory: apps/web-platform

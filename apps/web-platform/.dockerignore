@@ -1,5 +1,10 @@
 node_modules
 .env*
+# The deps stage runs `npm ci` BEFORE `COPY . .`, and no dependency-resolving npm
+# command runs after it — so .npmrc's release-age floor never applies inside the image.
+# That invariant was previously unguarded (Dockerfile:10 is `COPY . .`, which would
+# otherwise copy .npmrc in); this line makes it explicit rather than incidental.
+.npmrc
 
 # Terraform configs, not needed at runtime
 infra/

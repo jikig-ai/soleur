@@ -9,14 +9,20 @@
 #
 # Two assertions:
 #
-#   1. PARITY — bun.lock and package-lock.json MUST agree on the resolved version of
-#      BOTH @anthropic-ai/claude-agent-sdk AND @anthropic-ai/claude-code. package-lock
-#      is deploy-authoritative (the prod image builds via `npm ci` in the Dockerfile,
-#      NOT bun.lock which only feeds CI bun test/typecheck), and there is no other
-#      cross-parity check, so the two can silently drift. A drift here means the thing
-#      CI tests (bun) differs from the thing prod ships (npm) — the exact blind spot
-#      that let the gate below be evadable. Kieran P1 correction: key on package-lock,
-#      assert bun parity.
+#   1. PRESENCE — BOTH @anthropic-ai/claude-agent-sdk AND @anthropic-ai/claude-code
+#      MUST resolve in package-lock.json.
+#
+#      This was PARITY (package-lock vs bun.lock) until ADR-191 made npm the single
+#      lockfile of record; with bun.lock deleted there is no second lockfile to compare
+#      against, so the cross-lockfile half is retired.
+#
+#      The remaining arm is NOT vestigial and must not be deleted with the other half.
+#      Section 2's bump detection is `[[ -n "$base_v" && -n "$head_v" && … ]]`, which
+#      SHORT-CIRCUITS TO GREEN on an empty `head_v` — an SDK package that vanishes from
+#      the lockfile silently satisfies the gate. The `[[ -z "$pv" ]]` arm below is the
+#      only thing that catches that, so retiring it would reopen the #5849 "a routine
+#      SDK bump shipped green because nothing forced a look" class this gate exists to
+#      close. lint-dual-lockfile.test.sh row 8 asserts the arm is still here.
 #
 #   2. BUMP DETECTION + ACK (ADR-079 guardrail 2 — "no silent green on a detected
 #      bump"). When either SDK package's resolved version in package-lock.json changes
@@ -31,7 +37,6 @@
 # Env overrides (for apps/web-platform/scripts/sdk-bump-sandbox-gate.test.sh — the
 # gate is otherwise zero-config against the real repo):
 #   SDK_GATE_PKG_LOCK       path to head package-lock.json      (default: apps/web-platform/package-lock.json)
-#   SDK_GATE_BUN_LOCK       path to head bun.lock               (default: apps/web-platform/bun.lock)
 #   SDK_GATE_BASE_REF       git ref for the merge base          (default: origin/main)
 #   SDK_GATE_BASE_PKG_LOCK  path to base package-lock.json      (default: `git show $BASE_REF:...`)
 #   SDK_GATE_ACK_TEXT       commit-message text to scan for ack (default: `git log $BASE_REF..HEAD --format=%B`)
@@ -39,7 +44,6 @@
 set -euo pipefail
 
 PKG_LOCK="${SDK_GATE_PKG_LOCK:-apps/web-platform/package-lock.json}"
-BUN_LOCK="${SDK_GATE_BUN_LOCK:-apps/web-platform/bun.lock}"
 BASE_REF="${SDK_GATE_BASE_REF:-origin/main}"
 ACK_TOKEN="sdk-bump-verified"
 FOLLOWUP="the ADR-079 deferral-B follow-up (creds-gated real-argv capture)"
@@ -71,39 +75,17 @@ pkglock_version() { # $1=lockfile $2=pkg
   jq -r --arg k "node_modules/$2" '.packages[$k].version // ""' "$1" 2>/dev/null || printf ''
 }
 
-# Resolved version from a bun.lock (JSONC — jq cannot parse it). The packages map has
-# an entry `"<pkg>": ["<pkg>@<version>", …]`; the leading exact-pkg token carries the
-# resolved version. Anchored on the exact `"<pkg>": ["<pkg>@` prefix so the platform
-# sub-packages (…-linux-x64@…) never match. Prints "" when absent.
-bunlock_version() { # $1=lockfile $2=pkg
-  [[ -f "$1" ]] || { printf ''; return 0; }
-  local esc; esc="$(printf '%s' "$2" | sed 's/[.[\*^$()+?{|]/\\&/g')"
-  grep -oE "\"${esc}\": \[\"${esc}@[^\"]+\"" "$1" 2>/dev/null | head -1 \
-    | sed -E "s/.*@([^\"]+)\"$/\1/" || printf ''
-}
-
 fail=0
 
-# --- 1. PARITY -------------------------------------------------------------------
+# --- 1. PRESENCE -----------------------------------------------------------------
 for pkg in "${SDK_PACKAGES[@]}"; do
   pv="$(pkglock_version "$PKG_LOCK" "$pkg")"
-  bv="$(bunlock_version "$BUN_LOCK" "$pkg")"
   if [[ -z "$pv" ]]; then
-    echo "::error::sdk-bump-gate: ${pkg} not found in ${PKG_LOCK} (deploy-authoritative lockfile)."
+    echo "::error::sdk-bump-gate: ${pkg} not found in ${PKG_LOCK} (deploy-authoritative lockfile). Section 2's bump detection short-circuits to green on an empty resolved version, so this arm is what stops a vanished SDK package from passing silently (#5849)."
     fail=1
     continue
   fi
-  if [[ -z "$bv" ]]; then
-    echo "::error::sdk-bump-gate: ${pkg} not found in ${BUN_LOCK}."
-    fail=1
-    continue
-  fi
-  if [[ "$pv" != "$bv" ]]; then
-    echo "::error::sdk-bump-gate: LOCKFILE PARITY MISMATCH for ${pkg}: package-lock.json=${pv} (deploy) vs bun.lock=${bv} (CI). The image ships the npm version; a drift means CI tests a different SDK than prod runs. Re-sync both lockfiles (npm ci / bun install) so they agree."
-    fail=1
-  else
-    echo "sdk-bump-gate: parity OK — ${pkg} @ ${pv} (package-lock == bun.lock)."
-  fi
+  echo "sdk-bump-gate: presence OK — ${pkg} @ ${pv} (package-lock.json, deploy-authoritative)."
 done
 
 # --- 2. BUMP DETECTION + ACK -----------------------------------------------------
@@ -135,7 +117,7 @@ if [[ -n "$BASE_TMP" ]]; then
   done
   rm -f "$BASE_TMP"
 else
-  echo "::warning::sdk-bump-gate: could not resolve the base package-lock.json (ref='${BASE_REF}'); skipping bump-vs-base detection. Parity is still enforced above. (In CI, ensure origin/main is fetched.)"
+  echo "::warning::sdk-bump-gate: could not resolve the base package-lock.json (ref='${BASE_REF}'); skipping bump-vs-base detection. Presence is still enforced above. (In CI, ensure origin/main is fetched.)"
 fi
 
 if [[ "${#bumped_pkgs[@]}" -gt 0 ]]; then
@@ -157,7 +139,7 @@ fi
 # --- 3. CAPTURE GATE (ADR-079 deferral B / #5913) --------------------------------
 # Only runs where explicitly enabled (SANDBOX_CANARY_GATE_ENABLED=1) — a dedicated
 # creds-bearing CI job (bun + npm ci + ANTHROPIC_API_KEY). The always-run
-# `lockfile-sync` gate leaves this OFF so sections 1+2 (parity + bump-ack) run on
+# `lockfile-sync` gate leaves this OFF so sections 1+2 (presence + bump-ack) run on
 # every PR (incl. forks) WITHOUT the paid capture turn, and a routine edit to the
 # canary script never trips a false ack-fallback. Fork PRs get no secrets → the
 # capture job is skipped. TRUST-BOUNDARY NOTE (security review #5913 L1): a fork's

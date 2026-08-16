@@ -171,7 +171,11 @@ and the deterministic-LLM-SDK-invocation learning warn against. Instead PR3 clos
 the incident **class** deterministically:
 
 - **BLOCKING (deterministic, no creds/model):** resolved-version bump-detection +
-  `bun.lock`↔`package-lock.json` parity for both SDK packages
+  `package-lock.json` PRESENCE for both SDK packages (**amended 2026-08-16, ADR-191:**
+  the `bun.lock`↔`package-lock.json` parity arm is retired — `bun.lock` no longer exists.
+  The PRESENCE arm is retained and is load-bearing: bump detection short-circuits to green
+  on an empty resolved version, so it is the only remaining catch for an SDK package that
+  vanishes from the lockfile, which is the #5849 class this gate exists to close)
   (`apps/web-platform/scripts/sdk-bump-sandbox-gate.sh`, run in the required
   `lockfile-sync` job). On a detected bump, the merge is gated on a maintainer
   `sdk-bump-verified:` acknowledgement (guardrail 2 — **no silent green**; a silent
@@ -546,4 +550,7 @@ unchanged; no new `TF_VAR_*`. Files: `apps/web-platform/infra/ci-deploy.sh` (+`.
   `event_unique_user_frequency` suffices; the only real requirement is not to add
   a global-key debounce.
 - **Detect SDK bump via `bun.lock`** — rejected: `package-lock.json` is
-  deploy-authoritative; key on it + parity-assert `bun.lock`.
+  deploy-authoritative; key on it + parity-assert `bun.lock`. **(Superseded
+  2026-08-16 by ADR-191: `bun.lock` is deleted, so there is nothing left to
+  parity-assert against. The rejection's premise — that `package-lock.json` is the
+  deploy-authoritative lockfile — is what ADR-191 generalized to the whole repo.)
