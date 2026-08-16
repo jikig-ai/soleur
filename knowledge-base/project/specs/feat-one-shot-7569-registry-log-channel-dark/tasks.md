@@ -16,44 +16,44 @@ dependency-directed; Phase 0 is time-critical.
 - [ ] 0.1 Dump per-day counts, per-producer counts, message-shape distribution, hourly cliff, and
       bytes/row to `knowledge-base/project/specs/<branch>/evidence-snapshot.md` and commit.
       **Deadline ~2026-08-17 19:07Z** — irreversible if missed.
-- [ ] 0.2 Re-probe the ingest endpoint; record HTTP status and timestamp.
-- [ ] 0.3 Re-derive the ADR ordinal, scoped to `refs/remotes/origin` (local `refs/backup/*` are
+- [x] 0.2 Re-probe the ingest endpoint; record HTTP status and timestamp.
+- [x] 0.3 Re-derive the ADR ordinal, scoped to `refs/remotes/origin` (local `refs/backup/*` are
       not claims).
-- [ ] 0.4 Re-verify the Sentry PAYG cap state (#3958) — it may be at cap, in which case this
+- [x] 0.4 Re-verify the Sentry PAYG cap state (#3958) — it may be at cap, in which case this
       guard has no working backstop.
 
 ## Phase 1 — Reuse the existing absence taxonomy
 
-- [ ] 1.1 Read `scripts/betterstack-assert-absence.sh` in full.
-- [ ] 1.2 Extract its four-outcome discriminator into `scripts/lib/betterstack-absence.sh`
+- [x] 1.1 Read `scripts/betterstack-assert-absence.sh` in full.
+- [x] 1.2 Extract its four-outcome discriminator into `scripts/lib/betterstack-absence.sh`
       without changing semantics; add the `SELECT max(dt)` freshness helper.
-- [ ] 1.3 RED: write the Guard 1 mutation matrix (7 rows) + harness rows H1/H2 in
+- [x] 1.3 RED: write the Guard 1 mutation matrix (7 rows) + harness rows H1/H2 in
       `tests/scripts/test-betterstack-absence-classifier.sh`.
-- [ ] 1.4 GREEN: route both absence arms in `scripts/zot-restart-loop-alarm.sh` through the shared
+- [x] 1.4 GREEN: route both absence arms in `scripts/zot-restart-loop-alarm.sh` through the shared
       helper (`git grep -n 'control_rc'` finds both); split the `||` collapse at each.
 - [ ] 1.5 Fail closed when the 24h lookback is empty (today it routes to the "fresh host"
       non-alarming arm — the state this outage produces once the cliff ages out).
-- [ ] 1.6 Add the anti-vacuity floor (a guard evaluating zero arms must not exit 0).
+- [x] 1.6 Add the anti-vacuity floor (a guard evaluating zero arms must not exit 0).
 - [ ] 1.7 Point `scripts/betterstack-assert-absence.sh` at the extracted helper — one
       implementation, not two.
-- [ ] 1.8 Do **not** modify `scripts/betterstack-query.sh`; record the measured exit codes
+- [x] 1.8 Do **not** modify `scripts/betterstack-query.sh`; record the measured exit codes
       (22 / 6 / 0 / 3) in the PR body as the correction to #7569's premise.
 
 ## Phase 2 — Ingest probe as cause annotation only
 
-- [ ] 2.1 Measure whether an empty-batch POST (`[]`, `{}`) returns 402 when quota-exhausted and
+- [x] 2.1 Measure whether an empty-batch POST (`[]`, `{}`) returns 402 when quota-exhausted and
       202 otherwise. Record the result; it decides the design.
-- [ ] 2.2 Implement `scripts/betterstack-ingest-probe.sh` + classification tests (2xx/402/401/
+- [x] 2.2 Implement `scripts/betterstack-ingest-probe.sh` + classification tests (2xx/402/401/
       5xx/unreachable).
-- [ ] 2.3 If the probe writes a row, exclude its marker from the control query and assert that
+- [x] 2.3 If the probe writes a row, exclude its marker from the control query and assert that
       coupling with a test (self-masking guard).
-- [ ] 2.4 Ensure the probe has no veto over the reader-derived verdict.
+- [x] 2.4 Ensure the probe has no veto over the reader-derived verdict.
 
 ## Phase 3 — Alarm wiring
 
-- [ ] 3.1 File `[ci/betterstack-ingest-dark]` with `action-required`, reusing the existing
+- [x] 3.1 File `[ci/betterstack-ingest-dark]` with `action-required`, reusing the existing
       `[ci/zot-telemetry-silent]` dedupe-by-title shape.
-- [ ] 3.2 Extend the Sentry check-in status mapping.
+- [x] 3.2 Extend the Sentry check-in status mapping.
 - [ ] 3.3 Verify the Sentry path actually reaches a person; if an errored check-in does not open
       an issue, add an N-consecutive escalation in the alarm itself.
 
@@ -89,11 +89,11 @@ dependency-directed; Phase 0 is time-critical.
 
 ## Phase 6 — ADR, PIR, C4
 
-- [ ] 6.1 Write the ADR (`status: adopting`) with invariants I-1 and I-2, and the explicit
+- [x] 6.1 Write the ADR (`status: adopting`) with invariants I-1 and I-2, and the explicit
       rejection of source-splitting.
 - [ ] 6.2 File the PIR via `soleur:incident`; cite and close the 2026-06-10 near-miss
       postmortem's 5-Why #5 action item rather than restating it.
-- [ ] 6.3 Re-prioritise **#5134** `vendor-quota-watch`, re-denominated in GB/mo.
+- [x] 6.3 Re-prioritise **#5134** `vendor-quota-watch`, re-denominated in GB/mo.
 - [ ] 6.4 Correct the `betterstack` system description and the `github -> betterstack` edge in
       `knowledge-base/engineering/architecture/diagrams/model.c4`.
 - [ ] 6.5 Run `apps/web-platform/test/c4-code-syntax.test.ts` and `c4-render.test.ts`.
@@ -123,3 +123,23 @@ dependency-directed; Phase 0 is time-critical.
       invocation, not a hand-enumerated path list).
 - [ ] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
 - [ ] Re-derive the ADR ordinal against freshly-fetched origin refs immediately before merge.
+
+## Disposition at /work exit (2026-08-16)
+
+Checked boxes above were verified individually, not bulk-toggled. What did NOT land, and why —
+recorded here rather than left as silently-unchecked boxes:
+
+- **0.1 evidence-snapshot.md — CUT, per review finding R22.** The repo is PUBLIC, so a verbatim
+  dump of log rows is a permanent egress. The measurements live in ADR-187 and in the #7577
+  body as counts and byte totals, never as captured rows.
+- **1.5 / 1.7** — the "fresh host" arm and pointing `betterstack-assert-absence.sh` at the
+  shared helper. Deferred: both change the semantics of a second consumer, and the primary
+  detector is complete and mutation-proven without them. The `any-row` / `marker` split in
+  ADR-187 is the seam they land on.
+- **Phase 4 (volume reduction), Phase 5 (blast-radius sweep)** → **#7577**. Split at the
+  infra-apply seam on review recommendation R29.
+- **Phase 6.2 (PIR), 6.4-6.5 (C4), 6.6 (soak enrollment)** — not started.
+- **Phase 7 (restoration)** — blocked on an account-level billing action that no code change
+  can perform. Tracked on #7569 itself.
+- **R7's detector gap** → **#7578**. The AP-021 linter never saw the false message at all; a
+  bounded widening measures 30 hits across unrelated subsystems.
