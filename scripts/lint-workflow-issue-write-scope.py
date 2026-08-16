@@ -21,9 +21,18 @@ TOKEN-AWARE, deliberately. A workflow authenticating with a GitHub App installat
 PAT carries its own grants and does NOT need the workflow-scoped permission. Flagging those would
 be a false positive on the repo's preferred auth (hr-github-app-auth-not-pat), so a step is only
 in scope when its `GH_TOKEN`/`GITHUB_TOKEN` resolves to `secrets.GITHUB_TOKEN` or `github.token`.
-Measured while writing this: a naive scan reported 5 offenders, of which 4 were false —
-2 already held the scope and 2 make no tracker write at all. Only `inngest-watchdog-restart-dispatch`
-was real.
+Measured against `origin/main`'s 75 workflows: this lint reports exactly TWO violations —
+`inngest-watchdog-restart-dispatch.yml` and `registry-host-replace-dispatch.yml`, the latter being
+the motivating defect of the PR that added this file. Both are fixed in that same PR, so the
+`-live` arm registered in scripts/test-all.sh is green on merge.
+
+KNOWN LIMITS, stated because a permissions gate that overstates its reach is worse than none.
+This scans `.github/workflows/*.yml` only, so it does NOT see: a tracker write inside a script
+the workflow invokes (7 such scripts have 8 workflow call sites today — all currently hold the
+scope, by convention rather than by this gate), a composite action under `.github/actions/`, or
+a reusable workflow whose CALLER bounds the token. The write-form patterns are single-line, and
+`has_issue_write` is text-anywhere, so a grant on a DIFFERENT job than the writing one satisfies
+it. Widening any of these is safe to do incrementally; narrowing the claim is not optional.
 
 Exit 0 clean, 1 on a violation, 2 on a usage/parse error.
 """
@@ -33,8 +42,24 @@ from pathlib import Path
 
 # `gh issue <verb>` for verbs that WRITE. `gh issue view/list` are reads and need nothing.
 WRITE_CALL = re.compile(r"\bgh\s+issue\s+(comment|create|edit|close|reopen|lock|unlock|pin|unpin|transfer|delete)\b")
-# The REST/GraphQL equivalents, which bypass the `gh issue` surface entirely.
-API_WRITE = re.compile(r"\bgh\s+api\b[^\n]*(--method\s+(POST|PATCH|PUT|DELETE)|-X\s*(POST|PATCH|PUT|DELETE))[^\n]*\bissues\b")
+# The REST equivalent, which bypasses the `gh issue` surface entirely.
+#
+# SPLIT, not one regex with two floating `[^\n]*` around the alternation. That shape was O(n^3)
+# — measured 140s on a single 33KB line, a CI hang any PR could add — and it also silently
+# required the method to appear BEFORE the path, so the ordering this repo actually writes
+# (`gh api "repos/o/r/issues/$N/comments" -X POST`, see cla-evidence.yml) was never matched.
+# Scanning each `gh api` LINE for the three components independently is linear and order-free.
+GH_API_LINE = re.compile(r"^.*\bgh\s+api\b.*$", re.M)
+MUTATING_METHOD = re.compile(r"--method\s+(POST|PATCH|PUT|DELETE)\b|-X\s*(POST|PATCH|PUT|DELETE)\b", re.I)
+
+
+def has_api_issue_write(text: str) -> bool:
+    """A mutating `gh api` call against the issues path, in any argument order."""
+    return any(
+        "issues" in line and MUTATING_METHOD.search(line) for line in GH_API_LINE.findall(text)
+    )
+
+
 GRAPHQL_WRITE = re.compile(r"\bgh\s+api\s+graphql\b[^\n]*(addComment|createIssue|updateIssue)")
 
 WORKFLOW_TOKEN = re.compile(r"\$\{\{\s*(secrets\.GITHUB_TOKEN|github\.token)\s*\}\}")
@@ -81,6 +106,9 @@ def uses_workflow_token(text: str) -> bool:
 
 
 def main(argv: list[str]) -> int:
+    if len(argv) > 2:
+        print(f"lint-workflow-issue-write-scope: expected at most one path, got {len(argv) - 1}", file=sys.stderr)
+        return 2
     root = Path(argv[1]) if len(argv) > 1 else Path(".github/workflows")
     if not root.is_dir():
         print(f"lint-workflow-issue-write-scope: {root} is not a directory", file=sys.stderr)
@@ -88,13 +116,21 @@ def main(argv: list[str]) -> int:
 
     violations = []
     scanned = 0
-    for wf in sorted(root.glob("*.yml")) + sorted(root.glob("*.yaml")):
-        text = wf.read_text(encoding="utf8")
+    for wf in sorted(list(root.glob("*.yml")) + list(root.glob("*.yaml"))):
+        # A decode failure is a PARSE error (rc 2), not a violation (rc 1). Unguarded, it raised
+        # UnicodeDecodeError mid-loop: the traceback exited 1 — indistinguishable from a real
+        # finding — AND aborted before the violations accumulated so far were ever printed, so a
+        # genuine offender sorting earlier was silently swallowed.
+        try:
+            text = wf.read_text(encoding="utf8")
+        except (UnicodeDecodeError, OSError) as exc:
+            print(f"lint-workflow-issue-write-scope: cannot read {wf}: {exc}", file=sys.stderr)
+            return 2
         scanned += 1
         writes = []
         if WRITE_CALL.search(text):
             writes.append("gh issue <write-verb>")
-        if API_WRITE.search(text):
+        if has_api_issue_write(text):
             writes.append("gh api (issues, mutating method)")
         if GRAPHQL_WRITE.search(text):
             writes.append("gh api graphql (addComment/createIssue/updateIssue)")
@@ -107,9 +143,14 @@ def main(argv: list[str]) -> int:
         # A raw `/issues/{n}/` API call may be addressing a PULL REQUEST, which
         # `pull-requests: write` covers. `gh issue <verb>` cannot be — it only addresses issues —
         # so that form still requires `issues: write` even when pull-requests is granted.
-        api_only = writes == ["gh api (issues, mutating method)"] or writes == [
-            "gh api graphql (addComment/createIssue/updateIssue)"
-        ]
+        # Expressed as "no `gh issue` verb present", NOT as equality against each singleton list.
+        # The equality form silently failed on a file using BOTH API forms: `writes` is then a
+        # two-element list matching neither singleton, so `api_only` went False and a correct
+        # PR-commenting workflow declaring `pull-requests: write` was FLAGGED. GraphQL
+        # `addComment` takes a subjectId that is legitimately a PR, so both forms are PR-capable
+        # and both must be excused — and a false positive here is a recommendation to widen a
+        # token's scope, which is the one outcome this lint must never produce.
+        api_only = "gh issue <write-verb>" not in writes
         if api_only and has_pr_write(text):
             continue
         violations.append((wf, writes))

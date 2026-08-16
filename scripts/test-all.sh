@@ -1028,6 +1028,12 @@ if want_scripts; then
   # RUN, this one checks it CAN WRITE. The dispatcher's refusal artifact satisfied the first and
   # failed the second, silently, behind `|| true`.
   run_suite "scripts/lint-workflow-issue-write-scope" bash scripts/lint-workflow-issue-write-scope.test.sh
+  # THE -live ARM IS THE GATE. The suite above only proves the lint BEHAVES correctly against
+  # synthesized fixtures in $TMP; it never points the lint at `.github/workflows`, so without this
+  # line a workflow carrying the exact shipped defect merges green and the lint catches nothing.
+  # Every peer workflow lint is registered as this same pair (see lint-workflow-step-env-refs and
+  # lint-workflow-errexit-capture above) — this one was registered once, which made it decoration.
+  run_suite "scripts/lint-workflow-issue-write-scope-live" python3 scripts/lint-workflow-issue-write-scope.py
   # #7242 / ADR-166: no operator-facing CI message may name a cause the job did not measure.
   # Registered HERE rather than in the lint-bot-statuses job on purpose -- that job is
   # advisory (absent from required-checks.txt and the ruleset), and this defect has already

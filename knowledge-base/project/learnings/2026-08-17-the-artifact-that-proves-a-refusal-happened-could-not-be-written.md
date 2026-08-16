@@ -98,8 +98,23 @@ carefully as a deploy — not treated as the victory lap after the merge.
   **Prevention:** grep a new workflow's write calls against its `permissions:` block before
   merge — now mechanical.
 - **Sized P3's wait at 480s on an assumed ~8-minute release; it is ~31.** Recovery: 2100s, and
-  the job timeout 15 → 45 so the wait cannot be cancelled. **Prevention:** derive a wait budget
+  the job timeout 15 → 70 so the wait cannot be cancelled. **Prevention:** derive a wait budget
   from the measured duration of the thing being waited on, not from an estimate of it.
+- **Broke the rule in §2 in the same commit that wrote it.** The first pass set the timeout to
+  **45** while the two internal deadlines on the path sum to 2100 + 1500 = **60 minutes** — the
+  arithmetic was stated in the comment justifying the number and not performed on it. Caught in
+  review by six agents converging. **Prevention:** a rule written in a learning file is not
+  self-applying; run it against the diff that introduces it.
+- **Charged the P3 wait in `sleep`, not elapsed.** `waited + POLL_SECS` never counted the three
+  `gh run list` round-trips each iteration makes, so the loop's real duration was
+  `2100 + 315*T_gh` — minutes of untracked drift, growing exactly when the API is slow. That made
+  `timeout-minutes` underivable from `WAIT_SECS`, which is precisely the derivation this change
+  performed. **Prevention:** if a budget is used to size a timeout, it must measure wall clock.
+- **Shipped the lint without ever pointing it at the repository.** `test-all.sh` registered only
+  the fixture suite, so CI verified the lint *behaves* correctly and never that the tree is
+  clean; the workflow comment claiming it "now fails the build" was false. Every peer workflow
+  lint carries a second `-live` registration. **Prevention:** for any new gate, name the CI
+  invocation that runs it against production inputs — a green test of a gate is not a green gate.
 - **Nearly "fixed" a correct workflow.** The first lint draft flagged `pr-auto-close-scanner`,
   and the remedy would have been to widen its token. Recovery: taught the lint that PR comments
   ride the issues path under `pull-requests: write`. **Prevention:** before acting on a lint's

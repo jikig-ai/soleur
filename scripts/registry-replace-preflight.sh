@@ -189,23 +189,44 @@ fi
 # to remove (hr-never-label-any-step-as-manual-without).
 #
 # The hazard is a replace *mid-push*, not a replace six minutes after one. So poll until the
-# writers drain and refuse only if they do not. Bounded well inside the job's timeout-minutes: 15.
+# writers drain and refuse only if they do not.
 # 480 -> 2100 (35 min). MEASURED, not guessed: the first real refusal (run 31976455167,
 # 2026-08-16) waited the full 480s and refused anyway, because web-platform-release takes ~31
-# minutes end to end (21:57:21Z -> 22:28:56Z on the preceding run) and the release fires on the
-# SAME merge as this dispatcher. A budget shorter than a release can never clear the modal case
-# it exists for — it only converts an immediate refusal into a delayed one.
+# minutes end to end (run 31974987386: created 21:57:21Z, concluded 22:28:23Z = 31m02s) and the
+# release fires on the SAME merge as this dispatcher. A budget shorter than a release can never
+# clear the modal case it exists for — it only converts an immediate refusal into a delayed one.
+#
+# 2100 is NOT a ceiling on release duration, and the comment should not imply one. Over the last
+# 60 push-triggered releases: mean 1630s, max 5538s, and 18.3% exceeded 2100s. So this clears
+# roughly 82% of co-firing releases; the rest still refuse, now after 35 minutes instead of 8.
+# Raising it further trades runner-hold and API budget for that tail — the durable fix is to
+# serialise this dispatcher against the release rather than to poll for it.
 #
 # The job's own `timeout-minutes` must exceed this or the wait is truncated by a cancellation,
 # which is worse than a refusal because a cancelled job does not satisfy `failure()` and files
 # no artifact. Raised to 45 in registry-host-replace-dispatch.yml alongside this.
 WAIT_SECS="${REGISTRY_PREFLIGHT_WAIT_SECS:-2100}"
-POLL_SECS="${REGISTRY_PREFLIGHT_POLL_SECS:-20}"
+# 20 -> 60. The 480 -> 2100 raise multiplied this loop's API cost by 4.24x: at a 20s poll it is
+# 105 iterations x 3 workflows x 2 GETs = 636 requests, and the job's total (with the apply poll)
+# measured 988 against the 1,000/hour per-repo GITHUB_TOKEN ceiling — which `web-platform-release`
+# is spending from at the same time, because it co-fires on this very push. Exhausting it makes
+# `gh` return 403, which this loop's error arm reports as `verdict=REFUSED predicate=P3`: a rate
+# limit recorded as a delivery refusal, with the refusal comment itself failing on the same
+# exhausted token. 60s costs at most 40s of extra drain latency on a 2100s budget (1.9%) and cuts
+# the loop to 216 requests.
+POLL_SECS="${REGISTRY_PREFLIGHT_POLL_SECS:-60}"
+# CHARGE ELAPSED, NOT ACCUMULATED SLEEP. Every iteration also makes one `gh run list` per
+# zot-writing workflow, and those round-trips are wall clock the old `waited + POLL_SECS` never
+# charged. At 105 iterations x 3 workflows that is 315 unbilled round-trips, so the loop's real
+# duration was 2100 + 315*T_gh — minutes of drift that grows exactly when the API is slow, i.e.
+# during the incidents this workflow fires for. The job's `timeout-minutes` is derived from
+# WAIT_SECS, so a declared budget that is not the real ceiling makes that derivation unsound.
+_p3_started_at=$SECONDS
 waited=0
 while [[ "${in_progress:-0}" -gt 0 && "$waited" -lt "$WAIT_SECS" ]]; do
   echo "NOTE: P3 sees ${in_progress} in-flight zot-writing run(s); waiting for the push to drain (${waited}s/${WAIT_SECS}s)."
   sleep "$POLL_SECS"
-  waited=$(( waited + POLL_SECS ))
+  waited=$(( SECONDS - _p3_started_at ))
   in_progress=0
   for _wf in $ZOT_WRITER_WORKFLOWS; do
     _json="$("$RUNS_CMD" run list --workflow="$_wf" --limit 30 --json status 2>>"$p3_err")" || { runs_rc=$?; break; }
