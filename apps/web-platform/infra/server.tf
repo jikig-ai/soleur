@@ -1079,14 +1079,29 @@ resource "terraform_data" "journald_persistent" {
       # Render-sanity gate BEFORE we touch the live agent: a botched render (empty sed output,
       # unsubstituted sentinel, missing sink) must fail the apply while the RUNNING vector stays up —
       # a dead vector on web-1 darkens ALL host observability, a far bigger blast than the 3 probes.
-      # (A full `vector validate` is not used here: it would false-fail on the unset
-      # ${BETTERSTACK_LOGS_TOKEN} env interpolation — vector.service injects it via doppler run, this
-      # remote-exec has no such env. The committed vector.toml is already CI-validated TOML, and the
-      # only runtime transform is the @@HOST_NAME@@ string substitution.) #6438/#6548 review.
+      # #7539: a full `vector validate` IS used here now. The objection recorded above was that it
+      # would false-fail on the unset ${BETTERSTACK_LOGS_TOKEN} interpolation — injecting a
+      # placeholder for the duration of the call retires exactly that, and nothing else in the
+      # objection survives it. The four greps below check the render's SHAPE; only `validate` checks
+      # that Vector can actually parse and load the config, which is the property that matters
+      # because the reload is what can kill the agent.
       "test -s /opt/soleur/vector.toml",
       "! grep -q '@@HOST_NAME@@' /opt/soleur/vector.toml",
       "grep -q '\\[sinks.betterstack\\]' /opt/soleur/vector.toml",
       "grep -q 'web-zot-consumer-probe' /opt/soleur/vector.toml",
+      # #7539: validate the RENDER before the live file is touched. Invocation mirrors the
+      # canonical one in .github/workflows/validate-vector-config.yml (pinned vector 0.43.1) —
+      # BOTH interpolated vars must be injected or validate false-fails: vector.toml resolves
+      # ${BETTERSTACK_LOGS_TOKEN} for the sink AND ${SENTRY_USERID_PEPPER} for the pii_scrub HMAC.
+      # The values are throwaway placeholders only so the interpolation resolves; the real secrets
+      # reach vector.service via doppler run and are never written here.
+      "VECTOR_STRICT_ENV_VARS=false BETTERSTACK_LOGS_TOKEN=dummy SENTRY_USERID_PEPPER=dummy vector validate --no-environment --config-toml /opt/soleur/vector.toml",
+      # #7539: keep a restorable copy across the swap. Before this, the window between the
+      # overwrite and the detect-only liveness check below had NO backup — and this apply can be
+      # the first to reload the agent onto a config that has never executed on the host, which is
+      # precisely the case the render greps cannot cover. The resource's own comment above states
+      # the stakes: a dead vector on web-1 darkens ALL host observability.
+      "cp -a /etc/vector/vector.toml /etc/vector/vector.toml.prev",
       "install -m 0644 /opt/soleur/vector.toml /etc/vector/vector.toml",
       "rm -f /tmp/soleur-vector.toml.staged",
       "systemctl restart vector.service",
@@ -1101,7 +1116,12 @@ resource "terraform_data" "journald_persistent" {
       # the file the agent actually reads. Asserted on /etc (post-install, post-restart), not on
       # /opt — the staged copy proves the render, this proves the DELIVERY.
       "grep -q 'inngest-consumer-probe' /etc/vector/vector.toml",
+      # #7539: restore-and-reload if the agent did not come back, then fail loud. Previously this
+      # was detect-only: it failed the apply while leaving web-1 with a dead vector AND the
+      # previous config already destroyed.
+      "if ! systemctl is-active --quiet vector.service; then install -m 0644 /etc/vector/vector.toml.prev /etc/vector/vector.toml; systemctl restart vector.service || true; echo 'vector failed to start on the new config; previous config restored' >&2; exit 1; fi",
       "test \"$(systemctl is-active vector.service)\" = 'active'",
+      "rm -f /etc/vector/vector.toml.prev",
     ]
   }
 }

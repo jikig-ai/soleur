@@ -968,6 +968,37 @@ jobs:
               -target=terraform_data.git_data_probe_install \
               -target=terraform_data.inngest_consumer_probe_install
 
+      # --- #7539: the green-skip needs a CHANNEL, not a ::warning:: -------------------------
+      # When CI_SSH_ACCESS_TOKEN_ID is absent, `ssh_token_gate` sets ssh_apply_skip=true and the
+      # bridge, the post-bridge apply AND the ARM gate below all skip. The run is GREEN, nothing
+      # is delivered, no heartbeat arms, and the only artifact was a ::warning:: on a green run.
+      # This repo already ruled on that shape in scheduled-terraform-drift.yml: "A named
+      # ::error:: alone is not a channel." The operator is non-technical, so the notification
+      # names what did NOT land and the exact recovery command -- a bare "skipped" would
+      # reproduce the same problem in email form. Mirrors the notify-ops-email idiom used by
+      # infra-validation.yml, weakness-miner.yml and reusable-release.yml.
+      - name: Notify ops — SSH stage skipped, nothing delivered (#7539)
+        if: always() && steps.ssh_token_gate.outputs.ssh_apply_skip == 'true'
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: "Apply web-platform infra: SSH stage SKIPPED — infrastructure not delivered"
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+          body: |
+            <p>The <strong>Apply web-platform infra</strong> run completed <strong>green</strong>,
+            but its SSH stage did not run, so <strong>no SSH-provisioned resource reached
+            web-1</strong>. A green run here does not mean the change was delivered.</p>
+            <p><strong>Cause:</strong> <code>CI_SSH_ACCESS_TOKEN_ID</code> is absent from Doppler
+            <code>soleur/prd_terraform</code>, so the CF Tunnel SSH bridge, the post-bridge
+            terraform apply, and the Better Stack heartbeat ARM gate were all skipped.</p>
+            <p><strong>What did NOT land:</strong> every <code>terraform_data.*</code> resource in
+            the post-bridge target set — the host monitors, the probe installs, the journald and
+            Vector delivery.</p>
+            <p><strong>Recovery (re-runs the whole apply, including the SSH stage):</strong></p>
+            <pre>gh workflow run apply-web-platform-infra.yml --ref main \
+              -f apply_target=manual-rerun \
+              -f reason='deliver SSH stage after token sync'</pre>
+            <p>Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}</p>
+
       # --- #6438/#6548: measured-beat ARM gate (ADR-117 automated) ------------------------------
       # The brand-critical step (#6400 shape prevention): a heartbeat that ships GREEN-but-inert is
       # the very failure this bundle exists to catch, so acceptance is a REAL measured beat, never a
@@ -1159,8 +1190,18 @@ jobs:
           MERGE_SHA: ${{ github.sha }}
           REASON: ${{ inputs.reason }}
           JOB_STATUS: ${{ job.status }}
+          # #7539: a green run that SKIPPED the SSH stage delivered nothing. Surface
+          # it here -- `job.status` alone reads `success` in exactly that case.
+          SSH_SKIP: ${{ steps.ssh_token_gate.outputs.ssh_apply_skip }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          if [ "${SSH_SKIP}" = "true" ]; then
+            SSH_STAGE="SKIPPED — CI_SSH_ACCESS_TOKEN_ID absent in Doppler prd_terraform; no SSH-provisioned resource was applied"
+          elif [ -z "${SSH_SKIP}" ]; then
+            SSH_STAGE="not reached (the job ended before the token gate)"
+          else
+            SSH_STAGE="ran"
+          fi
           {
             echo "## Apply web-platform infra"
             echo ""
@@ -1168,6 +1209,7 @@ jobs:
             echo "**Merge SHA:** ${MERGE_SHA}"
             echo "**Reason (manual only):** ${REASON:-n/a}"
             echo "**Status:** ${JOB_STATUS}"
+            echo "**SSH stage:** ${SSH_STAGE}"
             echo "**Run:** ${RUN_URL}"
           } >> "$GITHUB_STEP_SUMMARY"
 
