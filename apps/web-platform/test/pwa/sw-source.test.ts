@@ -54,4 +54,60 @@ describe("public/sw.js invariants", () => {
     expect(SW).toContain('addEventListener("push"');
     expect(SW).toContain('addEventListener("notificationclick"');
   });
+
+  // --- CodeQL alert 203 (js/missing-origin-check) compensating control -----------------
+  //
+  // Alert 203 is dismissed as a false positive, NOT fixed. The reasoning:
+  // `ServiceWorker.postMessage()` accepts no `targetOrigin`, so there is nothing to tighten
+  // at the send site; only same-origin, in-scope clients can obtain a handle to this
+  // registration; and the handler's entire effect is `self.skipWaiting()` — precisely what
+  // the user's own Reload button does. No read, no write, no privilege change.
+  //
+  // Against that, adding an origin check is actively harmful: `event.origin` on
+  // `ExtendableMessageEvent` is not uniformly populated across browsers, so a naive
+  // predicate silently locks every user out of app updates with no feedback — a
+  // feedback-free update lockout is strictly worse than the non-threat it would prevent.
+  //
+  // The dismissal is only defensible while the handler stays this small, so THIS is the
+  // control that keeps it honest: if the handler ever gains a real capability, this fails
+  // and forces the origin-check conversation onto the diff where it can be reasoned about.
+  test("alert 203: the message handler's only effect is skipWaiting", () => {
+    const start = SW.indexOf('self.addEventListener("message"');
+    expect(start, "message handler not found — this control cannot run").toBeGreaterThan(-1);
+
+    // Bounded slice. An unbounded one would swallow the following handlers and this
+    // assertion would then be about the whole file, passing for the wrong reason.
+    const rest = SW.slice(start);
+    const end = rest.indexOf("\n});");
+    expect(end, "could not find the handler's closing brace").toBeGreaterThan(-1);
+    const handler = rest.slice(0, end);
+
+    // Sanity-check the slice really is the handler, so the negative-space assertions below
+    // cannot pass against an empty or mis-cut region.
+    expect(handler).toContain('event.data.type === "SKIP_WAITING"');
+    expect(handler).toContain("self.skipWaiting()");
+    expect(handler.length).toBeLessThan(400);
+
+    // Negative space: any of these would give the handler a capability worth an origin
+    // check, at which point the dismissal must be revisited rather than inherited.
+    for (const forbidden of [
+      "fetch(",
+      "caches.",
+      "postMessage(",
+      "indexedDB",
+      "importScripts",
+      "clients.openWindow",
+      "registration.showNotification",
+      "localStorage",
+      "eval(",
+    ]) {
+      expect(
+        handler.includes(forbidden),
+        `sw.js message handler now calls \`${forbidden}\`. CodeQL alert 203 ` +
+          "(js/missing-origin-check) was dismissed on the argument that this handler's only " +
+          "effect is skipWaiting. That argument no longer holds — re-open the alert and " +
+          "decide the origin check on this diff. See ADR-191.",
+      ).toBe(false);
+    }
+  });
 });

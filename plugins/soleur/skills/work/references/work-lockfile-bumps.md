@@ -1,4 +1,13 @@
-# Lockfile Bumps — Surgical Pattern for `bun.lock` Transitive Updates
+# Lockfile Bumps — Transitive Updates
+
+> **Does not apply to this repository as of ADR-191 (#7084).** Soleur carries exactly
+> one lockfile per directory (`package-lock.json`); `bun.lock` is deleted and
+> `scripts/lint-dual-lockfile.sh` fails if one reappears. For a transitive-only bump
+> here, run `npx --yes npm@11 update <pkg>` and validate with `npm ci --ignore-scripts`
+> — npm produces a clean transitive-only diff and no surgical editing is needed.
+>
+> The bun procedure below is retained for **tenant repositories**, which the
+> constraint-scaffold skill also targets and which may legitimately still be bun-based.
 
 When a Dependabot security alert (or equivalent) calls for a transitive-only
 bump in a directory that carries dual lockfiles (`package-lock.json` AND

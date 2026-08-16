@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   onCapture: null as ((e: unknown) => void) | null,
   onInstalled: null as (() => void) | null,
   postSkipWaiting: vi.fn(),
+  watchUpdateAcceptance: vi.fn(),
 }));
 
 vi.mock("@/lib/pwa/sw-update", () => ({
@@ -19,6 +20,11 @@ vi.mock("@/lib/pwa/sw-update", () => ({
   },
   postSkipWaiting: h.postSkipWaiting,
   reloadOnControllerChange: () => () => {},
+  // This factory replaces the module WHOLESALE, so every export the component imports
+  // has to appear here — omitting one throws "No <name> export is defined on the mock"
+  // at render time rather than failing a comparison.
+  watchUpdateAcceptance: h.watchUpdateAcceptance,
+  UPDATE_ACCEPT_TIMEOUT_MS: 10_000,
 }));
 
 vi.mock("@/lib/pwa/install", () => ({
@@ -40,6 +46,7 @@ beforeEach(() => {
   h.onCapture = null;
   h.onInstalled = null;
   h.postSkipWaiting.mockClear();
+  h.watchUpdateAcceptance.mockClear();
   sessionStorage.clear();
   Object.defineProperty(navigator, "serviceWorker", {
     value: { ready: Promise.resolve({}) },
@@ -82,6 +89,21 @@ describe("PwaControls", () => {
 
     fireEvent.click(reload);
     expect(h.postSkipWaiting).toHaveBeenCalledWith(worker);
+    // #7084: accepting an update must also arm the watchdog, and it must be armed BEFORE
+    // skipWaiting is posted — activation can complete fast enough that a listener attached
+    // afterwards misses controllerchange and reports a false timeout.
+    expect(h.watchUpdateAcceptance).toHaveBeenCalledTimes(1);
+    expect(h.watchUpdateAcceptance.mock.invocationCallOrder[0]).toBeLessThan(
+      h.postSkipWaiting.mock.invocationCallOrder[0],
+    );
+  });
+
+  test("no waiting worker → Reload path does not arm the watchdog", () => {
+    // Without this, a handleReload that armed unconditionally would still satisfy the
+    // assertions above while reporting a timeout for an update that was never accepted.
+    render(<PwaControls />);
+    expect(h.watchUpdateAcceptance).not.toHaveBeenCalled();
+    expect(h.postSkipWaiting).not.toHaveBeenCalled();
   });
 
   test("update pill is dismissible", async () => {

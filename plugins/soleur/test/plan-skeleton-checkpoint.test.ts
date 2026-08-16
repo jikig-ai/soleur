@@ -24,9 +24,10 @@
  * against fixtures whose correct answers differ.
  */
 import { describe, test, expect } from "bun:test";
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
+import { readFileSync, mkdtempSync, writeFileSync } from "node:fs";
+import { resolve, join } from "node:path";
+import { tmpdir } from "node:os";
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const SKILLS = resolve(REPO_ROOT, "plugins/soleur/skills");
@@ -97,7 +98,13 @@ function runPrescribedReader(skillPath: string, planFile: string): string {
   if (!snippet.includes("/^branch:/") || !snippet.includes("gsub(/^\"|\"$/,\"\")")) {
     throw new Error(`${skillPath}: prescribed reader no longer matches the executed form`);
   }
-  return execFileSync("bash", ["-c", script, "bash", planFile], { encoding: "utf8" }).trim();
+  // Written to a file and run as `bash <file> <planFile>` rather than through `bash -c`
+  // (CodeQL js/shell-command-injection-from-environment, alert 213). `$1` is still the plan
+  // file, so the load-bearing property is untouched: this still EXECUTES the skill's own
+  // prescribed reader, verbatim, rather than pattern-matching it.
+  const readerFile = join(mkdtempSync(join(tmpdir(), "plan-skeleton-reader-")), "reader.sh");
+  writeFileSync(readerFile, script);
+  return execFileSync("bash", [readerFile, planFile], { encoding: "utf8" }).trim();
 }
 
 describe("plan skeleton checkpoint — Phase 0.7 position", () => {
@@ -217,11 +224,15 @@ describe("plan skeleton checkpoint — the dropped cursor stays dropped", () => 
     // ADR-176 drops the cursor: completion is asserted from content. A second progress signal can
     // disagree with the file's own content, and every such disagreement resolved to a fail-open
     // arm. Re-adding one would reopen that whole class.
-    const hits = execFileSync(
-      "bash",
-      ["-c", `grep -rl 'pipeline_resume' "${SKILLS}" 2>/dev/null || true`],
-      { encoding: "utf8" },
-    ).trim();
+    // grep is invoked directly instead of through `bash -c` with SKILLS interpolated into
+    // the command string — that interpolation was the actual injection-shaped construct here.
+    // grep exits 1 on "no matches", which is the PASSING case, so the status is handled
+    // rather than allowed to throw.
+    const found = spawnSync("grep", ["-rl", "pipeline_resume", SKILLS], { encoding: "utf8" });
+    if (found.status !== 0 && found.status !== 1) {
+      throw new Error(`grep failed (status ${found.status}): ${found.stderr}`);
+    }
+    const hits = (found.stdout ?? "").trim();
     expect(hits).toBe("");
   });
 });

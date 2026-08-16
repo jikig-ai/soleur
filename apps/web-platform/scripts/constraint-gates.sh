@@ -36,7 +36,7 @@ CONFIG=".dependency-cruiser.cjs"
 BASELINE=".dependency-cruiser-known-violations.json"
 
 if [[ ! -x "$DEPCRUISE" ]]; then
-  echo "::error::constraint-gates: dependency-cruiser not found at ${APP_DIR}/${DEPCRUISE} — run 'bun install' (or 'npm ci'). To recover, re-run the constraint-scaffold skill (the agent fixes the import or runs --refresh-baseline); auto-recovery (fix-constraints-stage-a/b, ADR-074) opens a follow-up PR when the gate is auto-fixable." >&2
+  echo "::error::constraint-gates: dependency-cruiser not found at ${APP_DIR}/${DEPCRUISE} — run 'npm ci --ignore-scripts'. To recover, re-run the constraint-scaffold skill (the agent fixes the import or runs --refresh-baseline); auto-recovery (fix-constraints-stage-a/b, ADR-074) opens a follow-up PR when the gate is auto-fixable." >&2
   exit 1
 fi
 if [[ ! -f "$BASELINE" ]]; then
