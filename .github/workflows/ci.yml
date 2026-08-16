@@ -174,7 +174,7 @@ jobs:
         run: python3 scripts/lint-trap-tempfile-ownership.py
       - name: Ratchet the accepted class-b tempfile population
         run: python3 scripts/lint-trap-tempfile-ownership.py --check-highwater
-      - name: Lint orphan test suites (scripts/*.test.sh must be registered)
+      - name: Lint orphan test suites (every tracked *.test.sh must be registered)
         run: bash scripts/lint-orphan-test-suites.sh
       # #7002 actionlint hang guard. Asserts ONLY that the linter TERMINATES.
       #

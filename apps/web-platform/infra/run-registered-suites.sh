@@ -96,7 +96,67 @@
 # only be checked by a 25-minute full run would not, in practice, be checked.
 # INFRA_WF overrides the workflow path for the same reason (fixtures).
 #
-# Exit 0 only when every registered suite passes.
+# EXIT CONTRACT — THE SHAPE OF THE NON-ZERO IS LOAD-BEARING (#7429).
+#
+# Exit 0 only when every registered suite passes. Otherwise:
+#
+#   failed > 0  OR  UNACCOUNTED > 0   -> 1        an attributed verdict, or a suite that never
+#                                                 reported at all (see D3 below)
+#   killed > 0                        -> 128+N    the rc of a suite the kernel terminated,
+#                                                 propagated VERBATIM
+#   otherwise                         -> 0
+#
+# A suite terminated by a signal used to be flattened into "1" here, so scripts/test-all.sh's
+# run_suite saw an ordinary failure and rendered `[FAIL]` — a line that says an assertion broke
+# when none did. Propagating the observed 128+N lets run_suite's `suite_exit_class` render
+# `[KILLED]` and exits 3 at top level. `failed` DOMINATES `killed`: a run with a real assertion
+# failure exits 1 even if something was also terminated, mirroring ADR-177's top-level contract.
+#
+# OBSERVED RC ONLY. The rc propagated is one this runner READ from a suite's own `.meta` file.
+# It is never fabricated: "signal-shaped" is a claim about a number that was observed, and a
+# mimicked 137 would make `[KILLED]` a statement the runner cannot support.
+#
+# DETERMINISTIC MULTI-KILL RULE. With more than one terminated suite, two runs of the same
+# failure must report the same number. The rule: the rc of the LEXICOGRAPHICALLY-FIRST KILLED
+# SUITE KEY, where the key is the munged path (`${s//\//_}`) the child writes its `.meta` under,
+# compared under `LC_ALL=C`. Not the suite PATH — `_` is 0x5F and sorts after `.` and after
+# every uppercase letter, so the two orders diverge as soon as subdirectories are involved.
+# (The parent walks `"$SOLEUR_SUITE_LOGDIR"/*.meta`; because every entry shares a prefix and a
+# `.meta` suffix, sorting those paths under LC_ALL=C is the same order as sorting the keys.)
+# The rule is scoped to SUITE kills, where every `.meta` is written and the killed set is
+# stable. It does NOT extend to the shim-kill shape below, where the killed set itself varies.
+#
+# D3 — WHY AN UNACCOUNTED SUITE STILL EXITS 1, DELIBERATELY (#7429, AC9b).
+#
+# There are two distinct kill positions and only one of them lands in `killed`:
+#
+#   the SUITE dies      -> the shim survives, writes `.meta` with rc 128+N, prints `RED  <path>`
+#                          -> counted in `killed`, rc propagated. xargs sees 0.
+#   the SHIM dies       -> NO `.meta` is written and NEITHER `PASS` nor `RED` is printed
+#                          -> the suite lands in UNACCOUNTED. xargs exits 125 and STOPS
+#                             DISPATCHING, so an arbitrary number of never-started suites join
+#                             it. Measured on this box, and it is the likeliest OOM shape:
+#                             the shim is the process holding the suite.
+#
+# The xargs rc IS captured now (it used to be discarded by `| tee "$LOG"`) and it is REPORTED —
+# 125 is xargs' documented "a child was killed by a signal", against 123 for "a child exited
+# non-zero". So a reader is told a kill occurred rather than left to infer it. But the EXIT
+# stays 1, for three reasons, none of which is "nobody thought about it":
+#
+#   1. The signal is not in this runner's observation channel. `.meta` is the only place a
+#      concrete rc is ever read, and the killed shim wrote none. The signal number appears only
+#      inside xargs' own localized stderr string ("terminated by signal 15"), and pinning an
+#      exit contract to a translated message is worse than pinning it to nothing. Exiting a
+#      mimicked 137 would violate the observed-rc-only rule above.
+#   2. An unaccounted suite is UNMEASURED, not merely terminated. `[KILLED]`/exit-3 reports
+#      "coverage not obtained for a named suite"; here the runner cannot even enumerate which
+#      suites ran, because dispatch stopped. The accounting assertion below exists precisely to
+#      make that RED, and 1 is the code that says so.
+#   3. No reproducible rc exists for this shape anyway — which suites reach UNACCOUNTED varies
+#      run to run, so the determinism rule above cannot be honoured here.
+#
+# If a future change gives the parent a per-suite record written BEFORE the suite runs (a
+# dispatch marker, not a post-hoc `.meta`), this becomes decidable and should be revisited.
 
 set -uo pipefail
 
@@ -340,11 +400,83 @@ printf '%s\n' "${SUITES[@]}" \
     ' _ {} \
   | tee "$LOG"
 
+# READ IMMEDIATELY — PIPESTATUS is clobbered by the next command, and `$?` here is `tee`'s,
+# which is why the xargs rc was previously lost. Index 1 is xargs (0=printf, 1=xargs, 2=tee).
+# The only value with a defined meaning for this runner is 125: "a child was killed by a
+# signal" — the shim-kill shape D3 in the header is about. 123 means a child exited non-zero,
+# which the shim never does (its last command is an `echo`), so 123 here would itself be news.
+XARGS_RC=${PIPESTATUS[1]}
+
 # `^RED ` / `^PASS ` WITH the trailing space, matching every downstream consumer. Nothing else
 # reaches $LOG — it is fed only by the child summary lines above — but the two anchors used to
 # disagree, and a log line that merely began "RED" would have been counted.
 RED=$(grep -c '^RED ' "$LOG" || true)
 PASS=$(grep -c '^PASS ' "$LOG" || true)
+
+# ── Signal classification, IN THE PARENT (#7429) ──────────────────────────────
+#
+# INLINED, NOT SOURCED FROM scripts/lib/ — ADR-177 §A3. run-registered-suites.test.sh sandboxes
+# this file with a SINGLE-FILE `cp "$SUT" "$PRISTINE"` and then a python single-file MUTATOR.
+# ADR-177 §A3 makes this fatal to SHARE, but not for the reason first recorded: the binding
+# constraint is that run-registered-suites.test.sh drives a python SINGLE-FILE mutator over the
+# copy, so the two rows that mutate the classifier BODY (drop-rc128-guard, drop-name-guard)
+# could not be applied at all if it lived elsewhere. (The original reason — "a sourced lib
+# would be absent from the copy" — does not follow: the runner cd's to $ROOT first, so a
+# $ROOT-anchored source resolves fine. Corrected in ADR-187 at review; this copy is the
+# propagation of that correction.) This body is a BOOLEAN predicate and is NOT
+# byte-identical to the tri-state `suite_exit_class` in test-all.sh / run-all.sh -- the call
+# site here already counts every non-zero child, so it needs "is this rc the killed subset?",
+# not a three-way classification. `scripts/suite-exit-class-parity.test.sh` byte-compares only
+# the two tri-state copies and pins THIS one behaviourally across the rc domain. Do not "restore
+# parity" by copying the tri-state body in. Formerly this line said to keep it byte-identical to
+# .github/scripts/test/run-all.sh so the parity pin can compare them.
+#
+# TWO guards, and both are load-bearing:
+#   rc > 128      `kill -l 0` returns EXIT, so rc 128 would decode to a "signal" named EXIT.
+#   -n "$name"    `kill -l 32` / `kill -l 33` exit 0 with EMPTY output (glibc's internal
+#                 SIGCANCEL/SIGSETXID), and `kill -l 65`+ exits non-zero — both are rejected
+#                 here, which is also why no `<= 192` upper bound is carried: ADR-177 records
+#                 verbatim that the bound is NOT load-bearing and no test pins it.
+# rc 124 stays UNKILLED on purpose: it is GNU `timeout`'s own exit, an attributed verdict by a
+# named tool, and folding it in would lose exactly the attribution this change adds.
+suite_rc_is_signal_shaped() {
+  local rc="${1-}" name
+  [[ "$rc" =~ ^[0-9]+$ ]] || return 1
+  (( rc > 128 )) || return 1
+  name=$(kill -l $(( rc - 128 )) 2>/dev/null) || return 1
+  [[ -n "$name" ]]
+}
+
+# COUNTED HERE, IN THE PARENT — never inside dump_reds(). That function runs inside the
+# `{ … } 2>&1 | sed …` block below, which is a PIPELINE SUBSHELL: a counter incremented there
+# evaporates at the closing brace, and this repo has a 2026-07-27 learning about exactly that.
+#
+# LC_ALL=C on the glob, not just on the `comm` below: a bare glob's order is LC_COLLATE-
+# dependent, and the multi-kill rule in the header is only reproducible if the walk is pinned.
+#
+# `killed` is a SUBSET of `RED`, never a re-partition of it. The child already prints `RED` for
+# ANY non-zero rc including 137, so RED stays the total and `failed` is derived by subtraction.
+# Keeping RED as the superset is what leaves the `RED  <path>` emit shape, the retention block
+# and the summary line below untouched.
+killed=0
+kill_rc=0
+while IFS= read -r _m; do
+  [[ -s "$_m" ]] || continue
+  _rc=""
+  read -r _rc _ < "$_m" || true
+  suite_rc_is_signal_shaped "$_rc" || continue
+  killed=$(( killed + 1 ))
+  (( kill_rc == 0 )) && kill_rc="$_rc"
+done < <(shopt -s nullglob; printf '%s\n' "$SOLEUR_SUITE_LOGDIR"/*.meta | LC_ALL=C sort)
+
+failed=$(( RED - killed ))
+# Cannot happen — every signal-shaped rc is non-zero, so every killed suite is already a RED —
+# but if it ever did, a negative `failed` would silently disarm the `failed > 0` arm below and
+# turn a real failure green. Fail LOUD and fall back to the superset.
+if (( failed < 0 )); then
+  echo "INTERNAL: killed (${killed}) exceeds RED (${RED}) — counting every non-zero as failed." >&2
+  failed=$RED
+fi
 
 # ── Dump, from the PARENT, single-threaded, strictly after xargs and strictly before the
 # final summary block (so the monitor's `tail -30` still ends on the count).
@@ -443,8 +575,21 @@ emit_unaccounted_names() {
   if (( ${#UNACCOUNTED[@]} > 0 )); then
     echo ""
     echo "ACCOUNTING FAILURE: ${#SUITES[@]} suites were dispatched but only $((PASS + RED)) reported."
-    echo "The suite(s) named UNACCOUNTED above emitted neither PASS nor RED — their wrapping"
-    echo "shell died (OOM kill, timeout, or a crash) before it could report."
+    echo "The suite(s) named UNACCOUNTED above emitted neither PASS nor RED."
+    # MEASURED, not guessed. The previous wording asserted "their wrapping shell died (OOM kill,
+    # timeout, or a crash)" — three causes this runner had never measured, in the block a reader
+    # trusts most (AP-021/ADR-166). The xargs rc is now captured, so the cause claim can be
+    # sourced from an observation. See D3 in the header for why this still exits 1.
+    if (( XARGS_RC == 125 )); then
+      echo "MEASURED: xargs exited 125 — its documented code for \"a child was killed by a signal\","
+      echo "so one of the wrapping \`bash -c\` shims was TERMINATED. WHICH signal, and by whom, is"
+      echo "NOT measured here: the killed shim wrote no .meta, and the OOM killer is only the most"
+      echo "common sender, not an observed one. xargs also STOPS DISPATCHING at that point, so some"
+      echo "suites listed above may never have started rather than having died."
+    else
+      echo "MEASURED: xargs exited ${XARGS_RC}, not 125 — so no wrapping shim was reported killed by"
+      echo "a signal, and the reporting gap is NOT explained by a terminated wrapper. Unmeasured."
+    fi
     echo "Treat this as a FAILED run: those suites are unmeasured, not passing."
     # Their captured output still exists and is the only evidence of what they were doing when
     # they died — the failure mode most likely to have masked capacity evidence all along.
@@ -475,7 +620,32 @@ fi
 report_orphans
 
 echo ""
+# GATED ON killed > 0, and emitted BEFORE the summary, mirroring scripts/test-all.sh's own
+# breakdown-line precedent. Both halves matter: gated, so a clean run's bytes are unchanged;
+# before, so the monitor's `tail -30` still ENDS on the count line. Deliberately NOT shaped like
+# `=== N suites: …` — main-health-monitor.yml anchors that exact shape for test-all.sh's own
+# breakdown, and a second line matching it would corroborate a KILLED title from the wrong file.
+if (( killed > 0 )); then
+  echo "=== of the ${RED} counted \`failed\` below, ${killed} were TERMINATED BY A SIGNAL — unresolved, not assertion failures (propagating rc ${kill_rc} = SIG$(kill -l $(( kill_rc - 128 )) 2>/dev/null)) ==="
+fi
 # The count line carries all THREE numbers. Reporting only passed/failed is what let
 # "91 passed, 0 failed (of 93)" read as success while two suites had vanished.
+#
+# THE `failed` LABEL IS IMPRECISE WHEN A SUITE WAS TERMINATED, AND IS KEPT ANYWAY. `RED` counts
+# every non-zero child, so a killed suite is counted here among "failed". Correcting the label
+# — or adding a fourth number — would break both of this line's exact-string consumers
+# (run-registered-suites.test.sh T6v and plugins/soleur/test/main-health-monitor-workflow.test.sh),
+# so the precision is carried by the gated line above instead. Keep this line BYTE-IDENTICAL.
 echo "=== registered infra suites: ${PASS} passed, ${RED} failed, ${#UNACCOUNTED[@]} unaccounted (of ${#SUITES[@]}) ==="
-(( RED == 0 && ${#UNACCOUNTED[@]} == 0 ))
+
+# THE PROPAGATION (#7429). Precedence, and each arm's reason:
+#   failed > 0        an attributed assertion failure dominates everything, per ADR-177.
+#   UNACCOUNTED > 0   a suite that never reported is UNMEASURED — see D3 in the header for why
+#                     this stays 1 even when xargs measured a shim kill.
+#   killed > 0        propagate the observed 128+N so run_suite renders [KILLED], not [FAIL].
+if (( failed > 0 || ${#UNACCOUNTED[@]} > 0 )); then
+  exit 1
+elif (( killed > 0 )); then
+  exit "$kill_rc"
+fi
+exit 0

@@ -122,6 +122,12 @@ decision. The classification suite pins this with an executed row.
 
 ### Wrapper absorption — the class is only visible when the process `run_suite` forks is the one that dies
 
+> **SUPERSEDED IN PART — see the 2026-08-13 addendum (#7429), D1.** The `npm` row below is
+> **false**: measured end-to-end, `npm` propagates `128+N` (rc 137 under a SIGKILL of the
+> largest-RSS node in the real `test:ci` chain). The absorbing set is the **two shell wrappers**.
+> The paragraphs below are left intact as the record of how the error survived; do not act on
+> the `npm` claim or on the `exec node_modules/.bin/vitest run` remedy it motivates.
+
 Three in-repo wrappers swallow the signal shape:
 
 - `apps/web-platform/infra/run-registered-suites.sh` — returns a plain `1`;
@@ -209,3 +215,66 @@ would add a value nothing reads. The overload is documented rather than silent.
 **Consumer impact: none beyond what this ADR already recorded.** Every consumer still blocks on
 any non-zero. `grok-pre-push-gate.sh` reads `3` specifically; it does not read `4`, and a refusal
 cannot reach it because the gate does not set `SOLEUR_SUBAGENT`.
+
+## Addendum — 2026-08-13 (#7429): the npm absorption claim is falsified, and `3` stays top-level-only
+
+Append-only. The body above is left byte-for-byte intact, including the paragraphs this
+addendum corrects — a dated record is amended by appending, never by substitution, and the
+superseded text is the evidence for how the error survived review.
+
+### D1 — `npm` DOES propagate `128+N`. The wrapper-3 claim was wrong.
+
+§"Wrapper absorption" names the **webplat** registration "most consequentially" absorbing,
+"because `npm` does not propagate `128+N` for a signal-killed child", and concludes that an OOM
+kill of the vitest/node process "still surfaces as `[FAIL]`". Re-measured 2026-08-13 on
+npm 11.12.1 / node v22.22.2, against the **real** `test:ci` (`vitest run`), not a synthetic
+`package.json`:
+
+| shape | rc |
+| --- | --- |
+| `npm run test:ci` → SIGTERM to the spawned shell | 143 |
+| `npm run test:ci` → SIGINT | 130 |
+| `env VAR=x bash -c 'cd apps/web-platform && npm run test:ci …'` → SIGKILL | 137 |
+| **the real OOM shape** — full `bash → npm → sh → vitest node → 15 workers` chain, `SIGKILL` to the largest-RSS node (268 MB, the process a kernel OOM killer selects) | **137** |
+
+The last row is the one that matters: it is the exact scenario the body calls "the single most
+plausible instance of the class this ADR is about", executed end-to-end rather than argued. npm
+propagates the signal shape, so that case already renders `[KILLED]` and already exits 3.
+
+**Consequences of the correction.**
+
+- Wrapper 3 is struck. The absorbing set is **two** shell wrappers, not three.
+- **The `exec node_modules/.bin/vitest run` remedy the body proposes is unnecessary**, and so is
+  the drift pin it would have required (asserting `test:ci` stays exactly `vitest run`). Both are
+  withdrawn. This matters beyond bookkeeping: the remedy bypassed the package's declared entry
+  point, so the ADR was recommending a real cost to buy a property the toolchain already had.
+- The body's measured note that `env … bash -c` propagates (because `env` execs rather than
+  forks) is **re-confirmed** and stands.
+
+**How the error survived.** The claim is plausible, it is the kind of thing npm has done in
+older majors, and nothing in the original work executed it — the wrapper table was reasoned
+about rather than driven. It then propagated into #7429's body as that issue's headline finding.
+The re-probe cost under a minute. This is `cq-assert-anchor-not-bare-token`'s sibling for
+claims: a wrapper's behaviour is a measurement, not a deduction from its category.
+
+### D2 — `3` remains a TOP-LEVEL contract only (re-affirmed, not reversed)
+
+§"`3` is a TOP-LEVEL contract only" was re-opened deliberately under #7429 and is **kept**. A
+nested runner returning `3` into `run_suite` still classifies as a plain `FAIL`, because `3` is
+not signal-shaped and `run_suite` classifies on shape. The nested runners therefore propagate
+`128+N` — the shape — rather than adopting `3`.
+
+Adopting `3` as a nested contract was rejected because it would make a nested runner's
+"a suite under me was terminated" indistinguishable from a suite that itself chose `exit 3` for
+unrelated reasons, re-introducing at the nested layer precisely the deliberate-vs-signal
+ambiguity §"Classification rule" exists to resolve. ADR-187 records the resulting constraint:
+classification is on **observed rc only**.
+
+### D3 — the A6 status correction
+
+The body's A6 deferral rested on a trigger that had **already fired** when it was written:
+`xargs` *is* an absorbing layer, and `.meta` *is* the sideband. The tripwire now lives at the
+shim (`xargs` reports **125** for a real signal versus **123** for a deliberate exit), which is
+the only position where the two are distinguishable at all — at the fixture-suite position they
+are byte-identical at every chokepoint (`rc=$?` 137, `xargs` 0). A canary placed there could
+never have fired, which is the same vacuity class this ADR's taxonomy exists to expose.

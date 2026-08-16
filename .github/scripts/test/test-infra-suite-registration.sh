@@ -186,7 +186,7 @@ done < <(printf '%s\n' "$JOB_CODE" | grep -oE \
 # cheaper to debug than 90 identical errors.
 if (( ${#REGISTERED[@]} < 50 )); then
   err "extracted only ${#REGISTERED[@]} single-line \`run: bash\` step(s) from the \`${JOB}\` job"
-  err "  -- expected ~87. The extraction is broken, not the workflow. Fix the pattern."
+  err "  -- expected ~98. The extraction is broken, not the workflow. Fix the pattern."
   exit 1
 fi
 

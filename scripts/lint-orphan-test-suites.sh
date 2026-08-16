@@ -1,82 +1,481 @@
 #!/usr/bin/env bash
-# lint-orphan-test-suites.sh -- fail when a scripts/*.test.sh, or a required nested RUNNER,
-# is never run by test-all.sh.
+# lint-orphan-test-suites.sh -- fail when a tracked *.test.sh ANYWHERE in the repo is run by
+# no runner, or when a required nested RUNNER is de-registered from test-all.sh.
 #
-# WHY (#6734): test-all.sh's glob covers `scripts/lib/*.test.sh` but NOT `scripts/*.test.sh`,
-# which must be registered by hand. Three suites had silently never run in any CI job.
-# That is worse than having no suite at all: a test added to an orphan file gates nothing
-# while looking like coverage. This PR's own #6734 work added a residue harness to exactly
-# such a file, so the gap was load-bearing at the moment it was found.
+# WHY (#6734, widened by #7402): a test added to a file nothing executes gates nothing while
+# looking exactly like coverage -- strictly worse than having no test at all, because the
+# green summary is read as evidence. #6734 found three such suites under scripts/; #7402
+# found that the same check, scoped to `scripts/*.test.sh`, was blind to the other ~270
+# tracked suites and that 9 of them ran in ZERO runners.
 #
-# Deliberately ~20 lines with NO companion .test.sh: a 150-line suite testing a grep
-# would reproduce the orphan problem in miniature. AC3 mutation-proves it inline instead
-# (delete a run_suite line -> this must exit non-zero).
+# THE PRODUCER IS `git ls-files '*.test.sh'` -- the whole repo, not a directory list. A walk
+# scoped to any directory answers a question about that directory; the property this file
+# asserts is about the REPOSITORY, and every directory-scoped version of it has eventually
+# been outgrown by a suite added one directory over. Scope note (deliberate, not an
+# oversight): the producer is keyed on the `*.test.sh` SUFFIX, so the `test-<name>.sh`
+# convention used under tests/scripts/ and tests/commands/ is outside it. tests/commands/ has
+# its own dedicated loop at the bottom of this file. tests/scripts/ (45 `test-*.sh`) is
+# currently registered in full by explicit `run_suite` lines, but NOTHING guards that
+# membership -- an earlier revision of this comment claimed it was "floored by
+# .github/scripts/test/run-all.sh's own MIN_SUITES", which is false: that runner globs
+# `$DIR/test-*.sh` with DIR=.github/scripts/test and never looks at tests/scripts/. Recorded
+# as a known gap rather than left as a false assurance; closing it needs a second producer
+# keyed on the `test-*.sh` convention.
 #
-# Exclusions carry a REASON and a tracking issue. An exclusion without both is an error --
-# the point is that skipping is a recorded decision, not a silent absorption.
+# THE COVERED SET IS A UNION OF SIX REGISTRATION SURFACES, enumerated below at their point of
+# use. Six, not one: a linter that only knew test-all.sh would report all 98 infra suites as
+# orphans, and one that only knew the single-line `run: bash …` workflow shape would report
+# workspaces-luks-loopback.test.sh as an orphan when it demonstrably runs in CI under
+# `sudo bash` inside a multi-line `run: |` block.
+#
+# THIS FILE HAS A COMPANION SUITE (scripts/lint-orphan-test-suites.test.sh) and needs one.
+# The earlier header claimed the opposite -- "deliberately ~20 lines with NO companion
+# .test.sh" -- and that stopped being true long before it was corrected: the file was 396
+# lines with four independent checks, and scripts/lint-workflows.sh cited it as precedent for
+# going untested. A guard whose failure mode is "silently stops detecting" cannot be proved by
+# reading it; the companion suite mutates each of the six surfaces individually and asserts
+# this file reddens.
+#
+# Exclusions carry a REASON and a tracking issue, and are keyed on the REPO-RELATIVE PATH.
+# The point is that skipping is a recorded decision, not a silent absorption.
 
 set -euo pipefail
 
+# LC_ALL=C, EXPORTED, and pinned again on every sort/comm below.
+#
+# `comm` requires both inputs sorted in the SAME collation it uses to compare them. Under a
+# UTF-8 locale glibc's sort ignores punctuation at the primary level, so `a-b/c.test.sh` and
+# `a/b-c.test.sh` order differently than byte order -- and `comm` then reads its own input as
+# unsorted and emits an undefined diff. Measured on this repo: the default locale produced 48
+# phantom orphans, every one of them a registered suite. The export covers the whole script
+# (including the child processes it invokes); the per-command pins survive someone deleting
+# the export, which is the edit most likely to happen.
+export LC_ALL=C
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNNER="$REPO_ROOT/scripts/test-all.sh"
+WORKFLOW_DIR="$REPO_ROOT/.github/workflows"
+INFRA_VALIDATION_WF="$WORKFLOW_DIR/infra-validation.yml"
+INFRA_RUNNER="$REPO_ROOT/apps/web-platform/infra/run-registered-suites.sh"
 
-# name | reason (must cite a tracking issue)
+# repo-relative path | reason (must cite a tracking issue)
+#
+# KEYED ON THE PATH, NOT THE BASENAME (#7402). A basename key was safe while this file walked
+# one flat directory and is unsafe repo-wide: measured, `argv-ceiling.test.sh` exists under
+# both drain-prs/test/ and skill-security-scan/test/, and `parity.test.sh` under both
+# constraint-scaffold/test/ and linear-fetch/test/. A basename exclusion would silently
+# absorb a suite nobody decided to skip -- the exact silent absorption this mechanism exists
+# to prevent, introduced by the mechanism itself.
 #
 # EMPTY IS THE GOAL STATE. lint-agents-enforcement-tags.test.sh was excluded
 # here as a pre-existing failure (7/9) tracked in #6751; #7172 fixed the
 # defect, registered both suites in test-all.sh, and removed the exclusion.
 # Leaving a stale exclusion behind would re-hide the next regression in the
 # very suite that was just repaired.
+#
+# CROSS-CHECKED against the other exclusion list over an overlapping domain,
+# .github/scripts/test/test-infra-suite-registration.sh's EXCLUSIONS (#7402 step 8). That list
+# carries exactly one entry, workspaces-luks-loopback.test.sh, excluded from
+# run-registered-suites.sh's single-line DERIVATION because it needs root and exits 2
+# unprivileged (#7076). That is a statement about local EXECUTION, not about registration:
+# this file asks only "does anything run it?", surface 6 answers yes, and it is therefore
+# COVERED here and must not be excluded. The two lists are disjoint today and one being empty
+# is what keeps them from disagreeing.
 EXCLUSIONS=()
 
 fails=0
-# Minimum-cardinality guard, mirroring the tests/commands one below. Without it, a glob that matches
-# nothing (a renamed directory, a changed suffix convention) reports a clean pass having certified
-# zero suites -- the asymmetry was the finding: the newer loop had this guard and the original,
-# which covers far more files, did not.
-scripts_seen=0
-for f in "$REPO_ROOT"/scripts/*.test.sh; do
-  [[ -e "$f" ]] || continue
-  base=$(basename "$f")
-  scripts_seen=$((scripts_seen + 1))
 
-  excluded=""
-  # `${a[@]+"${a[@]}"}` so an EMPTY exclusion list does not trip `set -u` on
-  # bash < 4.4 (macOS still ships 3.2). Empty is now the expected state.
-  for e in ${EXCLUSIONS[@]+"${EXCLUSIONS[@]}"}; do
-    [[ "${e%%|*}" == "$base" ]] && excluded="${e#*|}"
-  done
-  if [[ -n "$excluded" ]]; then
-    # Fail-closed on a reasonless or issue-less exclusion.
-    if [[ -z "${excluded// /}" ]] || ! grep -qE '#[0-9]+' <<< "$excluded"; then
-      echo "ERROR: exclusion for $base has no reason or no tracking issue" >&2
-      fails=$((fails + 1))
-    else
-      echo "note: $base excluded -- $excluded"
-    fi
-    continue
-  fi
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
 
-  # Anchor on the run_suite CALL SHAPE, not a bare filename: the bare name also appears
-  # in comments and in this script's own EXCLUSIONS, either of which would let an
-  # unregistered suite pass vacuously (cq-assert-anchor-not-bare-token).
-  if ! grep -qE "^[[:space:]]*run_suite .*[\"' ]scripts/${base}([\"' ]|$)" "$RUNNER"; then
-    echo "ERROR: scripts/${base} is never run by test-all.sh -- add a run_suite line, or add a reasoned exclusion citing a tracking issue" >&2
-    fails=$((fails + 1))
-  fi
-done
+# --- The producer -----------------------------------------------------------------------
+# One line, deliberately: it is the single point where this guard could silently start
+# certifying a subset. Its companion suite mutates exactly this line two ways -- to enumerate
+# zero (the vacuity direction) and to enumerate the pre-#7402 `scripts/*.test.sh` subset (the
+# plausible-subset direction, which clears a zero-check and prints a clean report).
+git -C "$REPO_ROOT" ls-files '*.test.sh' | LC_ALL=C sort -u > "$WORK/tracked"
+tracked_n=$(wc -l < "$WORK/tracked" | tr -d ' ')
 
-if (( scripts_seen < 1 )); then
-  echo "ERROR: scripts/*.test.sh matched zero suites -- the glob is broken, so this check certified nothing" >&2
+# PRODUCER FLOOR. A zero-check alone cannot see the failure that matters most here: narrowing
+# the producer back to one directory leaves it enumerating 70 real files, passes every
+# per-surface zero-check, finds no orphans among them, and prints `orphan test suites: none`
+# -- byte-identical to a healthy repo. Only a count floor separates "certified the repo" from
+# "certified a corner of it".
+#
+# ABSOLUTE and hand-ratcheted, like REQUIRED_RUNNERS' floor below and for the same stated
+# reason: there is no second producer in the tree to derive it from, and deriving it from
+# `git ls-files` would be deriving the floor from its own subject.
+#
+# 320 against 342 measured 2026-08-13. It was 250, and that was too loose: measured at review,
+# narrowing the producer to `-- apps plugins scripts` drops all 43 `.claude/**` suites, still
+# enumerates 299, clears a 250 floor, leaves every per-surface zero-check non-zero (s3/s4/s6
+# all live under `apps/`), and prints `0 orphaned` over a repo it stopped walking. Slack in a
+# floor is not safety margin, it is narrowing budget. Keep just enough for a real cleanup.
+MIN_TRACKED_SUITES=320
+if (( tracked_n < MIN_TRACKED_SUITES )); then
+  echo "ERROR: the *.test.sh walk enumerated ${tracked_n} tracked suites, below the floor of ${MIN_TRACKED_SUITES} -- the producer is narrowed or broken, so every check below certified a SUBSET of the repo while reporting on all of it." >&2
   fails=$((fails + 1))
 fi
 
+# A COUNT cannot see a narrowing that stays above the floor, and it cannot see a SUBSTITUTION
+# at all -- the defect class this very PR exists to close, one level up. So assert the SET of
+# top-level roots the producer reached, not how many files it returned. A narrowing that drops
+# an entire root reds here even when the count survives, and it names the root.
+#
+# Derived from the producer's own output and compared against an explicit expected set: the
+# expected side is the decision point, so adding a root is a deliberate edit rather than a
+# silent widening.
+# Measured, not guessed: the first cut of this line listed `tests` from memory and the check
+# reddened on its own first run -- `tests/` uses a `test-*.sh` convention this producer does
+# not match. Re-derive with:
+#   git ls-files '*.test.sh' | awk -F/ 'NF{print $1}' | LC_ALL=C sort -u
+EXPECTED_SUITE_ROOTS=".claude apps plugins scripts"
+actual_roots="$(awk -F/ 'NF{print $1}' "$WORK/tracked" | LC_ALL=C sort -u | tr '\n' ' ')"
+actual_roots="${actual_roots% }"
+# Non-vacuity: an empty derivation must never be compared as a legitimate set. (It was, on the
+# first cut of this check -- the producer's output is a FILE, not an array, so `${tracked[@]}`
+# expanded to nothing. It reddened rather than passing, which is the only reason it was cheap.)
+if [[ -z "$actual_roots" ]]; then
+  echo "ERROR: the root derivation produced an EMPTY set from ${WORK}/tracked -- the extraction broke, so the comparison below would be meaningless." >&2
+  fails=$((fails + 1))
+fi
+# SUPERSET, not equality — and the asymmetry is the whole point.
+#
+# The hazard this closes is a root DISAPPEARING: the producer silently stops walking it and
+# every "covered" verdict below excludes it while the report still says 0 orphaned. So every
+# expected root must be PRESENT.
+#
+# A root APPEARING is a different and much weaker concern, and it is already covered: a suite
+# under a brand-new root matches no surface, so the orphan walk itself reports it by name (rows
+# M2 and M16 in the companion suite create suites under `tools/` and `docs/deep/nested/` and
+# assert exactly that). Demanding equality here would therefore red on a legitimate new
+# directory AND break those two fixtures — which is precisely what it did on its first run,
+# caught by M16 rather than by review.
+_missing_roots=""
+for _r in $EXPECTED_SUITE_ROOTS; do
+  case " $actual_roots " in
+    *" $_r "*) ;;
+    *) _missing_roots="${_missing_roots}${_r} " ;;
+  esac
+done
+if [[ -n "$_missing_roots" ]]; then
+  echo "ERROR: the *.test.sh walk reached roots [${actual_roots}] but did NOT reach [${_missing_roots% }] -- the producer stopped walking a root it is expected to cover, so every 'covered' verdict below silently excludes it. A count floor cannot see this: dropping .claude/** leaves 299 suites, above any floor loose enough not to red on a real cleanup." >&2
+  fails=$((fails + 1))
+fi
+
+# --- Surface 1: explicit `run_suite … bash <path>` lines in test-all.sh --------------------
+# Extracted from COMMAND position -- the token after `bash` -- never from anywhere on the
+# line. run_suite's first argument is a free-form display LABEL, so a pattern that accepts the
+# path anywhere after `run_suite ` is satisfied by the label alone. Measured at #7103:
+# `run_suite "…/run-registered-suites.sh" bash -c true` left this linter reporting
+# `orphan test suites: none` while the runner it named executed nothing.
+sed -nE 's/^[[:space:]]*run_suite[[:space:]].*[[:space:]]bash[[:space:]]+"?([A-Za-z0-9._\/-]+\.test\.sh)"?([[:space:]].*)?$/\1/p' \
+  "$RUNNER" | LC_ALL=C sort -u > "$WORK/raw1"
+
+# --- Surface 2: the auto-discovery globs, ASKED OF THE RUNNER ------------------------------
+# `test-all.sh --print-suite-globs` is a contract, not a parse. This file must NEVER carry its
+# own copy of the patterns: with a copy, deleting a pattern from the runner stops those suites
+# running while this linter, reading its stale duplicate, still reports them covered and exits
+# 0. The guard would be blind to the one mutation it exists to catch, by construction.
+#
+# Fail CLOSED if the flag is gone: a runner that does not answer prints nothing on stdout and
+# exits 2 (the flag reads as an unknown TEST_GROUP), so an unchecked capture would silently
+# yield an empty pattern set and turn every glob-registered suite into a phantom orphan.
+# SOLEUR_DISABLE_SESSION_STATE=1 is LOAD-BEARING, not hygiene. This is a read-only metadata
+# query and must never serialize on anything — but the handler it targets sits before
+# `tc_acquire` by placement alone, and placement is exactly what a future edit can change.
+#
+# Measured 2026-08-13: with the handler moved (or mutated) past `tc_acquire`, this invocation
+# falls through into the advisory lock. When the linter runs as a registered suite INSIDE
+# `test-all.sh`, the lock is held by its own parent, so the child can never acquire it — it
+# waits the full `TC_LOCK_TIMEOUT` (900 s) and only then proceeds. Observed with four such
+# children parked in `do_wait` at once, adding tens of minutes to a local shard.
+#
+# CI never sees it (`tc_acquire` returns early when `CI` is set), so this can only ever punish
+# the local gate — which is the gate people stop running when it gets slow.
+#
+# With the kill switch set, a moved handler still fails CLOSED and fast: the flag reads as an
+# unknown TEST_GROUP, the runner exits 2, and the `globs_rc != 0` branch below fires. The switch
+# removes the 900 s wait, never the detection.
+# `env -u TEST_GROUP` is the OTHER half, and it is the one that matters most.
+#
+# The fallback this whole block relies on is "an unhandled `--print-suite-globs` reads as an
+# unknown TEST_GROUP, so the runner exits 2 and we fail closed". That sentence is only true when
+# TEST_GROUP is UNSET. This linter runs as a registered suite inside `test-all.sh`, which exports
+# `TEST_GROUP=<shard>` — so the child inherits a *valid* group, the unknown-group branch is never
+# reached, and instead of exiting 2 the mutant RUNS THE ENTIRE SHARD. That shard contains this
+# suite, which mutates and re-invokes again: unbounded recursion.
+#
+# Measured 2026-08-13, and it is not subtle:
+#   TEST_GROUP unset    -> 17 rows, 65 passed, 10 s
+#   TEST_GROUP=scripts  -> still running at 120 s, three nested copies of the suite alive at once
+#
+# It reproduces in CI, which sets TEST_GROUP per shard, and in the documented local exit gate
+# (`TEST_GROUP=scripts bash scripts/test-all.sh`). It did NOT reproduce standalone, which is
+# exactly why it survived: the suite's own green run leaves TEST_GROUP unset.
+#
+# Clearing it makes the fail-closed path unconditional — independent of whatever the caller's
+# environment happens to hold, which is the only form of "fail closed" worth the name.
+globs_rc=0
+env -u TEST_GROUP SOLEUR_DISABLE_SESSION_STATE=1 bash "$RUNNER" --print-suite-globs > "$WORK/globs" 2>/dev/null || globs_rc=$?
+globs_n=$(wc -l < "$WORK/globs" | tr -d ' ')
+if (( globs_rc != 0 )) || (( globs_n < 1 )); then
+  echo "ERROR: 'bash scripts/test-all.sh --print-suite-globs' exited ${globs_rc} and printed ${globs_n} pattern(s) -- this linter derives the auto-discovery surface from that flag, so without it every glob-registered suite would be reported as an orphan. Restore the flag rather than re-copying the patterns here." >&2
+  fails=$((fails + 1))
+fi
+: > "$WORK/raw2"
+while IFS= read -r pattern; do
+  [[ -n "$pattern" ]] || continue
+  # Expanded from REPO_ROOT so the patterns mean what they mean in the runner, which `cd`s
+  # nowhere and expands them against the repo root it is invoked from.
+  ( cd "$REPO_ROOT" && for f in $pattern; do [[ -f "$f" ]] && printf '%s\n' "$f"; done ) >> "$WORK/raw2" || true
+done < "$WORK/globs"
+LC_ALL=C sort -u -o "$WORK/raw2" "$WORK/raw2"
+
+# --- Surface 3: the infra suites, DELEGATED to run-registered-suites.sh --------------------
+# Three authorities already derive over this one domain (this file, run-registered-suites.sh's
+# own report_orphans, and .github/scripts/test/test-infra-suite-registration.sh) and they
+# disagreed on method. Re-grepping infra-validation.yml here would make a fourth. `--list`
+# prints the runner's OWN derivation, so a change to that extraction cannot silently
+# desynchronise from what this file believes runs (#7402 step 8).
+#
+# INFRA_ORPHAN_LIST=/dev/null suppresses the runner's own orphan section, for two reasons.
+# (1) That section is a naive bare-basename `git grep` -- the technique this file rejects, and
+# the one that reports a suite covered because a COMMENT names it; consuming its output would
+# re-import the method through the back door. (2) It prints its members with the same
+# two-space indent as the derived list and costs 10.6 s of `git grep` per invocation, against
+# 0.03 s without it.
+infra_rc=0
+( cd "$REPO_ROOT" && INFRA_ORPHAN_LIST=/dev/null bash "$INFRA_RUNNER" --list ) > "$WORK/infra_list" 2>/dev/null || infra_rc=$?
+# The header states the count the runner derived. Assert the parse recovered exactly that
+# many: a header saying 98 over a body this file read as 3 is a broken parse, and a broken
+# parse here manufactures 95 phantom orphans that a reader would rightly ignore -- after which
+# the check is ignored permanently.
+infra_declared=$(sed -nE 's/^Derived ([0-9]+) registered infra suite.*/\1/p' "$WORK/infra_list" | head -1)
+sed -nE 's/^  ([A-Za-z0-9._\/-]+\.test\.sh)$/\1/p' "$WORK/infra_list" | LC_ALL=C sort -u > "$WORK/raw3"
+infra_parsed=$(wc -l < "$WORK/raw3" | tr -d ' ')
+# SURFACE-3 FLOOR. The declared-vs-parsed check below compares two numbers that move TOGETHER:
+# narrow run-registered-suites.sh's derivation and both shrink, they still agree, and surface 5
+# (defined as "all workflow bash matches MINUS surface 3's output") grows by exactly the paths
+# surface 3 dropped -- so s3+s5 is unchanged, covered is unchanged, orphans stay 0. Surface 3 is
+# the only surface backed by a runner that actually EXECUTES its list, so its silent shrinkage is
+# the most consequential blind spot in the union. Absolute, hand-ratcheted, and deliberately not
+# derived from raw3 (that would be the floor deriving itself from its own subject).
+MIN_INFRA_DERIVED=90
+if (( infra_parsed < MIN_INFRA_DERIVED )); then
+  echo "ERROR: surface 3 derived only ${infra_parsed} infra suites, below the floor of ${MIN_INFRA_DERIVED} -- run-registered-suites.sh's derivation has narrowed. This is invisible to the declared-vs-parsed check (both numbers shrink together) and to the totals (surface 5's subtraction absorbs exactly the dropped paths), so nothing else in this file can see it." >&2
+  fails=$((fails + 1))
+fi
+if (( infra_rc != 0 )) || [[ -z "$infra_declared" ]] || [[ "$infra_declared" != "$infra_parsed" ]]; then
+  echo "ERROR: 'run-registered-suites.sh --list' exited ${infra_rc} and declared '${infra_declared:-<no header>}' derived suites while this parse recovered ${infra_parsed} -- the infra registration surface is not readable, so every infra suite would be judged against an incomplete covered set." >&2
+  fails=$((fails + 1))
+fi
+
+# --- Surface 4: the per-app `main.test.sh` hook in infra-validation.yml ---------------------
+# One workflow step (`if [[ -f main.test.sh ]]; then bash main.test.sh; fi`, run with
+# `working-directory: ${{ matrix.directory }}`) registers a suite in EVERY infra root at once,
+# without naming any of them. Nothing else in this file can see that: the path on the step is
+# relative, so surfaces 5 and 6 extract `main.test.sh`, which matches no tracked path.
+#
+# The matrix directories are computed at run time from the diff, so they cannot be read out of
+# the YAML. What CAN be read is the producer's two infra-root families, stated in the
+# `Find changed infra directories` step: `apps/*/infra` and `infra/<name>`. Presence of the
+# hook step is the condition; the two families are the domain.
+: > "$WORK/raw4"
+if grep -qE '^[[:space:]]*bash[[:space:]]+main\.test\.sh[[:space:]]*$' "$INFRA_VALIDATION_WF"; then
+  git -C "$REPO_ROOT" ls-files 'apps/*/infra/main.test.sh' 'infra/*/main.test.sh' \
+    | LC_ALL=C sort -u > "$WORK/raw4"
+fi
+
+# --- Surface 5: single-line `run: … bash <path>.test.sh` in any workflow --------------------
+# Every workflow, INCLUDING infra-validation.yml, minus whatever surface 3 already derived.
+# Subtracting surface 3's actual output (rather than excluding the file, or excluding a path
+# prefix) is what keeps the two surfaces disjoint AND complete: the seven suites under
+# apps/web-platform/infra/<subdir>/ carry correct single-line steps but are structurally
+# underivable by run-registered-suites.sh, whose extraction class excludes `/` (#7076,
+# pinned as KNOWN_UNDERIVABLE in .github/scripts/test/test-infra-suite-registration.sh).
+# Excluding the file would have dropped all seven and reported them as orphans.
+#
+# Disjointness is DESIRABLE but NOT achieved, and the difference is asserted rather than
+# claimed. Measured 2026-08-13: five suites are legitimately covered twice -- registered both
+# locally (test-all.sh) and in a CI workflow, which is belt-and-braces, not a defect. They are
+# listed in DOUBLE_COVERED_ACK below and the check fails on any SIXTH.
+#
+# An earlier revision of this comment asserted disjointness flatly while the live tree carried
+# violations of it, and enforced the invariant only inside the companion suite's synthetic
+# battery -- so the guarantee existed in prose and nowhere else. That matters because the next
+# author reads it when deciding whether a mutation row proves anything. The residual hazard is
+# real and now visible: the covered set is a UNION, so two surfaces matching one suite
+# make a single-surface de-registration a silent no-op, and any mutation row aimed at it
+# passes green while the suite stops running.
+grep -hEo 'run:[[:space:]]+(sudo[[:space:]]+)?bash[[:space:]]+[A-Za-z0-9._/-]+\.test\.sh' \
+  "$WORKFLOW_DIR"/*.yml 2>/dev/null | sed -E 's/.*bash[[:space:]]+//' \
+  | LC_ALL=C sort -u > "$WORK/raw5all" || true
+LC_ALL=C comm -23 "$WORK/raw5all" "$WORK/raw3" > "$WORK/raw5"
+
+# --- Surface 6: `bash <path>.test.sh` inside a multi-line `run: |` block ---------------------
+# The line carries no `run:` -- it is a body line of a block scalar -- and it may carry a
+# prefix. Today's only member is `sudo bash apps/web-platform/infra/workspaces-luks-loopback.test.sh`
+# at infra-validation.yml, which needs root for losetup/luksFormat.
+#
+# THIS SURFACE IS WHY ZERO ORPHANS IS SATISFIABLE. Without it that suite is reported as an
+# orphan while it demonstrably runs in CI, and the only ways to make the report green would
+# have been to excuse it with an exclusion (a false statement about a suite that runs) or to
+# stop believing the report. Disjoint from 3 and 5 by construction: both of those require
+# `run:` on the same line.
+grep -hEo '^[[:space:]]*(sudo[[:space:]]+)?bash[[:space:]]+[A-Za-z0-9._/-]+\.test\.sh' \
+  "$WORKFLOW_DIR"/*.yml 2>/dev/null | sed -E 's/.*bash[[:space:]]+//' \
+  | LC_ALL=C sort -u > "$WORK/raw6" || true
+
+# --- Assembly ------------------------------------------------------------------------------
+# Each surface is intersected with the producer before it counts. A surface entry that matches
+# no tracked file (`main.test.sh` from surface 4's own hook body, a path deleted but still
+# referenced) is not coverage of anything, and letting it inflate a surface's count would let
+# a dead reference satisfy that surface's zero-check.
+: > "$WORK/covered"
+surface_summary=""
+for i in 1 2 3 4 5 6; do
+  LC_ALL=C comm -12 "$WORK/raw${i}" "$WORK/tracked" > "$WORK/s${i}"
+  n=$(wc -l < "$WORK/s${i}" | tr -d ' ')
+  surface_summary="${surface_summary}s${i}=${n} "
+  cat "$WORK/s${i}" >> "$WORK/covered"
+  # PER-SURFACE ZERO-CHECK, not a ratcheting per-surface count. A count floor per surface has
+  # to be hand-maintained on every commit that adds a suite, and -- the reason it is refused
+  # here -- a count is structurally blind to a RENAME, which holds the total constant while
+  # the covered set changes underneath it. This repo has shipped that exact defect. What a
+  # zero-check catches is the one failure the producer floor cannot: a single surface silently
+  # going dark (a renamed workflow, a changed step shape) while the other five keep the total
+  # plausible and the report clean.
+  if (( n < 1 )); then
+    # A surface with exactly ONE member (surface 6 today: workspaces-luks-loopback.test.sh)
+    # makes this check double as a tripwire on that single suite, and the two causes need
+    # opposite remedies -- re-derive a broken extractor, versus drop a surface whose last
+    # member legitimately went away. Naming both is the difference between a 30-second fix and
+    # an investigation into an extractor that was never broken.
+    echo "ERROR: registration surface ${i} matched ZERO tracked suites. Either it silently stopped matching (so every suite that depended on it is now judged against a covered set that no longer contains it -- re-derive the extractor), OR its last remaining member was legitimately deleted or relocated (in which case retire the surface deliberately, in the same commit). Check which before fixing: a surface that had exactly one member cannot tell these apart on its own." >&2
+    fails=$((fails + 1))
+  fi
+done
+LC_ALL=C sort -u -o "$WORK/covered" "$WORK/covered"
+LC_ALL=C comm -23 "$WORK/tracked" "$WORK/covered" > "$WORK/orphans"
+
+# TEST SEAM. The companion suite's single-surface precondition needs to know WHICH surfaces
+# cover a given suite before it mutates one of them away: on a union, de-registering a
+# double-covered suite is a no-op and the row it belongs to proves nothing while passing.
+if [[ "${SOLEUR_LINT_ORPHAN_DUMP_SURFACES:-}" == "1" ]]; then
+  for i in 1 2 3 4 5 6; do
+    while IFS= read -r p; do [[ -n "$p" ]] && echo "SURFACE${i} ${p}"; done < "$WORK/s${i}"
+  done
+fi
+
+# --- Disjointness, asserted against the LIVE repo ---------------------------------------------
+#
+# The comment at the surface-5 subtraction states that disjointness "is not cosmetic": the
+# covered set is a UNION, so two surfaces matching one suite make a single-surface
+# de-registration a silent no-op. That was asserted in prose and enforced ONLY inside the
+# companion suite's synthetic battery (`require_single_surface`), which cannot see the real
+# repo -- so the live tree carried three violations while the file claimed the invariant.
+# A written guarantee the code does not provide is worse than no guarantee: it is the thing a
+# future author will rely on when deciding a mutation row proves something.
+#
+# ACK list, not a threshold. Double coverage is occasionally legitimate (a suite genuinely
+# registered two ways), and a count bound would silently absorb the next one. Each entry is a
+# recorded decision in the same shape as EXCLUSIONS: path | reason citing an issue.
+DOUBLE_COVERED_ACK=(
+  "scripts/lib/frontmatter-strip.test.sh|explicit run_suite AND the scripts/lib glob -- belt-and-braces local registration, #7402"
+  "scripts/marketplace-manifest-validate.test.sh|explicit run_suite AND a ci.yml step -- registered locally and in CI on purpose, #7402"
+  "scripts/verify-marketplace-ruleset.test.sh|explicit run_suite AND a ci.yml step -- registered locally and in CI on purpose, #7402"
+  "plugins/soleur/test/gdpr-gate-self-test.test.sh|test-all glob AND its own gdpr-gate-self-test.yml workflow, #7402"
+  "apps/web-platform/scripts/sandbox-canary-regression.test.sh|test-all glob AND an infra-validation.yml step, #7402"
+)
+: > "$WORK/dupes"
+cat "$WORK"/s1 "$WORK"/s2 "$WORK"/s3 "$WORK"/s4 "$WORK"/s5 "$WORK"/s6 2>/dev/null \
+  | grep -v '^$' | LC_ALL=C sort | LC_ALL=C uniq -d > "$WORK/dupes" || true
+while IFS= read -r dup; do
+  [[ -n "$dup" ]] || continue
+  acked=0
+  for a in ${DOUBLE_COVERED_ACK[@]+"${DOUBLE_COVERED_ACK[@]}"}; do
+    [[ "${a%%|*}" == "$dup" ]] && { acked=1; break; }
+  done
+  if (( acked == 0 )); then
+    surfaces=""
+    for i in 1 2 3 4 5 6; do grep -qxF "$dup" "$WORK/s${i}" 2>/dev/null && surfaces="${surfaces}${i} "; done
+    echo "ERROR: '${dup}' is covered by MORE THAN ONE registration surface (${surfaces% }). The covered set is a union, so de-registering it from any single surface is a silent no-op -- it keeps reporting as covered while one of the things that ran it has stopped. Either narrow a surface so they are disjoint, or add it to DOUBLE_COVERED_ACK with a reason and a tracking issue." >&2
+    fails=$((fails + 1))
+  fi
+done < "$WORK/dupes"
+
+# --- Exclusions -----------------------------------------------------------------------------
+# Validated BEFORE they are applied, and fail-closed in three independent directions. Each is
+# a way for an exclusion to look disciplined while masking something nobody decided to mask.
+: > "$WORK/excluded"
+for e in ${EXCLUSIONS[@]+"${EXCLUSIONS[@]}"}; do
+  key="${e%%|*}"
+  reason="${e#*|}"
+
+  # (a) No reason, or no tracking issue.
+  if [[ -z "${reason// /}" ]] || ! grep -qE '#[0-9]+' <<< "$reason"; then
+    echo "ERROR: exclusion for '${key}' has no reason or no tracking issue -- an exclusion is a recorded decision with an owner, not a silent absorption." >&2
+    fails=$((fails + 1))
+    continue
+  fi
+
+  # (b) The key matches zero, or two or more, tracked files. Zero is a STALE key: it masks
+  # nothing, reads as discipline, and survives the deletion or rename of the suite it was
+  # written for. Two or more is an AMBIGUOUS key -- the basename-collision failure this
+  # mechanism was re-keyed to prevent, which would excuse a suite nobody named.
+  # rc captured, never bare: under this file's `set -euo pipefail` a git failure (a key git
+  # rejects as a pathspec -- `../x`, a bad magic prefix) makes the pipeline non-zero and the
+  # BARE assignment aborts the whole linter with git's fatal on stderr and no message of our
+  # own -- before REQUIRED_RUNNERS, the relevance-array block and the tests/commands loop ever
+  # run. A malformed exclusion key must fail THIS key loudly, not silently truncate the run.
+  _ls_rc=0
+  match_n=$(git -C "$REPO_ROOT" ls-files -- "$key" 2>/dev/null | wc -l | tr -d ' ') || _ls_rc=$?
+  if (( _ls_rc != 0 )); then
+    echo "ERROR: exclusion key '${key}' was rejected by git as a pathspec (rc ${_ls_rc}) -- fix the key; the walk below is otherwise unaffected." >&2
+    fails=$((fails + 1))
+    continue
+  fi
+  if [[ "$match_n" != "1" ]]; then
+    echo "ERROR: exclusion key '${key}' matches ${match_n} tracked files, expected exactly 1 -- a key matching none is stale and masks nothing while looking deliberate; a key matching several excuses suites nobody named. Use the repo-relative path." >&2
+    fails=$((fails + 1))
+    continue
+  fi
+
+  # (c) The excluded suite is actually covered. An exclusion for a suite that RUNS is a false
+  # statement in the file that exists to make coverage claims true, and it survives the fix
+  # that made it unnecessary. (Caught while writing this: an intermediate revision carried
+  # workspaces-luks-loopback.test.sh as an exclusion when surface 6 covers it.)
+  if LC_ALL=C grep -qxF -- "$key" "$WORK/covered"; then
+    echo "ERROR: exclusion for '${key}' is stale -- that suite IS covered by a registration surface, so the exclusion states something false and would mask a future regression in a suite that runs. Delete the entry." >&2
+    fails=$((fails + 1))
+    continue
+  fi
+
+  echo "note: ${key} excluded -- ${reason}"
+  printf '%s\n' "$key" >> "$WORK/excluded"
+done
+LC_ALL=C sort -u -o "$WORK/excluded" "$WORK/excluded"
+
+LC_ALL=C comm -23 "$WORK/orphans" "$WORK/excluded" > "$WORK/orphans_final"
+orphan_n=$(wc -l < "$WORK/orphans_final" | tr -d ' ')
+while IFS= read -r p; do
+  [[ -n "$p" ]] || continue
+  echo "ERROR: ${p} is never run by any runner -- it is registered in no test-all.sh line, no auto-discovery glob and no workflow step, so every assertion in it gates nothing. Add a run_suite line (or a workflow step), or add a reasoned exclusion citing a tracking issue." >&2
+  fails=$((fails + 1))
+done < "$WORK/orphans_final"
+
+# Printed on every run, pass or fail. The counts are the evidence that the walk happened: a
+# report with no numbers cannot be distinguished from a report over nothing, which is the
+# failure the floors above exist to make impossible.
+echo "walked ${tracked_n} tracked *.test.sh against 6 registration surfaces (${surface_summary}) -- $(wc -l < "$WORK/covered" | tr -d ' ') covered, ${orphan_n} orphaned"
+
 # --- Required nested runners (#7103 R5(a)) ---------------------------------------------
-# The loop above answers "is every scripts/*.test.sh registered?". This answers the inverse
+# The walk above answers "is every tracked *.test.sh registered?". This answers the inverse
 # question one level up: "is every nested RUNNER still registered?"
 #
 # The two failures are not symmetric. An unregistered suite leaves an orphan FILE that the
-# glob above can find. A de-registered runner leaves NOTHING to find -- the runner still
+# walk above can find. A de-registered runner leaves NOTHING to find -- the runner still
 # exists, still passes when invoked by hand, and still gates in CI; it has simply stopped
 # being reachable from the local gate, taking its entire suite set with it. That is the
 # #6730/#6969 shape exactly: a green summary read as evidence for suites the run never
@@ -359,13 +758,16 @@ else
 fi
 
 # --- tests/commands/*.sh (#7442) -------------------------------------------------------
-# test-all.sh registers this directory by explicit run_suite lines with NO glob, and the
-# scripts/*.test.sh loop above cannot see it, so the tombstone did not cover it. A suite
-# added here without a run_suite line gates nothing while looking like coverage — the same
-# class this file exists to catch, in a directory it could not reach.
+# test-all.sh registers this directory by explicit run_suite lines with NO glob, and the walk
+# above cannot see it, so the tombstone did not cover it. A suite added here without a
+# run_suite line gates nothing while looking like coverage — the same class this file exists
+# to catch, in a directory it could not reach.
 #
-# The naming convention differs (`test-<name>.sh`, not `<name>.test.sh`), which is exactly
-# why the existing glob misses it rather than merely under-matching.
+# STILL NEEDED AFTER THE WHOLE-REPO WIDENING (#7402), and this is the reason: the naming
+# convention here is `test-<name>.sh`, not `<name>.test.sh`, so the producer's suffix does not
+# match it. Widening the walk to every directory does not widen it to every naming convention.
+# The same gap covers tests/scripts/, which is floored instead by
+# .github/scripts/test/run-all.sh's own MIN_SUITES.
 cmd_seen=0
 for f in "$REPO_ROOT"/tests/commands/*.sh; do
   [[ -e "$f" ]] || continue

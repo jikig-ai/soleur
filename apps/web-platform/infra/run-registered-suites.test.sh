@@ -485,6 +485,202 @@ else
   no "T7c: the unaccounted suite is not named"
 fi
 
+# ─────────────────────────────────────────────────────────────────────────────
+# T10 — SIGNAL PROPAGATION (#7429). Guard 2's rows.
+#
+# The property: when a derived suite is TERMINATED BY A SIGNAL and nothing failed an assertion,
+# this runner exits the observed 128+N so scripts/test-all.sh's run_suite renders `[KILLED]`
+# instead of `[FAIL]`. The end-to-end half of that claim — that run_suite really does render
+# [KILLED] and test-all.sh really does exit 3 — lives in
+# scripts/test-all-killed-classification.test.sh, which already owns the sandbox harness that
+# drives the real run_suite. What is asserted HERE is this runner's own exit contract.
+#
+# WHY `exit 137` AND NOT A REAL `kill -KILL $$` IN THESE SUITE-POSITION FIXTURES. Measured:
+# at the SUITE position the two are byte-identical at every chokepoint — the shim's `rc=$?` is
+# 137 either way, the `.meta` bytes are identical, and xargs returns 0 in both cases, because
+# `rc=$?` captures the value before xargs can observe anything. A "real signal" fixture here
+# would assert nothing a deliberate exit does not. The one position where the distinction IS
+# observable is the SHIM, and that is T10g below.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── T10a/T10b/T10c: a terminated suite, nothing failed → the observed rc propagates ──
+FIXDIR7="$TMP/fix10a"; mkdir -p "$FIXDIR7"
+printf '#!/usr/bin/env bash\nexit 137\n' > "$FIXDIR7/aaa-killed.test.sh"
+chmod +x "$FIXDIR7"/*.test.sh
+mkfixture_wf "$FIXDIR7/wf.yml" "$FIXDIR7/aaa-killed.test.sh"
+rc10a=0
+OUT10A="$(INFRA_WF="$FIXDIR7/wf.yml" SOLEUR_INFRA_DIR="$FIXDIR7" timeout 60 bash "$SUT" 2>&1)" || rc10a=$?
+if (( rc10a == 137 )); then
+  ok "T10a: a killed-only run exits the observed 137, not a flattened 1"
+else
+  no "T10a: a killed-only run exited ${rc10a}, expected 137 — run_suite would render [FAIL], not [KILLED]"
+fi
+
+# The summary line is the one this runner may NOT change: two exact-string consumers read it
+# (T6v here, and plugins/soleur/test/main-health-monitor-workflow.test.sh:554,571). A killed
+# suite is still counted among `failed` there — deliberately imprecise, because correcting the
+# LABEL would break both consumers. The precision is carried by the gated line T10c asserts.
+if printf '%s\n' "$OUT10A" | grep -qF '=== registered infra suites: 0 passed, 1 failed, 0 unaccounted (of 1) ==='; then
+  ok "T10b: the summary line keeps its exact byte shape on a killed run (killed still counted in \`failed\`)"
+else
+  no "T10b: the summary line changed on a killed run — its two exact-string consumers would break"
+fi
+
+if printf '%s\n' "$OUT10A" | grep -qF '1 were TERMINATED BY A SIGNAL' \
+   && printf '%s\n' "$OUT10A" | grep -qF 'propagating rc 137 = SIGKILL'; then
+  ok "T10c: the gated breakdown line reports the killed count and the propagated rc, decoded"
+else
+  no "T10c: no killed breakdown line — the summary's \`failed\` label is then the only reading available"
+fi
+
+# ── T10d: failure DOMINATES termination (M2 / AC3) ────────────────────────────
+FIXDIR8="$TMP/fix10d"; mkdir -p "$FIXDIR8"
+printf '#!/usr/bin/env bash\nexit 137\n' > "$FIXDIR8/aaa-killed.test.sh"
+printf '#!/usr/bin/env bash\nexit 1\n'   > "$FIXDIR8/bbb-fail.test.sh"
+chmod +x "$FIXDIR8"/*.test.sh
+mkfixture_wf "$FIXDIR8/wf.yml" "$FIXDIR8/aaa-killed.test.sh" "$FIXDIR8/bbb-fail.test.sh"
+rc10d=0
+OUT10D="$(INFRA_WF="$FIXDIR8/wf.yml" SOLEUR_INFRA_DIR="$FIXDIR8" timeout 60 bash "$SUT" 2>&1)" || rc10d=$?
+# TWO assertions, deliberately. `rc == 1` alone is VACUOUS w.r.t. the property this arm
+# names: the runner exits 1 for `failed>0 || UNACCOUNTED>0`, so a classifier that detects NO
+# kills at all puts both suites in `failed` and exits 1 too. Measured 2026-08-13 — neutering
+# the classifier (`suite_rc_is_signal_shaped … || continue` -> `continue`) left this arm
+# reporting `[ok]` while T10a/T10c/T10h all correctly reddened. An exit code is a BUCKET
+# several outcomes share; asserting it proves precedence only once detection is pinned
+# separately. Its sibling T10e already did this correctly, which is what made the gap legible.
+if (( rc10d == 1 )); then
+  ok "T10d: one killed + one failed exits 1 — an attributed failure dominates (ADR-177's contract)"
+else
+  no "T10d: a mixed run exited ${rc10d}, expected 1 — a real assertion failure was reported as a termination"
+fi
+# The DETECTION half: the kill must still have been seen and reported, not silently absorbed
+# into `failed`. Without this, "failure dominates" is indistinguishable from "kills are
+# invisible" — and the second is the defect this whole PR exists to remove.
+if printf '%s\n' "$OUT10D" | grep -qF '1 were TERMINATED BY A SIGNAL'; then
+  ok "T10d: the dominated kill is still DETECTED and reported (breakdown names 1 terminated suite)"
+else
+  no "T10d: exit 1 was reached with NO killed breakdown — the termination was absorbed into the failure count, so the runner cannot distinguish a starved suite from a regression"
+fi
+
+# ── T10e: rc 124 is an ATTRIBUTED verdict, never a kill (M3 / AC4) ────────────
+FIXDIR9="$TMP/fix10e"; mkdir -p "$FIXDIR9"
+printf '#!/usr/bin/env bash\nexit 124\n' > "$FIXDIR9/aaa-timeout.test.sh"
+chmod +x "$FIXDIR9"/*.test.sh
+mkfixture_wf "$FIXDIR9/wf.yml" "$FIXDIR9/aaa-timeout.test.sh"
+rc10e=0
+OUT10E="$(INFRA_WF="$FIXDIR9/wf.yml" SOLEUR_INFRA_DIR="$FIXDIR9" timeout 60 bash "$SUT" 2>&1)" || rc10e=$?
+if (( rc10e == 1 )) && ! printf '%s\n' "$OUT10E" | grep -qF 'TERMINATED BY A SIGNAL'; then
+  ok "T10e: rc 124 (GNU timeout's own exit) stays a plain failure — exit 1, no killed line"
+else
+  no "T10e: rc 124 exited ${rc10e} / claimed a termination — timeout's attributed verdict was folded into the unattributed bucket"
+fi
+
+# ── T10f: BOTH classifier guards, at their boundaries ─────────────────────────
+# 128: `kill -l 0` succeeds and returns EXIT, so without `rc > 128` this decodes as a signal
+#      named EXIT. 160: `kill -l 32` succeeds with EMPTY output (glibc's internal SIGCANCEL),
+#      so without `-n "$name"` the runner would propagate 160 and claim a nameless signal.
+FIXDIR10="$TMP/fix10f"; mkdir -p "$FIXDIR10"
+printf '#!/usr/bin/env bash\nexit 128\n' > "$FIXDIR10/aaa-b128.test.sh"
+chmod +x "$FIXDIR10"/*.test.sh
+mkfixture_wf "$FIXDIR10/wf.yml" "$FIXDIR10/aaa-b128.test.sh"
+rc10f1=0
+OUT10F1="$(INFRA_WF="$FIXDIR10/wf.yml" SOLEUR_INFRA_DIR="$FIXDIR10" timeout 60 bash "$SUT" 2>&1)" || rc10f1=$?
+if (( rc10f1 == 1 )) && ! printf '%s\n' "$OUT10F1" | grep -qF 'TERMINATED BY A SIGNAL'; then
+  ok "T10f-128: GUARD rc>128 — rc 128 stays a failure (\`kill -l 0\` returns EXIT)"
+else
+  no "T10f-128: rc 128 exited ${rc10f1} / claimed a termination — the \`rc > 128\` guard is gone"
+fi
+
+FIXDIR11="$TMP/fix10f2"; mkdir -p "$FIXDIR11"
+printf '#!/usr/bin/env bash\nexit 160\n' > "$FIXDIR11/aaa-b160.test.sh"
+chmod +x "$FIXDIR11"/*.test.sh
+mkfixture_wf "$FIXDIR11/wf.yml" "$FIXDIR11/aaa-b160.test.sh"
+rc10f2=0
+OUT10F2="$(INFRA_WF="$FIXDIR11/wf.yml" SOLEUR_INFRA_DIR="$FIXDIR11" timeout 60 bash "$SUT" 2>&1)" || rc10f2=$?
+if (( rc10f2 == 1 )) && ! printf '%s\n' "$OUT10F2" | grep -qF 'TERMINATED BY A SIGNAL'; then
+  ok "T10f-160: GUARD -n name — rc 160 stays a failure (\`kill -l 32\` succeeds with EMPTY output)"
+else
+  no "T10f-160: rc 160 exited ${rc10f2} / claimed a termination — the non-empty-name guard is gone"
+fi
+
+# ── T10g: THE SHIM POSITION — the A6 tripwire, AC5 and D3, in one arm ─────────
+# This is the ONLY position where "a real signal" is observable at all: the suite's rc is
+# captured by `rc=$?` before xargs sees it, but a signal that kills the WRAPPING `bash -c`
+# makes xargs exit 125 ("a child was killed by a signal") against 123 for a deliberate
+# non-zero exit. If a future layer ever absorbs or re-spells that — a trap, a wrapper, a
+# different dispatcher — this assertion is what says so, rather than a comment nobody re-reads.
+#
+# SIGTERM, not SIGKILL, and the trailing sleep is not decoration: nothing can trap SIGKILL, so
+# a KILL canary only catches rc-DISCARDING layers, which a deliberate exit already catches; and
+# the kill is asynchronous, so without the sleep the fixture can reach EOF and exit 0 first.
+# 1s rather than the house 5s for the reason recorded at T7: the sleeping fixture holds the
+# xargs pipe open, and this file runs once per mutation child.
+#
+# It also carries AC5: a killed suite AND an unaccounted one must still exit 1. An unaccounted
+# suite is UNMEASURED — the runner cannot even say which suites ran, because xargs stops
+# dispatching — so it is a failure, not a termination. See D3 in the runner's header.
+FIXDIR12="$TMP/fix10g"; mkdir -p "$FIXDIR12"
+printf '#!/usr/bin/env bash\nexit 137\n'                      > "$FIXDIR12/aaa-killed.test.sh"
+printf '#!/usr/bin/env bash\nkill -TERM $PPID\nsleep 1\n'     > "$FIXDIR12/zzz-shimkill.test.sh"
+chmod +x "$FIXDIR12"/*.test.sh
+mkfixture_wf "$FIXDIR12/wf.yml" "$FIXDIR12/aaa-killed.test.sh" "$FIXDIR12/zzz-shimkill.test.sh"
+rc10g=0
+OUT10G="$(INFRA_WF="$FIXDIR12/wf.yml" SOLEUR_INFRA_DIR="$FIXDIR12" timeout 60 bash "$SUT" 2>&1)" || rc10g=$?
+if printf '%s\n' "$OUT10G" | grep -qF 'MEASURED: xargs exited 125'; then
+  ok "T10g-125: a signal at the SHIM is MEASURED — xargs' 125 reaches the report (the A6 tripwire)"
+else
+  no "T10g-125: the runner did not report xargs' 125 — a layer between the shim and here is swallowing the signal, or the rc is no longer captured"
+fi
+if (( rc10g == 1 )); then
+  ok "T10g-exit: killed + UNACCOUNTED exits 1 DELIBERATELY — an unmeasured suite is a failure, not a termination (D3)"
+else
+  no "T10g-exit: exited ${rc10g}, expected 1 — an unaccounted suite must never be reported as merely terminated"
+fi
+
+# ── T10h: the multi-kill selection rule, asserted by CONTENT (M6 / AC24) ──────
+# Three terminated suites whose lexicographic order and completion order are deliberately
+# OPPOSED, with three different signals:
+#
+#   aaa  SIGTERM 143  completes SECOND   <- lexicographically first: the rule's answer
+#   bbb  SIGKILL 137  completes FIRST    <- what "first completed" would return
+#   ccc  SIGVTALRM 154 completes LAST    <- what "last completed" or "max rc" would return
+#
+# So a single assertion (`rc == 143`) kills first-completed, last-completed, max-rc and
+# min-rc at once. Repeating a two-suite fixture and comparing runs would only assert
+# STABILITY — which a "first completed" implementation satisfies on a quiet box and violates
+# under contention, i.e. exactly when the answer matters.
+#
+# It is also the row that catches a SATURATING counter: with `killed=1` instead of
+# `killed + 1`, `failed = RED - killed` is 2, the failure arm wins, and the run exits 1.
+# (killed_two in test-all-killed-classification.test.sh records the same reasoning.)
+FIXDIR13="$TMP/fix10h"; mkdir -p "$FIXDIR13"
+printf '#!/usr/bin/env bash\nsleep 0.4\nkill -TERM $$\nsleep 5\n'   > "$FIXDIR13/aaa-term.test.sh"
+printf '#!/usr/bin/env bash\nkill -KILL $$\nsleep 5\n'              > "$FIXDIR13/bbb-kill.test.sh"
+printf '#!/usr/bin/env bash\nsleep 0.8\nkill -VTALRM $$\nsleep 5\n' > "$FIXDIR13/ccc-vtalrm.test.sh"
+chmod +x "$FIXDIR13"/*.test.sh
+mkfixture_wf "$FIXDIR13/wf.yml" "$FIXDIR13/aaa-term.test.sh" "$FIXDIR13/bbb-kill.test.sh" "$FIXDIR13/ccc-vtalrm.test.sh"
+rc10h=0
+OUT10H="$(INFRA_WF="$FIXDIR13/wf.yml" SOLEUR_INFRA_DIR="$FIXDIR13" timeout 90 bash "$SUT" 2>&1)" || rc10h=$?
+if (( rc10h == 143 )); then
+  ok "T10h-rule: three kills, opposed orders → rc 143, the LEXICOGRAPHICALLY-FIRST killed key"
+else
+  no "T10h-rule: exited ${rc10h}, expected 143 (137 = first-completed, 154 = last-completed or max-rc, 1 = a saturating killed counter)"
+fi
+if printf '%s\n' "$OUT10H" | grep -qF '3 were TERMINATED BY A SIGNAL'; then
+  ok "T10h-count: the killed counter ACCUMULATES to 3 rather than saturating at 1"
+else
+  no "T10h-count: the breakdown did not report 3 terminated suites"
+fi
+
+# ── T10i: a clean run's bytes are unchanged — the breakdown line is GATED ─────
+# Reuses T6t's all-green capture. Without the `killed > 0` gate this line would ride on every
+# green run, which is how the same change broke byte-identical output the last two times.
+if printf '%s\n' "$OUT6T" | grep -qF 'TERMINATED BY A SIGNAL'; then
+  no "T10i: an all-green run emitted the killed breakdown line — the \`killed > 0\` gate is gone"
+else
+  ok "T10i: an all-green run emits no killed breakdown line (the gate holds)"
+fi
+
 # ── T8: corpus-conformance — every registered suite's failure marker is readable ──
 # Converts a silent degradation into a red test the day a 94th suite lands with a new
 # marker shape. Needs no suite execution.
@@ -670,8 +866,73 @@ open(p,'w').write(s)
     "s = s.replace('bash \"\$s\" >\"\$SOLEUR_SUITE_LOGDIR/\$key.log\" 2>&1; rc=\$?', 'bash \"\$s\" 2>&1 >\"\$SOLEUR_SUITE_LOGDIR/\$key.log\"; rc=\$?')"
 
   # Delete the accounting assertion → the pre-existing FALSE GREEN returns.
+  #
+  # REWRITTEN for #7429. The previous mutator replaced the terminal `(( RED == 0 &&
+  # ${#UNACCOUNTED[@]} == 0 ))` one-liner, which the propagation change deletes: left alone it
+  # would have matched nothing and scored as DID-NOT-LAND — a row that reads as a broken test
+  # rather than as the coverage it lost. The accounting assertion now lives in the first arm of
+  # the exit block, so that is what this deletes; the fixture and the killing assertion (T7a,
+  # aaa-suicide kills its own wrapper) are unchanged.
   run_mutant drop-accounting "T7a: FALSE GREEN" \
-    "s = s.replace('(( RED == 0 && \${#UNACCOUNTED[@]} == 0 ))\n', '(( RED == 0 ))\n')"
+    "s = s.replace('if (( failed > 0 || \${#UNACCOUNTED[@]} > 0 )); then', 'if (( failed > 0 )); then')"
+
+  # ── Guard 2 rows (#7429) ────────────────────────────────────────────────────
+
+  # M5 — revert the propagation to the pre-change one-liner. The row exists because the whole
+  # change is one statement: without it, deleting the exit block is a silent, reviewable-looking
+  # edit. Scored HERE rather than cross-file: the end-to-end [KILLED]/exit-3 assertion lives in
+  # scripts/test-all-killed-classification.test.sh, and this harness re-invokes THIS file with
+  # SUT=<mutant> and greps its own `[FAIL]` lines, so it cannot span files. T10a pins the same
+  # property this runner is responsible for — the observed rc reaching its caller.
+  run_mutant revert-propagation "T10a: a killed-only run exited" \
+    "s = s.replace('if (( failed > 0 || \${#UNACCOUNTED[@]} > 0 )); then\n  exit 1\nelif (( killed > 0 )); then\n  exit \"\$kill_rc\"\nfi\nexit 0', '(( RED == 0 && \${#UNACCOUNTED[@]} == 0 ))')"
+
+  # The classifier is never consulted → nothing is ever counted killed, and every terminated
+  # suite is flattened back into `failed`.
+  run_mutant classifier-never-consulted "T10a: a killed-only run exited" \
+    "s = s.replace('  suite_rc_is_signal_shaped \"\$_rc\" || continue\n', '  continue\n')"
+
+  # GUARD 1 of the classifier: `rc > 128` → `rc >= 128`. `kill -l 0` returns EXIT, so rc 128
+  # would decode as a signal named EXIT and a clean-ish exit code would claim a termination.
+  run_mutant drop-rc128-guard "T10f-128: rc 128 exited" \
+    "s = s.replace('  (( rc > 128 )) || return 1', '  (( rc >= 128 )) || return 1')"
+
+  # GUARD 2 of the classifier: drop the non-empty-name test. `kill -l 32`/`33` exit 0 with
+  # EMPTY output, so 160/161 would propagate as a signal the runner cannot name.
+  run_mutant drop-name-guard "T10f-160: rc 160 exited" \
+    "s = s.replace('  [[ -n \"\$name\" ]]\n}', '  true\n}')"
+
+  # A SATURATING killed counter. 1-of-1 cannot distinguish it from an accumulating one, which
+  # is why T10h stages three kills: with killed pinned to 1, `failed = RED - killed` is 2 and
+  # the failure arm wins, so a three-kill run reports an assertion failure that never happened.
+  run_mutant saturating-killed "T10h-rule: exited" \
+    "s = s.replace('  killed=\$(( killed + 1 ))', '  killed=1')"
+
+  # Reverse the pinned walk order → the multi-kill rc becomes the LAST key rather than the
+  # first. Deterministic either way, so only a content assertion (T10h's opposed orders) can
+  # tell them apart — repetition-and-compare would score this mutant green.
+  run_mutant unsorted-kill-rc "T10h-rule: exited" \
+    "s = s.replace('\"\$SOLEUR_SUITE_LOGDIR\"/*.meta | LC_ALL=C sort)', '\"\$SOLEUR_SUITE_LOGDIR\"/*.meta | LC_ALL=C sort -r)')"
+
+  # Stop deriving `failed` from RED → every killed suite is ALSO counted as a failure, so a
+  # mixed run reports the termination and swallows the real assertion failure.
+  run_mutant failed-not-derived "T10d: a mixed run exited" \
+    "s = s.replace('failed=\$(( RED - killed ))', 'failed=0')"
+
+  # Drop the killed breakdown line → the only reading left is the summary's `failed` label,
+  # which counts terminated suites among failures. That is the #7429 misreading, restored.
+  run_mutant drop-killed-line "T10c: no killed breakdown line" \
+    "s = s.replace('if (( killed > 0 )); then\n  echo \"=== of the', 'if false; then\n  echo \"=== of the')"
+
+  # Ungate it → the line rides on every green run and clean output stops being byte-identical.
+  run_mutant ungate-killed-line "T10i: an all-green run emitted the killed breakdown line" \
+    "s = s.replace('if (( killed > 0 )); then\n  echo \"=== of the', 'if true; then\n  echo \"=== of the')"
+
+  # Read the WRONG pipeline stage — index 2 is `tee`, which exits 0 whatever xargs did. This is
+  # the exact shape of the pre-change defect (the xargs rc was \$? , i.e. tee's), so the row pins
+  # that the shim-kill signal is captured rather than merely mentioned in a comment.
+  run_mutant drop-xargs-rc "T10g-125: the runner did not report xargs' 125" \
+    "s = s.replace('XARGS_RC=\${PIPESTATUS[1]}', 'XARGS_RC=\${PIPESTATUS[2]}')"
 
   # POSITIVE CONTROL for the scorer. A comment-only edit changes no behaviour, so every
   # assertion must stay green — if this row reports a kill, the matcher is matching noise and
@@ -683,11 +944,14 @@ open(p,'w').write(s)
   # (incremented inside run_mutant), not `run_mutant` lines in this file — an earlier draft
   # grepped its own source text, which still counts 7 after gutting run_mutant's body to
   # `return 0`, i.e. it could not detect the failure mode its own comment named.
+  # Floor raised 7 -> 19 with the Guard 2 rows (#7429). It must rise WITH the row count, not
+  # merely stay satisfied by it: a floor of 7 against 19 rows is 12 rows of slack a deletion
+  # could spend silently.
   MATRIX_CALLS=$(grep -c '^  run_mutant ' "${BASH_SOURCE[0]}" || true)
-  if (( MATRIX_RAN >= 7 && MATRIX_RAN == MATRIX_CALLS )); then
+  if (( MATRIX_RAN >= 19 && MATRIX_RAN == MATRIX_CALLS )); then
     ok "T9: mutation matrix dispatched ${MATRIX_RAN} rows (all ${MATRIX_CALLS} call sites ran)"
   else
-    no "T9: matrix dispatched ${MATRIX_RAN} of ${MATRIX_CALLS} call sites (expected >= 7, all run)"
+    no "T9: matrix dispatched ${MATRIX_RAN} of ${MATRIX_CALLS} call sites (expected >= 19, all run)"
   fi
 fi
 
@@ -713,7 +977,15 @@ fi
 # Parent runs the full set; a mutation child legitimately skips the repo-level assertions
 # (T2e, T8a/T8b) and the matrix itself, so it carries its own lower floor. Both derived from a
 # green run, not from an expectation.
-if [[ -n "${SOLEUR_MUTATION_CHILD:-}" ]]; then MIN_ASSERTIONS=36; else MIN_ASSERTIONS=44; fi
+# Raised from 36/44 with the Guard 2 rows (#7429): 12 new T10 assertions in both, plus 10 new
+# matrix rows and their scoring lines in the parent. Measured on the green run that added them
+# (parent 72, child 49), not estimated — leaving the old numbers would have let the whole
+# propagation battery be deleted without either floor noticing, which is the one failure both
+# floors exist to prevent.
+# Ratcheted to the CURRENT measured count, never left with slack: slack is deletion budget,
+# so a floor trailing the real count silently permits removing exactly that many assertions.
+# 73/50 after T10d gained its detection half (see the T10d block).
+if [[ -n "${SOLEUR_MUTATION_CHILD:-}" ]]; then MIN_ASSERTIONS=50; else MIN_ASSERTIONS=73; fi
 TOTAL=$(( pass + fail ))
 if (( TOTAL < MIN_ASSERTIONS )); then
   echo "[FAIL] anti-vacuity: only ${TOTAL} assertion(s) ran, expected >= ${MIN_ASSERTIONS}" >&2
