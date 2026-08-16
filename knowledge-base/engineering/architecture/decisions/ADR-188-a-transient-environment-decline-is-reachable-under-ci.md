@@ -6,9 +6,9 @@ amends: [ADR-181]
 related_adrs: [ADR-166, ADR-177, ADR-180, ADR-181]
 related: [7291]
 related_plans:
-  - knowledge-base/project/plans/2026-08-12-fix-t5-mutation-arm-network-flake-plan.md
+  - knowledge-base/project/plans/archive/20260816-203421-2026-08-12-fix-t5-mutation-arm-network-flake-plan.md
 related_specs:
-  - knowledge-base/project/specs/feat-one-shot-7291-t5-mutation-network-flake/session-state.md
+  - knowledge-base/project/specs/archive/20260816-203421-feat-one-shot-7291-t5-mutation-network-flake/session-state.md
 brand_survival_threshold: aggregate pattern
 ---
 
