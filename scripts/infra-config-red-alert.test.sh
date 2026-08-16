@@ -22,10 +22,17 @@ PASS=0; FAIL=0
 # trap reclaims them all. Without it a mid-run death (a failing assertion under a future
 # `set -e`, a SIGINT) leaves a /tmp dir per case behind, and /tmp here is a machine-global
 # 4 GiB tmpfs shared by parallel worktrees.
-TMPDIRS=()
-cleanup_tmpdirs() { [[ ${#TMPDIRS[@]} -gt 0 ]] && rm -rf "${TMPDIRS[@]}"; return 0; }
+# One owning ROOT, not an array of children. `mk_sandbox` is always called as
+# `T=$(mk_sandbox)`, i.e. in a COMMAND SUBSTITUTION, so an array append inside it lands in
+# the subshell and is discarded — measured: every call left the array at length 0 and the
+# trap reclaimed nothing, leaking a sandbox per case onto the shared 4 GiB tmpfs. Allocating
+# children UNDER a single root removes the cross-subshell state entirely, so the trap has
+# nothing to miss. (The file's own rule two blocks down says never increment inside `$( )`;
+# it had been applied to the counter and not to the array.)
+SANDBOX_ROOT="$(mktemp -d)" || { echo "FATAL: mktemp failed" >&2; exit 2; }
+cleanup_tmpdirs() { [[ -n "${SANDBOX_ROOT:-}" && -d "$SANDBOX_ROOT" ]] && rm -rf "$SANDBOX_ROOT"; return 0; }
 trap cleanup_tmpdirs EXIT INT TERM
-mk_sandbox() { local d; d=$(mktemp -d); TMPDIRS+=("$d"); printf '%s' "$d"; }
+mk_sandbox() { local d; d=$(mktemp -d "$SANDBOX_ROOT/sb.XXXXXX") || return 1; printf '%s' "$d"; }
 
 # CASES is the INDEPENDENT counter, incremented at every verdict CALL SITE and never inside
 # ok()/bad(). A counter that lives inside the verdict helpers moves WITH the verdict, so stubbing

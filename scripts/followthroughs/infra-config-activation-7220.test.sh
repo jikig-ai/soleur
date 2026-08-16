@@ -42,8 +42,11 @@ fail() { printf '  FAIL: %s\n' "$1" >&2; FAIL=$((FAIL + 1)); }
 
 # Single owning trap for every sandbox (ADR-129 rule (c)); /tmp is a machine-global tmpfs shared
 # by parallel worktrees, so a per-case leak is unbounded.
-SANDBOXES=()
-cleanup() { [[ ${#SANDBOXES[@]} -gt 0 ]] && rm -rf "${SANDBOXES[@]}"; return 0; }
+# One owning ROOT, not an array of children — `mk_case` is called as `D=$(mk_case …)`, so an
+# array append inside it is discarded to the command substitution's subshell and the trap
+# reclaims nothing. Measured leak: one sandbox per case on a shared tmpfs.
+SANDBOX_ROOT="$(mktemp -d)" || { echo "FATAL: mktemp failed" >&2; exit 2; }
+cleanup() { [[ -n "${SANDBOX_ROOT:-}" && -d "$SANDBOX_ROOT" ]] && rm -rf "$SANDBOX_ROOT"; return 0; }
 trap cleanup EXIT INT TERM
 
 # Build a sandbox repo root holding the real soak plus stubbed collaborators.
@@ -52,8 +55,7 @@ trap cleanup EXIT INT TERM
 #   $3 = end_ts offset in seconds into the PAST (only used when a frame is supplied)
 mk_case() {
   local msgs="$1" frame="$2" age="${3:-7200}"
-  local d; d=$(mktemp -d) || { echo "FATAL: mktemp failed" >&2; exit 2; }
-  SANDBOXES+=("$d")
+  local d; d=$(mktemp -d "$SANDBOX_ROOT/case.XXXXXX") || { echo "FATAL: mktemp failed" >&2; exit 2; }
   mkdir -p "$d/scripts/followthroughs" "$d/bin" || { echo "FATAL: sandbox mkdir failed" >&2; exit 2; }
   cp "$SOAK" "$d/scripts/followthroughs/" || { echo "FATAL: sandbox cp failed" >&2; exit 2; }
 
