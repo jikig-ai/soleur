@@ -2114,7 +2114,37 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // until then. Measured both ways — this plan contributes exactly ONE declaration whether it
   // sits at its live path or under archive/; the move is not the cause. (The absolute count at
   // the time of that measurement was 2; it is 3 here only because #7455 merged in between.)
-  const BASELINE_DECLARED_PROBES = 3;
+  // 3 -> 4 on 2026-08-16 (#7565). THE REVIEWABLE DIFF LINE, and the first adoption whose
+  // requirement is NOT a credential — recorded as such rather than glossed, because the
+  // field's NAME says credential and this one does not.
+  //
+  // Declaring plan: `archive/20260816-203735-2026-08-16-fix-t5-checksum-never-evaluated-plan.md`.
+  //   1. PLACEMENT — a correctly-indented child of `discoverability_test:`, verified by
+  //      running this file's own parser both ways. It is deliberately an INLINE scalar: the
+  //      Check 10 reader is a flat awk over the key line, so a folded `>-` or block `|`
+  //      value extracts as the bare indicator and is then treated as ABSENT, which would
+  //      execute the probe rather than waive it. Measured — the folded form was written
+  //      first and read back as `>-`.
+  //   2. TRUTH — the probe is the git-data runcmd rehearsal, which starts 8 ubuntu:24.04
+  //      containers that download the genuine Doppler tarball from the GitHub release CDN
+  //      and assert a wrong DOPPLER_SHA256 aborts the chain before tar/chmod. Measured
+  //      runtime ~3 min against Check 10's 15s cap; the bwrap sandbox binds no docker
+  //      socket, so the probe cannot start there at all.
+  //   3. NO SUBSTITUTE — the property under test IS the container-level abort ordering.
+  //      Any sandbox-runnable stand-in degenerates to a source grep, which is precisely the
+  //      vacuity #7565 exists to close (its predecessor asserted four markers all satisfied
+  //      by the download failing). The job that does run it is `deploy-script-tests`.
+  //
+  // WHERE THIS DIFFERS FROM THE TWO ABOVE, stated so the next reader can judge whether the
+  // field should be widened or renamed rather than inheriting a precedent silently: those
+  // declare BETTERSTACK_QUERY_* against a warehouse with no public read surface — a genuine
+  // credential. This declares a docker daemon plus wall clock. The field's semantics as
+  // documented are "no unauthenticated substitute"; the honest reading here is "no
+  // sandbox-runnable substitute". Both end at the same place — executing it in the sandbox
+  // would fail for want of a precondition and prove nothing — which is why the field is
+  // used rather than the probe being weakened to fit. If a third non-credential adoption
+  // appears, that is the signal to rename the field, not to keep stretching it.
+  const BASELINE_DECLARED_PROBES = 4;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
