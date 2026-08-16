@@ -1039,6 +1039,12 @@ jobs:
               copy_*)
                 # Measured: the copy family fails while PUSHING bytes, so host disk/restart
                 # telemetry is a cause this job did not measure.
+                #
+                # Matched on the GLOB rather than the three reasons the TAG_SPEC loop generates
+                # today, so a fourth tag inherits the correct pointer instead of silently
+                # falling through to the union arm.
+                # plugins/soleur/test/reusable-release-degraded-pointer.test.sh derives the
+                # reason set from that loop and reds if a tag is added whose label misses it.
                 echo "Upload evidence — this stage failed while PUSHING bytes to zot. Read the PatchBlobUpload rows and their paired HTTP-API row (the pairing carries statusCode, latency and Content-Length); a row at latency:1m0s against a large Content-Length is zot's HTTP deadline expiring mid-upload (ADR-190) rather than an origin fault. Run: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep PatchBlobUpload"
                 ;;
               verify)
@@ -1049,8 +1055,17 @@ jobs:
                 # which is the ADR-166 defect this branching exists to remove.
                 echo "Read-back evidence — this stage did not push; it read back what the copy left in zot. For 'unresolvable' the manifest never landed, so read the copy stage's own rows; for 'mismatch' zot holds DIFFERENT bits than this release built, which is a writer question, not a transport one. Run: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep PatchBlobUpload"
                 ;;
-              bridge|crane_install)
+              bridge)
                 echo "Registry-host health (disk AND zot_restarts/exit_code, which is what an origin flap shows up in): see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd. Run: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep SOLEUR_ZOT_DISK"
+                ;;
+              crane_install)
+                # NOT grouped with `bridge`, though both precede any copy. This stage is a curl
+                # from github.com/google/go-containerregistry plus a sha256sum -c ON THE RUNNER;
+                # its own detail says "nothing is wrong with zot or the image". Pointing it at
+                # registry-host telemetry names a cause this job did not measure — the ADR-166
+                # defect this branching exists to remove — and it contradicted the detail printed
+                # two lines below it. No registry channel applies, so none is named.
+                echo "Runner-side evidence — crane could not be installed ON THE RUNNER (download or checksum), so nothing was ever sent to zot. No registry evidence applies: neither the upload rows nor registry-host health can explain this, and reading them will mislead. Read THIS run's own 'install crane' step log, then re-run the workflow."
                 ;;
               *)
                 # Fail-safe union. An unclassified stage names BOTH channels and asserts NEITHER
@@ -1099,23 +1114,6 @@ jobs:
               echo "::group::zot mirror diagnosis (full)"
               printf '%s\n' "$detail"
               printf '%s\n' "$SAFE_TO_RERUN"
-              # MEASURED-BY: #7555 — zot v2.1.20's built-in ReadTimeout/WriteTimeout of
-              # 60000000000 ns was read off the pinned digest's own boot config, and the
-              # failure was reproduced off-box over a docker bridge with Cloudflare absent
-              # (ADR-190). The restart-loop framing this line used to point at was refuted in
-              # the same window: zot_restarts=0, uptime monotonic, none in 48 h.
-              #
-              # The pointer BRANCHES ON THE STAGE. It was one unconditional line appended to
-              # every stage, which is an ADR-166 violation for the copy family: a copy_*
-              # failure is an UPLOAD failure — the bytes were in flight to zot — and sending
-              # that reader at registry-host disk/restart telemetry names a cause the job did
-              # not measure. A wrong pointer is not a missing diagnosis; it is a false one.
-              #
-              # Matched on the copy_* GLOB rather than the three reasons the TAG_SPEC loop
-              # generates today, so a fourth tag inherits the correct pointer.
-              # plugins/soleur/test/reusable-release-degraded-pointer.test.sh derives the
-              # reason set from that loop and reds if a tag is added whose reason label does
-              # not match this glob.
               echo "::endgroup::"
             fi
             {

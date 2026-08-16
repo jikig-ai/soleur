@@ -32,11 +32,26 @@
 #
 # Output: a single `verdict=` line on stdout. Exit 0 = clear to dispatch, non-zero = do not.
 #
-# Usage: scripts/registry-replace-preflight.sh
+# Usage: scripts/registry-replace-preflight.sh [--manual]
+#   --manual  this run is the operator's re-fire of a refused/dark replace. Skips P1 only.
+#             A FLAG, NOT AN ENV VAR, on purpose: the caller that may set it is the
+#             workflow_dispatch arm, and `github.event_name` is unforgeable by the caller,
+#             whereas an env var of the same name is exactly the shape the seam loop below
+#             refuses. REGISTRY_PREFLIGHT_MANUAL is honoured OUTSIDE Actions for local use and
+#             refused inside it, so there is no env route to a P1 downgrade in production.
 # Env seams (tests only, one per external dependency):
 #   REGISTRY_PREFLIGHT_QUERY_CMD   REGISTRY_PREFLIGHT_RUNS_CMD
 
 set -uo pipefail
+
+MANUAL=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --manual) MANUAL=1; shift ;;
+    -h|--help) sed -n '1,40p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    *) echo "registry-replace-preflight: unknown argument '$1'" >&2; exit 2 ;;
+  esac
+done
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 QUERY_CMD="${REGISTRY_PREFLIGHT_QUERY_CMD:-${ROOT}/scripts/betterstack-query.sh}"
@@ -48,8 +63,13 @@ WINDOW="${REGISTRY_PREFLIGHT_WINDOW:-24h}"
 # makes every predicate pass and prints a verdict line BYTE-IDENTICAL to a real clean reading —
 # on the sole gate in front of an irreversible production host replace. The sibling D10 gate
 # already carries this refusal; it was the one thing worth copying from it.
+#
+# REGISTRY_PREFLIGHT_MANUAL is in this list even though it is not a command seam: setting it
+# DOWNGRADES P1 from gating to advisory, which is the same "manufacture a clear verdict" power
+# as the command seams. The supported production route is the `--manual` flag, passed only from
+# the workflow_dispatch arm. Outside Actions the env var still works, for local reproduction.
 if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-  for _seam in REGISTRY_PREFLIGHT_QUERY_CMD REGISTRY_PREFLIGHT_RUNS_CMD REGISTRY_PREFLIGHT_WINDOW; do
+  for _seam in REGISTRY_PREFLIGHT_QUERY_CMD REGISTRY_PREFLIGHT_RUNS_CMD REGISTRY_PREFLIGHT_WINDOW REGISTRY_PREFLIGHT_MANUAL; do
     if [[ -n "${!_seam:-}" ]]; then
       echo "::error::registry-replace-preflight: ${_seam} is set inside GitHub Actions. A seam set on the production path can manufacture a CLEAR verdict. Refusing." >&2
       echo "verdict=REFUSED predicate=SEAM"
@@ -57,6 +77,9 @@ if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
     fi
   done
 fi
+# Reached only outside Actions (the loop above exits otherwise), so this cannot widen the
+# production path.
+[[ "${REGISTRY_PREFLIGHT_MANUAL:-0}" == "1" ]] && MANUAL=1
 
 abort() { # $1 = predicate, rest = message
   local p="$1"; shift
@@ -109,7 +132,7 @@ fi
 # tail spliced into a log line) would refuse the replace. Fail-closed, and noted rather than
 # silently relied on.
 lc_hits="$(printf '%s\n' "$PROBE_OUT" | { grep -c 'registry=local-cache' || true; })"
-if [[ "${REGISTRY_PREFLIGHT_MANUAL:-0}" == "1" && "${lc_hits:-0}" -gt 0 ]]; then
+if [[ "$MANUAL" == "1" && "${lc_hits:-0}" -gt 0 ]]; then
   echo "NOTE: P1 observed ${lc_hits} local-cache event(s) but this is a MANUAL re-fire, which is the documented recovery path for a failed or dark replace. Not gating."
 elif [[ "${lc_hits:-0}" -gt 0 ]]; then
   abort P1 "${lc_hits} local-cache pull event(s) in the last ${WINDOW}. The fleet is already falling back to its LAST tier, so replacing the registry host now would remove the only remaining pull source. Resolve the pull path first, then re-dispatch."
@@ -140,7 +163,9 @@ ZOT_WRITER_WORKFLOWS="${REGISTRY_PREFLIGHT_ZOT_WRITERS:-web-platform-release.yml
 # `queued` COUNTS. Merging fires the release and this dispatcher on the SAME push, so at preflight
 # time the release is very likely queued, not in_progress — and `--status` takes one value, so the
 # old single-status filter reported 0 for exactly the case P3 exists to catch.
-p3_err="$(mktemp)"
+# Reuses $p0_err rather than a second mktemp: the EXIT trap covers only $p0_err, so a separate
+# temp file here leaked one file per invocation.
+p3_err="$p0_err"
 in_progress=0
 runs_rc=0
 for _wf in $ZOT_WRITER_WORKFLOWS; do
@@ -151,8 +176,33 @@ done
 if (( runs_rc != 0 )); then
   abort P3 "could not list in-flight runs for the zot-writing workflows (gh exited ${runs_rc}): $(head -c 300 "$p3_err"). Refusing rather than replacing the registry host with an unknown number of pushes in flight."
 fi
+# P3 WAITS BEFORE IT REFUSES. Refusing outright made the MODAL case operator-driven: merging a
+# user_data change fires the release AND this dispatcher on the same push, so a queued release is
+# the expected state, not the exception. That turned every ordinary delivery into "refuse → file
+# a comment → a human types `gh workflow run`", i.e. the operator step this whole workflow exists
+# to remove (hr-never-label-any-step-as-manual-without).
+#
+# The hazard is a replace *mid-push*, not a replace six minutes after one. So poll until the
+# writers drain and refuse only if they do not. Bounded well inside the job's timeout-minutes: 15.
+WAIT_SECS="${REGISTRY_PREFLIGHT_WAIT_SECS:-480}"
+POLL_SECS="${REGISTRY_PREFLIGHT_POLL_SECS:-20}"
+waited=0
+while [[ "${in_progress:-0}" -gt 0 && "$waited" -lt "$WAIT_SECS" ]]; do
+  echo "NOTE: P3 sees ${in_progress} in-flight zot-writing run(s); waiting for the push to drain (${waited}s/${WAIT_SECS}s)."
+  sleep "$POLL_SECS"
+  waited=$(( waited + POLL_SECS ))
+  in_progress=0
+  for _wf in $ZOT_WRITER_WORKFLOWS; do
+    _json="$("$RUNS_CMD" run list --workflow="$_wf" --limit 30 --json status 2>>"$p3_err")" || { runs_rc=$?; break; }
+    _n="$(printf '%s' "$_json" | { grep -oE '"status":"(queued|in_progress|waiting|requested|pending)"' || true; } | grep -c . || true)"
+    in_progress=$(( in_progress + _n ))
+  done
+  if (( runs_rc != 0 )); then
+    abort P3 "could not re-list in-flight runs while waiting for the push to drain (gh exited ${runs_rc}): $(head -c 300 "$p3_err"). Refusing rather than replacing the registry host with an unknown number of pushes in flight."
+  fi
+done
 if [[ "${in_progress:-0}" -gt 0 ]]; then
-  abort P3 "${in_progress} in-flight run(s) across the zot-writing workflows (queued or running). A replace mid-push strands a partial manifest on the preserved volume. Wait for them to finish, then re-dispatch."
+  abort P3 "${in_progress} in-flight run(s) across the zot-writing workflows still queued or running after waiting ${waited}s. A replace mid-push strands a partial manifest on the preserved volume. Re-dispatch once they finish."
 fi
 
 # ── P4 — DELIBERATELY ABSENT: no live zot serving probe. ────────────────────────────────────
@@ -162,6 +212,11 @@ fi
 # SYMPTOM is a degraded zot, so a serving predicate would refuse precisely when the fix is most
 # needed. The same reasoning removed D10's A5 (ADR-169 ground 2).
 
-echo "verdict=CLEAR local_cache_hits=0 ghcr_fallback_hits=${gf_hits} in_progress_releases=0 window=${WINDOW}"
+# Print the OBSERVED counts, never literals. They are zero on the ordinary path only because
+# every non-zero reading aborts above — but P1 no longer always aborts (`--manual` downgrades it
+# to a NOTE), so a literal `local_cache_hits=0` would report a clean reading for a run that
+# actually observed hits and proceeded anyway. The verdict line is the durable artifact; it must
+# describe what was measured, not what the happy path implies.
+echo "verdict=CLEAR local_cache_hits=${lc_hits:-0} ghcr_fallback_hits=${gf_hits} in_progress_releases=${in_progress:-0} manual=${MANUAL} window=${WINDOW}"
 echo "NOTE: ghcr_fallback_hits is ADVISORY. Its emitter is unreachable since #7071, so a zero says nothing about fallback health."
 exit 0

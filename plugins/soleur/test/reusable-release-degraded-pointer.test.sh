@@ -14,9 +14,10 @@
 # message may only name a cause the job measured.
 #
 # THE PROPERTY. Every reason the `for TAG_SPEC` loop generates, plus `verify`, emits the
-# upload-ceiling pointer and NOT the host-health pointer; `bridge` and `crane_install` emit the
-# host-health pointer and NOT the upload-ceiling pointer; any reason in neither family emits
-# BOTH, so an unclassified stage can never silently inherit a cause nobody measured.
+# upload-ceiling pointer and NOT the host-health pointer; `bridge` emits the host-health pointer
+# and NOT the upload-ceiling pointer; `crane_install` emits NEITHER (it fails on the runner, so
+# both registry channels would name an unmeasured cause); any reason in no family emits BOTH, so
+# an unclassified stage can never silently inherit a cause nobody measured.
 #
 # WHY THE REASON SET IS DERIVED, NOT LISTED. A hand-written list of three copy reasons cannot
 # see a fourth tag added to the loop. This suite parses the `for TAG_SPEC in ...` line and
@@ -149,7 +150,14 @@ UPLOAD_FAMILY=("${COPY_REASONS[@]}")
 # transport one. Telling that reader about an upload deadline names a cause the job did not
 # measure — the ADR-166 defect this branching exists to remove, re-committed inside its own fix.
 VERIFY_FAMILY=(verify)
-HOST_FAMILY=(bridge crane_install)
+HOST_FAMILY=(bridge)
+# `crane_install` is NOT host family, though it shares bridge's position before any copy. It is a
+# curl from github.com plus a sha256sum ON THE RUNNER, and its own degraded() detail says
+# "nothing is wrong with zot or the image". Pointing it at registry-host telemetry named a cause
+# the job did not measure — this guard's whole subject — and contradicted the detail printed
+# beside it. Its family asserts the ABSENCE of both registry channels, which is the only honest
+# pointer for a stage where nothing ever reached zot.
+RUNNER_FAMILY=(crane_install)
 UNCLASSIFIED=(sign)
 
 # ---------------------------------------------------------------------------
@@ -213,6 +221,30 @@ assert_host_family() {
   fi
 }
 
+assert_runner_family() {
+  local reason="$1" out
+  out="$(run_degraded "$reason")"
+  # Both directions, because this family is defined by what it must NOT say. An assertion that
+  # only checked for the word "runner" would pass a pointer that ALSO named a registry channel,
+  # which is the defect being fixed.
+  if grep -qF -- "$HOST_ANCHOR" <<<"$out"; then
+    fail "reason '$reason' (runner family): emits the host-health pointer for a failure on the RUNNER"
+  else
+    pass "reason '$reason' does NOT emit the host-health pointer"
+  fi
+  if grep -qF -- "PatchBlobUpload" <<<"$out"; then
+    fail "reason '$reason' (runner family): emits the upload-ceiling pointer though nothing was uploaded"
+  else
+    pass "reason '$reason' does NOT emit the upload-ceiling pointer"
+  fi
+  # ...and it must still say something. Naming no channel is only honest if it explains why.
+  if grep -qiE 'runner' <<<"$out"; then
+    pass "reason '$reason' names the runner as the place to look"
+  else
+    fail "reason '$reason' (runner family): names no evidence at all — silence is not a diagnosis"
+  fi
+}
+
 assert_unclassified() {
   local reason="$1" out
   out="$(run_degraded "$reason")"
@@ -253,6 +285,8 @@ for r in "${VERIFY_FAMILY[@]}"; do assert_verify_family "$r"; done
 
 echo "--- host family ---"
 for r in "${HOST_FAMILY[@]}"; do assert_host_family "$r"; done
+echo "--- runner family (names NO registry channel) ---"
+for r in "${RUNNER_FAMILY[@]}"; do assert_runner_family "$r"; done
 
 echo "--- unclassified fail-safe ---"
 for r in "${UNCLASSIFIED[@]}"; do assert_unclassified "$r"; done
@@ -276,7 +310,7 @@ mapfile -t CALLSITE_REASONS < <(
     | sed -E 's/.*degraded[[:space:]]+"?//; s/"?$//' \
     | sort -u
 )
-DECLARED=("${UPLOAD_FAMILY[@]}" "${VERIFY_FAMILY[@]}" "${HOST_FAMILY[@]}" "${UNCLASSIFIED[@]}")
+DECLARED=("${UPLOAD_FAMILY[@]}" "${VERIFY_FAMILY[@]}" "${HOST_FAMILY[@]}" "${RUNNER_FAMILY[@]}" "${UNCLASSIFIED[@]}")
 unaccounted=""
 for r in "${CALLSITE_REASONS[@]}"; do
   [[ -n "$r" ]] || continue
@@ -432,7 +466,7 @@ fi
 # green it did not earn. The floor is a function of the derived set size, so it
 # cannot be satisfied by a run that examined less than it claims.
 # ---------------------------------------------------------------------------
-EXPECTED_MIN=$(( (${#UPLOAD_FAMILY[@]} * 2) + (${#VERIFY_FAMILY[@]} * 3) + (${#HOST_FAMILY[@]} * 2) + ${#UNCLASSIFIED[@]} + 1 + 7 + 1 ))
+EXPECTED_MIN=$(( (${#UPLOAD_FAMILY[@]} * 2) + (${#VERIFY_FAMILY[@]} * 3) + (${#HOST_FAMILY[@]} * 2) + (${#RUNNER_FAMILY[@]} * 3) + ${#UNCLASSIFIED[@]} + 1 + 7 + 1 ))
 # HARNESS CANARY + a floor that does NOT dispatch through the helper it guards. Neutering fail()
 # to a no-op previously left this suite fully GREEN, and the floor's only voice was that same
 # helper — so one edit disarmed the assertions AND their backstop.

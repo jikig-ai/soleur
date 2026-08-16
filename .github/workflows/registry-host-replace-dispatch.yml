@@ -107,20 +107,42 @@ jobs:
             exit 0
           fi
           # The path changed — now ask whether the HOST-VISIBLE bytes changed.
-          strip_comments() { sed -E 's/^[[:space:]]*#([[:space:]].*)?$//' "$1" | grep -v '^$'; }
-          befr="$(mktemp)"; aftr="$(mktemp)"
+          #
+          # THIS MUST REPRODUCE terraform's `/(?m)^[ \t]*#([ \t][^\n]*)?\n/` → "" EXACTLY, and two
+          # details are load-bearing in opposite directions:
+          #
+          #   * That regex consumes the trailing \n, so a comment LINE vanishes — but a line that
+          #     was ALREADY blank survives the render. An earlier form here piped through
+          #     `grep -v '^$'`, deleting pre-existing blank lines on both sides too. A push whose
+          #     only change was adding or removing a blank line then compared IDENTICAL, so
+          #     deliver=false, while the real rendered user_data differed: the host kept booting
+          #     stale bytes and a pending ForceNew sat in state until some unrelated apply
+          #     delivered it as a surprise replace. That is the silent non-delivery this workflow
+          #     exists to remove, printed under a message claiming the bytes were identical.
+          #   * `#` must be followed by a BLANK or end-of-line to count as a comment. `#cloud-config`
+          #     and `#!/bin/sh` are therefore NOT stripped — by terraform, and so not here either.
+          #     Widening this to any leading `#` would silently drop the cloud-init header.
+          #
+          # Trailing-whitespace and key-reordering edits still compare as changed and fire an
+          # unnecessary (volume-preserving) replace. That direction is deliberate: an unnecessary
+          # replace is recoverable, an undelivered one is silent.
+          strip_comments() { grep -vE '^[[:blank:]]*#([[:blank:]].*)?$' "$1" || true; }
+          befr="$(mktemp)"
           brc=0; arc=0
           gh api "repos/${GITHUB_REPOSITORY}/contents/${CFG}?ref=${BEFORE_SHA}" \
             --jq '.content' 2>/dev/null | base64 -d > "$befr" || brc=$?
-          gh api "repos/${GITHUB_REPOSITORY}/contents/${CFG}?ref=${AFTER_SHA}" \
-            --jq '.content' 2>/dev/null | base64 -d > "$aftr" || arc=$?
-          if [[ "$brc" -ne 0 || "$arc" -ne 0 || ! -s "$aftr" ]]; then
+          # The AFTER side is already on disk: actions/checkout ran at github.sha, which IS
+          # AFTER_SHA. Re-fetching it over the API added a second failure mode whose fail-open
+          # direction is "replace the production host".
+          aftr="$CFG"
+          [[ -s "$aftr" ]] || arc=1
+          if [[ "$brc" -ne 0 || "$arc" -ne 0 ]]; then
             # FAIL CLOSED TOWARD DELIVERING, not toward skipping: the path did change, so a
             # comparison we could not make must not be read as "nothing to deliver". The preflight
             # below still gates, and an unnecessary replace is recoverable where an undelivered
             # fix is silent.
             echo "deliver=true" >> "$GITHUB_OUTPUT"
-            echo "::warning::could not fetch both revisions of $CFG (before rc=$brc, after rc=$arc) — delivering anyway rather than silently skipping a real change."
+            echo "::warning::could not read both revisions of $CFG (before-fetch rc=$brc, checked-out copy readable=$((1-arc))) — delivering anyway rather than silently skipping a real change."
             exit 0
           fi
           if diff -q <(strip_comments "$befr") <(strip_comments "$aftr") >/dev/null 2>&1; then
@@ -139,10 +161,19 @@ jobs:
           BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
           BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
+          # --manual ONLY on the workflow_dispatch arm, and derived from github.event_name rather
+          # than from an input or an env var the caller controls: it downgrades P1 (local-cache
+          # pulls) from gating to advisory, which is exactly the predicate a replace outage itself
+          # trips, so the documented recovery would otherwise be blocked for 24h by the condition
+          # it exists to cure. The script REFUSES an env var of this name inside Actions, so this
+          # flag is the only production route to that downgrade.
+          MANUAL_FLAG=()
+          [[ "$EVENT_NAME" == "workflow_dispatch" ]] && MANUAL_FLAG=(--manual)
           # tee -a: GHA convention is append; plain tee TRUNCATES the summary.
-          bash scripts/registry-replace-preflight.sh | tee -a "$GITHUB_STEP_SUMMARY"
+          bash scripts/registry-replace-preflight.sh "${MANUAL_FLAG[@]+"${MANUAL_FLAG[@]}"}" | tee -a "$GITHUB_STEP_SUMMARY"
 
       # A REFUSAL MUST LEAVE A DURABLE ARTIFACT, not just a red run. Without this the merged
       # user_data sits inert and the only signal is a failed job on main that nobody owns — the
