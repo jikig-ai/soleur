@@ -59,6 +59,10 @@ dependency-directed; Phase 0 is time-critical.
 
 ## Phase 4 — Volume reduction at the structural chokepoint
 
+- [ ] 4.0 **L3 precondition.** Editing `vector.toml` re-fires `terraform_data.journald_persistent`
+      (`apps/web-platform/infra/server.tf:982-991`), which reaches `web-1:22` over an SSH
+      provisioner. Confirm the CI/operator egress IP is in `var.admin_ips` BEFORE the apply. A
+      handshake reset is admin-IP drift → `/soleur:admin-ip-refresh`, never an sshd fault.
 - [ ] 4.1 Bound the `parse_err != null → true` arm at `apps/web-platform/infra/vector.toml:83`.
 - [ ] 4.2 Add a `throttle` transform keyed on container/`SYSLOG_IDENTIFIER` ahead of
       `[sinks.betterstack]` (line 543).

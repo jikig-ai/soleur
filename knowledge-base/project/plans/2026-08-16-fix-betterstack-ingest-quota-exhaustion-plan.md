@@ -377,6 +377,30 @@ usage or billing API — measured 404 on `/api/v1/usage`, `/api/v1/billing`, and
 (`hr-no-dashboard-eyeball-pull-data-yourself`), this plan asserts the **invariant** — ingest returns
 2xx — and lets the new probe report the transition.
 
+## Network-Outage Deep-Dive
+
+Deepen-plan Phase 4.5 fired on two independent triggers: the prose trigger (`SSH`, `unreachable`,
+`ECONNREFUSED` appear in the problem statement) and — more importantly — the **resource-shape
+trigger**, because Phase 4's `vector.toml` edit drives an apply on
+`terraform_data.journald_persistent`, whose definition contains a `connection { type = "ssh" }`
+block. The prose scan alone would not have caught that; the plan body never proposed an SSH step.
+
+Layer-by-layer verification status, L3 → L7, per `hr-ssh-diagnosis-verify-firewall`:
+
+| Layer | Concern | Status | Artifact |
+|---|---|---|---|
+| **L3 — firewall allow-list** | The apply-time SSH provisioner reaches `web-1:22` only if the CI/operator egress IP ∈ `var.admin_ips` (`firewall.tf`; the CI-deploy SSH rule was removed in #749) | **NOT VERIFIED — must be checked before Phase 4's apply** | `server.tf` comment above `terraform_data.journald_persistent`; remedy `/soleur:admin-ip-refresh`, runbook `admin-ip-drift.md` |
+| **L3 — DNS / routing** | `hcloud_server.web["web-1"].ipv4_address` resolves from state, not DNS | Not applicable — no name resolution in the provisioner path | `server.tf` connection block |
+| **L4/L7 — TLS to the vendor** | CI → `s2457081.eu-fsn-3.betterstackdata.com` over HTTPS | **VERIFIED** — TCP+TLS completed and an application-layer body was returned this session | The 402 response body itself |
+| **L7 — application (vendor)** | Ingest refuses writes | **VERIFIED — HTTP 402 `{"error":"Quota exceeded"}`** | Direct POST, both endpoints |
+| **L7 — application (app)** | `ECONNREFUSED 10.0.1.40:8288` — the web app cannot reach the Inngest host | **VERIFIED as a symptom; cause owned by #7462** | ~4,576/day, flat across both surviving days |
+
+**The one open gap is L3.** Before Phase 4's apply runs, confirm the egress IP is in `admin_ips`.
+A handshake reset there is drift, and the checklist's ordering forbids proposing an sshd-layer or
+service-layer remedy ahead of that check. Note the `ECONNREFUSED` in this incident is **not** a
+firewall question — it is a service-down question already tracked by #7462 — so the L3-first rule
+applies to the *apply path*, not to the diagnosis, which is closed by measurement.
+
 ## User-Brand Impact
 
 **If this lands broken, the user experiences:** a release that cannot pull its container image from
@@ -483,20 +507,48 @@ resource. No new Terraform root, so `hr-every-new-terraform-root-must-include-an
 
 ### Terraform changes
 
-None required for the guard or the volume cut. Both are application code and CI workflow changes
-against already-provisioned surfaces.
+**Corrected during deepen-plan — the first draft of this section was wrong.** It claimed "no `.tf`
+change, therefore nothing applies". `vector.toml` is a **Terraform-delivered artifact**:
 
-One conditional: if §Domain Review's operations finding recommends raising log retention above 3
-days, that is a `betteruptime`/Telemetry attribute rather than a new resource, and it is recorded
-as a follow-up rather than folded in — changing it does not restore ingest and would confuse the
-soak signal.
+```hcl
+# apps/web-platform/infra/server.tf:982-991
+resource "terraform_data" "journald_persistent" {
+  # Also hashes vector.toml so an edit to the Vector config … re-fires this provisioner and
+  # re-delivers + reloads Vector on the running web-1. web-1 installs Vector ONLY at cloud-init
+  # boot and never re-runs cloud-init (ignore_changes=[user_data]), so without this fold a
+  # vector.toml change is file-only, never live on the host …
+  triggers_replace = sha256(join(",", [
+    file("${path.module}/journald-soleur.conf"),
+    file("${path.module}/vector.toml"),
+  ]))
+```
+
+So Phase 4's `vector.toml` edit **does** reach the running host — and only because that fold
+exists. Without it the change would be file-only, which is the #7539 shape ("vector.toml never
+reached web-1") and the ADR-184 §7 "merging this applies nothing" trap.
+
+No new Terraform resource is introduced. `hcloud_server.web` carries
+`lifecycle { ignore_changes = [user_data] }`, so the host is **not** replaced and there is no
+downtime — the provisioner re-delivers and reloads Vector in place.
 
 ### Apply path
 
-Not applicable — no `.tf` change. Note for the implementer: because there is no `*.tf` edit, the
-merge-triggered `apply-web-platform-infra.yml` path filter does not fire, so this PR applies no
-infrastructure. That is intentional and removes the sequencing hazard that
-`hr-tf-variable-no-operator-mint-default` guards against.
+**(b) existing resource re-fired via provisioner.** Changing `vector.toml` changes
+`triggers_replace`, which replaces `terraform_data.journald_persistent` and re-runs its
+provisioner against the running `web-1`. Blast radius: a Vector config re-delivery and reload. No
+host replace, no serving interruption — Vector is a log shipper, not a serving surface, so
+deepen-plan Phase 4.55's downtime gate does not fire.
+
+**The provisioner connects over SSH, and that is an apply-time dependency this plan must respect.**
+`server.tf` declares `connection { type = "ssh", host = hcloud_server.web["web-1"].ipv4_address }`.
+Per the comment immediately above it, SSH:22 is allowlisted to `var.admin_ips` only, so the apply
+succeeds **iff the CI/operator egress IP is in `admin_ips`**. A `connection reset by peer` at apply
+time is **admin-IP drift**, not an sshd fault — remedy is `/soleur:admin-ip-refresh` and the
+`admin-ip-drift.md` runbook, per `hr-ssh-diagnosis-verify-firewall`. See §Network-Outage Deep-Dive.
+
+This is an apply-time SSH dependency of the tooling, not an SSH diagnostic path into a host — it
+does not conflict with `hr-no-ssh-fallback-in-runbooks`, which forbids reaching the **registry**
+host for diagnosis. Nothing in this plan touches the registry host.
 
 ### Distinctness / drift safeguards
 
@@ -898,6 +950,12 @@ next week; this one cannot.
     may not open an issue. If it does not, add an N-consecutive escalation in the alarm itself.
 
 ### Phase 4 — Volume reduction at the structural chokepoint
+
+4.0 **L3 precondition (do this first).** Editing `vector.toml` re-fires
+    `terraform_data.journald_persistent`, which reaches `web-1:22` over SSH. Confirm the CI/operator
+    egress IP is in `var.admin_ips` before the apply. A `connection reset by peer` here is admin-IP
+    drift — remedy `/soleur:admin-ip-refresh` — never an sshd or service-layer fault
+    (`hr-ssh-diagnosis-verify-firewall`). See §Network-Outage Deep-Dive.
 
 4.1 **Primary fix — bound unparseable app-container lines in `vector.toml`.** The
     `parse_err != null → true` arm at `apps/web-platform/infra/vector.toml:83` is the single hole
