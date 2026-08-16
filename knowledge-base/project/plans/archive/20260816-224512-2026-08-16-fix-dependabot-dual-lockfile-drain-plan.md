@@ -358,7 +358,7 @@ execute there on untrusted code. An earlier draft of this plan described `--igno
 *preventing a new* risk while leaving that live instance untouched — the framing was backwards, and
 correcting it turns a defensive flag into an actual remediation.
 
-**Brand-survival threshold:** `single-user incident`
+- **Brand-survival threshold:** `single-user incident`
 
 Consequences: `requires_cpo_signoff: true` is set and CPO sign-off is recorded in `## Domain Review`;
 `user-impact-reviewer` is invoked at review time (the second of the two required sign-offs);
@@ -1123,17 +1123,27 @@ logs:
   where: GitHub Actions run logs for `lockfile-sync`; Sentry
   retention: GitHub Actions default retention; Sentry project retention
 discoverability_test:
-  command: bash scripts/lint-dual-lockfile.sh && bash scripts/lint-workflow-install-sites.sh
-  expected_output: >-
-    "lint-dual-lockfile: OK — N package-lock directories scanned (N >= 4), 0 tracked bun.lock,
-    0 bunfig [install] sections" then "lint-workflow-install-sites: OK — W workflow files scanned
-    (W >= 40), M install steps matched (M >= 18), 0 violations". Counts are asserted as floors, never
-    as literals, so a fifth package-lock directory does not stale the probe.
+  command: bash scripts/verify-lockfile-guards.sh
+  expected_output: "verify-lockfile-guards: OK"
 ```
 
-Both probes' first token is `bash` and both targets are repo-relative scripts committed in this PR,
-satisfying the preflight Check 10 execution boundary. No credentials are required and neither command
-contains `ssh`.
+**Corrected during ship (this plan's own probe was unrunnable).** The command above was originally
+`bash scripts/lint-dual-lockfile.sh && bash scripts/lint-workflow-install-sites.sh`, and the prose
+here asserted it "satisfies the preflight Check 10 execution boundary". It does not: Check 10 rejects
+every shell-active token — `&&` among them — **before** execution, so the probe would have been
+refused unparsed. The invariant would have been declared verifiable while nothing verified it, which
+is the exact defect the check exists to catch. The two guards now run behind one repo-relative
+wrapper, `scripts/verify-lockfile-guards.sh`, whose `set -e` withholds the success marker if either
+guard reddens (mutation-proven both directions).
+
+The `expected_output` was also fabricated: it quoted summary text (`"N package-lock directories
+scanned (N >= 4)…"`) that neither guard has ever printed. The contracted token is now a fixed marker
+the wrapper actually emits. The guards still print their live counts for a human reader, but the
+probe does not match on them — a count-matching probe goes stale the moment the tree grows, which is
+a false RED that teaches operators to ignore it.
+
+The command's first token is `bash`, the target is a repo-relative script committed in this PR, no
+credentials are required, and it contains no `ssh`.
 
 **No scheduled follow-through probe is enrolled**, and the reason is recorded in Phase 6.3 so it is
 not reintroduced: the sweeper cannot authenticate against the Dependabot alerts API, and a failing

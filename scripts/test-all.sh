@@ -747,6 +747,11 @@ if want_scripts; then
   run_suite "scripts/lint-dual-lockfile-live" bash scripts/lint-dual-lockfile.sh
   run_suite "scripts/lint-workflow-install-sites" bash scripts/lint-workflow-install-sites.test.sh
   run_suite "scripts/lint-workflow-install-sites-live" bash scripts/lint-workflow-install-sites.sh
+  # The wrapper the plan's `discoverability_test.command` contracts on. Registered
+  # separately from the two guards it calls because what it can get wrong is its own:
+  # reporting success while a guard beneath it reddened. preflight Check 10 matches on its
+  # marker, so an unconditional marker would report a healthy invariant against any tree.
+  run_suite "scripts/verify-lockfile-guards" bash scripts/verify-lockfile-guards.test.sh
   # The drain itself (#7084). Asserted from the committed lockfiles rather than from the
   # Dependabot API: this is deterministic, available at merge time, and needs no token the
   # workflow does not have. The alert COUNT is a lagging mirror of this same fact.
