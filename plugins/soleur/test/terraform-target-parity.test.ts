@@ -296,68 +296,136 @@ describe("terraform -target parity — current state is covered", () => {
 //
 // See ADR-154 (§ bridge-less stage amendment).
 
-/** Deliberately empty: no local `terraform_data` legitimately sits on the push
- *  path today. An addition here needs a one-line reason, like EXCLUSION_ALLOWLIST. */
-const PUSH_PATH_TERRAFORM_DATA_ALLOWLIST = new Set<string>([]);
+/** Deliberately empty: no local `terraform_data` legitimately sits on a
+ *  bridge-less path today. An addition needs a one-line reason, like
+ *  EXCLUSION_ALLOWLIST. Kept non-vacuous by an M-row that allowlists a
+ *  synthetic offender and asserts it is admitted — a zero-cardinality set with
+ *  no test is an escape hatch nobody has ever proven is wired. */
+const BRIDGELESS_TERRAFORM_DATA_ALLOWLIST = new Set<string>([]);
 
-/**
- * The `apply` job's text PRECEDING the CF Tunnel SSH bridge step — i.e. every
- * step that runs without TF_VAR_ci_ssh_private_key. Returns null when the
- * anchors do not resolve; callers MUST treat null as a failure, never as empty.
- */
-function bridgelessStage(workflowText: string): string | null {
-  const job = extractJobBlock(workflowText, "apply");
-  if (!job.trim()) return null;
-  const lines = job.split("\n");
-  const bridge = lines.findIndex((l) =>
-    /^\s*uses:\s*\.\/\.github\/actions\/cf-tunnel-ssh-bridge\s*$/.test(l),
-  );
-  if (bridge <= 0) return null;
-  return lines.slice(0, bridge).join("\n");
+/** Bridge step anchor — the composite's `uses:` VALUE, not any step title. */
+const BRIDGE_USES_RE =
+  /^\s*uses:\s*\.\/\.github\/actions\/cf-tunnel-ssh-bridge\s*$/;
+
+/** Every top-level job id (a 2-space `<id>:` key that owns `runs-on`/`steps`). */
+function listJobIds(workflowText: string): string[] {
+  const ids: string[] = [];
+  let inJobs = false;
+  for (const line of workflowText.split("\n")) {
+    if (/^jobs:\s*$/.test(line)) {
+      inJobs = true;
+      continue;
+    }
+    if (!inJobs) continue;
+    if (/^[A-Za-z]/.test(line)) break; // left the `jobs:` mapping
+    const m = line.match(/^ {2}([A-Za-z0-9_-]+):\s*$/);
+    if (m) ids.push(m[1]);
+  }
+  return ids;
 }
 
-/** `-target=terraform_data.<name>` on flag-shaped, comment-stripped lines only. */
+/**
+ * For ONE job: the text that runs WITHOUT `TF_VAR_ci_ssh_private_key` — i.e.
+ * everything before its first `cf-tunnel-ssh-bridge` step, or the WHOLE job
+ * when it never opens a bridge. Returns null only when the job block itself
+ * does not resolve; callers MUST treat null as a failure, never as empty.
+ *
+ * Scoping to the whole job set rather than the literal id "apply" is
+ * load-bearing: `vector_redeliver` has the identical two-stage shape and is
+ * compliant only by step ORDER (its own header calls that "LOAD-BEARING"), and
+ * the file has grown to 18 jobs by accretion.
+ */
+function bridgelessRangeForJob(
+  workflowText: string,
+  jobId: string,
+): string | null {
+  const job = extractJobBlock(workflowText, jobId);
+  if (!job.trim()) return null;
+  const lines = job.split("\n");
+  const bridge = lines.findIndex((l) => BRIDGE_USES_RE.test(l));
+  if (bridge === 0) return null; // a job that opens with the bridge is malformed
+  return bridge === -1 ? job : lines.slice(0, bridge).join("\n");
+}
+
+/**
+ * `terraform_data` addresses reachable from a `-target=`/`-replace=` flag.
+ *
+ * Quoting tolerance is NOT optional — the sibling `extractAllTargets` says so
+ * in its own comment, and this file's workflow uses 69 single-quoted and 14
+ * double-quoted `-target=` flags against 139 bare ones. A bare-only,
+ * line-leading matcher lets the #7539 regression re-land verbatim in the
+ * house style. `-replace=` is included because it drives the same provisioner
+ * run and the workflow already carries 13 of them.
+ */
 function terraformDataTargets(text: string): string[] {
   const out: string[] = [];
-  for (const raw of text.split("\n")) {
-    const m = stripLineComment(raw).match(
-      /^\s*-target=terraform_data\.([A-Za-z0-9_]+)/,
-    );
-    if (m) out.push(m[1]);
+  for (const m of stripComments(text).matchAll(
+    /-(?:target|replace)=['"]?(?:module\.[A-Za-z0-9_]+\.)*terraform_data\.([A-Za-z0-9_]+)/g,
+  )) {
+    out.push(m[1]);
   }
   return out;
 }
 
-/** Every flag-shaped `-target=` in a range, any type — the dispatch floor. */
+/** Every `-target=`/`-replace=` of any type — the dispatch floor's input. */
 function countTargets(text: string): number {
-  let n = 0;
-  for (const raw of text.split("\n")) {
-    if (/^\s*-target=/.test(stripLineComment(raw))) n++;
-  }
-  return n;
+  return [...stripComments(text).matchAll(/-(?:target|replace)=/g)].length;
 }
 
-/** Offenders = terraform_data targeted before the bridge, minus the allowlist. */
-function bridgelessOffenders(workflowText: string): string[] {
-  const range = bridgelessStage(workflowText);
-  if (range === null) throw new Error("bridge-less range did not resolve");
-  return terraformDataTargets(range).filter(
-    (n) => !PUSH_PATH_TERRAFORM_DATA_ALLOWLIST.has(n),
-  );
+/**
+ * Offenders across EVERY job: `{job, addr}` for each `terraform_data` reachable
+ * from a bridge-less range. Throws when a job block fails to resolve, so an
+ * unparseable workflow fails closed rather than reporting "no offenders".
+ */
+function bridgelessOffenders(
+  workflowText: string,
+): Array<{ job: string; addr: string }> {
+  const jobs = listJobIds(workflowText);
+  if (jobs.length === 0) throw new Error("no jobs resolved from the workflow");
+  const out: Array<{ job: string; addr: string }> = [];
+  for (const job of jobs) {
+    const range = bridgelessRangeForJob(workflowText, job);
+    if (range === null) throw new Error(`job block did not resolve: ${job}`);
+    for (const addr of terraformDataTargets(range)) {
+      if (!BRIDGELESS_TERRAFORM_DATA_ALLOWLIST.has(addr)) out.push({ job, addr });
+    }
+  }
+  return out;
 }
 
 describe("bridge-less stage may not target an SSH-provisioned resource (#7539)", () => {
   const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
 
-  test("the bridge-less range resolves from its content anchor", () => {
-    expect(bridgelessStage(wf)).not.toBeNull();
+  test("every job block resolves (an unparseable workflow fails CLOSED)", () => {
+    const jobs = listJobIds(wf);
+    // Floor derived from the measured value (18 jobs), not a round number: a
+    // job-enumeration that silently narrows takes the whole guard with it.
+    expect(jobs.length).toBeGreaterThanOrEqual(15);
+    for (const j of jobs) {
+      expect(bridgelessRangeForJob(wf, j)).not.toBeNull();
+    }
   });
 
-  test("dispatch floor: the range actually holds targets (a guard that scans nothing must FAIL)", () => {
-    expect(countTargets(bridgelessStage(wf)!)).toBeGreaterThan(50);
+  test("dispatch floor: the ranges hold targets (a guard that scans nothing must FAIL)", () => {
+    const scanned = listJobIds(wf)
+      .map((j) => countTargets(bridgelessRangeForJob(wf, j)!))
+      .reduce((a, b) => a + b, 0);
+    // Measured 219 across all bridge-less ranges at authoring time. Bounded
+    // NEAR the measurement, not at a fraction of it: a floor that tolerates
+    // losing half the range does not floor the tail, which is where #7539 lived.
+    expect(scanned).toBeGreaterThanOrEqual(180);
   });
 
-  test("no terraform_data is targeted before the CF Tunnel SSH bridge", () => {
+  test("the bridge anchor resolves in the apply job (content anchor, not a title)", () => {
+    // The apply job MUST have a bridge; a range equal to the whole job would
+    // mean the anchor stopped resolving and every post-bridge target became an
+    // offender — loud, but for the wrong reason. Pin it positively.
+    const applyJob = extractJobBlock(wf, "apply");
+    expect(BRIDGE_USES_RE.test(applyJob.split("\n").find((l) => BRIDGE_USES_RE.test(l)) ?? "")).toBe(true);
+    expect(bridgelessRangeForJob(wf, "apply")!.length).toBeLessThan(applyJob.length);
+  });
+
+  test("no terraform_data is targeted before a CF Tunnel SSH bridge, in ANY job", () => {
     expect(bridgelessOffenders(wf)).toEqual([]);
   });
 });
@@ -457,6 +525,8 @@ describe("Guard 1 mutation battery (#7539)", () => {
     ],
   });
 
+  const addrs = (wf: string) => bridgelessOffenders(wf).map((o) => o.addr);
+
   test("control: the compliant baseline is GREEN (a red baseline voids every row)", () => {
     expect(bridgelessOffenders(COMPLIANT)).toEqual([]);
   });
@@ -469,9 +539,7 @@ describe("Guard 1 mutation battery (#7539)", () => {
       ],
       postBridge: ["-target=terraform_data.journald_persistent \\"],
     });
-    expect(bridgelessOffenders(mutant)).toEqual([
-      "inngest_consumer_probe_install",
-    ]);
+    expect(addrs(mutant)).toEqual(["inngest_consumer_probe_install"]);
   });
 
   test("M2: a SECOND offender after a compliant first (catches a check that stops at hit one)", () => {
@@ -482,14 +550,52 @@ describe("Guard 1 mutation battery (#7539)", () => {
         "-target=terraform_data.fail2ban_tuning \\",
       ],
     });
-    expect(bridgelessOffenders(mutant)).toEqual([
+    expect(addrs(mutant)).toEqual([
       "inngest_consumer_probe_install",
       "fail2ban_tuning",
     ]);
   });
 
-  test("M3: an address in the bridge-less APPLY step, not the plan step (the range hole)", () => {
-    // A plan-step-only scope stays green here; the stage-wide range does not.
+  // M3a-c: TOKEN SHAPE. The real workflow writes 69 single-quoted and 14
+  // double-quoted `-target=` flags against 139 bare ones, and 13 `-replace=`.
+  // A bare-only, line-leading matcher lets the regression re-land in the
+  // file's own majority style — measured, it did: the first draft of this
+  // guard passed all three of these green.
+  test("M3a: SINGLE-QUOTED — the style 69 of the file's own -target flags use", () => {
+    const mutant = synth({
+      preBridge: ["-target='terraform_data.inngest_consumer_probe_install' \\"],
+    });
+    expect(addrs(mutant)).toEqual(["inngest_consumer_probe_install"]);
+  });
+
+  test("M3b: DOUBLE-QUOTED", () => {
+    const mutant = synth({
+      preBridge: ['-target="terraform_data.journald_persistent" \\'],
+    });
+    expect(addrs(mutant)).toEqual(["journald_persistent"]);
+  });
+
+  test("M3c: -replace= drives the same provisioner run as -target=", () => {
+    const mutant = synth({
+      preBridge: ["-replace=terraform_data.cosign_trusted_root \\"],
+    });
+    expect(addrs(mutant)).toEqual(["cosign_trusted_root"]);
+  });
+
+  test("M3d: a SECOND flag on one line, and a module-prefixed address", () => {
+    const mutant = synth({
+      preBridge: [
+        "-target=doppler_secret.alpha -target=terraform_data.fail2ban_tuning \\",
+        "-target=module.web.terraform_data.orphan_reaper_install \\",
+      ],
+    });
+    expect(addrs(mutant)).toEqual([
+      "fail2ban_tuning",
+      "orphan_reaper_install",
+    ]);
+  });
+
+  test("M4: an address in the bridge-less APPLY step, not the plan step (the range hole)", () => {
     const mutant = [
       "jobs:",
       "  apply:",
@@ -505,29 +611,81 @@ describe("Guard 1 mutation battery (#7539)", () => {
       "  inngest_host:",
       "    runs-on: ubuntu-latest",
     ].join("\n");
-    expect(bridgelessOffenders(mutant)).toEqual(["cosign_trusted_root"]);
+    expect(addrs(mutant)).toEqual(["cosign_trusted_root"]);
   });
 
-  test("M4: an unresolvable end anchor FAILS — it never passes vacuously on zero targets", () => {
-    const mutant = synth({
-      preBridge: ["-target=terraform_data.journald_persistent \\"],
-      bridgeLine: "        uses: ./.github/actions/some-other-action",
-    });
-    expect(bridgelessStage(mutant)).toBeNull();
-    expect(() => bridgelessOffenders(mutant)).toThrow(
-      /bridge-less range did not resolve/,
+  test("M5: a SECOND job with its own bridge, reordered so the target precedes it", () => {
+    // `vector_redeliver` in the real file has exactly this shape and is
+    // compliant only by step ORDER. An apply-job-only guard is blind to it.
+    const mutant = [
+      "jobs:",
+      "  apply:",
+      "    steps:",
+      "      - name: CF Tunnel SSH bridge (gated)",
+      BRIDGE,
+      "      - name: Terraform apply",
+      "        run: terraform apply -target=terraform_data.journald_persistent",
+      "  vector_redeliver:",
+      "    steps:",
+      "      - name: Terraform plan (scoped)",
+      "        run: terraform plan -target=terraform_data.journald_persistent",
+      "      - name: CF Tunnel SSH bridge",
+      BRIDGE,
+      "  entrypoint_audit:",
+      "    runs-on: ubuntu-latest",
+    ].join("\n");
+    expect(bridgelessOffenders(mutant)).toEqual([
+      { job: "vector_redeliver", addr: "journald_persistent" },
+    ]);
+  });
+
+  test("M6: a NEW job with no bridge at all — the whole job is bridge-less", () => {
+    const mutant = [
+      "jobs:",
+      "  apply:",
+      "    steps:",
+      "      - name: CF Tunnel SSH bridge (gated)",
+      BRIDGE,
+      "  hotfix_seccomp:",
+      "    steps:",
+      "      - name: Terraform apply",
+      "        run: terraform apply -target=terraform_data.docker_seccomp_config",
+      "  entrypoint_audit:",
+      "    runs-on: ubuntu-latest",
+    ].join("\n");
+    expect(bridgelessOffenders(mutant)).toEqual([
+      { job: "hotfix_seccomp", addr: "docker_seccomp_config" },
+    ]);
+  });
+
+  test("M7: an unresolvable JOB SET fails CLOSED, never empty-passes", () => {
+    expect(() => bridgelessOffenders("name: no jobs here\non: push\n")).toThrow(
+      /no jobs resolved/,
     );
   });
 
-  test("H1: comment-stripping and flag-shape matching are live, not incidental", () => {
-    // Both lines mention `-target=terraform_data.` but neither is a real flag:
-    // one is a YAML comment, one is inside a `::warning::` message string. The
-    // real workflow contains both shapes, so a naive matcher reds a clean tree.
+  test("M8: the allowlist escape hatch is WIRED (a zero-cardinality set is unproven)", () => {
+    const mutant = synth({
+      preBridge: ["-target=terraform_data.local_only_thing \\"],
+    });
+    expect(addrs(mutant)).toEqual(["local_only_thing"]);
+    BRIDGELESS_TERRAFORM_DATA_ALLOWLIST.add("local_only_thing");
+    try {
+      expect(bridgelessOffenders(mutant)).toEqual([]);
+    } finally {
+      BRIDGELESS_TERRAFORM_DATA_ALLOWLIST.delete("local_only_thing");
+    }
+    expect(addrs(mutant)).toEqual(["local_only_thing"]);
+  });
+
+  test("H1: comment-stripping is live (now load-bearing — the matcher is unanchored)", () => {
+    // With an unanchored matcher, stripComments is what keeps a DOCUMENTED
+    // target from reading as an applied one. The first draft anchored on
+    // `^\s*-target=`, which made this strip a measured no-op.
     const mutant = synth({
       preBridge: [
         "-target=doppler_secret.alpha \\",
         "# -target=terraform_data.journald_persistent (documented, not applied)",
-        'echo "::warning::a -target=terraform_data.fail2ban_tuning run skipped"',
       ],
     });
     expect(bridgelessOffenders(mutant)).toEqual([]);
@@ -537,13 +695,28 @@ describe("Guard 1 mutation battery (#7539)", () => {
     const mutant = synth({
       preBridge: [
         "-target=github_actions_secret.zeta \\",
-        "-target=random_id.eta \\",
+        "-target='random_id.eta' \\",
       ],
       postBridge: [
         "-target=terraform_data.synthetic_probe_install \\",
         "-target=terraform_data.synthetic_monitor_install \\",
       ],
     });
+    expect(bridgelessOffenders(mutant)).toEqual([]);
+  });
+
+  test("H3: a job with no terraform at all stays GREEN", () => {
+    const mutant = [
+      "jobs:",
+      "  apply:",
+      "    steps:",
+      "      - name: CF Tunnel SSH bridge (gated)",
+      BRIDGE,
+      "  entrypoint_audit:",
+      "    steps:",
+      "      - name: Audit",
+      "        run: echo ok",
+    ].join("\n");
     expect(bridgelessOffenders(mutant)).toEqual([]);
   });
 });
