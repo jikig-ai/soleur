@@ -95,9 +95,16 @@ and a counted ceiling asserts `SKIPPED_ASSERTIONS <= 2` — one skip-eligible ar
 cost of two. **The cost is 2, not 1, and this was re-derived at the #7565 rebase rather than
 carried:** that PR gave the T5 mutation arm a second counted assertion (sha256sum's own
 `<tarball>: FAILED` rejection verdict, asserted in both arms), so the arm now contributes exactly
-two on every route — two on the ran route, two on each defect route, and a declared skip cost of
-two. A ceiling left at 1 would have failed the very run it exists to permit. The ceiling is a
-function of the arm's assertion count and must be re-read off the arm whenever that changes. This follows
+two on each of its four **verdict** routes — ran, fixture-defect, harness-defect, and the declared
+skip. A ceiling left at 1 would have failed the very run it exists to permit. The ceiling is a
+function of the arm's assertion count and must be re-read off the arm whenever that changes.
+
+Scoped to the *verdict* routes deliberately: the arm's `did not land` pre-branch sits outside them
+and contributes **one**, which is pre-existing and identical on `main`. That route is sound because
+it must be red regardless and is doubly red — the total falls to 48 and the floor fires alongside
+the arm's own message (measured, mutation row 8). An earlier draft of this paragraph said "every
+route" and mutation row 8 falsified it: a universal asserted over a route set that had not been
+enumerated. This follows
 `infra-config-apply.test.sh`, which already ships the counter, the assertion-cost denomination, the
 sum-floor and a degraded-run `NOTE`. Only the ceiling is new here. Denominating in assertion cost
 rather than in arms resolves the ceiling's unit ambiguity outright and is forward-compatible with

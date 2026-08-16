@@ -2111,11 +2111,21 @@ total=$((passes + fails + SKIPPED_ASSERTIONS))
 #
 #                   THE ARM'S CONTRIBUTION IS 2, NOT 1 — restated because #7565 changed it under
 #                   this branch. That PR gave the arm a second counted assertion (the
-#                   checksum-rejection premise), so the invariant this floor depends on is now
-#                   "the T5 mutation arm contributes exactly TWO on every route": two on the ran
-#                   route (premise + result), two on each defect route, and a declared skip cost
-#                   of two. A route contributing a different number is indistinguishable here
-#                   from an arm that partly vanished, which is what the floor exists to catch.
+#                   checksum-rejection premise), so the invariant this floor depends on is that
+#                   the T5 mutation arm contributes exactly TWO on each of its four VERDICT
+#                   routes: two on the ran route (premise + result), two on the fixture-defect
+#                   and harness-defect routes, and a declared skip cost of two. A verdict route
+#                   contributing a different number is indistinguishable here from an arm that
+#                   partly vanished, which is what the floor exists to catch.
+#
+#                   NOT "every route" — the arm's `did not land` PRE-BRANCH (the `diff -q` that
+#                   checks the errexit strip applied) sits OUTSIDE the verdict branch and
+#                   contributes ONE. That is pre-existing and unchanged by this PR; origin/main
+#                   has the identical shape. It is sound because that route must be red anyway
+#                   and is doubly so: total falls to 48 and this floor fires alongside the
+#                   arm's own message. Measured, mutation row 8: two FAIL lines, exit 1. The
+#                   earlier wording here said "every route" and was falsified by that row —
+#                   a universal asserted over routes that had not all been enumerated.
 #
 #                   PRECISION about what the floor covers: three of the arm's terminations —
 #                   the structural `exit 1`, an `arm_skip` cost rejection, and the EXIT trap on a
