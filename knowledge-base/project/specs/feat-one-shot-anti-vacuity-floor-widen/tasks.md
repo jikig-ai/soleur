@@ -242,3 +242,78 @@ first version derived `deferred` as "everything not covered", making
 are now declared regexes with an UNCLASSIFIED bucket that must be empty. The plan's Guard 2
 row 3 predicted exactly this shape; it still shipped in the first draft and only mutation
 caught it.
+
+
+---
+
+## Addendum — 2026-08-16, post-review
+
+The Completion Record above was written before the review panel ran. Several of its numbers
+were **wrong**, and the corrections matter more than the originals. Recorded as an addendum
+rather than an edit: the originals are what a green guard reported, and the gap between them
+is the finding.
+
+### Corrected population
+
+| Quantity | Recorded above | Measured after review |
+|---|---|---|
+| Floor-bearing repo-wide | 84 | **97** |
+| Covered | 41 | **51** |
+| Declared-deferred | 43 | **46** |
+| Floors that FIRE | 24 | **36** |
+| NO_FIRE | 0 | **0** (after fixing 7 more suites) |
+| Mutant not constructible | 17 | **15** |
+| Suites hardened | 10 | **17** |
+
+### Why the originals were wrong — four fail-open defects in the guard itself
+
+1. **The oracle matched its own temp path.** The FIRES sentinel ran under `grep -i` and
+   included `vacuit`, while every mutant lives under a directory this file names
+   `vacuity-floor-meta.XXXX`, which bash prints as the path prefix of its diagnostics. A
+   crashing mutant matched FIRES on its own filename; `-i` also made `FATAL` match git's
+   `fatal:`. Correcting it moved the reported firing population **51 → 32** before the
+   remaining fixes brought it to 36. Caught by ARM 8, the control that exists for this.
+2. **CONSTRUCTION was tested before FIRES**, and `|| [[ $rc -eq 2 ]]` forced it unconditionally
+   — 2 being this repo's own fatal convention. Compliant floors whose phrasing sat outside a
+   hardcoded allowlist were booked as permanent debt.
+3. **The derivation missed the arithmetic form** `(( total < MIN ))` and matched COMMENTS and
+   HEREDOC bodies. The guard's own header comment was scored a floor and sliced 277 lines of
+   the guard into an executed mutant.
+4. **The slice refused to cross `$((`.** Arithmetic expansion is safe to carry into a mutant;
+   only command substitution is not. Rejecting both left compliant floors unbound.
+
+### A correction to my own widening
+
+`-gt` and `-eq` were added to the operator set and **reverted**: `-gt` is the shape of a
+suite's final exit gate (`if [[ "$FAIL" -gt 0 ]]`) and `-eq` of an ordinary assertion, so
+admitting them reported 13 "non-firing floors" that were neither floors nor broken. Widening a
+matcher moves the error to the other side, and every fixture sat on the must-trip side.
+
+### Ratchets, all proven at zero slack
+
+`MIN_FIRING_SUITES=36` (37 → RED), `MAX_CONSTRUCTION_FAILURES=15` (14 → RED),
+`MIN_CONSERVING=18` (19 → RED), `MAX_DEFERRED=46`, `MIN_META_CASES=19`.
+
+### New arms, each mutation-proven
+
+- **8b permissiveness bound** — nothing bounded the oracle in the loose direction, and both
+  ratchets move that way. Adding `|expected|error` to the vocabulary now reds.
+- **10d** the CASE counter must not move inside a verdict helper (ADR-193 decision #2,
+  previously claimed in a comment and enforced nowhere).
+- **10e** conservation is EXECUTED, not just spelled. Arms 10a-10d are static and all
+  satisfied by a gutted comparison; replacing the condition with `if false` had left the guard
+  byte-identical green.
+- **ARM 6 deleted** as subsumed by ARM 3 + ARM 5b.
+
+### ADR ordinal
+
+**ADR-191 → ADR-193.** Both 191 and 192 were claimed by sibling branches after the original
+probe. Three of the ADR's claims were also corrected: it described the *rejected* closure
+identity as shipped, said "seven suites" where ten were hardened, and asserted every covered
+suite is mutation-tested when those whose mutant cannot be built are counted separately.
+
+### Deferral
+
+Issue **#7580** filed for the 8 measured NO_FIRE suites in deferred directories, with the 33
+CONSTRUCTION listed separately as a measurement task rather than a fix backlog, and the
+per-scope-ratchet constraint recorded.
