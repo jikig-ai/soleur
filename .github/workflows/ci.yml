@@ -451,7 +451,8 @@ jobs:
           fi
 
       # #5875 item 3 / ADR-079 — SDK-bump sandbox gate (BLOCKING). Asserts
-      # bun.lock↔package-lock parity for both @anthropic-ai SDK packages AND, on a
+      # package-lock PRESENCE for both @anthropic-ai SDK packages (the bun.lock parity
+      # half was retired with bun.lock itself — ADR-191) AND, on a
       # resolved-version bump vs the base branch, requires an `sdk-bump-verified:`
       # ack (a maintainer attests the committed seccomp profile was validated against
       # the new SDK). Closes the #5849 "a routine SDK bump shipped green because
@@ -584,7 +585,7 @@ jobs:
 
       - name: Install web-platform dependencies
         working-directory: apps/web-platform
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Build (next build runs the route-file validator)
         working-directory: apps/web-platform
@@ -630,23 +631,16 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web-platform/package-lock.json
 
-      # First actions/cache usage in this repo. SHA pinned per the standing
-      # vendor-pin discipline (every other action above is also SHA-pinned).
-      # Cache key uses `apps/web-platform/bun.lock` (text format — `bun.lockb`
-      # does not exist in this repo; hashFiles() would silently hash zero bytes).
-      - name: Cache bun install (apps/web-platform)
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/.bun/install/cache
-            apps/web-platform/node_modules
-          key: bun-webplat-${{ runner.os }}-${{ hashFiles('apps/web-platform/bun.lock') }}
-          restore-keys: |
-            bun-webplat-${{ runner.os }}-
-
+      # The hand-rolled `actions/cache` block that used to sit here is gone, not
+      # re-pointed: `npm ci` DELETES node_modules unconditionally, so caching it is worse
+      # than useless. setup-node's `cache: npm` caches the npm _download_ cache instead,
+      # which is the part `npm ci` can actually reuse. Same pattern web-platform-build
+      # already used.
       - name: Install web-platform dependencies
-        run: bun install --frozen-lockfile
+        run: npm ci --ignore-scripts
         working-directory: apps/web-platform
 
       - name: Type-check web-platform
@@ -680,19 +674,11 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-
-      - name: Cache bun install (root)
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-          key: bun-root-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            bun-root-${{ runner.os }}-
+          cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Install root dependencies
-        run: bun install --frozen-lockfile
+        run: npm ci --ignore-scripts
 
       - name: Run bun-side tests
         run: bash scripts/test-all.sh bun
@@ -883,27 +869,14 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Install unzip (required by setup-bun)
-        # The Playwright Jammy image does not include unzip, which oven-sh/setup-bun
-        # shells out to during install. Without it the action fails with
-        # "error: unzip is required to install bun" (see oven-sh/setup-bun#55).
-        # critical-css-gate did not hit this because that job uses npm, not bun.
-        # Chained with `&&` so a flaky `apt-get update` (mirror outage) fails the
-        # step instead of falling through to a stale-cache install.
-        # `--no-install-recommends` keeps the install footprint minimal (no docs,
-        # no suggested-package pulls).
-        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends unzip
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
-        with:
-          bun-version-file: ".bun-version"
-
+      # setup-bun and its `unzip` prerequisite are both gone (ADR-191): this job's only
+      # bun usage was the two installs below. The image ships Node 24, so no
+      # actions/setup-node either — that is deliberate and unchanged.
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: npm ci --ignore-scripts
 
       - name: Install web-platform dependencies
-        run: bun install --frozen-lockfile
+        run: npm ci --ignore-scripts
         working-directory: apps/web-platform
 
       - name: Run E2E tests
@@ -951,7 +924,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Install root dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Build docs
         env:

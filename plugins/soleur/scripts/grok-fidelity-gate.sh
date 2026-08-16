@@ -25,7 +25,7 @@ else
 fi
 
 # Root package.json provides shared deps (e.g. yaml for agent-registry imports).
-bun install --frozen-lockfile
+npm ci --ignore-scripts
 
 cd "$PLUGIN_ROOT"
 

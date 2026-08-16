@@ -65,17 +65,19 @@ jobs:
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 
-      - name: Setup Bun                          # the gate's depcruise binary lives in node_modules
-        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+      - name: Setup Node.js                      # the gate's depcruise binary lives in node_modules
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          bun-version-file: ".bun-version"
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web-platform/package-lock.json
 
       - name: Install dependencies (no postinstall scripts over untrusted PR code)
         working-directory: apps/web-platform
         # --ignore-scripts kills the postinstall ACE vector on fork-controlled package.json.
         # (It does NOT stop the gate's own .dependency-cruiser.cjs from running — that is the
         # accepted Stage-A residual, bounded by the capped/rotatable key + no write token.)
-        run: bun install --frozen-lockfile --ignore-scripts
+        run: npm ci --ignore-scripts
 
       - name: Run the constraint-gate (capture rc)
         id: gate

@@ -29,9 +29,18 @@
 # ::error:: strings, prose). Matching the raw string would fire on a correct tree, and a
 # false-RED guard gets disabled.
 #
-# BOUNDARY (asserted by H3, not merely described): composite actions under
-# `.github/actions/**` and the production Dockerfile are OUT OF SCOPE. The Dockerfile
-# deliberately runs `npm ci` WITHOUT --ignore-scripts; clause 2 does not govern it.
+# BOUNDARY (asserted by H3, not merely described). OUT OF SCOPE:
+#   - composite actions under `.github/actions/**`;
+#   - the production Dockerfile, which deliberately runs `npm ci` WITHOUT --ignore-scripts;
+#   - `apps/web-platform/scripts/*-in-image.sh`, which install inside an image build against
+#     a pinned SDK — same class as the Dockerfile, and named here rather than left as a
+#     silent gap in the class-2 globs;
+#   - `*.test.sh`, because a mutation battery's heredoc FIXTURES necessarily contain the
+#     exact violating text the guard looks for. Without this, the guard reddens on its own
+#     test suite: a false positive that would get the guard disabled, which is the failure
+#     mode clause 1's invocation-vs-raw-string discrimination exists to avoid.
+# The `*.test.sh` exclusion is a real (accepted) hole: a test script performing a genuine
+# install is unseen. It is the narrowest exclusion that keeps the guard credible.
 #
 # Two anti-vacuity floors, because file enumeration and step extraction fail independently:
 # a broken step regex would scan every workflow, match nothing, and exit 0 green — the
@@ -65,6 +74,7 @@ for f in "${tracked[@]}"; do
   case "$f" in
     .github/actions/*) continue ;; # stated boundary
     *.github/workflows/*.yml | *.github/workflows/*.yaml) workflow_files+=("$f") ;;
+    *.test.sh) continue ;; # stated boundary: harness fixtures carry violating text by design
     scripts/*.sh | scripts/*/*.sh | plugins/*.sh | plugins/*/*.sh | plugins/*/*/*.sh | plugins/*/*/*/*.sh | plugins/*/*/*/*/*.sh | plugins/*/*/*/*/*/*.sh)
       script_files+=("$f")
       ;;
