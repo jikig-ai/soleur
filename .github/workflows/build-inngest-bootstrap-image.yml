@@ -581,7 +581,20 @@ jobs:
               echo "❌ mirror_only backfill FAILED for \`${IMAGE}:${TAG}\` (reason=\`${reason}\` rc=${rc}) — zot does not serve the GHCR digest; do not pin." >> "$GITHUB_STEP_SUMMARY"
               exit 1
             fi
-            echo "::warning::zot mirror degraded for ${ZOT:-$IMAGE}:${TAG} (reason=${reason} rc=${rc})${detail:+ — ${detail}} — build UNAFFECTED (GHCR primary/break-glass); zot redundancy reduced. Backfill: gh workflow run build-inngest-bootstrap-image.yml -f ref=vinngest-${TAG} -f mirror_only=true (crane, digest-preserving — NOT 'docker pull + docker push', which re-creates the manifest and breaks digest parity). If disk-full: see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd."
+            # WHICH EVIDENCE CHANNEL (#7555). This trailer used to be an unconditional
+            # "If disk-full: see SOLEUR_ZOT_DISK" for every reason — including copy/parity, which
+            # fail while PUSHING or while READING BACK bytes, so registry-host disk telemetry is a
+            # cause this job did not measure (ADR-166). Same defect the release workflow carried;
+            # found here because the fix was swept by CLAIM rather than by file.
+            case "$reason" in
+              copy|parity_*|blobs_missing)
+                _ptr=" Upload/read-back evidence — this stage moved or verified bytes, so read the PatchBlobUpload rows and their paired statusCode/latency/Content-Length rather than host disk. Run: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep PatchBlobUpload" ;;
+              bridge_down|crane_*|unrouted)
+                _ptr=" Registry-host health: see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd. Run: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep SOLEUR_ZOT_DISK" ;;
+              *)
+                _ptr=" Stage '${reason}' is unclassified, so BOTH channels are named and NEITHER is asserted as the cause: SOLEUR_ZOT_LOG PatchBlobUpload rows, and SOLEUR_ZOT_DISK." ;;
+            esac
+            echo "::warning::zot mirror degraded for ${ZOT:-$IMAGE}:${TAG} (reason=${reason} rc=${rc})${detail:+ — ${detail}} — build UNAFFECTED (GHCR primary/break-glass); zot redundancy reduced. Backfill: gh workflow run build-inngest-bootstrap-image.yml -f ref=vinngest-${TAG} -f mirror_only=true (crane, digest-preserving — NOT 'docker pull + docker push', which re-creates the manifest and breaks digest parity).${_ptr}"
             echo "⚠️ zot mirror degraded for \`${TAG}\` (reason=\`${reason}\` rc=${rc}) — GHCR unaffected, backfill needed." >> "$GITHUB_STEP_SUMMARY"
             # On the BUILD path the mirror is secondary, so exit 0 and let the release stand.
             exit 0
