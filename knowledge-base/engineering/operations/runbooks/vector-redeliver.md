@@ -168,10 +168,18 @@ Verify **off-host**. No SSH (`hr-no-ssh-fallback-in-runbooks`).
    Expect:
    - `journald_storage.persistent == true` — the journald half of the resource is still in effect;
    - `services.vector` active, and `services.vector_journal_tail` **non-empty** — the agent restarted and is talking;
-   - `services.vector_config_identity` — the identity of the **live** `/etc/vector/vector.toml`, in the form `redis_allowlisted=<yes|no> sha256=<hash> mtime=<epoch>` (`cat-deploy-state.sh:618`). Capture it **before** you dispatch and compare after: a changed `sha256` is direct proof the delivery landed.
+   - `services.vector_config_identity` — the identity of the **live** `/etc/vector/vector.toml`, in the form `redis_allowlisted=<yes|no> sha256=<hash> mtime=<epoch>` (`cat-deploy-state.sh:618`).
+
+     **Compare it against the sha the committed file renders to, not against its own previous value.** Render the same substitution the delivery performs and hash it:
+
+     ```bash
+     sed 's|@@HOST_NAME@@|soleur-web-platform|g' apps/web-platform/infra/vector.toml | sha256sum
+     ```
+
+     `live == rendered` is the success condition, and it is the *only* form that works on every dispatch. A before-vs-after diff proves something changed; it does not prove the *right* content is there, and it **inverts on a NO-OP** — when the host already has the committed file the gate returns NO-OP (a success) and the sha correctly does **not** move, which a "changed sha proves delivery" rule reads as failure. Capturing the before value is still worth doing, but as a supporting datum, not the verdict.
      The literal string **`absent`** (`:620`) means the file is not there at all — that is not a stale delivery, it is a broken agent config, and it is the one value that should stop you rather than prompt a re-dispatch.
 
-   > The live sha will **not** equal `sha256sum apps/web-platform/infra/vector.toml` — the delivery substitutes `@@HOST_NAME@@` for the host's Better Stack name. Compare before-vs-after, never against the repo file.
+   > The live sha will **not** equal a bare `sha256sum apps/web-platform/infra/vector.toml` — the delivery substitutes `@@HOST_NAME@@` for the host's Better Stack name, so the repo file as-committed is never what lands. That is why the check above pipes the file through the same `sed` first. Hashing the raw repo file and finding a mismatch proves nothing.
 
 3. **Positive control on the sink.** A new identifier producing no rows is ambiguous — the agent may be dark. Assert against something web-1 genuinely emits, with a timestamp after the restart:
 
