@@ -183,6 +183,7 @@ of the first apply. A number that licenses a guard has to describe the command b
   implement the root-cause readiness probe as Phase 2, blocked on the first firing's forensics."*
   When Phase 2 lands and the root cause is named and fixed at source, this recovery becomes dead
   code and should be removed rather than left as a second mechanism nobody reasons about.
+  Phase 2 is filed as **#7576**, blocked explicitly on the first firing of this recovery.
 - **C4: no edit.** No new external actor, external system, container or access relationship.
 
 ## Alternatives rejected

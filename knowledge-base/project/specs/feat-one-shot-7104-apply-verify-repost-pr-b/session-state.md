@@ -306,3 +306,13 @@ intermediate commits means rewriting all 23 on the branch — `git rebase -i` is
 environment, so it would need `--exec` or `filter-branch` across the whole range — to change
 history that the merge discards. The risk is real (this branch has already had one sibling
 collision) and the benefit is zero once squashed. Recorded rather than silently dropped.
+
+### Phase 2 filed
+
+**#7576** — *"Phase 2 (#7104): name the infra-config push race at source, then add an advisory
+readiness probe"*, `type/chore` + `domain/engineering`, milestone `Post-MVP / Later`. Blocked
+explicitly on the first firing of this PR's recovery, with the forensics to read
+(`preframe_status`, `observed_start_ts`, pass 2's `restarts[]`, the host journal), the
+NAME-the-mechanism gate before any code, and the advisory-with-timeout constraint stated as
+binding with the 6 s + 3 s = 9 s measurement behind it. It records that the >=3-in-30-days
+trigger must NOT be built.
