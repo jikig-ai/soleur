@@ -6,8 +6,12 @@
 # claim; this file is the measurement. Every sibling bash mutation battery in this directory is
 # `*-mutation.test.sh` AND registered in .github/workflows/infra-validation.yml
 # (workspaces-luks-g4, web-host-provisioner-parity, inngest-rls, scan-workflow,
-# zot-image-staleness, cf-tunnel-liveness-gate), so this one follows both halves of that
-# convention. An unrun battery is a claim, not a guard.
+# zot-image-staleness), so this one follows both halves of that convention. An unrun battery is
+# a claim, not a guard.
+#
+# (An earlier revision of this header also cited `cf-tunnel-liveness-gate` as a sibling "in this
+# directory". It is not: it lives in scripts/ and is named `-mutations.test.sh`, plural. The
+# citation was inherited verbatim from the zot battery's header, where it was correct.)
 #
 # WHAT IT DRIVES. Each row copies a minimal repo skeleton, applies exactly one mutation, and runs
 # the real suite that is supposed to catch it — infra-config-gate.test.sh for the Guard 1 and
@@ -22,18 +26,34 @@
 #   region boundaries  — G2-5 (a nested `done` inside the pinned region)
 #   authority input    — D2 (the output the workflow's `if:` literals are validated against)
 #   assertion count    — G2-7 (the anti-vacuity floor, via deletion of a pinned block)
-#   harness stubbing   — S1 (the PATH stub's argv contract)
+#   harness stubbing   — S1-S4 (the PATH stubs' argv contract: the URL path, the HOST, the HMAC
+#                        VALUE and the secret NAME. S2-S4 were added after measuring that the
+#                        stubs pinned PRESENCE only, so a body polling the wrong host, signing
+#                        with an empty HMAC, or reading the wrong secret stayed green)
+#   temporal contract  — S5 (the retry/settle budget. `sleep` was stubbed to a bare `exit 0`,
+#                        which makes a suite fast and simultaneously blind to the timing
+#                        contract it is supposed to hold)
+#   fixture direction  — I4/I5 in the verify suite: the equality boundary
+#                        (start_ts == APPLY_START_EPOCH) and the ordinary FRESH-frame arm, both
+#                        previously uninstantiated. See the note below, which this supersedes.
 #   the floor          — G1-7 (the predicate's one passing arm; without it the predicate could be
 #                        `return 1` unconditionally and every refusal row would stay green)
+#   stay-green control — STAY-GREEN (the only rc=0 row). Without it a suite that has become
+#                        impossible to satisfy scores identically to a correct one.
 #
 # AXES THIS BATTERY DOES **NOT** EDIT:
 #   demotion — leaving asserted bytes identical and rewording the prose above them so the
 #     prescription reads as conditional. Nothing in this diff is a prose prescription that a gate
 #     enforces; ADR-189 is a decision record, not an enforced contract. Not applicable rather
 #     than skipped.
-#   fixture direction — the far side of a transform. Guard 1's predicate is a one-directional
-#     allow-list (exactly one input shape returns 0), and G1-7 IS the opposite-direction fixture.
-#     There is no second direction to sample.
+#   (fixture direction WAS listed here as "not applicable, there is no second direction to
+#     sample". That was wrong and is corrected above: the predicate's input is an ORDERING, so it
+#     has three directions — below, equal, and above the baseline — and only the strict ones were
+#     ever instantiated. The equality boundary is precisely what distinguishes `-lt` from `-le`,
+#     which is the mutation G1-3 applies. Measuring it also surfaced that production's inline
+#     freshness comparison decides staleness BEFORE delegating to the predicate, so the
+#     predicate's own `-lt` is a redundant second evaluation and the unit matrix's equality arm
+#     is unreachable from the shipped call path.)
 #   the cf-tunnel-ssh-bridge composite action — the third production-reachable path named in
 #     Guard 2's assembly. Pre-existing, unmodified by this PR, and out of scope by decision (see
 #     the assembly note in infra-config-gate.test.sh); mutating it would test a guard this PR did
@@ -250,6 +270,45 @@ elif case == 'S1':
     sub(VERIFY, '"https://deploy.${APP_DOMAIN_BASE}/hooks/infra-config-status"',
                 '"https://deploy.${APP_DOMAIN_BASE}/hooks/infra-config-STATUS-TYPO"')
 
+elif case == 'S2':
+    # STUB ARGV — THE HOST, not the path. S1 corrupts the path suffix, which the stub's
+    # `*/hooks/infra-config-status` check catches. The HOST was presence-only: any host at all
+    # satisfied it, so a body polling somebody else's server for its production verdict stayed
+    # green. Repoints the request while leaving the path intact.
+    sub(VERIFY, '"https://deploy.${APP_DOMAIN_BASE}/hooks/infra-config-status"',
+                '"https://elsewhere.example/hooks/infra-config-status"')
+
+elif case == 'S3':
+    # STUB ARGV — THE HMAC VALUE. The header was pinned by PRESENCE only (`X-Signature-256:*`),
+    # so an empty or malformed signature passed. In production that request 401s and the gate
+    # reports a transport failure it cannot explain.
+    sub(VERIFY, 'X-Signature-256: sha256=${HMAC}', 'X-Signature-256: sha256=')
+
+elif case == 'S4':
+    # STUB ARGV — THE SECRET NAME. The doppler stub answered identically for any name, so the
+    # body could read the WRONG secret and sign with the wrong key while every case stayed
+    # green. Renames the signing-secret lookup.
+    sub(VERIFY, 'doppler secrets get WEBHOOK_DEPLOY_SECRET --plain',
+                'doppler secrets get WEBHOOK_DEPLOY_SECRET_TYPO --plain')
+
+elif case == 'S5':
+    # RETRY / SLEEP CARDINALITY. `sleep` was stubbed to a bare `exit 0`, so the documented 8 s
+    # settle preamble — which exists because the async handler takes ~5-8 s, and without it
+    # attempt 1 is always wasted — could be deleted or retimed with no case able to see it.
+    sub(VERIFY, 'sleep 8', 'sleep 0')
+
+elif case == 'STAY-GREEN':
+    # THE STAY-GREEN CONTROL, and the only row that expects rc=0.
+    #
+    # Every other row asserts that a mutation drives the suite RED. A battery composed entirely
+    # of must-trip rows cannot distinguish "these guards detect the right things" from "these
+    # guards have become impossible to satisfy" — a suite that reds on everything scores 17/17
+    # exactly like a correct one. This row perturbs the tree in a way that is genuinely
+    # IRRELEVANT to every guarded property (a comment appended to the library) and requires the
+    # suite to stay GREEN. It is the far side of the transform, in the fixture-direction sense.
+    with open(GATE, 'a', encoding='utf-8') as fh:
+        fh.write('\n# MUTATED STAY-GREEN: an irrelevant comment. No guard may react to this.\n')
+
 else:
     die('unknown case id')
 PYEOF
@@ -267,14 +326,25 @@ PYEOF
 if [[ "${1:-}" == "--row" ]]; then
   _id="$2"; _suite="$3"; _want_rc="$4"; _marker="$5"; _result="$6"; _pristine="$7"
 
+  # OWNING TRAP, REGISTERED BEFORE THE ALLOCATION IT RECLAIMS, AND WIDENED TO INT TERM HUP
+  # (#7104 PR-B review). The child used bare `rm -rf` at each exit path and no trap at all, so a
+  # killed run — which is routine here: this battery runs under a parent fan-out on a machine
+  # with sibling worktrees, and long runs get reaped — leaked one sandbox copy of the infra tree
+  # per row. Measured: 12 entries left behind by one interrupted run. /tmp is a machine-global
+  # 4 GiB tmpfs, so the leak is other sessions' problem too.
+  _CHILD_TMPS=()
+  _child_cleanup() { [[ ${#_CHILD_TMPS[@]} -gt 0 ]] && rm -rf "${_CHILD_TMPS[@]}"; return 0; }
+  trap _child_cleanup EXIT INT TERM HUP
+
   _box="$(mktemp -d -t "repushmut-$_id.XXXXXXXX")" || {
     printf 'SETUPFAIL|%s|0|mktemp box\n' "$_id" > "$_result"; exit 0; }
+  _CHILD_TMPS+=("$_box")
   cp -a "$_pristine/." "$_box/" || {
-    printf 'SETUPFAIL|%s|0|cp box\n' "$_id" > "$_result"; rm -rf "$_box"; exit 0; }
+    printf 'SETUPFAIL|%s|0|cp box\n' "$_id" > "$_result"; exit 0; }
 
   if ! _muterr="$(_mutate_impl "$_box" "$_id" 2>&1)"; then
     printf 'SETUPFAIL|%s|0|mutator did not apply: %s\n' "$_id" "${_muterr//|/ }" > "$_result"
-    rm -rf "$_box"; exit 0
+    exit 0
   fi
 
   # Prove the mutation LANDED, against the PRISTINE copy — never against git HEAD, which is
@@ -282,20 +352,43 @@ if [[ "${1:-}" == "--row" ]]; then
   # result is indistinguishable from "the suite did not detect this".
   if diff -rq "$_pristine" "$_box" >/dev/null 2>&1; then
     printf 'SETUPFAIL|%s|0|mutation changed nothing (the mutator is a no-op)\n' "$_id" > "$_result"
-    rm -rf "$_box"; exit 0
+    exit 0
   fi
 
   _log="$(mktemp -t "repushmut-$_id.XXXXXXXX.log")" || {
-    printf 'SETUPFAIL|%s|0|mktemp log\n' "$_id" > "$_result"; rm -rf "$_box"; exit 0; }
+    printf 'SETUPFAIL|%s|0|mktemp log\n' "$_id" > "$_result"; exit 0; }
+  _CHILD_TMPS+=("$_log")
   bash "$_box/$_suite" > "$_log" 2>&1; _rc=$?
 
   # Assert the EXPECTED rc, not merely non-zero, AND that a check NAMING the property reported.
   # "Some assertion failed" is not detection: it is equally compatible with a suite that has
   # become incapable of passing for an unrelated reason.
+  #
+  # THE MARKER IS MATCHED ONLY ON FAIL LINES (#7104 PR-B review), AND THAT IS THE WHOLE POINT.
+  #
+  # This used to be a bare `grep -qF -- "$_marker" "$_log"` over the entire log. Every marker is
+  # the leading text of an assertion's message, and `pass()` and `fail()` print the SAME message
+  # under different prefixes — so a marker matched the log of a suite in which that assertion had
+  # PASSED. Measured against a green baseline: 11 of the 17 markers were present, which means 11
+  # rows had silently degenerated to `rc == 1` and were scoring "some assertion, somewhere,
+  # failed" as detection of the specific property they name.
+  #
+  # Filtered through a variable rather than `grep '^  FAIL:' "$_log" | grep -qF ...`: under this
+  # file's `set -o pipefail`, `grep -q` closes the pipe on its first match and the producer takes
+  # SIGPIPE (141), which pipefail then promotes — so the pipeline can report FAILURE on a
+  # successful early match. A herestring has no pipe and cannot flake that way.
+  #
+  # `-F` throughout: markers legitimately contain regex metacharacters (`#7104 Guard 2 (5):`).
   _why=""
   [[ "$_rc" == "$_want_rc" ]] || _why="rc=$_rc want=$_want_rc"
-  if [[ -z "$_why" ]] && ! grep -qF -- "$_marker" "$_log"; then
-    _why="rc ok but no check named the property"
+  _faillines="$(grep '^  FAIL:' "$_log" || true)"
+  if [[ -z "$_why" ]] && [[ "$_want_rc" != "0" ]] && ! grep -qF -- "$_marker" <<<"$_faillines"; then
+    _why="rc ok but NO FAILING check named the property (the marker appears only on passing lines, if at all)"
+  fi
+  # A stay-green row asserts the inverse: the suite must pass AND the named property must not be
+  # reported as failing by anything.
+  if [[ -z "$_why" ]] && [[ "$_want_rc" == "0" ]] && grep -qF -- "$_marker" <<<"$_faillines"; then
+    _why="suite passed overall but '$_marker' was reported as FAILING"
   fi
   if [[ -n "$_why" ]]; then
     printf 'NOTASEXPECTED|%s|%s|%s\n' "$_id" "$_rc" "$_why" > "$_result"
@@ -303,7 +396,6 @@ if [[ "${1:-}" == "--row" ]]; then
   else
     printf 'RED|%s|%s|\n' "$_id" "$_rc" > "$_result"
   fi
-  rm -rf "$_box" "$_log"
   exit 0
 fi
 
@@ -322,20 +414,50 @@ python3 -c 'import yaml' 2>/dev/null || { echo "SETUP-FAIL: python3 pyyaml unava
 # Copying the top-level TRACKED files only: apps/web-platform/infra also holds an untracked
 # .terraform provider cache (~168 MB), and `cp -a` of the whole directory would put that on the
 # critical path of every row.
+# OWNING TRAP FIRST, THEN THE ALLOCATIONS (#7104 PR-B review). The trap used to be registered
+# AFTER BOTH mktemp -d calls, so a failure or a signal between the two leaked $PRISTINE — which
+# is a full copy of the infra tree — with nothing owning it. Registered before the first
+# allocation, appending as each succeeds, and widened from bare EXIT to EXIT INT TERM HUP so a
+# reaped or interrupted run reclaims too.
+_PARENT_TMPS=()
+_parent_cleanup() { [[ ${#_PARENT_TMPS[@]} -gt 0 ]] && rm -rf "${_PARENT_TMPS[@]}"; return 0; }
+trap _parent_cleanup EXIT INT TERM HUP
+
 PRISTINE="$(mktemp -d -t repushmut-pristine.XXXXXXXX)" || { echo "SETUP-FAIL: mktemp pristine" >&2; exit 2; }
+_PARENT_TMPS+=("$PRISTINE")
 RESULTS="$(mktemp -d -t repushmut-results.XXXXXXXX)" || { echo "SETUP-FAIL: mktemp results" >&2; exit 2; }
-trap 'rm -rf "$PRISTINE" "$RESULTS"' EXIT
+_PARENT_TMPS+=("$RESULTS")
 mkdir -p "$PRISTINE/apps/web-platform/infra" "$PRISTINE/.github/workflows" \
   || { echo "SETUP-FAIL: mkdir skeleton" >&2; exit 2; }
 
+EXPECTED_FILES="$(git -C "$REPO_ROOT" ls-files apps/web-platform/infra | awk -F/ 'NF==4' | wc -l)"
 copied=0
 while IFS= read -r rel; do
   cp "$REPO_ROOT/$rel" "$PRISTINE/apps/web-platform/infra/" || { echo "SETUP-FAIL: cp $rel" >&2; exit 2; }
   copied=$((copied + 1))
 done < <(git -C "$REPO_ROOT" ls-files apps/web-platform/infra | awk -F/ 'NF==4')
-# Cardinality floor on the SETUP itself: an empty or truncated skeleton would make every row below
+# Cardinality check on the SETUP itself: an empty or truncated skeleton would make every row below
 # a statement about a directory that does not contain the code under test.
-[[ "$copied" -ge 50 ]] || { echo "SETUP-FAIL: copied only $copied infra files (expected >= 50)" >&2; exit 2; }
+#
+# DERIVED, NOT A FLOOR OF 50 (#7104 PR-B review). The measured population is 268, so `>= 50` left
+# 218 files that could vanish with the check still clean — slack four times larger than the
+# quantity guarded. A flush literal was the other option and was rejected: this directory gains
+# files routinely (the rebase for this very PR added one), so a hardcoded 268 would red this
+# battery for unrelated sibling PRs, which is how a guard gets weakened by the person it
+# inconveniences. Comparing the copy count against the enumeration it iterates is exact, needs no
+# maintenance, and catches the real failure — a `cp` loop that stopped partway.
+[[ "$copied" -eq "$EXPECTED_FILES" ]] || {
+  echo "SETUP-FAIL: copied $copied infra files but git ls-files enumerated $EXPECTED_FILES — the skeleton is truncated" >&2; exit 2; }
+# ...and the enumeration itself must not be empty, which is the one thing the comparison above
+# cannot see (0 == 0 passes).
+[[ "$copied" -ge 50 ]] || { echo "SETUP-FAIL: enumerated only $copied infra files (expected >= 50) — git ls-files returned nothing usable, so every row below would grade an empty directory" >&2; exit 2; }
+
+# IDENTITY, NOT ONLY CARDINALITY. A count cannot tell you the files under test are present.
+for _need in infra-config-gate.sh infra-config-gate.test.sh infra-config-verify.sh \
+             infra-config-verify.test.sh infra-config-apply.sh; do
+  [[ -s "$PRISTINE/apps/web-platform/infra/$_need" ]] || {
+    echo "SETUP-FAIL: the skeleton is missing $_need — every row below would grade a tree that does not contain the code under test" >&2; exit 2; }
+done
 
 for wf in infra-validation.yml apply-deploy-pipeline-fix.yml; do
   cp "$REPO_ROOT/.github/workflows/$wf" "$PRISTINE/.github/workflows/" \
@@ -366,18 +488,23 @@ ROWS=(
   "G1-3|$GATE_SUITE|1|#7104 P4:|G1 r3 freshness -lt -> -le (equality re-pushes)"
   "G1-4|$GATE_SUITE|1|the predicate is not defined|G1 r4 predicate renamed (OWN DISPATCH)"
   "G1-5|$GATE_SUITE|1|#7104 P5:|G1 r5 second success member: unreadable frame"
-  "G1-6|$GATE_SUITE|1|#7104 P4:|G1 r6 builder default supplies asserted value"
+  "G1-6|$GATE_SUITE|1|#7104 P0 (builder fidelity):|G1 r6 builder default supplies asserted value"
   "G1-7|$GATE_SUITE|1|#7104 P3:|G1 r7 predicate refuses always (FLOOR)"
   "G2-1|$GATE_SUITE|1|is not terminal|G2 r1 content assert moved INSIDE the poll loop"
-  "G2-2|$GATE_SUITE|1|#7104 Guard 2 (5)(6):|G2 r2 predicate decision inlined in the script"
+  "G2-2|$GATE_SUITE|1|#7104 Guard 2 (5):|G2 r2 predicate decision inlined in the script"
   "G2-3|$GATE_SUITE|1|#7104 Guard 2 (7):|G2 r3 a SECOND production apply site added"
-  "G2-4|$GATE_SUITE|1|#7104 Guard 2 (5)(6):|G2 r6 predicate call wrapped in a function"
+  "G2-4|$GATE_SUITE|1|#7104 Guard 2 (6):|G2 r6 predicate call wrapped in a function"
   "G2-5|$GATE_SUITE|1|done-lines-strictly-between=2|G2 r5 nested done inside the pinned region"
   "G2-6|$GATE_SUITE|1|#7104 Guard 2 (8):|G2 r6' write added to the sourced library"
   "G2-7|$GATE_SUITE|1|assertion-count floor|G2 r7 the pin block itself deleted"
   "D1|$GATE_SUITE|1|harness self-test|harness fail() neutered (OWN DISPATCH)"
   "D2|$GATE_SUITE|1|#7104 Guard 1:|repush_needed output never written"
-  "S1|$VERIFY_SUITE|1|#7104 I1 pass 1:|production status URL corrupted (stub argv)"
+  "S1|$VERIFY_SUITE|1|#7104 I1 pass 1:|production status URL path corrupted (stub argv)"
+  "S2|$VERIFY_SUITE|1|#7104 I6d:|stub argv: the status HOST repointed elsewhere"
+  "S3|$VERIFY_SUITE|1|#7104 I1 pass 1:|stub argv: the HMAC signature VALUE emptied"
+  "S4|$VERIFY_SUITE|1|#7104 I6c:|stub argv: the signing SECRET NAME changed"
+  "S5|$VERIFY_SUITE|1|#7104 I6a:|retry cardinality: the 8s settle preamble retimed to 0"
+  "STAY-GREEN|$GATE_SUITE|0|#7104|an irrelevant comment must NOT red the suite (control)"
 )
 
 # Bounded fan-out. Rows are hermetic, but this machine runs parallel worktrees and the suites
@@ -408,20 +535,30 @@ for row in "${ROWS[@]}"; do
       exit 2 ;;
     RED)
       RED=$((RED + 1))
-      printf '  %-5s %-52s RED rc=%-2s [%s]\n' "$id" "$desc" "$rc" "$marker" ;;
+      if [[ "$_want" == "0" ]]; then
+        printf '  %-10s %-52s GREEN rc=%-2s (control: must NOT trip)\n' "$id" "$desc" "$rc"
+      else
+        printf '  %-10s %-52s RED   rc=%-2s [%s]\n' "$id" "$desc" "$rc" "$marker"
+      fi ;;
     *)
       NOTASEXPECTED=$((NOTASEXPECTED + 1))
-      printf '  %-5s %-52s NOT-AS-EXPECTED (%s)\n' "$id" "$desc" "$why"
+      printf '  %-10s %-52s NOT-AS-EXPECTED (%s)\n' "$id" "$desc" "$why"
       tail -n +2 "$rf" ;;
   esac
 done
 
 echo
 echo "---"
-echo "infra-config-repush-mutation.test.sh: $RED/$N mutations behaved as expected, $NOTASEXPECTED did not"
+echo "infra-config-repush-mutation.test.sh: $RED/$N rows behaved as expected, $NOTASEXPECTED did not"
 # Cardinality floor: a battery that silently ran zero rows would otherwise print 0/0 and exit 0.
-if [[ "$N" -lt 17 ]]; then
-  echo "  FAIL: only $N rows ran, expected >= 17 (7 Guard 1 + 7 Guard 2 + 3 dispatch/authority/stub)" >&2
+if [[ "$N" -lt 22 ]]; then
+  echo "  FAIL: only $N rows ran, expected >= 22 (7 Guard 1 + 7 Guard 2 + 2 dispatch/authority + 5 stub-argv/cardinality + 1 stay-green control)" >&2
+  exit 1
+fi
+# The stay-green control must actually be present, not merely counted. A battery of
+# must-trip rows cannot distinguish working guards from guards that red on everything.
+if ! printf '%s\n' "${ROWS[@]}" | grep -q '^STAY-GREEN|'; then
+  echo "  FAIL: the stay-green control row is absent — with every row expecting rc=1, a suite that has become impossible to satisfy scores a perfect result" >&2
   exit 1
 fi
 [[ "$NOTASEXPECTED" -eq 0 ]] || exit 1

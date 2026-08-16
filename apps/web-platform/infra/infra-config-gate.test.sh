@@ -472,10 +472,29 @@ REPUSH_IF_SITES=$(grep -cE '^[[:space:]]*if[[:space:]]+infra_config_should_repus
 # correctly excluded; comment lines are dropped before matching.
 REPUSH_CMD_SITES=$(grep -vE '^[[:space:]]*#' "$VERIFY_SH" \
   | grep -cE '(^[[:space:]]*|[;&|][[:space:]]*|[({][[:space:]]*|\b(if|elif|then|else|do|while|until)[[:space:]]+|![[:space:]]*)infra_config_should_repush[[:space:]]' || true)
-if [[ "$REPUSH_IF_SITES" -eq 1 && "$REPUSH_CMD_SITES" -eq 1 ]]; then
-  pass "#7104 Guard 2 (5)(6): production invokes infra_config_should_repush exactly once, directly as the re-push condition — no inline reimplementation, no function wrapper"
+# SPLIT INTO ITS TWO INDEPENDENT CLAIMS (#7104 PR-B review).
+#
+# These were one assertion over a conjunction, and the two mutations that target them —
+# inlining the decision (row G2-2) and wrapping it in a function (row G2-4) — therefore tripped
+# the SAME check and shared a marker. A shared marker means neither row proves its own clause
+# works: either could have been detected by the other's, and deleting one clause would leave
+# both rows still reporting RED off the surviving one.
+#
+# (5) is the "assertion adjacent to the property" claim: exactly one DIRECT `if` condition.
+if [[ "$REPUSH_IF_SITES" -eq 1 ]]; then
+  pass "#7104 Guard 2 (5): infra-config-verify.sh calls infra_config_should_repush directly as an if condition exactly once — the decision is not inlined"
 else
-  fail "#7104 Guard 2 (5)(6): infra-config-verify.sh has $REPUSH_IF_SITES direct 'if infra_config_should_repush' condition(s) and $REPUSH_CMD_SITES command-position call(s); both must be 1. Zero direct conditions means the decision was inlined (Guard 1 then certifies a predicate production does not run) or wrapped in a function (errexit suspends into the wrapper body, R16.1); a higher count means the re-push decision has two producers."
+  fail "#7104 Guard 2 (5): infra-config-verify.sh has $REPUSH_IF_SITES direct 'if infra_config_should_repush' condition(s), expected exactly 1. Zero means the decision was reimplemented inline, and Guard 1's entire matrix then certifies a predicate production does not run; more than one means the re-push decision has two producers."
+fi
+# (6) is the wrapper claim, and it is a DIFFERENT property: bash suspends `errexit` for a
+# CONDITION context and the suspension PROPAGATES INTO THE FUNCTION BODY (R16.1), so
+# `if ! repush_once; then` is how a production `terraform apply` ends up running with -e off.
+# Requiring the total command-position count to equal the direct-condition count is what rules
+# a wrapper out.
+if [[ "$REPUSH_CMD_SITES" -eq "$REPUSH_IF_SITES" ]]; then
+  pass "#7104 Guard 2 (6): every command-position call to infra_config_should_repush IS the direct if condition ($REPUSH_CMD_SITES = $REPUSH_IF_SITES) — no function wrapper, so errexit is not suspended around a production write"
+else
+  fail "#7104 Guard 2 (6): infra-config-verify.sh has $REPUSH_CMD_SITES command-position call(s) to infra_config_should_repush but $REPUSH_IF_SITES direct if condition(s). The excess is a wrapper or a second evaluation site; bash suspends errexit into a wrapper body (R16.1), which is how a production terraform apply downstream runs with -e off."
 fi
 
 # (5b) THE VERDICT MUST NOT BE DISCARDED ON THE CONDITION LINE (#7104 PR-B review).
@@ -1545,6 +1564,27 @@ mkresp() { # $1 = file, $2 = start_ts value (raw; may be non-numeric or the lite
   fi
 }
 
+# THE BUILDER MUST VARY WITH ITS ARGUMENT (#7104 PR-B review).
+#
+# Every Guard 1 case below distinguishes verdicts by the start_ts mkresp() writes. If the
+# builder ever stops reading $2 — the battery's G1-6 mutation makes it print a constant — then
+# each case feeds the predicate the SAME frame, several cases return the same verdict under two
+# different decision rules, and the matrix measures nothing while staying green.
+#
+# This is asserted directly, and it is also what gives G1-6 its own marker: before, G1-6 was
+# detected only because the constant frame happened to break the P4 equality case, so it shared
+# a marker with G1-3 and the two rows could not be told apart. A row that is detected by another
+# row's assertion is not evidence that its own assertion works.
+_b1="$TMP/_builder_probe_1.json"; _b2="$TMP/_builder_probe_2.json"
+mkresp "$_b1" 1000
+mkresp "$_b2" 2000
+if [[ -s "$_b1" && -s "$_b2" ]] && ! cmp -s "$_b1" "$_b2"; then
+  pass "#7104 P0 (builder fidelity): mkresp varies its output with its start_ts argument, so the Guard 1 cases below are distinguishable"
+else
+  fail "#7104 P0 (builder fidelity): mkresp produced identical frames for start_ts=1000 and start_ts=2000. Every Guard 1 case below feeds the predicate the same input, so the whole matrix is vacuous regardless of what it reports."
+fi
+rm -f "$_b1" "$_b2"
+
 if ! declare -F infra_config_should_repush >/dev/null; then
   fail "#7104 should_repush: the predicate is not defined — every case below is vacuous"
 else
@@ -2049,7 +2089,7 @@ fi
 # Nothing asserted that the assertions RAN. Measured: deleting the entire #7220 block took the
 # suite 53 -> 40 passed, 0 failed, exit 0 — a silent truncation that reads exactly like a clean
 # run. A floor (not equality — the count is developer-incremented) makes arm deletion loud.
-GATE_MIN_ASSERTIONS=130
+GATE_MIN_ASSERTIONS=132
 # Adjudicated DIRECTLY, not through fail(). Measured: `fail() { return 0; }` made this suite
 # report `94 passed, 0 failed` / `OK` / exit 0 WITH a genuinely broken assertion present — and
 # the floor built to make truncation loud was itself dispatched through the neutered function,

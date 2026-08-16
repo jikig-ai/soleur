@@ -214,13 +214,39 @@ trap 'rm -rf "$I_TMP"' EXIT
 
 mkstubs() {
   mkdir -p "$I_TMP/bin"
+  # THE SECRET NAME IS PART OF THE CONTRACT (#7104 PR-B review).
+  #
+  # This stub used to `echo` a constant for any argv at all, so it answered identically whether
+  # the body asked for WEBHOOK_DEPLOY_SECRET, for a typo, or for nothing — the secret NAME shipped
+  # unpinned, and a body that read the wrong secret (signing with the wrong key, so every request
+  # 401s in production) stayed green here. It now allow-lists the names the body legitimately
+  # reads and `exit 64`s on anything else, and it records each name so a case can assert on them.
   cat > "$I_TMP/bin/doppler" <<'EOS'
 #!/usr/bin/env bash
-# Only `secrets get <NAME> --plain` is ever called by the body under test.
+# The body only ever calls `secrets get <NAME> --plain`.
+if [[ "${1:-}" != "secrets" || "${2:-}" != "get" ]]; then
+  echo "doppler-stub: unexpected subcommand '${1:-} ${2:-}' (the gate may only READ secrets)" >&2
+  exit 64
+fi
+name="${3:-}"
+printf '%s\n' "$name" >> "${STUB_DOPPLER_LOG:-/dev/null}"
+case "$name" in
+  APP_DOMAIN_BASE|WEBHOOK_DEPLOY_SECRET|CF_ACCESS_CLIENT_ID|CF_ACCESS_CLIENT_SECRET|\
+  CI_SSH_ACCESS_TOKEN_ID|CI_SSH_ACCESS_TOKEN_SECRET) ;;
+  *) echo "doppler-stub: unexpected secret name '$name'" >&2; exit 64 ;;
+esac
+[[ "$name" == "APP_DOMAIN_BASE" ]] && { echo "example.test"; exit 0; }
 echo "stub-secret-value"
 EOS
+  # SLEEP IS RECORDED, NOT JUST SUPPRESSED (#7104 PR-B review).
+  #
+  # A `sleep` stubbed to a bare `exit 0` makes the suite fast and simultaneously voids the
+  # retry/backoff contract: the documented 8 s settle preamble and the 5 s inter-attempt waits
+  # could be deleted, or set to 600, and every case would stay green at identical speed. The
+  # stub now logs each requested duration so cardinality and budget can be asserted.
   cat > "$I_TMP/bin/sleep" <<'EOS'
 #!/usr/bin/env bash
+printf '%s\n' "${1:-}" >> "${STUB_SLEEP_LOG:-/dev/null}"
 exit 0
 EOS
   # curl writes the frame the case wants to the -o path and reports the HTTP code.
@@ -234,19 +260,34 @@ EOS
 #!/usr/bin/env bash
 out=""
 prev=""
-have_w=0; have_maxtime=0; have_sig=0; have_url=0
+have_w=0; have_maxtime=0; have_sig=0; have_url=0; sigval=""; url=""
 for a in "$@"; do
   [[ "$prev" == "-o" ]] && out="$a"
   [[ "$a" == "-w" || "$a" == "--write-out" ]] && have_w=1
   [[ "$a" == "--max-time" ]] && have_maxtime=1
-  [[ "$a" == X-Signature-256:* ]] && have_sig=1
-  [[ "$a" == */hooks/infra-config-status ]] && have_url=1
+  [[ "$a" == X-Signature-256:* ]] && { have_sig=1; sigval="${a#X-Signature-256:}"; }
+  [[ "$a" == */hooks/infra-config-status ]] && { have_url=1; url="$a"; }
   prev="$a"
 done
 if [[ -z "$out" || "$have_w" -ne 1 || "$have_maxtime" -ne 1 || "$have_sig" -ne 1 || "$have_url" -ne 1 ]]; then
   echo "curl-stub: required argv missing (o='${out:-}' w=$have_w max-time=$have_maxtime sig=$have_sig url=$have_url)" >&2
   exit 64
 fi
+# VALUES, NOT ONLY PRESENCE (#7104 PR-B review). The three checks below were presence-only, so
+# the HOST, the signature VALUE and the scheme all shipped unpinned: the body could have polled
+# `http://anywhere/hooks/infra-config-status` with `X-Signature-256:` and an empty value and
+# every case here would still have been green. Presence-only argv fidelity puts the seam one
+# level above the thing that actually matters about this request.
+sigval="${sigval# }"
+if [[ ! "$sigval" =~ ^(sha256=)?[0-9a-f]{64}$ ]]; then
+  echo "curl-stub: X-Signature-256 is '${sigval}', not a 64-hex sha256 HMAC — the request would not authenticate" >&2
+  exit 64
+fi
+if [[ "$url" != https://deploy.*/hooks/infra-config-status ]]; then
+  echo "curl-stub: status URL is '${url}', expected https://deploy.<domain>/hooks/infra-config-status" >&2
+  exit 64
+fi
+printf '%s\n' "$url" >> "${STUB_CURL_LOG:-/dev/null}"
 [[ -n "${STUB_FRAME:-}" ]] && cp "$STUB_FRAME" "$out"
 printf '%s' "${STUB_HTTP_CODE:-200}"
 EOS
@@ -358,6 +399,95 @@ if mkframe 1000 "$STALE" && mkframe 3000 "$MOVED"; then
   else
     fail "#7104 I3: a run that expected no push requested a re-push"
   fi
+
+  # --- I4: THE EQUALITY BOUNDARY ON PASS 1, AND THE ELSE ARM ------------------------------
+  #
+  # FIXTURE DIRECTION (#7104 PR-B review). Every case above samples start_ts strictly BELOW
+  # APPLY_START_EPOCH (1000 vs 2000, "stale") or strictly ABOVE it (3000, "moved"). The
+  # boundary itself — start_ts EXACTLY equal to APPLY_START_EPOCH — was never instantiated on
+  # pass 1, and it is the one input that distinguishes `-lt` from `-le`.
+  #
+  # This matters more than a missing edge case usually would, because of what it revealed:
+  # production's inline freshness comparison decides staleness BEFORE delegating to the
+  # predicate, so the predicate's own `-lt` is a SECOND, redundant evaluation and the P4
+  # equality arm exercised by the unit cases is UNREACHABLE from production. The unit matrix
+  # was grading a branch the shipped call path cannot reach. Driving the boundary through the
+  # real script is what makes the guard's claim true of production rather than of the unit.
+  EQ="$I_TMP/eq.json"
+  if mkframe 2000 "$EQ"; then
+    o7="$I_TMP/o7"; : > "$o7"
+    rc7=0; drive 1 "$EQ" "$o7" || rc7=$?
+    p7=$(grep -c '^repush_needed=true$' "$o7" || true)
+    if [[ "$p7" -eq 0 ]]; then
+      pass "#7104 I4: pass 1 treats start_ts == APPLY_START_EPOCH as FRESH (no re-push) — equality is a delivered frame, and re-pushing on it writes production for a run that already succeeded"
+    else
+      fail "#7104 I4: pass 1 requested a re-push for a frame published in the same second as the apply started. Equality is fresh; this is the -lt/-le boundary, and it is the only input that distinguishes them."
+    fi
+  else
+    fail "#7104 I4: could not build the equality fixture — the boundary case is vacuous"
+  fi
+
+  # THE ELSE ARM. Every pass-1 case above ends in a soft-fail or a refusal-to-repush on a
+  # frame that is stale or unexpected. A frame that is simply FRESH on pass 1 — the ordinary
+  # healthy apply, which is what the overwhelming majority of production runs look like — was
+  # never driven end to end here, so the arm that renders the ordinary green verdict had no
+  # fixture at all. A suite whose fixtures all expect the exceptional path cannot see a change
+  # that breaks the normal one.
+  o8="$I_TMP/o8"; : > "$o8"
+  rc8=0; drive 1 "$MOVED" "$o8" || rc8=$?
+  v8=$(grep -c '^verdict=verified$' "$o8" || true)
+  r8=$(grep -c '^repush_needed=true$' "$o8" || true)
+  if [[ "$rc8" -eq 0 && "$v8" -eq 1 && "$r8" -eq 0 ]]; then
+    pass "#7104 I5: a FRESH frame on pass 1 verifies outright (rc=0, verdict=verified, no re-push) — the ordinary healthy apply, which no other case drove"
+  else
+    fail "#7104 I5: pass 1 on a fresh frame gave rc=$rc8 verdict-verified=$v8 repush_needed=$r8 (expected 0/1/0). The ordinary green path is broken."
+  fi
+
+  # --- I6: STUB ARGV FIDELITY, on VALUES rather than presence -----------------------------
+  #
+  # The stubs log what they were actually asked for; these rows read those logs. Without them
+  # the stub contract is enforced only by `exit 64`, which proves the required flags were
+  # PRESENT and says nothing about whether the host, the secret names or the retry budget were
+  # the intended ones.
+  SL="$I_TMP/sleep.log"; DL="$I_TMP/doppler.log"; CL="$I_TMP/curl.log"
+  : > "$SL"; : > "$DL"; : > "$CL"
+  o9="$I_TMP/o9"; : > "$o9"
+  ( cd "$SCRIPT_DIR" || exit 99
+    export PATH="$I_TMP/bin:$PATH" STUB_FRAME="$MOVED" STUB_HTTP_CODE=200
+    export STUB_SLEEP_LOG="$SL" STUB_DOPPLER_LOG="$DL" STUB_CURL_LOG="$CL"
+    export INFRA_CONFIG_STATUS_RESPONSE="$I_TMP/status-argv-$$.json"
+    export GITHUB_OUTPUT="$o9" VERIFY_PASS=1 ALLOW_MISSING_STATUS=false
+    export DPF_REPLACED=true APPLY_START_EPOCH=1
+    bash ./infra-config-verify.sh >/dev/null 2>&1 ) || true
+
+  # The 8 s settle preamble is documented and load-bearing: the async handler takes ~5-8 s, so
+  # polling immediately wastes attempt 1. A stubbed-to-nothing sleep let it be deleted silently.
+  if grep -qx '8' "$SL"; then
+    pass "#7104 I6a: the documented 8 s settle preamble is actually requested (sleep budget is pinned, not merely stubbed away)"
+  else
+    fail "#7104 I6a: no 8 s sleep was requested (sleep log: $(tr '\n' ' ' < "$SL")). The settle preamble was deleted or retimed, and a no-op sleep stub cannot see that."
+  fi
+  # A healthy first attempt must not burn inter-attempt waits: exactly one sleep total.
+  n_sleep=$(grep -c . "$SL" || true)
+  if [[ "$n_sleep" -eq 1 ]]; then
+    pass "#7104 I6b: a frame that satisfies the invariant on attempt 1 sleeps exactly once (the preamble) — no retry budget is spent on a healthy apply"
+  else
+    fail "#7104 I6b: $n_sleep sleep(s) on a first-attempt success (expected exactly 1): $(tr '\n' ' ' < "$SL")"
+  fi
+  # The signing secret's NAME. A body that read the wrong secret would sign with the wrong key
+  # and 401 in production, while a name-agnostic stub kept every case green.
+  if grep -qx 'WEBHOOK_DEPLOY_SECRET' "$DL"; then
+    pass "#7104 I6c: the body reads WEBHOOK_DEPLOY_SECRET by name (the signing key is pinned, not just 'some secret')"
+  else
+    fail "#7104 I6c: WEBHOOK_DEPLOY_SECRET was never requested (secrets read: $(tr '\n' ' ' < "$DL")). The request would be signed with the wrong key."
+  fi
+  # The HOST. The stub's URL check enforces the deploy.<domain> shape; this pins that the
+  # domain came from APP_DOMAIN_BASE rather than being hardcoded to something else.
+  if grep -q '^https://deploy\.example\.test/hooks/infra-config-status$' "$CL"; then
+    pass "#7104 I6d: the status URL is built from APP_DOMAIN_BASE (https://deploy.example.test/...), so the host is pinned and not hardcoded"
+  else
+    fail "#7104 I6d: the polled URL(s) were '$(tr '\n' ' ' < "$CL")', expected https://deploy.example.test/hooks/infra-config-status built from the stubbed APP_DOMAIN_BASE"
+  fi
 else
   fail "#7104 AC17: could not build fixtures from the live FILE_MAP — the integration cases are vacuous"
 fi
@@ -365,7 +495,7 @@ fi
 # --- assertion floor --------------------------------------------------------------------------
 # Anti-vacuity. Counts assertions that RAN, so a structural break that skips whole
 # blocks (an unset file path, an early `else`) reds instead of reporting a clean 0/0.
-VERIFY_MIN_ASSERTIONS=23
+VERIFY_MIN_ASSERTIONS=29
 echo ""
 echo "  $PASS passed, $FAIL failed"
 if [[ "$FAIL" -gt 0 ]]; then
