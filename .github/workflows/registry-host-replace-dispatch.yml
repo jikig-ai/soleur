@@ -231,6 +231,7 @@ jobs:
       # No `if: always()` here, and no fallback arm: a refused preflight must stop the job with
       # the preflight's own ::error:: as the last word. It files nothing and dispatches nothing.
       - name: Dispatch registry-host-replace
+        id: dispatch
         if: steps.gate.outputs.deliver == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -270,8 +271,19 @@ jobs:
       # This polls the APPLY RUN's own conclusion, which is the signal the dispatcher can actually
       # observe. It does NOT assert the host is serving — that is #7556's job, from the warehouse,
       # and claiming it here would be a cause this step did not measure.
+      # `always() &&` IS LOAD-BEARING, and the predicate is the DISPATCH STEP's own outcome.
+      #
+      # This step FILES on #7556 when the apply concludes non-success. With a bare
+      # `steps.gate.outputs.deliver == 'true'` it inherited an implicit success(), so any earlier
+      # failure skipped it — and the alarm for "the registry host may be dark, with no SSH" is
+      # exactly the alarm that must survive a failing run. That is the #7242 defect
+      # scripts/alarm-issue-filing-guard.test.sh pins, and this step tripped it (baseline 11 -> 12).
+      #
+      # Gating on `steps.dispatch.outcome == 'success'` rather than `always()` alone keeps it
+      # honest in the other direction: if nothing was ever dispatched there is no run to poll,
+      # and polling for one would emit an UNVERIFIED warning about a dispatch that never happened.
       - name: Poll the dispatched apply to a conclusion
-        if: steps.gate.outputs.deliver == 'true'
+        if: always() && steps.dispatch.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
