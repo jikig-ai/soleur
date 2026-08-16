@@ -24,14 +24,16 @@ MARKER='verify-lockfile-guards: OK'
 passes=0
 fails=0
 asserted=0
+# ADR-193 #2: the verdict helpers touch ONLY the verdict counters. `asserted` (the CASE
+# counter) moves at the CALL SITE, in expect(). A counter incremented inside both helpers
+# moves WITH the verdict, so stubbing fail() would drop the row AND its count together and
+# `passes + fails == asserted` would still hold under the exact fault it exists to catch.
 pass() {
   passes=$((passes + 1))
-  asserted=$((asserted + 1))
   echo "[ok] $*"
 }
 fail() {
   fails=$((fails + 1))
-  asserted=$((asserted + 1))
   echo "[FAIL] $*" >&2
 }
 
@@ -65,6 +67,7 @@ make_repo() {
 # whether the marker Check 10 matches on was emitted. Checking only the status would
 # leave the marker free to print on a red run.
 expect() {
+  asserted=$((asserted + 1))
   local repo="$1" want_rc="$2" want_marker="$3" label="$4" out rc
   out=$(cd "$repo" && bash scripts/verify-lockfile-guards.sh 2>&1) || rc=$?
   rc=${rc:-0}
@@ -113,11 +116,27 @@ expect "$R3" 1 no "row3 both guards RED — marker withheld"
 # routing through fail(), because a floor dispatched through the helper it backstops is
 # disarmed by the same one-line edit it exists to catch. See
 # knowledge-base/project/learnings/security-issues/2026-08-16-a-guard-asserting-absence-was-backwards-and-my-floors-counted-the-wrong-thing.md
-MIN_ASSERTIONS=4
+#
+# ORDER (ADR-193 #4): conservation FIRST. A neutered fail() deflates the pass count, so both
+# trip on the same fault and whichever runs first names it — conservation says "a verdict was
+# discarded", the floor would say the misleading "assertions were removed".
+#
+# The threshold binding sits DIRECTLY above the floor it binds. guard-vacuity-floor.test.sh
+# slices the floor `if` plus the contiguous simple assignments above it; with the
+# conservation block in between, the slice stops at `fi`, MIN_ASSERTIONS is unbound, and the
+# mutant dies at `set -u` before reaching the floor — scored "not constructible", i.e. this
+# floor would be asserted by nothing.
 if [[ $((passes + fails)) -ne $asserted ]]; then
-  echo "[FAIL] H1 counter reconciliation: ${passes} passed + ${fails} failed != ${asserted} asserted — an assertion counter is not incrementing, so this run cannot be trusted" >&2
+  printf '\n[FATAL] accounting: passes+fails (%d) != asserted (%d).\n' \
+    "$((passes + fails))" "$asserted" >&2
+  if [[ $((passes + fails)) -lt "$asserted" ]]; then
+    printf '  An assertion was counted but its verdict was not recorded — that is what a neutered pass()/fail() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded without a counted case — a call site is missing its increment (a harness bug, not a product failure).\n' >&2
+  fi
   exit 1
 fi
+MIN_ASSERTIONS=4
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] H1 only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — assertions were neutered or skipped" >&2
   exit 1

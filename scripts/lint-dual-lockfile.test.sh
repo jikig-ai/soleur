@@ -23,14 +23,18 @@ GUARD="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lint-dual-lockfile.sh"
 passes=0
 fails=0
 asserted=0
+# ADR-193 #2: the verdict helpers touch ONLY the verdict counters. `asserted` (the CASE
+# counter) moves at the CALL SITE instead. That is the whole difference between a
+# conservation identity that catches a discarded verdict and one that cannot: a counter
+# incremented inside both helpers moves WITH the verdict, so stubbing fail() drops the row
+# AND its count together and `passes + fails == asserted` still holds under the exact fault
+# it exists to catch.
 pass() {
   passes=$((passes + 1))
-  asserted=$((asserted + 1))
   echo "[ok] $*"
 }
 fail() {
   fails=$((fails + 1))
-  asserted=$((asserted + 1))
   echo "[FAIL] $*" >&2
 }
 
@@ -75,6 +79,7 @@ guard_rc() { run_guard "$1" | sed -n 's/^---RC:\(.*\)$/\1/p'; }
 guard_out() { run_guard "$1" | sed '/^---RC:/d'; }
 
 expect_red() {
+  asserted=$((asserted + 1))
   local repo="$1" label="$2" needle="${3:-}" rc out
   rc=$(guard_rc "$repo")
   out=$(guard_out "$repo")
@@ -90,6 +95,7 @@ expect_red() {
 }
 
 expect_pass() {
+  asserted=$((asserted + 1))
   local repo="$1" label="$2" rc
   rc=$(guard_rc "$repo")
   if [[ "$rc" != "0" ]]; then
@@ -108,6 +114,7 @@ expect_pass "$CLEAN" "CONTROL clean repo (4 package-lock dirs, no bun.lock)"
 
 # H3 must-PASS: the clean state reports a NON-ZERO scanned count, so it is distinguishable
 # from a broken enumeration.
+asserted=$((asserted + 1))
 if guard_out "$CLEAN" | grep -qE '4 package-lock\.json director'; then
   pass "H3 clean tree reports a non-zero scanned count"
 else
@@ -181,6 +188,7 @@ git -C "$R6H" add -A
 expect_red "$R6H" "row6h bunfig.local.toml is scanned" "declares an [install] section"
 
 # --- Row 7: the floor must be ASSERTED, not decorative. ---
+asserted=$((asserted + 1))
 if grep -qE '^MIN_PACKAGE_LOCK_DIRS=[4-9][0-9]*$' "$GUARD"; then
   pass "row7 floor constant is >= 4 (not lowered to a decorative value)"
 else
@@ -194,6 +202,7 @@ expect_red "$R7" "row7 clean repo below the floor still REDs" "below the floor"
 # Guard 1 does not own this check; the row exists so that retiring the bun half of
 # sdk-bump-sandbox-gate.sh cannot silently take the empty-head_v catch with it (#5849).
 SDK_GATE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/apps/web-platform/scripts/sdk-bump-sandbox-gate.sh"
+asserted=$((asserted + 1))
 if [[ -r "$SDK_GATE" ]]; then
   if grep -qE '\[\[[[:space:]]*-z[[:space:]]*"\$\{?pv\}?"[[:space:]]*\]\]' "$SDK_GATE"; then
     pass "row8 sdk-bump-sandbox-gate.sh retains its [[ -z \$pv ]] PRESENCE arm"
@@ -211,9 +220,9 @@ printf '{"name":"pencil","lockfileVersion":3}\n' > "$H2/pencil-scripts/package-l
 git -C "$H2" add -A
 expect_pass "$H2" "H2 npm-only directory"
 
-# --- H1: the suite's own executed-assertion floor. ---
-# The floor sits on PASSES, not on `asserted`. `asserted` is incremented by pass() AND
-# fail() alike, so it measures that assertions RAN and never that they CONCLUDED: deleting
+# --- H1: the suite's own executed-assertion floor (ADR-193). ---
+# The floor sits on PASSES, never on `asserted`: a floor on the case counter measures that
+# assertions RAN and never that they CONCLUDED. Deleting
 # the single line `fails=$((fails + 1))` from fail() left this suite reporting
 # "5 passed, 0 failed, 14 assertion(s)" and exiting 0 with the guard fully neutered. The
 # reconciliation catches that directly -- passes+fails must account for every assertion,
@@ -221,11 +230,27 @@ expect_pass "$H2" "H2 npm-only directory"
 #
 # Emitted WITHOUT routing through fail(), because a floor dispatched through the helper it
 # backstops is disarmed by the same one-line edit it exists to catch.
-MIN_ASSERTIONS=18
+#
+# ORDER (ADR-193 #4): conservation runs FIRST. A neutered fail() deflates the pass count, so
+# both checks trip on the same fault -- and whichever runs first names it. Conservation says
+# "a verdict was discarded"; the floor would say the misleading "assertions were removed".
+#
+# The threshold binding sits DIRECTLY above the floor it binds, with no intervening block.
+# scripts/guard-vacuity-floor.test.sh builds its mutant by slicing the floor `if` plus the
+# contiguous simple assignments above it; with the conservation block in between, the slice
+# stops at `fi`, MIN_ASSERTIONS is unbound, and the mutant dies at `set -u` BEFORE reaching
+# the floor -- scored "not constructible", i.e. this floor would be asserted by nothing.
 if [[ $((passes + fails)) -ne $asserted ]]; then
-  echo "[FAIL] H1 counter reconciliation: ${passes} passed + ${fails} failed != ${asserted} asserted — an assertion counter is not incrementing, so this run cannot be trusted" >&2
+  printf '\n[FATAL] accounting: passes+fails (%d) != asserted (%d).\n' \
+    "$((passes + fails))" "$asserted" >&2
+  if [[ $((passes + fails)) -lt "$asserted" ]]; then
+    printf '  An assertion was counted but its verdict was not recorded — that is what a neutered pass()/fail() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded without a counted case — a call site is missing its increment (a harness bug, not a product failure).\n' >&2
+  fi
   exit 1
 fi
+MIN_ASSERTIONS=18
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] H1 only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — assertions were neutered or skipped" >&2
   exit 1
