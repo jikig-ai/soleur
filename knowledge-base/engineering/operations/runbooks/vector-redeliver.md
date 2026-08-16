@@ -181,22 +181,23 @@ Verify **off-host**. No SSH (`hr-no-ssh-fallback-in-runbooks`).
 
    > The live sha will **not** equal a bare `sha256sum apps/web-platform/infra/vector.toml` — the delivery substitutes `@@HOST_NAME@@` for the host's Better Stack name, so the repo file as-committed is never what lands. That is why the check above pipes the file through the same `sed` first. Hashing the raw repo file and finding a mismatch proves nothing.
 
-3. **Positive control on the sink — and read the table caveat FIRST.** A new identifier producing no rows is ambiguous: the agent may be dark, *or* you may be querying a source web-1 does not ship to. Resolve the second before concluding anything about the first.
+3. **Positive control on the sink.** A new identifier producing no rows is ambiguous — the agent may be dark. Assert first that the channel carries *anything*, then ask about your identifier.
 
-   > **`betterstack-query.sh` does not default to web-1's source.** Its default is `BS_TABLE=t520508_soleur_inngest_vector_prd_3_logs` (`scripts/betterstack-query.sh:79`), while web-1's Vector sink posts to `https://s2457081.eu-fsn-3.betterstackdata.com/` (`vector.toml`, `[sinks.betterstack]`). Whether that ingest source maps to that query table is **not recorded anywhere in this repo** — tracked as a gap, and until it is closed a zero-row result from the default table is **not** evidence that web-1 is dark. Override with `--table <web-1's table>` once the mapping is known.
-   >
-   > Measured 2026-08-16, immediately after a verified-successful delivery: `--since 24h` against the default table returned **zero rows for every host**, hot and archive, while the same host reported `vector: active` with a non-empty journal tail. That is exactly the ambiguous shape this caveat exists to stop you from misreading as a production outage. (A genuinely dark channel in the same window is #7569 — related, and not the same channel.)
-
-   When you have a table you can attribute to web-1, assert against something the host genuinely emits, with a timestamp after the restart:
+   **Use an unfiltered short window as the liveness probe**, not a `--grep` on a named identifier:
 
    ```bash
-   doppler run -p soleur -c prd_terraform -- \
-     scripts/betterstack-query.sh --table <web-1-table> --since 1h --grep ci-deploy
+   doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 15m --limit 3
    ```
 
-   `sshd` and `ci-deploy` are both in Source 4's allow-list and are emitted by web-1 itself (`host_name=soleur-web-platform`). Rows after the restart prove the agent returned **and** the sink still works. Only then is "no rows for the new identifier" evidence about the new identifier.
+   `app_container` rows flow continuously from web-1, so a live sink answers this in seconds with `"host_name":"soleur-web-platform"`. No `--table` is needed: web-1's sink posts to `https://s2457081.eu-fsn-3.betterstackdata.com/` (`vector.toml`, `[sinks.betterstack]`) and source **2457081** is the same source that backs the script's default table — the mapping is recorded at [betterstack-log-query.md](betterstack-log-query.md) under *Connection details* (`t<TEAM_ID>_<table_name>_logs` → `t520508_soleur_inngest_vector_prd_3_logs`). Every host multiplexes into that one source.
 
-   **If you cannot attribute a table to web-1, this leg is INCONCLUSIVE, not passed and not failed.** Record it that way. The delivery itself is already proven by the rendered-sha comparison in step 2, which needs no log channel at all — do not let an unavailable positive control cast doubt on a sha that matches.
+   > **Do NOT use `--grep ci-deploy --since 1h` as the liveness probe.** `ci-deploy` and `sshd` are **event-driven**, not continuous: measured 2026-08-16, `ci-deploy` returned 0 rows over 24h and rows over 72h. A quiet hour produces zero rows on a perfectly healthy sink — the exact ambiguity this step exists to remove. Reach for `--grep ci-deploy` only with `--since 72h`, and note the source's retention is **3 days**, so a longer window buys nothing.
+
+   Once the unfiltered probe returns rows, "no rows for the new identifier" is evidence about the identifier.
+
+   **A zero-row unfiltered result IS meaningful — it means the channel is dark.** Do not explain it away. Measured 2026-08-16: rows were absent across hot *and* archive for the whole preceding day, then began abruptly at 20:43:26Z; the same host reported `vector: active` with a non-empty journal tail throughout, so the unit being up proves nothing about the sink. A dark channel is a real finding — see #7569 for a concurrent instance on a different channel.
+
+   The delivery itself does not depend on any of this: the rendered-sha comparison in step 2 reads the webhook's own response body and needs no log channel at all. A dark sink is worth an incident; it is not a reason to doubt a sha that matches.
 
 ## Known residual
 
