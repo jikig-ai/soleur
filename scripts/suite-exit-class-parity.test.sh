@@ -49,6 +49,16 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 pass_n=0; fail_n=0
+# `cases` is incremented at the CALL SITE — immediately before each block that resolves to
+# exactly one verdict — and NEVER inside ok()/bad(). That placement is the whole substance of
+# the conservation check at the bottom of this file, and it is also why the assertion floor
+# below reads `cases` rather than `pass_n + fail_n`: a counter derived from the two verdict
+# counters moves WITH the verdict, so stubbing `bad() { :; }` drops the row and its count
+# together — the floor then fires with the WRONG diagnosis ("an arm was deleted") or, once the
+# margin is wide enough, does not fire at all.
+#
+# Never increment inside `$( )` — a subshell discards it.
+cases=0
 ok()   { pass_n=$((pass_n+1)); echo "[ok] $*"; }
 bad()  { fail_n=$((fail_n+1)); echo "[FAIL] $*" >&2; }
 
@@ -77,12 +87,21 @@ IN_BODY="$(extract "$INFRA"    '^suite_rc_is_signal_shaped\(\) \{$')"
 # functions would be undefined, and a naive suite would report a clean pass over
 # zero comparisons. That is the exact failure this file exists to prevent, one
 # level up. Fail CLOSED and loudly instead.
+#
+# Reported with `printf >&2` + `exit 1` DIRECTLY, never through bad(). A floor that reports by
+# calling bad() increments the same counter the exit status reads, so neutering bad() silences
+# the rows AND the floor that exists to notice the silence. A floor enforced through the
+# suspect cannot witness the suspect.
 MIN_BODY_LINES=5
 for pair in "test-all:$TA_BODY" "run-all:$RA_BODY" "infra:$IN_BODY"; do
   label="${pair%%:*}"; body="${pair#*:}"
   n=$(printf '%s\n' "$body" | grep -c . || true)
+  cases=$((cases+1))
   if (( n < MIN_BODY_LINES )); then
-    bad "extraction floor: '$label' classifier extracted only $n line(s) (< $MIN_BODY_LINES) — the anchor stopped matching; every parity assertion below would be vacuous"
+    printf '\n[FATAL] anti-vacuity floor: only %d line(s) extracted for the %s classifier, expected >= %d — the anchor stopped matching; every parity assertion below would be vacuous.\n' \
+      "$n" "$label" "$MIN_BODY_LINES" >&2
+    echo "=== suite-exit-class parity: $pass_n passed, $fail_n failed ==="
+    exit 1
   else
     ok "extraction floor: '$label' classifier extracted ($n lines)"
   fi
@@ -90,6 +109,7 @@ done
 (( fail_n == 0 )) || { echo "=== suite-exit-class parity: $pass_n passed, $fail_n failed ==="; exit 1; }
 
 # --- Byte parity, where the shape is genuinely shared -----------------------
+cases=$((cases+1))
 if [[ "$TA_BODY" == "$RA_BODY" ]]; then
   ok "byte parity: run-all.sh suite_exit_class is byte-identical to test-all.sh's"
 else
@@ -106,6 +126,7 @@ eval "$(printf '%s\n' "$RA_BODY" | sed '1s/^suite_exit_class()/ra_suite_exit_cla
 eval "$IN_BODY"
 
 for fn in suite_exit_class ra_suite_exit_class suite_rc_is_signal_shaped; do
+  cases=$((cases+1))
   if declare -F "$fn" >/dev/null 2>&1; then
     ok "loaded: $fn is defined after sourcing"
   else
@@ -125,9 +146,17 @@ done
 # away. Measured: without these rows, mutating the infra guard to `return 0` produced ZERO
 # in-domain disagreements. Found by structural enumeration at review.
 RC_DOMAIN=(0 1 2 3 124 128 129 130 137 143 154 159 160 161 192 193 200 254 255 abc "")
+#
+# Reported directly for the same reason as the extraction floor above: a narrowed domain makes
+# every parity row below vacuous, and a floor routed through bad() is silenced by exactly the
+# fault it exists to notice.
+cases=$((cases+1))
 MIN_RC_CASES=17
 if (( ${#RC_DOMAIN[@]} < MIN_RC_CASES )); then
-  bad "rc-domain floor: ${#RC_DOMAIN[@]} cases (< $MIN_RC_CASES) — the domain was narrowed"
+  printf '\n[FATAL] anti-vacuity floor: only %d rc case(s) in the domain, expected >= %d — the domain was narrowed and every parity row below is vacuous.\n' \
+    "${#RC_DOMAIN[@]}" "$MIN_RC_CASES" >&2
+  echo "=== suite-exit-class parity: $pass_n passed, $fail_n failed ==="
+  exit 1
 else
   ok "rc-domain floor: ${#RC_DOMAIN[@]} cases"
 fi
@@ -151,6 +180,7 @@ for rc in "${RC_DOMAIN[@]}"; do
   ra=$(ra_suite_exit_class "$rc"); [[ "$ra" == killed ]] && ra=1 || ra=0
   if suite_rc_is_signal_shaped "$rc"; then inf=1; else inf=0; fi
   compared=$((compared+1))
+  cases=$((cases+1))
   if [[ "$ta" == "$ra" && "$ta" == "$inf" ]]; then
     ok "parity rc=[$rc]: all three agree (killed=$ta)"
   else
@@ -162,6 +192,7 @@ for rc in "${RC_DOMAIN[@]}"; do
   # domain as a fail-closed shape — so gate on numeric-ness first.
   if [[ "$rc" =~ ^[0-9]+$ ]] && [[ -n "${RC_EXPECT[$rc]+set}" ]]; then
     expected_checked=$((expected_checked+1))
+    cases=$((cases+1))
     if [[ "$ta" == "${RC_EXPECT[$rc]}" ]]; then
       ok "expected rc=[$rc]: classified killed=${RC_EXPECT[$rc]} as required"
     else
@@ -169,6 +200,7 @@ for rc in "${RC_DOMAIN[@]}"; do
     fi
   fi
 done
+cases=$((cases+1))
 if (( expected_checked == ${#RC_EXPECT[@]} )); then
   ok "expected-value accounting: checked all ${expected_checked} pinned rc values"
 else
@@ -215,6 +247,7 @@ _parity_name_guard_arm() {
     ta=$(suite_exit_class "$rc");    [[ "$ta" == killed ]] && ta=1 || ta=0
     ra=$(ra_suite_exit_class "$rc"); [[ "$ra" == killed ]] && ra=1 || ra=0
     if suite_rc_is_signal_shaped "$rc"; then inf=1; else inf=0; fi
+    cases=$((cases+1))
     if [[ "$ta" == 0 && "$ra" == 0 && "$inf" == 0 ]]; then
       ok "name-guard (permissive-kill shell) rc=[$rc]: all three still reject"
     else
@@ -224,12 +257,21 @@ _parity_name_guard_arm() {
   # Fixture self-check: if the shadow did not take effect the three rows above
   # would pass for the ORDINARY reason and prove nothing.
   local probe; probe=$(kill -l 65 2>/dev/null); local prc=$?
+  cases=$((cases+1))
   if (( prc == 0 )) && [[ -z "$probe" ]]; then
     ok "name-guard fixture self-check: the permissive-kill shadow is in effect"
   else
     bad "name-guard fixture self-check: shadow NOT in effect (kill -l 65 rc=$prc out=[$probe]) — the three rows above were vacuous"
   fi
-  (( examined == 3 )) || bad "name-guard arm: examined $examined of 3"
+  # Written as a full if/else rather than `(( … )) || bad …`: a bare `||` records a verdict
+  # ONLY on the failing side, so the row is counted by no counter at all on the passing side
+  # and the conservation check below would read it as a missing verdict.
+  cases=$((cases+1))
+  if (( examined == 3 )); then
+    ok "name-guard arm: examined all 3 rc values"
+  else
+    bad "name-guard arm: examined $examined of 3"
+  fi
   # bash function definitions are GLOBAL regardless of nesting, so without this the
   # permissive-kill shadow survives the arm's return for the rest of the process and any
   # arm appended below would silently run against a synthesized shell — passing for the
@@ -239,6 +281,7 @@ _parity_name_guard_arm() {
 _parity_name_guard_arm
 # Fixture teardown must actually have happened: a shadow that outlived the arm would make
 # every later assertion in this file suspect, so prove the real builtin is back.
+cases=$((cases+1))
 if [[ "$(kill -l 65 2>/dev/null; echo "rc=$?")" == "rc=1" ]]; then
   ok "name-guard teardown: the real kill builtin is restored (shadow did not leak)"
 else
@@ -248,6 +291,7 @@ fi
 # Loop-accounting floor. A `pass()`-counting floor cannot see a loop whose body
 # never executed: a gutted loop still leaves the earlier ok() calls counted. So
 # reconcile what the loop EXAMINED against the domain it was handed.
+cases=$((cases+1))
 if (( compared == ${#RC_DOMAIN[@]} )); then
   ok "loop accounting: compared $compared of ${#RC_DOMAIN[@]} rc values"
 else
@@ -258,24 +302,61 @@ fi
 # pass_n left this suite 35/0 and rc 0 while a real classifier drift was live. Nothing above can
 # see that — every assertion is observed THROUGH these two helpers. Ported from
 # run-registered-suites.test.sh, the only suite in this PR that already had it.
-_ctl_p=$pass_n; _ctl_f=$fail_n
+#
+# `cases` is rolled back alongside pass_n/fail_n so the two deliberate helper calls below do not
+# unbalance the conservation identity: net effect on a healthy run is exactly one recorded
+# verdict and exactly one counted case.
+_ctl_p=$pass_n; _ctl_f=$fail_n; _ctl_c=$cases
+cases=$((cases+1))
 ok "positive control: ok() increments the pass counter"
+cases=$((cases+1))
 bad "positive control: bad() increments the fail counter (this FAIL line is expected)"
 if (( pass_n == _ctl_p + 1 && fail_n == _ctl_f + 1 )); then
-  pass_n=$_ctl_p; fail_n=$_ctl_f
+  pass_n=$_ctl_p; fail_n=$_ctl_f; cases=$_ctl_c
+  cases=$((cases+1))
   ok "positive control: ok()/bad() both move their own counters"
 else
-  pass_n=$_ctl_p; fail_n=$((_ctl_f + 1))
-  echo "[FAIL] positive control: ok()/bad() do NOT move their counters — every verdict in this file is unreliable" >&2
+  pass_n=$_ctl_p; fail_n=$((_ctl_f + 1)); cases=$((_ctl_c + 1))
+  printf '\n[FATAL] positive control: ok()/bad() do NOT move their counters — every verdict in this file is unreliable.\n' >&2
+  echo "=== suite-exit-class parity: $pass_n passed, $fail_n failed ==="
+  exit 1
 fi
 
-# Assertion floor. Deleting a whole arm dropped this suite 35 -> 31 and still exited 0.
-MIN_PARITY_ASSERTIONS=36
-if (( pass_n + fail_n < MIN_PARITY_ASSERTIONS )); then
-  echo "[FAIL] anti-vacuity: only $((pass_n + fail_n)) assertions ran, expected >= ${MIN_PARITY_ASSERTIONS} — an arm was deleted" >&2
-  fail_n=$((fail_n + 1))
+# --- Anti-vacuity floor -----------------------------------------------------------------------
+# Deleting a whole arm dropped this suite 35 -> 31 and still exited 0.
+#
+# Two changes from the shape that let that through. First it is reported with `printf >&2` +
+# `exit 1` DIRECTLY: the previous form did `fail_n=$((fail_n + 1))`, and `fail_n` is exactly
+# what the exit status reads, so neutering the verdict machinery silenced the rows AND the floor
+# meant to notice the silence. Second it counts `cases` — incremented at the call site — rather
+# than `pass_n + fail_n`, which is derived from the verdict counters and therefore collapses
+# with them under the same fault, making the floor blame a deleted arm for a discarded verdict.
+#
+# Measured from a green run with ZERO slack: 57 assertions. Ratchet upward only.
+MIN_PARITY_ASSERTIONS=57
+if (( cases < MIN_PARITY_ASSERTIONS )); then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d — an arm was deleted.\n' \
+    "$cases" "$MIN_PARITY_ASSERTIONS" >&2
+  echo "=== suite-exit-class parity: $pass_n passed, $fail_n failed ($cases assertions) ==="
+  exit 1
+fi
+
+# --- Accounting conservation --------------------------------------------------------------
+# The arm that actually catches a neutered verdict helper. The floor above catches "no
+# assertions RAN"; it cannot catch "assertions ran and their verdicts were discarded", because
+# `cases` keeps its full value when bad() is a no-op. Every assertion records exactly one
+# verdict, so pass_n+fail_n MUST equal cases. Reported directly for the same reason as the floor.
+if (( pass_n + fail_n != cases )); then
+  printf '\n[FATAL] accounting: pass_n+fail_n (%d) != cases (%d).\n' "$((pass_n + fail_n))" "$cases" >&2
+  if (( pass_n + fail_n < cases )); then
+    printf '  An assertion was counted but its verdict was not recorded — that is what a neutered ok()/bad() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `cases=$((cases+1))` before it. This is a harness bug, not a parity failure: add the increment at that call site.\n' >&2
+  fi
+  echo "=== suite-exit-class parity: $pass_n passed, $fail_n failed ($cases assertions) ==="
+  exit 1
 fi
 
 echo ""
-echo "=== suite-exit-class parity: $pass_n passed, $fail_n failed ==="
+echo "=== suite-exit-class parity: $pass_n passed, $fail_n failed ($cases assertions) ==="
 (( fail_n == 0 ))
