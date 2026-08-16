@@ -734,6 +734,19 @@ if want_scripts; then
   # the real defect into a tree copy.
   run_suite "scripts/lint-workflow-errexit-capture" bash scripts/lint-workflow-errexit-capture.test.sh
   run_suite "scripts/lint-workflow-errexit-capture-live" python3 scripts/lint-workflow-errexit-capture.py
+  # ADR-191 (#7084). Same both-halves shape as the pair above, and for the same reason: after
+  # this change the passing state of Guard 1 is "zero bun.lock found", which is byte-identical
+  # to the output of a guard whose search is broken. The unit suites carry the anti-vacuity
+  # floors and the must-PASS rows; the live scans prove the tree.
+  #
+  # Two guards rather than one: each one's floor has to be obviously matched to its own
+  # enumeration (Guard 1 anchors on package-lock.json directories, Guard 2 on workflow files
+  # AND matched install steps), and a single script hosting both would fail that name test for
+  # half its job.
+  run_suite "scripts/lint-dual-lockfile" bash scripts/lint-dual-lockfile.test.sh
+  run_suite "scripts/lint-dual-lockfile-live" bash scripts/lint-dual-lockfile.sh
+  run_suite "scripts/lint-workflow-install-sites" bash scripts/lint-workflow-install-sites.test.sh
+  run_suite "scripts/lint-workflow-install-sites-live" bash scripts/lint-workflow-install-sites.sh
   # SIBLING gate (#7332): the same "captured a status nobody decided about" class, but in shell
   # SCRIPTS under `set -e` rather than Actions `run:` blocks. Separate anchor, separate
   # calibration -- the naive "a command-substitution assignment is a finding" rule found only
