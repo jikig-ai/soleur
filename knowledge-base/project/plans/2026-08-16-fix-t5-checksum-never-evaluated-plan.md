@@ -55,7 +55,7 @@ brand_survival_threshold: none
 | Cited AGENTS rule IDs | All 4 verified ACTIVE in `AGENTS.md` and absent from `scripts/retired-rule-ids.txt` |
 | Commit attribution `933635603` | Verified an ancestor of `origin/main`; its subject matches the claim quoted from it verbatim |
 | Cited issues/PRs #7565 / #7291 / #7510 | State verified live via `gh` |
-| String literals across plan + `tasks.md` | Consistent; floor `47` appears in 6 places with no stale `48` |
+| String literals across plan + `tasks.md` | Checked at plan time against a floor of `47`. **Superseded at review**: the floor is now `48` (the mutation arm gained a precondition assertion), and the sweep scope was understated — the literal also appears in `tasks.md`, so the stated "6 places" was 7 |
 | **The AC pattern executed against real captured output** | `grep -q '/tmp/doppler\.tar\.gz: FAILED$'` MATCHES the genuine-mismatch cell and does NOT match either the missing-file cell (`FAILED open or read`) or the curl-failure cell — the discrimination the whole fix rests on |
 | Locale sensitivity of the verdict token | Probed under unset `LANG`, `LC_ALL=C` and `LC_ALL=fr_FR.UTF-8`; not translated in the pinned image |
 
@@ -189,6 +189,15 @@ Three facts this pins:
 2. **`: FAILED` must be `$`-anchored.** Case (d) emits `/tmp/doppler.tar.gz: FAILED open or read`.
    An unanchored `: FAILED` matches it, which would make the new assertion satisfiable by a
    *download* failure — this bug re-created in a new disguise.
+
+   > **Falsified on execution (2026-08-16) — see `mutation-transcript.md` G1-2/G1-2a/G1-2b and
+   > `decision-challenges.md` §1.** Case (d) is the *mutant* path (`no set -e`); the assertion
+   > lives on the errexit-armed primary arm, where a blocked CDN aborts at `curl` **before**
+   > `sha256sum` runs, so no verdict line is emitted at all and the over-match cell is
+   > unreachable as the suite ships. Reaching it required appending `|| true` to curl. The
+   > anchor is retained and is now a whole-line `grep -qxF`, but as defence-in-depth against a
+   > future edit — not a guard on a live path. Left in place rather than rewritten: the
+   > falsified prediction is evidence.
 3. **(b) vs (d) is the mutation arm's discrimination.** On `main` (probe e) both cells print
    `CHMOD_RAN`; after `&&`-conditioning only (b) does.
 
@@ -270,7 +279,7 @@ because the next reader will otherwise reach for the tail.
 | `knowledge-base/project/learnings/2026-08-09-the-shell-capture-trap-recurred-three-times-and-finally-earned-a-lint.md` | ADR-166 and the origin of `lint-shell-capture-exit.py`, whose baseline must not grow |
 | `knowledge-base/project/learnings/2026-08-13-the-guards-i-wrote-to-prove-the-fixes-had-the-defects-the-fixes-were-about.md` | Records that running `lint-shell-capture-exit` **without** `--baseline` and reading exit 1 as a regression is itself a logged mistake |
 | `knowledge-base/project/learnings/2026-04-06-doppler-cli-checksum-cloud-init.md` | The original trust-boundary rationale for the pinned version + checksum this arm defends |
-| `knowledge-base/engineering/architecture/decisions/ADR-181-local-gate-declines-are-counted-verdicts.md` | Property 4: **"A decline is UNREACHABLE under CI, not merely detected."** Doctrinal support for this plan's central cut — introducing a CI-reachable decline into this suite would have widened ADR-181's carve-out from one mutant container to the supply-chain guard itself |
+| `knowledge-base/engineering/architecture/decisions/ADR-181-local-gate-declines-are-counted-verdicts.md` | Property 4: **"A decline is UNREACHABLE under CI, not merely detected."** Consistent with this plan's central cut (supporting, not dispositive: ADR-181's scope is suite-dispatch declines in `scripts/test-all.sh` and explicitly does NOT extend to CI or to an in-suite, assertion-level decline; the measurement is what carries the cut) — introducing a CI-reachable decline into this suite would have widened ADR-181's carve-out from one mutant container to the supply-chain guard itself |
 | `knowledge-base/engineering/architecture/decisions/ADR-180-guard-contract-as-plan-time-deliverable.md` | Requires the Guard Contract below, and its "assembly is structural, not a member snapshot" rule shapes both entries |
 | `knowledge-base/engineering/architecture/decisions/ADR-166-a-ci-message-may-only-name-a-cause-the-job-measured.md` | The new failure message names what the arm measured (sha256sum did not reject) and does not claim a cause it did not measure |
 
@@ -460,7 +469,7 @@ All greps use `if grep -q … ; then` form. No `var=$(grep -c …)` capture, so
 
 ### Phase 3 — floor, comments, pre-existing-hazard issue, measurement
 
-- Raise the floor from 46 to **47**: the primary arm goes from 4 assertions to 5. Itemise the raise
+- Raise the floor from 46 to **48**: the primary arm goes from 4 assertions to 5, and (added at review) the mutation arm gains a precondition assertion that its wrong-digest `sed` actually landed. Itemise the raise
   in-file in the existing style, and correct the stale "four plain `docker run --rm`" comment to the
   measured count in the same edit.
 - Update the instrumentation comment block at `:451-456` to state why the marker is `&&`-chained and
@@ -520,8 +529,8 @@ the four assertions at `:666-672`.
 
 | # | Edit (and input condition) | Must go |
 |---|---|---|
-| 1 | Delete the new checksum-verdict assertion entirely (targets the guard's **own dispatch**); CDN reachable | RED via the floor — `total` drops to 46 against a floor of 47. A removed assertion must not be indistinguishable from an arm that ran |
-| 2 | Delete the `$` anchor from the pattern (`: FAILED` for `: FAILED$`); **CDN blocked, apt healthy** | GREEN, and that is the finding — `FAILED open or read` satisfies a checksum-specific assertion, i.e. bug #1 in a new disguise. The row is recorded as a must-be-RED only in its corrected form; the uncorrected form's greenness is the evidence the anchor is load-bearing |
+| 1 | Delete the new checksum-verdict assertion entirely (targets the guard's **own dispatch**); CDN reachable | RED via the floor — `total` drops against the floor (46 vs 47 as measured; the floor is 48 after review added the mutation arm's precondition assertion). A removed assertion must not be indistinguishable from an arm that ran |
+| 2 | **FALSIFIED ON EXECUTION — came back RED; replaced by rows G1-2a/G1-2b, see `mutation-transcript.md`.** Delete the `$` anchor from the pattern (`: FAILED` for `: FAILED$`); **CDN blocked, apt healthy** | Predicted GREEN, and that was to be the finding — `FAILED open or read` satisfies a checksum-specific assertion, i.e. bug #1 in a new disguise. The row is recorded as a must-be-RED only in its corrected form; the uncorrected form's greenness is the evidence the anchor is load-bearing |
 | 3 | Leave both fixes in place; **CDN blocked, apt healthy** | RED — primary arm fails with "sha256sum never rejected the tarball". On `origin/main` the identical input is **green with zero findings**: the false pass this PR closes |
 | 4 | Point `DOPPLER_SHA256` at the *correct* checksum so the chain completes; CDN reachable | RED — `CHMOD_RAN` appears and the existing absence assertion fires. Confirms the arm still detects a chain that runs to completion |
 | 5 | Add a **second** `chmod +x /usr/local/bin/doppler` line to the shipped block after a compliant first (targets the **second-member** case); CDN reachable | RED — `s.count(old) != 1` hard-exits rather than instrumenting one and silently ignoring the other |
@@ -544,7 +553,7 @@ its own inline `docker run` at `:689-700` — *not* `run_case`. The instrumentat
 |---|---|---|
 | 1 | Revert the transform to `; echo CHMOD_RAN` (any network) | RED — the Phase 1 line-anchored post-transform check does not match the emitted construct and hard-exits 1. *Note the detector*: behaviourally, `;` and `&&` are indistinguishable when the CDN is reachable (chmod succeeds either way), and under a blocked CDN the `;` form makes this arm **pass**. The anchored check is what catches it, not the arm's own verdict |
 | 2 | Keep the `&&` in the transform but revert the post-transform check to a bare `grep -q 'echo CHMOD_RAN'`, then delete the `&&` clause (targets the guard's **own dispatch**) | RED must be the outcome; on `main` this same pair is GREEN, because a bare grep matches its own source text |
-| 3 | Rename the emitted marker in the transform but not in either check | RED twice, independently — the source-level anchored check and the mounted-artifact check in the mutation arm both fail |
+| 3 | Rename the emitted marker in the transform but not in either check | Predicted RED twice, independently. **Measured: only the source-level check fires** — it `exit 1`s before the mutation arm is reached, so the two are not observed independently in one run. The mounted check's independence is demonstrated by row 2 instead, where the source-level check was deliberately defeated and the mounted check was the sole detector. |
 | 4 | Delete the mounted-artifact check and corrupt `$TMP/dl.case.sh` after the `sed -i` at `:688` | RED must be the outcome — the check is what pins application, not merely presence in the source copy |
 | 5 | Leave both fixes in place; **CDN blocked, apt healthy** | RED — `CHMOD_RAN` absent. Documented as an accepted new red path (see Risks); on `main` this input is green |
 
@@ -568,7 +577,13 @@ liveness_signal:
     Every push to a branch touching `apps/*/infra/**`, via the `deploy-script-tests` job in
     `.github/workflows/infra-validation.yml` (registered at line 1241); plus roughly every six
     hours via `main-health-monitor` with `TEST_GROUP=infra`.
-  alert_target: The GitHub Actions job conclusion for `deploy-script-tests`.
+  alert_target: >
+    The GitHub Actions job conclusion for `deploy-script-tests` — which is an **advisory** job,
+    not a merge gate: it is absent from `ruleset-ci-required.tf`, so a red check is visible but
+    mergeable-past, and on a pull request there is no notification at all. Ops email fires only
+    on push-to-main, via `notify-main-failure`. Promotion to required is tracked in #6480.
+    Stated here because a supply-chain guard whose alert route is advisory should not be
+    presented as if it blocked.
   configured_in: .github/workflows/infra-validation.yml
 
 error_reporting:
@@ -601,9 +616,16 @@ failure_modes:
       A line-anchored check for the whole emitted construct against `$TMP/dl.case.sh` in the
       mutation arm, run before that container starts.
     alert_route: Uncounted hard `exit 1` with a named reason.
-  - mode: An arm vanishes silently (an early `exit 0`, a short-circuited branch).
-    detection: '`total = passes + fails` measured against the floor of 47.'
-    alert_route: '`FAIL: ran only N assertions (<47)` -> exit 1.'
+  - mode: An arm vanishes silently via a short-circuited branch or a deleted assertion.
+    detection: '`total = passes + fails` measured against the floor of 48.'
+    alert_route: '`FAIL: ran only N assertions (<48)` -> exit 1.'
+  - mode: An arm vanishes via an early `exit 0` (a skip guard firing).
+    detection: >
+      NOT the floor — an early `exit 0` returns before the floor check is reached, so the floor
+      is structurally blind to it. `CI=true` is the detection: it converts every `_skip` guard
+      into `exit 1` with a named reason. The floor comment in the script carried the same false
+      clause and is corrected in the same commit.
+    alert_route: 'Named `_skip` reason -> exit 1 under CI.'
 
 logs:
   where: >
@@ -612,10 +634,16 @@ logs:
   retention: GitHub Actions default log retention for the repository.
 
 discoverability_test:
-  command: bash apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh
+  # `CI=true` IS LOAD-BEARING. Without it the four `_skip` guards exit 0 before a single
+  # assertion, so on any host without a docker daemon the probe reports success having
+  # verified nothing — this plan's own thesis, reproduced in its only executable proof.
+  # Under CI=true those guards become `exit 1` with a named reason, so a docker-less
+  # sandbox FAILS instead of false-greening, which is the correct direction for a
+  # supply-chain gate.
+  command: CI=true bash apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh
   expected_output: >
     A terminal line `git-data-runcmd-rehearsal: <N> passed, 0 failed (<N> assertions)` with `<N>` at
-    or above 47, and exit status 0.
+    or above 48, and exit status 0.
 ```
 
 No `credentials_required`: the suite needs docker and outbound network, both already provided by the
@@ -642,8 +670,8 @@ after merge.
    `printf 'true\n'` and carries no marker) is named in the adjacent comment.
 4. The primary arm carries a counted assertion on `/tmp/doppler\.tar\.gz: FAILED$` against
    `$TMP/out/stdout`, with the `$` anchor and the escaped `.` both present.
-5. The floor equals the `total` printed by a measured healthy run (predicted 47), is itemised in-file
-   naming the new assertion, and the stale "four plain `docker run --rm`" comment is corrected to the
+5. The floor equals the `total` printed by a measured healthy run (measured 48), is itemised in-file
+   naming the new assertions, and the stale "four plain `docker run --rm`" comment is corrected to the
    measured count in the same edit.
 6. `run_case` is unmodified: `git diff origin/main -- apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh`
    shows no change between its `run_case() {` line and its closing brace.
@@ -706,7 +734,7 @@ independently supported by ADR-181 property 4).
 
 | Risk | Mitigation |
 |---|---|
-| **A CDN-blocked run now fails where it previously passed** — a new red path in both arms | **Accepted deliberately.** The failure is true and specific, and for a supply-chain guard a false red is cheap (re-run) while a silent vacuous pass is the defect being fixed. It is also cheap to accept: measured, this cell has **never** been observed — #7291's flake was apt (probes e/f/g). ADR-181 property 4 ("a decline is UNREACHABLE under CI") independently favours failing over declining here. If a CDN decline is ever *observed*, ADR-188's counted-decline machinery is the sanctioned remedy and #7291 is where it lands — reached by evidence rather than anticipation |
+| **A CDN-blocked run now fails where it previously passed** — a new red path in both arms | **Accepted deliberately.** The failure is true and specific, and for a supply-chain guard a false red is cheap (re-run) while a silent vacuous pass is the defect being fixed. It is also cheap to accept: measured, this cell has **never** been observed — #7291's flake was apt (probes e/f/g). ADR-181 property 4 ("a decline is UNREACHABLE under CI") independently favours failing over declining here. If a CDN decline is ever *observed*, the counted-decline machinery proposed in draft PR 7510 (ADR-188, **unmerged** — it exists only on that branch) is the candidate remedy and #7291 is where it lands — reached by evidence rather than anticipation |
 | A deleted or retagged pinned release asset would disarm the guard | Cannot happen under this design: with no decline path, curl rc 22 (server answered and refused) fails the arm exactly like any other non-checksum abort. This was a live hazard in the cut decline design and is recorded on #7291 so a future decline does not reintroduce it |
 | The floor number is wrong at merge | Phase 3 derives it from a measured run; AC5 requires the floor to equal the printed `total`. The in-file "four plain `docker run`" comment — wrong at 6 on PR 7510 and at 8 on `main` — is standing evidence that hand-maintained counts here drift |
 | The mounted-artifact check hard-exits the suite on T17 | Placement is constrained by AC3 to the mutation arm, after its own `cp`/`sed -i`, where the file exists and must carry the marker. T17 overwrites `$TMP/doppler-dl.sh` with `printf 'true\n'` at `:713`, so its mounted copy legitimately has no marker; the exemption is named in the comment |
@@ -738,4 +766,4 @@ independently supported by ADR-181 property 4).
 - Fixing the pre-existing `set -u` / unset-`CAPTURE` hazard at `:652`. It gets a tracking issue.
 - Resolving #7535's contested design, or #7544's e2fsprogs naming.
 - Introducing skip/decline semantics to this suite. If a genuine environment decline is ever observed
-  here, ADR-188 is the sanctioned design and #7291 is where it lands.
+  here, the design proposed in draft PR 7510 (ADR-188, unmerged) is the candidate and #7291 is where it lands.

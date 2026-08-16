@@ -57,8 +57,9 @@ against `origin/main` and will drift as edits land — re-locate by content anch
 
 ### 2.3 Floor, comments, tracking issue (plan Phase 3)
 
-- [x] 2.3.1 Raise the floor from 46 to the measured total (predicted 47) and itemise the raise in the
-      existing in-file style, naming the new assertion.
+- [x] 2.3.1 Raise the floor from 46 to the measured total (measured **48** after review added the
+      mutation arm's precondition assertion; 47 before it) and itemise the raise in the existing
+      in-file style, naming the new assertions.
 - [x] 2.3.2 Correct the stale "four plain `docker run --rm`" comment to the measured count in the
       same edit.
 - [x] 2.3.3 Update the instrumentation comment block to record why the marker is `&&`-chained and
@@ -107,3 +108,21 @@ against `origin/main` and will drift as edits land — re-locate by content anch
 - [ ] 4.5 Post-merge: comment on #7291 with probes (e)/(f)/(g), the note that `&&`-conditioned
       `CHMOD_RAN` makes a CDN-blocked run reach PR 7510's `else` branch, and the caveat that curl
       rc 22 (asset deleted or retagged) must never be routed to a decline.
+
+## Phase 5 — Review round (added 2026-08-16)
+
+- [x] 5.1 8-agent panel run report-only against the pushed commit; fixes applied by the lead.
+- [x] 5.2 Dispatch vacuity closed: `fail()` was a counter, so a one-token bucket swap greened the
+      whole suite at `47 passed, 0 failed` / exit 0. Verdict now reads an append-only ledger.
+- [x] 5.3 Primary arm's MOUNTED artifact pinned — its CHMOD_RAN assertion is NEGATIVE, so a marker
+      lost in transit made it pass vacuously. The pin had been added to the mutation arm, whose
+      assertion is POSITIVE and already self-failing.
+- [x] 5.4 Mutation arm's wrong-digest `sed` landing asserted (was fail-open) and its message
+      de-misattributed (ADR-166).
+- [x] 5.5 Tarball path DERIVED from the extracted block instead of hard-coded; assertions moved to
+      whole-line `grep -qxF`/`-qx`.
+- [x] 5.6 Three false/ambiguous prose claims corrected: the anchor rationale's prose-collision
+      threat model, the `docker run --rm` count (6 sites / 8 runtime, both derivations given), and
+      the frozen 19-era floor itemisation I had wrongly updated.
+- [x] 5.7 Falsified plan predictions annotated in place rather than rewritten.
+- [x] 5.8 Stale sibling count in `run-registered-suites.sh` swept (same quantity, "three").

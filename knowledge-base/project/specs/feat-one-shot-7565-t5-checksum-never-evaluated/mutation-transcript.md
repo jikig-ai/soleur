@@ -82,6 +82,41 @@ RED" carelessly would have accepted it. But a bash syntax error is not the floor
 run never reached `total=$((passes + fails))`, so it measured nothing about the dispatch layer
 it targets. Redone as a clean two-line substitution.
 
+## Addendum — 2026-08-16, review round (#7565)
+
+An 8-agent panel found the axes this battery did not mutate. Recorded here rather than in place,
+because the rows above are the evidence for what was measured at the time.
+
+**The battery's blind spots, as measured by the panel:**
+
+| Axis the battery did not edit | What survived it |
+|---|---|
+| **dispatch — `fail()` alone** | H1-redo neutered `pass()` *and* `fail()` together, so its RED is fully explained by the `pass()` half. Neutering only `fail()` — or, worse, swapping its bucket (`fail() { passes=$((passes+1)); … }`) — leaves `total` at its floor, prints accurate `FAIL:` text, and **exits 0**. Reproduced in isolation with three real regressions injected: `47 passed, 0 failed`, `EXIT=0`. One token disarms ~129 assertion sites. |
+| **fixture direction, mutation arm** | The arm's wrong-digest `sed -i` had no landing assertion. A no-op sed means the genuine checksum passes, the chain completes legitimately, `CHMOD_RAN` prints, and the arm reports a cheerful pass having reproduced nothing. Fail-open. |
+| **population growth** | G1-5 grew the set with a *duplicate* member, which the exact-literal `s.count(old) != 1` catches by construction. A **new** member — a second pinned binary in the same runcmd block — yields 5/5 green with its checksum never evaluated. |
+| **which arm was pinned** | The mounted-artifact check went to the arm whose assertion is POSITIVE (self-failing). The PRIMARY arm's `CHMOD_RAN` assertion is NEGATIVE, so a marker lost in transit makes it pass **vacuously** — the tautology class #7565 exists to kill — and it was the unpinned one. |
+| **observation-grep anchoring** | Both `CHMOD_RAN` observation greps were bare-token while the two *source* checks were anchored. bash echoes the offending source line on a syntax error, and that line contains the marker. |
+
+**Fixes applied, and the floor consequence.** The verdict now reads an append-only `FAILURES`
+ledger instead of a counter; the primary arm's mounted artifact is pinned; the mutation arm
+asserts its own premise (the rejection verdict must be PRESENT) — a counted assertion, so the
+floor moves **47 → 48**; both observation greps became whole-line; the tarball path is derived
+from the extracted block rather than hard-coded.
+
+**Three prose defects the panel found, all mine, all in the added comments:** the anchor
+rationale asserted a prose-collision threat model that is false (the grep target is the extracted
+block, and #7264 made the rendered template comment-free — measured: zero comment lines); the
+`docker run --rm` correction replaced a wrong number with another wrong number via a
+self-polluting recipe (it is 6 source sites / 8 runtime invocations, and the unanchored grep it
+prescribed returned 9 *because the comment counted itself*); and the floor's leading itemisation
+is the frozen 19-era baseline, which I updated, breaking the `= 14 new, 19 pre-existing, 33 total`
+ledger 40 lines below for anyone doing what that stanza invites.
+
+**Still open, deliberately.** The floor is a bare count with no per-arm identity, and `pass; pass`
+at the dash-absent branch means `total == 48` is satisfiable with two fewer real assertions. A
+per-arm ledger is the real fix and is a larger change to a file two open PRs are editing; recorded
+rather than filed, since it needs the #7291 rebase to settle first.
+
 ## Axes mutated, and axes not
 
 Mutated: **guard dispatch** (G1-1, G2-2a/b, H1-redo), **fixture direction** (G1-2a vs G1-2b —
