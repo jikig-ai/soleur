@@ -458,6 +458,25 @@ sourceable library of quiet, pure adjudicators. Exit status is the verdict; noth
       **This row stays OPEN deliberately.** Its instruction is "immediately before merge", and it
       is not discharged by having been run once: a sibling could land 189 during review. `/ship`'s
       ADR-Ordinal Collision Gate must re-run this enumeration and re-sweep if it moved again.
+
+      **Re-run 2026-08-16 (the review-fix pass) — 189 IS RETAINED, and the review list's
+      instruction to renumber it was itself stale.** That list said "ADR-189 → ADR-190. A third
+      branch (`origin/feat-one-shot-7341-…`) took 189." Re-derived across all **67** `origin/*`
+      refs:
+
+      | ordinal | held by |
+      |---|---|
+      | 187 | `origin/feat-one-shot-7429-7402-killed-signal-and-orphan-globs` |
+      | 188 | `origin/feat-one-shot-7291-t5-mutation-network-flake` |
+      | **189** | **this branch, uncontested** |
+      | 190 | `origin/feat-one-shot-7341-zot-restart-loop-blocks-release` |
+
+      The 7341 branch DID claim 189 (`5df0ab917`, "docs(adr-189): claim the ordinal for zot HTTP
+      deadlines…") — that is the collision the list recorded — and has **since renumbered itself
+      to 190**. Renumbering to 190 now would therefore have CREATED the collision the instruction
+      existed to avoid. `origin/main`'s highest remains **186**, so all four claims are still
+      provisional and this row still does not close. Lowest free ordinal if 189 is ever lost:
+      **191**.
 - [x] **10.4** Post-merge: confirm the `DPF_REPLACED == false` path — explicit `::notice::`, no
       re-push, green job. **[SATISFIED — R18.5.]** Evidence: GitHub Actions run **31714143720**
       (`workflow_dispatch` on `main`, 2026-08-13T15:12:19Z, conclusion `success`), which logs
