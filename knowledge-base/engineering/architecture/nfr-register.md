@@ -362,9 +362,9 @@ Source of truth: `knowledge-base/engineering/architecture/diagrams/c4-model.md` 
 
 | Container/Link | Status | Enforced By | Evidence |
 |----------------|--------|-------------|----------|
-| Dashboard | Implemented | bun.lockb | Lockfile committed; pinned dependency versions |
-| API Routes | Implemented | bun.lockb | Shared lockfile with Dashboard |
-| Agent Runtime | Implemented | bun.lockb | Plugin lockfile committed |
+| Dashboard | Implemented | package-lock.json | Lockfile committed; pinned dependency versions (ADR-191) |
+| API Routes | Implemented | package-lock.json | Shared lockfile with Dashboard |
+| Agent Runtime | Implemented | package-lock.json | Plugin lockfile committed |
 
 ### NFR-035: Semantic Versioning
 

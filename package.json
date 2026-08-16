@@ -1,4 +1,5 @@
 {
+  "name": "soleur",
   "type": "module",
   "scripts": {
     "test": "bash scripts/test-all.sh",

@@ -1535,16 +1535,40 @@ install_deps() {
   local worktree_path="$1"
 
   # --- Root-level dependency install ---
+  # Lockfile-detecting, mirroring the per-app branch below. The root branch used to
+  # hardcode `bun install --frozen-lockfile`; once ADR-191 deleted root bun.lock that
+  # became an unconditional failure, so EVERY worktree created by /one-shot, /work or
+  # /ship would print "Warning: bun install failed" and ship with no root node_modules
+  # -- breaking `bun test plugins/soleur/` and the pre-push hook on every fresh
+  # worktree, including any follow-up to the change that deleted the lockfile.
   if [[ -f "$worktree_path/package.json" ]] && [[ ! -d "$worktree_path/node_modules" ]]; then
-    if ! command -v bun &>/dev/null; then
-      echo -e "  ${YELLOW}Warning: bun not found -- install root dependencies manually${NC}" >&2
+    local -a root_install_cmd=()
+    local root_runtime=""
+    if [[ -f "$worktree_path/bun.lockb" ]] || [[ -f "$worktree_path/bun.lock" ]]; then
+      if command -v bun &>/dev/null; then
+        root_install_cmd=(bun install --frozen-lockfile --cwd "$worktree_path")
+        root_runtime="bun"
+      else
+        echo -e "  ${YELLOW}Warning: root has a bun lockfile but bun not found -- install manually${NC}" >&2
+      fi
+    elif [[ -f "$worktree_path/package-lock.json" ]]; then
+      if command -v npm &>/dev/null; then
+        root_install_cmd=(npm ci --prefix "$worktree_path")
+        root_runtime="npm"
+      else
+        echo -e "  ${YELLOW}Warning: root has package-lock.json but npm not found -- install manually${NC}" >&2
+      fi
     else
-      echo -e "${BLUE}Installing dependencies...${NC}"
+      echo -e "  ${YELLOW}Warning: root package.json has no recognized lockfile -- skip${NC}" >&2
+    fi
+
+    if [[ ${#root_install_cmd[@]} -gt 0 ]]; then
+      echo -e "${BLUE}Installing dependencies (${root_runtime})...${NC}"
       local install_output
-      if install_output=$(bun install --frozen-lockfile --cwd "$worktree_path" 2>&1); then
+      if install_output=$("${root_install_cmd[@]}" 2>&1); then
         echo -e "  ${GREEN}Dependencies installed${NC}"
       else
-        echo -e "  ${YELLOW}Warning: bun install failed -- run manually in the worktree${NC}" >&2
+        echo -e "  ${YELLOW}Warning: ${root_runtime} install failed -- run manually in the worktree${NC}" >&2
         echo "  $install_output" >&2
       fi
     fi
