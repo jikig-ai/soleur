@@ -112,6 +112,32 @@ prescribed returned 9 *because the comment counted itself*); and the floor's lea
 is the frozen 19-era baseline, which I updated, breaking the `= 14 new, 19 pre-existing, 33 total`
 ledger 40 lines below for anyone doing what that stanza invites.
 
+### Review-fix battery — the fixes above, mutation-proven
+
+A review-driven fix is written after the tests and nothing forces coverage for it, so each was
+mutated back out on a scratch copy. Control first.
+
+| Row | Mutation | rc | Result | Verdict |
+|---|---|---|---|---|
+| control | none | 0 | `48 passed, 0 failed` | **GREEN** — baseline valid |
+| r1 | bucket-swap `fail()`, healthy input | 0 | `48 passed, 0 failed` | **PROVES NOTHING** — see below |
+| r1b | bucket-swap `fail()` **+ a real regression injected** | **1** | `48 passed, 0 failed` | **RED** ✅ — the terminal line still reads 0 failed (the swap sent the failure into `passes`) and the run exits **1** anyway, because the verdict reads the ledger. Pre-fix this exact input was exit **0**. |
+| r2 | delete the primary pin **+** strip the marker in transit | 0 | `48 passed, 0 failed` | **GREEN, and that is the finding** — the vacuity is real: a marker lost in transit with no pin is a silent pass on the arm carrying the supply-chain property |
+| r2b | keep the primary pin, same corruption | **1** | `FAIL: the mounted T5 PRIMARY artifact lost the CHMOD_RAN instrumentation` | **RED** ✅ — the pin is the detector, on identical input to r2 |
+| r3 | no-op the mutation arm's wrong-digest `sed` | **1** | `47 passed, 1 failed` | **RED** ✅ — the new precondition assertion fires; pre-fix this was a silent fail-open green |
+| r4 | break the tarball-path derivation | **1** | fails loud before asserting | **RED** ✅ — an empty derivation cannot produce a vacuous whole-line match |
+
+**Row r1 is mislabelled and proves nothing — recorded rather than dropped.** Its description says
+"+ a real regression injected"; the mutation never injected one, so no code path called `fail()`
+and a healthy run was always going to report `48 passed, 0 failed`, exit 0. It is r1b, which does
+inject one, that demonstrates the ledger. Left in the table because a row that measures nothing
+looks exactly like a row that passed, which is this PR's whole subject.
+
+**r2/r2b are the pair that matters.** Identical corruption, differing only in whether the pin
+exists: without it the suite is fully green while the primary arm's absence assertion is vacuous;
+with it the run stops with a named reason. That is the demonstration the original battery never
+had, because it never mutated *which arm* was pinned.
+
 **Still open, deliberately.** The floor is a bare count with no per-arm identity, and `pass; pass`
 at the dash-absent branch means `total == 48` is satisfiable with two fewer real assertions. A
 per-arm ledger is the real fix and is a larger change to a file two open PRs are editing; recorded
