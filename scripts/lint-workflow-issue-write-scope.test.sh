@@ -363,6 +363,27 @@ else
   fail "the .yaml glob is unpinned — dropping it is a silent bypass: rc=$RC"
 fi
 
+# --- AN UNRELATED SECRET MUST NOT EXEMPT THE FILE. The App/PAT carve-out matched any
+# `${{ secrets.X }}` anywhere, so a Slack webhook — not a GitHub credential at all — silently
+# took the whole file out of scope. Tightening it to a token-KEY binding is what makes the
+# exemption mean what it says.
+reset
+mkwf slackleak.yml 'name: slackleak
+permissions:
+  contents: read
+jobs:
+  j:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: curl -X POST "${{ secrets.SLACK_WEBHOOK_URL }}"
+      - run: gh issue comment 7556 --body hi'
+run_lint
+if [[ "$RC" -eq 1 ]]; then
+  pass "an unrelated secret does not exempt the file from the token check"
+else
+  fail "a non-GitHub secret disarmed the whole file — the widest fail-open is back: rc=$RC"
+fi
+
 # --- an empty or wrong directory must ERROR, never silently pass -------------------------------
 python3 "$SUT" "$TMP/does-not-exist" >/dev/null 2>&1
 if [[ "$?" -eq 2 ]]; then
@@ -429,7 +450,7 @@ fi
 # mutant slice BACKWARD only over contiguous simple assignments, so a threshold computed further
 # up does not bind and the floor is scored "not constructible" — counted as UNCOVERED by ADR-193
 # rather than as passing. `scripts/` is a COVERED directory, so this must bind from the start.
-FAIL_FLOOR_MIN=22
+FAIL_FLOOR_MIN=23
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$FAIL_FLOOR_MIN" ]]; then
   echo "  FATAL: anti-vacuity — ran $TOTAL assertions, expected >= $FAIL_FLOOR_MIN. Fix the extraction, do not lower the floor." >&2

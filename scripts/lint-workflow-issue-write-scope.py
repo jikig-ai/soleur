@@ -63,7 +63,18 @@ def has_api_issue_write(text: str) -> bool:
 GRAPHQL_WRITE = re.compile(r"\bgh\s+api\s+graphql\b[^\n]*(addComment|createIssue|updateIssue)")
 
 WORKFLOW_TOKEN = re.compile(r"\$\{\{\s*(secrets\.GITHUB_TOKEN|github\.token)\s*\}\}")
-APP_OR_PAT_TOKEN = re.compile(r"\$\{\{\s*(secrets\.(?!GITHUB_TOKEN)[A-Z0-9_]+|steps\.[A-Za-z0-9_-]+\.outputs\.token)\s*\}\}")
+# BOUND TO A TOKEN KEY, not "any secret anywhere in the file". The earlier form matched any
+# `${{ secrets.X }}`, so a Slack webhook, a Doppler token or an Anthropic key — none of them a
+# GitHub credential — silently converted the whole file to "authenticates with App/PAT, not our
+# problem" and exempted it from the check entirely. That is the widest fail-open the exemption
+# can have, and it fires on exactly the infra workflows that carry unrelated secrets. Requiring
+# the secret to sit on a `GH_TOKEN:`/`GITHUB_TOKEN:`/`token:` key keeps the legitimate
+# hr-github-app-auth-not-pat carve-out while removing the accidental one. Verified: no workflow
+# in the tree changes verdict, because tightening this can only ADD files to scope.
+APP_OR_PAT_TOKEN = re.compile(
+    r"(?im)^\s*(?:GH_TOKEN|GITHUB_TOKEN|token)\s*:\s*"
+    r"\$\{\{\s*(?:secrets\.(?!GITHUB_TOKEN\b)[A-Z0-9_]+|steps\.[A-Za-z0-9_-]+\.outputs\.token)\s*\}\}"
+)
 
 
 def has_pr_write(text: str) -> bool:
