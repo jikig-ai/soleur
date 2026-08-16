@@ -75,7 +75,11 @@ for f in "${tracked[@]}"; do
     .github/actions/*) continue ;; # stated boundary
     *.github/workflows/*.yml | *.github/workflows/*.yaml) workflow_files+=("$f") ;;
     *.test.sh) continue ;; # stated boundary: harness fixtures carry violating text by design
-    scripts/*.sh | scripts/*/*.sh | plugins/*.sh | plugins/*/*.sh | plugins/*/*/*.sh | plugins/*/*/*/*.sh | plugins/*/*/*/*/*.sh | plugins/*/*/*/*/*/*.sh)
+    # A `case` glob's `*` matches `/` (unlike pathname expansion), so these two patterns
+    # already cover arbitrary depth. The per-depth alternatives that used to sit here were
+    # dead weight, and shellcheck flagged them (SC2221/SC2222) precisely because the first
+    # one subsumes them all.
+    scripts/*.sh | plugins/*.sh)
       script_files+=("$f")
       ;;
     plugins/soleur/skills/constraint-scaffold/references/*.template) template_files+=("$f") ;;
