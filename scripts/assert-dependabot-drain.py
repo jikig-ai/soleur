@@ -15,6 +15,11 @@ LOCKS = {
     "web-platform": "apps/web-platform/package-lock.json",
     "root": "package-lock.json",
     "pencil-setup": "plugins/soleur/skills/pencil-setup/scripts/package-lock.json",
+    # The FOURTH tracked lockfile. Its omission made this script disagree with
+    # lint-dual-lockfile.sh, whose MIN_PACKAGE_LOCK_DIRS=4 floor names spike explicitly --
+    # so one guard asserted four directories exist while this one asserted three were clean,
+    # and a vulnerable copy here was asserted clear by nobody.
+    "spike": "spike/package-lock.json",
 }
 
 # (manifest, package, major-line, minimum patched) -- the Phase 3 reconciliation table.
@@ -45,7 +50,16 @@ DEFERRED = [("web-platform", "postcss", "node_modules/next/node_modules/postcss"
 
 
 def ver(s):
-    return tuple(int(x) for x in re.findall(r"\d+", s)[:3])
+    """Comparable version key. A prerelease sorts BELOW its release.
+
+    `re.findall(r"\d+", "4.13.0-beta.1")[:3]` yields (4,13,0) -- identical to the release --
+    so a prerelease below a patched floor would compare equal and read OK. The trailing
+    flag makes the release sort strictly higher.
+    """
+    nums = tuple(int(x) for x in re.findall(r"\d+", s)[:3])
+    nums = nums + (0,) * (3 - len(nums))
+    is_release = 0 if re.search(r"[-+]", s) else 1
+    return nums + (is_release,)
 
 
 def main():

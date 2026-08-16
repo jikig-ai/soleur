@@ -351,6 +351,42 @@ printf '#!/usr/bin/env bash\nset -euo pipefail\nbun install --frozen-lockfile\n'
 git -C "$R9C" add -A
 expect_red "$R9C" "row9c a non-root scripts/ directory is in scope" "apps/web-platform/scripts/setup.sh"
 
+# Row 10: an ARRAY-ASSIGNMENT install must be seen. `VAR=(bun install …)` begins with the
+# variable name after ltrim, so the head-anchored extractor could not see it — and
+# worktree-manager.sh carries live examples on the /ship path.
+R10=$(make_repo row10)
+mkdir -p "$R10/scripts"
+printf '#!/usr/bin/env bash\ncmd=(bun install --frozen-lockfile --cwd "$d")\n' > "$R10/scripts/wt.sh"
+git -C "$R10" add -A
+expect_red "$R10" "row10 array-assignment bun install is seen" "installs with bun"
+
+# Row 10b: the per-line waiver suppresses exactly that line...
+R10B=$(make_repo row10b)
+mkdir -p "$R10B/scripts"
+printf '#!/usr/bin/env bash\ncmd=(bun install --frozen-lockfile) # lint-workflow-install-sites: allow-bun\n' > "$R10B/scripts/wt.sh"
+git -C "$R10B" add -A
+expect_pass "$R10B" "row10b per-line allow-bun waiver suppresses its own line"
+
+# Row 10c: ...and ONLY that line. A naked reintroduction in the same file must still RED,
+# or the waiver would be a file-wide exemption wearing a per-line label.
+R10C=$(make_repo row10c)
+mkdir -p "$R10C/scripts"
+printf '#!/usr/bin/env bash\ncmd=(bun install --frozen-lockfile) # lint-workflow-install-sites: allow-bun\nbun install --frozen-lockfile\n' > "$R10C/scripts/wt.sh"
+git -C "$R10C" add -A
+expect_red "$R10C" "row10c waiver is per-LINE: a naked sibling install still REDs" "installs with bun"
+
+# Row 11: composite actions carry runs.steps[].run with workflow-step semantics.
+R11=$(make_repo row11)
+add_wf "$R11" ".github/actions/thing/action.yml" <<'YML'
+name: thing
+runs:
+  using: composite
+  steps:
+    - run: bun install --frozen-lockfile
+      shell: bash
+YML
+expect_red "$R11" "row11 composite action install is in scope" "installs with bun"
+
 # --- H2 must-PASS: a workflow with no install step at all. ---
 H2=$(make_repo h2)
 add_wf "$H2" ".github/workflows/noinstall.yml" <<'YML'
@@ -365,14 +401,13 @@ YML
 expect_pass "$H2" "H2 workflow with no install step (guard does not require one)"
 
 # --- H3 must-PASS: the stated boundary is IMPLEMENTED, not merely described. ---
-# The production Dockerfile deliberately runs `npm ci` WITHOUT --ignore-scripts, and
-# composite actions under .github/actions/** are out of scope.
+# The production Dockerfile deliberately runs `npm ci` WITHOUT --ignore-scripts and stays
+# out of scope. Composite actions are NO LONGER a boundary -- row 11 asserts they are
+# scanned -- so this row now pins only the Dockerfile half.
 H3=$(make_repo h3)
 printf 'FROM node:22\nRUN npm ci\nRUN npm ci --omit=dev\n' > "$H3/Dockerfile"
-mkdir -p "$H3/.github/actions/thing"
-printf 'runs:\n  using: composite\n  steps:\n    - run: bun install --frozen-lockfile\n      shell: bash\n' > "$H3/.github/actions/thing/action.yml"
 git -C "$H3" add -A
-expect_pass "$H3" "H3 Dockerfile bare 'npm ci' and .github/actions/** are out of scope"
+expect_pass "$H3" "H3 the production Dockerfile bare 'npm ci' stays out of scope"
 
 # --- H1: the suite's own executed-assertion floor. ---
 # The floor sits on PASSES, not on `asserted`. `asserted` is incremented by pass() AND
@@ -384,7 +419,7 @@ expect_pass "$H3" "H3 Dockerfile bare 'npm ci' and .github/actions/** are out of
 #
 # Emitted WITHOUT routing through fail(), because a floor dispatched through the helper it
 # backstops is disarmed by the same one-line edit it exists to catch.
-MIN_ASSERTIONS=22
+MIN_ASSERTIONS=26
 if [[ $((passes + fails)) -ne $asserted ]]; then
   echo "[FAIL] H1 counter reconciliation: ${passes} passed + ${fails} failed != ${asserted} asserted — an assertion counter is not incrementing, so this run cannot be trusted" >&2
   exit 1

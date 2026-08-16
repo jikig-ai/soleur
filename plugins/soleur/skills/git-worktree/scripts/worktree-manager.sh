@@ -1546,7 +1546,12 @@ install_deps() {
     local root_runtime=""
     if [[ -f "$worktree_path/bun.lockb" ]] || [[ -f "$worktree_path/bun.lock" ]]; then
       if command -v bun &>/dev/null; then
-        root_install_cmd=(bun install --frozen-lockfile --cwd "$worktree_path")
+        # Dispatches on the TENANT repo lockfile.
+        # ADR-191 makes npm the lockfile of record for THIS repo; a bun-based tenant
+        # repo must still get bun install, and this branch only runs when a bun lockfile
+        # is present. Waived per-line, not per-file, so a naked reintroduction elsewhere
+        # in this script is still caught.
+        root_install_cmd=(bun install --frozen-lockfile --cwd "$worktree_path") # lint-workflow-install-sites: allow-bun
         root_runtime="bun"
       else
         echo -e "  ${YELLOW}Warning: root has a bun lockfile but bun not found -- install manually${NC}" >&2
@@ -1594,7 +1599,9 @@ install_deps() {
     local -a install_cmd=()
     if [[ -f "$app_dir/bun.lockb" ]] || [[ -f "$app_dir/bun.lock" ]]; then
       if command -v bun &>/dev/null; then
-        install_cmd=(bun install --frozen-lockfile --cwd "$app_dir")
+        # Same tenant-lockfile dispatch as the
+        # root branch above; reached only when the app directory carries a bun lockfile.
+        install_cmd=(bun install --frozen-lockfile --cwd "$app_dir") # lint-workflow-install-sites: allow-bun
       else
         echo -e "  ${YELLOW}Warning: $app_name has bun lockfile but bun not found -- skip${NC}" >&2
         continue

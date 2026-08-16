@@ -74,7 +74,9 @@ for f in ${bunfigs[@]+"${bunfigs[@]}"}; do
   #   [ install ]              inner whitespace is legal in a table header
   #   ["install"]              quoted table keys are legal
   #   install.registry = "..."  a dotted key is equivalent to the section
-  if grep -qE '^[[:space:]]*\[[[:space:]]*"?install"?[[:space:]]*(\]|\.)|^[[:space:]]*install\.[A-Za-z]' "$f"; then
+  #   install = { registry = ... }   a root-level INLINE TABLE is also a declaration;
+  #                                   every anchor above keys on a table HEADER and misses it
+  if grep -qE '^[[:space:]]*\[[[:space:]]*"?install"?[[:space:]]*(\]|\.)|^[[:space:]]*install[[:space:]]*\.|^[[:space:]]*install[[:space:]]*=[[:space:]]*\{' "$f"; then
     fail "${f} declares an [install] section. bun is the test runner only (ADR-191) — keep [test], drop [install]. The supply-chain floor now lives in the per-directory .npmrc."
   fi
 done

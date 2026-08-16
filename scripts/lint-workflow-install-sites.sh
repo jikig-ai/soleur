@@ -46,6 +46,18 @@
 # `constraint-scaffold/test/boundary.test.sh` runs a caret-ranged `npm install` with scripts
 # enabled. It is the narrowest exclusion that keeps the guard credible, but it is a hole.
 #
+# SURFACES THIS GUARD DOES NOT REACH AT ALL (enumerated, so the gap is stated rather than
+# discovered later). None carries an install today; each is one line away from carrying one:
+#   - `lefthook.yml` — the pre-commit/pre-push runner. Not a workflow, not a *.sh.
+#   - `package.json` "scripts" (6 manifests) — a `postinstall` here composes with the
+#     Dockerfile boundary, which deliberately runs `npm ci` WITHOUT --ignore-scripts.
+#   - `apps/web-platform/infra/cloud-init-*.yml` `runcmd:` — shell on every fresh prod host.
+#   - `.ts` spawn sites (e.g. cron-ux-audit.ts spawns an installer on the prod host).
+#   - `.mcp.json` — an npx invocation inside a bash -c string.
+# The assembly is therefore NARROWER than the property this guard names. Closing them means
+# parsing four more formats; recorded here so the next reader inherits the map rather than
+# re-deriving it.
+#
 # Two anti-vacuity floors, because file enumeration and step extraction fail independently:
 # a broken step regex would scan every workflow, match nothing, and exit 0 green — the
 # file-count floor cannot see that.
@@ -76,7 +88,11 @@ script_files=()
 template_files=()
 for f in "${tracked[@]}"; do
   case "$f" in
-    .github/actions/*) continue ;; # stated boundary
+    # Composite actions carry `runs.steps[].run` with the SAME semantics as a workflow
+    # step and are invoked FROM the workflows scanned below, so excluding them was a
+    # boundary with no principle behind it. Zero install sites live there today, which is
+    # exactly why closing it now is free.
+    .github/actions/*action.yml | .github/actions/*action.yaml) workflow_files+=("$f") ;;
     *.github/workflows/*.yml | *.github/workflows/*.yaml) workflow_files+=("$f") ;;
     *.test.sh) continue ;;                          # boundary: fixtures carry violating text by design
     *-in-image.sh) continue ;;                       # boundary: installs inside an image build
@@ -116,6 +132,12 @@ extract_installs() {
       if (cmd ~ /^#/) next
       sub(/^run:[[:space:]]*\|?-?[[:space:]]*/, "", cmd)
       if (cmd ~ /::(error|warning|notice)::/) next
+      # An explicit, greppable per-line waiver. Used where a `bun install` is CORRECT --
+      # worktree-manager dispatches on the TENANT repo lockfile, and a bun-based tenant
+      # must get `bun install`. Per-line, never per-file, so a naked reintroduction
+      # elsewhere in the same file is still caught. The count is reported so waivers
+      # cannot accumulate silently.
+      if ($0 ~ /lint-workflow-install-sites:[[:space:]]*allow-bun/) { print "__WAIVER__\t" FILENAME; next }
 
       # A line can carry SEVERAL commands. Anchoring on the head of the line made
       # `npm ci --ignore-scripts && bun install` read as compliant and
@@ -129,6 +151,11 @@ extract_installs() {
         if (c ~ /^#/) continue
         if (c ~ /^(echo|printf)[[:space:]]/) continue
         # Strip a `cd <path>` segment and any leading VAR=value env prefixes.
+        if (c ~ /^cd[[:space:]]/) continue
+        # `VAR=(bun install …)` — an array assignment is an install site the previous
+        # anchor could not see, because after ltrim the text begins with the variable
+        # name. worktree-manager.sh carries live examples on the /ship path.
+        sub(/^[A-Za-z_][A-Za-z0-9_]*\+?=\([[:space:]]*/, "", c)
         if (c ~ /^cd[[:space:]]/) continue
         for (i = 0; i < 8; i++) {
           if (c ~ /^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+/) sub(/^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+/, "", c)
@@ -145,8 +172,13 @@ install_steps=0
 declare -a offending_bun=()
 declare -a offending_scripts=()
 
+waivers=0
 while IFS=$'\t' read -r file cmd; do
   [[ -n "$file" ]] || continue
+  if [[ "$file" == "__WAIVER__" ]]; then
+    waivers=$((waivers + 1))
+    continue
+  fi
   install_steps=$((install_steps + 1))
   case "$cmd" in
     'bun install'*) offending_bun+=("${file}: ${cmd}") ;;
@@ -238,17 +270,25 @@ done
 # A job-parser that returns zero jobs reports zero clause-3 violations, and neither the
 # file-count nor the install-step floor can see that.
 #
-# Derived, not a literal: every workflow declares at least one job (the schema requires
-# it), so the parser must resolve at least one job per workflow file. A hardcoded count
-# calibrated to this tree (159 today) would false-RED any smaller repo -- including this
-# guard's own synthetic fixtures -- which is the false-RED failure mode that gets a guard
-# disabled. The two operands come from different passes, so this is not a tautology.
-MIN_JOBS_PARSED=${#workflow_files[@]}
+# Derived, not a literal: a hardcoded count calibrated to this tree (159 today) would
+# false-RED any smaller repo -- including this guard's own synthetic fixtures -- which is
+# the false-RED failure mode that gets a guard disabled.
+#
+# Derived from the files that actually declare `jobs:`, NOT from every scanned workflow
+# file. A composite action declares `runs:`, so counting it as owing a job made the floor
+# unsatisfiable the moment composite actions entered the scan. The two operands still come
+# from different passes (one greps for the key, the other parses the block), so this
+# remains a real floor and not a tautology.
+jobs_declaring=0
+for wf in ${workflow_files[@]+"${workflow_files[@]}"}; do
+  grep -qE '^jobs:' "$wf" && jobs_declaring=$((jobs_declaring + 1))
+done
+MIN_JOBS_PARSED=$jobs_declaring
 if [[ $jobs_parsed -lt $MIN_JOBS_PARSED ]]; then
   fail "the workflow job-parser resolved ${jobs_parsed} job(s), below the floor of ${MIN_JOBS_PARSED}. Clause 3 inspected almost nothing -- its zero-violation result means nothing."
 fi
 
-echo "lint-workflow-install-sites: scanned ${#workflow_files[@]} workflow file(s) (floor ${MIN_WORKFLOW_FILES}), ${#script_files[@]} shell script(s), ${#template_files[@]} template(s); matched ${install_steps} install step(s) (floor ${MIN_INSTALL_STEPS}); parsed ${jobs_parsed} job(s) (floor ${MIN_JOBS_PARSED})."
+echo "lint-workflow-install-sites: scanned ${#workflow_files[@]} workflow file(s) (floor ${MIN_WORKFLOW_FILES}), ${#script_files[@]} shell script(s), ${#template_files[@]} template(s); matched ${install_steps} install step(s) (floor ${MIN_INSTALL_STEPS}); parsed ${jobs_parsed} job(s) (floor ${MIN_JOBS_PARSED}); ${waivers} per-line allow-bun waiver(s)."
 
 if [[ $failures -gt 0 ]]; then
   echo "::error::lint-workflow-install-sites: ${failures} violation(s)." >&2
