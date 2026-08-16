@@ -16,6 +16,51 @@ requires_cpo_signoff: true
 > Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed): no
 > `knowledge-base/project/specs/feat-one-shot-7084-dependabot-bunlock-alert-drain/spec.md` exists.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-16
+**Halt gates passed:** 4.6 User-Brand Impact, 4.7 Observability, 4.8 PAT-shaped variables,
+4.9 UI-wireframe (no UI surface in Files to Create/Edit — `pwa-controls.tsx` is a telemetry edit to
+an existing control, so tier NONE holds and no `.pen` is required), 4.10 Encryption Posture (no
+store-class file, no new cross-component connection), 4.11 Guard Contract
+(`lint-guard-contract.py` → 2 guard entries, exit 0). 4.5 network-outage and 4.55
+downtime-and-cutover did not trigger.
+
+**Reviewers applied:** Kieran (correctness), code-simplicity, architecture-strategist,
+spec-flow-analyzer, CTO, CPO, and a scoped `model: fable` consult. Every finding was applied to the
+plan rather than noted; the `## Plan Review` section records the ones that reversed a decision.
+
+### Verifications run in this pass
+
+| Check | Result |
+|---|---|
+| Cited AGENTS rule IDs are **active** (not retired or fabricated) | 2/2 active |
+| Cited issue/PR numbers resolve **and their titles match the claim** | 9/9 — notably #1327 is genuinely the `next lint` → ESLint blocker, and #1174 is genuinely the supply-chain hardening issue behind `minimumReleaseAge` |
+| Prescribed labels exist | 5/5 (`action-required`, `decision-challenge`, `follow-through`, `type/security`, `dependencies`) |
+| ADR ordinal re-derived from **freshly fetched** `origin/main` | `main` at ADR-186; ADR-191 stays provisional and is re-verified before merge |
+| Knowledge-base citations resolve | all resolve except the ADR-191 file this plan creates |
+| Acceptance criteria containing a repo-wide grep | none — no AC can match the plan file itself |
+| Verify-the-negative sweep over the plan's absence claims | see below |
+
+### Verify-the-negative sweep
+
+Four absence claims were probed against the tree. Three confirmed outright (no composite action runs
+an install; no workflow references `.bin/claude`; no `.npmrc` is tracked). The fourth —
+*"the Dockerfile contains no bun"* — came back **CONTRADICTED at 6 hits** under an unbounded
+`grep -ci`, and the investigation is worth keeping: all six are the substring `bun` inside
+`bundle`/`bundled`, and the word-bounded `grep -ciowE` returns 0. The claim is true; the *check* was
+wrong, in exactly the way the architecture review had already caught for the C4 `model.c4` claim one
+section earlier. Both claims now cite the word-bounded command they actually ran. A plan that
+documents a trap and then falls into it two sections later is the failure mode this sweep exists to
+catch.
+
+### Key improvements from the deepen pass
+
+1. The verification discipline is now consistent: every absence claim in the plan cites the exact
+   command that produced it, word-bounded where substring collisions are possible.
+2. The two provisional facts most likely to drift — the ADR ordinal and the live alert set — are
+   both marked as re-derived rather than fixed, with the re-derivation named.
+
 ## Overview
 
 Two directories in this repository resolve one dependency set through two lockfiles each. In
@@ -872,7 +917,10 @@ claude-code 2.1.219 nor the real `resolveClaudeBin()`). Not this plan's job to f
 
 Two adjacent claims hold and are re-verified at implementation time: `publicResolvers` asserts the
 Dockerfile installs only `ca-certificates, git, bubblewrap, socat, qpdf, jq` (an apt list; the
-Dockerfile contains no bun), and `zotRegistry`/`projectZot` assert *"no bot manages that pin"*
+Dockerfile installs and invokes no bun — `grep -ciowE 'bun' apps/web-platform/Dockerfile` returns
+**0**, while the unbounded `grep -ci 'bun'` returns 6, every one of them the substring inside
+`bundle`/`bundled`. The word-bounded form is the command the claim cites, for the same reason it is
+cited for `model.c4`), and `zotRegistry`/`projectZot` assert *"no bot manages that pin"*
 (Renovate- and zot-scoped; this plan creates no `dependabot.yml`). Run
 `apps/web-platform/test/c4-code-syntax.test.ts` and `c4-render.test.ts` regardless.
 
