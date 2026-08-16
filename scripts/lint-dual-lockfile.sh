@@ -49,7 +49,7 @@ pkg_lock_dirs=()
 for f in "${tracked[@]}"; do
   case "$f" in
     bun.lock | */bun.lock | bun.lockb | */bun.lockb) bun_locks+=("$f") ;;
-    bunfig.toml | */bunfig.toml) bunfigs+=("$f") ;;
+    bunfig.toml | */bunfig.toml | bunfig.local.toml | */bunfig.local.toml) bunfigs+=("$f") ;;
     package-lock.json | */package-lock.json) pkg_lock_dirs+=("$(dirname "$f")") ;;
   esac
 done
@@ -68,7 +68,13 @@ fi
 
 # --- Clause (b): no [install] section in any tracked bunfig.toml. ---
 for f in ${bunfigs[@]+"${bunfigs[@]}"}; do
-  if grep -qE '^[[:space:]]*\[install(\]|\.)' "$f"; then
+  # TOML admits several spellings of the same table, and the previous anchor
+  # (`^[[:space:]]*\[install(\]|\.)`) saw only the canonical one. All of these declare
+  # install config and all evaded it:
+  #   [ install ]              inner whitespace is legal in a table header
+  #   ["install"]              quoted table keys are legal
+  #   install.registry = "..."  a dotted key is equivalent to the section
+  if grep -qE '^[[:space:]]*\[[[:space:]]*"?install"?[[:space:]]*(\]|\.)|^[[:space:]]*install\.[A-Za-z]' "$f"; then
     fail "${f} declares an [install] section. bun is the test runner only (ADR-191) — keep [test], drop [install]. The supply-chain floor now lives in the per-directory .npmrc."
   fi
 done

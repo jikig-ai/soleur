@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { readFileSync, mkdtempSync, writeFileSync } from "fs";
+import { readFileSync, mkdtempSync, writeFileSync, rmSync } from "fs";
 import { spawnSync } from "child_process";
 import { resolve, join } from "path";
 import { tmpdir } from "os";
@@ -282,13 +282,22 @@ describe("workflow-fidelity sentinel markers in skills", () => {
   // exit code we choose. test-all.sh reserves 3 for "zero suites failed, >= 1 suite terminated
   // with a signal-shaped status" — unresolved, not failed — and `run_step` must keep the two
   // apart while stopping the push either way.
+  // Temp dirs are tracked and removed rather than leaked: one was created per invocation
+  // and never cleaned, and /tmp here is a machine-global tmpfs shared by parallel worktrees.
+  const harnessDirs: string[] = [];
+  afterEach(() => {
+    for (const d of harnessDirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
   // The harness is written to a FILE and invoked as `bash <file> <gate> <code>` rather than
   // passed via `bash -c`. CodeQL flags the inline-script form (js/shell-command-injection-from-
   // environment, alert 214) because the command string is built next to an absolute path. The
   // path was already in argv rather than interpolated, so this is a shape change, not a
   // behaviour change: $1 and $2 keep exactly the same meaning.
   const runStepWithExit = (code: number) => {
-    const harness = join(mkdtempSync(join(tmpdir(), "grok-pre-push-gate-")), "harness.sh");
+    const dir = mkdtempSync(join(tmpdir(), "grok-pre-push-gate-"));
+    harnessDirs.push(dir);
+    const harness = join(dir, "harness.sh");
     writeFileSync(
       harness,
       [

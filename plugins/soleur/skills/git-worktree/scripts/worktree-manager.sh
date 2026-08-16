@@ -1553,7 +1553,12 @@ install_deps() {
       fi
     elif [[ -f "$worktree_path/package-lock.json" ]]; then
       if command -v npm &>/dev/null; then
-        root_install_cmd=(npm ci --prefix "$worktree_path")
+        # --ignore-scripts: this runs on the operator machine for every worktree the
+        # pipeline creates, and the repo root has no .npmrc floor (ADR-191 root exemption),
+        # so it is the one install site with neither protection. The bun form it replaced
+        # ran no install scripts either, so this preserves behaviour rather than adding a
+        # restriction.
+        root_install_cmd=(npm ci --ignore-scripts --prefix "$worktree_path")
         root_runtime="npm"
       else
         echo -e "  ${YELLOW}Warning: root has package-lock.json but npm not found -- install manually${NC}" >&2
@@ -1596,7 +1601,7 @@ install_deps() {
       fi
     elif [[ -f "$app_dir/package-lock.json" ]]; then
       if command -v npm &>/dev/null; then
-        install_cmd=(npm ci --prefix "$app_dir")
+        install_cmd=(npm ci --ignore-scripts --prefix "$app_dir")
       else
         echo -e "  ${YELLOW}Warning: $app_name has package-lock.json but npm not found -- skip${NC}" >&2
         continue

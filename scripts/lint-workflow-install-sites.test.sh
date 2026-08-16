@@ -241,6 +241,78 @@ jobs:
 YML
 expect_pass "$R6B" "row6b same job WITH setup-bun passes (clause 3 is not vacuous)"
 
+# Row 6c: setup-bun named only in a COMMENT must NOT count as a setup step. Clause 1
+# distinguishes invocation from mention; clause 3 did not, and ci.yml carries exactly such
+# a comment inside a job with no setup-bun of its own — so the clause was fail-open on the
+# live tree, not merely in theory.
+R6C=$(make_repo row6c)
+add_wf "$R6C" ".github/workflows/buncomment.yml" <<'YML'
+name: buncomment
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      # NOTE for maintainers: keep actions/checkout and oven-sh/setup-bun pinned.
+      - name: test
+        run: bun test plugins/soleur/
+YML
+expect_red "$R6C" "row6c setup-bun named only in a comment does not satisfy clause 3" "no setup-bun step"
+
+# Row 6d: a job key carrying a trailing comment must still open a job. When the unparsed
+# key was a file's FIRST job, `job` stayed empty and every clause-3 rule was gated off —
+# the whole file went invisible with no signal.
+R6D=$(make_repo row6d)
+add_wf "$R6D" ".github/workflows/buncomment2.yml" <<'YML'
+name: buncomment2
+jobs:
+  unit: # the only job in this file
+    runs-on: ubuntu-latest
+    steps:
+      - name: test
+        run: bun test plugins/soleur/
+YML
+expect_red "$R6D" "row6d job key with a trailing comment is still parsed" "no setup-bun step"
+
+# Row 6e: a QUOTED job key must also parse.
+R6E=$(make_repo row6e)
+add_wf "$R6E" ".github/workflows/bunquoted.yml" <<'YML'
+name: bunquoted
+jobs:
+  "unit":
+    runs-on: ubuntu-latest
+    steps:
+      - name: test
+        run: bun test plugins/soleur/
+YML
+expect_red "$R6E" "row6e quoted job key is still parsed" "no setup-bun step"
+
+# Row 6f: a chained command must be classified per SEGMENT. Anchoring on the head of the
+# line made `npm ci --ignore-scripts && bun install` read as fully compliant.
+R6F=$(make_repo row6f)
+add_wf "$R6F" ".github/workflows/chained.yml" <<'YML'
+name: chained
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: install
+        run: npm ci --ignore-scripts && bun install --frozen-lockfile
+YML
+expect_red "$R6F" "row6f bun install chained after a compliant npm ci is seen" "installs with bun"
+
+# Row 6g: an env-var prefix must not hide the invocation.
+R6G=$(make_repo row6g)
+add_wf "$R6G" ".github/workflows/envprefix.yml" <<'YML'
+name: envprefix
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: install
+        run: CI=1 NODE_ENV=test bun install --frozen-lockfile
+YML
+expect_red "$R6G" "row6g env-prefixed bun install is seen" "installs with bun"
+
 # --- Row 7: step-matching broken → the STEP floor fires, not a silent green. ---
 # 45 workflow files (clears the file floor) but zero install steps.
 R7=$(make_repo row7 45 0)
@@ -269,6 +341,16 @@ printf '#!/usr/bin/env bash\nset -euo pipefail\nbun install --frozen-lockfile\n'
 git -C "$R9B" add -A
 expect_red "$R9B" "row9b plugins/**/*.sh is in scope" "plugins/soleur/scripts/gate.sh"
 
+# Row 9c: a `scripts/` directory that is NOT at the repo root. The previous class-2 arms
+# were `scripts/*.sh | plugins/*.sh`, anchored at the root — a `case` glob's `*` matches
+# `/`, so they covered arbitrary depth BELOW those two and missed every scripts/ directory
+# elsewhere, leaving ~185 tracked scripts unscanned while the header named one exclusion.
+R9C=$(make_repo row9c)
+mkdir -p "$R9C/apps/web-platform/scripts"
+printf '#!/usr/bin/env bash\nset -euo pipefail\nbun install --frozen-lockfile\n' > "$R9C/apps/web-platform/scripts/setup.sh"
+git -C "$R9C" add -A
+expect_red "$R9C" "row9c a non-root scripts/ directory is in scope" "apps/web-platform/scripts/setup.sh"
+
 # --- H2 must-PASS: a workflow with no install step at all. ---
 H2=$(make_repo h2)
 add_wf "$H2" ".github/workflows/noinstall.yml" <<'YML'
@@ -293,10 +375,23 @@ git -C "$H3" add -A
 expect_pass "$H3" "H3 Dockerfile bare 'npm ci' and .github/actions/** are out of scope"
 
 # --- H1: the suite's own executed-assertion floor. ---
-MIN_ASSERTIONS=16
-if [[ $asserted -lt $MIN_ASSERTIONS ]]; then
-  echo "[FAIL] H1 executed only ${asserted} assertion(s), below the floor of ${MIN_ASSERTIONS} — assertions were neutered or skipped" >&2
-  fails=$((fails + 1))
+# The floor sits on PASSES, not on `asserted`. `asserted` is incremented by pass() AND
+# fail() alike, so it measures that assertions RAN and never that they CONCLUDED: deleting
+# the single line `fails=$((fails + 1))` from fail() left this suite reporting
+# "5 passed, 0 failed, 16 assertion(s)" and exiting 0 with the guard fully neutered. The
+# reconciliation catches that directly -- passes+fails must account for every assertion,
+# so a counter that stops incrementing is a hard failure rather than a quiet one.
+#
+# Emitted WITHOUT routing through fail(), because a floor dispatched through the helper it
+# backstops is disarmed by the same one-line edit it exists to catch.
+MIN_ASSERTIONS=22
+if [[ $((passes + fails)) -ne $asserted ]]; then
+  echo "[FAIL] H1 counter reconciliation: ${passes} passed + ${fails} failed != ${asserted} asserted — an assertion counter is not incrementing, so this run cannot be trusted" >&2
+  exit 1
+fi
+if [[ $passes -lt $MIN_ASSERTIONS ]]; then
+  echo "[FAIL] H1 only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — assertions were neutered or skipped" >&2
+  exit 1
 fi
 
 echo

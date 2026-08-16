@@ -117,7 +117,7 @@ if [[ -n "$BASE_TMP" ]]; then
   done
   rm -f "$BASE_TMP"
 else
-  echo "::warning::sdk-bump-gate: could not resolve the base package-lock.json (ref='${BASE_REF}'); skipping bump-vs-base detection. Parity is still enforced above. (In CI, ensure origin/main is fetched.)"
+  echo "::warning::sdk-bump-gate: could not resolve the base package-lock.json (ref='${BASE_REF}'); skipping bump-vs-base detection. Presence is still enforced above. (In CI, ensure origin/main is fetched.)"
 fi
 
 if [[ "${#bumped_pkgs[@]}" -gt 0 ]]; then
@@ -139,7 +139,7 @@ fi
 # --- 3. CAPTURE GATE (ADR-079 deferral B / #5913) --------------------------------
 # Only runs where explicitly enabled (SANDBOX_CANARY_GATE_ENABLED=1) — a dedicated
 # creds-bearing CI job (bun + npm ci + ANTHROPIC_API_KEY). The always-run
-# `lockfile-sync` gate leaves this OFF so sections 1+2 (parity + bump-ack) run on
+# `lockfile-sync` gate leaves this OFF so sections 1+2 (presence + bump-ack) run on
 # every PR (incl. forks) WITHOUT the paid capture turn, and a routine edit to the
 # canary script never trips a false ack-fallback. Fork PRs get no secrets → the
 # capture job is skipped. TRUST-BOUNDARY NOTE (security review #5913 L1): a fork's

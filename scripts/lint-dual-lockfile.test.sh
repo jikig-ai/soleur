@@ -165,6 +165,21 @@ printf '[install.scopes]\n"@x" = "https://y"\n' > "$R6C/bunfig.toml"
 git -C "$R6C" add -A
 expect_red "$R6C" "row6c [install.scopes] sub-table" "declares an [install] section"
 
+# Rows 6d-6g: TOML admits several spellings of the same table. The original anchor saw only
+# the canonical `[install]`, so each of these declared install config and passed green.
+for spelling in "[ install ]" '["install"]' 'install.registry = "https://reg"'; do
+  RS=$(make_repo "row6-$(printf '%s' "$spelling" | tr -cd '[:alnum:]')" 4)
+  printf '%s\nminimumReleaseAge = 259200\n' "$spelling" > "$RS/bunfig.toml"
+  git -C "$RS" add -A
+  expect_red "$RS" "row6 TOML spelling '$spelling' is seen" "declares an [install] section"
+done
+
+# Row 6h: bun also reads bunfig.local.toml, which was outside the scanned set entirely.
+R6H=$(make_repo row6h 4)
+printf '[install]\nminimumReleaseAge = 259200\n' > "$R6H/bunfig.local.toml"
+git -C "$R6H" add -A
+expect_red "$R6H" "row6h bunfig.local.toml is scanned" "declares an [install] section"
+
 # --- Row 7: the floor must be ASSERTED, not decorative. ---
 if grep -qE '^MIN_PACKAGE_LOCK_DIRS=[4-9][0-9]*$' "$GUARD"; then
   pass "row7 floor constant is >= 4 (not lowered to a decorative value)"
@@ -197,10 +212,23 @@ git -C "$H2" add -A
 expect_pass "$H2" "H2 npm-only directory"
 
 # --- H1: the suite's own executed-assertion floor. ---
-MIN_ASSERTIONS=14
-if [[ $asserted -lt $MIN_ASSERTIONS ]]; then
-  echo "[FAIL] H1 executed only ${asserted} assertion(s), below the floor of ${MIN_ASSERTIONS} — assertions were neutered or skipped" >&2
-  fails=$((fails + 1))
+# The floor sits on PASSES, not on `asserted`. `asserted` is incremented by pass() AND
+# fail() alike, so it measures that assertions RAN and never that they CONCLUDED: deleting
+# the single line `fails=$((fails + 1))` from fail() left this suite reporting
+# "5 passed, 0 failed, 14 assertion(s)" and exiting 0 with the guard fully neutered. The
+# reconciliation catches that directly -- passes+fails must account for every assertion,
+# so a counter that stops incrementing is a hard failure rather than a quiet one.
+#
+# Emitted WITHOUT routing through fail(), because a floor dispatched through the helper it
+# backstops is disarmed by the same one-line edit it exists to catch.
+MIN_ASSERTIONS=18
+if [[ $((passes + fails)) -ne $asserted ]]; then
+  echo "[FAIL] H1 counter reconciliation: ${passes} passed + ${fails} failed != ${asserted} asserted — an assertion counter is not incrementing, so this run cannot be trusted" >&2
+  exit 1
+fi
+if [[ $passes -lt $MIN_ASSERTIONS ]]; then
+  echo "[FAIL] H1 only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — assertions were neutered or skipped" >&2
+  exit 1
 fi
 
 echo

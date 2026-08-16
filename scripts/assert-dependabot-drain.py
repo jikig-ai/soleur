@@ -52,6 +52,7 @@ def main():
     packages = {name: json.load(open(path))["packages"] for name, path in LOCKS.items()}
     failures = []
     checked = 0
+    resolved = 0
     print(f"{'manifest':14s} {'package':34s} {'line':>5s} {'required':>10s}  found")
     for manifest, pkg, major, minimum in REQUIRED:
         found = sorted({
@@ -61,9 +62,14 @@ def main():
         }, key=ver)
         checked += 1
         if not found:
-            # Absent is fine: the major line simply is not installed here.
+            # Absent is fine on its own: the major line simply is not installed here.
+            # But it must not count toward the floor -- a mistyped package name produces
+            # exactly this output, so a floor on `checked` is satisfied by rows that
+            # resolved to nothing. Renaming all 17 rows to nonexistent packages exited 0
+            # reporting "17 rows clear" before `resolved` existed.
             print(f"{manifest:14s} {pkg:34s} {major:5d} {'>=' + minimum:>10s}  (absent)")
             continue
+        resolved += 1
         worst = found[0]
         ok = ver(worst) >= ver(minimum)
         if not ok:
@@ -80,8 +86,39 @@ def main():
         failures.append(
             f"the reconciliation table has {len(REQUIRED)} rows, below the floor of {MIN_ROWS}. "
             f"Rows were deleted -- a clean result from this run means nothing.")
+    # The floor that matters sits on rows that RESOLVED to a real installed version --
+    # the only set that is non-empty in the passing state. `checked` and `len(REQUIRED)`
+    # are both populated by construction and cannot detect a row that matches nothing.
+    MIN_RESOLVED = 17
+    if resolved < MIN_RESOLVED:
+        failures.append(
+            f"only {resolved} of {len(REQUIRED)} rows resolved to an installed version, "
+            f"below the floor of {MIN_RESOLVED}. A row that matches nothing prints "
+            f"'(absent)' and would otherwise pass -- check for a renamed or mistyped package.")
     if checked != len(REQUIRED):
         failures.append(f"evaluated {checked} of {len(REQUIRED)} rows -- the loop did not complete")
+
+    # COMPLETENESS. Per-major keying is what lets a watched package carry an unwatched
+    # major: a `brace-expansion@1.1.11` nested under a new dependency in web-platform sits
+    # below the 1.x floor this table already declares for root, yet no row covers it. So
+    # every major of every watched package that is PRESENT must have a row -- otherwise the
+    # table's completeness is a coincidence of today's tree rather than an asserted property.
+    watched = {pkg for _, pkg, _, _ in REQUIRED}
+    covered = {(m, pkg, major) for m, pkg, major, _ in REQUIRED}
+    for manifest, pkgs in packages.items():
+        for key, meta in pkgs.items():
+            version = meta.get("version")
+            if not version:
+                continue
+            name = key.split("node_modules/")[-1]
+            if name not in watched:
+                continue
+            major = ver(version)[0]
+            if (manifest, name, major) not in covered:
+                failures.append(
+                    f"{manifest}: {name}@{version} is present on major line {major}, which no "
+                    f"row covers. Add ({manifest!r}, {name!r}, {major}, '<patched>') to the "
+                    f"table or confirm the major is not affected.")
     for manifest, pkg, path in DEFERRED:
         if path not in packages[manifest]:
             failures.append(
@@ -94,7 +131,8 @@ def main():
         for f in failures:
             print("  -", f)
         return 1
-    print(f"drain assertion: {checked} package/major-line rows clear across {len(LOCKS)} manifests; "
+    print(f"drain assertion: {checked} rows evaluated, {resolved} resolved to an installed "
+          f"version (floor {MIN_RESOLVED}), across {len(LOCKS)} manifests; "
           f"{len(DEFERRED)} deferred advisories still present as next-pinned nested copies (expected).")
     return 0
 

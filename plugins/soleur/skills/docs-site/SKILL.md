@@ -181,7 +181,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npx @11ty/eleventy
       - uses: actions/configure-pages@v4
       - uses: actions/upload-pages-artifact@v3

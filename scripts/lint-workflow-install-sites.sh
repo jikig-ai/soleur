@@ -38,9 +38,13 @@
 #   - `*.test.sh`, because a mutation battery's heredoc FIXTURES necessarily contain the
 #     exact violating text the guard looks for. Without this, the guard reddens on its own
 #     test suite: a false positive that would get the guard disabled, which is the failure
-#     mode clause 1's invocation-vs-raw-string discrimination exists to avoid.
-# The `*.test.sh` exclusion is a real (accepted) hole: a test script performing a genuine
-# install is unseen. It is the narrowest exclusion that keeps the guard credible.
+#     mode clause 1's invocation-vs-raw-string discrimination exists to avoid;
+#   - install steps embedded in SKILL.md prose (`docs-site`, `deploy-docs`), which are
+#     scaffolded into TENANT repos. Scanning markdown for shell would fire on every
+#     documented example, so those are kept compliant by review rather than by this guard.
+# The `*.test.sh` exclusion is a real (accepted) hole, and one live instance already exists:
+# `constraint-scaffold/test/boundary.test.sh` runs a caret-ranged `npm install` with scripts
+# enabled. It is the narrowest exclusion that keeps the guard credible, but it is a hole.
 #
 # Two anti-vacuity floors, because file enumeration and step extraction fail independently:
 # a broken step regex would scan every workflow, match nothing, and exit 0 green — the
@@ -74,12 +78,17 @@ for f in "${tracked[@]}"; do
   case "$f" in
     .github/actions/*) continue ;; # stated boundary
     *.github/workflows/*.yml | *.github/workflows/*.yaml) workflow_files+=("$f") ;;
-    *.test.sh) continue ;; # stated boundary: harness fixtures carry violating text by design
-    # A `case` glob's `*` matches `/` (unlike pathname expansion), so these two patterns
-    # already cover arbitrary depth. The per-depth alternatives that used to sit here were
-    # dead weight, and shellcheck flagged them (SC2221/SC2222) precisely because the first
-    # one subsumes them all.
-    scripts/*.sh | plugins/*.sh)
+    *.test.sh) continue ;;                          # boundary: fixtures carry violating text by design
+    *-in-image.sh) continue ;;                       # boundary: installs inside an image build
+    # EVERY tracked shell script, not a hand-picked prefix list. The previous form was
+    # `scripts/*.sh | plugins/*.sh`, which is ANCHORED AT THE REPO ROOT -- a `case` glob's
+    # `*` matches `/`, so it covered arbitrary depth BELOW those two directories and missed
+    # every `scripts/` directory elsewhere in the tree. That left ~185 tracked scripts
+    # unscanned (apps/web-platform/scripts, apps/web-platform/infra, tests/scripts,
+    # .claude/hooks, .github/scripts, apps/cla-evidence/scripts) while the header claimed
+    # the only class-2 exclusion was `*-in-image.sh`. Enumerating the whole set is the only
+    # form whose reach does not depend on remembering where scripts live.
+    *.sh)
       script_files+=("$f")
       ;;
     plugins/soleur/skills/constraint-scaffold/references/*.template) template_files+=("$f") ;;
@@ -106,14 +115,28 @@ extract_installs() {
       sub(/^[[:space:]]+/, "", cmd)
       if (cmd ~ /^#/) next
       sub(/^run:[[:space:]]*\|?-?[[:space:]]*/, "", cmd)
-      if (cmd ~ /^(echo|printf)[[:space:]]/) next
       if (cmd ~ /::(error|warning|notice)::/) next
-      # Bounded loop: each iteration strips a `cd … &&`, so it always shortens.
-      for (i = 0; i < 8; i++) {
-        if (cmd ~ /^\(?cd[[:space:]]+[^&]+&&[[:space:]]*/) sub(/^\(?cd[[:space:]]+[^&]+&&[[:space:]]*/, "", cmd)
-        else break
+
+      # A line can carry SEVERAL commands. Anchoring on the head of the line made
+      # `npm ci --ignore-scripts && bun install` read as compliant and
+      # `CI=1 bun install` invisible, so split on the shell separators and
+      # classify each segment independently.
+      n = split(cmd, seg, /&&|\|\||;/)
+      for (k = 1; k <= n; k++) {
+        c = seg[k]
+        sub(/^[[:space:](]+/, "", c)
+        sub(/[[:space:])]+$/, "", c)
+        if (c ~ /^#/) continue
+        if (c ~ /^(echo|printf)[[:space:]]/) continue
+        # Strip a `cd <path>` segment and any leading VAR=value env prefixes.
+        if (c ~ /^cd[[:space:]]/) continue
+        for (i = 0; i < 8; i++) {
+          if (c ~ /^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+/) sub(/^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+/, "", c)
+          else break
+        }
+        if (c ~ /^bun install/ || c ~ /^npm ci/ || c ~ /^npm install/ || c ~ /^npm i[[:space:]]/)
+          printf "%s\t%s\n", FILENAME, c
       }
-      if (cmd ~ /^bun install/ || cmd ~ /^npm ci/) printf "%s\t%s\n", FILENAME, cmd
     }
   ' "$@"
 }
@@ -127,8 +150,16 @@ while IFS=$'\t' read -r file cmd; do
   install_steps=$((install_steps + 1))
   case "$cmd" in
     'bun install'*) offending_bun+=("${file}: ${cmd}") ;;
-    'npm ci'*)
-      if [[ "$cmd" != *--ignore-scripts* ]]; then
+    *)
+      # `--package-lock-only` resolves versions without installing, so no package code
+      # runs and --ignore-scripts is moot for it. A GLOBAL or explicitly-named tool
+      # install (`npm install -g x@1`, `npm install --no-save y@2`) is not an install
+      # over a package-lock.json directory and is out of clause 2's scope.
+      if [[ "$cmd" == *--package-lock-only* ]]; then
+        :
+      elif [[ "$cmd" == 'npm install'* || "$cmd" == 'npm i '* ]] && [[ "$cmd" == *' -g '* || "$cmd" == *--no-save* ]]; then
+        :
+      elif [[ "$cmd" != *--ignore-scripts* ]]; then
         offending_scripts+=("${file}: ${cmd}")
       fi
       ;;
@@ -157,30 +188,67 @@ for hit in ${offending_scripts[@]+"${offending_scripts[@]}"}; do
 done
 
 # --- Clause 3: a step invoking `bun ` needs setup-bun in the SAME job. ---
+#
+# SCOPE, stated rather than implied: this sees DIRECT `bun` invocations in a `run:` block.
+# A job that reaches bun THROUGH a script (`run: bash scripts/test-all.sh bun`) is NOT
+# covered -- 5 of the 9 live setup-bun jobs are of that shape. Those fail loudly at run
+# time instead, which is why the gap is acceptable; it is recorded here because an
+# unstated gap in a guard is indistinguishable from coverage.
+jobs_parsed=0
 for wf in ${workflow_files[@]+"${workflow_files[@]}"}; do
   while IFS=$'\t' read -r job uses_bun has_setup; do
+    if [[ "$job" == "__NJOBS__" ]]; then
+      jobs_parsed=$((jobs_parsed + uses_bun))
+      continue
+    fi
     [[ -n "$job" ]] || continue
     if [[ "$uses_bun" == "1" && "$has_setup" == "0" ]]; then
       fail "${wf}: job '${job}' invokes bun but has no setup-bun step. Removing setup-bun from a job that still runs bun breaks it at run time."
     fi
   done < <(awk '
-    /^jobs:[[:space:]]*$/ { injobs=1; next }
-    injobs && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ {
+    # A job key may carry a trailing comment or be quoted; the previous pattern required
+    # nothing after the colon, so `  build: # main` and `  "unit":` silently failed to open
+    # a job. When the un-parsed key was the FIRST job, `job` stayed empty and every rule
+    # below was gated off, making the whole file invisible with no signal.
+    /^jobs:([[:space:]]*|[[:space:]]*#.*)$/ { injobs=1; next }
+    injobs && /^  "?[A-Za-z0-9_-]+"?:([[:space:]]*|[[:space:]]*#.*)$/ {
       if (job != "") print job "\t" usesbun "\t" hassetup
-      job = $1; sub(/:$/, "", job); usesbun = 0; hassetup = 0; next
+      job = $1; sub(/:.*$/, "", job); gsub(/"/, "", job); usesbun = 0; hassetup = 0; njobs++; next
     }
     injobs && /^[A-Za-z]/ {
       if (job != "") print job "\t" usesbun "\t" hassetup
       job = ""; injobs = 0; next
     }
-    job != "" && /oven-sh\/setup-bun/ { hassetup = 1 }
+    # `uses:`-anchored, not a bare string match. The bare form was satisfied by a COMMENT
+    # naming setup-bun -- and ci.yml carries exactly such a comment inside a job that has
+    # no setup-bun step of its own, so the clause was already fail-open on the live tree.
+    # This mirrors clause 1s invocation-vs-mention discrimination, which clause 3 lacked.
+    job != "" && /^[[:space:]]*(- )?uses:[[:space:]]*oven-sh\/setup-bun/ { hassetup = 1 }
     job != "" && /^[[:space:]]*(- )?run:.*(^|[[:space:]])bun[[:space:]]/ { usesbun = 1 }
     job != "" && /^[[:space:]]+bun[[:space:]]/ { usesbun = 1 }
-    END { if (job != "") print job "\t" usesbun "\t" hassetup }
+    END {
+      if (job != "") print job "\t" usesbun "\t" hassetup
+      # Sentinel field FIRST and non-empty: tab is IFS whitespace, so a leading empty
+      # field is collapsed by `read` and the count would land in the wrong variable.
+      printf "__NJOBS__\t%d\t0\n", njobs
+    }
   ' "$wf")
 done
 
-echo "lint-workflow-install-sites: scanned ${#workflow_files[@]} workflow file(s) (floor ${MIN_WORKFLOW_FILES}), ${#script_files[@]} shell script(s), ${#template_files[@]} template(s); matched ${install_steps} install step(s) (floor ${MIN_INSTALL_STEPS})."
+# A job-parser that returns zero jobs reports zero clause-3 violations, and neither the
+# file-count nor the install-step floor can see that.
+#
+# Derived, not a literal: every workflow declares at least one job (the schema requires
+# it), so the parser must resolve at least one job per workflow file. A hardcoded count
+# calibrated to this tree (159 today) would false-RED any smaller repo -- including this
+# guard's own synthetic fixtures -- which is the false-RED failure mode that gets a guard
+# disabled. The two operands come from different passes, so this is not a tautology.
+MIN_JOBS_PARSED=${#workflow_files[@]}
+if [[ $jobs_parsed -lt $MIN_JOBS_PARSED ]]; then
+  fail "the workflow job-parser resolved ${jobs_parsed} job(s), below the floor of ${MIN_JOBS_PARSED}. Clause 3 inspected almost nothing -- its zero-violation result means nothing."
+fi
+
+echo "lint-workflow-install-sites: scanned ${#workflow_files[@]} workflow file(s) (floor ${MIN_WORKFLOW_FILES}), ${#script_files[@]} shell script(s), ${#template_files[@]} template(s); matched ${install_steps} install step(s) (floor ${MIN_INSTALL_STEPS}); parsed ${jobs_parsed} job(s) (floor ${MIN_JOBS_PARSED})."
 
 if [[ $failures -gt 0 ]]; then
   echo "::error::lint-workflow-install-sites: ${failures} violation(s)." >&2

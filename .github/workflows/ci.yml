@@ -452,9 +452,22 @@ jobs:
       - name: Regenerate package-lock.json (root)
         run: npm install --package-lock-only
 
+      # All FOUR tracked lockfile directories, not the two that happen to carry the most
+      # alerts. pencil-setup/scripts holds 9 of the 39 baseline alerts and is bumped by
+      # this change, so leaving it ungated would drift exactly where the drain lands.
+      # Both were verified to regenerate byte-identically under npm@11 before being gated,
+      # so this cannot fail on its own introduction.
+      - name: Regenerate package-lock.json (pencil-setup scripts)
+        working-directory: plugins/soleur/skills/pencil-setup/scripts
+        run: npm install --package-lock-only
+
+      - name: Regenerate package-lock.json (spike)
+        working-directory: spike
+        run: npm install --package-lock-only
+
       - name: Check lockfile sync
         run: |
-          if ! git diff --exit-code apps/web-platform/package-lock.json package-lock.json; then
+          if ! git diff --exit-code apps/web-platform/package-lock.json package-lock.json plugins/soleur/skills/pencil-setup/scripts/package-lock.json spike/package-lock.json; then
             echo "::error::A package-lock.json is out of sync with its package.json."
             echo "::error::Run 'npx --yes npm@11 install --package-lock-only' in the affected directory (apps/web-platform/ and/or the repo root) and commit the result. (CI pins npm@11 — a different npm version locally produces a divergent lockfile shape.)"
             exit 1
@@ -478,7 +491,7 @@ jobs:
       # the new SDK). Closes the #5849 "a routine SDK bump shipped green because
       # nothing forced a look" class deterministically (no model turn / creds). The
       # base comparison needs origin/main; the default checkout is depth-1, so fetch it.
-      - name: SDK-bump sandbox gate (lockfile parity + bump ack)
+      - name: SDK-bump sandbox gate (lockfile presence + bump ack)
         run: |
           git fetch --no-tags origin main 2>/dev/null || true  # NOT --depth=1: a shallow base has no merge base, so `git log base..HEAD` exits 128 and the ack scan silently reads empty
           bash apps/web-platform/scripts/sdk-bump-sandbox-gate.sh
