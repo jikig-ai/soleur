@@ -90,15 +90,24 @@ if (( PROBE_RC != 0 )); then
 fi
 
 # ── P1 — GATING. The #6400 hazard, stated in the mechanism that actually detects it. ─────────
-# `_try_local_cache_reload` (apps/web-platform/infra/ci-deploy.sh) fires ONLY when BOTH registries
-# have already failed. A hit therefore means the fleet is serving off its last tier — and darking
-# zot for a replace removes the last source it has. This is #6400 exactly: a degraded fallback is
+# `_try_local_cache_reload` (apps/web-platform/infra/ci-deploy.sh) fires when the pull path has
+# already failed. CORRECTED (#7555 review): the earlier wording said "ONLY when BOTH registries
+# have already failed", which is false at one of its two call sites — the ZOT_ACTIVE==0 branch is
+# reached when zot is dark and never attempted, i.e. GHCR alone failed. So a hit does not entail
+# "serving off the last tier"; it can mean zot was not configured this deploy. The direction is
+# fail-closed (over-refusal), so this costs availability of the fix rather than safety, but the
+# sentence was the entire justification for P1 being GATING and it did not hold as written. This is #6400 exactly: a degraded fallback is
 # what turned a registry outage into a total deploy outage.
 # P1 IS SKIPPED ON THE MANUAL RE-FIRE ARM (#7555 review). During a replace outage deploys fall
 # back to local-cache, so P1 would abort for 24h — and the documented rollback for a failed or
 # dark replace IS "re-fire the dispatcher". That is verbatim the anti-pattern this file's own
 # header rejects for D10's A4: it would block the recovery on the condition the recovery cures.
 # The `reason` input required by workflow_dispatch is the human judgement P1 stands in for.
+# Counts over the RAW row. betterstack-query.sh's own header records the stronger rule (#6475):
+# field-isolate from the decoded object, or a job that merely PRINTED a marker name counts. The
+# marker survives double-encoding so this works today, but a row QUOTING the literal (an error
+# tail spliced into a log line) would refuse the replace. Fail-closed, and noted rather than
+# silently relied on.
 lc_hits="$(printf '%s\n' "$PROBE_OUT" | { grep -c 'registry=local-cache' || true; })"
 if [[ "${REGISTRY_PREFLIGHT_MANUAL:-0}" == "1" && "${lc_hits:-0}" -gt 0 ]]; then
   echo "NOTE: P1 observed ${lc_hits} local-cache event(s) but this is a MANUAL re-fire, which is the documented recovery path for a failed or dark replace. Not gating."

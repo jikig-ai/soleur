@@ -195,9 +195,21 @@ else
 fi
 
 # --- anti-vacuity floor -------------------------------------------------------------------
+# HARNESS CANARY + a floor that does NOT dispatch through the helper it guards. Neutering fail()
+# to a no-op previously left this suite fully GREEN, and the floor's only voice was that same
+# helper — so one edit disarmed the assertions AND their backstop.
+_cp=$PASS; _cf=$FAIL
+pass "canary: a true condition registers as PASS"
+fail "canary: a false condition MUST register as FAIL (this line is EXPECTED)"
+if [[ "$PASS" -ne $((_cp + 1)) || "$FAIL" -ne $((_cf + 1)) ]]; then
+  echo "  FATAL: the assertion helpers are not counting — every verdict above is void." >&2
+  exit 2
+fi
+FAIL=$((FAIL - 1))
 TOTAL=$((PASS+FAIL))
 if [[ "$TOTAL" -lt 17 ]]; then
-  fail "anti-vacuity: ran $TOTAL assertions, expected >= 17. Fix the dispatch, do not lower the floor."
+  echo "  FATAL: anti-vacuity: ran $TOTAL assertions, expected >= 17. Fix the dispatch, do not lower the floor." >&2
+  exit 2
 fi
 
 echo "=== Results: $PASS/$((PASS+FAIL)) passed, $FAIL failed ==="

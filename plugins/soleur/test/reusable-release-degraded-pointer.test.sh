@@ -433,9 +433,21 @@ fi
 # cannot be satisfied by a run that examined less than it claims.
 # ---------------------------------------------------------------------------
 EXPECTED_MIN=$(( (${#UPLOAD_FAMILY[@]} * 2) + (${#VERIFY_FAMILY[@]} * 3) + (${#HOST_FAMILY[@]} * 2) + ${#UNCLASSIFIED[@]} + 1 + 7 + 1 ))
+# HARNESS CANARY + a floor that does NOT dispatch through the helper it guards. Neutering fail()
+# to a no-op previously left this suite fully GREEN, and the floor's only voice was that same
+# helper — so one edit disarmed the assertions AND their backstop.
+_cp=$PASS; _cf=$FAIL
+pass "canary: a true condition registers as PASS"
+fail "canary: a false condition MUST register as FAIL (this line is EXPECTED)"
+if [[ "$PASS" -ne $((_cp + 1)) || "$FAIL" -ne $((_cf + 1)) ]]; then
+  echo "  FATAL: the assertion helpers are not counting — every verdict above is void." >&2
+  exit 2
+fi
+FAIL=$((FAIL - 1))
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$EXPECTED_MIN" ]]; then
-  fail "anti-vacuity: ran $TOTAL assertions, expected >= $EXPECTED_MIN — the derived set or the carve is short. Fix the derivation, do not lower the floor."
+  echo "  FATAL: anti-vacuity: ran $TOTAL assertions, expected >= $EXPECTED_MIN — the derived set or the carve is short. Fix the derivation, do not lower the floor." >&2
+  exit 2
 fi
 
 echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
