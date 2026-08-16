@@ -362,6 +362,54 @@ describe("bridge-less stage may not target an SSH-provisioned resource (#7539)",
   });
 });
 
+// The green-skip channel (#7539). When CI_SSH_ACCESS_TOKEN_ID is absent,
+// ssh_token_gate sets ssh_apply_skip=true and the bridge, the post-bridge apply
+// AND the heartbeat ARM gate all skip — the run goes GREEN having delivered
+// nothing. These assert the notification arm is actually wired, so it cannot be
+// silently un-wired: an arm that exists but references a dead output, or whose
+// body omits the recovery command, reproduces the ::warning:: problem in email.
+describe("the ssh_token_gate green-skip has a channel (#7539)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const applyJob = extractJobBlock(wf, "apply");
+
+  test("a notify-ops-email step is gated on the skip output, inside the apply job", () => {
+    expect(applyJob).toContain("uses: ./.github/actions/notify-ops-email");
+    expect(applyJob).toMatch(
+      /if:\s*always\(\)\s*&&\s*steps\.ssh_token_gate\.outputs\.ssh_apply_skip\s*==\s*'true'/,
+    );
+  });
+
+  test("the gate it references is a real step id (not a dead output)", () => {
+    expect(applyJob).toMatch(/^\s*id:\s*ssh_token_gate\s*$/m);
+  });
+
+  test("the notification names the recovery lever, not merely the fact of skipping", () => {
+    // A body that says only "skipped" is the ::warning:: problem in email form.
+    //
+    // Scoped to the notify STEP, not the job: `apply_target=manual-rerun` also
+    // appears in the job's recovery COMMENT, so a job-wide toContain would pass
+    // with the lever absent from the email — vacuous exactly the way a bare-token
+    // grep is (cq-assert-anchor-not-bare-token).
+    const notifyIdx = applyJob.indexOf(
+      "uses: ./.github/actions/notify-ops-email",
+    );
+    expect(notifyIdx).toBeGreaterThan(-1);
+    const afterNotify = applyJob.slice(notifyIdx);
+    // Bound the slice at the next step header so it cannot swallow later steps.
+    const nextStep = afterNotify.slice(1).search(/\n {6}- name:/);
+    const notifyStep =
+      nextStep === -1 ? afterNotify : afterNotify.slice(0, nextStep + 1);
+    expect(notifyStep).toContain("apply_target=manual-rerun");
+    // Non-vacuity: the bounded slice must be a step, not the rest of the file.
+    expect(notifyStep.length).toBeLessThan(afterNotify.length);
+  });
+
+  test("the run summary surfaces the SSH stage state (job.status alone reads success)", () => {
+    expect(applyJob).toMatch(/SSH_SKIP:\s*\$\{\{\s*steps\.ssh_token_gate\.outputs\.ssh_apply_skip/);
+    expect(applyJob).toContain("**SSH stage:**");
+  });
+});
+
 // Mutation + harness battery. Each M-row asserts the guard reports RED for a
 // mutated fixture; each H-row asserts it PASSES a legitimate non-canonical one.
 // These run in CI forever rather than being hand-applied once at authoring time.

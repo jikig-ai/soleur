@@ -17,20 +17,23 @@ brand_survival_threshold: aggregate pattern
 `Apply web-platform infra` has been red on `main` for six consecutive pushes. The cause is a single
 misplaced `-target=` line.
 
-The `apply` job runs two Terraform stages separated by a **credential-availability boundary**.
-Stage 1 is named **"Terraform plan (allow-list, non-SSH resources only)"**
-(`apply-web-platform-infra.yml:434`, spanning to `:739`) and its saved `tfplan` is applied at `:764`
-— both **before** the `CF Tunnel SSH bridge` at `:895` that exports `TF_VAR_ci_ssh_private_key`.
-Stage 2, `Terraform apply (SSH-provisioned resources, over the bridge)` (`:904`), owns every
-SSH-provisioned resource and carries 14 `-target=terraform_data.*` at `:931-944`.
+In `apply-web-platform-infra.yml`, the `apply` job runs two Terraform stages separated by a
+**credential-availability boundary**. Stage 1 — the step titled *"Terraform plan (allow-list, non-SSH
+resources only)"* and the `Terraform apply` of its saved `tfplan` — runs **before** the step whose
+`uses:` is `./.github/actions/cf-tunnel-ssh-bridge`, which is what exports
+`TF_VAR_ci_ssh_private_key`. Stage 2, *"Terraform apply (SSH-provisioned resources, over the
+bridge)"*, runs after it and owns every SSH-provisioned resource.
 
-`-target=terraform_data.inngest_consumer_probe_install` sits at `:578` — inside stage 1, whose own
-title declares it carries no SSH resources. That resource (`server.tf:749`) is SSH-provisioned
-against `hcloud_server.web["web-1"]` and carries `depends_on = [terraform_data.journald_persistent]`
-(`:753`). Terraform's `-target` is transitive on dependencies, so `journald_persistent` entered the
-bridge-less plan; with the bridge not yet open, `agent = var.ci_ssh_private_key == null`
-(`server.tf:997`) evaluated **true** and the provisioner aborted with
-`SSH agent requested but SSH_AUTH_SOCK not-specified`.
+`-target=terraform_data.inngest_consumer_probe_install` sat inside stage 1, whose own title declares
+it carries no SSH resources. That resource is SSH-provisioned against `hcloud_server.web["web-1"]`
+and carries `depends_on = [terraform_data.journald_persistent]`. `server.tf` resolves
+`agent = var.ci_ssh_private_key == null`, so with the bridge not yet open it baked `agent = true` and
+the provisioner aborted with `SSH agent requested but SSH_AUTH_SOCK not-specified`.
+
+**Sites are cited by their content, not by line number.** A sibling PR landing mid-session shifted
+every coordinate in this file by ~7 lines; the guard survived because it anchors on the bridge step's
+`uses:` value, and this prose is written the same way for the same reason
+(`cq-cite-content-anchor-not-line-number`).
 
 **Two mechanisms, one placement bug — measured 2026-08-16, both live.**
 
