@@ -454,6 +454,23 @@ fi
 # identically against a completely unguarded chain. The marker rides on the chmod line
 # because chmod is the last of the three commands the abort must prevent (`sha256sum -c -`
 # fails => tar, chmod and this echo are all unreached).
+#
+# THE MARKER IS `&&`-CHAINED, NOT `;`-CHAINED (#7565). With `;` the echo ran no matter what
+# chmod did, so in the mutation arm — which strips `set -e` — CHMOD_RAN printed after a failed
+# curl, a failed sha256sum, a failed tar AND a failed chmod. That arm exists to prove the
+# marker is REACHABLE when the chain runs; the `;` form made it print when the chain had
+# collapsed, which is the opposite claim. `&&` makes the marker mean what its name says:
+# chmod ran, and chmod succeeded.
+#
+# WHY A BARE `&&` AND NOT AN ERREXIT-PRESERVING TAIL. bash does NOT fire errexit on a failing
+# NON-FINAL member of an AND-OR list — measured: `set -e; false && echo M; echo AFTER` prints
+# AFTER and exits 0. So `&&` genuinely does relax errexit on this line. It is not OBSERVABLE
+# here, because no arm in this suite can reach a FAILING chmod under `set -e`: the primary arm
+# aborts at the checksum by construction (that is the property under test), the mutation arm
+# has already had `set -e` stripped, and T17 replaces the block with `printf 'true\n'` and has
+# no chmod at all. Do not reach for a `|| { rc=$?; …; ( exit $rc ); }` tail — it buys nothing
+# on this line and misfires when the ECHO fails (EPIPE, full disk), attributing echo's status
+# to chmod.
 python3 - "$TMP/doppler-dl.sh" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p).read()
@@ -461,9 +478,14 @@ old = "chmod +x /usr/local/bin/doppler"
 if s.count(old) != 1:
     sys.stderr.write("expected exactly 1 chmod line in the extracted block, found %d\n" % s.count(old))
     sys.exit(3)
-open(p, "w").write(s.replace(old, old + "; echo CHMOD_RAN"))
+open(p, "w").write(s.replace(old, old + " && echo CHMOD_RAN"))
 PY
-grep -q 'echo CHMOD_RAN' "$TMP/doppler-dl.sh" || {
+# ANCHORED ON THE WHOLE EMITTED CONSTRUCT, not on a bare token. The old check was
+# `grep -q 'echo CHMOD_RAN'`, which is satisfied by the comment prose above it, and which
+# stays GREEN after the transform is reverted to `;` — because `; echo CHMOD_RAN` contains
+# `echo CHMOD_RAN` too. Matching the full line is what makes a reverted, renamed or
+# non-landing transform detectable at all (`cq-assert-anchor-not-bare-token`).
+grep -q '^chmod +x /usr/local/bin/doppler && echo CHMOD_RAN$' "$TMP/doppler-dl.sh" || {
   echo "FAIL: CHMOD_RAN instrumentation did not land — T5 would be a tautology again" >&2; exit 1; }
 
 # A capture endpoint inside the container network, standing in for Sentry.
@@ -649,6 +671,12 @@ if command -v dash >/dev/null 2>&1; then
   # emitted nothing — silently, on a host whose only diagnostic is this emitter.
   ( cd "$TMP" && dash ./git-data-emit "m" "s" info >/dev/null 2>&1 )
   _d_rc=$?
+  # PRE-EXISTING HAZARD, TRACKED IN #7570 — deliberately not fixed here (#7565 pins run_case
+  # unmodified). CAPTURE is first assigned inside run_case, whose first call is T5 BELOW this
+  # arm, so under this file's `set -u` the expansion below is of an unset variable. `[`
+  # short-circuits on `||`, so it is reachable ONLY when _d_rc == 2 — precisely D1's failing
+  # direction. A real emitter regression would therefore abort with "CAPTURE: unbound
+  # variable" instead of D1's own message. Do not read the green here as coverage of it.
   if [ "$_d_rc" -ne 2 ] || [ -s "$CAPTURE" ]; then pass; else
     fail "D1: a 3-arg call died at the shift (dash rc=2) instead of emitting"; fi
 else
@@ -658,14 +686,36 @@ fi
 # ── T5 — a WRONG checksum must ABORT before tar/chmod ──────────────────────────────
 # This is the supply-chain half of issue item 3. Before #6982 there was no `set -e`, so a
 # failed `sha256sum -c -` still ran `tar xzf` and `chmod +x /usr/local/bin/doppler` on an
-# unverified tarball that then executed as ROOT. Here curl SUCCEEDS (real network) and
-# fetches the genuine tarball, so the checksum is the ONLY thing that can stop the chain —
-# the faithful version of the supply-chain case. The assertion is that it aborts loudly
-# with the stage named, and that the later commands never ran.
+# unverified tarball that then executed as ROOT. Here curl is EXPECTED to succeed (real
+# network) and fetch the genuine tarball, so that the checksum is the only thing left that can
+# stop the chain — the faithful version of the supply-chain case.
+#
+# "THE CHECKSUM IS THE ONLY THING THAT CAN STOP THE CHAIN" IS A PROPERTY OF A HEALTHY
+# ENVIRONMENT, NOT A GUARANTEE (#7565). If the release CDN is unreachable while apt still
+# works, curl fails, `set -e` aborts into `on_err`, and `on_err` emits stage=doppler_dl,
+# level=fatal and exits 1 — satisfying every one of the rc/stage/level/no-CHMOD_RAN assertions
+# below WITHOUT sha256sum ever having run. Four green assertions, and the supply-chain property
+# they are named for was never evaluated. The checksum-verdict assertion is what makes this arm
+# say which command actually aborted, instead of merely that something did.
 run_case "T5 wrong-checksum aborts" 's#^DOPPLER_SHA256=.*#DOPPLER_SHA256="0000000000000000000000000000000000000000000000000000000000000000"#' 1
 if grep -q '"stage":"doppler_dl"' "$CAPTURE" 2>/dev/null; then pass; else
   fail "T5: no doppler_dl fatal was emitted" "$(cat "$CAPTURE" 2>/dev/null | head -2)"; fi
 if grep -q '"level":"fatal"' "$CAPTURE" 2>/dev/null; then pass; else fail "T5: emit was not level=fatal"; fi
+# THE CHECKSUM'S OWN VERDICT. `sha256sum -c -` writes `<file>: FAILED` to STDOUT (only the
+# "WARNING: 1 computed checksum did NOT match" summary goes to stderr, which the shipped block
+# redirects into $GIT_DATA_RUNCMD_DETAIL inside the container). run_case captures container
+# stdout+stderr into $TMP/out/stdout, so the deciding evidence is already here and needs no
+# instrumentation.
+#
+# THE `$` ANCHOR IS LOAD-BEARING. A MISSING tarball — curl never wrote one — makes sha256sum
+# print `/tmp/doppler.tar.gz: FAILED open or read` on the same stream. An unanchored `: FAILED`
+# matches that, so a checksum-specific assertion would be satisfied by a DOWNLOAD failure:
+# this exact bug, in a new disguise. The `.` is escaped so it is not a BRE metacharacter.
+# The message names only what was measured — sha256sum did not reject the tarball — and does
+# not assert a cause the arm did not measure (ADR-166).
+if grep -q '/tmp/doppler\.tar\.gz: FAILED$' "$TMP/out/stdout" 2>/dev/null; then pass; else
+  fail "T5: sha256sum never rejected the tarball — the abort was not the checksum" \
+       "$(tail -3 "$TMP/out/stdout" 2>/dev/null)"; fi
 # The abort must precede the unverified install. If /usr/local/bin/doppler exists the
 # chain continued past the checksum, which is the exact pre-#6982 behaviour.
 if grep -q 'CHMOD_RAN' "$TMP/out/stdout" 2>/dev/null; then
@@ -686,6 +736,21 @@ if diff -q "$TMP/drive.sh" "$TMP/drive.noerrexit.sh" >/dev/null; then
 else
   cp "$TMP/doppler-dl.sh" "$TMP/dl.case.sh"
   sed -i 's#^DOPPLER_SHA256=.*#DOPPLER_SHA256="0000000000000000000000000000000000000000000000000000000000000000"#' "$TMP/dl.case.sh"
+  # THE MOUNTED ARTIFACT, NOT THE SOURCE COPY. The post-transform check up at the
+  # instrumentation site pins what $TMP/doppler-dl.sh IS; it cannot pin that the file this
+  # container actually mounts still carries the marker. Anything between here and the
+  # docker run — this `cp`, this `sed -i`, a future edit — could drop it, and the arm would
+  # then fail with "the chain still did not reach chmod", blaming the system under test for
+  # a harness defect.
+  #
+  # WHY HERE AND NOWHERE ELSE. Two placements look natural and both break the suite. At the
+  # instrumentation site $TMP/dl.case.sh does not exist yet — it is created inside run_case,
+  # and separately right here. Inside run_case it would hard-exit on T17, which deliberately
+  # overwrites $TMP/doppler-dl.sh with `printf 'true\n'` before its own run_case call, so
+  # T17's mounted copy legitimately carries no chmod and no marker. This arm is the one place
+  # where the file provably exists AND provably must carry it.
+  grep -q '^chmod +x /usr/local/bin/doppler && echo CHMOD_RAN$' "$TMP/dl.case.sh" || {
+    echo "FAIL: the mounted T5 mutation artifact lost the CHMOD_RAN instrumentation" >&2; exit 1; }
   docker run --rm \
     -v "$TMP/dl.case.sh:/work/doppler-dl.sh:ro" \
     -v "$TMP/git-data-emit:/work/git-data-emit-src:ro" \
@@ -878,7 +943,9 @@ fi
 # ANYONE PROPOSING "just mount it and see" SHOULD BE SHOWN THE PARAGRAPH ABOVE.
 #
 # R2 (a real mount) is DELIBERATELY ABSENT. Disposition taken in this PR's Phase 0.7:
-# this harness runs four plain `docker run --rm` and contains zero
+# this harness runs eight plain `docker run --rm` (measured:
+# `grep -c 'docker run --rm'` on this file — the count was hand-maintained at "four" and had
+# drifted; derive it, do not carry it forward) and contains zero
 # --privileged/--cap-add/--device, so `mount(2)` fails EPERM on the fixed AND the unfixed
 # template — an arm that is green on neither, proving nothing about either. Promoting this
 # rung to privileged would be an architectural change to the rung-1/rung-2 taxonomy that
@@ -1700,7 +1767,7 @@ else
 fi
 
 total=$((passes + fails))
-# Floor = the ACTUAL assertion count (B1: 1, B2: 1, D1: 2, T5: 4 + 1 mutation, T17: 2 + 1
+# Floor = the ACTUAL assertion count (B1: 1, B2: 1, D1: 2, T5: 5 + 1 mutation, T17: 2 + 1
 # mutation, S1: 3 + 4 mutation). Its job is to catch a silently-empty harness — an early
 # `exit 0` from a skip guard, or a docker run that never produced output — not to be an
 # aspirational target. S1 emits exactly 7 on ALL THREE of its paths (healthy, mutation-did-
@@ -1749,8 +1816,18 @@ total=$((passes + fails))
 # the healthy path. Counting it is the whole point of the instrument — a gate that contributes
 # nothing when it succeeds is one that an inversion-to-always-pass leaves undetectable,
 # because the old floor of 44 would still be met.
-if [ "$total" -lt 46 ]; then
-  echo "FAIL: ran only ${total} assertions (<46) — harness did not execute fully" >&2
+#
+# RAISED 46 -> 47 WITH THE ARM THAT MADE IT NECESSARY (#7565), itemised:
+#   T5 primary  1  the CHECKSUM'S OWN VERDICT (`/tmp/doppler.tar.gz: FAILED$` on captured
+#                  container stdout). The four assertions that predate it — rc, stage, level,
+#                  CHMOD_RAN-absent — are ALL satisfied by the download failing, so the arm
+#                  could report 4/4 green with sha256sum never having run. This assertion is
+#                  the one that names which command aborted. Deleting it must not be
+#                  indistinguishable from an arm that ran, which is exactly what this floor
+#                  buys: total falls to 46 and fires here.
+# Measured after the raise: 47 passed, 0 failed.
+if [ "$total" -lt 47 ]; then
+  echo "FAIL: ran only ${total} assertions (<47) — harness did not execute fully" >&2
   exit 1
 fi
 echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed (${total} assertions)"
