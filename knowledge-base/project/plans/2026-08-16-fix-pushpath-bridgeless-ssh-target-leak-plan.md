@@ -32,11 +32,22 @@ bridge-less plan; with the bridge not yet open, `agent = var.ci_ssh_private_key 
 (`server.tf:997`) evaluated **true** and the provisioner aborted with
 `SSH agent requested but SSH_AUTH_SOCK not-specified`.
 
-**Why it fired now rather than at merge time.** A *clean* transitive dependency plans as a no-op and
-runs no provisioner, so the misplacement could have sat green indefinitely. It fired because
-`journald_persistent` was simultaneously due for replacement: its `triggers_replace` hashes
-`vector.toml`, which changed at `0d6443960` (2026-08-12). That coincidence is precisely why
-placement needs a *structural* check rather than a passing apply.
+**Two mechanisms, one placement bug — measured 2026-08-16, both live.**
+
+- *Transitive (2026-08-13, run `31751479550`).* `journald_persistent` was simultaneously due for
+  replacement — its `triggers_replace` hashes `vector.toml`, changed at `0d6443960` — so `-target`
+  transitivity dragged it into the bridge-less plan and **it** failed the SSH resolution. A *clean*
+  transitive dependency plans as a no-op, which is why the misplacement had sat green for months.
+- *Direct (2026-08-16, run `31952153708`).* After PR #7543's `apply_target=vector-redeliver`
+  dispatch cleaned `journald_persistent` (below), the transitive drag disappeared — and the
+  misplaced target now fails on **its own** first `file` provisioner:
+  `terraform_data.inngest_consumer_probe_install: Provisioning with 'file'... Error: file
+  provisioner error / SSH agent requested but SSH_AUTH_SOCK not-specified`.
+
+The direct form is the durable statement of the defect: an SSH-provisioned resource on a stage with
+no SSH transport fails whether or not anything else is dragged in with it. Both reduce to the same
+one-line fix, and that a *clean* dependency hides the transitive form is precisely why placement
+needs a structural check rather than a passing apply.
 
 The fix moves that one line into stage 2, where its three structurally identical siblings already
 live.
@@ -62,14 +73,32 @@ Re-probed 2026-08-16 against `main` at `4a7e5cb08`.
 | Stage 1's plan "does not exclude the SSH set" | **IMPRECISE** | It excludes by construction; one address was misplaced into it |
 | Repair needs #7543's redeliver arm | **FALSE** | taint + the existing `:935` target deliver it |
 
-**Taint is the sole replacement driver — measured, not assumed.** The tainted object's stored
-`triggers_replace` is `31c8b8b4bab798dc684d3b6bbd1cf8010de4a91841407188da09004f346219ae`; the
-computed `sha256(join(",", [file(journald-soleur.conf), file(vector.toml)]))` at HEAD is byte-identical.
-The hash has already converged, so **nothing but the taint will trigger a replace.** Any apply that
-consumes the taint first (a `manual-rerun`, or #7543's `apply_target=vector-redeliver`) delivers
-`vector.toml` correctly but leaves this PR's stage 2 with nothing to replace. That makes any
-acceptance criterion asserting "this run performed the replace" concurrent-session-dependent
-(`cq-ac-must-not-depend-on-concurrent-sessions`) — see Acceptance Criteria.
+**The predicted concurrency exposure OCCURRED — re-measured 2026-08-16 14:2x UTC, after rebase.**
+
+Plan review flagged that `journald_persistent`'s taint was the sole replacement driver (its stored
+`triggers_replace` `31c8b8b4bab798dc…` already equalled the HEAD hash) and therefore consumable by
+any concurrent apply. That is exactly what happened, inside this session:
+
+| Run | When | Outcome |
+|---|---|---|
+| `31948197175` (push, #7543's merge) | 12:51 | "success" — but only `preflight` ran; `apply` was **skipped**. A vacuous green |
+| `31950518641` (workflow_dispatch) | 13:41 | **`vector_redeliver` job** — #7543's new arm. Replaced `journald_persistent` over the bridge |
+| `31952153708` (push) | 14:15 | `apply` **FAILED** — the direct form of this defect |
+
+Live state now: `journald_persistent` = **normal** (taint consumed, `vector.toml` delivered to web-1
+by #7543's dispatch); `inngest_consumer_probe_install` = **tainted** (object created, its `file`
+provisioner failed for want of the bridge).
+
+**Consequences for this plan, stated plainly:**
+
+- **Properties 3 and 4 are already satisfied — by #7543, not by this PR.** The Cut List reasoning
+  that decoupled from #7543 was sound at the time and is now moot; do not claim credit for delivery
+  this PR did not perform.
+- **Properties 1, 2 and 5 remain entirely unmet.** `main`'s apply is still red, and the misplaced
+  target is still at workflow `:585`.
+- The resource this PR's stage 2 will repair is now **`inngest_consumer_probe_install`** (tainted),
+  not `journald_persistent` (clean). Acceptance must assert it reaches **untainted**, since merely
+  "present in state" is now true and false-passes.
 
 ### Property List
 
@@ -102,10 +131,12 @@ that other assertions in the same suite depend on, under a P1 red-`main` fix.
 
 ### Key locations
 
-- `.github/workflows/apply-web-platform-infra.yml` — `:434` stage-1 plan (to `:739`), `:578` the
-  misplaced target, `:764` stage-1 apply, `:815` the recovery comment, `:890` `ssh_token_gate`
-  warning, `:895` bridge, `:904` stage-2 apply, `:911`/`:918` destroy-guard rationale,
-  `:931-944` the 14-address list, `:969-980` the ARM gate.
+- `.github/workflows/apply-web-platform-infra.yml` — **line numbers re-derived after the 2026-08-16
+  rebase onto `f78468e53`; they shifted ~+7 when #7543 landed, which is why the guard anchors on
+  content rather than coordinates.** `:441` stage-1 plan, `:585` the misplaced target, `:771` stage-1
+  apply, `:902` bridge step / `:904` its `uses:` (the guard's end anchor), `:911` stage-2 apply.
+  The recovery comment, `ssh_token_gate` warning, destroy-guard rationale and ARM gate shifted
+  correspondingly — locate each by its quoted text, not by the pre-rebase line.
 - `apps/web-platform/infra/server.tf` — `:142` phantom-edge comment, `:743` the `#7228` block title,
   `:749` the resource, `:753` `depends_on`, `:767-769` its SSH connection, `:981` `journald_persistent`,
   `:997` the `agent` expression, `:1070-1085` the Vector delivery and reload window.
@@ -357,8 +388,12 @@ mutates infrastructure. Credentials are read from Doppler `prd_terraform` (`AWS_
 `_SECRET` for state reads, Better Stack for the log query). Named because nothing enforces them if
 the session ends at merge.
 
-11. **`terraform_data.inngest_consumer_probe_install` appears in `terraform state list`.** The only
-    post-merge criterion caused by this diff and nothing else — no concurrent session can produce it.
+11. **`terraform_data.inngest_consumer_probe_install` reaches `status != "tainted"` in state.**
+    Presence alone is now FALSE-PASSING — the 14:15 apply already created the object and left it
+    tainted, so `terraform state list` reports it today with the defect fully live. Assert the taint
+    clears: `terraform state pull | jq '.resources[] | select(.name=="inngest_consumer_probe_install")
+    | .instances[0].status'`. Clearing it requires the provisioners to actually run, which requires
+    the bridge — so this is caused by this diff and nothing else.
 12. **Better Stack carries rows for `SyslogIdentifier=inngest-consumer-probe` within ~4 minutes of
     the merge apply** (probe timer period 180 s; the ARM gate's own deadline is 230 s), pulled via
     `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh`. This single query
@@ -482,10 +517,27 @@ marking Infrastructure "skipped".
 
 ### C4 views
 
-**No C4 impact**, established by reading all three of `model.c4`, `views.c4`, `spec.c4` rather than
-grepping the feature's noun: no external human actor added; no external system/vendor added (CF
-Tunnel `model.c4:181` and Hetzner Cloud `:185` already modeled, relationships unchanged); no container
-or data store added; no actor↔surface access relationship changed.
+**Corrected 2026-08-16 — the original "no C4 impact" finding was right for the original scope and
+became FALSE when Phase 3 was folded in.** Recorded rather than quietly amended, because the way it
+went stale is the same defect class this PR exists to fix.
+
+The enumeration against all three of `model.c4`, `views.c4`, `spec.c4` still holds for the *element*
+set: no external human actor added; no external system/vendor added (CF Tunnel and Hetzner Cloud
+already modeled, relationships unchanged); no container or data store added; no actor↔surface access
+relationship changed.
+
+What changed is a **count embedded in an existing edge's prose**. The `github -> resend` edge said
+*"one of twelve Resend emitters under .github/"*, and Phase 3's `notify-ops-email` arm made it
+thirteen. `plugins/soleur/test/c4-count-parity.test.sh` derives that number
+(`grep -rlE 'api[.]resend[.]com|notify-ops-email' .github/workflows/ .github/actions/ | wc -l`) and
+failed the scripts shard — a count in prose going stale the moment its set grew, which is precisely
+the class the Phase 2 comment sweep addresses. Corrected to thirteen, `model.likec4.json` regenerated,
+and the guard's word→int map extended past `twelve` (it fails CLOSED on an unmapped word rather than
+passing silently, which is why it surfaced at all).
+
+**Process note worth keeping:** the C4 gate was evaluated once, at plan time, against the original
+scope. Folding in a new phase after that assessment invalidated it, and nothing re-ran the gate — the
+scripts shard caught it. A scope widening should re-trigger the plan-time gates it could falsify.
 
 ## Infrastructure (IaC)
 
