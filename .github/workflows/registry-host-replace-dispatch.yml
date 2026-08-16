@@ -144,6 +144,19 @@ jobs:
           # tee -a: GHA convention is append; plain tee TRUNCATES the summary.
           bash scripts/registry-replace-preflight.sh | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # A REFUSAL MUST LEAVE A DURABLE ARTIFACT, not just a red run. Without this the merged
+      # user_data sits inert and the only signal is a failed job on main that nobody owns — the
+      # silent-non-delivery this workflow exists to remove, one step to the left.
+      - name: Record a refused delivery on the tracker
+        if: failure() && steps.gate.outputs.deliver == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MERGE_SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          gh issue comment 7556 --repo "${GITHUB_REPOSITORY}" --body "Delivery REFUSED for \`${MERGE_SHA}\`. The registry host still runs its previous user_data, so the #7555 deadline change is NOT live. Preflight verdict and cause: ${RUN_URL}. Re-fire with \`gh workflow run registry-host-replace-dispatch.yml -f reason='<why>'\` once the refusing predicate is resolved — the manual arm skips P1, which is the predicate a replace outage itself trips." || true
+
       # No `if: always()` here, and no fallback arm: a refused preflight must stop the job with
       # the preflight's own ::error:: as the last word. It files nothing and dispatches nothing.
       - name: Dispatch registry-host-replace
@@ -173,3 +186,46 @@ jobs:
             echo ""
             echo "Verification is enrolled on #7556 and runs from Better Stack — no dashboard, no SSH."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # BOUNDED POLL. `gh workflow run` only QUEUES the apply, so without this the dispatcher's
+      # green means "the request was accepted", not "the host came back". A replace that boots
+      # dark takes the fleet's sole pull path offline, and nothing else here would notice.
+      #
+      # This polls the APPLY RUN's own conclusion, which is the signal the dispatcher can actually
+      # observe. It does NOT assert the host is serving — that is #7556's job, from the warehouse,
+      # and claiming it here would be a cause this step did not measure.
+      - name: Poll the dispatched apply to a conclusion
+        if: steps.gate.outputs.deliver == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          deadline=$(( SECONDS + 1500 ))
+          run_id=""
+          while (( SECONDS < deadline )); do
+            run_id="$(gh run list --workflow=apply-web-platform-infra.yml --limit 10 \
+              --json databaseId,status,createdAt --jq \
+              'map(select(.status != "completed")) | sort_by(.createdAt) | last | .databaseId' 2>/dev/null || true)"
+            [[ -n "$run_id" && "$run_id" != "null" ]] && break
+            sleep 15
+          done
+          if [[ -z "$run_id" || "$run_id" == "null" ]]; then
+            echo "::warning::could not identify the dispatched apply run within the poll window. The dispatch was accepted; its outcome is UNVERIFIED here. #7556 remains the authority."
+            exit 0
+          fi
+          echo "Watching apply run ${run_id}."
+          concl=""
+          while (( SECONDS < deadline )); do
+            concl="$(gh run view "$run_id" --json conclusion --jq '.conclusion' 2>/dev/null || true)"
+            [[ -n "$concl" && "$concl" != "null" ]] && break
+            sleep 20
+          done
+          if [[ "$concl" == "success" ]]; then
+            echo "Apply run ${run_id} concluded: success."
+          elif [[ -z "$concl" || "$concl" == "null" ]]; then
+            echo "::warning::apply run ${run_id} had not concluded within the poll window — UNVERIFIED, not failed."
+          else
+            echo "::error::apply run ${run_id} concluded '${concl}'. The registry host may be DOWN and it has no SSH; recover by re-dispatching registry-host-replace, which restores from the PRESERVED volume."
+            gh issue comment 7556 --repo "${GITHUB_REPOSITORY}" --body "The dispatched \`registry-host-replace\` concluded **${concl}** (run ${run_id}). The registry host may be dark; the store volume is preserved. Recovery is a re-dispatch." || true
+            exit 1
+          fi

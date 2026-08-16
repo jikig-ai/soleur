@@ -903,6 +903,25 @@ window in which no *new* deploy can pull is materially different from a user-fac
 web-platform containers already running are untouched. The alternative — leaving the deadline at 60 s
 — leaves every release exposed to a ~1-in-13 failure indefinitely.
 
+> **Amended 2026-08-16 (#7555 review).** The paragraph above is incomplete, and the omission runs
+> in the unsafe direction. "A deploy or a host bootstrap" enumerates only *planned* pulls; an
+> **unplanned container restart** — an OOM kill, a docker restart-policy respawn, a host reboot —
+> is also a pull, is not a discrete scheduled event, and finds no pull source during the window
+> (the host→GHCR leg is dead per #7071). This PR's own corrected sentence in
+> `apply-web-platform-infra.yml` states it plainly: *"already-running containers keep serving; any
+> restart in this window cannot pull."* So the honest claim is narrower: already-running containers
+> are untouched, and a restart during the window does not come back until the registry does.
+>
+> The ~2-minute figure is also measured off run 31639782781, a replace that carried NO zot-config
+> change. This one boots a NEW config on a host with no SSH, so a config zot rejects, a LUKS unlock
+> failure or a failed image pull yields a DARK host and a window of hours rather than minutes.
+> Guard 3 and its required-shard sibling bound the config half; the boot half is bounded by the
+> dispatcher's post-dispatch poll, which now raises on a non-success apply rather than firing and
+> exiting.
+>
+> Neither correction changes the decision — a ~1-in-13 release failure rate indefinitely is worse —
+> but the acceptance now rests on the real exposure rather than an understated one.
+
 **Per-stage verification and rollback.**
 
 | Stage | Verification | Rollback |
