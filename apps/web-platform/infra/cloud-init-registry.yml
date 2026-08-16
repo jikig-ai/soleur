@@ -84,6 +84,28 @@ write_files:
   # MANIFEST_INVALID unless this compat flag is set. The inngest-bootstrap image is built by
   # plain `docker build` → docker-schema2, so it needs this; the web image is OCI (buildx) and
   # does not. (project-zot pkg/compat/compat.go DockerManifestV2SchemaV2 = "docker2s2".)
+  #
+  # http.readTimeout / http.writeTimeout "1800s" (#7555, ADR-190): zot v2.1.20 supplies BOTH
+  # deadlines as 60000000000 ns (60.000 s) when the "http" block omits them — read off the
+  # PINNED digest's own boot config, not from docs. At 60 s a 703_724_542 B layer must sustain
+  # 11.73 MB/s, and three concurrent layers ~280 Mbit/s through one tunnel; when it does not,
+  # zot closes mid-PATCH and the runner reports `connection reset by peer`. MEASURED 2026-08-13
+  # off-box against the pinned digest over a docker bridge with NO tunnel and NO Cloudflare
+  # edge, by dribbling a 4 MB blob over 100 s: same message, same routes.go:2078, same
+  # statusCode:500, same latency:1m0s. So the tunnel is exonerated and this is a TIME wall, not
+  # a size wall — the 272_236_549 B layer died at the same deadline (< 4.54 MB/s effective).
+  #
+  #   Arm A  both keys set      -> upload completes; zot answers the client
+  #   Arm B  neither key set    -> the 60 s default; the failure above
+  #   Arm C  readTimeout ALONE  -> zot-side 202 with NO response to the client
+  #
+  # Arm C is why these two MOVE TOGETHER and never one without the other: its failure mode is
+  # SILENT SUCCESS, which is strictly worse than Arm B's honest 500. The upper bound is
+  # gcDelay (1h above): a deadline at or above it lets gc reclaim staging for an upload still
+  # in flight, so 1800s sits strictly below. Both bounds are enforced by
+  # apps/web-platform/infra/zot-config-deadlines.test.sh against the RENDERED config, because
+  # this host is cloud-init-only (ADR-096) — a config zot rejects fails AFTER the destroy and
+  # create, on a host with no SSH. Re-measure on every zot bump, never re-word.
   - path: /etc/zot/config.json
     content: |
       {
@@ -116,6 +138,8 @@ write_files:
           "address": "0.0.0.0",
           "port": "5000",
           "compat": ["docker2s2"],
+          "readTimeout": "1800s",
+          "writeTimeout": "1800s",
           "auth": { "htpasswd": { "path": "/etc/zot/htpasswd" } },
           "accessControl": {
             "repositories": {
@@ -843,11 +867,20 @@ write_files:
       # the value cannot corrupt the single-key body. Bounded with a substring expansion rather
       # than `head -c`: under pipefail, head closing the pipe early makes the producer take
       # SIGPIPE and the whole pipeline report 141.
+      # $2 = optional per-class max length (defaults to MAXLEN).
+      #
+      # ONE CLASS NEEDS A LONGER BUDGET (#7555). zot's boot `configuration settings` line is the
+      # entire DELIVERY signal for the #7556 soak probe — it is how an off-box reader learns which
+      # HTTP deadlines the running host actually parsed. MEASURED against the pinned digest booted
+      # on the rendered config: the line is 2273 chars and `ReadTimeout` sits at offset 1363, so
+      # the 800-char cap severed exactly the field the probe reads and Signal 1 could never match,
+      # decode fix or not. One line per boot, so the ingest cost is negligible.
       sanitize() {
-        local s
+        local s _max="$${2:-$MAXLEN}"
         s="$(printf '%s' "$1" | tr '\n\r\t' ' ' | LC_ALL=C tr -cd '\40-\176' | tr -d '"\\')"
-        printf '%s' "$${s:0:MAXLEN}"
+        printf '%s' "$${s:0:_max}"
       }
+      CONFIG_LINE_MAXLEN=2600
       # The four measured evidence classes are CAP-EXEMPT. Without this the cap drops the
       # diagnostic evidence preferentially during exactly the flood (crash-loop / pull storm) that
       # accompanies disk growth. `executing gc` is the DENOMINATOR the downstream gc-completion
@@ -879,11 +912,53 @@ write_files:
           "fatal error"*)               return 0 ;;
           "runtime error"*)             return 0 ;;
           \[signal*)                     return 0 ;;
+          # zot's BOOT CONFIG DUMP (#7555). This single line is the entire DELIVERY signal for the
+          # #7556 soak probe — it is how an off-box reader learns which deadlines the running host
+          # actually parsed. It is emitted once per boot, inside the boot burst that most easily
+          # fills the ordinary cap, so without an exemption the probe's only evidence is the row
+          # most likely to be dropped.
+          "configuration settings"*)    return 0 ;;
+        esac
+        return 1
+      }
+      # The HTTP-API HALF of an upload-failure PAIRING is cap-exempt too (#7555). zot reports a
+      # failed blob upload as TWO rows: the `PatchBlobUpload` error line (already exempt above)
+      # and an ordinary HTTP-API row carrying `statusCode`, `latency` and `Content-Length`. Only
+      # the pairing carries the numbers that distinguish a DEADLINE from an origin fault, and
+      # only the first half was surviving the cap. Measured in the 2026-08-13 failure tick:
+      # `SOLEUR_ZOT_LOG_DROPPED n=124 cum=5743 reason=rate_cap` against a baseline of n=8, and
+      # cumulatively `dropped_cum=5841` vs `shipped_cum=5151` — so the deciding evidence survived
+      # by luck of its class, not by design.
+      #
+      # MATCHED ON THE `/blobs/uploads/` PAIRING, never on 5xx alone. A broad 5xx arm would admit
+      # ordinary health-probe and pull-storm failures into the SHARED 17-slot exempt lane and
+      # starve the panic traces out of it — reinstating the #7444 R12 priority inversion one
+      # layer down, in the fix for it.
+      is_upload_failure_evidence() {
+        # $1 = statusCode, $2 = path. Any 5xx: 502/503/504 are as much a cut upload as 500, and
+        # pinning 500 alone would make the guard blind to exactly the proxy-side shapes.
+        case "$1" in
+          5??) ;;
+          *) return 1 ;;
+        esac
+        # ANCHORED on the registry API shape, not an unanchored substring (#7555 review): $2 is
+        # verbatim client input, so `*/blobs/uploads/*` alone let any 5xx on a crafted path mint
+        # an exempt row.
+        case "$2" in
+          /v2/*/blobs/uploads/*) return 0 ;;
         esac
         return 1
       }
       # THE TICK IS THE WINDOW (ADR-184 §4). A cron one-shot starts each counter at zero and ends
       # at exit, so there is no rolling-window boundary to arbitrate and no `maybe_roll_window`.
+      # UPLOAD EVIDENCE GETS A SUB-QUOTA INSIDE THE SHARED EXEMPT LANE (#7555 review).
+      # Admission to the 17-slot exempt lane was first-come-first-served, so one failing
+      # multi-layer push (both halves of the pairing, x3 retries x3 tags) filled it and a
+      # concurrent panic trace was dropped -- REPRODUCED, and it is the #7444 R12 priority
+      # inversion one layer down, inside the change that claims to bound against it. Capping the
+      # upload class below the lane's size reserves the remainder for is_cap_exempt (gc + crash).
+      CAP_UPLOAD_EVIDENCE_PER_INTERVAL="$${ZOT_LOG_SHIPPER_CAP_UPLOAD_EVIDENCE_PER_INTERVAL:-8}"
+      WIN_UPLOAD_EVIDENCE=0
       WIN_COUNT=0
       WIN_EXEMPT=0
       WIN_DROPPED=0
@@ -970,11 +1045,34 @@ write_files:
       # docker daemon lines, pre-logger startup errors — the highest-value evidence) vanished at
       # the jq stage with no drop row and no stderr. `(...) // ""` applies the alternative to the
       # empty stream instead. Caught by T6b's non-vacuity fixture, not by any leak fixture.
-      # @tsv escapes embedded tabs and newlines, so a field cannot split a record. The three
-      # fields are emitted in a fixed order and `read -r` with IFS=tab takes them positionally;
-      # zmsg is LAST because it is the only one that can legitimately be empty.
-      JQ_TICK='(.MESSAGE // "") as $m | [(.__CURSOR // ""), $m, (($m | fromjson? | .message?) // "")] | @tsv'
-      while IFS=$'\t' read -r cur msg zmsg; do
+      # @tsv escapes embedded tabs and newlines, so a field cannot split a record. The fields are
+      # emitted in a fixed order and `read -r` with IFS=tab takes them positionally.
+      #
+      # EVERY FIELD IS SENTINELLED WITH `-`, and that is load-bearing rather than tidy (#7555).
+      # `IFS=$'\t'` makes tab an IFS-*WHITESPACE* character, so `read` COLLAPSES runs of tabs and
+      # strips leading ones: one empty field does not read back as empty, it SHIFTS every later
+      # field one position LEFT. Measured on this exact record — with an empty `message`,
+      # zstatus lands in zmsg and zpath lands in zstatus, so is_cap_exempt classifies a status
+      # code and the upload predicate reads a path as a status. Prefix matching still returns 0
+      # and the suite stays GREEN over a corrupted record, which is the fail-open this
+      # sentinelling removes by construction. `-` matches no is_cap_exempt arm and is neither a
+      # legal statusCode nor a legal path, so "absent" stays representable and unambiguous.
+      #
+      # `(($m | fromjson?) // {})` and the per-field `// null` are the same empty-stream trap the
+      # comment above describes: `fromjson?` on a plaintext line yields EMPTY, not null, and an
+      # empty stream inside an array literal makes the element VANISH — a 5-field contract would
+      # silently emit 4. `// null` converts empty to null so `s` can sentinel it.
+      #
+      # statusCode and path are appended AFTER zmsg so existing positional reads keep their
+      # meaning; the `read -r` arity below is widened IN THE SAME EDIT, because a field list and
+      # an arity that disagree is exactly the corruption described above.
+      JQ_TICK='def s: if (. == null or . == "") then "-" else (. | tostring) end; (.MESSAGE // "") as $m | (($m | fromjson?) // {}) as $j | [((.__CURSOR // null) | s), (($m // null) | s), ((($j.message?) // null) | s), ((($j.statusCode?) // null) | s), ((($j.path?) // null) | s)] | @tsv'
+      while IFS=$'\t' read -r cur msg zmsg zstatus zpath; do
+        # Translate sentinels back to the empty string the downstream code expects. Done here,
+        # once, so no consumer has to know about the wire representation.
+        [ "$cur" = "-" ] && cur=""
+        [ "$zmsg" = "-" ] && zmsg=""
+        [ "$msg" = "-" ] && msg=""
         [ -n "$msg" ] || continue
         # THE CURSOR ADVANCES ON EVERY *DECIDED* ROW, not only on delivered ones (#7444 R1).
         #
@@ -991,11 +1089,57 @@ write_files:
         # A capped row is DECIDED and ACCOUNTED (emit_drops carries it), not undelivered. Only an
         # undelivered row may hold the cursor, which is exactly what F-3 established.
         decided=0
-        if is_cap_exempt "$zmsg"; then
-          if [ "$WIN_EXEMPT" -ge "$CAP_EXEMPT_PER_INTERVAL" ]; then
+        # PLAINTEXT CRASH EVIDENCE (#7555, pre-existing since #7444 R12). `zmsg` is the PARSED
+        # zerolog `message` field, so it is EMPTY for any line that is not zot JSON — and a Go
+        # panic is written to stderr as PLAINTEXT. So the four crash arms of is_cap_exempt
+        # (panic:, fatal error, runtime error, [signal) could never match the input they were
+        # added for: measured on origin/main, a `panic: runtime error: …` journald line yields
+        # zmsg="" and classifies as ORDINARY, i.e. the crash class was droppable at the cap
+        # during exactly the crash flood R12 exists to survive. The suite missed it because its
+        # panic fixtures wrap the panic text INSIDE a JSON `message`.
+        #
+        # The fallback fires ONLY when zmsg is empty — that is, only for a line that is not zot
+        # JSON — so the #7444 F-5 whole-line bypass stays closed by construction: an attacker's
+        # `User-Agent: executing gc` rides on an HTTP-API row, which always parses and therefore
+        # always has a non-empty zmsg and never reaches this arm. T19 pins both directions.
+        _zclass="$zmsg"
+        if [ -z "$_zclass" ]; then
+          # ONLY THE CRASH CLASSES FALL BACK TO THE RAW LINE (#7555 review).
+          #
+          # The earlier form fell back to "$msg" for ALL eight arms, and its comment argued the
+          # #7444 F-5 bypass stayed closed because "an HTTP-API row always parses". THAT PREMISE
+          # IS FALSIFIED ~260 LINES ABOVE, in this same file: zot runs --log-driver journald, so a
+          # line exceeding the driver's buffer arrives as MULTIPLE INVALID-JSON FRAGMENTS, and
+          # header size is client-controlled. A fragment does not parse, so zmsg is empty, and the
+          # fallback then classified the fragment's raw bytes -- which are the client's own header
+          # payload. Reproduced: 17 forged fragments beginning "executing gc" consumed the entire
+          # exempt lane and starved a genuine panic trace to zero.
+          #
+          # The four gc/upload classes ALWAYS arrive as parsed zot JSON, so they have no plaintext
+          # justification and are exactly what a client can forge cheaply. A Go panic is written to
+          # stderr as plaintext and has no other route, which is the whole reason this fallback
+          # exists, so the crash classes keep it.
+          case "$msg" in
+            panic:*|"fatal error"*|"runtime error"*|\[signal*) _zclass="$msg" ;;
+          esac
+        fi
+        _upload_only=0
+        if is_cap_exempt "$_zclass"; then
+          _exempt=1
+        elif is_upload_failure_evidence "$zstatus" "$zpath"; then
+          _exempt=1; _upload_only=1
+        else
+          _exempt=0
+        fi
+        if [ "$_exempt" = "1" ]; then
+          if [ "$_upload_only" = "1" ] && [ "$WIN_UPLOAD_EVIDENCE" -ge "$CAP_UPLOAD_EVIDENCE_PER_INTERVAL" ]; then
+            # Sub-quota spent: the remaining exempt slots are reserved for gc + crash rows.
+            WIN_DROPPED_EXEMPT=$(( WIN_DROPPED_EXEMPT + 1 )); decided=1
+          elif [ "$WIN_EXEMPT" -ge "$CAP_EXEMPT_PER_INTERVAL" ]; then
             WIN_DROPPED_EXEMPT=$(( WIN_DROPPED_EXEMPT + 1 )); decided=1
           else
             WIN_EXEMPT=$(( WIN_EXEMPT + 1 ))
+            [ "$_upload_only" = "1" ] && WIN_UPLOAD_EVIDENCE=$(( WIN_UPLOAD_EVIDENCE + 1 ))
           fi
         elif [ "$WIN_COUNT" -ge "$CAP_PER_INTERVAL" ]; then
           WIN_DROPPED=$(( WIN_DROPPED + 1 )); decided=1
@@ -1013,7 +1157,11 @@ write_files:
           [ -n "$cur" ] && persist_cursor "$cur"
           continue
         fi
-        clean="$(sanitize "$redacted")"
+        # The boot config dump gets the longer budget; everything else keeps MAXLEN. Keyed on the
+        # PARSED message so a client cannot buy a longer line by putting the literal in a header.
+        _slen="$MAXLEN"
+        case "$zmsg" in "configuration settings"*) _slen="$CONFIG_LINE_MAXLEN" ;; esac
+        clean="$(sanitize "$redacted" "$_slen")"
         # A row that sanitizes to empty was silently discarded with no accounting while the cursor
         # advanced past it — the literal F-3 signature (offered N, shipped N-1, dropped 0) on a
         # path the F-3 fix never touched. Reproduced with a non-ASCII line, which tr -cd empties.

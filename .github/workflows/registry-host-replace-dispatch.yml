@@ -1,0 +1,324 @@
+# Delivery dispatcher for registry-host user_data changes (#7555, ADR-190).
+#
+# WHY THIS EXISTS. `apps/web-platform/infra/cloud-init-registry.yml` is the registry host's
+# user_data, and the host is cloud-init-only (ADR-096) with no SSH edit path. So a merged change
+# to that file is INERT until a `registry-host-replace` runs — and `registry-host-replace` is
+# `workflow_dispatch`-only, with nothing in the repo firing it. Every reference to it was a
+# command printed for a human to type.
+#
+# Booking that as a post-merge operator step trips `hr-never-label-any-step-as-manual-without`
+# and `wg-block-pr-ready-on-undeferred-operator-steps`, and automation is available, so
+# `hr-exhaust-all-automated-options-before` makes it mandatory. The target carries no
+# `environment:` reviewer gate and no `confirm=` token (verified against the job's own guard), so
+# `reason` is the only required input and nothing here is deferred.
+#
+# ── THE PREFLIGHT IS NOT THE D10 RECUT GATE ────────────────────────────────────────────────
+# It is `scripts/registry-replace-preflight.sh`, which is read-only. Do not swap in
+# `scripts/registry-pull-path-health.sh`: that is the PRE-DESTROY gate for `registry-luks-recut`,
+# it renders its verdict by EXECUTING a restore rehearsal (i.e. by pushing images), and its pass
+# condition is about re-materialising an EMPTY store — whereas this replace PRESERVES the volume
+# (`store_destroyed==0`). Full rationale: ADR-190 §"Why the replace pre-check is not the D10
+# recut gate", and the preflight script's own header.
+#
+# ── FIRING BLIND IS THE #6400 HAZARD ───────────────────────────────────────────────────────
+# In #6400 the fallback was ALSO degraded, which is what turned a registry outage into a total
+# deploy outage. The preflight refuses when the fleet is already serving off its last tier, and
+# it fails CLOSED when it cannot read — a failed query is never read as "no events found".
+name: Registry host replace — Delivery Dispatch
+
+on:
+  # The delivery trigger. A merged user_data change is inert until this fires, so the merge IS
+  # the intent to deliver.
+  push:
+    branches: [main]
+    paths:
+      - 'apps/web-platform/infra/cloud-init-registry.yml'
+      # Registration only (see the note on the job guard below). A workflow with no push trigger
+      # can take 30+ minutes to appear in the Actions UI, and this path lets an edit to THIS file
+      # register it without also dispatching a production host replace as a side effect.
+      - '.github/workflows/registry-host-replace-dispatch.yml'
+  # Manual re-fire, for when a preflight refusal has been resolved.
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why re-fire the replace (e.g. 'P1 refusal resolved: local-cache pulls stopped')"
+        required: true
+        type: string
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  # Never let two replaces of the same host queue up behind each other.
+  group: registry-host-replace-dispatch
+  cancel-in-progress: false
+
+jobs:
+  dispatch-replace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # WHAT MAKES THIS A DELIVERY, and why it is not "the file changed".
+      #
+      # `cloud-init-registry.yml` is ~1000 lines and is not only zot config — it also carries the
+      # log-shipper bash. Triggering on the PATH means any future comment typo in it destroys and
+      # recreates the production registry host, and the target job carries NO `environment:`
+      # reviewer gate and NO `confirm=` token (verified), so path-triggering would remove the last
+      # human decision in front of a pull-path outage.
+      #
+      # So the gate asks whether the bytes that REACH THE HOST changed. `zot-registry.tf` applies
+      # `registry_rationale_strip` (`/(?m)^[ \t]*#([ \t][^\n]*)?\n/`) at render, so a comment-only
+      # edit renders byte-identical — comparing the stripped file at both SHAs reproduces that
+      # without needing terraform in this job.
+      #
+      # THE DIFF IS FETCHED VIA THE COMPARE API, NOT `git diff`. actions/checkout is fetch-depth:1,
+      # so `github.event.before` is not in the object store and `git diff` exits 128 — which, with
+      # the fail-closed arm below, made EVERY delivery push exit 1 and left `workflow_dispatch` as
+      # the only working route, i.e. exactly the operator step this workflow exists to remove.
+      # `web-platform-release.yml` already documents this trap verbatim.
+      - name: Decide whether this push changes the bytes the host boots
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+          CFG: apps/web-platform/infra/cloud-init-registry.yml
+        run: |
+          set -uo pipefail
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "deliver=true" >> "$GITHUB_OUTPUT"
+            echo "Manual dispatch — proceeding."
+            exit 0
+          fi
+          rc=0
+          cmp_json="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BEFORE_SHA}...${AFTER_SHA}" 2>/dev/null)" || rc=$?
+          # rc FIRST: everything below parses $cmp_json, and an empty body would otherwise be read
+          # as "a diff with no files" rather than "the read failed".
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::could not resolve the changed-file set via the compare API (rc=$rc). Refusing to dispatch a registry host replace on an unclassifiable diff — re-fire via workflow_dispatch once verified."
+            exit 1
+          fi
+          changed="$(printf '%s' "$cmp_json" | jq -r '.files[]?.filename' 2>/dev/null)"
+          # THE COMPARE API CAPS `files` AT 300 and truncates with NO error field. So a merge
+          # touching >300 files that includes the config would fall through the `grep -qx` below
+          # and report "registration-only push" — byte-for-byte the silent non-delivery this
+          # workflow exists to remove, on the largest merges.
+          #
+          # There is no total-files count in the compare response to check against (`total_commits`
+          # counts commits, not files), so the cap itself is the signal: at exactly 300 the list
+          # MAY be complete and MAY be truncated, and those are indistinguishable here. Treat both
+          # as unproven and deliver — the preflight still gates, and an unnecessary
+          # volume-preserving replace is recoverable where an undelivered fix is silent.
+          n_files="$(printf '%s' "$cmp_json" | jq -r '(.files | length) // 0' 2>/dev/null || echo 0)"
+          if [[ "${n_files:-0}" -ge 300 ]]; then
+            echo "deliver=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::the compare API returned ${n_files} files, at or above its 300 cap, so the changed-file list may be TRUNCATED and cannot prove $CFG was untouched. Delivering rather than silently skipping. The preflight still gates."
+            exit 0
+          fi
+          if ! grep -qx "$CFG" <<<"$changed"; then
+            echo "deliver=false" >> "$GITHUB_OUTPUT"
+            echo "Registration-only push (user_data untouched). Not dispatching."
+            exit 0
+          fi
+          # The path changed — now ask whether the HOST-VISIBLE bytes changed.
+          #
+          # THIS MUST REPRODUCE terraform's `/(?m)^[ \t]*#([ \t][^\n]*)?\n/` → "" EXACTLY, and two
+          # details are load-bearing in opposite directions:
+          #
+          #   * That regex consumes the trailing \n, so a comment LINE vanishes — but a line that
+          #     was ALREADY blank survives the render. An earlier form here piped through
+          #     `grep -v '^$'`, deleting pre-existing blank lines on both sides too. A push whose
+          #     only change was adding or removing a blank line then compared IDENTICAL, so
+          #     deliver=false, while the real rendered user_data differed: the host kept booting
+          #     stale bytes and a pending ForceNew sat in state until some unrelated apply
+          #     delivered it as a surprise replace. That is the silent non-delivery this workflow
+          #     exists to remove, printed under a message claiming the bytes were identical.
+          #   * `#` must be followed by a BLANK or end-of-line to count as a comment. `#cloud-config`
+          #     and `#!/bin/sh` are therefore NOT stripped — by terraform, and so not here either.
+          #     Widening this to any leading `#` would silently drop the cloud-init header.
+          #
+          # Trailing-whitespace and key-reordering edits still compare as changed and fire an
+          # unnecessary (volume-preserving) replace. That direction is deliberate: an unnecessary
+          # replace is recoverable, an undelivered one is silent.
+          strip_comments() { grep -vE '^[[:blank:]]*#([[:blank:]].*)?$' "$1" || true; }
+          befr="$(mktemp)"
+          brc=0; arc=0
+          gh api "repos/${GITHUB_REPOSITORY}/contents/${CFG}?ref=${BEFORE_SHA}" \
+            --jq '.content' 2>/dev/null | base64 -d > "$befr" || brc=$?
+          # The AFTER side is already on disk: actions/checkout ran at github.sha, which IS
+          # AFTER_SHA. Re-fetching it over the API added a second failure mode whose fail-open
+          # direction is "replace the production host".
+          aftr="$CFG"
+          [[ -s "$aftr" ]] || arc=1
+          if [[ "$brc" -ne 0 || "$arc" -ne 0 ]]; then
+            # FAIL CLOSED TOWARD DELIVERING, not toward skipping: the path did change, so a
+            # comparison we could not make must not be read as "nothing to deliver". The preflight
+            # below still gates, and an unnecessary replace is recoverable where an undelivered
+            # fix is silent.
+            echo "deliver=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::could not read both revisions of $CFG (before-fetch rc=$brc, checked-out copy readable=$((1-arc))) — delivering anyway rather than silently skipping a real change."
+            exit 0
+          fi
+          if diff -q <(strip_comments "$befr") <(strip_comments "$aftr") >/dev/null 2>&1; then
+            echo "deliver=false" >> "$GITHUB_OUTPUT"
+            echo "$CFG changed, but only in comments — the rendered user_data is byte-identical, so the running host boots the same bytes. Not dispatching."
+          else
+            echo "deliver=true" >> "$GITHUB_OUTPUT"
+            echo "$CFG changed in host-visible bytes — the merged user_data is inert until a replace runs."
+          fi
+
+      - name: Pull-path preflight (read-only; refuses rather than firing blind)
+        if: steps.gate.outputs.deliver == 'true'
+        id: preflight
+        env:
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          # --manual ONLY on the workflow_dispatch arm, and derived from github.event_name rather
+          # than from an input or an env var the caller controls: it downgrades P1 (local-cache
+          # pulls) from gating to advisory, which is exactly the predicate a replace outage itself
+          # trips, so the documented recovery would otherwise be blocked for 24h by the condition
+          # it exists to cure. The script REFUSES an env var of this name inside Actions, so this
+          # flag is the only production route to that downgrade.
+          MANUAL_FLAG=()
+          [[ "$EVENT_NAME" == "workflow_dispatch" ]] && MANUAL_FLAG=(--manual)
+          # tee -a: GHA convention is append; plain tee TRUNCATES the summary.
+          bash scripts/registry-replace-preflight.sh "${MANUAL_FLAG[@]+"${MANUAL_FLAG[@]}"}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # A REFUSAL MUST LEAVE A DURABLE ARTIFACT, not just a red run. Without this the merged
+      # user_data sits inert and the only signal is a failed job on main that nobody owns — the
+      # silent-non-delivery this workflow exists to remove, one step to the left.
+      # `failure()` ALONE, deliberately. This was `failure() && steps.gate.outputs.deliver == 'true'`,
+      # so a failure IN THE GATE ITSELF — an unreachable compare API, a force-pushed `before` SHA —
+      # left a red run on main and nothing else: that output is never set when the gate is what
+      # broke. A red run nobody owns is the exact failure this step exists to prevent, so the
+      # condition must not depend on a value the failing step produces.
+      - name: Record a refused delivery on the tracker
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MERGE_SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DELIVER: ${{ steps.gate.outputs.deliver }}
+        run: |
+          set -uo pipefail
+          # DELIVER is empty when the GATE itself failed, which is a different fact from a refused
+          # preflight — say which one happened rather than asserting the preflight refused.
+          if [[ "${DELIVER:-}" == "true" ]]; then
+            WHAT="Delivery REFUSED"
+            WHY="The preflight declined, or the dispatch/poll failed."
+          else
+            WHAT="Delivery UNDETERMINED"
+            WHY="The delta gate did not complete, so this run never decided whether the merged user_data changes the bytes the host boots. Nothing was dispatched."
+          fi
+          BODY="$(printf '%s\n' \
+            "${WHAT} for \`${MERGE_SHA}\`. ${WHY} The registry host still runs its previous user_data, so the #7555 deadline change is NOT live. Verdict and cause: ${RUN_URL}" \
+            "" \
+            "Re-fire with \`gh workflow run registry-host-replace-dispatch.yml -f reason='<why>'\` once the refusing predicate is resolved. Two predicates are expected to need it:" \
+            "" \
+            "- **P1** (local-cache pulls) — the manual arm passes \`--manual\`, which skips P1 only; it is the predicate a replace outage itself trips." \
+            "- **P5** (the replace would be unobservable) — \`--manual\` does NOT skip this one, deliberately. If the container-log channel is dark (#7569) the replace outcome cannot be read back, and forcing it would put the sole pull path behind a channel that cannot report whether it returned.")"
+          gh issue comment 7556 --repo "${GITHUB_REPOSITORY}" --body "$BODY" || true
+
+      # No `if: always()` here, and no fallback arm: a refused preflight must stop the job with
+      # the preflight's own ::error:: as the last word. It files nothing and dispatches nothing.
+      - name: Dispatch registry-host-replace
+        id: dispatch
+        if: steps.gate.outputs.deliver == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MERGE_SHA: ${{ github.sha }}
+          MANUAL_REASON: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          # The reason names the commit whose user_data this delivers, so the apply's own audit
+          # trail answers "which change is this host carrying" without a human correlating runs.
+          if [[ -n "${MANUAL_REASON:-}" ]]; then
+            REASON="registry-host-replace re-fired manually: ${MANUAL_REASON} (delivering user_data at ${MERGE_SHA})"
+          else
+            REASON="Delivering the cloud-init-registry.yml user_data merged at ${MERGE_SHA} (#7555 / ADR-190 — zot HTTP deadlines). Inert until this replace runs; the store volume is preserved."
+          fi
+          # Stamped BEFORE the dispatch, so the poll below can select the run this step caused
+          # rather than whatever apply happens to be in flight. One second of slack absorbs
+          # clock skew between the runner and the API's createdAt.
+          DISPATCHED_AT="$(date -u -d '-1 second' +%Y-%m-%dT%H:%M:%SZ)"
+          echo "DISPATCHED_AT=${DISPATCHED_AT}" >> "$GITHUB_ENV"
+          gh workflow run apply-web-platform-infra.yml --ref main \
+            --repo "${GITHUB_REPOSITORY}" \
+            -f apply_target=registry-host-replace \
+            -f reason="${REASON}"
+          {
+            echo "### Dispatched \`registry-host-replace\`"
+            echo ""
+            echo "Delivering the user_data merged at \`${MERGE_SHA}\`. The store volume is preserved"
+            echo "(the target's own gate aborts unless \`store_destroyed==0\`)."
+            echo ""
+            echo "Verification is enrolled on #7556 and runs from Better Stack — no dashboard, no SSH."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # BOUNDED POLL. `gh workflow run` only QUEUES the apply, so without this the dispatcher's
+      # green means "the request was accepted", not "the host came back". A replace that boots
+      # dark takes the fleet's sole pull path offline, and nothing else here would notice.
+      #
+      # This polls the APPLY RUN's own conclusion, which is the signal the dispatcher can actually
+      # observe. It does NOT assert the host is serving — that is #7556's job, from the warehouse,
+      # and claiming it here would be a cause this step did not measure.
+      # `always() &&` IS LOAD-BEARING, and the predicate is the DISPATCH STEP's own outcome.
+      #
+      # This step FILES on #7556 when the apply concludes non-success. With a bare
+      # `steps.gate.outputs.deliver == 'true'` it inherited an implicit success(), so any earlier
+      # failure skipped it — and the alarm for "the registry host may be dark, with no SSH" is
+      # exactly the alarm that must survive a failing run. That is the #7242 defect
+      # scripts/alarm-issue-filing-guard.test.sh pins, and this step tripped it (baseline 11 -> 12).
+      #
+      # Gating on `steps.dispatch.outcome == 'success'` rather than `always()` alone keeps it
+      # honest in the other direction: if nothing was ever dispatched there is no run to poll,
+      # and polling for one would emit an UNVERIFIED warning about a dispatch that never happened.
+      - name: Poll the dispatched apply to a conclusion
+        if: always() && steps.dispatch.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          deadline=$(( SECONDS + 1500 ))
+          run_id=""
+          # SELECT THE RUN THIS STEP CAUSED, not "the latest non-completed one". apply-web-platform-infra
+          # serves many apply_targets, so a concurrent apply for an unrelated target would have its
+          # conclusion attributed to this replace — a false green or a false alarm on the highest-stakes
+          # step here. Filter on workflow_dispatch AND a creation time at/after our own dispatch.
+          # DISPATCHED_AT is stamped by the dispatch step immediately before `gh workflow run`.
+          while (( SECONDS < deadline )); do
+            run_id="$(gh run list --workflow=apply-web-platform-infra.yml --limit 30 \
+              --json databaseId,status,createdAt,event --jq \
+              "map(select(.event == \"workflow_dispatch\" and .createdAt >= \"${DISPATCHED_AT}\")) | sort_by(.createdAt) | first | .databaseId" 2>/dev/null || true)"
+            [[ -n "$run_id" && "$run_id" != "null" ]] && break
+            sleep 15
+          done
+          if [[ -z "$run_id" || "$run_id" == "null" ]]; then
+            echo "::warning::could not identify the dispatched apply run within the poll window. The dispatch was accepted; its outcome is UNVERIFIED here. #7556 remains the authority."
+            exit 0
+          fi
+          echo "Watching apply run ${run_id}."
+          concl=""
+          while (( SECONDS < deadline )); do
+            concl="$(gh run view "$run_id" --json conclusion --jq '.conclusion' 2>/dev/null || true)"
+            [[ -n "$concl" && "$concl" != "null" ]] && break
+            sleep 20
+          done
+          if [[ "$concl" == "success" ]]; then
+            echo "Apply run ${run_id} concluded: success."
+          elif [[ -z "$concl" || "$concl" == "null" ]]; then
+            echo "::warning::apply run ${run_id} had not concluded within the poll window — UNVERIFIED, not failed."
+          else
+            echo "::error::apply run ${run_id} concluded '${concl}'. The registry host may be DOWN and it has no SSH; recover by re-dispatching registry-host-replace, which restores from the PRESERVED volume."
+            gh issue comment 7556 --repo "${GITHUB_REPOSITORY}" --body "The dispatched \`registry-host-replace\` concluded **${concl}** (run ${run_id}). The registry host may be dark; the store volume is preserved. Recovery is a re-dispatch." || true
+            exit 1
+          fi
