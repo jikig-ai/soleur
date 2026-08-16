@@ -23,6 +23,16 @@ GUARD="$REPO_ROOT/scripts/tmpfs-guard.sh"
 
 pass_n=0
 fails=0
+cases=0
+# `cases` is incremented at the CALL SITE — immediately before each decision
+# block that resolves to exactly one verdict — and NEVER inside pass()/fail().
+# That placement is the entire substance of the conservation check at the bottom
+# of this file: a counter moved inside both verdict helpers moves WITH the
+# verdict, so stubbing `fail() { :; }` drops the row and its count together and
+# `pass_n + fails == cases` still holds. Measured on that shape: a genuine defect
+# printed a clean total and exited 0.
+#
+# Never increment inside `$( )` — a subshell discards it.
 pass() { pass_n=$((pass_n + 1)); echo "  [ok] $1"; }
 fail() { fails=$((fails + 1)); echo "  [FAIL] $1" >&2; }
 
@@ -116,6 +126,7 @@ echo "=== tmpfs-guard scratch reaper ==="
 reset_fixtures
 mk_dir "tmp.stale" 20 120
 out="$(reap)"
+cases=$((cases + 1))
 if [[ ! -e "$FAKE_TMP/tmp.stale" ]]; then
   pass "reaps a large, stale, own-uid scratch entry"
 else
@@ -126,6 +137,7 @@ fi
 reset_fixtures
 mk_dir "tmp.fresh" 20 1
 out="$(reap)"
+cases=$((cases + 1))
 if [[ -e "$FAKE_TMP/tmp.fresh" ]]; then
   pass "AGE gate: a large but recent entry is NOT reaped"
 else
@@ -139,6 +151,7 @@ fi
 reset_fixtures
 mk_dir "tmp.small" 1 120
 out="$(reap)"
+cases=$((cases + 1))
 if [[ -e "$FAKE_TMP/tmp.small" ]]; then
   pass "SIZE gate: an old but small entry is NOT reaped"
 else
@@ -151,6 +164,7 @@ mk_dir "tmp.inuse" 20 120
 mkdir -p "$FAKE_PROC/4242"
 ln -sfn "$FAKE_TMP/tmp.inuse" "$FAKE_PROC/4242/cwd"
 out="$(reap)"
+cases=$((cases + 1))
 if [[ -e "$FAKE_TMP/tmp.inuse" ]]; then
   pass "IN-USE gate: an entry holding a live process cwd is NOT reaped"
 else
@@ -160,6 +174,7 @@ fi
 # arm above cannot pass by simply never reaping anything.
 rm -rf "$FAKE_PROC/4242"
 out="$(reap)"
+cases=$((cases + 1))
 if [[ ! -e "$FAKE_TMP/tmp.inuse" ]]; then
   pass "the same entry IS reaped once no process cwd points into it"
 else
@@ -181,6 +196,7 @@ touch -d "-120 minutes" "$FAKE_TMP/tmp.nestcwd"
 mkdir -p "$FAKE_PROC/4243"
 ln -sfn "$FAKE_TMP/tmp.nestcwd/repo/sub" "$FAKE_PROC/4243/cwd"
 out="$(reap)"
+cases=$((cases + 1))
 if [[ -e "$FAKE_TMP/tmp.nestcwd" ]]; then
   pass "IN-USE gate: a NESTED process cwd marks the top-level tree in use"
 else
@@ -201,6 +217,7 @@ mkdir -p "$FAKE_PROC/4244/fd"
 ln -sfn "$FAKE_TMP/tmp.openfd/data/blob" "$FAKE_PROC/4244/fd/3"
 # no cwd symlink → liveness must come from the fd scan alone
 out="$(reap)"
+cases=$((cases + 1))
 if [[ -e "$FAKE_TMP/tmp.openfd" ]]; then
   pass "IN-USE gate: an OPEN FD into the tree marks it in use (cwd elsewhere)"
 else
@@ -210,6 +227,7 @@ fi
 # cannot pass by never reaping.
 rm -rf "$FAKE_PROC/4244"
 out="$(reap)"
+cases=$((cases + 1))
 if [[ ! -e "$FAKE_TMP/tmp.openfd" ]]; then
   pass "the same tree IS reaped once no fd points into it"
 else
@@ -222,6 +240,7 @@ fi
 reset_fixtures
 mk_dir "claude-$UID_NOW" 20 120
 out="$(reap)"
+cases=$((cases + 1))
 if [[ -e "$FAKE_TMP/claude-$UID_NOW" ]]; then
   pass "PROTECTED: /tmp/claude-<uid> is never reaped (owned by worktree-manager)"
 else
@@ -234,6 +253,7 @@ fi
 reset_fixtures
 mk_dir "node-compile-cache" 20 120
 out="$(reap)"
+cases=$((cases + 1))
 if [[ -e "$FAKE_TMP/node-compile-cache" ]]; then
   pass "PROTECTED: node-compile-cache is never reaped (reusable V8 cache)"
 else
@@ -251,6 +271,7 @@ mk_dir "tmp.freshinside" 20 120
 # mutation battery caught exactly that gap in this fixture.
 touch "$FAKE_TMP/tmp.freshinside/blob"
 out="$(reap)"
+cases=$((cases + 1))
 if [[ -e "$FAKE_TMP/tmp.freshinside" ]]; then
   pass "recursive age: a stale dir containing a FRESH file is NOT reaped"
 else
@@ -265,12 +286,14 @@ mk_dir "tmp.dry" 20 120
 : > "$TESTROOT/dry.log"
 out="$(guard_env env TMPFS_GUARD_DRY_RUN=1 TMPFS_GUARD_LOG_SINK="$TESTROOT/dry.log" \
   bash -c "source '$GUARD'; reap_scratch_entries" 2>&1 || true)"
+cases=$((cases + 1))
 if [[ -e "$FAKE_TMP/tmp.dry" ]]; then
   pass "TMPFS_GUARD_DRY_RUN=1 deletes nothing"
 else
   fail "dry run deleted a file; got: $out"
 fi
 # The dry run must still REPORT what it would have done, or it is untestable.
+cases=$((cases + 1))
 if [[ "$(grep -cF -- "tmp.dry" "$TESTROOT/dry.log" || true)" -ge 1 ]]; then
   pass "dry run still reports the candidate it would reap"
 else
@@ -284,6 +307,7 @@ fi
 reset_fixtures
 mk_dir "tmp.noclaude" 20 120
 out="$(guard_env bash "$GUARD" 2>&1 || true)"
+cases=$((cases + 1))
 if [[ ! -e "$FAKE_TMP/tmp.noclaude" ]]; then
   pass "the scratch reaper runs even with no /tmp/claude-<uid> present"
 else
@@ -303,6 +327,7 @@ touch -d "-120 minutes" "$FAKE_TMP/tmp.nested"
 : > "$TESTROOT/nested.txt"
 out="$(guard_env env TMPFS_GUARD_DRY_RUN=1 TMPFS_GUARD_LOG_SINK="$TESTROOT/nested.txt" \
   bash -c "source '$GUARD'; reap_scratch_entries" 2>&1 || true)"
+cases=$((cases + 1))
 if [[ "$(grep -cF -- "tmp.nested/inner" "$TESTROOT/nested.txt" || true)" -eq 0 ]] \
    && [[ "$(grep -cE 'would reap .*/tmp\.nested \(' "$TESTROOT/nested.txt" || true)" -ge 1 ]]; then
   pass "reaps the top-level scratch entry, never its nested subdirs (du -sm)"
@@ -314,6 +339,7 @@ fi
 # Cannot synthesize a foreign-owned file without root, so assert the gate is
 # expressed in the source, anchored on the find predicate rather than a bare
 # word that a comment could satisfy (cq-assert-anchor-not-bare-token).
+cases=$((cases + 1))
 if [[ "$(grep -cE '^[^#]*-user[[:space:]]' "$GUARD" || true)" -ge 1 ]]; then
   pass "OWNERSHIP gate: the reaper's find is -user scoped"
 else
@@ -349,6 +375,7 @@ touch -d "-120 minutes" "$FAKE_TMP/sockdir"
 
 if [[ -S "$SOCK_PATH" ]] && grep -qF -- "$SOCK_PATH" /proc/net/unix 2>/dev/null; then
   reap env TMPFS_GUARD_COUNT_TRIGGER=99999 >/dev/null
+  cases=$((cases + 1))
   if [[ -d "$FAKE_TMP/sockdir" ]]; then
     pass "SOCKET liveness: a socket-held tree is NOT reaped (normal tier)"
   else
@@ -373,6 +400,7 @@ time.sleep(60)
   find "$FAKE_TMP/sock dir" -exec touch -d "-120 minutes" {} + 2>/dev/null || true
   touch -d "-120 minutes" "$FAKE_TMP/sock dir"
   reap >/dev/null
+  cases=$((cases + 1))
   if [[ -d "$FAKE_TMP/sock dir" ]]; then
     pass "SOCKET liveness: a socket path containing a SPACE is still protected"
   else
@@ -383,14 +411,18 @@ time.sleep(60)
   # Non-vacuity: blind the seam and the SAME fixture must be deleted. Without
   # this the two assertions above could pass because of some unrelated gate.
   reap env TMPFS_GUARD_UNIX_SOCKETS=/dev/null >/dev/null
+  cases=$((cases + 1))
   if [[ ! -d "$FAKE_TMP/sockdir" ]]; then
     pass "SOCKET liveness is non-vacuous: blinding /proc/net/unix reaps it"
   else
     fail "blinding the socket seam changed nothing — the arm proves nothing"
   fi
 else
+  cases=$((cases + 1))
   fail "socket fixture did not register in /proc/net/unix — arm cannot run"
+  cases=$((cases + 1))
   fail "socket fixture unavailable (pressure arm)"
+  cases=$((cases + 1))
   fail "socket fixture unavailable (non-vacuity arm)"
 fi
 kill "$SOCK_PID" 2>/dev/null || true
@@ -411,11 +443,13 @@ find "$FAKE_TMP" -mindepth 1 -exec touch -d "-120 minutes" {} + 2>/dev/null || t
 seed_watermark 0
 reap env TMPFS_GUARD_COUNT_TRIGGER=10 TMPFS_GUARD_ALARM_FILE="$TESTROOT/count.alarm" >/dev/null
 remaining=$(find "$FAKE_TMP" -mindepth 1 -maxdepth 1 -name 'tmp.tiny*' | wc -l)
+cases=$((cases + 1))
 if [[ "$(grep -cF -- 'count-shaped leak' "$TESTROOT/count.alarm" || true)" -ge 1 ]]; then
   pass "COUNT pressure raises an alarm the operator will see"
 else
   fail "no alarm at count pressure — the #6991 incident stays silent"
 fi
+cases=$((cases + 1))
 if [[ "$remaining" -eq 40 ]]; then
   pass "COUNT pressure does NOT widen deletion (report, never reap)"
 else
@@ -427,6 +461,7 @@ reset_fixtures
 mk_dir "tmp.quiet" 1 120
 : > "$TESTROOT/quiet.alarm"
 reap env TMPFS_GUARD_COUNT_TRIGGER=99999 TMPFS_GUARD_ALARM_FILE="$TESTROOT/quiet.alarm" >/dev/null
+cases=$((cases + 1))
 if [[ ! -s "$TESTROOT/quiet.alarm" ]]; then
   pass "below the trigger, no count alarm is raised"
 else
@@ -445,6 +480,7 @@ mkdir -p "$FAKE_TMP/victim"$'\n'"x"
 dd if=/dev/zero of="$FAKE_TMP/victim"$'\n'"x/blob" bs=1M count=20 status=none 2>/dev/null
 find "$FAKE_TMP" -mindepth 1 -exec touch -d "-120 minutes" {} + 2>/dev/null || true
 reap >/dev/null
+cases=$((cases + 1))
 if [[ -e "$FAKE_TMP/victim/keep" ]]; then
   pass "a newline-named sibling cannot cause the wrong entry to be reaped"
 else
@@ -460,6 +496,7 @@ fi
 # false-match trap that cq-assert-anchor-not-bare-token warns about, and which
 # this suite hit while being written.
 logger_sites=$(grep -vE '^[[:space:]]*#' "$GUARD" | grep -cE 'logger[[:space:]]+-t' || true)
+cases=$((cases + 1))
 if [[ "$logger_sites" -eq 1 ]]; then
   pass "exactly one logger call site remains, inside guard_log (was 3)"
 else
@@ -470,6 +507,7 @@ reset_fixtures
 mk_dir "tmp.sink" 20 120
 : > "$TESTROOT/sink.log"
 reap env TMPFS_GUARD_LOG_SINK="$TESTROOT/sink.log" >/dev/null
+cases=$((cases + 1))
 if [[ "$(grep -cF -- "tmp.sink" "$TESTROOT/sink.log" || true)" -ge 1 ]]; then
   pass "per-entry reap detail reaches the log sink (was stdout, discarded)"
 else
@@ -486,6 +524,7 @@ fi
 # `reaped="$(reap_scratch_entries)"` shape, and a naive grep matches that.
 subst_sites=$(grep -vE '^[[:space:]]*#' "$GUARD" \
   | grep -cE '\$\((reap_scratch_entries|reap_output_files)' || true)
+cases=$((cases + 1))
 if [[ "$subst_sites" -eq 0 ]]; then
   pass "no command substitution captures the reapers (globals contract)"
 else
@@ -495,6 +534,7 @@ fi
 reset_fixtures
 mk_dir "tmp.exit" 20 120
 : > "$TESTROOT/exit.log"
+cases=$((cases + 1))
 if guard_env env TMPFS_GUARD_USAGE_WARN_PCT=0 TMPFS_GUARD_LOG_SINK="$TESTROOT/exit.log" \
      TMPFS_GUARD_ALARM_FILE="$TESTROOT/alarm.log" bash "$GUARD" >/dev/null 2>&1; then
   pass "a run that reaps >=1 entry at high usage exits 0 (was: unbound variable)"
@@ -503,6 +543,7 @@ else
 fi
 
 # --- Arm 14: liveness line on every run, alarm only when alarming ----------
+cases=$((cases + 1))
 if [[ "$(grep -cE 'run complete' "$TESTROOT/exit.log" || true)" -ge 1 ]]; then
   pass "every run emits a liveness line (silent != not running)"
 else
@@ -510,6 +551,7 @@ else
 fi
 
 # A run that REAPED something is not an alarm — nothing should be recorded.
+cases=$((cases + 1))
 if [[ ! -s "$TESTROOT/alarm.log" ]]; then
   pass "a run that reclaimed space records no alarm"
 else
@@ -522,6 +564,7 @@ reset_fixtures
 : > "$TESTROOT/alarm2.log"
 guard_env env TMPFS_GUARD_USAGE_WARN_PCT=0 TMPFS_GUARD_LOG_SINK=/dev/null \
   TMPFS_GUARD_ALARM_FILE="$TESTROOT/alarm2.log" bash "$GUARD" >/dev/null 2>&1 || true
+cases=$((cases + 1))
 if [[ "$(grep -cE 'nothing reapable' "$TESTROOT/alarm2.log" || true)" -ge 1 ]]; then
   pass "high usage with nothing reapable writes a durable alarm record"
 else
@@ -534,6 +577,7 @@ for _ in $(seq 1 40); do
     TMPFS_GUARD_ALARM_FILE="$TESTROOT/alarm2.log" bash "$GUARD" >/dev/null 2>&1 || true
 done
 alarm_lines=$(wc -l < "$TESTROOT/alarm2.log")
+cases=$((cases + 1))
 if [[ "$alarm_lines" -le 200 ]]; then
   pass "alarm file size cap holds ($alarm_lines lines <= 200)"
 else
@@ -544,6 +588,7 @@ fi
 # A no-op under cron (no DBUS session), additionally swallowed by
 # `2>/dev/null || true`. Keeping it as a best-effort extra is how the dead
 # channel came to exist.
+cases=$((cases + 1))
 if [[ "$(grep -cE '^[^#]*notify-send' "$GUARD" || true)" -eq 0 ]]; then
   pass "notify-send is gone (it was a silent no-op under cron)"
 else
@@ -563,6 +608,7 @@ find "$FAKE_TMP" -mindepth 1 -exec touch -d "-120 minutes" {} + 2>/dev/null || t
 seed_watermark 0
 reap env TMPFS_GUARD_COUNT_TRIGGER=5 TMPFS_GUARD_USAGE_WARN_PCT=70 \
   TMPFS_GUARD_ALARM_FILE="$TESTROOT/lowusage.alarm" >/dev/null
+cases=$((cases + 1))
 if [[ "$(grep -cF -- 'count-shaped leak' "$TESTROOT/lowusage.alarm" || true)" -ge 1 ]]; then
   pass "COUNT alarm fires below the usage threshold (the #6991 state)"
 else
@@ -570,6 +616,7 @@ else
 fi
 # ...and the destructive tier did NOT engage at that usage.
 remaining=$(find "$FAKE_TMP" -mindepth 1 -maxdepth 1 -name 'tmp.c*' | wc -l)
+cases=$((cases + 1))
 if [[ "$remaining" -eq 12 ]]; then
   pass "REAP tier stays disengaged below the usage threshold (alarm != delete)"
 else
@@ -583,6 +630,7 @@ reset_fixtures
 printf '2026-01-01T00:00:00Z old alarm\n' > "$TESTROOT/stale.alarm"
 guard_env env TMPFS_GUARD_USAGE_WARN_PCT=101 TMPFS_GUARD_COUNT_TRIGGER=999999 \
   TMPFS_GUARD_ALARM_FILE="$TESTROOT/stale.alarm" bash "$GUARD" >/dev/null 2>&1 || true
+cases=$((cases + 1))
 if [[ ! -f "$TESTROOT/stale.alarm" ]]; then
   pass "a healthy run clears the alarm file (no manual operator step)"
 else
@@ -595,6 +643,7 @@ fi
 reset_fixtures
 rm -f "$TESTROOT/hb"
 guard_env env TMPFS_GUARD_HEARTBEAT_FILE="$TESTROOT/hb" bash "$GUARD" >/dev/null 2>&1 || true
+cases=$((cases + 1))
 if [[ -s "$TESTROOT/hb" ]] && [[ "$(grep -cF -- 'run complete' "$TESTROOT/hb" || true)" -ge 1 ]]; then
   pass "heartbeat written on a completed run (staleness is detectable)"
 else
@@ -602,6 +651,7 @@ else
 fi
 # Overwrite, not append — an append would grow without bound.
 guard_env env TMPFS_GUARD_HEARTBEAT_FILE="$TESTROOT/hb" bash "$GUARD" >/dev/null 2>&1 || true
+cases=$((cases + 1))
 if [[ "$(wc -l < "$TESTROOT/hb")" -eq 1 ]]; then
   pass "heartbeat is overwritten, not appended"
 else
@@ -617,6 +667,7 @@ LOADER="$REPO_ROOT/.claude/hooks/session-rules-loader.sh"
 for var in TMPFS_GUARD_ALARM_FILE TMPFS_GUARD_HEARTBEAT_FILE; do
   g_default=$(grep -oE "\\\$\{${var}:-[^}]*\}" "$GUARD" | head -1)
   l_default=$(grep -oE "\\\$\{${var}:-[^}]*\}" "$LOADER" | head -1)
+  cases=$((cases + 1))
   if [[ -n "$g_default" && "$g_default" == "$l_default" ]]; then
     pass "$var default matches between the guard and the SessionStart reader"
   else
@@ -659,11 +710,13 @@ rm -f "$TESTROOT/count-watermark" "$TESTROOT/heartbeat"
 mk_many "legacy" 30
 : > "$TESTROOT/wm.alarm"
 reap env TMPFS_GUARD_COUNT_TRIGGER=10 TMPFS_GUARD_ALARM_FILE="$TESTROOT/wm.alarm" >/dev/null
+cases=$((cases + 1))
 if [[ ! -s "$TESTROOT/wm.alarm" ]]; then
   pass "AC-A1(a): legacy backlog alone does NOT alarm (absolute count is not pressure)"
 else
   fail "AC-A1(a): legacy alarmed on absolute count — the every-5-min alarm survives: $(cat "$TESTROOT/wm.alarm")"
 fi
+cases=$((cases + 1))
 if [[ "$(wm)" == "30" ]]; then
   pass "AC-A1(a): first run seeds the watermark from the current count"
 else
@@ -676,11 +729,13 @@ seed_watermark 30
 mk_many "legacy" 12
 : > "$TESTROOT/wm.alarm"
 reap env TMPFS_GUARD_COUNT_TRIGGER=10 TMPFS_GUARD_ALARM_FILE="$TESTROOT/wm.alarm" >/dev/null
+cases=$((cases + 1))
 if [[ "$(wm)" == "12" ]]; then
   pass "AC-A1(b): the watermark ratchets DOWN as the legacy drains"
 else
   fail "AC-A1(b): watermark is '$(wm)' after draining 30 -> 12; a frozen baseline would still read 30"
 fi
+cases=$((cases + 1))
 if [[ ! -s "$TESTROOT/wm.alarm" ]]; then
   pass "AC-A1(b): a drain raises no alarm"
 else
@@ -694,6 +749,7 @@ seed_watermark 12
 mk_many "legacy" 27
 : > "$TESTROOT/wm.alarm"
 reap env TMPFS_GUARD_COUNT_TRIGGER=10 TMPFS_GUARD_ALARM_FILE="$TESTROOT/wm.alarm" >/dev/null
+cases=$((cases + 1))
 if [[ "$(grep -cF -- 'count-shaped leak' "$TESTROOT/wm.alarm" || true)" -ge 1 ]]; then
   pass "AC-A1(c): growth above the drained watermark ALARMS (a frozen baseline is blind here)"
 else
@@ -702,11 +758,13 @@ fi
 # The NUMBERS are the remediation payload. Asserting only the static prose lets
 # an implementation reporting hardcoded garbage pass — measured: a mutant
 # emitting 999999 survived the whole suite.
+cases=$((cases + 1))
 if [[ "$(grep -cE 'grew to 27 top-level entries \(\+15 above the 12 watermark, trigger 10\)' "$TESTROOT/wm.alarm" || true)" -ge 1 ]]; then
   pass "AC-A1(c): the alarm reports the derived count, growth and floor"
 else
   fail "AC-A1(c): alarm numbers wrong or hardcoded; got: $(cat "$TESTROOT/wm.alarm")"
 fi
+cases=$((cases + 1))
 if [[ "$(wm)" == "12" ]]; then
   pass "AC-A1(c): growth does NOT raise the watermark (it only ever ratchets down)"
 else
@@ -718,6 +776,7 @@ reset_fixtures
 seed_watermark 12
 mk_many "post_reboot" 1
 reap env TMPFS_GUARD_COUNT_TRIGGER=10 TMPFS_GUARD_ALARM_FILE="$TESTROOT/wm.alarm" >/dev/null
+cases=$((cases + 1))
 if [[ "$(wm)" == "1" ]]; then
   pass "AC-A1(d): the watermark re-floors after a reboot clears tmpfs"
 else
@@ -730,6 +789,7 @@ seed_watermark 1
 mk_many "post_reboot" 16
 : > "$TESTROOT/wm.alarm"
 reap env TMPFS_GUARD_COUNT_TRIGGER=10 TMPFS_GUARD_ALARM_FILE="$TESTROOT/wm.alarm" >/dev/null
+cases=$((cases + 1))
 if [[ "$(grep -cF -- 'count-shaped leak' "$TESTROOT/wm.alarm" || true)" -ge 1 ]]; then
   pass "AC-A1(d): a post-reboot leak ALARMS against the re-floored watermark"
 else
@@ -747,6 +807,7 @@ seed_watermark 0
 mk_many "boundary" 10
 : > "$TESTROOT/bound.alarm"
 reap env TMPFS_GUARD_COUNT_TRIGGER=10 TMPFS_GUARD_ALARM_FILE="$TESTROOT/bound.alarm" >/dev/null
+cases=$((cases + 1))
 if [[ "$(grep -cF -- 'count-shaped leak' "$TESTROOT/bound.alarm" || true)" -ge 1 ]]; then
   pass "threshold: growth EXACTLY at COUNT_TRIGGER alarms (pins >= against >)"
 else
@@ -757,6 +818,7 @@ seed_watermark 0
 mk_many "boundary" 9
 : > "$TESTROOT/bound.alarm"
 reap env TMPFS_GUARD_COUNT_TRIGGER=10 TMPFS_GUARD_ALARM_FILE="$TESTROOT/bound.alarm" >/dev/null
+cases=$((cases + 1))
 if [[ ! -s "$TESTROOT/bound.alarm" ]]; then
   pass "threshold: growth one BELOW COUNT_TRIGGER stays silent (pins the constant itself)"
 else
@@ -772,6 +834,7 @@ printf 'not-a-number\n' > "$TESTROOT/count-watermark"
 mk_many "corrupt" 30
 : > "$TESTROOT/corrupt.alarm"
 reap env TMPFS_GUARD_COUNT_TRIGGER=10 TMPFS_GUARD_ALARM_FILE="$TESTROOT/corrupt.alarm" >/dev/null
+cases=$((cases + 1))
 if [[ "$(grep -cF -- 'count-shaped leak' "$TESTROOT/corrupt.alarm" || true)" -eq 0 ]]; then
   pass "a corrupt watermark is NOT read as 0 (no alarm on the full backlog)"
 else
@@ -783,6 +846,7 @@ reset_fixtures
 printf '08\n' > "$TESTROOT/count-watermark"
 mk_many "octal" 12
 out="$(reap env TMPFS_GUARD_COUNT_TRIGGER=10 TMPFS_GUARD_ALARM_FILE="$TESTROOT/corrupt.alarm")"
+cases=$((cases + 1))
 if [[ "$(wm)" == "12" ]]; then
   pass "a leading-zero watermark is rejected, not fed to bash arithmetic"
 else
@@ -799,11 +863,13 @@ seed_watermark 30
 : > "$TESTROOT/gone.alarm"
 reap env TMPFS_GUARD_TMP="$TESTROOT/does-not-exist" TMPFS_GUARD_COUNT_TRIGGER=10 \
   TMPFS_GUARD_ALARM_FILE="$TESTROOT/gone.alarm" >/dev/null
+cases=$((cases + 1))
 if [[ "$(wm)" == "30" ]]; then
   pass "an unenumerable TMP_ROOT leaves the stored watermark UNTOUCHED (fail-closed)"
 else
   fail "enumeration failure floored the watermark to '$(wm)' — the forever-alarm returns on the next healthy run"
 fi
+cases=$((cases + 1))
 if [[ ! -s "$TESTROOT/gone.alarm" ]]; then
   pass "an unenumerable TMP_ROOT raises no count alarm"
 else
@@ -819,6 +885,7 @@ mk_many "degraded" 5
 : > "$TESTROOT/degraded.alarm"
 dbg="$(reap env TMPFS_GUARD_WATERMARK_FILE=/proc/soleur-nonexistent/wm \
   TMPFS_GUARD_COUNT_TRIGGER=10 TMPFS_GUARD_ALARM_FILE="$TESTROOT/degraded.alarm")"
+cases=$((cases + 1))
 if [[ "$(grep -cF -- 'DISARMED' "$TESTROOT/degraded.alarm" || true)" -ge 1 ]]; then
   pass "an unpersistable watermark raises an alarm naming the disarm"
 else
@@ -830,6 +897,7 @@ reset_fixtures
 seed_watermark 100
 mk_many "dry" 5
 reap env TMPFS_GUARD_DRY_RUN=1 TMPFS_GUARD_COUNT_TRIGGER=10 >/dev/null
+cases=$((cases + 1))
 if [[ "$(wm)" == "100" ]]; then
   pass "DRY_RUN leaves the watermark untouched (inspection is non-destructive)"
 else
@@ -843,6 +911,7 @@ fi
 reset_fixtures
 mkdir -p "$FAKE_TMP/$(printf 'leak_a\nleak_b')" "$FAKE_TMP/plain"
 n="$(guard_env bash -c "source '$GUARD'; top_level_entry_count" 2>/dev/null || echo ERR)"
+cases=$((cases + 1))
 if [[ "$n" == "2" ]]; then
   pass "a newline-bearing entry name counts as ONE entry, not two"
 else
@@ -855,6 +924,7 @@ fi
 # reboot, so stored would always equal the current count and growth would be
 # pinned at 0 forever.
 wm_default="$(grep -E '^WATERMARK_FILE=' "$GUARD" | head -1)"
+cases=$((cases + 1))
 if [[ -n "$wm_default" && "$wm_default" == *'.local/state/soleur'* && "$wm_default" != *'${TMPDIR'* && "$wm_default" != *'"/tmp'* && "$wm_default" != *'=/tmp'* && "$wm_default" != *':-/tmp'* ]]; then
   pass "the watermark default lives in durable state, not on the tmpfs it measures"
 else
@@ -874,6 +944,7 @@ printf 'prior run\n' > "$TESTROOT/heartbeat"
 mk_many "lost" 30
 : > "$TESTROOT/lost.alarm"
 reap env TMPFS_GUARD_COUNT_TRIGGER=10 TMPFS_GUARD_ALARM_FILE="$TESTROOT/lost.alarm" >/dev/null
+cases=$((cases + 1))
 if [[ "$(grep -cF -- 'was missing or unreadable' "$TESTROOT/lost.alarm" || true)" -ge 1 ]]; then
   pass "watermark loss after a completed run is reported, not silently forgiven"
 else
@@ -886,6 +957,7 @@ rm -f "$TESTROOT/count-watermark" "$TESTROOT/heartbeat"
 mk_many "lost" 30
 : > "$TESTROOT/lost.alarm"
 reap env TMPFS_GUARD_COUNT_TRIGGER=10 TMPFS_GUARD_ALARM_FILE="$TESTROOT/lost.alarm" >/dev/null
+cases=$((cases + 1))
 if [[ ! -s "$TESTROOT/lost.alarm" ]]; then
   pass "a genuine first run (no heartbeat) seeds silently"
 else
@@ -894,9 +966,47 @@ fi
 
 
 # --- Minimum-cardinality guard ---------------------------------------------
-if [[ "$pass_n" -lt 60 ]]; then
-  fail "cardinality guard: only $pass_n assertions ran (expected >= 60)"
+# Reads `cases`, NOT `pass_n`. Gating on the pass count conflates two unrelated
+# faults: a run with genuine failures has a lower pass_n and would trip a
+# CARDINALITY message for a problem that is not a cardinality problem. The
+# sibling suite scripts/test-contention.test.sh records having done exactly that
+# — "cardinality guard: only 64 ran (expected >= 66)" on a run whose real
+# problem was two failures. `cases` counts assertions ATTEMPTED, so it stays
+# fixed whichever way the verdicts go and the message means what it says.
+#
+# Reported with `printf >&2` + `exit 1` DIRECTLY, never through fail(). A floor
+# that reports by calling fail() increments the same counter the exit status
+# reads, so neutering fail() silences the rows AND the floor that exists to
+# notice the silence. A floor enforced through the suspect cannot witness the
+# suspect.
+#
+# 60 is MEASURED, not estimated: the as-written file has 59 static decision
+# blocks, one of which sits in a two-iteration `for var in ...` loop.
+MIN_CASES=60
+if [[ "$cases" -lt "$MIN_CASES" ]]; then
+  printf '\n[FATAL] cardinality floor: only %d assertion(s) ran, expected >= %d.\n' \
+    "$cases" "$MIN_CASES" >&2
+  echo "=== tmpfs-guard: $pass_n passed, $fails failed ($cases assertions) ==="
+  exit 1
 fi
 
-echo "=== tmpfs-guard: $pass_n passed, $fails failed ==="
+# --- Accounting conservation ------------------------------------------------
+# The arm that catches a neutered verdict helper. The floor above catches "no
+# assertions RAN"; it cannot catch "assertions ran and their verdicts were
+# discarded", because `cases` keeps its full value when fail() is a no-op.
+# Every assertion records exactly one verdict, so pass_n+fails MUST equal cases.
+# Reported directly for the same reason as the floor.
+if [[ $((pass_n + fails)) -ne "$cases" ]]; then
+  printf '\n[FATAL] accounting: pass_n+fails (%d) != cases (%d).\n' \
+    "$((pass_n + fails))" "$cases" >&2
+  if [[ $((pass_n + fails)) -lt "$cases" ]]; then
+    printf '  An assertion was counted but its verdict was not recorded — that is what a neutered pass()/fail() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `cases=$((cases + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  echo "=== tmpfs-guard: $pass_n passed, $fails failed ($cases assertions) ==="
+  exit 1
+fi
+
+echo "=== tmpfs-guard: $pass_n passed, $fails failed ($cases assertions) ==="
 [[ "$fails" -eq 0 ]] || exit 1
