@@ -938,12 +938,20 @@ jobs:
       # SENTRY_* and GH_TOKEN on it would widen that further. Keeping escalation out of the
       # step that renders the verdict is the same principle the split itself encodes.
       #
-      # `always() && ... != 'skipped'` and not `success()`: this report matters MOST on the
-      # terminal-red path, where the gate exits 1. A success()-gated report would be dropped
-      # on exactly the runs worth counting. "Attempted" is a native step outcome under the
-      # split, so no output plumbing and no ordering rule is needed.
+      # `!cancelled()` and an ENUMERATED outcome rather than `success()`: this report matters
+      # MOST on the terminal-red path, where the gate exits 1. A success()-gated report would be
+      # dropped on exactly the runs worth counting. "Attempted" is a native step outcome under
+      # the split, so no output plumbing and no ordering rule is needed.
+      #
+      # NOT `!= 'skipped'` (#7104 PR-B review): that spelling inverts the null trap. A renamed or
+      # typo'd `repush_apply` id resolves to the EMPTY STRING, and `'' != 'skipped'` is TRUE, so
+      # the mis-keyed case would emit a "re-push attempted" Sentry event on EVERY run — including
+      # the overwhelming majority where no re-push happened. Enumerating the two real outcomes
+      # fails closed on a rename instead of open.
       - name: Report the bounded re-push to Sentry (#7104)
-        if: always() && steps.repush_apply.outcome != 'skipped'
+        if: >-
+          !cancelled()
+          && (steps.repush_apply.outcome == 'success' || steps.repush_apply.outcome == 'failure')
         env:
           SENTRY_INGEST_DOMAIN: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           SENTRY_PROJECT_ID: ${{ secrets.SENTRY_PROJECT_ID }}
@@ -999,20 +1007,38 @@ jobs:
       # inside `run: |`, which YAML block-scalar indentation mangles.
       - name: Compose the re-push ledger entry (#7104)
         id: ledger_body
-        if: always() && steps.repush_apply.outcome != 'skipped' && github.event_name != 'workflow_dispatch'
+        # Enumerated outcomes, not `!= 'skipped'` — same inverted-null-trap fix as the two steps
+        # above: a renamed `repush_apply` id yields '', and `'' != 'skipped'` is TRUE, which would
+        # append a ledger row on every ordinary run.
+        if: >-
+          !cancelled()
+          && (steps.repush_apply.outcome == 'success' || steps.repush_apply.outcome == 'failure')
+          && github.event_name != 'workflow_dispatch'
         env:
           APPLY_OUTCOME: ${{ steps.repush_apply.outcome }}
           PASS2_OUTCOME: ${{ steps.infra_config_gate_pass2.outcome }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RUN_SHA: ${{ github.sha }}
         run: |
+          # `set +e` and a terminal `exit 0`, matching the consuming step below (#7104 PR-B
+          # review). This step is pure BOOKKEEPING: a failed `mktemp`, a full disk, or a
+          # `$GITHUB_OUTPUT` write error must not convert a run that SUCCESSFULLY self-healed
+          # production into a red job. Without these it does exactly that — the step runs under
+          # the default `bash -eo pipefail`, so any one of those aborts it, and its sibling
+          # `Maintain the re-push ledger issue` already carries both for precisely this reason.
+          #
+          # NOT `continue-on-error: true`, which is the obvious-looking alternative and is wrong
+          # here: it pins the step's `conclusion` to `success` while leaving `outcome` as the real
+          # value, and scripts/followthroughs/moved-block-wedge-5887.sh reads `conclusion` — so it
+          # would feed that follow-through GREEN over a red. AC18 also bans the key by literal.
+          set +e
           set -uo pipefail
-          f="$(mktemp)"
+          f="$(mktemp)" || { echo "::warning::Could not allocate the ledger scratch file; skipping the ledger row for this run."; exit 0; }
           {
             printf '%s\n' "This issue is a running tally of every time the infra-config apply gate"
             printf '%s\n' "recovered itself with a bounded re-push (#7104). It is created CLOSED and is"
             printf '%s\n' "only ever edited, so it does not notify."
-            printf '%s\n\n' "It is a counter you can look at, not an alert."
+            printf '%s\n\n' "It is a counter you can look at, not an alert. The run that produced each row also files a ci/infra-config-recovered issue, which is the surface that DOES notify."
             printf '%s\n' "| when (UTC) | run | sha | apply | verify |"
             printf '%s\n' "|---|---|---|---|---|"
             printf '| %s | %s | %s | %s | %s |\n' \
@@ -1020,6 +1046,7 @@ jobs:
               "${APPLY_OUTCOME}" "${PASS2_OUTCOME:-not-reached}"
           } >> "$f"
           echo "path=$f" >> "$GITHUB_OUTPUT"
+          exit 0
 
       - name: Maintain the re-push ledger issue (#7104)
         if: always() && steps.ledger_body.outcome == 'success'
@@ -1035,9 +1062,16 @@ jobs:
           set -uo pipefail
 
           # The label lives OUTSIDE the ci/ namespace (R14.2) and is created here rather than
-          # assumed. scripts/infra-config-red-alert.sh is deliberately NOT touched: it
-          # hardcodes three labels across five sites and is fail-open by contract, so widening
-          # the P1 helper is exposure this avoids.
+          # assumed.
+          #
+          # This ledger is the COUNTER, not the notification. #7104 PR-B review established that
+          # a green recovered run must also reach the operator, and that is handled by the
+          # `recovered` reach mode of scripts/infra-config-red-alert.sh — which files under its
+          # own ci/infra-config-recovered label at p2, deliberately NOT the p1 ci/infra-config-red
+          # dedupe slot. (An earlier revision of this comment said that helper was "deliberately
+          # NOT touched" because it hardcoded its labels; it no longer hardcodes them, and the
+          # separation that mattered — a self-heal must not swallow a real P1 — is now enforced
+          # by the per-mode dedupe key rather than by declining to reuse the helper at all.)
           gh label create "$LEDGER_LABEL" \
             --description "Running tally of infra-config gate self-recoveries (#7104). Never pages." \
             --color ededed 2>/dev/null || true
@@ -1076,10 +1110,16 @@ jobs:
       # prod-write Terraform credentials; adding Sentry keys to it widens that further. Adding a
       # new step is not a re-wiring of the seven existing status-keyed steps.
       #
-      # It does NOT use infra_config_red_alert: that helper hardcodes the message prefix
-      # "infra-config delivery gate RED: " and files a ci/infra-config-red issue. Both are
-      # measurably false here — the gate is GREEN. Keeping that helper monotonic (it means red)
-      # matters more than reusing it.
+      # It does NOT use infra_config_red_alert. That helper's red modes prefix the Sentry message
+      # "infra-config delivery gate RED: " and file a p1 ci/infra-config-red issue, and both are
+      # measurably false here — the gate is GREEN and nothing was written.
+      #
+      # It also does not use the helper's `recovered` mode (added in #7104 PR-B for the green
+      # SELF-HEAL path), and the distinction is worth stating because the two look adjacent: that
+      # mode reports a run in which a PRODUCTION WRITE happened, which is what earns a durable
+      # operator-visible record. This step reports thinner-than-usual EVIDENCE on a run that wrote
+      # nothing. Filing an issue per pre-apply network blip is the notification an operator learns
+      # to scroll past, so this one stays a Sentry event only.
       - name: Report degraded freshness evidence (#7104)
         if: always() && steps.infra_config_gate.outputs.freshness_evidence == 'degraded'
         env:
@@ -1166,8 +1206,42 @@ jobs:
       # the next step added: `verdict` is the contract both passes render, and an unset output
       # (the gate never ran) is `''`, which `!= 'verified'` correctly treats as alertable. It
       # also needs no `id:` on the backstop step, which has none.
+      # #7104 PR-B REVIEW — AND A GREEN RECOVERED RUN MUST NOTIFY SOMEONE TOO.
+      #
+      # The condition above was `failure() && ...`, so it could only ever fire on a red run. But
+      # the bounded re-push writes PRODUCTION on the sole no-SSH remediation channel and then, on
+      # the path this PR exists to create, SUCCEEDS — and the run ends green. On that path the
+      # operator was told nothing: the Sentry breadcrumb below is tagged
+      # op=infra-config-repush-attempted, which this file's own comment records as matching NO
+      # sentry_issue_alert rule, and the ledger issue is created CLOSED and only ever body-edited,
+      # which is by construction a surface that never notifies. An unattended production write
+      # that nobody is told about is the same invisibility #7220 exists to end, one path over.
+      #
+      # WHY THE `outcome == 'success' || outcome == 'failure'` FORM AND NOT `!= 'skipped'`.
+      #
+      # `!= 'skipped'` looks like the natural spelling and inverts the null trap: a renamed or
+      # typo'd `repush_apply` id makes `steps.repush_apply.outcome` the EMPTY STRING, and
+      # `'' != 'skipped'` is TRUE — so the mis-keyed case, the one failure mode the backstop step
+      # exists for, would fire this alert on EVERY run instead of none. Enumerating the two real
+      # outcomes fails closed on a rename instead of open. (actionlint cannot catch it: a mistyped
+      # step id types as {string => string}, so every name is valid.)
+      #
+      # `!cancelled()` rather than `always()`: this step FILES AND COMMENTS ON GitHub issues, so
+      # it mutates. `always()` is true on cancellation and would file an incident for a run the
+      # operator themselves cancelled. The previous `failure()` was already false on cancellation;
+      # this preserves that property while widening to the green-recovery path.
       - name: Alert on a red infra-config gate (#7220)
-        if: failure() && steps.infra_config_gate.outputs.verdict != 'verified' && steps.infra_config_gate_pass2.outputs.verdict != 'verified'
+        if: >-
+          !cancelled()
+          && (
+               steps.repush_apply.outcome == 'success'
+               || steps.repush_apply.outcome == 'failure'
+               || (
+                    failure()
+                    && steps.infra_config_gate.outputs.verdict != 'verified'
+                    && steps.infra_config_gate_pass2.outputs.verdict != 'verified'
+                  )
+             )
         working-directory: ${{ env.INFRA_DIR }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1209,6 +1283,24 @@ jobs:
             echo "::error::#7220 alert helper unavailable — the red-gate notification did NOT fire"
             exit 1
           }
+
+          # THE RECOVERY WORKED (#7104 PR-B review). Handled FIRST — before the re-push-failure
+          # arm, before the gate-never-ran arm, and before every frame-derived branch.
+          #
+          # The ordering is not cosmetic. On this path pass 1 exited 0 with verdict=pending, the
+          # re-push applied, and pass 2 rendered `verified`, so GATE_OUTCOME is `success` and the
+          # gate-never-ran arm below would tell the operator "the infra-config gate never ran" —
+          # false — while every frame-derived branch would describe a delivery failure that did
+          # not happen. This arm is also the only one reachable on a run whose overall conclusion
+          # is GREEN, which is exactly why it was missing: every other arm is written for red.
+          #
+          # `recovered` is a distinct reach mode with its own label, priority, title and Sentry
+          # op. It must NOT reuse the red set: `ci/infra-config-red` is the dedupe key, so a
+          # routine self-heal filed into it would swallow a real P1 gate failure as a comment.
+          if [[ "${REPUSH_APPLY_OUTCOME:-}" == "success" && "${PASS2_VERDICT:-}" == "verified" ]]; then
+            infra_config_red_alert "Pass 1 detected the documented webhook-restart race and deferred its verdict; the bounded re-push applied cleanly and pass 2 then rendered verdict=verified. Exactly one production write was made, to terraform_data.deploy_pipeline_fix. No lever needs pulling. This record exists because the write happened at all, not because anything is wrong." "recovered" || true
+            exit 0
+          fi
 
           # Read the host's own frame. Every field below is sanitized AT THE SOURCE by
           # infra-config-apply.sh's on_exit (charset A-Za-z0-9 ._:/=-, so no quote, backslash,

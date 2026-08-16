@@ -163,6 +163,71 @@ if grep -qF 'infra-config-gate-ungraded' <<<"$UNGRADED_CURL"; then
   ok "ungraded Sentry op is distinguishable from both other ops"
 else bad "ungraded state reused another Sentry op"; fi
 
+# --- #7104 PR-B: THE FOURTH STATE, and the only NON-RED one -------------------------------
+#
+# The bounded re-push writes PRODUCTION on the sole no-SSH remediation channel and then, on the
+# path #7104 exists to create, SUCCEEDS — so the run ends GREEN and, before this mode, told the
+# operator nothing at all: the workflow's Sentry breadcrumb (op=infra-config-repush-attempted)
+# matches no sentry_issue_alert rule, and the ledger issue is created CLOSED and only ever
+# body-edited, which is by construction a surface that never notifies.
+#
+# The rows below are mostly about what this mode must NOT inherit from the three red ones. The
+# dedupe-key row is the load-bearing one: `ci/infra-config-red` is the dedupe key for real P1
+# gate failures, so a routine self-heal filed into it would be swallowed as a COMMENT on an open
+# incident — or, worse, would itself become the open issue that swallows the next real one. That
+# is the identical "two independent classes, one slot" defect this helper's own header records as
+# the reason it is not seccomp_unenforced_alert, and it is the failure mode a naive reading of
+# "route green runs through infra_config_red_alert" produces.
+run_alert "the re-push applied and pass 2 verified" recovered
+RECOV_GH=$(cat "$MOCK_GH_FILE"); RECOV_CURL=$(cat "$MOCK_CURL_FILE")
+
+if [[ "$RECOV_GH" != "$REACH_GH" && "$RECOV_GH" != "$UNREACH_GH" && "$RECOV_GH" != "$UNGRADED_GH" ]]; then
+  ok "recovered produces output distinct from ALL THREE red states"
+else bad "recovered reused a red state's text — it would report a failure that did not happen"; fi
+
+# THE DEDUPE-SLOT SEPARATION. Both directions matter, so both are asserted.
+if grep -qF 'ci/infra-config-recovered' <<<"$RECOV_GH"; then
+  ok "recovered files under its OWN ci/infra-config-recovered label"
+else bad "recovered did not use its own label"; fi
+if grep -qF 'ci/infra-config-red' <<<"$RECOV_GH"; then
+  bad "recovered touched ci/infra-config-red — a self-heal would swallow (or be swallowed by) a real P1 gate failure in that dedupe slot"
+else ok "recovered never touches the red dedupe slot"; fi
+if grep -qF 'issue list --label ci/infra-config-recovered' <<<"$RECOV_GH"; then
+  ok "recovered DEDUPES against its own label, so an open red incident cannot absorb it"
+else bad "recovered deduped against the wrong label"; fi
+
+# Priority: a self-heal that worked is not a p1 page.
+if grep -qF 'priority/p2-medium' <<<"$RECOV_GH" && ! grep -qF 'priority/p1-high' <<<"$RECOV_GH"; then
+  ok "recovered files at p2, never p1 — it did not page the founder for a success"
+else bad "recovered filed at p1 (or omitted p2) — pages the operator for a run that worked"; fi
+
+if grep -qF 'retried itself and succeeded' <<<"$RECOV_GH"; then
+  ok "recovered title says the retry succeeded"
+else bad "recovered state did not use its own title"; fi
+
+# The three claims it must NOT make, because all three are false on a successful self-heal.
+if grep -qF 'did not finish applying' <<<"$RECOV_GH"; then
+  bad "recovered body says the update did not finish — it did finish, on the second attempt"
+else ok "recovered body asserts no failure"; fi
+if grep -qF 'did not answer' <<<"$RECOV_GH"; then
+  bad "recovered body asserts the channel did not answer — it answered"
+else ok "recovered body makes no listener-down claim"; fi
+if grep -qF 'we do not know whether the change took effect' <<<"$RECOV_GH"; then
+  bad "recovered body says the outcome is unknown — pass 2 rendered verdict=verified"
+else ok "recovered body makes no ungraded claim"; fi
+
+if grep -qF 'infra-config-repush-recovered' <<<"$RECOV_CURL"; then
+  ok "recovered Sentry op is distinguishable from all three red ops"
+else bad "recovered state reused a red Sentry op"; fi
+# Severity and message prefix: an `error`-level event prefixed "delivery gate RED" would train
+# the operator to distrust the channel that carries real gate failures.
+if grep -qE '"level":[[:space:]]*"warning"' <<<"$RECOV_CURL"; then
+  ok "recovered emits at Sentry level warning, not error"
+else bad "recovered emitted an error-level Sentry event for a successful recovery"; fi
+if grep -qF 'delivery gate RED' <<<"$RECOV_CURL"; then
+  bad "recovered Sentry message carries the 'delivery gate RED' prefix — the gate was GREEN"
+else ok "recovered Sentry message does not claim the gate was red"; fi
+
 # --- #7220 review: CALLER/CALLEE ENV LOCKSTEP ---------------------------------------------
 #
 # THE BUG THIS EXISTS FOR. The workflow's alert step exported SECCOMP_ALERT_RUN_URL /
@@ -208,15 +273,68 @@ if [[ -f "$WF" ]]; then
   else ok "the alert step does not export the seccomp variable names"; fi
 
   # --- #7220 review: THE STEP'S CONDITION MUST COVER A GATE THAT NEVER RAN ------------------
+  #
   # `== 'failure'` excluded `skipped`, so a pre-gate failure notified nobody. Asserted on the
   # condition text because the branch it guards cannot be reached to observe otherwise.
-  cond=$(awk '/^      - name: Alert on a red infra-config gate/{f=1;next} f&&/^        if: /{sub(/^        if: /,"");print;exit}' "$WF")
-  if [[ -n "$cond" ]] && grep -qF "!= 'success'" <<<"$cond"; then
-    ok "the alert fires whenever the gate did not SUCCEED, not only when it failed"
-  else bad "the alert condition is '${cond:-<unparseable>}' — a skipped gate would notify nobody"; fi
-  if grep -qF 'failure()' <<<"$cond"; then
-    ok "the alert is still scoped to a failed job (a cancelled run does not page)"
-  else bad "the alert condition lost its failure() guard"; fi
+  #
+  # EXTRACTED WITH PyYAML, NOT awk (#7104 PR-B review). The previous extractor was
+  # `awk '... /^        if: /{sub(...); print}'`, which reads ONE physical line at a fixed
+  # indent. That is an extractor escape, and it fired: when the condition grew past one line and
+  # became a folded `if: >-` block, the extractor returned the literal string `>-` and every
+  # assertion below graded that instead of the condition. A guard whose subject can be silently
+  # replaced by a YAML sigil is not pinning anything. Parsing the document yields the resolved
+  # scalar regardless of whether it is written inline, folded, or literal-block.
+  #
+  # Whitespace is normalised because a folded scalar's line breaks become spaces, so the same
+  # logical condition has several byte-representations.
+  cond=$(python3 -c '
+import sys, yaml
+wf = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+for job in wf.get("jobs", {}).values():
+    for st in job.get("steps", []) or []:
+        if str(st.get("name", "")).startswith("Alert on a red infra-config gate"):
+            print(" ".join(str(st.get("if", "")).split()))
+            sys.exit(0)
+' "$WF" 2>/dev/null)
+
+  if [[ -n "$cond" && "$cond" != ">-" && "$cond" != "|" ]]; then
+    ok "extracted the alert step's condition as a resolved scalar ($(wc -c <<<"$cond" | tr -d ' ') bytes)"
+  else bad "could not extract the alert condition (got '${cond:-<empty>}') — every row below would be vacuous"; fi
+
+  # A GATE THAT NEVER RAN. Since PR-B the condition keys on the VERDICT, not the step outcome:
+  # pass 1 now soft-fails with verdict=pending and exit 0, so `outcome != 'success'` was false on
+  # every new terminal-red path. An unset output is '' and `'' != 'verified'` is TRUE, so the
+  # verdict form still covers the gate-never-ran case the #7220 review added this row for.
+  if grep -qF "steps.infra_config_gate.outputs.verdict != 'verified'" <<<"$cond" \
+     && grep -qF "steps.infra_config_gate_pass2.outputs.verdict != 'verified'" <<<"$cond"; then
+    ok "the alert keys on BOTH passes' verdicts, so an unset verdict (the gate never ran) still notifies"
+  else bad "the alert condition is '${cond}' — it does not require both passes to be non-'verified', so a skipped gate or a mis-keyed pass 2 would notify nobody"; fi
+
+  # A cancelled run must not page. `failure()` gave this for free; `!cancelled()` is the
+  # equivalent once the condition also has to fire on a GREEN recovery, where `failure()` is
+  # false by construction. Either is acceptable; a bare `always()` is not.
+  if grep -qE '(^|[^!])failure\(\)' <<<"$cond" || grep -qF '!cancelled()' <<<"$cond"; then
+    ok "the alert cannot fire on a cancelled run (failure() or !cancelled() present)"
+  else bad "the alert condition lost its cancellation guard — condition is '${cond}'"; fi
+  if grep -qF 'always()' <<<"$cond"; then
+    bad "the alert condition uses always(), so a run the operator cancelled would file a P1 incident"
+  else ok "the alert condition does not use always()"; fi
+
+  # --- #7104 PR-B: THE GREEN RECOVERY PATH MUST ALSO NOTIFY ---------------------------------
+  #
+  # The re-push writes production and then succeeds, so the run ends GREEN and `failure()` is
+  # false. Before this row the condition was `failure() && ...` alone, and the one path this PR
+  # exists to create was the one path that notified nobody.
+  if grep -qF 'steps.repush_apply.outcome' <<<"$cond"; then
+    ok "the alert condition reads the re-push apply outcome, so a green recovery reaches the operator"
+  else bad "the alert condition never mentions steps.repush_apply.outcome — a successful production re-push would notify nobody"; fi
+
+  # THE INVERTED NULL TRAP. `!= 'skipped'` is the natural spelling and is wrong: a renamed or
+  # typo'd step id resolves to '', and `'' != 'skipped'` is TRUE, so the mis-keyed case — the one
+  # the backstop step exists for — would fire this alert on EVERY run rather than none.
+  if grep -qF "steps.repush_apply.outcome != 'skipped'" <<<"$cond"; then
+    bad "the alert condition uses \`outcome != 'skipped'\`, which is TRUE for the empty string a renamed step id yields — it would alert on every run"
+  else ok "the alert condition does not use the inverted-null \`!= 'skipped'\` form"; fi
 else
   bad "could not locate apply-deploy-pipeline-fix.yml — the caller/callee lockstep did NOT run"
 fi
@@ -289,7 +407,7 @@ fi
 
 # --- ASSERTION FLOOR ----------------------------------------------------------------------
 # Deleting a case from this file must be loud. Zero headroom, ratchet when adding cases.
-ALERT_MIN_ASSERTIONS=29
+ALERT_MIN_ASSERTIONS=45
 if [[ "$PASS" -lt "$ALERT_MIN_ASSERTIONS" ]]; then
   echo "  FAIL: assertion-count floor — only $PASS assertions ran, expected >= $ALERT_MIN_ASSERTIONS"
   FAIL=$((FAIL + 1))
