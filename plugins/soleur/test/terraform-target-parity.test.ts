@@ -393,6 +393,59 @@ function bridgelessOffenders(
   return out;
 }
 
+/**
+ * Every resource TYPE in the infra root that carries a `provisioner` block.
+ *
+ * Guard 1 is stated as a bright line over `terraform_data` rather than over the
+ * SSH predicate, and that is only STRICTLY STRONGER while this set is exactly
+ * {terraform_data}. The premise was true and unpinned until #7539's review: an
+ * SSH-provisioned `null_resource`, or a `provisioner` added to
+ * `hcloud_server.web`, would sit outside the line with the whole suite green.
+ * Pinning the premise is strictly better than widening the predicate for it —
+ * it fails in the PR that introduces the violation, naming the resource, and it
+ * needs no edit to the fail-open HCL parser four other assertions depend on.
+ */
+function resourceTypesWithProvisioners(
+  files: string[] = listInfraTfFiles(),
+): string[] {
+  const types = new Set<string>();
+  for (const f of files) {
+    let current: string | null = null;
+    for (const line of stripComments(readFileSync(f, "utf8")).split("\n")) {
+      const h = line.match(/^resource\s+"([A-Za-z0-9_]+)"\s+"[A-Za-z0-9_]+"\s*\{/);
+      if (h) {
+        current = h[1];
+        continue;
+      }
+      if (current && /^\s*provisioner\s+"[a-z-]+"\s*\{/.test(line)) {
+        types.add(current);
+      }
+    }
+  }
+  return [...types].sort();
+}
+
+/**
+ * Every workflow that opens a CF Tunnel SSH bridge — DERIVED, never restated.
+ *
+ * Guard 1 originally read one workflow while five use the bridge. A hardcoded
+ * list would reproduce the defect this file exists to catch: the deferral filed
+ * during review proposed a trigger reading "when a THIRD workflow adopts the
+ * shape", and three already had. Deriving means a sixth is guarded on arrival.
+ */
+function bridgeWorkflowPaths(): string[] {
+  const dir = resolve(REPO_ROOT, ".github/workflows");
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".yml") || f.endsWith(".yaml"))
+    .map((f) => resolve(dir, f))
+    .filter((abs) =>
+      /^\s*uses:\s*\.\/\.github\/actions\/cf-tunnel-ssh-bridge\s*$/m.test(
+        readFileSync(abs, "utf8"),
+      ),
+    )
+    .sort();
+}
+
 describe("bridge-less stage may not target an SSH-provisioned resource (#7539)", () => {
   const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
 
@@ -427,6 +480,22 @@ describe("bridge-less stage may not target an SSH-provisioned resource (#7539)",
 
   test("no terraform_data is targeted before a CF Tunnel SSH bridge, in ANY job", () => {
     expect(bridgelessOffenders(wf)).toEqual([]);
+  });
+
+  test("the bright line's PREMISE is pinned: only terraform_data carries provisioners", () => {
+    // If this ever fails, Guard 1 stopped being strictly stronger than the SSH
+    // predicate and the named type must be admitted to the walk.
+    expect(resourceTypesWithProvisioners()).toEqual(["terraform_data"]);
+  });
+
+  test("EVERY bridge-using workflow is guarded, not just this one", () => {
+    const paths = bridgeWorkflowPaths();
+    // Floor derived from the measured five; a derivation that silently narrows
+    // takes the coverage with it.
+    expect(paths.length).toBeGreaterThanOrEqual(5);
+    for (const abs of paths) {
+      expect(bridgelessOffenders(readFileSync(abs, "utf8"))).toEqual([]);
+    }
   });
 });
 
