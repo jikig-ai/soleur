@@ -105,6 +105,80 @@ whole battery rather than as one bad row.
   patches.** Recovery: wrote mutations to files. **Prevention:** write mutation scripts to files
   rather than nesting them in a heredoc inside another quoting context. One-off.
 
+## Addendum 2026-08-16 — a second round, found by the two seats I had not run
+
+The review above ran 5 of the ~12 seats the `code` classification calls for. At ship time I ran
+the two that were missing and genuinely relevant (`design-risk` was YES: the diff introduces four
+mechanisms), and they found **nine more defects, all green**, in the fixes for the nine above.
+
+The single worst one is the one no reviewer found — I found it while wiring their fix:
+
+**`tests/scripts/test-registry-replace-preflight.sh` measured 18/18 on my machine and 6/18 in CI.**
+The suite's own subject, `registry-replace-preflight.sh`, refuses its command seams when
+`GITHUB_ACTIONS` is set — the production-path guard I had added two commits earlier. CI sets that
+variable for every job. So the suite gating an irreversible production host replace was red
+exactly where it gates and green exactly where I ran it, and every local run I had cited as
+evidence was measuring a different program than CI would.
+
+The generalizable form, and it is sharper than the one above: **a guard that reads the environment
+to decide whether to refuse has TWO behaviours, and a suite that exercises one of them has
+measured half the program.** The litmus, asked once per environment-sensitive branch: *which
+environment does CI provide, and have I run the suite in it?* Not "does the guard work" — that
+question passes.
+
+The others, each the same shape as its round-one sibling one level in:
+
+- The stage pointer, fixed for `copy_*`, still sent `crane_install` — a `curl` and a `sha256sum`
+  **on the runner** — at registry-host disk, contradicting the detail printed beside it. The
+  inngest copy was worse: `unrouted`, whose own text reads "a workflow bug, not an infrastructure
+  fault", pointed at the same disk graph, and a `crane_verify` SUPPLY-CHAIN checksum mismatch did
+  too. The round-one commit said the sweep was done "by CLAIM rather than by file"; it then swept
+  the *replacement* by claim as well.
+- `REGISTRY_PREFLIGHT_MANUAL` was read by the script and set by **no caller**, so the documented
+  recovery from a dark replace did not exist — while the dispatcher's auto-filed comment told a
+  non-technical operator to use it. A `grep -rn` for the variable's own name returns one hit; that
+  grep is the whole test, and I did not run it.
+- `strip_comments` claimed to reproduce terraform's render strip and deleted **pre-existing blank
+  lines** the render preserves, so a blank-line-only edit compared identical and the host kept
+  booting stale bytes — under a message asserting they were identical.
+- P3 refused in the **modal** case (merge fires the release and the dispatcher on the same push),
+  turning every ordinary delivery back into "a human types `gh workflow run`".
+- `MIN_DEADLINE_S` was derived in the advisory guard and hard-coded in the **required** one, so the
+  first re-measurement would leave the merge-blocking check enforcing a stale floor.
+- Three T19/T20 starvation fixtures could not fail: the 8-of-17 sub-quota I added in round one
+  capped the flood below the level the assertion needed to survive. The fix that closed a
+  starvation bug made its own regression tests vacuous.
+- Three comments in the #7556 probe described a `latency:1m0s` pairing that round one deleted. One
+  told a future reader the probe cannot fire on a 1800s cut — the opposite of what the code does,
+  and the opposite of what is wanted.
+
+**The lesson about process, not code:** I judged 5 seats sufficient for a diff with no UI and no
+DB. That judgement was about *blast radius* and the missing seats were about *design*, which is
+orthogonal — and `design-risk` is exactly the flag that says so. Running the panel the
+classification prescribes is cheaper than discovering at ship time that the fix needs a second
+round, and the skill already says the panel is a phase ordering, not a menu.
+
+### Session Errors (round two)
+
+- **A suite green locally and red in CI, because of my own environment guard.** Recovery: `env -u
+  GITHUB_ACTIONS` in the runner; the one test needing the guard sets it explicitly. 23/23 both
+  ways. **Prevention:** when a guard branches on an env var CI sets, run the suite in both shapes
+  before citing either.
+- **Ran 5 of ~12 review seats on a `design-risk: yes` diff.** Recovery: ran the two missing
+  relevant seats at ship time; they found nine defects. **Prevention:** treat `design-risk` as
+  selecting the phase ORDER, never as licence to shrink the panel.
+- **A mutation broke syntax instead of logic and I nearly read its red as a KILL.** Recovery:
+  rewrote it against the actual `case` arms and asserted the anchor count first. **Prevention:**
+  the round-one rule (`assert s.count(old) == 1`) is necessary but not sufficient — also confirm
+  the mutated file still PARSES, or a syntax error masquerades as a killed mutant.
+- **Swept the pointer fix by claim, not by file — twice in the same PR.** Recovery: split
+  `crane_install` and `crane_*`/`unrouted` into families that assert no registry channel.
+  **Prevention:** after fixing a misattribution, enumerate every *other* label the same function
+  routes and state which family each lands in.
+- **Refreshed an acceptance record whose cited counts were stale.** Recovery: re-ran both suites
+  and wrote the observed numbers. **Prevention:** an acceptance record is a measurement; re-run
+  before ship rather than carrying the number that was true when written.
+
 ## Related
 
 - `2026-08-13-a-lower-bound-cannot-tell-a-measurement-from-a-constant.md`

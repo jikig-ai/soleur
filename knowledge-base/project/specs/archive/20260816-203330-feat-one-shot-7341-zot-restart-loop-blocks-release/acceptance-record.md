@@ -5,12 +5,12 @@ implementation rather than restated from the plan (plan-quoted numbers are preco
 
 | AC | Command | Result |
 |---|---|---|
-| 1 | `bash plugins/soleur/test/reusable-release-degraded-pointer.test.sh` | 21/21 — every loop-derived `copy_*` reason + `verify` emits the upload pointer with all three anchors |
+| 1 | `bash plugins/soleur/test/reusable-release-degraded-pointer.test.sh` | 25/25 passed — every loop-derived `copy_*` reason + `verify` emits the upload pointer with all three anchors; `bridge` host-health only; `crane_install` NEITHER channel (runner family, added after the design-validity pass) |
 | 2 | same suite (separate assertions) | `bridge`/`crane_install` still emit the host-health pointer AND not the upload pointer — separately falsifiable |
 | 3 | same suite, AC3 section | each of the three `BETTERSTACK_QUERY_*` absent individually → FAILED READ, never a no-samples measurement; plus an error-payload-on-exit-0 arm |
 | 4 | `grep -rn 'zot_mirror_diagnosis' --include=*.yml --include=*.sh` | 3 invocations (1 in `reusable-release.yml`, 2 in `cf-tunnel-registry-bridge/action.yml`) + 1 `declare -F` guard. Both action.yml sites already pass an explicit non-measurement string; `reusable-release.yml` was the sole outlier |
 | 5 | `bash scripts/zot-mirror-diagnosis.test.sh` | 54 passed, `MIN_ASSERTIONS=50` floor unchanged |
-| 6 | `bash apps/web-platform/infra/zot-log-shipper.test.sh` | 164 passed, `>= 150` floor and `CANARY_OK` intact |
+| 6 | `bash apps/web-platform/infra/zot-log-shipper.test.sh` | 174 passed, 0 failed, `>= 174` floor and `CANARY_OK` intact |
 | 7 | `bash apps/web-platform/infra/zot-config-deadlines.test.sh` | 8/8 against the **rendered** config via `registry-userdata-budget.sh` |
 | 8 | same suite, negative control | pinned digest rejects `zzzboguskey`: `'HTTP' has invalid keys: zzzboguskey` |
 | 9 | Guard 2 battery row 1 | widened `JQ_TICK` + unwidened `read -r` → RED |

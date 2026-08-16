@@ -503,3 +503,64 @@ Two corrections to the amendment above, both from a nine-agent review of the fix
   A2 as ADR-169 scopes it — the predicate is "the pull path can be re-materialised", not "every
   platform is intact" — but it is a narrowing of the plain-language reading, so it is stated
   here rather than left to be discovered.
+
+## Amendment 2026-08-16 — merge-to-`main` now authorizes a volume-preserving registry replace (#7555)
+
+This ADR's question is "what authorizes destroying the sole pull path". #7555 changed the answer
+for one class of destroy, so the change is recorded here rather than only in ADR-190.
+
+### What changed
+
+`registry-host-replace` is `workflow_dispatch`-only and carries **no `environment:` reviewer gate
+and no typed `confirm` token** — verified against the job's own guard. So before #7555 the entire
+human authorization for recreating the fleet's sole pull path was *an operator deliberately typed
+a dispatch*. Nothing in the repo fired it, which is why `apps/web-platform/infra/cloud-init-registry.yml`
+could merge and sit **inert** — the defect #7555 exists to remove.
+
+`.github/workflows/registry-host-replace-dispatch.yml` now fires that replace on a merge to `main`
+whose **rendered, comment-stripped** `cloud-init-registry.yml` differs. The interposed judgement is
+a delta gate plus a read-only preflight (`scripts/registry-replace-preflight.sh`), not a human.
+
+### Why this is a different class from the D10 destroy this ADR was written for
+
+The replace **preserves the store volume** (`store_destroyed==0`). D10's recut destroys it, which is
+why that path earns a rehearsal-based gate and this one deliberately does not (ADR-190
+§"Why the replace pre-check is not the D10 recut gate"). The loss window here is a host
+recreate, not a re-materialisation from GHCR.
+
+That is a real distinction, but it is not a licence: #7071 retracted the host→GHCR fallback, so
+while the fresh host boots, **nothing pulls**. The window is deploy-blocking, and the authorization
+question is therefore still this ADR's.
+
+### The two gating predicates, walked against the independence criterion
+
+> A gate on an irreversible destroy may not depend on the component whose failure motivates it.
+
+Applied honestly, **both predicates violate it**, and the criterion predicted both defects that
+review found:
+
+| Predicate | Reads | Component whose failure motivates the replace? | Consequence |
+|---|---|---|---|
+| P1 — local-cache pull events | the pull path | **yes** | a replace outage itself drives hosts to local-cache, so P1 blocks the recovery for 24 h |
+| P3 — in-flight zot-writing runs | the release pipeline | **yes** | merging fires the release and the dispatcher on the same push, so P3's refusing state is the *modal* one |
+
+Neither was reasoned to from this criterion at design time; both were found empirically. The
+remedies are the criterion's own: P1 is skipped on the manual re-fire arm (the `--manual` flag,
+derived from `github.event_name`), and P3 **waits** for the writers to drain before refusing
+rather than converting the automated path back into an operator step.
+
+P4 (a live zot serving probe) remains deliberately absent, and here the criterion is decisive
+rather than advisory: #7555's motivating symptom **is** a degraded zot, so a serving predicate
+would refuse precisely when the fix is most needed. Same reasoning that removed D10's A5
+(ground 2 above).
+
+### Residual, stated rather than discovered
+
+The delta gate reads `cloud-init-registry.yml` only. The rendered `user_data` also depends on
+`templatefile` inputs — `zot_image`, the derived cgroup cap — that live in `zot-registry.tf` and
+`variables.tf`. **A zot digest bump therefore changes the bytes the host boots without firing this
+dispatcher**, and ADR-190's standing instruction is to re-measure on every zot bump. Closing it
+means comparing the *render* at both SHAs (`registry-userdata-budget.sh` already produces exactly
+those bytes offline, with no credentials and no state) instead of comparing the template file.
+That is the right shape and is not implemented here; it is tracked with the #7556 follow-through
+rather than left implicit in a passing gate.
