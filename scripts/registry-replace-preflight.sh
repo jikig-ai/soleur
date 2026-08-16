@@ -43,9 +43,28 @@ QUERY_CMD="${REGISTRY_PREFLIGHT_QUERY_CMD:-${ROOT}/scripts/betterstack-query.sh}
 RUNS_CMD="${REGISTRY_PREFLIGHT_RUNS_CMD:-gh}"
 WINDOW="${REGISTRY_PREFLIGHT_WINDOW:-24h}"
 
+# THE TEST SEAMS ARE REFUSED ON THE PRODUCTION PATH (#7555 review). "tests only" was a comment,
+# not a mechanism: `REGISTRY_PREFLIGHT_QUERY_CMD=/bin/true REGISTRY_PREFLIGHT_RUNS_CMD=/bin/true`
+# makes every predicate pass and prints a verdict line BYTE-IDENTICAL to a real clean reading —
+# on the sole gate in front of an irreversible production host replace. The sibling D10 gate
+# already carries this refusal; it was the one thing worth copying from it.
+if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+  for _seam in REGISTRY_PREFLIGHT_QUERY_CMD REGISTRY_PREFLIGHT_RUNS_CMD REGISTRY_PREFLIGHT_WINDOW; do
+    if [[ -n "${!_seam:-}" ]]; then
+      echo "::error::registry-replace-preflight: ${_seam} is set inside GitHub Actions. A seam set on the production path can manufacture a CLEAR verdict. Refusing." >&2
+      echo "verdict=REFUSED predicate=SEAM"
+      exit 1
+    fi
+  done
+fi
+
 abort() { # $1 = predicate, rest = message
   local p="$1"; shift
-  echo "::error::registry-replace-preflight: ${p} ABORT — $*" >&2
+  # Strip CR/LF and non-printables: `::error::` is LINE-ORIENTED, so an embedded newline in
+  # captured vendor stderr terminates the annotation and emits the remainder as raw log lines —
+  # including a forged `::add-mask::`. This repo flags that exact class in reusable-release.yml.
+  local _m; _m="$(printf '%s' "$*" | tr -d '\n\r' | LC_ALL=C tr -cd '\40-\176')"
+  echo "::error::registry-replace-preflight: ${p} ABORT — ${_m}" >&2
   echo "verdict=REFUSED predicate=${p}"
   exit 1
 }
@@ -75,8 +94,15 @@ fi
 # have already failed. A hit therefore means the fleet is serving off its last tier — and darking
 # zot for a replace removes the last source it has. This is #6400 exactly: a degraded fallback is
 # what turned a registry outage into a total deploy outage.
+# P1 IS SKIPPED ON THE MANUAL RE-FIRE ARM (#7555 review). During a replace outage deploys fall
+# back to local-cache, so P1 would abort for 24h — and the documented rollback for a failed or
+# dark replace IS "re-fire the dispatcher". That is verbatim the anti-pattern this file's own
+# header rejects for D10's A4: it would block the recovery on the condition the recovery cures.
+# The `reason` input required by workflow_dispatch is the human judgement P1 stands in for.
 lc_hits="$(printf '%s\n' "$PROBE_OUT" | { grep -c 'registry=local-cache' || true; })"
-if [[ "${lc_hits:-0}" -gt 0 ]]; then
+if [[ "${REGISTRY_PREFLIGHT_MANUAL:-0}" == "1" && "${lc_hits:-0}" -gt 0 ]]; then
+  echo "NOTE: P1 observed ${lc_hits} local-cache event(s) but this is a MANUAL re-fire, which is the documented recovery path for a failed or dark replace. Not gating."
+elif [[ "${lc_hits:-0}" -gt 0 ]]; then
   abort P1 "${lc_hits} local-cache pull event(s) in the last ${WINDOW}. The fleet is already falling back to its LAST tier, so replacing the registry host now would remove the only remaining pull source. Resolve the pull path first, then re-dispatch."
 fi
 
@@ -97,14 +123,27 @@ fi
 # ── P3 — GATING. Do not replace the host out from under an in-flight push. ──────────────────
 # Replacing mid-push strands a partially-uploaded manifest on the PRESERVED volume. Directly
 # on-point for #7555, whose motivating failure mode is large-layer pushes.
-runs_json="$("$RUNS_CMD" run list --workflow=web-platform-release.yml --status=in_progress --limit 20 --json databaseId 2>/dev/null)"
-runs_rc=$?
+# EVERY WORKFLOW THAT CRANE-COPIES INTO ZOT, not just the web release (#7555 review): the hazard
+# is "a replace mid-push strands a partial manifest on the preserved volume", and three workflows
+# can be pushing. Derived rather than remembered:
+#   grep -rln 'crane copy' .github/workflows/
+ZOT_WRITER_WORKFLOWS="${REGISTRY_PREFLIGHT_ZOT_WRITERS:-web-platform-release.yml build-inngest-config-bundle.yml build-inngest-bootstrap-image.yml}"
+# `queued` COUNTS. Merging fires the release and this dispatcher on the SAME push, so at preflight
+# time the release is very likely queued, not in_progress — and `--status` takes one value, so the
+# old single-status filter reported 0 for exactly the case P3 exists to catch.
+p3_err="$(mktemp)"
+in_progress=0
+runs_rc=0
+for _wf in $ZOT_WRITER_WORKFLOWS; do
+  _json="$("$RUNS_CMD" run list --workflow="$_wf" --limit 30 --json status 2>>"$p3_err")" || { runs_rc=$?; break; }
+  _n="$(printf '%s' "$_json" | { grep -oE '"status":"(queued|in_progress|waiting|requested|pending)"' || true; } | grep -c . || true)"
+  in_progress=$(( in_progress + _n ))
+done
 if (( runs_rc != 0 )); then
-  abort P3 "could not list in-progress release runs (gh exited ${runs_rc}). Refusing rather than replacing the registry host with an unknown number of pushes in flight."
+  abort P3 "could not list in-flight runs for the zot-writing workflows (gh exited ${runs_rc}): $(head -c 300 "$p3_err"). Refusing rather than replacing the registry host with an unknown number of pushes in flight."
 fi
-in_progress="$(printf '%s' "$runs_json" | { grep -o 'databaseId' || true; } | grep -c . || true)"
 if [[ "${in_progress:-0}" -gt 0 ]]; then
-  abort P3 "${in_progress} release run(s) in progress. A replace mid-push strands a partial manifest on the preserved volume. Wait for them to finish, then re-dispatch."
+  abort P3 "${in_progress} in-flight run(s) across the zot-writing workflows (queued or running). A replace mid-push strands a partial manifest on the preserved volume. Wait for them to finish, then re-dispatch."
 fi
 
 # ── P4 — DELIBERATELY ABSENT: no live zot serving probe. ────────────────────────────────────

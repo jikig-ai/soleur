@@ -65,6 +65,7 @@ mk_query; mk_runs
 run_sut() {
   env REGISTRY_PREFLIGHT_QUERY_CMD="$TMP/query.sh" \
       REGISTRY_PREFLIGHT_RUNS_CMD="$TMP/gh.sh" \
+      REGISTRY_PREFLIGHT_ZOT_WRITERS="web-platform-release.yml" \
       "$@" bash "$SUT" 2>"$TMP/err" ; RC=$?
 }
 
@@ -135,7 +136,7 @@ else
 fi
 
 # --- P3: an in-progress release -> REFUSED -------------------------------------------------
-run_sut STUB_LOCAL_CACHE_ROWS="" STUB_RUNS_JSON='[{"databaseId":123}]' > "$TMP/out"
+run_sut STUB_LOCAL_CACHE_ROWS="" STUB_RUNS_JSON='[{"status":"in_progress"}]' > "$TMP/out"
 if [[ "$RC" -ne 0 ]] && grep -q 'predicate=P3' "$TMP/out"; then
   pass "P3 synthesized red: an in-progress release run REFUSES the replace"
 else
@@ -148,6 +149,25 @@ if [[ "$RC" -ne 0 ]] && grep -q 'predicate=P3' "$TMP/out"; then
   pass "P3 fail-closed: an unlistable run set REFUSES rather than assuming zero"
 else
   fail "P3 assumed zero in-flight releases when it could not list them: rc=$RC"
+fi
+
+# --- P3: a QUEUED run must gate too. Merging fires the release and the dispatcher on the SAME
+# push, so at preflight time the release is very likely queued. `--status` takes one value, so the
+# old single-status filter reported 0 for exactly the case P3 exists to catch.
+run_sut STUB_LOCAL_CACHE_ROWS="" STUB_RUNS_JSON='[{"status":"queued"}]' > "$TMP/out"
+if [[ "$RC" -ne 0 ]] && grep -q 'predicate=P3' "$TMP/out"; then
+  pass "P3 synthesized red: a QUEUED release run REFUSES the replace (not just in_progress)"
+else
+  fail "P3 missed a queued run: rc=$RC — this is the case the same-merge race actually produces"
+fi
+
+# --- the seam guard: a seam set on the production path must REFUSE, not manufacture CLEAR ------
+SEAM_OUT="$(env GITHUB_ACTIONS=true REGISTRY_PREFLIGHT_QUERY_CMD=/bin/true \
+  REGISTRY_PREFLIGHT_RUNS_CMD=/bin/true bash "$SUT" 2>"$TMP/seamerr")"; SEAM_RC=$?
+if [[ "$SEAM_RC" -ne 0 ]] && grep -q 'predicate=SEAM' <<<"$SEAM_OUT"; then
+  pass "seam guard: a test seam set inside GitHub Actions REFUSES rather than reporting CLEAR"
+else
+  fail "seam guard absent: seams manufactured a verdict on the production path (rc=$SEAM_RC)"
 fi
 
 # --- P4 must stay absent, and the reason must stay recorded -------------------------------
@@ -176,8 +196,8 @@ fi
 
 # --- anti-vacuity floor -------------------------------------------------------------------
 TOTAL=$((PASS+FAIL))
-if [[ "$TOTAL" -lt 15 ]]; then
-  fail "anti-vacuity: ran $TOTAL assertions, expected >= 15. Fix the dispatch, do not lower the floor."
+if [[ "$TOTAL" -lt 17 ]]; then
+  fail "anti-vacuity: ran $TOTAL assertions, expected >= 17. Fix the dispatch, do not lower the floor."
 fi
 
 echo "=== Results: $PASS/$((PASS+FAIL)) passed, $FAIL failed ==="

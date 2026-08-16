@@ -61,37 +61,74 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      # THE REGISTRATION PATH MUST NOT DELIVER. A push that touched only this workflow file is a
-      # registration event, not a user_data change, and replacing production because someone
-      # edited a comment here would be the #6425 defect. Computed from the actual changed files
-      # rather than trusted from the paths filter, which is an OR across both entries.
-      - name: Decide whether this push carries a user_data change
+      # WHAT MAKES THIS A DELIVERY, and why it is not "the file changed".
+      #
+      # `cloud-init-registry.yml` is ~1000 lines and is not only zot config — it also carries the
+      # log-shipper bash. Triggering on the PATH means any future comment typo in it destroys and
+      # recreates the production registry host, and the target job carries NO `environment:`
+      # reviewer gate and NO `confirm=` token (verified), so path-triggering would remove the last
+      # human decision in front of a pull-path outage.
+      #
+      # So the gate asks whether the bytes that REACH THE HOST changed. `zot-registry.tf` applies
+      # `registry_rationale_strip` (`/(?m)^[ \t]*#([ \t][^\n]*)?\n/`) at render, so a comment-only
+      # edit renders byte-identical — comparing the stripped file at both SHAs reproduces that
+      # without needing terraform in this job.
+      #
+      # THE DIFF IS FETCHED VIA THE COMPARE API, NOT `git diff`. actions/checkout is fetch-depth:1,
+      # so `github.event.before` is not in the object store and `git diff` exits 128 — which, with
+      # the fail-closed arm below, made EVERY delivery push exit 1 and left `workflow_dispatch` as
+      # the only working route, i.e. exactly the operator step this workflow exists to remove.
+      # `web-platform-release.yml` already documents this trap verbatim.
+      - name: Decide whether this push changes the bytes the host boots
         id: gate
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+          CFG: apps/web-platform/infra/cloud-init-registry.yml
         run: |
-          set -euo pipefail
+          set -uo pipefail
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             echo "deliver=true" >> "$GITHUB_OUTPUT"
             echo "Manual dispatch — proceeding."
             exit 0
           fi
-          # rc is captured on its own line: inside `if ! cmd`, `$?` is the negated test result.
-          changed=""
           rc=0
-          changed="$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" 2>/dev/null)" || rc=$?
-          if [[ "$rc" -ne 0 || -z "$changed" ]]; then
-            # A push whose base is unavailable (force-push, first push) cannot be classified.
-            # Fail CLOSED: do not replace a production host on an unreadable diff.
-            echo "::error::could not determine the changed files for this push (rc=$rc). Refusing to dispatch a registry host replace on an unclassifiable diff — re-fire manually via workflow_dispatch once verified."
+          changed="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BEFORE_SHA}...${AFTER_SHA}" \
+            --jq '.files[].filename' 2>/dev/null)" || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::could not resolve the changed-file set via the compare API (rc=$rc). Refusing to dispatch a registry host replace on an unclassifiable diff — re-fire via workflow_dispatch once verified."
             exit 1
           fi
-          if grep -qx 'apps/web-platform/infra/cloud-init-registry.yml' <<<"$changed"; then
-            echo "deliver=true" >> "$GITHUB_OUTPUT"
-            echo "user_data change detected — the merged change is inert until a replace runs."
-          else
+          if ! grep -qx "$CFG" <<<"$changed"; then
             echo "deliver=false" >> "$GITHUB_OUTPUT"
-            echo "Registration-only push (this workflow file changed, user_data did not). Not dispatching."
+            echo "Registration-only push (user_data untouched). Not dispatching."
+            exit 0
+          fi
+          # The path changed — now ask whether the HOST-VISIBLE bytes changed.
+          strip_comments() { sed -E 's/^[[:space:]]*#([[:space:]].*)?$//' "$1" | grep -v '^$'; }
+          befr="$(mktemp)"; aftr="$(mktemp)"
+          brc=0; arc=0
+          gh api "repos/${GITHUB_REPOSITORY}/contents/${CFG}?ref=${BEFORE_SHA}" \
+            --jq '.content' 2>/dev/null | base64 -d > "$befr" || brc=$?
+          gh api "repos/${GITHUB_REPOSITORY}/contents/${CFG}?ref=${AFTER_SHA}" \
+            --jq '.content' 2>/dev/null | base64 -d > "$aftr" || arc=$?
+          if [[ "$brc" -ne 0 || "$arc" -ne 0 || ! -s "$aftr" ]]; then
+            # FAIL CLOSED TOWARD DELIVERING, not toward skipping: the path did change, so a
+            # comparison we could not make must not be read as "nothing to deliver". The preflight
+            # below still gates, and an unnecessary replace is recoverable where an undelivered
+            # fix is silent.
+            echo "deliver=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::could not fetch both revisions of $CFG (before rc=$brc, after rc=$arc) — delivering anyway rather than silently skipping a real change."
+            exit 0
+          fi
+          if diff -q <(strip_comments "$befr") <(strip_comments "$aftr") >/dev/null 2>&1; then
+            echo "deliver=false" >> "$GITHUB_OUTPUT"
+            echo "$CFG changed, but only in comments — the rendered user_data is byte-identical, so the running host boots the same bytes. Not dispatching."
+          else
+            echo "deliver=true" >> "$GITHUB_OUTPUT"
+            echo "$CFG changed in host-visible bytes — the merged user_data is inert until a replace runs."
           fi
 
       - name: Pull-path preflight (read-only; refuses rather than firing blind)
@@ -104,7 +141,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          bash scripts/registry-replace-preflight.sh | tee "$GITHUB_STEP_SUMMARY"
+          # tee -a: GHA convention is append; plain tee TRUNCATES the summary.
+          bash scripts/registry-replace-preflight.sh | tee -a "$GITHUB_STEP_SUMMARY"
 
       # No `if: always()` here, and no fallback arm: a refused preflight must stop the job with
       # the preflight's own ::error:: as the last word. It files nothing and dispatches nothing.
