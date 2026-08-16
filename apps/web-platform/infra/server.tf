@@ -745,7 +745,18 @@ resource "terraform_data" "zot_consumer_probe_install" {
 # Detection for the twelve-day dark-host outage, installed on the CONSUMER. Nothing here touches
 # 10.0.1.40, which is the point: cloud-init/bootstrap changes reach that host ONLY via
 # `apply_target=inngest-host-replace`, so anything installed there ships no detection until a
-# replace is dispatched. This block is inside the per-merge `-target=` set, so it works on merge.
+# replace is dispatched.
+#
+# GROUP BY TRANSPORT, NOT BY FEATURE (#7539). This resource is SSH-provisioned against web-1, so it
+# belongs to the apply job's POST-BRIDGE stage — the one that runs after `cf-tunnel-ssh-bridge`
+# exports TF_VAR_ci_ssh_private_key — alongside its three structurally identical siblings
+# (private_nic_guard_install, zot_consumer_probe_install, git_data_probe_install). It shipped in the
+# BRIDGE-LESS stage instead, batched next to the other inngest-consumer resources
+# (betteruptime_heartbeat.inngest_consumer, doppler_secret.inngest_consumer_url) by feature; those
+# two are non-SSH and belong there, this one did not. It reddened main's apply for six consecutive
+# pushes. Both stages run per-merge, so "it works on merge" was true of either and is not the
+# distinction that matters — bridge-vs-bridge-less is. Enforced by the Guard 1 bright line in
+# plugins/soleur/test/terraform-target-parity.test.ts. See ADR-154.
 resource "terraform_data" "inngest_consumer_probe_install" {
   # Reload Vector before (re)enabling the timer (see private_nic_guard_install; probe-first
   # ordering) — the probe's fault classification is only readable off-box once Source 4 carries

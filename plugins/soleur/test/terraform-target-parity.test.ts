@@ -6,7 +6,8 @@
 // the main saved-tfplan apply and only land via an explicit `-target=` over the
 // CF Tunnel SSH bridge. This test asserts each such resource appears in the UNION
 // of:
-//   • apply-web-platform-infra.yml's SSH `-target=` set (the 7 server.tf siblings)
+//   • apply-web-platform-infra.yml's SSH `-target=` set (the server.tf siblings,
+//     applied over the CF Tunnel SSH bridge; count derived, never restated)
 //   • apply-deploy-pipeline-fix.yml's `-target=` set (deploy_pipeline_fix +
 //     infra_config_handler_bootstrap)
 //   • the exclusion allowlist (root_authorized_keys — stays operator-local per the
@@ -83,7 +84,13 @@ const EXCLUSION_ALLOWLIST = new Set<string>(["root_authorized_keys"]);
 // SSH-provisioned resource raises the count without a brittle exact-match edit —
 // the union-coverage assertion is what enforces correctness; this only guards
 // against the predicate silently collapsing to zero (e.g. a parser regression).
-const MIN_SSH_PROVISIONED = 10; // #6122: +terraform_data.registry_insecure_config (zot insecure-registries, running-host SSH delivery)
+// #7539: raised 10 -> 17, the MEASURED size of the set. The old floor left a
+// headroom of 7 -- eight of the seventeen are unpinned by the name list below,
+// so a resource could silently drop out of the SSH set with the whole suite
+// green. That matters beyond this sentinel: Guard 1 intersects against
+// collectSshProvisioned(), so a narrowed set silently narrows the guard too.
+// Still `>=`, so adding an SSH-provisioned resource does not need an edit here.
+const MIN_SSH_PROVISIONED = 17;
 
 /** Strip `#` and `//` line comments, quote-aware, leaving string contents intact. */
 function stripLineComment(line: string): string {

@@ -17,10 +17,12 @@
 #      (a) the main saved-`tfplan` apply covers the 80 non-SSH resources;
 #      (b) a SEPARATE token-gated SSH apply, run AFTER the post-apply token sync
 #          and behind the CF Tunnel SSH bridge (.github/actions/cf-tunnel-ssh-bridge),
-#          covers the 8 SSH-provisioned `terraform_data.*` siblings in server.tf
-#          (disk_monitor_install, resource_monitor_install, fail2ban_tuning,
-#          journald_persistent, docker_seccomp_config, apparmor_bwrap_profile,
-#          orphan_reaper_install). The GitHub runner egress IP is not in
+#          covers EVERY SSH-provisioned `terraform_data.*` resource in server.tf.
+#          The set is derived, never restated here: an enumeration in prose rots
+#          silently as the set grows (#7539 shipped four such stale counts).
+#          plugins/soleur/test/terraform-target-parity.test.ts is the authority --
+#          it derives the set from server.tf and fails when one is targeted
+#          before the bridge. The GitHub runner egress IP is not in
 #          `var.admin_ips`, so the bridge (not a direct :22 dial) is the access
 #          path. Before #4844 these 7 silently drifted: they were excluded here
 #          with no apply path, and apply-deploy-pipeline-fix.yml only `-target`s
@@ -446,9 +448,23 @@ jobs:
           HEAD_MSG: ${{ github.event.head_commit.message }}
         # ALLOW-LIST MAINTENANCE: if a future PR adds a new `.tf` resource at
         # `apps/web-platform/infra/*.tf`, append a matching `-target=<addr>`
-        # line below (and exclude server.tf SSH-provisioned resources per
-        # header comment). `scheduled-terraform-drift.yml` is the 12h backstop
-        # if you forget — drift surfaces in the next cron run.
+        # line below.
+        #
+        # GROUP BY TRANSPORT, NOT BY FEATURE. This step is BRIDGE-LESS: it runs
+        # before `cf-tunnel-ssh-bridge` exports TF_VAR_ci_ssh_private_key, so an
+        # SSH-provisioned resource here bakes `agent = true` and dies on
+        # SSH_AUTH_SOCK. Those belong in the post-bridge apply step below.
+        # This instruction already said so and did not hold: it landed 2026-05-20
+        # and `terraform_data.inngest_consumer_probe_install` was appended six
+        # lines beneath it on 2026-08-12, batched beside the other
+        # inngest-consumer resources by feature (#7539). Prose is not the
+        # enforcement -- Guard 1 in
+        # plugins/soleur/test/terraform-target-parity.test.ts is, and it fails
+        # the PR rather than the apply.
+        #
+        # `scheduled-terraform-drift.yml` is a 12h backstop for a FORGOTTEN
+        # resource; it did not surface #7539, because a MISPLACED resource is
+        # declared and targeted -- just on the stage that cannot provision it.
         run: |
           # We capture terraform plan's exit code in $rc so a legitimate failure surfaces
           # with the ::error:: below instead of aborting silently.
@@ -582,7 +598,6 @@ jobs:
               -target=betteruptime_heartbeat.web_nic_guard \
               -target=betteruptime_heartbeat.inngest_consumer \
               -target=doppler_secret.inngest_consumer_url \
-              -target=terraform_data.inngest_consumer_probe_install \
               -target=doppler_secret.web_zot_consumer_url \
               -target=doppler_secret.web_nic_guard_url \
               -target=doppler_service_token.web_probes \
@@ -819,7 +834,9 @@ jobs:
       # that one run because GH Actions resolves secrets at job-start,
       # not step-start. The warning is non-fatal; the operator re-fires
       # the workflow once after first merge via `gh workflow run
-      # apply-web-platform-infra.yml --ref main -F reason='bootstrap'`.
+      # apply-web-platform-infra.yml --ref main -f apply_target=manual-rerun`
+      # (the `apply` job requires apply_target=manual-rerun on a dispatch; a bare
+      # `-F reason=...` leaves apply_target at its default and the job does not run).
       # The local-fallback script
       # `apps/web-platform/infra/scripts/sync-ci-ssh-access-token.sh`
       # remains available as backup. Operator follow-through obligation
@@ -894,7 +911,7 @@ jobs:
           TOKEN_ID=$(doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain 2>/dev/null || true)
           if [[ -z "$TOKEN_ID" ]]; then
             echo "ssh_apply_skip=true" >> "$GITHUB_OUTPUT"
-            echo "::warning::first-bootstrap: CI_SSH_ACCESS_TOKEN_ID absent in Doppler prd_terraform — the 8 SSH-provisioned resources are deferred to the next run after the token sync lands. The non-SSH apply + token sync above still succeeded."
+            echo "::warning::first-bootstrap: CI_SSH_ACCESS_TOKEN_ID absent in Doppler prd_terraform — every SSH-provisioned resource is deferred to the next run after the token sync lands. The non-SSH apply + token sync above still succeeded."
           else
             echo "ssh_apply_skip=false" >> "$GITHUB_OUTPUT"
           fi
@@ -915,14 +932,14 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         # No destroy-guard on this step (data-integrity Q4 / AC9): the
         # destroy-guard-filter-web-platform.jq scope is Cloudflare-resource-only
-        # and would never flag a `terraform_data` replace, AND none of the 7
+        # and would never flag a `terraform_data` replace, AND none of the SSH-provisioned
         # resources has a `when = destroy` provisioner — a triggers_replace
         # destroy+recreate is a pure state-entry swap with no on-host teardown.
         # A future maintainer adding a destroy-provisioned SSH resource here MUST
         # add guard coverage.
         #
         # This is a SEPARATE `terraform apply` (not the saved tfplan), so it runs
-        # its own internal plan against the 8 targets. R2 backend creds (bare
+        # its own internal plan against its target set. R2 backend creds (bare
         # AWS_ACCESS_KEY_ID/_SECRET) are already in $GITHUB_ENV from "Extract
         # backend credentials" and persist across steps; `--name-transformer
         # tf-var` injects TF_VAR_* doppler secrets but passes those bare AWS_*
@@ -948,7 +965,8 @@ jobs:
               -target=terraform_data.cron_egress_firewall \
               -target=terraform_data.private_nic_guard_install \
               -target=terraform_data.zot_consumer_probe_install \
-              -target=terraform_data.git_data_probe_install
+              -target=terraform_data.git_data_probe_install \
+              -target=terraform_data.inngest_consumer_probe_install
 
       # --- #6438/#6548: measured-beat ARM gate (ADR-117 automated) ------------------------------
       # The brand-critical step (#6400 shape prevention): a heartbeat that ships GREEN-but-inert is
