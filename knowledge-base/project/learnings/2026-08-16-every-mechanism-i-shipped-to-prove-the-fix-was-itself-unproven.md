@@ -175,6 +175,24 @@ round, and the skill already says the panel is a phase ordering, not a menu.
   `crane_install` and `crane_*`/`unrouted` into families that assert no registry channel.
   **Prevention:** after fixing a misattribution, enumerate every *other* label the same function
   routes and state which family each lands in.
+- **A positive control on the QUERY PATH is not a positive control on the WINDOW.** I read an empty
+  Better Stack result as "the channel is dark since 2026-08-14 19:06Z" and filed it as a P1
+  (#7569) whose title said the pull path "is currently unobservable". At ship time — only because
+  the gate forced me to enroll the tracker — I re-measured and found the channel fully alive, with
+  rows minutes old. Recovery: re-scoped #7569 to what is actually established. **Prevention:** the
+  72 h control I ran proved `betterstack-query.sh` *runs*; it did not rule out that script's OWN
+  documented short-answer mode (`remote(..._logs)` is a ~40-minute hot window, older rows in S3).
+  A gap is only a finding when a SECOND independent marker, on a different emitter, shows the same
+  window — which is what eventually made this one real (both `SOLEUR_ZOT_DISK` and
+  `SOLEUR_ZOT_LOG` stop ~08-14 19:00 and resume ~08-16 20:45). Run the control on the WINDOW and
+  the MARKER you are about to make a claim about, not merely on the tool.
+- **A regression detector enrolled on a CLOSED issue never runs.** The probe for this exact channel
+  (`zot-log-channel-7440.sh`) was hosted on #7455, which is closed, and `sweep-followthroughs.sh`
+  lists `--state open` — a permanent silent no-op, documented in the probe's own header and still
+  shipped that way. It is why a ~49-hour telemetry outage was found by hand. Recovery: re-homed the
+  directive onto the open #7569. **Prevention:** when a follow-through probe is kept as a
+  *regression* detector after its original condition closes, it needs a LIVE host issue — closing
+  the tracker retires the detector with it.
 - **Refreshed an acceptance record whose cited counts were stale.** Recovery: re-ran both suites
   and wrote the observed numbers. **Prevention:** an acceptance record is a measurement; re-run
   before ship rather than carrying the number that was true when written.

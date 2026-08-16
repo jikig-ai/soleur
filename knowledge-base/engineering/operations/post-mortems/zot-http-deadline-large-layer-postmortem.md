@@ -32,7 +32,8 @@ The upload started and received a session id each time, then the peer went away 
 | 2026-08-13 | The run's own `SOLEUR_ZOT_DISK` diagnostic returns **no `zot_restarts` samples**. The unconditional pointer routes the reader to disk/restart telemetry regardless. |
 | 2026-08-13 22:28 | Measured refutation posted to #7341: store not full, `zot_restarts=0`, uptime monotonic. |
 | 2026-08-14 18:39 | #7341 **auto-closes on its own sweeper** — `pcent=12`, slope `-0.29pp/day`, 550 samples/72 h. |
-| 2026-08-14 19:06:58 | The registry container-log channel goes dark (#7569, filed by this work, confirmed with a 72 h positive control). |
+| 2026-08-14 19:06:58 | The registry's log delivery stops (#7569, filed by this work). The host keeps serving — `zot_restarts=0`, `pcent` 12→14 — so this is a telemetry outage, not a registry outage. |
+| 2026-08-16 20:45 | Log delivery resumes on its own; root cause unestablished. Corroborated by two independent markers, 8 consecutive heartbeat buckets. |
 | 2026-08-16 | Root cause established, fix + guards + delivery dispatcher shipped in #7552. |
 
 ## Participants and Systems Involved
@@ -57,7 +58,7 @@ Initially — and wrongly — attributed to #7341's disk-full restart loop, on t
 
 ## Recovery verification
 
-Guard 3 renders the config and **boots the pinned zot digest against it**, with a `zzzboguskey` negative control. The #7556 probe verifies delivery off-box by reading zot's own boot `configuration settings` line. Run on 2026-08-16 it returned **TRANSIENT (exit 2)** — correctly refusing to certify delivery while #7569 has the channel dark, rather than reporting a false PASS.
+Guard 3 renders the config and **boots the pinned zot digest against it**, with a `zzzboguskey` negative control. The #7556 probe verifies delivery off-box by reading zot's own boot `configuration settings` line. Run on 2026-08-16 it returned **TRANSIENT (exit 2)** — correctly refusing to certify delivery it could not yet observe, rather than reporting a false PASS. (The `configuration settings` line is emitted at boot, and the replace had not run.)
 
 # Incident Post-Mortem Analysis
 
@@ -106,5 +107,5 @@ One day of diagnosis routed at a stale cause, plus two review rounds' worth of r
 | Issue | Action | Status |
 |---|---|---|
 | #7556 | Soak-verify the raised deadlines landed on the running host and the `i/o timeout` sub-mode stopped; enrolled with the sweeper, `earliest=2026-08-21` | open |
-| #7569 | Restore the registry container-log channel, dark since 2026-08-14 19:06Z — it blocks #7556 from reading its own evidence, and it is the same channel that was silent when this incident needed it | open |
+| #7569 | Now the LIVE host for the channel regression detector. Delivery recovered on its own 2026-08-16 20:45Z with root cause unestablished; the probe that should have reported the ~49h outage was enrolled on #7455, which is CLOSED, and the sweeper lists `--state open` — so it had never run | open |
 | #7582 | Make the replace dispatcher compare the rendered `user_data` at both SHAs rather than the template, so a zot digest bump cannot merge inert | open |

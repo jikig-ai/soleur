@@ -554,10 +554,15 @@ rather than converting the automated path back into an operator step.
 
 P4's absence (no live serving probe) is defensible only because something else eventually verifies
 the host: #7556 reads zot's own boot `configuration settings` line out of the warehouse. That is a
-**standing assumption written into the design**, and #7569 falsified it — the container-log channel
-went dark on 2026-08-14 19:06Z, so at the moment of writing, a replace's outcome is unreadable.
+**standing assumption written into the design**, and #7569 showed it is not always true — the
+registry's log delivery stopped from ~2026-08-14 19:06Z to ~2026-08-16 20:45Z (corroborated by two
+independent markers on different emitters; `zot_restarts=0` and `pcent` 12→14 throughout, so the
+host was serving fine and only its telemetry stopped).
 
-P5 checks the assumption instead of inheriting it: *will I be able to see what I did?*
+The channel recovered before this shipped, so P5 passes today and delivery proceeds. That is the
+point rather than a caveat: for ~49 hours the assumption was false, nothing in the design noticed,
+and a replace fired in that window would have been unverifiable. P5 checks the assumption instead
+of inheriting it: *will I be able to see what I did?*
 
 The hazard it closes is the #6400 escalation, and the asymmetry is the whole argument. A degraded
 zot still **serves** pulls and only fails large-layer **pushes**. A host that boots dark serves
