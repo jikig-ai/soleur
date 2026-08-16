@@ -29,6 +29,7 @@
 #   P2  ghcr-fallback event count .......... ADVISORY ONLY — MUST NOT GATE (see below)
 #   P3  no in-progress release run ......... GATING
 #   P4  live zot serving probe ............. DELIBERATELY ABSENT (see below)
+#   P5  the replace will be OBSERVABLE ..... GATING   (control + container-log channel)
 #
 # Output: a single `verdict=` line on stdout. Exit 0 = clear to dispatch, non-zero = do not.
 #
@@ -57,6 +58,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 QUERY_CMD="${REGISTRY_PREFLIGHT_QUERY_CMD:-${ROOT}/scripts/betterstack-query.sh}"
 RUNS_CMD="${REGISTRY_PREFLIGHT_RUNS_CMD:-gh}"
 WINDOW="${REGISTRY_PREFLIGHT_WINDOW:-24h}"
+# P5's two markers. The control rides the HOST heartbeat transport; the channel marker rides the
+# CONTAINER-LOG transport that #7556 actually reads. They must stay on different transports or
+# P5's positive control proves nothing.
+P5_CONTROL_MARKER="${REGISTRY_PREFLIGHT_P5_CONTROL:-SOLEUR_ZOT_DISK}"
+P5_CHANNEL_MARKER="${REGISTRY_PREFLIGHT_P5_CHANNEL:-HTTP API}"
 
 # THE TEST SEAMS ARE REFUSED ON THE PRODUCTION PATH (#7555 review). "tests only" was a comment,
 # not a mechanism: `REGISTRY_PREFLIGHT_QUERY_CMD=/bin/true REGISTRY_PREFLIGHT_RUNS_CMD=/bin/true`
@@ -212,11 +218,54 @@ fi
 # SYMPTOM is a degraded zot, so a serving predicate would refuse precisely when the fix is most
 # needed. The same reasoning removed D10's A5 (ADR-169 ground 2).
 
+# ── P5 — CAN THE RESULT OF THIS REPLACE BE OBSERVED AT ALL? GATING. ─────────────────────────
+# P4's absence is defensible ONLY because something else eventually verifies the host: #7556
+# reads zot's own boot `configuration settings` line out of the warehouse. That is the standing
+# justification written into this file and into the dispatcher. P5 checks the justification is
+# still TRUE at the moment of the replace, instead of assuming it.
+#
+# The hazard is specific and it is the #6400 escalation. Today a degraded zot still SERVES pulls
+# and only fails large-layer PUSHES. A replace that boots dark serves nothing — and with the
+# host->GHCR fallback retracted (#7071) there is no tier beneath it. So firing blind trades a
+# blocked release for a total deploy outage, and with the container-log channel dark nobody
+# learns which one happened until the next deploy fails.
+#
+# THIS DOES NOT VIOLATE ADR-169's INDEPENDENCE CRITERION. The criterion forbids depending on the
+# component whose failure motivates the destroy — here, zot's HTTP deadlines. The log channel is
+# not that component, and P5 reads no pull-path health: it asks only "will I be able to see what
+# I did". Unlike P1 and P3 (both of which DO violate it — see the amendment), P5 cannot be tripped
+# by the condition the replace cures.
+#
+# TWO ARMS, because an empty query is not evidence of a dark channel — that mistake was made
+# once already this cycle and cost a false all-clear until a 72h positive control refuted it.
+# The control marker rides a DIFFERENT transport than the container-log channel, so:
+#   control empty  -> the READ is broken; refuse, same class as P0.
+#   control alive + container-log empty -> the CHANNEL is dark; refuse, this is #7569.
+#   both alive -> the replace's outcome will be observable; proceed.
+probe "$P5_CONTROL_MARKER"
+p5_control_rc=$PROBE_RC
+p5_control_hits="$(printf '%s\n' "$PROBE_OUT" | { grep -c '[^[:space:]]' || true; })"
+if (( p5_control_rc != 0 )); then
+  abort P5 "the control query for ${P5_CONTROL_MARKER} failed (rc=${p5_control_rc}): $(head -c 200 "$p0_err"). A read that did not run cannot establish that this replace would be observable."
+fi
+probe "$P5_CHANNEL_MARKER"
+p5_channel_rc=$PROBE_RC
+p5_channel_hits="$(printf '%s\n' "$PROBE_OUT" | { grep -c '[^[:space:]]' || true; })"
+if (( p5_channel_rc != 0 )); then
+  abort P5 "the container-log query failed (rc=${p5_channel_rc}): $(head -c 200 "$p0_err"). Refusing rather than reading a failed query as a live channel."
+fi
+if [[ "${p5_control_hits:-0}" -eq 0 ]]; then
+  abort P5 "no ${P5_CONTROL_MARKER} rows in the last ${WINDOW} — the warehouse read itself is not returning host telemetry, so a dark boot would be indistinguishable from a healthy one. Fix the read before replacing the sole pull path."
+fi
+if [[ "${p5_channel_hits:-0}" -eq 0 ]]; then
+  abort P5 "the control marker is delivering (${p5_control_hits} rows) but the registry CONTAINER-LOG channel returned zero rows in ${WINDOW} — this is #7569. Replacing the host now would put the fleet's sole pull path (no SSH, no GHCR fallback since #7071) behind a channel that cannot report whether it came back. Resolve #7569, then re-dispatch; delivery is deferred, not cancelled."
+fi
+
 # Print the OBSERVED counts, never literals. They are zero on the ordinary path only because
 # every non-zero reading aborts above — but P1 no longer always aborts (`--manual` downgrades it
 # to a NOTE), so a literal `local_cache_hits=0` would report a clean reading for a run that
 # actually observed hits and proceeded anyway. The verdict line is the durable artifact; it must
 # describe what was measured, not what the happy path implies.
-echo "verdict=CLEAR local_cache_hits=${lc_hits:-0} ghcr_fallback_hits=${gf_hits} in_progress_releases=${in_progress:-0} manual=${MANUAL} window=${WINDOW}"
+echo "verdict=CLEAR local_cache_hits=${lc_hits:-0} ghcr_fallback_hits=${gf_hits} in_progress_releases=${in_progress:-0} obs_control_hits=${p5_control_hits:-0} obs_channel_hits=${p5_channel_hits:-0} manual=${MANUAL} window=${WINDOW}"
 echo "NOTE: ghcr_fallback_hits is ADVISORY. Its emitter is unreachable since #7071, so a zero says nothing about fallback health."
 exit 0

@@ -95,11 +95,29 @@ jobs:
             exit 0
           fi
           rc=0
-          changed="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BEFORE_SHA}...${AFTER_SHA}" \
-            --jq '.files[].filename' 2>/dev/null)" || rc=$?
+          cmp_json="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BEFORE_SHA}...${AFTER_SHA}" 2>/dev/null)" || rc=$?
+          # rc FIRST: everything below parses $cmp_json, and an empty body would otherwise be read
+          # as "a diff with no files" rather than "the read failed".
           if [[ "$rc" -ne 0 ]]; then
             echo "::error::could not resolve the changed-file set via the compare API (rc=$rc). Refusing to dispatch a registry host replace on an unclassifiable diff — re-fire via workflow_dispatch once verified."
             exit 1
+          fi
+          changed="$(printf '%s' "$cmp_json" | jq -r '.files[]?.filename' 2>/dev/null)"
+          # THE COMPARE API CAPS `files` AT 300 and truncates with NO error field. So a merge
+          # touching >300 files that includes the config would fall through the `grep -qx` below
+          # and report "registration-only push" — byte-for-byte the silent non-delivery this
+          # workflow exists to remove, on the largest merges.
+          #
+          # There is no total-files count in the compare response to check against (`total_commits`
+          # counts commits, not files), so the cap itself is the signal: at exactly 300 the list
+          # MAY be complete and MAY be truncated, and those are indistinguishable here. Treat both
+          # as unproven and deliver — the preflight still gates, and an unnecessary
+          # volume-preserving replace is recoverable where an undelivered fix is silent.
+          n_files="$(printf '%s' "$cmp_json" | jq -r '(.files | length) // 0' 2>/dev/null || echo 0)"
+          if [[ "${n_files:-0}" -ge 300 ]]; then
+            echo "deliver=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::the compare API returned ${n_files} files, at or above its 300 cap, so the changed-file list may be TRUNCATED and cannot prove $CFG was untouched. Delivering rather than silently skipping. The preflight still gates."
+            exit 0
           fi
           if ! grep -qx "$CFG" <<<"$changed"; then
             echo "deliver=false" >> "$GITHUB_OUTPUT"
@@ -178,15 +196,37 @@ jobs:
       # A REFUSAL MUST LEAVE A DURABLE ARTIFACT, not just a red run. Without this the merged
       # user_data sits inert and the only signal is a failed job on main that nobody owns — the
       # silent-non-delivery this workflow exists to remove, one step to the left.
+      # `failure()` ALONE, deliberately. This was `failure() && steps.gate.outputs.deliver == 'true'`,
+      # so a failure IN THE GATE ITSELF — an unreachable compare API, a force-pushed `before` SHA —
+      # left a red run on main and nothing else: that output is never set when the gate is what
+      # broke. A red run nobody owns is the exact failure this step exists to prevent, so the
+      # condition must not depend on a value the failing step produces.
       - name: Record a refused delivery on the tracker
-        if: failure() && steps.gate.outputs.deliver == 'true'
+        if: failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MERGE_SHA: ${{ github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DELIVER: ${{ steps.gate.outputs.deliver }}
         run: |
           set -uo pipefail
-          gh issue comment 7556 --repo "${GITHUB_REPOSITORY}" --body "Delivery REFUSED for \`${MERGE_SHA}\`. The registry host still runs its previous user_data, so the #7555 deadline change is NOT live. Preflight verdict and cause: ${RUN_URL}. Re-fire with \`gh workflow run registry-host-replace-dispatch.yml -f reason='<why>'\` once the refusing predicate is resolved — the manual arm skips P1, which is the predicate a replace outage itself trips." || true
+          # DELIVER is empty when the GATE itself failed, which is a different fact from a refused
+          # preflight — say which one happened rather than asserting the preflight refused.
+          if [[ "${DELIVER:-}" == "true" ]]; then
+            WHAT="Delivery REFUSED"
+            WHY="The preflight declined, or the dispatch/poll failed."
+          else
+            WHAT="Delivery UNDETERMINED"
+            WHY="The delta gate did not complete, so this run never decided whether the merged user_data changes the bytes the host boots. Nothing was dispatched."
+          fi
+          BODY="$(printf '%s\n' \
+            "${WHAT} for \`${MERGE_SHA}\`. ${WHY} The registry host still runs its previous user_data, so the #7555 deadline change is NOT live. Verdict and cause: ${RUN_URL}" \
+            "" \
+            "Re-fire with \`gh workflow run registry-host-replace-dispatch.yml -f reason='<why>'\` once the refusing predicate is resolved. Two predicates are expected to need it:" \
+            "" \
+            "- **P1** (local-cache pulls) — the manual arm passes \`--manual\`, which skips P1 only; it is the predicate a replace outage itself trips." \
+            "- **P5** (the replace would be unobservable) — \`--manual\` does NOT skip this one, deliberately. If the container-log channel is dark (#7569) the replace outcome cannot be read back, and forcing it would put the sole pull path behind a channel that cannot report whether it returned.")"
+          gh issue comment 7556 --repo "${GITHUB_REPOSITORY}" --body "$BODY" || true
 
       # No `if: always()` here, and no fallback arm: a refused preflight must stop the job with
       # the preflight's own ::error:: as the last word. It files nothing and dispatches nothing.
@@ -205,6 +245,11 @@ jobs:
           else
             REASON="Delivering the cloud-init-registry.yml user_data merged at ${MERGE_SHA} (#7555 / ADR-190 — zot HTTP deadlines). Inert until this replace runs; the store volume is preserved."
           fi
+          # Stamped BEFORE the dispatch, so the poll below can select the run this step caused
+          # rather than whatever apply happens to be in flight. One second of slack absorbs
+          # clock skew between the runner and the API's createdAt.
+          DISPATCHED_AT="$(date -u -d '-1 second' +%Y-%m-%dT%H:%M:%SZ)"
+          echo "DISPATCHED_AT=${DISPATCHED_AT}" >> "$GITHUB_ENV"
           gh workflow run apply-web-platform-infra.yml --ref main \
             --repo "${GITHUB_REPOSITORY}" \
             -f apply_target=registry-host-replace \
@@ -233,10 +278,15 @@ jobs:
           set -uo pipefail
           deadline=$(( SECONDS + 1500 ))
           run_id=""
+          # SELECT THE RUN THIS STEP CAUSED, not "the latest non-completed one". apply-web-platform-infra
+          # serves many apply_targets, so a concurrent apply for an unrelated target would have its
+          # conclusion attributed to this replace — a false green or a false alarm on the highest-stakes
+          # step here. Filter on workflow_dispatch AND a creation time at/after our own dispatch.
+          # DISPATCHED_AT is stamped by the dispatch step immediately before `gh workflow run`.
           while (( SECONDS < deadline )); do
-            run_id="$(gh run list --workflow=apply-web-platform-infra.yml --limit 10 \
-              --json databaseId,status,createdAt --jq \
-              'map(select(.status != "completed")) | sort_by(.createdAt) | last | .databaseId' 2>/dev/null || true)"
+            run_id="$(gh run list --workflow=apply-web-platform-infra.yml --limit 30 \
+              --json databaseId,status,createdAt,event --jq \
+              "map(select(.event == \"workflow_dispatch\" and .createdAt >= \"${DISPATCHED_AT}\")) | sort_by(.createdAt) | first | .databaseId" 2>/dev/null || true)"
             [[ -n "$run_id" && "$run_id" != "null" ]] && break
             sleep 15
           done

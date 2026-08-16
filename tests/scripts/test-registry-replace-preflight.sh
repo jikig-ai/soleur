@@ -44,6 +44,15 @@ if [[ -n "${STUB_QUERY_RC:-}" && "${STUB_QUERY_RC}" != "0" ]]; then exit "${STUB
 case "$marker" in
   'registry=local-cache')   printf '%s' "${STUB_LOCAL_CACHE_ROWS:-}" ;;
   'registry=ghcr-fallback') printf '%s' "${STUB_GHCR_ROWS:-}" ;;
+  # P5's two arms. Both default to a NON-empty row so the pre-existing cases keep
+  # asserting what they were written to assert; the P5 cases below blank them
+  # explicitly. Defaulting these to empty would have made every other test refuse
+  # at P5 and silently stop testing P0-P3.
+  'SOLEUR_ZOT_DISK')        printf '%s' "${STUB_ZOT_DISK_ROWS-SOLEUR_ZOT_DISK pcent=12 boot=93c52405}" ;;
+  # NO BRACES IN THIS DEFAULT. A `}` inside ${VAR-default} terminates the expansion, so a
+  # JSON-shaped default leaked a stray `}` when the test set this to empty — the dark-channel
+  # case then measured one row and the assertion passed for the wrong reason.
+  'HTTP API')               printf '%s' "${STUB_ZOT_LOG_ROWS-zot HTTP API statusCode:200 path:/v2/}" ;;
   *) : ;;
 esac
 exit 0
@@ -248,6 +257,46 @@ else
   fail "an unknown argument was accepted — a typo'd --manual would silently keep P1 gating: rc=$RC"
 fi
 
+# --- P5: can the result of this replace be OBSERVED at all? --------------------------------
+# P4 (a live serving probe) is deliberately absent, and its absence is defensible only because
+# #7556 later reads zot's boot line out of the warehouse. P5 checks that justification is still
+# true AT THE MOMENT OF THE REPLACE. The hazard is the #6400 escalation: a degraded zot still
+# SERVES pulls today and only fails large-layer pushes, so firing blind trades a blocked release
+# for a total deploy outage — with no SSH and no GHCR fallback (#7071) beneath it.
+run_sut STUB_LOCAL_CACHE_ROWS="" STUB_GHCR_ROWS="" STUB_RUNS_JSON="[]" \
+        STUB_ZOT_LOG_ROWS="" > "$TMP/out"
+if [[ "$RC" -ne 0 ]] && grep -q 'predicate=P5' "$TMP/out"; then
+  pass "P5 synthesized red: control alive but the CONTAINER-LOG channel is dark REFUSES the replace (#7569)"
+else
+  fail "P5: a dark container-log channel did not refuse — the replace would be unverifiable: rc=$RC: $(head -1 "$TMP/out")"
+fi
+# ...and it must say WHY, naming the tracking issue, or the operator cannot act on it.
+if grep -qi '7569' "$TMP/err"; then
+  pass "P5 names the tracking issue so the refusal is actionable"
+else
+  fail "P5 refused without naming what to fix"
+fi
+
+# The positive control is the load-bearing half: an EMPTY query is not evidence of a dark
+# channel. If the control marker is also silent, the READ is broken and P5 must refuse for that
+# reason instead — reading it as "channel dark" would misattribute a broken query to #7569.
+run_sut STUB_LOCAL_CACHE_ROWS="" STUB_GHCR_ROWS="" STUB_RUNS_JSON="[]" \
+        STUB_ZOT_DISK_ROWS="" > "$TMP/out"
+if [[ "$RC" -ne 0 ]] && grep -q 'predicate=P5' "$TMP/out" && grep -qi 'warehouse read itself' "$TMP/err"; then
+  pass "P5 distinguishes a BROKEN READ from a dark channel, and refuses on the read"
+else
+  fail "P5 attributed a broken read to a dark channel (or did not refuse): rc=$RC"
+fi
+
+# Both arms alive -> P5 must NOT gate. Without this the predicate could refuse unconditionally
+# and every case above would still pass.
+run_sut STUB_LOCAL_CACHE_ROWS="" STUB_GHCR_ROWS="" STUB_RUNS_JSON="[]" > "$TMP/out"
+if [[ "$RC" -eq 0 ]] && grep -q 'obs_channel_hits=' "$TMP/out"; then
+  pass "P5 passes when both arms deliver, and REPORTS both observed counts"
+else
+  fail "P5 refused (or dropped its counts) on a healthy channel: rc=$RC: $(head -1 "$TMP/out")"
+fi
+
 # --- the seam guard: a seam set on the production path must REFUSE, not manufacture CLEAR ------
 SEAM_OUT="$(env GITHUB_ACTIONS=true REGISTRY_PREFLIGHT_QUERY_CMD=/bin/true \
   REGISTRY_PREFLIGHT_RUNS_CMD=/bin/true bash "$SUT" 2>"$TMP/seamerr")"; SEAM_RC=$?
@@ -294,8 +343,8 @@ if [[ "$PASS" -ne $((_cp + 1)) || "$FAIL" -ne $((_cf + 1)) ]]; then
 fi
 FAIL=$((FAIL - 1))
 TOTAL=$((PASS+FAIL))
-if [[ "$TOTAL" -lt 22 ]]; then
-  echo "  FATAL: anti-vacuity: ran $TOTAL assertions, expected >= 22. Fix the dispatch, do not lower the floor." >&2
+if [[ "$TOTAL" -lt 26 ]]; then
+  echo "  FATAL: anti-vacuity: ran $TOTAL assertions, expected >= 26. Fix the dispatch, do not lower the floor." >&2
   exit 2
 fi
 
