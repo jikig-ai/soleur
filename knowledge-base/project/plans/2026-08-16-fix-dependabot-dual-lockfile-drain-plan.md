@@ -60,6 +60,17 @@ catch.
    command that produced it, word-bounded where substring collisions are possible.
 2. The two provisional facts most likely to drift — the ADR ordinal and the live alert set — are
    both marked as re-derived rather than fixed, with the re-derivation named.
+3. **A production post-mortem was folded in after the pass had otherwise closed.** The
+   `learnings-researcher` agent returned very late (its result arrived after the plan was already
+   committed) carrying
+   `knowledge-base/engineering/operations/post-mortems/sharp-devdep-blocks-prod-deploys-postmortem.md`:
+   a Dependabot `sharp` bump across the `^0.34.x` → `^0.35.x` boundary previously caused npm to
+   re-resolve the top-level copy as dev-only, after which `npm ci --omit=dev` in the Docker runner
+   stage installed none and production deploys were skipped for 3h+. The fix is already on `main`
+   (`dependencies.sharp: ^0.35.0`, lockfile `dev: false`), but **this plan regenerates that lockfile
+   across eleven bumps** and nothing in it asserted the classification survives. Added AC13b, T21b, a
+   risk row, and two sharp edges. Recorded here rather than absorbed silently, because the finding
+   arrived by luck of timing — had the agent failed outright, the gap would have shipped.
 
 ## Overview
 
@@ -272,7 +283,19 @@ scales.
 - `learnings/2026-05-27-npm-update-rewrites-lockfile-name-in-worktrees.md` — the root-lockfile `name`
   rewrite trap, live in this repo right now.
 - `learnings/2026-04-03-lockfile-sync-ci-check-pattern.md` — the regenerate-and-diff pattern extended
-  here.
+  here. Canonical regeneration command: **`npx --yes npm@11 install --package-lock-only`**, never
+  local npm — `npm install --package-lock-only` uses the same Arborist resolver as `npm ci`, which is
+  what gives the gate detection parity.
+- `knowledge-base/engineering/operations/post-mortems/sharp-devdep-blocks-prod-deploys-postmortem.md`
+  — **the highest-value late finding of the research pass, and a live hazard for Phase 3.** A
+  Dependabot bump moved `sharp` `^0.34.5` → `^0.35.0`; because `next` declares `sharp` as an
+  `optionalDependency` at `^0.34.3`, `0.35.x` no longer satisfied it and npm re-resolved the
+  top-level copy as **dev-only** (`"dev": true`). `npm ci --omit=dev` in the Docker runner stage then
+  installed no `sharp` at all, failing the build and skipping the deploy for 3h+. The fix — promoting
+  `sharp` to `dependencies` explicitly — is already on `main` (verified: `dependencies.sharp` is
+  `^0.35.0`, and the lockfile records `dev: false, optional: false`). The hazard is that **this plan
+  regenerates that lockfile across eleven bumps**, and nothing in it asserted the classification
+  survives. See AC13b and T21b.
 
 ### Anti-vacuity precedent
 
@@ -1163,6 +1186,13 @@ criteria cut at review are simply absent rather than renumbered.
   `js-yaml` 3.15.1 and 4.3.1, `nanoid` 3.3.x), **and** no vulnerable copy of any package marked
   *cleared* in the Phase 3 reconciliation table remains in any regenerated lockfile. Asserted per
   package, itemized against that table.
+- **AC13b** In the regenerated `apps/web-platform/package-lock.json`, `node_modules/sharp` still
+  records `dev: false` and `optional: false`, and `dependencies.sharp` in `package.json` is still an
+  explicit entry — not inherited from `next`'s `optionalDependencies`. This is the direct
+  post-mortem regression check: a Dependabot `sharp` bump previously re-resolved the top-level copy as
+  dev-only, `npm ci --omit=dev` at `Dockerfile:158` then installed none, and production deploys were
+  skipped for 3h+. `tsc` and the vitest suite are both blind to it, and so is `docker build` in the
+  deps stage — only the `--omit=dev` runner stage reveals it.
 - **AC14** No **executable** file added or modified by this PR (`.sh`, `.yml`, `.ts`, `.mjs`) contains
   `bun update`. Scoped to executables because this plan file and ADR-191 legitimately quote the banned
   command as their own prohibition — an unscoped grep would be unsatisfiable by construction.
@@ -1232,6 +1262,7 @@ criteria cut at review are simply absent rather than renumbered.
 | T19 | `npm ci --ignore-scripts` in the Playwright container | Exits 0; `npx playwright test` resolves the pinned 1.58.2 binary; browsers are not re-downloaded |
 | T20 | `npm ci --ignore-scripts` over untrusted PR-head code | None of the ten install-script packages executes |
 | T21 | Production image build after the bumps | `docker build` succeeds; `sharp` native binaries resolve |
+| T21b | `npm ci --omit=dev` against the regenerated lockfile, then resolve `sharp` | Resolves. Mirrors `Dockerfile:158` — the runner stage is the only place the dev-only mis-resolution surfaces |
 | T22 | `next.config.ts` gains `images.remotePatterns` | Assertion RED |
 | T23 | `next.config.ts` gains `images.domains` or a custom `images.loader` | Assertion RED — the widened form has no hole a narrow check would leave |
 | T24 | The service-worker `message` handler gains an effect beyond `skipWaiting` | Assertion RED |
@@ -1253,6 +1284,7 @@ criteria cut at review are simply absent rather than renumbered.
 | **The operator sees nothing.** The digest reads merged-PR titles/labels and `action-required` issue titles — never PR bodies. An earlier draft put the business consequence in the PR body and labelled follow-ups `decision-challenge` *instead of* `action-required`, which is invisible in both digest blocks and on a 30-day auto-close timer — a mitigation strictly worse than the risk it addressed. | Phase 6.6 and AC20/AC25: consequence in the PR **title**; both labels on every follow-up. |
 | **Dependabot self-closes rebased PRs without a comment**, so a criterion demanding our comment on all nine fails on the *success* path. | AC22 accepts either disposition and requires pre-close subsumption re-verification (Phase 4.3). |
 | **The sharp deferral's guard watches one door.** A same-origin proxy route reaches the nested decoder with no `images` config at all. | Recorded as an explicit residual in Phase 3.4 and in the follow-up issue, with the WebP re-encoding noted as partial mitigation — not papered over by widening a guard that cannot see it. |
+| **Regenerating the lockfile could silently re-classify `sharp` as dev-only.** `next` declares `sharp` as an `optionalDependency` at `^0.34.3` while the repo pins `^0.35.0` in `dependencies`; a previous Dependabot bump across exactly this boundary caused npm to resolve the top-level copy `"dev": true`, after which `npm ci --omit=dev` (`Dockerfile:158`) installed no `sharp` and production deploys were skipped for 3h+. This plan regenerates that lockfile across eleven bumps. | AC13b asserts `dev: false` / `optional: false` and the explicit `dependencies.sharp` entry survive regeneration; T21b runs `npm ci --omit=dev` and resolves `sharp`, mirroring the runner stage where the fault actually appears. The plan does not bump `sharp` itself, so the risk is regeneration side-effect, not version movement. |
 | **Retired risk, recorded so it is not reintroduced:** the ported release-age floor was feared to fight `lockfile-sync`'s regenerate-and-diff. | Measured false against npm 11.12.1: `npm ci` does not enforce the floor; the Dockerfile never COPYs `.npmrc`; `--package-lock-only` against a satisfied lock is a no-op. |
 | **Retired risk:** the OTel chain bump was framed as touching the request path. | Measured false — OTel is never initialized; inngest's OTel middleware is opt-in and not enabled. Hygiene only. |
 
@@ -1298,6 +1330,14 @@ criteria cut at review are simply absent rather than renumbered.
   *title* or an `action-required` issue *title*.
 - **Dependabot alerts do not clear at merge**, and the alerts API is not readable by `GITHUB_TOKEN` —
   which is why verification is in-session rather than a scheduled probe.
+- **A `sharp` that is not explicitly in `dependencies` is a production outage waiting to happen.**
+  `next` holds it as an `optionalDependency` at `^0.34.3`; the repo pins `^0.35.0`. When those
+  disagree, npm can resolve the top-level copy dev-only, and the only surface that reveals it is
+  `npm ci --omit=dev` in the Docker runner stage — not `tsc`, not vitest, not the deps-stage build.
+- **Regenerate `package-lock.json` with `npx --yes npm@11 install --package-lock-only`, never local
+  npm.** npm 10 and npm 11 disagree on `"dev": true` flags for optional transitive packages
+  (`@img/sharp-*`, `fsevents`), which is the same class of defect as the bullet above and the reason
+  `lockfile-sync` pins the major.
 - **Do not take `latest` for any bumped package.** Latest is a major past the target for `undici`
   (8.10.0), `@hono/node-server` (2.1.1), `js-yaml` (5.3.0), and `nanoid` (6.0.1). `bun update <pkg>`
   and bare `bun update` remain banned in executable files.
