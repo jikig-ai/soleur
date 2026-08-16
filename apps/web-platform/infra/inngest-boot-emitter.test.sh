@@ -219,7 +219,7 @@ else
   # Keys come from the templatefile() call site in inngest-host.tf — the authoritative statement
   # of what this template receives. A missing key is a render error, not a silent empty string,
   # so a future var addition trips this loudly rather than degrading the assertions to vacuity.
-  printf 'templatefile("%s", { inngest_volume_id="v", doppler_token="d", sdk_url="https://sdk", inngest_cli_arch="amd64", inngest_cli_sha256="s", vector_sha256="vs", doppler_arch="amd64", doppler_sha256="ds", ghcr_read_user="u", ghcr_read_token="g", web_host_private_ips="10.0.1.10", betterstack_logs_token="BS_TOKEN_SENTINEL_7228" })\n' \
+  printf 'templatefile("%s", { inngest_volume_id="v", doppler_token="d", sdk_url="https://sdk", inngest_cli_arch="amd64", inngest_cli_sha256="s", vector_sha256="vs", doppler_arch="amd64", doppler_sha256="ds", ghcr_read_user="u", ghcr_read_token="g", web_host_private_ips="10.0.1.10", betterstack_logs_token="BS_TOKEN_SENTINEL_7228", zot_registry_endpoint="10.0.1.30:5000", zot_pull_user="zu", zot_pull_token="zt" })\n' \
     "$CLOUD_INIT" | terraform -chdir="$RENDER_DIR" console > "$RENDERED" 2>"$WORK/render.err"
 
   # A truncated or empty render makes every assertion below pass or fail for the wrong reason.

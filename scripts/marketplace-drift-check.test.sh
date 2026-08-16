@@ -14,11 +14,25 @@
 # manifest) lands on MISMATCH rather than on OK.
 #
 # HOW IT DRIVES THE CHECKER. The logic lives inline in the workflow's `check` step, so the step
-# body IS the unit under test: it is extracted from the YAML and executed under the exact shell
-# GitHub uses for a `run:` block with no `shell:` key — `bash --noprofile --norc -eo pipefail`.
-# Running it under a plain `bash` would defeat the point: the inherited `-e` is the specific
+# body IS the unit under test: it is extracted from the YAML and executed with errexit already
+# on. Running it under a plain `bash` would defeat the point: the inherited `-e` is the specific
 # thing that has silently killed capture logic in this repo's workflows before (#7304), and a
 # test that clears it cannot observe the defect it exists to catch.
+#
+# CORRECTED (#7506). This comment previously said `bash --noprofile --norc -eo pipefail` was
+# "the exact shell GitHub uses for a `run:` block with no `shell:` key". That is the mapping
+# for an EXPLICIT `shell: bash`. A block declaring NO `shell:` key is invoked as
+# `/usr/bin/bash -e {0}` — errexit, and no pipefail. This repo's own
+# `scripts/lint-workflow-errexit-capture.py` records both mappings correctly; this file
+# asserted the wrong side of that contradiction, and it is what misled the #7506 plan into
+# pinning the wrong harness for a different workflow.
+#
+# THE HARNESS BELOW IS LEFT AS IT IS, DELIBERATELY, and the discrepancy is recorded rather
+# than papered over: the steps in scheduled-marketplace-drift.yml declare no `shell:` key, so
+# this suite runs them under a STRICTER shell than production (it adds `pipefail`). That
+# direction is safe for a guard — `pipefail` can only ADD failures, so it may raise a false
+# alarm but cannot manufacture a false green — and re-pinning another workflow's suite is not
+# in #7506's scope. A suite that ran it under a LOOSER shell would be the dangerous inverse.
 #
 # Network is stubbed with a `curl` shim on PATH, so no scenario touches the network and the
 # fixtures are synthesized JSON rather than captured responses.
@@ -518,6 +532,23 @@ VAR_DEF = re.compile(
     r'|(?:^|\n)\s*for\s+([A-Za-z_]\w*)\s+in\b'
     r'|read\s+(?:-\w+\s+)*([A-Za-z_]\w*)'
 )
+# `local a=1 b=2 c=3` declares THREE names; the pattern above anchors at line start and so
+# captures only `a`. The remaining names then read as unbound and the lint reports a step that
+# is perfectly correct — which is worse than missing a bug, because a false positive on a
+# hand-written guard is what trains the next reader to disable the lint. Extended for #7490,
+# whose `file_or_update()` opens `local TITLE="$1" FIND="$2" PREAMBLE="$3" REMEDIATION="$4"`.
+VAR_DEF_MULTI = re.compile(r'(?:^|\n)\s*(?:local|declare|export|typeset)\s+((?:-\w+\s+)*)(.+)')
+def _multi_names(body):
+    out = set()
+    for m in VAR_DEF_MULTI.finditer(body):
+        for tok in m.group(2).split():
+            if '=' in tok:
+                nm = tok.split('=', 1)[0]
+            else:
+                nm = tok
+            if re.fullmatch(r'[A-Za-z_]\w*', nm):
+                out.add(nm)
+    return out
 for st in steps:
     body = st.get("run") or ""
     if not body:
@@ -526,6 +557,7 @@ for st in steps:
     defined = set(BUILTIN_ENV) | wf_env | set((st.get("env") or {}).keys())
     for m in VAR_DEF.finditer(body):
         defined.update(g for g in m.groups() if g)
+    defined |= _multi_names(body)
     referenced = set()
     for m in VAR_REF.finditer(body):
         # A `${VAR:-default}` reference is explicitly guarded; it cannot abort under -u.
@@ -552,6 +584,16 @@ if "dispatch_eligible=" not in check_body:
 # DSN's components), forwarded because the composite declares them `required: true` and Actions
 # does not enforce that — they were omitted for the workflow's whole life, so the check-in never
 # delivered. See the amended gate-override clause (iii).
+# Unauthenticated by design. This stays a CLOSED ALLOWLIST rather than becoming a
+# prefix match or being dropped: the property it protects is that a drift alarm
+# cannot quietly grow into a credential consumer.
+#
+# The three SENTRY_* entries were added with the heartbeat repair (#7490). They are
+# the components of a Sentry DSN, which is public by construction -- the same values
+# ship inside browser bundles -- so admitting them does not widen the credential
+# surface in the way the assertion exists to prevent. They are enumerated
+# individually for that reason; `SENTRY_*` as a wildcard would also admit an auth
+# token, which is a real secret.
 ALLOWED_SECRETS = {
     "GITHUB_TOKEN",
     "SENTRY_INGEST_DOMAIN",
@@ -604,6 +646,13 @@ fi
 filing_structural="$(python3 - "$WORKFLOW" <<'ALARMPY'
 import sys, yaml
 wf = yaml.safe_load(open(sys.argv[1]))
+# Name the job explicitly. This read used to be `list(wf["jobs"].values())[0]`,
+# which silently became "whichever job is declared first" -- so adding the
+# `canary` job above `drift-check` would have pointed every assertion below at a
+# job that files no issues, and they would all have failed for a reason that has
+# nothing to do with the property they test. A positional selector over a
+# multi-job workflow is a latent misattribution, not a shortcut.
+steps = wf["jobs"]["drift-check"]["steps"]
 problems = []
 
 # KEYED BY NAME, never `list(wf["jobs"].values())[0]`. This extractor used the positional form
@@ -620,8 +669,24 @@ else:
     # A second job is legitimate (the dispatch may be narrowed into its own job), but it must
     # never silently take over this extractor. Assert the set of jobs explicitly so ADDING one
     # is a decision this harness sees rather than a change it absorbs.
-    known_jobs = {"drift-check"}
+    known_jobs = {"drift-check", "canary"}
     unexpected = set(wf["jobs"]) - known_jobs
+    # The canary is REGISTERED, so it must also be COVERED — registering it without assertions
+    # is how a job with wider permissions slips past a harness that only counts job names. It
+    # holds `contents: read` ONLY (the write-capable `issues: write` stays with drift-check,
+    # which consumes the canary's verdict through job outputs and never executes what the canary
+    # downloaded), and it must own a timeout.
+    canary = wf["jobs"].get("canary")
+    if canary is not None:
+        perms = canary.get("permissions")
+        if perms != {"contents": "read"}:
+            problems.append(
+                f"canary job permissions are {perms!r}, expected exactly {{'contents': 'read'}} — "
+                "it materialises executable plugin content, so it must never hold a write scope")
+        if "timeout-minutes" not in canary:
+            problems.append("canary job has no timeout-minutes; a hung CLI download would pin the alarm open")
+        if not (canary.get("outputs") or {}).get("verdict"):
+            problems.append("canary job emits no `verdict` output — the alarm's conjunct would read empty and pass")
     if unexpected:
         problems.append(
             f"unexpected job(s) {sorted(unexpected)} - add them to known_jobs AND extend the "

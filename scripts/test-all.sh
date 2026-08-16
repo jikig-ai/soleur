@@ -714,6 +714,24 @@ if want_scripts; then
   # this suite is that guard's guard. Registered explicitly because
   # scripts/*.test.sh is NOT auto-globbed here — an unregistered gate never runs.
   run_suite "scripts/marketplace-drift-check" bash scripts/marketplace-drift-check.test.sh
+  # #7489: the legacy `soleur@soleur` marketplace entry carries client-side
+  # `autoUpdate: true`, which cannot be revoked remotely — so the tracker's
+  # closing condition is a claim about MACHINES, and the probe is how that claim
+  # is made checkable rather than asserted. Guard 2's battery; registered
+  # explicitly for the same reason as the suite above.
+  run_suite "scripts/plugin-legacy-resolver-probe" bash scripts/plugin-legacy-resolver-probe.test.sh
+  # #7490: the manifest suite above asserts the published POINTER is well-formed.
+  # This one guards the assertion that following it actually DELIVERS the plugin --
+  # complete, byte-correct at the delivered commit, and current. #7471 shipped 64
+  # skill directories where 96 were expected with every metadata field reading
+  # correct, which is the defect a manifest check structurally cannot see.
+  run_suite "scripts/plugin-delivery-canary" bash scripts/plugin-delivery-canary.test.sh
+  # Meta-guard over the two suites above: both end in an anti-vacuity floor, and
+  # both originally enforced that floor by calling `fail` — the function whose
+  # failure the floor exists to survive. This pins the fix by mutation (stub
+  # `fail`, assert the floor still exits non-zero) rather than by inspection.
+  # Registered explicitly: it lives under scripts/, which is not auto-globbed.
+  run_suite "scripts/guard-vacuity-floor" bash scripts/guard-vacuity-floor.test.sh
   # Guard 4 (#7493): validates the manifest SOURCE that Terraform publishes, as opposed to the
   # sibling above which validates the PUBLISHED artifact. Neither subsumes the other — once the
   # drift workflow dispatches a reconcile, a bad SOURCE is republished daily while a
@@ -830,6 +848,12 @@ if want_scripts; then
   # proof (both RED directions) that the guard can catch the banned form.
   run_suite "scripts/followthrough-varq-ban-live" bash scripts/lint-followthrough-varq-ban.sh
   run_suite "scripts/followthrough-varq-ban" bash scripts/lint-followthrough-varq-ban.test.sh
+  # #7506: the callback-URL closure guard EXECUTES its shipped workflow step body under
+  # `bash -e` (the shell Actions uses for a `run:` block with no `shell:` key). Registered
+  # explicitly for the same reason as the two lines above — scripts/*.test.sh is not globbed,
+  # and this suite existing-but-unregistered would gate exactly nothing, which is the failure
+  # mode the guard it protects had in production.
+  run_suite "scripts/follow-through-closure-guard" bash scripts/follow-through-closure-guard.test.sh
   # Was an ORPHAN until #6698 — the suite existed and passed locally but was
   # registered in no runner, so it gated nothing (exactly the class the comment
   # above warns about). It covers the sweeper's path-traversal/symlink rejection
@@ -881,6 +905,21 @@ if want_scripts; then
   # original order). It also pins the accept-shape against the peers' `$`-anchored form, which
   # would reject the figure this issue requires the operator to state.
   run_suite "scripts/cpx22-invoice-reconcile-7431" bash scripts/followthroughs/cpx22-invoice-reconcile-7431.test.sh
+  # Dedicated inngest host zot-primary boot readback (#7462/#7228). Two properties decide whether
+  # this probe can be trusted to auto-close two P1 trackers, and both are pinned: PASS requires
+  # `bootstrap-done` and not merely `inngest_zot`, because the pull half succeeding while nothing
+  # installs IS the #7228 incident; and every count is taken from the DECODED `.stage` field, so a
+  # row whose message merely echoes a stage name cannot supply it. The suite also pins the jq
+  # stream shape — without `-R` + `fromjson?` one malformed warehouse line aborts the whole parse
+  # and a clean PASS window reports as `channel_dark`, i.e. "the host never booted".
+  run_suite "scripts/inngest-zot-boot-7462" bash scripts/followthroughs/inngest-zot-boot-7462.test.sh
+  # Operator authorization for enrolling soleur-inngest as a zot client (#6500). This probe closes
+  # the issue that GATES retiring GHCR push/egress, so the suite pins the two properties the #7437
+  # sibling shipped wrong: the verdict is anchored at line start (an unanchored grep authorizes on
+  # a comment ASKING about the criterion), and FAIL is evaluated before PASS (checking PASS first
+  # lets a retraction lose to the string it retracts). Deliberately reads a HUMAN verdict rather
+  # than telemetry — a green boot marker must not authorize a supply-chain retirement.
+  run_suite "scripts/inngest-zot-client-authz-6500" bash scripts/followthroughs/inngest-zot-client-authz-6500.test.sh
   # Inngest external-watchdog decision helpers (#6374/#6384/#6407). Registered here in #6407 —
   # these sourceable classifiers/gates were previously orphan suites (run only when invoked
   # manually), so a regression to the watchdog decision logic would have shipped with green CI.

@@ -341,15 +341,27 @@ This installs the plugin subtree only — about 10 MiB in well under a minute.
 <details>
 <summary>Installing from the monorepo directly (slower, and may time out)</summary>
 
-A plain `claude plugin marketplace add jikig-ai/soleur` clones the whole repository (~181 MiB),
-which takes about 329 seconds — well past the CLI's 120-second default — and a failed refresh can
-leave the local checkout unusable. Add `--sparse` so it fetches only what a plugin install needs;
-that completes in about 78 seconds, inside the default limit:
+A first-time `claude plugin marketplace add jikig-ai/soleur` clones the whole repository
+(~181 MiB), which takes about 329 seconds — well past the CLI's 120-second default. Add `--sparse`
+so it fetches only what a plugin install needs; that completes in about 78 seconds, inside the
+default limit:
 
 ```bash
 claude plugin marketplace add jikig-ai/soleur --sparse .claude-plugin plugins
 claude plugin install soleur@soleur
 ```
+
+**Only on a first add.** If you already have a plain `~/.claude/plugins/marketplaces/soleur`
+checkout, do **not** add `--sparse` to it: applying `--sparse` to an existing checkout does not
+convert it in place, it forces a full re-clone — which on the monorepo is the 329-second operation
+that cannot finish under the 120-second default. Migrate instead, using the commands below. Details
+and recovery: the
+[plugin delivery runbook](../../knowledge-base/engineering/operations/runbooks/plugin-delivery-recovery.md),
+under `## Symptom 2`.
+
+Once the checkout exists, routine refreshes are incremental `git pull`s rather than fresh clones, so
+the 329 seconds is a one-time cost of adding this way — but it is paid again whenever a refresh
+cannot update in place and restarts as a re-clone.
 
 **Already installed this way?** Switch to the marketplace above — the migration never clones the
 monorepo, so it is not subject to the timeout:
@@ -365,9 +377,11 @@ Restart the CLI afterwards; plugin changes apply on restart. If your original in
 `--scope project` or `--scope local`, pass the same `--scope` to every command above — the
 default is `user`, and a scope mismatch silently targets an install that isn't there.
 
-Removing the marketplace does **not** reclaim the plugin cache. Measured: after `uninstall`
-and `marketplace remove` both succeed, the old plugin cache survives — about 9.6 MiB, with no
-CLI verb to reclaim it.
+Removing the marketplace does **not** reclaim the plugin cache — though it does remove the
+marketplace checkout itself. Measured: after `uninstall` and `marketplace remove` both succeed, the
+378 MiB checkout is gone and the old plugin **cache** survives — 26 MiB on the machine this was
+measured on, with no CLI verb to reclaim it. Expect more the longer the install has been updating:
+each update caches into a new directory and leaves the previous one behind.
 
 **Do this only once the migration above has completed.** First confirm the new install is live
 and the old one is gone:
@@ -417,10 +431,14 @@ claude plugin marketplace update soleur
 claude plugin update soleur
 ```
 
-**If that does not converge them, reinstall.** `plugin.json` carries a frozen `0.0.0-dev`
-version sentinel, so the install directory name never changes and there is no version bump
-for `plugin update` to act on (measured in ADR-178: an actively-used install carried 64
-skills against 96 in the repo, three months stale, while reporting success):
+**If that does not converge them, reinstall.** This is now a fallback rather than the only
+mechanism, and the reason it used to be the only one is worth knowing: `plugin.json` carried a
+frozen `0.0.0-dev` sentinel, so the install directory name never changed and `plugin update` had
+no version bump to act on (measured in ADR-178 — an actively-used install carried 64 skills
+against 96 in the repo, three months stale, while reporting success). The manifests became
+keyless on 2026-08-12, and the CLI now records a compound version whose leading half is the
+delivered commit, so the string changes with every commit and `update` has something to compare.
+See ADR-182 for the mechanism and its measurements:
 
 ```bash
 claude plugin uninstall soleur && claude plugin install soleur

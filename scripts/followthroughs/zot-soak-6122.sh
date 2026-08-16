@@ -85,14 +85,26 @@
 #     below — which is why that arm must keep exit 1. Tracked: #6437.
 #   NOT COVERED 2/2 — the DEDICATED INNGEST HOST (the 7th path, surfaced by #6462). It is a
 #     LIVE host (hcloud_server.inngest is unconditional — inngest-host.tf:181) whose
-#     cloud-init-inngest.yml hard-pins a ghcr.io ref (`IREF=ghcr.io/...`) with NO zot path, NO
-#     /v2/ probe and NO fallback, and whose pull is FAIL-CLOSED (`[ "$pull_rc" -eq 0 ] || exit`).
-#     Name-anchored: #6500 exists to rewrite that file, so any :NNN here rots on its own fix.
-#     It reports via
+#     cloud-init-inngest.yml. NARROWED 2026-08-13 by #7462/#7516 — the paragraph that stood here
+#     is retained below in corrected form rather than deleted, because it is the reasoning that
+#     briefs an irreversible PAT revoke and half of it is now false.
+#       WAS (true until #7462): "hard-pins a ghcr.io ref with NO zot path, NO /v2/ probe and NO
+#       fallback … it could not emit inngest_ghcr_fallback even if it were wired to Sentry (it
+#       never attempts zot)."
+#       NOW: the file HAS a zot-primary arm. It resolves `ZIREF="$ZOT_EP/…@sha256:…"` (same
+#       digest as the GHCR ref), pulls that first, and emits `inngest_zot` on a hit /
+#       `inngest_ghcr_fallback` on a miss. It still has NO `/v2/` probe — it goes straight to
+#       `docker pull` — and its pull is still FAIL-CLOSED.
+#     Name-anchored: any :NNN here rots on its own fix.
+#     WHAT REMAINS UNCOVERED, and it is the whole residual now: it reports via
 #     inngest-boot-phone-home.sh to Better Stack, NOT the Sentry `stage:` schema — so every
-#     query in this file is structurally blind to it, and it could not emit
-#     inngest_ghcr_fallback even if it were wired to Sentry (it never attempts zot).
-#     Consequence: 5.3 revokes the PAT ⇒ its next fresh boot 401s ⇒ the host never comes up.
+#     query in this file is still structurally blind to it. It now DOES emit
+#     inngest_ghcr_fallback; this file simply cannot see it. Read it separately with
+#     `betterstack-query.sh --grep inngest_ghcr_fallback`.
+#     Consequence, and #7462 SHARPENS rather than removes it: AP-016 lapsed 2026-07-30, so the
+#     PAT is ALREADY revoked and the GHCR leg already 401s. The host's boot therefore depends
+#     ENTIRELY on zot reachability plus a baked pull credential with no refresh channel. 5.3
+#     formalises a retirement that has de facto already happened on this host.
 #     Tracked: #6500 — and MACHINE-ENFORCED by the blocker arm at the bottom of this file,
 #     which refuses exit 0 while #6500 is OPEN. That arm is why this residual cannot silently
 #     authorize a retirement. Do not delete it; do not close #6500 to bypass it.
@@ -413,10 +425,38 @@ fi
 # file that was still GHCR-only. The guard added to close the careless-close bypass was itself
 # bypassable by prose (verified, not theorised). A comment line begins with `#`, so it can never
 # produce `^\s*IREF=` or `^\s*soleur-boot-emit `. Narrowing is not anchoring.
-if ! grep -qE '^[[:space:]]*IREF=.*\$ZURL' "$INNGEST_CI" || ! grep -qE '^[[:space:]]*soleur-boot-emit ' "$INNGEST_CI"; then
-  echo "FAIL(blocker-closed-but-condition-unmet): #$BLOCKER is CLOSED, but $INNGEST_CI still shows no zot pull path and/or no soleur-boot-emit reporting — the 7th GHCR-served path is still open in the CODE. Closing the issue does not retire the path. Re-open #$BLOCKER or fix the host before 5.3."
+# ⚠ TWO EMITTER SHAPES, NOT ONE (#7462). The anchors above were written when the only imagined
+# fix was "make cloud-init-inngest.yml look like cloud-init.yml". #7462 implemented the zot arm
+# with a DIFFERENT and deliberate shape — `ZIREF="$ZOT_EP/…"` + `IREF="$ZIREF"`, reporting via
+# `inngest-boot-phone-home.sh` — because this host has no `soleur-boot-emit` (that emitter ships
+# in the WEB host's host-script bundle) and reads its endpoint from a baked file rather than
+# `$ZURL` from Doppler. Measured against that implementation, BOTH original anchors return ZERO
+# hits. Left as-is, this arm would have gone from "correctly blocks" to "can never agree": once
+# #6500 is legitimately closed the gate would emit `blocker-closed-but-condition-unmet` forever,
+# on a factually false premise, and the realistic end state is someone deleting a safety gate.
+#
+# So accept either host's shape. The SEMANTICS are unchanged — a zot pull path must exist in
+# code, and it must report off-box — and the syntax-anchoring rule above is preserved: every
+# alternative is `^\s*`-anchored, so a comment line can satisfy none of them.
+_zot_path_in_code() {
+  grep -qE '^[[:space:]]*IREF=.*\$ZURL' "$1" || grep -qE '^[[:space:]]*ZIREF="\$ZOT_EP/' "$1"
+}
+_zot_reports_offbox() {
+  grep -qE '^[[:space:]]*soleur-boot-emit ' "$1" \
+    || grep -qE '^[[:space:]]*/usr/local/bin/inngest-boot-phone-home\.sh inngest_zot ' "$1"
+}
+if ! _zot_path_in_code "$INNGEST_CI" || ! _zot_reports_offbox "$INNGEST_CI"; then
+  echo "FAIL(blocker-closed-but-condition-unmet): #$BLOCKER is CLOSED, but $INNGEST_CI still shows no zot pull path and/or no off-box reporting of it — the 7th GHCR-served path is still open in the CODE. Closing the issue does not retire the path. Re-open #$BLOCKER or fix the host before 5.3."
   exit 1
 fi
+# ⚠ AND THE CHANNEL STILL DOES NOT REACH THIS QUERY SET. The `[freshboot]` entry above is a
+# SENTRY query; the dedicated host emits `inngest_ghcr_fallback` to Better Stack ONLY. So a
+# clean `[freshboot]` count is evidence about the WEB host and says nothing about this one.
+# Whoever authorises 5.3–5.5 must read this host separately:
+#   doppler run -p soleur -c prd_terraform -- \
+#     scripts/betterstack-query.sh --since <window> --grep inngest_ghcr_fallback --grep inngest_zot
+# Narrowed, not closed: before #7462 this host had no zot path at all; now it has one whose
+# reporting the soak cannot see. Tracked with #6500 / ADR-096 Phase 5.
 
 echo "PASS: 0 ghcr-fallbacks, zot served web=$ZOT_WEB inngest=$ZOT_INNGEST (>=$MIN_SAMPLE each), $APP_ZOT zot-served fresh boot(s), and #$BLOCKER is CLOSED — since $START. zot-primary soak holds. Safe to retire GHCR (5.3-5.5) and flip ADR-096 accepted (5.6)."
 exit 0
