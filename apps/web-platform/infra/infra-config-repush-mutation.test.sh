@@ -498,7 +498,7 @@ ROWS=(
   "G2-6|$GATE_SUITE|1|#7104 Guard 2 (8):|G2 r6' write added to the sourced library"
   "G2-7|$GATE_SUITE|1|assertion-count floor|G2 r7 the pin block itself deleted"
   "D1|$GATE_SUITE|1|harness self-test|harness fail() neutered (OWN DISPATCH)"
-  "D2|$GATE_SUITE|1|#7104 Guard 1:|repush_needed output never written"
+  "D2|$GATE_SUITE|1|#7104 WORKFLOW-REF PIN:|repush_needed output never written"
   "S1|$VERIFY_SUITE|1|#7104 I1 pass 1:|production status URL path corrupted (stub argv)"
   "S2|$VERIFY_SUITE|1|#7104 I6d:|stub argv: the status HOST repointed elsewhere"
   "S3|$VERIFY_SUITE|1|#7104 I1 pass 1:|stub argv: the HMAC signature VALUE emptied"

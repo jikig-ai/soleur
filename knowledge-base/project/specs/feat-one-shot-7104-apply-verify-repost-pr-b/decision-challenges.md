@@ -17,10 +17,23 @@ are surfaced for a decision, not applied silently.
 **Operator's stated direction (issue #7104, "Suggested shape", point 1):**
 > `continue-on-error: true` on the verify step; capture its `outcome`.
 
-**What the plan does instead.** Keeps the step fail-closed and performs the bounded one-shot
-re-push *inside* it, so the step's own exit code stays the single terminal verdict. Points 2, 3
-and 4 of the suggested shape are honoured as written; point 3's "final adjudication step" becomes
-the final *statement* of the same step, and it is still the thing that fails closed.
+**What the plan does instead.** Keeps the verification fail-closed rather than adopting
+`continue-on-error`. Points 2, 3 and 4 of the suggested shape are honoured as written.
+
+> **SUPERSEDED IN MECHANISM, NOT IN CONCLUSION — read this before the reasoning below.**
+> This section described the re-push as happening *inside* the verify step, with "the step's own
+> exit code as the single terminal verdict" and point 3's final adjudication becoming "the final
+> statement of the same step". That inline-latched-block design was **PRUNED** by plan R22.6 and is
+> not what ships. What ships is the three-step split — sensing (`infra_config_gate`), adjudication
+> and grading (`repush_plan`), actuation (`repush_apply`) — with the terminal verdict rendered by a
+> SECOND invocation of the same verify artifact (`infra_config_gate_pass2`) and backstopped by an
+> `always()` step. Boundedness is structural (a step cannot run twice in a job) rather than latched.
+>
+> The paragraphs below are retained because their REASONING is why `continue-on-error` was
+> rejected, and that conclusion is unchanged and is now enforced by assertion (AC18). But the
+> mechanism they describe in the present tense is not the shipped one, and this file is rendered
+> into the PR body — so left uncorrected the PR would have asserted a design that contradicts
+> ADR-189.
 
 **Why.** Two measured reasons.
 
@@ -92,8 +105,17 @@ requirement comes from the threshold, not from a UI surface.
 
 The threshold is set at `single-user incident` because the gate protects delivery of
 `/etc/default/soleur-doppler-token` and `/etc/webhook/hooks.json` to a host the repo treats as
-unreplaceable, and #7095 records that a malformed credential there bricks the only no-SSH
-remediation channel.
+unreplaceable.
+
+**CORRECTED at review — the citation that justified the threshold was inflated.** This read "and
+#7095 records that a malformed credential there bricks the only no-SSH remediation channel."
+#7095 records no such thing. Its title is *"prod has not deployed since 2026-07-29 — web-1's baked
+Doppler token was revoked (11:19:30Z), so the zot gate goes dark and the pull falls through to an
+unauthenticated GHCR fetch"*: a STALE credential serving STALE CODE, with the site UP throughout.
+No host was bricked and none needed re-provisioning. The threshold still stands — this PR adds a
+production write to the sole no-SSH channel for a host that genuinely cannot be re-provisioned
+(cx33, 0/6 stock), which is sufficient on its own — but it must not rest on a precedent that does
+not exist, because the inflation is precisely what carried the sign-off.
 
 **What the operator is being asked.** Confirm the threshold and provide the sign-off, or downgrade
 the threshold to `aggregate pattern` with a reason. `user-impact-reviewer` is invoked at review

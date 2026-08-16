@@ -140,19 +140,73 @@ of the first apply. A number that licenses a guard has to describe the command b
   `op=infra-config-repush-attempted`, exactly as #7527 records for
   `op=infra-config-preframe-degraded`. Saying otherwise would be the anti-pattern this work exists
   to avoid.
-- **Backend lock handling is now explicit.** `-lock-timeout` on both the re-push plan and apply, so
-  a cancelled recovery cannot leave the S3 backend lock held and block every later apply on the sole
-  no-SSH remediation path.
+- **There is NO backend lock, and `-lock-timeout` is inert.** An earlier revision of this ADR said
+  "backend lock handling is now explicit", citing the `-lock-timeout=120s` on both the re-push plan
+  and apply. That is false. `apps/web-platform/infra/main.tf:19` sets `use_lockfile = false` — R2
+  does not support the S3 conditional writes terraform's native locking needs — so there is no lock
+  to time out on and the flag changes nothing. The flags are kept (harmless, and correct the day the
+  backend gains locking), but the SOLE serializer for this path is the shared
+  `terraform-apply-web-platform-host` concurrency group, and `main.tf:18` already warns against
+  dropping that group in the belief that R2 locks. The alert step's re-push-failure arm says the
+  same thing to the operator rather than routing them to a lock that cannot exist.
 - **The re-push re-delivers the same bytes; it is not a credential rotation.** Measured in
-  `server.tf`: the payload is two `templatefile()` renders whose inputs are unchanged. This matters
-  because #7095 records that a malformed value on that channel bricks a host that cannot be
-  re-provisioned.
+  `server.tf`: the payload is two `templatefile()` renders whose inputs are unchanged.
+  - This was previously justified by claiming "#7095 records that a malformed value on that channel
+    bricks a host that cannot be re-provisioned." That inflates what #7095 says, and the inflation
+    is load-bearing because it is what carried the CPO sign-off threshold. #7095 is titled *"prod
+    has not deployed since 2026-07-29 — web-1's baked Doppler token was revoked, so the zot gate
+    goes dark and the pull falls through to an unauthenticated GHCR fetch"*: a STALE credential
+    serving STALE CODE, with the site UP throughout. No host was bricked and none needed
+    re-provisioning. The byte-identity property is still worth stating — it is what makes the
+    re-push idempotent — it is simply not backed by a host-bricking precedent.
 - **The plan JSON is secret-bearing.** `tfplan-repush.json` carries the live prd Doppler token and
   the webhook HMAC in cleartext — terraform's JSON serialization ignores `sensitive` — so it is
   removed by a `trap ... EXIT` that survives every abort path and is never `cat`ed.
+- **Boundedness is per-RUN, not per-issue or per-host.** A step cannot execute twice in one job, so
+  "at most one re-push" is structural for the run that fires it. It is NOT a global budget: a job
+  RE-RUN produces a fresh, independently eligible re-push, and so does the next push. That is the
+  intended behaviour — each run re-senses and re-grades from scratch — but it means the honest claim
+  is "one write per run", and anyone reading this as "one write, ever" would be wrong.
+- **R17.8's free win, available only because `use_lockfile = false`.** The "assert the webhook is
+  alive after every apply" invariant previously covered apply #1 only, and under the rejected inline
+  design it was unfixable. Under the step split it is one duplicated step with an `if:`. It is free
+  here specifically because there is no backend lock to hold across the extra probe.
+- **R20.5's measurement: the window this cannot close is 9 s.** The handler's own
+  `webhook-self-restart` fires at `+3 s`, and the observed restart settle is `6 s`, so `6 + 3 = 9 s`
+  of exposure remains after any probe succeeds. This is why the Phase 2 readiness probe must be
+  advisory-with-timeout and can never be a proof.
+- **The ADR-072 distinction, as ADR-186 states it.** ADR-072 bans a verification surface from
+  actuating. This ADR does not overturn that: the verification surface here still does not actuate.
+  Sensing, adjudication and actuation are three separate steps, and the production write lives in
+  the actuation step, which is not a verification surface. ADR-186 records the same split for PR-A.
+- **Sunset condition, verbatim from the ruling.** *"Ship the bounded recovery (this PR) first;
+  implement the root-cause readiness probe as Phase 2, blocked on the first firing's forensics."*
+  When Phase 2 lands and the root cause is named and fixed at source, this recovery becomes dead
+  code and should be removed rather than left as a second mechanism nobody reasons about.
 - **C4: no edit.** No new external actor, external system, container or access relationship.
 
 ## Alternatives rejected
+
+- **Fixing it at the source instead of recovering from it (the CTO's three reasons).** The obvious
+  objection to this whole ADR is that a bounded re-push treats a symptom. It was put to the CTO and
+  rejected for Phase 1 on three grounds, all verified:
+  1. **The root cause is NOT established.** `infra-config-apply.sh:80` does `rm -f "$STATE_FILE"`
+     before any work, so a handler that ran and was killed leaves NO frame. Nonce-1 observed a
+     *readable stale 13/13 frame*, which means the handler never reached that line. "The async
+     handler exec was disrupted" is inference, not measurement.
+  2. **A readiness probe cannot be a proof.** `webhook.service` is `Type=simple` (active at fork,
+     before the `hooks.json` parse and the `:9000` bind); the bootstrap ALREADY asserts `is-active`
+     at `server.tf:164` and that assertion PASSED during nonce-1; and
+     `StartLimitIntervalSec=0` + `Restart=on-failure` plus the handler's own `+3 s`
+     `webhook-self-restart` reopen the window after any probe succeeds (the 9 s above).
+  3. **Blast radius is inverted from the naive read.** This recovery repeats a byte-identical,
+     already-authorized, nonce-idempotent write. A fail-closed readiness assertion would instead sit
+     inside the SOLE no-SSH delivery path for a host that cannot be re-provisioned (cx33, 0/6
+     stock). Phase 2's probe must therefore be advisory-with-timeout, never blocking.
+
+  The ≥3-in-30-days escalation trigger that would normally accompany a recovery like this was
+  deliberately NOT built: at the observed rate (n=1 in ~13 months) it is unfireable, so it would be
+  a mechanism that never runs pretending to be a safety net.
 
 - **`continue-on-error` on the verification step, adjudicating afterwards.** Rejected in
   `decision-challenges.md`: it converts a fail-closed gate into a fail-open one, which is strictly
@@ -170,3 +224,13 @@ of the first apply. A number that licenses a guard has to describe the command b
 - **Widening `scripts/infra-config-red-alert.sh` to file the ledger.** Rejected: three labels
   hardcoded across five sites, fail-open by contract, and it means *red* — the ledger is written on
   runs that recovered.
+  - **Partly SUPERSEDED at review.** The ledger is still not filed through that helper, and should
+    not be: it is a per-run counter, not a notification. But the reasoning above was used to
+    conclude that a green recovered run needs no operator-facing record at all, and that conclusion
+    was wrong — the Sentry breadcrumb matches no alert rule and the ledger issue is created CLOSED
+    and only body-edited, so a production write to the sole no-SSH channel was reaching nobody. The
+    helper now carries a fourth `recovered` reach mode with its OWN label
+    (`ci/infra-config-recovered`), priority (p2), title, body and Sentry op. The separation is the
+    part that mattered in the original objection and it is preserved structurally rather than by
+    declining to reuse the helper: `ci/infra-config-red` is the dedupe key, so a self-heal filed
+    into it would swallow a real P1 gate failure as a comment.

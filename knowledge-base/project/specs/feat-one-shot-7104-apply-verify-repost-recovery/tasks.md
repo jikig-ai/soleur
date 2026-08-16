@@ -96,8 +96,18 @@ stylistic: PR-B's recovery would fire on the wrong runs without PR-A's discrimin
 ## Phase 4 — PR-B RED: the contract's tests, before the contract
 
 **Design pivot (plan R16.2).** There is **no** higher-order `infra_config_bounded_verify`. The
-decision logic is a **pure predicate** matching the seven existing siblings in
-`infra-config-gate.sh`; the `if`/`else` that consumes it stays in the YAML. This is what keeps
+decision logic is a **pure predicate** in `infra-config-gate.sh`; the `if`/`else` that consumes
+it stays in the YAML.
+
+**CORRECTED at review.** This read "matching the seven existing siblings", and both halves were
+wrong. There are **EIGHT** sibling functions in `infra-config-gate.sh`, not seven
+(`expected_count`, `dpf_replaced`, `frame_stability`, `expected_restart_units`, `classify_files`,
+`count_invariant`, `content_assert`, plus `adjudicate_infra_config`) — nine with the predicate this
+PR adds. More importantly, the predicate does **not** match all of them: only **ONE**,
+`infra_config_count_invariant`, is quiet-with-exit-status-as-the-verdict. Every other sibling
+RETURNS A VALUE on stdout — a count, a unit list, a true/false, a verdict string, or diagnostics —
+so "matching the siblings" describes a convention that seven of the eight do not follow. The
+predicate mirrors `count_invariant` specifically, and that is the precedent worth naming. This is what keeps
 `set -e` in force (R16.1) and what makes the tests exercise the real decision rather than stubs.
 
 ```
@@ -212,7 +222,7 @@ sourceable library of quiet, pure adjudicators. Exit status is the verdict; noth
 
 - [x] **6.1** Move the `Verify infra-config apply succeeded` step's `run:` body **verbatim** to
       `apps/web-platform/infra/infra-config-verify.sh`. Measured precondition (ADR-150's): 240 body
-      lines, 19,710 bytes, **0** `${{ }}` expressions, **0** heredocs, **0** herestrings; all four
+      lines, 19,774 bytes, **0** `${{ }}` expressions, **0** heredocs, **0** herestrings; all four
       `env:` keys are step-level and inherited by a child `bash`. The step becomes
       `run: bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/infra-config-verify.sh"` with
       `working-directory` **unchanged** — the body's `source ./infra-config-gate.sh` is relative and
@@ -315,7 +325,19 @@ sourceable library of quiet, pure adjudicators. Exit status is the verdict; noth
       **`infra-config-recovery-ledger`**. Guard the emission so a failure can never red a run that
       actually recovered.
 - [x] **7.4** Exclude dispatch-triggered runs from the counter (R15.8).
-- [~] **7.5** **[FOLDED into 7.2/7.3 — R19.6.]** Original text: **[FOLDED into 7.2/7.3 — R19.6.]** Once corrected it names no mechanism 7.2/7.3 do not already build — the same shape as the cut 7.7 and the discharged 9.3. Its acceptance moves into 7.2/7.3's definition of done. Add the ≥3-in-30-days escalation. **[Corrected — R18.7]** it ships as a **queryable
+- [~] **7.5** **[FOLDED into 7.2/7.3 — R19.6.]** Once corrected it names no mechanism 7.2/7.3 do
+      not already build — the same shape as the cut 7.7 and the discharged 9.3. Its acceptance moves
+      into 7.2/7.3's definition of done.
+
+      **The ≥3-in-30-days escalation trigger was CUT, and is not deferred.** An earlier revision of
+      this entry duplicated its own `[FOLDED]` marker and left the instruction "Add the
+      ≥3-in-30-days escalation" reading as live work, so it looked outstanding rather than decided.
+      It was cut on the CTO's ruling for a measured reason: at the observed rate — n=1 in ~13
+      months — a ≥3-in-30-days trigger is unfireable, so building it would ship a mechanism that
+      never runs while presenting as a safety net. It is NOT a merge blocker and must not be
+      re-added on the strength of this line.
+
+      **[Corrected — R18.7]** it ships as a **queryable
       counter plus the ledger title**, and must **not** be described as an alert route: no
       `sentry_issue_alert` rule matches a new `op=`, exactly as #7527 already records for
       `op=infra-config-preframe-degraded`. Claiming otherwise is the AP-021 violation this plan
@@ -429,7 +451,7 @@ sourceable library of quiet, pure adjudicators. Exit status is the verdict; noth
       `origin/main`, so all three claims are provisional; **189** is the lowest free ordinal.
 
       Swept: the filename plus **15** references across 6 files (battery, verify suite, the ADR's
-      own H1, plan ×7, session-state ×2, this file ×3). Residual `ADR-187` in the branch: **0**.
+      own H1, plan ×7, session-state ×2, this file ×3). Residual `ADR-187` in the branch: **0 outside the collision narrative** — the unqualified "0" was self-refuting, since the sentences recording the collision necessarily name the ordinal.
       The sweep was scoped to the enumerated files rather than run repo-wide — a blanket renumber
       is how another branch's work gets rewritten, and a count certifies it either way.
 

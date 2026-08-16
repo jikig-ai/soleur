@@ -20,13 +20,21 @@ in prose only, and #7104 is still OPEN with `closedByPullRequestsReferences: []`
 
 ### Decisions
 
+> **These are INTENT as recorded at plan time, not a description of what shipped.** One entry below
+> was superseded during implementation and is corrected in place; the rest held.
+
 - `infra_config_bounded_verify`, `infra_config_no_new_frame` and a `repush_once` *function* are all
   dead names from the pre-R16.2 design and must not be built. The one function PR-B adds is the pure
   predicate `infra_config_should_repush` (R18.1, R18.2).
-- The re-push is an **inline latched block inside the widened poll loop**, not a function and not a
-  duplicated block. A function invites `if ! repush_once`, which suspends `errexit` for a body
-  containing a production `terraform apply`; a duplicated block defeats the call-site pin's `head -1`
-  anchors (R18.2).
+- ~~The re-push is an **inline latched block inside the widened poll loop**, not a function and not
+  a duplicated block.~~ **SUPERSEDED — plan R22.6 PRUNED the inline latched block outright, and it
+  is not what ships.** The shipped shape is a three-step split: sensing (`infra_config_gate`),
+  adjudication and grading (`repush_plan`), actuation (`repush_apply`), with the terminal verdict
+  rendered by a second invocation of the same verify artifact and an `always()` backstop.
+  Boundedness is STRUCTURAL — a step cannot run twice in a job — rather than latched, and the
+  `head -1` call-site anchors this entry worried about were replaced by counting and parsed-YAML
+  assertions. The reason the entry gives for rejecting a `repush_once` FUNCTION is still live and
+  still enforced (bash suspends `errexit` into a wrapper body; Guard 2 (6) pins it).
 - Guard 1 is re-derived over the predicate; boundedness moves to Guard 2, the only guard that
   quantifies over the caller (R18.3).
 - AC14 is withdrawn: after PR-A, a no-op dispatch passes pass 1, so it no longer exercises the
@@ -127,7 +135,7 @@ those sections record, and overwriting them would destroy the evidence for how e
   contract (R20.7 §1). Measured on the as-written library: **0** hits, with a positive control
   proving the detector can report a non-empty set.
 - **4.3 / 8.2** — `apps/web-platform/infra/infra-config-repush-mutation.test.sh`, **17/17 rows
-  behaved as expected**, registered in `infra-validation.yml` (suite **39 of 107**, derivable by
+  behaved as expected**, registered in `infra-validation.yml` (suite **39 of 101** post-rebase, derivable by
   `run-registered-suites.sh --list`). The file header states which axes it edits AND which it does
   not, so the omissions are visible rather than implied.
 - **`GATE_MIN_ASSERTIONS` re-measured 127 → 130**, flush, no slack (task 8.3's instruction re-run
@@ -196,7 +204,7 @@ no verdict, which the battery correctly refuses to score as detection. **G2-5** 
   `ADR-187` (a different decision, `nested-runner-signals-unresolved-by-exit-shape…`) and
   `origin/feat-one-shot-7291-t5-mutation-network-flake` carries `ADR-188`. Neither is on
   `origin/main`, so all three claims are provisional and 189 is the lowest free ordinal. Swept:
-  filename + **15** references across 6 files; residual `ADR-187` in the branch is **0**. The sweep
+  filename + **15** references across 6 files; residual `ADR-187` in the branch is **0 outside the collision narrative itself**. The bare claim "residual is 0" was self-refuting — the sentence making it contains the literal, and grep counts 6 hits across this file, `tasks.md` and `resume-prompt.md`, every one of them a NARRATIVE reference to the collision rather than a live citation of a decision. The sweep
   was scoped to the enumerated files rather than run repo-wide, because a blanket renumber is how
   another branch's work gets rewritten.
 - **10.4** — SATISFIED under AC20 (above). **Do not re-dispatch.**
@@ -223,3 +231,78 @@ plus `TF_CLI_CONFIG_FILE=/var/tmp/tfcli.hcl`; the worktree's infra dir is alread
   third could land 189), and run `apps/web-platform/infra/run-registered-suites.sh` — that
   directory has **no required CI status check**, so it is the one half of this diff no gate
   covers automatically.
+
+## Addendum — 2026-08-16 (the review-fix pass)
+
+Appended, not folded in: the readings below correct figures the sections above record, and
+overwriting them would destroy the evidence for how each was reached.
+
+### The ADR ordinal: KEEP 189. Do NOT renumber to 190.
+
+The resume prompt instructed "ADR-189 → ADR-190" because a third branch was observed holding 189.
+Re-derived across all **67** `origin/*` refs at the start of this pass:
+
+| ordinal | held by |
+|---|---|
+| 187 | `origin/feat-one-shot-7429-7402-killed-signal-and-orphan-globs` |
+| 188 | `origin/feat-one-shot-7291-t5-mutation-network-flake` |
+| **189** | **`origin/feat-one-shot-7104-apply-verify-repost-pr-b` (this branch, uncontested)** |
+| 190 | `origin/feat-one-shot-7341-zot-restart-loop-blocks-release` |
+
+`origin/main`'s highest is **186**, so all four claims are provisional. The 7341 branch DID claim
+189 (`5df0ab917` "docs(adr-189): claim the ordinal…") — that is the collision the resume prompt
+saw — but it has **since renumbered itself to 190**. Following the instruction literally would
+therefore have created a fresh collision with 7341, which is the exact harm it was written to
+prevent. This is why task **10.3 stays OPEN**: re-derive again immediately before merge. Lowest
+free ordinal if 189 is ever lost: **191**.
+
+### Measurements taken this pass
+
+- **Suite ordinal: 39 of 101** (post-rebase). The recorded "39 of 107" was wrong on the
+  denominator; pre-rebase it was 38 of 100, and #7516 inserted one suite above it.
+- **The extraction body is 19,774 bytes.** Re-derived at the extraction commit `9c7a021b8`: the
+  file is 241 lines / 19,794 bytes, so the 240-line body is 19,794 − 20 (shebang) = 19,774. The
+  plan's 19,710 was wrong at two sites; both corrected.
+- **`steps.infra_config_gate.*` is referenced at 3 `if:` sites and 6 `env:` values**, with 5
+  `success()`-gated and 5 `always()`-mentioning steps downstream. The plan's "two / three / one
+  always(), zero edits" was false; only the five-×-`success()` half survived.
+- **Eight sibling functions, not seven, and only ONE is quiet-with-rc-as-verdict**
+  (`infra_config_count_invariant`). Every other sibling returns a value on stdout.
+- **`main-health-monitor.yml`'s infra step budget of 15 min is CORRECT and was NOT changed.**
+  The resume prompt called for 15 → 20. Measured across 8 successful runs the infra step ran
+  354/366/389/419/420/431/434/447 s; `roundup5(7.45 × 1.5) = 15`, floor 10 → **15**. Reaching 20
+  needs an infra max above 10 min; the observed max is 7 m 27 s. Refuted, not applied.
+- **`deploy-script-tests` re-derived 14 → 15 min.** Measured from the API over the last 15
+  `Infra Validation` runs (successful only): 422 … 581 s, so the recorded 565 s basis is now
+  **581 s**. This PR takes the battery 17 → 22 rows; measured locally 85 s → 102 s at JOBS=4 on 16
+  cores, and CI is a 4-vCPU runner where `JOBS=2`, so the added cost is roughly +45 s → ~626 s.
+  `626 × 1.4 = 876 s = 14.6 min → 15`. The block's own standing instruction ("re-derive this if
+  steps are added") is what triggered this.
+- **#7095 does not record a bricked host.** It records a revoked baked token serving stale code
+  with the site UP. Corrected in ADR-189 and in `decision-challenges.md`, where the inflation was
+  carrying the CPO sign-off threshold.
+- **`use_lockfile = false`** at `main.tf:19`, so `-lock-timeout` is inert and the concurrency group
+  is the sole serializer. The ADR's "backend lock handling is now explicit" was false.
+
+### A defect this pass found that was not on the list
+
+**The branch was already CI-red.** Commit `974a77c43` (listed as DONE and verified) re-keyed the
+alert step's condition from `outcome != 'success'` onto the verdict and left
+`scripts/infra-config-red-alert.test.sh` asserting the old literal. That suite is registered in
+`scripts/test-all.sh` (the `scripts` shard, which CI's required `test` context runs) and had been
+failing **28 passed / 2 failed** since. The Phase 10 `TEST_GROUP=scripts` run recorded as
+`302/0` predates that commit, and `974a77c43`'s own verification measured the *verify* suite
+instead — an adjacent property. Now 45/0.
+
+### The three commits missing `Co-Authored-By`, and why they are not rewritten
+
+`aefce3b2e`, `2dd55a851` and `a23ae8ce0` (pre-rebase SHAs) carry no `Co-Authored-By` trailer;
+confirmed with `git interpret-trailers --parse`, which reports 0 for each. Every commit added by
+this review pass carries it.
+
+They are deliberately NOT rewritten. This repo squash-merges, so the only commit body that reaches
+`main` is the squash body, which `/ship` composes and which will carry the trailer. Fixing three
+intermediate commits means rewriting all 23 on the branch — `git rebase -i` is unavailable in this
+environment, so it would need `--exec` or `filter-branch` across the whole range — to change
+history that the merge discards. The risk is real (this branch has already had one sibling
+collision) and the benefit is zero once squashed. Recorded rather than silently dropped.

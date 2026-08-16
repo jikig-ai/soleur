@@ -31,10 +31,14 @@ fail.
 
 > **[Updated 2026-08-13] This plan covers two PRs, and PR-A has shipped.** PR-A (#7509, merged
 > 2026-08-13, deployed and verified live) delivered the discriminator — `tasks.md` Phases 1–3.
-> **PR-B is the bounded re-push, and its authoritative section is
-> [`# R18 — PR-B`](#r18--pr-b-the-bounded-re-push-reconciled-against-what-pr-a-shipped) at the end
-> of this document.** R18 supersedes every forward-looking statement above it wherever they
-> disagree, and it names each disagreement. `Closes #7104` attaches to PR-B, not PR-A.
+> **PR-B is the bounded re-push. Its authoritative sections are
+> [`# R18 — PR-B`](#r18--pr-b-the-bounded-re-push-reconciled-against-what-pr-a-shipped) AND, above
+> it wherever the two disagree, `# R22`.** R18 supersedes every forward-looking statement above it
+> and names each disagreement — but R18 is not the last word: **R22 supersedes R18** on the shape
+> that actually ships. Most consequentially R22.6 PRUNES R18.3's inline latched block outright in
+> favour of the three-step sensing/adjudication/actuation split, and R22.2 is what moved the
+> verification body into `infra-config-verify.sh`. A reader who stops at R18, as this header
+> previously invited, gets the design that was rejected. `Closes #7104` attaches to PR-B, not PR-A.
 
 ## Enhancement Summary
 
@@ -3143,9 +3147,16 @@ sensor — and `Terraform apply` consumes the saved plan in the next. The unbypa
 grading and applying already exists, is already tested, and sits ~400 lines above the step PR-B was
 about to actuate a *second* production apply from without it.
 
-R20.2's measurement re-confirmed independently: `steps.infra_config_gate` is referenced at exactly
-**two** `if:` sites plus three `env:` reads; the remaining six status-keyed steps are five ×
-`success()` and one `always()`, all job-cumulative, **zero edits**.
+R20.2's measurement, **CORRECTED against this PR's own output**. The line here previously read
+"re-confirmed independently: exactly **two** `if:` sites plus three `env:` reads; the remaining six
+status-keyed steps are five × `success()` and one `always()`". Re-derived from the parsed workflow
+at HEAD, `steps.infra_config_gate.*` is referenced at **three** `if:` sites and **six** `env:`
+values, and downstream of the gate there are five `success()`-gated steps and **five** whose `if:`
+mentions `always()`. Only the five-×-`success()` half of the original claim survived; it is the half
+the backstop's justification is sized on, and it is pinned by `AC18_SUCCESS_STEPS` in
+`infra-config-gate.test.sh`, which re-derives it from the parsed workflow rather than restating it.
+The "zero edits" claim also no longer holds: this PR's review pass edited the alert step's condition
+and three re-push-keyed `if:`s.
 
 | R20 defect | Under the split |
 |---|---|
@@ -3165,7 +3176,7 @@ body across two YAML steps — exactly the duplication R18.2 rejected, breaking 
 anchoring precisely as R18.2 predicted. So the choice is not "script vs. YAML"; it is **one tested
 file invoked twice** vs. **240 duplicated lines of untestable YAML**.
 
-Precondition re-measured independently: **240 body lines, 19,710 bytes, 0 `${{ }}`, 0 heredocs, 0
+Precondition re-measured independently: **240 body lines, 19,774 bytes, 0 `${{ }}`, 0 heredocs, 0
 herestrings**, and all four `env:` keys are step-level and inherited by a child `bash`. ADR-150's
 verbatim-move precondition is satisfied exactly.
 
@@ -3235,7 +3246,8 @@ the `if: always()` terminal-verdict backstop step exists. ~15 lines, two indepen
 required to agree. **Do not rely on actionlint for this.**
 
 **Guard 2 — the "verbatim" move is not verbatim** (block-scalar dedent, stripped trailing newline,
-shebang offset) — 19,710 bytes into a P1 gate with no CI signal on the production path.
+shebang offset) — 19,774 bytes into a P1 gate with no CI signal on the production path.
+(CORRECTED: this figure and the one above both read 19,710. Re-derived at the extraction commit `9c7a021b8`: the file is 241 lines / 19,794 bytes, and the 240-line BODY is therefore 19,794 - 20 = **19,774** bytes once the `#!/usr/bin/env bash` line is removed.)
 *Cheapest guard:* ADR-150's technique as a commit-1 merge gate, not as prose — parse the `run:` block
 from the base revision with PyYAML, compare byte-for-byte against the new file minus its shebang, **no
 whitespace normalization**. Plus `bash -n` on the extracted file (never on the `.yml`, never `bash -c`).

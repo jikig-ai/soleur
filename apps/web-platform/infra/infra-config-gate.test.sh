@@ -1888,11 +1888,11 @@ g1_problems=$(printf '%s\n' "$GUARD1" | grep -c '^PROBLEM=' || true)
 # someone wires a new consumer onto this chain. Re-derive and update on a deliberate change.
 G1_EXPECTED_REFERENCES=12
 if [[ "$g1_problems" -eq 0 && "${g1_checked:-0}" == "$G1_EXPECTED_REFERENCES" ]]; then
-  pass "#7104 Guard 1: all $g1_checked workflow if:/env: references resolve, and every compared literal is one the producer can emit"
+  pass "#7104 WORKFLOW-REF PIN: all $g1_checked workflow if:/env: references resolve, and every compared literal is one the producer can emit"
 elif [[ "$g1_problems" -eq 0 ]]; then
-  fail "#7104 Guard 1: examined ${g1_checked:-0} if:/env: step-output reference(s), expected exactly $G1_EXPECTED_REFERENCES. Fewer means the extractor stopped matching and its clean verdict is vacuous; more means a new consumer was wired onto the gate chain — re-derive and update G1_EXPECTED_REFERENCES deliberately."
+  fail "#7104 WORKFLOW-REF PIN: examined ${g1_checked:-0} if:/env: step-output reference(s), expected exactly $G1_EXPECTED_REFERENCES. Fewer means the extractor stopped matching and its clean verdict is vacuous; more means a new consumer was wired onto the gate chain — re-derive and update G1_EXPECTED_REFERENCES deliberately."
 else
-  fail "#7104 Guard 1: $g1_problems problem(s) over ${g1_checked:-0} reference(s):"
+  fail "#7104 WORKFLOW-REF PIN: $g1_problems problem(s) over ${g1_checked:-0} reference(s):"
   printf '%s\n' "$GUARD1" | sed -n 's/^PROBLEM=/      - /p' >&2
 fi
 # GUARD 3's LITERAL IS THE MEASUREMENT, so it is pinned to the measured value and not
@@ -1992,12 +1992,32 @@ PYEOF
 
 g3_problems=$(printf '%s\n' "$GUARD3" | grep -c '^PROBLEM=' || true)
 if [[ "$g3_problems" -eq 0 ]]; then
-  pass "#7104 Guard 3: repush_plan and repush_apply carry EXACTLY their measured conditions (apply keyed on repush_graded == '${TASK_40_MEASURED_CARDINALITY}'), and the apply body holds one unlooped production write"
+  pass "#7104 CARDINALITY PIN: repush_plan and repush_apply carry EXACTLY their measured conditions (apply keyed on repush_graded == '${TASK_40_MEASURED_CARDINALITY}'), and the apply body holds one unlooped production write"
 else
-  fail "#7104 Guard 3: $g3_problems problem(s). Widening the apply's literal re-opens the transitive -target blast radius task 4.0 measured shut; narrowing it disables the recovery silently:"
+  fail "#7104 CARDINALITY PIN: $g3_problems problem(s). Widening the apply's literal re-opens the transitive -target blast radius task 4.0 measured shut; narrowing it disables the recovery silently:"
   printf '%s\n' "$GUARD3" | sed -n 's/^PROBLEM=/      - /p' >&2
 fi
 
+# ------------------------------------------------------------------------------------------
+# A NOTE ON GUARD NAMES, because this PR carries TWO numbering systems (#7104 review).
+#
+# The plan uses "Guard N" twice with different referents, and `scripts/lint-guard-contract.py`
+# lints only one of them (it walks knowledge-base/project/plans/** and never sees this file):
+#
+#   plan `## Guard Contract`  Guard 1 = the predicate infra_config_should_repush
+#                             Guard 2 = the production call-site pin
+#   plan R22.5                Guard 1 = the mis-keyed `if:` pin
+#                             Guard 2 = the verbatim-move gate
+#                             Guard 3 = the graded cardinality
+#
+# Both sets ship, so a reader grepping "Guard 1" in this file got two different guards. The two
+# labels here that followed R22.5's numbering are renamed to descriptive names — WORKFLOW-REF PIN
+# and CARDINALITY PIN — so no number is shared. `Guard 2 (N)` is deliberately UNCHANGED: it tracks
+# the `## Guard Contract` numbering, which is the one the lint enforces, and renaming it would
+# break that correspondence. R22.5's Guard 2 (the verbatim-move gate) has no label here at all
+# because it does not ship as a standing assert — it was a commit-time verification, since its
+# prescribed baseline `git show origin/main:<workflow>` FLIPS at merge.
+#
 # --- #7104 AC18 ----------------------------------------------------------------------------
 # The step-level error-tolerance key is banned outright in this workflow: it is how a
 # verification gate stops failing closed, which is the entire defect class PR-B exists in.
