@@ -230,3 +230,62 @@ ran, and already produced the right answer. Building another one fixes nothing.
 
 **Patch the infra code again.** Rejected: the code on `main` is already correct. Two of the fifteen
 failed releases (`30650563981`, `30688451384`) postdate that correct fix. The defect is arrival, not authorship.
+
+## Amendment — 2026-08-16 (#7539): a stage with no channel must not plan over it
+
+Proposition 3 above says **probe the transport before the destroy**. It is implemented as the final
+step of the `cf-tunnel-ssh-bridge` composite action, and its contract is *step position*: a caller
+that has invoked the bridge has necessarily passed the gate.
+
+That argument structurally cannot reach a stage that **never invokes the composite**. #7539 was that
+case. `apply-web-platform-infra.yml`'s `apply` job runs two Terraform stages split by a credential
+boundary — the first plans and applies before the bridge exports `TF_VAR_ci_ssh_private_key`, the
+second runs after it and owns every SSH-provisioned resource. A single `-target=` line for an
+SSH-provisioned resource sat in the first stage, whose own step title reads *"non-SSH resources
+only"*. `server.tf` resolves `agent = var.ci_ssh_private_key == null`, so it baked `agent = true` and
+died with `SSH agent requested but SSH_AUTH_SOCK not-specified`. `main`'s apply was red for six
+consecutive pushes.
+
+**The amendment generalises §3 from "probe the channel before using it" to "a stage that has no
+channel must not be able to plan over it", and moves enforcement from runtime to build time.**
+
+The runtime probe and the build-time assertion are complements, not substitutes. §3's probe answers
+*is the channel alive right now* on a stage that has one; the new assertion answers *may this stage
+reach that kind of resource at all*, before a run exists. Neither implies the other: a live channel
+does not make a bridge-less stage safe, and a correct placement does not make a dead credential
+work.
+
+**Enforcement** is the Guard 1 bright line in
+[`plugins/soleur/test/terraform-target-parity.test.ts`](../../../../plugins/soleur/test/terraform-target-parity.test.ts):
+no `-target=terraform_data.*` may appear anywhere in the `apply` job before the step whose `uses:` is
+`./.github/actions/cf-tunnel-ssh-bridge`. It is stated over `terraform_data` rather than over the
+SSH predicate because 17 of the 18 `terraform_data` resources in the infra root are SSH-provisioned
+and nothing else in the root carries a `provisioner` block — so the line is strictly stronger there,
+needs no dependency graph, and cannot be narrowed by a resource silently dropping out of the SSH set.
+It fails the pull request rather than the apply.
+
+Two mechanisms produced the same failure, and both reduce to the placement:
+
+- **Transitive.** `-target` is transitive on dependencies, so the misplaced resource dragged its
+  `depends_on` target into the bridge-less plan when that dependency happened to need replacing. A
+  *clean* dependency plans as a no-op, which is why the misplacement sat green for months.
+- **Direct.** Once a sibling change cleaned that dependency, the misplaced resource failed on its own
+  first `file` provisioner. This is the durable form: an SSH-provisioned resource on a stage with no
+  SSH transport fails whether or not anything is dragged in with it.
+
+### Rejected alternative — open the bridge before the first stage
+
+Recorded here because it is a genuine architectural rejection that would otherwise survive only in a
+plan that gets archived.
+
+Opening `cf-tunnel-ssh-bridge` before the first stage would also have made the misplaced target work.
+It is rejected because it **inverts the stage contract**: it puts a root SSH credential on the stage
+explicitly designated for non-SSH resources, widening the blast radius of every one of that stage's
+~123 targets to include a live credential they have no need for, and dissolving the boundary that
+makes the two-stage split legible at all. The correct fix moves one line to the stage that already
+owns that class of resource. The credential boundary is the design; the misplacement was the defect.
+
+The prose instruction alone is not sufficient, and this is measured rather than assumed: the
+`ALLOW-LIST MAINTENANCE` comment above the first stage's target list already said to exclude
+SSH-provisioned resources. It landed 2026-05-20. The violation was appended six lines beneath it on
+2026-08-12.
