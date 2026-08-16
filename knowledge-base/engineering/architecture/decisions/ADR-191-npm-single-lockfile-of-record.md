@@ -66,7 +66,7 @@ a duplication rather than removing the duplication.
 **Deleting `package-lock.json` instead, and standardizing on bun.** Rejected, and this is
 the decisive asymmetry rather than a preference: **Dependabot security-scans only the npm
 lockfile.** The evidence is in-repo and predates the change:
-`knowledge-base/project/specs/feat-one-shot-7084-dependabot-bunlock-alert-drain/alerts-baseline.tsv`
+`knowledge-base/project/specs/archive/20260816-224512-feat-one-shot-7084-dependabot-bunlock-alert-drain/alerts-baseline.tsv`
 captures all 39 alerts as they stood *while `bun.lock` still existed*, and not one names a
 `bun.lock` manifest — 27 point at `apps/web-platform/package-lock.json`, 9 at
 `plugins/soleur/skills/pencil-setup/scripts/package-lock.json`, 3 at the root. There is also
