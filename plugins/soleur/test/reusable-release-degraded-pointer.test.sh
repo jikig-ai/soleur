@@ -478,9 +478,28 @@ if [[ "$PASS" -ne $((_cp + 1)) || "$FAIL" -ne $((_cf + 1)) ]]; then
   exit 2
 fi
 FAIL=$((FAIL - 1))
+# THE DERIVED CHECK, kept as its own non-dispatching guard. It is the sharper of the two — it
+# scales with the derived family sizes, so a short derivation cannot satisfy it.
+if [[ $((PASS + FAIL)) -lt "$EXPECTED_MIN" ]]; then
+  echo "  FATAL: anti-vacuity (derived): ran $((PASS + FAIL)) assertions, expected >= $EXPECTED_MIN for the derived family sizes — the derivation or the carve is short. Fix it, do not lower the floor." >&2
+  exit 2
+fi
+
+# THE ABSOLUTE FLOOR, deliberately a LITERAL bound on the line directly above the test.
+#
+# scripts/guard-vacuity-floor.test.sh builds its mutant by slicing the floor block and widening
+# BACKWARD only over contiguous simple assignments. `EXPECTED_MIN` is computed from arrays
+# declared ~200 lines up, so it does not bind inside that slice: the mutant died on an unbound
+# variable and was scored `mutant not constructible` — i.e. this suite's floor was counted as
+# UNCOVERED by the contract in ADR-193, not as passing. A literal adjacent to the `if` binds,
+# so the floor is provably exercised under a neutered assertion machinery.
+#
+# It is an absolute lower bound, NOT a substitute for the derived check above: raise it only
+# alongside a real growth in the assertion population.
+FAIL_FLOOR_MIN=25
 TOTAL=$((PASS + FAIL))
-if [[ "$TOTAL" -lt "$EXPECTED_MIN" ]]; then
-  echo "  FATAL: anti-vacuity: ran $TOTAL assertions, expected >= $EXPECTED_MIN — the derived set or the carve is short. Fix the derivation, do not lower the floor." >&2
+if [[ "$TOTAL" -lt "$FAIL_FLOOR_MIN" ]]; then
+  echo "  FATAL: anti-vacuity: ran $TOTAL assertions, expected >= $FAIL_FLOOR_MIN. Fix the extraction, do not lower the floor." >&2
   exit 2
 fi
 

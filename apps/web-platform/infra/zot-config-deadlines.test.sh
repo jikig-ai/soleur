@@ -286,9 +286,30 @@ if [[ "$PASS" -ne $((_cp + 1)) || "$FAIL" -ne $((_cf + 1)) ]]; then
   exit 2
 fi
 FAIL=$((FAIL - 1))
+
+# THE DERIVED CHECK — the sharper of the two, since it scales with the key/relation population.
+if [[ $((PASS + FAIL)) -lt "$EXPECTED_MIN" ]]; then
+  echo "  FATAL: anti-vacuity (derived) — ran $((PASS + FAIL)) assertions, expected >= $EXPECTED_MIN for the derived population. Fix the extraction, do not lower the floor." >&2
+  exit 2
+fi
+
+# THE ABSOLUTE FLOOR, a LITERAL bound on the line directly above the test.
+#
+# scripts/guard-vacuity-floor.test.sh slices the floor block and widens BACKWARD only over
+# contiguous simple assignments, so `EXPECTED_MIN` — computed far above — does not bind inside
+# the mutant. With only the derived form, the mutant died unbound and this floor was scored
+# `not constructible`: counted as UNCOVERED by ADR-193's contract rather than as passing. A
+# literal here binds, so the floor is provably exercised under a neutered assertion machinery.
+# 7 = the SMALLEST legitimate population, which is the synthesized CHILD run
+# (CONFIG_JSON_OVERRIDE set, so the +3 parent-only assertions do not apply). A literal tuned to
+# the parent's 12 fired rc=2 inside every child and collapsed three real S4 verdicts into the
+# unresolved class — the exact FAIL-vs-cannot-measure confusion this suite's exit contract turns
+# on. The derived check above carries the parent's stronger requirement; this one only has to
+# catch a total collapse, and under a neutered assertion machinery the count goes to 0.
+FAIL_FLOOR_MIN=7
 TOTAL=$((PASS + FAIL))
-if [[ "$TOTAL" -lt "$EXPECTED_MIN" ]]; then
-  echo "  FATAL: anti-vacuity — ran $TOTAL assertions, expected >= $EXPECTED_MIN. Fix the extraction, do not lower the floor." >&2
+if [[ "$TOTAL" -lt "$FAIL_FLOOR_MIN" ]]; then
+  echo "  FATAL: anti-vacuity — ran $TOTAL assertions, expected >= $FAIL_FLOOR_MIN. Fix the extraction, do not lower the floor." >&2
   exit 2
 fi
 
