@@ -12,14 +12,15 @@
 #                   deadlines at the intended nanosecond value. This is zot reporting its own
 #                   parsed config, not the repo describing itself.
 #   (2) ABSENCE   — over a window long enough to matter, ZERO PatchBlobUpload rows carrying
-#                   `i/o timeout` at `latency:1m0s`.
+#                   `i/o timeout`. Any duration counts: a cut at the RAISED deadline is still
+#                   a finding, and requiring `latency:1m0s` made this criterion unmatchable.
 #
 # Neither alone is a pass. (1) without (2) says the config landed and says nothing about effect;
 # (2) without (1) is the ~92% coincidence above.
 #
 # ── SCOPED TO THE DEADLINE SUB-MODE, DELIBERATELY ──────────────────────────────────────────
 # zot's `PatchBlobUpload` fails in at least TWO shapes. This probe grades only the `i/o timeout`
-# at `latency:1m0s` shape — the deadline. `unexpected EOF` is a DIFFERENT sub-mode, observed
+# shape — the deadline, at whatever duration it cuts. `unexpected EOF` is a DIFFERENT sub-mode, observed
 # during a run that SUCCEEDED, and it is explicitly out of scope for #7555. A PASS here is not
 # evidence that EOF is gone, and the verdict text says so rather than leaving a reader to infer
 # a broader claim from a green.
@@ -33,9 +34,9 @@
 #
 # EXIT CONTRACT (the sweeper reads these numerically):
 #   0  PASS       — window >= MIN_WINDOW_DAYS, >= MIN_SAMPLES on the newest boot, BOTH deadlines
-#                   at DEADLINE_NS, and zero deadline-shaped PatchBlobUpload pairings.
-#   1  FAIL       — a deadline is absent/wrong on the newest boot, OR a deadline-shaped failure
-#                   was observed. Both are real findings about the running host.
+#                   at DEADLINE_NS, and zero timed-out PatchBlobUpload rows.
+#   1  FAIL       — a deadline is absent/wrong on the newest boot, OR an upload timed out.
+#                   Both are real findings about the running host.
 #   2  TRANSIENT  — the state could not be established. Never a pass.
 #
 # Usage: bash scripts/followthroughs/zot-upload-ceiling-7556.sh
@@ -44,7 +45,6 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 QUERY="${ZOT_CEILING_QUERY:-${REPO_ROOT}/scripts/betterstack-query.sh}"
-PARSE_LIB="${REPO_ROOT}/scripts/lib/zot-telemetry-parse.sh"
 
 # The intended value, in the nanoseconds zot itself reports. Derived from the 1800s setting in
 # cloud-init-registry.yml; if that setting changes, this must change with it and the ADR-190
@@ -57,7 +57,6 @@ MIN_SAMPLES="${ZOT_CEILING_MIN_SAMPLES:-12}"
 verdict() { echo "zot-upload-ceiling[#7556]: $1"; }
 
 [[ -x "$QUERY" ]] || { verdict "TRANSIENT reason=query-not-executable"; echo "TRANSIENT: ${QUERY} is not executable."; exit 2; }
-[[ -r "$PARSE_LIB" ]] || { verdict "TRANSIENT reason=parse-lib-unreadable"; echo "TRANSIENT: ${PARSE_LIB} is not readable — refusing to hand-roll the trusted-region parse."; exit 2; }
 command -v python3 >/dev/null || { verdict "TRANSIENT reason=no-python3"; echo "TRANSIENT: python3 is not on PATH."; exit 2; }
 
 # Window sanity BEFORE spending a query: a caller that shortens the window below the soak floor
@@ -80,7 +79,10 @@ trap 'rm -f "$qerr"' EXIT INT TERM
 # give 21. A probe that greps the raw envelope computes deadline_hits=0 on data where 21 of 25
 # uploads are deadline failures — and this exit code AUTO-CLOSES #7556.
 #
-# Same decode the #7440 channel probe uses; not re-derived here.
+# The same two-stage decode scripts/followthroughs/zot-log-channel-7440.sh performs. It IS
+# duplicated here rather than shared — the Workflow-era `scripts/lib/` extraction is the right
+# home once a THIRD caller appears; until then say so plainly instead of claiming a reuse that
+# does not exist in the code.
 decode() {
   jq -R -r 'fromjson? | .raw // empty' 2>/dev/null \
     | jq -R -r 'fromjson? | .message // empty' 2>/dev/null
@@ -183,10 +185,17 @@ if [[ "${patch_rows:-0}" -lt "$MIN_SAMPLES" ]]; then
   exit 2
 fi
 
-# The deadline shape, both operands required. `i/o timeout` alone would also match a transient
-# network fault; `latency:1m0s` alone would match any slow-but-successful request. The PAIRING is
-# what identifies the 60 s deadline specifically — and after this fix a genuine 1800s cut would
-# read `latency:30m0s`, so this pattern deliberately does NOT generalise to "any timeout".
+# ANY `i/o timeout` on a PatchBlobUpload row is a finding. One operand, deliberately.
+#
+# This comment used to describe a PAIRING with `latency:1m0s` and claim the pattern "does NOT
+# generalise to any timeout". Both halves were false once `latency_hits` was deleted: that field
+# lives on the paired HTTP-API row and is 0 on PatchBlobUpload rows by construction, so requiring
+# it made the probe unable to fire at all. The comment survived the deletion and told a future
+# reader the probe cannot see a 1800s cut — the opposite of what this line does, and the opposite
+# of what is wanted. A 30m0s cut IS a finding: it means the raised deadline is also too small.
+#
+# Scope: an upload row that timed out is a real failure whatever the duration, so the narrower
+# question ("was it exactly 60 s?") is answered by reading the rows, not by filtering them out.
 deadline_hits="$(grep 'PatchBlobUpload' < "$LOG_DEC_F" 2>/dev/null | { grep -c 'i/o timeout' || true; })"
 
 if [[ "${deadline_hits:-0}" -gt 0 ]]; then

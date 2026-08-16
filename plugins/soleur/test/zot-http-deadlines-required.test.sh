@@ -67,9 +67,36 @@ PY
 g() { python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('$1') if json.loads(sys.argv[1]).get('$1') is not None else '')" "$READ_S"; }
 N="$(g n)"; RT="$(g rt)"; WT="$(g wt)"; GC="$(g gc)"
 
-# Derived from the #7555 measurement, same arithmetic as the infra suite: 703_724_542 B at the
-# observed 4_500_000 B/s floor throughput = 157 s.
-MIN_DEADLINE_S=157
+# DERIVE the floor, and duplicate the OPERANDS — never the product.
+#
+# This file hard-coded `157`. ADR-190 requires the layer size to be re-measured on every zot
+# bump, and a re-measurement updates the infra suite's derivation while leaving a stale literal
+# here — in the guard that is actually REQUIRED. The required check would then pass a config the
+# advisory check fails, which inverts the tiering: the weaker guard decides the merge, on a
+# number nobody re-derived. Duplicating the two operands makes the drift visible; the assertion
+# below makes it fail.
+LARGEST_LAYER_BYTES=703724542
+FLOOR_THROUGHPUT_BPS=4500000
+MIN_DEADLINE_S=$(( (LARGEST_LAYER_BYTES + FLOOR_THROUGHPUT_BPS - 1) / FLOOR_THROUGHPUT_BPS ))
+
+# PIN THE TWO COPIES TOGETHER. Without this the duplication above is just a second place to be
+# wrong. Read the infra suite's operands and require agreement; if that file moves or stops
+# declaring them, say so rather than silently skipping (a vacuous pass here is the whole failure
+# class this PR exists to close).
+INFRA_GUARD="$REPO_ROOT/apps/web-platform/infra/zot-config-deadlines.test.sh"
+if [[ -r "$INFRA_GUARD" ]]; then
+  _ib="$(grep -oE '^LARGEST_LAYER_BYTES=[0-9]+' "$INFRA_GUARD" | head -1 | cut -d= -f2)"
+  _it="$(grep -oE '^FLOOR_THROUGHPUT_BPS=[0-9]+' "$INFRA_GUARD" | head -1 | cut -d= -f2)"
+  if [[ -z "$_ib" || -z "$_it" ]]; then
+    fail "could not read LARGEST_LAYER_BYTES/FLOOR_THROUGHPUT_BPS from the infra guard — the two floors can now drift undetected"
+  elif [[ "$_ib" == "$LARGEST_LAYER_BYTES" && "$_it" == "$FLOOR_THROUGHPUT_BPS" ]]; then
+    pass "the required and advisory guards derive the floor from the SAME operands (${LARGEST_LAYER_BYTES}B / ${FLOOR_THROUGHPUT_BPS}Bps => ${MIN_DEADLINE_S}s)"
+  else
+    fail "floor operands DRIFTED: required guard has ${LARGEST_LAYER_BYTES}B/${FLOOR_THROUGHPUT_BPS}Bps, infra guard has ${_ib}B/${_it}Bps. Re-measure once and update both, per ADR-190."
+  fi
+else
+  fail "infra guard not readable at $INFRA_GUARD — cannot confirm the two floors still agree"
+fi
 
 if [[ "$N" == "1" ]]; then
   pass "exactly one /etc/zot/config.json write_files entry (cloud-init applies the LAST; a duplicate would win on the host)"
@@ -121,8 +148,8 @@ fi
 FAIL=$((FAIL - 1))
 
 TOTAL=$((PASS + FAIL))
-if [[ "$TOTAL" -lt 8 ]]; then
-  echo "  FATAL: anti-vacuity — ran $TOTAL assertions, expected >= 8. Fix the extraction, do not lower the floor." >&2
+if [[ "$TOTAL" -lt 9 ]]; then
+  echo "  FATAL: anti-vacuity — ran $TOTAL assertions, expected >= 9. Fix the extraction, do not lower the floor." >&2
   exit 2
 fi
 

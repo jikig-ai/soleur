@@ -1005,11 +1005,16 @@ for i in $(seq 1 17); do
   printf '%s\n' "{\"level\":\"error\",\"message\":\"HTTP API\",\"path\":\"/v2/health-probe-$i\",\"statusCode\":503,\"caller\":\"c\"}" >> "$J_STARVE"
 done
 printf '%s\n' 'panic: runtime error: invalid memory address or nil pointer dereference' >> "$J_STARVE"
-run_shipper "$J_STARVE" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=1
+# CAP_UPLOAD_EVIDENCE_PER_INTERVAL is raised to the full exempt cap HERE ONLY. With the
+# production sub-quota (8 of 17) a mutation routing these rows into the upload lane can
+# consume at most 8 slots, so the sentinel below always ships and the assertion cannot
+# fail — it would pin nothing. At 17 the lane can actually be saturated, which is the
+# pressure this fixture exists to survive.
+run_shipper "$J_STARVE" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=1 ZOT_LOG_SHIPPER_CAP_UPLOAD_EVIDENCE_PER_INTERVAL=17
 assert "T19 a panic trace still ships behind 17 ordinary 5xx rows (exempt lane not starved)" \
   "grep -qF 'panic: runtime error' '$STUB_POSTS'"
 assert "T19 non-upload 5xx rows are NOT exempt (they are ordinary; a broad 5xx arm would admit them)" \
-  "[[ \$(grep -c 'health-probe-' '$STUB_POSTS') -lt 17 ]]"
+  "[[ \$(grep -c 'health-probe-' '$STUB_POSTS') -le 1 ]]"
 
 # Row 6 — SECOND MEMBER. Exempting the first pairing in a tick and dropping the second is the
 # defect a single-member fixture cannot see.
@@ -1076,7 +1081,12 @@ for i in $(seq 1 17); do
   printf '%s\n' "{\"level\":\"info\",\"message\":\"HTTP API\",\"method\":\"PATCH\",\"path\":\"/v2/x/blobs/uploads/ok-$i\",\"statusCode\":202,\"caller\":\"c\"}" >> "$J_2XX"
 done
 printf '%s\n' 'panic: runtime error: T20SENTINEL_2XX' >> "$J_2XX"
-run_shipper "$J_2XX" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=1
+# CAP_UPLOAD_EVIDENCE_PER_INTERVAL is raised to the full exempt cap HERE ONLY. With the
+# production sub-quota (8 of 17) a mutation routing these rows into the upload lane can
+# consume at most 8 slots, so the sentinel below always ships and the assertion cannot
+# fail — it would pin nothing. At 17 the lane can actually be saturated, which is the
+# pressure this fixture exists to survive.
+run_shipper "$J_2XX" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=1 ZOT_LOG_SHIPPER_CAP_UPLOAD_EVIDENCE_PER_INTERVAL=17
 # Pinned against the ORDINARY cap (1), not merely "fewer than offered": with the upload
 # sub-quota in place, deleting the 5xx arm still caps forged rows at 8, which satisfies any
 # `< 17` assertion. The property is that a 2xx is NOT exempt at all.
@@ -1135,7 +1145,12 @@ for i in $(seq 1 17); do
   printf '%s\n' "{\"level\":\"info\",\"message\":\"HTTP API\",\"method\":\"POST\",\"path\":\"/attacker/x/blobs/uploads/forged-$i\",\"statusCode\":500,\"caller\":\"c\"}" >> "$J_ANCH"
 done
 printf '%s\n' 'panic: runtime error: T20SENTINEL_ANCH' >> "$J_ANCH"
-run_shipper "$J_ANCH" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=1
+# CAP_UPLOAD_EVIDENCE_PER_INTERVAL is raised to the full exempt cap HERE ONLY. With the
+# production sub-quota (8 of 17) a mutation routing these rows into the upload lane can
+# consume at most 8 slots, so the sentinel below always ships and the assertion cannot
+# fail — it would pin nothing. At 17 the lane can actually be saturated, which is the
+# pressure this fixture exists to survive.
+run_shipper "$J_ANCH" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=1 ZOT_LOG_SHIPPER_CAP_UPLOAD_EVIDENCE_PER_INTERVAL=17
 assert "T20 a 5xx on a NON-/v2/ path is NOT exempt (path arm is anchored, not a substring)" \
   "[[ \$(grep -c 'forged-' '$STUB_POSTS') -le 1 ]]"
 assert "T20 a panic still ships behind forged non-/v2/ upload paths" \
