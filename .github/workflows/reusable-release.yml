@@ -1020,6 +1020,47 @@ jobs:
           #     recovery path at all: it publishes a draft whose image is still absent from
           #     zot, so the deploy still will not land. #7242.
           SAFE_TO_RERUN="Nothing was half-shipped: the release is still an UNPUBLISHED DRAFT with no git tag, no version consumed and no notes sent. TO RECOVER THIS RELEASE, use GitHub's 'Re-run failed jobs' on THIS run — never a fresh 'Run workflow' dispatch, which recomputes the version from a default bump_type and can strand this draft permanently. (Separately, and NOT a recovery path: if the gate itself is MISFIRING — the image really is in zot and the check is wrong — a dispatch with allow_unmirrored_reason=<why> publishes the draft anyway. It does not put the image in zot, so the deploy still will not land; it only unblocks a false positive.)"
+          # WHICH EVIDENCE CHANNEL A STAGE'S FAILURE POINTS AT (#7555 / ADR-190).
+          #
+          # MEASURED-BY: #7555 — zot v2.1.20's built-in ReadTimeout/WriteTimeout of 60000000000 ns
+          # was read off the pinned digest's own boot config, and the failure was reproduced
+          # off-box over a docker bridge with Cloudflare absent. The restart-loop framing the old
+          # unconditional pointer sent readers at was refuted in the same window: zot_restarts=0,
+          # uptime monotonic, none in 48 h.
+          #
+          # A wrong pointer is not a missing diagnosis; it is a false one (ADR-166). This used to
+          # be ONE unconditional line naming registry-host disk/restart telemetry for every stage.
+          #
+          # Each arm names a RUNNABLE command, not a place to look — the operator decides, they do
+          # not retrieve (hr-no-dashboard-eyeball-pull-data-yourself).
+          emit_stage_pointer() {
+            local reason="$1"
+            case "$reason" in
+              copy_*)
+                # Measured: the copy family fails while PUSHING bytes, so host disk/restart
+                # telemetry is a cause this job did not measure.
+                echo "Upload evidence — this stage failed while PUSHING bytes to zot. Read the PatchBlobUpload rows and their paired HTTP-API row (the pairing carries statusCode, latency and Content-Length); a row at latency:1m0s against a large Content-Length is zot's HTTP deadline expiring mid-upload (ADR-190) rather than an origin fault. Run: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep PatchBlobUpload"
+                ;;
+              verify)
+                # DELIBERATELY WORDED DIFFERENTLY FROM copy_*. `verify` does not push — it reads
+                # back what the copy left in zot, and `verify mismatch` means zot holds a
+                # DIFFERENT image, whose own detail says "something else is writing to" the tag.
+                # Telling that reader about an upload deadline would name an unmeasured cause,
+                # which is the ADR-166 defect this branching exists to remove.
+                echo "Read-back evidence — this stage did not push; it read back what the copy left in zot. For 'unresolvable' the manifest never landed, so read the copy stage's own rows; for 'mismatch' zot holds DIFFERENT bits than this release built, which is a writer question, not a transport one. Run: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep PatchBlobUpload"
+                ;;
+              bridge|crane_install)
+                echo "Registry-host health (disk AND zot_restarts/exit_code, which is what an origin flap shows up in): see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd. Run: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep SOLEUR_ZOT_DISK"
+                ;;
+              *)
+                # Fail-safe union. An unclassified stage names BOTH channels and asserts NEITHER
+                # as the cause, rather than silently inheriting whichever pointer happens to be
+                # written first — which is how this defect arose. `sign` is the live member: the
+                # copy already succeeded, so neither channel is a measured cause for it.
+                echo "Stage '${reason}' is not classified into an evidence family, so both channels are named and NEITHER is asserted as the cause. Upload evidence: PatchBlobUpload rows with their paired statusCode/latency/Content-Length. Registry-host health: SOLEUR_ZOT_DISK. Run: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 3h --grep PatchBlobUpload"
+                ;;
+            esac
+          }
           degraded() {
             local reason="$1" rc="$2"
             local detail="${3:-zot did not receive this image; backfill via 'crane copy GHCR→zot && cosign sign --yes <zot>@<digest>', then re-run.}"
@@ -1044,6 +1085,16 @@ jobs:
             # annotation cost for text the annotation cannot carry.
             local detail_head="${detail%%$'\n'*}"
             echo "::error::zot mirror FAILED at stage '${reason}' for ${ZOT:-<image>} (rc=${rc}) — ${detail_head} This release is BLOCKED and will not deploy. Full diagnosis in the job summary and the 'zot mirror diagnosis' log group."
+            # THE POINTER IS NOT GATED ON THE DETAIL'S SHAPE (#7555 review). It used to live inside
+            # the `$detail != $detail_head` arm below, which renders ONLY for a multi-line detail —
+            # and MEASURED, 8 of the 9 live degraded() call sites pass a SINGLE-LINE detail,
+            # including every `copy_*` site. So the family this branching exists for emitted no
+            # pointer at all in production, while the suite stayed green because its fixture forced
+            # a two-line detail. The pointer is diagnostic guidance that is NOT in the ::error::
+            # headline, so it must render for every stage regardless of how long the detail is.
+            echo "::group::zot mirror — which evidence to read"
+            emit_stage_pointer "$reason"
+            echo "::endgroup::"
             if [[ "$detail" != "$detail_head" ]]; then
               echo "::group::zot mirror diagnosis (full)"
               printf '%s\n' "$detail"
@@ -1065,22 +1116,6 @@ jobs:
               # plugins/soleur/test/reusable-release-degraded-pointer.test.sh derives the
               # reason set from that loop and reds if a tag is added whose reason label does
               # not match this glob.
-              case "$reason" in
-                copy_*|verify)
-                  echo "Upload evidence — this stage failed while PUSHING bytes to zot, so registry-host disk/restart telemetry is not the channel to read. In Better Stack, read SOLEUR_ZOT_LOG for PatchBlobUpload rows and the paired HTTP-API row; the pairing carries statusCode, latency and Content-Length. A row at latency:1m0s against a large Content-Length is zot's HTTP deadline expiring mid-upload (ADR-190), which is a throughput ceiling rather than an origin fault — 703724542 B in 60 s requires 11.73 MB/s sustained."
-                  ;;
-                bridge|crane_install)
-                  echo "Registry-host health (disk AND zot_restarts/exit_code, which is what an origin flap shows up in): see SOLEUR_ZOT_DISK / Better Stack registry_disk_prd."
-                  ;;
-                *)
-                  # Fail-safe union. An unclassified stage names BOTH channels and asserts
-                  # NEITHER as the cause, rather than silently inheriting whichever pointer
-                  # happens to be written first — which is how this defect arose. `sign` is
-                  # the live member: the copy already succeeded, so neither channel is a
-                  # measured cause for it.
-                  echo "Stage '${reason}' is not classified into an evidence family, so both channels are named and NEITHER is asserted as the cause. Upload evidence: SOLEUR_ZOT_LOG PatchBlobUpload rows with their paired statusCode/latency/Content-Length. Registry-host health: SOLEUR_ZOT_DISK / Better Stack registry_disk_prd."
-                  ;;
-              esac
               echo "::endgroup::"
             fi
             {
@@ -1089,6 +1124,8 @@ jobs:
               echo "**Stage:** \`${reason}\` (rc=${rc})"
               echo ""
               echo "${detail}"
+              echo ""
+              echo "**Which evidence to read:** $(emit_stage_pointer "$reason")"
               echo ""
               echo "${SAFE_TO_RERUN}"
             } >> "$GITHUB_STEP_SUMMARY"

@@ -94,11 +94,12 @@ fi
 FN="$TMP/degraded.sh"
 awk '
   /^SAFE_TO_RERUN=/ { print; next }
+  /^emit_stage_pointer\(\) \{/ { infn=1; print; next }
   /^degraded\(\) \{/ { infn=1; print; next }
   infn { print; if ($0 == "}") infn=0 }
 ' "$BLOCK" > "$FN"
 
-if ! grep -q '^degraded() {' "$FN" || ! grep -q '^}' "$FN"; then
+if ! grep -q '^degraded() {' "$FN" || ! grep -q '^emit_stage_pointer() {' "$FN" || ! grep -q '^}' "$FN"; then
   fail "could not carve degraded() out of the extracted block"
   echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
   exit 1
@@ -113,8 +114,20 @@ fi
 # Derive the copy-reason set from the loop that GENERATES it. `${TAG_SPEC##*:}`
 # is the reason, so take the text after the last colon of each quoted spec.
 # ---------------------------------------------------------------------------
+# ANCHORED ON THE STATEMENT, NOT THE TOKEN, AND REQUIRED UNIQUE (#7555 review). A bare
+# `grep -m1 'for TAG_SPEC in '` takes the first match ANYWHERE in the file, so one documentation
+# comment quoting the old loop above the live one silently redirects this derivation at the decoy
+# — measured: a fourth non-copy_* tag then shipped with this suite 21/21 green. This repo's house
+# style is a long comment directly above the code it describes, so the decoy is the convention,
+# not an attack. `^[[:space:]]*for` cannot match a `#`-led line.
+TAG_SPEC_SITES=$(grep -cE '^[[:space:]]*for TAG_SPEC in ' "$WF")
+if [[ "$TAG_SPEC_SITES" -ne 1 ]]; then
+  fail "expected exactly ONE 'for TAG_SPEC in' statement in $WF, found $TAG_SPEC_SITES — the derivation below would silently pick one of them"
+  echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
+  exit 1
+fi
 mapfile -t COPY_REASONS < <(
-  grep -m1 'for TAG_SPEC in ' "$WF" \
+  grep -m1 -E '^[[:space:]]*for TAG_SPEC in ' "$WF" \
     | grep -oE '"[^"]+"' \
     | tr -d '"' \
     | sed 's/.*://'
@@ -130,14 +143,23 @@ echo "  (derived copy reasons: ${COPY_REASONS[*]})"
 # `verify` is not loop-generated but belongs to the same family: it fails on what the upload
 # left behind. `sign` is deliberately in NEITHER family — the copy already succeeded, so
 # neither pointer is a measured cause for it.
-UPLOAD_FAMILY=("${COPY_REASONS[@]}" verify)
+UPLOAD_FAMILY=("${COPY_REASONS[@]}")
+# `verify` is its OWN family (#7555 review). It does NOT push — it reads back what the copy left
+# in zot, and `verify mismatch` means zot holds DIFFERENT bits, which is a writer question, not a
+# transport one. Telling that reader about an upload deadline names a cause the job did not
+# measure — the ADR-166 defect this branching exists to remove, re-committed inside its own fix.
+VERIFY_FAMILY=(verify)
 HOST_FAMILY=(bridge crane_install)
 UNCLASSIFIED=(sign)
 
 # ---------------------------------------------------------------------------
-# Run degraded() for one reason and echo everything it printed. A multi-line
-# detail is required: the pointer block is emitted only when detail exceeds its
-# first line (that is the ::group:: arm). degraded() exits non-zero by design.
+# Run degraded() for one reason and echo everything it printed.
+#
+# THE DETAIL IS SINGLE-LINE ON PURPOSE (#7555 review). It used to force a two-line detail so the
+# ::group:: arm would render — which made this suite structurally unable to see that the pointer
+# was nested inside that arm while 8 of the 9 live call sites pass a SINGLE-line detail. Measured:
+# under the production shape the pointer emitted ZERO times and this suite was still green. Keep
+# this fixture on the shape production actually produces.
 # ---------------------------------------------------------------------------
 run_degraded() {
   local reason="$1"
@@ -146,7 +168,7 @@ run_degraded() {
     : > "$GITHUB_OUTPUT"; : > "$GITHUB_STEP_SUMMARY"
     # shellcheck disable=SC1090
     source "$FN"
-    degraded "$reason" "1" "$(printf 'first line of detail\nsecond line forces the group arm\n')"
+    degraded "$reason" "1" "zot did not receive the tag of this image, so the host has nothing to pull."
   ) 2>&1
 }
 
@@ -201,14 +223,72 @@ assert_unclassified() {
   fi
 }
 
-echo "--- upload family (loop-derived + verify) ---"
+assert_verify_family() {
+  local reason="$1" out
+  out="$(run_degraded "$reason")"
+  if grep -qiF -- "read back" <<<"$out"; then
+    pass "reason '$reason' emits the read-back pointer"
+  else
+    fail "reason '$reason' (verify family): read-back pointer absent"
+  fi
+  # The inverse half, and the whole point of splitting this family out: verify must NOT be told
+  # its failure is an upload deadline.
+  if grep -qF -- "deadline expiring mid-upload" <<<"$out"; then
+    fail "reason '$reason' (verify family): asserts an upload deadline it did not measure (ADR-166)"
+  else
+    pass "reason '$reason' does NOT assert an upload deadline"
+  fi
+  if grep -qF -- "$HOST_ANCHOR" <<<"$out"; then
+    fail "reason '$reason' (verify family): still emits the host-health pointer"
+  else
+    pass "reason '$reason' does NOT emit the host-health pointer"
+  fi
+}
+
+echo "--- upload family (loop-derived) ---"
 for r in "${UPLOAD_FAMILY[@]}"; do assert_upload_family "$r"; done
+
+echo "--- verify family (reads back; must not claim an upload deadline) ---"
+for r in "${VERIFY_FAMILY[@]}"; do assert_verify_family "$r"; done
 
 echo "--- host family ---"
 for r in "${HOST_FAMILY[@]}"; do assert_host_family "$r"; done
 
 echo "--- unclassified fail-safe ---"
 for r in "${UNCLASSIFIED[@]}"; do assert_unclassified "$r"; done
+
+# ---------------------------------------------------------------------------
+# S8 — EVERY LIVE degraded() CALL SITE MUST LAND IN A DECLARED FAMILY.
+# The families above are partly hardcoded, so a NEW call site routed to the wrong arm was
+# invisible: measured, adding `degraded "copy_manifest_upload"` and routing it to the host arm
+# left this suite 21/21 green — reinstating the exact #7555 defect (an upload failure pointed at
+# registry-host telemetry) with the guard green. Derive the literal reasons from the run block
+# and assert each is accounted for.
+# ---------------------------------------------------------------------------
+# COMMENT-STRIPPED, and anchored on the CALL form. A bare token grep matches the prose that
+# explains the mechanism — this repo documents code directly above it, so an unanchored scan
+# reads sentences containing the word "degraded" as call sites (measured: it extracted the
+# words "fires message through"). Strip whole-line comments, then require the reason to sit at
+# a command position: either line-start or after `|| `.
+mapfile -t CALLSITE_REASONS < <(
+  sed 's/^[[:space:]]*#.*$//' "$BLOCK" \
+    | grep -oE '(^[[:space:]]*|\|\|[[:space:]]*)degraded[[:space:]]+"?[A-Za-z_][A-Za-z0-9_]*"?' \
+    | sed -E 's/.*degraded[[:space:]]+"?//; s/"?$//' \
+    | sort -u
+)
+DECLARED=("${UPLOAD_FAMILY[@]}" "${VERIFY_FAMILY[@]}" "${HOST_FAMILY[@]}" "${UNCLASSIFIED[@]}")
+unaccounted=""
+for r in "${CALLSITE_REASONS[@]}"; do
+  [[ -n "$r" ]] || continue
+  found=0
+  for d in "${DECLARED[@]}"; do [[ "$r" == "$d" ]] && found=1; done
+  [[ "$found" -eq 1 ]] || unaccounted="$unaccounted $r"
+done
+if [[ -z "$unaccounted" ]]; then
+  pass "every literal degraded() call-site reason is in a declared family (${CALLSITE_REASONS[*]})"
+else
+  fail "degraded() call-site reason(s) not in any declared family:$unaccounted — a new stage was added without classifying it"
+fi
 
 # ---------------------------------------------------------------------------
 # H1 (must-PASS, non-canonical). The guard enforces that the three anchors are
@@ -352,7 +432,7 @@ fi
 # green it did not earn. The floor is a function of the derived set size, so it
 # cannot be satisfied by a run that examined less than it claims.
 # ---------------------------------------------------------------------------
-EXPECTED_MIN=$(( (${#UPLOAD_FAMILY[@]} * 2) + (${#HOST_FAMILY[@]} * 2) + ${#UNCLASSIFIED[@]} + 1 + 7 ))
+EXPECTED_MIN=$(( (${#UPLOAD_FAMILY[@]} * 2) + (${#VERIFY_FAMILY[@]} * 3) + (${#HOST_FAMILY[@]} * 2) + ${#UNCLASSIFIED[@]} + 1 + 7 + 1 ))
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$EXPECTED_MIN" ]]; then
   fail "anti-vacuity: ran $TOTAL assertions, expected >= $EXPECTED_MIN — the derived set or the carve is short. Fix the derivation, do not lower the floor."
