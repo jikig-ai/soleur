@@ -50,10 +50,21 @@ Three independent guards were green throughout, and each was green for a differe
 1. **The alarm** conflated "the query failed" with "the query answered and found nothing".
 2. **The workflow** reported `completed/success` every run, because the detector *ran*.
 3. **`scripts/lint-diagnosis-claims.sh`** — the AP-021 gate that exists to stop a CI message
-   naming an unmeasured cause — did not flag the alarm's message at all. Its `CLAIM` pattern is
-   a fixed phrase list (`most likely cause`, `caused by`, `is the cause`, …). The alarm named
-   its causes with an **em-dash appendix** (`— Better Stack unreachable / creds unset`), a form
-   the detector does not model. The gate was not bypassed; it was blind.
+   naming an unmeasured cause — never counted the alarm's message. Measured against the two
+   offending lines on `main`, **three independent filters reject it**, and the first one is
+   decisive:
+
+   | filter | result | effect |
+   |---|---|---|
+   | `OPERATOR_LINE` | **False** | rejects first — the loop is `if not OPERATOR_LINE or not CLAIM: continue` |
+   | `CLAIM` | False | never consulted |
+   | `MEASURED` | True | would exempt the line anyway (`VERDICT=` matches) |
+
+   The message is a bare shell assignment (`VERDICT="…"; DETAIL="…"`), not an `echo "`,
+   `printf`, or `::error::` emission, so the gate's notion of an operator-facing line does not
+   include it. The causal text then reaches the operator via `${detail_safe}` interpolated into
+   a `::warning::` **in a different file** — a seam a line-scanning detector cannot cross under
+   any `CLAIM` widening. The gate was not bypassed; it was looking at the wrong lines.
 
 The measured shape rules out every producer-side explanation. Ingest was a flat ~5,500 rows/hour
 through 18:00 on 08-14, 612 in the 19:00 hour, then nothing — a clean cliff with no ramp. Every
@@ -136,6 +147,29 @@ because routing the report of a Better Stack outage through Sentry would put it 
 repo cannot assume is healthy. The Sentry PAYG seat cap has silently disabled cron monitors here
 before.
 
+## Acceptance evidence — the guard measured in BOTH directions against production
+
+The window that made this possible was narrow and is now closed, so it is recorded here rather
+than left as a fixture claim. Both readings are from live prod on 2026-08-16, the same day, with
+no code change between them — only the vendor state changed.
+
+| | Dark (morning, ingest 402-refused) | Restored (evening, after the account action) |
+|---|---|---|
+| `betterstack-ingest-probe.sh` | `INGEST_REFUSED_QUOTA http=402`, exit 4 | `INGEST_ACCEPTING http=202`, exit 0 |
+| `zot-restart-loop-alarm.sh` (zot leg) | `ZOT_ALARM_VERDICT=INGEST_DARK`, exit 4 | `ZOT_ALARM_VERDICT=GREEN`, exit 0 |
+| `zot-restart-loop-alarm.sh` (NIC leg) | `NIC_ALARM_VERDICT=INGEST_DARK` | `NIC_ALARM_VERDICT=GREEN` |
+| registry channel | zero rows / 24h | `SOLEUR_ZOT_LOG` 72/h, `SOLEUR_PRIVATE_NIC` 10/h, `SOLEUR_ZOT_DISK` 4/h |
+
+This is what a mutation battery cannot buy. A guard proven only against fixtures is proven
+against the shapes its author imagined; this one produced the alarming verdict against the real
+outage and the clean verdict against the real recovery. The `2xx` arm in particular could not be
+measured while the account was over quota — it was covered by the unit suite and deferred to the
+soak follow-through, and it is now measured.
+
+**The restoration does not close the volume problem, and it slightly worsens the urgency.** The
+account is accepting writes again at roughly the same rate that exhausted it (~135k rows/day),
+so recurrence is a matter of time rather than of chance. That work is #7577.
+
 ## Consequences
 
 - A silent stop of this source now alarms within one 30-minute cycle instead of going unnoticed
@@ -152,17 +186,28 @@ before.
 
 Recorded so the gaps are visible rather than implied:
 
-- **Volume reduction.** Sustained ingest was ~132k rows/day. The dominant producer is the
-  `soleur-web-platform` container at 80,320 rows/day (75%), because pretty-printed multi-line
-  object logs bill one row per physical line. The Vector-side ceiling reaches production through
-  a `terraform_data` re-fire over an SSH provisioner gated on `admin_ips`, a delivery path that
-  has bounced on IP drift before. Split deliberately so the detector does not wait on it.
+- **Volume reduction.** Measured over the only clean 24 hours that exist
+  (`2026-08-13 19:00` → `2026-08-14 19:00`): **135,316 rows/day** total, of which the
+  `soleur-web-platform` container is ~101,000 (75%), because pretty-printed multi-line object
+  logs bill one row per physical line.
+
+  **Correction, recorded rather than quietly fixed:** an earlier revision of this ADR cited
+  `80,320 rows/day (75%)` and a `107,567` total. Both were counts over *calendar day*
+  2026-08-14, which the outage truncated at 19:06:58 — a **19.1-hour** window, not 24. The
+  ratio was computed inside the truncated window and then paired with a full-day denominator,
+  so the two halves of that sentence came from different measurements. Every capacity figure
+  derived from it is understated by ×1.26, which is material: the plan's "the upgrade is
+  avoidable on capacity" conclusion rests on the low number and has not been re-derived.
+
+  The Vector-side ceiling reaches production through a `terraform_data` re-fire over an SSH
+  provisioner gated on `admin_ips`, a delivery path that has bounced on IP drift before. Split
+  deliberately so the detector does not wait on it.
 - **The blast-radius sweep** across the other absence-asserting consumers of this source.
 - **The AP-021 detector gap** described above. A bounded widening measures 30 candidate hits
   across unrelated subsystems, most of them false positives in test files; the offending message
   is fixed here and the detector work is tracked on its own.
-- **`vendor-quota-watch` (#5134).** This ADR **supersedes its mechanism and leaves it open with
-  a re-scoped body.** Guard 1 cannot substitute for it: it reads the warehouse, which is dark at
+- **`vendor-quota-watch` (#5134, deferred from #5103).** This ADR **supersedes its mechanism
+  and leaves it open with a re-scoped body.** Guard 1 cannot substitute for it: it reads the warehouse, which is dark at
   exactly the moment quota is exhausted. Claiming a closure this change does not deliver would
   repeat the near-miss's own defect.
 
@@ -178,8 +223,26 @@ carried it. That is the invariant, and it is why the positive control exists at 
 ## Related
 
 - `knowledge-base/engineering/operations/post-mortems/betterstack-quota-near-miss-postmortem.md`
-  — predicted this recurrence on 2026-06-10; its 5-Why #5 action item (#5134) is still open.
+  — predicted this recurrence on 2026-06-10. Its 5-Why #5 action item is **#5103** (still
+  open); **#5134** is a deferred increment of #5103, not the action item itself — an earlier
+  revision of this ADR and of the postmortem addendum misattributed it. Both are open and
+  neither was built.
 - ADR-166 (AP-021, diagnostic honesty) — the principle the alarm's message violated.
 - ADR-170 (AP-022, errexit capture) — the pattern the new workflow step follows.
-- ADR-184 — the registry container-log shipper, exonerated here: it is absent from the top-10
-  producers and its 5,000/day cap held.
+- ADR-184 — the registry container-log shipper. **An earlier revision of this ADR exonerated
+  it ("absent from the top-10 producers and its 5,000/day cap held"). That is FALSE on both
+  grounds and is retracted.** The exoneration came from a producer table grouped by
+  container/syslog identifier, which structurally cannot see a direct host POST — the shipper
+  fell into an `other/unattributed` bucket and its missing *label* was read as an absent
+  *producer*. Decomposing that bucket over the clean 24h window:
+
+  | producer | rows/24h |
+  |---|---|
+  | `soleur-web-platform` container | ~101,000 |
+  | host metrics | 22,464 |
+  | **`SOLEUR_ZOT_LOG` (this shipper)** | **5,028** |
+  | `SOLEUR_ZOT_LOG_DROPPED` | 287 |
+
+  It is roughly the 4th-largest producer at **5,315 rows/day, over its own declared 5,000/day
+  cap**. The reframing in this ADR is right about the *darkness* — the registry channel is the
+  consumer that noticed, not the cause — and was wrong about the *volume*.
