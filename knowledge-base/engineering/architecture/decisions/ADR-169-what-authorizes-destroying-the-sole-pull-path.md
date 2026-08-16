@@ -543,11 +543,41 @@ review found:
 |---|---|---|---|
 | P1 — local-cache pull events | the pull path | **yes** | a replace outage itself drives hosts to local-cache, so P1 blocks the recovery for 24 h |
 | P3 — in-flight zot-writing runs | the release pipeline | **yes** | merging fires the release and the dispatcher on the same push, so P3's refusing state is the *modal* one |
+| P5 — the replace will be observable | the log channel | **no** | cannot be tripped by the condition the replace cures; see below |
 
-Neither was reasoned to from this criterion at design time; both were found empirically. The
-remedies are the criterion's own: P1 is skipped on the manual re-fire arm (the `--manual` flag,
-derived from `github.event_name`), and P3 **waits** for the writers to drain before refusing
+P1 and P3 were not reasoned to from this criterion at design time; both were found empirically.
+The remedies are the criterion's own: P1 is skipped on the manual re-fire arm (the `--manual`
+flag, derived from `github.event_name`), and P3 **waits** for the writers to drain before refusing
 rather than converting the automated path back into an operator step.
+
+### P5 — the predicate this criterion actually *generates*
+
+P4's absence (no live serving probe) is defensible only because something else eventually verifies
+the host: #7556 reads zot's own boot `configuration settings` line out of the warehouse. That is a
+**standing assumption written into the design**, and #7569 falsified it — the container-log channel
+went dark on 2026-08-14 19:06Z, so at the moment of writing, a replace's outcome is unreadable.
+
+P5 checks the assumption instead of inheriting it: *will I be able to see what I did?*
+
+The hazard it closes is the #6400 escalation, and the asymmetry is the whole argument. A degraded
+zot still **serves** pulls and only fails large-layer **pushes**. A host that boots dark serves
+nothing — and #7071 retracted the host→GHCR fallback, so there is no tier beneath it. Firing blind
+therefore trades a blocked release for a total deploy outage, with no signal until the next deploy
+fails.
+
+Two arms, because **an empty query is not evidence of a dark channel** — that error was made once
+already in this cycle and was caught only by a 72 h positive control. The control marker rides a
+different transport from the container-log channel, so a silent control means the *read* is broken
+(refuse for that reason) while a live control plus a silent channel means the *channel* is dark
+(refuse, and name #7569).
+
+P5 is deliberately **not** skippable by `--manual`. P1's bypass exists because P1 violates the
+independence criterion; P5 satisfies it, so there is no equivalent deadlock to escape. Forcing a
+replace past P5 would be forcing it into the void the predicate exists to detect.
+
+This is the criterion doing generative work rather than post-hoc diagnosis: applied to "what
+authorizes an irreversible destroy", it yields not only "do not depend on the failing component"
+but "**do not take an irreversible action whose result you cannot read back**".
 
 P4 (a live zot serving probe) remains deliberately absent, and here the criterion is decisive
 rather than advisory: #7555's motivating symptom **is** a degraded zot, so a serving predicate
