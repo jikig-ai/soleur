@@ -926,13 +926,24 @@ write_files:
           5??) ;;
           *) return 1 ;;
         esac
+        # ANCHORED on the registry API shape, not an unanchored substring (#7555 review): $2 is
+        # verbatim client input, so `*/blobs/uploads/*` alone let any 5xx on a crafted path mint
+        # an exempt row.
         case "$2" in
-          */blobs/uploads/*) return 0 ;;
+          /v2/*/blobs/uploads/*) return 0 ;;
         esac
         return 1
       }
       # THE TICK IS THE WINDOW (ADR-184 §4). A cron one-shot starts each counter at zero and ends
       # at exit, so there is no rolling-window boundary to arbitrate and no `maybe_roll_window`.
+      # UPLOAD EVIDENCE GETS A SUB-QUOTA INSIDE THE SHARED EXEMPT LANE (#7555 review).
+      # Admission to the 17-slot exempt lane was first-come-first-served, so one failing
+      # multi-layer push (both halves of the pairing, x3 retries x3 tags) filled it and a
+      # concurrent panic trace was dropped -- REPRODUCED, and it is the #7444 R12 priority
+      # inversion one layer down, inside the change that claims to bound against it. Capping the
+      # upload class below the lane's size reserves the remainder for is_cap_exempt (gc + crash).
+      CAP_UPLOAD_EVIDENCE_PER_INTERVAL="$${ZOT_LOG_SHIPPER_CAP_UPLOAD_EVIDENCE_PER_INTERVAL:-8}"
+      WIN_UPLOAD_EVIDENCE=0
       WIN_COUNT=0
       WIN_EXEMPT=0
       WIN_DROPPED=0
@@ -1077,12 +1088,43 @@ write_files:
         # `User-Agent: executing gc` rides on an HTTP-API row, which always parses and therefore
         # always has a non-empty zmsg and never reaches this arm. T19 pins both directions.
         _zclass="$zmsg"
-        [ -n "$_zclass" ] || _zclass="$msg"
-        if is_cap_exempt "$_zclass" || is_upload_failure_evidence "$zstatus" "$zpath"; then
-          if [ "$WIN_EXEMPT" -ge "$CAP_EXEMPT_PER_INTERVAL" ]; then
+        if [ -z "$_zclass" ]; then
+          # ONLY THE CRASH CLASSES FALL BACK TO THE RAW LINE (#7555 review).
+          #
+          # The earlier form fell back to "$msg" for ALL eight arms, and its comment argued the
+          # #7444 F-5 bypass stayed closed because "an HTTP-API row always parses". THAT PREMISE
+          # IS FALSIFIED ~260 LINES ABOVE, in this same file: zot runs --log-driver journald, so a
+          # line exceeding the driver's buffer arrives as MULTIPLE INVALID-JSON FRAGMENTS, and
+          # header size is client-controlled. A fragment does not parse, so zmsg is empty, and the
+          # fallback then classified the fragment's raw bytes -- which are the client's own header
+          # payload. Reproduced: 17 forged fragments beginning "executing gc" consumed the entire
+          # exempt lane and starved a genuine panic trace to zero.
+          #
+          # The four gc/upload classes ALWAYS arrive as parsed zot JSON, so they have no plaintext
+          # justification and are exactly what a client can forge cheaply. A Go panic is written to
+          # stderr as plaintext and has no other route, which is the whole reason this fallback
+          # exists, so the crash classes keep it.
+          case "$msg" in
+            panic:*|"fatal error"*|"runtime error"*|\[signal*) _zclass="$msg" ;;
+          esac
+        fi
+        _upload_only=0
+        if is_cap_exempt "$_zclass"; then
+          _exempt=1
+        elif is_upload_failure_evidence "$zstatus" "$zpath"; then
+          _exempt=1; _upload_only=1
+        else
+          _exempt=0
+        fi
+        if [ "$_exempt" = "1" ]; then
+          if [ "$_upload_only" = "1" ] && [ "$WIN_UPLOAD_EVIDENCE" -ge "$CAP_UPLOAD_EVIDENCE_PER_INTERVAL" ]; then
+            # Sub-quota spent: the remaining exempt slots are reserved for gc + crash rows.
+            WIN_DROPPED_EXEMPT=$(( WIN_DROPPED_EXEMPT + 1 )); decided=1
+          elif [ "$WIN_EXEMPT" -ge "$CAP_EXEMPT_PER_INTERVAL" ]; then
             WIN_DROPPED_EXEMPT=$(( WIN_DROPPED_EXEMPT + 1 )); decided=1
           else
             WIN_EXEMPT=$(( WIN_EXEMPT + 1 ))
+            [ "$_upload_only" = "1" ] && WIN_UPLOAD_EVIDENCE=$(( WIN_UPLOAD_EVIDENCE + 1 ))
           fi
         elif [ "$WIN_COUNT" -ge "$CAP_PER_INTERVAL" ]; then
           WIN_DROPPED=$(( WIN_DROPPED + 1 )); decided=1
