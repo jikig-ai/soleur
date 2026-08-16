@@ -27,6 +27,16 @@ if [[ ! "$VERIFY_PASS" =~ ^(1|2)$ ]]; then
   exit 1
 fi
 
+# #7104 PR-B review — DEFAULT IT HERE, at the top, with every other input.
+#
+# This was the one variable in the file read bare (`"$ALLOW_MISSING_STATUS"`, ~line 145) with no
+# `:-` default under `set -u`. Both production callers happen to set it, so the gap is invisible
+# in CI — but a direct invocation (the documented inner loop while editing this script, and what
+# the suite's own harness does) aborts with `ALLOW_MISSING_STATUS: unbound variable` at the final
+# adjudication, AFTER the polling has already run. Defaulting to the safe value here also makes
+# the safe value explicit rather than incidental: 404-tolerance is opt-in.
+ALLOW_MISSING_STATUS="${ALLOW_MISSING_STATUS:-false}"
+
 APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
 WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain)
 CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain)
@@ -148,6 +158,18 @@ if [[ "$HTTP_CODE" == "404" ]]; then
     # can exit green on, and leaving it unwritten made it indistinguishable from
     # `verified` to every consumer — absence reading as good news.
     echo "freshness_evidence=none" >> "$GITHUB_OUTPUT"
+    # #7104 PR-B review — AND THE VERDICT MUST SAY SO TOO.
+    #
+    # This arm did not exit. It fell through to the tail `verdict=verified`, so the one path in
+    # the whole design that adjudicates NOTHING was emitting the same terminal verdict as a full
+    # count-plus-content-plus-freshness pass. The `freshness_evidence=none` output above was
+    # added to stop absence reading as good news, and the verdict immediately undid it by
+    # asserting the strongest possible claim.
+    #
+    # `unadjudicated` is a distinct terminal state: it is NOT `verified` (nothing was checked)
+    # and NOT `pending` (nothing is going to check it — there is no re-push on this path).
+    echo "verdict=unadjudicated" >> "$GITHUB_OUTPUT"
+    exit 0
   else
     echo "::error::infra-config-status returned HTTP 404 after all retries — the host's hooks.json predates the status endpoint and the apply did NOT verify. This is the false-success freeze vector (#4804). For a genuine first bootstrap, re-run via workflow_dispatch with allow_missing_status_endpoint=true."
     cat "$STATUS_RESPONSE" >&2 2>/dev/null || true

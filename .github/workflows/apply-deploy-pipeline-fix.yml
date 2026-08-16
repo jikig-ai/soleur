@@ -801,17 +801,41 @@ jobs:
           # infra_config_handler_bootstrap, which carries an SSH remote-exec, and -target is
           # transitive at the resource level, so a plan that reached it would run a
           # remote-exec against the cloudflared bridge this job tears down three steps later.
-          GRADED=$(jq '[.resource_changes[] | select(.change.actions != ["no-op"]) | select(.mode == "managed")] | length' tfplan-repush.json)
-          if [[ ! "$GRADED" =~ ^[0-9]+$ ]]; then
-            echo "::error::Could not count changing managed resources in the re-push plan (got '${GRADED}'). Failing closed rather than applying an ungraded plan."
+          # EVERY jq CAPTURE BELOW IS `rc=0; X=$(...) || rc=$?`, NEVER a bare `X=$(...)`.
+          #
+          # This block runs under the step's own `set -euo pipefail`, where a simple assignment
+          # from a command substitution takes the substitution's exit status — so a bare
+          # `GRADED=$(jq ...)` on malformed JSON ABORTS THE STEP AT THAT LINE. Every line below
+          # it, including the `::error::` written to explain exactly this case, never executes.
+          # The step then dies mute: `repush_plan` reds with no annotation naming a cause, and
+          # the operator gets the generic red-run surface instead of the diagnosis this code
+          # already contains. The guards were written; they were simply unreachable.
+          #
+          # NOTE ON `.resource_changes[]` WITH NO `?`. The missing `?` is LOAD-BEARING and must
+          # not be "made consistent" with a later edit. On degraded or truncated JSON — no
+          # `resource_changes` key at all — `.resource_changes[]` ERRORS, jq exits non-zero, and
+          # the capture below routes to the fail-closed `::error::`. Adding `[]?` would make it
+          # yield an empty stream instead, so `length` would be 0, the grade would be a clean
+          # numeric zero, and a plan nobody could actually read would grade as "nothing changes".
+          # Fail closed on unreadable input is the whole contract of this step.
+          rc=0
+          GRADED=$(jq '[.resource_changes[] | select(.change.actions != ["no-op"]) | select(.mode == "managed")] | length' tfplan-repush.json) || rc=$?
+          if [[ "$rc" -ne 0 || ! "$GRADED" =~ ^[0-9]+$ ]]; then
+            echo "::error::Could not count changing managed resources in the re-push plan (jq rc=${rc}, got '${GRADED}'). The plan JSON is unreadable or has no resource_changes key. Failing closed rather than applying an ungraded plan."
             exit 1
           fi
 
           # The destroy-guard, over the SAME shared filter the first plan uses.
-          counts=$(jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq" tfplan-repush.json)
-          host_creates=$(echo "$counts" | jq -r '.host_creates')
-          if [[ ! "$host_creates" =~ ^[0-9]+$ ]]; then
-            echo "::error::destroy-guard counter parse failed on the re-push plan (host_creates='${host_creates}') — the guard did not evaluate, so it cannot be read as clean."
+          rc=0
+          counts=$(jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq" tfplan-repush.json) || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::The destroy-guard filter could not be evaluated against the re-push plan (jq rc=${rc}). The guard did not run, so its silence cannot be read as clean."
+            exit 1
+          fi
+          rc=0
+          host_creates=$(jq -r '.host_creates' <<<"$counts") || rc=$?
+          if [[ "$rc" -ne 0 || ! "$host_creates" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed on the re-push plan (jq rc=${rc}, host_creates='${host_creates}') — the guard did not evaluate, so it cannot be read as clean."
             exit 1
           fi
           if [[ "$host_creates" -gt 0 ]]; then
@@ -819,9 +843,52 @@ jobs:
             exit 1
           fi
 
-          echo "Re-push plan graded: ${GRADED} changing managed resource(s), host_creates=0."
-          jq -r '.resource_changes[] | select(.change.actions != ["no-op"]) | "  \(.address) | \(.mode) | \(.change.actions|join(","))"' tfplan-repush.json
+          # A REFUSED GRADE MUST NAME ITSELF (#7104 PR-B review).
+          #
+          # Previously any grade other than 1 simply wrote `repush_graded=<n>` and exited 0. The
+          # apply's `if: ... == '1'` then skipped, pass 2 never ran, and the backstop reported
+          # "the recovery steps were skipped or MIS-KEYED" — which is a false diagnosis. Nothing
+          # was mis-keyed: the grader deliberately refused a plan whose blast radius was not the
+          # measured one, and that is the single most important thing to tell the operator.
+          #
+          # Exiting non-zero (rather than annotating and continuing) is what routes this to the
+          # alert step's re-push-plan-failure arm, whose text and remediation lever are already
+          # correct for "no production write was attempted".
+          #
+          # This does NOT weaken Guard 3's two-producer property: loosening this assert still
+          # leaves `if: steps.repush_plan.outputs.repush_graded == '1'` on the apply, so both
+          # producers must be edited to widen what gets written to production.
+          if [[ "$GRADED" -ne 1 ]]; then
+            echo "::error::The re-push plan graded ${GRADED} changing managed resource(s), not the measured 1. REFUSING to apply — this is a deliberate refusal by the grader, NOT a skipped or mis-keyed step. A grade of 0 means -replace produced no change (the resource or its address has drifted); a grade above 1 means the blast radius grew beyond terraform_data.deploy_pipeline_fix. No production write was attempted."
+            exit 1
+          fi
+
+          # PIN THE IDENTITY, NOT ONLY THE CARDINALITY.
+          #
+          # `GRADED == 1` says exactly one managed resource changes; it does NOT say WHICH. A
+          # plan that replaced one entirely different resource would satisfy it. The address set
+          # is already computed here — it used to be printed decoratively — so asserting it costs
+          # nothing and closes the gap between "one thing changes" and "the one thing we measured
+          # changes".
+          rc=0
+          addrs=$(jq -r '[.resource_changes[] | select(.change.actions != ["no-op"]) | select(.mode == "managed") | .address] | sort | join(",")' tfplan-repush.json) || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::Could not extract the changing address set from the re-push plan (jq rc=${rc}). Failing closed."
+            exit 1
+          fi
+          if [[ "$addrs" != "terraform_data.deploy_pipeline_fix" ]]; then
+            echo "::error::The re-push plan changes '${addrs}', not terraform_data.deploy_pipeline_fix. The grade was 1, so cardinality alone would have passed this — the plan targets the wrong resource. Refusing to apply; no production write was attempted."
+            exit 1
+          fi
+
+          # THE OUTPUT WRITE COMES BEFORE ANY REPORTING.
+          #
+          # It used to sit AFTER a decorative `jq -r '... \(.address) ...'` listing, under
+          # `set -e` — so a cosmetic formatting failure in a line whose only job was to pretty-
+          # print would abort the step and veto a correctly-graded recovery. Nothing that can
+          # fail may stand between a passed grade and the output that records it.
           echo "repush_graded=${GRADED}" >> "$GITHUB_OUTPUT"
+          echo "Re-push plan graded: ${GRADED} changing managed resource(s) (${addrs}), host_creates=0."
 
       # GUARD 3 — the apply is keyed on the GRADE, never on success().
       #
@@ -901,6 +968,26 @@ jobs:
           # reports nothing for it.
         run: bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/infra-config-verify.sh"
 
+      # #7104 PR-B review — RECLAIM THE BINARY PLAN ON EVERY PATH, INCLUDING THE SKIPPED ONES.
+      #
+      # `repush_plan` traps only `tfplan-repush.json` (the cleartext-credential render), and
+      # `repush_apply` deletes the binary `tfplan-repush` inline — but ONLY when it runs. On the
+      # grade-refused path the apply is skipped by its own `if:`, so the binary plan survives on
+      # the runner for the remainder of the job. It is a terraform plan file for production
+      # infrastructure: it encodes the full resource diff and is a saved-plan input that
+      # `terraform apply <planfile>` will consume without re-grading.
+      #
+      # `if: always()` and not `!cancelled()`: this deletes a file and nothing else, so running
+      # it on a cancelled run is strictly good. `rm -f` is already idempotent, so the step is a
+      # no-op on the overwhelming majority of runs where no re-push was ever planned.
+      - name: Reclaim the bounded re-push plan artifacts (#7104)
+        if: always()
+        working-directory: ${{ env.INFRA_DIR }}
+        run: |
+          set -uo pipefail
+          rm -f tfplan-repush tfplan-repush.json
+          exit 0
+
       # THE BACKSTOP. Pass 1's soft-fail is only safe because of this step.
       #
       # If a consumer `if:` is ever mis-keyed — a renamed step id, a typo'd output name —
@@ -926,6 +1013,33 @@ jobs:
           fi
           if [[ "$PASS1_VERDICT" == "verified" || "$PASS2_VERDICT" == "verified" ]]; then
             echo "Terminal verdict rendered (pass1='${PASS1_VERDICT:-<none>}' pass2='${PASS2_VERDICT:-<none>}')."
+            exit 0
+          fi
+
+          # THE 404 ESCAPE HATCH IS A TERMINAL STATE, AND A DISTINCT ONE (#7104 PR-B review).
+          #
+          # `unadjudicated` is what the verify script now emits on the documented first-bootstrap
+          # arm, where it tolerates a 404 and checks nothing. Before, that arm fell through to
+          # `verdict=verified` and this backstop waved it past as a full pass.
+          #
+          # It is handled HERE, above the mis-keyed error, and NOT by redding the run. Two
+          # reasons, and the second is binding:
+          #
+          #   * the message below would be false. It names "the recovery steps were skipped or
+          #     mis-keyed", and nothing was mis-keyed — an operator deliberately set
+          #     allow_missing_status_endpoint on a workflow_dispatch. That is the same
+          #     misdiagnosis-by-fallthrough this PR fixes in the refused-grade path.
+          #   * failing closed here would put a blocking assertion inside the SOLE no-SSH
+          #     delivery path for a host that cannot be re-provisioned (cx33, 0/6 stock), which
+          #     is precisely what the CTO ruling on this issue forbids. The escape hatch exists
+          #     for a bootstrap where the endpoint cannot yet answer; redding it would make the
+          #     flag unusable for the one situation it was built for.
+          #
+          # So: exit 0, but say plainly that nothing was verified. The flag is unreachable on a
+          # routine `push` apply (its env expression is gated on the dispatch input), so this
+          # cannot silently become the everyday path.
+          if [[ "$PASS1_VERDICT" == "unadjudicated" || "$PASS2_VERDICT" == "unadjudicated" ]]; then
+            echo "::warning::This run did NOT verify the config apply. The status endpoint returned 404 and allow_missing_status_endpoint was set, so the gate tolerated it and adjudicated nothing — no count invariant, no content assert, no freshness assertion. This is the documented first-bootstrap escape hatch and it is not a failure, but it is also not evidence that the configuration is live. Re-run without the flag once the host publishes a status frame."
             exit 0
           fi
           echo "::error::NO TERMINAL VERDICT was rendered (pass1='${PASS1_VERDICT:-<none>}' pass2='${PASS2_VERDICT:-<none>}'). Pass 1 deferred to a re-push and pass 2 never returned a verdict — the recovery steps were skipped or mis-keyed. This job verified NOTHING; failing closed rather than letting the downstream success()-gated steps re-arm."

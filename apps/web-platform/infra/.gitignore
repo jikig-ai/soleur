@@ -7,3 +7,8 @@ terraform.tfvars
 # written into this dir by the apply workflow — never commit them (defence-in-depth).
 tfplan
 tfplan.json
+# #7104 PR-B: the bounded re-push's own plan artifacts. tfplan-repush.json carries the live prd
+# Doppler token and the webhook HMAC in CLEARTEXT (terraform's JSON serialization ignores
+# `sensitive`), and the binary tfplan-repush survives on the runner whenever the apply step is
+# skipped — the grade-refused path. The glob covers both.
+tfplan-repush*

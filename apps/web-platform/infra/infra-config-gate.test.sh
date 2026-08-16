@@ -1644,10 +1644,39 @@ fi
 # two files are ever scanned together — and more importantly it is the shape that made
 # this assert trip on its OWN explanatory comment while it was being written.
 FORBIDDEN_KEY="continue-on""-error"
-if grep -q "$FORBIDDEN_KEY" "$APPLY_WF"; then
-  fail "#7104 AC18: apply-deploy-pipeline-fix.yml contains '$FORBIDDEN_KEY'. A verification gate that tolerates its own failure does not fail closed."
+#
+# ...AND THE SAME TRAP APPLIES TO THE WORKFLOW, WHICH THIS ASSERT ORIGINALLY MISSED
+# (#7104 PR-B review). Spelling the literal from parts protects THIS file; the assert was
+# still a bare `grep -q` over the ENTIRE workflow, so it matched any prose there too. It
+# fired for real: a review fix added a comment to the ledger step explaining WHY the key is
+# not used (it pins `conclusion` to success and would feed
+# scripts/followthroughs/moved-block-wedge-5887.sh green over red) and the guard reported the
+# workflow as carrying the key. The forbidden thing is a YAML KEY, so the assertion is now
+# made against the PARSED DOCUMENT — a comment cannot produce a mapping key, so the explanation
+# and the guard can coexist. This also strengthens it: the bare grep could not distinguish
+# job-level from step-level, and now both are checked and named.
+ac18_ce=$(python3 - "$APPLY_WF" "$FORBIDDEN_KEY" <<'PYEOF'
+import sys, yaml
+wf = yaml.safe_load(open(sys.argv[1], encoding='utf-8'))
+key = sys.argv[2]
+hits = []
+for jn, job in (wf.get('jobs') or {}).items():
+    if not isinstance(job, dict):
+        continue
+    if key in job:
+        hits.append("job '%s'" % jn)
+    for st in (job.get('steps') or []):
+        if isinstance(st, dict) and key in st:
+            hits.append("step '%s' in job '%s'" % (st.get('name') or st.get('id') or '<unnamed>', jn))
+print("; ".join(hits))
+PYEOF
+) || ac18_ce="ERR"
+if [[ "$ac18_ce" == "ERR" ]]; then
+  fail "#7104 AC18: could not parse the workflow to check for the error-tolerance key — the guard did not evaluate, so its silence cannot be read as clean."
+elif [[ -n "$ac18_ce" ]]; then
+  fail "#7104 AC18: apply-deploy-pipeline-fix.yml carries '$FORBIDDEN_KEY' at: ${ac18_ce}. A verification gate that tolerates its own failure does not fail closed."
 else
-  pass "#7104 AC18: the workflow contains no step-level error-tolerance key"
+  pass "#7104 AC18: no job or step in the workflow carries the error-tolerance key"
 fi
 
 # The ledger must never notify. It is created CLOSED and only ever edited, because GitHub
