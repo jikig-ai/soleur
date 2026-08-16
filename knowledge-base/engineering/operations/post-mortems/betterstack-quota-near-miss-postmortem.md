@@ -18,7 +18,8 @@ art_33_deadline: "n/a — no personal-data exposure; availability/quota near-mis
 > refusing every ingest POST with `HTTP 402 {"error": "Quota exceeded"}` while the read path kept
 > answering `200`, and the whole source went dark for two days before anyone noticed. See
 > [ADR-192](../../architecture/decisions/ADR-192-an-empty-warehouse-read-is-three-states-not-one.md)
-> and issue #7569.
+> and issue #7569. Full PIR:
+> `2026-08-14-betterstack-ingest-402-registry-unobservable-postmortem.md`.
 >
 > This document's 5-Why #5 named the gap — no internal monitor watches vendor quota — and its
 > action item is **#5103**; **#5134** is a deferred increment of #5103 (its own body opens
