@@ -33,7 +33,7 @@ The upload started and received a session id each time, then the peer went away 
 | 2026-08-13 22:28 | Measured refutation posted to #7341: store not full, `zot_restarts=0`, uptime monotonic. |
 | 2026-08-14 18:39 | #7341 **auto-closes on its own sweeper** — `pcent=12`, slope `-0.29pp/day`, 550 samples/72 h. |
 | 2026-08-14 19:06:58 | The registry's log delivery stops (#7569, filed by this work). The host keeps serving — `zot_restarts=0`, `pcent` 12→14 — so this is a telemetry outage, not a registry outage. |
-| 2026-08-16 20:45 | Log delivery resumes on its own; root cause unestablished. Corroborated by two independent markers, 8 consecutive heartbeat buckets. |
+| 2026-08-16 20:45 | Log delivery resumes — the Better Stack **free-plan quota had been exceeded**; a paid plan restored ingest (operator-confirmed). Corroborated by two independent markers, 8 consecutive heartbeat buckets. |
 | 2026-08-16 | Root cause established, fix + guards + delivery dispatcher shipped in #7552. |
 
 ## Participants and Systems Involved
@@ -102,10 +102,16 @@ One day of diagnosis routed at a stale cause, plus two review rounds' worth of r
 4. **Every mechanism built to prove the fix was itself broken, and every one was green.** Nine defects in round one, nine more in the fixes for those. The generalizable litmus: *a guard's fixture is a claim about production, and it is the claim nobody checks.* Full detail in `knowledge-base/project/learnings/2026-08-16-every-mechanism-i-shipped-to-prove-the-fix-was-itself-unproven.md`.
 5. **A guard that reads the environment has two behaviours.** The preflight suite measured 18/18 locally and 6/18 in CI because its subject refuses its test seams when `GITHUB_ACTIONS` is set. Running a suite in only one of its environments measures half the program.
 
+6. **A vendor quota ceiling took out observability, and the quota check was human-driven.**
+   `scripts/followthroughs/betterstack-quota-verdict-5105.sh` exists and knows the 25k/day
+   threshold, but it reads a verdict a human posts on the tracking issue — so nothing autonomous
+   was watching the number that eventually silenced the fleet's telemetry for ~49 hours. A
+   threshold that is known, and a probe that cannot read it without a person, is not a monitor.
+
 ## Action Items & Follow-ups
 
 | Issue | Action | Status |
 |---|---|---|
 | #7556 | Soak-verify the raised deadlines landed on the running host and the `i/o timeout` sub-mode stopped; enrolled with the sweeper, `earliest=2026-08-21` | open |
-| #7569 | Now the LIVE host for the channel regression detector. Delivery recovered on its own 2026-08-16 20:45Z with root cause unestablished; the probe that should have reported the ~49h outage was enrolled on #7455, which is CLOSED, and the sweeper lists `--state open` — so it had never run | open |
+| #7569 | Now the LIVE host for the channel regression detector. Root cause was Better Stack free-plan quota exhaustion, resolved by subscribing to the paid plan; the probe that should have reported the ~49h outage was enrolled on #7455, an issue in the closed state, and the sweeper lists `--state open` — so it had never run | open |
 | #7582 | Make the replace dispatcher compare the rendered `user_data` at both SHAs rather than the template, so a zot digest bump cannot merge inert | open |
