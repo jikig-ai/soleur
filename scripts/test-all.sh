@@ -1023,6 +1023,11 @@ if want_scripts; then
   # exists to report. Static gate over both alarm workflows — the condition is evaluated by
   # GitHub, so the YAML is the only artifact there is to test.
   run_suite "scripts/alarm-issue-filing-guard" bash scripts/alarm-issue-filing-guard.test.sh
+  # A workflow that writes to the issue tracker must hold `issues: write`. Registered beside the
+  # alarm guard because they are the same class one layer apart: that one checks an alarm step CAN
+  # RUN, this one checks it CAN WRITE. The dispatcher's refusal artifact satisfied the first and
+  # failed the second, silently, behind `|| true`.
+  run_suite "scripts/lint-workflow-issue-write-scope" bash scripts/lint-workflow-issue-write-scope.test.sh
   # #7242 / ADR-166: no operator-facing CI message may name a cause the job did not measure.
   # Registered HERE rather than in the lint-bot-statuses job on purpose -- that job is
   # advisory (absent from required-checks.txt and the ruleset), and this defect has already

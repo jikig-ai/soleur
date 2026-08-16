@@ -48,6 +48,14 @@ on:
 permissions:
   actions: write
   contents: read
+  # ISSUES: WRITE IS LOAD-BEARING, and its absence was invisible.
+  #
+  # The refusal artifact posts with `gh issue comment`, which needs this scope. Without it the
+  # first real refusal (2026-08-16, run 31976455167) emitted
+  # `GraphQL: Resource not accessible by integration (addComment)` — and because that call ended
+  # in `|| true`, the step reported SUCCESS while posting nothing. The durable artifact whose
+  # entire purpose is "a refusal must never be only a red run nobody owns" was itself silent.
+  issues: write
 
 concurrency:
   # Never let two replaces of the same host queue up behind each other.
@@ -57,7 +65,10 @@ concurrency:
 jobs:
   dispatch-replace:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # 15 -> 45. P3 now waits up to 2100s (35 min) for the release it co-fires with, and the
+    # apply poll allows a further 1500s. At 15 the job was cancelled mid-wait — and a CANCELLED
+    # job does not satisfy `failure()`, so the refusal artifact step would not have run at all.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -226,7 +237,14 @@ jobs:
             "" \
             "- **P1** (local-cache pulls) — the manual arm passes \`--manual\`, which skips P1 only; it is the predicate a replace outage itself trips." \
             "- **P5** (the replace would be unobservable) — \`--manual\` does NOT skip this one, deliberately. If the container-log channel is dark (#7569) the replace outcome cannot be read back, and forcing it would put the sole pull path behind a channel that cannot report whether it returned.")"
-          gh issue comment 7556 --repo "${GITHUB_REPOSITORY}" --body "$BODY" || true
+          # NOT `|| true`. That is what masked the missing scope above: the artifact step cannot
+          # both be the thing that guarantees a refusal is visible AND silently tolerate failing
+          # to post. If this cannot write, the run must say so — the ::error:: is then the
+          # artifact of last resort, and the step's own failure is the signal.
+          if ! gh issue comment 7556 --repo "${GITHUB_REPOSITORY}" --body "$BODY"; then
+            echo "::error::could not post the delivery-refusal artifact to #7556. The refusal itself stands (nothing was dispatched), but it has NO durable record beyond this run. Verdict and cause: ${RUN_URL}"
+            exit 1
+          fi
 
       # No `if: always()` here, and no fallback arm: a refused preflight must stop the job with
       # the preflight's own ::error:: as the last word. It files nothing and dispatches nothing.
@@ -319,6 +337,7 @@ jobs:
             echo "::warning::apply run ${run_id} had not concluded within the poll window — UNVERIFIED, not failed."
           else
             echo "::error::apply run ${run_id} concluded '${concl}'. The registry host may be DOWN and it has no SSH; recover by re-dispatching registry-host-replace, which restores from the PRESERVED volume."
-            gh issue comment 7556 --repo "${GITHUB_REPOSITORY}" --body "The dispatched \`registry-host-replace\` concluded **${concl}** (run ${run_id}). The registry host may be dark; the store volume is preserved. Recovery is a re-dispatch." || true
+            gh issue comment 7556 --repo "${GITHUB_REPOSITORY}" --body "The dispatched \`registry-host-replace\` concluded **${concl}** (run ${run_id}). The registry host may be dark; the store volume is preserved. Recovery is a re-dispatch." \
+              || echo "::error::the apply concluded '${concl}' AND the tracker comment could not be posted — this run is the only record."
             exit 1
           fi

@@ -190,7 +190,16 @@ fi
 #
 # The hazard is a replace *mid-push*, not a replace six minutes after one. So poll until the
 # writers drain and refuse only if they do not. Bounded well inside the job's timeout-minutes: 15.
-WAIT_SECS="${REGISTRY_PREFLIGHT_WAIT_SECS:-480}"
+# 480 -> 2100 (35 min). MEASURED, not guessed: the first real refusal (run 31976455167,
+# 2026-08-16) waited the full 480s and refused anyway, because web-platform-release takes ~31
+# minutes end to end (21:57:21Z -> 22:28:56Z on the preceding run) and the release fires on the
+# SAME merge as this dispatcher. A budget shorter than a release can never clear the modal case
+# it exists for — it only converts an immediate refusal into a delayed one.
+#
+# The job's own `timeout-minutes` must exceed this or the wait is truncated by a cancellation,
+# which is worse than a refusal because a cancelled job does not satisfy `failure()` and files
+# no artifact. Raised to 45 in registry-host-replace-dispatch.yml alongside this.
+WAIT_SECS="${REGISTRY_PREFLIGHT_WAIT_SECS:-2100}"
 POLL_SECS="${REGISTRY_PREFLIGHT_POLL_SECS:-20}"
 waited=0
 while [[ "${in_progress:-0}" -gt 0 && "$waited" -lt "$WAIT_SECS" ]]; do
