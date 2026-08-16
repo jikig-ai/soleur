@@ -128,6 +128,16 @@
 /tests/scripts/lib/preapply-entrypoint-gate.sh           @deruelle
 /tests/scripts/test-preapply-entrypoint-gate.sh          @deruelle
 
+# vector-redeliver plan gate (#7542). Same review scope and the same reason as the
+# rows above: the `vector_redeliver` job sources this file from ${GITHUB_WORKSPACE}
+# and applies a saved plan only if it returns 0, so a PR that neuters the function
+# converts a scoped delivery into an unbounded apply against production web-1. The
+# blanket `*` rule at the top already assigns the same owner — these rows exist to
+# record WHICH files are gate-critical, not to change ownership.
+/tests/scripts/lib/vector-redeliver-gate.sh              @deruelle
+/tests/scripts/test-vector-redeliver-gate.sh             @deruelle
+/tests/scripts/test-vector-redeliver-wiring.sh           @deruelle
+
 # R15 follow-up D2 — CodeQL coverage audit (#3545). Same false-pass
 # attack surface as #3544: mutating classify_codeql() to accept
 # `failure` as `passing` would auto-green a real CodeQL drift on bot

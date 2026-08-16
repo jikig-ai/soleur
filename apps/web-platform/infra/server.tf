@@ -1082,6 +1082,14 @@ resource "terraform_data" "journald_persistent" {
       "grep -q 'web-zot-consumer-probe' /etc/vector/vector.toml",
       "grep -q 'web-git-data-probe' /etc/vector/vector.toml",
       "grep -q 'web-nic-guard' /etc/vector/vector.toml",
+      # (#7228 / #7542) The FOURTH Source-4 tag, asserted for the same reason as the three above
+      # and added when apply_target=vector-redeliver gave this file a delivery path of its own.
+      # It is what makes AC27(a) a property of the APPLY rather than a claim about it: the arm's
+      # whole purpose is delivering a vector.toml change to the running host, so "the apply went
+      # green" must not be satisfiable while the tag this dispatch was fired for is absent from
+      # the file the agent actually reads. Asserted on /etc (post-install, post-restart), not on
+      # /opt — the staged copy proves the render, this proves the DELIVERY.
+      "grep -q 'inngest-consumer-probe' /etc/vector/vector.toml",
       "test \"$(systemctl is-active vector.service)\" = 'active'",
     ]
   }

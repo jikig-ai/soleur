@@ -190,7 +190,7 @@ on:
           registry-host-replace | registry-region-migrate | registry-luks-recut |
           git-data-host-replace | git-data-host-create | workspaces-luks-cutover |
           workspaces-luks-recut | web-host-create | web-host-replace | ci-ssh-token-replace |
-          entrypoint-audit.
+          vector-redeliver | entrypoint-audit.
           DESTRUCTIVE targets need `confirm` and an id-pin — see the runbook for the
           target you are firing.
           ci-ssh-token-replace RE-MINTS the CF Access ci_ssh service token when Cloudflare
@@ -258,6 +258,13 @@ on:
           # It is the ONE arm that can run while the SSH bridge is dead, because it
           # repairs the credential the bridge authenticates with.
           - ci-ssh-token-replace
+          # #7542 — delivers a `vector.toml` change to web-1 on its own dispatch, scoped to
+          # terraform_data.journald_persistent (the resource whose triggers_replace hashes that
+          # file). It exists because the merge-triggered push apply grades the WHOLE plan, so a
+          # routine delivery could not land while unrelated pending drift sat in the same plan.
+          # Its plan gate REFUSES anything that is not exactly one delivery. See the
+          # vector_redeliver job and knowledge-base/engineering/operations/runbooks/vector-redeliver.md.
+          - vector-redeliver
           - entrypoint-audit
 
 concurrency:
@@ -5464,6 +5471,298 @@ jobs:
           fi
           echo "::error::ci_ssh_liveness_unavailable — scan returned live='${live}' dead='${dead}' unverifiable='${unver}', which certifies nothing. A zero live-count means no pair was measured. The re-mint is NOT known to have failed; do not re-dispatch."
           exit 1
+
+  # #7542 — deliver a `vector.toml` change to web-1 WITHOUT riding unrelated pending drift.
+  #
+  # WHY THIS ARM EXISTS. `vector.toml` is hashed into the `triggers_replace` of
+  # terraform_data.journald_persistent (server.tf:987-990), so a Vector config change reaches
+  # the running host ONLY by replacing that resource. Before this arm the sole route was the
+  # merge-triggered push apply, which grades the WHOLE plan at once — so a delivery that is by
+  # itself routine could not land while unrelated pending drift sat in the same plan. This arm
+  # gives the delivery its own dispatch, scoped to that one address.
+  #
+  # ── THE REAL GATE CHAIN (read this before adding another guard) ────────────────────────────
+  #   1. AUTHORIZATION is the menu-ack dispatch itself (`hr-menu-option-ack-not-prod-write-auth`).
+  #      A non-technical operator selecting this target from the dropdown IS the human approval
+  #      for the production write. There is no commit trailer on this path — `[ack-destroy]`
+  #      is structurally unavailable, because the push guard reads
+  #      github.event.head_commit.message, which is EMPTY on workflow_dispatch.
+  #   2. `confirm=REDELIVER-VECTOR` is a TYPO-GUARD ONLY, not the authorization. It exists so a
+  #      token typed for a host birth or a credential destroy cannot fire a delivery. The token
+  #      is recorded HERE and in knowledge-base/engineering/operations/runbooks/vector-redeliver.md
+  #      — deliberately NOT in the `confirm` input's description (:112 keeps that field a
+  #      pointer, because the string accreted one clause per target and no operator reads it).
+  #   3. The MECHANICAL protection is the sourced plan gate below
+  #      (tests/scripts/lib/vector-redeliver-gate.sh) — the same bytes
+  #      tests/scripts/test-vector-redeliver-gate.sh exercises. It reads the SAVED PLAN, not the
+  #      `-target=` flags, because `-target` is transitive and is a request, not a bound: the
+  #      real closure of this one target is ~9 addresses (both hcloud_server.web entries,
+  #      hcloud_ssh_key.default, hcloud_placement_group.web_spread, the CF tunnel +
+  #      random_id.tunnel_secret, doppler_service_token.web_probes, hcloud_volume.workspaces[*],
+  #      tls_private_key.ci_ssh). Grading the plan is what makes that closure safe.
+  #   4. `environment: web-platform-infra-apply` is a MAIN-BRANCH PIN, not merely a reviewer
+  #      click — and for this job it is the load-bearing one. `workflow_dispatch` runs the
+  #      SELECTED REF's workflow AND its scripts; this job sources its gate from
+  #      ${GITHUB_WORKSPACE} and runs root `remote-exec` on web-1, so without the environment's
+  #      `deployment_branch_policy` (web-host-birth-environment.tf:63-78) anyone who can
+  #      dispatch could point the run at a branch carrying a neutered gate — and the reviewer
+  #      prompt shows a branch NAME, not a diff. A first-step `github.ref` guard was considered
+  #      and rejected as strictly weaker: the guard would itself be supplied by the branch it is
+  #      meant to police.
+  #      THE PIN IS LIVE — measured 2026-08-16, not inherited. The environment carries
+  #      protection_rules ["required_reviewers","branch_policy"] and exactly one deployment
+  #      branch policy, "main". `github_repository_environment_deployment_policy.web_platform_infra_apply_main`
+  #      does still show as a pending CREATE in the push plan, but that is a STATE fact
+  #      (Terraform has not adopted it yet), NOT a liveness one. An earlier revision of this
+  #      comment inherited the plan's "the pin is among the changes the wedge is holding" and
+  #      read it as "the pin may not be protecting you" — the opposite of the measurement, and
+  #      understating a security control is the more dangerous direction of that error. When
+  #      the question is whether the pin protects a dispatch RIGHT NOW, read the environments
+  #      API, never the terraform plan.
+  #
+  # ── STEP ORDER IS LOAD-BEARING ─────────────────────────────────────────────────────────────
+  # The CF Tunnel SSH bridge MUST precede the plan. It writes TF_VAR_ci_ssh_private_key into
+  # $GITHUB_ENV (cf-tunnel-ssh-bridge/action.yml:199-203); variables.tf:468-472 defaults that to
+  # null and server.tf:992-998 resolves `agent = var.ci_ssh_private_key == null`, so a plan
+  # produced BEFORE the bridge bakes agent = true and looks for an ssh-agent on an agent-less
+  # runner. `terraform apply <savedplan>` uses the values recorded in the plan file and accepts
+  # no variable input, so a later export is inert. This is the only job in this file that
+  # combines a saved plan with the bridge, and that is why.
+  #
+  # ── NO-OP IS A SUCCESS SHAPE, NOT A FAILURE ────────────────────────────────────────────────
+  # Zero entries at the allowed address means the desired state is ALREADY REALISED — the arm's
+  # own success condition, one dispatch later. Legitimate ways to land there: a re-dispatch to
+  # re-verify, the push apply delivering first, a cancelled run after state was updated. The
+  # gate returns 0 with outcome=noop, the apply is SKIPPED by a positive verdict rather than by
+  # a failure, and "nothing to redeliver" is written to the step summary. (The plan's F12 said
+  # the no-op should also skip the BRIDGE; F10 then moved the bridge ahead of the plan, so by
+  # the time the verdict exists the bridge is already up. The `if: always()` teardown covers it.)
+  vector_redeliver:
+    if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'vector-redeliver'
+    runs-on: ubuntu-24.04
+    # 15, matching ci_ssh_token_replace (:5148). Omitted, GitHub grants 360.
+    #
+    # THIS DOES NOT BOUND THE MUTEX HOLD, and an earlier revision of this comment claimed it
+    # did. `timeout-minutes` starts when the job begins EXECUTING; a job held in `waiting` for
+    # the `environment:` approval below has not started, and a pending GitHub deployment
+    # approval survives for up to 30 days — while already holding its concurrency group. This
+    # file's own header records the measurement (`:44-47`): PR #4220 dropped an `environment:`
+    # reviewer gate after apply runs sat in `waiting` up to 13h blocking sibling applies
+    # through exactly this mechanism.
+    #
+    # Consequence to know before dispatching: an unapproved dispatch of THIS arm holds
+    # `web-1-swap`, which `ci_ssh_token_replace` also takes — and that arm is deliberately
+    # environment-free (`:5142-5148`) so credential recovery is never behind a click. Approve
+    # or CANCEL a dispatch you are not going to complete; do not leave it pending. The runbook
+    # says so under Preconditions. Pre-existing and repo-wide (web_host_create and
+    # web_host_replace pair the same environment with the same group) — tracked separately, not
+    # papered over here.
+    timeout-minutes: 15
+    # A MAIN-BRANCH PIN (F7) — see the gate chain above. Not decorative.
+    environment: web-platform-infra-apply
+    # THE WORKFLOW-LEVEL GROUP IS NOT SUFFICIENT. That group serializes terraform applies
+    # against each other, which is what the lockless R2 backend needs. This job's distinct
+    # hazard is different: it replaces a resource whose create-time provisioners run root
+    # commands on web-1 and restart vector + systemd-journald. A concurrent container swap
+    # (web-platform-release `deploy`, apply-deploy-pipeline-fix `apply`) or a LUKS
+    # cutover/recut on the same host is exactly what this mutex exists to serialize.
+    # DO NOT RENAME — GitHub does not error on divergent group strings, they simply fail to
+    # serialize. Enrolment is asserted by
+    # apps/web-platform/infra/web-1-swap-concurrency-parity.test.sh.
+    concurrency:
+      group: web-1-swap
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
+
+      - name: Typo-guard
+        env:
+          # Operator-supplied. Routed through env: and compared as data — never interpolated
+          # into the shell, per the workflow-injection guidance in this file's header.
+          CONFIRM_RAW: ${{ inputs.confirm }}
+          REASON_RAW: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          # Deliberately distinct from every other token in this file: a string typed for a
+          # host birth, a host replace or a credential destroy must not authorize a delivery.
+          if [[ "$CONFIRM_RAW" != "REDELIVER-VECTOR" ]]; then
+            echo "::error::confirm must be exactly 'REDELIVER-VECTOR'. This REPLACES terraform_data.journald_persistent, which re-runs its create-time provisioners as root on web-1 and restarts vector + systemd-journald."
+            exit 1
+          fi
+          if [[ -z "${REASON_RAW// /}" ]]; then
+            echo "::error::reason is required — it is the audit trail for a production write against web-1."
+            exit 1
+          fi
+          # The audit trail has to LAND somewhere, or requiring it is theatre.
+          {
+            echo "### vector-redeliver dispatch"
+            echo ""
+            echo "- Reason: ${REASON_RAW}"
+            echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Generate ephemeral SSH public key for var.ssh_key_path
+        # HCL evaluates file() at plan time regardless of -target= filtering, so this dummy key
+        # only satisfies parsing. UNLIKE the ci_ssh_token_replace comment this is modelled on,
+        # hcloud_ssh_key.default IS inside this arm's target closure (server.tf:264) — it stays
+        # a no-op only because of its `lifecycle { ignore_changes = [public_key] }` (:242-244).
+        # If that lifecycle block is ever removed, this dummy key becomes a real diff and the
+        # plan gate will refuse every dispatch. Regenerate a stable key here at that point.
+        run: |
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+          printf 'CI_SSH_PUB=%s\n' "/tmp/ci_ssh_key.pub" >> "$GITHUB_ENV"
+
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null) || {
+            echo "::error::AWS_ACCESS_KEY_ID not found in Doppler prd_terraform."; exit 1; }
+          SECRET=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null) || {
+            echo "::error::AWS_SECRET_ACCESS_KEY not found in Doppler prd_terraform."; exit 1; }
+          if [[ -z "$KEY_ID" || -z "$SECRET" ]]; then
+            echo "::error::AWS R2 backend credentials are empty in Doppler prd_terraform."; exit 1; fi
+          printf '::add-mask::%s\n' "$KEY_ID"
+          printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+
+      - name: Terraform init
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: CF Tunnel SSH bridge
+        # BEFORE the plan, deliberately — see "STEP ORDER IS LOAD-BEARING" in the job header.
+        # The bridge is read-only setup (a cloudflared forward, a NAT rule, and an assertion
+        # that CF Access still ADMITS the ci_ssh token), and proving the channel before the
+        # consequential step is this file's own doctrine (:5209-5217). It reads
+        # `terraform output -raw server_ip` from R2 state, so it must follow `terraform init`.
+        uses: ./.github/actions/cf-tunnel-ssh-bridge
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
+          infra-dir: ${{ env.INFRA_DIR }}
+          cloudflared-version: ${{ env.CLOUDFLARED_VERSION }}
+          cloudflared-sha256: ${{ env.CLOUDFLARED_SHA256 }}
+
+      - name: Terraform plan (vector redeliver — one target, one delivery)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # ONE `-target`, and NO `-replace`: the vector.toml hash in triggers_replace is what
+        # makes this a replace, so a `-replace` flag here would force a delivery even when the
+        # config had not changed — turning the arm's own no-op success shape into a needless
+        # production restart.
+        run: |
+          set -uo pipefail
+          # `set +e` bracket, matching the corrected exemplar in this file: Actions runs a bare
+          # run: block as `bash -e {0}`, so errexit is INHERITED and `set -uo pipefail` cannot
+          # clear it. Without this the step would die AT the doppler line on a plan failure and
+          # both `rc=$?` and the `::error::` below would be unreachable. The handler still ends
+          # `exit $rc`, so this cannot turn a failed prod plan green.
+          set +e
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan \
+              -var="ssh_key_path=${CI_SSH_PUB}" \
+              -target=terraform_data.journald_persistent
+          rc=$?
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan (vector-redeliver) failed (exit $rc). NOTHING has been applied."
+            exit $rc
+          fi
+          set -e
+
+      - name: Vector-redeliver plan gate (reads the PLAN, not the flags)
+        id: vector_gate
+        working-directory: ${{ env.INFRA_DIR }}
+        run: |
+          set -euo pipefail
+          terraform show -json tfplan > "$RUNNER_TEMP/vector-redeliver-plan.json"
+          # Sourced gate — the SAME bytes tests/scripts/test-vector-redeliver-gate.sh exercises,
+          # so the CI decision logic is never a re-derived inline copy that can drift.
+          # shellcheck source=tests/scripts/lib/vector-redeliver-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/vector-redeliver-gate.sh"
+          if ! vector_redeliver_gate "$RUNNER_TEMP/vector-redeliver-plan.json"; then
+            echo "::error::vector-redeliver plan gate ABORTED. The plan is not exactly one delivery of terraform_data.journald_persistent — see the named counter above. Refusing to apply; NOTHING has been changed. Remedies per counter: knowledge-base/engineering/operations/runbooks/vector-redeliver.md (## If the gate refuses)."
+            terraform show -no-color tfplan \
+              | grep -E 'will be destroyed|must be replaced|will be updated in-place|will be created|Plan:' \
+              | head -30 >&2 || true
+            exit 1
+          fi
+          # FAIL-CLOSED ON A MISSING VERDICT. The gate sets VECTOR_REDELIVER_OUTCOME as its
+          # first statement, so an empty value here means the sourced lib is not the one this
+          # step thinks it is — a rename, a partial source, a shadowed function. Two things
+          # would otherwise happen, both bad: `set -u` kills the step at the printf with a
+          # message that names bash rather than the cause, or a `:-` default silently publishes
+          # an empty outcome that reads as "not pass" and skips the apply without saying why.
+          # Asserted explicitly instead. (This guard is also what satisfies
+          # scripts/lint-workflow-step-env-refs.py, which cannot see that a sourced function
+          # sets the variable — its docstring names exactly this shape.)
+          if [[ -z "${VECTOR_REDELIVER_OUTCOME:-}" ]]; then
+            echo "::error::vector_redeliver_gate returned success but set no VECTOR_REDELIVER_OUTCOME. Refusing to apply on a verdict that does not exist. NOTHING has been changed."
+            exit 1
+          fi
+          printf 'outcome=%s\n' "$VECTOR_REDELIVER_OUTCOME" >> "$GITHUB_OUTPUT"
+          if [[ "$VECTOR_REDELIVER_OUTCOME" == "noop" ]]; then
+            {
+              echo ""
+              echo "**Result: nothing to redeliver.** No entry matched the allow-set, so the desired state is already realised (or a re-dispatch found the work already done). No apply ran. This is a SUCCESS."
+              echo ""
+              echo "If a delivery WAS expected, verify \`terraform_data.journald_persistent\` is still un-indexed at that exact address — an exact-equality allow-set reads zero for a broken allow-set too."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Terraform apply (the graded tfplan)
+        if: steps.vector_gate.outputs.outcome == 'pass'
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # Consumes the SAVED plan the gate just graded. This is the Guard Contract's chokepoint:
+        # because the apply consumes the artifact rather than re-planning, no resource can enter
+        # the apply that was absent from the graded document — the gate's scope and the apply's
+        # scope are the SAME OBJECT, not two lists kept in sync. Never add `-target=` here.
+        run: |
+          set -euo pipefail
+          doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false -auto-approve tfplan
+
+      - name: Tear down cloudflared SSH bridge
+        if: always()
+        # Caller-side teardown — the composite action cannot register a post-job hook and
+        # declares this MANDATORY (action.yml:33-58). The `-n` guards make it a clean no-op when
+        # the bridge never ran or failed before exporting. It is also where
+        # /tmp/cloudflared.log surfaces, which is the evidence the runbook's L3 "tunnel
+        # unhealthy" hypothesis runs on — without it that triage step has nothing to read.
+        run: |
+          set +e
+          if [[ -n "${SERVER_IP:-}" ]]; then
+            sudo iptables -t nat -D OUTPUT \
+              -d "$SERVER_IP" -p tcp --dport 22 \
+              -j REDIRECT --to-ports 2222 2>/dev/null || true
+          fi
+          if [[ -n "${CLOUDFLARED_PID:-}" ]]; then
+            kill "$CLOUDFLARED_PID" 2>/dev/null || true
+          fi
+          if [[ -f /tmp/cloudflared.log ]]; then
+            echo "=== /tmp/cloudflared.log (last 200 lines) ==="
+            if [[ -s /tmp/cloudflared.log ]]; then
+              tail -n 200 /tmp/cloudflared.log
+            else
+              echo "(log empty — cloudflared may have failed before writing any output)"
+            fi
+          fi
 
   entrypoint_audit:
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'entrypoint-audit'

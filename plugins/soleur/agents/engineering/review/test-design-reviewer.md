@@ -83,3 +83,5 @@ When a PR arrives carrying its own mutation battery ("9-for-9 caught", "each ass
 The recurring axes are: SUT content · fixture shape · fixture direction · dispatch · extractor uniqueness · harness normalization · set cardinality. Their measured cases and the reasoning behind each live in `plugins/soleur/skills/review/SKILL.md` §Sharp Edges, which is the authority — read them there rather than from a copy kept here, which would drift out of step with it.
 
 **Verify the instrument before reading any verdict** — run it against a known-positive and a known-negative. A mutation that did not land reports the baseline, and a baseline is indistinguishable from a pass.
+
+"Landed" means landed **in the region under test**, not "the file changed". In a multi-job workflow or any file of near-identical blocks, a file-wide `s///` without `/g` rewrites the FIRST match — somebody else's job — so the mutant is real, the diff is real, and the verdict is about code the suite was never asserting on. Scope the mutation to the block's line range and assert its placement; a `cmp` proving the file differs proves nothing about where.

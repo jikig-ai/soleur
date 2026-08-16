@@ -1090,6 +1090,17 @@ if want_scripts; then
   run_suite "tests/scripts/inngest-host-replace-gate" bash tests/scripts/test-inngest-host-replace-gate.sh
   # registry-host-replace scoped-recreate destroy-guard (5-target; preserves the zot store volume).
   run_suite "tests/scripts/registry-host-replace-gate" bash tests/scripts/test-registry-host-replace-gate.sh
+  # #7542: vector-redeliver scoped-delivery gate. Unlike the -replace arms above it permits a bare
+  # ["create"] as well as ["delete","create"] (a delivery, not a replace), and its no-op outcome is
+  # SUCCESS rather than a refusal — so "nothing to redeliver" cannot be reported for a lone delete.
+  run_suite "tests/scripts/vector-redeliver-gate" bash tests/scripts/test-vector-redeliver-gate.sh
+  # #7542 WIRING (not logic), and the same split as the D10 pair below. The suite above proves the
+  # gate DECIDES correctly; it cannot prove the vector_redeliver job calls it, calls it on the
+  # artifact the apply consumes, or is gated on its verdict at all. It also pins the one property
+  # no unit test can see: the CF Tunnel bridge must precede the plan, because the plan bakes
+  # TF_VAR_ci_ssh_private_key and `apply <savedplan>` accepts no variable input. Registered
+  # explicitly — nothing auto-discovers tests/scripts/ (#3366).
+  run_suite "tests/scripts/vector-redeliver-wiring" bash tests/scripts/test-vector-redeliver-wiring.sh
   # registry-region-migrate destroy-guard (#6288; permits the registry's OWN store-volume replace across regions, forbids all out-of-scope destroys).
   run_suite "tests/scripts/registry-region-migrate-gate" bash tests/scripts/test-registry-region-migrate-gate.sh
   # registry-luks-recut destroy-guard (#6929). The INVERSE of registry-host-replace: it REQUIRES
