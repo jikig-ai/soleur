@@ -1,7 +1,8 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { readFileSync } from "fs";
+import { readFileSync, mkdtempSync, writeFileSync } from "fs";
 import { spawnSync } from "child_process";
-import { resolve } from "path";
+import { resolve, join } from "path";
+import { tmpdir } from "os";
 import {
   isPipelineSkill,
   isHandoffSkill,
@@ -281,22 +282,28 @@ describe("workflow-fidelity sentinel markers in skills", () => {
   // exit code we choose. test-all.sh reserves 3 for "zero suites failed, >= 1 suite terminated
   // with a signal-shaped status" — unresolved, not failed — and `run_step` must keep the two
   // apart while stopping the push either way.
-  const runStepWithExit = (code: number) =>
-    spawnSync(
-      "bash",
+  // The harness is written to a FILE and invoked as `bash <file> <gate> <code>` rather than
+  // passed via `bash -c`. CodeQL flags the inline-script form (js/shell-command-injection-from-
+  // environment, alert 214) because the command string is built next to an absolute path. The
+  // path was already in argv rather than interpolated, so this is a shape change, not a
+  // behaviour change: $1 and $2 keep exactly the same meaning.
+  const runStepWithExit = (code: number) => {
+    const harness = join(mkdtempSync(join(tmpdir(), "grok-pre-push-gate-")), "harness.sh");
+    writeFileSync(
+      harness,
       [
-        "-c",
-        [
-          "set -euo pipefail",
-          `eval "$(sed -n '/^step() {/,/^}/p;/^run_step() {/,/^}/p' "$1")"`,
-          'run_step probe bash -c "exit $2"',
-        ].join("\n"),
-        "harness",
-        resolve(PLUGIN_ROOT, "scripts/grok-pre-push-gate.sh"),
-        String(code),
-      ],
+        "set -euo pipefail",
+        `eval "$(sed -n '/^step() {/,/^}/p;/^run_step() {/,/^}/p' "$1")"`,
+        'run_step probe bash -c "exit $2"',
+        "",
+      ].join("\n"),
+    );
+    return spawnSync(
+      "bash",
+      [harness, resolve(PLUGIN_ROOT, "scripts/grok-pre-push-gate.sh"), String(code)],
       { encoding: "utf-8" },
     );
+  };
 
   test("grok-pre-push-gate run_step: exit 3 is UNRESOLVED, other non-zero is FAIL, both stop the push", () => {
     const ok = runStepWithExit(0);

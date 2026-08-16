@@ -1,11 +1,27 @@
 // Service-worker update-lifecycle helpers.
 //
+// Observability layer 3 (browser). Until #7084 this whole path was unobservable:
+// no Sentry, no logger, anywhere in sw-update.ts or pwa-controls.tsx. A user could
+// click Reload and have nothing happen — the waiting worker never activating, the
+// page never reloading — and neither the user nor the operator would learn anything.
+// `watchUpdateAcceptance` closes that: an accepted update that produces no
+// `controllerchange` inside a bounded window reports to Sentry.
+//
 // The service worker (public/sw.js) no longer calls skipWaiting() on install —
 // a new version installs and then WAITS. These helpers detect the waiting
 // worker, tell it to activate when the user accepts, and reload the page once
 // (guarded) when the new worker takes control.
 
+import { reportSilentFallback } from "@/lib/client-observability";
+
 export type WaitingListener = (worker: ServiceWorker) => void;
+
+/**
+ * How long an accepted update may take to produce a `controllerchange` before we
+ * treat it as stuck. Generous: skipWaiting → activate → claim is normally well
+ * under a second, but a slow device mid-activation should not page anyone.
+ */
+export const UPDATE_ACCEPT_TIMEOUT_MS = 10_000;
 
 /**
  * Watch a registration for a waiting worker (a new SW version that installed
@@ -82,4 +98,58 @@ export function reloadOnControllerChange(
   };
   container.addEventListener("controllerchange", handler);
   return () => container.removeEventListener("controllerchange", handler);
+}
+
+/**
+ * Report when an accepted update never takes effect.
+ *
+ * Call immediately after `postSkipWaiting`. If `controllerchange` does not fire within
+ * `timeoutMs`, the update is stuck — the user clicked Reload and the app did not
+ * update — and that is reported to Sentry under `feature: "pwa-update"`,
+ * `op: "accept-timeout"`. A cleared timer on success means the healthy path is silent.
+ *
+ * Returns an unsubscribe function; calling it cancels the watchdog (used when the
+ * component unmounts before either outcome).
+ *
+ * `container`, `setTimer` and `clearTimer` are injectable so the existing
+ * makeContainer/fire harness in test/pwa/sw-update.test.ts can drive both arms without
+ * real timers.
+ */
+export function watchUpdateAcceptance(
+  container: ServiceWorkerContainer = navigator.serviceWorker,
+  timeoutMs: number = UPDATE_ACCEPT_TIMEOUT_MS,
+  setTimer: (fn: () => void, ms: number) => unknown = (fn, ms) => setTimeout(fn, ms),
+  clearTimer: (handle: unknown) => void = (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+): () => void {
+  let settled = false;
+
+  const onControllerChange = () => {
+    if (settled) return;
+    settled = true;
+    clearTimer(handle);
+    container.removeEventListener("controllerchange", onControllerChange);
+  };
+
+  const handle = setTimer(() => {
+    if (settled) return;
+    settled = true;
+    container.removeEventListener("controllerchange", onControllerChange);
+    reportSilentFallback(
+      new Error("pwa update accepted but no controllerchange within timeout"),
+      {
+        feature: "pwa-update",
+        op: "accept-timeout",
+        extra: { timeoutMs, hadController: Boolean(container.controller) },
+      },
+    );
+  }, timeoutMs);
+
+  container.addEventListener("controllerchange", onControllerChange);
+
+  return () => {
+    if (settled) return;
+    settled = true;
+    clearTimer(handle);
+    container.removeEventListener("controllerchange", onControllerChange);
+  };
 }
