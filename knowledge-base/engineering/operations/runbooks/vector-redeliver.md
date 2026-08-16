@@ -195,9 +195,17 @@ Verify **off-host**. No SSH (`hr-no-ssh-fallback-in-runbooks`).
 
    Once the unfiltered probe returns rows, "no rows for the new identifier" is evidence about the identifier.
 
-   **A zero-row unfiltered result IS meaningful — it means the channel is dark.** Do not explain it away. Measured 2026-08-16: rows were absent across hot *and* archive for the whole preceding day, then began abruptly at 20:43:26Z; the same host reported `vector: active` with a non-empty journal tail throughout, so the unit being up proves nothing about the sink. A dark channel is a real finding — see #7569 for a concurrent instance on a different channel.
+   **A zero-row unfiltered result IS meaningful — it means the channel is dark.** Do not explain it away. But triage it in this order, because the cheapest cause is the one every instinct skips:
 
-   The delivery itself does not depend on any of this: the rendered-sha comparison in step 2 reads the webhook's own response body and needs no log channel at all. A dark sink is worth an incident; it is not a reason to doubt a sha that matches.
+   | Order | Check | Why first |
+   |---|---|---|
+   | 1 | **Better Stack account/billing state** — is ingest suspended for a plan limit, an expired card, or a quota overage? | It is a **vendor** condition with an infra-shaped symptom, and it is the one hypothesis no amount of host inspection can reach. **Measured 2026-08-16: exactly this.** Rows were absent across hot *and* archive for the whole preceding day, then resumed abruptly at `20:43:26Z` when the billing issue was resolved — nothing on the host changed. |
+   | 2 | Ingest token — `BETTERSTACK_LOGS_TOKEN` valid and injected into `vector.service`? | A revoked or unrefreshed token drops shipping while the unit stays healthy. |
+   | 3 | The agent — is `vector` running *and shipping*? | Last, because it is the loudest and most misleading signal. |
+
+   **`vector: active` with a non-empty journal tail proves the unit is up and nothing about the sink** — both were true throughout the outage above while the channel carried nothing. A dark channel is a real finding; the first question is whether you are being billed for it, not whether the process is alive.
+
+   The delivery itself does not depend on any of this: the rendered-sha comparison in step 2 reads the webhook's own response body and needs no log channel at all. A dark sink never casts doubt on a sha that matches.
 
 ## Known residual
 
