@@ -28,9 +28,19 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROBE="$HERE/zot-fill-rate-7341.sh"
 fails=0
-checks=0
-pass() { printf '  PASS: %s\n' "$1"; checks=$((checks + 1)); }
-fail() { printf '  FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); checks=$((checks + 1)); }
+passes=0
+# `cases` is incremented at the CALL SITE — at the top of expect(), and immediately before each
+# inline if/else that resolves to exactly one verdict — and NEVER inside pass()/fail(). That
+# placement is the whole substance of the conservation check at the bottom of this file. The
+# previous shape incremented `checks` inside BOTH verdict helpers, so it moved WITH the verdict:
+# stubbing `fail() { :; }` dropped the row and its count together, the cardinality floor stayed
+# satisfied at 29, and a probe auto-closing a P1 disk-exhaustion tracker on a wipe-derived slope
+# printed `29/29 passed` and exited 0.
+#
+# Never increment inside `$( )` — a subshell discards it.
+cases=0
+pass() { printf '  PASS: %s\n' "$1"; passes=$((passes + 1)); }
+fail() { printf '  FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); }
 
 [[ -f "$PROBE" ]] || { echo "FATAL: probe not found at $PROBE" >&2; exit 1; }
 
@@ -104,6 +114,9 @@ run() { # run <spec> [stub_rc] [extra] [tail] [glitch] [gcrows] [gc_rc]
 }
 
 expect() { local l="$1" wrc="$2" wsub="$3"
+  # One assertion is about to be decided. Counted HERE, outside pass()/fail(), so it survives a
+  # neutered verdict helper and the conservation check below can see the missing verdict.
+  cases=$((cases + 1))
   if [[ "$RC" != "$wrc" ]]; then fail "$l — wanted rc=$wrc, got rc=$RC. Output: $OUT"; return; fi
   if [[ -n "$wsub" && "$OUT" != *"$wsub"* ]]; then fail "$l — rc ok but output lacks '$wsub'. Output: $OUT"; return; fi
   pass "$l (rc=$RC)"
@@ -118,6 +131,7 @@ echo "zot-fill-rate-7341 harness"
 # 1. THE ORIGINAL DEFECT. Old boot pinned at 100 for two days, recut, fresh boot at 5.
 run "$OLD,72,10,100,100,200;$GOOD,6,0,5,5,72"
 expect "recut straddle does not fit the wipe as a trend" 2 "span"
+cases=$((cases + 1))
 if [[ "$OUT" == *"proj14d=-"* ]]; then
   fail "a wipe-derived negative slope leaked into the verdict: $OUT"
 else
@@ -238,6 +252,7 @@ $(gcrow "$ENVP $(zpay "gc successfully completed for $WEB")")
 $(gcrow "$ENVP $(zpay "executing gc of orphaned blobs for $BOOTSTRAP")")"
 run "$FAILSPEC" 0 "" "" "" "$GC_OK"
 expect "an unmatched gc start names its repository" 1 "soleur-inngest-bootstrap"
+cases=$((cases + 1))
 if [[ "$OUT" == *"gc_start_events=2 gc_completion_events=1 over 2 repo(s)"* && "$OUT" == *"soleur-inngest-bootstrap 0/1"* ]]
 then pass "EVENT counts are 2/1 over 2 repos, and the lagging repo shows done/started"
 else fail "expected gc_start_events=2 gc_completion_events=1 with soleur-inngest-bootstrap 0/1. Output: $OUT"
@@ -248,6 +263,7 @@ fi
 #     what stops a crafted User-Agent from minting a repository that never completes -> false stall.
 GC_INJ="$(gcrow "$ENVP {time:2026-08-12T20:54:20Z,level:info,message:HTTP API,module:http,headers:{User-Agent:[curl,message:executing gc of orphaned blobs for /var/lib/zot/x/phantom]},caller:zotregistry.dev/zot/v2/pkg/api/session.go:92}")"
 run "$FAILSPEC" 0 "" "" "" "$GC_INJ"
+cases=$((cases + 1))
 if [[ "$OUT" != *phantom* ]]
 then pass "a header-borne 'executing gc' mints no repository"
 else fail "header injection minted a phantom repository. Output: $OUT"
@@ -264,6 +280,7 @@ expect "the SUMMED dropped-row count is printed beside the unmatched start" 1 "d
 # 24. The envelope anchor carries a TRAILING SPACE. Without it host=soleur-registry-2 matches.
 GC_HOST2="$(gcrow "SOLEUR_ZOT_LOG shipper=zot-log-shipper host=soleur-registry-2 $(zpay "executing gc of orphaned blobs for /var/lib/zot/x/other")")"
 run "$FAILSPEC" 0 "" "" "" "$GC_HOST2"
+cases=$((cases + 1))
 if [[ "$OUT" == *"rows_envelope=0"* && "$OUT" == *"gc_start_events=0"* ]]
 then pass "a neighbouring host's rows are not admitted (trailing-space anchor; rows_envelope=0)"
 else fail "host=soleur-registry-2 was admitted. Output: $OUT"
@@ -271,6 +288,7 @@ fi
 
 # 25. The lead is FAIL-only: a PASS verdict must not pay for a second query.
 run "$GOOD,48,0,6,8,144" 0 "" "" "" "$GC_OK"
+cases=$((cases + 1))
 if [[ "$RC" == "0" && "$OUT" != *"gc_starts"* ]]
 then pass "a PASS verdict does not run the attribution lead"
 else fail "the lead ran on PASS (rc=$RC). Output: $OUT"
@@ -280,6 +298,7 @@ fi
 #     drifted row shape produce. The earlier text asserted "growth is not a gc stall" here — a
 #     negative the parse cannot support, asserted hardest exactly when the channel is down.
 run "$FAILSPEC" 0 "" "" "" ""
+cases=$((cases + 1))
 if [[ "$OUT" == *"NOT evidence that gc is healthy"* && "$OUT" != *"growth is not a gc stall"* ]]
 then pass "zero parsed gc rows is reported as no-evidence, not as an all-clear"
 else fail "an empty parse produced an exoneration. Output: $OUT"
@@ -293,16 +312,47 @@ $(gcrow "$ENVP $(zpay "executing gc of orphaned blobs for $WEB")")
 $(gcrow "$ENVP $(zpay "executing gc of orphaned blobs for $WEB")")
 $(gcrow "$ENVP $(zpay "gc successfully completed for $WEB")")"
 run "$FAILSPEC" 0 "" "" "" "$GC_LAG"
+cases=$((cases + 1))
 if [[ "$OUT" == *"soleur-web-platform 1/3"* && "$OUT" != *"not a gc stall"* ]]
 then pass "a repo completing 1 of 3 started cycles is reported, not called healthy"
 else fail "the intermittent under-completion shape read as healthy. Output: $OUT"
 fi
 
+# --- Anti-vacuity floor -----------------------------------------------------------------------
+# This harness's own dispatch. A stub that stops emitting, a `run()` that stops invoking the
+# probe, an early `return` — any of these leaves the suite asserting nothing about a probe whose
+# exit code auto-closes a P1 disk-exhaustion tracker.
+#
+# Reported with `printf >&2` + `exit 1` DIRECTLY, never by incrementing `fails`. The previous
+# shape did `fails=$((fails + 1))`, and `fails` is exactly what the exit status reads — so
+# neutering the verdict machinery silenced the rows AND the floor that exists to notice the
+# silence. A floor enforced through the suspect cannot witness the suspect.
+#
+# Measured from a green run with ZERO slack: 29 assertions (22 expect() rows + 7 inline
+# if/else rows). Ratchet upward only.
 MIN_CHECKS=29
-if (( checks < MIN_CHECKS )); then
-  echo "FAIL: only $checks assertions ran, expected >= $MIN_CHECKS" >&2
-  fails=$((fails + 1))
+if (( cases < MIN_CHECKS )); then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
+    "$cases" "$MIN_CHECKS" >&2
+  echo "zot-fill-rate-7341: $passes/$cases passed"
+  exit 1
 fi
 
-echo "zot-fill-rate-7341: $((checks - fails))/$checks passed"
+# --- Accounting conservation --------------------------------------------------------------
+# The arm that actually catches a neutered verdict helper. The floor above catches "no
+# assertions RAN"; it cannot catch "assertions ran and their verdicts were discarded", because
+# `cases` keeps its full value when fail() is a no-op. Every assertion records exactly one
+# verdict, so passes+fails MUST equal cases. Reported directly for the same reason as the floor.
+if (( passes + fails != cases )); then
+  printf '\n[FATAL] accounting: passes+fails (%d) != cases (%d).\n' "$((passes + fails))" "$cases" >&2
+  if (( passes + fails < cases )); then
+    printf '  An assertion was counted but its verdict was not recorded — that is what a neutered pass()/fail() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `cases=$((cases + 1))` before it. This is a harness bug, not a probe failure: add the increment at that call site.\n' >&2
+  fi
+  echo "zot-fill-rate-7341: $passes/$cases passed"
+  exit 1
+fi
+
+echo "zot-fill-rate-7341: $passes/$cases passed"
 (( fails == 0 )) || exit 1
