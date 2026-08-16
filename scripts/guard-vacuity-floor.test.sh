@@ -338,6 +338,24 @@ else
   fail "the repo-wide sweep found nothing outside the covered directories — the closure check has become circular"
 fi
 
+# --- ARM 5c: the deferral ledger may only SHRINK -----------------------------------------
+# Closure (ARM 4) stops a floor-bearing suite ESCAPING classification. It does not stop the
+# deferred set ACCRETING: `DEFERRED_DIRS` is a directory regex with no upper bound, so a new
+# vacuous-floored suite dropped into any deferred directory lands in the ledger and the guard
+# stays green while the debt grows with CI's blessing. This ratchet closes that leak — it may
+# only be lowered, never raised, so promoting a suite is the ONLY way to move it.
+#
+# Of the 43 deferred on 2026-08-16: 8 are measured NO_FIRE (the defect this PR fixes in the
+# covered scope), 33 are CONSTRUCTION (mutant not constructible — status unknown, not
+# known-bad), and 2 already FIRE unmodified.
+MAX_DEFERRED=43
+cases=$((cases + 1))
+if [[ "$n_deferred" -le "$MAX_DEFERRED" ]]; then
+  pass "deferral ledger within its shrink-only ratchet ($n_deferred <= $MAX_DEFERRED)"
+else
+  fail "deferral ledger GREW to $n_deferred (ratchet is $MAX_DEFERRED). A new floor-bearing suite landed in a deferred directory: cover it, or promote its directory into COVERED_DIRS — do NOT raise this number."
+fi
+
 # --- ARM 6: population floor (the guard's own dispatch) ----------------------------------
 cases=$((cases + 1))
 MIN_POPULATION=30
@@ -508,7 +526,7 @@ printf '\n'
 # hand; never derived from a variable this file computes, because a floor that descends
 # with the thing it guards is not a floor.
 # ---------------------------------------------------------------------------------------
-MIN_META_CASES=16
+MIN_META_CASES=17
 if [[ "$cases" -lt "$MIN_META_CASES" ]]; then
   printf '\n[FATAL] meta-guard vacuity: only %d assertion(s) ran; expected >= %d.\n' \
     "$cases" "$MIN_META_CASES" >&2
