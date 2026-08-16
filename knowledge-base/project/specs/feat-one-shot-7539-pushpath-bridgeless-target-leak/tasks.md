@@ -7,67 +7,67 @@ Phase order is load-bearing: the guard (1) must be RED before the move (2) makes
 
 ## 1. RED — the guard, as in-suite fixtures
 
-- [ ] 1.1 Refactor the new logic in `plugins/soleur/test/terraform-target-parity.test.ts` as **pure
+- [x] 1.1 Refactor the new logic in `plugins/soleur/test/terraform-target-parity.test.ts` as **pure
       functions taking `(workflowText)`**, mirroring `extractTargets(text)` /
       `collectSshProvisioned(files)`. Without this the mutation rows cannot run in CI.
-- [ ] 1.2 Implement the bridge-less range extractor: from the `apply` job's first `terraform` step to
+- [x] 1.2 Implement the bridge-less range extractor: from the `apply` job's first `terraform` step to
       the step whose `uses:` is `./.github/actions/cf-tunnel-ssh-bridge`. Anchor on the `uses:` path
       (content anchor), never a step title.
-- [ ] 1.3 Match targets over **comment-stripped** text via the existing `stripComments()`, and only
+- [x] 1.3 Match targets over **comment-stripped** text via the existing `stripComments()`, and only
       on flag-shaped lines. Non-negotiable: the range holds two prose `-target=` mentions
       (`:365` comment, `:854` `::warning::` string) that would otherwise false-fire.
-- [ ] 1.4 Assert the property: zero `-target=terraform_data.*` in that range. Failure message must
+- [x] 1.4 Assert the property: zero `-target=terraform_data.*` in that range. Failure message must
       name the offending address, the step it was found in, and the step it belongs in.
-- [ ] 1.5 Raise `MIN_SSH_PROVISIONED` 10 → 17 (measured) with a deliberate-edit contract. Guard 1
+- [x] 1.5 Raise `MIN_SSH_PROVISIONED` 10 → 17 (measured) with a deliberate-edit contract. Guard 1
       intersects `collectSshProvisioned()`, and 8 of the 17 are unpinned by the `:236` name list —
       including `inngest_consumer_probe_install` itself.
-- [ ] 1.6 Correct the stale header count at `:9` ("the 7 server.tf siblings").
-- [ ] 1.7 Place the new `describe` adjacent to the existing parity block (~`:226`), not at EOF.
-- [ ] 1.8 Mutation fixtures M1–M4, each asserting RED:
+- [x] 1.6 Correct the stale header count at `:9` ("the 7 server.tf siblings").
+- [x] 1.7 Place the new `describe` adjacent to the existing parity block (~`:226`), not at EOF.
+- [x] 1.8 Mutation fixtures M1–M4, each asserting RED:
       M1 re-add the address before the bridge · M2 a *second* SSH address after a compliant first ·
       M3 a `-target` in the `:764` apply step (the range hole) · M4 break the bridge `uses:` anchor
       so an unresolvable range FAILS rather than passing on zero scanned targets.
-- [ ] 1.9 Harness fixtures H1–H2, each asserting PASS: H1 a commented-out target + a `::warning::`
+- [x] 1.9 Harness fixtures H1–H2, each asserting PASS: H1 a commented-out target + a `::warning::`
       mentioning `-target=` · H2 SSH addresses only after the bridge, non-canonical names and file.
-- [ ] 1.10 Confirm the suite is RED against the tree as-is, naming `inngest_consumer_probe_install`.
-- [ ] 1.11 Commit the failing test first (`cq-write-failing-tests-before`).
+- [x] 1.10 Confirm the suite is RED against the tree as-is, naming `inngest_consumer_probe_install`.
+- [x] 1.11 Commit the failing test first (`cq-write-failing-tests-before`).
 
 ## 2. GREEN — move the target, correct what the move falsifies
 
-- [ ] 2.1 Move `-target=terraform_data.inngest_consumer_probe_install` from `:578` into the
+- [x] 2.1 Move `-target=terraform_data.inngest_consumer_probe_install` from its bridge-less position (cite by content, not line — the rebase shifted it) into the
       `:931-944` post-bridge list.
-- [ ] 2.2 `server.tf:743-748` — name the **stage**, state the resource is SSH-provisioned and belongs
+- [x] 2.2 `server.tf:743-748` — name the **stage**, state the resource is SSH-provisioned and belongs
       post-bridge, and frame the rule as **group by transport, not by feature** (`:576-578` batched
       all three inngest-consumer resources; the SSH one rode along).
-- [ ] 2.3 `:890` — operator-facing warning: "the **8** SSH-provisioned resources" → set language.
-- [ ] 2.4 `:911` — "none of the **7** resources has a `when = destroy` provisioner". Load-bearing:
+- [x] 2.3 `:890` — operator-facing warning: "the **8** SSH-provisioned resources" → set language.
+- [x] 2.4 `:911` — "none of the **7** resources has a `when = destroy` provisioner". Load-bearing:
       it is why stage 2 carries no destroy-guard, and this PR adds a member. Verified there is no
       `when = destroy` provisioner anywhere in the infra root, so re-assert for the set.
-- [ ] 2.5 `:918` — "internal plan against the **8** targets" → "its target set".
-- [ ] 2.6 `:815` — recovery lever `-F reason='bootstrap'` is a **no-op** (leaves `apply_target` at
+- [x] 2.5 `:918` — "internal plan against the **8** targets" → "its target set".
+- [x] 2.6 `:815` — recovery lever `-F reason='bootstrap'` is a **no-op** (leaves `apply_target` at
       default, so the `apply` job never runs) → `-f apply_target=manual-rerun`.
-- [ ] 2.7 `:440-444` `ALLOW-LIST MAINTENANCE` — point at the guard as the enforcement; the
+- [x] 2.7 `:440-444` `ALLOW-LIST MAINTENANCE` — point at the guard as the enforcement; the
       instruction alone demonstrably did not hold (added `620f682c2` 2026-05-20; violated
-      `0d6443960` 2026-08-12, six lines below it).
-- [ ] 2.8 Confirm the suite is GREEN.
+      `0d6443960` 2026-08-12, 138 lines below it — inside the list that instruction governs).
+- [x] 2.8 Confirm the suite is GREEN.
 
 ## 3. Close the green-skip dark path
 
-- [ ] 3.1 Add a `notify-ops-email` step to the `apply` job gated on
+- [x] 3.1 Add a `notify-ops-email` step to the `apply` job gated on
       `steps.ssh_token_gate.outputs.ssh_apply_skip == 'true'`. Inputs `subject`, `body`,
       `resend-api-key: ${{ secrets.RESEND_API_KEY }}`. Follow `infra-validation.yml:1636`.
-- [ ] 3.2 Body must name the undelivered work **and** the `manual-rerun` recovery command — a
+- [x] 3.2 Body must name the undelivered work **and** the `manual-rerun` recovery command — a
       notification that says only "skipped" reproduces the `::warning::` problem in email form.
-- [ ] 3.3 Add the skip state to `Post-apply summary` (today prints only `job.status`).
-- [ ] 3.4 Assert the wiring in the parity suite (workflow-shape assertion), not by eyeballing YAML.
+- [x] 3.3 Add the skip state to `Post-apply summary` (today prints only `job.status`).
+- [x] 3.4 Assert the wiring in the parity suite (workflow-shape assertion), not by eyeballing YAML.
 
 ## 4. Harden the Vector reload
 
-- [ ] 4.1 Add real config validation of the rendered `/opt/soleur/vector.toml` **before** the
+- [x] 4.1 Add real config validation of the rendered `/opt/soleur/vector.toml` **before** the
       `install` that overwrites the live file, injecting a dummy `BETTERSTACK_LOGS_TOKEN`.
-- [ ] 4.2 Rewrite the comment at `:1071-1074`, which currently claims validation is impossible —
+- [x] 4.2 Rewrite the comment at `:1071-1074`, which currently claims validation is impossible —
       the dummy-value injection retires exactly its stated objection.
-- [ ] 4.3 Preserve a restorable copy of `/etc/vector/vector.toml` across the swap; restore it and
+- [x] 4.3 Preserve a restorable copy of `/etc/vector/vector.toml` across the swap; restore it and
       reload on validation failure or post-reload liveness failure.
 - [ ] 4.4 Prove it: a deliberately broken render must fail the apply **with the previous config
       still live**.
@@ -87,10 +87,10 @@ Phase order is load-bearing: the guard (1) must be RED before the move (2) makes
 
 ## 6. Record
 
-- [ ] 6.1 Amend ADR-154 with the substantive rationale (runtime probe → build-time structural
+- [x] 6.1 Amend ADR-154 with the substantive rationale (runtime probe → build-time structural
       assertion; §3's step-position contract cannot reach a bridge-less stage) and carry the
       "open the bridge before stage 1" rejection into rejected-alternatives.
-- [ ] 6.2 Reciprocal pointers: ADR-154 Related gains the test file; the guard header gains
+- [x] 6.2 Reciprocal pointers: ADR-154 Related gains the test file; the guard header gains
       `See ADR-154`.
 - [ ] 6.3 File the follow-up: widen the SSH predicate beyond `terraform_data` blocks (deferred
       because it edits a shared fail-open parser under a P1).

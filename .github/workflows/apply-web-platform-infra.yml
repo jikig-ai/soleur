@@ -14,7 +14,8 @@
 #   1. Doppler `--name-transformer tf-var` invocation wraps `terraform plan`/`apply`
 #      because the web-platform root reads ~12 `TF_VAR_*` inputs from Doppler.
 #   2. `-target=`-scoped apply, split into TWO applies (#4844):
-#      (a) the main saved-`tfplan` apply covers the 80 non-SSH resources;
+#      (a) the main saved-`tfplan` apply covers the non-SSH resources (a derived
+#          allow-list; the count is not restated here because it rots);
 #      (b) a SEPARATE token-gated SSH apply, run AFTER the post-apply token sync
 #          and behind the CF Tunnel SSH bridge (.github/actions/cf-tunnel-ssh-bridge),
 #          covers EVERY SSH-provisioned `terraform_data.*` resource in server.tf.
@@ -24,7 +25,7 @@
 #          it derives the set from server.tf and fails when one is targeted
 #          before the bridge. The GitHub runner egress IP is not in
 #          `var.admin_ips`, so the bridge (not a direct :22 dial) is the access
-#          path. Before #4844 these 7 silently drifted: they were excluded here
+#          path. Before #4844 the SSH-provisioned set silently drifted: excluded here
 #          with no apply path, and apply-deploy-pipeline-fix.yml only `-target`s
 #          deploy_pipeline_fix + infra_config_handler_bootstrap (its header's old
 #          "those 7 land via apply-deploy-pipeline-fix.yml" claim was never true).
@@ -293,7 +294,7 @@ env:
   TERRAFORM_VERSION: "1.10.5"
   INFRA_DIR: apps/web-platform/infra
   # cloudflared binary for the CF Tunnel SSH bridge (#4844) — the token-gated
-  # SSH apply of the 8 server.tf terraform_data siblings reaches the host over
+  # SSH apply of the SSH-provisioned server.tf terraform_data set reaches the host over
   # the tunnel via .github/actions/cf-tunnel-ssh-bridge. SHA-256 computed against
   # the real released binary at the pinned version (NEVER paste a checksum from
   # documentation or AI output per the 2026-03-21 server-provisioning learning,
@@ -835,8 +836,10 @@ jobs:
       # not step-start. The warning is non-fatal; the operator re-fires
       # the workflow once after first merge via `gh workflow run
       # apply-web-platform-infra.yml --ref main -f apply_target=manual-rerun`
-      # (the `apply` job requires apply_target=manual-rerun on a dispatch; a bare
-      # `-F reason=...` leaves apply_target at its default and the job does not run).
+      # (either form works — `apply_target` declares `default: manual-rerun`, which
+      # already satisfies the job's `inputs.apply_target == 'manual-rerun'` gate.
+      # Passing it explicitly is self-documenting, not required. #7539 briefly
+      # asserted the bare form does not run the job; that was false.)
       # The local-fallback script
       # `apps/web-platform/infra/scripts/sync-ci-ssh-access-token.sh`
       # remains available as backup. Operator follow-through obligation
@@ -892,7 +895,7 @@ jobs:
           unset CLIENT_ID CLIENT_SECRET
           echo "Synced CI_SSH_ACCESS_TOKEN_ID/_SECRET to Doppler prd_terraform."
 
-      # --- #4844: token-gated SSH apply of the 8 server.tf terraform_data siblings ---
+      # --- #4844: token-gated SSH apply of the SSH-provisioned server.tf set ---
       # Runs AFTER the post-apply token sync above (shape B) so a from-scratch
       # rebuild self-heals: the bridge needs the CF Access ci_ssh token that the
       # sync step produces, so on the very first apply (tokens absent) this step

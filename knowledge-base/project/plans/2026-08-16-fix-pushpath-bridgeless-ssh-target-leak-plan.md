@@ -126,7 +126,7 @@ provisioner failed for want of the bridge).
 
 The bright line does not catch a **non-`terraform_data`** push-path target gaining a `depends_on`
 into an SSH resource. Verified equivalence that makes this acceptable today: **no non-`terraform_data`
-resource in any of the 45 infra `.tf` files carries a `provisioner` block at all** — 17 of the 18
+resource in any of the 46 infra `.tf` files carries a `provisioner` block at all** — 17 of the 18
 `terraform_data` resources are SSH-provisioned and nothing else is. So "reaches an SSH-provisioned
 resource" is presently equivalent to "reaches a `terraform_data`". Widening the SSH predicate to all
 block types is filed as a follow-up rather than done here, because it edits a shared fail-open parser
@@ -254,7 +254,7 @@ Correct, in the same commit, the statements this move or its predecessors falsif
 | `:911` | "none of the **7** resources has a `when = destroy` provisioner" — **load-bearing**: it is the stated reason stage 2 carries no destroy-guard, and this PR adds a member | Re-assert for the set; verified there is **no `when = destroy` provisioner anywhere** in the infra root, so the rationale holds |
 | `:918` | "internal plan against the **8** targets" | "against its target set" |
 | `:815` | recovery lever `-F reason='bootstrap'` (a no-op) | `-f apply_target=manual-rerun` |
-| `:440-444` `ALLOW-LIST MAINTENANCE` | Instructs "exclude server.tf SSH-provisioned resources" — added `620f682c2` (2026-05-20), three months before the violation at `0d6443960` (2026-08-12) landed six lines below it | Point at the guard as the enforcement, since the instruction alone demonstrably did not hold |
+| `:440-444` `ALLOW-LIST MAINTENANCE` | Instructs "exclude server.tf SSH-provisioned resources" — added `620f682c2` (2026-05-20), three months before the violation at `0d6443960` (2026-08-12) landed 138 lines below it, inside the very list that instruction governs (measured; an earlier revision said "six") | Point at the guard as the enforcement, since the instruction alone demonstrably did not hold |
 | `terraform-target-parity.test.ts:9` | "the **7** server.tf siblings" | the SSH-provisioned set |
 
 Counts are replaced with set language wherever possible so they cannot rot again.

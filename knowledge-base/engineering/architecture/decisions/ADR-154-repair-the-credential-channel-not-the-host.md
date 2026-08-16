@@ -287,5 +287,9 @@ owns that class of resource. The credential boundary is the design; the misplace
 
 The prose instruction alone is not sufficient, and this is measured rather than assumed: the
 `ALLOW-LIST MAINTENANCE` comment above the first stage's target list already said to exclude
-SSH-provisioned resources. It landed 2026-05-20. The violation was appended six lines beneath it on
-2026-08-12.
+SSH-provisioned resources. It landed 2026-05-20 (`620f682c2`). The violation was appended to the
+list that instruction governs on 2026-08-12 (`0d6443960`) — 138 lines below it, measured in that
+commit, inside the same `-target=` allow-list the comment is attached to. An earlier revision of
+this paragraph said "six lines beneath"; that number was written from recollection and is wrong.
+The distance is not the point and never was: the instruction governed the list, the addition went
+into the list, and the instruction did not hold.
