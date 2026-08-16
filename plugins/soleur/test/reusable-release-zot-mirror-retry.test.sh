@@ -576,7 +576,7 @@ _t19_dir="$TMP/t19"; mkdir -p "$_t19_dir/scripts"
 cp "$STUB_DIR/betterstack-query.sh" "$_t19_dir/scripts/betterstack-query.sh"
 _t19_out="$TMP/t19out"; _t19_sum="$TMP/t19sum"; _t19_log="$TMP/t19log"; _t19_cnt="$TMP/t19cnt"
 : > "$_t19_out"; : > "$_t19_sum"; : > "$_t19_cnt"
-( cd "$_t19_dir" &&   MOCK_CRANE_MODE=always_ok MOCK_CRANE_COUNT="$_t19_cnt" MOCK_CRANE_DIGEST_MODE=match   GITHUB_OUTPUT="$_t19_out" GITHUB_STEP_SUMMARY="$_t19_sum"   IMAGE="ghcr.io/jikig-ai/soleur-web-platform" DIGEST="sha256:deadbeef" VERSION="1.2.3"   COMMIT_SHA="abc123def" BRIDGE_OUTCOME="failure" MIRROR_OVERRIDE_REASON=""   GITHUB_WORKSPACE="$REPO_ROOT" TOKEN_VERDICT="live" TOKEN_CHECKED_AT="20:23:05Z"   TOKEN_CAUSE="unknown" BETTERSTACK_QUERY_HOST="stub.example"   PATH="$STUB_DIR:$PATH"     bash --noprofile --norc -eo pipefail "$MIRROR_BLOCK" > "$_t19_log" 2>&1 )
+( cd "$_t19_dir" &&   MOCK_CRANE_MODE=always_ok MOCK_CRANE_COUNT="$_t19_cnt" MOCK_CRANE_DIGEST_MODE=match   GITHUB_OUTPUT="$_t19_out" GITHUB_STEP_SUMMARY="$_t19_sum"   IMAGE="ghcr.io/jikig-ai/soleur-web-platform" DIGEST="sha256:deadbeef" VERSION="1.2.3"   COMMIT_SHA="abc123def" BRIDGE_OUTCOME="failure" MIRROR_OVERRIDE_REASON=""   GITHUB_WORKSPACE="$REPO_ROOT" TOKEN_VERDICT="live" TOKEN_CHECKED_AT="20:23:05Z"   TOKEN_CAUSE="unknown" BETTERSTACK_QUERY_HOST="stub.example" BETTERSTACK_QUERY_USERNAME="stub-user" BETTERSTACK_QUERY_PASSWORD="stub-pass"   PATH="$STUB_DIR:$PATH"     bash --noprofile --norc -eo pipefail "$MIRROR_BLOCK" > "$_t19_log" 2>&1 )
 _t19_ok=1
 grep -qE '^mirror_status=degraded' "$_t19_out" || _t19_ok=0
 grep -qE '^mirror_reason=bridge' "$_t19_out" || _t19_ok=0
@@ -590,6 +590,12 @@ else
 fi
 PATH="$_t19_prev_path"
 
+# NOTE (#7555): these fixtures supply all THREE BETTERSTACK_QUERY_* values. The guard used to
+# test only _HOST, so a host-only fixture reached the query arm; it now requires all three
+# (a partially-injected job was entering the query arm and classifying its own failure as a
+# measurement). With only _HOST set these cases would silently exercise the credentials-absent
+# branch instead of the query branch they are written for — still 'passing' the fail-soft
+# intent while testing a different arm. Do not trim them back.
 # T20 (#7242, plan Test Scenario 11) — a FAILING telemetry query must say so, and must not
 # produce a claim about zot. T19 covers the query that SUCCEEDS with no rows; this covers the
 # query that fails outright, which is the other half of the fail-soft contract and the arm an
@@ -605,7 +611,7 @@ STUB
 chmod +x "$_t20_dir/scripts/betterstack-query.sh"
 _t20_out="$TMP/t20out"; _t20_log="$TMP/t20log"; _t20_cnt="$TMP/t20cnt"
 : > "$_t20_out"; : > "$_t20_cnt"
-( cd "$_t20_dir" &&   MOCK_CRANE_MODE=always_ok MOCK_CRANE_COUNT="$_t20_cnt" MOCK_CRANE_DIGEST_MODE=match   GITHUB_OUTPUT="$_t20_out" GITHUB_STEP_SUMMARY="$TMP/t20sum"   IMAGE="ghcr.io/jikig-ai/soleur-web-platform" DIGEST="sha256:deadbeef" VERSION="1.2.3"   COMMIT_SHA="abc123def" BRIDGE_OUTCOME="failure" MIRROR_OVERRIDE_REASON=""   GITHUB_WORKSPACE="$REPO_ROOT" TOKEN_VERDICT="live" TOKEN_CHECKED_AT="20:23:05Z"   TOKEN_CAUSE="unknown" BETTERSTACK_QUERY_HOST="stub.example"   PATH="$STUB_DIR:$PATH"     bash --noprofile --norc -eo pipefail "$MIRROR_BLOCK" > "$_t20_log" 2>&1 )
+( cd "$_t20_dir" &&   MOCK_CRANE_MODE=always_ok MOCK_CRANE_COUNT="$_t20_cnt" MOCK_CRANE_DIGEST_MODE=match   GITHUB_OUTPUT="$_t20_out" GITHUB_STEP_SUMMARY="$TMP/t20sum"   IMAGE="ghcr.io/jikig-ai/soleur-web-platform" DIGEST="sha256:deadbeef" VERSION="1.2.3"   COMMIT_SHA="abc123def" BRIDGE_OUTCOME="failure" MIRROR_OVERRIDE_REASON=""   GITHUB_WORKSPACE="$REPO_ROOT" TOKEN_VERDICT="live" TOKEN_CHECKED_AT="20:23:05Z"   TOKEN_CAUSE="unknown" BETTERSTACK_QUERY_HOST="stub.example" BETTERSTACK_QUERY_USERNAME="stub-user" BETTERSTACK_QUERY_PASSWORD="stub-pass"   PATH="$STUB_DIR:$PATH"     bash --noprofile --norc -eo pipefail "$MIRROR_BLOCK" > "$_t20_log" 2>&1 )
 _t20_ok=1
 grep -qE '^mirror_status=degraded' "$_t20_out" || _t20_ok=0
 grep -qE '^mirror_reason=bridge' "$_t20_out" || _t20_ok=0

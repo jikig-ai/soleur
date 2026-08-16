@@ -1133,6 +1133,9 @@ if want_scripts; then
   # D10 pre-destroy authorization gate (#6929 / #7277) — authorizes a destroy only on a restore
   # CI has just executed into an empty registry. Leads with a positive control.
   run_suite "tests/scripts/registry-pull-path-health" bash tests/scripts/test-registry-pull-path-health.sh
+  # #7555. tests/scripts/ is NOT auto-globbed by this runner (the *.test.sh glob cannot match a
+  # test-* prefix), so an unregistered suite here would run in ZERO runners, green and invisible.
+  run_suite "tests/scripts/registry-replace-preflight" bash tests/scripts/test-registry-replace-preflight.sh
   # The mutation battery for BOTH suites above. Registered, not ad-hoc: its previous incarnations
   # lived in a session transcript, so their "15/15 caught" protected nothing the next day — and
   # when it was finally committed it found 15 of its mutations surviving, including a seam that
