@@ -747,6 +747,10 @@ if want_scripts; then
   run_suite "scripts/lint-dual-lockfile-live" bash scripts/lint-dual-lockfile.sh
   run_suite "scripts/lint-workflow-install-sites" bash scripts/lint-workflow-install-sites.test.sh
   run_suite "scripts/lint-workflow-install-sites-live" bash scripts/lint-workflow-install-sites.sh
+  # The drain itself (#7084). Asserted from the committed lockfiles rather than from the
+  # Dependabot API: this is deterministic, available at merge time, and needs no token the
+  # workflow does not have. The alert COUNT is a lagging mirror of this same fact.
+  run_suite "scripts/assert-dependabot-drain" python3 scripts/assert-dependabot-drain.py
   # SIBLING gate (#7332): the same "captured a status nobody decided about" class, but in shell
   # SCRIPTS under `set -e` rather than Actions `run:` blocks. Separate anchor, separate
   # calibration -- the naive "a command-substitution assignment is a finding" rule found only
