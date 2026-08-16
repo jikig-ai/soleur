@@ -175,6 +175,17 @@ breaks**. `asserted` and `checked` are populated by construction; `passes` and `
     credit.** **Prevention:** resume dead agents rather than respawning (a resume keeps partial
     findings), and re-prioritise their task lists so an interruption still leaves value.
 
+21. **I uploaded a TRUNCATED PR body and did not notice.** A `cat >>` append left the scratchpad
+    file holding only the appended section — 19 lines where 140 were expected — and
+    `gh pr edit --body-file` shipped it, silently dropping `Closes #7084` and every acceptance
+    criterion the body carries. `net-issue-flow` still reported **PASS**, because a body that
+    closes nothing is net-zero and reads identically to a clean one: the gate measures backlog
+    delta, not deliverable completeness, so the passing state was indistinguishable from the
+    broken one — the same shape as the Key Insight above, one level up from the code.
+    **Prevention:** after any `gh pr edit --body-file`, read the LIVE body back and assert two
+    things a truncation cannot satisfy — a `^Closes #<issue>$` line, and a section-heading count
+    at or above what was written. Never treat `--body-file` as verified by its own exit code.
+
 ## Cross-references
 
 - ADR-191 — npm is the single lockfile of record
