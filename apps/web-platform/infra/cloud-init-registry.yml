@@ -867,11 +867,20 @@ write_files:
       # the value cannot corrupt the single-key body. Bounded with a substring expansion rather
       # than `head -c`: under pipefail, head closing the pipe early makes the producer take
       # SIGPIPE and the whole pipeline report 141.
+      # $2 = optional per-class max length (defaults to MAXLEN).
+      #
+      # ONE CLASS NEEDS A LONGER BUDGET (#7555). zot's boot `configuration settings` line is the
+      # entire DELIVERY signal for the #7556 soak probe — it is how an off-box reader learns which
+      # HTTP deadlines the running host actually parsed. MEASURED against the pinned digest booted
+      # on the rendered config: the line is 2273 chars and `ReadTimeout` sits at offset 1363, so
+      # the 800-char cap severed exactly the field the probe reads and Signal 1 could never match,
+      # decode fix or not. One line per boot, so the ingest cost is negligible.
       sanitize() {
-        local s
+        local s _max="$${2:-$MAXLEN}"
         s="$(printf '%s' "$1" | tr '\n\r\t' ' ' | LC_ALL=C tr -cd '\40-\176' | tr -d '"\\')"
-        printf '%s' "$${s:0:MAXLEN}"
+        printf '%s' "$${s:0:_max}"
       }
+      CONFIG_LINE_MAXLEN=2600
       # The four measured evidence classes are CAP-EXEMPT. Without this the cap drops the
       # diagnostic evidence preferentially during exactly the flood (crash-loop / pull storm) that
       # accompanies disk growth. `executing gc` is the DENOMINATOR the downstream gc-completion
@@ -903,6 +912,12 @@ write_files:
           "fatal error"*)               return 0 ;;
           "runtime error"*)             return 0 ;;
           \[signal*)                     return 0 ;;
+          # zot's BOOT CONFIG DUMP (#7555). This single line is the entire DELIVERY signal for the
+          # #7556 soak probe — it is how an off-box reader learns which deadlines the running host
+          # actually parsed. It is emitted once per boot, inside the boot burst that most easily
+          # fills the ordinary cap, so without an exemption the probe's only evidence is the row
+          # most likely to be dropped.
+          "configuration settings"*)    return 0 ;;
         esac
         return 1
       }
@@ -1142,7 +1157,11 @@ write_files:
           [ -n "$cur" ] && persist_cursor "$cur"
           continue
         fi
-        clean="$(sanitize "$redacted")"
+        # The boot config dump gets the longer budget; everything else keeps MAXLEN. Keyed on the
+        # PARSED message so a client cannot buy a longer line by putting the literal in a header.
+        _slen="$MAXLEN"
+        case "$zmsg" in "configuration settings"*) _slen="$CONFIG_LINE_MAXLEN" ;; esac
+        clean="$(sanitize "$redacted" "$_slen")"
         # A row that sanitizes to empty was silently discarded with no accounting while the cursor
         # advanced past it — the literal F-3 signature (offered N, shipped N-1, dropped 0) on a
         # path the F-3 fix never touched. Reproduced with a non-ASCII line, which tr -cd empties.

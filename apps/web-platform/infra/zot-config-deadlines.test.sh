@@ -29,6 +29,7 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
+SELF="$HERE/$(basename "${BASH_SOURCE[0]}")"
 
 PASS=0
 FAIL=0
@@ -82,11 +83,16 @@ else
 import sys, yaml
 src, dst = sys.argv[1], sys.argv[2]
 doc = yaml.safe_load(open(src))
-for wf in doc.get("write_files", []):
-    if wf.get("path") == "/etc/zot/config.json":
-        open(dst, "w").write(wf["content"])
-        sys.exit(0)
-sys.exit(1)
+# EXACTLY ONE ENTRY, and unique. cloud-init applies write_files in list order, so a SECOND
+# entry for this path wins on the host — a first-match extractor would validate bytes the host
+# discards, in a suite whose thesis is "the bytes that ACTUALLY reach the host". Measured:
+# appending a duplicate 60s entry passed 8/8.
+matches = [wf for wf in doc.get("write_files", []) if wf.get("path") == "/etc/zot/config.json"]
+if len(matches) != 1:
+    sys.stderr.write("expected exactly 1 write_files entry, found %d\n" % len(matches))
+    sys.exit(1)
+open(dst, "w").write(matches[0]["content"])
+sys.exit(0)
 PY
 fi
 
@@ -148,7 +154,13 @@ fi
 for pair in "readTimeout:$RT_RAW:$RT_S" "writeTimeout:$WT_RAW:$WT_S"; do
   name="${pair%%:*}"; rest="${pair#*:}"; raw="${rest%%:*}"; secs="${rest#*:}"
   if [[ -z "$raw" ]]; then
-    continue   # already reported by the split-brain assertion above
+    # EMIT THE RELATIONS AS FAILURES rather than `continue`. Skipping made the assertion count a
+    # function of the config's validity, so the anti-vacuity floor fired (rc=2, "could not
+    # measure") on a config that was simply INVALID (rc=1) — collapsing a real FAIL into the
+    # unresolved class, which is exactly the distinction this suite's exit contract turns on.
+    fail "$name is absent, so its largest-layer floor cannot hold"
+    fail "$name is absent, so its gcDelay ceiling cannot hold"
+    continue
   fi
   if [[ -z "$secs" ]]; then
     fail "$name ('$raw') did not parse as a Go duration — an unparseable deadline is not a deadline"
@@ -227,10 +239,57 @@ fi
 DEADLINE_KEYS=2
 RELATIONS_PER_KEY=2
 EXPECTED_MIN=$(( 1 + 1 + (DEADLINE_KEYS * RELATIONS_PER_KEY) ))
+[[ -z "${CONFIG_JSON_OVERRIDE:-}" ]] && EXPECTED_MIN=$(( EXPECTED_MIN + 3 ))
 [[ "${SOLEUR_ZOT_GUARD_NO_DIGEST:-0}" != "1" ]] && EXPECTED_MIN=$(( EXPECTED_MIN + 2 ))
+# ---------------------------------------------------------------------------
+# S4 — SYNTHESIZED ROWS. Every assertion above ran against ONE fixture (the real render), in which
+# both keys are present and 1800s sits far from both bounds — so `&&` was indistinguishable from
+# `||`, `-lt` from `-le`, and `-ge` from `-gt`. Measured: all three mutations passed 8/8.
+# CONFIG_JSON_OVERRIDE exists for exactly this and shipped with zero rows using it.
+# Recursion is broken by the CONFIG_JSON_OVERRIDE guard: a child run sets it, so it skips this block.
+# ---------------------------------------------------------------------------
+# $4 = a marker the child's output MUST contain. Pinning rc alone is not enough: a synthesized
+# config that is invalid in one way is usually invalid in several, so the child can exit non-zero
+# for a reason unrelated to the conjunct under test — measured, the `&&` -> `||` mutation SURVIVED
+# an rc-only assertion because the missing key independently tripped the relation checks.
+synth_case() { # $1=label $2=python-mutation-file $3=expected rc $4=required marker
+  local label="$1" mutf="$2" want="$3" marker="${4:-}" f="$TMP/synth.json" rc=0 out
+  python3 "$mutf" "$CFG" "$f" 2>/dev/null || { fail "S4 $label — could not synthesize"; return; }
+  out="$(CONFIG_JSON_OVERRIDE="$f" SOLEUR_ZOT_GUARD_NO_DIGEST=1 bash "$SELF" 2>&1)" || rc=$?
+  if [[ "$rc" -ne "$want" ]]; then
+    fail "S4 $label — got rc=$rc, want $want"
+  elif [[ -n "$marker" ]] && ! grep -qF -- "$marker" <<<"$out"; then
+    fail "S4 $label — rc matched but the child never emitted '$marker' (it failed for another reason)"
+  else
+    pass "S4 $label"
+  fi
+}
+if [[ -z "${CONFIG_JSON_OVERRIDE:-}" ]]; then
+  printf '%s\n' 'import sys,json' 'c=json.load(open(sys.argv[1]))' 'del c["http"]["writeTimeout"]' 'json.dump(c,open(sys.argv[2],"w"))' > "$TMP/m1.py"
+  printf '%s\n' 'import sys,json' 'c=json.load(open(sys.argv[1]))' 'c["http"]["readTimeout"]="1h"' 'c["http"]["writeTimeout"]="1h"' 'json.dump(c,open(sys.argv[2],"w"))' > "$TMP/m2.py"
+  printf '%s\n' 'import sys,json' 'c=json.load(open(sys.argv[1]))' 'c["http"]["readTimeout"]="157s"' 'c["http"]["writeTimeout"]="157s"' 'json.dump(c,open(sys.argv[2],"w"))' > "$TMP/m3.py"
+  synth_case "readTimeout ALONE is rejected (Arm C split-brain)"          "$TMP/m1.py" 1 "SPLIT-BRAIN"
+  synth_case "a deadline exactly AT gcDelay is rejected (strict bound)"   "$TMP/m2.py" 1 ">= gcDelay"
+  synth_case "a deadline exactly AT the largest-layer floor is accepted"  "$TMP/m3.py" 0
+fi
+
+
+# HARNESS CANARY + a floor that does NOT dispatch through the helper it guards (#7555 review).
+# Neutering fail() to a no-op previously left this suite 8/8 GREEN, and the floor was its only
+# voice — so ONE edit disarmed the assertions AND their backstop. Measured: with fail() neutered
+# and the thesis reverted, the count collapsed 8 -> 3 and still reported green.
+_cp=$PASS; _cf=$FAIL
+pass "canary: a true condition registers as PASS"
+fail "canary: a false condition MUST register as FAIL (this line is EXPECTED)"
+if [[ "$PASS" -ne $((_cp + 1)) || "$FAIL" -ne $((_cf + 1)) ]]; then
+  echo "  FATAL: the assertion helpers are not counting — every verdict above is void." >&2
+  exit 2
+fi
+FAIL=$((FAIL - 1))
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$EXPECTED_MIN" ]]; then
-  fail "anti-vacuity: ran $TOTAL assertions, expected >= $EXPECTED_MIN. Fix the extraction, do not lower the floor."
+  echo "  FATAL: anti-vacuity — ran $TOTAL assertions, expected >= $EXPECTED_MIN. Fix the extraction, do not lower the floor." >&2
+  exit 2
 fi
 
 finish

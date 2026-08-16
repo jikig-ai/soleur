@@ -117,9 +117,9 @@ _final_gate() {
   fi
   _tally
   local ran=$(( PASS + FAIL ))
-  if [[ "$ran" -lt "172" ]]; then
+  if [[ "$ran" -lt "174" ]]; then
     FAIL=$(( FAIL + 1 ))
-    echo "  FAIL: assertion floor — ran $ran assertions, expected >= 172"
+    echo "  FAIL: assertion floor — ran $ran assertions, expected >= 174"
     echo "        (suite truncated, or assert() neutered — this run certified nothing)"
   fi
   echo ""
@@ -1140,3 +1140,19 @@ assert "T20 a 5xx on a NON-/v2/ path is NOT exempt (path arm is anchored, not a 
   "[[ \$(grep -c 'forged-' '$STUB_POSTS') -le 1 ]]"
 assert "T20 a panic still ships behind forged non-/v2/ upload paths" \
   "grep -qF 'T20SENTINEL_ANCH' '$STUB_POSTS'"
+
+# The boot config dump must survive sanitize() far enough to carry ReadTimeout. MEASURED against
+# the pinned digest: the real line is 2273 chars with ReadTimeout at offset 1363, so the 800-char
+# default severed the one field the #7556 probe reads — Signal 1 could never match, decode or not.
+J_CFG="$TMP/j_cfg"; : > "$J_CFG"
+CFG_PAD=$(python3 -c "print('x'*1300)")
+printf '%s\n' "{\"level\":\"info\",\"message\":\"configuration settings PAD${CFG_PAD} ReadTimeout:1800000000000 WriteTimeout:1800000000000\",\"caller\":\"c\"}" >> "$J_CFG"
+run_shipper "$J_CFG"
+assert "T20 the boot config dump ships far enough to carry ReadTimeout (offset ~1363 > MAXLEN 800)" \
+  "grep -qF 'ReadTimeout:1800000000000' '$STUB_POSTS'"
+# And an ordinary row must NOT inherit the longer budget.
+J_ORD="$TMP/j_ord"; : > "$J_ORD"
+printf '%s\n' "{\"level\":\"info\",\"message\":\"HTTP API PAD${CFG_PAD} TAILMARKER\",\"path\":\"/v2/\",\"caller\":\"c\"}" >> "$J_ORD"
+run_shipper "$J_ORD"
+assert "T20 an ordinary row is still truncated at MAXLEN (the longer budget is class-scoped)" \
+  "! grep -qF 'TAILMARKER' '$STUB_POSTS'"
