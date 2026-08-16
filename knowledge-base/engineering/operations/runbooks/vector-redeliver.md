@@ -33,7 +33,16 @@ Fire it when:
 
 1. **The change must be merged to `main`.** `environment: web-platform-infra-apply` binds this job to a `main`-only deployment branch policy, and `workflow_dispatch` runs the **selected ref's** workflow *and its scripts* — including the gate. Dispatching from a branch is refused by the environment, which is the point: the reviewer prompt shows a branch name, not a diff.
 
-   > **Verify the pin is live before relying on it.** `github_repository_environment_deployment_policy.web_platform_infra_apply_main` is itself one of the four resources the push apply is currently wedged on. The environment exists; confirm the branch policy has actually applied.
+   > **The pin is live — measured, not assumed.** As of 2026-08-16 the environment carries both protection rules and exactly one deployment branch policy, `main`:
+   >
+   > ```bash
+   > gh api repos/jikig-ai/soleur/environments/web-platform-infra-apply --jq '[.protection_rules[].type]'
+   > # ["required_reviewers","branch_policy"]
+   > gh api repos/jikig-ai/soleur/environments/web-platform-infra-apply/deployment-branch-policies --jq '[.branch_policies[].name]'
+   > # ["main"]
+   > ```
+   >
+   > `github_repository_environment_deployment_policy.web_platform_infra_apply_main` does still appear as a pending CREATE in the push plan, but that is a **state** fact, not a **liveness** one: the policy exists at GitHub and Terraform has not yet adopted it. The two are easy to conflate and the difference is the whole F7 protection — read the API, never the plan, when the question is "is the pin protecting me right now".
 
 2. **No other web-1 mutation in flight.** This job takes the `web-1-swap` mutex, so GitHub will queue it — but a queued job holds the mutex for its whole run, and this one also holds an SSH bridge. Check:
 

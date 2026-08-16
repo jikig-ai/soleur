@@ -5509,9 +5509,16 @@ jobs:
   #      prompt shows a branch NAME, not a diff. A first-step `github.ref` guard was considered
   #      and rejected as strictly weaker: the guard would itself be supplied by the branch it is
   #      meant to police.
-  #      RESIDUAL: `github_repository_environment_deployment_policy.web_platform_infra_apply_main`
-  #      is itself one of the four pending creates the push apply is currently wedged on. The
-  #      environment exists; verify the main-only policy is live before relying on it.
+  #      THE PIN IS LIVE — measured 2026-08-16, not inherited. The environment carries
+  #      protection_rules ["required_reviewers","branch_policy"] and exactly one deployment
+  #      branch policy, "main". `github_repository_environment_deployment_policy.web_platform_infra_apply_main`
+  #      does still show as a pending CREATE in the push plan, but that is a STATE fact
+  #      (Terraform has not adopted it yet), NOT a liveness one. An earlier revision of this
+  #      comment inherited the plan's "the pin is among the changes the wedge is holding" and
+  #      read it as "the pin may not be protecting you" — the opposite of the measurement, and
+  #      understating a security control is the more dangerous direction of that error. When
+  #      the question is whether the pin protects a dispatch RIGHT NOW, read the environments
+  #      API, never the terraform plan.
   #
   # ── STEP ORDER IS LOAD-BEARING ─────────────────────────────────────────────────────────────
   # The CF Tunnel SSH bridge MUST precede the plan. It writes TF_VAR_ci_ssh_private_key into
