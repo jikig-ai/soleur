@@ -300,4 +300,54 @@ resource "cloudflare_ruleset" "seo_config_settings" {
       email_obfuscation = false
     }
   }
+
+  # ── 2026-08-16 APEX OUTAGE MITIGATION — REMOVE WHEN THE PAGES CERT IS VALID ──
+  #
+  # WHY THIS EXISTS. The GitHub Pages origin cert for soleur.ai expired
+  # 2026-08-16 13:53:34Z. The zone default is Full (STRICT), which VALIDATES the
+  # origin certificate, so Cloudflare refused the expired cert and served
+  # HTTP 526 on apex+www for ~7.5 hours. `full` (non-strict) still encrypts the
+  # CF→origin leg but does not validate the certificate, so the site serves again.
+  #
+  # WHY NOT THE ZONE TOGGLE. Flipping the zone-level SSL mode would drop EVERY
+  # proxied host off strict at once. This rule is scoped to the same two
+  # marketing hosts as the rule above; `app.soleur.ai` is untouched (it carries
+  # its own `flexible` rule, first block in this ruleset) and the zone default
+  # stays `strict` for `deploy.`/`ssh.`/`registry.` and anything added later.
+  #
+  # WHY THIS IS AN ACCEPTABLE RISK HERE, AND WOULD NOT BE ELSEWHERE. The origin
+  # is GitHub Pages serving a PUBLIC STATIC site — no auth, no cookies, no PII,
+  # no secrets, and nothing a tampered response could escalate into. Visitors
+  # keep a valid Cloudflare EDGE certificate either way, so browser-facing TLS is
+  # unchanged. The residual exposure is an unauthenticated CF→GitHub leg for
+  # public marketing/docs content. Do NOT copy this rule to a host that serves
+  # authenticated or user-submitted data.
+  #
+  # WHY IT IS NOT MERELY WAITING FOR RENEWAL. The cert is wedged in ACME state
+  # `bad_authz` ("The ACME authorization is in a bad state. We need to start
+  # over"), detected 2026-07-19 (#6691). The documented remediation
+  # (cron-gh-pages-cert-reissue: flip apex+www DNS-only, toggle the Pages cname,
+  # let ACME revalidate) was executed BY HAND on 2026-08-16 with public DNS
+  # propagation VERIFIED on both 1.1.1.1 and 8.8.8.8 — the precondition #6698
+  # hypothesised was the blocker. GitHub restored `bad_authz` immediately on
+  # re-adding the domain, across both a 50-second and a 7-minute teardown. That
+  # FALSIFIES the DNS-window hypothesis: the authorization is wedged server-side
+  # at GitHub and no lever in this repo can reset it. Clearing it needs GitHub
+  # Support, so this mitigation is not a short wait — it is load-bearing until
+  # they act.
+  #
+  # REMOVAL CONDITION. Delete this rules block once `gh api
+  # repos/jikig-ai/soleur/pages` reports `https_certificate.state` in
+  # {approved, issued} with a future `expires_at`. Removing it restores strict
+  # validation on apex+www. Leaving it after that point is silent risk with no
+  # benefit, so the removal is tracked, not left to memory.
+  rules {
+    action      = "set_config"
+    description = "TEMPORARY (2026-08-16 outage): accept the expired GitHub Pages origin cert on soleur.ai + www.soleur.ai — remove when the Pages cert is valid again"
+    enabled     = true
+    expression  = "(http.host in {\"soleur.ai\" \"www.soleur.ai\"})"
+    action_parameters {
+      ssl = "full"
+    }
+  }
 }

@@ -263,6 +263,20 @@ function flexibleSslRule(): string {
 }
 
 /**
+ * The 2026-08-16 outage mitigation: `ssl = "full"` on the marketing hosts so the
+ * edge accepts the expired GitHub Pages origin cert.
+ *
+ * Selected on `"full"` specifically, never on a bare /ssl\s*=/ — that would also
+ * match the adopted `"flexible"` rule and make `ruleWithParam`'s
+ * exactly-one assertion fail confusingly. It also means a mutant that widens
+ * this to `"off"` (plaintext to origin) does not silently satisfy this helper:
+ * it fails the exactly-one assertion instead of passing under a laxer regex.
+ */
+function apexFullSslRule(): string {
+  return ruleWithParam(/ssl\s*=\s*"full"/);
+}
+
+/**
  * The `import` block's body, brace-matched.
  *
  * A `[^}]*` scan cannot be used here: the block contains `${var.cf_zone_id}`,
@@ -311,8 +325,13 @@ describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () =>
   // ruleset owns its phase entrypoint as a whole-list replacement, so the
   // pre-existing dashboard-created Flexible SSL rule had to be adopted into
   // this resource or applying would have deleted it (#6767).
-  test("ruleset declares exactly two rules", () => {
-    expect(allRuleBlocks()).toHaveLength(2);
+  // THIRD rule added 2026-08-16 (apex outage): `ssl = "full"` on the marketing
+  // hosts, so Cloudflare accepts the expired GitHub Pages origin cert instead of
+  // serving 526. This count is the guard that forced this update to be
+  // deliberate rather than incidental — working as designed. When the Pages cert
+  // is valid again and that rule is removed, this goes back to 2.
+  test("ruleset declares exactly three rules", () => {
+    expect(allRuleBlocks()).toHaveLength(3);
   });
 
   test("the rule disables email obfuscation via set_config and is enabled", () => {
@@ -334,6 +353,7 @@ describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () =>
     const cases: ReadonlyArray<readonly [string, string, string]> = [
       ["obfuscation", obfuscationRule(), "email_obfuscation"],
       ["adopted Flexible SSL", flexibleSslRule(), "ssl"],
+      ["apex Full SSL mitigation", apexFullSslRule(), "ssl"],
     ];
     for (const [label, rule, expected] of cases) {
       const params = rule.match(/action_parameters\s*\{([^}]*)\}/)?.[1];
@@ -355,6 +375,38 @@ describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () =>
     expect(quotedAttr(obfuscationRule(), "expression")).toBe(
       CANONICAL_EXPRESSION,
     );
+  });
+
+  // The outage mitigation relaxes CERTIFICATE VALIDATION on the hosts it
+  // matches, so its scope carries the same weight as the obfuscation rule's and
+  // is pinned the same way — exact equality against the canonical two-host set.
+  // A mutant that widens this one to the zone would silently drop strict
+  // validation from `deploy.`/`ssh.`/`registry.` too, which is precisely the
+  // zone-wide option that was considered and rejected.
+  test("apex Full SSL mitigation is scoped to exactly the canonical two hosts", () => {
+    expect(quotedAttr(apexFullSslRule(), "expression")).toBe(
+      CANONICAL_EXPRESSION,
+    );
+  });
+
+  // `full` and `off` are one word apart and worlds apart: `full` still encrypts
+  // CF→origin (it only skips cert VALIDATION), while `off` sends plaintext to
+  // the origin. Pin the exact value so a "simplification" cannot downgrade the
+  // transport while keeping every other assertion in this file green.
+  test("apex Full SSL mitigation sets full, never off or flexible", () => {
+    const rule = apexFullSslRule();
+    expect(rule).toMatch(/ssl\s*=\s*"full"/);
+    expect(rule).not.toMatch(/ssl\s*=\s*"off"/);
+    expect(rule).toMatch(/action\s*=\s*"set_config"/);
+    expect(rule).toMatch(/enabled\s*=\s*true/);
+  });
+
+  // This rule is TEMPORARY and its removal condition lives in a comment that a
+  // future reader must actually find. Pinning the marker keeps the rule
+  // self-identifying as removable, so it is not mistaken for permanent posture
+  // once the incident is out of living memory.
+  test("apex Full SSL mitigation declares itself temporary", () => {
+    expect(quotedAttr(apexFullSslRule(), "description")).toMatch(/TEMPORARY/);
   });
 
   // Guards the adoption itself. This rule is NOT this PR's work — it is a live
