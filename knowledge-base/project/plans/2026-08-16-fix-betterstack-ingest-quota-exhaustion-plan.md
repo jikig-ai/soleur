@@ -248,24 +248,39 @@ tier is therefore very likely avoidable for steady state — see §Domain Review
 recommendation. What the cut cannot do is un-consume the allowance already spent in the current
 billing period.
 
-**M. The structural cause of the amplification is one open arm in `vector.toml`.**
+**M. The amplification flows through one arm in `vector.toml` — but that arm is DELIBERATE, and
+an earlier draft of this plan misread it as waste.**
 `apps/web-platform/infra/vector.toml:83` — `[transforms.app_container_warn_filter]`:
 
 ```
 parsed, parse_err = parse_json(.message)
 if parse_err != null {
-  true                      # <- unparseable lines ship UNCONDITIONALLY
+  true                      # <- unparseable lines bypass the level gate
 } else if is_object(parsed) {
   ...
   level_int >= 40           # <- the gate structured lines must pass
 }
 ```
 
-Every line that is not parseable JSON **bypasses the `level >= 40` gate entirely**. That is one
-arm covering both offenders at once: each of the ~14 physical lines of a pretty-printed Node stack
-trace fails `parse_json`, and so does every bare `console.warn` — including
-`resolve-origin.ts:20`, which the module header explains *must* use `console.warn` because it is
-edge-runtime and cannot import the pino logger.
+Every line that is not parseable JSON bypasses the `level >= 40` gate. Both offenders ride it: each
+of the ~14 physical lines of a pretty-printed Node stack trace fails `parse_json`, and so does
+every bare `console.warn` — including `resolve-origin.ts:20`, which the module header explains
+*must* use `console.warn` because it is edge-runtime and cannot import the pino logger.
+
+**The comment directly above the transform states the arm's purpose:**
+
+> `# Non-JSON lines (container crash / uncaught-exception stack on fd 2) are kept.`
+
+So the arm is **load-bearing**, not an oversight: it is the only off-box evidence that the app
+container died mid-request. This plan's first draft — and the engineering advisory that informed
+it — both called it "the single hole" after reading the condition and not the rationale five lines
+above. **A naive bound would delete container-crash capture**, which is a worse outcome than the
+quota exhaustion it fixes.
+
+The fix must therefore **discriminate rather than suppress**: collapse repeated inner stack frames
+of the same event, preserve the **first line of every distinct non-JSON event**. That keeps crash
+capture whole while removing the ~14× multiplier. Recorded here because "read the condition, miss
+the comment" is the exact failure this plan is otherwise about.
 
 Two further facts, both verified: there is **no `throttle` transform anywhere** in `vector.toml`
 (`[sinks.betterstack].inputs = ["tag_journald", "tag_metrics"]`), and the file's own comments
@@ -403,23 +418,51 @@ applies to the *apply path*, not to the diagnosis, which is closed by measuremen
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** a release that cannot pull its container image from
-the registry, with no signal anywhere explaining why — because the channel that would have
-explained it is the one that is down. The fleet's sole image-pull path is currently unobservable, so
-a crash loop, a filling disk, or an upload failure on that host produces no evidence at all.
+**Rewritten after review.** The first draft enumerated by *surface* (registry channel, sub-processor
+egress) — which is operator-shaped prose at aggregate-pattern altitude under a
+`single-user incident` frontmatter. The threshold was right and the prose did not follow. Below is
+the same section written by **user role**, which is what the threshold actually demands.
 
-**If this leaks, the user's data is exposed via:** the log-volume reduction work touches emitters
-that carry request-derived content (`resolve-origin` logs a caller-supplied `Host` header; the
-Inngest error path can carry request context). A change that widens rather than narrows what is
-logged would push more request-derived data to a sub-processor whose DPA is **currently
-unexecuted** (open issue #7529). Every change in this plan must reduce or hold constant what is
-emitted, never widen it.
+**If this lands broken, the user experiences** — one user, alone, absorbing a complete incident:
+
+| Role | Artifact they own | What dark ingest does to them |
+|---|---|---|
+| **A billing-charged customer** | `users.subscription_status`, Stripe `customer_id` | `app/api/webhooks/stripe/route.ts` logs its safety branches at warn/error only — "Unknown Stripe subscription status — defaulting to 'cancelled'", "No user row for Stripe customer — skipping", "failed to update user on customer.subscription.updated". Since 2026-08-14 19:07Z a paying customer silently downgraded to `cancelled` leaves **zero queryable evidence** |
+| **An Art. 17 erasure requester** | the deletion record | `server/account-delete.ts` logs a partial erasure's failure at error level into the dark channel. Retention is 3 days, so the proof that their rows were *not* erased is destroyed before anyone can look. This is a statutory-evidence deadline, not just a diagnosis one |
+| **A BYOK key owner** | their own vendor spend | `server/byok-lease.ts` / `byok-cap-rpc.ts` log cap-breach and lease failure at warn/error. Uncapped spend on the user's own credential, with no record for either party |
+| **An inbound emailer** | their message | `app/api/webhooks/resend-inbound/route.ts` logs six error/warn paths; a dropped email makes "it never arrived" unfalsifiable |
+| **Any user of app.soleur.ai** | the running build | `.github/workflows/reusable-release.yml` is an absence-asserting consumer. Over a dark warehouse it can report **PASS and ship** — a fail-open release gate reaching real users |
+| **The operator watching a release** | the registry pull path | The fleet's sole image-pull path is unobservable; a crash loop, filling disk, or upload failure produces no evidence |
+
+**If this leaks, the user's data is exposed via** two paths, both created or touched here:
+
+1. **Sub-processor egress.** The volume work touches emitters carrying request-derived content
+   (`resolve-origin` logs a caller-supplied `Host`; the Inngest path can carry request context).
+   Every change here must reduce or hold constant what is emitted, never widen it. #7529 records
+   the Better Stack DPA as **unexecuted** — and a paid tier would extend retention of un-DPA'd
+   user-derived content from 3 to 30 days *and* convert the hard 402 into a metered spill that
+   ships more. **A paid-tier or retention change is therefore gated on #7529** (AC below).
+2. **Public-repo egress — new, and created by this plan.** `jikig-ai/soleur` is `PUBLIC`
+   (measured). Any committed dump of warehouse content is permanent, whereas Better Stack expires
+   it in 3 days. Non-pino lines traverse only `pii_scrub_string`, the regex backstop — not the
+   Art-9 key drop. **No verbatim log line may be committed**; counts, byte totals and hashed
+   shapes only.
 
 **Brand-survival threshold:** `single-user incident`
 
-Consistent with ADR-184, which set the same threshold for this channel. Consequences:
-`requires_cpo_signoff: true` is set in frontmatter; `user-impact-reviewer` is invoked at review
-time; plan-review runs the escalated panel.
+Correct and not to be relaxed: the first three rows each clear the bar with a single victim, no
+pattern required. Consistent with ADR-184. Consequences: `requires_cpo_signoff: true`;
+`user-impact-reviewer` at review time; plan-review runs the escalated panel.
+
+**Correlated-vendor blast radius.** `cq-silent-fallback-must-mirror-to-sentry` makes Sentry the
+designated second home for every silent fallback in the product. The operations advisory reports
+Sentry's PAYG cap may bind in the same week (#3958 — at cap, monitors deactivate and check-ins drop
+silently). Both layers dead at once, over a 3-day retention window, makes the gap unrecoverable
+even after restoration. **Second-order, and the sharpest point in this review:** this plan's own
+`## Observability` block detects "the guard itself stops running" via a *Sentry cron monitor* — so
+at Sentry cap the new guard can stop running undetected. That is the identical fail-open shape this
+plan exists to close, reproduced one level up, and it is why the guard needs a liveness detector
+that survives a Sentry cap.
 
 ## Architecture Decision (ADR/C4)
 
@@ -434,12 +477,19 @@ and ADR-184.
 
 Decision content:
 
-1. **I-1 (mechanically enforceable):** *every shipped emitter is bounded per unit time,
-   independent of trigger frequency.* Enforced by the `throttle` transform plus an AC-grep in
-   `.github/workflows/validate-vector-config.yml` asserting `[sinks.betterstack].inputs` reads
-   only from throttled transforms. A real gate, not prose. This is the generalisation of ADR-184's
-   per-emitter cap — the one cap that **held** through this incident, which is the evidence for
-   extending the discipline.
+1. **I-1:** *every shipped emitter is bounded per unit time, independent of trigger frequency.*
+   **Enforcement corrected at review — Guard 2 is the gate, not the Vector grep.** `model.c4` has
+   **six** `-> betterstack` edges and only two traverse `vector.toml`: `zotRegistry` (:593, direct
+   curl, ADR-184), `github` (:599, runner curl, ADR-172) and `gitDataStore` (:630, explicitly "NOT
+   a Vector agent") bypass it entirely. Worse,
+   `.github/workflows/validate-vector-config.yml:18-19` carries
+   `paths: ["apps/web-platform/infra/vector.toml"]`, so the grep **does not run at all** unless
+   that one file changes — structurally incapable of failing for the direct-POST emitter class.
+   Guard 2 discovers producers *from the warehouse*, so it quantifies over all six substrates by
+   construction. **Guard 2 is I-1's enforcement; the Vector grep is a supplementary check scoped
+   to the Vector leg.** Stated this way so the ADR is not read in six months as "I-1 is gated"
+   when five-sixths of it is prose. This generalises ADR-184's per-emitter cap — the one cap that
+   **held** through this incident.
 2. **I-2 (checklist, not grep):** *a detector must not read exclusively over the channel it
    monitors.* The zot alarm infers Better Stack's health from Better Stack. The fate-independent
    signal already exists and is unused: `[sinks.vector_console]` (`vector.toml:568`) ships
@@ -533,11 +583,33 @@ downtime — the provisioner re-delivers and reloads Vector in place.
 
 ### Apply path
 
-**(b) existing resource re-fired via provisioner.** Changing `vector.toml` changes
-`triggers_replace`, which replaces `terraform_data.journald_persistent` and re-runs its
-provisioner against the running `web-1`. Blast radius: a Vector config re-delivery and reload. No
-host replace, no serving interruption — Vector is a log shipper, not a serving surface, so
-deepen-plan Phase 4.55's downtime gate does not fire.
+**Corrected twice. Merging this PR delivers the volume fix to NO host.**
+
+Two mechanisms exist and they are not interchangeable:
+
+1. `terraform_data.journald_persistent` (`server.tf:982-991`) hashes `vector.toml` and re-delivers
+   over an SSH provisioner — the Terraform-side mechanism.
+2. **A dedicated gated `workflow_dispatch`**: `apply-web-platform-infra.yml` job `vector_redeliver`
+   (`:5540`), fired with `apply_target=vector-redeliver` and the typo-guard
+   `confirm=REDELIVER-VECTOR` (`:5598`), documented in
+   `knowledge-base/engineering/operations/runbooks/vector-redeliver.md` and listed in the
+   `apply_target` enum at `:267`. It was added by #7542/#7543, two commits before this branch.
+
+`vector-redeliver` is the operative path: registry/web infra resources are `-target=`-scoped and
+operator-gated, so **a merge applies nothing** — the ADR-184 §7 shape, and the reason #7539 records
+"`vector.toml` never reached web-1". Phase 4's edit is committed-but-undelivered until the dispatch
+fires. This is exactly the deliverable shape the issue anticipated: ship the code fix plus a gated
+`workflow_dispatch`, then dispatch it.
+
+**Scope limit, and it matters for invariant I-1:** `vector-redeliver` targets **web-1 only**. The
+throttle therefore bounds only the hosts `vector.toml` actually lands on — a narrower set than the
+producer table in §Research Insights F. The registry host runs the ADR-184 bash shipper and CI
+direct-POSTs; neither is Vector-shipped, so I-1 must be scoped to "every **Vector-shipped**
+emitter" with the non-Vector emitters named as an explicit residual.
+
+Blast radius: a Vector config re-delivery and reload on web-1. No host replace, no serving
+interruption — Vector is a log shipper, not a serving surface, so deepen-plan Phase 4.55's downtime
+gate does not fire.
 
 **The provisioner connects over SSH, and that is an apply-time dependency this plan must respect.**
 `server.tf` declares `connection { type = "ssh", host = hcloud_server.web["web-1"].ipv4_address }`.
@@ -696,12 +768,55 @@ header (`clean` is the only exit 0, and is unreachable without a positive contro
 the sink). The guard's job is to make the zot alarm obey the property its sibling already encodes.
 
 **Assembly.** Every code path in `scripts/zot-restart-loop-alarm.sh` that can reach a
-non-alarming exit from an emptiness test. **Members drift; the chokepoint is structural:** all such
-paths must route through the shared `scripts/lib/betterstack-absence.sh` classifier, and the guard
-asserts that no non-alarming exit is reachable from an emptiness test outside it. There are **two**
-such sites today — the zot arm (`VERDICT="TRANSIENT"` on `control_rc -ne 0 || -z "$CONTROL"`) and
-the private-NIC arm (`NIC_VERDICT="TRANSIENT"` on `control_rc -ne 0 || -z "$control"`), findable
-with `git grep -n 'control_rc'` — and a guard scoped to one of two is the defect, not a partial fix.
+non-alarming exit from an emptiness or zero-evidence test.
+
+**The first draft said "two sites, findable with `git grep -n 'control_rc'`". That was a snapshot,
+and it was wrong — it finds 2 of 10.** Measured enumeration:
+
+| Line | Arm |
+|---|---|
+| 149 | NIC transport rc |
+| 185 | NIC control empty/errored |
+| **213** | **NIC never-emitted AND sibling also silent — literally the total-account-outage shape, resolved TRANSIENT by delegating to "the zot legs below"** |
+| 220 | NIC no usable boot_id |
+| 367-369 | `betterstack-query.sh` not found/executable |
+| 380-381 | zot transport rc |
+| 389-390 | zot control empty/errored |
+| 400-401 | zot fresh/never-installed host |
+| 408-409 | zot no usable boot_id |
+| ~433 | all-`-1` zero-evidence seam |
+
+Line 213 must be named explicitly: its detail string delegates the verdict to a sibling arm this
+plan is simultaneously rewriting, so the delegation becomes false the moment the zot leg changes
+shape.
+
+**The chokepoint is structural, and it is not the `control_rc` token:** every non-alarming exit
+reachable from an emptiness test must route through `scripts/lib/betterstack-absence.sh`, and the
+guard enumerates candidate sites by *shape* (an `if`/`elif` whose condition contains `-z "$V"`,
+`-n "$V"`, `== ""`, or an `rc -ne 0` test in a block that also tests emptiness) rather than by
+identifier. Anchoring on a rebindable identifier is the suppression-grep defect this repo has
+already paid for once — hence mutation row 8.
+
+**Scope must be resolved asymmetrically, because a blanket rule collides with the script's own
+documented doctrine.** `zot-restart-loop-alarm.sh:52-57` states a deliberate FAIL-SAFE trade:
+"NEVER FIRE on zero valid evidence… buys ZERO false-positives at the cost of a narrow non-OOM
+false-negative", implemented at ~433. A blanket "no non-alarming exit" rule reds that seam and both
+no-boot_id arms, and an implementer would resolve the collision by quietly narrowing the guard back
+to two sites — making it vacuous. **The defensible line:** zero-evidence about *zot's internal
+state* (boot_id, climb samples) may stay TRANSIENT; zero-evidence about *the channel itself*
+(control empty, lookback empty, both producers dark) may not. The plan owns this split, with a
+reason per arm, rather than leaving it to implementation.
+
+**Anti-vacuity floor is two-level and pinned**, not "not zero": `files_scanned >= MIN_FILES` AND
+`sites_found >= MIN_SITES` with both committed as constants (today `MIN_SITES` is the in-scope
+subset of the ten above). A `>= 1` floor passes the exact "scoped to one of ten" defect.
+
+**Placement is load-bearing and the first draft got it wrong.** Both absence arms live *inside*
+`if [[ -z "$MAIN" ]]` (:384) / `if [[ -z "$trusted" ]]` (:178). When rows are present the script
+falls through to the climb evaluation and `emit_and_exit 0` without ever consulting control,
+lookback, freshness, or the probe — so T6 is unreachable by construction. **The ingest-status and
+`max(dt)` freshness precondition must be hoisted ABOVE the `-z "$MAIN"` test and evaluated on every
+path, including GREEN.**
 
 **Mutation matrix** (each MUST drive the guard RED):
 
@@ -712,8 +827,28 @@ with `git grep -n 'control_rc'` — and a guard scoped to one of two is the defe
 | 3 | Re-collapse `control_rc -ne 0` and `-z "$CONTROL"` into one branch inside the classifier | RED — behavioural assertion on the verdict, not merely on call shape |
 | 4 | Cause the guard's own dispatch to evaluate zero arms (empty assembly) and exit 0 | RED — anti-vacuity floor; a guard reporting "0 checked" must not pass |
 | 5 | Make an empty 24h lookback resolve to the "fresh / never-installed host" non-alarming arm | RED — this is the state the outage produces once the cliff ages out; it must fail closed |
-| 6 | Let the ingest probe's status override a reader-derived verdict | RED — the probe annotates cause and has no veto |
-| 7 | Remove the control query's exclusion of the probe's own marker | RED — self-masking; the probe would hide the silence it detects |
+| 6 | Let the ingest probe **downgrade** an alarming or dark verdict to a non-alarming one | RED — the fail-open direction; the probe has no veto |
+| 6b | Make a measured non-2xx ingest status **unable to escalate** a GREEN reader-derived verdict to an alarm | RED — this is T6, the day-zero case |
+| 7 | Remove the control query's exclusion of the probe's own marker, **or** fail to prove the probe body is empty-batch | RED — self-masking; assert the disjunction so neither branch is silently skipped |
+| 8 | Rename `control_rc` to `ctl_rc` in one arm | RED — the assembly must not be anchored on a rebindable identifier |
+| 9 | Make an emptiness-test block assign a verdict from a string literal instead of the classifier | RED — the decidable form of the chokepoint (see below) |
+
+**Row 6/6b resolve a contradiction three reviewers caught independently.** The first draft's row 6
+forbade the probe affecting the verdict at all, while T6 ("ingest 402 while rows are still
+present") *requires* the probe to escalate a reader-derived GREEN. As written, T6 was unreachable
+and the plan's headline outcome did not land. The veto is **directional**: never downgrade, always
+free to escalate.
+
+**"Non-alarming" is defined mechanically as "files no GitHub issue."** Without that, rows 3 and 5
+are satisfiable by renaming `TRANSIENT` to `INGEST_UNKNOWN` with zero behaviour change.
+
+**The literal property is not decidable in bash** — "reachable from" is a control-flow-path
+property and there is no call graph. The writable conservative form, which is what the guard
+actually asserts: *inside an emptiness-test block, a verdict may not be assigned from a string
+literal, and no bare non-alarming `exit` may appear.* `VERDICT="TRANSIENT"` violates it;
+`VERDICT="$(bs_absence_classify "$rc" "$out")"` complies. Pure syntax, exactly the defect,
+unsatisfiable by a stub. Ship it with an honest-limits docstring (an emptiness test inside an
+unscanned helper, or a verdict built with `printf -v`, is out of reach).
 
 **Harness rows:**
 
@@ -750,7 +885,26 @@ self-maintaining rather than a snapshot.
 | 3 | Empty the manifest entirely so nothing is compared | RED — anti-vacuity: zero declared budgets must not pass |
 | 4 | Add a **second** over-budget emitter after a compliant first | RED — quantifies over all, not the first |
 | 5 | Hold every emitter's row count constant while tripling mean row size | RED — the byte-denomination assertion; a row-count guard would pass this and it is the exact drift that caused #7569 |
+| 5b | Triple the row **count** while holding total bytes constant | **PASS** — the paired inverse. Without it, a guard computing `rows * 1269` (a row guard in a byte costume) passes row 5 and fails nothing |
 | 6 | Set the summed declared budgets above the account allowance | RED — the budgets must be feasible, not merely present |
+| 7 | **Empty the discovered set (the warehouse is dark) and let the guard PASS** | **RED — must be UNRESOLVED, never PASS** |
+
+**Row 7 closes a fail-open that reproduces this plan's own I-2 inside its own new deliverable**, and
+it was caught independently by two reviewers. Guard 2's assembly discovers producers by grouping
+warehouse rows. When ingest is refused the warehouse returns zero rows, every producer is trivially
+under budget, and Guard 2 reports GREEN throughout the exact incident it exists to prevent — a
+detector reading exclusively over the channel it monitors. **Guard 2 must route through the same
+`scripts/lib/betterstack-absence.sh` freshness precondition Phase 5 mandates for every other
+consumer**; otherwise this plan creates consumer #64 and exempts it from its own sweep. Note this
+state is live *today*, not hypothetical.
+
+**Row 5 only discriminates over row-level fixtures.** If the stub returns a canned aggregate
+(`{producer, bytes}`), tripling a field the guard already treats as bytes proves nothing about the
+denominator. The stub must return row-level data with a row-length knob so `count()` and
+`sum(length(raw))` give different answers over one fixture. Add an SUT mutation on the denominator
+itself (`sum(length(raw))` → `count() * 1269`) and a calibration assertion reproducing the measured
+136,556,248 bytes for 2026-08-14 within a tolerance band — the only test proving the guard's
+denominator means what the invoice means.
 
 **Harness rows:**
 
@@ -957,16 +1111,40 @@ next week; this one cannot.
     drift — remedy `/soleur:admin-ip-refresh` — never an sshd or service-layer fault
     (`hr-ssh-diagnosis-verify-firewall`). See §Network-Outage Deep-Dive.
 
-4.1 **Primary fix — bound unparseable app-container lines in `vector.toml`.** The
-    `parse_err != null → true` arm at `apps/web-platform/infra/vector.toml:83` is the single hole
-    producing both offenders. One config change fixes the stack-trace amplification *and* the
-    scanner-driven `resolve-origin` volume, and it protects against the next unknown loop rather
-    than only the two known ones. Validate with `vector validate` on the pinned 0.43.1 and the
-    26/26 PII parity suite.
-4.2 Add a `throttle` transform keyed on container/`SYSLOG_IDENTIFIER` between the journald
-    transforms and `[sinks.betterstack]`, giving every emitter a per-unit-time bound. This is the
-    mechanical form of invariant I-1 and the generalisation of ADR-184's per-emitter cap, which is
-    the one cap that held during this incident.
+4.1 **Primary fix — `reduce`, NOT `filter` and NOT `throttle`.** Corrected at review; the first
+    draft named elements that cannot do the job. The 14× amplification is a **fan-out** problem:
+    one logical event billed as ~14 physical rows because a pretty-printed Node error crosses lines
+    and journald ships one row per line.
+    - A `type = "filter"` (`vector.toml:83`) is a boolean predicate **per event**. It cannot merge
+      14 events into 1 and cannot bound per-unit-time. "Bound the arm" is not an operation a filter
+      performs.
+    - A `throttle` **discards** excess events, so on a 14-line trace it keeps an arbitrary 1–2
+      interleaved lines and drops `[cause]:`, `code:`, `syscall:`. That is a *corrupted* trace —
+      worse than keeping or dropping the whole event, and it contradicts this plan's own rule
+      "collapse to one line plus an aggregate, never remove".
+    - **`reduce`** (or multiline merge at the journald source) merges continuation lines into one
+      event *before* the filter — preserving the full trace at ~1/14 the byte cost. This is the
+      element the plan needs and it is what AC9/AC10 must target.
+    Preserve the `parse_err` arm's purpose (§M): it is the documented #4773 decision and the only
+    crash-stack path. This **amends** that decision, it does not correct an oversight. Add a
+    fixture asserting an uncaught-exception stack (non-JSON, fd 2) still reaches the sink, and the
+    inverse must-PASS that a structured `level=50` line still ships. `vector validate` exiting 0
+    proves the config parses, never that the gate gates.
+4.2 Add `throttle` as a **ceiling behind `reduce`**, not as the fan-out fix. Three constraints:
+    - **Two throttles, or journald-leg only.** `[sinks.betterstack].inputs =
+      ["tag_journald", "tag_metrics"]`; `tag_metrics` events carry neither container nor
+      `SYSLOG_IDENTIFIER`, so a single identifier-keyed throttle collapses all 17,862 metric
+      rows/day into one null-key bucket and guts the stream #5105/#5110 already tuned.
+    - **Key on identifier AND pino level, with WARN+ separately bucketed or exempt.** A single
+      container-wide bucket lets an unauthenticated scanner flood (via `resolve-origin`) starve the
+      Stripe/auth ERROR lines for a real user in the same window — escalating an existing
+      denial-of-observability into a *targeted* suppressor. Add a mutation row asserting a flood on
+      one key cannot starve another.
+    - **Drops must be observable.** Vector's throttle discards silently; the only record is
+      `component_discarded_events_total` → `[sinks.vector_console]` → journald PRIORITY 6, which
+      Source 2's `PRIORITY = ["0","1","2"]` filter drops. That is a *new* I-2 violation inside the
+      I-1 fix. Mirror ADR-184's `SOLEUR_ZOT_LOG_DROPPED`: a bounded periodic drop-accounting row
+      through the sink, with an AC (`cq-silent-fallback-must-mirror-to-sentry`).
 4.3 **Defense-in-depth only** (explicitly not the fix): per-emit-site changes. Note that
     edge-runtime rate limiting in `resolve-origin.ts` would not work as intended anyway — counters
     are per-isolate and ephemeral — and the Inngest emit-site change becomes dead code once
@@ -1182,6 +1360,142 @@ Beyond the mutation matrices, which are the primary gate:
 
 T6 is the scenario that matters most: it is the one that converts this class of outage from
 two days undetected to one 30-minute cycle.
+
+## BLOCKING — the warehouse is an unauthenticated write surface, and the canonical classifier trusts it
+
+Security review found, and this session verified directly, that **this is not only a billing
+problem — it is an integrity problem**, and the plan's central move (promote
+`scripts/betterstack-assert-absence.sh` to the shared classifier for all consumers) multiplies the
+blast radius of an existing forgery hole. These are blocking: resolve them before implementation
+starts, not during.
+
+### F14 (HIGH) — the canonical classifier's only exit-0 is attacker-forgeable
+
+Verified at `scripts/betterstack-assert-absence.sh`:
+
+- `:67` — `CONTROL_MARKER="SOLEUR_PROBE_CANARY"`
+- `:209` — `control_rows="$(run_count "raw LIKE '%$(sql_lit "$CONTROL_MARKER")%'")"`
+- `:170` — the only structured clause is `JSONExtractString(raw,'host_name') = '${HOST_LIT}'`
+
+`outcome=clean` — **the only exit 0**, and the very property Guard 1 is built to protect ("at least
+one row was read back through the sink") — is unlocked by *any* row on that host whose text
+contains the marker. The predicate is an unanchored `%…%` substring. `host_name` is Vector-injected
+and not attacker-settable, but it pins the **host, not the producer** — and the web container runs
+on that host. There is no `source_kind`, no `SYSLOG_IDENTIFIER`, no `CONTAINER_NAME`, no anchor.
+
+**The only thing standing between an unauthenticated HTTP `Host` header and a forged "the channel
+is alive" is that ClickHouse `LIKE` is byte-case-sensitive while `resolve-origin.ts:17` calls
+`.toLowerCase()`.** That call exists for origin comparison. It is not a log-safety control, it is
+not documented as one, and nothing tests it. This plan would make it load-bearing for the repo's
+canonical absence classifier across every consumer in the Phase 5 sweep.
+
+**Required before extraction:** pin the control predicate on **producer identity**, not just host.
+The strong form already exists in-repo — the envelope anchor at `zot-restart-loop-alarm.sh:176`
+and the prefix-anchored decoded form in `zot-inventory-assert-marker.sh`. Add a Guard 1 mutation
+row: *a web-container journald row containing the control marker as literal text must NOT satisfy
+the positive control.* Either document and test the case-fold dependency at `resolve-origin.ts:17`,
+or stop depending on it.
+
+### F15 (HIGH) — an anchor asymmetry that lets an attacker SUPPRESS the alarm
+
+Same file, two legs, verified:
+
+- **NIC leg, `:176`** — `grep -F '"raw":"{\"message\":\"SOLEUR_PRIVATE_NIC '`. Envelope-anchored;
+  a Vector-shipped journald row's `raw` starts `{"PRIORITY":"6",…` and structurally cannot match.
+  The comment records the live 2026-07-15 incident where three GitHub-webhook rows quoting the
+  marker were returned.
+- **ZOT leg, `:403`** — straight into `zot_trusted_region` with **no envelope anchor at all**.
+
+A forged `SOLEUR_ZOT_DISK` row therefore parses as genuine telemetry — and the second consequence
+is the one that belongs in this plan: it makes `$MAIN` non-empty, which **skips the entire
+`if [[ -z "$MAIN" ]]` block containing the `PRODUCER_SILENT` branch**. An unauthenticated third
+party can mask genuine registry-telemetry darkness. That is precisely the failure this plan exists
+to close, and none of Guard 1's mutation rows cover it.
+
+**Whichever anchor the extracted classifier adopts becomes the repo-wide contract — adopt the NIC
+leg's.** Add the alarm-suppression mutation row.
+
+### F16 (MEDIUM) — AC2's wording outruns its measurement
+
+`scripts/betterstack-query.sh:189` escapes single quotes but **not backslashes**; its sibling
+`betterstack-assert-absence.sh:136` does both, in the correct order. Latent, not live — every
+current `--grep` term is a repo-controlled literal. But AC2 declares the file *unmodified* and
+records exit codes "that make a change unnecessary", which reads as a general audit pass the
+measurement did not earn. **Either fix the escaping here or narrow AC2 to the exit contract only.**
+Also unescaped: `_` is a ClickHouse `LIKE` wildcard, so `--grep SOLEUR_ZOT_DISK` really matches
+`SOLEUR?ZOT?DISK` — widening rather than forgery-enabling, but it belongs in the Phase 5 table.
+
+### F18 (MEDIUM) — forgery preferentially wins
+
+`betterstack-query.sh:215-226` orders `dt DESC LIMIT ${LIMIT}` inside the subquery, so **a freshly
+injected row is the newest and always survives the limit**. Every consumer using `--limit 1` +
+`tail -1` reads the attacker's row preferentially — including `zot-restart-loop-alarm.sh:206`,
+`:393` and `inngest-config-drift.yml:63`. Separately, the one consumer that *does* pin a producer
+field pins the wrong one: `cert-reissue-markers-6698.sh:52` requires
+`"source_kind":"app_container"`, which `vector.toml:487` sets for the web container — making its
+producer isolation **anti-protective** against this vector.
+
+### The through-line, and it belongs in the ADR
+
+F14, F15, F17 and F18 all trace to one root: **an unauthenticated party can write attacker-chosen
+text into a shared telemetry source that 63+ consumers read with unanchored substring matches.**
+The ADR must say so, and must record the invariant: *no marker predicate may be satisfiable by a
+row an attacker can influence.* `resolve-origin` is not a noisy emitter — it is an unauthenticated
+write path into the evidence store, which is also why its rate cap is a control rather than
+housekeeping.
+
+**Two further blocking items from the same review:** the plan's "no secret added" claim is false —
+the alarm workflow holds no Doppler token today, so provision `BETTERSTACK_LOGS_TOKEN` directly
+rather than granting prd-wide read; and the empty-batch POST experiment should be promoted from a
+Phase 2.1 nicety to a **blocking gate**, because a non-writing probe dissolves the self-masking
+hazard, the credential expansion, and the probe's share of F14 at once.
+
+## Deepen-Plan Review Findings
+
+Six reviewers ran against this plan (observability-coverage, architecture-strategist,
+code-simplicity, test-design, user-impact, security-sentinel). The P0s and the corrections already
+folded into the sections above are not repeated here. This table records the remainder with an
+explicit disposition so `/work` inherits them rather than rediscovering them.
+
+**Three reviewers independently found the same contradiction** (Guard 1 row 6 vs T6) and **two
+independently found the same fail-open** (Guard 2 over a dark warehouse). Convergence of that kind
+is the strongest signal in this table.
+
+| # | Finding | Disposition |
+|---|---|---|
+| R1 | `[ci/betterstack-ingest-refused]` (Observability block) vs `[ci/betterstack-ingest-dark]` (Phase 3, Files to Edit) — **two titles for one alarm in a dedupe-by-title scheme**. Every filing step here dedupes on `in:title "<exact string>"` | **Fix inline at /work.** Pick `[ci/betterstack-ingest-dark]`, use it verbatim in all four places (block, phase, filing step, close step), add to ACs |
+| R2 | `discoverability_test` asserts `status=202`, which is measured-**false** today and stays false until a human pays a bill. Preflight Check 10 *executes* it, so it FAILs — or gets weakened to pass. It also lacks a `doppler run` wrapper, and the property the PR delivers is verifiable offline with no credentials | **Replace.** Use `bash tests/scripts/test-betterstack-absence-classifier.sh --case ingest-402-reader-ok`, expecting the alarming verdict. Zero network, zero credentials, passes today, asserts the invariant not the vendor's billing state. Move the live 202 assertion to the soak follow-through, which is already time-gated for it |
+| R3 | Observability layer cited as **5**; layer 5 is Sentry `release` context | **Fix.** Layer **3** for the journald→Better Stack producer path; layer **6** for the guard's own operator-visible signal (workflow-run log, `::error::`, filed issue). `failure_modes` 2 and 4 cite no layer at all |
+| R4 | `failure_modes` entry 4 (`[ci/betterstack-volume-ceiling]`) has **no owning phase and no file** — it reads as though the route exists | **Rewrite** to say the route is a tracked follow-up on #5134 with no live detection today, or build it. Overstating coverage on the exact axis that caused the incident is the worst place to do it |
+| R5 | The ADR claims to **close** the near-miss's 5-Why #5, but no phase builds `vendor-quota-watch` and Guard 2 cannot substitute (it reads the warehouse, dark at exactly quota) | **Reword** to "supersedes #5134's mechanism and leaves it open with a re-scoped body", or build the watch. Claiming a closure the PR does not deliver is the near-miss's own defect repeated |
+| R6 | `betterstack-quota-near-miss-postmortem.md` is **not in Files to Edit** — no back-link from the prediction to the recurrence | **Add** a `RECURRED 2026-08-14 → <PIR path>, ADR-191` line. §K's argument depends on that file being reachable *from* the recurrence |
+| R7 | **Live AP-021 violation nobody reported.** The shipped alarm string "Better Stack unreachable / creds unset" names two causes the job measured **false** (it had `rc=0`). AP-021 (ADR-166, hook-tier, `scripts/lint-diagnosis-claims.sh`) forbids exactly this, and the gate did not catch it — for two days, every 30 minutes | **Elevate.** Add an AC running `lint-diagnosis-claims.sh` against `scripts/zot-restart-loop-alarm.sh`. If it passes today on that string, **the gate gap is the real deliverable**. Also mint AP-023/AP-024 rows for I-1/I-2 in `principles-register.md`, which the plan currently never touches |
+| R8 | Source-splitting rejection is **inference labelled as measurement**: both probes used the *same* source token, which cannot discriminate account-level from source-level | **Soften** to unfalsified inference, or measure with a second source's token. The clause currently reads "Recorded so it is not re-proposed" — permanently foreclosing an option on an unmeasured premise, in a plan that boasts no hypothesis rests on reasoning alone |
+| R9 | **Metrics-off-the-Logs-quota alternative never evaluated.** 17,862 rows/day of `host_metrics` bill against the *Logs* quota only because Vector's native metrics sink does not exist. The near-miss's 5-Why #3 says exactly this | **Add to Alternatives Considered** with a verdict, even if deferred. Second-largest producer, pure structural waste, already identified once |
+| R10 | I-2's named target state routes to **Sentry**, which this plan's own Risks table says may be at PAYG cap this week | **Reword** target state to "a channel independent of the monitored vendor", naming the GitHub-issue path as the one in force. Build the N-consecutive escalation as a Phase 3 deliverable with an AC — and define **where the counter lives**, since a GHA bash script is stateless between runs (issue-comment count, committed marker, or the Sentry monitor's own consecutive-failure setting). It is currently unimplementable as written |
+| R11 | Two C4 edits leave the four highest-volume emitter edges (`model.c4:524, 525, 593, 630`) implying independence | **Add one sentence to each of the six edges** naming `betterstack-emitter-ceilings.json` as the authority plus the shared-failure-domain consequence. Keep the numbers in the manifest only — `vector.toml:126-129` already documents two comments in one file drifting apart on a rows/day figure |
+| R12 | **Stub-ladder aliasing.** `zot-restart-loop-alarm.test.sh:38` branches on `$*` substrings and its comment says "ORDER IS LOAD-BEARING". The new `max(dt)` read carries no `--grep`, so it lands in the branch serving the control probe — every freshness fixture would silently read the control fixture | **Give the freshness helper a distinguishable argv** (`--max-dt`) *before* the stub is written |
+| R13 | **Two seams for one override**: `ZOT_BQ_OVERRIDE` (`zot-restart-loop-alarm.sh:70`) and `BETTERSTACK_QUERY_SCRIPT` (`betterstack-assert-absence.sh:64`) | **Unify in Phase 1.1**, keeping `ZOT_BQ_OVERRIDE` as a deprecated alias — otherwise the shared classifier has two override paths and a test can stub one while the other reaches the network |
+| R14 | No **staleness threshold** is declared for the `max(dt)` freshness helper — AC4 asserts it is enforced mechanically and there is nothing to enforce against | **Declare the number** and derive it from `WINDOW` |
+| R15 | **`max(dt)` and byte sums are measured/wall-clock quantities.** No tolerance discipline is specified | **Never assert equality.** Inject `now` via a `BS_NOW_EPOCH` override; bound elapsed values (`-le N`), never pin them |
+| R16 | Phase 5's "63 consumers" is a `git grep -l` artifact, inflated ~2.3×: 29 are `scripts/followthroughs/` soak probes whose `*=TRANSIENT(retry)` contract is already correct, and 19 contain no invocation. Real gating surface ~24. Separately, the wider sweep (`betterstackdata.com`, `BETTERSTACK_LOGS_TOKEN`, `uptime.betterstack.com`) finds **52 more files** — the direct-POST emitters that swallowed the 402 | **Re-scope.** Exclude `scripts/followthroughs/` by rule with one sentence of justification; classify the ~24 gating consumers; route the named ones; follow-up for the rest. Rewrite AC3 accordingly |
+| R17 | Phase 5's taxonomy is wrong on one half: "presence-assert = fail-closed, safe" — a presence-assert that hard-blocks turns a vendor outage into a **fleet-wide release freeze**, and two named targets are release-path gates. It also misses a third class: **state-mutating consumers** that close issues or mark soaks PASS on empty reads | **Re-axis** on *authorized action* (gates a deploy > closes a standing signal > advisory). Triage state-mutating consumers **first** — a two-day dark window may already have auto-closed live issues and PASSed soaks on empty evidence. That is a retrospective question this plan does not ask |
+| R18 | The **3 GB/month allowance is an unverified inherited premise** from a 2-month-old postmortem; every quantitative conclusion rests on it and all three usage APIs 404 | **Record as a named constant with a provenance comment** stating it is unverifiable by API, so one edit re-tunes everything. Consider self-calibrating: an observed 402 *measures* that the effective allowance ≤ cumulative bytes since the last reset |
+| R19 | Guard 2 compares a **daily** measurement against a **monthly** budget over a 3-day-retention warehouse; the ×30 extrapolation is nowhere stated | **Denominate in bytes/day**, derived from the monthly allowance with the ÷30.44 shown inline |
+| R20 | AC7 says "All **four** Guard 2 mutation rows"; the matrix has **seven** | **Fix the count.** Two rows were unasserted and would have been quietly dropped |
+| R21 | ACs that are phase-output audits, not post-conditions: AC1 (self-certifying "or carries a note"), AC3, AC6c ("the experiment is run and recorded"), AC19 ("the PR body reframes"). ACs 20-23 depend on a vendor payment and another workflow's schedule — `cq-ac-must-not-depend-on-concurrent-sessions` | **Rewrite or delete.** Move AC20-23 into the soak follow-through's exit contract, which already states them |
+| R22 | `evidence-snapshot.md` duplicates plan tables B/C/F/G/L, and the Risks table already says "the tables in this plan are the historical record" — while the repo is **PUBLIC**, making any verbatim dump a permanent egress | **Cut the separate file.** Keep the plan tables as the record; if any dump is kept, counts/byte-totals/hashed shapes only, never a verbatim log line, with an AC |
+| R23 | `scripts/followthroughs/betterstack-quota-verdict-5105.sh` is named in-scope for re-denomination but is **dormant** — hardcoded `ISSUE=5110`, which its own header says is CLOSED/NOT_PLANNED and the sweeper skips. It is also missing from Files to Edit | **Cut the re-denomination** as waste, or revive the probe deliberately. Do not schedule work against a script that never runs |
+| R24 | Fail-open default at `zot-restart-loop-alarm.sh:128` — `${NIC_VERDICT:-TRANSIENT}` defaults an *unset* verdict to non-alarming, outside every emptiness test | **Default to an alarming sentinel**, and add a mutation row for "change a `:-` default from alarming to non-alarming" |
+| R25 | Phase 3's new `rc=$?` captures risk the AP-022 pattern (a `run:` block dying at the command and silently skipping the `$GITHUB_OUTPUT` write) | **Note in Phase 3**: `set +e` / `|| rc=$?`. Gate the new filing step on `== 'INGEST_DARK'` (equality against a non-empty literal), never `!=` — an unset output satisfies an inequality and files a spurious issue on the alarm's own crash |
+| R26 | No **lifecycle spec** for the new issue — filing and dedupe are specified, closing is not | **State the close condition**: ingest 2xx on N consecutive runs, own-title search, never a union search |
+| R27 | Missing scenarios: T9 (402 + empty window **and** empty lookback — the state production is in today), T10 (`max(dt)` not advancing — detects the outage with no probe at all), T11 (control returns only the probe's marker), T12 (both arms in one run), T13 (`betterstack-query.sh` exit 3 vs 6 vs 22), T14 (**HTTP 200 with a mid-stream `DB::Exception`** — the real transport gap, guarded today by the parseability check Phase 1.1 extracts, with nothing asserting the protection came with it), T15/T16 (the `reduce` fix itself, plus the inverse must-PASS that a structured `level=50` line still ships) | **Add all.** T5's expected value ("see the CTO advisory") must also become concrete — the right form is a consistency assertion that T5's verdict *equals* T2's for the same reader state |
+| R28 | Guard suites need the `fail()`-increments-`PASS` accounting control (precedent: `lint-guard-contract.test.sh` TS-21) and registration via `scripts/lint-orphan-test-suites.sh` | **Add both**; the accounting control is what catches "0 passed, 0 failed, exit 0" |
+| R29 | Scope: the plan mixes a CI-side shell/workflow half (testable today against a dark prod) with an infra-apply half gated on `admin_ips` drift and a delivery path that has failed before | **Consider splitting at that seam.** The detector is the stated primary deliverable and should not wait on an apply that can bounce on IP drift |
+| R30 | Postmortem directory mixes dated and undated filenames | **Pick one convention** |
+
+Security-sentinel had not reported when this section was written; its findings should be folded in
+at `/work` Phase 0 rather than assumed absent.
 
 ## Sharp Edges
 
