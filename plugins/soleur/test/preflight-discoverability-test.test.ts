@@ -2144,7 +2144,45 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // would fail for want of a precondition and prove nothing — which is why the field is
   // used rather than the probe being weakened to fit. If a third non-credential adoption
   // appears, that is the signal to rename the field, not to keep stretching it.
-  const BASELINE_DECLARED_PROBES = 4;
+  //
+  // 4 -> 5 on 2026-08-16 — A COLLISION, RESOLVED BY COUNTING, NOT BY PICKING A SIDE.
+  // #7565 and #7555 each took this counter 3 -> 4 concurrently, for DIFFERENT plans, so
+  // neither branch's `4` was ever right once both landed. The corpus was re-walked at
+  // resolution and returns 5 declaring plans; both adoption records are kept below because
+  // each is the reviewable diff line for its own probe, and deleting either would leave a
+  // baseline whose justification is missing exactly one entry.
+  //
+  // This is the all-members-baseline hazard the first entry documents, arriving twice at
+  // once. A counter that every branch increments needs re-derivation at merge, not a bump.
+  //
+  // 3 -> 4 on 2026-08-16 (#7555). FOURTH REVIEWABLE DIFF LINE.
+  //
+  // Renumbered on rebase: #7462/#7516 took 2 -> 3 on main while this branch was open. That is
+  // the same all-members-baseline class the entry above documents, hitting the entry that
+  // documents it — so the count is asserted here, not inherited from the branch.
+  //
+  // Declaring plan: `2026-08-13-fix-zot-mirror-large-layer-upload-timeout-plan.md`, for the
+  // probe `scripts/followthroughs/zot-upload-ceiling-7556.sh`. Confirmed intentional against
+  // this gate's own instruction (delete a stray line, baseline only a genuine one) on the
+  // same three counts:
+  //   1. PLACEMENT — a correctly-indented child of the `discoverability_test:` sub-block,
+  //      not a leftover template comment and not a stray top-level line.
+  //   2. TRUTH — the probe reads BOTH of its signals out of the Better Stack Logs ClickHouse
+  //      warehouse (zot's boot `configuration settings` line for delivery, and the
+  //      PatchBlobUpload rows for absence), which needs
+  //      BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}.
+  //   3. NO SUBSTITUTE — the property is the ABSENCE of a server-side upload failure on a
+  //      deny-all-public private host (10.0.1.30, no ingress). Nothing unauthenticated can
+  //      observe that host's logs, and an unauthenticated variant could at most show the
+  //      registry answering, which is a different claim already covered by the
+  //      SOLEUR_ZOT_DISK heartbeat.
+  // Distinct from the three probes above rather than another declaration of the same one:
+  // those read a log CHANNEL's liveness (#7440) or a host's boot markers (#7462); this reads a
+  // CONFIG VALUE the host reports about itself plus a failure class, and it is the closure
+  // criterion for #7556.
+  // Same orthogonality note applies — a warehouse query, not a host login, so
+  // `hr-no-ssh-fallback-in-runbooks` is satisfied.
+  const BASELINE_DECLARED_PROBES = 5;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

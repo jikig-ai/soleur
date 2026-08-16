@@ -117,9 +117,9 @@ _final_gate() {
   fi
   _tally
   local ran=$(( PASS + FAIL ))
-  if [[ "$ran" -lt "150" ]]; then
+  if [[ "$ran" -lt "174" ]]; then
     FAIL=$(( FAIL + 1 ))
-    echo "  FAIL: assertion floor — ran $ran assertions, expected >= 150"
+    echo "  FAIL: assertion floor — ran $ran assertions, expected >= 174"
     echo "        (suite truncated, or assert() neutered — this run certified nothing)"
   fi
   echo ""
@@ -959,3 +959,215 @@ assert "T18 it ships nothing rather than shipping empty rows" \
 assert "T18 the template also re-ensures jq in runcmd (packages: alone is non-fatal)" \
   "grep -qE 'dpkg -s jq.*apt-get install -y jq' '$CI'"
 
+
+# --- T19: GUARD 2 (#7555) — the paired upload-failure row survives the cap ----------------
+# zot reports a failed blob upload as TWO rows: the `PatchBlobUpload` error line (cap-exempt
+# since #7440) and an ordinary HTTP-API row carrying statusCode/latency/Content-Length. Only
+# the PAIRING carries the numbers that separate a DEADLINE from an origin fault, and only the
+# first half was surviving. Measured in the 2026-08-13 failure tick: dropped_cum=5841 vs
+# shipped_cum=5151, so the deciding evidence survived by luck of its class.
+J_PAIR="$TMP/j_pair"
+: > "$J_PAIR"
+for i in $(seq 1 40); do
+  printf '%s\n' "{\"level\":\"info\",\"message\":\"HTTP API\",\"path\":\"/v2/ordinary-$i\",\"statusCode\":200,\"caller\":\"zotregistry.dev/zot/v2/pkg/api/session.go:92\"}" >> "$J_PAIR"
+done
+# The pairing's HTTP-API half. `pairA` is the discriminating substring.
+printf '%s\n' '{"level":"info","message":"HTTP API","module":"http","method":"PATCH","path":"/v2/jikig-ai/soleur-web-platform/blobs/uploads/pairA","statusCode":500,"latency":"1m0s","bodySize":0,"caller":"zotregistry.dev/zot/v2/pkg/api/session.go:92","goroutine":156}' >> "$J_PAIR"
+run_shipper "$J_PAIR" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=5
+assert "T19 the ordinary cap still bit under the flood (otherwise this case proves nothing)" \
+  "[[ \$(grep -c 'ordinary-' '$STUB_POSTS') -lt 40 ]]"
+assert "T19 the HTTP-API half of an upload-failure pairing survived the cap" \
+  "grep -qF 'pairA' '$STUB_POSTS'"
+
+# Row 4 — 502/503/504 are as much a cut upload as 500. A predicate pinned to 500 alone is blind
+# to exactly the proxy-side shapes, and no 500-only fixture can see that.
+J_5XX="$TMP/j_5xx"
+: > "$J_5XX"
+for i in $(seq 1 40); do
+  printf '%s\n' "{\"level\":\"info\",\"message\":\"HTTP API\",\"path\":\"/v2/ordinary-$i\",\"statusCode\":200,\"caller\":\"c\"}" >> "$J_5XX"
+done
+for code in 502 503 504; do
+  printf '%s\n' "{\"level\":\"info\",\"message\":\"HTTP API\",\"method\":\"PATCH\",\"path\":\"/v2/x/blobs/uploads/code$code\",\"statusCode\":$code,\"latency\":\"1m0s\",\"caller\":\"c\"}" >> "$J_5XX"
+done
+run_shipper "$J_5XX" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=5
+for code in 502 503 504; do
+  assert "T19 a $code upload-failure pairing is exempt too (not just 500)" \
+    "grep -qF 'code$code' '$STUB_POSTS'"
+done
+
+# Row 7 — admitting the pairing must NOT starve the crash class out of the shared exempt lane.
+# 17 ordinary 5xx rows on a NON-upload path ahead of a panic trace: the panic must still ship.
+# This is the #7444 R12 priority inversion, one layer down, and it is what bounds the predicate
+# to the `/blobs/uploads/` pairing rather than to 5xx generally.
+J_STARVE="$TMP/j_starve"
+: > "$J_STARVE"
+for i in $(seq 1 17); do
+  printf '%s\n' "{\"level\":\"error\",\"message\":\"HTTP API\",\"path\":\"/v2/health-probe-$i\",\"statusCode\":503,\"caller\":\"c\"}" >> "$J_STARVE"
+done
+printf '%s\n' 'panic: runtime error: invalid memory address or nil pointer dereference' >> "$J_STARVE"
+# CAP_UPLOAD_EVIDENCE_PER_INTERVAL is raised to the full exempt cap HERE ONLY. With the
+# production sub-quota (8 of 17) a mutation routing these rows into the upload lane can
+# consume at most 8 slots, so the sentinel below always ships and the assertion cannot
+# fail — it would pin nothing. At 17 the lane can actually be saturated, which is the
+# pressure this fixture exists to survive.
+run_shipper "$J_STARVE" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=1 ZOT_LOG_SHIPPER_CAP_UPLOAD_EVIDENCE_PER_INTERVAL=17
+assert "T19 a panic trace still ships behind 17 ordinary 5xx rows (exempt lane not starved)" \
+  "grep -qF 'panic: runtime error' '$STUB_POSTS'"
+assert "T19 non-upload 5xx rows are NOT exempt (they are ordinary; a broad 5xx arm would admit them)" \
+  "[[ \$(grep -c 'health-probe-' '$STUB_POSTS') -le 1 ]]"
+
+# Row 6 — SECOND MEMBER. Exempting the first pairing in a tick and dropping the second is the
+# defect a single-member fixture cannot see.
+J_TWO="$TMP/j_two"
+: > "$J_TWO"
+for i in $(seq 1 40); do
+  printf '%s\n' "{\"level\":\"info\",\"message\":\"HTTP API\",\"path\":\"/v2/ordinary-$i\",\"statusCode\":200,\"caller\":\"c\"}" >> "$J_TWO"
+done
+printf '%s\n' '{"level":"info","message":"HTTP API","method":"PATCH","path":"/v2/x/blobs/uploads/firstMember","statusCode":500,"latency":"1m0s","caller":"c"}' >> "$J_TWO"
+printf '%s\n' '{"level":"info","message":"HTTP API","method":"PATCH","path":"/v2/x/blobs/uploads/secondMember","statusCode":500,"latency":"1m0s","caller":"c"}' >> "$J_TWO"
+run_shipper "$J_TWO" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=5
+assert "T19 the FIRST pairing in a tick survived" "grep -qF 'firstMember' '$STUB_POSTS'"
+assert "T19 the SECOND pairing in a tick survived too (second-member row)" \
+  "grep -qF 'secondMember' '$STUB_POSTS'"
+
+# H1 — MUST-PASS non-canonical. A synthesized pairing with a different path suffix and a
+# different goroutine than the canonical fixture must be exempt: the guard enforces the
+# `/blobs/uploads/` + 5xx property, not the fixture's literal bytes.
+J_H1="$TMP/j_h1"
+: > "$J_H1"
+for i in $(seq 1 40); do
+  printf '%s\n' "{\"level\":\"info\",\"message\":\"HTTP API\",\"path\":\"/v2/ordinary-$i\",\"statusCode\":200,\"caller\":\"c\"}" >> "$J_H1"
+done
+printf '%s\n' '{"level":"info","message":"HTTP API","method":"PATCH","path":"/v2/some-other-org/other-image/blobs/uploads/9f3c-NONCANON","statusCode":503,"latency":"55s","bodySize":17,"caller":"zotregistry.dev/zot/v2/pkg/api/other.go:7","goroutine":99999}' >> "$J_H1"
+run_shipper "$J_H1" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=5
+assert "T19 H1 a non-canonical pairing (different path, goroutine, code) is still exempt" \
+  "grep -qF 'NONCANON' '$STUB_POSTS'"
+
+# The tick record's ARITY. Row 1's fail-open is a widened JQ_TICK against an unwidened
+# `read -r`: the extra fields fold into zmsg, prefix matching still returns 0, and the suite
+# stays green over a corrupted record. Pin the two together at the source so they cannot drift
+# apart silently -- the count is derived from the field list, not written down twice.
+JQ_FIELDS=$(grep -m1 "^      JQ_TICK=" "$CI" | grep -o '| s)' | wc -l)
+READ_VARS=$(grep -m1 "while IFS=\$'\\\\t' read -r " "$CI" | sed "s/.*read -r //; s/;.*//" | wc -w)
+assert "T19 JQ_TICK emits >= 5 sentinelled fields (got $JQ_FIELDS)" "[[ '$JQ_FIELDS' -ge 5 ]]"
+assert "T19 the read -r arity MATCHES the JQ_TICK field count ($READ_VARS vars vs $JQ_FIELDS fields)" \
+  "[[ '$READ_VARS' -eq '$JQ_FIELDS' ]]"
+# Every optional field must be sentinelled: with IFS=tab (an IFS-WHITESPACE char) one empty
+# field shifts all later fields one position left, so an unsentinelled record corrupts silently.
+assert "T19 JQ_TICK sentinels empty fields (tab is IFS-whitespace; empties would shift fields left)" \
+  "grep -m1 '^      JQ_TICK=' '$CI' | grep -qF 'then \"-\" else'"
+
+# T19 — the F-5 bypass must stay CLOSED while plaintext crash evidence becomes exempt. These two
+# assertions are the pair: without the second, the fix above is indistinguishable from reverting
+# to a whole-line match. An HTTP-API row whose User-Agent contains an exempt-class literal parses
+# as JSON, so its zmsg is "HTTP API" and it never reaches the plaintext fallback.
+J_BYPASS="$TMP/j_bypass"
+: > "$J_BYPASS"
+for i in $(seq 1 40); do
+  printf '%s\n' "{\"level\":\"info\",\"message\":\"HTTP API\",\"path\":\"/v2/bypass-$i\",\"statusCode\":200,\"headers\":{\"User-Agent\":[\"executing gc\"]},\"caller\":\"c\"}" >> "$J_BYPASS"
+done
+run_shipper "$J_BYPASS" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=5
+assert "T19 F-5 bypass stays closed: a User-Agent carrying 'executing gc' does NOT make rows exempt" \
+  "[[ \$(grep -c 'bypass-' '$STUB_POSTS') -le 6 ]]"
+
+# --- T20: the gaps review found in T19 (#7555). Each row pins a conjunct T19 left free. -----
+
+# S5 — the 5xx half of is_upload_failure_evidence was FREE: every T19 fixture that carried a
+# /blobs/uploads/ path also carried a 5xx, so deleting the status arm passed 164/164. On a healthy
+# registry every successful blob PATCH is a 2xx on that path, and one multi-layer push emits many
+# — under the deleted arm they would all enter the exempt lane and starve the crash class.
+J_2XX="$TMP/j_2xx"; : > "$J_2XX"
+for i in $(seq 1 17); do
+  printf '%s\n' "{\"level\":\"info\",\"message\":\"HTTP API\",\"method\":\"PATCH\",\"path\":\"/v2/x/blobs/uploads/ok-$i\",\"statusCode\":202,\"caller\":\"c\"}" >> "$J_2XX"
+done
+printf '%s\n' 'panic: runtime error: T20SENTINEL_2XX' >> "$J_2XX"
+# CAP_UPLOAD_EVIDENCE_PER_INTERVAL is raised to the full exempt cap HERE ONLY. With the
+# production sub-quota (8 of 17) a mutation routing these rows into the upload lane can
+# consume at most 8 slots, so the sentinel below always ships and the assertion cannot
+# fail — it would pin nothing. At 17 the lane can actually be saturated, which is the
+# pressure this fixture exists to survive.
+run_shipper "$J_2XX" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=1 ZOT_LOG_SHIPPER_CAP_UPLOAD_EVIDENCE_PER_INTERVAL=17
+# Pinned against the ORDINARY cap (1), not merely "fewer than offered": with the upload
+# sub-quota in place, deleting the 5xx arm still caps forged rows at 8, which satisfies any
+# `< 17` assertion. The property is that a 2xx is NOT exempt at all.
+assert "T20 a 2xx on /blobs/uploads/ is NOT exempt (it takes the ordinary cap, so exactly 1 ships)" \
+  "[[ \$(grep -c 'ok-' '$STUB_POSTS') -le 1 ]]"
+assert "T20 a panic still ships behind 17 successful upload rows" \
+  "grep -qF 'T20SENTINEL_2XX' '$STUB_POSTS'"
+
+# F9 / enumeration 2c — the ACTUAL starvation case: >=17 EXEMPT upload-failure pairings ahead of a
+# panic. T19's row 7 used NON-exempt 5xx, which land in the ordinary lane, so it proved the
+# predicate is narrow and never that the exempt lane survives a genuine flood. Reproduced RED
+# before the sub-quota; this pins it.
+J_SAT="$TMP/j_sat"; : > "$J_SAT"
+for i in $(seq 1 17); do
+  printf '%s\n' "{\"level\":\"info\",\"message\":\"HTTP API\",\"method\":\"PATCH\",\"path\":\"/v2/x/blobs/uploads/sat$i\",\"statusCode\":500,\"latency\":\"1m0s\",\"caller\":\"c\"}" >> "$J_SAT"
+done
+printf '%s\n' 'panic: runtime error: T20SENTINEL_SAT nil pointer dereference' >> "$J_SAT"
+run_shipper "$J_SAT" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=1
+assert "T20 a panic survives behind 17 EXEMPT upload-failure rows (crash sub-quota reserved)" \
+  "grep -qF 'T20SENTINEL_SAT' '$STUB_POSTS'"
+
+# F1 — the journald FRAGMENT forgery. zot runs --log-driver journald, so an oversized line arrives
+# as invalid-JSON fragments whose bytes are client-controlled (this file documents that ~260 lines
+# above is_cap_exempt). The old fallback classified those raw bytes, so a client could prefix a
+# fragment with an exempt-class literal and mint exempt rows at will.
+J_FRAG="$TMP/j_frag"; : > "$J_FRAG"
+for i in $(seq 1 25); do
+  printf '%s\n' "executing gc/AAAA-FRAGMARK$i\",\"statusCode\":200,\"path\":\"/v2/\"}" >> "$J_FRAG"
+done
+printf '%s\n' 'panic: runtime error: T20SENTINEL_FRAG' >> "$J_FRAG"
+run_shipper "$J_FRAG" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=1
+assert "T20 a forged journald fragment does NOT buy cap exemption" \
+  "[[ \$(grep -c 'FRAGMARK' '$STUB_POSTS') -lt 17 ]]"
+assert "T20 a genuine plaintext panic still ships behind forged fragments" \
+  "grep -qF 'T20SENTINEL_FRAG' '$STUB_POSTS'"
+
+# S6 — the sentinel was asserted STRUCTURALLY (a grep for `then "-" else`) and never behaviorally:
+# no fixture anywhere had an empty message/statusCode/path, so dropping the `. == ""` half of the
+# sentinel passed 164/164 while the field-shift corruption the SUT comment describes went
+# unexercised.
+J_EMPTY="$TMP/j_empty"; : > "$J_EMPTY"
+for i in $(seq 1 40); do
+  printf '%s\n' "{\"level\":\"info\",\"message\":\"HTTP API\",\"path\":\"/v2/ordinary-$i\",\"statusCode\":200,\"caller\":\"c\"}" >> "$J_EMPTY"
+done
+printf '%s\n' '{"level":"info","message":"","method":"PATCH","path":"/v2/x/blobs/uploads/emptyMsg","statusCode":500,"latency":"1m0s","caller":"c"}' >> "$J_EMPTY"
+run_shipper "$J_EMPTY" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=5
+assert "T20 an EMPTY message field does not shift the record (upload pairing still exempt)" \
+  "grep -qF 'emptyMsg' '$STUB_POSTS'"
+
+# F7 — the path arm must be ANCHORED on the registry API shape. $2 is verbatim client input, so an
+# unanchored `*/blobs/uploads/*` lets any 5xx on a crafted path mint an exempt row. Every other
+# fixture here uses a well-formed /v2/... path, which matches BOTH the anchored and unanchored
+# forms — so this row is the only one that can see the difference.
+J_ANCH="$TMP/j_anch"; : > "$J_ANCH"
+for i in $(seq 1 17); do
+  printf '%s\n' "{\"level\":\"info\",\"message\":\"HTTP API\",\"method\":\"POST\",\"path\":\"/attacker/x/blobs/uploads/forged-$i\",\"statusCode\":500,\"caller\":\"c\"}" >> "$J_ANCH"
+done
+printf '%s\n' 'panic: runtime error: T20SENTINEL_ANCH' >> "$J_ANCH"
+# CAP_UPLOAD_EVIDENCE_PER_INTERVAL is raised to the full exempt cap HERE ONLY. With the
+# production sub-quota (8 of 17) a mutation routing these rows into the upload lane can
+# consume at most 8 slots, so the sentinel below always ships and the assertion cannot
+# fail — it would pin nothing. At 17 the lane can actually be saturated, which is the
+# pressure this fixture exists to survive.
+run_shipper "$J_ANCH" ZOT_LOG_SHIPPER_CAP_PER_INTERVAL=1 ZOT_LOG_SHIPPER_CAP_UPLOAD_EVIDENCE_PER_INTERVAL=17
+assert "T20 a 5xx on a NON-/v2/ path is NOT exempt (path arm is anchored, not a substring)" \
+  "[[ \$(grep -c 'forged-' '$STUB_POSTS') -le 1 ]]"
+assert "T20 a panic still ships behind forged non-/v2/ upload paths" \
+  "grep -qF 'T20SENTINEL_ANCH' '$STUB_POSTS'"
+
+# The boot config dump must survive sanitize() far enough to carry ReadTimeout. MEASURED against
+# the pinned digest: the real line is 2273 chars with ReadTimeout at offset 1363, so the 800-char
+# default severed the one field the #7556 probe reads — Signal 1 could never match, decode or not.
+J_CFG="$TMP/j_cfg"; : > "$J_CFG"
+CFG_PAD=$(python3 -c "print('x'*1300)")
+printf '%s\n' "{\"level\":\"info\",\"message\":\"configuration settings PAD${CFG_PAD} ReadTimeout:1800000000000 WriteTimeout:1800000000000\",\"caller\":\"c\"}" >> "$J_CFG"
+run_shipper "$J_CFG"
+assert "T20 the boot config dump ships far enough to carry ReadTimeout (offset ~1363 > MAXLEN 800)" \
+  "grep -qF 'ReadTimeout:1800000000000' '$STUB_POSTS'"
+# And an ordinary row must NOT inherit the longer budget.
+J_ORD="$TMP/j_ord"; : > "$J_ORD"
+printf '%s\n' "{\"level\":\"info\",\"message\":\"HTTP API PAD${CFG_PAD} TAILMARKER\",\"path\":\"/v2/\",\"caller\":\"c\"}" >> "$J_ORD"
+run_shipper "$J_ORD"
+assert "T20 an ordinary row is still truncated at MAXLEN (the longer budget is class-scoped)" \
+  "! grep -qF 'TAILMARKER' '$STUB_POSTS'"
