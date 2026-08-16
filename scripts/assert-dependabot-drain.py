@@ -62,8 +62,17 @@ def ver(s):
     return nums + (is_release,)
 
 
+def read_packages(path):
+    # Context-managed rather than `json.load(open(path))`: the bare form leaves four
+    # lockfile handles open until the interpreter's refcount happens to drop them, which
+    # is CPython-specific behaviour rather than a guarantee. Flagged by github-code-quality
+    # on this PR.
+    with open(path) as fh:
+        return json.load(fh)["packages"]
+
+
 def main():
-    packages = {name: json.load(open(path))["packages"] for name, path in LOCKS.items()}
+    packages = {name: read_packages(path) for name, path in LOCKS.items()}
     failures = []
     checked = 0
     resolved = 0
