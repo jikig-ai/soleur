@@ -254,6 +254,245 @@ describe("terraform -target parity — current state is covered", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Guard 1 (#7539): the bridge-less stage may not target an SSH-provisioned
+// resource.
+//
+// The `apply` job runs TWO terraform stages separated by a CREDENTIAL boundary.
+// Stage 1 ("Terraform plan (allow-list, non-SSH resources only)" → "Terraform
+// apply" of the saved tfplan) runs BEFORE `./.github/actions/cf-tunnel-ssh-bridge`
+// exports TF_VAR_ci_ssh_private_key. Stage 2 ("Terraform apply (SSH-provisioned
+// resources, over the bridge)") runs after it and owns every SSH-provisioned
+// resource. server.tf resolves `agent = var.ci_ssh_private_key == null`, so an
+// SSH-provisioned resource targeted in stage 1 bakes `agent = true` and dies:
+// `SSH agent requested but SSH_AUTH_SOCK not-specified`. It fails DIRECTLY (its
+// own provisioner) and can also drag a dependency in via `-target` transitivity,
+// which is a REQUEST and not a bound.
+//
+// The property is a BRIGHT LINE over `terraform_data` rather than over the SSH
+// predicate. Measured: 17 of 18 `terraform_data` resources in the infra root are
+// SSH-provisioned, and NOTHING else in the root carries a `provisioner` block at
+// all — so the line is strictly stronger here, needs no dependency graph, and
+// cannot be narrowed by a resource silently dropping out of
+// collectSshProvisioned(). A future genuinely-local terraform_data on the push
+// path costs one PUSH_PATH_TERRAFORM_DATA_ALLOWLIST entry with a stated reason.
+//
+// PARSER ASSUMPTIONS (this extractor fails OPEN, like its siblings above):
+//   • The end anchor is the bridge step's `uses:` VALUE, never a step title — a
+//     legitimate rename must not hard-fail the guard
+//     (cq-cite-content-anchor-not-line-number).
+//   • Targets match on COMMENT-STRIPPED text and only on flag-shaped lines
+//     (`^\s*-target=`). Both are load-bearing: the range contains prose mentions
+//     of `-target=` (an ALLOW-LIST MAINTENANCE comment and a `::warning::`
+//     string) that a naive substring match counts. H1 pins this.
+//   • An unresolvable range is a FAILURE, never an empty pass (M4).
+//
+// See ADR-154 (§ bridge-less stage amendment).
+
+/** Deliberately empty: no local `terraform_data` legitimately sits on the push
+ *  path today. An addition here needs a one-line reason, like EXCLUSION_ALLOWLIST. */
+const PUSH_PATH_TERRAFORM_DATA_ALLOWLIST = new Set<string>([]);
+
+/**
+ * The `apply` job's text PRECEDING the CF Tunnel SSH bridge step — i.e. every
+ * step that runs without TF_VAR_ci_ssh_private_key. Returns null when the
+ * anchors do not resolve; callers MUST treat null as a failure, never as empty.
+ */
+function bridgelessStage(workflowText: string): string | null {
+  const job = extractJobBlock(workflowText, "apply");
+  if (!job.trim()) return null;
+  const lines = job.split("\n");
+  const bridge = lines.findIndex((l) =>
+    /^\s*uses:\s*\.\/\.github\/actions\/cf-tunnel-ssh-bridge\s*$/.test(l),
+  );
+  if (bridge <= 0) return null;
+  return lines.slice(0, bridge).join("\n");
+}
+
+/** `-target=terraform_data.<name>` on flag-shaped, comment-stripped lines only. */
+function terraformDataTargets(text: string): string[] {
+  const out: string[] = [];
+  for (const raw of text.split("\n")) {
+    const m = stripLineComment(raw).match(
+      /^\s*-target=terraform_data\.([A-Za-z0-9_]+)/,
+    );
+    if (m) out.push(m[1]);
+  }
+  return out;
+}
+
+/** Every flag-shaped `-target=` in a range, any type — the dispatch floor. */
+function countTargets(text: string): number {
+  let n = 0;
+  for (const raw of text.split("\n")) {
+    if (/^\s*-target=/.test(stripLineComment(raw))) n++;
+  }
+  return n;
+}
+
+/** Offenders = terraform_data targeted before the bridge, minus the allowlist. */
+function bridgelessOffenders(workflowText: string): string[] {
+  const range = bridgelessStage(workflowText);
+  if (range === null) throw new Error("bridge-less range did not resolve");
+  return terraformDataTargets(range).filter(
+    (n) => !PUSH_PATH_TERRAFORM_DATA_ALLOWLIST.has(n),
+  );
+}
+
+describe("bridge-less stage may not target an SSH-provisioned resource (#7539)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+
+  test("the bridge-less range resolves from its content anchor", () => {
+    expect(bridgelessStage(wf)).not.toBeNull();
+  });
+
+  test("dispatch floor: the range actually holds targets (a guard that scans nothing must FAIL)", () => {
+    expect(countTargets(bridgelessStage(wf)!)).toBeGreaterThan(50);
+  });
+
+  test("no terraform_data is targeted before the CF Tunnel SSH bridge", () => {
+    expect(bridgelessOffenders(wf)).toEqual([]);
+  });
+});
+
+// Mutation + harness battery. Each M-row asserts the guard reports RED for a
+// mutated fixture; each H-row asserts it PASSES a legitimate non-canonical one.
+// These run in CI forever rather than being hand-applied once at authoring time.
+describe("Guard 1 mutation battery (#7539)", () => {
+  const BRIDGE = "        uses: ./.github/actions/cf-tunnel-ssh-bridge";
+
+  /** Minimal synthetic workflow with the same two-stage shape as the real one. */
+  function synth(opts: {
+    preBridge?: string[];
+    postBridge?: string[];
+    bridgeLine?: string;
+  }): string {
+    return [
+      "jobs:",
+      "  preflight:",
+      "    runs-on: ubuntu-latest",
+      "  apply:",
+      "    runs-on: ubuntu-latest",
+      "    steps:",
+      "      - name: Terraform plan (allow-list, non-SSH resources only)",
+      "        run: |",
+      "          terraform plan \\",
+      ...(opts.preBridge ?? []).map((t) => `            ${t}`),
+      "      - name: CF Tunnel SSH bridge (gated)",
+      opts.bridgeLine ?? BRIDGE,
+      "      - name: Terraform apply (SSH-provisioned resources, over the bridge)",
+      "        run: |",
+      "          terraform apply \\",
+      ...(opts.postBridge ?? []).map((t) => `            ${t}`),
+      "  inngest_host:",
+      "    runs-on: ubuntu-latest",
+    ].join("\n");
+  }
+
+  /** A compliant baseline: SSH addresses only after the bridge. */
+  const COMPLIANT = synth({
+    preBridge: [
+      "-target=doppler_secret.alpha \\",
+      "-target=betteruptime_heartbeat.beta \\",
+      "-target=cloudflare_ruleset.gamma \\",
+    ],
+    postBridge: [
+      "-target=terraform_data.journald_persistent \\",
+      "-target=terraform_data.fail2ban_tuning \\",
+    ],
+  });
+
+  test("control: the compliant baseline is GREEN (a red baseline voids every row)", () => {
+    expect(bridgelessOffenders(COMPLIANT)).toEqual([]);
+  });
+
+  test("M1: the #7539 regression itself — the misplaced address before the bridge", () => {
+    const mutant = synth({
+      preBridge: [
+        "-target=doppler_secret.alpha \\",
+        "-target=terraform_data.inngest_consumer_probe_install \\",
+      ],
+      postBridge: ["-target=terraform_data.journald_persistent \\"],
+    });
+    expect(bridgelessOffenders(mutant)).toEqual([
+      "inngest_consumer_probe_install",
+    ]);
+  });
+
+  test("M2: a SECOND offender after a compliant first (catches a check that stops at hit one)", () => {
+    const mutant = synth({
+      preBridge: [
+        "-target=doppler_secret.alpha \\",
+        "-target=terraform_data.inngest_consumer_probe_install \\",
+        "-target=terraform_data.fail2ban_tuning \\",
+      ],
+    });
+    expect(bridgelessOffenders(mutant)).toEqual([
+      "inngest_consumer_probe_install",
+      "fail2ban_tuning",
+    ]);
+  });
+
+  test("M3: an address in the bridge-less APPLY step, not the plan step (the range hole)", () => {
+    // A plan-step-only scope stays green here; the stage-wide range does not.
+    const mutant = [
+      "jobs:",
+      "  apply:",
+      "    steps:",
+      "      - name: Terraform plan (allow-list, non-SSH resources only)",
+      "        run: terraform plan -target=doppler_secret.alpha",
+      "      - name: Terraform apply",
+      "        run: |",
+      "          terraform apply \\",
+      "            -target=terraform_data.cosign_trusted_root \\",
+      "      - name: CF Tunnel SSH bridge (gated)",
+      BRIDGE,
+      "  inngest_host:",
+      "    runs-on: ubuntu-latest",
+    ].join("\n");
+    expect(bridgelessOffenders(mutant)).toEqual(["cosign_trusted_root"]);
+  });
+
+  test("M4: an unresolvable end anchor FAILS — it never passes vacuously on zero targets", () => {
+    const mutant = synth({
+      preBridge: ["-target=terraform_data.journald_persistent \\"],
+      bridgeLine: "        uses: ./.github/actions/some-other-action",
+    });
+    expect(bridgelessStage(mutant)).toBeNull();
+    expect(() => bridgelessOffenders(mutant)).toThrow(
+      /bridge-less range did not resolve/,
+    );
+  });
+
+  test("H1: comment-stripping and flag-shape matching are live, not incidental", () => {
+    // Both lines mention `-target=terraform_data.` but neither is a real flag:
+    // one is a YAML comment, one is inside a `::warning::` message string. The
+    // real workflow contains both shapes, so a naive matcher reds a clean tree.
+    const mutant = synth({
+      preBridge: [
+        "-target=doppler_secret.alpha \\",
+        "# -target=terraform_data.journald_persistent (documented, not applied)",
+        'echo "::warning::a -target=terraform_data.fail2ban_tuning run skipped"',
+      ],
+    });
+    expect(bridgelessOffenders(mutant)).toEqual([]);
+  });
+
+  test("H2: a legitimate non-canonical workflow PASSES (the guard is not diffing the real file)", () => {
+    const mutant = synth({
+      preBridge: [
+        "-target=github_actions_secret.zeta \\",
+        "-target=random_id.eta \\",
+      ],
+      postBridge: [
+        "-target=terraform_data.synthetic_probe_install \\",
+        "-target=terraform_data.synthetic_monitor_install \\",
+      ],
+    });
+    expect(bridgelessOffenders(mutant)).toEqual([]);
+  });
+});
+
 describe("comment-strip is load-bearing (SpecFlow 2c non-vacuity)", () => {
   test("server.tf's `connection{type=\"ssh\"}` comment is stripped before matching", () => {
     const raw = readFileSync(resolve(INFRA_DIR, "server.tf"), "utf8");
