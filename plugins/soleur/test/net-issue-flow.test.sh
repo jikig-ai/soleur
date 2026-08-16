@@ -27,6 +27,16 @@ fails=0
 # only printed, so there was no count to floor against and a deleted case was
 # indistinguishable from a case that never existed.
 passes=0
+# `cases` is the INDEPENDENT counter, incremented at every assertion CALL SITE and
+# never inside pass()/fail(). That placement is the whole substance of the
+# conservation check at the bottom of this file: a counter that moves inside the
+# verdict helpers moves WITH the verdict, so stubbing fail() to a no-op drops the
+# row and its count together and the identity still holds. `passes` alone cannot
+# serve — it DEFLATES when verdicts are discarded, so a floor reading it reports
+# "too few assertions" and names the wrong fault.
+#
+# Never increment inside `$( )` — a subshell discards it.
+cases=0
 pass() { printf '  ok   %s\n' "$1"; passes=$((passes + 1)); }
 fail() { printf '  FAIL %s\n' "$1"; fails=$((fails + 1)); }
 
@@ -210,8 +220,10 @@ ISSUE_LIST_FILE="$WORK/issues3"; export ISSUE_LIST_FILE
 printf 'Some PR that closes nothing and files three.\n' > "$PR_BODY_FILE"
 mk_issues 3 > "$ISSUE_LIST_FILE"
 run_gate
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 1 ]]; then pass "net=+3 without override BLOCKS (exit 1)"
 else fail "net=+3 without override should exit 1, got $CASE_RC"; fi
+cases=$((cases + 1))
 if grep -qE 'Net:[[:space:]]*\+3' "$WORK/out"; then pass "net=+3 reports Net: +3"
 else fail "expected 'Net: +3' in output; got: $(tr '\n' '|' < "$WORK/out")"; fi
 
@@ -225,8 +237,10 @@ PR_BODY_FILE="$WORK/body2"; export PR_BODY_FILE
   printf -- '- #7001 blocked on upstream schema change\n'
 } > "$PR_BODY_FILE"
 run_gate
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 0 ]]; then pass "net=+3 WITH override PASSES (exit 0)"
 else fail "net=+3 with override should exit 0, got $CASE_RC"; fi
+cases=$((cases + 1))
 if grep -qE 'override' "$WORK/out"; then pass "override path is announced in output"
 else fail "expected override to be announced"; fi
 
@@ -238,6 +252,7 @@ ISSUE_LIST_FILE="$WORK/issues1"; export ISSUE_LIST_FILE
 printf 'Closes #6769\n' > "$PR_BODY_FILE"
 mk_issues 1 > "$ISSUE_LIST_FILE"
 run_gate
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 0 ]]; then pass "net=0 passes (exit 0)"
 else fail "net=0 should exit 0, got $CASE_RC"; fi
 
@@ -250,6 +265,7 @@ PR_BODY_FILE="$WORK/body4"; export PR_BODY_FILE
 printf 'No closures here.\n' > "$PR_BODY_FILE"
 mk_issues 1 > "$ISSUE_LIST_FILE"
 run_gate
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 1 ]]; then pass "net=+1 BLOCKS (threshold is >0, not >+1)"
 else fail "net=+1 should exit 1, got $CASE_RC"; fi
 
@@ -261,8 +277,10 @@ ISSUE_LIST_FILE="$WORK/issues0"; export ISSUE_LIST_FILE
 printf 'Closes #100 and fixes #200.\n' > "$PR_BODY_FILE"
 mk_issues 0 > "$ISSUE_LIST_FILE"
 run_gate
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 0 ]]; then pass "net=-2 passes (exit 0)"
 else fail "net=-2 should exit 0, got $CASE_RC"; fi
+cases=$((cases + 1))
 if grep -qE 'Closing:[[:space:]]*2' "$WORK/out"; then pass "dedup+multi-keyword closing count = 2"
 else fail "expected 'Closing: 2'; got: $(tr '\n' '|' < "$WORK/out")"; fi
 
@@ -278,6 +296,7 @@ run_gate_env() {
   CASE_RC=$?
 }
 run_gate_env
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 0 ]]; then pass "SOLEUR_SKIP_NET_ISSUE_FLOW_GATE=1 passes"
 else fail "env skip should exit 0, got $CASE_RC"; fi
 
@@ -292,8 +311,10 @@ run_gate_fail() {
   CASE_RC=$?
 }
 run_gate_fail
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 0 ]]; then pass "gh failure fails OPEN (exit 0)"
 else fail "gh failure should fail open with exit 0, got $CASE_RC"; fi
+cases=$((cases + 1))
 if grep -qiE 'transient|fail-open|could not' "$WORK/out"; then pass "fail-open is announced, not silent"
 else fail "fail-open must announce; got: $(tr '\n' '|' < "$WORK/out")"; fi
 
@@ -306,14 +327,19 @@ ISSUE_LIST_FILE="$WORK/issues0"; export ISSUE_LIST_FILE
 printf 'Closes #1\n' > "$PR_BODY_FILE"
 run_gate
 issue_call="$(grep -F 'issue list' "$GH_CALLS" || true)"
+cases=$((cases + 1))
 if [[ -n "$issue_call" ]]; then pass "issue list was invoked"
 else fail "issue list was never invoked"; fi
+cases=$((cases + 1))
 if [[ "$issue_call" == *"--limit 500"* ]]; then pass "FILED query passes --limit 500 (default 30 undercounts)"
 else fail "FILED query must pass --limit 500; got: $issue_call"; fi
+cases=$((cases + 1))
 if [[ "$issue_call" != *"--search"* ]]; then pass "FILED query does NOT use --search (empty under App token)"
 else fail "FILED query must not use --search; got: $issue_call"; fi
+cases=$((cases + 1))
 if [[ "$issue_call" == *"--state all"* ]]; then pass "FILED query uses --state all"
 else fail "FILED query must use --state all; got: $issue_call"; fi
+cases=$((cases + 1))
 if [[ "$issue_call" != *"deferred-scope-out"* ]]; then pass "FILED query is not label-filtered (label covers ~8%)"
 else fail "FILED query must not filter by deferred-scope-out; got: $issue_call"; fi
 
@@ -328,6 +354,7 @@ cat > "$ISSUE_LIST_FILE" <<'PRE'
 [{"number":6000,"body":"Pre-existing context for #999.","createdAt":"2026-07-01T09:00:00Z"}]
 PRE
 run_gate
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 0 ]]; then pass "issue created BEFORE the PR is excluded (net=0)"
 else fail "pre-PR issue must not count; got exit $CASE_RC / $(tr '\n' '|' < "$WORK/out")"; fi
 
@@ -341,6 +368,7 @@ cat > "$ISSUE_LIST_FILE" <<'SUB'
 [{"number":6100,"body":"Unrelated work on #9990 only.","createdAt":"2026-07-20T12:00:00Z"}]
 SUB
 run_gate
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 0 ]]; then pass "#9990 does not substring-match #999 (net=0)"
 else fail "numeric boundary broken: #9990 matched #999; exit $CASE_RC"; fi
 
@@ -361,6 +389,7 @@ mk_issues 3 > "$ISSUE_LIST_FILE"
   printf 'Still working on it.\n'
 } > "$PR_BODY_FILE"
 run_gate
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 1 ]]; then pass "marker inside a fenced block does NOT override"
 else fail "fenced-block marker self-overrode; exit $CASE_RC"; fi
 
@@ -373,6 +402,7 @@ PR_BODY_FILE="$WORK/body12"; export PR_BODY_FILE
   printf -- '- #7001 genuinely deferred\n'
 } > "$PR_BODY_FILE"
 run_gate
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 0 ]]; then pass "marker outside a fence still overrides"
 else fail "real override was swallowed by the fence strip; exit $CASE_RC"; fi
 
@@ -382,6 +412,7 @@ else fail "real override was swallowed by the fence strip; exit $CASE_RC"; fi
 # warn -- a 'transient' row increments nothing, so the operator cannot tell
 # "never fired" from "fail-opened every time".
 # ---------------------------------------------------------------------------
+cases=$((cases + 1))
 if grep -qE '_emit[[:space:]]+warn' "$GATE" && ! grep -qE '_emit[[:space:]]+transient' "$GATE"; then
   pass "fail-open emits a counted event_type (warn, not transient)"
 else
@@ -391,11 +422,13 @@ fi
 # Case 14: the emitted rule_id must be exempt in the aggregator, or the first
 # real event hard-fails the metrics run (exit 5) via the orphan gate.
 AGG="$REPO_ROOT/scripts/rule-metrics-aggregate.sh"
+cases=$((cases + 1))
 if [[ -r "$AGG" ]] && grep -qF 'startswith("net-issue-flow")' "$AGG"; then
   pass "net-issue-flow rule_id is exempted in rule-metrics-aggregate.sh"
 else
   fail "net-issue-flow rule_id would be an orphan -> aggregator exit 5"
 fi
+cases=$((cases + 1))
 if [[ -r "$AGG" ]] && grep -qF 'startswith("cost-of-filing-")' "$AGG"; then
   pass "cost-of-filing-* rule_ids are exempted in rule-metrics-aggregate.sh"
 else
@@ -445,6 +478,7 @@ PRB_OK="$WORK/prb-ok"
 PR_BODY_FILE="$PRB_OK"; export PR_BODY_FILE
 set_issues "$(mk_issue 7001 "$(claim_body "$MANDATED")" OPEN)"
 run_gate
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 0 ]]; then pass "validly-mandated filing is EXEMPT (exit 0)"
 else fail "mandated filing should be exempt; exit $CASE_RC / $(tr '\n' '|' < "$WORK/out")"; fi
 
@@ -452,12 +486,16 @@ else fail "mandated filing should be exempt; exit $CASE_RC / $(tr '\n' '|' < "$W
 # shown on its own line naming the rule. An exemption that silently reduces
 # `Filing:` is worse than the blanket override, because the override at least
 # leaves a marker in the PR body.
+cases=$((cases + 1))
 if grep -qE '^  Filing:[[:space:]]+1\b' "$WORK/out"; then pass "Filing: keeps its true count (1), not reduced by the exemption"
 else fail "Filing: must remain 1; got: $(tr '\n' '|' < "$WORK/out")"; fi
+cases=$((cases + 1))
 if grep -qE "^  Exempt:[[:space:]]+1\b.*#7001.*$MANDATED" "$WORK/out"; then pass "Exempt: line names the issue AND the mandating rule"
 else fail "Exempt: line must name #7001 and $MANDATED; got: $(tr '\n' '|' < "$WORK/out")"; fi
+cases=$((cases + 1))
 if grep -qE '^  Net:[[:space:]]+\+0\b' "$WORK/out"; then pass "Net: +0 after exemption (1 filed, 1 exempt, 0 closing)"
 else fail "expected 'Net: +0'; got: $(tr '\n' '|' < "$WORK/out")"; fi
+cases=$((cases + 1))
 if grep -qE "^  Mandating rules:[[:space:]]+3[[:space:]]+\(.*$MANDATED.*merge-base abc1234" "$WORK/out" \
    && ! grep -qE 'Mandating rules:.*(indented-subbullet|prose-line|ungated-prefix)' "$WORK/out"; then
   pass "report prints the derived ids AND the merge-base (not just a count)"
@@ -473,6 +511,7 @@ PRB_FIXONLY="$WORK/prb-fixonly"; printf 'Deferred.\n\nTracks #7003\n' > "$PRB_FI
 PR_BODY_FILE="$PRB_FIXONLY"; export PR_BODY_FILE
 set_issues "$(mk_issue 7003 "$(printf 'From #999.\n\nMandated-By: wg-fixture-only-mandating-rule\n')" OPEN)"
 run_gate
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 0 ]]; then pass "corpus is read from the MERGE-BASE, not the worktree"
 else fail "merge-base-only rule id was not honoured => gate is reading some other corpus; exit $CASE_RC"; fi
 PR_BODY_FILE="$PRB_OK"; export PR_BODY_FILE
@@ -483,6 +522,7 @@ run_gate
 # anchor fails closed on a CORRECT claim, silently and permanently.
 set_issues "$(mk_issue 7001 "$(printf 'Follow-up from #999.\r\n\r\nMandated-By: %s\r\n' "$MANDATED")" OPEN)"
 run_gate
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 0 ]]; then pass "CRLF-bodied claim is exempt (\\r tolerated)"
 else fail "CRLF body broke the claim match; exit $CASE_RC"; fi
 
@@ -492,6 +532,7 @@ else fail "CRLF body broke the claim match; exit $CASE_RC"; fi
 neg() { # $1=label  $2=issue-json  [$3=pr-body-file]
   local label="$1" issue="$2" prb="${3:-$PRB_OK}"
   PR_BODY_FILE="$prb"; export PR_BODY_FILE
+  cases=$((cases + 1))
   set_issues "$issue"
   run_gate
   if [[ "$CASE_RC" -eq 1 ]]; then pass "NOT exempt: $label"
@@ -540,6 +581,7 @@ PRB_UNBAL="$WORK/prb-unbal"; printf 'Deferred.\n\nTracks #7004\n' > "$PRB_UNBAL"
 PR_BODY_FILE="$PRB_UNBAL"; export PR_BODY_FILE
 set_issues "$(mk_issue 7004 "$(printf 'From #999.\n\nMandated-By: %s\n\n```\nunclosed fence\n' "$MANDATED")" OPEN)"
 run_gate
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 1 ]]; then pass "unbalanced fence in the ISSUE body fails CLOSED"
 else fail "unbalanced fence must fail closed; got exit $CASE_RC"; fi
 
@@ -548,6 +590,7 @@ PRB_UNBAL2="$WORK/prb-unbal2"; printf 'Tracks #7005\n\n```\nunclosed\n' > "$PRB_
 PR_BODY_FILE="$PRB_UNBAL2"; export PR_BODY_FILE
 set_issues "$(mk_issue 7005 "$(claim_body "$MANDATED")" OPEN)"
 run_gate
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 1 ]]; then pass "unbalanced fence in the PR body fails CLOSED"
 else fail "unbalanced PR-body fence must fail closed; got exit $CASE_RC"; fi
 
@@ -563,12 +606,15 @@ set_issues "$(mk_issue 7001 "$(claim_body "$MANDATED")" OPEN)"
 MB_FAIL=1; export MB_FAIL
 run_gate
 MB_FAIL=0; export MB_FAIL
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 1 ]]; then pass "unresolvable merge-base => NOT exempt (fails CLOSED)"
 else fail "merge-base failure must fail closed; got exit $CASE_RC"; fi
+cases=$((cases + 1))
 if grep -qE '^show :AGENTS\.rules\.md$' "$GIT_CALLS"; then
   fail "gate read the STAGED INDEX via a bare ':path' -- author-controlled self-grant"
 else pass "gate never issues a bare ':path' git show (index is not read)"
 fi
+cases=$((cases + 1))
 if grep -qiE 'mandating rules: 0|corpus' "$WORK/out"; then pass "corpus-read failure is announced in the report"
 else fail "corpus read failure must be visible; got: $(tr '\n' '|' < "$WORK/out")"; fi
 
@@ -577,6 +623,7 @@ else fail "corpus read failure must be visible; got: $(tr '\n' '|' < "$WORK/out"
 # the gate undebuggable exactly when an agent is blocked and guessing.
 set_issues "$(mk_issue 7002 "$(claim_body wg-defer-only-after-inline-triage)" OPEN)"
 run_gate
+cases=$((cases + 1))
 if grep -qE '^  Rejected:.*#7002.*wg-defer-only-after-inline-triage' "$WORK/out"; then
   pass "Rejected: line names the issue and the offending claim"
 else fail "expected a Rejected: line naming #7002; got: $(tr '\n' '|' < "$WORK/out")"; fi
@@ -592,10 +639,12 @@ PRB_SHAPE="$WORK/prb-shape"; printf 'Deferred.\n\nTracks #7010\nTracks #7011\n' 
 PR_BODY_FILE="$PRB_SHAPE"; export PR_BODY_FILE
 set_issues "$(mk_issue 7010 "$(claim_body wg-indented-subbullet-must-not-derive)" OPEN)"
 run_gate
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 1 ]]; then pass "INDENTED sub-bullet carrying the marker is NOT derived"
 else fail "indented sub-bullet self-granted the exemption; exit $CASE_RC"; fi
 set_issues "$(mk_issue 7011 "$(claim_body wg-prose-line-must-not-derive)" OPEN)"
 run_gate
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 1 ]]; then pass "PROSE line carrying the marker is NOT derived"
 else fail "prose line self-granted the exemption; exit $CASE_RC"; fi
 
@@ -607,6 +656,7 @@ PRB_SECT="$WORK/prb-sect"; printf 'Deferred.\n\nTracks #7012\n' > "$PRB_SECT"
 PR_BODY_FILE="$PRB_SECT"; export PR_BODY_FILE
 set_issues "$(mk_issue 7012 "$(claim_body wg-ungated-section-must-not-derive)" OPEN)"
 run_gate
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 1 ]]; then pass "body line under an UNGATED section is NOT derived"
 else fail "ungated-section rule self-granted the exemption; exit $CASE_RC"; fi
 
@@ -623,8 +673,10 @@ PR_BODY_FILE="$PRB_MULTI"; export PR_BODY_FILE
 } | jq -s '.' > "$WORK/issues-multi"
 ISSUE_LIST_FILE="$WORK/issues-multi"; export ISSUE_LIST_FILE
 run_gate
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 1 ]]; then pass "1 exempt of 4 filed still BLOCKS (exemption subtracts, not zeroes)"
 else fail "4 filed / 1 exempt must block; got exit $CASE_RC"; fi
+cases=$((cases + 1))
 if grep -qE '^  Filing:[[:space:]]+4\b' "$WORK/out" \
    && grep -qE '^  Exempt:[[:space:]]+1\b' "$WORK/out" \
    && grep -qE '^  Net:[[:space:]]+\+3\b' "$WORK/out"; then
@@ -640,6 +692,7 @@ PR_BODY_FILE="$PRB_TWO"; export PR_BODY_FILE
 } | jq -s '.' > "$WORK/issues-two"
 ISSUE_LIST_FILE="$WORK/issues-two"; export ISSUE_LIST_FILE
 run_gate
+cases=$((cases + 1))
 if grep -qE '^  Exempt:[[:space:]]+2\b.*#7001.*#7005' "$WORK/out"; then
   pass "two exemptions render as a joined pair list"
 else fail "expected both #7001 and #7005 on the Exempt: line; got: $(tr '\n' '|' < "$WORK/out")"; fi
@@ -653,8 +706,10 @@ printf 'Quoting an issue body for context:\n\n```\nCloses #4242\n```\n\nNothing 
 PR_BODY_FILE="$PRB_FENCED_CLOSE"; export PR_BODY_FILE
 set_issues "$(mk_issue 7001 "Follow-up from #999." OPEN)"
 run_gate
+cases=$((cases + 1))
 if grep -qE '^  Closing:[[:space:]]+0\b' "$WORK/out"; then pass "fenced 'Closes #N' does NOT count toward CLOSING"
 else fail "fenced close-keyword inflated CLOSING; got: $(tr '\n' '|' < "$WORK/out")"; fi
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 1 ]]; then pass "fenced close-keyword still BLOCKS (no free NET credit)"
 else fail "fenced 'Closes' bought a pass; exit $CASE_RC"; fi
 
@@ -673,6 +728,7 @@ distinct=0
 grep -qE '^  Rejected:.*#7001 \(no Mandated-By' "$WORK/out" && distinct=$((distinct + 1))
 grep -qE '#7002 \(multiple Mandated-By' "$WORK/out" && distinct=$((distinct + 1))
 grep -qE '#7003 \(issue is not OPEN' "$WORK/out" && distinct=$((distinct + 1))
+cases=$((cases + 1))
 if [[ "$distinct" -eq 3 ]]; then pass "three rejection causes render DISTINCTLY (not one collapsed string)"
 else fail "expected 3 distinct causes, matched $distinct; got: $(tr '\n' '|' < "$WORK/out")"; fi
 
@@ -689,6 +745,7 @@ if [[ -r "$INC" ]]; then
   attr="$(jq -sr --arg r "net-issue-flow-mandated-filing--$MANDATED" \
     '[.[] | select(.rule_id == $r and .event_type == "bypass")] | length' < "$INC" 2>/dev/null || echo 0)"
 fi
+cases=$((cases + 1))
 if [[ "$attr" -ge 1 ]]; then pass "exempt emits per-rule attribution in the STRUCTURED rule_id"
 else fail "expected a bypass row under net-issue-flow-mandated-filing--<rule>; got $attr"; fi
 
@@ -701,6 +758,7 @@ attr_neg=0
 if [[ -r "$INC" ]]; then
   attr_neg="$(jq -sr '[.[] | select(.rule_id | startswith("net-issue-flow-mandated-filing--"))] | length' < "$INC" 2>/dev/null || echo 0)"
 fi
+cases=$((cases + 1))
 if [[ "$attr_neg" -eq 0 ]]; then pass "a rejected claim emits NO attribution row (the row is discriminating)"
 else fail "non-exempt run emitted $attr_neg attribution row(s)"; fi
 
@@ -713,6 +771,7 @@ unreadable=0
 if [[ -r "$INC" ]]; then
   unreadable="$(jq -sr '[.[] | select(.rule_id == "net-issue-flow-mandated-filing-corpus-unreadable")] | length' < "$INC" 2>/dev/null || echo 0)"
 fi
+cases=$((cases + 1))
 if [[ "$unreadable" -ge 1 ]]; then pass "corpus-unreadable emits its own rule_id"
 else fail "expected a corpus-unreadable row; got $unreadable"; fi
 
@@ -726,8 +785,10 @@ zero=0
 if [[ -r "$INC" ]]; then
   zero="$(jq -sr '[.[] | select(.rule_id == "net-issue-flow-mandated-filing-zero-tagged")] | length' < "$INC" 2>/dev/null || echo 0)"
 fi
+cases=$((cases + 1))
 if [[ "$zero" -ge 1 ]]; then pass "read-OK-but-zero-tagged emits a DISTINCT rule_id from unreadable"
 else fail "expected a zero-tagged row; got $zero"; fi
+cases=$((cases + 1))
 if grep -qiE 'zero rules tagged' "$WORK/out"; then pass "zero-tagged corpus is announced in the report"
 else fail "zero-tagged must be visible; got: $(tr '\n' '|' < "$WORK/out")"; fi
 CORPUS_FILE="$WORK/corpus-default"; export CORPUS_FILE
@@ -741,6 +802,7 @@ for pair in "net-issue-flow-mandated-filing--:$GATE" \
             "net-issue-flow-timeout:$REPO_ROOT/.claude/hooks/ship-net-issue-flow-gate.sh" \
             "net-issue-flow-timeout:$AGG"; do
   lit="${pair%%:*}"; f="${pair#*:}"
+  cases=$((cases + 1))
   if grep -qF -- "$lit" "$f"; then pass "parity: '$lit' present in ${f##*/}"
   else fail "parity broken: '$lit' missing from ${f##*/} — readout would go silently empty"; fi
 done
@@ -752,6 +814,7 @@ PR_BODY_FILE="$WORK/prb-override"; export PR_BODY_FILE
 { printf 'Architectural pivot.\n'; printf '<!-- gate-override: net-issue-flow -->\n'; } > "$PR_BODY_FILE"
 set_issues "$(mk_issue 7001 "$(claim_body wg-does-not-exist-anywhere)" OPEN)"
 run_gate
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 0 ]]; then pass "blanket override still passes an unexemptable filing"
 else fail "blanket override must remain functional; got exit $CASE_RC"; fi
 
@@ -777,6 +840,7 @@ else fail "blanket override must remain functional; got exit $CASE_RC"; fi
 # with the gate today and diverge silently tomorrow.
 derived="$(python3 "$REPO_ROOT/scripts/lint-rule-bodies.py" --emit-mandating-ids \
   < "$REPO_ROOT/AGENTS.rules.md" | sort -u | tr '\n' ' ')"
+cases=$((cases + 1))
 if [[ "$derived" == "wg-block-pr-ready-on-undeferred-operator-steps " ]]; then
   pass "worktree corpus derives exactly the 1 intended id"
 else fail "worktree corpus derived: '$derived'"; fi
@@ -789,36 +853,68 @@ else fail "worktree corpus derived: '$derived'"; fi
 PR_BODY_FILE="$PRB_NONE"; export PR_BODY_FILE
 set_issues "$(mk_issue 7001 "$(claim_body "$MANDATED")" OPEN)"
 run_gate
+cases=$((cases + 1))
 if [[ "$CASE_RC" -eq 1 ]]; then pass "remedy fixture actually blocks (positive control)"
 else fail "remedy fixture must block to print the remedy; got exit $CASE_RC"; fi
+cases=$((cases + 1))
 if grep -qE '^  \(d\) Mandated filing' "$WORK/out"; then pass "BLOCKED output offers the (d) mandated-filing exit"
 else fail "blocked output must offer (d); got: $(tr '\n' '|' < "$WORK/out")"; fi
+cases=$((cases + 1))
 if grep -qE '^        Mandated-By: <rule-id>' "$WORK/out"; then pass "BLOCKED output shows the literal claim form"
 else fail "blocked output must show 'Mandated-By: <rule-id>'"; fi
+cases=$((cases + 1))
 if grep -qE '^      Rules that currently qualify:' "$WORK/out" \
    && grep -qE "^        $MANDATED\$" "$WORK/out"; then
   pass "BLOCKED output enumerates the qualifying rules (no guessing required)"
 else fail "blocked output must list the qualifying ids; got: $(tr '\n' '|' < "$WORK/out")"; fi
+cases=$((cases + 1))
 if grep -qE 'NOT in that list.*unavailable|unavailable to you' "$WORK/out"; then
   pass "BLOCKED output names the untagged-rule dead end"
 else fail "blocked output must tell an untagged-rule agent that (d) is unavailable"; fi
+cases=$((cases + 1))
 if ! grep -qi 'architectural-pivot deferral' "$WORK/out"; then
   pass "BLOCKED output no longer frames the override as architectural-pivot-only"
 else fail "blocked output still calls the override an 'architectural-pivot deferral'"; fi
+cases=$((cases + 1))
 if ! grep -qi 'architectural-pivot deferral' "$GATE"; then
   pass "gate source carries no 'architectural-pivot deferral' framing"
 else fail "gate still calls the override an 'architectural-pivot deferral'"; fi
 
 HOOK_GATE="$REPO_ROOT/.claude/hooks/ship-net-issue-flow-gate.sh"
+cases=$((cases + 1))
 if ! grep -qi 'architectural-pivot deferral' "$HOOK_GATE"; then
   pass "hook remedy text no longer frames the override as architectural-pivot-only"
 else fail "hook still calls the override an 'architectural-pivot deferral'"; fi
 for needle in "Fix inline" "Close something" "Override" "gate-override: net-issue-flow"; do
+  cases=$((cases + 1))
   if grep -qF -- "$needle" "$HOOK_GATE"; then pass "hook remedy needle survives FR8: $needle"
   else fail "FR8 removed a needle the hook suite pins: $needle"; fi
 done
 
 printf '\n'
+
+# ---------------------------------------------------------------------------
+# ACCOUNTING CONSERVATION. Deliberately placed BEFORE the floor: this is the arm
+# that catches a NEUTERED verdict helper, and the floor cannot. `cases` keeps its
+# full value when fail() is a no-op, so the floor stays green while the verdicts
+# it was floored on have silently evaporated. Every counted case records exactly
+# one verdict, so passes+fails MUST equal cases.
+#
+# Reported with `printf >&2` + `exit 1` DIRECTLY, never through fail(): fail()
+# increments the counter the exit status reads, so a check enforced through the
+# suspect cannot witness the suspect.
+# ---------------------------------------------------------------------------
+if [[ $((passes + fails)) -ne "$cases" ]]; then
+  printf '\n[FATAL] accounting: passes+fails (%d) != cases (%d).\n' \
+    "$((passes + fails))" "$cases" >&2
+  if [[ $((passes + fails)) -lt "$cases" ]]; then
+    printf '  An assertion was counted but its verdict was not recorded — that is what a neutered pass()/fail() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `cases=$((cases + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  printf 'net-issue-flow.test.sh: %d FAILED (%d passed, %d cases)\n' "$fails" "$passes" "$cases"
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # ANTI-VACUITY FLOOR. Set AT the running count, never below it: a floor with
@@ -829,15 +925,26 @@ printf '\n'
 # Motivating vacuity: before this run the suite had no pass COUNTER at all, so
 # deleting a case changed nothing observable. Baseline before the exemption
 # work was 23.
+#
+# It reads `cases`, NOT `passes`. `passes` deflates whenever a verdict is
+# discarded, so a floor on it fires with "too few assertions" on a run whose real
+# fault is a neutered fail() -- naming the wrong fault. `cases` moves only with
+# the call sites, which is exactly what a floor is about.
+#
+# Reported directly (`printf >&2` + `exit 1`) for the same reason as the
+# conservation check above: routing it through fail() puts the floor inside the
+# thing it is meant to police.
 # ---------------------------------------------------------------------------
 MIN_ASSERTIONS=84
-if [[ "$passes" -lt "$MIN_ASSERTIONS" ]]; then
-  printf '  FAIL anti-vacuity floor: %d assertions ran, expected >= %d\n' "$passes" "$MIN_ASSERTIONS"
-  fails=$((fails + 1))
+if [[ "$cases" -lt "$MIN_ASSERTIONS" ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
+    "$cases" "$MIN_ASSERTIONS" >&2
+  printf 'net-issue-flow.test.sh: %d FAILED (%d passed, %d cases)\n' "$fails" "$passes" "$cases"
+  exit 1
 fi
 
 if [[ "$fails" -eq 0 ]]; then
-  printf 'net-issue-flow.test.sh: ALL PASS (%d assertions)\n' "$passes"
+  printf 'net-issue-flow.test.sh: ALL PASS (%d assertions)\n' "$cases"
   exit 0
 fi
 printf 'net-issue-flow.test.sh: %d FAILED (%d passed)\n' "$fails" "$passes"

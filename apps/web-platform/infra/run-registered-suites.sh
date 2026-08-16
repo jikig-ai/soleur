@@ -35,8 +35,12 @@
 # TOOLING DEPENDENCY, recorded here because this is the auto-glob site (#7068).
 # TWO registered suites need a real docker daemon:
 #   - cloud-init-plugin-seed.test.sh    builds a small busybox fixture image (~2-4s in CI)
-#   - git-data-runcmd-rehearsal.test.sh three `docker run --rm` invocations (~48-61s in CI,
-#                                       the most expensive step in deploy-script-tests)
+#   - git-data-runcmd-rehearsal.test.sh 8 `docker run --rm` invocations from 6 source sites
+#                                       (~48-61s in CI, the most expensive step in
+#                                       deploy-script-tests). Was "three" — the same
+#                                       hand-maintained quantity that had drifted to "four"
+#                                       in the rehearsal itself; corrected together in #7565
+#                                       so the two files cannot disagree again.
 #
 # Both self-skip with exit 0 when docker is missing or unreachable. The skip is NOT visible
 # through this runner: the executor below captures each suite's output to a per-run log dir and
