@@ -163,7 +163,7 @@ emit_and_exit() {
 #   SILENT    — the guard went dark (absence), proven against a control marker + 24h lookback
 #   TRANSIENT — probe fault / fresh host / no usable boot_id
 evaluate_nic() {
-  local main main_rc control control_rc look look_rc sib sib_rc trusted newest scoped control_verdict
+  local main main_rc look look_rc sib sib_rc trusted newest scoped control_verdict
   local conv rc nets store up nic max_rb any_false
 
   main="$("$BQ" --since "$WINDOW" --grep SOLEUR_PRIVATE_NIC --limit 5000 2>/dev/null)"; main_rc=$?
@@ -403,7 +403,14 @@ fi
 evaluate_nic
 
 # --- Recent-window main query ------------------------------------------------------------
-MAIN="$("$BQ" --since "$WINDOW" --grep SOLEUR_ZOT_DISK --limit 5000 2>/dev/null)"; main_rc=$?
+MAIN_RAW="$("$BQ" --since "$WINDOW" --grep SOLEUR_ZOT_DISK --limit 5000 2>/dev/null)"; main_rc=$?
+# ENVELOPE-ANCHOR BEFORE THE EMPTINESS DECISION (#7569 F15). `--grep` is an unanchored
+# `raw LIKE '%SOLEUR_ZOT_DISK%'`, so a row that merely QUOTES the marker satisfies it. Deciding
+# `-z "$MAIN"` on the raw result made one such row skip the entire block below — the block
+# holding BOTH the PRODUCER_SILENT branch and the new INGEST_DARK branch — which is a
+# suppression primitive available to anyone who can land one line on this shared source. The
+# NIC leg has anchored since the live 2026-07-15 incident; this leg had not.
+MAIN="$(printf '%s\n' "$MAIN_RAW" | zot_envelope_anchor)"
 
 if [[ "$main_rc" -ne 0 ]]; then
   # The probe itself failed (auth/network/creds-unset) — a probe fault is TRANSIENT, never a page.

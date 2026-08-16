@@ -273,6 +273,28 @@ reset_fix
 export ZOT_FIX_MAIN="" ZOT_FIX_CONTROL=""   # both empty; control_rc 0 → the query ANSWERED
 assert_case "S9 empty window + control answered empty → ingest dark" 4 INGEST_DARK
 
+# --- Scenario 9d (F15): a CONTAMINATED row must not suppress the dark verdict --------------
+# The plan's F15. `--grep SOLEUR_ZOT_DISK` is an unanchored `raw LIKE '%SOLEUR_ZOT_DISK%'`, so a
+# row that merely QUOTES the marker — the measured 2026-07-15 GitHub-webhook shape, which is why
+# the NIC leg already anchors — satisfies it. Before the envelope anchor, one such row made
+# $MAIN non-empty and skipped the whole block holding the PRODUCER_SILENT and INGEST_DARK
+# branches: a suppression primitive available to anyone who can land one line on this shared
+# source. Reproduced before fixing: this case returned TRANSIENT(2) instead of INGEST_DARK(4).
+reset_fix
+printf '{"dt":"2026-07-10 09:59:00","raw":"{\\"PRIORITY\\":\\"6\\",\\"CONTAINER_NAME\\":\\"soleur-web-platform\\",\\"message\\":\\"webhook body quoting SOLEUR_ZOT_DISK verbatim\\"}"}\n' > "$TMP/s9d.json"
+export ZOT_FIX_MAIN="$TMP/s9d.json"   # non-empty RAW, but zero ANCHORED producer rows
+export ZOT_FIX_CONTROL=""             # warehouse answered with nothing
+assert_case "S9d contaminated non-producer row cannot mask ingest darkness" 4 INGEST_DARK
+
+# The inverse must-PASS: a GENUINE producer row still passes the anchor and reaches the normal
+# evaluation path. Without this, S9d is satisfiable by an anchor that rejects everything.
+reset_fix
+{ zline "2026-07-10 10:00:00" "$BOOT_NEW" 5 0 0 false none
+  zline "2026-07-10 10:05:00" "$BOOT_NEW" 5 0 0 false none
+  zline "2026-07-10 10:10:00" "$BOOT_NEW" 5 0 0 false none; } > "$TMP/s9e.json"
+export ZOT_FIX_MAIN="$TMP/s9e.json"
+assert_case "S9e genuine producer rows still pass the envelope anchor" 0 GREEN
+
 # --- Scenario 9c: the discriminator's other side — control read FAILS → TRANSIENT(2) ------
 # The must-PASS twin of S9. Without it, S9 is satisfiable by an implementation that calls
 # every empty control INGEST_DARK, which would page the operator on every probe fault.

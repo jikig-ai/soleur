@@ -61,10 +61,7 @@ STUB="$TMP/bq-stub.sh"
 cat > "$STUB" <<'STUB_EOF'
 #!/usr/bin/env bash
 argv="$*"
-if [[ "$argv" == *"--max-dt"* ]]; then
-  [[ -n "${FIX_MAXDT:-}" && -f "${FIX_MAXDT:-}" ]] && cat "$FIX_MAXDT"
-  exit "${FIX_MAXDT_RC:-0}"
-elif [[ "$argv" == *"--limit"* ]]; then
+if [[ "$argv" == *"--limit"* ]]; then
   [[ -n "${FIX_CONTROL:-}" && -f "${FIX_CONTROL:-}" ]] && cat "$FIX_CONTROL"
   exit "${FIX_CONTROL_RC:-0}"
 fi
@@ -119,43 +116,48 @@ FIX_CONTROL="$EMPTY" FIX_CONTROL_RC=22 \
   assert_classify "control rc=22 (malformed SQL)" "TRANSPORT_FAIL"
 
 # R6 — HTTP 200 carrying a mid-stream ClickHouse exception. curl reports success; the body is
-# not an answer. Must never be read as darkness (T14).
+# not an answer. Must never be read as darkness (T14). The exception arrives as a BARE line
+# outside the JSONEachRow stream, which is what makes it detectable by shape.
 ROW_EXC="$(mkfix exc '{"dt":"2026-08-14 19:06:58","raw":"{}"}' 'Code: 241. DB::Exception: Memory limit exceeded')"
 FIX_CONTROL="$ROW_EXC" FIX_CONTROL_RC=0 \
-  assert_classify "rc=0 body carries DB::Exception" "TRANSPORT_FAIL"
+  assert_classify "rc=0 body carries a bare DB::Exception line" "TRANSPORT_FAIL"
 
-echo "--- F14: the positive control must pin PRODUCER identity, not just host ---"
+# R6b — THE MUST-PASS TWIN, and the one that matters. Without it R6 is satisfiable by a content
+# grep, which is what shipped and was wrong: `raw` is arbitrary application log text, so a
+# healthy row whose message merely CONTAINS "exception" was classifying TRANSPORT_FAIL and
+# suppressing the PRODUCER_SILENT / NIC SILENT legs to a non-alarming verdict.
+ROW_APP_EXC="$(mkfix appexc '{"dt":"2026-08-14 19:06:58","raw":"{\"message\":\"TypeError: unhandled exception in handler\"}"}')"
+FIX_CONTROL="$ROW_APP_EXC" FIX_CONTROL_RC=0 \
+  assert_classify "a healthy row whose TEXT contains 'exception' is LIVE, not a probe fault" "LIVE"
 
-# The marker appears as literal text inside a web-container row an unauthenticated party can
-# influence (resolve-origin writes attacker-chosen text into this shared source). Before this
-# fix the predicate was an unanchored `raw LIKE '%SOLEUR_PROBE_CANARY%'`, so this row alone
-# unlocked the classifier's only healthy verdict.
-ROW_FORGED="$(mkfix forged '{"dt":"2026-08-14 19:06:58","raw":"{\"PRIORITY\":\"6\",\"CONTAINER_NAME\":\"soleur-web-platform\",\"message\":\"origin=https://x/SOLEUR_PROBE_CANARY\"}"}')"
-FIX_CONTROL="$ROW_FORGED" FIX_CONTROL_RC=0 \
-  assert_classify "forged marker in a web-container row does NOT satisfy the control" "INGEST_DARK"
+# The same trap for the other three words the content grep matched. `Code: <n>` is the one an
+# upstream-error log line hits constantly.
+ROW_APP_CODE="$(mkfix appcode '{"dt":"2026-08-14 19:06:58","raw":"{\"message\":\"upstream returned Code: 502\"}"}')"
+FIX_CONTROL="$ROW_APP_CODE" FIX_CONTROL_RC=0 \
+  assert_classify "a healthy row whose TEXT contains 'Code: 502' is LIVE" "LIVE"
 
-# The inverse must-PASS: a genuine producer row still satisfies it. Without this arm the fix
-# above is satisfiable by a matcher that rejects everything.
-FIX_CONTROL="$ROW_JOURNALD" FIX_CONTROL_RC=0 \
-  assert_classify "genuine journald producer row DOES satisfy the control" "LIVE"
+# An HTML error page or any non-JSONEachRow body is still not an answer.
+ROW_HTML="$(mkfix html '<html><body>502 Bad Gateway</body></html>')"
+FIX_CONTROL="$ROW_HTML" FIX_CONTROL_RC=0 \
+  assert_classify "a non-JSONEachRow body (HTML error page) is not an answer" "TRANSPORT_FAIL"
 
-echo "--- any-row anchor: warehouse liveness, the account-wide-refusal instrument ---"
+echo "--- warehouse liveness: the account-wide-refusal instrument ---"
 # The alarm's control is a bare `--limit 1` with no grep. It answers "is the warehouse taking
 # ANYTHING", which is the correct question for an account-wide 402 and the wrong one to
 # producer-anchor: a live warehouse carrying only other hosts' rows must read LIVE, not dark.
 ROW_UNRELATED="$(mkfix unrelated '{"dt":"2026-08-14 19:06:58","raw":"some unrelated app log row"}')"
 
-BS_CONTROL_ANCHOR=any-row FIX_CONTROL="$EMPTY" FIX_CONTROL_RC=0 \
+FIX_CONTROL="$EMPTY" FIX_CONTROL_RC=0 \
   assert_classify "any-row: zero rows of any kind" "INGEST_DARK"
-BS_CONTROL_ANCHOR=any-row FIX_CONTROL="$ROW_UNRELATED" FIX_CONTROL_RC=0 \
+FIX_CONTROL="$ROW_UNRELATED" FIX_CONTROL_RC=0 \
   assert_classify "any-row: an unrelated app row counts as warehouse liveness" "LIVE"
-BS_CONTROL_ANCHOR=any-row FIX_CONTROL="$EMPTY" FIX_CONTROL_RC=6 \
+FIX_CONTROL="$EMPTY" FIX_CONTROL_RC=6 \
   assert_classify "any-row: rc=6 is still a probe fault, never darkness" "TRANSPORT_FAIL"
 
 # Whitespace-only output is emptiness, not a row. Without this the `-n` test would read a
 # trailing newline from the query wrapper as evidence the channel is alive.
 WS="$(mkfix ws '   ')"
-BS_CONTROL_ANCHOR=any-row FIX_CONTROL="$WS" FIX_CONTROL_RC=0 \
+FIX_CONTROL="$WS" FIX_CONTROL_RC=0 \
   assert_classify "any-row: whitespace-only body is not a row" "INGEST_DARK"
 
 echo "--- Anti-vacuity floor ---"
