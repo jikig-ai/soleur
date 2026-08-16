@@ -395,7 +395,7 @@ fi
 # A floor whose mutant is not a runnable program (it reads state computed by surrounding
 # code) is NOT silently skipped: it is named here and capped by a hand-ratcheted maximum.
 # Ratcheting DOWN-only means new suites cannot quietly join the uncovered set.
-MAX_CONSTRUCTION_FAILURES=17
+MAX_CONSTRUCTION_FAILURES=15
 cases=$((cases + 1))
 if [[ "$n_construct" -le "$MAX_CONSTRUCTION_FAILURES" ]]; then
   pass "mutant-construction failures within the ratchet ($n_construct <= $MAX_CONSTRUCTION_FAILURES)"
@@ -407,7 +407,7 @@ fi
 # --- ARM 3: the firing population may only grow ------------------------------------------
 # Absolute and hand-ratcheted. Never derived from a variable this file computes: a floor
 # that descends with the thing it guards is not a floor.
-MIN_FIRING_SUITES=20
+MIN_FIRING_SUITES=36
 cases=$((cases + 1))
 if [[ "$n_fires" -ge "$MIN_FIRING_SUITES" ]]; then
   pass "firing-floor population at or above the ratchet ($n_fires >= $MIN_FIRING_SUITES)"
@@ -611,7 +611,7 @@ while IFS= read -r f; do
 done < "$COVERED"
 n_conserving=$(wc -l < "$CONSERVING")
 
-MIN_CONSERVING=7
+MIN_CONSERVING=18
 cases=$((cases + 1))
 if [[ "$n_conserving" -ge "$MIN_CONSERVING" ]]; then
   pass "suites carrying an accounting-conservation check: $n_conserving (>= $MIN_CONSERVING)"

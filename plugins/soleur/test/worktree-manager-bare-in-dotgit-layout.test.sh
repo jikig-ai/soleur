@@ -57,6 +57,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-helpers.sh"
 SCRIPT="$SCRIPT_DIR/../skills/git-worktree/scripts/worktree-manager.sh"
 
+# CASES counts assertions DISPATCHED, incremented at the CALL SITE and never
+# inside assert_eq() or any other verdict helper. That placement is the whole
+# substance of the accounting-conservation check at the bottom of this file: a
+# counter that moves inside the verdict helper moves WITH the verdict, so
+# stubbing that helper drops the row and its count together and
+# PASS+FAIL == CASES still holds under the exact fault it exists to catch.
+#
+# Never increment inside `$( )` — a subshell discards it. `$((` is arithmetic and
+# is fine; `$(` is command substitution and is not.
+CASES=0
+
 # `/tmp` is a machine-global 4 GiB tmpfs shared by every parallel worktree; a direct
 # invocation of this suite (the inner loop while editing the thing under test) would
 # otherwise inherit it and make verdicts a function of another session's disk usage.
@@ -163,12 +174,13 @@ C1_WT="$C1/.worktrees/feat-a"
 
 # Precondition: the fixture really is wedged (guards against a vacuous PASS).
 C1_PRE="$(git -C "$C1_WT" rev-parse --is-bare-repository 2>/dev/null || echo ERR)"
-assert_eq "true" "$C1_PRE" "fixture precondition: the poisoned worktree really does report bare"
+CASES=$((CASES + 1)); assert_eq "true" "$C1_PRE" "fixture precondition: the poisoned worktree really does report bare"
 
 set +e
 C1_OUT="$(run_sourced "$C1_WT" 'require_working_tree && echo RWT_OK' 2>&1)"
 C1_RC=$?
 set -e
+CASES=$((CASES + 1))
 if (( C1_RC == 0 )) && printf '%s' "$C1_OUT" | grep -qF 'RWT_OK'; then
   echo "  PASS: require_working_tree succeeds from inside the poisoned worktree"; PASS=$((PASS + 1))
 else
@@ -186,13 +198,14 @@ git config --file "$C2/.git/config" core.worktree "/stale/path"   # the row-3 le
 GIT_ROOT="$C2"
 set +e; C2_OUT="$(ensure_bare_config 2>&1)"; C2_RC=$?; set -e
 restore_root
-assert_eq "0" "$C2_RC" "ensure_bare_config returns 0 on the bare-in-.git layout"
-assert_eq "true" "$(git config --file "$C2/.git/config" --get core.bare 2>/dev/null || echo __ABSENT__)" \
+CASES=$((CASES + 1)); assert_eq "0" "$C2_RC" "ensure_bare_config returns 0 on the bare-in-.git layout"
+CASES=$((CASES + 1)); assert_eq "true" "$(git config --file "$C2/.git/config" --get core.bare 2>/dev/null || echo __ABSENT__)" \
   "shared core.bare RETAINED (reversed polarity — it is no longer unset)"
-assert_eq "__ABSENT__" "$(git config --file "$C2/.git/config" --get extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
+CASES=$((CASES + 1)); assert_eq "__ABSENT__" "$(git config --file "$C2/.git/config" --get extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
   "extensions.worktreeConfig ABSENT (never enabled; defensively removed)"
-assert_eq "__ABSENT__" "$(git config --file "$C2/.git/config" --get core.worktree 2>/dev/null || echo __ABSENT__)" \
+CASES=$((CASES + 1)); assert_eq "__ABSENT__" "$(git config --file "$C2/.git/config" --get core.worktree 2>/dev/null || echo __ABSENT__)" \
   "stale core.worktree removed (this step is retained from the old behaviour)"
+CASES=$((CASES + 1))
 if printf '%s' "$C2_OUT" | grep -qF 'SOLEUR_GIT_BARE_POISON' && printf '%s' "$C2_OUT" | grep -qF 'branch=healed'; then
   echo "  PASS: SOLEUR_GIT_BARE_POISON … branch=healed emitted (work was done)"; PASS=$((PASS + 1))
 else
@@ -209,13 +222,14 @@ add_worktree "$C3" "feat-b"
 GIT_ROOT="$C3"
 set +e; C3_OUT="$(ensure_bare_config 2>&1)"; C3_RC=$?; set -e
 restore_root
-assert_eq "0" "$C3_RC" "ensure_bare_config returns 0 on the poisoned bare-in-.git layout"
-assert_eq "__ABSENT__" "$(git config --file "$C3/.git/config" --get extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
+CASES=$((CASES + 1)); assert_eq "0" "$C3_RC" "ensure_bare_config returns 0 on the poisoned bare-in-.git layout"
+CASES=$((CASES + 1)); assert_eq "__ABSENT__" "$(git config --file "$C3/.git/config" --get extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
   "the poisoning half of the pair is REMOVED"
-assert_eq "true" "$(git config --file "$C3/.git/config" --get core.bare 2>/dev/null || echo __ABSENT__)" \
+CASES=$((CASES + 1)); assert_eq "true" "$(git config --file "$C3/.git/config" --get core.bare 2>/dev/null || echo __ABSENT__)" \
   "core.bare RETAINED — the bare root must keep reporting bare (fact 7)"
 C3_WT_BARE="$(git -C "$C3/.worktrees/feat-b" rev-parse --is-bare-repository 2>/dev/null || echo ERR)"
-assert_eq "false" "$C3_WT_BARE" "the linked worktree no longer reports bare"
+CASES=$((CASES + 1)); assert_eq "false" "$C3_WT_BARE" "the linked worktree no longer reports bare"
+CASES=$((CASES + 1))
 if printf '%s' "$C3_OUT" | grep -qF 'branch=healed'; then
   echo "  PASS: branch=healed emitted for the poisoned fixture"; PASS=$((PASS + 1))
 else
@@ -232,11 +246,12 @@ git -C "$C4" worktree add -q "$TMP/c4/wt-a" -b "wt-a" main >/dev/null 2>&1
 GIT_ROOT="$C4"
 set +e; C4_OUT="$(ensure_bare_config 2>&1)"; C4_RC=$?; set -e
 restore_root
-assert_eq "0" "$C4_RC" "ensure_bare_config returns 0 on a genuine bare repo"
-assert_eq "__ABSENT__" "$(git config --file "$C4/config" --get extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
+CASES=$((CASES + 1)); assert_eq "0" "$C4_RC" "ensure_bare_config returns 0 on a genuine bare repo"
+CASES=$((CASES + 1)); assert_eq "__ABSENT__" "$(git config --file "$C4/config" --get extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
   "genuine-bare path also removes the extension (polarity is layout-independent)"
-assert_eq "false" "$(git -C "$TMP/c4/wt-a" rev-parse --is-bare-repository 2>/dev/null || echo ERR)" \
+CASES=$((CASES + 1)); assert_eq "false" "$(git -C "$TMP/c4/wt-a" rev-parse --is-bare-repository 2>/dev/null || echo ERR)" \
   "genuine-bare linked worktree no longer reports bare"
+CASES=$((CASES + 1))
 if printf '%s' "$C4_OUT" | grep -qF 'branch=healed'; then
   echo "  PASS: branch=healed emitted on the genuine-bare layout too"; PASS=$((PASS + 1))
 else
@@ -253,7 +268,8 @@ cp -p "$C5/.git/config" "$TMP/c5-config.before"
 GIT_ROOT="$C5"
 set +e; C5_OUT="$(ensure_bare_config 2>&1)"; C5_RC=$?; set -e
 restore_root
-assert_eq "0" "$C5_RC" "ensure_bare_config returns 0 on a normal clone"
+CASES=$((CASES + 1)); assert_eq "0" "$C5_RC" "ensure_bare_config returns 0 on a normal clone"
+CASES=$((CASES + 1))
 if cmp -s "$TMP/c5-config.before" "$C5/.git/config"; then
   echo "  PASS: .git/config is BYTE-IDENTICAL (no write of any kind)"; PASS=$((PASS + 1))
 else
@@ -263,6 +279,7 @@ else
 fi
 # The guard SKIPS before the normalization block, so no POISON marker may be emitted.
 # Without this, a future change that falls through on a non-bare clone would be silent.
+CASES=$((CASES + 1))
 if printf '%s' "$C5_OUT" | grep -qF 'branch=guard-skip'; then
   echo "  PASS: the skip is OBSERVABLE (branch=guard-skip), not silent"; PASS=$((PASS + 1))
 else
@@ -271,6 +288,7 @@ else
   printf '%s\n' "$C5_OUT" | sed 's/^/    /'; FAIL=$((FAIL + 1))
 fi
 # …and it must still be a SKIP: no healed/clean normalization marker on a non-bare clone.
+CASES=$((CASES + 1))
 if printf '%s' "$C5_OUT" | grep -qE 'branch=(healed|clean)'; then
   echo "  FAIL: ran the normalization on a NON-bare clone (guard fell through)"; FAIL=$((FAIL + 1))
 else
@@ -288,7 +306,8 @@ ln -s /dev/null "$C6/.git/config"      # char device by dereference == the live 
 GIT_ROOT="$C6"
 set +e; C6_OUT="$(ensure_bare_config 2>&1)"; C6_RC=$?; set -e
 restore_root
-assert_eq "0" "$C6_RC" "masked-config clone still returns 0 (graceful degrade, not a wedge)"
+CASES=$((CASES + 1)); assert_eq "0" "$C6_RC" "masked-config clone still returns 0 (graceful degrade, not a wedge)"
+CASES=$((CASES + 1))
 if printf '%s' "$C6_OUT" | grep -qF 'SOLEUR_GIT_CONFIG_MASK_SKIP' \
    && printf '%s' "$C6_OUT" | grep -qF 'branch=non-bare-skip'; then
   echo "  PASS: benign SOLEUR_GIT_CONFIG_MASK_SKIP … branch=non-bare-skip emitted"; PASS=$((PASS + 1))
@@ -297,11 +316,13 @@ else
   printf '%s\n' "$C6_OUT" | sed 's/^/    /'
   FAIL=$((FAIL + 1))
 fi
+CASES=$((CASES + 1))
 if printf '%s' "$C6_OUT" | grep -qE 'worktree wedge|soleur-tmp|mv:'; then
   echo "  FAIL: attempted a write against a masked config"; FAIL=$((FAIL + 1))
 else
   echo "  PASS: no write attempted against the masked config"; PASS=$((PASS + 1))
 fi
+CASES=$((CASES + 1))
 if [[ -L "$C6/.git/config" ]]; then
   echo "  PASS: the masked node itself was left untouched"; PASS=$((PASS + 1))
 else
@@ -322,7 +343,7 @@ for cfg in "$C2/.git/config" "$C3/.git/config" "$C4/config" "$C5/.git/config"; d
     C7_VIOLATIONS=$((C7_VIOLATIONS + 1))
   fi
 done
-assert_eq "0" "$C7_VIOLATIONS" "zero (extension-enabled + shared core.bare) states across all driven fixtures"
+CASES=$((CASES + 1)); assert_eq "0" "$C7_VIOLATIONS" "zero (extension-enabled + shared core.bare) states across all driven fixtures"
 
 # ---------------------------------------------------------------------------------
 echo "Case 8: already-poisoned worktree, ensure_bare_config NOT called — self-heal alone recovers"
@@ -338,6 +359,7 @@ set +e
 C8_OUT="$(run_sourced "$C8_WT" 'require_working_tree && echo RWT_OK' 2>&1)"
 C8_RC=$?
 set -e
+CASES=$((CASES + 1))
 if (( C8_RC == 0 )) && printf '%s' "$C8_OUT" | grep -qF 'RWT_OK'; then
   echo "  PASS: self-heal alone makes require_working_tree succeed"; PASS=$((PASS + 1))
 else
@@ -345,6 +367,7 @@ else
   printf '%s\n' "$C8_OUT" | sed 's/^/    /'
   FAIL=$((FAIL + 1))
 fi
+CASES=$((CASES + 1))
 if cmp -s "$TMP/c8-shared.before" "$C8/.git/config"; then
   echo "  PASS: SHARED config byte-unchanged (blast radius stays at 1 worktree)"; PASS=$((PASS + 1))
 else
@@ -362,6 +385,7 @@ new_bare_in_dotgit "$C9"
 # config.worktree at all. The plan originally claimed an EMPTY one; measured false.
 # Assert NON-EXISTENCE (`! -e`) — never "exists and is 0 bytes".
 add_worktree "$C9" "raw-baseline"
+CASES=$((CASES + 1))
 if [[ ! -e "$(admin_dir "$C9" raw-baseline)/config.worktree" ]]; then
   echo "  PASS: baseline — raw 'git worktree add' creates NO config.worktree"; PASS=$((PASS + 1))
 else
@@ -372,6 +396,7 @@ set +e
 C9_OUT="$(run_sourced "$C9" 'YES_FLAG=true; create_worktree "feat-seeded" "main" >/dev/null 2>&1; echo CREATE_RC=$?' 2>&1)"
 set -e
 C9_SEEDED="$(admin_dir "$C9" feat-seeded)/config.worktree"
+CASES=$((CASES + 1))
 if [[ -f "$C9_SEEDED" ]]; then
   echo "  PASS: create seeded a config.worktree for the new worktree"; PASS=$((PASS + 1))
 else
@@ -379,7 +404,7 @@ else
   printf '%s\n' "$C9_OUT" | sed 's/^/    /'
   FAIL=$((FAIL + 1))
 fi
-assert_eq "false" "$(git config --file "$C9_SEEDED" --get core.bare 2>/dev/null || echo __ABSENT__)" \
+CASES=$((CASES + 1)); assert_eq "false" "$(git config --file "$C9_SEEDED" --get core.bare 2>/dev/null || echo __ABSENT__)" \
   "seeded config.worktree pins core.bare=false"
 
 # ---------------------------------------------------------------------------------
@@ -387,7 +412,7 @@ echo "Case 10: after ensure_bare_config on a clean fixture, the ROOT still repor
 # Pins the retired end state: the issue's hand workaround (unset core.bare) makes the
 # bare ROOT report as a normal working tree, which is why the polarity was reversed
 # rather than the workaround being codified.
-assert_eq "true" "$(git -C "$C2" rev-parse --is-bare-repository 2>/dev/null || echo ERR)" \
+CASES=$((CASES + 1)); assert_eq "true" "$(git -C "$C2" rev-parse --is-bare-repository 2>/dev/null || echo ERR)" \
   "the bare ROOT still reports bare after normalization"
 
 # ---------------------------------------------------------------------------------
@@ -401,7 +426,8 @@ new_bare_in_dotgit "$C11"    # core.bare=true, extension ABSENT == already clean
 GIT_ROOT="$C11"
 set +e; C11_OUT="$(ensure_bare_config 2>&1)"; C11_RC=$?; set -e
 restore_root
-assert_eq "0" "$C11_RC" "already-clean bare-in-.git returns 0 (does NOT wedge on --unset-all)"
+CASES=$((CASES + 1)); assert_eq "0" "$C11_RC" "already-clean bare-in-.git returns 0 (does NOT wedge on --unset-all)"
+CASES=$((CASES + 1))
 if printf '%s' "$C11_OUT" | grep -qF 'SOLEUR_GIT_BARE_POISON' \
    && printf '%s' "$C11_OUT" | grep -qF 'branch=clean'; then
   echo "  PASS: SOLEUR_GIT_BARE_POISON … branch=clean emitted"; PASS=$((PASS + 1))
@@ -410,6 +436,7 @@ else
   printf '%s\n' "$C11_OUT" | sed 's/^/    /'
   FAIL=$((FAIL + 1))
 fi
+CASES=$((CASES + 1))
 if printf '%s' "$C11_OUT" | grep -qF 'worktree wedge:'; then
   echo "  FAIL: emitted a wedge give-up on an already-healthy repo"; FAIL=$((FAIL + 1))
 else
@@ -433,11 +460,13 @@ else
   C12_RC=$?
   set -e
   chmod u+w "$C12_ADMIN"
+  CASES=$((CASES + 1))
   if (( C12_RC != 0 )); then
     echo "  PASS: exits non-zero instead of proceeding into git commands that will fatal"; PASS=$((PASS + 1))
   else
     echo "  FAIL: returned success despite being unable to write the recovery config"; FAIL=$((FAIL + 1))
   fi
+  CASES=$((CASES + 1))
   if printf '%s' "$C12_OUT" | grep -qF 'SOLEUR_GIT_BARE_SELFHEAL' \
      && printf '%s' "$C12_OUT" | grep -qF 'branch=failed'; then
     echo "  PASS: SOLEUR_GIT_BARE_SELFHEAL … branch=failed emitted"; PASS=$((PASS + 1))
@@ -450,27 +479,32 @@ else
   # permission|ownership|read-only|disk match are both satisfied by git's own stderr
   # ("error: could not lock config file <abs path>: Permission denied"), which
   # run_sourced now surfaces — so deleting every guidance line below left this case green.
+  CASES=$((CASES + 1))
   if printf '%s' "$C12_OUT" | grep -qF 'Could not write:'; then
     echo "  PASS: message names the file it could not write (script literal)"; PASS=$((PASS + 1))
   else
     echo "  FAIL: the script's own 'Could not write:' line is absent"; FAIL=$((FAIL + 1))
   fi
+  CASES=$((CASES + 1))
   if printf '%s' "$C12_OUT" | grep -qF 'Likely causes:'; then
     echo "  PASS: message names likely causes (script literal)"; PASS=$((PASS + 1))
   else
     echo "  FAIL: the script's own 'Likely causes:' line is absent"; FAIL=$((FAIL + 1))
   fi
+  CASES=$((CASES + 1))
   if printf '%s' "$C12_OUT" | grep -qF 'Next step: run  ls -ld'; then
     echo "  PASS: message names one concrete next step (script literal)"; PASS=$((PASS + 1))
   else
     echo "  FAIL: the script's own 'Next step:' line is absent"; FAIL=$((FAIL + 1))
   fi
+  CASES=$((CASES + 1))
   if printf '%s' "$C12_OUT" | grep -qF "$C12_ADMIN"; then
     echo "  PASS: message names the ABSOLUTE path"; PASS=$((PASS + 1))
   else
     echo "  FAIL: message does not name the absolute unwritable path"; FAIL=$((FAIL + 1))
   fi
   # The message this replaces — do NOT fall back to it (the plan's Third defect).
+  CASES=$((CASES + 1))
   if printf '%s' "$C12_OUT" | grep -qF 'Run from an existing worktree'; then
     echo "  FAIL: fell back to the uninformative 'Run from an existing worktree' text"; FAIL=$((FAIL + 1))
   else
@@ -490,10 +524,11 @@ add_worktree "$C13" "feat-e"
 set +e
 C13_WTDIR="$(run_sourced "$C13/.worktrees/feat-e" 'echo "WTDIR=$WORKTREE_DIR"' 2>&1 | grep -oP '(?<=^WTDIR=).*' || true)"
 set -e
-assert_eq "$C13/.worktrees" "$C13_WTDIR" "WORKTREE_DIR resolves to <root>/.worktrees after the heal"
+CASES=$((CASES + 1)); assert_eq "$C13/.worktrees" "$C13_WTDIR" "WORKTREE_DIR resolves to <root>/.worktrees after the heal"
 set +e
 run_sourced "$C13/.worktrees/feat-e" 'YES_FLAG=true; create_worktree "feat-f" "main" >/dev/null 2>&1' >/dev/null 2>&1
 set -e
+CASES=$((CASES + 1))
 if [[ -d "$C13/.worktrees/feat-f" ]]; then
   echo "  PASS: a subsequent create lands under <root>/.worktrees"; PASS=$((PASS + 1))
 else
@@ -516,7 +551,8 @@ cp -p "$C14/.git/config" "$TMP/c14-config.before"
 GIT_ROOT="$C14"
 set +e; C14_OUT="$(ensure_bare_config 2>&1)"; C14_RC=$?; set -e
 restore_root
-assert_eq "0" "$C14_RC" "corrupted-non-bare clone returns 0 (no refusal, no wedge)"
+CASES=$((CASES + 1)); assert_eq "0" "$C14_RC" "corrupted-non-bare clone returns 0 (no refusal, no wedge)"
+CASES=$((CASES + 1))
 if cmp -s "$TMP/c14-config.before" "$C14/.git/config"; then
   echo "  PASS: .git/config byte-identical — the fall-through performs zero writes"; PASS=$((PASS + 1))
 else
@@ -524,10 +560,11 @@ else
   diff -u "$TMP/c14-config.before" "$C14/.git/config" | sed 's/^/    /' || true
   FAIL=$((FAIL + 1))
 fi
-assert_eq "__ABSENT__" "$(git config --file "$C14/.git/config" --get extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
+CASES=$((CASES + 1)); assert_eq "__ABSENT__" "$(git config --file "$C14/.git/config" --get extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
   "extension still absent (never enabled under the reversed polarity)"
 # [R-arch2] The intended behaviour on this fall-through, asserted rather than implied:
 # the run reaches the normalization block, finds nothing to do, and says so.
+CASES=$((CASES + 1))
 if printf '%s' "$C14_OUT" | grep -qF 'branch=clean'; then
   echo "  PASS: falls through and reports branch=clean (nothing to heal)"; PASS=$((PASS + 1))
 else
@@ -551,14 +588,14 @@ add_worktree "$C15" "feat-old"
 GIT_ROOT="$C15"
 set +e; C15_OUT="$(ensure_bare_config 2>&1)"; C15_RC=$?; set -e
 restore_root
-assert_eq "0" "$C15_RC" "retired-polarity repo returns 0"
-assert_eq "__ABSENT__" "$(git config --file "$C15/.git/config" --get extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
+CASES=$((CASES + 1)); assert_eq "0" "$C15_RC" "retired-polarity repo returns 0"
+CASES=$((CASES + 1)); assert_eq "__ABSENT__" "$(git config --file "$C15/.git/config" --get extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
   "the wedging extension is REMOVED (this repo was previously unreachable)"
-assert_eq "true" "$(git config --file "$C15/.git/config" --get core.bare 2>/dev/null || echo __ABSENT__)" \
+CASES=$((CASES + 1)); assert_eq "true" "$(git config --file "$C15/.git/config" --get core.bare 2>/dev/null || echo __ABSENT__)" \
   "shared core.bare RESTORED before the extension was dropped (root must stay bare)"
-assert_eq "true" "$(git -C "$C15" rev-parse --is-bare-repository 2>/dev/null || echo ERR)" \
+CASES=$((CASES + 1)); assert_eq "true" "$(git -C "$C15" rev-parse --is-bare-repository 2>/dev/null || echo ERR)" \
   "the bare ROOT still reports bare after migration"
-assert_eq "false" "$(git -C "$C15/.worktrees/feat-old" rev-parse --is-bare-repository 2>/dev/null || echo ERR)" \
+CASES=$((CASES + 1)); assert_eq "false" "$(git -C "$C15/.worktrees/feat-old" rev-parse --is-bare-repository 2>/dev/null || echo ERR)" \
   "the linked worktree is no longer bare"
 
 # ---------------------------------------------------------------------------------
@@ -573,8 +610,8 @@ git config --file "$C16/.git/config" --add extensions.worktreeConfig true
 GIT_ROOT="$C16"
 set +e; C16_OUT="$(ensure_bare_config 2>&1)"; C16_RC=$?; set -e
 restore_root
-assert_eq "0" "$C16_RC" "doubly-poisoned repo returns 0 (a plain --unset exits 5 here)"
-assert_eq "__ABSENT__" "$(git config --file "$C16/.git/config" --get-all extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
+CASES=$((CASES + 1)); assert_eq "0" "$C16_RC" "doubly-poisoned repo returns 0 (a plain --unset exits 5 here)"
+CASES=$((CASES + 1)); assert_eq "__ABSENT__" "$(git config --file "$C16/.git/config" --get-all extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
   "ALL values removed, not just the last"
 
 # ---------------------------------------------------------------------------------
@@ -589,8 +626,8 @@ git config --file "$C17/.git/config" extensions.worktreeConfig true
 GIT_ROOT="$C17"
 set +e; C17_OUT="$(ensure_bare_config 2>&1)"; C17_RC=$?; set -e
 restore_root
-assert_eq "0" "$C17_RC" "core.bare=1 repo returns 0"
-assert_eq "__ABSENT__" "$(git config --file "$C17/.git/config" --get extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
+CASES=$((CASES + 1)); assert_eq "0" "$C17_RC" "core.bare=1 repo returns 0"
+CASES=$((CASES + 1)); assert_eq "__ABSENT__" "$(git config --file "$C17/.git/config" --get extensions.worktreeConfig 2>/dev/null || echo __ABSENT__)" \
   "a truthy-but-not-'true' core.bare still reaches the normalization"
 
 # ---------------------------------------------------------------------------------
@@ -602,7 +639,7 @@ set +e
 run_sourced "$C18" 'YES_FLAG=true; create_for_feature "second" "main" >/dev/null 2>&1' >/dev/null 2>&1
 set -e
 C18_SEEDED="$(admin_dir "$C18" feat-second)/config.worktree"
-assert_eq "false" "$(git config --file "$C18_SEEDED" --get core.bare 2>/dev/null || echo __ABSENT__)" \
+CASES=$((CASES + 1)); assert_eq "false" "$(git config --file "$C18_SEEDED" --get core.bare 2>/dev/null || echo __ABSENT__)" \
   "create_for_feature also pins core.bare=false in the new worktree"
 
 # ---------------------------------------------------------------------------------
@@ -617,7 +654,7 @@ C19_VALUES="$( { grep -oE 'branch=[a-z-]+' "$C19_SCRIPT" | sed 's/^branch=//'
                  grep -oE '_branch="[a-z-]+"' "$C19_SCRIPT" | sed 's/^_branch="//; s/"$//'
                } | sort -u | tr '\n' ' ')"
 C19_EXPECTED="bare-disagree bare-fail clean failed guard-skip healed non-bare-skip ok seed-failed skipped target-masked-precheck "
-assert_eq "$C19_EXPECTED" "$C19_VALUES" \
+CASES=$((CASES + 1)); assert_eq "$C19_EXPECTED" "$C19_VALUES" \
   "the emitter's branch= vocabulary is exactly the documented set (a new value must be classified)"
 
 # ---------------------------------------------------------------------------------
@@ -637,12 +674,14 @@ cp -p "$C20/.git/config" "$TMP/c20-shared.before"
 set +e
 C20_OUT="$(run_sourced "$C20/.worktrees/feat-link" 'require_working_tree && echo RWT_OK' 2>&1)"
 set -e
+CASES=$((CASES + 1))
 if printf '%s' "$C20_OUT" | grep -qF 'reason=config-worktree-symlink'; then
   echo "  PASS: refused to write through the symlink (marker names the reason)"; PASS=$((PASS + 1))
 else
   echo "  FAIL: no symlink refusal — the write followed the link"
   printf '%s\n' "$C20_OUT" | sed 's/^/    /'; FAIL=$((FAIL + 1))
 fi
+CASES=$((CASES + 1))
 if cmp -s "$TMP/c20-shared.before" "$C20/.git/config"; then
   echo "  PASS: SHARED config byte-unchanged (blast radius held)"; PASS=$((PASS + 1))
 else
@@ -668,8 +707,8 @@ C21_OUT="$(run_sourced "$C21/.worktrees/feat-flag" 'echo "ISBARE=$IS_BARE GITROO
 set -e
 C21_ISBARE="$(printf '%s' "$C21_OUT" | grep -oP '(?<=^ISBARE=)[a-z]+' || true)"
 C21_ROOT="$(printf '%s' "$C21_OUT" | grep -oP '(?<=GITROOT=).*' || true)"
-assert_eq "true" "$C21_ISBARE" "IS_BARE stays true after a heal (never downgraded)"
-assert_eq "$C21" "$C21_ROOT" "GIT_ROOT resolves to the bare root, not the admin dir"
+CASES=$((CASES + 1)); assert_eq "true" "$C21_ISBARE" "IS_BARE stays true after a heal (never downgraded)"
+CASES=$((CASES + 1)); assert_eq "$C21" "$C21_ROOT" "GIT_ROOT resolves to the bare root, not the admin dir"
 
 # ---------------------------------------------------------------------------------
 echo "Case 22: STRUCTURAL — the self-heal never downgrades IS_BARE, and re-probes before ok"
@@ -681,10 +720,12 @@ echo "Case 22: STRUCTURAL — the self-heal never downgrades IS_BARE, and re-pro
 # downgrade is invisible. A source-shape assertion is the honest instrument here; it is
 # anchored on the assignment/call syntax so a comment mentioning either cannot satisfy it.
 C22_BODY="$(awk '/^_selfheal_bare_worktree_override\(\) \{/,/^\}/' "$SCRIPT")"
+CASES=$((CASES + 1))
 if [[ -z "$C22_BODY" ]]; then
   echo "  FAIL: could not extract _selfheal_bare_worktree_override — the anchor moved"; FAIL=$((FAIL + 1))
 else
   echo "  PASS: extracted the self-heal body ($(printf '%s\n' "$C22_BODY" | wc -l) lines)"; PASS=$((PASS + 1))
+  CASES=$((CASES + 1))
   if printf '%s\n' "$C22_BODY" | grep -qE '^[[:space:]]*IS_BARE=false'; then
     echo "  FAIL: the self-heal assigns IS_BARE=false — a degraded re-probe then leaves it"
     echo "        false with GIT_ROOT on a real working tree, and cleanup-merged's non-bare"
@@ -696,6 +737,7 @@ else
   # Anchor on the BARE `git rev-parse` form: the IS_BARE re-derivation below uses
   # `git -C "$common_dir" rev-parse …` and would otherwise satisfy this, which it did on
   # the first attempt — the mutation survived until the pattern excluded it.
+  CASES=$((CASES + 1))
   if printf '%s\n' "$C22_BODY" | grep -qE '\$\(git rev-parse --is-bare-repository[^)]*\)"[[:space:]]*==[[:space:]]*"true"[[:space:]]*\]\]; then'; then
     echo "  PASS: a post-write re-probe gates the success claim"; PASS=$((PASS + 1))
   else
@@ -709,13 +751,41 @@ fi
 # ANTI-VACUITY FLOOR. Deleting a whole case block left the suite reporting
 # "ALL TESTS PASSED" at a lower count with exit 0 — assertions are the thing being
 # counted, so the count itself needs a floor. Mirrors net-issue-flow.test.sh.
+#
+# Reported with `printf >&2` + `exit 1` DIRECTLY, never by bumping FAIL. FAIL is
+# exactly what the exit status reads, so a floor that reports itself through FAIL
+# is enforced THROUGH the machinery it exists to survive: neuter assert_eq() and
+# every row goes quiet AND so does the floor that exists to notice the quiet —
+# the suite prints a total and exits 0. A floor enforced through the suspect
+# cannot witness the suspect.
 MIN_ASSERTIONS=65
 _total=$((PASS + FAIL))
 if (( _total < MIN_ASSERTIONS )); then
-  echo "  FAIL: only $_total assertions ran; expected at least $MIN_ASSERTIONS (did a case block get dropped?)"
-  FAIL=$((FAIL + 1))
-else
-  echo "  PASS: assertion floor met ($_total >= $MIN_ASSERTIONS)"; PASS=$((PASS + 1))
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
+    "$_total" "$MIN_ASSERTIONS" >&2
+  printf '        (did a case block get dropped, or was a verdict helper neutered?)\n' >&2
+  echo "=== Results: $PASS passed, $FAIL failed ($CASES assertions dispatched) ==="
+  exit 1
+fi
+CASES=$((CASES + 1))
+echo "  PASS: assertion floor met ($_total >= $MIN_ASSERTIONS)"; PASS=$((PASS + 1))
+
+# ---------------------------------------------------------------------------------
+# ACCOUNTING CONSERVATION. The arm that catches what the floor cannot. The floor
+# above catches "no assertions RAN"; it cannot catch "assertions ran and their
+# verdicts were DISCARDED", because CASES keeps its full value when assert_eq() is
+# stubbed to a no-op. Every dispatched assertion records exactly one verdict, so
+# PASS+FAIL MUST equal CASES. Reported directly, for the same reason as the floor.
+if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
+  printf '\n[FATAL] accounting: PASS+FAIL (%d) != CASES (%d).\n' \
+    "$((PASS + FAIL))" "$CASES" >&2
+  if [[ $((PASS + FAIL)) -lt "$CASES" ]]; then
+    printf '  An assertion was dispatched but its verdict was not recorded — that is what a neutered assert helper looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `CASES=$((CASES + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  echo "=== Results: $PASS passed, $FAIL failed ($CASES assertions dispatched) ==="
+  exit 1
 fi
 
 echo ""
