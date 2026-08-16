@@ -347,7 +347,11 @@ fi
 #
 # Of the 43 deferred on 2026-08-16: 8 are measured NO_FIRE (the defect this PR fixes in the
 # covered scope), 33 are CONSTRUCTION (mutant not constructible — status unknown, not
-# known-bad), and 2 already FIRE unmodified.
+# known-bad), and 2 already FIRE unmodified. The 8 are named and tracked in issue #7580.
+#
+# WIDENING SCOPE NEEDS A PER-SCOPE RATCHET FIRST. MAX_CONSTRUCTION_FAILURES below is GLOBAL
+# and sits at exactly its current value with zero headroom; promoting the deferred
+# directories wholesale would push it from 17 to ~50 and ARM 2 would stop discriminating.
 MAX_DEFERRED=43
 cases=$((cases + 1))
 if [[ "$n_deferred" -le "$MAX_DEFERRED" ]]; then
