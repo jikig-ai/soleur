@@ -243,7 +243,7 @@ failing test first (`cq-write-failing-tests-before`).
 
 ### Phase 2 — GREEN: move the target, and correct every statement this edit falsifies
 
-Move `-target=terraform_data.inngest_consumer_probe_install` from `:578` into the `:931-944` list.
+Move `-target=terraform_data.inngest_consumer_probe_install` out of the bridge-less plan step and into the post-bridge apply list. Cited by content, not coordinate — the rebase shifted every line in this file.
 
 Correct, in the same commit, the statements this move or its predecessors falsify:
 
@@ -297,14 +297,35 @@ outside the apply.
 
 No SSH, no dashboard. See Acceptance Criteria.
 
+**Phase 4 ships DORMANT, and that is deliberate rather than unnoticed.**
+`terraform_data.journald_persistent`'s `triggers_replace` hashes `journald-soleur.conf` and
+`vector.toml`. This PR touches neither, and #7543's `vector-redeliver` dispatch already consumed the
+taint — so the resource plans as a no-op and **the hardened reload does not execute on this merge**.
+Left alone it would first run months later, on an unrelated PR that edits `vector.toml`, mid
+config-swap, unobserved.
+
+Operator decision (2026-08-17): **force one exercise post-merge.** After the merge apply is green,
+fire `apply_target=vector-redeliver` so the settle window, the known-good backup and the
+restore-and-report path all run once against the real host, under observation, on the arm whose
+whole purpose is that replace. Any acceptance criterion phrased as "verify the hardened reload
+worked" is unsatisfiable until that dispatch runs — it is listed separately below rather than folded
+into the merge ACs.
+
 ## Files to Edit
 
 - `.github/workflows/apply-web-platform-infra.yml` — move one `-target=`; correct `:815`, `:890`,
   `:911`, `:918`, `:440-444`; add the `notify-ops-email` skip arm and the summary line.
 - `apps/web-platform/infra/server.tf` — comment correction at `:743-748`, **and** the Phase 4
   hardening at `:1066-1086` (validation + restorable copy) with its stale comment rewritten.
-- `plugins/soleur/test/terraform-target-parity.test.ts` — scoped extractor, the placement assertion,
-  mutation fixtures, `MIN_SSH_PROVISIONED`, header `:9`.
+- `plugins/soleur/test/terraform-target-parity.test.ts` — job-walking extractor, the placement
+  assertion, mutation fixtures, `MIN_SSH_PROVISIONED`, header `:9`.
+- `knowledge-base/engineering/architecture/decisions/ADR-154-…md` — the amendment (Phase 6).
+- `knowledge-base/engineering/architecture/diagrams/model.c4` + `model.likec4.json` — the Resend
+  emitter count, which Phase 3 moved 12 → 13.
+- `plugins/soleur/test/c4-count-parity.test.sh` — its word→int map stopped at `twelve`.
+
+**Corrected 2026-08-17:** this list said three files while the PR touched seven. The C4 and ADR
+sections narrated those edits and the list was never reconciled — the same class the PR fixes.
 
 ## Files to Create
 
@@ -561,7 +582,7 @@ already exists and is unchanged.
 2. Apply the Phase 2 move → suite green.
 3. M1–M4 fixtures each drive the guard RED; H1–H2 each PASS.
 4. `MIN_SSH_PROVISIONED = 17`; removing one `connection` block from any of the 17 drives the floor RED.
-5. Post-merge AC9–AC11, all self-pulled.
+5. Post-merge AC11–AC14, all self-pulled.
 
 ## Risks & Mitigations
 
@@ -572,6 +593,6 @@ already exists and is unchanged.
 | **The Vector reload window is unguarded** | **Closed by Phase 4**, on the operator's decision to harden rather than defer. The provisioner previously overwrote the live `/etc/vector/vector.toml` with no backup, reloaded, then performed a detect-only liveness check — the render gate protects the *render*, not the *reload*, and this apply reloads onto a config that has **never executed** (Property 4). The resource's own comment names the stakes: "a dead vector on web-1 darkens ALL host observability." Phase 4 adds real validation before the live overwrite and a restorable copy across it. Note this makes `server.tf` a non-comment edit, relaxing the original AC6 |
 | Phase 4's validation false-fails and blocks a legitimate apply | The stated reason validation was omitted is the unset `${BETTERSTACK_LOGS_TOKEN}` interpolation; a dummy value retires exactly that. The mutation to prove it is real: feed a deliberately broken render and confirm the apply fails **with the previous config still live**, which is the property the change exists to buy |
 | A prior apply consumes the taint before this merge | Delivery still occurs (that apply replaces and provisions). Only the *attribution* criteria are affected, which is why the taint-based checks were demoted to context and acceptance rests on `state list` and the Better Stack identifier |
-| Green run that delivers nothing (`ssh_token_gate` skip) | AC11 detects it for this merge. No standing detector — recorded as a named gap and a scope decision |
-| Merge conflict with PR #7543 | #7543 adds a job near `:5472` and a comment near `server.tf:1082`; this edits `:578`, `:931-944`, `server.tf:743-748` and several comments. Non-adjacent. The operator accepted this risk |
+| Green run that delivers nothing (`ssh_token_gate` skip) | **Closed by Phase 3**, which ships a standing `notify-ops-email` arm plus a measured `ssh_skip_cause`. This row previously read "no standing detector — a named gap", which survived from the revision where Phase 3 was deferred |
+| Merge conflict with PR #7543 (**spent** — #7543 merged 12:51 and this branch rebased onto `f78468e53`; retained for the record) | #7543 adds a job near `:5472` and a comment near `server.tf:1082`; this edits `:578`, `:931-944`, `server.tf:743-748` and several comments. Non-adjacent. The operator accepted this risk |
 | The bridge reds at `:895` after stage 1 applied | The most likely new red — the ADR-154 §3 credential probe has been unexercised for 4 days. Recovery table above covers it |

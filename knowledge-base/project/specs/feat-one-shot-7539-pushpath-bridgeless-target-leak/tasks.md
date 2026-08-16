@@ -76,8 +76,9 @@ Phase order is load-bearing: the guard (1) must be RED before the move (2) makes
 
 - [ ] 5.1 Pre-merge AC1–AC10.
 - [ ] 5.2 `actionlint` clean on the workflow.
-- [ ] 5.3 Post-merge AC11: `inngest_consumer_probe_install` in `terraform state list` — the only
-      criterion no concurrent session can produce.
+- [ ] 5.3 Post-merge AC11: `inngest_consumer_probe_install` reaches `status != "tainted"`.
+      Presence alone is FALSE-PASSING — the 14:15 apply already created the object and left it
+      tainted, so `state list` reports it today with the defect fully live.
 - [ ] 5.4 Post-merge AC12/AC14: Better Stack rows for `SyslogIdentifier=inngest-consumer-probe`
       within ~4 min, via `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh`.
       Proves both hops and agent liveness in one query.
