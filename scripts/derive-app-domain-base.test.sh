@@ -22,8 +22,9 @@
 # Three authoring traps this file deliberately avoids (all documented in work/SKILL.md):
 #   1. A deliberately-nonzero command inside `$( )` aborts under `set -e` BEFORE fail() prints.
 #      Every script invocation is wrapped `rc=0; out=$(…) || rc=$?`.
-#   2. A loop over an empty data source exits 0 with ZERO coverage. CASES_RUN is reconciled
-#      against a minimum-cardinality floor at the end.
+#   2. A loop over an empty data source exits 0 with ZERO coverage, and a neutered verdict
+#      helper exits 0 with zero RECORDED coverage. CASES_RUN (invocations), `cases`
+#      (assertions decided) and passes/fails are reconciled against each other at the end.
 #   3. `producer | grep -q` under pipefail can exit 141 (SIGPIPE) on an early match, which
 #      fails OPEN on a negative assertion. Assertions grep FILES directly or use bash `[[ ]]`.
 export TMPDIR="${TMPDIR:-/var/tmp}"
@@ -35,7 +36,20 @@ SUT="${SCRIPT_DIR}/derive-app-domain-base.sh"
 
 passes=0
 fails=0
+# CASES_RUN counts SCRIPT INVOCATIONS — how many times the SUT was executed. It is NOT an
+# assertion count: one invocation is read by up to three separate assertions (T1), and four
+# assertions (T13-T16) invoke the SUT inline without run_sut. It cannot witness the dispatch
+# layer, which is why `cases` exists alongside it.
 CASES_RUN=0
+# `cases` counts ASSERTIONS DECIDED, incremented at the CALL SITE and never inside
+# pass()/fail(). That placement is the whole substance of the conservation check at the bottom
+# of this file: a counter that moves inside both verdict helpers moves WITH the verdict, so
+# stubbing fail() to a no-op drops the row and its count together and `passes+fails == cases`
+# still holds. Measured on this suite's previous shape: neutering fail() to `return 0` printed
+# "22 passed, 0 failed" while six malformed-shape rows were silently suppressed.
+#
+# Never increment inside `$( )` — a subshell discards it.
+cases=0
 
 # The explicit `return 0` is load-bearing, not decoration. Every call site below is written
 # `[[ cond ]] && pass … || fail …`, which is NOT if-then-else: if `pass` itself exited non-zero
@@ -94,20 +108,26 @@ run_sut() {
 # ── T1: the committed default resolves ──────────────────────────────────────────────────────
 write_fixture "${SB}/t1" "soleur.ai"
 run_sut "${SB}/t1/variables.tf"
+cases=$((cases + 1))
 [[ "$RC" -eq 0 ]] && pass "T1 exit 0 on a well-formed default" || fail "T1 expected exit 0, got $RC"
+cases=$((cases + 1))
 [[ "$OUT" == "soleur.ai" ]] && pass "T1 stdout is the base" || fail "T1 stdout expected 'soleur.ai', got '$OUT'"
+cases=$((cases + 1))
 [[ "$ERRTEXT" == *"${SB}/t1/variables.tf"* ]] && pass "T1 stderr resolution line names the source file" \
   || fail "T1 stderr did not name the source file: $ERRTEXT"
 
 # ── T2: no hardcoded domain — a different value resolves just as well ───────────────────────
 write_fixture "${SB}/t2" "dev.soleur.ai"
 run_sut "${SB}/t2/variables.tf"
+cases=$((cases + 1))
 [[ "$RC" -eq 0 && "$OUT" == "dev.soleur.ai" ]] && pass "T2 a non-canonical base resolves (no hardcoded domain)" \
   || fail "T2 expected 'dev.soleur.ai' exit 0, got '$OUT' rc=$RC"
 
 # ── T3: missing file is fatal and names the path ────────────────────────────────────────────
 run_sut "${SB}/nope/variables.tf"
+cases=$((cases + 1))
 [[ "$RC" -ne 0 ]] && pass "T3 missing file exits non-zero" || fail "T3 expected non-zero for a missing file"
+cases=$((cases + 1))
 [[ "$ERRTEXT" == *"::error::"* && "$ERRTEXT" == *"${SB}/nope/variables.tf"* ]] \
   && pass "T3 ::error:: names the missing path" || fail "T3 ::error:: did not name the path: $ERRTEXT"
 
@@ -120,7 +140,9 @@ variable "something_else" {
 }
 EOF
 run_sut "${SB}/t4/variables.tf"
+cases=$((cases + 1))
 [[ "$RC" -ne 0 ]] && pass "T4 absent variable exits non-zero" || fail "T4 expected non-zero when the variable is absent"
+cases=$((cases + 1))
 [[ "$ERRTEXT" == *"app_domain_base"* ]] && pass "T4 ::error:: names the variable" \
   || fail "T4 error did not name app_domain_base: $ERRTEXT"
 
@@ -129,6 +151,9 @@ run_sut "${SB}/t4/variables.tf"
 # report the whole class as covered.
 assert_malformed() {
   local label="$1" value="$2" dir="${SB}/mal_$3"
+  # This wrapper resolves to exactly ONE verdict per call, so the assertion is counted here —
+  # once per invocation — and NOT again at the `&&`/`||` line below.
+  cases=$((cases + 1))
   write_fixture "$dir" "$value"
   run_sut "${dir}/variables.tf"
   [[ "$RC" -ne 0 ]] && pass "${label} rejected" || fail "${label} was ACCEPTED (rc=0, out='$OUT') — a malformed base would reach a URL"
@@ -155,14 +180,17 @@ variable "app_domain_base" {
 }
 EOF
 run_sut "${SB}/t10/variables.tf"
+cases=$((cases + 1))
 [[ "$OUT" == "soleur.ai" ]] && pass "T10 anchored match skips the prefix-matching sibling" \
   || fail "T10 selected the wrong variable: got '$OUT' (expected soleur.ai)"
 
 # ── T11: stdout carries ONLY the base ───────────────────────────────────────────────────────
 write_fixture "${SB}/t11" "soleur.ai"
 run_sut "${SB}/t11/variables.tf"
+cases=$((cases + 1))
 [[ "$(printf '%s' "$OUT" | wc -l)" -eq 0 ]] && pass "T11 stdout is a single line (no trailing annotations)" \
   || fail "T11 stdout carried extra lines: '$OUT'"
+cases=$((cases + 1))
 [[ "$OUT" != *"derive-app-domain-base"* ]] && pass "T11 the resolution line is NOT on stdout" \
   || fail "T11 diagnostics leaked onto stdout: '$OUT'"
 
@@ -170,6 +198,7 @@ run_sut "${SB}/t11/variables.tf"
 # Distinct value from every other fixture, so honouring $1 is the only way to produce it.
 write_fixture "${SB}/t12" "pinned.example.org"
 run_sut "${SB}/t12/variables.tf"
+cases=$((cases + 1))
 [[ "$OUT" == "pinned.example.org" ]] && pass "T12 \$1 selects the fixture" \
   || fail "T12 did not honour \$1: got '$OUT'"
 
@@ -182,6 +211,7 @@ RC13=0
 OUT13="$(TF_VAR_app_domain_base="override.example.net" bash "$SUT" "${SB}/t13/variables.tf" 2>"$errfile13")" || RC13=$?
 rm -f "$errfile13"
 CASES_RUN=$((CASES_RUN + 1))
+cases=$((cases + 1))
 [[ "$RC13" -eq 0 && "$OUT13" == "override.example.net" ]] && pass "T13 TF_VAR override wins over the committed default" \
   || fail "T13 override ignored: got '$OUT13' rc=$RC13"
 
@@ -192,6 +222,7 @@ write_fixture "${SB}/t14" "soleur.ai"
 RC14=0
 OUT14="$(TF_VAR_app_domain_base="https://bad.example.net" bash "$SUT" "${SB}/t14/variables.tf" 2>/dev/null)" || RC14=$?
 CASES_RUN=$((CASES_RUN + 1))
+cases=$((cases + 1))
 [[ "$RC14" -ne 0 ]] && pass "T14 a malformed TF_VAR override is rejected" \
   || fail "T14 malformed override ACCEPTED (out='$OUT14') — the guard is on the wrong branch"
 
@@ -203,6 +234,7 @@ write_fixture "${SB}/t15" "cwdproof.example.com"
 RC15=0
 OUT15="$(cd "$SB" && bash "$SUT" "${SB}/t15/variables.tf" 2>/dev/null)" || RC15=$?
 CASES_RUN=$((CASES_RUN + 1))
+cases=$((cases + 1))
 [[ "$RC15" -eq 0 && "$OUT15" == "cwdproof.example.com" ]] && pass "T15 derivation is CWD-independent" \
   || fail "T15 CWD-dependent: got '$OUT15' rc=$RC15"
 
@@ -211,6 +243,7 @@ CASES_RUN=$((CASES_RUN + 1))
 RC16=0
 OUT16="$(cd / && bash "$SUT" 2>/dev/null)" || RC16=$?
 CASES_RUN=$((CASES_RUN + 1))
+cases=$((cases + 1))
 [[ "$RC16" -eq 0 && -n "$OUT16" ]] && pass "T16 zero-arg invocation resolves the repo's own variables.tf" \
   || fail "T16 zero-arg invocation failed: got '$OUT16' rc=$RC16"
 
@@ -230,6 +263,7 @@ variable "app_domain_base" {
 }
 EOF
 run_sut "${SB}/t17/variables.tf"
+cases=$((cases + 1))
 [[ "$RC" -eq 0 && "$OUT" == "soleur.ai" ]] && pass "T17 a validation{} block BEFORE default does not abort" \
   || fail "T17 false-abort on a nested block: rc=$RC out='$OUT'"
 
@@ -240,6 +274,7 @@ variable "app_domain_base" {
 }
 EOF
 run_sut "${SB}/t18/variables.tf"
+cases=$((cases + 1))
 [[ "$RC" -eq 0 && "$OUT" == "soleur.ai" ]] && pass "T18 a trailing # comment on the default line does not abort" \
   || fail "T18 false-abort on an inline comment: rc=$RC out='$OUT'"
 
@@ -257,6 +292,7 @@ variable "unrelated_sibling" {
 }
 EOF
 run_sut "${SB}/t19/variables.tf"
+cases=$((cases + 1))
 [[ "$RC" -ne 0 ]] && pass "T19 a default from a LATER sibling does not bleed into the target block" \
   || fail "T19 bled a sibling's default: got '$OUT' (expected non-zero exit)"
 
@@ -264,6 +300,7 @@ run_sut "${SB}/t19/variables.tf"
 mkdir -p "${SB}/t20"
 printf 'variable "app_domain_base" { default = "oneline.example.com" }\n' > "${SB}/t20/variables.tf"
 run_sut "${SB}/t20/variables.tf"
+cases=$((cases + 1))
 [[ "$RC" -eq 0 && "$OUT" == "oneline.example.com" ]] && pass "T20 a one-line variable block parses" \
   || fail "T20 one-line block: rc=$RC out='$OUT'"
 
@@ -273,6 +310,7 @@ run_sut "${SB}/t20/variables.tf"
 mkdir -p "${SB}/t21"
 printf 'variable "app_domain_base" { default = local.base }\n' > "${SB}/t21/variables.tf"
 run_sut "${SB}/t21/variables.tf"
+cases=$((cases + 1))
 [[ "$RC" -ne 0 ]] && pass "T21 an unquoted HCL expression is rejected, not returned verbatim" \
   || fail "T21 returned an unquoted expression: '$OUT' — that is a fabricated hostname"
 
@@ -291,6 +329,7 @@ assert_malformed "T25 leading hyphen"                "-soleur.ai"      t25
 # of the transform.
 write_fixture "${SB}/t26" "a1-base.example.com"
 run_sut "${SB}/t26/variables.tf"
+cases=$((cases + 1))
 [[ "$RC" -eq 0 && "$OUT" == "a1-base.example.com" ]] && pass "T26 a legitimate base with digits and hyphens is ACCEPTED" \
   || fail "T26 over-rejected a valid domain: rc=$RC out='$OUT'"
 
@@ -306,6 +345,7 @@ variable "app_domain_base" {
 variable "app_domain" { default = "app.example.org" }
 EOF
 run_sut "${SB}/t27/variables.tf"
+cases=$((cases + 1))
 [[ "$RC" -ne 0 ]] && pass "T27 a divergent app_domain aborts (wrong-host read becomes loud)" \
   || fail "T27 accepted a divergent app_domain: '$OUT' — the gate would measure the wrong host"
 
@@ -319,31 +359,65 @@ variable "app_domain" {
 }
 EOF
 run_sut "${SB}/t28/variables.tf"
+cases=$((cases + 1))
 [[ "$RC" -eq 0 && "$OUT" == "soleur.ai" ]] && pass "T28 a consistent app_domain passes" \
   || fail "T28 false-abort on consistent values: rc=$RC out='$OUT'"
 
 # ── Anti-vacuity floors ─────────────────────────────────────────────────────────────────────
-# TWO floors, because they fail differently and the second is the one that was missing.
+# THREE checks, because they fail differently and no one of them subsumes another.
 #
-# The INVOCATION floor catches a fixture source that silently produced nothing.
-if [[ "$CASES_RUN" -lt 26 ]]; then
-  fail "anti-vacuity: only ${CASES_RUN} script invocations ran (expected >= 26)"
-else
-  pass "anti-vacuity floor: ${CASES_RUN} script invocations"
+# All three report with `printf >&2` + `exit 1` DIRECTLY, never through fail(). A floor that
+# reports by calling fail() increments the same counter the exit status reads, so neutering
+# fail() silences the rows AND the floor that exists to notice the silence — the suite prints
+# a total and exits 0. A floor enforced through the suspect cannot witness the suspect. That
+# is also why neither floor calls pass(): a floor row counted by the exact `EXPECTED_PASSES`
+# pin below would make the pin partly a measurement of itself.
+#
+# 1. The INVOCATION floor catches a fixture source that silently produced nothing.
+MIN_INVOCATIONS=28
+if [[ "$CASES_RUN" -lt "$MIN_INVOCATIONS" ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d script invocation(s) ran, expected >= %d.\n' \
+    "$CASES_RUN" "$MIN_INVOCATIONS" >&2
+  printf '\n=== %d passed, %d failed (%d assertions) ===\n' "$passes" "$fails" "$cases"
+  exit 1
 fi
 
-# The ASSERTION floor catches the dispatch layer itself going silent. Measured: neutering
+# 2. ACCOUNTING CONSERVATION — the arm that actually catches a neutered verdict helper. The
+# invocation floor above catches "nothing RAN"; it cannot catch "cases ran and their verdicts
+# were discarded", because CASES_RUN and `cases` both keep their full value when fail() is a
+# no-op. Every assertion records exactly one verdict, so passes+fails MUST equal cases.
+#
+# This runs BEFORE the EXPECTED_PASSES pin deliberately. A neutered fail() deflates `passes`
+# too, so the pin would also fire — and would report "assertions were added, removed, or
+# silenced", sending the reader to hunt a phantom edit to this file. The conservation check
+# names the real fault (a verdict went unrecorded) and must therefore win the race.
+if [[ $((passes + fails)) -ne "$cases" ]]; then
+  printf '\n[FATAL] accounting: passes+fails (%d) != cases (%d).\n' \
+    "$((passes + fails))" "$cases" >&2
+  if [[ $((passes + fails)) -lt "$cases" ]]; then
+    printf '  An assertion was counted but its verdict was not recorded — that is what a neutered pass()/fail() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `cases=$((cases + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  printf '\n=== %d passed, %d failed (%d assertions) ===\n' "$passes" "$fails" "$cases"
+  exit 1
+fi
+
+# 3. The ASSERTION floor catches the dispatch layer itself going silent. Measured: neutering
 # `fail()` to `return 0` — which the `&&`/`||` idiom makes a VALID no-op — reported
 # "22 passed, 0 failed" while `validate_base` was deleted from the SUT and six malformed-shape
 # rows were suppressed. `fails` alone is a single unguarded integer, so a suite that asserts
 # nothing is byte-indistinguishable from one that passed. Pinned EXACTLY, with zero slack:
-# a `>=` here would re-open the hole every time an assertion is added.
-EXPECTED_PASSES=34
+# a `>=` here would re-open the hole every time an assertion is added. It survives a neutered
+# fail() by a route the conservation check does not share — an assertion DELETED outright
+# keeps the books balanced, and only this pin notices it went missing.
+EXPECTED_PASSES=33
 if [[ "$fails" -eq 0 && "$passes" -ne "$EXPECTED_PASSES" ]]; then
-  printf '  FAIL anti-vacuity: %d assertions passed, expected exactly %d — assertions were added, removed, or silenced\n' \
-    "$passes" "$EXPECTED_PASSES"
-  fails=$((fails + 1))
+  printf '\n[FATAL] assertion pin: %d assertion(s) passed, expected exactly %d — assertions were added, removed, or silenced.\n' \
+    "$passes" "$EXPECTED_PASSES" >&2
+  printf '\n=== %d passed, %d failed (%d assertions) ===\n' "$passes" "$fails" "$cases"
+  exit 1
 fi
 
-printf '\n=== %d passed, %d failed ===\n' "$passes" "$fails"
+printf '\n=== %d passed, %d failed (%d assertions) ===\n' "$passes" "$fails" "$cases"
 [[ "$fails" -eq 0 ]] || exit 1

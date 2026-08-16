@@ -8,6 +8,17 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-helpers.sh"
 
+# CASES counts assertions DISPATCHED, incremented at the CALL SITE and never
+# inside a verdict helper. That placement is the whole substance of the
+# accounting-conservation check at the bottom of this file: a counter that moves
+# inside assert_eq()/assert_indexed() moves WITH the verdict, so neutering those
+# helpers drops the row and its count together and PASS+FAIL == CASES still
+# holds under the exact fault it exists to catch.
+#
+# Never increment inside `$( )` — a subshell discards it. `$((` is arithmetic
+# and is fine; `$(` is command substitution and is not.
+CASES=0
+
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 # Overridable so the mutation battery can point at a scratch copy of the script
 # without mutating the working tree. Default is the real script.
@@ -45,11 +56,11 @@ echo "--- TS1: inline form extraction ---"
 kb=$(setup_kb ts1 inline.md)
 run_generator "$kb"
 tags_out=$(cat "$kb/kb-tags.txt")
-assert_contains "$tags_out" "eager-loading" "inline: eager-loading present"
-assert_contains "$tags_out" "n+1" "inline: n+1 present (literal, not regex)"
-assert_contains "$tags_out" "performance" "inline: performance present"
+CASES=$((CASES + 1)); assert_contains "$tags_out" "eager-loading" "inline: eager-loading present"
+CASES=$((CASES + 1)); assert_contains "$tags_out" "n+1" "inline: n+1 present (literal, not regex)"
+CASES=$((CASES + 1)); assert_contains "$tags_out" "performance" "inline: performance present"
 cats_out=$(cat "$kb/kb-categories.txt")
-assert_eq "performance-issues" "$cats_out" "inline: single category emitted"
+CASES=$((CASES + 1)); assert_eq "performance-issues" "$cats_out" "inline: single category emitted"
 
 # ---------------------------------------------------------------------------
 # TS2 — Block form extracts same content as inline
@@ -59,11 +70,11 @@ echo "--- TS2: block form extraction ---"
 kb=$(setup_kb ts2 block.md)
 run_generator "$kb"
 tags_out=$(cat "$kb/kb-tags.txt")
-assert_contains "$tags_out" "eager-loading" "block: eager-loading present"
-assert_contains "$tags_out" "n+1" "block: n+1 present"
-assert_contains "$tags_out" "performance" "block: performance present"
+CASES=$((CASES + 1)); assert_contains "$tags_out" "eager-loading" "block: eager-loading present"
+CASES=$((CASES + 1)); assert_contains "$tags_out" "n+1" "block: n+1 present"
+CASES=$((CASES + 1)); assert_contains "$tags_out" "performance" "block: performance present"
 cats_out=$(cat "$kb/kb-categories.txt")
-assert_eq "performance-issues" "$cats_out" "block: single category emitted"
+CASES=$((CASES + 1)); assert_eq "performance-issues" "$cats_out" "block: single category emitted"
 
 # ---------------------------------------------------------------------------
 # TS3 — Malformed fixtures skipped silently (no crash, exit 0)
@@ -72,6 +83,7 @@ echo ""
 echo "--- TS3: malformed frontmatter handling ---"
 kb=$(setup_kb ts3 no-frontmatter.md missing-tags.md empty-tags.md)
 # Must not crash — generator exits 0 even with all-malformed input
+CASES=$((CASES + 1))
 if KB_DIR="$kb" bash "$GEN_SCRIPT" >/dev/null 2>&1; then
   echo "  PASS: generator exits 0 with malformed-only corpus"
   PASS=$((PASS + 1))
@@ -79,10 +91,11 @@ else
   echo "  FAIL: generator crashed on malformed corpus"
   FAIL=$((FAIL + 1))
 fi
-assert_file_exists "$kb/kb-tags.txt" "malformed: kb-tags.txt still emitted (empty ok)"
-assert_file_exists "$kb/kb-categories.txt" "malformed: kb-categories.txt still emitted"
+CASES=$((CASES + 1)); assert_file_exists "$kb/kb-tags.txt" "malformed: kb-tags.txt still emitted (empty ok)"
+CASES=$((CASES + 1)); assert_file_exists "$kb/kb-categories.txt" "malformed: kb-categories.txt still emitted"
 # no-frontmatter.md tags like "should-not-appear" must not leak
 tags_out=$(cat "$kb/kb-tags.txt")
+CASES=$((CASES + 1))
 if ! grep -q 'should-not-appear' "$kb/kb-tags.txt"; then
   echo "  PASS: body-text tags do not leak into artifact"
   PASS=$((PASS + 1))
@@ -91,6 +104,7 @@ else
   FAIL=$((FAIL + 1))
 fi
 # empty-tags.md must not emit a literal "[]" string
+CASES=$((CASES + 1))
 if ! grep -q '^\[\]$' "$kb/kb-tags.txt"; then
   echo "  PASS: empty tags array does not emit literal []"
   PASS=$((PASS + 1))
@@ -100,7 +114,7 @@ else
 fi
 # missing-tags.md still emits its category
 cats_out=$(cat "$kb/kb-categories.txt")
-assert_contains "$cats_out" "workflow" "malformed: category from missing-tags fixture still captured"
+CASES=$((CASES + 1)); assert_contains "$cats_out" "workflow" "malformed: category from missing-tags fixture still captured"
 
 # ---------------------------------------------------------------------------
 # TS4 — Case-fold dedup produces single entry
@@ -111,10 +125,10 @@ kb=$(setup_kb ts4 mixed-case.md)
 run_generator "$kb"
 tags_out=$(cat "$kb/kb-tags.txt")
 eager_count=$(grep -c '^eager-loading$' "$kb/kb-tags.txt" || true)
-assert_eq "1" "$eager_count" "mixed-case: three variants collapse to single entry"
+CASES=$((CASES + 1)); assert_eq "1" "$eager_count" "mixed-case: three variants collapse to single entry"
 # Category should lowercase as well
 cats_out=$(cat "$kb/kb-categories.txt")
-assert_eq "performance-issues" "$cats_out" "mixed-case: category lowercased"
+CASES=$((CASES + 1)); assert_eq "performance-issues" "$cats_out" "mixed-case: category lowercased"
 
 # ---------------------------------------------------------------------------
 # TS5 — Missing artifact fallback (documented behavior in kb-search SKILL)
@@ -129,11 +143,11 @@ kb=$(setup_kb ts5 inline.md)
 run_generator "$kb"
 first_sum=$(sha256sum "$kb/kb-tags.txt" | awk '{print $1}')
 rm "$kb/kb-tags.txt" "$kb/kb-categories.txt"
-assert_file_not_exists "$kb/kb-tags.txt" "TS5: artifact removed"
+CASES=$((CASES + 1)); assert_file_not_exists "$kb/kb-tags.txt" "TS5: artifact removed"
 run_generator "$kb"
-assert_file_exists "$kb/kb-tags.txt" "TS5: artifact regenerated"
+CASES=$((CASES + 1)); assert_file_exists "$kb/kb-tags.txt" "TS5: artifact regenerated"
 second_sum=$(sha256sum "$kb/kb-tags.txt" | awk '{print $1}')
-assert_eq "$first_sum" "$second_sum" "TS5: regeneration is deterministic"
+CASES=$((CASES + 1)); assert_eq "$first_sum" "$second_sum" "TS5: regeneration is deterministic"
 
 # ---------------------------------------------------------------------------
 # TR6 — Best-effort extraction on dirty values, graceful skip of junk
@@ -143,9 +157,9 @@ echo "--- TR6: dirty tag values tolerated, clean siblings still captured ---"
 kb=$(setup_kb dirty dirty.md)
 run_generator "$kb"
 tags_out=$(cat "$kb/kb-tags.txt")
-assert_contains "$tags_out" "clean-tag" "dirty: clean sibling tag still captured"
+CASES=$((CASES + 1)); assert_contains "$tags_out" "clean-tag" "dirty: clean sibling tag still captured"
 cats_out=$(cat "$kb/kb-categories.txt")
-assert_contains "$cats_out" "messy-category" "dirty: category still emitted (lowercased)"
+CASES=$((CASES + 1)); assert_contains "$cats_out" "messy-category" "dirty: category still emitted (lowercased)"
 
 # ---------------------------------------------------------------------------
 # Artifact invariants — sorted, unique, lowercase, no blank lines
@@ -155,6 +169,7 @@ echo "--- Invariants: sorted + unique + lowercase ---"
 kb=$(setup_kb inv inline.md block.md mixed-case.md)
 run_generator "$kb"
 # Sorted (LC_ALL=C sort should be idempotent)
+CASES=$((CASES + 1))
 if diff <(cat "$kb/kb-tags.txt") <(LC_ALL=C sort -u "$kb/kb-tags.txt") >/dev/null; then
   echo "  PASS: kb-tags.txt sorted + unique"
   PASS=$((PASS + 1))
@@ -163,6 +178,7 @@ else
   FAIL=$((FAIL + 1))
 fi
 # Lowercase only
+CASES=$((CASES + 1))
 if ! grep -qE '[A-Z]' "$kb/kb-tags.txt"; then
   echo "  PASS: kb-tags.txt lowercase only"
   PASS=$((PASS + 1))
@@ -171,6 +187,7 @@ else
   FAIL=$((FAIL + 1))
 fi
 # No blank lines
+CASES=$((CASES + 1))
 if ! grep -qE '^$' "$kb/kb-tags.txt"; then
   echo "  PASS: kb-tags.txt no blank lines"
   PASS=$((PASS + 1))
@@ -256,6 +273,12 @@ assert_not_indexed() {
 # Self-test the two bespoke helpers. Both are used 18 times below and neither
 # is otherwise verified, so the whole TS7 verdict rests on two unguarded greps.
 # Neutering either to an unconditional PASS is invisible without this.
+#
+# The composite verdict is scored by the CALLER, not in here. This function
+# records two RETAINED verdicts and two RESCINDED probes, so it must not be a
+# place where a case counter and a verdict counter both move: a function that
+# moves both makes the conservation identity a tautology (ADR-193 Decision #2).
+# It therefore publishes its three tallies and lets the call site decide.
 selftest_helpers() {
   local d="$TMPDIR_BASE/helper-selftest"
   mkdir -p "$d/present"
@@ -263,34 +286,39 @@ selftest_helpers() {
   : > "$d/present/x.md"
   : > "$d/absent-from-index.md"
   local p0=$PASS f0=$FAIL
-  assert_indexed     "$d" "present/x.md"          "selftest: indexed row detected"
-  assert_not_indexed "$d" "absent-from-index.md"  "selftest: missing row detected"
-  # Both above must PASS; now prove each helper can FAIL.
+  # Two RETAINED verdicts — counted here, at their call sites.
+  CASES=$((CASES + 1)); assert_indexed     "$d" "present/x.md"          "selftest: indexed row detected"
+  CASES=$((CASES + 1)); assert_not_indexed "$d" "absent-from-index.md"  "selftest: missing row detected"
+  # Both above must PASS; now prove each helper can FAIL. These two are PROBES,
+  # not assertions: their verdicts are deliberately rescinded three lines below,
+  # so counting them would break conservation by construction.
   local p1=$PASS f1=$FAIL
   assert_indexed     "$d" "absent-from-index.md"  "selftest(expect-fail): assert_indexed on missing row"
   assert_not_indexed "$d" "present/x.md"          "selftest(expect-fail): assert_not_indexed on present row"
-  local ok_pass=$((p1 - p0)) ok_fail=$((f1 - f0)) bad_fail=$((FAIL - f1))
-  # Undo the two deliberate failures and score the self-test itself.
+  st_ok_hits=$((p1 - p0)); st_false_reds=$((f1 - f0)); st_caught=$((FAIL - f1))
+  # Undo the two deliberate failures. The call site scores the self-test itself.
   FAIL=$f1
-  # The correct-input pair must produce 2 passes and 0 failures; the
-  # wrong-input pair must produce 2 failures. Anything else means a helper
-  # cannot distinguish present from absent in one direction or the other.
-  if [[ "$ok_pass" -eq 2 && "$ok_fail" -eq 0 && "$bad_fail" -eq 2 ]]; then
-    echo "  PASS: helper self-test (both helpers detect present AND absent)"
-    PASS=$((PASS + 1))
-  else
-    echo "  FAIL: helper self-test (pass=$ok_pass expected 2, false_fail=$ok_fail expected 0, caught=$bad_fail expected 2)"
-    FAIL=$((FAIL + 1))
-  fi
 }
 
 selftest_helpers
+# The correct-input pair must produce 2 passes and 0 failures; the wrong-input
+# pair must produce 2 failures. Anything else means a helper cannot distinguish
+# present from absent in one direction or the other.
+CASES=$((CASES + 1))
+if [[ "$st_ok_hits" -eq 2 && "$st_false_reds" -eq 0 && "$st_caught" -eq 2 ]]; then
+  echo "  PASS: helper self-test (both helpers detect present AND absent)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: helper self-test (pass=$st_ok_hits expected 2, false_fail=$st_false_reds expected 0, caught=$st_caught expected 2)"
+  FAIL=$((FAIL + 1))
+fi
 
 kb=$(setup_kb_specs)
 run_generator "$kb"
 
 # Fixture sanity: if the generator emitted nothing, every assert_not_indexed
 # below would pass vacuously. Fail loudly instead.
+CASES=$((CASES + 1))
 if ! grep -q '^- \[' "$kb/INDEX.md"; then
   echo "  FAIL: fixture corpus produced no INDEX.md rows — TS7 would be vacuous"
   FAIL=$((FAIL + 1))
@@ -300,51 +328,52 @@ else
 fi
 
 # F1 / F14 — a spec dir contributes spec.md AND tasks.md
-assert_indexed     "$kb" "project/specs/feat-x/spec.md"  "F1: spec.md indexed"
-assert_indexed     "$kb" "project/specs/feat-x/tasks.md" "F14: tasks.md indexed"
+CASES=$((CASES + 1)); assert_indexed     "$kb" "project/specs/feat-x/spec.md"  "F1: spec.md indexed"
+CASES=$((CASES + 1)); assert_indexed     "$kb" "project/specs/feat-x/tasks.md" "F14: tasks.md indexed"
 
 # F2 / F3 / F10 — flat working state is dropped, whatever it is named
-assert_not_indexed "$kb" "project/specs/feat-x/session-state.md"      "F2: session-state.md dropped"
-assert_not_indexed "$kb" "project/specs/feat-x/phase0-evidence.md"    "F3: phase0-evidence.md dropped (long tail)"
-assert_not_indexed "$kb" "project/specs/feat-x/ac-walk.md"            "F3: ac-walk.md dropped (long tail)"
-assert_not_indexed "$kb" "project/specs/feat-x/decision-challenges.md" "F10: decision-challenges.md dropped from index"
+CASES=$((CASES + 1)); assert_not_indexed "$kb" "project/specs/feat-x/session-state.md"      "F2: session-state.md dropped"
+CASES=$((CASES + 1)); assert_not_indexed "$kb" "project/specs/feat-x/phase0-evidence.md"    "F3: phase0-evidence.md dropped (long tail)"
+CASES=$((CASES + 1)); assert_not_indexed "$kb" "project/specs/feat-x/ac-walk.md"            "F3: ac-walk.md dropped (long tail)"
+CASES=$((CASES + 1)); assert_not_indexed "$kb" "project/specs/feat-x/decision-challenges.md" "F10: decision-challenges.md dropped from index"
 
 # F16 — a deliberate SUBDIRECTORY inside a spec dir is durable content, not
 # branch-lifetime scratch, and stays indexed. This is what keeps the rule FLAT;
 # without the fourth predicate arm the exclusion is depth-unbounded.
-assert_indexed "$kb" "project/specs/feat-z/case-studies/01-durable.md" "F16: nested spec-dir content indexed (rule is flat-scoped)"
+CASES=$((CASES + 1)); assert_indexed "$kb" "project/specs/feat-z/case-studies/01-durable.md" "F16: nested spec-dir content indexed (rule is flat-scoped)"
 
 # F4 — prefix-independence: fix-* behaves exactly like feat-*
-assert_indexed     "$kb" "project/specs/fix-y/spec.md"          "F4: fix-* spec.md indexed"
-assert_indexed     "$kb" "project/specs/fix-y/tasks.md"         "F4: fix-* tasks.md indexed"
-assert_not_indexed "$kb" "project/specs/fix-y/session-state.md" "F4: fix-* session-state.md dropped"
+CASES=$((CASES + 1)); assert_indexed     "$kb" "project/specs/fix-y/spec.md"          "F4: fix-* spec.md indexed"
+CASES=$((CASES + 1)); assert_indexed     "$kb" "project/specs/fix-y/tasks.md"         "F4: fix-* tasks.md indexed"
+CASES=$((CASES + 1)); assert_not_indexed "$kb" "project/specs/fix-y/session-state.md" "F4: fix-* session-state.md dropped"
 
 # F5 — bare-named spec dir. The dropped sibling is load-bearing: without it
 # this fixture is indexed before and after and discriminates no mutation.
-assert_indexed     "$kb" "project/specs/review-workflow-hardening/spec.md"          "F5: bare-named dir spec.md indexed"
-assert_not_indexed "$kb" "project/specs/review-workflow-hardening/session-state.md" "F5: bare-named dir session-state.md dropped"
+CASES=$((CASES + 1)); assert_indexed     "$kb" "project/specs/review-workflow-hardening/spec.md"          "F5: bare-named dir spec.md indexed"
+CASES=$((CASES + 1)); assert_not_indexed "$kb" "project/specs/review-workflow-hardening/session-state.md" "F5: bare-named dir session-state.md dropped"
 
 # F9 — pre-existing archive exclusion must not regress
-assert_not_indexed "$kb" "project/specs/archive/20260101-000000-feat-old/spec.md" "F9: archived spec.md still dropped"
+CASES=$((CASES + 1)); assert_not_indexed "$kb" "project/specs/archive/20260101-000000-feat-old/spec.md" "F9: archived spec.md still dropped"
 
 # F7 / F8 — plans are untouched, including the nested shape that broke the
 # reverted gate's -maxdepth 1
-assert_indexed "$kb" "project/plans/feat-q/plan.md"              "F7: nested plan indexed"
-assert_indexed "$kb" "project/plans/2026-01-01-feat-r-plan.md"   "F8: flat plan indexed"
+CASES=$((CASES + 1)); assert_indexed "$kb" "project/plans/feat-q/plan.md"              "F7: nested plan indexed"
+CASES=$((CASES + 1)); assert_indexed "$kb" "project/plans/2026-01-01-feat-r-plan.md"   "F8: flat plan indexed"
 
 # F13 — only project/specs/ is special. Loosening the anchor to */specs/*
 # would drop this row.
-assert_indexed "$kb" "product/specs/feat-w/session-state.md" "F13: product/specs/ is not project/specs/"
+CASES=$((CASES + 1)); assert_indexed "$kb" "product/specs/feat-w/session-state.md" "F13: product/specs/ is not project/specs/"
 
 # F11 / F12 — pre-existing arms adjacent to the edit
-assert_not_indexed "$kb" "engineering/INDEX.md"   "F11: INDEX.md never indexes itself"
-assert_not_indexed "$kb" "engineering/diagram.png" "F12: non-markdown dropped"
-assert_indexed     "$kb" "engineering/note.md"     "F12: sibling markdown still indexed"
+CASES=$((CASES + 1)); assert_not_indexed "$kb" "engineering/INDEX.md"   "F11: INDEX.md never indexes itself"
+CASES=$((CASES + 1)); assert_not_indexed "$kb" "engineering/diagram.png" "F12: non-markdown dropped"
+CASES=$((CASES + 1)); assert_indexed     "$kb" "engineering/note.md"     "F12: sibling markdown still indexed"
 
 # F15 — a trailing slash on KB_DIR must not change the output. Interpolating
 # $KB_DIR into the -path patterns silently disabled the whole exclusion.
 cp "$kb/INDEX.md" "$TMPDIR_BASE/index-noslash.md"
 KB_DIR="$kb/" bash "$GEN_SCRIPT" >/dev/null 2>&1
+CASES=$((CASES + 1))
 if diff -q "$TMPDIR_BASE/index-noslash.md" "$kb/INDEX.md" >/dev/null 2>&1; then
   echo "  PASS: F15: trailing-slash KB_DIR produces identical output"
   PASS=$((PASS + 1))
@@ -379,6 +408,7 @@ tags_a=$(cat "$kb_big/kb-tags.txt"); cats_a=$(cat "$kb_big/kb-categories.txt")
 KB_DIR="$kb_big" bash "$GEN_SCRIPT" >/dev/null 2>&1
 tags_b=$(cat "$kb_big/kb-tags.txt"); cats_b=$(cat "$kb_big/kb-categories.txt")
 
+CASES=$((CASES + 1))
 if [[ "$tags_a" == "$tags_b" && "$cats_a" == "$cats_b" ]]; then
   echo "  PASS: facet artifacts stable across runs on a multi-batch corpus"
   PASS=$((PASS + 1))
@@ -389,6 +419,7 @@ fi
 
 # Torn lines are the race's signature: a spliced value that is not a real tag.
 # Every emitted tag must be one this fixture actually declares.
+CASES=$((CASES + 1))
 if printf '%s\n' "$tags_a" | grep -qvE '^(contention-tag-[0-9]+|shared-tag|another-shared-tag)$'; then
   echo "  FAIL: kb-tags.txt contains a value no fixture declares (torn line)"
   printf '%s\n' "$tags_a" | grep -vE '^(contention-tag-[0-9]+|shared-tag|another-shared-tag)$' | head -3 | sed 's/^/        /'
@@ -400,6 +431,7 @@ fi
 
 # Non-vacuity: the corpus must actually be big enough to contend.
 tag_bytes=$(printf '%s' "$tags_a" | wc -c)
+CASES=$((CASES + 1))
 if [[ "$tag_bytes" -lt 4096 ]]; then
   echo "  FAIL: TS8 corpus emits only ${tag_bytes}B of tags — under one flush boundary, cannot detect the race"
   FAIL=$((FAIL + 1))
@@ -432,6 +464,7 @@ echo "--- TS9: prose names the same files the predicate allows ---"
 allowed=$( { sed -n "/-not -path '\*\/project\/specs\/\*'/,/\\\\)/p" "$GEN_SCRIPT" \
   | grep -oE "\-name '[^']+'" | sed "s/-name '//; s/'//" | LC_ALL=C sort -u; } || true )
 
+CASES=$((CASES + 1))
 if [[ -z "$allowed" ]]; then
   echo "  FAIL: TS9 could not extract the allowlist from the predicate (extraction is broken, not the prose)"
   FAIL=$((FAIL + 1))
@@ -452,6 +485,8 @@ for doc in \
   "$REPO_ROOT/knowledge-base/engineering/architecture/decisions/ADR-174-kb-index-exclusion-supersedes-per-feature-archival.md"
 do
   label="prose parity: $(basename "$(dirname "$doc")")/$(basename "$doc")"
+  # One verdict per iteration, on either branch — counted before the branch.
+  CASES=$((CASES + 1))
   if [[ ! -f "$doc" ]]; then
     echo "  FAIL: $label (file missing — a consumer moved or was renamed)"; FAIL=$((FAIL + 1)); continue
   fi
@@ -474,13 +509,43 @@ done
 # FAIL==0. A floor (never -eq, which makes every added assertion a spurious
 # failure) makes silent removal loud. Derived from a green run; raise it in
 # lockstep when assertions are added.
+#
+# Reported with `printf >&2` + `exit 1` DIRECTLY, never by bumping FAIL. A floor
+# that reports itself by incrementing FAIL increments the same counter the exit
+# status reads, so neutering the assertion machinery silences the rows AND the
+# floor that exists to notice the silence — the suite prints a total and exits 0.
+# A floor enforced through the suspect cannot witness the suspect.
 # ---------------------------------------------------------------------------
 MIN_ASSERTIONS=57
 total_assertions=$((PASS + FAIL))
 if [[ "$total_assertions" -lt "$MIN_ASSERTIONS" ]]; then
-  echo "  FAIL: anti-vacuity floor — ran $total_assertions assertions, expected >= $MIN_ASSERTIONS"
-  echo "        (assertions were removed, or a block exited early without running)"
-  FAIL=$((FAIL + 1))
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
+    "$total_assertions" "$MIN_ASSERTIONS" >&2
+  printf '        (assertions were removed, or a block exited early without running)\n' >&2
+  echo "=== Results: $PASS passed, $FAIL failed ($CASES assertions dispatched) ==="
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Accounting conservation.
+#
+# The arm that actually catches a neutered verdict helper. The floor above
+# catches "no assertions RAN"; it cannot catch "assertions ran and their
+# verdicts were DISCARDED", because CASES keeps its full value when assert_eq()
+# or assert_indexed() is stubbed to a no-op. Every dispatched assertion records
+# exactly one verdict, so PASS+FAIL MUST equal CASES. Reported directly for the
+# same reason as the floor.
+# ---------------------------------------------------------------------------
+if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
+  printf '\n[FATAL] accounting: PASS+FAIL (%d) != CASES (%d).\n' \
+    "$((PASS + FAIL))" "$CASES" >&2
+  if [[ $((PASS + FAIL)) -lt "$CASES" ]]; then
+    printf '  An assertion was dispatched but its verdict was not recorded — that is what a neutered assert helper looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `CASES=$((CASES + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  echo "=== Results: $PASS passed, $FAIL failed ($CASES assertions dispatched) ==="
+  exit 1
 fi
 
 print_results
