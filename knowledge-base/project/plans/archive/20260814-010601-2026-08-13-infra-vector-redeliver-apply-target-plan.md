@@ -793,7 +793,19 @@ logs:
   retention: 90 days (Actions); Better Stack per its configured plan
 discoverability_test:
   command: bash tests/scripts/test-vector-redeliver-gate.sh
-  expected_output: all mutation-matrix cases pass; suite reports a non-zero executed-case count
+  expected_output: "0 failed"
+  # The expected_output is a TOKEN the command actually prints, not a description of it.
+  # It was prose ("all mutation-matrix cases pass; suite reports a non-zero executed-case
+  # count") — accurate English and unmatchable by preflight Check 10, which substring-matches
+  # this field against the command's real stdout. The suite prints
+  # "=== test-vector-redeliver-gate.sh: 24 passed, 0 failed ===", so "0 failed" is both
+  # matchable and a genuine success sentinel.
+  #
+  # The dropped executed-case half is NOT lost coverage: the suite's own anti-vacuity floor
+  # exits non-zero if fewer than 24 assertions run, so a vacuous run cannot reach this line
+  # to print "0 failed" in the first place. Asserting it here as well would restate a
+  # guarantee the suite already enforces mechanically.
+  #
   # No credentials_required: the gate is a pure function over a JSON document, so the
   # property is fully verifiable locally with synthesized fixtures and no live infrastructure.
 ```
@@ -948,7 +960,7 @@ web-1 — a botched render there would dark host observability, which is why the
 pre-touch render-sanity gate (`server.tf:1068-1078`) runs before the live agent is touched and
 the post-restart assertions (`:1082-1085`) fail the apply if it does not come back.
 
-**Brand-survival threshold:** none
+- **Brand-survival threshold:** none
 
 *Sensitive-path scope-out:* `threshold: none, reason: this change adds a gated CI dispatch arm
 over an existing Terraform-managed config-delivery resource; it introduces no user-facing surface,
