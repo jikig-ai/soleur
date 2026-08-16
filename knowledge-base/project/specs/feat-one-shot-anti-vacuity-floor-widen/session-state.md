@@ -48,7 +48,7 @@ rewritten against the full 5-field schema before proceeding.
   other 4 (measured `conservation GREEN — defect hidden`, RC=0).
 
 ### Open Items Carried Into Work
-- **ADR-191 is provisional.** Highest on disk is ADR-186; highest claimed across 69 `origin/*` refs
+- **ADR-193 is provisional.** Highest on disk is ADR-186; highest claimed across 69 `origin/*` refs
   is ADR-190. Re-derive the number before merge.
 - The open `SOLEUR_SUBAGENT` issue was verified still open and deliberately left unbundled and
   unreferenced, per the brief.

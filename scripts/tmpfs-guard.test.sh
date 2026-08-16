@@ -984,7 +984,7 @@ fi
 # blocks, one of which sits in a two-iteration `for var in ...` loop.
 MIN_CASES=60
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
-  printf '\n[FATAL] cardinality floor: only %d assertion(s) ran, expected >= %d.\n' \
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_CASES" >&2
   echo "=== tmpfs-guard: $pass_n passed, $fails failed ($cases assertions) ==="
   exit 1

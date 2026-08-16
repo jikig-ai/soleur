@@ -27,9 +27,18 @@
 # hand-maintained list is the snapshot that goes stale — the same failure class one level
 # up. The sweep below enumerates tracked `*.test.sh` RECURSIVELY (never a shell glob:
 # `scripts/*.test.sh` is non-recursive and silently excludes `scripts/followthroughs/`)
-# and classifies by SHAPE: a `-lt`/`-ge`/`-le` comparison against a counter the file
-# itself increments. A suite whose floor this file cannot construct a mutant for is
+# and classifies by SHAPE: a conditional opener whose test compares a counter the file
+# itself increments against a threshold, in either bracket (`[[ … -lt … ]]`) or arithmetic
+# (`(( … < … ))`) form. A suite whose floor this file cannot construct a mutant for is
 # reported LOUDLY and counted — never silently skipped.
+#
+# THE ONE FAILURE MODE THIS FILE CANNOT REPORT ON ITSELF is a DERIVATION miss. A suite whose
+# floor the sweep does not recognise never enters the population, so it is not covered, not
+# deferred, and not UNCLASSIFIED either — it is simply absent, and every arm below is silent
+# about it. The operator set and the syntax forms above are therefore the guard's real
+# boundary, and widening them is how coverage grows. Measured: adding the arithmetic form
+# moved the repo-wide population from 84 to 97 and surfaced four suites whose floors had
+# never been tested.
 #
 # NOTHING HERE RUNS THE GUARDED SUITES TO COMPLETION. Each mutant is truncated to the
 # floor block plus its threshold bindings, so this suite costs seconds and cannot be made
@@ -75,13 +84,60 @@ counters_of() { # <file>
 #
 # Variables inside an arithmetic expansion appear WITHOUT a leading `$` — `$((PASS + FAIL))`
 # — so the reference test matches on a WORD BOUNDARY, not on `\$VAR`. Anchoring on `$` was
-# measured to drop `plugins/soleur/test/terraform-drift-step-order.test.sh` and
-# `preflight-check10-suite-integrity.test.sh` from the population entirely.
+# measured to drop `plugins/soleur/test/terraform-drift-step-order.test.sh`, whose only floor
+# is `if [[ "$((PASS + FAIL))" -lt 6 ]]`, from the population entirely.
+# (An earlier version of this comment also named `preflight-check10-suite-integrity.test.sh`.
+# That was true at `origin/main` and this PR falsified it: hardening that suite added a
+# `$cases`-anchored floor, so the `$`-anchored variant now finds it. Corrected rather than
+# left standing — a comment citing evidence the diff itself moved is the class this repo
+# calls out explicitly.)
 #
 # Both `[[ ]]` and `[ ]` are matched: `apps/web-platform/infra/git-data-emit.test.sh`
 # writes its floor as `if [ "$total" -lt 44 ]`, and a `[[`-only pattern misses it.
+# Line numbers that are INSIDE a heredoc body, so the sweep never treats generated
+# fixture/stub text as suite code. Without this, a `curl` stub emitted via
+# `cat > x <<'STUB'` contributes both a counter and a floor candidate, and the slice runs
+# 1200+ lines of another suite's setup (measured on prod-version-drift-check.test.sh).
+heredoc_lines_of() { # <file> -> one line number per line inside a heredoc body
+  awk '
+    /<<-?[[:space:]]*['"'"'"]?[A-Za-z_][A-Za-z0-9_]*['"'"'"]?/ && !inhd {
+      if (match($0, /<<-?[[:space:]]*['"'"'"]?[A-Za-z_][A-Za-z0-9_]*/)) {
+        tag = substr($0, RSTART, RLENGTH)
+        gsub(/^<<-?[[:space:]]*['"'"'"]?/, "", tag)
+        inhd = 1; next
+      }
+    }
+    inhd { if ($0 ~ "^[[:space:]]*" tag "[[:space:]]*$") { inhd = 0 } else { print NR } }
+  ' "$1" 2>/dev/null || true
+}
+
+# Floor candidates. A candidate must be an actual CONDITIONAL OPENER referencing a counter:
+#
+#   * `if`/`elif` with a bracket test — `[[ … -lt … ]]`, `[ … -ne … ]`
+#   * an arithmetic conditional — `if (( cases < 20 ))`
+#
+# Three narrownesses were measured and closed here, each of which silently shrank the
+# population rather than reporting anything:
+#
+#   1. SYNTAX FORM ONLY — the operator set stays at BELOW-THRESHOLD semantics.
+#      A floor says "the counter is under its minimum". That is `-lt`/`-le` and the inverted
+#      `-ge` (success arm). `-gt` and `-eq` were tried and REVERTED: `-gt` is the shape of a
+#      suite's FINAL EXIT GATE (`if [[ "$FAIL" -gt 0 ]]`) and `-eq` is the shape of an
+#      ordinary assertion, so admitting them reported 13 "non-firing floors" that were
+#      neither floors nor broken. Widening a matcher moves the error to the other side; the
+#      fixtures that would have caught it all sat on the must-trip side.
+#   2. SYNTAX FORM. `(( TOTAL < MIN_ASSERTIONS ))` is invisible to a bracket-only pattern.
+#      19 tracked suites write their floor that way, 12 of them inside the covered scope.
+#   3. COMMENTS AND HEREDOCS. A bare line match scored this file's OWN header comment
+#      (`#   if [[ "$cases" -lt 75 ]]; then fail …`) as a floor, sliced 277 lines of the
+#      guard's body into a mutant, and scored it FIRES off git's `fatal:` error. Requiring a
+#      conditional opener and excluding heredoc bodies closes both.
+#
+# A suite that fails DERIVATION never reaches the mutation arm and never reaches
+# UNCLASSIFIED either, so a too-narrow pattern here is the one failure mode this file cannot
+# report on itself. ARM 11 exists to bound exactly that.
 floor_lines_of() { # <file> -> "lineno:text" per candidate
-  local f="$1" base derived all alt c
+  local f="$1" base derived all alt c hd
   base="$(counters_of "$f")"
   [[ -n "$base" ]] || return 0
   derived=""
@@ -98,7 +154,12 @@ floor_lines_of() { # <file> -> "lineno:text" per candidate
   all="$(printf '%s\n%s\n' "$base" "$derived" | { grep -v '^$' || true; } | sort -u)"
   alt="$(printf '%s' "$all" | paste -sd'|' -)"
   [[ -n "$alt" ]] || return 0
-  { grep -anE '(\[\[|\[)[^]]*(-lt|-ge|-le)[^]]*\]' "$f" || true; } | grep -aE "\b(${alt})\b" || true
+  hd="$(heredoc_lines_of "$f" | paste -sd',' -)"
+  { grep -anE '^[[:space:]]*(el)?if[[:space:]]+((\[\[|\[)[^]]*(-lt|-le|-ge)[^]]*\]|\(\([^)]*(<|<=|>=)[^)]*\)\))' "$f" || true; } \
+    | grep -aE "\b(${alt})\b" \
+    | awk -v hd="$hd" -F: '
+        BEGIN { n = split(hd, a, ","); for (i = 1; i <= n; i++) if (a[i] != "") skip[a[i]] = 1 }
+        !($1 in skip)' || true
 }
 
 is_floor_bearing() { [[ -n "$(floor_lines_of "$1")" ]]; }
@@ -108,10 +169,20 @@ is_floor_bearing() { [[ -n "$(floor_lines_of "$1")" ]]; }
 ALL_SUITES="$SUITE_TMP/all.txt"
 git ls-files '*.test.sh' > "$ALL_SUITES"
 
+SELF_REL="scripts/$(basename "${BASH_SOURCE[0]}")"
+
 FLOOR_ALL="$SUITE_TMP/floor-all.txt"
 : > "$FLOOR_ALL"
 while IFS= read -r f; do
   [[ -f "$f" ]] || continue
+  # A symlink is not read-and-executed. `git ls-files` can name one, `[[ -f ]]` follows it,
+  # and this walker slices the target's lines into a script it then runs.
+  [[ -L "$f" ]] && continue
+  # THIS FILE IS NOT ITS OWN SUBJECT. Slicing the guard into a mutant and running it
+  # re-enters the whole population sweep recursively, and its verdict then depends on
+  # whether $TMPDIR happens to sit inside a git checkout — measured FIRES in one location
+  # and NO_FIRE in another, both wrong. Its own floor is asserted directly at the bottom.
+  [[ "$f" == "$SELF_REL" ]] && continue
   is_floor_bearing "$f" && printf '%s\n' "$f" >> "$FLOOR_ALL"
 done < "$ALL_SUITES"
 
@@ -176,8 +247,13 @@ build_mutant() { # <suite> <floor-lineno> <out>
   while [[ "$start" -gt 1 ]]; do
     prev=$((start - 1))
     t="$(sed -n "${prev}p" "$src")"
+    # `$((` is ARITHMETIC expansion and is safe to carry into the mutant; `$(` is COMMAND
+    # substitution and is not (it would run the suite's setup). The first version rejected
+    # both, so a floor preceded by `total=$((passes + fails))` lost its threshold binding and
+    # the mutant died unbound — reported as a construction failure for a fully compliant
+    # floor. Same `$((` vs `$(` distinction the conservation arm makes.
     if printf '%s' "$t" | grep -qE '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=[^;]*$' \
-       && ! printf '%s' "$t" | grep -qE '\$\('; then
+       && ! printf '%s' "$t" | grep -qE '\$\([^(]'; then
       start="$prev"
     else
       break
@@ -205,20 +281,53 @@ build_mutant() { # <suite> <floor-lineno> <out>
 #   NO_FIRE      -> exit 0: the floor is enforced THROUGH the machinery it guards
 #   CONSTRUCTION -> non-zero with a shell-error signature and no sentinel
 classify_mutant() { # <mutant> -> prints FIRES|NO_FIRE|CONSTRUCTION
-  local m="$1" errf rc=0
+  local m="$1" errf outf both rc=0
   errf="${m}.err"
-  bash "$m" >/dev/null 2>"$errf" || rc=$?
+  outf="${m}.out"
+  bash "$m" >"$outf" 2>"$errf" || rc=$?
   if [[ "$rc" -eq 0 ]]; then
     printf 'NO_FIRE\n'
     return 0
   fi
-  if grep -qaE 'unbound variable|command not found|syntax error|unexpected (EOF|end of file)' "$errf" \
-     || [[ "$rc" -eq 2 ]]; then
+
+  # A TOOL's error is not a floor. `-i` used to make the sentinel `FATAL` match git's
+  # universal `fatal:` prefix, so a mutant that merely failed to find a git repository
+  # scored FIRES. Measured: this file's own header comment produced a 277-line slice that
+  # `cd`-ed outside the repo and was credited as a firing floor on
+  # `fatal: not a git repository`. Tool errors are checked FIRST and are never a fire.
+  if grep -qaE '^(fatal|error):' "$errf"; then
     printf 'CONSTRUCTION\n'
     return 0
   fi
-  if grep -qaiE 'FATAL|vacuity|cardinality|assertion floor|only .* (ran|dispatched)|did not execute' "$errf"; then
+
+  # FIRES is tested BEFORE the shell-error signature. The previous order returned
+  # CONSTRUCTION for any mutant whose slice happened to emit an unrelated shell diagnostic
+  # earlier, and `|| [[ "$rc" -eq 2 ]]` forced CONSTRUCTION unconditionally at rc=2 even
+  # with a perfect sentinel on stderr — and 2 is this repo's own fatal convention.
+  #
+  # The sentinel is matched on BOTH streams. A floor that reports to stdout is
+  # non-compliant with ADR-193 Decision #1, but it DID fire, and scoring it as a failed
+  # CONSTRUCTION misreports which property is broken.
+  #
+  # The vocabulary is deliberately broader than one phrasing: an earlier allowlist required
+  # `only` BEFORE the verb and so missed `dispatched only …`, and matched `vacuity` but not
+  # `vacuous`, demoting three fully-compliant floors into the ratcheted debt bin.
+  # Bash's own diagnostics (`<path>: line N: …`) are stripped BEFORE the sentinel test.
+  # They are shell errors by definition, never floor output — and they carry the mutant's
+  # PATH, which lives under a temp dir this file names `vacuity-floor-meta.XXXX`. The word
+  # `vacuit` is in the sentinel vocabulary, so every crashing mutant matched FIRES on its own
+  # filename. Caught by ARM 8, which is the whole reason that control exists.
+  both="${m}.both"
+  { cat "$outf" "$errf" 2>/dev/null || true; } \
+    | { grep -avE '^[^[:space:]]*: line [0-9]+: ' || true; } > "$both"
+  if grep -qaE '\[FATAL\]|\[?FAIL(ED)?\]?:|vacuit|vacuous|cardinality|assertion floor|anti-vacuity|only [0-9]|did not execute|assertions ran' "$both"; then
     printf 'FIRES\n'
+    return 0
+  fi
+
+  if grep -qaE 'unbound variable|syntax error|unexpected (EOF|end of file)|bad substitution' "$errf" \
+     || [[ "$rc" -eq 2 ]]; then
+    printf 'CONSTRUCTION\n'
     return 0
   fi
   printf 'CONSTRUCTION\n'
@@ -352,7 +461,7 @@ fi
 # WIDENING SCOPE NEEDS A PER-SCOPE RATCHET FIRST. MAX_CONSTRUCTION_FAILURES below is GLOBAL
 # and sits at exactly its current value with zero headroom; promoting the deferred
 # directories wholesale would push it from 17 to ~50 and ARM 2 would stop discriminating.
-MAX_DEFERRED=43
+MAX_DEFERRED=46
 cases=$((cases + 1))
 if [[ "$n_deferred" -le "$MAX_DEFERRED" ]]; then
   pass "deferral ledger within its shrink-only ratchet ($n_deferred <= $MAX_DEFERRED)"
@@ -360,14 +469,13 @@ else
   fail "deferral ledger GREW to $n_deferred (ratchet is $MAX_DEFERRED). A new floor-bearing suite landed in a deferred directory: cover it, or promote its directory into COVERED_DIRS — do NOT raise this number."
 fi
 
-# --- ARM 6: population floor (the guard's own dispatch) ----------------------------------
-cases=$((cases + 1))
-MIN_POPULATION=30
-if [[ "$n_covered" -ge "$MIN_POPULATION" ]]; then
-  pass "derived population is non-empty and above its floor ($n_covered >= $MIN_POPULATION)"
-else
-  fail "derived population collapsed to $n_covered (floor $MIN_POPULATION) — the sweep is returning (almost) nothing and every arm above is vacuous"
-fi
+# ARM 6 (an absolute `MIN_POPULATION` floor on the covered set) was DELETED as subsumed.
+# ARM 3's `n_fires >= MIN_FIRING_SUITES` already implies a covered population at least that
+# large, and ARM 5b already catches a sweep that has stopped reaching outside the covered
+# directories. Two loose floors on one quantity are weaker than one tight floor: the deleted
+# arm discriminated only in the narrow band where covered sat between the firing ratchet and
+# 30 AND construction failures were few, and it invited being read as the population guard it
+# was not.
 
 # --- ARM 7: NEGATIVE CONTROL --------------------------------------------------------------
 # The arms above must be CAPABLE of failing. This builds the PRE-FIX shape by hand — a
@@ -416,6 +524,31 @@ if [[ "$crash_verdict" == "CONSTRUCTION" ]]; then
   pass "construction control: an unbound threshold is reported as a construction failure, never as a fired floor"
 else
   fail "construction control classified $crash_verdict, expected CONSTRUCTION — a crash is indistinguishable from a fired floor and the mutation arm is vacuous"
+fi
+
+# --- ARM 8b: PERMISSIVENESS BOUND ----------------------------------------------------------
+# ARM 8 bounds the oracle in the STRICT direction (a crash must not read as a fire). Nothing
+# bounded it in the PERMISSIVE direction: widening the sentinel vocabulary inflates `n_fires`
+# and deflates `n_construct`, and both ratchets move that way (`-ge` and `-le`), so a looser
+# oracle reports a healthier population with every arm green. Measured during review: adding
+# `|FAIL|error|expected|vacuous` to the vocabulary moved fires 24 -> 27 with nothing red.
+#
+# This control exits NON-ZERO while printing text that carries no floor sentinel. It must NOT
+# classify FIRES. Any vocabulary broad enough to match ordinary diagnostic prose fails here.
+permctl="$SUITE_TMP/permissive-shape.sh"
+{
+  printf '%s\n' '#!/usr/bin/env bash'
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' 'command_not_found_handle() { return 0; }'
+  printf '%s\n' 'echo "the configured value was not what the step expected" >&2'
+  printf '%s\n' 'exit 1'
+} > "$permctl"
+cases=$((cases + 1))
+perm_verdict="$(classify_mutant "$permctl")"
+if [[ "$perm_verdict" != "FIRES" ]]; then
+  pass "permissiveness bound: a non-zero exit with no floor sentinel is NOT scored FIRES (got $perm_verdict)"
+else
+  fail "permissiveness bound: generic diagnostic prose scored FIRES — the sentinel vocabulary is broad enough to match any failing mutant, so n_fires is inflated and the ratchets move the permissive way"
 fi
 
 # --- ARM 9: SYNTHESIZED OUT-OF-POPULATION MUST-PASS CONTROL -------------------------------
@@ -492,7 +625,9 @@ tautological=""
 direct_ok=1
 while IFS= read -r f; do
   [[ -n "$f" ]] || continue
-  # the accounting sentinel must be on a printf that redirects to stderr
+  # The sentinel must be emitted by a printf, i.e. NOT routed through the suite's own verdict
+  # helper. This checks the emitter, not the redirect: the `>&2` frequently sits on a
+  # continuation line, so requiring it here would false-fail correct suites.
   if ! grep -qaE "printf.*\[FATAL\] accounting" "$f"; then
     direct_ok=0; tautological="$tautological $f(not-direct)"
   fi
@@ -511,7 +646,13 @@ fi
 subshell_offenders=""
 while IFS= read -r f; do
   [[ -n "$f" ]] || continue
-  if grep -qaE '\$\([^(][^)]*[A-Za-z_]*(cases|ASSERTED|asserts|tally)[A-Za-z_]*[^)]*\+ 1' "$f"; then
+  # Counter names are DERIVED per file, not hardcoded. A literal alternation
+  # `(cases|ASSERTED|asserts|tally)` under case-sensitive grep silently exempted the two
+  # suites in this very PR that name their counter `CASES` — the arm passed because it could
+  # not see them, which is the vacuity class this file exists to close.
+  local_alt="$(counters_of "$f" | paste -sd'|' -)"
+  [[ -n "$local_alt" ]] || continue
+  if grep -qaE "\\$\([^(][^)]*\b(${local_alt})\b[^)]*\+ *1" "$f"; then
     subshell_offenders="$subshell_offenders $f"
   fi
 done < "$CONSERVING"
@@ -522,7 +663,81 @@ else
   fail "case-counter increment inside a command substitution — discarded to a subshell:$subshell_offenders"
 fi
 
-printf '\n'
+# --- ARM 10d: the CASE counter must not move INSIDE a verdict helper ------------------------
+# ADR-193 Decision #2, and until now only CLAIMED. A case counter incremented inside the
+# verdict helpers moves WITH the verdict, so stubbing one drops the row and its count together
+# and the identity holds under the exact fault it exists to catch — the tautology measured as
+# `conservation GREEN — defect hidden`, RC=0.
+#
+# The CASE counter is derived from the conservation identity itself: in
+# `if [[ $((A + B)) -ne "$C" ]]` the right operand C is the case counter, and A/B are the
+# verdict counters. Deriving it this way rather than matching every counter is load-bearing —
+# a first attempt flagged `passes=$((passes + 1))` inside `pass()` for every suite including
+# the two reference implementations, because a verdict helper incrementing its OWN verdict
+# counter is correct and expected.
+helper_offenders=""
+while IFS= read -r f; do
+  [[ -n "$f" ]] || continue
+  case_ctr="$( { grep -aoE 'if \[\[ \$\(\([^)]*\)\) -ne "?\$\{?[A-Za-z_][A-Za-z0-9_]*' "$f" || true; } \
+    | sed -E 's/.*-ne "?\$\{?//' | head -1)"
+  [[ -n "$case_ctr" ]] || continue
+  # Extract each verdict-helper body by brace depth and look for the CASE counter in it.
+  # The VERDICT counters are the two operands on the left of the identity.
+  vdt="$( { grep -aoE 'if \[\[ \$\(\([^)]*\)\) -ne' "$f" || true; } | head -1 \
+    | sed -E 's/^if \[\[ \$\(\(//; s/\)\) -ne$//' | tr -cd 'A-Za-z0-9_ ' | tr ' ' '|' | sed 's/||*/|/g; s/^|//; s/|$//')"
+  [[ -n "$vdt" ]] || continue
+  # A function is a TERMINAL VERDICT HELPER only if it moves a verdict counter. A wrapper
+  # that merely CALLS one (expect_rc, eq, neg, assert_eq) is the correct home for the case
+  # increment — flagging those was a false positive on every reference implementation.
+  hit="$(awk -v ctr="$case_ctr" -v vdt="$vdt" '
+    /^[a-zA-Z_][a-zA-Z0-9_]*\(\)[[:space:]]*\{/ { inh = 1; depth = 0; name = $0; sub(/\(\).*/, "", name); hasc = 0; hasv = 0 }
+    inh {
+      d = gsub(/\{/, "{"); depth += d
+      d = gsub(/\}/, "}"); depth -= d
+      if ($0 ~ ctr "[[:space:]]*=[[:space:]]*\\$\\(\\(" || $0 ~ "\\(\\([[:space:]]*" ctr "\\+\\+") hasc = 1
+      if ($0 ~ "(" vdt ")[[:space:]]*=[[:space:]]*\\$\\(\\(") hasv = 1
+      if (depth <= 0) { inh = 0; if (hasc && hasv) print name }
+    }
+  ' "$f" 2>/dev/null | sort -u || true)"
+  while IFS= read -r h; do
+    [[ -n "$h" ]] || continue
+    helper_offenders="$helper_offenders ${f}:${h}()"
+  done <<< "$hit"
+done < "$CONSERVING"
+cases=$((cases + 1))
+if [[ -z "$helper_offenders" ]]; then
+  pass "no CASE counter is incremented inside a verdict helper (the identity stays non-tautological)"
+else
+  fail "CASE counter incremented INSIDE a verdict helper — conservation becomes a tautology:$helper_offenders"
+fi
+
+# --- ARM 10e: conservation is EXECUTED, not just spelled ------------------------------------
+# Arms 10a-10d are static: they grep for the sentinel, for direct reporting, and for where the
+# increments sit. All four are satisfied by a conservation block whose comparison has been
+# gutted — replacing the condition with `if false; then` while keeping the printf and the
+# `exit 1` inside left the whole guard byte-identical green, which is the "certifies spelling,
+# not behaviour" class this file exists to close, one level up.
+#
+# So this arm RUNS a conservation check. The synthesized fixture is the subject because it is
+# outside the derived population and cheap: stub its verdict helper to a no-op, and the case
+# counter keeps moving while the verdict does not, which is exactly the fault conservation
+# exists to catch. It must exit non-zero AND name the accounting sentinel.
+cases=$((cases + 1))
+cons_exec="$SUITE_TMP/conservation-exec.sh"
+if [[ -f "$FIXTURE" ]]; then
+  # Stub the fixture's success helper AFTER its definition, leaving everything else intact.
+  awk '{ print } /^yay\(\)/ { print "yay() { :; }" }' "$FIXTURE" > "$cons_exec"
+fi
+ce_rc=0
+ce_err="$cons_exec.err"
+if [[ -s "$cons_exec" ]]; then
+  bash "$cons_exec" >/dev/null 2>"$ce_err" || ce_rc=$?
+fi
+if [[ "$ce_rc" -ne 0 ]] && grep -qaE '\[FATAL\] accounting' "$ce_err"; then
+  pass "conservation EXECUTES: a neutered verdict helper is caught by the accounting identity (exit $ce_rc)"
+else
+  fail "conservation did not fire when a verdict helper was neutered (exit $ce_rc) — the identity is spelled but not enforced; a gutted comparison would pass every static arm above"
+fi
 
 # ---------------------------------------------------------------------------------------
 # THIS SUITE'S OWN FLOOR. The same rule it enforces on the others: reported directly, never
@@ -530,7 +745,7 @@ printf '\n'
 # hand; never derived from a variable this file computes, because a floor that descends
 # with the thing it guards is not a floor.
 # ---------------------------------------------------------------------------------------
-MIN_META_CASES=17
+MIN_META_CASES=19
 if [[ "$cases" -lt "$MIN_META_CASES" ]]; then
   printf '\n[FATAL] meta-guard vacuity: only %d assertion(s) ran; expected >= %d.\n' \
     "$cases" "$MIN_META_CASES" >&2

@@ -80,7 +80,7 @@ Independently verified live by a dedicated agent; all eight claims confirmed.
 - Reference implementation confirmed in both `scripts/plugin-legacy-resolver-probe.test.sh` (floor at `:521`, conservation at `:538`) and `scripts/plugin-delivery-canary.test.sh` (floor at `:1055`, conservation at `:1072`), each reporting via `printf >&2` + `exit 1`.
 - Issue **#7553** (`test-all.sh's subagent full-gate refusal can never fire: nothing sets SOLEUR_SUBAGENT=1`) — confirmed **open**. Different subsystem. **Out of scope; must not be bundled and must not be closed.**
 - Learning `knowledge-base/project/learnings/2026-08-13-the-fixture-shape-decided-what-the-assertion-could-possibly-catch.md` — confirmed present.
-- ADR ordinal: highest **on disk** is ADR-186; highest **claimed across all 69 `origin/*` refs** is ADR-190. Next free is **ADR-191**, *provisional* — re-derive immediately before merge.
+- ADR ordinal: highest **on disk** is ADR-186; highest **claimed across all 69 `origin/*` refs** is ADR-190. Next free is **ADR-193**, *provisional* — re-derive immediately before merge.
 
 ---
 
@@ -258,7 +258,7 @@ These feed the Phase 3.7 closure identity and must not be copied from this docum
 
 ### Phase 1 — Record the invariant
 
-1.1 Author `knowledge-base/engineering/architecture/decisions/ADR-191-*.md` (ordinal
+1.1 Author `knowledge-base/engineering/architecture/decisions/ADR-193-*.md` (ordinal
 provisional) recording the cross-cutting invariant: **a suite's anti-vacuity floor reports with
 `printf >&2` + `exit 1` directly and never through the suite's own assert functions**, and the
 corpus is swept by a meta-guard that mutation-tests every floor it can construct a runnable
@@ -266,7 +266,7 @@ mutant for. This is an obligation on every future suite author, mechanically enf
 Phase 3 — which is what makes it ADR-shaped.
 
 1.2 Add **AP-023** to `knowledge-base/engineering/architecture/principles-register.md`
-referencing ADR-191, enforcement `hook (CI-required suite: scripts/guard-vacuity-floor.test.sh
+referencing ADR-193, enforcement `hook (CI-required suite: scripts/guard-vacuity-floor.test.sh
 via test-all.sh)`. Precedent: AP-021 and AP-022 are both CI-enforced lint invariants of the
 same shape.
 
@@ -415,7 +415,7 @@ no-op — all existing targets already run.
 
 | Path | Purpose |
 |---|---|
-| `knowledge-base/engineering/architecture/decisions/ADR-191-anti-vacuity-floor-contract.md` | Record the direct-exit floor invariant (ordinal provisional) |
+| `knowledge-base/engineering/architecture/decisions/ADR-193-anti-vacuity-floor-contract.md` | Record the direct-exit floor invariant (ordinal provisional) |
 | A synthesized control fixture under `scripts/` or a test-fixture dir | Out-of-population must-PASS control (Phase 3.8) |
 
 ---
@@ -529,7 +529,7 @@ arm — proving the guard accepts a compliant shape it did not author. `plugin-d
 
 ### ADR
 
-**Create `ADR-191 — Anti-vacuity floor contract for bash test suites`** (ordinal **provisional**;
+**Create `ADR-193 — Anti-vacuity floor contract for bash test suites`** (ordinal **provisional**;
 highest on disk is ADR-186, highest claimed across 69 `origin/*` refs is ADR-190).
 
 Decision: a suite's anti-vacuity floor reports via `printf >&2` + `exit 1` directly and never
@@ -685,7 +685,7 @@ UI-surface term list or glob superset; the mechanical override did not fire.
 13. `bash scripts/test-all.sh scripts` exits 0.
 14. All four re-ratcheted floors (Phase 2.7) sit at their re-measured post-edit counts, with
     pre- and post-edit numbers recorded.
-15. `ADR-191-*.md` and the AP-023 register row exist; the ordinal is re-verified free across all
+15. `ADR-193-*.md` and the AP-023 register row exist; the ordinal is re-verified free across all
     `origin/*` refs immediately before merge, and every artifact naming it (`plans/`,
     `specs/feat-*/tasks.md`) is swept in the same edit if it moves.
 
@@ -732,7 +732,7 @@ Stated as *mutation → guard reddens*, never *command → output*.
 | **`set -euo pipefail` kills the script at a capture.** `x=$(cmd \| pipeline)` on a no-match dies **at the assignment**, so a `[[ -n "$x" ]] \|\| { echo FATAL; exit 2; }` guard below it is unreachable. | Use the brace form `{ cmd \|\| true; }`; a trailing `\|\| true` binds only to the last stage. `lint-shell-capture-exit.py` catches regressions (AC11). |
 | **"Equivalent mutant" asserted rather than proven.** The first draft carried one (a row assuming the floor still called a helper the fix had removed). | Any row claimed equivalent must be traced through both branches to a difference in observable output before it is recorded. Rejected at review otherwise. |
 | **CI blast radius.** A red guard blocks the `test-scripts` shard on every PR. | Phase 2 lands the suite fixes before Phase 3 tightens the guard. |
-| **ADR ordinal collision.** ADR-191 is provisional. | Re-derive across all `origin/*` refs immediately before merge; sweep `plans/` + `specs/feat-*/` for the old ordinal in the same edit if it moves (AC15). |
+| **ADR ordinal collision.** ADR-193 is provisional. | Re-derive across all `origin/*` refs immediately before merge; sweep `plans/` + `specs/feat-*/` for the old ordinal in the same edit if it moves (AC15). |
 
 ---
 
@@ -756,7 +756,7 @@ Stated as *mutation → guard reddens*, never *command → output*.
 - A plan whose `## User-Brand Impact` section is empty or placeholder fails `deepen-plan` Phase
   4.6. This plan's section names a concrete artifact, a concrete (nil) exposure vector, and
   threshold `none`.
-- **The ADR ordinal is provisional until merge.** ADR-191 was free across all 69 `origin/*` refs
+- **The ADR ordinal is provisional until merge.** ADR-193 was free across all 69 `origin/*` refs
   on 2026-08-16 (highest on disk: ADR-186; highest claimed on a branch: ADR-190). Siblings claim
   ordinals mid-pipeline and collide only post-squash. Re-run the probe before merge and sweep
   every artifact naming it if it moves.

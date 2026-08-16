@@ -1,4 +1,4 @@
-# ADR-191: A suite's anti-vacuity floor reports directly, and its case counter moves at the call site
+# ADR-193: A suite's anti-vacuity floor reports directly, and its case counter moves at the call site
 
 - **Status:** Accepted. True the moment the code merges — no soak window, no time-gated criterion.
 - **Date:** 2026-08-16
@@ -38,7 +38,7 @@ than a learning file. A case counter incremented **inside both verdict helpers**
 conservation identity a **tautology**: the counter moves *with* the verdict, so stubbing `fail`
 drops the row and its count together and `passes + fails == cases` still holds under the exact
 fault it was written to catch. Measured on the `ok`/`bad` shape: `conservation GREEN — defect
-hidden`, RC=0. Three of the seven suites hardened here had precisely that shape, and it reads as
+hidden`, RC=0. Three of the ten suites hardened here had precisely that shape, and it reads as
 correct at every call site.
 
 ## Decision
@@ -54,7 +54,9 @@ preference: it is the entire difference between a check that catches a discarded
 that cannot. The increment must never sit inside a command substitution `$( … )` — a subshell
 discards it, and the code reads as correct.
 
-**3. A suite carrying a floor also carries an accounting-conservation check** — `passes + fails
+**3. A suite carrying a floor also carries an accounting-conservation check** (an obligation on
+new suites; enforced today over the suites that carry one, with a shrink-only ratchet, rather
+than over every floor-bearing suite in the corpus) — `passes + fails
 == cases` — reported directly, for the same reason as the floor. It diagnoses **both**
 directions: fewer verdicts than counted means a discarded verdict (a neutered helper); more means
 a call site with no increment (a harness bug). Naming both keeps a genuine harness slip from
@@ -86,8 +88,12 @@ list can be under-declared), zeroing the counters, and running it. The obvious o
 That oracle is wrong, and it was scoring crashes as passes. A slice that starts at the floor's
 `if` leaves a threshold assigned on the *preceding* line unbound; under `set -u` the mutant dies
 **before reaching the floor**, exiting non-zero for both the pre-fix and post-fix forms.
-**8 of 11 target floors were equivalent mutants this way** — the arm proved nothing about them
-while reporting green. Reproduced as `MIN_ASSERTS: unbound variable`.
+The effect is reproducible in the shipped tree: disabling the backward slice-widening moves
+suites out of FIRES and into the construction bucket wholesale, and the failure mode is
+`MIN_ASSERTS: unbound variable` — the mutant dying before the comparison it exists to test.
+(An earlier draft of this ADR put the ratio at "8 of 11". That figure came from an intermediate
+builder and does not reproduce against anything in the tree; the directional finding is what is
+load-bearing, so the numerals are dropped rather than restated.)
 
 So the oracle requires a floor-shaped sentinel on stderr, and classifies shell-error signatures as
 a distinct **construction failure** — its own loud class, neither pass nor fail. The slice is
@@ -96,14 +102,21 @@ are zeroed: zeroing a threshold inverts a `-ge` floor's polarity and destroys di
 
 ## Consequences
 
-- Every floor-bearing suite under `scripts/` and `plugins/soleur/test/` is mutation-tested on
-  every PR via the CI-required `test` context. A suite that regresses to a `fail`-routed floor is
-  caught by derivation, with no author action and no list to update.
+- Every floor-bearing suite under `scripts/` and `plugins/soleur/test/` **for which a runnable
+  mutant can be constructed** is mutation-tested on every PR via the CI-required `test` context.
+  A suite that regresses to a `fail`-routed floor is caught by derivation, with no author action
+  and no list to update. Suites whose floor block is not independently runnable are counted
+  separately and named — see the next bullet; the guard does not claim to have tested them.
 - Suites whose floor block is not independently runnable (it reads state computed by surrounding
   code) are counted against a **shrink-only** ratchet. They are visible debt, not silence.
-- A **closure identity** — `covered + deferred == repo-wide total`, where the total is swept
-  independently over the whole repo — means a new floor-bearing suite in a directory nobody
-  anticipated breaks the guard loudly rather than disappearing.
+- **Closure is enforced by two DECLARED directory scopes plus an UNCLASSIFIED bucket that must
+  be empty** — not by the arithmetic identity `covered + deferred == total`. That identity was
+  drafted, shipped, and then falsified by mutation: deriving `deferred` as "everything not
+  covered" makes the two sets a partition of one list, so the sum always equals the total and
+  the arm can never fail. A floor-bearing suite added under a directory in neither scope left
+  the guard GREEN. With both scopes declared, that suite lands in UNCLASSIFIED and the guard
+  reddens naming the file. The deferral ledger additionally carries a shrink-only ratchet, so
+  the deferred set cannot silently accrete.
 - The corpus outside those two directories (notably `apps/web-platform/infra/`, which has its own
   runner) is deferred and counted, not forgotten.
 

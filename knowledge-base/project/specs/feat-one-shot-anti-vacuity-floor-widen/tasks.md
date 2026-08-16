@@ -31,12 +31,12 @@ Lane: `procedural`
 
 ## Phase 1 — Record the invariant
 
-- [x] 1.1 Author `knowledge-base/engineering/architecture/decisions/ADR-191-*.md` (ordinal
+- [x] 1.1 Author `knowledge-base/engineering/architecture/decisions/ADR-193-*.md` (ordinal
       **provisional**): floors report `printf >&2` + `exit 1` directly, never through the
       suite's assert functions; conservation from call-site increments; population derived
       from floor shape and closed over the repo.
 - [x] 1.2 Add **AP-023** to `knowledge-base/engineering/architecture/principles-register.md`
-      referencing ADR-191, enforcement `hook (CI-required suite: scripts/guard-vacuity-floor.test.sh
+      referencing ADR-193, enforcement `hook (CI-required suite: scripts/guard-vacuity-floor.test.sh
       via test-all.sh)`. Precedent: AP-021, AP-022.
 - [x] 1.3 **No contract-line rollout** (R1). The 33 comment-only edits are cut.
 
