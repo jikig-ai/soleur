@@ -186,8 +186,50 @@ breaks**. `asserted` and `checked` are populated by construction; `passes` and `
     things a truncation cannot satisfy — a `^Closes #<issue>$` line, and a section-heading count
     at or above what was written. Never treat `--body-file` as verified by its own exit code.
 
+22. **The plan's own `discoverability_test.command` could not execute, and its `expected_output`
+    quoted text no guard has ever printed.** The command chained two guards with `&&`; preflight
+    Check 10 rejects every shell-active token *before* running, so the probe would have been
+    refused unparsed — the ADR-191 invariant declared verifiable with nothing verifying it. The
+    plan asserted in prose that this shape "satisfies the preflight Check 10 execution boundary",
+    which is the class of unmeasured claim the repo already has a rule about. **Prevention:** a
+    declared probe is a claim to RUN, not to describe — execute the exact `command:` string
+    through the gate that will consume it, and diff the real stdout against the `expected_output`
+    you are about to write, before either lands.
+23. **My conservation identity was a tautology, and it was the same key insight I wrote at the top
+    of this file, one level over.** ADR-193 landed mid-flight and its derived guard reddened on
+    three batteries added here. I had correctly moved the FLOOR off `asserted` onto `passes`, then
+    left `asserted` incremented inside both `pass()` and `fail()` — so the identity
+    `passes + fails == asserted` moved with the verdict and held under the exact fault it exists to
+    catch. Fixing the floor and leaving the identity tautological is a half-application of my own
+    conclusion. **Prevention:** when a file has two counters and a check relating them, ask of the
+    RELATION — not just each floor — whether it can still hold when the mechanism breaks; a counter
+    incremented by the helpers it is meant to audit can never audit them.
+24. **The floors were not constructible, so nothing asserted them.** `guard-vacuity-floor.test.sh`
+    slices the floor `if` plus the contiguous assignments above it; with the conservation block
+    sitting between `MIN_ASSERTIONS=<n>` and the floor reading it, the threshold was unbound, the
+    mutant died at `set -u` first, and the floor scored "not constructible" — indistinguishable
+    from compliant to a reader. **Prevention:** when a meta-guard exists for a shape, run it before
+    claiming conformance; "my suite is green" and "the guard can prove my suite's floor fires" are
+    different properties.
+25. **The tautological identity was hiding a real harness bug in my own suite.** The moment the
+    case counter moved to the call site, `lint-dual-lockfile.test.sh` reported **18 passed against
+    15 asserted** — three inline assertion sites (H3, row7, row8) call `pass`/`fail` directly and
+    had never gone through the counting wrappers. **Prevention:** treat the first run after
+    de-tautologising a check as a *finding-producing* run, not a formality; it is the first run in
+    which that check has ever been able to say anything.
+26. **I ran a mutation that could not have failed, and nearly read its survival as evidence.**
+    Testing whether the wrapper could leak its success marker, I moved the marker into a
+    `trap … EXIT` registered at the END of the file — but `set -e` exits before that line runs, so
+    no trap was ever installed and the marker legitimately never printed. Re-run with the trap
+    registered *before* the guards, the mutant leaked as intended and the battery caught it. This
+    is error 16 recurring in a new costume. **Prevention:** every mutation needs a sanity step that
+    demonstrates the mutant ACTUALLY exhibits the defect, run before the battery's verdict is
+    consulted — never infer the mutant's behaviour from the edit.
+
 ## Cross-references
 
 - ADR-191 — npm is the single lockfile of record
+- ADR-193 — a suite's anti-vacuity floor reports directly, and its case counter moves at the call site
+- Issue #7588 — `guard-vacuity-floor`'s conservation population is selected by message text
 - `knowledge-base/project/learnings/2026-08-10-a-guard-that-cannot-be-driven-red-is-vacuous-four-rounds-four-instances.md`
 - `knowledge-base/project/learnings/2026-07-16-a-mutation-battery-only-covers-what-you-mutate.md`
