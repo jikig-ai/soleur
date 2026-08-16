@@ -30,13 +30,28 @@ INFRA_VALIDATION="$REPO_ROOT/.github/workflows/infra-validation.yml"
 # on this sha256 while the repo had moved on). Documented provenance, not a live dep.
 STALE_CI_DEPLOY_SHA="2208300a1c0ffee0000000000000000000000000000000000000000000000000"
 
-pass=0
-fail=0
-pass() { echo "  PASS: $1"; pass=$((pass + 1)); }
-fail() { echo "  FAIL: $1"; fail=$((fail + 1)); }
-
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+
+pass=0
+fail=0
+# A SECOND, INDEPENDENT PRODUCER FOR THE TALLY (#7104 PR-B review).
+#
+# `$pass` is a counter incremented by one function, so the assertion-count floor below had
+# exactly ONE producer and two one-line mutations defeated it:
+#
+#   pass=$((pass + 2))         -> the suite reported 260 passed against a floor of 130, so the
+#                                 floor passed while HALF the arms could have been deleted.
+#   GATE_MIN_ASSERTIONS=$pass  -> the floor compares the counter against itself. Tautology; it
+#                                 can never fail, at any count.
+#
+# The emitted PASS: lines are the second producer. `pass()` prints one line per assertion and
+# appends one line here, so the counter and the log can only agree if each increment
+# corresponds to a real assertion. `pass=$((pass + 2))` desynchronises them immediately.
+PASSLOG="$TMP/pass.log"
+: > "$PASSLOG"
+pass() { echo "  PASS: $1"; printf 'PASS\n' >> "$PASSLOG"; pass=$((pass + 1)); }
+fail() { echo "  FAIL: $1"; fail=$((fail + 1)); }
 
 # --- Build a hermetic synthetic infra dir mirroring the real FILE_MAP ----------------
 # For each FILE_MAP dest: if the REAL repo classifies it as template-backed (ships
@@ -330,6 +345,76 @@ else
     else
       fail "adjudicate_infra_config is not terminal in infra-config-verify.sh: count L$ci_line, adjudicate L$adj_line, done-lines-strictly-between=$done_count (expected exactly 1). A content assert inside the retry loop is the #6594 coin flip; a SECOND done means a nested loop the first-match scan was structurally unable to see (R19.2)."
     fi
+
+    # ---------------------------------------------------------------------------------------
+    # THE SAME PROPERTY, MEASURED STRUCTURALLY (#7104 PR-B review) — because the count above
+    # CANCELS under composition.
+    #
+    # `done_count == 1` is a scalar over a window, and two mutations that each break it can be
+    # applied together so that it comes back to 1: move adjudicate_infra_config INTO the poll
+    # loop (row G2-1, which removes the real closing `done` from the window) and add a nested
+    # loop above it (row G2-5, which puts a different `done` back). Measured: the composite
+    # scored done_count=1 and the suite stayed green, with the content assert restored to the
+    # any-of-3 coin flip #6594 exists to prevent. Neither row alone survives; together they do.
+    #
+    # A count cannot express "outside every loop". Nesting DEPTH can, and it does not cancel:
+    # adjudicate must sit at depth 0 and count_invariant at depth >= 1, and no arrangement of
+    # extra loops makes an in-loop call read as depth 0.
+    #
+    # The scanner carries a POSITIVE CONTROL. If its tokenizer silently stopped matching, every
+    # line would measure depth 0 and the adjudicate assertion would pass vacuously — so it also
+    # requires having SEEN at least one loop, which is the same failure the count's own
+    # cardinality floor guards against one level up.
+    LOOPDEPTH=$(python3 - "$VERIFY_SH" "$adj_line" "$ci_line" <<'PYEOF'
+import re, sys
+
+path, adj, ci = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+lines = open(path, encoding='utf-8').read().splitlines()
+
+tok = re.compile(r'(?<![-\w])(do|done)(?![-\w])')
+depth = 0
+maxdepth = 0
+depth_at = {}
+for i, raw in enumerate(lines, start=1):
+    # Strip comments and single/double-quoted spans so a `done` inside prose or a message
+    # string cannot move the counter. Crude but conservative: it can only UNDER-count, and an
+    # under-count is caught by the positive control below.
+    line = re.sub(r'#.*$', '', raw)
+    line = re.sub(r'"[^"]*"', '""', line)
+    line = re.sub(r"'[^']*'", "''", line)
+    depth_at[i] = depth          # depth as the line BEGINS
+    for t in tok.findall(line):
+        if t == 'do':
+            depth += 1
+            maxdepth = max(maxdepth, depth)
+        else:
+            depth -= 1
+
+problems = []
+if maxdepth < 1:
+    problems.append("the loop scanner saw no loop at all (maxdepth=0) — its verdict is vacuous")
+if depth != 0:
+    problems.append("loop tokens do not balance over the file (ends at depth %d)" % depth)
+if depth_at.get(adj, -1) != 0:
+    problems.append("adjudicate_infra_config (L%d) sits at loop depth %d, expected 0 — a content "
+                    "assert inside the retry loop is the #6594 any-of-N coin flip"
+                    % (adj, depth_at.get(adj, -1)))
+if depth_at.get(ci, 0) < 1:
+    problems.append("infra_config_count_invariant (L%d) sits at loop depth %d, expected >= 1 — the "
+                    "poll-loop fast path is no longer inside the poll loop"
+                    % (ci, depth_at.get(ci, 0)))
+print("MAXDEPTH=%d ADJ=%d CI=%d" % (maxdepth, depth_at.get(adj, -1), depth_at.get(ci, -1)))
+for p in problems:
+    print("PROBLEM=%s" % p)
+PYEOF
+) || LOOPDEPTH="PROBLEM=the loop-depth scanner could not run"
+    ld_problems=$(printf '%s\n' "$LOOPDEPTH" | grep -c '^PROBLEM=' || true)
+    if [[ "$ld_problems" -eq 0 ]]; then
+      pass "adjudicate_infra_config is at loop depth 0 and count_invariant is inside the loop ($(printf '%s\n' "$LOOPDEPTH" | sed -n 's/^MAXDEPTH=/maxdepth=/p')) — terminal-ness is structural, so G2-1 and G2-5 cannot cancel"
+    else
+      fail "loop-structure check failed ($ld_problems problem(s)):"
+      printf '%s\n' "$LOOPDEPTH" | sed -n 's/^PROBLEM=/      - /p' >&2
+    fi
   fi
 fi
 
@@ -393,6 +478,24 @@ else
   fail "#7104 Guard 2 (5)(6): infra-config-verify.sh has $REPUSH_IF_SITES direct 'if infra_config_should_repush' condition(s) and $REPUSH_CMD_SITES command-position call(s); both must be 1. Zero direct conditions means the decision was inlined (Guard 1 then certifies a predicate production does not run) or wrapped in a function (errexit suspends into the wrapper body, R16.1); a higher count means the re-push decision has two producers."
 fi
 
+# (5b) THE VERDICT MUST NOT BE DISCARDED ON THE CONDITION LINE (#7104 PR-B review).
+#
+# The count above pins that the predicate is CALLED exactly once, directly, as an `if`
+# condition. It says nothing about what happens to the value it returns. Appending `|| true`
+# (or `|| :`) to that line keeps every count at 1 — one direct condition, one command-position
+# call, no wrapper — while making the condition unconditionally TRUE, so the re-push fires on
+# every run regardless of what the predicate decided. Measured: the whole Guard 1 matrix stayed
+# green, because Guard 1 grades the predicate and this mutation does not touch the predicate.
+#
+# It is the cheapest possible way to neutralise a safety decision while leaving every structural
+# assertion satisfied, so it gets its own row rather than being folded into the counts.
+REPUSH_SWALLOWED=$(grep -nE '^[[:space:]]*if[[:space:]]+infra_config_should_repush[[:space:]].*\|\|[[:space:]]*(true|:)([[:space:]]|;|$)' "$VERIFY_SH" || true)
+if [[ -z "$REPUSH_SWALLOWED" ]]; then
+  pass "#7104 Guard 2 (5b): the predicate's verdict is not swallowed by '|| true' / '|| :' on its own condition line"
+else
+  fail "#7104 Guard 2 (5b): the re-push condition discards the predicate's verdict — '${REPUSH_SWALLOWED}'. Every count-based clause above still reads 1, but the condition is now unconditionally true and the bounded re-push fires on runs the predicate refused."
+fi
+
 # (7) BOUNDEDNESS. Exactly ONE step in the job writes production from the re-push plan.
 #
 # This is R22.6's replacement for R18.3's latch: under the step split the honest statement of
@@ -431,25 +534,120 @@ fi
 # The detector carries its own POSITIVE CONTROL. A sweep that matches nothing is
 # indistinguishable from a sweep whose regex silently stopped matching — and this sweep
 # exists precisely to report an empty set, so it must prove it can report a non-empty one.
+#
+# INVERTED TO AN ALLOW-LIST (#7104 PR-B review). THIS IS THE IMPORTANT PART OF THIS GUARD.
+#
+# The previous sweep was a DENY-LIST of write verbs (terraform|curl|ssh|systemctl|gh issue|
+# doppler secrets set). A deny-list over a shell file enumerates the ways you thought of, and
+# a shell has unboundedly many ways to say the same thing. Measured against it, 11 of 12
+# write-shaped inputs evaded detection:
+#
+#   `terraform apply`            caught (the one the single control tested)
+#   doppler run -- terraform apply   EVADED  <-- and this is the shape THIS WORKFLOW USES TWICE
+#   `terraform apply` in backticks   EVADED
+#   xargs terraform apply            EVADED
+#   env TF_LOG=1 terraform apply     EVADED
+#   bash -c 'terraform apply'        EVADED
+#   sh -c ...                        EVADED
+#   eval "$cmd"                      EVADED
+#   ssh -o ... host terraform apply  EVADED (leading flags broke the anchor)
+#   command terraform apply          EVADED
+#   nohup terraform apply            EVADED
+#   timeout 60 terraform apply       EVADED
+#
+# The property this guard actually wants is "this library is a PURE ADJUDICATOR", and that is
+# naturally expressed as: the only things it may run are text tools and its own functions.
+# Anything else is a hit, including a wrapper whose name nobody predicted. Measured on the
+# as-written library, the complete command-position set is six external binaries plus
+# `infra_config_*` self-calls.
+#
+# The control is now a BATTERY, not a single case: a sweep that exists to report an empty set
+# must prove it can report a non-empty one for every evasion shape above, or its silence is a
+# statement about the regex rather than about the file.
 LIB_SWEEP=$(python3 - "$SCRIPT_DIR/infra-config-gate.sh" <<'PYEOF'
 import sys, re
 
-VERBS = r'(?:terraform|curl|ssh|systemctl|gh\s+issue|doppler\s+secrets\s+(?:set|delete|unset|upload))'
-CMD = re.compile(
-    r'(?:^\s*|[;&|]\s*|[({]\s*|\b(?:if|elif|then|else|do|while|until)\s+|!\s*)' + VERBS + r'\b')
+# The six external binaries the library legitimately runs, derived from the as-written file.
+# All six are pure text/JSON transforms: none can write infrastructure, open a network
+# connection, or change host state. Adding to this list is a deliberate act.
+ALLOWED_EXTERNAL = {'jq', 'sed', 'grep', 'awk', 'basename', 'sha256sum'}
+
+KEYWORDS = {'if','elif','then','else','fi','for','while','until','do','done','case','esac',
+            'in','function','time','coproc','return','break','continue'}
+# Shell builtins run in-process and cannot reach infrastructure. `eval`, `source`, `.` and
+# `command` are DELIBERATELY ABSENT: each is an arbitrary-command trampoline, which is exactly
+# what an allow-list exists to stop.
+BUILTINS = {'echo','printf','local','declare','typeset','readonly','export','unset','set',
+            'shift','exit','true','false','test','read','shopt','trap','let','pwd',
+            'type','hash','umask',':','['}
+
+def strip_noise(text):
+    """Blank quoted spans (tracking state ACROSS lines, which is what makes a multi-line jq
+    program stop looking like code), comments, arithmetic and [[ ]] tests."""
+    out, i, n, q = [], 0, len(text), None
+    while i < n:
+        c = text[i]
+        if q is None:
+            if c == '#':
+                while i < n and text[i] != '\n':
+                    i += 1
+                continue
+            if c in ('"', "'"):
+                q = c; out.append(' '); i += 1; continue
+            out.append(c); i += 1
+        else:
+            if c == '\\' and q == '"' and i + 1 < n:
+                out.append('  '); i += 2; continue
+            if c == q:
+                q = None
+            out.append('\n' if c == '\n' else ' ')
+            i += 1
+    s = ''.join(out)
+    # Arithmetic and test spans hold variable names, not commands.
+    s = re.sub(r'\$?\(\([^()]*\)\)', ' ', s)
+    s = re.sub(r'\[\[.*?\]\]', ' ', s, flags=re.S)
+    return s
+
+# Command position: start of input/line, after a separator, a subshell/group opener, a
+# command-substitution opener (both `$(` and a backtick), or an if-family keyword or `!`.
+CMD = re.compile(r'(?:^|[\n;&|(){}`]|\$\(|\b(?:if|elif|then|else|do|while|until)\s|!\s*)\s*'
+                 r'([A-Za-z_][A-Za-z0-9_./-]*)(?=\s|$|;)', re.M)
 
 def sweep(text):
     hits = []
-    for i, line in enumerate(text.splitlines(), 1):
-        if line.lstrip().startswith('#'):
+    clean = strip_noise(text)
+    # Map offsets back to line numbers for a useful message.
+    for m in CMD.finditer(clean):
+        tok = m.group(1)
+        if tok in KEYWORDS or tok in BUILTINS or tok in ALLOWED_EXTERNAL:
             continue
-        if CMD.search(line):
-            hits.append((i, line.strip()[:110]))
+        if tok.startswith('infra_config_'):
+            continue          # the library's own functions
+        line = clean.count('\n', 0, m.start(1)) + 1
+        hits.append((line, tok))
     return hits
 
-control = sweep('_mutant() {\n  terraform apply -auto-approve\n}\n')
-if len(control) != 1:
-    print('CONTROL-FAILED (the detector cannot see an obvious command-position write, so its verdict on the real file would be a statement about the regex)')
+# POSITIVE-CONTROL BATTERY. Every one of these must be seen. The comment above records that
+# the deny-list this replaced caught exactly the first.
+CONTROLS = [
+    'f() {\n  terraform apply -auto-approve\n}\n',
+    'f() {\n  doppler run --name-transformer tf-var -- terraform apply\n}\n',
+    'f() {\n  x=`terraform apply`\n}\n',
+    'f() {\n  echo a | xargs terraform apply\n}\n',
+    'f() {\n  env TF_LOG=1 terraform apply\n}\n',
+    'f() {\n  bash -c "terraform apply"\n}\n',
+    'f() {\n  sh -c "terraform apply"\n}\n',
+    'f() {\n  eval "$cmd"\n}\n',
+    'f() {\n  ssh -o StrictHostKeyChecking=no host terraform apply\n}\n',
+    'f() {\n  command terraform apply\n}\n',
+    'f() {\n  nohup terraform apply\n}\n',
+    'f() {\n  timeout 60 terraform apply\n}\n',
+]
+missed = [i for i, c in enumerate(CONTROLS, 1) if not sweep(c)]
+if missed:
+    print('CONTROL-FAILED (the detector missed control(s) %s, so its verdict on the real file '
+          'would be a statement about the regex rather than about the file)'
+          % ','.join(str(m) for m in missed))
     sys.exit(0)
 
 hits = sweep(open(sys.argv[1], encoding='utf-8').read())
@@ -457,7 +655,7 @@ print('OK' if not hits else 'HITS=' + '; '.join('L%d %s' % h for h in hits))
 PYEOF
 ) || LIB_SWEEP="SWEEP-ERROR (python3/regex unavailable)"
 if [[ "$LIB_SWEEP" == "OK" ]]; then
-  pass "#7104 Guard 2 (8): the sourced library contains no command-position production write (terraform/curl/ssh/systemctl/mutating doppler/gh issue) — pure-adjudicator is now enforced, not merely conventional"
+  pass "#7104 Guard 2 (8): the sourced library runs ONLY six allow-listed text tools (jq/sed/grep/awk/basename/sha256sum) and its own infra_config_* functions — pure-adjudicator is enforced by allow-list, so an unpredicted wrapper (doppler run --, xargs, env, backticks, bash -c) is a hit rather than an escape"
 else
   fail "#7104 Guard 2 (8): infra-config-gate.sh is production-reachable via 'source' and invisible to every grep over the workflow. Sweep: $LIB_SWEEP"
 fi
@@ -1548,10 +1746,50 @@ for s in steps:
         wf_emitted.setdefault(s['id'], {}).setdefault(m.group(1), set()).add(
             '<dynamic>' if '$' in m.group(2) else m.group(2))
 
-SCRIPT_STEPS = {'infra_config_gate', 'infra_config_gate_pass2'}
+# SCRIPT_STEPS IS DERIVED, NOT HARDCODED (#7104 PR-B review).
+#
+# It used to be the literal set {'infra_config_gate', 'infra_config_gate_pass2'}. A hardcoded
+# set is a snapshot: rename a step, or add a THIRD invocation of the script, and the new step
+# is silently outside the set — so none of its `if:`/`env:` literals are validated against
+# what the script can emit, which is the entire job of this guard. Derived from the workflow,
+# a new invocation is covered the moment it exists.
+#
+# AND THE INVOCATION ITSELF IS ASSERTED. Nothing previously pinned that pass 2 runs the TESTED
+# artifact at all: the old membership test was `head -1` over a population of two, so a pass-2
+# step whose `run:` had been changed to an inline body — the 240 duplicated lines of untestable
+# YAML the extraction exists to prevent — would still have been treated as a script step and
+# graded against the script's outputs. Here the two facts are the same fact: a step is a script
+# step BECAUSE its `run:` invokes the script.
+SCRIPT_INVOKE = re.compile(r'bash\s+\S*infra-config-verify\.sh')
+SCRIPT_STEPS = {s['id'] for s in steps
+                if s.get('id') and isinstance(s.get('run'), str) and SCRIPT_INVOKE.search(s['run'])}
+
 ref = re.compile(r"steps\.([A-Za-z0-9_-]+)\.outputs\.([A-Za-z0-9_-]+)\s*==\s*'([^']*)'")
 
 problems, checked = [], 0
+
+# The derivation must not silently yield the empty set (which would make every literal check
+# below vacuous), and it must still find BOTH passes.
+if len(SCRIPT_STEPS) < 2:
+    problems.append("only %d step(s) invoke infra-config-verify.sh (%s); expected at least 2 "
+                    "(pass 1 and pass 2). Either a pass was removed, or its run: no longer "
+                    "invokes the tested artifact and has been inlined back into YAML."
+                    % (len(SCRIPT_STEPS), sorted(SCRIPT_STEPS)))
+
+# PASS 2 MUST HARDCODE THE 404 ESCAPE HATCH OFF, AND THE LITERAL IS PINNED.
+#
+# This is R20.4's entire fix and it is one word from being false: `ALLOW_MISSING_STATUS: "true"`
+# on pass 2 would let the escape hatch green a run that has ALREADY WRITTEN PRODUCTION, which is
+# strictly worse than the race it recovers from. Nothing asserted the value.
+p2 = [s for s in steps if s.get('id') == 'infra_config_gate_pass2']
+if not p2:
+    problems.append("the pass-2 step (id: infra_config_gate_pass2) does not exist")
+else:
+    ams = (p2[0].get('env') or {}).get('ALLOW_MISSING_STATUS')
+    if str(ams).strip().lower() != 'false':
+        problems.append("pass 2 sets ALLOW_MISSING_STATUS to %r, expected the hardcoded literal "
+                        "'false' — the 404 escape hatch must never be reachable on a pass that "
+                        "runs after a production write" % (ams,))
 for s in steps:
     cond = s.get('if')
     if not isinstance(cond, str):
@@ -1602,8 +1840,17 @@ PYEOF
 
 g1_checked=$(printf '%s\n' "$GUARD1" | sed -n 's/^CHECKED=//p')
 g1_problems=$(printf '%s\n' "$GUARD1" | grep -c '^PROBLEM=' || true)
-if [[ "$g1_problems" -eq 0 && "${g1_checked:-0}" -ge 4 ]]; then
+# FLUSH, NOT A FLOOR (#7104 PR-B review). This was `>= 4` against a measured 12, so eight of the
+# twelve references could have stopped being examined with the guard still reporting clean — an
+# anti-vacuity floor whose slack is larger than the thing it guards is not a floor. Pinned flush
+# so drift is loud IN BOTH DIRECTIONS: a reference that disappears from the extractor reds, and a
+# newly added if:/env: step-output reference also reds, which is the review prompt you want when
+# someone wires a new consumer onto this chain. Re-derive and update on a deliberate change.
+G1_EXPECTED_REFERENCES=12
+if [[ "$g1_problems" -eq 0 && "${g1_checked:-0}" == "$G1_EXPECTED_REFERENCES" ]]; then
   pass "#7104 Guard 1: all $g1_checked workflow if:/env: references resolve, and every compared literal is one the producer can emit"
+elif [[ "$g1_problems" -eq 0 ]]; then
+  fail "#7104 Guard 1: examined ${g1_checked:-0} if:/env: step-output reference(s), expected exactly $G1_EXPECTED_REFERENCES. Fewer means the extractor stopped matching and its clean verdict is vacuous; more means a new consumer was wired onto the gate chain — re-derive and update G1_EXPECTED_REFERENCES deliberately."
 else
   fail "#7104 Guard 1: $g1_problems problem(s) over ${g1_checked:-0} reference(s):"
   printf '%s\n' "$GUARD1" | sed -n 's/^PROBLEM=/      - /p' >&2
@@ -1621,16 +1868,94 @@ fi
 # Changing the bound therefore requires re-running task 4.0 and editing this line, which
 # is the two-producer property the guard is for.
 TASK_40_MEASURED_CARDINALITY=1
-if grep -qE "steps\.repush_plan\.outputs\.repush_graded == '${TASK_40_MEASURED_CARDINALITY}'" "$APPLY_WF"; then
-  pass "#7104 Guard 3: the apply is keyed on the task-4.0-measured cardinality ('${TASK_40_MEASURED_CARDINALITY}'), not on success()"
+#
+# ------------------------------------------------------------------------------------------
+# WHY THIS IS NOW A PARSED-YAML EQUALITY AND NOT A grep (#7104 PR-B review).
+#
+# The three assertions this block replaces were: a `grep -qE "...repush_graded == '1'"` over
+# the WHOLE FILE, and a `grep -nE '^\s+id: repush_apply$' -A2 | grep -qE "if: success\(\)"`.
+# Both are extractor escapes, and a mutation battery run against them measured the top
+# survivor of the whole PR:
+#
+#   compose (a) put `if:` ABOVE `id:` in the step, so the `-A2` window — which is key-ORDER
+#   dependent and would also break on a two-space `id:` — no longer contained the condition;
+#   (b) changed the condition to read `.outcome` instead of `.outputs.`; and (c) DEMOTED the
+#   graded literal into a comment. The whole-file grep still found `repush_graded == '1'` in
+#   that comment and passed. Net effect: the production apply fired whenever the plan step
+#   merely SUCCEEDED, regardless of the grade — the exact blast-radius bound task 4.0 exists
+#   to hold — and the suite reported 130/0, rc=0.
+#
+# A negative grep ("the condition does not say success()") cannot close this: there are
+# unboundedly many conditions that are neither the right one nor the one you thought to
+# forbid. The assertion has to be POSITIVE EQUALITY against the measured literal, made on the
+# resolved mapping rather than on bytes, so that any edit to the condition — reordered keys,
+# a different operator, a demoted literal, a folded scalar — changes the thing compared.
+# ------------------------------------------------------------------------------------------
+GUARD3=$(python3 - "$APPLY_WF" "$TASK_40_MEASURED_CARDINALITY" <<'PYEOF'
+import sys, yaml
+
+wf = yaml.safe_load(open(sys.argv[1], encoding='utf-8'))
+card = sys.argv[2]
+
+steps = []
+for job in (wf.get('jobs') or {}).values():
+    steps.extend(job.get('steps') or [])
+byid = {s.get('id'): s for s in steps if s.get('id')}
+
+problems = []
+
+def norm(v):
+    return " ".join(str(v).split()) if v is not None else None
+
+# The two conditions that bound the recovery, each pinned by EQUALITY to the literal that is
+# the measurement. Written as a table so adding a bounded step means adding a row, not
+# inventing a new grep.
+EXPECT = {
+    'repush_plan':  "steps.infra_config_gate.outputs.repush_needed == 'true'",
+    'repush_apply': "steps.repush_plan.outputs.repush_graded == '%s'" % card,
+}
+for sid, want in EXPECT.items():
+    st = byid.get(sid)
+    if st is None:
+        problems.append("step id '%s' does not exist — the recovery chain is broken or renamed" % sid)
+        continue
+    got = norm(st.get('if'))
+    if got != want:
+        problems.append("steps.%s.if is %r, expected exactly %r" % (sid, got, want))
+
+# BOUNDEDNESS INSIDE ONE STEP. The step-level count elsewhere cannot see a loop: a single
+# step body containing `for _i in 1 2 3; do terraform apply ... tfplan-repush; done` is ONE
+# line and ONE step, so both "independent producers" agree and both are wrong. Forbid a loop
+# keyword in the body that writes production, and count occurrences within that body.
+ap = byid.get('repush_apply')
+if ap is not None:
+    body = ap.get('run') or ''
+    code = "\n".join(l for l in body.splitlines() if not l.lstrip().startswith('#'))
+    n_apply = 0
+    for line in code.splitlines():
+        if 'terraform apply' in line and 'tfplan-repush' in line:
+            n_apply += 1
+    if n_apply != 1:
+        problems.append("the repush_apply body has %d production-apply line(s), expected exactly 1" % n_apply)
+    import re as _re
+    loopkw = _re.search(r'(^|[;&|]|\bdo\b)\s*(for|while|until)\s', code, _re.M)
+    if loopkw:
+        problems.append("the repush_apply body contains a loop keyword (%r) — one line and one step "
+                        "can still be an unbounded number of production writes"
+                        % loopkw.group(2))
+
+print("OK" if not problems else "")
+for p in problems:
+    print("PROBLEM=%s" % p)
+PYEOF
+) || GUARD3="PROBLEM=guard 3 could not run (python3/pyyaml unavailable or the workflow did not parse)"
+
+g3_problems=$(printf '%s\n' "$GUARD3" | grep -c '^PROBLEM=' || true)
+if [[ "$g3_problems" -eq 0 ]]; then
+  pass "#7104 Guard 3: repush_plan and repush_apply carry EXACTLY their measured conditions (apply keyed on repush_graded == '${TASK_40_MEASURED_CARDINALITY}'), and the apply body holds one unlooped production write"
 else
-  fail "#7104 Guard 3: the apply step's if: does not compare repush_graded against the measured cardinality '${TASK_40_MEASURED_CARDINALITY}'. Widening it re-opens the transitive -target blast radius task 4.0 measured shut; narrowing it disables the recovery silently."
-fi
-# The apply must not be keyed on success() — that is the failure mode Guard 3 replaces.
-if grep -nE '^\s+id: repush_apply$' -A2 "$APPLY_WF" | grep -qE "if: success\(\)"; then
-  fail "#7104 Guard 3: the re-push apply is keyed on success(), so a grading step that fails to assert still lets it write production"
-else
-  pass "#7104 Guard 3: the re-push apply is not keyed on success()"
+  fail "#7104 Guard 3: $g3_problems problem(s). Widening the apply's literal re-opens the transitive -target blast radius task 4.0 measured shut; narrowing it disables the recovery silently:"
+  printf '%s\n' "$GUARD3" | sed -n 's/^PROBLEM=/      - /p' >&2
 fi
 
 # --- #7104 AC18 ----------------------------------------------------------------------------
@@ -1713,11 +2038,12 @@ fi
 
 # Cardinality floor: if the reference extractor silently matches nothing, the clean
 # result above would be a statement about the empty set.
-if [[ "${g1_checked:-0}" -ge 4 ]]; then
-  pass "#7104 Guard 1: examined $g1_checked step-output references (extractor is not matching the empty set)"
-else
-  fail "#7104 Guard 1: only ${g1_checked:-0} references examined — the extractor stopped matching, so its verdict is vacuous"
-fi
+# (The standalone `g1_checked >= 4` anti-vacuity row that used to sit here is DELETED. It was
+# unreachable-as-a-failure: the Guard 1 arm above already requires the same quantity, so this
+# one could not fail unless that one had already failed — and it inflated the tally by 1, which
+# the assertion-count floor then counted as coverage. The vacuity property it named is now
+# carried by the flush `G1_EXPECTED_REFERENCES` pin on that same arm, which is strictly
+# stronger because it also catches the count going UP.)
 
 # --- #7220 review: ASSERTION-COUNT FLOOR ---------------------------------------------------
 # Nothing asserted that the assertions RAN. Measured: deleting the entire #7220 block took the
@@ -1728,6 +2054,32 @@ GATE_MIN_ASSERTIONS=130
 # report `94 passed, 0 failed` / `OK` / exit 0 WITH a genuinely broken assertion present — and
 # the floor built to make truncation loud was itself dispatched through the neutered function,
 # so the one-line mutation that disarms every assertion also disarmed its own backstop.
+#
+# THE FLOOR ITSELF HAD ONE PRODUCER (#7104 PR-B review). Two one-line mutations defeated it and
+# both are closed here:
+#
+#  (a) `pass=$((pass + 2))` inflated the counter to 260 against a floor of 130, so the floor
+#      passed with half the arms deletable. Closed by reconciling the counter against the
+#      independently-appended PASS log — two producers that must agree.
+#  (b) `GATE_MIN_ASSERTIONS=$pass` makes the comparison a tautology at any count. Nothing at
+#      RUNTIME can distinguish that from a correct literal, because by the time the comparison
+#      runs both sides are just numbers. So it is checked in the SOURCE: the floor must be
+#      assigned a bare integer. Reading this file is legitimate here — the suite already reads
+#      the workflow and the library it grades, and this is the one assertion whose subject is
+#      its own text.
+emitted_passes=$(grep -c '^PASS$' "$PASSLOG" 2>/dev/null || echo 0)
+if [[ "$emitted_passes" -ne "$pass" ]]; then
+  echo "  FAIL: assertion-count reconciliation: the counter says $pass but $emitted_passes PASS lines were emitted. The two producers disagree, so the tally is not a count of assertions and the floor below is meaningless." >&2
+  echo "---"
+  echo "infra-config-gate.test.sh: $pass passed, $fail failed (TALLY DESYNCHRONISED)"
+  exit 1
+fi
+if ! grep -qE '^GATE_MIN_ASSERTIONS=[0-9]+$' "${BASH_SOURCE[0]}"; then
+  echo "  FAIL: the assertion-count floor is not a literal integer in the source — a floor derived from the tally it guards (GATE_MIN_ASSERTIONS=\$pass) is a tautology that can never fail." >&2
+  echo "---"
+  echo "infra-config-gate.test.sh: $pass passed, $fail failed (FLOOR IS NOT A LITERAL)"
+  exit 1
+fi
 if [[ "$pass" -lt "$GATE_MIN_ASSERTIONS" ]]; then
   echo "  FAIL: assertion-count floor: only $pass assertions ran, expected >= $GATE_MIN_ASSERTIONS — arms were deleted or skipped" >&2
   echo "---"
