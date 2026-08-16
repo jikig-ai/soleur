@@ -271,7 +271,7 @@ CSP is generated per-request in middleware.ts with a per-request nonce via `cryp
 ### Check 3: Lockfile Consistency
 
 Since ADR-191 this repository carries exactly ONE lockfile per directory
-(`package-lock.json`); `bun.lock` is deleted and `scripts/lint-dual-lockfile.sh` fails if
+(`package-lock.json`); `bun.lock` is deleted and [lint-dual-lockfile.sh](../../../../scripts/lint-dual-lockfile.sh) fails if
 one reappears. The sibling-consistency logic below therefore no longer fires here — it is
 retained because this skill also runs against tenant repositories, which may legitimately
 still carry dual lockfiles.
