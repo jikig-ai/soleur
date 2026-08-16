@@ -57,26 +57,47 @@ have re-created the original defect one level up — a missing signal read as a 
 SUT.
 
 **2. A missing measurement ALONGSIDE A ZERO EXIT is a harness bug, never an environment skip.** A
-capture-integrity precondition runs *ahead* of the verdict branch: an empty `$TMP/out/stdout` **with
-`rc == 0`** hard-fails. This is the row that stops the fix relocating the bug it closes (matrix
-row 5).
+harness-defect rung sits above the skip rung: **`rc == 0` with the execution marker absent**
+hard-fails. This is the row that stops the fix relocating the bug it closes (matrix row 5).
+
+**The predicate is marker ABSENCE, not file emptiness.** An emptiness test is one byte from never
+firing: `2>&1` merges stderr into the capture, so `rc == 0` plus a single `WARNING: apt does not
+have a stable CLI` line defeats it and the run falls through to a SKIP. Marker absence subsumes
+emptiness — an empty file has no marker — and closes that hole.
 
 The `rc == 0` conjunct is load-bearing and the property is deliberately **not** stated
-unconditionally. A degraded container legitimately exits non-zero *and* produces an empty capture —
+unconditionally. A degraded container legitimately exits non-zero *and* produces no marker —
 measured, matrix row 2 (the only real skip in the matrix) recorded `docker rc=100` with an empty
-tail. Widening this precondition to fire on an empty capture regardless of rc would convert that
+tail. Widening this rung to fire regardless of rc would convert that
 skip back into the false FAIL this ADR exists to remove. "The container said it succeeded and
 produced nothing" is a harness bug; "the container said it failed and produced nothing" is the
 environment.
 
-**3. The branch order is load-bearing and commented.** `CHMOD_RAN` → `FIXTURE:` → marker → else
-fail. Testing the marker before `CHMOD_RAN` would skip a slow-but-successful run; testing it before
+**3. The branch order is load-bearing and commented.** `CHMOD_RAN` → `FIXTURE:` → harness defect →
+marker → else fail, evaluated once into an explicit state rather than re-tested per assertion.
+Testing the marker before `CHMOD_RAN` would skip a slow-but-successful run; testing it before
 the `FIXTURE:` literal would absorb a deterministic fixture defect (the capture server failing to
-bind :8099) into the environment bucket, where nothing would ever act on it.
+bind :8099) into the environment bucket, where nothing would ever act on it — and because the
+marker is emitted *below* the capture-server guard, a fixture defect also presents as marker-absent,
+which is precisely why `FIXTURE:` must be tested first.
+
+`FIXTURE:` also sits **above** the harness-defect rung, and that ordering is attribution rather
+than detection: both are hard FAILs contributing two, so the floor cannot distinguish them. A
+capture-server failure that still exits 0 satisfies the harness rung's predicate (`rc == 0`, no
+marker), so with the harness rung first the run would be reported as "the container reported
+success and left no evidence" while a specific, named, deterministic diagnosis was sitting in the
+capture. Naming the less specific cause when the more specific one is available is the
+misattribution class this arm exists to stop.
 
 **4. The skip is counted, denominated in assertion cost, and capped.** `SKIPPED_ASSERTIONS` increments by the
 number of assertions the skipped arm would have made, the floor compares `passes + fails + SKIPPED_ASSERTIONS`,
-and a counted ceiling asserts `SKIPPED_ASSERTIONS <= 1` — one skip-eligible arm exists. This follows
+and a counted ceiling asserts `SKIPPED_ASSERTIONS <= 2` — one skip-eligible arm exists, declaring a
+cost of two. **The cost is 2, not 1, and this was re-derived at the #7565 rebase rather than
+carried:** that PR gave the T5 mutation arm a second counted assertion (sha256sum's own
+`<tarball>: FAILED` rejection verdict, asserted in both arms), so the arm now contributes exactly
+two on every route — two on the ran route, two on each defect route, and a declared skip cost of
+two. A ceiling left at 1 would have failed the very run it exists to permit. The ceiling is a
+function of the arm's assertion count and must be re-read off the arm whenever that changes. This follows
 `infra-config-apply.test.sh`, which already ships the counter, the assertion-cost denomination, the
 sum-floor and a degraded-run `NOTE`. Only the ceiling is new here. Denominating in assertion cost
 rather than in arms resolves the ceiling's unit ambiguity outright and is forward-compatible with
@@ -165,12 +186,14 @@ training is the actual cost, and it is the cost ADR-180 warns about from the oth
   the whole user-visible effect, and it is deliberately narrower than "the suite stops flaking":
   `run_case()` (2 callers) and `_s1_run()` (2 callers) carry the same exposure and are explicitly
   deferred, so one of ~6 container invocations gains the verdict.
-- The suite's floor moves **46 → 47** for the one new counted assertion (the ceiling). The base was
-  44 when this ADR was drafted; #7501 raised it to 46 mid-flight, so the number changed while the
-  increment (+1) did not — the floor is stated as a delta for exactly that reason.
+- The suite's floor moves **48 → 49** for the one new counted assertion (the ceiling). The base was
+  44 when this ADR was drafted, 46 after #7501, and 48 after #7565 — it has moved four times in four
+  days while the increment (+1) has not moved once, which is exactly why the floor is stated as a
+  delta and the base re-read from `git show origin/main:<file>` at ship rather than at plan time.
+  Do not carry the literal forward; re-derive it.
 - A degraded run is now legible rather than silent: the summary line reports `Skipped: N`, and a
   degraded run additionally emits a breakdown NOTE.
-- **Accepted residual — no persistence bound, but a narrower hole than it first appears.** The three
+- **Accepted residual — no persistence bound, but a narrower hole than it first appears.** The four
   mechanical conditions bound a skip *per run*; nothing bounds it *across* runs, and ADR-181 paired
   its decline with a compensating un-gated run every six hours where this has no analogue.
 
@@ -192,7 +215,10 @@ training is the actual cost, and it is the cost ADR-180 warns about from the oth
   live inside the floor's itemisation comment, where this file's culture already forces review of
   any count change. This is stated rather than papered over: the file's `"four plain docker run"` comment had been
   stale since the count reached six, which is measured proof that hand-maintained numbers here
-  drift silently. That comment is corrected in this PR rather than left standing as a live example.
+  drift silently. **That comment is no longer this PR's to correct** — #7565 landed first and
+  replaced it with two named measures (6 source sites, 8 runtime invocations) each carrying its own
+  derivation, which is the shape a count in this file should take. The example is now historical,
+  and the corrected form is the better precedent for the ceiling constant this residual concerns.
 
 ## Alternatives Considered
 

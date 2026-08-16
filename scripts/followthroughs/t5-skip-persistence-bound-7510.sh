@@ -2,8 +2,8 @@
 # Follow-through verification for the T5 counted-skip persistence bound (PR #7510, issue #7291).
 #
 # ADR-188 accepts, explicitly, that nothing bounds the T5 mutation arm's skip ACROSS runs. The
-# three mechanical conditions bound it per-run; an arm that skips on every run forever satisfies
-# all three and reports green, and the only carrier is `Skipped: N` plus a NOTE on the stdout of
+# four mechanical conditions bound it per-run; an arm that skips on every run forever satisfies
+# all four and reports green, and the only carrier is `Skipped: N` plus a NOTE on the stdout of
 # a check that exits 0. This probe is that missing observer.
 #
 # It reads the ONE signal that already exists — the suite's own loud SKIP line in post-merge
