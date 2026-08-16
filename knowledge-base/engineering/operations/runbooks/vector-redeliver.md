@@ -181,13 +181,22 @@ Verify **off-host**. No SSH (`hr-no-ssh-fallback-in-runbooks`).
 
    > The live sha will **not** equal a bare `sha256sum apps/web-platform/infra/vector.toml` — the delivery substitutes `@@HOST_NAME@@` for the host's Better Stack name, so the repo file as-committed is never what lands. That is why the check above pipes the file through the same `sed` first. Hashing the raw repo file and finding a mismatch proves nothing.
 
-3. **Positive control on the sink.** A new identifier producing no rows is ambiguous — the agent may be dark. Assert against something web-1 genuinely emits, with a timestamp after the restart:
+3. **Positive control on the sink — and read the table caveat FIRST.** A new identifier producing no rows is ambiguous: the agent may be dark, *or* you may be querying a source web-1 does not ship to. Resolve the second before concluding anything about the first.
+
+   > **`betterstack-query.sh` does not default to web-1's source.** Its default is `BS_TABLE=t520508_soleur_inngest_vector_prd_3_logs` (`scripts/betterstack-query.sh:79`), while web-1's Vector sink posts to `https://s2457081.eu-fsn-3.betterstackdata.com/` (`vector.toml`, `[sinks.betterstack]`). Whether that ingest source maps to that query table is **not recorded anywhere in this repo** — tracked as a gap, and until it is closed a zero-row result from the default table is **not** evidence that web-1 is dark. Override with `--table <web-1's table>` once the mapping is known.
+   >
+   > Measured 2026-08-16, immediately after a verified-successful delivery: `--since 24h` against the default table returned **zero rows for every host**, hot and archive, while the same host reported `vector: active` with a non-empty journal tail. That is exactly the ambiguous shape this caveat exists to stop you from misreading as a production outage. (A genuinely dark channel in the same window is #7569 — related, and not the same channel.)
+
+   When you have a table you can attribute to web-1, assert against something the host genuinely emits, with a timestamp after the restart:
 
    ```bash
-   doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep ci-deploy
+   doppler run -p soleur -c prd_terraform -- \
+     scripts/betterstack-query.sh --table <web-1-table> --since 1h --grep ci-deploy
    ```
 
    `sshd` and `ci-deploy` are both in Source 4's allow-list and are emitted by web-1 itself (`host_name=soleur-web-platform`). Rows after the restart prove the agent returned **and** the sink still works. Only then is "no rows for the new identifier" evidence about the new identifier.
+
+   **If you cannot attribute a table to web-1, this leg is INCONCLUSIVE, not passed and not failed.** Record it that way. The delivery itself is already proven by the rendered-sha comparison in step 2, which needs no log channel at all — do not let an unavailable positive control cast doubt on a sha that matches.
 
 ## Known residual
 
