@@ -1,5 +1,5 @@
 ---
-id: ADR-187
+id: ADR-192
 title: "An empty warehouse read is three states, not one"
 status: adopting
 date: 2026-08-16
@@ -8,7 +8,7 @@ supersedes: []
 related: [ADR-166, ADR-170, ADR-184]
 ---
 
-# ADR-187 — An empty warehouse read is three states, not one
+# ADR-192 — An empty warehouse read is three states, not one
 
 ## Status
 

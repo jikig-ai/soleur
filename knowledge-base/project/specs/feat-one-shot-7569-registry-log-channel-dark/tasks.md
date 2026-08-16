@@ -130,12 +130,12 @@ Checked boxes above were verified individually, not bulk-toggled. What did NOT l
 recorded here rather than left as silently-unchecked boxes:
 
 - **0.1 evidence-snapshot.md — CUT, per review finding R22.** The repo is PUBLIC, so a verbatim
-  dump of log rows is a permanent egress. The measurements live in ADR-187 and in the #7577
+  dump of log rows is a permanent egress. The measurements live in ADR-192 and in the #7577
   body as counts and byte totals, never as captured rows.
 - **1.5 / 1.7** — the "fresh host" arm and pointing `betterstack-assert-absence.sh` at the
   shared helper. Deferred: both change the semantics of a second consumer, and the primary
   detector is complete and mutation-proven without them. The `any-row` / `marker` split in
-  ADR-187 is the seam they land on.
+  ADR-192 is the seam they land on.
 - **Phase 4 (volume reduction), Phase 5 (blast-radius sweep)** → **#7577**. Split at the
   infra-apply seam on review recommendation R29.
 - **Phase 6.2 (PIR), 6.4-6.5 (C4), 6.6 (soak enrollment)** — not started.

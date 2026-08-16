@@ -34,7 +34,7 @@
 # emits the marker at the START of the message value; a row that merely CONTAINS the marker
 # somewhere inside a field an attacker influences does not match.
 #
-# INVARIANT (ADR-187, I-1): no marker predicate may be satisfiable by a row an attacker can
+# INVARIANT (ADR-192, I-1): no marker predicate may be satisfiable by a row an attacker can
 # influence.
 
 # Guard against double-sourcing: this file is sourced by both the alarm and the assert script.

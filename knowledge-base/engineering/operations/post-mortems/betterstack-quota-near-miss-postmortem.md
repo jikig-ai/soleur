@@ -17,12 +17,12 @@ art_33_deadline: "n/a — no personal-data exposure; availability/quota near-mis
 > **RECURRED 2026-08-14 19:06:58Z.** This near-miss became an outage. Better Stack began
 > refusing every ingest POST with `HTTP 402 {"error": "Quota exceeded"}` while the read path kept
 > answering `200`, and the whole source went dark for two days before anyone noticed. See
-> [ADR-187](../../architecture/decisions/ADR-187-an-empty-warehouse-read-is-three-states-not-one.md)
+> [ADR-192](../../architecture/decisions/ADR-192-an-empty-warehouse-read-is-three-states-not-one.md)
 > and issue #7569.
 >
 > This document's 5-Why #5 named the gap — no internal monitor watches vendor quota — and filed
 > #5134 for it. **#5134 was never built, and is still open.** The recurrence is therefore not a
-> new discovery; it is the predicted one. ADR-187 supersedes #5134's mechanism and deliberately
+> new discovery; it is the predicted one. ADR-192 supersedes #5134's mechanism and deliberately
 > leaves it open rather than claiming a closure it does not deliver.
 
 ## Actor key
