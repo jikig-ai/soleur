@@ -38,9 +38,16 @@ trap 'rm -rf "$TMP"' EXIT
 PASS=0
 FAIL=0
 ASSERTED=0
-pass() { PASS=$((PASS + 1)); ASSERTED=$((ASSERTED + 1)); echo "  PASS: $1"; }
+# ASSERTED is incremented at the CALL SITE, never inside pass()/fail(). That placement is
+# the whole substance of the conservation check at the bottom of this file: a counter that
+# moves inside both verdict helpers moves WITH the verdict, so stubbing fail() to a no-op
+# drops the row and its count together and `PASS+FAIL == ASSERTED` still holds. Measured on
+# this shape before the fix: a genuine defect printed a clean total and exited 0.
+#
+# Never increment inside `$( )` — a subshell discards it.
+pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
 fail() {
-  FAIL=$((FAIL + 1)); ASSERTED=$((ASSERTED + 1))
+  FAIL=$((FAIL + 1))
   echo "  FAIL: $1"
   [[ $# -lt 2 ]] || echo "        $2"
 }
@@ -48,11 +55,13 @@ fail() {
 echo "=== marketplace-manifest-validate ==="
 
 if [[ ! -x "$VALIDATOR" ]]; then
+  ASSERTED=$((ASSERTED + 1))
   fail "validator exists and is executable at $VALIDATOR"
   echo "=== Results: $PASS passed, $FAIL failed ==="
   exit 1
 fi
 if [[ ! -f "$CANONICAL" ]]; then
+  ASSERTED=$((ASSERTED + 1))
   fail "canonical manifest exists at $CANONICAL"
   echo "=== Results: $PASS passed, $FAIL failed ==="
   exit 1
@@ -70,6 +79,9 @@ run_validator() {
 
 expect_rc() {
   local label="$1" file="$2" want="$3" got
+  # One assertion is about to be decided. Counted HERE, outside the command substitution
+  # below — an increment inside `$( )` lands in a subshell and is discarded.
+  ASSERTED=$((ASSERTED + 1))
   got="$(run_validator "$file")"
   if [[ "$got" == "$want" ]]; then
     pass "$label (exit $got)"
@@ -176,6 +188,7 @@ expect_rc "G4.4e fails closed when .plugins is absent" "$TMP/no-plugins.json" 1
 # Invoked with NO argument at all — the shape a miswired CI step produces.
 rc=0
 "$VALIDATOR" > /dev/null 2>&1 || rc=$?
+ASSERTED=$((ASSERTED + 1))
 if [[ "$rc" != "0" ]]; then
   pass "G4.4f fails closed when invoked with no argument (exit $rc)"
 else
@@ -185,9 +198,35 @@ fi
 # --- Anti-vacuity floor -----------------------------------------------------------------------
 # This suite's own dispatch. A harness that silently asserts nothing (a fixture generator that
 # no-ops, an early `return`) would otherwise report a clean 0/0.
+#
+# Reported with `printf >&2` + `exit 1` DIRECTLY, never through fail(). A floor that reports
+# by calling fail() increments the same counter the exit status reads, so neutering fail()
+# silences the rows AND the floor that exists to notice the silence — the suite prints a
+# total and exits 0. A floor enforced through the suspect cannot witness the suspect.
 MIN_ASSERTIONS=22
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
-  fail "anti-vacuity floor" "only $ASSERTED assertion(s) ran, expected >= $MIN_ASSERTIONS"
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
+    "$ASSERTED" "$MIN_ASSERTIONS" >&2
+  echo "=== Results: $PASS passed, $FAIL failed ($ASSERTED assertions) ==="
+  exit 1
+fi
+
+# --- Accounting conservation ------------------------------------------------------------------
+# The arm that actually catches a neutered verdict helper. The floor above catches "no
+# assertions RAN"; it cannot catch "assertions ran and their verdicts were discarded",
+# because ASSERTED keeps its full value when fail() is a no-op. Every assertion records
+# exactly one verdict, so PASS+FAIL MUST equal ASSERTED. Reported directly for the same
+# reason as the floor.
+if [[ $((PASS + FAIL)) -ne "$ASSERTED" ]]; then
+  printf '\n[FATAL] accounting: PASS+FAIL (%d) != ASSERTED (%d).\n' \
+    "$((PASS + FAIL))" "$ASSERTED" >&2
+  if [[ $((PASS + FAIL)) -lt "$ASSERTED" ]]; then
+    printf '  An assertion was counted but its verdict was not recorded — that is what a neutered pass()/fail() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `ASSERTED=$((ASSERTED + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  echo "=== Results: $PASS passed, $FAIL failed ($ASSERTED assertions) ==="
+  exit 1
 fi
 
 echo "=== Results: $PASS passed, $FAIL failed ($ASSERTED assertions) ==="
