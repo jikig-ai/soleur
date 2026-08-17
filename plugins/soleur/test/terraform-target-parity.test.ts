@@ -6,7 +6,8 @@
 // the main saved-tfplan apply and only land via an explicit `-target=` over the
 // CF Tunnel SSH bridge. This test asserts each such resource appears in the UNION
 // of:
-//   • apply-web-platform-infra.yml's SSH `-target=` set (the 7 server.tf siblings)
+//   • apply-web-platform-infra.yml's SSH `-target=` set (the server.tf siblings,
+//     applied over the CF Tunnel SSH bridge; count derived, never restated)
 //   • apply-deploy-pipeline-fix.yml's `-target=` set (deploy_pipeline_fix +
 //     infra_config_handler_bootstrap)
 //   • the exclusion allowlist (root_authorized_keys — stays operator-local per the
@@ -83,7 +84,13 @@ const EXCLUSION_ALLOWLIST = new Set<string>(["root_authorized_keys"]);
 // SSH-provisioned resource raises the count without a brittle exact-match edit —
 // the union-coverage assertion is what enforces correctness; this only guards
 // against the predicate silently collapsing to zero (e.g. a parser regression).
-const MIN_SSH_PROVISIONED = 10; // #6122: +terraform_data.registry_insecure_config (zot insecure-registries, running-host SSH delivery)
+// #7539: raised 10 -> 17, the MEASURED size of the set. The old floor left a
+// headroom of 7 -- eight of the seventeen are unpinned by the name list below,
+// so a resource could silently drop out of the SSH set with the whole suite
+// green. That matters beyond this sentinel: Guard 1 intersects against
+// collectSshProvisioned(), so a narrowed set silently narrows the guard too.
+// Still `>=`, so adding an SSH-provisioned resource does not need an edit here.
+const MIN_SSH_PROVISIONED = 17;
 
 /** Strip `#` and `//` line comments, quote-aware, leaving string contents intact. */
 function stripLineComment(line: string): string {
@@ -251,6 +258,590 @@ describe("terraform -target parity — current state is covered", () => {
 
   test("deploy_pipeline_fix (local-exec, no connection block) is NOT counted", () => {
     expect(sshProvisioned).not.toContain("deploy_pipeline_fix");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Guard 1 (#7539): the bridge-less stage may not target an SSH-provisioned
+// resource.
+//
+// The `apply` job runs TWO terraform stages separated by a CREDENTIAL boundary.
+// Stage 1 ("Terraform plan (allow-list, non-SSH resources only)" → "Terraform
+// apply" of the saved tfplan) runs BEFORE `./.github/actions/cf-tunnel-ssh-bridge`
+// exports TF_VAR_ci_ssh_private_key. Stage 2 ("Terraform apply (SSH-provisioned
+// resources, over the bridge)") runs after it and owns every SSH-provisioned
+// resource. server.tf resolves `agent = var.ci_ssh_private_key == null`, so an
+// SSH-provisioned resource targeted in stage 1 bakes `agent = true` and dies:
+// `SSH agent requested but SSH_AUTH_SOCK not-specified`. It fails DIRECTLY (its
+// own provisioner) and can also drag a dependency in via `-target` transitivity,
+// which is a REQUEST and not a bound.
+//
+// The property is a BRIGHT LINE over `terraform_data` rather than over the SSH
+// predicate. Measured: 17 of 18 `terraform_data` resources in the infra root are
+// SSH-provisioned, and NOTHING else in the root carries a `provisioner` block at
+// all — so the line is strictly stronger here, needs no dependency graph, and
+// cannot be narrowed by a resource silently dropping out of
+// collectSshProvisioned(). A future genuinely-local terraform_data on the push
+// path costs one PUSH_PATH_TERRAFORM_DATA_ALLOWLIST entry with a stated reason.
+//
+// PARSER ASSUMPTIONS (this extractor fails OPEN, like its siblings above):
+//   • The end anchor is the bridge step's `uses:` VALUE, never a step title — a
+//     legitimate rename must not hard-fail the guard
+//     (cq-cite-content-anchor-not-line-number).
+//   • Targets match on COMMENT-STRIPPED text and only on flag-shaped lines
+//     (`^\s*-target=`). Both are load-bearing: the range contains prose mentions
+//     of `-target=` (an ALLOW-LIST MAINTENANCE comment and a `::warning::`
+//     string) that a naive substring match counts. H1 pins this.
+//   • An unresolvable range is a FAILURE, never an empty pass (M4).
+//
+// See ADR-154 (§ bridge-less stage amendment).
+
+/** Deliberately empty: no local `terraform_data` legitimately sits on a
+ *  bridge-less path today. An addition needs a one-line reason, like
+ *  EXCLUSION_ALLOWLIST. Kept non-vacuous by an M-row that allowlists a
+ *  synthetic offender and asserts it is admitted — a zero-cardinality set with
+ *  no test is an escape hatch nobody has ever proven is wired. */
+const BRIDGELESS_TERRAFORM_DATA_ALLOWLIST = new Set<string>([]);
+
+/** Bridge step anchor — the composite's `uses:` VALUE, not any step title. */
+const BRIDGE_USES_RE =
+  /^\s*uses:\s*\.\/\.github\/actions\/cf-tunnel-ssh-bridge\s*$/;
+
+/** Every top-level job id (a 2-space `<id>:` key that owns `runs-on`/`steps`). */
+function listJobIds(workflowText: string): string[] {
+  const ids: string[] = [];
+  let inJobs = false;
+  for (const line of workflowText.split("\n")) {
+    if (/^jobs:\s*$/.test(line)) {
+      inJobs = true;
+      continue;
+    }
+    if (!inJobs) continue;
+    if (/^[A-Za-z]/.test(line)) break; // left the `jobs:` mapping
+    const m = line.match(/^ {2}([A-Za-z0-9_-]+):\s*$/);
+    if (m) ids.push(m[1]);
+  }
+  return ids;
+}
+
+/**
+ * For ONE job: the text that runs WITHOUT `TF_VAR_ci_ssh_private_key` — i.e.
+ * everything before its first `cf-tunnel-ssh-bridge` step, or the WHOLE job
+ * when it never opens a bridge. Returns null only when the job block itself
+ * does not resolve; callers MUST treat null as a failure, never as empty.
+ *
+ * Scoping to the whole job set rather than the literal id "apply" is
+ * load-bearing: `vector_redeliver` has the identical two-stage shape and is
+ * compliant only by step ORDER (its own header calls that "LOAD-BEARING"), and
+ * the file has grown to 18 jobs by accretion.
+ */
+function bridgelessRangeForJob(
+  workflowText: string,
+  jobId: string,
+): string | null {
+  const job = extractJobBlock(workflowText, jobId);
+  if (!job.trim()) return null;
+  const lines = job.split("\n");
+  const bridge = lines.findIndex((l) => BRIDGE_USES_RE.test(l));
+  if (bridge === 0) return null; // a job that opens with the bridge is malformed
+  return bridge === -1 ? job : lines.slice(0, bridge).join("\n");
+}
+
+/**
+ * `terraform_data` addresses reachable from a `-target=`/`-replace=` flag.
+ *
+ * Quoting tolerance is NOT optional — the sibling `extractAllTargets` says so
+ * in its own comment, and this file's workflow uses 69 single-quoted and 14
+ * double-quoted `-target=` flags against 139 bare ones. A bare-only,
+ * line-leading matcher lets the #7539 regression re-land verbatim in the
+ * house style. `-replace=` is included because it drives the same provisioner
+ * run and the workflow already carries 13 of them.
+ */
+function terraformDataTargets(text: string): string[] {
+  const out: string[] = [];
+  for (const m of stripComments(text).matchAll(
+    /-(?:target|replace)=['"]?(?:module\.[A-Za-z0-9_]+\.)*terraform_data\.([A-Za-z0-9_]+)/g,
+  )) {
+    out.push(m[1]);
+  }
+  return out;
+}
+
+/** Every `-target=`/`-replace=` of any type — the dispatch floor's input. */
+function countTargets(text: string): number {
+  return [...stripComments(text).matchAll(/-(?:target|replace)=/g)].length;
+}
+
+/**
+ * Offenders across EVERY job: `{job, addr}` for each `terraform_data` reachable
+ * from a bridge-less range. Throws when a job block fails to resolve, so an
+ * unparseable workflow fails closed rather than reporting "no offenders".
+ */
+function bridgelessOffenders(
+  workflowText: string,
+): Array<{ job: string; addr: string }> {
+  const jobs = listJobIds(workflowText);
+  if (jobs.length === 0) throw new Error("no jobs resolved from the workflow");
+  const out: Array<{ job: string; addr: string }> = [];
+  for (const job of jobs) {
+    const range = bridgelessRangeForJob(workflowText, job);
+    if (range === null) throw new Error(`job block did not resolve: ${job}`);
+    for (const addr of terraformDataTargets(range)) {
+      if (!BRIDGELESS_TERRAFORM_DATA_ALLOWLIST.has(addr)) out.push({ job, addr });
+    }
+  }
+  return out;
+}
+
+/**
+ * Every resource TYPE in the infra root that carries a `provisioner` block.
+ *
+ * Guard 1 is stated as a bright line over `terraform_data` rather than over the
+ * SSH predicate, and that is only STRICTLY STRONGER while this set is exactly
+ * {terraform_data}. The premise was true and unpinned until #7539's review: an
+ * SSH-provisioned `null_resource`, or a `provisioner` added to
+ * `hcloud_server.web`, would sit outside the line with the whole suite green.
+ * Pinning the premise is strictly better than widening the predicate for it —
+ * it fails in the PR that introduces the violation, naming the resource, and it
+ * needs no edit to the fail-open HCL parser four other assertions depend on.
+ */
+function resourceTypesWithProvisioners(
+  files: string[] = listInfraTfFiles(),
+): string[] {
+  const types = new Set<string>();
+  for (const f of files) {
+    let current: string | null = null;
+    for (const line of stripComments(readFileSync(f, "utf8")).split("\n")) {
+      const h = line.match(/^resource\s+"([A-Za-z0-9_]+)"\s+"[A-Za-z0-9_]+"\s*\{/);
+      if (h) {
+        current = h[1];
+        continue;
+      }
+      if (current && /^\s*provisioner\s+"[a-z-]+"\s*\{/.test(line)) {
+        types.add(current);
+      }
+    }
+  }
+  return [...types].sort();
+}
+
+/**
+ * Every workflow that opens a CF Tunnel SSH bridge — DERIVED, never restated.
+ *
+ * Guard 1 originally read one workflow while five use the bridge. A hardcoded
+ * list would reproduce the defect this file exists to catch: the deferral filed
+ * during review proposed a trigger reading "when a THIRD workflow adopts the
+ * shape", and three already had. Deriving means a sixth is guarded on arrival.
+ */
+function bridgeWorkflowPaths(): string[] {
+  const dir = resolve(REPO_ROOT, ".github/workflows");
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".yml") || f.endsWith(".yaml"))
+    .map((f) => resolve(dir, f))
+    .filter((abs) =>
+      /^\s*uses:\s*\.\/\.github\/actions\/cf-tunnel-ssh-bridge\s*$/m.test(
+        readFileSync(abs, "utf8"),
+      ),
+    )
+    .sort();
+}
+
+describe("bridge-less stage may not target an SSH-provisioned resource (#7539)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+
+  test("every job block resolves (an unparseable workflow fails CLOSED)", () => {
+    const jobs = listJobIds(wf);
+    // Floor derived from the measured value (18 jobs), not a round number: a
+    // job-enumeration that silently narrows takes the whole guard with it.
+    expect(jobs.length).toBeGreaterThanOrEqual(15);
+    for (const j of jobs) {
+      expect(bridgelessRangeForJob(wf, j)).not.toBeNull();
+    }
+  });
+
+  test("dispatch floor: the ranges hold targets (a guard that scans nothing must FAIL)", () => {
+    const scanned = listJobIds(wf)
+      .map((j) => countTargets(bridgelessRangeForJob(wf, j)!))
+      .reduce((a, b) => a + b, 0);
+    // Measured 219 across all bridge-less ranges at authoring time. Bounded
+    // NEAR the measurement, not at a fraction of it: a floor that tolerates
+    // losing half the range does not floor the tail, which is where #7539 lived.
+    expect(scanned).toBeGreaterThanOrEqual(180);
+  });
+
+  test("the bridge anchor resolves in the apply job (content anchor, not a title)", () => {
+    // The apply job MUST have a bridge; a range equal to the whole job would
+    // mean the anchor stopped resolving and every post-bridge target became an
+    // offender — loud, but for the wrong reason. Pin it positively.
+    const applyJob = extractJobBlock(wf, "apply");
+    expect(BRIDGE_USES_RE.test(applyJob.split("\n").find((l) => BRIDGE_USES_RE.test(l)) ?? "")).toBe(true);
+    expect(bridgelessRangeForJob(wf, "apply")!.length).toBeLessThan(applyJob.length);
+  });
+
+  test("no terraform_data is targeted before a CF Tunnel SSH bridge, in ANY job", () => {
+    expect(bridgelessOffenders(wf)).toEqual([]);
+  });
+
+  test("the bright line's PREMISE is pinned: only terraform_data carries provisioners", () => {
+    // If this ever fails, Guard 1 stopped being strictly stronger than the SSH
+    // predicate and the named type must be admitted to the walk.
+    expect(resourceTypesWithProvisioners()).toEqual(["terraform_data"]);
+  });
+
+  test("EVERY bridge-using workflow is guarded, not just this one", () => {
+    const paths = bridgeWorkflowPaths();
+    // Floor derived from the measured five; a derivation that silently narrows
+    // takes the coverage with it.
+    expect(paths.length).toBeGreaterThanOrEqual(5);
+    for (const abs of paths) {
+      expect(bridgelessOffenders(readFileSync(abs, "utf8"))).toEqual([]);
+    }
+  });
+});
+
+// The green-skip channel (#7539). When CI_SSH_ACCESS_TOKEN_ID is absent,
+// ssh_token_gate sets ssh_apply_skip=true and the bridge, the post-bridge apply
+// AND the heartbeat ARM gate all skip — the run goes GREEN having delivered
+// nothing. These assert the notification arm is actually wired, so it cannot be
+// silently un-wired: an arm that exists but references a dead output, or whose
+// body omits the recovery command, reproduces the ::warning:: problem in email.
+/**
+ * One `- name: <title>` step within a job block, bounded at the next same-indent
+ * step header (or the end of the job). Returns null when absent.
+ *
+ * Bounded by the NEXT HEADER rather than by a length comparison: the first draft
+ * asserted `slice.length < remainder.length` as its non-vacuity guard, which
+ * false-REDs when the step is legitimately the LAST one in the job — coupling the
+ * guard to step ORDER, which is not the property.
+ */
+function extractStep(jobText: string, titleMatch: RegExp): string | null {
+  const lines = jobText.split("\n");
+  const start = lines.findIndex(
+    (l) => /^ {6}- name:/.test(l) && titleMatch.test(l),
+  );
+  if (start === -1) return null;
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^ {6}- name:/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  return lines.slice(start, end).join("\n");
+}
+
+// The green-skip channel (#7539). When CI_SSH_ACCESS_TOKEN_ID cannot be read,
+// ssh_token_gate sets ssh_apply_skip=true and the bridge, the post-bridge apply
+// AND the heartbeat ARM gate all skip — the run goes GREEN having delivered
+// nothing.
+//
+// Every assertion here is scoped to the NOTIFY STEP and anchored on syntax a
+// comment cannot produce. The first draft used job-wide `toContain` on bare
+// tokens, under which the `if:` could be moved to a decoy step and the whole
+// SSH_STAGE branch deleted, both at full green.
+describe("the ssh_token_gate green-skip has a channel (#7539)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const applyJob = extractJobBlock(wf, "apply");
+  const notify = extractStep(applyJob, /Notify ops/);
+  const summary = extractStep(applyJob, /Post-apply summary/);
+  const gate = extractStep(applyJob, /Check CI-SSH token presence/);
+
+  test("the notify step exists and USES the ops-email action (anchored, not a substring)", () => {
+    expect(notify).not.toBeNull();
+    expect(notify!).toMatch(/^\s*uses:\s*\.\/\.github\/actions\/notify-ops-email\s*$/m);
+  });
+
+  test("the skip gate is ON that step — not on a decoy elsewhere in the job", () => {
+    // Anchored on the `if:` LINE, not the step body. The body carries a comment
+    // explaining why this is `!cancelled()` and not `always()` — a body-wide
+    // `not.toContain("always()")` is satisfied by that comment, which is the exact
+    // collision this file documents (cq-assert-anchor-not-bare-token). Measured:
+    // the first draft of this assertion failed on its own explanatory comment.
+    const ifLine = notify!
+      .split("\n")
+      .find((l) => /^\s*if:/.test(stripLineComment(l)));
+    expect(ifLine).toBeDefined();
+    expect(ifLine!).toMatch(
+      /steps\.ssh_token_gate\.outputs\.ssh_apply_skip\s*==\s*'true'/,
+    );
+    // `!cancelled()`, never `always()`: always() also fires on a CANCELLED run,
+    // where the body's "completed green" headline is false.
+    expect(ifLine!).toContain("!cancelled()");
+    expect(ifLine!).not.toContain("always()");
+  });
+
+  test("it references a real step id, and that gate emits BOTH outputs it is read for", () => {
+    expect(gate).not.toBeNull();
+    expect(applyJob).toMatch(/^\s*id:\s*ssh_token_gate\s*$/m);
+    expect(gate!).toContain('echo "ssh_apply_skip=true" >> "$GITHUB_OUTPUT"');
+    expect(gate!).toContain('echo "ssh_skip_cause=${SKIP_CAUSE}" >> "$GITHUB_OUTPUT"');
+  });
+
+  test("the gate MEASURES the cause instead of assuming it (no bare `|| true` collapse)", () => {
+    // A `|| true` here folds an expired DOPPLER_TOKEN into "the secret is absent",
+    // and the email then states that as fact.
+    expect(gate!).not.toMatch(/TOKEN_ID=\$\(doppler secrets get [^)]*\|\| true\)/);
+    expect(gate!).toContain("SKIP_CAUSE=unreadable");
+    expect(gate!).toContain("SKIP_CAUSE=absent");
+  });
+
+  test("the email carries a RUNNABLE recovery command, not a pointer to one", () => {
+    expect(notify!).toContain("gh workflow run apply-web-platform-infra.yml");
+    expect(notify!).toContain("apply_target=manual-rerun");
+    // and it reports the measured cause rather than a hardcoded one
+    expect(notify!).toContain("ssh_skip_cause");
+  });
+
+  test("the run summary BRANCHES on the skip (job.status alone reads success)", () => {
+    expect(summary).not.toBeNull();
+    // Assert the branch itself, not just the echo literal: deleting the whole
+    // if/elif/else leaves `**SSH stage:**` matching while SSH_STAGE renders empty.
+    expect(summary!).toMatch(/if\s+\[\s*"\$\{SSH_SKIP\}"\s*=\s*"true"\s*\]/);
+    expect(summary!).toContain("SSH_STAGE=");
+    expect(summary!).toContain("**SSH stage:**");
+  });
+});
+
+// Mutation + harness battery. Each M-row asserts the guard reports RED for a
+// mutated fixture; each H-row asserts it PASSES a legitimate non-canonical one.
+// These run in CI forever rather than being hand-applied once at authoring time.
+describe("Guard 1 mutation battery (#7539)", () => {
+  const BRIDGE = "        uses: ./.github/actions/cf-tunnel-ssh-bridge";
+
+  /** Minimal synthetic workflow with the same two-stage shape as the real one. */
+  function synth(opts: {
+    preBridge?: string[];
+    postBridge?: string[];
+    bridgeLine?: string;
+  }): string {
+    return [
+      "jobs:",
+      "  preflight:",
+      "    runs-on: ubuntu-latest",
+      "  apply:",
+      "    runs-on: ubuntu-latest",
+      "    steps:",
+      "      - name: Terraform plan (allow-list, non-SSH resources only)",
+      "        run: |",
+      "          terraform plan \\",
+      ...(opts.preBridge ?? []).map((t) => `            ${t}`),
+      "      - name: CF Tunnel SSH bridge (gated)",
+      opts.bridgeLine ?? BRIDGE,
+      "      - name: Terraform apply (SSH-provisioned resources, over the bridge)",
+      "        run: |",
+      "          terraform apply \\",
+      ...(opts.postBridge ?? []).map((t) => `            ${t}`),
+      "  inngest_host:",
+      "    runs-on: ubuntu-latest",
+    ].join("\n");
+  }
+
+  /** A compliant baseline: SSH addresses only after the bridge. */
+  const COMPLIANT = synth({
+    preBridge: [
+      "-target=doppler_secret.alpha \\",
+      "-target=betteruptime_heartbeat.beta \\",
+      "-target=cloudflare_ruleset.gamma \\",
+    ],
+    postBridge: [
+      "-target=terraform_data.journald_persistent \\",
+      "-target=terraform_data.fail2ban_tuning \\",
+    ],
+  });
+
+  const addrs = (wf: string) => bridgelessOffenders(wf).map((o) => o.addr);
+
+  test("control: the compliant baseline is GREEN (a red baseline voids every row)", () => {
+    expect(bridgelessOffenders(COMPLIANT)).toEqual([]);
+  });
+
+  test("M1: the #7539 regression itself — the misplaced address before the bridge", () => {
+    const mutant = synth({
+      preBridge: [
+        "-target=doppler_secret.alpha \\",
+        "-target=terraform_data.inngest_consumer_probe_install \\",
+      ],
+      postBridge: ["-target=terraform_data.journald_persistent \\"],
+    });
+    expect(addrs(mutant)).toEqual(["inngest_consumer_probe_install"]);
+  });
+
+  test("M2: a SECOND offender after a compliant first (catches a check that stops at hit one)", () => {
+    const mutant = synth({
+      preBridge: [
+        "-target=doppler_secret.alpha \\",
+        "-target=terraform_data.inngest_consumer_probe_install \\",
+        "-target=terraform_data.fail2ban_tuning \\",
+      ],
+    });
+    expect(addrs(mutant)).toEqual([
+      "inngest_consumer_probe_install",
+      "fail2ban_tuning",
+    ]);
+  });
+
+  // M3a-c: TOKEN SHAPE. The real workflow writes 69 single-quoted and 14
+  // double-quoted `-target=` flags against 139 bare ones, and 13 `-replace=`.
+  // A bare-only, line-leading matcher lets the regression re-land in the
+  // file's own majority style — measured, it did: the first draft of this
+  // guard passed all three of these green.
+  test("M3a: SINGLE-QUOTED — the style 69 of the file's own -target flags use", () => {
+    const mutant = synth({
+      preBridge: ["-target='terraform_data.inngest_consumer_probe_install' \\"],
+    });
+    expect(addrs(mutant)).toEqual(["inngest_consumer_probe_install"]);
+  });
+
+  test("M3b: DOUBLE-QUOTED", () => {
+    const mutant = synth({
+      preBridge: ['-target="terraform_data.journald_persistent" \\'],
+    });
+    expect(addrs(mutant)).toEqual(["journald_persistent"]);
+  });
+
+  test("M3c: -replace= drives the same provisioner run as -target=", () => {
+    const mutant = synth({
+      preBridge: ["-replace=terraform_data.cosign_trusted_root \\"],
+    });
+    expect(addrs(mutant)).toEqual(["cosign_trusted_root"]);
+  });
+
+  test("M3d: a SECOND flag on one line, and a module-prefixed address", () => {
+    const mutant = synth({
+      preBridge: [
+        "-target=doppler_secret.alpha -target=terraform_data.fail2ban_tuning \\",
+        "-target=module.web.terraform_data.orphan_reaper_install \\",
+      ],
+    });
+    expect(addrs(mutant)).toEqual([
+      "fail2ban_tuning",
+      "orphan_reaper_install",
+    ]);
+  });
+
+  test("M4: an address in the bridge-less APPLY step, not the plan step (the range hole)", () => {
+    const mutant = [
+      "jobs:",
+      "  apply:",
+      "    steps:",
+      "      - name: Terraform plan (allow-list, non-SSH resources only)",
+      "        run: terraform plan -target=doppler_secret.alpha",
+      "      - name: Terraform apply",
+      "        run: |",
+      "          terraform apply \\",
+      "            -target=terraform_data.cosign_trusted_root \\",
+      "      - name: CF Tunnel SSH bridge (gated)",
+      BRIDGE,
+      "  inngest_host:",
+      "    runs-on: ubuntu-latest",
+    ].join("\n");
+    expect(addrs(mutant)).toEqual(["cosign_trusted_root"]);
+  });
+
+  test("M5: a SECOND job with its own bridge, reordered so the target precedes it", () => {
+    // `vector_redeliver` in the real file has exactly this shape and is
+    // compliant only by step ORDER. An apply-job-only guard is blind to it.
+    const mutant = [
+      "jobs:",
+      "  apply:",
+      "    steps:",
+      "      - name: CF Tunnel SSH bridge (gated)",
+      BRIDGE,
+      "      - name: Terraform apply",
+      "        run: terraform apply -target=terraform_data.journald_persistent",
+      "  vector_redeliver:",
+      "    steps:",
+      "      - name: Terraform plan (scoped)",
+      "        run: terraform plan -target=terraform_data.journald_persistent",
+      "      - name: CF Tunnel SSH bridge",
+      BRIDGE,
+      "  entrypoint_audit:",
+      "    runs-on: ubuntu-latest",
+    ].join("\n");
+    expect(bridgelessOffenders(mutant)).toEqual([
+      { job: "vector_redeliver", addr: "journald_persistent" },
+    ]);
+  });
+
+  test("M6: a NEW job with no bridge at all — the whole job is bridge-less", () => {
+    const mutant = [
+      "jobs:",
+      "  apply:",
+      "    steps:",
+      "      - name: CF Tunnel SSH bridge (gated)",
+      BRIDGE,
+      "  hotfix_seccomp:",
+      "    steps:",
+      "      - name: Terraform apply",
+      "        run: terraform apply -target=terraform_data.docker_seccomp_config",
+      "  entrypoint_audit:",
+      "    runs-on: ubuntu-latest",
+    ].join("\n");
+    expect(bridgelessOffenders(mutant)).toEqual([
+      { job: "hotfix_seccomp", addr: "docker_seccomp_config" },
+    ]);
+  });
+
+  test("M7: an unresolvable JOB SET fails CLOSED, never empty-passes", () => {
+    expect(() => bridgelessOffenders("name: no jobs here\non: push\n")).toThrow(
+      /no jobs resolved/,
+    );
+  });
+
+  test("M8: the allowlist escape hatch is WIRED (a zero-cardinality set is unproven)", () => {
+    const mutant = synth({
+      preBridge: ["-target=terraform_data.local_only_thing \\"],
+    });
+    expect(addrs(mutant)).toEqual(["local_only_thing"]);
+    BRIDGELESS_TERRAFORM_DATA_ALLOWLIST.add("local_only_thing");
+    try {
+      expect(bridgelessOffenders(mutant)).toEqual([]);
+    } finally {
+      BRIDGELESS_TERRAFORM_DATA_ALLOWLIST.delete("local_only_thing");
+    }
+    expect(addrs(mutant)).toEqual(["local_only_thing"]);
+  });
+
+  test("H1: comment-stripping is live (now load-bearing — the matcher is unanchored)", () => {
+    // With an unanchored matcher, stripComments is what keeps a DOCUMENTED
+    // target from reading as an applied one. The first draft anchored on
+    // `^\s*-target=`, which made this strip a measured no-op.
+    const mutant = synth({
+      preBridge: [
+        "-target=doppler_secret.alpha \\",
+        "# -target=terraform_data.journald_persistent (documented, not applied)",
+      ],
+    });
+    expect(bridgelessOffenders(mutant)).toEqual([]);
+  });
+
+  test("H2: a legitimate non-canonical workflow PASSES (the guard is not diffing the real file)", () => {
+    const mutant = synth({
+      preBridge: [
+        "-target=github_actions_secret.zeta \\",
+        "-target='random_id.eta' \\",
+      ],
+      postBridge: [
+        "-target=terraform_data.synthetic_probe_install \\",
+        "-target=terraform_data.synthetic_monitor_install \\",
+      ],
+    });
+    expect(bridgelessOffenders(mutant)).toEqual([]);
+  });
+
+  test("H3: a job with no terraform at all stays GREEN", () => {
+    const mutant = [
+      "jobs:",
+      "  apply:",
+      "    steps:",
+      "      - name: CF Tunnel SSH bridge (gated)",
+      BRIDGE,
+      "  entrypoint_audit:",
+      "    steps:",
+      "      - name: Audit",
+      "        run: echo ok",
+    ].join("\n");
+    expect(bridgelessOffenders(mutant)).toEqual([]);
   });
 });
 
