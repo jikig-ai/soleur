@@ -873,6 +873,34 @@ runcmd:
     boot_tail="$(tail -n 20 /var/log/inngest-bootstrap.log 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' || true)"
     /usr/local/bin/inngest-boot-phone-home.sh bootstrap-exit-$boot_rc "$boot_tail"
     if [ "$boot_rc" -ne 0 ]; then
+      # THE FAILURE THAT KILLS THE BOOTSTRAP ALSO KILLS THE CHANNEL THAT WOULD EXPLAIN IT, and that
+      # is why this block exists rather than a bigger `tail`. Vector — this host's journald ->
+      # Better Stack shipper — is installed BY the bootstrap below the line that just failed. So a
+      # non-zero exit leaves the failing unit's stderr in journald and NOWHERE else, readable only
+      # over SSH, which hr-no-ssh-fallback-in-runbooks forbids. The phone-home is a direct curl and
+      # is the ONE channel still working here.
+      #
+      # MEASURED, not hypothetical (2026-08-16 inngest-host-replace, #7462 delivery): every stage
+      # through `oci-pull-rc-0` shipped and the zot leg served the image, then `bootstrap-exit-1`
+      # carried a 20-line tail whose last two lines were systemd's generic "Job for
+      # inngest-server.service failed" + "See journalctl for details". Better Stack held ZERO
+      # journald rows for this host, so the cause was unobtainable off-box and the leading
+      # hypothesis (prod Postgres unreachable) was falsified only by probing Supabase from
+      # elsewhere. A boot that cannot say why it failed costs a whole replace cycle per guess.
+      #
+      # `systemctl --failed` FIRST and separately: it names WHICH unit broke without assuming it is
+      # always inngest-server. A future regression in inngest-redis.service would otherwise land in
+      # a block that only ever quotes inngest-server and read as "no journal", i.e. the same
+      # silence in a new place.
+      set +e
+      failed_units="$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | tr '\n' ',' | head -c 300)"
+      unit_journal="$(journalctl -xu inngest-server.service -n 30 --no-pager 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' | head -c 1200)"
+      set -e
+      # Redacted and BOUNDED (300 + 1200 chars). The journal carries env-delivered Postgres/Redis
+      # URIs and signing keys on a failed ExecStart, and this lands in a Better Stack source the
+      # whole team reads — inngest-redact.sh is the same scrubber the boot_tail above already
+      # trusts, and the caps stop one runaway unit from filling the channel.
+      /usr/local/bin/inngest-boot-phone-home.sh bootstrap-failure-journal "rc=$boot_rc failed_units=[$failed_units] inngest-server=[$unit_journal]"
       echo "FATAL: inngest bootstrap failed rc=$boot_rc (see /var/log/inngest-bootstrap.log)" >&2
       exit "$boot_rc"
     fi
