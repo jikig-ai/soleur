@@ -23,6 +23,28 @@
 # tail BEFORE any key=value parse. zot_last_err is emitted LAST (cloud-init-registry.yml, the LINE= emitter in zot-disk-heartbeat.sh),
 # so a greedy cut from its first occurrence bounds the trusted region and a crafted zot log line
 # (containing e.g. `boot_id=`/`exit_code=137`) cannot spoof the fields a verdict keys on.
+# zot_envelope_anchor: stdin = raw JSONEachRow lines. Prints only rows whose `raw` envelope
+# BEGINS with the direct-POST producer shape `{"message":"SOLEUR_ZOT_DISK `.
+#
+# WHY (#7569, plan finding F15). `betterstack-query.sh --grep SOLEUR_ZOT_DISK` is an unanchored
+# `raw LIKE '%SOLEUR_ZOT_DISK%'`, so ANY row on the shared source whose text merely quotes the
+# marker satisfies it — and that is not hypothetical: on 2026-07-15 three GitHub-webhook rows
+# quoting a marker were returned to the sibling NIC leg, which is why THAT leg already anchors.
+#
+# The zot leg did not, and the consequence is a suppression primitive rather than noise: one
+# contaminated row makes the caller's `$MAIN` non-empty, which SKIPS the whole
+# `if [[ -z "$MAIN" ]]` block — the block containing both the PRODUCER_SILENT branch and the
+# INGEST_DARK branch. An unauthenticated party able to get one line into this shared source
+# could therefore mask genuine registry-telemetry darkness indefinitely.
+#
+# The anchor is the NIC leg's proven form (envelope prefix + trailing space). A Vector-shipped
+# journald row's raw starts `{"PRIORITY":"6",…` and buries the marker in a nested .message, so
+# it cannot satisfy this prefix; the registry host's direct POST emits `{"message":"<marker> …`
+# and does.
+zot_envelope_anchor() {
+  grep -F '"raw":"{\"message\":\"SOLEUR_ZOT_DISK ' || true
+}
+
 zot_trusted_region() {
   sort | sed 's/ zot_last_err=.*//'
 }
