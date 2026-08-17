@@ -64,6 +64,43 @@ Each row is a temporary local edit, observed, then reverted. Record observed out
 - [x] 3.9 Row 9 — marker present in source, stripped from the mounted artifact ⇒ structural hard-exit.
 - [x] 3.10 Row 10 — control, nothing mutated ⇒ `47 passed, 0 failed, Skipped: 0`, exit 0 (re-running post-rebase).
 
+### Addendum — 2026-08-17 (#7565 rebase, re-measured on `4ba943393`)
+
+Every figure above describes bytes that no longer exist. #7565 merged into this same arm, giving it
+a second counted assertion, so the skip cost became 2, the ceiling 2 and the floor 49. The harness
+itself was rebuilt: the previous one lived in a session-scoped scratchpad and did not survive, the
+perishability recorded in `2026-07-15-ad-hoc-verification-evidence-is-as-perishable-as-uncommitted-code.md`.
+All ten anchors were dry-verified against the post-rebase bytes before any row was trusted.
+
+| Row | rc | Observed | Property |
+|---|---|---|---|
+| 1 | 1 | `48 passed, 1 failed, Skipped: 0 (49)` | genuine vacuity reaches the `ran` route, not SKIP |
+| 2 | 0 | `47 passed, 0 failed, Skipped: 2 (49)` + NOTE | transient decline ⇒ loud counted skip, floor met |
+| 3 | 1 | structural hard-exit | marker absent from the mounted driver |
+| 4 | 1 | `41 passed, 8 failed, Skipped: 0 (49)` | fixture defect not absorbed into the environment bucket |
+| 5 | 1 | `47 passed, 2 failed, Skipped: 0 (49)` | missing measurement is a harness bug, not a skip |
+| 6 | 1 | `ran only 48 assertions (<49)` | the ceiling is COUNTED — its own deletion reddens |
+| 7 | 1 | `skip ceiling exceeded: 4 … ceiling is 2` | the ceiling counts MEMBERS, not just the first |
+| 8 | 1 | 2 FAIL lines, total 48 | mutation-did-not-land pre-branch, doubly red |
+| 9 | 1 | structural hard-exit | same message as row 3 |
+| 10 | 0 | `49 passed, 0 failed, Skipped: 0 (49)` | control |
+
+**Two rows were mis-designed and were re-run, not reported as passes.** Row 1 v1 removed the
+CHMOD_RAN instrumentation, which trips #7565's instrumentation guard and hard-exits *before* the
+verdict — red for a reason unrelated to the vacuity routing it is named for. Row 7 v1 added a
+synthetic `arm_skip` of cost 2 against a ceiling of 2 without forcing the T5 skip, so it measured
+`rc 0, Skipped: 2 (51)` and **survived**; the archived matrix says "force BOTH", and composing
+row 2 reaches 4 > 2. Both were fixture defects, so the fixtures were fixed, not the guards.
+
+**Rows 3 and 9 are ONE axis, not two** — both terminate at the same structural marker guard with
+an identical message. Counting them separately overstates the battery.
+
+**Axes this battery does NOT edit,** stated rather than implied: fixture *direction* on the premise
+assertion (no row makes the premise fail while the result passes), population growth beyond one
+synthetic ceiling member, and the `pass`/`fail` dispatch helpers themselves.
+
+Row 8 falsified a claim this PR had written one commit earlier — see `4ba943393`.
+
 ## Phase 4 — ADR
 
 - [x] 4.1 Re-derive the next free ADR ordinal against **fetched** `origin/*` refs (the local corpus
@@ -87,6 +124,15 @@ Each row is a temporary local edit, observed, then reverted. Record observed out
       with the degraded-run NOTE emitted. Two earlier clean controls (45/0 and an interrupted
       run) described trees invalidated by #7540 and #7501/#7507 landing mid-flight and are NOT
       the evidence of record.
+
+      > **Superseded 2026-08-17 (#7565 rebase):** the figures above are now stale for the same
+      > reason they superseded their own predecessors — a sibling landed in this arm. Re-measured
+      > on `4ba943393`: control `49 passed, 0 failed, Skipped: 0 (49 assertions)`, rc=0, ~230s;
+      > skip path `47 passed, 0 failed, Skipped: 2 (49 assertions)`, rc=0, with the NOTE emitted.
+      > The skip is `2` rather than `1` because #7565 gave the arm a second counted assertion.
+      > The ~2347s figure was a cold/contended box; with `ubuntu:24.04` cached a single container
+      > step measures 21.6s and the suite ~4 min. This is the fourth restatement of this number
+      > on this branch, which is the argument for deltas over literals, not against measuring.
 - [x] 5.4 Deferred-scope rows dispositioned. Six proposed rows became **three filings and three
       resolved decisions**, after two CONCUR rounds (both DISSENTed, both correctly):
         - #7565 P1 (separate, discovered defect): the vacuous-PASS path — egress blocked while apt
