@@ -173,6 +173,7 @@ command -v docker >/dev/null 2>&1 || _skip "git-data-runcmd-rehearsal: SKIP — 
 docker info >/dev/null 2>&1 || _skip "git-data-runcmd-rehearsal: SKIP — docker daemon unreachable"
 command -v terraform >/dev/null 2>&1 || _skip "git-data-runcmd-rehearsal: SKIP — terraform absent"
 command -v python3 >/dev/null 2>&1 || _skip "git-data-runcmd-rehearsal: SKIP — python3 absent"
+command -v dash >/dev/null 2>&1 || _skip "git-data-runcmd-rehearsal: SKIP — dash absent (/bin/sh on 24.04; D1 asserts the shipped emitter against it)"
 
 # DEFAULT TMPDIR HERE, not only in the runners. scripts/test-all.sh and run-registered-suites.sh
 # both export TMPDIR=/var/tmp, but a DIRECT invocation — the shape this file's own header
@@ -237,7 +238,7 @@ for l in open(sys.argv[1]).read().splitlines():
             delim = m.group(1)
     elif l.strip() == delim:
         delim = None
-print(sum(1 for l in out if re.match(r'^trap .*EXIT', l)))
+print(sum(1 for l in out if re.match(r'^[ \t]*trap [^\n]*EXIT', l)))
 PY
 )"
 if [ "${_ac15_traps:-0}" -eq 1 ]; then
@@ -690,7 +691,7 @@ FIX
 chmod +x /work/git-data-emit
 mkdir -p /usr/local/bin && cp /work/git-data-emit /usr/local/bin/git-data-emit
 
-STAGE=runcmd_early
+STAGE=gitdata_runcmd_early
 # (#7227) MODELS THE SHIPPED HANDLER, which now derives its title from $STAGE and passes a
 # seeded, [ -s ]-guarded scoped file rather than the literal "". Kept in step deliberately:
 # B2SPEC pins six constructs but NOT the title or the detail source, so a driver left modelling
@@ -712,7 +713,7 @@ on_err() {
 }
 trap on_err EXIT
 set -e
-STAGE=doppler_dl
+STAGE=gitdata_doppler_dl
 # SOURCED, not `bash /work/doppler-dl.sh`. cloud-init concatenates every runcmd entry into
 # ONE script, so the `set -e` armed above is in effect for this block. Running it as a
 # CHILD bash gives that child its own (unset) options, so a failing `sha256sum -c -` would
@@ -784,6 +785,7 @@ set -e (exactly)|1|^[[:space:]]*set -e[[:space:]]*$
 rc=$? capture|2|^[[:space:]]*rc=\$\?[[:space:]]*$
 rc guard|2|^[[:space:]]*\[ "\$rc" -eq 0 \][[:space:]]*&&[[:space:]]*exit 0[[:space:]]*$
 trap - EXIT disarm|2|^[[:space:]]*trap - EXIT[[:space:]]*$
+doppler stage name|1|^[[:space:]]*STAGE=gitdata_doppler_dl[[:space:]]*$
 emit call|1|/usr/local/bin/git-data-emit[[:space:]]+"
 B2SPEC
 if [ -z "$_b2_missing" ]; then pass; else
@@ -835,23 +837,29 @@ run_case() {
 # shell outright and which `|| true` cannot catch. Asserted DIRECTLY against dash rather
 # than inferred from the driver's interpreter, so it holds regardless of how the container
 # case is wired.
-if command -v dash >/dev/null 2>&1; then
-  if dash -n "$TMP/git-data-emit" 2>/dev/null; then pass; else fail "D1: emitter is not valid dash"; fi
-  # A 3-arg call is what the usage line invites. Under a bare `shift 4` dash exits 2 having
-  # emitted nothing — silently, on a host whose only diagnostic is this emitter.
-  ( cd "$TMP" && dash ./git-data-emit "m" "s" info >/dev/null 2>&1 )
-  _d_rc=$?
-  # PRE-EXISTING HAZARD, TRACKED IN #7570 — deliberately not fixed here (#7565 pins run_case
-  # unmodified). CAPTURE is first assigned inside run_case, whose first call is T5 BELOW this
-  # arm, so under this file's `set -u` the expansion below is of an unset variable. `[`
-  # short-circuits on `||`, so it is reachable ONLY when _d_rc == 2 — precisely D1's failing
-  # direction. A real emitter regression would therefore abort with "CAPTURE: unbound
-  # variable" instead of D1's own message. Do not read the green here as coverage of it.
-  if [ "$_d_rc" -ne 2 ] || [ -s "$CAPTURE" ]; then pass; else
-    fail "D1: a 3-arg call died at the shift (dash rc=2) instead of emitting"; fi
-else
-  pass; pass   # dash absent: keep the cardinality floor honest rather than skewing it
-fi
+# DASH IS A RUNNER-CONTRACT DEPENDENCY, GUARDED AT THE TOP WITH THE OTHER FOUR (review).
+# This arm used to end in an `else pass; pass` counterweight "to keep the cardinality floor
+# honest". It kept the floor honest and the MEASUREMENT dishonest: on a runner without dash the
+# summary line was byte-identical to a full run — 49 passed, 0 failed, Skipped: 0, no NOTE — so
+# nothing distinguished a run that tested the emitter's dash-compatibility from one that did not.
+# Fabricating passes is the vacuity class this whole file is written against, and it was the only
+# bare multi-`pass` here. dash ships /bin/sh on Ubuntu and is an essential package, so its absence
+# is a provisioning defect in the same class as docker/terraform/python3 — which means `_skip`,
+# not a counterweight and not `arm_skip` (nobody-owns-it is false for an essential package).
+# Hoisting it up there also keeps the skip ceiling at 2: this arm never becomes skip-eligible.
+if dash -n "$TMP/git-data-emit" 2>/dev/null; then pass; else fail "D1: emitter is not valid dash"; fi
+# A 3-arg call is what the usage line invites. Under a bare `shift 4` dash exits 2 having
+# emitted nothing — silently, on a host whose only diagnostic is this emitter.
+( cd "$TMP" && dash ./git-data-emit "m" "s" info >/dev/null 2>&1 )
+_d_rc=$?
+# PRE-EXISTING HAZARD, TRACKED IN #7570 — deliberately not fixed here (#7565 pins run_case
+# unmodified). CAPTURE is first assigned inside run_case, whose first call is T5 BELOW this
+# arm, so under this file's `set -u` the expansion below is of an unset variable. `[`
+# short-circuits on `||`, so it is reachable ONLY when _d_rc == 2 — precisely D1's failing
+# direction. A real emitter regression would therefore abort with "CAPTURE: unbound
+# variable" instead of D1's own message. Do not read the green here as coverage of it.
+if [ "$_d_rc" -ne 2 ] || [ -s "$CAPTURE" ]; then pass; else
+  fail "D1: a 3-arg call died at the shift (dash rc=2) instead of emitting"; fi
 
 # ── T5 — a WRONG checksum must ABORT before tar/chmod ──────────────────────────────
 # This is the supply-chain half of issue item 3. Before #6982 there was no `set -e`, so a
@@ -868,8 +876,29 @@ fi
 # they are named for was never evaluated. The checksum-verdict assertion is what makes this arm
 # say which command actually aborted, instead of merely that something did.
 run_case "T5 wrong-checksum aborts" 's#^DOPPLER_SHA256=.*#DOPPLER_SHA256="0000000000000000000000000000000000000000000000000000000000000000"#' 1
-if grep -q '"stage":"doppler_dl"' "$CAPTURE" 2>/dev/null; then pass; else
-  fail "T5: no doppler_dl fatal was emitted" "$(cat "$CAPTURE" 2>/dev/null | head -2)"; fi
+# ERREXIT ORDERING IS T5's LOAD-BEARING PRECONDITION TOO — asserted at review, mirroring the
+# assertion S1 has carried for its own stage. T5's entire claim is that the `set -e` armed in one
+# runcmd entry covers the doppler block in a LATER entry, because cloud-init concatenates them.
+# The two live in separate entries and nothing pinned their ORDER: move the shipped `set -e` below
+# the doppler entry and every guard here stays green — B2 sees `set -e` present on both sides, T5's
+# rc/stage/level/verdict/CHMOD_RAN-absent all still hold because the DRIVER arms errexit itself,
+# and S1's inequality is satisfied a fortiori by `set -e` moving LATER. Production would then run
+# `tar xzf` and `chmod +x /usr/local/bin/doppler` as root on an unverified tarball with the whole
+# suite reporting success. The inequality is the mirror image of S1's: the doppler stage must come
+# AFTER the arming, where sshd_config must come BEFORE it.
+_t5_stage_ln=$(grep -n '^[[:space:]]*STAGE=gitdata_doppler_dl[[:space:]]*$' "$TMP/runcmd-all.sh" | head -1 | cut -d: -f1)
+_t5_sete_ln=$(grep -n '^[[:space:]]*set -e[[:space:]]*$' "$TMP/runcmd-all.sh" | head -1 | cut -d: -f1)
+if [ -n "$_t5_stage_ln" ] && [ -n "$_t5_sete_ln" ] && [ "$_t5_sete_ln" -lt "$_t5_stage_ln" ]; then pass; else
+  fail "T5: the shipped chain does not arm 'set -e' before the doppler stage (set -e=${_t5_sete_ln:-?}, stage=${_t5_stage_ln:-?})" \
+       "T5 asserts the checksum aborts the chain; without the arming ordered first, a failed sha256sum runs tar+chmod as root on an unverified tarball."; fi
+
+# THE STAGE LITERAL IS THE SHIPPED ONE (review). The driver modelled the stage as `doppler_dl`
+# while the template emits `gitdata_doppler_dl`, so this assertion validated the harness's own
+# model and would have failed against the real artifact — and the sibling stage had the same
+# divergence with no assertion at all. Both driver names are now the template's, and B2SPEC pins
+# the literal on BOTH sides so they cannot drift apart again silently.
+if grep -q '"stage":"gitdata_doppler_dl"' "$CAPTURE" 2>/dev/null; then pass; else
+  fail "T5: no gitdata_doppler_dl fatal was emitted" "$(cat "$CAPTURE" 2>/dev/null | head -2)"; fi
 if grep -q '"level":"fatal"' "$CAPTURE" 2>/dev/null; then pass; else fail "T5: emit was not level=fatal"; fi
 # THE CHECKSUM'S OWN VERDICT. `sha256sum -c -` writes `<file>: FAILED` to STDOUT (only the
 # "WARNING: 1 computed checksum did NOT match" summary goes to stderr, which the shipped block
@@ -2200,6 +2229,19 @@ total=$((passes + fails + SKIPPED_ASSERTIONS))
 #                   and the arm passed having reproduced nothing.
 # Measured after that raise, on #7565's own bytes: 48 passed, 0 failed.
 #
+# RAISED 49 -> 50 AT REVIEW (#7291), itemised. Base re-read from origin/main at this edit and
+# still 48, so the composed delta is +2:
+#   T5 errexit ordering  1  the shipped `set -e` and the doppler block are separate cloud-init
+#                           runcmd entries and nothing asserted their ORDER. Moving the arming
+#                           below the doppler entry left every existing guard green — B2 sees
+#                           `set -e` on both sides, T5's other assertions hold because the DRIVER
+#                           arms errexit itself, and S1's inequality is satisfied a fortiori —
+#                           while production ran tar+chmod as root on an unverified tarball. The
+#                           assertion mirrors the one S1 has always carried for its own stage.
+# The D1 dash counterweight was removed in the same pass and moves this by ZERO: it contributed
+# two either way (two fabricated passes when dash was absent, two real assertions when present),
+# and dash is now a top-level `_skip` dependency so only the real pair can run.
+#
 # RAISED 48 -> 49 WITH THE ARM THAT MADE IT NECESSARY (#7291), itemised. THE BASE WAS RE-DERIVED
 # FROM origin/main AT THE #7567 REBASE, NOT CARRIED FORWARD: this stanza previously read
 # "46 -> 47", and 46 had itself been rebased from 44. The literal has moved 44 -> 46 -> 47 -> 48
@@ -2303,8 +2345,8 @@ total=$((passes + fails + SKIPPED_ASSERTIONS))
 # fixture-liveness gate emits on the healthy path. Counting it is the whole point of the instrument
 # — a gate that contributes nothing when it succeeds is one that an inversion-to-always-pass leaves
 # undetectable, because the old floor of 44 would still be met.
-if [ "$total" -lt 49 ]; then
-  echo "FAIL: ran only ${total} assertions (<49) — harness did not execute fully" >&2
+if [ "$total" -lt 50 ]; then
+  echo "FAIL: ran only ${total} assertions (<50) — harness did not execute fully" >&2
   exit 1
 fi
 echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed, Skipped: ${SKIPPED_ASSERTIONS} (${total} assertions)"
