@@ -2,11 +2,17 @@
 # Read a Sentry issue / its latest event inline, for no-SSH agent debugging (#5495).
 #
 # Reads are GET-only and least-privilege. The issue/event endpoints require an
-# `event:read`-scoped token: SENTRY_API_TOKEN / SENTRY_AUTH_TOKEN 403 on
-# /issues/<id>/ (Discover/ingest scope only — see postmerge/SKILL.md). Use the
-# dedicated read-only SENTRY_ISSUE_RO_TOKEN (scopes [event:read, org:read]); the
-# write-scoped SENTRY_ISSUE_RW_TOKEN is a GET-only fallback until the RO token is
-# minted (see runbook).
+# `event:read`-scoped token. Use the dedicated read-only SENTRY_ISSUE_RO_TOKEN
+# (scopes [event:read, org:read]); the write-scoped SENTRY_ISSUE_RW_TOKEN is a
+# GET-only fallback until the RO token is minted (see runbook).
+#
+# (#7389) This header previously asserted that SENTRY_API_TOKEN *and*
+# SENTRY_AUTH_TOKEN both 403 on the issue endpoints. Measured 2026-08-10 against
+# GET /organizations/jikigai-eu/issues/: only SENTRY_API_TOKEN 403s.
+# SENTRY_AUTH_TOKEN returns 200, as do SENTRY_ISSUE_RO_TOKEN and
+# SENTRY_IAC_AUTH_TOKEN. Preferring the RO token is still correct — it is the
+# least-privilege choice — but the others are not all scope-blocked, and a
+# reader who tests the claim will find it does not hold.
 #
 # Provisioning: SENTRY_ISSUE_RO_TOKEN lives in Doppler soleur/prd. To re-mint, see
 # knowledge-base/engineering/operations/runbooks/sentry-issue-read.md.

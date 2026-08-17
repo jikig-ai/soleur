@@ -4961,9 +4961,18 @@ jobs:
       # a partial birth is exactly when the boot evidence matters most.
       #
       # It reads BETTER STACK, not Sentry, and that is forced rather than chosen: the
-      # boot-completion emit goes to both, but scripts/sentry-issue.sh needs
-      # SENTRY_ISSUE_RO_TOKEN (its own header records that SENTRY_IAC_AUTH_TOKEN 403s on
-      # event:read), while the BETTERSTACK_QUERY_* credentials are already available.
+      # boot-completion emit goes to both, but scripts/sentry-issue.sh is wired to
+      # SENTRY_ISSUE_RO_TOKEN, while the BETTERSTACK_QUERY_* credentials are already
+      # available here.
+      #
+      # (#7389) This comment previously claimed SENTRY_IAC_AUTH_TOKEN "403s on
+      # event:read". That was false twice over: sentry-issue.sh's header names
+      # SENTRY_API_TOKEN/SENTRY_AUTH_TOKEN, not the IAC token, and a live probe on
+      # 2026-08-10 showed SENTRY_IAC_AUTH_TOKEN DOES carry event:read
+      # (GET /organizations/jikigai-eu/issues/ -> 200; introspected scopes include
+      # event:read). Its actual 403s are on members/ and audit-logs/, which need
+      # member:read and org:admin. Better Stack is still the right source here --
+      # it is the credential this job already has -- but not for the stated reason.
       - name: Poll for the git-data boot-completion signal
         if: always()
         env:

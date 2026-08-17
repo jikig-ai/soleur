@@ -722,6 +722,12 @@ if want_scripts; then
   run_suite "scripts/lint-agents-enforcement-tags-unit" bash scripts/lint-agents-enforcement-tags.test.sh
   run_suite "scripts/lint-infra-no-human-steps" bash scripts/lint-infra-no-human-steps.test.sh
   run_suite "scripts/lint-credential-path-literals" bash scripts/lint-credential-path-literals.test.sh
+  # #7389: a credential reaching a PUBLISHED build channel (Docker build-arg -> SLSA
+  # provenance attestation, credential-shaped ARG/ENV/LABEL, `--build-arg` in a script).
+  # The unit suite includes a live sweep of the real tree, so the -live leg below is the
+  # same gate the release job runs pre-build.
+  run_suite "scripts/lint-buildarg-secret-channels" bash scripts/lint-buildarg-secret-channels.test.sh
+  run_suite "scripts/lint-buildarg-secret-channels-live" python3 scripts/lint-buildarg-secret-channels.py
   # #7136: a `run:` step reading a variable declared only on ANOTHER step. Part B of this
   # suite EXECUTES the shipped release-failure email body under both deploy branches — the
   # alert path that had never once delivered, because `set -u` killed it before the curl.
