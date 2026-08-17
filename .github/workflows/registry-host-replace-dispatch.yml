@@ -78,6 +78,15 @@ concurrency:
   # SUCCESSFUL RUN rather than on `github.event.before`, and eviction only ever happens when a
   # successor run exists, so the successor's range SUBSUMES the evicted one. Eviction coalesces
   # deliveries instead of dropping them. Do not reintroduce `github.event.before` here.
+  #
+  # THE TWO CANCELLATION CLASSES ARE COVERED SEPARATELY, and neither needs an external observer.
+  # Recorded because a review round proposed a `workflow_run` sweeper for this and the split is
+  # what makes it unnecessary — do not re-derive it:
+  #   * cancelled while PENDING — no steps run, so nothing in-band can fire; covered by the
+  #     watermark's subsumption argument above (the delivery is not lost, only coalesced).
+  #   * cancelled by `timeout-minutes` — the job started, so the refusal-artifact step's
+  #     `always()` gate fires in the runner's grace window and files the record in-band.
+  # A second workflow observing this one would only relocate the question of who observes IT.
   group: registry-host-replace-dispatch
   cancel-in-progress: false
 
@@ -391,17 +400,37 @@ jobs:
       # broke. A red run nobody owns is the exact failure this step exists to prevent, so the
       # condition must not depend on a value the failing step produces.
       - name: Record a refused delivery on the tracker
-        if: failure()
+        # `always()`, NOT `failure()` — and the difference is the whole cancellation class.
+        #
+        # "Cancelled" is TWO failure modes with opposite step-execution semantics, and collapsing
+        # them is what made this look like it needed a second workflow to observe the first:
+        #   * cancelled while PENDING (a third arrival evicts the queued second) runs NO steps, so
+        #     nothing in-band can fire. That case needs no artifact here: the watermark above makes
+        #     it lossless by subsumption, so there is no undelivered change to report.
+        #   * cancelled by `timeout-minutes` has STARTED, and `always()` steps run inside the
+        #     runner's cancellation grace window. `failure()` does not. This file already depends
+        #     on exactly that distinction — see "`always()` IS LOAD-BEARING" on the poll step.
+        # Under `failure()` the ceiling-timeout path filed nothing, which is the silent
+        # non-delivery this step exists to prevent, in the arm where a production replace may
+        # already be in flight.
+        if: always() && job.status != 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MERGE_SHA: ${{ github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           DELIVER: ${{ steps.gate.outputs.deliver }}
+          JOB_STATUS: ${{ job.status }}
         run: |
           set -uo pipefail
           # DELIVER is empty when the GATE itself failed, which is a different fact from a refused
           # preflight — say which one happened rather than asserting the preflight refused.
-          if [[ "${DELIVER:-}" == "true" ]]; then
+          if [[ "${JOB_STATUS:-}" == "cancelled" ]]; then
+            # Say which one happened rather than asserting a refusal the job never reached. A
+            # ceiling cancellation is the one arm where a replace may ALREADY BE IN FLIGHT, so the
+            # remediation is "read the run before re-firing", not "re-fire".
+            WHAT="Delivery CANCELLED mid-run"
+            WHY="The job was cancelled while running — most likely its \`timeout-minutes\` ceiling. Whether the replace was dispatched before the cut is visible in the run itself, so READ IT BEFORE RE-FIRING: a replace may already be in flight, and the apply's own outcome was never polled."
+          elif [[ "${DELIVER:-}" == "true" ]]; then
             WHAT="Delivery REFUSED"
             WHY="The preflight declined, or the dispatch/poll failed."
           else
