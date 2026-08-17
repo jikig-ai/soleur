@@ -14,6 +14,15 @@ brand_survival_threshold: aggregate pattern
 
 # ADR-188: a transient environment decline is reachable under CI, and must corroborate rather than infer
 
+> **Ordinal note (re-derived at ship, 2026-08-17).** 188 was `highest + 1` when claimed at plan
+> time on 2026-08-12; `origin/main` has since merged up to 193. A review pass proposed renumbering
+> to 194 on the "highest + 1" convention, and the density check refutes it: the merged sequence has
+> exactly three gaps — 188, 189, 192 — and 189 and 192 are held by two other in-flight branches
+> (`feat-one-shot-7104-…`, `feat-one-shot-7569-…`). They are concurrent reservations, not holes.
+> Renumbering would *create* the hole at 188 and place this 2026-08-12 decision above two branches
+> that started later. No other ref claims 188, so there is no collision — which is the condition
+> the re-derive rule actually guards against.
+
 ## Context
 
 `git-data-runcmd-rehearsal.test.sh` carries a mutation arm for T5, the guard that proves a wrong
@@ -42,8 +51,14 @@ the network). Both produced the same verdict, and only one of them is about this
 
 ## Decision
 
-The arm gains a third verdict, `SKIP`, reachable **only** on positive corroboration that the driver
-never executed, and bounded by a counted ceiling. Four properties are load-bearing.
+The arm gains a third verdict, `SKIP`, reachable **only** on a discriminating absence — that of a
+distinct, earlier execution marker — and bounded by a counted ceiling. Four properties are
+load-bearing.
+
+(This sentence said "positive corroboration" until review, contradicting the paragraph seven lines
+below that retracts exactly that phrasing. The retraction was applied to the test file's header and
+not to its two twins here and in the driver comment; marking one of three is worse than marking
+none, because an unmarked twin reads as still-current.)
 
 **1. The skip turns on the absence of a DISTINCT, EARLIER marker — not on the absence of the success marker.** The driver's `drive.sh` emits an
 execution marker immediately above its `. /work/doppler-dl.sh` line and **below** the capture-server
@@ -56,9 +71,20 @@ the success marker did not appear. Inferring the decline from a non-zero docker 
 have re-created the original defect one level up — a missing signal read as a verdict about the
 SUT.
 
-**2. A missing measurement ALONGSIDE A ZERO EXIT is a harness bug, never an environment skip.** A
-harness-defect rung sits above the skip rung: **`rc == 0` with the execution marker absent**
-hard-fails. This is the row that stops the fix relocating the bug it closes (matrix row 5).
+**2. A missing measurement OUTSIDE THE MEASURED ENVIRONMENT CLASSES is a harness bug, never a
+skip.** A harness-defect rung sits above the skip rung: the execution marker absent, with a
+container rc that is **not one of the measured decline classes**, hard-fails. This is the row that
+stops the fix relocating the bug it closes (matrix row 5).
+
+**The rc test is an allowlist, widened from `rc == 0` at review.** The original predicate caught
+only the zero-exit case, so every *non-zero* harness defect fell through to the skip bucket — a
+mistyped `-v` source makes docker exit 125 with no marker, and that is a bug in the suite, not a
+statement about the network. The classes the decline is actually justified for are enumerated once
+(`100` apt under the container's outer `set -e`; `125` docker CLI / image pull) and read by both
+the routing predicate and the operator-facing classification, so the two cannot drift apart.
+`125` is retained in that list only because a companion structural check now asserts every mount
+source exists before the run, which removes the harness half of 125 rather than trying to classify
+docker's error text.
 
 **The predicate is marker ABSENCE, not file emptiness.** An emptiness test is one byte from never
 firing: `2>&1` merges stderr into the capture, so `rc == 0` plus a single `WARNING: apt does not
@@ -74,20 +100,28 @@ produced nothing" is a harness bug; "the container said it failed and produced n
 environment.
 
 **3. The branch order is load-bearing and commented.** `CHMOD_RAN` → `FIXTURE:` → harness defect →
-marker → else fail, evaluated once into an explicit state rather than re-tested per assertion.
+marker → else `ran`, evaluated once into an explicit state rather than re-tested per assertion.
+(The terminal is `ran`, not `fail`: a run whose marker is present but whose chain did not reach a
+succeeding chmod routes into the `ran` arm, where the premise assertion can still pass. Written as
+`else fail` here until review.)
 Testing the marker before `CHMOD_RAN` would skip a slow-but-successful run; testing it before
 the `FIXTURE:` literal would absorb a deterministic fixture defect (the capture server failing to
 bind :8099) into the environment bucket, where nothing would ever act on it — and because the
 marker is emitted *below* the capture-server guard, a fixture defect also presents as marker-absent,
 which is precisely why `FIXTURE:` must be tested first.
 
-`FIXTURE:` also sits **above** the harness-defect rung, and that ordering is attribution rather
-than detection: both are hard FAILs contributing two, so the floor cannot distinguish them. A
-capture-server failure that still exits 0 satisfies the harness rung's predicate (`rc == 0`, no
-marker), so with the harness rung first the run would be reported as "the container reported
-success and left no evidence" while a specific, named, deterministic diagnosis was sitting in the
-capture. Naming the less specific cause when the more specific one is available is the
-misattribution class this arm exists to stop.
+`FIXTURE:` also sits **above** the harness-defect rung, and that ordering is cosmetic — corrected
+at review, because the reason first recorded here was false. The draft argued that "a capture-server
+failure that still exits 0 satisfies the harness rung's predicate". It cannot: `drive.sh`'s :8099
+guard ends in `exit 2`, fires before that script arms its EXIT trap, and runs as the container's
+final command under `set -e`, so `FIXTURE:` present implies rc 2 — measured. The fixture rung and
+the harness rung are mutually exclusive, and their relative order changes nothing.
+
+The load-bearing constraint is the other one: **`FIXTURE:` must sit above `did-not-run`.** The
+execution marker is emitted *below* the capture-server guard, so a fixture defect presents as
+marker-absent with rc 2. Place the fixture rung any lower and that run satisfies `did-not-run`
+exactly — a deterministic, actionable bind failure absorbed into the environment bucket and
+reported as a green declared skip, which is the outcome this whole arm exists to prevent.
 
 **4. The skip is counted, denominated in assertion cost, and capped.** `SKIPPED_ASSERTIONS` increments by the
 number of assertions the skipped arm would have made, the floor compares `passes + fails + SKIPPED_ASSERTIONS`,
@@ -192,9 +226,11 @@ training is the actual cost, and it is the cost ADR-180 warns about from the oth
 - The required check stops flaking **in the one measured direction** — the T5 mutation arm. That is
   the whole user-visible effect, and it is deliberately narrower than "the suite stops flaking":
   `run_case()` (2 callers) and `_s1_run()` (2 callers) carry the same exposure and are explicitly
-  deferred, so one of ~6 container invocations gains the verdict.
+  deferred, so one of **8 runtime container invocations** gains the verdict. (Stated as "~6" until
+  review — that is the SOURCE-SITE measure, and using it here for a runtime quantity is the exact
+  two-measures-sharing-one-number drift this ADR commends the suite for separating, below.)
 - The suite's floor moves **48 → 49** for the one new counted assertion (the ceiling). The base was
-  44 when this ADR was drafted, 46 after #7501, and 48 after #7565 — it has moved four times in four
+  44 when this ADR was drafted, 46 after #7501, 48 after #7565, and 49 here — four moves in four
   days while the increment (+1) has not moved once, which is exactly why the floor is stated as a
   delta and the base re-read from `git show origin/main:<file>` at ship rather than at plan time.
   Do not carry the literal forward; re-derive it.

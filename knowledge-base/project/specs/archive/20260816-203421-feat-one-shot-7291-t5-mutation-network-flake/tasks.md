@@ -41,9 +41,13 @@ SIGPIPE prohibition, and the `$(grep -c … || true)` idiom).
 - [x] 2.3 Rewrite the verdict as an ordered branch — `CHMOD_RAN` → `FIXTURE:` → marker → else fail —
       with the ordering rationale commented.
 - [x] 2.4 Change `total` to `passes + fails + SKIPPED`.
-- [x] 2.5 Add the ceiling as a **counted** assertion (`SKIPPED <= 1`) with its derivation in a
+- [x] 2.5 Add the ceiling as a **counted** assertion (`SKIPPED <= 1`; **superseded 2026-08-17 —**
+      **the #7565 rebase gave the arm a second counted assertion, so the declared cost and the**
+      **ceiling are both 2**) with its derivation in a
       comment.
-- [x] 2.6 Raise the floor by +1 (46 → 47 after the #7501 rebase) and add a `RAISED` stanza in the file's
+- [x] 2.6 Raise the floor by +1 (46 → 47 after the #7501 rebase; **superseded 2026-08-17 — the**
+      **base was re-read from origin/main at ship and is 48, so the shipped raise is 48 → 49**)
+      and add a `RAISED` stanza in the file's
       existing style.
 - [x] 2.7 Extend the summary line with `Skipped: N`. (The resolved-suite-path half was CUT at review — its premise was false; see plan AC11.)
 - [x] 2.8 Amend the B5 doctrine comment block in the same commit; cite the ADR.
@@ -136,7 +140,16 @@ Row 8 falsified a claim this PR had written one commit earlier — see `4ba94339
 - [x] 5.4 Deferred-scope rows dispositioned. Six proposed rows became **three filings and three
       resolved decisions**, after two CONCUR rounds (both DISSENTed, both correctly):
         - #7565 P1 (separate, discovered defect): the vacuous-PASS path — egress blocked while apt
-          works leaves both T5 arms green with the checksum never evaluated. Cross-linked from the
+          works leaves both T5 arms green with the checksum never evaluated.
+          **> Superseded 2026-08-17: this is no longer true of the tree, and saying so in the**
+          **> present tense is the inherited-claim defect this branch exists to remove. #7565**
+          **> merged as the rebase base and added sha256sum's own `<tarball>: FAILED` verdict as a**
+          **> counted assertion in BOTH arms. Under egress-blocked-with-apt-healthy the primary**
+          **> arm's curl aborts before sha256sum runs, so that verdict line is absent and the**
+          **> assertion FAILS; the mutation arm lands on `ran` (its marker prints) where the same**
+          **> assertion also fails. Both arms are RED. The row is kept as the record of what was**
+          **> filed; the issue is closed.**
+          Cross-linked from the
           doctrine block so no reader infers soundness from the three skip conditions.
         - #7572 (bug): the S1 arm's live instance of the #7291 class, measured in this PR's own
           control run. Filed as the DEFECT, not as "S1 lacks arm_skip" — that asymmetry is

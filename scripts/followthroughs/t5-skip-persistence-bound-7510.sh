@@ -43,20 +43,42 @@ ids=$(printf '%s' "$runs" | jq -r '.[] | select(.conclusion == "success") | .dat
 # subject matter is about.
 [[ -n "$ids" ]] || { echo "TRANSIENT: no successful post-merge runs to sample" >&2; exit 2; }
 
+# THE POSITIVE CONTROL, added at review. Counting occurrences of a marker and reporting PASS on
+# zero cannot distinguish "the arm did not skip" from "this probe can no longer see the arm at
+# all". Both the prefix `SKIP (loud): ` (emitted by arm_skip in the suite) and the discriminator
+# `T5 MUTATION` (the call site's message) are hand-copied here as fixed strings, so a reword on
+# either side silently zeroes the count — and a zero reads as the reassuring answer, forever, from
+# an instrument that is measuring nothing. That is precisely the unpinned-replicated-literal
+# failure the suite spends a hundred lines closing for its own execution marker, and it would land
+# in the one artifact that exists to bound ADR-188's accepted residual.
+#
+# So a run only counts as OBSERVED when its log carries the suite's own terminal summary line.
+# If no sampled run does, the sample is unreadable and the verdict is TRANSIENT, never PASS.
+SUITE_TERMINAL='git-data-runcmd-rehearsal:'
+SKIP_MARKER='SKIP (loud): T5 MUTATION'
+
 sampled=0
+observed=0
 hits=0
 while IFS= read -r id; do
   [[ -n "$id" ]] || continue
   log=$(gh run view "$id" --repo "$REPO" --log 2>/dev/null) || continue
   sampled=$((sampled + 1))
-  n=$(printf '%s' "$log" | grep -cF 'SKIP (loud): T5 MUTATION' || true)
+  printf '%s' "$log" | grep -qF "$SUITE_TERMINAL" || continue
+  observed=$((observed + 1))
+  n=$(printf '%s' "$log" | grep -cF "$SKIP_MARKER" || true)
   hits=$((hits + n))
 done <<< "$ids"
 
 [[ "$sampled" -ge 1 ]] || { echo "TRANSIENT: no run logs could be fetched" >&2; exit 2; }
+[[ "$observed" -ge 1 ]] || {
+  echo "TRANSIENT: fetched ${sampled} run log(s), none containing '${SUITE_TERMINAL}' — the suite" >&2
+  echo "           did not run in this window, or its output moved. A zero skip-count here would" >&2
+  echo "           be an un-run instrument reporting a clean bill of health." >&2
+  exit 2; }
 
 if [[ "$hits" -eq 0 ]]; then
-  echo "PASS: 0 loud T5 skips across ${sampled} sampled post-merge run(s) — the persistence residual has not materialised."
+  echo "PASS: 0 loud T5 skips across ${observed} observed post-merge run(s) (${sampled} sampled) — the persistence residual has not materialised."
   exit 0
 fi
 

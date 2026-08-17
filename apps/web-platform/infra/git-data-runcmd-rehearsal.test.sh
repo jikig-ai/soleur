@@ -43,13 +43,37 @@ fail() { fails=$((fails + 1)); FAILURES+=("$1"); echo "FAIL: $1" >&2; [ -n "${2:
 # suite has no assertion floor, so its counter is decorative. Reusing the identifier would import
 # no compatibility and would put two DIFFERENT denominations behind one name in one directory,
 # which is exactly the collision a shared name is supposed to prevent.
-# The execution marker, defined ONCE. Three readers below plus the drive.sh heredoc carry it;
-# with the literal repeated at all four sites a partial rename passes the structural guard while
-# the verdict grep never matches, so the arm skips on EVERY run behind a green check — the exact
-# failure the structural guard exists to prevent. The heredoc is quoted (no expansion), so the
-# guard comparing THIS variable against the MOUNTED artifact is what pins the two together:
-# rename either side alone and the guard hard-exits.
+# The execution marker, defined ONCE. Five readers below plus the drive.sh heredoc carry it
+# (`grep -c '_T5_MARKER'` = 6 including this definition — the count said "four sites" until a
+# review re-derived it); with the literal repeated at every site a partial rename passes the
+# structural guard while the verdict grep never matches, so the arm skips on EVERY run behind a
+# green check — the exact failure the structural guard exists to prevent. The heredoc is quoted
+# (no expansion), so the guard comparing THIS variable against the MOUNTED artifact is what pins
+# the two together: rename either side alone and the guard hard-exits.
 _T5_MARKER='DRIVER_REACHED_DL'
+
+# THE FIXTURE MARKER GETS THE SAME TREATMENT, and it did not until review. It was a bare literal
+# emitted at one site and grepped at another with nothing pinning them, which is the hazard the
+# paragraph above describes — but on the HIGHER-consequence rung: `FIXTURE:` is the only thing
+# standing between a deterministic capture-server failure and a declared environment skip, so a
+# rename on the producer side alone turns two hard FAILs into a GREEN run with a NOTE.
+#
+# THAT RENAME IS NOT HYPOTHETICAL — IT IS THE NEXT OBVIOUS CLEANUP. Every other fixture marker in
+# this file already reads `FIXTURE-FAIL:` (the mktemp guard, `fixture_fail`, the R4/R3 arm), and
+# the comment at the R4 driver states the migration explicitly. This emit is the last holdout of
+# the old spelling, and `FIXTURE-FAIL:` does not contain `FIXTURE:` — so "make the markers
+# consistent" would silently disarm this rung. The structural guard below is what stops that.
+_T5_FIXTURE_MARKER='FIXTURE: capture server never bound :8099'
+
+# The rc classes the SKIP verdict is justified for, enumerated ONCE so the routing predicate and
+# the operator-facing classification cannot disagree. ADR-188 justifies the decline for a
+# precondition nobody owns; these are the two classes measured to produce it:
+#   100  apt under the container's outer `set -e` (the archive's state at that instant)
+#   125  docker CLI / image pull
+# Deliberately NOT a catch-all: see the routing comment at the verdict for why "any non-zero"
+# hands the skip bucket every harness defect in this file. Word-split on purpose (read with
+# `printf '%s\n' $_T5M_ENV_RCS`), so it stays a plain string under this file's `set -u`.
+_T5M_ENV_RCS='100 125'
 
 SKIPPED_ASSERTIONS=0
 # The cost is declared at the CALL SITE, never defaulted: a default is a silent 1 for an arm whose
@@ -98,11 +122,15 @@ arm_skip() {
 # fetch full history and is not contracted to run as root.
 #
 # An arm may reach arm_skip() only under all FOUR mechanical conditions, each demonstrated by a
-# failing direction in the mutation matrix: (1) the SUCCESS marker CHMOD_RAN is absent, so a slow
-# but succeeding run can never be skipped; (2) it is past the harness-defect rung (rc 0 with no
-# execution marker), so a missing measurement is a harness bug and not an environment skip;
-# (3) it is past the deterministic fixture test, so a fixture defect cannot be absorbed into
-# the environment bucket; and (4) the DRIVER'S OWN execution marker is absent.
+# failing direction in the mutation matrix, LISTED IN THE ORDER THE CODE TESTS THEM (they were
+# listed harness-before-fixture until review — the pre-restructure order, and the inverse of both
+# the verdict below and the paragraph justifying it; the conditions are conjunctive so nothing
+# behaved differently, but this is the first place a reader meets them):
+# (1) the SUCCESS marker CHMOD_RAN is absent, so a slow but succeeding run can never be skipped;
+# (2) it is past the fixture test, so a deterministic bind failure cannot be absorbed into the
+# environment bucket; (3) it is past the harness-defect rung — the container's rc is one of the
+# measured environment classes, so a missing measurement is a harness bug and not a skip; and
+# (4) the DRIVER'S OWN execution marker is absent.
 #
 # (4) is an absence test, and calling it "positive corroboration" would be false — the code reads
 # `! grep`. What makes it sound is WHICH absence: not the absence of the success marker
@@ -693,11 +721,17 @@ STAGE=doppler_dl
 # what ships.
 #
 # EXECUTION MARKER (#7291). Emitted immediately above the source line and BELOW the
-# capture-server guard, so "the driver never reached the download block" is a POSITIVE
-# observation rather than an inference from the absence of CHMOD_RAN. Its position is the
-# whole point: above the source line it cannot be reached by a run that died in apt or at the
-# image pull, and below the :8099 guard it stays distinguishable from a fixture failure —
-# which the T5 mutation verdict tests separately, and earlier.
+# capture-server guard. Its position is the whole point: above the source line it cannot be
+# reached by a run that died in apt or at the image pull, and below the :8099 guard it stays
+# distinguishable from a fixture failure — which the T5 mutation verdict tests separately, and
+# earlier.
+#
+# STILL AN ABSENCE TEST — corrected at review. This block used to call the resulting verdict a
+# "POSITIVE observation", which is the phrasing the header block retracts (the code reads
+# `! grep`). What the marker buys is not positivity but DISCRIMINATION: the verdict turns on the
+# absence of a distinct, EARLIER marker that localises the failure upstream of the download
+# block, rather than on the absence of the success marker. Strictly more informative than the
+# original, and still an inference from an absence.
 echo DRIVER_REACHED_DL
 . /work/doppler-dl.sh
 DRIVE
@@ -907,6 +941,18 @@ sed 's/^set -e$/true/' "$TMP/drive.sh" > "$TMP/drive.noerrexit.sh"
 grep -q "^echo ${_T5_MARKER}\$" "$TMP/drive.noerrexit.sh" || {
   echo "FAIL: the execution marker is absent from the mounted driver — the T5 mutation verdict would read every run as a non-execution" >&2
   exit 1; }
+# STRUCTURAL, same class, added at review: pin the FIXTURE marker's producer to its consumer.
+# The verdict below greps $_T5_FIXTURE_MARKER against container stdout; the only thing that can
+# emit it is drive.sh's :8099 bind guard. Nothing connected the two, so renaming the emit alone
+# — which the rest of this file has ALREADY done for every other fixture marker, to
+# `FIXTURE-FAIL:` — would leave the rung permanently unmatched and silently reclassify a
+# deterministic bind failure as an environment decline: two hard FAILs become a green skip.
+# Matched as a fixed string against the mounted artifact, so the emit and the read move together
+# or this exits before any verdict is formed.
+grep -qF "$_T5_FIXTURE_MARKER" "$TMP/drive.noerrexit.sh" || {
+  echo "FAIL: the fixture marker is absent from the mounted driver — the T5 mutation verdict's fixture-defect rung is unreachable, so a deterministic bind failure would be reported as an environment skip" >&2
+  grep -n 'FIXTURE' "$TMP/drive.noerrexit.sh" >&2 || true
+  exit 1; }
 if diff -q "$TMP/drive.sh" "$TMP/drive.noerrexit.sh" >/dev/null; then
   fail "T5 MUTATION did not land: 'set -e' not found in the driver"
 else
@@ -927,6 +973,18 @@ else
   # where the file provably exists AND provably must carry it.
   grep -q '^chmod +x /usr/local/bin/doppler && echo CHMOD_RAN$' "$TMP/dl.case.sh" || {
     echo "FAIL: the mounted T5 mutation artifact lost the CHMOD_RAN instrumentation" >&2; exit 1; }
+  # STRUCTURAL, added at review: every mount SOURCE must exist before the run.
+  # This is what makes it safe to keep 125 in _T5M_ENV_RCS. docker exits 125 for BOTH a failed
+  # image pull (an environment decline the skip is justified for) and a bad `-v` source (a defect
+  # in THIS file), and the rc alone cannot tell them apart — so without this check a mistyped
+  # mount path produced no marker, landed on `did-not-run`, and reported a green skip with a NOTE
+  # forever. The paths are static and this file owns all of them, so asserting them here removes
+  # the harness half of 125 entirely rather than trying to classify docker's error text.
+  for _m in "$TMP/dl.case.sh" "$TMP/git-data-emit" "$TMP/capture.py" "$TMP/drive.noerrexit.sh" "$TMP/out"; do
+    [ -e "$_m" ] || {
+      echo "FAIL: T5 mutation mount source is missing: ${_m} — docker would exit 125 and the verdict would misread a harness defect as an environment decline" >&2
+      exit 1; }
+  done
   docker run --rm \
     -v "$TMP/dl.case.sh:/work/doppler-dl.sh:ro" \
     -v "$TMP/git-data-emit:/work/git-data-emit-src:ro" \
@@ -983,13 +1041,20 @@ else
   #   marker absent   — only past all three is absence evidence that the driver never ran.
   #   else            — the driver DID run: both assertions are live and meaningful.
   #
-  # WHY `FIXTURE:` SITS ABOVE THE HARNESS RUNG AND NOT BELOW IT. Both are hard FAILs contributing
-  # two, so the floor cannot tell them apart and the ordering buys only ATTRIBUTION — which is the
-  # whole subject of this arm. A capture-server failure that still exits 0 satisfies the harness
-  # rung's predicate (rc 0, no marker), so with the harness rung first the run would be reported
-  # as "the container reported success and left no evidence" when in fact it left a specific,
-  # named, deterministic diagnosis. Naming the less specific cause when the more specific one is
-  # sitting in the capture is the misattribution class this arm exists to stop (ADR-166/AP-021).
+  # WHY `FIXTURE:` SITS WHERE IT DOES — CORRECTED AT REVIEW, because the reason first given here
+  # was false and contradicted the note 25 lines above. That draft said a capture-server failure
+  # "that still exits 0" would satisfy the harness rung. It cannot: drive.sh's :8099 guard ends in
+  # `exit 2`, it fires before that script arms its EXIT trap, and the container runs it as the
+  # final command under `set -e`, so `FIXTURE:` present implies rc == 2 — measured. The harness
+  # rung's rc-class test and the fixture rung are therefore mutually exclusive, and their relative
+  # order is cosmetic. Asserting otherwise was the same inherited-claim defect this branch exists
+  # to remove, written into the justification for the change that removes it.
+  #
+  # THE REAL CONSTRAINT IS THAT `FIXTURE:` MUST SIT ABOVE `did-not-run`, and that one is load
+  # bearing. The marker is emitted BELOW the :8099 guard, so a fixture defect presents as
+  # marker-absent with rc 2. Put the fixture rung any lower and that run satisfies `did-not-run`
+  # exactly — a deterministic, actionable bind failure absorbed into the environment bucket and
+  # reported as a green declared skip. That is the outcome the whole arm is built to prevent.
   #
   # The `rc == 0` conjunct on the harness rung stays load-bearing and the claim is deliberately
   # NOT unconditional: a degraded container legitimately exits non-zero AND prints no marker —
@@ -1000,15 +1065,37 @@ else
   # never firing: `2>&1` merges stderr into this capture, so rc 0 plus a single `WARNING: apt
   # does not have a stable CLI` line defeats it and the run falls through to a SKIP. Marker
   # absence subsumes emptiness (an empty file has no marker) and closes that hole.
+  # `-qx` ON THE MARKER TOO, NOT ONLY ON CHMOD_RAN (review). These two reads were written with
+  # different strictness four lines apart, and the loose one is the one that routes the verdict.
+  # bash ECHOES the offending source line on an error, so a line like
+  #   bash: /work/drive.sh: line 701: echo DRIVER_REACHED_DL: command not found
+  # SATISFIES a bare `grep -q` (measured). Both marker rungs then fall through to `else ... =ran`
+  # and the arm emits two fails saying "the driver RAN" about a driver that never reached the
+  # block — the ADR-166/AP-021 misattribution this whole arm exists to prevent. `-qx` costs
+  # nothing on the healthy path: the driver's `echo` produces a line that IS exactly the marker.
+  #
+  # THE RC CLASSES ARE AN ALLOWLIST, NOT "any non-zero" (review). The skip is justified by
+  # ADR-188 for ONE thing: a precondition nobody owns — the apt archive's state at that instant.
+  # Reading every non-zero rc as that decline hands the skip bucket every HARNESS defect too: a
+  # mistyped `-v` source makes docker exit 125 with no marker, which is a bug in this file, and
+  # it would have gone green-with-a-NOTE forever. The measured classes are enumerated ONCE in
+  # _T5M_ENV_RCS and both the routing and the offered classification read that list, so they
+  # cannot drift apart. Anything outside it with no marker is a harness defect and reds.
   if grep -qx 'CHMOD_RAN' "$TMP/out/stdout" 2>/dev/null; then _t5m_state=ran
-  elif grep -q 'FIXTURE:' "$TMP/out/stdout" 2>/dev/null; then _t5m_state=fixture-defect
-  elif [ "$_t5m_rc" -eq 0 ] && ! grep -q "$_T5_MARKER" "$TMP/out/stdout" 2>/dev/null; then
+  elif grep -q "$_T5_FIXTURE_MARKER" "$TMP/out/stdout" 2>/dev/null; then _t5m_state=fixture-defect
+  elif ! grep -qx "$_T5_MARKER" "$TMP/out/stdout" 2>/dev/null \
+       && ! printf '%s\n' $_T5M_ENV_RCS | grep -qx "$_t5m_rc"; then
     _t5m_state=harness-defect
-  elif ! grep -q "$_T5_MARKER" "$TMP/out/stdout" 2>/dev/null; then _t5m_state=did-not-run
+  elif ! grep -qx "$_T5_MARKER" "$TMP/out/stdout" 2>/dev/null; then _t5m_state=did-not-run
   else _t5m_state=ran
   fi
 
-  # EXACTLY TWO COUNTED OUTCOMES ON EVERY ROUTE. The arm asserts a PREMISE (the wrong digest was
+  # EXACTLY TWO COUNTED OUTCOMES ON EVERY VERDICT ROUTE — i.e. on each of the four `case` arms
+  # below. NOT on "every route": the `did not land` pre-branch at the `diff -q` above contributes
+  # ONE and sits outside this invariant (pre-existing, identical on origin/main; itemised at the
+  # floor). This heading said "EVERY ROUTE" until review — the same universal the floor stanza
+  # and ADR-188 had already retracted, left standing at the third of three sites.
+  # The arm asserts a PREMISE (the wrong digest was
   # rejected, #7565) and a RESULT (the chain then reached a succeeding chmod). Both are made, or
   # both are declared-skipped, or both are reported not-demonstrated — never a mix, because a
   # route contributing a different number is indistinguishable at the floor from an arm that
@@ -2096,6 +2183,23 @@ total=$((passes + fails + SKIPPED_ASSERTIONS))
 # aspirational target. S1 emits exactly 7 on ALL THREE of its paths (healthy, mutation-did-
 # not-land, extraction-failed) so no short-circuit can satisfy the floor.
 #
+# RAISED 46 -> 48 WITH THE ARMS THAT MADE IT NECESSARY (#7565), itemised. RESTORED AT REVIEW —
+# the #7291 rebase resolved a conflict in this block by taking its own side, which dropped this
+# stanza wholesale while keeping the 48 it derives. The chain then read 44 -> 46 -> 48 -> 49 with
+# nothing explaining the middle step, in a comment that four lines down tells the next author each
+# raise is itemised in its own stanza. Summing the surviving itemisations gave 47, not 49:
+#   T5 primary   1  the CHECKSUM'S OWN VERDICT (`<tarball>: FAILED` whole-line, on captured
+#                   container stdout). The four assertions that predate it — rc, stage, level,
+#                   CHMOD_RAN-absent — are ALL satisfied by the download failing, so the arm
+#                   could report 4/4 green with sha256sum never having run. This assertion is
+#                   the one that names which command aborted.
+#   T5 mutation  1  the same verdict asserted PRESENT. That arm's whole premise is "a wrong
+#                   digest was rejected and the chain continued anyway", and its `sed -i` — the
+#                   only thing making the digest wrong — had no landing assertion. A no-op sed
+#                   meant the genuine checksum passed, the chain completed, CHMOD_RAN printed,
+#                   and the arm passed having reproduced nothing.
+# Measured after that raise, on #7565's own bytes: 48 passed, 0 failed.
+#
 # RAISED 48 -> 49 WITH THE ARM THAT MADE IT NECESSARY (#7291), itemised. THE BASE WAS RE-DERIVED
 # FROM origin/main AT THE #7567 REBASE, NOT CARRIED FORWARD: this stanza previously read
 # "46 -> 47", and 46 had itself been rebased from 44. The literal has moved 44 -> 46 -> 47 -> 48
@@ -2127,11 +2231,19 @@ total=$((passes + fails + SKIPPED_ASSERTIONS))
 #                   earlier wording here said "every route" and was falsified by that row —
 #                   a universal asserted over routes that had not all been enumerated.
 #
-#                   PRECISION about what the floor covers: three of the arm's terminations —
-#                   the structural `exit 1`, an `arm_skip` cost rejection, and the EXIT trap on a
-#                   signal — never reach this line at all. Those runs are red because the process
-#                   exits non-zero, NOT because the floor caught them. The floor's guarantee is
-#                   over runs that reach it.
+#                   PRECISION about what the floor covers: TWO of the arm's terminations — the
+#                   structural `exit 1`s and the EXIT trap on a signal — never reach this line at
+#                   all. Those runs are red because the process exits non-zero, NOT because the
+#                   floor caught them. The floor's guarantee is over runs that reach it.
+#
+#                   CORRECTED AT REVIEW: this list previously included "an `arm_skip` cost
+#                   rejection" as a third such termination, and that was wrong about the
+#                   mechanism. `arm_skip`'s validator calls `fail` and then `return`s — it does
+#                   not exit — so control reaches this line and the floor is one of the two
+#                   things that catch it (total lands at 48, alongside the FAILURES ledger).
+#                   The outcome was right and the stated reason was not; unreachable today
+#                   because the sole call site passes a literal, which is exactly why nothing
+#                   falsified it.
 #
 # RAISED 36 -> 44 WITH THE ARMS THAT MADE IT NECESSARY (#7227), itemised. The single old
 # R3(3b) arm is REPLACED, so the sum is 36 - 1 + 9 = 44 (measured: 44 passed, 0 failed):
