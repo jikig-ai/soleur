@@ -24,7 +24,12 @@ Target: `apps/web-platform/scripts/sentry-monitors-audit.sh`
       stub prepended to `PATH`). The existing `SENTRY_FIXTURE_*` seams `cat` a file and `return`
       **before curl runs**, so they cannot express a status, header or retry sequence.
 - [ ] 1.2 Define and document the seam contract: how a test declares a status sequence, response
-      headers and body per URL.
+      headers and body per URL. **Read an existing stub first** — `upload-evidence.test.sh`,
+      `upload-bypass.test.sh` (both `apps/cla-evidence/scripts/`), or
+      `apps/web-platform/infra/doppler-download-error-channel.test.sh` — and match the established
+      shape rather than adding a fourth dialect.
+- [ ] 1.2a The stub must record the **host actually requested**, so T20b can assert no request left
+      `$api_host`. Asserting only "no error" is satisfied by a silently-followed redirect.
 - [ ] 1.3 Add the seam to the script header's "Test injection" block.
 
 ## Phase 2 — `curl_retry` rewrite (contract change; precedes its consumers)
@@ -59,6 +64,14 @@ Target: `apps/web-platform/scripts/sentry-monitors-audit.sh`
       Gate 3 and the report frontmatter still use it.
 - [ ] 4.2 Add cursor-following for `detectors/` and `monitors/` (both grow with cron monitors; a
       loud failure there deadlocks the deployment path). `workflows/` may keep a simple loud check.
+- [ ] 4.2a **Never follow a `Link` target as given.** Sentry's Link headers are absolute; following
+      them sends `SENTRY_IAC_AUTH_TOKEN` wherever the header points. Extract only the `cursor`
+      parameter and rebuild the URL from the validated `$api_host`. Read `link_next` in
+      `scripts/zot-inventory.sh` first — it documents the `<@attacker.tld/…>` userinfo attack,
+      measured against curl 8.18.0, and its rejection arm.
+- [ ] 4.2b Add a `MAX_PAGES` ceiling and a truncation counter (`LINK_UNFOLLOWED` shape). Any refusal
+      or ceiling-hit must **suppress the clean-state string** — never emit a clean verdict over a
+      set that was not fully enumerated.
 - [ ] 4.3 Add `SENTRY_FIXTURE_DETECTORS`, and make the detectors fetch **inherit fixture mode**:
       when `SENTRY_FIXTURE_RULES`/`_MONITORS` is set and `_DETECTORS` is not, serve `[]` rather than
       reaching the network — otherwise the 13 existing tests start making live calls and go red.
@@ -93,6 +106,9 @@ Target: `apps/web-platform/scripts/sentry-monitors-audit.sh`
       500-then-208 on the POST.
 - [ ] 5.5 T19 — Class B against the detector binding; a generic tag value is not flagged.
 - [ ] 5.6 T20 — pagination followed, not truncated.
+- [ ] 5.6a T20b — hostile Link target refused (absolute URL, and `@`-bearing userinfo form). Assert
+      the stub's recorded host, and that the clean-state string is suppressed.
+- [ ] 5.6b T20c — `MAX_PAGES` ceiling terminates the loop and sets the truncation counter.
 - [ ] 5.7 T21 — extraction-failure guard.
 - [ ] 5.8 Refixture the rules-shaped tests the schema change invalidates (T3/T5/T8/T9/T11/T12).
 - [ ] 5.9 Add the per-guard harness rows (tests of the suite, not the script), including the

@@ -37,6 +37,37 @@ recorded in Research Reconciliation; scope challenges are in
 Note: `lane:` could not be carried forward — no `spec.md` existed for this branch — so it is
 defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-17
+**Halt gates passed:** 4.6 (user-brand, threshold `aggregate pattern`), 4.7 (observability, 5/5
+fields with children, `bash` verb allowlisted, no SSH), 4.8 (no PAT shapes), 4.11 (guard-contract
+lint green, assembly structural). 4.9/4.10/4.55 did not trigger. **4.5 fired** and is answered in
+the Network-Outage Deep-Dive.
+
+### Key improvements from the deepen pass
+
+1. **A credential-exfiltration hazard in the pagination work, caught by precedent.** Sentry's `Link`
+   headers are absolute. Following them as given would send `SENTRY_IAC_AUTH_TOKEN` wherever the
+   header points. `scripts/zot-inventory.sh` already documents this attack — measured against curl
+   8.18.0 — and rejects non-rooted targets. The plan now extracts only the cursor and rebuilds the
+   URL from `$api_host`, with T20b as the falsifying fixture.
+2. **Two "novel" mechanisms turned out to have repo precedent.** The `CURL_RETRY_LAST_*` global-out
+   contract is `http_get()`'s `HTTP_CODE`/`HTTP_BODY`/`HTTP_HDR` shape, adopted for a documented
+   reason (a stdout return pushed callers into a subshell where a counter increment vanished while
+   the suite stayed green). The `curl`-stub transport seam has three existing implementations. Both
+   are now cited rather than reinvented.
+3. **A truncation-poisons-the-verdict invariant**, borrowed from the same script's refusal to emit
+   `outcome=ok` beside `enumeration_complete=false`. Plus a `MAX_PAGES` ceiling.
+4. **A claim of mine was falsified.** I had written that the id manifest has "no live consumer"; the
+   README runbook consumes it and T7 tests that coupling. Corrected — retirement is still right, but
+   it is a three-part change.
+
+### Prior corrections retained from plan review
+
+The five-agent review falsified the "orphan test suite" premise (it is glob-registered and green at
+14/14) and found the `-w`-inside-`curl_retry` P0. Both are recorded in Research Reconciliation.
+
 ## Research Reconciliation — Brief vs. Codebase & Live API
 
 All rows measured against `jikigai-eu` / `web-platform` on 2026-08-17 with the Doppler `prd`
@@ -102,10 +133,16 @@ silently change the report's `<!-- ids: -->` manifest out of the rule-ID space t
 `sentry_issue_alert` resource addressing consumes. Name-based mapping is forbidden (duplicate names
 are legal in Sentry).
 
-But the manifest has **no live consumer**: `issue-alerts.tf` declares 29 `sentry_issue_alert`
-resources, `apply-sentry-infra.yml` plans the full root, and the README's adoption runbook is stale
-by 25 resources — it still says *"The 4 issue-alert rules already exist in Sentry"*. Decision 4 is
-therefore retirement, not relabelling.
+The manifest's **only** consumer is the README's adoption runbook, which extracts it at
+`apps/web-platform/infra/sentry/README.md` via
+`ids=$(grep -oE '<!-- ids: \[(.*)\] -->' "$latest_audit" | …)` — and that coupling is itself
+tested by T7 ("manifest survives README's extraction pipeline"). That runbook is stale by 25
+resources: it says *"The 4 issue-alert rules already exist in Sentry"* while `issue-alerts.tf`
+declares 29 and `apply-sentry-infra.yml` plans the full root.
+
+*(Deepen correction: an earlier draft of this plan claimed the manifest had "no live consumer".
+That was wrong — the consumer exists and is tested. Retirement is still the right call, but it is a
+three-part change: the emission, the runbook, and T6/T7/T10.)*
 
 ## Research Insights
 
@@ -193,6 +230,28 @@ H4 stays UNKNOWN deliberately. Six of seven points fitting "just past the hour" 
 decisive, and the deciding datum is not readable from here. Recording it CONFIRMED would license a
 window-sized retry, which Decision 3 rejects on exactly that ground.
 
+### Network-Outage Deep-Dive (deepen Phase 4.5)
+
+The gate fired on `504` and `timeout` appearing in H3. Per `hr-ssh-diagnosis-verify-firewall` the
+L3→L7 layers must be answered before any service-layer hypothesis is accepted. Answered below, with
+the artifact for each — "obvious" is not a verification.
+
+| Layer | Verified? | Artifact / reasoning |
+|---|---|---|
+| **L3 — firewall allow-list** | **N/A, structurally** | There is no host and no allowlist. The client is a GitHub-hosted runner (and, for the probes above, a workstation) calling a public vendor API over the internet; no egress IP is enrolled anywhere, so admin-IP drift — the #2681 failure this layer exists to catch — has no surface here |
+| **L3 — DNS / routing** | **Ruled out by construction** | Five of six endpoints returned `HTTP/2 200` from `${SENTRY_API_HOST}` in the *same probe loop, same second, same token* as the deprecated ones. A resolution or routing fault cannot be endpoint-selective within one host |
+| **L7 — TLS / proxy** | **Verified** | `curl -s -D -` returned `HTTP/2 200` with a valid chain to `${SENTRY_API_HOST}`; the `link:` pagination headers are Sentry-issued and well-formed. A CDN/edge fault does not synthesize `x-sentry-deprecation-date` with a correct per-endpoint replacement path |
+| **L7 — application** | **This is the causal layer** | The vendor names the cause in its own response headers, and the mechanism is confirmed in upstream source (`src/sentry/api/helpers/deprecation.py`: `HTTP_410_GONE` inside a brownout window, gated on `now >= deprecation_date`) |
+
+The discipline's point is to stop a service-layer fix being proposed while a lower layer is
+unverified. Here the causal layer is established by an artifact the lower layers cannot produce — a
+410 carrying an endpoint-specific `x-sentry-replacement-endpoint`, on one endpoint family, while its
+siblings answer 200 on the same connection. That is stronger than any L3 probe could be.
+
+H3's 504/500/208 observations are a **separate, genuinely transient vendor-side** class at the same
+L7 boundary. They are not a connectivity fault either, and the plan's response to them is the
+status-aware retry in Decision 3 — which today retries none of them.
+
 ## User-Brand Impact
 
 **If this lands broken, the user experiences:** nothing directly — this is a CI gate. The felt
@@ -276,6 +335,30 @@ and `monitors/`** (the latter feeds Class D, the only class with teeth, where si
 may keep the simple loud check. AC11 is single-valued accordingly — a disjunctive AC discriminates
 nothing.
 
+**Precedent (deepen Phase 4.4) — and a security hazard the plan had missed.** Link-header cursor
+following is **not novel** here: `scripts/zot-inventory.sh` already implements it, hardened, and its
+`link_next` header comments record why. Adopt its three properties rather than re-deriving them:
+
+1. **Never follow the Link URL as given.** Sentry's `Link` headers are *absolute*
+   (`https://sentry.io/api/0/organizations/…?&cursor=…`). `zot-inventory.sh` rejects any non-rooted
+   target and any target containing `@`, with the attack documented in-file and **measured against
+   curl 8.18.0**: a header of `Link: <@attacker.tld/…>; rel="next"` makes curl parse everything
+   before the `@` as userinfo, resolving to `attacker.tld` — a real off-box request carrying
+   production credentials, whose response then drives further requests. This audit sends
+   `SENTRY_IAC_AUTH_TOKEN` on every call, so the same shape would exfiltrate it. **Extract only the
+   `cursor` parameter and rebuild the URL from the already-validated `$api_host`** — never pass the
+   header's URL to curl. (Its own note is worth heeding: the canary test could not catch this,
+   because every fixture Link was relative, so the assertion able to falsify it was never exercised.
+   T20's fixtures must include an absolute and an `@`-bearing Link.)
+2. **A `MAX_PAGES` ceiling** (`zot-inventory.sh` defaults to 50 via `ZOT_INVENTORY_MAX_PAGES`), so a
+   cursor loop cannot run unbounded against a misbehaving endpoint.
+3. **A truncation counter that poisons the clean verdict.** `zot-inventory.sh` increments
+   `LINK_UNFOLLOWED` on every refusal and `die`s rather than emit `outcome=ok` alongside
+   `enumeration_complete=false` — *"a summary field that says clean beside a completeness field that
+   says nothing was measured is the contradiction this marker exists to make impossible."* That is
+   exactly the property Decision 2's extraction guard needs; carry the same shape so a partially
+   enumerated org can never render the clean-state string.
+
 **Partial-fetch posture must be declared.** The rules side now makes two calls where it made one. If
 `detectors/` fails while `workflows/` succeeds, Classes A and B must be marked **not evaluated** and
 the report must not emit the clean-state string. Collapsing "could not check" into "clean" in an
@@ -331,6 +414,20 @@ Make `curl_retry` **status-aware**, which also repairs H3:
 - **Publish status and headers through exported shell variables**, e.g. `CURL_RETRY_LAST_STATUS` /
   `CURL_RETRY_LAST_HDR`, set by the wrapper and read by the shape check. Without this side channel
   the diagnostic has no contract to consume.
+
+  **Precedent (deepen Phase 4.4):** this global-out shape is already canonical in the repo —
+  `http_get()` in `scripts/zot-inventory.sh` sets `HTTP_CODE` / `HTTP_BODY` / `HTTP_HDR` for exactly
+  this reason, and its sibling `link_next` documents the failure that forced it: returning the value
+  on stdout pushed every call site into `$( )`, a subshell, where the counter increment was silently
+  discarded — *"a truncated sweep emitted `enumeration_complete=true`"* while the suite stayed green.
+  Mutating state in a function whose result is consumed via command substitution is the trap; the
+  global-out contract is the repo's answer to it.
+
+  Note the one place the precedent does **not** transfer: `http_get` uses `--output` and
+  `--write-out` freely because *all* its callers share one contract (body to a file, status on
+  stdout). `curl_retry`'s callers do not — Gates 2/3 read stdout as the status while Gate 1 and the
+  fetches read it as the body — which is precisely why `-w`/`-o` are forbidden inside this wrapper
+  and `-D` is the only safe capture.
 
 **Capture with `-D` only. Never add `-w` or `-o` inside the wrapper.** Measured: duplicate `-w` →
 last wins; and `curl_retry`'s stdout is polymorphic — Gates 2/3 pass their own
@@ -437,6 +534,16 @@ status, a header or a retry sequence. Add a transport-level seam — `CURL_BIN="
 inside `curl_retry`, or a `curl` stub prepended to `PATH` (the suite already does
 `env -i PATH="$PATH"`). Define its contract: how a test declares a status sequence, headers and body
 per URL. Document it in the script header's "Test injection" block.
+
+**Precedent (deepen Phase 4.4): not novel.** Several suites already stub `curl` this way — see
+`apps/cla-evidence/scripts/upload-evidence.test.sh`,
+`apps/cla-evidence/scripts/upload-bypass.test.sh`, and
+`apps/web-platform/infra/doppler-download-error-channel.test.sh`. Read one before inventing a
+contract and match the established shape rather than adding a fourth dialect.
+
+The seam must let a single test express: a **status sequence** across attempts (for T18's
+500-then-200 and 500-then-208), **response headers** written to the `-D` target (T16/T17/T20), and a
+**body** on stdout — because those three are exactly what the file-fixture seam cannot reach.
 
 ### Phase 2 — `curl_retry`: `-D`-only capture, status classification, side-channel metadata
 
@@ -718,6 +825,15 @@ All criteria are verifiable pre-merge, in-session or in CI. This plan has no pos
     suppresses the clean-state string.
 11. Pagination: a `rel="next"; results="true"` fixture causes the cursor to be followed for
     `detectors/` and `monitors/`. Single-valued — no "or fail loudly" disjunction.
+11a. **Link-header targets are never followed as given.** The cursor value is extracted and the URL
+    rebuilt from the validated `$api_host`. Fixtures must include an absolute-URL Link and an
+    `@`-bearing Link (`Link: <@attacker.tld/api/0/…>; rel="next"`); neither may produce a request to
+    any host other than `$api_host`. Assert on the requested host recorded by the transport stub —
+    not on the absence of an error, which a silently-followed redirect also satisfies.
+11b. A `MAX_PAGES` ceiling bounds every cursor loop, and any refusal or ceiling-hit increments a
+    truncation counter that **suppresses the clean-state string**. Modelled on
+    `scripts/zot-inventory.sh`'s `LINK_UNFOLLOWED` + its refusal to emit `outcome=ok` beside
+    `enumeration_complete=false`.
 12. The existing suite still passes and the count is ≥ 14 plus the new tests, after refixturing the
     rules-shaped tests (T3/T5/T8/T9/T11/T12) that the schema change invalidates.
 13. `bash scripts/lint-orphan-test-suites.sh` still reports `0 orphaned`, and
@@ -760,6 +876,8 @@ invented org/project/slug values, low-entropy ids. No captured production payloa
 | T18 | Retry classification + stdout neutrality | 500-then-200; 410-only; 500-then-208 on the POST | 5xx retried on safe methods; 410 not retried; POST not status-retried; stdout byte-identical to bare curl at both shapes |
 | T19 | Class B against the detector binding | detector slug with no matching monitor | that slug as Class B; a generic tag value is not |
 | T20 | Pagination followed, not truncated | Link header with `rel="next"; results="true"` | cursor followed for detectors/monitors; full set audited |
+| T20b | Hostile Link target refused | absolute-URL Link, and `Link: <@attacker.tld/api/0/…>; rel="next"` | no request to any host but `$api_host` (assert the stub's recorded host); truncation counter incremented; clean-state string suppressed |
+| T20c | `MAX_PAGES` ceiling | a fixture that always returns a `next` cursor | loop terminates at the ceiling; truncation counter set; no clean verdict |
 | T21 | Extraction-failure guard | empty detectors, non-empty monitors | non-zero naming extraction failure; no clean-state string |
 
 Plus the per-guard harness rows, which are tests of the *suite*.
