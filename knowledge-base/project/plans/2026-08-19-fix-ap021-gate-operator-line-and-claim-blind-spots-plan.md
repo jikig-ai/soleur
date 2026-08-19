@@ -23,10 +23,13 @@ if not OPERATOR_LINE.search(line) or not CLAIM.search(line):
     continue
 ```
 
+…and only when a third predicate, `MEASURED`, finds no evidence in a 16-line window.
+
 A message that ran every 30 minutes for two days naming two causes the run had measured
-**false** was never counted. This plan closes the gap by widening both filters, triaging the
-newly-visible lines, and holding the ratchet at its current value rather than baselining the
-new hits.
+**false** was never counted — and it was invisible to **all three** predicates, not the two
+the issue names. This plan closes the gap by widening the two filters, narrowing the
+exoneration for the newly-detected claim form, triaging the newly-visible lines, and holding
+the ratchet at its current value rather than baselining the new hits.
 
 `lane:` is recorded `cross-domain` per the fail-closed default — this branch has no `spec.md`
 to carry a value forward from. The inline domain sweep (§Domain Review) found only
@@ -64,14 +67,23 @@ scripts/zot-restart-loop-alarm.sh:186   NIC_DETAIL="recent ${WINDOW} empty for S
 
 Run against the live regexes, **both filters reject both lines, independently**:
 
-| Filter | Matches? | Why |
+| Filter | Blocks the line? | Why |
 |---|---|---|
-| `OPERATOR_LINE` | **No** | Its helper-call alternative is `^\s*[a-z_][a-z0-9_]*(\s+\S+)*\s+"` — it requires **whitespace immediately before the quote**. A shell assignment has `=` there. The uppercase shell-var convention is a second, independent barrier (`^\s*[a-z_]`). Measured: `NIC_DETAIL="x"` → False, `detail="x"` → False, `detail = "x"` → True. |
-| `CLAIM` | **No** | Its phrase list does not model the em-dash appendix `— <cause> / <cause>`. |
+| `OPERATOR_LINE` | **Yes (rejects)** | Its helper-call alternative is `^\s*[a-z_][a-z0-9_]*(\s+\S+)*\s+"` — it requires **whitespace immediately before the quote**. A shell assignment has `=` there. The uppercase shell-var convention is a second, independent barrier (`^\s*[a-z_]`). Measured: `NIC_DETAIL="x"` → False, `detail="x"` → False, `detail = "x"` → True. |
+| `CLAIM` | **Yes (rejects)** | Its phrase list does not model the em-dash appendix `— <cause> / <cause>`. |
+| `MEASURED` | **Yes (exonerates)** | Even with both filters above widened, the line is cleared: `VERDICT="TRANSIENT"` on line 389 matches `verdict=` (the regex is case-insensitive), and `NIC_VERDICT` in line 186's 16-line window matches `_VERDICT\b`. |
 
-Because the scanner ANDs the two filters, this is not one defect with two descriptions — it is
-**two independent defects on the same line**, and the AND means fixing either one alone
-changes nothing.
+So there are **three** independent defects on the same line, not two — and the third is the
+deepest. `MEASURED` tests for the *presence of a verdict-ish token near the message*, not for
+the named cause having been measured. That is this repo's own `cq-assert-anchor-not-bare-token`
+anti-pattern applied to the exoneration side, and it is exactly backwards for this incident:
+the alarm's entire defect was that its measurement (`rc=0`) **contradicted** the causes the
+appendix named, yet the presence of that very measurement is what cleared the line.
+
+Neither the issue title nor the issue body identifies this third defect. It was found by
+writing the fixture before the fix and running the *whole* scanner — the two-filter analysis
+that both the title and the body stop at is measured `True`/`True`, which looks like a
+complete diagnosis until `MEASURED` is applied.
 
 ### The measurement that reshapes the fix
 
@@ -79,29 +91,50 @@ Four candidate configurations, scanned over the gate's real `DIRS` with its real
 window and `MEASURED` filter (harness mirrors the scanner loop exactly; config A reproduces
 the live gate's `1`, which is the harness's own fidelity check):
 
-| Config | Widening | Hits | Δ | Catches the historical offender? |
+Candidate configurations, scanned over the gate's real `DIRS` with its real evidence window
+and `MEASURED` filter (the harness mirrors the scanner loop exactly; config A reproduces the
+live gate's `1`, which is the harness's own fidelity check). The last column is measured by
+running each config over the **pre-fix tree**, reconstructed from the commit that fixed the
+alarm — not by reasoning about the regexes:
+
+| Config | Widening | Hits (live) | Δ | Catches the historical offenders? |
 |---|---|---|---|---|
 | A | baseline (live gate) | 1 | — | **No** |
 | B | `CLAIM` only — *the issue body's prescribed fix* | 18 | +17 | **No** |
 | C | `OPERATOR_LINE` only — *the issue title's diagnosis* | 2 | +1 | **No** |
-| D | both, broad predicate | 19 | +18 | Yes |
-| E | both, **static-prose** predicate | 10 | +9 | Yes |
-| F | E + #7318 continuation-line form | 11 | +10 | Yes |
+| D | both, broad predicate | 19 | +18 | **No** — `MEASURED` exonerates |
+| E | both, **static-prose** predicate | 10 | +9 | **No** — `MEASURED` exonerates |
+| F | E + #7318 continuation-line form | 11 | +10 | **No** — `MEASURED` exonerates |
+| **G** | **F + appendix-class strict exoneration** | **12** | **+11** | **Yes — both lines** |
 
-Three conclusions follow, and each contradicts something the issue assumes:
+Four conclusions follow, and each contradicts something the issue assumes:
 
-1. **The issue's own "Suggested shape" would not have fixed the bug it was filed for.**
-   Config B — widen `CLAIM`, reuse the existing `OPERATOR_LINE` — is measured `False` against
-   both historical lines. The issue's `## Suggested shape` §1 is insufficient as written.
-2. **The issue's "30 hits" cost estimate measured only half the change.** It was taken with
-   `OPERATOR_LINE` unchanged, so it priced the `CLAIM` widening alone and is blind to the
-   variable-assignment class entirely.
-3. **Tightening the predicate to static prose halves the triage cost at no loss of the target.**
+1. **No two-filter fix works.** Every configuration that widens only `OPERATOR_LINE` and
+   `CLAIM` — including the strongest one — still misses both historical lines, because
+   `MEASURED` clears them. Only config G, which narrows the exoneration for appendix-named
+   causes, catches them. This is the plan's central finding and it is not in the issue.
+2. **The issue's own "Suggested shape" would not have fixed the bug it was filed for.**
+   Config B is measured `False` against both historical lines.
+3. **The issue's "30 hits" cost estimate priced only one third of the change.** It was taken
+   with `OPERATOR_LINE` and `MEASURED` both unchanged.
+4. **Tightening the predicate to static prose halves the triage cost at no loss of the target.**
    Requiring the appendix to contain no `$` (`[—–][^"$]{0,60}?\b(?:<predicate>)\b`) drops
-   D→E (19→10) while still catching both historical lines. The dominant false-positive shape
-   is an appendix that *interpolates the measured value it is explaining*
-   (`http=$code — … (zot unreachable)`, `exit $bq_rc — creds unset / …`); the offender's
-   appendix was static prose that the interpolated `rc=0` **contradicted**.
+   D→E (19→10). The dominant false-positive shape is an appendix that *interpolates the
+   measured value it is explaining* (`http=$code — … (zot unreachable)`); the offender's
+   appendix was static prose that the interpolated `rc=0` contradicted.
+
+### The third widening, stated precisely
+
+For a line whose `CLAIM` match came **only** from the new appendix alternative, the inferred
+`MEASURED` token set no longer exonerates — only an explicit `# MEASURED-BY:` marker does.
+Lines matching `CLAIM`'s pre-existing phrase list keep the current exoneration semantics
+unchanged, so this narrows nothing that is green today for a reason unrelated to the appendix.
+
+The justification is the AP-021 principle itself: a verdict variable in the neighbourhood
+establishes that *the job measured something*, which is not the claim under test. The claim
+under test is that **the cause this appendix names** was measured. For the phrase-list forms
+the neighbourhood heuristic has held; for a static-prose appendix it demonstrably has not,
+and the deliberate marker is the right evidence standard because a human had to write it.
 
 ### Fold-in: #7318
 
@@ -197,27 +230,41 @@ One such message reaching one operator is the incident.
 `echo`/`printf`, a helper call at start-of-line, a helper call on a shell continuation, or a
 variable assignment later interpolated into an emitted line.
 
-**Assembly.** The single chokepoint is the `if not OPERATOR_LINE.search(line) or not
-CLAIM.search(line): continue` line in the `census()` heredoc of
+**Assembly.** The chokepoint is the per-line decision in the `census()` heredoc of
 `scripts/lint-diagnosis-claims.sh` — every scanned line of every file under `DIRS` flows
-through it, and it is the only site that decides reachability. The assembly the *property*
-quantifies over is the set of **carrier syntaxes**, not the set of alternatives currently
-listed in the regex: an alternative list is a snapshot that the next carrier form invalidates
-while the suite stays green. The four carrier syntaxes above are enumerated from shell/YAML
-grammar, not from what the regex happens to contain today. Because the two filters are ANDed,
-the assembly is the *product* of carrier syntaxes × claim forms — a member is missed if
-either factor misses it, which is exactly how the motivating line escaped.
+through it, and it is the only site that decides whether a line is reported. That decision is
+a conjunction of **three** independent predicates, and the assembly is their *product*, not
+any one of them:
+
+```
+report(line)  ⟺  OPERATOR_LINE(line) ∧ CLAIM(line) ∧ ¬MEASURED(window(line))
+```
+
+A line escapes if **any single factor** misses it, which is why a two-factor analysis of this
+bug read as complete and was not. The property quantifies over: (a) the set of **carrier
+syntaxes** — direct emit, start-of-line helper call, continuation-line helper call, variable
+assignment — enumerated from shell/YAML grammar rather than from what the regex contains
+today; (b) the set of **claim forms**; and (c) the set of **evidence standards** that count as
+exoneration. An alternative list is a snapshot the next carrier form invalidates while the
+suite stays green; the factorisation above is structural and does not drift.
 
 **Mutation matrix.**
 
 | # | Mutation | Must go |
 |---|---|---|
-| 1 | Restore the verbatim `DETAIL="… — Better Stack unreachable / creds unset"` line into a fixture | RED |
+| 1 | Restore the verbatim `VERDICT="TRANSIENT"; DETAIL="… — Better Stack unreachable / creds unset"` line into a fixture | RED |
 | 2 | Restore the verbatim `NIC_DETAIL="…"` sibling (second carrier, after a compliant first) | RED |
-| 3 | Delete the assignment alternative from `OPERATOR_LINE`, leaving `CLAIM` widened | RED (fixture 1 no longer flagged → suite fails) |
-| 4 | Delete the appendix alternative from `CLAIM`, leaving `OPERATOR_LINE` widened | RED (fixture 1 no longer flagged → suite fails) |
-| 5 | Make the scanner's dispatch vacuous — point `DIRS` at an empty dir / force `scanned_files` to 0 | RED (a gate reporting "0 checked" and exiting 0 is the vacuity case) |
-| 6 | Add a continuation-line carrier (`\|\| degraded sign "$?" "… is the fix"`) to a fixture | RED |
+| 3 | Delete the assignment alternative from `OPERATOR_LINE`, leaving the other two widenings | RED (fixture 1 no longer reported → suite fails) |
+| 4 | Delete the appendix alternative from `CLAIM`, leaving the other two widenings | RED (fixture 1 no longer reported → suite fails) |
+| 5 | Revert the appendix-class exoneration to the inferred `MEASURED` token set, leaving both regex widenings | RED (fixture 1 no longer reported → suite fails) |
+| 6 | Make the scanner's dispatch vacuous — point `DIRS` at an empty dir / force `scanned_files` to 0 | RED (a gate reporting "0 checked" and exiting 0 is the vacuity case) |
+| 7 | Add a continuation-line carrier (`\|\| degraded sign "$?" "… is the fix"`) to a fixture | RED |
+
+Rows 3, 4 and 5 are the load-bearing set: each reverts exactly one factor of the conjunction
+while leaving the other two in place, so together they prove no factor is decorative. Row 5 is
+the one that would not exist if the fixture had been written after the fix instead of before
+it — the two-filter version of this plan passed rows 3 and 4 and still shipped a gate blind to
+its own motivating bug.
 
 **Harness rows.**
 
@@ -268,7 +315,18 @@ Document why the `$`-exclusion and the 60-char bound are load-bearing (measured 
 and why the predicate list is CLOSED — the same reasoning the file already records for
 `CLAIM`'s adjective list.
 
-### Phase 4 — Triage the 10 newly-visible lines
+### Phase 3b — Narrow the exoneration for the appendix class (the fix that actually works)
+
+Track which `CLAIM` alternative matched. For a line matched **only** by the new appendix
+alternative, require an explicit `# MEASURED-BY:` marker in the evidence window; the inferred
+token set (`verdict=`, `_VERDICT`, `steps.*.outputs.*`, …) no longer exonerates it. Lines
+matched by `CLAIM`'s pre-existing phrase list are unaffected.
+
+Comment this with the measurement that motivates it: both historical offenders pass
+`OPERATOR_LINE` and `CLAIM` under the widening and were cleared by `VERDICT=` / `_VERDICT` —
+so without this phase the whole change is inert against the bug it was filed for.
+
+### Phase 4 — Triage the 11 newly-visible lines
 
 Each gets `# MEASURED-BY: <what measured it>` or a reworded message. None is an unmeasured
 causal claim; the annotation records *which* measurement exonerates it.
@@ -284,7 +342,12 @@ causal claim; the annotation records *which* measurement exonerates it.
 | `scripts/followthroughs/hostname-mislabel-web1-6616.sh:102` | `exit $bq_rc` measured; explicit 4-way disjunction | `MEASURED-BY:` + rationale |
 | `scripts/sync-readme-counts.sh:50` | count measured; hedged `may be` | `MEASURED-BY:` |
 | `scripts/sync-readme-counts.sh:52` | as above | `MEASURED-BY:` |
-| `scripts/zot-restart-loop-alarm.sh:387` | measured, but `NIC_VERDICT` sits outside the 16-line window | `MEASURED-BY:` (do **not** widen the window) |
+| `scripts/zot-restart-loop-alarm.sh:309` | `NIC_CAUSE` H1 arm; `imds_rc=${rc}` measured | `MEASURED-BY: imds_rc` |
+| `scripts/zot-restart-loop-alarm.sh:387` | `NIC_CAUSE` attach arm; measured, formerly cleared by a bare `NIC_VERDICT` | `MEASURED-BY:` (do **not** widen the window) |
+
+The last two are the appendix class in the very file the incident came from — they are
+measured and will carry markers, but they are now *asserted* to be measured rather than
+inferred to be, which is the point of Phase 3b.
 
 `scripts/followthroughs/zot-soak-6122.sh:319` is the pre-existing baselined `1` and is **not**
 touched — it is an unrelated subsystem and is what the highwater is for.
@@ -304,12 +367,20 @@ that the `SCOPE change` carve-out was **available and deliberately not used**, w
 
 **Amend ADR-166**, do not create a new one. The decision (*a CI message may only name a cause
 the job measured*) is unchanged; what changes is its **enforcement reach**, and ADR-166 is the
-document that records how AP-021 is enforced. Add to its `## Decision`: the detector is an AND
-of a carrier filter and a claim filter, so a blind spot in **either** factor makes the whole
-class invisible — and the carrier filter must enumerate carrier *syntaxes*, not accumulate
-alternatives reactively. Add to `## Alternatives Considered`: widening `CLAIM` alone (the
-originally-suggested shape), with the measurement showing it does not catch the motivating
-line.
+document that records how AP-021 is enforced. Add to its `## Decision`:
+
+- The detector is a **three-factor conjunction** — carrier ∧ claim ∧ ¬exoneration — so a blind
+  spot in *any one* factor makes the whole class invisible. Diagnosing a miss requires testing
+  all three; this incident's two-factor diagnosis was correct as far as it went and still
+  produced an inert fix.
+- The carrier filter enumerates carrier *syntaxes*, not an accumulated alternative list.
+- **Proximity is not evidence.** For a cause named as free prose, a verdict variable in the
+  neighbourhood shows the job measured *something*, not that it measured *this*. Where the two
+  can diverge, exoneration requires the deliberate `MEASURED-BY:` marker.
+
+Add to `## Alternatives Considered`: widening `CLAIM` alone (the originally-suggested shape),
+and widening both regexes without touching the exoneration — with the measurement showing that
+neither catches the motivating line.
 
 Also add a line to ADR-187 §Scope, which recorded this gap as deliberately out of scope —
 close that loop by pointing at this work.
@@ -347,7 +418,8 @@ rather than silently so the skip is reviewable.
 
 ## Files to Edit
 
-- `scripts/lint-diagnosis-claims.sh` — widen `OPERATOR_LINE` (×2 alternatives) and `CLAIM` (×1)
+- `scripts/lint-diagnosis-claims.sh` — widen `OPERATOR_LINE` (×2 alternatives), widen `CLAIM`
+  (×1), and narrow the exoneration for the appendix class (Phase 3b)
 - `scripts/lint-diagnosis-claims.test.sh` — mutation matrix rows 1–6 + harness rows H1–H4
 - `scripts/lint-diagnosis-claims.highwater` — provenance comment only; the number stays `1`
 - `.github/workflows/reusable-release.yml` — `MEASURED-BY:` annotation
@@ -390,15 +462,18 @@ glob. Product tier: **NONE**.
 
 ### Pre-merge (PR)
 
-1. Both historical offender lines, verbatim in fixtures, are flagged by the gate.
-2. Mutation matrix rows 1–6 each drive the suite RED when applied individually.
+1. Both historical offender lines, verbatim in fixtures **with their surrounding `VERDICT=` /
+   `NIC_VERDICT` context**, are reported by the gate. The context is load-bearing: a fixture
+   carrying the message string alone would pass under a two-filter fix and hide the defect.
+2. Mutation matrix rows 1–7 each drive the suite RED when applied individually.
 3. Harness rows H1, H2 drive the suite RED; H3, H4 stay GREEN.
 4. `bash scripts/lint-diagnosis-claims.sh` exits 0 against the live tree with all Phase 4
    annotations applied.
 5. `scripts/lint-diagnosis-claims.highwater` still reads `1`; its comment records the widening,
    the measured per-alternative deltas, and why the SCOPE carve-out was not used.
-6. Removing **either** new `OPERATOR_LINE` alternative **or** the new `CLAIM` alternative
-   drives the suite RED — proving both are load-bearing and neither is decorative.
+6. Reverting **any one** of the three factors — the `OPERATOR_LINE` assignment alternative,
+   the `CLAIM` appendix alternative, or the Phase 3b exoneration narrowing — drives the suite
+   RED. None is decorative.
 7. `python3 scripts/lint-guard-contract.py` passes on this plan file.
 8. `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` passes over
    every changed doc — note the gate derives its own input set; run its own invocation, not a
@@ -416,14 +491,19 @@ the next CI run.
 Every scenario is shaped *mutation → guard reddens*, not *command → terminal output*, because
 the deliverable is a guard.
 
-1. Fixture carrying `DETAIL="… — Better Stack unreachable / creds unset"` → gate flags it.
-2. Same, as `NIC_DETAIL=` after a compliant first assignment → gate flags it (second-member row).
-3. Continuation-line `|| degraded sign "$?" "… is the fix"` → gate flags it.
-4. `OPERATOR_LINE` assignment alternative deleted → suite RED.
-5. `CLAIM` appendix alternative deleted → suite RED.
-6. `DIRS` pointed at an empty directory → suite RED (vacuity floor).
-7. Measured dash-appendix line with `# MEASURED-BY:` → gate does **not** flag (must-PASS).
-8. Interpolating appendix `http=$code — (zot unreachable)` → gate does **not** flag (must-PASS).
+1. Fixture carrying `VERDICT="TRANSIENT"; DETAIL="… — Better Stack unreachable / creds unset"`
+   — **including the `VERDICT=` context** → gate reports it.
+2. Same, as `NIC_DETAIL=` after a compliant first assignment, with `NIC_VERDICT` in the window
+   → gate reports it (second-member row **and** the exoneration row).
+3. Continuation-line `|| degraded sign "$?" "… is the fix"` → gate reports it.
+4. `OPERATOR_LINE` assignment alternative reverted → suite RED.
+5. `CLAIM` appendix alternative reverted → suite RED.
+6. Phase 3b exoneration narrowing reverted → suite RED.
+7. `DIRS` pointed at an empty directory → suite RED (vacuity floor).
+8. Measured dash-appendix line with `# MEASURED-BY:` → gate does **not** report (must-PASS).
+9. Interpolating appendix `http=$code — (zot unreachable)` → gate does **not** report (must-PASS).
+10. A phrase-list claim (`Most likely cause: …`) next to a `TOKEN_VERDICT` → gate does **not**
+    report (must-PASS) — proves Phase 3b did not narrow the pre-existing class.
 
 ## Risks & Mitigations
 
