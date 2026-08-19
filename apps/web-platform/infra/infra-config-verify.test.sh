@@ -38,6 +38,27 @@ APPLY_WF="${REPO_ROOT}/.github/workflows/apply-deploy-pipeline-fix.yml"
 PASS=0
 FAIL=0
 
+# TALLY PROTECTION, MIRRORING THE GATE SUITE (#7104 PR-B review, F7).
+#
+# The floor at the bottom of this file had exactly ONE producer — the counter `pass()`
+# increments — so `PASS=$((PASS + 2))` clears it with half the arms deletable, which is the D2
+# shape the gate suite was measured to have. F7's finding is that neither sibling suite got the
+# fix. The second producer is this suite's own captured STDOUT, written by the redirection below
+# rather than by `pass()`, so no edit to `pass()` can inflate it silently.
+STDOUT_LOG="$(mktemp -t verify-suite-stdout.XXXXXXXX.log)"
+exec 3>&1
+exec 1> >(tee -a "$STDOUT_LOG" >&3)
+close_stdout_capture() {
+  exec 1>&3 3>&-
+  local i=0 prev=-1 now
+  while [[ "$i" -lt 50 ]]; do
+    now=$(wc -c < "$STDOUT_LOG" 2>/dev/null || echo 0)
+    [[ "$now" == "$prev" && "$now" != "0" ]] && return 0
+    prev="$now"; i=$((i + 1)); sleep 0.02
+  done
+  return 0
+}
+
 pass() {
   echo "  PASS: $1"
   PASS=$((PASS + 1))
@@ -771,7 +792,20 @@ fi
 VERIFY_MIN_ASSERTIONS=38
 echo ""
 echo "  $PASS passed, $FAIL failed"
+close_stdout_capture
+stdout_passes=$(grep -c '^  PASS: ' "$STDOUT_LOG" 2>/dev/null || echo 0)
+rm -f "$STDOUT_LOG"
 if [[ "$FAIL" -gt 0 ]]; then
+  exit 1
+fi
+# The counter must equal what was actually PRINTED. `PASS=$((PASS + 2))` cannot reach the
+# captured stdout, so an inflated tally and a satisfied floor no longer travel together.
+if [[ "$stdout_passes" -ne "$PASS" ]]; then
+  echo "  FAIL: assertion-count reconciliation (stdout): the counter says $PASS but $stdout_passes '  PASS: ' lines were printed — the tally is not a count of assertions, so the floor below is meaningless" >&2
+  exit 1
+fi
+if ! grep -qE '^VERIFY_MIN_ASSERTIONS=[0-9]+$' "${BASH_SOURCE[0]}"; then
+  echo "  FAIL: the assertion-count floor is not a literal integer in the source — a floor derived from the tally it guards is a tautology that can never fail" >&2
   exit 1
 fi
 if [[ "$PASS" -lt "$VERIFY_MIN_ASSERTIONS" ]]; then

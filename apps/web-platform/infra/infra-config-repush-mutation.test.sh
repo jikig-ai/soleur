@@ -39,13 +39,39 @@
 #   the floor          — G1-7 (the predicate's one passing arm; without it the predicate could be
 #                        `return 1` unconditionally and every refusal row would stay green)
 #   stay-green control — STAY-GREEN (the only rc=0 row). Without it a suite that has become
-#                        impossible to satisfy scores identically to a correct one.
+#                        impossible to satisfy scores identically to a correct one. It appended a
+#                        COMMENT until #7104 PR-B review (F6) — and every scanner in this
+#                        directory strips comments as its first act, so the control perturbed
+#                        nothing any guard could see and was a duplicate of the mandatory
+#                        unmutated baseline. It is a scanner-VISIBLE pure helper now.
+#   composite cancellation — D3-BYPASS. Two mutations that each break a guard, applied together
+#                        so the guard's scalar comes back to its passing value. This is the one
+#                        the panel executed against the previous pass and it reported 132/0.
+#   noise policy       — D5/D6/D7 cross the SHAPES the allow-list sweep must see (a trampoline
+#                        inside the allow list, a path form, a bare redirection) rather than
+#                        varying the wrapper on one shape, which is what let D3 evade 8 ways
+#                        while the 12-row control battery scored 12/12.
+#   alert dispatch     — A1-A3. Previously unrowed entirely, while P0-B was a mis-dispatch.
 #
 # AXES THIS BATTERY DOES **NOT** EDIT:
 #   demotion — leaving asserted bytes identical and rewording the prose above them so the
-#     prescription reads as conditional. Nothing in this diff is a prose prescription that a gate
-#     enforces; ADR-189 is a decision record, not an enforced contract. Not applicable rather
-#     than skipped.
+#     prescription reads as conditional.
+#
+#     THIS ENTRY PREVIOUSLY READ "not applicable rather than skipped", on the reasoning that
+#     ADR-189 is a decision record rather than an enforced contract. That is contradicted by this
+#     PR's own record: a DEMOTION was its top surviving mutant. It is SKIPPED, not inapplicable,
+#     and it is skipped because the demotable surfaces here are prose (the ADR's rulings, this
+#     header's own claims) with no gate reading them — which is a description of the gap, not a
+#     defence of it. Anyone adding a prose-enforcing gate to this chain should add the row.
+#
+#   `::error::` severity — a verify.sh arm could be demoted from `::error::` to `::warning::`
+#     with its exit codes untouched. Nothing here reads annotation severity, so the row would
+#     have no detector to name. Stated rather than omitted.
+#
+#   the ledger's destructive-append guards — the `gh issue view` failure path, the header check
+#     and the length check are workflow `run:` bodies with no suite driving them end to end. The
+#     alert step's body IS driven (drive_step), and extending that harness to the ledger step is
+#     the obvious next move; it is not done here.
 #   (fixture direction WAS listed here as "not applicable, there is no second direction to
 #     sample". That was wrong and is corrected above: the predicate's input is an ORDERING, so it
 #     has three directions — below, equal, and above the baseline — and only the strict ones were
@@ -69,6 +95,10 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 GATE_SUITE=apps/web-platform/infra/infra-config-gate.test.sh
 VERIFY_SUITE=apps/web-platform/infra/infra-config-verify.test.sh
+# #7104 PR-B review (F3): the alert step's DISPATCH had no row at all — the whole of
+# red-alert.sh was on the omission list — while P0-B was a mis-dispatch that told the operator
+# three false things on the one failure with no fallback lever. It is a graded suite now.
+ALERT_SUITE=scripts/infra-config-red-alert.test.sh
 
 # --- the mutators -------------------------------------------------------------------------------
 # Defined before the child-mode dispatch below, because bash resolves a function at call time and
@@ -271,12 +301,18 @@ elif case == 'S1':
                 '"https://deploy.${APP_DOMAIN_BASE}/hooks/infra-config-STATUS-TYPO"')
 
 elif case == 'S2':
-    # STUB ARGV — THE HOST, not the path. S1 corrupts the path suffix, which the stub's
-    # `*/hooks/infra-config-status` check catches. The HOST was presence-only: any host at all
-    # satisfied it, so a body polling somebody else's server for its production verdict stayed
-    # green. Repoints the request while leaving the path intact.
+    # STUB ARGV — THE HOST, not the path.
+    #
+    # `deploy.attacker.test`, NOT `elsewhere.example` (#7104 PR-B review, F5). The old target
+    # failed the stub's own `https://deploy.*/hooks/infra-config-status` glob, so the stub
+    # `exit 64`d and the body's `|| echo "000"` turned it into a generic transport failure —
+    # which reds `#7104 I1 pass 1:`, the SAME marker S1 and S3 land on. Three rows, one
+    # detector, and the row's stated subject (the HOST) was never the thing measured.
+    #
+    # `deploy.attacker.test` SATISFIES the stub's glob and fails only I6d's exact-host
+    # assertion, so this row now isolates the property it names. Measured.
     sub(VERIFY, '"https://deploy.${APP_DOMAIN_BASE}/hooks/infra-config-status"',
-                '"https://elsewhere.example/hooks/infra-config-status"')
+                '"https://deploy.attacker.test/hooks/infra-config-status"')
 
 elif case == 'S3':
     # STUB ARGV — THE HMAC VALUE. The header was pinned by PRESENCE only (`X-Signature-256:*`),
@@ -285,11 +321,19 @@ elif case == 'S3':
     sub(VERIFY, 'X-Signature-256: sha256=${HMAC}', 'X-Signature-256: sha256=')
 
 elif case == 'S4':
-    # STUB ARGV — THE SECRET NAME. The doppler stub answered identically for any name, so the
-    # body could read the WRONG secret and sign with the wrong key while every case stayed
-    # green. Renames the signing-secret lookup.
+    # STUB ARGV — THE SECRET NAME.
+    #
+    # Swapped to `CF_ACCESS_CLIENT_SECRET`, an ALLOW-LISTED name, not a typo (#7104 PR-B review,
+    # F5). A typo'd name makes the doppler stub `exit 64`, which collapses into the same generic
+    # transport failure S1/S2/S3 all produced — so the row proved the stub rejects unknown names,
+    # not that the body reads the RIGHT one. An allow-listed substitute passes the stub and fails
+    # only I6c, which is the assertion that actually names this property. Measured.
+    #
+    # It is also the more realistic mutation: signing with a real-but-wrong secret is what a
+    # copy-paste from the sibling CF_ACCESS lookups four lines above would produce, and it 401s
+    # in production while every presence-only check stays green.
     sub(VERIFY, 'doppler secrets get WEBHOOK_DEPLOY_SECRET --plain',
-                'doppler secrets get WEBHOOK_DEPLOY_SECRET_TYPO --plain')
+                'doppler secrets get CF_ACCESS_CLIENT_SECRET --plain')
 
 elif case == 'S5':
     # RETRY / SLEEP CARDINALITY. `sleep` was stubbed to a bare `exit 0`, so the documented 8 s
@@ -304,10 +348,174 @@ elif case == 'STAY-GREEN':
     # of must-trip rows cannot distinguish "these guards detect the right things" from "these
     # guards have become impossible to satisfy" — a suite that reds on everything scores 17/17
     # exactly like a correct one. This row perturbs the tree in a way that is genuinely
-    # IRRELEVANT to every guarded property (a comment appended to the library) and requires the
-    # suite to stay GREEN. It is the far side of the transform, in the fixture-direction sense.
+    # IRRELEVANT to every guarded property and requires the suite to stay GREEN. It is the far
+    # side of the transform, in the fixture-direction sense.
+    #
+    # IT MUST BE VISIBLE TO THE SCANNERS (#7104 PR-B review, F6). This appended a COMMENT, and
+    # every scanner in this directory strips comments as its first act — so the row perturbed
+    # nothing any guard could see, which makes it a duplicate of the mandatory unmutated baseline
+    # rather than a control. A control that cannot reach the thing it controls for measures the
+    # harness twice and the property zero times.
+    #
+    # A pure helper function is visible to all three: it is real code, it changes the file's
+    # token stream and line count, and the allow-list sweep reads its command-position tokens.
+    # `printf` is a builtin and `local` is allow-listed, so nothing here may legitimately trip —
+    # which is exactly the claim being controlled for.
     with open(GATE, 'a', encoding='utf-8') as fh:
-        fh.write('\n# MUTATED STAY-GREEN: an irrelevant comment. No guard may react to this.\n')
+        fh.write('\n_infra_config_mutant_noop() {\n'
+                 '  local x="${1:-}"\n'
+                 '  printf \'%s\' "$x"\n'
+                 '}\n')
+
+# ---- #7104 P0-A: the pass-2 absolute freshness pin ---------------------------------------------
+elif case == 'FR1':
+    # THE P0 ITSELF. Delete the absolute pin, leaving pass 2's only assertion RELATIVE. Any
+    # unrelated frame advance — a queued handler invocation, a concurrent trigger, a host clock
+    # step — then certifies the recovery while the frame still predates this apply.
+    sub(VERIFY,
+        '      if [[ "$FRAME_START_TS" -lt $((FRESHNESS_REF_EPOCH - INFRA_CONFIG_CLOCK_SKEW_S)) ]]; then',
+        '      if false; then')
+
+elif case == 'FR2':
+    # THE PIN WITHOUT ITS TOLERANCE — the naive AND the finding warns against. Both operands of
+    # the RELATIVE check are host-clock so skew cancels; this one crosses clocks, so removing the
+    # allowance red-lines a real delivery on a host whose clock lags the runner.
+    sub(VERIFY, '$((FRESHNESS_REF_EPOCH - INFRA_CONFIG_CLOCK_SKEW_S))', '"$FRESHNESS_REF_EPOCH"')
+
+elif case == 'FR3':
+    # THE ADVANCE UNBOUNDED. Ignore the re-push's own start stamp and bound only by the ORIGINAL
+    # apply, so a frame published moments after that apply began — which the re-push cannot have
+    # produced — reads as VERIFIED.
+    sub(VERIFY,
+        'if [[ "${REPUSH_START_EPOCH:-}" =~ ^[0-9]+$ ]] && [[ "$REPUSH_START_EPOCH" -ge "$APPLY_START_EPOCH" ]]; then',
+        'if false; then')
+
+elif case == 'FR4':
+    # THE TWO DIAGNOSES COLLAPSED. Verdict unchanged, lever lost: "the frame moved but still
+    # predates this apply" and "the frame did not move" send the operator to different places.
+    sub(VERIFY, '::error::STALE FRAME AFTER RE-PUSH:', '::error::RE-PUSH DID NOT DELIVER:')
+
+# ---- #7104 D1/D2/D3: the three fixes the panel defeated ----------------------------------------
+elif case == 'D3-BYPASS':
+    # D1, EXECUTED — and it is a COMPOSITE, which is the whole point. Neither half is detected
+    # alone by the pre-fix guards, and together they cancel:
+    #
+    #   * the content assert MOVES INTO the poll loop, restoring #6594's any-of-3 coin flip
+    #     across fresh connector selections (this is G2-1's move);
+    #   * `for _n in 1; do :; done` puts a `done` back between the two anchors, so the
+    #     done_count == 1 scalar comes back to 1;
+    #   * `[[ $PHASE == done ]]` decrements the loop depth at the assert to 0 and
+    #     `[[ $PHASE == do ]]` rebalances the file, so the depth check and the balance check
+    #     both pass.
+    #
+    # Measured before the shared strip_noise stripped `[[ ]]` spans: gate 132/0, verify 29/0,
+    # rc=0, printing the reassuring `maxdepth=2 ADJ=0 CI=1 — terminal-ness is structural`.
+    #
+    # A FIRST ATTEMPT AT THIS ROW ADDED ONLY THE PHANTOMS, without moving the assert. It landed,
+    # and it was correctly NOT detected — balanced phantoms around an assert that is genuinely
+    # terminal perturb nothing. Recorded because the survivor looked like a guard failure and
+    # was a fixture failure, which is the distinction this battery exists to keep.
+    sub(VERIFY,
+        '  if [[ "$attempt" -lt 3 ]]; then\n    sleep 5\n  fi\ndone\n',
+        '  if [[ "$attempt" -lt 3 ]]; then\n    sleep 5\n  fi\n'
+        '  for _n in 1; do :; done\n'
+        '  [[ $PHASE == done ]] || :\n'
+        '  adjudicate_infra_config "$STATUS_RESPONSE" . infra-config-apply.sh && break\n'
+        '  [[ $PHASE == do ]] || :\n'
+        'done\n')
+    sub(VERIFY,
+        '  if ! adjudicate_infra_config "$STATUS_RESPONSE" . infra-config-apply.sh; then\n'
+        '    cat "$STATUS_RESPONSE" >&2 2>/dev/null || true\n'
+        '    exit 1\n'
+        '  fi\n',
+        '')
+
+elif case == 'D4-TALLY':
+    # D2, EXECUTED. One edit moves the counter AND the PASS log, because both lived in the same
+    # one-line pass(). Measured at 264 passed, 0 failed, OK, rc=0, floor cleared, 66 real
+    # assertions deletable. The suite's captured STDOUT is the producer this cannot reach.
+    sub(TEST,
+        'pass() { echo "  PASS: $1"; printf \'PASS\\n\' >> "$PASSLOG"; pass=$((pass + 1)); }',
+        'pass() { echo "  PASS: $1"; printf \'PASS\\nPASS\\n\' >> "$PASSLOG"; pass=$((pass + 2)); }')
+
+elif case == 'D5-AWK-TRAMPOLINE':
+    # D3, the sharpest class: `awk` is ON the allow list as a pure text transform, and it has
+    # system(). strip_noise blanks quoted spans, so the program body was invisible BY
+    # CONSTRUCTION — the sweep had deleted the evidence before looking for it.
+    with open(GATE, 'a', encoding='utf-8') as fh:
+        fh.write('\n_infra_config_mutant_awk() {\n'
+                 '  awk \'BEGIN{system("terraform apply -auto-approve")}\'\n'
+                 '}\n')
+
+elif case == 'D6-PATH-FORM':
+    # D3: the token regex required a leading [A-Za-z_], so an absolute path captured NO TOKEN AT
+    # ALL — no token, no hit, silence that reads as approval.
+    with open(GATE, 'a', encoding='utf-8') as fh:
+        fh.write('\n_infra_config_mutant_path() {\n'
+                 '  /usr/bin/terraform apply -auto-approve\n'
+                 '}\n')
+
+elif case == 'D7-REDIRECT-WRITE':
+    # D3: a write that invokes no command at all, so no command-position allow list can see it.
+    with open(GATE, 'a', encoding='utf-8') as fh:
+        fh.write('\n_infra_config_mutant_redir() {\n'
+                 '  echo pwned > /etc/default/soleur-doppler-token\n'
+                 '}\n')
+
+# ---- #7104 P0-B: alert-step dispatch, which had NO row at all ----------------------------------
+elif case == 'A1-LIVENESS-ID':
+    # P0-B's root cause. Remove the probe's `id:` and its outcome becomes unreadable, so a
+    # re-push that BRICKED the sole no-SSH channel falls through every arm to the gate-never-ran
+    # catch-all — which tells the operator the gate never ran on a run whose gate ran, graded,
+    # deferred and re-pushed.
+    sub(WF, '        id: webhook_liveness\n', '')
+
+elif case == 'A2-GATE-NEVER-RAN-WIDE':
+    # The catch-all predicate, restored to `!= failure`. Since PR-B pass 1 SOFT-FAILS with exit
+    # 0, so `success` is the outcome on every recovery path and this arm swallows all of them.
+    sub(WF,
+        'if [[ -z "${GATE_OUTCOME:-}" || "${GATE_OUTCOME:-}" == "skipped" ]]; then',
+        'if [[ "${GATE_OUTCOME:-}" != "failure" ]]; then')
+
+elif case == 'A3-REPUSH-FAILED-MODE':
+    # The fifth reach mode, reverted to reusing `reachable` — whose body opens "the files
+    # themselves reached the server", false on the plan-failure path where nothing was written.
+    sub(WF, '${LEVER}" "repush_failed" || true', '${LEVER}" "reachable" || true')
+
+# ---- #7104 F3: guards the omission list named as UNROWED ---------------------------------------
+elif case == 'C1-CARDINALITY-LITERAL':
+    # GUARD 3 / CARDINALITY PIN — the m18 fix itself, previously unrowed. Widening the apply's
+    # keyed literal re-opens the transitive -target blast radius task 4.0 measured shut.
+    sub(WF, "        if: steps.repush_plan.outputs.repush_graded == '1'\n",
+            "        if: steps.repush_plan.outputs.repush_graded == '2'\n")
+
+elif case == 'C2-ADDRESS-SET':
+    # The address-set assert. `GRADED == 1` says one managed resource changes, never WHICH — a
+    # plan replacing one entirely different production resource satisfies cardinality alone.
+    sub(WF, 'if [[ "$addrs" != "terraform_data.deploy_pipeline_fix" ]]; then',
+            'if false; then')
+
+elif case == 'C3-CLEARTEXT-TRAP':
+    # The trap that reclaims tfplan-repush.json, which carries the live prd Doppler token and
+    # the webhook HMAC in CLEARTEXT — terraform's JSON serialization ignores `sensitive`.
+    sub(WF, "          trap 'rm -f tfplan-repush.json' EXIT\n", "")
+
+elif case == 'C4-AC18-ERROR-TOLERANCE':
+    # AC18's forbidden key. `continue-on-error: true` pins a step's `conclusion` to success while
+    # leaving `outcome` real, and scripts/followthroughs/moved-block-wedge-5887.sh reads
+    # `conclusion` — so it would feed that follow-through GREEN over a red.
+    sub(WF, '        id: repush_apply\n',
+            '        id: repush_apply\n        continue-on-error: true\n')
+
+# ---- #7104 F7: the SIBLING suites' tallies, previously unprotected and unrowed -----------------
+elif case == 'F7-VERIFY-TALLY':
+    VTEST = os.path.join(INFRA, 'infra-config-verify.test.sh')
+    sub(VTEST, '  PASS=$((PASS + 1))\n}', '  PASS=$((PASS + 2))\n}')
+
+elif case == 'F7-ALERT-TALLY':
+    ATEST = os.path.join(box, 'scripts/infra-config-red-alert.test.sh')
+    sub(ATEST, 'ok()   { echo "  PASS: $1"; PASS=$((PASS + 1)); }',
+               'ok()   { echo "  PASS: $1"; PASS=$((PASS + 2)); }')
 
 else:
     die('unknown case id')
@@ -381,7 +589,13 @@ if [[ "${1:-}" == "--row" ]]; then
   # `-F` throughout: markers legitimately contain regex metacharacters (`#7104 Guard 2 (5):`).
   _why=""
   [[ "$_rc" == "$_want_rc" ]] || _why="rc=$_rc want=$_want_rc"
-  _faillines="$(grep '^  FAIL:' "$_log" || true)"
+  # The `      - ` lines are the PROBLEM details a failing multi-part guard prints beneath its
+  # `  FAIL:` header (`sed -n 's/^PROBLEM=/      - /p' >&2`). They are emitted ONLY from a fail
+  # branch, so including them cannot match a passing assertion — and excluding them forced every
+  # row targeting a sub-check of a composite guard to share that guard's single header marker,
+  # which is the "N rows, one detector" shape F5 flags. A row can now name the specific problem
+  # it causes rather than the block that reports it.
+  _faillines="$(grep -E '^  FAIL:|^      - ' "$_log" || true)"
   if [[ -z "$_why" ]] && [[ "$_want_rc" != "0" ]] && ! grep -qF -- "$_marker" <<<"$_faillines"; then
     _why="rc ok but NO FAILING check named the property (the marker appears only on passing lines, if at all)"
   fi
@@ -464,10 +678,19 @@ for wf in infra-validation.yml apply-deploy-pipeline-fix.yml; do
     || { echo "SETUP-FAIL: cp $wf" >&2; exit 2; }
 done
 
+# The alert suite and the emitter it grades. Both resolve relative to scripts/, and the suite
+# reaches ../.github/workflows/ for the caller/callee lockstep — which the skeleton above
+# already reproduces.
+mkdir -p "$PRISTINE/scripts" || { echo "SETUP-FAIL: mkdir scripts" >&2; exit 2; }
+for s in infra-config-red-alert.sh infra-config-red-alert.test.sh; do
+  cp "$REPO_ROOT/scripts/$s" "$PRISTINE/scripts/" || { echo "SETUP-FAIL: cp $s" >&2; exit 2; }
+  [[ -s "$PRISTINE/scripts/$s" ]] || { echo "SETUP-FAIL: $s is empty in the skeleton" >&2; exit 2; }
+done
+
 # --- the UNMUTATED control ----------------------------------------------------------------------
 # A red baseline voids every row below: each would then be reporting the baseline's failure and
 # calling it detection. Run it first, on the pristine skeleton, for BOTH suites.
-for suite in "$GATE_SUITE" "$VERIFY_SUITE"; do
+for suite in "$GATE_SUITE" "$VERIFY_SUITE" "$ALERT_SUITE"; do
   log="$(mktemp -t repushmut-base.XXXXXXXX.log)" || { echo "SETUP-FAIL: mktemp base log" >&2; exit 2; }
   bash "$PRISTINE/$suite" > "$log" 2>&1; base_rc=$?
   if [[ "$base_rc" -ne 0 ]]; then
@@ -504,7 +727,29 @@ ROWS=(
   "S3|$VERIFY_SUITE|1|#7104 I1 pass 1:|stub argv: the HMAC signature VALUE emptied"
   "S4|$VERIFY_SUITE|1|#7104 I6c:|stub argv: the signing SECRET NAME changed"
   "S5|$VERIFY_SUITE|1|#7104 I6a:|retry cardinality: the 8s settle preamble retimed to 0"
-  "STAY-GREEN|$GATE_SUITE|0|#7104|an irrelevant comment must NOT red the suite (control)"
+  # ---- #7104 P0-A: the pass-2 absolute freshness pin (4 rows, 4 distinct detectors) ----
+  "FR1|$VERIFY_SUITE|1|#7104 I7a:|P0-A: the absolute freshness pin deleted from pass 2"
+  "FR2|$VERIFY_SUITE|1|#7104 I7b:|P0-A: the pin without its cross-clock skew allowance"
+  "FR3|$VERIFY_SUITE|1|#7104 I7c:|P0-A: the advance unbounded by the re-push's own start"
+  "FR4|$VERIFY_SUITE|1|#7104 I7a-diag:|P0-A: the two diagnoses collapsed into one message"
+  # ---- #7104 D1/D2/D3: the three fixes the panel DEFEATED, each re-applied here ----
+  "D3-BYPASS|$GATE_SUITE|1|loop-structure check failed|D1: the [[ ]] phantom-line loop-depth bypass"
+  "D4-TALLY|$GATE_SUITE|1|assertion-count reconciliation (stdout)|D2: pass() inflates counter AND log together"
+  "D5-AWK-TRAMPOLINE|$GATE_SUITE|1|awk-exec|D3: awk system() — a trampoline ON the allow list"
+  "D6-PATH-FORM|$GATE_SUITE|1|/usr/bin/terraform|D3: an absolute path captured no token at all"
+  "D7-REDIRECT-WRITE|$GATE_SUITE|1|redirect-literal-path|D3: a write that invokes no command"
+  # ---- #7104 P0-B: alert-step dispatch, previously unrowed entirely ----
+  "A1-LIVENESS-ID|$ALERT_SUITE|1|liveness probe has no id|P0-B: the probe's outcome made unreadable"
+  "A2-GATE-NEVER-RAN-WIDE|$ALERT_SUITE|1|the residue arm claims the gate never ran|P0-B: catch-all predicate re-widened"
+  "A3-REPUSH-FAILED-MODE|$ALERT_SUITE|1|#7104 alert honesty: a failed re-push|P0-B: fifth mode reverted to reachable"
+  # ---- #7104 F3: guards the previous omission list named as unrowed ----
+  "C1-CARDINALITY-LITERAL|$GATE_SUITE|1|#7104 CARDINALITY PIN:|Guard 3: the apply's keyed literal widened"
+  "C2-ADDRESS-SET|$GATE_SUITE|1|CHANGING ADDRESS SET|the address-set assert neutered"
+  "C3-CLEARTEXT-TRAP|$GATE_SUITE|1|no longer traps|the cleartext-credential trap removed"
+  "C4-AC18-ERROR-TOLERANCE|$GATE_SUITE|1|#7104 AC18|AC18: continue-on-error added to the apply"
+  "F7-VERIFY-TALLY|$VERIFY_SUITE|1|assertion-count reconciliation (stdout)|F7: the verify suite's tally inflated"
+  "F7-ALERT-TALLY|$ALERT_SUITE|1|assertion-count reconciliation (stdout)|F7: the alert suite's tally inflated"
+  "STAY-GREEN|$GATE_SUITE|0|#7104|a scanner-VISIBLE but irrelevant helper must NOT red the suite (control)"
 )
 
 # Bounded fan-out. Rows are hermetic, but this machine runs parallel worktrees and the suites
@@ -551,8 +796,8 @@ echo
 echo "---"
 echo "infra-config-repush-mutation.test.sh: $RED/$N rows behaved as expected, $NOTASEXPECTED did not"
 # Cardinality floor: a battery that silently ran zero rows would otherwise print 0/0 and exit 0.
-if [[ "$N" -lt 22 ]]; then
-  echo "  FAIL: only $N rows ran, expected >= 22 (7 Guard 1 + 7 Guard 2 + 2 dispatch/authority + 5 stub-argv/cardinality + 1 stay-green control)" >&2
+if [[ "$N" -lt 40 ]]; then
+  echo "  FAIL: only $N rows ran, expected >= 40 (7 Guard 1 + 7 Guard 2 + 2 dispatch/authority + 5 stub-argv/cardinality + 4 P0-A freshness + 5 D1/D2/D3 + 3 alert dispatch + 4 previously-unrowed guards + 2 sibling-suite tallies + 1 stay-green control)" >&2
   exit 1
 fi
 # The stay-green control must actually be present, not merely counted. A battery of

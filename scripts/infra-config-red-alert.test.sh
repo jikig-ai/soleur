@@ -27,6 +27,24 @@ cleanup_tmpdirs() { [[ ${#TMPDIRS[@]} -gt 0 ]] && rm -rf "${TMPDIRS[@]}"; return
 trap cleanup_tmpdirs EXIT INT TERM
 mk_sandbox() { local d; d=$(mktemp -d); TMPDIRS+=("$d"); printf '%s' "$d"; }
 
+# TALLY PROTECTION (#7104 PR-B review, F7). Same single-producer defect the gate suite was
+# measured to have: `PASS=$((PASS + 2))` clears the floor with half the arms deletable. The
+# second producer is this suite's captured STDOUT, written outside `ok()`.
+STDOUT_LOG="$(mktemp -t alert-suite-stdout.XXXXXXXX.log)"
+TMPFILES=("$STDOUT_LOG")
+exec 3>&1
+exec 1> >(tee -a "$STDOUT_LOG" >&3)
+close_stdout_capture() {
+  exec 1>&3 3>&-
+  local i=0 prev=-1 now
+  while [[ "$i" -lt 50 ]]; do
+    now=$(wc -c < "$STDOUT_LOG" 2>/dev/null || echo 0)
+    [[ "$now" == "$prev" && "$now" != "0" ]] && return 0
+    prev="$now"; i=$((i + 1)); sleep 0.02
+  done
+  return 0
+}
+
 ok()   { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 bad()  { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 has()  { grep -qF "$2" "$1"; }
@@ -388,6 +406,35 @@ for job in wf.get("jobs", {}).values():
     bad "the alert condition uses always(), so a run the operator cancelled would file a P1 incident"
   else ok "the alert condition does not use always()"; fi
 
+  # --- #7104 P0-B: THE LIVENESS PROBE MUST BE READABLE --------------------------------------
+  #
+  # The probe carried no `id:`, which is the root cause: its outcome is then unreadable, so a
+  # re-push that BRICKED the sole no-SSH remediation channel is indistinguishable downstream
+  # from "pass 2 was skipped for some other reason". Both halves are asserted — the step must
+  # declare an id, and the alert step must actually read it — because either alone leaves the
+  # state unreachable, and this is the one failure with no fallback lever.
+  probe_id=$(python3 -c '
+import sys, yaml
+wf = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+for job in wf.get("jobs", {}).values():
+    for st in job.get("steps", []) or []:
+        if str(st.get("name", "")).startswith("Verify webhook is alive post-re-push"):
+            print(st.get("id") or "")
+            sys.exit(0)
+print("<step-absent>")
+' "$WF" 2>/dev/null)
+  if [[ -n "$probe_id" && "$probe_id" != "<step-absent>" ]]; then
+    ok "#7104 P0-B: the post-re-push liveness probe declares an id ($probe_id), so its failure is readable downstream"
+  else
+    bad "#7104 P0-B: the post-re-push liveness probe has no id (got '${probe_id:-<none>}') — its outcome is unreadable, so a re-push that bricked the only no-SSH channel cannot be distinguished from a routine skip"
+  fi
+  if [[ -n "$probe_id" && "$probe_id" != "<step-absent>" ]] \
+     && grep -qF "steps.${probe_id}.outcome" <<<"$alert_env"; then
+    ok "#7104 P0-B: the alert step reads steps.${probe_id}.outcome, so the bricked-channel state reaches an arm"
+  else
+    bad "#7104 P0-B: the alert step never reads the liveness probe's outcome — the probe has an id nothing consumes, so the state is still unreachable from every arm"
+  fi
+
   # --- #7104 PR-B: THE GREEN RECOVERY PATH MUST ALSO NOTIFY ---------------------------------
   #
   # The re-push writes production and then succeeds, so the run ends GREEN and `failure()` is
@@ -532,6 +579,24 @@ STUB
     ok "#7104 alert honesty: a failed re-push uses its OWN reach mode, not the reachable body"
   else bad "#7104 alert honesty: a failed re-push alerted as '${STEP_OUT//$'\n'/ }' — reusing a body whose first claim is false on this path"; fi
 
+  # THE RESIDUE ARM. Narrowing gate-never-ran to {skipped, empty} leaves the case where the gate
+  # RAN, did not fail, and we are here anyway — reachable when pass 1 rendered `unadjudicated`
+  # (the 404 escape hatch, which adjudicates nothing) and something later in the job went red.
+  # Without its own arm that case falls into the frame-derived branches, which all describe a
+  # DELIVERY failure the gate never reported.
+  drive_step success failure '{"exit_code":0,"files_written":19,"files_total":19}' \
+    PASS1_VERDICT=unadjudicated REPUSH_APPLY_OUTCOME=skipped PASS2_OUTCOME=skipped PASS2_VERDICT=
+  if grep -qF 'unadjudicated' <<<"$STEP_OUT"; then
+    ok "#7104 P0-B: a gate that ran, did not fail, and adjudicated NOTHING says so by name — it is not described as a delivery failure"
+  else
+    bad "#7104 P0-B: the unadjudicated residue alerted as '${STEP_OUT//$'\n'/ }' — the 404 escape hatch checked nothing and the operator is being told something else happened"
+  fi
+  if grep -qF 'never ran' <<<"$STEP_OUT"; then
+    bad "#7104 P0-B: the residue arm claims the gate never ran — it ran, and its own verdict says it adjudicated nothing, which is a different fact with a different remedy"
+  else
+    ok "#7104 P0-B: the residue arm does not claim the gate never ran"
+  fi
+
   # THE RECOVERED ARM still wins on its own path, and the liveness arm must not steal it.
   drive_step success success "" REPUSH_APPLY_OUTCOME=success WEBHOOK_LIVENESS_OUTCOME=success \
     PASS2_OUTCOME=success PASS2_VERDICT=verified
@@ -542,12 +607,23 @@ fi
 
 # --- ASSERTION FLOOR ----------------------------------------------------------------------
 # Deleting a case from this file must be loud. Zero headroom, ratchet when adding cases.
-ALERT_MIN_ASSERTIONS=62
+ALERT_MIN_ASSERTIONS=66
 if [[ "$PASS" -lt "$ALERT_MIN_ASSERTIONS" ]]; then
   echo "  FAIL: assertion-count floor — only $PASS assertions ran, expected >= $ALERT_MIN_ASSERTIONS"
+  FAIL=$((FAIL + 1))
+fi
+if ! grep -qE '^ALERT_MIN_ASSERTIONS=[0-9]+$' "${BASH_SOURCE[0]}"; then
+  echo "  FAIL: the assertion-count floor is not a literal integer in the source — a floor derived from the tally it guards is a tautology"
   FAIL=$((FAIL + 1))
 fi
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
+close_stdout_capture
+stdout_passes=$(grep -c '^  PASS: ' "$STDOUT_LOG" 2>/dev/null || echo 0)
+rm -f "$STDOUT_LOG"
+if [[ "$stdout_passes" -ne "$PASS" ]]; then
+  echo "  FAIL: assertion-count reconciliation (stdout): the counter says $PASS but $stdout_passes '  PASS: ' lines were printed — the tally is not a count of assertions" >&2
+  exit 1
+fi
 [[ "$FAIL" -eq 0 ]] || exit 1
