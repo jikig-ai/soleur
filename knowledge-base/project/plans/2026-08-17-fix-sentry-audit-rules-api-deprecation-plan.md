@@ -711,8 +711,6 @@ discoverability_test:
   command: "bash apps/web-platform/scripts/sentry-monitors-audit.test.sh"
   expected_output: "final line reads 'Results: N passed, 0 failed' with N > 0, and the script
                     exits 0"
-  credentials_required: "none — hermetic via the SENTRY_FIXTURE_* file seams and the Phase 1
-                         transport seam; makes no network call"
 ```
 
 Credentialed live probe, deliberately **not** the discoverability test:
