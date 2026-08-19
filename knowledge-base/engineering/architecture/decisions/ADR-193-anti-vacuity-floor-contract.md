@@ -120,6 +120,35 @@ are zeroed: zeroing a threshold inverts a `-ge` floor's polarity and destroys di
 - The corpus outside those two directories (notably `apps/web-platform/infra/`, which has its own
   runner) is deferred and counted, not forgotten.
 
+> **Amended 2026-08-19 (#7580).** The bullet above was accurate and insufficient, and the gap was
+> exactly the distance between its two verbs. *Counted* is what the deferred corpus was; *counted*
+> is what failed to notice that **eleven** of its suites carried floors exiting 0 under a neutered
+> assertion machinery. Because the mutation loop read `$COVERED` only, every arm of
+> `guard-vacuity-floor.test.sh` returned an identical verdict before and after those eleven were
+> fixed — a repair the guard could not observe.
+>
+> The deferred scope is now **mutation-classified in place**, not merely counted (ARM 2b). It
+> carries its own shrink-only NO_FIRE ratchet, pinned at **0**: a set invariant ("every member
+> fires") has no tolerance, and slack in a floor is narrowing budget. Alongside it sits an exact
+> bucket identity — `fires + nofire + construct == n_deferred` — which is strictly stronger than a
+> floor on the classified count, because it catches an arm that classifies an *empty* list. That
+> arm would report `0 NO_FIRE` and pass while classifying nothing, which is this ADR's own defect
+> one level up.
+>
+> A second shrink-only ratchet, `MAX_DEFERRED_CONSTRUCTION`, closes an escape path the amendment
+> itself opens: a floor **rewrite** can move a suite from NO_FIRE into CONSTRUCTION rather than
+> into FIRES, driving the NO_FIRE count to 0 while the property still fails.
+> `MAX_CONSTRUCTION_FAILURES` cannot see that — it is global and derived from `$COVERED`.
+>
+> This is deliberately **not** promotion into `COVERED_DIRS`. `COVERED_DIRS`,
+> `MAX_CONSTRUCTION_FAILURES` (15) and `MAX_DEFERRED` (47) are unchanged. Promotion remains blocked
+> on arithmetic: the deferred scope carries **18** mutant-construction failures against a global cap
+> of 15 with zero headroom, so it would push that cap to ~33 and stop ARM 2 discriminating. Tracked
+> as the precondition on #7585.
+>
+> `CONSERVING` now spans both scopes, so ARM 10/10b/10c/10d cover the deferred suites' conservation
+> checks; `MIN_CONSERVING` was raised 18 → 32, its measured post-amendment value.
+
 ## Alternatives considered
 
 | Alternative | Why not |
