@@ -11,7 +11,7 @@
     "build": "next build",
     "build:server": "esbuild server/index.ts --bundle --platform=node --target=node22 --outfile=dist/server/index.cjs --external:next --external:react --external:react-dom --external:@supabase/supabase-js --external:@supabase/ssr --external:ws --external:stripe --external:@anthropic-ai/claude-agent-sdk --external:pino --external:@sentry/nextjs --external:pdfjs-dist",
     "start": "NODE_ENV=production node dist/server/index.cjs",
-    "lint": "next lint",
+    "lint": "eslint .",
     "test": "vitest",
     "test:ci": "vitest run",
     "test:e2e": "npx playwright test",
