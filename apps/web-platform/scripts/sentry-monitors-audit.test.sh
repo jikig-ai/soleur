@@ -1068,7 +1068,10 @@ rm -rf "$TMP23B"
 # several places, and a body-grep sees comments too.
 # ------------------------------------------------------------------------
 echo "T22: assembly — every Sentry call goes through curl_retry"
-sut_code=$(grep -vE '^[[:space:]]*#' "$SCRIPT")
+# `grep -v` exits 1 when it emits nothing (an all-comment file), and this is a
+# bare assignment under `set -eu` — the same class this PR fixed in the script
+# itself, caught here by scripts/lint-shell-capture-exit.
+sut_code=$(grep -vE '^[[:space:]]*#' "$SCRIPT" || true)
 # A bare `curl` invocation is one not preceded by `_` (curl_retry) and not the
 # seam variable. `-w` here is the word-boundary class, not curl's flag.
 bare_lines=$(grep -nE '(^|[^_[:alnum:]$"])curl[[:space:]]' <<<"$sut_code" \
@@ -1100,17 +1103,27 @@ else
 fi
 
 # ------------------------------------------------------------------------
-# Anti-vacuity floor. A suite whose assertions all silently stopped running
-# would otherwise report "0 passed, 0 failed" and exit 0. The floor is a
-# COUNT of executed assertions, so it catches a harness that dies early — it
-# cannot catch an assertion that runs but checks nothing, which is what the
-# mutation battery in the PR body is for.
-# ------------------------------------------------------------------------
-MIN_ASSERTIONS=27
-if (( PASS + FAIL < MIN_ASSERTIONS )); then
-  echo "  FAIL: anti-vacuity floor — only $((PASS + FAIL)) assertions ran, expected >= $MIN_ASSERTIONS"
-  FAIL=$((FAIL+1))
-fi
+# NO anti-vacuity floor here, deliberately — and this is a constraint, not a
+# preference.
+#
+# A `MIN_ASSERTIONS` floor was written, and `scripts/guard-vacuity-floor.test.sh`
+# rejected it: adding one makes this suite "floor-bearing", this directory is
+# in that guard's DEFERRED set, and its deferral ledger is a SHRINK-ONLY
+# ratchet. Its three sanctioned outs are all closed to this PR — "cover it" is
+# directory-granular and adding a single file trips the double-count arm;
+# "promote the directory" is blocked on a per-scope construction ratchet that
+# does not exist yet; and raising the number is explicitly forbidden by that
+# file, which records the last bump as made against its own instruction and
+# says the correct response to a second occurrence is to build the seam, not
+# to add another line. The seam is tracked in #7585.
+#
+# What is lost is small here: this suite runs under `set -eu` and ends in
+# `exit $((FAIL > 0 ? 1 : 0))`, so a harness that dies early exits non-zero and
+# the runner sees RED anyway. A floor would only add protection against
+# assertions being silently SKIPPED while the script still reaches its end.
+# The stronger property — that each assertion actually discriminates — is not
+# something a floor can check at all; that is what the 21-mutation battery in
+# the PR body is for, including a row that guts `pass()` accounting.
 
 # ------------------------------------------------------------------------
 echo
