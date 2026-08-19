@@ -306,6 +306,19 @@ else
   fail "seam guard absent: seams manufactured a verdict on the production path (rc=$SEAM_RC)"
 fi
 
+# The COMMAND seams were on that list; the DATA seams were not, and they are the ones that
+# manufacture a CLEAR verdict rather than an error. Measured: with the three real writers
+# mid-push, retargeting ZOT_WRITERS at an idle workflow turned REFUSED/P3 into CLEAR. One arm per
+# seam, because a loop over a list is satisfied by any single member being present.
+for _dseam in REGISTRY_PREFLIGHT_ZOT_WRITERS REGISTRY_PREFLIGHT_P5_CONTROL REGISTRY_PREFLIGHT_P5_CHANNEL; do
+  DS_OUT="$(env GITHUB_ACTIONS=true "$_dseam=x" bash "$SUT" 2>/dev/null)"; DS_RC=$?
+  if [[ "$DS_RC" -ne 0 ]] && grep -q 'predicate=SEAM' <<<"$DS_OUT"; then
+    pass "seam guard: $_dseam is refused on the production path"
+  else
+    fail "$_dseam was NOT refused inside Actions — it can manufacture a CLEAR verdict (rc=$DS_RC)"
+  fi
+done
+
 # --- P4 must stay absent, and the reason must stay recorded -------------------------------
 if grep -q 'P4' "$SUT" && grep -qi 'DELIBERATELY ABSENT' "$SUT"; then
   pass "P4's deliberate absence is recorded in-file (or it gets re-added)"
