@@ -235,15 +235,54 @@ elif [[ "$HTTP_CODE" == "200" ]]; then
         echo "verdict=failed" >> "$GITHUB_OUTPUT"
         exit 1
       fi
-      if [[ "$FRAME_START_TS" -gt "$REPUSH_BASELINE_TS" ]]; then
-        echo "Re-push VERIFIED: frame advanced ${REPUSH_BASELINE_TS} -> ${FRAME_START_TS} (host clock, both operands)."
-        echo "freshness_evidence=verified" >> "$GITHUB_OUTPUT"
-      else
+      if [[ ! "$FRAME_START_TS" -gt "$REPUSH_BASELINE_TS" ]]; then
         echo "::error::RE-PUSH DID NOT DELIVER: the frame still reads start_ts=${FRAME_START_TS} against the ${REPUSH_BASELINE_TS} observed before the re-push — it did not advance. The bounded recovery is spent (one attempt by construction) and this run is terminally red. Do NOT re-run expecting a different result: -target SELECTS resources, it does not force replacement."
         echo "verdict=failed" >> "$GITHUB_OUTPUT"
         cat "$STATUS_RESPONSE" >&2 2>/dev/null || true
         exit 1
       fi
+      # #7104 P0-A — THE ABSOLUTE PIN, WHICH PASS 2 HAD LOST.
+      #
+      # The relative check above is necessary and NOT sufficient. On origin/main this arm was
+      # unconditionally `FRAME_START_TS -lt APPLY_START_EPOCH`; inserting the pass-2 branch in
+      # front of it left "the frame advanced" as pass 2's ONLY surviving assertion, and
+      # APPLY_START_EPOCH — validated a few lines above — was never read again on this path.
+      # Any unrelated advance then certifies the recovery: a queued handler invocation, a
+      # concurrent trigger, a host clock that stepped forward. That is #7220's shape, in the
+      # TERMINAL verdict of the very PR that exists to close it.
+      #
+      # This is deliberately not a naive AND with the pass-1 comparison. The relative check is
+      # host-clock-to-host-clock so skew cancels exactly; this one crosses clocks, so it carries
+      # the same 300 s allowance the runner-clock comparisons already carry
+      # (INFRA_CONFIG_CLOCK_SKEW_S, single-sourced in infra-config-gate.sh). Without the
+      # tolerance a host whose clock lags the runner would be red-lined for a real delivery.
+      #
+      # AND THE REFERENCE IS THE RE-PUSH, NOT THE ORIGINAL APPLY, WHEN THE RE-PUSH RECORDED ONE.
+      # Bounding the advance only by APPLY_START_EPOCH leaves it unbounded in the direction that
+      # matters: pass 2 runs after a whole plan+grade+apply cycle, so a frame published moments
+      # after the ORIGINAL apply began cannot have been produced by the re-push, yet it clears an
+      # APPLY_START_EPOCH-only pin. REPUSH_START_EPOCH is a runner-side stamp taken by the
+      # re-push apply step, so it is not host-selectable.
+      #
+      # Falling back to APPLY_START_EPOCH when it is absent is a documented degradation, not a
+      # silent one: it is strictly weaker but still sound (APPLY_START_EPOCH <= REPUSH_START_EPOCH
+      # always), the message names which reference was used, and the reference is published as an
+      # output so the choice is visible off-host rather than inferred.
+      FRESHNESS_REF_EPOCH="$APPLY_START_EPOCH"
+      FRESHNESS_REF_LABEL="this workflow's apply"
+      if [[ "${REPUSH_START_EPOCH:-}" =~ ^[0-9]+$ ]] && [[ "$REPUSH_START_EPOCH" -ge "$APPLY_START_EPOCH" ]]; then
+        FRESHNESS_REF_EPOCH="$REPUSH_START_EPOCH"
+        FRESHNESS_REF_LABEL="the bounded re-push"
+      fi
+      echo "freshness_reference=${FRESHNESS_REF_EPOCH}" >> "$GITHUB_OUTPUT"
+      if [[ "$FRAME_START_TS" -lt $((FRESHNESS_REF_EPOCH - INFRA_CONFIG_CLOCK_SKEW_S)) ]]; then
+        echo "::error::STALE FRAME AFTER RE-PUSH: the frame DID advance (${REPUSH_BASELINE_TS} -> ${FRAME_START_TS}), but it still predates ${FRESHNESS_REF_LABEL} (began ${FRESHNESS_REF_EPOCH}) by $((FRESHNESS_REF_EPOCH - FRAME_START_TS))s, which is beyond the ${INFRA_CONFIG_CLOCK_SKEW_S}s host/runner clock allowance. So something moved the frame, but it was not this re-push — a queued handler invocation, a concurrent trigger, or a host clock step. The delivery this run needed is still unproven and the bounded recovery is spent. This is a DIFFERENT diagnosis from 'the frame did not move' and it has a different lever: do not re-run, and do not read the advance as a delivery. Inspect the host's journal for which invocation published start_ts=${FRAME_START_TS}."
+        echo "verdict=failed" >> "$GITHUB_OUTPUT"
+        cat "$STATUS_RESPONSE" >&2 2>/dev/null || true
+        exit 1
+      fi
+      echo "Re-push VERIFIED: frame advanced ${REPUSH_BASELINE_TS} -> ${FRAME_START_TS} (host clock, both operands) and postdates ${FRESHNESS_REF_LABEL} (${FRESHNESS_REF_EPOCH}) within the ${INFRA_CONFIG_CLOCK_SKEW_S}s allowance."
+      echo "freshness_evidence=verified" >> "$GITHUB_OUTPUT"
     elif [[ "$FRAME_START_TS" -lt "$APPLY_START_EPOCH" ]]; then
       # PASS 1, stale frame — the documented webhook-restart race, or something else
       # entirely. The predicate decides which, and it is the ONLY thing that may

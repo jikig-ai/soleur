@@ -337,6 +337,29 @@ drive() { # $1 = pass, $2 = frame, $3 = GITHUB_OUTPUT path, $4 = baseline (pass 
     bash ./infra-config-verify.sh >/dev/null 2>&1 )
 }
 
+# PASS-2 DRIVER WITH THE CLOCK OPERANDS EXPOSED, AND A CAPTURED LOG (#7104 P0-A).
+#
+# `drive` above hardcodes APPLY_START_EPOCH=2000 and discards stdout/stderr. Both
+# omissions are load-bearing: the absolute freshness pin's operands could not be
+# varied at all, so the arm had no fixture; and with the output discarded a case can
+# only assert THAT pass 2 failed, never WHICH diagnosis fired — and the whole point of
+# a distinct `::error::` is that "the frame moved but still predates this apply" and
+# "the frame did not move" have different levers.
+drive_pass2() { # $1 frame, $2 GITHUB_OUTPUT, $3 baseline, $4 apply_start_epoch, $5 log, [$6 repush_start_epoch]
+  ( cd "$SCRIPT_DIR" || exit 99
+    export PATH="$I_TMP/bin:$PATH"
+    export STUB_FRAME="$1" STUB_HTTP_CODE=200
+    export INFRA_CONFIG_STATUS_RESPONSE="$I_TMP/status-p2-$$-${RANDOM}.json"
+    export GITHUB_OUTPUT="$2"
+    export VERIFY_PASS=2
+    export ALLOW_MISSING_STATUS=false
+    export DPF_REPLACED=true
+    export REPUSH_BASELINE_TS="$3"
+    export APPLY_START_EPOCH="$4"
+    [[ -n "${6:-}" ]] && export REPUSH_START_EPOCH="$6"
+    bash ./infra-config-verify.sh > "$5" 2>&1 )
+}
+
 mkstubs
 STALE="$I_TMP/stale.json"; MOVED="$I_TMP/moved.json"
 if mkframe 1000 "$STALE" && mkframe 3000 "$MOVED"; then
@@ -488,6 +511,90 @@ if mkframe 1000 "$STALE" && mkframe 3000 "$MOVED"; then
   else
     fail "#7104 I6d: the polled URL(s) were '$(tr '\n' ' ' < "$CL")', expected https://deploy.example.test/hooks/infra-config-status built from the stubbed APP_DOMAIN_BASE"
   fi
+
+  # --- I7: THE ABSOLUTE FRESHNESS PIN ON PASS 2 (#7104 P0-A) -------------------------------
+  #
+  # On origin/main this arm was unconditionally `FRAME_START_TS -lt APPLY_START_EPOCH`.
+  # PR-B inserted the `VERIFY_PASS == 2` branch IN FRONT of it, so pass 2's only surviving
+  # assertion was RELATIVE — `FRAME_START_TS -gt REPUSH_BASELINE_TS` — and APPLY_START_EPOCH,
+  # validated three lines above, was never read again on this path. That reintroduces the
+  # exact #7220 shape this PR exists to close, in the TERMINAL verdict: any unrelated frame
+  # advance (a queued handler invocation, a concurrent trigger, a lagging host clock) reads
+  # as a verified recovery while the frame still predates this workflow's own apply.
+  #
+  # These fixtures are directional on purpose. I7a drives the defect; I7b drives the far side
+  # of the same comparison, because the host-clock-to-host-clock choice on the RELATIVE half is
+  # DELIBERATE (skew cancels exactly) and a naive AND against a runner-clock operand would
+  # false-red a correct recovery whose host clock lags. A suite carrying only I7a would be
+  # satisfied by exactly that regression.
+  P1500="$I_TMP/f1500.json"; P1750="$I_TMP/f1750.json"
+  P2100="$I_TMP/f2100.json"; P2300="$I_TMP/f2300.json"
+  if mkframe 1500 "$P1500" && mkframe 1750 "$P1750" && mkframe 2100 "$P2100" && mkframe 2300 "$P2300"; then
+    # I7a — THE P0. Advanced 1000 -> 1500, but 1500 still predates the apply's 2000 start by
+    # 500 s, which is beyond the 300 s cross-clock skew allowance. This must be terminal.
+    oa="$I_TMP/oa"; la="$I_TMP/la"; : > "$oa"
+    rca=0; drive_pass2 "$P1500" "$oa" 1000 2000 "$la" || rca=$?
+    va=$(grep -c '^verdict=failed$' "$oa" || true)
+    if [[ "$rca" -ne 0 && "$va" -eq 1 ]]; then
+      pass "#7104 I7a: pass 2 REJECTS a frame that advanced but still predates this apply (1000 -> 1500 against APPLY_START_EPOCH=2000)"
+    else
+      fail "#7104 I7a: pass 2 accepted start_ts=1500 as a verified re-push while the apply began at 2000 (rc=$rca verdict-failed=$va). The absolute freshness pin is gone from the terminal verdict — this is the #7220 shape."
+    fi
+    # The DIAGNOSIS, not merely the verdict. "The frame moved but still predates this apply"
+    # and "the frame did not move" have different levers, so an operator handed the wrong one
+    # is handed the wrong next action.
+    if grep -q 'STALE FRAME AFTER RE-PUSH' "$la" && ! grep -q 'RE-PUSH DID NOT DELIVER' "$la"; then
+      pass "#7104 I7a-diag: the advanced-but-stale path emits its OWN ::error::, distinct from 'the frame did not move'"
+    else
+      fail "#7104 I7a-diag: expected a distinct STALE-FRAME-AFTER-RE-PUSH diagnosis; got: $(tr '\n' '|' < "$la" | tail -c 400)"
+    fi
+    # I7b — THE OTHER DIRECTION. 1750 is 250 s before the apply's start, inside the 300 s
+    # allowance the runner-clock comparison already carries. A host whose clock lags the runner
+    # publishes exactly this, and it is a REAL delivery. A naive AND reds it.
+    ob="$I_TMP/ob"; lb="$I_TMP/lb"; : > "$ob"
+    rcb=0; drive_pass2 "$P1750" "$ob" 1000 2000 "$lb" || rcb=$?
+    vb=$(grep -c '^verdict=verified$' "$ob" || true)
+    if [[ "$rcb" -eq 0 && "$vb" -eq 1 ]]; then
+      pass "#7104 I7b: pass 2 still VERIFIES a delivered frame inside the 300 s cross-clock skew allowance (1750 vs apply start 2000) — the pin is not a naive AND"
+    else
+      fail "#7104 I7b: pass 2 red-lined a frame 250 s before the apply start, inside the documented 300 s skew allowance (rc=$rcb verdict-verified=$vb). The absolute pin was added without the skew tolerance and will false-red correct recoveries on a lagging host clock."
+    fi
+    # I7c — THE ADVANCE IS BOUNDED BY THE RE-PUSH, NOT BY PASS 1'S OBSERVATION. A frame that
+    # postdates the ORIGINAL apply can still predate the RE-PUSH, in which case it belongs to
+    # some other write and the recovery delivered nothing. Without this, a +1 s bump anywhere
+    # after APPLY_START_EPOCH reads as VERIFIED.
+    oc="$I_TMP/oc"; lc="$I_TMP/lc"; : > "$oc"
+    rcc=0; drive_pass2 "$P2100" "$oc" 1000 2000 "$lc" 2500 || rcc=$?
+    vc=$(grep -c '^verdict=failed$' "$oc" || true)
+    if [[ "$rcc" -ne 0 && "$vc" -eq 1 ]]; then
+      pass "#7104 I7c: pass 2 REJECTS a frame that predates the re-push itself (2100 against a re-push that began at 2500) — the advance is bounded by the write that was supposed to cause it"
+    else
+      fail "#7104 I7c: pass 2 accepted start_ts=2100 for a re-push that began at 2500 (rc=$rcc verdict-failed=$vc). The advance is unbounded: any frame later than the ORIGINAL apply certifies the recovery."
+    fi
+    # I7d — the bounded-advance positive control. 2300 is inside the 300 s allowance below the
+    # re-push's 2500 start, so it is a real post-re-push frame and must verify. Without this row
+    # I7c is satisfiable by a pin that reds every run.
+    od="$I_TMP/od"; ld="$I_TMP/ld"; : > "$od"
+    rcd=0; drive_pass2 "$P2300" "$od" 1000 2000 "$ld" 2500 || rcd=$?
+    vd=$(grep -c '^verdict=verified$' "$od" || true)
+    if [[ "$rcd" -eq 0 && "$vd" -eq 1 ]]; then
+      pass "#7104 I7d: pass 2 VERIFIES a frame inside the skew allowance of the re-push's own start (2300 vs 2500) — I7c's pin discriminates, it does not just red everything"
+    else
+      fail "#7104 I7d: pass 2 red-lined a genuine post-re-push frame (rc=$rcd verdict-verified=$vd). The bounded-advance pin has no tolerance and will red correct recoveries."
+    fi
+    # I7e — the UNMOVED frame keeps its own diagnosis. Both predicates are false here (1000 is
+    # neither greater than the 1000 baseline nor at/after the apply start), and the operator
+    # must be told the re-push delivered nothing, which is the more specific of the two.
+    oe="$I_TMP/oe"; le="$I_TMP/le"; : > "$oe"
+    rce=0; drive_pass2 "$STALE" "$oe" 1000 2000 "$le" || rce=$?
+    if [[ "$rce" -ne 0 ]] && grep -q 'RE-PUSH DID NOT DELIVER' "$le"; then
+      pass "#7104 I7e: an UNMOVED frame still reports 'the re-push did not deliver' — the new absolute pin did not swallow the more specific diagnosis"
+    else
+      fail "#7104 I7e: rc=$rce and the log did not carry 'RE-PUSH DID NOT DELIVER': $(tr '\n' '|' < "$le" | tail -c 400)"
+    fi
+  else
+    fail "#7104 I7: could not build the absolute-freshness-pin fixtures — the whole P0-A arm is vacuous"
+  fi
 else
   fail "#7104 AC17: could not build fixtures from the live FILE_MAP — the integration cases are vacuous"
 fi
@@ -495,7 +602,7 @@ fi
 # --- assertion floor --------------------------------------------------------------------------
 # Anti-vacuity. Counts assertions that RAN, so a structural break that skips whole
 # blocks (an unset file path, an early `else`) reds instead of reporting a clean 0/0.
-VERIFY_MIN_ASSERTIONS=29
+VERIFY_MIN_ASSERTIONS=35
 echo ""
 echo "  $PASS passed, $FAIL failed"
 if [[ "$FAIL" -gt 0 ]]; then

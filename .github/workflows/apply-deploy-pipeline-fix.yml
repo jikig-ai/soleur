@@ -903,6 +903,13 @@ jobs:
         working-directory: ${{ env.INFRA_DIR }}
         run: |
           set -euo pipefail
+          # THE REFERENCE PASS 2 BOUNDS THE ADVANCE AGAINST (#7104 P0-A). Stamped BEFORE the
+          # apply, on the RUNNER's clock, so it is not host-selectable — and written to
+          # $GITHUB_OUTPUT before anything that can exit, so the reference survives an apply
+          # that fails. Without it pass 2 can only require the frame to postdate the ORIGINAL
+          # apply, which a frame published moments after that apply began already satisfies
+          # without the re-push having produced it.
+          echo "repush_start_epoch=$(date -u +%s)" >> "$GITHUB_OUTPUT"
           # No doppler wrapper and no -target/-var here: `terraform apply <planfile>` rejects
           # both and takes every value from the graded plan file. That is the property the
           # split buys — what is applied is exactly what was graded.
@@ -958,6 +965,12 @@ jobs:
           # The baseline is pass 1's OBSERVED start_ts, handed over as an argument rather
           # than re-read. Both operands are then host-clock, so skew cancels.
           REPUSH_BASELINE_TS: ${{ steps.infra_config_gate.outputs.observed_start_ts }}
+          # The ABSOLUTE reference (#7104 P0-A). Runner-clock, stamped by the apply step before
+          # it ran, so the host cannot select it. Pass 2 requires the frame to postdate THIS —
+          # not merely to be larger than the baseline, which any unrelated advance satisfies.
+          # A missing value degrades to APPLY_START_EPOCH inside the script, which is weaker but
+          # still sound, and the script names which reference it used.
+          REPUSH_START_EPOCH: ${{ steps.repush_apply.outputs.repush_start_epoch }}
           # DPF_REPLACED is deliberately NOT re-declared here. The `Terraform plan` step
           # exports it to $GITHUB_ENV, so it reaches this step as a job-level env var
           # already. An `env:` entry sourcing it from a step output would need that step to

@@ -21,7 +21,18 @@
 # deterministic, but the assert stays terminal on principle: a real content mismatch
 # must never be retried away.
 #
-# Sourceable: defines functions only, no top-level execution.
+# Sourceable: defines functions only plus the one constant below, no top-level execution.
+
+# THE CROSS-CLOCK TOLERANCE, SINGLE-SOURCED (#7104 P0-A).
+#
+# The host publishes `start_ts` from ITS clock; the runner captures APPLY_START_EPOCH from its
+# own. Every comparison that crosses those two clocks needs the same NTP-jitter allowance, and
+# there are now three of them: the `future_frame` upper bound and the degraded-arm push detector
+# below, plus the pass-2 absolute freshness pin in infra-config-verify.sh. Two copies of a
+# tolerance drift silently and in opposite directions — one goes lax, one goes strict, and the
+# pair still reads consistent at either call site. A plain assignment, not `${X:-300}`: an
+# env-overridable tolerance is a tolerance a caller can widen until the pin stops discriminating.
+INFRA_CONFIG_CLOCK_SKEW_S=300
 
 # Number of delivered files the repo FILE_MAP expects. NOT hardcoded — auto-tracks
 # FILE_MAP additions. Echoes the integer; the caller validates it is a positive int.
@@ -187,7 +198,7 @@ infra_config_dpf_replaced() {
 infra_config_frame_stability() {
   local post_ts="$1" pre_ts="$2" pre_status="$3" now_epoch="$4"
   local apply_start_epoch="${5:-}"
-  local skew=300   # tolerance for NTP jitter between the host and the runner
+  local skew="$INFRA_CONFIG_CLOCK_SKEW_S"   # tolerance for NTP jitter between the host and the runner
 
   if [[ ! "$post_ts" =~ ^[0-9]+$ ]]; then
     echo "infra_config_frame_stability: post_ts '$post_ts' is not numeric" >&2

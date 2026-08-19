@@ -1804,9 +1804,53 @@ SCRIPT_INVOKE = re.compile(r'bash\s+\S*infra-config-verify\.sh')
 SCRIPT_STEPS = {s['id'] for s in steps
                 if s.get('id') and isinstance(s.get('run'), str) and SCRIPT_INVOKE.search(s['run'])}
 
+# THE GATE CHAIN, DERIVED — because the COUNT PIN below must not quantify over the whole file.
+#
+# `checked` used to count every `steps.X.outputs.Y` reference anywhere in this 1985-line SHARED
+# workflow, and 2 of the 12 it measured (`steps.check_4804.outputs.open`, twice) have nothing to
+# do with the infra-config gate. So the flush pin reddened a REGISTERED gate for any PR that
+# added an unrelated step-output reference — a guard that fires on work it does not guard trains
+# people to bump its literal without reading it, which is how a flush pin becomes a rubber stamp.
+#
+# The chain is the fixpoint of "consumes the chain, or is consumed by something that does",
+# seeded on the steps that invoke the tested artifact. Derived rather than enumerated for the
+# same reason SCRIPT_STEPS is: an enumerated set is a snapshot, and a newly wired re-push step
+# would sit outside it silently. `outcome`/`conclusion` count as edges as well as `outputs`,
+# because the re-push chain is wired on step OUTCOMES and an outputs-only closure drops it.
+CHAIN_EDGE = re.compile(r"steps\.([A-Za-z0-9_-]+)\.(?:outputs\.[A-Za-z0-9_-]+|outcome|conclusion)")
+
+def _step_refs(s):
+    out = set()
+    for txt in [s.get('if')] + [v for v in (s.get('env') or {}).values()]:
+        if isinstance(txt, str):
+            out |= set(CHAIN_EDGE.findall(txt))
+    return out
+
+GATE_CHAIN = set(SCRIPT_STEPS)
+for _ in range(len(steps) + 1):
+    grew = False
+    for s in steps:
+        r = _step_refs(s)
+        if r & GATE_CHAIN:
+            sid = s.get('id')
+            if sid and sid not in GATE_CHAIN:
+                GATE_CHAIN.add(sid); grew = True
+            for x in r:
+                if x not in GATE_CHAIN:
+                    GATE_CHAIN.add(x); grew = True
+    if not grew:
+        break
+
 ref = re.compile(r"steps\.([A-Za-z0-9_-]+)\.outputs\.([A-Za-z0-9_-]+)\s*==\s*'([^']*)'")
 
 problems, checked = [], 0
+
+# The chain must not collapse back to the two seed steps: that would silently shrink what the
+# count pin quantifies over, which is the same vacuity the pin exists to prevent one level up.
+if len(GATE_CHAIN) < 5:
+    problems.append("the derived gate chain is %s (%d steps); expected at least 5 — the closure "
+                    "stopped following the re-push wiring, so the reference count below no longer "
+                    "covers the chain it names." % (sorted(GATE_CHAIN), len(GATE_CHAIN)))
 
 # The derivation must not silently yield the empty set (which would make every literal check
 # below vacuous), and it must still find BOTH passes.
@@ -1835,7 +1879,11 @@ for s in steps:
     if not isinstance(cond, str):
         continue
     for sid, out, lit in ref.findall(cond):
-        checked += 1
+        # Only gate-chain references are COUNTED; every reference is still VALIDATED. A
+        # dangling step id anywhere in the workflow is a bug worth failing on, and checking it
+        # is free — but it must not move the flush count, or the pin reds on unrelated work.
+        if sid in GATE_CHAIN:
+            checked += 1
         if sid not in ids:
             problems.append("if: names step id '%s', which does not exist" % sid)
             continue
@@ -1858,7 +1906,8 @@ for s in steps:
         if not isinstance(v, str):
             continue
         for sid, out in envref.findall(v):
-            checked += 1
+            if sid in GATE_CHAIN:
+                checked += 1
             if sid not in ids:
                 problems.append("env: names step id '%s', which does not exist" % sid)
             elif sid in SCRIPT_STEPS and out not in emitted:
@@ -1886,7 +1935,13 @@ g1_problems=$(printf '%s\n' "$GUARD1" | grep -c '^PROBLEM=' || true)
 # so drift is loud IN BOTH DIRECTIONS: a reference that disappears from the extractor reds, and a
 # newly added if:/env: step-output reference also reds, which is the review prompt you want when
 # someone wires a new consumer onto this chain. Re-derive and update on a deliberate change.
-G1_EXPECTED_REFERENCES=12
+#
+# SCOPED TO THE GATE CHAIN (#7104 PR-B review, F8). This was 12 measured over the whole
+# workflow, 2 of which were `steps.check_4804.outputs.open` — unrelated to this gate. Now 11,
+# measured over the derived chain {infra_config_gate, infra_config_gate_pass2, repush_plan,
+# repush_apply, ledger_body, terraform_apply}, so an unrelated step-output reference elsewhere
+# in this shared workflow no longer reds a registered gate.
+G1_EXPECTED_REFERENCES=11
 if [[ "$g1_problems" -eq 0 && "${g1_checked:-0}" == "$G1_EXPECTED_REFERENCES" ]]; then
   pass "#7104 WORKFLOW-REF PIN: all $g1_checked workflow if:/env: references resolve, and every compared literal is one the producer can emit"
 elif [[ "$g1_problems" -eq 0 ]]; then
