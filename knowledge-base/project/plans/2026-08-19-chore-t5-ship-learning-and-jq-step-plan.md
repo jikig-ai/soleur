@@ -45,7 +45,7 @@ No issue is closed by this PR. Issues 7572, 7574 and 7613 are context and stay o
 | "the sibling `Install psql` has retries and a timeout" | **Confirmed, with a correction:** it is not a sibling step in the same workflow — it is `web-platform-release.yml:340`, with `timeout-minutes: 5`, a 3-attempt retry, and a job cap whose comment cites #5559 hanging ~3h on it. | Cite accurately as cross-workflow precedent. |
 | "the identical step in corpus.yml and postmerge.yml" | **Confirmed identical** — but the inventory is incomplete. **Seven jq-install sites exist, not three.** | Corrected inventory below. |
 | (implicit) "jq is preinstalled on hosted runners" | **Supported, but the plan's first-draft figure was inflated.** Many workflow hits are `gh api --jq`, which uses gh's embedded gojq and says nothing about the `jq` binary. Re-derivation must exclude `gh --jq` (§Phase 0.4). | Re-measure; do not inherit a number. |
-| Commit `45ea9f7e9`; ADR-188; issues OPEN | **All hold.** Merged 2026-08-19T17:43:52Z, closes #7291. | Proceed. |
+| Commit `45ea9f7e9`; ADR-188; issues OPEN | **All hold.** Merged 2026-08-19T17:43:52Z, closes issue 7291. | Proceed. |
 
 ### Corrected jq-install inventory (all seven sites)
 
@@ -121,7 +121,7 @@ P4 the review-panel outcome is traceable to the open issues.
 
 ### Related issues and PRs
 
-PR #7510 (merged as `45ea9f7e9`, closes #7291) · #7565 (closed, rebase base) · **#7572 OPEN** (S1 arm
+PR #7510 (merged as `45ea9f7e9`, closes issue 7291) · #7565 (closed, rebase base) · **#7572 OPEN** (S1 arm
 defect) · **#7574 OPEN** (`deferred-scope-out`, persistence bound) · **#7613 OPEN**
 (`deferred-scope-out`) · #5559 (the ~3h `Install psql` hang motivating that step's cap).
 
@@ -398,6 +398,16 @@ any harness reading exit status.
   > SKILL/agent files, a green check was compatible with `jq` being wholly absent. §D3's unconditional
   > step is what makes AC6 pin anything.
 
+  > **Scope corrected at review — AC6 covers ONE of the three edited workflows.** "Unconditional" is a
+  > property of the STEP; the WORKFLOW still has triggers. Resolved against this PR's 8-file diff:
+  > `pr-trailer` runs (`pull_request`, no `paths:`); `corpus` does **not** (its `pull_request` arm
+  > carries a 6-pattern `paths:` filter matching none of the changed files); `postmerge` does **not**
+  > (no PR trigger — `push: branches: [main]` only). So this PR's green is direct evidence for
+  > `pr-trailer` alone, and the other two inherit it only through the separate premise that all three
+  > `runs-on: ubuntu-latest` jobs draw the same runner image — sound, but an inference the assertion
+  > does not itself make. AC7 closes `postmerge` on the post-merge push; `corpus` is first exercised
+  > by its own `push:main` arm. Found by the structural-enumeration seat.
+
 - **AC7** — post-merge, the `push:main`-triggered `skill-security-scan-postmerge.yml` run shows its
   `Assert jq present` step succeeding. `wg-after-merging-a-pr-that-adds-or-modifies` is **honoured,
   not waived**; note `gh workflow run` is inoperable on pr-trailer (no `workflow_dispatch`), so the
@@ -417,7 +427,7 @@ any harness reading exit status.
   7572/7574/7613, and the same scan over `git log origin/main..HEAD --format=%B` is clean.
   **Commit messages are load-bearing:** this repo squash-merges, and the squash body is built from
   branch commit messages, so a keyword there auto-closes even with a clean PR body. GitHub's parser
-  is also negation-blind — *"does not close #7572"* still closes it.
+  is also negation-blind — *"does not `clo`​`se` #7572"* (adjacency broken here on purpose) still closes it.
 - **AC10** — the PR body records the seven-site inventory, the §D2/§D3 deviations, and the §D4
   tracking issues, so no finding is lost at archive time.
 
@@ -426,7 +436,7 @@ any harness reading exit status.
 | Risk | Likelihood | Mitigation |
 |---|---|---|
 | **A green check is mistaken for runtime proof.** All pre-existing jq steps are `if:`-guarded and never execute on this PR. | **Realised** — this was a live defect in the first draft, found by three reviewers | §D3's unconditional `jq --version` step; AC6 asserts that step specifically. |
-| The change breaks a required check, blocking all merges. | Low | AC3 (actionlint) + AC6 (live run). Revert is a 3-line restore per file. |
+| The change breaks a required check, blocking all merges. | Low | AC3 (actionlint) + AC6 (live run). Revert is a 2-line restore per file (the step is two lines). |
 | `ship`'s compound auto-invoke writes a **second** learning file, breaking AC8. | Medium | §D1 pins the slug so ship Phase 2's glob arm resolves; AC8 is evaluated after ship Phase 2, not before. |
 | A closing keyword reaches a commit message and auto-closes a context issue. | Medium | AC9 scans commit messages via the canonical scanner, not just the diff. |
 | The workflow edit is silently rejected by a PreToolUse hook. | Medium (has happened) | Phase 1 step 2 — post-edit grep; AC1/AC2 are the recorded evidence. |

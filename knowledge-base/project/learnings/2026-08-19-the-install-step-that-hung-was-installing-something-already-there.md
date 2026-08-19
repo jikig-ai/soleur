@@ -5,7 +5,7 @@ category: workflow-issues
 module: .github/workflows
 tags: [ci, package-install, unbounded-hang, runner-image, guard-vacuity, acceptance-criteria, supply-chain]
 related_issues: [7572, 7574, 7613]
-related_prs: [7510]
+related_prs: [7510, 7623]
 related_learnings:
   - knowledge-base/project/learnings/2026-08-19-i-hardened-my-verifier-twice-and-its-sample-was-still-a-sample.md
   - knowledge-base/project/learnings/2026-08-16-every-number-i-inherited-was-stale-and-the-panel-found-the-defect-class-inside-my-fix.md
@@ -29,31 +29,59 @@ own, so a slow or unreachable package mirror stalls for as long as the job is pe
 job's own limit becomes the failure's duration. Nothing in the step distinguishes "the mirror is
 slow" from "the mirror is gone", and nothing bounds either.
 
-The part worth keeping is not that the step lacked a timeout. It is **what it was installing**:
+The part worth keeping is not that the step lacked a timeout. It is **what it was installing**.
+
+Six workflow files install `jq`, and the split is the whole argument:
+
+```bash
+git grep -lE 'apt-get install[^|;]*\bjq\b' origin/main -- '.github/workflows/*.yml' \
+| sed 's|^origin/main:||' \
+| while read -r f; do
+    git show "origin/main:$f" | grep -qE 'which jq' \
+      && echo "GUARDED       $f" || echo "UNCONDITIONAL $f"
+  done
+```
 
 ```
-$ # workflows invoking the jq binary, excluding `gh --jq` call sites
-38
-$ # ...of which install it
-5
+GUARDED       .github/workflows/apply-sentry-infra.yml
+GUARDED       .github/workflows/deploy-docs.yml
+GUARDED       .github/workflows/sentry-audit-gate.yml
+UNCONDITIONAL .github/workflows/skill-security-scan-corpus.yml
+UNCONDITIONAL .github/workflows/skill-security-scan-postmerge.yml
+UNCONDITIONAL .github/workflows/skill-security-scan-pr-trailer.yml
 ```
 
-Of those five, three (`deploy-docs.yml`, `sentry-audit-gate.yml`, `apply-sentry-infra.yml`) guard
-the install behind `which jq >/dev/null 2>&1 ||`, so on a normal runner they no-op. The three
-`skill-security-scan-*` files were **the only unconditional installers in the repository**. The
-remaining 33 workflows just call `jq` and have been green for as long as they have existed.
+Every other installer in the repository checks whether `jq` is already present and no-ops when it
+is. These three did not — they were **the only unconditional installers**, and they are the three
+this change fixes. Every remaining workflow that uses `jq` simply calls it and has been green.
 
 So the step was buying nothing. `jq` ships in the GitHub-hosted runner image; the install was a
 network round-trip, an unpinned package fetch, and an unbounded hang, in exchange for a binary that
 was already on the PATH.
 
-### Count what you claim, not what looks similar
+### Count what you claim — and say which denominator you counted
 
-The `38` above excludes `gh api --jq` / `gh ... -q` sites deliberately. `gh` embeds **gojq**, so a
-`gh --jq` call proves nothing about whether the standalone `jq` binary exists. Counting them would
-have inflated the evidence for the exact claim the change rests on. This is the same discipline as
-[[2026-08-16-every-number-i-inherited-was-stale-and-the-panel-found-the-defect-class-inside-my-fix]]:
-project the measurement onto the scope you are actually going to assert.
+Two cautions, both of which this file got wrong before review caught them.
+
+**State the denominator once.** An earlier draft said "38 workflows invoke the jq binary and only 5
+install it", then two sentences later described three guarded plus three unconditional installers —
+3 + 3 = 6, not 5. Both numbers were correctly measured and they answered *different questions*:
+6 is the repo-wide installer count, while 5 counts only installers that ALSO contain a literal `jq`
+invocation. `skill-security-scan-corpus.yml` is the sixth, and it drops out of the second set
+because it has **zero** non-install `jq` tokens — it reaches `jq` only indirectly, through
+`run-self-test.sh` → `run-scan.sh`. A reader who adds 3 + 3 and gets 6 is right, and one denominator
+silently became the other mid-paragraph.
+
+**A consumer count is definition-dependent, so publish the command or drop the number.** "How many
+workflows invoke the jq binary" ranges from ~35 to ~50 across defensible filters — comment-only
+matches, composite actions under `.github/actions/`, and whether install lines count. The argument
+here does not need that number: it rests on the installer split above, which is exactly
+reproducible. Where a figure IS load-bearing, print the command beside it, per
+[[2026-08-16-every-number-i-inherited-was-stale-and-the-panel-found-the-defect-class-inside-my-fix]].
+
+**And exclude `gh --jq`.** `gh` embeds **gojq**, so a `gh api --jq` call proves nothing about
+whether the standalone `jq` binary exists. Counting those would have inflated the evidence for the
+exact claim the change rests on.
 
 ## The trap: deleting it would have been verified by nothing
 
@@ -78,10 +106,26 @@ The fix is to make the proof unconditional rather than to make the removal small
   run: jq --version
 ```
 
-No network, no package manager, no `if:`. It runs on every invocation of all three workflows, so
-the green check means what it appears to mean, and a future runner image dropping `jq` fails
+No network, no package manager, no `if:`. Whenever one of these workflows runs, the assertion runs,
+so its green means what it appears to mean — and a future runner image dropping `jq` fails
 immediately and legibly instead of surfacing as a confusing `jq: command not found` several steps
 later inside a scan script.
+
+**"Unconditional" is a property of the STEP, not a promise that the step executes on your PR.** The
+review panel caught this overstated in an earlier draft of this very file. The step has no `if:`,
+but the *workflow* still has triggers, and on the PR making this change only one of the three
+actually ran:
+
+| workflow | trigger | ran on the PR that changed it |
+| --- | --- | --- |
+| `skill-security-scan-pr-trailer.yml` | `pull_request`, no `paths:` | **yes** |
+| `skill-security-scan-corpus.yml` | `pull_request` + a 6-pattern `paths:` filter | no — the diff matched none of them |
+| `skill-security-scan-postmerge.yml` | `push: branches: [main]` only | no — it has no PR trigger at all |
+
+So CI-green on that PR was direct evidence for exactly one workflow. The other two inherited it only
+through a separate premise — that all three `runs-on: ubuntu-latest` jobs draw the same runner image
+— which the assertion does not itself establish. That premise is sound here, but it is an inference,
+and the honest claim names it rather than letting one green check stand in for three.
 
 **The general rule: when you remove a step that provisions a dependency, the assertion that
 replaces it must run unconditionally.** If the thing that would catch your mistake is behind a
@@ -92,6 +136,14 @@ Two of the three sites turned out to have unguarded consumers anyway, which is w
 rather than assuming: `corpus` reaches `jq` indirectly (`run-self-test.sh` → `run-scan.sh`, which
 calls it throughout), and `postmerge` calls it directly. Only `pr-trailer` — the one originally
 scoped, and the only required check of the three — had the guard problem.
+
+**What the assertion still does not prove: a capability floor.** `jq --version` exits 0 on any `jq`,
+including builds predating the flags the scanner actually uses — `--rawfile` (jq ≥ 1.6) at
+`run-scan.sh`, `--argjson` at `parse-override.sh`, `-Rsn` + `inputs` at `lib.sh`. A capability-shaped
+probe such as `jq -n --argjson x '{"a":1}' '$x.a'` would assert the flags rather than mere presence.
+This was left as-is deliberately: the removed `apt-get install -y -qq jq` carried no version floor
+either, so the exposure is **unchanged**, not newly introduced — and a fix should be scoped as its
+own change rather than smuggled in under a diff whose acceptance criteria pin it at two lines.
 
 ## Second trap: an acceptance criterion that no implementation could satisfy
 
@@ -149,9 +201,17 @@ this very file reported *three* learning files from `--stat`; the correct answer
 
 - Before adding a package-install step to CI, check whether the runner image already ships the
   tool. `jq`, `curl`, `git`, `python3`, `unzip` and friends are present on `ubuntu-latest`.
-- If you genuinely are unsure, use the repo's existing fallback idiom —
-  `which <tool> >/dev/null 2>&1 || sudo apt-get install -y <tool>` — which costs nothing on a
-  normal runner and does not hang when the tool is already there.
+- If you genuinely are unsure, guard the install so it no-ops when the tool is already present. Two
+  shapes exist in this repo and the right one depends on where the job runs:
+  `which <tool> >/dev/null 2>&1 || sudo apt-get install -y <tool>` on a VM runner
+  (`apply-sentry-infra.yml`, `sentry-audit-gate.yml`), and the **`sudo`-less** form inside a
+  container, where the job is already root — `deploy-docs.yml` runs in the Playwright container and
+  its own comment says the bare `apt-get` is correct there. Copying the `sudo` form into a container
+  job gets you `sudo: command not found`.
+- Note what "the runner image ships it" is scoped to: the **image**. A job with `container:` or on a
+  self-hosted runner is a different image and inherits none of this — which is why `deploy-docs.yml`
+  installing `jq` is correct rather than redundant, and why it is the weakest of the three guarded
+  installers as evidence for the premise.
 - Any step that can touch the network needs `timeout-minutes`. An unbounded step turns a transient
   mirror problem into a merge-blocking outage.
 - When removing a provisioning step, verify the replacement assertion is reachable on the very PR

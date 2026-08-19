@@ -82,9 +82,16 @@ Replacement block (identical at each site):
       the three intended files. *Anti-widening gate: changing scope means editing this AC.*
 - [x] 3.5 **AC5** — both jq-consuming steps still open with `set -euo pipefail` (assert the anchors,
       not a bare count; the file carries three occurrences total).
-- [ ] 3.6 **AC6** — the `skill-security-scan PR gate` run on this PR's head shows `Assert jq present`
-      with conclusion `success` and `jq --version` output in the log. **This is the real proof** — the
-      pre-existing jq steps are `if:`-guarded on `no_new_skills == 'false'` and never run on this PR.
+- [ ] 3.6 **AC6 (scope corrected at review)** — the `skill-security-scan PR gate` run on this PR's
+      head shows `Assert jq present` with conclusion `success` and `jq --version` output in the log.
+      **This is the real proof** — the pre-existing jq steps are `if:`-guarded on
+      `no_new_skills == 'false'` and never run on this PR.
+      **Covers 1 of the 3 edited workflows, not 3.** The structural-enumeration seat resolved the
+      triggers: only `pr-trailer` runs here (`pull_request`, no `paths:`). `corpus` carries a
+      6-pattern `paths:` filter matching none of this PR's 8 files, and `postmerge` has no PR
+      trigger at all (`push: branches: [main]`). Their assertions inherit this evidence only via the
+      separate premise that all three `runs-on: ubuntu-latest` jobs draw the same image. AC7 closes
+      `postmerge` post-merge; `corpus` is first exercised by its own `push:main` arm.
 - [ ] 3.7 **AC7** — post-merge, the `push:main` `skill-security-scan-postmerge.yml` run shows its
       `Assert jq present` step succeeding (`wg-after-merging-a-pr-that-adds-or-modifies` honoured;
       `gh workflow run` is inoperable on pr-trailer — no `workflow_dispatch`).

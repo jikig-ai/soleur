@@ -51,7 +51,16 @@ This PR adds no SKILL or agent files, so all of them skip and the gate reports `
 never run `jq`. A green check on the deletion PR would have been indistinguishable from a green
 check on a runner where `jq` had been removed. Replacing the step with an unconditional
 `jq --version` assertion is what makes the green mean something — and it removes the file's only
-unpinned supply-chain input, in a file whose other actions are SHA-pinned.
+**package-manager** supply-chain input, in a file whose actions are SHA-pinned.
+
+> Narrowed after review. An earlier draft said "only unpinned supply-chain input", which overstates
+> it: a SHA pin gives integrity over the *action's code*, not over what that action fetches at
+> runtime. `oven-sh/setup-bun` still downloads a Bun release tarball driven by `.bun-version`, so
+> residual unpinned-fetch surface remains in `pr-trailer` and `corpus`. What this change removes is
+> the runtime `apt-get` — a root, networked package fetch running inside the security-gate job
+> immediately before the gate runs, able to replace the very binary that computes the verdict.
+> Also unchanged and worth naming: `runs-on: ubuntu-latest` is a rolling label, so image drift is
+> still an unpinned input; closing that would mean pinning `ubuntu-24.04`, which is out of scope here.
 
 **(b) The case for staying narrow dissolved once (a) was established.** The original argument for
 one file rested on blast radius — only `pr-trailer` is a required check. That establishes different
