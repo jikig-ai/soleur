@@ -850,6 +850,41 @@ ZG_SECTION_ASSERTIONS=$(( TOTAL - ZG_TOTAL_BEFORE ))
 assert "Guard 1 anti-vacuity: the section ran its full assertion inventory (expected 40, ran $ZG_SECTION_ASSERTIONS)" \
   "(( ZG_SECTION_ASSERTIONS == 40 ))"
 
+# --- Row 7: a failed bootstrap must say WHY, on the one channel that still works -----------
+# The failure that kills the bootstrap also kills Vector, which is installed BY the bootstrap. So
+# on a non-zero exit the failing unit's stderr exists ONLY in journald on a host that
+# hr-no-ssh-fallback-in-runbooks forbids logging into. Measured 2026-08-16 (#7462 delivery): the
+# zot leg served the image, `bootstrap-exit-1` shipped systemd's generic "see journalctl", Better
+# Stack held zero journald rows for the host, and the cause cost a full replace cycle to not learn.
+R7_BEFORE="$TOTAL"
+L_R7_EXIT=$(zg_line '^[[:space:]]*exit "\$boot_rc"')
+L_R7_EMIT=$(zg_line 'inngest-boot-phone-home\.sh bootstrap-failure-journal')
+L_R7_JOURNAL=$(zg_line 'journalctl -xu inngest-server\.service')
+L_R7_FAILED=$(zg_line 'systemctl --failed')
+
+assert "Row7: the failure path emits a bootstrap-failure-journal marker" \
+  "[[ -n \"\$L_R7_EMIT\" ]]"
+assert "Row7: it captures the failing unit's journal (journalctl -xu inngest-server.service)" \
+  "[[ -n \"\$L_R7_JOURNAL\" ]]"
+assert "Row7: it names WHICH unit failed (systemctl --failed), not only inngest-server" \
+  "[[ -n \"\$L_R7_FAILED\" ]]"
+# ORDERING IS THE PROPERTY, not presence. A capture emitted after `exit` is dead code that every
+# presence-only assertion above would still certify green — the exact vacuity class #7516 shipped.
+assert "Row7: the journal capture runs BEFORE exit \$boot_rc (after it is unreachable)" \
+  "[[ -n \"\$L_R7_JOURNAL\" && -n \"\$L_R7_EXIT\" ]] && (( L_R7_JOURNAL < L_R7_EXIT ))"
+assert "Row7: the marker is emitted BEFORE exit \$boot_rc" \
+  "[[ -n \"\$L_R7_EMIT\" && -n \"\$L_R7_EXIT\" ]] && (( L_R7_EMIT < L_R7_EXIT ))"
+# The journal carries env-delivered Postgres/Redis URIs and signing keys on a failed ExecStart,
+# and this lands in a source the whole team reads.
+assert "Row7: the journal is scrubbed through inngest-redact.sh before shipping" \
+  "grep -qE 'journalctl -xu inngest-server\\.service.*inngest-redact\\.sh' \"\$DED_CODE_FILE\""
+assert "Row7: both captures are BOUNDED (head -c), so one runaway unit cannot fill the channel" \
+  "(( \$(grep -cE 'head -c (300|1200)' \"\$DED_CODE_FILE\") >= 2 ))"
+
+R7_ASSERTIONS=$(( TOTAL - R7_BEFORE ))
+assert "Row7 anti-vacuity: the section ran its full inventory (expected 7, ran $R7_ASSERTIONS)" \
+  "(( R7_ASSERTIONS == 7 ))"
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="
 if (( FAIL > 0 )); then
