@@ -900,8 +900,15 @@ run_case "T5 wrong-checksum aborts" 's#^DOPPLER_SHA256=.*#DOPPLER_SHA256="000000
 # `tar xzf` and `chmod +x /usr/local/bin/doppler` as root on an unverified tarball with the whole
 # suite reporting success. The inequality is the mirror image of S1's: the doppler stage must come
 # AFTER the arming, where sshd_config must come BEFORE it.
-_t5_stage_ln=$(grep -n '^[[:space:]]*STAGE=gitdata_doppler_dl[[:space:]]*$' "$TMP/runcmd-all.sh" | head -1 | cut -d: -f1)
-_t5_sete_ln=$(grep -n '^[[:space:]]*set -e[[:space:]]*$' "$TMP/runcmd-all.sh" | head -1 | cut -d: -f1)
+# `|| true` because a NO-MATCH here is a normal answer, not an error — the `[ -n ]` guards below
+# are what decide. Required by `lint-shell-capture-exit`, which is a RATCHET: S1's byte-identical
+# captures 380 lines down are grandfathered in its 210-entry baseline, so mirroring S1's shape
+# added two NEW findings and rejected. Baselining them was the wrong fix — that grows the accepted
+# population, which is the one thing the ratchet exists to stop. (This file runs `set -uo pipefail`
+# with no `-e`, so the lint's stated hazard cannot bite here; the guard is for the shape, and
+# satisfying it costs nothing.)
+_t5_stage_ln=$(grep -n '^[[:space:]]*STAGE=gitdata_doppler_dl[[:space:]]*$' "$TMP/runcmd-all.sh" | head -1 | cut -d: -f1) || true
+_t5_sete_ln=$(grep -n '^[[:space:]]*set -e[[:space:]]*$' "$TMP/runcmd-all.sh" | head -1 | cut -d: -f1) || true
 if [ -n "$_t5_stage_ln" ] && [ -n "$_t5_sete_ln" ] && [ "$_t5_sete_ln" -lt "$_t5_stage_ln" ]; then pass; else
   fail "T5: the shipped chain does not arm 'set -e' before the doppler stage (set -e=${_t5_sete_ln:-?}, stage=${_t5_stage_ln:-?})" \
        "T5 asserts the checksum aborts the chain; without the arming ordered first, a failed sha256sum runs tar+chmod as root on an unverified tarball."; fi
