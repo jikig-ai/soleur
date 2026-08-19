@@ -68,6 +68,57 @@ if [[ "${1:-}" == "--print-suite-globs" ]]; then
   exit 0
 fi
 
+# Answer "can this box absorb another full gate?" and exit, under the SAME
+# discipline as --print-suite-globs above: BEFORE anything with a side effect —
+# no TMPDIR export, no bare-repo guard, no TEST_GROUP validation, and above all
+# no tc_acquire, since a pre-launch probe that blocked on the lock would queue
+# behind the very run the caller is asking whether to start (#7545).
+#
+# THIS IS THE DELIVERABLE FOR THE ISSUE'S TITLE. "A session cannot tell before
+# launching whether the box can absorb another full gate" — it can now, in under
+# a second, without running a suite or taking the lock.
+#
+# IT ALWAYS EXITS 0, including on a contended box. The verdict is a STATEMENT:
+# it reports and the caller decides. An `exit 1` here would make every consumer
+# a gate — lefthook's pre-commit hook runs this runner, so a non-zero would
+# block `git commit` — and that decline was cut on measured evidence (see
+# tc_capacity_line's header and the ADR-133 addendum).
+#
+# Sources the lib INDEPENDENTLY, because the normal source site sits below the
+# bare-repo guard this branch deliberately precedes. Same defensive shape: a
+# missing lib degrades to a named CAPACITY_UNKNOWN rather than to silence, so
+# the answer can never simply vanish.
+if [[ "${1:-}" == "--capacity" ]]; then
+  # Mirrors the pin below: the contention lib observes the /tmp TMPFS, not
+  # whatever TMPDIR the caller happens to carry.
+  export TC_TMPDIR="${TC_TMPDIR:-/tmp}"
+  _cap_lib="$(dirname "${BASH_SOURCE[0]}")/lib/test-contention.sh"
+  if [[ -f "$_cap_lib" ]]; then
+    # shellcheck source=scripts/lib/test-contention.sh
+    source "$_cap_lib" || true
+  fi
+  if declare -F tc_capacity_line >/dev/null 2>&1 && declare -F tc_preamble >/dev/null 2>&1; then
+    # tc_preamble is what performs the single /proc walk and promotes its
+    # readings; its own output is not wanted here, only the verdict built from
+    # them. One walk, one source of truth.
+    tc_preamble >/dev/null 2>&1 || true
+    tc_capacity_line
+    # The per-sibling detail is what makes the verdict ACTIONABLE: "contended"
+    # tells you to wait, "pid 2266786 in .worktrees/feat-x, 1214s in" tells you
+    # what you are waiting for.
+    _cap_rows="$(tc_siblings 2>/dev/null || true)"
+    if [[ -n "${_cap_rows//[[:space:]]/}" ]]; then
+      while IFS=$'\t' read -r _cp _cc _ce; do
+        [[ -n "$_cp" ]] || continue
+        printf '[contention]   -> pid %s in %s (running %ss)\n' "$_cp" "$_cc" "$_ce"
+      done <<< "$_cap_rows"
+    fi
+  else
+    echo '[contention] CAPACITY_UNKNOWN reason=lib_unavailable'
+  fi
+  exit 0
+fi
+
 # Default TMPDIR to /var/tmp (disk-backed) rather than /tmp.
 #
 # /tmp on this machine class is a ~4 GiB SHARED tmpfs, and parallel worktrees are this
@@ -174,6 +225,12 @@ if ! declare -F tc_acquire >/dev/null 2>&1; then
   tc_tmp_entry_count() { printf '0\n'; }
   tc_used_bytes() { printf '0\n'; }
   tc_acquire() { :; }
+  # NOT a no-op, unlike its siblings above. Every other stub here degrades an
+  # OBSERVATION to a harmless zero; this one degrades an ANSWER, and an answer
+  # that silently vanishes is the failure this verdict exists to prevent — a
+  # reader who sees no CAPACITY_ line cannot tell "the box is fine" from "the
+  # instrument is gone". AC15/M11 pin it.
+  tc_capacity_line() { echo '[contention] CAPACITY_UNKNOWN reason=lib_unavailable'; }
 fi
 
 # ADR-133 amendment instrument: bytes held per mount, at RUN boundaries.
@@ -616,6 +673,69 @@ _diff_touches() {
   return 1
 }
 
+# --- Diff-justification report (#7545) --------------------------------------
+#
+# Names which TEST_GROUP shards this run's diff actually touches, so a session
+# can see what its own change warrants instead of inferring it.
+#
+# A REPORT, NOT A GATE, AND DELIBERATELY NOT A FIFTH `*_PATHS` ARRAY. Adding a
+# relevance array is a documented six-site change whose own guard comment
+# records a live defect where a fifth gate left the linter, the harness floor
+# and every behavioural arm green — against a measured ceiling of 4 gated suites
+# out of 167 top-level run_suite registrations (~2.4%). The operator's own
+# measurement agrees from the other direction: relevance-gating declined 3 of
+# 325 suites. The lever is real and small, so it ships as information.
+#
+# NO NARROWING ADVICE UNDER `TEST_GROUP=all`. ADR-183 pins /ship Phase 4 at the
+# full battery as that change's load-bearing constraint, asserted by
+# plugins/soleur/test/fullsuite-merge-gate.test.ts. A report that suggested
+# narrowing there would be this script arguing against the ADR it implements.
+_diff_shard_report() {
+  local shards="" msg
+  _add_shard() {
+    case ",$shards," in
+      *",$1,"*) ;;
+      *) shards="${shards:+$shards,}$1" ;;
+    esac
+  }
+
+  # Fail NAMED, not silent. An absent line is indistinguishable from a report
+  # that ran and found nothing — and "found nothing" is the reading that would
+  # wrongly reassure. M20 pins this arm.
+  if [[ "$_diff_detect_ok" == 0 || "$_diff_head_ok" == 0 ]]; then
+    echo "[contention] DIFF_TOUCHES: undeterminable — this run could not resolve its own diff (no origin/main, a shallow clone, or a concurrent index.lock), so no shard claim is made. Every suite runs, which is the safe direction." >&2
+    return 0
+  fi
+
+  # Written as `if … then … fi`, never `grep -q … && _add_shard …`: under this
+  # script's `set -e` the short form's exit status is the whole list's, so a
+  # non-matching final line would abort the runner.
+  if grep -qF 'apps/web-platform/infra/' <<<"$_diff_names"; then _add_shard infra; fi
+  if grep -qE '^\s*(R[0-9]*\s+)?apps/web-platform/(app|components|lib|server|test|scripts|supabase)/' <<<"$_diff_names"; then _add_shard webplat; fi
+  if grep -qF 'docs/legal/' <<<"$_diff_names"; then _add_shard webplat; fi
+  if grep -qE '(^|\s)(scripts/|plugins/soleur/|\.claude/hooks/|tests/|AGENTS)' <<<"$_diff_names"; then
+    _add_shard scripts
+    _add_shard bun
+  fi
+  if grep -qE '\.c4(\s|$)' <<<"$_diff_names"; then _add_shard scripts; fi
+
+  if [[ -z "$shards" ]]; then
+    echo "[contention] DIFF_TOUCHES: none — this diff maps to no TEST_GROUP shard by the prefixes this report knows." >&2
+    return 0
+  fi
+
+  msg="[contention] DIFF_TOUCHES: $shards (TEST_GROUP=$TEST_GROUP)"
+  if [[ "$TEST_GROUP" == "all" ]]; then
+    # Statement only. No verb that could read as advice to run less — ADR-183.
+    msg="$msg — the full battery is pinned here, so every shard runs regardless."
+  else
+    msg="$msg — this run covers the '$TEST_GROUP' shard only; any other shard named above is NOT covered by this run's result."
+  fi
+  echo "$msg" >&2
+  return 0
+}
+_diff_shard_report
+
 # Counted at the RELEVANCE call sites only. `skipped` also carries the infra runner's incident and
 # not_in_diff declines, which SOLEUR_TEST_FORCE_ALL cannot force -- see the epilogue lever.
 _relevance_declined=0
@@ -680,6 +800,18 @@ fi
 # as a regression (AC1/AC2).
 tc_preamble
 _TC_RUN_START_ENTRIES=$(tc_tmp_entry_count)
+
+# The capacity verdict (#7545), emitted BETWEEN the preamble and the lock —
+# after the readings exist, before the wait that may consume them.
+#
+# It is built from the values tc_preamble just promoted, never from a second
+# /proc walk: two walks are two non-atomic snapshots, and a run that printed
+# CAPACITY_OK above SIBLING_RUN_DETECTED: 2 would be reporting on two different
+# machines. One call site, because the runner has one top-level control flow.
+#
+# Changes NO exit code and blocks NO suite. Every run that completes today still
+# completes; the only new thing is that it says what it measured.
+tc_capacity_line >&2
 
 # Advisory, self-announcing queue (#6789). Acquired INTERNALLY (not by a caller
 # wrapping the script) so no invocation can forget it. It NEVER aborts — on
@@ -1374,6 +1506,14 @@ if want_scripts; then
   # want_bun for the same reason as its neighbours — it shells out to python3 to build its
   # sandbox, and `test-scripts` is the shard documented as "bash + python3".
   run_suite "scripts/test-all-killed-classification" bash scripts/test-all-killed-classification.test.sh
+  # The #7545 pre-launch capacity signal: the verdict, --capacity, the wait
+  # heartbeat and re-sample, and the diff-justification report. Registered
+  # EXPLICITLY beside its neighbours for the same reason they state — repo-root
+  # `scripts/*.test.sh` is NOT in SUITE_GLOBS (which carries `scripts/lib/*.test.sh`
+  # only), so an unregistered suite here runs in zero runners and stays green
+  # forever. AC18 asserts this registration by its invoked PATH, not its label,
+  # because the orphan linter derives coverage from the path.
+  run_suite "scripts/test-all-capacity-signal" bash scripts/test-all-capacity-signal.test.sh
   # ADR-178/ADR-187 textual parity pin (#7429): the signal-shape classifier is inlined in three
   # runners, and this asserts the three copies still agree. Registered explicitly beside its
   # sibling above — scripts/*.test.sh is NOT auto-globbed here, and this suite arrived
