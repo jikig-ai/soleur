@@ -8,6 +8,20 @@ Target: `apps/web-platform/scripts/sentry-monitors-audit.sh`
 
 ---
 
+## Checkbox state — read this before trusting the boxes below
+
+**The boxes in Phases 0-6 were never maintained during execution.** They are all
+`[ ]` and the work is done; that is artifact lag, not outstanding work. Do not
+read an unticked box as a task, and do not bulk-tick them — a bulk toggle would
+convert unverified work into work that reads as verified, which is worse than
+the lag.
+
+The binding contract is the plan's **Acceptance Criteria** list, not this file.
+Ticked below are only the items whose literal command was run in the 2026-08-19
+resume session, with the output read.
+
+---
+
 ## Phase 0 — Preconditions (no code)
 
 - [ ] 0.1 Probe all six Sentry endpoints via `doppler run --project soleur --config prd`, using
@@ -138,14 +152,48 @@ Target: `apps/web-platform/scripts/sentry-monitors-audit.sh`
 ## Phase 7 — Verification
 
 - [ ] 7.1 Work through all 22 Acceptance Criteria in the plan.
-- [ ] 7.2 `bash apps/web-platform/scripts/sentry-monitors-audit.test.sh` — green, count ≥ 14 + new.
-- [ ] 7.3 `bash tests/scripts/test-sentry-monitors-audit-class-d.sh` — all 13 pass.
-- [ ] 7.4 `bash scripts/lint-orphan-test-suites.sh` — `0 orphaned`. **Do not** add a `run_suite`
+- [x] 7.2 `bash apps/web-platform/scripts/sentry-monitors-audit.test.sh` — green, count ≥ 14 + new.
+- [x] 7.3 `bash tests/scripts/test-sentry-monitors-audit-class-d.sh` — all 13 pass.
+- [x] 7.4 `bash scripts/lint-orphan-test-suites.sh` — `0 orphaned`. **Do not** add a `run_suite`
       line for the unit suite; it is already glob-registered and an explicit line double-registers it.
-- [ ] 7.5 AC14 gate-block byte-identity diff (anchored awk form from the plan — the naive range
+- [x] 7.5 AC14 gate-block byte-identity diff (anchored awk form from the plan — the naive range
       self-matches and returns 364 lines instead of 61).
 - [ ] 7.6 PR body: endpoint table naming the token, the env-rename trap, Decision 6's
       recommendation, and `Closes #7590`.
+
+## Phase 8 — Resume session (2026-08-19)
+
+Three items carried into the resume, plus what fell out of them. Every box here
+was run in-session and its output read.
+
+- [x] 8.1 Pin the transport-failure axis. `mk_curl_stub`'s respond spec gains an
+      optional 4th field, `exit_code`; T18e (safe GET, curl 28 -> 3 attempts,
+      backoff 5/10, stdout empty, exit 0) and T18f (write, curl 28 -> 1 attempt,
+      fixtured separately for the declared and inferred unsafe signals).
+- [x] 8.2 Pin the pagination fixes. T20f: two synthesized 159 KB pages, a fixture
+      precondition asserting page 1 stays above MAX_ARG_STRLEN, and a per_page=100
+      assertion on every detectors request.
+- [x] 8.3 Mutation-prove 8.1/8.2 — 8 mutations, sandbox copies, each diff-verified
+      as landed, unmutated control green first. All 8 killed. Battery script:
+      scratchpad `mutbat-7590.sh`; results transcribed into `session-state.md`.
+- [x] 8.4 Scope call on the three unmigrated siblings, CONCUR co-signed.
+      `assert-byok-rules-exist.sh` migrated INLINE (it is the only one wired into
+      a workflow, and it was live-firing); the other two deferred to #7634 on the
+      write-shape blocker.
+- [x] 8.5 Mutation-prove 8.4 — 4 mutations, control green at 16/16, 3 killed and
+      1 labelled equivalent (comment-only). Battery: scratchpad `mutbat-byok.sh`.
+- [x] 8.6 ADR-031 §Recurrence narrowed: both the `::error::` severity claim and
+      the "every caller" reach claim were false and are corrected, with the
+      caller population enumerated rather than recalled.
+- [x] 8.7 Prose corrections: `versions.tf` supersession note (dated measurement
+      left intact); the `(500, 504, timeout)` triple corrected to H3's
+      `504, 208, 500` at all three sites; `reusable-release.yml`'s
+      "falls back to `sentry.io`" retracted; `oauth-probe-failure.md` read recipe
+      migrated + configurator recipe gated; 2026-06-02 learning superseded in
+      place with the live field mapping.
+- [ ] 8.8 Shard gate: `TEST_GROUP=scripts`, `TEST_GROUP=webplat`,
+      `apps/web-platform/infra/run-registered-suites.sh`. Launched detached
+      2026-08-19; queued behind 4 sibling worktrees on the advisory lock.
 
 ---
 
