@@ -691,7 +691,32 @@ fi
 
 cron_detectors=$(jq -c '[ .[] | select(.type == "monitor_check_in_failure") ]' <<<"$detectors_json")
 cron_detector_count=$(jq 'length' <<<"$cron_detectors")
-cron_detector_names=$(jq -r '.[].name // empty' <<<"$cron_detectors")
+
+# Monitor binding: STRUCTURED pass first, substring-free FALLBACK second.
+#
+# `dataSources[].queryObj.slug` is the real binding — an actual slug field on
+# the data source the detector watches. `.name` is a display name that Sentry
+# happens to slugify to the same value; verified live, both give an exact 55/55
+# set match against the live monitors AND are identical to each other today.
+# They are NOT the same thing: renaming a detector in the UI moves `.name` and
+# leaves `queryObj.slug` alone, so preferring the display name would invent a
+# Class B orphan out of a cosmetic edit.
+#
+# The fallback is only consulted when the structured pass yields NOTHING, which
+# preserves the "structured first, fall back once" safety property the old
+# code had (rebased onto the new schema — the old fallback was a substring
+# sweep over a serialized payload, which has no meaning here). The
+# structured-pass count is emitted into the report so that "the structured pass
+# found it" is distinguishable from "the fallback found it"; without that the
+# property is unverifiable by any fixture.
+cron_detector_slugs=$(jq -r '.[] | .dataSources[]?.queryObj.slug // empty' <<<"$cron_detectors" | sort -u)
+structured_slug_count=$(printf '%s' "$cron_detector_slugs" | grep -c . || true)
+binding_source="structured (dataSources[].queryObj.slug)"
+if [[ "$structured_slug_count" == "0" ]] && (( cron_detector_count > 0 )); then
+  cron_detector_slugs=$(jq -r '.[].name // empty' <<<"$cron_detectors" | sort -u)
+  binding_source="fallback (.name — structured pass returned nothing)"
+fi
+cron_detector_names="$cron_detector_slugs"
 
 # Fail-closed extraction guard, carried from Class D's declared_slugs check.
 # Under the OLD predicate an auth/scope/endpoint regression returning `[]`
@@ -966,7 +991,12 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
     printf '_No detectors returned by the API._\n\n'
   else
     printf -- '- Cron detectors (`monitor_check_in_failure`): %s\n' "$cron_detector_count"
-    printf -- '- Total detectors: %s\n\n' "$(jq 'length' <<<"$detectors_json")"
+    printf -- '- Total detectors: %s\n' "$(jq 'length' <<<"$detectors_json")"
+    # Emitted so a fallback activation is VISIBLE rather than silent — without
+    # it, "the structured pass found the binding" and "the fallback did" are
+    # indistinguishable in the artifact and no fixture can tell them apart.
+    printf -- '- Monitor binding: %s — %s slug(s) from the structured pass\n\n' \
+      "$binding_source" "$structured_slug_count"
   fi
 
   printf '## Orphans\n\n'

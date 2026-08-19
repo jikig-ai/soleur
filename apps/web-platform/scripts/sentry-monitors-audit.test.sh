@@ -984,6 +984,77 @@ fi
 rm -rf "$TMP20C"
 
 # ------------------------------------------------------------------------
+# T23 — the STRUCTURED binding wins over the display name, and the choice is
+# reported. This is the fixture where the two disagree: `.name` has been
+# renamed in the UI while `dataSources[].queryObj.slug` still points at the
+# real monitor. Binding on `.name` would invent a Class B orphan out of a
+# cosmetic edit. They are identical in the live org today, which is exactly
+# why a fixture is needed to pin the preference.
+# ------------------------------------------------------------------------
+echo "T23: structured binding preferred over display name"
+TMP23=$(mktemp -d)
+cat > "$TMP23/monitors.json" <<'EOF'
+[{"slug": "real-slug", "name": "Real", "type": "cron_job", "config": {"schedule": "0 * * * *"}}]
+EOF
+printf '[]' > "$TMP23/workflows.json"
+cat > "$TMP23/detectors.json" <<'EOF'
+[
+  {
+    "id": "2301",
+    "name": "renamed-in-the-ui",
+    "type": "monitor_check_in_failure",
+    "workflowIds": ["w1"],
+    "dataSources": [{"queryObj": {"slug": "real-slug"}}]
+  }
+]
+EOF
+SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
+  SENTRY_API_HOST=de.sentry.io \
+  SENTRY_FIXTURE_MONITORS="$TMP23/monitors.json" \
+  SENTRY_FIXTURE_RULES="$TMP23/workflows.json" \
+  SENTRY_FIXTURE_DETECTORS="$TMP23/detectors.json" \
+  AUDIT_OUT_DIR="$TMP23" bash "$SCRIPT" >/dev/null 2>&1
+report=$(ls "$TMP23"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+if ! grep -qE '`renamed-in-the-ui`' "$report" \
+   && ! grep -qE 'Class B' "$report" \
+   && grep -q 'Monitor binding: structured' "$report"; then
+  pass "structured slug used; UI rename did not fabricate a Class B orphan; choice reported"
+else
+  fail "structured binding not preferred"
+  grep -E 'Monitor binding|Class B|renamed' "$report" >&2 2>/dev/null || true
+fi
+rm -rf "$TMP23"
+
+# ------------------------------------------------------------------------
+# T23b — the fallback still fires when the structured field is absent, and
+# says so. Every pre-#7590 fixture in this file is shaped that way, so this
+# also pins that those keep working.
+# ------------------------------------------------------------------------
+echo "T23b: fallback engages when the structured field is absent"
+TMP23B=$(mktemp -d)
+cat > "$TMP23B/monitors.json" <<'EOF'
+[{"slug": "only-name", "name": "Only", "type": "cron_job", "config": {"schedule": "0 * * * *"}}]
+EOF
+printf '[]' > "$TMP23B/workflows.json"
+cat > "$TMP23B/detectors.json" <<'EOF'
+[{"id": "2302", "name": "only-name", "type": "monitor_check_in_failure", "workflowIds": ["w1"]}]
+EOF
+SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
+  SENTRY_API_HOST=de.sentry.io \
+  SENTRY_FIXTURE_MONITORS="$TMP23B/monitors.json" \
+  SENTRY_FIXTURE_RULES="$TMP23B/workflows.json" \
+  SENTRY_FIXTURE_DETECTORS="$TMP23B/detectors.json" \
+  AUDIT_OUT_DIR="$TMP23B" bash "$SCRIPT" >/dev/null 2>&1
+report=$(ls "$TMP23B"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+if grep -q 'Monitor binding: fallback' "$report" && ! grep -qE 'Class B' "$report"; then
+  pass "fallback engaged and reported; no false orphan"
+else
+  fail "fallback path wrong"
+  grep -E 'Monitor binding|Class B' "$report" >&2 2>/dev/null || true
+fi
+rm -rf "$TMP23B"
+
+# ------------------------------------------------------------------------
 # T22 — ASSEMBLY: no Sentry call bypasses the curl_retry chokepoint.
 #
 # Guard 1's property is "every response carrying a deprecation header produces
@@ -1035,7 +1106,7 @@ fi
 # cannot catch an assertion that runs but checks nothing, which is what the
 # mutation battery in the PR body is for.
 # ------------------------------------------------------------------------
-MIN_ASSERTIONS=25
+MIN_ASSERTIONS=27
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "  FAIL: anti-vacuity floor — only $((PASS + FAIL)) assertions ran, expected >= $MIN_ASSERTIONS"
   FAIL=$((FAIL+1))
