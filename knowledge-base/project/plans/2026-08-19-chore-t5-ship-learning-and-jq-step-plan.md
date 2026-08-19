@@ -152,6 +152,12 @@ enumerated in the two files plus §5.4, so the fallback is mechanical.
 **User-Challenge** (ADR-084) — appended to
 `knowledge-base/project/specs/feat-one-shot-t5-ship-learning-and-jq-step/decision-challenges.md`.
 
+**RESOLVED 2026-08-19 — operator upheld the challenge.** Presented the three options (re-scope /
+drop A entirely / write the T5 file as literally briefed) with the duplication evidence verified
+independently: `git show --name-only 45ea9f7e9` lists both learning files, so the `/compound`
+obligation was discharged inside the merge itself. Operator chose **re-scope**. The plan default
+above is now the approved path; the fallback is retired and must NOT be taken by review.
+
 ### D2 — Scope widens to all three unconditional sites
 
 The brief scoped deletion to pr-trailer *"unless the review phase argues otherwise."* **Review argued
@@ -171,6 +177,13 @@ otherwise, and the argument is new information the brief could not have had:**
 - Holding narrow cost ~35 lines of plan and two ACs to justify not making a two-line change.
 
 **Decision: widen to sites #1–#3.** The four guarded sites stay out of scope on any reading.
+
+**RESOLVED 2026-08-19 — operator approved the widening and the §D3 replacement together.** The brief's
+"unless the review phase argues otherwise" pre-authorization was not taken silently: the deviation was
+put to the operator explicitly, against the alternative of deleting in `pr-trailer.yml` alone, with the
+AC8 vacuity evidence confirmed independently (all four guarded `jq` sites sit behind
+`if: steps.diff.outputs.no_new_skills == 'false'`; only the install step is unconditional). Operator
+chose replace-across-three.
 
 ### D3 — Replace the step; do not merely delete it
 
