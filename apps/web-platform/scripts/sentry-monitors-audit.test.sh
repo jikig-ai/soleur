@@ -500,9 +500,9 @@ d="$dir"
 STUB
   cat >> "$dir/respond.sh" <<'STUB'
 case "$URL" in
-  */monitors/*|*/monitors/)   printf '200\t-\t%s\n' "$d/empty.json" ;;
-  */workflows/*|*/workflows/) printf '200\t-\t%s\n' "$d/empty.json" ;;
-  */detectors/*|*/detectors/) printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */monitors/*|*/monitors/|*/monitors/\?*)   printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */workflows/*|*/workflows/|*/workflows/\?*) printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */detectors/*|*/detectors/|*/detectors/\?*) printf '200\t-\t%s\n' "$d/empty.json" ;;
   */releases/*|*/releases/)   printf '201\t-\t-\n' ;;
   */projects/*/)              printf '200\t-\t-\n' ;;
   */organizations/*/)         printf '200\t-\t%s\n' "$d/org.json" ;;
@@ -580,9 +580,9 @@ d="$TMP16"
 STUB
 cat >> "$TMP16/respond.sh" <<'STUB'
 case "$URL" in
-  */workflows/*|*/workflows/) printf '410\t%s\t%s\n' "$d/dep.hdr" "$d/gone.json" ;;
-  */monitors/*|*/monitors/)   printf '200\t-\t%s\n' "$d/empty.json" ;;
-  */detectors/*|*/detectors/) printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */workflows/*|*/workflows/|*/workflows/\?*) printf '410\t%s\t%s\n' "$d/dep.hdr" "$d/gone.json" ;;
+  */monitors/*|*/monitors/|*/monitors/\?*)   printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */detectors/*|*/detectors/|*/detectors/\?*) printf '200\t-\t%s\n' "$d/empty.json" ;;
   */releases/*|*/releases/)   printf '201\t-\t-\n' ;;
   */projects/*/)              printf '200\t-\t-\n' ;;
   */organizations/*/)         printf '200\t-\t%s\n' "$d/org.json" ;;
@@ -629,9 +629,9 @@ d="$TMP17"
 STUB
 cat >> "$TMP17/respond.sh" <<'STUB'
 case "$URL" in
-  */workflows/*|*/workflows/) printf '200\t%s\t%s\n' "$d/dep.hdr" "$d/empty.json" ;;
-  */monitors/*|*/monitors/)   printf '200\t-\t%s\n' "$d/empty.json" ;;
-  */detectors/*|*/detectors/) printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */workflows/*|*/workflows/|*/workflows/\?*) printf '200\t%s\t%s\n' "$d/dep.hdr" "$d/empty.json" ;;
+  */monitors/*|*/monitors/|*/monitors/\?*)   printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */detectors/*|*/detectors/|*/detectors/\?*) printf '200\t-\t%s\n' "$d/empty.json" ;;
   */releases/*|*/releases/)   printf '201\t-\t-\n' ;;
   */projects/*/)              printf '200\t-\t-\n' ;;
   */organizations/*/)         printf '200\t-\t%s\n' "$d/org.json" ;;
@@ -670,9 +670,9 @@ d="$TMP17B"
 STUB
 cat >> "$TMP17B/respond.sh" <<'STUB'
 case "$URL" in
-  */workflows/*|*/workflows/) printf '200\t%s\t%s\n' "$d/dep.hdr" "$d/empty.json" ;;
-  */monitors/*|*/monitors/)   printf '200\t-\t%s\n' "$d/empty.json" ;;
-  */detectors/*|*/detectors/) printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */workflows/*|*/workflows/|*/workflows/\?*) printf '200\t%s\t%s\n' "$d/dep.hdr" "$d/empty.json" ;;
+  */monitors/*|*/monitors/|*/monitors/\?*)   printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */detectors/*|*/detectors/|*/detectors/\?*) printf '200\t-\t%s\n' "$d/empty.json" ;;
   */releases/*|*/releases/)   printf '201\t-\t-\n' ;;
   */projects/*/)              printf '200\t-\t-\n' ;;
   */organizations/*/)         printf '200\t-\t%s\n' "$d/org.json" ;;
@@ -886,10 +886,10 @@ d="$TMP20"
 STUB
 cat >> "$TMP20/respond.sh" <<'STUB'
 case "$URL" in
-  *detectors/?cursor=*) printf '200\t-\t%s\n' "$d/det_p2.json" ;;
-  */detectors/)         printf '200\t%s\t%s\n' "$d/next.hdr" "$d/det_p1.json" ;;
-  */monitors/*|*/monitors/) printf '200\t-\t%s\n' "$d/monitors.json" ;;
-  */workflows/*|*/workflows/) printf '200\t-\t%s\n' "$d/empty.json" ;;
+  *detectors/*cursor=*)        printf '200\t-\t%s\n' "$d/det_p2.json" ;;
+  */detectors/|*/detectors/\?*) printf '200\t%s\t%s\n' "$d/next.hdr" "$d/det_p1.json" ;;
+  */monitors/*|*/monitors/|*/monitors/\?*) printf '200\t-\t%s\n' "$d/monitors.json" ;;
+  */workflows/*|*/workflows/|*/workflows/\?*) printf '200\t-\t%s\n' "$d/empty.json" ;;
   */releases/*|*/releases/)   printf '201\t-\t-\n' ;;
   */projects/*/)              printf '200\t-\t-\n' ;;
   */organizations/*/)         printf '200\t-\t%s\n' "$d/org.json" ;;
@@ -933,9 +933,9 @@ d="$TMP20B"
 STUB
 cat >> "$TMP20B/respond.sh" <<'STUB'
 case "$URL" in
-  */detectors/*|*/detectors/) printf '200\t%s\t%s\n' "$d/evil.hdr" "$d/empty.json" ;;
-  */monitors/*|*/monitors/)   printf '200\t-\t%s\n' "$d/empty.json" ;;
-  */workflows/*|*/workflows/) printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */detectors/*|*/detectors/|*/detectors/\?*) printf '200\t%s\t%s\n' "$d/evil.hdr" "$d/empty.json" ;;
+  */monitors/*|*/monitors/|*/monitors/\?*)   printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */workflows/*|*/workflows/|*/workflows/\?*) printf '200\t-\t%s\n' "$d/empty.json" ;;
   */releases/*|*/releases/)   printf '201\t-\t-\n' ;;
   */projects/*/)              printf '200\t-\t-\n' ;;
   */organizations/*/)         printf '200\t-\t%s\n' "$d/org.json" ;;
@@ -973,9 +973,9 @@ d="$TMP20C"
 STUB
 cat >> "$TMP20C/respond.sh" <<'STUB'
 case "$URL" in
-  */detectors/*|*/detectors/) printf '200\t%s\t%s\n' "$d/loop.hdr" "$d/empty.json" ;;
-  */monitors/*|*/monitors/)   printf '200\t-\t%s\n' "$d/empty.json" ;;
-  */workflows/*|*/workflows/) printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */detectors/*|*/detectors/|*/detectors/\?*) printf '200\t%s\t%s\n' "$d/loop.hdr" "$d/empty.json" ;;
+  */monitors/*|*/monitors/|*/monitors/\?*)   printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */workflows/*|*/workflows/|*/workflows/\?*) printf '200\t-\t%s\n' "$d/empty.json" ;;
   */releases/*|*/releases/)   printf '201\t-\t-\n' ;;
   */projects/*/)              printf '200\t-\t-\n' ;;
   */organizations/*/)         printf '200\t-\t%s\n' "$d/org.json" ;;
@@ -1132,35 +1132,44 @@ rm -rf "$TMP23C"
 # several places, and a body-grep sees comments too.
 # ------------------------------------------------------------------------
 echo "T22: assembly — every Sentry call goes through curl_retry"
-# `grep -v` exits 1 when it emits nothing (an all-comment file), and this is a
-# bare assignment under `set -eu` — the same class this PR fixed in the script
-# itself, caught here by scripts/lint-shell-capture-exit.
+# `grep -v` exits 1 when it emits nothing, and this is a bare assignment under
+# `set -eu` — the class this PR fixed in the script itself, caught here by
+# scripts/lint-shell-capture-exit.
 sut_code=$(grep -vE '^[[:space:]]*#' "$SCRIPT" || true)
-# A bare `curl` invocation is one not preceded by `_` (curl_retry) and not the
-# seam variable. `-w` here is the word-boundary class, not curl's flag.
-bare_lines=$(grep -nE '(^|[^_[:alnum:]$"])curl[[:space:]]' <<<"$sut_code" \
-  | grep -vE 'curl_retry|CURL_BIN' || true)
+
+# Count EXECUTIONS, not spellings.
+#
+# The first version counted a bare `curl` token and filtered out any line
+# mentioning `CURL_BIN`. Both halves were wrong, and BOTH bypasses were proven
+# to ship at full green: `"$CURL_BIN" … https://…/teams/` was deleted by the
+# CURL_BIN filter before counting, and `"curl" …` escaped the
+# `[^_[:alnum:]$"]` prefix class because `"` is inside it. Each is a real
+# Sentry request carrying the production token, outside the tripwire — the
+# exact defect T22 exists to catch, in T22.
+#
+# The property: curl is EXECUTED in exactly three places — once inside
+# curl_retry via the seam variable, and twice at the enumerated exemptions.
+n_seam=$(grep -cE '(^|[[:space:]]|\$\()"?\$\{?CURL_BIN\}?"?[[:space:]]' <<<"$sut_code" || true)
+bare_lines=$(grep -nE '(^|[[:space:]]|\$\()"?curl"?[[:space:]]' <<<"$sut_code" \
+  | grep -vE 'curl_retry' || true)
 n_bare=$(printf '%s' "$bare_lines" | grep -c . || true)
-# The invocation and its URL are on different physical lines (backslash
-# continuations), so identifying WHICH bypass each site is needs the following
-# lines too — a line-local grep for `users/me/` finds nothing and the check
-# would fail against a perfectly correct file.
-bare_sites=$(grep -E -A3 '(^|[^_[:alnum:]$"])curl[[:space:]]' <<<"$sut_code" \
-  | grep -vE 'curl_retry|CURL_BIN' || true)
+bare_ctx=$(grep -E -A3 '(^|[[:space:]]|\$\()"?curl"?[[:space:]]' <<<"$sut_code" \
+  | grep -vE 'curl_retry' || true)
+
 # Exempt, with reasons:
-#   1. the region-probe loop — runs BEFORE api_host is resolved, so there is
-#      no validated host to attach a tripwire to, and it probes /users/me/
-#      rather than a deprecated collection endpoint.
-#   2. Gate 3's cleanup DELETE — best-effort teardown of the write probe; its
-#      response is discarded by design (`|| true`), so it has no verdict to
-#      carry and must not be able to fail the audit.
-n_exempt=2
-if [[ "$n_bare" == "$n_exempt" ]] \
-   && grep -q 'users/me/' <<<"$bare_sites" \
-   && grep -q 'X DELETE' <<<"$bare_sites"; then
-  pass "exactly the 2 enumerated bypasses use bare curl; every other Sentry call is chokepointed"
+#   1. the region-probe loop — runs BEFORE api_host is resolved, so there is no
+#      validated host to attach a tripwire to, and it probes /users/me/.
+#   2. Gate 3's cleanup DELETE — best-effort teardown whose response is
+#      discarded by design (`|| true`), so it carries no verdict.
+# HONEST SCOPE: those two DO issue real Sentry requests whose headers the
+# tripwire never reads. This asserts every request THROUGH THE CHOKEPOINT is
+# monitored — not that every Sentry response is.
+if [[ "$n_seam" == "1" ]] && [[ "$n_bare" == "2" ]] \
+   && grep -q 'users/me/' <<<"$bare_ctx" \
+   && grep -q 'X DELETE' <<<"$bare_ctx"; then
+  pass "curl executes in exactly 3 places: the curl_retry seam + the 2 enumerated bypasses"
 else
-  fail "bare-curl call sites changed: found $n_bare, expected $n_exempt"
+  fail "curl execution sites changed: seam=$n_seam (expect 1), bare=$n_bare (expect 2)"
   printf '%s\n' "$bare_lines" >&2
   echo "    If you added a Sentry call, route it through curl_retry (so the" >&2
   echo "    deprecation tripwire sees it) or add it here WITH a reason." >&2

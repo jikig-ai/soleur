@@ -575,8 +575,25 @@ declare -A FETCH_HDR=()
 FETCH_BODY=""
 sentry_fetch_collection() {  # $1 label, $2 path after /api/0/
   local label="$1" path="$2"
-  local page=1 acc='[]' body url qs=""
-  local base="https://${api_host}/api/0/${path}"
+  local page=1 body url qs=""
+  # Accumulate pages in a FILE, never in an argv-passed variable.
+  #
+  # The previous form was `acc=$(jq -n --argjson a "$acc" --argjson b "$body" '$a + $b')`.
+  # `--argjson` passes the whole accumulator as ONE argv entry, and Linux caps
+  # a single entry at MAX_ARG_STRLEN (32 * 4096 = 131072 B) — a kernel constant
+  # unrelated to ARG_MAX, so `getconf ARG_MAX` (2097152 here) gives no warning.
+  # Measured: 128640 B accumulates fine, 134000 B dies with
+  # `jq: Argument list too long` and rc=126.
+  #
+  # That fails UPSTREAM of the shape check, so it bypasses the entire
+  # self-naming diagnostic this change exists to build — the operator gets one
+  # cryptic line and no report. It also fires well below the advertised
+  # MAX_PAGES ceiling: at realistic Sentry object sizes the real limit was a
+  # few hundred rows, not 50 pages. `jq -s` reads the file directly, so no
+  # argv is involved and the O(pages^2) re-serialisation goes away too.
+  local pages_file="$AUDIT_SCRATCH/pages.$label"
+  : > "$pages_file"
+  local base="https://${api_host}/api/0/${path}?per_page=100"
   while :; do
     url="${base}${qs}"
     body=$(curl_retry -s --max-time 10 \
@@ -584,7 +601,14 @@ sentry_fetch_collection() {  # $1 label, $2 path after /api/0/
     # Snapshot the shared last-header file under this label. Without the copy
     # the shape check below would read whichever fetch ran LAST, and would
     # report the wrong endpoint's deprecation headers against a failure.
-    cp -f "$CURL_LAST_HDR_FILE" "$AUDIT_SCRATCH/hdr.$label" 2>/dev/null || true
+    if ! cp -f "$CURL_LAST_HDR_FILE" "$AUDIT_SCRATCH/hdr.$label" 2>/dev/null; then
+      # Silent here would make the diagnostic drop x-sentry-deprecation-date
+      # and x-sentry-replacement-endpoint — the two fields the release caller
+      # now tells the operator to read FIRST — and make "no deprecation
+      # header" indistinguishable from "header lost".
+      echo "::warning::could not snapshot response headers for ${label}; the failure diagnostic will omit deprecation headers." >&2
+      : > "$AUDIT_SCRATCH/hdr.$label"
+    fi
     FETCH_STATUS["$label"]="$(curl_retry_status)"
     FETCH_URL["$label"]="$url"
     FETCH_HDR["$label"]="$AUDIT_SCRATCH/hdr.$label"
@@ -596,7 +620,7 @@ sentry_fetch_collection() {  # $1 label, $2 path after /api/0/
       FETCH_BODY="$body"
       return 0
     fi
-    acc=$(jq -c -n --argjson a "$acc" --argjson b "$body" '$a + $b')
+    printf '%s\n' "$body" >> "$pages_file"
 
     sentry_next_cursor "${FETCH_HDR[$label]}"
     [[ -z "$SENTRY_NEXT_CURSOR" ]] && break
@@ -606,9 +630,10 @@ sentry_fetch_collection() {  # $1 label, $2 path after /api/0/
       break
     fi
     page=$(( page + 1 ))
-    qs="?cursor=${SENTRY_NEXT_CURSOR}"
+    # `&` not `?`: the base already carries per_page.
+    qs="&cursor=${SENTRY_NEXT_CURSOR}"
   done
-  FETCH_BODY="$acc"
+  FETCH_BODY=$(jq -c -s 'add // []' "$pages_file")
 }
 
 # Cursor-following is MANDATORY for monitors and detectors, not optional.
@@ -709,7 +734,14 @@ for label in monitors workflows detectors; do
       echo "  verdict:      ${verdict}"
       echo "  body (first 500 bytes):"
     } >&2
-    printf '%s\n' "$payload" | head -c 500 >&2
+    # NOT `printf … | head -c 500`: once the payload exceeds the 64 KiB pipe
+    # buffer, head exits, printf takes SIGPIPE, and under `set -o pipefail`
+    # the pipeline returns 141 — which `set -e` raises BEFORE the `exit 1`
+    # below. The plan declares the non-zero exit as the load-bearing signal,
+    # and 141 vs 1 is a distinction a caller keying on exit codes gets wrong.
+    # Parameter expansion needs no subprocess and cannot SIGPIPE.
+    printf '%s\n' "${payload:0:500}" >&2
+    echo "  --- end body ---" >&2
     exit 1
   fi
 done
@@ -751,7 +783,12 @@ fi
 # Class D block below relies on, verified live: 55 detector names, 55 monitor
 # slugs, exact set match in both directions.
 
-monitor_slugs=$(jq -r '.[].slug // empty' <<<"$monitors_json")
+# `sort -u`: pagination concatenates pages, and Sentry's offset cursors shift
+# under concurrent mutation — a monitor deleted between page N and N+1 repeats
+# a row. Undeduped, that double-counts Class D and doubles the dollar figure
+# rendered into the Article 30 artifact. (Unreachable before this change: a
+# single unpaginated page cannot repeat a slug.)
+monitor_slugs=$(jq -r '.[].slug // empty' <<<"$monitors_json" | sort -u)
 
 # A synthetic `[]` (the hermetic default for tests that predate detectors) is
 # NOT evidence of a clean org and must not be reported as one. This is the only
@@ -791,7 +828,11 @@ cron_detector_count=$(jq 'length' <<<"$cron_detectors")
 # Class B under-reports a real orphan with no signal anywhere. Resolving per
 # detector removes that state by construction rather than warning about it.
 cron_detector_slugs=$(jq -r '.[] | (.dataSources[]?.queryObj.slug // .name // empty)' <<<"$cron_detectors" | sort -u)
-structured_slug_count=$(jq '[ .[] | select(.dataSources[]?.queryObj.slug) ] | length' <<<"$cron_detectors")
+# `select(.dataSources[]?.queryObj.slug)` emits the input ONCE PER truthy
+# value, so one detector with two structured data sources counts as 2 — the
+# report could print `MIXED — 2/1 structured`, which discredits the very
+# counter that exists to make the binding auditable. `any(...)` collapses it.
+structured_slug_count=$(jq '[ .[] | select(any(.dataSources[]?; .queryObj.slug)) ] | length' <<<"$cron_detectors")
 if (( structured_slug_count == cron_detector_count )) && (( cron_detector_count > 0 )); then
   binding_source="structured (dataSources[].queryObj.slug) for all ${cron_detector_count}"
 elif (( structured_slug_count == 0 )); then
@@ -846,7 +887,7 @@ if (( detectors_evaluated == 1 )); then
     if ! printf '%s\n' "$monitor_slug_set" | grep -qFx -- "$ref"; then
       orphan_alerts+=("$ref")
     fi
-  done <<<"$(printf '%s\n' "$cron_detector_names" | sort -u)"
+  done <<<"$cron_detector_names"
 fi
 
 # Class C — workflows with no actions anywhere.
@@ -870,14 +911,17 @@ done < <(jq -r '
 # against the FULL ROOT — so an undeclared live monitor is no longer a
 # harmless bookkeeping gap: it is spend Terraform will never reclaim, because
 # only a resource that once existed in the config can be destroyed by removing
-# it. Live monitors grew 8 → 49 in two months and never decreased while
+# it. Live monitors grew 8 → 49 → 55 and never decreased while
 # deletion was a silent no-op; each undeclared monitor bills $0.78/mo forever.
 #
 # Slug↔declaration relation: Sentry derives the monitor slug by slugifying the
 # resource's `name`. Every `sentry_cron_monitor` in this root already sets a
 # kebab-case `name`, so slugification is the identity and `name` == live slug
-# — verified against the live org: 49 `resource "sentry_cron_monitor"` blocks,
-# 49 `name =` attributes, 49 live monitors, exact set match.
+# — re-verified 2026-08-19 against the live org: 55 `resource
+# "sentry_cron_monitor"` blocks, 55 `name =` attributes, 55 live monitors,
+# exact set match in both directions. (This comment read 49 until #7590; the
+# figure had gone stale while reading as "verified".) Re-derive rather than
+# trusting it:  grep -c '^resource "sentry_cron_monitor"' ../infra/sentry/*.tf
 CRON_MONITOR_MONTHLY_USD="0.78"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -940,7 +984,7 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" || -n "${SENTRY_TF_DIR:-}" ]]; then
   # Zero declarations parsed against a non-empty live org means the anchor broke
   # (e.g. a reformat moved `resource` off column 0), not that every monitor is
   # orphaned. Erroring here is still fail-closed, but it names the real defect
-  # instead of flooding the operator with 49 bogus orphans.
+  # instead of flooding the operator with one bogus orphan per live monitor.
   if [[ -z "$declared_slugs" && "$(jq 'length' <<<"$monitors_json")" != "0" ]]; then
     echo "ERROR: no sentry_cron_monitor declarations parsed from ${tf_dir}/*.tf while the API returned live monitors — Class D extraction is broken; refusing to report every live monitor as an orphan. Refs #6589." >&2
     exit 1
@@ -1037,6 +1081,8 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
   # 8/8 -> 55/55 across this change under a different definition).
   printf -- '- **Source endpoints:** `organizations/{org}/monitors/`, `organizations/{org}/workflows/`, `organizations/{org}/detectors/`\n'
   printf -- '- **Orphan predicate generation:** 2 (#7590 — Class A/B rebound onto cron detectors; generation 1 keyed on `monitor.slug`, which never matched)\n'
+  printf -- '- **Class D state half:** %s\n' \
+    "$( (( class_d_state_unknown == 1 )) && echo "absent — Class D unresolved" || echo "injected" )"
   printf -- '- **Enumeration complete:** %s\n\n' "$( (( LINK_UNFOLLOWED == 0 )) && echo yes || echo "NO — ${LINK_UNFOLLOWED} unfollowed cursor(s)")"
 
   printf '## Monitors\n\n'
@@ -1089,6 +1135,21 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
   # artifact is the exact failure mode this whole change exists to remove.
   if (( detectors_evaluated == 0 )); then
     printf 'Classes A and B **NOT EVALUATED** — the detectors payload was not obtained on this run, so no statement is made about monitor routing. Classes C and D below were evaluated.\n\n'
+  elif (( class_d_state_unknown == 1 )) && (( ${#class_d_unresolved[@]} > 0 )); then
+    # Class D is the class with teeth (unreclaimable spend) and it is the one
+    # the clean string used to assert hardest. Without the Terraform state half
+    # a live-but-undeclared monitor is UNRESOLVED, not clean — and passing no
+    # state half is the DEFAULT for two of the three callers, including the one
+    # that uploads this file as the Article 30 release asset. So the artifact
+    # was asserting "D … clean" in the only configuration where D cannot be
+    # measured. Enumerate the candidates here rather than only on stderr.
+    printf 'Class D **NOT EVALUATED** — %d live monitor(s) have no declaring `.tf` block, but Terraform state was not provided, so a pending destroy cannot be told from an unreclaimable orphan. Classes A, B and C below were evaluated.\n\n' \
+      "${#class_d_unresolved[@]}"
+    printf '_Class D candidates (unresolved):_\n\n'
+    for slug in "${class_d_unresolved[@]}"; do
+      printf -- '- `%s`\n' "$slug"
+    done
+    printf '\n'
   elif (( LINK_UNFOLLOWED > 0 )); then
     printf 'Enumeration was **INCOMPLETE** (%d unfollowed cursor(s)), so no clean verdict is issued: an unenumerated page can hold an orphan of any class.\n\n' "$LINK_UNFOLLOWED"
   elif (( total_orphans == 0 )); then
@@ -1124,7 +1185,7 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
       printf -- '- Invariant `class_a_count == cron_detector_count` DOES NOT HOLD: %s of %s cron detectors now route through a workflow. Routing changed since the last report — confirm it was intended.\n' \
         "$(( cron_detector_count - class_a_count ))" "$cron_detector_count"
     fi
-    printf -- '\n_Not enumerated per-slug by design: every slug already appears in the `## Monitors` table above, and 55 identical bullets per run is noise. The machine-checked invariant lives in `sentry-monitors-audit.test.sh`._\n\n'
+    printf -- '\n_Not enumerated per-slug by design: every slug already appears in the `## Monitors` table above, and %s identical bullets per run is noise. The machine-checked invariant lives in `sentry-monitors-audit.test.sh`._\n\n' "$cron_detector_count"
   fi
 
   if (( ${#orphan_live_monitors[@]} > 0 )); then
