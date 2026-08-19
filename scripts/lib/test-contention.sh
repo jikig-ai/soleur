@@ -474,6 +474,8 @@ tc_preamble() {
   # measured 4 siblings" from "an ancestor measured 4 siblings and told me", which is the
   # DECLARED antecedent ADR-194 exists to move away from. This stamp is what makes the count
   # this process's own measurement; it does not survive a fork/exec, which is exactly the point.
+  # shellcheck disable=SC2034  # read by scripts/test-all.sh, which SOURCES this lib, so the
+  # variable is in scope there; it is deliberately NOT exported, which is the whole point.
   TC_SIBLING_RUN_COUNT_PID=$$
 
   if (( sib_count > 0 )); then
