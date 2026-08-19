@@ -5,9 +5,14 @@
 # checks JSON, and from infra/github/ruleset-ci-required.tf. The claim was
 # false in two places and is corrected rather than made true: this job calls
 # the LIVE Sentry API, whose own history here holds three vendor-caused reds
-# in three months (500, 504, timeout), so requiring it would hand merge
-# control to a vendor's uptime. The honest sequencing is to split the
-# fail-closed gating half from the advisory reporting half first.
+# in three months — Gate 3 `504` (2026-08-06), Gate 3 `208` (2026-05-26) and
+# org-GET `500` (2026-05-26), none of them retried — so requiring it would
+# hand merge control to a vendor's uptime. That triple IS the argument, so it
+# is quoted from the evidence it comes from rather than paraphrased: an
+# earlier form of this line read "(500, 504, timeout)", which substituted a
+# transport class for the 208 and thereby dropped the write-probe idempotency
+# case — the one red a retry cannot help with. The honest sequencing is to
+# split the fail-closed gating half from the advisory reporting half first.
 #
 # Runs the 4-gate destination-controllability audit (PR-β §10 / Branch-C C5)
 # against the prod Sentry org on every PR that diffs:

@@ -491,7 +491,12 @@ under the required `test` check". They already do. The recommendation is re-deri
 
 What survives, and is sufficient:
 - The job calls the **live Sentry API**, and its own history holds three vendor-caused reds in three
-  months (500, 504, timeout). Requiring it hands merge control to a vendor's uptime.
+  months — the H3 row above: Gate 3 `504` (08-06), Gate 3 `208` (05-26), org-GET `500` (05-26).
+  Requiring it hands merge control to a vendor's uptime. (An earlier form of this line read
+  "500, 504, timeout", which does not match H3: it substitutes a transport class for the `208` and
+  so drops the write-probe idempotency red — the one a retry cannot help with, and the reason
+  Decision 5 excludes writes from status retry. The triple is the whole argument, so it is quoted
+  from H3 rather than paraphrased.)
 - It is absent from `scripts/required-checks.txt`, the canonical JSON, and
   `infra/github/ruleset-ci-required.tf` — while its header falsely claims required status in **two**
   places. Correct the claim; do not change the status.

@@ -14,6 +14,17 @@
 # monitor_ids binding — see ADR-031 §Amendment 2026-07-17. Provider
 # source rationale + escape-hatch documented in
 # knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md.
+#
+# Superseded 2026-08-19 (#7590): "the 410 was transient" above is the
+# 2026-07-17 reading, kept as the dated measurement it was — the re-probe
+# genuinely did come back clean. It was not transient. Sentry deprecated this
+# API family on 2026-05-14 and serves it under scheduled BROWNOUTS: 410 for a
+# window on a recurring schedule, 200 the rest of the time. A follow-up probe
+# minutes later cannot distinguish "restored" from "outside the next window",
+# which is exactly the inference recorded here. The bump remains correct and
+# remains the right fix for THIS root; only the transience claim is retracted.
+# Read ADR-031 §Amendment 2026-08-19 (#7590) before acting on the paragraph
+# above.
 terraform {
   required_version = ">= 1.6"
 

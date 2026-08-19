@@ -118,8 +118,15 @@ change"*. The plan recommends **not** requiring it.
 
 So the recommendation must be re-derived without it. The substantive arguments against requiring the
 gate survive intact — it calls the live Sentry API, and its own history holds three vendor-caused
-reds in three months (500, 504, timeout). But the plan can no longer claim it is *banking new
-deterministic coverage* in exchange.
+reds in three months: Gate 3 `504` (08-06), Gate 3 `208` (05-26), org-GET `500` (05-26), per the
+plan's H3 row. But the plan can no longer claim it is *banking new deterministic coverage* in
+exchange.
+
+(Corrected 2026-08-19. This line read "(500, 504, timeout)" until review; the plan header and
+`sentry-audit-gate.yml` carried the same wrong triple. It substitutes a transport class for the
+`208`, dropping the write-probe idempotency red — the one red a retry cannot help with, which is
+exactly why Decision 5 keeps writes off status retry. The triple is the argument, so it now quotes
+H3 verbatim at all three sites.)
 
 **Recommendation.** Keep "not yet", on the vendor-availability argument alone. The honest follow-up
 is UC-3's split: once a hermetic gates-only mode exists, requiring *that* is the version of this
