@@ -81,7 +81,7 @@ only the zero-exit case, so every *non-zero* harness defect fell through to the 
 mistyped `-v` source makes docker exit 125 with no marker, and that is a bug in the suite, not a
 statement about the network. The classes the decline is actually justified for are enumerated once
 (`100` apt under the container's outer `set -e`; `125` docker CLI / image pull) and read by both
-the routing predicate and the operator-facing classification, so the two cannot drift apart.
+the routing predicate and the classification printed in the NOTE, so the two cannot drift apart.
 `125` is retained in that list only because a companion structural check now asserts every mount
 source exists before the run, which removes the harness half of 125 rather than trying to classify
 docker's error text.
