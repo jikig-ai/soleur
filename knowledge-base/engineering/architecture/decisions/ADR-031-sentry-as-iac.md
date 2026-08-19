@@ -499,7 +499,17 @@ reads refreshed on every PR and on the main apply — so the transient 410 wedge
 **Measurement (Phase 0, the load-bearing gate).** Run against **live** Sentry state
 2026-07-17: `terraform plan` on the pinned `0.15.0-beta2` returned a clean full-root no-op
 (0/0/0) with **zero 410s** — the retirement was transient and Sentry had restored the legacy
-endpoint. So the 410 was NOT reproducible-on-beta2 by the time of the fix; a bump was not
+endpoint.
+
+> **Superseded 2026-08-19 (#7590):** the reading "transient, and Sentry had restored the
+> endpoint" was wrong, and the measurement above is exactly what a wrong reading looks like.
+> Sentry deprecated this API family on **2026-05-14** and serves it under scheduled
+> **brownouts** — 410 for a short window on a recurring schedule, 200 the rest of the time. A
+> re-probe minutes later therefore returns a clean 0/0/0 whether the endpoint was restored or
+> merely outside its next window, and the two are indistinguishable from a single follow-up
+> probe. The signal that would have separated them was in the response headers the whole time
+> (`x-sentry-deprecation-date`, `x-sentry-replacement-endpoint`); nothing read them. See
+> Amendment 2026-08-19 (#7590) below. So the 410 was NOT reproducible-on-beta2 by the time of the fix; a bump was not
 *required* to clear it. But the standing deprecation warning ("migrate to `sentry_alert`")
 signals the legacy read path will eventually be retired for real, and the beta pin was itself
 flagged "re-evaluate on first stable".
@@ -530,6 +540,100 @@ which is now satisfied).
 off it (v0.15.3 #885), so this root does not re-wedge on that account. A different provider
 read regression would surface the same way (full-root plan failure → red required gate) and is
 governed by the same #6589 machinery.
+
+**Amendment (2026-08-19, #7590) — the alert-rule API family is deprecated with brownouts,
+not removed; the audit is migrated per-endpoint and the orphan predicate is rebound.**
+
+**What happened.** `Sentry Audit Gate` alternated green and red across consecutive runs on a
+byte-identical script. The alternation was read as flakiness for months. It is a deprecation
+**brownout**: Sentry deprecated the alert-rule API on 2026-05-14 and returns 410 for a short
+window on a recurring schedule. Two consequences follow that a "transient vendor blip" reading
+does not predict — the failure never self-heals, and re-probing after a red reliably "clears"
+it, which is why the 2026-07-17 amendment above reached the wrong conclusion.
+
+**Endpoint mapping, taken from Sentry's own response headers.** Every deprecated 410 carries
+`x-sentry-replacement-endpoint`. The mapping is **per-endpoint**, and this is the load-bearing
+detail: the two endpoints this audit used have DIFFERENT successors, so repointing both at
+`workflows/` would have silently mis-mapped metric alerts onto issue-alert routing.
+
+| Deprecated (410 + headers) | Replacement (200, no deprecation headers) |
+|---|---|
+| `projects/{org}/{proj}/rules/` | `organizations/{org}/workflows/` |
+| `organizations/{org}/alert-rules/` | `organizations/{org}/detectors/` |
+| `organizations/{org}/combined-rules/` | (410; not called by this root) |
+
+Both replacements are **org-scoped**, so the audit's `SENTRY_PROJECT` fetch branch dissolved.
+`SENTRY_PROJECT` still scopes Gates 2 and 3.
+
+**The orphan predicate was already broken, independently of the deprecation.** Classes A and B
+keyed on a `monitor.slug` binding inside rule `.conditions[]`/`.filters[]`. Measured against
+the live org: that key matches **0 rows**, and **0 of 55** monitor slugs appear anywhere in the
+rules payload. It did not fail to survive the migration — it never matched, so Class A had
+flagged every monitor in the org since it shipped. The classes are rebound onto the routing
+graph that actually exists:
+
+    monitor  <--(name)--  cron detector  --(workflowIds)-->  workflow
+
+Class A is now a **count plus a machine-checked invariant**, `class_a_count ==
+cron_detector_count`, asserted in the suite rather than stated here. A literal baseline (55
+today) would go stale the moment monitor 56 lands and could not distinguish ordinary growth
+from a real routing attachment from an extraction failure; the invariant distinguishes all
+three. Deliberately **not** recorded in this ADR: the literal count.
+
+**`curl_retry` never inspected HTTP status.** It retried only when the transport itself failed,
+so the 500 and 504 recorded in the 2026-07-17 amendment were never retried at all. It now
+classifies: 429/5xx retried, 410/404/401/403 never — retrying a 410 would mask a permanent
+sunset as a flake, which is the precise ambiguity that cost this investigation a full session.
+
+**Retry is idempotency-aware.** Gate 3 is a non-idempotent `POST /releases/` whose `probe_ver`
+is computed once, outside the wrapper, and whose check is `!= 201`. Sentry returns **208** when
+the release already exists, so status-retrying a 5xx whose write landed server-side would yield
+a deterministic 208 and a false "token lacks project:releases scope" diagnosis. Write probes
+are excluded from status retry. This failure mode could not occur before only because the
+wrapper never retried on status at all.
+
+**Capture is `-D` only; `-w`/`-o` are forbidden inside the wrapper.** `curl_retry`'s stdout is
+polymorphic — Gates 2/3 pass their own `-o /dev/null -w '%{http_code}'` and read stdout as the
+STATUS, while Gate 1 and every fetch read it as the BODY. A wrapper `-w` after `"$@"` wins
+(duplicate `-w` is last-wins) and turns a healthy body into `[...]200`, firing the new
+diagnostic against a working endpoint.
+
+**The deprecation tripwire and its escalation window.** Any response carrying
+`x-sentry-deprecation-date` now warns — **including a 200**, which is the state these endpoints
+were in for three months while nothing read the header. A perpetual warning is what already
+failed here, so the tripwire escalates to a non-zero exit once the date is within
+`SENTRY_DEPRECATION_FAIL_WINDOW_DAYS` (default 30) or already past. Escape hatch: raise the
+window when an endpoint is deprecated with no replacement shipped yet.
+
+**Pagination follows the cursor, and never the Link target as given.** `detectors/` grows 1:1
+with cron monitors, so a loud-fail-on-truncation arm would — by ordinary monitor growth — red
+this audit *before* the `terraform plan` step in `apply-sentry-infra.yml`, the only path that
+deploys the fix: the detector blocking its own cure, the same deadlock the Class D state half
+exists to avoid. Only the `cursor` parameter is extracted and the URL rebuilt from the
+validated `api_host`. Two independent reasons, and the second is why the obvious hardening is
+wrong: an `@`-bearing target makes curl treat the prefix as userinfo and send the token
+off-box; and Sentry's Link targets point at `sentry.io` even when the request went to the org
+subdomain, so a host-equality check would refuse **every** real pagination and silently
+truncate the audit.
+
+**The id manifest is retired.** Its first-time-import consumer is complete (29
+`sentry_issue_alert` resources, clean full-root plan) and its README runbook was stale by 25
+resources. Rule ids and workflow ids are disjoint identifier spaces, so repointing the manifest
+would have preserved its name and shape while changing its meaning — worse than deleting it.
+
+**Required-check status: unchanged, and the false claim corrected.** `sentry-audit-gate.yml`
+asserted in two places that it was a required check. It is absent from
+`scripts/required-checks.txt`, the canonical required-status-checks JSON, and
+`ruleset-ci-required.tf`. The claim was corrected rather than made true: this job calls the
+live Sentry API, and its own history holds three vendor-caused reds in three months, so
+requiring it would hand merge control to a vendor's uptime. The structural fix — splitting the
+fail-closed gating half from the advisory reporting half behind `AUDIT_MODE=gates` — is
+tracked separately.
+
+**Recurrence.** Any future deprecation of `workflows/`, `detectors/` or `monitors/` now
+self-reports through the tripwire on the first 200 that carries the header, rather than
+surfacing months later as an intermittent red.
+
 
 ## Consequences
 

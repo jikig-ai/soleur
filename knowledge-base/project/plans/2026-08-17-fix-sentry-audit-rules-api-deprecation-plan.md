@@ -854,8 +854,17 @@ All criteria are verifiable pre-merge, in-session or in CI. This plan has no pos
     `Project filter:` frontmatter, the hardcoded clean-state string and the `## Alert Rules` heading
     are all consistent with the new schema.
 17. ADR-031 carries the amendment, and no deprecated-path reference remains uncorrected in its body.
-18. `! grep -qiE 'required.?check' .github/workflows/sentry-audit-gate.yml` — both false claims
-    removed.
+18. Both false required-check claims removed. **AC amended at /work (#7590):** the planned
+    form was `! grep -qiE 'required.?check' <workflow>`, a bare-token negative that cannot
+    distinguish a line ASSERTING required status from prose explaining the job is NOT required
+    — it false-fails on the correction itself, and on the verification recipe the corrected
+    header now carries. Anchored on the assertion shape instead
+    (`cq-assert-anchor-not-bare-token`):
+    ```bash
+    ! grep -qE 'required-check for|REQUIRED-CHECK on' .github/workflows/sentry-audit-gate.yml
+    ```
+    Those are the two literal claims that were present; a bare-token form is strictly weaker
+    here, not stronger.
 19. `reusable-release.yml`'s audit-failure warning no longer quotes an error string the script cannot
     emit and no longer references a `de.sentry.io` default.
 20. The Decision 6 follow-up issue exists with the specified title, labels and first AC.

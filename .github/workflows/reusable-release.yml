@@ -461,7 +461,7 @@ jobs:
           script_rc=$?
           set -e
           if [[ "$script_rc" -ne 0 ]]; then
-            echo "::warning::Sentry migration audit script exited ${script_rc} — no Article 30 evidence uploaded for this release. If the script output reads 'Sentry token not valid against either US or EU ingest', verify SENTRY_API_HOST is reaching the script (defaults to 'de.sentry.io'; override via repo secret if residency changed). If the token is rejected past the probe, rotate per ADR-031 §Authentication."
+            echo "::warning::Sentry migration audit script exited ${script_rc} — no Article 30 evidence uploaded for this release. The script's own stderr names the cause: since #7590 a non-array payload prints http_status, api_host, url, which fetch, any x-sentry-deprecation-date / x-sentry-replacement-endpoint, and a verdict distinguishing 'retries exhausted, RE-RUN' from '410, MIGRATE'. Read that block first. SENTRY_API_HOST has no default and must be the org-subdomain (NOT de.sentry.io, which is ingest-only). If the token is rejected past the probe, rotate per ADR-031 §Authentication."
             exit 0
           fi
           report=$(ls "${RUNNER_TEMP}/sentry-audit"/sentry-migration-audit-*.md 2>/dev/null | head -1 || true)

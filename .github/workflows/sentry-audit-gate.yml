@@ -1,4 +1,13 @@
-# Sentry Audit Gate — required-check for PRs touching Sentry config / IaC.
+# Sentry Audit Gate — ADVISORY check for PRs touching Sentry config / IaC.
+#
+# NOT a required check, despite what this header claimed until #7590. It is
+# absent from scripts/required-checks.txt, from the canonical required-status-
+# checks JSON, and from infra/github/ruleset-ci-required.tf. The claim was
+# false in two places and is corrected rather than made true: this job calls
+# the LIVE Sentry API, whose own history here holds three vendor-caused reds
+# in three months (500, 504, timeout), so requiring it would hand merge
+# control to a vendor's uptime. The honest sequencing is to split the
+# fail-closed gating half from the advisory reporting half first.
 #
 # Runs the 4-gate destination-controllability audit (PR-β §10 / Branch-C C5)
 # against the prod Sentry org on every PR that diffs:
@@ -15,11 +24,13 @@
 #   Gate 4 — DSN org-id doesn't match token org-id (split state)
 # Plus the existing DSN cluster substring residency-mismatch check.
 #
-# This workflow is REQUIRED-CHECK on `main`-bound PRs per infra/github/main.tf
-# ruleset extension (lands in commit B of the §10.5 2-commit sequence).
+# The `main.tf` ruleset extension this header used to cite as making the job
+# mandatory never landed. Verify before re-asserting it:
+#   grep -n 'Sentry Audit Gate' scripts/required-checks.txt \
+#     apps/web-platform/infra/github/ruleset-ci-required.tf
 #
 # Refs: plan knowledge-base/project/plans/2026-05-16-feat-sentry-residency-a2-branch-c-plan.md
-#       (Phase 5 block), parent issue #3861, PR-beta.
+#       (Phase 5 block), parent issue #3861, PR-beta; corrected in #7590.
 
 name: Sentry Audit Gate
 
