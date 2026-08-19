@@ -53,7 +53,7 @@ after plan review. The plan is the source of truth; this is its execution breakd
 - [ ] 2.4 Emit the verdict in `scripts/test-all.sh` between `tc_preamble` and `tc_acquire`. The
       verdict reads value **and** validity flag, never the value alone.
 - [ ] 2.5 Update the lib's `TEST SEAMS` header block: add `TC_WAIT_HEARTBEAT_S` and the
-      pre-existing omission `TC_DF_CMD`.
+      pre-existing omission `TC_DF_CMD`. (Plan Phase 2.1b.)
 - [ ] 2.6 Confirm GREEN; confirm `tc_preamble` stderr byte-identical vs
       `git show origin/main:scripts/lib/test-contention.sh` on a fixed fake `/proc`.
 

@@ -12,6 +12,45 @@ domain: engineering
 brand_survival_threshold: none
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-19
+**Review panel:** dhh-rails-reviewer, kieran-rails-reviewer, code-simplicity-reviewer,
+architecture-strategist, spec-flow-analyzer, cto (plan-review) + verify-the-negative and
+post-edit self-audit passes (deepen-plan Phase 4.45).
+
+### Key improvements
+
+1. **The design was reversed on measured evidence.** v1's hard decline (`exit 4`) was cut after four
+   reviewers converged; the decisive datum is ADR-133's own record of a wait **redeemed at 616 s**
+   that v1 would have refused at t=0. See §Plan Review Reversal.
+2. **The real root cause was found and is now the fix.** `TC_LOCK_TIMEOUT` = 900 s against a ~45-min
+   hold time means the lock expires by construction — which is *why* N runs land together. ADR-133
+   names raising it as an explicitly unconsidered candidate, so it is licensed where the decline was not.
+3. **Two blast-radius consumers v1 missed** were found and are now moot rather than patched:
+   `lefthook`'s `pre-commit` hook (a decline would have blocked `git commit`) and `ship`/`one-shot`'s
+   rc=4 documentation (which would have sent a ship session to the incident-recreating override).
+4. **A P5 hole was closed:** `tc_avail_mb` and its siblings degrade an unreadable probe to `0`, so
+   consuming the value alone would report "could not read" as "critically low". The plan now promotes
+   a validity flag beside each value.
+5. **A `set -e` abort hazard was pinned:** `grep -c` exits 1 on a zero count, and zero siblings is the
+   *expected* post-wait state — so the naive re-sample would abort `tc_acquire` on the common path.
+
+### Verification performed
+
+All 12 factual/negative claims in the plan were independently verified against the code
+(`confirms` on every one), including the EXIT CONTRACT, the promotable `tc_preamble` locals, the
+degrade-to-`0` idiom, `TC_NPROC` fall-through, the lib-stub invariant, `SUITE_GLOBS` exclusion of
+repo-root `scripts/*.test.sh`, `guard-vacuity-floor` auto-enrolment, and the ADR-183 `TEST_GROUP=all`
+pin. `_tc_scan_procs` was measured at **~6.6 s** per walk, which is why the verdict reuses
+`tc_preamble`'s values rather than walking again.
+
+### Halt gates
+
+Phases 4.6 (User-Brand Impact), 4.7 (Observability), 4.8 (PAT-shaped variable), 4.9 (UI wireframe —
+no UI surface), 4.10 (Encryption Posture — no store), and 4.11 (Guard Contract, via
+`lint-guard-contract.py`) all pass.
+
 ## Overview
 
 `scripts/test-all.sh` already measures everything a capacity decision needs, on every run, before
@@ -453,8 +492,14 @@ only Decision 1 reds the floor. All four:
 
 ### Phase 2 — GREEN: promote the measurements, emit the verdict
 
-2.1 In `tc_preamble`, assign `TC_LAST_SIB_COUNT` / `TC_LAST_AVAIL_MB` / `TC_LAST_MEMAVAIL_MB` at
-script scope alongside the existing `printf`s. **Zero output bytes change.**
+2.1 In `tc_preamble`, assign `TC_LAST_SIB_COUNT` / `TC_LAST_AVAIL_MB` / `TC_LAST_MEMAVAIL_MB` **and
+their validity flags `TC_LAST_SIB_COUNT_OK` / `TC_LAST_AVAIL_MB_OK` / `TC_LAST_MEMAVAIL_MB_OK`** at
+script scope alongside the existing `printf`s, each flag set from the shape assertion the function
+already performs. The flags are required by D1, AC5(b) and M11b — without them an unparseable `df`
+degrades to `0` and reads as `CONTENDED`, not `UNKNOWN`. **Zero output bytes change.**
+2.1b Update the lib's **`TEST SEAMS` header block**, which enumerates the overridable seams: add
+`TC_WAIT_HEARTBEAT_S` (new in Phase 4) and `TC_DF_CMD` (a pre-existing omission — the seam exists and
+the suite uses it, but the block never listed it).
 2.2 Add `tc_capacity_line()` to `scripts/lib/test-contention.sh`, **defined before `tc_acquire`** so
 the lib-stub block's "LAST-defined function" invariant still holds, and add a matching stub to that
 block emitting `CAPACITY_UNKNOWN reason=lib_unavailable`.
@@ -551,6 +596,9 @@ contention passage. No rc-contract change.
   completes — the verdict never silently vanishes.
 - **AC16** The diff report names touched shards and does **not** recommend narrowing under
   `TEST_GROUP=all`.
+- **AC16b** With an undeterminable diff (no `origin/main`, shallow clone, fresh repo) the report emits
+  a **named** "diff undeterminable" line rather than nothing, and with a diff touching only
+  `scripts/` it names `scripts` and not `webplat`. (Without this, M20 and M21 cite no criterion.)
 - **AC17** No exit code changes: `git diff origin/main -- scripts/test-all.sh` shows no edit to any
   `exit` statement, and the EXIT CONTRACT block is unmodified.
 - **AC18** `bash scripts/lint-orphan-test-suites.sh` exits 0 and reports no orphan, **and** the
@@ -626,7 +674,7 @@ any exit code.
 | # | Mutation | Must redden because |
 |---|---|---|
 | M12 | Move the branch below `tc_acquire` | AC8 — a `LOCK_` line appears |
-| M13 | Make it `exit 1` on a contended box | AC8 — the query must never gate |
+| M13 | Make it `exit 1` on a contended box | **H5** — the must-PASS contended fixture is what pins exit 0 under contention; AC8 alone pins only the general case |
 | M14 | Let it fall through into the suite loop | AC8 — the recorder logs suite invocations |
 
 **Harness row:** H5 — **must-PASS**: `--capacity` on a *contended* fake box still exits 0.
@@ -663,8 +711,8 @@ structurally, since the function's contract is defined over *all* its exits.
 | # | Mutation | Must redden because |
 |---|---|---|
 | M19 | Recommend a shard under `TEST_GROUP=all` | AC16 — ADR-183 Ceiling 1 |
-| M20 | Delete the undeterminable-diff arm | the empty-diff fixture emits nothing |
-| M21 | Hardcode the report to always name all four shards | the single-shard fixture's assertion fails |
+| M20 | Delete the undeterminable-diff arm | **AC16b** — the undeterminable-diff fixture emits nothing instead of a named line |
+| M21 | Hardcode the report to always name all four shards | **AC16b** — the `scripts/`-only fixture would also name `webplat` |
 
 **Harness row:** H7 — **must-PASS**: a diff touching only `scripts/` names `scripts`, not `webplat`.
 
