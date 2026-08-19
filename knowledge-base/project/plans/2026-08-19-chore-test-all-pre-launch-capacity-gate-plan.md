@@ -767,19 +767,38 @@ structurally, since the function's contract is defined over *all* its exits.
 Every scenario is "mutation → guard reddens"; the matrix (M1-M21, H1-H7) is authoritative.
 Additionally:
 
+**Amended 2026-08-20 after review.** Scenarios 9 and 11 described behaviour that was CUT on review
+evidence; leaving them would make this section assert features that do not exist. Corrected in place
+with the reason, rather than deleted, so the next reader inherits the decision:
+
 1. Healthy fake box ⇒ `CAPACITY_OK` with measured values.
-2. One sibling ⇒ `CAPACITY_CONTENDED reason=sibling_runs measured=1 threshold=1`.
-3. Two PIDs in one worktree ⇒ `siblings=1`.
+2. One sibling runner ⇒ `CAPACITY_CONTENDED reason=sibling_runs measured_runs=1 threshold=1`.
+3. Two PIDs in one worktree ⇒ `measured_runs=1` (distinct worktrees, not pids).
 4. tmpfs 1023 / 1024 / 3000 MB ⇒ contended / not / not.
-5. Each degraded input ⇒ `CAPACITY_UNKNOWN` with the right `reason=`.
+5. Each degraded input ⇒ `CAPACITY_UNKNOWN` with the right `reason=`, and the degraded field
+   rendered as `?` rather than a digit.
 6. Mixed degraded + over-threshold ⇒ `CONTENDED`, degraded reading named.
-7. `--capacity` on healthy and contended boxes ⇒ exit 0 both times, zero suites, no `LOCK_` line.
-8. Verdict sibling count == banner sibling count in one run.
-9. `tc_acquire` returns 0 on every arm; heartbeat emits holder identity; contended banner re-samples.
-10. Lib absent ⇒ `CAPACITY_UNKNOWN reason=lib_unavailable`, run completes.
-11. Diff touching only `scripts/` ⇒ names `scripts`; under `TEST_GROUP=all` ⇒ no narrowing advice.
-12. `-live` calibration: real `/proc/meminfo`, `nproc`, `df` readable and numeric.
-13. `git diff origin/main -- scripts/test-all.sh` shows no modified `exit` statement (AC17).
+7. `--capacity` on healthy and contended boxes ⇒ exit 0 both times, zero suites, no `LOCK_` line,
+   and NO second `/proc` walk (asserted structurally — two walks agree on a hermetic fixture).
+8. Verdict runner count == banner runner count in one run.
+9. `tc_acquire` returns 0 on every arm; the heartbeat emits the LOCK NAME and a measured elapsed;
+   the contended banner re-samples. **AMENDED:** this scenario said "heartbeat emits holder
+   identity". Holder identification was cut — it took `head -1` of a `/proc` walk, which named a
+   fellow *waiter* ~83% of the time on the pileup this feature exists for, and cost ~313 CPU-seconds
+   per wait on a fork-starved box.
+10. Lib absent, or present-but-incomplete (version skew) ⇒ `CAPACITY_UNKNOWN reason=lib_unavailable`,
+    run completes. **WIDENED:** skew was the reachable case and exited 127 with no summary.
+11. **REMOVED.** The diff-justification report was cut: it could not change a decision under either
+    `TEST_GROUP` value (forbidden from advising under `all` by ADR-183, redundant under an explicit
+    shard), it was a fifth hand-written prefix list where this issue asked for reuse of
+    `test-relevance-paths.sh`, and it was already wrong on `.github/`, `CLAUDE.md` and
+    `apps/cla-evidence/`.
+12. Sibling SUITES alone (no runners) ⇒ `CAPACITY_CONTENDED reason=sibling_suites`. **ADDED:** the
+    first draft promoted only the runner count, so a box whose own `SIBLING_SUITE_DETECTED` banner
+    was firing read as `CAPACITY_OK`.
+13. A non-numeric `TC_MIN_AVAIL_MB` ⇒ `reason=unusable_floor`, never `CAPACITY_OK`. **ADDED:** `2G`
+    printed `CAPACITY_OK` on a tmpfs with 4 MB free.
+14. `git diff origin/main -- scripts/test-all.sh` shows no modified `exit` statement (AC17).
 
 ## Sharp Edges
 
