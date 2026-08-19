@@ -745,7 +745,18 @@ resource "terraform_data" "zot_consumer_probe_install" {
 # Detection for the twelve-day dark-host outage, installed on the CONSUMER. Nothing here touches
 # 10.0.1.40, which is the point: cloud-init/bootstrap changes reach that host ONLY via
 # `apply_target=inngest-host-replace`, so anything installed there ships no detection until a
-# replace is dispatched. This block is inside the per-merge `-target=` set, so it works on merge.
+# replace is dispatched.
+#
+# GROUP BY TRANSPORT, NOT BY FEATURE (#7539). This resource is SSH-provisioned against web-1, so it
+# belongs to the apply job's POST-BRIDGE stage — the one that runs after `cf-tunnel-ssh-bridge`
+# exports TF_VAR_ci_ssh_private_key — alongside its three structurally identical siblings
+# (private_nic_guard_install, zot_consumer_probe_install, git_data_probe_install). It shipped in the
+# BRIDGE-LESS stage instead, batched next to the other inngest-consumer resources
+# (betteruptime_heartbeat.inngest_consumer, doppler_secret.inngest_consumer_url) by feature; those
+# two are non-SSH and belong there, this one did not. It reddened main's apply for six consecutive
+# pushes. Both stages run per-merge, so "it works on merge" was true of either and is not the
+# distinction that matters — bridge-vs-bridge-less is. Enforced by the Guard 1 bright line in
+# plugins/soleur/test/terraform-target-parity.test.ts. See ADR-154.
 resource "terraform_data" "inngest_consumer_probe_install" {
   # Reload Vector before (re)enabling the timer (see private_nic_guard_install; probe-first
   # ordering) — the probe's fault classification is only readable off-box once Source 4 carries
@@ -1068,17 +1079,65 @@ resource "terraform_data" "journald_persistent" {
       # Render-sanity gate BEFORE we touch the live agent: a botched render (empty sed output,
       # unsubstituted sentinel, missing sink) must fail the apply while the RUNNING vector stays up —
       # a dead vector on web-1 darkens ALL host observability, a far bigger blast than the 3 probes.
-      # (A full `vector validate` is not used here: it would false-fail on the unset
-      # ${BETTERSTACK_LOGS_TOKEN} env interpolation — vector.service injects it via doppler run, this
-      # remote-exec has no such env. The committed vector.toml is already CI-validated TOML, and the
-      # only runtime transform is the @@HOST_NAME@@ string substitution.) #6438/#6548 review.
+      # #7539: a full `vector validate` IS used here now. The objection recorded above was that it
+      # would false-fail on the unset ${BETTERSTACK_LOGS_TOKEN} interpolation — injecting a
+      # placeholder retires exactly that, and `VECTOR_STRICT_ENV_VARS=false` covers it a second
+      # way. The four greps below check the render's SHAPE; only `validate` checks that Vector can
+      # parse the config, which is what the reload can die on.
+      #
+      # SCOPE, stated rather than implied: `--no-environment` disables component construction and
+      # sink HEALTH CHECKS, so this never opens a socket and the dummy token is never presented to
+      # Better Stack. It also means validate runs as ROOT with an unrestricted filesystem while the
+      # unit runs as `deploy` under ProtectSystem=strict — a config that needs a path outside
+      # /var/lib/vector validates clean here and dies under the sandbox. That residual is what the
+      # settle window and restore below exist for.
+      #
+      # SENTRY_USERID_PEPPER is injected to MIRROR validate-vector-config.yml byte-for-byte, not
+      # because validate needs it: vector.toml's only `${...}` interpolation is
+      # ${BETTERSTACK_LOGS_TOKEN} (:551). The pepper is read at RUNTIME by a VRL `get_env_var()`
+      # call (:391), which `--no-environment` never reaches. An earlier revision of this comment
+      # claimed both were required; that was false.
       "test -s /opt/soleur/vector.toml",
       "! grep -q '@@HOST_NAME@@' /opt/soleur/vector.toml",
       "grep -q '\\[sinks.betterstack\\]' /opt/soleur/vector.toml",
       "grep -q 'web-zot-consumer-probe' /opt/soleur/vector.toml",
+      # #7539: validate the RENDER before the live file is touched. Invocation mirrors the
+      # canonical one in .github/workflows/validate-vector-config.yml (pinned vector 0.43.1) —
+      # BOTH interpolated vars must be injected or validate false-fails: vector.toml resolves
+      # ${BETTERSTACK_LOGS_TOKEN} for the sink AND ${SENTRY_USERID_PEPPER} for the pii_scrub HMAC.
+      # The values are throwaway placeholders only so the interpolation resolves; the real secrets
+      # reach vector.service via doppler run and are never written here.
+      # Absolute path: the unit's own ExecStart uses /usr/local/bin/vector, and this remote-exec
+      # runs under a non-login shell whose PATH comes from sshd/PAM. The installer is fail-open
+      # ("vector binary absent; skipping unit"), so config-without-binary is a REACHABLE host
+      # state — name it rather than dying on a bare 127.
+      "if [ ! -x /usr/local/bin/vector ]; then echo 'FATAL: /usr/local/bin/vector absent; cannot validate the rendered config' >&2; exit 1; fi",
+      "VECTOR_STRICT_ENV_VARS=false BETTERSTACK_LOGS_TOKEN=dummy SENTRY_USERID_PEPPER=dummy /usr/local/bin/vector validate --no-environment --config-toml /opt/soleur/vector.toml",
+      # #7539: keep a restorable copy across the swap. Before this, the window between the
+      # overwrite and the detect-only liveness check below had NO backup — and this apply can be
+      # the first to reload the agent onto a config that has never executed on the host, which is
+      # precisely the case the render greps cannot cover. The resource's own comment above states
+      # the stakes: a dead vector on web-1 darkens ALL host observability.
+      # Snapshot ONLY a config the agent is demonstrably running: `.prev` must be last-KNOWN-GOOD,
+      # not last-live. An unconditional copy poisons itself on a retry — run 1 installs a bad
+      # config and aborts, run 2 then snapshots THAT and "restores" broken over broken. Guarded on
+      # existence too: `install -d` above creates the DIRECTORY only, and a fresh host that took
+      # one of the installer's fail-open exits has no /etc/vector/vector.toml, where an
+      # unguarded `cp` would abort under `set -e` BEFORE the `install` that would have created it.
+      "if systemctl is-active --quiet vector.service && [ -f /etc/vector/vector.toml ]; then cp -a /etc/vector/vector.toml /etc/vector/vector.toml.prev; else rm -f /etc/vector/vector.toml.prev; fi",
+      "PREV_N=$(systemctl show -p NRestarts --value vector.service 2>/dev/null || echo 0)",
       "install -m 0644 /opt/soleur/vector.toml /etc/vector/vector.toml",
       "rm -f /tmp/soleur-vector.toml.staged",
-      "systemctl restart vector.service",
+      # `|| true` is REQUIRED, not defensive: under `set -e` a failing restart aborts the script
+      # several lines above the restore branch, which is the single most likely instance of the
+      # very failure the branch exists for. The liveness check below is the sole verdict.
+      "systemctl restart vector.service || true",
+      # Settle window. The unit is Type=simple (soleur-host-bootstrap.sh), so `restart` returns at
+      # the FORK of the ExecStart wrapper — before `doppler run` fetches secrets and before Vector
+      # parses the config. Without this wait, `is-active` reads `active` for a config Vector
+      # rejects a moment later, the restore never fires, and `rm -f .prev` deletes the backup on a
+      # GREEN apply. 20s clears one RestartSec=10 cycle.
+      "sleep 20",
       "grep -q 'web-zot-consumer-probe' /etc/vector/vector.toml",
       "grep -q 'web-git-data-probe' /etc/vector/vector.toml",
       "grep -q 'web-nic-guard' /etc/vector/vector.toml",
@@ -1090,7 +1149,16 @@ resource "terraform_data" "journald_persistent" {
       # the file the agent actually reads. Asserted on /etc (post-install, post-restart), not on
       # /opt — the staged copy proves the render, this proves the DELIVERY.
       "grep -q 'inngest-consumer-probe' /etc/vector/vector.toml",
+      # #7539: restore-and-reload if the agent did not come back, then fail loud. Previously this
+      # was detect-only: it failed the apply while leaving web-1 with a dead vector AND the
+      # previous config already destroyed.
+      # Crash-loop detection: a restart counter that moved means Vector came up and died at least
+      # once, which `is-active` alone can report as healthy mid-RestartSec. Either condition fires
+      # the restore.
+      "NOW_N=$(systemctl show -p NRestarts --value vector.service 2>/dev/null || echo 0)",
+      "if ! systemctl is-active --quiet vector.service || [ \"$NOW_N\" != \"$PREV_N\" ]; then if [ -f /etc/vector/vector.toml.prev ]; then install -m 0644 /etc/vector/vector.toml.prev /etc/vector/vector.toml; systemctl restart vector.service || true; sleep 10; if systemctl is-active --quiet vector.service; then echo 'FATAL: vector rejected the new config. The previous config was restored and vector IS RUNNING.' >&2; else echo 'FATAL: vector rejected the new config AND the restore also failed. VECTOR IS DOWN on web-1 — all host observability is dark.' >&2; fi; else echo 'FATAL: vector rejected the new config and NO known-good backup existed. VECTOR IS DOWN on web-1 — all host observability is dark.' >&2; fi; exit 1; fi",
       "test \"$(systemctl is-active vector.service)\" = 'active'",
+      "rm -f /etc/vector/vector.toml.prev",
     ]
   }
 }
