@@ -63,6 +63,34 @@ tripped.
 `SOLEUR_ALLOW_FULL_GATE=1`. The refusal targets an *opportunistic* second battery, never the gate a
 commit or push is required to pass.
 
+**7. A measured count must be measured by THIS process.** `tc_preamble` exports
+`TC_SIBLING_RUN_COUNT`, so a nested `test-all.sh` inherits it — including one whose own
+`tc_preamble` was neutered by a test sandbox and therefore measured nothing at all. A policy
+reading the bare count cannot distinguish *"I measured 4 siblings"* from *"an ancestor measured 4
+and told me"*, which is the DECLARED antecedent this ADR exists to move away from, re-entering
+through an environment variable rather than a prompt. `tc_preamble` therefore stamps
+`TC_SIBLING_RUN_COUNT_PID` with its own `$$` and does **not** export it; the refusal requires that
+stamp to equal the current process. An inherited count carries no stamp and cannot refuse, while a
+nested runner that performs its own measurement sets its own stamp and refuses correctly.
+
+This was not hypothetical and it is not detectable in CI. Two suites drive `test-all.sh` as their
+SUT and neuter `tc_preamble` in their sandboxes; both were refused on their parent's measurement
+whenever any sibling worktree happened to be running a battery. Single-variable A/B with the
+sandbox procfs pinned, on suites this branch does not touch:
+
+| suite | own measurement | `TC_SIBLING_RUN_COUNT=4` inherited |
+|---|---|---|
+| `scripts/test-all-killed-classification.test.sh` | 77 passed, 0 failed | 40 passed, 37 failed |
+| `scripts/test-all-infra-coverage-notice.test.sh` | 118 passed, 0 failed | 38 passed, 81 failed |
+
+CI runs with no siblings, so the count is `0` there and the inherited-count path is unreachable —
+the required `test` context stays green either way. The failure is visible only under the
+parallel-worktree workflow, which is also the only condition under which the refusal does anything
+at all. A guard whose failure mode is invisible to the gate that would catch it needs its
+regression pinned deliberately: `plugins/soleur/test/fanout-suite-scope.test.sh` builds a sandbox
+with `scripts/lib/test-contention.sh` withheld — which is exactly how `test-all.sh` reaches its
+no-op `tc_preamble` stub in the wild — and asserts an inherited count does not refuse.
+
 ## Why the harness-identity design was rejected
 
 The obvious repair — since no variable can be *set* on the spawn path, *read* one the harness
