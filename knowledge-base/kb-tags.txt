@@ -145,6 +145,8 @@ adr-166
 adr-corpus
 adr-drift
 adr-hygiene
+adr-ordinal
+adr-ordinal-collision
 adr-ordinals
 adversarial-review
 advisor
@@ -159,6 +161,7 @@ agent
 agent-accuracy
 agent-autonomy
 agent-browser
+agent-convergence
 agent-coverage-gap
 agent-design
 agent-discoverability
@@ -232,6 +235,7 @@ anti-sycophancy
 anti-vacuity
 anycast
 ap-009
+ap-021
 apache-2.0
 api
 api key in git history
@@ -314,6 +318,7 @@ assert-dev-signin-eliminated.sh
 asserted-vs-measured
 assertion
 assertion-drift
+assertion-floor
 async
 async-await
 async-context
@@ -908,6 +913,7 @@ copy
 copywriter
 correction-discipline
 correction-pr
+correction-sweep
 cosign
 cost-attribution
 cost-efficiency
@@ -1034,6 +1040,7 @@ debounce
 debugging
 decision-archaeology
 decision-challenge
+decision-ladder
 decision-recording
 decision-routing
 decodeuricomponent
@@ -1055,6 +1062,7 @@ defense_in_depth
 defensive-coding
 defer
 defer-vs-ship
+deferral
 deferral-vs-legal-floor
 deferred
 deferred-artifact
@@ -1068,6 +1076,7 @@ delegations
 delete
 delete-path
 deletion-sweep
+delivery
 demotion
 deny-by-default
 dependabot
@@ -1098,6 +1107,8 @@ der
 derivation-coupling
 derived
 derived-doc-refresh
+derived-population
+derived-set
 descope
 describe-skipif
 description
@@ -1157,6 +1168,7 @@ disk-full
 disk-io
 disk-monitoring
 disk-space
+dispatch-layer
 dispatch-waste
 dispatcher
 dispatcher-event-hooks
@@ -1290,6 +1302,7 @@ enumerations
 env
 env-defaults
 env-file
+env-inheritance
 env-injection
 env-leak
 env-parsing
@@ -1299,6 +1312,7 @@ env-vars
 environment
 environment-variables
 eprivacy
+equivalent-mutants
 eresolve
 errexit
 error
@@ -1353,6 +1367,7 @@ extract-to-sourceable
 extractfunctionbody
 extraction
 extraction-pattern
+fabricated-claims
 fabrication
 fact-checker
 fact-checking
@@ -1451,6 +1466,7 @@ fixture-axes
 fixture-bug
 fixture-cardinality
 fixture-design
+fixture-direction
 fixture-fidelity
 fixture-redaction
 fixture-seam
@@ -1487,6 +1503,7 @@ for-update
 for_each
 force-push
 force-with-lease
+forcenew
 foreground
 foreign-keys
 format
@@ -1664,7 +1681,9 @@ growth-targets
 guard
 guard-building
 guard-building-pr
+guard-contract
 guard-design
+guard-erosion
 guard-itself-dark
 guard-test
 guard-testing
@@ -1830,6 +1849,7 @@ installation-detection
 installation-id
 installation-takeover
 installation-token
+instrument-verification
 instrumentation
 integration
 integration-design
@@ -2001,6 +2021,7 @@ load
 loader-class-fit
 loading-state
 local-testing
+locale
 localstorage
 lockfile
 lockless-write
@@ -2036,6 +2057,7 @@ markdown-tables
 markdownlint
 marker
 marker-tests
+marker-vocabulary
 marketing
 marketing agents operating independently
 marketing-automation
@@ -2043,6 +2065,7 @@ marketing-copy
 marketing-pipeline
 marketing/docs-site
 marketplace
+marketplace-install
 mask-degraded
 mask-degraded-guard
 match
@@ -2064,6 +2087,7 @@ measure-dont-infer
 measurement
 measurement-discipline
 measurement-gate
+measurement-hygiene
 measurement-method
 measurement-parity
 measurement-validity
@@ -2103,8 +2127,10 @@ migrations
 milestone-enforcement
 milestones
 min-w-0
+minimality
 minimum-release-age
 mirror
+mirror-drift
 mirrors
 mirrors-x-drift
 misaligned business validation
@@ -2217,6 +2243,7 @@ next
 next-app-router
 next-build
 next-headers
+next-image
 next-js
 next-js-middleware
 next-navigation
@@ -2329,6 +2356,7 @@ option
 option-space
 opus-4-7
 or-semantics
+oracle-design
 ordering
 ordering-bug
 ordinal-collision
@@ -2592,6 +2620,7 @@ porting
 position-fixed
 positive
 positive-control
+positive-controls
 positive-only-oracle
 posix
 posix-special-builtin
@@ -2731,8 +2760,10 @@ prompt-structure
 promptfoo
 prop-vs-state
 prop-wiring
+propagation
 prose-claims
 prose-conventions
+prose-guard
 prospect-anchored features
 protecthome
 protocol
@@ -2935,6 +2966,7 @@ resource-management
 responsive
 responsive-design
 rest-api
+restatement
 restructure
 resume
 resume-from-memory
@@ -2969,6 +3001,7 @@ review-gap
 review-gate
 review-gates
 review-panel
+review-panel-cost
 review-pipeline
 review-reasoning
 review-reminder
@@ -2980,11 +3013,13 @@ reviewer-suggestion-validation
 revocation
 revoke
 revoke-grant
+rework
 rf-review-finding-default-fix-inline
 rf-when-a-reviewer-or-user-says-to-keep-a
 rfc-3161
 rfc-5869
 rich-results
+rider
 right-sizing
 rls
 rls-bypass
@@ -2996,6 +3031,7 @@ robots
 robots-txt
 role
 rollback
+rollout
 root-cause
 roster-drift
 rotation
@@ -3128,6 +3164,7 @@ search
 search-path-injection
 search-path-pinning
 seccomp
+second-order-defects
 second-reviewer-concur
 second-reviewer-gate
 secret
@@ -3174,11 +3211,13 @@ self-grep
 self-heal
 self-healing
 self-healing-tests
+self-hosted-users
 self-hosting
 self-leak
 self-match
 self-pull
 self-pull-observability
+self-reference
 self-references
 self-referential
 self-referential-assertions
@@ -3632,6 +3671,7 @@ test-fidelity
 test-fix-loop
 test-fixtures
 test-flake
+test-gates
 test-harness
 test-harness-verification
 test-helpers
@@ -3645,6 +3685,7 @@ test-mocking
 test-mocks
 test-patterns
 test-portability
+test-relevance-gate
 test-runner
 test-scope
 test-scripts
@@ -3688,6 +3729,7 @@ tiered-gating
 time
 timeout
 timeout-attribution
+timeouts
 timer
 timer-design
 timer-leak
@@ -3975,6 +4017,7 @@ websockets
 welcome-hook
 wg-block-pr-ready-on-undeferred-operator-steps
 why
+widening
 wire-path
 wire-protocol
 wire-schema
