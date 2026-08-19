@@ -134,9 +134,15 @@ curl_retry_status() { cat "$CURL_LAST_STATUS_FILE" 2>/dev/null || true; }
 # Fail once a deprecation date is within this many days (or already past).
 # A perpetual warning is what failed in 2026-07: versions.tf records this
 # family answering 410 on 2026-07-17, written off as transient, because a
-# warning on a green check has no teeth. Escape hatch: raise the window (or
-# set it to a negative value) when an endpoint is deprecated with no
-# replacement shipped yet.
+# warning on a green check has no teeth.
+#
+# ESCAPE HATCH DIRECTION — the predicate is `days <= WINDOW`, so RAISING the
+# window WIDENS escalation and LOWERING it suppresses. An earlier revision of
+# this comment (and the operator-facing error below) said "raise the window",
+# which is inverted: an operator following it while CI was red would have made
+# the failure fire more often, not less. To suppress for a date N days out, set
+# the window BELOW N; for an already-past date, below its negative day-count
+# (a date 97 days past needs a window under -97).
 DEPRECATION_FAIL_WINDOW_DAYS="${SENTRY_DEPRECATION_FAIL_WINDOW_DAYS:-30}"
 # ESCALATION IS OFF BY DEFAULT, and that is a deliberate caller-scoped choice.
 #
@@ -761,7 +767,7 @@ done
 # endpoints carry no deprecation headers at all, so this is dormant unless
 # Sentry deprecates one of them too.
 if [[ -s "$DEPRECATION_FATAL_FILE" ]] && [[ "$DEPRECATION_FAIL_ENABLED" == "1" ]]; then
-  echo "ERROR: a Sentry endpoint this audit depends on is deprecated and its date is within ${DEPRECATION_FAIL_WINDOW_DAYS} days (or already past). This caller opted into escalation via SENTRY_DEPRECATION_FAIL=1; widen the window with SENTRY_DEPRECATION_FAIL_WINDOW_DAYS only if the endpoint has no shipped replacement yet. Refs #7590." >&2
+  echo "ERROR: a Sentry endpoint this audit depends on is deprecated and its date is within ${DEPRECATION_FAIL_WINDOW_DAYS} days (or already past). This caller opted into escalation via SENTRY_DEPRECATION_FAIL=1. To suppress this (only when the endpoint has no shipped replacement yet), LOWER SENTRY_DEPRECATION_FAIL_WINDOW_DAYS below the day-count shown above — raising it widens escalation, it does not relax it. Or unset SENTRY_DEPRECATION_FAIL for this caller. Refs #7590." >&2
   echo "  affected endpoints (endpoint deprecation-date):" >&2
   sort -u "$DEPRECATION_FATAL_FILE" | sed 's/^/    /' >&2
   exit 1
