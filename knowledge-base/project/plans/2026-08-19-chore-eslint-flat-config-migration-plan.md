@@ -236,7 +236,23 @@ author `eslint.config.mjs`: `@eslint/js` recommended, `@typescript-eslint/parser
 
 Drive the finding set to a deterministic state. Each rule ships as `error`, `warn`, or `off` with
 a stated reason. Rules turned off are turned off explicitly and individually — never a blanket
-disable to reach zero. The 13 pre-existing unused `eslint-disable` directives are removed.
+disable to reach zero.
+
+> **Amended 2026-08-19 at implementation exit — the directive sweep is NOT performed, and this
+> is a correction to the instruction rather than a deferral of it.** The plan said "the 13
+> pre-existing unused `eslint-disable` directives are removed". Measured against the as-written
+> config there are **31**, and the breakdown is what changes the answer: ESLint reports a
+> directive as *unused* when the named rule produced no finding there — which is equally true
+> when the rule is simply **off**. Of the 31, **29 name rules this first-run config does not
+> enable** (11 `no-console`, 8 `@typescript-eslint/no-explicit-any`, 4 `-no-require-imports`,
+> 3 `-no-this-alias`, 2 `-require-await`, 1 `prefer-rest-params`); only 2 name enabled rules
+> (`no-control-regex`, `react-hooks/exhaustive-deps`) and are genuinely dead.
+>
+> Deleting the 29 would discard the original authors' suppressions precisely where they become
+> load-bearing — the moment the ratchet enables those rules. So all 31 stay, counted in the
+> pinned baseline where they are visible and cannot grow silently, and they are driven down
+> together with the rules they belong to rather than swept ahead of them. Verified with
+> `eslint --print-config` per rule, not inferred.
 
 ### Phase 4 — script + CI
 
@@ -332,10 +348,22 @@ logs:
   retention: "GHA default (90 days)"
 
 discoverability_test:
-  command: "bash -c 'cd apps/web-platform && npm run lint'"
-  expected_output: "eslint runs to completion and prints its findings summary; exit status is
-                    deterministic and the process never waits on stdin"
-  credentials_required: "none — no network, no secrets"
+  # Scoped to ONE file deliberately. The full `npm run lint` is the gate, but it
+  # measures 57.2s against Check 10's 15s cap, so as a probe it could only ever
+  # time out. This runs the same binary through the same flat-config resolution
+  # in 1.6s, with stdin closed, and emits a single deterministic token —
+  # `expected_output` is matched by CONTAINMENT, so a prose description of a
+  # findings summary can never match the summary itself. The full run's exit
+  # status is pinned by apps/web-platform/test/eslint-config.test.ts instead,
+  # which is where whole-corpus assertions belong.
+  command: "bash -c 'cd apps/web-platform && ./node_modules/.bin/eslint lib/relative-time.ts </dev/null >/dev/null && echo LINT_GATE_OK'"
+  expected_output: "LINT_GATE_OK"
+  # NO credentials_required. The field is a verification WAIVER for probes with
+  # no unauthenticated substitute; this probe needs no credentials, so declaring
+  # it would (a) inflate the corpus baseline that exists to make each genuine
+  # waiver a reviewable diff line, and (b) make preflight print "Check 10 did
+  # NOT execute the command: running it inside the sandbox would fail for lack
+  # of credentials" — false here. Absence is the correct declaration.
 ```
 
 ## Architecture Decision (ADR/C4)
@@ -412,8 +440,18 @@ and a review panel should be run before merge if agent spawning is authorised.
 6. A brace glob (`"**/*.{ts,tsx}"`) in the config does **not** crash ESLint — the
    `TypeError: expand is not a function` failure is gone.
 7. Every resolved `brace-expansion` in `apps/web-platform/package-lock.json` is at or above its
-   own major line's patched floor (1.1.12 / 2.0.2 / 3.0.1 / 4.0.1). Asserted per line, not in
-   aggregate — an aggregate check passes while one line sits below its floor.
+   own major line's patched floor. Asserted per line, not in aggregate — an aggregate check
+   passes while one line sits below its floor.
+
+   > **Corrected 2026-08-19 at implementation exit.** This criterion originally named the floors
+   > `1.1.12 / 2.0.2 / 3.0.1 / 4.0.1`. Those are the patched set for ONE advisory
+   > (GHSA-v6h2-p8h4-qcjw, LOW). The npm advisory API returns **six** advisories for this package,
+   > three of them HIGH; the union of their vulnerable ranges puts the real floors at
+   > **1.1.18 / 2.1.4 / (no patched 3.x) / (no patched 4.x) / 5.0.9**. A guard encoding the
+   > original numbers would have passed a `1.1.12` that is vulnerable to two HIGH advisories, so
+   > the shipped guard encodes the measured set with each advisory ID cited, and fails closed on
+   > an unknown major. The tree itself was already compliant — all four lockfiles resolve exactly
+   > at the corrected floors.
 8. `rimraf`'s `minimatch@9` resolves a `brace-expansion@2.x`, proving the fix is not scoped only
    to the ESLint stack.
 9. Guard 1 and Guard 2 mutation matrices each drive the suite RED for every listed row, and the
