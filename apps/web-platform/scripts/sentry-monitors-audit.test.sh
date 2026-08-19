@@ -593,11 +593,18 @@ chmod +x "$TMP16/respond.sh"
 set +e
 out=$(run_sut_stubbed "$TMP16"); rc=$?
 set -e
+# The replacement-endpoint assertion is anchored on its LABEL, not on the bare
+# path: the same path also appears on the `url:` line, so `grep -q
+# '/organizations/jikigai/workflows/'` was satisfied whether or not the
+# replacement header was ever emitted. Deleting the replacement line from the
+# diagnostic left this test GREEN until the mutation battery caught it
+# (cq-assert-anchor-not-bare-token).
 if [[ "$rc" != "0" ]] \
    && grep -q 'http_status:  410' <<<"$out" \
-   && grep -q 'de.sentry.io' <<<"$out" \
-   && grep -q '/organizations/jikigai/workflows/' <<<"$out" \
-   && grep -q '2026-05-14' <<<"$out" \
+   && grep -q 'api_host:     de.sentry.io' <<<"$out" \
+   && grep -q 'url:          https://de.sentry.io/api/0/organizations/jikigai/workflows/' <<<"$out" \
+   && grep -q 'x-sentry-replacement-endpoint: /api/0/organizations/jikigai/workflows/' <<<"$out" \
+   && grep -q 'x-sentry-deprecation-date:    2026-05-14' <<<"$out" \
    && grep -qi 'MIGRATE' <<<"$out"; then
   pass "410 diagnostic carries status, host, URL, deprecation date, replacement and a verdict"
 else
@@ -977,13 +984,58 @@ fi
 rm -rf "$TMP20C"
 
 # ------------------------------------------------------------------------
+# T22 — ASSEMBLY: no Sentry call bypasses the curl_retry chokepoint.
+#
+# Guard 1's property is "every response carrying a deprecation header produces
+# a warning". The tripwire attaches to curl_retry, so a new call site written
+# as bare `curl` is silently unmonitored — no fixture can catch that, because
+# the defect is the ABSENCE of a call. This asserts the ENUMERATION, not a
+# snapshot of today's list: the two known bypasses are exempted BY REASON, and
+# any third one fails until someone states why it is allowed.
+#
+# Comment lines are stripped first: this file discusses `curl` in prose in
+# several places, and a body-grep sees comments too.
+# ------------------------------------------------------------------------
+echo "T22: assembly — every Sentry call goes through curl_retry"
+sut_code=$(grep -vE '^[[:space:]]*#' "$SCRIPT")
+# A bare `curl` invocation is one not preceded by `_` (curl_retry) and not the
+# seam variable. `-w` here is the word-boundary class, not curl's flag.
+bare_lines=$(grep -nE '(^|[^_[:alnum:]$"])curl[[:space:]]' <<<"$sut_code" \
+  | grep -vE 'curl_retry|CURL_BIN' || true)
+n_bare=$(printf '%s' "$bare_lines" | grep -c . || true)
+# The invocation and its URL are on different physical lines (backslash
+# continuations), so identifying WHICH bypass each site is needs the following
+# lines too — a line-local grep for `users/me/` finds nothing and the check
+# would fail against a perfectly correct file.
+bare_sites=$(grep -E -A3 '(^|[^_[:alnum:]$"])curl[[:space:]]' <<<"$sut_code" \
+  | grep -vE 'curl_retry|CURL_BIN' || true)
+# Exempt, with reasons:
+#   1. the region-probe loop — runs BEFORE api_host is resolved, so there is
+#      no validated host to attach a tripwire to, and it probes /users/me/
+#      rather than a deprecated collection endpoint.
+#   2. Gate 3's cleanup DELETE — best-effort teardown of the write probe; its
+#      response is discarded by design (`|| true`), so it has no verdict to
+#      carry and must not be able to fail the audit.
+n_exempt=2
+if [[ "$n_bare" == "$n_exempt" ]] \
+   && grep -q 'users/me/' <<<"$bare_sites" \
+   && grep -q 'X DELETE' <<<"$bare_sites"; then
+  pass "exactly the 2 enumerated bypasses use bare curl; every other Sentry call is chokepointed"
+else
+  fail "bare-curl call sites changed: found $n_bare, expected $n_exempt"
+  printf '%s\n' "$bare_lines" >&2
+  echo "    If you added a Sentry call, route it through curl_retry (so the" >&2
+  echo "    deprecation tripwire sees it) or add it here WITH a reason." >&2
+fi
+
+# ------------------------------------------------------------------------
 # Anti-vacuity floor. A suite whose assertions all silently stopped running
 # would otherwise report "0 passed, 0 failed" and exit 0. The floor is a
 # COUNT of executed assertions, so it catches a harness that dies early — it
 # cannot catch an assertion that runs but checks nothing, which is what the
 # mutation battery in the PR body is for.
 # ------------------------------------------------------------------------
-MIN_ASSERTIONS=24
+MIN_ASSERTIONS=25
 if (( PASS + FAIL < MIN_ASSERTIONS )); then
   echo "  FAIL: anti-vacuity floor — only $((PASS + FAIL)) assertions ran, expected >= $MIN_ASSERTIONS"
   FAIL=$((FAIL+1))
