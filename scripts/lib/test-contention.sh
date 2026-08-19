@@ -468,6 +468,13 @@ tc_preamble() {
   # reader ends up trusting a comment that is no longer true. scripts/test-all.sh decides.
   TC_SIBLING_RUN_COUNT="$sib_count"
   export TC_SIBLING_RUN_COUNT
+  # PROVENANCE, and deliberately NOT exported. TC_SIBLING_RUN_COUNT is exported, so a nested
+  # runner INHERITS it — including one whose own tc_preamble was neutered by a test sandbox, and
+  # which therefore measured nothing at all. A policy reading the bare count cannot tell "I
+  # measured 4 siblings" from "an ancestor measured 4 siblings and told me", which is the
+  # DECLARED antecedent ADR-194 exists to move away from. This stamp is what makes the count
+  # this process's own measurement; it does not survive a fork/exec, which is exactly the point.
+  TC_SIBLING_RUN_COUNT_PID=$$
 
   if (( sib_count > 0 )); then
     while IFS=$'\t' read -r p c e; do

@@ -319,6 +319,82 @@ else
   fail "SOLEUR_SUBAGENT=1 stopped refusing once the sibling arm landed — got rc=$ARM_RC"
 fi
 
+# --- Arm 8: an INHERITED sibling count must NOT refuse ---------------------------------------
+#
+# TC_SIBLING_RUN_COUNT is EXPORTED by tc_preamble, so a nested test-all.sh inherits it. A suite
+# that drives this runner as its SUT neuters tc_preamble in its sandbox — so it measures nothing,
+# inherits its parent's number, and (before the fix) refused on a machine state it never looked
+# at. That is the DECLARED antecedent ADR-194 exists to move away from, reintroduced by an env
+# var. Measured on the real suites: `TC_SIBLING_RUN_COUNT=4` alone took
+# test-all-killed-classification from 77/0 to 40/37 and test-all-infra-coverage-notice from
+# 118/0 to 38/81, with nothing wrong in either diff.
+#
+# The discriminating fixture must NEUTER tc_preamble — with it live, the inherited value is just
+# overwritten by a real measurement and the arm passes either way. Dropping test-contention.sh
+# from the sandbox's lib/ is exactly how test-all.sh reaches its no-op stubs in the wild.
+NOLIB_SANDBOX="$TMP/nolib/test-all-sandbox.sh"
+mkdir -p "$TMP/nolib"
+if ! build_sandbox "$NOLIB_SANDBOX"; then
+  fail "no-lib sandbox build failed — the inherited-count arm cannot run"
+else
+  rm -f "$TMP/nolib/lib/test-contention.sh"
+  export SANDBOX_RECORD="$TMP/record-inherited.txt"; : > "$SANDBOX_RECORD"
+  INH_OUT=$(cd "$REPO_ROOT" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
+            TEST_TIMING_LOG="$TMP/arm-timing-inherited.tsv" \
+            TC_PROC_ROOT="$SOLO_PROC_F" TC_SIBLING_RUN_COUNT=9 \
+            timeout 120 bash "$NOLIB_SANDBOX" 2>&1) || true
+  INH_RC=$?
+  INH_SUITES=$(wc -l < "$SANDBOX_RECORD" | tr -d '[:space:]')
+  if [[ "$INH_RC" -ne 4 ]]; then
+    pass "an inherited TC_SIBLING_RUN_COUNT does not refuse when this process measured nothing (rc=$INH_RC)"
+  else
+    fail "refused on an INHERITED sibling count — a nested runner that neutered tc_preamble is being refused on its parent's measurement, which reds every suite driving test-all.sh as its SUT"
+  fi
+  if [[ "$INH_SUITES" -gt 0 ]]; then
+    pass "the inherited-count run reached suite registration ($INH_SUITES suites)"
+  else
+    fail "the inherited-count run recorded 0 suites — it was blocked by something"
+  fi
+  if grep -qF 'sibling full-gate run(s) already in flight' <<<"$INH_OUT"; then
+    fail "the refusal text printed on a run whose sibling count was inherited, not measured"
+  else
+    pass "no refusal text on an inherited count"
+  fi
+fi
+
+# --- Arm 9: the sanctioned hooks actually CARRY the hatch ------------------------------------
+#
+# Arm 5 proves the hatch WORKS. Nothing proved the two invocations that depend on it still SET
+# it, and ADR-194 section 6 ("a sanctioned invocation carries the hatch") asserted it in prose
+# only. Blast radius if it drifts: no agent or developer can commit a `.ts` file, or push, while
+# any sibling worktree runs the battery — the exact outcome that disqualified the
+# harness-identity design.
+#
+# Asserted over EVERY uncommented full-gate invocation in each file, not just the line that
+# carries it today: a second, unhatched invocation added later is the same outage. Comments are
+# stripped FIRST because both files explain the hatch in prose directly above the invocation, so
+# a bare token grep would match the explanation whether or not the code still carries it
+# (cq-assert-anchor-not-bare-token).
+for hookf in "$REPO_ROOT/lefthook.yml" "$REPO_ROOT/plugins/soleur/scripts/grok-pre-push-gate.sh"; do
+  hookrel="${hookf#"$REPO_ROOT"/}"
+  if [[ ! -f "$hookf" ]]; then
+    fail "$hookrel does not exist"
+    continue
+  fi
+  HOOK_INV="$(sed 's/#.*$//' "$hookf" | grep -nE 'bash[[:space:]]+scripts/test-all\.sh' || true)"
+  if [[ -z "$HOOK_INV" ]]; then
+    fail "$hookrel no longer invokes scripts/test-all.sh — this guard is pinned to the wrong file"
+    continue
+  fi
+  pass "$hookrel carries $(grep -c . <<<"$HOOK_INV") uncommented full-gate invocation(s)"
+  HOOK_BARE="$(grep -vE 'SOLEUR_ALLOW_FULL_GATE=1[[:space:]]+bash[[:space:]]+scripts/test-all\.sh' <<<"$HOOK_INV" || true)"
+  if [[ -z "$HOOK_BARE" ]]; then
+    pass "$hookrel: every full-gate invocation carries SOLEUR_ALLOW_FULL_GATE=1 (ADR-194 section 6)"
+  else
+    fail "$hookrel has a full-gate invocation WITHOUT the hatch — it exits 4 whenever any sibling runs the battery: $HOOK_BARE"
+  fi
+done
+
 # --- Anti-vacuity floor -----------------------------------------------------------------------
 # Every assertion above is reachable only if the sandbox built and the arms ran. Strand the file
 # — a renamed TARGET, a python failure, an early exit — and it would report "0 passed, 0 failed"

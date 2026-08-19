@@ -704,7 +704,16 @@ _TC_RUN_START_ENTRIES=$(tc_tmp_entry_count)
 # on. A refused run must cost nothing.
 #
 # ADDITIVE, not a replacement: the SOLEUR_SUBAGENT arm above is untouched and still exits 4.
-if [[ "${TC_SIBLING_RUN_COUNT:-0}" -gt 0 && "${SOLEUR_ALLOW_FULL_GATE:-}" != "1" ]]; then
+# The count must be one THIS process measured. TC_SIBLING_RUN_COUNT is exported, so a nested
+# test-all.sh inherits it — and a suite that drives this runner as its SUT neuters tc_preamble
+# in its sandbox, so the inherited number describes a machine state the sandbox never looked
+# at. Refusing on it turns every such suite red whenever any sibling happens to be running,
+# for a reason unrelated to its subject: measured, `TC_SIBLING_RUN_COUNT=4` alone took
+# test-all-killed-classification from 77/0 to 40/37 and test-all-infra-coverage-notice from
+# 118/0 to 38/81. tc_preamble stamps TC_SIBLING_RUN_COUNT_PID with its own $$ and does not
+# export it, so an inherited count carries no stamp and cannot refuse.
+if [[ "${TC_SIBLING_RUN_COUNT:-0}" -gt 0 && "${TC_SIBLING_RUN_COUNT_PID:-}" == "$$" \
+      && "${SOLEUR_ALLOW_FULL_GATE:-}" != "1" ]]; then
   echo "ERROR: refusing a full-gate run — ${TC_SIBLING_RUN_COUNT} sibling full-gate run(s) already in flight (TEST_GROUP=$TEST_GROUP)." >&2
   echo "" >&2
   echo "The offending worktree(s) are listed in the contention preamble above, under" >&2
