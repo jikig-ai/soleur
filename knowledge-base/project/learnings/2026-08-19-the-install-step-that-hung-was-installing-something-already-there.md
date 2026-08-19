@@ -117,6 +117,34 @@ the file has pre-existing findings. An absolute AC on a dirty baseline is not a 
 it is an unsatisfiable one, and unsatisfiable criteria get quietly relaxed at the moment they are
 checked — which is the worst time, because the relaxation is invisible in the artifact.
 
+## Third trap: the brief asserted an obligation instead of probing for one
+
+This work was commissioned as *"one file in `knowledge-base/project/learnings/`, closes the
+workflow-gate obligation"* for merge `45ea9f7e9`. That obligation did not exist. The merge had
+discharged it itself, shipping two learning files in the same commit:
+
+```
+$ git show --name-status --format='' 45ea9f7e9 | awk '$1=="A" && $2 ~ /learnings\//'
+A  knowledge-base/project/learnings/2026-08-16-every-number-i-inherited-was-stale-...md
+A  knowledge-base/project/learnings/2026-08-19-i-hardened-my-verifier-twice-...md
+```
+
+The tempting conclusion is that the repo needs an obligation *tracker* — a persisted record of which
+merges still owe a learning. It does not, and the reason is worth stating because the tracker is the
+locally obvious repair. **The obligation is derivable from git at any time**, by the one-line probe
+above. A stored ledger would add a mechanism whose requirement is already met, and it could not even
+answer this instance: a ledger started today says nothing about merges that predate it. That is a
+deferral target that cannot reach the defect it was proposed for.
+
+What actually failed was cheaper than any mechanism: the state was *inferred* rather than *probed*,
+when the probe was one command and available the whole time. The same shape as the stale-inherited-number
+class in [[2026-08-16-every-number-i-inherited-was-stale-and-the-panel-found-the-defect-class-inside-my-fix]] —
+an inherited claim about the tree, carried forward without re-running the thing that settles it.
+
+Use `--name-status` filtered to `A` rather than `--stat` when the count matters. A review pass on
+this very file reported *three* learning files from `--stat`; the correct answer is two, and
+`--name-status` shows it unambiguously along with whether each path was added, modified or renamed.
+
 ## What to do next time
 
 - Before adding a package-install step to CI, check whether the runner image already ships the
