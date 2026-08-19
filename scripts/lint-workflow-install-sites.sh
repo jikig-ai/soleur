@@ -258,6 +258,26 @@ for wf in ${workflow_files[@]+"${workflow_files[@]}"}; do
     job != "" && /^[[:space:]]*(- )?uses:[[:space:]]*oven-sh\/setup-bun/ { hassetup = 1 }
     job != "" && /^[[:space:]]*(- )?run:.*(^|[[:space:]])bun[[:space:]]/ { usesbun = 1 }
     job != "" && /^[[:space:]]+bun[[:space:]]/ { usesbun = 1 }
+    # The two patterns above name only two POSITIONS -- a `run:` line, and a line whose first
+    # token is `bun` -- while the clause claims "any step invoking `bun `". A shell command
+    # position is neither of those in general, and the gap was not hypothetical: #7566
+    # removed `Setup Bun` from cla-evidence.yml and left `payload=$(bun run …)`, breaking a
+    # REQUIRED pull_request_target check on every PR. Restoring that file and re-running this
+    # guard prints `scanned 83 workflow file(s) … OK` -- measured, not argued.
+    #
+    # So enumerate the POSITIONS structurally rather than appending the shape that just bit:
+    # a command substitution, a backquote, or a pipeline/list separator each open a command.
+    # Plain whitespace is deliberately NOT in the set -- `echo "no longer uses bun install"`
+    # is a mention, and reddening it is the false-RED that gets a guard switched off. That is
+    # clause 1s invocation-vs-mention split, applied on the position axis.
+    #
+    # NOTE: no apostrophes in this comment block. The awk program is single-quoted, so one
+    # apostrophe closes it and the rest parses as bash -- which is why the sibling comment
+    # above also writes "clause 1s".
+    #
+    # Comment lines are excluded first: a comment is never a step, in the workflow YAML or
+    # inside a `run: |` block.
+    job != "" && $0 !~ /^[[:space:]]*#/ && $0 ~ /(\$\(|`|[|&;])[[:space:]]*bun[[:space:]]/ { usesbun = 1 }
     END {
       if (job != "") print job "\t" usesbun "\t" hassetup
       # Sentinel field FIRST and non-empty: tab is IFS whitespace, so a leading empty

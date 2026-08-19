@@ -247,6 +247,67 @@ jobs:
 YML
 expect_pass "$R6B" "row6b same job WITH setup-bun passes (clause 3 is not vacuous)"
 
+# Row 6f: the invocation is inside a COMMAND SUBSTITUTION. This is the shape that actually
+# shipped: #7566 replaced `Setup Bun` with `Setup Node.js` in cla-evidence.yml and left two
+# `payload=$(bun run …)` call sites, breaking a REQUIRED pull_request_target check on every
+# PR — and this lint reported OK against that tree (measured by restoring the broken file
+# and re-running: `scanned 83 workflow file(s) … OK`).
+#
+# Clause 3 named the property "any step invoking `bun `" but matched only two positions: a
+# `run:` line, and a line whose first token is `bun`. A command substitution is neither, so
+# the property was wider than the pattern — the same defect class this file's own header
+# describes for clause 1's invocation-vs-mention split, on the position axis instead.
+R6SUBST=$(make_repo row6subst)
+add_wf "$R6SUBST" ".github/workflows/bunsubst.yml" <<'YML'
+name: bunsubst
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+      - name: build record
+        run: |
+          payload=$(bun run apps/web-platform/scripts/cla-evidence/build-record.ts) \
+            || exit 1
+          echo "$payload"
+YML
+expect_red "$R6SUBST" "row6subst bun inside a command substitution is an invocation" "no setup-bun step"
+
+# Row 6g: the same job WITH setup-bun must still PASS, so 6f cannot be satisfied by a
+# clause that reddens every command substitution.
+R6SUBSTOK=$(make_repo row6substok)
+add_wf "$R6SUBSTOK" ".github/workflows/bunsubstok.yml" <<'YML'
+name: bunsubstok
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    steps:
+      - name: setup
+        uses: oven-sh/setup-bun@v2
+      - name: build record
+        run: |
+          payload=$(bun run apps/web-platform/scripts/cla-evidence/build-record.ts)
+          echo "$payload"
+YML
+expect_pass "$R6SUBSTOK" "row6substok command substitution WITH setup-bun passes"
+
+# Row 6h: a bun MENTION inside a quoted operator-facing string is not an invocation. Without
+# this, widening the position set to "anywhere on the line" would redden every workflow that
+# merely talks about bun in an ::error:: — the false-RED that gets a guard disabled.
+R6MENTION=$(make_repo row6mention)
+add_wf "$R6MENTION" ".github/workflows/bunmention.yml" <<'YML'
+name: bunmention
+jobs:
+  advise:
+    runs-on: ubuntu-latest
+    steps:
+      - name: advise
+        run: |
+          echo "::error::this repo no longer uses bun install; use npm ci instead"
+YML
+expect_pass "$R6MENTION" "row6mention a bun mention in a quoted string is not an invocation"
+
 # Row 6c: setup-bun named only in a COMMENT must NOT count as a setup step. Clause 1
 # distinguishes invocation from mention; clause 3 did not, and ci.yml carries exactly such
 # a comment inside a job with no setup-bun of its own — so the clause was fail-open on the
