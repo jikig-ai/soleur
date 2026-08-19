@@ -1,5 +1,5 @@
 ---
-title: "fix: the AP-021 gate's two independent blind spots — a variable-assigned message and a dash-appendix cause"
+title: "fix: the AP-021 gate is a three-factor conjunction and its motivating message escaped all three"
 date: 2026-08-19
 slug: fix-ap021-gate-operator-line-and-claim-blind-spots
 branch: feat-one-shot-7578-ap021-claim-blind-spot
@@ -47,7 +47,9 @@ Four premises were checked before any research was dispatched.
    *"Both are fixed here; the baseline ratchets to 0."* **The remaining work is the gate, not
    the instance** — which is what #7578 says it is about.
 2. **The issue's title and body give different diagnoses.** Settled empirically below. Both
-   are true, and — the finding that reshapes this plan — **neither is sufficient alone.**
+   are true, both are incomplete, and — the finding that reshapes this plan — **fixing both is
+   still not sufficient.** A third predicate, which ADR-192 recorded and the issue dropped,
+   exonerates the line regardless.
 3. **`AP-021` is not a Linear issue reference.** It is an internal principle ID
    (`knowledge-base/engineering/architecture/principles-register.md`,
    `apps/web-platform/infra/infra-config-gate.sh`). The `[A-Z]{2,}-[0-9]+` preflight regex
@@ -65,7 +67,7 @@ scripts/zot-restart-loop-alarm.sh:389   VERDICT="TRANSIENT"; DETAIL="recent ${WI
 scripts/zot-restart-loop-alarm.sh:186   NIC_DETAIL="recent ${WINDOW} empty for SOLEUR_PRIVATE_NIC AND the control-marker query is empty/errored (rc=${control_rc}) — Better Stack unreachable / creds unset"
 ```
 
-Run against the live regexes, **both filters reject both lines, independently**:
+Run against the live scanner, **all three predicates independently let both lines through**:
 
 | Filter | Blocks the line? | Why |
 |---|---|---|
@@ -80,16 +82,24 @@ anti-pattern applied to the exoneration side, and it is exactly backwards for th
 the alarm's entire defect was that its measurement (`rc=0`) **contradicted** the causes the
 appendix named, yet the presence of that very measurement is what cleared the line.
 
-Neither the issue title nor the issue body identifies this third defect. It was found by
-writing the fixture before the fix and running the *whole* scanner — the two-filter analysis
-that both the title and the body stop at is measured `True`/`True`, which looks like a
-complete diagnosis until `MEASURED` is applied.
+**This was already known and correctly recorded — in ADR-192, whose §Context carries the
+identical three-row table, `MEASURED | True | would exempt the line anyway (VERDICT= matches)`
+included.** The measurement above reproduces that finding independently; it does not discover
+it. What went wrong is the restatement: **#7578's title carries only the `OPERATOR_LINE` row
+and its body only the `CLAIM` row**, and neither carries the third. The prescribed fix follows
+correctly from that partial reading and is inert.
+
+That is the reusable lesson here, and it is worth more than the regex change: a follow-up
+issue is a *lossy copy* of the analysis that produced it, and the factor it drops is invisible
+precisely because the remaining factors still explain the symptom. The cheap gate is to read
+the ADR the issue came from before planning against the issue — which is what
+`plan` Phase 0.6 §4 already mandates, and what would have caught this before any measurement.
+
+The issue body also cites **ADR-187 §Scope** as recording this deferral. That is a
+mis-citation: ADR-187 has no §Scope section and never mentions this gate. The deferral is
+recorded in **ADR-192**, which is where the closing note belongs.
 
 ### The measurement that reshapes the fix
-
-Four candidate configurations, scanned over the gate's real `DIRS` with its real evidence
-window and `MEASURED` filter (harness mirrors the scanner loop exactly; config A reproduces
-the live gate's `1`, which is the harness's own fidelity check):
 
 Candidate configurations, scanned over the gate's real `DIRS` with its real evidence window
 and `MEASURED` filter (the harness mirrors the scanner loop exactly; config A reproduces the
@@ -112,7 +122,7 @@ Four conclusions follow, and each contradicts something the issue assumes:
 1. **No two-filter fix works.** Every configuration that widens only `OPERATOR_LINE` and
    `CLAIM` — including the strongest one — still misses both historical lines, because
    `MEASURED` clears them. Only config G, which narrows the exoneration for appendix-named
-   causes, catches them. This is the plan's central finding and it is not in the issue.
+   causes, catches them. This is the plan's central finding; ADR-192 has it, the issue does not.
 2. **The issue's own "Suggested shape" would not have fixed the bug it was filed for.**
    Config B is measured `False` against both historical lines.
 3. **The issue's "30 hits" cost estimate priced only one third of the change.** It was taken
@@ -382,8 +392,10 @@ Add to `## Alternatives Considered`: widening `CLAIM` alone (the originally-sugg
 and widening both regexes without touching the exoneration — with the measurement showing that
 neither catches the motivating line.
 
-Also add a line to ADR-187 §Scope, which recorded this gap as deliberately out of scope —
-close that loop by pointing at this work.
+Close the deferral in **ADR-192** (§"deliberately not in this change"), which is where it is
+actually recorded — **not** ADR-187, which the issue cites but which has no §Scope section and
+never mentions this gate. The closing note records that all three filters moved together, that
+the two-filter fix is measured inert, and that the "30 hits" figure priced one factor of three.
 
 ### C4 views
 
@@ -430,7 +442,7 @@ rather than silently so the skip is reviewable.
 - `scripts/sync-readme-counts.sh` — 2 annotations
 - `scripts/zot-restart-loop-alarm.sh` — annotation
 - `knowledge-base/engineering/architecture/decisions/ADR-166-*.md` — amend
-- `knowledge-base/engineering/architecture/decisions/ADR-187-*.md` — §Scope pointer
+- `knowledge-base/engineering/architecture/decisions/ADR-192-*.md` — close the recorded deferral
 
 ## Files to Create
 
@@ -478,7 +490,7 @@ glob. Product tier: **NONE**.
 8. `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` passes over
    every changed doc — note the gate derives its own input set; run its own invocation, not a
    hand-enumerated path list.
-9. ADR-166 carries the amendment; ADR-187 §Scope points at this work.
+9. ADR-166 carries the amendment; ADR-192's recorded deferral is closed (not ADR-187 — the issue mis-cites it).
 10. The PR body uses `Closes #7578` and `Closes #7318`.
 
 ### Post-merge
