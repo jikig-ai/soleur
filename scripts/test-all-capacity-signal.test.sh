@@ -517,6 +517,31 @@ else
   fail "AC10/M9: verdict/banner sibling counts disagree (banner='$PV_BANNER_N' verdict='$PV_VERDICT_N')"
 fi
 
+# M9's STRUCTURAL half, and it is the half that can actually fail.
+#
+# The behavioural arm above cannot catch a re-walk on a HERMETIC fixture: a
+# second walk over a fake /proc that nobody is mutating returns the same count,
+# so the mutation "have the verdict re-walk /proc" would survive it as an
+# equivalent mutant. The defect M9 names is not "a wrong number" but "a SECOND
+# NON-ATOMIC SNAPSHOT", which only shows up on a live box where the sibling set
+# changes between the two reads — precisely the box no suite can fixture.
+#
+# So the property is asserted where it is decidable: tc_capacity_line's body
+# must contain no scan call at all. Anchored on the CALL construct rather than a
+# bare word, so a mention in a comment cannot satisfy or break it.
+TCL_BODY="$(sed -n '/^tc_capacity_line() {/,/^}/p' "$LIB")"
+
+cases=$((cases + 1))
+if [[ -n "$TCL_BODY" ]]; then
+  if [[ "$(grep -cE '^[^#]*(_tc_scan_procs|tc_siblings)[[:space:]]*(\||$|\))' <<<"$TCL_BODY" || true)" -eq 0 ]]; then
+    pass "AC10/M9 structural: tc_capacity_line takes no /proc walk of its own — it consumes tc_preamble's readings"
+  else
+    fail "AC10/M9 structural: tc_capacity_line calls a scan directly — that is a second non-atomic snapshot"
+  fi
+else
+  fail "AC10/M9 structural: could not extract tc_capacity_line's body from the lib — the arm was NOT evaluated"
+fi
+
 # --- AC9: tc_preamble's stderr is byte-identical to origin/main's -----------
 # Promoting VARIABLES must change zero output bytes: work/SKILL.md greps the
 # `[contention] BANNER` names as a contract. Materialized by the repo's existing
@@ -1005,6 +1030,19 @@ fi
 # deflates the counts, so the floor would ALSO trip and would name the wrong
 # fault ("assertions were added or removed" instead of "a verdict was
 # discarded").
+#
+# MEASURED, and the first attempt at the H1 row was WRONG — recorded because the
+# wrong version looks like coverage. Neutering fail() ALONE survives: on a green
+# tree no fail() ever fires, so pass_n=66/fails=0/cases=66 still conserves and
+# the suite exits 0. That is not an equivalent mutant, it is a fixture that does
+# not exercise the property — H1's claim is "a discarded verdict cannot hide a
+# REAL failure", and a green tree has no real failure to hide.
+#
+# The row that actually tests it is COMPOSITE: neuter fail() *and* inject a
+# genuine defect (M1, deleting the sibling arm). Measured: the suite then prints
+# `59 passed, 0 failed (66 assertions)` — which without this check exits 0 and
+# reads as clean while concealing seven real failures — and this check fires
+# `pass_n+fails (59) != cases (66)`, naming the discarded verdict.
 # ---------------------------------------------------------------------------
 
 if [[ $((pass_n + fails)) -ne "$cases" ]]; then
@@ -1031,7 +1069,7 @@ fi
 # whole change exists to remove. Zero slack is deliberate.
 # ---------------------------------------------------------------------------
 
-MIN_CASES=65
+MIN_CASES=66
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_CASES" >&2

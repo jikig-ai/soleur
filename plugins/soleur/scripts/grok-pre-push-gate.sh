@@ -82,6 +82,22 @@ run_step() {
 
 echo "grok-pre-push-gate: starting local CI parity (repo: $REPO_ROOT)"
 
+# --- Phase 0: pre-launch capacity probe (#7545) — ADVISORY, never a gate ---
+#
+# Answers "can this box absorb the full gate I am about to start?" in under a
+# second, before ~11 steps have already been paid for. Phase 2 below is the
+# ~4-5 minute `test-all.sh` run, and on a contended box that run's REDs may be
+# interleaving rather than regressions — knowing that at second 0 rather than at
+# minute 5 is the whole point.
+#
+# NOT run through run_step, and the `|| true` is deliberate: a capacity verdict
+# must never gate a push. It is a STATEMENT the operator reads, not a decision
+# the script makes — see the ADR-133 2026-08-19 addendum for why the blocking
+# form was cut. Its exit code is discarded so that a broken or missing probe
+# also cannot gate the push.
+echo "--- capacity (advisory, does not gate) ---"
+bash scripts/test-all.sh --capacity 2>&1 || true
+
 # --- Phase 1: fast CI jobs (ci.yml always-run, no secrets) ---
 run_step "readme-counts" bash scripts/sync-readme-counts.sh --check
 run_step "adr-ordinals" bash scripts/check-adr-ordinals.sh

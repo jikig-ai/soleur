@@ -804,6 +804,35 @@ State plainly which axes your battery did NOT edit. Two mechanical companions: r
 
    **A shard's summary is not a completeness claim — read the BREAKDOWN line.** Since ADR-181 a suite may DECLINE (relevance-gated), and declines are counted in the denominator, so `N/N` is no longer the ordinary local green spelling: a healthy run commonly reads `N-k/N` with a `k skipped (declined — not relevant to this diff)` breakdown. A shard narrows coverage a second way the runner does NOT announce — it emits a coverage NOTE for the `infra` case only, so nothing tells you `TEST_GROUP=bun` excluded the webplat shard. **State which shards you ran when you report the gate green.** This is the definite-article trap #6969 named, one level down: a green `test-all.sh` was read as the exit gate for a diff half of which it never executed, and a shard makes that easier, not harder.
 
+   **Ask before you launch: `bash scripts/test-all.sh --capacity`.** It answers "can this box
+   absorb another full gate?" in under a second — no suite, no lock, always exit 0 — and prints one
+   named verdict plus the per-sibling pid/worktree/elapsed detail:
+
+   - `CAPACITY_OK measured_siblings=0 sibling_threshold=1 tmp_avail_mb=3619 tmp_floor_mb=1024 …`
+   - `CAPACITY_CONTENDED reason=<sibling_runs|low_tmp> …` — a **statement**, not a refusal. The run
+     is still yours to start; what it changes is what a RED under it is worth, which is exactly the
+     three-way confirmation the contention passage below already prescribes.
+   - `CAPACITY_UNKNOWN reason=<unreadable_proc|unparseable_df|unparseable_meminfo|lib_unavailable>`
+     — a reading DEGRADED. Never read this as a healthy box: every underlying probe degrades an
+     unreadable result to `0`, which is below every floor, so a degraded value renders as `?` and
+     the verdict names which reading failed.
+
+   Every line carries the measured value **and** the threshold, so you judge rather than obey. The
+   same verdict is emitted automatically on every run between the contention preamble and the lock,
+   so a run's log always records the capacity it started under. `--capacity` deliberately does NOT
+   block or change any exit code — the blocking form was cut on measured evidence (ADR-133's
+   2026-08-19 addendum: a wait `LOCK_ACQUIRED … after 616310ms` was *redeemed* at 616 s, which a
+   sibling decline would have refused at t=0, and a non-zero exit here would block `git commit`
+   through `lefthook`'s pre-commit hook).
+
+   **A long wait is now legible rather than silent.** `TC_LOCK_TIMEOUT` is **3600 s** (raised from
+   900, which was shorter than the ~45-minute run it waits for — the budget expired by construction,
+   which is *why* N runs used to land together). While blocked, the runner emits
+   `LOCK_WAIT_HEARTBEAT: queued, not hung — waited=<N>s … holder pid=<p> worktree=<w>` every
+   `TC_WAIT_HEARTBEAT_S` (default 60). So a stalled-looking gate is now self-describing: **read the
+   heartbeat before killing anything** — it names the worktree you are actually waiting for, and
+   `--capacity` surfaces the same holder in a second without waiting at all.
+
    **The lead runs this gate, not a delegate.** [scripts/test-all.sh](../../../../scripts/test-all.sh) exits `4` — REFUSED, nothing ran — when `SOLEUR_SUBAGENT=1` is set without `SOLEUR_ALLOW_FULL_GATE=1`. A ~90 s shard is far likelier to be delegated than a 45-minute battery was, so treat `rc=4` as its own outcome: it is not a reap and it is not a pass.
 
    **Why a shard and not a hand-derived command set.** A `vitest --changed` + `git grep` derivation was specified and cut. A shard keeps the contention preamble (`SIBLING_RUN_DETECTED` / `SIBLING_SUITE_DETECTED` / `LOW_TMP_HEADROOM`), the `EXIT CONTRACT`, the terminal `=== N/M suites passed ===` marker, the rc file, and the `rc=3` UNRESOLVED class — an ad-hoc command set has none of them, and `vitest run --changed` with zero matches exits 1, which is indistinguishable from a real red by exit code alone. A shard also has **no empty-set state**: it always runs a defined suite list, so the "empty derived set" fail-open cannot arise. Losing the banner would have moved the earliest sibling-collision signal past the 8-10-agent review fan-out — the cost #7247 paid, where a duplicate implementation surfaced only because a banner named the sibling worktree after a full RED→GREEN cycle had been built and had to be reverted.
