@@ -232,3 +232,32 @@ this very file reported *three* learning files from `--stat`; the correct answer
   [`knowledge-base/project/specs/archive/20260816-203421-feat-one-shot-7291-t5-mutation-network-flake/tasks.md`](../specs/archive/20260816-203421-feat-one-shot-7291-t5-mutation-network-flake/tasks.md)
   §5.4, for how that branch dispositioned six proposed scope-out rows into three filings and three
   resolved decisions across two CONCUR rounds.
+
+## Session Errors
+
+**My CI-status monitor reported a false all-green while every check was still pending.**
+The poll was `gh pr checks <n> --json name,bucket 2>/dev/null || echo '[]'`, and its terminal
+condition was "count of entries whose bucket is `pending` equals zero". A transient `gh` failure
+produced `[]`; an empty array trivially satisfies "zero pending"; the monitor emitted
+`ALL-CHECKS-SETTLED / all green`. A direct query moments later showed **38 checks, all pending**.
+
+**Recovery:** I pulled the run status independently instead of trusting the notification, which is
+the only reason it surfaced. The corrected poll requires a non-empty result set with every member
+settled, and reports a probe failure as its own distinct outcome rather than folding it into the
+success branch.
+
+**Prevention.** A poll's terminal condition must rest on **positive evidence** — *this many things
+exist and all of them are done* — never on the **absence** of a not-done marker. Absence is what
+"finished" and "the probe never answered" look like from the outside, and the failure resolves
+toward the reassuring one. Two mechanical rules:
+
+- `|| echo '[]'` (or `|| true`, or `2>/dev/null` alone) on a probe converts an error into a
+  confident empty answer. Validate the probe's output shape first (`jq -e 'type=="array"'`) and
+  branch to a `PROBE-FAILED` arm; a monitor that cannot distinguish "nothing pending" from "could
+  not look" is not measuring the thing it names.
+- Require a non-empty denominator. `total > 0 && pending == 0` rejects the empty-array case that
+  `pending == 0` alone accepts.
+
+This is the same defect the rest of this file is about, committed by the instrument rather than the
+CI step: a check whose passing state is indistinguishable from its broken state. It cost nothing
+here only because the claim was independently re-derived — which is the habit, not the mechanism.
