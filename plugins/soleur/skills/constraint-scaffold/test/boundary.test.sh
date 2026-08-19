@@ -24,6 +24,29 @@ RUNNER="$APP/scripts/constraint-gates.sh"
 
 pass=0
 fail=0
+# The INDEPENDENT case counter (ADR-193 #2). Incremented at every CALL SITE, and NEVER
+# inside ok()/bad() — the VERDICT helpers, which touch only the verdict counters. That
+# separation is the whole point: a counter bumped inside the verdict helpers moves WITH the
+# verdict, so stubbing bad() drops the row and its count together and `pass + fail == cases`
+# still holds under the exact fault it exists to catch (ADR-193 Context, third failure mode —
+# measured on this very ok()/bad() shape). Incremented at top level only, never inside a
+# `$( … )` command substitution: a subshell discards the increment while reading as correct.
+cases=0
+# Anti-vacuity thresholds. Declared here (not adjacent to their `if`) so BOTH exit doors bind
+# them and so guard-vacuity-floor's backward slice-widening finds them bound under `set -u`.
+#
+# TOOLCHAIN_FREE_MIN_ASSERTIONS guards the toolchain-SKIP exit. Derived as a genuine lower
+# bound, not a snapshot: 11 fixed assertions (1 AC4 + 7 drift-trip + 1 drift-no-false-positive
+# + 1 P2 anchoring + 1 AC5b direct-baseline) plus at least 1 VALUE_SAFE_PATH module — the
+# module count is product content that #5850 plans to shrink by relocating modules out of
+# server/**, so pinning it at today's 4 would set a landmine; the `vs_checked -lt 1` floor
+# guards that loop separately.
+# MIN_ASSERTIONS adds the 22 fixed assertions that run past the toolchain probe (3 AC3/AC6b +
+# 3 directive-form + 7 transitive 4.x + AC3 couldNotResolve + AC6 + AC6b empty-from-set +
+# AC5 empty-input + AC5 broken-cjs + AC10 + 4.8 + 4.10 + 4.11). A full green run today reports
+# 37; read a floor failure on an otherwise-green run as "you added assertions, ratchet this".
+TOOLCHAIN_FREE_MIN_ASSERTIONS=12
+MIN_ASSERTIONS=34
 ok()   { printf 'ok   - %s\n' "$1"; pass=$((pass + 1)); }
 bad()  { printf 'FAIL - %s\n' "$1"; fail=$((fail + 1)); }
 
@@ -58,6 +81,7 @@ count_suppressors() {  # $1 = baseline path; echoes count of transitive-suppress
     } catch(e){ process.stdout.write("-1"); }' "$1" "$TRANSITIVE_RULE" 2>/dev/null
 }
 REACH_CT="$(count_suppressors "$BASELINE")"
+cases=$((cases + 1))
 if [[ "$REACH_CT" == "0" ]]; then
   ok "AC4(D3.1): committed baseline has zero transitive-rule-suppressing entries"
 else
@@ -77,11 +101,21 @@ DEP_CT="$(node -e '
   try { const b = JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
     process.stdout.write(String((Array.isArray(b)?b:[]).filter(e=>e&&e.type==="dependency").length));
   } catch(e){ process.stdout.write("-1"); }' "$BASELINE" 2>/dev/null)"
-if [[ "$DEP_CT" =~ ^[0-9]+$ ]] && [[ "$DEP_CT" -ge 10 ]]; then
-  ok "AC5b(D3.3): direct-rule baseline count is $DEP_CT (>= floor 10; flip did not shrink the value-edge set)"
-else
-  bad "AC5b(D3.3): direct-rule baseline count is $DEP_CT (< floor 10) — a tsPreCompilationDeps flip regression would shrink the direct value-edge set. If you LEGITIMATELY removed a client->value-safe-module direct import, lower this floor; otherwise investigate a flip regression."
+# ADR-193 #1: this floor's failure arm reports with `printf >&2` + `exit 1` DIRECTLY rather
+# than through bad(). It measures a SYSTEM UNDER TEST (the committed baseline) rather than the
+# suite itself, but that makes no difference to the argument: routed through bad() it
+# incremented the same `fail` counter the exit status reads, so neutering bad() silenced this
+# floor together with every assertion row. Its operand ($DEP_CT) is independent of the verdict
+# counters, so no ordering conflict with the conservation check arises (ADR-193 #4).
+DIRECT_BASELINE_FLOOR=10
+if ! [[ "$DEP_CT" =~ ^[0-9]+$ ]] || [[ "$DEP_CT" -lt "$DIRECT_BASELINE_FLOOR" ]]; then
+  printf '\n[FATAL] AC5b(D3.3) direct-rule non-regression floor: baseline count is %s, expected >= %d (-1 = non-array/parse error).\n' \
+    "$DEP_CT" "$DIRECT_BASELINE_FLOOR" >&2
+  printf '  A tsPreCompilationDeps flip regression would shrink the direct value-edge set. If you LEGITIMATELY removed a client->value-safe-module direct import, lower this floor; otherwise investigate a flip regression.\n' >&2
+  exit 1
 fi
+cases=$((cases + 1))
+ok "AC5b(D3.3): direct-rule baseline count is $DEP_CT (>= floor $DIRECT_BASELINE_FLOOR; flip did not shrink the value-edge set)"
 
 # --- AC5 (D4/D3c): VALUE_SAFE_PATH modules are drift-proof value-safe -----------
 # Each module the transitive rule excludes via to.pathNot MUST NOT gain a secret,
@@ -140,6 +174,7 @@ printf 'export { SECRET_TOKEN } from "@/server/secret";\n' > "$DRIFT_TMP/bad-ree
 printf 'export const load = () => import("@/server/secret");\n' > "$DRIFT_TMP/bad-dynamic.ts"
 printf 'import type { T } from "@/lib/types";\nexport const LEADERS = ["a"] as const;\nexport function isX(s: string): s is T { return true; }\n' > "$DRIFT_TMP/good.ts"
 for bad in bad-env-dot bad-env-bracket bad-literal bad-multiline bad-import bad-reexport bad-dynamic; do
+  cases=$((cases + 1))
   if ! check_value_safe_drift "$DRIFT_TMP/$bad.ts"; then
     ok "AC5(D4): drift guard TRIPS on $bad (non-vacuous)"
   else
@@ -148,6 +183,7 @@ for bad in bad-env-dot bad-env-bracket bad-literal bad-multiline bad-import bad-
 done
 # good.ts mirrors the real modules' shape: an `import type`, an `export const` array,
 # and an `export function` declaration — none are value edges.
+cases=$((cases + 1))
 if check_value_safe_drift "$DRIFT_TMP/good.ts"; then
   ok "AC5(D4): drift guard PASSES a registry with import-type + export-const/function only (no false positive)"
 else
@@ -160,6 +196,7 @@ rm -rf "$DRIFT_TMP"
 # prefix-match `server/providers.server.ts` and silently exempt it from the transitive
 # rule. Read the RUNTIME pathNot value off the required config (avoids source-escaping
 # ambiguity) and assert sibling non-match + real-module match.
+cases=$((cases + 1))
 if node -e '
   const cfg = require(process.argv[1]);
   const rule = (cfg.forbidden||[]).find(r=>r.name==="no-client-to-server-secret-transitive");
@@ -177,11 +214,13 @@ fi
 # each real server module is still value-safe.
 VS_MODULES="$(grep -E 'VALUE_SAFE_PATH[[:space:]]*=' -A1 "$CFG" | grep -oE '\([^)]*\)' | head -1 | tr -d '()' | tr '|' ' ')"
 if [[ -z "$VS_MODULES" ]]; then
+  cases=$((cases + 1))
   bad "AC5(D4): could not extract VALUE_SAFE_PATH module list from $CFG"
 else
   vs_checked=0
   for m in $VS_MODULES; do
     mf="$APP/server/${m}.ts"
+    cases=$((cases + 1))
     if [[ ! -f "$mf" ]]; then
       bad "AC5(D4): VALUE_SAFE_PATH lists server/${m} but $mf does not exist"
       continue
@@ -193,8 +232,14 @@ else
       bad "AC5(D4): server/${m}.ts DRIFTED out of value-safe (reads process.env or value-imports) — it is pathNot-excluded, so a secret there ships green; fix it or remove from VALUE_SAFE_PATH (see #5850)"
     fi
   done
+  # ADR-193 #1: reports directly, never through bad(). This is the floor that notices the
+  # VALUE_SAFE_PATH loop asserted NOTHING; routed through bad() it was silenced by the same
+  # neutered-helper fault it exists to witness. Its operand ($vs_checked) is independent of
+  # the verdict counters.
   if [[ "$vs_checked" -lt 1 ]]; then
-    bad "AC5(D4): zero VALUE_SAFE_PATH modules checked (extraction/glob broke)"
+    printf '\n[FATAL] AC5(D4) VALUE_SAFE_PATH floor: zero modules checked, expected >= 1.\n' >&2
+    printf '  The .cjs VALUE_SAFE_PATH extraction or the module glob broke — every drift assertion in this block was skipped, so a green run here is vacuous.\n' >&2
+    exit 1
   fi
 fi
 
@@ -325,12 +370,36 @@ if ! [[ "$PARSED_COMPONENTS" =~ ^[0-9]+$ ]] || [[ "$PARSED_COMPONENTS" -lt 1 ]];
   echo "SKIP: depcruise parsed 0 component modules from the .tsx fixtures — toolchain"
   echo "      unavailable in this shard. The L1 gate is validated end-to-end by the"
   echo "      constraint-gates dogfood workflow (live apps/web-platform) + local runs."
-  exit 0
+  # This `exit 0` is a SECOND clean-exit door, so the trailer's conservation check and floor
+  # are repeated here rather than referenced: a guarantee that only guards one of two exits is
+  # not a guarantee. Everything above this point is toolchain-FREE and runs in EVERY shard, so
+  # it carries its own floor. Conservation FIRST (ADR-193 #4), both reported directly.
+  if [[ $((pass + fail)) -ne "$cases" ]]; then
+    printf '\n[FATAL] accounting: pass+fail (%d) != cases (%d).\n' "$((pass + fail))" "$cases" >&2
+    if [[ $((pass + fail)) -lt "$cases" ]]; then
+      printf '  An assertion was counted but its verdict was not recorded — that is what a neutered ok()/bad() looks like.\n' >&2
+    else
+      printf '  A verdict was recorded at a call site with no `cases=$((cases + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+    fi
+    echo "boundary.test.sh: $pass passed, $fail failed ($cases assertions, SKIPPED at the toolchain probe)"
+    exit 1
+  fi
+  if [[ "$cases" -lt "$TOOLCHAIN_FREE_MIN_ASSERTIONS" ]]; then
+    printf '\n[FATAL] anti-vacuity floor (toolchain-free half): only %d assertion(s) ran, expected >= %d.\n' \
+      "$cases" "$TOOLCHAIN_FREE_MIN_ASSERTIONS" >&2
+    printf '  Arms were deleted or skipped before the toolchain probe; skipping the depcruise half is sanctioned, asserting nothing at all is not.\n' >&2
+    echo "boundary.test.sh: $pass passed, $fail failed ($cases assertions, SKIPPED at the toolchain probe)"
+    exit 1
+  fi
+  echo "boundary.test.sh: $pass passed, $fail failed ($cases assertions, SKIPPED at the toolchain probe)"
+  [[ "$fail" -eq 0 ]]
+  exit
 fi
 
 # --- AC3 + AC6b: positive/negative + regex-escaping --------------------------
 ERR_OUT="$( cd "$FX" && "$DEPCRUISE" --config .dependency-cruiser.cjs --output-type err components server 2>&1 )"
 
+cases=$((cases + 1))
 if printf '%s' "$ERR_OUT" | grep -q 'components/leakdir/leak.tsx'; then
   ok "AC3: value import of server/** via @/server alias is flagged"
 else
@@ -338,12 +407,14 @@ else
   printf '%s\n' "$ERR_OUT" | sed 's/^/    /'
 fi
 
+cases=$((cases + 1))
 if printf '%s' "$ERR_OUT" | grep -q 'components/leakdir/typeonly.tsx'; then
   bad "AC3: import type of server/** was flagged (type-only must be allowed)"
 else
   ok "AC3: import type of server/** is allowed (not flagged)"
 fi
 
+cases=$((cases + 1))
 if printf '%s' "$ERR_OUT" | grep -qF 'components/(a|b)/parenleak.tsx'; then
   ok "AC6b: regex-metacharacter route-group path matched (regex-escaping works)"
 else
@@ -352,18 +423,21 @@ else
 fi
 
 # --- #2: directive preceded by a leading comment banner is still client -------
+cases=$((cases + 1))
 if printf '%s' "$ERR_OUT" | grep -q 'components/leakdir/bannerleak.tsx'; then
   ok "#2: leading line-comment before \"use client\" still classified client (flagged)"
 else
   bad "#2: leading line-comment banner client file NOT flagged (fail-open misclassification)"
   printf '%s\n' "$ERR_OUT" | sed 's/^/    /'
 fi
+cases=$((cases + 1))
 if printf '%s' "$ERR_OUT" | grep -q 'components/leakdir/blockbannerleak.tsx'; then
   ok "#2: leading block-comment before \"use client\" still classified client (flagged)"
 else
   bad "#2: leading block-comment banner client file NOT flagged (fail-open misclassification)"
   printf '%s\n' "$ERR_OUT" | sed 's/^/    /'
 fi
+cases=$((cases + 1))
 if printf '%s' "$ERR_OUT" | grep -q 'components/leakdir/trailingleak.tsx'; then
   ok "#2: \"use client\"; // trailing-comment form still classified client (flagged)"
 else
@@ -376,6 +450,7 @@ fi
 # reachability. Anti-vacuity (4.9): we are PAST the toolchain SKIP guard, so these
 # MUST execute and MUST fail (not skip) if a negative fixture is not flagged.
 # 4.1 NEGATIVE transitive via lib/ helper -> MUST FLAG
+cases=$((cases + 1))
 if printf '%s' "$ERR_OUT" | grep -q 'components/trans/transitive.tsx'; then
   ok "4.1: transitive value chain (client -> lib helper -> server/secret) is flagged"
 else
@@ -383,12 +458,14 @@ else
   printf '%s\n' "$ERR_OUT" | sed 's/^/    /'
 fi
 # 4.2 POSITIVE first-hop type-only -> MUST NOT FLAG (type-only edge elided globally)
+cases=$((cases + 1))
 if printf '%s' "$ERR_OUT" | grep -q 'components/trans/typeonly-firsthop.tsx'; then
   bad "4.2: first-hop import-type chain was FLAGGED (type-only must be elided -> false positive)"
 else
   ok "4.2: first-hop import-type chain is not flagged (type-only elided, position-independent)"
 fi
 # 4.3 NEGATIVE mixed import { type A, realValue } -> value edge survives -> MUST FLAG
+cases=$((cases + 1))
 if printf '%s' "$ERR_OUT" | grep -q 'components/trans/mixed.tsx'; then
   ok "4.3: mixed { type A, realValue } chain is flagged (value edge survives the flip)"
 else
@@ -396,12 +473,14 @@ else
   printf '%s\n' "$ERR_OUT" | sed 's/^/    /'
 fi
 # 4.4 NEGATIVE barrel (export *) + named export-from -> MUST FLAG
+cases=$((cases + 1))
 if printf '%s' "$ERR_OUT" | grep -q 'components/trans/barrel.tsx'; then
   ok "4.4a: barrel re-export (export * from) chain is flagged"
 else
   bad "4.4a: barrel (export *) chain NOT flagged"
   printf '%s\n' "$ERR_OUT" | sed 's/^/    /'
 fi
+cases=$((cases + 1))
 if printf '%s' "$ERR_OUT" | grep -q 'components/trans/named-barrel.tsx'; then
   ok "4.4b: named export-from re-export chain is flagged"
 else
@@ -409,6 +488,7 @@ else
   printf '%s\n' "$ERR_OUT" | sed 's/^/    /'
 fi
 # 4.5 NEGATIVE dynamic import() -> MUST FLAG
+cases=$((cases + 1))
 if printf '%s' "$ERR_OUT" | grep -q 'components/trans/dynamic.tsx'; then
   ok "4.5: dynamic import() chain is flagged (reachability traverses dynamic edges)"
 else
@@ -416,6 +496,7 @@ else
   printf '%s\n' "$ERR_OUT" | sed 's/^/    /'
 fi
 # 4.6 POSITIVE pathNot target (server/domain-leaders) -> MUST NOT FLAG by transitive rule
+cases=$((cases + 1))
 if printf '%s' "$ERR_OUT" | grep -q 'components/trans/safe-target.tsx'; then
   bad "4.6: pathNot-target chain (client -> helper -> server/domain-leaders) was FLAGGED (pathNot broken)"
   printf '%s\n' "$ERR_OUT" | sed 's/^/    /'
@@ -439,6 +520,7 @@ UNRESOLVED_INTO_SERVER="$(
     });
   ' 2>/dev/null
 )"
+cases=$((cases + 1))
 if [[ "$UNRESOLVED_INTO_SERVER" == "0" ]]; then
   ok "AC3: 0 couldNotResolve edges into server/ (tsConfig alias resolution live)"
 else
@@ -446,6 +528,7 @@ else
 fi
 
 # --- AC6: the secret (`to`) set is explicit and non-empty --------------------
+cases=$((cases + 1))
 if grep -q 'SECRET_PATH = "\^server/"' "$CFG"; then
   ok "AC6: secret (to) set is explicit and non-empty (^server/)"
 else
@@ -455,6 +538,7 @@ fi
 # --- AC6b: empty from-set while "use client" files exist -> HARD ERROR --------
 EMPTY_OUT="$( cd "$FX" && CONSTRAINT_SCAFFOLD_TEST_FORCE_EMPTY=1 node -e 'require("./.dependency-cruiser.cjs")' 2>&1 )"
 EMPTY_RC=$?
+cases=$((cases + 1))
 if [[ "$EMPTY_RC" -ne 0 ]] && printf '%s' "$EMPTY_OUT" | grep -q 'from-set is empty'; then
   ok "AC6b: empty from-set while client files exist throws (not silently disabled)"
 else
@@ -468,6 +552,7 @@ ln -s "$NODE_MODULES" "$EMPTYDIR/node_modules"
 cp "$CFG" "$EMPTYDIR/.dependency-cruiser.cjs"
 NOINPUT_OUT="$( cd "$EMPTYDIR" && node -e 'require("./.dependency-cruiser.cjs")' 2>&1 )"
 NOINPUT_RC=$?
+cases=$((cases + 1))
 if [[ "$NOINPUT_RC" -ne 0 ]] && printf '%s' "$NOINPUT_OUT" | grep -qE 'neither app/ nor components/'; then
   ok "AC5: empty input (no client dirs) fails closed (distinct from 'no client modules')"
 else
@@ -482,6 +567,7 @@ printf 'module.exports = { this is not valid javascript\n' > "$BROKEN/.dependenc
 printf '[]\n' > "$BROKEN/.dependency-cruiser-known-violations.json"
 BROKEN_OUT="$( CONSTRAINT_GATES_DIR="$BROKEN" bash "$RUNNER" 2>&1 )"
 BROKEN_RC=$?
+cases=$((cases + 1))
 if [[ "$BROKEN_RC" -ne 0 ]] && printf '%s' "$BROKEN_OUT" | grep -q 'config/binary error'; then
   ok "AC5: broken .cjs makes the shared runner fail closed (rc=$BROKEN_RC)"
 else
@@ -507,6 +593,7 @@ printf '"use client";\nimport { LEADERS } from "@/server/domain-leaders";\nexpor
 ( cd "$CLEAN" && "$DEPCRUISE" --config .dependency-cruiser.cjs --output-type baseline app components server > .dependency-cruiser-known-violations.json 2>/dev/null )
 CLEAN_OUT="$( CONSTRAINT_GATES_DIR="$CLEAN" bash "$RUNNER" 2>&1 )"
 CLEAN_RC=$?
+cases=$((cases + 1))
 if [[ "$CLEAN_RC" -eq 0 ]]; then
   ok "AC10: shared runner is green (rc=0) when all (value-safe direct) violations are baselined"
 else
@@ -531,6 +618,7 @@ rm -f "$LEAKY/components/trans/typeonly-firsthop.tsx" "$LEAKY/components/trans/s
 printf '[]\n' > "$LEAKY/.dependency-cruiser-known-violations.json"
 LEAKY_OUT="$( CONSTRAINT_GATES_DIR="$LEAKY" bash "$RUNNER" 2>&1 )"
 LEAKY_RC=$?
+cases=$((cases + 1))
 if [[ "$LEAKY_RC" -ne 0 ]] && printf '%s' "$LEAKY_OUT" | grep -q 'import-boundary violation'; then
   ok "4.8: real runner fails closed (rc=$LEAKY_RC) on an un-baselined transitive leak"
 else
@@ -552,6 +640,7 @@ cat > "$MODENTRY/.dependency-cruiser-known-violations.json" <<'JSON'
 JSON
 MODENTRY_OUT="$( CONSTRAINT_GATES_DIR="$MODENTRY" bash "$RUNNER" 2>&1 )"
 MODENTRY_RC=$?
+cases=$((cases + 1))
 if [[ "$MODENTRY_RC" -ne 0 ]] && printf '%s' "$MODENTRY_OUT" | grep -q 'suppress the transitive rule'; then
   ok "4.10: runner rejects a type:\"module\" baseline entry naming the transitive rule (rc=$MODENTRY_RC)"
 else
@@ -568,6 +657,7 @@ cp "$CFG" "$NONARRAY/.dependency-cruiser.cjs"
 printf '{}\n' > "$NONARRAY/.dependency-cruiser-known-violations.json"
 NONARRAY_OUT="$( CONSTRAINT_GATES_DIR="$NONARRAY" bash "$RUNNER" 2>&1 )"
 NONARRAY_RC=$?
+cases=$((cases + 1))
 if [[ "$NONARRAY_RC" -ne 0 ]]; then
   ok "4.11: runner fails closed on a non-array baseline (rc=$NONARRAY_RC)"
 else
@@ -575,5 +665,41 @@ else
 fi
 
 echo "---"
-echo "boundary.test.sh: $pass passed, $fail failed"
+
+# --- Accounting conservation (ADR-193 #3) --------------------------------------------------
+# Ordered BEFORE the floor (ADR-193 #4): a neutered bad()/ok() deflates the verdict counters, so
+# the floor below would ALSO trip and would report the misleading "arms were deleted". This says
+# "a verdict was discarded" instead. Reported with `printf >&2` + `exit 1` DIRECTLY, never
+# through bad(): a check that reports by calling the verdict helper increments the very counter
+# the exit status reads, so neutering bad() silences the rows AND the check meant to notice the
+# silence. Every assertion records exactly one verdict, so pass+fail MUST equal cases; because
+# `cases` moves at the CALL SITE and not inside the verdict helpers, the identity is a real
+# constraint rather than a tautology. The literal `[FATAL] accounting` is load-bearing —
+# guard-vacuity-floor's ARM 10 builds its conservation population by grepping that exact string.
+if [[ $((pass + fail)) -ne "$cases" ]]; then
+  printf '\n[FATAL] accounting: pass+fail (%d) != cases (%d).\n' "$((pass + fail))" "$cases" >&2
+  if [[ $((pass + fail)) -lt "$cases" ]]; then
+    printf '  An assertion was counted but its verdict was not recorded — that is what a neutered ok()/bad() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `cases=$((cases + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  echo "boundary.test.sh: $pass passed, $fail failed ($cases assertions)"
+  exit 1
+fi
+
+# --- Anti-vacuity floor (ADR-193 #1) -------------------------------------------------------
+# Reads the INDEPENDENT `cases` counter, and reports with `printf >&2` + `exit 1` DIRECTLY.
+# This suite previously carried NO suite-level floor at all: a harness that silently asserted
+# nothing (a fixture generator that no-ops, an editing slip that drops a block) printed a clean
+# smaller total and exited 0. See MIN_ASSERTIONS above for how the number is derived and when
+# to ratchet it.
+if [[ "$cases" -lt "$MIN_ASSERTIONS" ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
+    "$cases" "$MIN_ASSERTIONS" >&2
+  printf '  Arms were deleted or skipped; a green run here would be a coverage loss.\n' >&2
+  echo "boundary.test.sh: $pass passed, $fail failed ($cases assertions)"
+  exit 1
+fi
+
+echo "boundary.test.sh: $pass passed, $fail failed ($cases assertions)"
 [[ "$fail" -eq 0 ]]

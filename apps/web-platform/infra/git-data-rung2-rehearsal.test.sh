@@ -47,15 +47,29 @@ GATE="${ROOT}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
 
 passes=0
 fails=0
+# THE INDEPENDENT CASE COUNTER (ADR-193 #2). Incremented AT THE CALL SITE — never inside
+# pass()/fail(), and never inside `$( )` (a subshell discards it). The floor below used to
+# read `_ran=$((passes + fails))`, a total DERIVED from the verdicts: it moved WITH the
+# verdict, so a neutered fail() dropped the row and its count together and both the floor and
+# the conservation identity held under the exact fault they exist to catch. `cases` moves
+# whether or not the verdict is recorded, which is the entire difference between a check that
+# can see a discarded verdict and one that cannot.
+#
+# Placement rule, uniform across this file: one increment per VERDICT. Statement-position
+# calls carry it inline (`cases=$((cases + 1)); pass "…"`); the `cond \ && pass … \ || fail …`
+# compounds carry ONE hoisted increment on the line above, because exactly one of the two arms
+# can run. Branches that record no verdict (the bare `if …; then fail …; fi` guards) carry it
+# only on the branch that does.
+cases=0
 pass() { passes=$((passes + 1)); printf '  ok   %s\n' "$1"; }
 fail() { fails=$((fails + 1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; return 0; }
 
 printf '\n=== git-data-rung2-rehearsal ===\n\n'
 
 for f in "$WF" "$APPLY_WF" "$DRIFT_WF" "$GATE" "$MOD/main.tf"; do
-  [[ -f "$f" ]] || { fail "required file missing: $f"; }
+  [[ -f "$f" ]] || { cases=$((cases + 1)); fail "required file missing: $f"; }
 done
-[[ -d "$REH" ]] || { fail "rehearsal root missing: $REH"; printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"; exit 1; }
+[[ -d "$REH" ]] || { cases=$((cases + 1)); fail "rehearsal root missing: $REH"; printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"; exit 1; }
 
 # Comment-stripped HCL for every content assertion below.
 REH_CODE="$(mktemp -t gdr2code.XXXXXXXX)" || exit 2
@@ -73,9 +87,9 @@ sed 's/^[[:space:]]*#.*$//' "$REH"/*.tf > "$REH_CODE"
 # this root and carry no address the allowlist can score, so they are refused outright.
 _adopt=$(grep -cE '^[[:space:]]*(import|moved)[[:space:]]*\{' "$REH_CODE" || true)
 if [[ "$_adopt" -eq 0 ]]; then
-  pass "the rehearsal root declares no import/moved block (it cannot adopt production state)"
+  cases=$((cases + 1)); pass "the rehearsal root declares no import/moved block (it cannot adopt production state)"
 else
-  fail "the rehearsal root declares ${_adopt} import/moved block(s)" \
+  cases=$((cases + 1)); fail "the rehearsal root declares ${_adopt} import/moved block(s)" \
     "these adopt existing state into this root and are invisible to the address allowlist"
 fi
 # NO `\b` AFTER `git_data`. In an ERE `\b` is a word BOUNDARY and `_` is a word
@@ -85,9 +99,9 @@ fi
 # `rehearsal`-scoped, so there is nothing beginning `git_data` that belongs.
 n_prod=$(grep -cE 'hcloud_(server|volume|firewall)\.git_data|terraform_remote_state' "$REH_CODE" || true)
 if [[ "$n_prod" -eq 0 ]]; then
-  pass "the rehearsal root references NO production git-data address (comments stripped)"
+  cases=$((cases + 1)); pass "the rehearsal root references NO production git-data address (comments stripped)"
 else
-  fail "the rehearsal root references ${n_prod} production git-data address(es)/remote state" \
+  cases=$((cases + 1)); fail "the rehearsal root references ${n_prod} production git-data address(es)/remote state" \
     "$(grep -nE 'hcloud_(server|volume|firewall)\.git_data\b|terraform_remote_state' "$REH_CODE" | head -5)"
 fi
 
@@ -96,9 +110,9 @@ fi
 _mut="$(mktemp -t gdr2mut.XXXXXXXX)" || exit 2
 { cat "$REH_CODE"; printf 'volume_id = hcloud_volume.git_data.id\n'; } > "$_mut"
 if [[ "$(grep -cE 'hcloud_(server|volume|firewall)\.git_data\b|terraform_remote_state' "$_mut" || true)" -ne 0 ]]; then
-  pass "the purity predicate CAN fail (a synthetic prod reference is detected)"
+  cases=$((cases + 1)); pass "the purity predicate CAN fail (a synthetic prod reference is detected)"
 else
-  fail "the purity predicate is vacuous — a synthetic prod reference was not detected"
+  cases=$((cases + 1)); fail "the purity predicate is vacuous — a synthetic prod reference was not detected"
 fi
 rm -f "$_mut"
 
@@ -117,25 +131,29 @@ while IFS= read -r addr; do
 done < <(grep -oE '^[[:space:]]*(resource|data)[[:space:]]+"(hcloud|doppler)_[a-z_]+"[[:space:]]+"[a-z0-9_]+"' "$REH_CODE" \
          | sed -E 's/.*" *"([a-z0-9_]+)"$/\1/')
 if [[ -z "$_bad_addr" ]]; then
-  pass "every hcloud_*/doppler_* address in the rehearsal root is rehearsal-scoped"
+  cases=$((cases + 1)); pass "every hcloud_*/doppler_* address in the rehearsal root is rehearsal-scoped"
 else
-  fail "non-rehearsal-scoped address(es) in the rehearsal root:${_bad_addr}"
+  cases=$((cases + 1)); fail "non-rehearsal-scoped address(es) in the rehearsal root:${_bad_addr}"
 fi
 
 _n_addr=$(grep -cE '^resource "(hcloud|doppler)_[a-z_]+" "[a-z0-9_]+"' "$REH_CODE" || true)
-if [[ "$_n_addr" -ge 10 ]]; then
-  pass "the address enumeration is non-vacuous (${_n_addr} hcloud_*/doppler_* resources)"
-else
-  fail "only ${_n_addr} hcloud_*/doppler_* resources found (<10) — the extraction drifted, and an empty enumeration passes the allowlist arm above trivially"
+# A FLOOR, so it reports directly (ADR-193 #1) rather than through fail(): its whole job is to
+# notice that the enumeration above went empty, and a detector routed through the verdict
+# helper is silenced by the same fault that silences the rows.
+if [[ "$_n_addr" -lt 10 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %s hcloud_*/doppler_* resource(s) found in the rehearsal root, expected >= 10.\n' "$_n_addr" >&2
+  printf '  The extraction drifted; an empty enumeration passes the address-allowlist arm above trivially.\n' >&2
+  exit 1
 fi
+cases=$((cases + 1)); pass "the address enumeration is non-vacuous (${_n_addr} hcloud_*/doppler_* resources)"
 
 # ── 2. A DISTINCT STATE KEY — the control, not a guard ─────────────────────────────
 reh_key="$(grep -oE '^[[:space:]]*key[[:space:]]*=[[:space:]]*"[^"]+"' "$REH_CODE" | head -1 | sed 's/.*"\([^"]*\)"$/\1/')"
 par_key="$(sed 's/^[[:space:]]*#.*$//' "$DIR/main.tf" | grep -oE '^[[:space:]]*key[[:space:]]*=[[:space:]]*"[^"]+"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')"
 if [[ -n "$reh_key" && -n "$par_key" && "$reh_key" != "$par_key" ]]; then
-  pass "the rehearsal backend key (${reh_key}) is DISTINCT from the parent root's (${par_key})"
+  cases=$((cases + 1)); pass "the rehearsal backend key (${reh_key}) is DISTINCT from the parent root's (${par_key})"
 else
-  fail "the rehearsal and parent roots share a backend key, or one could not be extracted" \
+  cases=$((cases + 1)); fail "the rehearsal and parent roots share a backend key, or one could not be extracted" \
     "rehearsal='${reh_key}' parent='${par_key}'"
 fi
 
@@ -145,18 +163,18 @@ fi
 # the private surface anyway ("open by network membership"), so re-adding an attachment
 # behind a deny-all firewall would restore the vector while looking like a control.
 if ! grep -qE '^[[:space:]]*resource "hcloud_server_network"' "$REH_CODE"; then
-  pass "the rehearsal root attaches to NO private network (R2)"
+  cases=$((cases + 1)); pass "the rehearsal root attaches to NO private network (R2)"
 else
-  fail "the rehearsal root declares hcloud_server_network — the prod private net is reachable from a rehearsal host"
+  cases=$((cases + 1)); fail "the rehearsal root declares hcloud_server_network — the prod private net is reachable from a rehearsal host"
 fi
 
 # ── 4. NO ignore_changes ANYWHERE ──────────────────────────────────────────────────
 # The host is cattle by construction. Suppressing user_data drift in particular would let a
 # rehearsal re-report a stale boot as a fresh one.
 if ! grep -qE 'ignore_changes' "$REH_CODE"; then
-  pass "the rehearsal root suppresses no drift (no ignore_changes)"
+  cases=$((cases + 1)); pass "the rehearsal root suppresses no drift (no ignore_changes)"
 else
-  fail "the rehearsal root carries ignore_changes — a stale boot could re-report as fresh"
+  cases=$((cases + 1)); fail "the rehearsal root carries ignore_changes — a stale boot could re-report as fresh"
 fi
 
 # ── 5. BOTH ROOTS CALL THE ONE MODULE ──────────────────────────────────────────────
@@ -164,17 +182,17 @@ fi
 # the same template and the same nine payloads the rung-2 gate hashes. If either root stopped
 # calling the module, the hash would attest a render that root does not produce.
 if grep -qE 'source[[:space:]]*=[[:space:]]*"\.\./modules/git-data-userdata"' "$REH_CODE"; then
-  pass "the rehearsal root renders through the SHARED module"
+  cases=$((cases + 1)); pass "the rehearsal root renders through the SHARED module"
 else
-  fail "the rehearsal root does not call ../modules/git-data-userdata — it would attest a render it does not produce"
+  cases=$((cases + 1)); fail "the rehearsal root does not call ../modules/git-data-userdata — it would attest a render it does not produce"
 fi
 # Herestring, not a pipe: under pipefail an early match makes `sed | grep -q` return the
 # producer's SIGPIPE rather than grep's success once the body passes 64 KiB (#6649).
 _git_data_code="$(sed 's/^[[:space:]]*#.*$//' "$DIR/git-data.tf")"
 if grep -qE 'source[[:space:]]*=[[:space:]]*"\./modules/git-data-userdata"' <<<"$_git_data_code"; then
-  pass "the production root renders through the SAME shared module"
+  cases=$((cases + 1)); pass "the production root renders through the SAME shared module"
 else
-  fail "git-data.tf does not call ./modules/git-data-userdata"
+  cases=$((cases + 1)); fail "git-data.tf does not call ./modules/git-data-userdata"
 fi
 
 # ── 6. THE DIVERGENCE SET THE REHEARSAL PASSES IS THE SET THE GATE PERMITS ──────────
@@ -195,9 +213,9 @@ while IFS= read -r k; do
   esac
 done < <(printf '%s\n' "$_module_block" | grep -oE '^[[:space:]]+[a-z_]+[[:space:]]*=' | tr -d ' =')
 if [[ -n "$_declared_div" ]]; then
-  pass "the rehearsal binds$(printf '%s' "$_declared_div") — all on the gate's divergence allowlist"
+  cases=$((cases + 1)); pass "the rehearsal binds$(printf '%s' "$_declared_div") — all on the gate's divergence allowlist"
 else
-  fail "no allowlisted divergence var found in the rehearsal's module block — the extraction drifted"
+  cases=$((cases + 1)); fail "no allowlisted divergence var found in the rehearsal's module block — the extraction drifted"
 fi
 
 # The MUST-MATCH set is the sharp one: these change WHAT the host does, not WHICH host it is.
@@ -211,8 +229,8 @@ fi
 # 7d pins their absence structurally; this loop pins the inputs that DO exist.
 for _pin in git_data_server_type sentry_dsn betterstack_ingest_url; do
   case " $GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST " in
-    *" $_pin "*) fail "${_pin} is on the divergence allowlist — it changes WHAT the host does, not WHICH host it is" ;;
-    *) pass "${_pin} is NOT permitted to diverge" ;;
+    *" $_pin "*) cases=$((cases + 1)); fail "${_pin} is on the divergence allowlist — it changes WHAT the host does, not WHICH host it is" ;;
+    *) cases=$((cases + 1)); pass "${_pin} is NOT permitted to diverge" ;;
   esac
 done
 
@@ -237,9 +255,9 @@ prod_ingest="$(sed 's/^[[:space:]]*#.*$//' "$DIR/zot-registry.tf" \
   | sed 's/.*"\([^"]*\)"$/\1/')"
 if [[ -n "$reh_ingest" && -n "$prod_ingest" && "$reh_ingest" == "$prod_ingest" ]]; then
   _value_proven="${_value_proven} betterstack_ingest_url"
-  pass "the rehearsal's betterstack_ingest_url default matches production's literal"
+  cases=$((cases + 1)); pass "the rehearsal's betterstack_ingest_url default matches production's literal"
 else
-  fail "betterstack ingest URL DRIFTED between the rehearsal default and prod's local" \
+  cases=$((cases + 1)); fail "betterstack ingest URL DRIFTED between the rehearsal default and prod's local" \
     "rehearsal='${reh_ingest}' prod='${prod_ingest}'"
 fi
 
@@ -279,18 +297,23 @@ for _v in location git_data_server_type; do
   _mm_checked=$((_mm_checked + 1))
   [[ "$_rv" != "$_pv" ]] && _mm_drift="${_mm_drift} ${_v}(rehearsal=${_rv},prod=${_pv})"
 done
+# EXTRACTION FLOOR, reported directly (ADR-193 #1) — it exists to notice that the comparison
+# below has nothing to compare, which is exactly the state a fail()-routed detector cannot
+# witness once fail() is the thing that broke.
 if [[ "$_mm_checked" -lt 2 ]]; then
-  fail "MUST-MATCH default extraction found only ${_mm_checked} of 2 variables" \
-    "the awk extraction drifted; an empty comparison is vacuous"
-elif [[ -z "$_mm_drift" ]]; then
+  printf '\n[FATAL] anti-vacuity floor: MUST-MATCH default extraction found only %s of 2 variables.\n' "$_mm_checked" >&2
+  printf '  The awk extraction drifted; an empty comparison is vacuous.\n' >&2
+  exit 1
+fi
+if [[ -z "$_mm_drift" ]]; then
   # DELIBERATELY NOT added to _value_proven. This arm compares variables.tf DEFAULTS; 7c
   # compares module BINDINGS. Granting a binding-level exemption on the strength of a
   # default-level proof is a category error, and `git_data_server_type` became a module
   # binding in this very change — so adding it here (which an earlier revision did, for
   # "consistency") put the one var that selects the download arch into 7c's exemption shadow.
-  pass "location and git_data_server_type defaults match production byte-for-byte"
+  cases=$((cases + 1)); pass "location and git_data_server_type defaults match production byte-for-byte"
 else
-  fail "a MUST-MATCH default DIVERGED from production:${_mm_drift}" \
+  cases=$((cases + 1)); fail "a MUST-MATCH default DIVERGED from production:${_mm_drift}" \
     "the rehearsal would boot on different hardware/DC than the host it attests for"
 fi
 
@@ -303,9 +326,9 @@ fi
 _reh_dsn="$(_var_default "$REH/variables.tf" sentry_dsn)"
 _prod_dsn="$(_var_default "$DIR/variables.tf" sentry_dsn)"
 if [[ "$_reh_dsn" == "$_prod_dsn" ]]; then
-  pass "sentry_dsn defaults agree between the two roots (the fatal channel cannot be silently re-pointed)"
+  cases=$((cases + 1)); pass "sentry_dsn defaults agree between the two roots (the fatal channel cannot be silently re-pointed)"
 else
-  fail "the rehearsal's sentry_dsn default DIVERGED from production's" \
+  cases=$((cases + 1)); fail "the rehearsal's sentry_dsn default DIVERGED from production's" \
     "rehearsal='${_reh_dsn}' prod='${_prod_dsn}' — the rehearsal would prove a fatal channel production does not use"
 fi
 
@@ -402,9 +425,9 @@ for _f in "$DIR/git-data.tf" "$REH/rehearsal.tf"; do
     || _bind_drift="${_bind_drift} $(basename "$_f")"
 done
 if [[ -z "$_bind_drift" ]]; then
-  pass "both roots bind git_data_server_type = var.git_data_server_type into the module (the arch the precondition validates IS the arch the module derives)"
+  cases=$((cases + 1)); pass "both roots bind git_data_server_type = var.git_data_server_type into the module (the arch the precondition validates IS the arch the module derives)"
 else
-  fail "a root does not bind git_data_server_type from its own var:${_bind_drift}" \
+  cases=$((cases + 1)); fail "a root does not bind git_data_server_type from its own var:${_bind_drift}" \
     "the module would derive an arch the caller's phantom-arch precondition never validates — #6570 with the tripwire green"
 fi
 
@@ -435,9 +458,9 @@ for _pair in "$DIR/git-data.tf:git_data" "$REH/rehearsal.tf:rehearsal"; do
   fi
 done
 if [[ -z "$_srv_drift" ]]; then
-  pass "both roots create the server with server_type = var.git_data_server_type (the arch validated IS the arch the host is born on)"
+  cases=$((cases + 1)); pass "both roots create the server with server_type = var.git_data_server_type (the arch validated IS the arch the host is born on)"
 else
-  fail "a root pins its server_type independently of its own var:${_srv_drift}" \
+  cases=$((cases + 1)); fail "a root pins its server_type independently of its own var:${_srv_drift}" \
     "the host would be born on a type the precondition never validated — #6570 with every guard green"
 fi
 
@@ -486,24 +509,27 @@ done <<< "$_prod_binds"
 # references neither default.
 _exempted_sorted="$(printf '%s' "${_exempted_keys# }" | tr ' ' '\n' | sort | paste -sd, - )"
 if [[ "$_exempted_sorted" != "betterstack_ingest_url" && -n "$_exempted_sorted" ]]; then
-  fail "the value-proven exemption was consumed by an unexpected var: ${_exempted_sorted}" \
+  cases=$((cases + 1)); fail "the value-proven exemption was consumed by an unexpected var: ${_exempted_sorted}" \
     "only betterstack_ingest_url's exemption is justified (arm 7 compares its VALUES); every other var must diverge into the declared set"
 fi
 if [[ -n "$_onesided" ]]; then
-  fail "module input(s) bound by only ONE root:${_onesided}" \
+  cases=$((cases + 1)); fail "module input(s) bound by only ONE root:${_onesided}" \
     "a one-sided binding is a render divergence; counted into the derived set so R6 must refuse it rather than never seeing it"
 fi
 _declared="$(grep -oE '^[[:space:]]*REHEARSAL_DIVERGENCE:[[:space:]]*\S+' "$WF" | head -1 | awk '{print $2}')"
 # Sort both sides: the derived set comes out of `sort`, the declared literal is hand-ordered.
 _derived_sorted="$(printf '%s' "$_derived" | tr ',' '\n' | sort | paste -sd, -)"
 _declared_sorted="$(printf '%s' "$_declared" | tr ',' '\n' | sort | paste -sd, -)"
+# EXTRACTION FLOOR, reported directly (ADR-193 #1).
 if [[ "$_common" -lt 8 ]]; then
-  fail "module-binding comparison found only ${_common} shared var(s) (<8)" \
-    "the awk extraction drifted; an empty comparison makes this arm vacuous"
-elif [[ "$_derived_sorted" == "$_declared_sorted" ]]; then
-  pass "the workflow's declared divergence set equals what actually diverges (${_common} vars compared)"
+  printf '\n[FATAL] anti-vacuity floor: module-binding comparison found only %s shared var(s), expected >= 8.\n' "$_common" >&2
+  printf '  The awk extraction drifted; an empty comparison makes the divergence-set arm vacuous.\n' >&2
+  exit 1
+fi
+if [[ "$_derived_sorted" == "$_declared_sorted" ]]; then
+  cases=$((cases + 1)); pass "the workflow's declared divergence set equals what actually diverges (${_common} vars compared)"
 else
-  fail "REHEARSAL_DIVERGENCE does not match the actual divergence between the two module blocks" \
+  cases=$((cases + 1)); fail "REHEARSAL_DIVERGENCE does not match the actual divergence between the two module blocks" \
     "declared=${_declared_sorted} derived=${_derived_sorted}"
 fi
 
@@ -535,13 +561,13 @@ _n_mod="$(_shas "$MOD"/*.tf | grep -c . || true)"
 _n_reh="$(_shas "$REH"/*.tf | grep -c . || true)"
 _n_prod="$(_shas "$DIR"/git-data.tf | grep -c . || true)"
 if [[ "$_n_mod" -ne 2 ]]; then
-  fail "the shared module carries ${_n_mod} distinct sha256 literal(s) across its *.tf; the per-arch Doppler pair is exactly 2" \
+  cases=$((cases + 1)); fail "the shared module carries ${_n_mod} distinct sha256 literal(s) across its *.tf; the per-arch Doppler pair is exactly 2" \
     "either the derivation left the module (each caller is then an uncompared copy) or a third literal joined it"
 elif [[ "$_n_reh" -ne 0 || "$_n_prod" -ne 0 ]]; then
-  fail "a caller root carries a sha256 literal (rehearsal=${_n_reh} prod=${_n_prod}); both must be 0" \
+  cases=$((cases + 1)); fail "a caller root carries a sha256 literal (rehearsal=${_n_reh} prod=${_n_prod}); both must be 0" \
     "a per-root literal is a copy nothing compares — the exact shape that let a version bump land on one root only"
 else
-  pass "the Doppler checksum pair exists exactly once, in the shared module's *.tf, and nowhere in either caller root"
+  cases=$((cases + 1)); pass "the Doppler checksum pair exists exactly once, in the shared module's *.tf, and nowhere in either caller root"
 fi
 # THE MODULE'S INPUT SURFACE IS PINNED WHOLE, not screened against two forbidden names.
 #
@@ -567,14 +593,14 @@ _mod_var_names="$(sed 's/[[:space:]]#.*$//' "$MOD"/*.tf 2>/dev/null \
 _mod_var_declared="$(sed 's/[[:space:]]#.*$//' "$MOD"/*.tf 2>/dev/null | grep -cE '^variable "' || true)"
 _mod_var_extracted="$(printf '%s' "$_mod_var_names" | tr ',' '\n' | grep -c . || true)"
 if [[ "$_mod_var_declared" -ne "$_mod_var_extracted" ]]; then
-  fail "the module-input extraction saw ${_mod_var_extracted} of ${_mod_var_declared} declared variable blocks" \
+  cases=$((cases + 1)); fail "the module-input extraction saw ${_mod_var_extracted} of ${_mod_var_declared} declared variable blocks" \
     "the name pattern is narrower than the identifiers actually in use; the set comparison below would be over a subset"
 fi
 _mod_var_expected="betterstack_ingest_url,doppler_config_name,doppler_token,git_data_luks_volume_id,git_data_server_type,git_data_volume_id,git_provision_pubkey,git_remove_pubkey,git_transport_pubkey,host_name,sentry_dsn"
 if [[ "$_mod_var_names" == "$_mod_var_expected" ]]; then
-  pass "the module's input surface is exactly the pinned 11 — no doppler arch/checksum input exists, and no new input can appear unreviewed"
+  cases=$((cases + 1)); pass "the module's input surface is exactly the pinned 11 — no doppler arch/checksum input exists, and no new input can appear unreviewed"
 else
-  fail "the module's input surface drifted from the pinned set" \
+  cases=$((cases + 1)); fail "the module's input surface drifted from the pinned set" \
     "expected=${_mod_var_expected} actual=${_mod_var_names}"
 fi
 
@@ -612,18 +638,22 @@ PY
 
   _wf() { printf '%s\n' "$_wf_out" | sed -n "s/^$1=//p"; }
 
+  cases=$((cases + 1))
   [[ "$(_wf TRIGGERS)" == "workflow_dispatch" ]] \
     && pass "the rehearsal workflow is workflow_dispatch ONLY (no push/schedule can fire it)" \
     || fail "the rehearsal workflow has non-dispatch triggers: $(_wf TRIGGERS)"
 
+  cases=$((cases + 1))
   [[ "$(_wf DRYRUN_DEFAULT)" == "True" ]] \
     && pass "dry_run defaults to TRUE (a default-false makes 'just check the plan' spend a real host)" \
     || fail "dry_run does not default to true (got '$(_wf DRYRUN_DEFAULT)')"
 
+  cases=$((cases + 1))
   [[ "$(_wf TEARDOWN_PRESENT)" == "True" ]] \
     && pass "the teardown_only recovery arm exists (R12 — detection without recovery leaves a paying host)" \
     || fail "the teardown_only input is missing — teardown failure would have no automated remedy"
 
+  cases=$((cases + 1))
   [[ "$(_wf FAULT_INJECTION)" == "False" ]] \
     && pass "no fault_injection input (cut: injecting a fault alters what boots, so the output can never be evidence)" \
     || fail "a fault_injection input is present — it is incoherent with the hash binding"
@@ -632,11 +662,12 @@ PY
   # distinct group PERMITS a rehearsal and a birth to run at once, which inverts the point.
   _birth_groups=$(grep -cE '^[[:space:]]{6}group: git-data-state[[:space:]]*$' "$APPLY_WF" || true)
   if [[ "$(_wf GROUP)" == "git-data-state" && "$_birth_groups" -eq 2 ]]; then
-    pass "the rehearsal JOINS the birth/replace concurrency group (git-data-state, ${_birth_groups} sibling jobs)"
+    cases=$((cases + 1)); pass "the rehearsal JOINS the birth/replace concurrency group (git-data-state, ${_birth_groups} sibling jobs)"
   else
-    fail "concurrency group mismatch: rehearsal='$(_wf GROUP)', sibling jobs on git-data-state=${_birth_groups}" \
+    cases=$((cases + 1)); fail "concurrency group mismatch: rehearsal='$(_wf GROUP)', sibling jobs on git-data-state=${_birth_groups}" \
       "GitHub does not error on divergent group strings — they silently fail to serialize"
   fi
+  cases=$((cases + 1))
   [[ "$(_wf CANCEL)" == "False" ]] \
     && pass "cancel-in-progress is false (cancelling mid-apply orphans a half-created host)" \
     || fail "cancel-in-progress is not false (got '$(_wf CANCEL)')"
@@ -645,6 +676,7 @@ PY
   # interlock; a workflow that could push it to main would be self-approving.
   # The map now merges workflow-level with EVERY job-level block, so a job-scoped
   # `contents: write` shows up as `contents@<job>:write` and breaks this exact-match.
+  cases=$((cases + 1))
   [[ "$(_wf PERMS)" == "contents:read" ]] \
     && pass "permissions are contents:read ONLY — the workflow structurally CANNOT commit its own evidence" \
     || fail "workflow permissions are '$(_wf PERMS)', not exactly contents:read — it may be able to commit the file that releases the birth interlock"
@@ -652,15 +684,18 @@ PY
   # APPENDED job is unexamined by all of them: measured, a second job carrying contents:write,
   # an unpinned checkout, no environment, and `git commit && git push` left this suite green.
   # A new job is a deliberate change; it should have to come here and say so.
+  cases=$((cases + 1))
   [[ "$(_wf JOBS)" == "rehearse" ]] \
     && pass "the workflow declares exactly one job (rehearse) — no unexamined sibling job" \
     || fail "the workflow declares jobs '$(_wf JOBS)', expected exactly 'rehearse'" \
          "every job-scoped assertion in this suite reads the rehearse job only, so a sibling job is unexamined"
 
+  cases=$((cases + 1))
   [[ "$(_wf ENVIRONMENT)" == "web-platform-infra-apply" ]] \
     && pass "the job declares the reviewed environment (DP-11 F8: a zero-reviewer environment auto-approves)" \
     || fail "environment is '$(_wf ENVIRONMENT)', not web-platform-infra-apply"
 
+  cases=$((cases + 1))
   [[ -z "$(_wf UNPINNED)" ]] \
     && pass "every action is SHA-pinned" \
     || fail "unpinned action(s): $(_wf UNPINNED)"
@@ -721,7 +756,7 @@ PY
   _cap_extract_rc=$?
 
   if [[ "$_cap_extract_rc" -ne 0 || ! -s "$_cap_body" ]]; then
-    fail "could not extract the capture step body keyed on 'id: capture'" \
+    cases=$((cases + 1)); fail "could not extract the capture step body keyed on 'id: capture'" \
       "an empty extraction must FAIL, never silently skip — the upload step gates on steps.capture.outputs.capture_rc, so that id is load-bearing"
   else
     # Executes the extracted body under `bash -e` (what GitHub actually uses) with `doppler`
@@ -797,36 +832,39 @@ PY
     # built a throwaway dir, put a `sleep` in it, and checked that PATH lookup found it —
     # a property of bash, constant-true, and it never touched the dir `_run_capture` uses.
     # The real body sleeps 30 s between attempts, so three attempts unstubbed is 60 s+.
+    cases=$((cases + 1))
     [[ "$_cap_elapsed" -lt 10 ]] \
       && pass "arm 13's three attempts completed in ${_cap_elapsed}s — the sleep stub is genuinely shadowing (unstubbed would be 60s+)" \
       || fail "arm 13 took ${_cap_elapsed}s — the sleep stub is NOT shadowing, so this arm is silently a minute-long test"
 
     if grep -q -- '--- capture attempt 2/20' "$_out13/stdout"; then
-      pass "the capture poll REACHES ATTEMPT 2 (the whole defect: production stopped at 1/20)"
+      cases=$((cases + 1)); pass "the capture poll REACHES ATTEMPT 2 (the whole defect: production stopped at 1/20)"
     else
-      fail "the capture poll never reached attempt 2/20 (ran ${_att13} attempt(s))" \
+      cases=$((cases + 1)); fail "the capture poll never reached attempt 2/20 (ran ${_att13} attempt(s))" \
         "GitHub runs this step as \`bash -e {0}\`; without an explicit \`set +e\` the TRANSIENT rc=2 this poll exists to retry kills it on attempt 1"
     fi
 
+    cases=$((cases + 1))
     [[ "$_rc13" -eq 0 ]] \
       && pass "a terminal PASS exits 0 (the poll ran to a real verdict instead of dying on a retryable one)" \
       || fail "the capture body exited ${_rc13} on a stub that PASSes on attempt 3"
 
     if grep -q '^capture_rc=0$' "$_out13/gh_output" 2>/dev/null; then
-      pass "capture_rc=0 is written to \$GITHUB_OUTPUT (the upload step's gate reads exactly this)"
+      cases=$((cases + 1)); pass "capture_rc=0 is written to \$GITHUB_OUTPUT (the upload step's gate reads exactly this)"
     else
-      fail "capture_rc was not written as 0 to \$GITHUB_OUTPUT" \
+      cases=$((cases + 1)); fail "capture_rc was not written as 0 to \$GITHUB_OUTPUT" \
         "in production it was never written at all, so the upload gate compared against an empty string"
     fi
 
     if grep -q 'Rung-2 rehearsal: PASS' "$_out13/gh_summary" 2>/dev/null; then
-      pass "the PASS verdict reaches \$GITHUB_STEP_SUMMARY"
+      cases=$((cases + 1)); pass "the PASS verdict reaches \$GITHUB_STEP_SUMMARY"
     else
-      fail "no PASS line reached \$GITHUB_STEP_SUMMARY"
+      cases=$((cases + 1)); fail "no PASS line reached \$GITHUB_STEP_SUMMARY"
     fi
 
     # Without this, a future edit that drops `doppler run` entirely leaves the stub unused and
     # the arm passes for reasons that have nothing to do with the poll.
+    cases=$((cases + 1))
     [[ "${_inv13:-0}" -gt 0 ]] \
       && pass "the doppler stub was actually invoked (${_inv13}x) — the arm is exercising the real call, not an empty loop" \
       || fail "the doppler stub was never invoked — arm 13 passed without executing the capture call"
@@ -838,9 +876,9 @@ PY
     _rb="$(_run_capture "$_mut_b" pass_on_3)"
     _rcb="${_rb%%|*}"; _restb="${_rb#*|}"; _attb="${_restb%%|*}"; _outb="${_restb#*|}"; _outb="${_outb#*|}"
     if [[ "$_attb" -eq 1 && "$_rcb" -ne 0 ]]; then
-      pass "MUTATION 13b (set +e stripped): collapses to 1 attempt and exits ${_rcb} — the guard can go RED"
+      cases=$((cases + 1)); pass "MUTATION 13b (set +e stripped): collapses to 1 attempt and exits ${_rcb} — the guard can go RED"
     else
-      fail "MUTATION 13b did NOT reproduce the bug: ${_attb} attempt(s), exit ${_rcb}" \
+      cases=$((cases + 1)); fail "MUTATION 13b did NOT reproduce the bug: ${_attb} attempt(s), exit ${_rcb}" \
         "a guard that cannot fail is not a guard; this mutation IS the production defect"
     fi
     rm -f "$_mut_b"
@@ -863,15 +901,15 @@ sys.exit(0 if n == 1 else 4)
 PY
     _mut_c_rc=$?
     if [[ "$_mut_c_rc" -ne 0 ]]; then
-      fail "could not construct mutation 13c (no adjacent 'rc=\${PIPESTATUS[0]}' + 'set -e' pair found)" \
+      cases=$((cases + 1)); fail "could not construct mutation 13c (no adjacent 'rc=\${PIPESTATUS[0]}' + 'set -e' pair found)" \
         "the ordering this arm protects is not present in the extracted body — the fix is missing or was reshaped"
     else
       _rcc_all="$(_run_capture "$_mut_c" pass_on_3)"
       _rcc="${_rcc_all%%|*}"; _restc="${_rcc_all#*|}"; _attc="${_restc%%|*}"; _restc="${_restc#*|}"; _outc="${_restc#*|}"
       if [[ "$_attc" -eq 1 && "$_rcc" -eq 0 ]] || grep -q 'Rung-2 rehearsal: PASS' "$_outc/gh_summary" 2>/dev/null; then
-        pass "MUTATION 13c (set -e before the read): produces the SILENT FALSE PASS — ${_attc} attempt(s), exit ${_rcc}; the ordering is load-bearing and pinned"
+        cases=$((cases + 1)); pass "MUTATION 13c (set -e before the read): produces the SILENT FALSE PASS — ${_attc} attempt(s), exit ${_rcc}; the ordering is load-bearing and pinned"
       else
-        fail "MUTATION 13c did not reproduce the false-PASS shape (${_attc} attempt(s), exit ${_rcc})" \
+        cases=$((cases + 1)); fail "MUTATION 13c did not reproduce the false-PASS shape (${_attc} attempt(s), exit ${_rcc})" \
           "if this stops reproducing, the ordering guarantee this arm exists to pin has moved — re-derive it before deleting the arm"
       fi
     fi
@@ -889,25 +927,26 @@ PY
     # `-eq 2`, NOT `-le 2`: the loose form also passes at ONE attempt, which is the original
     # errexit bug's signature — so arm 13e would have stayed green if that bug returned.
     if [[ "$_atte" -eq 2 ]]; then
-      pass "a no-sentinel rc=1 (wrapper auth failure) stops after exactly 2 attempts, not 20 — no 16-minute burn on a paid host"
+      cases=$((cases + 1)); pass "a no-sentinel rc=1 (wrapper auth failure) stops after exactly 2 attempts, not 20 — no 16-minute burn on a paid host"
     else
-      fail "a wrapper auth failure ran ${_atte} attempt(s), expected exactly 2" \
+      cases=$((cases + 1)); fail "a wrapper auth failure ran ${_atte} attempt(s), expected exactly 2" \
         "more means retrying a bad credential for ~16 minutes on a paid Hetzner host; ONE means the errexit bug is back"
     fi
     # The NUMERIC contract of the new class, not just its display prose: a copy edit to the
     # summary should not be the only thing this arm can detect.
+    cases=$((cases + 1))
     [[ "$_rce" -eq 3 ]] \
       && pass "the wrapper-failure class exits 3 (distinct from 1 FAIL and 2 TRANSIENT)" \
       || fail "the wrapper-failure path exited ${_rce}, expected 3"
     if grep -q '^capture_rc=3$' "$_oute/gh_output" 2>/dev/null; then
-      pass "capture_rc=3 is written to \$GITHUB_OUTPUT"
+      cases=$((cases + 1)); pass "capture_rc=3 is written to \$GITHUB_OUTPUT"
     else
-      fail "capture_rc=3 was not written to \$GITHUB_OUTPUT"
+      cases=$((cases + 1)); fail "capture_rc=3 was not written to \$GITHUB_OUTPUT"
     fi
     if grep -q 'WRAPPER FAILURE' "$_oute/gh_summary" 2>/dev/null; then
-      pass "the wrapper failure gets its own summary class, naming the credential rather than the host"
+      cases=$((cases + 1)); pass "the wrapper failure gets its own summary class, naming the credential rather than the host"
     else
-      fail "no WRAPPER FAILURE summary class — a bad doppler token reports as TRANSIENT" \
+      cases=$((cases + 1)); fail "no WRAPPER FAILURE summary class — a bad doppler token reports as TRANSIENT" \
         "whose own text says 'This is NOT evidence the host booted dark', sending the operator to the one place the answer is not"
     fi
 
@@ -922,17 +961,19 @@ PY
     _rf="$(_run_capture "$_cap_body" host_fail)"
     _rcf="$(_cap_field "${_rf%%|*}")"; _restf="${_rf#*|}"
     _attf="$(_cap_field "${_restf%%|*}")"; _restf="${_restf#*|}"; _outf="${_restf#*|}"
+    cases=$((cases + 1))
     [[ "$_rcf" -eq 1 ]] \
       && pass "a host FAIL (rc=1 WITH the verdict sentinel) exits 1 — the step goes red, so the job cannot report success over a dark boot" \
       || fail "a host FAIL exited ${_rcf}, expected 1" \
            "if this is 0 the job goes GREEN on a host that booted dark — the failure the interlock exists to catch"
+    cases=$((cases + 1))
     [[ "$_attf" -eq 1 ]] \
       && pass "a host FAIL is TERMINAL — it is not retried (retrying a real finding would turn it into a timeout)" \
       || fail "a host FAIL ran ${_attf} attempts; a terminal verdict must not be retried"
     if grep -q 'Rung-2 rehearsal: FAIL' "$_outf/gh_summary" 2>/dev/null; then
-      pass "a host FAIL reports the FAIL class, not TRANSIENT or WRAPPER FAILURE"
+      cases=$((cases + 1)); pass "a host FAIL reports the FAIL class, not TRANSIENT or WRAPPER FAILURE"
     else
-      fail "a host FAIL did not print the FAIL summary class" \
+      cases=$((cases + 1)); fail "a host FAIL did not print the FAIL summary class" \
         "it is being reported as some other class — the sentinel or the rc branch has drifted"
     fi
 
@@ -945,10 +986,12 @@ PY
     _rg="$(_run_capture "$_cap_body" blip_then_pass)"
     _rcg="$(_cap_field "${_rg%%|*}")"; _restg="${_rg#*|}"
     _attg="$(_cap_field "${_restg%%|*}")"; _restg="${_restg#*|}"; _outg="${_restg#*|}"
+    cases=$((cases + 1))
     [[ "$_rcg" -eq 0 ]] \
       && pass "a single wrapper blip followed by a real verdict still reaches PASS (the fast-fail is consecutive, not cumulative)" \
       || fail "one wrapper blip aborted the run (exit ${_rcg}) — the fast-fail is too aggressive" \
            "a transient doppler failure on attempt 1 would end a rehearsal that has already spent a paid host"
+    cases=$((cases + 1))
     [[ "$_attg" -ge 3 ]] \
       && pass "the poll continued past the blip (${_attg} attempts) instead of treating it as terminal" \
       || fail "the poll stopped after ${_attg} attempt(s) on a single blip"
@@ -1043,10 +1086,12 @@ PY
   # a workflow containing ZERO PIPESTATUS reads -- the rule would fire zero times and still
   # report clean. MATCHED counts the reads actually examined, which is what the rule
   # quantifies over.
+  cases=$((cases + 1))
   [[ "${_matched:-0}" -ge 1 ]] \
     && pass "the errexit-posture rule examined ${_matched} PIPESTATUS read(s) across ${_scanned} run: bodies (non-vacuous)" \
     || fail "the errexit-posture rule examined ZERO PIPESTATUS reads (scanned ${_scanned:-0} bodies) — a vacuous pass" \
          "the capture step must read \${PIPESTATUS[0]}; if it no longer does, this arm is guarding nothing"
+  cases=$((cases + 1))
   [[ "${_violations:-1}" -eq 0 ]] \
     && pass "every PIPESTATUS read in this workflow sits under \`set +e\` with nothing between the pipeline and the read" \
     || fail "${_violations} run: body/bodies read PIPESTATUS under the wrong errexit posture" \
@@ -1076,6 +1121,7 @@ for s in d["jobs"]["rehearse"]["steps"]:
         print("%s\t%s" % (s.get("name") or s.get("id"), " ".join(str(s["if"]).split())))
 PY
 )
+  cases=$((cases + 1))
   [[ -z "$_statusfn_bad" ]] \
     && pass "every step gated on a NON-PASS capture_rc carries a status function — none is silently ANDed with success()" \
     || fail "step(s) gated on capture_rc != '0' with no status function:${_statusfn_bad}" \
@@ -1085,13 +1131,13 @@ PY
   # capture_rc is written by the step this suite's arm 13 executes. Retained from the review's
   # cut of a speculative continue-on-error assertion — this one is measured, not hypothesised.
   if grep -qE "steps\.capture\.outputs\.capture_rc == '0'" "$WF"; then
-    pass "the evidence upload still gates on steps.capture.outputs.capture_rc == '0'"
+    cases=$((cases + 1)); pass "the evidence upload still gates on steps.capture.outputs.capture_rc == '0'"
   else
-    fail "the evidence upload no longer gates on steps.capture.outputs.capture_rc == '0'" \
+    cases=$((cases + 1)); fail "the evidence upload no longer gates on steps.capture.outputs.capture_rc == '0'" \
       "in production that comparison ran against an empty string because the step died before writing it"
   fi
 else
-  fail "python3 absent — the workflow-contract arms did NOT run" \
+  cases=$((cases + 1)); fail "python3 absent — the workflow-contract arms did NOT run" \
     "a gate that cannot run must not report success"
 fi
 
@@ -1106,14 +1152,14 @@ fi
 # comparison from the sentence explaining it, so it refuses the file for being documented.
 # That is cq-assert-anchor-not-bare-token, caught by this suite on its own author.
 if grep -qE '\!=[[:space:]]*"REHEARSE-GIT-DATA"' "$WF"; then
-  pass "the rehearsal workflow COMPARES the confirm input against REHEARSE-GIT-DATA"
+  cases=$((cases + 1)); pass "the rehearsal workflow COMPARES the confirm input against REHEARSE-GIT-DATA"
 else
-  fail "no confirm-token comparison against REHEARSE-GIT-DATA in the rehearsal workflow"
+  cases=$((cases + 1)); fail "no confirm-token comparison against REHEARSE-GIT-DATA in the rehearsal workflow"
 fi
 if ! grep -qE '[=!]=[[:space:]]*"BIRTH-GIT-DATA"' "$WF"; then
-  pass "the rehearsal workflow never COMPARES against the birth token (prose mentioning it is fine)"
+  cases=$((cases + 1)); pass "the rehearsal workflow never COMPARES against the birth token (prose mentioning it is fine)"
 else
-  fail "the rehearsal workflow compares against BIRTH-GIT-DATA — a token typed for one path could authorize the other"
+  cases=$((cases + 1)); fail "the rehearsal workflow compares against BIRTH-GIT-DATA — a token typed for one path could authorize the other"
 fi
 
 # ── 10. THE PREFIX LITERAL AND ITS TRAILING HYPHEN ─────────────────────────────────
@@ -1126,9 +1172,9 @@ _pfx_tf="$(grep -oE 'rehearsal_host_name[[:space:]]*=[[:space:]]*"[^"]*"' "$REH_
 _pfx_wf="$(grep -oE '^[[:space:]]*REHEARSAL_PREFIX:[[:space:]]*\S+' "$WF" | head -1 | awk '{print $2}')"
 _pfx_drift="$(grep -oE '^[[:space:]]*REHEARSAL_PREFIX:[[:space:]]*\S+' "$DRIFT_WF" | head -1 | awk '{print $2}')"
 if [[ "$_pfx_wf" == "soleur-git-data-rehearsal-" && "$_pfx_drift" == "soleur-git-data-rehearsal-" ]]; then
-  pass "the rehearsal prefix agrees in the dispatch workflow and the orphan sweep"
+  cases=$((cases + 1)); pass "the rehearsal prefix agrees in the dispatch workflow and the orphan sweep"
 else
-  fail "rehearsal prefix DRIFTED: workflow='${_pfx_wf}' drift-sweep='${_pfx_drift}'"
+  cases=$((cases + 1)); fail "rehearsal prefix DRIFTED: workflow='${_pfx_wf}' drift-sweep='${_pfx_drift}'"
 fi
 # THE TERRAFORM COPY IS THE ONE THAT NAMES THE HOST, and it was shape-checked but never
 # COMPARED to the two literals the sweeps match against. Measured (#7066 review): renaming
@@ -1137,19 +1183,19 @@ fi
 # each printing "teardown verified / no survivors" while a paying host with a LUKS volume ran
 # on. A shape check cannot see a prefix change; only a comparison can.
 if [[ "$_pfx_tf" == "${_pfx_wf}"* ]]; then
-  pass "the Terraform host name starts with the prefix both sweeps match on (${_pfx_wf})"
+  cases=$((cases + 1)); pass "the Terraform host name starts with the prefix both sweeps match on (${_pfx_wf})"
 else
-  fail "the Terraform host name '${_pfx_tf}' does not start with the sweeps' prefix '${_pfx_wf}'" \
+  cases=$((cases + 1)); fail "the Terraform host name '${_pfx_tf}' does not start with the sweeps' prefix '${_pfx_wf}'" \
     "both orphan sweeps would match zero servers and report success while a rehearsal host runs"
 fi
 for _p in "$_pfx_wf" "$_pfx_drift"; do
   case "$_p" in
     *-) : ;;
-    *) fail "rehearsal prefix '${_p}' has NO trailing hyphen — it would also match the production host soleur-git-data" ;;
+    *) cases=$((cases + 1)); fail "rehearsal prefix '${_p}' has NO trailing hyphen — it would also match the production host soleur-git-data" ;;
   esac
 done
 if [[ "$_pfx_wf" == *- && "$_pfx_drift" == *- ]]; then
-  pass "both prefixes carry the load-bearing trailing hyphen"
+  cases=$((cases + 1)); pass "both prefixes carry the load-bearing trailing hyphen"
 fi
 # A FOURTH COPY (#7227 item 4): the evidence-capture script now refuses any --host-name that
 # does not carry this prefix, so its regex is a consumer of the same literal and drifts the
@@ -1166,30 +1212,30 @@ fi
 _pfx_cap="$(grep -oE '=~[[:space:]]*\^soleur-git-data-rehearsal-' \
   "${ROOT}/scripts/followthroughs/git-data-rung2-evidence-capture.sh" | head -1 | sed 's/.*\^//')"
 if [[ "$_pfx_cap" == "$_pfx_wf" ]]; then
-  pass "the evidence-capture script's --host-name constraint pins the same rehearsal prefix"
+  cases=$((cases + 1)); pass "the evidence-capture script's --host-name constraint pins the same rehearsal prefix"
 else
-  fail "the evidence-capture --host-name constraint does not pin the rehearsal prefix (got '${_pfx_cap:-none}', want '${_pfx_wf}')" \
+  cases=$((cases + 1)); fail "the evidence-capture --host-name constraint does not pin the rehearsal prefix (got '${_pfx_cap:-none}', want '${_pfx_wf}')" \
     "Unconstrained, the capture script can be aimed at the production host soleur-git-data and project its boot telemetry into a PUBLIC Actions log."
 fi
 if [[ "$_pfx_tf" == *"rehearsal-\${var.rehearsal_run_id}"* ]]; then
-  pass "the Terraform host name is prefix + run id (unique per rehearsal, so a leak cannot be adopted)"
+  cases=$((cases + 1)); pass "the Terraform host name is prefix + run id (unique per rehearsal, so a leak cannot be adopted)"
 else
-  fail "the rehearsal host name is not prefix+run_id (got '${_pfx_tf}')"
+  cases=$((cases + 1)); fail "the rehearsal host name is not prefix+run_id (got '${_pfx_tf}')"
 fi
 
 # ── 11. THE PARENT APPLY DOES NOT FIRE ON A REHEARSAL-ONLY EDIT (R10) ──────────────
 if grep -qE '^[[:space:]]*-[[:space:]]*"!apps/web-platform/infra/rung2-rehearsal/\*\*"' "$APPLY_WF"; then
-  pass "the parent apply's push filter EXCLUDES the rehearsal subdir (R10)"
+  cases=$((cases + 1)); pass "the parent apply's push filter EXCLUDES the rehearsal subdir (R10)"
 else
-  fail "apply-web-platform-infra.yml still fires on apps/web-platform/infra/** without excluding rung2-rehearsal/" \
+  cases=$((cases + 1)); fail "apply-web-platform-infra.yml still fires on apps/web-platform/infra/** without excluding rung2-rehearsal/" \
     "a rehearsal-only edit would trigger a PRODUCTION apply of the parent root"
 fi
 # The module must NOT be excluded — the production host really does render from it, so an
 # edit there is a genuine production change.
 if grep -qE 'rung2-rehearsal' "$APPLY_WF" && ! grep -qE '!apps/web-platform/infra/modules' "$APPLY_WF"; then
-  pass "modules/ is NOT excluded from the parent apply (the production host renders from it)"
+  cases=$((cases + 1)); pass "modules/ is NOT excluded from the parent apply (the production host renders from it)"
 else
-  fail "the parent apply excludes modules/ — a real production render change would not trigger an apply"
+  cases=$((cases + 1)); fail "the parent apply excludes modules/ — a real production render change would not trigger an apply"
 fi
 
 # ── 11b. PROVIDER VERSIONS ARE PINNED TO THE PARENT ROOT'S, NOT MERELY CONSTRAINED ──
@@ -1206,7 +1252,7 @@ fi
 _lock_par="$DIR/.terraform.lock.hcl"
 _lock_reh="$REH/.terraform.lock.hcl"
 if [[ ! -f "$_lock_par" || ! -f "$_lock_reh" ]]; then
-  fail "a committed .terraform.lock.hcl is missing" "parent=${_lock_par} rehearsal=${_lock_reh}"
+  cases=$((cases + 1)); fail "a committed .terraform.lock.hcl is missing" "parent=${_lock_par} rehearsal=${_lock_reh}"
 else
   _lock_ver() {  # $1=lockfile $2=provider path -> version
     awk -v p="provider \"registry.terraform.io/$2\" {" '
@@ -1220,13 +1266,16 @@ else
     _checked=$((_checked + 1))
     [[ "$_pv" != "$_rv" ]] && _drift="${_drift} ${_prov}(parent=${_pv},rehearsal=${_rv})"
   done
+  # EXTRACTION FLOOR, reported directly (ADR-193 #1).
   if [[ "$_checked" -lt 4 ]]; then
-    fail "provider-lock parity extraction found only ${_checked} shared provider(s) (<4)" \
-      "the awk extraction drifted; an empty intersection makes the comparison below vacuous"
-  elif [[ -z "$_drift" ]]; then
-    pass "all ${_checked} shared provider versions are locked identically in both roots"
+    printf '\n[FATAL] anti-vacuity floor: provider-lock parity extraction found only %s shared provider(s), expected >= 4.\n' "$_checked" >&2
+    printf '  The awk extraction drifted; an empty intersection makes the parity comparison vacuous.\n' >&2
+    exit 1
+  fi
+  if [[ -z "$_drift" ]]; then
+    cases=$((cases + 1)); pass "all ${_checked} shared provider versions are locked identically in both roots"
   else
-    fail "provider-lock DRIFT between the rehearsal root and production:${_drift}" \
+    cases=$((cases + 1)); fail "provider-lock DRIFT between the rehearsal root and production:${_drift}" \
       "the rehearsal would render/attach under a different provider than the host it attests for"
   fi
 fi
@@ -1242,17 +1291,17 @@ fi
 DRIFT_CODE="$(mktemp -t gdr2drift.XXXXXXXX)" || exit 2
 sed 's/^[[:space:]]*#.*$//; s/[[:space:]]#.*$//' "$DRIFT_WF" > "$DRIFT_CODE"
 if grep -q 'rung2-rehearsal-orphan-sweep' "$DRIFT_CODE"; then
-  pass "the scheduled drift workflow carries a rung-2 orphan sweep"
+  cases=$((cases + 1)); pass "the scheduled drift workflow carries a rung-2 orphan sweep"
 else
-  fail "no rung-2 orphan sweep — a leaked rehearsal host would be invisible to every terraform plan"
+  cases=$((cases + 1)); fail "no rung-2 orphan sweep — a leaked rehearsal host would be invisible to every terraform plan"
 fi
 # Anchored on the CALL, not on a bare URL: the sweep now iterates resource kinds
 # (servers/volumes/ssh_keys/firewalls) because a partial teardown strands volumes and the
 # scratch Doppler config far more often than it strands the box.
 if grep -qE 'api\.hetzner\.cloud/v1/\$\{_kind\}' "$DRIFT_CODE"; then
-  pass "the sweep asks HETZNER, not terraform state (state cannot see what it has forgotten)"
+  cases=$((cases + 1)); pass "the sweep asks HETZNER, not terraform state (state cannot see what it has forgotten)"
 else
-  fail "the orphan sweep does not query the Hetzner API"
+  cases=$((cases + 1)); fail "the orphan sweep does not query the Hetzner API"
 fi
 
 # ── 14. THIS SUITE RUNS WHEN THE WORKFLOWS IT GUARDS ARE EDITED ────────────────────
@@ -1269,9 +1318,9 @@ fi
 # file reds here until its path is registered.
 INFRA_VALIDATION_WF="${ROOT}/.github/workflows/infra-validation.yml"
 if [[ ! -f "$INFRA_VALIDATION_WF" ]]; then
-  fail "infra-validation.yml is missing — cannot verify this suite is registered against the workflows it reads"
+  cases=$((cases + 1)); fail "infra-validation.yml is missing — cannot verify this suite is registered against the workflows it reads"
 elif ! command -v python3 >/dev/null 2>&1; then
-  fail "python3 absent — the path-registration arm did NOT run" \
+  cases=$((cases + 1)); fail "python3 absent — the path-registration arm did NOT run" \
     "a gate that cannot run must not report success"
 else
   # ASK THE OPERATIONAL QUESTION, not a textual one: "would a PR editing ONLY this file
@@ -1331,20 +1380,24 @@ PY
   _pnofile="$(printf '%s\n' "$_paths_probe" | sed -n 's/^NOFILE=//p' | tr '\n' ' ')"
   _pcontrol="$(printf '%s\n' "$_paths_probe" | sed -n 's/^CONTROL_ROUTES=//p')"
   if printf '%s' "$_paths_probe" | grep -q 'PROBE_FAILED=1'; then
-    fail "could not parse infra-validation.yml's pull_request filter — refusing to read an unparseable filter as coverage"
+    cases=$((cases + 1)); fail "could not parse infra-validation.yml's pull_request filter — refusing to read an unparseable filter as coverage"
+  # EXTRACTION FLOOR, reported directly (ADR-193 #1). Kept in ITS ORIGINAL CHAIN POSITION:
+  # an unparseable probe leaves _pguarded empty, so hoisting this above the PROBE_FAILED arm
+  # would report a drifted extraction where the real fault is an unreadable filter.
   elif [[ "${_pguarded:-0}" -lt 3 ]]; then
-    fail "derived only ${_pguarded:-0} guarded workflow(s) from this suite's own *_WF= assignments (expected >= 3)" \
-      "the extraction drifted; this arm is comparing against an incomplete set and would pass over an unregistered workflow"
+    printf '\n[FATAL] anti-vacuity floor: derived only %s guarded workflow(s) from this suite own *_WF= assignments, expected >= 3.\n' "${_pguarded:-0}" >&2
+    printf '  The extraction drifted; this arm would be comparing against an incomplete set and would pass over an unregistered workflow.\n' >&2
+    exit 1
   elif [[ "${_pcontrol:-1}" -ne 0 ]]; then
-    fail "NEGATIVE CONTROL FAILED: a PR touching only README.md would trigger infra-validation" \
+    cases=$((cases + 1)); fail "NEGATIVE CONTROL FAILED: a PR touching only README.md would trigger infra-validation" \
       "the filter matches everything (paths-ignore, or a stray '**'), so this arm's pass would be vacuous"
   elif [[ -n "$_pnofile" ]]; then
-    fail "a *_WF= assignment names a file that does not exist: ${_pnofile}" \
+    cases=$((cases + 1)); fail "a *_WF= assignment names a file that does not exist: ${_pnofile}" \
       "cannot verify registration for a workflow that is not on disk"
   elif [[ -z "$_pmissing" ]]; then
-    pass "a PR editing ONLY any of the ${_pguarded} workflows this suite reads WOULD trigger infra-validation (parsed filter, negative control held)"
+    cases=$((cases + 1)); pass "a PR editing ONLY any of the ${_pguarded} workflows this suite reads WOULD trigger infra-validation (parsed filter, negative control held)"
   else
-    fail "editing ONLY these workflow(s) would NOT trigger infra-validation: ${_pmissing}" \
+    cases=$((cases + 1)); fail "editing ONLY these workflow(s) would NOT trigger infra-validation: ${_pmissing}" \
       "this suite guards them, so a PR changing one would skip the guard entirely — check for a missing entry, a '!' exclusion, paths-ignore, or a push-only block"
   fi
 fi
@@ -1362,15 +1415,15 @@ if [[ -r "$_CAP" ]]; then
   _hostsql="$(awk '/^HOST_SQL="/{f=1} f{print} f&&/FORMAT JSONEachRow"/{exit}' "$_CAP")"
 
   if printf '%s' "$_hostsql" | grep -qE "JSONExtractString\(raw,'detail'\)"; then
-    pass "20a HOST_SQL projects detail"
+    cases=$((cases + 1)); pass "20a HOST_SQL projects detail"
   else
-    fail "20a HOST_SQL does not project detail" \
+    cases=$((cases + 1)); fail "20a HOST_SQL does not project detail" \
          "A FAIL artifact then carries a verdict with no cause — the #7204 defect."
   fi
   if printf '%s' "$_hostsql" | grep -qE "JSONExtractString\(raw,'rc'\)"; then
-    pass "20b HOST_SQL projects rc"
+    cases=$((cases + 1)); pass "20b HOST_SQL projects rc"
   else
-    fail "20b HOST_SQL does not project rc" \
+    cases=$((cases + 1)); fail "20b HOST_SQL does not project rc" \
          "rc rides in \$TAGS, which the emitter concatenates at TOP LEVEL of the Better Stack body, so raw.rc resolves. It is the mount(8) exit status — 32 for the ESRCH class."
   fi
 
@@ -1378,10 +1431,10 @@ if [[ -r "$_CAP" ]]; then
   # greps above are satisfied by any file that happens to contain the strings.
   _mut="$(printf '%s' "$_hostsql" | sed -E "/JSONExtractString\(raw,'(detail|rc)'\)/d")"
   if printf '%s' "$_mut" | grep -qE "JSONExtractString\(raw,'(detail|rc)'\)"; then
-    fail "20c MUTATION did not land — the projections survived deletion" \
+    cases=$((cases + 1)); fail "20c MUTATION did not land — the projections survived deletion" \
          "20a/20b certify nothing; re-anchor the slice."
   else
-    pass "20c MUTATION lands (projections are deletable, so 20a/20b are real)"
+    cases=$((cases + 1)); pass "20c MUTATION lands (projections are deletable, so 20a/20b are real)"
   fi
 
   # ── D11: HOST_SQL's key set ⊆ the keys something actually EMITS ──────────────────
@@ -1418,7 +1471,7 @@ if [[ -r "$_CAP" ]]; then
   # correct emitter, which is the opposite error but still a broken gate.
   _bs_body="$(grep -F -- '--data-raw' "$_emit_src" 2>/dev/null | tr -d '\\' || true)"
   if [[ -z "$_bs_body" ]]; then
-    fail "20d could not locate the emitter's --data-raw line in ${_emit_src}" \
+    cases=$((cases + 1)); fail "20d could not locate the emitter's --data-raw line in ${_emit_src}" \
          "The producer scan has no anchor; treating that as 'all keys produced' would be the fail-open this arm exists to close."
   else
   _unproduced=""
@@ -1429,9 +1482,9 @@ if [[ -r "$_CAP" ]]; then
     [[ "${_in_body:-0}" -ge 1 || "${_in_tags:-0}" -ge 1 ]] || _unproduced="${_unproduced} ${_k}"
   done < <(printf '%s' "$_hostsql" | sed -nE "s/.*JSONExtractString\(raw,'([a-z_]+)'\).*/\1/p" | sort -u)
   if [[ -z "$_unproduced" ]]; then
-    pass "20d every HOST_SQL key is produced by the emitter body or a tag argument"
+    cases=$((cases + 1)); pass "20d every HOST_SQL key is produced by the emitter body or a tag argument"
   else
-    fail "20d HOST_SQL projects key(s) nothing emits:${_unproduced}" \
+    cases=$((cases + 1)); fail "20d HOST_SQL projects key(s) nothing emits:${_unproduced}" \
          "An always-empty column reads as 'the host did not report it' rather than 'we never asked correctly'. Either wire the producer or drop the column."
   fi
   fi
@@ -1444,21 +1497,55 @@ if [[ -r "$_CAP" ]]; then
   _ctl_tags=$(cat "$_emit_src" "$_boot_src" 2>/dev/null | grep -cF -- '"_detail=' || true)
   _ctl_loose=$(cat "$_emit_src" "$_boot_src" 2>/dev/null | grep -cE '"_detail"|_detail=' || true)
   if [[ "${_ctl_body:-0}" -eq 0 && "${_ctl_tags:-0}" -eq 0 && "${_ctl_loose:-0}" -ge 1 ]]; then
-    pass "20e LOOSENESS control: a shell local (_detail) is correctly NOT counted as a producer"
+    cases=$((cases + 1)); pass "20e LOOSENESS control: a shell local (_detail) is correctly NOT counted as a producer"
   else
-    fail "20e LOOSENESS control failed (body=${_ctl_body:-?} tags=${_ctl_tags:-?} loose=${_ctl_loose:-?})" \
+    cases=$((cases + 1)); fail "20e LOOSENESS control failed (body=${_ctl_body:-?} tags=${_ctl_tags:-?} loose=${_ctl_loose:-?})" \
          "Expected: _detail present in the files (loose>=1) but NOT counted as an emitted field (body=0, tags=0). A non-zero body/tags means 20d's scan is still matching locals; loose=0 means the control itself no longer exercises anything."
   fi
 else
-  fail "20 capture script not readable at ${_CAP}"
-  fail "20: skipped (capture script missing)"; fail "20: skipped (capture script missing)"
-  fail "20: skipped (capture script missing)"; fail "20: skipped (capture script missing)"
+  cases=$((cases + 1)); fail "20 capture script not readable at ${_CAP}"
+  cases=$((cases + 1)); fail "20: skipped (capture script missing)"; cases=$((cases + 1)); fail "20: skipped (capture script missing)"
+  cases=$((cases + 1)); fail "20: skipped (capture script missing)"; cases=$((cases + 1)); fail "20: skipped (capture script missing)"
 fi
 
-# ── Minimum-cardinality floor ──────────────────────────────────────────────────────
+# ── Accounting conservation (ADR-193 #3) ───────────────────────────────────────────
+# ORDERED BEFORE THE FLOOR (ADR-193 #4). A neutered pass()/fail() deflates the verdict counts
+# while `cases` keeps its full value, so on that fault BOTH checks can trip — and whichever
+# runs first is the diagnosis the operator reads. Conservation first makes the run say "a
+# verdict was discarded" instead of the misleading "arms were deleted".
+#
+# The floor catches "no assertions RAN". It cannot catch "assertions ran and their verdicts
+# were DISCARDED": `cases` keeps its full value when fail() is a no-op. Every assertion
+# records exactly one verdict, so passes+fails MUST equal cases, and the identity is
+# non-tautological only because `cases` moves at the CALL SITE rather than inside the verdict
+# helpers.
+#
+# Reported with `printf >&2` + `exit 1` DIRECTLY, never through fail(). A check that reports
+# by calling the verdict helper increments the very counter the exit status reads, so
+# neutering fail() silences the rows AND the check meant to notice the silence. The literal
+# `[FATAL] accounting` is load-bearing — guard-vacuity-floor's ARM 10 builds its conservation
+# population by grepping that exact string (#7588).
+if [[ $((passes + fails)) -ne "$cases" ]]; then
+  printf '\n[FATAL] accounting: passes+fails (%d) != cases (%d).\n' \
+    "$((passes + fails))" "$cases" >&2
+  if [[ $((passes + fails)) -lt "$cases" ]]; then
+    printf '  An assertion was counted but its verdict was not recorded — that is what a neutered pass()/fail() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `cases=$((cases + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed (%d cases) ===\n\n' "$passes" "$fails" "$cases"
+  exit 1
+fi
+
+# ── Minimum-cardinality floor (ADR-193 #1) ─────────────────────────────────────────
 # A floor, not an equality: developer-incremented, so `-eq` would redden the suite on every
-# legitimately added arm and train the next person to bump it unread. Counts passes+fails so
-# a genuine failure reports as a failure rather than as an empty suite.
+# legitimately added arm and train the next person to bump it unread.
+#
+# READS `cases`, NOT `passes + fails`. The derived total was the ADR-193 §3 tautology in its
+# sharpest form, and it reported by doing `fails=$((fails + 1))` and falling through to the
+# trailer — so with the assertion machinery neutered the floor "fired" into a counter nobody
+# read before exit, and the suite printed a clean total and exited 0. A floor enforced through
+# the suspect cannot witness the suspect, so this one reports `printf >&2` + `exit 1` directly.
 #
 # RAISED 65 -> 70 WITH THE ARMS THAT MADE IT NECESSARY (#7204: arms 20a-20e — HOST_SQL
 # projects detail and rc, the projections are deletable so those greps are real, and every
@@ -1478,13 +1565,13 @@ fi
 # way. Folded into the existing chain rather than given its own arm plus mutation, because
 # that chain's whole property is already "every replica of one literal agrees".
 # 70 + 1 = 71. Measured: 71 passed, 0 failed.
-_ran=$((passes + fails))
-if [[ "$_ran" -lt 71 ]]; then
-  fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 71. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
-else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 71)\n' "$_ran"
+if [[ "$cases" -lt 71 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 71.\n' "$cases" >&2
+  printf '  Arms were deleted, skipped, or the suite exited early.\n' >&2
+  printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed (%d cases) ===\n\n' "$passes" "$fails" "$cases"
+  exit 1
 fi
+printf '  ok   anti-vacuity floor: %d assertions ran (floor 71)\n' "$cases"
 
 printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]

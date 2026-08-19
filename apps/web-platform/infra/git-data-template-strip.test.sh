@@ -72,6 +72,15 @@ fails=0
 pass() { passes=$((passes + 1)); printf '  ok   %s\n' "$1"; }
 fail() { fails=$((fails + 1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
 
+# The independent case counter (ADR-193 #2). Incremented at each CALL SITE, immediately before
+# the block that decides a verdict — never inside pass()/fail(). The floor previously read
+# `_ran=$((passes + fails))`, a total DERIVED from the verdicts: it moved WITH the verdict, so
+# stubbing fail() dropped the row and its count together and the floor was satisfied under the
+# exact fault it exists to catch. This counter does not move when a verdict helper is neutered,
+# which is what makes the conservation check below non-tautological. Never increment it inside
+# `$( )` — a subshell discards it and the code still reads as correct.
+CASES=0
+
 printf '\n=== git-data-template-strip ===\n\n'
 
 command -v terraform >/dev/null 2>&1 || {
@@ -86,6 +95,7 @@ trap 'rm -rf "$TMP"' EXIT
 # the restatement ADR-152's registry precedent records as the defect that produced a phantom
 # cap breach — a second implementation that can disagree with production silently.
 if ! bash "$DIR/git-data-userdata-budget.sh" "$TMP/stripped.yml" "$TMP/raw.yml" >"$TMP/budget.out" 2>&1; then
+  CASES=$((CASES + 1))
   fail "render harness produced both artifacts" "$(tail -3 "$TMP/budget.out" | tr '\n' ' ')"
   printf '\n=== git-data-template-strip: %s passed, %s failed ===\n\n' "$passes" "$fails"
   exit 1
@@ -93,6 +103,7 @@ fi
 
 # ── 1. The stripped render still begins with #cloud-config ─────────────────────────────
 first_line=$(head -1 "$TMP/stripped.yml")
+CASES=$((CASES + 1))
 if [[ "$first_line" == "#cloud-config" ]]; then
   pass "stripped render begins with '#cloud-config'"
 else
@@ -106,6 +117,7 @@ fi
 # back to sh, which is dash on 24.04. Silent bash/dash divergence on a fail-closed host.
 raw_shebangs=$(grep -cE '^[[:space:]]*#!' "$TMP/raw.yml" || true)
 str_shebangs=$(grep -cE '^[[:space:]]*#!' "$TMP/stripped.yml" || true)
+CASES=$((CASES + 1))
 if [[ "$raw_shebangs" -gt 0 && "$raw_shebangs" -eq "$str_shebangs" ]]; then
   pass "all ${raw_shebangs} shebangs survive the strip"
 else
@@ -133,6 +145,7 @@ raw_bytes=$(wc -c < "$TMP/raw.yml")
 str_bytes=$(wc -c < "$TMP/stripped.yml")
 max_ratio=60
 str_pct=$(( str_bytes * 100 / raw_bytes ))
+CASES=$((CASES + 1))
 if [[ "$str_bytes" -ge "$raw_bytes" ]]; then
   fail "strip removed nothing (raw ${raw_bytes} B -> stripped ${str_bytes} B)" \
     "a strip that matches nothing satisfies arms 1 and 2 while delivering no saving"
@@ -214,6 +227,7 @@ print(f"per-entry: {checked} compared, {differing} actually stripped, each diffe
       "strip-matching lines")
 PY
 arm4_rc=$?
+CASES=$((CASES + 1))
 if [[ "$arm4_rc" -eq 0 ]]; then
   pass "$(cat "$TMP/arm4.out")"
 else
@@ -289,6 +303,7 @@ print(f"{len(line_leading)} line-leading interpolation sites: every delivered pa
       "survives the template strip (shebangs are preserved because '!' is not [ \\t])")
 PY
 arm5_rc=$?
+CASES=$((CASES + 1))
 if [[ "$arm5_rc" -eq 0 ]]; then
   pass "$(cat "$TMP/arm5.out")"
 else
@@ -296,13 +311,44 @@ else
     "$(cat "$TMP/arm5.out")"
 fi
 
-_ran=$((passes + fails))
-if [[ "$_ran" -lt 5 ]]; then
-  fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 5.\n' "$_ran"
-else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 5)\n' "$_ran"
+# ── Accounting conservation (ADR-193 #3) ───────────────────────────────────────────────
+#
+# Ordered BEFORE the floor per ADR-193 #4: a neutered fail() deflates the recorded verdicts, so
+# the floor would ALSO trip and would report "arms were deleted" — the misleading diagnosis.
+# This says "a verdict was discarded" instead. Reported with printf >&2 + exit 1 DIRECTLY,
+# never through fail(): a check that reports by calling the verdict helper increments the very
+# counter the exit status reads, so neutering fail() silences the rows AND the check meant to
+# notice the silence. The literal `[FATAL] accounting` is load-bearing — guard-vacuity-floor's
+# ARM 10 builds its conservation population by grepping that exact string (#7588).
+if [[ $((passes + fails)) -ne "$CASES" ]]; then
+  printf '\n[FATAL] accounting: passes+fails (%d) != CASES (%d).\n' \
+    "$((passes + fails))" "$CASES" >&2
+  if [[ $((passes + fails)) -lt "$CASES" ]]; then
+    printf '  An assertion was counted but its verdict was not recorded — that is what a neutered pass()/fail() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `CASES=$((CASES + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  printf '\n=== git-data-template-strip: %s passed, %s failed ===\n\n' "$passes" "$fails"
+  exit 1
 fi
+
+# ── Anti-vacuity floor (ADR-193 #1) ────────────────────────────────────────────────────
+#
+# Reads the INDEPENDENT case counter, and reports with printf >&2 + exit 1 DIRECTLY. It
+# previously read `_ran=$((passes + fails))` and reported by doing `fails=$((fails + 1))` and
+# falling through — so with the assertion machinery neutered the floor "fired" into a counter
+# nobody read before exit, the suite printed a clean total and exited 0. A floor enforced
+# through the suspect cannot witness the suspect.
+#
+# Zero headroom against the current count, so any deletion is loud. Ratchet when adding arms,
+# and read a floor failure on an otherwise-green run as "you added arms, update this number".
+if [[ "$CASES" -lt 5 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= 5.\n' "$CASES" >&2
+  printf '  Arms were deleted or skipped; a green run here would be a coverage loss.\n' >&2
+  printf '\n=== git-data-template-strip: %s passed, %s failed ===\n\n' "$passes" "$fails"
+  exit 1
+fi
+printf '  ok   anti-vacuity floor: %s assertions ran (floor 5)\n' "$CASES"
 
 printf '\n=== git-data-template-strip: %s passed, %s failed ===\n\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]] || exit 1
