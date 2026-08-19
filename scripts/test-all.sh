@@ -242,7 +242,21 @@ fi
 # checking the last one closes even that edge. If the lib is absent or failed to
 # parse, install no-op stubs for every call site so a broken/missing lib degrades
 # to a normal run rather than aborting the suite.
-if ! declare -F tc_acquire >/dev/null 2>&1 || ! declare -F tc_capacity_line >/dev/null 2>&1; then
+# Checked as a SET, not via a proxy. Guarding on one function treats "the lib
+# failed to load at all" as the only failure — true for a missing or truncated
+# file, false for VERSION SKEW, which is the live case (an origin/main-era lib in
+# a mixed checkout, a stale plugin cache, a half-reverted worktree). Reproduced:
+# a lib with tc_acquire but no tc_capacity_line left the stubs uninstalled and
+# the bare top-level call below exited 127 with no summary, no rc file and no
+# [FAIL] line. The list is asserted against the stub bodies by
+# scripts/test-all-capacity-signal.test.sh, so adding a stub without adding its
+# name here reds.
+_TC_STUBBED_FNS="tc_preamble tc_epilogue tc_tmp_entry_count tc_used_bytes tc_acquire tc_capacity_line"
+_tc_lib_incomplete=0
+for _tc_fn in $_TC_STUBBED_FNS; do
+  declare -F "$_tc_fn" >/dev/null 2>&1 || _tc_lib_incomplete=1
+done
+if (( _tc_lib_incomplete )); then
   echo "WARNING: contention instrumentation unavailable ($_TC_LIB); continuing without it." >&2
   tc_preamble() { :; }
   tc_epilogue() { :; }

@@ -1094,6 +1094,122 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Arms for the REVIEW FIXES themselves. A review-driven fix lands after the
+# tests, so nothing forces coverage for it — which is the same blind spot the
+# fix closed, one layer out. Each of these was mutation-proven.
+# ---------------------------------------------------------------------------
+
+echo "--- review-fix arms ---"
+
+# The lib-stub guard must name EVERY function whose absence would abort, not one
+# believed to dominate. Reproduced before the fix: a lib carrying tc_acquire but
+# not tc_capacity_line left the stubs uninstalled and the runner exited 127 with
+# no summary, no rc file and no [FAIL] line.
+SKEW_DIR="$TESTROOT/skew"
+mkdir -p "$SKEW_DIR/scripts/lib"
+cp "$RUNNER" "$SKEW_DIR/scripts/test-all.sh"
+cp "$REPO_ROOT/scripts/lib/test-relevance-paths.sh" "$SKEW_DIR/scripts/lib/" 2>/dev/null || true
+# a lib with tc_acquire and NO tc_capacity_line
+{ echo 'tc_preamble() { :; }'; echo 'tc_epilogue() { :; }'; echo 'tc_tmp_entry_count() { printf "0\n"; }'
+  echo 'tc_used_bytes() { printf "0\n"; }'; echo 'tc_siblings() { :; }'; echo 'tc_acquire() { :; }'
+} > "$SKEW_DIR/scripts/lib/test-contention.sh"
+SKEW_RC=0
+SKEW_OUT="$(cd "$SKEW_DIR" && "${TC_CLEAN[@]}" bash scripts/test-all.sh --capacity 2>&1)" || SKEW_RC=$?
+
+cases=$((cases + 1))
+if [[ "$SKEW_RC" -eq 0 && "$(grep -cE 'CAPACITY_UNKNOWN' <<<"$SKEW_OUT" || true)" -ge 1 ]]; then
+  pass "skew: --capacity against a lib missing tc_capacity_line still answers, named, exit 0"
+else
+  fail "skew: --capacity did not answer under version skew (rc=$SKEW_RC); got: $SKEW_OUT"
+fi
+
+# THE STUB BLOCK'S ASSEMBLY, asserted directly. The behavioural arm above cannot
+# reach it: --capacity carries its OWN `declare -F` guard, so it answers
+# correctly whatever the stub block does. The regression that matters is on the
+# NORMAL run path, where a bare top-level call to an undefined function exits 127
+# under `set -e` with no summary, no rc file and no [FAIL] line. Measured: this
+# arm named that property while testing a different one, and the mutation
+# reverting the guard to `tc_acquire` alone SURVIVED at 80/0 until this replaced
+# it. The property is "every lib function the runner calls at top level is
+# covered by the stub block", so it is asserted over that set, not over a sample.
+# THE GUARD MUST FIRE WHENEVER ANY STUBBED FUNCTION IS MISSING. Being stubbed is
+# worthless if the guard never trips — the body only runs when the condition
+# does. Measured: an "is it named in the guard OR stubbed in the body" assertion
+# ALSO survived the mutation, because every function is stubbed by construction.
+# The decidable property is set equality between what the block stubs and what
+# the guard checks.
+STUB_BODY="$(awk '/^_tc_lib_incomplete=0$/,/^fi$/' "$RUNNER")"
+STUBBED="$(grep -oE '^  tc_[a-z_]+\(\)' "$RUNNER" | tr -d ' ()' | sort -u)"
+CHECKED="$(grep -oE '^_TC_STUBBED_FNS="[^"]*"' "$RUNNER" | sed 's/^_TC_STUBBED_FNS="//; s/"$//' | tr ' ' '\n' | sort -u)"
+
+cases=$((cases + 1))
+if [[ -n "$STUBBED" && -n "$CHECKED" ]]; then
+  _unchecked="$(comm -23 <(printf '%s\n' "$STUBBED") <(printf '%s\n' "$CHECKED") | tr '\n' ',' )"
+  if [[ -z "${_unchecked//,/}" ]]; then
+    pass "stub assembly: every function the block stubs is also checked by its guard ($(wc -l <<<"$CHECKED") fns)"
+  else
+    fail "stub assembly: stubbed but NOT checked by the guard: ${_unchecked%,} — version skew leaves the stubs uninstalled and the runner exits 127"
+  fi
+else
+  fail "stub assembly: could not extract the stub set (stubbed='$STUBBED' checked='$CHECKED') — arm NOT evaluated"
+fi
+
+# --capacity must consume tc_preamble's promoted rows, never walk again. The
+# behavioural arm cannot see this (two walks over a hermetic fixture agree), so
+# it is asserted where it is decidable: the branch's own source.
+CAP_BLOCK="$(awk '/^if \[\[ "\$\{1:-\}" == "--capacity" \]\]; then$/,/^fi$/' "$RUNNER")"
+
+cases=$((cases + 1))
+if [[ -n "$CAP_BLOCK" ]]; then
+  if [[ "$(grep -cE '^[^#]*(tc_siblings|_tc_scan_procs)' <<<"$CAP_BLOCK" || true)" -eq 0 ]]; then
+    pass "--capacity takes NO second /proc walk (it reads the promoted rows)"
+  else
+    fail "--capacity walks /proc again — the verdict and its own detail rows can then disagree"
+  fi
+else
+  fail "--capacity: could not extract the branch — this arm was NOT evaluated"
+fi
+
+cases=$((cases + 1))
+if [[ "$(grep -cE 'TC_LAST_SIB_ROWS' <<<"$CAP_BLOCK" || true)" -ge 1 ]]; then
+  pass "--capacity reads TC_LAST_SIB_ROWS (one walk, one source of truth)"
+else
+  fail "--capacity does not read the promoted rows"
+fi
+
+# This suite's OWN exit decision must read an append-only record. Measured on the
+# counter form: one inserted `fails=0` printed "59 passed, 0 failed (66
+# assertions)" and exited 0, landing in CI as ok.
+SELF_SRC="$(grep -vE '^\s*#' "$0")"
+
+cases=$((cases + 1))
+if [[ "$(grep -cF 'FAILLOG' <<<"$SELF_SRC" || true)" -ge 2 ]] \
+   && [[ "$(grep -cE '^\[\[ ! -s "\$FAILLOG" \]\] \|\| exit 1$' <<<"$SELF_SRC" || true)" -ge 1 ]]; then
+  pass "self: the exit decision reads the append-only failure log, not a mutable counter"
+else
+  fail "self: the exit decision reads a counter — one assignment can zero it and still exit 0"
+fi
+
+# The heartbeat must MEASURE elapsed, not accumulate nominal intervals (the
+# accumulator drifted ~11% low and overshot its own orphan bound).
+HB_BODY="$(awk '/^_tc_wait_heartbeat\(\) \{/,/^\}/' "$LIB")"
+
+cases=$((cases + 1))
+if [[ "$(grep -cE 'EPOCHSECONDS' <<<"$HB_BODY" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'waited=\$\(\( waited \+ interval \)\)' <<<"$HB_BODY" || true)" -eq 0 ]]; then
+  pass "heartbeat: elapsed is read from a clock, never summed from nominal intervals"
+else
+  fail "heartbeat: elapsed is accumulated — it drifts by the cost of each beat"
+fi
+
+cases=$((cases + 1))
+if [[ "$(grep -cE '^[^#]*(tc_siblings|_tc_scan_procs)' <<<"$HB_BODY" || true)" -eq 0 ]]; then
+  pass "heartbeat: no /proc walk per beat (~313 CPU-s per wait, on a fork-starved box)"
+else
+  fail "heartbeat: walks /proc per beat — the diagnostic participates in the incident"
+fi
+
+# ---------------------------------------------------------------------------
 # Registration (AC18) — asserted on the invoked PATH, not only the label.
 # `scripts/lint-orphan-test-suites.sh` derives coverage from the path, so a
 # label-only assertion would pass a registration whose path is typo'd.
