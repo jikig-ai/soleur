@@ -1132,6 +1132,12 @@ fi
 # reverting the guard to `tc_acquire` alone SURVIVED at 80/0 until this replaced
 # it. The property is "every lib function the runner calls at top level is
 # covered by the stub block", so it is asserted over that set, not over a sample.
+# Each capture below carries `|| true` INSIDE the substitution: grep exits 1 on
+# no-match, pipefail propagates it, and under this file's `set -e` the assignment
+# would kill the suite — making the "could not extract / arm NOT evaluated"
+# branches below unreachable, i.e. the exact fail-open they exist to report.
+# Caught by scripts/lint-shell-capture-exit.py, not by ten review agents.
+#
 # THE GUARD MUST FIRE WHENEVER ANY STUBBED FUNCTION IS MISSING. Being stubbed is
 # worthless if the guard never trips — the body only runs when the condition
 # does. Measured: an "is it named in the guard OR stubbed in the body" assertion
@@ -1139,8 +1145,8 @@ fi
 # The decidable property is set equality between what the block stubs and what
 # the guard checks.
 STUB_BODY="$(awk '/^_tc_lib_incomplete=0$/,/^fi$/' "$RUNNER")"
-STUBBED="$(grep -oE '^  tc_[a-z_]+\(\)' "$RUNNER" | tr -d ' ()' | sort -u)"
-CHECKED="$(grep -oE '^_TC_STUBBED_FNS="[^"]*"' "$RUNNER" | sed 's/^_TC_STUBBED_FNS="//; s/"$//' | tr ' ' '\n' | sort -u)"
+STUBBED="$(grep -oE '^  tc_[a-z_]+\(\)' "$RUNNER" | tr -d ' ()' | sort -u || true)"
+CHECKED="$(grep -oE '^_TC_STUBBED_FNS="[^"]*"' "$RUNNER" | sed 's/^_TC_STUBBED_FNS="//; s/"$//' | tr ' ' '\n' | sort -u || true)"
 
 cases=$((cases + 1))
 if [[ -n "$STUBBED" && -n "$CHECKED" ]]; then
@@ -1180,7 +1186,7 @@ fi
 # This suite's OWN exit decision must read an append-only record. Measured on the
 # counter form: one inserted `fails=0` printed "59 passed, 0 failed (66
 # assertions)" and exited 0, landing in CI as ok.
-SELF_SRC="$(grep -vE '^\s*#' "$0")"
+SELF_SRC="$(grep -vE '^[[:space:]]*#' "$0" || true)"
 
 cases=$((cases + 1))
 if [[ "$(grep -cF 'FAILLOG' <<<"$SELF_SRC" || true)" -ge 2 ]] \
