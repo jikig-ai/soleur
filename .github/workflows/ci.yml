@@ -604,6 +604,35 @@ jobs:
   # next build runs the App Router route-file validator that vitest and `tsc --noEmit`
   # skip — catches non-HTTP exports from `app/**/route.{ts,tsx}` before merge instead
   # of inside the post-merge Docker build (#2347/#2401 outage).
+  # ESLint for apps/web-platform (#1327). Replaces `next lint`, which Next 16
+  # removes and which never ran here (no config -> interactive prompt -> exit 1).
+  #
+  # DELIBERATELY NOT A REQUIRED CHECK, and deliberately NOT continue-on-error.
+  # `continue-on-error: true` would report green on failure, which is worse than
+  # no job at all. Instead the job fails honestly and is simply absent from
+  # scripts/required-checks.txt, so a red here is visible without blocking an
+  # unrelated PR on a first-run baseline. Promoting it to required is a separate,
+  # deliberate decision once the warning ratchet has been driven down.
+  lint-webplat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web-platform/package-lock.json
+
+      - name: Install web-platform dependencies
+        run: npm ci --ignore-scripts
+        working-directory: apps/web-platform
+
+      - name: ESLint
+        run: npm run lint
+        working-directory: apps/web-platform
+
   web-platform-build:
     runs-on: ubuntu-latest
     steps:
