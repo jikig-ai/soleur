@@ -789,7 +789,6 @@ fi
 # assertions covering strictly more shapes — D3 measured the deny-list as evaded 8 ways out of 9.
 # 33 -> 38 for the `unadjudicated` arm (I8/I8b/I8c), which had ZERO coverage: STUB_HTTP_CODE was
 # 200 at every drive site, so the 404/000/502/503 branches were unreachable from this suite.
-VERIFY_MIN_ASSERTIONS=38
 echo ""
 echo "  $PASS passed, $FAIL failed"
 close_stdout_capture
@@ -801,15 +800,25 @@ fi
 # The counter must equal what was actually PRINTED. `PASS=$((PASS + 2))` cannot reach the
 # captured stdout, so an inflated tally and a satisfied floor no longer travel together.
 if [[ "$stdout_passes" -ne "$PASS" ]]; then
-  echo "  FAIL: assertion-count reconciliation (stdout): the counter says $PASS but $stdout_passes '  PASS: ' lines were printed — the tally is not a count of assertions, so the floor below is meaningless" >&2
+  printf '  FAIL: assertion-count reconciliation (stdout): the counter says %d but %d "  PASS: " lines were printed — the tally is not a count of assertions, so the floor below is meaningless\n' \
+    "$PASS" "$stdout_passes" >&2
   exit 1
 fi
 if ! grep -qE '^VERIFY_MIN_ASSERTIONS=[0-9]+$' "${BASH_SOURCE[0]}"; then
-  echo "  FAIL: the assertion-count floor is not a literal integer in the source — a floor derived from the tally it guards is a tautology that can never fail" >&2
+  printf '  FAIL: the assertion-count floor is not a literal integer in the source — a floor derived from the tally it guards is a tautology that can never fail\n' >&2
   exit 1
 fi
+# THE THRESHOLD BINDING SITS IMMEDIATELY ABOVE ITS FLOOR, and that adjacency is load-bearing
+# rather than stylistic (#7104 PR-B, promoting this suite into scripts/guard-vacuity-floor.test.sh's
+# covered scope). That guard builds a mutant carrying the floor block plus the CONTIGUOUS SIMPLE
+# ASSIGNMENTS directly above it. With the binding declared ~15 lines up, behind `echo`s and a
+# command substitution, the widening stops early, the mutant runs with $VERIFY_MIN_ASSERTIONS
+# unbound, and the floor is reported as one that cannot be driven red. Measured: this suite was
+# the one covered failure the promotion surfaced.
+VERIFY_MIN_ASSERTIONS=38
 if [[ "$PASS" -lt "$VERIFY_MIN_ASSERTIONS" ]]; then
-  echo "  FAIL: assertion-count floor: only $PASS assertions ran, expected >= $VERIFY_MIN_ASSERTIONS — arms were deleted or skipped" >&2
+  printf '  FAIL: assertion-count floor: only %d assertions ran, expected >= %d — arms were deleted or skipped\n' \
+    "$PASS" "$VERIFY_MIN_ASSERTIONS" >&2
   exit 1
 fi
 exit 0

@@ -748,7 +748,14 @@ ROWS=(
   "C3-CLEARTEXT-TRAP|$GATE_SUITE|1|no longer traps|the cleartext-credential trap removed"
   "C4-AC18-ERROR-TOLERANCE|$GATE_SUITE|1|#7104 AC18|AC18: continue-on-error added to the apply"
   "F7-VERIFY-TALLY|$VERIFY_SUITE|1|assertion-count reconciliation (stdout)|F7: the verify suite's tally inflated"
-  "F7-ALERT-TALLY|$ALERT_SUITE|1|[FATAL] accounting:|F7: the alert suite's tally inflated (caught by #7575's call-site counter)"
+    # Marker deliberately NOT guard-vacuity-floor's conservation sentinel. That guard classifies
+  # a suite as carrying a conservation check by grepping for its sentinel string, so quoting it
+  # HERE — in a data table, as a marker — made this battery read as a conserving suite that
+  # reports non-directly. The rewrite could not merely move the string into a comment either:
+  # a comment is still bytes in the file, and the first attempt at this fix reproduced the
+  # failure by explaining it. Anchor on a phrase from the same emitted line that is not another
+  # guard's sentinel (cq-assert-anchor-not-bare-token, one level out).
+  "F7-ALERT-TALLY|$ALERT_SUITE|1|verdict(s) recorded across|F7: the alert suite's tally inflated (caught by #7575's call-site counter)"
   "STAY-GREEN|$GATE_SUITE|0|#7104|a scanner-VISIBLE but irrelevant helper must NOT red the suite (control)"
 )
 

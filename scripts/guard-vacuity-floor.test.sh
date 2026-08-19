@@ -202,15 +202,36 @@ COVERED_DIRS='^(scripts/|plugins/soleur/test/)'
 # UNCLASSIFIED and the guard reddens naming the file, which is the entire point.
 DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-platform/test/infra/|\.claude/hooks/|plugins/soleur/skills/[^/]+/test/)'
 
+# THE PER-FILE PROMOTION SEAM (#7585, built by #7104 PR-B).
+#
+# ARM 5c's own note records that #7552 raised MAX_DEFERRED 46 -> 47 for exactly one file,
+# against that arm's instruction, and states: "Do NOT treat this bump as precedent for the next
+# one — the correct response to a second occurrence is to build the seam, not to add another
+# line here." This is the second occurrence, so this is the seam.
+#
+# Why it was needed: both sanctioned outs are directory-granular. "Cover it" by adding one file
+# to COVERED_DIRS leaves its directory in DEFERRED_DIRS and trips ARM 5's double-count check;
+# "promote its directory" is blocked by the per-scope construction ratchet that does not exist
+# yet. A file listed here is moved from the deferred ledger into the covered scope INDIVIDUALLY,
+# so it is mutation-tested like any covered suite — it is a promotion, not an exemption, and it
+# makes the ledger SHRINK rather than the ratchet grow.
+#
+# Anchored with ^...$ per entry so a path cannot be promoted by prefix accident.
+PROMOTED_FILES='^(apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh)$'
+
 COVERED="$SUITE_TMP/covered.txt"
 DEFERRED="$SUITE_TMP/deferred.txt"
 UNCLASSIFIED="$SUITE_TMP/unclassified.txt"
-{ grep -E "$COVERED_DIRS" "$FLOOR_ALL" || true; } > "$COVERED"
-{ grep -E "$DEFERRED_DIRS" "$FLOOR_ALL" || true; } > "$DEFERRED"
+{ { grep -E "$COVERED_DIRS" "$FLOOR_ALL" || true; }; { grep -E "$PROMOTED_FILES" "$FLOOR_ALL" || true; }; } | sort -u > "$COVERED"
+{ grep -E "$DEFERRED_DIRS" "$FLOOR_ALL" || true; } | { grep -vE "$PROMOTED_FILES" || true; } > "$DEFERRED"
 # Anything floor-bearing that matches NEITHER declared scope.
-{ grep -vE "$COVERED_DIRS" "$FLOOR_ALL" || true; } | { grep -vE "$DEFERRED_DIRS" || true; } > "$UNCLASSIFIED"
+{ grep -vE "$COVERED_DIRS" "$FLOOR_ALL" || true; } | { grep -vE "$DEFERRED_DIRS" || true; } \
+  | { grep -vE "$PROMOTED_FILES" || true; } > "$UNCLASSIFIED"
 # And anything counted TWICE would satisfy the identity while covering nothing.
 DOUBLE="$SUITE_TMP/double.txt"
+# Unchanged by the seam: a PROMOTED file never matches COVERED_DIRS, so it cannot appear on
+# both sides of this intersection. What this still catches is the original case — a
+# directory listed in both scope regexes.
 { grep -E "$COVERED_DIRS" "$FLOOR_ALL" || true; } | { grep -E "$DEFERRED_DIRS" || true; } > "$DOUBLE"
 
 n_total=$(wc -l < "$FLOOR_ALL")
