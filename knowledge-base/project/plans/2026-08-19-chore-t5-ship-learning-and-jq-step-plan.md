@@ -365,7 +365,21 @@ any harness reading exit status.
   > unified-diff `+++ b/<path>` header matches `^+`, and *any* deletion-only change satisfies "no
   > added lines" — including deleting a `jq` call site. A first draft of this AC expected `7` and
   > would have failed on a correct implementation.
-- **AC3** — `actionlint` exits `0` on all three workflows, and `command -v actionlint` succeeded first.
+- **AC3** — `actionlint` introduces **no new finding** on the three workflows: its finding set at
+  HEAD is byte-identical to the same command's finding set against `git show origin/main:<path>`,
+  and `command -v actionlint` succeeded first.
+
+  > **Amended at /work, 2026-08-19 — the original AC was mechanically unsatisfiable.** It read
+  > *"`actionlint` exits `0` on all three workflows."* Measured, `origin/main` **already** exits 1
+  > with 11 pre-existing shellcheck findings (SC2221/SC2222/SC2005/SC2016) in the scan steps at
+  > `pr-trailer:113` and `postmerge:35` — code this change does not touch. No reachable
+  > implementation of this PR could have satisfied the original wording, so passing it would have
+  > required either fixing unrelated pre-existing warnings (silent scope creep, and AC4 forbids it)
+  > or quietly running a looser command and reporting the result as the AC. Re-keyed onto the
+  > property the AC was actually protecting — *this change adds no lint debt*. Verified: 11
+  > findings at base, 11 at HEAD, `diff` empty, and none cite the assertion step. The replacement
+  > is 2 lines for 2 lines, so no line numbers shift and the comparison is exact rather than
+  > normalized. The 11 pre-existing findings are recorded in §D4's tracking issue, not fixed here.
 - **AC4** — the touched-workflow set is exactly the three intended files:
   `git diff --name-only origin/main...HEAD -- .github/workflows/` returns exactly those three. *This
   is the anti-widening gate; changing scope means editing this AC, never drifting past it.*

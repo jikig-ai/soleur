@@ -71,7 +71,11 @@ Replacement block (identical at each site):
 - [ ] 3.1 **AC1** — no `apt-get` remains at any of the three sites.
 - [ ] 3.2 **AC2** — `git diff --numstat origin/main...HEAD -- <pr-trailer>` → `2	2	<path>`;
       `test "$(grep -c 'jq' <pr-trailer>)" -eq 8` (six call sites + the assertion step's two lines).
-- [ ] 3.3 **AC3** — `actionlint` exits 0 on all three.
+- [x] 3.3 **AC3 (amended at /work)** — `actionlint` adds **no new finding**: its finding set at HEAD
+      is byte-identical to the same command against `git show origin/main:<path>`. The original
+      "exits 0" wording was unsatisfiable — `origin/main` already exits 1 with 11 pre-existing
+      shellcheck findings in untouched scan steps. Measured 11 = 11, `diff` empty, none cite the
+      assertion step. See the plan's AC3 amendment note.
 - [ ] 3.4 **AC4** — `git diff --name-only origin/main...HEAD -- .github/workflows/` returns exactly
       the three intended files. *Anti-widening gate: changing scope means editing this AC.*
 - [ ] 3.5 **AC5** — both jq-consuming steps still open with `set -euo pipefail` (assert the anchors,
