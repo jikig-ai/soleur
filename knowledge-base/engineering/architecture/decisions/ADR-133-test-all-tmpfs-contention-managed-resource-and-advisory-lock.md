@@ -351,9 +351,8 @@ plus a tuning of Decision 3's own parameter.
 ### Why the budget was raised, and why that is tuning rather than a mechanism change
 
 **900 s was shorter than the thing it waits for.** This ADR's own 2026-08-11 addendum records the
-uncontended full gate at a **~45-minute (~2700 s) baseline**, with observed sibling holds of
-3,775 / 5,787 / 5,763 s. A budget at roughly a third of the hold time cannot serialize two full
-gates: it expires by construction, `LOCK_CONTENDED_PROCEEDING` fires, and every queued run proceeds
+uncontended full gate at a **~45-minute (~2700 s) baseline**. A budget at roughly a third of that
+cannot serialize two full gates: it expires by construction, `LOCK_CONTENDED_PROCEEDING` fires, and every queued run proceeds
 at once. **That is the mechanism behind six concurrent runs landing on one 16-core box — not the
 absence of a lock.** #7545 reproduced it with an agent that had full context on the failure class
 and still launched two shards onto a box already running two.
@@ -363,6 +362,15 @@ or making acquisition blocking with a documented escape"** as *"candidates the o
 never considered"*. That is what distinguishes the raise from **"Make the lock blocking (abort on
 timeout)"**, which `## Alternatives Considered` REJECTS. Decision 3's load-bearing property is
 preserved verbatim: on expiry the lock still **proceeds and never aborts**.
+
+**Two corrections to how an earlier draft argued this.** (a) The 2026-08-11 figures of
+3,775 / 5,787 / 5,763 s were described here as "observed sibling holds". They are not — that
+addendum records those runs as executing *concurrently*, the figures being elapsed-at-probe-time,
+and at most one of them held the lock. (b) Citing them as hold times made the argument
+self-defeating: "a budget below the hold time cannot serialize" condemns 3600 just as readily
+against 5,787. The honest claim is narrower. **3600 is a bounded improvement over 900, sized above
+the recorded ~2700 s uncontended baseline; it is not a value proven sufficient for the contended
+tail** — and a future tuner should not inherit an argument that proves more than the data does.
 
 **Source of the 2700 s figure.** ADR-133's recorded baseline, not a fresh measurement. A fresh
 uncontended reading was not obtainable in-session: the box carried load 43.67 with two live sibling
@@ -382,15 +390,22 @@ and produced the second recorded redeemed wait:
 [contention] LOCK_ACQUIRED: 'test-all' after 941047ms (worktrees of this repo serialize on it).
 ```
 
-**941 s against the old 900 s budget** — it would have expired 41 seconds short, fired
-`LOCK_CONTENDED_PROCEEDING`, and made this run the fifth concurrent gate on the box. The raise is
-what converted it from *interleaved* into *serialized*, and the margin was under a minute, which is
-the shape the 2026-08-12 addendum predicted when it noted that a budget below ~620 s would have
-converted THAT run the same way. Two independent observations now say the same thing: waits get
-redeemed at durations the old budget sat just below.
+**941 s against the old 900 s budget** — it would have expired 41 seconds short and fired
+`LOCK_CONTENDED_PROCEEDING`. State that precisely: what the raise bought **on this observation** is
+~41 s of avoided overlap with the one run actually holding the lock. The other three siblings were
+already interleaved and would have been under either budget, so this is not evidence of a prevented
+fifth *sustained* concurrent gate — an earlier draft of this addendum claimed exactly that and
+overstated the datum. What it does establish is that a redeemed wait sat just above the old budget,
+the same shape the 2026-08-12 addendum recorded when it noted a budget below ~620 s would have
+converted THAT run from serialized to interleaved. Two independent observations, one bounded
+conclusion.
 
-Fourteen heartbeats fired across the wait (60 s → 840 s), each naming the holder's pid and worktree,
-so a fifteen-minute block read as a queue rather than a hang.
+Fourteen heartbeats fired across the wait — and that count is itself a finding. At an exact 60 s
+interval a 941 s wait yields fifteen beats ending at 900 s; the run recorded fourteen ending at
+`waited=840s`. The discrepancy was the instrument, not the machine: each beat also ran a ~6.6 s
+`/proc` walk the counter never counted, so reported elapsed drifted ~11% low and the self-terminate
+that bounds orphan lifetime overshot to ~4000 s on a 3600 s budget. Both are fixed — elapsed is read
+from `EPOCHSECONDS`, and the beat no longer walks `/proc` at all.
 
 **The cost this raises, stated plainly:** an *accidental* lock acquisition on a fast path is now an
 hour-long hang rather than a fifteen-minute one. That is why `--capacity`'s side-effect freedom is
@@ -401,9 +416,17 @@ the `--print-suite-globs` comment warns a lock-blocking fast path would.
 ### Why a longer wait needed the heartbeat in the same change
 
 A raised budget makes the SILENCE longer, and a silent multi-minute block is indistinguishable from
-a hang — which is what produces hand-kills and hand-queueing. `LOCK_WAIT_HEARTBEAT` names the
-holder's worktree, pid and elapsed seconds at the interval, re-resolved every beat because the
-holder can change during a long wait. The contended banner additionally **re-samples** the sibling
+a hang — which is what produces hand-kills and hand-queueing. `LOCK_WAIT_HEARTBEAT` names the lock
+and this run's **measured** elapsed at the interval.
+
+**It deliberately does not name a holder.** A first draft did, taken from `head -1` of a `/proc`
+walk — whichever sibling the glob enumerated first, with no relationship to lock ownership. Measured
+during review: the reported pid changed on every beat and was `unknown` on 2 of 9, and on a six-run
+pileup five of six candidates are fellow *waiters*, so it named a waiter ~83% of the time while the
+skill docs told the operator to read it before killing something. It also cost ~313 CPU-seconds and
+~154,000 process creations per waiting run — a diagnostic that participates in the fork-starvation
+incident it narrates. `--capacity` answers "who is running" on demand in ~3 s; the beat answers only
+what it can know. The contended banner additionally **re-samples** the sibling
 count, which after a full budget would otherwise report a reading up to an hour stale.
 
 One implementation hazard is worth recording because it is invisible on the happy path: **`grep -c`
@@ -454,6 +477,6 @@ The verdict is emitted from **one** `_tc_scan_procs` walk (measured ~6.6 s), sha
 banners, so verdict and banner cannot disagree. It is still a **point reading**: it says what the
 box looked like at t=0 of this run, not what it will look like an hour in. Nothing here reaps a
 wedged holder — that is #7537, and the raised budget makes reaping *more* valuable, not less, which
-is why the heartbeat that identifies the holder ships alongside. And local developer tooling has no
+is why `--capacity` — which enumerates the running worktrees on demand — ships alongside. And local developer tooling has no
 remote alert target, so a permanently-degraded probe on a hardened `/proc` is caught by loudness
 (`CAPACITY_UNKNOWN` on every run) rather than by telemetry.

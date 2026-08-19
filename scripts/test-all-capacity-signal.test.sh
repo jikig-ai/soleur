@@ -10,7 +10,15 @@
 #             degraded reading as a healthy box.       [M1-M11b, H1-H4]
 #   Guard 2 — `test-all.sh --capacity` is side-effect free.       [M12-M14, H5]
 #   Guard 3 — the wait cannot abort, and is legible.              [M15-M18, H6]
-#   Guard 4 — the diff report never narrows a pinned full run.    [M19-M21, H7]
+#
+# A Guard 4 (a diff-justification report) was CUT during review rather than
+# fixed: it could not change a decision under either TEST_GROUP value (forbidden
+# from advising under `all` by ADR-183 Ceiling 1, redundant under an explicit
+# shard), it was a fifth hand-written path-prefix list where #7545 asked for
+# reuse of scripts/lib/test-relevance-paths.sh, and it was already wrong —
+# `.github/`, `CLAUDE.md`, `apps/cla-evidence/` and four apps/web-platform
+# subtrees all reported `DIFF_TOUCHES: none`, the confidently-reassuring reading
+# its own comment warned against.
 #
 # WHY A SIGNAL AND NOT A DECLINE. #7545 asked for a pre-launch DECISION that
 # declines an over-capacity run. That was cut on review against measured
@@ -60,10 +68,21 @@ cases=0
 # counter that moves inside both verdict helpers moves WITH the verdict, so
 # stubbing fail() to a no-op drops the row and its count together and
 # `pass_n + fails == cases` still holds.
+# Every failure is ALSO appended to a file, and the exit decision at the bottom
+# reads THAT, not the counter. Measured on the counter-only form: inserting a
+# single `fails=0` line before the summary printed
+#   === … 59 passed, 0 failed (66 assertions) ===
+# and exited 0 — an arithmetic that is impossible on a green run (59 != 66),
+# carrying seven real [FAIL] lines, landing in CI as `ok` because run_suite
+# classifies purely on exit code. Conservation did not catch it because it ran
+# upstream on the true counters; the floor did not because `cases` was intact.
+# Silencing an append-only record means DELETING EVIDENCE, not moving a number.
 pass() { pass_n=$((pass_n + 1)); echo "  [ok] $1"; }
-fail() { fails=$((fails + 1)); echo "  [FAIL] $1" >&2; }
+fail() { fails=$((fails + 1)); echo "  [FAIL] $1" >&2; printf '%s\n' "$1" >> "$FAILLOG"; }
 
 TESTROOT="$(mktemp -d -t test-all-capacity.XXXXXXXX)"
+FAILLOG="$TESTROOT/failures.log"
+: > "$FAILLOG"
 cleanup() { rm -rf "$TESTROOT"; }
 trap cleanup EXIT
 
@@ -102,6 +121,15 @@ TC_CLEAN=(env
   -u TC_LAST_SIB_COUNT -u TC_LAST_SIB_COUNT_OK
   -u TC_LAST_AVAIL_MB -u TC_LAST_AVAIL_MB_OK
   -u TC_LAST_MEMAVAIL_MB -u TC_LAST_MEMAVAIL_MB_OK
+  -u TC_LAST_SIB_ROWS -u TC_LAST_SUITE_COUNT -u TC_LAST_SUITE_COUNT_OK
+  # XDG_RUNTIME_DIR and TMPDIR were MISSING from this list while the comment
+  # above claimed it was enumerated from the SUT. They are in that grep's output.
+  # The consequence was concrete: TC_XDG_DIR was passed EMPTY, the lib reads it
+  # with `:-` (which treats empty as unset), so tc_preamble fell through to the
+  # operator's real $XDG_RUNTIME_DIR — a live directory with ~6400 entries — and
+  # AC9's byte-identity assertion would flake on any file touched there between
+  # its two calls, reporting "promoting variables must change no bytes".
+  -u XDG_RUNTIME_DIR -u TMPDIR
 )
 
 # ---------------------------------------------------------------------------
@@ -168,11 +196,12 @@ EOF
 # warns about for `cases`, one construct over — and here it produced plausible
 # wrong NUMBERS rather than an obvious error.
 make_fixture() {
-  local siblings=0 sibling_pids=1 avail_kb=3072000 meminfo=ok proc=ok cores=16
+  local siblings=0 sibling_pids=1 avail_kb=3072000 meminfo=ok proc=ok cores=16 suites=0
   local kv
   for kv in "$@"; do
     case "$kv" in
       siblings=*)     siblings="${kv#*=}" ;;
+      suites=*)       suites="${kv#*=}" ;;
       sibling_pids=*) sibling_pids="${kv#*=}" ;;
       avail_kb=*)     avail_kb="${kv#*=}" ;;
       meminfo=*)      meminfo="${kv#*=}" ;;
@@ -197,10 +226,26 @@ make_fixture() {
         make_fake_proc "$proc_root" "$pid" "$dir/wt-$w" $(( 100 * w )) "scripts/test-all.sh"
       done
     done
+    # Individual suites running in other worktrees — a second contention axis.
+    # ppid/pgrp are set so the scan's ancestry/pgid cancellation does not absorb
+    # them.
+    local sp=300000 q
+    for (( q = 1; q <= suites; q++ )); do
+      sp=$((sp + 1)); mkdir -p "$dir/swt-$q"
+      make_fake_proc "$proc_root" "$sp" "$dir/swt-$q" 45 "tests/scripts/test-foo.sh" bash 1 "$sp"
+    done
   fi
-  # `proc=empty` leaves the directory with no process entries at all — the
-  # AC5(c) witness. Note it also has no uptime/meminfo, so it is a genuinely
-  # unusable procfs rather than a merely idle one.
+
+  # `proc=empty` leaves the directory with no process entries — the AC5(c)
+  # witness. It MUST still carry meminfo: without it the fixture was degraded on
+  # TWO axes at once, and 2 of AC5(c)'s 3 rows then passed under their own defect
+  # (a forced-healthy procfs probe) carried entirely by the meminfo signal. A
+  # fixture degraded on two axes cannot attribute either.
+  if [[ "$proc" == "empty" ]]; then
+    printf 'MemAvailable:    7000000 kB\n' > "$proc_root/meminfo"
+    printf '3.96 9.72 14.60 2/2934 572235\n' > "$proc_root/loadavg"
+    printf '100000 0.00\n' > "$proc_root/uptime"
+  fi
 
   if [[ "$proc" == "ok" && "$meminfo" == "gone" ]]; then
     rm -f "$proc_root/meminfo"
@@ -208,8 +253,11 @@ make_fixture() {
 
   make_df_stub "$df_stub" "$avail_kb"
 
-  printf 'TC_PROC_ROOT=%s\nTC_TMPDIR=%s\nTC_DF_CMD=%s\nTC_SELF_PID=999999\nTC_XDG_DIR=\nTC_NPROC=%s\n' \
-    "$proc_root" "$tmpdir" "$df_stub" "$cores"
+  # TC_XDG_DIR points at a path that CANNOT exist, never at the empty string:
+  # the lib reads it with `:-`, so empty means "fall through to the operator's
+  # real XDG_RUNTIME_DIR" and the fixture stops being hermetic.
+  printf 'TC_PROC_ROOT=%s\nTC_TMPDIR=%s\nTC_DF_CMD=%s\nTC_SELF_PID=999999\nTC_XDG_DIR=%s/nonexistent-xdg\nTC_NPROC=%s\n' \
+    "$proc_root" "$tmpdir" "$df_stub" "$dir" "$cores"
 }
 
 # Run tc_preamble (to populate the promoted values) then tc_capacity_line, and
@@ -313,10 +361,10 @@ else
 fi
 
 cases=$((cases + 1))
-if [[ "$(grep -cE 'measured_siblings=5' <<<"$V_SIB5" || true)" -ge 1 ]]; then
-  pass "AC2/AC7: the verdict reports the measured sibling count (5)"
+if [[ "$(grep -cE 'measured_runs=5' <<<"$V_SIB5" || true)" -ge 1 ]]; then
+  pass "AC2/AC7: the verdict reports the measured runner count (5)"
 else
-  fail "AC2/AC7: the verdict did not report measured_siblings=5; got: $V_SIB5"
+  fail "AC2/AC7: the verdict did not report measured_runs=5; got: $V_SIB5"
 fi
 
 # --- AC2: distinct WORKTREES, not pids --------------------------------------
@@ -326,7 +374,7 @@ FX_TWO_WT="$(make_fixture siblings=2 sibling_pids=1 avail_kb=3072000)"
 V_TWO_WT="$(verdict_for "$FX_TWO_WT")"
 
 cases=$((cases + 1))
-if [[ "$(grep -cE 'measured_siblings=2' <<<"$V_TWO_WT" || true)" -ge 1 ]]; then
+if [[ "$(grep -cE 'measured_runs=2' <<<"$V_TWO_WT" || true)" -ge 1 ]]; then
   pass "AC2: two distinct sibling worktrees count as 2"
 else
   fail "AC2: two distinct worktrees did not count as 2; got: $V_TWO_WT"
@@ -336,7 +384,7 @@ FX_ONE_WT_TWO_PID="$(make_fixture siblings=1 sibling_pids=2 avail_kb=3072000)"
 V_ONE_WT_TWO_PID="$(verdict_for "$FX_ONE_WT_TWO_PID")"
 
 cases=$((cases + 1))
-if [[ "$(grep -cE 'measured_siblings=1' <<<"$V_ONE_WT_TWO_PID" || true)" -ge 1 ]]; then
+if [[ "$(grep -cE 'measured_runs=1' <<<"$V_ONE_WT_TWO_PID" || true)" -ge 1 ]]; then
   pass "AC2/M8: two pids in ONE worktree count as 1, not 2"
 else
   fail "AC2/M8: two pids in one worktree did not count as 1; got: $V_ONE_WT_TWO_PID"
@@ -528,6 +576,120 @@ else
   fail "AC6: the mixed verdict did not name sibling_runs; got: $V_MIXED"
 fi
 
+# --- Arms the review proved were missing (each one had a live defect) ---
+
+# C1: the degraded RENDERING, not just the classification. Making the render
+# unconditional survived at 66/0 while printing `measured_runs=0` for a procfs
+# that could not be measured — an absence of measurement rendered as a
+# measurement of absence, one field over from M11b, asserted by nothing.
+cases=$((cases + 1))
+if [[ "$(grep -cE 'measured_runs=\?' <<<"$V_PROC_EMPTY" || true)" -ge 1 ]]; then
+  pass "C1: an unmeasurable procfs renders measured_runs=? — never a digit"
+else
+  fail "C1: an unmeasurable procfs rendered a NUMBER for the runner count; got: $V_PROC_EMPTY"
+fi
+
+cases=$((cases + 1))
+if [[ "$(grep -cE 'tmp_avail_mb=\?' <<<"$V_DF_BAD" || true)" -ge 1 ]]; then
+  pass "C1: an unparseable df renders tmp_avail_mb=? — never a digit"
+else
+  fail "C1: an unparseable df rendered a NUMBER for tmp avail; got: $V_DF_BAD"
+fi
+
+cases=$((cases + 1))
+if [[ "$(grep -cE 'memavail_mb=\?' <<<"$V_MEM_GONE" || true)" -ge 1 ]]; then
+  pass "C1: an unreadable meminfo renders memavail_mb=? — never a digit"
+else
+  fail "C1: an unreadable meminfo rendered a NUMBER for memavail; got: $V_MEM_GONE"
+fi
+
+# C2: EVERY field of the tail, not the three that happened to have arms. The
+# whole `memavail_mb=` field could be deleted at 66/0.
+cases=$((cases + 1))
+_missing=""
+for _f in measured_runs measured_suites sibling_threshold tmp_avail_mb tmp_floor_mb memavail_mb; do
+  [[ "$(grep -cE "$_f=" <<<"$V_HEALTHY" || true)" -ge 1 ]] || _missing="${_missing:+$_missing,}$_f"
+done
+if [[ -z "$_missing" ]]; then
+  pass "AC7/C2: the verdict tail carries every declared field"
+else
+  fail "AC7/C2: the verdict tail is missing field(s): $_missing; got: $V_HEALTHY"
+fi
+
+# C3: TWO signals contended at once. No fixture ever crossed both thresholds, so
+# the `${contended:+$contended,}` accumulator only ever ran at one member and
+# overwriting instead of joining survived — on a real box with both signals hot
+# the verdict would silently drop sibling_runs.
+FX_BOTH="$(make_fixture siblings=2 avail_kb=$(( 500 * 1024 )))"
+V_BOTH="$(verdict_for "$FX_BOTH")"
+
+cases=$((cases + 1))
+if [[ "$(grep -cE 'reason=[^ ]*sibling_runs' <<<"$V_BOTH" || true)" -ge 1 ]] \
+   && [[ "$(grep -cE 'reason=[^ ]*low_tmp' <<<"$V_BOTH" || true)" -ge 1 ]]; then
+  pass "C3: two crossed thresholds are BOTH named (the accumulator joins, not overwrites)"
+else
+  fail "C3: a verdict with two crossed thresholds dropped one; got: $V_BOTH"
+fi
+
+# The SUITE axis. tc_preamble computes suite_count and the first draft promoted
+# only the runner count, so CAPACITY_OK was reachable on a box whose own
+# SIBLING_SUITE_DETECTED banner was firing in the same run.
+FX_SUITES="$(make_fixture siblings=0 suites=2 avail_kb=3072000)"
+V_SUITES="$(verdict_for "$FX_SUITES")"
+
+cases=$((cases + 1))
+if [[ "$(grep -cE 'CAPACITY_CONTENDED' <<<"$V_SUITES" || true)" -ge 1 ]]; then
+  pass "suite-axis: sibling SUITES alone yield CAPACITY_CONTENDED (not a healthy box)"
+else
+  fail "suite-axis: sibling suites read as healthy — the false-OK this arm exists for; got: $V_SUITES"
+fi
+
+cases=$((cases + 1))
+if [[ "$(grep -cE 'reason=[^ ]*sibling_suites' <<<"$V_SUITES" || true)" -ge 1 ]]; then
+  pass "suite-axis: the verdict names reason=sibling_suites"
+else
+  fail "suite-axis: the verdict did not name sibling_suites; got: $V_SUITES"
+fi
+
+cases=$((cases + 1))
+if [[ "$(grep -cE 'measured_suites=2' <<<"$V_SUITES" || true)" -ge 1 ]]; then
+  pass "suite-axis: the verdict reports the measured suite count (2)"
+else
+  fail "suite-axis: the verdict did not report measured_suites=2; got: $V_SUITES"
+fi
+
+# The FLOOR is an operator seam and must be shape-asserted like every other
+# value. Measured before the guard: TC_MIN_AVAIL_MB=2G printed CAPACITY_OK on a
+# tmpfs with 4MB free, rc=0, with the failed signal not even named as degraded.
+FX_FLOOR="$(make_fixture siblings=0 avail_kb=$(( 4 * 1024 )))"
+V_FLOOR_BAD="$(verdict_for "$(printf '%s\nTC_MIN_AVAIL_MB=2G\n' "$FX_FLOOR")")"
+
+cases=$((cases + 1))
+if [[ "$(grep -cE 'CAPACITY_OK' <<<"$V_FLOOR_BAD" || true)" -eq 0 ]]; then
+  pass "floor: a non-numeric TC_MIN_AVAIL_MB never reads as a healthy box"
+else
+  fail "floor: TC_MIN_AVAIL_MB=2G reported CAPACITY_OK on a 4MB tmpfs; got: $V_FLOOR_BAD"
+fi
+
+cases=$((cases + 1))
+if [[ "$(grep -cE 'reason=[^ ]*unusable_floor' <<<"$V_FLOOR_BAD" || true)" -ge 1 ]]; then
+  pass "floor: an unusable floor is NAMED, not silently skipped"
+else
+  fail "floor: an unusable floor was not named; got: $V_FLOOR_BAD"
+fi
+
+# not_probed: unset is a different fault from set-and-invalid, and reporting the
+# second when the first is true sends a reader to investigate three probes that
+# are all fine.
+V_UNPROBED="$("${TC_CLEAN[@]}" bash -c 'set -euo pipefail; source "$1"; tc_capacity_line' _ "$LIB" 2>/dev/null || true)"
+
+cases=$((cases + 1))
+if [[ "$(grep -cE 'reason=not_probed' <<<"$V_UNPROBED" || true)" -ge 1 ]]; then
+  pass "not_probed: a verdict with no preamble names the real fault, not three phantom probe failures"
+else
+  fail "not_probed: a verdict with no preamble misdiagnosed; got: $V_UNPROBED"
+fi
+
 # --- AC10 / M9: one walk, one source of truth -------------------------------
 # The verdict must consume tc_preamble's promoted values, never re-walk /proc.
 # M9 (have the verdict re-walk) reddens here because two non-atomic snapshots
@@ -535,8 +697,8 @@ fi
 # falsifiable half.
 
 PV_TWO="$(preamble_and_verdict_for "$FX_TWO_WT")"
-PV_BANNER_N="$(sed -n 's/.*siblings: \([0-9]*\) other worktree.*/\1/p' <<<"$PV_TWO" | head -1)"
-PV_VERDICT_N="$(sed -n 's/.*measured_siblings=\([0-9]*\).*/\1/p' <<<"$PV_TWO" | head -1)"
+PV_BANNER_N="$(sed -n 's/.*siblings: \([0-9]*\) other worktree.*/\1/p' <<<"$PV_TWO" | head -1 || true)"
+PV_VERDICT_N="$(sed -n 's/.*measured_runs=\([0-9]*\).*/\1/p' <<<"$PV_TWO" | head -1 || true)"
 
 cases=$((cases + 1))
 if [[ -n "$PV_BANNER_N" && "$PV_BANNER_N" == "$PV_VERDICT_N" ]]; then
@@ -575,9 +737,17 @@ fi
 # `[contention] BANNER` names as a contract. Materialized by the repo's existing
 # idiom (`git show origin/main:<path>`), as test-all-killed-classification.test.sh
 # already does for the runner — without a named mechanism this AC is unfalsifiable.
-MAIN_LIB="$TESTROOT/main-test-contention.sh"
+# PINNED TO AN IMMUTABLE SHA, not to origin/main. Demonstrated during review:
+# with origin/main pointed at this branch's own content (i.e. the state one
+# second after merge), a banner regression injected into BOTH sides passed AC9
+# green — the arm reduces to X == X and the byte-identity contract it exists to
+# protect is unguarded from the merge commit onward.
+#
+# This is the pre-#7545 lib, the last commit before the promotion landed.
+AC9_BASELINE_SHA="45ea9f7e9"
+MAIN_LIB="$TESTROOT/baseline-test-contention.sh"
 MAIN_LIB_OK=0
-if git -C "$REPO_ROOT" show origin/main:scripts/lib/test-contention.sh > "$MAIN_LIB" 2>/dev/null; then
+if git -C "$REPO_ROOT" show "${AC9_BASELINE_SHA}:scripts/lib/test-contention.sh" > "$MAIN_LIB" 2>/dev/null; then
   MAIN_LIB_OK=1
 fi
 
@@ -589,15 +759,15 @@ if [[ "$MAIN_LIB_OK" == 1 ]]; then
   OUT_NEW="$("${TC_CLEAN[@]}" "${_envs[@]}" bash -c 'source "$1"; tc_preamble' _ "$LIB" 2>&1 || true)"
   OUT_MAIN="$("${TC_CLEAN[@]}" "${_envs[@]}" bash -c 'source "$1"; tc_preamble' _ "$MAIN_LIB" 2>&1 || true)"
   if [[ "$OUT_NEW" == "$OUT_MAIN" ]]; then
-    pass "AC9: tc_preamble's output is byte-identical to origin/main's on a fixed fake /proc"
+    pass "AC9: tc_preamble's output is byte-identical to the pinned pre-#7545 baseline on a fixed fake /proc"
   else
-    fail "AC9: tc_preamble's output DIFFERS from origin/main's — promoting variables must change no bytes"
+    fail "AC9: tc_preamble's output DIFFERS from the pinned baseline — promoting variables must change no bytes"
     diff <(printf '%s\n' "$OUT_MAIN") <(printf '%s\n' "$OUT_NEW") | head -20 >&2 || true
   fi
 else
   # Not silently skipped: a missing baseline is reported as its own outcome so
   # an unfalsifiable run cannot read as a clean one.
-  fail "AC9: could not materialize the origin/main baseline (git show failed) — AC9 was NOT evaluated"
+  fail "AC9: could not materialize the pinned baseline (git show failed) — AC9 was NOT evaluated"
 fi
 
 # --- M5: the guard's own dispatch -------------------------------------------
@@ -737,7 +907,13 @@ echo "--- Guard 3: the wait cannot abort, and is legible ---"
 # the heartbeat has a real interval to fire in.
 STUB_SS="$TESTROOT/session-state-stub.sh"
 cat > "$STUB_SS" <<'EOF'
+# RECORDS ITS ARGV. The previous stub was a pure function of two env vars the
+# case set, discarding "$name" and "$timeout_s" — so no arm could witness the
+# seam's contract, and dropping "$timeout_s" from tc_acquire's call survived at
+# 66/0. The raised budget was asserted as a source literal and as an argument
+# NOWHERE, while a real acquire_lock would silently use its own default.
 acquire_lock() {
+  printf '%s\n' "$*" > "${STUB_ARGV_FILE:-/dev/null}"
   sleep "${STUB_ACQUIRE_SLEEP:-0}"
   return "${STUB_ACQUIRE_RC:-0}"
 }
@@ -793,23 +969,35 @@ else
   fail "AC12/M16: no heartbeat during a 3s wait at a 1s interval; got: $ACQ_HB_OUT"
 fi
 
+# The beat names the LOCK, not a "holder". Identifying the holder was cut: the
+# old line took head -1 of a /proc walk, which named a fellow WAITER ~83% of the
+# time on the pileup this feature exists for, and cost ~6 s of /proc walking per
+# beat on an already-contended box.
 cases=$((cases + 1))
-if [[ "$(grep -cE 'LOCK_WAIT_HEARTBEAT.*pid=[0-9]+' <<<"$ACQ_HB_OUT" || true)" -ge 1 ]]; then
-  pass "AC12: the heartbeat names the holder's pid"
+if [[ "$(grep -cE "LOCK_WAIT_HEARTBEAT.*test-arm" <<<"$ACQ_HB_OUT" || true)" -ge 1 ]]; then
+  pass "AC12: the heartbeat names the lock it is waiting on"
 else
-  fail "AC12: the heartbeat does not name a holder pid; got: $ACQ_HB_OUT"
+  fail "AC12: the heartbeat does not name the lock; got: $ACQ_HB_OUT"
 fi
 
 cases=$((cases + 1))
-if [[ "$(grep -cE 'LOCK_WAIT_HEARTBEAT.*(worktree|cwd)=' <<<"$ACQ_HB_OUT" || true)" -ge 1 ]]; then
-  pass "AC12: the heartbeat names the holder's worktree"
+if [[ "$(grep -cE 'LOCK_WAIT_HEARTBEAT.*(holder pid=|worktree=)' <<<"$ACQ_HB_OUT" || true)" -eq 0 ]]; then
+  pass "AC12: the heartbeat claims NO holder identity (it cannot know it)"
 else
-  fail "AC12: the heartbeat does not name a holder worktree; got: $ACQ_HB_OUT"
+  fail "AC12: the heartbeat asserts a holder it cannot know; got: $ACQ_HB_OUT"
 fi
 
 cases=$((cases + 1))
-if [[ "$(grep -cE 'LOCK_WAIT_HEARTBEAT.*waited=[0-9]+s' <<<"$ACQ_HB_OUT" || true)" -ge 1 ]]; then
-  pass "AC12: the heartbeat reports elapsed seconds"
+if [[ "$(grep -cE 'LOCK_WAIT_HEARTBEAT.*BANNER' <<<"$ACQ_HB_OUT" || true)" -ge 1 ]] \
+   || [[ "$(grep -cE '\[contention\] BANNER LOCK_WAIT_HEARTBEAT' <<<"$ACQ_HB_OUT" || true)" -ge 1 ]]; then
+  pass "AC12: the heartbeat carries the BANNER prefix work/SKILL.md's triage grep reads"
+else
+  fail "AC12: the heartbeat is invisible to the documented triage grep; got: $ACQ_HB_OUT"
+fi
+
+cases=$((cases + 1))
+if [[ "$(grep -cE 'LOCK_WAIT_HEARTBEAT.*waited=[0-9]+s of [0-9]+s' <<<"$ACQ_HB_OUT" || true)" -ge 1 ]]; then
+  pass "AC12: the heartbeat reports MEASURED elapsed against its budget"
 else
   fail "AC12: the heartbeat does not report elapsed seconds; got: $ACQ_HB_OUT"
 fi
@@ -881,7 +1069,7 @@ fi
 # AC14: the raised budget must exceed the measured full-gate hold time. Read the
 # default out of the lib by SHAPE, so a future edit of the constant is caught
 # rather than a stale literal being re-asserted here.
-TC_TIMEOUT_DEFAULT="$(sed -n 's/^TC_LOCK_TIMEOUT="\${TC_LOCK_TIMEOUT:-\([0-9]*\)}"$/\1/p' "$LIB" | head -1)"
+TC_TIMEOUT_DEFAULT="$(sed -n 's/^TC_LOCK_TIMEOUT="\${TC_LOCK_TIMEOUT:-\([0-9]*\)}"$/\1/p' "$LIB" | head -1 || true)"
 
 cases=$((cases + 1))
 if [[ "$TC_TIMEOUT_DEFAULT" =~ ^[0-9]+$ ]] && (( TC_TIMEOUT_DEFAULT >= 2700 )); then
@@ -903,117 +1091,6 @@ if [[ "$(grep -cE '^#   TC_DF_CMD' "$LIB" || true)" -ge 1 ]]; then
   pass "Phase 2.1b: TC_DF_CMD (a pre-existing omission) is listed in the lib's TEST SEAMS block"
 else
   fail "Phase 2.1b: TC_DF_CMD is missing from the lib's TEST SEAMS block"
-fi
-
-# ---------------------------------------------------------------------------
-# Guard 4 — the diff report never narrows a pinned full run
-# ---------------------------------------------------------------------------
-
-echo "--- Guard 4: the diff-justification report ---"
-
-# Sandbox the runner so `run_suite` records instead of running, and so the diff
-# blob can be forced. Same shape as scripts/test-all-infra-coverage-notice.test.sh.
-make_diff_sandbox() {
-  local out="$1"
-  mkdir -p "$(dirname "$out")/lib"
-  cp "$RUNNER" "$out" || return 1
-  cp "$REPO_ROOT/scripts/lib/test-contention.sh" "$(dirname "$out")/lib/" || return 1
-  cp "$REPO_ROOT/scripts/lib/test-relevance-paths.sh" "$(dirname "$out")/lib/" 2>/dev/null || true
-  python3 - "$out" <<'PY'
-import re, sys
-p = sys.argv[1]
-s = open(p).read()
-
-# Force the diff blob from the environment, AFTER the detection block, so a real
-# diff cannot leak into an arm that declared its own.
-anchor = '_diff_touches() {'
-assert anchor in s, "could not locate _diff_touches definition"
-inject = (
-    '[[ -n "${SANDBOX_DIFF_NAMES:-}" ]] && _diff_names="$SANDBOX_DIFF_NAMES"\n'
-    '[[ -n "${SANDBOX_DETECT_OK:-}" ]] && _diff_detect_ok="$SANDBOX_DETECT_OK"\n'
-    '[[ -n "${SANDBOX_DETECT_OK:-}" ]] && _diff_head_ok="$SANDBOX_DETECT_OK"\n'
-)
-s = s.replace(anchor, inject + anchor, 1)
-
-# run_suite becomes a recorder: nothing is executed, everything is counted.
-m = re.search(r'^run_suite\(\) \{.*?^\}', s, re.S | re.M)
-assert m, "could not locate run_suite() definition"
-s = s[:m.start()] + 'run_suite() { suites=$((suites + 1)); echo "RECORDED_SUITE:$1" >> "$SANDBOX_RECORD"; }' + s[m.end():]
-open(p, 'w').write(s)
-PY
-}
-
-DIFF_SANDBOX="$TESTROOT/diff-sandbox/scripts/test-all.sh"
-DIFF_SANDBOX_OK=0
-if make_diff_sandbox "$DIFF_SANDBOX" >/dev/null 2>&1; then
-  DIFF_SANDBOX_OK=1
-fi
-
-run_diff_arm() { # <group> <diff-names> [detect_ok]
-  local group="$1" names="$2" detect="${3:-1}"
-  export SANDBOX_RECORD="$TESTROOT/rec-$RANDOM.txt"
-  : > "$SANDBOX_RECORD"
-  (cd "$REPO_ROOT" && "${TC_CLEAN[@]}" "${_envs[@]}" \
-      SOLEUR_DISABLE_SESSION_STATE=1 \
-      SANDBOX_DIFF_NAMES="$names" SANDBOX_DETECT_OK="$detect" \
-      TEST_GROUP="$group" \
-      bash "$DIFF_SANDBOX" 2>&1 || true)
-}
-
-if [[ "$DIFF_SANDBOX_OK" == 1 ]]; then
-  # H7 (must-PASS) / M21: a diff touching ONLY scripts/ names scripts and NOT
-  # webplat. M21 (hardcode the report to always name all four shards) reddens
-  # on the second half.
-  H7_OUT="$(run_diff_arm scripts 'scripts/test-all.sh')"
-
-  cases=$((cases + 1))
-  if [[ "$(grep -cE 'DIFF_TOUCHES.*scripts' <<<"$H7_OUT" || true)" -ge 1 ]]; then
-    pass "H7 must-PASS/AC16b: a scripts/-only diff names the scripts shard"
-  else
-    fail "H7 must-PASS/AC16b: a scripts/-only diff did not name scripts; got: $(grep -E 'DIFF_TOUCHES' <<<"$H7_OUT" || true)"
-  fi
-
-  cases=$((cases + 1))
-  if [[ "$(grep -cE 'DIFF_TOUCHES[^\n]*webplat' <<<"$H7_OUT" || true)" -eq 0 ]]; then
-    pass "H7/M21/AC16b: a scripts/-only diff does NOT name webplat"
-  else
-    fail "H7/M21/AC16b: a scripts/-only diff named webplat — the report is hardcoded; got: $(grep -E 'DIFF_TOUCHES' <<<"$H7_OUT" || true)"
-  fi
-
-  # AC16b: a webplat diff names webplat — the other direction, so the matcher is
-  # pinned in both, not merely "does not over-report".
-  WP_OUT="$(run_diff_arm all 'apps/web-platform/app/page.tsx')"
-
-  cases=$((cases + 1))
-  if [[ "$(grep -cE 'DIFF_TOUCHES[^\n]*webplat' <<<"$WP_OUT" || true)" -ge 1 ]]; then
-    pass "AC16b: a webplat diff names the webplat shard"
-  else
-    fail "AC16b: a webplat diff did not name webplat; got: $(grep -E 'DIFF_TOUCHES' <<<"$WP_OUT" || true)"
-  fi
-
-  # M19 / AC16: no narrowing advice under TEST_GROUP=all. ADR-183 Ceiling 1 pins
-  # /ship Phase 4 at TEST_GROUP=all; a report that recommended narrowing there
-  # would contradict the ADR this plan is required to preserve.
-  cases=$((cases + 1))
-  if [[ "$(grep -ciE 'DIFF_TOUCHES[^\n]*(consider|narrow|you can run|suggest)' <<<"$WP_OUT" || true)" -eq 0 ]]; then
-    pass "AC16/M19: under TEST_GROUP=all the report gives no narrowing advice (ADR-183 Ceiling 1)"
-  else
-    fail "AC16/M19: the report recommended narrowing under TEST_GROUP=all; got: $(grep -E 'DIFF_TOUCHES' <<<"$WP_OUT" || true)"
-  fi
-
-  # M20 / AC16b: an UNDETERMINABLE diff emits a NAMED line, not nothing. A
-  # silent absence is indistinguishable from a report that found no shards.
-  UNDET_OUT="$(run_diff_arm all '' 0)"
-
-  cases=$((cases + 1))
-  if [[ "$(grep -cE 'DIFF_TOUCHES.*undeterminable' <<<"$UNDET_OUT" || true)" -ge 1 ]]; then
-    pass "AC16b/M20: an undeterminable diff emits a NAMED undeterminable line"
-  else
-    fail "AC16b/M20: an undeterminable diff emitted no named line; got: $(grep -E 'DIFF_TOUCHES' <<<"$UNDET_OUT" || true)"
-  fi
-else
-  cases=$((cases + 1))
-  fail "Guard 4: could not build the diff sandbox — the four diff-report arms were NOT evaluated"
 fi
 
 # ---------------------------------------------------------------------------
@@ -1097,7 +1174,7 @@ fi
 # whole change exists to remove. Zero slack is deliberate.
 # ---------------------------------------------------------------------------
 
-MIN_CASES=66
+MIN_CASES=73
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_CASES" >&2
@@ -1106,4 +1183,5 @@ if [[ "$cases" -lt "$MIN_CASES" ]]; then
 fi
 
 echo "=== test-all-capacity-signal: $pass_n passed, $fails failed ($cases assertions) ==="
-[[ "$fails" -eq 0 ]] || exit 1
+# Reads the append-only record, never the counter. See fail() above.
+[[ ! -s "$FAILLOG" ]] || exit 1

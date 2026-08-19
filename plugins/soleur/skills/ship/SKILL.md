@@ -329,8 +329,8 @@ that directory, so the summary accounts for it. Calling `test-all.sh` alone "mat
 produced #6969: a green summary read as evidence for infra it never executed, at the last gate
 before merge.
 
-**Probe capacity first (#7545).** This is the pipeline's longest local run, so spend a second
-learning what it is about to run into:
+**Probe capacity first (#7545).** This is the pipeline's longest local run, so spend ~3 s
+(measured p50) learning what it is about to run into:
 
 ```bash
 bash scripts/test-all.sh --capacity

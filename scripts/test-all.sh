@@ -106,7 +106,17 @@ if [[ "${1:-}" == "--capacity" ]]; then
     # The per-sibling detail is what makes the verdict ACTIONABLE: "contended"
     # tells you to wait, "pid 2266786 in .worktrees/feat-x, 1214s in" tells you
     # what you are waiting for.
-    _cap_rows="$(tc_siblings 2>/dev/null || true)"
+    # The rows tc_preamble ALREADY resolved on the walk above. Calling
+    # tc_siblings here was a SECOND non-atomic walk, and it produced exactly the
+    # contradiction the promotion exists to prevent — reproduced on this box:
+    #   CAPACITY_OK measured_siblings=0
+    #     -> pid 1497146 in .../feat-one-shot-7545... (running 3s)
+    #     -> pid 1497376 ...
+    #     -> pid 1503142 ...
+    # a verdict of "idle" printed directly above three enumerated siblings,
+    # because the count came from walk #1 and the rows from walk #2 six seconds
+    # later. It also doubled this branch's latency.
+    _cap_rows="${TC_LAST_SIB_ROWS:-}"
     if [[ -n "${_cap_rows//[[:space:]]/}" ]]; then
       while IFS=$'\t' read -r _cp _cc _ce; do
         [[ -n "$_cp" ]] || continue
@@ -114,7 +124,7 @@ if [[ "${1:-}" == "--capacity" ]]; then
       done <<< "$_cap_rows"
     fi
   else
-    echo '[contention] CAPACITY_UNKNOWN reason=lib_unavailable'
+    echo '[contention] BANNER CAPACITY_UNKNOWN reason=lib_unavailable'
   fi
   exit 0
 fi
@@ -212,13 +222,27 @@ if [[ -f "$_TC_LIB" ]]; then
   # shellcheck source=scripts/lib/test-contention.sh
   source "$_TC_LIB" || true
 fi
-# Guard on tc_acquire (the LAST-defined function in the lib): bash parses a
+# Guard on tc_acquire AND tc_capacity_line. The single-function form was
+# reproduced dying under version skew: a lib that defines tc_acquire but not
+# tc_capacity_line (an origin/main-era copy in a mixed checkout, a stale plugin
+# cache, a half-reverted worktree) left the stubs uninstalled, and the bare
+# top-level `tc_capacity_line >&2` below exited 127 under `set -e` —
+#   scripts/test-all.sh: line 814: tc_capacity_line: command not found
+# with NO summary, NO rc file and NO [FAIL] line, which is the signature this
+# repo documents as "a harness reap, not your diff".
+#
+# The old parenthetical said tc_acquire is "the LAST-defined function in the
+# lib". That was FALSE and had been false on main: tc_epilogue is defined after
+# it (941 vs 816 here, 660 vs 569 on main). The all-or-nothing-parse argument it
+# rested on is real but covers TRUNCATION only, never skew — so the guard now
+# names every function whose absence would abort, rather than one function
+# believed to dominate the rest. bash parses a
 # sourced file all-or-nothing, so a file truncated at an exact function boundary
 # is the only state where an earlier function exists but a later one does not —
 # checking the last one closes even that edge. If the lib is absent or failed to
 # parse, install no-op stubs for every call site so a broken/missing lib degrades
 # to a normal run rather than aborting the suite.
-if ! declare -F tc_acquire >/dev/null 2>&1; then
+if ! declare -F tc_acquire >/dev/null 2>&1 || ! declare -F tc_capacity_line >/dev/null 2>&1; then
   echo "WARNING: contention instrumentation unavailable ($_TC_LIB); continuing without it." >&2
   tc_preamble() { :; }
   tc_epilogue() { :; }
@@ -230,7 +254,7 @@ if ! declare -F tc_acquire >/dev/null 2>&1; then
   # that silently vanishes is the failure this verdict exists to prevent — a
   # reader who sees no CAPACITY_ line cannot tell "the box is fine" from "the
   # instrument is gone". AC15/M11 pin it.
-  tc_capacity_line() { echo '[contention] CAPACITY_UNKNOWN reason=lib_unavailable'; }
+  tc_capacity_line() { echo '[contention] BANNER CAPACITY_UNKNOWN reason=lib_unavailable'; }
 fi
 
 # ADR-133 amendment instrument: bytes held per mount, at RUN boundaries.
@@ -673,69 +697,6 @@ _diff_touches() {
   return 1
 }
 
-# --- Diff-justification report (#7545) --------------------------------------
-#
-# Names which TEST_GROUP shards this run's diff actually touches, so a session
-# can see what its own change warrants instead of inferring it.
-#
-# A REPORT, NOT A GATE, AND DELIBERATELY NOT A FIFTH `*_PATHS` ARRAY. Adding a
-# relevance array is a documented six-site change whose own guard comment
-# records a live defect where a fifth gate left the linter, the harness floor
-# and every behavioural arm green — against a measured ceiling of 4 gated suites
-# out of 167 top-level run_suite registrations (~2.4%). The operator's own
-# measurement agrees from the other direction: relevance-gating declined 3 of
-# 325 suites. The lever is real and small, so it ships as information.
-#
-# NO NARROWING ADVICE UNDER `TEST_GROUP=all`. ADR-183 pins /ship Phase 4 at the
-# full battery as that change's load-bearing constraint, asserted by
-# plugins/soleur/test/fullsuite-merge-gate.test.ts. A report that suggested
-# narrowing there would be this script arguing against the ADR it implements.
-_diff_shard_report() {
-  local shards="" msg
-  _add_shard() {
-    case ",$shards," in
-      *",$1,"*) ;;
-      *) shards="${shards:+$shards,}$1" ;;
-    esac
-  }
-
-  # Fail NAMED, not silent. An absent line is indistinguishable from a report
-  # that ran and found nothing — and "found nothing" is the reading that would
-  # wrongly reassure. M20 pins this arm.
-  if [[ "$_diff_detect_ok" == 0 || "$_diff_head_ok" == 0 ]]; then
-    echo "[contention] DIFF_TOUCHES: undeterminable — this run could not resolve its own diff (no origin/main, a shallow clone, or a concurrent index.lock), so no shard claim is made. Every suite runs, which is the safe direction." >&2
-    return 0
-  fi
-
-  # Written as `if … then … fi`, never `grep -q … && _add_shard …`: under this
-  # script's `set -e` the short form's exit status is the whole list's, so a
-  # non-matching final line would abort the runner.
-  if grep -qF 'apps/web-platform/infra/' <<<"$_diff_names"; then _add_shard infra; fi
-  if grep -qE '^\s*(R[0-9]*\s+)?apps/web-platform/(app|components|lib|server|test|scripts|supabase)/' <<<"$_diff_names"; then _add_shard webplat; fi
-  if grep -qF 'docs/legal/' <<<"$_diff_names"; then _add_shard webplat; fi
-  if grep -qE '(^|\s)(scripts/|plugins/soleur/|\.claude/hooks/|tests/|AGENTS)' <<<"$_diff_names"; then
-    _add_shard scripts
-    _add_shard bun
-  fi
-  if grep -qE '\.c4(\s|$)' <<<"$_diff_names"; then _add_shard scripts; fi
-
-  if [[ -z "$shards" ]]; then
-    echo "[contention] DIFF_TOUCHES: none — this diff maps to no TEST_GROUP shard by the prefixes this report knows." >&2
-    return 0
-  fi
-
-  msg="[contention] DIFF_TOUCHES: $shards (TEST_GROUP=$TEST_GROUP)"
-  if [[ "$TEST_GROUP" == "all" ]]; then
-    # Statement only. No verb that could read as advice to run less — ADR-183.
-    msg="$msg — the full battery is pinned here, so every shard runs regardless."
-  else
-    msg="$msg — this run covers the '$TEST_GROUP' shard only; any other shard named above is NOT covered by this run's result."
-  fi
-  echo "$msg" >&2
-  return 0
-}
-_diff_shard_report
-
 # Counted at the RELEVANCE call sites only. `skipped` also carries the infra runner's incident and
 # not_in_diff declines, which SOLEUR_TEST_FORCE_ALL cannot force -- see the epilogue lever.
 _relevance_declined=0
@@ -820,8 +781,8 @@ tc_capacity_line >&2
 tc_acquire "test-all"
 
 # AFTER tc_acquire, deliberately. A run that queued behind a sibling can wait up
-# to TC_LOCK_TIMEOUT (900 s) here, so a reading taken before the wait describes a
-# machine state up to fifteen minutes stale and makes the start/end delta
+# to TC_LOCK_TIMEOUT (3600 s) here, so a reading taken before the wait describes a
+# machine state up to an hour stale and makes the start/end delta
 # meaningless. Sampled at the moment this run actually begins doing work.
 _emit_bytes_probe "__run_boundary_start__"
 
