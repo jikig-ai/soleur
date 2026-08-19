@@ -905,6 +905,53 @@ fi
 rm -rf "$TMP20E"
 
 # ------------------------------------------------------------------------
+# T24 — Class E: a cron detector routing to a workflow that does not exist.
+# Class A asks whether workflowIds is EMPTY, and a dangling id is not empty, so
+# before this an operator deleting a workflow in the UI left every bound
+# detector reading as fully routed while nothing paged. Both directions
+# fixtured: one reference resolves, one does not.
+# ------------------------------------------------------------------------
+echo "T24: Class E — dangling workflowIds detected, resolved ones not"
+TMP24=$(mktemp -d)
+cat > "$TMP24/monitors.json" <<'EOF'
+[
+  {"slug": "routed-ok",   "name": "A", "type": "cron_job", "config": {"schedule": "0 * * * *"}},
+  {"slug": "routed-dead", "name": "B", "type": "cron_job", "config": {"schedule": "0 0 * * *"}}
+]
+EOF
+cat > "$TMP24/workflows.json" <<'EOF'
+[{"id": "5001", "name": "live-workflow", "triggers": {"actions": [{"id": "NotifyEmailAction"}]}, "actionFilters": []}]
+EOF
+cat > "$TMP24/detectors.json" <<'EOF'
+[
+  {"id": "1", "name": "routed-ok",   "type": "monitor_check_in_failure", "workflowIds": ["5001"]},
+  {"id": "2", "name": "routed-dead", "type": "monitor_check_in_failure", "workflowIds": ["9999"]}
+]
+EOF
+set +e
+SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
+  SENTRY_API_HOST=de.sentry.io \
+  SENTRY_FIXTURE_MONITORS="$TMP24/monitors.json" \
+  SENTRY_FIXTURE_RULES="$TMP24/workflows.json" \
+  SENTRY_FIXTURE_DETECTORS="$TMP24/detectors.json" \
+  AUDIT_OUT_DIR="$TMP24" bash "$SCRIPT" >/dev/null 2>&1
+rc=$?
+set -e
+report=$(ls "$TMP24"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+# 9999 dangles and must be named; 5001 resolves and must NOT be. A predicate
+# that flagged every reference would name both and pass a one-sided check.
+if [[ "$rc" == "0" ]] \
+   && grep -q 'workflow id `9999`' "$report" \
+   && ! grep -q 'workflow id `5001`' "$report" \
+   && ! grep -q 'No orphans detected' "$report"; then
+  pass "dangling workflowId flagged, resolved one not; clean verdict suppressed"
+else
+  fail "Class E mis-fired (rc=$rc)"
+  sed -n '/^## Orphans/,$p' "$report" 2>/dev/null | head -14 >&2 || true
+fi
+rm -rf "$TMP24"
+
+# ------------------------------------------------------------------------
 # T21 — extraction-failure guard. Zero cron detectors against a non-empty
 # live monitor list is a BROKEN EXTRACTION, not a clean org. Under the old
 # predicate this state produced a loud artifact (all monitors flagged); under
@@ -1196,6 +1243,47 @@ else
   grep -E 'Monitor binding|Class B|renamed-in-ui|ghost-only' "$report" >&2 2>/dev/null || true
 fi
 rm -rf "$TMP23C"
+
+# ------------------------------------------------------------------------
+# T25 — resource-count parity between the .tf root and the prose that cites it.
+#
+# Review found the SAME count asserted as 49 (script, twice, "verified against
+# the live org"), 50 (README), and 55 (script, also "verified live") — and 23
+# vs 29 for issue alerts. Every one read as verified; ground truth is 55 and 29.
+# None of them had a parity test, which is why they could drift silently while
+# looking authoritative.
+#
+# This derives from the .tf root and asserts the prose agrees. It is
+# deliberately narrow: it pins the counts that are CITED, not every number.
+# ------------------------------------------------------------------------
+echo "T25: prose counts match the Terraform root"
+TF_DIR="$SCRIPT_DIR/../infra/sentry"
+# `grep -c` exits 1 for any file with zero matches, and under `set -eu` that
+# kills the suite at the assignment — the same class this PR fixed in the
+# script. The non-vacuity check below is what turns a genuinely-zero result
+# into a loud failure rather than a silent pass.
+n_cron=$( { grep -h -c '^resource "sentry_cron_monitor"' "$TF_DIR"/*.tf 2>/dev/null || true; } | awk '{s+=$1} END{print s+0}')
+n_alert=$( { grep -h -c '^resource "sentry_issue_alert"' "$TF_DIR"/*.tf 2>/dev/null || true; } | awk '{s+=$1} END{print s+0}')
+readme="$TF_DIR/README.md"
+t25_ok=1
+# Non-vacuity: the derivation must actually find resources.
+if (( n_cron < 1 )) || (( n_alert < 1 )); then
+  fail "T25: derived 0 resources from $TF_DIR — the anchor broke, not the prose"
+  t25_ok=0
+else
+  if ! grep -q "\*\*${n_cron} cron monitors\*\*" "$readme"; then
+    fail "T25: README cron-monitor count disagrees with the tf root (${n_cron})"; t25_ok=0
+  fi
+  if ! grep -q "\*\*${n_alert} issue alerts\*\*" "$readme"; then
+    fail "T25: README issue-alert count disagrees with the tf root (${n_alert})"; t25_ok=0
+  fi
+  # The script's Class D comment cites the cron count three times in one
+  # sentence; any stale figure there is the shape that shipped as "verified".
+  if ! grep -q "${n_cron} \`resource \"sentry_cron_monitor\"\` blocks" "$SCRIPT"; then
+    fail "T25: the script's Class D comment cites a stale cron count (tf root says ${n_cron})"; t25_ok=0
+  fi
+fi
+(( t25_ok == 1 )) && pass "prose counts agree with the tf root (${n_cron} cron, ${n_alert} issue alerts)"
 
 # ------------------------------------------------------------------------
 # T22 — ASSEMBLY: no Sentry call bypasses the curl_retry chokepoint.

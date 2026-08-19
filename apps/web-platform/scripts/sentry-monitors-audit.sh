@@ -261,9 +261,14 @@ curl_retry() {
   # correct only by coincidence of Gate 3's writing style.
   #
   # So: the declaration is authoritative for intent, and the inference is a
-  # backstop completed to cover every shape curl treats as a write. Either one
-  # marking the request unsafe is enough. A false POSITIVE here costs one
-  # un-retried transient failure; a false negative costs a duplicated write.
+  # backstop covering the write shapes curl accepts. Either one marking the
+  # request unsafe is enough. A false POSITIVE costs one un-retried transient
+  # failure; a false NEGATIVE costs a duplicated write, so the list errs wide.
+  #
+  # It is a BACKSTOP, not a proof: curl's option surface is large and the
+  # joined forms (`-XPOST`, `--request=POST`, `-d@file`) are easy to miss. The
+  # declaration is what makes a write safe — this only catches an author who
+  # forgot it. Do not read the list as exhaustive.
   local safe=1
   [[ "${CURL_RETRY_UNSAFE:-0}" == "1" ]] && safe=0
   prev=""
@@ -272,10 +277,15 @@ curl_retry() {
     case "$prev" in
       -X|--request) case "$arg" in GET|HEAD) ;; *) safe=0 ;; esac ;;
     esac
-    # Any body-bearing flag makes this a write to curl even with no -X.
+    # Any body-bearing flag makes this a write to curl even with no -X, and the
+    # JOINED forms (`-XPOST`, `--request=POST`, `-d@file`) are argv elements
+    # the space-separated `case "$prev"` above cannot see.
     case "$arg" in
-      -d|--data|--data-raw|--data-binary|--data-urlencode|-F|--form|-T|--upload-file) safe=0 ;;
-      --data=*|--data-raw=*|--data-binary=*|--data-urlencode=*|--form=*) safe=0 ;;
+      -X[!G]*|--request=*) safe=0 ;;
+      -d|-d?*|--data|--data-ascii|--data-raw|--data-binary|--data-urlencode) safe=0 ;;
+      --json|--form-string|-F|--form|-T|--upload-file) safe=0 ;;
+      --data=*|--data-ascii=*|--data-raw=*|--data-binary=*|--data-urlencode=*) safe=0 ;;
+      --json=*|--form-string=*|--form=*|--upload-file=*) safe=0 ;;
       https://*|http://*) url="$arg" ;;
     esac
     prev="$arg"
@@ -848,6 +858,28 @@ cron_detector_names="$cron_detector_slugs"
 # zero orphans, a clean report and exit 0 — a quiet, green, WRONG answer. Zero
 # cron detectors against a non-empty live monitor list is an extraction
 # failure, not a clean org.
+# Class E — a cron detector routing to a workflow that does not exist.
+#
+# Class A asks "is workflowIds EMPTY?" and a DANGLING id is not empty, so an
+# operator deleting a workflow in the Sentry UI leaves every bound detector
+# reading as fully routed while nothing pages. That is the audit's actual
+# question — does a cron failure reach anyone — and neither A nor C could see
+# it. This is the exact dual of Class B (detector -> missing monitor).
+#
+# REPORTED, not fatal. A hard exit here would block the apply that deploys the
+# corrected routing, which is the "detector blocks its own cure" deadlock the
+# Class D state half exists to avoid. It suppresses the clean verdict instead.
+# `tostring` on both sides: workflowIds are strings, workflow .id may be numeric.
+dangling_workflow_refs=()
+if (( detectors_evaluated == 1 )); then
+  while IFS= read -r ref; do
+    [[ -z "$ref" ]] && continue
+    dangling_workflow_refs+=("$ref")
+  done < <(jq -r --argjson w "$(jq -c '[ .[].id | tostring ]' <<<"$rules_json")" '
+    [ .[] | .workflowIds[]? | tostring ] | unique | map(select(. as $i | ($w | index($i)) | not)) | .[]
+  ' <<<"$cron_detectors")
+fi
+
 if (( detectors_evaluated == 1 )) \
    && [[ "$cron_detector_count" == "0" ]] \
    && [[ "$(jq 'length' <<<"$monitors_json")" != "0" ]]; then
@@ -906,14 +938,25 @@ fi
 # `.actionFilters[].actions[]`. Checking only one would flag every workflow
 # that routes via the other, drowning real orphans — the same defect the old
 # Metric-Alert shape branch existed to avoid.
-while IFS= read -r rid; do
-  [[ -z "$rid" ]] && continue
-  empty_action_rule_ids+=("$rid")
-done < <(jq -r '
+# Run jq to a FILE and check its status. Inside `done < <(jq …)` a jq schema
+# error (e.g. `.triggers` arriving as an array) exits 5, the loop reads
+# nothing, and process-substitution status is unobservable to `set -e` — so the
+# report would print "C … clean" having examined zero workflows. Class A uses
+# command substitution and does abort; the two were asymmetric for no reason.
+class_c_out="$AUDIT_SCRATCH/class_c.txt"
+if ! jq -r '
   .[] | select(
     (([.triggers.actions[]?] + [.actionFilters[]?.actions[]?]) | length) == 0
   ) | .id | tostring
-' <<<"$rules_json")
+' <<<"$rules_json" > "$class_c_out" 2>"$AUDIT_SCRATCH/class_c.err"; then
+  echo "ERROR: Class C extraction failed — the workflows payload did not match the expected shape. Refusing to report 'no workflows with empty routing' from a failed extraction. jq said:" >&2
+  head -c 300 "$AUDIT_SCRATCH/class_c.err" >&2
+  exit 1
+fi
+while IFS= read -r rid; do
+  [[ -z "$rid" ]] && continue
+  empty_action_rule_ids+=("$rid")
+done < "$class_c_out"
 
 # --- Class D: live monitor with no declaring .tf resource block -----------
 # The live→IaC direction (A/B/C all run IaC→live or live→live). Since #6589
@@ -927,11 +970,12 @@ done < <(jq -r '
 # Slug↔declaration relation: Sentry derives the monitor slug by slugifying the
 # resource's `name`. Every `sentry_cron_monitor` in this root already sets a
 # kebab-case `name`, so slugification is the identity and `name` == live slug
-# — re-verified 2026-08-19 against the live org: 55 `resource
-# "sentry_cron_monitor"` blocks, 55 `name =` attributes, 55 live monitors,
-# exact set match in both directions. (This comment read 49 until #7590; the
-# figure had gone stale while reading as "verified".) Re-derive rather than
-# trusting it:  grep -c '^resource "sentry_cron_monitor"' ../infra/sentry/*.tf
+# — re-verified 2026-08-19 against the live org and the tf root:
+# 55 `resource "sentry_cron_monitor"` blocks, 55 `name =` attributes, 55 live
+# monitors, exact set match in both directions. (This comment read 49 until
+# #7590; the figure had gone stale while still reading as "verified", which is
+# why sentry-monitors-audit.test.sh T25 now derives it from the tf root and
+# fails if this line drifts again. Keep the count on ONE line — T25 greps it.)
 CRON_MONITOR_MONTHLY_USD="0.78"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -1139,12 +1183,18 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
   fi
 
   printf '## Orphans\n\n'
-  total_orphans=$(( class_a_count + ${#orphan_alerts[@]} + ${#empty_action_rule_ids[@]} + ${#orphan_live_monitors[@]} ))
+  total_orphans=$(( class_a_count + ${#orphan_alerts[@]} + ${#empty_action_rule_ids[@]} + ${#orphan_live_monitors[@]} + ${#dangling_workflow_refs[@]} ))
   # The clean-state string is suppressed whenever anything went unmeasured.
   # Collapsing "could not check" into "clean" in an Article 30 evidence
   # artifact is the exact failure mode this whole change exists to remove.
   if (( detectors_evaluated == 0 )); then
     printf 'Classes A and B **NOT EVALUATED** — the detectors payload was not obtained on this run, so no statement is made about monitor routing. Classes C and D below were evaluated.\n\n'
+  elif (( ${#dangling_workflow_refs[@]} > 0 )); then
+    printf '_Class E (cron detector routing to a workflow that does not exist):_\n\n'
+    for ref in "${dangling_workflow_refs[@]}"; do
+      printf -- '- workflow id `%s` — referenced by a cron detector'"'"'s `workflowIds`; no such workflow exists. Check-in failures for that monitor route nowhere.\n' "$ref"
+    done
+    printf '\n**Remediation:** the workflow was deleted (usually via the Sentry UI) while the detector kept its binding. Re-create the workflow or clear the stale `workflowIds` entry.\n\n'
   elif [[ -s "$DEPRECATION_FATAL_FILE" ]]; then
     printf 'An endpoint this audit reads is **DEPRECATED and inside the escalation window** (see `## Endpoint deprecation`). The orphan classes below were computed from data served by a sunsetting endpoint, so no clean verdict is issued.\n\n'
   elif (( class_b_discarded > 0 )); then
