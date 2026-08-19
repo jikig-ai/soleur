@@ -42,7 +42,7 @@ Target: `apps/web-platform`. Closes #1327; unblocks #7594 (do NOT upgrade Next h
 - [x] 3.1 Author `apps/web-platform/eslint.config.mjs`: `@eslint/js` recommended;
       `@typescript-eslint/parser` for `.ts`/`.tsx`; `@next/eslint-plugin-next`
       `flatConfig.coreWebVitals`; node + browser globals; ignores
-      (node_modules, .next, dist, supabase, public, __goldens__).
+      (node_modules, .next, dist, supabase, public, `__goldens__`).
 - [x] 3.2 Comment WHY `eslint-config-next` stays a dependency (Decision 2) so it is not
       "cleaned up" as unused — that is exactly what the issue's step 4 proposed.
 - [x] 3.3 Make the guard suite pass.

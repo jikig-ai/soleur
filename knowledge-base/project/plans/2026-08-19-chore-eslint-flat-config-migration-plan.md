@@ -283,6 +283,7 @@ because `next lint` is precisely the form that prompts.
 | 4 | Add a `--no-eslintrc`-style flag that silently disables all rules | Config present but inert; the count assertion (Guard 2) must catch it |
 
 **Harness rows.**
+
 - Must-RED: delete the assertion body, leaving the test name and its `expect` count intact → the
   suite must fail rather than pass a test asserting nothing.
 - Must-PASS: a config that legitimately reports **non-zero findings** still satisfies Guard 1 —
@@ -306,6 +307,7 @@ subset. The guard runs ESLint over the same scope CI runs and compares against t
 | 4 | Introduce a new violation in a tracked file | The regression case the baseline exists to catch |
 
 **Harness rows.**
+
 - Must-RED: replace the baseline comparison with `expect(count).toBeGreaterThanOrEqual(0)` — a
   predicate any constant satisfies → the suite must fail, proving it discriminates.
 - Must-PASS: a file added under an ignored path does not move the count.
@@ -377,6 +379,7 @@ no ruleset ADR is implicated.
 
 **No C4 impact.** Enumerated against all three model files
 (`knowledge-base/engineering/architecture/diagrams/{model.c4,views.c4,spec.c4}`):
+
 - **External human actors:** unchanged — no new correspondent, reviewer or recipient.
 - **External systems / vendors:** unchanged — no new vendor edge. GitHub Actions is already
   modelled as the CI surface; this adds a job to an existing workflow, not a new integration.
