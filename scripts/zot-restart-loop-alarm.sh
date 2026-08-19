@@ -26,21 +26,33 @@
 # EXIT CONTRACT (consumed by .github/workflows/scheduled-zot-restart-loop.yml):
 #   0 GREEN            — newest boot flat/absent climb, no 137, oom_kills_5m==0 (auto-close issues)
 #   1 FIRE            — condition A|B|C on the newest boot (open/update [ci/zot-restart-loop])
-#   2 TRANSIENT       — probe fault (query fail/creds unset) OR the control-marker query is ALSO
-#                       empty (Better Stack unreachable) OR zero valid evidence (all-'-1' sentinels
-#                       with no 137/oom). NO GitHub issue — the workflow emits an ERRORED Sentry
-#                       check-in so persistent probe-death surfaces as a monitor problem.
-#   3 PRODUCER-SILENT — the control marker returns rows (BS reachable + creds valid) AND a 24h
-#                       lookback has SOLEUR_ZOT_DISK rows (reporter WAS alive) BUT the recent WINDOW
-#                       is empty → the token-gated reporter went dark while the token-free disk
-#                       heartbeat + Sentry monitor stay GREEN (open/update [ci/zot-telemetry-silent]).
+#   2 TRANSIENT       — probe fault (the control read did not answer) OR zero valid evidence
+#                       (all-'-1' sentinels with no 137/oom). NO GitHub issue — the workflow emits
+#                       an ERRORED Sentry check-in so persistent probe-death surfaces as a monitor
+#                       problem. NOTE: an answered-but-empty control is NOT this code; see 4.
+#   3 PRODUCER-SILENT — the control read returns rows AND a 24h lookback has SOLEUR_ZOT_DISK rows
+#                       (reporter WAS alive) BUT the recent WINDOW is empty → the token-gated
+#                       reporter went dark while the token-free disk heartbeat + Sentry monitor
+#                       stay GREEN (open/update [ci/zot-telemetry-silent]).
+#   4 INGEST_DARK     — the control read ANSWERED and the warehouse holds zero rows of any kind
+#                       (open/update [ci/betterstack-ingest-dark]). Added for #7569: on
+#                       2026-08-14 19:06:58Z Better Stack began refusing every ingest POST with
+#                       HTTP 402 while the READ path kept answering 200, and code 2's arm — which
+#                       then collapsed "query failed" and "query answered, nothing there" with a
+#                       single `||` — reported the non-alarming TRANSIENT for two days. The two
+#                       states are epistemically different: one is "we learned nothing", the other
+#                       is "we learned the source is taking no writes". They now have distinct
+#                       codes because they need distinct operator responses.
 #
 # SECOND STREAM — SOLEUR_PRIVATE_NIC (#6415). This script also watches the registry host's
 # private-NIC self-report and emits an INDEPENDENT NIC_ALARM_VERDICT block
-# (GREEN|FIRE|ADVISORY|SILENT|TRANSIENT) on EVERY exit path. It is deliberately NOT folded into
-# the exit code: the workflow maps any exit outside {0,1,3} to a Sentry 'error', so a new exit 4
-# would report a NIC fire as a PROBE FAULT — contradicting the "a FIRE is NOT a monitor error"
-# doctrine. The NIC evaluation therefore runs BEFORE every zot leg, because those legs exit early
+# (GREEN|FIRE|ADVISORY|SILENT|INGEST_DARK|TRANSIENT|UNEVALUATED) on EVERY exit path. It is
+# deliberately NOT folded into the exit code: the workflow's Sentry mapping treats an unrecognised
+# exit as 'error', so encoding a NIC fire in the exit code would report it as a PROBE FAULT —
+# contradicting the "a FIRE is NOT a monitor error" doctrine. (Exit 4 now EXISTS for the zot leg's
+# INGEST_DARK verdict and the workflow maps it explicitly — #7569. The reasoning above is about
+# why the NIC stream stays out of the exit code, not about which codes are available.)
+# The NIC evaluation therefore runs BEFORE every zot leg, because those legs exit early
 # on a probe fault / zero evidence (a zot isolation FATAL ⇒ zot_restarts=-1 ⇒ exit 2) and would
 # otherwise skip the NIC check exactly when a correlated NIC fault is most likely.
 #
@@ -66,8 +78,14 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/zot-telemetry-parse.sh
 source "$SCRIPT_DIR/lib/zot-telemetry-parse.sh"
+# shellcheck source=scripts/lib/betterstack-absence.sh
+source "$SCRIPT_DIR/lib/betterstack-absence.sh"
 
 BQ="${ZOT_BQ_OVERRIDE:-$SCRIPT_DIR/betterstack-query.sh}"
+# ONE override seam, not two (R13). The classifier resolves BETTERSTACK_QUERY_SCRIPT first and
+# ZOT_BQ_OVERRIDE second; pinning it to $BQ here means a test that stubs either name cannot end
+# up with the classifier reaching the real network while the alarm reads a fixture.
+export BETTERSTACK_QUERY_SCRIPT="$BQ"
 
 # --- Named constants (NOT env overrides) -------------------------------------------------
 # WINDOW is the recent evaluation window. It MUST stay >= CLIMB_N x the reporter's emit interval
@@ -100,9 +118,10 @@ DETAIL=""
 
 # --- Private-NIC stream (#6415) -----------------------------------------------------------
 # A SECOND, INDEPENDENT verdict carried alongside the zot one. It is NOT folded into the exit
-# code: the contract (0/1/2/3) is consumed by scheduled-zot-restart-loop.yml, whose Sentry
-# status mapping treats any non-0/1/3 as 'error' — so a new exit 4 would report a NIC fire as a
-# *probe fault*, contradicting that file's "a FIRE is NOT a monitor error" doctrine. Instead the
+# code: the contract (0/1/2/3/4) is consumed by scheduled-zot-restart-loop.yml, whose Sentry
+# status mapping treats any UNRECOGNISED exit as 'error' — so folding a NIC fire into the exit
+# code would report it as a *probe fault*, contradicting that file's "a FIRE is NOT a monitor
+# error" doctrine. Instead the
 # NIC facts travel as their own NIC_ALARM_* output block, printed on EVERY exit path.
 #
 # This is what makes the NIC check survive the zot early-exits. The zot legs below exit at the
@@ -125,7 +144,10 @@ emit_and_exit() {
   [[ -n "$DETAIL" ]] && echo "ZOT_ALARM_DETAIL=${DETAIL}"
   echo "ZOT_ALARM_CAUSE=${CAUSE:-n/a}"
   # The NIC block rides EVERY exit path — that is the whole point (see above).
-  echo "NIC_ALARM_VERDICT=${NIC_VERDICT:-TRANSIENT}"
+  # R24 FAIL-OPEN FIX: an unset NIC_VERDICT means evaluate_nic never ran or died before
+  # assigning. Defaulting that to the non-alarming TRANSIENT is invisible to every
+  # emptiness test in this file; UNEVALUATED is loud and cannot be mistaken for health.
+  echo "NIC_ALARM_VERDICT=${NIC_VERDICT:-UNEVALUATED}"
   [[ -n "$NIC_DETAIL" ]] && echo "NIC_ALARM_DETAIL=${NIC_DETAIL}"
   echo "NIC_ALARM_CAUSE=${NIC_CAUSE:-n/a}"
   echo "=============================="
@@ -141,7 +163,7 @@ emit_and_exit() {
 #   SILENT    — the guard went dark (absence), proven against a control marker + 24h lookback
 #   TRANSIENT — probe fault / fresh host / no usable boot_id
 evaluate_nic() {
-  local main main_rc control control_rc look look_rc sib sib_rc trusted newest scoped
+  local main main_rc look look_rc sib sib_rc trusted newest scoped control_verdict
   local conv rc nets store up nic max_rb any_false
 
   main="$("$BQ" --since "$WINDOW" --grep SOLEUR_PRIVATE_NIC --limit 5000 2>/dev/null)"; main_rc=$?
@@ -180,10 +202,18 @@ evaluate_nic() {
     # is computed only when $MAIN (SOLEUR_ZOT_DISK) is empty, so a dead NIC guard sitting beside
     # a live disk heartbeat would sail straight past it and read GREEN. Two producers, two
     # absence checks.
-    control="$("$BQ" --since "$WINDOW" --limit 1 2>/dev/null)"; control_rc=$?
-    if [[ "$control_rc" -ne 0 || -z "$control" ]]; then
+    # Same `||` collapse as the zot leg carried, and the same fix: a failed read and an
+    # answered-but-empty read are different states and only one of them is a probe fault.
+    control_verdict="$(BS_CONTROL_ANCHOR=any-row BS_CONTROL_WINDOW="$WINDOW" bs_absence_classify)"
+    if [[ "$control_verdict" == "TRANSPORT_FAIL" ]]; then
       NIC_VERDICT="TRANSIENT"
-      NIC_DETAIL="recent ${WINDOW} empty for SOLEUR_PRIVATE_NIC AND the control-marker query is empty/errored (rc=${control_rc}) — Better Stack unreachable / creds unset"
+      NIC_DETAIL="recent ${WINDOW} empty for SOLEUR_PRIVATE_NIC and the control read did not answer — probe fault; this run cannot tell a live channel from a dark one"
+      return
+    fi
+    if [[ "$control_verdict" == "INGEST_DARK" ]]; then
+      NIC_VERDICT="INGEST_DARK"
+      NIC_DETAIL="recent ${WINDOW} empty for SOLEUR_PRIVATE_NIC AND the control read answered with zero rows of any kind — the warehouse is accepting no writes, so NIC absence is unreadable rather than absent"
+      NIC_CAUSE="run scripts/betterstack-ingest-probe.sh; a 402 is vendor quota exhaustion, a 401 is a rotated ingest token"
       return
     fi
     look="$("$BQ" --since "$LOOKBACK" --grep SOLEUR_PRIVATE_NIC --limit 1 2>/dev/null)"; look_rc=$?
@@ -373,7 +403,14 @@ fi
 evaluate_nic
 
 # --- Recent-window main query ------------------------------------------------------------
-MAIN="$("$BQ" --since "$WINDOW" --grep SOLEUR_ZOT_DISK --limit 5000 2>/dev/null)"; main_rc=$?
+MAIN_RAW="$("$BQ" --since "$WINDOW" --grep SOLEUR_ZOT_DISK --limit 5000 2>/dev/null)"; main_rc=$?
+# ENVELOPE-ANCHOR BEFORE THE EMPTINESS DECISION (#7569 F15). `--grep` is an unanchored
+# `raw LIKE '%SOLEUR_ZOT_DISK%'`, so a row that merely QUOTES the marker satisfies it. Deciding
+# `-z "$MAIN"` on the raw result made one such row skip the entire block below — the block
+# holding BOTH the PRODUCER_SILENT branch and the new INGEST_DARK branch — which is a
+# suppression primitive available to anyone who can land one line on this shared source. The
+# NIC leg has anchored since the live 2026-07-15 incident; this leg had not.
+MAIN="$(printf '%s\n' "$MAIN_RAW" | zot_envelope_anchor)"
 
 if [[ "$main_rc" -ne 0 ]]; then
   # The probe itself failed (auth/network/creds-unset) — a probe fault is TRANSIENT, never a page.
@@ -382,13 +419,38 @@ if [[ "$main_rc" -ne 0 ]]; then
 fi
 
 if [[ -z "$MAIN" ]]; then
-  # No SOLEUR_ZOT_DISK rows in the recent window. Discriminate probe-fault / fresh-host / silence
-  # via a bare control-marker query (proves BS reachability + valid creds) + a 24h lookback.
-  CONTROL="$("$BQ" --since "$WINDOW" --limit 1 2>/dev/null)"; control_rc=$?
-  if [[ "$control_rc" -ne 0 || -z "$CONTROL" ]]; then
-    VERDICT="TRANSIENT"; DETAIL="recent ${WINDOW} empty AND control-marker query empty/errored (rc=${control_rc}) — Better Stack unreachable / creds unset"
-    emit_and_exit 2
-  fi
+  # No SOLEUR_ZOT_DISK rows in the recent window. Discriminate probe-fault / ingest-dark /
+  # fresh-host / producer-silence.
+  #
+  # THE `||` COLLAPSE THAT WAS HERE IS THE #7569 DEFECT. The old form was
+  #   if [[ "$control_rc" -ne 0 || -z "$CONTROL" ]]; then VERDICT="TRANSIENT"
+  # which reported a non-alarming probe fault for TWO DIFFERENT states: a query that failed
+  # (rc != 0, we learned nothing) and a query that SUCCEEDED and found the warehouse empty
+  # (rc == 0, we learned the warehouse is taking no writes). On 2026-08-14 19:06:58Z Better
+  # Stack began 402'ing every ingest POST while the read path kept answering 200 — the second
+  # state — and this arm reported TRANSIENT every 30 minutes for two days.
+  #
+  # The old DETAIL string named "Better Stack unreachable / creds unset": two causes the run
+  # had just measured FALSE, since rc was 0. That is an AP-021 violation (ADR-166) and it was
+  # sitting in the diagnosis-claims baseline. Both are fixed here; the baseline ratchets to 0.
+  CONTROL_VERDICT="$(BS_CONTROL_ANCHOR=any-row BS_CONTROL_WINDOW="$WINDOW" bs_absence_classify)"
+  case "$CONTROL_VERDICT" in
+    TRANSPORT_FAIL)
+      # We learned nothing about the channel. Never a page, and never reported as darkness.
+      VERDICT="TRANSIENT"
+      DETAIL="recent ${WINDOW} empty and the control read did not answer — probe fault (query failed or returned an unparseable body). This run cannot distinguish a live channel from a dark one."
+      emit_and_exit 2
+      ;;
+    INGEST_DARK)
+      # The control read ANSWERED and the warehouse holds no row of any kind in the window.
+      # That is not a probe fault and not this producer going quiet — it is the whole source
+      # taking no writes. Measured cause on 2026-08-14: HTTP 402 quota refusal.
+      VERDICT="INGEST_DARK"
+      DETAIL="recent ${WINDOW} empty AND the control read answered with zero rows of any kind — the warehouse is accepting no writes from any producer, so every absence signal on this source is currently unreadable"
+      CAUSE="run scripts/betterstack-ingest-probe.sh for the refusal code; a 402 is vendor quota exhaustion (account-level, needs a plan/billing change), a 401 is a rotated ingest token"
+      emit_and_exit 4
+      ;;
+  esac
   # Better Stack is reachable. Was the reporter alive within the last 24h?
   LOOK="$("$BQ" --since "$LOOKBACK" --grep SOLEUR_ZOT_DISK --limit 1 2>/dev/null)"; look_rc=$?
   if [[ "$look_rc" -eq 0 && -n "$LOOK" ]]; then

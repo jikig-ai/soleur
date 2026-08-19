@@ -159,7 +159,7 @@ jobs:
           PR_NUMBER: ${{ github.event.issue.number }}
         run: |
           set -euo pipefail
-          payload=$(bun run apps/web-platform/scripts/cla-evidence/build-record.ts) \
+          payload=$(apps/web-platform/node_modules/.bin/tsx apps/web-platform/scripts/cla-evidence/build-record.ts) \
             || { echo "::error::evidence-record build failed"; exit 2; }
           bash apps/cla-evidence/scripts/upload-evidence.sh "$payload"
 
@@ -184,7 +184,7 @@ jobs:
           # Do NOT swallow non-zero with `|| exit 0` — that would silently
           # erase audit records on parse failures (cq-silent-fallback-must-
           # mirror-to-sentry).
-          payload=$(bun run apps/web-platform/scripts/cla-evidence/build-bypass.ts)
+          payload=$(apps/web-platform/node_modules/.bin/tsx apps/web-platform/scripts/cla-evidence/build-bypass.ts)
           if [[ -z "$payload" ]]; then
             echo "Not an allowlist-bypass; skipping."
             exit 0
