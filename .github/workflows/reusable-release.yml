@@ -408,12 +408,20 @@ jobs:
       # probe (which requires `member:read` scope — a scope that personal
       # tokens minted for CI commonly lack even after the post-#3849 token
       # rotation). Mirrors the escape hatch added to
-      # `configure-sentry-alerts.sh` in #3858. Falls back to `sentry.io`
-      # (US ingest — the empirically-verified host the operator's
-      # 2026-05-15 baseline audit ran against per the committed artifact
-      # at `knowledge-base/legal/audits/sentry-migration-audit-2026-05-15.md`).
-      # Override via the `SENTRY_API_HOST` repo secret if Sentry residency
-      # changes (e.g., migration to `de.sentry.io`).
+      # `configure-sentry-alerts.sh` in #3858.
+      #
+      # Corrected 2026-08-19 (#7590): this paragraph said "Falls back to
+      # `sentry.io` (US ingest — the empirically-verified host the operator's
+      # 2026-05-15 baseline audit ran against)". There is no such fallback and
+      # has not been one since the Branch-C correction recorded nine lines
+      # below, which this paragraph contradicted. Unset, the script PROBES
+      # four candidates in order — `${SENTRY_ORG}.sentry.io`, `eu.sentry.io`,
+      # `de.sentry.io`, `sentry.io` — and takes the first that authenticates,
+      # so the resolved host is a property of the token, not a constant. The
+      # 2026-05-15 baseline artifact remains what it was; only the claim that
+      # it pins a default is retracted. Set the `SENTRY_API_HOST` repo secret
+      # to the ORG-SUBDOMAIN and let the fail-loud path below catch an empty
+      # one; `de.sentry.io` is ingest-only and serves no `/api/0/`.
       #
       # Skips silently when SENTRY_AUTH_TOKEN is unavailable (e.g. component
       # release where the secret isn't required).
