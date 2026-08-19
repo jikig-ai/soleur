@@ -59,6 +59,13 @@ jobs:
       SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
       SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
       SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+      # This is the ADVISORY caller, so it is where the deprecation tripwire's
+      # teeth belong: a red here costs a comment thread on a PR whose author is
+      # already touching the Sentry surface. The apply path
+      # (apply-sentry-infra.yml) deliberately leaves this unset — there a hard
+      # failure would freeze Sentry deploys on a vendor's calendar. See the
+      # DEPRECATION_FAIL_ENABLED block in sentry-monitors-audit.sh.
+      SENTRY_DEPRECATION_FAIL: '1'
       NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
     steps:
       - uses: actions/checkout@v4

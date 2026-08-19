@@ -819,8 +819,20 @@ All criteria are verifiable pre-merge, in-session or in CI. This plan has no pos
    in the suite. No per-slug list.
 9. Zero cron detectors while `monitors_json` is non-empty exits non-zero naming an extraction
    failure, and never emits the clean-state string.
-10. A partial fetch (detectors fails, workflows succeeds) marks Classes A and B not-evaluated and
-    suppresses the clean-state string.
+10. **AC amended at review (#7590) — the planned form was measured UNMET and is replaced by a
+    STRONGER one.** Planned: "a partial fetch (detectors fails, workflows succeeds) marks Classes
+    A and B not-evaluated and suppresses the clean-state string."
+
+    That mechanism is unreachable. A non-array detectors payload is caught by the shape check,
+    which `exit 1`s before any not-evaluated branch is read — verified empirically: a bad
+    detectors fixture against a live monitors fixture gives `rc=1`, the self-naming diagnostic,
+    and **zero reports written**. So the partial-report state cannot arise, and the code paths
+    built for it were dead.
+
+    Amended: **a failed detectors fetch exits non-zero with a self-naming diagnostic and emits no
+    report at all.** This is strictly stronger than partial reporting — refusing to write an
+    Article 30 artifact beats writing one that says it did not check — and it is already covered
+    by T16. The dead mechanism is deleted rather than made reachable.
 11. Pagination: a `rel="next"; results="true"` fixture causes the cursor to be followed for
     `detectors/` and `monitors/`. Single-valued — no "or fail loudly" disjunction.
 11a. **Link-header targets are never followed as given.** The cursor value is extracted and the URL
@@ -838,8 +850,28 @@ All criteria are verifiable pre-merge, in-session or in CI. This plan has no pos
     `bash scripts/test-all.sh --print-suite-globs` still contains
     `apps/web-platform/scripts/*.test.sh` — the glob is the suite's registration, so narrowing it is
     the regression to guard. **No explicit `run_suite` line is added.**
-14. The four gates are byte-identical. Mechanical form, anchored on full lines so the range cannot
-    self-match (the naive range re-triggers inside `fetch_monitors` and yields 364 lines instead of 61):
+14. **AC amended at review (#7590).** The planned criterion was "the four gates are byte-identical".
+    It no longer holds, deliberately: Gate 3's call site now carries `CURL_RETRY_UNSAFE=1`, a
+    three-line change (one env prefix + two comment lines). Justification, since a frozen block
+    must not drift silently:
+
+    Review proved `curl_retry` re-sent a non-idempotent POST **three times** on a transport
+    failure — the `safe` check sat inside the `rc == 0` branch, so it governed only the status
+    path. A `--max-time` timeout on a write that already landed is the live case (curl exit 28 on
+    this script is recorded as having actually happened), and the retry yields a deterministic 208
+    that Gate 3's `!= 201` reports as a token-scope failure, halting the apply before
+    `terraform plan`. This comment block and ADR-031 both asserted that could not happen.
+
+    Byte-identity was never the safety property — Gates 1–3 call the rewritten wrapper, so their
+    SEMANTICS were already inside the blast radius. Freezing the syntax while the behaviour
+    changed bought nothing and blocked the exact fix. The request itself is unchanged (same
+    flags, same URL, same body); only retry eligibility moves. Verify with:
+    ```bash
+    diff <(gate /tmp/base.sh) <(gate apps/web-platform/scripts/sentry-monitors-audit.sh)
+    ```
+    and confirm the ONLY hunk is Gate 3's `CURL_RETRY_UNSAFE=1` prefix and its two comment lines.
+    Gates 1, 2 and 4 remain byte-identical. Mechanical form, anchored on full lines so the range
+    cannot self-match (the naive range re-triggers inside `fetch_monitors` and yields 364 lines instead of 61):
     ```bash
     gate() { awk '$0 == "if [[ -z \"${SENTRY_FIXTURE_MONITORS:-}\" ]]; then" { inb=1 }
                   inb { print }

@@ -680,13 +680,30 @@ case "$URL" in
 esac
 STUB
 chmod +x "$TMP17B/respond.sh"
+# (a) OPTED IN — the advisory caller (sentry-audit-gate.yml sets this).
+set +e
+out=$(run_sut_stubbed "$TMP17B" SENTRY_DEPRECATION_FAIL=1); rc=$?
+set -e
+if [[ "$rc" != "0" ]] && grep -qi 'deprecated and its date is within' <<<"$out"; then
+  pass "T17b: past-dated deprecation escalates when the caller opts in"
+else
+  fail "escalation did not fire under SENTRY_DEPRECATION_FAIL=1 (rc=$rc)"
+  printf '%s\n' "$out" | tail -10 >&2
+fi
+
+# (b) NOT opted in — the apply path. This is the load-bearing direction: the
+# tripwire runs inside curl_retry, which Gates 1-3 also call, so an escalation
+# here would freeze Sentry infra deploys on a vendor's calendar, including the
+# deploy that would ship the migration. Must WARN and exit 0.
 set +e
 out=$(run_sut_stubbed "$TMP17B"); rc=$?
 set -e
-if [[ "$rc" != "0" ]] && grep -qi 'deprecated and its date is within' <<<"$out"; then
-  pass "past-dated deprecation escalates to a non-zero exit"
+if [[ "$rc" == "0" ]] \
+   && grep -q 'NOT failing' <<<"$out" \
+   && grep -qi 'deprecated and its date is within' <<<"$out"; then
+  pass "T17c: the apply-path default warns and does NOT fail (no deploy freeze)"
 else
-  fail "escalation did not fire (rc=$rc)"
+  fail "default posture wrong: expected warn+exit 0, got rc=$rc"
   printf '%s\n' "$out" | tail -10 >&2
 fi
 rm -rf "$TMP17B"
@@ -1052,6 +1069,54 @@ else
   grep -E 'Monitor binding|Class B' "$report" >&2 2>/dev/null || true
 fi
 rm -rf "$TMP23B"
+
+# ------------------------------------------------------------------------
+# T23c — PARTIAL rollout: some cron detectors carry the structured slug and
+# some do not. Under the earlier all-or-nothing fallback this was the silent
+# failure: the structured count was non-zero so the fallback never engaged,
+# and every detector without the field dropped out of the binding set — Class B
+# under-reporting a real orphan with no signal. Per-detector resolution removes
+# the state; this fixture is what proves it, and no mutation of the old
+# implementation could have reached it.
+# ------------------------------------------------------------------------
+echo "T23c: partial structured rollout resolves per detector"
+TMP23C=$(mktemp -d)
+cat > "$TMP23C/monitors.json" <<'EOF'
+[
+  {"slug": "has-structured", "name": "A", "type": "cron_job", "config": {"schedule": "0 * * * *"}},
+  {"slug": "name-only",      "name": "B", "type": "cron_job", "config": {"schedule": "0 0 * * *"}}
+]
+EOF
+printf '[]' > "$TMP23C/workflows.json"
+cat > "$TMP23C/detectors.json" <<'EOF'
+[
+  {"id": "1", "name": "renamed-in-ui", "type": "monitor_check_in_failure", "workflowIds": ["w"],
+   "dataSources": [{"queryObj": {"slug": "has-structured"}}]},
+  {"id": "2", "name": "name-only", "type": "monitor_check_in_failure", "workflowIds": ["w"]},
+  {"id": "3", "name": "ghost-only-via-name", "type": "monitor_check_in_failure", "workflowIds": ["w"]}
+]
+EOF
+SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
+  SENTRY_API_HOST=de.sentry.io \
+  SENTRY_FIXTURE_MONITORS="$TMP23C/monitors.json" \
+  SENTRY_FIXTURE_RULES="$TMP23C/workflows.json" \
+  SENTRY_FIXTURE_DETECTORS="$TMP23C/detectors.json" \
+  AUDIT_OUT_DIR="$TMP23C" bash "$SCRIPT" >/dev/null 2>&1
+report=$(ls "$TMP23C"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+# The structured detector binds by its slug (its .name is a decoy that would
+# have produced a false orphan); the name-only detector still binds; and the
+# name-only detector naming a MISSING monitor is still caught as Class B —
+# which the all-or-nothing form would have dropped entirely.
+if grep -q 'Monitor binding: MIXED — 1/3 structured' "$report" \
+   && ! grep -qE '`renamed-in-ui`' "$report" \
+   && ! grep -qE '^- `name-only` — a cron detector' "$report" \
+   && grep -qE '`ghost-only-via-name`' "$report"; then
+  pass "mixed rollout: structured wins per detector, name-only still binds, orphan still caught"
+else
+  fail "partial structured rollout mis-resolved"
+  grep -E 'Monitor binding|Class B|renamed-in-ui|ghost-only' "$report" >&2 2>/dev/null || true
+fi
+rm -rf "$TMP23C"
 
 # ------------------------------------------------------------------------
 # T22 — ASSEMBLY: no Sentry call bypasses the curl_retry chokepoint.

@@ -127,6 +127,7 @@ DEPRECATION_FATAL_FILE="$AUDIT_SCRATCH/dep_fatal"
 : > "$CURL_LAST_STATUS_FILE"
 : > "$CURL_LAST_HDR_FILE"
 : > "$DEPRECATION_SEEN_FILE"
+: > "$DEPRECATION_FATAL_FILE"
 
 # Status of the most recent curl_retry call, readable from the parent shell.
 curl_retry_status() { cat "$CURL_LAST_STATUS_FILE" 2>/dev/null || true; }
@@ -137,6 +138,25 @@ curl_retry_status() { cat "$CURL_LAST_STATUS_FILE" 2>/dev/null || true; }
 # set it to a negative value) when an endpoint is deprecated with no
 # replacement shipped yet.
 DEPRECATION_FAIL_WINDOW_DAYS="${SENTRY_DEPRECATION_FAIL_WINDOW_DAYS:-30}"
+# ESCALATION IS OFF BY DEFAULT, and that is a deliberate caller-scoped choice.
+#
+# The tripwire runs inside curl_retry, which Gates 1-3 also call. So its reach
+# is NOT limited to the endpoints this audit migrated: a deprecation header on
+# `/organizations/{org}/` — which this script must read to prove org
+# controllability, and cannot migrate away from — would reach it too.
+#
+# `apply-sentry-infra.yml` runs this script BEFORE `terraform plan`. A hard
+# failure there is a vendor-scheduled freeze on Sentry infra deploys, possibly
+# including the deploy that would ship the migration. That is the same
+# "detector blocks its own cure" deadlock the Class D state-half block below
+# spends twenty lines avoiding, and the escape hatch named in the error text
+# is set in NO workflow, so the apply path cannot clear it without merging a
+# workflow edit first.
+#
+# So the teeth belong on the ADVISORY caller (sentry-audit-gate.yml), where a
+# red costs a comment thread and a human is already reading the PR. The
+# unconditional ::warning:: fires everywhere regardless.
+DEPRECATION_FAIL_ENABLED="${SENTRY_DEPRECATION_FAIL:-0}"
 
 # Emit a deprecation warning for any response carrying the header, on ANY
 # status — including 200. This is the whole point: the endpoints that broke
@@ -160,7 +180,16 @@ sentry_deprecation_tripwire() {  # $1 header-dump path, $2 url
   fi
   now_s=$(date -u +%s)
   dep_s=$(date -u -d "$dep" +%s 2>/dev/null || echo "")
-  [[ -z "$dep_s" ]] && return 0
+  if [[ -z "$dep_s" ]]; then
+    # `date -u -d` is GNU-only; on BSD/macOS it fails. Returning here would
+    # leave the warning firing while the escalation silently never arms —
+    # a platform-conditional downgrade to exactly the toothless warning this
+    # tripwire exists to replace, and indistinguishable from "no deprecation".
+    # A date we cannot read is a finding, not an all-clear.
+    echo "::warning::Sentry sent x-sentry-deprecation-date '${dep}' for ${endpoint} but this host cannot parse it (GNU \`date -d\` unavailable?). Escalation cannot be evaluated — treating as IN-WINDOW." >&2
+    printf '%s %s\n' "$endpoint" "${dep} (unparseable — escalated conservatively)" >> "$DEPRECATION_FATAL_FILE"
+    return 0
+  fi
   days=$(( (dep_s - now_s) / 86400 ))
   if (( days <= DEPRECATION_FAIL_WINDOW_DAYS )); then
     # A marker file, not a variable: this runs inside the `$( )` subshell.
@@ -196,7 +225,7 @@ curl_retry() {
   local result=""
   local rc=0
   local status=""
-  local hdr url prev arg safe=1
+  local hdr url arg prev
 
   # A FIXED path, not a mktemp: the caller must be able to find this file after
   # the command substitution returns, and a per-call random name computed in
@@ -204,45 +233,79 @@ curl_retry() {
   # call snapshot it (see sentry_fetch_collection).
   hdr="$CURL_LAST_HDR_FILE"
 
-  # Idempotency: only safe methods may be retried on an HTTP status.
-  # Gate 3 is a non-idempotent POST /releases/ whose `probe_ver` is computed
-  # ONCE, outside this wrapper, and whose check is `!= 201`. Sentry returns
-  # 208 when the release already exists, so retrying a 5xx whose write DID
-  # land server-side yields a deterministic 208 and a false "token may lack
-  # project:releases scope" diagnosis. That failure cannot happen today only
-  # because this wrapper never retried on status at all.
+  # Idempotency: a NON-IDEMPOTENT request is never repeated, by EITHER path.
+  #
+  # Gate 3 is a POST /releases/ whose `probe_ver` is computed ONCE, outside
+  # this wrapper, and whose check is `!= 201`. Sentry returns 208 when the
+  # release already exists, so re-sending a write that DID land server-side
+  # yields a deterministic 208 and a false "token may lack project:releases
+  # scope" diagnosis — halting the apply before `terraform plan`.
+  #
+  # The guard covers the TRANSPORT path as well as the status path, and that
+  # is the half that matters most: a `--max-time 10` timeout on a POST whose
+  # write already landed is the live case (curl exit 28 on this exact script
+  # is recorded in the fetch_monitors comment below as having actually
+  # happened), whereas a status-bearing 5xx at least proves the server
+  # answered. An earlier revision of this block consulted `safe` only inside
+  # the `rc == 0` branch, so a timed-out POST was re-sent three times while
+  # this comment and ADR-031 both asserted it could not be.
+  #
+  # Safety is DECLARED by the call site AND inferred from argv — both, because
+  # each alone fails open in a different direction.
+  #
+  # Declaration alone: a future author who adds a write and forgets the prefix
+  # gets it retried. That is the failure this guard exists to prevent, and it
+  # would be reintroduced by the very change meant to make the guard exact.
+  # Inference alone: the previous scan matched only `-X <verb>`, so it missed
+  # `--request POST` and read a bare `curl -d …` (a POST, to curl) as safe —
+  # correct only by coincidence of Gate 3's writing style.
+  #
+  # So: the declaration is authoritative for intent, and the inference is a
+  # backstop completed to cover every shape curl treats as a write. Either one
+  # marking the request unsafe is enough. A false POSITIVE here costs one
+  # un-retried transient failure; a false negative costs a duplicated write.
+  local safe=1
+  [[ "${CURL_RETRY_UNSAFE:-0}" == "1" ]] && safe=0
   prev=""
   url=""
   for arg in "$@"; do
-    if [[ "$prev" == "-X" ]]; then
-      case "$arg" in GET|HEAD) ;; *) safe=0 ;; esac
-    fi
-    case "$arg" in https://*|http://*) url="$arg" ;; esac
+    case "$prev" in
+      -X|--request) case "$arg" in GET|HEAD) ;; *) safe=0 ;; esac ;;
+    esac
+    # Any body-bearing flag makes this a write to curl even with no -X.
+    case "$arg" in
+      -d|--data|--data-raw|--data-binary|--data-urlencode|-F|--form|-T|--upload-file) safe=0 ;;
+      --data=*|--data-raw=*|--data-binary=*|--data-urlencode=*|--form=*) safe=0 ;;
+      https://*|http://*) url="$arg" ;;
+    esac
     prev="$arg"
   done
 
   while (( attempt <= max_attempts )); do
     : > "$hdr"
     if result=$("$CURL_BIN" -D "$hdr" "$@" 2>/dev/null); then rc=0; else rc=$?; fi
-    # Parse the LAST `HTTP/` line — a redirect chain emits several.
+    # Parse the LAST `HTTP/` line — a redirect chain emits several. A transport
+    # failure produces no status line at all; normalise that to `000` rather
+    # than the empty string, so it renders the same way `-w '%{http_code}'`
+    # renders it at Gates 2/3 and never prints as `returned HTTP `.
     status=$(awk '/^HTTP\//{c=$2} END{print c}' "$hdr" 2>/dev/null | tr -d '\r')
+    [[ -z "$status" ]] && status="000"
     printf '%s' "$status" > "$CURL_LAST_STATUS_FILE"
     sentry_deprecation_tripwire "$hdr" "$url"
 
     if (( rc == 0 )); then
-      # Transport succeeded. Retry only transient statuses, and only when the
-      # request is safe to repeat. 410/404/401/403 are permanent: retrying a
-      # 410 would mask a post-sunset removal as a flake, which is precisely
-      # the ambiguity #7590 spent an investigation failing to resolve.
-      if (( safe == 1 )) && [[ "$status" =~ ^(429|5[0-9][0-9])$ ]]; then
-        : # fall through to the backoff below
-      else
-        break
-      fi
+      # Transport succeeded. Retry only transient statuses. 410/404/401/403
+      # are permanent: retrying a 410 would mask a post-sunset removal as a
+      # flake, which is precisely the ambiguity #7590 spent an investigation
+      # failing to resolve.
+      [[ "$status" =~ ^(429|5[0-9][0-9])$ ]] || break
     fi
 
+    # Unsafe requests stop here regardless of WHY the attempt failed.
+    (( safe == 1 )) || break
+
     if (( attempt < max_attempts )); then
-      echo "::warning::Sentry API attempt $attempt/$max_attempts failed (rc=${rc} status=${status:-none}) — retrying in ${backoff}s" >&2
+      echo "::warning::Sentry API attempt $attempt/$max_attempts failed (rc=${rc} status=${status}) — retrying in ${backoff}s" >&2
       sleep "$backoff"
       backoff=$(( backoff * 2 ))
     fi
@@ -290,8 +353,18 @@ sentry_next_cursor() {  # $1 header-dump path
 
   for seg in "${segs[@]}"; do
     grep -qE 'rel="?next"?' <<<"$seg" || continue
-    # `results="false"` means the next page is empty — following it is a
-    # wasted round trip, not a truncation.
+    # Three states, not two. `results="false"` means the next page is empty —
+    # skipping it is correct, not a truncation. But `results` ABSENT is a
+    # PARSE failure, and collapsing it into "done" is the fail-open this
+    # mechanism exists to prevent: the sweep would silently stop and the
+    # report would still say "Enumeration complete: yes". Its sibling failure
+    # ten lines down (an unparseable cursor) already warns and counts; these
+    # are the same class and must agree.
+    if ! grep -qE 'results=' <<<"$seg"; then
+      echo "::warning::Sentry returned a Link 'next' with no 'results' field; cannot tell an empty next page from a truncated sweep. Refusing to follow it. This sweep is INCOMPLETE." >&2
+      LINK_UNFOLLOWED=$(( LINK_UNFOLLOWED + 1 ))
+      return 0
+    fi
     grep -qE 'results="?true"?' <<<"$seg" || continue
 
     target=$(sed -E 's/^[[:space:]]*<([^>]*)>.*/\1/' <<<"$seg")
@@ -385,7 +458,9 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
   # Gate 3: audit_write_probe (POST release, expect 201 only — Kieran P1-4
   # dropped the 208 branch). Cleans up via DELETE on best-effort.
   probe_ver="audit-probe-$(date +%s)-$$"
-  gate3_http=$(curl_retry -s --max-time 10 -o /dev/null -w '%{http_code}' \
+  # The ONLY non-idempotent call in this file. Declared, not inferred — see
+  # the idempotency block in curl_retry.
+  gate3_http=$(CURL_RETRY_UNSAFE=1 curl_retry -s --max-time 10 -o /dev/null -w '%{http_code}' \
     -X POST \
     -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
     -H "Content-Type: application/json" \
@@ -492,7 +567,6 @@ fi
 declare -A FETCH_STATUS=()
 declare -A FETCH_URL=()
 declare -A FETCH_HDR=()
-declare -A FETCH_OK=()
 
 # Global-out, NOT stdout. This function mutates FETCH_* and LINK_UNFOLLOWED,
 # so calling it as `x=$(sentry_fetch_collection …)` would run it in a subshell
@@ -503,7 +577,6 @@ sentry_fetch_collection() {  # $1 label, $2 path after /api/0/
   local label="$1" path="$2"
   local page=1 acc='[]' body url qs=""
   local base="https://${api_host}/api/0/${path}"
-  FETCH_OK["$label"]=1
   while :; do
     url="${base}${qs}"
     body=$(curl_retry -s --max-time 10 \
@@ -517,8 +590,9 @@ sentry_fetch_collection() {  # $1 label, $2 path after /api/0/
     FETCH_HDR["$label"]="$AUDIT_SCRATCH/hdr.$label"
     if ! jq -e 'type == "array"' >/dev/null 2>&1 <<<"$body"; then
       # Hand the raw body back untouched so the shape check can render the
-      # self-naming diagnostic against it.
-      FETCH_OK["$label"]=0
+      # self-naming diagnostic against it, then exit. There is deliberately no
+      # "partial fetch" state: a failed collection means no report is written
+      # at all, which is stronger than writing one that says it did not check.
       FETCH_BODY="$body"
       return 0
     fi
@@ -549,7 +623,6 @@ sentry_fetch_collection() {  # $1 label, $2 path after /api/0/
 fetch_monitors() {
   if [[ -n "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
     FETCH_BODY="$(cat "$SENTRY_FIXTURE_MONITORS")"
-    FETCH_OK[monitors]=1
     return
   fi
   sentry_fetch_collection monitors "organizations/${SENTRY_ORG}/monitors/"
@@ -562,7 +635,6 @@ fetch_monitors() {
 fetch_workflows() {
   if [[ -n "${SENTRY_FIXTURE_RULES:-}" ]]; then
     FETCH_BODY="$(cat "$SENTRY_FIXTURE_RULES")"
-    FETCH_OK[workflows]=1
     return
   fi
   sentry_fetch_collection workflows "organizations/${SENTRY_ORG}/workflows/"
@@ -578,12 +650,13 @@ fetch_workflows() {
 fetch_detectors() {
   if [[ -n "${SENTRY_FIXTURE_DETECTORS:-}" ]]; then
     FETCH_BODY="$(cat "$SENTRY_FIXTURE_DETECTORS")"
-    FETCH_OK[detectors]=1
     return
   fi
   if [[ -n "${SENTRY_FIXTURE_MONITORS:-}" || -n "${SENTRY_FIXTURE_RULES:-}" ]]; then
+    # Hermetic default for the tests that predate detectors. Test-injection
+    # only: SENTRY_FIXTURE_* are never set in production (see the header), so
+    # this branch cannot fire on a real run.
     FETCH_BODY='[]'
-    FETCH_OK[detectors]=1
     return
   fi
   sentry_fetch_collection detectors "organizations/${SENTRY_ORG}/detectors/"
@@ -645,11 +718,14 @@ done
 # only once the date is inside the window. After this migration the target
 # endpoints carry no deprecation headers at all, so this is dormant unless
 # Sentry deprecates one of them too.
-if [[ -s "$DEPRECATION_FATAL_FILE" ]]; then
-  echo "ERROR: a Sentry endpoint this audit depends on is deprecated and its date is within ${DEPRECATION_FAIL_WINDOW_DAYS} days (or already past). Raise SENTRY_DEPRECATION_FAIL_WINDOW_DAYS only if the endpoint has no shipped replacement yet. Refs #7590." >&2
+if [[ -s "$DEPRECATION_FATAL_FILE" ]] && [[ "$DEPRECATION_FAIL_ENABLED" == "1" ]]; then
+  echo "ERROR: a Sentry endpoint this audit depends on is deprecated and its date is within ${DEPRECATION_FAIL_WINDOW_DAYS} days (or already past). This caller opted into escalation via SENTRY_DEPRECATION_FAIL=1; widen the window with SENTRY_DEPRECATION_FAIL_WINDOW_DAYS only if the endpoint has no shipped replacement yet. Refs #7590." >&2
   echo "  affected endpoints (endpoint deprecation-date):" >&2
   sort -u "$DEPRECATION_FATAL_FILE" | sed 's/^/    /' >&2
   exit 1
+elif [[ -s "$DEPRECATION_FATAL_FILE" ]]; then
+  echo "::warning::A Sentry endpoint this audit depends on is deprecated and its date is within ${DEPRECATION_FAIL_WINDOW_DAYS} days (or already past). NOT failing: this caller has not set SENTRY_DEPRECATION_FAIL=1. Affected:" >&2
+  sort -u "$DEPRECATION_FATAL_FILE" | sed 's/^/    /' >&2
 fi
 
 # --- Compute orphans ------------------------------------------------------
@@ -677,15 +753,13 @@ fi
 
 monitor_slugs=$(jq -r '.[].slug // empty' <<<"$monitors_json")
 
-# Was the detectors payload actually obtained? A synthetic `[]` (fixture
-# inheritance for tests that predate detectors) is NOT evidence of a clean org,
-# and must not be reported as one.
+# A synthetic `[]` (the hermetic default for tests that predate detectors) is
+# NOT evidence of a clean org and must not be reported as one. This is the only
+# state that can reach here: a FAILED fetch never gets this far, because the
+# shape check above exits first and writes no report.
 detectors_evaluated=1
 if [[ -z "${SENTRY_FIXTURE_DETECTORS:-}" ]] \
    && [[ -n "${SENTRY_FIXTURE_MONITORS:-}" || -n "${SENTRY_FIXTURE_RULES:-}" ]]; then
-  detectors_evaluated=0
-fi
-if [[ "${FETCH_OK[detectors]:-1}" == "0" ]]; then
   detectors_evaluated=0
 fi
 
@@ -709,12 +783,21 @@ cron_detector_count=$(jq 'length' <<<"$cron_detectors")
 # structured-pass count is emitted into the report so that "the structured pass
 # found it" is distinguishable from "the fallback found it"; without that the
 # property is unverifiable by any fixture.
-cron_detector_slugs=$(jq -r '.[] | .dataSources[]?.queryObj.slug // empty' <<<"$cron_detectors" | sort -u)
-structured_slug_count=$(printf '%s' "$cron_detector_slugs" | grep -c . || true)
-binding_source="structured (dataSources[].queryObj.slug)"
-if [[ "$structured_slug_count" == "0" ]] && (( cron_detector_count > 0 )); then
-  cron_detector_slugs=$(jq -r '.[].name // empty' <<<"$cron_detectors" | sort -u)
-  binding_source="fallback (.name — structured pass returned nothing)"
+# PER-DETECTOR, not all-or-nothing. An earlier revision only fell back when the
+# structured pass returned ZERO across the whole payload, which is silently
+# wrong under a PARTIAL rollout: if Sentry ships queryObj.slug on some cron
+# detectors and not others, the count is non-zero, the fallback never engages,
+# and every detector WITHOUT the structured field drops out of the set — so
+# Class B under-reports a real orphan with no signal anywhere. Resolving per
+# detector removes that state by construction rather than warning about it.
+cron_detector_slugs=$(jq -r '.[] | (.dataSources[]?.queryObj.slug // .name // empty)' <<<"$cron_detectors" | sort -u)
+structured_slug_count=$(jq '[ .[] | select(.dataSources[]?.queryObj.slug) ] | length' <<<"$cron_detectors")
+if (( structured_slug_count == cron_detector_count )) && (( cron_detector_count > 0 )); then
+  binding_source="structured (dataSources[].queryObj.slug) for all ${cron_detector_count}"
+elif (( structured_slug_count == 0 )); then
+  binding_source="fallback (.name) for all ${cron_detector_count} — no detector carries a structured slug"
+else
+  binding_source="MIXED — ${structured_slug_count}/${cron_detector_count} structured, remainder via .name"
 fi
 cron_detector_names="$cron_detector_slugs"
 
@@ -1034,6 +1117,12 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
       "$class_a_count" "$cron_detector_count"
     if (( class_a_count == cron_detector_count )) && (( cron_detector_count > 0 )); then
       printf -- '- Invariant `class_a_count == cron_detector_count` HOLDS: no cron monitor in this org routes through a workflow. This is a true statement about the org, not a detection bug.\n'
+    elif (( cron_detector_count > 0 )); then
+      # The interesting state. Without this branch the invariant line simply
+      # DISAPPEARS when routing changes, so the one transition worth noticing
+      # is the one the report goes quiet about.
+      printf -- '- Invariant `class_a_count == cron_detector_count` DOES NOT HOLD: %s of %s cron detectors now route through a workflow. Routing changed since the last report — confirm it was intended.\n' \
+        "$(( cron_detector_count - class_a_count ))" "$cron_detector_count"
     fi
     printf -- '\n_Not enumerated per-slug by design: every slug already appears in the `## Monitors` table above, and 55 identical bullets per run is noise. The machine-checked invariant lives in `sentry-monitors-audit.test.sh`._\n\n'
   fi
