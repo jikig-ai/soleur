@@ -6,7 +6,7 @@ mirror of this same fact, so this is the assertion and the API re-query is corro
 
 Thresholds are keyed per MAJOR LINE, not per package. js-yaml and brace-expansion each
 ship two supported majors with SEPARATE advisories (js-yaml 3.15.1 and 4.3.1;
-brace-expansion 1.1.16 and 5.0.9), so a single per-package minimum would compare a
+brace-expansion 1.1.18, 2.1.4 and 5.0.9), so a single per-package minimum would compare a
 correctly-patched 3.x copy against a 4.x threshold and report a false vulnerability.
 """
 import json, re, sys
@@ -32,11 +32,19 @@ REQUIRED = [
     ("web-platform", "ip-address", 10, "10.3.1"),
     ("web-platform", "fast-uri", 3, "3.1.5"),
     ("web-platform", "undici", 7, "7.29.0"),
+    # Three rows, not one: #1327 removed the blanket `brace-expansion` override, so
+    # web-platform legitimately resolves this package on major lines 1, 2 and 5 again
+    # (minimatch@3 needs ^1, rimraf's minimatch@9 needs ^2, minimatch@10 needs ^5).
+    # Floors are the UNION of all six published advisories, not GHSA-v6h2-p8h4-qcjw
+    # (LOW) alone: GHSA-rgw5-rvv9-x895 (HIGH) makes <1.1.18 and <2.1.4 vulnerable, and
+    # its >=4.0.0 <5.0.9 range means NO 3.x or 4.x release is patched at all.
+    ("web-platform", "brace-expansion", 1, "1.1.18"),
+    ("web-platform", "brace-expansion", 2, "2.1.4"),
     ("web-platform", "brace-expansion", 5, "5.0.9"),
     ("web-platform", "@opentelemetry/propagator-jaeger", 2, "2.9.0"),
     ("root", "js-yaml", 3, "3.15.1"),
     ("root", "js-yaml", 4, "4.3.1"),
-    ("root", "brace-expansion", 1, "1.1.16"),
+    ("root", "brace-expansion", 1, "1.1.18"),  # was 1.1.16: GHSA-rgw5-rvv9-x895 covers <1.1.18
     ("pencil-setup", "hono", 4, "4.12.34"),
     ("pencil-setup", "@hono/node-server", 1, "1.19.15"),
     ("pencil-setup", "ip-address", 10, "10.3.1"),
@@ -104,7 +112,7 @@ def main():
     # evaluated count against the table's own length is a tautology that cannot fail, so
     # deleting the table would report "0 rows clear" and exit 0. (Measured -- that mutation
     # survived the first version of this check.)
-    MIN_ROWS = 17
+    MIN_ROWS = 19  # main's 17 + the two brace-expansion major lines #1327 restored
     if len(REQUIRED) < MIN_ROWS:
         failures.append(
             f"the reconciliation table has {len(REQUIRED)} rows, below the floor of {MIN_ROWS}. "
@@ -112,7 +120,7 @@ def main():
     # The floor that matters sits on rows that RESOLVED to a real installed version --
     # the only set that is non-empty in the passing state. `checked` and `len(REQUIRED)`
     # are both populated by construction and cannot detect a row that matches nothing.
-    MIN_RESOLVED = 17
+    MIN_RESOLVED = 19  # main's 17 + the same two rows, both of which resolve
     if resolved < MIN_RESOLVED:
         failures.append(
             f"only {resolved} of {len(REQUIRED)} rows resolved to an installed version, "
