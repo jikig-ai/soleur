@@ -704,7 +704,6 @@ TMP18=$(mktemp -d); mk_curl_stub "$TMP18"
 awk '/^CURL_BIN=/{on=1} on{print} on && /^curl_retry\(\)/{inr=1} inr && /^}/{exit}' "$SCRIPT" > "$TMP18/lib.sh"
 printf '[{"id":"1"}]' > "$TMP18/body.json"
 
-t18_fail=0
 # --- (a) 500 then 200 on a safe GET: retried, final body returned ---------
 cat > "$TMP18/respond.sh" <<STUB
 #!/usr/bin/env bash
@@ -720,7 +719,7 @@ n_calls=$(wc -l < "$TMP18/requests.txt")
 if [[ "$got" == '[{"id":"1"}]' ]] && [[ "$n_calls" == "2" ]]; then
   pass "T18a: 5xx on a safe GET is retried and the final body is returned"
 else
-  fail "T18a: got='$got' calls=$n_calls"; t18_fail=1
+  fail "T18a: got='$got' calls=$n_calls"
 fi
 
 # --- (b) 410 is NEVER retried --------------------------------------------
@@ -735,7 +734,7 @@ n_calls=$(wc -l < "$TMP18/requests.txt")
 if [[ "$n_calls" == "1" ]]; then
   pass "T18b: 410 is not retried (retrying would mask a sunset as a flake)"
 else
-  fail "T18b: 410 retried $n_calls times"; t18_fail=1
+  fail "T18b: 410 retried $n_calls times"
 fi
 
 # --- (c) a 5xx on a non-idempotent POST is NOT status-retried -------------
@@ -752,7 +751,7 @@ n_calls=$(wc -l < "$TMP18/requests.txt")
 if [[ "$n_calls" == "1" ]]; then
   pass "T18c: a write probe is not status-retried (208-after-retry cannot arise)"
 else
-  fail "T18c: POST status-retried $n_calls times"; t18_fail=1
+  fail "T18c: POST status-retried $n_calls times"
 fi
 
 # --- (d) stdout byte-identity, BOTH call-site shapes ----------------------
@@ -773,7 +772,7 @@ if [[ "$body_wrapped" == "$body_bare" ]] && [[ "$body_wrapped" == '[{"id":"1"}]'
    && [[ "$status_wrapped" == "$status_bare" ]] && [[ "$status_wrapped" == "200" ]]; then
   pass "T18d: curl_retry stdout is byte-identical to bare curl in BOTH shapes"
 else
-  fail "T18d: body '$body_wrapped' vs '$body_bare'; status '$status_wrapped' vs '$status_bare'"; t18_fail=1
+  fail "T18d: body '$body_wrapped' vs '$body_bare'; status '$status_wrapped' vs '$status_bare'"
 fi
 rm -rf "$TMP18"
 
