@@ -850,6 +850,15 @@ State plainly which axes your battery did NOT edit. Two mechanical companions: r
    starts (it was 15 minutes). CI is unaffected — `tc_acquire` returns early on `CI`. The escape
    hatches are `git commit --no-verify` and `LEFTHOOK=0`.
 
+   **Re-run each touched shard under the environments it SHIPS into, not only yours.** `CI=1` and
+   `SOLEUR_SUBAGENT=1` change control flow (CI exemptions, subagent refusals), so a suite can be
+   green locally and red on merge — treat any PASS-COUNT DELTA between environments as a finding,
+   not just a FAIL. **Why:** #7545 — a new suite was 66/0 locally and 58/8 under `CI=1` because
+   `tc_acquire` returns early on `CI` before the code under test; it was registered in the required
+   `test` context, so it was green for the author and red on merge. Thirty seconds of work; no
+   amount of diff-reading finds it. `review/SKILL.md` carries this rule too, but review runs AFTER
+   this gate — by then the panel is already reviewing a suite CI will reject.
+
    **The lead runs this gate, not a delegate.** [scripts/test-all.sh](../../../../scripts/test-all.sh) exits `4` — REFUSED, nothing ran — when `SOLEUR_SUBAGENT=1` is set without `SOLEUR_ALLOW_FULL_GATE=1`. A ~90 s shard is far likelier to be delegated than a 45-minute battery was, so treat `rc=4` as its own outcome: it is not a reap and it is not a pass.
 
    **Why a shard and not a hand-derived command set.** A `vitest --changed` + `git grep` derivation was specified and cut. A shard keeps the contention preamble (`SIBLING_RUN_DETECTED` / `SIBLING_SUITE_DETECTED` / `LOW_TMP_HEADROOM`), the `EXIT CONTRACT`, the terminal `=== N/M suites passed ===` marker, the rc file, and the `rc=3` UNRESOLVED class — an ad-hoc command set has none of them, and `vitest run --changed` with zero matches exits 1, which is indistinguishable from a real red by exit code alone. A shard also has **no empty-set state**: it always runs a defined suite list, so the "empty derived set" fail-open cannot arise. Losing the banner would have moved the earliest sibling-collision signal past the 8-10-agent review fan-out — the cost #7247 paid, where a duplicate implementation surfaced only because a banner named the sibling worktree after a full RED→GREEN cycle had been built and had to be reverted.

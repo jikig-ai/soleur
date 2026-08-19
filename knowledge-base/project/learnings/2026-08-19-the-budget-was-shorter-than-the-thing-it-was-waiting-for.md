@@ -160,3 +160,68 @@ fix for a mechanism that cannot change a decision is deletion.
   hand-written path list to keep in sync — and it was already wrong on `.github/`, `CLAUDE.md` and
   four `apps/web-platform` subtrees.
 - One suite run: **~190 s**, 73 assertions.
+
+## Session Errors
+
+Fourteen, of which nine are recurrences of classes this repo already documents. That ratio is the
+finding: the rules existed and were not reached for.
+
+1. **`iac-plan-write-guard` blocked the first plan write** on an incidental "operator runs" phrase
+   co-occurring with "mount" *(forwarded from the plan phase)*. Recovery: rephrase, not the ack
+   opt-out — there was no infrastructure step to acknowledge. **Prevention:** none warranted; the
+   guard failing closed on an ambiguous phrase is the correct direction.
+2. **`lint-guard-contract.py` read 0 mutation rows** — escaped pipes (`\|\|`) broke its table parser
+   and no guard carried the field it scopes on *(forwarded)*. **Prevention:** already fixed in-session.
+3. **A counter incremented inside `$( )`.** `make_fixture` was called as `FX=$(make_fixture …)`, so
+   the subshell discarded the increment, every fixture landed in one directory, and arms accumulated
+   the previous arm's processes. It failed as *plausible wrong numbers* (2 siblings reported as 5),
+   which pointed at the implementation rather than the fixtures. **Prevention:** in any function that
+   will be called in `$( )`, mint uniqueness with `mktemp -d`; never carry state in a variable.
+4. **`until ! pgrep -f 'cap-battery.sh'` matched its own command line**, so the loop never
+   terminated and burned a 5-minute timeout. **Prevention:** `plugins/soleur/scripts/lib/proc.sh
+   list_runs` resolves ownership via `/proc/<pid>/cwd` and excludes self — use it instead of `pgrep`.
+5. **The same self-match again**, in `pgrep -c -f "sleep 47"`, reporting 2 orphans where there were
+   0 — nearly recording a fix as failed. **Prevention:** as #4. Twice in one session with the rule in
+   view is the argument for reaching for the helper by default.
+6. **A Python anchor matched inside a comment.** `s.index("tc_acquire() {")` first matches the
+   string `` `tc_acquire() { :; }` `` in a comment, so the replacement truncated a pre-existing block,
+   duplicated two functions, and left an unbalanced backtick that bash expanded as a command
+   substitution. **Prevention:** anchor structural edits on `^`-anchored, regex-bounded matches and
+   assert `count == 1`; when a file is mangled, rebuild from the last good commit rather than
+   repairing in place.
+7. **`cp -a .` copied `.git`**, so the `rm -rf` guardrail correctly refused to clean the sandbox.
+   **Prevention:** for a suite needing a real git dir, mutate in place against a pristine backup with
+   a restore trap; sandbox-copy only when the suite is git-independent.
+8. **A blocked Bash call took its heredoc with it.** The denial aborted the whole call, so the
+   mutator file was never written and the next call reported 8 rows NOT-APPLIED. **Prevention:**
+   write files in a call separate from any gated command — the documented pattern for hook-gated `gh`
+   invocations, which applies to every gated command.
+9. **A grep anchored on a bare token** (`LOCK_WAITING|LOCK_ACQUIRED`) matched the suite's own
+   assertion *text* rather than the runner's output, and the lock state was misread. **Prevention:**
+   `cq-assert-anchor-not-bare-token` — anchor on the emitter prefix (`^\[contention\] LOCK_`).
+10. **Three unguarded `$(grep …)` captures**, where a no-match exits 1, pipefail propagates, and
+    `set -e` kills the suite — making the "extraction failed" branches directly below unreachable.
+    Caught by `lint-shell-capture-exit` in 700ms, after ten review agents did not.
+    **Prevention:** the lint already exists and is registered; run the cheap deterministic gates
+    BEFORE the panel, not after.
+11. **The version-skew arm was vacuous twice.** v1 drove `--capacity`, which carries its own guard;
+    v2 asserted "named in the guard OR stubbed in the body", which every function satisfies by
+    construction. Only mutation caught both. **Prevention:** for every new assertion, name an
+    implementation that satisfies it while violating the property — and mutation-prove the fix, not
+    just the original defect.
+12. **A comment asserted an enumeration it had not completed.** `TC_CLEAN`'s comment said the list
+    was "enumerated FROM THE SUT (`grep …`), not from memory"; that grep returns `XDG_RUNTIME_DIR`
+    and `TMPDIR` and neither was in the list. **Prevention:** when a comment claims a command
+    produced a list, paste the command's output into the list rather than transcribing from memory.
+13. **An overstated datum, reported to the operator.** The 941s measurement was described as
+    preventing a "fifth concurrent gate"; it supports ~41s of avoided overlap with one holder.
+    **Prevention:** state what the datum bounds, not what it suggests — and correct it in every
+    artifact, not only where it was noticed.
+14. **An unreproducible figure.** "167 top-level `run_suite` registrations" matches no counting rule
+    (measured 165/164 and 170/169). **Prevention:** publish the command beside any count; a number
+    pinned to prose rots exactly like a citation pinned to a line number.
+
+**Not counted as deviations:** `.claude/.rule-incidents.jsonl` shows 1,516 deny/bypass rows since
+2026-08-19, dominated by fixtures (`gh pr merge 1`, `-some-project`, `${{ github.event.issue.title }}`).
+These are the repo's own hook test suites, which the `scripts` shard runs — and that shard ran four
+times today. They are test artifacts, not session violations.
