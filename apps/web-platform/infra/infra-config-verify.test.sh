@@ -121,33 +121,133 @@ fi
 # curl and `doppler secrets get` are deliberately NOT in this set: polling the status
 # endpoint and reading a secret are what a verification gate does. T6 pins the doppler
 # half to read-only subcommands.
-ACTUATING="terraform ssh systemctl"
+# AN ALLOW-LIST, NOT A DENY-LIST (#7104 PR-B review, D3).
+#
+# This was `for c in terraform ssh systemctl` — three names, matched by a grep. D3 ran the
+# equivalent deny-list against crafted inputs and it was evaded EIGHT ways out of nine: an
+# absolute path, a relative `./` path, a variable in command position, `awk` with system(),
+# `awk` piping to "sh", `sed -e ...e`, `sed -i`, and a bare shell redirection. A deny-list can
+# only refuse what its author thought of, and this is the HIGHER-privilege of the two files —
+# it runs twice in production, holds DOPPLER_TOKEN, and its `repush_needed=true` output is the
+# sole authoriser of the production write.
+#
+# So the sweep is now the same allow-list the library gets, from the same shared scanner. The
+# three names above are no longer enumerated because they no longer need to be: anything not on
+# the list is a hit, including shapes nobody predicted.
 if [[ -f "$VERIFY_SH" ]]; then
-  checked=0
-  for c in $ACTUATING; do
-    checked=$((checked + 1))
-    n=$(cmd_position_count "$VERIFY_SH" "$c")
-    if [[ "$n" -eq 0 ]]; then
-      pass "infra-config-verify.sh has no command-position \`$c\` (it verifies; it does not actuate)"
-    else
-      fail "infra-config-verify.sh runs \`$c\` at $n command position(s) — the verification gate actuates, collapsing the step boundary R22 restored"
-    fi
-  done
+  VERIFY_SWEEP=$(python3 - "$VERIFY_SH" "$GATE_SH" "${SCRIPT_DIR}/infra-config-shellscan.py" <<'PYEOF'
+import importlib.util, re, sys
+
+verify_path, gate_path, scanner = sys.argv[1], sys.argv[2], sys.argv[3]
+_spec = importlib.util.spec_from_file_location('shellscan', scanner)
+_m = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_m)
+
+KEYWORDS = {'if','elif','then','else','fi','for','while','until','do','done','case','esac',
+            'in','function','time','coproc','return','break','continue'}
+BUILTINS = {'echo','printf','local','declare','typeset','readonly','export','unset','set',
+            'shift','exit','true','false','test','read','shopt','trap','let','pwd',
+            'type','hash','umask',':','['}
+# What a VERIFICATION gate legitimately runs: it polls an endpoint, reads a secret, waits,
+# transforms text, and prints. Every one is inert with respect to infrastructure. `terraform`,
+# `ssh`, `systemctl` and `gh` are absent by omission rather than by enumeration, which is the
+# point of the inversion.
+ALLOWED = {'jq','sed','grep','awk','basename','sha256sum','cat','curl','date','doppler',
+           'openssl','sleep','source'}
+
+# The gate library's function names, DERIVED from the library rather than listed here, so a
+# newly added adjudicator is covered the moment it exists instead of reading as an escape.
+gate_src = open(gate_path, encoding='utf-8').read()
+LIB_FUNCS = set(re.findall(r'^([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{', gate_src, re.M))
+if len(LIB_FUNCS) < 5:
+    print('SWEEP-ERROR: derived only %d function name(s) from infra-config-gate.sh — the '
+          'derivation broke, so every library call below would read as an escape' % len(LIB_FUNCS))
+    sys.exit(0)
+
+src = open(verify_path, encoding='utf-8').read()
+hits = []
+for line, tok, raw in _m.raw_command_tokens(_m.strip_noise(src)):
+    if tok in KEYWORDS or tok in BUILTINS or tok in ALLOWED or tok in LIB_FUNCS:
+        continue
+    if tok == '$INDIRECT':
+        hits.append((line, '%s (a variable in command position names a command this sweep '
+                           'cannot resolve)' % raw))
+        continue
+    hits.append((line, raw))
+
+for line, kind, detail in _m.find_trampolines(src):
+    # `redirect-variable` is ALLOWED HERE and nowhere else: this gate legitimately writes
+    # $GITHUB_OUTPUT and its own status-response scratch file. A redirect to a LITERAL path is
+    # still a hit — that is `echo pwned > /etc/default/soleur-doppler-token`, which invokes no
+    # command at all and is therefore invisible to every allow list above.
+    if kind == 'redirect-variable':
+        continue
+    hits.append((line, '%s: %s' % (kind, detail)))
+
+# `source` is on the allow list because this file must load the adjudicator, and that makes it
+# the one allow-listed trampoline. Pin WHAT it sources, or the allowance is a hole.
+sourced = re.findall(r'(?:^|[\n;&|])\s*(?:source|\.)\s+(\S+)', _m.strip_noise(src), re.M)
+unexpected = [s for s in sourced if s not in ('./infra-config-gate.sh',)]
+if unexpected:
+    hits.append((0, 'sources %s — `source` is allow-listed only for ./infra-config-gate.sh; '
+                    'anything else is an arbitrary-code trampoline' % ', '.join(unexpected)))
+if not sourced:
+    hits.append((0, 'sources NOTHING — the adjudicator is not loaded, so the `source` allowance '
+                    'is unexercised and this pin is vacuous'))
+
+print('OK' if not hits else 'HITS=' + '; '.join('L%d %s' % h for h in hits))
+PYEOF
+) || VERIFY_SWEEP="SWEEP-ERROR (python3 unavailable)"
+  if [[ "$VERIFY_SWEEP" == "OK" ]]; then
+    pass "infra-config-verify.sh runs ONLY allow-listed inert commands plus the derived gate-library functions, sources only ./infra-config-gate.sh, and writes no literal path — it verifies; it does not actuate"
+  else
+    fail "infra-config-verify.sh actuation sweep: $VERIFY_SWEEP"
+  fi
+
+  # THE SWEEP'S OWN POSITIVE CONTROL, crossing shapes rather than wrappers. Without it an
+  # allow-list that silently stopped matching reports the same clean verdict as a clean file.
+  VERIFY_CONTROL=$(python3 - "$GATE_SH" "${SCRIPT_DIR}/infra-config-shellscan.py" <<'PYEOF'
+import importlib.util, sys
+_spec = importlib.util.spec_from_file_location('shellscan', sys.argv[2])
+_m = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_m)
+ALLOWED = {'jq','sed','grep','awk','basename','sha256sum','cat','curl','date','doppler',
+           'openssl','sleep','source','echo','printf','exit','local','set','if','then','fi','f'}
+SHAPES = {
+    'bare-binary':   'f() {\n  terraform apply -auto-approve\n}\n',
+    'abs-path':      'f() {\n  /usr/bin/terraform apply -auto-approve\n}\n',
+    'rel-path':      'f() {\n  ./push-infra-config.sh\n}\n',
+    'var-indirect':  'f() {\n  TF=terraform ; $TF apply -auto-approve\n}\n',
+    'awk-system':    'f() {\n  awk \'BEGIN{system("terraform apply")}\'\n}\n',
+    'awk-pipe-sh':   'f() {\n  awk \'BEGIN{print "terraform apply" | "sh"}\'\n}\n',
+    'sed-e-flag':    'f() {\n  sed -e "s/x/terraform apply/e" file\n}\n',
+    'sed-inplace':   'f() {\n  sed -i "s/a/b/" ../../../.github/workflows/apply-deploy-pipeline-fix.yml\n}\n',
+    'redirect-write':'f() {\n  echo pwned > /etc/default/soleur-doppler-token\n}\n',
+    'ssh-actuate':   'f() {\n  ssh host systemctl restart webhook\n}\n',
+}
+missed = []
+for name, code in SHAPES.items():
+    toks = [t for _l, t, _r in _m.raw_command_tokens(_m.strip_noise(code)) if t not in ALLOWED]
+    tramp = [k for _l, k, _d in _m.find_trampolines(code) if k != 'redirect-variable']
+    if not toks and not tramp:
+        missed.append(name)
+print('OK' if not missed else 'MISSED=' + ','.join(missed))
+PYEOF
+) || VERIFY_CONTROL="MISSED=control battery could not run"
+  if [[ "$VERIFY_CONTROL" == "OK" ]]; then
+    pass "the actuation sweep's control battery detects all 10 evasion SHAPES (path, indirect, awk/sed trampoline, bare redirection), not 12 wrappers on one shape"
+  else
+    fail "the actuation sweep cannot see: $VERIFY_CONTROL — its clean verdict on the real file is a statement about the regex, not about the file"
+  fi
+
   # `gh issue` specifically: the escalation credentials live in none of these steps
-  # (R18.6). A bare `gh` would over-match `gh` in prose; anchor on the subcommand.
+  # (R18.6). Kept as its own row because it is a CREDENTIAL-SURFACE claim, not an actuation one:
+  # the allow-list above already excludes `gh`, but this row is what names why.
   ghn=$(grep -cE '(^|[;&|]|\$\()[[:space:]]*gh[[:space:]]+issue[[:space:]]' "$VERIFY_SH" || true)
-  checked=$((checked + 1))
   if [[ "$ghn" -eq 0 ]]; then
     pass "infra-config-verify.sh runs no \`gh issue\` (escalation stays out of the verdict step)"
   else
     fail "infra-config-verify.sh runs \`gh issue\` at $ghn site(s) — escalation credentials do not belong in the verdict step"
-  fi
-  # Minimum-cardinality guard: a loop whose data source silently empties reports a
-  # clean sweep having examined nothing.
-  if [[ "$checked" -ge 4 ]]; then
-    pass "actuation sweep examined $checked commands"
-  else
-    fail "actuation sweep examined only $checked commands — the command list emptied"
   fi
 fi
 
@@ -602,7 +702,10 @@ fi
 # --- assertion floor --------------------------------------------------------------------------
 # Anti-vacuity. Counts assertions that RAN, so a structural break that skips whole
 # blocks (an unset file path, an early `else`) reds instead of reporting a clean 0/0.
-VERIFY_MIN_ASSERTIONS=35
+# 35 -> 33: the actuation sweep replaced five deny-list rows (three command names, the `gh issue`
+# row, and a cardinality guard over the loop that iterated them) with three allow-list rows. Fewer
+# assertions covering strictly more shapes — D3 measured the deny-list as evaded 8 ways out of 9.
+VERIFY_MIN_ASSERTIONS=33
 echo ""
 echo "  $PASS passed, $FAIL failed"
 if [[ "$FAIL" -gt 0 ]]; then

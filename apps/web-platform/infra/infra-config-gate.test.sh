@@ -48,10 +48,49 @@ fail=0
 # The emitted PASS: lines are the second producer. `pass()` prints one line per assertion and
 # appends one line here, so the counter and the log can only agree if each increment
 # corresponds to a real assertion. `pass=$((pass + 2))` desynchronises them immediately.
+#
+# THE TWO PRODUCERS WERE ONE FUNCTION (#7104 PR-B review, D2).
+#
+# The paragraph above claims "the emitted PASS: lines are the second producer". They were not:
+# both the counter and the log were written by the SAME one-line `pass()`, so one edit moved
+# both and the reconciliation compared a value against itself by a longer route. Measured:
+#
+#     pass() { echo "  PASS: $1"; printf 'PASS\nPASS\n' >> "$PASSLOG"; pass=$((pass + 2)); }
+#
+# reported 264 passed, 0 failed, OK, rc=0 — reconciliation clean, source-literal check clean,
+# floor of 132 cleared with 66 real assertions deletable. The test for independence is: can one
+# edit move both? It could.
+#
+# The genuinely independent producer is this suite's OWN STDOUT, captured OUTSIDE `pass()` by
+# the redirection below. `pass=$((pass + 2))` cannot touch it, so the counter and the printed
+# output diverge and the teardown says so. A mutation that instead prints each line TWICE keeps
+# all three in sync — and is caught by the consecutive-duplicate check at teardown, because it
+# doubles the output a human reads.
+#
+# fd 3 holds the real stdout so the tee can be shut down deterministically at teardown: closing
+# fd 1 gives tee EOF, which is what makes the capture flushed and complete before it is counted.
 PASSLOG="$TMP/pass.log"
 : > "$PASSLOG"
+STDOUT_LOG="$TMP/stdout.log"
+: > "$STDOUT_LOG"
+exec 3>&1
+exec 1> >(tee -a "$STDOUT_LOG" >&3)
+
 pass() { echo "  PASS: $1"; printf 'PASS\n' >> "$PASSLOG"; pass=$((pass + 1)); }
 fail() { echo "  FAIL: $1"; fail=$((fail + 1)); }
+
+# Shut the capture down and wait for tee to flush. Called once, at teardown, before anything
+# reads $STDOUT_LOG. Without the settle the count is a race against a subprocess.
+close_stdout_capture() {
+  exec 1>&3 3>&-
+  local i=0 prev=-1 now
+  while [[ "$i" -lt 50 ]]; do
+    now=$(wc -c < "$STDOUT_LOG" 2>/dev/null || echo 0)
+    [[ "$now" == "$prev" && "$now" != "0" ]] && return 0
+    prev="$now"; i=$((i + 1)); sleep 0.02
+  done
+  return 0
+}
 
 # --- Build a hermetic synthetic infra dir mirroring the real FILE_MAP ----------------
 # For each FILE_MAP dest: if the REAL repo classifies it as template-backed (ships
@@ -365,30 +404,34 @@ else
     # line would measure depth 0 and the adjudicate assertion would pass vacuously — so it also
     # requires having SEEN at least one loop, which is the same failure the count's own
     # cardinality floor guards against one level up.
-    LOOPDEPTH=$(python3 - "$VERIFY_SH" "$adj_line" "$ci_line" <<'PYEOF'
-import re, sys
+    LOOPDEPTH=$(python3 - "$VERIFY_SH" "$adj_line" "$ci_line" "$SCRIPT_DIR/infra-config-shellscan.py" <<'PYEOF'
+import importlib.util, sys
 
-path, adj, ci = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
-lines = open(path, encoding='utf-8').read().splitlines()
+path, adj, ci, scanner = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
 
-tok = re.compile(r'(?<![-\w])(do|done)(?![-\w])')
-depth = 0
-maxdepth = 0
-depth_at = {}
-for i, raw in enumerate(lines, start=1):
-    # Strip comments and single/double-quoted spans so a `done` inside prose or a message
-    # string cannot move the counter. Crude but conservative: it can only UNDER-count, and an
-    # under-count is caught by the positive control below.
-    line = re.sub(r'#.*$', '', raw)
-    line = re.sub(r'"[^"]*"', '""', line)
-    line = re.sub(r"'[^']*'", "''", line)
-    depth_at[i] = depth          # depth as the line BEGINS
-    for t in tok.findall(line):
-        if t == 'do':
-            depth += 1
-            maxdepth = max(maxdepth, depth)
-        else:
-            depth -= 1
+# THE SHARED SCANNER (#7104 PR-B review, D1). This block used to carry its OWN three-line
+# stripper — comments and quotes, but NOT `[[ ]]` test spans — while the allow-list sweep 300
+# lines below stripped all three. That divergence IS D1, and the panel executed it: two balanced
+# phantom lines
+#
+#     for _n in 1; do :; done          # restores done_count == 1
+#     [[ $PHASE == done ]] || :        # depth 1 -> 0
+#     adjudicate_infra_config ... && break
+#     [[ $PHASE == do ]] || :          # rebalance
+#
+# zero the depth at the assert and rebalance the file, restoring #6594's any-of-3 coin flip with
+# this suite reporting 132 passed, 0 failed. Neither the positive control nor the balance check
+# protects — maxdepth reads 2, HIGHER than baseline, and the phantoms balance by construction.
+#
+# Both halves of the fix live in the shared module: `[[ ]]` spans are stripped like quotes are
+# (a test span holds values, not commands), and `do`/`done` are counted only in COMMAND
+# position, so `echo done` no longer decrements the counter either.
+_spec = importlib.util.spec_from_file_location('shellscan', scanner)
+_m = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_m)
+
+src = open(path, encoding='utf-8').read()
+depth_at, maxdepth, depth = _m.loop_depth_map(src)
 
 problems = []
 if maxdepth < 1:
@@ -583,12 +626,23 @@ fi
 # The control is now a BATTERY, not a single case: a sweep that exists to report an empty set
 # must prove it can report a non-empty one for every evasion shape above, or its silence is a
 # statement about the regex rather than about the file.
-LIB_SWEEP=$(python3 - "$SCRIPT_DIR/infra-config-gate.sh" <<'PYEOF'
-import sys, re
+LIB_SWEEP=$(python3 - "$SCRIPT_DIR/infra-config-gate.sh" "$SCRIPT_DIR/infra-config-shellscan.py" <<'PYEOF'
+import importlib.util, sys
+
+_spec = importlib.util.spec_from_file_location('shellscan', sys.argv[2])
+_m = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_m)
+strip_noise = _m.strip_noise
+raw_command_tokens = _m.raw_command_tokens
+find_trampolines = _m.find_trampolines
 
 # The six external binaries the library legitimately runs, derived from the as-written file.
-# All six are pure text/JSON transforms: none can write infrastructure, open a network
-# connection, or change host state. Adding to this list is a deliberate act.
+# All six are pure text/JSON transforms — with two enormous exceptions that D3 measured and
+# this comment used to omit: `awk` has system() and pipe-to-shell, and GNU `sed` has `-i` and
+# the `e` flag. Both are arbitrary-command trampolines sitting INSIDE the allow list, and the
+# old sweep was structurally blind to them because it blanked quoted spans first, which is
+# exactly where an awk program body lives. find_trampolines() below looks for them in
+# comment-stripped, quote-PRESERVING text.
 ALLOWED_EXTERNAL = {'jq', 'sed', 'grep', 'awk', 'basename', 'sha256sum'}
 
 KEYWORDS = {'if','elif','then','else','fi','for','while','until','do','done','case','esac',
@@ -600,55 +654,55 @@ BUILTINS = {'echo','printf','local','declare','typeset','readonly','export','uns
             'shift','exit','true','false','test','read','shopt','trap','let','pwd',
             'type','hash','umask',':','['}
 
-def strip_noise(text):
-    """Blank quoted spans (tracking state ACROSS lines, which is what makes a multi-line jq
-    program stop looking like code), comments, arithmetic and [[ ]] tests."""
-    out, i, n, q = [], 0, len(text), None
-    while i < n:
-        c = text[i]
-        if q is None:
-            if c == '#':
-                while i < n and text[i] != '\n':
-                    i += 1
-                continue
-            if c in ('"', "'"):
-                q = c; out.append(' '); i += 1; continue
-            out.append(c); i += 1
-        else:
-            if c == '\\' and q == '"' and i + 1 < n:
-                out.append('  '); i += 2; continue
-            if c == q:
-                q = None
-            out.append('\n' if c == '\n' else ' ')
-            i += 1
-    s = ''.join(out)
-    # Arithmetic and test spans hold variable names, not commands.
-    s = re.sub(r'\$?\(\([^()]*\)\)', ' ', s)
-    s = re.sub(r'\[\[.*?\]\]', ' ', s, flags=re.S)
-    return s
-
-# Command position: start of input/line, after a separator, a subshell/group opener, a
-# command-substitution opener (both `$(` and a backtick), or an if-family keyword or `!`.
-CMD = re.compile(r'(?:^|[\n;&|(){}`]|\$\(|\b(?:if|elif|then|else|do|while|until)\s|!\s*)\s*'
-                 r'([A-Za-z_][A-Za-z0-9_./-]*)(?=\s|$|;)', re.M)
-
 def sweep(text):
+    """Every escape class D3 measured, in one pass.
+
+    The token half now sees three shapes that previously captured NOTHING AT ALL — which for an
+    allow-list is the worst failure available, because no token means no hit means silence that
+    reads as approval:
+
+      /usr/bin/terraform apply      the old regex required a leading [A-Za-z_]
+      ./push-infra-config.sh        same
+      TF=terraform ; $TF apply      a variable in command position
+
+    Path forms are compared on their basename; the indirect form cannot be resolved statically
+    and is therefore REPORTED, not skipped. The trampoline half covers awk/sed execution and
+    shell redirection, neither of which any command-position allow list can see.
+    """
     hits = []
     clean = strip_noise(text)
-    # Map offsets back to line numbers for a useful message.
-    for m in CMD.finditer(clean):
-        tok = m.group(1)
+    for line, tok, raw in raw_command_tokens(clean):
         if tok in KEYWORDS or tok in BUILTINS or tok in ALLOWED_EXTERNAL:
             continue
         if tok.startswith('infra_config_'):
             continue          # the library's own functions
-        line = clean.count('\n', 0, m.start(1)) + 1
-        hits.append((line, tok))
+        if tok == '$INDIRECT':
+            hits.append((line, '%s (indirect: a variable in command position names a command '
+                               'this sweep cannot resolve, so it is reported rather than '
+                               'assumed benign)' % raw))
+            continue
+        hits.append((line, raw))
+    for line, kind, detail in find_trampolines(text):
+        # A PURE ADJUDICATOR WRITES NOTHING, so every redirect class is a hit here. The verify
+        # gate's own sweep permits `redirect-variable` (it legitimately writes $GITHUB_OUTPUT);
+        # sharing one verdict between the two would have to permit the union, and the union
+        # permits the escape.
+        hits.append((line, '%s: %s' % (kind, detail)))
+    hits.sort()
     return hits
 
-# POSITIVE-CONTROL BATTERY. Every one of these must be seen. The comment above records that
-# the deny-list this replaced caught exactly the first.
+# POSITIVE-CONTROL BATTERY.
+#
+# THE FIRST TWELVE ARE ALL ONE SHAPE (#7104 PR-B review, F5 / anti-pattern 1): a bare binary in
+# command position, varying only the WRAPPER in front of it. Twelve rows crossing one axis is
+# one row, and it is precisely why the sweep scored 12/12 while D3 measured EIGHT evasions —
+# every one of them a different shape, and none of them sampled here. The controls agreed with
+# the detector because they were drawn from the same assumption.
+#
+# The rows below the divider each instantiate a DIFFERENT shape, and each was measured EVADING
+# the pre-fix sweep. They are the controls that would have caught D3.
 CONTROLS = [
+    # shape A — a binary in command position, twelve wrappers
     'f() {\n  terraform apply -auto-approve\n}\n',
     'f() {\n  doppler run --name-transformer tf-var -- terraform apply\n}\n',
     'f() {\n  x=`terraform apply`\n}\n',
@@ -661,12 +715,30 @@ CONTROLS = [
     'f() {\n  command terraform apply\n}\n',
     'f() {\n  nohup terraform apply\n}\n',
     'f() {\n  timeout 60 terraform apply\n}\n',
+    # ---- shapes the twelve above cannot reach (D3, each EVADED before this change) ----
+    # shape B — a PATH, so the old token regex captured nothing at all
+    'f() {\n  /usr/bin/terraform apply -auto-approve\n}\n',
+    'f() {\n  ./push-infra-config.sh\n}\n',
+    # shape C — the command name in a variable
+    'f() {\n  TF=terraform ; $TF apply -auto-approve\n}\n',
+    # shape D — a trampoline INSIDE the allow list, hidden in a quoted span
+    'f() {\n  awk \'BEGIN{system("terraform apply -auto-approve")}\'\n}\n',
+    'f() {\n  awk \'BEGIN{print "terraform apply" | "sh"}\'\n}\n',
+    'f() {\n  sed -e "s/x/terraform apply/e" file\n}\n',
+    'f() {\n  sed -i "s/old/new/" ../../../.github/workflows/apply-deploy-pipeline-fix.yml\n}\n',
+    # shape E — a write that invokes no command at all
+    'f() {\n  echo pwned > /etc/default/soleur-doppler-token\n}\n',
 ]
 missed = [i for i, c in enumerate(CONTROLS, 1) if not sweep(c)]
 if missed:
     print('CONTROL-FAILED (the detector missed control(s) %s, so its verdict on the real file '
           'would be a statement about the regex rather than about the file)'
           % ','.join(str(m) for m in missed))
+    sys.exit(0)
+# The controls must also cross more than one shape, or the battery degenerates back to the
+# twelve-rows-one-axis state that made D3 invisible. Counted structurally rather than trusted.
+if len(CONTROLS) < 20:
+    print('CONTROL-FAILED (only %d controls; the shape-crossing rows were removed)' % len(CONTROLS))
     sys.exit(0)
 
 hits = sweep(open(sys.argv[1], encoding='utf-8').read())
@@ -2188,11 +2260,36 @@ GATE_MIN_ASSERTIONS=132
 #      assigned a bare integer. Reading this file is legitimate here — the suite already reads
 #      the workflow and the library it grades, and this is the one assertion whose subject is
 #      its own text.
+#  (c) BOTH PRODUCERS IN (a) WERE THE SAME FUNCTION. The counter and the PASS log were written
+#      by the same one-line `pass()`, so the "two producers that must agree" were one, and
+#      `printf 'PASS\nPASS\n' … pass=$((pass + 2))` moved them together: 264 passed, 0 failed,
+#      OK, rc=0, with 66 real assertions deletable. The third producer below is this suite's own
+#      captured STDOUT, written by the redirection at the top of the file rather than by
+#      `pass()`, so no edit to `pass()` can inflate it silently.
+close_stdout_capture
 emitted_passes=$(grep -c '^PASS$' "$PASSLOG" 2>/dev/null || echo 0)
+stdout_passes=$(grep -c '^  PASS: ' "$STDOUT_LOG" 2>/dev/null || echo 0)
 if [[ "$emitted_passes" -ne "$pass" ]]; then
   echo "  FAIL: assertion-count reconciliation: the counter says $pass but $emitted_passes PASS lines were emitted. The two producers disagree, so the tally is not a count of assertions and the floor below is meaningless." >&2
   echo "---"
   echo "infra-config-gate.test.sh: $pass passed, $fail failed (TALLY DESYNCHRONISED)"
+  exit 1
+fi
+if [[ "$stdout_passes" -ne "$pass" ]]; then
+  echo "  FAIL: assertion-count reconciliation (stdout): the counter says $pass but $stdout_passes '  PASS: ' lines were actually PRINTED. The counter is not measuring emitted assertions — this is the D2 shape, where inflating the tally hides deleted arms behind a satisfied floor." >&2
+  echo "---"
+  echo "infra-config-gate.test.sh: $pass passed, $fail failed (STDOUT DESYNCHRONISED)"
+  exit 1
+fi
+# The one mutation that CAN keep all three in sync is printing each assertion twice. It is not
+# free: it doubles the output a human reads, and identical adjacent messages are what that looks
+# like. Adjacent rather than global — two arms may legitimately share wording, but an assertion
+# never legitimately reports the same sentence twice in a row.
+dup_adjacent=$(grep '^  PASS: ' "$STDOUT_LOG" | uniq -d | head -3)
+if [[ -n "$dup_adjacent" ]]; then
+  echo "  FAIL: assertion-count integrity: consecutive identical PASS lines were emitted, so the tally is inflated by repetition rather than by assertions: ${dup_adjacent}" >&2
+  echo "---"
+  echo "infra-config-gate.test.sh: $pass passed, $fail failed (DUPLICATE ASSERTIONS)"
   exit 1
 fi
 if ! grep -qE '^GATE_MIN_ASSERTIONS=[0-9]+$' "${BASH_SOURCE[0]}"; then
