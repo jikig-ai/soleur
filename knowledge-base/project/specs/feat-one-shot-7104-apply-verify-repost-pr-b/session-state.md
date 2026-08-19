@@ -316,3 +316,63 @@ explicitly on the first firing of this PR's recovery, with the forensics to read
 NAME-the-mechanism gate before any code, and the advisory-with-timeout constraint stated as
 binding with the 6 s + 3 s = 9 s measurement behind it. It records that the >=3-in-30-days
 trigger must NOT be built.
+
+## Addendum — 2026-08-19 (the P0 fix pass, against the 2026-08-16 panel)
+
+Appended, not folded in: the readings below correct figures the sections above record.
+
+### Both P0s are closed, and both were invisible to a green suite for the same reason
+
+- **P0-A** — pass 2 had lost the absolute `APPLY_START_EPOCH` pin, so its only surviving
+  assertion was relative and any unrelated frame advance certified the recovery. Fixed with the
+  cross-clock skew allowance (`INFRA_CONFIG_CLOCK_SKEW_S`, now single-sourced — there are three
+  such comparisons), a DISTINCT `::error::`, and a bound against the re-push's own start stamp
+  (`repush_start_epoch`, new output on `repush_apply`). Six fixtures, both directions.
+- **P0-B** — the post-re-push liveness probe had no `id:`, so a re-push that bricked the sole
+  no-SSH channel reported *"The infra-config gate never ran (outcome=success)"*. Fixed with the
+  `id:`, a new first alert arm routing to `unreachable` with the `-replace` lever, a narrowed
+  gate-never-ran predicate (`-z || == 'skipped'`), an explicit arm for the residue that narrowing
+  leaves, and a branched backstop.
+
+**Why neither was reachable from the suites.** The alert suite's step driver took two positional
+outcomes and nothing else, so every arm keyed on `REPUSH_APPLY_OUTCOME` / `PASS2_VERDICT` /
+`WEBHOOK_LIVENESS_OUTCOME` ran with all of them EMPTY — one point in a space the step branches on
+five ways, and the point at which both re-push arms are unreachable. And `STUB_HTTP_CODE` was 200
+at every drive site in the verify suite, so the 404/000/502/503 branches could not be entered
+(F9). The suites were not lax; they were structurally unable to construct the failing states.
+
+### The three defeated fixes, and their shared root cause
+
+D1/D2/D3 all traced to **three hand-rolled shell parsers with three different noise-stripping
+policies**. They are now one module, `apps/web-platform/infra/infra-config-shellscan.py`. D3's
+eight measured evasions are all caught; D1's executed composite now reads depth 1 rather than 0;
+D2's tally gained a producer `pass()` cannot reach (the suite's own captured stdout).
+
+### Measurements taken this pass
+
+- **`G1_EXPECTED_REFERENCES` 12 → 19**, and the extractor is now scoped to a DERIVED gate chain.
+  It was counting every step-output reference in the 1985-line shared workflow, 2 of which were
+  `steps.check_4804.outputs.open`. A first attempt at the closure included a backward half
+  ("pull in what a chain step reads") which dragged that same reference back on the moment the
+  #4804 step gained a verdict gate — the F8 problem returning, caught by re-measuring.
+- **Assertion floors, all flush:** gate 132, verify 29 → 38, alert 45 → 66.
+- **Battery rows 22 → 40**, 40/40 as expected. The alert suite is now a graded suite in it.
+- **`tfplan.txt` was neither reclaimed nor gitignored** — the `.gitignore` entry `tfplan` matches
+  a file named exactly `tfplan`. The binary `tfplan` was never reclaimed at all.
+- **ADR-072 contains ZERO occurrences of *actuate* or *verification surface*.** ADR-189's
+  citation of it was phantom; the principle is real, is now stated as originating here, and is
+  registered as **AP-023**.
+
+### A survivor that was a FIXTURE failure, not a guard failure
+
+The first `D3-BYPASS` row added the panel's balanced phantom lines without moving the content
+assert into the poll loop. It landed, and it was correctly NOT detected — balanced phantoms
+around a genuinely terminal assert perturb nothing. Recorded in the row's own comment because the
+survivor looked like a guard gap and was not.
+
+### A session error worth carrying
+
+The first P0-A mutation battery used `git checkout --` to restore between rows. The fix under
+test was UNCOMMITTED, so row 1 reverted it and every row after that scored the defect against
+itself. Caught by the battery's own restore check. Restore from a PRISTINE COPY, never from git —
+and commit each verified unit before mutating it.

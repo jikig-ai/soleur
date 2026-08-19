@@ -131,8 +131,36 @@ of the first apply. A number that licenses a guard has to describe the command b
   as an `echo` without `exit 1`, or loosened later by an editor "making it work", would otherwise
   let the apply run. Keying on the measured literal means loosening the assert also requires editing
   the `if:` — two producers must agree.
-- **R17.4's residual is closed** rather than carried: "assert the webhook is alive after every apply"
-  covered apply #1 only, and now covers the re-push too. Impossible under the inline shape.
+- **R17.4's residual is NARROWED, not closed.** "Assert the webhook is alive after every apply"
+  covered apply #1 only, and now covers the re-push too — which was impossible under the inline
+  shape.
+
+  > **Corrected 2026-08-19 (#7104 PR-B review, S4).** This read "is closed rather than carried".
+  > It is not closed: the probe is gated on `steps.repush_apply.outcome == 'success'`, so an apply
+  > that FAILS partway — having already re-delivered some of the FILE_MAP — leaves the listener
+  > unprobed. The residual after this change is "every SUCCESSFUL apply", not "every apply". The
+  > gap is deliberate (a failed apply has its own terminal arm and its own lever) but it is a
+  > narrower claim than the one this bullet made.
+
+  What the probe now buys, and it is the load-bearing part, is that its FAILURE is readable: it
+  carries an `id:` and routes to the `unreachable` mode with the `-replace` lever. Before the
+  PR-B review it had no `id:`, so a re-push that bricked the sole no-SSH channel was reported to
+  the operator as "the infra-config gate never ran (outcome=success)".
+- **The re-push apply drops the `doppler run` wrapper, and that is an unvalidated behaviour
+  change.**
+
+  > **Recorded 2026-08-19 (#7104 PR-B review, S7).** Apply #1 runs under a `doppler run` wrapper;
+  > `repush_apply` does not, because `terraform apply <planfile>` rejects `-var` and takes every
+  > value from the graded plan file — which is precisely the property the split buys. But run
+  > **31714143720**, cited elsewhere in this ADR as evidence, executed the **wrapped** form. So
+  > the unwrapped shape is reasoned-about rather than measured, and this ADR should not have
+  > presented it as validated by that run.
+  >
+  > Why it is nonetheless expected to hold: a saved plan carries its variable values, so the
+  > provider needs no `TF_VAR_*` at apply time. Why that is not proof: the provider still needs
+  > its own credentials, which reach the step through `env:` rather than through the wrapper.
+  > The first firing of this recovery is what will settle it, and #7576 lists it as one of the
+  > forensics to read.
 - **A recovered run is now visible by push, not only by pull.** As otherwise designed it was a green
   job, an unchanged summary, a Sentry event matching no alert rule, and a ledger built not to
   notify. A `**Self-healed:**` line in `Post-apply summary` is the only channel that changes that.
@@ -175,15 +203,52 @@ of the first apply. A number that licenses a guard has to describe the command b
   `webhook-self-restart` fires at `+3 s`, and the observed restart settle is `6 s`, so `6 + 3 = 9 s`
   of exposure remains after any probe succeeds. This is why the Phase 2 readiness probe must be
   advisory-with-timeout and can never be a proof.
-- **The ADR-072 distinction, as ADR-186 states it.** ADR-072 bans a verification surface from
-  actuating. This ADR does not overturn that: the verification surface here still does not actuate.
-  Sensing, adjudication and actuation are three separate steps, and the production write lives in
-  the actuation step, which is not a verification surface. ADR-186 records the same split for PR-A.
+- **A verification surface does not actuate — ESTABLISHED HERE, not inherited.**
+
+  > **Corrected 2026-08-19 (#7104 PR-B review, S1).** This bullet previously read *"ADR-072 bans a
+  > verification surface from actuating"* and attributed the principle to ADR-186's reading of it.
+  > **ADR-072 contains no such principle.** Verified: zero occurrences of *actuate* or
+  > *verification surface* in that document; its Option-2 rejection turns on a flock collision, and
+  > ADR-186 frames the matter as *signal availability*. No `AP-NNN` covered it either. The
+  > invariant genuinely exists and is well enforced in this PR — the false part was the citation,
+  > which is worse than no citation: it presents a claim as settled precedent that a reader
+  > following the reference cannot find, and the next document to cite it inherits the phantom.
+
+  The principle is therefore stated as ORIGINATING here and registered as **AP-023**. Sensing,
+  adjudication and actuation are three separate steps; the production write lives in the actuation
+  step, which is not a verification surface. It is enforced by the T5 actuation sweep over
+  `infra-config-verify.sh` and by Guard 2 (8) over the sourced library — both allow-lists since
+  the #7104 PR-B review, because the deny-list they replaced was measured evadable 8 ways out of 9.
+- **What the split separates, and what it does NOT.**
+
+  > **Corrected 2026-08-19 (#7104 PR-B review, S2).** The earlier formulation implied the split
+  > separates everything that matters. It separates the WRITE, the BLAST RADIUS, the CREDENTIALS
+  > and the VERDICT. It does **not** separate the AUTHORIZATION: `repush_needed=true`, emitted by
+  > the verification surface, is the sole authoriser of the production write.
+
+  The honest formulation: *the verification surface authorizes but does not perform the write, and
+  what it authorizes is independently shape-graded and independently credentialed.* That is a
+  weaker and true claim, and it is the one the guards actually enforce — Guard 3 grades the plan's
+  cardinality AND its address set at a step the gate does not control, and `repush_apply` carries
+  no `env:` at all.
 - **Sunset condition, verbatim from the ruling.** *"Ship the bounded recovery (this PR) first;
   implement the root-cause readiness probe as Phase 2, blocked on the first firing's forensics."*
   When Phase 2 lands and the root cause is named and fixed at source, this recovery becomes dead
   code and should be removed rather than left as a second mechanism nobody reasons about.
   Phase 2 is filed as **#7576**, blocked explicitly on the first firing of this recovery.
+
+  > **Qualified 2026-08-19 (#7104 PR-B review, S6).** As written this sunset is a WISH: it carries
+  > no `SOLEUR-DEBT:` marker, no follow-through script, and no ledger row, so nothing will ever
+  > raise it. And it is gated on an event measured at **n=1 in ~13 months** — which is the same
+  > unfireability argument this ADR uses three bullets earlier to REJECT the >=3-in-30-days
+  > escalation trigger. Applying that argument in one direction and not the other is the
+  > inconsistency, not the sunset itself.
+  >
+  > Rather than manufacture a trigger that cannot fire, the honest position is recorded: **this
+  > recovery may well outlive its sunset condition, and that is accepted.** The cost of leaving it
+  > is one bounded, graded, single-attempt write behind four guards; the cost of a trigger nobody
+  > can fire is a document that reads as governed and is not. #7576 carries the removal as an
+  > explicit deliverable so the sunset lives on a tracked issue rather than in this paragraph.
 - **C4: no edit.** No new external actor, external system, container or access relationship.
 
 ## Alternatives rejected

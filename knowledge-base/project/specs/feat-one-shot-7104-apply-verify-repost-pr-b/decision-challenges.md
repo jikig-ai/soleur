@@ -147,3 +147,35 @@ Not challenges to the operator; recorded so they are not re-introduced by a late
 This is PR-B's copy of the record, placed on the PR-B branch so `ship` resolves it from
 `specs/<branch>/`. **All three items above are DISCHARGED** — render them as *resolved* in the PR
 body and file **no** `action-required` issue. Per UC2, **this** PR carries `Closes #7104`.
+
+---
+
+## Addendum — 2026-08-19 (the P0 fix pass): one decision taken against a review finding
+
+Appended, not folded in. The 2026-08-16 panel raised a finding this pass **declined to implement
+as written**, and the reasoning is recorded here rather than buried in a commit body.
+
+**The finding.** *"No `action-required` label → invisible to `operator-digest`, which queries by
+it."* — raised against the `recovered` reach mode, the surface that files a P2 note when the gate
+self-heals with a bounded production re-push.
+
+**What was implemented instead.** The label moved out of the `ci/` namespace (that half of the
+finding is implemented in full — `ci/infra-config-recovered` → `infra-config-recovery-notice`;
+plan `:405` names the old string as the one not to use, and the plan reserves `ci/*` for red
+alarms). The `action-required` label was **not** added.
+
+**Why.** Plan R14.2 states the label must be *"**Not** under `ci/` and never `action-required`"*,
+and the rationale generalises: `action-required` is the operator's P1 ask-channel, the issue body
+says in its first line that no action is needed, and `operator-digest` explicitly de-pollutes that
+list because a flat dump *"makes a 131-day chore look identical to a P0"* (#6836). Labelling a
+self-heal as an ask spends the channel's credibility on a success.
+
+**The finding's underlying concern was real and is addressed differently.** Without
+`action-required` the notice was invisible to the weekly digest — the founder's only
+comprehension surface. `operator-digest` already has a separate informational block for
+`decision-challenge` ("informational, not blocking"); `infra-config-recovery-notice` is now listed
+there too. The founder sees it; the P1 channel stays clean.
+
+**If this was the wrong call**, the fix is one word in
+`plugins/soleur/skills/operator-digest/SKILL.md` — move the label from the informational block to
+the action query. No code depends on the choice.
