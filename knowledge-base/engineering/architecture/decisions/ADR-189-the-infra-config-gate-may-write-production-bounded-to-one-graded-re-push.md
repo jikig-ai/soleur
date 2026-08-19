@@ -214,7 +214,7 @@ of the first apply. A number that licenses a guard has to describe the command b
   > which is worse than no citation: it presents a claim as settled precedent that a reader
   > following the reference cannot find, and the next document to cite it inherits the phantom.
 
-  The principle is therefore stated as ORIGINATING here and registered as **AP-023**. Sensing,
+  The principle is therefore stated as ORIGINATING here and registered as **AP-024**. Sensing,
   adjudication and actuation are three separate steps; the production write lives in the actuation
   step, which is not a verification surface. It is enforced by the T5 actuation sweep over
   `infra-config-verify.sh` and by Guard 2 (8) over the sourced library — both allow-lists since
