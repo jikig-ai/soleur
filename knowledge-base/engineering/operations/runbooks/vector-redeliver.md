@@ -20,6 +20,16 @@ Fire it when:
 - A PR touching `apps/web-platform/infra/vector.toml` or `apps/web-platform/infra/journald-soleur.conf` has merged with `[skip-web-platform-apply]`, or the push apply halted on its destroy-guard, and the new Source-4 tag / sink / transform is not yet live on web-1.
 - The `vector_config_identity` sha in the deploy-status webhook (see [After it succeeds](#after-it-succeeds)) still reports the pre-merge file.
 
+**`[skip-web-platform-apply]` only counts in a COMMIT MESSAGE, never in the PR description.**
+This repo's squash merge builds the merge-commit message from the branch's *commit* messages, so a
+token that lives only in the PR body is absent from the commit the push apply's destroy-guard reads.
+The result is silent and inverts the intent: the merge proceeds as if nothing was skipped, and the
+unattended push apply carries the delivery this arm was being reserved for. Measured on PR #7617 —
+the token sat in the PR body, the squash message never carried it, and run 32293304282 performed the
+`journald_persistent` replace unattended. Put the token on its own line in a commit message on the
+branch, and confirm it survived with `git log -1 --format=%B origin/main | grep -x '\[skip-web-platform-apply\]'`
+after the merge.
+
 **Do NOT fire on these**, which look similar and have different remedies:
 
 | Symptom | Meaning | What to do instead |
@@ -216,4 +226,17 @@ Verify **off-host**. No SSH (`hr-no-ssh-fallback-in-runbooks`).
 
 - **`hcloud_ssh_key.default` is inside the closure.** It stays a no-op only via its own `lifecycle { ignore_changes = [public_key] }`. The job generates a throwaway keypair to satisfy HCL's `file()` parsing; if that lifecycle block is ever removed, the throwaway key becomes a real diff and the gate refuses every dispatch.
 
+- **This arm reaches web-1 and nothing else — and web-2 is a real host.** The resource's `connection`
+  block pins `host = hcloud_server.web["web-1"].ipv4_address`, and the staged config has its
+  `@@HOST_NAME@@` sentinel resolved with `hcloud_server.web["web-1"].name`, so what this arm installs
+  is a web-1-branded file by construction. web-2 (ADR-143, #6459) receives `vector.toml` on its next
+  boot instead: the file is baked into `local.host_script_files`, and `soleur-host-bootstrap.sh`
+  authors `/usr/local/bin/soleur-vector-install`, which renders the sentinel per-host and installs to
+  `/etc/vector/vector.toml`. A behavioural change to `vector.toml` is therefore live on web-1 within
+  minutes of this dispatch and on web-2 only after that host is next rebuilt. The fresh-boot half of
+  that pair is what `web-host-provisioner-parity.test.sh` exists to keep honest.
+- **The registry host does not run Vector at all.** `zot-registry.tf` and `cloud-init-registry.yml`
+  mention `vector.toml`, but only to keep the Better Stack endpoint and the redaction rules in step
+  with it; the host ships logs through its own `zot-log-shipper`. Nothing about a `vector.toml` change
+  needs delivering there, and a search for a Vector agent on that host finds none by design.
 - **This arm does not reach the inngest host.** `terraform_data.journald_persistent` connects to `hcloud_server.web["web-1"]` only. The inngest host receives `vector.toml` exclusively through the OCI bootstrap image. Verifying `inngest-boot-phone-home` / `inngest-bs-token-restage` belongs to `apply_target=inngest-host-replace` under #7462, not here.
