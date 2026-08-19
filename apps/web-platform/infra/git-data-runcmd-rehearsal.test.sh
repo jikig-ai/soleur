@@ -788,6 +788,20 @@ trap - EXIT disarm|2|^[[:space:]]*trap - EXIT[[:space:]]*$
 doppler stage name|1|^[[:space:]]*STAGE=gitdata_doppler_dl[[:space:]]*$
 emit call|1|/usr/local/bin/git-data-emit[[:space:]]+"
 B2SPEC
+# DERIVED, NOT FROZEN (review). The 2|2|2 minimums above are a snapshot of a two-handler tree,
+# and the comment twenty lines up already prescribes the fix — "Derive minimums from the artifact,
+# not from the count you expect the design to have" — while the table three lines below it refuses
+# to. A third stage handler added with no rc guard and no disarm keeps every `-ge 2` satisfied, so
+# a handler that fires `fatal` on every healthy exit (the T17 defect) ships unwatched. The
+# invariant is not a floor at all: EVERY handler that captures `rc=$?` must also guard it and
+# disarm its trap, so the three counts must be EQUAL. Folded into _b2_missing rather than added as
+# its own assertion, so this costs no floor movement.
+_b2_rc=$(grep -cE -- '^[[:space:]]*rc=\$\?[[:space:]]*$' "$_b2_pre" || true)
+_b2_grd=$(grep -cE -- '^[[:space:]]*\[ "\$rc" -eq 0 \][[:space:]]*&&[[:space:]]*exit 0[[:space:]]*$' "$_b2_pre" || true)
+_b2_dis=$(grep -cE -- '^[[:space:]]*trap - EXIT[[:space:]]*$' "$_b2_pre" || true)
+if [ "$_b2_grd" -ne "$_b2_rc" ] || [ "$_b2_dis" -ne "$_b2_rc" ]; then
+  _b2_missing="${_b2_missing} derived:[handlers=${_b2_rc} rc-guards=${_b2_grd} disarms=${_b2_dis} — every handler capturing rc must guard and disarm]"
+fi
 if [ -z "$_b2_missing" ]; then pass; else
   fail "B2: the driver and the shipped preamble have drifted" "missing —${_b2_missing}"
 fi
@@ -897,9 +911,19 @@ if [ -n "$_t5_stage_ln" ] && [ -n "$_t5_sete_ln" ] && [ "$_t5_sete_ln" -lt "$_t5
 # model and would have failed against the real artifact — and the sibling stage had the same
 # divergence with no assertion at all. Both driver names are now the template's, and B2SPEC pins
 # the literal on BOTH sides so they cannot drift apart again silently.
-if grep -q '"stage":"gitdata_doppler_dl"' "$CAPTURE" 2>/dev/null; then pass; else
-  fail "T5: no gitdata_doppler_dl fatal was emitted" "$(cat "$CAPTURE" 2>/dev/null | head -2)"; fi
-if grep -q '"level":"fatal"' "$CAPTURE" 2>/dev/null; then pass; else fail "T5: emit was not level=fatal"; fi
+# ONE RECORD, NOT A BAG UNION (review). These were two independent greps over the same capture,
+# so an emitter shipping `stage=gitdata_doppler_dl level=info` alongside an unrelated
+# `stage=other level=fatal` satisfied both while no doppler_dl fatal existed. The property is a
+# single-record conjunction and is now asserted as one — which is also why the pair collapses to
+# ONE counted assertion rather than two. S1 already does this correctly with a joined pattern.
+# `awk` rather than `grep … | grep -q`: field ORDER differs between the two emit shapes (Sentry
+# nests stage inside tags AFTER level; the Better Stack body is flat with stage FIRST), so a
+# positional regex would pin one shape, and a `grep -q` on a pipe is the SIGPIPE fail-open this
+# repo forbids — the producer takes 141 and `pipefail` reports failure on a successful match.
+if awk '/"stage":"gitdata_doppler_dl"/ && /"level":"fatal"/ { found = 1 } END { exit !found }' \
+     "$CAPTURE" 2>/dev/null; then pass; else
+  fail "T5: no single record carried both stage=gitdata_doppler_dl and level=fatal" \
+       "$(head -2 "$CAPTURE" 2>/dev/null)"; fi
 # THE CHECKSUM'S OWN VERDICT. `sha256sum -c -` writes `<file>: FAILED` to STDOUT (only the
 # "WARNING: 1 computed checksum did NOT match" summary goes to stderr, which the shipped block
 # redirects into $GIT_DATA_RUNCMD_DETAIL inside the container). run_case captures container
@@ -2229,8 +2253,9 @@ total=$((passes + fails + SKIPPED_ASSERTIONS))
 #                   and the arm passed having reproduced nothing.
 # Measured after that raise, on #7565's own bytes: 48 passed, 0 failed.
 #
-# RAISED 49 -> 50 AT REVIEW (#7291), itemised. Base re-read from origin/main at this edit and
-# still 48, so the composed delta is +2:
+# RAISED 48 -> 49 AT REVIEW (#7291), itemised. Base re-read from origin/main at this edit and
+# still 48. The review pass moved this literal in BOTH directions before settling, which is the
+# argument for re-deriving the whole delta rather than nudging the number per change:
 #   T5 errexit ordering  1  the shipped `set -e` and the doppler block are separate cloud-init
 #                           runcmd entries and nothing asserted their ORDER. Moving the arming
 #                           below the doppler entry left every existing guard green — B2 sees
@@ -2238,6 +2263,10 @@ total=$((passes + fails + SKIPPED_ASSERTIONS))
 #                           arms errexit itself, and S1's inequality is satisfied a fortiori —
 #                           while production ran tar+chmod as root on an unverified tarball. The
 #                           assertion mirrors the one S1 has always carried for its own stage.
+#   T5 stage/level      -1  the stage and level assertions were two independent greps over one
+#                           capture — a bag union satisfiable by two unrelated records — and are
+#                           now ONE single-record conjunction. Strictly stronger coverage from
+#                           strictly fewer assertions, so the floor comes back down by one.
 # The D1 dash counterweight was removed in the same pass and moves this by ZERO: it contributed
 # two either way (two fabricated passes when dash was absent, two real assertions when present),
 # and dash is now a top-level `_skip` dependency so only the real pair can run.
@@ -2315,7 +2344,7 @@ total=$((passes + fails + SKIPPED_ASSERTIONS))
 #
 # RAISED 19 -> 33 WITH THE ARMS THAT MADE IT NECESSARY (#7204), itemised so the next author
 # can check the sum rather than trust it:
-#   R1        7  extraction, mutation-landed, (a) unclassified, (b) module-dep,
+#   R1        8  extraction, mutation-landed, (a) unclassified, (b) module-dep,
 #                (c) non-vacuity, in-test mutation control, committed pre-fix control
 #   R1-EXPIRY 1  fixture provenance, deliberately OUTSIDE R1's pass/fail path
 #   R3        2  detail-file seed present, seed PRECEDES first append (ordering, not co-presence)
@@ -2323,7 +2352,14 @@ total=$((passes + fails + SKIPPED_ASSERTIONS))
 #   R3(3b)    1  the stage passes a readability-guarded VARIABLE, never a bare path literal
 #   R4        2  mount error survives the double-truncation, + ordering-reversal mutation
 #              = 14 new, 19 pre-existing, 33 total.
-# R1 emits exactly 7 on all three of ITS paths (healthy, extraction-failed,
+# R1 emits 8 on its healthy path and 7 on each degraded one — NOT path-invariant, corrected at
+# review. The 33 -> 36 raise added R1's unclassified control without adding a seventh `fail`
+# to either else-block, and the claim here was never re-derived. Consequence is not a false
+# green (those paths are red anyway) but a misattributed one: on an R1 degradation the total
+# lands one short and the run exits with the floor's generic "harness did not execute fully"
+# instead of R1's own cause — the misattribution class this file documents elsewhere. The
+# fix is one more `fail` in each else-block and belongs with the R3 arm work, not here.
+# S1 IS invariant and R3 IS invariant, on all three of THEIR paths (healthy, extraction-failed,
 # precondition-missing) for the same reason S1 does. The floor must move with the suite or it
 # only ever guards the work that predates it.
 #
@@ -2340,13 +2376,17 @@ total=$((passes + fails + SKIPPED_ASSERTIONS))
 #      updated in lockstep, to buy the narrow case in (1).
 # Note for anyone re-raising it: "I cannot validate -ne across environment variance" is NOT a
 # reason — the header above asserts `passes + fails + SKIPPED_ASSERTIONS` IS environment-
-# invariant, and the dash branch's `pass; pass` counterweight exists to keep it so.
+# invariant. (The dash branch's `pass; pass` counterweight used to be cited here as what kept
+# it so; this PR removed that counterweight and made dash a top-level `_skip` dependency, so
+# the invariant now holds because the arm either runs its two real assertions or the suite
+# does not start. Leaving the old sentence would have described machinery this same commit
+# deleted.)
 # RAISED 44 -> 46 (#7501, then +1 for the AC15 trap-count arm added at review): the R4/R3 run-level
 # fixture-liveness gate emits on the healthy path. Counting it is the whole point of the instrument
 # — a gate that contributes nothing when it succeeds is one that an inversion-to-always-pass leaves
 # undetectable, because the old floor of 44 would still be met.
-if [ "$total" -lt 50 ]; then
-  echo "FAIL: ran only ${total} assertions (<50) — harness did not execute fully" >&2
+if [ "$total" -lt 49 ]; then
+  echo "FAIL: ran only ${total} assertions (<49) — harness did not execute fully" >&2
   exit 1
 fi
 echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed, Skipped: ${SKIPPED_ASSERTIONS} (${total} assertions)"
