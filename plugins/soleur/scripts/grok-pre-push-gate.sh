@@ -120,7 +120,10 @@ else
 fi
 
 # --- Phase 2: full test aggregator (CI `test` required check) ---
-run_step "test-all (CI test aggregator)" bash scripts/test-all.sh
+# SOLEUR_ALLOW_FULL_GATE=1: this gate IS the sanctioned full-gate run, so the sibling refusal
+# (#7553) must not fire on it. Same reasoning as lefthook.yml's bun-test pre-commit hook — the
+# refusal targets an opportunistic second battery, never the gate a push is required to pass.
+run_step "test-all (CI test aggregator)" env SOLEUR_ALLOW_FULL_GATE=1 bash scripts/test-all.sh
 
 # --- Phase 3: next build / route validator (CI web-platform-build) ---
 if [[ "$SKIP_BUILD" -eq 0 ]]; then

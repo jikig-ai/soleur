@@ -463,6 +463,12 @@ tc_preamble() {
     "$cores" "$load" "$memavail_mb"
   printf '[contention] siblings: %s other worktree(s) running test-all.sh\n' "$sib_count"
 
+  # Exported so a POLICY at the call site can read it. Deliberately NOT acted on here: this
+  # function is a REPORTER, and burying a refusal in a measurement function is how the next
+  # reader ends up trusting a comment that is no longer true. scripts/test-all.sh decides.
+  TC_SIBLING_RUN_COUNT="$sib_count"
+  export TC_SIBLING_RUN_COUNT
+
   if (( sib_count > 0 )); then
     while IFS=$'\t' read -r p c e; do
       [[ -n "$p" ]] || continue
@@ -479,7 +485,13 @@ tc_preamble() {
     done <<< "$suite_sibs"
   fi
 
-  # Named banners. All are advisory: nothing here changes the run's outcome.
+  # Named banners. Everything THIS FUNCTION does is advisory: nothing below changes the run's
+  # outcome, and tc_preamble still always returns 0.
+  #
+  # But `SIBLING_RUN_DETECTED` is no longer purely advisory END-TO-END (#7553). The count it
+  # reports is exported as TC_SIBLING_RUN_COUNT, and scripts/test-all.sh refuses a full-gate run
+  # on it unless SOLEUR_ALLOW_FULL_GATE=1. The refusal lives there, not here, so the policy sits
+  # next to the SOLEUR_SUBAGENT refusal it joins rather than inside the reporter.
   if [[ "$avail_mb" =~ ^[0-9]+$ ]] && (( avail_mb < TC_MIN_AVAIL_MB )); then
     printf '[contention] BANNER LOW_TMP_HEADROOM: %sMB avail is below the %sMB floor. A failure in this run may be resource contention, not a regression — re-run the failing suite in isolation before diagnosing.\n' \
       "$avail_mb" "$TC_MIN_AVAIL_MB" >&2

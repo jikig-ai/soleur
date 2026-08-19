@@ -48,6 +48,11 @@ build_sandbox() {
   # copy every arm below would measure that guard firing instead of the refusal under test.
   mkdir -p "$(dirname "$out")/lib" || return 1
   cp "$REPO_ROOT/scripts/lib/test-relevance-paths.sh" "$(dirname "$out")/lib/" || return 1
+  # test-contention.sh must be relocated too. Without it test-all.sh finds no lib, installs its
+  # no-op stubs (tc_preamble() { :; }), and TC_SIBLING_RUN_COUNT is never exported — so the
+  # sibling refusal (#7553) could not fire and every arm asserting it would measure the stub
+  # rather than the guard. That is the fail-open this suite exists to prevent, one level up.
+  cp "$REPO_ROOT/scripts/lib/test-contention.sh" "$(dirname "$out")/lib/" || return 1
   python3 - "$out" <<'PY' || exit 2
 import re, sys
 path = sys.argv[1]
@@ -57,8 +62,13 @@ m = re.search(r'^run_suite\(\) \{.*?^\}', s, re.S | re.M)
 assert m, "could not locate run_suite() definition"
 s = s[:m.start()] + 'run_suite() { echo "RECORDED_SUITE:$1" >> "$SANDBOX_RECORD"; }' + s[m.end():]
 
-# Neuter the contention hooks at their CALL sites (the lib itself still sources cleanly).
-for call in ('tc_preamble\n', 'tc_acquire "test-all"\n'):
+# Neuter tc_acquire only. tc_preamble USED to be neutered here too, and that made the sibling
+# refusal (#7553) structurally untestable: tc_preamble is what resolves the sibling count and
+# exports TC_SIBLING_RUN_COUNT, so stubbing it meant the refusal could never fire and any arm
+# asserting it fires would have been measuring the stub. Determinism is preserved a better way --
+# run_arm pins TC_PROC_ROOT at a SYNTHETIC procfs for every arm, so tc_preamble reads a fixture
+# rather than the machine, and a sibling worktree running its own battery cannot flip these arms.
+for call in ('tc_acquire "test-all"\n',):
     assert s.count(call) == 1, f"expected exactly one {call!r}, found {s.count(call)}"
     s = s.replace(call, ':\n')
 
@@ -68,6 +78,31 @@ PY
 
 SANDBOX="$TMP/test-all-sandbox.sh"
 build_sandbox "$SANDBOX" || { echo "FATAL: sandbox build failed" >&2; exit 2; }
+
+CLK_TCK_F=$(getconf CLK_TCK 2>/dev/null || echo 100)
+make_fake_proc_f() { # <root> <pid> <cwd> <elapsed_s> <cmd>
+  local root="$1" pid="$2" cwd="$3" elapsed_s="$4" cmd="$5" uptime=100000 i filler
+  local starttime=$(( (uptime - elapsed_s) * CLK_TCK_F ))
+  mkdir -p "$root/$pid"
+  printf '%s 0.00\n' "$uptime" > "$root/uptime"
+  printf '%s\0%s\0' "bash" "$cmd" > "$root/$pid/cmdline"
+  filler="S 0 0"
+  for (( i = 4; i <= 19; i++ )); do filler+=" 0"; done
+  printf '%s (te) st) %s %s 0 0\n' "$pid" "$filler" "$starttime" > "$root/$pid/stat"
+  [[ -n "$cwd" ]] && ln -sfn "$cwd" "$root/$pid/cwd"
+  printf 'MemAvailable:    7000000 kB\n' > "$root/meminfo"
+  printf '3.96 9.72 14.60 2/2934 572235\n' > "$root/loadavg"
+}
+
+SIB_WT_F="$TMP/worktrees/feat-a-sibling-worktree"; mkdir -p "$SIB_WT_F"
+SIB_PROC_F="$TMP/proc-with-sibling"
+make_fake_proc_f "$SIB_PROC_F" 424242 "$SIB_WT_F" 620 "scripts/test-all.sh"
+
+# An EMPTY procfs: uptime/meminfo/loadavg present, no processes. The negative control.
+SOLO_PROC_F="$TMP/proc-solo"; mkdir -p "$SOLO_PROC_F"
+printf '100000 0.00\n' > "$SOLO_PROC_F/uptime"
+printf 'MemAvailable:    7000000 kB\n' > "$SOLO_PROC_F/meminfo"
+printf '3.96 9.72 14.60 2/2934 572235\n' > "$SOLO_PROC_F/loadavg"
 
 # Run the sandbox under a given environment. $1 = arm label; remaining args are VAR=VALUE pairs.
 # Sets ARM_OUT / ARM_RC / ARM_SUITES.
@@ -84,6 +119,7 @@ run_arm() {
   # the operator's real timing log -- the artifact a gate run's measurement is read from.
   ARM_OUT=$(cd "$REPO_ROOT" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
             TEST_TIMING_LOG="$TMP/arm-timing-$label.tsv" \
+            TC_PROC_ROOT="$SOLO_PROC_F" \
             "$@" timeout 120 bash "$SANDBOX" 2>&1)
   ARM_RC=$?
   ARM_SUITES=$(wc -l < "$SANDBOX_RECORD" | tr -d '[:space:]')
@@ -175,12 +211,113 @@ for skill in "$WORK_SKILL" "$REVIEW_SKILL"; do
   else
     fail "$rel is missing the fan-out scope clause"
   fi
-  if grep -qF 'SOLEUR_SUBAGENT=1' "$skill"; then
-    pass "$rel tells the lead to export SOLEUR_SUBAGENT=1"
+  # This asserted `$rel tells the lead to export SOLEUR_SUBAGENT=1` while matching prose that
+  # said the HARNESS sets it — describing an instruction the matched text did not contain, and
+  # standing behind a claim it did not test (#7553). What is actually true, and all this grep can
+  # establish, is that the file NAMES the variable. Assert that, and separately assert the file
+  # does not re-assert the falsehood.
+  if grep -qF 'SOLEUR_SUBAGENT' "$skill"; then
+    pass "$rel names SOLEUR_SUBAGENT (the convention a lead may export)"
   else
-    fail "$rel does not name the variable the mechanical guard reads"
+    fail "$rel does not name SOLEUR_SUBAGENT at all"
+  fi
+  # The regression guard for the correction itself. Nothing in this repo sets SOLEUR_SUBAGENT on
+  # a spawn path, so a file claiming the harness does is false — and it is a claim a future edit
+  # can plausibly reintroduce, because it reads like a description of a mechanism that exists.
+  if grep -qF 'are spawned with' "$skill"; then
+    fail "$rel re-asserts that the harness SETS SOLEUR_SUBAGENT — measured false; no spawn path sets it"
+  else
+    pass "$rel does not claim the harness sets SOLEUR_SUBAGENT"
   fi
 done
+
+# --- Arms 4-7: the SIBLING refusal (#7553) --------------------------------------------------
+#
+# Arms 1-3 above cover the DECLARED antecedent (SOLEUR_SUBAGENT). Nothing in this repo sets that
+# variable, so its refusal only fires when someone exports it deliberately. These arms cover the
+# MEASURED antecedent: test-all.sh refuses when tc_preamble has already resolved that another
+# worktree is running the full gate. That condition needs no spawn-path cooperation, which is why
+# it is the one CI can actually exercise -- these arms need no spawned agent at all.
+#
+# The sibling is SYNTHESIZED via a fake procfs (cq-test-fixtures-synthesized-only), the same
+# fixture shape scripts/test-contention.test.sh uses. TC_SELF_PID is left at its default so it
+# names no entry in the fake tree, which disables self-exclusion -- exactly the synthetic-self
+# path the library documents.
+
+# --- Arm 4: a measured sibling refuses, before any work -------------------------------------
+run_arm sibling-refuse TC_PROC_ROOT="$SIB_PROC_F"
+if [[ "$ARM_RC" -eq 4 ]]; then
+  pass "a measured sibling full-gate run makes a full-gate invocation exit 4"
+else
+  fail "sibling present did not refuse with rc=4 — got rc=$ARM_RC"
+fi
+if [[ "$ARM_SUITES" -eq 0 ]]; then
+  pass "the sibling refusal happens before any suite runs (0 suites recorded)"
+else
+  fail "refused only AFTER running $ARM_SUITES suites — the contention was already paid"
+fi
+# The refusal must fire BEFORE tc_acquire. Refusing after it would make a run that should never
+# have started wait up to TC_LOCK_TIMEOUT (900 s) to be told so, and take the advisory lock a
+# legitimate sibling is queued on.
+#
+# Asserted STRUCTURALLY, on source order in the real file — NOT by grepping the arm's output for a
+# lock line. That was the first form and it was VACUOUS: build_sandbox neuters `tc_acquire` to `:`,
+# so no lock line can ever appear in any arm's output and the assertion could not fail. Measured —
+# relocating the refusal to AFTER tc_acquire left this suite at 24 passed, 0 failed. A guard that
+# cannot be driven red is exactly what this PR exists to remove, so it is not shipped in one.
+REFUSAL_LN=$(grep -n 'TC_SIBLING_RUN_COUNT:-0' "$TARGET" | head -1 | cut -d: -f1)
+ACQUIRE_LN=$(grep -n '^tc_acquire "test-all"' "$TARGET" | head -1 | cut -d: -f1)
+if [[ -z "$REFUSAL_LN" || -z "$ACQUIRE_LN" ]]; then
+  fail "could not locate the sibling refusal and/or tc_acquire in $TARGET (refusal=${REFUSAL_LN:-none} acquire=${ACQUIRE_LN:-none})"
+elif [[ "$REFUSAL_LN" -lt "$ACQUIRE_LN" ]]; then
+  pass "the sibling refusal precedes tc_acquire in test-all.sh (line $REFUSAL_LN < $ACQUIRE_LN)"
+else
+  fail "the sibling refusal sits at line $REFUSAL_LN, AFTER tc_acquire at $ACQUIRE_LN — a refused run would queue up to TC_LOCK_TIMEOUT and take the lock a legitimate sibling is waiting on"
+fi
+if grep -qF 'sibling' <<<"$ARM_OUT"; then
+  pass "the sibling refusal names its cause"
+else
+  fail "the sibling refusal does not say a sibling caused it, so a false positive is a mystery"
+fi
+
+# --- Arm 5: the sanctioned override is not collateral ---------------------------------------
+# lefthook's pre-commit hook and the Grok pre-push gate both invoke the full gate deliberately and
+# both carry this hatch. If it stopped working, a spawned agent could not commit a .ts file while
+# any sibling ran -- the blast radius that disqualified the harness-identity design (#7553).
+run_arm sibling-hatch TC_PROC_ROOT="$SIB_PROC_F" SOLEUR_ALLOW_FULL_GATE=1
+if [[ "$ARM_RC" -ne 4 ]]; then
+  pass "SOLEUR_ALLOW_FULL_GATE=1 overrides the sibling refusal (rc=$ARM_RC)"
+else
+  fail "the hatch did not override the sibling refusal — the sanctioned gate run is collateral"
+fi
+if [[ "$ARM_SUITES" -gt 0 ]]; then
+  pass "the hatched run reaches suite registration ($ARM_SUITES suites)"
+else
+  fail "the hatched run recorded 0 suites — it was blocked by something"
+fi
+
+# --- Arm 6: the SOLO path is untouched (the highest-cost false positive) ---------------------
+run_arm sibling-solo TC_PROC_ROOT="$SOLO_PROC_F"
+if [[ "$ARM_RC" -ne 4 ]]; then
+  pass "no sibling and no hatch does NOT refuse — the ordinary local run is unaffected"
+else
+  fail "refused with NO sibling present — this would break every solo run of the gate"
+fi
+if [[ "$ARM_SUITES" -gt 0 ]]; then
+  pass "the solo run reaches suite registration ($ARM_SUITES suites)"
+else
+  fail "the solo run recorded 0 suites"
+fi
+
+# --- Arm 7: the two refusals are ADDITIVE, not a swap ----------------------------------------
+# Arm 1 proves SOLEUR_SUBAGENT still refuses on its own. This proves the declared antecedent still
+# refuses even with NO sibling measured, i.e. adding the measured arm did not replace it.
+run_arm declared-still-refuses TC_PROC_ROOT="$SOLO_PROC_F" SOLEUR_SUBAGENT=1
+if [[ "$ARM_RC" -eq 4 ]]; then
+  pass "SOLEUR_SUBAGENT=1 still refuses with no sibling present — the change is additive"
+else
+  fail "SOLEUR_SUBAGENT=1 stopped refusing once the sibling arm landed — got rc=$ARM_RC"
+fi
 
 # --- Anti-vacuity floor -----------------------------------------------------------------------
 # Every assertion above is reachable only if the sandbox built and the arms ran. Strand the file

@@ -12,7 +12,11 @@ set -euo pipefail
 #      relevance-predicate data file is missing. Both are "this runner cannot run", not a
 #      verdict about any suite; ADR-181 declined a separate code because every consumer is
 #      binary and a second usage-shaped code buys nothing.
-#   4  REFUSED before anything ran — SOLEUR_SUBAGENT=1 without SOLEUR_ALLOW_FULL_GATE=1
+#   4  REFUSED before anything ran. TWO producers, both overridden by SOLEUR_ALLOW_FULL_GATE=1:
+#        (a) SOLEUR_SUBAGENT=1 is set — a DECLARED spawned agent;
+#        (b) a sibling full-gate run is already in flight — a MEASURED condition (#7553).
+#        (b) is the reachable one: nothing in this repo sets SOLEUR_SUBAGENT, so (a)'s
+#        antecedent only holds when someone exports it deliberately.
 #      (ADR-181). Distinct from 3 on purpose: 3 says a suite was terminated and its coverage
 #      is unresolved; 4 says nothing ran, by design, and nothing is unresolved. Sharing 3
 #      would make a refused run read as a killed suite.
@@ -680,6 +684,45 @@ fi
 # as a regression (AC1/AC2).
 tc_preamble
 _TC_RUN_START_ENTRIES=$(tc_tmp_entry_count)
+
+# --- Sibling full-gate refusal (#7553) -------------------------------------------------------
+#
+# The SOLEUR_SUBAGENT refusal above binds to a condition an agent must DECLARE. Nothing in this
+# repository sets that variable — measured across every occurrence: ADR prose, learnings, archived
+# plans, two skill sentences, and tests that set it for their own arm. So its antecedent has never
+# held in normal operation and the refusal has never fired for the case it was written for.
+#
+# This one binds to a condition the runner MEASURES. tc_preamble has already resolved how many
+# OTHER worktrees are running test-all.sh (via /proc, excluding this run's own ancestors and
+# process group), so no spawn-path cooperation is needed and there is no fail-open mode when some
+# upstream harness changes an undocumented variable. It is also the arm CI can actually run: start
+# a real sibling, assert the second invocation is refused.
+#
+# It fires HERE, AFTER tc_preamble (which computes the count) and BEFORE tc_acquire, deliberately.
+# Refusing after tc_acquire would make a run that should never have started wait up to
+# TC_LOCK_TIMEOUT (900 s) to be told so, and take the advisory lock a legitimate sibling is queued
+# on. A refused run must cost nothing.
+#
+# ADDITIVE, not a replacement: the SOLEUR_SUBAGENT arm above is untouched and still exits 4.
+if [[ "${TC_SIBLING_RUN_COUNT:-0}" -gt 0 && "${SOLEUR_ALLOW_FULL_GATE:-}" != "1" ]]; then
+  echo "ERROR: refusing a full-gate run — ${TC_SIBLING_RUN_COUNT} sibling full-gate run(s) already in flight (TEST_GROUP=$TEST_GROUP)." >&2
+  echo "" >&2
+  echo "The offending worktree(s) are listed in the contention preamble above, under" >&2
+  echo "'[contention] siblings:'. Concurrent full-gate runs inflate each other's timings, and on a" >&2
+  echo "contended host push suites past their own timeouts — turning a green suite red for a reason" >&2
+  echo "unrelated to your diff, so the next reader investigates a phantom." >&2
+  echo "" >&2
+  echo "Run the suite covering your files instead:" >&2
+  echo "    bash <path/to/the/suite.test.sh>" >&2
+  echo "" >&2
+  echo "Or wait for the sibling to finish. If you are the lead and this IS the sanctioned gate run," >&2
+  echo "override explicitly:" >&2
+  echo "    SOLEUR_ALLOW_FULL_GATE=1 bash scripts/test-all.sh" >&2
+  # Same rc as the SOLEUR_SUBAGENT refusal: both mean REFUSED, nothing ran, nothing unresolved.
+  # Deliberately NOT 3 — #7424 assigned 3 the meaning "a suite was terminated, coverage not
+  # obtained", which is the opposite claim.
+  exit 4
+fi
 
 # Advisory, self-announcing queue (#6789). Acquired INTERNALLY (not by a caller
 # wrapping the script) so no invocation can forget it. It NEVER aborts — on
