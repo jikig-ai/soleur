@@ -371,6 +371,33 @@ report — and taking one would have meant launching a seventh full gate onto a 
 measure contention. 3600 > 2700 with headroom, and the value stays env-tunable for a constrained
 harness.
 
+### Measured on the first real use: 941 s, and the old budget would have missed it
+
+The `/work` exit gate for this very PR ran while **four** sibling worktrees were running the runner,
+and produced the second recorded redeemed wait:
+
+```
+[contention] CAPACITY_CONTENDED reason=sibling_runs measured_siblings=4 sibling_threshold=1 tmp_avail_mb=3470 tmp_floor_mb=1024
+[contention] LOCK_WAITING: 'test-all' — waiting up to 3600s for the advisory lock.
+[contention] LOCK_ACQUIRED: 'test-all' after 941047ms (worktrees of this repo serialize on it).
+```
+
+**941 s against the old 900 s budget** — it would have expired 41 seconds short, fired
+`LOCK_CONTENDED_PROCEEDING`, and made this run the fifth concurrent gate on the box. The raise is
+what converted it from *interleaved* into *serialized*, and the margin was under a minute, which is
+the shape the 2026-08-12 addendum predicted when it noted that a budget below ~620 s would have
+converted THAT run the same way. Two independent observations now say the same thing: waits get
+redeemed at durations the old budget sat just below.
+
+Fourteen heartbeats fired across the wait (60 s → 840 s), each naming the holder's pid and worktree,
+so a fifteen-minute block read as a queue rather than a hang.
+
+**The cost this raises, stated plainly:** an *accidental* lock acquisition on a fast path is now an
+hour-long hang rather than a fifteen-minute one. That is why `--capacity`'s side-effect freedom is
+pinned by a mutation row rather than left to review — and that row (M12) reddens by **timeout**
+rather than by assertion, because the mutated `--capacity` queued behind the live holders exactly as
+the `--print-suite-globs` comment warns a lock-blocking fast path would.
+
 ### Why a longer wait needed the heartbeat in the same change
 
 A raised budget makes the SILENCE longer, and a silent multi-minute block is indistinguishable from

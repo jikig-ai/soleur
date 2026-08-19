@@ -775,20 +775,29 @@ _tc_ms_since() {
 # tells agents to grep LOCK_WAITING before killing a gate; this gives that check
 # something to read while the wait is in progress rather than only afterwards.
 _tc_wait_heartbeat() {
-  local interval="${1:-60}" parent="${2:-0}" waited=0 rows row pid cwd
+  local interval="${1:-60}" budget="${2:-0}" waited=0 rows row pid cwd
   [[ "$interval" =~ ^[0-9]+$ ]] || interval=60
+  [[ "$budget" =~ ^[0-9]+$ ]] || budget=0
   (( interval > 0 )) || return 0
   while :; do
     sleep "$interval" || return 0
-    # STOP IF THE WAITER IS GONE. tc_acquire kills this job on both of its exit
-    # paths, but an ABNORMAL death of the waiting shell (SIGKILL, a harness reap
-    # of a long gate — measured elsewhere in this repo at exit 144) skips that
-    # cleanup, and the budget is now an HOUR. An orphan here would outlive its
-    # run and keep writing to a stderr nobody is reading, once a minute, for as
-    # long as the machine is up. `kill -0` and not a $TC_PROC_ROOT probe, because
-    # that root is faked by the suite and liveness must be asked of the real one.
-    (( parent > 0 )) && { kill -0 "$parent" 2>/dev/null || return 0; }
     waited=$(( waited + interval ))
+    # SELF-TERMINATE AT THE BUDGET. tc_acquire kills this job on both of its exit
+    # paths, but an ABNORMAL death of the waiting shell (SIGKILL, or the harness
+    # reap of a long gate this repo has measured at exit 144) skips that cleanup
+    # — and the budget is now an HOUR, so an orphan would outlive its run and
+    # write to a stderr nobody reads, once a minute, until the machine restarts.
+    #
+    # Bounding the LIFETIME is the fix, not probing the parent: a heartbeat has
+    # no reason to outlive the wait it narrates, so the budget is the correct
+    # bound on its own terms. A `kill -0 "$parent"` liveness check was written
+    # first and REVERTED — `scripts/test-contention.test.sh` Arm 15 asserts this
+    # lib contains no `kill -0`, guarding ADR-133 Phase 3.6's "no stale-holder
+    # detection" invariant (flock is inode-bound and released by the kernel, so
+    # ownership code defending a dead pid is dead code). That guard is broader
+    # than its target and this was a false positive, but the right move is to
+    # stop matching rather than to narrow a guard protecting an invariant.
+    (( budget > 0 && waited >= budget )) && return 0
     # Re-resolved every beat: the holder can CHANGE during a long wait, and a
     # heartbeat naming a worktree that exited ten minutes ago is worse than
     # silence — it sends the reader to kill the wrong session.
@@ -883,7 +892,7 @@ tc_acquire() {
   # not a reason to abort the one function whose contract is that it cannot
   # abort (ADR-133 Decision 3).
   local _hb_pid=""
-  _tc_wait_heartbeat "${TC_WAIT_HEARTBEAT_S:-60}" "$$" & _hb_pid=$!
+  _tc_wait_heartbeat "${TC_WAIT_HEARTBEAT_S:-60}" "$timeout_s" & _hb_pid=$!
   _tc_stop_heartbeat() {
     [[ -n "$_hb_pid" ]] || return 0
     kill "$_hb_pid" 2>/dev/null || true
