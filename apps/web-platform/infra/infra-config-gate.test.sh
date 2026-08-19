@@ -1941,7 +1941,13 @@ g1_problems=$(printf '%s\n' "$GUARD1" | grep -c '^PROBLEM=' || true)
 # measured over the derived chain {infra_config_gate, infra_config_gate_pass2, repush_plan,
 # repush_apply, ledger_body, terraform_apply}, so an unrelated step-output reference elsewhere
 # in this shared workflow no longer reds a registered gate.
-G1_EXPECTED_REFERENCES=11
+#
+# 11 -> 13 for #7104 P0-B: the alert step now reads pass 1's verdict (so it can name
+# `unadjudicated` rather than describe a delivery failure the gate never reported), and the
+# post-apply summary reads pass 2's verdict (so "Self-healed" is gated on the re-push having
+# WORKED rather than merely having happened). The step-`outcome` references added alongside them
+# are not counted here — the extractor's regex quantifies over `.outputs.` only.
+G1_EXPECTED_REFERENCES=13
 if [[ "$g1_problems" -eq 0 && "${g1_checked:-0}" == "$G1_EXPECTED_REFERENCES" ]]; then
   pass "#7104 WORKFLOW-REF PIN: all $g1_checked workflow if:/env: references resolve, and every compared literal is one the producer can emit"
 elif [[ "$g1_problems" -eq 0 ]]; then

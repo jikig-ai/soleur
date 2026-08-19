@@ -186,15 +186,83 @@ if [[ "$RECOV_GH" != "$REACH_GH" && "$RECOV_GH" != "$UNREACH_GH" && "$RECOV_GH" 
 else bad "recovered reused a red state's text — it would report a failure that did not happen"; fi
 
 # THE DEDUPE-SLOT SEPARATION. Both directions matter, so both are asserted.
-if grep -qF 'ci/infra-config-recovered' <<<"$RECOV_GH"; then
-  ok "recovered files under its OWN ci/infra-config-recovered label"
+if grep -qF 'infra-config-recovery-notice' <<<"$RECOV_GH"; then
+  ok "recovered files under its OWN infra-config-recovery-notice label"
 else bad "recovered did not use its own label"; fi
 if grep -qF 'ci/infra-config-red' <<<"$RECOV_GH"; then
   bad "recovered touched ci/infra-config-red — a self-heal would swallow (or be swallowed by) a real P1 gate failure in that dedupe slot"
 else ok "recovered never touches the red dedupe slot"; fi
-if grep -qF 'issue list --label ci/infra-config-recovered' <<<"$RECOV_GH"; then
+if grep -qF 'issue list --label infra-config-recovery-notice' <<<"$RECOV_GH"; then
   ok "recovered DEDUPES against its own label, so an open red incident cannot absorb it"
 else bad "recovered deduped against the wrong label"; fi
+
+# THE ci/ NAMESPACE IS RESERVED FOR RED ALARMS (plan :405 / R14.2). The recovered mode shipped
+# as `ci/infra-config-recovered`, which is the literal name the plan names as the one not to use.
+# The rationale is not cosmetic and it is not about the ledger alone: every other `ci/*` label in
+# this repo is an alarm, the two live `ci/infra-config-red` issues literally read "needs a
+# decision", and a p2 "no action needed" note in that namespace spends the P1 channel's
+# credibility on a success.
+if grep -qE 'ci/infra-config-recovered' <<<"$RECOV_GH"; then
+  bad "recovered still files under ci/infra-config-recovered — the plan reserves ci/* for red alarms and names this exact string as the one not to use"
+else ok "recovered's label is outside the ci/ alarm namespace"; fi
+
+# --- #7104 PR-B review: THE RECOVERED BODY'S THREE UNMEASURED CLAIMS ----------------------
+#
+# The body asserted three things nothing in this run measured, and the first is INVERTED.
+#
+#   1. "the first attempt landed the files". The race is the opposite: the predicate that
+#      authorises the re-push establishes only that the frame on the host describes a PREVIOUS
+#      apply. Whether THIS apply's files landed is precisely what is unknown — it is why a
+#      re-push happens at all.
+#   2. "The website stayed up throughout". The only thing probed is the webhook endpoint, and
+#      the container swap is still AHEAD of this step in the same job.
+#   3. "no customer data is affected". Nothing in this workflow looks at customer data.
+#
+# An operator-facing body is the one artifact a non-technical founder reads end to end, so a
+# reassurance that was never measured is worse here than in a log line.
+if grep -qF 'the first attempt landed the files' <<<"$RECOV_GH"; then
+  bad "recovered body claims the first attempt landed the files — INVERTED: the race is that it may not have, which is why a re-push fired"
+else ok "recovered body makes no claim about what the first attempt delivered"; fi
+if grep -qiF 'stayed up throughout' <<<"$RECOV_GH"; then
+  bad "recovered body asserts the website stayed up — the only probe is the webhook endpoint, and the container swap is still ahead in this job"
+else ok "recovered body makes no website-uptime claim"; fi
+if grep -qiF 'no customer data is affected' <<<"$RECOV_GH"; then
+  bad "recovered body asserts no customer data is affected — nothing in this workflow measured that"
+else ok "recovered body makes no customer-data claim"; fi
+# A ROLLING issue, not a per-event one. "Close it whenever you like" invites the operator to
+# close the dedupe target, after which the next recovery files a fresh issue instead of
+# commenting — converting the rolling record this mode exists to be into one issue per event.
+if grep -qiF 'Close it whenever you like' <<<"$RECOV_GH"; then
+  bad "recovered body invites closing the issue, which converts the rolling record into one issue per recovery"
+else ok "recovered body does not invite closing its own dedupe target"; fi
+
+# --- #7104 PR-B review: THE FIFTH STATE, for a re-push that FAILED ------------------------
+#
+# The re-push-failure path reused `reachable`, whose body opens "the files themselves reached
+# the server" — false on the plan-failure path, where nothing was written. The workflow patched
+# that by appending a clause telling the founder to "Ignore any suggestion that app health is
+# unaffected", i.e. to disregard the body it is printed inside. A body that needs a disclaimer
+# contradicting it is the wrong body.
+run_alert "the bounded re-push did not deliver" repush_failed
+RPF_GH=$(cat "$MOCK_GH_FILE"); RPF_CURL=$(cat "$MOCK_CURL_FILE")
+
+if [[ "$RPF_GH" != "$REACH_GH" && "$RPF_GH" != "$UNREACH_GH" && "$RPF_GH" != "$UNGRADED_GH" && "$RPF_GH" != "$RECOV_GH" ]]; then
+  ok "repush_failed produces output distinct from all four other states"
+else bad "repush_failed reused another state's text"; fi
+if grep -qF 'the files themselves reached the server' <<<"$RPF_GH"; then
+  bad "repush_failed body asserts the files reached the server — false on the plan-failure path, where nothing was written"
+else ok "repush_failed body makes no delivery claim"; fi
+if grep -qiF 'Ignore any suggestion' <<<"$RPF_GH"; then
+  bad "repush_failed body still needs a clause telling the operator to disregard the body it is in"
+else ok "repush_failed body needs no self-contradicting disclaimer"; fi
+if grep -qF 'infra-config-repush-failed' <<<"$RPF_CURL"; then
+  ok "repush_failed Sentry op is distinguishable from all four other ops"
+else bad "repush_failed reused another Sentry op"; fi
+# It IS a red state: a production write was attempted on the sole no-SSH channel and the run is
+# terminally red. p1, unlike recovered.
+if grep -qF 'priority/p1-high' <<<"$RPF_GH"; then
+  ok "repush_failed files at p1 — a spent recovery on the sole no-SSH channel is a real incident"
+else bad "repush_failed did not file at p1"; fi
 
 # Priority: a self-heal that worked is not a p1 page.
 if grep -qF 'priority/p2-medium' <<<"$RECOV_GH" && ! grep -qF 'priority/p1-high' <<<"$RECOV_GH"; then
@@ -357,7 +425,15 @@ if [[ -f "$WF" ]]; then
     ok "extracted the alert step's run block ($n_body lines)"
   else bad "extracted only $n_body lines of the alert step — every case below would be vacuous"; fi
 
-  drive_step() {  # <gate-outcome> <apply-outcome> <frame-json-or-empty>
+  # <gate-outcome> <apply-outcome> <frame-json-or-empty> [NAME=VALUE ...]
+  #
+  # The trailing NAME=VALUE arguments are what make the re-push arms drivable at all. The two
+  # positional outcomes were the whole environment this driver supplied, so every arm keyed on
+  # REPUSH_APPLY_OUTCOME / PASS2_VERDICT / WEBHOOK_LIVENESS_OUTCOME ran with all of them EMPTY —
+  # which is exactly one point in a space the step branches on five ways, and it is the point at
+  # which the recovered and re-push arms are both unreachable. That is why P0-B was invisible
+  # here: the suite could not construct the state in which the bug occurs.
+  drive_step() {
     D=$(mk_sandbox)
     # Stub the emitter: record the ARGUMENTS, which is where reach-mode and WHERE live.
     cat > "$D/stub-helper.sh" <<'STUB'
@@ -372,8 +448,9 @@ STUB
     # pre-seeding that path is not safe across parallel runs, so rewrite the one assignment.
     sed -i "s|^RESP=/tmp/infra-config-status-response.txt$|RESP=$D/resp.txt|" "$D/step.sh"
     grep -qF "RESP=$D/resp.txt" "$D/step.sh" || { bad "could not repoint RESP — driver is broken"; return 1; }
-    STEP_LOG="$D/step.log" GITHUB_WORKSPACE="$D/ws" \
-      GATE_OUTCOME="$1" APPLY_OUTCOME="$2" \
+    local _g="$1" _a="$2"; shift 3
+    env STEP_LOG="$D/step.log" GITHUB_WORKSPACE="$D/ws" \
+      GATE_OUTCOME="$_g" APPLY_OUTCOME="$_a" "$@" \
       bash --noprofile --norc -eo pipefail "$D/step.sh" >"$D/out.txt" 2>&1
     STEP_RC=$?
     STEP_OUT=$(cat "$D/step.log")
@@ -403,11 +480,69 @@ STUB
   if grep -qF 'SYSTEMCTL_PRIV' <<<"$STEP_OUT"; then
     bad "the raw \$SYSTEMCTL_PRIV seam name still leaks to the operator"
   else ok "no raw seam variable name leaks to the operator"; fi
+
+  # --- #7104 P0-B: A RE-PUSH THAT BRICKS THE CHANNEL --------------------------------------
+  #
+  # THE STATE. The re-push applied cleanly, and the post-re-push liveness probe then found the
+  # webhook listener DOWN — i.e. the recovery destroyed the only no-SSH remediation channel on a
+  # host that cannot be replaced (cx33, 0/6 stock). The probe carried no `id:` and a bare-
+  # expression `if:`, so it and pass 2 both received the implicit `success() &&`; the probe's
+  # failure therefore SKIPS pass 2 rather than failing it.
+  #
+  # Every arm then declined in turn: recovered needs PASS2_VERDICT=='verified' (unset),
+  # re-push-failure tested only for 'failure' and saw 'skipped', and gate-never-ran tested
+  # `GATE_OUTCOME != 'failure'` — but pass 1 SOFT-FAILED with exit 0, so GATE_OUTCOME is
+  # 'success' and that arm fired. The operator received "Server config update failed before it
+  # could be checked — the site is up", "nothing needs re-provisioning", "The infra-config gate
+  # never ran (outcome=success)". Every clause false, on the one failure whose lever
+  # (-replace=terraform_data.infra_config_handler_bootstrap) is the only route back.
+  drive_step success success '{"exit_code":0,"files_written":19,"files_total":19}' \
+    REPUSH_APPLY_OUTCOME=success WEBHOOK_LIVENESS_OUTCOME=failure \
+    PASS2_OUTCOME=skipped PASS2_VERDICT=
+  if grep -qF 'REACH=unreachable' <<<"$STEP_OUT"; then
+    ok "#7104 P0-B: a bricked channel alerts in the UNREACHABLE mode"
+  else bad "#7104 P0-B: a re-push that killed the webhook listener alerted as '${STEP_OUT//$'\n'/ }' — the channel is down and the operator is not being told so"; fi
+  if grep -qF 'never ran' <<<"$STEP_OUT"; then
+    bad "#7104 P0-B: the operator is told 'the gate never ran' for a run whose gate ran, graded, deferred, re-pushed and bricked the channel — every clause of that message is false"
+  else ok "#7104 P0-B: the bricked-channel path does not claim the gate never ran"; fi
+  if grep -qF 'terraform_data.infra_config_handler_bootstrap' <<<"$STEP_OUT"; then
+    ok "#7104 P0-B: the detail names the -replace lever, which is the only route back on this path"
+  else bad "#7104 P0-B: the detail never names terraform_data.infra_config_handler_bootstrap — the operator is given no lever for the one failure that removes every other one"; fi
+
+  # THE GATE-NEVER-RAN ARM MUST NARROW. `!= 'failure'` made it the catch-all for every
+  # GATE_OUTCOME that is not literally 'failure', which is how it swallowed the case above. It
+  # must fire on the two states that actually mean "it never ran": skipped, and the empty string
+  # a renamed step id yields.
+  drive_step skipped failure "" REPUSH_APPLY_OUTCOME=skipped PASS2_OUTCOME=skipped PASS2_VERDICT=
+  if grep -qF 'REACH=ungraded' <<<"$STEP_OUT"; then
+    ok "#7104 P0-B: a SKIPPED gate still alerts as ungraded (the arm narrowed without losing its own case)"
+  else bad "#7104 P0-B: narrowing the gate-never-ran predicate dropped the case it exists for (log=${STEP_OUT:-<empty>})"; fi
+  drive_step "" "" "" REPUSH_APPLY_OUTCOME=skipped PASS2_OUTCOME=skipped PASS2_VERDICT=
+  if grep -qF 'REACH=ungraded' <<<"$STEP_OUT"; then
+    ok "#7104 P0-B: an EMPTY gate outcome (a renamed step id) also alerts as ungraded"
+  else bad "#7104 P0-B: an empty GATE_OUTCOME did not reach the ungraded arm (log=${STEP_OUT:-<empty>})"; fi
+
+  # THE RE-PUSH FAILURE GETS ITS OWN MODE, not the `reachable` body. That body opens "the files
+  # themselves reached the server", which is FALSE on the plan-failure path where nothing was
+  # written at all — and it was mitigated only by a clause asking a non-technical founder to
+  # "Ignore any suggestion that app health is unaffected", i.e. to disregard the body it is
+  # printed inside.
+  drive_step success success "" REPUSH_APPLY_OUTCOME=failure PASS2_OUTCOME=skipped PASS2_VERDICT=
+  if grep -qF 'REACH=repush_failed' <<<"$STEP_OUT"; then
+    ok "#7104 alert honesty: a failed re-push uses its OWN reach mode, not the reachable body"
+  else bad "#7104 alert honesty: a failed re-push alerted as '${STEP_OUT//$'\n'/ }' — reusing a body whose first claim is false on this path"; fi
+
+  # THE RECOVERED ARM still wins on its own path, and the liveness arm must not steal it.
+  drive_step success success "" REPUSH_APPLY_OUTCOME=success WEBHOOK_LIVENESS_OUTCOME=success \
+    PASS2_OUTCOME=success PASS2_VERDICT=verified
+  if grep -qF 'REACH=recovered' <<<"$STEP_OUT"; then
+    ok "#7104 P0-B: a genuine self-heal still reaches the recovered arm (the new arms did not steal it)"
+  else bad "#7104 P0-B: the recovered path now alerts as '${STEP_OUT//$'\n'/ }'"; fi
 fi
 
 # --- ASSERTION FLOOR ----------------------------------------------------------------------
 # Deleting a case from this file must be loud. Zero headroom, ratchet when adding cases.
-ALERT_MIN_ASSERTIONS=45
+ALERT_MIN_ASSERTIONS=62
 if [[ "$PASS" -lt "$ALERT_MIN_ASSERTIONS" ]]; then
   echo "  FAIL: assertion-count floor — only $PASS assertions ran, expected >= $ALERT_MIN_ASSERTIONS"
   FAIL=$((FAIL + 1))

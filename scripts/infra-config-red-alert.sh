@@ -32,7 +32,7 @@
 
 infra_config_red_alert() {
   # $1 = one-line technical detail.
-  # $2 = "reachable" | "unreachable" | "ungraded" | "recovered".
+  # $2 = "reachable" | "unreachable" | "ungraded" | "recovered" | "repush_failed".
   # The second argument is load-bearing and is why this is not a one-arg function: when the
   # status endpoint is DOWN (000/502/503), the gate's own recovery guidance is the opposite of
   # the reachable case, and an alert that contradicts the gate is worse than no alert.
@@ -68,6 +68,7 @@ infra_config_red_alert() {
   [[ "$reach" == "unreachable" ]] && op="infra-config-listener-down"
   [[ "$reach" == "ungraded" ]] && op="infra-config-gate-ungraded"
   [[ "$reach" == "recovered" ]] && op="infra-config-repush-recovered"
+  [[ "$reach" == "repush_failed" ]] && op="infra-config-repush-failed"
 
   # The dedupe key, the priority and the Sentry severity are all per-mode, because "recovered"
   # is not a failure. A hardcoded p1 + red label + `level: error` would page the founder for a
@@ -79,12 +80,36 @@ infra_config_red_alert() {
   local label_desc="infra-config delivery gate red; config reached the host but did not activate (#7220)"
   local label_color="B60205"
   if [[ "$reach" == "recovered" ]]; then
-    dedupe_label="ci/infra-config-recovered"
+    # OUT OF THE ci/ NAMESPACE (plan R14.2 / :405). This shipped as `ci/infra-config-recovered`,
+    # which is the literal string the plan names as the one not to use. Every other `ci/*` label
+    # in this repo is a red alarm — the two live `ci/infra-config-red` issues literally read
+    # "needs a decision" — so a p2 "no action needed" note in that namespace spends the P1
+    # channel's credibility on a success. The name now reads as a notice rather than an alarm,
+    # and is distinct from `infra-config-recovery-ledger`, which is the closed counter.
+    dedupe_label="infra-config-recovery-notice"
     priority_label="priority/p2-medium"
     sentry_level="warning"
     msg_prefix="infra-config gate self-recovered: "
-    label_desc="infra-config gate recovered itself with a bounded production re-push (#7104). Not a failure."
+    label_desc="infra-config gate recovered itself with a bounded production re-push (#7104). Not a failure; never pages."
     label_color="FBCA04"
+  elif [[ "$reach" == "repush_failed" ]]; then
+    # THE FIFTH MODE (#7104 PR-B review). This path reused `reachable`, whose body opens "the
+    # files themselves reached the server" — false on the plan-failure path, where nothing was
+    # written at all. The workflow compensated by appending a clause asking a non-technical
+    # founder to "Ignore any suggestion that app health is unaffected", i.e. to disregard the
+    # body it is printed inside. A body that needs a disclaimer contradicting it is the wrong
+    # body, and the disclaimer is the tell.
+    #
+    # Its OWN dedupe slot, not `ci/infra-config-red`: a spent bounded recovery on the sole
+    # no-SSH channel has a different lever from an ordinary activation failure, and sharing one
+    # slot means whichever fires first absorbs the other as a comment — the "two independent
+    # classes, one slot" defect this file's header exists to record.
+    dedupe_label="ci/infra-config-repush-failed"
+    priority_label="priority/p1-high"
+    sentry_level="error"
+    msg_prefix="infra-config bounded re-push FAILED: "
+    label_desc="The bounded infra-config re-push (#7104) failed. The recovery is spent and the channel needs a decision."
+    label_color="B60205"
   fi
 
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
@@ -121,9 +146,11 @@ infra_config_red_alert() {
       body="$(cat <<EOF
 A server configuration update needed a second attempt, took it automatically, and worked. **No action is needed.**
 
-**What this means:** the first attempt landed the files but the server did not confirm it had picked them up, which is a known timing race. The system retried the delivery once, on its own, and the follow-up check then confirmed the configuration is live. The website stayed up throughout and no customer data is affected.
+**What this means:** after the first attempt, the server was still reporting the results of a PREVIOUS update rather than this one — so whether the first attempt delivered anything was unknown, which is a known timing race. The system re-sent the configuration once, on its own, and the follow-up check then confirmed the server is reporting THIS update and that every file matches what was sent.
 
-**Why you are being told about a success:** the retry writes to production on the one channel that is also used to repair the server remotely, so every time it fires there is a record here that you can read. This issue is a P2 note, not an incident — it auto-updates if it recurs. Close it whenever you like.
+**Why you are being told about a success:** the retry writes to production on the one channel that is also used to repair the server remotely, so every time it fires there is a record here that you can read. This issue is a P2 note, not an incident, and it auto-updates if it recurs — please leave it open, because closing it makes the next recovery file a brand-new issue instead of adding a line to this one.
+
+**What this does NOT tell you:** whether the website itself was affected. The only thing checked here is the configuration channel; the application deploy is a separate step in the same run, and its result is not part of this record.
 
 **When it would matter:** if this recurs often, the underlying race is worth fixing at the source rather than recovering from. The follow-up for that is tracked separately and is deliberately blocked on the readings this issue collects.
 
@@ -139,6 +166,21 @@ A server configuration update failed before anything could check whether it work
 **What this means:** the update stopped at an earlier stage, so the check that confirms the server picked up the new configuration never ran. That means we do not know whether the change took effect — not that it failed. The website is a separate system and stays up, and no customer data is affected.
 
 **What happens next:** no manual server access is needed and **nothing needs re-provisioning**. The CI run linked below names the step that failed. Once that step is fixed and the update is re-run, the normal check runs again and will say plainly whether the configuration is live.
+
+**Detail:** ${detail}${sha:+
+**Commit:** \`${sha}\`}${run_url:+
+**CI run:** ${run_url}}
+EOF
+)"
+    elif [[ "$reach" == "repush_failed" ]]; then
+      body="$(cat <<EOF
+An automatic retry of a server configuration update failed, and the retry does not happen twice.
+
+**What this means:** an earlier configuration update did not confirm itself, so the system tried once more automatically. That retry has now failed as well. It is a single attempt by design, so re-running the update will NOT try it again — this needs a decision.
+
+**What is and is not known:** whether the configuration reached the server is UNKNOWN on this path, and it is deliberately not asserted either way here. The CI run linked below names which stage failed — planning the retry (nothing was written), performing it (a write was attempted), or re-checking afterwards. Those three have different consequences and the run says which one happened.
+
+**What happens next:** reply on this issue and an engineer/agent will pick it up. The documented route back is a targeted replace of the configuration handler, which the CI run spells out. The production host itself must NOT be replaced.
 
 **Detail:** ${detail}${sha:+
 **Commit:** \`${sha}\`}${run_url:+
@@ -184,6 +226,7 @@ EOF
     [[ "$reach" == "unreachable" ]] && title="Server config channel is not responding — needs a decision"
     [[ "$reach" == "ungraded" ]] && title="Server config update failed before it could be checked — the site is up"
     [[ "$reach" == "recovered" ]] && title="Server config update retried itself and succeeded — no action needed"
+    [[ "$reach" == "repush_failed" ]] && title="Server config update ran out of automatic retries — needs a decision"
     gh issue create \
       --label "$dedupe_label" --label domain/engineering --label "$priority_label" \
       --title "$title" \
@@ -194,7 +237,7 @@ EOF
 }
 
 # Direct-exec convenience:
-# `infra-config-red-alert.sh "<detail>" [reachable|unreachable|ungraded|recovered]`.
+# `infra-config-red-alert.sh "<detail>" [reachable|unreachable|ungraded|recovered|repush_failed]`.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   infra_config_red_alert "${1:-}" "${2:-reachable}"
 fi

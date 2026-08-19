@@ -925,7 +925,16 @@ jobs:
       # R22.7's free win: the "assert the webhook is alive after every apply" invariant
       # covered apply #1 only. Under the inline shape that was unfixable; under the split it
       # is one duplicated step with an `if:`.
+      # THE `id:` IS LOAD-BEARING (#7104 P0-B). Without it this step's outcome is unreadable, and
+      # its failure is therefore indistinguishable downstream from "pass 2 was skipped for some
+      # other reason". Because both this step and pass 2 carry a bare-expression `if:`, both also
+      # receive the implicit `success() &&` — so when this probe fails, pass 2 is SKIPPED rather
+      # than failed, and every alert arm declined in turn until the gate-never-ran catch-all fired
+      # and told the operator the gate never ran on a run whose gate ran, graded, deferred and
+      # re-pushed. The channel this probe guards is the ONLY no-SSH remediation path on a host
+      # that cannot be replaced, so that misroute lands on the one failure with no fallback.
       - name: Verify webhook is alive post-re-push (#7104)
+        id: webhook_liveness
         if: steps.repush_apply.outcome == 'success'
         working-directory: ${{ env.INFRA_DIR }}
         env:
@@ -1016,6 +1025,11 @@ jobs:
           PASS1_VERDICT: ${{ steps.infra_config_gate.outputs.verdict }}
           PASS2_VERDICT: ${{ steps.infra_config_gate_pass2.outputs.verdict }}
           GATE_OUTCOME: ${{ steps.infra_config_gate.outcome }}
+          # #7104 P0-B — so the backstop can name WHICH step failed instead of asserting that the
+          # recovery steps were "skipped or mis-keyed" on three paths where they ran and reported.
+          REPUSH_PLAN_OUTCOME: ${{ steps.repush_plan.outcome }}
+          REPUSH_APPLY_OUTCOME: ${{ steps.repush_apply.outcome }}
+          WEBHOOK_LIVENESS_OUTCOME: ${{ steps.webhook_liveness.outcome }}
         run: |
           set -euo pipefail
           # A step that FAILED has already reddened the job; this backstop exists for the
@@ -1055,7 +1069,29 @@ jobs:
             echo "::warning::This run did NOT verify the config apply. The status endpoint returned 404 and allow_missing_status_endpoint was set, so the gate tolerated it and adjudicated nothing — no count invariant, no content assert, no freshness assertion. This is the documented first-bootstrap escape hatch and it is not a failure, but it is also not evidence that the configuration is live. Re-run without the flag once the host publishes a status frame."
             exit 0
           fi
-          echo "::error::NO TERMINAL VERDICT was rendered (pass1='${PASS1_VERDICT:-<none>}' pass2='${PASS2_VERDICT:-<none>}'). Pass 1 deferred to a re-push and pass 2 never returned a verdict — the recovery steps were skipped or mis-keyed. This job verified NOTHING; failing closed rather than letting the downstream success()-gated steps re-arm."
+          # BRANCH ON THE RE-PUSH OUTCOMES BEFORE NARRATING (#7104 P0-B / S8).
+          #
+          # The single message below named "the recovery steps were skipped or mis-keyed" on three
+          # paths where nothing was mis-keyed: the liveness probe failed, the apply failed, or the
+          # plan refused to grade. Each of those is a step that RAN and reported, and each has its
+          # own lever. Naming an unmeasured cause is the defect this whole PR is about, and the
+          # backstop is the last thing an operator reads on a red run.
+          #
+          # Every arm still exits 1 — the job verified nothing on all of them. Only the diagnosis
+          # differs, which is the entire point.
+          if [[ "${WEBHOOK_LIVENESS_OUTCOME:-}" == "failure" ]]; then
+            echo "::error::NO TERMINAL VERDICT, and the config channel is DOWN. The bounded re-push applied and the post-re-push liveness probe then found the webhook listener not responding, which SKIPS pass 2 (it is skipped, not failed). Nothing was mis-keyed. This run wrote production and no verdict exists for it. Route back: terraform apply -replace=terraform_data.infra_config_handler_bootstrap ."
+            exit 1
+          fi
+          if [[ "${REPUSH_APPLY_OUTCOME:-}" == "failure" || "${REPUSH_PLAN_OUTCOME:-}" == "failure" ]]; then
+            echo "::error::NO TERMINAL VERDICT was rendered (pass1='${PASS1_VERDICT:-<none>}' pass2='${PASS2_VERDICT:-<none>}'). The re-push itself failed (plan='${REPUSH_PLAN_OUTCOME:-<none>}' apply='${REPUSH_APPLY_OUTCOME:-<none>}'), so pass 2 correctly never ran. Nothing was mis-keyed. The bounded recovery is spent — it is one attempt by construction, so re-running does not retry it."
+            exit 1
+          fi
+          if [[ "${REPUSH_PLAN_OUTCOME:-}" == "success" && "${REPUSH_APPLY_OUTCOME:-}" == "skipped" ]]; then
+            echo "::error::NO TERMINAL VERDICT was rendered (pass1='${PASS1_VERDICT:-<none>}' pass2='${PASS2_VERDICT:-<none>}'). The re-push was PLANNED but not applied, which means the grading step did not return the expected single-resource cardinality — the apply is keyed on the measured grade, never on success(), so it correctly refused. Nothing was mis-keyed and NOTHING was written. Read the grade printed by the plan step in this run."
+            exit 1
+          fi
+          echo "::error::NO TERMINAL VERDICT was rendered (pass1='${PASS1_VERDICT:-<none>}' pass2='${PASS2_VERDICT:-<none>}'). Pass 1 deferred to a re-push and pass 2 never returned a verdict, and the re-push steps report plan='${REPUSH_PLAN_OUTCOME:-<none>}' apply='${REPUSH_APPLY_OUTCOME:-<none>}' liveness='${WEBHOOK_LIVENESS_OUTCOME:-<none>}' — no enumerated failure explains that combination, so the recovery steps were skipped or mis-keyed. This job verified NOTHING; failing closed rather than letting the downstream success()-gated steps re-arm."
           exit 1
 
       # --- #7104 PR-B: observability for a recovery that fires -----------------------------
@@ -1165,7 +1201,7 @@ jobs:
             printf '%s\n' "This issue is a running tally of every time the infra-config apply gate"
             printf '%s\n' "recovered itself with a bounded re-push (#7104). It is created CLOSED and is"
             printf '%s\n' "only ever edited, so it does not notify."
-            printf '%s\n\n' "It is a counter you can look at, not an alert. The run that produced each row also files a ci/infra-config-recovered issue, which is the surface that DOES notify."
+            printf '%s\n\n' "It is a counter you can look at, not an alert. The run that produced each row also files an infra-config-recovery-notice issue, which is the surface that DOES notify."
             printf '%s\n' "| when (UTC) | run | sha | apply | verify |"
             printf '%s\n' "|---|---|---|---|---|"
             printf '| %s | %s | %s | %s | %s |\n' \
@@ -1194,7 +1230,7 @@ jobs:
           # This ledger is the COUNTER, not the notification. #7104 PR-B review established that
           # a green recovered run must also reach the operator, and that is handled by the
           # `recovered` reach mode of scripts/infra-config-red-alert.sh — which files under its
-          # own ci/infra-config-recovered label at p2, deliberately NOT the p1 ci/infra-config-red
+          # own infra-config-recovery-notice label at p2, deliberately NOT the p1 ci/infra-config-red
           # dedupe slot. (An earlier revision of this comment said that helper was "deliberately
           # NOT touched" because it hardcoded its labels; it no longer hardcodes them, and the
           # separation that mattered — a self-heal must not swallow a real P1 — is now enforced
@@ -1390,6 +1426,10 @@ jobs:
           # frame that looks healthy on exactly these failures. Empty on every other red path,
           # which is what selects the pre-existing frame-derived branches.
           STABILITY_VERDICT: ${{ steps.infra_config_gate.outputs.stability_verdict }}
+          # #7104 P0-B — pass 1's verdict, read by the "gate ran and did not fail" arm so it can
+          # name `unadjudicated` explicitly instead of describing a delivery failure that the gate
+          # never reported.
+          PASS1_VERDICT: ${{ steps.infra_config_gate.outputs.verdict }}
           # #7104 PR-B — the re-push phase outcomes. The phase IS the step (plan R22.1), so no
           # `repush_failed=<phase>` output is plumbed; these three native outcomes name the phase
           # between them. Read by the RE-PUSH arm below, which must precede every frame-derived
@@ -1400,6 +1440,10 @@ jobs:
           REPUSH_APPLY_OUTCOME: ${{ steps.repush_apply.outcome }}
           PASS2_OUTCOME: ${{ steps.infra_config_gate_pass2.outcome }}
           PASS2_VERDICT: ${{ steps.infra_config_gate_pass2.outputs.verdict }}
+          # #7104 P0-B — the post-re-push liveness probe's outcome. Its failure means the recovery
+          # destroyed the sole no-SSH remediation channel, and it SKIPS pass 2 rather than failing
+          # it, so without this the state is unreachable from every arm below.
+          WEBHOOK_LIVENESS_OUTCOME: ${{ steps.webhook_liveness.outcome }}
         run: |
           set -uo pipefail
           source "$GITHUB_WORKSPACE/scripts/infra-config-red-alert.sh"
@@ -1411,7 +1455,24 @@ jobs:
             exit 1
           }
 
-          # THE RECOVERY WORKED (#7104 PR-B review). Handled FIRST — before the re-push-failure
+          # THE RE-PUSH BRICKED THE CHANNEL (#7104 P0-B). Handled BEFORE EVERY OTHER ARM, because
+          # it dominates them: when the post-re-push liveness probe fails, the recovery has
+          # destroyed the only no-SSH remediation channel on a host that cannot be re-provisioned
+          # (cx33, 0/6 stock). Nothing else this step could say matters more, and nothing else it
+          # could say is true.
+          #
+          # Tested for `== 'failure'` and not `!= 'success'`: a renamed or typo'd
+          # `webhook_liveness` id resolves to the EMPTY STRING, and `'' != 'success'` is TRUE, so
+          # the inverted spelling would route EVERY run — including the overwhelming majority
+          # where no re-push happened — into a P1 "the channel is down" alert. Same null trap the
+          # `!= 'skipped'` comments above record, one arm over.
+          if [[ "${WEBHOOK_LIVENESS_OUTCOME:-}" == "failure" ]]; then
+            infra_config_red_alert "The bounded re-push applied, and the post-re-push liveness probe then found the webhook listener DOWN. The recovery destroyed the sole no-SSH remediation channel on a host that cannot be re-provisioned (cx33, 0/6 stock). Pass 2 did not run — it is skipped, not failed — so no delivery verdict exists for this run and none should be inferred. The route back does not depend on the webhook being alive: terraform apply -replace=terraform_data.infra_config_handler_bootstrap , which reprovisions the handler over root SSH on the CF Tunnel. Do NOT run terraform apply -replace=hcloud_server.web ." "unreachable" || true
+            exit 0
+          fi
+
+          # THE RECOVERY WORKED (#7104 PR-B review). Handled after the bricked-channel arm and
+          # before the re-push-failure
           # arm, before the gate-never-ran arm, and before every frame-derived branch.
           #
           # The ordering is not cosmetic. On this path pass 1 exited 0 with verdict=pending, the
@@ -1425,7 +1486,12 @@ jobs:
           # op. It must NOT reuse the red set: `ci/infra-config-red` is the dedupe key, so a
           # routine self-heal filed into it would swallow a real P1 gate failure as a comment.
           if [[ "${REPUSH_APPLY_OUTCOME:-}" == "success" && "${PASS2_VERDICT:-}" == "verified" ]]; then
-            infra_config_red_alert "Pass 1 detected the documented webhook-restart race and deferred its verdict; the bounded re-push applied cleanly and pass 2 then rendered verdict=verified. Exactly one production write was made, to terraform_data.deploy_pipeline_fix. No lever needs pulling. This record exists because the write happened at all, not because anything is wrong." "recovered" || true
+            # "Exactly one production write" was an UNDERSTATEMENT, not a summary (#7104 PR-B
+            # review). One terraform RESOURCE was replaced; that resource's local-exec re-delivers
+            # the full FILE_MAP (~24 files) and reconciles the systemd units on the host. Counting
+            # resources and reporting it as if it were counting effects is the same shape as the
+            # gate claiming a stale frame proves delivery.
+            infra_config_red_alert "Pass 1 detected the documented webhook-restart race and deferred its verdict; the bounded re-push applied cleanly and pass 2 then rendered verdict=verified. Exactly one terraform resource was replaced, terraform_data.deploy_pipeline_fix — which is not a one-file change: its provisioner re-delivers the whole FILE_MAP to the host and reconciles the systemd units, and pass 2 verified every delivered file's digest against the repo. No lever needs pulling. This record exists because the write happened at all, not because anything is wrong." "recovered" || true
             exit 0
           fi
 
@@ -1460,7 +1526,12 @@ jobs:
               PHASE="re-verifying after the re-push (the write completed; the host still did not publish a new frame)"
               LEVER="The bounded recovery is spent — it is one attempt by construction, so re-running will not retry it. The documented lever is: terraform apply -replace=terraform_data.infra_config_handler_bootstrap . Do NOT run terraform apply -replace=hcloud_server.web — that host cannot be re-provisioned (cx33, 0/6 stock)."
             fi
-            infra_config_red_alert "The automatic config re-push FAILED while ${PHASE}. This is NOT the ordinary activation failure: the gate detected the documented webhook-restart race, deferred its verdict, and the recovery it triggered did not deliver. Ignore any suggestion that app health is unaffected — that is only known for the delivery half, and this failed on the terraform half. ${LEVER}" "reachable" || true
+            # `repush_failed`, not `reachable` (#7104 PR-B review). The reachable body opens "the
+            # files themselves reached the server", which is FALSE on the plan-failure path where
+            # nothing was written — and the old call compensated by asking a non-technical founder
+            # to "Ignore any suggestion that app health is unaffected", i.e. to disregard the body
+            # it was printed inside. A body that needs a clause contradicting it is the wrong body.
+            infra_config_red_alert "The automatic config re-push FAILED while ${PHASE}. This is NOT the ordinary activation failure: the gate detected the documented webhook-restart race, deferred its verdict, and the recovery it triggered did not deliver. ${LEVER}" "repush_failed" || true
             exit 0
           fi
 
@@ -1471,10 +1542,36 @@ jobs:
           # channel did not answer, when in truth nothing ever asked it. The distinct third mode
           # exists so the alert says the one thing that is actually known: activation is
           # UNKNOWN, and the named step is where to look.
-          if [[ "${GATE_OUTCOME:-}" != "failure" ]]; then
+          # THE PREDICATE IS `skipped` OR EMPTY, NOT `!= 'failure'` (#7104 P0-B).
+          #
+          # `!= 'failure'` made this the catch-all for every outcome that is not literally
+          # `failure`, which since PR-B includes `success` — pass 1 SOFT-FAILS with exit 0 on the
+          # recoverable shape, so `success` is the outcome on every recovery path. That is how a
+          # re-push which bricked the channel was reported as "The infra-config gate never ran
+          # (outcome=success)": a message whose own parenthetical contradicts its claim, on the
+          # one failure with no fallback.
+          #
+          # The two states that actually mean "it never ran" are `skipped` (a step before it
+          # failed) and the empty string (a renamed step id). Enumerating them fails closed on a
+          # rename in the safe direction — an unrecognised outcome now falls through to the
+          # explicit arm below rather than silently borrowing this one's story.
+          if [[ -z "${GATE_OUTCOME:-}" || "${GATE_OUTCOME:-}" == "skipped" ]]; then
             DIED="a step before the gate"
             [[ "${APPLY_OUTCOME:-}" == "failure" ]] && DIED="the terraform apply (which is where this PR's sudo-grant and DropInPaths preconditions are asserted)"
             infra_config_red_alert "The infra-config gate never ran (outcome=${GATE_OUTCOME:-unset}) because ${DIED} failed first, so NOTHING has graded whether the config activated on the host. Do not read this as a delivery failure or an activation failure — it is ungraded. Fix the failing step named in the CI run and re-run; the gate then reports the real verdict." "ungraded" || true
+            exit 0
+          fi
+
+          # THE GATE RAN AND DID NOT FAIL, AND WE ARE STILL HERE.
+          #
+          # Narrowing the arm above leaves this residue, and it must be named rather than left to
+          # fall through into the frame-derived branches — those all describe a DELIVERY failure,
+          # and on this path the gate itself reported no failure at all. It is reachable when pass
+          # 1 rendered `unadjudicated` (the documented 404 first-bootstrap escape hatch, which
+          # adjudicates nothing) and something later in the job went red, and it is the honest
+          # place for any future outcome this ladder does not enumerate.
+          if [[ "${GATE_OUTCOME:-}" != "failure" ]]; then
+            infra_config_red_alert "The infra-config gate reported outcome=${GATE_OUTCOME} — it did not fail — but this run is red or wrote production, so something else did. Pass 1's verdict was '${PASS1_VERDICT:-unset}' and pass 2's was '${PASS2_VERDICT:-unset}'. If either reads 'unadjudicated', the status endpoint answered 404 and allow_missing_status_endpoint was set, so the gate deliberately checked NOTHING: that is not evidence the configuration is live. Do not read any delivery or activation claim into this run. The CI run linked below names the step that actually failed." "ungraded" || true
             exit 0
           fi
 
@@ -1973,6 +2070,10 @@ jobs:
           MERGE_SHA: ${{ github.sha }}
           REPUSH_OUTCOME: ${{ steps.repush_apply.outcome }}
           REPUSH_VERIFY: ${{ steps.infra_config_gate_pass2.outcome }}
+          # #7104 P0-B — the two facts that distinguish "a re-push happened" from "a re-push
+          # worked". Without them the summary could only report the former and asserted the latter.
+          PASS2_VERDICT: ${{ steps.infra_config_gate_pass2.outputs.verdict }}
+          WEBHOOK_LIVENESS_OUTCOME: ${{ steps.webhook_liveness.outcome }}
         run: |
           {
             echo "## Apply deploy-pipeline-fix"
@@ -1991,8 +2092,21 @@ jobs:
             # is what changes that, and it lives INSIDE this step rather than standing alone
             # because a standalone summary block renders orphaned above this heading — and
             # this is the one artifact the founder actually reads.
+            #
+            # GATED ON PASS 2 ACTUALLY VERIFYING (#7104 P0-B). This fired on
+            # `REPUSH_OUTCOME != 'skipped'`, so it also fired when the re-push apply FAILED and
+            # when the re-push bricked the webhook listener — printing "recovered itself" into
+            # the one artifact the founder reads, on the two runs where it did not. The re-push
+            # HAPPENING and the re-push WORKING are different facts; the summary now reports
+            # whichever is true rather than the more comfortable one.
             if [[ "${REPUSH_OUTCOME:-skipped}" != "skipped" ]]; then
               echo ""
-              echo "**Self-healed:** the infra-config gate hit the documented webhook-restart race and recovered itself with one bounded re-push (apply=${REPUSH_OUTCOME}, re-verify=${REPUSH_VERIFY:-not-reached}). This run wrote production a second time. Running tally: see the \`infra-config-recovery-ledger\` issue."
+              if [[ "${PASS2_VERDICT:-}" == "verified" ]]; then
+                echo "**Self-healed:** the infra-config gate hit the documented webhook-restart race and recovered itself with one bounded re-push (apply=${REPUSH_OUTCOME}, re-verify=${REPUSH_VERIFY:-not-reached}). This run wrote production a second time. Running tally: see the \`infra-config-recovery-ledger\` issue."
+              elif [[ "${WEBHOOK_LIVENESS_OUTCOME:-}" == "failure" ]]; then
+                echo "**Re-push attempted, and the config channel is now DOWN:** the bounded re-push applied (apply=${REPUSH_OUTCOME}) and the liveness probe then found the webhook listener not responding. This run wrote production a second time and the result is UNVERIFIED — pass 2 was skipped, not passed. This is the one failure with no no-SSH route back; see the open \`ci/infra-config-red\` issue for the lever."
+              else
+                echo "**Re-push attempted and did NOT verify:** the bounded re-push ran (apply=${REPUSH_OUTCOME}, re-verify=${REPUSH_VERIFY:-not-reached}) and pass 2 did not render verdict=verified (verdict='${PASS2_VERDICT:-unset}'). This run wrote production a second time and nothing has confirmed the configuration is live. The recovery is one attempt by construction — re-running does not retry it."
+              fi
             fi
           } >> "$GITHUB_STEP_SUMMARY"
