@@ -209,3 +209,21 @@ of a section above — duplicating them would create two copies that can drift.
 - ADR-188 — the verdict taxonomy and its two accepted residuals.
 - #7565 (P1, vacuous PASS with the checksum never evaluated), #7572 (the S1 instance), #7574
   (persistence bound), #7535 (pre-baked image, sibling session).
+
+---
+
+## Sequel — 2026-08-19 (the rebase onto #7565, PR #7510)
+
+This branch was rebased onto #7567 (closing #7565), which had merged into the same function, and a
+7-agent panel reviewed the composition. The defect class named above — asserting an inherited claim
+instead of re-measuring it — recurred in four new shapes, all in prose or code this branch authored:
+
+- The header's "WHAT THIS DOES NOT CLOSE" paragraph asserted a hole #7565 had already closed.
+- The rung-reorder justification asserted a state that cannot occur, contradicting a note 25 lines
+  above it in the same file.
+- A retracted universal survived at the third of three sites, one commit after the retraction.
+- A commit deleted a mechanism and left the sentence describing it.
+
+And the instrument built to catch the rebase's own losses had the blind spot it was built for.
+Full account, with the mechanical falsifier that found it:
+[[2026-08-19-i-hardened-my-verifier-twice-and-its-sample-was-still-a-sample]]
