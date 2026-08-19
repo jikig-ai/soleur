@@ -792,7 +792,11 @@ fi
 echo ""
 echo "  $PASS passed, $FAIL failed"
 close_stdout_capture
-stdout_passes=$(grep -c '^  PASS: ' "$STDOUT_LOG" 2>/dev/null || echo 0)
+# `|| true`, NOT `|| echo 0` (caught by scripts/lint-shell-capture-exit): `grep -c` PRINTS `0`
+# and THEN exits 1 on no match, so `|| echo 0` appends a SECOND line and the variable becomes
+# "0\n0" — which every numeric comparison below then mis-evaluates. `|| true` keeps the zero the
+# command already printed.
+stdout_passes=$(grep -c '^  PASS: ' "$STDOUT_LOG" 2>/dev/null || true)
 rm -f "$STDOUT_LOG"
 if [[ "$FAIL" -gt 0 ]]; then
   exit 1

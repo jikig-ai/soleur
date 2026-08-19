@@ -2323,8 +2323,12 @@ GATE_MIN_ASSERTIONS=132
 #      captured STDOUT, written by the redirection at the top of the file rather than by
 #      `pass()`, so no edit to `pass()` can inflate it silently.
 close_stdout_capture
-emitted_passes=$(grep -c '^PASS$' "$PASSLOG" 2>/dev/null || echo 0)
-stdout_passes=$(grep -c '^  PASS: ' "$STDOUT_LOG" 2>/dev/null || echo 0)
+emitted_passes=$(grep -c '^PASS$' "$PASSLOG" 2>/dev/null || true)
+# `|| true`, NOT `|| echo 0` (caught by scripts/lint-shell-capture-exit): `grep -c` PRINTS `0`
+# and THEN exits 1 on no match, so `|| echo 0` appends a SECOND line and the variable becomes
+# "0\n0" — which every numeric comparison below then mis-evaluates. `|| true` keeps the zero the
+# command already printed.
+stdout_passes=$(grep -c '^  PASS: ' "$STDOUT_LOG" 2>/dev/null || true)
 if [[ "$emitted_passes" -ne "$pass" ]]; then
   echo "  FAIL: assertion-count reconciliation: the counter says $pass but $emitted_passes PASS lines were emitted. The two producers disagree, so the tally is not a count of assertions and the floor below is meaningless." >&2
   echo "---"
