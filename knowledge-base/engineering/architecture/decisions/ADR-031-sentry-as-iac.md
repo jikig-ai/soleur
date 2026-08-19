@@ -650,11 +650,31 @@ requiring it would hand merge control to a vendor's uptime. The structural fix �
 fail-closed gating half from the advisory reporting half behind `AUDIT_MODE=gates` — is
 tracked separately.
 
-**Recurrence.** Any future deprecation of `workflows/`, `detectors/` or `monitors/` now
-self-reports on the first 200 carrying the header — as an `::error::` annotation on every caller,
-as a non-zero exit on callers that opted into escalation, and in the report's own
-`## Endpoint deprecation` section, which is the only durable channel of the three. It no longer
-surfaces months later as an intermittent red.
+**Recurrence — scoped, and narrower than the first draft of this paragraph claimed.** Any future
+deprecation of `workflows/`, `detectors/` or `monitors/` self-reports on the first 200 carrying the
+header — as a `::warning::` annotation, as a non-zero exit on callers that opted into escalation
+(`SENTRY_DEPRECATION_FAIL=1`; the advisory gate does, the apply path deliberately does not), and in
+the report's own `## Endpoint deprecation` section, which is the only durable channel of the three.
+
+Two corrections to what this paragraph said when first written, both measured:
+
+- **Severity.** It claimed an `::error::` annotation. `grep -c '::error::'
+  apps/web-platform/scripts/sentry-monitors-audit.sh` returns **0**. The tripwire emits
+  `::warning::`, and the escalation path writes a plain `ERROR:` to stderr, which is not a GitHub
+  annotation at all. An ADR promising a severity the code does not emit is how an operator
+  concludes the channel is broken when it is merely quieter than advertised.
+- **Reach.** It claimed "every caller". The tripwire lives inside `sentry-monitors-audit.sh`'s own
+  `curl_retry`, so it covers exactly the callers that route through that script —
+  `sentry-audit-gate.yml`, `reusable-release.yml`, and `apply-sentry-infra.yml`'s audit step. It
+  does **not** cover the three scripts that call Sentry directly with their own `curl`:
+  `assert-byok-rules-exist.sh` (migrated to `workflows/` under #7590, so no longer exposed),
+  `audit-sentry-extra-text-references.sh` and `configure-sentry-alerts.sh`. The latter two still
+  read and WRITE the deprecated `projects/{org}/{proj}/rules/` path; their migration is blocked on
+  an unresolved write shape (the `workflows/` payload has no `conditions`/`filters`/`actions` keys —
+  it carries `triggers` and `actionFilters[]` instead) and is tracked separately. Neither has an
+  automated caller, so no brownout can abort a workflow through them.
+
+Within that scope it no longer surfaces months later as an intermittent red.
 
 
 ## Consequences
