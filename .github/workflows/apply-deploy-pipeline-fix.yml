@@ -1002,12 +1002,30 @@ jobs:
       # `if: always()` and not `!cancelled()`: this deletes a file and nothing else, so running
       # it on a cancelled run is strictly good. `rm -f` is already idempotent, so the step is a
       # no-op on the overwhelming majority of runs where no re-push was ever planned.
-      - name: Reclaim the bounded re-push plan artifacts (#7104)
+      # THE RECLAIM COVERED ONLY THE FILES THIS PASS AUTHORED (#7104 PR-B review, security).
+      #
+      # The FIRST apply's artifacts have the same shape and worse coverage, and the asymmetry was
+      # invisible because each half looked complete on its own:
+      #
+      #   tfplan.json  `rm -f` at the END of the plan step, with FIVE `exit 1` paths between its
+      #                creation and that line — so it survives every failure, which is exactly
+      #                when a plan for production infrastructure is most interesting. Its own
+      #                step comment claims the window is closed.
+      #   tfplan       the BINARY saved plan. Never reclaimed at all. `terraform apply <planfile>`
+      #                consumes it without re-grading, so it is a pre-authorised production write
+      #                sitting on the runner.
+      #   tfplan.txt   neither reclaimed NOR gitignored — the .gitignore entry `tfplan` matches a
+      #                file named exactly `tfplan`, not this one.
+      #
+      # `if: always()` and not `!cancelled()`: this deletes files and nothing else, so running it
+      # on a cancelled run is strictly good. `rm -f` is idempotent, so it is a no-op on the runs
+      # where a given artifact was never created.
+      - name: Reclaim the plan artifacts (#7104)
         if: always()
         working-directory: ${{ env.INFRA_DIR }}
         run: |
           set -uo pipefail
-          rm -f tfplan-repush tfplan-repush.json
+          rm -f tfplan-repush tfplan-repush.json tfplan tfplan.json tfplan.txt
           exit 0
 
       # THE BACKSTOP. Pass 1's soft-fail is only safe because of this step.
@@ -1211,8 +1229,18 @@ jobs:
           echo "path=$f" >> "$GITHUB_OUTPUT"
           exit 0
 
+      # THE GATE WAS VACUOUS, AND THIS PASS INTRODUCED IT (#7104 PR-B review).
+      #
+      # `steps.ledger_body.outcome == 'success'` can never be false: that step now runs `set +e`
+      # with a terminal `exit 0` — deliberately, so a bookkeeping failure cannot red a run that
+      # successfully self-healed production — INCLUDING on its own mktemp-failure arm, which
+      # exits 0 having written no `path` output at all. So this step ran on every path and then
+      # consumed an empty BODY_PATH.
+      #
+      # Gate on the OUTPUT instead. It is written only on the arm that actually composed a row,
+      # which is the condition this `if:` was always meant to express.
       - name: Maintain the re-push ledger issue (#7104)
-        if: always() && steps.ledger_body.outcome == 'success'
+        if: always() && steps.ledger_body.outputs.path != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BODY_PATH: ${{ steps.ledger_body.outputs.path }}
@@ -1245,17 +1273,61 @@ jobs:
           if [[ -z "$num" ]]; then
             url=$(gh issue create --title "$LEDGER_TITLE" --label "$LEDGER_LABEL" --body-file "$BODY_PATH" 2>/dev/null)
             num="${url##*/}"
+            if [[ -z "$url" || -z "$num" ]]; then
+              echo "::warning::Could not create the re-push ledger issue. This run's row is LOST; the recovery itself is unaffected."
+              exit 0
+            fi
             # Created CLOSED. This is what buys "the ledger never notifies" by construction:
             # GitHub notifies on comments and state changes, not on body or title edits.
-            [[ -n "$num" ]] && gh issue close "$num" 2>/dev/null
+            #
+            # THE CLOSE IS CHECKED (#7104 PR-B review). A failed `gh issue close` leaves the
+            # ledger OPEN, which silently breaks the "created closed so it never notifies"
+            # invariant this whole design rests on — and the next recovery would then edit an
+            # OPEN issue, notifying the founder for a run that worked.
+            if ! gh issue close "$num" 2>/dev/null; then
+              echo "::warning::The ledger issue #${num} was created but could NOT be closed. It is OPEN, which breaks the never-notifies invariant — close it manually or the next recovery will notify."
+            fi
             echo "Ledger issue created and closed: ${url:-<none>}"
           else
-            prev=$(gh issue view "$num" --json body --jq .body 2>/dev/null)
-            merged="$(mktemp)"
+            # THE APPEND WAS DESTRUCTIVE (#7104 PR-B review, silent-failure #2/#3).
+            #
+            # Under `set +e`, a failed `gh issue view` yielded prev='' — and the code below then
+            # wrote a file containing ONE ROW and handed it to `gh issue edit --body-file`, which
+            # REPLACES the body. Every prior row was deleted, the step printed "appended", and it
+            # exited 0. #7576 is explicitly blocked on the readings this artifact collects, so a
+            # transient API blip could silently destroy the evidence the follow-up depends on
+            # while reporting success.
+            #
+            # Fail closed on an unreadable or empty previous body: a ledger row is bookkeeping,
+            # and losing ONE row is strictly better than overwriting all of them.
+            prev_rc=0
+            prev=$(gh issue view "$num" --json body --jq .body 2>/dev/null) || prev_rc=$?
+            if [[ "$prev_rc" -ne 0 || -z "$prev" ]]; then
+              echo "::warning::Could not read the existing ledger body for #${num} (rc=${prev_rc}, ${#prev} bytes). REFUSING to edit it: writing this run's row alone would REPLACE every prior row, and #7576 is blocked on those readings. This run's row is lost; the ledger is intact."
+              exit 0
+            fi
+            # The header is the ledger's own self-description and is present in every body this
+            # step has ever written. If it is absent, what came back is not the ledger — an error
+            # page, a truncation, a different issue — and appending to it would still destroy the
+            # real one.
+            if ! grep -qF 'running tally of every time the infra-config apply gate' <<<"$prev"; then
+              echo "::warning::The body read back from #${num} does not carry the ledger header, so it is not the ledger this step maintains. REFUSING to overwrite it."
+              exit 0
+            fi
+            merged="$(mktemp)" || { echo "::warning::Could not allocate the ledger merge file; this run's row is lost and the ledger is intact."; exit 0; }
             printf '%s\n' "$prev" > "$merged"
             tail -n 1 "$BODY_PATH" >> "$merged"
-            gh issue edit "$num" --body-file "$merged" 2>/dev/null
-            echo "Ledger issue #${num} appended."
+            # The merged body must be strictly LONGER than what it replaces. An append that
+            # shrinks the ledger is a truncation wearing an append's clothing.
+            if [[ "$(wc -c < "$merged")" -le "${#prev}" ]]; then
+              echo "::warning::The merged ledger body is not longer than the existing one; refusing to edit rather than risk truncating the tally."
+              exit 0
+            fi
+            if gh issue edit "$num" --body-file "$merged" 2>/dev/null; then
+              echo "Ledger issue #${num} appended."
+            else
+              echo "::warning::Could not append this run's row to ledger issue #${num}. The row is lost; the ledger is intact."
+            fi
           fi
           exit 0
 
@@ -1658,8 +1730,19 @@ jobs:
           # is legitimate and is prescribed elsewhere in this very workflow.
           infra_config_red_alert "${WHERE} What is still true: the files that landed are on the host, and app health is unaffected — this is an ACTIVATION failure, not a delivery one. Next: from the repo root, run: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep SOLEUR_INFRA_CONFIG_FATAL. Do NOT run terraform apply -replace=hcloud_server.web — that host cannot be re-provisioned (cx33, 0/6 stock). Replacing terraform_data.infra_config_handler_bootstrap is a different and safe operation, but it is only the right lever when the status endpoint returns 000/502/503." "reachable" || true
 
+      # GATED ON THE VERDICT, NOT ON success() (#7104 PR-B review).
+      #
+      # `unadjudicated` is the 404 first-bootstrap escape hatch: the gate tolerated a missing
+      # status endpoint and checked NOTHING — no count invariant, no content assert, no freshness
+      # assertion — and then exited 0, which re-armed every `success()`-gated step downstream.
+      # This one swaps the running container on the strength of a verification that did not
+      # happen. `verified` is the only verdict that licenses it, and the OR covers the recovery
+      # path where pass 1 rendered `pending` and pass 2 rendered `verified`.
       - name: Redeploy to load applied profile and assert loaded==committed (#5875 item 4)
-        if: success()
+        if: >-
+          success()
+          && (steps.infra_config_gate.outputs.verdict == 'verified'
+              || steps.infra_config_gate_pass2.outputs.verdict == 'verified')
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -2024,8 +2107,17 @@ jobs:
 
       # #7104 — same reasoning as the drift auto-close below: this closes an issue on the
       # strength of a self-heal, and a zero-change apply performed none.
+      # GATED ON THE VERDICT (#7104 PR-B review). The comment this step posts asserts
+      # "infra-config files landed (files_written == files_total, files_failed == 0)" — which is
+      # a MEASUREMENT, and on the `unadjudicated` arm the gate's own annotation says it adjudicated
+      # nothing. Posting it there fabricates a reading onto the founder's own issue and then closes
+      # it. The verdict gate is what makes the sentence true whenever it is written.
       - name: Close #4804 after self-heal verified
-        if: success() && env.PLAN_HAS_CHANGES == 'true'  && steps.check_4804.outputs.open == 'true'
+        if: >-
+          success() && env.PLAN_HAS_CHANGES == 'true'
+          && steps.check_4804.outputs.open == 'true'
+          && (steps.infra_config_gate.outputs.verdict == 'verified'
+              || steps.infra_config_gate_pass2.outputs.verdict == 'verified')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MERGE_SHA: ${{ github.sha }}
@@ -2045,8 +2137,15 @@ jobs:
       # zero-change apply nothing was re-aligned, and before this PR the step was unreachable on
       # such a run only because the gate red first. Making the gate correctly green arms it, so
       # the gate has to carry the condition the red was standing in for.
+      # GATED ON THE VERDICT (#7104 PR-B review). This closes drift issues with the comment
+      # "Server state was re-aligned with HEAD" — a claim about the HOST, which only the gate can
+      # substantiate. On the `unadjudicated` arm nothing checked whether the host received
+      # anything, so the drift the issue records may still be there.
       - name: Auto-close any open drift issues for this stack
-        if: success() && env.PLAN_HAS_CHANGES == 'true' 
+        if: >-
+          success() && env.PLAN_HAS_CHANGES == 'true'
+          && (steps.infra_config_gate.outputs.verdict == 'verified'
+              || steps.infra_config_gate_pass2.outputs.verdict == 'verified')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MERGE_SHA: ${{ github.sha }}

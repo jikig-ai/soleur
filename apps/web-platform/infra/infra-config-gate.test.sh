@@ -1884,11 +1884,18 @@ SCRIPT_STEPS = {s['id'] for s in steps
 # added an unrelated step-output reference — a guard that fires on work it does not guard trains
 # people to bump its literal without reading it, which is how a flush pin becomes a rubber stamp.
 #
-# The chain is the fixpoint of "consumes the chain, or is consumed by something that does",
-# seeded on the steps that invoke the tested artifact. Derived rather than enumerated for the
-# same reason SCRIPT_STEPS is: an enumerated set is a snapshot, and a newly wired re-push step
-# would sit outside it silently. `outcome`/`conclusion` count as edges as well as `outputs`,
-# because the re-push chain is wired on step OUTCOMES and an outputs-only closure drops it.
+# The chain is the fixpoint of "CONSUMES the chain", seeded on the steps that invoke the tested
+# artifact. Derived rather than enumerated for the same reason SCRIPT_STEPS is: an enumerated set
+# is a snapshot, and a newly wired re-push step would sit outside it silently.
+# `outcome`/`conclusion` count as edges as well as `outputs`, because the re-push chain is wired
+# on step OUTCOMES and an outputs-only closure drops it.
+#
+# CONSUMES ONLY — the closure deliberately does NOT also pull in everything a chain step reads.
+# That backward half was tried and reintroduced the very problem this scoping exists to fix: the
+# moment the "Close #4804" step gained a verdict gate, its UNRELATED `steps.check_4804.outputs.open`
+# reference was dragged onto the chain and the count jumped by two. A step joins because it
+# consumes the gate; a reference counts because its TARGET is on the chain. Those are different
+# questions and conflating them makes the pin sensitive to whatever else happens to share an `if:`.
 CHAIN_EDGE = re.compile(r"steps\.([A-Za-z0-9_-]+)\.(?:outputs\.[A-Za-z0-9_-]+|outcome|conclusion)")
 
 def _step_refs(s):
@@ -1906,10 +1913,8 @@ for _ in range(len(steps) + 1):
         if r & GATE_CHAIN:
             sid = s.get('id')
             if sid and sid not in GATE_CHAIN:
-                GATE_CHAIN.add(sid); grew = True
-            for x in r:
-                if x not in GATE_CHAIN:
-                    GATE_CHAIN.add(x); grew = True
+                GATE_CHAIN.add(sid)
+                grew = True
     if not grew:
         break
 
@@ -2019,7 +2024,13 @@ g1_problems=$(printf '%s\n' "$GUARD1" | grep -c '^PROBLEM=' || true)
 # post-apply summary reads pass 2's verdict (so "Self-healed" is gated on the re-push having
 # WORKED rather than merely having happened). The step-`outcome` references added alongside them
 # are not counted here — the extractor's regex quantifies over `.outputs.` only.
-G1_EXPECTED_REFERENCES=13
+#
+# 13 -> 19: the three `success()`-gated steps downstream of the gate (the container swap, the
+# #4804 close-out, the drift-issue auto-close) are now gated on the VERDICT as well, two
+# references each. `unadjudicated` is the 404 first-bootstrap escape hatch — the gate tolerates a
+# missing status endpoint, checks nothing, and exits 0 — so `success()` alone re-armed all three
+# behind a verification that never happened.
+G1_EXPECTED_REFERENCES=19
 if [[ "$g1_problems" -eq 0 && "${g1_checked:-0}" == "$G1_EXPECTED_REFERENCES" ]]; then
   pass "#7104 WORKFLOW-REF PIN: all $g1_checked workflow if:/env: references resolve, and every compared literal is one the producer can emit"
 elif [[ "$g1_problems" -eq 0 ]]; then
@@ -2116,6 +2127,51 @@ if ap is not None:
         problems.append("the repush_apply body contains a loop keyword (%r) — one line and one step "
                         "can still be an unbounded number of production writes"
                         % loopkw.group(2))
+
+# ---- FOUR GUARDS WITH NO PRODUCER-SIDE PIN (#7104 PR-B review, security) -------------------
+#
+# Each of these was measured DELETABLE with every guard in this suite still green, and none had
+# a battery row. A guard nothing asserts the existence of is a guard that survives exactly until
+# someone finds it inconvenient — and all four sit on the step that authorises the production
+# write, which is the last place that should be true.
+#
+# Pinned on the SHAPE the guard must have (a comparison against a specific literal, a specific
+# jq filter, a trap naming a specific file) rather than on prose, so a comment describing the
+# prohibition cannot satisfy the pin. Anchored inside the OWNING STEP's body rather than over the
+# whole 2000-line workflow, so a same-shaped line elsewhere cannot stand in for a deleted one.
+pl = byid.get('repush_plan')
+if pl is None:
+    problems.append("step id 'repush_plan' does not exist, so its four internal guards cannot be pinned")
+else:
+    plan_body = pl.get('run') or ''
+    plan_code = "\n".join(l for l in plan_body.splitlines() if not l.lstrip().startswith('#'))
+
+    # (1) THE ADDRESS-SET ASSERT. `GRADED == 1` says one managed resource changes; it does not
+    #     say WHICH. A plan replacing one entirely different resource satisfies cardinality.
+    if not _re.search(r'\$addrs"?\s*!=\s*"terraform_data\.deploy_pipeline_fix"', plan_code):
+        problems.append("the re-push plan step no longer asserts the CHANGING ADDRESS SET equals "
+                        "terraform_data.deploy_pipeline_fix — cardinality alone passes a plan that "
+                        "replaces one entirely different production resource")
+
+    # (2) THE CARDINALITY ASSERT ITSELF, at the producer. The consumer-side `if:` literal is
+    #     pinned above; this is the half that makes the grade mean anything.
+    if not _re.search(r'"\$GRADED"\s*-ne\s*1\b', plan_code):
+        problems.append("the re-push plan step no longer refuses a grade other than 1 "
+                        "(`[[ \"$GRADED\" -ne 1 ]]`) — the apply's `if:` would then be keyed on a "
+                        "literal the producer never enforces")
+
+    # (3) THE DESTROY GUARD. The re-push must not be able to destroy anything, and the filter is
+    #     the shared one the first apply uses.
+    if 'destroy-guard-filter-web-platform.jq' not in plan_code:
+        problems.append("the re-push plan step no longer runs the destroy-guard jq filter — the "
+                        "bounded recovery could plan a destroy against an unreplaceable host")
+
+    # (4) THE TRAP. tfplan-repush.json carries the live prd Doppler token and the webhook HMAC in
+    #     CLEARTEXT — terraform's JSON serialization ignores `sensitive`.
+    if not _re.search(r"trap\s+'rm -f tfplan-repush\.json'\s+EXIT", plan_code):
+        problems.append("the re-push plan step no longer traps `rm -f tfplan-repush.json` on EXIT "
+                        "— that render carries the live prd Doppler token and the webhook HMAC in "
+                        "cleartext, and the trap is what reclaims it on the failure paths")
 
 print("OK" if not problems else "")
 for p in problems:

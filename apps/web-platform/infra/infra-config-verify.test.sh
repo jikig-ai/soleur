@@ -612,6 +612,67 @@ if mkframe 1000 "$STALE" && mkframe 3000 "$MOVED"; then
     fail "#7104 I6d: the polled URL(s) were '$(tr '\n' ' ' < "$CL")', expected https://deploy.example.test/hooks/infra-config-status built from the stubbed APP_DOMAIN_BASE"
   fi
 
+  # --- I8: THE `unadjudicated` ARM, WHICH HAD ZERO COVERAGE (#7104 PR-B review) -------------
+  #
+  # This is the 404 first-bootstrap escape hatch: the gate tolerates a missing status endpoint,
+  # checks NOTHING — no count invariant, no content assert, no freshness assertion — and exits 0.
+  # It is simultaneously the weakest green the design can produce and the only one with no
+  # out-of-band report, and it was driven by no fixture at all. Everything downstream keys on the
+  # verdict this arm emits, so "it emits `unadjudicated` and not `verified`" is load-bearing for
+  # the three production steps now gated on it.
+  #
+  # STUB_HTTP_CODE is 200 at every other drive site in this file, which is why the 404 branch was
+  # unreachable from the suite (F9).
+  o10="$I_TMP/o10"; : > "$o10"
+  rc10=0
+  ( cd "$SCRIPT_DIR" || exit 99
+    export PATH="$I_TMP/bin:$PATH" STUB_FRAME="$STALE" STUB_HTTP_CODE=404
+    export INFRA_CONFIG_STATUS_RESPONSE="$I_TMP/status-404-$$.json"
+    export GITHUB_OUTPUT="$o10" VERIFY_PASS=1 ALLOW_MISSING_STATUS=true
+    export DPF_REPLACED=true APPLY_START_EPOCH=2000
+    bash ./infra-config-verify.sh >/dev/null 2>&1 ) || rc10=$?
+  v10=$(grep -c '^verdict=unadjudicated$' "$o10" || true)
+  vv10=$(grep -c '^verdict=verified$' "$o10" || true)
+  f10=$(grep -c '^freshness_evidence=none$' "$o10" || true)
+  if [[ "$rc10" -eq 0 && "$v10" -eq 1 && "$vv10" -eq 0 && "$f10" -eq 1 ]]; then
+    pass "#7104 I8: a tolerated 404 emits verdict=unadjudicated and freshness_evidence=none, and NEVER verdict=verified — the one arm that adjudicates nothing does not claim the strongest result"
+  else
+    fail "#7104 I8: tolerated 404 gave rc=$rc10 unadjudicated=$v10 verified=$vv10 evidence-none=$f10 (expected 0/1/0/1). An arm that checks nothing must not emit the same terminal verdict as a full count-plus-content-plus-freshness pass."
+  fi
+  # And WITHOUT the flag the same 404 must be terminal — this is the #4804 false-success freeze
+  # vector, so the escape hatch must be opt-in rather than the default shape of a 404.
+  o11="$I_TMP/o11"; : > "$o11"
+  rc11=0
+  ( cd "$SCRIPT_DIR" || exit 99
+    export PATH="$I_TMP/bin:$PATH" STUB_FRAME="$STALE" STUB_HTTP_CODE=404
+    export INFRA_CONFIG_STATUS_RESPONSE="$I_TMP/status-404b-$$.json"
+    export GITHUB_OUTPUT="$o11" VERIFY_PASS=1 ALLOW_MISSING_STATUS=false
+    export DPF_REPLACED=true APPLY_START_EPOCH=2000
+    bash ./infra-config-verify.sh >/dev/null 2>&1 ) || rc11=$?
+  if [[ "$rc11" -ne 0 ]]; then
+    pass "#7104 I8b: an UNtolerated 404 is terminal (rc=$rc11) — the escape hatch is opt-in, not the default reading of a missing endpoint (#4804)"
+  else
+    fail "#7104 I8b: a 404 with ALLOW_MISSING_STATUS=false exited 0 — that is the #4804 false-success freeze vector"
+  fi
+  # A DEAD LISTENER is not a missing endpoint, and they have opposite levers. 000/502/503 were
+  # never driven either (F9), and the escape hatch must not swallow them.
+  for code in 000 502 503; do
+    oX="$I_TMP/o-$code"; : > "$oX"
+    rcX=0
+    ( cd "$SCRIPT_DIR" || exit 99
+      export PATH="$I_TMP/bin:$PATH" STUB_FRAME="$STALE" STUB_HTTP_CODE="$code"
+      export INFRA_CONFIG_STATUS_RESPONSE="$I_TMP/status-$code-$$.json"
+      export GITHUB_OUTPUT="$oX" VERIFY_PASS=1 ALLOW_MISSING_STATUS=true
+      export DPF_REPLACED=true APPLY_START_EPOCH=2000
+      bash ./infra-config-verify.sh >/dev/null 2>&1 ) || rcX=$?
+    uX=$(grep -c '^verdict=unadjudicated$' "$oX" || true)
+    if [[ "$rcX" -ne 0 && "$uX" -eq 0 ]]; then
+      pass "#7104 I8c/$code: a dead listener is terminal even with the 404 escape hatch set — allow_missing_status_endpoint tolerates a MISSING endpoint, not a DOWN one"
+    else
+      fail "#7104 I8c/$code: HTTP $code gave rc=$rcX unadjudicated=$uX — the escape hatch swallowed a dead listener, whose lever (-replace the handler bootstrap) is the opposite of the first-bootstrap one"
+    fi
+  done
+
   # --- I7: THE ABSOLUTE FRESHNESS PIN ON PASS 2 (#7104 P0-A) -------------------------------
   #
   # On origin/main this arm was unconditionally `FRAME_START_TS -lt APPLY_START_EPOCH`.
@@ -705,7 +766,9 @@ fi
 # 35 -> 33: the actuation sweep replaced five deny-list rows (three command names, the `gh issue`
 # row, and a cardinality guard over the loop that iterated them) with three allow-list rows. Fewer
 # assertions covering strictly more shapes — D3 measured the deny-list as evaded 8 ways out of 9.
-VERIFY_MIN_ASSERTIONS=33
+# 33 -> 38 for the `unadjudicated` arm (I8/I8b/I8c), which had ZERO coverage: STUB_HTTP_CODE was
+# 200 at every drive site, so the 404/000/502/503 branches were unreachable from this suite.
+VERIFY_MIN_ASSERTIONS=38
 echo ""
 echo "  $PASS passed, $FAIL failed"
 if [[ "$FAIL" -gt 0 ]]; then
