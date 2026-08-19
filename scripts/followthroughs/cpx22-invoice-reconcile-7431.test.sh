@@ -20,9 +20,18 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROBE="$HERE/cpx22-invoice-reconcile-7431.sh"
 fails=0
-checks=0
-pass() { printf '  PASS: %s\n' "$1"; checks=$((checks + 1)); }
-fail() { printf '  FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); checks=$((checks + 1)); }
+passes=0
+# `cases` is incremented at the CALL SITE — at the top of expect(), and inline for the one
+# assertion that does not go through it — and NEVER inside pass()/fail(). That placement is the
+# whole substance of the conservation check at the bottom of this file. The previous shape
+# incremented `checks` inside BOTH verdict helpers, so it moved WITH the verdict: stubbing
+# `fail() { :; }` dropped the row and its count together, the cardinality floor stayed satisfied
+# at 16, and a forged-verdict regression printed `16/16 passed` and exited 0.
+#
+# Never increment inside `$( )` — a subshell discards it.
+cases=0
+pass() { printf '  PASS: %s\n' "$1"; passes=$((passes + 1)); }
+fail() { printf '  FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); }
 
 [[ -f "$PROBE" ]] || { echo "FATAL: probe not found at $PROBE" >&2; exit 1; }
 command -v jq >/dev/null || { echo "FATAL: jq required for the stub" >&2; exit 1; }
@@ -70,6 +79,9 @@ run() { # run <comments_json> [issue_body] [gh_rc]
 }
 
 expect() { local l="$1" wrc="$2" wsub="$3"
+  # One assertion is about to be decided. Counted HERE, outside pass()/fail(), so it survives a
+  # neutered verdict helper and the conservation check below can see the missing verdict.
+  cases=$((cases + 1))
   if [[ "$RC" != "$wrc" ]]; then fail "$l — wanted rc=$wrc, got rc=$RC. Output: $OUT"; return; fi
   if [[ -n "$wsub" && "$OUT" != *"$wsub"* ]]; then fail "$l — rc ok but output lacks '$wsub'. Output: $OUT"; return; fi
   pass "$l (rc=$RC)"
@@ -152,6 +164,7 @@ expect "the sweeper's own echoed FAIL does not outlive the operator's correction
 
 # 14. And the probe must not EMIT a re-readable anchor in the first place.
 run "$(comments_json 'MEMBER:RESULT: FAIL  invoice shows cx23')"
+cases=$((cases + 1))
 if [[ "$OUT" == *$'\n''RESULT: FAIL'* || "$OUT" == 'RESULT: FAIL'* ]]; then
   fail "the probe echoes an unredacted ^RESULT: line, which the sweeper will post back and re-read"
 else
@@ -169,11 +182,41 @@ expect "gh transport failure is TRANSIENT, not a pass" 2 "TRANSIENT"
 run "$(comments_json 'MEMBER:RESULT: PASS  EUR 14.00')" "this issue no longer tracks that script"
 expect "a tracker missing its directive is TRANSIENT" 2 "no longer carries"
 
+# --- Anti-vacuity floor -----------------------------------------------------------------------
+# This harness's own dispatch. A fixture builder that no-ops, an early `return`, a `run()` that
+# stops invoking the probe — any of these leaves the suite asserting nothing about a probe that
+# decides whether a production financial ledger stands.
+#
+# Reported with `printf >&2` + `exit 1` DIRECTLY, never by incrementing `fails`. The previous
+# shape did `fails=$((fails + 1))`, and `fails` is exactly what the exit status reads — so
+# neutering the verdict machinery silenced the rows AND the floor that exists to notice the
+# silence. A floor enforced through the suspect cannot witness the suspect.
+#
+# Measured from a green run with ZERO slack: 16 assertions (15 expect() rows + the inline
+# echo-redaction row). Ratchet upward only.
 MIN_CHECKS=16
-if (( checks < MIN_CHECKS )); then
-  echo "FAIL: only $checks assertions ran, expected >= $MIN_CHECKS" >&2
-  fails=$((fails + 1))
+if (( cases < MIN_CHECKS )); then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
+    "$cases" "$MIN_CHECKS" >&2
+  echo "cpx22-invoice-reconcile-7431: $passes/$cases passed"
+  exit 1
 fi
 
-echo "cpx22-invoice-reconcile-7431: $((checks - fails))/$checks passed"
+# --- Accounting conservation --------------------------------------------------------------
+# The arm that actually catches a neutered verdict helper. The floor above catches "no
+# assertions RAN"; it cannot catch "assertions ran and their verdicts were discarded", because
+# `cases` keeps its full value when fail() is a no-op. Every assertion records exactly one
+# verdict, so passes+fails MUST equal cases. Reported directly for the same reason as the floor.
+if (( passes + fails != cases )); then
+  printf '\n[FATAL] accounting: passes+fails (%d) != cases (%d).\n' "$((passes + fails))" "$cases" >&2
+  if (( passes + fails < cases )); then
+    printf '  An assertion was counted but its verdict was not recorded — that is what a neutered pass()/fail() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `cases=$((cases + 1))` before it. This is a harness bug, not a probe failure: add the increment at that call site.\n' >&2
+  fi
+  echo "cpx22-invoice-reconcile-7431: $passes/$cases passed"
+  exit 1
+fi
+
+echo "cpx22-invoice-reconcile-7431: $passes/$cases passed"
 (( fails == 0 )) || exit 1

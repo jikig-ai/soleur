@@ -79,14 +79,16 @@ jobs:
           echo "endpoint=$endpoint" >> "$GITHUB_OUTPUT"
           echo "bucket=$bucket" >> "$GITHUB_OUTPUT"
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.2
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          bun-version: latest
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web-platform/package-lock.json
 
       - name: Install dependencies (zod for schema validation)
         working-directory: apps/web-platform
-        run: bun install --frozen-lockfile
+        run: npm ci --ignore-scripts
 
       # Plan Phase 2 step 5/6 — folded gate. Poll the upstream action's
       # `license/cla` Status API check up to 30s. If green, run sidecar; if
@@ -157,7 +159,7 @@ jobs:
           PR_NUMBER: ${{ github.event.issue.number }}
         run: |
           set -euo pipefail
-          payload=$(bun run apps/web-platform/scripts/cla-evidence/build-record.ts) \
+          payload=$(apps/web-platform/node_modules/.bin/tsx apps/web-platform/scripts/cla-evidence/build-record.ts) \
             || { echo "::error::evidence-record build failed"; exit 2; }
           bash apps/cla-evidence/scripts/upload-evidence.sh "$payload"
 
@@ -182,7 +184,7 @@ jobs:
           # Do NOT swallow non-zero with `|| exit 0` — that would silently
           # erase audit records on parse failures (cq-silent-fallback-must-
           # mirror-to-sentry).
-          payload=$(bun run apps/web-platform/scripts/cla-evidence/build-bypass.ts)
+          payload=$(apps/web-platform/node_modules/.bin/tsx apps/web-platform/scripts/cla-evidence/build-bypass.ts)
           if [[ -z "$payload" ]]; then
             echo "Not an allowlist-bypass; skipping."
             exit 0

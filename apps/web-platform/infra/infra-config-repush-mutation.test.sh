@@ -595,7 +595,7 @@ if [[ "${1:-}" == "--row" ]]; then
   # row targeting a sub-check of a composite guard to share that guard's single header marker,
   # which is the "N rows, one detector" shape F5 flags. A row can now name the specific problem
   # it causes rather than the block that reports it.
-  _faillines="$(grep -E '^  FAIL:|^      - ' "$_log" || true)"
+  _faillines="$(grep -E '^  FAIL:|^      - |^\[FATAL\]' "$_log" || true)"
   if [[ -z "$_why" ]] && [[ "$_want_rc" != "0" ]] && ! grep -qF -- "$_marker" <<<"$_faillines"; then
     _why="rc ok but NO FAILING check named the property (the marker appears only on passing lines, if at all)"
   fi
@@ -748,7 +748,7 @@ ROWS=(
   "C3-CLEARTEXT-TRAP|$GATE_SUITE|1|no longer traps|the cleartext-credential trap removed"
   "C4-AC18-ERROR-TOLERANCE|$GATE_SUITE|1|#7104 AC18|AC18: continue-on-error added to the apply"
   "F7-VERIFY-TALLY|$VERIFY_SUITE|1|assertion-count reconciliation (stdout)|F7: the verify suite's tally inflated"
-  "F7-ALERT-TALLY|$ALERT_SUITE|1|assertion-count reconciliation (stdout)|F7: the alert suite's tally inflated"
+  "F7-ALERT-TALLY|$ALERT_SUITE|1|[FATAL] accounting:|F7: the alert suite's tally inflated (caught by #7575's call-site counter)"
   "STAY-GREEN|$GATE_SUITE|0|#7104|a scanner-VISIBLE but irrelevant helper must NOT red the suite (control)"
 )
 

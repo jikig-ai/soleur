@@ -41,6 +41,16 @@ WF="${MHM_WORKFLOW:-$WF}"
 
 PASS=0
 FAIL=0
+# CASES counts assertions DISPATCHED. It is incremented at the CALL SITE and
+# never inside pass()/fail(), and that placement is the whole substance of the
+# accounting-conservation check further down: a counter that moves inside both
+# verdict helpers moves WITH the verdict, so stubbing fail() to a no-op drops the
+# row and its count together and PASS+FAIL == CASES still holds under the exact
+# fault it exists to catch.
+#
+# Never increment inside `$( )` — a subshell discards it. `$((` is arithmetic and
+# is fine; `$(` is command substitution and is not.
+CASES=0
 pass() { PASS=$((PASS + 1)); echo "  [ok]   $1"; }
 fail() { FAIL=$((FAIL + 1)); echo "  [FAIL] $1 -- $2" >&2; }
 
@@ -500,6 +510,7 @@ fi
 
 while IFS=$'\t' read -r status msg detail; do
   [[ -n "${status:-}" ]] || continue
+  CASES=$((CASES + 1))
   if [[ "$status" == "ok" ]]; then pass "$msg"; else fail "$msg" "$detail"; fi
 done < "$RESULT_FILE"
 
@@ -530,6 +541,7 @@ if [[ -n "$EXCERPT_EXPR" ]]; then
   # title derivation. Mirrors T8c's technique for MARKER_ERE in the runner's own suite.
   _RUNNER="$REPO_ROOT/apps/web-platform/infra/run-registered-suites.sh"
   SP="$(sed -n "s/^SENTINEL_PREFIX='\(.*\)'$/\1/p" "$_RUNNER")"
+  CASES=$((CASES + 1))
   if [[ -z "$SP" ]]; then
     fail "(13) could not read SENTINEL_PREFIX from the runner" "$_RUNNER"
     SP='SOLEUR| '
@@ -559,6 +571,7 @@ if [[ -n "$EXCERPT_EXPR" ]]; then
   # shellcheck disable=SC2034
   file="$_fix"; eval "$EXCERPT_EXPR" > "$_out" 2>/dev/null || true
 
+  CASES=$((CASES + 1))
   if ! grep -q '^SOLEUR| ' "$_out"; then
     pass "(13a) the excerpt drops every dumped diagnostic line"
   else
@@ -568,6 +581,7 @@ if [[ -n "$EXCERPT_EXPR" ]]; then
   # WHITELIST, not an absence check. "no SOLEUR| line" is satisfied by a filter that drops
   # EVERYTHING, which would silently gut the issue body. Assert positively that the signal
   # the operator actually needs survived.
+  CASES=$((CASES + 1))
   if grep -q '=== registered infra suites: 91 passed, 1 failed, 1 unaccounted (of 93) ===' "$_out" \
      && grep -q '^RED  *apps/web-platform/infra/inngest.test.sh' "$_out" \
      && grep -q '^UNACCOUNTED  *apps/web-platform/infra/zot-liveness.test.sh' "$_out"; then
@@ -579,6 +593,7 @@ if [[ -n "$EXCERPT_EXPR" ]]; then
   # The tests half of the same loop: expenses-verify-by-check prints markdown tables at
   # column 0. A bare `^| ` sentinel would have deleted them from the public excerpt; this is
   # the assertion that keeps the sentinel distinctive.
+  CASES=$((CASES + 1))
   if grep -q '^| Service | Provider' "$_out"; then
     pass "(13c) a legitimate column-0 markdown table is NOT stripped"
   else
@@ -586,6 +601,7 @@ if [[ -n "$EXCERPT_EXPR" ]]; then
   fi
   rm -f "$_fix" "$_out"
 else
+  CASES=$((CASES + 1))
   fail "(13) could not extract the excerpt filter from the workflow" \
     "the dump filter is missing, or its shape changed and this pin went blind"
 fi
@@ -636,6 +652,7 @@ if (( ${#_SED_EXPRS[@]} >= 12 )); then
   grep -q 'abcdefghijklmnop0123456789' <<<"$_red" && _leaks+=("authorization")
   grep -q 'MIIEowIBAAKCAQEAsecretbody' <<<"$_red" && _leaks+=("pem-body")
 
+  CASES=$((CASES + 1))
   if (( ${#_leaks[@]} == 0 )); then
     pass "(14a) every synthesized secret shape is redacted (${#_SED_EXPRS[@]} rules)"
   else
@@ -644,6 +661,7 @@ if (( ${#_SED_EXPRS[@]} >= 12 )); then
 
   # The PEM rule is a RANGE. A header-only rule is an anti-mitigation: it strips the marker
   # that makes a leaked key recognisable and leaves the base64 body behind.
+  CASES=$((CASES + 1))
   if ! grep -q 'MIIEowIBAAKCAQEA' <<<"$_red" && ! grep -q 'END RSA PRIVATE KEY' <<<"$_red"; then
     pass "(14b) the PEM rule removes the whole key BLOCK, not just its header"
   else
@@ -651,12 +669,14 @@ if (( ${#_SED_EXPRS[@]} >= 12 )); then
   fi
 
   # WHITELIST: redaction that eats everything is not a pass.
+  CASES=$((CASES + 1))
   if grep -q 'keepme: this ordinary diagnostic line must survive' <<<"$_red"; then
     pass "(14c) ordinary diagnostic text survives redaction"
   else
     fail "(14c) redaction destroyed non-secret diagnostic text"
   fi
 else
+  CASES=$((CASES + 1))
   fail "(14) could not extract the redaction rules from the workflow" \
     "found ${#_SED_EXPRS[@]} -e expressions, expected >= 12"
 fi
@@ -698,6 +718,7 @@ chmod +x "$BEHAVE_DIR/bin/gh"
 # Extract the filer's run: body and repoint its hardcoded /tmp/ paths at the sandbox.
 # `$SANDBOX/` substitution is the ONLY rewrite: any other edit would make this harness
 # assert something the workflow does not do.
+CASES=$((CASES + 1))
 if ! python3 - "$WF" "$BEHAVE_DIR/run" > "$BEHAVE_DIR/filer.sh" 2>"$BEHAVE_DIR/extract.err"; then
   fail "(B0) the filer's run: body extracts cleanly" "$(head -5 "$BEHAVE_DIR/extract.err")"
 else
@@ -808,6 +829,7 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
 
   # --- AC21: redaction, and the [KILLED] line reaching the body at all -------
   run_filer "$BEHAVE_DIR/fx-killed.txt" "$NO_TRACKER" "$SHELLOPTS_ARM"
+  CASES=$((CASES + 1))
   if [[ "$B_RC" -ne 0 ]]; then
     fail "(B1)$ARM the filer completes on a killed-only capture" \
       "rc=$B_RC -- under errexit an unguarded capture ABORTS the step, and everything below it (the issue body, the ::error::) never runs. stdout: $(tail -3 "$BEHAVE_DIR/run/stdout.txt" | tr '\n' ' ')"
@@ -815,6 +837,7 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
     pass "(B1)$ARM the filer completes on a killed-only capture"
   fi
 
+  CASES=$((CASES + 1))
   if grep -qF -- 'registry-gate-mutation-battery' "$BEHAVE_DIR/run/issue-body.md"; then
     pass "(B2)$ARM the issue body NAMES the terminated suite"
   else
@@ -822,12 +845,14 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
       "the [KILLED] line sits 36 lines above the end of the capture, outside tail -30, so without the SUMMARY append the operator gets an issue titled 'terminated' naming no suite"
   fi
 
+  CASES=$((CASES + 1))
   if grep -qF -- '<redacted-gh-token>' "$BEHAVE_DIR/run/issue-body.md"; then
     pass "(B3)$ARM a token on a [KILLED] line is redacted in the published body"
   else
     fail "(B3)$ARM a token on a [KILLED] line is redacted in the published body" \
       "this repo is PUBLIC; content appended AFTER the REDACTED= pass ships raw"
   fi
+  CASES=$((CASES + 1))
   if grep -qF -- "$_TOK" "$BEHAVE_DIR/run/issue-body.md"; then
     fail "(B3b)$ARM the raw token literal does NOT survive into the body" \
       "the killed hits were appended after the redactor"
@@ -836,6 +861,7 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
   fi
 
   # --- AC23: the operator's killed issue is actionable ----------------------
+  CASES=$((CASES + 1))
   if [[ "$(b_title)" == "CI: main-branch health check was terminated before it could report" ]]; then
     pass "(B4)$ARM a killed-only run selects the fourth (terminated) title"
   else
@@ -843,18 +869,21 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
       "title=$(b_title) -- 'tests failing' would assert a failure no suite reported"
   fi
 
+  CASES=$((CASES + 1))
   if grep -qF -- 'gh workflow run main-health-monitor.yml' "$BEHAVE_DIR/run/issue-body.md"; then
     pass "(B5)$ARM the killed body's Actions block names a re-run command"
   else
     fail "(B5)$ARM the killed body's Actions block names a re-run command" \
       "the only actionable text on the page must match the arm it is on"
   fi
+  CASES=$((CASES + 1))
   if grep -qF -- 'Fix the tests or revert the breaking change' "$BEHAVE_DIR/run/issue-body.md"; then
     fail "(B6)$ARM the killed body prescribes no revert" \
       "a non-technical operator is told to find and revert a commit on a run whose own lede says no suite reported a failure"
   else
     pass "(B6)$ARM the killed body prescribes no revert"
   fi
+  CASES=$((CASES + 1))
   if grep -qF -- '### Actions required' "$BEHAVE_DIR/run/issue-body.md"; then
     pass "(B6b)$ARM the killed body still carries an Actions required block"
   else
@@ -870,6 +899,7 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
   # a no-match grep is exit 1 and errexit kills the step at that line, taking the issue
   # body, the ::error:: and the whole report with it.
   run_filer "$BEHAVE_DIR/fx-forged.txt" "$NO_TRACKER" "$SHELLOPTS_ARM"
+  CASES=$((CASES + 1))
   if [[ "$B_RC" -eq 0 && "$(b_title)" == "CI: main-branch health check did not complete" ]]; then
     pass "(B7)$ARM a shape-invalid [KILLED] line does not select the fourth arm"
   else
@@ -878,6 +908,7 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
   fi
 
   run_filer "$BEHAVE_DIR/fx-uncorroborated.txt" "$NO_TRACKER" "$SHELLOPTS_ARM"
+  CASES=$((CASES + 1))
   if [[ "$B_RC" -eq 0 && "$(b_title)" == "CI: main-branch health check did not complete" ]]; then
     pass "(B8)$ARM a [KILLED] line with no runner breakdown line does not select the arm"
   else
@@ -887,12 +918,14 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
 
   # --- failure dominates ----------------------------------------------------
   run_filer "$BEHAVE_DIR/fx-both.txt" "$NO_TRACKER" "$SHELLOPTS_ARM"
+  CASES=$((CASES + 1))
   if [[ "$(b_title)" == "CI: main branch tests failing" ]]; then
     pass "(B9)$ARM a capture with BOTH markers is reported as a failure"
   else
     fail "(B9)$ARM a capture with BOTH markers is reported as a failure" \
       "title=$(b_title) -- calling a run with a real [FAIL] merely 'terminated' hides it"
   fi
+  CASES=$((CASES + 1))
   if grep -qF -- 'Fix the tests or revert the breaking change' "$BEHAVE_DIR/run/issue-body.md"; then
     pass "(B9b)$ARM the failure arm keeps its pre-existing Actions wording"
   else
@@ -902,6 +935,7 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
 
   # --- AC23 (comment path): the arm's LEDE survives into the comment --------
   run_filer "$BEHAVE_DIR/fx-killed.txt" "$HAS_TRACKER" "$SHELLOPTS_ARM"
+  CASES=$((CASES + 1))
   if grep -qF 'did not measure what terminated the suite' "$BEHAVE_DIR/run/issue-comment.md" 2>/dev/null; then
     pass "(B10)$ARM the existing-tracker comment carries the killed arm's LEDE"
   else
@@ -909,6 +943,29 @@ for SHELLOPTS_ARM in "-e" "-eo pipefail"; do
       "runs 2, 3, 4 ... of a flapping killed suite otherwise append only 'still not passing' -- an escalating claim that main is broken, from a runner that measured nothing"
   fi
 done
+
+# ACCOUNTING CONSERVATION. Placed BEFORE the positive control on purpose: the
+# control below also trips on a neutered pass()/fail(), and whichever check runs
+# first is the one that names the fault. This one names it most precisely --
+# "N assertions were dispatched and only M verdicts came back" -- and it covers
+# a case the control cannot: a dispatch site whose verdict is silently dropped
+# while pass()/fail() themselves still work.
+#
+# Reported with `printf >&2` + `exit 1` DIRECTLY, never through fail(): a check
+# that reports by calling fail() increments the same counter the exit status
+# reads, so neutering fail() silences the rows AND the check that exists to
+# notice the silence.
+if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
+  printf '\n[FATAL] accounting: PASS+FAIL (%d) != CASES (%d).\n' \
+    "$((PASS + FAIL))" "$CASES" >&2
+  if [[ $((PASS + FAIL)) -lt "$CASES" ]]; then
+    printf '  An assertion was dispatched but its verdict was not recorded — that is what a neutered pass()/fail() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `CASES=$((CASES + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  echo "=== Results: $PASS passed, $FAIL failed ($CASES assertions dispatched) ==="
+  exit 1
+fi
 
 # POSITIVE CONTROL. The floor below counts PASS+FAIL, so it catches a dispatch
 # layer that stops emitting entirely -- but NOT a `fail()` neutered to a no-op,
@@ -936,14 +993,21 @@ fi
 # block emit nothing reported 28 assertions / exit 0 (all nine #7424 static guards gone),
 # and stranding the behavioural battery reported 30 / exit 0 (all 26 AC21/AC22/AC23
 # assertions gone, incl. redaction and forged-marker rejection).
+#
+# Reported with `printf >&2` + `exit 1` DIRECTLY, never by bumping FAIL. A floor
+# that reports itself through FAIL increments the same counter the exit status
+# reads, so neutering pass()/fail() silences every row AND the floor that exists
+# to notice the silence -- the suite prints a total and exits 0. A floor enforced
+# through the suspect cannot witness the suspect.
 MIN_ASSERTIONS=63
 TOTAL=$((PASS + FAIL))
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
-  echo "  [FAIL] anti-vacuity: only $TOTAL assertion(s) ran, expected >= $MIN_ASSERTIONS" >&2
-  FAIL=$((FAIL + 1))
-else
-  pass "anti-vacuity: $TOTAL assertions ran (floor $MIN_ASSERTIONS)"
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
+    "$TOTAL" "$MIN_ASSERTIONS" >&2
+  echo "=== Results: $PASS passed, $FAIL failed ($CASES assertions dispatched) ==="
+  exit 1
 fi
+pass "anti-vacuity: $TOTAL assertions ran (floor $MIN_ASSERTIONS)"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

@@ -11,7 +11,7 @@ Validate the documentation build and prepare it for GitHub Pages deployment.
 
 ```bash
 # Install dependencies (if needed)
-npm ci
+npm ci --ignore-scripts
 
 # Run Eleventy build
 npx @11ty/eleventy

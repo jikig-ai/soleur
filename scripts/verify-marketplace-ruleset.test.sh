@@ -27,16 +27,33 @@ trap 'rm -rf "$TMP"' EXIT
 PASS=0
 FAIL=0
 ASSERTED=0
-pass() { PASS=$((PASS + 1)); ASSERTED=$((ASSERTED + 1)); echo "  PASS: $1"; }
+# ASSERTED is incremented at the CALL SITE, never inside pass()/fail(). That placement is
+# the whole substance of the conservation check at the bottom of this file: a counter that
+# moves inside both verdict helpers moves WITH the verdict, so stubbing fail() to a no-op
+# drops the row and its count together and `PASS+FAIL == ASSERTED` still holds. Measured on
+# this shape before the fix: a genuine defect printed a clean total and exited 0.
+#
+# Never increment inside `$( )` — a subshell discards it.
+pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
 fail() {
-  FAIL=$((FAIL + 1)); ASSERTED=$((ASSERTED + 1))
+  FAIL=$((FAIL + 1))
   echo "  FAIL: $1"; [[ $# -lt 2 ]] || echo "        $2"
 }
 
 echo "=== verify-marketplace-ruleset ==="
 
-[[ -x "$VERIFIER" ]] || { fail "verifier is executable at $VERIFIER"; echo "=== Results: $PASS passed, $FAIL failed ==="; exit 1; }
-[[ -f "$CANONICAL" ]] || { fail "canonical bypass-actors file exists at $CANONICAL"; echo "=== Results: $PASS passed, $FAIL failed ==="; exit 1; }
+if [[ ! -x "$VERIFIER" ]]; then
+  ASSERTED=$((ASSERTED + 1))
+  fail "verifier is executable at $VERIFIER"
+  echo "=== Results: $PASS passed, $FAIL failed ==="
+  exit 1
+fi
+if [[ ! -f "$CANONICAL" ]]; then
+  ASSERTED=$((ASSERTED + 1))
+  fail "canonical bypass-actors file exists at $CANONICAL"
+  echo "=== Results: $PASS passed, $FAIL failed ==="
+  exit 1
+fi
 
 # API-shaped baseline: OrganizationAdmin carries `actor_id: null` here, where the .tf writes 0.
 cat > "$TMP/baseline.json" <<'EOF'
@@ -73,6 +90,9 @@ EOF
 run_rc() { local rc=0; "$VERIFIER" "$1" "$CANONICAL" > "$TMP/out.txt" 2>&1 || rc=$?; echo "$rc"; }
 
 expect() { # $1=label $2=file $3=want-rc
+  # One assertion is about to be decided. Counted HERE, outside the command substitution
+  # below — an increment inside `$( )` lands in a subshell and is discarded.
+  ASSERTED=$((ASSERTED + 1))
   local got; got="$(run_rc "$2")"
   if [[ "$got" == "$3" ]]; then pass "$1 (exit $got)"
   else fail "$1" "expected exit $3, got $got; output: $(tr '\n' ' ' < "$TMP/out.txt" | cut -c1-240)"; fi
@@ -85,8 +105,14 @@ expect() { # $1=label $2=file $3=want-rc
 # had nothing to do with the mutation. Measured: with mutate() fully broken, 16 of these
 # 18 rows still reported green. So the mutation happens in THIS shell, and both failure
 # modes are asserted before the row is allowed to count.
+#
+# NOTE ON COUNTING. expect_mut has three exits, each recording exactly one verdict: the two
+# early `fail`s below, and the delegation to expect() at the end. The increment therefore
+# goes at each early exit, NOT at the top of this function — expect() already counts the
+# delegated path, and a top-of-function increment would count that path twice.
 expect_mut() { # $1=label $2=jq-filter $3=want-rc
   if ! jq "$2" "$TMP/baseline.json" > "$TMP/m.json" 2>"$TMP/jqerr.txt"; then
+    ASSERTED=$((ASSERTED + 1))
     fail "$1" "mutate: jq filter failed: $2 :: $(tr '\n' ' ' < "$TMP/jqerr.txt" | cut -c1-160)"
     return
   fi
@@ -95,6 +121,7 @@ expect_mut() { # $1=label $2=jq-filter $3=want-rc
   # which is false, and it would fail — but only by accident of direction. For a row
   # expecting rc 0 it passes while proving nothing. Landing is asserted either way.
   if cmp -s "$TMP/baseline.json" "$TMP/m.json"; then
+    ASSERTED=$((ASSERTED + 1))
     fail "$1" "mutate: filter produced NO change — the row is vacuous: $2"
     return
   fi
@@ -190,9 +217,38 @@ expect_mut "G1.5f an absent target fails closed" 'del(.target)' 1
 expect_mut "rule order is irrelevant (selected by .type, never positionally)" \
   '.rules |= reverse' 0
 
+# --- Anti-vacuity floor -------------------------------------------------------------------------
+# This suite's own dispatch. A harness that silently asserts nothing (a fixture generator that
+# no-ops, an early `return`) would otherwise report a clean 0/0.
+#
+# Reported with `printf >&2` + `exit 1` DIRECTLY, never through fail(). A floor that reports
+# by calling fail() increments the same counter the exit status reads, so neutering fail()
+# silences the rows AND the floor that exists to notice the silence — the suite prints a
+# total and exits 0. A floor enforced through the suspect cannot witness the suspect.
 MIN_ASSERTIONS=27
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
-  fail "anti-vacuity floor" "only $ASSERTED assertion(s) ran, expected >= $MIN_ASSERTIONS"
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
+    "$ASSERTED" "$MIN_ASSERTIONS" >&2
+  echo "=== Results: $PASS passed, $FAIL failed ($ASSERTED assertions) ==="
+  exit 1
+fi
+
+# --- Accounting conservation ----------------------------------------------------------------------
+# The arm that actually catches a neutered verdict helper. The floor above catches "no
+# assertions RAN"; it cannot catch "assertions ran and their verdicts were discarded",
+# because ASSERTED keeps its full value when fail() is a no-op. Every assertion records
+# exactly one verdict, so PASS+FAIL MUST equal ASSERTED. Reported directly for the same
+# reason as the floor.
+if [[ $((PASS + FAIL)) -ne "$ASSERTED" ]]; then
+  printf '\n[FATAL] accounting: PASS+FAIL (%d) != ASSERTED (%d).\n' \
+    "$((PASS + FAIL))" "$ASSERTED" >&2
+  if [[ $((PASS + FAIL)) -lt "$ASSERTED" ]]; then
+    printf '  An assertion was counted but its verdict was not recorded — that is what a neutered pass()/fail() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `ASSERTED=$((ASSERTED + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  echo "=== Results: $PASS passed, $FAIL failed ($ASSERTED assertions) ==="
+  exit 1
 fi
 
 echo "=== Results: $PASS passed, $FAIL failed ($ASSERTED assertions) ==="

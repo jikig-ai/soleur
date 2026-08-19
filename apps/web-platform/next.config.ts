@@ -10,6 +10,26 @@ const securityHeaders = buildSecurityHeaders();
 const devPort = process.env.PORT || "3000";
 
 const nextConfig: NextConfig = {
+  // Restrict the image optimizer to the ONE first-party asset that uses next/image
+  // (app/(public)/invite/[token]/page.tsx renders /icons/soleur-logo-mark.png).
+  //
+  // This is a security control, not a preference. Declaring NO `images` key does not
+  // restrict local URLs — it permits every one of them: `imageConfigDefault.localPatterns`
+  // is `undefined`, and Next's `hasLocalMatch(undefined, path)` returns TRUE for any path
+  // (measured against the installed next@15.5.22). The optimizer's local branch is checked
+  // against `localPatterns` only, never `remotePatterns`.
+  //
+  // Without this, `/_next/image?url=/api/shared/<token>` reached the next-PINNED nested
+  // sharp — which is the copy Dependabot advisory 144 covers, and which `next` holds at
+  // 0.34.5 while our top-level copy is patched at 0.35.3. `middleware.ts` excludes
+  // `_next/image` from auth and `/api/shared` is in PUBLIC_PATHS, so that path was
+  // unauthenticated, and KB binaries are stored and served RAW with an extension-derived
+  // content type (server/kb-binary-response.ts) — no decode, no re-encode. An uploaded
+  // malformed .webp was therefore decodable by the vulnerable copy by any logged-out
+  // caller. See ADR-191 and apps/web-platform/test/next-config-image-optimizer-scope.test.ts.
+  images: {
+    localPatterns: [{ pathname: "/icons/**" }],
+  },
   // Custom server handles HTTP — disable standalone output
   output: undefined,
   // Bake BUILD_VERSION / BUILD_SHA into both client and server bundles so

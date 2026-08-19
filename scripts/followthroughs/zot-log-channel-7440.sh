@@ -453,6 +453,17 @@ fi
 # header still counted here — byte-identical literals, different semantics, no gate between them.
 # sanitize() strips quotes, so a shipped zerolog row renders `message:executing gc` while a
 # header-borne one renders `User-Agent:[executing gc]` with `message:HTTP API`.
+# STAYS FOUR-CLASS DELIBERATELY (#7555). The producer's cap-exempt set is now WIDER than these
+# four: #7444 R12 added four crash classes (panic:, fatal error, runtime error, [signal] — which
+# #7555 also repaired, since they could never match a PLAINTEXT panic), and #7555 added the
+# HTTP-API half of an upload-failure pairing. This reader is NOT an exemption census and must not
+# become one. It answers one question — is the #7440 channel delivering, and what is the gc
+# start/complete RATIO — for which these four are the vocabulary. The upload-pairing question has
+# its own probe (scripts/followthroughs/zot-upload-ceiling-7556.sh); counting it here too would be
+# a second encoding that can drift from the first.
+#
+# The consequence to keep in view: these counts are a lower bound on exempt volume, never a
+# measure of it. Do not read a flat gc count as "the exempt lane is quiet".
 n_gc_start=$(printf '%s\n' "$envelope_hits" | grep -cF 'message:executing gc' || true)
 n_gc_done=$(printf '%s\n' "$envelope_hits" | grep -cF 'message:gc successfully completed' || true)
 n_gc_blobs=$(printf '%s\n' "$envelope_hits" | grep -cF 'message:garbage collected blobs' || true)

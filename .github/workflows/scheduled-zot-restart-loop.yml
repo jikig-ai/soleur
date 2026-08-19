@@ -137,6 +137,7 @@ jobs:
             1) echo "::error::zot restart-loop alarm FIRE — ${cause_safe}" ;;
             2) echo "::warning::zot restart-loop alarm TRANSIENT (probe fault / zero valid evidence) — ${detail_safe}. No issue filed; the errored Sentry check-in surfaces a persistent probe fault." ;;
             3) echo "::error::zot telemetry PRODUCER-SILENT — ${detail_safe}" ;;
+            4) echo "::error::Better Stack INGEST DARK — ${detail_safe}" ;;
             *) echo "::warning::zot restart-loop checker returned unexpected exit ${rc}: ${detail_safe}" ;;
           esac
 
@@ -144,8 +145,10 @@ jobs:
             GREEN)     echo "::notice::private-NIC GREEN — ${nic_detail_safe}" ;;
             FIRE)      echo "::error::private-NIC alarm FIRE — ${nic_cause_safe}" ;;
             ADVISORY)  echo "::warning::private-NIC self-heal observed — ${nic_cause_safe}" ;;
-            SILENT)    echo "::error::private-NIC guard went dark — ${nic_detail_safe}" ;;
-            *)         echo "::warning::private-NIC evaluation TRANSIENT — ${nic_detail_safe}. No issue filed." ;;
+            SILENT)      echo "::error::private-NIC guard went dark — ${nic_detail_safe}" ;;
+            INGEST_DARK) echo "::error::private-NIC absence is UNREADABLE — ${nic_detail_safe}" ;;
+            UNEVALUATED) echo "::error::private-NIC verdict was never assigned — the evaluator did not complete. This is a checker defect, not a NIC state." ;;
+            *)           echo "::warning::private-NIC evaluation TRANSIENT — ${nic_detail_safe}. No issue filed." ;;
           esac
 
       # ── WHY `always() &&` ON EVERY FILING STEP BELOW (#7242) ──────────────────
@@ -245,6 +248,105 @@ jobs:
           else
             gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
               --label "ci/zot-telemetry-silent" --label "action-required" --label "observability" --label "domain/engineering" \
+              --body-file "$BODY_FILE"
+          fi
+
+          # Reaching PRODUCER_SILENT REQUIRES the control read to have returned rows, so it is
+          # positive evidence that ingest resumed — by construction, not by inference. Without
+          # this, a reporter that stays quiet after restoration leaves [ci/betterstack-ingest-dark]
+          # open falsely while this issue says the opposite about the same warehouse.
+          STALE_DARK=$(gh issue list --repo "$GH_REPO" --state open \
+            --search 'in:title "[ci/betterstack-ingest-dark] Better Stack is accepting no writes"' --json number --jq '.[0].number // empty') || STALE_DARK=""
+          if [[ -n "$STALE_DARK" ]]; then
+            gh issue close "$STALE_DARK" --repo "$GH_REPO" --comment "Better Stack ingest resumed at ${NOW} — the control read returned rows, so the warehouse is accepting writes. This reporter is still quiet, tracked separately here. Run: ${RUN_URL}"
+          fi
+
+      - name: Open or comment Better Stack ingest-dark issue (INGEST_DARK)
+        # Gated on EQUALITY against two non-empty literals, never an inequality: an unset output
+        # is `null`, Actions `==` coerces, and `null != 'X'` is true — so a `!=` gate would file
+        # a spurious issue on the alarm's own crash.
+        if: ${{ !cancelled() && steps.alarm.outputs.exit_code == '4' && steps.alarm.outputs.verdict == 'INGEST_DARK' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BETTERSTACK_LOGS_TOKEN: ${{ secrets.BETTERSTACK_LOGS_TOKEN }}
+          DETAIL: ${{ steps.alarm.outputs.detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # shellcheck disable=SC2016  # literal single-quoted GitHub search is intentional
+          set -uo pipefail
+          # NOT `set -e`. The probe below exits non-zero BY CONTRACT (4 = refused), and the
+          # default shell for a `run:` block is already `bash -eo pipefail`, so an unguarded
+          # non-zero would abort this step between detecting the problem and REPORTING it.
+          ISSUE_TITLE="[ci/betterstack-ingest-dark] Better Stack is accepting no writes"
+          ISSUE_SEARCH='in:title "[ci/betterstack-ingest-dark] Better Stack is accepting no writes"'
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+          # Cause ANNOTATION, never a veto. The verdict of record is the reader-derived one
+          # already in steps.alarm.outputs.verdict; this only names the refusal code.
+          probe_rc=0
+          probe_out="$(bash scripts/betterstack-ingest-probe.sh 2>&1)" || probe_rc=$?
+          probe_safe="$(printf '%s' "$probe_out" | tr -d '\000-\037' | head -c 400)"
+
+          gh label create "ci/betterstack-ingest-dark" --repo "$GH_REPO" \
+            --description "Standing alarm: Better Stack is accepting no writes from any producer" --color "B60205" 2>/dev/null || true
+
+          BODY_FILE=$(mktemp) || exit 1
+          trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            printf '## Better Stack is accepting no writes\n\n'
+            printf -- '- **Detail:** %s\n' "$DETAIL"
+            # MEASURED-BY: scripts/betterstack-ingest-probe.sh, which POSTs an empty batch to the
+            # ingest endpoint and reports the HTTP status. Not an inference.
+            printf -- '- **Ingest probe:** `%s` (exit %s)\n' "$probe_safe" "$probe_rc"
+            printf -- '- **Detected at:** %s\n' "$NOW"
+            printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            printf '### Why this pages\n\n'
+            printf 'The control read ANSWERED and returned zero rows of any kind. That is not a probe\n'
+            printf 'fault and not one producer going quiet — the whole source is taking no writes, so\n'
+            printf 'EVERY absence-based signal on it is currently unreadable rather than clean. Any\n'
+            printf 'guard that reports "no errors found" against this source right now is reporting the\n'
+            printf 'absence of evidence, not evidence of absence.\n\n'
+            printf '### Decode table\n\n'
+            printf -- '- `INGEST_REFUSED_QUOTA` (402) -> vendor quota exhausted. Account-level; no code\n'
+            printf '  change restores it. Check the plan allowance against current volume.\n'
+            printf -- '- `INGEST_REFUSED_AUTH` (401/403) -> the ingest token was rejected. Compare\n'
+            printf '  `BETTERSTACK_LOGS_TOKEN` against the source token.\n'
+            printf -- '- `INGEST_UNREACHABLE` -> no HTTP status observed; the probe learned nothing.\n'
+            printf -- '- `INGEST_PROBE_UNCONFIGURED` -> the probe has no token in this environment; the\n'
+            printf '  reader-side verdict above still stands on its own.\n'
+            printf -- '- `INGEST_RATE_LIMITED` (429) -> the vendor is throttling. Distinct from quota\n'
+            printf '  exhaustion and usually self-clearing; re-run the workflow to re-probe.\n'
+            printf -- '- `INGEST_VENDOR_ERROR` (5xx) -> vendor-side fault. Says nothing about our quota or\n'
+            printf '  credentials.\n'
+            printf -- '- `INGEST_UNEXPECTED_STATUS` -> not classified rather than guessed. Read the status.\n\n'
+            printf '### Close condition\n\n'
+            printf 'This issue auto-closes on a GREEN run (the warehouse is carrying SOLEUR_ZOT_DISK\n'
+            printf 'rows again in the 3h window) or on a PRODUCER-SILENT run (the control read returned\n'
+            printf 'rows, which is positive evidence ingest resumed even though this reporter is still\n'
+            printf 'quiet). A FIRE or TRANSIENT run does NOT close it — those are non-dark but carry no\n'
+            printf 'evidence that writes are being accepted. Closing it by hand while the probe still\n'
+            printf 'returns 402 only hides the state.\n'
+          } > "$BODY_FILE"
+
+          # Capture the rc SEPARATELY. `|| EXISTING=""` masked a search failure into the CREATE
+          # branch, which is the wrong direction: a transient gh 5xx — or GitHub's
+          # eventually-consistent issue search failing to return a just-created issue — would
+          # file a fresh issue every 30 minutes for the length of an outage. Trading one missed
+          # report for an unbounded duplicate stream is not a safe default. On a search failure
+          # emit the body to the run log (layer 6) and let the next run file.
+          search_rc=0
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty') || search_rc=$?
+          if [[ "$search_rc" -ne 0 ]]; then
+            echo "::error::ingest-dark: the issue search failed (rc=${search_rc}), so this run cannot tell a new occurrence from an existing one and is NOT filing. Body follows; the next run will file."
+            cat "$BODY_FILE"
+            exit 1
+          fi
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still dark at ${NOW} — ${probe_safe}. Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+              --label "ci/betterstack-ingest-dark" --label "action-required" --label "observability" --label "domain/engineering" \
               --body-file "$BODY_FILE"
           fi
 
@@ -417,6 +519,16 @@ jobs:
           if [[ -n "$STALE_SILENT" ]]; then
             gh issue close "$STALE_SILENT" --repo "$GH_REPO" --comment "SOLEUR_ZOT_DISK reporting resumed at ${NOW} (fresh rows in the 3h window). Run: ${RUN_URL}"
           fi
+          # GREEN is reached on the MAIN-non-empty path, which does NOT execute the control read —
+          # an earlier revision of this comment claimed it did, and the close comment stated that
+          # measurement as fact. The evidence GREEN actually produces is different and still
+          # sufficient: anchored SOLEUR_ZOT_DISK rows are present in the 3h window, so the
+          # warehouse is demonstrably accepting writes. Own-title search, never a union.
+          STALE_DARK=$(gh issue list --repo "$GH_REPO" --state open \
+            --search 'in:title "[ci/betterstack-ingest-dark] Better Stack is accepting no writes"' --json number --jq '.[0].number // empty')
+          if [[ -n "$STALE_DARK" ]]; then
+            gh issue close "$STALE_DARK" --repo "$GH_REPO" --comment "Better Stack ingest resumed at ${NOW} — SOLEUR_ZOT_DISK rows are present in the 3h window, so the warehouse is accepting writes. Run: ${RUN_URL}"
+          fi
 
       # TRANSIENT (exit_code == 2): intentionally NO issue step — a standing alarm that pages on its
       # own query fault trains the operator to ignore it. The loud ::warning:: above + the errored
@@ -432,7 +544,14 @@ jobs:
           # reached a verdict; error on TRANSIENT(2) so a persistent probe fault (and a MISSING run)
           # alert. Fail-loud on ANY OTHER exit code too (an abnormal set -u/signal abort) — an
           # unexpected exit must surface as a monitor problem, never be silently checked-in ok.
-          # A FIRE is NOT a monitor error — the recurrence issue is its surface.
+          # A FIRE is NOT a monitor error — the recurrence issue is its surface. INGEST_DARK(4)
+          # joins the `ok` set for the same reason (#7569): it is a completed evaluation that
+          # reached a verdict, and [ci/betterstack-ingest-dark] is its surface. Grading it
+          # `error` would file the issue AND page the monitor for one event, and — the sharper
+          # objection — would put the report of a Better Stack outage into a channel this repo
+          # cannot assume is healthy, since the Sentry PAYG seat cap has silently disabled cron
+          # monitors here before. The GitHub-issue path is the one in force precisely because
+          # it is independent of the monitored vendor.
           #
           # #7242: each `ok` arm now ALSO requires the matching verdict, because exit_code
           # alone cannot distinguish "the checker evaluated and returned this" from "the
@@ -445,7 +564,7 @@ jobs:
           # the checker emits ZOT_ALARM_VERDICT on every exit path. Pairing them means an
           # abort that emits no verdict now checks in `error` (the monitor pages) instead
           # of `ok` (silence). Fail-loud is the correct direction for a liveness signal.
-          status: ${{ ((steps.alarm.outputs.exit_code == '0' && steps.alarm.outputs.verdict == 'GREEN') || (steps.alarm.outputs.exit_code == '1' && steps.alarm.outputs.verdict == 'FIRE') || (steps.alarm.outputs.exit_code == '3' && steps.alarm.outputs.verdict == 'PRODUCER_SILENT')) && 'ok' || 'error' }}
+          status: ${{ ((steps.alarm.outputs.exit_code == '0' && steps.alarm.outputs.verdict == 'GREEN') || (steps.alarm.outputs.exit_code == '1' && steps.alarm.outputs.verdict == 'FIRE') || (steps.alarm.outputs.exit_code == '3' && steps.alarm.outputs.verdict == 'PRODUCER_SILENT') || (steps.alarm.outputs.exit_code == '4' && steps.alarm.outputs.verdict == 'INGEST_DARK')) && 'ok' || 'error' }}
           sentry-ingest-domain: ${{ secrets.SENTRY_INGEST_DOMAIN }}
           sentry-project-id: ${{ secrets.SENTRY_PROJECT_ID }}
           sentry-public-key: ${{ secrets.SENTRY_PUBLIC_KEY }}

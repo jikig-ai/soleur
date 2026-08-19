@@ -62,8 +62,8 @@ Only item 1 is auto-applied. Items 2–5 are reported in the PR body for human s
 
    Then verify item 2b: the new ID must appear in the **pinned** `@anthropic-ai/claude-code`
    bundle (`[2b]` in the audit output). If it reports DRIFT, bump the pin in
-   `apps/web-platform/package.json` AND the `Dockerfile` global, regenerate **both**
-   lockfiles (see the bun.lock sharp edge below), and re-run. Grep the bundle with `grep -a`
+   `apps/web-platform/package.json` AND the `Dockerfile` global, regenerate
+   `package-lock.json` (see the release-age sharp edge below), and re-run. Grep the bundle with `grep -a`
    — the linux-x64 CLI is a compiled binary and a text-mode grep reports zero hits for
    EVERY id, a null result that reads exactly like a real one.
 
@@ -116,16 +116,18 @@ change" trigger never fired when Fable 5 shipped. The cron files an issue, never
 - Inventory by independent grep, not by a checklist's file list (inventories undercount).
 - **When the launch migration bumps the Anthropic SDK toolchain in
   `apps/web-platform/package.json` (`@anthropic-ai/claude-code`,
-  `@anthropic-ai/claude-agent-sdk`, `@anthropic-ai/sdk`), regenerate BOTH
-  lockfiles — `package-lock.json` AND `bun.lock` — in the same PR.** The new
-  releases are <3 days old, so a plain `bun install` is blocked by
-  `bunfig.toml`'s `minimumReleaseAge = 259200` (#1174) and silently leaves
-  `bun.lock` stale; every CI job running `bun install --frozen-lockfile` then
-  fails at the install step. Regenerate with
-  `cd apps/web-platform && bun install --lockfile-only --minimum-release-age=0`,
-  then prove CI-parity with `bun install --frozen-lockfile` (no override →
-  "no changes"). CI's `lockfile-sync` job covers only `package-lock.json`, not
-  `bun.lock`. See
+  `@anthropic-ai/claude-agent-sdk`, `@anthropic-ai/sdk`), regenerate
+  `package-lock.json` in the same PR.** Since ADR-191 there is one lockfile per
+  directory — do NOT recreate `bun.lock`.
+
+  The release-age floor still applies and still bites here: the new releases are
+  <3 days old and `apps/web-platform/.npmrc` sets `min-release-age=3`, so
+  regenerate with an explicit override:
+  `cd apps/web-platform && npx --yes npm@11 install --package-lock-only --min-release-age=0`.
+  CI's `lockfile-sync` job now covers this directory AND the repo root. Note the
+  repo ROOT has no `.npmrc` precisely so that this skill's own
+  `npm install -g "@anthropic-ai/claude-code@${CLI_VERSION}"` — an exact pin to a
+  same-day release — is not blocked by the floor. See
   [2026-07-01-bun-lock-minimum-release-age-blocks-sdk-toolchain-bump.md](../../../../knowledge-base/project/learnings/best-practices/2026-07-01-bun-lock-minimum-release-age-blocks-sdk-toolchain-bump.md).
 - Pricing is a billing constant — flag, never auto-edit; the opus `MODEL_PRICING` row is
   deferred to #5106 (do not fabricate it).

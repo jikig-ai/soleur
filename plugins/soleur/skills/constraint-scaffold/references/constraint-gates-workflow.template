@@ -42,16 +42,18 @@ jobs:
             echo "__TARGET_DIR__/** unchanged in this PR — constraint-gates passes (no-op)."
           fi
 
-      - name: Setup Bun
+      - name: Setup Node.js
         if: steps.changed.outputs.changed == 'true'
-        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          bun-version-file: ".bun-version"
+          node-version: 22
+          cache: npm
+          cache-dependency-path: __TARGET_DIR__/package-lock.json
 
       - name: Install dependencies
         if: steps.changed.outputs.changed == 'true'
         working-directory: __TARGET_DIR__
-        run: bun install --frozen-lockfile
+        run: npm ci --ignore-scripts
 
       - name: Run constraint gates (fail-closed)
         if: steps.changed.outputs.changed == 'true'

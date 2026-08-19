@@ -2114,7 +2114,75 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // until then. Measured both ways — this plan contributes exactly ONE declaration whether it
   // sits at its live path or under archive/; the move is not the cause. (The absolute count at
   // the time of that measurement was 2; it is 3 here only because #7455 merged in between.)
-  const BASELINE_DECLARED_PROBES = 3;
+  // 3 -> 4 on 2026-08-16 (#7565). THE REVIEWABLE DIFF LINE, and the first adoption whose
+  // requirement is NOT a credential — recorded as such rather than glossed, because the
+  // field's NAME says credential and this one does not.
+  //
+  // Declaring plan: `archive/20260816-203735-2026-08-16-fix-t5-checksum-never-evaluated-plan.md`.
+  //   1. PLACEMENT — a correctly-indented child of `discoverability_test:`, verified by
+  //      running this file's own parser both ways. It is deliberately an INLINE scalar: the
+  //      Check 10 reader is a flat awk over the key line, so a folded `>-` or block `|`
+  //      value extracts as the bare indicator and is then treated as ABSENT, which would
+  //      execute the probe rather than waive it. Measured — the folded form was written
+  //      first and read back as `>-`.
+  //   2. TRUTH — the probe is the git-data runcmd rehearsal, which starts 8 ubuntu:24.04
+  //      containers that download the genuine Doppler tarball from the GitHub release CDN
+  //      and assert a wrong DOPPLER_SHA256 aborts the chain before tar/chmod. Measured
+  //      runtime ~3 min against Check 10's 15s cap; the bwrap sandbox binds no docker
+  //      socket, so the probe cannot start there at all.
+  //   3. NO SUBSTITUTE — the property under test IS the container-level abort ordering.
+  //      Any sandbox-runnable stand-in degenerates to a source grep, which is precisely the
+  //      vacuity #7565 exists to close (its predecessor asserted four markers all satisfied
+  //      by the download failing). The job that does run it is `deploy-script-tests`.
+  //
+  // WHERE THIS DIFFERS FROM THE TWO ABOVE, stated so the next reader can judge whether the
+  // field should be widened or renamed rather than inheriting a precedent silently: those
+  // declare BETTERSTACK_QUERY_* against a warehouse with no public read surface — a genuine
+  // credential. This declares a docker daemon plus wall clock. The field's semantics as
+  // documented are "no unauthenticated substitute"; the honest reading here is "no
+  // sandbox-runnable substitute". Both end at the same place — executing it in the sandbox
+  // would fail for want of a precondition and prove nothing — which is why the field is
+  // used rather than the probe being weakened to fit. If a third non-credential adoption
+  // appears, that is the signal to rename the field, not to keep stretching it.
+  //
+  // 4 -> 5 on 2026-08-16 — A COLLISION, RESOLVED BY COUNTING, NOT BY PICKING A SIDE.
+  // #7565 and #7555 each took this counter 3 -> 4 concurrently, for DIFFERENT plans, so
+  // neither branch's `4` was ever right once both landed. The corpus was re-walked at
+  // resolution and returns 5 declaring plans; both adoption records are kept below because
+  // each is the reviewable diff line for its own probe, and deleting either would leave a
+  // baseline whose justification is missing exactly one entry.
+  //
+  // This is the all-members-baseline hazard the first entry documents, arriving twice at
+  // once. A counter that every branch increments needs re-derivation at merge, not a bump.
+  //
+  // 3 -> 4 on 2026-08-16 (#7555). FOURTH REVIEWABLE DIFF LINE.
+  //
+  // Renumbered on rebase: #7462/#7516 took 2 -> 3 on main while this branch was open. That is
+  // the same all-members-baseline class the entry above documents, hitting the entry that
+  // documents it — so the count is asserted here, not inherited from the branch.
+  //
+  // Declaring plan: `2026-08-13-fix-zot-mirror-large-layer-upload-timeout-plan.md`, for the
+  // probe `scripts/followthroughs/zot-upload-ceiling-7556.sh`. Confirmed intentional against
+  // this gate's own instruction (delete a stray line, baseline only a genuine one) on the
+  // same three counts:
+  //   1. PLACEMENT — a correctly-indented child of the `discoverability_test:` sub-block,
+  //      not a leftover template comment and not a stray top-level line.
+  //   2. TRUTH — the probe reads BOTH of its signals out of the Better Stack Logs ClickHouse
+  //      warehouse (zot's boot `configuration settings` line for delivery, and the
+  //      PatchBlobUpload rows for absence), which needs
+  //      BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}.
+  //   3. NO SUBSTITUTE — the property is the ABSENCE of a server-side upload failure on a
+  //      deny-all-public private host (10.0.1.30, no ingress). Nothing unauthenticated can
+  //      observe that host's logs, and an unauthenticated variant could at most show the
+  //      registry answering, which is a different claim already covered by the
+  //      SOLEUR_ZOT_DISK heartbeat.
+  // Distinct from the three probes above rather than another declaration of the same one:
+  // those read a log CHANNEL's liveness (#7440) or a host's boot markers (#7462); this reads a
+  // CONFIG VALUE the host reports about itself plus a failure class, and it is the closure
+  // criterion for #7556.
+  // Same orthogonality note applies — a warehouse query, not a host login, so
+  // `hr-no-ssh-fallback-in-runbooks` is satisfied.
+  const BASELINE_DECLARED_PROBES = 5;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

@@ -22,28 +22,28 @@ PASS=0; FAIL=0
 # trap reclaims them all. Without it a mid-run death (a failing assertion under a future
 # `set -e`, a SIGINT) leaves a /tmp dir per case behind, and /tmp here is a machine-global
 # 4 GiB tmpfs shared by parallel worktrees.
-TMPDIRS=()
-cleanup_tmpdirs() { [[ ${#TMPDIRS[@]} -gt 0 ]] && rm -rf "${TMPDIRS[@]}"; return 0; }
+# One owning ROOT, not an array of children (from #7575, kept through this merge). `mk_sandbox`
+# is always called as `T=$(mk_sandbox)`, i.e. in a COMMAND SUBSTITUTION, so an array append inside
+# it lands in the subshell and is discarded — measured: every call left the array at length 0 and
+# the trap reclaimed nothing, leaking a sandbox per case onto the shared 4 GiB tmpfs.
+SANDBOX_ROOT="$(mktemp -d)" || { echo "FATAL: mktemp failed" >&2; exit 2; }
+cleanup_tmpdirs() { [[ -n "${SANDBOX_ROOT:-}" && -d "$SANDBOX_ROOT" ]] && rm -rf "$SANDBOX_ROOT"; return 0; }
 trap cleanup_tmpdirs EXIT INT TERM
-mk_sandbox() { local d; d=$(mktemp -d); TMPDIRS+=("$d"); printf '%s' "$d"; }
+mk_sandbox() { local d; d=$(mktemp -d "$SANDBOX_ROOT/sb.XXXXXX") || return 1; printf '%s' "$d"; }
 
-# TALLY PROTECTION (#7104 PR-B review, F7). Same single-producer defect the gate suite was
-# measured to have: `PASS=$((PASS + 2))` clears the floor with half the arms deletable. The
-# second producer is this suite's captured STDOUT, written outside `ok()`.
-STDOUT_LOG="$(mktemp -t alert-suite-stdout.XXXXXXXX.log)"
-TMPFILES=("$STDOUT_LOG")
-exec 3>&1
-exec 1> >(tee -a "$STDOUT_LOG" >&3)
-close_stdout_capture() {
-  exec 1>&3 3>&-
-  local i=0 prev=-1 now
-  while [[ "$i" -lt 50 ]]; do
-    now=$(wc -c < "$STDOUT_LOG" 2>/dev/null || echo 0)
-    [[ "$now" == "$prev" && "$now" != "0" ]] && return 0
-    prev="$now"; i=$((i + 1)); sleep 0.02
-  done
-  return 0
-}
+# CASES is the INDEPENDENT producer, incremented at every verdict CALL SITE and never inside
+# ok()/bad(). A counter living inside the verdict helpers moves WITH the verdict, so stubbing
+# bad() to a no-op drops the row and its count together and the accounting identity still holds.
+#
+# THIS SUPERSEDES THE STDOUT-CAPTURE RECONCILIATION this branch had added for the same finding
+# (F7). Both are valid independent producers; keeping two mechanisms in one file would mean two
+# things to keep in step and one of them silently rotting. #7575's call-site counter is the
+# repo-wide convention across 17 suites and is the stronger of the two — it floors on CASES, which
+# moves only with call sites, where a PASS-based floor DEFLATES when verdicts are discarded and so
+# reports a vacuity that did not happen while hiding the one that did.
+#
+# Never increment inside `$( )` — a subshell discards it.
+CASES=0
 
 ok()   { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 bad()  { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
@@ -87,20 +87,25 @@ echo "infra-config-red-alert.test.sh"
 
 # --- IDENTITY: the whole reason this file exists ------------------------------------------
 run_alert "delivery channel is RED" reachable
+CASES=$((CASES + 1))
 if has "$MOCK_GH_FILE" 'ci/infra-config-red'; then
   ok "files under its OWN label, not ci/seccomp-unenforced"
 else bad "did not use the ci/infra-config-red label"; fi
+CASES=$((CASES + 1))
 if grep -qF 'ci/seccomp-unenforced' "$MOCK_GH_FILE"; then
   bad "LEAKED the seccomp label — an open seccomp incident would swallow this alert"
 else ok "never touches the seccomp label (no dedupe collision)"; fi
+CASES=$((CASES + 1))
 if grep -qiF 'seccomp' "$MOCK_GH_FILE"; then
   bad "issue text mentions seccomp — the fabricated-security-claim defect"
 else ok "issue text makes no security claim"; fi
 # jq -n pretty-prints, so the payload carries `"feature": "infra-config"` WITH a space —
 # assert the rendered shape, whitespace-tolerant, rather than a compact form the code never emits.
+CASES=$((CASES + 1))
 if grep -qE '"feature":[[:space:]]*"infra-config"' "$MOCK_CURL_FILE"; then
   ok "Sentry tags feature:infra-config, not agent-sandbox"
 else bad "Sentry payload did not carry feature:infra-config"; fi
+CASES=$((CASES + 1))
 if grep -qE '"feature":[[:space:]]*"agent-sandbox"' "$MOCK_CURL_FILE"; then
   bad "Sentry payload still tags agent-sandbox — would page the seccomp rule"
 else ok "Sentry never tags agent-sandbox (no rule misroute)"; fi
@@ -111,20 +116,25 @@ UNREACH_GH=$(cat "$MOCK_GH_FILE"); UNREACH_CURL=$(cat "$MOCK_CURL_FILE")
 run_alert "died at a known line" reachable
 REACH_GH=$(cat "$MOCK_GH_FILE")
 
+CASES=$((CASES + 1))
 if [[ "$UNREACH_GH" != "$REACH_GH" ]]; then
   ok "the two states produce DIFFERENT operator-facing output"
 else bad "reachable and unreachable emit identical text — the contradiction defect"; fi
+CASES=$((CASES + 1))
 if grep -qF 'is not responding' <<<"$UNREACH_GH"; then
   ok "unreachable title says the channel is not responding"
 else bad "unreachable state did not use its own title"; fi
 # The load-bearing one: on 000/502/503 the gate PRESCRIBES -replace, so the alert must not
 # assert app health or forbid the lever.
+CASES=$((CASES + 1))
 if grep -qiF 'app health is unaffected' <<<"$UNREACH_GH"; then
   bad "unreachable body asserts app health — it cannot know that when the listener is down"
 else ok "unreachable body makes no app-health claim"; fi
+CASES=$((CASES + 1))
 if grep -qF 'Do NOT run' <<<"$UNREACH_GH"; then
   bad "unreachable body forbids -replace, contradicting the gate's own recovery guidance"
 else ok "unreachable body does not contradict the gate on the -replace lever"; fi
+CASES=$((CASES + 1))
 if printf '%s' "$UNREACH_CURL" | grep -qF 'infra-config-listener-down'; then
   ok "unreachable Sentry op is distinguishable from the gate-red op"
 else bad "unreachable state reused the gate-red Sentry op"; fi
@@ -133,6 +143,7 @@ else bad "unreachable state reused the gate-red Sentry op"; fi
 T=$(mk_sandbox); mk_mocks "$T"
 export MOCK_GH_FILE="$T/gh.log" MOCK_CURL_FILE="$T/curl.log"; : > "$MOCK_GH_FILE"; : > "$MOCK_CURL_FILE"
 PATH="$T:$PATH" MOCK_EXISTING_ISSUE=4242 bash "$SCRIPT" "recurred" reachable >/dev/null 2>&1
+CASES=$((CASES + 1))
 if has "$MOCK_GH_FILE" 'issue comment 4242' && ! has "$MOCK_GH_FILE" 'issue create'; then
   ok "comments on the open issue instead of filing a duplicate"
 else bad "did not dedupe onto the existing open issue"; fi
@@ -141,6 +152,7 @@ else bad "did not dedupe onto the existing open issue"; fi
 T=$(mk_sandbox); mk_mocks "$T"
 export MOCK_GH_FILE="$T/gh.log" MOCK_CURL_FILE="$T/curl.log"; : > "$MOCK_GH_FILE"; : > "$MOCK_CURL_FILE"
 PATH="$T:$PATH" MOCK_GH_WRITE_FAIL=1 MOCK_CURL_FAIL=1 bash "$SCRIPT" "everything broken" reachable >/dev/null 2>&1
+CASES=$((CASES + 1))
 if [[ "$?" -eq 0 ]]; then
   ok "returns 0 even when BOTH gh and curl fail (fail-open contract)"
 else bad "non-zero exit on telemetry failure — would mask the real failure it reports"; fi
@@ -151,6 +163,7 @@ export MOCK_GH_FILE="$T/gh.log" MOCK_CURL_FILE="$T/curl.log"; : > "$MOCK_GH_FILE
 env -u SENTRY_INGEST_DOMAIN -u SENTRY_PROJECT_ID -u SENTRY_PUBLIC_KEY \
   PATH="$T:$PATH" bash "$SCRIPT" "no sentry env" reachable >/dev/null 2>&1
 rc_nosentry=$?
+CASES=$((CASES + 1))
 if [[ "$rc_nosentry" -eq 0 ]] && [[ ! -s "$MOCK_CURL_FILE" ]] && has "$MOCK_GH_FILE" 'issue'; then
   ok "skips Sentry when its env is unset and still files the issue"
 else bad "unset Sentry env broke the GitHub surface (rc=$rc_nosentry)"; fi
@@ -164,19 +177,24 @@ else bad "unset Sentry env broke the GitHub surface (rc=$rc_nosentry)"; fi
 run_alert "the gate never ran" ungraded
 UNGRADED_GH=$(cat "$MOCK_GH_FILE"); UNGRADED_CURL=$(cat "$MOCK_CURL_FILE")
 
+CASES=$((CASES + 1))
 if [[ "$UNGRADED_GH" != "$REACH_GH" && "$UNGRADED_GH" != "$UNREACH_GH" ]]; then
   ok "ungraded produces output distinct from BOTH other states"
 else bad "ungraded reused another state's text — it would name a cause nothing measured"; fi
+CASES=$((CASES + 1))
 if grep -qF 'before it could be checked' <<<"$UNGRADED_GH"; then
   ok "ungraded title says the update was never checked"
 else bad "ungraded state did not use its own title"; fi
 # The two claims it must NOT make, because it cannot know either.
+CASES=$((CASES + 1))
 if grep -qF 'the files themselves reached the server' <<<"$UNGRADED_GH"; then
   bad "ungraded body asserts the files landed — nothing measured that"
 else ok "ungraded body makes no delivery claim"; fi
+CASES=$((CASES + 1))
 if grep -qF 'did not answer' <<<"$UNGRADED_GH"; then
   bad "ungraded body asserts the channel did not answer — nothing asked it"
 else ok "ungraded body makes no listener-down claim"; fi
+CASES=$((CASES + 1))
 if grep -qF 'infra-config-gate-ungraded' <<<"$UNGRADED_CURL"; then
   ok "ungraded Sentry op is distinguishable from both other ops"
 else bad "ungraded state reused another Sentry op"; fi
@@ -199,17 +217,21 @@ else bad "ungraded state reused another Sentry op"; fi
 run_alert "the re-push applied and pass 2 verified" recovered
 RECOV_GH=$(cat "$MOCK_GH_FILE"); RECOV_CURL=$(cat "$MOCK_CURL_FILE")
 
+CASES=$((CASES + 1))
 if [[ "$RECOV_GH" != "$REACH_GH" && "$RECOV_GH" != "$UNREACH_GH" && "$RECOV_GH" != "$UNGRADED_GH" ]]; then
   ok "recovered produces output distinct from ALL THREE red states"
 else bad "recovered reused a red state's text — it would report a failure that did not happen"; fi
 
 # THE DEDUPE-SLOT SEPARATION. Both directions matter, so both are asserted.
+CASES=$((CASES + 1))
 if grep -qF 'infra-config-recovery-notice' <<<"$RECOV_GH"; then
   ok "recovered files under its OWN infra-config-recovery-notice label"
 else bad "recovered did not use its own label"; fi
+CASES=$((CASES + 1))
 if grep -qF 'ci/infra-config-red' <<<"$RECOV_GH"; then
   bad "recovered touched ci/infra-config-red — a self-heal would swallow (or be swallowed by) a real P1 gate failure in that dedupe slot"
 else ok "recovered never touches the red dedupe slot"; fi
+CASES=$((CASES + 1))
 if grep -qF 'issue list --label infra-config-recovery-notice' <<<"$RECOV_GH"; then
   ok "recovered DEDUPES against its own label, so an open red incident cannot absorb it"
 else bad "recovered deduped against the wrong label"; fi
@@ -220,6 +242,7 @@ else bad "recovered deduped against the wrong label"; fi
 # this repo is an alarm, the two live `ci/infra-config-red` issues literally read "needs a
 # decision", and a p2 "no action needed" note in that namespace spends the P1 channel's
 # credibility on a success.
+CASES=$((CASES + 1))
 if grep -qE 'ci/infra-config-recovered' <<<"$RECOV_GH"; then
   bad "recovered still files under ci/infra-config-recovered — the plan reserves ci/* for red alarms and names this exact string as the one not to use"
 else ok "recovered's label is outside the ci/ alarm namespace"; fi
@@ -238,18 +261,22 @@ else ok "recovered's label is outside the ci/ alarm namespace"; fi
 #
 # An operator-facing body is the one artifact a non-technical founder reads end to end, so a
 # reassurance that was never measured is worse here than in a log line.
+CASES=$((CASES + 1))
 if grep -qF 'the first attempt landed the files' <<<"$RECOV_GH"; then
   bad "recovered body claims the first attempt landed the files — INVERTED: the race is that it may not have, which is why a re-push fired"
 else ok "recovered body makes no claim about what the first attempt delivered"; fi
+CASES=$((CASES + 1))
 if grep -qiF 'stayed up throughout' <<<"$RECOV_GH"; then
   bad "recovered body asserts the website stayed up — the only probe is the webhook endpoint, and the container swap is still ahead in this job"
 else ok "recovered body makes no website-uptime claim"; fi
+CASES=$((CASES + 1))
 if grep -qiF 'no customer data is affected' <<<"$RECOV_GH"; then
   bad "recovered body asserts no customer data is affected — nothing in this workflow measured that"
 else ok "recovered body makes no customer-data claim"; fi
 # A ROLLING issue, not a per-event one. "Close it whenever you like" invites the operator to
 # close the dedupe target, after which the next recovery files a fresh issue instead of
 # commenting — converting the rolling record this mode exists to be into one issue per event.
+CASES=$((CASES + 1))
 if grep -qiF 'Close it whenever you like' <<<"$RECOV_GH"; then
   bad "recovered body invites closing the issue, which converts the rolling record into one issue per recovery"
 else ok "recovered body does not invite closing its own dedupe target"; fi
@@ -264,52 +291,65 @@ else ok "recovered body does not invite closing its own dedupe target"; fi
 run_alert "the bounded re-push did not deliver" repush_failed
 RPF_GH=$(cat "$MOCK_GH_FILE"); RPF_CURL=$(cat "$MOCK_CURL_FILE")
 
+CASES=$((CASES + 1))
 if [[ "$RPF_GH" != "$REACH_GH" && "$RPF_GH" != "$UNREACH_GH" && "$RPF_GH" != "$UNGRADED_GH" && "$RPF_GH" != "$RECOV_GH" ]]; then
   ok "repush_failed produces output distinct from all four other states"
 else bad "repush_failed reused another state's text"; fi
+CASES=$((CASES + 1))
 if grep -qF 'the files themselves reached the server' <<<"$RPF_GH"; then
   bad "repush_failed body asserts the files reached the server — false on the plan-failure path, where nothing was written"
 else ok "repush_failed body makes no delivery claim"; fi
+CASES=$((CASES + 1))
 if grep -qiF 'Ignore any suggestion' <<<"$RPF_GH"; then
   bad "repush_failed body still needs a clause telling the operator to disregard the body it is in"
 else ok "repush_failed body needs no self-contradicting disclaimer"; fi
+CASES=$((CASES + 1))
 if grep -qF 'infra-config-repush-failed' <<<"$RPF_CURL"; then
   ok "repush_failed Sentry op is distinguishable from all four other ops"
 else bad "repush_failed reused another Sentry op"; fi
 # It IS a red state: a production write was attempted on the sole no-SSH channel and the run is
 # terminally red. p1, unlike recovered.
+CASES=$((CASES + 1))
 if grep -qF 'priority/p1-high' <<<"$RPF_GH"; then
   ok "repush_failed files at p1 — a spent recovery on the sole no-SSH channel is a real incident"
 else bad "repush_failed did not file at p1"; fi
 
 # Priority: a self-heal that worked is not a p1 page.
+CASES=$((CASES + 1))
 if grep -qF 'priority/p2-medium' <<<"$RECOV_GH" && ! grep -qF 'priority/p1-high' <<<"$RECOV_GH"; then
   ok "recovered files at p2, never p1 — it did not page the founder for a success"
 else bad "recovered filed at p1 (or omitted p2) — pages the operator for a run that worked"; fi
 
+CASES=$((CASES + 1))
 if grep -qF 'retried itself and succeeded' <<<"$RECOV_GH"; then
   ok "recovered title says the retry succeeded"
 else bad "recovered state did not use its own title"; fi
 
 # The three claims it must NOT make, because all three are false on a successful self-heal.
+CASES=$((CASES + 1))
 if grep -qF 'did not finish applying' <<<"$RECOV_GH"; then
   bad "recovered body says the update did not finish — it did finish, on the second attempt"
 else ok "recovered body asserts no failure"; fi
+CASES=$((CASES + 1))
 if grep -qF 'did not answer' <<<"$RECOV_GH"; then
   bad "recovered body asserts the channel did not answer — it answered"
 else ok "recovered body makes no listener-down claim"; fi
+CASES=$((CASES + 1))
 if grep -qF 'we do not know whether the change took effect' <<<"$RECOV_GH"; then
   bad "recovered body says the outcome is unknown — pass 2 rendered verdict=verified"
 else ok "recovered body makes no ungraded claim"; fi
 
+CASES=$((CASES + 1))
 if grep -qF 'infra-config-repush-recovered' <<<"$RECOV_CURL"; then
   ok "recovered Sentry op is distinguishable from all three red ops"
 else bad "recovered state reused a red Sentry op"; fi
 # Severity and message prefix: an `error`-level event prefixed "delivery gate RED" would train
 # the operator to distrust the channel that carries real gate failures.
+CASES=$((CASES + 1))
 if grep -qE '"level":[[:space:]]*"warning"' <<<"$RECOV_CURL"; then
   ok "recovered emits at Sentry level warning, not error"
 else bad "recovered emitted an error-level Sentry event for a successful recovery"; fi
+CASES=$((CASES + 1))
 if grep -qF 'delivery gate RED' <<<"$RECOV_CURL"; then
   bad "recovered Sentry message carries the 'delivery gate RED' prefix — the gate was GREEN"
 else ok "recovered Sentry message does not claim the gate was red"; fi
@@ -331,6 +371,7 @@ if [[ -f "$WF" ]]; then
   # listed here, so a newly-read variable is covered without editing this test.
   helper_vars=$(grep -oE '\$\{INFRA_CONFIG_ALERT_[A-Z_]+' "$SCRIPT" | sed 's/^\${//' | sort -u)
   n_vars=$(grep -c . <<<"$helper_vars")
+  CASES=$((CASES + 1))
   if [[ "$n_vars" -ge 2 ]]; then
     ok "derived $n_vars INFRA_CONFIG_ALERT_* variable(s) from the helper"
   else bad "derived only $n_vars INFRA_CONFIG_ALERT_* variables — the extraction is broken, so the lockstep below is vacuous"; fi
@@ -348,12 +389,14 @@ if [[ -f "$WF" ]]; then
     [[ -n "$v" ]] || continue
     grep -qE "^[[:space:]]+${v}:" <<<"$alert_env" || missing="${missing} ${v}"
   done <<<"$helper_vars"
+  CASES=$((CASES + 1))
   if [[ -z "$missing" ]]; then
     ok "the alert step exports every INFRA_CONFIG_ALERT_* variable the helper reads"
   else bad "the alert step never sets:${missing} — the issue body would omit the Commit/CI-run lines it promises"; fi
 
   # And the inverse half: the step must not be exporting the seccomp names INSTEAD, which is the
   # exact shape of the original defect.
+  CASES=$((CASES + 1))
   if grep -qE '^[[:space:]]+SECCOMP_ALERT_' <<<"$alert_env"; then
     bad "the alert step still exports SECCOMP_ALERT_* — the helper does not read those"
   else ok "the alert step does not export the seccomp variable names"; fi
@@ -383,6 +426,7 @@ for job in wf.get("jobs", {}).values():
             sys.exit(0)
 ' "$WF" 2>/dev/null)
 
+  CASES=$((CASES + 1))
   if [[ -n "$cond" && "$cond" != ">-" && "$cond" != "|" ]]; then
     ok "extracted the alert step's condition as a resolved scalar ($(wc -c <<<"$cond" | tr -d ' ') bytes)"
   else bad "could not extract the alert condition (got '${cond:-<empty>}') — every row below would be vacuous"; fi
@@ -391,6 +435,7 @@ for job in wf.get("jobs", {}).values():
   # pass 1 now soft-fails with verdict=pending and exit 0, so `outcome != 'success'` was false on
   # every new terminal-red path. An unset output is '' and `'' != 'verified'` is TRUE, so the
   # verdict form still covers the gate-never-ran case the #7220 review added this row for.
+  CASES=$((CASES + 1))
   if grep -qF "steps.infra_config_gate.outputs.verdict != 'verified'" <<<"$cond" \
      && grep -qF "steps.infra_config_gate_pass2.outputs.verdict != 'verified'" <<<"$cond"; then
     ok "the alert keys on BOTH passes' verdicts, so an unset verdict (the gate never ran) still notifies"
@@ -399,9 +444,11 @@ for job in wf.get("jobs", {}).values():
   # A cancelled run must not page. `failure()` gave this for free; `!cancelled()` is the
   # equivalent once the condition also has to fire on a GREEN recovery, where `failure()` is
   # false by construction. Either is acceptable; a bare `always()` is not.
+  CASES=$((CASES + 1))
   if grep -qE '(^|[^!])failure\(\)' <<<"$cond" || grep -qF '!cancelled()' <<<"$cond"; then
     ok "the alert cannot fire on a cancelled run (failure() or !cancelled() present)"
   else bad "the alert condition lost its cancellation guard — condition is '${cond}'"; fi
+  CASES=$((CASES + 1))
   if grep -qF 'always()' <<<"$cond"; then
     bad "the alert condition uses always(), so a run the operator cancelled would file a P1 incident"
   else ok "the alert condition does not use always()"; fi
@@ -423,11 +470,13 @@ for job in wf.get("jobs", {}).values():
             sys.exit(0)
 print("<step-absent>")
 ' "$WF" 2>/dev/null)
+  CASES=$((CASES + 1))
   if [[ -n "$probe_id" && "$probe_id" != "<step-absent>" ]]; then
     ok "#7104 P0-B: the post-re-push liveness probe declares an id ($probe_id), so its failure is readable downstream"
   else
     bad "#7104 P0-B: the post-re-push liveness probe has no id (got '${probe_id:-<none>}') — its outcome is unreadable, so a re-push that bricked the only no-SSH channel cannot be distinguished from a routine skip"
   fi
+  CASES=$((CASES + 1))
   if [[ -n "$probe_id" && "$probe_id" != "<step-absent>" ]] \
      && grep -qF "steps.${probe_id}.outcome" <<<"$alert_env"; then
     ok "#7104 P0-B: the alert step reads steps.${probe_id}.outcome, so the bricked-channel state reaches an arm"
@@ -440,6 +489,7 @@ print("<step-absent>")
   # The re-push writes production and then succeeds, so the run ends GREEN and `failure()` is
   # false. Before this row the condition was `failure() && ...` alone, and the one path this PR
   # exists to create was the one path that notified nobody.
+  CASES=$((CASES + 1))
   if grep -qF 'steps.repush_apply.outcome' <<<"$cond"; then
     ok "the alert condition reads the re-push apply outcome, so a green recovery reaches the operator"
   else bad "the alert condition never mentions steps.repush_apply.outcome — a successful production re-push would notify nobody"; fi
@@ -447,10 +497,12 @@ print("<step-absent>")
   # THE INVERTED NULL TRAP. `!= 'skipped'` is the natural spelling and is wrong: a renamed or
   # typo'd step id resolves to '', and `'' != 'skipped'` is TRUE, so the mis-keyed case — the one
   # the backstop step exists for — would fire this alert on EVERY run rather than none.
+  CASES=$((CASES + 1))
   if grep -qF "steps.repush_apply.outcome != 'skipped'" <<<"$cond"; then
     bad "the alert condition uses \`outcome != 'skipped'\`, which is TRUE for the empty string a renamed step id yields — it would alert on every run"
   else ok "the alert condition does not use the inverted-null \`!= 'skipped'\` form"; fi
 else
+  CASES=$((CASES + 1))
   bad "could not locate apply-deploy-pipeline-fix.yml — the caller/callee lockstep did NOT run"
 fi
 
@@ -468,6 +520,7 @@ if [[ -f "$WF" ]]; then
     inrun { sub(/^          /, ""); print }
   ' "$WF")
   n_body=$(grep -c . <<<"$step_body")
+  CASES=$((CASES + 1))
   if [[ "$n_body" -ge 20 ]]; then
     ok "extracted the alert step's run block ($n_body lines)"
   else bad "extracted only $n_body lines of the alert step — every case below would be vacuous"; fi
@@ -494,7 +547,7 @@ STUB
     # The step hardcodes /tmp/infra-config-status-response.txt; point RESP at the fixture by
     # pre-seeding that path is not safe across parallel runs, so rewrite the one assignment.
     sed -i "s|^RESP=/tmp/infra-config-status-response.txt$|RESP=$D/resp.txt|" "$D/step.sh"
-    grep -qF "RESP=$D/resp.txt" "$D/step.sh" || { bad "could not repoint RESP — driver is broken"; return 1; }
+    grep -qF "RESP=$D/resp.txt" "$D/step.sh" || { CASES=$((CASES + 1)); bad "could not repoint RESP — driver is broken"; return 1; }
     local _g="$1" _a="$2"; shift 3
     env STEP_LOG="$D/step.log" GITHUB_WORKSPACE="$D/ws" \
       GATE_OUTCOME="$_g" APPLY_OUTCOME="$_a" "$@" \
@@ -505,9 +558,11 @@ STUB
 
   # (a) The gate never ran -> ungraded, and it must not fall through to the frame branches.
   drive_step skipped failure ""
+  CASES=$((CASES + 1))
   if grep -qF 'REACH=ungraded' <<<"$STEP_OUT"; then
     ok "a skipped gate alerts in the ungraded mode"
   else bad "a skipped gate did not alert as ungraded (rc=$STEP_RC, log=${STEP_OUT:-<empty>})"; fi
+  CASES=$((CASES + 1))
   if grep -qF 'terraform apply' <<<"$STEP_OUT"; then
     ok "the ungraded detail names the step that actually failed"
   else bad "the ungraded detail does not name the failing step"; fi
@@ -515,15 +570,18 @@ STUB
   # (b) The gate ran and failed on a frame with a failed FILE -> the file and reason reach the
   #     operator, rather than "go read the CI log".
   drive_step failure success '{"fatal_line":0,"fatal_rc":0,"fatal_cmd":"","files_written":18,"files_total":19,"files":[{"file":"/etc/webhook/hooks.json","status":"failed","reason":"hooks_json_unparseable"}],"restarts":[]}'
+  CASES=$((CASES + 1))
   if grep -qF '/etc/webhook/hooks.json' <<<"$STEP_OUT" && grep -qF 'hooks_json_unparseable' <<<"$STEP_OUT"; then
     ok "the failed file AND the host's reason reach the operator-facing detail"
   else bad "the failed file/reason never reached the detail (log=${STEP_OUT:-<empty>})"; fi
 
   # (c) Seam normalisation: fatal_cmd carries the handler's internal variable name.
   drive_step failure success '{"fatal_line":642,"fatal_rc":1,"fatal_cmd":"$SYSTEMCTL_PRIV daemon-reload","files_written":19,"files_total":19,"files":[],"restarts":[]}'
+  CASES=$((CASES + 1))
   if grep -qF 'sudo systemctl daemon-reload' <<<"$STEP_OUT"; then
     ok "the seam name is rendered as the command that actually ran"
   else bad "fatal_cmd still shows the raw seam variable (log=${STEP_OUT:-<empty>})"; fi
+  CASES=$((CASES + 1))
   if grep -qF 'SYSTEMCTL_PRIV' <<<"$STEP_OUT"; then
     bad "the raw \$SYSTEMCTL_PRIV seam name still leaks to the operator"
   else ok "no raw seam variable name leaks to the operator"; fi
@@ -546,12 +604,15 @@ STUB
   drive_step success success '{"exit_code":0,"files_written":19,"files_total":19}' \
     REPUSH_APPLY_OUTCOME=success WEBHOOK_LIVENESS_OUTCOME=failure \
     PASS2_OUTCOME=skipped PASS2_VERDICT=
+  CASES=$((CASES + 1))
   if grep -qF 'REACH=unreachable' <<<"$STEP_OUT"; then
     ok "#7104 P0-B: a bricked channel alerts in the UNREACHABLE mode"
   else bad "#7104 P0-B: a re-push that killed the webhook listener alerted as '${STEP_OUT//$'\n'/ }' — the channel is down and the operator is not being told so"; fi
+  CASES=$((CASES + 1))
   if grep -qF 'never ran' <<<"$STEP_OUT"; then
     bad "#7104 P0-B: the operator is told 'the gate never ran' for a run whose gate ran, graded, deferred, re-pushed and bricked the channel — every clause of that message is false"
   else ok "#7104 P0-B: the bricked-channel path does not claim the gate never ran"; fi
+  CASES=$((CASES + 1))
   if grep -qF 'terraform_data.infra_config_handler_bootstrap' <<<"$STEP_OUT"; then
     ok "#7104 P0-B: the detail names the -replace lever, which is the only route back on this path"
   else bad "#7104 P0-B: the detail never names terraform_data.infra_config_handler_bootstrap — the operator is given no lever for the one failure that removes every other one"; fi
@@ -561,10 +622,12 @@ STUB
   # must fire on the two states that actually mean "it never ran": skipped, and the empty string
   # a renamed step id yields.
   drive_step skipped failure "" REPUSH_APPLY_OUTCOME=skipped PASS2_OUTCOME=skipped PASS2_VERDICT=
+  CASES=$((CASES + 1))
   if grep -qF 'REACH=ungraded' <<<"$STEP_OUT"; then
     ok "#7104 P0-B: a SKIPPED gate still alerts as ungraded (the arm narrowed without losing its own case)"
   else bad "#7104 P0-B: narrowing the gate-never-ran predicate dropped the case it exists for (log=${STEP_OUT:-<empty>})"; fi
   drive_step "" "" "" REPUSH_APPLY_OUTCOME=skipped PASS2_OUTCOME=skipped PASS2_VERDICT=
+  CASES=$((CASES + 1))
   if grep -qF 'REACH=ungraded' <<<"$STEP_OUT"; then
     ok "#7104 P0-B: an EMPTY gate outcome (a renamed step id) also alerts as ungraded"
   else bad "#7104 P0-B: an empty GATE_OUTCOME did not reach the ungraded arm (log=${STEP_OUT:-<empty>})"; fi
@@ -575,6 +638,7 @@ STUB
   # "Ignore any suggestion that app health is unaffected", i.e. to disregard the body it is
   # printed inside.
   drive_step success success "" REPUSH_APPLY_OUTCOME=failure PASS2_OUTCOME=skipped PASS2_VERDICT=
+  CASES=$((CASES + 1))
   if grep -qF 'REACH=repush_failed' <<<"$STEP_OUT"; then
     ok "#7104 alert honesty: a failed re-push uses its OWN reach mode, not the reachable body"
   else bad "#7104 alert honesty: a failed re-push alerted as '${STEP_OUT//$'\n'/ }' — reusing a body whose first claim is false on this path"; fi
@@ -586,11 +650,13 @@ STUB
   # DELIVERY failure the gate never reported.
   drive_step success failure '{"exit_code":0,"files_written":19,"files_total":19}' \
     PASS1_VERDICT=unadjudicated REPUSH_APPLY_OUTCOME=skipped PASS2_OUTCOME=skipped PASS2_VERDICT=
+  CASES=$((CASES + 1))
   if grep -qF 'unadjudicated' <<<"$STEP_OUT"; then
     ok "#7104 P0-B: a gate that ran, did not fail, and adjudicated NOTHING says so by name — it is not described as a delivery failure"
   else
     bad "#7104 P0-B: the unadjudicated residue alerted as '${STEP_OUT//$'\n'/ }' — the 404 escape hatch checked nothing and the operator is being told something else happened"
   fi
+  CASES=$((CASES + 1))
   if grep -qF 'never ran' <<<"$STEP_OUT"; then
     bad "#7104 P0-B: the residue arm claims the gate never ran — it ran, and its own verdict says it adjudicated nothing, which is a different fact with a different remedy"
   else
@@ -600,30 +666,40 @@ STUB
   # THE RECOVERED ARM still wins on its own path, and the liveness arm must not steal it.
   drive_step success success "" REPUSH_APPLY_OUTCOME=success WEBHOOK_LIVENESS_OUTCOME=success \
     PASS2_OUTCOME=success PASS2_VERDICT=verified
+  CASES=$((CASES + 1))
   if grep -qF 'REACH=recovered' <<<"$STEP_OUT"; then
     ok "#7104 P0-B: a genuine self-heal still reaches the recovered arm (the new arms did not steal it)"
   else bad "#7104 P0-B: the recovered path now alerts as '${STEP_OUT//$'\n'/ }'"; fi
 fi
 
-# --- ASSERTION FLOOR ----------------------------------------------------------------------
-# Deleting a case from this file must be loud. Zero headroom, ratchet when adding cases.
-ALERT_MIN_ASSERTIONS=66
-if [[ "$PASS" -lt "$ALERT_MIN_ASSERTIONS" ]]; then
-  echo "  FAIL: assertion-count floor — only $PASS assertions ran, expected >= $ALERT_MIN_ASSERTIONS"
-  FAIL=$((FAIL + 1))
+# --- ACCOUNTING CONSERVATION (from #7575, kept through this merge) ------------------------
+# Every counted case must have recorded exactly one verdict. This is what catches a neutered
+# ok()/bad(): the helper stops recording while CASES, incremented at the call site, does not.
+# Reported DIRECTLY rather than through FAIL — routing it through the counter a neutered verdict
+# helper is corrupting is the vacuity one level up.
+if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
+  printf '\n[FATAL] accounting: %d verdict(s) recorded across %d counted case(s).\n' \
+    "$((PASS + FAIL))" "$CASES" >&2
+  if [[ $((PASS + FAIL)) -lt "$CASES" ]]; then
+    printf '  An assertion was counted but its verdict was not recorded — that is what a neutered ok()/bad() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `CASES=$((CASES + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  echo "=== Results: $PASS passed, $FAIL failed ($CASES assertions) ==="
+  exit 1
 fi
-if ! grep -qE '^ALERT_MIN_ASSERTIONS=[0-9]+$' "${BASH_SOURCE[0]}"; then
-  echo "  FAIL: the assertion-count floor is not a literal integer in the source — a floor derived from the tally it guards is a tautology"
-  FAIL=$((FAIL + 1))
+
+# --- ASSERTION FLOOR ----------------------------------------------------------------------
+# Floored on CASES, not PASS. PASS deflates whenever a verdict is discarded, so a floor on it
+# reports a vacuity that did not happen and hides the one that did.
+ALERT_MIN_ASSERTIONS=66
+if [[ "$CASES" -lt "$ALERT_MIN_ASSERTIONS" ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
+    "$CASES" "$ALERT_MIN_ASSERTIONS" >&2
+  echo "=== Results: $PASS passed, $FAIL failed ($CASES assertions) ==="
+  exit 1
 fi
 
 echo ""
-echo "=== Results: $PASS passed, $FAIL failed ==="
-close_stdout_capture
-stdout_passes=$(grep -c '^  PASS: ' "$STDOUT_LOG" 2>/dev/null || echo 0)
-rm -f "$STDOUT_LOG"
-if [[ "$stdout_passes" -ne "$PASS" ]]; then
-  echo "  FAIL: assertion-count reconciliation (stdout): the counter says $PASS but $stdout_passes '  PASS: ' lines were printed — the tally is not a count of assertions" >&2
-  exit 1
-fi
+echo "=== Results: $PASS passed, $FAIL failed ($CASES assertions) ==="
 [[ "$FAIL" -eq 0 ]] || exit 1

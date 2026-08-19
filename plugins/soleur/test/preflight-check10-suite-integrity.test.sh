@@ -71,6 +71,15 @@ MIN_MANIFEST_LINES=126
 
 PASS=0
 FAIL=0
+cases=0
+# `cases` is incremented at the CALL SITE, never inside pass()/fail(). That placement is the
+# whole substance of the conservation check at the bottom of this file: a counter that moves
+# inside both verdict helpers moves WITH the verdict, so stubbing fail() to a no-op drops the
+# row and its count together and `PASS+FAIL == cases` still holds. It is also what makes the
+# own-dispatch floor below independent of the helpers it exists to police — a floor read off
+# PASS+FAIL is read off the suspect.
+#
+# Never increment inside `$( )` — a subshell discards it.
 pass() { PASS=$((PASS + 1)); printf '  [ok] %s\n' "$1"; }
 fail() { FAIL=$((FAIL + 1)); printf '  [FAIL] %s\n' "$1"; }
 
@@ -102,6 +111,7 @@ echo "=== preflight Check 10 suite integrity ==="
 # `.skip`/`.only`/`.todo` silently remove coverage while the runner still exits 0.
 for f in "${SUITES[@]}"; do
   if [[ ! -f "$f" ]]; then
+    cases=$((cases + 1))
     fail "suite missing: $f"
     continue
   fi
@@ -118,6 +128,8 @@ for f in "${SUITES[@]}"; do
   # `test["todo"](…)`. The trailing `\(` anchor is DELIBERATELY kept so that
   # prose and comments naming `.skip` still cannot trip the gate.
   SUPPRESS_RE='(test|it|describe)[[:space:]]*(\.[[:space:]]*(skip|only|todo|failing)[A-Za-z]*[[:space:]]*\(|\[[[:space:]]*["'"'"'](skip|only|todo|failing)[A-Za-z]*["'"'"'][[:space:]]*\][[:space:]]*\()'
+  # One check is about to be decided — counted HERE, outside the verdict helpers.
+  cases=$((cases + 1))
   if tr '\n' ' ' < "$f" | grep -qE "$SUPPRESS_RE"; then
     # Braces are required: `$SUPPRESS_RE[` parses as array-index syntax (SC1087).
     tr '\n' ' ' < "$f" | grep -oE "${SUPPRESS_RE}[^)]{0,80}" | head -5
@@ -136,6 +148,7 @@ for f in "${SUITES[@]}"; do
   # rebound `it`, and this gate reported a full green with pass=121.
   # Adds no expect() calls, so MIN_ASSERTIONS is unaffected.
   REBIND_RE='(^|[;{}[:space:]])(const|let|var|function)[[:space:]]+(test|it|describe)([[:space:]]|=|;|\()'
+  cases=$((cases + 1))
   if tr '\n' ' ' < "$f" | grep -qE "$REBIND_RE"; then
     tr '\n' ' ' < "$f" | grep -oE "${REBIND_RE}[^;]{0,60}" | head -5
     fail "$f REBINDS test/it/describe — the source-pattern gate can be aliased around"
@@ -149,6 +162,7 @@ done
 # declared by the sources; a deletion or rename is then a diff line rather than a
 # silent count change absorbed by the floor's slack.
 if [[ ! -f "$MANIFEST" ]]; then
+  cases=$((cases + 1))
   fail "manifest missing at $MANIFEST"
 else
   DECLARED="$(mktemp -t check10-declared.XXXXXXXX.txt)"
@@ -183,6 +197,7 @@ else
   # (`sort -u` in a normal UTF-8 locale) desorts it relative to comm, which then
   # emits 81 spurious "no longer declared" lines accusing a deletion that never
   # happened. A gate that cries wolf gets bypassed, so name the remedy in the message.
+  cases=$((cases + 1))
   if ! LC_ALL=C sort -c "$MANIFEST" 2>/dev/null; then
     fail "$MANIFEST is not in C collation — regenerate with: LC_ALL=C sort -u -o $MANIFEST $MANIFEST"
   else
@@ -193,11 +208,21 @@ else
   # counts duplicates — so 116 copies of one name would satisfy a raw line floor.
   n_manifest=$(LC_ALL=C sort -u "$MANIFEST" | wc -l | tr -d ' ')
   n_declared=$(wc -l < "$DECLARED" | tr -d ' ')
+  # SUT floor, reported DIRECTLY. This measures the system under test (the committed manifest),
+  # and a floor that reports by calling fail() increments the same counter the exit status reads
+  # — neuter fail() and the floor goes silent along with the rows it exists to backstop. A floor
+  # enforced through the suspect cannot witness the suspect. Kept inside this else-branch: it is
+  # only meaningful once $MANIFEST is known to exist.
   if [[ "$n_manifest" -lt "$MIN_MANIFEST_LINES" ]]; then
-    fail "manifest has only $n_manifest entries, floor is $MIN_MANIFEST_LINES (manifest gutted?)"
+    printf '\n[FATAL] SUT floor: manifest has only %d entries, floor is %d (manifest gutted?).\n' \
+      "$n_manifest" "$MIN_MANIFEST_LINES" >&2
+    echo "=== $PASS passed, $FAIL failed ($cases checks) ==="
+    exit 1
   elif [[ "$n_declared" -eq 0 ]]; then
+    cases=$((cases + 1))
     fail "extracted ZERO declared test names — extraction is broken, treating as UNMEASURED"
   else
+    cases=$((cases + 1))
     MISSING="$(LC_ALL=C comm -23 "$MANIFEST" "$DECLARED" | head -20)"
     if [[ -n "$MISSING" ]]; then
       printf '%s\n' "$MISSING" | sed 's/^/      missing: /'
@@ -224,6 +249,7 @@ LOG="$(mktemp -t check10-integrity.XXXXXXXX.log)"
 bun test "${SUITES[@]}" >"$LOG" 2>&1
 RC=$?
 
+cases=$((cases + 1))
 if [[ "$RC" -ne 0 ]]; then
   fail "bun test exited $RC — see $LOG"
   KEEP_LOG=1
@@ -246,6 +272,10 @@ n_expect=$(grep -oE '([0-9]+) expect\(\) calls' "$LOG" | grep -oE '^[0-9]+' | ta
 # An UNPARSED summary must not read as "measured zero". Without this, a run that
 # never produced a summary block still printed "[ok] no tests skipped at runtime".
 if [[ -z "${n_pass:-}" || -z "${n_expect:-}" ]]; then
+  # Counted INSIDE the arm: this block has no else, so a `cases` increment ahead of the `if`
+  # would count a check on the happy path that records no verdict, and the conservation check
+  # at the bottom would fire on the harness rather than on the product.
+  cases=$((cases + 1))
   fail "could not parse bun's summary block — treating as UNMEASURED, not as zero (log: $LOG)"
   KEEP_LOG=1
 fi
@@ -253,6 +283,7 @@ fi
 
 echo "  (measured: pass=$n_pass fail=$n_fail skip=$n_skip todo=$n_todo expect=$n_expect)"
 
+cases=$((cases + 1))
 if [[ "$n_fail" -gt 0 ]]; then
   fail "$n_fail test(s) FAILED per bun's own summary"
   KEEP_LOG=1
@@ -260,23 +291,32 @@ else
   pass "bun's summary reports no failing tests"
 fi
 
+cases=$((cases + 1))
 if [[ "$n_skip" -gt 0 || "$n_todo" -gt 0 ]]; then
   fail "$n_skip skipped + $n_todo todo test(s) — coverage silently removed"
 else
   pass "no tests skipped or todo'd at runtime"
 fi
 
+# SUT floors, reported DIRECTLY for the same reason as the manifest floor above: they are the
+# backstop for the rows, so they must not be routed through the helper a mutation neuters.
 if [[ "$n_pass" -lt "$MIN_TESTS" ]]; then
-  fail "only $n_pass tests passed, floor is $MIN_TESTS (coverage removed? — if 'bun test exited 0' also failed, this is a consequence of that, not a cause)"
-else
-  pass "test count $n_pass >= floor $MIN_TESTS"
+  printf '\n[FATAL] SUT floor: only %d test(s) passed, floor is %d (coverage removed? — if "bun test exited 0" also failed, this is a consequence of that, not a cause).\n' \
+    "$n_pass" "$MIN_TESTS" >&2
+  echo "=== $PASS passed, $FAIL failed ($cases checks) ==="
+  exit 1
 fi
+cases=$((cases + 1))
+pass "test count $n_pass >= floor $MIN_TESTS"
 
 if [[ "$n_expect" -lt "$MIN_ASSERTIONS" ]]; then
-  fail "only $n_expect expect() calls, floor is $MIN_ASSERTIONS (assertions gutted? — if 'bun test exited 0' also failed, this is a consequence of that, not a cause)"
-else
-  pass "assertion count $n_expect >= floor $MIN_ASSERTIONS"
+  printf '\n[FATAL] SUT floor: only %d expect() call(s), floor is %d (assertions gutted? — if "bun test exited 0" also failed, this is a consequence of that, not a cause).\n' \
+    "$n_expect" "$MIN_ASSERTIONS" >&2
+  echo "=== $PASS passed, $FAIL failed ($cases checks) ==="
+  exit 1
 fi
+cases=$((cases + 1))
+pass "assertion count $n_expect >= floor $MIN_ASSERTIONS"
 
 # (the EXIT trap removes $LOG)
 
@@ -287,13 +327,44 @@ fi
 # and STILL exited 0, because the only terminal below reads $FAIL. CI reads the exit
 # code. This file's whole thesis is that a suite asserting nothing is
 # indistinguishable from one that passed — that applies to this file too.
-# Ratchet with the check count, exactly like MIN_TESTS.
-MIN_CHECKS=11
-if [[ "$((PASS + FAIL))" -lt "$MIN_CHECKS" ]]; then
-  printf '  [FAIL] only %d checks dispatched, floor is %d — the gate itself went silent\n' \
-    "$((PASS + FAIL))" "$MIN_CHECKS"
-  FAIL=$((FAIL + 1))
+# Ratchet with the check count, exactly like MIN_TESTS. Ratcheted to the MEASURED green value
+# (13) with no slack: the previous 11 carried 2 checks of slack, and slack in an own-dispatch
+# floor is the budget a silent regression spends — deleting two whole checks stayed green.
+#
+# Read off `cases`, NOT off PASS+FAIL. The counter must be independent of the helpers the floor
+# exists to police: PASS+FAIL is exactly what a neutered fail() suppresses, so a floor read off
+# it fires on the wrong cause (or, with the row deleted rather than silenced, not at all). With
+# `cases`, this floor answers ONLY "did the checks dispatch?", and the conservation check below
+# answers "were their verdicts recorded?" — two distinct failures with two distinct sentinels.
+#
+# Reported with `printf >&2` + `exit 1` DIRECTLY, never by incrementing FAIL: the terminal below
+# reads $FAIL, which is the same counter a stubbed fail() stops moving. A floor enforced through
+# the suspect cannot witness the suspect — measured on the previous shape: fail() neutered, the
+# gate printed a clean total and exited 0.
+MIN_CHECKS=13
+if [[ "$cases" -lt "$MIN_CHECKS" ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d check(s) dispatched, floor is %d — the gate itself went silent.\n' \
+    "$cases" "$MIN_CHECKS" >&2
+  echo "=== $PASS passed, $FAIL failed ($cases checks) ==="
+  exit 1
 fi
 
-echo "=== $PASS passed, $FAIL failed ==="
+# --- Accounting conservation -------------------------------------------------
+# The arm that actually catches a neutered verdict helper. The floor above catches "no checks
+# RAN"; it cannot catch "checks ran and their verdicts were discarded", because $cases keeps its
+# full value when fail() is a no-op. Every check records exactly one verdict, so PASS+FAIL MUST
+# equal $cases. Reported directly for the same reason as the floor.
+if [[ $((PASS + FAIL)) -ne "$cases" ]]; then
+  printf '\n[FATAL] accounting: PASS+FAIL (%d) != cases (%d).\n' \
+    "$((PASS + FAIL))" "$cases" >&2
+  if [[ $((PASS + FAIL)) -lt "$cases" ]]; then
+    printf '  A check was counted but its verdict was not recorded — that is what a neutered pass()/fail() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `cases=$((cases + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  echo "=== $PASS passed, $FAIL failed ($cases checks) ==="
+  exit 1
+fi
+
+echo "=== $PASS passed, $FAIL failed ($cases checks) ==="
 [[ "$FAIL" -eq 0 ]] || exit 1

@@ -1130,6 +1130,15 @@ jobs:
       - name: Run zot container-log shipper tests (#7440 — envelope, cap exemption, cursor durability)
         run: bash apps/web-platform/infra/zot-log-shipper.test.sh
 
+      # Guard 3 (#7555). Needs bash + python3 + terraform (the render) + docker (the pinned
+      # digest adjudicates the config), all of which this job already provides — terraform via
+      # the setup-terraform step above, docker via the runner. It renders the user_data and
+      # boots `zot verify` against the bytes that reach the host, because the registry host is
+      # cloud-init-only (ADR-096): a config zot rejects fails AFTER the destroy and create, on
+      # a host with no SSH, so plan-time validation cannot see it.
+      - name: Run zot HTTP-deadline config guard (#7555 — split-brain, gcDelay bound, digest acceptance)
+        run: bash apps/web-platform/infra/zot-config-deadlines.test.sh
+
       - name: Run deploy fan-out peer-list parity drift-guard
         run: bash apps/web-platform/infra/web-hosts-fanout-parity.test.sh
 

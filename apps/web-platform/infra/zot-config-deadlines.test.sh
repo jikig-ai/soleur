@@ -1,0 +1,316 @@
+#!/usr/bin/env bash
+# Guard 3 (#7555) — the zot HTTP deadlines cannot ship in a split-brain, gc-unsafe, or
+# unparseable shape.
+#
+# WHY THIS GUARDS THE *RENDERED* CONFIG. Delivery is a `user_data` ForceNew replace of the
+# fleet's sole pull path, and the host is cloud-init-only (ADR-096) with no SSH edit path. A
+# config zot rejects is therefore NOT a plan-time failure: the destroy succeeds, the create
+# succeeds, and zot fails to start on a host nobody can reach. So this reads the bytes that
+# ACTUALLY reach the host — `registry-userdata-budget.sh`'s stripped render — not the template.
+# Nothing in the repo validated this before.
+#
+# THE PROPERTY. The rendered /etc/zot/config.json always carries BOTH deadlines, both at or
+# above the largest-layer budget, both strictly below `gcDelay`, and is accepted by the PINNED
+# zot digest.
+#
+# Each conjunct exists because dropping it is silent:
+#   - BOTH keys: setting readTimeout alone was measured to yield a zot-side 202 with no
+#     response to the client — a split-brain strictly worse than today's honest 500.
+#   - BELOW gcDelay: the two live in the same document and are read by different subsystems;
+#     a deadline at or above gcDelay lets gc reclaim staging for an upload still in flight.
+#   - ACCEPTED BY THE DIGEST: without the negative control below, "zot accepted the config"
+#     means nothing — a typo'd key must be shown to be REJECTED, or acceptance is unfalsifiable.
+#
+# Run via: bash apps/web-platform/infra/zot-config-deadlines.test.sh
+# Registered in .github/workflows/infra-validation.yml (deploy-script-tests).
+
+set -uo pipefail
+export TMPDIR="${TMPDIR:-/var/tmp}"
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
+SELF="$HERE/$(basename "${BASH_SOURCE[0]}")"
+
+PASS=0
+FAIL=0
+pass() { echo "  pass: $1"; PASS=$((PASS + 1)); }
+fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
+
+finish() {
+  echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
+  [[ "$FAIL" -eq 0 ]]
+}
+
+TMP=$(mktemp -d) || { echo "  FAIL: mktemp failed"; exit 2; }
+trap 'rm -rf "$TMP"' EXIT
+
+# ---------------------------------------------------------------------------
+# THE LARGEST-LAYER BUDGET, derived from the #7555 measurement rather than chosen.
+#
+#   largest layer observed          703_724_542 B   (PATCH Content-Length, run 31740550632)
+#   floor throughput observed         4_500_000 B/s (the 272_236_549 B layer also died at the
+#                                                    60 s wall, so effective rate < 4.54 MB/s)
+#   => a deadline below 703724542/4500000 = 157 s cannot carry the largest layer.
+#
+# Asserted as a FLOOR on the configured deadline. The guard enforces the relation, never the
+# literal 1800s — see the H1 harness row.
+# ---------------------------------------------------------------------------
+LARGEST_LAYER_BYTES=703724542
+FLOOR_THROUGHPUT_BPS=4500000
+MIN_DEADLINE_S=$(( (LARGEST_LAYER_BYTES + FLOOR_THROUGHPUT_BPS - 1) / FLOOR_THROUGHPUT_BPS ))
+
+# ---------------------------------------------------------------------------
+# Render the bytes that reach the host, then extract /etc/zot/config.json from them.
+# CONFIG_JSON_OVERRIDE lets the mutation battery point this guard at a synthesized render
+# without re-running terraform; it is never set in CI.
+# ---------------------------------------------------------------------------
+CFG="$TMP/config.json"
+if [[ -n "${CONFIG_JSON_OVERRIDE:-}" ]]; then
+  if [[ ! -r "$CONFIG_JSON_OVERRIDE" ]]; then
+    fail "CONFIG_JSON_OVERRIDE set to an unreadable path: $CONFIG_JSON_OVERRIDE"
+    finish; exit $?
+  fi
+  cp "$CONFIG_JSON_OVERRIDE" "$CFG"
+  echo "  (using CONFIG_JSON_OVERRIDE — mutation-battery mode)"
+else
+  RENDERED="$TMP/rendered.yml"
+  if ! bash "$HERE/registry-userdata-budget.sh" "$RENDERED" > "$TMP/budget.log" 2>&1; then
+    fail "could not render the registry user_data (see below) — the guard cannot read the host bytes"
+    tail -5 "$TMP/budget.log" >&2
+    finish; exit $?
+  fi
+  python3 - "$RENDERED" "$CFG" <<'PY' || { echo "  FAIL: could not extract /etc/zot/config.json from the render"; exit 1; }
+import sys, yaml
+src, dst = sys.argv[1], sys.argv[2]
+doc = yaml.safe_load(open(src))
+# EXACTLY ONE ENTRY, and unique. cloud-init applies write_files in list order, so a SECOND
+# entry for this path wins on the host — a first-match extractor would validate bytes the host
+# discards, in a suite whose thesis is "the bytes that ACTUALLY reach the host". Measured:
+# appending a duplicate 60s entry passed 8/8.
+matches = [wf for wf in doc.get("write_files", []) if wf.get("path") == "/etc/zot/config.json"]
+if len(matches) != 1:
+    sys.stderr.write("expected exactly 1 write_files entry, found %d\n" % len(matches))
+    sys.exit(1)
+open(dst, "w").write(matches[0]["content"])
+sys.exit(0)
+PY
+fi
+
+if [[ ! -s "$CFG" ]]; then
+  fail "extracted config.json is empty — the guard would otherwise pass vacuously"
+  finish; exit $?
+fi
+
+# ---------------------------------------------------------------------------
+# Static half. Durations are Go-style ("1800s", "30m", "1h"); parse to seconds so the
+# comparisons are on the RELATION and not on string equality.
+# ---------------------------------------------------------------------------
+read_field() { # $1=jq-ish path via python; prints value or empty
+  python3 - "$CFG" "$1" <<'PY'
+import sys, json
+cfg = json.load(open(sys.argv[1]))
+cur = cfg
+for part in sys.argv[2].split("."):
+    if not isinstance(cur, dict) or part not in cur:
+        sys.exit(0)
+    cur = cur[part]
+print(cur if not isinstance(cur, (dict, list)) else "")
+PY
+}
+
+to_seconds() { # $1=Go duration; prints integer seconds, or nothing if unparseable
+  python3 - "$1" <<'PY'
+import sys, re
+v = sys.argv[1].strip()
+m = re.fullmatch(r"(\d+)(s|m|h)", v)
+if not m:
+    sys.exit(0)
+n, unit = int(m.group(1)), m.group(2)
+print(n * {"s": 1, "m": 60, "h": 3600}[unit])
+PY
+}
+
+RT_RAW="$(read_field http.readTimeout)"
+WT_RAW="$(read_field http.writeTimeout)"
+GC_RAW="$(read_field storage.gcDelay)"
+
+# --- both keys present (the Arm C split-brain) ---
+if [[ -n "$RT_RAW" && -n "$WT_RAW" ]]; then
+  pass "both http.readTimeout and http.writeTimeout are set (rt=$RT_RAW wt=$WT_RAW)"
+else
+  fail "SPLIT-BRAIN: readTimeout='${RT_RAW:-<unset>}' writeTimeout='${WT_RAW:-<unset>}' — both must move together; readTimeout alone yields a zot-side 202 with no response to the client"
+fi
+
+RT_S="$(to_seconds "${RT_RAW:-}")"
+WT_S="$(to_seconds "${WT_RAW:-}")"
+GC_S="$(to_seconds "${GC_RAW:-}")"
+
+if [[ -z "$GC_S" ]]; then
+  fail "storage.gcDelay ('${GC_RAW:-<unset>}') did not parse as a duration — the upper bound is unknowable, so this fails closed"
+else
+  pass "storage.gcDelay parses (${GC_RAW} = ${GC_S}s)"
+fi
+
+for pair in "readTimeout:$RT_RAW:$RT_S" "writeTimeout:$WT_RAW:$WT_S"; do
+  name="${pair%%:*}"; rest="${pair#*:}"; raw="${rest%%:*}"; secs="${rest#*:}"
+  if [[ -z "$raw" ]]; then
+    # EMIT THE RELATIONS AS FAILURES rather than `continue`. Skipping made the assertion count a
+    # function of the config's validity, so the anti-vacuity floor fired (rc=2, "could not
+    # measure") on a config that was simply INVALID (rc=1) — collapsing a real FAIL into the
+    # unresolved class, which is exactly the distinction this suite's exit contract turns on.
+    fail "$name is absent, so its largest-layer floor cannot hold"
+    fail "$name is absent, so its gcDelay ceiling cannot hold"
+    continue
+  fi
+  if [[ -z "$secs" ]]; then
+    fail "$name ('$raw') did not parse as a Go duration — an unparseable deadline is not a deadline"
+    continue
+  fi
+  # --- floor: at or above the largest-layer budget ---
+  if [[ "$secs" -ge "$MIN_DEADLINE_S" ]]; then
+    pass "$name ${raw} (${secs}s) >= largest-layer budget ${MIN_DEADLINE_S}s"
+  else
+    fail "$name ${raw} (${secs}s) is BELOW the largest-layer budget ${MIN_DEADLINE_S}s (${LARGEST_LAYER_BYTES} B at ${FLOOR_THROUGHPUT_BPS} B/s) — the layer that blocked the release still cannot land"
+  fi
+  # --- ceiling: strictly below gcDelay ---
+  if [[ -n "$GC_S" ]]; then
+    if [[ "$secs" -lt "$GC_S" ]]; then
+      pass "$name ${raw} (${secs}s) < gcDelay ${GC_RAW} (${GC_S}s)"
+    else
+      fail "$name ${raw} (${secs}s) is >= gcDelay ${GC_RAW} (${GC_S}s) — gc could reclaim staging for an upload still in flight"
+    fi
+  fi
+done
+
+# ---------------------------------------------------------------------------
+# Digest half. The pinned zot must ACCEPT the rendered config, and — the control that
+# gives that acceptance meaning — must REJECT an unknown key under HTTP.
+#
+# Declining is an explicit, printed verdict, never a silent pass (ADR-181).
+# ---------------------------------------------------------------------------
+if [[ "${SOLEUR_ZOT_GUARD_NO_DIGEST:-0}" == "1" ]]; then
+  echo "  DECLINED: digest acceptance half not run (SOLEUR_ZOT_GUARD_NO_DIGEST=1)."
+  echo "            The static relations above were checked; ACCEPTANCE BY ZOT WAS NOT OBTAINED."
+else
+  ZOT_IMAGE="$(grep -oE 'ghcr\.io/project-zot/zot-linux-amd64:[^"]+' "$REPO_ROOT/apps/web-platform/infra/zot-registry.tf" | head -1)"
+  if [[ -z "$ZOT_IMAGE" ]]; then
+    fail "could not read the pinned zot image from zot-registry.tf — acceptance cannot be tested against an unpinned digest"
+  elif ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+    fail "docker is unavailable, so the pinned digest could not adjudicate the config. This guard FAILS CLOSED: set SOLEUR_ZOT_GUARD_NO_DIGEST=1 to decline the half explicitly rather than have it pass silently."
+  else
+    zot_verify() { # $1=config path -> prints combined output; returns zot's rc
+      timeout 300 docker run --rm -v "$1:/tmp/zot-guard.json:ro" "$ZOT_IMAGE" verify /tmp/zot-guard.json 2>&1
+    }
+
+    OUT="$(zot_verify "$CFG")"; RC=$?
+    if [[ "$RC" -eq 0 ]] && grep -qF 'config file is valid' <<<"$OUT"; then
+      pass "the pinned zot digest ACCEPTS the rendered config"
+    else
+      fail "the pinned zot digest REJECTED the rendered config (rc=$RC): $(tail -2 <<<"$OUT" | tr '\n' ' ')"
+    fi
+
+    # NEGATIVE CONTROL. Without this, "zot accepted it" is unfalsifiable — a verify that
+    # accepts everything would report the same green.
+    python3 - "$CFG" "$TMP/bogus.json" <<'PY'
+import sys, json
+cfg = json.load(open(sys.argv[1]))
+cfg.setdefault("http", {})["zzzboguskey"] = "x"
+json.dump(cfg, open(sys.argv[2], "w"), indent=2)
+PY
+    BOUT="$(zot_verify "$TMP/bogus.json")"; BRC=$?
+    if [[ "$BRC" -ne 0 ]] && grep -qF "'HTTP' has invalid keys: zzzboguskey" <<<"$BOUT"; then
+      pass "negative control: the pinned digest REJECTS an unknown key under HTTP"
+    else
+      fail "negative control FAILED (rc=$BRC): the digest did not reject 'zzzboguskey', so its acceptance of the real config proves nothing"
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Anti-vacuity floor, DERIVED rather than written down, so it cannot drift out of step with
+# the assertions above:
+#   1  split-brain (both keys present)
+#   1  gcDelay parses
+#   2  deadlines x 2 relations each (>= largest-layer budget, < gcDelay)
+#   2  digest acceptance + its negative control   [only when the digest half runs]
+# A short count means an early `continue` fired or an unpopulated config slipped through as
+# green — both of which look identical to a pass from the summary line alone.
+# ---------------------------------------------------------------------------
+DEADLINE_KEYS=2
+RELATIONS_PER_KEY=2
+EXPECTED_MIN=$(( 1 + 1 + (DEADLINE_KEYS * RELATIONS_PER_KEY) ))
+[[ -z "${CONFIG_JSON_OVERRIDE:-}" ]] && EXPECTED_MIN=$(( EXPECTED_MIN + 3 ))
+[[ "${SOLEUR_ZOT_GUARD_NO_DIGEST:-0}" != "1" ]] && EXPECTED_MIN=$(( EXPECTED_MIN + 2 ))
+# ---------------------------------------------------------------------------
+# S4 — SYNTHESIZED ROWS. Every assertion above ran against ONE fixture (the real render), in which
+# both keys are present and 1800s sits far from both bounds — so `&&` was indistinguishable from
+# `||`, `-lt` from `-le`, and `-ge` from `-gt`. Measured: all three mutations passed 8/8.
+# CONFIG_JSON_OVERRIDE exists for exactly this and shipped with zero rows using it.
+# Recursion is broken by the CONFIG_JSON_OVERRIDE guard: a child run sets it, so it skips this block.
+# ---------------------------------------------------------------------------
+# $4 = a marker the child's output MUST contain. Pinning rc alone is not enough: a synthesized
+# config that is invalid in one way is usually invalid in several, so the child can exit non-zero
+# for a reason unrelated to the conjunct under test — measured, the `&&` -> `||` mutation SURVIVED
+# an rc-only assertion because the missing key independently tripped the relation checks.
+synth_case() { # $1=label $2=python-mutation-file $3=expected rc $4=required marker
+  local label="$1" mutf="$2" want="$3" marker="${4:-}" f="$TMP/synth.json" rc=0 out
+  python3 "$mutf" "$CFG" "$f" 2>/dev/null || { fail "S4 $label — could not synthesize"; return; }
+  out="$(CONFIG_JSON_OVERRIDE="$f" SOLEUR_ZOT_GUARD_NO_DIGEST=1 bash "$SELF" 2>&1)" || rc=$?
+  if [[ "$rc" -ne "$want" ]]; then
+    fail "S4 $label — got rc=$rc, want $want"
+  elif [[ -n "$marker" ]] && ! grep -qF -- "$marker" <<<"$out"; then
+    fail "S4 $label — rc matched but the child never emitted '$marker' (it failed for another reason)"
+  else
+    pass "S4 $label"
+  fi
+}
+if [[ -z "${CONFIG_JSON_OVERRIDE:-}" ]]; then
+  printf '%s\n' 'import sys,json' 'c=json.load(open(sys.argv[1]))' 'del c["http"]["writeTimeout"]' 'json.dump(c,open(sys.argv[2],"w"))' > "$TMP/m1.py"
+  printf '%s\n' 'import sys,json' 'c=json.load(open(sys.argv[1]))' 'c["http"]["readTimeout"]="1h"' 'c["http"]["writeTimeout"]="1h"' 'json.dump(c,open(sys.argv[2],"w"))' > "$TMP/m2.py"
+  printf '%s\n' 'import sys,json' 'c=json.load(open(sys.argv[1]))' 'c["http"]["readTimeout"]="157s"' 'c["http"]["writeTimeout"]="157s"' 'json.dump(c,open(sys.argv[2],"w"))' > "$TMP/m3.py"
+  synth_case "readTimeout ALONE is rejected (Arm C split-brain)"          "$TMP/m1.py" 1 "SPLIT-BRAIN"
+  synth_case "a deadline exactly AT gcDelay is rejected (strict bound)"   "$TMP/m2.py" 1 ">= gcDelay"
+  synth_case "a deadline exactly AT the largest-layer floor is accepted"  "$TMP/m3.py" 0
+fi
+
+
+# HARNESS CANARY + a floor that does NOT dispatch through the helper it guards (#7555 review).
+# Neutering fail() to a no-op previously left this suite 8/8 GREEN, and the floor was its only
+# voice — so ONE edit disarmed the assertions AND their backstop. Measured: with fail() neutered
+# and the thesis reverted, the count collapsed 8 -> 3 and still reported green.
+_cp=$PASS; _cf=$FAIL
+pass "canary: a true condition registers as PASS"
+fail "canary: a false condition MUST register as FAIL (this line is EXPECTED)"
+if [[ "$PASS" -ne $((_cp + 1)) || "$FAIL" -ne $((_cf + 1)) ]]; then
+  echo "  FATAL: the assertion helpers are not counting — every verdict above is void." >&2
+  exit 2
+fi
+FAIL=$((FAIL - 1))
+
+# THE DERIVED CHECK — the sharper of the two, since it scales with the key/relation population.
+if [[ $((PASS + FAIL)) -lt "$EXPECTED_MIN" ]]; then
+  echo "  FATAL: anti-vacuity (derived) — ran $((PASS + FAIL)) assertions, expected >= $EXPECTED_MIN for the derived population. Fix the extraction, do not lower the floor." >&2
+  exit 2
+fi
+
+# THE ABSOLUTE FLOOR, a LITERAL bound on the line directly above the test.
+#
+# scripts/guard-vacuity-floor.test.sh slices the floor block and widens BACKWARD only over
+# contiguous simple assignments, so `EXPECTED_MIN` — computed far above — does not bind inside
+# the mutant. With only the derived form, the mutant died unbound and this floor was scored
+# `not constructible`: counted as UNCOVERED by ADR-193's contract rather than as passing. A
+# literal here binds, so the floor is provably exercised under a neutered assertion machinery.
+# 7 = the SMALLEST legitimate population, which is the synthesized CHILD run
+# (CONFIG_JSON_OVERRIDE set, so the +3 parent-only assertions do not apply). A literal tuned to
+# the parent's 12 fired rc=2 inside every child and collapsed three real S4 verdicts into the
+# unresolved class — the exact FAIL-vs-cannot-measure confusion this suite's exit contract turns
+# on. The derived check above carries the parent's stronger requirement; this one only has to
+# catch a total collapse, and under a neutered assertion machinery the count goes to 0.
+FAIL_FLOOR_MIN=7
+TOTAL=$((PASS + FAIL))
+if [[ "$TOTAL" -lt "$FAIL_FLOOR_MIN" ]]; then
+  echo "  FATAL: anti-vacuity — ran $TOTAL assertions, expected >= $FAIL_FLOOR_MIN. Fix the extraction, do not lower the floor." >&2
+  exit 2
+fi
+
+finish

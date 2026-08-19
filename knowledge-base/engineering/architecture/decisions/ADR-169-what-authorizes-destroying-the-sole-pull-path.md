@@ -503,3 +503,99 @@ Two corrections to the amendment above, both from a nine-agent review of the fix
   A2 as ADR-169 scopes it — the predicate is "the pull path can be re-materialised", not "every
   platform is intact" — but it is a narrowing of the plain-language reading, so it is stated
   here rather than left to be discovered.
+
+## Amendment 2026-08-16 — merge-to-`main` now authorizes a volume-preserving registry replace (#7555)
+
+This ADR's question is "what authorizes destroying the sole pull path". #7555 changed the answer
+for one class of destroy, so the change is recorded here rather than only in ADR-190.
+
+### What changed
+
+`registry-host-replace` is `workflow_dispatch`-only and carries **no `environment:` reviewer gate
+and no typed `confirm` token** — verified against the job's own guard. So before #7555 the entire
+human authorization for recreating the fleet's sole pull path was *an operator deliberately typed
+a dispatch*. Nothing in the repo fired it, which is why `apps/web-platform/infra/cloud-init-registry.yml`
+could merge and sit **inert** — the defect #7555 exists to remove.
+
+`.github/workflows/registry-host-replace-dispatch.yml` now fires that replace on a merge to `main`
+whose **rendered, comment-stripped** `cloud-init-registry.yml` differs. The interposed judgement is
+a delta gate plus a read-only preflight (`scripts/registry-replace-preflight.sh`), not a human.
+
+### Why this is a different class from the D10 destroy this ADR was written for
+
+The replace **preserves the store volume** (`store_destroyed==0`). D10's recut destroys it, which is
+why that path earns a rehearsal-based gate and this one deliberately does not (ADR-190
+§"Why the replace pre-check is not the D10 recut gate"). The loss window here is a host
+recreate, not a re-materialisation from GHCR.
+
+That is a real distinction, but it is not a licence: #7071 retracted the host→GHCR fallback, so
+while the fresh host boots, **nothing pulls**. The window is deploy-blocking, and the authorization
+question is therefore still this ADR's.
+
+### The two gating predicates, walked against the independence criterion
+
+> A gate on an irreversible destroy may not depend on the component whose failure motivates it.
+
+Applied honestly, **both predicates violate it**, and the criterion predicted both defects that
+review found:
+
+| Predicate | Reads | Component whose failure motivates the replace? | Consequence |
+|---|---|---|---|
+| P1 — local-cache pull events | the pull path | **yes** | a replace outage itself drives hosts to local-cache, so P1 blocks the recovery for 24 h |
+| P3 — in-flight zot-writing runs | the release pipeline | **yes** | merging fires the release and the dispatcher on the same push, so P3's refusing state is the *modal* one |
+| P5 — the replace will be observable | the log channel | **no** | cannot be tripped by the condition the replace cures; see below |
+
+P1 and P3 were not reasoned to from this criterion at design time; both were found empirically.
+The remedies are the criterion's own: P1 is skipped on the manual re-fire arm (the `--manual`
+flag, derived from `github.event_name`), and P3 **waits** for the writers to drain before refusing
+rather than converting the automated path back into an operator step.
+
+### P5 — the predicate this criterion actually *generates*
+
+P4's absence (no live serving probe) is defensible only because something else eventually verifies
+the host: #7556 reads zot's own boot `configuration settings` line out of the warehouse. That is a
+**standing assumption written into the design**, and #7569 showed it is not always true — the
+registry's log delivery stopped from ~2026-08-14 19:06Z to ~2026-08-16 20:45Z (corroborated by two
+independent markers on different emitters; `zot_restarts=0` and `pcent` 12→14 throughout, so the
+host was serving fine and only its telemetry stopped).
+
+The channel recovered before this shipped, so P5 passes today and delivery proceeds. That is the
+point rather than a caveat: for ~49 hours the assumption was false, nothing in the design noticed,
+and a replace fired in that window would have been unverifiable. P5 checks the assumption instead
+of inheriting it: *will I be able to see what I did?*
+
+The hazard it closes is the #6400 escalation, and the asymmetry is the whole argument. A degraded
+zot still **serves** pulls and only fails large-layer **pushes**. A host that boots dark serves
+nothing — and #7071 retracted the host→GHCR fallback, so there is no tier beneath it. Firing blind
+therefore trades a blocked release for a total deploy outage, with no signal until the next deploy
+fails.
+
+Two arms, because **an empty query is not evidence of a dark channel** — that error was made once
+already in this cycle and was caught only by a 72 h positive control. The control marker rides a
+different transport from the container-log channel, so a silent control means the *read* is broken
+(refuse for that reason) while a live control plus a silent channel means the *channel* is dark
+(refuse, and name #7569).
+
+P5 is deliberately **not** skippable by `--manual`. P1's bypass exists because P1 violates the
+independence criterion; P5 satisfies it, so there is no equivalent deadlock to escape. Forcing a
+replace past P5 would be forcing it into the void the predicate exists to detect.
+
+This is the criterion doing generative work rather than post-hoc diagnosis: applied to "what
+authorizes an irreversible destroy", it yields not only "do not depend on the failing component"
+but "**do not take an irreversible action whose result you cannot read back**".
+
+P4 (a live zot serving probe) remains deliberately absent, and here the criterion is decisive
+rather than advisory: #7555's motivating symptom **is** a degraded zot, so a serving predicate
+would refuse precisely when the fix is most needed. Same reasoning that removed D10's A5
+(ground 2 above).
+
+### Residual, stated rather than discovered
+
+The delta gate reads `cloud-init-registry.yml` only. The rendered `user_data` also depends on
+`templatefile` inputs — `zot_image`, the derived cgroup cap — that live in `zot-registry.tf` and
+`variables.tf`. **A zot digest bump therefore changes the bytes the host boots without firing this
+dispatcher**, and ADR-190's standing instruction is to re-measure on every zot bump. Closing it
+means comparing the *render* at both SHAs (`registry-userdata-budget.sh` already produces exactly
+those bytes offline, with no credentials and no state) instead of comparing the template file.
+That is the right shape and is not implemented here; it is tracked with the #7556 follow-through
+rather than left implicit in a passing gate.

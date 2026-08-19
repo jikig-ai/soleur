@@ -14,15 +14,18 @@
 #   1. Doppler `--name-transformer tf-var` invocation wraps `terraform plan`/`apply`
 #      because the web-platform root reads ~12 `TF_VAR_*` inputs from Doppler.
 #   2. `-target=`-scoped apply, split into TWO applies (#4844):
-#      (a) the main saved-`tfplan` apply covers the 80 non-SSH resources;
+#      (a) the main saved-`tfplan` apply covers the non-SSH resources (a derived
+#          allow-list; the count is not restated here because it rots);
 #      (b) a SEPARATE token-gated SSH apply, run AFTER the post-apply token sync
 #          and behind the CF Tunnel SSH bridge (.github/actions/cf-tunnel-ssh-bridge),
-#          covers the 8 SSH-provisioned `terraform_data.*` siblings in server.tf
-#          (disk_monitor_install, resource_monitor_install, fail2ban_tuning,
-#          journald_persistent, docker_seccomp_config, apparmor_bwrap_profile,
-#          orphan_reaper_install). The GitHub runner egress IP is not in
+#          covers EVERY SSH-provisioned `terraform_data.*` resource in server.tf.
+#          The set is derived, never restated here: an enumeration in prose rots
+#          silently as the set grows (#7539 shipped four such stale counts).
+#          plugins/soleur/test/terraform-target-parity.test.ts is the authority --
+#          it derives the set from server.tf and fails when one is targeted
+#          before the bridge. The GitHub runner egress IP is not in
 #          `var.admin_ips`, so the bridge (not a direct :22 dial) is the access
-#          path. Before #4844 these 7 silently drifted: they were excluded here
+#          path. Before #4844 the SSH-provisioned set silently drifted: excluded here
 #          with no apply path, and apply-deploy-pipeline-fix.yml only `-target`s
 #          deploy_pipeline_fix + infra_config_handler_bootstrap (its header's old
 #          "those 7 land via apply-deploy-pipeline-fix.yml" claim was never true).
@@ -291,7 +294,7 @@ env:
   TERRAFORM_VERSION: "1.10.5"
   INFRA_DIR: apps/web-platform/infra
   # cloudflared binary for the CF Tunnel SSH bridge (#4844) — the token-gated
-  # SSH apply of the 8 server.tf terraform_data siblings reaches the host over
+  # SSH apply of the SSH-provisioned server.tf terraform_data set reaches the host over
   # the tunnel via .github/actions/cf-tunnel-ssh-bridge. SHA-256 computed against
   # the real released binary at the pinned version (NEVER paste a checksum from
   # documentation or AI output per the 2026-03-21 server-provisioning learning,
@@ -446,9 +449,23 @@ jobs:
           HEAD_MSG: ${{ github.event.head_commit.message }}
         # ALLOW-LIST MAINTENANCE: if a future PR adds a new `.tf` resource at
         # `apps/web-platform/infra/*.tf`, append a matching `-target=<addr>`
-        # line below (and exclude server.tf SSH-provisioned resources per
-        # header comment). `scheduled-terraform-drift.yml` is the 12h backstop
-        # if you forget — drift surfaces in the next cron run.
+        # line below.
+        #
+        # GROUP BY TRANSPORT, NOT BY FEATURE. This step is BRIDGE-LESS: it runs
+        # before `cf-tunnel-ssh-bridge` exports TF_VAR_ci_ssh_private_key, so an
+        # SSH-provisioned resource here bakes `agent = true` and dies on
+        # SSH_AUTH_SOCK. Those belong in the post-bridge apply step below.
+        # This instruction already said so and did not hold: it landed 2026-05-20
+        # and `terraform_data.inngest_consumer_probe_install` was appended six
+        # lines beneath it on 2026-08-12, batched beside the other
+        # inngest-consumer resources by feature (#7539). Prose is not the
+        # enforcement -- Guard 1 in
+        # plugins/soleur/test/terraform-target-parity.test.ts is, and it fails
+        # the PR rather than the apply.
+        #
+        # `scheduled-terraform-drift.yml` is a 12h backstop for a FORGOTTEN
+        # resource; it did not surface #7539, because a MISPLACED resource is
+        # declared and targeted -- just on the stage that cannot provision it.
         run: |
           # We capture terraform plan's exit code in $rc so a legitimate failure surfaces
           # with the ::error:: below instead of aborting silently.
@@ -582,7 +599,6 @@ jobs:
               -target=betteruptime_heartbeat.web_nic_guard \
               -target=betteruptime_heartbeat.inngest_consumer \
               -target=doppler_secret.inngest_consumer_url \
-              -target=terraform_data.inngest_consumer_probe_install \
               -target=doppler_secret.web_zot_consumer_url \
               -target=doppler_secret.web_nic_guard_url \
               -target=doppler_service_token.web_probes \
@@ -819,7 +835,11 @@ jobs:
       # that one run because GH Actions resolves secrets at job-start,
       # not step-start. The warning is non-fatal; the operator re-fires
       # the workflow once after first merge via `gh workflow run
-      # apply-web-platform-infra.yml --ref main -F reason='bootstrap'`.
+      # apply-web-platform-infra.yml --ref main -f apply_target=manual-rerun`
+      # (either form works — `apply_target` declares `default: manual-rerun`, which
+      # already satisfies the job's `inputs.apply_target == 'manual-rerun'` gate.
+      # Passing it explicitly is self-documenting, not required. #7539 briefly
+      # asserted the bare form does not run the job; that was false.)
       # The local-fallback script
       # `apps/web-platform/infra/scripts/sync-ci-ssh-access-token.sh`
       # remains available as backup. Operator follow-through obligation
@@ -875,7 +895,7 @@ jobs:
           unset CLIENT_ID CLIENT_SECRET
           echo "Synced CI_SSH_ACCESS_TOKEN_ID/_SECRET to Doppler prd_terraform."
 
-      # --- #4844: token-gated SSH apply of the 8 server.tf terraform_data siblings ---
+      # --- #4844: token-gated SSH apply of the SSH-provisioned server.tf set ---
       # Runs AFTER the post-apply token sync above (shape B) so a from-scratch
       # rebuild self-heals: the bridge needs the CF Access ci_ssh token that the
       # sync step produces, so on the very first apply (tokens absent) this step
@@ -891,10 +911,28 @@ jobs:
         # when present-but-empty; the `-z` guard catches both.
         run: |
           set -euo pipefail
-          TOKEN_ID=$(doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain 2>/dev/null || true)
-          if [[ -z "$TOKEN_ID" ]]; then
+          # #7539: `|| true` collapsed EVERY failure — expired DOPPLER_TOKEN, wrong
+          # config, network fault, Doppler outage — into "the secret is absent", and
+          # the notification below then stated that as fact and prescribed a re-dispatch
+          # that cannot fix an auth fault. `doppler secrets get --plain` rc is itself
+          # ambiguous (rc=1 for absent, rc=0+empty for present-but-empty), so the
+          # discriminator is a separate reachability probe, not the rc alone.
+          rc=0
+          TOKEN_ID=$(doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain 2>/dev/null) || rc=$?
+          SKIP_CAUSE=none
+          if [[ "$rc" -ne 0 ]]; then
+            if doppler secrets --only-names -p soleur -c prd_terraform >/dev/null 2>&1; then
+              SKIP_CAUSE=absent
+            else
+              SKIP_CAUSE=unreadable
+            fi
+          elif [[ -z "$TOKEN_ID" ]]; then
+            SKIP_CAUSE=empty
+          fi
+          echo "ssh_skip_cause=${SKIP_CAUSE}" >> "$GITHUB_OUTPUT"
+          if [[ "$SKIP_CAUSE" != "none" ]]; then
             echo "ssh_apply_skip=true" >> "$GITHUB_OUTPUT"
-            echo "::warning::first-bootstrap: CI_SSH_ACCESS_TOKEN_ID absent in Doppler prd_terraform — the 8 SSH-provisioned resources are deferred to the next run after the token sync lands. The non-SSH apply + token sync above still succeeded."
+            echo "::warning::first-bootstrap: CI_SSH_ACCESS_TOKEN_ID absent in Doppler prd_terraform — every SSH-provisioned resource is deferred to the next run after the token sync lands. The non-SSH apply + token sync above still succeeded."
           else
             echo "ssh_apply_skip=false" >> "$GITHUB_OUTPUT"
           fi
@@ -915,14 +953,14 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         # No destroy-guard on this step (data-integrity Q4 / AC9): the
         # destroy-guard-filter-web-platform.jq scope is Cloudflare-resource-only
-        # and would never flag a `terraform_data` replace, AND none of the 7
+        # and would never flag a `terraform_data` replace, AND none of the SSH-provisioned
         # resources has a `when = destroy` provisioner — a triggers_replace
         # destroy+recreate is a pure state-entry swap with no on-host teardown.
         # A future maintainer adding a destroy-provisioned SSH resource here MUST
         # add guard coverage.
         #
         # This is a SEPARATE `terraform apply` (not the saved tfplan), so it runs
-        # its own internal plan against the 8 targets. R2 backend creds (bare
+        # its own internal plan against its target set. R2 backend creds (bare
         # AWS_ACCESS_KEY_ID/_SECRET) are already in $GITHUB_ENV from "Extract
         # backend credentials" and persist across steps; `--name-transformer
         # tf-var` injects TF_VAR_* doppler secrets but passes those bare AWS_*
@@ -948,7 +986,47 @@ jobs:
               -target=terraform_data.cron_egress_firewall \
               -target=terraform_data.private_nic_guard_install \
               -target=terraform_data.zot_consumer_probe_install \
-              -target=terraform_data.git_data_probe_install
+              -target=terraform_data.git_data_probe_install \
+              -target=terraform_data.inngest_consumer_probe_install
+
+      # --- #7539: the green-skip needs a CHANNEL, not a ::warning:: -------------------------
+      # When CI_SSH_ACCESS_TOKEN_ID is absent, `ssh_token_gate` sets ssh_apply_skip=true and the
+      # bridge, the post-bridge apply AND the ARM gate below all skip. The run is GREEN, nothing
+      # is delivered, no heartbeat arms, and the only artifact was a ::warning:: on a green run.
+      # This repo already ruled on that shape in scheduled-terraform-drift.yml: "A named
+      # ::error:: alone is not a channel." The operator is non-technical, so the notification
+      # names what did NOT land and the exact recovery command -- a bare "skipped" would
+      # reproduce the same problem in email form. Mirrors the notify-ops-email idiom used by
+      # infra-validation.yml, weakness-miner.yml and reusable-release.yml.
+      - name: Notify ops — SSH stage skipped, nothing delivered (#7539)
+        # `!cancelled()` not `always()`: always() also fires on a CANCELLED run, where the
+        # body's "completed green" headline is false.
+        if: ${{ !cancelled() && steps.ssh_token_gate.outputs.ssh_apply_skip == 'true' }}
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: "Apply web-platform infra: SSH stage SKIPPED — infrastructure not delivered"
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+          body: |
+            <p>The <strong>Apply web-platform infra</strong> run completed <strong>green</strong>,
+            but its SSH stage did not run, so <strong>no SSH-provisioned resource reached
+            web-1</strong>. A green run here does not mean the change was delivered.</p>
+            <p><strong>Cause (measured, not assumed):</strong>
+            <code>${{ steps.ssh_token_gate.outputs.ssh_skip_cause }}</code> —
+            <code>absent</code> means the secret is genuinely missing and the recovery below fixes
+            it; <code>empty</code> means it exists but holds no value; <code>unreadable</code>
+            means Doppler itself could not be reached or the workflow's
+            <code>DOPPLER_TOKEN</code> is expired or mis-scoped, in which case the re-dispatch
+            below will skip again and the token is what needs attention. In every case the CF
+            Tunnel SSH bridge, the post-bridge terraform apply, and the Better Stack heartbeat ARM
+            gate were all skipped.</p>
+            <p><strong>What did NOT land:</strong> every <code>terraform_data.*</code> resource in
+            the post-bridge target set — the host monitors, the probe installs, the journald and
+            Vector delivery.</p>
+            <p><strong>Recovery (re-runs the whole apply, including the SSH stage):</strong></p>
+            <pre>gh workflow run apply-web-platform-infra.yml --ref main \
+              -f apply_target=manual-rerun \
+              -f reason='deliver SSH stage after token sync'</pre>
+            <p>Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}</p>
 
       # --- #6438/#6548: measured-beat ARM gate (ADR-117 automated) ------------------------------
       # The brand-critical step (#6400 shape prevention): a heartbeat that ships GREEN-but-inert is
@@ -1141,8 +1219,18 @@ jobs:
           MERGE_SHA: ${{ github.sha }}
           REASON: ${{ inputs.reason }}
           JOB_STATUS: ${{ job.status }}
+          # #7539: a green run that SKIPPED the SSH stage delivered nothing. Surface
+          # it here -- `job.status` alone reads `success` in exactly that case.
+          SSH_SKIP: ${{ steps.ssh_token_gate.outputs.ssh_apply_skip }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          if [ "${SSH_SKIP}" = "true" ]; then
+            SSH_STAGE="SKIPPED — CI_SSH_ACCESS_TOKEN_ID absent in Doppler prd_terraform; no SSH-provisioned resource was applied"
+          elif [ -z "${SSH_SKIP}" ]; then
+            SSH_STAGE="not reached (the job ended before the token gate)"
+          else
+            SSH_STAGE="ran"
+          fi
           {
             echo "## Apply web-platform infra"
             echo ""
@@ -1150,6 +1238,7 @@ jobs:
             echo "**Merge SHA:** ${MERGE_SHA}"
             echo "**Reason (manual only):** ${REASON:-n/a}"
             echo "**Status:** ${JOB_STATUS}"
+            echo "**SSH stage:** ${SSH_STAGE}"
             echo "**Run:** ${RUN_URL}"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -1727,8 +1816,9 @@ jobs:
   # (var.registry_location change) is ForceNew on hcloud_volume.registry: the zot store volume is
   # DESTROYED in the old region and RECREATED in the new one. registry-host-replace forbids that
   # (store_destroyed==0); this path PERMITS it because the 35 GB store is a DISPOSABLE GHCR MIRROR
-  # that re-fills from GHCR on the next CI dual-push (pulls fall through to GHCR meanwhile —
-  # non-release-blocking, ADR-096). It exists because the #6288 OOM remediation needs an 8 GB host
+  # that re-fills on the next CI dual-push. That window is NOT covered: #7071 retracted the
+  # host->GHCR fallback (read PAT revoked 401, minter disabled 403 DENIED), so pulls do NOT fall
+  # through to GHCR and a restart during the window cannot pull (ADR-096). It exists because the #6288 OOM remediation needs an 8 GB host
   # and the real 8 GB type (cx33) is offered in hel1 but NOT nbg1 (the plan's cx32 target does not
   # exist). No -replace flag: with the new location in variables.tf, the volume ForceNew + the host
   # create (the old host was already torn down by the failed cx32 -replace) happen naturally from a
@@ -1926,7 +2016,7 @@ jobs:
             echo ""
             echo "\`soleur-registry-disk-prd\` status: **${STATUS}**"
             echo ""
-            echo "_The fresh hel1 store is EMPTY on first boot; pulls fall through to GHCR until the next CI dual-push re-mirrors. This line is informational._"
+            echo "_The fresh hel1 store is EMPTY on first boot and NOTHING covers it: the host->GHCR fallback is dead (#7071), so pulls do not fall through until the next CI dual-push re-mirrors. Already-running containers keep serving; any restart in this window cannot pull._"
           } >> "$GITHUB_STEP_SUMMARY"
           exit 0
 
