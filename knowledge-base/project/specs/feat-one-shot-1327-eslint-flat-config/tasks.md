@@ -77,12 +77,18 @@ Target: `apps/web-platform`. Closes #1327; unblocks #7594 (do NOT upgrade Next h
 
 ## Phase 7 — Verification
 
-- [ ] 7.1 Work through all 15 Acceptance Criteria.
+- [x] 7.1 Work through all 15 Acceptance Criteria. AC1-AC14 verified by running each one's
+      literal command; AC15 (PR body) lands at ship.
 - [x] 7.2 Mutation-prove both Guard mutation matrices; run the UNMUTATED control first (a red
       baseline voids every row). Label any surviving mutant "fixture gap" or "equivalent" —
       never leave it unlabelled.
-- [ ] 7.3 `TEST_GROUP=webplat bash scripts/test-all.sh`; also `bun`/`scripts` shards since the
-      diff touches `plugins/` and `.github/`. Name which shards ran when reporting green.
+- [x] 7.3 Ran the FULL `bash scripts/test-all.sh` (all three shards) at 616dea35b:
+      `338 suites: 334 passed, 0 failed, 0 killed, 4 skipped (declined — not relevant)`,
+      rc=0, `orphan test suites: none`. Shard-owning suites green: `apps/web-platform`
+      (webplat, 218s), `plugins/soleur` (bun, 63s), the `scripts/` set incl.
+      `assert-dependabot-drain`. Coverage NOTE confirms `apps/web-platform/infra/` is out of
+      scope (diff does not touch it). An earlier run at 4c3fa6404 was RED on 2 suites — both
+      this PR's, both fixed in f09ea04e0.
 - [x] 7.4 `bash scripts/lint-dual-lockfile.sh` passes; lockfile-sync regeneration byte-identical.
 - [ ] 7.5 PR body: `Closes #1327`; reference #7594 as unblocked but do NOT close it.
 
