@@ -111,6 +111,7 @@ tc_avail_mb() {
 # The existing degrade-to-0 contract is UNCHANGED for tc_avail_mb's callers;
 # this is an additive second reader for the callers that need to tell the two
 # apart. Pinned by M11b in scripts/test-all-capacity-signal.test.sh.
+# shellcheck disable=SC2120  # optional dir arg mirrors tc_avail_mb; callers may pass one
 tc_avail_mb_v() {
   local d="${1:-$TC_TMPDIR}" kb
   kb=$("$TC_DF_CMD" -P -k "$d" 2>/dev/null | awk 'NR==2 {print $4}') || kb=""

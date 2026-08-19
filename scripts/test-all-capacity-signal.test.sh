@@ -76,6 +76,34 @@ done
 
 CLK_TCK="$(getconf CLK_TCK 2>/dev/null || echo 100)"
 
+# EVERY variable the SUT branches on is cleared before each fixture applies its
+# own. Enumerated FROM THE SUT (`grep -oE '\$\{[A-Z_][A-Z0-9_]*' scripts/lib/test-contention.sh`),
+# not from memory — fixing only the one that bit guarantees a next instance.
+#
+# WHY THIS IS NOT HYGIENE. `tc_acquire` returns EARLY on `CI` and on
+# `SOLEUR_DISABLE_SESSION_STATE` (before the lock, the heartbeat and the
+# re-sample), so with `CI` inherited every Guard 3 arm asserts against
+# `LOCK_SKIPPED_CI` and this suite reports 58/8 — and it is REGISTERED in
+# test-all.sh, which CI's required `test` context runs. Measured: 66/0 locally,
+# 58/8 under `CI=1`, i.e. green for the author and red on merge.
+# `_SOLEUR_TEST_CONTENTION_LOADED` is worse in kind: inherited as 1 it makes the
+# lib's double-source guard `return` immediately, so nothing under test is even
+# defined.
+TC_CLEAN=(env
+  -u CI
+  -u SOLEUR_DISABLE_SESSION_STATE
+  -u SOLEUR_SUBAGENT
+  -u SOLEUR_ALLOW_FULL_GATE
+  -u SOLEUR_TEST_FORCE_ALL
+  -u _SOLEUR_TEST_CONTENTION_LOADED
+  -u TC_PROC_ROOT -u TC_TMPDIR -u TC_XDG_DIR -u TC_SELF_PID
+  -u TC_MIN_AVAIL_MB -u TC_NPROC -u TC_DF_CMD
+  -u TC_SESSION_STATE -u TC_LOCK_TIMEOUT -u TC_WAIT_HEARTBEAT_S
+  -u TC_LAST_SIB_COUNT -u TC_LAST_SIB_COUNT_OK
+  -u TC_LAST_AVAIL_MB -u TC_LAST_AVAIL_MB_OK
+  -u TC_LAST_MEMAVAIL_MB -u TC_LAST_MEMAVAIL_MB_OK
+)
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -191,7 +219,7 @@ verdict_for() {
   local -a envs=()
   local line
   while IFS= read -r line; do [[ -n "$line" ]] && envs+=("$line"); done <<<"$env_block"
-  env "${envs[@]}" bash -c '
+  "${TC_CLEAN[@]}" "${envs[@]}" bash -c '
     set -euo pipefail
     source "$1"
     tc_preamble >/dev/null 2>&1
@@ -206,7 +234,7 @@ preamble_and_verdict_for() {
   local -a envs=()
   local line
   while IFS= read -r line; do [[ -n "$line" ]] && envs+=("$line"); done <<<"$env_block"
-  env "${envs[@]}" bash -c '
+  "${TC_CLEAN[@]}" "${envs[@]}" bash -c '
     set -euo pipefail
     source "$1"
     tc_preamble 2>&1
@@ -558,8 +586,8 @@ if [[ "$MAIN_LIB_OK" == 1 ]]; then
   FX_BYTES="$(make_fixture siblings=2 avail_kb=$(( 900 * 1024 )))"
   _envs=()
   while IFS= read -r _l; do [[ -n "$_l" ]] && _envs+=("$_l"); done <<<"$FX_BYTES"
-  OUT_NEW="$(env "${_envs[@]}" bash -c 'source "$1"; tc_preamble' _ "$LIB" 2>&1 || true)"
-  OUT_MAIN="$(env "${_envs[@]}" bash -c 'source "$1"; tc_preamble' _ "$MAIN_LIB" 2>&1 || true)"
+  OUT_NEW="$("${TC_CLEAN[@]}" "${_envs[@]}" bash -c 'source "$1"; tc_preamble' _ "$LIB" 2>&1 || true)"
+  OUT_MAIN="$("${TC_CLEAN[@]}" "${_envs[@]}" bash -c 'source "$1"; tc_preamble' _ "$MAIN_LIB" 2>&1 || true)"
   if [[ "$OUT_NEW" == "$OUT_MAIN" ]]; then
     pass "AC9: tc_preamble's output is byte-identical to origin/main's on a fixed fake /proc"
   else
@@ -581,7 +609,7 @@ echo "--- Guard 1: dispatch (M5) ---"
 FX_DISPATCH="$(make_fixture siblings=0 avail_kb=3072000)"
 _envs=()
 while IFS= read -r _l; do [[ -n "$_l" ]] && _envs+=("$_l"); done <<<"$FX_DISPATCH"
-CAP_OUT="$(cd "$REPO_ROOT" && env "${_envs[@]}" SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
+CAP_OUT="$(cd "$REPO_ROOT" && "${TC_CLEAN[@]}" "${_envs[@]}" \
   bash "$RUNNER" --capacity 2>&1 || true)"
 
 cases=$((cases + 1))
@@ -601,7 +629,7 @@ STUB_SANDBOX="$TESTROOT/stub-sandbox"
 mkdir -p "$STUB_SANDBOX/scripts/lib"
 cp "$RUNNER" "$STUB_SANDBOX/scripts/test-all.sh"
 # Deliberately do NOT copy scripts/lib/test-contention.sh: that is the fixture.
-STUB_OUT="$(cd "$STUB_SANDBOX" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
+STUB_OUT="$(cd "$STUB_SANDBOX" && "${TC_CLEAN[@]}" \
   bash "$STUB_SANDBOX/scripts/test-all.sh" --capacity 2>&1 || true)"
 
 cases=$((cases + 1))
@@ -626,7 +654,7 @@ echo "--- Guard 2: --capacity is side-effect free ---"
 
 # AC8: exits 0.
 CAP_RC=0
-(cd "$REPO_ROOT" && env "${_envs[@]}" SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
+(cd "$REPO_ROOT" && "${TC_CLEAN[@]}" "${_envs[@]}" \
   bash "$RUNNER" --capacity >/dev/null 2>&1) || CAP_RC=$?
 
 cases=$((cases + 1))
@@ -666,7 +694,7 @@ fi
 FX_CAPSIB="$(make_fixture siblings=2 avail_kb=3072000)"
 _capenvs=()
 while IFS= read -r _l; do [[ -n "$_l" ]] && _capenvs+=("$_l"); done <<<"$FX_CAPSIB"
-CAPSIB_OUT="$(cd "$REPO_ROOT" && env "${_capenvs[@]}" SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
+CAPSIB_OUT="$(cd "$REPO_ROOT" && "${TC_CLEAN[@]}" "${_capenvs[@]}" \
   bash "$RUNNER" --capacity 2>&1 || true)"
 
 cases=$((cases + 1))
@@ -681,7 +709,7 @@ fi
 # mutation this row exists for — and it is the exact shape of the decline that
 # was cut, so this row is also the regression guard for that reversal.
 CAPSIB_RC=0
-(cd "$REPO_ROOT" && env "${_capenvs[@]}" SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
+(cd "$REPO_ROOT" && "${TC_CLEAN[@]}" "${_capenvs[@]}" \
   bash "$RUNNER" --capacity >/dev/null 2>&1) || CAPSIB_RC=$?
 
 cases=$((cases + 1))
@@ -721,7 +749,7 @@ acquire_run() {
   local -a envs=()
   local line
   while IFS= read -r line; do [[ -n "$line" ]] && envs+=("$line"); done <<<"$env_block"
-  env "${envs[@]}" TC_SESSION_STATE="$STUB_SS" "$@" bash -c '
+  "${TC_CLEAN[@]}" "${envs[@]}" TC_SESSION_STATE="$STUB_SS" "$@" bash -c '
     set -euo pipefail
     source "$1"
     tc_acquire "test-arm"
@@ -925,8 +953,8 @@ run_diff_arm() { # <group> <diff-names> [detect_ok]
   local group="$1" names="$2" detect="${3:-1}"
   export SANDBOX_RECORD="$TESTROOT/rec-$RANDOM.txt"
   : > "$SANDBOX_RECORD"
-  (cd "$REPO_ROOT" && env "${_envs[@]}" \
-      SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= SOLEUR_DISABLE_SESSION_STATE=1 \
+  (cd "$REPO_ROOT" && "${TC_CLEAN[@]}" "${_envs[@]}" \
+      SOLEUR_DISABLE_SESSION_STATE=1 \
       SANDBOX_DIFF_NAMES="$names" SANDBOX_DETECT_OK="$detect" \
       TEST_GROUP="$group" \
       bash "$DIFF_SANDBOX" 2>&1 || true)
