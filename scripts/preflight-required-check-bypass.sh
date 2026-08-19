@@ -211,7 +211,15 @@ else
   merge_q="merged:>=$SINCE"
   note "no --until given: treating the outage as STILL LIVE and sweeping to now"
 fi
-merged="$(gh pr list --repo "$REPO" --state merged --search "$merge_q" \
+# `-L` is load-bearing, not tidiness. `gh pr list --search` caps at 30 rows unless a limit
+# is given, and a truncated list is indistinguishable from a short one -- which in THIS probe
+# means under-reporting merges and returning NIL for a window that had exposure. That is the
+# same "an empty read is not a clean read" defect the header states, so a cap-length result
+# is reported UNKNOWN rather than counted.
+# Overridable so the cap-detection branch below can actually be EXERCISED. A branch that
+# cannot be driven is indistinguishable from one that does not work.
+MERGE_LIMIT="${SOLEUR_BYPASS_MERGE_LIMIT:-200}"
+merged="$(gh pr list --repo "$REPO" --state merged --search "$merge_q" -L "$MERGE_LIMIT" \
             --json number,mergedAt --jq '.[] | "#\(.number) \(.mergedAt)"' 2>/dev/null)"
 mrc=$?
 if [[ $mrc -ne 0 ]]; then
@@ -219,6 +227,11 @@ if [[ $mrc -ne 0 ]]; then
 elif [[ -z "$merged" ]]; then
   emit merges PASS "count=0"
   note "no merges landed in the window, so no event could have gone unrecorded"
+elif [[ "$(wc -l <<<"$merged")" -ge "$MERGE_LIMIT" ]]; then
+  emit merges UNKNOWN "reason=result-at-limit limit=$MERGE_LIMIT"
+  note "the query returned $MERGE_LIMIT rows, which is the cap -- the true count may be higher"
+  note "narrow the window or raise MERGE_LIMIT; a capped list must not be counted as complete"
+  unknown=1
 else
   emit merges REAL "count=$(wc -l <<<"$merged")"
   note "$(tr '\n' ' ' <<<"$merged")"
