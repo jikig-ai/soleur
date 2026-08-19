@@ -509,7 +509,9 @@ endpoint.
 > merely outside its next window, and the two are indistinguishable from a single follow-up
 > probe. The signal that would have separated them was in the response headers the whole time
 > (`x-sentry-deprecation-date`, `x-sentry-replacement-endpoint`); nothing read them. See
-> Amendment 2026-08-19 (#7590) below. So the 410 was NOT reproducible-on-beta2 by the time of the fix; a bump was not
+> Amendment 2026-08-19 (#7590) below.
+
+So the 410 was NOT reproducible-on-beta2 by the time of the fix; a bump was not
 *required* to clear it. But the standing deprecation warning ("migrate to `sentry_alert`")
 signals the legacy read path will eventually be retired for real, and the beta pin was itself
 flagged "re-evaluate on first stable".
@@ -572,7 +574,7 @@ rules payload. It did not fail to survive the migration — it never matched, so
 flagged every monitor in the org since it shipped. The classes are rebound onto the routing
 graph that actually exists:
 
-    monitor  <--(name)--  cron detector  --(workflowIds)-->  workflow
+    monitor  <--(slug)--  cron detector  --(workflowIds)-->  workflow
 
 Class A is now a **count plus a machine-checked invariant**, `class_a_count ==
 cron_detector_count`, asserted in the suite rather than stated here. A literal baseline (55
@@ -598,12 +600,30 @@ STATUS, while Gate 1 and every fetch read it as the BODY. A wrapper `-w` after `
 (duplicate `-w` is last-wins) and turns a healthy body into `[...]200`, firing the new
 diagnostic against a working endpoint.
 
-**The deprecation tripwire and its escalation window.** Any response carrying
+**The deprecation tripwire, and why its escalation is CALLER-SCOPED.** Any response carrying
 `x-sentry-deprecation-date` now warns — **including a 200**, which is the state these endpoints
-were in for three months while nothing read the header. A perpetual warning is what already
-failed here, so the tripwire escalates to a non-zero exit once the date is within
-`SENTRY_DEPRECATION_FAIL_WINDOW_DAYS` (default 30) or already past. Escape hatch: raise the
-window when an endpoint is deprecated with no replacement shipped yet.
+were in for three months while nothing read the header.
+
+Escalation to a non-zero exit is **opt-in per caller** (`SENTRY_DEPRECATION_FAIL=1`) and **off by
+default**; only the advisory `sentry-audit-gate.yml` sets it. That asymmetry is the load-bearing
+decision, not the window:
+
+The tripwire runs inside `curl_retry`, which Gates 1–3 also call, so its reach is NOT limited to
+the endpoints this migration moved. A deprecation header on `/organizations/{org}/` — which the
+audit must read to prove org controllability, and cannot migrate away from — reaches it too. And
+`apply-sentry-infra.yml` runs this script BEFORE `terraform plan`, so escalating there would be a
+vendor-scheduled freeze on Sentry infra deploys, possibly including the deploy that ships the
+migration: the same "detector blocks its own cure" deadlock the Class D state half exists to
+avoid. `SENTRY_DEPRECATION_FAIL_WINDOW_DAYS` (default 30) governs WHEN escalation arms for a
+caller that opted in; it is not an escape hatch for one that did not, and it is set in no
+workflow.
+
+So on the apply and release callers, a deprecation inside the window emits an `::error::`
+annotation and exits 0. That is a weaker channel than failing, and it is a deliberate trade —
+a warning on a green job is what failed in 2026-07, but freezing deploys on a vendor's calendar
+is worse. The durable record is the audit report itself, which names the affected endpoints.
+#7619 removes the need for the trade by splitting the fail-closed gating half from the advisory
+reporting half.
 
 **Pagination follows the cursor, and never the Link target as given.** `detectors/` grows 1:1
 with cron monitors, so a loud-fail-on-truncation arm would — by ordinary monitor growth — red
@@ -631,8 +651,10 @@ fail-closed gating half from the advisory reporting half behind `AUDIT_MODE=gate
 tracked separately.
 
 **Recurrence.** Any future deprecation of `workflows/`, `detectors/` or `monitors/` now
-self-reports through the tripwire on the first 200 that carries the header, rather than
-surfacing months later as an intermittent red.
+self-reports on the first 200 carrying the header — as an `::error::` annotation on every caller,
+as a non-zero exit on callers that opted into escalation, and in the report's own
+`## Endpoint deprecation` section, which is the only durable channel of the three. It no longer
+surfaces months later as an intermittent red.
 
 
 ## Consequences

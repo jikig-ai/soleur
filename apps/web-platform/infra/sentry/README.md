@@ -2,7 +2,7 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **23 issue alerts** — a mix of import-only auth/observability rules (mirrored
+- **29 issue alerts** — a mix of import-only auth/observability rules (mirrored
   from rules created by `apps/web-platform/scripts/configure-sentry-alerts.sh`)
   and **apply-created** rules that terraform fully owns from real
   `conditions_v2`/`filters_v2`/`actions_v2`. The apply-created set includes the
@@ -13,7 +13,7 @@ Manages Sentry-hosted infrastructure for `app.soleur.ai`:
   (#4656 item 1 — the only rule here using `"any"`). After every apply,
   `apply-sentry-infra.yml` runs a read-only `assert-byok-rules-exist.sh` liveness
   check asserting both BYOK rules still exist by name (#4656 item 5).
-- **50 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
+- **55 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
   Actions workflows that touch secrets (closes #3236). Auto-applied on
   push-to-main via `.github/workflows/apply-sentry-infra.yml`. A monitor for
   `scheduled-cf-token-expiry-check` is deferred until that workflow's
@@ -67,7 +67,7 @@ of which made it actively misleading rather than merely obsolete:
 1. It was stale by 25 resources — it described importing "the 4 issue-alert
    rules" created by the legacy `configure-sentry-alerts.sh`.
 2. It extracted rule ids from an `<!-- ids: ... -->` manifest that the audit
-   script no longer emits. Sentry removed the project-scoped rules API the
+   script no longer emits. Sentry DEPRECATED the project-scoped rules API the
    manifest was built from, and its replacement (`organizations/{org}/workflows/`)
    uses a DISJOINT identifier space — so a manifest repointed at the new
    endpoint would have kept its name and shape while silently changing
@@ -87,13 +87,48 @@ Note `SENTRY_IAC_AUTH_TOKEN`, not `SENTRY_AUTH_TOKEN`: Doppler `prd` holds
 both, they are different credentials, and CI feeds the former into an env var
 named after the latter.
 
-## Cron monitors are net-new (no import)
+## Cron monitors — adoption COMPLETE (#7590)
 
-The 8 `sentry_cron_monitor` resources do not exist in Sentry yet. The first
-`terraform apply` (or, in CI, the first run of `apply-sentry-infra.yml` after
-push to main) creates them. Per-workflow grace periods (`checkin_margin_minutes`,
-`max_runtime_minutes`) come from observed run durations + 2x safety margin —
-re-tune via subsequent PRs after the operator has 30 days of check-in history.
+This section previously read "the 8 `sentry_cron_monitor` resources do not
+exist in Sentry yet" and described the first apply creating them. True at
+authoring, actively misleading now: the root declares **55** of them, all live,
+and the audit's Class D machinery exists precisely *because* live monitors can
+outrun the `.tf` that declares them — a monitor Terraform never declared is
+spend no apply can reclaim.
+
+Re-derive rather than trusting the number:
+
+```bash
+grep -c '^resource "sentry_cron_monitor"' apps/web-platform/infra/sentry/*.tf
+```
+
+## Audit
+
+The audit answers "is the alert routing healthy?", and nothing in this
+directory pointed at it:
+
+```bash
+# 1. Is the audit script itself sound? Hermetic — no credentials, no network.
+bash apps/web-platform/scripts/sentry-monitors-audit.test.sh
+
+# 2. Did the last CI run of the gate pass? No credentials needed.
+gh run list --workflow="Sentry Audit Gate" --limit 5 --json conclusion,createdAt
+
+# 3. What does the live org look like now? Needs prd credentials.
+#    NOTE SENTRY_IAC_AUTH_TOKEN, not SENTRY_AUTH_TOKEN — Doppler holds a
+#    DIFFERENT secret under that second name, and CI feeds the former into an
+#    env var named after the latter (#7590 lost a session to this).
+doppler run --project soleur --config prd --command '
+  SENTRY_AUTH_TOKEN="$SENTRY_IAC_AUTH_TOKEN" \
+  AUDIT_OUT_DIR=/tmp/sentry-audit \
+    bash apps/web-platform/scripts/sentry-monitors-audit.sh'
+```
+
+(1) proves the script is not broken; only (2) and (3) say anything about the
+org. Class D has teeth only when Terraform state is injected, which
+`apply-sentry-infra.yml` does and a local run does not — so a local run reports
+Class D candidates as *unresolved*, never as clean.
+
 
 ## Drift detection
 

@@ -663,7 +663,9 @@ liveness_signal:
   configured_in: ".github/workflows/sentry-audit-gate.yml, .github/workflows/reusable-release.yml"
 
 error_reporting:
-  destination: "GitHub Actions job log + check conclusion (observability layer 5 — CI). This script
+  destination: "GitHub Actions job log + check conclusion (observability layer 6 — synchronous
+                workflow run log; layer 5 is Sentry release context, which this never reaches).
+                This script
                 runs only on GHA runners; per the Class D marker comment, SOLEUR_* markers here are
                 job-log only and are NOT shipped to Better Stack (vector.toml scopes every source to
                 the Hetzner host SYSLOG_IDENTIFIER). The load-bearing signal is the non-zero exit."
@@ -687,11 +689,26 @@ failure_modes:
     alert_route: "non-zero exit before the Terraform plan step"
   - mode: "Collection paginates beyond the first page"
     detection: "rel=\"next\"; results=\"true\" in the captured Link header"
-    alert_route: "cursor followed for detectors/ and monitors/; loud non-zero for workflows/"
+    alert_route: "all three collections follow cursors; a refusal warns, increments
+                  LINK_UNFOLLOWED, stamps 'Enumeration complete: NO' in the report and
+                  suppresses the clean verdict; exit 0 (workflow run log, layer 6). There is
+                  no workflows-specific loud-fail arm — that claim was false."
   - mode: "detectors/ fails while workflows/ succeeds"
-    detection: "per-fetch status metadata; Classes A and B marked not-evaluated"
-    alert_route: "report omits the clean-state string and names the unevaluated classes; exit code
-                  per the posture declared in Decision 1"
+    detection: "the shape check catches the non-array payload"
+    alert_route: "exit 1 with the self-naming diagnostic and NO report written at all — so
+                  reusable-release.yml uploads no Article 30 evidence and downgrades to a
+                  ::warning:: on a green release (workflow run log, layer 6). The
+                  'partial report naming unevaluated classes' route does not exist in
+                  production; see the AC10 amendment."
+  - mode: "A Link header is refused (absent results=, @-bearing target, unparseable cursor) or
+           the MAX_PAGES ceiling is hit"
+    detection: "sentry_next_cursor increments LINK_UNFOLLOWED"
+    alert_route: "::warning::, 'Enumeration complete: NO' in the report, clean verdict
+                  suppressed; exit 0 (workflow run log, layer 6)"
+  - mode: "A deprecation date cannot be parsed (non-GNU date -d)"
+    detection: "date -u -d fails on a header that was present"
+    alert_route: "::warning:: and conservative escalation — treated as in-window rather than
+                  silently disarming (workflow run log, layer 6)"
   - mode: "Orphan extraction returns nothing against a non-empty org"
     detection: "zero cron detectors while monitors_json is non-empty -> extraction failure, modelled
                 on Class D's declared_slugs guard"
@@ -809,8 +826,15 @@ All criteria are verifiable pre-merge, in-session or in CI. This plan has no pos
 5. A 410 fixture with both deprecation headers produces a diagnostic containing the status `410`, the
    host, the source URL, the deprecation date and the replacement endpoint. Assert on the
    replacement-endpoint substring — a content anchor, not a bare `ERROR` token.
-6. Deprecation headers on a **200** emit a warning naming the endpoint and exit 0; inside the
-   escalation window the same input exits non-zero.
+6. **AC amended at review (#7590).** Planned: "inside the escalation window the same input exits
+   non-zero" — stated unconditionally, which the code no longer does. Escalation is opt-in per
+   caller (`SENTRY_DEPRECATION_FAIL=1`) and OFF by default, because the tripwire sits inside
+   `curl_retry` and Gates 1–3 call it too, so an unconditional escalation could freeze Sentry
+   infra deploys on a deprecation of an endpoint the audit cannot migrate away from. Amended:
+   deprecation headers on a **200** emit a warning naming the endpoint and exit 0; the same input
+   exits non-zero **when the caller sets `SENTRY_DEPRECATION_FAIL=1`** (the advisory gate does,
+   the apply path deliberately does not), and in BOTH cases the finding is recorded in the
+   report's `## Endpoint deprecation` section, which is the durable channel.
 7. Classes A/B/C compute from the new schema. A fixture with a known orphan yields exactly that
    orphan; one with none yields none. The structured-pass count is emitted into the report so
    "structured found it" is distinguishable from "fallback found it" — without which the

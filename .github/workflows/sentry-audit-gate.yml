@@ -27,7 +27,7 @@
 # The `main.tf` ruleset extension this header used to cite as making the job
 # mandatory never landed. Verify before re-asserting it:
 #   grep -n 'Sentry Audit Gate' scripts/required-checks.txt \
-#     apps/web-platform/infra/github/ruleset-ci-required.tf
+#     infra/github/ruleset-ci-required.tf
 #
 # Refs: plan knowledge-base/project/plans/2026-05-16-feat-sentry-residency-a2-branch-c-plan.md
 #       (Phase 5 block), parent issue #3861, PR-beta; corrected in #7590.
@@ -50,6 +50,11 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     env:
+      # NAMING TRAP: the repo secret is SENTRY_IAC_AUTH_TOKEN and the env var
+      # is SENTRY_AUTH_TOKEN. Doppler prd holds a DIFFERENT secret under that
+      # second name, so reproducing a failure with Doppler's SENTRY_AUTH_TOKEN
+      # exercises the wrong credential. This file is where an investigation
+      # starts when the gate goes red — #7590 lost a session to it.
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
       # Kieran P0-1 fail-loud: require SENTRY_API_HOST to be set explicitly.
       # No fallback default — `eu.sentry.io` would silently 401 for slugs
@@ -68,7 +73,16 @@ jobs:
       SENTRY_DEPRECATION_FAIL: '1'
       NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.NEXT_PUBLIC_SENTRY_DSN }}
     steps:
-      - uses: actions/checkout@v4
+      # Pinned to a SHA like every other checkout in this repo. This was the
+      # only unpinned action reference in the tree, in the workflow whose env
+      # block hands the step a production Sentry token with project:releases
+      # WRITE scope — a mutable tag is repointable by anyone who compromises
+      # the upstream repo or its tag. `persist-credentials: false` because the
+      # job runs no git command; the step after it executes a PR-authored
+      # script.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
       - name: Fail-loud secret presence check
         run: |
           set -euo pipefail

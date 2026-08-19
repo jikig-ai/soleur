@@ -876,14 +876,24 @@ if (( detectors_evaluated == 1 )); then
 fi
 
 # Class B — a cron detector naming a monitor that does not exist live.
-# The detector's `.name` is the binding (detectors carry no `slug`). The
-# slug-shape guard stays: it defends against a future Sentry change shipping a
-# non-slug-shaped name, which would otherwise flood the report.
+# `cron_detector_slugs` is slug-first with a `.name` fallback (see the binding
+# block above). The slug-shape guard stays, but a discard is now COUNTED and
+# surfaced: silently dropping a non-slug-shaped binding is a fail-open on
+# exactly the event Class B exists to catch. The guard's premise is that
+# `.name` slugifies to the monitor slug — so the trigger for a non-slug-shaped
+# value is not a hypothetical Sentry change, it is a human renaming a detector
+# in the UI to "Nightly Backup Check", which is precisely when that detector's
+# monitor binding is most likely to be broken.
+class_b_discarded=0
 if (( detectors_evaluated == 1 )); then
   monitor_slug_set=$(printf '%s\n' "$monitor_slugs" | sort -u)
   while IFS= read -r ref; do
     [[ -z "$ref" ]] && continue
-    [[ "$ref" =~ ^[a-z0-9][a-z0-9-]*$ ]] || continue
+    if ! [[ "$ref" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+      class_b_discarded=$(( class_b_discarded + 1 ))
+      echo "::warning::cron detector binding '${ref}' is not slug-shaped; Class B cannot be evaluated for it (a UI rename produces exactly this)." >&2
+      continue
+    fi
     if ! printf '%s\n' "$monitor_slug_set" | grep -qFx -- "$ref"; then
       orphan_alerts+=("$ref")
     fi
@@ -1135,6 +1145,11 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
   # artifact is the exact failure mode this whole change exists to remove.
   if (( detectors_evaluated == 0 )); then
     printf 'Classes A and B **NOT EVALUATED** — the detectors payload was not obtained on this run, so no statement is made about monitor routing. Classes C and D below were evaluated.\n\n'
+  elif [[ -s "$DEPRECATION_FATAL_FILE" ]]; then
+    printf 'An endpoint this audit reads is **DEPRECATED and inside the escalation window** (see `## Endpoint deprecation`). The orphan classes below were computed from data served by a sunsetting endpoint, so no clean verdict is issued.\n\n'
+  elif (( class_b_discarded > 0 )); then
+    printf 'Class B **PARTIALLY EVALUATED** — %d cron detector binding(s) were not slug-shaped and could not be resolved to a monitor. A UI rename produces exactly this, and it is the event Class B exists to catch, so no clean verdict is issued.\n\n' \
+      "$class_b_discarded"
   elif (( class_d_state_unknown == 1 )) && (( ${#class_d_unresolved[@]} > 0 )); then
     # Class D is the class with teeth (unreclaimable spend) and it is the one
     # the clean string used to assert hardest. Without the Terraform state half
@@ -1201,6 +1216,34 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
       "${#orphan_live_monitors[@]}" "$CRON_MONITOR_MONTHLY_USD"
     printf '**Remediation:** these monitors exist only in Sentry. Terraform cannot destroy a resource it never declared, so `terraform apply` will NOT reclaim them. Either add a `sentry_cron_monitor` block to `%s` (adopt via `terraform import`) or delete the monitor via the Sentry API. Refs #6589.\n\n' \
       "apps/web-platform/infra/sentry/cron-monitors.tf"
+  fi
+
+  # The deprecation finding must reach the DURABLE artifact, not only a job
+  # log. The report is the Article 30 evidence and, as a release asset, is
+  # retained indefinitely against GHA's 90 days — and on two of three callers
+  # the escalation deliberately does NOT fail, so without this section the only
+  # record of "this data came off a sunsetting endpoint" lives in a green job's
+  # scrollback. LINK_UNFOLLOWED already gets this treatment; deprecation did not.
+  if [[ -s "$DEPRECATION_FATAL_FILE" ]] || [[ -s "$DEPRECATION_SEEN_FILE" ]]; then
+    printf '## Endpoint deprecation\n\n'
+    if [[ -s "$DEPRECATION_SEEN_FILE" ]]; then
+      printf '_Endpoints that returned a deprecation header on this run:_\n\n'
+      while IFS= read -r ep; do
+        [[ -z "$ep" ]] && continue
+        printf -- '- `%s`\n' "$ep"
+      done < <(sort -u "$DEPRECATION_SEEN_FILE")
+      printf '\n'
+    fi
+    if [[ -s "$DEPRECATION_FATAL_FILE" ]]; then
+      printf '_Inside the %s-day escalation window (endpoint — deprecation date):_\n\n' \
+        "$DEPRECATION_FAIL_WINDOW_DAYS"
+      while IFS= read -r row; do
+        [[ -z "$row" ]] && continue
+        printf -- '- `%s`\n' "$row"
+      done < <(sort -u "$DEPRECATION_FATAL_FILE")
+      printf '\n**Escalation posture on this run:** %s\n\n' \
+        "$( [[ "$DEPRECATION_FAIL_ENABLED" == "1" ]] && echo 'ENABLED — this run exits non-zero' || echo 'warn-only (SENTRY_DEPRECATION_FAIL unset) — this run exits 0' )"
+    fi
   fi
 
   printf '## DPA evidence\n\n'

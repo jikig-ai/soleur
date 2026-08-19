@@ -826,6 +826,85 @@ fi
 rm -rf "$TMP19"
 
 # ------------------------------------------------------------------------
+# T20d — a Link with rel="next" and NO `results` field. This is the arm the
+# code argues hardest for and the one nothing covered: collapsing "cannot tell"
+# into "done" is the fail-open the whole mechanism exists to prevent, and its
+# sibling (an unparseable cursor, T20e) already warned and counted. Two
+# structurally identical parse failures must not get opposite verdicts.
+# ------------------------------------------------------------------------
+echo "T20d: a Link with no results= field is refused, not read as done"
+TMP20D=$(mktemp -d); mk_curl_stub "$TMP20D"; mk_default_respond "$TMP20D"
+mkdir -p "$TMP20D/tf"; printf 'resource "sentry_cron_monitor" "x" {\n  name = "none"\n}\n' > "$TMP20D/tf/m.tf"
+printf 'link: <https://sentry.io/api/0/organizations/jikigai/detectors/?&cursor=100:1:0>; rel="next"; cursor="100:1:0"\r\n' > "$TMP20D/noresults.hdr"
+cat > "$TMP20D/respond.sh" <<STUB
+#!/usr/bin/env bash
+d="$TMP20D"
+STUB
+cat >> "$TMP20D/respond.sh" <<'STUB'
+case "$URL" in
+  */detectors/*|*/detectors/|*/detectors/\?*) printf '200\t%s\t%s\n' "$d/noresults.hdr" "$d/empty.json" ;;
+  */monitors/*|*/monitors/|*/monitors/\?*)   printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */workflows/*|*/workflows/|*/workflows/\?*) printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */releases/*|*/releases/)   printf '201\t-\t-\n' ;;
+  */projects/*/)              printf '200\t-\t-\n' ;;
+  */organizations/*/)         printf '200\t-\t%s\n' "$d/org.json" ;;
+  *)                          printf '200\t-\t%s\n' "$d/empty.json" ;;
+esac
+STUB
+chmod +x "$TMP20D/respond.sh"
+set +e
+out=$(run_sut_stubbed "$TMP20D"); rc=$?
+set -e
+report=$(ls "$TMP20D"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+if grep -qi "no 'results' field" <<<"$out" \
+   && grep -q 'Enumeration complete:\*\* NO' "$report" \
+   && ! grep -q 'No orphans detected' "$report"; then
+  pass "absent results= refused, counted, and the clean verdict suppressed"
+else
+  fail "absent results= read as end-of-pagination (rc=$rc)"
+  printf '%s\n' "$out" | tail -6 >&2
+fi
+rm -rf "$TMP20D"
+
+# ------------------------------------------------------------------------
+# T20e — the sibling parse failure: rel="next", results="true", no parseable
+# cursor. Same class as T20d, and it must get the same verdict.
+# ------------------------------------------------------------------------
+echo "T20e: an unparseable cursor is refused, not read as done"
+TMP20E=$(mktemp -d); mk_curl_stub "$TMP20E"; mk_default_respond "$TMP20E"
+mkdir -p "$TMP20E/tf"; printf 'resource "sentry_cron_monitor" "x" {\n  name = "none"\n}\n' > "$TMP20E/tf/m.tf"
+printf 'link: <https://sentry.io/api/0/organizations/jikigai/detectors/>; rel="next"; results="true"\r\n' > "$TMP20E/nocursor.hdr"
+cat > "$TMP20E/respond.sh" <<STUB
+#!/usr/bin/env bash
+d="$TMP20E"
+STUB
+cat >> "$TMP20E/respond.sh" <<'STUB'
+case "$URL" in
+  */detectors/*|*/detectors/|*/detectors/\?*) printf '200\t%s\t%s\n' "$d/nocursor.hdr" "$d/empty.json" ;;
+  */monitors/*|*/monitors/|*/monitors/\?*)   printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */workflows/*|*/workflows/|*/workflows/\?*) printf '200\t-\t%s\n' "$d/empty.json" ;;
+  */releases/*|*/releases/)   printf '201\t-\t-\n' ;;
+  */projects/*/)              printf '200\t-\t-\n' ;;
+  */organizations/*/)         printf '200\t-\t%s\n' "$d/org.json" ;;
+  *)                          printf '200\t-\t%s\n' "$d/empty.json" ;;
+esac
+STUB
+chmod +x "$TMP20E/respond.sh"
+set +e
+out=$(run_sut_stubbed "$TMP20E"); rc=$?
+set -e
+report=$(ls "$TMP20E"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+if grep -qi 'no parseable cursor' <<<"$out" \
+   && grep -q 'Enumeration complete:\*\* NO' "$report" \
+   && ! grep -q 'No orphans detected' "$report"; then
+  pass "unparseable cursor refused and counted — same verdict as T20d"
+else
+  fail "unparseable cursor mis-handled (rc=$rc)"
+  printf '%s\n' "$out" | tail -6 >&2
+fi
+rm -rf "$TMP20E"
+
+# ------------------------------------------------------------------------
 # T21 — extraction-failure guard. Zero cron detectors against a non-empty
 # live monitor list is a BROKEN EXTRACTION, not a clean org. Under the old
 # predicate this state produced a loud artifact (all monitors flagged); under
