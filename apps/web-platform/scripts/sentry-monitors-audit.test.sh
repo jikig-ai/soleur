@@ -444,7 +444,19 @@ rm -rf "$TMP14"
 
 # Writes $1/curl. Each test supplies $1/respond.sh, which receives URL, METHOD
 # and N (1-based invocation count) in the environment and prints one line:
-#   <status><TAB><extra-headers-file|-><TAB><body-file|->
+#   <status><TAB><extra-headers-file|-><TAB><body-file|-><TAB><exit_code>
+#
+# The fourth field is OPTIONAL and defaults to 0. A non-zero value makes the
+# stub emulate a TRANSPORT failure — curl's own exit (28 on `--max-time`), no
+# status line, no headers, no body — rather than an HTTP response.
+#
+# That axis is not decoration. `curl_retry`'s idempotency guard has two arms,
+# a status arm and a transport arm, and the SUT's own comment records that the
+# transport arm is the half that matters: a timed-out POST whose write already
+# landed is the case observed live, whereas a 5xx at least proves the server
+# answered. Before this field the stub ended in an unconditional `exit 0`, so
+# NO test could drive rc != 0 and both arms of that guard — plus the safe-GET
+# transport retry — were pinned by nothing and reverted green.
 mk_curl_stub() {
   local dir="$1"
   mkdir -p "$dir"
@@ -470,6 +482,14 @@ spec=$(URL="$url" METHOD="$method" N="$n" bash "$STUB_DIR/respond.sh")
 status=$(printf '%s' "$spec" | cut -f1)
 hfile=$(printf '%s' "$spec" | cut -f2)
 bfile=$(printf '%s' "$spec" | cut -f3)
+ec=$(printf '%s' "$spec" | cut -f4)
+[[ -z "$ec" ]] && ec=0
+# Transport failure: exit before writing ANYTHING. curl_retry truncates the
+# header file before each attempt, so leaving it untouched is what a real
+# `--max-time` abort leaves behind, and is what drives the `000` status path.
+if (( ec != 0 )); then
+  exit "$ec"
+fi
 if [[ -n "$hdr" ]]; then
   printf 'HTTP/2 %s\r\n' "$status" > "$hdr"
   [[ "$hfile" != "-" && -f "$hfile" ]] && cat "$hfile" >> "$hdr"
@@ -790,6 +810,76 @@ if [[ "$body_wrapped" == "$body_bare" ]] && [[ "$body_wrapped" == '[{"id":"1"}]'
   pass "T18d: curl_retry stdout is byte-identical to bare curl in BOTH shapes"
 else
   fail "T18d: body '$body_wrapped' vs '$body_bare'; status '$status_wrapped' vs '$status_bare'"
+fi
+
+# ------------------------------------------------------------------------
+# T18e/T18f — the TRANSPORT axis. T18a-d perturb curl's *status*; every one of
+# them runs against a stub that exited 0, so `rc` in curl_retry was 0 in every
+# fixture the suite owned. Three properties lived on the untested axis:
+#
+#   * a safe GET whose transport fails IS retried to the ceiling (T18e)
+#   * a non-idempotent write whose transport fails is NOT (T18f) — the arm the
+#     SUT's own comment calls the half that matters, because a `--max-time`
+#     abort on a POST that already landed server-side is the case observed live
+#   * the never-exit contract survives a transport failure (T18e's rc arm) —
+#     every call site is `x=$(curl_retry …)` under `set -euo pipefail`, so a
+#     propagated exit 28 aborts at the assignment, which is the exact cryptic
+#     failure #7590 spent an investigation misreading
+#
+# `sleep` is stubbed on PATH and its argv RECORDED, not discarded: a no-op
+# clock would void the backoff contract silently, so the recorded sequence is
+# asserted (two sleeps, 5 then 10) rather than merely made fast.
+# ------------------------------------------------------------------------
+mkdir -p "$TMP18/bin"
+cat > "$TMP18/bin/sleep" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$TMP18/sleeps.txt"
+exit 0
+STUB
+chmod +x "$TMP18/bin/sleep"
+
+# Responder for both: every request is a transport failure (curl exit 28), the
+# `--max-time 10` shape both real call sites use.
+cat > "$TMP18/respond.sh" <<'STUB'
+#!/usr/bin/env bash
+printf '000\t-\t-\t28\n'
+STUB
+chmod +x "$TMP18/respond.sh"
+
+# --- (e) transport failure on a safe GET: 3 attempts, backoff 5 then 10 ---
+echo "T18e: transport failure on a safe GET is retried to the ceiling"
+printf '0' > "$TMP18/count"; : > "$TMP18/requests.txt"; : > "$TMP18/sleeps.txt"
+got=$(cd "$TMP18" && PATH="$TMP18/bin:$PATH" CURL_BIN="$TMP18/curl" bash -c \
+  'set -euo pipefail; source ./lib.sh; rc=0; o=$(curl_retry -s --max-time 10 "https://de.sentry.io/api/0/x/") || rc=$?; printf "%s|rc=%s" "$o" "$rc"' 2>/dev/null)
+n_calls=$(wc -l < "$TMP18/requests.txt")
+sleeps=$(tr '\n' ' ' < "$TMP18/sleeps.txt" | sed 's/ *$//')
+if [[ "$n_calls" == "3" ]] && [[ "$got" == "|rc=0" ]] && [[ "$sleeps" == "5 10" ]]; then
+  pass "T18e: 3 attempts, backoff 5s then 10s, empty stdout, exit 0 (assignment never aborts)"
+else
+  fail "T18e: calls=$n_calls got='$got' sleeps='$sleeps' (want 3 / '|rc=0' / '5 10')"
+fi
+
+# --- (f) transport failure on a non-idempotent write: exactly 1 attempt ---
+# Two fixtures, because curl_retry marks a request unsafe by EITHER of two
+# independent signals and a single fixture satisfying both cannot tell which
+# one is load-bearing: dropping either would stay green.
+echo "T18f: transport failure on a write is not retried, by either unsafe signal"
+# (f1) DECLARED unsafe, argv otherwise indistinguishable from a safe GET.
+printf '0' > "$TMP18/count"; : > "$TMP18/requests.txt"; : > "$TMP18/sleeps.txt"
+(cd "$TMP18" && PATH="$TMP18/bin:$PATH" CURL_BIN="$TMP18/curl" CURL_RETRY_UNSAFE=1 bash -c \
+  'set -euo pipefail; source ./lib.sh; o=$(curl_retry -s --max-time 10 -o /dev/null -w "%{http_code}" "https://de.sentry.io/api/0/x/releases/") || true' >/dev/null 2>&1)
+f1_calls=$(wc -l < "$TMP18/requests.txt"); f1_sleeps=$(wc -l < "$TMP18/sleeps.txt")
+# (f2) INFERRED unsafe from argv alone, no declaration — the backstop that
+# catches a future author who adds a write and forgets the prefix.
+printf '0' > "$TMP18/count"; : > "$TMP18/requests.txt"; : > "$TMP18/sleeps.txt"
+(cd "$TMP18" && PATH="$TMP18/bin:$PATH" CURL_BIN="$TMP18/curl" bash -c \
+  'set -euo pipefail; source ./lib.sh; o=$(curl_retry -s --max-time 10 -X POST -d "{\"v\":1}" "https://de.sentry.io/api/0/x/releases/") || true' >/dev/null 2>&1)
+f2_calls=$(wc -l < "$TMP18/requests.txt"); f2_sleeps=$(wc -l < "$TMP18/sleeps.txt")
+if [[ "$f1_calls" == "1" ]] && [[ "$f1_sleeps" == "0" ]] \
+   && [[ "$f2_calls" == "1" ]] && [[ "$f2_sleeps" == "0" ]]; then
+  pass "T18f: a timed-out write is sent once — declared (f1) and inferred (f2) alike"
+else
+  fail "T18f: declared=$f1_calls/$f1_sleeps inferred=$f2_calls/$f2_sleeps (want 1/0 each)"
 fi
 rm -rf "$TMP18"
 
@@ -1124,6 +1214,92 @@ else
   printf '%s\n' "$out" | tail -8 >&2
 fi
 rm -rf "$TMP20C"
+
+# ------------------------------------------------------------------------
+# T20f — accumulation ABOVE the argv ceiling, and the page-size parameter.
+#
+# T20 already proves two pages are followed and merged, but it does it with
+# two ~90-byte pages, so it is blind to both halves of the pagination fix:
+#
+#   * Reverting the file-backed accumulator to
+#     `acc=$(jq -n --argjson a "$acc" --argjson b "$body" '$a + $b')` passes a
+#     whole page as ONE argv entry, which Linux caps at MAX_ARG_STRLEN
+#     (32 * 4096 = 131072 B). Two tiny pages never reach it. Measured on this
+#     box: 128640 B accumulates, 134000 B dies `Argument list too long`.
+#     Crucially that failure lands UPSTREAM of the shape check, so it bypasses
+#     the whole self-naming diagnostic and the operator gets one cryptic line
+#     and no report at all.
+#   * Dropping `?per_page=100` leaves `cursor=` intact, so T20's cursor
+#     assertion still matches. Nothing read the page size.
+#
+# The fixture therefore asserts its OWN precondition first: if a later edit
+# shrinks these pages back under the ceiling the test does not quietly become
+# a duplicate of T20, it fails as a fixture defect.
+# ------------------------------------------------------------------------
+echo "T20f: pages above the argv ceiling accumulate, and per_page is sent"
+TMP20F=$(mktemp -d); mk_curl_stub "$TMP20F"; mk_default_respond "$TMP20F"
+mkdir -p "$TMP20F/tf"
+printf 'resource "sentry_cron_monitor" "a" {\n  name = "m1"\n}\nresource "sentry_cron_monitor" "b" {\n  name = "m2"\n}\n' > "$TMP20F/tf/m.tf"
+cat > "$TMP20F/monitors.json" <<'EOF'
+[{"slug":"m1","name":"M1","type":"cron_job","config":{"schedule":"0 * * * *"}},
+ {"slug":"m2","name":"M2","type":"cron_job","config":{"schedule":"0 0 * * *"}}]
+EOF
+printf '[{"id":"w","name":"W","triggers":{"actions":[{"targetType":"issue_owners"}]},"actionFilters":[]}]' \
+  > "$TMP20F/workflows.json"
+# Synthesized, not captured (cq-test-fixtures-synthesized-only): invented ids,
+# low-entropy filler. 200 rows of ~760 B puts each page well past 131072 B.
+mk_det_page() {  # $1 out, $2 cron slug, $3 id prefix
+  jq -nc --arg slug "$2" --arg p "$3" '
+    [{id: ($p + "-cron"), name: $slug, type: "monitor_check_in_failure",
+      workflowIds: ["w"], dataSources: [{queryObj: {slug: $slug}}]}]
+    + [range(0;200) | {id: ($p + "-" + (.|tostring)), name: ($p + "-filler-" + (.|tostring)),
+        type: "metric_issue", workflowIds: ["w"], description: ("x" * 700)}]
+  ' > "$1"
+}
+mk_det_page "$TMP20F/det_p1.json" m1 p1
+mk_det_page "$TMP20F/det_p2.json" m2 p2
+p1_bytes=$(wc -c < "$TMP20F/det_p1.json")
+printf 'link: <https://sentry.io/api/0/organizations/jikigai/detectors/?&cursor=100:1:0>; rel="next"; results="true"; cursor="100:1:0"\r\n' > "$TMP20F/next.hdr"
+cat > "$TMP20F/respond.sh" <<STUB
+#!/usr/bin/env bash
+d="$TMP20F"
+STUB
+cat >> "$TMP20F/respond.sh" <<'STUB'
+case "$URL" in
+  *detectors/*cursor=*)        printf '200\t-\t%s\n' "$d/det_p2.json" ;;
+  */detectors/|*/detectors/\?*) printf '200\t%s\t%s\n' "$d/next.hdr" "$d/det_p1.json" ;;
+  */monitors/*|*/monitors/|*/monitors/\?*)   printf '200\t-\t%s\n' "$d/monitors.json" ;;
+  */workflows/*|*/workflows/|*/workflows/\?*) printf '200\t-\t%s\n' "$d/workflows.json" ;;
+  */releases/*|*/releases/)   printf '201\t-\t-\n' ;;
+  */projects/*/)              printf '200\t-\t-\n' ;;
+  */organizations/*/)         printf '200\t-\t%s\n' "$d/org.json" ;;
+  *)                          printf '200\t-\t%s\n' "$d/empty.json" ;;
+esac
+STUB
+chmod +x "$TMP20F/respond.sh"
+if (( p1_bytes <= 131072 )); then
+  fail "T20f FIXTURE DEFECT: page 1 is ${p1_bytes} B, at or under MAX_ARG_STRLEN (131072) — this fixture can no longer distinguish the file-backed accumulator from --argjson"
+else
+  set +e
+  out=$(run_sut_stubbed "$TMP20F"); rc=$?
+  set -e
+  report=$(ls "$TMP20F"/sentry-migration-audit-*.md 2>/dev/null | head -1)
+  det_reqs=$(grep -c 'detectors/' "$TMP20F/requests.txt" || true)
+  det_paged=$(grep 'detectors/' "$TMP20F/requests.txt" | grep -c 'per_page=100' || true)
+  if [[ "$rc" == "0" ]] \
+     && [[ "$det_reqs" == "2" ]] && [[ "$det_paged" == "2" ]] \
+     && grep -q 'cursor=100:1:0' "$TMP20F/requests.txt" \
+     && grep -qE '^- Total detectors: 402$' "$report" \
+     && grep -qE '^- Cron detectors \(`monitor_check_in_failure`\): 2$' "$report" \
+     && grep -q 'Enumeration complete:\*\* yes' "$report"; then
+    pass "T20f: ${p1_bytes} B x2 merged to 402 detectors; every detectors request carried per_page=100"
+  else
+    fail "T20f: rc=$rc p1_bytes=$p1_bytes det_reqs=$det_reqs det_paged=$det_paged"
+    grep -E 'Total detectors|Cron detectors|Enumeration' "$report" >&2 2>/dev/null || true
+    printf '%s\n' "$out" | tail -6 >&2
+  fi
+fi
+rm -rf "$TMP20F"
 
 # ------------------------------------------------------------------------
 # T23 — the STRUCTURED binding wins over the display name, and the choice is
