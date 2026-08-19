@@ -673,8 +673,12 @@ s = s.replace(a, a + """
 # own exact baseline too, so removing a bootstrap-installed destination moves the intersection.
 # Measured: 2 [FAIL] lines. That is the deliberate cost of margin-zero floors on overlapping
 # sweeps -- the anchor still attributes this case to FLOOR_DESTS, which is what the rule requires.
+# The expected count tracks FLOOR_DESTS - 1 and must be re-derived whenever the baseline
+# moves: 56 while the baseline was 57, 58 since #7539 took it to 59. A stale literal here does
+# not fail loudly -- the guard still goes red, just via a different message -- so the battery
+# reports "red but NOT via <expected>" and the mutation stops being attributed to this floor.
 expect_red "M30 (§2 floor: one delivered artifact removed)" server.tf \
-  "2: swept only 56 destinations" '
+  "2: swept only 58 destinations" '
 blk = """  provisioner "file" {
     source      = "${path.module}/cron-egress-alarm@.service"
     destination = "/etc/systemd/system/cron-egress-alarm@.service"

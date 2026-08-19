@@ -734,6 +734,28 @@ if want_scripts; then
   # the real defect into a tree copy.
   run_suite "scripts/lint-workflow-errexit-capture" bash scripts/lint-workflow-errexit-capture.test.sh
   run_suite "scripts/lint-workflow-errexit-capture-live" python3 scripts/lint-workflow-errexit-capture.py
+  # ADR-191 (#7084). Same both-halves shape as the pair above, and for the same reason: after
+  # this change the passing state of Guard 1 is "zero bun.lock found", which is byte-identical
+  # to the output of a guard whose search is broken. The unit suites carry the anti-vacuity
+  # floors and the must-PASS rows; the live scans prove the tree.
+  #
+  # Two guards rather than one: each one's floor has to be obviously matched to its own
+  # enumeration (Guard 1 anchors on package-lock.json directories, Guard 2 on workflow files
+  # AND matched install steps), and a single script hosting both would fail that name test for
+  # half its job.
+  run_suite "scripts/lint-dual-lockfile" bash scripts/lint-dual-lockfile.test.sh
+  run_suite "scripts/lint-dual-lockfile-live" bash scripts/lint-dual-lockfile.sh
+  run_suite "scripts/lint-workflow-install-sites" bash scripts/lint-workflow-install-sites.test.sh
+  run_suite "scripts/lint-workflow-install-sites-live" bash scripts/lint-workflow-install-sites.sh
+  # The wrapper the plan's `discoverability_test.command` contracts on. Registered
+  # separately from the two guards it calls because what it can get wrong is its own:
+  # reporting success while a guard beneath it reddened. preflight Check 10 matches on its
+  # marker, so an unconditional marker would report a healthy invariant against any tree.
+  run_suite "scripts/verify-lockfile-guards" bash scripts/verify-lockfile-guards.test.sh
+  # The drain itself (#7084). Asserted from the committed lockfiles rather than from the
+  # Dependabot API: this is deterministic, available at merge time, and needs no token the
+  # workflow does not have. The alert COUNT is a lagging mirror of this same fact.
+  run_suite "scripts/assert-dependabot-drain" python3 scripts/assert-dependabot-drain.py
   # SIBLING gate (#7332): the same "captured a status nobody decided about" class, but in shell
   # SCRIPTS under `set -e` rather than Actions `run:` blocks. Separate anchor, separate
   # calibration -- the naive "a command-substitution assignment is a finding" rule found only
@@ -1052,6 +1074,11 @@ if want_scripts; then
   # short answer. That silently starved every soak gate built on it (#6288's needs 2h of
   # span and could never PASS). Hermetic: stubs curl, asserts SQL shape, never live rows.
   run_suite "tests/scripts/betterstack-query-archive" bash tests/scripts/test-betterstack-query-archive.sh
+  # #7569 — the ingest-refusal discriminator and its cause-annotation probe. tests/scripts/ is
+  # NOT auto-globbed by this runner, so an unregistered suite gates nothing, silently and
+  # greenly. Both are registered here in the same commit that adds them.
+  run_suite "tests/scripts/betterstack-absence-classifier" bash tests/scripts/test-betterstack-absence-classifier.sh
+  run_suite "tests/scripts/betterstack-ingest-probe" bash tests/scripts/test-betterstack-ingest-probe.sh
   run_suite "tests/scripts/rule-id-regex-parity" python3 -m unittest tests.scripts.test_rule_id_regex_parity
   run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh
   run_suite "scripts/rule-metrics-aggregate" bash scripts/rule-metrics-aggregate.test.sh

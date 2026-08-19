@@ -113,6 +113,7 @@ word_to_int() {
     one) echo 1 ;; two) echo 2 ;; three) echo 3 ;; four) echo 4 ;; five) echo 5 ;;
     six) echo 6 ;; seven) echo 7 ;; eight) echo 8 ;; nine) echo 9 ;; ten) echo 10 ;;
     eleven) echo 11 ;; twelve) echo 12 ;;
+    thirteen) echo 13 ;; fourteen) echo 14 ;; fifteen) echo 15 ;;
     *) echo "__UNMAPPED__" ;;
   esac
 }

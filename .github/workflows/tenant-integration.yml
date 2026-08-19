@@ -149,19 +149,19 @@ jobs:
         with:
           bun-version-file: .bun-version
 
-      - name: Cache bun install (apps/web-platform)
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      # The hand-rolled `actions/cache` block that used to sit here is deleted, not
+      # re-pointed: `npm ci` DELETES node_modules unconditionally, so caching it is worse
+      # than useless. setup-node's `cache: npm` caches the npm download cache instead.
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          path: |
-            ~/.bun/install/cache
-            apps/web-platform/node_modules
-          key: bun-webplat-${{ runner.os }}-${{ hashFiles('apps/web-platform/bun.lock') }}
-          restore-keys: |
-            bun-webplat-${{ runner.os }}-
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web-platform/package-lock.json
 
       - name: Install web-platform dependencies
         working-directory: apps/web-platform
-        run: bun install --frozen-lockfile
+        run: npm ci --ignore-scripts
 
       - name: Install Doppler CLI
         uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4

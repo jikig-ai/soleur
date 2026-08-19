@@ -84,7 +84,7 @@ jobs:
         # --ignore-scripts kills the postinstall ACE vector on fork-controlled package.json.
         # (It does NOT stop the gate's own .dependency-cruiser.cjs from running — that is the
         # accepted Stage-A residual, bounded by the capped/rotatable key + no write token.)
-        run: bun install --frozen-lockfile --ignore-scripts
+        run: npm ci --ignore-scripts
 
       - name: Run the constraint-gate (capture rc)
         id: gate

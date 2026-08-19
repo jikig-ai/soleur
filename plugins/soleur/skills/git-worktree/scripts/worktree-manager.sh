@@ -1535,16 +1535,50 @@ install_deps() {
   local worktree_path="$1"
 
   # --- Root-level dependency install ---
+  # Lockfile-detecting, mirroring the per-app branch below. The root branch used to
+  # hardcode `bun install --frozen-lockfile`; once ADR-191 deleted root bun.lock that
+  # became an unconditional failure, so EVERY worktree created by /one-shot, /work or
+  # /ship would print "Warning: bun install failed" and ship with no root node_modules
+  # -- breaking `bun test plugins/soleur/` and the pre-push hook on every fresh
+  # worktree, including any follow-up to the change that deleted the lockfile.
   if [[ -f "$worktree_path/package.json" ]] && [[ ! -d "$worktree_path/node_modules" ]]; then
-    if ! command -v bun &>/dev/null; then
-      echo -e "  ${YELLOW}Warning: bun not found -- install root dependencies manually${NC}" >&2
+    local -a root_install_cmd=()
+    local root_runtime=""
+    if [[ -f "$worktree_path/bun.lockb" ]] || [[ -f "$worktree_path/bun.lock" ]]; then
+      if command -v bun &>/dev/null; then
+        # Dispatches on the TENANT repo lockfile.
+        # ADR-191 makes npm the lockfile of record for THIS repo; a bun-based tenant
+        # repo must still get bun install, and this branch only runs when a bun lockfile
+        # is present. Waived per-line, not per-file, so a naked reintroduction elsewhere
+        # in this script is still caught.
+        root_install_cmd=(bun install --frozen-lockfile --cwd "$worktree_path") # lint-workflow-install-sites: allow-bun
+        root_runtime="bun"
+      else
+        echo -e "  ${YELLOW}Warning: root has a bun lockfile but bun not found -- install manually${NC}" >&2
+      fi
+    elif [[ -f "$worktree_path/package-lock.json" ]]; then
+      if command -v npm &>/dev/null; then
+        # --ignore-scripts: this runs on the operator machine for every worktree the
+        # pipeline creates, and the repo root has no .npmrc floor (ADR-191 root exemption),
+        # so it is the one install site with neither protection. The bun form it replaced
+        # ran no install scripts either, so this preserves behaviour rather than adding a
+        # restriction.
+        root_install_cmd=(npm ci --ignore-scripts --prefix "$worktree_path")
+        root_runtime="npm"
+      else
+        echo -e "  ${YELLOW}Warning: root has package-lock.json but npm not found -- install manually${NC}" >&2
+      fi
     else
-      echo -e "${BLUE}Installing dependencies...${NC}"
+      echo -e "  ${YELLOW}Warning: root package.json has no recognized lockfile -- skip${NC}" >&2
+    fi
+
+    if [[ ${#root_install_cmd[@]} -gt 0 ]]; then
+      echo -e "${BLUE}Installing dependencies (${root_runtime})...${NC}"
       local install_output
-      if install_output=$(bun install --frozen-lockfile --cwd "$worktree_path" 2>&1); then
+      if install_output=$("${root_install_cmd[@]}" 2>&1); then
         echo -e "  ${GREEN}Dependencies installed${NC}"
       else
-        echo -e "  ${YELLOW}Warning: bun install failed -- run manually in the worktree${NC}" >&2
+        echo -e "  ${YELLOW}Warning: ${root_runtime} install failed -- run manually in the worktree${NC}" >&2
         echo "  $install_output" >&2
       fi
     fi
@@ -1565,14 +1599,16 @@ install_deps() {
     local -a install_cmd=()
     if [[ -f "$app_dir/bun.lockb" ]] || [[ -f "$app_dir/bun.lock" ]]; then
       if command -v bun &>/dev/null; then
-        install_cmd=(bun install --frozen-lockfile --cwd "$app_dir")
+        # Same tenant-lockfile dispatch as the
+        # root branch above; reached only when the app directory carries a bun lockfile.
+        install_cmd=(bun install --frozen-lockfile --cwd "$app_dir") # lint-workflow-install-sites: allow-bun
       else
         echo -e "  ${YELLOW}Warning: $app_name has bun lockfile but bun not found -- skip${NC}" >&2
         continue
       fi
     elif [[ -f "$app_dir/package-lock.json" ]]; then
       if command -v npm &>/dev/null; then
-        install_cmd=(npm ci --prefix "$app_dir")
+        install_cmd=(npm ci --ignore-scripts --prefix "$app_dir")
       else
         echo -e "  ${YELLOW}Warning: $app_name has package-lock.json but npm not found -- skip${NC}" >&2
         continue

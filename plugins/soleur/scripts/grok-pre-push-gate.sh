@@ -126,7 +126,7 @@ run_step "test-all (CI test aggregator)" bash scripts/test-all.sh
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
   step "web-platform-build"
   if [[ -f apps/web-platform/package-lock.json ]]; then
-    (cd apps/web-platform && npm ci && npm run build)
+    (cd apps/web-platform && npm ci --ignore-scripts && npm run build)
     echo "[ok] web-platform-build"
   else
     echo "SKIP web-platform-build (no package-lock.json)" >&2

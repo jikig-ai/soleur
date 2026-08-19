@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import {
-  watchForUpdate,
   postSkipWaiting,
   reloadOnControllerChange,
+  watchForUpdate,
+  watchUpdateAcceptance,
 } from "@/lib/pwa/sw-update";
 import {
   isStandalone,
@@ -91,7 +92,11 @@ export function PwaControls() {
   }
 
   function handleReload() {
-    if (waiting) postSkipWaiting(waiting);
+    if (!waiting) return;
+    // Watch BEFORE posting: skipWaiting can complete fast enough that a listener
+    // attached afterwards misses the controllerchange and reports a false timeout.
+    watchUpdateAcceptance();
+    postSkipWaiting(waiting);
   }
 
   function dismissIosCard() {

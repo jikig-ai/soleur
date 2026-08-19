@@ -86,10 +86,9 @@ gh pr merge <N> --squash
 
 See `knowledge-base/project/learnings/workflow-patterns/2026-06-30-update-branch-drifts-lockfiles-and-npm11-pin.md` and `knowledge-base/project/learnings/workflow-patterns/2026-06-30-stale-bot-cron-pr-hallucinated-api-and-registration-sweep.md` for the full failure analyses.
 
-- **(a) Lockfile drift on deps PRs.** `gh pr update-branch` / a main-merge silently desyncs the lockfiles. Regenerate **both** and verify the frozen gates locally:
+- **(a) Lockfile drift on deps PRs.** `gh pr update-branch` / a main-merge silently desyncs the lockfile. There is exactly ONE lockfile per directory since ADR-191 — do not recreate `bun.lock`:
   ```bash
   cd apps/web-platform
-  bun install && bun install --frozen-lockfile          # bun.lock — must exit 0
   npx --yes npm@11 install --package-lock-only           # package-lock.json — npm@11 ONLY
   ```
   The `lockfile-sync` CI gate pins **npm@11**; regenerating `package-lock.json` with local npm produces a divergent shape and fails the gate. On a lockfile **merge conflict**, resolve by regenerating (`git checkout --ours -- <lockfiles>` then re-run), not by hand-picking hunks.

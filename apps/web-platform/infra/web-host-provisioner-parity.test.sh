@@ -140,9 +140,25 @@ bootstrap = strip_comments(read("soleur-host-bootstrap.sh"))
 # ── ALLOWLIST: destinations that are LEGITIMATELY web-1-only ─────────────────────────
 # Keyed by the exact DESTINATION PATH the failure message prints -- one key namespace, not
 # three (the previous version had three and documented one). Value is the reason, which is
-# mandatory. Deliberately empty: every destination the 15 write has a real fresh-boot
-# counterpart, so nothing needs an exception. Adding an entry is a reviewable diff.
-ALLOWLIST: dict[str, str] = {}
+# mandatory. Adding an entry is a reviewable diff.
+#
+# This was "deliberately empty" until #7539, on the claim that every destination the 15 write
+# has a real fresh-boot counterpart. That stopped being true when #7539 added a rotation
+# backup, and the sentence is corrected here rather than left to read as still-surveyed --
+# a claim that silently outlives the set it described is the exact defect #7539 fixes.
+ALLOWLIST: dict[str, str] = {
+    # A transient last-known-good backup, not config. server.tf writes it ONLY when vector is
+    # already running with an existing config, `rm -f`s it when that precondition fails, and
+    # `rm -f`s it again after a successful swap -- so it never persists in steady state and a
+    # fresh host must NOT have one. Delivering it on the fresh-boot path (the other remedy the
+    # §2 message offers) would be actively wrong: it would seed a "known-good" restore target
+    # onto a host where vector has never run, which is precisely the poisoned-restore shape
+    # the guarded snapshot exists to prevent.
+    "/etc/vector/vector.toml.prev":
+        "running-host rotation artifact (#7539): written only from a demonstrably-running "
+        "agent, removed on both the failure and success paths, absent by design on a fresh "
+        "host.",
+}
 
 # ── §0. Parse the three fresh-boot channels ──────────────────────────────────────────
 m = re.search(r'host_script_files = \[(.*?)\n  \]', srv, re.S)
@@ -577,7 +593,14 @@ for dest in sorted(all_dests):
 # the sweep quietly covers 50 while reporting a clean run (#7014 gap 1). Removing a delivered
 # artifact is a Phase-5-class change (plan §5.3(c)), so it SHOULD cost an explicit edit here --
 # same margin-zero rationale as FLOOR_RESOURCES and FLOOR_IDENTITY.
-FLOOR_DESTS = 57
+# 57 -> 59 in #7539. The Vector-reload hardening added two destinations to
+# journald_persistent: /etc/vector/vector.toml.prev (the rotation backup, ALLOWLISTed above)
+# and /usr/local/bin/vector. The second is an over-extraction -- the provisioner only TESTS
+# (`[ ! -x ]`) and INVOKES (`vector validate`) that path, it never delivers it -- but this
+# extractor is fail-closed by over-extraction by design, and the path is genuinely installed
+# on the fresh-boot path by soleur-host-bootstrap.sh, so it clears §2 truthfully rather than
+# needing an exception. Measured, not assumed: origin/main sweeps 57, this tree sweeps 59.
+FLOOR_DESTS = 59
 if len(all_dests) >= FLOOR_DESTS:
     if not uncovered:
         ok(f"2: all {len(all_dests)} SSH-written destinations have a fresh-boot writer "
@@ -738,11 +761,16 @@ def check_allowlist(entries, label):
 
 check_allowlist(ALLOWLIST, "ALLOWLIST")
 
-# REACHABILITY PROBE (#7014 gap 2). ALLOWLIST is empty -- which is the correct state -- so both
-# hygiene checks above are STRUCTURALLY UNREACHABLE from the mutation battery: no edit to the
-# four input FILES can add an entry, and the checks could therefore be deleted with the battery
-# reporting a full pass. They asserted nothing. This env var feeds a synthetic entry set through
-# the SAME function so both arms can be proven to fire.
+# REACHABILITY PROBE (#7014 gap 2). The hygiene checks above remain STRUCTURALLY UNREACHABLE
+# from the mutation battery: no edit to the four input FILES can add, remove or corrupt an
+# ALLOWLIST entry, so the checks could be deleted with the battery still reporting a full pass.
+# They would assert nothing. This env var feeds a synthetic entry set through the SAME function
+# so both arms can be proven to fire.
+#
+# Until #7539 this note justified itself with "ALLOWLIST is empty -- which is the correct
+# state". The list is no longer empty, and that clause was never the load-bearing one anyway:
+# unreachability follows from the battery mutating FILES while the list lives in this script,
+# which holds at any cardinality. The stale half is removed rather than re-stated.
 #
 # It is deliberately NOT merged into ALLOWLIST. An env var able to SUPPRESS a §2 finding would
 # be a fail-open switch on the guard's load-bearing invariant, and a test hook must never be

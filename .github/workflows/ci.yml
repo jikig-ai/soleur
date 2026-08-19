@@ -438,26 +438,60 @@ jobs:
         # (the global install replaces it for the rest of this job only).
         run: npm install -g npm@11
 
-      - name: Regenerate package-lock.json
+      # Root is covered as of ADR-191: it is now an install site for `test-bun` and
+      # `e2e`, so an unsynced root lockfile breaks CI exactly the way an unsynced
+      # web-platform one does. Extending this gate was ordered AFTER repairing root's
+      # `name` — root package.json had none, so npm wrote the checkout directory name
+      # into the lockfile (it read `fix-security-override-bumps-ws-jsyaml-babel`, a
+      # stale branch name). Widening the gate first would have failed it on its own
+      # introduction commit.
+      - name: Regenerate package-lock.json (apps/web-platform)
         working-directory: apps/web-platform
+        run: npm install --package-lock-only
+
+      - name: Regenerate package-lock.json (root)
+        run: npm install --package-lock-only
+
+      # All FOUR tracked lockfile directories, not the two that happen to carry the most
+      # alerts. pencil-setup/scripts holds 9 of the 39 baseline alerts and is bumped by
+      # this change, so leaving it ungated would drift exactly where the drain lands.
+      # Both were verified to regenerate byte-identically under npm@11 before being gated,
+      # so this cannot fail on its own introduction.
+      - name: Regenerate package-lock.json (pencil-setup scripts)
+        working-directory: plugins/soleur/skills/pencil-setup/scripts
+        run: npm install --package-lock-only
+
+      - name: Regenerate package-lock.json (spike)
+        working-directory: spike
         run: npm install --package-lock-only
 
       - name: Check lockfile sync
         run: |
-          if ! git diff --exit-code apps/web-platform/package-lock.json; then
-            echo "::error::package-lock.json is out of sync with package.json in apps/web-platform/."
-            echo "::error::Run 'npx --yes npm@11 install --package-lock-only' in apps/web-platform/ and commit the updated package-lock.json. (CI pins npm@11 — using a different npm version locally will produce a divergent lockfile shape.)"
+          if ! git diff --exit-code apps/web-platform/package-lock.json package-lock.json plugins/soleur/skills/pencil-setup/scripts/package-lock.json spike/package-lock.json; then
+            echo "::error::A package-lock.json is out of sync with its package.json."
+            echo "::error::Run 'npx --yes npm@11 install --package-lock-only' in the affected directory (apps/web-platform/ and/or the repo root) and commit the result. (CI pins npm@11 — a different npm version locally produces a divergent lockfile shape.)"
             exit 1
           fi
 
+      # ADR-191 (#7084). Folded into this job rather than added as new checks: both
+      # guards are cheap, both are about lockfile posture, and a NEW required status
+      # check would need the three declaring files + branch-protection changed.
+      # lockfile-sync is also exactly where a Dependabot PR already lands.
+      - name: Guard — npm is the single lockfile of record
+        run: bash scripts/lint-dual-lockfile.sh
+
+      - name: Guard — install sites resolve through npm with scripts disabled
+        run: bash scripts/lint-workflow-install-sites.sh
+
       # #5875 item 3 / ADR-079 — SDK-bump sandbox gate (BLOCKING). Asserts
-      # bun.lock↔package-lock parity for both @anthropic-ai SDK packages AND, on a
+      # package-lock PRESENCE for both @anthropic-ai SDK packages (the bun.lock parity
+      # half was retired with bun.lock itself — ADR-191) AND, on a
       # resolved-version bump vs the base branch, requires an `sdk-bump-verified:`
       # ack (a maintainer attests the committed seccomp profile was validated against
       # the new SDK). Closes the #5849 "a routine SDK bump shipped green because
       # nothing forced a look" class deterministically (no model turn / creds). The
       # base comparison needs origin/main; the default checkout is depth-1, so fetch it.
-      - name: SDK-bump sandbox gate (lockfile parity + bump ack)
+      - name: SDK-bump sandbox gate (lockfile presence + bump ack)
         run: |
           git fetch --no-tags origin main 2>/dev/null || true  # NOT --depth=1: a shallow base has no merge base, so `git log base..HEAD` exits 128 and the ack scan silently reads empty
           bash apps/web-platform/scripts/sdk-bump-sandbox-gate.sh
@@ -584,7 +618,7 @@ jobs:
 
       - name: Install web-platform dependencies
         working-directory: apps/web-platform
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Build (next build runs the route-file validator)
         working-directory: apps/web-platform
@@ -630,23 +664,16 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web-platform/package-lock.json
 
-      # First actions/cache usage in this repo. SHA pinned per the standing
-      # vendor-pin discipline (every other action above is also SHA-pinned).
-      # Cache key uses `apps/web-platform/bun.lock` (text format — `bun.lockb`
-      # does not exist in this repo; hashFiles() would silently hash zero bytes).
-      - name: Cache bun install (apps/web-platform)
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/.bun/install/cache
-            apps/web-platform/node_modules
-          key: bun-webplat-${{ runner.os }}-${{ hashFiles('apps/web-platform/bun.lock') }}
-          restore-keys: |
-            bun-webplat-${{ runner.os }}-
-
+      # The hand-rolled `actions/cache` block that used to sit here is gone, not
+      # re-pointed: `npm ci` DELETES node_modules unconditionally, so caching it is worse
+      # than useless. setup-node's `cache: npm` caches the npm _download_ cache instead,
+      # which is the part `npm ci` can actually reuse. Same pattern web-platform-build
+      # already used.
       - name: Install web-platform dependencies
-        run: bun install --frozen-lockfile
+        run: npm ci --ignore-scripts
         working-directory: apps/web-platform
 
       - name: Type-check web-platform
@@ -680,19 +707,11 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-
-      - name: Cache bun install (root)
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-          key: bun-root-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            bun-root-${{ runner.os }}-
+          cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Install root dependencies
-        run: bun install --frozen-lockfile
+        run: npm ci --ignore-scripts
 
       - name: Run bun-side tests
         run: bash scripts/test-all.sh bun
@@ -883,27 +902,14 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Install unzip (required by setup-bun)
-        # The Playwright Jammy image does not include unzip, which oven-sh/setup-bun
-        # shells out to during install. Without it the action fails with
-        # "error: unzip is required to install bun" (see oven-sh/setup-bun#55).
-        # critical-css-gate did not hit this because that job uses npm, not bun.
-        # Chained with `&&` so a flaky `apt-get update` (mirror outage) fails the
-        # step instead of falling through to a stale-cache install.
-        # `--no-install-recommends` keeps the install footprint minimal (no docs,
-        # no suggested-package pulls).
-        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends unzip
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
-        with:
-          bun-version-file: ".bun-version"
-
+      # setup-bun and its `unzip` prerequisite are both gone (ADR-191): this job's only
+      # bun usage was the two installs below. The image ships Node 24, so no
+      # actions/setup-node either — that is deliberate and unchanged.
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: npm ci --ignore-scripts
 
       - name: Install web-platform dependencies
-        run: bun install --frozen-lockfile
+        run: npm ci --ignore-scripts
         working-directory: apps/web-platform
 
       - name: Run E2E tests
@@ -951,7 +957,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Install root dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Build docs
         env:

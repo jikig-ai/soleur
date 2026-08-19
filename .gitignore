@@ -113,3 +113,11 @@ mutants/
 # never committed (also structurally excluded in _cron-safe-commit.ts).
 .soleur-collector-status/
 .claude/.memory-backstop*
+
+# ADR-191: npm is the single lockfile of record. bun remains the test runner, so a
+# habitual `bun install` still recreates these -- scripts/lint-dual-lockfile.sh scans
+# TRACKED files, so without this a stray lockfile is invisible until a commit resurrects
+# the dual-lockfile split that made every Dependabot PR born red (#7084). Ignoring them
+# makes resurrection structurally impossible rather than merely detectable after the fact.
+bun.lock
+bun.lockb
