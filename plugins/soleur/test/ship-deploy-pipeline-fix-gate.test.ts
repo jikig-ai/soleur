@@ -798,6 +798,22 @@ describe("profile→redeploy loaded-verification guard (#5875 item 4)", () => {
     const nextStep = rest.indexOf("\n      - name:");
     const stepBlock =
       nextStep >= 0 ? yml.slice(redeployStepIdx, redeployStepIdx + 1 + nextStep) : yml.slice(redeployStepIdx);
-    expect(stepBlock).toMatch(/if:\s*success\(\)/);
+    // SHAPE-TOLERANT, because the condition is no longer a bare inline `if: success()`.
+    // #7104 PR-B added a verdict gate alongside it, which makes the condition a folded
+    // block scalar (`if: >-`) — so a regex anchored on `if:` immediately followed by
+    // `success()` fails on a change that STRENGTHENED the very property it guards.
+    //
+    // Both halves are asserted rather than one loose match: `success()` must still be
+    // there (this test's original subject), and the verdict gate must be too. The reason
+    // the second clause matters is that `success()` alone is NOT sufficient — the gate's
+    // 404 first-bootstrap escape hatch exits 0 having adjudicated nothing, which re-armed
+    // this step (a container swap) behind a verification that never happened.
+    expect(stepBlock).toMatch(/if:[\s>|-]*success\(\)/);
+    expect(stepBlock).toMatch(
+      /steps\.infra_config_gate\.outputs\.verdict\s*==\s*'verified'/,
+    );
+    expect(stepBlock).toMatch(
+      /steps\.infra_config_gate_pass2\.outputs\.verdict\s*==\s*'verified'/,
+    );
   });
 });
