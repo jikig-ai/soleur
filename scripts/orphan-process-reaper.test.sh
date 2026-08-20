@@ -1238,19 +1238,84 @@ fi
 fi   # SKIP_LIVE
 
 # ===========================================================================
+# Integration with the runner (AC33, AC34)
+# ===========================================================================
+echo "--- runner integration ---"
+TA="$REPO_ROOT/scripts/test-all.sh"
+
+# AC33 — scripts/*.test.sh is NOT auto-globbed by the runner, so an unregistered
+# suite is an ORPHAN that gates nothing. Both lines must exist.
+for suite_name in orphan-process-reaper orphan-process-reaper-mutation; do
+  cases=$((cases + 1))
+  if grep -qE "^  run_suite .scripts/[^ ]*. bash scripts/${suite_name}[.]test[.]sh$" "$TA"; then
+    pass "AC33 scripts/${suite_name}.test.sh is registered in the runner"
+  else
+    fail "AC33 scripts/${suite_name}.test.sh is NOT registered — it would gate nothing"
+  fi
+done
+
+# AC34 — the preamble. Four separate assertions, because each covers a distinct
+# way the probe stops being a probe.
+cases=$((cases + 1))
+if grep -qE '^    timeout 10 bash scripts/orphan-process-reaper\.sh report' "$TA"; then
+  pass "AC34 the preamble invokes the REPORT verb under timeout 10"
+else
+  fail "AC34 the preamble call is not 'timeout 10 … report'"
+fi
+cases=$((cases + 1))
+# `|| _orphan_rc=$?` rather than `|| true`: the caller must be able to SAY that
+# the detector did not run. `|| true` alone makes that indistinguishable from
+# "it ran and found nothing", and the second reads as an all-clear.
+if grep -qE '\|\| _orphan_rc=\$\?' "$TA" && grep -qE "printf 'ORPHAN_SCAN valid=0 reason=rc" "$TA"; then
+  pass "AC34/M36 the caller captures rc and emits ORPHAN_SCAN valid=0 itself on a non-zero exit"
+else
+  fail "AC34/M36 a non-zero rc from the preamble would be swallowed — 'did not run' would read as 'found nothing'"
+fi
+cases=$((cases + 1))
+# AC28h — `timeout` runs its child in its own process group, so the probe
+# computing its own pgid would get timeout's pid rather than the runner's. The
+# synthesized-procfs arms structurally cannot observe this: they pin
+# TC_SELF_PID, so the pgid computed at the REAL call site is never seen.
+if grep -qE 'ORPHAN_REAPER_EXCLUDE_PGID=' "$TA"; then
+  pass "AC28h the caller passes the exclusion pgid EXPLICITLY rather than letting it be inferred"
+else
+  fail "AC28h without an explicit exclusion pgid, timeout's own group is excluded instead of the runner's"
+fi
+cases=$((cases + 1))
+# Nothing may invoke `reap` automatically. This is the whole trigger design: the
+# detector has never been observed firing on a real orphan.
+if [[ "$(grep -cE 'orphan-process-reaper\.sh reap' "$TA" || true)" == "0" ]]; then
+  pass "AC34 nothing in the runner invokes reap automatically"
+else
+  fail "AC34 the runner invokes reap — the first strike must be a reader's judgment"
+fi
+
+# ===========================================================================
 # Vacuity floors
 # ===========================================================================
 
-# ABSOLUTE assertion floor, hand-ratcheted to the measured case count. Written
-# as `if [[ "$cases" -lt N ]]` so scripts/guard-vacuity-floor.test.sh's
-# shape-derived population recognises it — its floor_lines_of() matches only
-# these forms, and a floor written otherwise is not covered, not deferred, and
-# not reported as unclassified, but simply ABSENT.
-# Absolute, hand-ratcheted to the measured case count. The live arms contribute
-# exactly 8 assertions (1 + 7 hops), so the skip-live floor is 8 lower — stated
-# as an explicit subtraction so the two numbers cannot drift apart.
-MIN_CASES=134
-[[ "$SKIP_LIVE" == "1" ]] && MIN_CASES=$((134 - 8))
+# ABSOLUTE assertion floor, hand-ratcheted to the measured case count, in the
+# comparison shape scripts/guard-vacuity-floor.test.sh recognises. A floor
+# written any other way is not covered, not deferred, and not reported as
+# unclassified — it is simply ABSENT from that gate's population.
+#
+# Two constraints on HOW it is written, both learned from that gate rejecting an
+# earlier draft of this block:
+#
+#   * The threshold must be a LITERAL on the line immediately above. That gate
+#     builds a mutant from this block plus the preceding plain assignments and
+#     zeroes the counters; a threshold computed conditionally is unbound in the
+#     mutant, so the floor scores as "not constructible" rather than as one that
+#     fires.
+#   * Nothing above may spell the comparison out. Prose describing the shape is
+#     matched by the same scan that finds the real one, and the slice taken from
+#     a comment exits 0 — reported as a floor that does not fire.
+#
+# The value is the SKIP-LIVE count, which is the lower of the two modes and
+# therefore valid in both. Full runs carry 8 more assertions (the live-procfs
+# arm and the seven end-to-end hops); those eight are not floored here, and that
+# slack is the price of one threshold that is correct under both modes.
+MIN_CASES=133
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '\n[FATAL] assertion floor: %d assertions ran, expected at least %d.\n' \
     "$cases" "$MIN_CASES" >&2

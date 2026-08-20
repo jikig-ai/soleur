@@ -44,7 +44,10 @@
 # deleted cwd — `[[ "$cwd" == *' (deleted)' ]] && return 1` — because for its
 # question ("does this process belong to my worktree?") an unresolvable path is
 # a refusal. This tool asks the opposite question ("is this inode unlinked?"),
-# so the two predicates diverge on purpose. See the reciprocal note there.
+# so the two predicates diverge on purpose, and there is a reciprocal note at
+# that line. The divergence is the thing worth recording: undocumented, it is a
+# trap for whoever next tries to unify them, because each predicate is correct
+# for its own failure direction and wrong for the other's.
 #
 # SEAMS (every name below is read by the code that follows; a seam that is
 # documented but unimplemented produces a test that sets it, observes no
