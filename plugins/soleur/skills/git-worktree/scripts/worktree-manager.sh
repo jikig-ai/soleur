@@ -1064,6 +1064,13 @@ seed_worktree_bare_false() {
 _porcelain_has_line() {
   local needle="$1" listing
   listing="$(git worktree list --porcelain)" || return 2
+  # rc 0 with no `worktree ` record is a BROKEN REGISTRY, not a repo with no
+  # worktrees: any valid repo emits at least the main worktree. Same standard
+  # cleanup_orphan_worktree_dirs sets with `reason=empty-parse`, and it matters
+  # here for the same reason — a definite "absent" from this helper is what
+  # authorises a delete. Without this, the rc check watches one door and the
+  # empty parse walks through the other.
+  [[ $'\n'"$listing" == *$'\n'"worktree "* ]] || return 2
   [[ $'\n'"$listing"$'\n' == *$'\n'"$needle"$'\n'* ]]
 }
 
@@ -1111,10 +1118,30 @@ verify_worktree_created() {
   fi
 
   # Check 2: Verify worktree is registered in git's worktree list (#1932)
-  if ! _porcelain_has_line "worktree $worktree_path"; then
+  #
+  # rc 2 ("could not read the registry") must NOT be folded into rc 1
+  # ("absent"). The handler below deletes the worktree `create` just checked
+  # out — 13,815 files — so answering a transient registry failure with `rm -rf`
+  # destroys good work AND asserts the wrong cause in a marker operators page
+  # on. Fail closed instead: keep the tree, name the real reason.
+  local _reg=0
+  _porcelain_has_line "worktree $worktree_path" || _reg=$?
+  if [[ "$_reg" == "2" ]]; then
+    echo "SOLEUR_GIT_WORKTREE_VERIFY_FAILED reason=registry-unavailable phase=initial branch=$branch_name expected=$worktree_path"
+    echo -e "${RED}Error: could not read the worktree registry — leaving $worktree_path in place${NC}"
+    exit 1
+  fi
+  if [[ "$_reg" != "0" ]]; then
     echo -e "${YELLOW}Warning: Worktree not in git worktree list — attempting repair...${NC}"
     git worktree repair "$worktree_path" 2>/dev/null || true
-    if ! _porcelain_has_line "worktree $worktree_path"; then
+    _reg=0
+    _porcelain_has_line "worktree $worktree_path" || _reg=$?
+    if [[ "$_reg" == "2" ]]; then
+      echo "SOLEUR_GIT_WORKTREE_VERIFY_FAILED reason=registry-unavailable phase=post-repair branch=$branch_name expected=$worktree_path"
+      echo -e "${RED}Error: could not read the worktree registry after repair — leaving $worktree_path in place${NC}"
+      exit 1
+    fi
+    if [[ "$_reg" != "0" ]]; then
       echo "SOLEUR_GIT_WORKTREE_VERIFY_FAILED reason=unregistered branch=$branch_name expected=$worktree_path"
       echo -e "${RED}Error: Worktree directory exists but is not registered after repair${NC}"
       git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true

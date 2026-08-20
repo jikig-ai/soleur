@@ -215,7 +215,7 @@ make_mutant() {
 
 # M1: verify_worktree_created Check 2 back to the piped form.
 neuter_verify() {
-  perl -0pi -e 's/if ! _porcelain_has_line "worktree \$worktree_path"; then/if ! git worktree list --porcelain | grep -qxF "worktree \$worktree_path"; then/g' "$1"
+  perl -0pi -e 's/^_porcelain_has_line\(\) \{.*?^\}/_porcelain_has_line() {\n  local needle="\$1"\n  git worktree list --porcelain | grep -qxF "\$needle"\n}/ms' "$1"
 }
 # M2: heal_stale_branch's guard back to its ORIGINAL form — wholesale, not just
 # the probe. Reverting only the probe would leave the `!= "1"` test in place,
@@ -337,7 +337,13 @@ echo ""
 echo "A6: no 'git worktree list … | grep -q' pipeline remains in the script"
 # `^[^#]*` so the helper's own explanatory comment — which quotes the outlawed
 # spelling on purpose — is not counted as a use of it.
-OFFENDERS=$(grep -nE '^[^#]*git worktree list[^|]*\| *grep -q' "$SCRIPT" || true)
+#
+# `.*` between the pipe and the consumer, NOT `[^|]*`: the hazard is any
+# short-circuiting reader ANYWHERE downstream, not just the next stage. With
+# `[^|]*`, `git worktree list --porcelain | sed -n 's/^branch //p' | grep -qx …`
+# reintroduces the identical bug (grep -q closes -> sed dies -> git dies -> 141
+# promoted) while the guard stays green. `head`/`read` short-circuit the same way.
+OFFENDERS=$(grep -nE '^[^#]*git worktree list.*\|.*(grep -q|head( |$)|read( |$))' "$SCRIPT" || true)
 assert_eq "" "$OFFENDERS" "script has no piped grep -q over 'git worktree list'"
 echo ""
 
@@ -371,4 +377,57 @@ assert_eq "0" "$RC_A7" "heal_stale_branch returns 0 when the listing is unreadab
 assert_eq "true" "$(remote_has_branch "$R_A7" "$BR_A7")"   "origin/$BR_A7 SURVIVES an unreadable listing (fail-closed, not fail-open)"
 echo ""
 
-print_results 18
+# ---------------------------------------------------------------------------
+# A8 — the OTHER door into the fail-open. `git worktree list` can exit 0 and
+#      still yield no records (the masked-config wedge this file documents).
+#      Any valid repo emits at least the main worktree, so a zero-length parse
+#      is a BROKEN REGISTRY, not "this branch is an orphan" — and answering it
+#      with "absent" authorises the delete. Same standard as
+#      cleanup_orphan_worktree_dirs' `reason=empty-parse` branch.
+# ---------------------------------------------------------------------------
+echo "A8: an EMPTY (rc 0) worktree listing does not authorise a delete"
+R_A8=$(new_fixture a8)
+IFS=$'\t' read -r _P_A8 BR_A8 <<<"$(entry_at "$R_A8" 1)"
+EMPTY_GIT="$TEST_DIR/emptybin"
+mkdir -p "$EMPTY_GIT"
+cat > "$EMPTY_GIT/git" <<EOF
+#!/usr/bin/env bash
+# Succeeds, prints nothing — the rc check alone cannot catch this.
+_seen_wt=0
+for _a in "\$@"; do
+  [[ "\$_a" == "worktree" ]] && _seen_wt=1
+  [[ "\$_seen_wt" == 1 && "\$_a" == "--porcelain" ]] && exit 0
+done
+exec "$REAL_GIT" "\$@"
+EOF
+chmod +x "$EMPTY_GIT/git"
+RC_A8=0
+( export PATH="$EMPTY_GIT:$PATH"
+  cd "$R_A8" && source "$SCRIPT" && heal_stale_branch "$BR_A8" main ) \
+  >"$TEST_DIR/a8.log" 2>&1 || RC_A8=$?
+assert_eq "0" "$RC_A8" "heal_stale_branch returns 0 on an empty (rc 0) listing"
+assert_eq "true" "$(remote_has_branch "$R_A8" "$BR_A8")" \
+  "origin/$BR_A8 SURVIVES an empty parse (rc 0 is not proof of absence)"
+echo ""
+
+# ---------------------------------------------------------------------------
+# A9 — verify must not answer "could not read the registry" with `rm -rf`.
+#      The handler deletes a worktree `create` just checked out, and the marker
+#      operators page on would assert the wrong cause.
+# ---------------------------------------------------------------------------
+echo "A9: an unreadable registry does not destroy the worktree under verify"
+R_A9=$(new_fixture a9)
+IFS=$'\t' read -r P_A9 B_A9 <<<"$(entry_at "$R_A9" 1)"
+RC_A9=0
+( export PATH="$BROKEN_GIT:$PATH"
+  cd "$R_A9" && source "$SCRIPT" && verify_worktree_created "$P_A9" "$B_A9" main ) \
+  >"$TEST_DIR/a9.log" 2>&1 || RC_A9=$?
+assert_eq "true" "$([[ "$RC_A9" -ne 0 ]] && echo true || echo false)" \
+  "verify fails (got $RC_A9) rather than passing blind"
+assert_eq "true" "$([[ -d "$P_A9" ]] && echo true || echo false)" \
+  "worktree SURVIVES an unreadable registry — fail-closed, no rm -rf"
+assert_contains "$(cat "$TEST_DIR/a9.log")" "reason=registry-unavailable" \
+  "marker names the real cause, not reason=unregistered"
+echo ""
+
+print_results 23
