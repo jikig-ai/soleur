@@ -776,6 +776,38 @@ fi
 tc_preamble
 _TC_RUN_START_ENTRIES=$(tc_tmp_entry_count)
 
+# Orphaned-PROCESS probe (#7537), emitted with the contention banners because it
+# answers the same question they do — "is something else on this box eating the
+# capacity this run needs?" — for processes rather than for /tmp.
+#
+# REPORT ONLY. Nothing in this repo invokes `reap` automatically: the detector
+# has never been observed firing on a real orphan, so the first strike is a
+# READER'S judgment. This is the moment an actor is present and already reading
+# stderr, which is what makes a report here a decision point rather than a
+# declaration site.
+#
+# `timeout 10` AND `|| true` are both load-bearing and cover different failures:
+# `|| true` covers a non-zero exit, and `timeout` covers what it cannot — an
+# unresponsive NFS/FUSE/autofs mount puts readlink/stat in uninterruptible
+# sleep, and a command that never returns is never rescued by `|| true`.
+#
+# EXCLUDE_PGID is passed EXPLICITLY rather than inferred: `timeout` runs its
+# child in its own process group, so the probe computing its own pgid would get
+# timeout's pid rather than this runner's, and this runner's command-
+# substitution forks would not be excluded from its own reap set.
+if [[ -z "${CI:-}" ]] && [[ -x scripts/orphan-process-reaper.sh || -f scripts/orphan-process-reaper.sh ]]; then
+  _orphan_rc=0
+  ORPHAN_REAPER_EXCLUDE_PGID="$(command ps -o pgid= -p $$ 2>/dev/null | tr -d ' ' || true)" \
+    timeout 10 bash scripts/orphan-process-reaper.sh report || _orphan_rc=$?
+  # The caller emits on a non-zero rc ITSELF. `|| true` hides the status, so
+  # without this line "the detector did not run" is indistinguishable from "it
+  # ran and found nothing" — and the second reads as an all-clear.
+  if [[ "$_orphan_rc" != "0" ]]; then
+    printf 'ORPHAN_SCAN valid=0 reason=rc%s\n' "$_orphan_rc"
+  fi
+  unset _orphan_rc
+fi
+
 # The capacity verdict (#7545), emitted BETWEEN the preamble and the lock —
 # after the readings exist, before the wait that may consume them.
 #
@@ -972,6 +1004,24 @@ if want_scripts; then
   # #6789: arms for the tmpfs scratch reaper. It DELETES files, so every gate
   # (age/size/ownership/liveness/protected-path) is asserted in both directions.
   run_suite "scripts/tmpfs-guard" bash scripts/tmpfs-guard.test.sh
+  # #7537: the orphaned-PROCESS reaper. It SIGNALS processes, so every gate
+  # (own-uid, unlinked cwd, unlinked fd/255, self-exclusion, mount/pid
+  # namespace, age floor) is asserted in both directions here. Registered
+  # explicitly for the same reason as its neighbours: scripts/*.test.sh is NOT
+  # in the auto-glob below, so an unregistered suite is an ORPHAN that gates
+  # nothing (the #5417 class). lint-orphan-test-suites.sh enforces this line.
+  run_suite "scripts/orphan-process-reaper" bash scripts/orphan-process-reaper.test.sh
+  # The mutation battery for the same detector. Both lines are needed for the
+  # reason the legal-corpus pair below states: the behavioural suite proves the
+  # detector can detect a planted orphan, and the battery is the only thing that
+  # proves each of its GUARDS can be driven red. The preceding PR in this area
+  # shipped nine guards that could not fail; measured here at ~90s for 36 rows.
+  #
+  # NOT registered as a live `report` run: that would be a second /proc walk per
+  # launch, and a suite whose verdict depended on what else happened to be
+  # running is cq-ac-must-not-depend-on-concurrent-sessions reproduced inside
+  # the gate.
+  run_suite "scripts/orphan-process-reaper-mutations" bash scripts/orphan-process-reaper-mutation.test.sh
   # The fstab ceiling applier. Every case drives a FIXTURE fstab through the
   # RAISE_TMPFS_FSTAB seam — the real /etc/fstab is never read or written, because a
   # test that touched it could leave the machine unbootable. Registered explicitly for
