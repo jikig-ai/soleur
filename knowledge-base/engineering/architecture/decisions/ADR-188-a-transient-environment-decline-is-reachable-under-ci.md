@@ -283,3 +283,77 @@ training is the actual cost, and it is the cost ADR-180 warns about from the oth
 - **Lower or remove the assertion floor** — REJECTED. It gives back exactly the detectability the
   floor exists to provide, and makes a legitimate loud skip indistinguishable from an arm that
   silently stopped running — the distinction this ADR is entirely about.
+
+---
+
+## Amendment — 2026-08-20 (#7572): S1 becomes skip-eligible, and what that costs
+
+This ADR's decision is unchanged. Three of the records it makes are now stale, and one of its
+accepted residuals is partially retired. All four are recorded here rather than edited above.
+
+### The ceiling moves 2 → 5, itemised
+
+`_SKIP_CEILING` was `2`, justified above as "one skip-eligible arm exists, declaring a cost of
+two". #7572 makes S1's two container-dependent groups declinable, so the itemisation is now:
+
+| Arm | Cost | Origin |
+|---|---|---|
+| T5 mutation | 2 | pre-existing (this ADR) |
+| S1 healthy | 2 | #7572 — both assertions in the healthy run |
+| S1 mutation | 3 | #7572 — the mutant's rc, its fatal, and the privsep reproduction |
+| **Ceiling** | **5** | the largest cost reachable in a single run |
+
+**5, not 7.** T5 and S1 cannot both be maximally skipped in a run that produced any verdict at
+all; 5 is S1's two groups together, which is the largest single-run cost actually reachable. A
+future arm that makes 7 reachable raises it in a new stanza rather than editing this one.
+
+### Full derivation stays rejected, for the reason this ADR already gave
+
+#7572's issue body proposed replacing the constant with a count derived from the `arm_skip` call
+sites. That is rejected, and the rejection is the same one recorded above: a ceiling derived from
+the live skip count makes `SKIPPED_ASSERTIONS <= _SKIP_CEILING` an **identity that cannot fail**
+(AP-023). It would read as a tightening and would in fact delete the assertion.
+
+### The "not mechanically drift-proof" residual is PARTIALLY retired
+
+That residual said raising the ceiling "is not detectable by any assertion that would not be
+text-matching the source". A narrower guard now exists and does not require text-matching a
+value: the suite counts `arm_skip` **call sites** and asserts the number the itemised stanza
+declares (3). This catches an unlisted call site silently consuming another arm's budget — the
+drift that actually happens. It deliberately does **not** sum the costs from the code, because
+summing them would re-create the AP-023 identity one level down. So: the *roster* is now
+mechanically guarded; the ceiling's *value* remains procedural, as stated above.
+
+### The composite vacuity bound now rests on T5's primary alone
+
+This is the consequential one. The residual above records that "skips forever behind a green
+check" is not reachable, because the T5 **primary** arm runs the identical container recipe
+unconditionally and FAILS on a degraded container.
+
+S1's healthy run used to be a second such bound, for the same reason and independently. Routing
+it through the classifier **removes that bound**: a run in which the container never starts now
+declares five skips and still satisfies the floor. The argument above therefore no longer has two
+legs — it has one, and it is T5's primary.
+
+The suite asserts this explicitly rather than leaving it implicit: if a future change makes T5's
+primary skip-eligible too, every container-dependent assertion in the file becomes declinable at
+once and a run in which docker never worked reports green. That assertion is the standing guard
+on this ADR's own argument.
+
+### Why S1 became skip-eligible at all
+
+Not for convenience. S1 read the stage's exit status out of the container's stdout, so a container
+that never ran left it empty and the arm reported `the sshd_config stage exited <no marker> on a
+fresh 24.04 — this is the boot abort` and `S1 is no longer reproducing the measured failure`. Both
+name a cause that never occurred: the stage did not exit anything, because it never started. That
+is the AP-021 / ADR-166 misattribution this ADR's own four-rung ladder exists to prevent, and S1
+was the arm without one. The skip is the cost of no longer asserting a false cause.
+
+### Carrier note
+
+The manual observation window this ADR declares ("more than 1 in 20 post-merge runs") is no longer
+manual. `scripts/followthroughs/t5-skip-persistence-bound-7510.sh` counts it, and since #7574 its
+marker set covers **both** T5 and S1 — the arm this amendment makes skip-eligible. Its carrier is
+the standing daily monitor `.github/workflows/scheduled-rehearsal-skip-monitor.yml`, not the
+follow-through sweeper, which closes on first PASS and would retire the observer after one clean
+sample.

@@ -1251,6 +1251,42 @@ if [ -s "$TMP/out/capture.log" ]; then pass; else
 # The stage is run under `sh` with errexit OFF, matching the shipped chain: the template arms
 # `set -e` in a LATER runcmd entry, and production evidence confirms it (the failing `sshd -t`
 # was followed by `_sshd_t_rc=$?` and an emit, neither of which runs under errexit).
+# S1's rc-class allowlist, enumerated ONCE so the routing and the offered classification
+# cannot drift apart -- same construction as _T5M_ENV_RCS. A bare string, not an array, so it
+# stays safe under this file's `set -u` when word-split by `printf '%s\n' $_S1_ENV_RCS`.
+# 125: docker CLI / image pull. 100: apt under the container's outer `set -e`.
+_S1_ENV_RCS='100 125'
+
+# The IN-CONTAINER execution marker. Its whole job is to distinguish "the stage ran and
+# exited N" from "nothing ran, so there is no N". It is emitted by the driver AFTER the
+# container has reached the point where the stage is about to run, so its absence is
+# positive evidence of a pre-stage failure rather than an inference from an empty capture.
+_S1_MARKER='S1_DRIVER_REACHED_STAGE'
+# The FIXTURE marker, emitted before anything environmental can fail. Its presence means the
+# mount worked and the driver started, so a later failure is deterministic -- a defect in
+# THIS file -- and must not be laundered into an environment decline.
+_S1_FIXTURE_MARKER='S1_FIXTURE_OK'
+
+# THE FOUR-RUNG LADDER, PORTED FROM T5. Pure over its four inputs so the negative controls
+# below can drive every rung without docker.
+#   $1 container rc   $2 marker seen (yes|no)   $3 fixture marker seen (yes|no)
+#   $4 primary reached (yes|no, carried into the skip message only)
+#
+# ORDER IS LOAD-BEARING AND IS NOT ALPHABETICAL. The fixture rung MUST sit above
+# `did-not-run`: docker exits 125 for BOTH a failed image pull (environment) and a bad `-v`
+# source (this file's bug), so with the fixture rung any lower a mount typo lands on
+# `did-not-run` and reports a green skip forever.
+_s1_classify() {
+  if [ "$2" = yes ]; then printf 'ran'; return 0; fi
+  if [ "$3" = yes ]; then printf 'fixture-defect'; return 0; fi
+  if ! printf '%s\n' $_S1_ENV_RCS | grep -qx "$1"; then printf 'harness-defect'; return 0; fi
+  printf 'did-not-run'
+}
+
+# SNAPSHOT THE GLOBAL COUNTERS AROUND THE ARM so S1's own invariant can be checked without
+# re-deriving it from the whole suite. Taken BEFORE the arm, and read by an assertion placed
+# after it, so the check does not perturb its own input.
+_S1_P0=$passes; _S1_F0=$fails; _S1_S0=$SKIPPED_ASSERTIONS
 if [ -s "$TMP/sshd-stage.sh" ] && [ -s "$TMP/01-hardening.conf" ]; then
   cat > "$TMP/sshd-drive.sh" <<'S1DRV'
 set -e
@@ -1272,7 +1308,14 @@ chmod +x /usr/local/bin/git-data-emit
 # calls it bare. There is no init in a container; the restart's tolerance is not what S1 tests.
 printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/systemctl
 chmod +x /usr/local/bin/systemctl
+# The fixture marker goes FIRST -- before apt, before anything environmental can fail --
+# so its presence proves the mount worked and the driver started.
+echo "S1_FIXTURE_OK"
 set +e
+# The execution marker sits immediately above the stage invocation. Absence of this line is
+# positive evidence that nothing reached the stage, which is what STAGE_RC alone could never
+# distinguish from "the stage ran and exited".
+echo "S1_DRIVER_REACHED_STAGE"
 sh /work/sshd-stage.sh
 echo "STAGE_RC=$?"
 S1DRV
@@ -1285,8 +1328,20 @@ S1DRV
       -v "$TMP/sshd-drive.sh:/work/sshd-drive.sh:ro" \
       -v "$TMP/s1out:/out" \
       ubuntu:24.04 bash /work/sshd-drive.sh >"$TMP/s1out/stdout" 2>&1
+    S1_DOCKER_RC=$?
     S1_RC="$(sed -n 's/^STAGE_RC=//p' "$TMP/s1out/stdout" | tail -1)"
     S1_CAP="$TMP/s1out/sshd-capture.log"
+    # `-qx` ON BOTH READS. bash ECHOES the offending source line on an error, so a line like
+    #   bash: /work/sshd-drive.sh: line 9: echo S1_DRIVER_REACHED_STAGE: command not found
+    # SATISFIES a bare `grep -q` and would route a driver that never reached the stage
+    # straight to `ran` -- the misattribution this arm exists to remove. On the healthy path
+    # the driver's `echo` produces a line that IS exactly the marker, so `-x` costs nothing.
+    S1_MARKER_SEEN=no
+    grep -qx "$_S1_MARKER" "$TMP/s1out/stdout" 2>/dev/null && S1_MARKER_SEEN=yes
+    S1_FIXTURE_SEEN=no
+    grep -qx "$_S1_FIXTURE_MARKER" "$TMP/s1out/stdout" 2>/dev/null && S1_FIXTURE_SEEN=yes
+    S1_STATE="$(_s1_classify "$S1_DOCKER_RC" "$S1_MARKER_SEEN" "$S1_FIXTURE_SEEN" "$S1_MARKER_SEEN")"
+    S1_NOTE="docker rc=${S1_DOCKER_RC} (measured classes: 125 docker CLI/image pull, 100 apt under the container's outer set -e — offered as classification, not asserted as cause); stage rc=${S1_RC:-<no marker>}; execution marker seen: ${S1_MARKER_SEEN}; fixture marker seen: ${S1_FIXTURE_SEEN}; tail: $(tail -3 "$TMP/s1out/stdout" 2>/dev/null | tr '\n' ' ')"
   }
 
   # ERREXIT ORDERING IS S1's LOAD-BEARING PRECONDITION, so assert it rather than assume it.
@@ -1299,6 +1354,26 @@ S1DRV
   if [ -n "$_s1_stage_ln" ] && [ -n "$_s1_sete_ln" ] && [ "$_s1_stage_ln" -lt "$_s1_sete_ln" ]; then pass; else
     fail "S1: the shipped chain arms 'set -e' at or before the sshd stage (stage=${_s1_stage_ln:-?}, set -e=${_s1_sete_ln:-?})" \
          "S1's child-sh model runs with errexit OFF and now tests the opposite of what ships."; fi
+
+  # STRUCTURAL GUARD ON THE MOUNTED ARTIFACT, not on this file's variables. Both markers are
+  # hand-copied literals: the driver heredoc emits them and the reads above match them. A
+  # reword on either side silently makes S1_MARKER_SEEN=no forever, which routes every run to
+  # `did-not-run` and converts the whole arm into a permanent green skip -- the exact
+  # unpinned-replicated-literal failure T5 spends a hundred lines closing for its own marker.
+  # Assert against the file that is actually mounted, so the check cannot pass on a variable
+  # the container never sees.
+  # SUBSTRING HERE, WHOLE-LINE THERE, and the difference is not an inconsistency. In the
+  # mounted DRIVER the marker sits inside `echo "S1_DRIVER_REACHED_STAGE"`, so a whole-line
+  # match cannot see it; in the container's STDOUT the echo produces a line that IS exactly
+  # the marker, so `-qx` is correct there and is what stops bash's own error echo
+  # ("... echo S1_DRIVER_REACHED_STAGE: command not found") from satisfying the read. The
+  # first draft used `-qx` in both places and this guard failed against a driver that carried
+  # both markers.
+  if grep -qF "$_S1_MARKER" "$TMP/sshd-drive.sh" && grep -qF "$_S1_FIXTURE_MARKER" "$TMP/sshd-drive.sh"; then
+    pass
+  else
+    fail "S1: an execution marker is absent from the mounted driver (marker=$(grep -cF "$_S1_MARKER" "$TMP/sshd-drive.sh" 2>/dev/null || true), fixture=$(grep -cF "$_S1_FIXTURE_MARKER" "$TMP/sshd-drive.sh" 2>/dev/null || true))" \
+         "The classifier's rungs are then unreachable and every run reports a green skip."; fi
 
   # ── S1 CLASSIFIER NEGATIVE CONTROLS (#7572) ──────────────────────────────────────
   #
@@ -1346,19 +1421,44 @@ S1DRV
          "This is the only rung ADR-188 justifies a skip on; if it does not fire, the accepted decline reds instead."; fi
 
   _s1_run "$TMP/sshd-stage.sh"
-  if [ "${S1_RC:-none}" = "0" ]; then pass; else
-    fail "S1: the sshd_config stage exited ${S1_RC:-<no marker>} on a fresh 24.04 — this is the boot abort" \
-         "$(tail -5 "$TMP/s1out/stdout" 2>/dev/null)"; fi
+  # THE HEALTHY RUN'S TWO ASSERTIONS ARE BOTH CONTAINER-DEPENDENT, so they are made together,
+  # declared-skipped together, or reported not-demonstrated together -- never a mix. A route
+  # contributing a different number is indistinguishable at the floor from an arm that partly
+  # vanished. (The errexit-ordering assertion above is container-INDEPENDENT and stays
+  # unconditional; so does the mutation-landed check below.)
+  case "$S1_STATE" in
+    did-not-run)
+      # 2: the stage's own exit status, and the emptiness of its capture.
+      arm_skip "S1 healthy run did not run: the container never reached the stage, so this arm demonstrated neither that the sshd_config stage survives a fresh 24.04 nor that a healthy stage emits nothing. ${S1_NOTE}" 2
+      ;;
+    harness-defect)
+      fail "S1: docker exited ${S1_DOCKER_RC} with no execution marker and an rc outside _S1_ENV_RCS — harness defect, not an environment skip; the fresh-boot survival premise is undemonstrated" \
+           "${S1_NOTE}"
+      fail "S1: the same harness defect leaves the healthy-stage-emits-nothing property undemonstrated" \
+           "${S1_NOTE}"
+      ;;
+    fixture-defect)
+      fail "S1: the fixture marker printed but the stage was never reached — a deterministic defect in this file, not an environment decline" \
+           "${S1_NOTE}"
+      fail "S1: the same fixture defect leaves the healthy-stage-emits-nothing property undemonstrated" \
+           "${S1_NOTE}"
+      ;;
+    *)
+      if [ "${S1_RC:-none}" = "0" ]; then pass; else
+        fail "S1: the sshd_config stage exited ${S1_RC:-<no marker>} on a fresh 24.04 — this is the boot abort" \
+             "$(tail -5 "$TMP/s1out/stdout" 2>/dev/null)"; fi
   # EMPTY, not "no fatal". A substring test for `|sshd_config|fatal` is satisfied by the 126/127
   # branch, which emits `sshd_config_warn`/`warning`, forces `_sshd_t_rc=0` and exits 0 — so a
   # container where /usr/sbin/sshd was missing entirely would pass both asserts while the fix
   # under test was never exercised. Measured: a healthy stage emits ZERO bytes (the systemctl
   # stub keeps the restart quiet), so `-s` is strictly stronger and cannot flake. It is also
   # what makes the systemctl stub load-bearing rather than decorative.
-  if [ -s "$S1_CAP" ]; then
-    fail "S1: a healthy sshd stage emitted $(wc -l < "$S1_CAP") event(s) — a warn here means sshd -t did not actually run (126/127 branch), so the privsep fix was never exercised" \
-         "$(head -3 "$S1_CAP" 2>/dev/null)"
-  else pass; fi
+      if [ -s "$S1_CAP" ]; then
+        fail "S1: a healthy sshd stage emitted $(wc -l < "$S1_CAP") event(s) — a warn here means sshd -t did not actually run (126/127 branch), so the privsep fix was never exercised" \
+             "$(head -3 "$S1_CAP" 2>/dev/null)"
+      else pass; fi
+      ;;
+  esac
 
   # MUTATION — strip the WHOLE privsep preamble so the mutant is the pre-fix stage, and prove
   # S1 reproduces the MEASURED production failure rather than merely "some" failure. Leaving
@@ -1379,25 +1479,80 @@ S1DRV
   else
     pass
     _s1_run "$TMP/sshd-stage.nomkdir.sh"
-    if [ "${S1_RC:-none}" = "1" ]; then pass; else
-      fail "S1 MUTATION: without the mkdir the stage exited ${S1_RC:-<no marker>}, expected 1" \
-           "$(tail -5 "$TMP/s1out/stdout" 2>/dev/null)"; fi
-    if grep -q '|sshd_config|fatal' "$S1_CAP" 2>/dev/null; then pass; else
-      fail "S1 MUTATION: no sshd_config fatal was emitted" "$(head -3 "$S1_CAP" 2>/dev/null)"; fi
-    # The exact string from the rehearsal hosts. Pinning it — rather than "any failure" —
-    # is what keeps this arm tied to the defect instead of to sshd being unhappy generally.
-    if grep -q 'Missing privilege separation directory' "$S1_CAP" 2>/dev/null; then pass; else
-      fail "S1 MUTATION: the captured stderr does not name the privsep directory — S1 is no longer reproducing the measured failure" \
-           "$(head -5 "$S1_CAP" 2>/dev/null)"; fi
+    # THE THREE MUTATION ASSERTIONS ARE ALL CONTAINER-DEPENDENT. Before this routing, a
+    # container that never ran made S1_RC empty and the third assertion reported
+    # "S1 is no longer reproducing the measured failure" -- a statement about the MUTATION,
+    # asserted from a run in which no mutation was ever executed. That message is #7572's
+    # title, and it is the reason the routing exists: the arm was naming a cause it had not
+    # measured. NOTE the deliberate asymmetry with the did-not-land branch above, which
+    # already emits three substitute fails of its own -- adding an arm_skip there too would
+    # double-count and put the arm at 10 rather than 7.
+    case "$S1_STATE" in
+      did-not-run)
+        # 3: the mutant's exit status, the fatal it should have emitted, and the privsep
+        # string that ties this arm to the measured production failure.
+        arm_skip "S1 MUTATION did not run: the container never reached the stage, so this arm demonstrated neither that the missing mkdir aborts the stage nor that it reproduces the measured privsep failure. ${S1_NOTE}" 3
+        ;;
+      harness-defect)
+        fail "S1 MUTATION: docker exited ${S1_DOCKER_RC} with no execution marker and an rc outside _S1_ENV_RCS — harness defect, not an environment skip" \
+             "${S1_NOTE}"
+        fail "S1 MUTATION: the same harness defect leaves the sshd_config fatal undemonstrated" "${S1_NOTE}"
+        fail "S1 MUTATION: the same harness defect leaves the privsep reproduction undemonstrated" "${S1_NOTE}"
+        ;;
+      fixture-defect)
+        fail "S1 MUTATION: the fixture marker printed but the stage was never reached — a deterministic defect in this file" \
+             "${S1_NOTE}"
+        fail "S1 MUTATION: the same fixture defect leaves the sshd_config fatal undemonstrated" "${S1_NOTE}"
+        fail "S1 MUTATION: the same fixture defect leaves the privsep reproduction undemonstrated" "${S1_NOTE}"
+        ;;
+      *)
+        if [ "${S1_RC:-none}" = "1" ]; then pass; else
+          fail "S1 MUTATION: without the mkdir the stage exited ${S1_RC:-<no marker>}, expected 1" \
+               "$(tail -5 "$TMP/s1out/stdout" 2>/dev/null)"; fi
+        if grep -q '|sshd_config|fatal' "$S1_CAP" 2>/dev/null; then pass; else
+          fail "S1 MUTATION: no sshd_config fatal was emitted" "$(head -3 "$S1_CAP" 2>/dev/null)"; fi
+        # The exact string from the rehearsal hosts. Pinning it — rather than "any failure" —
+        # is what keeps this arm tied to the defect instead of to sshd being unhappy generally.
+        if grep -q 'Missing privilege separation directory' "$S1_CAP" 2>/dev/null; then pass; else
+          fail "S1 MUTATION: the captured stderr does not name the privsep directory — S1 is no longer reproducing the measured failure" \
+               "$(head -5 "$S1_CAP" 2>/dev/null)"; fi
+        ;;
+    esac
   fi
 else
-  # SEVEN, matching S1's assertion count on every other path, so a failed extraction cannot
-  # satisfy the anti-vacuity floor by emitting fewer.
+  # TWELVE, matching S1's assertion count on every other path, so a failed extraction cannot
+  # satisfy the anti-vacuity floor by emitting fewer. Was SEVEN; #7572 adds the structural
+  # marker guard (1) and the four classifier rung controls (4), both container-INDEPENDENT,
+  # so every path grows by five. Re-derived from the success path rather than incremented by
+  # memory: 1 errexit + 1 structural + 4 controls + 2 healthy + 1 mutation-landed + 3 mutation.
   fail "S1: could not extract the sshd stage and/or the hardening drop-in from the render"
   fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
   fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
   fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
+  fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
+  fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
+  fail "S1: skipped (extraction failed)"
 fi
+
+# S1's OWN INVARIANT, not the suite's. Twelve assertions are made, declared-skipped, or
+# reported not-demonstrated on EVERY route through the arm -- healthy, mutation-did-not-land,
+# each defect rung, and extraction-failed. A route contributing a different number is
+# indistinguishable at the suite floor from an arm that partly vanished, which is exactly the
+# hole the classifier would otherwise open: routing assertions into arm_skip moves them out
+# of `passes` without moving them out of the total.
+_S1_TOTAL=$(( (passes - _S1_P0) + (fails - _S1_F0) + (SKIPPED_ASSERTIONS - _S1_S0) ))
+if [ "$_S1_TOTAL" -eq 12 ]; then pass; else
+  fail "S1: the arm contributed ${_S1_TOTAL} assertion(s), expected exactly 12 on every route" \
+       "A route contributing a different number is indistinguishable at the floor from an arm that partly vanished."; fi
+
+# AND AN S1-SPECIFIC SKIP BOUND. The suite-wide ceiling cannot tell whose skips they are, so
+# S1 declaring five (2 healthy + 3 mutation) would silently consume T5's budget too. Bound
+# S1's own contribution here: 5 is its maximum -- both container-dependent groups skipping at
+# once -- and anything above it means a route is declaring cost it does not have.
+_S1_SKIPPED=$(( SKIPPED_ASSERTIONS - _S1_S0 ))
+if [ "$_S1_SKIPPED" -le 5 ]; then pass; else
+  fail "S1: declared ${_S1_SKIPPED} skipped assertion(s), S1's own ceiling is 5 (2 healthy + 3 mutation)" \
+       "A single arm cannot exceed the cost of its own container-dependent groups."; fi
 
 # ══ #7204 — R1 / R3 / R4: the birth filesystem, and the diagnostic that named it ══
 #
@@ -2269,7 +2424,55 @@ fi
 # "four plain `docker run`" comment, which was wrong from the moment the count reached six and
 # stayed wrong across multiple PRs; #7565 has since corrected it to a pair of stated measures
 # with their derivations, which is the shape a count in this file should take.
-_SKIP_CEILING=2   # one skip-eligible arm (the T5 mutation arm), declaring a cost of 2
+# RAISED 2 -> 5 (#7572), ITEMISED. The list below is the authority; the number is NOT derived
+# from it. Deriving the ceiling from the live SKIPPED_ASSERTIONS count -- or from the arm_skip
+# call sites -- would make `SKIPPED_ASSERTIONS <= _SKIP_CEILING` an identity that can never
+# fail (AP-023), which is the decision ADR-188 recorded and #7572's issue body proposed
+# reversing. It stays absolute; each raise gets its own stanza.
+#
+#   T5 mutation   2   (pre-existing)
+#   S1 healthy    2   (#7572: both container-dependent assertions in the healthy run)
+#   S1 mutation   3   (#7572: the mutant's rc, its fatal, and the privsep reproduction)
+#   ------------------
+#   total         5   -- NOT 7: T5 and S1 cannot both be maximally skipped in a run that
+#                        produced any verdict at all, and 5 is the largest single-run cost
+#                        actually reachable (S1's two groups together). If a future arm makes
+#                        7 reachable, raise it in a new stanza rather than editing this one.
+_SKIP_CEILING=5
+
+# THE STANZA'S DECLARED LIST MUST MATCH THE CODE. A ceiling itemised in a comment is a claim
+# about arm_skip call sites, and comments do not fail. Count the real call sites and assert
+# the number the stanza above declares -- three: T5 mutation, S1 healthy, S1 mutation. This
+# is the only thing standing between the stanza and silent drift, and it is deliberately a
+# COUNT of call sites rather than a sum of their costs, because summing the costs from the
+# code would re-create the identity the paragraph above rejects.
+# S1's RESIDUAL, RECORDED AND GUARDED (#7572, 3.6). Before this change S1's healthy run was
+# unconditional, so it could not skip and its failure was always a real signal -- S1's primary
+# was itself a bound on the suite's vacuity. Routing it through the classifier REMOVES that
+# bound: a run where the container never starts now declares five skips and still satisfies
+# the floor. The composite bound therefore rests entirely on T5's PRIMARY arm, which is the
+# one remaining container-dependent assertion that cannot decline. Assert that -- if a future
+# change makes T5's primary skip-eligible too, every container-dependent assertion in the file
+# becomes declinable at once and a run in which docker never worked reports green.
+# TWO COUNTS COMPARED, not a negative match. The first draft used
+#   grep -cE '^[[:space:]]*arm_skip "T5 (?!MUTATION)'
+# which is wrong twice over: POSIX ERE has no negative lookahead (grep warns and matches
+# nothing), and `grep -c` PRINTS `0` while EXITING 1 on no match -- so the `|| echo 0` guard
+# appended a SECOND zero and the comparison saw the two-line string "0\n0". It failed against
+# a file with no such call site. Counting both populations and asserting equality needs
+# neither lookahead nor an error guard.
+_T5_SKIPS=$(grep -cE '^[[:space:]]*arm_skip "T5 ' "$0" || true)
+_T5_MUT_SKIPS=$(grep -cE '^[[:space:]]*arm_skip "T5 MUTATION' "$0" || true)
+if [ "$_T5_SKIPS" -eq "$_T5_MUT_SKIPS" ]; then
+  pass
+else
+  fail "T5 has ${_T5_SKIPS} arm_skip call site(s) of which only ${_T5_MUT_SKIPS} are MUTATION — its primary arm has become skip-eligible; S1's primary is no longer a bound (it declines via the classifier since #7572), so nothing unconditional remains to red a run in which the container never started" \
+       "The composite vacuity bound rests on T5's primary. Re-establish a bound before making it declinable."; fi
+
+_SKIP_CALL_SITES=$(grep -cE '^[[:space:]]*arm_skip ' "$0" || true)
+if [ "$_SKIP_CALL_SITES" -eq 3 ]; then pass; else
+  fail "skip stanza drift: ${_SKIP_CALL_SITES} arm_skip call site(s) in this file, the itemised stanza declares 3 (T5 mutation; S1 healthy; S1 mutation)" \
+       "The ceiling's itemisation is a claim about call sites; an unlisted one silently consumes another arm's budget."; fi
 if [ "$SKIPPED_ASSERTIONS" -le "$_SKIP_CEILING" ]; then pass; else
   fail "skip ceiling exceeded: ${SKIPPED_ASSERTIONS} assertion(s) declared-skipped, ceiling is ${_SKIP_CEILING}"; fi
 
@@ -2437,7 +2640,23 @@ total=$((passes + fails + SKIPPED_ASSERTIONS))
 # fixture-liveness gate emits on the healthy path. Counting it is the whole point of the instrument
 # — a gate that contributes nothing when it succeeds is one that an inversion-to-always-pass leaves
 # undetectable, because the old floor of 44 would still be met.
-if [ "$total" -lt 49 ]; then
+# RAISED 49 -> 58 (#7572), ITEMISED — nine new counted assertions, all container-INDEPENDENT,
+# so they are made on every route and cannot be satisfied by a skip:
+#     4  the S1 classifier's four rung controls (pure over their inputs; no docker)
+#     1  the structural guard that both S1 markers are present in the MOUNTED driver
+#     1  S1's own 12-assertions-per-route invariant
+#     1  S1's own skip bound (<= 5)
+#     1  the arm_skip call-site count matching the ceiling's itemised stanza
+#     1  the T5-primary-not-skip-eligible residual guard
+#   ----
+#     9
+# Re-derived from a measured run against the as-written file (58 assertions), not incremented
+# by memory — the stanza above records that this count moved 44 -> 46 -> 47 -> 48 -> 49 across
+# three PRs in four days, and #7291 had to re-derive its own raise twice as siblings landed
+# underneath it. Do NOT edit the frozen 19-era baseline list higher up to reconcile with this;
+# each raise is itemised in its own stanza, and that list is what "19 pre-existing" is checked
+# against.
+if [ "$total" -lt 58 ]; then
   echo "FAIL: ran only ${total} assertions (<49) — harness did not execute fully" >&2
   exit 1
 fi
