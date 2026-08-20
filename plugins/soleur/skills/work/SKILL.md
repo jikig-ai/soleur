@@ -177,6 +177,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - Read the work document completely
    - Review any references or links provided in the plan
    - Before proceeding, verify the plan does not contradict conventions in AGENTS.md and constitution.md: file format (markdown tables not YAML), kebab-case naming, directory structure (agents recurse, skills flat), required frontmatter fields, shell script conventions
+   - **A budget you write as a LITERAL is stale the moment a sibling PR moves its base — write it as a delta, and measure the shell rather than assuming it.** Two shapes from one session. (a) An assertion floor, byte cap or count copied into the diff as `47` encodes *today's* base; when a sibling raises the base mid-flight the number is silently wrong and the rebase conflicts exactly where both PRs land. Derive it (`main's floor + 1`), state the increment in the comment, and re-read the base from `git show origin/main:<file>` at ship rather than at plan time — measured, one suite's floor moved 44 -> 46 -> 48 -> 49 over four days across three PRs, and the branch's own in-flight 47 was never a value that shipped, so a literal carried from it would have been wrong in a direction no local test could see. (b) `set -e` does **not** fire on a failing NON-FINAL member of an AND-OR list (`bash -c 'set -e; sh -c "exit 100" && true; echo reached'` prints `reached`), so `setup_a && setup_b` lets a failing `setup_a` fall through into the code under test with its preconditions unmet — which then surfaces as whichever *later* guard trips, asserting a cause that never occurred. Split such pairs into separate statements so each failure aborts with its own rc. **Why:** #7291 — a floor literal and an `apt-get update && apt-get install` both shipped, the second producing a hard FAIL naming a deterministic fixture defect that had not happened. See `knowledge-base/project/learnings/2026-08-16-every-number-i-inherited-was-stale-and-the-panel-found-the-defect-class-inside-my-fix.md`.
    - **Plan-quoted numbers are preconditions to verify, not facts.** When the plan quotes a current measurement (`bun test … reports X`, `wc -c < AGENTS.md = N`, "cumulative ~Y words; ~Z headroom", `git ls-files | wc -l`), re-run the measurement at /work start before depending on it. Plans authored hours-or-days earlier observe a moving target; parallel branches landing in `main` invalidate the measurement. PR #3501 plan claimed `~186 word headroom` against an actual `15` and required inline trim of the gate description. See `knowledge-base/project/learnings/2026-05-10-handshake-schema-drift-and-stale-precondition-budgets.md`.
    - **A remedy PROPOSED BY AN ISSUE is a claim to MEASURE, not a fix to apply — and a correct diagnosis is what makes the proposed fix go unchecked.** The rule above re-derives plan-quoted *numbers*; this is the same discipline applied to a *remedy*. An issue's diagnosis and its suggested repair are independent claims, and when the diagnosis is obviously right (a reproduced P1, a named file:line), the repair inherits its credibility and nobody runs it. Before implementing an issue's prescribed fix, expand/execute it in the failing condition and confirm it changes the outcome — for a path/anchor/env remedy that means printing what it actually expands to on the target surface, not on yours. **Why:** #7442 — the issue correctly diagnosed CWD-relative producers executing a customer's same-named file, then proposed `${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}`; the variable is unset in bash, so the `:-` default expands to `./plugins/soleur` — the defect itself. Measuring the remedy (~30s) is what caught it, and the same PR then shipped an unmeasured safety claim about its *replacement* that review falsified. See `knowledge-base/project/learnings/2026-08-11-i-measured-the-issues-remedy-then-asserted-my-own-without-measuring.md`.
    - **A plan premise you REFUTED is only refuted against the SHA you checked — re-check refutations after the ship-time rebase, not just re-derive counts.** The stale-number rule above runs one direction (the plan claimed X, X has since changed); this is the inverse, and it is the one that reads as diligence: you verify a plan-asserted defect does not exist, correctly decline to file it, and a sibling PR merging mid-session then CREATES it. The rebase that brings siblings in is exactly the event that can manufacture the condition you ruled out, so a refutation recorded at Phase 0 is stale by Phase 5 on a fast-moving `main`. Cheapest gate: re-run the refuting command after the final rebase for any premise you declined to act on. **Why:** #7160 — a deferral claiming [scripts/test-all.sh](../../../../scripts/test-all.sh) carried a stale "21 suites" header was correctly refuted (no numeric suite claim existed anywhere in the file), and #7146 merged that exact line an hour later. See `knowledge-base/project/learnings/2026-08-03-my-guards-error-channel-was-published-before-its-writers-ran.md`.
@@ -780,6 +781,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 - **population growth** — ADD a member to the guarded set, do not only edit one.
 - **demotion** — leave the asserted bytes byte-identical and reword the prose above them to make the prescription conditional. Retained deliberately: `ship/SKILL.md` and `plugins/soleur/test/fullsuite-merge-gate.test.ts` both actively guard this mutation, so dropping it from the list would leave the repo testing for an axis it no longer tells authors to mutate.
 - **the floor** — revert the PR's own thesis and confirm the suite reddens.
+- **the verifier's own anchor SET** — the axis that survives hardening the PREDICATE. When you build a hand-anchored completeness check (a rebase-composition checklist, a "did the sweep miss anything" list), tightening each anchor is orthogonal to whether the anchors COVER the subject: a checklist upgraded presence → exact-occurrence-count, and positive-controlled against the source tree, still reported 16/16 on a tree where an entire 13-line block had been deleted, because none of its 16 anchors sat in that region. Positive-controlling proves the anchors are well-formed; both trees have the unsampled region intact, so it can never detect one. Where the population is enumerable, enumerate it instead of anchoring — for a rebase over a sibling that touched the same code, `git show <sibling> -- <file> | grep '^+'` then assert each added line is present at HEAD or classify it as deliberately superseded. **Why:** #7291/PR #7510 — 37 lines absent, 13 of them a floor itemisation whose loss left the raise chain unreconstructable, past a green suite and a green checklist. See `knowledge-base/project/learnings/2026-08-19-i-hardened-my-verifier-twice-and-its-sample-was-still-a-sample.md`.
 
 State plainly which axes your battery did NOT edit. Two mechanical companions: run the UNMUTATED control first (a red baseline voids every row), and assert each mutation LANDED against a pristine backup, because a mutation that does not land reports the BASELINE and that is indistinguishable from a pass. **Why:** PR #7470 (issue #7352) — a battery reported 6/6 RED and "no surviving mutants"; it had two axes, and the retraction ran a 13-mutation Round 2 across axes it never touched. Recorded in `knowledge-base/project/learnings/2026-08-12-my-ladder-rung-ended-in-a-label-so-it-fell-through-to-the-unsafe-branch.md`.
 
@@ -802,6 +804,61 @@ State plainly which axes your battery did NOT edit. Two mechanical companions: r
    **The full battery is not the gate here — it moves to the `/ship` Phase 4 full-battery checkpoint.** The MERGE gate is CI's required `test` context; no local run is the merge gate, and calling one that is the over-claim that would license a future PR to shard it. This ordering is [ADR-183](../../../../knowledge-base/engineering/architecture/decisions/ADR-183-full-suite-runs-at-ship-not-at-implementation-exit.md); do not re-add a second full run at this position without reading it. What reaches `main` is unchanged, because the local runner never was the merge gate: CI's required `test` context (ruleset 14145388) runs the same three shards on the PR head, independent of anything you do here.
 
    **A shard's summary is not a completeness claim — read the BREAKDOWN line.** Since ADR-181 a suite may DECLINE (relevance-gated), and declines are counted in the denominator, so `N/N` is no longer the ordinary local green spelling: a healthy run commonly reads `N-k/N` with a `k skipped (declined — not relevant to this diff)` breakdown. A shard narrows coverage a second way the runner does NOT announce — it emits a coverage NOTE for the `infra` case only, so nothing tells you `TEST_GROUP=bun` excluded the webplat shard. **State which shards you ran when you report the gate green.** This is the definite-article trap #6969 named, one level down: a green `test-all.sh` was read as the exit gate for a diff half of which it never executed, and a shard makes that easier, not harder.
+
+   **Ask before you launch: `bash scripts/test-all.sh --capacity`.** It answers "can this box
+   absorb another full gate?" in **~3 s** (measured p50, 16 cores / ~640 pids — it walks `/proc`
+   once; an earlier revision of this passage claimed "under a second" and was wrong by ~10x because
+   it walked twice). No suite, no lock, always exit 0. One verdict plus the running worktrees:
+
+   - `CAPACITY_OK measured_runs=0 measured_suites=0 sibling_threshold=1 tmp_avail_mb=3619 tmp_floor_mb=1024 memavail_mb=…`
+   - `[contention] BANNER CAPACITY_CONTENDED reason=<sibling_runs|sibling_suites|low_tmp> …` — a
+     **statement**, not a refusal. The run is still yours to start; what it changes is what a RED
+     under it is worth, which is the three-way confirmation the contention passage below prescribes.
+     Note **both** axes: another worktree running the whole runner, and one running an individual
+     suite, are the same capacity contention one level apart.
+   - `[contention] BANNER CAPACITY_UNKNOWN reason=<unreadable_proc|unparseable_df|unparseable_meminfo|unusable_floor|not_probed|lib_unavailable> …`
+     — a reading DEGRADED. Never read this as a healthy box: every underlying probe degrades an
+     unreadable result to `0`, which is below every floor, so a degraded value renders as `?` and
+     the verdict names which reading failed. `not_probed` and `unusable_floor` are distinct on
+     purpose — the first means nothing was measured, the second that `TC_MIN_AVAIL_MB` is not a
+     number.
+
+   The two exceptional verdicts carry the `[contention] BANNER` prefix, so the post-run triage grep
+   in §"`rc` is the verdict" catches them; `CAPACITY_OK` stays plain because a banner that fires on
+   every run carries no information. Every line carries the measured value **and** the threshold.
+   The same verdict is emitted on every run between the contention preamble and the lock, so a run's
+   log records the capacity it started under.
+
+   `--capacity` deliberately does NOT block or change any exit code — the blocking form was cut on
+   measured evidence (ADR-133's 2026-08-19 addendum: a wait `LOCK_ACQUIRED … after 616310ms` was
+   *redeemed* at 616 s, which a sibling decline would have refused at t=0, and a non-zero exit here
+   would block `git commit` through `lefthook`'s pre-commit hook).
+
+   **A long wait is legible rather than silent.** `TC_LOCK_TIMEOUT` is **3600 s** (raised from 900,
+   which was shorter than the ~45-minute run it waits for — the budget expired by construction,
+   which is *why* N runs used to land together). While blocked the runner emits
+   `[contention] BANNER LOCK_WAIT_HEARTBEAT: queued, not hung — <lock> waited=<N>s of <budget>s`
+   every `TC_WAIT_HEARTBEAT_S` (default 60), with elapsed read from a real clock.
+
+   **The heartbeat does not tell you who holds the lock, and will not pretend to.** An earlier
+   revision printed a "holder pid/worktree" taken from the first row of a `/proc` walk; measured, it
+   named a fellow *waiter* ~83% of the time on the pileup this exists for, so acting on it meant
+   killing the wrong session. Run `--capacity` in another shell for the actual list of running
+   worktrees. **Read one of those two before killing anything.**
+
+   **One consequence to know.** `lefthook` pre-commit runs the full battery behind this lock on any
+   staged `*.{ts,tsx,js,jsx}`, so a `git commit` can now wait up to an hour before the suite even
+   starts (it was 15 minutes). CI is unaffected — `tc_acquire` returns early on `CI`. The escape
+   hatches are `git commit --no-verify` and `LEFTHOOK=0`.
+
+   **Re-run each touched shard under the environments it SHIPS into, not only yours.** `CI=1` and
+   `SOLEUR_SUBAGENT=1` change control flow (CI exemptions, subagent refusals), so a suite can be
+   green locally and red on merge — treat any PASS-COUNT DELTA between environments as a finding,
+   not just a FAIL. **Why:** #7545 — a new suite was 66/0 locally and 58/8 under `CI=1` because
+   `tc_acquire` returns early on `CI` before the code under test; it was registered in the required
+   `test` context, so it was green for the author and red on merge. Thirty seconds of work; no
+   amount of diff-reading finds it. `review/SKILL.md` carries this rule too, but review runs AFTER
+   this gate — by then the panel is already reviewing a suite CI will reject.
 
    **The lead runs this gate, not a delegate.** [scripts/test-all.sh](../../../../scripts/test-all.sh) exits `4` — REFUSED, nothing ran — when `SOLEUR_SUBAGENT=1` is set without `SOLEUR_ALLOW_FULL_GATE=1`. A ~90 s shard is far likelier to be delegated than a 45-minute battery was, so treat `rc=4` as its own outcome: it is not a reap and it is not a pass.
 

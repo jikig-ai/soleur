@@ -121,3 +121,6 @@ mutants/
 # makes resurrection structurally impossible rather than merely detectable after the fact.
 bun.lock
 bun.lockb
+
+# post-dispatch-watch-gate state (per-worktree, never committed)
+soleur-pending-dispatch

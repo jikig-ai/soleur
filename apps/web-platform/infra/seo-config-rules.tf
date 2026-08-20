@@ -323,24 +323,53 @@ resource "cloudflare_ruleset" "seo_config_settings" {
   # public marketing/docs content. Do NOT copy this rule to a host that serves
   # authenticated or user-submitted data.
   #
-  # WHY IT IS NOT MERELY WAITING FOR RENEWAL. The cert is wedged in ACME state
-  # `bad_authz` ("The ACME authorization is in a bad state. We need to start
-  # over"), detected 2026-07-19 (#6691). The documented remediation
-  # (cron-gh-pages-cert-reissue: flip apex+www DNS-only, toggle the Pages cname,
-  # let ACME revalidate) was executed BY HAND on 2026-08-16 with public DNS
-  # propagation VERIFIED on both 1.1.1.1 and 8.8.8.8 — the precondition #6698
-  # hypothesised was the blocker. GitHub restored `bad_authz` immediately on
-  # re-adding the domain, across both a 50-second and a 7-minute teardown. That
-  # FALSIFIES the DNS-window hypothesis: the authorization is wedged server-side
-  # at GitHub and no lever in this repo can reset it. Clearing it needs GitHub
-  # Support, so this mitigation is not a short wait — it is load-bearing until
-  # they act.
+  # WHY IT IS NOT MERELY WAITING FOR RENEWAL — CORRECTED 2026-08-19.
+  #
+  # ‼️ An earlier revision of this comment claimed the ACME authorization was
+  # "wedged server-side at GitHub" and that clearing it "needs GitHub Support".
+  # That was WRONG and is corrected here rather than quietly deleted, because the
+  # wrong version was load-bearing: it argued this rule could never be retired,
+  # which would have made a temporary mitigation look permanent.
+  #
+  # The authoritative signal is `GET /repos/{owner}/{repo}/pages/health`, which
+  # was never called during the incident. It reports, identically for BOTH hosts:
+  #
+  #   is_https_eligible              false   <- the actual blocker
+  #   is_proxied                     true
+  #   is_cloudflare_ip               true
+  #   is_pointed_to_github_pages_ip  false
+  #   caa_error                      null    <- CAA ruled out by GitHub itself
+  #   reason                         null    <- nothing else is misconfigured
+  #
+  # Nothing is stuck. GitHub simply REFUSES to order a certificate while the
+  # hostname resolves to Cloudflare's proxy instead of GitHub's anycast IPs. That
+  # is deterministic, not a fault, and no support ticket can change it.
+  #
+  # The 2026-08-16 hand-run of the remediation (DNS-only flip verified propagated
+  # on 1.1.1.1 and 8.8.8.8, cname toggled, `bad_authz` returned within seconds
+  # across both a 50-second and a 7-minute teardown) did NOT falsify the
+  # DNS-window hypothesis, as that revision claimed. The flip restores
+  # eligibility, but GitHub's cert-provisioning job runs on its own BACKGROUND
+  # SCHEDULE — the `bad_authz` read back instantly was stale state, not a fresh
+  # rejection. The window was too short by hours, not by minutes.
+  #
+  # THE 90-DAY TRAP THIS CREATES. Renewal needs the same eligibility as issuance,
+  # so behind the proxy the cert can never renew and expires every 90 days by
+  # construction. The escape is timing, not tooling: run the DNS-only window
+  # while the CURRENT cert is still VALID (~day 60) and GitHub Pages serves that
+  # valid cert directly for the duration — zero downtime — then re-proxy. Run it
+  # only AFTER expiry, as happened here, and DNS-only means broken TLS. Same
+  # mechanism, opposite user impact, purely from when it is run.
   #
   # REMOVAL CONDITION. Delete this rules block once `gh api
   # repos/jikig-ai/soleur/pages` reports `https_certificate.state` in
   # {approved, issued} with a future `expires_at`. Removing it restores strict
   # validation on apex+www. Leaving it after that point is silent risk with no
   # benefit, so the removal is tracked, not left to memory.
+  #
+  # NOTE the ordering constraint that follows from the above: this rule can only
+  # be retired immediately AFTER a successful renewal window, while the fresh
+  # cert is valid. Retiring it at any other time re-arms the 526.
   rules {
     action      = "set_config"
     description = "TEMPORARY (2026-08-16 outage): accept the expired GitHub Pages origin cert on soleur.ai + www.soleur.ai — remove when the Pages cert is valid again"

@@ -75,7 +75,17 @@ P5_CHANNEL_MARKER="${REGISTRY_PREFLIGHT_P5_CHANNEL:-HTTP API}"
 # as the command seams. The supported production route is the `--manual` flag, passed only from
 # the workflow_dispatch arm. Outside Actions the env var still works, for local reproduction.
 if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-  for _seam in REGISTRY_PREFLIGHT_QUERY_CMD REGISTRY_PREFLIGHT_RUNS_CMD REGISTRY_PREFLIGHT_WINDOW REGISTRY_PREFLIGHT_MANUAL; do
+  # ZOT_WRITERS and the two P5 markers are on this list for the same reason as the command seams,
+  # and their absence was measured, not theorised: with the three real writers mid-push,
+  # retargeting REGISTRY_PREFLIGHT_ZOT_WRITERS at an idle workflow turns `verdict=REFUSED
+  # predicate=P3` into `verdict=CLEAR ... in_progress_releases=0`. That is exactly the
+  # "manufacture a CLEAR verdict" power this loop's own message describes. Pointing both P5
+  # markers at a common substring makes P5 pass trivially, same class.
+  #
+  # WAIT_SECS and POLL_SECS are deliberately NOT here: they can only shorten the wait, which
+  # refuses earlier. A seam that can only over-refuse is not a bypass.
+  for _seam in REGISTRY_PREFLIGHT_QUERY_CMD REGISTRY_PREFLIGHT_RUNS_CMD REGISTRY_PREFLIGHT_WINDOW REGISTRY_PREFLIGHT_MANUAL \
+               REGISTRY_PREFLIGHT_ZOT_WRITERS REGISTRY_PREFLIGHT_P5_CONTROL REGISTRY_PREFLIGHT_P5_CHANNEL; do
     if [[ -n "${!_seam:-}" ]]; then
       echo "::error::registry-replace-preflight: ${_seam} is set inside GitHub Actions. A seam set on the production path can manufacture a CLEAR verdict. Refusing." >&2
       echo "verdict=REFUSED predicate=SEAM"
@@ -176,11 +186,11 @@ in_progress=0
 runs_rc=0
 for _wf in $ZOT_WRITER_WORKFLOWS; do
   _json="$("$RUNS_CMD" run list --workflow="$_wf" --limit 30 --json status 2>>"$p3_err")" || { runs_rc=$?; break; }
-  _n="$(printf '%s' "$_json" | { grep -oE '"status":"(queued|in_progress|waiting|requested|pending)"' || true; } | grep -c . || true)"
+  _n="$(printf '%s' "$_json" | { grep -oE '"status":"(queued|in_progress|waiting|requested|pending|action_required)"' || true; } | grep -c . || true)"
   in_progress=$(( in_progress + _n ))
 done
 if (( runs_rc != 0 )); then
-  abort P3 "could not list in-flight runs for the zot-writing workflows (gh exited ${runs_rc}): $(head -c 300 "$p3_err"). Refusing rather than replacing the registry host with an unknown number of pushes in flight."
+  abort P3 "could not list in-flight runs for the zot-writing workflows (gh exited ${runs_rc}): $(tail -c 300 "$p3_err"). Refusing rather than replacing the registry host with an unknown number of pushes in flight."
 fi
 # P3 WAITS BEFORE IT REFUSES. Refusing outright made the MODAL case operator-driven: merging a
 # user_data change fires the release AND this dispatcher on the same push, so a queued release is
@@ -189,26 +199,81 @@ fi
 # to remove (hr-never-label-any-step-as-manual-without).
 #
 # The hazard is a replace *mid-push*, not a replace six minutes after one. So poll until the
-# writers drain and refuse only if they do not. Bounded well inside the job's timeout-minutes: 15.
-WAIT_SECS="${REGISTRY_PREFLIGHT_WAIT_SECS:-480}"
-POLL_SECS="${REGISTRY_PREFLIGHT_POLL_SECS:-20}"
+# writers drain and refuse only if they do not.
+# 480 -> 2100 (35 min). MEASURED, not guessed: the first real refusal (run 31976455167,
+# 2026-08-16) waited the full 480s and refused anyway, because web-platform-release takes ~31
+# minutes end to end (run 31974987386: created 21:57:21Z, concluded 22:28:23Z = 31m02s) and the
+# release fires on the SAME merge as this dispatcher. A budget shorter than a release can never
+# clear the modal case it exists for — it only converts an immediate refusal into a delayed one.
+#
+# 2100 is NOT a ceiling on release duration, and the comment should not imply one. Over the last
+# 60 push-triggered releases: mean 1630s, max 5538s, and 18.3% exceeded 2100s. So this clears
+# roughly 82% of co-firing releases; the rest still refuse, now after 35 minutes instead of 8.
+# Raising it further trades runner-hold and API budget for that tail — the durable fix is to
+# serialise this dispatcher against the release rather than to poll for it.
+#
+# The job's own `timeout-minutes` must exceed this or the wait is truncated by a cancellation,
+# which is worse than a refusal because a cancelled job does not satisfy `failure()` and files
+# no artifact. Raised to 70 in registry-host-replace-dispatch.yml alongside this — 70, not 45,
+# because the apply poll adds a further 1500s on the same path.
+WAIT_SECS="${REGISTRY_PREFLIGHT_WAIT_SECS:-2100}"
+# 20 -> 60. The 480 -> 2100 raise multiplied this loop's API cost by 4.24x: at a 20s poll it is
+# 105 iterations x 3 workflows x 2 GETs = 636 requests, and the job's total (with the apply poll)
+# measured 988 against the 1,000/hour per-repo GITHUB_TOKEN ceiling — which `web-platform-release`
+# is spending from at the same time, because it co-fires on this very push. Exhausting it makes
+# `gh` return 403, which this loop's error arm reports as `verdict=REFUSED predicate=P3`: a rate
+# limit recorded as a delivery refusal, with the refusal comment itself failing on the same
+# exhausted token. 60s costs at most 40s of extra drain latency on a 2100s budget (1.9%) and cuts
+# the loop to 216 requests.
+POLL_SECS="${REGISTRY_PREFLIGHT_POLL_SECS:-60}"
+# CHARGE ELAPSED, NOT ACCUMULATED SLEEP. Every iteration also makes one `gh run list` per
+# zot-writing workflow, and those round-trips are wall clock the old `waited + POLL_SECS` never
+# charged. At 105 iterations x 3 workflows that is 315 unbilled round-trips, so the loop's real
+# duration was 2100 + 315*T_gh — minutes of drift that grows exactly when the API is slow, i.e.
+# during the incidents this workflow fires for. The job's `timeout-minutes` is derived from
+# WAIT_SECS, so a declared budget that is not the real ceiling makes that derivation unsound.
+_p3_started_at=$SECONDS
 waited=0
 while [[ "${in_progress:-0}" -gt 0 && "$waited" -lt "$WAIT_SECS" ]]; do
   echo "NOTE: P3 sees ${in_progress} in-flight zot-writing run(s); waiting for the push to drain (${waited}s/${WAIT_SECS}s)."
   sleep "$POLL_SECS"
-  waited=$(( waited + POLL_SECS ))
+  waited=$(( SECONDS - _p3_started_at ))
   in_progress=0
   for _wf in $ZOT_WRITER_WORKFLOWS; do
     _json="$("$RUNS_CMD" run list --workflow="$_wf" --limit 30 --json status 2>>"$p3_err")" || { runs_rc=$?; break; }
-    _n="$(printf '%s' "$_json" | { grep -oE '"status":"(queued|in_progress|waiting|requested|pending)"' || true; } | grep -c . || true)"
+    _n="$(printf '%s' "$_json" | { grep -oE '"status":"(queued|in_progress|waiting|requested|pending|action_required)"' || true; } | grep -c . || true)"
     in_progress=$(( in_progress + _n ))
   done
   if (( runs_rc != 0 )); then
-    abort P3 "could not re-list in-flight runs while waiting for the push to drain (gh exited ${runs_rc}): $(head -c 300 "$p3_err"). Refusing rather than replacing the registry host with an unknown number of pushes in flight."
+    abort P3 "could not re-list in-flight runs while waiting for the push to drain (gh exited ${runs_rc}): $(tail -c 300 "$p3_err"). Refusing rather than replacing the registry host with an unknown number of pushes in flight."
   fi
 done
 if [[ "${in_progress:-0}" -gt 0 ]]; then
   abort P3 "${in_progress} in-flight run(s) across the zot-writing workflows still queued or running after waiting ${waited}s. A replace mid-push strands a partial manifest on the preserved volume. Re-dispatch once they finish."
+fi
+
+# P1 WAS MEASURED BEFORE THE WAIT, AND THE WAIT IS NOW UP TO 35 MINUTES.
+#
+# P0/P1/P2 all sample the warehouse near the top of this script, before the drain loop. At 480s a
+# stale reading was a rounding error. At 2100s the fleet can begin falling back to local-cache
+# DURING the wait, and this script would then dispatch on a clean reading taken half an hour
+# earlier while printing `local_cache_hits=` as though it were current — the #6400 hazard P1
+# exists to catch, reached precisely because the budget was raised. The re-measure therefore
+# belongs with the raise, not as a follow-up: this is the one direction in which a longer wait
+# makes an unsafe replace MORE likely.
+#
+# Skipped when the loop never waited (the original reading is still fresh) and on the manual arm,
+# which deliberately does not gate on P1 — see the P1 block's own note.
+if [[ "${waited:-0}" -gt 0 && "$MANUAL" != "1" ]]; then
+  probe 'registry=local-cache'
+  if (( PROBE_RC != 0 )); then
+    abort P1 "the post-wait re-read of the pull path failed (betterstack-query.sh exited ${PROBE_RC}: $(tail -c 300 "$p0_err")). P1 was last measured ${waited}s ago, and a failed read is not a clean reading."
+  fi
+  lc_hits="$(printf '%s\n' "$PROBE_OUT" | { grep -c 'registry=local-cache' || true; })"
+  if [[ "${lc_hits:-0}" -gt 0 ]]; then
+    abort P1 "${lc_hits} local-cache pull event(s) appeared DURING the ${waited}s drain wait. The fleet started falling back to its last tier while this job waited, so the pre-wait CLEAR reading is stale. Resolve the pull path first, then re-dispatch."
+  fi
+  echo "NOTE: P1 re-read after the ${waited}s drain wait — still 0 local-cache events."
 fi
 
 # ── P4 — DELIBERATELY ABSENT: no live zot serving probe. ────────────────────────────────────
