@@ -564,9 +564,17 @@ fi
 # reports a clean total. This one compares against a literal and exits
 # directly, so deleting assertions above reddens the run rather than shrinking
 # both sides of an equality.
-_total=$((passes + fails))
-# Set to the FULL measured count (20 = 19 fixtures + G1.0), not a slack figure: any headroom
+# Set to the FULL measured count (26, measured 2026-08-20), not a slack figure: any headroom
 # between a floor and the real total is deletable-assertion budget, not padding.
+#
+# KEEP THESE TWO ASSIGNMENTS CONTIGUOUS -- no comment between them, and none between
+# `_FLOOR=` and the `if`. build_mutant in scripts/guard-vacuity-floor.test.sh binds a floor's
+# variables by walking BACKWARD from the `if` over consecutive simple assignments, stopping at
+# the first line that is not one. An interleaved comment ends that walk early, so the mutant is
+# built without `_total`, dies on `set -u`, and scores CONSTRUCTION -- an unconstructible
+# mutant rather than a covered floor. Measured: that is exactly how this floor tripped the
+# guard's construction ratchet (15 -> 16) on 2026-08-20.
+_total=$((passes + fails))
 _FLOOR=26
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d assertion(s) ran, floor is %d — the harness lost coverage rather than passing it\n' \

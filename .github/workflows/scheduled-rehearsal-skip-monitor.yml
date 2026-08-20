@@ -160,8 +160,15 @@ jobs:
           # `|| existing=""` turned any search error into "none found" -> duplicate. Both
           # directions produce operator-facing issue spam.
           ls_rc=0
+          # -L is load-bearing, not decoration. `gh issue list` silently caps at 30, and the
+          # --state all above (correct on its own terms) widens the candidate pool to this
+          # repo's ENTIRE closed history -- so the truncation gets strictly more likely as the
+          # repo ages. A truncated page that drops the one OPEN alert reads as "none found",
+          # and this job then files a duplicate every 06:00 UTC. A dedup probe that degrades
+          # toward "nothing exists" is a fail-open gate, which is the defect class this PR
+          # exists to close.
           existing=$(gh issue list --repo "${{ github.repository }}" \
-            --state all --search "$title in:title" --json number,state \
+            --state all --search "$title in:title" --limit 200 --json number,state \
             --jq '[.[] | select(.state == "OPEN")][0].number // empty') || ls_rc=$?
           if [ "$ls_rc" -ne 0 ]; then
             echo "::error::gh issue list failed (exit $ls_rc); refusing to file a possibly-duplicate alert."
