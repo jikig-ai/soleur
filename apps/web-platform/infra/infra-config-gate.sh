@@ -21,7 +21,18 @@
 # deterministic, but the assert stays terminal on principle: a real content mismatch
 # must never be retried away.
 #
-# Sourceable: defines functions only, no top-level execution.
+# Sourceable: defines functions only plus the one constant below, no top-level execution.
+
+# THE CROSS-CLOCK TOLERANCE, SINGLE-SOURCED (#7104 P0-A).
+#
+# The host publishes `start_ts` from ITS clock; the runner captures APPLY_START_EPOCH from its
+# own. Every comparison that crosses those two clocks needs the same NTP-jitter allowance, and
+# there are now three of them: the `future_frame` upper bound and the degraded-arm push detector
+# below, plus the pass-2 absolute freshness pin in infra-config-verify.sh. Two copies of a
+# tolerance drift silently and in opposite directions — one goes lax, one goes strict, and the
+# pair still reads consistent at either call site. A plain assignment, not `${X:-300}`: an
+# env-overridable tolerance is a tolerance a caller can widen until the pin stops discriminating.
+INFRA_CONFIG_CLOCK_SKEW_S=300
 
 # Number of delivered files the repo FILE_MAP expects. NOT hardcoded — auto-tracks
 # FILE_MAP additions. Echoes the integer; the caller validates it is a positive int.
@@ -187,7 +198,7 @@ infra_config_dpf_replaced() {
 infra_config_frame_stability() {
   local post_ts="$1" pre_ts="$2" pre_status="$3" now_epoch="$4"
   local apply_start_epoch="${5:-}"
-  local skew=300   # tolerance for NTP jitter between the host and the runner
+  local skew="$INFRA_CONFIG_CLOCK_SKEW_S"   # tolerance for NTP jitter between the host and the runner
 
   if [[ ! "$post_ts" =~ ^[0-9]+$ ]]; then
     echo "infra_config_frame_stability: post_ts '$post_ts' is not numeric" >&2
@@ -257,6 +268,65 @@ infra_config_frame_stability() {
       return 1
       ;;
   esac
+}
+
+# #7104 PR-B: should a bounded re-push fire?
+#
+# Returns 0 on EXACTLY ONE shape: a push was expected (dpf-replaced is exactly `true`),
+# the host published a readable frame, and that frame is strictly OLDER than the supplied
+# baseline — i.e. the handler never published a frame for this apply, which is the
+# documented webhook-restart race. Everything else returns non-zero, including everything
+# it cannot classify. Quiet on stdout: the exit status IS the verdict.
+#
+# THE BASELINE IS THE CALLER'S ARGUMENT, and that is load-bearing (plan R19.3). The first
+# design passed a pre-frame timestamp AND an apply-start epoch and then described a third
+# value as the pass-2 baseline; under that reading pass 1 always sees start_ts == baseline,
+# equality reads as fresh, and the predicate CAN NEVER RETURN 0 ON ANY INPUT — a recovery
+# unreachable by construction, the same defect class R19.1 found in the loop design. So
+# there is ONE baseline and ONE rule, and the caller supplies the value:
+#
+#   pass 1   baseline = APPLY_START_EPOCH          "the frame predates this apply"
+#   pass 2   baseline = the start_ts seen on pass 1 "the frame still has not moved"
+#
+# Equality is FRESH in both readings, matching the `-lt` freshness pin the verification
+# body already applies. On pass 2 an unmoved frame therefore DECLINES a second re-push —
+# that is the boundedness property, and pass 2's terminal verdict is rendered by
+# adjudicate_infra_config rather than by this predicate.
+infra_config_should_repush() {
+  local response_file="${1:-}" dpf_replaced="${2:-}" baseline="${3:-}"
+
+  # Polarity guard (R17.1). `true` and `false` are the only classifiable readings; an
+  # empty, absent, or differently-cased value is NOT a synonym for false — it is a sensor
+  # whose output we do not understand, and a production write must not rest on that.
+  if [[ ! "$dpf_replaced" =~ ^(true|false)$ ]]; then
+    echo "infra_config_should_repush: dpf-replaced '${dpf_replaced:-<absent>}' is not exactly true|false" >&2
+    return 1
+  fi
+  # No push was expected, so no frame can be stale relative to one. Silent: this is the
+  # ordinary no-op arm on every routine run, not an anomaly.
+  [[ "$dpf_replaced" == "true" ]] || return 1
+
+  if [[ ! "$baseline" =~ ^[0-9]+$ ]]; then
+    echo "infra_config_should_repush: baseline '${baseline:-<absent>}' is not numeric — freshness cannot be established, so staleness cannot be either" >&2
+    return 1
+  fi
+
+  if [[ ! -r "$response_file" ]]; then
+    echo "infra_config_should_repush: response file '${response_file:-<absent>}' is not readable" >&2
+    return 1
+  fi
+
+  local start_ts
+  start_ts=$(jq -r '.start_ts // empty' "$response_file" 2>/dev/null || true)
+  if [[ ! "$start_ts" =~ ^[0-9]+$ ]]; then
+    # A host that published NO frame is UNCLASSIFIABLE, not "unchanged" (R19.4 §5). The
+    # two are easy to conflate and must not be: re-pushing at a host whose handler is
+    # wedged or absent is a production write aimed at a machine we cannot read.
+    echo "infra_config_should_repush: frame carries no numeric start_ts ('${start_ts:-<absent>}') — a frame that cannot be read is not a stale frame" >&2
+    return 1
+  fi
+
+  [[ "$start_ts" -lt "$baseline" ]]
 }
 
 # Units the repo's RESTART_MAP expects a reconciliation verdict for (#7103 R2 3.8). Derived

@@ -2,7 +2,7 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **23 issue alerts** — a mix of import-only auth/observability rules (mirrored
+- **29 issue alerts** — a mix of import-only auth/observability rules (mirrored
   from rules created by `apps/web-platform/scripts/configure-sentry-alerts.sh`)
   and **apply-created** rules that terraform fully owns from real
   `conditions_v2`/`filters_v2`/`actions_v2`. The apply-created set includes the
@@ -13,7 +13,7 @@ Manages Sentry-hosted infrastructure for `app.soleur.ai`:
   (#4656 item 1 — the only rule here using `"any"`). After every apply,
   `apply-sentry-infra.yml` runs a read-only `assert-byok-rules-exist.sh` liveness
   check asserting both BYOK rules still exist by name (#4656 item 5).
-- **50 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
+- **55 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
   Actions workflows that touch secrets (closes #3236). Auto-applied on
   push-to-main via `.github/workflows/apply-sentry-infra.yml`. A monitor for
   `scheduled-cf-token-expiry-check` is deferred until that workflow's
@@ -57,82 +57,78 @@ terraform init -input=false
 terraform plan
 ```
 
-## First-time import (operator step, run BEFORE `terraform apply`)
+## First-time import — COMPLETE, runbook retired (#7590)
 
-The 4 issue-alert rules already exist in Sentry — they were created by the
-legacy `configure-sentry-alerts.sh` script. Import each into state matching
-the rule id from the migration audit report:
+First-time adoption of the issue-alert rules is done: this root declares 29
+`sentry_issue_alert` resources and plans clean against the full root. The
+step-by-step import runbook that stood here was retired for two reasons, both
+of which made it actively misleading rather than merely obsolete:
 
-```bash
-# Get the rule ids from the most recent audit report. `ls -t | head -1`
-# picks the most recently-modified report (filename-lex tail-1 would break
-# under future naming changes such as `…-rerun` suffixes).
-latest_audit=$(ls -t knowledge-base/legal/audits/sentry-migration-audit-*.md | head -1)
-ids=$(grep -oE '<!-- ids: \[(.*)\] -->' "$latest_audit" | \
-  head -1 | sed -E 's/.*\[//;s/\].*//' | tr -d '"' | tr ',' ' ')
-# Defense-in-depth: validate every id is purely numeric before feeding to
-# `terraform import` / curl. A maliciously-shaped audit (compromised Sentry
-# response, MitM, fixture tampering) cannot land shell metacharacters in
-# the loop below — the audit script also rejects non-numeric ids at write
-# time per scripts/sentry-monitors-audit.sh.
-for id in $ids; do
-  [[ "$id" =~ ^[0-9]+$ ]] || { echo "FATAL: non-numeric rule id '$id'"; exit 1; }
-done
-echo "Rule ids from audit: $ids"
+1. It was stale by 25 resources — it described importing "the 4 issue-alert
+   rules" created by the legacy `configure-sentry-alerts.sh`.
+2. It extracted rule ids from an `<!-- ids: ... -->` manifest that the audit
+   script no longer emits. Sentry DEPRECATED the project-scoped rules API the
+   manifest was built from, and its replacement (`organizations/{org}/workflows/`)
+   uses a DISJOINT identifier space — so a manifest repointed at the new
+   endpoint would have kept its name and shape while silently changing
+   meaning.
 
-# Map to resource names — ORDER must match issue-alerts.tf:
-# auth_exchange_code_burst, auth_callback_no_code_burst,
-# auth_per_user_loop, auth_signout_burst.
-# Determine which id is which by name:
-SENTRY_ORG=jikigai
-SENTRY_PROJECT=web-platform
-for id in $ids; do
-  name=$(curl -fSs -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
-    "https://de.sentry.io/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/rules/${id}/" | \
-    jq -r .name)
-  case "$name" in
-    auth-exchange-code-burst)    res=auth_exchange_code_burst ;;
-    auth-callback-no-code-burst) res=auth_callback_no_code_burst ;;
-    auth-per-user-loop)          res=auth_per_user_loop ;;
-    auth-signout-burst)          res=auth_signout_burst ;;
-    *) echo "unknown rule: $name ($id)"; continue ;;
-  esac
-  terraform import "sentry_issue_alert.${res}" "${SENTRY_ORG}/${SENTRY_PROJECT}/${id}"
-done
-
-# Verify clean plan (modulo lifecycle-ignored v2 drift):
-terraform plan
-```
-
-## Import rollback (partial-failure recovery)
-
-If `terraform import` fails on rule N of 4, the state file holds N-1 rules.
-**Do not proceed to apply.** Recover via:
+If a future rule ever does need adopting, read its id from the Sentry API or
+from the Terraform provider directly, not from an audit report:
 
 ```bash
-for resource in sentry_issue_alert.auth_exchange_code_burst \
-                sentry_issue_alert.auth_callback_no_code_burst \
-                sentry_issue_alert.auth_per_user_loop \
-                sentry_issue_alert.auth_signout_burst; do
-  terraform state rm "$resource" 2>/dev/null || true
-done
-terraform state list | grep sentry_issue_alert   # expect empty
-# Re-run audit (rule ids may have changed):
-SENTRY_AUTH_TOKEN=... bash apps/web-platform/scripts/sentry-monitors-audit.sh
-# Retry import from a clean state with the refreshed ids.
+doppler run --project soleur --config prd --command '
+  curl -s -H "Authorization: Bearer $SENTRY_IAC_AUTH_TOKEN" \
+    "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/workflows/" \
+  | jq -r ".[] | \"\(.id)\t\(.name)\""'
 ```
 
-If 3+ retries fail, fall back to the ADR-031 escape hatch: leave
-`configure-sentry-alerts.sh` as source of truth, mark ADR-031 `status: rejected`,
-and revert this directory.
+Note `SENTRY_IAC_AUTH_TOKEN`, not `SENTRY_AUTH_TOKEN`: Doppler `prd` holds
+both, they are different credentials, and CI feeds the former into an env var
+named after the latter.
 
-## Cron monitors are net-new (no import)
+## Cron monitors — adoption COMPLETE (#7590)
 
-The 8 `sentry_cron_monitor` resources do not exist in Sentry yet. The first
-`terraform apply` (or, in CI, the first run of `apply-sentry-infra.yml` after
-push to main) creates them. Per-workflow grace periods (`checkin_margin_minutes`,
-`max_runtime_minutes`) come from observed run durations + 2x safety margin —
-re-tune via subsequent PRs after the operator has 30 days of check-in history.
+This section previously read "the 8 `sentry_cron_monitor` resources do not
+exist in Sentry yet" and described the first apply creating them. True at
+authoring, actively misleading now: the root declares **55** of them, all live,
+and the audit's Class D machinery exists precisely *because* live monitors can
+outrun the `.tf` that declares them — a monitor Terraform never declared is
+spend no apply can reclaim.
+
+Re-derive rather than trusting the number:
+
+```bash
+grep -c '^resource "sentry_cron_monitor"' apps/web-platform/infra/sentry/*.tf
+```
+
+## Audit
+
+The audit answers "is the alert routing healthy?", and nothing in this
+directory pointed at it:
+
+```bash
+# 1. Is the audit script itself sound? Hermetic — no credentials, no network.
+bash apps/web-platform/scripts/sentry-monitors-audit.test.sh
+
+# 2. Did the last CI run of the gate pass? No credentials needed.
+gh run list --workflow="Sentry Audit Gate" --limit 5 --json conclusion,createdAt
+
+# 3. What does the live org look like now? Needs prd credentials.
+#    NOTE SENTRY_IAC_AUTH_TOKEN, not SENTRY_AUTH_TOKEN — Doppler holds a
+#    DIFFERENT secret under that second name, and CI feeds the former into an
+#    env var named after the latter (#7590 lost a session to this).
+doppler run --project soleur --config prd --command '
+  SENTRY_AUTH_TOKEN="$SENTRY_IAC_AUTH_TOKEN" \
+  AUDIT_OUT_DIR=/tmp/sentry-audit \
+    bash apps/web-platform/scripts/sentry-monitors-audit.sh'
+```
+
+(1) proves the script is not broken; only (2) and (3) say anything about the
+org. Class D has teeth only when Terraform state is injected, which
+`apply-sentry-infra.yml` does and a local run does not — so a local run reports
+Class D candidates as *unresolved*, never as clean.
+
 
 ## Drift detection
 
