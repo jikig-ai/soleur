@@ -146,7 +146,21 @@ list of predicates as they happen to be written today.
 | 3 | Delete the empty-`PG_DARK` fail-closed arm | RED |
 | 4 | Stub `g3_decide` to always echo `write` | RED — **own-dispatch row**: a guard that evaluates nothing must not pass |
 | 5 | Add a second input pair after a compliant first, where the second must refuse | RED — **second-member row**: a check that stops after the first evaluation must not pass |
+| 5b | Add a SECOND call site evaluating a G3 predicate inline | RED — **population-growth row** (added at implementation; see below) |
 | 6 | Accept `:6543` (drop the transaction-pooler rejection) | RED |
+
+**Row 5 outcome: EQUIVALENT, not a fixture gap — recorded rather than waved through.** Implemented
+as a cross-call memo (the first outcome returned for every later call), row 5 **survived**. The
+reading is equivalence, and the proof is structural: `g3_decide` has exactly **one** call site per
+process (asserted), that call is a command substitution so it runs in a subshell, and each `op=`
+dispatch is a fresh process — so no state can cross calls and a memo has no observable effect in
+production. A "stops after the first evaluation" defect is not expressible for a function invoked
+once per process.
+
+The axis row 5 was *meant* to cover — a check that stops before evaluating later members — is
+covered two ways that DO red: the per-predicate scenarios (2, 3, 4 each exercise a predicate that
+only runs after earlier ones pass), and new row 5b, which grows the population by adding a second
+inline predicate evaluation and is caught by the Assembly assertion.
 
 **Harness rows.**
 
@@ -323,7 +337,7 @@ None.
 1. `g3_decide` exists in `scripts/cutover-inngest.sh` and echoes exactly one of the six outcome tokens for every input pair.
 2. The `arm)` case contains **exactly one** `g3_decide` call site — asserted by an anchored count, not a bare token grep.
 3. No G3 predicate is evaluated inline in the `arm)` case outside `g3_decide`.
-4. Every mutation-matrix row (1–6) drives the suite red when applied, verified by applying each and observing failure.
+4. Every mutation-matrix row drives the suite red when applied, verified by applying each and observing failure — **except any row proven EQUIVALENT**, which must be recorded with its proof rather than counted as caught. Outcome: rows 1, 2, 3, 4, 5b and 6 RED; row 5 equivalent (proof in §Guard Contract). A control run must be green BEFORE the battery, and each mutation must be asserted to have landed (`diff` against a pristine backup) — a mutation that does not land reports the baseline, which is indistinguishable from a pass.
 5. Harness row H1 drives the suite red; harness row H2 passes with outcome `write`.
 6. The G4 write of `INNGEST_POSTGRES_URI` to `soleur-inngest/prd` is guarded so it does not run on `skip-already-current`.
 7. The G5 `INNGEST_CUTOVER_FLIP=armed` write and the `INNGEST_HEARTBEAT_URL` write are reachable on the `skip-already-current` path — asserted, since skipping them would silently convert a successful arm into a no-op.
