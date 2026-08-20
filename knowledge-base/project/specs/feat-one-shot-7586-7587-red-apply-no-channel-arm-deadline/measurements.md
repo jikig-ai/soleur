@@ -495,6 +495,20 @@ The extraction resolves a real failing step's name end to end against the live A
 stripped by AC2c's charset — cosmetic, and deliberately not widened: the allow-list is the
 criterion's own literal.
 
+### One claim RETRACTED at this point, before it propagated
+
+The rewritten `arc == 2` warning originally told the reader that `status=pending` means no beat has
+arrived since the unpause and that any other non-up status means Better Stack saw something else.
+**Nothing in this change measured that.** The only verified enumeration in the repo is that
+`up` / `pending` / `down` / `paused` all occur — the ARM gate's own op/state gate lists them — and
+the precise semantics of `pending` versus `down` on an unpaused-but-unfed heartbeat was an
+inference dressed as an observation, in the very message whose whole purpose is to stop an operator
+debugging a surface that is working. The message now reports the two observed fields and says what
+they are FOR, without claiming what each value means; the test's comment records the same about its
+fixture (it asserts the SUT *echoes* the status it saw, not that `pending` is what the vendor
+returns). Retracted here rather than left for review, because a false reading instruction in an
+alert propagates into whatever the operator does next.
+
 ---
 
 ## 6.3 — acceptance criteria walk
