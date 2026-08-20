@@ -37,26 +37,23 @@ resource "cloudflare_pages_project" "docs" {
   production_branch = "main"
 }
 
-# The custom domains. Attaching these does NOT create DNS records — PF3 probes for
-# exactly that before PR3 is written, because a Cloudflare-created record would make the
-# dns.tf hunk an `import` rather than a create and change PR3's shape.
-resource "cloudflare_pages_domain" "apex" {
-  provider     = cloudflare.pages
-  account_id   = var.cf_account_id
-  project_name = cloudflare_pages_project.docs.name
-  domain       = "soleur.ai"
-}
-
-# www is attached even though it 301s to the apex (D1). The Bulk Redirect runs at the
-# edge in FRONT of the Pages project, so in normal operation nothing reaches this
-# attachment. It exists so that the redirect's failure mode is duplicate content served
-# from the same build rather than a hard 522 on the www host.
-resource "cloudflare_pages_domain" "www" {
-  provider     = cloudflare.pages
-  account_id   = var.cf_account_id
-  project_name = cloudflare_pages_project.docs.name
-  domain       = "www.soleur.ai"
-}
+# ‼️ THE CUSTOM DOMAINS ARE NOT IN THIS PR — they land in PR3.
+#
+# Attaching soleur.ai to a Pages project with ZERO deployments would, if
+# Hypothesis Z holds ("the apex begins serving from Pages at the moment of
+# attachment"), move the apex origin to an empty project and serve Cloudflare's
+# error page on an HSTS-preloaded hostname. `apply-web-platform-infra.yml` runs
+# ON MERGE, so no gate can catch that first — the measurement would be a
+# post-hoc observation of a production mutation, not a gate.
+#
+# The sequence is therefore substrate (here) -> deploy path -> attach -> record
+# swap, which is correct under BOTH branches of Z rather than only the preferred
+# one: whichever of attachment or the DNS record actually selects the origin,
+# reverting the PR that introduced it removes it. See "## Delivery Sequencing".
+#
+# Z itself is measured in PR2 against a scratch hostname whose topology is
+# identical to the apex (proxied A record at a GitHub Pages IP + a Pages custom
+# domain on the same account and zone), so no production name is touched.
 
 # ---------------------------------------------------------------------------
 # Publication to GitHub Actions
