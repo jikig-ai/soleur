@@ -1065,6 +1065,21 @@ jobs:
       - name: Run www-apex-canonicalizer drift-guard
         run: bash apps/web-platform/infra/www-apex-canonicalizer.test.sh
 
+      # The battery that proves the guard above can actually go RED (#7640). Registered, not
+      # orphaned: this job lists each infra test explicitly -- no glob -- so an unregistered
+      # battery is ZERO coverage, silently and greenly, and run-registered-suites.sh derives
+      # its list from THIS file, so registering here is what makes it runnable locally too.
+      #
+      # It carries more weight than the sibling batteries do. scripts/guard-vacuity-floor.test.sh
+      # gives the guard above NO mutation coverage: its floor is an exact cardinality (`-ne`),
+      # which that meta-guard's `floor_lines_of` does not classify as a floor candidate, and
+      # apps/web-platform/infra/ is in its DEFERRED_DIRS regardless. This battery is therefore
+      # the guard's ONLY falsifiability evidence. It has already earned it -- running the matrix
+      # found a version-pinned `npx wrangler@4 pages deploy` that the guard's invocation
+      # detector could not see, which made BOTH cross-file coupling assertions vacuous.
+      - name: Run www-apex-canonicalizer mutation battery (#7640)
+        run: bash apps/web-platform/infra/www-apex-canonicalizer-mutation.test.sh
+
       - name: Run cloud-init inngest-bootstrap pin drift-guard
         run: bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
 
