@@ -545,10 +545,41 @@ if mkframe 1000 "$STALE" && mkframe 3000 "$MOVED"; then
     export DPF_REPLACED=false APPLY_START_EPOCH=2000 PRE_FRAME_STATUS=ok PRE_APPLY_FRAME_START_TS=1000
     bash ./infra-config-verify.sh >/dev/null 2>&1 ) && rc6=0 || rc6=$?
   p6=$(grep -c '^repush_needed=true$' "$o6" || true)
-  if [[ "$p6" -eq 0 ]]; then
-    pass "#7104 I3: DPF_REPLACED=false never requests a re-push (rc=$rc6) — no push was expected, so no frame can be stale relative to one"
+  # POSITIVE, NOT ABSENCE-ONLY (#7546 review). This asserted only that a string was ABSENT from
+  # the output file, and absence is exactly what an aborted, crashed or gutted run produces --
+  # `rc6` was captured on the line above and rendered into the pass message without ever being
+  # asserted. Measured: replacing the no-push arm's body with `exit 1` left this row printing
+  # `PASS: ... (rc=1)` and the suite 38 passed, 0 failed. It is the ONLY end-to-end case for the
+  # DPF_REPLACED=false arm, which is the arm most production dispatches take.
+  v6=$(grep -c '^verdict=verified$' "$o6" || true)
+  if [[ "$p6" -eq 0 && "$rc6" -eq 0 && "$v6" -eq 1 ]]; then
+    pass "#7104 I3: DPF_REPLACED=false completes (rc=0), renders verdict=verified exactly once, and never requests a re-push — no push was expected, so no frame can be stale relative to one"
   else
-    fail "#7104 I3: a run that expected no push requested a re-push"
+    fail "#7104 I3: the no-push arm did not complete cleanly (rc=$rc6, verdict=verified x$v6, repush_needed x$p6). Expected rc=0, exactly one verdict=verified, and no re-push."
+  fi
+
+  # I3b — THE NO-PUSH ARM'S REJECT PATH, WHICH NO FIXTURE DROVE (#7546 review).
+  #
+  # Every DPF_REPLACED=false fixture above is the HEALTHY case, so the whole adjudication could
+  # be replaced by a hardcoded `STABILITY=stable` and this suite stayed 38 passed, 0 failed --
+  # a suite whose fixtures all sit on one side of a transform cannot see the transform being
+  # removed. `unexpected_push` is the cheapest opposite-direction fixture: nothing was pushed,
+  # yet the frame moved forward, which the arm must treat as terminal because it means either
+  # the applied plan diverged from the graded one or something else wrote to the host's sole
+  # credential channel. It is also the one sub-case whose own comment says the red-gate alert
+  # would otherwise misreport it as cosmetic.
+  o6b="$I_TMP/o6b"; : > "$o6b"
+  ( cd "$SCRIPT_DIR" || exit 99
+    export PATH="$I_TMP/bin:$PATH" STUB_FRAME="$MOVED" STUB_HTTP_CODE=200
+    export GITHUB_OUTPUT="$o6b" VERIFY_PASS=1 ALLOW_MISSING_STATUS=false
+    export DPF_REPLACED=false APPLY_START_EPOCH=2000 PRE_FRAME_STATUS=ok PRE_APPLY_FRAME_START_TS=1000
+    bash ./infra-config-verify.sh >/dev/null 2>&1 ) && rc6b=0 || rc6b=$?
+  sv6b=$(grep -c '^stability_verdict=unexpected_push$' "$o6b" || true)
+  vv6b=$(grep -c '^verdict=verified$' "$o6b" || true)
+  if [[ "$rc6b" -ne 0 && "$sv6b" -eq 1 && "$vv6b" -eq 0 ]]; then
+    pass "#7104 I3b: the no-push arm REJECTS a frame that moved with nothing pushed (rc=$rc6b, stability_verdict=unexpected_push, never verdict=verified) — the reject direction, which every other DPF_REPLACED=false fixture omits"
+  else
+    fail "#7104 I3b: the no-push arm accepted a frame that advanced when nothing was pushed (rc=$rc6b, stability_verdict=unexpected_push x$sv6b, verdict=verified x$vv6b). Hardcoding the stability adjudication to 'stable' passes every other fixture in this suite; this is the row that catches it."
   fi
 
   # --- I4: THE EQUALITY BOUNDARY ON PASS 1, AND THE ELSE ARM ------------------------------
@@ -569,10 +600,15 @@ if mkframe 1000 "$STALE" && mkframe 3000 "$MOVED"; then
     o7="$I_TMP/o7"; : > "$o7"
     rc7=0; drive 1 "$EQ" "$o7" || rc7=$?
     p7=$(grep -c '^repush_needed=true$' "$o7" || true)
-    if [[ "$p7" -eq 0 ]]; then
+    # `rc7` ASSERTED, not just rendered (#7546 review). shellcheck flagged it SC2034 -- captured
+    # and unused -- and that is not a style nit here: the only assertion was that a string was
+    # ABSENT, so this row passed vacuously if the drive CRASHED. Same shape as I3 above, and the
+    # sibling I5 twenty lines down already asserts its rc correctly.
+    v7=$(grep -c '^verdict=verified$' "$o7" || true)
+    if [[ "$p7" -eq 0 && "$rc7" -eq 0 && "$v7" -eq 1 ]]; then
       pass "#7104 I4: pass 1 treats start_ts == APPLY_START_EPOCH as FRESH (no re-push) — equality is a delivered frame, and re-pushing on it writes production for a run that already succeeded"
     else
-      fail "#7104 I4: pass 1 requested a re-push for a frame published in the same second as the apply started. Equality is fresh; this is the -lt/-le boundary, and it is the only input that distinguishes them."
+      fail "#7104 I4: the equality boundary did not verify cleanly (rc=$rc7, verdict=verified x$v7, repush_needed x$p7). Expected rc=0, exactly one verdict=verified, and no re-push: equality is a delivered frame, and re-pushing on it writes production for a run that already succeeded."
     fi
   else
     fail "#7104 I4: could not build the equality fixture — the boundary case is vacuous"
@@ -850,7 +886,7 @@ else
   exit 1
 fi
 
-VERIFY_MIN_ASSERTIONS=38
+VERIFY_MIN_ASSERTIONS=39
 if [[ "$PASS" -lt "$VERIFY_MIN_ASSERTIONS" ]]; then
   printf '  FAIL: assertion-count floor: only %d assertions ran, expected >= %d — arms were deleted or skipped\n' \
     "$PASS" "$VERIFY_MIN_ASSERTIONS" >&2

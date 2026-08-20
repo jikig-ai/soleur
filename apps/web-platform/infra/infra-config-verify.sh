@@ -270,11 +270,28 @@ elif [[ "$HTTP_CODE" == "200" ]]; then
       # output so the choice is visible off-host rather than inferred.
       FRESHNESS_REF_EPOCH="$APPLY_START_EPOCH"
       FRESHNESS_REF_LABEL="this workflow's apply"
+      FRESHNESS_REF_DEGRADED=1
       if [[ "${REPUSH_START_EPOCH:-}" =~ ^[0-9]+$ ]] && [[ "$REPUSH_START_EPOCH" -ge "$APPLY_START_EPOCH" ]]; then
         FRESHNESS_REF_EPOCH="$REPUSH_START_EPOCH"
         FRESHNESS_REF_LABEL="the bounded re-push"
+        FRESHNESS_REF_DEGRADED=0
       fi
       echo "freshness_reference=${FRESHNESS_REF_EPOCH}" >> "$GITHUB_OUTPUT"
+      # "NOT A SILENT ONE" WAS NOT TRUE (#7546 review). The comment above justified the fallback
+      # on two grounds and neither held: the message naming the reference is printed only on the
+      # SUCCESS path, as an un-annotated stdout line inside a GREEN run -- which this repo's own
+      # prose repeatedly calls "a log line in a run nobody opens" -- and `freshness_reference` is
+      # published but has ZERO consumers, while APPLY_START_EPOCH is never published at all, so
+      # nothing off-host can tell a degraded reference from a pinned one. Worse, the arm below
+      # emits `freshness_evidence=verified` identically either way, and that verdict re-arms the
+      # container swap and two issue-closing steps.
+      #
+      # Measured: deleting the producer of repush_start_epoch flipped a STALE FRAME AFTER RE-PUSH
+      # error into `verdict=verified` with byte-identical evidence. So say it out loud, and route
+      # it to the degraded-freshness reporter that already exists for exactly this class.
+      if [[ "$FRESHNESS_REF_DEGRADED" -eq 1 ]]; then
+        echo "::warning::The pass-2 freshness pin DEGRADED to this workflow's apply start (${APPLY_START_EPOCH}) because the bounded re-push published no usable start epoch (REPUSH_START_EPOCH='${REPUSH_START_EPOCH:-<absent>}'). That reference is strictly weaker: a frame published moments after the ORIGINAL apply began cannot have been produced by the re-push, yet it clears an APPLY_START_EPOCH-only pin. This run's verdict rests on the weaker test."
+      fi
       if [[ "$FRAME_START_TS" -lt $((FRESHNESS_REF_EPOCH - INFRA_CONFIG_CLOCK_SKEW_S)) ]]; then
         echo "::error::STALE FRAME AFTER RE-PUSH: the frame DID advance (${REPUSH_BASELINE_TS} -> ${FRAME_START_TS}), but it still predates ${FRESHNESS_REF_LABEL} (began ${FRESHNESS_REF_EPOCH}) by $((FRESHNESS_REF_EPOCH - FRAME_START_TS))s, which is beyond the ${INFRA_CONFIG_CLOCK_SKEW_S}s host/runner clock allowance. So something moved the frame, but it was not this re-push — a queued handler invocation, a concurrent trigger, or a host clock step. The delivery this run needed is still unproven and the bounded recovery is spent. This is a DIFFERENT diagnosis from 'the frame did not move' and it has a different lever: do not re-run, and do not read the advance as a delivery. Inspect the host's journal for which invocation published start_ts=${FRAME_START_TS}."
         echo "verdict=failed" >> "$GITHUB_OUTPUT"
@@ -282,7 +299,34 @@ elif [[ "$HTTP_CODE" == "200" ]]; then
         exit 1
       fi
       echo "Re-push VERIFIED: frame advanced ${REPUSH_BASELINE_TS} -> ${FRAME_START_TS} (host clock, both operands) and postdates ${FRESHNESS_REF_LABEL} (${FRESHNESS_REF_EPOCH}) within the ${INFRA_CONFIG_CLOCK_SKEW_S}s allowance."
-      echo "freshness_evidence=verified" >> "$GITHUB_OUTPUT"
+      # `degraded`, not `verified`, when the pin fell back -- so the existing
+      # `Report degraded freshness evidence` step fires and the weaker test leaves an off-host
+      # record instead of being indistinguishable from a fully-pinned pass.
+      if [[ "$FRESHNESS_REF_DEGRADED" -eq 1 ]]; then
+        echo "freshness_evidence=degraded" >> "$GITHUB_OUTPUT"
+      else
+        echo "freshness_evidence=verified" >> "$GITHUB_OUTPUT"
+      fi
+    # NO SKEW ALLOWANCE HERE, AND THAT ASYMMETRY IS DELIBERATE (#7546 review).
+    #
+    # Pass 2 tolerates INFRA_CONFIG_CLOCK_SKEW_S on its staleness test; this one does not, and
+    # review flagged the difference. Symmetrising it would be the WRONG fix, in the dangerous
+    # direction: pass 1 is asking "did this apply deliver?", so tolerating 300s of "before"
+    # accepts a frame published BEFORE the apply started as proof that the apply landed --
+    # a false `verdict=verified`, which re-arms the container swap and closes the founder's
+    # drift issues. Pass 2 is asking a narrower question ("did the RE-PUSH move the frame?")
+    # where the operands are a runner stamp and a host stamp and the tolerance buys a real
+    # false-red reduction.
+    #
+    # The cost of the strictness here is bounded and much smaller: a host clock lagging the
+    # runner can classify a genuine delivery as stale and trigger the bounded re-push -- a
+    # production write on a healthy channel. Measured skew for this fleet is ~1-2s against a
+    # +/-2s resolution floor (plan Task 2.1, which is why R2 was NOT shipped), so the window in
+    # which that can happen is a frame published within ~2s of the apply's own start.
+    #
+    # Do not "fix" this by adding the allowance. If the spurious-re-push path is ever measured
+    # in the wild, the correct move is to compare host-clock operands on BOTH sides, not to
+    # widen the acceptance window on the pass that decides whether the config is live.
     elif [[ "$FRAME_START_TS" -lt "$APPLY_START_EPOCH" ]]; then
       # PASS 1, stale frame — the documented webhook-restart race, or something else
       # entirely. The predicate decides which, and it is the ONLY thing that may

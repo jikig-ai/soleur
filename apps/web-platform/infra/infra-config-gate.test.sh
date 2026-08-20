@@ -1996,6 +1996,20 @@ for s in steps:
                 problems.append("env: names step id '%s', which does not exist" % sid)
             elif sid in SCRIPT_STEPS and out not in emitted:
                 problems.append("env: reads steps.%s.outputs.%s, which infra-config-verify.sh never writes" % (sid, out))
+            # THE SAME CHECK FOR NON-SCRIPT PRODUCERS (#7546 review). The `if:` loop above has
+            # exactly this branch -- `vals = (wf_emitted.get(sid) or {}).get(out)` -- and the
+            # `env:` loop did not, so an env reference to a WORKFLOW step's output was validated
+            # for the step id and never for the output NAME. Measured: deleting the producer line
+            # `echo "repush_start_epoch=..." >> "$GITHUB_OUTPUT"` left Guard 1 reporting CHECKED=19
+            # and zero problems, while pass 2's absolute freshness pin silently degraded to the
+            # weaker APPLY_START_EPOCH reference and still emitted `freshness_evidence=verified`.
+            # `env:` is the shape that yields the empty string rather than erroring, which is
+            # exactly why it needed the stricter branch, not the looser one.
+            elif sid not in SCRIPT_STEPS and (wf_emitted.get(sid) or {}).get(out) is None:
+                problems.append("env: reads steps.%s.outputs.%s, which step '%s' never writes to "
+                                "$GITHUB_OUTPUT -- this resolves to the EMPTY STRING at runtime, "
+                                "silently, and the consumer degrades rather than failing"
+                                % (sid, out, sid))
 
 # The backstop must exist and must be always()-keyed.
 backstop = [s for s in steps
