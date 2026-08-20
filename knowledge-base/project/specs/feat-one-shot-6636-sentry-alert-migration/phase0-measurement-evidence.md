@@ -70,9 +70,17 @@ retirement … by fix time Sentry had restored it".
 UTC. The 18:00–20:00Z observation was a brownout window; the Phase 0 plan ran outside one. Nothing
 was restored.
 
-**Unaffected:** §0.2's durability datum and the `0.15.4` conclusion. The bump is still right, for a
-reason §0.1 could not supply — `0.15.4`'s read path is not in the deprecated family at all, so it
-is immune to the brownout rather than merely lucky about its timing.
+**Also retracted — §0.2's durability datum, which this file correctly flagged as unmeasured.** §0.2
+records that v0.15.3 (`#885`) moved `sentry_issue_alert` reads off the legacy endpoint, and the Key
+Insight of the companion learning notes honestly that "with the endpoint restored, `terraform plan`
+cannot observe the read-path rework, so it is changelog-sourced, not plan-measured". That caveat was
+right and the datum was wrong. CI measured it on 2026-08-20 with `jianyuan/sentry v0.15.4` installed: run
+`32362401543` (11:09:07Z) took `410 "This API no longer exists"` on **29 of 29**
+`sentry_issue_alert` reads and failed `terraform plan`, while run `32362320701`
+**one minute earlier** (11:08:09Z), same branch, same pin, succeeded. The same
+alternation appears on 2026-08-19 (17:43 pass / 18:26 fail; 21:21 pass / 21:30 fail). `0.15.4` still reads the deprecated path. The bump is
+stable-over-beta and worth keeping; it is not a fix for the 410, and the root is still wedged by
+every brownout window.
 
 **What §0.1 should have recorded.** The response headers, which name the retirement directly and
 were present throughout: `x-sentry-deprecation-date`, and per-endpoint

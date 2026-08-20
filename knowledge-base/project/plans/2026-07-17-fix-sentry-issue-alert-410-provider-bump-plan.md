@@ -328,10 +328,20 @@ No other overlap. (Check ran; result recorded.)
 
 Kept as the dated plan it is. Nothing above is edited away.
 
-**What still stands.** Option A over Option B, the `sentry_alert`/`monitor_ids` blocker, the
-lockfile and destroy-guard sharp edges, and the `0.15.4` pin itself — all unchanged, and the pin
-is right for a reason this plan did not have: the read path `0.15.4` moves to is not in the
-deprecated alert-rule family at all.
+**What still stands.** The `sentry_alert`/`monitor_ids` blocker, the lockfile and destroy-guard
+sharp edges, and Option A as the right *first* move — a provider-only change with no state surgery
+was correct to try before a 23-resource migration.
+
+**What does NOT stand: Option A did not solve the problem it was adopted to solve.** Phase 0.4
+adopted it on a clean plan plus a changelog datum (`#885` moved `sentry_issue_alert` reads off the
+legacy endpoint). The datum was never plan-measured — §0.1's own evidence file says so — because
+measuring it requires being inside a brownout window. CI measured it on 2026-08-20 with `jianyuan/sentry v0.15.4` installed: run
+`32362401543` (11:09:07Z) took `410 "This API no longer exists"` on **29 of 29**
+`sentry_issue_alert` reads and failed `terraform plan`, while run `32362320701`
+**one minute earlier** (11:08:09Z), same branch, same pin, succeeded. The same
+alternation appears on 2026-08-19 (17:43 pass / 18:26 fail; 21:21 pass / 21:30 fail). The pin is still preferable to
+`0.15.0-beta2` on stable-vs-beta grounds, but it does not clear the 410 and the root remains wedged
+on the vendor's schedule. The unresolved exposure is tracked in #7650.
 
 **What is retracted: the Phase 0 measurement gate's stopping rule.** Phase 0.4 adopts Option A on
 observing "a real `terraform plan` with zero 410s". Against a **scheduled brownout** that

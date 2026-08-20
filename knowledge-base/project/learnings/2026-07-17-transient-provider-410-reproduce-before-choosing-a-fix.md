@@ -92,7 +92,20 @@ a *general rule* for any vendor-API break, so it is what a future search retriev
 | "A reported external-API break is a **claim to reproduce**, not a fact to route on." | **Stands.** This is the right instinct and it is why the over-fix was avoided. |
 | "Reproducing it on the pinned version first tells you whether *any* fix is needed." | **Stands, weakened.** It bounds the blast radius of the fix; it does not establish the vendor's state. |
 | "A 410/5xx-class provider failure **can be a transient vendor incident that self-resolves**." | **Retracted as the default reading.** A deprecation served under brownouts is observationally identical to a transient incident from a single probe, and is far likelier for a documented API family. |
-| "…so the heavy migration was not needed." | **Right answer, wrong reason.** `0.15.4` is correct because its read path is not in the deprecated family — not because the endpoint came back. |
+| "…so the heavy migration was not needed." | **Retracted, and the replacement reason is retracted too.** The first correction to this file said `0.15.4` was right "because its read path is not in the deprecated family". That was changelog-sourced and never measured; CI has since refuted it (see below). Deferring the migration was still the right *call* — it is blocked on `monitor_ids` regardless — but the 410 is not fixed. |
+
+**The durability claim was refuted too — by CI, on 2026-08-20.** This file's Solution says the
+`0.15.4` bump "future-proof[s] against a *permanent* retirement", sourced from the v0.15.3 changelog
+(`#885`, "fix: Update reads from GET endpoint"). It was never measured, and could not be: observing
+it requires a request inside a brownout window. With `jianyuan/sentry v0.15.4` installed, run
+`32362401543` (2026-08-20T11:09:07Z) took `410 "This API no longer exists"` on **29 of 29**
+`sentry_issue_alert` reads and failed `terraform plan`; run `32362320701` **one minute earlier**
+(11:08:09Z), same branch and same pin, passed. The alternation repeats on 2026-08-19 (17:43 pass /
+18:26 fail; 21:21 pass / 21:30 fail). So `0.15.4` still reads the deprecated path and the sentry
+Terraform root is still wedged by every brownout. Two lessons compound here: the probe-and-conclude
+stopping rule below, and **a changelog datum standing in for a measurement the environment made
+impossible at the time** — the second is what let a documented-as-unverified claim harden into
+"future-proofed" across four artifacts.
 
 **The corrected rule.** A single clean re-probe cannot distinguish *"restored"* from *"outside the
 next window"*, so it is not a valid stopping condition for a schedule-shaped failure. Before

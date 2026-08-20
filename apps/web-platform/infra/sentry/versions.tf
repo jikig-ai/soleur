@@ -21,8 +21,17 @@
 # API family on 2026-05-14 and serves it under scheduled BROWNOUTS: 410 for a
 # window on a recurring schedule, 200 the rest of the time. A follow-up probe
 # minutes later cannot distinguish "restored" from "outside the next window",
-# which is exactly the inference recorded here. The bump remains correct and
-# remains the right fix for THIS root; only the transience claim is retracted.
+# which is exactly the inference recorded here.
+#
+# Corrected again 2026-08-20 (#7590): an earlier version of this note said "the
+# bump remains the right fix for THIS root". That is retracted too. The
+# durability rationale (v0.15.3 #885 moved sentry_issue_alert reads off the
+# legacy endpoint) was changelog-sourced and never plan-measured. CI measured it
+# with v0.15.4 installed: run 32362401543 (2026-08-20T11:09:07Z) took 410 on
+# 29 of 29 sentry_issue_alert reads and failed terraform plan, while run
+# 32362320701 one minute earlier passed. This pin is stable-over-beta and worth
+# keeping, but it does NOT clear the 410 and this root still wedges on every
+# brownout window.
 # Read ADR-031 §Amendment 2026-08-19 (#7590) before acting on the paragraph
 # above.
 terraform {

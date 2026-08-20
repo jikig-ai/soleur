@@ -520,7 +520,10 @@ flagged "re-evaluate on first stable".
 line's latest, `0.15.4`. This is the durable fix, not merely a beta-pin cleanup: provider
 **v0.15.3** (`jianyuan/terraform-provider-sentry#885`, "fix: Update reads from GET endpoint")
 switched `sentry_issue_alert` reads **off** the legacy endpoint, so `0.15.4` no longer depends
-on the retired read path. Measured on `0.15.4` against live state: `validate` exit 0, full-root
+on the retired read path. *(**That last clause is RETRACTED — measured false 2026-08-20 under
+#7590; see the Correction at the end of this amendment.** `0.15.4` still reads the deprecated
+path. The bump stands as stable-over-beta, not as a fix for the 410.)* Measured on `0.15.4`
+against live state: `validate` exit 0, full-root
 `plan` no-op (0/0/0) across all 23 issue alerts + 49 cron + 4 uptime monitors, zero 410s, no
 drift, `fmt` clean. It is a provider-version-only change (`versions.tf` pin + regenerated
 `.terraform.lock.hcl` for the CI/dev platform set) — no state surgery, no resource rewrite,
@@ -538,10 +541,32 @@ updated: **re-attempt the `sentry_alert` migration when those default-monitor da
 confirmed to let a project-wide frequency rule fire faithfully** (not merely "on first stable",
 which is now satisfied).
 
-**Recurrence.** If Sentry retires the legacy read endpoint *permanently*, `0.15.4` is already
-off it (v0.15.3 #885), so this root does not re-wedge on that account. A different provider
-read regression would surface the same way (full-root plan failure → red required gate) and is
-governed by the same #6589 machinery.
+**Recurrence.** ~~If Sentry retires the legacy read endpoint *permanently*, `0.15.4` is already
+off it (v0.15.3 #885), so this root does not re-wedge on that account.~~ **RETRACTED 2026-08-20
+(#7590) — measured false; see the Amendment below.** A different provider read regression would
+surface the same way (full-root plan failure → red required gate) and is governed by the same
+#6589 machinery.
+
+**Correction (2026-08-20, #7590) — `0.15.4` is NOT off the legacy read path, and this root DOES
+re-wedge.** The claim above, and the "durable fix" rationale in the decision paragraph, both rest
+on the v0.15.3 changelog entry (`#885`). That datum was never plan-measured: the 2026-07-17 Phase 0
+plan ran outside a brownout window, and its own evidence file flags the durability claim as
+"changelog-sourced, not plan-measured". CI has now measured it. With `jianyuan/sentry v0.15.4`
+installed, run `32362401543` (2026-08-20T11:09:07Z) took `410 "This API no longer exists"` on
+**29 of 29** `sentry_issue_alert` reads and failed `terraform plan`; run `32362320701` **one minute
+earlier** (11:08:09Z), same branch and same pin, passed. The alternation repeats on 2026-08-19
+(17:43 pass / 18:26 fail; 21:21 pass / 21:30 fail) — the brownout signature, now visible in CI
+history rather than inferred.
+
+Consequences: the `0.15.4` pin is still preferable to `0.15.0-beta2` (stable over beta, and it
+resolves the "re-evaluate at first stable" note), but it is **not** a fix for the 410 and #6636 did
+not durably close this. The sentry Terraform root remains wedged by every brownout window, which
+also means the required `sentry-destroy-required` gate and `apply-sentry-infra.yml` fail on the
+vendor's schedule — the "detector blocks its own cure" deadlock this ADR describes elsewhere, now
+load-bearing rather than hypothetical. The real fix is a provider that reads the replacement
+endpoint (`organizations/{org}/workflows/`); the `sentry_alert`/`monitor_ids` blocker in the
+paragraph above is unchanged and still forbids the migration the issue originally proposed. Tracked
+in #7650.
 
 **Amendment (2026-08-19, #7590) — the alert-rule API family is deprecated with brownouts,
 not removed; the audit is migrated per-endpoint and the orphan predicate is rebound.**

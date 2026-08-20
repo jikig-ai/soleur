@@ -123,9 +123,20 @@ requires either the response headers (`x-sentry-deprecation-date`,
 time) or probing across more than one window. The header-reading tripwire shipped in #7590 exists
 because this loop could not have caught it.
 
-**What still stands.** The 0.15.4 provider bump was and remains the correct fix for the sentry
-Terraform root, for a reason this report did not have: the read path it moves to is not in the
-deprecated family at all. The "no customer impact" assessment stands. The action-items section
+**What still stands.** The "no customer impact" assessment stands.
+
+**What does NOT stand, and was not known when this note was first drafted: the bump did not make
+the root immune.** The durability rationale carried by every artifact in this set — that v0.15.3
+(`jianyuan/terraform-provider-sentry#885`) moved `sentry_issue_alert` reads off the legacy endpoint,
+so `0.15.4` no longer depends on it — was **changelog-sourced and never plan-measured**, because
+observing it requires being inside a brownout window. CI measured it on 2026-08-20 with `jianyuan/sentry v0.15.4` installed: run
+`32362401543` (11:09:07Z) took `410 "This API no longer exists"` on **29 of 29**
+`sentry_issue_alert` reads and failed `terraform plan`, while run `32362320701`
+**one minute earlier** (11:08:09Z), same branch, same pin, succeeded. The same
+alternation appears on 2026-08-19 (17:43 pass / 18:26 fail; 21:21 pass / 21:30 fail). So `0.15.4` still reads the
+deprecated path, and the sentry Terraform root is still wedged by every brownout. The bump remains
+defensible as stable-over-beta; it is **not** a fix for the 410, and #6636 did not durably close
+this. Tracked in #7650. The action-items section
 stands — the residual work is tracked under #7590 and #7634, not here.
 
 **Cross-references.** The same retraction is recorded on every artifact that carried the
