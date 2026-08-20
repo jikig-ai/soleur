@@ -1398,6 +1398,12 @@ if want_scripts; then
   # under the shell GitHub Actions uses, so it is the only thing in the repo that
   # can tell "the gate blocked this input" from "the gate never looked" (#7629).
   run_suite "scripts/skill-security-scan-step-body" bash scripts/skill-security-scan-step-body.test.sh
+
+  # EXPLICIT: scripts/followthroughs/ is covered by no glob here. Drives the T5
+  # skip-persistence probe against seven fixture samples through a fake `gh`,
+  # with fixtures padded past the 64 KiB pipe buffer so the SIGPIPE race the
+  # probe was losing matches to is actually reachable (#7574).
+  run_suite "scripts/followthroughs/t5-skip-persistence-bound-7510" bash scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh
 fi
 
 # Named bun-test entries — bun shard.
