@@ -30,8 +30,7 @@ function sandbox(opts: { floor: number; config: string; sources: Record<string, 
   mkdirSync(join(dir, "scripts"), { recursive: true });
   mkdirSync(join(dir, "test"), { recursive: true });
   mkdirSync(join(dir, "node_modules"), { recursive: true });
-  // Symlink the real toolchain rather than reinstalling it.
-  symlinkSync(resolve(APP_ROOT, "node_modules"), join(dir, "node_modules_real"), "dir");
+  // Symlink the real eslint rather than reinstalling a toolchain.
   mkdirSync(join(dir, "node_modules/.bin"), { recursive: true });
   symlinkSync(REAL_ESLINT, join(dir, "node_modules/.bin/eslint"));
   writeFileSync(join(dir, "scripts/eslint-vacuity-floor.mjs"), readFileSync(REAL_SCRIPT, "utf8"));

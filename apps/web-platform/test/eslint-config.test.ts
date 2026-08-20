@@ -517,7 +517,8 @@ describe("Harness — the guard's own dispatch", () => {
     // A baseline of 0 would make the pin unfalsifiable by an inert config.
     expect(BASELINE_FINDINGS).toBeGreaterThan(0);
     // Setting the CONSTANT to 0 satisfied `toBeGreaterThanOrEqual(MIN_FILES_SCANNED)`
-    // for a run that scanned nothing. 1900 is today's value against 2019 actual; the
+    // for a run that scanned nothing. 1900 sits under the measured total in
+    // MIN_FILES_SCANNED's docstring, which is the one site that re-derives it; the
     // bound sits just under it because a harness floor that sanctions a quarter of the
     // tree going unlinted is the same defect one level up — at >= 1500, ignoring 519
     // finding-free files kept every assertion in this suite green.

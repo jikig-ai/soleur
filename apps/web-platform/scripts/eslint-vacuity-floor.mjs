@@ -2,7 +2,7 @@
 // Anti-vacuity floor for the `lint-webplat` CI job (#1327).
 //
 // `npm run lint` exits 0 on a config that selected almost nothing: `export default []`
-// linted 11 of 2019 files and reported success. Without this, the job's green meant only
+// linted 11 files out of the full tree and reported success. Without this, the job's green
 // "eslint did not error", and its whole anti-vacuity story lived in a different job.
 //
 // Lives in a file rather than inline in ci.yml for three reasons: a `node -e '...'` block

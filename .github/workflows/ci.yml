@@ -601,9 +601,6 @@ jobs:
             *) echo "::error::unrecognized propagation verdict: $VERDICT_JSON"; exit 1 ;;
           esac
 
-  # next build runs the App Router route-file validator that vitest and `tsc --noEmit`
-  # skip — catches non-HTTP exports from `app/**/route.{ts,tsx}` before merge instead
-  # of inside the post-merge Docker build (#2347/#2401 outage).
   # ESLint for apps/web-platform (#1327). Replaces `next lint`, which Next 16
   # removes and which never ran here (no config -> interactive prompt -> exit 1).
   #
@@ -643,7 +640,7 @@ jobs:
         working-directory: apps/web-platform
 
       # The step above exits 0 on a config that selected almost nothing:
-      # `export default []` linted 11 of 2019 files and reported success. This job's
+      # `export default []` linted 11 files out of the full tree and reported success. This
       # entire anti-vacuity story otherwise lived in the vitest guard suite — a different
       # job, on a different matrix, that this one does not depend on. A gate whose green
       # is only trustworthy because some other gate is also green is not a gate.
@@ -656,11 +653,14 @@ jobs:
       # The argv is not hardcoded either. It comes from the `lint` script, for the same
       # reason the guard suite's lintScriptArgs() does: a hardcoded `eslint .` means
       # narrowing `lint` to `eslint lib` lints 106 files in the step above while this one
-      # still scans 2019 and reports the floor cleared.
+      # still scans the whole tree and reports the floor cleared.
       - name: ESLint anti-vacuity floor
         run: node scripts/eslint-vacuity-floor.mjs
         working-directory: apps/web-platform
 
+  # next build runs the App Router route-file validator that vitest and `tsc --noEmit`
+  # skip — catches non-HTTP exports from `app/**/route.{ts,tsx}` before merge instead
+  # of inside the post-merge Docker build (#2347/#2401 outage).
   web-platform-build:
     runs-on: ubuntu-latest
     steps:

@@ -9,7 +9,7 @@
 // supplying the parser and every rule source, and that "removing it removes every Next
 // and React rule source and the TS parser". That was measured and is FALSE: with
 // node_modules/eslint-config-next moved aside entirely, `eslint . -f json` returns a
-// byte-identical report — 2020 files, 192 findings, same byRule. The claim was written
+// byte-identical report — same file count, same 192 findings, same byRule. The claim was
 // before the six imports below were declared as direct devDependencies and was never
 // reconciled with them.
 //
