@@ -1394,8 +1394,12 @@ jobs:
       - name: Run credential-persist-to-home guard (#6633 — ProtectHome=read-only cred-write class)
         run: bash apps/web-platform/infra/credential-persist-home-guard.test.sh
 
-      # Registered here and NOWHERE ELSE (#7587). `run-registered-suites.sh` DERIVES its list from
-      # this file's `run: bash apps/web-platform/infra/*.test.sh` steps, and
+      # Registered here and NOWHERE ELSE (#7587). `run-registered-suites.sh` DERIVES its list by
+      # grepping this file for step commands that invoke a `.test.sh` in the infra directory. That
+      # pattern is deliberately NOT spelled out literally here: `run-registered-suites.test.sh`'s
+      # T2e oracle greps this same file with that same shape, so a prose copy of it is read as a
+      # ninth registered-but-underived suite and reds the gate (a comment defeating a guard --
+      # see knowledge-base/project/learnings/2026-08-02-my-comments-defeated-three-gates*). And
       # `scripts/lint-orphan-test-suites.sh` walks every tracked `*.test.sh` repo-wide and reports
       # anything no runner references — so an unregistered suite gates nothing AND fails the orphan
       # lint. It also must not be registered twice: that linter treats a suite covered by more than
