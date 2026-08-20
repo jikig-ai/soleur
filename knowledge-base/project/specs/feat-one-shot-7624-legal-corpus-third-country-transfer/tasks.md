@@ -10,7 +10,12 @@ date: 2026-08-20
 # Tasks — #7624
 
 Derived from the plan's Implementation Phases. **The plan's `## CLO Advisory — Binding Rulings`
-section carries the exact replacement wording for every correction — do not paraphrase it.** The
+section carries the exact replacement wording for every correction.** Apply it verbatim with ONE
+exception, recorded in the plan's `## Deviations from the CLO wording`: **D1 — every
+`*(Corrected …, ref #7624: …)*` marker paraphrases the superseded sentence instead of quoting it**
+(e.g. "previously described the archive as intra-EU with no third-country transfer", not the
+quoted literal). This is what removes the collision with the anti-regression guard; without it the
+guard reds on the CLO's own marker. The
 plan's `## Enumerated Inventory` is the work-list (64 rows / 55 anchors / 16 files); AC10's
 residual sweep is the closure criterion.
 
@@ -22,7 +27,8 @@ residual sweep is the closure criterion.
 - [ ] 0.2 Re-read PA-7 §§(d)(e)(f)(g) at HEAD; re-derive if the register moved past `28612e8cd`.
 - [ ] 0.3 Confirm a clean start: `lint-legal-mirror-drift-baseline.sh --base origin/main` → 0,
       `apps/web-platform/scripts/check-tc-document-sha.sh` → 0.
-- [ ] 0.4 Re-anchor all 64 inventory rows on their verbatim sentences at HEAD.
+- [ ] 0.4 Re-anchor all **64** inventory rows on their verbatim sentences at HEAD (55 distinct
+      anchors; nine rows share an anchor, and `data-protection-disclosure.md:172` carries three).
 - [ ] 0.5 Read `.github/workflows/cla-evidence.yml` "Compute CLA doc hash at PR base SHA"; confirm
       per-PR-base hashing before editing any CLA instrument.
 - [ ] 0.6 File the retention-ceiling issue (CLO Fork 2D). Record its number for every `[#NNNN]`.
@@ -77,11 +83,12 @@ residual sweep is the closure criterion.
 
 ## Phase 6 — Anti-regression sentinels
 
-- [ ] 6.1 Widen the `checks` tuple to `[string, RegExp, "present" | "absent"]`; branch the loop.
-- [ ] 6.2 Add `stripCorrectionMarkers` to the `absent` arm only.
-- [ ] 6.3 Add the fourteen rows and the dispatch floor from the plan's `## Guard Contract`.
-- [ ] 6.4 Every existing row gains `"present"`; modify no existing regex (AC6a).
-- [ ] 6.5 Execute mutation rows 1-6 and harness rows H1-H4; record each verdict (AC13).
+- [ ] 6.1 Add a **new `test()` block** to `apps/web-platform/test/legal-doc-consistency.test.ts`
+      with the `FORBIDDEN` / `REQUIRED` arrays, the `>= 8` dispatch floor and the loop — all
+      written out in full in the plan's `## Guard Contract`.
+- [ ] 6.2 **Do NOT widen the existing `checks` tuple**; leave all 15 pinned rows byte-unchanged
+      (AC4). Plain strings via `toContain` / `not.toContain` — no regex escaping.
+- [ ] 6.3 Execute mutation rows 1-3 and harness row H1; record each verdict (AC13).
 
 ## Phase 7 — Re-pin and verify
 
@@ -91,14 +98,15 @@ residual sweep is the closure criterion.
       `lint-legal-mirror-drift-baseline.sh`, then
       `cd apps/web-platform && ./node_modules/.bin/vitest run test/legal-doc-consistency.test.ts test/legal-doc-shas-guard.test.ts`.
       **Never set `SOLEUR_LEGAL_DRIFT_ACCEPT`.**
-- [ ] 7.3 Run AC10 / AC10a / AC11 / AC11a / AC11b; paste classified output into the PR body.
+- [ ] 7.3 Run AC10 / AC10a / AC11; paste the classified output into the PR body.
 - [ ] 7.4 `git diff origin/main | grep -n '#NNNN'` → nothing.
-- [ ] 7.5 File the E3-class tracking issue (AC19) and confirm AC14/AC15/AC16.
+- [ ] 7.5 File the availability/DR tracking issue (AC19 — the `chat-attachments` DR claim, NOT the
+      attribution, which is in scope as row E3) and confirm AC14/AC15/AC16.
 
 ## Post-merge
 
 - [ ] PM1 Fetch all three published mirrors; assert the negative literals return 0 and
       `EU-US Data Privacy Framework` returns ≥1 on each.
 - [ ] PM2 Confirm both deferred items exist: the register's Outstanding-items entry, and both
-      issues `OPEN`.
+      issues `OPEN` (the retention-ceiling issue from 0.6, and the AC19 DR issue).
 - [ ] PM3 `gh issue close 7624`.
