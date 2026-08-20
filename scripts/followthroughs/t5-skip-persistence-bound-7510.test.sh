@@ -90,9 +90,14 @@ mkcase() {
   printf '%s' "$root"
 }
 
+# PER-CASE STATE, or the cases contaminate each other. The probe now keeps a
+# consecutive-TRANSIENT streak in a file; with one shared path, (e), (f) and (g)
+# each incremented the SAME counter and (g) escalated to exit 1 on a streak it
+# did not earn. That is the probe behaving correctly and the harness measuring
+# the wrong thing -- exactly the class this suite exists to catch, one level up.
 run_probe() {  # $1 = case root; sets RC and OUT
   OUT="$SANDBOX/out.$RANDOM"
-  ( PATH="$1/bin:$PATH" GH_TOKEN=fake bash "$PROBE" ) >"$OUT" 2>&1
+  ( PATH="$1/bin:$PATH" GH_TOKEN=fake T5_PROBE_STATE="$1/streak" bash "$PROBE" ) >"$OUT" 2>&1
   RC=$?
 }
 
@@ -170,9 +175,46 @@ EOF
 run_probe "$_r"
 expect "(g) empty sample" 2 "an empty sample is an un-run instrument, not a clean bill of health"
 
+# ── (h) N consecutive TRANSIENTs must ESCALATE to a FAIL ─────────────────────
+# A permanently broken gh auth and a healthy quiet window both exit 2 forever,
+# and 2 is the code the carrier reads as "nothing to see". A probe that can
+# never reach a verdict must eventually say so, or it is an un-run instrument
+# reporting a clean bill of health -- the same defect one level up.
+_r=$(mkcase h 0 <<'EOF'
+irrelevant
+EOF
+)
+_esc_state="$_r/streak"
+_esc_rc=0
+for _i in 1 2 3; do
+  OUT="$SANDBOX/out.esc.$_i"
+  ( PATH="$_r/bin:$PATH" GH_TOKEN=fake T5_PROBE_STATE="$_esc_state" T5_TRANSIENT_ESCALATE_AFTER=3 bash "$PROBE" ) >"$OUT" 2>&1
+  _esc_rc=$?
+done
+if [ "$_esc_rc" -eq 1 ]; then
+  pass
+else
+  fail "(h) transient escalation: the 3rd consecutive TRANSIENT exited $_esc_rc, expected 1 — a probe that cannot reach a verdict must stop being indistinguishable from one that keeps reaching a clean one. Output: $(head -c 300 "$OUT" | tr '\n' ' ')"
+fi
+
+# (h.ii) a real verdict must CLEAR the streak, or one bad window poisons the
+# counter forever and the next genuine TRANSIENT escalates immediately.
+_r2=$(mkcase h2 20 <<EOF
+everything healthy here
+$TERMINAL_LINE
+EOF
+)
+printf '2' > "$_r2/streak"
+( PATH="$_r2/bin:$PATH" GH_TOKEN=fake T5_PROBE_STATE="$_r2/streak" bash "$PROBE" ) >"$SANDBOX/out.h2" 2>&1
+if [ ! -s "$_r2/streak" ]; then
+  pass
+else
+  fail "(h.ii) streak not cleared: a PASS left the transient streak at '$(cat "$_r2/streak")'; the next genuine transient would escalate on a streak it did not earn"
+fi
+
 # ── Assertion floor (not routed through fail(), deliberately) ────────────────
 _total=$((passes + fails))
-_FLOOR=7
+_FLOOR=9
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d ran, floor %d — the harness lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2

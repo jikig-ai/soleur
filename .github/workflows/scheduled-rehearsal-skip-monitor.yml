@@ -1,0 +1,140 @@
+# Standing daily monitor for the git-data rehearsal suite's loud SKIP arms (#7574).
+#
+# <!-- gate-override: new-scheduled-cron-prefer-inngest -->
+#
+# WHY A SCHEDULED WORKFLOW RATHER THAN INNGEST. ADR-033 makes Inngest canonical
+# for scheduled work, and it is right for almost everything: 53 cron functions
+# there against 12 scheduled workflows here. This one is in the minority for a
+# specific, checkable reason -- it is purely repo-scoped GitHub-API work. It
+# reads `gh run list` / `gh run view` against this repository's own Actions
+# logs. It needs no app context, no app secrets, no database, no Sentry, and
+# nothing that benefits from `step.run` memoisation; routing it through Inngest
+# would mean giving the app a GitHub token to do a job the Actions runner
+# already has one for. `scheduled-followthrough-sweeper.yml` is the same-shape
+# precedent and runs this very probe today.
+#
+# WHY IT IS NOT A FOLLOW-THROUGH DIRECTIVE (the point of #7574). The sweeper
+# CLOSES a follow-through on its first PASS, and `closed_precheck` then refuses
+# to re-litigate it. A probe whose entire purpose is to watch a window ACROSS
+# runs would therefore retire itself after one clean sample -- and a retired
+# observer reporting nothing is indistinguishable from a healthy one reporting
+# nothing. That is the same un-run-instrument failure the probe's own positive
+# control exists to prevent, so enrolling it there would have re-created the
+# defect inside the fix. This monitor does not close on PASS.
+name: scheduled-rehearsal-skip-monitor
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+concurrency:
+  group: scheduled-rehearsal-skip-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # THE STREAK FILE IS THE CARRIER'S RESPONSIBILITY. The probe escalates to
+      # a FAIL after N consecutive runs that could not reach a verdict; without
+      # persistence the counter resets every run and escalation never fires.
+      # That degrades OPEN, so the round-trip is asserted below rather than
+      # assumed.
+      - name: Restore transient-streak state
+        uses: actions/cache/restore@v4
+        with:
+          path: .monitor-state
+          key: rehearsal-skip-monitor-streak
+
+      - name: Run the skip-persistence probe
+        id: probe
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          T5_PROBE_STATE: .monitor-state/streak
+        run: |
+          set -uo pipefail
+          mkdir -p .monitor-state
+          rc=0
+          bash scripts/followthroughs/t5-skip-persistence-bound-7510.sh \
+            > "${RUNNER_TEMP}/probe.out" 2> "${RUNNER_TEMP}/probe.err" || rc=$?
+          cat "${RUNNER_TEMP}/probe.out"
+          cat "${RUNNER_TEMP}/probe.err" >&2
+          # Two outputs, deliberately: `rc` routes the steps below, and
+          # `verdict` is a NON-NUMERIC discriminator. Actions `==` is LOOSE, so
+          # an UNSET output is null and `null == '0'` is TRUE -- a step gated on
+          # a numeric literal alone fires on a producer that wrote nothing at
+          # all, which is exactly what a crashed step looks like.
+          case "$rc" in
+            0) verdict=pass ;;
+            1) verdict=fail ;;
+            *) verdict=transient ;;
+          esac
+          {
+            echo "rc=$rc"
+            echo "verdict=$verdict"
+            echo "summary<<SUMEOF"
+            cat "${RUNNER_TEMP}/probe.out" "${RUNNER_TEMP}/probe.err"
+            echo "SUMEOF"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Assert the streak file round-trips
+        if: ${{ !cancelled() }}
+        run: |
+          set -uo pipefail
+          # A monitor whose escalation counter silently never persists is a
+          # monitor that can never escalate. Report it rather than discovering
+          # it during the incident it was meant to catch.
+          if [ -d .monitor-state ]; then
+            echo "monitor-state present; streak=$(cat .monitor-state/streak 2>/dev/null || echo '<cleared>')"
+          else
+            echo "::warning::.monitor-state is absent — the consecutive-TRANSIENT escalation cannot fire until cache persistence is working."
+          fi
+
+      - name: Save transient-streak state
+        if: ${{ !cancelled() }}
+        uses: actions/cache/save@v4
+        with:
+          path: .monitor-state
+          key: rehearsal-skip-monitor-streak
+
+      - name: Open or update the alert issue
+        if: ${{ steps.probe.outputs.verdict == 'fail' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SUMMARY: ${{ steps.probe.outputs.summary }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          title="monitor: git-data rehearsal suite is skipping arms across runs"
+          existing=$(gh issue list --repo "${{ github.repository }}" \
+            --state open --search "$title in:title" --json number --jq '.[0].number // empty') || existing=""
+          body_file="${RUNNER_TEMP}/body.md"
+          {
+            printf '%s\n\n' "The rehearsal skip-persistence probe returned FAIL."
+            printf 'Run: %s\n\n' "$RUN_URL"
+            printf '```\n%s\n```\n\n' "$SUMMARY"
+            printf '%s\n' "ADR-188 accepts that nothing bounds these arms' skips ACROSS runs; this monitor is that bound. A sustained skip means the deferred pre-baked image (#7535) is owed."
+          } > "$body_file"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "${{ github.repository }}" --body-file "$body_file"
+          else
+            gh issue create --repo "${{ github.repository }}" \
+              --title "$title" --label "type/chore" --body-file "$body_file"
+          fi
+
+      - name: Report verdict
+        if: ${{ !cancelled() }}
+        run: |
+          echo "probe verdict: ${{ steps.probe.outputs.verdict }} (rc=${{ steps.probe.outputs.rc }})"
+          # A monitor must not go red on a quiet window, but a FAIL is a real
+          # signal and the alert issue above is the durable record.
+          [ "${{ steps.probe.outputs.verdict }}" != "fail" ] || exit 1
