@@ -17,8 +17,12 @@ the property.
 - [ ] 1.1 Create `scripts/orphan-process-reaper.test.sh` with the `scripts/tmpfs-guard.test.sh` harness shape:
       `set -euo pipefail`, `pass()`/`fail()` that never move `cases`, `cases` incremented at each call site,
       fixtures under the suite's own `mktemp -d`.
-- [ ] 1.2 Build the synthesized `/proc` fixture builder (`mkdir -p "$FAKE_PROC/<pid>"` + `ln -sfn`), and the
-      real-process fixture builder for arms that need a live `st_nlink`.
+- [ ] 1.2 Build the fixture builders. **A dangling symlink does NOT produce `nlink==0`** — `stat` fails, which
+      G-fail counts as `unreadable`, so a naive fixture makes every positive arm pass for the wrong reason.
+      Anchor-positive arms must point at a real unlinked inode: either a live process with a genuinely unlinked
+      cwd, or a synthesized link to `/proc/<pid>/fd/N` held open on an unlinked file (measured `%h` = 0).
+      Negative/structural arms may use live targets. Add the control arm that asserts a dangling-symlink
+      fixture classifies `unreadable`, not as an anchor (AC30b).
 - [ ] 1.3 Write the positive arms: the single orphan (AC1) and the three-process wrapper/child shape (AC2).
 - [ ] 1.4 Write the negative arms: tmpfs-guard cron shape (AC3), `exe` (AC4), the `… (deleted)` directory
       (AC5), foreign mount namespace (AC6), the seven fail-toward-alive cases (AC7), age floor both

@@ -540,6 +540,42 @@ Ordered so that every contract lands before its consumer. The suite is written b
 `cq-write-failing-tests-before` — and, more pointedly, because a mutation matrix derived from finished code
 tests the code that exists rather than the property.
 
+### Fixture strategy — measured, because the obvious one is silently wrong
+
+The gates test `stat -Lc '%h'` on a `/proc` magic link. A synthesized `/proc` built the obvious way cannot
+express the positive condition, and fails in the direction that looks like success. Measured:
+
+```
+A  fake symlink -> a nonexistent path ("/tmp/gone (deleted)")
+     stat -Lc '%h'  ->  stat: cannot stat ... (rc 1)      NOT 0
+B  fake symlink -> a live directory
+     stat -Lc '%h'  ->  2                                  correct for a negative arm
+C  fake symlink -> /proc/<pid>/fd/N, where N is an OPEN BUT UNLINKED file
+     stat -Lc '%h'  ->  0                                  correct for a positive arm
+```
+
+Case A is the fixture anyone would write first, and under this plan's own G-fail rule a failed `stat` counts as
+`unreadable` and the process is **not flagged**. So a suite built on dangling symlinks would report every
+positive arm as passing while the detector never actually classified anything — a test that passes for the
+wrong reason, which is the exact class `tmpfs-guard.sh`'s header warns about for unimplemented seams.
+
+Therefore:
+
+- **Anchor-positive arms use case C or a real process.** Either a real bash process whose cwd and script are
+  genuinely unlinked (as the plan's own probes did), or a synthesized `/proc` whose link points at a
+  `/proc/<pid>/fd/N` handle held open on an unlinked file. Case C is preferred where it works, because it is
+  deterministic and needs no process lifecycle in the suite.
+- **Negative and structural arms may use case B** — live targets, real nlink values — which covers
+  self-exclusion, the glob guard, counters, ordering, the cardinality cap, and the `… (deleted)`-named
+  directory.
+- **Arms that cannot be synthesized at all** are the mount-namespace gate and anything depending on real
+  process lifecycle (signal delivery, starttime re-read, pid recycling). Those use real processes, and the
+  plan says so rather than letting an implementer discover it.
+
+The suite asserts this discipline directly: a control arm builds a case-A fixture and requires it to classify
+as `unreadable`, **not** as an anchor. Without that control, a later refactor back to dangling symlinks would
+turn every positive arm green-but-vacuous with nothing to notice.
+
 ### Phase 1 — the mutation matrix and the failing suite (RED)
 
 Write `scripts/orphan-process-reaper.test.sh` against a `/proc` synthesized under the suite's own `mktemp -d`,
@@ -1070,6 +1106,11 @@ the criterion pins a shape rather than a value and says so.
     adjudicability, recency, borrowed-primitive validation, fail direction, guard dispatch, second-member
     handling, reap-set reach, reap-set derivation, member predicate, blast-radius bound, ordering, recycling,
     seam safety, evidence presence, evidence ordering, errexit discipline, reportability, and primitive drift.
+30b. **Fixture realism.** Anchor-positive arms are built from a real unlinked inode — a live process with a
+    genuinely unlinked cwd, or a synthesized `/proc` link pointing at a `/proc/<pid>/fd/N` handle held open on
+    an unlinked file. A control arm builds the naive dangling-symlink fixture and asserts it classifies as
+    `unreadable`, **not** as an anchor. Without that control a refactor back to dangling symlinks turns every
+    positive arm green-but-vacuous, because a failed `stat` is `unreadable` under G-fail and reads as a pass.
 31. The behavioural suite carries an **absolute** assertion floor, hand-ratcheted to the measured case count,
     written as `if [[ "$cases" -lt <N> ]]` or `if (( cases < <N> ))` so that
     `scripts/guard-vacuity-floor.test.sh`'s shape-derived population recognises it — its `floor_lines_of()`
