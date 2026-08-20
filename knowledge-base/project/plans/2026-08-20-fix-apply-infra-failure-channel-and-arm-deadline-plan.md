@@ -431,7 +431,10 @@ notify-apply-failure:
       id: cause
       run: …                  # gh api …/runs/${{ github.run_id }}/jobs -> sanitized token
     - name: Email ops on a non-green apply run
-      continue-on-error: true # a Resend outage must not red an already-red run
+      # SUPERSEDED at review time (#7654 A2): `continue-on-error: true` was REMOVED. It bought
+      # nothing -- `notify-ops-email` already collapses a Resend outage to a warning -- while
+      # swallowing the composite's only hard failure (a missing `RESEND_API_KEY`), i.e. the case
+      # where the channel is silently unbuilt. The shipped step also carries `if: always()`.
       uses: ./.github/actions/notify-ops-email
       with: { subject: …, body: …, resend-api-key: ${{ secrets.RESEND_API_KEY }} }
 ```
@@ -983,7 +986,10 @@ suites — **acknowledged**, not folded in.
       `apply_target == 'manual-rerun'`, and (d) is false only when `preflight` succeeded and `apply`
       is `success` or `skipped`; whose `needs:` array is `[preflight, apply]`; which declares
       `timeout-minutes` ≤ 10 and job-level `permissions:` containing both `contents: read` and
-      `actions: read`; and whose `notify-ops-email` step declares `continue-on-error: true`.
+      `actions: read`; and whose `notify-ops-email` step declares `if: always()`.
+      **SUPERSEDED (#7654 A2):** this criterion originally required `continue-on-error: true` on
+      that step. The shipped guard asserts its ABSENCE, and asserts `if: always()` in its place;
+      mutation A2 (restoring `continue-on-error`) is driven RED.
 - [ ] **AC2** — both new steps carry a `name:` (so the suite's `extractStep`, which matches
       `^ {6}- name:`, can see them). The email body interpolates only `github.sha`,
       `github.run_id`, `github.repository`, `github.server_url`, `needs.apply.result` and the
@@ -1087,9 +1093,12 @@ change (`2026-08-14-my-gate-reserved-its-reassuring-message-for-its-alarming-con
    detect a predicate that fires on everything.
 6. **Given** `preflight` sets `skip=true` via the `[skip-web-platform-apply]` kill switch so `apply`
    is legitimately `skipped` on a green run, **then** no email is sent.
-7. **Given** Resend returns a non-2xx, **then** the job still concludes green via
-   `continue-on-error` and the composite's own `::warning::` is the only signal — the recorded
-   residual, asserted so it cannot silently become something else.
+7. **Given** Resend returns a non-2xx, **then** the composite collapses it to a `::warning::` and
+   that is the only signal — the recorded residual, asserted so it cannot silently become something
+   else. **SUPERSEDED (#7654 A2):** this row originally attributed the green conclusion to
+   `continue-on-error: true`. That was removed at review time, because it also swallowed a missing
+   `RESEND_API_KEY` — the case where the channel was never built at all. The Resend-outage
+   tolerance comes from the composite itself, not from the step's error handling.
 8. **Given** the `apply` job is cancelled at its job budget while the ARM step holds an unconfirmed
    id, **then** the `always()` sweep re-mints its token and re-pauses that monitor inside the grace
    window.
