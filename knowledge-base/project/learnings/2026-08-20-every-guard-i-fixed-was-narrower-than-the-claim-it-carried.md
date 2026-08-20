@@ -7,7 +7,7 @@ symptoms:
   - "26 defects found in a PR where all five suites, a 40-row mutation battery, actionlint, shellcheck and 68 CI checks were green"
   - "a boundedness guard passed while a second production `terraform apply` was added"
   - "a one-character `&&` -> `||` inverted a production gate with every assertion still passing"
-  - "a repo test committed into a live worktree, twice, moving a branch ref off six commits"
+  - "a repo test committed into a live worktree three times, moving a branch ref off six commits"
 root_cause: guard_narrower_than_claimed_property
 severity: critical
 tags: [code-review, guard-vacuity, mutation-testing, worktree-isolation, anti-vacuity-floor, operator-facing]
@@ -181,7 +181,7 @@ Three of mine were broken, and each produced a confident wrong reading:
   file** after the Bash CWD drifted out of the worktree — a guard that reports success when its
   operand is absent.
 
-### 9. The incident: a repo test escaped its sandbox and committed into a live worktree, twice
+### 9. The incident: a repo test escaped its sandbox and committed into a live worktree, three times
 
 `plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh` sandboxes **correctly** —
 `TMP=$(mktemp -d)`, its own bare repo, `WT_PARENT="$TMP/wt-parent"`. The escape is not the sandbox,
@@ -206,7 +206,23 @@ review commits, then checked the worktree out to `main` and pulled.
 which cause the reap/checkout damage — re-ran, and it escaped **again**: HEAD moved
 `63fa1f335` → `877ca02e7` with all four fixture commits back. The **commit-producing** sites are
 four *different* `( cd "$X"` subshells with no `&&`, mapping one-to-one onto the four fixture
-commits. The fifth unguarded site had no fixture to make it visible and is the worst:
+commits.
+
+**And "twice" was itself wrong — it was three times.** I wrote this file saying the worktree was
+corrupted twice, from memory. A third session read the reflog and found **three** distinct fixture
+groups, which reproduces exactly:
+
+```
+HEAD@{9-12}    877ca02e7 v12 / b54402aac v9 / e67fb636f victim2 / 06e273e11 victim
+HEAD@{15-18}   ce6be813a    / 1a65b0c25    / 4cb96d3a5    / c405bbac1
+HEAD@{21-23}   f12c45851    / 1af379313    / e0ddf70f4    (+ 45a1a24e7 victim)
+```
+
+So the first fix escaped **twice**, not once. The correction matters less than where it came from:
+every other count in this document was measured, and this one was remembered — and it was the one
+that was wrong. The fixture pins `GIT_COMMITTER_DATE=2025-01-01`, so the reflog's own dates are
+spoofed and a time-ordered scan hides the escapes; loose-object **mtime** is the one clock the
+fixture cannot touch. A durable artifact was available the whole time and I narrated instead. The fifth unguarded site had no fixture to make it visible and is the worst:
 `( cd "$SEED"` ends in **`git push origin main`**.
 
 The `( cd "$X" && … )` forms in the same file are **safe** because `&&` short-circuits — which is
@@ -249,7 +265,7 @@ substring instead of a boolean, a filename instead of a write, rows instead of s
 instead of a membership, one direction of a comparison instead of two.
 
 The corollary that cost the most time here: **this applies to the fix as well as to the code being
-fixed.** My guard for a sandbox escape closed two of five sites and I declared it verified; the
+fixed.** My guard for a sandbox escape closed two of seven sites and I declared it verified; the
 pass-2 upper bound I added shipped with no fixture until I noticed the suite count had not moved.
 A fix is exactly as unpinned as the blind spot it closes, because it is written after the tests
 and nothing forces coverage for it.
@@ -294,10 +310,13 @@ and nothing forces coverage for it.
    purpose in the command. **Prevention:** do not include probes that serve no purpose.
 9. **A backgrounded CI poll was denied** by `hr-monitor-not-run-in-background-for-polling`. Correct
    denial; switched to the Monitor tool. **Prevention:** none needed — the hook works.
-10. **The lease test corrupted the worktree twice, and the first fix was declared verified while
-    incomplete.** Recovery: recovered by SHA, then guarded all five sites. **Prevention:** after
-    guarding a sandbox escape, re-run and assert HEAD is UNCHANGED rather than inferring from the
-    guard's presence.
+10. **The lease test corrupted the worktree three times, and the first fix was declared verified
+    while incomplete.** Recovery: recovered by SHA, then guarded all **seven** sites — the five
+    commit/push subshells plus the two `cd "$WT_ACTOR"` reaper sites. I first reported this as
+    "twice" and as "five sites"; the reflog gives three, and `grep -c 'exit 90'` gives seven.
+    **Prevention:** after guarding a sandbox escape, re-run and assert HEAD is UNCHANGED rather
+    than inferring from the guard's presence — and take the count from the artifact (reflog,
+    object mtime) rather than from recollection.
 11. **A false claim was written into a commit message** — that the lease test "previously passed by
     writing to a live worktree", when the first run of it was already `rc=1 PASS: 30`. Recovery:
     amended with `--force-with-lease`. **Prevention:** apply the same claim-verification discipline
