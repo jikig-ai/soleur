@@ -22,7 +22,18 @@ trap 'rm -rf "$TMP"' EXIT
 
 # Resolved ONCE, with `pwd -P`: TMPDIR is routinely a symlink, and comparing an
 # unresolved $TMP against a resolved toplevel false-FAILS every call.
-TMP_REAL="$(cd "$TMP" && pwd -P)"
+TMP_REAL="$(cd "$TMP" && pwd -P)" || TMP_REAL=""
+# An EMPTY TMP_REAL would silently disable the containment check below, because the
+# pattern `"$TMP_REAL"/*` degrades to `/*`, which matches every absolute path — the
+# guard would return 0 for a live repository. That is the same fail-open shape this
+# whole helper exists to close, so it is asserted rather than assumed. `readonly`
+# stops a later assignment from reintroducing it.
+case "$TMP_REAL" in
+  /*) : ;;
+  *)  echo "FATAL: could not resolve the fixture root '$TMP' to an absolute path — refusing, an empty root makes the containment check match everything" >&2
+      exit 2 ;;
+esac
+readonly TMP_REAL
 
 # cd into a fixture, or refuse. Two arms, and the second is why `cd X || exit` is
 # not enough:
