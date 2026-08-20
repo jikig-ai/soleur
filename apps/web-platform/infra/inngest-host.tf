@@ -2,7 +2,7 @@
 #
 # One dedicated Hetzner host running the self-hosted OSS Inngest server
 # (`inngest start`, pinned v1.19.4) as a systemd unit with host-local Redis (AOF
-# on a block volume) + a distinct non-prod Postgres backend, on the existing
+# on a block volume) + a Postgres backend, on the existing
 # private network (network.tf) at 10.0.1.40. EXTRACTED from the co-located web
 # host so exactly-one-instance is enforced by TOPOLOGY, not a runtime role-guard:
 # OSS Inngest v1.x is single-writer and two servers on the same prod Postgres
@@ -11,6 +11,16 @@
 # standby (ADR-143, #6459) — a different host from the fsn1 .11 retired 2026-07-17 (#6538). Its
 # private IP is in this host's :8288/:8289 allowlist (web_host_private_ips below), propagated to
 # the running host via the `inngest-host-replace` dispatch (#6608 window), NOT the merge-apply.
+#
+# ⚠ BACKEND QUALIFIER CORRECTED (#7462, 2026-08-20). The third line above read "a distinct
+# NON-PROD Postgres backend". That described the dark pre-cutover configuration and stopped
+# being true on 2026-07-23T15:46Z: `op=arm` writes the PROD DSN into INNGEST_POSTGRES_URI and
+# `op=rollback` has no inverse for that write, so the prod DSN is the post-first-arm steady
+# state of that slot (ADR-100 addendum 2026-08-20). The qualifier is DROPPED rather than
+# re-pinned to "prod", because the backend's identity is runtime state held in Doppler
+# soleur-inngest/prd — it is not a property of this file, and a re-pin would go stale the same
+# way. What this file DOES own is the single-writer topology asserted immediately above, and
+# that is unchanged.
 #
 # STRUCTURAL PRECEDENT: zot-registry.tf (ADR-096) / git-data.tf (ADR-068), NOT the
 # co-located inngest.tf. inngest.tf provisions keys/secrets for the ON-web-host

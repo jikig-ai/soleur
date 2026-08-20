@@ -763,6 +763,7 @@ call_flush_latch_count() { # $1 = rows | empty | fail
   FLC_OUT=$(
     eval "$(cat "$FLC_FN")"
     # Stub the ONLY external command the reader runs. Defined AFTER the eval so it wins.
+    # shellcheck disable=SC2317  # invoked indirectly, by the _flush_latch_count eval'd above
     doppler() {
       printf '%s\n' "$*" > "$FL_ARGV"
       case "$mode" in
@@ -784,6 +785,7 @@ call_flush_latch_count() { # $1 = rows | empty | fail
 call_flush_latch_count rows
 assert "#7462 reader counts matching rows (2 rows -> '2', got '$FLC_OUT')" "[[ '$FLC_OUT' == '2' ]]"
 assert "#7462 reader always returns 0 so the DECISION owns the verdict (rc=$FLC_RC)" "[[ '$FLC_RC' -eq 0 ]]"
+# shellcheck disable=SC2034  # read inside the eval'd assert conditions below
 FLC_ARGV_SEEN="$(cat "$FL_ARGV")"
 # ARGV FIDELITY. Each of these is a way the gate could be silently defeated while still "working".
 assert "#7462 reader queries via prd_terraform (the betterstack-query cred config)" \
@@ -843,6 +845,7 @@ assert "arm) G3.7 aborts unless the outcome is exactly 'clear' (fail-closed by c
   "[[ \$(grep -cF 'if [[ \"\$FL_OUTCOME\" != \"clear\" ]]; then exit 1; fi' '$ARM_FILE') -eq 1 ]]"
 assert "arm) no G3.7 outcome arm carries its own exit (the gate decides)" \
   "! grep -qE '^[[:space:]]+(clear|latched|unreadable)\\)[^#]*exit 1' '$ARM_FILE'"
+# shellcheck disable=SC2016  # literal search pattern, not an expansion (G3ABORT_LN precedent)
 FL_GATE_LN=$(grep -nF 'if [[ "$FL_OUTCOME" != "clear" ]]; then exit 1; fi' "$ARM_FILE" | head -1 | cut -d: -f1)
 FL_PGW_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1)
 FL_ARMW_LN=$(grep -nE "secrets set INNGEST_CUTOVER_FLIP " "$ARM_FILE" | head -1 | cut -d: -f1)

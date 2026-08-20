@@ -821,6 +821,31 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
      every app `inngest.send()` to the host is rejected → `op=rearm` HTTP 502). On MISMATCH,
      reconcile the app to the host's key + redeploy **before** re-running `op=arm` — see §2.4
      key-reconcile below.
+   - **G3.6 diagnostic-boot HARD GATE (#7462):** refuses to arm while `INNGEST_DIAGNOSTIC_BOOT` is
+     set on `soleur-inngest/prd`, and fails closed if that value cannot be read. `inngest-bootstrap.sh`
+     has stated this precondition in prose since the diagnostic path existed ("This is NOT a cutover
+     state: clear INNGEST_DIAGNOSTIC_BOOT before arming") and nothing enforced it. With the flag set
+     the host renders an SQLite-only ExecStart with `--sdk-url` on a closed loopback port, so it adopts
+     **no** function registry: arming would run the FSM to `done`, quiesce the web scheduler and
+     complete the cutover onto a host that serves nothing — reporting success while production crons
+     stop. **Remediation:** clear `INNGEST_DIAGNOSTIC_BOOT` on `soleur-inngest/prd`, let the host
+     re-render its ExecStart, then re-run `op=arm`. No SSH.
+   - **G3.7 pre-flush-latch gate (#7462):** refuses to arm — **before any prod write** — when the
+     dedicated host's Better Stack log source carries a `"reason":"flip-complete"` or
+     `"reason":"refuse-rearm-after-done"` row inside `FLUSH_LATCH_SINCE` (default `365d`), i.e. when a
+     `FLUSHALL` has already been performed for this host. Such an arm was always doomed: the monotonic
+     latch on `/mnt/data` refuses it on-host and drives the flag to terminal `aborted`. What the gate
+     removes is the damage done on the way there — G4 wrote both prod secrets and G5 parked
+     `INNGEST_CUTOVER_FLIP` at `armed`, a value **inside** the flip guard's prod-start allowlist, so a
+     reboot in that ~30-60s window would start a SECOND prod scheduler. Fails closed if Better Stack
+     cannot be read (G6 confirms over the same path, so an unconfirmable arm is refused rather than
+     dispatched). It is a **pre-filter, not the authority** — the on-host latch is what actually
+     prevents a second `FLUSHALL`, and this gate can only ever ADD a refusal.
+     **Remediation:** there is none while the latch stands, and `op=resume` is not it (its G1 accepts
+     `done` only). The latch clears only when the host's `/mnt/data` volume is recut, via the
+     `inngest-host-replace` maintenance window — never by SSH. If that recut has ALREADY happened but
+     the old rows have not aged out, set the repo variable `FLUSH_LATCH_SINCE` to a window starting
+     after it (e.g. `1h`) and re-dispatch; that narrows this pre-filter only.
    - **G4/G5 writes:** `INNGEST_POSTGRES_URI` → `INNGEST_HEARTBEAT_URL` → `INNGEST_CUTOVER_FLIP`
      set to `armed` (last), each via **stdin** (never argv), exit-gated. The enabled 30s poll
      timer then drives the forward FSM **stop → `FLUSHALL` → assert `DBSIZE==0` → start → `done`**.
