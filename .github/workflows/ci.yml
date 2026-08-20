@@ -610,9 +610,14 @@ jobs:
   # DELIBERATELY NOT A REQUIRED CHECK, and deliberately NOT continue-on-error.
   # `continue-on-error: true` would report green on failure, which is worse than
   # no job at all. Instead the job fails honestly and is simply absent from
-  # scripts/required-checks.txt, so a red here is visible without blocking an
-  # unrelated PR on a first-run baseline. Promoting it to required is a separate,
-  # deliberate decision once the warning ratchet has been driven down.
+  # scripts/required-checks.txt. Promoting it is tracked in #7648.
+  #
+  # This does NOT mean lint findings cannot block a merge, and an earlier version
+  # of this comment said it did. apps/web-platform/test/eslint-config.test.ts runs
+  # in the required `test` context and asserts both that eslint exits 0 and a
+  # per-rule ratchet, so an error-severity finding or a GROWING rule count blocks
+  # there. What being non-required buys is that this job's own red -- a readable
+  # stylish log, and the file-count floor below -- does not gate an unrelated PR.
   lint-webplat:
     runs-on: ubuntu-latest
     steps:
@@ -634,28 +639,22 @@ jobs:
         working-directory: apps/web-platform
 
       # The step above exits 0 on a config that selected almost nothing:
-      # `export default []` linted 11 of 2019 files and reported success. This
-      # job's entire anti-vacuity story otherwise lived in the vitest guard
-      # suite — a different job, on a different matrix, that this one does not
-      # depend on. A gate whose green is only trustworthy because some other
-      # gate is also green is not a gate. The floor and its derivation are the
-      # same ones apps/web-platform/test/eslint-config.test.ts pins; both are
-      # named MIN_FILES_SCANNED so a grep finds the pair.
+      # `export default []` linted 11 of 2019 files and reported success. This job's
+      # entire anti-vacuity story otherwise lived in the vitest guard suite — a different
+      # job, on a different matrix, that this one does not depend on. A gate whose green
+      # is only trustworthy because some other gate is also green is not a gate.
+      #
+      # The floor VALUE is not hand-copied: it is read out of the guard suite that owns
+      # it, so the two cannot drift. The first version hardcoded 1900 here and the vitest
+      # side asserted only that the identifier appeared somewhere in this block — so
+      # re-pinning the guard upward would have left this copy silently decorative.
+      #
+      # The argv is not hardcoded either. It comes from the `lint` script, for the same
+      # reason the guard suite's lintScriptArgs() does: a hardcoded `eslint .` means
+      # narrowing `lint` to `eslint lib` lints 106 files in the step above while this one
+      # still scans 2019 and reports the floor cleared.
       - name: ESLint anti-vacuity floor
-        run: |
-          node -e '
-            const { execFileSync } = require("node:child_process");
-            const MIN_FILES_SCANNED = 1900;
-            const out = execFileSync("./node_modules/.bin/eslint", [".", "-f", "json"], {
-              encoding: "utf8", maxBuffer: 256 * 1024 * 1024, timeout: 300000,
-            });
-            const scanned = JSON.parse(out).length;
-            console.log(`eslint scanned ${scanned} files (floor ${MIN_FILES_SCANNED})`);
-            if (scanned < MIN_FILES_SCANNED) {
-              console.log(`::error::eslint scanned ${scanned} files, below the anti-vacuity floor of ${MIN_FILES_SCANNED}. The step above passed without linting the codebase.`);
-              process.exit(1);
-            }
-          '
+        run: node scripts/eslint-vacuity-floor.mjs
         working-directory: apps/web-platform
 
   web-platform-build:

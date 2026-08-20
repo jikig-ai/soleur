@@ -2,6 +2,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { parse as parseYaml } from "yaml";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -23,17 +25,24 @@ const ESLINT_BIN = resolve(APP_ROOT, "node_modules/.bin/eslint");
 const SELF = resolve(__dirname, "eslint-config.test.ts");
 
 /**
- * Pinned baseline. Derived from the as-written config by running the same
- * command this suite runs — never from a prose estimate.
+ * Pinned baseline, as a RATCHET rather than an equality (see the assertion for why).
+ * Derived from the as-written config by running the same command this suite runs —
+ * never from a prose estimate. Re-derive, and re-pin DOWNWARD, with:
+ *
+ *   cd apps/web-platform && ./node_modules/.bin/eslint . -f json > /var/tmp/r.json
+ *   node -e 'const r=require("/var/tmp/r.json");
+ *            const b={}; for (const f of r) for (const m of f.messages)
+ *              b[m.ruleId ?? "(unused-disable-directive)"] = (b[m.ruleId ?? "(unused-disable-directive)"]??0)+1;
+ *            console.log(r.reduce((n,f)=>n+f.errorCount+f.warningCount,0), b)'
  */
 const BASELINE_FINDINGS = 192;
 
 /**
- * Anti-vacuity floor, re-derived 2026-08-20 against 2019 actually-scanned files:
+ * Anti-vacuity floor, re-derived 2026-08-20 against 2020 actually-scanned files:
  *
  *   ./node_modules/.bin/eslint . -f json | node -e '…JSON.parse(…).length'
  *
- * This used to be 500, which was NOT a floor. 1880 of the 2019 scanned files
+ * This used to be 500, which was NOT a floor. 1881 of the 2020 scanned files
  * carry zero findings, so a config that ignored 1519 of those finding-free
  * files produced results.length = 500, total = 192 and a byte-identical
  * byRule — every assertion in this suite green with 75.2% of the tree
@@ -43,15 +52,24 @@ const BASELINE_FINDINGS = 192;
 const MIN_FILES_SCANNED = 1900;
 
 /**
- * Per-directory coverage. The global floor above bounds how much of the tree
- * can vanish IN TOTAL; it cannot see a whole LAYER dropped, because the layer
- * is smaller than the headroom — `ignores: ["app/api/**"]` removes 109
- * finding-free files and still clears 1900. These floors make each layer's
- * disappearance its own failure, and they name the layer in the message.
+ * Per-directory coverage. The global floor above bounds how much of the tree can vanish
+ * IN TOTAL; it cannot see a whole LAYER dropped, because a layer is smaller than the
+ * headroom — `ignores: ["app/api/**"]` removes 109 finding-free files and still clears
+ * 1900. These floors make each layer's disappearance its own failure, and name the layer.
  *
- * Measured (same run as above): test 1142, server 317, components 220,
- * app 165, lib 106. Floors sit ~12% below so ordinary churn does not red the
- * suite while any layer-scale removal does.
+ * COVERS EVERY LAYER ESLINT SCANS, not just the big five. The first version floored
+ * test/server/components/app/lib only, leaving scripts/ 30, e2e/ 16 and hooks/ 13 — 59
+ * files, comfortably inside the global floor's 120-file headroom — assertable-away by a
+ * config change alone, with no test edit at all.
+ *
+ * Measured 2026-08-20: test 1142, server 317, components 220, app 165, lib 106,
+ * scripts 30, e2e 16, hooks 13. Floors sit 12-15% below (not "~12%" — the real spread is
+ * 11.7% for test/ to 15.2% for app/) so ordinary churn does not red the suite while any
+ * layer-scale removal does.
+ *
+ * The remaining 11 scanned files — 10 at the package root and 1 under infra/ — carry no
+ * layer floor: a floor of 1 is not a floor, and it would red on a single file move. They
+ * are covered only by the global count, which is stated here rather than left implicit.
  */
 const MIN_FILES_BY_DIR: Record<string, number> = {
   test: 1000,
@@ -59,6 +77,9 @@ const MIN_FILES_BY_DIR: Record<string, number> = {
   components: 190,
   app: 140,
   lib: 90,
+  scripts: 25,
+  e2e: 13,
+  hooks: 11,
 };
 
 /** Per-rule breakdown, so a drift names the rule that moved, not just a delta. */
@@ -75,6 +96,12 @@ const BASELINE_BY_RULE: Record<string, number> = {
   "no-useless-escape": 10,
   "react-hooks/exhaustive-deps": 6,
   "require-yield": 11,
+};
+
+type Step = {
+  name?: string;
+  run?: string;
+  "continue-on-error"?: boolean;
 };
 
 type EslintFileResult = {
@@ -245,37 +272,48 @@ describe("Guard 1 — the lint script is non-interactive and terminates", () => 
     expect(status).toBe(0);
   }, 600_000);
 
-  it("CI carries a job that actually runs the lint script", () => {
-    expect.assertions(4);
-    const ci = readFileSync(
-      resolve(REPO_ROOT, ".github/workflows/ci.yml"),
+  it("CI carries a job that actually runs the lint script, and can fail", () => {
+    expect.assertions(6);
+    // Parsed as YAML, not grepped. Every text-matching version of this test lost: the
+    // first matched a bare `MIN_FILES_SCANNED` that the step's own `#` comment supplied,
+    // and the second still asserted the step NAME and the token independently — so
+    // replacing the whole floor step with `run: echo MIN_FILES_SCANNED` kept it green,
+    // and nothing could see a `continue-on-error: true` added to the lint step.
+    const wf = parseYaml(
+      readFileSync(resolve(REPO_ROOT, ".github/workflows/ci.yml"), "utf8"),
+    ) as { jobs?: Record<string, { "continue-on-error"?: boolean; steps?: Step[] }> };
+    const job = wf.jobs?.["lint-webplat"];
+    expect(job).toBeDefined();
+    const steps = job?.steps ?? [];
+
+    const lintStep = steps.find((st) => (st.run ?? "").trim() === "npm run lint");
+    expect(lintStep).toBeDefined();
+    const floorStep = steps.find((st) =>
+      (st.run ?? "").includes("eslint-vacuity-floor.mjs"),
+    );
+    expect(floorStep).toBeDefined();
+
+    // `continue-on-error` reports green on failure, which the job's own comment calls
+    // worse than having no job at all. Checked on the job AND on both steps.
+    expect(
+      [
+        job?.["continue-on-error"] ? "job" : "",
+        lintStep?.["continue-on-error"] ? "lint step" : "",
+        floorStep?.["continue-on-error"] ? "floor step" : "",
+      ].filter(Boolean),
+    ).toEqual([]);
+
+    // The floor step must be a real script on disk, and that script must both read the
+    // floor from this file and be able to fail. A step that merely mentions the name
+    // satisfies neither.
+    const floorSrc = readFileSync(
+      resolve(APP_ROOT, "scripts/eslint-vacuity-floor.mjs"),
       "utf8",
     );
-    // Nothing in this suite reaches the CI job, so deleting the job — or just
-    // its ESLint step — left all three guards green with zero linting on any
-    // PR. Scoped to the job's own block so a same-named step elsewhere in the
-    // workflow cannot satisfy it.
-    const start = ci.indexOf("\n  lint-webplat:\n");
-    expect(start).toBeGreaterThan(-1);
-    const rest = ci.slice(start + 1);
-    const nextJob = rest.search(/\n {2}[a-zA-Z0-9_-]+:\n/);
-    // Comment lines are stripped before matching. The first version of this
-    // test asserted a bare `MIN_FILES_SCANNED` against the raw block, and the
-    // block's own explanatory YAML comment names that identifier — so deleting
-    // the entire floor step left this test green. That is the defect class
-    // this whole PR exists to close, reintroduced by its own fix.
-    const block = (nextJob === -1 ? rest : rest.slice(0, nextJob))
-      .split("\n")
-      .filter((l) => !l.trimStart().startsWith("#"))
-      .join("\n");
-    expect(block).toMatch(/^\s+run:\s+npm run lint$/m);
-    // The floor step is the job's own anti-vacuity story. Without it the job
-    // reports green having linted 11 of 2019 files (`export default []`
-    // exits 0), and its only floor lived in a different job on a different
-    // matrix. Anchored on the step's `- name:` key, which a `#` comment line
-    // cannot produce, in addition to the identifier itself.
-    expect(block).toMatch(/^\s+- name: ESLint anti-vacuity floor$/m);
-    expect(block).toMatch(/MIN_FILES_SCANNED/);
+    expect(floorSrc).toMatch(/process\.exit\(1\)/);
+    // ...and it must read the floor from here rather than hand-copying the number, which
+    // is how the two silently drifted apart in the first version.
+    expect(floorSrc).toMatch(/MIN_FILES_SCANNED = \(\\d\+\)/);
   });
 });
 
@@ -298,8 +336,8 @@ describe("Guard 2 — the finding set is pinned", () => {
     expect(short).toEqual([]);
   }, 600_000);
 
-  it("reports exactly the pinned baseline finding count", () => {
-    expect.assertions(2);
+  it("reports no more than the pinned baseline, per rule", () => {
+    expect.assertions(3);
     const { results } = runEslint();
     const total = results.reduce(
       (n, f) => n + f.errorCount + f.warningCount,
@@ -310,9 +348,9 @@ describe("Guard 2 — the finding set is pinned", () => {
     for (const f of results) {
       for (const m of f.messages) {
         // A fatal parse error also carries a null ruleId, so bucketing on
-        // `?? "(unused-disable-directive)"` alone reported an unparseable file
-        // as a stale disable directive. Branch on `fatal` FIRST and count it
-        // separately — an unparseable file is not a lint finding.
+        // `?? "(unused-disable-directive)"` alone reported an unparseable file as a
+        // stale disable directive. Branch on `fatal` FIRST and count it separately —
+        // an unparseable file is not a lint finding.
         if (m.fatal) {
           fatal += 1;
           continue;
@@ -325,93 +363,179 @@ describe("Guard 2 — the finding set is pinned", () => {
       }
     }
     expect(fatal).toBe(0);
-    // Printed on failure so a drift names the rule that moved rather than only
-    // the delta.
-    expect({ total, byRule }).toEqual({ total: BASELINE_FINDINGS, byRule: BASELINE_BY_RULE });
+
+    // A RATCHET, deliberately one-sided — this was exact equality, and exact equality
+    // here is merge-blocking in the direction the design explicitly rejected.
+    //
+    // This file matches vitest.config.ts's `unit` project, so it runs in `test-webplat`,
+    // which feeds the `test` aggregator, which IS in scripts/required-checks.txt. The
+    // ci.yml comment, this config's own ratchet note and work/SKILL.md all said a lint
+    // finding is "a signal to read, not a merge blocker"; with a two-sided pin all three
+    // were false. Worse, it was blocking in BOTH directions: FIXING a warning also
+    // reddened a required check, which directly contradicts "it can be driven down file
+    // by file". Measured: 139 of 2020 files carry findings, 111 of 192 of them under test/, and
+    // 49 of those files were touched on main in the last 60 days.
+    //
+    // So: a regression blocks, an improvement does not. A rule that appears with no
+    // baseline entry is a hard failure — that is the "cannot grow silently" half, and it
+    // is what makes the one-sided form still a ratchet rather than a rubber stamp.
+    // Re-pin downward with the derivation command in BASELINE_FINDINGS' docstring.
+    const grew = Object.entries(byRule)
+      .filter(([k, n]) => n > (BASELINE_BY_RULE[k] ?? 0))
+      .map(([k, n]) => `${k}: ${n} > baseline ${BASELINE_BY_RULE[k] ?? 0}${k in BASELINE_BY_RULE ? "" : " (NEW RULE — no baseline entry)"}`);
+    expect(grew).toEqual([]);
+    expect(total).toBeLessThanOrEqual(BASELINE_FINDINGS);
   }, 600_000);
 });
 
 /**
- * The source of this file with comments removed. Every self-guard below reads
- * THIS, not the raw text.
+ * The harness's self-guard, over the TYPESCRIPT AST rather than over source text.
  *
- * The previous version asserted against the raw source under the claim that
- * "a comment can name `toEqual`, but it cannot produce this construct". That
- * claim is false — a comment can contain any construct verbatim — and the
- * mutation it licensed was the cheap one: comment out both assertions, paste
- * the pinned text back as a `//` line, and the self-guard stays green over a
- * suite that asserts nothing.
+ * Two earlier versions matched regexes against this file's own source and both lost.
+ * The first matched raw text, so commenting the assertions out and pasting the pinned
+ * text back as a `//` line kept it green. The second stripped comment lines — and lost
+ * to two cheaper launderings: a `const _pinned = ["expect({ total, byRule }).toEqual(…)"]`
+ * string array satisfied every regex while Guard 2 was deleted outright, and a block
+ * comment OPENED MID-LINE left its body starting with ordinary code tokens, so the
+ * stripper skipped it and the pinned assertion was inert.
+ *
+ * Text matching cannot win this: the next laundering is a template literal, or a line
+ * split. An AST can — a comment, a string literal and a commented-out region simply are
+ * not CallExpressions, so none of them can satisfy an assertion about one.
  */
-function selfSourceWithoutComments(): string {
-  return readFileSync(SELF, "utf8")
-    .split("\n")
-    .map((line) => {
-      const t = line.trimStart();
-      // Whole-line comments, including a block comment's opener and its body
-      // lines (which start with `*`). A regex-based `/\*...\*/` sweep is not
-      // used here: this file contains the glob literal `**` + `/` + `*` in a
-      // fixture string, which opens a block comment the sweep then runs to
-      // the end of the file on.
-      if (t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")) return "";
-      // Trailing comments. The lookbehind keeps `https:` + `//`, a path's
-      // doubled separator, and an escaped separator inside a regex literal
-      // from being read as the start of one.
-      return line.replace(/(?<![:\\/])\/\/.*$/, "");
-    })
-    .join("\n");
+type SelfFacts = {
+  itCount: number;
+  describes: string[];
+  skipMarkers: string[];
+  hasRatchet: boolean;
+  hasNewRuleGate: boolean;
+  hasFloorAssertion: boolean;
+};
+
+function selfFacts(): SelfFacts {
+  // `typescript` is already a devDependency (the repo typechecks with it), so this adds
+  // no dependency surface.
+  const src = ts.createSourceFile(
+    SELF,
+    readFileSync(SELF, "utf8"),
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const facts: SelfFacts = {
+    itCount: 0,
+    describes: [],
+    skipMarkers: [],
+    hasRatchet: false,
+    hasNewRuleGate: false,
+    hasFloorAssertion: false,
+  };
+  const text = (n: ts.Node) => n.getText(src).replace(/\s+/g, " ");
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      if (ts.isIdentifier(callee)) {
+        if (callee.text === "it") facts.itCount += 1;
+        if (callee.text === "describe" && node.arguments.length > 0) {
+          const a = node.arguments[0];
+          if (ts.isStringLiteralLike(a)) facts.describes.push(a.text);
+        }
+      }
+      // `it.skip(` / `describe.only(` / `test.todo(` as a real call, not as text.
+      if (
+        ts.isPropertyAccessExpression(callee) &&
+        ts.isIdentifier(callee.expression) &&
+        ["it", "describe", "test"].includes(callee.expression.text) &&
+        ["skip", "only", "todo", "failing", "concurrent"].includes(callee.name.text) &&
+        callee.name.text !== "concurrent"
+      ) {
+        facts.skipMarkers.push(`${callee.expression.text}.${callee.name.text}`);
+      }
+      // The ratchet, matched on the CALL and its argument shape. Weakening it to a
+      // predicate any constant satisfies (`toBeGreaterThanOrEqual(0)`) removes the shape.
+      if (
+        ts.isPropertyAccessExpression(callee) &&
+        callee.name.text === "toBeLessThanOrEqual" &&
+        text(callee.expression) === "expect(total)" &&
+        node.arguments.length === 1 &&
+        text(node.arguments[0]) === "BASELINE_FINDINGS"
+      ) {
+        facts.hasRatchet = true;
+      }
+      // The half that makes a one-sided bound still a ratchet: a rule that grew, or that
+      // has no baseline entry at all, must be a hard failure.
+      if (
+        ts.isPropertyAccessExpression(callee) &&
+        callee.name.text === "toEqual" &&
+        text(callee.expression) === "expect(grew)" &&
+        node.arguments.length === 1 &&
+        text(node.arguments[0]) === "[]"
+      ) {
+        facts.hasNewRuleGate = true;
+      }
+      if (
+        ts.isPropertyAccessExpression(callee) &&
+        callee.name.text === "toBeGreaterThanOrEqual" &&
+        text(callee.expression) === "expect(results.length)" &&
+        node.arguments.length === 1 &&
+        text(node.arguments[0]) === "MIN_FILES_SCANNED"
+      ) {
+        facts.hasFloorAssertion = true;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(src);
+  return facts;
 }
 
 describe("Harness — the guard's own dispatch", () => {
-  it("pins the baseline by exact equality, not a predicate any constant satisfies", () => {
-    expect.assertions(2);
-    const src = selfSourceWithoutComments();
-    // Anchored on the comparison's CALL SHAPE rather than a bare token, and
-    // read from comment-stripped source so pasting the shape into a comment
-    // cannot satisfy it.
-    expect(src).toMatch(
-      /expect\(\{ total, byRule \}\)\.toEqual\(\{\s*total: BASELINE_FINDINGS,\s*byRule: BASELINE_BY_RULE,?\s*\}\)/,
-    );
-    // The floor must compare against the named constant, never an inline 0 —
-    // `>= 0` is satisfied by a run that scanned nothing.
-    expect(src).toMatch(
-      /expect\(results\.length\)\.toBeGreaterThanOrEqual\(MIN_FILES_SCANNED\)/,
-    );
+  it("pins the ratchet and the floor as real calls rather than as text", () => {
+    expect.assertions(3);
+    const f = selfFacts();
+    // All three were satisfiable by a string literal before they moved to the AST.
+    expect(f.hasRatchet).toBe(true);
+    expect(f.hasNewRuleGate).toBe(true);
+    expect(f.hasFloorAssertion).toBe(true);
   });
 
   it("keeps its own floors above the values that would make them vacuous", () => {
     expect.assertions(4);
     // A baseline of 0 would make the pin unfalsifiable by an inert config.
     expect(BASELINE_FINDINGS).toBeGreaterThan(0);
-    // Closing the inline `>= 0` form above left the other half open: setting
-    // the CONSTANT to 0 satisfied `toBeGreaterThanOrEqual(MIN_FILES_SCANNED)`
-    // for a run that scanned nothing. 1500 is well under today's 2019 and well
-    // over the 500 that let 75% of the tree go unlinted.
-    expect(MIN_FILES_SCANNED).toBeGreaterThanOrEqual(1500);
-    // Per-layer floors are only floors while they are positive, and only
-    // coverage while every measured layer is present.
-    expect(Object.keys(MIN_FILES_BY_DIR).sort()).toEqual([
-      "app",
-      "components",
-      "lib",
-      "server",
-      "test",
-    ]);
-    expect(
-      Object.entries(MIN_FILES_BY_DIR).filter(([, n]) => n < 50),
-    ).toEqual([]);
+    // Setting the CONSTANT to 0 satisfied `toBeGreaterThanOrEqual(MIN_FILES_SCANNED)`
+    // for a run that scanned nothing. 1900 is today's value against 2019 actual; the
+    // bound sits just under it because a harness floor that sanctions a quarter of the
+    // tree going unlinted is the same defect one level up — at >= 1500, ignoring 519
+    // finding-free files kept every assertion in this suite green.
+    expect(MIN_FILES_SCANNED).toBeGreaterThanOrEqual(1850);
+    // Per-layer floors are only floors while they are positive, and only coverage while
+    // every layer eslint actually scans is present. SUPERSET, not exact equality: the
+    // previous exact-equality form meant ADDING a floor for an uncovered layer FAILED
+    // the harness, so the self-guard actively forbade improving coverage.
+    const required = ["app", "components", "e2e", "hooks", "lib", "scripts", "server", "test"];
+    expect(required.filter((d) => !(d in MIN_FILES_BY_DIR))).toEqual([]);
+    expect(Object.entries(MIN_FILES_BY_DIR).filter(([, n]) => n < 10)).toEqual([]);
   });
 
   it("cannot be neutered by skipping or deleting its tests", () => {
-    expect.assertions(2);
-    const src = selfSourceWithoutComments();
-    // `it.skip(` on both Guard 2 tests left the source text every regex above
-    // matches completely untouched, and the suite reported green having run
-    // neither. `.only` is the same hole from the other side: it silently
-    // deselects every sibling.
-    expect(src).not.toMatch(/\b(?:describe|it|test)\.(?:skip|only|todo|failing)\s*\(/);
-    // An assertion-count floor covers a GUTTED body; it cannot see a deleted
-    // one. Ten `it(` blocks exist today across Guards 1-3 and this harness.
-    expect((src.match(/(?<![.\w])it\(/g) ?? []).length).toBeGreaterThanOrEqual(10);
+    expect.assertions(3);
+    const f = selfFacts();
+    // `it.skip(` on both Guard 2 tests left every byte the old regexes matched untouched.
+    // As AST nodes these are unmistakable, and a string containing ".skip(" is not one.
+    expect(f.skipMarkers).toEqual([]);
+    // An assertion-count floor covers a GUTTED body; it cannot see a DELETED one. The
+    // floor sits AT today's count (15), not below it: at >= 10 against 14 actual, all three
+    // Guard 2 tests plus one more could be deleted with this green.
+    expect(f.itCount).toBeGreaterThanOrEqual(15);
+    // Counting is not coverage — 14 blocks satisfy a count regardless of WHICH 14. The
+    // describe SET is what pins that every guard is still present.
+    expect(f.describes.map((d) => d.split(" ")[0] + d.split(" ")[1]).sort()).toEqual([
+      "Guard1",
+      "Guard2",
+      "Guard3",
+      "Harness—",
+    ]);
   });
 });
 
@@ -477,13 +601,31 @@ function braceExpansionResolutions(): { path: string; version: string }[] {
 }
 
 describe("Guard 3 — the dependency tree stays repaired", () => {
+  it("keeps its own floors on their major line and off the bare X.0.0", () => {
+    expect.assertions(2);
+    // The python sibling grew this check because zeroing every threshold there exited 0
+    // with a clean summary. This mirror had NO equivalent: setting 1, 2 and 5 all to
+    // "0.0.0" passed all fourteen tests and declared every copy in the tree patched.
+    const bad = Object.entries(BRACE_EXPANSION_FLOORS)
+      .filter(([, v]) => typeof v === "string")
+      .filter(([major, v]) => {
+        const p = (v as string).split(".").map(Number);
+        return p[0] !== Number(major) || (p[1] === 0 && p[2] === 0);
+      })
+      .map(([major, v]) => `line ${major} floor ${v} is off its major line or is the bare ${major}.0.0`);
+    expect(bad).toEqual([]);
+    // The unsatisfiable lines are unsatisfiable BY DESIGN (see the header). Flipping
+    // either to a string would silently declare a 3.x or 4.x copy patched.
+    expect([BRACE_EXPANSION_FLOORS[3], BRACE_EXPANSION_FLOORS[4]]).toEqual([null, null]);
+  });
+
   it("resolves every brace-expansion at or above its own line's patched floor", () => {
     expect.assertions(2);
     const found = braceExpansionResolutions();
-    // Anti-vacuity: an empty set satisfies "every member is patched" trivially.
-    // If this ever legitimately reaches zero, delete the guard deliberately
-    // rather than letting it pass while asserting nothing.
-    expect(found.length).toBeGreaterThanOrEqual(1);
+    // Anti-vacuity floored at the MEASURED population, not at 1. At >= 1 the matcher
+    // could be narrowed until two of the three resolutions were unwatched and this
+    // still passed.
+    expect(found.length).toBeGreaterThanOrEqual(3);
     const verdicts = found.map(({ path, version }) => {
       const major = Number(version.split(".")[0]);
       const floor = Object.prototype.hasOwnProperty.call(
@@ -522,13 +664,17 @@ describe("Guard 3 — the dependency tree stays repaired", () => {
     expect(readPkg().overrides?.["brace-expansion"]).toBeUndefined();
   });
 
-  it("gives rimraf's minimatch@9 a 2.x brace-expansion, not the hoisted 5.x", () => {
+  it("nests the three major lines independently instead of flattening them", () => {
     expect.assertions(1);
-    const rimraf = braceExpansionResolutions().find((r) =>
-      r.path.startsWith("node_modules/rimraf/"),
-    );
-    // Proves the repair is not scoped to the ESLint stack alone.
-    expect(rimraf?.version.split(".")[0]).toBe("2");
+    // The property wanted is that removing the blanket override let each consumer keep
+    // the major its minimatch needs — minimatch@3 wants ^1, rimraf's minimatch@9 wants
+    // ^2, minimatch@10 wants ^5. Asserting it as a SET rather than as
+    // `rimraf?.version` avoids a failure mode that names the wrong cause: rimraf is a
+    // TRANSITIVE dependency, so a Dependabot bump that drops it entirely would red this
+    // with "expected undefined to be '2'" under a test claiming the 2.x line regressed.
+    expect(
+      [...new Set(braceExpansionResolutions().map((r) => r.version.split(".")[0]))].sort(),
+    ).toEqual(["1", "2", "5"]);
   });
 
   it("expands a brace glob without the `expand is not a function` crash", () => {

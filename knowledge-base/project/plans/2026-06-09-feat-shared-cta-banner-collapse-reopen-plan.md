@@ -24,6 +24,13 @@ brand_survival_threshold: none
 4. **Up-chevron aligned to the repo's existing form.** Use `<polyline points="5 12 12 5 19 12" />` (+ optional stem `<line x1="12" y1="19" x2="12" y2="5" />`), the exact up-chevron already in `chat-input.tsx:691-694`, instead of an arbitrary lucide variant — visual + maintenance consistency.
 
 ### New Considerations Discovered
+> **Superseded 2026-08-20 (#1327):** the bullet below is no longer true. `apps/web-platform`
+> now carries an ESLint 9 flat config (`apps/web-platform/eslint.config.mjs`), `npm run lint`
+> is `eslint .` and runs non-interactively, and CI runs it in the `lint-webplat` job. The
+> finding count is pinned as a ratchet by `apps/web-platform/test/eslint-config.test.ts`.
+> Left in place rather than rewritten because this is a dated planning record; read the
+> original bullet as what was true on 2026-06-09.
+
 - **Lint is a non-functional gate for web-platform** (`knowledge-base/project/learnings/2026-06-05-web-platform-lint-gate-is-non-functional-tsc-vitest-are-authoritative.md`): `next lint` drops into an interactive prompt and CI does not run it. The authoritative gates are `tsc --noEmit` + `vitest run` — already what AC7/AC8 prescribe. Do NOT add a lint AC or treat a lint non-zero exit as a regression.
 - **`safeSession` is a sensitive-path file** (`apps/web-platform/lib/safe-session.ts` matches the preflight Check-6 / deepen Phase-4.6 `SENSITIVE_PATH_RE`). Confirmed at gate-check time that it is NOT in Files-to-Edit, so the `none` threshold needs no scope-out bullet. Re-confirms the "remove usage, keep the file" sharp edge — touching the file would also trip the sensitive-path gate.
 

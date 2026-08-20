@@ -862,7 +862,7 @@ if want_scripts; then
   # The drain itself (#7084). Asserted from the committed lockfiles rather than from the
   # Dependabot API: this is deterministic, available at merge time, and needs no token the
   # workflow does not have. The alert COUNT is a lagging mirror of this same fact.
-  run_suite "scripts/assert-dependabot-drain" python3 scripts/assert-dependabot-drain.py
+  run_suite "scripts/assert-dependabot-drain-live" python3 scripts/assert-dependabot-drain.py
   # ...and the guard's own guard (#1327). The live run above proves the tree is clean; it
   # cannot prove the assertion still has teeth. Both anti-vacuity floors there count ROWS,
   # so every CVE threshold in the table could be set to "0.0.0" and the live run still

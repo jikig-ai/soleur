@@ -4,23 +4,32 @@
 // anyway: there was no config, so it dropped into an interactive
 // "configure ESLint?" prompt and exited 1.
 //
-// WHY eslint-config-next STAYS A DEPENDENCY: this file consumes
-// @next/eslint-plugin-next's native `flatConfig` export rather than
-// eslint-config-next's legacy eslintrc content, so the package looks unused. It
-// is not. It is the dependency vehicle that supplies @next/eslint-plugin-next,
-// @typescript-eslint/parser, @typescript-eslint/eslint-plugin,
-// eslint-plugin-react, -react-hooks, -import and -jsx-a11y. Removing it removes
-// every Next and React rule source and the TS parser. See the plan's Decision 2.
+// ON eslint-config-next. It is still a devDependency and this config imports NOTHING
+// from it. An earlier version of this comment claimed it was "the dependency vehicle"
+// supplying the parser and every rule source, and that "removing it removes every Next
+// and React rule source and the TS parser". That was measured and is FALSE: with
+// node_modules/eslint-config-next moved aside entirely, `eslint . -f json` returns a
+// byte-identical report — 2020 files, 192 findings, same byRule. The claim was written
+// before the six imports below were declared as direct devDependencies and was never
+// reconciled with them.
 //
-// Two of the six imports below do NOT come from there, and an earlier version
-// of this comment credited all six to it: `@eslint/js` is a direct dependency
-// of `eslint` itself, and `globals` arrives through `eslint` -> `@eslint/eslintrc`.
+// What it uniquely still provides is eslint-plugin-react, eslint-plugin-import,
+// eslint-plugin-jsx-a11y and @rushstack/eslint-patch — none of which this config
+// registers today. It is therefore a genuine removal candidate, kept for now because it
+// is the supported vehicle for turning those rule families on (notably react/no-danger,
+// which is off today while five files use dangerouslySetInnerHTML). Removing it is a
+// deliberate separate decision, not a tidy-up to fold into this PR.
 //
-// All six are ALSO declared in this package's devDependencies. They were not,
-// and resolved only by npm hoisting through eslint-config-next's own tree —
-// which pins @typescript-eslint/* as `^5 || ^6 || ^7 || ^8`, so a transitive
-// bump could have moved the parser across three majors with nothing here
-// constraining it. A declared range fails loudly instead.
+// Provenance of the six imports, since the same false comment credited all six to
+// eslint-config-next: @next/eslint-plugin-next, @typescript-eslint/parser and
+// @typescript-eslint/eslint-plugin and eslint-plugin-react-hooks are also published
+// under it, but `@eslint/js` is a direct dependency of `eslint` itself and `globals`
+// arrives through `eslint` -> `@eslint/eslintrc`.
+//
+// All six are declared in this package's devDependencies. They were not, and resolved
+// only by npm hoisting through eslint-config-next's tree — which pins
+// @typescript-eslint/* as `^5.4.2 || ^6.0.0 || ^7.0.0 || ^8.0.0`, four majors wide, so a
+// transitive bump could have moved the parser with nothing here constraining it.
 import js from "@eslint/js";
 import next from "@next/eslint-plugin-next";
 import tsPlugin from "@typescript-eslint/eslint-plugin";
@@ -29,6 +38,12 @@ import globals from "globals";
 import reactHooks from "eslint-plugin-react-hooks";
 
 export default [
+  {
+    // 31 of the 192 pinned findings are unused `eslint-disable` directives, which ESLint
+    // reports only because its DEFAULT for this is "warn". Pinned explicitly so an ESLint
+    // minor cannot move the ratchet's baseline without anyone editing this repo.
+    linterOptions: { reportUnusedDisableDirectives: "warn" },
+  },
   {
     ignores: [
       "**/node_modules/**",
