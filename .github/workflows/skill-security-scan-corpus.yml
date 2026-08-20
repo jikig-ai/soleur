@@ -37,8 +37,8 @@ jobs:
         with:
           bun-version-file: ".bun-version"
 
-      - name: Install jq
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq
+      - name: Assert jq present (runner-image dependency — no install, no network)
+        run: jq --version
 
       - name: Run self-test
         env:
