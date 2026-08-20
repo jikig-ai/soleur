@@ -633,6 +633,31 @@ jobs:
         run: npm run lint
         working-directory: apps/web-platform
 
+      # The step above exits 0 on a config that selected almost nothing:
+      # `export default []` linted 11 of 2019 files and reported success. This
+      # job's entire anti-vacuity story otherwise lived in the vitest guard
+      # suite — a different job, on a different matrix, that this one does not
+      # depend on. A gate whose green is only trustworthy because some other
+      # gate is also green is not a gate. The floor and its derivation are the
+      # same ones apps/web-platform/test/eslint-config.test.ts pins; both are
+      # named MIN_FILES_SCANNED so a grep finds the pair.
+      - name: ESLint anti-vacuity floor
+        run: |
+          node -e '
+            const { execFileSync } = require("node:child_process");
+            const MIN_FILES_SCANNED = 1900;
+            const out = execFileSync("./node_modules/.bin/eslint", [".", "-f", "json"], {
+              encoding: "utf8", maxBuffer: 256 * 1024 * 1024, timeout: 300000,
+            });
+            const scanned = JSON.parse(out).length;
+            console.log(`eslint scanned ${scanned} files (floor ${MIN_FILES_SCANNED})`);
+            if (scanned < MIN_FILES_SCANNED) {
+              console.log(`::error::eslint scanned ${scanned} files, below the anti-vacuity floor of ${MIN_FILES_SCANNED}. The step above passed without linting the codebase.`);
+              process.exit(1);
+            }
+          '
+        working-directory: apps/web-platform
+
   web-platform-build:
     runs-on: ubuntu-latest
     steps:

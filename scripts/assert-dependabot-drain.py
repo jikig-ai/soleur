@@ -22,6 +22,30 @@ LOCKS = {
     "spike": "spike/package-lock.json",
 }
 
+# Deleting an entry from LOCKS exits 0. `packages[manifest]` is only reached for rows
+# that NAME the manifest, so dropping "spike" -- which no row names, because its tree is
+# covered by the completeness sweep rather than by the table -- removed a whole lockfile
+# from the scan in silence. That is the precise regression the comment above says was
+# fixed; repointing a path IS caught, deletion was not. Mirrors lint-dual-lockfile.sh's
+# MIN_PACKAGE_LOCK_DIRS=4.
+MIN_LOCKS = 4
+
+# Every package this table is responsible for. Declared, not derived: substituting one
+# row's package name for another REAL package left len(REQUIRED) at 19 and both count
+# floors satisfied while silently dropping the original from the watched set. A mistyped
+# name deflates `resolved` and IS caught; a substitution was not.
+WATCHED_PACKAGES = {
+    "@hono/node-server",
+    "@opentelemetry/propagator-jaeger",
+    "brace-expansion",
+    "fast-uri",
+    "hono",
+    "ip-address",
+    "js-yaml",
+    "nanoid",
+    "undici",
+}
+
 # (manifest, package, major-line, minimum patched) -- the Phase 3 reconciliation table.
 REQUIRED = [
     ("web-platform", "nanoid", 3, "3.3.18"),
@@ -35,9 +59,18 @@ REQUIRED = [
     # Three rows, not one: #1327 removed the blanket `brace-expansion` override, so
     # web-platform legitimately resolves this package on major lines 1, 2 and 5 again
     # (minimatch@3 needs ^1, rimraf's minimatch@9 needs ^2, minimatch@10 needs ^5).
-    # Floors are the UNION of all six published advisories, not GHSA-v6h2-p8h4-qcjw
-    # (LOW) alone: GHSA-rgw5-rvv9-x895 (HIGH) makes <1.1.18 and <2.1.4 vulnerable, and
-    # its >=4.0.0 <5.0.9 range means NO 3.x or 4.x release is patched at all.
+    # Floors are the UNION of all SEVEN published advisories, not GHSA-v6h2-p8h4-qcjw
+    # (LOW) alone: GHSA-rgw5-rvv9-x895 (HIGH) makes <1.1.18 and <2.1.4 vulnerable.
+    # FOUR of the seven are HIGH -- 3jxr, 832h, mh99, rgw5. An earlier version of this
+    # comment said six advisories and three HIGH; it omitted GHSA-832h-xg76-4gv6
+    # (HIGH, <1.1.7). Re-derived 2026-08-20 from
+    # `gh api "/advisories?ecosystem=npm&affects=brace-expansion"`.
+    # No 3.x or 4.x release clears all seven, so neither line is encodable here.
+    # That is deliberately weaker than "no patched 3.x exists": GHSA-rgw5 names 3.0.6
+    # as its own first_patched and npm ships it under dist-tag maintenance-v3, but
+    # GHSA-3jxr's `>=3.0.0 <5.0.7` range swallows it. The mirror of this table in
+    # apps/web-platform/test/eslint-config.test.ts carries the same seven advisories;
+    # they must move together.
     ("web-platform", "brace-expansion", 1, "1.1.18"),
     ("web-platform", "brace-expansion", 2, "2.1.4"),
     ("web-platform", "brace-expansion", 5, "5.0.9"),
@@ -128,6 +161,42 @@ def main():
             f"'(absent)' and would otherwise pass -- check for a renamed or mistyped package.")
     if checked != len(REQUIRED):
         failures.append(f"evaluated {checked} of {len(REQUIRED)} rows -- the loop did not complete")
+    if len(LOCKS) < MIN_LOCKS:
+        failures.append(
+            f"only {len(LOCKS)} lockfiles are read, below the floor of {MIN_LOCKS}. A manifest "
+            f"was dropped from LOCKS -- its tree is now asserted clear by nobody, which is the "
+            f"regression the 'spike' entry was added to close.")
+
+    # THE THRESHOLD, not the count. MIN_ROWS and MIN_RESOLVED both floor how MANY rows
+    # exist and resolve; nothing floored the fourth tuple element, which is the only
+    # thing the table exists to enforce. Setting all 19 thresholds to "0.0.0" printed a
+    # confident clean summary and exited 0. This check is structural rather than a second
+    # copy of the table: a row's minimum must sit ON the major line the row declares, so
+    # "0.0.0" fails every row whose major is not 0, and a correct table cannot false-fail.
+    # It must also be a real patch level -- "7.0.0" on the undici row would clear the
+    # major check while admitting every vulnerable 7.x. If a package's true
+    # first_patched_version is ever exactly X.0.0, relax this deliberately and say why.
+    for manifest, pkg, major, minimum in REQUIRED:
+        m = ver(minimum)
+        if m[0] != major:
+            failures.append(
+                f"{manifest}: the {pkg} row declares major line {major} but its minimum "
+                f"{minimum!r} is on line {m[0]}. A threshold was zeroed or retargeted -- "
+                f"a clean result from this run means nothing.")
+        elif m[:3] <= (major, 0, 0):
+            failures.append(
+                f"{manifest}: the {pkg} row's minimum {minimum!r} is the bare {major}.0.0 "
+                f"floor, which admits every vulnerable {major}.x. Encode the advisory's "
+                f"first_patched_version.")
+
+    declared = {pkg for _, pkg, _, _ in REQUIRED}
+    if declared != WATCHED_PACKAGES:
+        failures.append(
+            f"the table's package set drifted from WATCHED_PACKAGES: "
+            f"missing {sorted(WATCHED_PACKAGES - declared)}, "
+            f"unexpected {sorted(declared - WATCHED_PACKAGES)}. A row's package name was "
+            f"substituted -- the count floors cannot see that, because a substitution keeps "
+            f"the count.")
 
     # COMPLETENESS. Per-major keying is what lets a watched package carry an unwatched
     # major: a `brace-expansion@1.1.11` nested under a new dependency in web-platform sits

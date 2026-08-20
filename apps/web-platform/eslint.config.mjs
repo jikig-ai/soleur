@@ -7,10 +7,20 @@
 // WHY eslint-config-next STAYS A DEPENDENCY: this file consumes
 // @next/eslint-plugin-next's native `flatConfig` export rather than
 // eslint-config-next's legacy eslintrc content, so the package looks unused. It
-// is not. It is the dependency vehicle that supplies @typescript-eslint/parser,
-// @typescript-eslint/eslint-plugin, eslint-plugin-react, -react-hooks, -import,
-// -jsx-a11y and @next/eslint-plugin-next. Removing it removes every rule source
-// and the parser. See the plan's Decision 2.
+// is not. It is the dependency vehicle that supplies @next/eslint-plugin-next,
+// @typescript-eslint/parser, @typescript-eslint/eslint-plugin,
+// eslint-plugin-react, -react-hooks, -import and -jsx-a11y. Removing it removes
+// every Next and React rule source and the TS parser. See the plan's Decision 2.
+//
+// Two of the six imports below do NOT come from there, and an earlier version
+// of this comment credited all six to it: `@eslint/js` is a direct dependency
+// of `eslint` itself, and `globals` arrives through `eslint` -> `@eslint/eslintrc`.
+//
+// All six are ALSO declared in this package's devDependencies. They were not,
+// and resolved only by npm hoisting through eslint-config-next's own tree —
+// which pins @typescript-eslint/* as `^5 || ^6 || ^7 || ^8`, so a transitive
+// bump could have moved the parser across three majors with nothing here
+// constraining it. A declared range fails loudly instead.
 import js from "@eslint/js";
 import next from "@next/eslint-plugin-next";
 import tsPlugin from "@typescript-eslint/eslint-plugin";

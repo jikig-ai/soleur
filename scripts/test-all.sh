@@ -756,6 +756,12 @@ if want_scripts; then
   # Dependabot API: this is deterministic, available at merge time, and needs no token the
   # workflow does not have. The alert COUNT is a lagging mirror of this same fact.
   run_suite "scripts/assert-dependabot-drain" python3 scripts/assert-dependabot-drain.py
+  # ...and the guard's own guard (#1327). The live run above proves the tree is clean; it
+  # cannot prove the assertion still has teeth. Both anti-vacuity floors there count ROWS,
+  # so every CVE threshold in the table could be set to "0.0.0" and the live run still
+  # exited 0. This suite mutates a sandbox copy and requires each mutation to RED with the
+  # message that names its cause.
+  run_suite "scripts/assert-dependabot-drain-unit" bash scripts/assert-dependabot-drain.test.sh
   # SIBLING gate (#7332): the same "captured a status nobody decided about" class, but in shell
   # SCRIPTS under `set -e` rather than Actions `run:` blocks. Separate anchor, separate
   # calibration -- the naive "a command-substitution assignment is a finding" rule found only
