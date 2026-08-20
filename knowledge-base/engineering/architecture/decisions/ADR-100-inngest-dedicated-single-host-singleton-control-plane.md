@@ -653,3 +653,61 @@ therefore cited as `Ref` rather than closed by it. The twelve days of failed dis
 backfill or dead-letter path is in scope. An interim `INNGEST_BASE_URL` repoint was also declined,
 deliberately: the dedicated host is to be fixed properly rather than returned to the co-located
 operating point.
+
+
+## Addendum — 2026-08-20 (#7462) — `op=arm` is idempotent, and the prod DSN in the dark slot is the steady state
+
+Appended rather than folded into the 2026-07-15 addendum above: that addendum remains the accurate
+record of what was decided and of the co-tenancy as it stood. This section records a consequence it
+predicted in parentheses and treated as a footnote, which turned out to be load-bearing.
+
+**What that addendum got right, and what followed from it.** It states: *"soleur-dev is not a
+rollback target: `op=arm` overwrites `INNGEST_POSTGRES_URI`, and the `rollback` arm writes only
+`INNGEST_CUTOVER_FLIP` — no code path restores the dark DSN."* Both halves are correct. The
+consequence is that after the FIRST successful arm the dark slot holds the prod DSN permanently.
+
+An `op=arm` succeeded on **2026-07-23T15:46Z** (Doppler config log for `soleur-inngest/prd`: three
+writes inside one second by `user=inngest-cutover-arm` — the DSN, the heartbeat URL, and the flag).
+Measured 2026-08-20, value-silently: `soleur-inngest/prd` and `soleur/prd_terraform`
+`INNGEST_POSTGRES_URI` are byte-identical (sha256 prefix `7968f3d658c2`), both carrying the prod
+project ref and neither carrying soleur-dev's.
+
+**What broke.** G3 refused whenever the value it was about to write already equalled the value in
+place. That condition became permanently true on 2026-07-23, so every subsequent arm was refused
+regardless of readiness — the cutover could not be re-armed after a rollback, which is precisely
+what rollback exists to allow. It blocked the 2026-08-20 attempt, at the cost of a ~7m38s web
+scheduler gap and one missed timer tick.
+
+**The decision.** `op=arm` is now **idempotent**. When the target value is already in place, G3
+returns `skip-already-current`: the redundant DSN write is skipped and the arm proceeds. The
+heartbeat write and the `armed` write still run — skipping those would convert a successful arm into
+a silent no-op.
+
+**Why relaxing that guard costs no safety.** The hazard G3's own error text named ("would flip onto
+the DARK backend") is held entirely by the positive prod-project pin evaluated immediately before it:
+the dark backend is a *distinct Supabase project* and cannot carry the prod ref, so a value that
+passes the pin is prod by construction. The equality test contributed nothing to that. The FLUSHALL
+hazard is held by the monotonic latch in `inngest-cutover-flip.sh` (#7228 P0-5) — recorded **at the
+flush** rather than at completion, fatal if unrecordable, and fronted by a durability gate that
+refuses to flush when the latch cannot be durably written. Re-arming over an in-flight or completed
+flip is held by G1. None of those changed.
+
+The residual concentration is deliberate and worth stating: the prod project-ref pin is now the sole
+guard against arming onto a non-prod Postgres. That is why the decision was extracted into a pure
+`g3_decide` function with a mutation-tested suite — deleting the pin reddens the build.
+
+**Two corrections to the record.**
+
+1. **#7462's runbook premise is false.** It says a diagnostic boot brings the host up against a
+   NON-prod `INNGEST_POSTGRES_URI`. It does not, and has not since 2026-07-23 — it holds the prod
+   DSN. Anything reasoning from "the dark host points at soleur-dev" is reasoning about the system as
+   it was before that date.
+2. **The prod DSN resting in the dark slot is the documented post-first-arm steady state, not drift
+   to be corrected.** Restoring the soleur-dev DSN would re-create the co-tenancy this ADR wants
+   retired and would be undone by the next arm anyway.
+
+**Unchanged.** The soleur-dev co-tenancy defences (`0002_dev_inngest_tables_lockdown.sql`,
+`apply-inngest-rls-dev.yml`) remain live and correct: the cutover has not held, so the retirement
+sequencing described in the 2026-07-15 addendum still applies unmodified. The forward/reverse
+asymmetry for `INNGEST_POSTGRES_URI` is now deliberate rather than an omission — idempotence makes an
+inverse unnecessary, which is why one was not added.
