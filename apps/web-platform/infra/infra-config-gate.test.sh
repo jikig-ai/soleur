@@ -650,8 +650,15 @@ KEYWORDS = {'if','elif','then','else','fi','for','while','until','do','done','ca
 # Shell builtins run in-process and cannot reach infrastructure. `eval`, `source`, `.` and
 # `command` are DELIBERATELY ABSENT: each is an arbitrary-command trampoline, which is exactly
 # what an allow-list exists to stop.
+# `trap` REMOVED (#7546 review). The comment above says builtins "run in-process and cannot
+# reach infrastructure" -- true of `echo` and `printf`, false of `trap`, whose payload is
+# arbitrary code that runs later. Measured: `trap 'terraform apply' EXIT` was MISSED in both
+# quoting forms, because the payload lives in a quoted span that strip_noise blanks. Neither
+# scanned file uses `trap` today, so this costs nothing and closes a trampoline that sat on
+# the allow-list under a false premise -- the same shape as `eval`/`source`/`.`/`command`,
+# which this set already omits deliberately.
 BUILTINS = {'echo','printf','local','declare','typeset','readonly','export','unset','set',
-            'shift','exit','true','false','test','read','shopt','trap','let','pwd',
+            'shift','exit','true','false','test','read','shopt','let','pwd',
             'type','hash','umask',':','['}
 
 def sweep(text):
@@ -2348,6 +2355,56 @@ else
   fail "#7104 AC18: the success()-gated step set downstream of the gate drifted from its pin: $ac18_measured. These steps re-arm behind a false green -- two close the founder's GitHub issues and one swaps the running container. If the change is deliberate, update the EXPECT table and say why in the commit."
 fi
 
+# THE SCANNER'S OFFSET INVARIANT, ASSERTED OVER THE WHOLE DIRECTORY (#7546 review).
+#
+# infra-config-shellscan.py states this invariant twice -- "newlines are preserved inside every
+# blanked span so line numbers and offsets survive unchanged", and "_blank preserves byte offsets
+# exactly ... so the operator can be FOUND in the blanked text and its target READ from the
+# original at the same offset". LENGTH was preserved. NEWLINE POSITIONS were not:
+#
+#   * `_blank`'s escape branch emitted two SPACES for a backslash-NEWLINE inside a double-quoted
+#     string (a line continuation);
+#   * `strip_noise`'s arithmetic substitution flattened a MULTI-LINE $(( )) with ' ' * len(),
+#     while the `[[ ]]` substitution two lines below already did it correctly.
+#
+# Measured: 33 of 163 apps/web-platform/infra/*.sh diverged. It was LATENT rather than live --
+# the two files the guards actually scan did not diverge -- and that is exactly why it needs a
+# standing assertion instead of a fix: `loop_depth_map` keys `depth_at` by CLEAN line number
+# while its caller looks up RAW line numbers from a grep, so one ordinary edit adding a
+# multi-line $(( )) or a `\`-newline ABOVE the adjudicate call silently shifts every lookup and
+# the D1 depth check reads the wrong line. Quantified over the DIRECTORY, not over the two
+# current subjects, because the next subject is the one that will diverge.
+SCAN_INVARIANT=$(python3 - "$SCRIPT_DIR" <<'PYEOF'
+import glob, importlib.util, os, pathlib, sys
+
+d = sys.argv[1]
+_spec = importlib.util.spec_from_file_location('shellscan', os.path.join(d, 'infra-config-shellscan.py'))
+_m = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_m)
+
+files = sorted(glob.glob(os.path.join(d, '*.sh')))
+if len(files) < 20:
+    print("SCAN-ERROR: only %d *.sh found in %s -- the sweep is vacuous" % (len(files), d))
+    sys.exit(0)
+bad = []
+for f in files:
+    raw = pathlib.Path(f).read_text(encoding='utf-8', errors='replace')
+    for name, fn in (('strip_noise', _m.strip_noise), ('strip_comments', _m.strip_comments)):
+        out = fn(raw)
+        if len(out) != len(raw):
+            bad.append("%s: %s changed LENGTH %d -> %d" % (os.path.basename(f), name, len(raw), len(out)))
+        elif out.count('\n') != raw.count('\n'):
+            bad.append("%s: %s changed NEWLINE COUNT %d -> %d"
+                       % (os.path.basename(f), name, raw.count('\n'), out.count('\n')))
+print("OK %d" % len(files) if not bad else "; ".join(bad[:6]))
+PYEOF
+) || SCAN_INVARIANT="SCAN-ERROR (python3 unavailable)"
+if [[ "$SCAN_INVARIANT" == OK\ * ]]; then
+  pass "#7104 scanner: strip_noise/strip_comments preserve byte LENGTH and NEWLINE POSITIONS over all ${SCAN_INVARIANT#OK } infra/*.sh — the invariant the redirect detector's read-from-raw-at-blanked-offset and loop_depth_map's line keys both rest on"
+else
+  fail "#7104 scanner: the offset/newline invariant is BROKEN — $SCAN_INVARIANT. loop_depth_map keys depth_at by CLEAN line number while its caller looks up RAW line numbers, so any divergence above the adjudicate call silently shifts the D1 depth check onto the wrong line."
+fi
+
 # EVERY OPERATOR-FACING LEVER IS COMPLETE, AND CARRIES ITS FORBIDDEN TARGET (#7546 review).
 #
 # The diff hands a non-technical founder -- and, explicitly in the issue body, "an engineer/agent"
@@ -2389,7 +2446,7 @@ fi
 # Nothing asserted that the assertions RAN. Measured: deleting the entire #7220 block took the
 # suite 53 -> 40 passed, 0 failed, exit 0 — a silent truncation that reads exactly like a clean
 # run. A floor (not equality — the count is developer-incremented) makes arm deletion loud.
-GATE_MIN_ASSERTIONS=133
+GATE_MIN_ASSERTIONS=134
 # Adjudicated DIRECTLY, not through fail(). Measured: `fail() { return 0; }` made this suite
 # report `94 passed, 0 failed` / `OK` / exit 0 WITH a genuinely broken assertion present — and
 # the floor built to make truncation loud was itself dispatched through the neutered function,

@@ -64,7 +64,16 @@ def _blank(text, *, blank_quotes):
             i += 1
         else:
             if c == '\\' and q == '"' and i + 1 < n:
-                out.append('  ' if blank_quotes else text[i:i + 2])
+                if blank_quotes:
+                    # PRESERVE THE NEWLINE (#7546 review). This emitted two SPACES, so a
+                    # backslash-newline (a line continuation inside a double-quoted string)
+                    # destroyed a newline while preserving length -- and `loop_depth_map`
+                    # keys `depth_at` by LINE NUMBER while its callers look up RAW line
+                    # numbers, so every line below such a construct shifted and the D1 depth
+                    # check read the wrong line. Measured: 33 of 163 infra/*.sh diverged.
+                    out.append(' ' + ('\n' if text[i + 1] == '\n' else ' '))
+                else:
+                    out.append(text[i:i + 2])
                 i += 2
                 continue
             if c == q:
@@ -94,7 +103,11 @@ def strip_noise(text):
     strip these, which is one half of D1.
     """
     s = _blank(text, blank_quotes=True)
-    s = re.sub(r'\$?\(\([^()]*\)\)', lambda m: ' ' * len(m.group(0)), s)
+    # NEWLINE-PRESERVING, like the `[[ ]]` substitution below (#7546 review). ' ' * len()
+    # preserves LENGTH but flattens a MULTI-LINE $(( )) into spaces, breaking the
+    # newline-position half of this module's stated invariant.
+    s = re.sub(r'\$?\(\([^()]*\)\)',
+               lambda m: re.sub(r'[^\n]', ' ', m.group(0)), s, flags=re.S)
     s = re.sub(r'\[\[.*?\]\]',
                lambda m: re.sub(r'[^\n]', ' ', m.group(0)), s, flags=re.S)
     return s
@@ -113,22 +126,26 @@ def strip_noise(text):
 # captured nothing. It cannot be resolved statically, so it is captured as the sentinel
 # `$INDIRECT` and reported — an allow-list that cannot classify something must say so.
 _CMD_PREFIX = r'(?:^|[\n;&|(){}`]|\$\(|\b(?:if|elif|then|else|do|while|until)\s|!\s*)\s*'
-CMD = re.compile(_CMD_PREFIX + r'((?:[A-Za-z_][A-Za-z0-9_.-]*|[./][A-Za-z0-9_./-]+))(?=\s|$|;)', re.M)
+# `\.` LAST, and it is not cosmetic (#7546 review): `.` is the POSIX synonym for `source`,
+# and the allow-list's own comment says `eval`, `source`, `.` and `command` are
+# "DELIBERATELY ABSENT" from BUILTINS because each is an arbitrary-command trampoline.
+# `source` was caught and `.` was not -- `[./][A-Za-z0-9_./-]+` requires at least one
+# character after the dot, so a bare `. "$P"` captured NOTHING and read as approval.
+CMD = re.compile(_CMD_PREFIX + r'((?:[A-Za-z_][A-Za-z0-9_.-]*|[./][A-Za-z0-9_./-]+|\.))(?=\s|$|;)', re.M)
 CMD_INDIRECT = re.compile(_CMD_PREFIX + r'(\$\{?[A-Za-z_][A-Za-z0-9_]*\}?)(?=\s|$|;)', re.M)
+# KEYWORD WRAPPERS (#7546 review). `time` and `coproc` are shell KEYWORDS, so they are
+# allow-listed as tokens AND the command they wrap was never in command position:
+# `time terraform apply` and `coproc terraform apply` were both measured MISSED. This
+# cannot be fixed by adding them to _CMD_PREFIX, because `finditer` is NON-OVERLAPPING --
+# the `^`-anchored match on `time` consumes it, so the prefix is gone by the time the next
+# token is scanned. A separate pass is the honest fix. Note the 12-wrapper positive-control
+# battery samples twelve wrappers that all work and omits exactly these two.
+CMD_WRAPPED = re.compile(r'\b(?:time|coproc)\s+'
+                         r'((?:[A-Za-z_][A-Za-z0-9_.-]*|[./][A-Za-z0-9_./-]+))(?=\s|$|;)', re.M)
 
 
 def _line_of(text, pos):
     return text.count('\n', 0, pos) + 1
-
-
-def command_tokens(clean, *, include_indirect=True):
-    """Yield (line, token) for every command-position token in ALREADY-STRIPPED text.
-
-    A path-form token is yielded as its basename with a `path:` marker retained by the caller
-    via `raw_command_tokens` when the distinction matters.
-    """
-    for line, tok, _raw in raw_command_tokens(clean, include_indirect=include_indirect):
-        yield line, tok
 
 
 def raw_command_tokens(clean, *, include_indirect=True):
@@ -141,6 +158,10 @@ def raw_command_tokens(clean, *, include_indirect=True):
     if include_indirect:
         for m in CMD_INDIRECT.finditer(clean):
             found.append((m.start(1), _line_of(clean, m.start(1)), '$INDIRECT', m.group(1)))
+    for m in CMD_WRAPPED.finditer(clean):
+        raw = m.group(1)
+        norm = raw.rsplit('/', 1)[-1] if '/' in raw else raw
+        found.append((m.start(1), _line_of(clean, m.start(1)), norm, raw))
     found.sort()
     for _pos, line, norm, raw in found:
         yield line, norm, raw

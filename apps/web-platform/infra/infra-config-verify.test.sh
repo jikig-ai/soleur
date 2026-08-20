@@ -166,8 +166,15 @@ _spec.loader.exec_module(_m)
 
 KEYWORDS = {'if','elif','then','else','fi','for','while','until','do','done','case','esac',
             'in','function','time','coproc','return','break','continue'}
+# `trap` REMOVED (#7546 review). The comment above says builtins "run in-process and cannot
+# reach infrastructure" -- true of `echo` and `printf`, false of `trap`, whose payload is
+# arbitrary code that runs later. Measured: `trap 'terraform apply' EXIT` was MISSED in both
+# quoting forms, because the payload lives in a quoted span that strip_noise blanks. Neither
+# scanned file uses `trap` today, so this costs nothing and closes a trampoline that sat on
+# the allow-list under a false premise -- the same shape as `eval`/`source`/`.`/`command`,
+# which this set already omits deliberately.
 BUILTINS = {'echo','printf','local','declare','typeset','readonly','export','unset','set',
-            'shift','exit','true','false','test','read','shopt','trap','let','pwd',
+            'shift','exit','true','false','test','read','shopt','let','pwd',
             'type','hash','umask',':','['}
 # What a VERIFICATION gate legitimately runs: it polls an endpoint, reads a secret, waits,
 # transforms text, and prints. Every one is inert with respect to infrastructure. `terraform`,
