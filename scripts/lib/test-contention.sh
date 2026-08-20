@@ -27,6 +27,8 @@
 #   TC_SELF_PID      pid to exclude from the scan (default $$)
 #   TC_MIN_AVAIL_MB  headroom floor in MB         (default 1024)
 #   TC_NPROC         core count                   (default `nproc`)
+#   TC_DF_CMD        the `df` binary              (default `df`)
+#   TC_WAIT_HEARTBEAT_S  lock-wait heartbeat interval in seconds (default 60)
 
 # Guard against double-source within a single shell (session-state.sh idiom).
 if [[ "${_SOLEUR_TEST_CONTENTION_LOADED:-}" == "1" ]]; then
@@ -48,7 +50,29 @@ TC_SESSION_STATE="${TC_SESSION_STATE:-$_tc_lib_dir/../../plugins/soleur/scripts/
 # A test-all.sh run is minutes, not seconds. with_lock's 30s default would fire
 # the advisory path on essentially every genuine overlap, so size the wait to a
 # full suite.
-TC_LOCK_TIMEOUT="${TC_LOCK_TIMEOUT:-900}"
+#
+# RAISED 900 -> 3600 (#7545). 900s was SHORTER THAN THE THING IT WAITS FOR: the
+# uncontended full gate is ~45 min (~2700 s) per ADR-133, and siblings were
+# observed holding for 3,775 / 5,787 / 5,763 s. A budget at a third of the hold
+# time cannot serialize two full gates — it expires by construction, fires
+# LOCK_CONTENDED_PROCEEDING, and every queued run proceeds at once. That is the
+# mechanism behind the six-concurrent-runs incident, not the absence of a lock.
+#
+# This is TUNING of ADR-133 Decision 3's own parameter, not a mechanism change:
+# the timeout still PROCEEDS on expiry and NEVER aborts. ADR-133's 2026-08-11
+# addendum names raising it as "a candidate the original Alternatives never
+# considered", which is what distinguishes it from abort-on-timeout (a recorded
+# rejection). Source of the 2700 s figure is ADR-133's recorded baseline rather
+# than a fresh measurement — see the addendum for why one was not taken.
+TC_LOCK_TIMEOUT="${TC_LOCK_TIMEOUT:-3600}"
+
+# How often to announce, while blocked, that this run is queued rather than hung.
+#
+# A silent multi-minute block is indistinguishable from a hang, and that
+# ambiguity is what produces hand-kills and hand-queueing — the operator
+# behaviour #7545 was filed about. Raising the budget above makes the silence
+# LONGER, so the heartbeat ships with it rather than after it.
+TC_WAIT_HEARTBEAT_S="${TC_WAIT_HEARTBEAT_S:-60}"
 
 # --- Capacity probes -------------------------------------------------------
 # `df -P` pins POSIX single-line output so a long device name cannot wrap and
@@ -70,6 +94,33 @@ tc_avail_mb() {
   kb=$("$TC_DF_CMD" -P -k "$d" 2>/dev/null | awk 'NR==2 {print $4}') || kb=""
   [[ "$kb" =~ ^[0-9]+$ ]] || { printf '0\n'; return 0; }
   printf '%s\n' $(( kb / 1024 ))
+}
+
+# Availability WITH a validity flag: prints "<mb> <ok>" from ONE df call.
+#
+# WHY A FLAG AND NOT JUST THE VALUE. tc_avail_mb above (and tc_used_pct /
+# tc_used_bytes below) degrade an unreadable or unparseable probe to `0` — which
+# is BELOW EVERY FLOOR. So "could not read the filesystem" and "read a
+# critically low number" are the same number, and any consumer reading the value
+# alone reports a degraded probe as a measured emergency. #7545's constraint 3
+# forbids exactly that collapse: no uncertainty may be reported as a healthy
+# box — and, symmetrically, none may be reported as a confident unhealthy one,
+# because a verdict nobody can distinguish from a real reading is not a
+# measurement.
+#
+# The existing degrade-to-0 contract is UNCHANGED for tc_avail_mb's callers;
+# this is an additive second reader for the callers that need to tell the two
+# apart. Pinned by M11b in scripts/test-all-capacity-signal.test.sh.
+# shellcheck disable=SC2120  # optional dir arg mirrors tc_avail_mb; callers may pass one
+tc_avail_mb_v() {
+  local d="${1:-$TC_TMPDIR}" kb
+  kb=$("$TC_DF_CMD" -P -k "$d" 2>/dev/null | awk 'NR==2 {print $4}') || kb=""
+  if [[ "$kb" =~ ^[0-9]+$ ]]; then
+    printf '%s 1\n' $(( kb / 1024 ))
+    return 0
+  fi
+  printf '0 0\n'
+  return 0
 }
 
 tc_used_pct() {
@@ -419,10 +470,25 @@ tc_preamble() {
   local used_pct avail_mb entries scan sibs suite_sibs sib_count suite_count
   local load cores memavail_kb
   used_pct=$(tc_used_pct)
-  avail_mb=$(tc_avail_mb)
+  # Read the value AND its validity in one df call. `avail_mb` keeps its
+  # historical degrade-to-0 value so every printf below is byte-identical to
+  # what it has always emitted (AC9) — only the FLAG is new, and flags are not
+  # printed.
+  local _avail_pair
+  _avail_pair=$(tc_avail_mb_v)
+  avail_mb="${_avail_pair%% *}"
+  local _avail_ok="${_avail_pair##* }"
   entries=$(tc_tmp_entry_count)
   # ONE /proc walk, split into the two views here. Calling the two view
   # functions instead would take two non-atomic snapshots.
+  # Validity comes from the walk itself, never a separate probe: a second glob is
+  # a second snapshot, and an "any entry readable" test additionally could not
+  # see PARTIAL masking (hidepid=2 leaves your own pids readable while hiding
+  # every other user's, so it answers yes on a structurally blind scan).
+  local _scan_ok=0
+  if [[ -d "$TC_PROC_ROOT" ]] && compgen -G "$TC_PROC_ROOT/[0-9]*" >/dev/null 2>&1; then
+    _scan_ok=1
+  fi
   scan=$(_tc_scan_procs || true)
   sibs=$(awk -F'\t' '$1=="run"   {print $2"\t"$3"\t"$4}' <<<"$scan")
   suite_sibs=$(awk -F'\t' '$1=="suite" {print $2"\t"$3"\t"$4}' <<<"$scan")
@@ -450,6 +516,40 @@ tc_preamble() {
   fi
   local memavail_mb="?"
   [[ "$memavail_kb" =~ ^[0-9]+$ ]] && memavail_mb=$(( memavail_kb / 1024 ))
+
+  # --- Promote this walk's readings to script scope (#7545) -----------------
+  #
+  # The capacity verdict CONSUMES these rather than taking its own /proc walk.
+  # That is not an optimization (though _tc_scan_procs was measured at ~6.6 s):
+  # a second walk is a second NON-ATOMIC snapshot, so a run could print
+  # CAPACITY_OK and then SIBLING_RUN_DETECTED: 2 about the same machine, from
+  # the same script, seconds apart. One walk, one source of truth — AC10 pins
+  # the agreement and M9 is the mutation that breaks it.
+  #
+  # Each value carries a 0|1 VALIDITY FLAG set from the shape assertion this
+  # function already performs, because every probe here degrades an unreadable
+  # reading to a NUMBER (0, or "?") rather than to "unknown". See tc_avail_mb_v.
+  #
+  # ZERO OUTPUT BYTES CHANGE: these are assignments only. work/SKILL.md greps
+  # the `[contention] BANNER` names as a contract, and AC9 asserts byte-identity
+  # against origin/main's tc_preamble on a fixed fake /proc.
+  TC_LAST_SIB_COUNT="$sib_count"
+  TC_LAST_SIB_COUNT_OK="$_scan_ok"
+  # The ROWS, not only the count. Without them a consumer wanting per-sibling
+  # detail had to walk /proc AGAIN, and --capacity then printed
+  # `CAPACITY_OK measured_runs=0` directly above three enumerated siblings
+  # (reproduced on this box) because count and rows came from walks ~6 s apart.
+  TC_LAST_SIB_ROWS="$sibs"
+  # SUITE siblings are the same capacity contention one level down — work/SKILL.md
+  # says so in those words — and omitting them made CAPACITY_OK reachable on a box
+  # whose own SIBLING_SUITE_DETECTED banner was firing in the same run.
+  TC_LAST_SUITE_COUNT="$suite_count"
+  TC_LAST_SUITE_COUNT_OK="$_scan_ok"
+  TC_LAST_AVAIL_MB="$avail_mb"
+  TC_LAST_AVAIL_MB_OK="$_avail_ok"
+  TC_LAST_MEMAVAIL_MB="$memavail_mb"
+  TC_LAST_MEMAVAIL_MB_OK=0
+  if [[ "$memavail_kb" =~ ^[0-9]+$ ]]; then TC_LAST_MEMAVAIL_MB_OK=1; fi
 
   echo "=== test-all.sh contention preamble (#6789) ==="
   printf '[contention] tmp %s: %s%% used, %sMB avail, %s entries\n' \
@@ -494,6 +594,121 @@ tc_preamble() {
   if (( suite_count > 0 )); then
     printf '[contention] BANNER SIBLING_SUITE_DETECTED: an individual test suite is running in %s other worktree(s) (listed above). This runner competes with it for the same tmpfs capacity. Confirm a failure three ways — isolated re-run, the matching CI gate, and a clean full re-run once the sibling exits — before accepting it as real.\n' \
       "$suite_count" >&2
+  fi
+  return 0
+}
+
+# --- Capacity verdict (#7545) ----------------------------------------------
+#
+# ONE named line answering "can this box absorb another full gate?", derived
+# entirely from the readings tc_preamble promoted above.
+#
+# IT IS A STATEMENT, NOT A REFUSAL. It changes no exit code and prevents no
+# suite from running. The first draft of #7545 declined an over-capacity run
+# with `exit 4`; that was cut on review against ADR-133's own record of a wait
+# `LOCK_ACQUIRED … after 616310ms` — REDEEMED at 616 s behind two siblings,
+# which a `>= 1` sibling decline refuses at t=0, converting a gate that
+# COMPLETED into no coverage at all. A decline would also have blocked
+# `git commit` (lefthook's pre-commit hook runs this runner) and would have been
+# read at /ship as the subagent refusal, whose documented remedy sets the very
+# override that re-creates the incident. See the ADR-133 addendum.
+#
+# EVERY LINE CARRIES THE MEASURED VALUE AND THE THRESHOLD, so a reader can judge
+# rather than obey — which is the whole difference between an instrument and a
+# gate.
+#
+# DEGRADED READINGS RENDER AS `?`, NEVER AS A NUMBER. The probes degrade to 0,
+# and 0 is below every floor, so printing the value alone would report "could
+# not read" as "critically low". Uncertainty is evaluated PER SIGNAL: one
+# unreadable reading does not suppress a CONTENDED verdict derived from a
+# different, healthy one — it is named in a `degraded=` field instead.
+#
+# PRECEDENCE, stated because leaving it undefined is what made the first draft's
+# own mutation rows unsound: CONTENDED when any threshold is crossed (listing
+# every reason, plus any degraded readings); UNKNOWN when no threshold is
+# crossed and at least one reading is degraded; OK only when every reading is
+# healthy AND present.
+tc_capacity_line() {
+  # The NOTICE threshold: it selects when to SAY something, never whether to run,
+  # so an operator has nothing to tune and it is deliberately not a seam.
+  local sib_threshold=1
+
+  # `+x` DISTINGUISHES UNSET FROM SET-AND-INVALID. `${VAR:-0}` collapses them and
+  # they are different faults: unset means tc_preamble never ran, invalid means a
+  # probe ran and returned garbage. Reporting the second when the first is true
+  # sent a reader to investigate a hardened /proc, a broken df and a missing
+  # meminfo, none of which was the problem.
+  if [[ -z "${TC_LAST_SIB_COUNT_OK+x}" ]]; then
+    printf '[contention] BANNER CAPACITY_UNKNOWN reason=not_probed measured_runs=? measured_suites=? sibling_threshold=%s tmp_avail_mb=? tmp_floor_mb=%s memavail_mb=?\n' \
+      "$sib_threshold" "${TC_MIN_AVAIL_MB:-?}"
+    return 0
+  fi
+
+  local sib="${TC_LAST_SIB_COUNT:-0}"      sib_ok="${TC_LAST_SIB_COUNT_OK:-0}"
+  local suite="${TC_LAST_SUITE_COUNT:-0}"  suite_ok="${TC_LAST_SUITE_COUNT_OK:-0}"
+  local avail="${TC_LAST_AVAIL_MB:-0}"     avail_ok="${TC_LAST_AVAIL_MB_OK:-0}"
+  local mem="${TC_LAST_MEMAVAIL_MB:-0}"    mem_ok="${TC_LAST_MEMAVAIL_MB_OK:-0}"
+
+  # THE FLOOR IS AN OPERATOR SEAM AND IS SHAPE-ASSERTED LIKE THE REST. Measured
+  # before this guard: `TC_MIN_AVAIL_MB=2G` — the natural mistake for a value
+  # documented "in MB" — printed CAPACITY_OK on a tmpfs with 4 MB free, rc=0,
+  # with the failed signal not even named as degraded; and a non-numeric value
+  # aborted the whole runner under `set -u` with no output at all.
+  local floor="${TC_MIN_AVAIL_MB:-}" floor_ok=1
+  [[ "$floor" =~ ^[0-9]+$ ]] || floor_ok=0
+
+  [[ "$sib"   =~ ^[0-9]+$ ]] || { sib=0;   sib_ok=0; }
+  [[ "$suite" =~ ^[0-9]+$ ]] || { suite=0; suite_ok=0; }
+  [[ "$avail" =~ ^[0-9]+$ ]] || { avail=0; avail_ok=0; }
+  [[ "$mem"   =~ ^[0-9]+$ ]] || { mem=0;   mem_ok=0; }
+  [[ "$sib_ok"   == 1 ]] || sib_ok=0
+  [[ "$suite_ok" == 1 ]] || suite_ok=0
+  [[ "$avail_ok" == 1 ]] || avail_ok=0
+  [[ "$mem_ok"   == 1 ]] || mem_ok=0
+
+  local contended="" degraded=""
+  if (( sib_ok )); then
+    (( sib >= sib_threshold )) && contended="${contended:+$contended,}sibling_runs"
+  else
+    degraded="${degraded:+$degraded,}unreadable_proc"
+  fi
+  if (( suite_ok )); then
+    (( suite >= sib_threshold )) && contended="${contended:+$contended,}sibling_suites"
+  fi
+  if (( avail_ok && floor_ok )); then
+    (( avail < floor )) && contended="${contended:+$contended,}low_tmp"
+  elif (( ! avail_ok )); then
+    degraded="${degraded:+$degraded,}unparseable_df"
+  fi
+  (( floor_ok )) || degraded="${degraded:+$degraded,}unusable_floor"
+  (( mem_ok ))   || degraded="${degraded:+$degraded,}unparseable_meminfo"
+
+  # A DEGRADED READING RENDERS AS `?`, NEVER A DIGIT. Every probe degrades to 0,
+  # and 0 is below every floor — so the value alone reports "could not read" as
+  # "critically low", and `measured_runs=0` for an unmeasurable procfs is an
+  # absence of measurement rendered as a measurement of absence.
+  local sib_f="?" suite_f="?" avail_f="?" mem_f="?" floor_f="?"
+  (( sib_ok ))   && sib_f="$sib"
+  (( suite_ok )) && suite_f="$suite"
+  (( avail_ok )) && avail_f="$avail"
+  (( mem_ok ))   && mem_f="$mem"
+  (( floor_ok )) && floor_f="$floor"
+
+  local tail
+  tail="measured_runs=$sib_f measured_suites=$suite_f sibling_threshold=$sib_threshold"
+  tail="$tail tmp_avail_mb=$avail_f tmp_floor_mb=$floor_f memavail_mb=$mem_f"
+
+  # CONTENDED and UNKNOWN carry the BANNER prefix so work/SKILL.md's documented
+  # triage grep (anchored on `[contention] BANNER`) catches them. OK stays plain:
+  # it fires on every run, and an always-firing banner carries no information —
+  # which is exactly why LOCK_WAITING is deliberately not one either.
+  if [[ -n "$contended" ]]; then
+    printf '[contention] BANNER CAPACITY_CONTENDED reason=%s%s %s\n' \
+      "$contended" "${degraded:+ degraded=$degraded}" "$tail"
+  elif [[ -n "$degraded" ]]; then
+    printf '[contention] BANNER CAPACITY_UNKNOWN reason=%s %s\n' "$degraded" "$tail"
+  else
+    printf '[contention] CAPACITY_OK %s\n' "$tail"
   fi
   return 0
 }
@@ -564,6 +779,52 @@ _tc_ms_since() {
   # `10#` forces base-10 so a leading zero in the microseconds field is not read
   # as octal.
   printf '%sms' $(( (e_i * 1000000 + 10#$e_f - s_i * 1000000 - 10#$s_f) / 1000 ))
+}
+
+# Announce, on a real clock, that a blocked run is QUEUED rather than hung.
+#
+# WHAT THIS DELIBERATELY DOES NOT DO: identify the lock holder. The first draft
+# printed `holder pid=… worktree=…` from `head -1` of a /proc walk — whichever
+# sibling the glob enumerated first, with NO relationship to lock ownership.
+# Measured during review: the reported pid CHANGED ON EVERY BEAT and was
+# `unknown` on 2 of 9 beats, and on the six-run pileup this exists for, five of
+# six candidates are fellow WAITERS — so it named a waiter ~83% of the time
+# while work/SKILL.md told the operator to read it before killing something.
+# Killing the named process would not have released the lock.
+#
+# It also cost what it was diagnosing: a full _tc_scan_procs per beat is ~6 s and
+# ~2,850 forks, so a 3600 s wait burned ~313 CPU-seconds and ~154,000 process
+# creations PER WAITER. On a box whose failure mode is fork/exec starvation, that
+# diagnostic participates in the incident.
+#
+# So a beat carries the two facts it can actually know — which lock, and how long
+# THIS run has waited — and points at `--capacity` for who is holding it. Cost
+# per beat is now one printf.
+#
+# ELAPSED IS MEASURED, NOT ACCUMULATED. Summing the nominal interval ignored the
+# work each beat did: 14 beats reported `waited=840s` across a 941 s wait (~11%
+# low), and the self-terminate a comment called "the fix" for orphan lifetime
+# overshot to ~4000 s on a 3600 s budget.
+_tc_wait_heartbeat() {
+  local interval="${1:-60}" budget="${2:-0}" name="${3:-}"
+  [[ "$interval" =~ ^[0-9]+$ ]] || interval=60
+  [[ "$budget"   =~ ^[0-9]+$ ]] || budget=0
+  (( interval > 0 )) || return 0
+
+  local t0="${EPOCHSECONDS:-0}" waited=0 _hb_sleep=""
+  # Kill the sleep child too. Without this every tc_acquire — including the
+  # uncontended ones, which spawn and immediately stop the heartbeat — leaked one
+  # `sleep <interval>` visible to anyone running ps to diagnose contention.
+  trap '[[ -n "$_hb_sleep" ]] && kill "$_hb_sleep" 2>/dev/null; exit 0' TERM
+  while :; do
+    sleep "$interval" & _hb_sleep=$!
+    wait "$_hb_sleep" 2>/dev/null || return 0
+    _hb_sleep=""
+    waited=$(( "${EPOCHSECONDS:-0}" - t0 ))
+    (( budget > 0 && waited >= budget )) && return 0
+    printf '[contention] BANNER LOCK_WAIT_HEARTBEAT: queued, not hung — %s waited=%ss of %ss. Run `bash scripts/test-all.sh --capacity` in another shell to see which worktrees are running.\n' \
+      "${name:-<unnamed>}" "$waited" "$budget" >&2
+  done
 }
 
 tc_acquire() {
@@ -640,20 +901,63 @@ tc_acquire() {
   # is called AFTER the end reading is captured, so its command substitution
   # cannot inflate the number it formats.
   local t0="${EPOCHREALTIME:-}" t1 waited
+
+  # The heartbeat brackets ONLY the blocking call. `|| true` on both the kill
+  # and the wait: the job may already have exited, and a non-zero from either is
+  # not a reason to abort the one function whose contract is that it cannot
+  # abort (ADR-133 Decision 3).
+  local _hb_pid=""
+  _tc_wait_heartbeat "${TC_WAIT_HEARTBEAT_S:-60}" "$timeout_s" "$name" & _hb_pid=$!
+  # SIGNAL ONLY A JOB WE STILL OWN. If the heartbeat exited early (a
+  # TC_WAIT_HEARTBEAT_S=0, the documented way to disable it, or a failed sleep)
+  # bash reaps the child and the pid returns to the kernel — so a bare kill up to
+  # an hour later signals whatever now holds it, on a box that forks tens of
+  # thousands of processes an hour. `jobs -p` and not `kill -0`, because
+  # scripts/test-contention.test.sh Arm 15 forbids that token in this lib to
+  # protect ADR-133 Phase 3.6.
+  _tc_stop_heartbeat() {
+    [[ -n "${_hb_pid:-}" ]] || return 0
+    if jobs -p 2>/dev/null | grep -qx "$_hb_pid"; then
+      kill "$_hb_pid" 2>/dev/null || true
+      wait "$_hb_pid" 2>/dev/null || true
+    fi
+    _hb_pid=""
+  }
+
   if acquire_lock "$name" "$timeout_s"; then
     t1="${EPOCHREALTIME:-}"
+    _tc_stop_heartbeat
     waited="$(_tc_ms_since "$t0" "$t1")"
     echo "[contention] LOCK_ACQUIRED: '$name' after $waited (worktrees of this repo serialize on it)." >&2
     return 0
   fi
   t1="${EPOCHREALTIME:-}"
+  _tc_stop_heartbeat
   waited="$(_tc_ms_since "$t0" "$t1")"
+
+  # RE-SAMPLE the sibling count. tc_preamble's reading was taken before a wait
+  # that may have lasted the entire budget, so reporting it here states a fact
+  # about a machine up to an hour stale.
+  #
+  # THE TRAILING `|| true` IS LOAD-BEARING AND MUST NOT BE "TIDIED" AWAY.
+  # `grep -c` exits 1 when the count is ZERO. Without the guard this assignment
+  # returns 1, and under `set -e` that aborts tc_acquire mid-function — and
+  # because `tc_acquire "test-all"` is a bare top-level command in the runner,
+  # the entire run dies with no summary, no rc file and no [FAIL] line. Zero
+  # siblings is the EXPECTED post-wait state (the holder exited; that is why the
+  # lock was released), so the unguarded form fails on the single most common
+  # path. Deliberately NOT wrapped in an `if [[ -n … ]]` emptiness guard: that
+  # would keep the zero case away from `grep -c` and make M18 vacuous — the
+  # guard would then be untested rather than unnecessary.
+  local sibs_now
+  sibs_now=$(tc_siblings 2>/dev/null | cut -f2 | sort -u | grep -c . || true)
+  [[ "$sibs_now" =~ ^[0-9]+$ ]] || sibs_now=0
 
   # Advisory: proceed, never abort. Reports the duration that was MEASURED
   # against the budget it was given. The previous text asserted `still held
   # after <timeout>s` unconditionally, which was false whenever acquire_lock
   # returned without waiting — the case the flock precheck above now removes.
-  echo "[contention] LOCK_CONTENDED_PROCEEDING: '$name' — gave up after $waited of ${timeout_s}s; proceeding anyway (advisory). A failure now may be interleaving — re-run the failing suite in isolation before diagnosing." >&2
+  echo "[contention] LOCK_CONTENDED_PROCEEDING: '$name' — gave up after $waited of ${timeout_s}s; siblings_now=$sibs_now (re-sampled after the wait, not the preamble's reading); proceeding anyway (advisory). A failure now may be interleaving — re-run the failing suite in isolation before diagnosing." >&2
   return 0
 }
 

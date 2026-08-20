@@ -109,6 +109,24 @@ function invocationLines(region: string): string[] {
     .filter((l) => /scripts\/test-all\.sh/.test(l) && !/^\s*#/.test(l));
 }
 
+/**
+ * Query-mode flags answer and exit without running a suite (`--capacity`,
+ * `--print-suite-globs`). They are NOT battery invocations.
+ *
+ * WHY THIS EXISTS. #7545 added a fenced `bash scripts/test-all.sh --capacity`
+ * probe to ship Phase 4. `shardTokensOn` finds no shard on it (its positional
+ * regex cannot match a `-`-leading token), so the probe alone satisfied BOTH the
+ * floor below and the unsharded check — meaning deleting the real
+ * `TEST_GROUP=all` line would have left every CEILING assertion green while
+ * Phase 4 prescribed an invocation that runs ZERO suites. The floor's own
+ * failure message ("prescribes no test-all.sh invocation at all") would have
+ * been false rather than triggered.
+ */
+const QUERY_FLAGS = ["--capacity", "--print-suite-globs"] as const;
+function isQueryInvocation(line: string): boolean {
+  return QUERY_FLAGS.some((f) => line.includes(f));
+}
+
 /** The shard a line selects, if any — env-prefix or positional, any position. */
 function shardTokensOn(line: string): string[] {
   const found: string[] = [];
@@ -125,6 +143,15 @@ function shardTokensOn(line: string): string[] {
 describe("CEILING — /ship Phase 4 runs the battery unsharded", () => {
   const shipPhase4 = () =>
     sliceSection(readFileSync(SHIP_SKILL, "utf8"), "## Phase 4: Run Tests", "\n## Phase 5: Final Checklist");
+
+  test("Phase 4 prescribes at least one invocation that actually RUNS the battery", () => {
+    const battery = invocationLines(shipPhase4()).filter((l) => !isQueryInvocation(l));
+    expect(
+      battery.length,
+      "ship Phase 4 prescribes no battery-running test-all.sh invocation — a query-mode " +
+        "flag (--capacity/--print-suite-globs) runs zero suites and cannot satisfy this",
+    ).toBeGreaterThan(0);
+  });
 
   test("every fenced test-all.sh invocation in Phase 4 is unsharded, in any spelling", () => {
     const lines = invocationLines(shipPhase4());
