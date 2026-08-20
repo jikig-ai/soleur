@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-08-12T19:18:47Z",
+  "generated_at": "2026-08-19T23:42:45Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -56,6 +56,19 @@
     },
     {
       "id": "cq-agents-md-tier-gate",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "cq-agents-md-why-single-line",
       "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
@@ -250,19 +263,6 @@
       "rule_text_prefix": ""
     },
     {
-      "id": "hr-all-infrastructure-provisioning-servers",
-      "section": "Hard Rules",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": ""
-    },
-    {
       "id": "hr-always-read-a-file-before-editing-it",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -380,19 +380,6 @@
       "rule_text_prefix": ""
     },
     {
-      "id": "hr-gdpr-gate-on-regulated-data-surfaces",
-      "section": "Hard Rules",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": ""
-    },
-    {
       "id": "hr-github-api-endpoints-with-enum",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -433,19 +420,6 @@
     },
     {
       "id": "hr-menu-option-ack-not-prod-write-auth",
-      "section": "Hard Rules",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": ""
-    },
-    {
-      "id": "hr-monitor-not-run-in-background-for-polling",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
@@ -524,19 +498,6 @@
     },
     {
       "id": "hr-never-run-commands-with-unbounded-output",
-      "section": "Hard Rules",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": ""
-    },
-    {
-      "id": "hr-never-write-to-claude-code-memory-claude",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
@@ -745,6 +706,19 @@
     },
     {
       "id": "hr-verify-repo-capability-claim-before-assert",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "hr-weigh-every-decision-against-target-user-impact",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
@@ -1134,19 +1108,6 @@
       "rule_text_prefix": ""
     },
     {
-      "id": "wg-pm-class-followthrough-for-operator-dogfood",
-      "section": "Workflow Gates",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": ""
-    },
-    {
       "id": "wg-record-recurring-vendor-expense-before-ready",
       "section": "Workflow Gates",
       "hit_count": 0,
@@ -1316,37 +1277,84 @@
       "rule_text_prefix": ""
     },
     {
-      "id": "cq-agents-md-why-single-line",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 1,
-      "warn_count": 0,
-      "fire_count": 1,
-      "prevented_errors": 0,
-      "last_hit": "2026-08-12T19:17:48Z",
-      "first_seen": "2026-08-12T19:17:48Z",
-      "rule_text_prefix": ""
-    },
-    {
-      "id": "hr-weigh-every-decision-against-target-user-impact",
+      "id": "hr-gdpr-gate-on-regulated-data-surfaces",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
-      "applied_count": 1,
+      "applied_count": 8,
       "warn_count": 0,
-      "fire_count": 1,
+      "fire_count": 8,
       "prevented_errors": 0,
-      "last_hit": "2026-08-12T18:59:41Z",
-      "first_seen": "2026-08-12T18:59:41Z",
+      "last_hit": "2026-08-19T23:27:15Z",
+      "first_seen": "2026-08-19T20:46:28Z",
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "hr-never-write-to-claude-code-memory-claude",
+      "section": "Hard Rules",
+      "hit_count": 24,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 24,
+      "prevented_errors": 24,
+      "last_hit": "2026-08-19T23:31:21Z",
+      "first_seen": "2026-08-19T20:53:02Z",
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "hr-monitor-not-run-in-background-for-polling",
+      "section": "Hard Rules",
+      "hit_count": 24,
+      "bypass_count": 4,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 28,
+      "prevented_errors": 20,
+      "last_hit": "2026-08-19T23:30:00Z",
+      "first_seen": "2026-08-19T20:50:51Z",
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "wg-pm-class-followthrough-for-operator-dogfood",
+      "section": "Workflow Gates",
+      "hit_count": 36,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 36,
+      "prevented_errors": 36,
+      "last_hit": "2026-08-19T23:30:09Z",
+      "first_seen": "2026-08-19T20:51:07Z",
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "hr-all-infrastructure-provisioning-servers",
+      "section": "Hard Rules",
+      "hit_count": 1012,
+      "bypass_count": 252,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 1264,
+      "prevented_errors": 760,
+      "last_hit": "2026-08-19T23:31:14Z",
+      "first_seen": "2026-08-19T20:51:50Z",
       "rule_text_prefix": ""
     }
   ],
   "summary": {
     "total_rules_tagged": 103,
-    "rules_unused_over_8w": 101,
-    "rules_bypassed_over_baseline": 0,
-    "orphan_rule_ids": [],
+    "rules_unused_over_8w": 98,
+    "rules_bypassed_over_baseline": 2,
+    "orphan_rule_ids": [
+      "adr-033-inngest-cron-canonical",
+      "cq-docs-cli-verification",
+      "durable-reminder-prefer-inngest",
+      "git-commit-secret-scan",
+      "hr-in-github-actions-run-blocks-never-use",
+      "kb-domain-allowlist-guard",
+      "pre-merge-auto-close-scan"
+    ],
     "gate_exemptions": [],
     "gate_override_count": 0,
     "gate_timeout_warn_count": 0,
@@ -1357,7 +1365,9 @@
     "drops_rotation_fail_count": 0,
     "grep_rewrite_fault_count": 0,
     "grep_rewrite_fault_reasons": {},
-    "hook_input_fault_count": 0,
-    "hook_input_fault_reasons": {}
+    "hook_input_fault_count": 20,
+    "hook_input_fault_reasons": {
+      "unparseable": 20
+    }
   }
 }

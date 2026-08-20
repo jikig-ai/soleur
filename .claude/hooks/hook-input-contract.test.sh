@@ -93,11 +93,11 @@ _fault_rows() {
   jq -r 'select(.kind=="hook_self_fault") | .kind' < "$1" 2>/dev/null | grep -c . || echo 0
 }
 
-EVAL10=(
+EVAL11=(
   cla-signed-author-gate context-reviewed-gate follow-through-directive-gate
-  guardrails prod-write-defer-gate ship-net-issue-flow-gate
-  ship-operator-step-gate ship-runbook-ssh-gate ship-soak-followthrough-gate
-  ship-unpushed-commits-gate
+  guardrails pre-ask-technical-fork-gate prod-write-defer-gate
+  ship-net-issue-flow-gate ship-operator-step-gate ship-runbook-ssh-gate
+  ship-soak-followthrough-gate ship-unpushed-commits-gate
 )
 SIBLING8=(
   background-poll-prefer-monitor brand-hex-commit-gate
@@ -106,12 +106,12 @@ SIBLING8=(
   pre-merge-auto-close-scan pre-merge-rebase
 )
 WRITE2=( worktree-write-guard iac-plan-write-guard )
-INSCOPE20=( "${EVAL10[@]}" "${SIBLING8[@]}" "${WRITE2[@]}" )
+INSCOPE21=( "${EVAL11[@]}" "${SIBLING8[@]}" "${WRITE2[@]}" )
 
 # REWRITERS — the THIRD disposition (ADR-162, #7165). These source the same
 # helper and are bound by the same trust boundary, but two of the guard
 # properties do not apply to them BY CONSTRUCTION, so they are classified
-# rather than listed in INSCOPE20:
+# rather than listed in INSCOPE21:
 #
 #   * They do not call `hook_input_should_ask`. Asking is the designated
 #     responder's job, and a rewriter's failed parse costs a missing
@@ -136,12 +136,12 @@ REWRITERS=( grep-rewrite )
 # it; the responder-set change tracked by #7219 will still need a sweep.
 HOOK_INPUT_RESPONDER_NAME="guardrails"
 
-# A18 — INSCOPE20 IS A CLAIM ABOUT THE FILESYSTEM, SO CHECK IT AGAINST THE
+# A18 — INSCOPE21 IS A CLAIM ABOUT THE FILESYSTEM, SO CHECK IT AGAINST THE
 # FILESYSTEM.
 #
 # Eleven assertions iterate this array, and every one of their messages prints
-# its length ("all 20 in-scope hooks …"). Nothing derived it. Measured: setting
-# INSCOPE20=( guardrails ) left the suite at 62/62 with an IDENTICAL pass count
+# its length ("all 21 in-scope hooks …"). Nothing derived it. Measured: setting
+# INSCOPE21=( guardrails ) left the suite at 62/62 with an IDENTICAL pass count
 # and the messages simply reading "all 1 hooks" — so the cardinality was a
 # printf argument, not a measured quantity.
 #
@@ -164,10 +164,10 @@ a18_inscope_closure() {
     | sort -u > "$discovered"
 
   # The claim is about the WHOLE trust boundary, so the listed set is
-  # INSCOPE20 ∪ REWRITERS. A new hook that sources the helper still fails this
+  # INSCOPE21 ∪ REWRITERS. A new hook that sources the helper still fails this
   # until it is classified into one of the two.
   local listed; listed="$(mktemp -p "$HIC_TMPROOT")"
-  printf '%s\n' "${INSCOPE20[@]}" "${REWRITERS[@]}" | sort -u > "$listed"
+  printf '%s\n' "${INSCOPE21[@]}" "${REWRITERS[@]}" | sort -u > "$listed"
 
   # Non-vacuity: an empty discovery would make both differences trivially empty.
   local n; n="$(grep -c . "$discovered" || true)"
@@ -177,9 +177,9 @@ a18_inscope_closure() {
     return
   fi
   ok "A18 non-vacuity control: $n hook(s) discovered sourcing lib/hook-input.sh"
-  want "A18 every hook that sources the helper is in INSCOPE20" "" \
+  want "A18 every hook that sources the helper is in INSCOPE21" "" \
     "$(comm -23 "$discovered" "$listed" | tr '\n' ' ' | sed 's/ $//')"
-  want "A18 every listed member (INSCOPE20 + REWRITERS) still sources the helper" "" \
+  want "A18 every listed member (INSCOPE21 + REWRITERS) still sources the helper" "" \
     "$(comm -13 "$discovered" "$listed" | tr '\n' ' ' | sed 's/ $//')"
 }
 
@@ -518,11 +518,11 @@ STUB
   # thing over a hardcoded FOUR hooks while claiming a property of nineteen.
   #
   # Cardinality note: (ii) and (iv) were each instantiated over 4 hooks against
-  # a claimed 19, and (i) over 10. All three now quantify over INSCOPE20, which
+  # a claimed 19, and (i) over 10. All three now quantify over INSCOPE21, which
   # is the set the properties are actually about. Measured before widening: all
   # 19 non-responders are silent, record the fault, and exit 0 — so the loop is
   # widened to the full set rather than trimmed back to a passing subset.
-  for hook in "${INSCOPE20[@]}"; do
+  for hook in "${INSCOPE21[@]}"; do
     local sandbox rc out
     sandbox="$(mktemp -d -p "$HIC_TMPROOT")"
     marker="$sandbox/PWNED-$hook"
@@ -583,18 +583,18 @@ STUB
   done
 
   if (( ${#pwned[@]} == 0 )); then
-    ok "A3 no attacker-named command executed by any of the ${#INSCOPE20[@]} in-scope hooks"
+    ok "A3 no attacker-named command executed by any of the ${#INSCOPE21[@]} in-scope hooks"
   else
     bad "A3 RCE still reachable in ${#pwned[@]} hook(s)" "${pwned[@]}"
   fi
   if (( ${#unrecorded[@]} == 0 )); then
-    ok "A3 REACHABILITY: all ${#INSCOPE20[@]} hooks reached the parse gate and recorded the fault"
+    ok "A3 REACHABILITY: all ${#INSCOPE21[@]} hooks reached the parse gate and recorded the fault"
   else
     bad "A3 hook(s) never reached the parse gate — the absence assertion above is vacuous for them" \
         "a silent exit 0 with no record IS defect 2" "${unrecorded[@]}"
   fi
   if (( ${#nonzero[@]} == 0 )); then
-    ok "A3 all ${#INSCOPE20[@]} hooks exit 0 on a NONSTRING envelope"
+    ok "A3 all ${#INSCOPE21[@]} hooks exit 0 on a NONSTRING envelope"
   else
     bad "A3 hook(s) exited non-zero on a nonstring envelope — stdout JSON is discarded" "${nonzero[@]}"
   fi
@@ -604,7 +604,7 @@ STUB
     bad "A14 stdout discipline broken on the fault path" "${noisy[@]}"
   fi
   if (( ${#strays[@]} == 0 )); then
-    ok "A12 no stray artifacts in any of the ${#INSCOPE20[@]} sandboxes"
+    ok "A12 no stray artifacts in any of the ${#INSCOPE21[@]} sandboxes"
   else
     bad "A12 stray artifacts created by the payload's trailing words" "${strays[@]}"
   fi
@@ -873,7 +873,7 @@ a9_designated_responder() {
   # The first version of this assertion COULD NOT FAIL, and it guarded the
   # invariant the whole designated-responder design rests on.
   #
-  # It passed the settings path as `jq -r --args '<prog>' "$settings" "${INSCOPE20[@]}"`.
+  # It passed the settings path as `jq -r --args '<prog>' "$settings" "${INSCOPE21[@]}"`.
   # With `--args`, EVERY remaining argument becomes a positional string — the
   # filename included — so jq never opened the file, read empty stdin, emitted
   # nothing and exited 0. `uncovered` was always "" and `want "" ""` always
@@ -886,7 +886,7 @@ a9_designated_responder() {
   # rest of the suite gets: feed the document on stdin, bind the hook list with
   # --argjson, and prove non-vacuity before trusting the result.
   local in20 out needed uncovered
-  in20="$(printf '%s\n' "${INSCOPE20[@]}" | jq -Rsc 'split("\n") - [""]')"
+  in20="$(printf '%s\n' "${INSCOPE21[@]}" | jq -Rsc 'split("\n") - [""]')"
   out="$(jq -r --argjson in20 "$in20" '
     . as $d
     | ([ $d.hooks.PreToolUse[] | . as $e
@@ -911,7 +911,7 @@ a9_designated_responder() {
   # Positive control: if no migrated hook is registered at all, the difference
   # is trivially empty and the assertion proves nothing.
   if [[ "${needed:-0}" -lt 1 ]]; then
-    bad "A9 non-vacuity control failed: zero matchers resolved for the ${#INSCOPE20[@]} in-scope hooks" \
+    bad "A9 non-vacuity control failed: zero matchers resolved for the ${#INSCOPE21[@]} in-scope hooks" \
         "settings.json registers none of them — the coverage check would pass vacuously"
     return
   fi
@@ -1047,24 +1047,24 @@ a16_exit_codes() {
 
   # --- class 1: unparseable (jq rejects the document; n == 0) ---------------
   offenders=()
-  for hook in "${INSCOPE20[@]}"; do
+  for hook in "${INSCOPE21[@]}"; do
     rc="$(rc_for "$hook" "$MALFORMED_PAYLOAD")"
     [[ "$rc" == "0" ]] || offenders+=("$hook → rc $rc")
   done
   if (( ${#offenders[@]} == 0 )); then
-    ok "A16 all ${#INSCOPE20[@]} in-scope hooks exit 0 on an UNPARSEABLE envelope"
+    ok "A16 all ${#INSCOPE21[@]} in-scope hooks exit 0 on an UNPARSEABLE envelope"
   else
     bad "A16 hook(s) exited non-zero on an unparseable envelope — stdout JSON is discarded" "${offenders[@]}"
   fi
 
   # --- class 2: happy (every contracted field a string) --------------------
   offenders=()
-  for hook in "${INSCOPE20[@]}"; do
+  for hook in "${INSCOPE21[@]}"; do
     rc="$(rc_for "$hook" "$HAPPY_PAYLOAD")"
     [[ "$rc" == "0" ]] || offenders+=("$hook → rc $rc")
   done
   if (( ${#offenders[@]} == 0 )); then
-    ok "A16 all ${#INSCOPE20[@]} in-scope hooks exit 0 on a HAPPY envelope"
+    ok "A16 all ${#INSCOPE21[@]} in-scope hooks exit 0 on a HAPPY envelope"
   else
     bad "A16 hook(s) exited non-zero on a happy envelope" "${offenders[@]}"
   fi
@@ -1081,12 +1081,12 @@ a16_exit_codes() {
     bad "A16 FIXTURE BROKEN — jq still reachable on the shim PATH" "the jq_missing class would be vacuous"
   else
     offenders=()
-    for hook in "${INSCOPE20[@]}"; do
+    for hook in "${INSCOPE21[@]}"; do
       rc="$(rc_for "$hook" "$ARRAY_STASH" "PATH=$shim")"
       [[ "$rc" == "0" ]] || offenders+=("$hook → rc $rc")
     done
     if (( ${#offenders[@]} == 0 )); then
-      ok "A16 all ${#INSCOPE20[@]} in-scope hooks exit 0 with jq MISSING (printf ask is the only channel)"
+      ok "A16 all ${#INSCOPE21[@]} in-scope hooks exit 0 with jq MISSING (printf ask is the only channel)"
     else
       bad "A16 hook(s) exited non-zero with jq missing — the ask is voided with no telemetry" "${offenders[@]}"
     fi
@@ -1109,11 +1109,11 @@ a16_exit_codes() {
 }
 
 # ===========================================================================
-# A13 — per-file source hygiene across all 20 in-scope hooks.
+# A13 — per-file source hygiene across all 21 in-scope hooks.
 # ===========================================================================
 a13_source_hygiene() {
   local hook f n src_lines bad_src=() missing=() missing_call=()
-  for hook in "${INSCOPE20[@]}"; do
+  for hook in "${INSCOPE21[@]}"; do
     f="$SCRIPT_DIR/$hook.sh"
     n="$(grep -cE 'source .*lib/hook-input\.sh' "$f" || true)"
     [[ "$n" == "1" ]] || missing+=("$hook (found $n)")
@@ -1158,7 +1158,7 @@ a13_source_hygiene() {
     done
   done
   if (( ${#missing[@]} == 0 )); then
-    ok "A13 all ${#INSCOPE20[@]} in-scope hooks source the helper exactly once"
+    ok "A13 all ${#INSCOPE21[@]} in-scope hooks source the helper exactly once"
   else
     bad "A13 helper source count wrong" "${missing[@]}"
   fi
@@ -1187,7 +1187,7 @@ a13_source_hygiene() {
 # It is merged rather than widened in place because it drove the SAME payload
 # class through the SAME hooks as A3's loop, one sandbox each — two overlapping
 # loops asserting overlapping properties, with A3 needing exactly the presence
-# evidence A14 was already collecting. One loop over INSCOPE20 now carries all
+# evidence A14 was already collecting. One loop over INSCOPE21 now carries all
 # five properties, and the responder's own ask is asserted there and in A16.
 
 # ===========================================================================
