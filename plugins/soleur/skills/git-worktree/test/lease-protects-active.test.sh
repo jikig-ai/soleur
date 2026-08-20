@@ -17,8 +17,51 @@ PASS=0; FAIL=0
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 
-TMP=$(mktemp -d)
+TMP=$(mktemp -d) || { echo "FATAL: mktemp -d failed — refusing to run with an empty \$TMP, every fixture path would resolve against /" >&2; exit 2; }
 trap 'rm -rf "$TMP"' EXIT
+
+# Resolved ONCE, with `pwd -P`: TMPDIR is routinely a symlink, and comparing an
+# unresolved $TMP against a resolved toplevel false-FAILS every call.
+TMP_REAL="$(cd "$TMP" && pwd -P)" || TMP_REAL=""
+# An EMPTY TMP_REAL would silently disable the containment check below, because the
+# pattern `"$TMP_REAL"/*` degrades to `/*`, which matches every absolute path — the
+# guard would return 0 for a live repository. That is the same fail-open shape this
+# whole helper exists to close, so it is asserted rather than assumed. `readonly`
+# stops a later assignment from reintroducing it.
+case "$TMP_REAL" in
+  /*) : ;;
+  *)  echo "FATAL: could not resolve the fixture root '$TMP' to an absolute path — refusing, an empty root makes the containment check match everything" >&2
+      exit 2 ;;
+esac
+readonly TMP_REAL
+
+# cd into a fixture, or refuse. Two arms, and the second is why `cd X || exit` is
+# not enough:
+#   (a) the directory is absent  -> cd fails.
+#   (b) the directory EXISTS but is not a repository -> cd SUCCEEDS, and git then
+#       walks UP to the enclosing repository. On 2026-08-20 that enclosing repo was
+#       a live worktree: `git worktree add` had created the path and then failed, so
+#       every guard keyed on cd's exit status passed and the fixture's commits landed
+#       on a real branch. Measured on main at 58486e1ae: HEAD 10b74df57 -> f5fd37bd6,
+#       carrying "victim", "victim2", "v9 change", "v12 change".
+# So containment is asserted on the RESOLVED git toplevel, not on cd's exit status.
+cdx() {
+  local target="$1" top
+  if ! cd "$target" 2>/dev/null; then
+    printf '  FAIL: fixture directory absent: %s\n' "$target" >&2
+    printf '        refusing to run fixture commands in %s — that is a LIVE repository.\n' "$PWD" >&2
+    : > "$TMP/.cdx-failed"
+    exit 90
+  fi
+  top="$(git rev-parse --show-toplevel 2>/dev/null)" || top=""
+  case "${top:-<none>}" in
+    "$TMP_REAL"|"$TMP_REAL"/*) return 0 ;;
+  esac
+  printf '  FAIL: %s exists, but its git toplevel is %s\n' "$target" "${top:-<not a git repository>}" >&2
+  printf '        which is OUTSIDE the fixture root %s — refusing, git would write to that repository.\n' "$TMP_REAL" >&2
+  : > "$TMP/.cdx-failed"
+  exit 90
+}
 
 # ---------------------------------------------------------------------------
 # Stand up a fake bare repo with two branches: main + feat-victim. Merge
@@ -30,7 +73,7 @@ git init --bare -b main "$BARE" >/dev/null
 # Seed a commit on main via a temporary clone
 SEED="$TMP/seed"
 git clone "$BARE" "$SEED" >/dev/null 2>&1
-( cd "$SEED" || { echo "FATAL: cd to sandbox \$SEED failed; refusing to write git objects in $(pwd)" >&2; exit 90; }
+( cdx "$SEED"
   git -c user.email=t@t -c user.name=t commit --allow-empty -m "seed" >/dev/null
   git push origin main >/dev/null 2>&1
 )
@@ -47,7 +90,7 @@ mkdir -p "$WT_PARENT/.worktrees"
 # Anchor a fake "victim" checkout — the worktree that holds an active lease
 # and which a sibling cleanup-merged invocation must NOT reap.
 git -C "$BARE" worktree add -b feat-victim "$WT_PARENT/.worktrees/feat-victim" main >/dev/null 2>&1
-( cd "$WT_PARENT/.worktrees/feat-victim" || { echo "FATAL: cd to sandbox \$WT_PARENT/.worktrees/feat-victim failed; refusing to write git objects in $(pwd)" >&2; exit 90; }
+( cdx "$WT_PARENT/.worktrees/feat-victim"
   echo hi > a.txt
   git -c user.email=t@t -c user.name=t add a.txt
   # Date the commit older than the 10-min recent-commit grace so the lease
@@ -115,7 +158,7 @@ WT_ACTOR="$WT_PARENT/.worktrees/feat-actor"
   # `victim change`, `victim2 change`, `v9 change` and `v12 change` onto a live feature branch in
   # another session's worktree, then checked that worktree out to main and pulled. The fixture
   # names map one-to-one onto the four cd-failure sites in this file.
-  cd "$WT_ACTOR" || { echo "FATAL: cd to sandbox \$WT_ACTOR failed; refusing to run cleanup-merged in $(pwd)" >&2; exit 90; }
+  cdx "$WT_ACTOR"
   SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT" \
     bash "$WM" cleanup-merged >/tmp/cleanup-out.$$ 2>&1 || true
 )
@@ -153,7 +196,7 @@ kill "$HOLDER_PID" 2>/dev/null || true
 # ---------------------------------------------------------------------------
 git -C "$BARE" worktree add -b feat-victim2 "$WT_PARENT/.worktrees/feat-victim2" main >/dev/null 2>&1
 WT_VICTIM2="$WT_PARENT/.worktrees/feat-victim2"
-( cd "$WT_VICTIM2" || { echo "FATAL: cd to sandbox \$WT_VICTIM2 failed; refusing to write git objects in $(pwd)" >&2; exit 90; }
+( cdx "$WT_VICTIM2"
   echo hi2 > b.txt
   git -c user.email=t@t -c user.name=t add b.txt
   # Older than the 10-minute recent-commit grace, so the LEASE is the only
@@ -186,7 +229,7 @@ else
   pass "scenario 2 precondition: the acquiring process has exited (pid $DEAD_PID is dead)"
   (
     # `|| exit` load-bearing -- see the note at the first cd site above.
-    cd "$WT_ACTOR" || { echo "FATAL: cd to sandbox \$WT_ACTOR failed; refusing to run cleanup-merged in $(pwd)" >&2; exit 90; }
+    cdx "$WT_ACTOR"
     SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT" \
       bash "$WM" cleanup-merged >/tmp/cleanup2-out.$$ 2>&1 || true
   )
@@ -592,7 +635,7 @@ SEED9="$TMP/seed9"; git clone "$BARE9" "$SEED9" >/dev/null 2>&1
 rm -rf "$SEED9"
 WT9="$TMP/wt9"; mkdir -p "$WT9/.worktrees"
 git -C "$BARE9" worktree add -b feat-v9 "$WT9/.worktrees/feat-v9" main >/dev/null 2>&1
-( cd "$WT9/.worktrees/feat-v9" || { echo "FATAL: cd to sandbox \$WT9/.worktrees/feat-v9 failed; refusing to write git objects in $(pwd)" >&2; exit 90; }
+( cdx "$WT9/.worktrees/feat-v9"
   echo hi9 > c.txt
   git -c user.email=t@t -c user.name=t add c.txt
   # Older than the 10-minute recent-commit grace, so the LEASE is the only thing
@@ -803,7 +846,7 @@ S12="$TMP/s12"; git clone "$BARE12" "$S12" >/dev/null 2>&1
 rm -rf "$S12"
 WT12="$TMP/wt12"; mkdir -p "$WT12/.worktrees"
 git -C "$BARE12" worktree add -b feat-v12 "$WT12/.worktrees/feat-v12" main >/dev/null 2>&1
-( cd "$WT12/.worktrees/feat-v12" || { echo "FATAL: cd to sandbox \$WT12/.worktrees/feat-v12 failed; refusing to write git objects in $(pwd)" >&2; exit 90; }
+( cdx "$WT12/.worktrees/feat-v12"
   echo hi12 > d.txt
   git -c user.email=t@t -c user.name=t add d.txt
   GIT_COMMITTER_DATE="2025-01-01T00:00:00Z" \
@@ -890,6 +933,16 @@ MIN_ASSERTIONS=40  # 3 -> 6 -> 9 -> 15 -> 17 (PR #7373 sc. 3-7) -> 40 (#7409 sc.
 # slip through whenever the defect happened to produce the expected dispatch
 # count. Matches scripts/lint-diagnosis-claims.test.sh and
 # scripts/lint-workflow-step-env-refs.test.sh, which both count PASS + FAIL.
+# `exit 90` inside `( cdx ... )` ends only the SUBSHELL, so without this marker the
+# suite would carry on against a fixture it never built and report whatever the
+# surviving assertions happened to say. Checked BEFORE the vacuity floor: a run that
+# refused is not a run with too few assertions, and must not be described as one.
+if [[ -f "$TMP/.cdx-failed" ]]; then
+  echo "FAIL: at least one fixture directory was absent or outside the fixture root."
+  echo "      The suite did not run as designed; its verdicts are not evidence."
+  exit 1
+fi
+
 if [[ $(( PASS + FAIL )) -lt "$MIN_ASSERTIONS" ]]; then
   echo "FAIL: only $(( PASS + FAIL )) assertions ran, expected >= $MIN_ASSERTIONS — the suite did not execute what it claims to cover."
   exit 1
