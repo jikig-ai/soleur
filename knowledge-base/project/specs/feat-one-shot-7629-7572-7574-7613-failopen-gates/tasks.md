@@ -151,7 +151,9 @@ commit — asserted from git history (tasks 1.7, 6.1), never from a pasted trans
       **Commit — test only.**
 - [ ] 6.2 **GREEN.** Replace `printf '%s' "$log" | grep -qF …` with a form that cannot lose a
       match to EPIPE (here-string or captured file); apply the same form to the counting line for
-      consistency (note in the comment: `grep -c` reads to EOF and never breaks the pipe).
+      consistency (note in the comment: `grep -c` reads to EOF and never breaks the pipe). Then
+      sweep the file with **#7005's wide pattern**
+      `\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q` — the narrow `-q` form misses `-Eq`/`-iq`/`-Fq`.
 - [ ] 6.3 Replace `SKIP_MARKER` with the enumerated set `SKIP (loud): T5 `, `SKIP (loud): S1 `;
       make FAIL a per-arm breakdown; leave `SUITE_TERMINAL` untouched; fix the PASS/FAIL
       denominator inconsistency.
@@ -161,6 +163,12 @@ commit — asserted from git history (tasks 1.7, 6.1), never from a pasted trans
       an alert issue on exit 1); retire the `<!-- soleur:followthrough … -->` directive on #7574.
       Header must record why: the sweeper closes on PASS and `closed_precheck` refuses to
       re-litigate, so an enrolled probe retires itself after one run.
+      **The file MUST contain the literal marker
+      `<!-- gate-override: new-scheduled-cron-prefer-inngest -->`** or
+      `.claude/hooks/new-scheduled-cron-prefer-inngest.sh` denies the Write (ADR-033: 53 Inngest
+      cron functions vs 12 scheduled workflows). Header states the exemption — purely repo-scoped
+      GitHub-API work, no app context/secrets/Sentry, nothing that benefits from `step.run`
+      memoisation — and cites `scheduled-followthrough-sweeper.yml` as the same-shape precedent.
 - [ ] 6.7 Register the new test with an explicit `run_suite` line in the `scripts` `TEST_GROUP`.
 
 ## Phase 7 — Integration

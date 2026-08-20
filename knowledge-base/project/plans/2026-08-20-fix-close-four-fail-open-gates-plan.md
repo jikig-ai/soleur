@@ -13,6 +13,42 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-20
+**Panel:** kieran-rails-reviewer, code-simplicity-reviewer, spec-flow-analyzer,
+architecture-strategist, plus a scoped strong-model consult. Every load-bearing finding was
+re-verified against the real files before being folded in.
+
+### What the review changed
+
+1. **Three guards in the first draft could not be driven RED**, in a plan whose thesis is that
+   such guards are the defect. All three are fixed: the derived `_SKIP_CEILING` was a tautology,
+   the widened skip marker would have failed every day forever, and the `.code.sh` stripper had
+   nothing to strip. Two of the three were the *issue bodies' own suggested fixes*.
+2. **Six fail-open sites, not two.** The panel found the post-merge base-resolution fallback,
+   the swallowed `gh issue create`, and — most consequentially — a scan loop whose `continue`
+   arms let `no_new_skills=false` produce zero verdicts and still exit 0.
+3. **The #7574 observer's carrier retires it.** Repairing the probe would have closed its own
+   tracker on first PASS and permanently exempted it. The carrier moves to a standing monitor.
+4. **The S1 classifier needed T5's four-rung ladder**, not a 2×2. A 2×2 routes every harness
+   defect into the skip bucket — the exact misattribution ADR-188 was written to prevent.
+5. **No new ADR.** Two amendments (ADR-152, ADR-188) replace it, because this plan reverses two
+   decisions those ADRs recorded and adds a third row to a rule table one already carries.
+
+### New considerations discovered in the deepen pass
+
+- **#7005 is the open umbrella for the #7574 defect class**, and supplies both the measured
+  64 KiB threshold and the correct wide detection pattern. This plan fixes one of its 52 sites
+  and cites it rather than re-deriving either.
+- **A new `scheduled-*.yml` is denied by a PreToolUse hook** without an explicit ADR-033 opt-out
+  marker. The exemption and its precedent are now written into the plan, so `/work` is not
+  blocked mid-phase.
+- **AP-023 cuts both ways on the skip ceiling** — the plan now satisfies both halves by deriving
+  the *population* and stating the *budget*.
+
+---
+
 ## Overview
 
 Four filed defects share one shape: a check reports success on an input it was written to
@@ -31,7 +67,9 @@ block.
 - **#7613** — three R3-arm guards are narrower than the properties they name. The fix is
   **anchoring the guards**, not rewriting their input; see the Decision Challenge.
 
-Each is closed by driving the guard RED on the concrete input the issue names, then GREEN. No
+Each is closed by driving the guard RED on the concrete input the issue names, then GREEN. Every
+acceptance anchor names that **concrete motivating input and the exit code or verdict it must
+produce** — never the presence of a token in a file (`cq-assert-anchor-not-bare-token`). No
 guard ships without a demonstrated failing direction — and, after a four-reviewer panel found
 three guards in this plan's own first draft that could not be driven RED, no guard ships
 without that direction having been *measured against the real artifact* rather than assumed.
@@ -217,10 +255,79 @@ markers**.
 
 ### Related issues and PRs
 
-#7291 / PR #7510 / ADR-188 (introduced `arm_skip` for T5 only; #7572 and #7574 are its declared
-residuals) · #7501 (landed R4's rc capture; the "4 of 6 arms discard rc" figure is stale, the
-count is 2) · #7535 (the deferred pre-baked rehearsal image, named by the probe's FAIL message)
-· #7534 and #3593 (see Open Code-Review Overlap).
+Every number below was resolved live with `gh issue view`/`gh pr view`; none is cited from
+memory.
+
+- **#7291** (CLOSED) / **#7510** (MERGED) / **ADR-188** — introduced `arm_skip` for T5 only;
+  #7572 and #7574 are its declared residuals.
+- **#7501** (CLOSED) — landed R4's rc capture; the "4 of 6 arms discard rc" figure is stale, the
+  count is 2.
+- **#7535** (OPEN) — the deferred pre-baked rehearsal image, named by the probe's FAIL message.
+- **#7005** (OPEN) — **the umbrella for this plan's #7574 defect class.** See Open Code-Review
+  Overlap; it carries the measured threshold and the correct detection pattern.
+- **#7565** (CLOSED), **#7204** (OPEN), **#6982** (CLOSED) — cited by the suite's own comments
+  for the stanzas this plan edits.
+- **#7278** (CLOSED) / **#7264** (CLOSED) — ADR-152's two amendments. See the ADR section.
+- **#7534**, **#3593** (both OPEN) — see Open Code-Review Overlap.
+
+### Deepen-pass findings
+
+**1. #7005 already tracks this exact defect class, and supplies the measurement.** It records
+that `grep -q` under `pipefail` reports failure on a *successful* match, and pins the threshold:
+*"Measured threshold is the 64 KiB pipe buffer: 0/30 false failures below it, 30/30 at 128 KB."*
+Two consequences for this plan:
+
+- It explains why the #7574 probe fails **every** time: Actions run logs are far above 64 KiB.
+- It calibrates Guard 3 M7. The `head -1` hazard on the required check is real but currently
+  **sub-threshold** — today's scanner emits ~700 bytes — so it is a latent regression that
+  materialises as findings accumulate, not a live bug. The plan fixes it anyway, and now says
+  why with a number rather than by analogy.
+
+It also supplies the **correct detection pattern**: use the wide form
+`\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q`, because the narrow `-q` form misses `-Eq`, `-iq`
+and `-Fq` — *"two live sites survived the first conversion pass in #6998 because of exactly
+that."* Phase 6.2 uses the wide form when sweeping the probe file.
+
+**2. ADR-152's #7278 amendment is precisely the precedent for Guard 5 M3.** That amendment
+extended the strip to the registry host **with a deliberately different expression**, and its
+standing instruction is *"Do not port an expression between these two cases."* Guard 5 M3 —
+"widening the strip to `_b2_strip`'s zero-width shape must drive RED" — is that instruction
+applied to a third artifact class, which is why the plan amends ADR-152 rather than opening a
+new ADR. A second amendment (2026-08-11, #7264) already extended the strip to git-data's own
+template, so the rule table has two rows and this is the third.
+
+**3. AP-023 cuts both ways on `_SKIP_CEILING`, and the plan satisfies both halves.** Its
+tautology clause — *"a case counter incremented INSIDE both verdict helpers makes the companion
+conservation identity a TAUTOLOGY"* — is exactly why the ceiling must not be the runtime sum of
+declared costs. But its other clause says *"The guard's population is DERIVED by floor SHAPE,
+never listed: a hand-maintained list is the stale snapshot that is the same defect one level
+up."* The plan honours both by separating the two things a derived ceiling conflates: the
+**population** (which arms are skip-eligible) is derived by shape — a grep of `arm_skip` call
+sites — while the **budget** (how many assertions may be skipped) is a stated literal with an
+itemised derivation. The call-site-count assertion is what couples them, and it can disagree in
+either direction. AP-021 governs the S1 classifier's harness-defect rung: a message may only
+name a cause the run measured, which is why `(rc==0, marker absent)` must not be reported as an
+environment skip.
+
+**4. A new `.github/workflows/scheduled-*.yml` is blocked by a PreToolUse hook unless it opts
+out explicitly.** `.claude/hooks/new-scheduled-cron-prefer-inngest.sh` denies the Write unless
+the body contains the literal marker
+`<!-- gate-override: new-scheduled-cron-prefer-inngest -->`. Measured: 53 Inngest cron functions
+vs 12 GitHub Actions scheduled workflows, so Inngest is canonical per ADR-033. The exemption
+this plan claims — and must write into the workflow header — is that the work is **purely
+repo-scoped GitHub-API work**: it reads this repository's own Actions run logs through `gh` and
+maintains an issue. No app context, no app secrets, no Sentry integration, and nothing that
+would benefit from `step.run` memoisation or Inngest replay. Direct precedent:
+`.github/workflows/scheduled-followthrough-sweeper.yml`, which is the same shape and runs the
+same probe today.
+
+**5. Network-outage gate (deepen Phase 4.5) — fired on the keyword scan, assessed as a false
+positive.** Two substring matches: `unreachable` inside a quoted failure-mode description
+("unreachable SHA"), and `SSH` inside the sentence stating there is **no** SSH in this plan. No
+network or connectivity symptom is being diagnosed, no `terraform apply` is driven, and no
+resource in scope carries `provisioner "file"`, `provisioner "remote-exec"` or a
+`connection { type = "ssh" }` block. No layer-by-layer deep-dive is owed. Recorded rather than
+silently skipped so the next reader does not re-derive it.
 
 ---
 
@@ -256,6 +363,16 @@ deferred-scope-out --limit 200` (200), matched against every planned path.
   only as a synthetic check-run name. **Acknowledge:** this plan neither renames the job nor
   touches the composite — but see Risks, because that composite is why the pre-merge gate is
   not the only control that matters.
+- **#7005** — *review: sweep the remaining pipefail + `grep -q` fail-open sites in `scripts/`
+  and `plugins/`*. This plan's #7574 half fixes **one** of the 52 `scripts/` sites it counts
+  (`scripts/followthroughs/t5-skip-persistence-bound-7510.sh`). **Fold in the site, acknowledge
+  the class.** Folding in the whole sweep — 52 sites across 27 files in `scripts/`, 35 across 17
+  in `plugins/`, plus the `constraint-gates.yml` / `ci.yml` workflow gates it names — would turn
+  a four-issue fail-open fix into a repo-wide refactor, which is the anti-pattern the CONCUR
+  gate that produced #7629 exists to argue against. #7005 stays open and this plan's PR body
+  references it, so the site count it tracks moves by one. Two things are taken **from** #7005
+  rather than re-derived: its measured 64 KiB threshold, and its wide detection pattern (the
+  narrow `-q` form misses `-Eq`/`-iq`/`-Fq`, which is how two sites survived a previous pass).
 
 No other open review issue names any planned path.
 
@@ -294,13 +411,17 @@ pre-merge gate as the sole defence would have been false.
 render-time transformation only"*, and its Consequences assert the strip *"does not touch
 mid-line or trailing `#`"* — a sentence that stays true of the render and becomes false of the
 suite's code corpus once the prophylactic stripper lands. ADR-152 already reaches into this
-suite (it records that B1's byte-identity check compares against the stripped source) and its
-#7278 amendment established a **rule table** of "which strip expression for which artifact
-class". This plan's decision is literally a third row in that table. A standalone ADR-195 would
-duplicate the table, leave ADR-152's sentence reading as repo-wide truth, and drag in the
-ordinal-collision gate and a renumber sweep for a two-line change to a test file's heredoc.
-*(The next free ordinal was probed anyway — highest claimed across all 63 `origin/*` refs is
-ADR-194 — and is recorded here only so a future reader knows the check ran.)*
+suite (it records that B1's byte-identity check compares against the stripped source), and it
+already carries **two amendments** that make this a third row rather than a new decision:
+*Amendment (2026-08-04, #7278) — extended to the registry host, with a DIFFERENT expression*,
+whose standing instruction is **"Do not port an expression between these two cases"**; and
+*Amendment (2026-08-11, #7264) — git-data's own cloud-init template is now stripped too*. Guard
+5 M3 is that first instruction applied to a third artifact class: porting `_b2_strip`'s
+expression into `.code.sh` must drive RED. A standalone new ADR would duplicate the rule table,
+leave ADR-152's mid-line sentence reading as repo-wide truth, and drag in the ordinal-collision
+gate and a renumber sweep for a two-line change to a test file's heredoc. *(The next free
+ordinal was probed anyway — highest claimed across all 63 `origin/*` refs is ADR-194 — and is
+recorded only so a future reader knows the check ran.)*
 
 **Amend `ADR-188`.** This plan reverses two things ADR-188 recorded, and doing that silently is
 the defect:
@@ -533,7 +654,7 @@ ask, not allow … Architecture review F8."*
 | M4 | Make the scanner exit 0 while printing no verdict line | yes — exit status alone is not the guard |
 | M5 | Make every path fall through `[ ! -f "$path" ] && continue` while `no_new_skills=false` | yes — the scanned-count assertion reddens. **Without this row the gate stays fail-open one step below where the issue cuts** |
 | M6 | Delete `SKILL_SECURITY_SCAN_OFFLINE=1` from either call site | yes — a required check must not be coupled to `api.osv.dev`; that env var is the reason fail-closed is safe |
-| M7 | Restore `head -1` inside a pipeline whose status is read | yes — `head -1` closes the pipe, the scanner takes EPIPE, `pipefail` promotes it, and a **successful** scan fails the gate. This is the #7574 defect pointed at a required merge check |
+| M7 | Restore `head -1` inside a pipeline whose status is read | yes — `head -1` closes the pipe, the scanner takes EPIPE, `pipefail` promotes it, and a **successful** scan fails the gate. This is the #7574 defect pointed at a required merge check. **Currently sub-threshold**: #7005 measures the boundary at the 64 KiB pipe buffer (0/30 false failures below, 30/30 at 128 KB) and today's scanner emits ~700 bytes, so this is a latent regression that arms as findings accumulate. The mutation row must therefore use a fixture whose scanner output exceeds 64 KiB, or it cannot be driven RED |
 
 **Must-PASS (non-canonical).** (i) A scanner emitting leading blank lines or an `::notice::`
 before a valid verdict → exit 0. (ii) `REVIEW` → exit 0. (iii) `HIGH-RISK` with a matching
@@ -915,7 +1036,11 @@ cardinality-parity `fail` counts in the same edit; re-record the terminal line.
     (g) zero successful runs → exit 2. Run it: (a), (b) and (c) fail today, all returning exit 2.
 6.2 **GREEN.** Replace the `printf | grep -q` form with one that cannot lose a match to EPIPE
     (a here-string or a captured file). Apply the same form to the counting line **for
-    consistency, not for correctness** — `grep -c` reads to EOF and never breaks the pipe.
+    consistency, not for correctness** — `grep -c` reads to EOF and never breaks the pipe. Then
+    sweep the whole file with **#7005's wide pattern**
+    `\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q` rather than a narrow `-q` search, because the
+    narrow form misses `-Eq`/`-iq`/`-Fq` and that is exactly how two sites survived a previous
+    conversion pass.
 6.3 Replace `SKIP_MARKER` with the **enumerated set** `SKIP (loud): T5 `, `SKIP (loud): S1 `,
     and make the FAIL message a per-arm breakdown. Keep the `SUITE_TERMINAL` positive control
     untouched — it is the one thing in the file that worked. Fix the denominator inconsistency
@@ -947,7 +1072,7 @@ cardinality-parity `fail` counts in the same edit; re-record the terminal line.
 |---|---|
 | `scripts/skill-security-scan-step-body.test.sh` | Guards 1–3. Extracts and executes the four in-scope `run:` bodies across both workflows. |
 | `scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh` | Guard 9. Drives the probe against seven fixture samples through a fake `gh`. |
-| `.github/workflows/scheduled-rehearsal-skip-monitor.yml` | Guard 9's carrier — a standing daily monitor that does not retire itself on first PASS. |
+| `.github/workflows/scheduled-rehearsal-skip-monitor.yml` | Guard 9's carrier — a standing daily monitor that does not retire itself on first PASS. **Must carry the literal marker `<!-- gate-override: new-scheduled-cron-prefer-inngest -->`** or `.claude/hooks/new-scheduled-cron-prefer-inngest.sh` denies the Write outright (ADR-033 makes Inngest canonical: 53 cron functions vs 12 scheduled workflows). The header must state the exemption — purely repo-scoped GitHub-API work, no app context, no app secrets, no Sentry, nothing that benefits from `step.run` memoisation — and cite `scheduled-followthrough-sweeper.yml` as the same-shape precedent running the same probe today. |
 
 No RED-proof transcript files. The RED-before-GREEN property is asserted from git history
 instead (AC2, AC29), which is re-derivable by any reviewer forever; a pasted transcript is the
@@ -1094,7 +1219,16 @@ Every path above was confirmed present in the worktree. No path glob is prescrib
 - [ ] **AC34** The probe is invoked by `.github/workflows/scheduled-rehearsal-skip-monitor.yml`
       and **not** by a `<!-- soleur:followthrough … -->` directive. Checkable at PR time, unlike
       a claim about issue state after merge.
+- [ ] **AC34b** The monitor workflow carries the literal marker
+      `<!-- gate-override: new-scheduled-cron-prefer-inngest -->` and a header stating the
+      ADR-033 exemption with its precedent. Without the marker the PreToolUse hook denies the
+      Write and Phase 6.6 cannot complete.
 - [ ] **AC35** The FAIL and PASS messages report over the same denominator.
+- [ ] **AC35b** Sweeping
+      `scripts/followthroughs/t5-skip-persistence-bound-7510.sh` with **#7005's wide pattern**
+      `\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q` returns zero remaining sites. The narrow `-q`
+      form is insufficient — it misses `-Eq`/`-iq`/`-Fq`, which is how two sites survived a
+      previous conversion pass.
 
 **Cross-cutting**
 
