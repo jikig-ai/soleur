@@ -104,7 +104,7 @@ product behaviour we cannot change.
 
 ## Considered Options
 
-### (a) Migrate to Cloudflare Pages — **PROPOSED**
+### (a) Migrate to Cloudflare Pages — **ACCEPTED**
 
 The site is served *by* Cloudflare, so **there is no origin certificate**. The
 entire failure class stops existing rather than being managed.
@@ -166,7 +166,7 @@ tokens, and costs nothing further.
 
 ## Decision
 
-**Proposed:** migrate the marketing/docs site from GitHub Pages to Cloudflare
+**Accepted:** migrate the marketing/docs site from GitHub Pages to Cloudflare
 Pages, retire the certificate-remediation subsystem, and return the zone to
 `strict` universally.
 
