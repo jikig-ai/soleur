@@ -271,10 +271,10 @@ else fail "AC1 expected exactly one '^anchor ' line, got $(lines_of anchor)"; fi
 # satisfies the issue's literal conjunction and still leaves the cores held.
 R="$(fp_new ac2)"
 mk_anchor "$R" 4242                       # the bash wrapper — the only fd/255
-mk_member "$R" 4243 "$HANDLE_A" 100 bash  # second bash, no fd/255
+mk_anchor "$R" 4243   # a REAL second bash running a script HAS its own fd/255
 mk_member "$R" 4244 "$HANDLE_A" 100 python3
 run_reaper "$R" report
-expect_field anchors     1 "AC2 exactly one anchor (fd/255 is bash-only)"
+expect_field anchors     2 "AC2 every nested bash level is its own anchor"
 expect_field set_members 3 "AC2 the whole set, not just the wrapper"
 cases=$((cases + 1))
 if [[ "$(lines_of member)" -ge 2 ]]; then pass "AC2 members enumerated in the report"
@@ -291,6 +291,31 @@ else fail "AC2/M19 anchor must be signalled after its children; sink order was: 
 cases=$((cases + 1))
 if [[ "$(grep -cE '^4244$' "$SINK" || true)" == "1" ]]; then pass "AC2 the non-bash child is signalled"
 else fail "AC2 the CPU-holding child was never signalled — the R1a defect"; fi
+
+# AC2/dedupe — TWO ANCHORS SHARING ONE DOOMED INODE, which is the motivating
+# incident's real shape rather than an edge case: `git worktree remove` under a
+# running suite leaves a TREE of bash levels, each holding its own fd/255, so
+# each is an anchor and each enumerates the others as members. Measured before
+# the fix: 7 bash + 3 python3 gave set_members=70 and signalled=70 for TEN
+# distinct pids, the cap evaluated against a per-anchor 10, and
+# children-before-anchor violated. Every fixture in this suite used to build
+# exactly ONE anchor, which is what hid the entire class.
+SINK="$TESTROOT/sink-dedup"; : > "$SINK"
+run_reaper "$R" reap ORPHAN_REAPER_SIGNAL_SINK="$SINK" ORPHAN_REAPER_DRY_RUN=0
+cases=$((cases + 1))
+_uniq="$(sort -u "$SINK" | wc -l)"; _tot="$(wc -l < "$SINK")"
+if [[ "$_tot" == "$_uniq" && "$_tot" -gt 0 ]]; then
+  pass "AC2/dedupe each pid is signalled exactly once across overlapping anchor sets ($_tot signals, $_uniq pids)"
+else
+  fail "AC2/dedupe $_tot signals for $_uniq distinct pids — overlapping anchors are double-signalling"
+fi
+cases=$((cases + 1))
+_last="$(awk 'END{print $1}' "$SINK")"
+if [[ "$_last" == "4242" || "$_last" == "4243" ]]; then
+  pass "AC2/dedupe an anchor is still signalled LAST once anchor sets overlap"
+else
+  fail "AC2/dedupe children-before-anchor is violated across overlapping anchors (last signalled: $_last)"
+fi
 
 # Accept-direction variants (the half a reject-only fixture set cannot see: a
 # detector that flags NOTHING satisfies every negative arm).
@@ -747,11 +772,20 @@ run_reaper "$R" reap ORPHAN_REAPER_SIGNAL_SINK="$SINK" ORPHAN_REAPER_DRY_RUN=0 \
 cases=$((cases + 1))
 if [[ "$(grep -cE 'pid=4242' "$EV" || true)" -ge 1 ]]; then pass "AC20 a journald record precedes the signal"
 else fail "AC20 no evidence record was written for the signalled pid"; fi
-for f in starttime uid age role verdict cwd_nlink fd255_nlink; do
+for f in starttime age role verdict cwd_nlink fd255_nlink; do
   cases=$((cases + 1))
   if [[ "$(grep -cE "$f=" "$EV" || true)" -ge 1 ]]; then pass "AC20 evidence carries $f"
   else fail "AC20 evidence record is missing $f"; fi
 done
+# `uid` is asserted against the RUNNING uid, not merely for presence. The bare
+# presence check left UID_NOW computed and unused — shellcheck's SC2034 on it
+# was the fingerprint of a value assertion that had been dropped.
+cases=$((cases + 1))
+if [[ "$(grep -cE "uid=$UID_NOW( |$)" "$EV" || true)" -ge 1 ]]; then
+  pass "AC20 the evidence uid equals the running uid ($UID_NOW)"
+else
+  fail "AC20 evidence uid is absent or does not equal id -u ($UID_NOW)"
+fi
 
 # AC20/M23 — a FAILED evidence write REFUSES the reap rather than signalling
 # unrecorded.
@@ -782,6 +816,43 @@ if [[ -n "$_ev" && -n "$_sig" && "$_ev" -lt "$_sig" ]]; then
   pass "AC20/M27 the evidence write precedes every signal site in signal_one"
 else
   fail "AC20/M27 evidence ordering is not provable (evidence line=${_ev:-?}, signal line=${_sig:-?})"
+fi
+
+# AC20/M27 — ORDERING, WITNESSED BEHAVIOURALLY. Pointing the evidence channel
+# and the signal sink at ONE file makes the interleaving observable. The
+# source-order assertion above pins the same property statically, and a source
+# grep over a heavily-commented file can be satisfied by a COMMENT: measured,
+# relocating the real `evidence_write` call below the signal and leaving one
+# comment naming it earlier kept the whole suite green.
+R="$(fp_new ac27-order)"
+mk_anchor "$R" 4242
+ONE="$TESTROOT/one-stream"; : > "$ONE"
+run_reaper "$R" reap ORPHAN_REAPER_SIGNAL_SINK="$ONE" ORPHAN_REAPER_EVIDENCE_FILE="$ONE" ORPHAN_REAPER_DRY_RUN=0
+cases=$((cases + 1))
+_evline="$(grep -nE '^orphan-reap verdict=authorized .*[ ]pid=4242( |$)' "$ONE" | head -1 | cut -d: -f1 || true)"
+_pidline="$(grep -nxE '4242' "$ONE" | head -1 | cut -d: -f1 || true)"
+if [[ -n "$_evline" && -n "$_pidline" && "$_evline" -lt "$_pidline" ]]; then
+  pass "AC20/M27 the authorizing record is written BEFORE the signal (observed on one stream)"
+else
+  fail "AC20/M27 ordering not observed behaviourally (evidence line=${_evline:-none}, signal line=${_pidline:-none})"
+fi
+
+# AC23 — SANITIZATION, WITNESSED WHERE THE BYTES ACTUALLY FLOW. `cmdline` is
+# read only inside signal_one, so an arm that plants hostile bytes and then runs
+# `report` asserts over output that never contained them under ANY
+# implementation. Measured: reducing _orphan_sanitize to the identity function
+# survived 141/141.
+R="$(fp_new ac23-bytes)"
+mk_anchor "$R" 4242
+mk_cmdline "$R" 4242 "$(printf 'bash \033[2Kevil\xe2\x80\xa8x\x7f')"
+EVB="$TESTROOT/ev-bytes"; : > "$EVB"
+run_reaper "$R" reap ORPHAN_REAPER_SIGNAL_SINK="$TESTROOT/sink-bytes" \
+  ORPHAN_REAPER_EVIDENCE_FILE="$EVB" ORPHAN_REAPER_DRY_RUN=0
+cases=$((cases + 1))
+if [[ -s "$EVB" ]] && ! grep -qP '\x1b|\x7f|\xe2\x80\xa8' "$EVB" 2>/dev/null; then
+  pass "AC23 hostile cmdline bytes are sanitized on the path that actually emits them"
+else
+  fail "AC23 raw ANSI/DEL/U+2028 bytes reached the evidence record (or no record was written)"
 fi
 
 # AC28g — EVIDENCE-CHANNEL LIVENESS, probed once at startup and printed.
@@ -873,7 +944,7 @@ else
   fail "AC23 non-printable bytes reached the output — check the LC_ALL=C tr pass"
 fi
 cases=$((cases + 1))
-if grep -qE "LC_ALL=C tr -c '\[:print:\]'" "$REAPER"; then
+if grep -qE "^[^#]*LC_ALL=C tr -c '\[:print:\]'" "$REAPER"; then
   pass "AC23 the canonical LC_ALL=C byte-wise sanitizer idiom is used"
 else
   fail "AC23 LC_ALL=C is load-bearing and must be pinned — it is what makes the pass byte-wise"
@@ -895,7 +966,7 @@ echo "--- robustness ---"
 # stat, so the registered live linter structurally cannot see this class.
 # Hence a source-level check IN ADDITION to the behavioural arm.
 cases=$((cases + 1))
-_bare="$(grep -nE '^[^#]*[a-z_]+=\$\((readlink|stat)[^)]*\)[[:space:]]*$' "$REAPER" || true)"
+_bare="$(grep -nE '^[^#]*[A-Za-z_][A-Za-z0-9_]*="?\$\((readlink|stat)[^)]*\)"?[[:space:]]*$' "$REAPER" || true)"
 if [[ -z "$_bare" ]]; then
   pass "AC24 every readlink/stat capture carries an explicit non-zero handler"
 else
@@ -922,9 +993,9 @@ expect_field scanned 0 "AC25 a numeric symlink entry is not walked"
 # because `local x=$(_tc_pgrp …)` masks the substitution's status behind
 # `local`'s own return of 0.
 cases=$((cases + 1))
-if grep -qE 'declare -F _tc_self_and_ancestors' "$REAPER" \
-   && grep -qE 'declare -F _tc_pgrp' "$REAPER" \
-   && grep -qE 'declare -F _tc_starttime_ticks' "$REAPER"; then
+if grep -qE '^[^#]*declare -F _tc_self_and_ancestors' "$REAPER" \
+   && grep -qE '^[^#]*declare -F _tc_pgrp' "$REAPER" \
+   && grep -qE '^[^#]*declare -F _tc_starttime_ticks' "$REAPER"; then
   pass "AC26 a declare -F assertion covers all three borrowed helpers"
 else
   fail "AC26 the declare -F assertion is missing a borrowed helper name"
@@ -973,7 +1044,15 @@ cases=$((cases + 1))
 _missing=""
 for s in $(grep -oE '\bORPHAN_(REAPER|PROC)_[A-Z_]+\b' "$REAPER" | sort -u || true); do
   # Declared in the header comment block AND read below it.
-  if [[ "$(grep -cE "^[^#]*\\\$\{?$s" "$REAPER" || true)" == "0" ]]; then
+  # A seam must be read on some line OTHER than its own default assignment, and
+  # the read need not carry a `$` — an arithmetic context like
+  # `(( age < ORPHAN_REAPER_MIN_AGE_S ))` is a genuine read. Counting every
+  # `${SEAM...}` occurrence made this vacuous by construction, because the
+  # `SEAM="${SEAM:-default}"` line at the top matches it: a seam that was
+  # declared and never read PASSED, which is verbatim the failure the script's
+  # own header warns about.
+  _reads="$(grep -nE "^[^#]*\b$s\b" "$REAPER" | grep -vE "^[0-9]+:$s=" || true)"
+  if [[ -z "$_reads" ]]; then
     _missing="$_missing $s"
   fi
 done
@@ -1031,7 +1110,7 @@ else fail "AC28 the no-flock seam did not produce a clean run"; fi
 # reap command an operator may reflexively prefix with sudo when it "doesn't
 # work", so this is the realistic path.
 cases=$((cases + 1))
-if grep -qE 'EUID' "$REAPER" && grep -qE '\bid -u\b' "$REAPER"; then
+if grep -qE '^[^#]*_euid_real=' "$REAPER" && grep -qE '^[^#]*"\$_euid_real" == "0"' "$REAPER"; then
   pass "AC28b the root refusal reads EUID"
 else
   fail "AC28b no EUID-based root refusal found"
@@ -1065,6 +1144,7 @@ expect_field anchors 0 "AC28c/G7 a foreign pid namespace is not adjudicated"
 # TC_PROC_ROOT="${TC_PROC_ROOT:-/proc}" with `:-`, not `-`, so an empty-but-set
 # seam silently reverts the borrowed helpers to the real /proc while this
 # script's own walk globs /[0-9]* at the FILESYSTEM ROOT.
+if [[ "$SKIP_LIVE" != "1" ]]; then
 cases=$((cases + 1))
 _o=""; _rc=0
 _o="$(env -u CI -u ORPHAN_PROC_ROOT ORPHAN_REAPER_SELF_PID="$FIXTURE_SELF_PID" ORPHAN_REAPER_NO_FLOCK=1 \
@@ -1073,6 +1153,7 @@ if [[ "$_rc" == "0" ]] && grep -qE '^ORPHAN_SCAN .*valid=1' <<<"$_o"; then
   pass "AC28c seam UNSET falls back to the real /proc cleanly"
 else
   fail "AC28c an unset seam did not produce a valid walk (rc=$_rc)"
+fi
 fi
 cases=$((cases + 1))
 _o=""; _rc=0
@@ -1092,7 +1173,7 @@ fi
 # process can be walked into a foreign anchor's set while both independently
 # pass every gate — restating the gates per member does not catch it.
 cases=$((cases + 1))
-if grep -qE "stat -Lc '%d:%i'" "$REAPER" && ! grep -qE "stat -Lc '%i'" "$REAPER"; then
+if grep -qE "^[^#]*stat -Lc '%n %d:%i'" "$REAPER" && ! grep -qE "^[^#]*stat -Lc '%i'" "$REAPER"; then
   pass "AC28f set membership compares %d:%i, never bare %i"
 else
   fail "AC28f a bare %i membership comparison is cross-device collidable"
@@ -1335,7 +1416,7 @@ cases=$((cases + 1))
 # `|| _orphan_rc=$?` rather than `|| true`: the caller must be able to SAY that
 # the detector did not run. `|| true` alone makes that indistinguishable from
 # "it ran and found nothing", and the second reads as an all-clear.
-if grep -qE '\|\| _orphan_rc=\$\?' "$TA" && grep -qE "printf 'ORPHAN_SCAN valid=0 reason=rc" "$TA"; then
+if grep -qE '^[^#]*\|\| _orphan_rc=\$\?' "$TA" && grep -qE "^[^#]*printf 'ORPHAN_SCAN valid=0 reason=rc" "$TA"; then
   pass "AC34/M36 the caller captures rc and emits ORPHAN_SCAN valid=0 itself on a non-zero exit"
 else
   fail "AC34/M36 a non-zero rc from the preamble would be swallowed — 'did not run' would read as 'found nothing'"
@@ -1345,7 +1426,7 @@ cases=$((cases + 1))
 # computing its own pgid would get timeout's pid rather than the runner's. The
 # synthesized-procfs arms structurally cannot observe this: they pin
 # TC_SELF_PID, so the pgid computed at the REAL call site is never seen.
-if grep -qE 'ORPHAN_REAPER_EXCLUDE_PGID=' "$TA"; then
+if grep -qE '^[^#]*ORPHAN_REAPER_EXCLUDE_PGID=' "$TA"; then
   pass "AC28h the caller passes the exclusion pgid EXPLICITLY rather than letting it be inferred"
 else
   fail "AC28h without an explicit exclusion pgid, timeout's own group is excluded instead of the runner's"
@@ -1384,7 +1465,7 @@ fi
 # therefore valid in both. Full runs carry 8 more assertions (the live-procfs
 # arm and the seven end-to-end hops); those eight are not floored here, and that
 # slack is the price of one threshold that is correct under both modes.
-MIN_CASES=133  # skip-live count; the live arms add 10 more
+MIN_CASES=136  # the skip-live count; full runs carry 12 more (the live arms)
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '\n[FATAL] assertion floor: %d assertions ran, expected at least %d.\n' \
     "$cases" "$MIN_CASES" >&2
@@ -1423,6 +1504,23 @@ if [[ "$pass_n" -ne $((_p0 + 1)) || "$fails" -ne $((_f0 + 1)) ]]; then
 fi
 # Subtract the control's own effects so it does not colour the real verdict.
 pass_n=$((pass_n - 1)); fails=$((fails - 1))
+
+# THE SAME CONTROL FOR expect_field, which carries 48 of this suite's 133
+# verdicts. Its `cases` increment lives INSIDE the helper, so a version that
+# keeps the count and drops the verdict is invisible to all three backstops:
+# the floor still sees the full count, conservation still balances, and the
+# pass/fail control above never routes through it. Measured on that mutant:
+# `133 passed, 0 failed`, byte-identical to a healthy run — while the
+# mount-namespace and age-floor mutants both went green through it.
+_p1="$pass_n"; _f1="$fails"; _c1="$cases"; _rr="$RR_OUT"
+RR_OUT="ORPHAN_SCAN valid=1"
+expect_field valid 0 "expect_field positive control (this FAIL is expected)"
+if [[ "$fails" -ne $((_f1 + 1)) || "$cases" -ne $((_c1 + 1)) ]]; then
+  printf '\n[FATAL] expect_field is neutered: fails %d->%d, cases %d->%d.\n' \
+    "$_f1" "$fails" "$_c1" "$cases" >&2
+  exit 1
+fi
+pass_n="$_p1"; fails="$_f1"; cases="$_c1"; RR_OUT="$_rr"
 
 echo "=== orphan-process-reaper: $pass_n passed, $fails failed ($cases assertions) ==="
 [[ "$fails" -eq 0 ]] || exit 1

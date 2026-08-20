@@ -497,14 +497,24 @@ _orphan_classify() {  # pid role(anchor|member)
   [[ -n "$_OC_CWD_KEY" ]] || { unreadable=$((unreadable + 1)); return 1; }
 
   # G3 — anchors only: fd/255 is an unlinked REGULAR FILE at an ABSOLUTE path
-  # ending `' (deleted)'`. All three terms, because `%h == 0` alone is far
-  # broader than "the bash script is unlinked": measured, a memfd_create file
-  # has nlink 0 and reports as a regular file, so any process holding a memfd on
-  # fd 255 satisfies a bare link-count test with no bash, no script and no
-  # orphan — and an anchor authorizes a whole REAP SET. Pipes, unix sockets and
-  # eventfds are nlink 1 and were never the risk. The two added terms are
-  # NARROWING and fail toward alive, so neither re-opens the polarity problem
-  # the link-count test closed: the suffix test is dangerous only as a SOLE term.
+  # ending `' (deleted)'`, and not a memfd. `%h == 0` alone is far broader than
+  # "the bash script is unlinked".
+  #
+  # WHAT EACH TERM ACTUALLY BUYS, corrected by measurement. An earlier comment
+  # here claimed the absolute and suffix terms excluded memfds. They do not: a
+  # real `memfd_create` reads back as `/memfd:<name> (deleted)`, which is
+  # absolute, suffixed, nlink 0 AND a regular file, so it satisfied all four
+  # terms. Proven end-to-end — a python3 process with no bash and no script
+  # became an anchor and authorized a reap set. The synthesized-procfs harness
+  # cannot reproduce it, because readlink there returns the fixture's own path
+  # rather than the kernel's memfd name, so the arm that claimed to cover this
+  # was passing for an unrelated reason.
+  #
+  # So: the absolute term rejects `anon_inode:[...]` descriptors, the
+  # regular-file term rejects directory- and socket-shaped ones, the memfd term
+  # rejects the case above by name, and G2 carries the rest. Every term fails
+  # toward alive, so none re-opens the polarity problem the link-count test
+  # closed — the suffix test is dangerous only as a SOLE term.
   if [[ "$role" == "anchor" ]]; then
     local fdl
     fdl=$(readlink "$d/fd/255" 2>/dev/null) || fdl=""
@@ -514,6 +524,7 @@ _orphan_classify() {  # pid role(anchor|member)
     fi
     [[ "$fdl" == /* ]] || return 1
     [[ "$fdl" == *' (deleted)' ]] || return 1
+    [[ "$fdl" == /memfd:* ]] && return 1
     _orphan_is_unlinked "$d/fd/255" || {
       [[ "$_OC_FD255_NLINK" == "?" ]] && { unreadable=$((unreadable + 1)); unreadable_gone=$((unreadable_gone + 1)); }
       return 1
@@ -678,6 +689,7 @@ SET_AGE=()
 SET_CWDNL=()
 SET_FDNL=()
 declare -A SET_SEEN=()
+declare -A REPORT_SEEN=()
 
 # ONE cwd-key scan for the whole walk, not one per anchor.
 #
@@ -803,6 +815,10 @@ if (( anchors > 0 )); then
 
     for mi in "${!members[@]}"; do
       p="${members[$mi]}"
+      # A pid already reported — as another anchor's member, or as an anchor in
+      # its own right — is not a second member.
+      [[ -n "${REPORT_SEEN[$p]:-}" ]] && continue
+      REPORT_SEEN["$p"]=1
       set_members=$((set_members + 1))
       # The reader has to be able to JUDGE this process, not just see its pid.
       # The whole trigger design rests on a person or an agent reviewing the set
@@ -816,7 +832,10 @@ if (( anchors > 0 )); then
         _set_add "$p" member "$a_pid" "${m_st[$mi]}" "${m_age[$mi]}" "${m_cwdnl[$mi]}" "?"
       fi
     done
-    set_members=$((set_members + 1))
+    if [[ -z "${REPORT_SEEN[$a_pid]:-}" ]]; then
+      REPORT_SEEN["$a_pid"]=1
+      set_members=$((set_members + 1))
+    fi
     if (( over_cap == 0 )); then
       _set_add "$a_pid" anchor "$a_pid" "$a_st" "$a_age" "$a_cwdnl" "$a_fdnl"
     fi
