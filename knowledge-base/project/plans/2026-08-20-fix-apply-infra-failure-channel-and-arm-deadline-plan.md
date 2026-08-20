@@ -709,6 +709,14 @@ boolean can no longer tell those two apart, which is the one thing it existed to
   real vector is **interpolated step output** — the ARM gate reads `BETTERSTACK_API_TOKEN` and
   handles monitor ids, and terraform error strings carry resource identifiers and Doppler variable
   names. The control is the interpolation allow-list in §1.
+- **If this lands as designed, the user still pays this:** the `inngest_consumer` deadline resize
+  (230 s → 30 s, §3) converts a deterministic same-apply re-arm into a probabilistic multi-day one.
+  While that window runs, Better Stack alerting for `inngest_consumer` is **OFF**, so a fresh and
+  unrelated consumer failure pages nobody. The distribution is geometric: mean ~2.2 days at the
+  measured 2.71 merge-applies/day, **p95 ~6.3 days**, and ~37 % still unarmed after two days. The
+  monitor was paused every day of #7228 already, so this is not a NEW dark state — but it is a
+  longer one, it is owned in §3 / AC6 and tracked to #7462, and it belongs in this section rather
+  than three sections away, because this section is what a reviewer contract keys on.
 - **Brand-survival threshold:** `aggregate pattern`
 
 The brief proposed `single-user incident`. Downgraded on verified precedent: the post-mortem

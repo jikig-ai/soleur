@@ -52,8 +52,12 @@ Phase 5 are written from the design, not from whatever the code ends up looking 
       **MEASURED** (`measurements.md` §0.7): 80 completed runs of the shared group over 35 days —
       observed queue depth never exceeded **1**, longest run **23.7 min**, worst wait-to-first-job
       **492 s**, and the sibling sharing this mutex already runs a 90-minute apply. The raise is
-      therefore safe; the honest run-level worst case is **40 min** (apply 35 + notify 5), not the
-      plan's 35, because the ladder was re-sized from the nominal Σ (see 1.2/1.3).
+      therefore safe; the honest run-level worst case is **45 min** (preflight 1 + apply 39 +
+      notify 5), not the plan's 35. Two corrections rolled in at review-resolution (#7657 D6):
+      `preflight` is chained by `needs:` and was uncounted, and the ladder was re-derived (1.2/1.3).
+      The overlap histogram over the same 80 runs is `{0 concurrent: 69, 1: 11}` — 11 of 80 DID
+      queue — so "dispatch jobs do not queue behind merges in practice" is retired: worst-case wait
+      for an emergency dispatch behind a routine merge apply is now 45 min.
 
 ## Phase 1 — Extract the ARM gate, then change its contracts
 
@@ -61,17 +65,36 @@ Phase 5 are written from the design, not from whatever the code ends up looking 
       `apps/web-platform/infra/arm-heartbeats.sh`, following the house precedent
       (`web-private-nic-guard.sh`). Parameterise the clock and the HTTP call so a test can inject
       fakes. Keep behaviour identical in this step — extraction first, changes after.
-- [x] **1.2** *(implemented as **35**, not 30 — the plan sized its ladder from the reachable Σ while
-      writing AC3's guard against the nominal Σ; `measurements.md` §0.3(a).)*
-      Raise the `apply` job's `timeout-minutes` from 15 to 30 and rewrite the adjacent
+- [x] **1.2** *(implemented as **39**, not 30. Superseded twice: to 35 at implementation, because
+      the plan sized its ladder from the reachable Σ while writing AC3's guard against the nominal Σ
+      (`measurements.md` §0.3(a)); then to 39 at review-resolution, because the INEQUALITY itself
+      was the wrong shape — see 1.3.)*
+      Raise the `apply` job's `timeout-minutes` from 15 and rewrite the adjacent
       comment: it currently claims the 15 "matches `apply-deploy-pipeline-fix.yml`", whose apply job
-      is actually **90**. Cite the two-part inequality and the measured p95 instead.
+      is actually **90**. Cite the two-part inequality and the measured pre-gate instead.
 - [x] **1.3** Add a step-level `timeout-minutes` to the ARM gate satisfying
       `arm_step_timeout ≥ Σdeadlines × 1.1` and
       `job_timeout − arm_step_timeout ≥ p95 pre-gate` (≈27 min against a 30 min job).
-      *(implemented as **31 min against a 35 min job**: 1860 ≥ 1660 × 1.1 = 1826, and
-      2100 − 1860 = 240 ≥ 111. The inequality is what the guard asserts; the plan's literals were
-      derived from the wrong Σ.)*
+      *(implemented as **33 min against a 39 min job**, with BOTH terms re-derived at
+      review-resolution (#7657 D1/D3/D4):*
+      *(1) `Σ × 1.1` was a multiplier applied to per-CALL-SITE additive overhead — four
+      `curl --max-time 15` round-trips plus one poll interval, 70 s per arm whatever the deadline —
+      and it broke at ≥ 9 s of vendor round-trip. Now `step ≥ Σ(deadline_i + 70)`:
+      1980 ≥ 1510 + 6 × 70 = 1930.*
+      *(2) the old term budgeted only the PRE-gate window, leaving 129 s for the re-pause sweep,
+      the bridge teardown and the post-apply summary combined — on the one step whose work
+      correlates with the ARM step having been cut. Now `job − step ≥ pre-gate + post-gate`:
+      2340 − 1980 = 360 ≥ 111 + 180 = 291. The sweep also gained its own `timeout-minutes: 3`.*
+      *`111` is the pre-gate MAXIMUM over n = 42, not a p95 — the earlier "p95 = 111" was a
+      max-of-6 mislabelled — and it is machine-pinned in `measurements.md` so the guard and the
+      measurement cannot drift. The inequality is what the guard asserts, and it now reads every
+      term out of the script rather than restating literals.)*
+- [x] **1.3b** *(added at review-resolution, #7657 D5.)* Correct the deadline formula's rollback
+      reserve from 10 s to 40 s (`ARM_POLL_INTERVAL_S + 2 × ARM_CURL_MAX_TIME_S`): at ≥ 2 s of
+      Better Stack round-trip the old reserve re-paused the monitor AFTER its first absence alert
+      had fired. `web_zot_consumer` 230 → **200**, `web_nic_guard` 470 → **440**, `git_data_prd`
+      230 → **200**. ADR-117's formula amended; the guard re-derives each deadline from the
+      monitor's own `period` + `grace` in the `.tf` source.
 - [x] **1.4** Fix the wall-clock accounting inside `arm-heartbeats.sh`: the loop counter must advance
       by measured elapsed time, not by its `sleep 10` alone. Today the per-iteration
       `curl --max-time 15` is uncounted, so a 230 s nominal deadline can consume up to 575 s.

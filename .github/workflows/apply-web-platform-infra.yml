@@ -1286,18 +1286,40 @@ jobs:
   # the second half — the step it was cited for, `Create issue on failure`, is gated
   # `if: ${{ !cancelled() && … }}`, and that run contains no `failure()`-gated step at all.
   #
-  # UNVERIFIED, and load-bearing, and said so rather than asserted (#7661 G5). Two GitHub Actions
-  # behaviours this design rests on have no empirical fixture in this repo's history:
-  #   (a) that a downstream `always()` JOB runs when an upstream job is cancelled by its OWN
-  #       `timeout-minutes`. GitHub's `always()` documentation is step-scoped and the cancellation
-  #       reference covers only RUNNING jobs. If this is false, the `apply == cancelled` arm of
-  #       #7586 is silent — the exact defect this job exists to remove.
-  #   (b) that a STEP exceeding its own `timeout-minutes` concludes `failure` and the job carries
-  #       on to its later `always()` siblings. The docs say only "killing the process". This is
-  #       the whole basis of the 33/39 ladder: it is what makes an over-running ARM gate fail
-  #       INSIDE the job, where the re-pause sweep still runs.
-  # Neither is refuted by anything measured here; both want a one-run empirical fixture, which
-  # this change does not build. Do not upgrade either sentence to an assertion without one.
+  # THE TWO LOAD-BEARING PREMISES, MEASURED (#7661 G5). Both were asserted from documentation; both
+  # were then checked against this repo's own run history, and each is recorded with exactly what
+  # its evidence covers and what it does not.
+  #
+  #   (a) A downstream `always()` JOB runs when an upstream job is CANCELLED.
+  #       VERIFIED. `infra-validation.yml`, runs 32272435663 / 32294251707 / 32296436704: the job
+  #       `validate (apps/web-platform/infra)` concluded `cancelled` after 6h, annotated "The job
+  #       has exceeded the maximum execution time of 6h0m0s / The operation was canceled", and the
+  #       downstream `infra-validate-required` (`needs: [detect-changes, validate]`, `if: always()`)
+  #       concluded `failure`, NOT `skipped` — its own log printed `RESULT: cancelled`, so it both
+  #       ran and read the cancelled result. NARROW SPOT: that job declares no `timeout-minutes`,
+  #       so the ceiling that cancelled it was GitHub's 6h platform default. That the two ceilings
+  #       are one code path is separately measured — `deploy-script-tests` (`timeout-minutes: 14`,
+  #       runs 32299138340 / 32299155123 / 32300783446) emits the identical annotation with a
+  #       different number, concludes `cancelled`, and every sibling job after it ran to `success`.
+  #       NOT IN HISTORY: a job cancelled by its DECLARED `timeout-minutes` that is literally named
+  #       in the `needs:` of the `always()` job that ran. The two halves are measured; the single
+  #       run joining them is not.
+  #
+  #   (b) A STEP exceeding its own `timeout-minutes` concludes `failure` (not `cancelled`) and the
+  #       job carries on. VERIFIED, in two halves from two workflows.
+  #       Half 1 — `web-platform-release.yml`, runs 32293304541 (job 96217488153) and 32283291347
+  #       (job 96183288475): step "Install psql", `timeout-minutes: 5`, logged "The action 'Install
+  #       psql' has timed out after 5 minutes", API step conclusion `failure`, and the JOB was not
+  #       cancelled — it ran on through `Post Run actions/checkout` and `Complete job`, both
+  #       `success`. Half 2 — `reusable-release.yml`'s `Tear down cloudflared registry bridge`
+  #       (`if: always()`) concludes `success` after a failed sibling step, across ~30 runs
+  #       (30913993850, 31379319736, 31751479655). NOT IN HISTORY: a step-level TIMEOUT with an
+  #       `if: always()` sibling behind it in the same job. Half 1 gives the conclusion, half 2
+  #       gives the continuation; no single run gives both.
+  #
+  #   Measurement note that feeds the ladder: a timeout kill overshoots its declared ceiling by
+  #   13–31 s of API wall clock (313 s against 300, 859–930 s against 840, 4243 s against 4200).
+  #   The job ceiling's 69 s of slack over the step ceiling absorbs that; do not shrink it below it.
   #
   # This job's HEADER COMMENT is inside `extractJobBlock(wf, "apply")` — that helper resets only
   # on `/^ {2}[A-Za-z0-9_-]+:/` and `#` is not in that class, so 2-space-indented comment lines
@@ -1518,7 +1540,8 @@ jobs:
             nothing moved. What is certain is that the newest change did not land in full, and
             later merges will keep failing in the same place until the cause is fixed.</p>
             <p><strong>Outcome:</strong> preflight <code>${{ needs.preflight.result }}</code>,
-            apply <code>${{ needs.apply.result }}</code>.<br>
+            apply <code>${{ needs.apply.result }}</code>, heartbeat re-pause sweep
+            <code>${{ steps.cause.outputs.sweep_conclusion }}</code>.<br>
             <strong>Failing step:</strong> <code>${{ steps.cause.outputs.failing_step }}</code></p>
             <p><strong>What to do:</strong> ${{ steps.cause.outputs.action_msg }}</p>
             <p><strong>Is uptime alerting still watching the servers?</strong>

@@ -512,6 +512,22 @@ jobs:
     # the ceiling's purpose is to catch a bypassed sleep mock, and a 20-minute ceiling would not.
     # Current long poles (run 31054177230): git-data runcmd rehearsal 96 s, web-host parity
     # mutation 47 s, ci-deploy 35 s, LUKS verify 28 s.
+    #
+    # RE-DERIVED 2026-08-20 (#7587), as the block above instructs, because this PR adds a step
+    # (`arm-heartbeats.test.sh`). The step measures **21.6 s** locally on a 16-core box — pure
+    # bash + jq with every `sleep` stubbed, so the runner should be comparable; it is ~2.5 % of
+    # the job.
+    # Measured from the API over the last 23 COMPLETED `deploy-script-tests` jobs, whole-job
+    # seconds: 495 512 513 538 538 538 542 543 555 576 576 718 723 727 740 742 758 763 766 775 863
+    # (plus two early failures at 70 and 395). ZERO cancellations. The 863 exceeds the 840 s
+    # ceiling in API wall clock, which is NOT a contradiction: GitHub's timeout clock starts when
+    # the job begins executing steps, while `started_at` is earlier — the same 13–31 s of
+    # divergence measured on this repo's actual timeout kills.
+    # VERDICT: NOT bumped. The margin this block sized for (~1.4x over the observed max) is gone —
+    # it is now ~1.0x — but bumping a ceiling whose stated purpose is to catch a bypassed sleep
+    # mock, in the same edit that adds 2.5 %, is exactly the move this block warns against. What
+    # would justify a bump: a cancellation, or a re-derivation that attributes the 495 -> 863
+    # spread to a specific suite. Neither exists yet, and the spread is the thing to explain first.
     timeout-minutes: 14
     steps:
       # fetch-depth: 0 + fetch-tags: true make the vinngest-v* tags reachable so

@@ -85,9 +85,46 @@ of relaxing the guard:
 ladder: 1660 (work) < 1860 (step ceiling) < 2100 (job ceiling)
 ```
 
-**So the `apply` job is `timeout-minutes: 35`, not the plan's 30, and the ARM step is 31, not 27.**
-This is a deliberate deviation from AC3's literal `30`; see 0.7 for the constraint that made it
-safe, and the Deviations section of the work report.
+### SUPERSEDED at review-resolution time (#7657 D1/D3/D5)
+
+Both terms above were the wrong shape and the ladder they justified is not what ships.
+
+**Term (1) was multiplicative on additive overhead.** `arm_one` spends four `curl --max-time 15`
+round-trips that the `elapsed` accounting never sees — the pre-loop GET, the unpause PATCH, the
+final iteration's own GET, and the rollback PATCH — plus one poll interval of loop overshoot. That
+is `poll_interval + 4 × curl_max_time = 70 s` **per call site**, whatever the deadline. Measured by
+running the shipped script under its own PATH stubs with all six monitors seeded `paused`:
+
+| round-trip cost | wall clock, 6 arms | vs the old 1860 s step ceiling |
+|---|---|---|
+| 0 s | 1660 s | ok |
+| 8 s | 1854 s | ok by 6 s |
+| **9 s** | **1891 s** | **BREACHED** |
+| 15 s (curl's own `--max-time`) | 2020 s | breached by 160 s |
+
+**Term (2) budgeted nothing after the gate.** `jobS − stepS ≥ p95(pre-gate)` left 129 s for the
+re-pause sweep, the bridge teardown and the post-apply summary combined — and the sweep only has
+work when the ARM step was cut, i.e. exactly when the least budget remains.
+
+**And the deadline formula reserved 10 s for a rollback that can take 40.** `deadline = period +
+grace − 10` re-paused the monitor AFTER its first absence alert at as little as 2 s of Better Stack
+round-trip. Reserve is now `poll_interval + 2 × curl_max_time = 40`.
+
+```
+deadlines      200 (240−40) / 440 (480−40) / 200 / 440 / 200 / 30      Σ = 1510
+work bound     1510 + 6 × 70                                         = 1930
+(1) step ≥ work                 →  33 min (1980 s) ≥ 1930            ✓ slack 50 s
+(2) job − step ≥ max(pre-gate) + post-gate
+    post-gate = 6 × 15 (sweep) + 30 (mint `timeout`) + 60 (teardown+summary) = 180
+                                →  2340 − 1980 = 360 ≥ 111 + 180 = 291  ✓ slack 69 s
+ladder: 1930 (work) < 1980 (step ceiling) < 2340 (job ceiling)
+```
+
+**So the `apply` job is `timeout-minutes: 39`, the ARM step is 33, and the re-pause sweep carries
+its own `timeout-minutes: 3`.** Fleet-mutex worst case on a push is preflight 1 + apply 39 +
+notify 5 = **45 min** (`preflight` was uncounted in the earlier "40", which was itself 41).
+Every one of those numbers is re-derived by the guard suite from the script and the workflow rather
+than restated; see `describe("the ARM gate's deadlines fit its job")`.
 
 ---
 
@@ -114,10 +151,51 @@ The six most recent **push** (merge) applies:
 | 32288987090 | 18:45:47 | 18:47:08 | **81** | 239 | 324 |
 | 32283291074 | 18:02:01 | 18:03:32 | **91** | 240 | 335 |
 
-Sorted: 58, 62, 64, 81, 91, **111**. **p95 = 111 s.**
+Sorted: 58, 62, 64, 81, 91, **111**.
 
-Plan states 57/58/64/81/91/111, p95 111. **CONFIRMED** — the 57 has aged out of the window and a 62
-has entered; **p95 is unchanged at 111 s**, so term (2) of the inequality carries no stale number.
+Plan states 57/58/64/81/91/111, p95 111. The 57 has aged out of the window and a 62 has entered.
+
+### RE-MEASURED at review-resolution time (#7657 D4) — n = 6 could not support the word "p95"
+
+The figure above was labelled `p95` and is the sample **MAXIMUM of six**. At n = 6 the 95th
+percentile is not estimable. Re-pulled over a window wide enough to say something:
+
+```bash
+gh run list --workflow=apply-web-platform-infra.yml --branch main --limit 60 \
+  --json databaseId,event,createdAt --jq '.[]|select(.event=="push")|[.databaseId,.createdAt]|@tsv' \
+  | sort -k2 -r | head -45 | cut -f1 > runs.txt
+while read -r id; do
+  gh api "repos/:owner/:repo/actions/runs/$id/jobs?per_page=100" \
+    --jq '.jobs[]|select(.name=="apply")|[(.started_at),([.steps[]?|select(.name|test("Arm web-host"))|.started_at]|first//"-"),(.completed_at)]|@tsv'
+done < runs.txt
+```
+
+**42** of the 45 most recent push applies reached the ARM step (3 died before it). Pre-gate, sorted:
+
+```
+8 27 30 31 31 32 33 36 36 36 36 37 38 38 39 42 42 42 51 52 53 54 55 56 57 57 57 58 58 58 59 60 62
+63 64 65 65 68 77 81 91 111
+```
+
+| statistic | value |
+|---|---|
+| n | 42 |
+| min | 8 s |
+| median | 48 s |
+| nearest-rank p95 (ceil(0.95 × 42) = 40th) | **81 s** |
+| **max** | **111 s** |
+
+The ladder uses the **max**, deliberately, and now calls it that. Same pull, whole-job duration:
+11–350 s (max **5.8 min**) — which is what retires the `~0.6 min/resource × ~70 targets = ~42 min
+worst-case cold-cache` sentence that sat two lines above the ladder in the workflow and
+contradicted it by 22×. A genuinely cold-cache build of this root is a `web_host_create` /
+`*_host_replace` DISPATCH job with its own budget, not the merge-path `apply` job.
+
+<!-- LADDER-PIN: MAX_PRE_GATE_S=111 -->
+
+The pin above is machine-read by `plugins/soleur/test/terraform-target-parity.test.ts`
+(`pinnedFromMeasurements`), so the guard's pre-gate term and this measurement cannot drift apart —
+and the guard throws if the pin is missing rather than falling back to a literal that fails open.
 
 Two figures fall out of the same pull and both **CONFIRM** the plan: the ARM step is 237–240 s on
 every one of the six (the plan cites 240), and the apply job is 302–350 s (the plan cites 302).

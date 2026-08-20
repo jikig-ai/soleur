@@ -31,17 +31,25 @@ are substituted by `general-purpose` agents carrying each agent's own definition
   `git_data_prd`'s tfstate absence, and `$RUNNER_TEMP` step-persistence. Both load-bearing.
 
 ### Decisions
-- Separate `notify-apply-failure` job, NOT the issue's `if: failure()` step arm. Measured on
-  run 32168637847: a timed-out job concludes `cancelled`, its `failure()` step is `skipped`
-  while `always()` steps run — the step arm is structurally silent on exactly the #7587 path.
+- Separate `notify-apply-failure` job, NOT the issue's `if: failure()` step arm. Run 32168637847
+  measures HALF of that: a job that exceeds its own `timeout-minutes` concludes `cancelled`, its
+  in-flight step concludes `cancelled`, unconditional later steps are `skipped`, and `always()`
+  steps still run. It does NOT measure the `failure()` half — the step it was cited for is
+  `!cancelled()`-gated and that run contains no `failure()`-gated step (#7661 G5). The two
+  load-bearing GitHub Actions premises were verified separately at review-resolution; see the
+  `notify-apply-failure` header in the workflow for the run ids.
 - Deadline resize (230s -> ~30s) instead of the brief's `inngest_consumer` short-circuit.
   UC-1 in decision-challenges.md. ACCEPTED by the pipeline owner as a technical fork:
   a short-circuit never re-tests, so nothing re-arms once #7228 closes; and the live
   `gh issue view` gate would need `issues: read` on the job holding prod Doppler secrets
   and the fleet-wide apply mutex. ADR-100 records #7228 cannot close until #7462 lands.
-- Job budget raised 15 -> 30 min, sized by a two-part inequality with a measured p95
-  pre-gate of 111s. Per-merge queue wait is NOT yet measured -- /work measures it before
-  relying on the raise.
+- Job budget raised 15 -> 39 min (the plan's AC3 literal of 30 was superseded twice: to 35 at
+  implementation, then to 39 at review-resolution when the inequality itself was re-derived).
+  Sized by a two-part inequality whose terms are now ADDITIVE per call site and which budgets
+  the POST-gate steps, against a measured pre-gate MAXIMUM of 111 s over n=42 (the earlier
+  "p95 111" was a max-of-6 mislabelled). ARM step 33 min, re-pause sweep 3 min. Fleet-mutex
+  worst case on a push is preflight 1 + apply 39 + notify 5 = 45 min; measured over 80 runs of
+  the shared group, observed queue depth never exceeded 1 and 11/80 runs overlapped.
 - `brand_survival_threshold: aggregate pattern` on verified precedent (the post-mortem for
   this same workflow and defect class declares that value). `user-impact-reviewer` retained
   voluntarily as the give-back.
