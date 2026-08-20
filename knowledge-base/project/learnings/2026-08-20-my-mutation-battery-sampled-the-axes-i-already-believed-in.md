@@ -70,7 +70,7 @@ Supporting fixes, each generalisable:
   a warning failed a required check. Gate: `grep -x '<ctx>' scripts/required-checks.txt`.
 - **Verify the REMEDY, not just the diagnosis.** A correctly-diagnosed flake (a stray
   untracked file inflates the pinned count, reproduced 3×) came with a proposed
-  `includeIgnoreFile` fix. Measured: `git check-ignore` over all 2020 scanned files returns
+  `includeIgnoreFile` fix. Measured: `git check-ignore` over all 2021 scanned files returns
   **zero** — the offending files were untracked and *not* git-ignored, the one set
   `.gitignore` cannot describe. Shipped a self-diagnosing failure message instead.
 

@@ -38,11 +38,11 @@ const SELF = resolve(__dirname, "eslint-config.test.ts");
 const BASELINE_FINDINGS = 192;
 
 /**
- * Anti-vacuity floor, re-derived 2026-08-20 against 2020 actually-scanned files:
+ * Anti-vacuity floor, re-derived 2026-08-20 against 2021 actually-scanned files:
  *
  *   ./node_modules/.bin/eslint . -f json | node -e '…JSON.parse(…).length'
  *
- * This used to be 500, which was NOT a floor. 1881 of the 2020 scanned files
+ * This used to be 500, which was NOT a floor. 1882 of the 2021 scanned files
  * carry zero findings, so a config that ignored 1519 of those finding-free
  * files produced results.length = 500, total = 192 and a byte-identical
  * byRule — every assertion in this suite green with 75.2% of the tree
@@ -59,10 +59,10 @@ const MIN_FILES_SCANNED = 1900;
  *
  * COVERS EVERY LAYER ESLINT SCANS, not just the big five. The first version floored
  * test/server/components/app/lib only, leaving scripts/ 30, e2e/ 16 and hooks/ 13 — 59
- * files, comfortably inside the global floor's 120-file headroom — assertable-away by a
+ * files, comfortably inside the global floor's 121-file headroom — assertable-away by a
  * config change alone, with no test edit at all.
  *
- * Measured 2026-08-20: test 1142, server 317, components 220, app 165, lib 106,
+ * Measured 2026-08-20: test 1143, server 317, components 220, app 165, lib 106,
  * scripts 30, e2e 16, hooks 13. Floors sit 12-15% below (not "~12%" — the real spread is
  * 11.7% for test/ to 15.2% for app/) so ordinary churn does not red the suite while any
  * layer-scale removal does.
@@ -373,7 +373,7 @@ describe("Guard 2 — the finding set is pinned", () => {
     // finding is "a signal to read, not a merge blocker"; with a two-sided pin all three
     // were false. Worse, it was blocking in BOTH directions: FIXING a warning also
     // reddened a required check, which directly contradicts "it can be driven down file
-    // by file". Measured: 139 of 2020 files carry findings, 111 of 192 of them under test/, and
+    // by file". Measured: 139 of 2021 files carry findings, 111 of 192 of them under test/, and
     // 49 of those files were touched on main in the last 60 days.
     //
     // So: a regression blocks, an improvement does not. A rule that appears with no
