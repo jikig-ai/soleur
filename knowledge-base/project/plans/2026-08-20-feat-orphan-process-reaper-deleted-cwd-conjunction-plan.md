@@ -930,7 +930,12 @@ Recorded rather than skipped silently, because a reviewer's first question is wh
     and an accounting-conservation check (`pass_n + fails == cases`) with `cases` incremented at the call site
     only. Verified non-vacuous by H1.
 19. `bash scripts/guard-vacuity-floor.test.sh` passes with the two new suites present, and the new suites'
-    floors are recognised by its shape-derived population rather than reported as unclassified.
+    floors are **recognised** by its shape-derived population rather than reported as unclassified. That
+    meta-guard derives its population by shape via `floor_lines_of()`, matching
+    `^[[:space:]]*(el)?if[[:space:]]+((\[\[|\[)[^]]*(-lt|-le|-ge)[^]]*\]|\(\([^)]*(<|<=|>=)[^)]*\)\))` — so
+    the floor must be written as `if [[ "$cases" -lt <N> ]]` or `if (( cases < <N> ))`. A floor written any
+    other way is not covered, not deferred, and not reported as unclassified either: it is simply absent from
+    the population, which is the one failure mode that file states it cannot report on itself.
 20. `scripts/test-all.sh` carries three explicit `run_suite` lines — behavioural suite, mutation battery, and
     the live `report` line — each with an explanatory comment in the idiom of its neighbours.
 21. `bash scripts/lint-orphan-test-suites.sh` passes; neither new suite is reported as an orphan.
