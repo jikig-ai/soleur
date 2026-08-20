@@ -35,11 +35,18 @@
 # init-only, NO `remote-exec` (the SSH-parity guard has no exclusion path otherwise);
 # (2) no inngest cred is a github_actions_secret.
 #
-# DARK-ON-PROVISION (AC-DARK): the host is born on a DISTINCT NON-PROD Postgres
-# backend (INNGEST_POSTGRES_URI, set OUT-OF-BAND into this project's prd config — see
-# the doppler_secret block below) with an empty function registry, so it fires ZERO
-# prod crons at boot. Dark→live is a Phase-2 operator Postgres flip gated behind a
-# Redis FLUSHALL + DBSIZE==0 assertion (ADR-100 Decision 6). No window at provision.
+# DARK-ON-PROVISION (AC-DARK): the host is born with an empty function registry and
+# fires ZERO prod crons at boot. Dark→live is a Phase-2 operator Postgres flip gated
+# behind a Redis FLUSHALL + DBSIZE==0 assertion (ADR-100 Decision 6). No window at
+# provision.
+#
+# ⚠ AC-DARK's PREMISE CHANGED, its CONCLUSION did not (#7462, 2026-08-20). This read
+# "the host is born on a DISTINCT NON-PROD Postgres backend". Since 2026-07-23T15:46Z
+# INNGEST_POSTGRES_URI holds the PROD DSN (see the BACKEND QUALIFIER CORRECTED note at
+# the top of this file), so a host provisioned today renders the DURABLE-backend
+# ExecStart. It is still dark — but because inngest-server-flip-guard.sh refuses every
+# prod-URI start whose INNGEST_CUTOVER_FLIP is outside {armed,flipping,flushed,done},
+# NOT because the DSN is non-prod. Do not re-derive AC-DARK from the DSN.
 
 locals {
   # Fresh private IP in 10.0.1.0/24 — web = .10 (.11 retired 2026-07-17, #6538), git-data = .20, registry = .30.
@@ -202,10 +209,14 @@ resource "doppler_secret" "inngest_redis_password_dedicated" {
 # engages AFTER the resource is in state). It is the session-pooler (:5432, NEVER :6543 —
 # breaks inngest's sqlc prepared statements) connection string.
 #
-# AC-DARK: at provision this points at a DISTINCT NON-PROD Postgres backend (a fresh empty
-# database firing ZERO prod crons). It is flipped to the prod inngest Postgres ONLY at the
-# Phase-2 cutover (operator, maintenance window), immediately after a Redis FLUSHALL +
-# DBSIZE==0 assertion (ADR-100 Decision 6). Provision it BEFORE the host boots (else
+# AC-DARK: this pointed at a DISTINCT NON-PROD Postgres backend (a fresh empty database
+# firing ZERO prod crons) up to and including the first cutover arm. ⚠ SUPERSEDED (#7462,
+# 2026-08-20): op=arm wrote the prod DSN here on 2026-07-23T15:46Z and op=rollback has no
+# inverse for that write, so the prod DSN is this value's steady state and the flip to it is
+# no longer a pending Phase-2 event. Darkness is now held by inngest-server-flip-guard.sh's
+# flag allowlist, not by this value — see the AC-DARK note near the top of this file and the
+# ADR-100 addendum 2026-08-20. The FLUSHALL + DBSIZE==0 gate (ADR-100 Decision 6) is
+# unchanged and still fronts every forward flip. Provision it BEFORE the host boots (else
 # cold-boot bricks — plan 1.4/M4): set it via `doppler secrets set` on the soleur-inngest
 # prd config (stdin, never argv). Rotation: rotate the DB password in the Supabase dashboard
 # → re-set INNGEST_POSTGRES_URI in the soleur-inngest prd config.
