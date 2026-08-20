@@ -131,6 +131,12 @@ PR3 being a single-file, single-hunk commit is what makes the rollback a surgica
 `git revert`. If `cf-pages.tf` and `dns.tf` shared a squashed commit, reverting would
 destroy the Pages project along with the DNS record, leaving the apex pointed at nothing.
 
+PR1 also touches `apps/web-platform/infra/sentry/cron-monitors.tf`, so its merge fires **two**
+apply workflows: `apply-web-platform-infra.yml` and `apply-sentry-infra.yml`. They are separate
+Terraform roots sharing no resource, so no ordering edge is required and neither interleaving is
+bad. The sentry-root plan is an **update, 0 destroys** — `sentry-destroy-required` passes without
+`[ack-destroy]`, and PR1's merge commit message must **not** carry `[skip-sentry-apply]`.
+
 **PR1 must come first, not last.** Shipping the workflow before the substrate would swap
 `deploy-docs.yml` away from GitHub Pages while GitHub Pages is still the live origin —
 dark-shipping the docs site and reddening `main` on every docs push for the whole interval.
@@ -466,7 +472,20 @@ decision**, and the hazard is created by this work, so it must be closed by this
    the "self-reverting to the Terraform-declared steady state" clause is provably false
    post-cutover.
 
-This is a phase step with files and acceptance criteria (AC25-AC27), not a risk-table note.
+4. Set `enabled = false` on `sentry_cron_monitor.scheduled_gh_pages_cert_state` in
+   `apps/web-platform/infra/sentry/cron-monitors.tf`. Disarming the Inngest schedule (item 2)
+   RELOCATES the daily-noise loop rather than closing it: that monitor carries
+   `checkin_margin_minutes = 240` and `failure_issue_threshold = 1`, so with no check-ins it
+   opens a missed-check-in issue every day from PR1's merge. `enabled = false` is an in-place
+   update on the pinned provider (`jianyuan/sentry 0.15.4` exposes `enabled`, bool,
+   optional+computed) — **0 destroys, so no `[ack-destroy]`, and the resource, its schedule and
+   its margins stay in config as the re-arm recipe.** Deleting the block was considered and
+   rejected: it spends the cutover PR's destroy gate on the substrate PR, breaks the code->IaC
+   parity guard while the handler's manual-trigger arm still heartbeats, and makes re-arming a
+   resource re-creation instead of the inverse of one boolean.
+
+This is a phase step with files and acceptance criteria (AC25-AC27, AC27a-AC27e), not a
+risk-table note.
 
 ## Design Decision D3 — rollback
 
@@ -928,6 +947,11 @@ uses `$(grep -c … || true)` compared with `[ "$n" = "0" ]`, or `! grep -q`.
 - **AC25** — `cron-gh-pages-cert-reissue.ts` refuses to run when the live apex record type is not `A`, asserted by a unit test that stubs the record read with a `CNAME` and expects the non-benign terminal outcome.
 - **AC26** — `cron-gh-pages-cert-state.ts` no longer registers a `cron` trigger: `! grep -q 'cron: "0 3 \* \* \*"' apps/web-platform/server/inngest/functions/cron-gh-pages-cert-state.ts`, with the manual-trigger arm retained.
 - **AC27** — the principles register records that AP-019's "self-reverting" justification is void until the topology precondition is live.
+- **AC27a** — `sentry_cron_monitor.scheduled_gh_pages_cert_state` carries `enabled = false`, and the PR-time sentry-root plan reports **0 destroys** (`sentry-destroy-required` green with no `[ack-destroy]` on PR1).
+- **AC27b** — the monitor's `schedule`, `checkin_margin_minutes`, `max_runtime_minutes` and both thresholds are unchanged from `main` (asserted by diff), so re-arming is a single-attribute flip.
+- **AC27c** — `routine-metadata-parity.test.ts` is green: every `ROUTINE_METADATA.description` is <= 160 chars, including the disarmed cert-state entry.
+- **AC27d** — `sentry-monitor-iac-parity.test.ts` is green **with no new `DISABLED_CRON_SLUG_EXEMPTIONS` entry** — the structural proof the monitor was disabled, not deleted.
+- **AC27e** — `cron-inngest-cron-watchdog.ts`'s cadence comment no longer cites `scheduled-gh-pages-cert-state` as a live constraint, and names `scheduled-community-monitor @ 0 8 * * *` as the surviving AC10 basis.
 - **AC28** — `scripts/encryption-posture-ledger.json` classifies both new resource types, and `python3 scripts/lint-encryption-posture.py --repo-sweep` exits `0`. The `cloudflare_pages_project` `stores[]` row carries a `provider-managed:<AttestationName>` mechanism with an `attestation_url` and a `retrieved_on` within 365 days — the validator rejects a bare "provider-managed encryption at rest" string.
 - **AC29** — the cutover apply is expressed as two targeted passes with the sequence asserted between them (PF-ORDER), and `-target=cloudflare_record.github_pages` is still present in the allow-list.
 
