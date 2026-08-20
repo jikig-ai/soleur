@@ -9,7 +9,13 @@
 # (This durability differentiator is changelog-sourced, not plan-measured:
 # the 410 was transient — beta2 plans clean again now, so a terraform plan
 # cannot observe it — but the bump future-proofs against the endpoint's
-# eventual permanent retirement, per the standing deprecation warning.) The `sentry_alert` migration remains deferred: the resource
+# eventual permanent retirement, per the standing deprecation warning.)
+#
+# ^^ RETRACTED — see the 2026-08-20 correction below before believing the
+#    paragraph above. The changelog datum it rests on is measured FALSE:
+#    v0.15.4 still reads the deprecated path.
+#
+# The `sentry_alert` migration remains deferred: the resource
 # is deprecated-but-functional and a faithful migration still requires
 # monitor_ids binding — see ADR-031 §Amendment 2026-07-17. Provider
 # source rationale + escape-hatch documented in

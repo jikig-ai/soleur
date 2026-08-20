@@ -33,6 +33,9 @@ Stable line: `0.15.0, 0.15.1, 0.15.2, 0.15.3, 0.15.4`. Latest stable = **0.15.4*
 `/rules/{id}/` endpoint. So `0.15.4` (> 0.15.3) does not depend on the endpoint that returned 410
 — the bump future-proofs the root against the legacy endpoint's eventual *permanent* retirement.
 
+> **^ RETRACTED 2026-08-20 (#7590).** This datum is measured **false**: `0.15.4` still reads the
+> deprecated path (29/29 reads took 410 in CI run `32362401543`). See § Supersession.
+
 ## 0.3 — Bump + upgrade
 
 `versions.tf`: `0.15.0-beta2` → `0.15.4`. `terraform init -upgrade` → installed `v0.15.4`.

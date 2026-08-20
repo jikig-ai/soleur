@@ -31,6 +31,8 @@ Phase 0 was a **measurement gate**: reproduce the break on the *pinned* provider
   reads from GET endpoint") moved `sentry_issue_alert` reads OFF the legacy
   endpoint, so 0.15.4 no longer depends on the retired read path — future-proofing
   against a *permanent* retirement without any state surgery.
+  **^ RETRACTED 2026-08-20 (#7590): measured false — `0.15.4` still reads the
+  deprecated path. See § Supersession.**
 - The `sentry_alert` migration stayed **deferred**: the `monitor_ids` blocker
   (#4610) persists at 0.15.4. ADR-031 amended; re-eval criterion updated to the
   default-monitor data sources.
