@@ -56,6 +56,28 @@ all. Setting 45 did not close that defect; it moved it from 15 minutes to 45.
 against the diff that introduces it. The highest-risk place for a new rule to be violated is the
 PR that authors it, because the author is holding the *narrative* of the rule, not its predicate.
 
+**RECURRENCE, 2026-08-20 (#7587) — and this time the two numbers disagreed for a *reason*.**
+The plan for the ARM-gate timeout ladder **sized** itself from one sum and **wrote its own guard**
+against a different one:
+
+| | Σ |
+|---|---|
+| **Nominal** — every hand-written `arm_one` call site | **1660 s** |
+| **Reachable** — only the sites present in tfstate today | **1430 s** |
+
+`arm_step_timeout` was set to `1430 × 1.1 = 1573` → 27 min, while the acceptance criterion it
+wrote quantified over `sum(arm_one deadlines)` = 1660, and `1620 < 1660 × 1.1 = 1826`. The plan's
+own ladder failed the plan's own AC. Caught by the implementation's Phase 0 measurement pass,
+before any code was written.
+
+Above, the disagreement was an arithmetic slip with both numbers stated adjacently. Here it was
+**structural: guard and sizing quantified over different populations.** That is the more dangerous
+version, because re-reading the comment does not reveal it — both numbers are individually correct.
+**Size from nominal:** a call site absent from state today is still a call site on the day it is
+not. Whenever a budget is computed over "the members that exist" and asserted over "the members
+that are declared", name the two sets separately and write the inequality against the larger. See
+[the channel was silent on the path it was built for](./2026-08-20-the-channel-was-silent-on-the-path-it-was-built-for.md) §4.
+
 ## 3. The wait budget was charged in `sleep`, not elapsed
 
 `waited=$(( waited + POLL_SECS ))` never counted the three `gh run list` round-trips each
@@ -65,6 +87,15 @@ incidents the workflow fires for. `timeout-minutes` was being derived from `WAIT
 declared budget that is not the real ceiling made that derivation unsound.
 
 **The generalizable form:** if a budget is used to size a timeout, it must measure wall clock.
+
+**RECURRENCE, 2026-08-20 (#7587):** the ARM gate's poll loop had the identical shape —
+`elapsed=$(( elapsed + ARM_POLL_INTERVAL_S ))`, blind to the per-iteration `curl`. Against a 200 s
+deadline and a 15 s round-trip the *reported* elapsed stopped at 200 while the real clock reached
+~620 s, which is why the job kept exceeding a ceiling derived from the declared deadlines. Note what
+this implies for the **test**: an assertion on the number the loop *reports* passes over this defect
+entirely. The fix is asserted by injecting a fake clock and asserting the **observed** clock, not
+the reported one (`arm-heartbeats.test.sh` T3 + mutation row M1) — two different numbers, and only
+one of them can see the bug.
 
 ## 4. "Cancelled" is two failure modes with opposite semantics
 
