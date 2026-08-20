@@ -97,12 +97,49 @@ Concretely:
    message text there, so a lint that skipped it would have enforced nothing over its own
    prose.
 
+5. **The detector is a three-factor conjunction, and a miss must be diagnosed against all
+   three.** The lint reports a line only when
+   `OPERATOR_LINE(line) ∧ CLAIM(line) ∧ ¬MEASURED(window(line))`, so a line escapes if **any
+   one** factor misses it. Added by #7578, where a message ran every 30 minutes for two days
+   naming two causes its own `rc=0` refuted, and was invisible to all three: an assignment
+   put `=` where `OPERATOR_LINE`'s helper-call alternative required whitespace; `CLAIM`'s
+   phrase list did not model a dash appendix; and `VERDICT="TRANSIENT"` on the same line
+   matched `MEASURED`'s `verdict=`. The issue's own diagnosis identified two of the three,
+   and the fix it prescribed — widen `CLAIM`, reuse the other filters — is measured inert
+   against both offending lines. Diagnose the conjunction, not the factor that first looks
+   guilty.
+
+6. **Proximity is not evidence.** A verdict variable near a message shows the job measured
+   *something*; it does not show it measured the cause the message **names**. Where the two
+   can diverge, exoneration requires the deliberate `# MEASURED-BY:` marker rather than an
+   inferred token. The failure runs the worst way round without this: in #7578 the
+   measurement the message sat beside (`rc=0`) was the very thing that **refuted** the causes
+   it named, and its presence is what cleared the line. This is
+   `cq-assert-anchor-not-bare-token` applied to the exoneration side. Applied narrowly — to
+   causes named as static prose, where the neighbourhood heuristic demonstrably failed — and
+   not to the phrase-list forms, where it has held.
+
+7. **`OPERATOR_LINE` enumerates carrier *syntaxes*, not incidents.** The four are direct
+   emit, start-of-line helper call, continuation-line helper call (#7318), and variable
+   assignment (#7578). An alternative list grown one incident at a time is a snapshot that
+   the next carrier form invalidates while the suite stays green.
+
 ### Scope
 
 Widened at review from "this code path" to **any diagnostic claim in any CI-emitted
 operator-facing message**. The narrow version would have been iteration four's setup: the
 defect is not specific to the zot bridge, and every other `::error::` in the repo was free
 to commit it.
+
+## Alternatives Considered
+
+| Alternative | Rejected because |
+|---|---|
+| Widen `CLAIM` alone to model the dash appendix (as #7578 proposed) | Measured inert: both offending lines still fail `OPERATOR_LINE`, and would then be cleared by `MEASURED` besides. Live cost 18 hits for zero coverage of the motivating bug. |
+| Widen `OPERATOR_LINE` **and** `CLAIM`, leave exoneration alone | Still inert. `VERDICT=` / `_VERDICT` clear both lines. This is the trap: the two-factor analysis is *correct* and still produces a fix that changes nothing. |
+| Broad appendix predicate (no `$`-exclusion) | Live census 19 vs 12; all 7 of the difference are messages that interpolate the measurement they are explaining — the honest shape. |
+| Widen the 16-line evidence window | Only one live line was out-of-window; an explicit marker fixes it without changing exoneration semantics repo-wide. |
+| Raise the `.highwater` to the newly measured value (as #7578 proposed) | Parks 11 exonerated lines in the ratchet forever, so the count can never reach zero and a future reader reads them as outstanding offenders. Annotation holds the baseline at 1 and keeps "non-zero means a real offender" true. |
 
 ## Consequences
 

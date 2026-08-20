@@ -161,6 +161,11 @@ function propagatedDns(): DnsPropagationInputs {
     acmeWwwStatus: 404,
     acmeApexServer: "GitHub.com",
     acmeWwwServer: "GitHub.com",
+    // Default fake = the post-flip state GitHub agrees is issuable, so the
+    // orchestration scenarios below exercise the paths PAST the gate.
+    httpsEligibleApex: true,
+    httpsEligibleWww: true,
+    healthCaaError: null,
   };
 }
 
@@ -699,10 +704,107 @@ describe("#6698 checkDnsPropagated — pure verdict function (AC8)", () => {
     acmeWwwStatus: 404,
     acmeApexServer: "GitHub.com",
     acmeWwwServer: "GitHub.com",
+    // The happy baseline is GitHub AGREEING it will issue. Every pre-existing
+    // case below asserts some OTHER field's effect, so they must start from an
+    // eligible baseline or they would all collapse to `retry` for the new
+    // reason and stop testing what they were written to test.
+    httpsEligibleApex: true,
+    httpsEligibleWww: true,
+    healthCaaError: null,
   };
 
   it("all-185.199.x + no AAAA + GitHub-shaped ACME → propagated", () => {
     expect(checkDnsPropagated(base).status).toBe("propagated");
+  });
+
+  // ── is_https_eligible gate (2026-08-16 apex outage regression) ─────────────
+  //
+  // The outage's defining property: EVERY inference-based check passed while
+  // GitHub still refused to issue. These pin the authoritative signal so that
+  // combination can never again read as "propagated" — which is what led to the
+  // wrong conclusion that the authorization was wedged server-side.
+
+  it("THE 2026-08-16 SIGNATURE: every dig-based check passes but GitHub says ineligible → retry, not propagated", () => {
+    const v = checkDnsPropagated({
+      ...base,
+      httpsEligibleApex: false,
+      httpsEligibleWww: false,
+    });
+    // Must NOT be "propagated" — that is the bug.
+    expect(v.status).toBe("retry");
+    expect(v.reason).toContain("is_https_eligible=false");
+  });
+
+  it("names WHICH host is ineligible rather than collapsing the two", () => {
+    // www is the half nobody checks, and the cert covers both as one order.
+    const wwwOnly = checkDnsPropagated({ ...base, httpsEligibleWww: false });
+    expect(wwwOnly.status).toBe("retry");
+    expect(wwwOnly.reason).toContain("www");
+    expect(wwwOnly.reason).not.toContain("apex + www");
+
+    const apexOnly = checkDnsPropagated({ ...base, httpsEligibleApex: false });
+    expect(apexOnly.status).toBe("retry");
+    expect(apexOnly.reason).toContain("apex");
+
+    const both = checkDnsPropagated({
+      ...base,
+      httpsEligibleApex: false,
+      httpsEligibleWww: false,
+    });
+    expect(both.reason).toContain("apex + www");
+  });
+
+  it("a FAILED health read is retry, never a false 'ineligible'", () => {
+    // Coalescing an unreachable endpoint to `false` would abort a healthy
+    // remediation on a transient blip — the fail-closed trap the AAAA and
+    // A-record guards already document.
+    for (const inputs of [
+      { ...base, httpsEligibleApex: null },
+      { ...base, httpsEligibleWww: null },
+      { ...base, httpsEligibleApex: null, httpsEligibleWww: null },
+    ]) {
+      const v = checkDnsPropagated(inputs);
+      expect(v.status).toBe("retry");
+      expect(v.reason).toContain("inconclusive");
+    }
+  });
+
+  it("a CAA error is TERMINAL (failed), not retry — waiting cannot clear it", () => {
+    const v = checkDnsPropagated({
+      ...base,
+      healthCaaError: "caa forbids issuance by letsencrypt.org",
+    });
+    expect(v.status).toBe("failed");
+    expect(v.reason).toContain("CAA");
+  });
+
+  it("CAA is checked even when eligibility is unknown — the remedies differ", () => {
+    // A CAA rejection with an unreadable eligibility flag must still report CAA,
+    // because "fix your CAA record" and "wait for the flip" are different jobs.
+    const v = checkDnsPropagated({
+      ...base,
+      httpsEligibleApex: null,
+      httpsEligibleWww: null,
+      healthCaaError: "caa_error",
+    });
+    expect(v.status).toBe("failed");
+    expect(v.reason).toContain("CAA");
+  });
+
+  it("eligibility does not mask an earlier, more specific failure", () => {
+    // A surviving AAAA is terminal and must keep reporting as such even though
+    // GitHub happens to say eligible — otherwise the specific diagnosis is lost.
+    const v = checkDnsPropagated({
+      ...base,
+      resolved6: ["2606:50c0:8000::153"],
+      resolve6Error: null,
+    });
+    expect(v.status).toBe("failed");
+    expect(v.reason).toContain("AAAA");
+  });
+
+  it("the propagated reason states GitHub's agreement, not just our inference", () => {
+    expect(checkDnsPropagated(base).reason).toContain("is_https_eligible=true");
   });
 
   it("Cloudflare answers → retry (propagation may still be in flight)", () => {

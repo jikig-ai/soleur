@@ -22,3 +22,21 @@
    # assert-dev-signin-eliminated.sh:104, run-migrations.sh:383) and would force the author
    # to either break the bold rule above or fix two messages in an unrelated subsystem as a
    # precondition of a scope change.
+   #
+   # DETECTION WIDENING, 2026-08-19 (#7578 + #7318) — AND WHY THIS NUMBER DID NOT MOVE.
+   # Three changes to what the scanner can see:
+   #   OPERATOR_LINE  + shell-variable assignment          (#7578)  measured +1
+   #   OPERATOR_LINE  + continuation-line helper call      (#7318)  measured +1
+   #   CLAIM          + static-prose dash appendix         (#7578)  measured +9
+   #   MEASURED       appendix class now needs an explicit MEASURED-BY  measured +1
+   # Census 1 -> 12 on the widening, then 12 -> 1 after all 11 newly-visible lines were
+   # triaged. Every one was genuinely measured; none was an unmeasured causal claim.
+   #
+   # THE SCOPE CARVE-OUT ABOVE WAS AVAILABLE AND WAS DELIBERATELY NOT USED. Setting the
+   # baseline to 12 was the obvious move and is what #7578 proposed. It was rejected for the
+   # reason this file already gives about a two-hit broadening: a baseline carrying eleven
+   # exonerated lines can never reach zero, and every future reader would read the 11 as real
+   # offenders still outstanding. Annotation costs one comment per line and keeps the
+   # invariant that makes this number worth reading — a non-zero count means a REAL offender.
+   # So an unchanged `1` here does not mean nothing widened. It means the widening was paid
+   # for at the call sites instead of in the baseline.

@@ -127,6 +127,28 @@ CLAIM = re.compile(
     r"(?:fix|cause|culprit)\b",
     re.IGNORECASE)
 
+# #7578. A cause named as a DASH APPENDIX — `<measured facts> — <cause> / <cause>`. This is
+# an extremely natural way to write a diagnosis in a shell string and the phrase list above
+# models none of it, so the construction was invisible class-wide.
+#
+# Two bounds make it usable, both measured against the live corpus:
+#
+#   - The span excludes `$`. The dominant honest shape INTERPOLATES the value it is
+#     explaining (`http=$code — GHCR path (zot unreachable)`, `exit $bq_rc — creds unset`) —
+#     that message restates a measurement it just took. The offender's appendix was STATIC
+#     PROSE, and the measurement beside it (`rc=0`) contradicted it. Measured: dropping the
+#     exclusion takes the live census 12 -> 19, and all 7 of the difference are this shape.
+#   - The predicate list is CLOSED, for the same reason CLAIM's adjective list is: an open
+#     slot buys hits that are permanent false positives, and a ratchet carrying those can
+#     never reach zero, so every future reader assumes real offenders remain.
+#
+# It is a SEPARATE regex rather than another alternative because the exoneration rule below
+# differs for it — see the EXONERATION note.
+CLAIM_APPENDIX = re.compile(
+    r"[—–][^\"$]{0,60}?\b(?:unreachable|creds unset|credentials unset|token expired|"
+    r"not installed|misconfigured|permission denied|quota exhausted)\b",
+    re.IGNORECASE)
+
 # Evidence that the claim rests on something the job computed. A verdict variable, an
 # outcome, a measured count, or an explicit marker.
 MEASURED = re.compile(
@@ -134,6 +156,11 @@ MEASURED = re.compile(
     r"steps\.[A-Za-z0-9_-]+\.outputs\.[A-Za-z0-9_]+|"
     r"outputs\.verdict|\$\{?VERDICT|zot_mirror_diagnosis|verdict=|_VERDICT\b",
     re.IGNORECASE)
+
+# The strict standard, used for the appendix class only (see the EXONERATION note below).
+# Deliberate, human-written, and auditable — unlike the inferred set above, whose members can
+# be present for reasons unrelated to the cause a message names.
+MEASURED_MARKER = re.compile(r"MEASURED-BY:")
 
 # Only lines that actually SPEAK to an operator.
 #
@@ -162,9 +189,28 @@ MEASURED = re.compile(
 EVIDENCE_LINES_BEFORE = 16
 EVIDENCE_LINES_AFTER = 4
 
+# The last TWO alternatives are #7578 and #7318. Both are the same lesson as the helper-call
+# alternative above, learned again: this filter must enumerate the SYNTAXES that carry a
+# message to an operator, not accumulate the shapes that happened to bite. The four are
+# direct emit, start-of-line helper call, continuation-line helper call, and assignment.
+#
+# ASSIGNMENT (#7578). A message assembled into a shell variable and emitted later was
+# invisible, and for two independent reasons: the helper-call alternative requires whitespace
+# immediately before the quote (`\s+"`) and an assignment has `=` there, and it is anchored to
+# `[a-z_]` while shell convention uppercases variable names. Measured: `NIC_DETAIL="x"` False,
+# `detail="x"` False, `detail = "x"` True — so even the lowercase form escaped. This is how
+# `zot-restart-loop-alarm.sh` named two causes its own rc=0 refuted, every 30 minutes for two
+# days, with the gate green. Live yield when it landed: +1.
+#
+# CONTINUATION (#7318). The helper-call alternative is `^\s*`-anchored, so `|| degraded sign
+# "$?" "…"` escaped. Documented as a known gap since #7310 and folded in here because it is
+# the same regex and the same class — kept separate it would cost a second triage pass and a
+# second negotiation over the same ratchet. Live yield when it landed: +1.
 OPERATOR_LINE = re.compile(
     r"::error::|::warning::|::notice::|GITHUB_STEP_SUMMARY|body:|echo \"|printf |"
-    r"^\s*[a-z_][a-z0-9_]*(\s+\S+)*\s+\"")
+    r"^\s*[a-z_][a-z0-9_]*(\s+\S+)*\s+\"|"
+    r"(?:\|\||&&|;|\|)\s*[a-z_][a-z0-9_]*(\s+\S+)*\s+\"|"
+    r"^\s*(?:local\s+|export\s+|readonly\s+)?[A-Za-z_][A-Za-z0-9_]*=\"")
 
 hits = []
 scanned_files = 0
@@ -223,7 +269,11 @@ for d in DIRS:
                 # names (cq-assert-anchor-not-bare-token).
                 if stripped.startswith("#"):
                     continue
-                if not OPERATOR_LINE.search(line) or not CLAIM.search(line):
+                if not OPERATOR_LINE.search(line):
+                    continue
+                claim_phrase = bool(CLAIM.search(line))
+                claim_appendix = bool(CLAIM_APPENDIX.search(line))
+                if not (claim_phrase or claim_appendix):
                     continue
                 # Evidence may sit on the line or in its immediate neighbourhood (an env:
                 # mapping a few lines up, a verdict computed just above).
@@ -238,7 +288,32 @@ for d in DIRS:
                     ln for ln in lines[lo:hi]
                     if not ln.strip().startswith("#") or "MEASURED-BY:" in ln
                 )
-                if MEASURED.search(block):
+                # EXONERATION — and this is the factor the #7578 diagnosis missed entirely.
+                #
+                # The detector is a THREE-factor conjunction: carrier AND claim AND NOT
+                # exonerated. A line escapes if any ONE factor misses it, so widening the two
+                # regexes above is not enough on its own — measured: with both widened and
+                # this rule left alone, BOTH verbatim offender lines are still cleared.
+                # `VERDICT="TRANSIENT"` on the offending line matches `verdict=`
+                # case-insensitively; its sibling's window carries `NIC_VERDICT`, matching
+                # `_VERDICT\b`. The two escaped through different alternatives of the same
+                # regex, which is why fixing one would not have revealed the other.
+                #
+                # PROXIMITY IS NOT EVIDENCE. A verdict variable in the neighbourhood shows the
+                # job measured SOMETHING; it does not show it measured the cause this line
+                # NAMES. For the phrase-list forms that heuristic has held. For a static-prose
+                # appendix it demonstrably has not — and the failure runs the worst possible
+                # way round, because the measurement the offender sat next to (rc=0) was the
+                # very thing that REFUTED the causes it named. That is this repo's own
+                # cq-assert-anchor-not-bare-token anti-pattern, on the exoneration side.
+                #
+                # So: a line matched ONLY by the appendix needs the deliberate marker, which a
+                # human had to write and can be held to. A line matched by the phrase list
+                # keeps the inferred token set exactly as before — the narrowing is
+                # appendix-only, and the suite pins that with a must-PASS case so a future
+                # edit cannot quietly extend it to the whole corpus.
+                exonerated = (MEASURED if claim_phrase else MEASURED_MARKER).search(block)
+                if exonerated:
                     continue
                 hits.append((rel, i, stripped[:120]))
 

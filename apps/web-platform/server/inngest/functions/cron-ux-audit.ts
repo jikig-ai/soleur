@@ -259,8 +259,23 @@ export async function cronUxAuditHandler({
 
   // --- Step 2: bot-fixture-seed ---
   await step.run("bot-fixture-seed", async () => {
+    // `turbopackIgnore` is REQUIRED, not stylistic. This is the canonical note for all
+    // three sites; the bot-signin and bot-fixture-reset steps carry the same annotation and
+    // point back here.
+    //
+    // The specifier is a runtime value: `getPluginPath()` resolves the plugin payload on
+    // DISK, outside the Next build graph, so there is nothing for a bundler to statically
+    // resolve and nothing it should try to inline. Webpack tolerated this; Turbopack fails
+    // the build with `Module not found: Can't resolve <dynamic>` (measured on the Next bump
+    // in the Dependabot PR, which reported exactly 3 errors — these three call sites).
+    //
+    // The annotation tells Turbopack to leave the import alone and emit it as a runtime
+    // import, which is precisely the intended semantics. Do NOT "fix" this by making the
+    // path a static string literal: the plugin payload is not part of this app's bundle and
+    // must not be, and a literal would resolve at build time against a tree that does not
+    // contain it.
     const botFixturePath = join(getPluginPath(), "skills/ux-audit/scripts/bot-fixture.ts");
-    const mod = await import(botFixturePath) as { seed: () => Promise<void> };
+    const mod = await import(/* turbopackIgnore: true */ botFixturePath) as { seed: () => Promise<void> };
     await mod.seed();
   });
 
@@ -330,8 +345,9 @@ export async function cronUxAuditHandler({
 
     // --- Step 5: bot-signin → write storageState to workspace ---
     await step.run("bot-signin", async () => {
+      // turbopackIgnore: runtime plugin-payload import — see the note at the bot-fixture-seed step.
       const botSigninPath = join(getPluginPath(), "skills/ux-audit/scripts/bot-signin.ts");
-      const mod = await import(botSigninPath) as {
+      const mod = await import(/* turbopackIgnore: true */ botSigninPath) as {
         signIn: () => Promise<{ access_token: string; refresh_token: string; expires_in: number; expires_at: number; token_type: string; user: unknown }>;
         writeStorageState: (session: unknown, outPath: string, supabaseUrl: string, siteUrl: string) => void;
       };
@@ -425,8 +441,9 @@ export async function cronUxAuditHandler({
 
     // --- Step 8: bot-fixture-reset ---
     await step.run("bot-fixture-reset", async () => {
+      // turbopackIgnore: runtime plugin-payload import — see the note at the bot-fixture-seed step.
       const botFixturePath = join(getPluginPath(), "skills/ux-audit/scripts/bot-fixture.ts");
-      const mod = await import(botFixturePath) as { reset: () => Promise<void> };
+      const mod = await import(/* turbopackIgnore: true */ botFixturePath) as { reset: () => Promise<void> };
       await mod.reset();
     });
 
