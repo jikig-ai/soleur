@@ -1445,11 +1445,17 @@ The ADR amendment, the C4 corrections and the principles-register AP-019 note al
 **PR1**, ahead of the cutover — the statements they correct become false at the moment PR3
 lands, and the disarmament they describe must exist before then.
 
-**Issue closure is PR3's alone.** The frontmatter `closes: 7640` names the work item, not the
-merge that resolves it. Only **PR3** carries `Closes #7640` in its body; **PR1 and PR2 cite
-`Refs #7640`** and must not use a closing keyword. Closing the issue at PR1 would mark the
-migration done while the site is still served by GitHub Pages and the cutover has not
-happened — and it would retire the tracking issue that PR2 and PR3 are sequenced against.
+**Issue closure is PR4's alone** (amended 2026-08-20 — was "PR3's" before the cutover split;
+the attach and the record swap are now separate PRs, and the ATTACH is not the resolution).
+The frontmatter `closes: 7640` names the work item, not the merge that resolves it. Only
+**PR4** carries `Closes #7640` in its body; **PR1, PR2 and PR3 cite `Refs #7640`** and must not
+use a closing keyword. Closing earlier would mark the migration done while the apex A-records
+still point at GitHub Pages, and would retire the tracking issue the remaining PRs are
+sequenced against.
+
+Note this stayed correct only by being re-read: the four-PR split moved the cutover without
+touching this paragraph, which is the propagation-miss shape — a decision changes and the
+sentence that depended on it keeps asserting the old one.
 
 ## Test Scenarios
 
