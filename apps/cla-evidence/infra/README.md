@@ -11,7 +11,7 @@ sidecar workflow and by Terraform itself.
 **Plan:** `knowledge-base/project/plans/2026-05-04-feat-cla-legal-rigor-evidence-layer-plan.md`
 **Runbook:** `knowledge-base/engineering/operations/runbooks/cla-signature-evidence-retrieval.md`
 **Retention:** 10 years (`maxAgeSeconds = 315360000`) from object creation, enforced by an R2 native Lock Rule.
-**Region:** `weur` (Western Europe, best-effort per Cloudflare R2 placement).
+**Region:** `weur` (Western Europe, best-effort per Cloudflare R2 placement). This is a **location hint, not a jurisdiction** -- the bucket sits on Cloudflare's `default` (standard, non-EU-tier) jurisdiction, as the `…<account>_default_<bucket>` token resource-strings in `iam.tf` record. Do not cite it as a data-residency or transfer safeguard: custody by Cloudflare, Inc. (US) is a Chapter V transfer regardless (Art. 30 PA-7 §(e)).
 
 ## Change-control gate
 
