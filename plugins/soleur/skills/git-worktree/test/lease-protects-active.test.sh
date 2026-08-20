@@ -67,7 +67,15 @@ cdx() {
 # file are in flight simultaneously, which makes "a merge drops one site back to a bare cd" a live
 # possibility rather than a hypothetical. Assert the PROPERTY here instead of trusting review to
 # notice. Excludes the `&&` forms, which short-circuit and are safe.
-_bare_cd="$(grep -nE '^[[:space:]]*\(?[[:space:]]*cd "' "${BASH_SOURCE[0]}" | grep -vE '&&' || true)"
+# Keyed on STRUCTURE, never on any guard's WORDING. A check greping for `cdx(` would flag a site
+# guarded correctly some other way; one greping for a guard PHRASE would clear a site guarded with
+# different wording — and that second failure mode is not hypothetical: a sibling session counted
+# its own guarded sites with `grep -c '<its guard phrase>'` and got 5 when the answer was 7,
+# because it had worded the two reaper guards differently. What is dangerous is a `cd "` whose
+# failure is not handled, so that is what this looks for: both `&&` (short-circuits) and `||`
+# (explicit handler, which is how the other in-flight fix to this file guards its sites) are
+# accepted, whatever they are followed by.
+_bare_cd="$(grep -nE '^[[:space:]]*\(?[[:space:]]*cd "' "${BASH_SOURCE[0]}" | grep -vE '&&|\|\|' || true)"
 if [[ -n "$_bare_cd" ]]; then
   printf '  FAIL: unguarded cd site(s) in this suite — every fixture cd must go through cdx():\n' >&2
   printf '%s\n' "$_bare_cd" >&2
