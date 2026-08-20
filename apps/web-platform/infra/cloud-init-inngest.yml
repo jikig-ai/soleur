@@ -674,7 +674,7 @@ runcmd:
     # inspect`, the build-inngest-bootstrap-image.yml push log for run 29694156854, and the
     # GitHub packages API. Bumping the tag WITHOUT re-resolving this digest gives you a
     # v1.1.25 tag pinned to v1.1.24's bytes — silently, since the drift guard only reads tags.
-    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.24@sha256:6cdaa63d1496642e681898a831234b712f75d3b09bd0844bcabec3de74b0a0f8
+    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.25@sha256:f23a2a0d730d353b146d0f0675d192237c732df5c32e30cb59d16b4424faba49
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
     # --- #7462 (ADR-096): resolve the effective ref ONCE, zot-primary ---------------------
     # THE DEFECT THIS CLOSES. Every other pull site in the fleet was flipped to prefer the
@@ -718,7 +718,7 @@ runcmd:
     . /etc/default/soleur-zot-read 2>/dev/null || true
     ZOT_EP="$ZOT_REGISTRY_ENDPOINT"
     if [ -n "$ZOT_EP" ]; then
-      ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.24@sha256:6cdaa63d1496642e681898a831234b712f75d3b09bd0844bcabec3de74b0a0f8"
+      ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.25@sha256:f23a2a0d730d353b146d0f0675d192237c732df5c32e30cb59d16b4424faba49"
       /usr/local/bin/inngest-boot-phone-home.sh pre-zot-pull "$ZIREF"
       set +e
       install -m 600 /dev/null /var/log/inngest-zot-pull.log

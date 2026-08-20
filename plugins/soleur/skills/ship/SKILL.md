@@ -329,6 +329,25 @@ that directory, so the summary accounts for it. Calling `test-all.sh` alone "mat
 produced #6969: a green summary read as evidence for infra it never executed, at the last gate
 before merge.
 
+**Probe capacity first (#7545).** This is the pipeline's longest local run, so spend ~3 s
+(measured p50) learning what it is about to run into:
+
+```bash
+bash scripts/test-all.sh --capacity
+```
+
+It prints one verdict — `CAPACITY_OK` / `CAPACITY_CONTENDED reason=…` / `CAPACITY_UNKNOWN reason=…`,
+each with the measured value and the threshold — plus the pid, worktree and elapsed time of every
+sibling run. It takes no lock, runs no suite and always exits 0.
+
+**It does not gate this phase and must never be treated as permission to skip it.** A
+`CAPACITY_CONTENDED` verdict changes what a RED below is *worth* (apply
+[work/SKILL.md](../work/SKILL.md) §9's three-way confirmation before accepting one), and names the
+worktree to wait for — it does not authorise shipping without the battery. The blocking form of this
+verdict was deliberately cut; see the ADR-133 2026-08-19 addendum.
+
+Then run the full battery:
+
 ```bash
 TEST_GROUP=all bash scripts/test-all.sh
 ```
