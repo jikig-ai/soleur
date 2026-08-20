@@ -601,6 +601,63 @@ jobs:
             *) echo "::error::unrecognized propagation verdict: $VERDICT_JSON"; exit 1 ;;
           esac
 
+  # ESLint for apps/web-platform (#1327). Replaces `next lint`, which Next 16
+  # removes and which never ran here (no config -> interactive prompt -> exit 1).
+  #
+  # DELIBERATELY NOT A REQUIRED CHECK, and deliberately NOT continue-on-error.
+  # `continue-on-error: true` would report green on failure, which is worse than
+  # no job at all. Instead the job fails honestly and is simply absent from
+  # scripts/required-checks.txt. Promoting it is tracked in #7648.
+  #
+  # This does NOT mean lint findings cannot block a merge, and an earlier version
+  # of this comment said it did. apps/web-platform/test/eslint-config.test.ts runs
+  # in the required `test` context and asserts both that eslint exits 0 and a
+  # per-rule ratchet, so an error-severity finding or a GROWING rule count blocks
+  # there. What being non-required buys is that this job's own red -- a readable
+  # stylish log, and the file-count floor below -- does not gate an unrelated PR.
+  lint-webplat:
+    runs-on: ubuntu-latest
+    # The only wall-clock bound on this job. The guard suite's own ESLINT_TIMEOUT_MS
+    # caps the vitest side; nothing capped this one, and a config that hangs would have
+    # run to the Actions six-hour default. Measured cost of the whole job is ~82s.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web-platform/package-lock.json
+
+      - name: Install web-platform dependencies
+        run: npm ci --ignore-scripts
+        working-directory: apps/web-platform
+
+      - name: ESLint
+        run: npm run lint
+        working-directory: apps/web-platform
+
+      # The step above exits 0 on a config that selected almost nothing:
+      # `export default []` linted 11 files out of the full tree and reported success. This
+      # entire anti-vacuity story otherwise lived in the vitest guard suite — a different
+      # job, on a different matrix, that this one does not depend on. A gate whose green
+      # is only trustworthy because some other gate is also green is not a gate.
+      #
+      # The floor VALUE is not hand-copied: it is read out of the guard suite that owns
+      # it, so the two cannot drift. The first version hardcoded 1900 here and the vitest
+      # side asserted only that the identifier appeared somewhere in this block — so
+      # re-pinning the guard upward would have left this copy silently decorative.
+      #
+      # The argv is not hardcoded either. It comes from the `lint` script, for the same
+      # reason the guard suite's lintScriptArgs() does: a hardcoded `eslint .` means
+      # narrowing `lint` to `eslint lib` lints 106 files in the step above while this one
+      # still scans the whole tree and reports the floor cleared.
+      - name: ESLint anti-vacuity floor
+        run: node scripts/eslint-vacuity-floor.mjs
+        working-directory: apps/web-platform
+
   # next build runs the App Router route-file validator that vitest and `tsc --noEmit`
   # skip — catches non-HTTP exports from `app/**/route.{ts,tsx}` before merge instead
   # of inside the post-merge Docker build (#2347/#2401 outage).
