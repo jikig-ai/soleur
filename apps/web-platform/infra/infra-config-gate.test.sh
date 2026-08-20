@@ -2115,13 +2115,27 @@ ap = byid.get('repush_apply')
 if ap is not None:
     body = ap.get('run') or ''
     code = "\n".join(l for l in body.splitlines() if not l.lstrip().startswith('#'))
-    n_apply = 0
-    for line in code.splitlines():
-        if 'terraform apply' in line and 'tfplan-repush' in line:
-            n_apply += 1
-    if n_apply != 1:
-        problems.append("the repush_apply body has %d production-apply line(s), expected exactly 1" % n_apply)
     import re as _re
+    # OCCURRENCES, NOT LINES (#7546 review). The comment above already prescribed "count
+    # occurrences within that body" and the code counted LINES, so two shapes walked through all
+    # three producers with the whole suite green, both measured:
+    #
+    #   terraform apply ... tfplan-repush ; terraform apply ... tfplan-repush   (one line)
+    #   terraform apply -auto-approve -input=false tfplan                       (the FIRST plan
+    #       file, which survives on the runner until `Reclaim the plan artifacts`)
+    #
+    # The second is the sharper one: every counter here and in Guard 2 (7) is keyed on the
+    # literal `tfplan-repush`, so an apply of a DIFFERENT plan file is invisible to all of them.
+    # The chokepoint has to be "a production apply", not "a line mentioning one plan filename".
+    n_apply = len(_re.findall(r'(?:^|[\s;&|(])terraform\s+apply\b', code))
+    if n_apply != 1:
+        problems.append("the repush_apply body runs `terraform apply` %d time(s), expected exactly 1 "
+                        "— counted as OCCURRENCES rather than lines, because `a ; b` on one physical "
+                        "line is two production writes" % n_apply)
+    if not _re.search(r'terraform\s+apply\b[^\n;&|]*\btfplan-repush\b', code):
+        problems.append("the repush_apply body's production apply does not use tfplan-repush — an "
+                        "apply of any other plan file is a second, unbounded production write that "
+                        "the tfplan-repush-keyed counters are structurally unable to see")
     loopkw = _re.search(r'(^|[;&|]|\bdo\b)\s*(for|while|until)\s', code, _re.M)
     if loopkw:
         problems.append("the repush_apply body contains a loop keyword (%r) — one line and one step "
@@ -2267,22 +2281,67 @@ else
 fi
 
 # R19.4 §4: the plan's own "six success()-gated steps" is wrong; the measured count is five.
-# Pinned because the backstop's whole justification is what re-arms behind a false green —
+# Pinned because the backstop's whole justification is what re-arms behind a false green --
 # two of these five close the founder's GitHub issues and one swaps the running container.
-AC18_SUCCESS_STEPS=5
+#
+# MEMBERSHIP AND STRUCTURE, NOT A COUNT (#7546 review). This was `== 5` over a set, and a
+# scalar over a set samples only its SIZE. Two mutations were measured walking straight
+# through it with all four suites green:
+#
+#   (a) `&&` -> `||` in the redeploy gate. ONE CHARACTER. The production container swap then
+#       runs on success() alone, ignoring BOTH verdicts -- the exact property this block names.
+#       The count stayed 5 (the substring `success()` is still there) and the WORKFLOW-REF PIN
+#       stayed unchanged (the same references still exist).
+#   (b) deleting the verdict clause and leaving it as a YAML comment. The ship-gate test's
+#       three `toMatch` substring checks all still passed, because it reads the file raw.
+#
+# A substring test cannot see a boolean structure. So each step is pinned by NAME to its
+# whitespace-normalised condition, exactly as Guard 3 pins repush_plan/repush_apply -- which
+# also makes a substitution (gut one member, add a success()-gated no-op) loud, and makes the
+# failure name the step rather than blaming a count.
 ac18_measured=$(python3 - "$APPLY_WF" <<'PYEOF'
 import sys, yaml
 wf = yaml.safe_load(open(sys.argv[1], encoding='utf-8'))
 steps = wf['jobs']['apply']['steps']
 gi = next(i for i, s in enumerate(steps) if s.get('id') == 'infra_config_gate')
-print(sum(1 for s in steps[gi+1:]
-          if isinstance(s.get('if'), str) and 'success()' in s['if']))
+
+VERDICT = ("(steps.infra_config_gate.outputs.verdict == 'verified' || "
+           "steps.infra_config_gate_pass2.outputs.verdict == 'verified')")
+EXPECT = {
+    'Redeploy to load applied profile and assert loaded==committed (#5875 item 4)':
+        "success() && " + VERDICT,
+    'Check whether':
+        "success()",
+    'Verify journald_storage no-SSH surface is live (AC12,':
+        "success() && steps.check_4804.outputs.open == 'true'",
+    'Close':
+        "success() && env.PLAN_HAS_CHANGES == 'true' && "
+        "steps.check_4804.outputs.open == 'true' && " + VERDICT,
+    'Auto-close any open drift issues for this stack':
+        "success() && env.PLAN_HAS_CHANGES == 'true' && " + VERDICT,
+}
+got = {}
+for st in steps[gi+1:]:
+    c = st.get('if')
+    if isinstance(c, str) and 'success()' in c:
+        got[st.get('name')] = " ".join(c.split())
+
+problems = []
+for name in sorted(set(EXPECT) | set(got)):
+    if name not in got:
+        problems.append("step %r is no longer success()-gated downstream of the gate" % name)
+    elif name not in EXPECT:
+        problems.append("NEW success()-gated step %r downstream of the gate, condition %r -- it "
+                        "re-arms behind a false green and is not pinned" % (name, got[name]))
+    elif got[name] != EXPECT[name]:
+        problems.append("step %r has if: %r, pinned as %r" % (name, got[name], EXPECT[name]))
+print("OK" if not problems else "; ".join(problems))
 PYEOF
 ) || ac18_measured="ERR"
-if [[ "$ac18_measured" == "$AC18_SUCCESS_STEPS" ]]; then
-  pass "#7104 AC18: $ac18_measured success()-gated steps run downstream of the gate (the set that re-arms behind a false green)"
+if [[ "$ac18_measured" == "OK" ]]; then
+  pass "#7104 AC18: all 5 success()-gated steps downstream of the gate carry their pinned condition VERBATIM -- the 3 that re-arm production (container swap, #4804 close, drift auto-close) are structurally gated on a verdict, so an && -> || inversion is loud rather than invisible to a count"
 else
-  fail "#7104 AC18: measured $ac18_measured success()-gated steps downstream of the gate, expected $AC18_SUCCESS_STEPS. The backstop's justification is sized on this number — re-derive it and update both."
+  fail "#7104 AC18: the success()-gated step set downstream of the gate drifted from its pin: $ac18_measured. These steps re-arm behind a false green -- two close the founder's GitHub issues and one swaps the running container. If the change is deliberate, update the EXPECT table and say why in the commit."
 fi
 
 # Cardinality floor: if the reference extractor silently matches nothing, the clean
@@ -2384,6 +2443,31 @@ if ( f0="$fail"; fail "self-test (expected — this line proves fail() records)"
   :
 else
   echo "  FAIL: harness self-test — the REAL fail() does not record a failure; every verdict above is unverifiable" >&2
+  exit 1
+fi
+
+# POSITIVE CONTROL ON pass() (#7546 review). The three-producer reconciliation above catches an
+# inflated tally only when the extra lines are IDENTICAL AND ADJACENT -- `dup_adjacent` is
+# `grep '^  PASS: ' | uniq -d`. The comment above claims "the one mutation that CAN keep all
+# three in sync is printing each assertion twice"; that is a false universal. Measured:
+#
+#   pass() { echo "  PASS: $1"; echo "  PASS: (b) $1"; printf 'PASS\nPASS\n' >> "$PASSLOG"; pass=$((pass + 2)); }
+#
+# keeps the counter, the PASS log and the captured stdout mutually consistent, produces NO
+# adjacent duplicate (the second line is worded differently), and left this suite reporting
+# `264 passed, 0 failed`, OK, rc=0 -- with 66 real assertions deletable underneath it.
+#
+# The invariant a wording change cannot dodge is a property of pass() ITSELF: one call emits
+# exactly one PASS line and advances the counter by exactly one. Driven against the REAL
+# helper, with PASSLOG redirected so this control cannot perturb the reconciliation above.
+if ( _p0="$pass"; PASSLOG="$TMP/selftest.passlog"; : > "$PASSLOG"
+     pass "self-test (expected — this line proves pass() emits exactly one assertion)" \
+       > "$TMP/selftest.out" 2>&1
+     _n=$(grep -c '^  PASS: ' "$TMP/selftest.out" || true)
+     [[ "$pass" -eq $((_p0 + 1)) && "$_n" -eq 1 ]] ); then
+  :
+else
+  echo "  FAIL: harness self-test — one pass() call does not emit exactly one PASS line and one increment. A helper that emits two lines per call inflates the tally past its floor while keeping every producer consistent, which is what hides deleted arms." >&2
   exit 1
 fi
 

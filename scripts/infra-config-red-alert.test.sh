@@ -692,6 +692,30 @@ fi
 # --- ASSERTION FLOOR ----------------------------------------------------------------------
 # Floored on CASES, not PASS. PASS deflates whenever a verdict is discarded, so a floor on it
 # reports a vacuity that did not happen and hides the one that did.
+
+# KNOWN-NEGATIVE SELF-TEST (#7546 review). Ported from infra-config-gate.test.sh, which was the
+# ONLY one of the four sibling suites to carry it -- and the only one that survived the mutation
+# below. An assertion harness that has never been shown to emit a FAIL has not returned a pass.
+#
+# MEASURED on a sandbox copy, with a genuine defect present: swapping this suite's bad()
+# to record a PASS instead of a FAIL left the suite reporting `66 passed, 0 failed (66 assertions)`, rc=0, zero FAIL lines.
+# Every existing backstop held, because none of them can see a SWAP:
+#   - the `FAIL -eq 0` exit gate  (FAIL never moves)
+#   - any assertion-count floor        (the count is unchanged -- the verdict moved buckets)
+#   - any passes+fails == cases identity (still balanced: one left one bucket, entered another)
+# A swap is invisible to every count and every conservation identity by construction. The only
+# thing that sees it is driving the REAL helper and asserting WHICH counter moved.
+#
+# Runs in a subshell so the side effects stay off the parent's tally.
+if ( _p0="$PASS"; _f0="$FAIL"
+     bad "self-test (expected -- this line proves bad() records a FAILURE)" >/dev/null 2>&1
+     [[ "$FAIL" -eq $((_f0 + 1)) && "$PASS" -eq "$_p0" ]] ); then
+  :
+else
+  echo "harness self-test: the REAL bad() does not record a failure into FAIL -- it is neutered, or it records failures as passes. Every verdict above is unverifiable." >&2
+  exit 1
+fi
+
 ALERT_MIN_ASSERTIONS=66
 if [[ "$CASES" -lt "$ALERT_MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \

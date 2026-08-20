@@ -808,5 +808,30 @@ if [[ $((passes + fails)) -ne "$cases" ]]; then
   exit 1
 fi
 
+
+# KNOWN-NEGATIVE SELF-TEST (#7546 review). Ported from infra-config-gate.test.sh, which was the
+# ONLY one of the four sibling suites to carry it -- and the only one that survived the mutation
+# below. An assertion harness that has never been shown to emit a FAIL has not returned a pass.
+#
+# MEASURED on a sandbox copy, with a genuine defect present (a covered suite's floor neutered --
+# a defect this guard exists to catch): swapping this suite's fail() to record a pass instead
+# left it reporting `19 passed, 0 failed`, rc=0, and the finding printed verbatim as
+# `[ok] 1 covered suite(s) have a floor that EXITS 0 under a neutered assertion machinery`.
+# The accounting identity above held throughout -- passes+fails == cases is balanced by a SWAP,
+# because one verdict left a bucket and entered another. That is the whole blind spot: a
+# conservation law cannot see a transfer.
+#
+# This matters more here than in the siblings: the suite whose stated purpose is catching a
+# floor enforced THROUGH the machinery it guards was itself enforced through the machinery it
+# guards. Runs in a subshell so the side effects stay off the parent's tally.
+if ( _p0="$passes"; _f0="$fails"
+     fail "self-test (expected -- this line proves fail() records a FAILURE)" >/dev/null 2>&1
+     [[ "$fails" -eq $((_f0 + 1)) && "$passes" -eq "$_p0" ]] ); then
+  :
+else
+  echo "harness self-test: the REAL fail() does not record a failure into fails -- it is neutered, or it records failures as passes. Every verdict above is unverifiable." >&2
+  exit 1
+fi
+
 printf 'Total: %d passed, %d failed (%d assertions)\n' "$passes" "$fails" "$cases"
 [[ "$fails" -eq 0 ]]
