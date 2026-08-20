@@ -1,4 +1,13 @@
-// TR9 Phase-2 — Daily GitHub Pages cert state poll migrated to Inngest cron.
+// TR9 Phase-2 — GitHub Pages cert state poll migrated to Inngest.
+//
+// #7640: the daily cron trigger is DISARMED (see the Registration block at the
+// bottom for why). This is now a MANUAL-TRIGGER-ONLY routine. Two consequences
+// live OUTSIDE this file and are owned elsewhere:
+//   - the Sentry cron monitor `scheduled-gh-pages-cert-state`
+//     (infra/sentry/cron-monitors.tf) will now miss its check-in window, since
+//     the heartbeat below only fires on a manual run;
+//   - ROUTINE_METADATA's `scheduleLabel` for this fn still reads
+//     "Daily 03:00 UTC" (server/inngest/routine-metadata.ts).
 //
 // Migrated from .github/workflows/scheduled-gh-pages-cert-state.yml (deleted
 // in the same PR per TR9 I-13 hygiene). Pure TS port — no agent spawn,
@@ -384,10 +393,26 @@ export const cronGhPagesCertState = inngest.createFunction(
     ],
     retries: 1,
   },
-  [
-    { cron: "0 3 * * *" },
-    { event: "cron/gh-pages-cert-state.manual-trigger" },
-  ],
+  // ‼️ #7640 — THE DAILY SCHEDULE IS DISARMED. It was a daily 03:00 UTC cron
+  // trigger; the literal is deliberately not repeated here, because AC26 greps
+  // this file for its absence.
+  //
+  // After the Cloudflare Pages cutover the GitHub Pages certificate is
+  // DNS-detached by design, so it can never recover: this poll is permanently
+  // tripped. On a daily schedule that is a self-escalating loop — it files (then
+  // comments on) a `[cert-poll]` issue EVERY DAY FOREVER whose body reads "fire
+  // `cron/gh-pages-cert-reissue.manual-trigger`", handing an autonomous agent a
+  // daily, authoritative instruction to run a routine that, against the
+  // post-cutover topology, de-proxies live www ONE-WAY (see the topology
+  // precondition in cron-gh-pages-cert-reissue.ts). That is not a low-likelihood
+  // hazard; it is the retained system's designed steady-state output.
+  //
+  // The function is NOT deleted — deleting the cert subsystem is deferred to a
+  // later PR — and the manual-trigger arm is retained so an operator (or the
+  // rollback path) can still read the Pages cert state on demand. Membership in
+  // EXPECTED_CRON_FUNCTIONS does not require a schedule: `cron-gh-pages-cert-reissue`
+  // is already event-only, and that manifest's own note says so.
+  [{ event: "cron/gh-pages-cert-state.manual-trigger" }],
   cronGhPagesCertStateHandler as unknown as Parameters<
     typeof inngest.createFunction
   >[2],

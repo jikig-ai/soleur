@@ -158,3 +158,14 @@ provider "cloudflare" {
   alias     = "r2"
   api_token = var.cf_api_token_r2
 }
+
+# Separate provider for Cloudflare Pages (ADR-194, #7640). Pages is an ACCOUNT-level
+# product reached at /accounts/<id>/pages/projects — a different resource class from the
+# zone-scoped rulesets the other aliases use, which is the case ADR-130's decision test
+# names as "mint the narrow alias instead" rather than widening an existing token. This
+# token carries Account -> Cloudflare Pages -> Edit and no zone permission of any kind.
+# Consumers: cf-pages.tf. Full scope ledger lives on var.cf_api_token_pages.
+provider "cloudflare" {
+  alias     = "pages"
+  api_token = var.cf_api_token_pages
+}
