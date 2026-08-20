@@ -391,7 +391,7 @@ without an override artifact, running in the user's session with their filesyste
 and `gh` credentials in reach. The vector is the plugin distribution path (`plugin` → `skills`),
 so it reaches the user directly and Soleur learns last.
 
-**Brand-survival threshold:** `single-user incident`.
+- **Brand-survival threshold:** `single-user incident`.
 
 **Where the pre-merge gate is *not* the control.**
 `.github/actions/bot-pr-with-synthetic-checks/action.yml` derives its check names from
