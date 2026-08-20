@@ -981,6 +981,9 @@ if [[ "$DIAGNOSTIC_BOOT" == "1" ]]; then
   # The diagnostic objective — does the process bind :8288, and what does net-health say — is
   # fully satisfied with an EMPTY registry, so point the sync at a closed loopback port.
   SDK_URL='http://127.0.0.1:1/api/inngest'
+  # MEASURED-BY: the INNGEST_DIAGNOSTIC_BOOT branch this line sits in. "prod Postgres
+  # unreachable" is the DELIBERATE configuration this arm just chose (SQLite-only, sdk-url
+  # pointed at a closed loopback port), not a diagnosis of an observed failure.
   log "inngest-server ExecStart: DIAGNOSTIC BOOT (#7228) — SQLite-only by request; prod Postgres unreachable so no second scheduler is possible. --sdk-url is pointed at a closed loopback port so the host adopts NO registry and cannot double-fire prod crons. The host can now bind :8288 and emit net-health. This is NOT a cutover state: clear INNGEST_DIAGNOSTIC_BOOT before arming."
 elif [[ "$REDIS_READY" == "1" ]]; then
   BACKEND_ENV='export INNGEST_REDIS_URI="redis://:$${INNGEST_REDIS_PASSWORD}@127.0.0.1:6379"; '
