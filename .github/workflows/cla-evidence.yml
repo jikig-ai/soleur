@@ -3,7 +3,7 @@ name: cla-evidence
 # Sidecar evidence layer alongside the upstream contributor-assistant/github-action
 # in cla.yml. Captures sign-time artifacts (doc-hash, verbatim comment body,
 # PR-of-record, allowlist-bypass provenance) and writes them to the off-site
-# Cloudflare R2 archive (governance object-lock, EU region) so a future BSL →
+# Cloudflare R2 archive (R2 Lock Rule, age-based 10y retention floor) so a future BSL →
 # Apache 2.0 relicensing event is defensible in EU/France jurisdiction.
 #
 # Plan: knowledge-base/project/plans/2026-05-04-feat-cla-legal-rigor-evidence-layer-plan.md
