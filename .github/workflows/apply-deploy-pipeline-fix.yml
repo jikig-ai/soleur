@@ -943,18 +943,64 @@ jobs:
           DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
+          # "COULD NOT MEASURE" IS NOT "THE CHANNEL IS DOWN" (#7546 review).
+          #
+          # Two defects were measured here, and both fired the highest-severity remedy in the
+          # whole feature on a HEALTHY host.
+          #
+          #   (a) `X=$(doppler ... || doppler ...)` under `set -euo pipefail` ABORTS AT THE
+          #       ASSIGNMENT when both reads fail. The step then dies with NO ::error:: at all --
+          #       measured, it printed nothing and exited 1 -- and three consumers key on the raw
+          #       step outcome. A Doppler blip therefore files a P1 issue stating that the sole
+          #       no-SSH remediation channel of an unreplaceable host has been bricked, and routes
+          #       the operator to a production terraform apply. The instrument failing must never
+          #       be reported as the subject failing.
+          #
+          #   (b) the alive test was a DENY-list -- anything not 000/502/503 read as ALIVE, so
+          #       401, 403, 404 and 500 all certified the listener healthy. A 403 from an expired
+          #       CF Access service token (the very credential read three lines above) is the
+          #       likeliest one. This PR's own headline lesson, argued three times in
+          #       infra-config-gate.test.sh ("INVERTED TO AN ALLOW-LIST ... THIS IS THE IMPORTANT
+          #       PART OF THIS GUARD"), is not applied to the probe the same PR ships.
+          #
+          # So: read credentials WITHOUT aborting, publish a three-valued listener_state, and
+          # allow-list what counts as alive. Both non-up states still red the job -- after writing
+          # production, an unverifiable channel is not an all-clear -- but they are now
+          # DISTINGUISHABLE, and the consumers can stop asserting a cause nobody measured.
           APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
-          CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain)
-          CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain)
+          cf_rc=0
+          CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null \
+            || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain 2>/dev/null) || cf_rc=$?
+          CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain 2>/dev/null \
+            || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain 2>/dev/null) || cf_rc=$?
+          [[ -n "${CF_ACCESS_SECRET:-}" ]] && echo "::add-mask::${CF_ACCESS_SECRET}"
+          [[ -n "${CF_ACCESS_ID:-}" ]] && echo "::add-mask::${CF_ACCESS_ID}"
+          if [[ "$cf_rc" -ne 0 || -z "${CF_ACCESS_ID:-}" || -z "${CF_ACCESS_SECRET:-}" ]]; then
+            echo "listener_state=probe_error" >> "$GITHUB_OUTPUT"
+            echo "::error::The post-re-push liveness probe COULD NOT RUN: the CF Access credentials could not be read from Doppler (rc=$cf_rc). This says NOTHING about the webhook listener — do NOT read it as a bricked channel and do NOT run the handler-replace lever on this evidence. The re-push DID apply, so this run still has no delivery verdict. Re-run the workflow once Doppler is reachable; if it recurs, check CF_ACCESS_CLIENT_ID/SECRET in the prd_terraform config."
+            exit 1
+          fi
           code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
             -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
             -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
             "https://deploy.${APP_DOMAIN_BASE}/hooks/infra-config-status" 2>/dev/null || echo "000")
-          if [[ "$code" == "000" || "$code" == "502" || "$code" == "503" ]]; then
-            echo "::error::The webhook listener is DOWN (HTTP $code) after the re-push apply — the re-push bricked the only no-SSH remediation channel."
-            exit 1
-          fi
-          echo "Webhook listener alive after the re-push (HTTP $code)."
+          # ALLOW-LIST, not deny-list: only an explicit 200 certifies the listener alive.
+          case "$code" in
+            200)
+              echo "listener_state=up" >> "$GITHUB_OUTPUT"
+              echo "Webhook listener alive after the re-push (HTTP $code)."
+              ;;
+            401|403)
+              echo "listener_state=probe_error" >> "$GITHUB_OUTPUT"
+              echo "::error::The post-re-push liveness probe was REJECTED BY CF ACCESS (HTTP $code). That is our credential, not the host's health — do NOT read it as a bricked channel and do NOT run the handler-replace lever on this evidence. The re-push DID apply, so this run still has no delivery verdict. Rotate or re-check CF_ACCESS_CLIENT_ID/SECRET and re-run."
+              exit 1
+              ;;
+            *)
+              echo "listener_state=down" >> "$GITHUB_OUTPUT"
+              echo "::error::The webhook listener is DOWN (HTTP $code) after the re-push apply — the re-push bricked the only no-SSH remediation channel."
+              exit 1
+              ;;
+          esac
 
       # PASS 2 — the terminal verdict, rendered by a second invocation of the SAME artifact.
       - name: Verify infra-config apply succeeded (pass 2, post-re-push) (#7104)
@@ -1048,12 +1094,29 @@ jobs:
           REPUSH_PLAN_OUTCOME: ${{ steps.repush_plan.outcome }}
           REPUSH_APPLY_OUTCOME: ${{ steps.repush_apply.outcome }}
           WEBHOOK_LIVENESS_OUTCOME: ${{ steps.webhook_liveness.outcome }}
+          WEBHOOK_LISTENER_STATE: ${{ steps.webhook_liveness.outputs.listener_state }}
+          # #7546 review: without this the backstop could not enumerate "pass 2 RAN and
+          # failed" -- the EXPECTED red path of this whole feature -- so that state fell to
+          # the catch-all below, whose text asserts a wiring bug that did not happen. The
+          # alert step got the fourth arm; this step did not.
+          PASS2_OUTCOME: ${{ steps.infra_config_gate_pass2.outcome }}
         run: |
           set -euo pipefail
           # A step that FAILED has already reddened the job; this backstop exists for the
           # case where everything reports success and no pass ever adjudicated.
-          if [[ "$GATE_OUTCOME" != "success" ]]; then
-            echo "The gate step did not succeed; the job is already red. Backstop has nothing to add."
+          # NULL TRAP, INVERTED (#7546 review). This was `!= "success"`, and `steps.<id>.outcome`
+          # resolves to the EMPTY STRING when the id is renamed or typo'd -- which is the single
+          # failure mode this backstop exists to catch, as its own comments say twice. `'' !=
+          # "success"` is TRUE, so the backstop exited 0 announcing "the job is already red" on a
+          # run that was GREEN, and every arm below became unreachable. Permanently and silently,
+          # via the one spelling this PR bans everywhere else. Measured: GATE_OUTCOME="" took the
+          # early exit. Enumerate the states, and make the unreadable one LOUD.
+          if [[ -z "${GATE_OUTCOME:-}" ]]; then
+            echo "::error::The backstop cannot read the gate step's outcome (it is empty). That means steps.infra_config_gate has been renamed or mis-keyed, so every downstream consumer gated on its outputs is silently comparing against the empty string and this job may be green having verified nothing. actionlint cannot see this. Failing closed."
+            exit 1
+          fi
+          if [[ "$GATE_OUTCOME" == "failure" || "$GATE_OUTCOME" == "cancelled" || "$GATE_OUTCOME" == "skipped" ]]; then
+            echo "The gate step did not succeed (outcome=$GATE_OUTCOME); the job is already red. Backstop has nothing to add."
             exit 0
           fi
           if [[ "$PASS1_VERDICT" == "verified" || "$PASS2_VERDICT" == "verified" ]]; then
@@ -1097,8 +1160,15 @@ jobs:
           #
           # Every arm still exits 1 — the job verified nothing on all of them. Only the diagnosis
           # differs, which is the entire point.
+          # A FAILED PROBE IS NOT A DOWN CHANNEL (#7546 review). Both states arrive here as
+          # outcome=failure; only listener_state tells them apart, and the remedy differs
+          # completely -- one routes to a production terraform apply, the other must not.
+          if [[ "${WEBHOOK_LISTENER_STATE:-}" == "probe_error" ]]; then
+            echo "::error::NO TERMINAL VERDICT. The bounded re-push applied, and the post-re-push liveness probe then COULD NOT RUN (credential read or CF Access rejection) — so nothing measured the config channel. This is NOT evidence the channel is down: do NOT run the handler-replace lever on it. This run wrote production and no verdict exists for it. Re-run the workflow once the probe's credentials are readable."
+            exit 1
+          fi
           if [[ "${WEBHOOK_LIVENESS_OUTCOME:-}" == "failure" ]]; then
-            echo "::error::NO TERMINAL VERDICT, and the config channel is DOWN. The bounded re-push applied and the post-re-push liveness probe then found the webhook listener not responding, which SKIPS pass 2 (it is skipped, not failed). Nothing was mis-keyed. This run wrote production and no verdict exists for it. Route back: terraform apply -replace=terraform_data.infra_config_handler_bootstrap ."
+            echo "::error::NO TERMINAL VERDICT, and the config channel is DOWN. The bounded re-push applied and the post-re-push liveness probe then found the webhook listener not responding, which SKIPS pass 2 (it is skipped, not failed). Nothing was mis-keyed. This run wrote production and no verdict exists for it. Route back: (run from apps/web-platform/infra) doppler run --name-transformer tf-var -- terraform apply -replace=terraform_data.infra_config_handler_bootstrap -target=terraform_data.infra_config_handler_bootstrap -input=false -lock-timeout=120s . Do NOT run terraform apply -replace=hcloud_server.web -- that host cannot be re-provisioned (cx33, 0/6 stock)."
             exit 1
           fi
           if [[ "${REPUSH_APPLY_OUTCOME:-}" == "failure" || "${REPUSH_PLAN_OUTCOME:-}" == "failure" ]]; then
@@ -1107,6 +1177,10 @@ jobs:
           fi
           if [[ "${REPUSH_PLAN_OUTCOME:-}" == "success" && "${REPUSH_APPLY_OUTCOME:-}" == "skipped" ]]; then
             echo "::error::NO TERMINAL VERDICT was rendered (pass1='${PASS1_VERDICT:-<none>}' pass2='${PASS2_VERDICT:-<none>}'). The re-push was PLANNED but not applied, which means the grading step did not return the expected single-resource cardinality — the apply is keyed on the measured grade, never on success(), so it correctly refused. Nothing was mis-keyed and NOTHING was written. Read the grade printed by the plan step in this run."
+            exit 1
+          fi
+          if [[ "${PASS2_OUTCOME:-}" == "failure" ]]; then
+            echo "::error::NO TERMINAL VERDICT was rendered (pass1='${PASS1_VERDICT:-<none>}' pass2='${PASS2_VERDICT:-<none>}'). The re-push applied and pass 2 RAN and rendered a non-verified verdict. Nothing was mis-keyed and nothing is skipped: this is the expected red path when the recovery writes production and the host still does not publish a frame that proves the delivery. The bounded recovery is spent. Read pass 2's own ::error:: in this run -- it distinguishes 'the frame did not move' from 'the frame moved but predates the re-push', and those have different levers."
             exit 1
           fi
           echo "::error::NO TERMINAL VERDICT was rendered (pass1='${PASS1_VERDICT:-<none>}' pass2='${PASS2_VERDICT:-<none>}'). Pass 1 deferred to a re-push and pass 2 never returned a verdict, and the re-push steps report plan='${REPUSH_PLAN_OUTCOME:-<none>}' apply='${REPUSH_APPLY_OUTCOME:-<none>}' liveness='${WEBHOOK_LIVENESS_OUTCOME:-<none>}' — no enumerated failure explains that combination, so the recovery steps were skipped or mis-keyed. This job verified NOTHING; failing closed rather than letting the downstream success()-gated steps re-arm."
@@ -1516,6 +1590,7 @@ jobs:
           # destroyed the sole no-SSH remediation channel, and it SKIPS pass 2 rather than failing
           # it, so without this the state is unreachable from every arm below.
           WEBHOOK_LIVENESS_OUTCOME: ${{ steps.webhook_liveness.outcome }}
+          WEBHOOK_LISTENER_STATE: ${{ steps.webhook_liveness.outputs.listener_state }}
         run: |
           set -uo pipefail
           source "$GITHUB_WORKSPACE/scripts/infra-config-red-alert.sh"
@@ -1538,8 +1613,12 @@ jobs:
           # the inverted spelling would route EVERY run — including the overwhelming majority
           # where no re-push happened — into a P1 "the channel is down" alert. Same null trap the
           # `!= 'skipped'` comments above record, one arm over.
+          if [[ "${WEBHOOK_LISTENER_STATE:-}" == "probe_error" ]]; then
+            infra_config_red_alert "The bounded re-push applied, and the post-re-push liveness probe then COULD NOT RUN — its CF Access credentials could not be read, or Cloudflare Access rejected them. NOTHING measured the webhook listener, so this is NOT evidence that the channel is down and the handler-replace lever must NOT be run on this evidence. What IS true: the re-push wrote production and pass 2 did not run, so no delivery verdict exists for this run. Re-run the workflow once the probe's credentials are readable." "unreachable" || true
+            exit 0
+          fi
           if [[ "${WEBHOOK_LIVENESS_OUTCOME:-}" == "failure" ]]; then
-            infra_config_red_alert "The bounded re-push applied, and the post-re-push liveness probe then found the webhook listener DOWN. The recovery destroyed the sole no-SSH remediation channel on a host that cannot be re-provisioned (cx33, 0/6 stock). Pass 2 did not run — it is skipped, not failed — so no delivery verdict exists for this run and none should be inferred. The route back does not depend on the webhook being alive: terraform apply -replace=terraform_data.infra_config_handler_bootstrap , which reprovisions the handler over root SSH on the CF Tunnel. Do NOT run terraform apply -replace=hcloud_server.web ." "unreachable" || true
+            infra_config_red_alert "The bounded re-push applied, and the post-re-push liveness probe then found the webhook listener DOWN. The recovery destroyed the sole no-SSH remediation channel on a host that cannot be re-provisioned (cx33, 0/6 stock). Pass 2 did not run — it is skipped, not failed — so no delivery verdict exists for this run and none should be inferred. The route back does not depend on the webhook being alive: (run from apps/web-platform/infra) doppler run --name-transformer tf-var -- terraform apply -replace=terraform_data.infra_config_handler_bootstrap -target=terraform_data.infra_config_handler_bootstrap -input=false -lock-timeout=120s , which reprovisions the handler over root SSH on the CF Tunnel. Do NOT run terraform apply -replace=hcloud_server.web ." "unreachable" || true
             exit 0
           fi
 
@@ -1593,10 +1672,10 @@ jobs:
               LEVER="Nothing was written. Re-run the workflow; if it fails here again, the re-push plan's shape has drifted from the 2026-08-13 measurement and the recovery is correctly refusing to write."
             elif [[ "${REPUSH_APPLY_OUTCOME:-}" == "failure" ]]; then
               PHASE="applying the re-push (a production write was ATTEMPTED and did not complete)"
-              LEVER="Terraform state may hold a tainted terraform_data.deploy_pipeline_fix. There is no backend lock to clear. Run a plan first to see the current state, then the documented lever is: terraform apply -replace=terraform_data.infra_config_handler_bootstrap . Do NOT run terraform apply -replace=hcloud_server.web — that host cannot be re-provisioned (cx33, 0/6 stock)."
+              LEVER="Terraform state may hold a tainted terraform_data.deploy_pipeline_fix. There is no backend lock to clear. Run a plan first to see the current state, then the documented lever is: (run from apps/web-platform/infra) doppler run --name-transformer tf-var -- terraform apply -replace=terraform_data.infra_config_handler_bootstrap -target=terraform_data.infra_config_handler_bootstrap -input=false -lock-timeout=120s . Do NOT run terraform apply -replace=hcloud_server.web — that host cannot be re-provisioned (cx33, 0/6 stock)."
             else
               PHASE="re-verifying after the re-push (the write completed; the host still did not publish a new frame)"
-              LEVER="The bounded recovery is spent — it is one attempt by construction, so re-running will not retry it. The documented lever is: terraform apply -replace=terraform_data.infra_config_handler_bootstrap . Do NOT run terraform apply -replace=hcloud_server.web — that host cannot be re-provisioned (cx33, 0/6 stock)."
+              LEVER="The bounded recovery is spent — it is one attempt by construction, so re-running will not retry it. The documented lever is: (run from apps/web-platform/infra) doppler run --name-transformer tf-var -- terraform apply -replace=terraform_data.infra_config_handler_bootstrap -target=terraform_data.infra_config_handler_bootstrap -input=false -lock-timeout=120s . Do NOT run terraform apply -replace=hcloud_server.web — that host cannot be re-provisioned (cx33, 0/6 stock)."
             fi
             # `repush_failed`, not `reachable` (#7104 PR-B review). The reachable body opens "the
             # files themselves reached the server", which is FALSE on the plan-failure path where
@@ -2173,6 +2252,7 @@ jobs:
           # worked". Without them the summary could only report the former and asserted the latter.
           PASS2_VERDICT: ${{ steps.infra_config_gate_pass2.outputs.verdict }}
           WEBHOOK_LIVENESS_OUTCOME: ${{ steps.webhook_liveness.outcome }}
+          WEBHOOK_LISTENER_STATE: ${{ steps.webhook_liveness.outputs.listener_state }}
         run: |
           {
             echo "## Apply deploy-pipeline-fix"

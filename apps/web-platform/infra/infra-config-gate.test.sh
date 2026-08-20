@@ -2030,7 +2030,11 @@ g1_problems=$(printf '%s\n' "$GUARD1" | grep -c '^PROBLEM=' || true)
 # references each. `unadjudicated` is the 404 first-bootstrap escape hatch — the gate tolerates a
 # missing status endpoint, checks nothing, and exits 0 — so `success()` alone re-armed all three
 # behind a verification that never happened.
-G1_EXPECTED_REFERENCES=19
+# 19 -> 22 (#7546 review): the liveness probe now publishes a three-valued `listener_state`,
+# and the backstop, the alert step and the post-apply summary each consume it so that
+# "the probe could not run" stops being indistinguishable from "the channel is down".
+# Three new env: refs on the gate chain, re-derived deliberately as this pin demands.
+G1_EXPECTED_REFERENCES=22
 if [[ "$g1_problems" -eq 0 && "${g1_checked:-0}" == "$G1_EXPECTED_REFERENCES" ]]; then
   pass "#7104 WORKFLOW-REF PIN: all $g1_checked workflow if:/env: references resolve, and every compared literal is one the producer can emit"
 elif [[ "$g1_problems" -eq 0 ]]; then
@@ -2344,6 +2348,34 @@ else
   fail "#7104 AC18: the success()-gated step set downstream of the gate drifted from its pin: $ac18_measured. These steps re-arm behind a false green -- two close the founder's GitHub issues and one swaps the running container. If the change is deliberate, update the EXPECT table and say why in the commit."
 fi
 
+# EVERY OPERATOR-FACING LEVER IS COMPLETE, AND CARRIES ITS FORBIDDEN TARGET (#7546 review).
+#
+# The diff hands a non-technical founder -- and, explicitly in the issue body, "an engineer/agent"
+# -- a terraform command to run against production. Measured on the shipped tree: FOUR emission
+# sites, and ZERO of them carried `-target=`. This file's own comment on the re-push plan says
+# why that matters: "-replace alone would plan the whole graph" -- 230 resources, 20 variables
+# with no default, on a root containing a host the repo treats as unreplaceable. The workflow
+# gets its OWN invocation right and got the one it hands a human wrong, four times out of four.
+#
+# The guardrail sweep had the same shape: 3 of 4 sites named the forbidden target, and the one
+# that did not was the backstop arm that fires when the re-push has ALREADY bricked the channel
+# -- i.e. the state with no fallback. That is the "two-thirds false annotation" class this PR
+# exists to close, recurring inside the fix, and a per-site sweep is what catches it rather than
+# a spot check on the site someone happened to be editing.
+LEVER_AUDIT=$(awk '/apply -replace=terraform_data\.infra_config_handler_bootstrap/{
+    n++
+    if (!/-target=terraform_data\.infra_config_handler_bootstrap/) bad = bad " L" NR ":no-target"
+    if (!/doppler run --name-transformer tf-var/)                  bad = bad " L" NR ":no-doppler"
+    if (!/Do NOT run terraform apply -replace=hcloud_server\.web/) bad = bad " L" NR ":no-guardrail"
+  } END { printf "%d%s", n+0, bad }' "$APPLY_WF")
+lever_n="${LEVER_AUDIT%%[!0-9]*}"
+lever_bad="${LEVER_AUDIT#"$lever_n"}"
+if [[ "${lever_n:-0}" -ge 1 && -z "$lever_bad" ]]; then
+  pass "#7104 lever: all $lever_n operator-facing handler-replace lever(s) are TARGETED (-replace alone plans the whole 230-resource graph), doppler-wrapped (so the operator is never prompted for 20 secret variables), and name the forbidden hcloud_server.web target"
+else
+  fail "#7104 lever: operator-facing recovery command(s) are incomplete or unguarded ($lever_n site(s);$lever_bad). A bare -replace plans the WHOLE graph, an unwrapped terraform prompts a non-technical founder for every secret variable, and an emission without the forbidden-target sentence is how a prior annotation told an operator to destroy an unreplaceable host."
+fi
+
 # Cardinality floor: if the reference extractor silently matches nothing, the clean
 # result above would be a statement about the empty set.
 # (The standalone `g1_checked >= 4` anti-vacuity row that used to sit here is DELETED. It was
@@ -2357,7 +2389,7 @@ fi
 # Nothing asserted that the assertions RAN. Measured: deleting the entire #7220 block took the
 # suite 53 -> 40 passed, 0 failed, exit 0 — a silent truncation that reads exactly like a clean
 # run. A floor (not equality — the count is developer-incremented) makes arm deletion loud.
-GATE_MIN_ASSERTIONS=132
+GATE_MIN_ASSERTIONS=133
 # Adjudicated DIRECTLY, not through fail(). Measured: `fail() { return 0; }` made this suite
 # report `94 passed, 0 failed` / `OK` / exit 0 WITH a genuinely broken assertion present — and
 # the floor built to make truncation loud was itself dispatched through the neutered function,
