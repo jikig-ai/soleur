@@ -1,29 +1,58 @@
 # Session state — #7537 orphan process reaper
 
-Written 2026-08-20. Branch `feat-one-shot-7537-orphan-process-reaper`,
+Written 2026-08-20, updated on resume. Branch `feat-one-shot-7537-orphan-process-reaper`,
 worktree `.worktrees/feat-one-shot-7537-orphan-process-reaper`, draft PR 7641, closes #7537.
 
 ## Position in the pipeline
 
-`/one-shot` Steps 0b/0c complete. **Steps 1-2 (plan + deepen-plan) did NOT finish.**
-Nothing of the feature is implemented. Two commits exist: `chore: initialize` and the plan
-checkpoint. Do not treat the pushed branch as progress on the feature.
+`/one-shot` Steps 0a/0a.5/0b/0c and **Steps 1-2 (plan + deepen-plan) are COMPLETE.**
+Next step is Step 3 (`/work`). Nothing of the feature is implemented yet — the branch carries
+planning artifacts only (`git diff origin/main...HEAD --name-only` = plan + tasks + this file).
 
-## Why it halted
+## Plan Phase
 
-An MCP reconnect dropped the entire `soleur` plugin registry — every skill and all ~70
-`soleur:*` agents — mid-run. Confirmed process-wide (a fresh subagent saw the same empty
-registry). The plugin is intact on disk and enabled in settings; a CLI restart restores it.
-Filed as issue 7645. The run halted rather than hand-rolling the pipeline, because
-improvising the child skills is exactly what one-shot's anti-bypass protocol forbids.
+- Plan file: `knowledge-base/project/plans/2026-08-20-feat-orphan-process-reaper-deleted-cwd-conjunction-plan.md`
+- Status: **complete** — continued IN PLACE from the prior session's checkpoint; exactly one plan
+  file matches this branch's `branch:` frontmatter selector, and it now carries
+  `## Acceptance Criteria` (the completion predicate).
+- Tasks derived to `knowledge-base/project/specs/feat-one-shot-7537-orphan-process-reaper/tasks.md`.
+- Collision gate re-probed after planning per the post-plan clause: plan declares `closes: 7537`,
+  #7537 is still OPEN, and planning did NOT re-target — so no unchecked ref was introduced.
 
-## The plan artifact is a deliberate partial
+### Errors
 
-`knowledge-base/project/plans/2026-08-20-feat-orphan-process-reaper-deleted-cwd-conjunction-plan.md`
-has correct frontmatter (`branch:`, `issue: 7537`), an `## Overview`, and **no
-`## Acceptance Criteria`**. That absence is the predicate one-shot's plan-artifact-recovery
-block branches on, and it correctly reads as "planning did not finish". Continue that file in
-place — do not start a second plan file.
+None from the registry — `soleur:plan`, `soleur:plan-review` and `soleur:deepen-plan` all resolved
+and ran, so the prior session's halt condition did not recur. One self-inflicted error, caught and
+repaired in-phase: the `skipped_foreign_uid` counter was cut on a simplicity recommendation, which
+silently made mutation row M5 an equivalent mutant; the security review caught it and it was restored.
+
+### Decisions
+
+- **The issue's own conjunction identifies the WRAPPER, not the load.** Measured: 31 processes
+  box-wide carry `fd/255` (30 bash + 1 `dbus-daemon`), and in the synthesized battery shape the
+  `python3` child burning CPU shares the unlinked cwd inode but has NO `fd/255`. The issue's
+  discriminator is preserved verbatim as an **anchor**; a confirmed anchor then authorizes a reap
+  **set** sharing its cwd `dev:inode`, with every gate restated per member.
+- **`st_nlink == 0` replaced the entire discriminator.** Measured 0 for a genuinely deleted cwd, 2
+  for a healthy directory literally named `work (deleted)`. It obsoletes the `' (deleted)'` suffix
+  test, the `%d:%i` comparison, and the two-stat window at once.
+- **Trigger is `test-all.sh`'s preamble running `report`; nothing invokes `reap` automatically.**
+  The first draft's cron-adjacent channel was refuted by reading the code.
+- **Kill authority stayed off the hot path.** The CTO's "reap on day one" was not adopted as given —
+  the conjunction has never been observed firing on a real orphan, so a reader's judgment gates
+  every signal.
+- **~1/3 of the implementation surface was cut** (stdout veto, two-strike state file, bespoke
+  ledger, post-signal polls, exit code 10, live `report` registration, Guard 2), then ~10 new
+  mutation axes were added from the security and test-design passes.
+
+### Components Invoked
+
+`soleur:plan`; `soleur:plan-review`; `soleur:deepen-plan`; agents `repo-research-analyst`,
+`learnings-researcher`, `cto`, `spec-flow-analyzer`, `dhh-rails-reviewer`, `kieran-rails-reviewer`,
+`code-simplicity-reviewer`, `architecture-strategist`, `security-sentinel`, `test-design-reviewer`,
+`observability-coverage-reviewer`, plus a general-purpose verify-the-negative pass; scripts
+`lint-guard-contract.py`, `lint-infra-no-human-steps.py`, `probe-verb-gate.sh`; `gh` probes and
+direct `/proc` measurement on this box.
 
 ## Environment hazard
 
