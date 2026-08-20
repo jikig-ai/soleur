@@ -36,10 +36,27 @@ trap 'rm -rf "$TMP"' EXIT
 # Exiting 90 ends only the subshell, so the marker is what makes the suite red: the fixture is
 # gone either way, and a silent "0 assertions about scenario N" is the shape this whole file
 # exists to prevent.
+TMP_REAL="$(cd "$TMP" && pwd -P)"
 cdx() {
-  cd "$1" 2>/dev/null && return 0
-  echo "  FAIL: fixture directory absent: $1" >&2
-  echo "        refusing to run fixture commands in $PWD — that is a LIVE repository." >&2
+  local target="$1" top
+  if ! cd "$target" 2>/dev/null; then
+    printf '  FAIL: fixture directory absent: %s\n' "$target" >&2
+    printf '        refusing to run fixture commands in %s — that is a LIVE repository.\n' "$PWD" >&2
+    : > "$TMP/.cdx-failed"
+    exit 90
+  fi
+  # cd SUCCEEDING is not sufficient, and this is the half a naive guard misses: a directory that
+  # EXISTS but is not a git repository (a `worktree add` that created the dir and then failed, a
+  # fixture reaped mid-run) leaves `cd` returning 0 and git walking UP to the nearest enclosing
+  # repository. If TMPDIR is ever set inside a checkout — and this suite is run from one — that
+  # enclosing repository is the developer's. Pin the RESOLVED toplevel inside the fixture root,
+  # which every fixture repo in this file lives under, rather than trusting cd's exit status.
+  top="$(git rev-parse --show-toplevel 2>/dev/null)" || top=""
+  case "${top:-<none>}" in
+    "$TMP_REAL"|"$TMP_REAL"/*) return 0 ;;
+  esac
+  printf '  FAIL: %s exists, but its git toplevel is %s\n' "$target" "${top:-<not a git repository>}" >&2
+  printf '        which is OUTSIDE the fixture root %s — refusing, git would write to that repository.\n' "$TMP_REAL" >&2
   : > "$TMP/.cdx-failed"
   exit 90
 }
@@ -131,9 +148,9 @@ WT_ACTOR="$WT_PARENT/.worktrees/feat-actor"
 # matches the worktree being considered — so feat-victim is NOT protected
 # by that guard from a sibling session. Only the new lease guard protects it.
 (
-  cd "$WT_ACTOR"
+  cdx "$WT_ACTOR"
   SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT" \
-    bash "$WM" cleanup-merged >/tmp/cleanup-out.$$ 2>&1 || true
+    bash "$WM" cleanup-merged >"$TMP/cleanup-out.txt" 2>&1 || true
 )
 
 if [[ -d "$WT_VICTIM" ]]; then
@@ -201,9 +218,9 @@ elif kill -0 "$DEAD_PID" 2>/dev/null; then
 else
   pass "scenario 2 precondition: the acquiring process has exited (pid $DEAD_PID is dead)"
   (
-    cd "$WT_ACTOR"
+    cdx "$WT_ACTOR"
     SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT" \
-      bash "$WM" cleanup-merged >/tmp/cleanup2-out.$$ 2>&1 || true
+      bash "$WM" cleanup-merged >"$TMP/cleanup2-out.txt" 2>&1 || true
   )
   if [[ -d "$WT_VICTIM2" ]]; then
     pass "a lease whose acquirer exited STILL protects the worktree from a sibling reap"
