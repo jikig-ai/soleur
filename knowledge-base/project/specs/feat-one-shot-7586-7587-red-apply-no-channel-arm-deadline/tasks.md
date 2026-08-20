@@ -1,143 +1,190 @@
 # Tasks — feat-one-shot-7586-7587-red-apply-no-channel-arm-deadline
 
 Derived from
-[`knowledge-base/project/plans/2026-08-20-fix-apply-infra-failure-channel-and-arm-deadline-plan.md`](../../plans/2026-08-20-fix-apply-infra-failure-channel-and-arm-deadline-plan.md)
-after plan review. Closes **#7586** and **#7587**. Incident **#7228** is context only and is **not**
-a work target — do not close it.
+[`knowledge-base/project/plans/2026-08-20-fix-apply-infra-failure-channel-and-arm-deadline-plan.md`](../../plans/2026-08-20-fix-apply-infra-failure-channel-and-arm-deadline-plan.md),
+**post-deepen**. Closes **#7586** and **#7587**. Incident **#7228** is context only and is **not** a
+work target — do not close it.
 
 `lane: cross-domain` (no `spec.md` on this branch; fail-closed default per TR2).
 
-**Phase order is load-bearing.** Phase 1 changes contracts the later phases assert on; the guard in
-Phase 4 is written from the design in Phase 0, not from whatever the code ends up looking like.
+**Phase order is load-bearing.** Phase 1 changes contracts the later phases assert on; the guards in
+Phase 5 are written from the design, not from whatever the code ends up looking like.
 
 ---
 
-## Phase 0 — Preconditions and the mutation matrix
+## Phase 0 — Preconditions and the mutation matrices
 
 - [ ] **0.1** Re-read the plan's `## Guard Contract` and write both mutation matrices down before
       touching the workflow. A matrix derived from finished code tests the code that exists; one
       derived from the design tests the property.
-- [ ] **0.2** Confirm the four issue states are unchanged since planning:
-      `gh issue view 7586 --json state`, `7587`, `7228`, `7462`. If #7228 has closed, revisit the
-      §4 deadline resize — the reasoning still holds but the framing changes.
-- [ ] **0.3** Capture the pre-change baseline for the AC10 comparison:
-      `gh api repos/:owner/:repo/actions/runs/32356859661/jobs` — record the `apply` job duration
-      (302 s) and the ARM step duration (240 s) into `measurements.md`.
-- [ ] **0.4** Verify the errexit premise directly rather than inheriting it: confirm the ARM step
-      declares no `shell:` key, so GitHub invokes it as `/usr/bin/bash -e {0}`. This is the claim
-      the plan's first draft got backwards; do not proceed on memory.
+- [ ] **0.2** Confirm issue states are unchanged: `gh issue view 7586 7587 7228 7462 --json state`.
+- [ ] **0.3** Re-derive the two sizing terms from the jobs API — do **not** carry this plan's
+      literals: (a) the reachable deadline sum, (b) the **p95 pre-gate duration** (job start → ARM
+      step start). The plan measured 57/58/64/81/91/111 s across six runs (p95 111 s) via
+      `gh api repos/:owner/:repo/actions/runs/<id>/jobs`. Record both in `measurements.md` with the
+      command.
+- [ ] **0.4** Verify the errexit premise directly: confirm the ARM step declares no `shell:` key, so
+      GitHub invokes it as `/usr/bin/bash -e {0}`. An earlier plan draft got this backwards; do not
+      proceed on memory.
 - [ ] **0.5** Run the bound suites GREEN before any edit, so a later red is attributable:
       `bun test plugins/soleur/test/terraform-target-parity.test.ts`,
+      `bun test plugins/soleur/test/stock-preflight-coverage.test.ts`,
       `bash tests/scripts/test-preapply-entrypoint-gate.sh`,
+      `bash tests/scripts/test-vector-redeliver-wiring.sh`,
       `bash apps/web-platform/infra/web-1-swap-concurrency-parity.test.sh`.
+- [ ] **0.6** Re-confirm the two claims the deepen pass flagged as unverifiable from the repo, both
+      load-bearing for the sweep: (a) `git_data_prd` is absent from the merge-path tfstate — read it
+      from a run's ARM-step log, not a committed file; (b) `$RUNNER_TEMP` persists across steps
+      within a job — GitHub Actions platform semantics with no in-repo citation, so confirm it
+      empirically. **If (b) does not hold, the state file must move to a step output or an artifact
+      and the sweep design changes.**
+- [ ] **0.7** Measure observed queue depth / wait on the shared
+      `terraform-apply-web-platform-host` group before relying on the budget raise. The plan states
+      the true worst case as 35 min run-level (apply 30 + notify 5, summed because the group is
+      workflow-level); per-merge queue wait is the binding constraint and is **not** yet measured.
 
-## Phase 1 — Contract changes in the workflow (before their consumers)
+## Phase 1 — Extract the ARM gate, then change its contracts
 
-- [ ] **1.1** Raise the `apply` job's `timeout-minutes` from 15 to 30, and rewrite the adjacent
-      comment: it currently claims the 15 "matches `apply-deploy-pipeline-fix.yml`", whose `apply`
-      job is actually `timeout-minutes: 90`. Cite the in-file mutex-holding precedent (job ceiling
-      above, in-script bound strictly below) instead.
-- [ ] **1.2** Add a step-level `timeout-minutes` to the ARM gate, strictly below the job's.
-- [ ] **1.3** Fix `arm_one`'s wall-clock accounting: the loop counter must advance by measured
-      elapsed time, not by its `sleep 10` alone. Today the per-iteration `curl --max-time 15` is
-      uncounted, so a 230 s nominal deadline can consume up to 575 s.
-- [ ] **1.4** Resize the `inngest_consumer` `arm_one` deadline from 230 to ~30. Change **no other**
-      deadline. Retain the `arc == 2` soft-landing branch and its `::warning::`.
-- [ ] **1.5** Add the state file: `arm_one` appends `<id>` to `$RUNNER_TEMP/armed-unconfirmed`
-      immediately after a successful `PATCH {paused:false}`, and removes it **only** on a 2xx
-      rollback `PATCH` or on reaching `up`. Removing on "rollback attempted" would drop a failed
-      rollback's id and defeat the sweep.
-- [ ] **1.6** Declare `set +e` explicitly in the ARM step, guard every rollback `PATCH` with
-      `|| true`, and replace any bare `(( … ))` with `x=$(( … ))`. Errexit is inherited and
-      `set -uo pipefail` does not clear it.
+- [ ] **1.1** Extract the ARM gate's bash from the workflow into
+      `apps/web-platform/infra/arm-heartbeats.sh`, following the house precedent
+      (`web-private-nic-guard.sh`). Parameterise the clock and the HTTP call so a test can inject
+      fakes. Keep behaviour identical in this step — extraction first, changes after.
+- [ ] **1.2** Raise the `apply` job's `timeout-minutes` from 15 to 30 and rewrite the adjacent
+      comment: it currently claims the 15 "matches `apply-deploy-pipeline-fix.yml`", whose apply job
+      is actually **90**. Cite the two-part inequality and the measured p95 instead.
+- [ ] **1.3** Add a step-level `timeout-minutes` to the ARM gate satisfying
+      `arm_step_timeout ≥ Σdeadlines × 1.1` and
+      `job_timeout − arm_step_timeout ≥ p95 pre-gate` (≈27 min against a 30 min job).
+- [ ] **1.4** Fix the wall-clock accounting inside `arm-heartbeats.sh`: the loop counter must advance
+      by measured elapsed time, not by its `sleep 10` alone. Today the per-iteration
+      `curl --max-time 15` is uncounted, so a 230 s nominal deadline can consume up to 575 s.
+- [ ] **1.5** Resize the `inngest_consumer` deadline from 230 to **exactly 30**. Change no other
+      deadline.
+- [ ] **1.6** Rewrite the `arc == 2` warning — do **not** retain it. Its text says "no beat within
+      230s" and "the probe or the private-net path is broken"; after the resize both are false and a
+      *healthy* feeder emits it ~5 runs in 6. Carry the deadline from the variable, drop the
+      probe-is-broken instruction, and emit the monitor's `status` and last-beat timestamp so
+      *never beat* and *beat not due in-window* are distinguishable from one event.
+- [ ] **1.7** Add the state file: append `<id>` to `$RUNNER_TEMP/armed-unconfirmed` immediately after
+      a successful `PATCH {paused:false}`; remove it **only** on a 2xx rollback `PATCH` or on
+      reaching `up`. Removing on "rollback attempted" drops a failed rollback's id and defeats the
+      sweep.
+- [ ] **1.8** Declare `set +e` explicitly, guard every rollback `PATCH` with `|| true`, and use
+      `x=$(( … ))` never bare `(( … ))`. Errexit is inherited and `set -uo pipefail` does not clear
+      it; an unguarded `rollback_all` aborts at the first 5xx and silently truncates.
+- [ ] **1.9** Do **not** add a `trap` (Cut List C6): bash keeps only the last `EXIT` handler, an
+      `INT`/`TERM` handler returns and then fires `EXIT` too, and the handler is deferred until the
+      foreground `sleep` returns.
 
 ## Phase 2 — The rollback sweep
 
-- [ ] **2.1** Add a **named** step `- name: Re-pause any monitor left unconfirmed`, gated
-      `if: always()`, positioned after the ARM gate and before `Tear down cloudflared SSH bridge`.
-- [ ] **2.2** Give it its own `env: { DOPPLER_TOKEN_WEB_ARM: ${{ secrets.DOPPLER_TOKEN_WEB_ARM }} }`,
-      re-mint `BETTERSTACK_API_TOKEN`, and `printf '::add-mask::%s\n'` the result. `BS_TOKEN` is
-      derived inside the ARM step and is invisible to a sibling step — without this the sweep runs,
-      finds ids, and can PATCH none of them.
-- [ ] **2.3** Re-PATCH `paused:true` for every id still listed, idempotently, with `set +e` and
-      `|| true` per 1.6. Emit `::error::` naming the credential when the re-mint fails, rather than
-      exiting quietly.
-- [ ] **2.4** Do **not** add a `trap`. Cut List C6 records why: bash keeps only the last `EXIT`
-      handler, an `INT`/`TERM` handler returns and then fires `EXIT` too (double-PATCH), and the
-      handler is deferred until the foreground `sleep` returns.
+- [ ] **2.1** Add a named step `- name: Re-pause any monitor left unconfirmed`, gated
+      `if: always()`, after the ARM gate and before `Tear down cloudflared SSH bridge`.
+- [ ] **2.2** First line, **before** any Doppler read:
+      `[[ -s "$RUNNER_TEMP/armed-unconfirmed" ]] || exit 0`. The step runs on every apply including
+      `ssh_apply_skip` runs; without this it re-mints a credential it does not need and raises a
+      mint-failure alarm on runs with no work — a false alarm wired into the new email channel.
+- [ ] **2.3** Give it `env: { DOPPLER_TOKEN_WEB_ARM: … }`, re-mint `BETTERSTACK_API_TOKEN`, and
+      `printf '::add-mask::%s\n'` the result. `BS_TOKEN` is derived inside the ARM step and is
+      invisible to a sibling step. Keep the mint and the mask adjacent; never `set -x`.
+- [ ] **2.4** Re-PATCH `paused:true` idempotently for every listed id, with `set +e` and `|| true`.
+- [ ] **2.5** **`exit 1`** when the state file is non-empty AND (the mint failed OR any re-pause
+      `PATCH` was non-2xx). `::error::` does not fail a step — an annotating sweep leaves the job
+      green, the notify predicate false, and nobody emailed.
+- [ ] **2.6** On a successful fire, write armed / fired / outcome counts where the notify body reads
+      them. Re-pausing a production uptime monitor on an otherwise-green run must reach the
+      operator, not just a run log.
 
 ## Phase 3 — The failure channel
 
-- [ ] **3.1** Add the `notify-apply-failure` job with `needs: [preflight, apply]` and
-      `timeout-minutes: 5`.
-- [ ] **3.2** Write the predicate so it is true unless everything is fine — it must cover a failed
-      `preflight` (which leaves `apply` **skipped** on a red run) and must admit the
-      `apply_target == 'manual-rerun'` dispatch (the recovery path the email itself prescribes).
-      A `push`-only, `needs.apply.result`-only predicate misses both.
-- [ ] **3.3** Declare job-level `permissions: { contents: read, actions: read }`. A job-level block
-      **replaces** the workflow-level one, so `contents: read` must be re-declared.
-- [ ] **3.4** Add a **named** `cause` step resolving the failing step's name from
-      `gh api repos/:owner/:repo/actions/runs/${{ github.run_id }}/jobs`, reduced to a sanitized
-      token. Do **not** read `apply` step outputs — the `apply` job declares no `outputs:`, and job
-      outputs are unreliable on the cancelled path anyway.
-- [ ] **3.5** Add the **named** `notify-ops-email` step with `continue-on-error: true`.
-- [ ] **3.6** Write the body to the `#7539` arm's quality bar: plain-language blast radius, a branch
-      on `needs.apply.result == 'cancelled'` with per-outcome guidance, the failing step's name, a
-      line stating that uptime alerting may be paused, a line stating that the previously applied
-      state is still serving, and a fenced copy-pasteable
+- [ ] **3.1** Add `notify-apply-failure` with `needs: [preflight, apply]` and `timeout-minutes: 5`.
+- [ ] **3.2** Predicate: true unless everything is fine. It must cover a failed `preflight` (which
+      leaves `apply` **skipped** on a red run) and must admit
+      `inputs.apply_target == 'manual-rerun'` (the recovery path the email itself prescribes). A
+      `push`-only, `needs.apply.result`-only predicate misses both.
+- [ ] **3.3** Job-level `permissions: { contents: read, actions: read }` — a job-level block
+      **replaces** the workflow-level one, so `contents: read` must be re-declared. `actions: read`
+      is the minimum for `…/actions/runs/<id>/jobs`.
+- [ ] **3.4** Named `cause` step resolving the failing step's name from the jobs API. Do **not** read
+      `apply` step outputs — that job declares no `outputs:`, and job outputs are unreliable on the
+      cancelled path anyway.
+- [ ] **3.5** Sanitize the cause token: strip `\r`/`\n`, reject outside
+      `[A-Za-z0-9 ._:()/-]{1,80}`, HTML-escape `&`/`<`/`>`, and use a random `$GITHUB_OUTPUT`
+      heredoc delimiter (a newline otherwise forges outputs and spoofs annotations).
+- [ ] **3.6** Named `notify-ops-email` step with `continue-on-error: true`.
+- [ ] **3.7** Body to the `#7539` bar: plain-language blast radius; a branch on
+      `needs.apply.result == 'cancelled'` with per-outcome guidance for **both** arms; the failing
+      step's name; whether uptime alerting may be paused; that the previously-applied infrastructure
+      is still serving; the sweep's counts when it fired; and a fenced
       `gh workflow run … -f apply_target=manual-rerun` block.
-- [ ] **3.7** Enforce the interpolation allow-list: workflow-context scalars plus the `cause` token
+- [ ] **3.8** Keep the body in `with: body:` — **no `run:` body in this job may contain
+      `terraform apply` or `-target=`**. The predicate names `manual-rerun`, so
+      `stock-preflight-coverage.test.ts`'s `jobFor("manual-rerun")` returns two hits and
+      disambiguates by `appliesTerraform`; either token makes that suite red.
+- [ ] **3.9** Enforce the interpolation allow-list: workflow-context scalars plus the `cause` token
       only. Never raw step logs, `curl` output or a shell trace.
-- [ ] **3.8** Add a one-line comment in the workflow pointing at the guard suite that owns these
-      invariants, so the next editor can find it.
+- [ ] **3.10** Add a one-line comment in the workflow pointing at the guard suite.
 
-## Phase 4 — Guards (written from the design, not the code)
+## Phase 4 — Records
 
-- [ ] **4.1** Add the shared `expectNonEmptyDispatch` helper to
-      `plugins/soleur/test/terraform-target-parity.test.ts`, plus a header note that this suite also
-      owns the apply workflow's channel and budget invariants.
-- [ ] **4.2** Add `describe("apply-web-platform-infra has a failure channel")` implementing Guard 1:
-      assert on the `if:` **line** (comment-stripped), the `needs:` array, `timeout-minutes`,
-      `permissions`, and `continue-on-error`.
-- [ ] **4.3** Add `describe("the ARM gate's deadlines fit its job")` implementing Guard 2: assert
-      `sum(arm_one deadlines) < apply_timeout_seconds − 62`, the step-level timeout strictly below
-      the job's, the sweep step's presence and `always()` gate, and the elapsed-time accounting.
-- [ ] **4.4** Leave `describe("the ssh_token_gate green-skip has a channel (#7539)")`
+- [ ] **4.1** Amend `ADR-117` with a dated section covering (a) the deliberate departure from
+      `period + grace − 10` for `inngest_consumer` and its bounded cost, and (b) the already-shipped
+      `arc == 2` soft-landing. Do **not** fold in the unrelated `triggers_replace` divergence.
+- [ ] **4.2** Update `model.c4`'s `github -> betterstack` edge to name the ARM gate's
+      `PATCH /api/v2/heartbeats/<id>` write under `DOPPLER_TOKEN_WEB_ARM`. Leave `github -> resend`
+      alone (C10). Run the c4 syntax + render suites.
+- [ ] **4.3** Extend `plugins/soleur/lib/heartbeat-manifest.ts`'s `arming_pending` comment on the
+      `inngest_consumer` row to record the probabilistic arming window and to state that removal
+      must follow **observed** arming. The row stays — removing it is #7462 step 6.
+- [ ] **4.4** Update the `registry_luks_recut` mutex-accounting comment for the new 35-min run-level
+      worst case.
+
+## Phase 5 — Guards (written from the design, not the code)
+
+- [ ] **5.1** Add `apps/web-platform/infra/arm-heartbeats.test.sh` with an injected fake clock and
+      fake `curl`, driving Guard 2 rows 6-9 behaviourally.
+- [ ] **5.2** **Register it** in `apps/web-platform/infra/run-registered-suites.sh`.
+      `scripts/lint-orphan-test-suites.sh` enumerates `git ls-files '*.test.sh'` repo-wide, so an
+      unregistered new `.test.sh` is an orphan by construction.
+- [ ] **5.3** In `plugins/soleur/test/terraform-target-parity.test.ts`: add the shared
+      `expectNonEmptyDispatch` helper and a header note that this suite also owns the apply
+      workflow's channel and budget invariants.
+- [ ] **5.4** Guard 1 — `describe("apply-web-platform-infra has a failure channel")`. Extract the
+      `if:` expression and **evaluate** it over `{success,failure,cancelled,skipped}² ×
+      {push,manual-rerun,other}`, asserting the truth table. Do not string-match: a canonical-string
+      match makes H2 fail by construction, a token-presence check passes rows 1/3/4 over a broken
+      predicate. Pin `needs` to equal `["preflight","apply"]` **in the same test** — otherwise
+      dropping `preflight` from both `needs:` and the predicate reds neither guard (row 5).
+- [ ] **5.5** Guard 2 — `describe("the ARM gate's deadlines fit its job")`. Assert the two-part
+      inequality, the step timeout strictly below the job's, and the sweep identified by
+      `if: always()` co-located with the state-file literal (**not** by step name — a rename would
+      false-RED).
+- [ ] **5.6** Leave `describe("the ssh_token_gate green-skip has a channel (#7539)")`
       **byte-identical**. Its passing untouched is the regression signal that the new job did not
       disturb the old arm.
-- [ ] **4.5** Execute every row of both mutation matrices and both harness tables against the real
+- [ ] **5.7** Execute every row of both mutation matrices and both harness tables against the real
       implementation; record each verdict in `measurements.md`. A guard that cannot be driven RED is
       vacuous.
-
-## Phase 5 — Records
-
-- [ ] **5.1** Amend `ADR-117-executable-heartbeat-arming.md` with a dated section covering (a) the
-      deliberate departure from `period + grace − 10` for `inngest_consumer` and its bounded cost,
-      and (b) the already-shipped `arc == 2` soft-landing. Do **not** fold in the unrelated
-      `triggers_replace` doc/code divergence.
-- [ ] **5.2** Update `model.c4`'s `github -> betterstack` edge description to name the ARM gate's
-      `PATCH /api/v2/heartbeats/<id>` write under `DOPPLER_TOKEN_WEB_ARM`. Leave `github -> resend`
-      alone. Run the c4 syntax + render suites.
 
 ## Phase 6 — Verification
 
 - [ ] **6.1** Run the full bound set from AC8, naming each suite explicitly because a touched-file
       selection reaches only the first: `terraform-target-parity`, `stock-preflight-coverage`,
       `test-preapply-entrypoint-gate.sh`, `test-vector-redeliver-wiring.sh`,
-      `web-1-swap-concurrency-parity.test.sh`, the c4 suites,
-      `lint-workflow-errexit-capture.py`, and
+      `web-1-swap-concurrency-parity.test.sh`, `arm-heartbeats.test.sh`, the c4 suites,
+      `lint-workflow-errexit-capture.py`, `lint-orphan-test-suites.sh`, and
       `lint-infra-no-human-steps.py --changed --base origin/main` (the gate's own invocation over
       the changed set, never a hand-enumerated path list).
-- [ ] **6.2** `actionlint` the workflow, and check each new/edited `run:` snippet with
+- [ ] **6.2** `actionlint` the workflow; check each new/edited `run:` snippet with
       `bash -c '<snippet>'` — never `bash -n` on the `.yml`.
-- [ ] **6.3** Walk every acceptance criterion and record its evidence in `measurements.md`.
-- [ ] **6.4** Confirm the PR body carries `Closes #7586` and `Closes #7587`, no `Closes` for #7228,
-      and names the observability layer (GitHub Actions job conclusions → `notify-ops-email` →
-      Resend → `ops@jikigai.com`).
-- [ ] **6.5** Confirm `/ship` will render
-      `knowledge-base/project/specs/<branch>/decision-challenges.md` into the PR body and file the
-      `action-required` issue, and that the Deferrals tracking issue (default notification posture
-      + the deferred de-duplication) is filed with its re-evaluation criterion.
+- [ ] **6.3** Walk every acceptance criterion (AC1-AC10 incl. AC2b/AC2c/AC4b/AC6b) and record its
+      evidence in `measurements.md`.
+- [ ] **6.4** PR body carries `Closes #7586` and `Closes #7587`, no `Closes` for #7228, and names
+      **both** observability layers (job conclusions → `notify-ops-email` → Resend → ops@; and
+      Better Stack heartbeat armed/paused state).
+- [ ] **6.5** Confirm `/ship` renders `decision-challenges.md` into the PR body and files the
+      `action-required` issue, and that the Deferrals tracking issue (default notification posture +
+      the deferred de-duplication) is filed with its re-evaluation criterion.
 
 ## Phase 7 — Post-merge (automated)
 

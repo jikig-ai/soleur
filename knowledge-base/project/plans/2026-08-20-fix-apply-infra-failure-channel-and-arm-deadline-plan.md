@@ -14,6 +14,51 @@ lane: cross-domain
 
 # fix: a RED apply run reaches a channel, and the ARM gate fits inside its job budget
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-20
+**Halt gates run:** 4.5 (fired — network-outage deep-dive), 4.55 (no trigger), 4.6 PASS, 4.7 PASS,
+4.8 PASS, 4.9 (no UI surface), 4.10 (no store/connection), 4.11 PASS (`lint-guard-contract.py` green)
+**Agents used:** network-outage deep-dive; verify-the-negative; post-edit self-audit;
+observability-coverage; architecture-strategist + security-sentinel + test-design (combined lens).
+Preceded by a 5-reviewer plan-review panel and three domain leaders.
+
+### Key improvements
+
+1. **The budget ladder is now derived from two measured terms, not one assumed figure.** The old
+   sizing rested on "~838 s available" from a single no-op run. It is now
+   `arm_step_timeout ≥ Σdeadlines × 1.1` **and** `job_timeout − arm_step_timeout ≥ p95 pre-gate`,
+   with p95 measured at **111 s** across six runs (57/58/64/81/91/111).
+2. **Guard 1 became semantic.** It now evaluates the `if:` expression over the full
+   `{success,failure,cancelled,skipped}² × {push,manual-rerun,other}` truth table instead of
+   string-matching it — which resolves a contradiction between mutation rows 1/3/4 and harness row
+   H2, and closes a mutation that would have red-flagged neither guard (dropping `preflight` from
+   `needs:` *and* its predicate clause in one edit).
+3. **Guard 2 became behavioural.** The ARM bash is extracted to
+   `apps/web-platform/infra/arm-heartbeats.sh` with a sibling `.test.sh` that injects a fake clock
+   and fake `curl`. The previous form was satisfiable by a decoy `date +%s` and false-RED on an
+   equivalent rewrite. Three new mutation rows cover the sweep's PATCH polarity, its `|| true`
+   guards, and its `::add-mask::`.
+4. **The sweep now fails instead of annotating.** `::error::` does not fail a step, so an annotating
+   sweep left the job green, the notify predicate false, and nobody emailed — this fix's own defect,
+   reproduced inside the fix.
+5. **The retained `arc == 2` warning is rewritten rather than kept.** After the 230→30 s resize its
+   text ("no beat within 230s", "the probe is broken") is false, and a *healthy* feeder would emit
+   it ~5 runs in 6.
+
+### New considerations discovered
+
+- **P7 is satisfied but unobserved.** `inngest_consumer` is exempted by name from the nightly
+  live-reconcile (`heartbeat-manifest.ts` → `arming_pending: { tracking_issue: 7462 }`), so nothing
+  reports "still paused weeks later". Addressed by AC6b rather than left implicit.
+- **The observability layer citation was incomplete** — this change also produces Better Stack's
+  armed/paused state, the layer with the larger blast radius.
+- **`stock-preflight-coverage.test.ts` is not a free pass**: the notify job's predicate names
+  `manual-rerun`, so it resolves to one job only because no `run:` body mentions `terraform apply`
+  or `-target=` (now AC2b).
+- **The true mutex cost is 35 min run-level, not 30** — the group is workflow-level and this file's
+  own rule sums across jobs.
+
 ## Overview
 
 Two pre-existing observability defects in `.github/workflows/apply-web-platform-infra.yml`, the
@@ -173,9 +218,14 @@ wall-clock budget, not a network stall — but the ARM gate does make HTTPS call
 from a hosted runner, so the L3→L7 layers are answered rather than waived. One artifact settles all
 four: run `32356859661`'s job log.
 
-1. **L3 — firewall allow-list.** Not applicable. The gate runs on a GitHub-hosted runner reaching
-   `uptime.betterstack.com` over the public internet; no `hcloud_firewall` and no egress allow-list
-   entry sits on that path.
+1. **L3 — firewall allow-list.** Not applicable, and now with a pulled artifact rather than
+   architectural reasoning (the deep-dive's one requested tightening). The gate runs on a
+   GitHub-hosted runner reaching `uptime.betterstack.com` over the public internet. Measured:
+   `apps/web-platform/infra/*.tf` declares five `hcloud_firewall` resources
+   (`firewall.tf`, `git-data.tf`, `grok-dogfood.tf`, `inngest-host.tf`, `zot-registry.tf`), every
+   one attached to a Hetzner server, and `grep -rn 'direction *= *"out"' apps/web-platform/infra/*.tf`
+   returns **zero** — there is no egress rule anywhere in this repo, so nothing here governs a
+   hosted runner's path to a third-party SaaS.
 2. **L3 — DNS / routing.** Verified: five successive `GET /heartbeats/<id>` round-trips completed
    between 10:06:01.298 and 10:06:02.255 — **~0.24 s each**. A resolver or route fault would have
    produced `--max-time 15` stalls; the timestamps exclude it.
@@ -186,9 +236,27 @@ four: run `32356859661`'s job log.
    and the log names the cause — `monitor 482259 is paused; unpausing and watching for a real beat`.
    The absence is on the **feeder** side (#7228's surface), not the API path.
 
+**Resource-shape trigger (the implicit-SSH arm of the gate).** `apps/web-platform/infra/server.tf`
+and `ci-ssh-key.tf` carry many `provisioner "file"` / `provisioner "remote-exec"` /
+`connection { type = "ssh" }` blocks, and those resources are in this workflow's blast radius. None
+of this plan's four changes edits any `.tf` file or touches a provisioner or connection block — all
+four are workflow-orchestration or Better Stack API changes. The one real interaction is
+**beneficial and intentional, not incidental**: raising the job's wall-clock budget from 15 to 30
+gives the SSH `remote-exec` provisioners that run *earlier in the same job* strictly more time to
+finish before a job-level cancellation would cut them off mid-provision. It cannot starve them.
+
 **Conclusion:** the 237 s is not a network fault at any layer. It is the gate doing exactly what it
 was written to do against a monitor whose feeder is knowingly dark, which rules out the entire
 network-hypothesis tree and leaves the deadline arithmetic as the sole cause.
+
+**Two claims in this plan rest on evidence outside the repo, flagged rather than buried** (the
+verify-the-negative pass found no contradictions across twelve load-bearing negative claims, but
+correctly marked these two unverifiable from source): (a) *`git_data_prd` is absent from merge-path
+tfstate* comes from run `32356859661`'s job log, not from any committed file, and the
+1630-vs-1860 s arithmetic rests on it; (b) *`$RUNNER_TEMP` persists across steps within a job* is
+GitHub Actions platform semantics with no in-repo citation. Both are load-bearing for the sweep
+design, so `/work` re-confirms (b) empirically on the first `manual-rerun` dispatch rather than
+taking it on faith.
 
 ## Research Insights
 
@@ -294,9 +362,14 @@ ADR-rejected alternative. ADR-100's 2026-08-12 addendum records that #7228 **can
   scoped to `JOB_BODY="$(_job_body 'vector_redeliver')"` (`:95`), **not** the `apply` job. Raising
   `apply`'s budget does not break it. Named because a grep for `timeout-minutes: 15` finds it and it
   reads like a blocker.
-- **`plugins/soleur/test/stock-preflight-coverage.test.ts`** — maps every `apply_target` option to
-  exactly one *applying* job. A notify job with no `apply_target` guard and no `terraform apply` is
-  invisible to it. Safe.
+- **`plugins/soleur/test/stock-preflight-coverage.test.ts`** — **not** the free pass an earlier
+  draft claimed. It maps every `apply_target` option to exactly one *applying* job, and the notify
+  job's predicate contains `inputs.apply_target == 'manual-rerun'` — so `jobFor("manual-rerun")` now
+  returns **two** hits and falls through to `hits.filter(appliesTerraform)`. It resolves to one only
+  because no `run:` body in the notify job matches `/\bterraform\s+apply\b/` or `/-target=/`. That
+  is a live constraint, not a coincidence: the email's "what did NOT land" prose is exactly the text
+  most likely to contain those tokens. Keep the body in `with: body:` rather than building it in a
+  `run:` step, and see AC2b.
 - **`tests/scripts/test-preapply-entrypoint-gate.sh`** check `W4` — asserts step **order by line
   number** between `Terraform plan (allow-list`, `Pre-apply entrypoint gate` and
   `^      - name: Terraform apply$`. All edits land after the main apply, so ordering is untouched —
@@ -442,17 +515,46 @@ After the §4 resize the reachable sum is `230 + 470 + 230 + 470 + 30 = 1430 s` 
 `git_data_prd` enters state), and **every monitor still gets measured** — which is what a truncating
 cap could not offer.
 
-**Sizing against a real apply, not the modal no-op.** The 838 s figure in the Problem Statement is
-derived from run `32356859661`, where the ARM step was 240 s of a 302 s job — an apply that changed
-nothing. The ARM gate is **step 16 of 18**, running *after* two `terraform apply` steps, so on a
-substantive merge the apply itself consumes budget before the gate starts. The worst case that
-matters is the one Kieran's review surfaced: a **web-host birth**, where this gate is the *only*
-unpause path for four born-paused monitors (`:3807`, `:4159`) and the arming pass alone is
-`230 + 470 + 230 + 470 = 1400 s`. At 30 min the job has `1800 − 62 = 1738 s`, leaving ~338 s for the
-apply that precedes it — adequate for the measured 3-5 min typical apply, and the case where it is
-not adequate is a cold-cache provisioning run that the step-level timeout will surface as a named
-step failure rather than an anonymous cancellation. Raising further is available if a real birth run
-measures otherwise; the point of the ladder is that the gate now fails *with a name*.
+**Size the ladder from a two-part inequality, both terms measured.** An earlier draft sized this off
+a single "~838 s available" figure derived from one no-op run, which the architecture review showed
+does not survive the worst case. The correct form has two constraints, and the plan asserts both:
+
+```
+(1) arm_step_timeout  ≥  sum(reachable deadlines) × vendor_factor
+(2) job_timeout − arm_step_timeout  ≥  p95(pre-gate duration)
+```
+
+**Term 1** is `230 + 470 + 230 + 470 + 30 = 1430 s`, the same reachable sum used above, times a
+small factor for vendor latency — the ARM gate is **step 16 of 18** and its own `curl`s are the
+only thing that can inflate it once the wall-clock accounting in §3 lands. At 1.1 that is ~1575 s,
+so a step ceiling of **27 min (1620 s)** satisfies (1).
+
+**Term 2 is measured, not assumed.** Across the last six merge applies, the elapsed time from job
+start to the ARM step starting was **57, 58, 64, 81, 91, 111 s** — p95 **111 s**:
+
+```bash
+gh api repos/:owner/:repo/actions/runs/<id>/jobs \
+  --jq '.jobs[]|select(.name=="apply")|{start:.started_at,
+        arm:([.steps[]?|select(.name|test("Arm web-host"))|.started_at]|first)}'
+```
+
+So (2) needs `job_timeout ≥ 1620 + 111 = 1731 s`. **30 min (1800 s)** satisfies both with 69 s of
+slack, and the resulting ladder is `1430 (work) < 1620 (step ceiling) < 1800 (job ceiling)` — the
+same shape the file's two dispatch jobs already document.
+
+**Why the pathological case the review raised is not reachable.** The concern was a cold-cache
+**web-host birth** apply (the file's own comment budgets ~42 min worst case) colliding with a full
+four-monitor arming pass in one job. Measured: `web_host_create` contains **zero** `arm_one` /
+`hb_patch_paused` calls — the birth job does no arming at all. Born-paused monitors are armed by the
+*next routine merge apply*, whose pre-gate duration is the 57-111 s measured above, not a birth's.
+The two never share a job.
+
+**The residual, and what covers it.** A cold-cache *routine* apply could still overrun before the
+ARM gate starts, in which case the step ceiling surfaces nothing and the job is cancelled
+anonymously — #7587's shape, from a different cause. That residual is precisely what the §1 notify
+job covers: `needs.apply.result == 'cancelled'` fires regardless of which step was running. The two
+halves of this PR compose — the step ceiling stops the ARM gate from *being* the cause, and the
+notify job names any cancellation that remains. Neither alone is sufficient.
 
 ### 3. A rollback that survives cancellation (#7587 → P5)
 
@@ -467,14 +569,28 @@ measures otherwise; the point of the ladder is that the gate now fails *with a n
   conditional on the PATCH returning 2xx, which also makes `rollback_all` idempotent: the trap-free
   design has one caller, but the sweep may still run after the step already cleared some ids, and
   re-PATCHing `paused:true` on an already-paused monitor is a no-op.
+- **The sweep exits early when there is nothing to sweep — before it reads Doppler.** Its gate is
+  `if: always()`, so it runs on every apply, including `ssh_apply_skip == 'true'` runs and pre-gate
+  failures where nothing was ever unpaused. Without a first line of
+  `[[ -s "$RUNNER_TEMP/armed-unconfirmed" ]] || exit 0` it would re-mint a credential it does not
+  need and then raise a mint-failure alarm on runs with no work — a false alarm wired directly into
+  the new email channel this PR is adding.
 - **The sweep needs its own credential, and that has to be wired.** `BS_TOKEN` is derived *inside*
   the ARM step from `doppler secrets get BETTERSTACK_API_TOKEN --plain --token
   "$DOPPLER_TOKEN_WEB_ARM"`, so a sibling step sees neither. The sweep step therefore declares
   `env: { DOPPLER_TOKEN_WEB_ARM: ${{ secrets.DOPPLER_TOKEN_WEB_ARM }} }`, repeats the mint, and
   emits `printf '::add-mask::%s\n'` on the result exactly as the ARM step does. Without that `env:`
-  block the sweep is decorative — it would run, find ids, and be unable to PATCH any of them. Its
-  residual failure mode (inert precisely when the mint is what broke) is recorded in
-  `failure_modes`, and it emits `::error::` on that path rather than exiting quietly.
+  block the sweep is decorative — it would run, find ids, and be unable to PATCH any of them.
+- **The sweep must FAIL, not annotate — `::error::` does not fail a step.** An earlier draft asked
+  only for an annotation, which is the defect this whole PR exists to remove, reproduced inside the
+  fix: if the ARM step already ended green via the `arc == 2` soft landing, an annotating sweep
+  leaves the job `success`, the notify predicate false, and nobody emailed. So the sweep
+  `exit 1`s whenever the state file is non-empty **and** (the mint failed **or** any re-pause
+  `PATCH` returned non-2xx) — mirroring the ARM step's own `echo "::error::…"; exit 1` mint
+  precedent. Equally, a **successful** sweep is news: re-pausing a production uptime monitor on an
+  otherwise-green run must reach the operator, so the sweep writes its armed / fired / outcome
+  counts where the notify body can read them, not only into a run log this plan has already
+  measured nobody opens.
 - **Fix the wall-clock accounting.** `arm_one`'s loop counter must advance by measured elapsed time,
   not by its `sleep` alone, so a slow vendor cannot make a 230 s deadline consume 575 s. This is
   needed regardless of any cap and is the #5795 defect class.
@@ -501,7 +617,31 @@ Change that one arm's deadline from **230 s to ~30 s**:
   monitor is still paused. It was *already* paused every day of the incident, so this is not a new
   dark state — but the window is real and is named here rather than left for a reader to derive.
 
-The existing `arc == 2` soft-landing branch and its `::warning::` are retained.
+**P7 is satisfied by this plan but is NOT observed, and that distinction has to be written down.**
+The plan adds nothing that can outlive #7228 — that is what C2 buys. What it does *not* buy is a
+signal that the probabilistic self-arming ever completed. The only mechanism that would report "this
+monitor is still paused weeks later" is the nightly `heartbeat-live-reconcile` job's
+`fed-but-paused` mismatch, and `inngest_consumer` is **exempted from it by name**:
+`plugins/soleur/lib/heartbeat-manifest.ts` carries `arming_pending: { tracking_issue: 7462 }` on
+that row, whose own comment reads *"Removing this row is step 6 of #7462."* The observer is switched
+off — by a different issue's checklist — for exactly the monitor this plan resizes. In-scope closer:
+extend that `arming_pending` comment to record the ~2-day probabilistic window this resize
+introduces, and to state that its removal must follow **observed** arming rather than a checklist
+tick. Lifting the exemption outright is deliberately *not* proposed here: the reconcile job dedupes
+into one open issue and re-emails only on a new marker, so it would cost one comment a night rather
+than a nightly page — but it belongs to #7462 step 6, not to this PR.
+
+**The `arc == 2` warning must be rewritten, not retained — an earlier draft got this wrong.** Its
+current text reads `no beat within 230s` and instructs *"If #7228 is CLOSED and you are still seeing
+this, the probe or the private-net path is broken."* After the resize both halves are false: the
+literal contradicts the deadline, and because the monitor's `period` is 180 s a **healthy** feeder
+produces this warning roughly five runs in six — the same 1-in-6 arithmetic that makes the resize
+safe makes the old message actively misleading about a surface nobody can SSH to. The rewrite must
+(a) carry the live deadline rather than a hard-coded 230, (b) drop the "the probe is broken"
+instruction, and (c) emit the discriminating fields from the `GET` the arm already makes — at
+minimum the monitor's `status` and its last-beat timestamp — so a single event separates *the feeder
+never beat* from *a beat was simply not due inside our 30 s window*. Without (c) the `arc == 2`
+boolean can no longer tell those two apart, which is the one thing it existed to tell an operator.
 
 ## Technical Considerations
 
@@ -588,7 +728,7 @@ failure_modes:
   - mode: "preflight fails, leaving apply skipped on a red run"
     detection: "the predicate's negated form reads needs.preflight.result, not needs.apply.result alone"
     alert_route: "ops@jikigai.com email"
-  - mode: "the whole RUN is cancelled before the notify job starts (manual cancel or concurrency supersede)"
+  - mode: "the whole RUN is cancelled before the notify job starts (MANUAL cancel only — the workflow declares cancel-in-progress: false, so a concurrency supersede cannot cancel this run)"
     detection: "NOT DETECTED by this change — an always() job never starts when queued jobs are cancelled with the run. Measured frequency 1 of the last 60 runs. The covering mechanism is a workflow_run watcher, which does not exist for this workflow"
     alert_route: "none — named residual, tracked by the Deferrals item"
   - mode: "a heartbeat is left unpaused-and-unfed by an abnormal exit"
@@ -623,10 +763,22 @@ an empty scan" is asserted once per guard rather than restated as four separate 
 **Assembly.** The chokepoint is the `if:` **line** of the `notify-apply-failure` job, parsed by
 `extractJobBlock(wf, "notify-apply-failure")` — not the job body, because a body-wide `toContain` is
 satisfiable by an explanatory comment (the collision `terraform-target-parity.test.ts` already
-documents for the `#7539` arm, per `cq-assert-anchor-not-bare-token`). The property quantifies over
-the **conclusion enum** `{success, failure, cancelled, skipped}` and over **both** jobs the run's
-health depends on, so the guard asserts the predicate's *shape* and that every job in `needs:`
-appears in it — not an enumerated member list, which would drift as GitHub adds conclusions.
+documents for the `#7539` arm, per `cq-assert-anchor-not-bare-token`).
+
+**The guard evaluates the predicate; it does not string-match it.** An earlier draft said "assert
+the predicate's shape", which is unimplementable as stated — a canonical-string match makes harness
+row H2 (operand reordering must PASS) fail by construction, while a token-presence check lets
+mutation rows 1/3/4 pass over a semantically broken predicate. So the guard extracts the `if:`
+expression and runs it through a small GitHub-expression evaluator over the full cross product
+`{success, failure, cancelled, skipped}² × {push, manual-rerun, other}`, asserting the truth table.
+That makes every mutation row semantic rather than textual, and makes H2 pass by construction.
+
+**The `needs:` array is pinned inside the same test that quantifies over it.** The property quantifies
+over the conclusion enum and over **both** jobs the run's health depends on. Quantifying over
+`needs:` alone is not enough: shrinking `needs:` would shrink the obligation, so an edit that drops
+`preflight` from `needs:` *and* its clause from the predicate would satisfy a `needs:`-relative guard
+while restoring the exact defect mutation row 3 exists to catch. The guard therefore asserts
+`needs` **equals** `["preflight", "apply"]` in the same test — see mutation row 5.
 
 **Mutation matrix:**
 
@@ -636,6 +788,7 @@ appears in it — not an enumerated member list, which would drift as GitHub add
 | 2 | Delete the `notify-apply-failure` job, so the guard has **zero** jobs to check | RED — `expectNonEmptyDispatch` must fire; a guard reporting "0 checked" and exiting 0 is vacuous |
 | 3 | Drop the `needs.preflight.result` clause, leaving only `needs.apply.result` — a **second** `needs:` member the predicate no longer covers | RED — this is the defect the plan's own first draft shipped; a check that stops at the first `needs:` member is the class |
 | 4 | Narrow the trigger clause to `github.event_name == 'push'` only | RED — the manual-rerun recovery path loses its channel |
+| 5 | Drop `preflight` from `needs:` **and** its clause from the predicate, in one edit | RED — the guard pins `needs` to `["preflight","apply"]`, so shrinking the array cannot shrink the obligation. Without this row the mutation reds neither guard and restores the plan's own first-draft defect |
 
 **Harness rows:**
 
@@ -649,13 +802,26 @@ appears in it — not an enumerated member list, which would drift as GitHub add
 **Property.** The sum of the ARM gate's per-arm deadlines is strictly less than the wall clock the
 `apply` job can give it, and no exit path leaves a monitor unpaused-and-unfed.
 
-**Assembly.** Three structural facts, all inside `extractJobBlock(wf, "apply")`: (i) the job's
-`timeout-minutes`; (ii) the ARM step's own step-level `timeout-minutes`; (iii) every `arm_one` call
-site's deadline argument. The chokepoint is the `arm_one` function — the call list does **not** fan
-out with `for_each` (per the `2026-07-24-followthrough-soak-must-arm-every-new-member-monitor.md`
-sharp edge), so each monitor is a hand-written line the guard must see. The rollback assembly
-quantifies over the step's exit paths, all of which flow through the state file
-`$RUNNER_TEMP/armed-unconfirmed`.
+**Assembly.** *(And the extraction that makes it testable.)* An earlier draft asserted this guard by
+regex over bash embedded in a YAML scalar, which the test-design review showed is not merely brittle
+but *weak*: "the counter advances by measured elapsed time" is checkable that way only as "a clock
+read appears in the step", which a decoy `date +%s` satisfies and an equivalent `SECONDS`-based
+rewrite false-REDs. So the ARM gate's bash is **extracted** to
+`apps/web-platform/infra/arm-heartbeats.sh` with a sibling `arm-heartbeats.test.sh`, following the
+house precedent (`web-private-nic-guard.sh` + `.test.sh`, and the other `*.test.sh` pairs in that
+directory). The test injects a fake clock and a fake `curl` and asserts the bound **behaviourally**.
+
+The property then quantifies over two assemblies:
+
+- **The ladder**, from the workflow YAML inside `extractJobBlock(wf, "apply")`: (i) the job's
+  `timeout-minutes`; (ii) the ARM step's step-level `timeout-minutes`; (iii) every `arm_one` call
+  site's deadline argument. The chokepoint is the `arm_one` function — the call list does **not**
+  fan out with `for_each` (per `2026-07-24-followthrough-soak-must-arm-every-new-member-monitor.md`),
+  so each monitor is a hand-written line the guard must see.
+- **The rollback**, from the extracted script plus the sweep step: every exit path flows through the
+  state file `$RUNNER_TEMP/armed-unconfirmed`, which is the chokepoint. The sweep is identified by
+  its `if: always()` co-located with that state-file literal — **not** by its step name, which would
+  false-RED on a rename.
 
 **Mutation matrix:**
 
@@ -665,8 +831,11 @@ quantifies over the step's exit paths, all of which flow through the state file
 | 2 | Delete every `arm_one` call, so the per-call-site scan checks **nothing** | RED — `expectNonEmptyDispatch` must fire |
 | 3 | Add a **second** `arm_one` call whose deadline is individually fine but pushes the sum past the available budget, after a compliant first call | RED — a check that validates only the first call site is the defect class |
 | 4 | Remove the step-level `timeout-minutes` from the ARM gate | RED — the gate reverts to being cancelled *with* the job rather than failing inside it |
-| 5 | Remove the `if: always()` sweep step | RED — P5 is lost on every abnormal-exit path |
-| 6 | Change the loop counter back to advancing only on `sleep`, ignoring the per-iteration `curl` | RED — reintroduces the 2.5× wall-clock undercount |
+| 5 | Remove the `if: always()` sweep step | RED — P5 is lost on every abnormal-exit path. Identified by `always()` + the state-file literal, so a rename does not false-RED |
+| 6 | Change the loop counter back to advancing only on `sleep`, ignoring the per-iteration `curl` | RED — asserted **behaviourally** against a fake clock and fake `curl` in `arm-heartbeats.test.sh`, so a decoy clock read cannot satisfy it and a `SECONDS`-based rewrite does not false-RED |
+| 7 | Flip the sweep's rollback `PATCH` body to `{"paused":false}` | RED — the sweep would then *unpause* every unconfirmed monitor, the exact inverse of P5 |
+| 8 | Delete `\|\| true` from any rollback `PATCH` | RED — under inherited errexit a 5xx truncates the sweep at the first failure, silently leaving the rest unpaused-and-unfed |
+| 9 | Delete the sweep's `::add-mask::` on the re-minted token | RED — the token reaches the log on any subsequent failure output |
 
 **Harness rows:**
 
@@ -675,9 +844,12 @@ quantifies over the step's exit paths, all of which flow through the state file
 | H3 | Feed a fixture whose `apply` job has **no** `timeout-minutes` at all | RED — must fail closed on a missing budget, never treat it as unbounded-and-fine |
 | H4 | (must-PASS, non-canonical) A fixture where the step timeout is written `timeout-minutes: 27` vs the canonical value, still strictly below the job's | PASS — the contract is the inequality, not a literal |
 
-**A known fragility, accepted.** Rows 3 and 6 regex over bash embedded in a YAML scalar, so a reflow
-of that `run:` block breaks them. Accepted because the gate is currently asserted by **nothing**;
-noted so a future editor knows why the block is brittle rather than deleting it.
+**On brittleness.** The extraction above removes the fragility an earlier draft accepted: rows 6-9
+now run against a real script with injected fakes rather than regexing bash inside a YAML scalar, so
+a reflow cannot break them. Rows 1-5 parse YAML *structure* (job and step `timeout-minutes`,
+`arm_one` call-site arguments, the sweep's `always()` + state-file literal), which is stable. The
+residual textual dependency is row 3's `arm_one` call-site scan — unavoidable, because the call list
+is hand-written by design, and that is exactly the property row 3 exists to defend.
 
 ## Architecture Decision (ADR/C4)
 
@@ -736,10 +908,14 @@ needs no change** — both read and confirmed. After editing, run the c4 syntax 
 ## Files to Edit
 
 - `.github/workflows/apply-web-platform-infra.yml` — add the `notify-apply-failure` job; raise the
-  `apply` job's `timeout-minutes` 15 → 30 and correct the false comparator comment; add the ARM
-  gate's step-level `timeout-minutes`, the state file, and the `if: always()` sweep step; fix the
-  loop's wall-clock accounting; resize the `inngest_consumer` deadline; add a one-line pointer
-  comment to the guard suite. **Do not touch** the `#7539` notify step at `:1001-1029`.
+  `apply` job's `timeout-minutes` 15 → 30 and correct the false comparator comment; replace the ARM
+  gate's inline bash with a call to the extracted `arm-heartbeats.sh`; add the ARM gate's
+  step-level `timeout-minutes` and the `if: always()` sweep step; resize the `inngest_consumer`
+  deadline and rewrite its `arc == 2` warning; add a one-line pointer comment to the guard suite.
+  **Do not touch** the `#7539` notify step at `:1001-1029`.
+- `apps/web-platform/infra/run-registered-suites.sh` — register `arm-heartbeats.test.sh`.
+- `plugins/soleur/lib/heartbeat-manifest.ts` — extend the `inngest_consumer` row's `arming_pending`
+  comment per AC6b. The row itself stays; removing it is #7462 step 6.
 - `plugins/soleur/test/terraform-target-parity.test.ts` — add two sibling `describe` blocks
   (Guard 1, Guard 2), the shared `expectNonEmptyDispatch` helper, and a header note that this suite
   also owns the apply workflow's channel and budget invariants. **Leave
@@ -752,7 +928,19 @@ needs no change** — both read and confirmed. After editing, run the c4 syntax 
 
 ## Files to Create
 
-None.
+- `apps/web-platform/infra/arm-heartbeats.sh` — the ARM gate's bash, extracted from the workflow so
+  its wall-clock bound and rollback can be tested behaviourally rather than regexed out of a YAML
+  scalar. House precedent: `web-private-nic-guard.sh`.
+- `apps/web-platform/infra/arm-heartbeats.test.sh` — the sibling suite: injects a fake clock and a
+  fake `curl`, and drives Guard 2 mutation rows 6-9. **Must be registered** in
+  `apps/web-platform/infra/run-registered-suites.sh` — `scripts/lint-orphan-test-suites.sh`
+  enumerates `git ls-files '*.test.sh'` repo-wide, so an unregistered new `.test.sh` is an orphan by
+  construction and the lint will say so.
+
+*(Cut List C2 still removes the `scripts/followthroughs/*.sh` this plan would otherwise have needed;
+C11 still declines a new `plugins/soleur/test/*.test.ts`. The two files above are a different
+decision — they exist because the test-design review showed Guard 2 was otherwise satisfiable by a
+decoy.)*
 
 ## Open Code-Review Overlap
 
@@ -782,22 +970,55 @@ suites — **acknowledged**, not folded in.
       (the `apply` job declares no `outputs:`, so such a reference would render empty). The body
       contains a **branch on `needs.apply.result == 'cancelled'`** — asserted on the expression, not
       on the prose word `cancelled`, which a body with no branch would also satisfy — plus the
-      failing-step name, a line on whether uptime alerting may be paused, and a fenced
+      failing-step name, per-outcome guidance for **both** the `failure` and `cancelled` arms, a
+      line on whether uptime alerting may be paused, a line stating that the previously-applied
+      infrastructure is still serving (so a non-technical reader does not infer an outage), the
+      sweep's re-pause counts when it fired, and a fenced
       `gh workflow run … -f apply_target=manual-rerun` block.
-- [ ] **AC3** — the `apply` job's `timeout-minutes` is 30, its comparator comment no longer claims
-      to match a 15-minute sibling, and the guard asserts
-      `sum(arm_one deadlines) < apply_timeout_seconds − 62`.
+- [ ] **AC2b** — no `run:` body inside `notify-apply-failure` contains `terraform apply` or
+      `-target=`. Load-bearing, not stylistic: the job's predicate names `manual-rerun`, so
+      `stock-preflight-coverage.test.ts`'s `jobFor("manual-rerun")` returns two hits and
+      disambiguates them by `appliesTerraform`. A `run:`-built email body mentioning either token
+      makes that suite red.
+- [ ] **AC2c** — the `cause` step's token is shape-validated with a stated shape, not the words
+      "shape-validated": strip `\r` and `\n`, reject anything outside `[A-Za-z0-9 ._:()/-]{1,80}`,
+      HTML-escape `&`, `<`, `>` before it reaches the Resend `html` field, and write it to
+      `$GITHUB_OUTPUT` with a random heredoc delimiter (a newline in a step name otherwise forges
+      arbitrary outputs and spoofs `::notice::` annotations). Measured mitigant, not a substitute:
+      no `- name:` in any repo workflow interpolates `${{ … }}`, so names are static from `main`.
+- [ ] **AC3** — the `apply` job's `timeout-minutes` is 30 and its comparator comment no longer
+      claims to match a 15-minute sibling (the cited sibling's apply job is 90). The guard asserts
+      the **two-part** inequality, not a single margin:
+      `arm_step_timeout_s >= sum(arm_one deadlines) * 1.1` **and**
+      `apply_job_timeout_s - arm_step_timeout_s >= 111` (the measured p95 pre-gate duration; the
+      figure is re-derived from the jobs API at implementation time, never carried from this plan
+      as a literal).
 - [ ] **AC4** — the ARM step declares a step-level `timeout-minutes` strictly below the job's; a
       named sibling step gated `if: always()` re-pauses every id in `$RUNNER_TEMP/armed-unconfirmed`,
-      declares `DOPPLER_TOKEN_WEB_ARM` in its own `env:`, re-mints and masks
-      `BETTERSTACK_API_TOKEN`, and emits `::error::` when that mint fails. An id is removed from the
-      state file only on a 2xx `PATCH`.
+      declares `DOPPLER_TOKEN_WEB_ARM` in its own `env:`, and re-mints and masks
+      `BETTERSTACK_API_TOKEN`. An id is removed from the state file only on a 2xx `PATCH`.
+- [ ] **AC4b** — the sweep **exits non-zero** (not merely `::error::`, which does not fail a step)
+      when the state file is non-empty AND either the mint failed or any re-pause `PATCH` was
+      non-2xx — otherwise a green ARM step leaves the job `success`, the notify predicate false, and
+      nobody emailed. When the sweep fires successfully it writes its armed / fired / outcome counts
+      somewhere the notify body reads, so a re-paused production monitor on an otherwise-green run
+      still reaches the operator.
 - [ ] **AC5** — `arm_one`'s loop counter advances by measured elapsed time, not by `sleep` alone;
       the ARM step and the sweep step each declare `set +e` explicitly (errexit is inherited from
       `/usr/bin/bash -e {0}` and `set -uo pipefail` does not clear it); every rollback `PATCH`
       carries `|| true`; and no bare `(( … ))` appears in either step.
-- [ ] **AC6** — the `inngest_consumer` `arm_one` call's deadline argument is ≤ 60, and every other
-      `arm_one` deadline is unchanged from `origin/main`.
+- [ ] **AC6** — the `inngest_consumer` `arm_one` call's deadline argument is **exactly 30** (not
+      "≤ 60": every other figure in this plan — the 1430 s reachable sum, the ~200 s reclaimed, the
+      1-in-6 arming probability, Test Scenarios 11-12 — plugs in 30, so a looser bound would pass
+      the AC while falsifying the arithmetic). Every other `arm_one` deadline is unchanged from
+      `origin/main`. The `arc == 2` warning text carries the deadline from the variable rather than
+      a hard-coded literal, no longer instructs that the probe is broken, and emits the monitor's
+      `status` and last-beat timestamp so *never beat* and *beat not due in-window* are
+      distinguishable from one event.
+- [ ] **AC6b** — `plugins/soleur/lib/heartbeat-manifest.ts`'s `arming_pending` comment on the
+      `inngest_consumer` row records the probabilistic arming window this resize introduces and
+      states that removal must follow observed arming. (The row itself stays; removing it is #7462
+      step 6.)
 - [ ] **AC7** — every row of both mutation matrices and both harness tables has been executed
       against the implementation and produced the stated verdict; the log is recorded in
       `knowledge-base/project/specs/<branch>/measurements.md`.
@@ -872,7 +1093,7 @@ change (`2026-08-14-my-gate-reserved-its-reassuring-message-for-its-alarming-con
 
 | Risk | Mitigation |
 |---|---|
-| Raising the job budget 15 → 30 doubles the worst-case fleet-mutex hold | Accepted, with in-file precedent: two mutex-holding jobs in this same file already use 30 and document the ladder (job ceiling above, in-script bound strictly below). Still well under the sibling `apply-deploy-pipeline-fix.yml`'s 90. The ceiling binds only when something is genuinely stuck. |
+| Raising the job budget 15 → 30 raises the worst-case fleet-mutex hold — and by **more** than 15 min | Accepted, but stated at its true size rather than the understated one an earlier draft gave. The group is **workflow-level**, and this file already records the accounting rule: the worst case is the **SUM across jobs in the run**, not the largest job. So the new worst case is `apply 30 + notify 5 = 35 min` run-level, not 30, and `apply-deploy-pipeline-fix.yml:162` carries the identical literal with `cancel-in-progress: false`, so it — and every subsequent merge apply — queues for the whole 35 min. Two honest caveats on the precedent: the file's other 30-minute jobs (`registry_luks_recut`, `registry_store_restore`) are **dispatch-only**, run by deliberate action, whereas `apply` runs on every merge at 2.71/day; and falsifying the 15's stated comparator does not by itself justify any particular replacement. What does: the sibling's own apply job is already `timeout-minutes: 90`, so the group demonstrably tolerates a 90-minute hold today, and 35 sits well inside that. The binding constraint is per-merge queue wait, which this plan has **not** measured — `/work` measures observed queue depth before relying on the raise, and updates the `registry_luks_recut` accounting comment in the same PR. |
 | Deadline resize re-pauses a monitor that was arming | Scoped to `inngest_consumer` alone (AC6 asserts every other deadline unchanged). Its monitor is already left paused on every apply today, so the end state is unchanged; the ~2-day post-heal arming window is owned explicitly in §4. |
 | The `always()` sweep does not complete inside GitHub's cancellation grace window | The window's length is **undocumented and unmeasured** — a known unknown, not assumed away. The raised budget means the gate normally finishes well inside the job, so the sweep is a backstop rather than the primary path; and the notify job's correctness does not depend on the window at all. |
 | The sweep is inert exactly when the Doppler mint is what broke | Recorded in `failure_modes` and asserted by Scenario 9: it emits `::error::` naming the credential instead of exiting quietly. |
@@ -934,12 +1155,23 @@ a request from the notification's recipient.
   `cq-cite-content-anchor-not-line-number`, `wg-architecture-decision-is-a-plan-deliverable`,
   `wg-record-recurring-vendor-expense-before-ready`, `wg-when-deferring-a-capability-create-a`.
 
-**Observability layer (`hr-observability-layer-citation`).** The layer this change operates on is
-**GitHub Actions job conclusions → the `notify-ops-email` composite action → the Resend HTTP API →
-`ops@jikigai.com`**, with `::error::` annotations and `$GITHUB_STEP_SUMMARY` as the in-band second
-channel. It is deliberately *not* Sentry (this workflow has no `sentry-heartbeat` call site) and not
-Better Stack (which this workflow *writes* to as a subject, never reads from as an alerting
-channel). The PR body must name this same layer.
+**Observability layer (`hr-observability-layer-citation`).** This change touches **two** layers, and
+an earlier draft named only the first — omitting the one with the larger blast radius.
+
+1. **The notification layer it repairs:** GitHub Actions job conclusions → the `notify-ops-email`
+   composite action → the Resend HTTP API → `ops@jikigai.com`, with `::error::` annotations and
+   `$GITHUB_STEP_SUMMARY` as the in-band second channel. Deliberately *not* Sentry — this workflow
+   has no `sentry-heartbeat` call site.
+2. **The uptime-alerting layer it produces state for:** Better Stack heartbeats
+   (`web_zot_consumer`, `web_nic_guard`, `git_data_prd`, `inngest_consumer`) → Better Stack
+   absence alerting → the operator. The plan's earlier framing — that this workflow only *writes*
+   to Better Stack "as a subject" — understated it: §3's sweep and §4's resize are producers of
+   whether the fleet's uptime alerting is **armed or paused**, and the Engineering review ranks
+   "leaves production alerting silently paused" as the second-worst outcome of this change. What
+   covers a wrongly-paused monitor is the nightly `heartbeat-live-reconcile` job in
+   `scheduled-terraform-drift.yml` — with the exemption named below.
+
+The PR body must name both layers.
 
 ## Domain Review
 
