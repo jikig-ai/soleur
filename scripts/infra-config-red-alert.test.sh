@@ -729,7 +729,25 @@ else
   exit 1
 fi
 
-ALERT_MIN_ASSERTIONS=66
+# THE p1 MODES MUST REACH AN OPERATOR SURFACE (#7546 review).
+#
+# Both the weekly operator digest and the cron-action-required-sla escalation clock SELECT on
+# `--label action-required`; neither selects on priority. So a p1 issue carrying only its dedupe
+# label, domain/engineering and priority/p1-high appears in NEITHER -- while the p2 `recovered`
+# notice did get a digest line. Pinned per-mode rather than globally, because putting it on
+# `recovered` would page the operator for a run whose entire message is "no action needed".
+CASES=$((CASES + 1))
+ar_problems=""
+grep -qF -- '--label action-required' <<<"$RPF_GH"     || ar_problems="$ar_problems repush_failed:missing"
+grep -qF -- '--label action-required' <<<"$UNREACH_GH" || ar_problems="$ar_problems unreachable:missing"
+grep -qF -- '--label action-required' <<<"$RECOV_GH"   && ar_problems="$ar_problems recovered:present-but-must-not-be"
+if [[ -z "$ar_problems" ]]; then
+  ok "the two decision-needing modes (repush_failed, unreachable) carry action-required so the digest and the SLA clock can see them; recovered does not"
+else
+  bad "action-required routing is wrong:$ar_problems — a p1 without it reaches neither the operator digest nor the SLA clock, and the issue body's own 'reply on this issue' promise is addressed to a surface nobody reads"
+fi
+
+ALERT_MIN_ASSERTIONS=67
 if [[ "$CASES" -lt "$ALERT_MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$CASES" "$ALERT_MIN_ASSERTIONS" >&2

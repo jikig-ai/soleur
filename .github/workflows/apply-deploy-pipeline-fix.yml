@@ -1343,7 +1343,23 @@ jobs:
 
           # --state all: a ledger created closed is invisible to the default open-only search,
           # so a narrower query would file a duplicate on every recovery.
-          num=$(gh issue list --state all --label "$LEDGER_LABEL" --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null)
+          # FAIL-CLOSED ON AN UNREADABLE LIST (#7546 review). This step runs under `set +e`, so a
+          # transient `gh issue list` failure yielded num="" -- INDISTINGUISHABLE from "no ledger
+          # exists" -- and the create branch below then filed a SECOND ledger under the same
+          # label. Subsequent runs `--limit 1` (no --sort, so newest-created wins) and append to
+          # the new one; the prior tally is orphaned under the same label and nothing detects it.
+          #
+          # The EDIT branch twenty lines down was hardened for exactly this transient in
+          # f4475c89b (`prev_rc` captured, refuses on an unreadable read). The READ that decides
+          # CREATE-vs-EDIT got neither. Same failure mode, same blast-radius class, opposite
+          # handling -- and losing one row is already this design's stated preference over
+          # corrupting the tally.
+          list_rc=0
+          num=$(gh issue list --state all --label "$LEDGER_LABEL" --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null) || list_rc=$?
+          if [[ "$list_rc" -ne 0 ]]; then
+            echo "::warning::Could not read the re-push ledger (gh issue list rc=$list_rc). Skipping this run's row rather than risking a SECOND ledger under the same label — an unreadable list is not evidence that no ledger exists. The row is lost; the tally is not."
+            exit 0
+          fi
           if [[ -z "$num" ]]; then
             url=$(gh issue create --title "$LEDGER_TITLE" --label "$LEDGER_LABEL" --body-file "$BODY_PATH" 2>/dev/null)
             num="${url##*/}"

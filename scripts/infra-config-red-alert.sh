@@ -79,6 +79,17 @@ infra_config_red_alert() {
   local msg_prefix="infra-config delivery gate RED: "
   local label_desc="infra-config delivery gate red; config reached the host but did not activate (#7220)"
   local label_color="B60205"
+  # ROUTES TO THE OPERATOR, OR ROUTES NOWHERE (#7546 review). The weekly operator digest selects
+  # on `--label action-required` (plugins/soleur/skills/operator-digest/SKILL.md) and so does the
+  # cron-action-required-sla escalation clock -- both SELECT by that label; neither selects by
+  # priority. So the p1 modes carried priority/p1-high, domain/engineering and their own dedupe
+  # label, and appeared in NEITHER surface. Splitting the p1 out of ci/infra-config-red into a
+  # fresh dedupe slot made that worse, not better: the new slot is harvested by nothing, while
+  # the p2 `recovered` notice DID get a digest line in this same PR. The issue body's own promise
+  # -- "reply on this issue and an engineer/agent will pick it up" -- was addressed to a surface
+  # nobody reads. Set only where an operator decision is actually needed; never on `recovered`,
+  # whose whole point is that no action is required.
+  local action_required=0
   if [[ "$reach" == "recovered" ]]; then
     # OUT OF THE ci/ NAMESPACE (plan R14.2 / :405). This shipped as `ci/infra-config-recovered`,
     # which is the literal string the plan names as the one not to use. Every other `ci/*` label
@@ -110,7 +121,11 @@ infra_config_red_alert() {
     msg_prefix="infra-config bounded re-push FAILED: "
     label_desc="The bounded infra-config re-push (#7104) failed. The recovery is spent and the channel needs a decision."
     label_color="B60205"
+    action_required=1
   fi
+  # `unreachable` is the other decision-needing mode: the config channel did not answer, and on
+  # the post-re-push path that is the state with no fallback.
+  [[ "$reach" == "unreachable" ]] && action_required=1
 
   if [[ -n "${SENTRY_INGEST_DOMAIN:-}" && -n "${SENTRY_PROJECT_ID:-}" && -n "${SENTRY_PUBLIC_KEY:-}" ]]; then
     local payload=""
@@ -222,6 +237,11 @@ EOF
       2>/dev/null || true
     gh label create domain/engineering 2>/dev/null || true
     gh label create "$priority_label" 2>/dev/null || true
+    local -a extra_labels=()
+    if [[ "$action_required" -eq 1 ]]; then
+      gh label create action-required 2>/dev/null || true
+      extra_labels+=(--label action-required)
+    fi
     local title="Server config update did not finish applying — the site is up"
     [[ "$reach" == "unreachable" ]] && title="Server config channel is not responding — needs a decision"
     [[ "$reach" == "ungraded" ]] && title="Server config update failed before it could be checked — the site is up"
@@ -229,9 +249,10 @@ EOF
     [[ "$reach" == "repush_failed" ]] && title="Server config update ran out of automatic retries — needs a decision"
     gh issue create \
       --label "$dedupe_label" --label domain/engineering --label "$priority_label" \
+      "${extra_labels[@]+"${extra_labels[@]}"}" \
       --title "$title" \
       --body "$body" \
-      2>/dev/null || echo "::warning::infra-config-red: failed to file ${dedupe_label} issue"
+      2>/dev/null || echo "::error::infra-config-red: could not file the ${dedupe_label} issue. On the green self-heal path this issue is the ONLY notifying surface (the ledger is created closed, and no Sentry rule matches these ops), so an unattended production write to the sole no-SSH channel has just been reported to nobody. ::error:: rather than ::warning:: because it annotates the run-summary card without failing the job."
   fi
   return 0
 }

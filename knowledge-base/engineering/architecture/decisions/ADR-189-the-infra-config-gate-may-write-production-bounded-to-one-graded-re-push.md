@@ -92,7 +92,17 @@ terraform_data.deploy_pipeline_fix | managed | delete,create
 destroy-guard             host_creates=0, resource_deletes=1
 ```
 
-`host_creates=0` is the load-bearing half and it is the number nothing had ever evaluated.
+The ADDRESS-SET assert is the load-bearing half for the property described below, and
+`host_creates=0` is an independent host-birth guard mirroring apply #1's.
+
+**Corrected 2026-08-20 (#7546 review).** This paragraph credited `host_creates=0` for the
+remote-exec hazard, and `host_creates` cannot see it: the destroy-guard filter computes it as
+`select(.type == "hcloud_server")`, while `infra_config_handler_bootstrap` is a `terraform_data`
+(`server.tf`). A plan that replaced the handler and fired its `remote-exec` would report
+`host_creates=0`. What actually excludes it is the address-set assert — *"The re-push plan changes
+'${addrs}', not terraform_data.deploy_pipeline_fix"* — which was added at review and which this
+ADR never credited. The code is safe; the rationale was not, and the rationale is what a future
+editor consults before loosening one of the three asserts.
 `deploy_pipeline_fix` carries
 `depends_on = [terraform_data.apparmor_bwrap_profile, terraform_data.infra_config_handler_bootstrap]`,
 the latter carrying an SSH `remote-exec` provisioner, and `-target` is transitive at the resource
@@ -127,7 +137,11 @@ of the first apply. A number that licenses a guard has to describe the command b
   types as `{string => string}` so every name is valid. CI's actionlint job also treats rc=1 as
   acceptable and is absent from `scripts/required-checks.txt`. A general
   `scripts/lint-workflow-output-literals.py` belongs to #7527's scope.
-- **The apply is keyed on the grade, never on `success()`.** A grading step whose assert was written
+- **The apply is keyed on the grade, AND on the implicit `success()`.** (Corrected 2026-08-20,
+  #7546 review: this read "never on `success()`". `repush_apply`'s `if:` is a bare expression, and
+  GitHub compiles a bare-expression `if:` to `success() && <expr>` — which the workflow documents
+  22 lines below the step itself. The two-producer property this bullet defends is intact; the
+  universal was not.) A grading step whose assert was written
   as an `echo` without `exit 1`, or loosened later by an editor "making it work", would otherwise
   let the apply run. Keying on the measured literal means loosening the assert also requires editing
   the `if:` — two producers must agree.
@@ -163,7 +177,11 @@ of the first apply. A number that licenses a guard has to describe the command b
   > forensics to read.
 - **A recovered run is now visible by push, not only by pull.** As otherwise designed it was a green
   job, an unchanged summary, a Sentry event matching no alert rule, and a ledger built not to
-  notify. A `**Self-healed:**` line in `Post-apply summary` is the only channel that changes that.
+  notify. A `**Self-healed:**` line in `Post-apply summary` was the first channel that changed
+  that. (Corrected 2026-08-20, #7546 review: "the only channel" is contradicted by this same PR
+  and by this ADR's own later entry — the `recovered` reach mode files a labelled p2 issue, and
+  since the #7546 review that issue is the notifying surface while the summary line is the
+  in-run one.)
 - **The ledger is a counter, not an alert route.** No `sentry_issue_alert` rule matches
   `op=infra-config-repush-attempted`, exactly as #7527 records for
   `op=infra-config-preframe-degraded`. Saying otherwise would be the anti-pattern this work exists
@@ -227,7 +245,11 @@ of the first apply. A number that licenses a guard has to describe the command b
   > the verification surface, is the sole authoriser of the production write.
 
   The honest formulation: *the verification surface authorizes but does not perform the write, and
-  what it authorizes is independently shape-graded and independently credentialed.* That is a
+  what it authorizes is independently shape-graded and separately credentialed.* (Corrected
+  2026-08-20, #7546 review: "independently credentialed" overstates it. `repush_apply` carries no
+  `env:` of its own — true, and the narrow claim — but the job-wide environment holds the R2 state
+  credentials it inherits and must inherit, since `terraform apply <planfile>` writes backend
+  state. It is differently credentialed, not independently so.) That is a
   weaker and true claim, and it is the one the guards actually enforce — Guard 3 grades the plan's
   cardinality AND its address set at a step the gate does not control, and `repush_apply` carries
   no `env:` at all.
@@ -296,7 +318,12 @@ of the first apply. A number that licenses a guard has to describe the command b
     was wrong — the Sentry breadcrumb matches no alert rule and the ledger issue is created CLOSED
     and only body-edited, so a production write to the sole no-SSH channel was reaching nobody. The
     helper now carries a fourth `recovered` reach mode with its OWN label
-    (`ci/infra-config-recovered`), priority (p2), title, body and Sentry op. The separation is the
+    (`infra-config-recovery-notice`), priority (p2), title, body and Sentry op.
+    (Corrected 2026-08-20, #7546 review: this said `ci/infra-config-recovered`, which is the
+    literal string `scripts/infra-config-red-alert.sh` names as the one NOT to use — every other
+    `ci/*` label in the repo is a red alarm, so a p2 "no action needed" note in that namespace
+    spends the P1 channel's credibility on a success. Anyone acting on the old text would have
+    queried a label that will never exist.) The separation is the
     part that mattered in the original objection and it is preserved structurally rather than by
     declining to reuse the helper: `ci/infra-config-red` is the dedupe key, so a self-heal filed
     into it would swallow a real P1 gate failure as a comment.
