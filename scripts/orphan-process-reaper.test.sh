@@ -1461,11 +1461,19 @@ fi
 #     matched by the same scan that finds the real one, and the slice taken from
 #     a comment exits 0 — reported as a floor that does not fire.
 #
-# The value is the SKIP-LIVE count, which is the lower of the two modes and
-# therefore valid in both. Full runs carry 8 more assertions (the live-procfs
-# arm and the seven end-to-end hops); those eight are not floored here, and that
-# slack is the price of one threshold that is correct under both modes.
-MIN_CASES=136  # the skip-live count; full runs carry 12 more (the live arms)
+# The value is the SKIP-LIVE count, which is the lower of the two modes and so
+# is valid in both. A full run carries 12 more assertions (the live-procfs arm
+# and the end-to-end hops), and those are not floored here — that slack is the
+# price of one threshold correct under both modes.
+#
+# THE ASSIGNMENT CARRIES NO TRAILING COMMENT, and that is not style. The vacuity
+# gate reconstructs this block by walking back over preceding lines matching
+# `^[[:space:]]*NAME=[^;]*$`, so a comment containing a SEMICOLON — which the
+# previous version of this comment had, in the phrase "the skip-live count; full
+# runs…" — fails that match, MIN_CASES is never bound in the mutant, and the
+# floor scores as one that does not fire. A guard broken by the prose explaining
+# it is the exact defect class this suite exists to catch, and it caught this one.
+MIN_CASES=136
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '\n[FATAL] assertion floor: %d assertions ran, expected at least %d.\n' \
     "$cases" "$MIN_CASES" >&2
