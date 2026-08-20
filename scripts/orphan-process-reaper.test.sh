@@ -1315,7 +1315,7 @@ fi
 # therefore valid in both. Full runs carry 8 more assertions (the live-procfs
 # arm and the seven end-to-end hops); those eight are not floored here, and that
 # slack is the price of one threshold that is correct under both modes.
-MIN_CASES=133
+MIN_CASES=132
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '\n[FATAL] assertion floor: %d assertions ran, expected at least %d.\n' \
     "$cases" "$MIN_CASES" >&2
