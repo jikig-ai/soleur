@@ -563,6 +563,29 @@ tc_preamble() {
     "$cores" "$load" "$memavail_mb"
   printf '[contention] siblings: %s other worktree(s) running test-all.sh\n' "$sib_count"
 
+  # Exported so a POLICY at the call site can read it. Deliberately NOT acted on here: this
+  # function is a REPORTER, and burying a refusal in a measurement function is how the next
+  # reader ends up trusting a comment that is no longer true. scripts/test-all.sh decides.
+  TC_SIBLING_RUN_COUNT="$sib_count"
+  export TC_SIBLING_RUN_COUNT
+  # PROVENANCE, and deliberately NOT exported. TC_SIBLING_RUN_COUNT is exported, so a nested
+  # runner INHERITS it — including one whose own tc_preamble was neutered by a test sandbox, and
+  # which therefore measured nothing at all. A policy reading the bare count cannot tell "I
+  # measured 4 siblings" from "an ancestor measured 4 siblings and told me", which is the
+  # DECLARED antecedent ADR-195 exists to move away from. This stamp is what makes the count
+  # this process's own measurement.
+  #
+  # What actually protects the invariant is that `$$` DIFFERS in a forked child — not that the
+  # variable fails to propagate. Bash retains the export attribute on a name already present in
+  # the environment, so a plain `VAR=$$` on an inherited-and-exported name stays exported
+  # (measured: `export V=x; bash -c 'V=$$; ...'` leaves V exported). `export -n` first, so the
+  # stamp cannot be carried into a child that did no measuring of its own. Both mechanisms are
+  # needed, and only the `$$` one is load-bearing.
+  export -n TC_SIBLING_RUN_COUNT_PID 2>/dev/null || true
+  # shellcheck disable=SC2034  # read by scripts/test-all.sh, which SOURCES this lib, so the
+  # variable is in scope there; it is deliberately NOT exported, which is the whole point.
+  TC_SIBLING_RUN_COUNT_PID=$$
+
   if (( sib_count > 0 )); then
     while IFS=$'\t' read -r p c e; do
       [[ -n "$p" ]] || continue
@@ -579,7 +602,13 @@ tc_preamble() {
     done <<< "$suite_sibs"
   fi
 
-  # Named banners. All are advisory: nothing here changes the run's outcome.
+  # Named banners. Everything THIS FUNCTION does is advisory: nothing below changes the run's
+  # outcome, and tc_preamble still always returns 0.
+  #
+  # But `SIBLING_RUN_DETECTED` is no longer purely advisory END-TO-END (#7553). The count it
+  # reports is exported as TC_SIBLING_RUN_COUNT, and scripts/test-all.sh refuses a full-gate run
+  # on it unless SOLEUR_ALLOW_FULL_GATE=1. The refusal lives there, not here, so the policy sits
+  # next to the SOLEUR_SUBAGENT refusal it joins rather than inside the reporter.
   if [[ "$avail_mb" =~ ^[0-9]+$ ]] && (( avail_mb < TC_MIN_AVAIL_MB )); then
     printf '[contention] BANNER LOW_TMP_HEADROOM: %sMB avail is below the %sMB floor. A failure in this run may be resource contention, not a regression — re-run the failing suite in isolation before diagnosing.\n' \
       "$avail_mb" "$TC_MIN_AVAIL_MB" >&2

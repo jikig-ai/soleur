@@ -14,13 +14,21 @@ export LC_ALL=C
 
 HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ship-net-issue-flow-gate.sh"
 
+# VERDICT helpers. They own passes/fails and NOTHING else — in particular they must never
+# touch `cases` below, or the floor becomes a tautology again.
 fails=0
-# Counter exists for the anti-vacuity floor at the bottom. This PR added ~120
-# lines of cases to this file and a floor to the sibling suite while leaving
-# this one unable to notice a deleted case — the same defect, one file over.
 passes=0
 pass() { printf '  ok   %s\n' "$1"; passes=$((passes + 1)); }
 fail() { printf '  FAIL %s\n' "$1"; fails=$((fails + 1)); }
+
+# The INDEPENDENT case counter (ADR-193 #2). Incremented at each CALL SITE, before the
+# verdict is decided, and never inside the verdict helpers above. The floor used to read
+# `passes`, which is a tautology: the count moved WITH the verdict, so stubbing pass()/fail()
+# dropped the row AND its count together and the floor was satisfied under the exact fault it
+# exists to catch. This suite has no assertion helper — every case is an inline `if ...; then
+# pass; else fail; fi` — so the increment lives at the call site. Never increment it inside
+# `$( )`: a subshell discards it.
+cases=0
 
 [[ -x "$HOOK" ]] || { printf 'FAIL: hook missing/not executable: %s\n' "$HOOK" >&2; exit 1; }
 
@@ -74,6 +82,7 @@ for cmd in \
   "gh pr merge --admin" \
   "git push && gh pr ready"
 do
+  cases=$((cases + 1))
   run_hook "$PROJ_DENY" "$cmd"
   if is_deny; then pass "DENY on: $cmd"
   else fail "should deny: $cmd (rc=$HOOK_RC out=$(tr -d '\n' < "$WORK/out"))"; fi
@@ -90,30 +99,36 @@ for cmd in \
   "gh issue create --title x" \
   "echo gh pr merge"
 do
+  cases=$((cases + 1))
   run_hook "$PROJ_DENY" "$cmd"
   if is_deny; then fail "should NOT deny: $cmd"
   else pass "ignores: $cmd"; fi
 done
 
 # --- Delegation contract ----------------------------------------------------
+cases=$((cases + 1))
 run_hook "$PROJ_PASS" "gh pr ready"
 if is_deny; then fail "must not deny when delegated script exits 0"
 else pass "delegated exit 0 -> no deny"; fi
 
+cases=$((cases + 1))
 run_hook "$PROJ_DENY" "gh pr ready" "SOLEUR_SKIP_NET_ISSUE_FLOW_GATE=1"
 if is_deny; then fail "env skip must bypass the gate"
 else pass "SOLEUR_SKIP_NET_ISSUE_FLOW_GATE=1 bypasses"; fi
 
 # Missing gate script -> fail open (infrastructure gap is not a policy verdict).
 mkdir -p "$WORK/proj-empty"
+cases=$((cases + 1))
 run_hook "$WORK/proj-empty" "gh pr ready"
 if is_deny; then fail "missing gate script must fail open"
 else pass "missing gate script fails open"; fi
 
 # --- Deny payload shape -----------------------------------------------------
 run_hook "$PROJ_DENY" "gh pr ready"
+cases=$((cases + 1))
 if [[ "$HOOK_RC" -eq 0 ]]; then pass "deny still exits 0 (hook protocol)"
 else fail "hook must exit 0 even when denying; got $HOOK_RC"; fi
+cases=$((cases + 1))
 if jq -e '.hookSpecificOutput.hookEventName == "PreToolUse"' < "$WORK/out" >/dev/null 2>&1; then
   pass "deny payload carries hookEventName=PreToolUse"
 else fail "deny payload missing hookEventName"; fi
@@ -124,13 +139,16 @@ reason="$(jq -r '.hookSpecificOutput.permissionDecisionReason // ""' < "$WORK/ou
 for needle in "Fix inline" "Close something" "Override" "gate-override: net-issue-flow" \
               "(d) Mandated filing" "Mandated-By: <rule-id>" "[mandates-filing]" \
               "if yours is not listed"; do
+  cases=$((cases + 1))
   if [[ "$reason" == *"$needle"* ]]; then pass "deny reason offers remedy: $needle"
   else fail "deny reason missing remedy: $needle"; fi
 done
 # And the reframe must hold in the payload, not just in the file.
+cases=$((cases + 1))
 if [[ "$reason" != *"architectural-pivot deferral"* ]]; then
   pass "deny reason does not frame the override as architectural-pivot-only"
 else fail "deny reason still calls the override an 'architectural-pivot deferral'"; fi
+cases=$((cases + 1))
 if [[ "$reason" == *"Net:     +3"* ]]; then pass "deny reason embeds the delegated script's output"
 else fail "deny reason must embed delegated output"; fi
 
@@ -156,6 +174,7 @@ rm -f "$WORK/recorded-cwd"
 printf '{"tool_input":{"command":"gh pr ready"},"cwd":"%s"}\n' "$PAYLOAD_CWD" \
   | ( export CLAUDE_PROJECT_DIR="$CWD_PROBE"; cd /; bash "$HOOK" ) >/dev/null 2>&1
 recorded="$(cat "$WORK/recorded-cwd" 2>/dev/null || echo MISSING)"
+cases=$((cases + 1))
 if [[ "$recorded" == "$PAYLOAD_CWD" ]]; then
   pass "hook cds into payload .cwd before delegating"
 else
@@ -166,6 +185,7 @@ fi
 rm -f "$WORK/recorded-cwd"
 printf '{"tool_input":{"command":"gh pr ready"},"cwd":"/nonexistent-%s"}\n' "$$" \
   | ( export CLAUDE_PROJECT_DIR="$CWD_PROBE"; bash "$HOOK" ) >"$WORK/out" 2>&1
+cases=$((cases + 1))
 if is_deny; then fail "bad .cwd must not produce a deny"
 else pass "nonexistent .cwd falls back without denying"; fi
 
@@ -207,6 +227,7 @@ INC_ROOT="$WORK/inc-124"; mkdir -p "$INC_ROOT"
 printf '{"tool_input":{"command":"gh pr ready"},"cwd":"/tmp"}\n' \
   | ( export CLAUDE_PROJECT_DIR="$PROJ_124" INCIDENTS_REPO_ROOT="$INC_ROOT"; bash "$HOOK" ) \
     > "$WORK/out" 2>/dev/null
+cases=$((cases + 1))
 if is_deny; then fail "RC=124 must fail OPEN (a timeout is not a policy verdict)"
 else pass "RC=124 fails open (no deny)"; fi
 
@@ -216,6 +237,7 @@ if [[ -r "$inc_file" ]]; then
   warn_rows="$(jq -sr '[.[] | select(.rule_id == "net-issue-flow-timeout" and .event_type == "warn")] | length' \
     < "$inc_file" 2>/dev/null || echo 0)"
 fi
+cases=$((cases + 1))
 if [[ "$warn_rows" -ge 1 ]]; then pass "RC=124 emits a counted warn row under its OWN rule_id"
 else fail "RC=124 must emit rule_id=net-issue-flow-timeout event_type=warn; got $warn_rows rows"; fi
 
@@ -227,6 +249,7 @@ if [[ -r "$inc_file" ]]; then
   shared_rows="$(jq -sr '[.[] | select(.rule_id == "net-issue-flow" and .event_type == "warn")] | length' \
     < "$inc_file" 2>/dev/null || echo 0)"
 fi
+cases=$((cases + 1))
 if [[ "$shared_rows" -eq 0 ]]; then pass "timeout warn does NOT reuse the shared net-issue-flow id"
 else fail "timeout must not emit under rule_id=net-issue-flow; got $shared_rows rows"; fi
 
@@ -241,6 +264,7 @@ if [[ -r "$INC_ROOT_OK/.claude/.rule-incidents.jsonl" ]]; then
   ok_warns="$(jq -sr '[.[] | select(.rule_id == "net-issue-flow-timeout" and .event_type == "warn")] | length' \
     < "$INC_ROOT_OK/.claude/.rule-incidents.jsonl" 2>/dev/null || echo 0)"
 fi
+cases=$((cases + 1))
 if [[ "$ok_warns" -eq 0 ]]; then pass "a clean pass emits NO timeout warn (the 124 row is discriminating)"
 else fail "RC=0 must not emit a timeout warn; got $ok_warns"; fi
 
@@ -252,6 +276,7 @@ else fail "RC=0 must not emit a timeout warn; got $ok_warns"; fi
 PROJ_SLOW="$(mk_slow_project 9 1)"
 printf '{"tool_input":{"command":"gh pr ready"},"cwd":"/tmp"}\n' \
   | ( export CLAUDE_PROJECT_DIR="$PROJ_SLOW"; bash "$HOOK" ) > "$WORK/out" 2>/dev/null
+cases=$((cases + 1))
 if is_deny; then pass "a 9 s gate still DENIES (ceiling clears the measured cost)"
 else fail "9 s gate was killed by the ceiling -> silent always-pass (raise the timeout)"; fi
 
@@ -277,6 +302,11 @@ done
 # Precondition self-check: the fixture is only meaningful if `timeout` is
 # genuinely unreachable AND the interpreter is still reachable. A silently
 # broken mirror would make the assertion below pass for the wrong reason.
+# The fixture self-check is ONE case (exactly one verdict across all three arms); the
+# behavioral assertion nested in the `else` is a SECOND, counted only where it runs. A
+# broken fixture therefore lowers `cases` to 34 and trips the floor — which is correct:
+# the coverage really is gone.
+cases=$((cases + 1))
 if PATH="$NOTO" command -v timeout >/dev/null 2>&1; then
   fail "FIXTURE BROKEN: timeout still resolvable on the stripped PATH"
 elif ! PATH="$NOTO" command -v bash >/dev/null 2>&1; then
@@ -286,23 +316,57 @@ else
   printf '{"tool_input":{"command":"gh pr ready"},"cwd":"/tmp"}\n' \
     | ( export CLAUDE_PROJECT_DIR="$PROJ_DENY" PATH="$NOTO"; bash "$HOOK" ) \
       > "$WORK/out" 2>/dev/null
+  cases=$((cases + 1))
   if is_deny; then pass "no timeout(1) on PATH still DENIES (probe, not hardcode)"
   else fail "missing timeout(1) produced rc=127 -> silent fail-open (use the TO=() probe)"; fi
 fi
 
 printf '\n'
 
-# ANTI-VACUITY FLOOR. Set AT the running count, never below: a floor with slack
-# silently absorbs a deleted case, which is the one thing it exists to stop.
-# `-lt` (a floor, not equality) so the suite grows without churn.
+# --- Accounting conservation (ADR-193 #3) -----------------------------------
+# Ordered BEFORE the floor per ADR-193 #4: a neutered fail() deflates the verdict counts, so
+# the floor would ALSO trip and would report "cases were deleted" — the misleading diagnosis.
+# This says "a verdict was discarded" instead. Reported with printf >&2 + exit 1 DIRECTLY,
+# never through pass()/fail(): a check that reports by calling the verdict helper increments
+# the very counter the exit status reads, so neutering fail() silences the rows AND the check
+# meant to notice the silence. The literal `[FATAL] accounting` is load-bearing —
+# guard-vacuity-floor's ARM 10 builds its conservation population by grepping that exact
+# string (#7588).
+if [[ $((passes + fails)) -ne "$cases" ]]; then
+  printf '\n[FATAL] accounting: passes+fails (%d) != cases (%d).\n' \
+    "$((passes + fails))" "$cases" >&2
+  if [[ $((passes + fails)) -lt "$cases" ]]; then
+    printf '  An assertion was counted but its verdict was not recorded — that is what a neutered pass()/fail() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `cases=$((cases + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  printf 'ship-net-issue-flow-gate.test.sh: ACCOUNTING FAILURE (%d passed, %d failed, %d cases)\n' \
+    "$passes" "$fails" "$cases" >&2
+  exit 1
+fi
+
+# --- Anti-vacuity floor (ADR-193 #1) ----------------------------------------
+# Reads the INDEPENDENT case counter, and reports with printf >&2 + exit 1 DIRECTLY. It
+# previously read `passes` and reported by doing `fails=$((fails + 1))` and falling through
+# to the trailer — both halves of the ADR-193 defect: neuter pass()/fail() and the rows go
+# quiet, `passes` goes to 0 with them, and the floor "fires" into a counter nobody reads
+# before exit 0. A floor enforced through the suspect cannot witness the suspect.
+#
+# Set AT the running count, never below: a floor with slack silently absorbs a deleted case,
+# which is the one thing it exists to stop. `-lt` (a floor, not equality) so the suite grows
+# without churn; ratchet the number when adding cases.
 MIN_ASSERTIONS=35
-if [[ "$passes" -lt "$MIN_ASSERTIONS" ]]; then
-  printf '  FAIL anti-vacuity floor: %d assertions ran, expected >= %d\n' "$passes" "$MIN_ASSERTIONS"
-  fails=$((fails + 1))
+if [[ "$cases" -lt "$MIN_ASSERTIONS" ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
+    "$cases" "$MIN_ASSERTIONS" >&2
+  printf '  Cases were deleted or skipped; a green run here would be a coverage loss.\n' >&2
+  printf 'ship-net-issue-flow-gate.test.sh: FLOOR FAILURE (%d passed, %d failed, %d cases)\n' \
+    "$passes" "$fails" "$cases" >&2
+  exit 1
 fi
 
 if [[ "$fails" -eq 0 ]]; then
-  printf 'ship-net-issue-flow-gate.test.sh: ALL PASS (%d assertions)\n' "$passes"; exit 0
+  printf 'ship-net-issue-flow-gate.test.sh: ALL PASS (%d assertions)\n' "$cases"; exit 0
 fi
 printf 'ship-net-issue-flow-gate.test.sh: %d FAILED (%d passed)\n' "$fails" "$passes"
 exit 1

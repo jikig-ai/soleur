@@ -26,6 +26,14 @@ trap 'rm -rf "$TMP"' EXIT
 
 passes=0
 fails=0
+# The INDEPENDENT case counter (ADR-193 #2). It moves in assert() — the ASSERTION helper —
+# and NEVER in pass()/fail(), the VERDICT helpers. That split is the whole point: a counter
+# incremented inside the verdict helpers moves WITH the verdict, so stubbing fail() drops the
+# row and its count together and the conservation identity below holds under the exact fault
+# it exists to catch. Never increment this inside `$( )`; a subshell discards it.
+CASES=0
+
+# VERDICT helpers — they own passes/fails and nothing else.
 pass() { passes=$((passes + 1)); printf '  ok   %s\n' "$1"; }
 fail() {
   fails=$((fails + 1))
@@ -34,9 +42,24 @@ fail() {
   return 0
 }
 
+# ASSERTION helper — owns CASES. $1 = description, $2 = condition (eval'd), $3 = failure detail.
+assert() {
+  CASES=$((CASES + 1))
+  if eval "$2"; then
+    pass "$1"
+  else
+    fail "$1" "${3:-$2}"
+  fi
+}
+
 printf '\n=== emit-review-trailer coverage field ===\n\n'
 
-[[ -f "$SUT" ]] || { fail "SUT exists at $SUT"; printf '\n=== 0 passed, 1 failed ===\n\n'; exit 1; }
+# Reported DIRECTLY, not through fail(): with the SUT absent there is nothing to assert, so a
+# verdict-helper report here would be a row in a suite that never ran.
+[[ -f "$SUT" ]] || {
+  printf '\n[FATAL] SUT missing at %s — nothing to test.\n' "$SUT" >&2
+  exit 1
+}
 
 # A fresh repo on a feature branch with a `main` to scope against. The script refuses to run
 # on main/master, and its idempotence check scopes to `origin/main..HEAD`-equivalent, so both
@@ -66,10 +89,9 @@ coverage_of() {  # $1 = repo dir -> the parsed Reviewed-Coverage trailer value
 # ── ARM 1: full coverage ──────────────────────────────────────────────────────────
 d="$(new_repo full)"
 out="$(cd "$d" && bash "$SUT" --findings 0 --agents-ran 9 --agents-expected 9 2>&1)"; rc=$?
-if [[ "$rc" -eq 0 ]]; then pass "full coverage exits 0"; else fail "full coverage exits 0" "rc=$rc out=$out"; fi
+assert "full coverage exits 0" '[[ "$rc" -eq 0 ]]' "rc=$rc out=$out"
 cov="$(coverage_of "$d")"
-if [[ "$cov" == *"full 9/9 agents"* ]]; then pass "records 'full 9/9 agents'"; else
-  fail "records 'full 9/9 agents'" "got: '$cov'"; fi
+assert "records 'full 9/9 agents'" '[[ "$cov" == *"full 9/9 agents"* ]]' "got: '$cov'"
 
 # ── ARM 2: degraded coverage, with the missing agents NAMED ───────────────────────
 #
@@ -80,26 +102,17 @@ d="$(new_repo degraded)"
 out="$(cd "$d" && bash "$SUT" --findings 3 --agents-ran 2 --agents-expected 9 \
         --agents-missing security-sentinel,test-design-reviewer 2>&1)"; rc=$?
 cov="$(coverage_of "$d")"
-if [[ "$rc" -eq 0 && "$cov" == *"degraded 2/9 agents"* ]]; then
-  pass "records 'degraded 2/9 agents'"
-else
-  fail "records 'degraded 2/9 agents'" "rc=$rc got: '$cov'"
-fi
-if [[ "$cov" == *"security-sentinel"* && "$cov" == *"test-design-reviewer"* ]]; then
-  pass "names the missing agents in the trailer value"
-else
-  fail "names the missing agents in the trailer value" "got: '$cov'"
-fi
+assert "records 'degraded 2/9 agents'" \
+  '[[ "$rc" -eq 0 && "$cov" == *"degraded 2/9 agents"* ]]' "rc=$rc got: '$cov'"
+assert "names the missing agents in the trailer value" \
+  '[[ "$cov" == *"security-sentinel"* && "$cov" == *"test-design-reviewer"* ]]' "got: '$cov'"
 
 # ── ARM 3: zero agents => inline-fallback ─────────────────────────────────────────
 d="$(new_repo zero)"
 (cd "$d" && bash "$SUT" --findings 1 --agents-ran 0 --agents-expected 8 >/dev/null 2>&1)
 cov="$(coverage_of "$d")"
-if [[ "$cov" == *"inline-fallback 0/8 agents"* ]]; then
-  pass "zero agents records 'inline-fallback'"
-else
-  fail "zero agents records 'inline-fallback'" "got: '$cov'"
-fi
+assert "zero agents records 'inline-fallback'" \
+  '[[ "$cov" == *"inline-fallback 0/8 agents"* ]]' "got: '$cov'"
 
 # ── ARM 4: THE COUNTS OVERRIDE A CALLER'S LABEL ───────────────────────────────────
 #
@@ -108,11 +121,8 @@ fi
 d="$(new_repo overclaim)"
 (cd "$d" && bash "$SUT" --agents-ran 2 --agents-expected 10 --mode full >/dev/null 2>&1)
 cov="$(coverage_of "$d")"
-if [[ "$cov" == *degraded* && "$cov" != *full* ]]; then
-  pass "counts override an overclaiming --mode full"
-else
-  fail "counts override an overclaiming --mode full" "got: '$cov'"
-fi
+assert "counts override an overclaiming --mode full" \
+  '[[ "$cov" == *degraded* && "$cov" != *full* ]]' "got: '$cov'"
 
 # ── ARM 5: ABSENT measurement is 'unknown', NOT 'full' ────────────────────────────
 #
@@ -122,8 +132,7 @@ fi
 d="$(new_repo legacy)"
 (cd "$d" && bash "$SUT" --findings 0 >/dev/null 2>&1)
 cov="$(coverage_of "$d")"
-if [[ "$cov" == "unknown" ]]; then pass "absent measurement records 'unknown', not 'full'"; else
-  fail "absent measurement records 'unknown', not 'full'" "got: '$cov'"; fi
+assert "absent measurement records 'unknown', not 'full'" '[[ "$cov" == "unknown" ]]' "got: '$cov'"
 
 # ── ARM 6: the coverage trailer PARSES (it is last, so it splits first) ───────────
 #
@@ -132,12 +141,11 @@ if [[ "$cov" == "unknown" ]]; then pass "absent measurement records 'unknown', n
 # every consumer while looking like evidence in `git log`.
 d="$(new_repo parse)"
 (cd "$d" && bash "$SUT" --agents-ran 4 --agents-expected 4 >/dev/null 2>&1)
-if [[ -n "$(coverage_of "$d")" ]] \
-   && [[ -n "$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-By-Soleur,valueonly)' | tr -d '[:space:]')" ]]; then
-  pass "both Reviewed-By-Soleur and Reviewed-Coverage parse as trailers"
-else
-  fail "both trailers parse" "$(git -C "$d" log -1 --format=%B)"
-fi
+cov="$(coverage_of "$d")"
+# shellcheck disable=SC2034  # consumed via `eval "$condition"` in assert()
+by="$(git -C "$d" log -1 --format='%(trailers:key=Reviewed-By-Soleur,valueonly)' | tr -d '[:space:]')"
+assert "both Reviewed-By-Soleur and Reviewed-Coverage parse as trailers" \
+  '[[ -n "$cov" && -n "$by" ]]' "$(git -C "$d" log -1 --format=%B)"
 
 # ── ARM 7: malformed input is REFUSED before any commit ───────────────────────────
 #
@@ -152,34 +160,60 @@ for bad in "--agents-ran abc --agents-expected 5" \
   # shellcheck disable=SC2086
   out="$(cd "$d" && bash "$SUT" $bad 2>&1)"; rc=$?
   after="$(git -C "$d" rev-parse HEAD)"
-  if [[ "$rc" -eq 2 && "$before" == "$after" ]]; then
-    pass "refuses '$bad' with no commit"
-  else
-    fail "refuses '$bad' with no commit" "rc=$rc committed=$([[ "$before" != "$after" ]] && echo yes || echo no) out=$out"
-  fi
+  # CASES moves here, once per loop iteration, because assert() is called once per iteration —
+  # the counter has to track the arms that actually run, not the arms written in the source.
+  assert "refuses '$bad' with no commit" '[[ "$rc" -eq 2 && "$before" == "$after" ]]' \
+    "rc=$rc committed=$([[ "$before" != "$after" ]] && echo yes || echo no) out=$out"
 done
 
 # ── ARM 8: still refuses to run on main ──────────────────────────────────────────
 # Guards against the coverage plumbing having disturbed the pre-existing branch guard.
 d="$(new_repo onmain)"; git -C "$d" checkout -q main
 out="$(cd "$d" && bash "$SUT" --agents-ran 1 --agents-expected 1 2>&1)"; rc=$?
-if [[ "$rc" -eq 0 && "$out" == *"nothing to mark, skipping"* ]]; then
-  pass "still skips on main (pre-existing guard intact)"
-else
-  fail "still skips on main" "rc=$rc out=$out"
+assert "still skips on main (pre-existing guard intact)" \
+  '[[ "$rc" -eq 0 && "$out" == *"nothing to mark, skipping"* ]]' "rc=$rc out=$out"
+
+# ── Accounting conservation (ADR-193 #3) ─────────────────────────────────────────
+# Ordered BEFORE the floor per ADR-193 #4: a neutered fail() deflates the verdict counts, so
+# a floor reading them would ALSO trip and would report the misleading "arms were deleted".
+# This says "a verdict was discarded" instead. Reported with printf >&2 + exit 1 DIRECTLY,
+# never through pass()/fail(): a check that reports by calling a verdict helper increments the
+# very counter the exit status reads, so neutering the helper silences the rows AND the check
+# meant to notice the silence. The literal `[FATAL] accounting` is load-bearing —
+# guard-vacuity-floor's ARM 10 builds its conservation population by grepping that string.
+if [[ $((passes + fails)) -ne "$CASES" ]]; then
+  printf '\n[FATAL] accounting: passes+fails (%d) != CASES (%d).\n' \
+    "$((passes + fails))" "$CASES" >&2
+  if [[ $((passes + fails)) -lt "$CASES" ]]; then
+    printf '  An assertion was counted but its verdict was discarded — that is what a neutered pass()/fail() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `CASES=$((CASES + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  printf '\n=== emit-review-trailer coverage: %d passed, %d failed (%d assertions) ===\n\n' \
+    "$passes" "$fails" "$CASES"
+  exit 1
 fi
 
-# ── Minimum-cardinality floor ────────────────────────────────────────────────────
-# A floor, not equality: developer-incremented, so `-eq` would redden the suite on every
-# added arm. Counts passes+fails so a genuine failure reports as a failure rather than as an
-# empty suite.
-_ran=$((passes + fails))
-if [[ "$_ran" -lt 12 ]]; then
-  fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 12.\n' "$_ran"
-else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 12)\n' "$_ran"
+# ── Anti-vacuity floor (ADR-193 #1) ──────────────────────────────────────────────
+# Reads the INDEPENDENT case counter, and reports with printf >&2 + exit 1 DIRECTLY. It
+# previously read `passes + fails` and reported via `fails=$((fails + 1))` — a tautology on
+# both counts: the operand moved WITH the verdict, and the report went into a counter that a
+# neutered fail() had already stopped feeding. Stub the assertion machinery and the suite
+# printed a clean total and exited 0.
+#
+# A floor, not equality: developer-incremented, so `-eq` would redden the suite on every added
+# arm. Ratchet when adding arms; read a floor failure on an otherwise-green run as "you added
+# assertions, update this number".
+TRAILER_MIN_ASSERTIONS=12
+if (( CASES < TRAILER_MIN_ASSERTIONS )); then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
+    "$CASES" "$TRAILER_MIN_ASSERTIONS" >&2
+  printf '  Arms were deleted or skipped; a green run here would be a coverage loss.\n' >&2
+  printf '\n=== emit-review-trailer coverage: %d passed, %d failed (%d assertions) ===\n\n' \
+    "$passes" "$fails" "$CASES"
+  exit 1
 fi
 
-printf '\n=== emit-review-trailer coverage: %d passed, %d failed ===\n\n' "$passes" "$fails"
+printf '\n=== emit-review-trailer coverage: %d passed, %d failed (%d assertions) ===\n\n' \
+  "$passes" "$fails" "$CASES"
 [[ "$fails" -eq 0 ]]

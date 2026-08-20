@@ -290,14 +290,21 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    ---
 
    **Standing constraint for EVERY tier — a spawned agent never runs the gate.**
-   Spawned agents run only the suites targeting the files they were given, and are spawned with
-   `SOLEUR_SUBAGENT=1` in their environment. They must not run [scripts/test-all.sh](../../../../scripts/test-all.sh),
+   Spawned agents run only the suites targeting the files they were given. **`SOLEUR_SUBAGENT=1` is
+   a convention a lead MAY export before spawning — the harness does not set it** (measured
+   2026-08-19 from inside two independent spawned agents: UNSET in both, and no repo-controlled
+   spawn path exists to set it). They must not run [scripts/test-all.sh](../../../../scripts/test-all.sh),
    `apps/web-platform/infra/run-registered-suites.sh`, or any other full-gate runner: concurrent
    full-gate runs inflate each other's timings and corrupt the measurement. Measured 2026-08-11 —
    three agents running lints and suites at once turned an 860 s battery into 1675 s, and that
    1.9x figure was then nearly used as the suite's cost budget. The lead runs the gate ONCE,
-   after collecting fan-out work. [scripts/test-all.sh](../../../../scripts/test-all.sh) enforces this mechanically (it exits 4
-   when `SOLEUR_SUBAGENT=1`), because a paragraph in a prompt is agent discretion and this is not.
+   after collecting fan-out work. Two mechanical backstops exist, and neither depends on an agent
+   volunteering anything: [scripts/test-all.sh](../../../../scripts/test-all.sh) exits 4 when it MEASURES a sibling full-gate
+   run already in flight (#7553), and `tc_acquire`'s advisory lock (ADR-133) serialises whatever
+   gets past that. The `SOLEUR_SUBAGENT=1` exit-4 path is real and reachable by anyone who exports
+   it deliberately, but it is a convention rather than an enforced one — so the paragraph above IS
+   agent discretion for the non-concurrent case, and is written as an instruction, not a claim
+   about the harness.
 
    **Step 1: Analyze independence**
 
@@ -864,6 +871,8 @@ State plainly which axes your battery did NOT edit. Two mechanical companions: r
    this gate — by then the panel is already reviewing a suite CI will reject.
 
    **The lead runs this gate, not a delegate.** [scripts/test-all.sh](../../../../scripts/test-all.sh) exits `4` — REFUSED, nothing ran — when `SOLEUR_SUBAGENT=1` is set without `SOLEUR_ALLOW_FULL_GATE=1`. A ~90 s shard is far likelier to be delegated than a 45-minute battery was, so treat `rc=4` as its own outcome: it is not a reap and it is not a pass.
+
+   **The lead runs this gate, not a delegate.** [scripts/test-all.sh](../../../../scripts/test-all.sh) exits `4` — REFUSED, nothing ran — for either of two reasons, both overridden by `SOLEUR_ALLOW_FULL_GATE=1`: `SOLEUR_SUBAGENT=1` is set (a DECLARED spawned agent — a convention, so this only fires if someone exported it), or a sibling full-gate run is already in flight (a MEASURED condition, #7553 — this is the one that fires in practice). A ~90 s shard is far likelier to be delegated than a 45-minute battery was, so treat `rc=4` as its own outcome: it is not a reap and it is not a pass. The message names which of the two tripped.
 
    **Why a shard and not a hand-derived command set.** A `vitest --changed` + `git grep` derivation was specified and cut. A shard keeps the contention preamble (`SIBLING_RUN_DETECTED` / `SIBLING_SUITE_DETECTED` / `LOW_TMP_HEADROOM`), the `EXIT CONTRACT`, the terminal `=== N/M suites passed ===` marker, the rc file, and the `rc=3` UNRESOLVED class — an ad-hoc command set has none of them, and `vitest run --changed` with zero matches exits 1, which is indistinguishable from a real red by exit code alone. A shard also has **no empty-set state**: it always runs a defined suite list, so the "empty derived set" fail-open cannot arise. Losing the banner would have moved the earliest sibling-collision signal past the 8-10-agent review fan-out — the cost #7247 paid, where a duplicate implementation surfaced only because a banner named the sibling worktree after a full RED→GREEN cycle had been built and had to be reverted.
 

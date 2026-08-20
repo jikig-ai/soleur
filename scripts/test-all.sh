@@ -4,6 +4,10 @@ set -euo pipefail
 # EXIT CONTRACT (#7424)
 #   0  every registered suite passed
 #   1  >= 1 suite FAILED (an assertion verdict) — failure dominates when both are present
+#      ALSO 1: a suite WROTE TO THE LIVE REPOSITORY. Counted into `failed` rather than given a
+#      new code, because every consumer of this runner is binary on non-zero and a fifth code
+#      buys nothing; the [FATAL] line above the summary names it unambiguously. See the
+#      REPO WRITE BOUNDARY blocks (#7553/#7652).
 #   3  0 failures and >= 1 suite KILLED — UNRESOLVED, not measured, and NOT green
 #      3 is a TOP-LEVEL contract only: a nested runner returning 3 into run_suite classifies
 #      as a plain FAIL, because rc=3 is not signal-shaped. Do not adopt 3 in a nested runner
@@ -12,7 +16,11 @@ set -euo pipefail
 #      relevance-predicate data file is missing. Both are "this runner cannot run", not a
 #      verdict about any suite; ADR-181 declined a separate code because every consumer is
 #      binary and a second usage-shaped code buys nothing.
-#   4  REFUSED before anything ran — SOLEUR_SUBAGENT=1 without SOLEUR_ALLOW_FULL_GATE=1
+#   4  REFUSED before anything ran. TWO producers, both overridden by SOLEUR_ALLOW_FULL_GATE=1:
+#        (a) SOLEUR_SUBAGENT=1 is set — a DECLARED spawned agent;
+#        (b) a sibling full-gate run is already in flight — a MEASURED condition (#7553).
+#        (b) is the reachable one: nothing in this repo sets SOLEUR_SUBAGENT, so (a)'s
+#        antecedent only holds when someone exports it deliberately.
 #      (ADR-181). Distinct from 3 on purpose: 3 says a suite was terminated and its coverage
 #      is unresolved; 4 says nothing ran, by design, and nothing is unresolved. Sharing 3
 #      would make a refused run read as a killed suite.
@@ -480,6 +488,12 @@ run_suite() {
   if [[ -n "${TEST_TIMING_LOG:-}" ]]; then
     tmp_before=$(tc_tmp_entry_count)
   fi
+  # Recorded so the repo-write boundary can NAME the suite in flight when a write happened,
+  # instead of reporting "something in this run wrote to your repo" and leaving the reader the
+  # same ~330-suite haystack the incident already cost someone once. One assignment per suite;
+  # per-suite git snapshots would narrow it further and cost ~660 extra process spawns, which is
+  # not worth it for a strictly-narrower answer.
+  _repo_last_suite="$label"
   local start="${EPOCHREALTIME:-}"
   echo "--- $label ---"
   # Capture the exit code rather than testing it. `if ! "$@"` is a boolean test:
@@ -820,10 +834,83 @@ fi
 # completes; the only new thing is that it says what it measured.
 tc_capacity_line >&2
 
+# --- Sibling full-gate refusal (#7553) -------------------------------------------------------
+#
+# The SOLEUR_SUBAGENT refusal above binds to a condition an agent must DECLARE. Nothing in this
+# repository sets that variable — measured across every occurrence: ADR prose, learnings, archived
+# plans, two skill sentences, and tests that set it for their own arm. So its antecedent has never
+# held in normal operation and the refusal has never fired for the case it was written for.
+#
+# This one binds to a condition the runner MEASURES. tc_preamble has already resolved how many
+# OTHER worktrees are running test-all.sh (via /proc, excluding this run's own ancestors and
+# process group), so no spawn-path cooperation is needed and there is no fail-open mode when some
+# upstream harness changes an undocumented variable. It is also the arm CI can actually run: start
+# a real sibling, assert the second invocation is refused.
+#
+# It fires HERE, AFTER tc_preamble (which computes the count) and BEFORE tc_acquire, deliberately.
+# Refusing after tc_acquire would make a run that should never have started wait up to
+# TC_LOCK_TIMEOUT (900 s) to be told so, and take the advisory lock a legitimate sibling is queued
+# on. A refused run must cost nothing.
+#
+# ADDITIVE, not a replacement: the SOLEUR_SUBAGENT arm above is untouched and still exits 4.
+# The count must be one THIS process measured. TC_SIBLING_RUN_COUNT is exported, so a nested
+# test-all.sh inherits it — and a suite that drives this runner as its SUT neuters tc_preamble
+# in its sandbox, so the inherited number describes a machine state the sandbox never looked
+# at. Refusing on it turned every such suite red whenever any sibling happened to be running,
+# for a reason unrelated to its subject. Measured PRE-STAMP — i.e. against the tree before the
+# TC_SIBLING_RUN_COUNT_PID condition below existed — `TC_SIBLING_RUN_COUNT=4` alone took
+# test-all-killed-classification from 77/0 to 40/37 and test-all-infra-coverage-notice from
+# 118/0 to 38/81. Those two numbers are NOT reproducible at HEAD: re-running that A/B now
+# returns 77/0 and 118/0, because the stamp is exactly what makes an inherited count inert.
+# tc_preamble stamps TC_SIBLING_RUN_COUNT_PID with its own $$ and does not export it, so an
+# inherited count carries no stamp and cannot refuse.
+if [[ "${TC_SIBLING_RUN_COUNT:-0}" -gt 0 && "${TC_SIBLING_RUN_COUNT_PID:-}" == "$$" \
+      && "${SOLEUR_ALLOW_FULL_GATE:-}" != "1" ]]; then
+  echo "ERROR: refusing a full-gate run — ${TC_SIBLING_RUN_COUNT} sibling full-gate run(s) already in flight (TEST_GROUP=$TEST_GROUP)." >&2
+  echo "" >&2
+  echo "The offending worktree(s) are listed in the contention preamble above, under" >&2
+  echo "'[contention] siblings:'. Concurrent full-gate runs inflate each other's timings, and on a" >&2
+  echo "contended host push suites past their own timeouts — turning a green suite red for a reason" >&2
+  echo "unrelated to your diff, so the next reader investigates a phantom." >&2
+  echo "" >&2
+  echo "Run the suite covering your files instead:" >&2
+  echo "    bash <path/to/the/suite.test.sh>" >&2
+  echo "" >&2
+  echo "Or wait for the sibling to finish. If you are the lead and this IS the sanctioned gate run," >&2
+  echo "override explicitly:" >&2
+  echo "    SOLEUR_ALLOW_FULL_GATE=1 bash scripts/test-all.sh" >&2
+  # Same rc as the SOLEUR_SUBAGENT refusal: both mean REFUSED, nothing ran, nothing unresolved.
+  # Deliberately NOT 3 — #7424 assigned 3 the meaning "a suite was terminated, coverage not
+  # obtained", which is the opposite claim.
+  exit 4
+fi
+
 # Advisory, self-announcing queue (#6789). Acquired INTERNALLY (not by a caller
 # wrapping the script) so no invocation can forget it. It NEVER aborts — on
 # timeout it proceeds with a named banner, so it cannot wedge a run. CI and the
 # SOLEUR_DISABLE_SESSION_STATE kill switch are honoured inside tc_acquire.
+# Declared BEFORE tc_acquire, i.e. OUTSIDE the region the two suites that drive this runner as
+# their SUT replace wholesale. scripts/test-all-killed-classification.test.sh and its sibling
+# splice their own fixture body between the lock-acquire call below and the epilogue, so a
+# variable first assigned inside that window does not exist in their sandbox while the reader
+# after it does — and under `set -u` that aborts the sandbox mid-run. Measured: it took AC2, AC3
+# and AC8b red in a suite this branch does not otherwise touch. Exactly the shape of #7553's own
+# regression, recorded in ADR-195 Decision 7.
+#
+# The anchors are NOT quoted verbatim here on purpose. Those fixtures locate the splice window by
+# substring and require it to be UNIQUE; an earlier draft of this comment quoted the acquire call
+# exactly, so the literal appeared twice and every sandbox build failed with
+# "sandbox build failed: killed_only/none" — 40 passed, 51 failed, in a suite whose own code was
+# untouched. A comment that names a token a parser keys on is part of that parser input
+# (cq-assert-anchor-not-bare-token), which is this branch's own subject.
+#
+# Initialised to the NOT-MEASURED value, so a sandbox that drops the capture degrades to an
+# honest "this run is not evidence" NOTE rather than either aborting or silently claiming a
+# clean boundary.
+_repo_guard_ok=0
+_repo_state_before=""
+_repo_last_suite="(none started)"
+
 tc_acquire "test-all"
 
 # AFTER tc_acquire, deliberately. A run that queued behind a sibling can wait up
@@ -831,6 +918,32 @@ tc_acquire "test-all"
 # machine state up to an hour stale and makes the start/end delta
 # meaningless. Sampled at the moment this run actually begins doing work.
 _emit_bytes_probe "__run_boundary_start__"
+
+# --- REPO WRITE BOUNDARY (start) ---------------------------------------------------------
+#
+# This runner is READ-ONLY with respect to the repository it is run from. Nothing it registers
+# may commit, check out, stage, or move a ref here. That is a property nobody was measuring,
+# and on 2026-08-20 it was violated: a suite silenced its `git worktree add` failures and then
+# ran `git add`/`git commit` in an unguarded subshell, so the commands executed in the CALLER
+# CWD — the developer's live worktree. Four escapes across three sessions in under two hours;
+# fixture commits landed on feature branches AND on local main, one worktree was checked out to
+# main, and hours of uncommitted work were destroyed. Every suite reported green throughout.
+#
+# The site-level fix (a guard in that suite) is necessary and not sufficient: it protects the
+# sites it covers, in the file it lives in. This is the BOUNDARY check, and it is deliberately
+# characterised by the INVARIANT rather than by any fingerprint of that fixture. Detection by
+# commit message, by the fixture's pinned committer date, or by author all key on incidental
+# properties of today's escape and fail SILENTLY CLEAN against a future one that differs. "The
+# gate wrote to the repo" does not.
+#
+# Sampled AFTER tc_acquire for the same reason the bytes probe is: a run that queued behind a
+# sibling can wait here, and a reading taken before the wait describes a stale tree.
+#
+# Degrades OPEN. A missing or failing git must not wedge the gate — an unmeasurable boundary is
+# reported at the end, never turned into a false RED.
+if _repo_state_before="$(git rev-parse HEAD 2>/dev/null && git status --porcelain 2>/dev/null | sha256sum)"; then
+  _repo_guard_ok=1
+fi
 
 # Pre-suite bash/python tests — scripts shard.
 if want_scripts; then
@@ -1663,6 +1776,47 @@ fi
 
 _emit_bytes_probe "__run_boundary_end__"
 tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"
+
+# --- REPO WRITE BOUNDARY (end) -----------------------------------------------------------
+#
+# Compared as a DELTA, so a tree that was already dirty at the start is fine; what is forbidden
+# is this run CHANGING it. Reported before the summary block so the marker stays the last
+# `=== ` line (#6750), and counted into `failed` so the exit code carries it: a run that
+# corrupted the repository is not a pass, whatever the suites said.
+_repo_wrote=0
+if [[ "$_repo_guard_ok" == 1 ]]; then
+  if _repo_state_after="$(git rev-parse HEAD 2>/dev/null && git status --porcelain 2>/dev/null | sha256sum)"; then
+    if [[ "$_repo_state_before" != "$_repo_state_after" ]]; then
+      _repo_wrote=1
+      failed=$((failed + 1))
+      echo "" >&2
+      echo "[FATAL] A SUITE WROTE TO THE LIVE REPOSITORY. This runner is read-only here." >&2
+      echo "        Last suite started: ${_repo_last_suite}" >&2
+      echo "        (not necessarily THAT suite's write — it is where the run had reached;" >&2
+      echo "         every suite before it completed without changing the tree.)" >&2
+      echo "        HEAD and/or the working tree changed between the first suite and this line." >&2
+      echo "        before: ${_repo_state_before//$'\n'/ | }" >&2
+      echo "        after : ${_repo_state_after//$'\n'/ | }" >&2
+      echo "        Committed work survives; UNCOMMITTED work may not. Do not re-run before" >&2
+      echo "        checking: git reflog -25, and git log --oneline origin/main..main" >&2
+      echo "        A suite whose fixture cd fails can run git in the caller CWD (#7553/#7652)." >&2
+      echo "" >&2
+      echo "        SCOPE, stated so it is not over-read: this covers runs of THIS runner only." >&2
+      echo "        A suite invoked directly (bash path/to/x.test.sh), lefthook's pre-commit" >&2
+      echo "        hook, and every other entry point are NOT inspected here. The per-site" >&2
+      echo "        guards inside the suites are the protection; this is defence in depth over" >&2
+      echo "        gate runs, and a clean run here is not evidence about those other paths." >&2
+    fi
+  else
+    echo "" >&2
+    echo "NOTE: the repo-write boundary could not be re-read; this run is not evidence that" >&2
+    echo "      no suite wrote to the repository." >&2
+  fi
+else
+  echo "" >&2
+  echo "NOTE: the repo-write boundary was not measured (git unavailable at run start); this run" >&2
+  echo "      is not evidence that no suite wrote to the repository." >&2
+fi
 
 # BREAKDOWN FIRST, TERMINAL MARKER LAST. The ordering is load-bearing, not cosmetic.
 # Both lines are `=== ...`-shaped, and the documented lesson from #6750 is to match
