@@ -488,6 +488,12 @@ run_suite() {
   if [[ -n "${TEST_TIMING_LOG:-}" ]]; then
     tmp_before=$(tc_tmp_entry_count)
   fi
+  # Recorded so the repo-write boundary can NAME the suite in flight when a write happened,
+  # instead of reporting "something in this run wrote to your repo" and leaving the reader the
+  # same ~330-suite haystack the incident already cost someone once. One assignment per suite;
+  # per-suite git snapshots would narrow it further and cost ~660 extra process spawns, which is
+  # not worth it for a strictly-narrower answer.
+  _repo_last_suite="$label"
   local start="${EPOCHREALTIME:-}"
   echo "--- $label ---"
   # Capture the exit code rather than testing it. `if ! "$@"` is a boolean test:
@@ -857,7 +863,7 @@ fi
 # variable first assigned inside that window does not exist in their sandbox while the reader
 # after it does — and under `set -u` that aborts the sandbox mid-run. Measured: it took AC2, AC3
 # and AC8b red in a suite this branch does not otherwise touch. Exactly the shape of #7553's own
-# regression, recorded in ADR-194 Decision 7.
+# regression, recorded in ADR-195 Decision 7.
 #
 # The anchors are NOT quoted verbatim here on purpose. Those fixtures locate the splice window by
 # substring and require it to be UNIQUE; an earlier draft of this comment quoted the acquire call
@@ -871,6 +877,7 @@ fi
 # clean boundary.
 _repo_guard_ok=0
 _repo_state_before=""
+_repo_last_suite="(none started)"
 
 tc_acquire "test-all"
 
@@ -1734,12 +1741,21 @@ if [[ "$_repo_guard_ok" == 1 ]]; then
       failed=$((failed + 1))
       echo "" >&2
       echo "[FATAL] A SUITE WROTE TO THE LIVE REPOSITORY. This runner is read-only here." >&2
+      echo "        Last suite started: ${_repo_last_suite}" >&2
+      echo "        (not necessarily THAT suite's write — it is where the run had reached;" >&2
+      echo "         every suite before it completed without changing the tree.)" >&2
       echo "        HEAD and/or the working tree changed between the first suite and this line." >&2
       echo "        before: ${_repo_state_before//$'\n'/ | }" >&2
       echo "        after : ${_repo_state_after//$'\n'/ | }" >&2
       echo "        Committed work survives; UNCOMMITTED work may not. Do not re-run before" >&2
       echo "        checking: git reflog -25, and git log --oneline origin/main..main" >&2
       echo "        A suite whose fixture cd fails can run git in the caller CWD (#7553/#7652)." >&2
+      echo "" >&2
+      echo "        SCOPE, stated so it is not over-read: this covers runs of THIS runner only." >&2
+      echo "        A suite invoked directly (bash path/to/x.test.sh), lefthook's pre-commit" >&2
+      echo "        hook, and every other entry point are NOT inspected here. The per-site" >&2
+      echo "        guards inside the suites are the protection; this is defence in depth over" >&2
+      echo "        gate runs, and a clean run here is not evidence about those other paths." >&2
     fi
   else
     echo "" >&2

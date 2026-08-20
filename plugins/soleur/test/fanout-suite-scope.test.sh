@@ -397,7 +397,7 @@ fi
 # TC_SIBLING_RUN_COUNT is EXPORTED by tc_preamble, so a nested test-all.sh inherits it. A suite
 # that drives this runner as its SUT neuters tc_preamble in its sandbox — so it measures nothing,
 # inherits its parent's number, and (before the fix) refused on a machine state it never looked
-# at. That is the DECLARED antecedent ADR-194 exists to move away from, reintroduced by an env
+# at. That is the DECLARED antecedent ADR-195 exists to move away from, reintroduced by an env
 # var. Measured on the real suites: `TC_SIBLING_RUN_COUNT=4` alone took
 # test-all-killed-classification from 77/0 to 40/37 and test-all-infra-coverage-notice from
 # 118/0 to 38/81, with nothing wrong in either diff.
@@ -449,7 +449,7 @@ else
   # that is false-on-unset — `-n`, `-v`, `!= ""`. Measured: replacing `== "$$"` with
   # `-n "${TC_SIBLING_RUN_COUNT_PID:-}"` in test-all.sh left this suite at 31 passed, 0 failed,
   # and `grep -rn TC_SIBLING_RUN_COUNT_PID` over every *.test.sh returned zero hits — no fixture
-  # anywhere SET the variable. That is the whole claim of ADR-194 Decision 7 ("measured by THIS
+  # anywhere SET the variable. That is the whole claim of ADR-195 Decision 7 ("measured by THIS
   # process") degrading to "measured by someone", which is the DECLARED antecedent the ADR
   # exists to remove, and nothing could see it.
   #
@@ -486,7 +486,7 @@ fi
 # --- Arm 9: the sanctioned hooks actually CARRY the hatch ------------------------------------
 #
 # Arm 5 proves the hatch WORKS. Nothing proved the two invocations that depend on it still SET
-# it, and ADR-194 Decision 6 ("the two GIT-HOOK invocations carry the hatch") asserted it in
+# it, and ADR-195 Decision 6 ("the two GIT-HOOK invocations carry the hatch") asserted it in
 # prose only. Blast radius if it drifts: no agent or developer can commit a `.ts` file, or push, while
 # any sibling worktree runs the battery — the exact outcome that disqualified the
 # harness-identity design.
@@ -544,7 +544,7 @@ for hookf in "$REPO_ROOT/lefthook.yml" "$REPO_ROOT/plugins/soleur/scripts/grok-p
   HOOK_BARE="$(grep -vF 'SOLEUR_ALLOW_FULL_GATE=1' <<<"$HOOK_INV" || true)"
   CASES=$((CASES + 1))
   if [[ -z "$HOOK_BARE" ]]; then
-    pass "$hookrel: every full-gate invocation carries SOLEUR_ALLOW_FULL_GATE=1 (ADR-194 section 6)"
+    pass "$hookrel: every full-gate invocation carries SOLEUR_ALLOW_FULL_GATE=1 (ADR-195 section 6)"
   else
     fail "$hookrel has a full-gate invocation WITHOUT the hatch — it exits 4 whenever any sibling runs the battery: $HOOK_BARE"
   fi

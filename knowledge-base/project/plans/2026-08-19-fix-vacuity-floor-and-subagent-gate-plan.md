@@ -10,7 +10,7 @@ type: fix
 priority: p2
 domain: engineering
 brand_survival_threshold: aggregate pattern
-adr: ADR-194 (provisional), amendment to ADR-193
+adr: ADR-195 (provisional), amendment to ADR-193
 ---
 
 > Spec carries no `lane:` (no `spec.md` exists for this branch) — defaulted to `cross-domain`
@@ -229,7 +229,7 @@ documents and guard scripts. No per-PR CPO sign-off is required at this threshol
 
 Two records, both in-scope tasks of this plan — not follow-ups.
 
-1. **ADR-194 (provisional ordinal) — "A full-gate refusal binds to a condition the runner can
+1. **ADR-195 (provisional ordinal) — "A full-gate refusal binds to a condition the runner can
    MEASURE, not to one an agent must DECLARE."** New decision. It records: that no repo-controlled
    spawn path exists (the M1-M11 enumeration), so `SOLEUR_SUBAGENT`'s antecedent has never held and
    the refusal has never fired; that the repair is therefore **not** to find a variable to read
@@ -664,7 +664,7 @@ and must land in the same commit.
 **3c — Correct the two ADRs the change touches.** `ADR-177:217` states "cannot reach it because
 the gate does not set `SOLEUR_SUBAGENT`" and `ADR-181:105` describes the same antecedent. Both stay
 *true* under this phase (nothing is widened), so this is a citation/consistency pass, not a
-correction — confirm and leave them, and note in ADR-194 that they were checked.
+correction — confirm and leave them, and note in ADR-195 that they were checked.
 
 **3d — Leave the environment-litmus lists alone.** `review/SKILL.md:1282` and `:1348` tell a
 reviewer to run suites under `SOLEUR_SUBAGENT=1` and `CI=1` and treat a PASS-count delta as a
@@ -737,7 +737,7 @@ closing the issue legitimate rather than a paper close):
 
 ### Phase 4 — Records
 
-Write ADR-194 (re-verify the ordinal against freshly-fetched `origin/main` first), amend ADR-193's
+Write ADR-195 (re-verify the ordinal against freshly-fetched `origin/main` first), amend ADR-193's
 Consequences, and post the acknowledgement notes on #7585 and #7588.
 
 ### Phase 5 — Full battery and ship
@@ -786,7 +786,7 @@ between environments as a finding, not noise.
 13. `plugins/soleur/test/fanout-suite-scope.test.sh` asserts the true contract; its pass message no
     longer says "tells the lead to export" unless the prose it matches actually says so.
 14. `bash plugins/soleur/test/fanout-suite-scope.test.sh` exits 0.
-15. `ADR-194-*.md` exists, its ordinal is free on freshly-fetched `origin/main`, and it names the
+15. `ADR-195-*.md` exists, its ordinal is free on freshly-fetched `origin/main`, and it names the
     fail-open failure mode and the re-measurement trigger. ADR-193 carries the per-scope amendment.
 16. Full battery `bash scripts/test-all.sh` is green.
 17. PR body carries `Closes #7580` and `Closes #7553`.
@@ -828,7 +828,7 @@ Beyond the mutation matrices in the Guard Contract:
 | ~~Guard runtime roughly doubles and pushes the `scripts` CI shard past budget~~ | **Closed at plan time** | Measured: 29.39s covered + 24.39s deferred = ~54s total. Not a budget concern; no design constraint follows from it. |
 | **Suites with no verdict helpers** need a helper pair introduced before the counter can be separated from the verdict — a larger structural change than the other conversions | Medium | Those three are called out in Phase 1 and get their own commits. |
 | A new conservation check worded differently is invisible to ARM 10b/10c/10d (#7588) | Low | AC5 greps for the literal `[FATAL] accounting` in every hardened suite; mutation row 6 asserts the arm notices. |
-| ADR-194 ordinal is claimed by a sibling PR mid-pipeline | Low | Ordinal treated as provisional; re-derived at ship; any renumber sweeps this plan, `tasks.md`, and AC15. |
+| ADR-195 ordinal is claimed by a sibling PR mid-pipeline | Low | Ordinal treated as provisional; re-derived at ship; any renumber sweeps this plan, `tasks.md`, and AC15. |
 
 ## Domain Review
 
@@ -866,7 +866,7 @@ persistent store and no new cross-component connection.
 
 ## Files to Create
 
-- `knowledge-base/engineering/architecture/decisions/ADR-194-*.md` (ordinal provisional)
+- `knowledge-base/engineering/architecture/decisions/ADR-195-*.md` (ordinal provisional)
 
 ## Alternatives Considered
 
