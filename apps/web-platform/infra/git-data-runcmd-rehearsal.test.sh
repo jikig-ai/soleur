@@ -279,8 +279,29 @@ if [ "$_first_line" != "#cloud-config" ]; then
   exit 1
 fi
 
-python3 - "$TMP/rendered.yml" "$TMP" <<'PY'
+
+# THE `.code.sh` STRIP, SINGLE-SOURCED (#7613, 5.0). Both extraction sites and the R3(3b)(ii)
+# control read it, so the corpus the arms see and the corpus the control tests are the same
+# bytes by construction rather than by two spellings agreeing.
+#
+# RED VALUE: EMPTY -- i.e. whole-line comments are dropped (as today) and TRAILING ones are
+# not touched at all. That is the mechanism #7613 names, and leaving it at the current value
+# here is what makes the control's failure the defect rather than a bug in the fixture.
+#
+# The GREEN value is `[ \t]+#([ \t].*)?$`, which BLANKS THE TAIL IN PLACE rather than deleting
+# the line -- line numbers must be preserved because R3(1)/(2)/(2b)/(2d) are ordering
+# predicates over them.
+#
+# TWO INDEPENDENT CHOICES, AND AN EARLIER REVISION CREDITED BOTH TO ONE. Holding the tail
+# constant and varying only `+` -> `*`, measured: the `+` prefix prevents exactly ONE
+# destruction, `$#` -> `$`. The other three (`${var#pat}`, a URL fragment, `#!/bin/sh`) are
+# saved by the BOUNDED TAIL `([ \t].*)?$`, which the star form also has. `_b2_strip`
+# (`[[:space:]]*#.*$`) destroys all four because it is zero-width AND unbounded.
+_R3_TAIL_STRIP='[ \t]+#([ \t].*)?$'
+
+R3_TAIL_STRIP="$_R3_TAIL_STRIP" python3 - "$TMP/rendered.yml" "$TMP" <<'PY'
 import sys, yaml, re
+import os
 d = yaml.safe_load(open(sys.argv[1])); out = sys.argv[2]
 for wf in d["write_files"]:
     if wf["path"] == "/usr/local/bin/git-data-emit":
@@ -336,7 +357,20 @@ open(f"{out}/sshd-stage.sh", "w").write(sshd[0])
 luks = [c for c in d["runcmd"] if isinstance(c, str) and "STAGE=luks_open" in c]
 assert len(luks) == 1, f"expected exactly 1 luks_open runcmd block, found {len(luks)}"
 open(f"{out}/luks-stage.sh", "w").write(luks[0])
-_code = "\n".join(l for l in luks[0].splitlines() if not re.match(r'^\s*#', l))
+# NO DEFAULT. `.get(..., "")` degrades a MISSING export into "do not strip at all" -- the
+# exact fail-open this strip exists to close, reachable by deleting one env assignment.
+_tail = os.environ["R3_TAIL_STRIP"]
+_tre = re.compile(_tail) if _tail else None
+def _strip_code(_t):
+    _out = []
+    for _l in _t.splitlines():
+        if re.match(r'^\s*#', _l):
+            continue                      # whole-line comment: dropped, as before
+        if _tre is not None:
+            _l = _tre.sub("", _l)         # trailing comment: BLANKED IN PLACE, line kept
+        _out.append(_l)
+    return "\n".join(_out)
+_code = _strip_code(luks[0])
 assert "mkfs.ext4" in _code, "comment-stripped luks stage lost its mkfs — strip is too aggressive"
 open(f"{out}/luks-stage.code.sh", "w").write(_code + "\n")
 # The WHOLE runcmd, concatenated the way cloud-init actually runs it. B2 compares against
@@ -350,7 +384,7 @@ open(f"{out}/runcmd-all.sh", "w").write(_all)
 # up: this file's prose discusses `git-data-emit … fatal`, `[ -s "$_detail"` and the literal
 # log path at length, so any regex predicate reading the raw text can be satisfied by the
 # commentary that explains the property instead of the property.
-_all_code = "\n".join(l for l in _all.splitlines() if not re.match(r'^\s*#', l))
+_all_code = _strip_code(_all)
 # NON-VACUITY, mirroring luks-stage.code.sh's `mkfs.ext4` assert one level up (#7264).
 # luks-stage.code.sh has carried this since it was written; THIS file did not, and its four
 # consumers (R3(3b), R3(3c), R3(3d), R3(2d)) are all NEGATIVE-space or ordering predicates —
@@ -1251,6 +1285,42 @@ if [ -s "$TMP/out/capture.log" ]; then pass; else
 # The stage is run under `sh` with errexit OFF, matching the shipped chain: the template arms
 # `set -e` in a LATER runcmd entry, and production evidence confirms it (the failing `sshd -t`
 # was followed by `_sshd_t_rc=$?` and an emit, neither of which runs under errexit).
+# S1's rc-class allowlist, enumerated ONCE so the routing and the offered classification
+# cannot drift apart -- same construction as _T5M_ENV_RCS. A bare string, not an array, so it
+# stays safe under this file's `set -u` when word-split by `printf '%s\n' $_S1_ENV_RCS`.
+# 125: docker CLI / image pull. 100: apt under the container's outer `set -e`.
+_S1_ENV_RCS='100 125'
+
+# The IN-CONTAINER execution marker. Its whole job is to distinguish "the stage ran and
+# exited N" from "nothing ran, so there is no N". It is emitted by the driver AFTER the
+# container has reached the point where the stage is about to run, so its absence is
+# positive evidence of a pre-stage failure rather than an inference from an empty capture.
+_S1_MARKER='S1_DRIVER_REACHED_STAGE'
+# The FIXTURE marker, emitted before anything environmental can fail. Its presence means the
+# mount worked and the driver started, so a later failure is deterministic -- a defect in
+# THIS file -- and must not be laundered into an environment decline.
+_S1_FIXTURE_MARKER='S1_FIXTURE_OK'
+
+# THE FOUR-RUNG LADDER, PORTED FROM T5. Pure over its four inputs so the negative controls
+# below can drive every rung without docker.
+#   $1 container rc   $2 marker seen (yes|no)   $3 fixture marker seen (yes|no)
+#   $4 primary reached (yes|no, carried into the skip message only)
+#
+# ORDER IS LOAD-BEARING AND IS NOT ALPHABETICAL. The fixture rung MUST sit above
+# `did-not-run`: docker exits 125 for BOTH a failed image pull (environment) and a bad `-v`
+# source (this file's bug), so with the fixture rung any lower a mount typo lands on
+# `did-not-run` and reports a green skip forever.
+_s1_classify() {
+  if [ "$2" = yes ]; then printf 'ran'; return 0; fi
+  if [ "$3" = yes ]; then printf 'fixture-defect'; return 0; fi
+  if ! printf '%s\n' $_S1_ENV_RCS | grep -qx "$1"; then printf 'harness-defect'; return 0; fi
+  printf 'did-not-run'
+}
+
+# SNAPSHOT THE GLOBAL COUNTERS AROUND THE ARM so S1's own invariant can be checked without
+# re-deriving it from the whole suite. Taken BEFORE the arm, and read by an assertion placed
+# after it, so the check does not perturb its own input.
+_S1_P0=$passes; _S1_F0=$fails; _S1_S0=$SKIPPED_ASSERTIONS
 if [ -s "$TMP/sshd-stage.sh" ] && [ -s "$TMP/01-hardening.conf" ]; then
   cat > "$TMP/sshd-drive.sh" <<'S1DRV'
 set -e
@@ -1272,21 +1342,61 @@ chmod +x /usr/local/bin/git-data-emit
 # calls it bare. There is no init in a container; the restart's tolerance is not what S1 tests.
 printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/systemctl
 chmod +x /usr/local/bin/systemctl
+# WHERE THIS SITS, AND WHY IT IS NOT FIRST (#7613 review). An earlier revision of this
+# comment claimed the marker precedes apt "so its presence proves the mount worked". It
+# does not -- apt-get update/install run above it under `set -e`. That placement is
+# nonetheless correct and moving the echo up would be a REGRESSION: an apt failure is the
+# environment decline ADR-188 accepts, so it must route to `did-not-run`, and emitting the
+# fixture marker before apt would convert every apt failure into a hard fixture-defect FAIL
+# -- reinstating the false-FAIL #7291 removed. What the marker actually buys is narrower
+# than the old comment said: it proves the driver reached the END of setup, so a failure
+# BELOW this line is deterministic. The mount-typo case it used to be credited with is
+# handled by the existence guard in _s1_run instead.
+echo "S1_FIXTURE_OK"
 set +e
+# The execution marker sits immediately above the stage invocation. Absence of this line is
+# positive evidence that nothing reached the stage, which is what STAGE_RC alone could never
+# distinguish from "the stage ran and exited".
+echo "S1_DRIVER_REACHED_STAGE"
 sh /work/sshd-stage.sh
 echo "STAGE_RC=$?"
 S1DRV
 
   _s1_run() { # $1 = stage script to mount
     rm -rf "$TMP/s1out"; mkdir -p "$TMP/s1out"; : > "$TMP/s1out/sshd-capture.log"
+    # MOUNT-SOURCE EXISTENCE GUARD (#7613 review), ported from T5. Without it S1 reopened
+    # the fail-open T5 closes and its own comment claimed to have closed: docker exits 125
+    # for BOTH a failed image pull (environment) and a bad `-v` SOURCE (a defect in THIS
+    # file), 125 is in _S1_ENV_RCS, and a mount typo emits NEITHER marker -- so it walks
+    # rung 1 (no), rung 2 (no: S1's fixture marker is POSITIVE, so a typo cannot produce
+    # it), rung 3 (125 IS allowlisted), and lands on `did-not-run`: a green skip, forever.
+    # The rung-2 rationale was mis-ported from T5, whose fixture marker is a FAILURE marker
+    # and therefore genuinely intercepts that case. A positive marker cannot, so the
+    # interception has to happen here instead, before the ladder ever runs.
+    local _m
+    for _m in "$1" "$TMP/01-hardening.conf" "$TMP/sshd-drive.sh" "$TMP/s1out"; do
+      [ -e "$_m" ] || { echo "FIXTURE-FAIL: S1 mount source is absent: $_m" >&2; exit 2; }
+    done
     docker run --rm \
       -v "$1:/work/sshd-stage.sh:ro" \
       -v "$TMP/01-hardening.conf:/work/01-hardening.conf:ro" \
       -v "$TMP/sshd-drive.sh:/work/sshd-drive.sh:ro" \
       -v "$TMP/s1out:/out" \
       ubuntu:24.04 bash /work/sshd-drive.sh >"$TMP/s1out/stdout" 2>&1
+    S1_DOCKER_RC=$?
     S1_RC="$(sed -n 's/^STAGE_RC=//p' "$TMP/s1out/stdout" | tail -1)"
     S1_CAP="$TMP/s1out/sshd-capture.log"
+    # `-qx` ON BOTH READS. bash ECHOES the offending source line on an error, so a line like
+    #   bash: /work/sshd-drive.sh: line 9: echo S1_DRIVER_REACHED_STAGE: command not found
+    # SATISFIES a bare `grep -q` and would route a driver that never reached the stage
+    # straight to `ran` -- the misattribution this arm exists to remove. On the healthy path
+    # the driver's `echo` produces a line that IS exactly the marker, so `-x` costs nothing.
+    S1_MARKER_SEEN=no
+    grep -qx "$_S1_MARKER" "$TMP/s1out/stdout" 2>/dev/null && S1_MARKER_SEEN=yes
+    S1_FIXTURE_SEEN=no
+    grep -qx "$_S1_FIXTURE_MARKER" "$TMP/s1out/stdout" 2>/dev/null && S1_FIXTURE_SEEN=yes
+    S1_STATE="$(_s1_classify "$S1_DOCKER_RC" "$S1_MARKER_SEEN" "$S1_FIXTURE_SEEN" "$S1_MARKER_SEEN")"
+    S1_NOTE="docker rc=${S1_DOCKER_RC} (measured classes: 125 docker CLI/image pull, 100 apt under the container's outer set -e — offered as classification, not asserted as cause); stage rc=${S1_RC:-<no marker>}; execution marker seen: ${S1_MARKER_SEEN}; fixture marker seen: ${S1_FIXTURE_SEEN}; tail: $(tail -3 "$TMP/s1out/stdout" 2>/dev/null | tr '\n' ' ')"
   }
 
   # ERREXIT ORDERING IS S1's LOAD-BEARING PRECONDITION, so assert it rather than assume it.
@@ -1300,20 +1410,127 @@ S1DRV
     fail "S1: the shipped chain arms 'set -e' at or before the sshd stage (stage=${_s1_stage_ln:-?}, set -e=${_s1_sete_ln:-?})" \
          "S1's child-sh model runs with errexit OFF and now tests the opposite of what ships."; fi
 
+  # STRUCTURAL GUARD ON THE MOUNTED ARTIFACT, not on this file's variables. Both markers are
+  # hand-copied literals: the driver heredoc emits them and the reads above match them. A
+  # reword on either side silently makes S1_MARKER_SEEN=no forever, which routes every run to
+  # `did-not-run` and converts the whole arm into a permanent green skip -- the exact
+  # unpinned-replicated-literal failure T5 spends a hundred lines closing for its own marker.
+  # Assert against the file that is actually mounted, so the check cannot pass on a variable
+  # the container never sees.
+  # SUBSTRING HERE, WHOLE-LINE THERE, and the difference is not an inconsistency. In the
+  # mounted DRIVER the marker sits inside `echo "S1_DRIVER_REACHED_STAGE"`, so a whole-line
+  # match cannot see it; in the container's STDOUT the echo produces a line that IS exactly
+  # the marker, so `-qx` is correct there and is what stops bash's own error echo
+  # ("... echo S1_DRIVER_REACHED_STAGE: command not found") from satisfying the read. The
+  # first draft used `-qx` in both places and this guard failed against a driver that carried
+  # both markers.
+  # ANCHORED ON THE EMIT FORM (#7613 review), matching T5's `^echo <marker>$`. This was
+  # `grep -qF`, an unanchored substring over a file that INCLUDES its own comments -- so
+  # renaming the real echo and leaving `# emits S1_DRIVER_REACHED_STAGE` above it satisfied
+  # the guard while S1_MARKER_SEEN went permanently `no`, routing every run to a green skip.
+  # That is verbatim the failure this guard exists to prevent, and the same
+  # comment-satisfaction class #7613 closes three arms down.
+  if grep -qE "^[[:space:]]*echo \"${_S1_MARKER}\"[[:space:]]*$" "$TMP/sshd-drive.sh" \
+     && grep -qE "^[[:space:]]*echo \"${_S1_FIXTURE_MARKER}\"[[:space:]]*$" "$TMP/sshd-drive.sh"; then
+    pass
+  else
+    fail "S1: an execution marker is absent from the mounted driver (marker=$(grep -cF "$_S1_MARKER" "$TMP/sshd-drive.sh" 2>/dev/null || true), fixture=$(grep -cF "$_S1_FIXTURE_MARKER" "$TMP/sshd-drive.sh" 2>/dev/null || true))" \
+         "The classifier's rungs are then unreachable and every run reports a green skip."; fi
+
+  # ── S1 CLASSIFIER NEGATIVE CONTROLS (#7572) ──────────────────────────────────────
+  #
+  # THE DEFECT THESE EXIST TO CLOSE. S1_RC is read out of the container's stdout with
+  # `sed -n 's/^STAGE_RC=//p' | tail -1`. When the container never ran at all -- image pull
+  # failed, apt-get died, docker exited 125 -- there is no marker, S1_RC is empty, and
+  # `${S1_RC:-none}` becomes the string "none". "none" is not "0", so the healthy assert
+  # fails with "the sshd_config stage exited <no marker> on a fresh 24.04 -- this is the boot
+  # abort", and "none" is not "1", so the mutation assert fails with "without the mkdir the
+  # stage exited <no marker>, expected 1". Both messages name a CAUSE THAT NEVER OCCURRED:
+  # the stage did not exit anything, because it never started. That is the ADR-166/AP-021
+  # misattribution T5's four-rung ladder already exists to prevent, one arm over.
+  #
+  # The ladder is ported here as a PURE FUNCTION so its rungs can be driven directly, without
+  # docker and without a container. Mirrors R3(2c)'s in-file negative-control shape: an
+  # assertion nobody has ever seen fail is not evidence.
+  #
+  # THE RC CLASSES ARE AN ALLOWLIST, NOT "any non-zero" -- the same reasoning as _T5M_ENV_RCS.
+  # Reading every non-zero rc as an environment decline hands the skip bucket every HARNESS
+  # defect too: a mistyped `-v` source makes docker exit 125 with no marker, which is a bug in
+  # this file, and it would go green-with-a-NOTE forever.
+  _s1c() { _s1_classify "$1" "$2" "$3" "$4"; }
+
+  # rung 1 -- the execution marker is present: the stage RAN, whatever else is true.
+  if [ "$(_s1c 1 yes no yes)" = "ran" ]; then pass; else
+    fail "S1 CLASSIFIER rung 1: marker present must classify as 'ran', got '$(_s1c 1 yes no yes)'" \
+         "Without this rung a healthy mutation run (rc=1, marker present) is reclassified as a skip."; fi
+
+  # rung 2 -- the fixture marker outranks the rc classes. A deterministic bind failure must
+  # not be laundered into an environment skip.
+  if [ "$(_s1c 125 no yes no)" = "fixture-defect" ]; then pass; else
+    fail "S1 CLASSIFIER rung 2: fixture marker must outrank the rc allowlist, got '$(_s1c 125 no yes no)'" \
+         "125 is in the env allowlist; if the fixture rung sits below it, a mount typo in THIS file reports as an environment decline forever."; fi
+
+  # rung 3 -- no marker and an rc OUTSIDE the allowlist is a defect in this file, not the
+  # environment. This is the rung that keeps the skip bucket honest.
+  if [ "$(_s1c 7 no no yes)" = "harness-defect" ]; then pass; else
+    fail "S1 CLASSIFIER rung 3: rc outside _S1_ENV_RCS with no marker must be 'harness-defect', got '$(_s1c 7 no no yes)'" \
+         "Reading every non-zero rc as an environment decline hands the skip bucket every harness defect too."; fi
+
+  # rung 0 -- THE ALLOWLIST'S SIZE. The four rung controls probe membership at exactly two
+  # points (7 out, 100 in), so every OTHER rc can be added without any of them noticing:
+  # measured, `_S1_ENV_RCS='1 2 100 125 126 127 137'` left the suite 68/0 green, and 126/127
+  # are the docker exec and mount-permission classes this file's own prose calls harness
+  # defects. The failure direction is the dangerous one -- the SKIP bucket getting more
+  # aggressive -- so the set's cardinality is pinned rather than sampled.
+  if [ "$(printf '%s\n' $_S1_ENV_RCS | grep -c .)" -eq 2 ]; then pass; else
+    fail "S1 CLASSIFIER rung 0: _S1_ENV_RCS holds $(printf '%s\n' $_S1_ENV_RCS | grep -c .) rc class(es) [$_S1_ENV_RCS], expected exactly 2 (100 apt, 125 docker CLI/image pull)" \
+         "Widening this set hands the environment-decline bucket every harness defect, which is the fail-open ADR-188's allowlist exists to prevent."; fi
+
+  # rung 4 -- no marker and an rc INSIDE the allowlist is the genuine environment decline
+  # ADR-188 accepts. This is the ONLY route to a skip.
+  if [ "$(_s1c 100 no no no)" = "did-not-run" ]; then pass; else
+    fail "S1 CLASSIFIER rung 4: rc inside _S1_ENV_RCS with no marker must be 'did-not-run', got '$(_s1c 100 no no no)'" \
+         "This is the only rung ADR-188 justifies a skip on; if it does not fire, the accepted decline reds instead."; fi
+
   _s1_run "$TMP/sshd-stage.sh"
-  if [ "${S1_RC:-none}" = "0" ]; then pass; else
-    fail "S1: the sshd_config stage exited ${S1_RC:-<no marker>} on a fresh 24.04 — this is the boot abort" \
-         "$(tail -5 "$TMP/s1out/stdout" 2>/dev/null)"; fi
+  # THE HEALTHY RUN'S TWO ASSERTIONS ARE BOTH CONTAINER-DEPENDENT, so they are made together,
+  # declared-skipped together, or reported not-demonstrated together -- never a mix. A route
+  # contributing a different number is indistinguishable at the floor from an arm that partly
+  # vanished. (The errexit-ordering assertion above is container-INDEPENDENT and stays
+  # unconditional; so does the mutation-landed check below.)
+  case "$S1_STATE" in
+    did-not-run)
+      # 2: the stage's own exit status, and the emptiness of its capture.
+      arm_skip "S1 healthy run did not run: the container never reached the stage, so this arm demonstrated neither that the sshd_config stage survives a fresh 24.04 nor that a healthy stage emits nothing. ${S1_NOTE}" 2
+      ;;
+    harness-defect)
+      fail "S1: docker exited ${S1_DOCKER_RC} with no execution marker and an rc outside _S1_ENV_RCS — harness defect, not an environment skip; the fresh-boot survival premise is undemonstrated" \
+           "${S1_NOTE}"
+      fail "S1: the same harness defect leaves the healthy-stage-emits-nothing property undemonstrated" \
+           "${S1_NOTE}"
+      ;;
+    fixture-defect)
+      fail "S1: the fixture marker printed but the stage was never reached — a deterministic defect in this file, not an environment decline" \
+           "${S1_NOTE}"
+      fail "S1: the same fixture defect leaves the healthy-stage-emits-nothing property undemonstrated" \
+           "${S1_NOTE}"
+      ;;
+    *)
+      if [ "${S1_RC:-none}" = "0" ]; then pass; else
+        fail "S1: the sshd_config stage exited ${S1_RC:-<no marker>} on a fresh 24.04 — this is the boot abort" \
+             "$(tail -5 "$TMP/s1out/stdout" 2>/dev/null)"; fi
   # EMPTY, not "no fatal". A substring test for `|sshd_config|fatal` is satisfied by the 126/127
   # branch, which emits `sshd_config_warn`/`warning`, forces `_sshd_t_rc=0` and exits 0 — so a
   # container where /usr/sbin/sshd was missing entirely would pass both asserts while the fix
   # under test was never exercised. Measured: a healthy stage emits ZERO bytes (the systemctl
   # stub keeps the restart quiet), so `-s` is strictly stronger and cannot flake. It is also
   # what makes the systemctl stub load-bearing rather than decorative.
-  if [ -s "$S1_CAP" ]; then
-    fail "S1: a healthy sshd stage emitted $(wc -l < "$S1_CAP") event(s) — a warn here means sshd -t did not actually run (126/127 branch), so the privsep fix was never exercised" \
-         "$(head -3 "$S1_CAP" 2>/dev/null)"
-  else pass; fi
+      if [ -s "$S1_CAP" ]; then
+        fail "S1: a healthy sshd stage emitted $(wc -l < "$S1_CAP") event(s) — a warn here means sshd -t did not actually run (126/127 branch), so the privsep fix was never exercised" \
+             "$(head -3 "$S1_CAP" 2>/dev/null)"
+      else pass; fi
+      ;;
+  esac
 
   # MUTATION — strip the WHOLE privsep preamble so the mutant is the pre-fix stage, and prove
   # S1 reproduces the MEASURED production failure rather than merely "some" failure. Leaving
@@ -1334,25 +1551,80 @@ S1DRV
   else
     pass
     _s1_run "$TMP/sshd-stage.nomkdir.sh"
-    if [ "${S1_RC:-none}" = "1" ]; then pass; else
-      fail "S1 MUTATION: without the mkdir the stage exited ${S1_RC:-<no marker>}, expected 1" \
-           "$(tail -5 "$TMP/s1out/stdout" 2>/dev/null)"; fi
-    if grep -q '|sshd_config|fatal' "$S1_CAP" 2>/dev/null; then pass; else
-      fail "S1 MUTATION: no sshd_config fatal was emitted" "$(head -3 "$S1_CAP" 2>/dev/null)"; fi
-    # The exact string from the rehearsal hosts. Pinning it — rather than "any failure" —
-    # is what keeps this arm tied to the defect instead of to sshd being unhappy generally.
-    if grep -q 'Missing privilege separation directory' "$S1_CAP" 2>/dev/null; then pass; else
-      fail "S1 MUTATION: the captured stderr does not name the privsep directory — S1 is no longer reproducing the measured failure" \
-           "$(head -5 "$S1_CAP" 2>/dev/null)"; fi
+    # THE THREE MUTATION ASSERTIONS ARE ALL CONTAINER-DEPENDENT. Before this routing, a
+    # container that never ran made S1_RC empty and the third assertion reported
+    # "S1 is no longer reproducing the measured failure" -- a statement about the MUTATION,
+    # asserted from a run in which no mutation was ever executed. That message is #7572's
+    # title, and it is the reason the routing exists: the arm was naming a cause it had not
+    # measured. NOTE the deliberate asymmetry with the did-not-land branch above, which
+    # already emits three substitute fails of its own -- adding an arm_skip there too would
+    # double-count and put the arm at 10 rather than 7.
+    case "$S1_STATE" in
+      did-not-run)
+        # 3: the mutant's exit status, the fatal it should have emitted, and the privsep
+        # string that ties this arm to the measured production failure.
+        arm_skip "S1 MUTATION did not run: the container never reached the stage, so this arm demonstrated neither that the missing mkdir aborts the stage nor that it reproduces the measured privsep failure. ${S1_NOTE}" 3
+        ;;
+      harness-defect)
+        fail "S1 MUTATION: docker exited ${S1_DOCKER_RC} with no execution marker and an rc outside _S1_ENV_RCS — harness defect, not an environment skip" \
+             "${S1_NOTE}"
+        fail "S1 MUTATION: the same harness defect leaves the sshd_config fatal undemonstrated" "${S1_NOTE}"
+        fail "S1 MUTATION: the same harness defect leaves the privsep reproduction undemonstrated" "${S1_NOTE}"
+        ;;
+      fixture-defect)
+        fail "S1 MUTATION: the fixture marker printed but the stage was never reached — a deterministic defect in this file" \
+             "${S1_NOTE}"
+        fail "S1 MUTATION: the same fixture defect leaves the sshd_config fatal undemonstrated" "${S1_NOTE}"
+        fail "S1 MUTATION: the same fixture defect leaves the privsep reproduction undemonstrated" "${S1_NOTE}"
+        ;;
+      *)
+        if [ "${S1_RC:-none}" = "1" ]; then pass; else
+          fail "S1 MUTATION: without the mkdir the stage exited ${S1_RC:-<no marker>}, expected 1" \
+               "$(tail -5 "$TMP/s1out/stdout" 2>/dev/null)"; fi
+        if grep -q '|sshd_config|fatal' "$S1_CAP" 2>/dev/null; then pass; else
+          fail "S1 MUTATION: no sshd_config fatal was emitted" "$(head -3 "$S1_CAP" 2>/dev/null)"; fi
+        # The exact string from the rehearsal hosts. Pinning it — rather than "any failure" —
+        # is what keeps this arm tied to the defect instead of to sshd being unhappy generally.
+        if grep -q 'Missing privilege separation directory' "$S1_CAP" 2>/dev/null; then pass; else
+          fail "S1 MUTATION: the captured stderr does not name the privsep directory — S1 is no longer reproducing the measured failure" \
+               "$(head -5 "$S1_CAP" 2>/dev/null)"; fi
+        ;;
+    esac
   fi
 else
-  # SEVEN, matching S1's assertion count on every other path, so a failed extraction cannot
-  # satisfy the anti-vacuity floor by emitting fewer.
+  # THIRTEEN, matching S1's assertion count on every other path, so a failed extraction cannot
+  # satisfy the anti-vacuity floor by emitting fewer. Was SEVEN; #7572 adds the structural
+  # marker guard (1) and the four classifier rung controls (4), both container-INDEPENDENT,
+  # so every path grows by five. Re-derived from the success path rather than incremented by
+  # memory: 1 errexit + 1 structural + 4 controls + 2 healthy + 1 mutation-landed + 3 mutation.
   fail "S1: could not extract the sshd stage and/or the hardening drop-in from the render"
   fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
   fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
   fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
+  fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
+  fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
+  fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
 fi
+
+# S1's OWN INVARIANT, not the suite's. Twelve assertions are made, declared-skipped, or
+# reported not-demonstrated on EVERY route through the arm -- healthy, mutation-did-not-land,
+# each defect rung, and extraction-failed. A route contributing a different number is
+# indistinguishable at the suite floor from an arm that partly vanished, which is exactly the
+# hole the classifier would otherwise open: routing assertions into arm_skip moves them out
+# of `passes` without moving them out of the total.
+_S1_TOTAL=$(( (passes - _S1_P0) + (fails - _S1_F0) + (SKIPPED_ASSERTIONS - _S1_S0) ))
+if [ "$_S1_TOTAL" -eq 13 ]; then pass; else
+  fail "S1: the arm contributed ${_S1_TOTAL} assertion(s), expected exactly 13 on every route" \
+       "A route contributing a different number is indistinguishable at the floor from an arm that partly vanished."; fi
+
+# AND AN S1-SPECIFIC SKIP BOUND. The suite-wide ceiling cannot tell whose skips they are, so
+# S1 declaring five (2 healthy + 3 mutation) would silently consume T5's budget too. Bound
+# S1's own contribution here: 5 is its maximum -- both container-dependent groups skipping at
+# once -- and anything above it means a route is declaring cost it does not have.
+_S1_SKIPPED=$(( SKIPPED_ASSERTIONS - _S1_S0 ))
+if [ "$_S1_SKIPPED" -le 5 ]; then pass; else
+  fail "S1: declared ${_S1_SKIPPED} skipped assertion(s), S1's own ceiling is 5 (2 healthy + 3 mutation)" \
+       "A single arm cannot exceed the cost of its own container-dependent groups."; fi
 
 # ══ #7204 — R1 / R3 / R4: the birth filesystem, and the diagnostic that named it ══
 #
@@ -1647,9 +1919,62 @@ if [ -n "$_r1_exp" ] && [ "$(date -u +%Y-%m-%d)" \< "$_r1_exp" ]; then pass; els
 # _r3_ln() also fails LOUD on a missing anchor rather than returning empty, because an empty
 # line number silently degrades every comparison below into "skip the check".
 _r3_ln() { grep -n "$1" "$TMP/luks-stage.code.sh" 2>/dev/null | head -1 | cut -d: -f1; }
+
+# THE THREE R3 PREDICATES, SINGLE-SOURCED (#7613). Each is used by the production arm AND by
+# its negative control below, so the control cannot certify a spelling the arm no longer uses
+# -- the hand-copied-fourth-spelling failure this file's B1 comment already warns about, one
+# level down. Changing a value here moves the arm and its control together, which is what
+# makes the control's RED and GREEN mean anything.
+#
+# _R3_SEED_PAT is DELIBERATELY the unanchored form at the commit that introduces these
+# controls, so their failure is the defect rather than a bug in the fixtures.
+# ANCHORED (#7613 finding 1). Was `GIT_DATA_LUKS_DETAIL=`, unanchored, fed to a `head -1`
+# over a corpus that still carried trailing comments -- so a comment naming the token above
+# the real seed hijacked the line number and R3(1)/(2)/(2b) all reported the seed early while
+# it sat after the trap. Its own twin _r2d_ordered has been anchored since it was written; the
+# .code.sh split landed and this anchor did not. Now the same shape as the twin.
+_R3_SEED_PAT='^[[:space:]]*GIT_DATA_LUKS_DETAIL='
+# The guard-shape predicate R3(3b)(ii) uses, exported into the python heredoc rather than
+# restated there.
+_R3_GUARD_PAT='\[\s+-[rs]\s+"?'
+# R3(2d)'s seed anchor. It is ALREADY anchored -- this arm is the reference the other seven
+# are being moved to -- so single-sourcing it does not change its value. What it buys is that
+# a future de-anchoring reds R3(2d)'s own control instead of silently widening the model.
+_R3_R2D_PAT='^[[:space:]]*GIT_DATA_RUNCMD_DETAIL='
+
+# R3(3b)(i)'s reporting-site predicate. RED VALUE: a bare count floor, which is what ships
+# today. The property is a SET -- delete one reporting site, add an unrelated one, and the
+# count is unchanged while the property is violated. Sub-assertion (iv) already does message-
+# set equality for fatals and is the model this is being moved to.
+# MEASURED, NOT GUESSED (#7613 review). The first draft of this roster held STAGE= names
+# (`luks_open`, `volume_mount`, …) while the analyzer's first field is the enclosing
+# HANDLER/STAGE WINDOW — so wiring the arm to it would have rejected on every single run.
+# These four are what a fresh render actually produces. Measured with the arm's own
+# analyzer: 7 emit rows, of which 6 are reporting (non-`info`) sites, across 4 distinct
+# windows -- which is why the floor conjunct below is `-ge 6` and not 8. An earlier
+# revision of this comment said "8 reporting emit sites", contradicting the code three
+# lines down.
+_R3B_EXPECTED_SITES='gc_timer
+luks_err
+on_err
+sshd_config'
+_r3b_sites_ok() {  # $1 = row count, $2 = newline-separated window names; 0 = accept
+  # A FLOOR **AND** A SET (#7613 finding 3). The floor alone holds across the exact mutation
+  # that matters — delete one reporting site, add an unrelated one — because the count does
+  # not move. Sub-assertion (iv) already does message-set equality for fatals and is the model.
+  #
+  # STATED HONESTLY: the set is over WINDOWS, so this catches a window disappearing and a
+  # window appearing. It does NOT catch swapping one emit site for another WITHIN a window
+  # that still has others; the floor is what bounds that direction, and it bounds it only by
+  # cardinality. Pinning the per-window distribution would close it and would hard-code a
+  # snapshot of today's render, which is the staleness AP-023 warns about one level up.
+  [ "$1" -ge 6 ] || return 1
+  [ "$(printf '%s\n' "$2" | sort -u)" = "$(printf '%s\n' "$_R3B_EXPECTED_SITES" | sort -u)" ]
+}
+
 if [ -s "$TMP/luks-stage.code.sh" ]; then
   # (1) the stage passes a seeded detail file, not the cloud-init log, to the emitter.
-  _r3_seed_ln=$(_r3_ln 'GIT_DATA_LUKS_DETAIL=')
+  _r3_seed_ln=$(_r3_ln "$_R3_SEED_PAT")
   _r3_trap_ln=$(_r3_ln '^[[:space:]]*trap luks_err EXIT')
   if [ -n "$_r3_seed_ln" ]; then pass; else
     fail "R3(1): the luks_open stage does not seed a detail file (no GIT_DATA_LUKS_DETAIL= assignment in CODE)" \
@@ -1678,7 +2003,10 @@ if [ -s "$TMP/luks-stage.code.sh" ]; then
   sed -e 's|^\([[:space:]]*\)GIT_DATA_LUKS_DETAIL=\(.*\)$|\1: # seed relocated by R3(2c)|' \
     "$TMP/luks-stage.code.sh" > "$_r3_mut"
   printf 'GIT_DATA_LUKS_DETAIL=/run/git-data-luks-stage.log\n' >> "$_r3_mut"
-  _mut_seed=$(grep -n 'GIT_DATA_LUKS_DETAIL=' "$_r3_mut" | head -1 | cut -d: -f1)
+  # `|| true` because a no-match is a NORMAL answer here, not an error: the arm's own
+  # emptiness check below is what decides. Bare in the 208-entry baseline as a literal
+  # pattern; single-sourcing the pattern re-presented it to lint-shell-capture-exit as new.
+  _mut_seed=$(grep -n "$_R3_SEED_PAT" "$_r3_mut" | head -1 | cut -d: -f1 || true)
   _mut_app=$(grep -n '2>>"\?\$GIT_DATA_LUKS_DETAIL' "$_r3_mut" | head -1 | cut -d: -f1)
   if [ -n "$_mut_seed" ] && [ -n "$_mut_app" ] && [ "$_mut_seed" -gt "$_mut_app" ]; then pass; else
     fail "R3(2c) MUTATION did not land: relocated seed=${_mut_seed:-none} first-append=${_mut_app:-none}, expected seed AFTER append" \
@@ -1688,6 +2016,235 @@ else
   fail "R3: skipped (luks stage not extracted)"; fail "R3: skipped (luks stage not extracted)"
   fail "R3: skipped (luks stage not extracted)"; fail "R3: skipped (luks stage not extracted)"
 fi
+
+# ── R3 PER-ARM COMMENT-SATISFACTION CONTROLS (#7613) ────────────────────────────────
+#
+# THE MECHANISM, MEASURED. The `.code.sh` corpora are stripped of WHOLE-LINE comments only
+# (`^\s*#` at the two extraction sites; the template's own strip is the same shape). So every
+# "a comment cannot satisfy this predicate" argument resting on `.code.sh` is narrower than
+# stated, and the shape is live rather than theoretical: the render carries
+# `STAGE=volume_mount # (#6982) name the stage …` today.
+#
+# WHY EIGHT CONTROLS AND NOT ONE. The predicates are shared, so one fix re-flows every
+# consumer at once -- which is precisely why a single control would be the wrong evidence.
+# Each arm has its own hijackable token and its own failing direction, and an arm that is
+# ALREADY anchored must be shown to STAY correct rather than assumed to. The budget is paid
+# per arm: one negative control each, over four fixtures plus two variants.
+#
+# EVERY CONTROL DRIVES THE PRODUCTION PREDICATE, not a restatement of it. They read
+# `$_R3_SEED_PAT` / `$_R3_GUARD_PAT` -- the same variables the arms read -- so changing a
+# predicate moves the arm and its control together. A control that hard-coded its own spelling
+# could certify an anchoring the arms no longer use, which is the hand-copied-fourth-spelling
+# failure this file already warns about one level up.
+#
+# They are pure text over files in $TMP; no container.
+_r3c_dir="$TMP/r3controls"; mkdir -p "$_r3c_dir"
+_r3_ln_in() { grep -n "$2" "$1" 2>/dev/null | head -1 | cut -d: -f1; }
+
+# ── GUARD 5 — the tail strip's live assertions and its _b2_strip parity check ────────
+#
+# THIS CHANGE IS PROPHYLACTIC, AND SAYING SO IS THE POINT. Re-measured against a fresh render
+# on 2026-08-20: the luks stage goes 55 -> 55 lines with ZERO surviving `#`, and the runcmd
+# concatenation 170 -> 170 with exactly ONE -- `STAGE=volume_mount # (#6982) …`, whose token
+# `volume_mount` is matched by no predicate in this file. So the tail strip changes one line
+# in one artifact and NO arm's verdict. It is retained because the property it buys -- a
+# predicate cannot be satisfied by the commentary explaining it -- should not depend on the
+# render's own strip continuing to be exhaustive. It is not retained because it fixed
+# something live, and the arms' RED/GREEN above is paid on the ANCHORING, which does re-flow
+# all eight.
+#
+# THE `+` PREFIX IS LOAD-BEARING. The suite already contains a stripper -- `_b2_strip`,
+# `sed -e 's/[[:space:]]*#.*$//'` -- and #7613's issue body proposed it as the ready-made fix.
+# Its zero-width `*` destroys `${var#pat}` -> `${var`, `$#` -> `$`, `#!/bin/sh` -> empty, and a
+# URL fragment. Measured, not assumed: the divergence assertion below is that measurement.
+_g5_dir="$TMP/g5"; mkdir -p "$_g5_dir"
+_g5_new() { R3_TAIL_STRIP="$_R3_TAIL_STRIP" python3 -c '
+import os, re, sys
+tail = os.environ["R3_TAIL_STRIP"]   # no default: a missing export is a defect, not "do not strip"
+tre = re.compile(tail) if tail else None
+out = []
+for l in open(sys.argv[1]).read().splitlines():
+    if re.match(r"^\s*#", l):
+        continue
+    if tre is not None:
+        l = tre.sub("", l)
+    out.append(l)
+# TRAILING NEWLINE, deliberately. `sed` terminates its last line and `"\n".join()` does not,
+# so without this `diff -q` reports a mismatch on two byte-identical corpora — which is
+# exactly what the first run of Guard 5(a) did.
+sys.stdout.write("\n".join(out) + "\n")
+' "$1"; }
+
+# (5a) PARITY ON THE REAL CORPUS. After the strip, B2's `_b2_strip` route and R3's route are
+# the same bytes -- which means B2 is now a REDUNDANT-IMPLEMENTATION CROSS-CHECK rather than
+# independent evidence, and this file says so rather than claiming a control it no longer has.
+# The parity is what makes that statement checkable.
+if [ -s "$TMP/runcmd-all.sh" ]; then
+  _g5_new "$TMP/runcmd-all.sh" > "$_g5_dir/new.txt" 2>/dev/null
+  _b2_strip "$TMP/runcmd-all.sh" > "$_g5_dir/b2.txt" 2>/dev/null
+  # (5a) PINS THE ARMS' OWN CORPUS -- it no longer compares against `_b2_strip`.
+  #
+  # THE _b2_strip PARITY ARM WAS REMOVED, and that is a correction rather than a relaxation.
+  # It asserted the two strippers AGREE on the real render, which is true only while the
+  # corpus contains none of the tokens they treat differently. Measured by injecting single
+  # lines into the real render: `base=${p#/x/}`, `argc=$#`, `#!/bin/sh` and `#nospace` each
+  # made it RED -- i.e. it fired precisely when the prophylaxis started earning its keep, and
+  # its failure text blamed B2's cross-check. A tripwire on improvement is one the next
+  # engineer deletes under time pressure. What it uniquely detected -- a DISABLED strip -- is
+  # now caught positively by 5(b) instead.
+  #
+  # What survives is the assertion that actually protects the arms: the strip's output IS the
+  # corpus every R3 predicate reads. Change the `^\s*#` rule at the extraction site alone and
+  # this reds, where the old pairing stayed green while the arms read a file no guard checked.
+  if diff -q "$_g5_dir/new.txt" "$TMP/runcmd-all.code.sh" >/dev/null 2>&1; then pass; else
+    fail "GUARD 5(a): the tail strip's output differs from runcmd-all.code.sh — the corpus every R3 predicate reads is not what this guard measured" \
+         "$(diff "$TMP/runcmd-all.code.sh" "$_g5_dir/new.txt" 2>/dev/null | head -6)"; fi
+else
+  fail "GUARD 5(a): runcmd-all.sh absent, parity unverifiable"
+fi
+
+# (5b) DIVERGENCE ON A SYNTHESIZED FIXTURE. Parity alone is satisfied by two strippers that
+# are both wrong in the same way, and by two that are both no-ops. This is the arm that proves
+# the new expression is strictly safer -- and it is a SYNTHESIZED fixture precisely because the
+# real artifacts contain zero at-risk tokens, which is why (5a) can pass at all.
+# `tight=1 #nospace` is what gives the `([ \t].*)?$` clause a failing direction. Every other
+# at-risk token here is preceded by a NON-whitespace character, so a strictly more aggressive
+# `[ \t]+#.*$` preserved all of them and survived the entire suite -- the clause was asserted
+# by nothing. A `#` with no space after it is a comment the shipped expression must LEAVE
+# ALONE, and the aggressive spelling eats.
+printf 'base=${path#/prefix/}\nargc=$#\nurl="https://e.com/#anchor"\nplain=1   # trailing\ntight=1 #nospace\n' > "$_g5_dir/risk.sh"
+_g5_new "$_g5_dir/risk.sh" > "$_g5_dir/risk.new" 2>/dev/null
+_b2_strip "$_g5_dir/risk.sh" > "$_g5_dir/risk.b2" 2>/dev/null
+_g5_keeps=$(grep -cE '\$\{path#/prefix/\}|argc=\$#|#anchor' "$_g5_dir/risk.new" 2>/dev/null || true)
+_g5_b2_keeps=$(grep -cE '\$\{path#/prefix/\}|argc=\$#|#anchor' "$_g5_dir/risk.b2" 2>/dev/null || true)
+# THE THIRD CONJUNCT IS WHAT MAKES THIS SELF-SUFFICIENT (#7613 review). The first two
+# assert only that at-risk tokens SURVIVE, which is equally true when the tail strip is
+# disabled entirely -- so with `_R3_TAIL_STRIP=''` this arm passed while the mechanism it
+# guards did nothing. Asserting that a genuine ` # trailing` tail was REMOVED is the positive
+# direction, and it is the assertion that lets the _b2_strip parity arm go.
+_g5_stripped=$(grep -cE '^plain=1$' "$_g5_dir/risk.new" 2>/dev/null || true)
+_g5_tight=$(grep -cE '^tight=1 #nospace$' "$_g5_dir/risk.new" 2>/dev/null || true)
+if [ "$_g5_keeps" -eq 3 ] && [ "$_g5_b2_keeps" -eq 0 ] && [ "$_g5_stripped" -eq 1 ] && [ "$_g5_tight" -eq 1 ]; then pass; else
+  fail "GUARD 5(b): on the at-risk fixture the tail strip preserved ${_g5_keeps}/3 at-risk tokens (expected 3), _b2_strip preserved ${_g5_b2_keeps}/3 (expected 0), the strip removed ${_g5_stripped}/1 genuine trailing tails (expected 1 — 0 means the strip is disabled), and preserved ${_g5_tight}/1 no-space comments (expected 1 — 0 means the tail clause was widened to `#.*$`) — the two strippers no longer differ in the way that justifies not reusing _b2_strip" \
+       "new=[$(tr '\n' ' ' < "$_g5_dir/risk.new")] b2=[$(tr '\n' ' ' < "$_g5_dir/risk.b2")]"; fi
+
+# ── FIXTURE A — the real seed relocated BELOW the trap, with a trailing comment naming the
+#    token left ABOVE it. Finding (1): with an unanchored `head -1` the comment hijacks the
+#    line number and R3(1)/(2)/(2b) report the seed early when it is late.
+_fxA="$_r3c_dir/A.code.sh"
+if [ -s "$TMP/luks-stage.code.sh" ]; then
+  # The seed is held out and re-emitted at END OF FILE, so it sits after BOTH the trap and
+  # the first append — the two orderings R3(2b) and R3(2) respectively assert. The decoy
+  # comment naming the token is left where the real seed used to be, above the trap, which is
+  # what an unanchored `head -1` latches onto.
+  awk '
+    /^[[:space:]]*GIT_DATA_LUKS_DETAIL=/ && !moved {
+      held = $0; moved = 1
+      print "  : # seed for GIT_DATA_LUKS_DETAIL= is documented here"
+      next
+    }
+    { print }
+    END { if (moved) print held }
+  ' "$TMP/luks-stage.code.sh" > "$_fxA"
+else
+  : > "$_fxA"
+fi
+_a_seed=$(_r3_ln_in "$_fxA" "$_R3_SEED_PAT")
+_a_real=$(_r3_ln_in "$_fxA" '^[[:space:]]*GIT_DATA_LUKS_DETAIL=')
+_a_trap=$(_r3_ln_in "$_fxA" '^[[:space:]]*trap luks_err EXIT')
+_a_app=$(_r3_ln_in "$_fxA" '2>>"\?\$GIT_DATA_LUKS_DETAIL')
+
+# A1 — R3(1): the ARM's seed lookup must resolve to the real seed, not to prose about it.
+if [ -n "$_a_seed" ] && [ "$_a_seed" = "${_a_real:-}" ]; then pass; else
+  fail "R3(1) CONTROL: the arm's seed predicate resolves to line ${_a_seed:-none}; the real seed is at line ${_a_real:-none} — a trailing comment naming the token has hijacked it" \
+       "An unanchored head -1 over a whole-line-only-stripped corpus cannot tell the seed from prose about the seed."; fi
+
+# A2 — R3(2): with the real seed below the first append, the ARM's ordering check must see
+# the violation. It cannot while its own lookup is pointing at the comment.
+if [ -n "$_a_seed" ] && [ -n "$_a_app" ] && [ "$_a_seed" -gt "$_a_app" ]; then pass; else
+  fail "R3(2) CONTROL: seed=${_a_seed:-none} append=${_a_app:-none} — the ordering check does not report a seed that sits after the first append" \
+       "R3(2)'s green certifies nothing if the mutated direction still reads as ordered."; fi
+
+# A3 — R3(2b): same, against the trap.
+if [ -n "$_a_seed" ] && [ -n "$_a_trap" ] && [ "$_a_seed" -gt "$_a_trap" ]; then pass; else
+  fail "R3(2b) CONTROL: seed=${_a_seed:-none} trap=${_a_trap:-none} — the ordering check does not report a seed that sits after the trap" \
+       "A seed after the trap makes luks_err abort on an unbound variable under set -u, so the stage emits NOTHING — strictly worse than the causeless fatal R3(2b) exists to prevent."; fi
+
+# ── FIXTURE A' — R3(2c) is the R3(2) family's own negative control, so it must discriminate
+#    on a corpus whose FIRST line is a decoy comment; otherwise it certifies either spelling.
+_fxAp="$_r3c_dir/Aprime.code.sh"
+{ printf 'x=1 # GIT_DATA_LUKS_DETAIL=/decoy\n'; cat "$_fxA" 2>/dev/null; } > "$_fxAp"
+_ap_seed=$(_r3_ln_in "$_fxAp" "$_R3_SEED_PAT")
+if [ "${_ap_seed:-0}" != "1" ]; then pass; else
+  fail "R3(2c) CONTROL: the arm's predicate resolves to line 1, which is a decoy comment — R3(2c) would certify a spelling that reads prose" \
+       "R3(2c) is the negative control for the whole R3(2) family; if it cannot tell code from commentary the family has no model."; fi
+
+# ── FIXTURE B — a real `[ -s "$_luks_detail" ]` guard DELETED, a trailing comment naming it
+#    left behind. Finding (2): a regex over the stripped corpus reports GUARDED from prose.
+_fxB="$_r3c_dir/B.code.sh"
+# NOTE THE `$`. The arm derives its search name as `arg4.strip('"'"'"'"'"')`, which KEEPS the
+# leading dollar -- the name is `$_luks_detail`, not `_luks_detail`. The first draft of this
+# control dropped it and therefore PASSED against the very defect it was written for: a
+# fixture that cannot match real code cannot detect a predicate that matches prose.
+printf 'git-data-emit stage level msg "$_luks_detail"   # guarded by [ -s "$_luks_detail" ] upstream\n' > "$_fxB"
+# STRIP FIRST, THEN SEARCH -- which is what production does. Feeding gpat a RAW fixture would
+# test gpat in isolation and could never be flipped by the stripper change that actually
+# closes this. The control therefore runs the arm's own stripper over the fixture and then the
+# arm's own guard predicate over the result.
+_b_hits=$(R3_GUARD_PAT="$_R3_GUARD_PAT" R3_TAIL_STRIP="$_R3_TAIL_STRIP" python3 -c '
+import os, re, sys
+tail = os.environ["R3_TAIL_STRIP"]   # no default: a missing export is a defect, not "do not strip"
+tre = re.compile(tail) if tail else None
+out = []
+for l in open(sys.argv[1]).read().splitlines():
+    if re.match(r"^\s*#", l):
+        continue
+    if tre is not None:
+        l = tre.sub("", l)
+    out.append(l)
+pat = re.compile(os.environ["R3_GUARD_PAT"] + re.escape("$_luks_detail"))
+print(len(pat.findall("\n".join(out))))
+' "$_fxB" 2>"$_r3c_dir/B.err") || _b_hits=ERROR
+# FAIL CLOSED (#7613 review). This was `2>/dev/null || echo 0`, and 0 is the PASS value --
+# so a KeyError, a bad regex, or an absent python3 reported "no match" and the one control
+# written to prove a deleted guard plus prose reports GUARDED could not tell "no match"
+# from "did not run". Every sibling guard in this file fails closed; this was the outlier.
+if [ "${_b_hits:-ERROR}" = "0" ]; then pass; else
+  fail "R3(3b)(ii) CONTROL: the arm's guard predicate returned '${_b_hits}' (expected 0) on a corpus whose ONLY occurrence of the guard shape is a trailing comment; ERROR means the predicate could not run: $(head -c 200 "$_r3c_dir/B.err" 2>/dev/null) — deleting a real guard and leaving prose about it reports GUARDED" \
+       "That reopens the literal-leak branch the guard exists to close."; fi
+
+# ── FIXTURE B' — R3(3d): a trailing comment matching the deletion sed's shape must not be
+#    what the mutation lands on, or the arm's cmp -s did-not-land guard never fires.
+_fxBp="$_r3c_dir/Bprime.code.sh"
+printf 'keep=1\nother=2   # [ -s "$_luks_detail" ] mentioned only in prose here\n' > "$_fxBp"
+_bp_mut="$_r3c_dir/Bprime.mut.sh"
+sed -e '/^[[:space:]]*[^#]*\[[[:space:]]\+-s[[:space:]]\+"\?\$\?_luks_detail/d' "$_fxBp" > "$_bp_mut"
+if cmp -s "$_fxBp" "$_bp_mut"; then pass; else
+  fail "R3(3d) CONTROL: the deletion sed changed a corpus whose only mention of the guard is a trailing comment — the mutation landed on prose, so the did-not-land guard would not fire and the mutant would score as a real deletion" \
+       "A mutation that lands on a comment measures nothing about the code."; fi
+
+# ── FIXTURE C — one reporting site deleted and one unrelated site added. Finding (3): a
+#    `>= 6` COUNT floor holds across that swap; the property is a SET.
+_fxC_b="$_r3c_dir/C_before"; _fxC_a="$_r3c_dir/C_after"
+printf 'gc_timer\nluks_err\non_err\nsshd_config\n' > "$_fxC_b"
+printf 'gc_timer\nluks_err\non_err\nZZZ_unrelated\n' > "$_fxC_a"
+# Drive the ARM's OWN predicate over both corpora. The complete set must be ACCEPTED and the
+# swapped one REJECTED; a count floor accepts both, which is the defect.
+_c_ok_before=1; _r3b_sites_ok 8 "$(cat "$_fxC_b")" && _c_ok_before=0
+_c_ok_after=1;  _r3b_sites_ok 8 "$(cat "$_fxC_a")" && _c_ok_after=0
+if [ "$_c_ok_before" -eq 0 ] && [ "$_c_ok_after" -ne 0 ]; then pass; else
+  fail "R3(3b)(i) CONTROL: the arm's site predicate accepted the complete set (rc=${_c_ok_before}) and the swapped set (rc=${_c_ok_after}) alike — one reporting site was deleted and an unrelated one added, and it could not tell" \
+       "A floor is not a set. Sub-assertion (iv) already does message-set equality for fatals and is the model this should follow."; fi
+
+# ── FIXTURE D — R3(2d) is the CONTROL PROVING THE ANCHORING STYLE WORKS, so its RED is a
+#    mutation of its own anchor and its behaviour must otherwise be unchanged.
+_fxD="$_r3c_dir/D.code.sh"
+printf 'noise=0 # GIT_DATA_RUNCMD_DETAIL=/decoy\nGIT_DATA_RUNCMD_DETAIL=/run/git-data-runcmd.log\n' > "$_fxD"
+_d_anch=$(_r3_ln_in "$_fxD" "$_R3_R2D_PAT")
+_d_bare=$(_r3_ln_in "$_fxD" 'GIT_DATA_RUNCMD_DETAIL=')
+if [ "${_d_anch:-0}" = "2" ] && [ "${_d_bare:-0}" = "1" ]; then pass; else
+  fail "R3(2d) CONTROL: anchored returned ${_d_anch:-none} (expected 2), bare returned ${_d_bare:-none} (expected 1) — the arm that demonstrates the anchoring style is not demonstrating it" \
+       "R3(2d) is the reference the other seven arms are being moved to; if it stops discriminating the family loses its model."; fi
 
 # ── R3(3) + R4 — drive the EXTRACTED emitter against the capture endpoint ────────────
 #
@@ -2003,8 +2560,8 @@ _R3B_SRC="$TMP/runcmd-all.code.sh"
 # A verdict with no demonstrated failing direction certifies nothing — that is the defect
 # this whole family exists to correct, and it would be self-defeating to re-create it here.
 _r3b_analyze() {  # $1 = comment-stripped shell; one `site|level|isvar|guarded|arg4|msg` row per emit
-  python3 - "$1" <<'PY' 2>&1 || true
-import re, sys, shlex
+  R3_GUARD_PAT="$_R3_GUARD_PAT" python3 - "$1" <<'PY' 2>&1 || true
+import os, re, sys, shlex
 src = open(sys.argv[1]).read()
 joined = re.sub(r'\\\n\s*', ' ', src)          # fold line continuations
 lines = joined.splitlines()
@@ -2052,7 +2609,12 @@ for i, l in enumerate(lines):
         # DETAIL=[], a verdict with no cause — #7204's defect), so pinning -r alone would
         # red the correct fix. Bounded to [wstart, epos): a guard belonging to a DIFFERENT
         # handler, or one placed after the emit, protects nothing here.
-        gpat = re.compile(r'\[\s+-[rs]\s+"?' + re.escape(name))
+        # NO DEFAULT (#7613 review). A fallback literal here is a SECOND, unpinned copy of
+        # the pattern: change _R3_GUARD_PAT and drop the export, and the arm silently keeps
+        # matching the old spelling while the control raises KeyError -- which its own
+        # `|| echo 0` used to swallow into a PASS. Single-sourcing means the arm fails loudly
+        # when the value is absent.
+        gpat = re.compile(os.environ["R3_GUARD_PAT"] + re.escape(name))
         guarded = "GUARDED" if gpat.search(joined, wstart, offs[i]) else "UNGUARDED"
     print("|".join([wname, level.strip('"'), isvar, guarded, arg4, msg]))
 PY
@@ -2074,8 +2636,14 @@ if [ -s "$_R3B_SRC" ]; then
   _r3b_bound="$(printf '%s\n' "$_r3b_out" | awk -F'|' '$2!="info" && $1!=""' || true)"
   _r3b_fatal="$(printf '%s\n' "$_r3b_out" | awk -F'|' '$2=="fatal"' || true)"
   _r3b_n=$(printf '%s\n' "$_r3b_bound" | grep -c . || true)
-  if [ "${_r3b_n:-0}" -ge 6 ]; then pass; else
-    fail "R3(3b)(i): parsed only ${_r3b_n:-0} reporting emit sites in the concatenated runcmd (expected >= 6)" \
+  # WIRED TO THE ARM (#7613 review). _r3b_sites_ok was defined and read ONLY by its own
+  # negative control, while this arm kept the bare `-ge 6` count floor — so the control
+  # certified a predicate production did not use, and the six names in _R3B_EXPECTED_SITES
+  # had never been compared against the real render at all. The rows carry
+  # `site|level|isvar|guarded|arg4|msg`; the predicate wants bare names.
+  _r3b_site_names="$(printf '%s\n' "$_r3b_bound" | awk -F'|' 'NF{print $1}' | sort -u || true)"
+  if _r3b_sites_ok "${_r3b_n:-0}" "$_r3b_site_names"; then pass; else
+    fail "R3(3b)(i): reporting emit sites do not match the expected roster (parsed ${_r3b_n:-0}; got [$(printf '%s' "$_r3b_site_names" | tr '\n' ' ')], expected [$(printf '%s' "$_R3B_EXPECTED_SITES" | tr '\n' ' ')])" \
          "The extraction produced nothing usable, so every verdict below is vacuous. out=[$(printf '%s' "$_r3b_out" | head -c 300)]"
   fi
 
@@ -2168,7 +2736,9 @@ fi
 # own comment claims. Echoes 1 when the ordering holds, 0 otherwise.
 _r2d_ordered() {  # $1 = comment-stripped concatenated runcmd
   local s t a
-  s=$(grep -n '^[[:space:]]*GIT_DATA_RUNCMD_DETAIL=' "$1" | head -1 | cut -d: -f1)
+  # `|| true` for the same reason as _mut_seed above -- a no-match is a normal answer and
+  # the `[ -n "$s" ]` guard below is what decides.
+  s=$(grep -n "$_R3_R2D_PAT" "$1" | head -1 | cut -d: -f1 || true)
   t=$(grep -n '^[[:space:]]*trap on_err EXIT[[:space:]]*$' "$1" | head -1 | cut -d: -f1)
   a=$(grep -n '2>>"\$GIT_DATA_RUNCMD_DETAIL"' "$1" | head -1 | cut -d: -f1)
   if [ -n "$s" ] && [ -n "$t" ] && [ -n "$a" ] && [ "$s" -lt "$t" ] && [ "$s" -lt "$a" ]; then
@@ -2224,7 +2794,76 @@ fi
 # "four plain `docker run`" comment, which was wrong from the moment the count reached six and
 # stayed wrong across multiple PRs; #7565 has since corrected it to a pair of stated measures
 # with their derivations, which is the shape a count in this file should take.
-_SKIP_CEILING=2   # one skip-eligible arm (the T5 mutation arm), declaring a cost of 2
+# RAISED 2 -> 5 (#7572), ITEMISED. The list below is the authority; the number is NOT derived
+# from it. Deriving the ceiling from the live SKIPPED_ASSERTIONS count -- or from the arm_skip
+# call sites -- would make `SKIPPED_ASSERTIONS <= _SKIP_CEILING` an identity that can never
+# fail (AP-023), which is the decision ADR-188 recorded and #7572's issue body proposed
+# reversing. It stays absolute; each raise gets its own stanza.
+#
+#   T5 mutation   2   (pre-existing)
+#   S1 healthy    2   (#7572: both container-dependent assertions in the healthy run)
+#   S1 mutation   3   (#7572: the mutant's rc, its fatal, and the privsep reproduction)
+#   ------------------
+#   total         7   -- MEASURED, and it is 7 rather than 5. An earlier revision of this
+#                        stanza asserted "NOT 7: T5 and S1 cannot both be maximally skipped in
+#                        a run that produced any verdict at all". That is false, and the
+#                        refutation is one line up: _T5M_ENV_RCS and _S1_ENV_RCS are the SAME
+#                        allowlist ('100 125') and both arms pull the same image, so ONE
+#                        environmental condition satisfies both did-not-run rungs. Measured
+#                        against an unpullable image: docker rc=125, all three arms decline,
+#                        `Skipped: 7`. At a ceiling of 5 that legitimate decline produced a
+#                        SECOND, spurious failure blaming the arms for declaring cost they
+#                        genuinely have -- a false FAIL inside the mechanism ADR-188 built to
+#                        remove false FAILs.
+_SKIP_CEILING=7
+
+# THE STANZA'S DECLARED LIST MUST MATCH THE CODE. A ceiling itemised in a comment is a claim
+# about arm_skip call sites, and comments do not fail. Count the real call sites and assert
+# the number the stanza above declares -- three: T5 mutation, S1 healthy, S1 mutation. This
+# is the only thing standing between the stanza and silent drift, and it is deliberately a
+# COUNT of call sites rather than a sum of their costs, because summing the costs from the
+# code would re-create the identity the paragraph above rejects.
+# S1's RESIDUAL, RECORDED AND GUARDED (#7572, 3.6). Before this change S1's healthy run was
+# unconditional, so it could not skip and its failure was always a real signal -- S1's primary
+# was itself a bound on the suite's vacuity. Routing it through the classifier REMOVES that
+# bound: a run where the container never starts now declares five skips and still satisfies
+# the floor. The composite bound therefore rests entirely on T5's PRIMARY arm, which is the
+# one remaining container-dependent assertion that cannot decline. Assert that -- if a future
+# change makes T5's primary skip-eligible too, every container-dependent assertion in the file
+# becomes declinable at once and a run in which docker never worked reports green.
+# TWO COUNTS COMPARED, not a negative match. The first draft used
+#   grep -cE '^[[:space:]]*arm_skip "T5 (?!MUTATION)'
+# which is wrong twice over: POSIX ERE has no negative lookahead (grep warns and matches
+# nothing), and `grep -c` PRINTS `0` while EXITING 1 on no match -- so the `|| echo 0` guard
+# appended a SECOND zero and the comparison saw the two-line string "0\n0". It failed against
+# a file with no such call site. Counting both populations and asserting equality needs
+# neither lookahead nor an error guard.
+_T5_SKIPS=$(grep -cE '^[[:space:]]*arm_skip "T5 ' "$0" || true)
+_T5_MUT_SKIPS=$(grep -cE '^[[:space:]]*arm_skip "T5 MUTATION' "$0" || true)
+# AND A NON-ZERO FLOOR, AND CROSS-FILE PARITY (#7613 review). `-eq` alone passes on 0 == 0,
+# so rewording `arm_skip "T5 MUTATION …"` to `arm_skip "T5-MUTATION …"` left BOTH counts at
+# zero, this guard green, the call-site count still 3 -- and silently stopped the external
+# probe (scripts/followthroughs/t5-skip-persistence-bound-7510.sh) matching
+# `SKIP (loud): T5 `, so the daily monitor would have reported PASS forever. One edit, three
+# instruments blinded, zero reds. Every arm_skip call site must therefore open with a name
+# the probe greps for, and that is asserted rather than assumed.
+# Assigned BEFORE its first reader: the roster-parity check below consumes it, and under
+# `set -u` reading it first aborted the whole suite at line ~2802 rather than failing an
+# assertion. Caught by running the suite, not by reading the edit.
+_SKIP_CALL_SITES=$(grep -cE '^[[:space:]]*arm_skip ' "$0" || true)
+_S1_SKIPS=$(grep -cE '^[[:space:]]*arm_skip "S1 ' "$0" || true)
+_PROBE_NAMED=$(( _T5_SKIPS + _S1_SKIPS ))
+if [ "$_T5_SKIPS" -ge 1 ] \
+   && [ "$_T5_SKIPS" -eq "$_T5_MUT_SKIPS" ] \
+   && [ "$_PROBE_NAMED" -eq "$_SKIP_CALL_SITES" ]; then
+  pass
+else
+  fail "arm_skip roster drift: T5=${_T5_SKIPS} (of which MUTATION=${_T5_MUT_SKIPS}), S1=${_S1_SKIPS}, probe-named total=${_PROBE_NAMED}, call sites=${_SKIP_CALL_SITES}. Either T5's primary became skip-eligible, or a call site's message no longer opens with a name the follow-through probe greps for — its primary arm has become skip-eligible; S1's primary is no longer a bound (it declines via the classifier since #7572), so nothing unconditional remains to red a run in which the container never started" \
+       "The composite vacuity bound rests on T5's primary. Re-establish a bound before making it declinable."; fi
+
+if [ "$_SKIP_CALL_SITES" -eq 3 ]; then pass; else
+  fail "skip stanza drift: ${_SKIP_CALL_SITES} arm_skip call site(s) in this file, the itemised stanza declares 3 (T5 mutation; S1 healthy; S1 mutation)" \
+       "The ceiling's itemisation is a claim about call sites; an unlisted one silently consumes another arm's budget."; fi
 if [ "$SKIPPED_ASSERTIONS" -le "$_SKIP_CEILING" ]; then pass; else
   fail "skip ceiling exceeded: ${SKIPPED_ASSERTIONS} assertion(s) declared-skipped, ceiling is ${_SKIP_CEILING}"; fi
 
@@ -2392,8 +3031,36 @@ total=$((passes + fails + SKIPPED_ASSERTIONS))
 # fixture-liveness gate emits on the healthy path. Counting it is the whole point of the instrument
 # — a gate that contributes nothing when it succeeds is one that an inversion-to-always-pass leaves
 # undetectable, because the old floor of 44 would still be met.
-if [ "$total" -lt 49 ]; then
-  echo "FAIL: ran only ${total} assertions (<49) — harness did not execute fully" >&2
+# RAISED 49 -> 58 (#7572), ITEMISED — nine new counted assertions, all container-INDEPENDENT,
+# so they are made on every route and cannot be satisfied by a skip:
+#     4  the S1 classifier's four rung controls (pure over their inputs; no docker)
+#     1  the structural guard that both S1 markers are present in the MOUNTED driver
+#     1  S1's own 12-assertions-per-route invariant
+#     1  S1's own skip bound (<= 5)
+#     1  the arm_skip call-site count matching the ceiling's itemised stanza
+#     1  the T5-primary-not-skip-eligible residual guard
+#   ----
+#     9
+# Re-derived from a measured run against the as-written file (58 assertions), not incremented
+# by memory — the stanza above records that this count moved 44 -> 46 -> 47 -> 48 -> 49 across
+# three PRs in four days, and #7291 had to re-derive its own raise twice as siblings landed
+# underneath it. Do NOT edit the frozen 19-era baseline list higher up to reconcile with this;
+# each raise is itemised in its own stanza, and that list is what "19 pre-existing" is checked
+# against.
+# RAISED 58 -> 68 (#7613), ITEMISED — ten new counted assertions, all pure text over $TMP,
+# so they are made on every route the suite reaches this far on:
+#     3  fixture A: R3(1), R3(2), R3(2b) — the unanchored seed lookup
+#     1  fixture A': R3(2c) — the family's own negative control must discriminate
+#     1  fixture B: R3(3b)(ii) — the guard predicate reading prose
+#     1  fixture B': R3(3d) — the deletion sed must land on code, not a comment
+#     1  fixture C: R3(3b)(i) — a count floor where the property is a set
+#     1  fixture D: R3(2d) — the anchored reference must stay discriminating
+#     2  Guard 5: _b2_strip parity on the real corpus, divergence on the at-risk fixture
+#   ----
+#    10
+# Re-derived from a measured run against the as-written file, not incremented by memory.
+if [ "$total" -lt 69 ]; then
+  echo "FAIL: ran only ${total} assertions (floor 69) — harness did not execute fully" >&2
   exit 1
 fi
 echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed, Skipped: ${SKIPPED_ASSERTIONS} (${total} assertions)"

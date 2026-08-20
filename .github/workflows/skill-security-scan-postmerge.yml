@@ -30,7 +30,9 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          fetch-depth: 2
+          # 0, not 2: the audit now diffs from the push event's `before`, which can be
+          # many commits back. Depth 2 could only ever see the tip.
+          fetch-depth: 0
 
       - name: Assert jq present (runner-image dependency — no install, no network)
         run: jq --version
@@ -39,18 +41,76 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MERGE_SHA: ${{ github.sha }}
+          EVENT_BEFORE: ${{ github.event.before }}
           CI: 'true'
         run: |
           set -euo pipefail
-          parent=$(git rev-parse HEAD^1 2>/dev/null || git rev-parse HEAD)
-          added=$(git diff --name-only --diff-filter=A "$parent"...HEAD | \
+          # AN UNRESOLVABLE BASE MUST FAIL, NOT DEGRADE TO HEAD. The old
+          # `|| git rev-parse HEAD` fallback made parent==HEAD, so the audit
+          # diffed a commit against itself, found nothing added, and printed
+          # "nothing to audit" -- a bypass audit that structurally cannot detect
+          # a bypass, on exactly the malformed-history shape a force-push leaves.
+          # USE THE PUSH EVENT'S OWN BASE. HEAD^1 audits only the TIP commit's first parent,
+          # so a push that lands the skill in any commit other than the tip -- a rebase-merge,
+          # a direct stack push, precisely the force-push shape this job exists to catch --
+          # was invisible, and `fetch-depth: 2` made auditing wider impossible. `before` is
+          # all-zeroes on branch creation, which falls through to the HEAD^1 path and then to
+          # the hard failure below.
+          par_rc=0
+          # `:-` because the body runs under `set -u` and not every trigger supplies
+          # github.event.before (workflow_dispatch does not). An unbound-variable abort here
+          # would kill the audit on exactly the manual re-run an operator reaches for during
+          # an incident. Caught by the harness's new clean-push must-PASS row.
+          parent="${EVENT_BEFORE:-}"
+          case "$parent" in
+            ""|0000000000000000000000000000000000000000)
+              set +e
+              parent=$(git rev-parse --verify HEAD^1 2>"${RUNNER_TEMP:-/tmp}/par.err")
+              par_rc=$?
+              set -e
+              ;;
+            *)
+              set +e
+              git rev-parse --verify "$parent^{commit}" >/dev/null 2>"${RUNNER_TEMP:-/tmp}/par.err"
+              par_rc=$?
+              set -e
+              ;;
+          esac
+          if [ "$par_rc" -ne 0 ] || [ -z "$parent" ]; then
+            echo "::error::skill-security-scan postmerge: could not resolve HEAD^1 for merge $MERGE_SHA (git exited $par_rc). Refusing to audit a commit against itself; a bypass would be undetectable."
+            cat "${RUNNER_TEMP:-/tmp}/par.err" >&2 || true
+            exit 1
+          fi
+          # AMR, not A -- see the pr-trailer note: a rename or an in-place edit reported
+          # R/M and left the added set empty, skipping the audit entirely.
+          dif_rc=0
+          set +e
+          raw=$(git diff --name-only --diff-filter=AMR "$parent"...HEAD 2>"${RUNNER_TEMP:-/tmp}/diff.err")
+          dif_rc=$?
+          set -e
+          if [ "$dif_rc" -ne 0 ]; then
+            echo "::error::skill-security-scan postmerge: git could not resolve the diff $parent...HEAD (git exited $dif_rc)."
+            cat "${RUNNER_TEMP:-/tmp}/diff.err" >&2 || true
+            exit 1
+          fi
+          added=$(printf '%s\n' "$raw" | \
             grep -E '^(plugins/soleur/skills/[^/]+/SKILL\.md|plugins/soleur/agents/.+\.md|\.claude/skills/.+/SKILL\.md|\.claude/agents/.+\.md)$' || true)
           if [ -z "$added" ]; then
             echo "No SKILL/agent files added in this push; nothing to audit."
             exit 0
           fi
           # Per-skill override binding (security review P1). See pr-trailer.yml.
-          matched_skills="$(bash plugins/soleur/skills/skill-security-scan/scripts/parse-override.sh --base "$parent" --head HEAD 2>/dev/null | jq -r '.matched[].skill // empty' | sort -u)"
+          po_rc=0
+          set +e
+          po_out=$(bash plugins/soleur/skills/skill-security-scan/scripts/parse-override.sh --base "$parent" --head HEAD 2>"${RUNNER_TEMP:-/tmp}/po.err")
+          po_rc=$?
+          set -e
+          if [ "$po_rc" -ne 0 ]; then
+            echo "::error::skill-security-scan postmerge: parse-override.sh exited $po_rc; refusing to derive an override set from a failed parse."
+            cat "${RUNNER_TEMP:-/tmp}/po.err" >&2 || true
+            exit 1
+          fi
+          matched_skills="$(printf '%s\n' "$po_out" | jq -r '.matched[].skill // empty' | sort -u)"
           path_to_slug() {
             local p="$1"
             case "$p" in
@@ -62,10 +122,40 @@ jobs:
             esac
           }
           violations=""
+          scanned=0
+          requested=0
           while IFS= read -r path; do
             [ -z "$path" ] && continue
-            [ ! -f "$path" ] && continue
-            verdict=$(SKILL_SECURITY_SCAN_OFFLINE=1 bash plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh < "$path" 2>/dev/null | head -1 | grep -oE 'HIGH-RISK|REVIEW|LOW-RISK' || echo 'UNKNOWN')
+            requested=$((requested + 1))
+            if [ ! -f "$path" ]; then
+              echo "::error file=$path::skill-security-scan postmerge: path was reported as added but is not present in the checkout; cannot audit it."
+              violations="$violations $path"
+              continue
+            fi
+            sc_rc=0
+            set +e
+            sc_out=$(SKILL_SECURITY_SCAN_OFFLINE=1 bash plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh < "$path" 2>"${RUNNER_TEMP:-/tmp}/scan.err")
+            sc_rc=$?
+            set -e
+            if [ "$sc_rc" -ne 0 ]; then
+              echo "::error file=$path::skill-security-scan postmerge: run-scan.sh exited $sc_rc; a crashed scanner has produced no verdict."
+              cat "${RUNNER_TEMP:-/tmp}/scan.err" >&2 || true
+              violations="$violations $path"
+              continue
+            fi
+            verdict=$(printf '%s\n' "$sc_out" | head -1 | grep -oE 'HIGH-RISK|REVIEW|LOW-RISK' || true)
+            if [ -z "$verdict" ]; then
+              echo "::error file=$path::skill-security-scan postmerge: run-scan.sh emitted no recognised verdict (UNKNOWN); failing closed. First line was: $(printf '%s\n' "$sc_out" | head -1)"
+              violations="$violations $path"
+              continue
+            fi
+            # COUNTS VERDICTS, NOT ITERATIONS (review). This also incremented inside the
+            # crash and unrecognised-verdict branches above, so `$scanned verdict(s)
+            # produced` asserted something the variable did not measure -- and the
+            # zero-verdict guard below could never be the sole cause of a failure,
+            # because every branch that skipped it had already set fail=1. Now the
+            # counter means what its name and its log line say.
+            scanned=$((scanned + 1))
             if [ "$verdict" = "HIGH-RISK" ]; then
               slug=$(path_to_slug "$path")
               if [ -z "$slug" ] || ! echo "$matched_skills" | grep -qFx -- "$slug"; then
@@ -73,17 +163,43 @@ jobs:
               fi
             fi
           done <<< "$added"
+          if [ "$requested" -gt 0 ] && [ "$scanned" -eq 0 ]; then
+            echo "::error::skill-security-scan postmerge: $requested path(s) were queued and 0 verdicts were produced. Refusing to report a clean audit for an audit that did not happen."
+            exit 1
+          fi
+          echo "skill-security-scan postmerge: $scanned verdict(s) produced from $requested queued path(s)."
           if [ -n "$violations" ]; then
             body=$(printf '**Bypass detected.** Merge commit `%s` introduced HIGH-RISK skill(s) WITHOUT a corresponding override artifact under `knowledge-base/engineering/security/skill-overrides/`.\n\nViolating files:\n' "$MERGE_SHA")
             for v in $violations; do
               body="${body}- $v"$'\n'
             done
-            body="${body}"$'\n'"This indicates the pre-merge gate (\`skill-security-scan-pr-trailer\`) was bypassed via admin merge or force-push. See plan #2719, R15 mitigation."
+            # STATE WHAT WAS OBSERVED, NOT WHY (ADR-166). This read "was bypassed via
+          # admin merge or force-push" -- two causes this job never measures. It
+          # compares a parent to HEAD and reads verdicts; it has no view of how the
+          # commit reached main, and as of #7629 a third possibility exists that the
+          # old wording excluded outright: the pre-merge gate RAN and reported success
+          # while scanning nothing. Naming a cause the job did not measure is the
+          # defect this PR is closing elsewhere in this same file.
+          body="${body}"$'\n'"The pre-merge gate (\`skill-security-scan-pr-trailer\`) did not block this. This job observes only that the file was added between \`$parent\` and HEAD with no matching override artifact; it does not observe how the merge was performed, so the reason is undetermined here. Check the PR's own check-run history for whether the gate ran, was skipped, or reported success. See plan #2719, R15 mitigation."
+            # A LOST COMPLIANCE RECORD IS REPORTED, NOT SWALLOWED. The old
+            # `|| true` meant a failed `gh issue create` still printed
+            # "compliance/critical issue filed" -- an assertion about an artifact
+            # that does not exist. The step exits non-zero either way, so the
+            # only thing `|| true` bought was a false statement in the log.
+            iss_rc=0
+            set +e
             gh issue create \
               --title "compliance/critical: skill-security-scan bypass on merge $MERGE_SHA" \
               --label "compliance/critical" \
-              --body "$body" || true
-            echo "::error::Bypass detected; compliance/critical issue filed."
+              --body "$body" >"${RUNNER_TEMP:-/tmp}/issue.out" 2>&1
+            iss_rc=$?
+            set -e
+            cat "${RUNNER_TEMP:-/tmp}/issue.out" || true
+            if [ "$iss_rc" -eq 0 ]; then
+              echo "::error::Bypass detected; compliance/critical issue filed."
+            else
+              echo "::error::Bypass detected, AND the compliance/critical issue could NOT be filed (gh exited $iss_rc). The bypass record exists only in this run log -- file it by hand from the violating files listed above."
+            fi
             exit 1
           fi
           echo "Post-merge audit OK."
