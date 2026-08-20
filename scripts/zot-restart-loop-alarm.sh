@@ -306,6 +306,8 @@ evaluate_nic() {
   if [[ "${nic:-}" == "false" ]]; then
     NIC_VERDICT="FIRE"
     if [[ "${rc:-0}" != "0" ]]; then
+      # MEASURED-BY: imds_rc (${rc}), read from the newest telemetry row and tested by this
+      # very branch. H1 is named only on the arm where the measurement selects it.
       NIC_CAUSE="H1 — the metadata service was unreachable (imds_rc=${rc}). The guard will NOT reboot without corroboration, so this is terminal until IMDS recovers or an operator re-dispatches registry-host-replace."
     elif [[ "${nets:-0}" == "0" ]]; then
       NIC_CAUSE="H2 — IMDS answered but reports NO private network attached (imds_rc=0, imds_nets=0): the hcloud_server_network additive online-attach had not landed. Expect a later tick to self-heal; if it persists, the attach itself failed."
@@ -384,6 +386,9 @@ evaluate_nic() {
       NIC_CAUSE="the boot race is REAL on this host and the guard healed it by rebooting — H2 confirmed empirically. Not an outage: serving is fine. THE REBOOT WAS ${age}, NOT RECENT: this host has been up ${up}s under an unchanged boot_id, and reboot_count is a cumulative root-disk counter that survives every boot. Do NOT read this advisory as evidence of a reboot in the last ${WINDOW} (#7242: doing so produced two refuted hypotheses during a release-blocking investigation). Triage if reboot_count climbs toward the cap (2) across boots."
     else
       NIC_DETAIL="newest boot_id=${newest}: nic_ok=true now, but this boot ALSO emitted nic_ok=false earlier — reboot_count=0, so it healed with NO reboot"
+      # MEASURED-BY: reboot_count=0 together with this boot having ALSO emitted nic_ok=false
+      # earlier under the same boot_id — the pair is what selects this arm, and "healed
+      # without a reboot" is exactly what that pair says.
       NIC_CAUSE="the attach landed AFTER the guest configured its network and the NIC came up on its own within the bounded wait — H2 confirmed empirically, healed without a reboot. Not an outage: serving is fine. This is the cheapest possible outcome of the race, and the reason the guard uses a cadence rather than a boot-only oneshot."
     fi
     return

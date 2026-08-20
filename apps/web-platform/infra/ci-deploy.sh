@@ -1670,6 +1670,8 @@ zot_gate_and_login() {
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time "$ZOT_PROBE_TIMEOUT" "http://${ZOT_REGISTRY_URL}/v2/" 2>/dev/null || echo 000)"
   if [[ "$code" != "200" && "$code" != "401" ]]; then
     ZOT_GATE_STATUS="probe_unreachable"
+    # MEASURED-BY: $code, the /v2/ http_code captured two lines up. curl emits 000 on connect
+    # failure, so "unreachable" is the reading of a measurement, not a guess about one.
     logger -t "$LOG_TAG" "ZOT_GATE: /v2/ probe http=$code — GHCR path (zot unreachable)"
     zot_gate_degraded_event probe_unreachable
     return 0
@@ -2562,6 +2564,9 @@ if [[ "$ACTION" == "quiesce" ]]; then
   # an UNREACHABLE/REJECTED peer, not an un-quiesced one. Single-host default:
   # SOLEUR_DEPLOY_PEERS unset → fan_out_to_peers returns 0 immediately (dormant).
   if ! fan_out_to_peers; then
+    # MEASURED-BY: fan_out_to_peers' non-zero return on the line above. Per DI-C3 the peer's
+    # own verdict is unreadable here, so the appendix states the disjunction the return code
+    # actually supports rather than picking one of its two arms.
     logger -t "$LOG_TAG" "FAILED: quiesce — a peer fan-out was NOT accepted (unreachable/rejected)"
     final_write_state 1 "quiesced_peer_fanout_unaccepted"
     exit 1
@@ -2611,6 +2616,8 @@ if [[ "$ACTION" == "enable" ]]; then
   fi
 
   if ! fan_out_to_peers; then
+    # MEASURED-BY: fan_out_to_peers' non-zero return on the line above (same contract as the
+    # quiesce arm: spawn-acceptance is measured here, the peer's own verdict is not).
     logger -t "$LOG_TAG" "FAILED: enable — a peer fan-out was NOT accepted (unreachable/rejected)"
     final_write_state 1 "enabled_peer_fanout_unaccepted"
     exit 1
