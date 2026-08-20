@@ -111,6 +111,29 @@ now requires a definite `1`.
    a bug depends on a producer still being live, the fixture must *make* it still live.
 3. **When one guard's comment says another guard already guarantees a precondition,
    both are one bug.** Grep for that phrasing during review of a destructive path.
+4. **A stub producer must die the way the real one dies.** The pad was first
+   emitted by a bash `printf` loop. Real git takes SIGPIPE and exits 141; bash's
+   `printf` builtin can survive EPIPE — on the CI runner it printed
+   `write error: Broken pipe` and kept looping, so the stub exited 0 and the
+   mutant could not reproduce the bug. `exec cat` makes the stub process *be*
+   an external reader-of-a-file, which dies exactly as git would. The suite now
+   asserts the stub's own SIGPIPE (A0) before any arm depends on it.
+
+### The same trap, three times in one session
+
+Every instance had the same shape — **the fixture did not reproduce the
+mechanism, so the arm passed with confidence**:
+
+| # | The fixture was wrong because | Caught by |
+|---|---|---|
+| 1 | ~14 lines of porcelain fit the 64 KiB pipe buffer, so git exited before the reader closed | noticing the unfixed script passed |
+| 2 | the mutant reverted only one of two `rc=2` branches, and the second still caught it | re-running the mutation properly |
+| 3 | the stub padded with a bash builtin that survives EPIPE, so it never SIGPIPEd | **CI — via the anti-vacuity arm** |
+
+Instance 3 is the argument for mutant arms in one line: A2 exists only to prove
+A1 can go red, and it was the single assertion that noticed the whole suite had
+stopped testing anything on that host. **A green suite is evidence about the
+fixture before it is evidence about the code.**
 
 ## Drive-by found on the way
 
