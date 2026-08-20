@@ -61,6 +61,20 @@ cdx() {
   exit 90
 }
 
+# MERGE-RESOLUTION SELF-CHECK. This file was ALREADY partially hardened once — two sites carried
+# explicit "Guarded cd" comments while five did not — and it regressed anyway; the reaper sites
+# carry no fixture-commit symptom, so a regression there is silent. Two independent fixes to this
+# file are in flight simultaneously, which makes "a merge drops one site back to a bare cd" a live
+# possibility rather than a hypothetical. Assert the PROPERTY here instead of trusting review to
+# notice. Excludes the `&&` forms, which short-circuit and are safe.
+_bare_cd="$(grep -nE '^[[:space:]]*\(?[[:space:]]*cd "' "${BASH_SOURCE[0]}" | grep -vE '&&' || true)"
+if [[ -n "$_bare_cd" ]]; then
+  printf '  FAIL: unguarded cd site(s) in this suite — every fixture cd must go through cdx():\n' >&2
+  printf '%s\n' "$_bare_cd" >&2
+  printf '        A bare cd here runs git in the CALLER CWD when the fixture is missing.\n' >&2
+  exit 1
+fi
+
 # ---------------------------------------------------------------------------
 # Stand up a fake bare repo with two branches: main + feat-victim. Merge
 # feat-victim into main so it qualifies as "merged" for cleanup_merged_worktrees.
