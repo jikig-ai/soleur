@@ -72,7 +72,7 @@ What the ask is actually for, stated as observable outcomes:
 |---|---|---|
 | Restore the soleur-dev DSN into `soleur-inngest/prd` | (1) | A prod-config write that unblocks one run and leaves the asymmetry intact — the next rollback re-poisons G3. Also re-creates the soleur-dev co-tenancy ADR-100 wants retired. |
 | Give `op=rollback` a true inverse (restore the dark DSN) | (1) | Buys (1) only by reintroducing the co-tenancy, and needs the dark DSN held as a new reference secret. Larger, and (1) is fully bought by idempotence. |
-| Command seam in `op=arm` + behavioural harness | (4) | A cheaper mechanism buys the same property: extracting the decision into a pure function makes it directly testable **without** altering the prod-credential path. |
+| Command seam in `op=arm` + behavioural harness | (4) | **This cut was WRONG and is recorded as such.** Extracting the decision buys Property 4 for the DECISION only. AC6/AC7 are about the WRITE SEQUENCE, and with no seam they fell back to greps that could not fail — review demonstrated three uncaught mutations against them, one of which armed the host onto the dark backend with the suite green. The gap was closed by asserting the write region structurally rather than by adding the seam, but the reasoning that cut it ("a cheaper mechanism buys the same property") did not hold: the property the seam would have bought was not the one the pure function buys. |
 
 ### Guard-precedent grep (repo convention)
 
@@ -119,8 +119,13 @@ next FSM step is `FLUSHALL` against the host Redis. The prod cron queue is wiped
 — inbound-email processing, digests, reconciliation — silently stops firing until someone notices the
 absence of an event rather than the presence of an error.
 
-**If this leaks, the user's data is exposed via:** no new exposure vector. The change moves no secret
-value and adds no logging of one; `INNGEST_POSTGRES_URI` remains masked and is never echoed.
+**If this leaks, the user's data is exposed via:** no new exposure vector, but the original
+wording ("moves no secret value") was inaccurate and is corrected here. Both G4 writes —
+`INNGEST_POSTGRES_URI` and the `INNGEST_HEARTBEAT_URL` bearer capability — become REACHABLE on a
+path that previously aborted at G3, so a re-arm now re-writes them where it used to write nothing.
+Neither value is echoed, both remain `::add-mask::`ed, and the heartbeat's restoration does not
+produce a monitor false-green because `inngest-bootstrap.sh`'s listener gate suppresses the beat
+until `:8288/health` returns 200. The exposure surface is the token's residency, not disclosure.
 
 **Brand-survival threshold:** single-user incident
 
