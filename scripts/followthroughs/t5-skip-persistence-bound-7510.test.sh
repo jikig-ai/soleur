@@ -55,7 +55,7 @@ TERMINAL_LINE='git-data-runcmd-rehearsal: 44 passed, 0 failed, Skipped: 2 (46 as
 # match happens while the producer still has most of its output pending.
 PIPE_PAD_LINES=6000
 mkcase() {
-  local name="$1" nruns="$2" mode="${3:-present}" root="$SANDBOX/$1"
+  local nruns="$2" mode="${3:-present}" root="$SANDBOX/$1"
   mkdir -p "$root/bin"
   cat > "$root/log.head"
   {
