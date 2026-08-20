@@ -262,6 +262,9 @@ mountpoint -q "$LUKS_ROOT" || {
   exit 1
 }
 [[ "$(git config --system receive.advertisePushOptions)" == "true" ]] || {
+  # MEASURED-BY: the `git config --system receive.advertisePushOptions` read in this test's
+  # own condition. The appendix states the CONSEQUENCE that follows from that measured fact,
+  # not a hypothesis about why it holds.
   log "FATAL: receive.advertisePushOptions not advertised — push-option fence unreachable"
   exit 1
 }

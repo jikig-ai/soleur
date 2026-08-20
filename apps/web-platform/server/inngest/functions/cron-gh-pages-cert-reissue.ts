@@ -305,6 +305,33 @@ export interface DnsPropagationInputs {
    */
   acmeApexServer: string;
   acmeWwwServer: string;
+  /**
+   * GitHub's OWN verdict on whether it will order a certificate, read from
+   * `GET /repos/{owner}/{repo}/pages/health` (`domain.is_https_eligible` and
+   * `alt_domain.is_https_eligible`). `null` = the health read failed.
+   *
+   * ‼️ THIS IS THE AUTHORITATIVE SIGNAL AND IT WAS MISSING UNTIL 2026-08-19.
+   * Every other field in this interface INFERS eligibility from the outside —
+   * resolver answers, absence of AAAA, the shape of a `Server:` header. The
+   * health endpoint reports the actual precondition GitHub evaluates, so it can
+   * confirm in one read what the inference chain can only approximate.
+   *
+   * During the 2026-08-16 apex outage the whole inference chain passed (A-records
+   * GitHub anycast on both public resolvers, no AAAA, ACME path GitHub-shaped)
+   * while GitHub still refused to issue. Had the routine read this field it
+   * would have reported `is_https_eligible=false` directly instead of leaving
+   * the operator to conclude, wrongly, that the authorization was wedged
+   * server-side and needed GitHub Support.
+   */
+  httpsEligibleApex: boolean | null;
+  httpsEligibleWww: boolean | null;
+  /**
+   * `caa_error` from the same health read. GitHub evaluates CAA itself, so this
+   * settles in one field what an external `dig CAA` walk can only guess at —
+   * and CAA failure is otherwise indistinguishable from a short window, since
+   * both leave the cert flat at `bad_authz`.
+   */
+  healthCaaError: string | null;
 }
 
 export type DnsPropagationVerdict =
@@ -454,9 +481,66 @@ export function checkDnsPropagated(
     };
   }
 
+  // ── GitHub's own verdict, checked LAST and treated as decisive (2026-08-19) ──
+  //
+  // Everything above infers eligibility from outside. This is GitHub reporting
+  // the precondition it actually evaluates, so it overrides a passing inference
+  // chain — which is exactly the case that burned us: on 2026-08-16 every check
+  // above passed while GitHub still would not issue.
+  //
+  // A CAA rejection is TERMINAL: waiting cannot clear it, and continuing would
+  // spend a Let's Encrypt validation attempt to learn nothing. Reported
+  // separately from ineligibility because the remedy is completely different
+  // (fix the CAA record vs. wait for the flip to register).
+  if (inputs.healthCaaError) {
+    return {
+      status: "failed",
+      reason:
+        `GitHub reports a CAA error (${inputs.healthCaaError}) — the zone forbids ` +
+        `the issuing CA, so no window length can succeed. Fix CAA before remediating.`,
+    };
+  }
+
+  // A failed health READ is not evidence of ineligibility — `retry`, never
+  // `failed`. Coalescing an unreachable endpoint to "not eligible" would abort
+  // a healthy remediation on a transient blip, the same fail-open/fail-closed
+  // trap the AAAA and A-record guards above already document.
+  if (inputs.httpsEligibleApex === null || inputs.httpsEligibleWww === null) {
+    return {
+      status: "retry",
+      reason:
+        "pages/health read inconclusive — cannot confirm GitHub considers the " +
+        "domain HTTPS-eligible (could not ask, not a negative answer)",
+    };
+  }
+
+  // BOTH hosts must be eligible: the certificate covers apex AND www as one
+  // order, so an ineligible www fails the whole issuance even with a perfect
+  // apex. Attributed per-host — collapsing them with `&&` would lose which half
+  // is blocking, and www is the half nobody thinks to check.
+  if (!inputs.httpsEligibleApex || !inputs.httpsEligibleWww) {
+    const blocked = [
+      !inputs.httpsEligibleApex ? "apex" : null,
+      !inputs.httpsEligibleWww ? "www" : null,
+    ]
+      .filter(Boolean)
+      .join(" + ");
+    return {
+      status: "retry",
+      reason:
+        `GitHub still reports is_https_eligible=false for ${blocked} — the ` +
+        `DNS-only flip has not registered with GitHub yet. GitHub re-evaluates ` +
+        `on its OWN schedule, so this can lag public DNS by far longer than the ` +
+        `resolvers suggest; that lag is what the 2026-08-16 hand-run mistook for ` +
+        `a permanently wedged authorization.`,
+    };
+  }
+
   return {
     status: "propagated",
-    reason: `public resolvers return GitHub anycast (${inputs.resolved4.join(", ")}), no AAAA, ACME path GitHub-shaped`,
+    reason:
+      `public resolvers return GitHub anycast (${inputs.resolved4.join(", ")}), no AAAA, ` +
+      `ACME path GitHub-shaped, and GitHub reports is_https_eligible=true for apex + www`,
   };
 }
 
@@ -914,6 +998,13 @@ export async function runReissueSteps(
       acmeWwwStatus: dns.acmeWwwStatus,
       acmeApexServer: dns.acmeApexServer,
       acmeWwwServer: dns.acmeWwwServer,
+      // Expected FALSE here — the records are still proxied at this point. The
+      // baseline is what makes the post-flip transition legible: false→true
+      // proves the flip registered with GitHub, and false→false across the whole
+      // window is the 2026-08-16 signature.
+      httpsEligibleApex: dns.httpsEligibleApex,
+      httpsEligibleWww: dns.httpsEligibleWww,
+      healthCaaError: dns.healthCaaError,
       detail: "baseline before the DNS-only flip",
     });
     return dns;
@@ -1010,6 +1101,13 @@ export async function runReissueSteps(
           acmeWwwStatus: inputs.acmeWwwStatus,
           acmeApexServer: inputs.acmeApexServer,
           acmeWwwServer: inputs.acmeWwwServer,
+          // The decisive fields. Emitted per attempt so a future stall is
+          // readable straight off Better Stack: `is_https_eligible=false` on
+          // every tick names the blocker outright, where the 2026-08-16 run left
+          // the operator inferring (wrongly) from a silent cert state.
+          httpsEligibleApex: inputs.httpsEligibleApex,
+          httpsEligibleWww: inputs.httpsEligibleWww,
+          healthCaaError: inputs.healthCaaError,
           ok: v.status === "propagated",
           outcome: v.status,
           detail: v.reason,
@@ -1410,9 +1508,48 @@ export function buildLiveDeps(args: {
           return { status: -1, server: "" };
         }
       };
-      const [apex, www] = await Promise.all([
+      // GitHub's OWN eligibility verdict (2026-08-19). Every other observation
+      // here infers whether GitHub will issue; this asks it. Failure coalesces
+      // to `null` — NOT `false` — so `checkDnsPropagated` can distinguish "GitHub
+      // says no" from "we could not ask", the same fail-open/fail-closed split
+      // the resolver legs above already make.
+      const health = async (): Promise<{
+        apex: boolean | null;
+        www: boolean | null;
+        caaError: string | null;
+      }> => {
+        try {
+          const { Octokit } = await import("@octokit/core");
+          const octokit = new Octokit({ auth: installationToken });
+          const res = await octokit.request(
+            "GET /repos/{owner}/{repo}/pages/health",
+            {
+              owner: REPO_OWNER,
+              repo: REPO_NAME,
+              request: { signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS) },
+            },
+          );
+          const d = res.data as {
+            domain?: { is_https_eligible?: boolean; caa_error?: string | null };
+            alt_domain?: { is_https_eligible?: boolean };
+          };
+          // An ABSENT field is unknown, not false — `?? null` rather than
+          // `?? false`, or a schema change would silently read as ineligible and
+          // stall every future run at the gate.
+          return {
+            apex: d.domain?.is_https_eligible ?? null,
+            www: d.alt_domain?.is_https_eligible ?? null,
+            caaError: d.domain?.caa_error ?? null,
+          };
+        } catch {
+          return { apex: null, www: null, caaError: null };
+        }
+      };
+
+      const [apex, www, eligibility] = await Promise.all([
         probe(APEX_NAME),
         probe(WWW_NAME),
+        health(),
       ]);
       return {
         resolved4,
@@ -1425,6 +1562,9 @@ export function buildLiveDeps(args: {
         // lives in checkDnsPropagated, per this file's gather/check split.
         acmeApexServer: apex.server,
         acmeWwwServer: www.server,
+        httpsEligibleApex: eligibility.apex,
+        httpsEligibleWww: eligibility.www,
+        healthCaaError: eligibility.caaError,
       };
     },
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
