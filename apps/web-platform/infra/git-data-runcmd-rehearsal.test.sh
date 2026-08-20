@@ -279,8 +279,24 @@ if [ "$_first_line" != "#cloud-config" ]; then
   exit 1
 fi
 
-python3 - "$TMP/rendered.yml" "$TMP" <<'PY'
+
+# THE `.code.sh` STRIP, SINGLE-SOURCED (#7613, 5.0). Both extraction sites and the R3(3b)(ii)
+# control read it, so the corpus the arms see and the corpus the control tests are the same
+# bytes by construction rather than by two spellings agreeing.
+#
+# RED VALUE: EMPTY -- i.e. whole-line comments are dropped (as today) and TRAILING ones are
+# not touched at all. That is the mechanism #7613 names, and leaving it at the current value
+# here is what makes the control's failure the defect rather than a bug in the fixture.
+#
+# The GREEN value is `[ \t]+#([ \t].*)?$`, which BLANKS THE TAIL IN PLACE rather than deleting
+# the line -- line numbers must be preserved because R3(1)/(2)/(2b)/(2d) are ordering
+# predicates over them. The `+` prefix (not `*`) is load-bearing: `_b2_strip`'s zero-width
+# form destroys `${var#pat}` -> `${var`, `$#` -> `$`, and `#!/bin/sh` -> empty, all measured.
+_R3_TAIL_STRIP=''
+
+R3_TAIL_STRIP="$_R3_TAIL_STRIP" python3 - "$TMP/rendered.yml" "$TMP" <<'PY'
 import sys, yaml, re
+import os
 d = yaml.safe_load(open(sys.argv[1])); out = sys.argv[2]
 for wf in d["write_files"]:
     if wf["path"] == "/usr/local/bin/git-data-emit":
@@ -336,7 +352,18 @@ open(f"{out}/sshd-stage.sh", "w").write(sshd[0])
 luks = [c for c in d["runcmd"] if isinstance(c, str) and "STAGE=luks_open" in c]
 assert len(luks) == 1, f"expected exactly 1 luks_open runcmd block, found {len(luks)}"
 open(f"{out}/luks-stage.sh", "w").write(luks[0])
-_code = "\n".join(l for l in luks[0].splitlines() if not re.match(r'^\s*#', l))
+_tail = os.environ.get("R3_TAIL_STRIP", "")
+_tre = re.compile(_tail) if _tail else None
+def _strip_code(_t):
+    _out = []
+    for _l in _t.splitlines():
+        if re.match(r'^\s*#', _l):
+            continue                      # whole-line comment: dropped, as before
+        if _tre is not None:
+            _l = _tre.sub("", _l)         # trailing comment: BLANKED IN PLACE, line kept
+        _out.append(_l)
+    return "\n".join(_out)
+_code = _strip_code(luks[0])
 assert "mkfs.ext4" in _code, "comment-stripped luks stage lost its mkfs — strip is too aggressive"
 open(f"{out}/luks-stage.code.sh", "w").write(_code + "\n")
 # The WHOLE runcmd, concatenated the way cloud-init actually runs it. B2 compares against
@@ -350,7 +377,7 @@ open(f"{out}/runcmd-all.sh", "w").write(_all)
 # up: this file's prose discusses `git-data-emit … fatal`, `[ -s "$_detail"` and the literal
 # log path at length, so any regex predicate reading the raw text can be satisfied by the
 # commentary that explains the property instead of the property.
-_all_code = "\n".join(l for l in _all.splitlines() if not re.match(r'^\s*#', l))
+_all_code = _strip_code(_all)
 # NON-VACUITY, mirroring luks-stage.code.sh's `mkfs.ext4` assert one level up (#7264).
 # luks-stage.code.sh has carried this since it was written; THIS file did not, and its four
 # consumers (R3(3b), R3(3c), R3(3d), R3(2d)) are all NEGATIVE-space or ordering predicates —
@@ -1847,9 +1874,41 @@ if [ -n "$_r1_exp" ] && [ "$(date -u +%Y-%m-%d)" \< "$_r1_exp" ]; then pass; els
 # _r3_ln() also fails LOUD on a missing anchor rather than returning empty, because an empty
 # line number silently degrades every comparison below into "skip the check".
 _r3_ln() { grep -n "$1" "$TMP/luks-stage.code.sh" 2>/dev/null | head -1 | cut -d: -f1; }
+
+# THE THREE R3 PREDICATES, SINGLE-SOURCED (#7613). Each is used by the production arm AND by
+# its negative control below, so the control cannot certify a spelling the arm no longer uses
+# -- the hand-copied-fourth-spelling failure this file's B1 comment already warns about, one
+# level down. Changing a value here moves the arm and its control together, which is what
+# makes the control's RED and GREEN mean anything.
+#
+# _R3_SEED_PAT is DELIBERATELY the unanchored form at the commit that introduces these
+# controls, so their failure is the defect rather than a bug in the fixtures.
+_R3_SEED_PAT='GIT_DATA_LUKS_DETAIL='
+# The guard-shape predicate R3(3b)(ii) uses, exported into the python heredoc rather than
+# restated there.
+_R3_GUARD_PAT='\[\s+-[rs]\s+"?'
+# R3(2d)'s seed anchor. It is ALREADY anchored -- this arm is the reference the other seven
+# are being moved to -- so single-sourcing it does not change its value. What it buys is that
+# a future de-anchoring reds R3(2d)'s own control instead of silently widening the model.
+_R3_R2D_PAT='^[[:space:]]*GIT_DATA_RUNCMD_DETAIL='
+
+# R3(3b)(i)'s reporting-site predicate. RED VALUE: a bare count floor, which is what ships
+# today. The property is a SET -- delete one reporting site, add an unrelated one, and the
+# count is unchanged while the property is violated. Sub-assertion (iv) already does message-
+# set equality for fatals and is the model this is being moved to.
+_R3B_EXPECTED_SITES='gitdata_doppler_dl
+gc_timer
+luks_open
+provision
+sshd_config
+volume_mount'
+_r3b_sites_ok() {  # $1 = newline-separated site names; 0 = accept, 1 = reject
+  [ "$(printf '%s\n' "$1" | grep -c . || true)" -ge 6 ]
+}
+
 if [ -s "$TMP/luks-stage.code.sh" ]; then
   # (1) the stage passes a seeded detail file, not the cloud-init log, to the emitter.
-  _r3_seed_ln=$(_r3_ln 'GIT_DATA_LUKS_DETAIL=')
+  _r3_seed_ln=$(_r3_ln "$_R3_SEED_PAT")
   _r3_trap_ln=$(_r3_ln '^[[:space:]]*trap luks_err EXIT')
   if [ -n "$_r3_seed_ln" ]; then pass; else
     fail "R3(1): the luks_open stage does not seed a detail file (no GIT_DATA_LUKS_DETAIL= assignment in CODE)" \
@@ -1878,7 +1937,7 @@ if [ -s "$TMP/luks-stage.code.sh" ]; then
   sed -e 's|^\([[:space:]]*\)GIT_DATA_LUKS_DETAIL=\(.*\)$|\1: # seed relocated by R3(2c)|' \
     "$TMP/luks-stage.code.sh" > "$_r3_mut"
   printf 'GIT_DATA_LUKS_DETAIL=/run/git-data-luks-stage.log\n' >> "$_r3_mut"
-  _mut_seed=$(grep -n 'GIT_DATA_LUKS_DETAIL=' "$_r3_mut" | head -1 | cut -d: -f1)
+  _mut_seed=$(grep -n "$_R3_SEED_PAT" "$_r3_mut" | head -1 | cut -d: -f1)
   _mut_app=$(grep -n '2>>"\?\$GIT_DATA_LUKS_DETAIL' "$_r3_mut" | head -1 | cut -d: -f1)
   if [ -n "$_mut_seed" ] && [ -n "$_mut_app" ] && [ "$_mut_seed" -gt "$_mut_app" ]; then pass; else
     fail "R3(2c) MUTATION did not land: relocated seed=${_mut_seed:-none} first-append=${_mut_app:-none}, expected seed AFTER append" \
@@ -1888,6 +1947,141 @@ else
   fail "R3: skipped (luks stage not extracted)"; fail "R3: skipped (luks stage not extracted)"
   fail "R3: skipped (luks stage not extracted)"; fail "R3: skipped (luks stage not extracted)"
 fi
+
+# ── R3 PER-ARM COMMENT-SATISFACTION CONTROLS (#7613) ────────────────────────────────
+#
+# THE MECHANISM, MEASURED. The `.code.sh` corpora are stripped of WHOLE-LINE comments only
+# (`^\s*#` at the two extraction sites; the template's own strip is the same shape). So every
+# "a comment cannot satisfy this predicate" argument resting on `.code.sh` is narrower than
+# stated, and the shape is live rather than theoretical: the render carries
+# `STAGE=volume_mount # (#6982) name the stage …` today.
+#
+# WHY EIGHT CONTROLS AND NOT ONE. The predicates are shared, so one fix re-flows every
+# consumer at once -- which is precisely why a single control would be the wrong evidence.
+# Each arm has its own hijackable token and its own failing direction, and an arm that is
+# ALREADY anchored must be shown to STAY correct rather than assumed to. The budget is paid
+# per arm: one negative control each, over four fixtures plus two variants.
+#
+# EVERY CONTROL DRIVES THE PRODUCTION PREDICATE, not a restatement of it. They read
+# `$_R3_SEED_PAT` / `$_R3_GUARD_PAT` -- the same variables the arms read -- so changing a
+# predicate moves the arm and its control together. A control that hard-coded its own spelling
+# could certify an anchoring the arms no longer use, which is the hand-copied-fourth-spelling
+# failure this file already warns about one level up.
+#
+# They are pure text over files in $TMP; no container.
+_r3c_dir="$TMP/r3controls"; mkdir -p "$_r3c_dir"
+_r3_ln_in() { grep -n "$2" "$1" 2>/dev/null | head -1 | cut -d: -f1; }
+
+# ── FIXTURE A — the real seed relocated BELOW the trap, with a trailing comment naming the
+#    token left ABOVE it. Finding (1): with an unanchored `head -1` the comment hijacks the
+#    line number and R3(1)/(2)/(2b) report the seed early when it is late.
+_fxA="$_r3c_dir/A.code.sh"
+if [ -s "$TMP/luks-stage.code.sh" ]; then
+  awk '
+    /^[[:space:]]*GIT_DATA_LUKS_DETAIL=/ && !moved { held = $0; moved = 1; next }
+    /^[[:space:]]*trap luks_err EXIT/ {
+      print "  : # seed for GIT_DATA_LUKS_DETAIL= is documented above this trap"
+      print $0
+      if (moved) { print held }
+      next
+    }
+    { print }
+  ' "$TMP/luks-stage.code.sh" > "$_fxA"
+else
+  : > "$_fxA"
+fi
+_a_seed=$(_r3_ln_in "$_fxA" "$_R3_SEED_PAT")
+_a_real=$(_r3_ln_in "$_fxA" '^[[:space:]]*GIT_DATA_LUKS_DETAIL=')
+_a_trap=$(_r3_ln_in "$_fxA" '^[[:space:]]*trap luks_err EXIT')
+_a_app=$(_r3_ln_in "$_fxA" '2>>"\?\$GIT_DATA_LUKS_DETAIL')
+
+# A1 — R3(1): the ARM's seed lookup must resolve to the real seed, not to prose about it.
+if [ -n "$_a_seed" ] && [ "$_a_seed" = "${_a_real:-}" ]; then pass; else
+  fail "R3(1) CONTROL: the arm's seed predicate resolves to line ${_a_seed:-none}; the real seed is at line ${_a_real:-none} — a trailing comment naming the token has hijacked it" \
+       "An unanchored head -1 over a whole-line-only-stripped corpus cannot tell the seed from prose about the seed."; fi
+
+# A2 — R3(2): with the real seed below the first append, the ARM's ordering check must see
+# the violation. It cannot while its own lookup is pointing at the comment.
+if [ -n "$_a_seed" ] && [ -n "$_a_app" ] && [ "$_a_seed" -gt "$_a_app" ]; then pass; else
+  fail "R3(2) CONTROL: seed=${_a_seed:-none} append=${_a_app:-none} — the ordering check does not report a seed that sits after the first append" \
+       "R3(2)'s green certifies nothing if the mutated direction still reads as ordered."; fi
+
+# A3 — R3(2b): same, against the trap.
+if [ -n "$_a_seed" ] && [ -n "$_a_trap" ] && [ "$_a_seed" -gt "$_a_trap" ]; then pass; else
+  fail "R3(2b) CONTROL: seed=${_a_seed:-none} trap=${_a_trap:-none} — the ordering check does not report a seed that sits after the trap" \
+       "A seed after the trap makes luks_err abort on an unbound variable under set -u, so the stage emits NOTHING — strictly worse than the causeless fatal R3(2b) exists to prevent."; fi
+
+# ── FIXTURE A' — R3(2c) is the R3(2) family's own negative control, so it must discriminate
+#    on a corpus whose FIRST line is a decoy comment; otherwise it certifies either spelling.
+_fxAp="$_r3c_dir/Aprime.code.sh"
+{ printf 'x=1 # GIT_DATA_LUKS_DETAIL=/decoy\n'; cat "$_fxA" 2>/dev/null; } > "$_fxAp"
+_ap_seed=$(_r3_ln_in "$_fxAp" "$_R3_SEED_PAT")
+if [ "${_ap_seed:-0}" != "1" ]; then pass; else
+  fail "R3(2c) CONTROL: the arm's predicate resolves to line 1, which is a decoy comment — R3(2c) would certify a spelling that reads prose" \
+       "R3(2c) is the negative control for the whole R3(2) family; if it cannot tell code from commentary the family has no model."; fi
+
+# ── FIXTURE B — a real `[ -s "$_luks_detail" ]` guard DELETED, a trailing comment naming it
+#    left behind. Finding (2): a regex over the stripped corpus reports GUARDED from prose.
+_fxB="$_r3c_dir/B.code.sh"
+# NOTE THE `$`. The arm derives its search name as `arg4.strip('"'"'"'"'"')`, which KEEPS the
+# leading dollar -- the name is `$_luks_detail`, not `_luks_detail`. The first draft of this
+# control dropped it and therefore PASSED against the very defect it was written for: a
+# fixture that cannot match real code cannot detect a predicate that matches prose.
+printf 'git-data-emit stage level msg "$_luks_detail"   # guarded by [ -s "$_luks_detail" ] upstream\n' > "$_fxB"
+# STRIP FIRST, THEN SEARCH -- which is what production does. Feeding gpat a RAW fixture would
+# test gpat in isolation and could never be flipped by the stripper change that actually
+# closes this. The control therefore runs the arm's own stripper over the fixture and then the
+# arm's own guard predicate over the result.
+_b_hits=$(R3_GUARD_PAT="$_R3_GUARD_PAT" R3_TAIL_STRIP="$_R3_TAIL_STRIP" python3 -c '
+import os, re, sys
+tail = os.environ.get("R3_TAIL_STRIP", "")
+tre = re.compile(tail) if tail else None
+out = []
+for l in open(sys.argv[1]).read().splitlines():
+    if re.match(r"^\s*#", l):
+        continue
+    if tre is not None:
+        l = tre.sub("", l)
+    out.append(l)
+pat = re.compile(os.environ["R3_GUARD_PAT"] + re.escape("$_luks_detail"))
+print(len(pat.findall("\n".join(out))))
+' "$_fxB" 2>/dev/null || echo 0)
+if [ "${_b_hits:-1}" = "0" ]; then pass; else
+  fail "R3(3b)(ii) CONTROL: the arm's guard predicate found ${_b_hits} match(es) on a corpus whose ONLY occurrence of the guard shape is a trailing comment — deleting a real guard and leaving prose about it reports GUARDED" \
+       "That reopens the literal-leak branch the guard exists to close."; fi
+
+# ── FIXTURE B' — R3(3d): a trailing comment matching the deletion sed's shape must not be
+#    what the mutation lands on, or the arm's cmp -s did-not-land guard never fires.
+_fxBp="$_r3c_dir/Bprime.code.sh"
+printf 'keep=1\nother=2   # [ -s "$_luks_detail" ] mentioned only in prose here\n' > "$_fxBp"
+_bp_mut="$_r3c_dir/Bprime.mut.sh"
+sed -e '/^[[:space:]]*[^#]*\[[[:space:]]\+-s[[:space:]]\+"\?\$\?_luks_detail/d' "$_fxBp" > "$_bp_mut"
+if cmp -s "$_fxBp" "$_bp_mut"; then pass; else
+  fail "R3(3d) CONTROL: the deletion sed changed a corpus whose only mention of the guard is a trailing comment — the mutation landed on prose, so the did-not-land guard would not fire and the mutant would score as a real deletion" \
+       "A mutation that lands on a comment measures nothing about the code."; fi
+
+# ── FIXTURE C — one reporting site deleted and one unrelated site added. Finding (3): a
+#    `>= 6` COUNT floor holds across that swap; the property is a SET.
+_fxC_b="$_r3c_dir/C_before"; _fxC_a="$_r3c_dir/C_after"
+printf 'luks_open\nvolume_mount\nsshd_config\ngitdata_doppler_dl\ngc_timer\nprovision\n' > "$_fxC_b"
+printf 'luks_open\nvolume_mount\nsshd_config\ngitdata_doppler_dl\ngc_timer\nZZZ_unrelated\n' > "$_fxC_a"
+# Drive the ARM's OWN predicate over both corpora. The complete set must be ACCEPTED and the
+# swapped one REJECTED; a count floor accepts both, which is the defect.
+_c_ok_before=1; _r3b_sites_ok "$(cat "$_fxC_b")" && _c_ok_before=0
+_c_ok_after=1;  _r3b_sites_ok "$(cat "$_fxC_a")" && _c_ok_after=0
+if [ "$_c_ok_before" -eq 0 ] && [ "$_c_ok_after" -ne 0 ]; then pass; else
+  fail "R3(3b)(i) CONTROL: the arm's site predicate accepted the complete set (rc=${_c_ok_before}) and the swapped set (rc=${_c_ok_after}) alike — one reporting site was deleted and an unrelated one added, and it could not tell" \
+       "A floor is not a set. Sub-assertion (iv) already does message-set equality for fatals and is the model this should follow."; fi
+
+# ── FIXTURE D — R3(2d) is the CONTROL PROVING THE ANCHORING STYLE WORKS, so its RED is a
+#    mutation of its own anchor and its behaviour must otherwise be unchanged.
+_fxD="$_r3c_dir/D.code.sh"
+printf 'noise=0 # GIT_DATA_RUNCMD_DETAIL=/decoy\nGIT_DATA_RUNCMD_DETAIL=/run/git-data-runcmd.log\n' > "$_fxD"
+_d_anch=$(_r3_ln_in "$_fxD" "$_R3_R2D_PAT")
+_d_bare=$(_r3_ln_in "$_fxD" 'GIT_DATA_RUNCMD_DETAIL=')
+if [ "${_d_anch:-0}" = "2" ] && [ "${_d_bare:-0}" = "1" ]; then pass; else
+  fail "R3(2d) CONTROL: anchored returned ${_d_anch:-none} (expected 2), bare returned ${_d_bare:-none} (expected 1) — the arm that demonstrates the anchoring style is not demonstrating it" \
+       "R3(2d) is the reference the other seven arms are being moved to; if it stops discriminating the family loses its model."; fi
 
 # ── R3(3) + R4 — drive the EXTRACTED emitter against the capture endpoint ────────────
 #
@@ -2203,8 +2397,8 @@ _R3B_SRC="$TMP/runcmd-all.code.sh"
 # A verdict with no demonstrated failing direction certifies nothing — that is the defect
 # this whole family exists to correct, and it would be self-defeating to re-create it here.
 _r3b_analyze() {  # $1 = comment-stripped shell; one `site|level|isvar|guarded|arg4|msg` row per emit
-  python3 - "$1" <<'PY' 2>&1 || true
-import re, sys, shlex
+  R3_GUARD_PAT="$_R3_GUARD_PAT" python3 - "$1" <<'PY' 2>&1 || true
+import os, re, sys, shlex
 src = open(sys.argv[1]).read()
 joined = re.sub(r'\\\n\s*', ' ', src)          # fold line continuations
 lines = joined.splitlines()
@@ -2252,7 +2446,7 @@ for i, l in enumerate(lines):
         # DETAIL=[], a verdict with no cause — #7204's defect), so pinning -r alone would
         # red the correct fix. Bounded to [wstart, epos): a guard belonging to a DIFFERENT
         # handler, or one placed after the emit, protects nothing here.
-        gpat = re.compile(r'\[\s+-[rs]\s+"?' + re.escape(name))
+        gpat = re.compile(os.environ.get("R3_GUARD_PAT", r'\[\s+-[rs]\s+"?') + re.escape(name))
         guarded = "GUARDED" if gpat.search(joined, wstart, offs[i]) else "UNGUARDED"
     print("|".join([wname, level.strip('"'), isvar, guarded, arg4, msg]))
 PY
@@ -2368,7 +2562,7 @@ fi
 # own comment claims. Echoes 1 when the ordering holds, 0 otherwise.
 _r2d_ordered() {  # $1 = comment-stripped concatenated runcmd
   local s t a
-  s=$(grep -n '^[[:space:]]*GIT_DATA_RUNCMD_DETAIL=' "$1" | head -1 | cut -d: -f1)
+  s=$(grep -n "$_R3_R2D_PAT" "$1" | head -1 | cut -d: -f1)
   t=$(grep -n '^[[:space:]]*trap on_err EXIT[[:space:]]*$' "$1" | head -1 | cut -d: -f1)
   a=$(grep -n '2>>"\$GIT_DATA_RUNCMD_DETAIL"' "$1" | head -1 | cut -d: -f1)
   if [ -n "$s" ] && [ -n "$t" ] && [ -n "$a" ] && [ "$s" -lt "$t" ] && [ "$s" -lt "$a" ]; then
