@@ -1333,6 +1333,12 @@ The ADR amendment, the C4 corrections and the principles-register AP-019 note al
 **PR1**, ahead of the cutover — the statements they correct become false at the moment PR3
 lands, and the disarmament they describe must exist before then.
 
+**Issue closure is PR3's alone.** The frontmatter `closes: 7640` names the work item, not the
+merge that resolves it. Only **PR3** carries `Closes #7640` in its body; **PR1 and PR2 cite
+`Refs #7640`** and must not use a closing keyword. Closing the issue at PR1 would mark the
+migration done while the site is still served by GitHub Pages and the cutover has not
+happened — and it would retire the tracking issue that PR2 and PR3 are sequenced against.
+
 ## Test Scenarios
 
 | # | Scenario | Expected |
