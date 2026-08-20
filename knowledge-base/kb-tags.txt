@@ -142,6 +142,7 @@ adr-149
 adr-151
 adr-155
 adr-166
+adr-193
 adr-corpus
 adr-drift
 adr-hygiene
@@ -1325,6 +1326,7 @@ error-mapping
 esbuild
 escape-hatch
 escaping
+eslint
 esm
 esm-hooks
 etag
