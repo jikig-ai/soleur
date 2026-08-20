@@ -342,7 +342,12 @@ else
   INH_OUT=$(cd "$REPO_ROOT" && env SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
             TEST_TIMING_LOG="$TMP/arm-timing-inherited.tsv" \
             TC_PROC_ROOT="$SOLO_PROC_F" TC_SIBLING_RUN_COUNT=9 \
-            timeout 120 bash "$NOLIB_SANDBOX" 2>&1) || true
+            timeout 120 bash "$NOLIB_SANDBOX" 2>&1)
+  # NO `|| true`. `$?` after it reads TRUE's status, not the command's, so INH_RC was
+  # pinned at 0 and the `-ne 4` assertion below became a tautology printing a fabricated
+  # `rc=0` as evidence — a constant satisfying the assertion that pins this PR's own
+  # thesis. This suite runs `set -uo pipefail` with NO errexit, which is exactly why
+  # run_arm captures ARM_RC the same bare way.
   INH_RC=$?
   INH_SUITES=$(wc -l < "$SANDBOX_RECORD" | tr -d '[:space:]')
   if [[ "$INH_RC" -ne 4 ]]; then

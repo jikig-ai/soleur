@@ -473,7 +473,15 @@ tc_preamble() {
   # which therefore measured nothing at all. A policy reading the bare count cannot tell "I
   # measured 4 siblings" from "an ancestor measured 4 siblings and told me", which is the
   # DECLARED antecedent ADR-194 exists to move away from. This stamp is what makes the count
-  # this process's own measurement; it does not survive a fork/exec, which is exactly the point.
+  # this process's own measurement.
+  #
+  # What actually protects the invariant is that `$$` DIFFERS in a forked child — not that the
+  # variable fails to propagate. Bash retains the export attribute on a name already present in
+  # the environment, so a plain `VAR=$$` on an inherited-and-exported name stays exported
+  # (measured: `export V=x; bash -c 'V=$$; ...'` leaves V exported). `export -n` first, so the
+  # stamp cannot be carried into a child that did no measuring of its own. Both mechanisms are
+  # needed, and only the `$$` one is load-bearing.
+  export -n TC_SIBLING_RUN_COUNT_PID 2>/dev/null || true
   # shellcheck disable=SC2034  # read by scripts/test-all.sh, which SOURCES this lib, so the
   # variable is in scope there; it is deliberately NOT exported, which is the whole point.
   TC_SIBLING_RUN_COUNT_PID=$$
