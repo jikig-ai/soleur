@@ -248,7 +248,10 @@ assert "T2 names the 30s deadline from the variable, never a literal 230" \
   "[[ \"\$OUT\" == *'no beat within 30s'* ]]"
 assert "T2 does NOT tell the reader the probe is broken (the pre-#7587 instruction)" \
   "[[ \"\$OUT\" != *'the probe or the private-net path is broken'* ]]"
-assert "T2 emits the observed status so 'never beat' is distinguishable" \
+# The fixture makes an unpaused-but-unfed monitor read `pending`; what is asserted is that the SUT
+# ECHOES whatever status it observed, not that `pending` is the value Better Stack would return —
+# this change measured no vendor semantics and the message claims none.
+assert "T2 echoes the observed status so 'never beat' is distinguishable from 'not due yet'" \
   "[[ \"\$OUT\" == *'status=pending'* ]]"
 assert "T2 emits the monitor's updated_at as the second discriminator" \
   "[[ \"\$OUT\" == *'updated_at=2026-08-20T09:15:00.000Z'* ]]"
@@ -375,6 +378,7 @@ mutate() {  # <name> <sed-expr> -> 0 and sets MUTANT, or 1
 }
 
 # M1 — revert the wall-clock accounting to the pre-#7587 sleep tally (Guard 2 row 6).
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
 if mutate wallclock 's|elapsed=\$(( \$(now_s) - started ))|elapsed=$(( elapsed + ARM_POLL_INTERVAL_S ))|g'; then
   case_setup m1
   printf 'paused' > "$FAKE_STATE/$ID_ZOT1.status"
@@ -386,6 +390,7 @@ if mutate wallclock 's|elapsed=\$(( \$(now_s) - started ))|elapsed=$(( elapsed +
 fi
 
 # M2 — flip the rollback to paused:false (Guard 2 row 7 at the script layer).
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
 if mutate unpause-rollback 's|hb_patch_paused "\$id" true|hb_patch_paused "$id" false|'; then
   case_setup m2
   printf 'paused' > "$FAKE_STATE/$ID_INNGEST.status"
@@ -395,6 +400,7 @@ if mutate unpause-rollback 's|hb_patch_paused "\$id" true|hb_patch_paused "$id" 
 fi
 
 # M3 — stop recording the id at the unpause, which is what a "remove on attempt" design amounts to.
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
 if mutate no-state-add 's|^  state_add "\$id"$|  : "state_add removed by mutation"|'; then
   case_setup m3
   printf 'paused' > "$FAKE_STATE/$ID_INNGEST.status"
@@ -405,6 +411,7 @@ if mutate no-state-add 's|^  state_add "\$id"$|  : "state_add removed by mutatio
 fi
 
 # M4 — soft-land a FAILED rollback back to rc=2, the pre-#7587 behaviour.
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
 if mutate soft-failed-rollback 's|^    return 1$|    return 2|'; then
   case_setup m4
   printf 'paused' > "$FAKE_STATE/$ID_INNGEST.status"
@@ -414,6 +421,7 @@ if mutate soft-failed-rollback 's|^    return 1$|    return 2|'; then
 fi
 
 # M5 — restore the 230s inngest deadline.
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
 if mutate deadline-230 's|^ARM_INNGEST_DEADLINE=30$|ARM_INNGEST_DEADLINE=230|'; then
   case_setup m5
   printf 'paused' > "$FAKE_STATE/$ID_INNGEST.status"

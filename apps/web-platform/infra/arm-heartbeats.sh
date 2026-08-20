@@ -252,10 +252,13 @@ if [[ "$arc" -eq 2 ]]; then
   # the private-net path is broken". Against a 30 s window and a 180 s period a HEALTHY feeder
   # produces this warning roughly five runs in six, so the old instruction would send an
   # operator to debug a surface that is working. What replaces it is the two observed fields
-  # that actually discriminate: `status` (a heartbeat that has never received a beat since the
-  # unpause reads `pending`; one that beat and then lapsed reads `down`) and the monitor's own
-  # `updated_at` as Better Stack reports it.
-  echo "::warning::inngest-consumer: no beat within ${ARM_INNGEST_DEADLINE}s (elapsed ${ARM_ELAPSED}s); monitor rolled back to paused. Observed at rollback: status=${ARM_LAST_STATUS:-unknown} updated_at=${ARM_LAST_UPDATED_AT:-unreported}. This arm polls for ${ARM_INNGEST_DEADLINE}s against a 180s feeder period, so a HEALTHY feeder misses roughly five windows in six — on its own this warning is not a fault. status=pending means no beat has arrived since the unpause, which is the expected state while the 10.0.1.40 bind failure (#7228) is open; any other non-up status means Better Stack saw something else and is worth reading before assuming the feeder is dark. It arms automatically on the first apply whose window catches a beat."
+  # that actually discriminate: the monitor's `status` and its `updated_at`, both as Better Stack
+  # reported them at rollback. Deliberately NOT paraphrased into a claim about what each status
+  # VALUE means — this repo's verified enumeration is only that `up`/`pending`/`down`/`paused` all
+  # occur (see the op/state gate above); the precise semantics of `pending` versus `down` here is
+  # not something this change measured, so the message reports the observed values and leaves the
+  # reading to whoever has the dashboard open.
+  echo "::warning::inngest-consumer: no beat within ${ARM_INNGEST_DEADLINE}s (elapsed ${ARM_ELAPSED}s); monitor rolled back to paused. Observed at rollback: status=${ARM_LAST_STATUS:-unknown} updated_at=${ARM_LAST_UPDATED_AT:-unreported}. This arm polls for ${ARM_INNGEST_DEADLINE}s against a 180s feeder period, so a HEALTHY feeder misses roughly five windows in six — on its own this warning is not a fault. Read the two fields rather than assuming: they are what Better Stack reported at rollback, and together they separate 'the feeder never beat' from 'a beat was simply not due inside our window' — which a bare boolean cannot. While the 10.0.1.40 bind failure (#7228) is open no beat can land at all, so a status that never leaves the not-yet-up family is the expected reading. It arms automatically on the first apply whose window catches a beat."
 elif [[ "$arc" -ne 0 ]]; then
   rc=1
 fi
