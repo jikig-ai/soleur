@@ -764,6 +764,26 @@ cases=$((cases + 1))
 if [[ "$(wc -l < "$SINK")" == "0" ]]; then pass "AC20/M23 an unwritable evidence channel refuses the reap"
 else fail "AC20/M23 signalled with no evidence record"; fi
 
+# AC20/M27 — EVIDENCE ORDERING, asserted at the source because a mutation
+# cannot express "move this call below that one" as a single-line edit and the
+# battery refuses multi-line edits by construction.
+#
+# The record must PRECEDE the signal for a specific reason rather than out of
+# general caution: after a successful kill the /proc entry is GONE, so the
+# evidence links can never be re-examined by anyone — and the victim class has
+# unrecoverable output by construction, so this is the only record that a false
+# positive ever happened. A record written after the signal names a pid whose
+# links are already unrecoverable.
+cases=$((cases + 1))
+_body="$(awk '/^signal_one\(\)/{f=1} f{print NR": "$0} f&&/^}/{exit}' "$REAPER")"
+_ev="$(awk -F: '/evidence_write "\$rec"/{print $1; exit}' <<<"$_body")"
+_sig="$(awk -F: '/kill -TERM|SIGNAL_SINK" 2>\/dev\/null/{print $1; exit}' <<<"$_body")"
+if [[ -n "$_ev" && -n "$_sig" && "$_ev" -lt "$_sig" ]]; then
+  pass "AC20/M27 the evidence write precedes every signal site in signal_one"
+else
+  fail "AC20/M27 evidence ordering is not provable (evidence line=${_ev:-?}, signal line=${_sig:-?})"
+fi
+
 # AC28g — EVIDENCE-CHANNEL LIVENESS, probed once at startup and printed.
 R="$(fp_new ac28g)"
 mk_anchor "$R" 4242
@@ -1315,7 +1335,7 @@ fi
 # therefore valid in both. Full runs carry 8 more assertions (the live-procfs
 # arm and the seven end-to-end hops); those eight are not floored here, and that
 # slack is the price of one threshold that is correct under both modes.
-MIN_CASES=132
+MIN_CASES=133
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '\n[FATAL] assertion floor: %d assertions ran, expected at least %d.\n' \
     "$cases" "$MIN_CASES" >&2
