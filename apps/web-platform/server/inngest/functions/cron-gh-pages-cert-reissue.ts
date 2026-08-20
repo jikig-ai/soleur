@@ -32,6 +32,16 @@
 // self-reverting, single-attempt, human-gated). Registered as AP-019 in
 // principles-register.md and governed by ADR-125.
 //
+// ‼️ The "self-reverting" ground is VOID from the #7640 apex cutover onward, and
+// that is what the apex-topology precondition below exists to enforce. Once the
+// apex is a CNAME, listToggleRecords() — which queries exactly [apex, "A"] and
+// [www, "CNAME"] — returns fewer than EXPECTED_TOGGLE_RECORDS (5), so
+// restoreStateInner refuses to restore a subset and the de-proxying of www
+// becomes ONE-WAY. The routine's own fail-loud safety guarantee is precisely
+// what removes the self-reversion this exception was granted for. The other four
+// AP-019 grounds are unaffected; see principles-register.md ## Notes for the
+// scope of the void and the condition that lifts it.
+//
 // v1 = manual-trigger only (POST /api/internal/trigger-cron). Self-heal
 // auto-invoke + a drift/apply freeze-lock are deferred to a flag-gated v2
 // (CTO ruling 2026-07-18: no runtime freeze-lock substrate exists; v1 accepts
