@@ -1155,8 +1155,12 @@ the criterion pins a shape rather than a value and says so.
 37. `plugins/soleur/scripts/lib/proc.sh` changes by **comment only**: the diff adds no non-comment line, and
     `bash plugins/soleur/test/proc.test.sh` passes. The comment records that the bare suffix test is falsifiable
     by a directory literally named `… (deleted)`, that its failure direction there is a refusal, and that the
-    reaper asks a different question. It cites no undefined ordinal: `proc.sh`'s single `D6` mention names a
-    failure mode and D6 is defined nowhere in the shared corpus, so the term is not written into a shipped file.
+    reaper asks a different question. It introduces no plan-local label into a shipped file. `proc.sh` already
+    carries one such mention — `i.e. the D6 failure mode` — and the correction here is to the *reason*, not the
+    instruction: an earlier draft asserted D6 was defined nowhere, which is false. It is defined in the
+    archived plan that built `proc.sh`, and **also** in ADR-068 and two other plans, each time meaning
+    something different. A label whose definition depends on which plan you happen to be reading is worse than
+    an undefined one, so the reaper's comment names the behaviour rather than borrowing the tag.
 38. `bash scripts/orphan-process-reaper.sh report` against the real `/proc` exits 0, reports `valid=1`, and
     reports `scanned` greater than zero. It deliberately asserts no finding count: a real orphan at
     verification time is ambient state. What this pins is that the walk executes against a real procfs at all —
