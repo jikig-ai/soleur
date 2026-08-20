@@ -24,8 +24,8 @@ jobs:
         with:
           fetch-depth: 2
 
-      - name: Install jq
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq
+      - name: Assert jq present (runner-image dependency — no install, no network)
+        run: jq --version
 
       - name: Detect merged HIGH-RISK skills without override
         env:
