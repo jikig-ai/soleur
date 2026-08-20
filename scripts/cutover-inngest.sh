@@ -316,6 +316,24 @@ diag_boot_decide() {
   esac
 }
 
+# G3's terminal ACTION, separated from its message text (#7462 review). The dispatcher used to
+# carry `exit 1` inside each refusal arm, which meant nothing tested that a refusal actually
+# aborts: stripping `exit 1` from all four arms turned G3 into a pure logger — every refusal
+# printed its ::error:: and fell through to the prod write — with the whole suite green. Now the
+# arms only choose the MESSAGE and a single gate below decides abort-vs-proceed, so the decision
+# is drivable by a test and there is one exit to pin instead of four.
+#
+#   $1  an outcome token from g3_decide
+# Outcomes: abort | proceed   (unknown tokens abort — fail-closed)
+#
+# Same extraction contract as g3_decide: signature and closing brace at column 0.
+g3_action() {
+  case "$1" in
+    skip-already-current|write) printf '%s' 'proceed'; return 0 ;;
+    *) printf '%s' 'abort'; return 0 ;;
+  esac
+}
+
 g3_decide() {
   local pg="$1" pg_dark="$2"
 
@@ -338,30 +356,50 @@ g3_decide() {
   # Positive prod-project pin (C3/D3). This is the SOLE remaining guard against arming onto
   # a non-prod Postgres now that equality no longer refuses — mutation-tested accordingly.
   #
-  # Pin the DESTINATION, not a substring (#7462 review). Two earlier forms were defeated:
-  # a bare `*<ref>*` accepted the ref in a password/dbname/query param, and pinning only the
-  # pooler USERNAME (`*://postgres.<ref>:*`) accepted the prod username in front of ANY host —
-  # measured, `postgres.<prod-ref>` in front of host `db.<dev-ref>.supabase.co`
-  # returned `write`, i.e. armed onto the dev project, which is precisely what this guard
-  # exists to prevent. The username is a client-supplied field; only the authority decides
-  # where the connection lands.
+  # Pin the DESTINATION by parsing the AUTHORITY (#7462 review, third revision). Three earlier
+  # forms were each defeated, all measured against the shipped function:
+  #   1. a bare `*<ref>*` substring — accepted the ref in a password, dbname or query param;
+  #   2. pinning the pooler USERNAME — accepted `postgres.<prod-ref>` in front of ANY host,
+  #      including `db.<dev-ref>.supabase.co`, i.e. armed onto the dev project;
+  #   3. globbing the whole DSN for `*@*.pooler.supabase.com:5432/*` — the `*` after `@` spans
+  #      the host AND the path, so the tail matched inside the PATH or QUERY while the real host
+  #      was attacker-controlled (`…@attacker.example.com/x.pooler.supabase.com:5432/postgres`).
   #
-  # Three conjuncts, all MEASURED against the live prd_terraform value (1 '@', no ','
-  # no 'host='), so none of them refuses the legitimate DSN:
-  #   1. exactly one '@' — Go's net/url splits userinfo at the LAST '@' and permits '@'
-  #      inside it, so a second one relocates the host past any prefix match.
-  #   2. no ',' and no 'host=' — libpq/pgx accept multi-host lists and a `host=` connection
-  #      parameter, either of which overrides the URI authority after it has been checked.
-  #   3. the authority itself is anchored from the start of the string, on the Supabase
-  #      suffix, with the session-pooler port required in the authority rather than merely
-  #      present somewhere in the value.
-  if [[ "${pg//[!@]/}" != "@" ]]; then printf '%s' 'refuse-not-prod-project'; return 0; fi
-  case "$pg" in
-    *,*|*host=*) printf '%s' 'refuse-not-prod-project'; return 0 ;;
+  # A glob over the whole string cannot express "the authority is X", because every wildcard can
+  # cross the delimiters that define it. So extract the authority and match THAT, whole. Pure
+  # bash, no subprocesses, no I/O. Every predicate below was MEASURED against the live
+  # prd_terraform value so none of them refuses the legitimate DSN.
+  local _rest _auth _user _hostport _low
+  _low="${pg,,}"
+  # Connection-parameter overrides relocate the destination AFTER any authority check. Matched
+  # case-insensitively and in percent-encoded form, because `?HOST=` and `%3d` both reach libpq.
+  case "$_low" in
+    *host=*|*host%3d*|*options=*|*service=*) printf '%s' 'refuse-not-prod-project'; return 0 ;;
   esac
   case "$pg" in
-    postgresql://postgres.pigsfuxruiopinouvjwy:*@*.pooler.supabase.com:5432/*) : ;;
-    postgresql://*@db.pigsfuxruiopinouvjwy.supabase.co:5432/*) : ;;
+    postgresql://*|postgres://*) : ;;
+    *) printf '%s' 'refuse-not-prod-project'; return 0 ;;
+  esac
+  _rest="${pg#*://}"
+  _auth="${_rest%%/*}"        # authority ends at the first '/'
+  _auth="${_auth%%\?*}"       # ...or at the first '?' when there is no path
+  # Exactly one '@' INSIDE the authority. Go's net/url splits userinfo at the last '@' and
+  # permits '@' within it, so a second one relocates the host past any prefix match.
+  if [[ "${_auth//[!@]/}" != "@" ]]; then printf '%s' 'refuse-not-prod-project'; return 0; fi
+  _user="${_auth%@*}"
+  _hostport="${_auth##*@}"
+  # A comma in the authority is a multi-host list; the first entry wins.
+  case "$_hostport" in *,*) printf '%s' 'refuse-not-prod-project'; return 0 ;; esac
+  # Accept exactly two destinations, matched whole against the extracted host:port.
+  #   - session pooler: user must carry the prod ref, host must be a Supabase pooler on :5432
+  #   - direct host:    the prod ref IS the host, so the username is irrelevant
+  case "$_hostport" in
+    *.pooler.supabase.com:5432)
+      case "$_user" in
+        postgres.pigsfuxruiopinouvjwy:*) : ;;
+        *) printf '%s' 'refuse-not-prod-project'; return 0 ;;
+      esac ;;
+    db.pigsfuxruiopinouvjwy.supabase.co:5432) : ;;
     *) printf '%s' 'refuse-not-prod-project'; return 0 ;;
   esac
 
@@ -1140,13 +1178,13 @@ case "$OP" in
     G3_OUTCOME="$(g3_decide "$PG" "$PG_DARK")"
     case "$G3_OUTCOME" in
       refuse-empty-dark)
-        echo "::error::op=arm: G3 — could not read the current dark INNGEST_POSTGRES_URI from soleur-inngest/prd (empty despite a readable config). G1 already proved the config readable, so an empty read here is anomalous — most plausibly a token-scope or wrong-project fault. Refusing FAIL-CLOSED (no value echoed). Do NOT SSH the host."; exit 1 ;;
+        echo "::error::op=arm: G3 — could not read the current dark INNGEST_POSTGRES_URI from soleur-inngest/prd (empty despite a readable config). G1 already proved the config readable, so an empty read here is anomalous — most plausibly a token-scope or wrong-project fault. Refusing FAIL-CLOSED (no value echoed). Do NOT SSH the host." ;;
       refuse-txn-pooler)
-        echo "::error::op=arm: G3 — INNGEST_POSTGRES_URI uses the :6543 transaction pooler; inngest sqlc requires the :5432 session pooler (inngest-host.tf:157). Refusing (no value echoed)."; exit 1 ;;
+        echo "::error::op=arm: G3 — INNGEST_POSTGRES_URI uses the :6543 transaction pooler; inngest sqlc requires the :5432 session pooler (inngest-host.tf:157). Refusing (no value echoed)." ;;
       refuse-not-session-pooler)
-        echo "::error::op=arm: G3 — INNGEST_POSTGRES_URI does not contain the :5432 session-pooler port. Refusing (no value echoed)."; exit 1 ;;
+        echo "::error::op=arm: G3 — INNGEST_POSTGRES_URI does not contain the :5432 session-pooler port. Refusing (no value echoed)." ;;
       refuse-not-prod-project)
-        echo "::error::op=arm: G3 — INNGEST_POSTGRES_URI does not target the TF-known prod inngest Postgres project (ref pigsfuxruiopinouvjwy). Refusing (no value echoed)."; exit 1 ;;
+        echo "::error::op=arm: G3 — INNGEST_POSTGRES_URI does not target the TF-known prod inngest Postgres project (ref pigsfuxruiopinouvjwy). Refusing (no value echoed)." ;;
       skip-already-current)
         # NOT a refusal (#7462), and NOT a skipped write — the token is INFORMATIONAL only.
         # The value is already in place: the expected steady state after any previous
@@ -1170,8 +1208,12 @@ case "$OP" in
       write)
         : ;;
       *)
-        echo "::error::op=arm: G3 — g3_decide returned an unrecognised outcome. Refusing FAIL-CLOSED (no value echoed)."; exit 1 ;;
+        echo "::error::op=arm: G3 — g3_decide returned an unrecognised outcome. Refusing FAIL-CLOSED (no value echoed)." ;;
     esac
+    # SINGLE abort gate. The arms above choose only the message; this decides. Keeping the
+    # exit out of the arms is what makes "a refusal actually aborts" testable rather than
+    # a property of four separate lines nothing exercises.
+    if [[ "$(g3_action "$G3_OUTCOME")" == "abort" ]]; then exit 1; fi
     echo "::notice::op=arm: G3 positive prod-URI assertion passed (:5432 session pooler, prod project-ref present, dark value readable — all value-silent; outcome=${G3_OUTCOME})"
 
     # G3.5 — CHANNEL-KEY PARITY HARD GATE (#6178 durability). INNGEST_EVENT_KEY +

@@ -55,6 +55,21 @@ assert() {
   else echo "  FAIL: $desc"; echo "    cond: $cond"; FAIL=$((FAIL + 1)); fi
 }
 
+# SELF-TEST of the assertion helper (#7462 review). Neutering `assert` — e.g. `eval "$cond" || true`
+# — made the whole suite report 381 passed / 0 failed / exit 0 with real regressions injected, and
+# the pass COUNT is not a tell because PASS increments on the same branch. Nothing downstream can
+# be trusted unless the helper itself is shown to distinguish true from false, so prove both
+# directions here and subtract the deliberate failure.
+_ST_P=$PASS; _ST_F=$FAIL
+assert "self-test: a TRUE condition passes" "true"
+assert "self-test: a FALSE condition fails (expected FAIL below)" "false"
+if [[ "$PASS" -ne $((_ST_P + 1)) || "$FAIL" -ne $((_ST_F + 1)) ]]; then
+  echo "  FATAL: assert() does not distinguish true from false — every verdict in this file is void."
+  exit 2
+fi
+FAIL=$((FAIL - 1))   # subtract the deliberate failure; the PASS from the true case is left as-is
+echo "  (assert() self-test OK — deliberate FAIL above is expected and subtracted)"
+
 echo "=== cutover-inngest.yml workflow tests ==="
 
 assert "workflow file exists" "[[ -f '$WF_YAML' ]]"
@@ -472,6 +487,17 @@ assert "arm) no same-line short-circuit gates a prod write" "! grep -qE '(&&|\\|
 G4_WRITE_LINES=$(grep -cE '^[[:space:]]+(printf|echo)[^|]*\| DOPPLER_TOKEN=' "$ARM_FILE" || true)
 G4_WRITE_DEPTHS=$(grep -oE '^[[:space:]]+(printf|echo)[^|]*\| DOPPLER_TOKEN=' "$ARM_FILE" | sed -E 's/[^[:space:]].*//' | awk '{print length}' | sort -u | wc -l)
 assert "arm) exactly three prod secret writes remain (URI, heartbeat, flag)" "[[ '$G4_WRITE_LINES' -eq 3 ]]"
+# Indent depth and token-absence are both defeated by an if/else that keeps the write at the same
+# column (bash ignores indentation), which is the catastrophic mutation: `if [[ $G3_OUTCOME ==
+# write ]]; then :; else <write>; fi` skips the DSN write on the FIRST-arm transition, so the host
+# boots against the dark backend and the job exits 0. Measured: it satisfied every other assertion
+# here. Pin the REGION instead — from the first prod write to the `armed` write there must be no
+# branching at all, because all three writes are unconditional by design.
+W_START=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1)
+W_END=$(grep -nF "printf '%s' 'armed'" "$ARM_FILE" | head -1 | cut -d: -f1)
+W_BRANCH=$(awk -v a="$W_START" -v b="$W_END" 'NR>=a && NR<=b' "$ARM_FILE" | grep -cE '^[[:space:]]*(if|else|elif|fi)\b' || true)
+assert "arm) the prod-write region is non-empty (F6 non-vacuity)" "[[ -n '$W_START' && -n '$W_END' && '$W_END' -gt '$W_START' ]]"
+assert "arm) NO branching between the first prod write and the armed write" "[[ '$W_BRANCH' -eq 0 ]]"
 assert "arm) all prod secret writes sit at one indent depth (none conditionally nested)" "[[ '$G4_WRITE_DEPTHS' -eq 1 ]]"
 assert "arm) G1 reads the current INNGEST_CUTOVER_FLIP from soleur-inngest (pre-write state guard)" "grep -qE 'doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest' '$ARM_FILE'"
 assert "arm) G1 refuses re-arm over a non-safe FSM state (DI-C2 REFUSING)" "grep -qE 'G1 REFUSING' '$ARM_FILE'"
@@ -511,9 +537,14 @@ assert "arm) branches on the confirm result (done vs aborted/rolled-back vs time
 assert "arm) surfaces the prod-project-ref remediation to the operator" "grep -qE '::error::.*ref pigsfuxruiopinouvjwy' '$ARM_FILE'"
 # And the pin itself is asserted where it actually lives, anchored on the case-arm shape a
 # comment or an error string cannot produce.
-assert "g3_decide pins the prod project ref on the AUTHORITY, not a bare substring" "grep -qE '^[[:space:]]+postgresql://postgres\\.pigsfuxruiopinouvjwy:\\*@\\*\\.pooler\\.supabase\\.com:5432/\\*\\)' '$BODY_SH'"
-assert "g3_decide rejects multi-host and host= parameter overrides" "grep -qE '^[[:space:]]+\\*,\\*\\|\\*host=\\*\\)' '$BODY_SH'"
-assert "g3_decide requires exactly one '@' (no userinfo host relocation)" "grep -qF 'if [[ \"\${pg//[!@]/}\" != \"@\" ]]' '$BODY_SH'"
+# The pin is asserted where it lives, anchored on the authority-EXTRACTION shape a comment or an
+# error string cannot produce. Behavioural coverage is the g3_case rows below; these pin that the
+# implementation still parses rather than globbing (a glob over the whole DSN cannot express
+# "the authority is X", which is how three earlier revisions were defeated).
+assert "g3_decide extracts the authority before matching it" "grep -qF '_auth=\"\${_rest%%/*}\"' '$BODY_SH'"
+assert "g3_decide matches host:port WHOLE, not by globbing the DSN" "grep -qE '^[[:space:]]+\\*\\.pooler\\.supabase\\.com:5432\\)' '$BODY_SH'"
+assert "g3_decide rejects connection-parameter overrides case-insensitively" "grep -qE '\\*host=\\*\\|\\*host%3d\\*' '$BODY_SH'"
+assert "g3_decide requires exactly one '@' inside the AUTHORITY" "grep -qF 'if [[ \"\${_auth//[!@]/}\" != \"@\" ]]' '$BODY_SH'"
 assert "arm) G1 fail-CLOSED: probes config readability (DOPPLER_PROJECT) before trusting an empty flip" "grep -qF 'config-readability probe failed' '$ARM_FILE' && grep -qE 'doppler secrets get DOPPLER_PROJECT -p soleur-inngest' '$ARM_FILE'"
 assert "arm) G3 fail-CLOSED on an empty PG_DARK read (no silent equality-pass)" "grep -qF 'could not read the current dark INNGEST_POSTGRES_URI' '$ARM_FILE'"
 assert "arm) adds NO deploy-status poll (Better Stack read only — QMAX/RMAX untouched, AC9)" "! grep -qE 'deploy-status' '$ARM_FILE'"
@@ -562,6 +593,25 @@ g3_case() { # $1 desc, $2 PG (to write), $3 PG_DARK (in place), $4 expected outc
   G3_EVALS=$((G3_EVALS + 1))
   assert "g3_decide: $1 -> $4" "[[ '$got' == '$4' ]]"
 }
+# The eval counter and its assert are adjacent lines in one function, so a one-line excision of
+# the assert leaves the counter satisfied while every row stops being checked (measured: 357
+# passed / 0 failed / exit 0). Snapshot the verdict counters instead and require a real delta.
+G3_VERDICTS_BEFORE=$((PASS + FAIL))
+
+# HARNESS CANARY. Two measured mutations defeated every floor above: replacing g3_case's body with
+# `got="$4"` (every row then asserts the fixture table against itself) and deleting only its
+# assert line while keeping the counter increment. Both leave the suite green because the counters
+# they feed do not distinguish "compared against the SUT" from "compared against nothing". So
+# drive one row whose expectation is deliberately WRONG and require it to FAIL: a tautological or
+# assert-less g3_case cannot produce that failure.
+_HC_F=$FAIL
+g3_case "harness canary: a deliberately wrong expectation MUST fail (expected FAIL below)" "$G3_PROD" "$G3_PROD" "write"
+if [[ "$FAIL" -ne $((_HC_F + 1)) ]]; then
+  echo "  FATAL: g3_case does not compare against g3_decide — every g3_decide row in this file is void."
+  exit 2
+fi
+FAIL=$((FAIL - 1)); G3_EVALS=$((G3_EVALS - 1))
+echo "  (g3_case harness canary OK — deliberate FAIL above is expected and subtracted)"
 
 g3_case "empty dark value fails closed"            "$G3_PROD"        ""               "refuse-empty-dark"
 g3_case "rejects the :6543 transaction pooler"     "$G3_PROD_TXN"    "$G3_PROD"       "refuse-txn-pooler"
@@ -589,6 +639,31 @@ g3_case "refuses the prod ref smuggled as @db.<ref>. in a param" "postgresql://p
 g3_case "refuses db.<ref>. as an attacker SUBDOMAIN"  "postgresql://u:pw@db.${G3_PROD_REF}.attacker.example.com:5432/postgres"   "$G3_PROD" "refuse-not-prod-project"
 g3_case "refuses a second '@' relocating the host"    "postgresql://u:p@db.${G3_PROD_REF}.x@attacker.example.com:5432/postgres"  "$G3_PROD" "refuse-not-prod-project"
 g3_case "refuses :5432 present but not the authority port" "postgresql://postgres.${G3_PROD_REF}:pw@attacker.example.com:15432/postgres?application_name=a:5432" "$G3_PROD" "refuse-not-prod-project"
+
+# G3's terminal action. Previously each refusal arm carried its own `exit 1` and nothing tested
+# that a refusal aborts: stripping all four turned G3 into a logger that fell through to the prod
+# write, at 381/0 green. The decision now lives in g3_action and is driven here.
+ACT_FN="$(mktemp)"; SCRATCH+=("$ACT_FN")
+awk '/^g3_action\(\) \{$/,/^\}$/' "$BODY_SH" > "$ACT_FN"
+# shellcheck disable=SC1090
+. "$ACT_FN"
+assert "g3_action() is defined after sourcing" "declare -F g3_action >/dev/null"
+ACT_EVALS=0
+act_case() { local got; got="$(g3_action "$2")"; ACT_EVALS=$((ACT_EVALS + 1)); assert "g3_action: $1 -> $3" "[[ '$got' == '$3' ]]"; }
+act_case "refuse-empty-dark aborts"          "refuse-empty-dark"         "abort"
+act_case "refuse-txn-pooler aborts"          "refuse-txn-pooler"         "abort"
+act_case "refuse-not-session-pooler aborts"  "refuse-not-session-pooler" "abort"
+act_case "refuse-not-prod-project aborts"    "refuse-not-prod-project"   "abort"
+act_case "skip-already-current proceeds"     "skip-already-current"      "proceed"
+act_case "write proceeds"                    "write"                     "proceed"
+act_case "an unknown token aborts (fail-closed)" "some-future-token"     "abort"
+assert "g3_action scenarios actually dispatched (>=7)" "[[ '$ACT_EVALS' -ge 7 ]]"
+# One abort gate, routed through the tested function, sitting before the first prod write.
+assert "arm) has exactly one G3 abort gate routed through g3_action" "[[ \$(grep -cF 'if [[ \"\$(g3_action \"\$G3_OUTCOME\")\" == \"abort\" ]]; then exit 1; fi' '$ARM_FILE') -eq 1 ]]"
+assert "arm) no G3 outcome arm carries its own exit (the gate decides)" "! grep -qE '^[[:space:]]+(refuse|skip|write)[a-z-]*\)[^#]*exit 1' '$ARM_FILE'"
+G3ABORT_LN=$(grep -nF 'g3_action "$G3_OUTCOME"' "$ARM_FILE" | head -1 | cut -d: -f1)
+G3ABORT_PGW=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1)
+assert "arm) the G3 abort gate precedes the first prod write" "[[ -n '$G3ABORT_LN' && -n '$G3ABORT_PGW' && '$G3ABORT_LN' -lt '$G3ABORT_PGW' ]]"
 
 # G3.6's decision, driven the same way. Greps over the arm body could not see this: adding
 # '1' to the pass-arm (i.e. arming WHILE the diagnostic flag is set — the exact catastrophe
@@ -618,6 +693,8 @@ assert "arm) routes G3.6 through diag_boot_decide (single chokepoint)" "grep -qE
 # would otherwise report success having evaluated nothing. This counts EVALUATIONS, not
 # assertion calls, so gutting g3_case's body cannot satisfy it.
 assert "g3_decide scenarios actually dispatched (>=19 evaluations)" "[[ '$G3_EVALS' -ge 19 ]]"
+G3_VERDICTS=$((PASS + FAIL - G3_VERDICTS_BEFORE))
+assert "g3_decide rows produced >=19 VERDICTS, not just evaluations" "[[ '$G3_VERDICTS' -ge 19 ]]"
 
 # The arm) case must route through the function exactly once — the Assembly contract.
 # Anchored on the call shape, not the bare name (which also appears in comments).
@@ -1287,6 +1364,17 @@ assert "#6178 op=doublefire-probe arm surfaces the dropped count (arm-scoped)" "
 rm -rf "$BUCKET_PROGS_DIR"
 rm -f "$DF_HARNESS_SRC"
 rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" "$PROBE_ARMS_FILE"
+
+# WHOLE-SUITE ANTI-DELETION FLOOR (#7462 review). The only merge gate below is `FAIL -gt 0`, so
+# deleting any assertion lowers the pass count silently and exits 0 — measured: removing the
+# prod-write region assertion left the suite green. This floor is the full count at the time of
+# writing; raise it in lockstep when adding assertions, never lower it to make a removal pass.
+if [[ "$PASS" -lt 408 ]]; then
+  echo "  FAIL: suite dispatched $PASS assertions, floor is 408 — an assertion was removed or skipped."
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: anti-deletion floor ($PASS >= 408 assertions dispatched)"
+fi
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

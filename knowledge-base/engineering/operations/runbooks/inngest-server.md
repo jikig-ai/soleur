@@ -674,7 +674,7 @@ setting).
 > **This is the ADR-100 dedicated-host extraction cutover** (move Inngest off the
 > co-located web host onto the singleton `hcloud_server.inngest` at `10.0.1.40`),
 > distinct from the same-host durable-backend cutover above. It flips the dedicated
-> host from its **dark, non-prod Postgres** backend to **prod Postgres**, gated behind a
+> host to **prod Postgres**, gated behind a
 > Redis `FLUSHALL` + `DBSIZE==0` assertion (ADR-100 Decision 6/6a). **Every operator
 > action here is a Doppler write, a `workflow_dispatch`, or a Better Stack read — there is
 > NO `ssh`/host-shell step** (`hr-no-ssh-fallback-in-runbooks`; the dedicated host is
@@ -685,7 +685,10 @@ setting).
 flip oneshot (`inngest-cutover-flip.sh` + `.service`/`.timer` + `inngest-server-flip-guard.sh`)
 must already be baked into the OCI image and installed on the dark host. Installing it is a
 cloud-init/OCI change that **force-replaces the singleton** — zero prod-downtime by
-construction (the host is on the non-prod dark backend serving zero prod crons; the AOF
+construction (the host serves zero prod crons — note this is NOT because its backend is
+non-prod: since 2026-07-23 `soleur-inngest/prd` holds the PROD DSN, and what keeps the host dark
+is `inngest-server-flip-guard.sh` refusing a prod-URI start while the flag sits outside
+`{armed,flipping,flushed,done}`. See ADR-100's 2026-08-20 addendum; the AOF
 Redis volume survives the replace). Never run that force-replace inside the maintenance
 window. The poll timer ships **enabled and stays enabled for the host's whole life** — the
 FSM flag (`INNGEST_CUTOVER_FLIP`) is the sole gate, so arming is pure Doppler writes with no
@@ -803,7 +806,11 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
    - **G2 read-through sources (ADR-100 6b):** reads `INNGEST_POSTGRES_URI` +
      `INNGEST_HEARTBEAT_URL` **from `prd_terraform`** via the existing read-only `DOPPLER_TOKEN`
      (the canonical prod values already live there — **no operator seed**), masking each value.
-   - **G3 positive prod-URI assertion (DI-C3):** asserts the value differs from the current dark
+   - **G3 positive prod-URI assertion (DI-C3):** asserts the value targets the prod project's
+     session pooler. It does NOT require the value to differ from the current `soleur-inngest/prd`
+     URI — that requirement was removed in #7462, because after the first successful arm it is
+     permanently true (`op=rollback` has no inverse for the write) and it refused every re-arm.
+     Equality is now informational. Superseded wording follows for reference: differs from the dark
      `soleur-inngest/prd` URI, uses the `:5432` session pooler (never `:6543`), and targets the
      prod host — all value-silent.
    - **G3.5 channel-key parity HARD GATE (#6178 durability):** sha256-compares the app
@@ -824,7 +831,9 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
      in that case — see aborted-state recovery below).
 
    > **No operator secret-seed (#6369 / ADR-100 Decision 6b).** The prod `INNGEST_POSTGRES_URI`
-   > already lives in `prd_terraform` (canonical, `:5432`, distinct from the dark value), so op=arm
+   > already lives in `prd_terraform` (canonical, `:5432`). It is NOT distinct from the value in
+   > `soleur-inngest/prd` — measured 2026-08-20 they are byte-identical (sha256 `7968f3d658c2`),
+   > which is the documented post-first-arm steady state, not drift. So op=arm
    > reads it **read-through** — there is **no `INNGEST_POSTGRES_URI_PROD` seed and no pre-window
    > human write**. The only new credential is the TF-provisioned read/write token
    > (`doppler_service_token.inngest_arm_write`) published as the `inngest-cutover` **environment**
@@ -1005,8 +1014,12 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
 If `op=execute` aborts at 2.0 with `registry-probe: dark registry NON-empty`, the dark host has
 functions registered against it — flipping now would carry stray state onto prod Postgres. To
 empty the dark registry and re-run (all no-SSH):
-1. Confirm `INNGEST_POSTGRES_URI` on `soleur-inngest/prd` still points at the **non-prod dark**
-   backend (it must NOT be the prod URI yet — that is only written at step 2 above).
+1. Read `INNGEST_POSTGRES_URI` on `soleur-inngest/prd` and record which backend it targets.
+   **Do NOT assert it should still be non-prod** — that instruction was correct only before the
+   first successful arm. `op=arm` writes the prod DSN and `op=rollback` has no inverse for that
+   write, so since 2026-07-23 the slot holds the prod value as its documented steady state
+   (ADR-100, addendum 2026-08-20). Following the superseded wording literally would lead to
+   hand-writing the soleur-dev DSN back into a guarded secret, which is explicitly not the fix.
 2. Stop whatever dev/test backend is re-syncing functions into the dark server (typically a
    stray `--sdk-url` pointing at the dark host), so nothing re-registers after you clear it.
 3. Clear the dark registry (re-provision the dark host via the

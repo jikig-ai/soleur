@@ -21,7 +21,9 @@ condition is permanently true — so every subsequent arm is refused regardless 
 readiness.
 
 This plan makes the arm **idempotent**: when the target value is already in place, G3 records that
-fact and the write is skipped rather than the run being aborted. Every other G3 assertion is
+fact and the arm PROCEEDS rather than aborting. The write itself is NOT skipped — an earlier
+revision branched it on that outcome and the branch was removed at review (inverting it armed the
+host onto the dark backend with the suite green). Every other G3 assertion is
 preserved. The decision itself is extracted into a pure function so it can be driven red by a test,
 which the current suite cannot do.
 

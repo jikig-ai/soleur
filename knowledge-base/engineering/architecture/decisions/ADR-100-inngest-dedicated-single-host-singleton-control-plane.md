@@ -679,14 +679,24 @@ what rollback exists to allow. It blocked the 2026-08-20 attempt, at the cost of
 scheduler gap and one missed timer tick.
 
 **The decision.** `op=arm` is now **idempotent**. When the target value is already in place, G3
-returns `skip-already-current`: the redundant DSN write is skipped and the arm proceeds. The
+returns `skip-already-current` and the arm PROCEEDS. The DSN write is **not** skipped — an
+earlier revision of this change branched the write on that outcome and the branch was removed
+before merge: inverting its polarity skipped the write on the FIRST-arm transition, booting the
+host onto the dark backend while reporting success, with the whole suite green. All three prod
+writes are unconditional, which is strictly stronger — the arm ESTABLISHES the invariant rather
+than observing it. Do not reintroduce the branch. The
 heartbeat write and the `armed` write still run — skipping those would convert a successful arm into
 a silent no-op.
 
 **Why relaxing that guard costs no safety.** The hazard G3's own error text named ("would flip onto
 the DARK backend") is held entirely by the positive prod-project pin evaluated immediately before it:
 the dark backend is a *distinct Supabase project* and cannot carry the prod ref, so a value that
-passes the pin is prod by construction. The equality test contributed nothing to that. The FLUSHALL
+passes the pin routes to the prod project. "Prod by construction" was too strong as originally
+written and is corrected here: the first two forms of the pin were defeated — a bare `*<ref>*`
+substring accepted the ref in a password or query parameter, and pinning the pooler USERNAME
+accepted `postgres.<prod-ref>` in front of ANY host, including `db.<dev-ref>.supabase.co`. The
+shipped pin anchors the AUTHORITY (scheme + user + Supabase host suffix + port), requires exactly
+one `@`, and rejects `,` and `host=`; twelve bypasses are permanent must-REFUSE fixtures. The equality test contributed nothing to that. The FLUSHALL
 hazard is held by the monotonic latch in `inngest-cutover-flip.sh` (#7228 P0-5) — recorded **at the
 flush** rather than at completion, fatal if unrecordable, and fronted by a durability gate that
 refuses to flush when the latch cannot be durably written. Re-arming over an in-flight or completed
@@ -698,16 +708,36 @@ guard against arming onto a non-prod Postgres. That is why the decision was extr
 
 **Two corrections to the record.**
 
-1. **#7462's runbook premise is false.** It says a diagnostic boot brings the host up against a
-   NON-prod `INNGEST_POSTGRES_URI`. It does not, and has not since 2026-07-23 — it holds the prod
-   DSN. Anything reasoning from "the dark host points at soleur-dev" is reasoning about the system as
-   it was before that date.
+1. **The diagnostic-boot premise is false — and it is stated INSIDE this ADR, not only in #7462's
+   runbook.** The 2026-08-12 addendum above says verbatim: *"Resolution is a diagnostic boot — a
+   guard-permitted start against a non-prod backend, so `is_prod=false` takes the guard's ALLOW arm."*
+   Read that clause as SUPERSEDED. Only its first half is wrong: the backend is prod, and has been
+   since 2026-07-23. The diagnostic boot itself still works, by a different mechanism than that
+   sentence describes — `inngest-server-flip-guard.sh` derives `is_prod=false` from the unit file's
+   SQLite-only sentinel, never from the DSN's value — so #7462's resolution path is intact. A reader
+   of the correction alone would wrongly conclude it is dead. Anything reasoning from "the dark host
+   points at soleur-dev" is reasoning about the system as it was before that date.
+1a. **`op=arm` never read `INNGEST_DIAGNOSTIC_BOOT` until this change.** `inngest-bootstrap.sh` states
+   the precondition in prose — *"This is NOT a cutover state: clear INNGEST_DIAGNOSTIC_BOOT before
+   arming"* — and nothing enforced it; measured 2026-08-20, the flag was live at `1` and the arm
+   contained zero references to it. Arming in that state would have run the FSM to `done`, quiescing
+   the web scheduler and cutting over to a host whose ExecStart is SQLite-only with `--sdk-url` on a
+   closed loopback port, i.e. serving no registry, while reporting success. G3.6 now refuses before
+   any write.
 2. **The prod DSN resting in the dark slot is the documented post-first-arm steady state, not drift
    to be corrected.** Restoring the soleur-dev DSN would re-create the co-tenancy this ADR wants
    retired and would be undone by the next arm anyway.
 
 **Unchanged.** The soleur-dev co-tenancy defences (`0002_dev_inngest_tables_lockdown.sql`,
 `apply-inngest-rls-dev.yml`) remain live and correct: the cutover has not held, so the retirement
-sequencing described in the 2026-07-15 addendum still applies unmodified. The forward/reverse
+sequencing described in the 2026-07-15 addendum still applies — but NOT unmodified, and the
+difference is recorded rather than substituted silently. That addendum names its trigger as
+"`op=arm` writes the prod DSN", and by that wording the trigger FIRED on 2026-07-23 and the
+retirement was due. The condition that actually governs is the stricter one the follow-through
+already uses (`scripts/followthroughs/inngest-rls-drop-6488.sh`): the flip reached `done` AND the
+DSN is not the dev ref AND the soak elapsed. Read the 2026-07-15 trigger as superseded by that.
+Its closing parenthetical — "the dark host is live against soleur-dev until the flip" — is also
+dead: the host has never bound `:8288`. The conclusion (do not drop early) survives on the
+different ground that the 14 tables still physically exist on soleur-dev. The forward/reverse
 asymmetry for `INNGEST_POSTGRES_URI` is now deliberate rather than an omission — idempotence makes an
 inverse unnecessary, which is why one was not added.
