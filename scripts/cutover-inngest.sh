@@ -294,6 +294,10 @@ doublefire_from() {
 # P0-5) — recorded AT the flush and fatal if unrecordable — never by this comparison.
 # Equality therefore means only "this write would change nothing", which is a fact to
 # record, not a reason to abort.
+#
+# EXTRACTION CONTRACT: cutover-inngest-workflow.test.sh sources this function by awk range
+# `/^g3_decide\(\) \{$/,/^\}$/`. Keep the signature and the closing brace at column 0, and do
+# not introduce a column-0 `}` inside the body, or the extraction truncates.
 g3_decide() {
   local pg="$1" pg_dark="$2"
 
@@ -313,10 +317,18 @@ g3_decide() {
     *:5432*) : ;;
     *) printf '%s' 'refuse-not-session-pooler'; return 0 ;;
   esac
-  # Positive prod-project pin (C3/D3). This is the LOAD-BEARING guard against arming onto
+  # Positive prod-project pin (C3/D3). This is the SOLE remaining guard against arming onto
   # a non-prod Postgres now that equality no longer refuses — mutation-tested accordingly.
+  #
+  # Pinned on the ROUTING position, not on mere presence (#7462 review). Supabase resolves the
+  # tenant from the pooler USERNAME, so the ref must appear in the userinfo as
+  # `://postgres.<ref>:` (session pooler — MEASURED against the live prd_terraform value, which
+  # carries a password, so the ref is followed by `:` and not by `@`), or in the direct host as
+  # `@db.<ref>.`. A bare `*<ref>*` substring would also accept a DSN carrying the ref in a
+  # password, dbname or query parameter while host and user point somewhere else entirely —
+  # which, as the only guard left, is the whole safety argument.
   case "$pg" in
-    *pigsfuxruiopinouvjwy*) : ;;
+    *://postgres.pigsfuxruiopinouvjwy:*|*@db.pigsfuxruiopinouvjwy.*) : ;;
     *) printf '%s' 'refuse-not-prod-project'; return 0 ;;
   esac
 
@@ -902,7 +914,7 @@ case "$OP" in
     REG_COUNT=$(echo "$BODY" | jq -r '.function_count // 0')
     if [[ "$REG_EMPTY" != "true" ]]; then
       echo "::error::2.0 ABORT — dark registry is NON-empty (function_count=$REG_COUNT). The cutover flip must only run against an EMPTY dark registry or a second scheduler double-fires against prod Postgres."
-      echo "::error::Remediation (P1-6): (1) confirm INNGEST_POSTGRES_URI on soleur-inngest/prd STILL points at the NON-prod dark backend; (2) stop the dark inngest-server so no dev/test backend re-syncs functions; (3) clear the dark registry (redeploy the dark backend / drop the stray functions); (4) re-run op=execute. Do NOT proceed to the flip."
+      echo "::error::Remediation (P1-6): (1) read INNGEST_POSTGRES_URI on soleur-inngest/prd and record which backend it targets — do NOT assume it is non-prod: a successful op=arm writes the PROD DSN there and op=rollback has no inverse for that write, so since the first arm (2026-07-23) it holds the prod value as its documented steady state (ADR-100 addendum 2026-08-20); (2) stop the dark inngest-server so nothing re-syncs functions; (3) clear the registry this host serves (drop the stray functions); (4) re-run op=execute. Do NOT proceed to the flip."
       exit 1
     fi
     echo "::notice::2.0 registry-probe: dark registry EMPTY (function_count=$REG_COUNT) — pre-flight clear"
@@ -1070,20 +1082,29 @@ case "$OP" in
     # G3 — positive prod-URI assertion (DI-C3, P1 — the :5432/:6543 guard alone MISSES the
     # dark backend; both dark and prod DSNs use :5432). Read the CURRENT (dark)
     # INNGEST_POSTGRES_URI from soleur-inngest/prd via the arm token, mask it, and assert the
-    # value we are about to write DIFFERS from dark AND targets the prod session pooler. All
-    # comparisons value-silent (only booleans/tokens reach the log).
+    # value we are about to write targets the prod session pooler on the prod project.
+    #
+    # It does NOT require that value to DIFFER from dark (#7462). It used to, and after the
+    # first successful arm that condition is permanently false — op=rollback has no inverse
+    # for the G4 write — so the refusal fired forever and the cutover could never be re-armed
+    # after a rollback. Equality is now informational. All comparisons value-silent (only
+    # booleans/tokens reach the log).
     PG_DARK=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get INNGEST_POSTGRES_URI -p soleur-inngest -c prd --plain 2>/dev/null || true)
     printf '::add-mask::%s\n' "$PG_DARK"
     # FAIL-CLOSED on an empty/failed dark read (observability F1 / user-impact / DI): the
-    # config is proven readable by G1, so an empty PG_DARK is anomalous — and the prod!=dark
-    # equality below is the ONLY guard that distinguishes prod from dark (both are :5432 Supabase).
-    # An empty PG_DARK would make `$PG == ""` false and SILENTLY pass the equality — the exact
-    # §User-Brand-Impact failure (flip onto the dark backend). Refuse instead.
+    # config is proven readable by G1, so an empty PG_DARK is anomalous — most plausibly a
+    # token-scope or wrong-project fault. Refusing costs one dispatch; proceeding on an
+    # anomalous read is how a surprise gets armed.
+    #
+    # The ORIGINAL rationale for this arm is OBSOLETE and must not be restated (#7462): it
+    # was that an empty PG_DARK makes the equality comparison false and so SILENTLY passes.
+    # That cannot happen now the equality arm no longer gates anything — it yields an
+    # informational `skip-already-current`. What distinguishes prod from dark is the positive
+    # prod project-ref pin in g3_decide, NOT the equality.
     # The decision itself lives in g3_decide (a pure function, defined above) so it can be
     # driven RED by a test. This case is the SINGLE call site — the Assembly contract in the
     # plan's Guard Contract — and no G3 predicate may be evaluated inline here.
     G3_OUTCOME="$(g3_decide "$PG" "$PG_DARK")"
-    G3_SKIP_PG_WRITE=0
     case "$G3_OUTCOME" in
       refuse-empty-dark)
         echo "::error::op=arm: G3 — could not read the current dark INNGEST_POSTGRES_URI from soleur-inngest/prd (empty despite a readable config). G1 already proved the config readable, so an empty read here is anomalous — most plausibly a token-scope or wrong-project fault. Refusing FAIL-CLOSED (no value echoed). Do NOT SSH the host."; exit 1 ;;
@@ -1094,13 +1115,19 @@ case "$OP" in
       refuse-not-prod-project)
         echo "::error::op=arm: G3 — INNGEST_POSTGRES_URI does not target the TF-known prod inngest Postgres project (ref pigsfuxruiopinouvjwy). Refusing (no value echoed)."; exit 1 ;;
       skip-already-current)
-        # NOT a refusal (#7462). The value we would write is ALREADY in place — the expected
-        # steady state after any previous successful arm, because op=rollback has no inverse
-        # for the G4 DSN write. The invariant G4 exists to establish already holds, so the
-        # write is skipped and the arm proceeds. The heartbeat write and the G5 `armed` write
-        # below still run; skipping THEM would turn a successful arm into a silent no-op.
-        G3_SKIP_PG_WRITE=1
-        echo "::notice::op=arm: G3 — INNGEST_POSTGRES_URI on soleur-inngest/prd already equals the prod value; skipping the redundant G4 write and proceeding (idempotent arm, value-silent)." ;;
+        # NOT a refusal (#7462), and NOT a skipped write — the token is INFORMATIONAL only.
+        # The value is already in place: the expected steady state after any previous
+        # successful arm, because op=rollback has no inverse for the G4 DSN write. G4 below
+        # still writes it unconditionally (see the comment there for why branching on this
+        # outcome was removed). The arm proceeds.
+        #
+        # POST-FLUSH RE-ARM: if a FLUSHALL has already been performed for this host, the
+        # on-host monotonic latch (/mnt/data, #7228 P0-5) will refuse the re-arm and drive
+        # INNGEST_CUTOVER_FLIP to terminal `aborted` — this job will still report success,
+        # and the refusal surfaces only on the host's Better Stack channel. The correct
+        # re-entry for that case is INNGEST_CUTOVER_FLIP=flushed, not another arm
+        # (inngest-server-flip-guard.sh:161).
+        echo "::notice::op=arm: G3 — INNGEST_POSTGRES_URI on soleur-inngest/prd already equals the prod value (expected after any prior arm; op=rollback has no inverse for that write). Proceeding; G4 rewrites it unconditionally. If a FLUSHALL already ran for this host, the on-host latch will refuse this arm into terminal 'aborted' — re-enter with INNGEST_CUTOVER_FLIP=flushed instead." ;;
       write)
         : ;;
       *)
@@ -1145,15 +1172,22 @@ case "$OP" in
 
     # G4 — write the two DATA secrets FIRST, each via stdin (never argv), each exit-gated
     # before the next. Order is a correctness invariant: the URIs must land before `armed`.
-    # Skipped only on G3's `skip-already-current` — the value is already what we would
-    # write, so the write is a no-op and the invariant already holds. Every other outcome
-    # either exited above or falls through to perform the write.
-    if [[ "$G3_SKIP_PG_WRITE" == "1" ]]; then
-      echo "::notice::op=arm: G4 skipped the INNGEST_POSTGRES_URI write — already current (G3 outcome=skip-already-current). The heartbeat and G5 armed writes below still run."
-    else
-      printf '%s' "$PG" | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_POSTGRES_URI -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=arm: G4 — writing INNGEST_POSTGRES_URI to soleur-inngest/prd FAILED. armed NOT written. Job aborts (no value echoed)."; exit 1; }
-      echo "::notice::op=arm: G4 wrote INNGEST_POSTGRES_URI to soleur-inngest/prd (value not echoed)"
-    fi
+    # UNCONDITIONAL, including on `skip-already-current` (#7462 review). An earlier revision
+    # branched this write on the G3 outcome and skipped it when the value was already current.
+    # That was wrong twice over. It bought nothing — writing a secret to the value it already
+    # holds is a no-op — and it introduced a branch whose INVERSION is catastrophic and which
+    # no behavioural test covered: flipping the guard's polarity skipped the write on the
+    # FIRST-arm transition, so the host booted against the DARK backend and the cutover
+    # reported success, with the whole suite green. It was also asymmetric with the
+    # INNGEST_HEARTBEAT_URL write immediately below, which has always been unconditional and
+    # is equally redundant on a re-arm.
+    #
+    # Writing unconditionally is strictly stronger: the arm ESTABLISHES the invariant rather
+    # than observing it, so a dark value that drifted into the slot between G3's read and this
+    # write is overwritten rather than trusted. Idempotence comes from G3 no longer REFUSING,
+    # never from skipping the write.
+    printf '%s' "$PG" | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_POSTGRES_URI -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=arm: G4 — writing INNGEST_POSTGRES_URI to soleur-inngest/prd FAILED. armed NOT written. Job aborts (no value echoed)."; exit 1; }
+    echo "::notice::op=arm: G4 wrote INNGEST_POSTGRES_URI to soleur-inngest/prd (value not echoed)"
     printf '%s' "$HB" | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_HEARTBEAT_URL -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=arm: G4 — writing INNGEST_HEARTBEAT_URL to soleur-inngest/prd FAILED. armed NOT written. Job aborts (no value echoed)."; exit 1; }
     echo "::notice::op=arm: G4 wrote INNGEST_HEARTBEAT_URL to soleur-inngest/prd (value not echoed)"
     # #7228: op=arm deliberately does NOT touch betteruptime_heartbeat.inngest_consumer, the

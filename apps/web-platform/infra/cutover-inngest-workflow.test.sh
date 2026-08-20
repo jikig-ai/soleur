@@ -442,21 +442,32 @@ FLIP_SET_LN=$(grep -nE 'secrets set INNGEST_CUTOVER_FLIP ' "$ARM_FILE" | head -1
 assert "arm) writes POSTGRES_URI BEFORE INNGEST_CUTOVER_FLIP=armed (write order AC7)" "[[ -n '$PG_SET_LN' && -n '$FLIP_SET_LN' && '$PG_SET_LN' -lt '$FLIP_SET_LN' ]]"
 
 # AC8 / G3 positive prod-URI assertion + :6543 reject; G1 pre-write FSM-state guard (DI-C2).
-assert "arm) G3 rejects the :6543 transaction pooler" "grep -qF ':6543' '$ARM_FILE'"
-assert "arm) G3 requires the :5432 session pooler" "grep -qF ':5432' '$ARM_FILE'"
+# NOTE (#7462): the pooler-port PREDICATES moved into g3_decide, so grepping $ARM_FILE for
+# ':6543'/':5432' now matches only the error-MESSAGE strings — it would pass with the
+# predicates deleted. Behavioural coverage is the g3_decide block below (scenarios 2 and 3).
+# What remains assertable here is that the arm still SURFACES the pooler remediation.
+assert "arm) surfaces the :6543 transaction-pooler remediation to the operator" "grep -qE '::error::.*:6543 transaction pooler' '$ARM_FILE'"
+assert "arm) names the :5432 session pooler in that remediation" "grep -qE '::error::.*:5432 session pooler' '$ARM_FILE'"
 # #7462: prod == dark is a SKIP, not a refusal. The old assertion here grepped for
 # `PG.*==.*PG_DARK` in the arm body — a comparison that has since moved into g3_decide, and
 # which could not have distinguished a refusal from a skip even while it was present. The
 # behavioural coverage is the g3_decide block further down; these assert the CONSUMER wiring.
 assert "arm) has an idempotent skip arm (not a refusal) for already-current" "grep -qF 'skip-already-current' '$ARM_FILE'"
 assert "arm) no longer claims an already-current value 'would flip onto the DARK backend'" "! grep -qF 'would flip onto the DARK backend' '$ARM_FILE'"
-assert "arm) evaluates NO G3 predicate inline (single chokepoint — Assembly contract)" "! grep -qE '^[[:space:]]+case \"\\\$PG\" in' '$ARM_FILE'"
-# AC7: skipping the DSN write must NOT skip the heartbeat or the `armed` write — that would
-# turn a successful arm into a silent no-op. Both must sit OUTSIDE the skip guard.
-assert "arm) G4 heartbeat write is reachable on the skip path" "grep -qE 'doppler secrets set INNGEST_HEARTBEAT_URL -p soleur-inngest -c prd' '$ARM_FILE'"
-assert "arm) G5 armed write is reachable on the skip path" "grep -qE \"printf '%s' 'armed'\" '$ARM_FILE'"
-G4_SKIP_GUARD_N=$(grep -cE 'G3_SKIP_PG_WRITE' "$ARM_FILE" || true)
-assert "arm) the skip guard is set once and read once (>=2 references)" "[[ '$G4_SKIP_GUARD_N' -ge 2 ]]"
+
+# AC6/AC7 (#7462 review). An earlier revision branched the G4 DSN write on the G3 outcome and
+# asserted that branch with PRESENCE greps — which pass identically with the writes moved
+# inside the guard, i.e. they could not fail. Three mutations went uncaught, one of which
+# skipped the write on the FIRST-arm transition and armed the host onto the dark backend with
+# the suite green. The branch is gone: all three prod writes are unconditional, which is the
+# property to pin, and it is pinnable by ABSENCE rather than by position.
+assert "arm) the G3-outcome skip flag is GONE (no conditional around a prod write)" "! grep -qE 'G3_SKIP_PG_WRITE' '$ARM_FILE'"
+assert "arm) the DSN write is not nested in an if/else" "! grep -qE '^[[:space:]]+(if|else|fi)\b.*(INNGEST_POSTGRES_URI|G3_OUTCOME)' '$ARM_FILE'"
+# All three writes must sit at the SAME indent depth — a conditional around any of them shows
+# up as a deeper indent, so this fails on exactly the mutation class above without needing a
+# command seam. Anchored on `doppler secrets set` at flag position, which a comment cannot emit.
+G4_WRITE_DEPTHS=$(grep -oE '^[[:space:]]+(printf|echo)[^|]*\| DOPPLER_TOKEN=' "$ARM_FILE" | sed -E 's/[^ ].*//' | awk '{print length}' | sort -u | tr '\n' ',')
+assert "arm) all prod secret writes sit at one indent depth (none conditionally nested)" "[[ \$(printf '%s' '$G4_WRITE_DEPTHS' | tr ',' '\n' | grep -c . ) -eq 1 ]]"
 assert "arm) G1 reads the current INNGEST_CUTOVER_FLIP from soleur-inngest (pre-write state guard)" "grep -qE 'doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest' '$ARM_FILE'"
 assert "arm) G1 refuses re-arm over a non-safe FSM state (DI-C2 REFUSING)" "grep -qE 'G1 REFUSING' '$ARM_FILE'"
 
@@ -507,12 +518,11 @@ assert "arm) contains no ssh (AC-NOSSH/AC13)" "! grep -qE '(^|[^[:alnum:]])ssh[[
 # re-declared inline, or the suite would assert a known-good snippet is known-good while
 # the shipped file regressed underneath it.
 # ============================================================================
+# The extraction is an awk range over the REAL script, so it is coupled to g3_decide's
+# signature and closing brace both sitting at column 0. A truncated-but-parseable extraction
+# fails the scenarios loudly and an empty one fails `declare -F` below, so this fails safe.
 G3_FN="$(mktemp)"; SCRATCH+=("$G3_FN")
 awk '/^g3_decide\(\) \{$/,/^\}$/' "$BODY_SH" > "$G3_FN"
-G3_FN_N=$(wc -l < "$G3_FN")
-# F6 non-vacuity: an empty extraction would leave g3_decide undefined and every scenario
-# below would compare against an empty string rather than an outcome token.
-assert "g3_decide() is extractable from the script (>8 lines — F6 non-vacuity)" "[[ '$G3_FN_N' -gt 8 ]]"
 
 # shellcheck disable=SC1090
 . "$G3_FN"
@@ -544,11 +554,17 @@ g3_case "refuses a non-prod project ref"           "$G3_DEV"         "$G3_DEV"  
 g3_case "already-current is a SKIP, not a refusal" "$G3_PROD"        "$G3_PROD"       "skip-already-current"
 g3_case "dark -> prod is the first-arm write"      "$G3_PROD"        "$G3_DEV"        "write"
 g3_case "a DIFFERENT prod-project value writes"    "$G3_PROD"        "$G3_PROD_ALT"   "write"
+# The pin is the SOLE guard against a non-prod target, so it needs a must-REFUSE row on the
+# axis a bare substring match would wave through: the prod ref present, but NOT in the routing
+# position — here it rides in the password and a query param while host and user point at the
+# dev project. A `*<ref>*` pin returns `write` for this and arms onto the wrong Postgres.
+G3_PROD_REF_OFF_ROUTE="postgresql://postgres.${G3_DEV_REF}:${G3_PROD_REF}@aws-0-eu-west-1.pooler.supabase.com:5432/postgres?application_name=${G3_PROD_REF}"
+g3_case "refuses the prod ref OUTSIDE the routing position" "$G3_PROD_REF_OFF_ROUTE" "$G3_PROD" "refuse-not-prod-project"
 
 # Anti-vacuity floor (harness row H1): a suite whose scenario dispatch silently stopped
 # would otherwise report success having evaluated nothing. This counts EVALUATIONS, not
 # assertion calls, so gutting g3_case's body cannot satisfy it.
-assert "g3_decide scenarios actually dispatched (>=7 evaluations)" "[[ '$G3_EVALS' -ge 7 ]]"
+assert "g3_decide scenarios actually dispatched (>=8 evaluations)" "[[ '$G3_EVALS' -ge 8 ]]"
 
 # The arm) case must route through the function exactly once — the Assembly contract.
 # Anchored on the call shape, not the bare name (which also appears in comments).
