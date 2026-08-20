@@ -653,3 +653,158 @@ therefore cited as `Ref` rather than closed by it. The twelve days of failed dis
 backfill or dead-letter path is in scope. An interim `INNGEST_BASE_URL` repoint was also declined,
 deliberately: the dedicated host is to be fixed properly rather than returned to the co-located
 operating point.
+
+
+## Addendum — 2026-08-20 (#7462) — `op=arm` is idempotent, and the prod DSN in the dark slot is the steady state
+
+Appended rather than folded into the 2026-07-15 addendum above: that addendum remains the accurate
+record of what was decided and of the co-tenancy as it stood. This section records a consequence it
+predicted in parentheses and treated as a footnote, which turned out to be load-bearing.
+
+**What that addendum got right, and what followed from it.** It states: *"soleur-dev is not a
+rollback target: `op=arm` overwrites `INNGEST_POSTGRES_URI`, and the `rollback` arm writes only
+`INNGEST_CUTOVER_FLIP` — no code path restores the dark DSN."* Both halves are correct. The
+consequence is that after the FIRST successful arm the dark slot holds the prod DSN permanently.
+
+An `op=arm` succeeded on **2026-07-23T15:46Z** (Doppler config log for `soleur-inngest/prd`: three
+writes inside one second by `user=inngest-cutover-arm` — the DSN, the heartbeat URL, and the flag).
+Measured 2026-08-20, value-silently: `soleur-inngest/prd` and `soleur/prd_terraform`
+`INNGEST_POSTGRES_URI` are byte-identical (sha256 prefix `7968f3d658c2`), both carrying the prod
+project ref and neither carrying soleur-dev's.
+
+**What broke.** G3 refused whenever the value it was about to write already equalled the value in
+place. That condition became permanently true on 2026-07-23, so every subsequent arm was refused
+regardless of readiness — the cutover could not be re-armed after a rollback, which is precisely
+what rollback exists to allow. It blocked the 2026-08-20 attempt, at the cost of a ~7m38s web
+scheduler gap and one missed timer tick.
+
+**The decision.** `op=arm` is now **idempotent**. When the target value is already in place, G3
+returns `skip-already-current` and the arm PROCEEDS. The DSN write is **not** skipped — an
+earlier revision of this change branched the write on that outcome and the branch was removed
+before merge: inverting its polarity skipped the write on the FIRST-arm transition, booting the
+host onto the dark backend while reporting success, with the whole suite green. All three prod
+writes are unconditional, which is strictly stronger — the arm ESTABLISHES the invariant rather
+than observing it. Do not reintroduce the branch. The
+heartbeat write and the `armed` write still run — skipping those would convert a successful arm into
+a silent no-op.
+
+**Why relaxing that guard costs no safety.** The hazard G3's own error text named ("would flip onto
+the DARK backend") is held entirely by the positive prod-project pin evaluated immediately before it:
+the dark backend is a *distinct Supabase project* and cannot carry the prod ref, so a value that
+passes the pin routes to the prod project. "Prod by construction" was too strong as originally
+written and is corrected here: the first two forms of the pin were defeated — a bare `*<ref>*`
+substring accepted the ref in a password or query parameter, and pinning the pooler USERNAME
+accepted `postgres.<prod-ref>` in front of ANY host, including `db.<dev-ref>.supabase.co`. The
+shipped pin anchors the AUTHORITY (scheme + user + Supabase host suffix + port), requires exactly
+one `@`, and rejects `,` and `host=`; twelve bypasses are permanent must-REFUSE fixtures. The equality test contributed nothing to that. The FLUSHALL
+hazard is held by the monotonic latch in `inngest-cutover-flip.sh` (#7228 P0-5) — recorded **at the
+flush** rather than at completion, fatal if unrecordable, and fronted by a durability gate that
+refuses to flush when the latch cannot be durably written. Re-arming over an in-flight or completed
+flip is held by G1. None of those changed.
+
+The residual concentration is deliberate and worth stating: the prod project-ref pin is now the sole
+guard against arming onto a non-prod Postgres. That is why the decision was extracted into a pure
+`g3_decide` function with a mutation-tested suite — deleting the pin reddens the build.
+
+**Two corrections to the record.**
+
+1. **The diagnostic-boot premise is false — and it is stated INSIDE this ADR, not only in #7462's
+   runbook.** The 2026-08-12 addendum above says verbatim: *"Resolution is a diagnostic boot — a
+   guard-permitted start against a non-prod backend, so `is_prod=false` takes the guard's ALLOW arm."*
+   Read that clause as SUPERSEDED. Only its first half is wrong: the backend is prod, and has been
+   since 2026-07-23. The diagnostic boot itself still works, by a different mechanism than that
+   sentence describes — `inngest-server-flip-guard.sh` derives `is_prod=false` from the unit file's
+   SQLite-only sentinel, never from the DSN's value — so #7462's resolution path is intact. A reader
+   of the correction alone would wrongly conclude it is dead. Anything reasoning from "the dark host
+   points at soleur-dev" is reasoning about the system as it was before that date.
+1a. **`op=arm` never read `INNGEST_DIAGNOSTIC_BOOT` until this change.** `inngest-bootstrap.sh` states
+   the precondition in prose — *"This is NOT a cutover state: clear INNGEST_DIAGNOSTIC_BOOT before
+   arming"* — and nothing enforced it; measured 2026-08-20, the flag was live at `1` and the arm
+   contained zero references to it. Arming in that state would have run the FSM to `done`, quiescing
+   the web scheduler and cutting over to a host whose ExecStart is SQLite-only with `--sdk-url` on a
+   closed loopback port, i.e. serving no registry, while reporting success. G3.6 now refuses before
+   any write.
+2. **The prod DSN resting in the dark slot is the documented post-first-arm steady state, not drift
+   to be corrected.** Restoring the soleur-dev DSN would re-create the co-tenancy this ADR wants
+   retired and would be undone by the next arm anyway.
+
+**Unchanged.** The soleur-dev co-tenancy defences (`0002_dev_inngest_tables_lockdown.sql`,
+`apply-inngest-rls-dev.yml`) remain live and correct: the cutover has not held, so the retirement
+sequencing described in the 2026-07-15 addendum still applies — but NOT unmodified, and the
+difference is recorded rather than substituted silently. That addendum names its trigger as
+"`op=arm` writes the prod DSN", and by that wording the trigger FIRED on 2026-07-23 and the
+retirement was due. The condition that actually governs is the stricter one the follow-through
+already uses (`scripts/followthroughs/inngest-rls-drop-6488.sh`): the flip reached `done` AND the
+DSN is not the dev ref AND the soak elapsed. Read the 2026-07-15 trigger as superseded by that.
+Its closing parenthetical — "the dark host is live against soleur-dev until the flip" — is also
+dead: the host has never bound `:8288`. The conclusion (do not drop early) survives on the
+different ground that the 14 tables still physically exist on soleur-dev. The forward/reverse
+asymmetry for `INNGEST_POSTGRES_URI` is now deliberate rather than an omission — idempotence makes an
+inverse unnecessary, which is why one was not added.
+
+### `cloud-init-inngest.yml`'s AC-DARK criterion is stale, and is recorded here rather than corrected there
+
+The dedicated host's cloud-init carries an acceptance criterion in its header:
+
+> DARK-ON-PROVISION (AC-DARK): INNGEST_POSTGRES_URI (out-of-band in the soleur-inngest
+> prd config) points at a distinct NON-PROD Postgres at provision → zero prod crons.
+
+The first clause has been false since 2026-07-23T15:46Z, for the reason this addendum gives
+throughout: `op=arm` overwrote that value with the prod DSN and `op=rollback` has no inverse. A
+host provisioned today reads the prod DSN out of `soleur-inngest/prd`, so `inngest-bootstrap.sh`
+renders the DURABLE-backend ExecStart and the host is not dark by that mechanism at all.
+
+**The criterion's CONCLUSION still holds, by a different mechanism, and the substitution is the
+part worth recording.** Darkness now comes from `inngest-server-flip-guard.sh`, not from the DSN:
+it derives `is_prod` from the presence of `--postgres-max-open-conns` in the installed unit, and
+refuses any prod-URI start whose `INNGEST_CUTOVER_FLIP` is outside `{armed,flipping,flushed,done}`
+(its own header states this as "refuses EVERY prod-URI start on the dedicated host"). The live
+flag is `rolled-back`, which is outside that set, so a freshly provisioned host would render a
+prod-backed ExecStart and then be refused at start. "Zero prod crons at provision" survives;
+"because the DSN is non-prod" does not. Anyone re-deriving AC-DARK from the DSN — a verification
+script, a runbook step, a future ADR — is reading a mechanism that no longer carries the property.
+
+**Why the file is not edited.** `inngest-host.tf` renders it through
+`user_data = base64gzip(templatefile("${path.module}/cloud-init-inngest.yml", …))` on
+`hcloud_server.inngest`. `user_data` is ForceNew, and that resource deliberately carries **no**
+`lifecycle.ignore_changes = [user_data]` — the file says so twice, once at the resource ("Deliberately
+NO lifecycle.ignore_changes=[user_data] … this host is the SOLE scheduler, so every cloud-init edit
+force-replaces it → a cron-outage window — gate all cloud-init edits to the maintenance-window
+`apply_target=inngest-host` dispatch") and once where `ssh_keys` IS ignored ("Deliberately NOT
+widened to user_data"). Terraform diffs the rendered bytes, so a **comment-only** edit is
+indistinguishable from a functional one: it arms a force-replace of the fleet's sole scheduler.
+
+That is not a merge-time hazard — none of `inngest-host.tf`'s resources sit in the per-PR CI
+`-target=` list — but it is a real one on the next `apply_target=inngest-host` dispatch, the drift
+detector, or any untargeted apply, i.e. on a path an operator may take for an unrelated reason and
+would not expect to be carrying a stale-comment fix. Correcting a comment is not worth arming that.
+
+**Disposition.** No issue is filed: the four deferral criteria have no slot for "correct, cheap, and
+unsafe to deliver until an unrelated window opens", which is the signal it belongs in the record
+rather than the backlog. The correction rides the next `inngest-host-replace` / maintenance-window
+edit to that file — whoever opens it should fold in the AC-DARK rewrite, and this section is what
+tells them to. Until then this ADR is the governing statement, and the header comment is to be read
+as superseded on its first clause.
+
+### ADR-105's `default_pool_size = 30` arithmetic is NOT falsified — measured, not assumed
+
+The review that produced this addendum flagged `inngest.tf`'s claim that post-flip "the dedicated
+host (10.0.1.40) uses its OWN dark pooler (soleur-dev), so prod-pooler inngest load goes to ~0",
+and asked whether re-deriving ADR-105's connection budget was a separate finding riding on the
+doc sweep. It is not, and the check is worth recording so it is not re-opened.
+
+ADR-105 never rested on that sentence. Its Precondition section names the durable resolution as
+"complete #6178 … collapses to **one** prod-pool writer permanently" — one, not zero — and its
+arithmetic is a single writer at `P × 5 ≤ 20` against `pool_size` 30, valid for any `P ≤ 4`. The
+post-flip operating point produced by the prod DSN resting in the dark slot is *exactly* that: the
+cutover stops both co-located inngests, leaving the dedicated host as the sole writer, and that
+host honours the cap (`inngest-bootstrap.sh` writes `--postgres-max-open-conns` into the
+durable-backend ExecStart — the same flag `inngest-server-flip-guard.sh` and `inngest-inventory.sh`
+use as their durability sentinel, so its presence there is independently pinned).
+
+So the falsified claim is `inngest.tf`'s alone, and it was already inconsistent with the ADR it
+anchors *before* the 2026-07-23 write made it stale — "~0" contradicts "one writer" in either
+world. Correcting the comment RECONCILES the two documents; it does not obsolete either, and no
+budget re-derivation follows. Recorded as a negative result rather than dropped silently: a future
+reader hitting the same sentence should be able to find that the question was asked and settled,
+rather than re-run the arithmetic.
