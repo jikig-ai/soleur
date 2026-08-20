@@ -298,6 +298,24 @@ doublefire_from() {
 # EXTRACTION CONTRACT: cutover-inngest-workflow.test.sh sources this function by awk range
 # `/^g3_decide\(\) \{$/,/^\}$/`. Keep the signature and the closing brace at column 0, and do
 # not introduce a column-0 `}` inside the body, or the extraction truncates.
+
+# G3.6's decision, extracted for the same reason g3_decide is (#7462 review): the first
+# revision of that gate inlined a `case` in the arm body and was covered only by greps for
+# its message strings — adding '1' to the pass-arm, i.e. arming while the diagnostic flag is
+# SET, left the whole suite green. A guard whose decision cannot be driven RED is not a guard.
+#
+#   $1  the raw INNGEST_DIAGNOSTIC_BOOT value, or __UNREADABLE__ when the read failed
+# Outcomes: clear | set | unreadable
+#
+# Same extraction contract as g3_decide: signature and closing brace at column 0.
+diag_boot_decide() {
+  case "$1" in
+    '__UNREADABLE__') printf '%s' 'unreadable'; return 0 ;;
+    ''|'0'|'false') printf '%s' 'clear'; return 0 ;;
+    *) printf '%s' 'set'; return 0 ;;
+  esac
+}
+
 g3_decide() {
   local pg="$1" pg_dark="$2"
 
@@ -1206,12 +1224,14 @@ case "$OP" in
     # Fail-closed on an unreadable value for the same reason G3 does: the config is proven
     # readable by G1, so an unreadable read here is anomalous, and proceeding would arm blind.
     DIAG_BOOT=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get INNGEST_DIAGNOSTIC_BOOT -p soleur-inngest -c prd --plain 2>/dev/null || printf '%s' '__UNREADABLE__')
-    case "$DIAG_BOOT" in
-      ''|'0'|'false') echo "::notice::op=arm: G3.6 diagnostic-boot gate passed (INNGEST_DIAGNOSTIC_BOOT is clear; the host will render its durable-backend ExecStart)." ;;
-      '__UNREADABLE__')
+    case "$(diag_boot_decide "$DIAG_BOOT")" in
+      clear) echo "::notice::op=arm: G3.6 diagnostic-boot gate passed (INNGEST_DIAGNOSTIC_BOOT is clear; the host will render its durable-backend ExecStart)." ;;
+      unreadable)
         echo "::error::op=arm: G3.6 — could not read INNGEST_DIAGNOSTIC_BOOT from soleur-inngest/prd despite a G1-readable config. Refusing FAIL-CLOSED: arming while that flag is set cuts over to a host that serves no registry. Do NOT SSH the host."; exit 1 ;;
-      *)
+      set)
         echo "::error::op=arm: G3.6 REFUSING — INNGEST_DIAGNOSTIC_BOOT is set on soleur-inngest/prd. A diagnostic boot renders an SQLite-only ExecStart with --sdk-url on a closed loopback port, so the host adopts NO function registry; arming now would quiesce the web scheduler and complete the cutover onto a host that serves nothing, reporting success. Clear INNGEST_DIAGNOSTIC_BOOT on soleur-inngest/prd, let the host re-render its ExecStart, then re-run op=arm. Do NOT SSH the host."; exit 1 ;;
+      *)
+        echo "::error::op=arm: G3.6 — diag_boot_decide returned an unrecognised outcome. Refusing FAIL-CLOSED."; exit 1 ;;
     esac
 
     # G4 — write the two DATA secrets FIRST, each via stdin (never argv), each exit-gated

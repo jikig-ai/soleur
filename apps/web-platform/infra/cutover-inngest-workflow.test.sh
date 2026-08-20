@@ -590,6 +590,30 @@ g3_case "refuses db.<ref>. as an attacker SUBDOMAIN"  "postgresql://u:pw@db.${G3
 g3_case "refuses a second '@' relocating the host"    "postgresql://u:p@db.${G3_PROD_REF}.x@attacker.example.com:5432/postgres"  "$G3_PROD" "refuse-not-prod-project"
 g3_case "refuses :5432 present but not the authority port" "postgresql://postgres.${G3_PROD_REF}:pw@attacker.example.com:15432/postgres?application_name=a:5432" "$G3_PROD" "refuse-not-prod-project"
 
+# G3.6's decision, driven the same way. Greps over the arm body could not see this: adding
+# '1' to the pass-arm (i.e. arming WHILE the diagnostic flag is set — the exact catastrophe
+# the gate exists to prevent) left the suite green, because every message string survived.
+DIAG_FN="$(mktemp)"; SCRATCH+=("$DIAG_FN")
+awk '/^diag_boot_decide\(\) \{$/,/^\}$/' "$BODY_SH" > "$DIAG_FN"
+# shellcheck disable=SC1090
+. "$DIAG_FN"
+assert "diag_boot_decide() is defined after sourcing" "declare -F diag_boot_decide >/dev/null"
+DIAG_EVALS=0
+diag_case() { # $1 desc, $2 raw value, $3 expected outcome
+  local got; got="$(diag_boot_decide "$2")"
+  DIAG_EVALS=$((DIAG_EVALS + 1))
+  assert "diag_boot_decide: $1 -> $3" "[[ '$got' == '$3' ]]"
+}
+diag_case "unset is clear"                ""                "clear"
+diag_case "'0' is clear"                  "0"               "clear"
+diag_case "'false' is clear"              "false"           "clear"
+diag_case "'1' is SET — must refuse"      "1"               "set"
+diag_case "'true' is SET — must refuse"   "true"            "set"
+diag_case "any other value is SET (fail-closed)" "yes"      "set"
+diag_case "an unreadable read fails closed" "__UNREADABLE__" "unreadable"
+assert "diag_boot_decide scenarios actually dispatched (>=7)" "[[ '$DIAG_EVALS' -ge 7 ]]"
+assert "arm) routes G3.6 through diag_boot_decide (single chokepoint)" "grep -qE 'case \"\\\$\\(diag_boot_decide ' '$ARM_FILE'"
+
 # Anti-vacuity floor (harness row H1): a suite whose scenario dispatch silently stopped
 # would otherwise report success having evaluated nothing. This counts EVALUATIONS, not
 # assertion calls, so gutting g3_case's body cannot satisfy it.
