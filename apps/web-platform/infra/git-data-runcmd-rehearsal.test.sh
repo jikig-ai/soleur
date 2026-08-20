@@ -1947,7 +1947,10 @@ if [ -s "$TMP/luks-stage.code.sh" ]; then
   sed -e 's|^\([[:space:]]*\)GIT_DATA_LUKS_DETAIL=\(.*\)$|\1: # seed relocated by R3(2c)|' \
     "$TMP/luks-stage.code.sh" > "$_r3_mut"
   printf 'GIT_DATA_LUKS_DETAIL=/run/git-data-luks-stage.log\n' >> "$_r3_mut"
-  _mut_seed=$(grep -n "$_R3_SEED_PAT" "$_r3_mut" | head -1 | cut -d: -f1)
+  # `|| true` because a no-match is a NORMAL answer here, not an error: the arm's own
+  # emptiness check below is what decides. Bare in the 208-entry baseline as a literal
+  # pattern; single-sourcing the pattern re-presented it to lint-shell-capture-exit as new.
+  _mut_seed=$(grep -n "$_R3_SEED_PAT" "$_r3_mut" | head -1 | cut -d: -f1 || true)
   _mut_app=$(grep -n '2>>"\?\$GIT_DATA_LUKS_DETAIL' "$_r3_mut" | head -1 | cut -d: -f1)
   if [ -n "$_mut_seed" ] && [ -n "$_mut_app" ] && [ "$_mut_seed" -gt "$_mut_app" ]; then pass; else
     fail "R3(2c) MUTATION did not land: relocated seed=${_mut_seed:-none} first-append=${_mut_app:-none}, expected seed AFTER append" \
@@ -2636,7 +2639,9 @@ fi
 # own comment claims. Echoes 1 when the ordering holds, 0 otherwise.
 _r2d_ordered() {  # $1 = comment-stripped concatenated runcmd
   local s t a
-  s=$(grep -n "$_R3_R2D_PAT" "$1" | head -1 | cut -d: -f1)
+  # `|| true` for the same reason as _mut_seed above -- a no-match is a normal answer and
+  # the `[ -n "$s" ]` guard below is what decides.
+  s=$(grep -n "$_R3_R2D_PAT" "$1" | head -1 | cut -d: -f1 || true)
   t=$(grep -n '^[[:space:]]*trap on_err EXIT[[:space:]]*$' "$1" | head -1 | cut -d: -f1)
   a=$(grep -n '2>>"\$GIT_DATA_RUNCMD_DETAIL"' "$1" | head -1 | cut -d: -f1)
   if [ -n "$s" ] && [ -n "$t" ] && [ -n "$a" ] && [ "$s" -lt "$t" ] && [ "$s" -lt "$a" ]; then
