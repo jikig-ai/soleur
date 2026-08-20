@@ -730,6 +730,15 @@ time bomb that reds every docs deploy.
      - soleur:cf-token-scope: requires Playwright MCP dashboard automation (same block) and
        is a WIDEN of an existing token, not a mint.
 
+   ✅ DONE 2026-08-20 — operator minted the token; verified without printing the value:
+     - AC30 presence: `doppler secrets get CF_API_TOKEN_PAGES -p soleur -c prd_terraform` exit 0
+     - AC12 ADR-130 retained-scope probe pair: pages/projects -> 200, zones/rulesets -> 403
+       (the 403 is the load-bearing half — a 200 there would mean an over-scoped mint)
+     - /user/tokens/verify: status=active, expires_on absent (no expiry, per the ledger)
+     - project name free: 0 existing Pages projects on the account, `soleur-docs` not taken
+     - chain proof: `doppler run --name-transformer tf-var` resolves TF_VAR_cf_api_token_pages,
+       so the merge-triggered apply will not fail at root-variable resolution
+
    OPERATOR ACTION (the only remaining path): Cloudflare dashboard -> My Profile -> API
    Tokens -> Create Token -> Custom token; permission Account : Cloudflare Pages : Edit and
    NOTHING else; TTL none. Write the value to Doppler soleur/prd_terraform as
