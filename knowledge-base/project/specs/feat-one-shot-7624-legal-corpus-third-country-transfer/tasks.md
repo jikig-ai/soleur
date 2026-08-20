@@ -38,13 +38,16 @@ residual sweep is the closure criterion.
 
 - [ ] 1.1 Apply CLO 2A (preamble, row C4) — keeps the pinned sentinel verbatim.
 - [ ] 1.2 Apply CLO 2B (limb (2) full replacement, rows A9 + C5). Substitute the 0.6 issue number.
-- [ ] 1.3 Apply CLO 2C (limb (3) addition). **Do not touch limb (1).**
+- [ ] 1.3 Apply CLO 2C (limb (3) addition). **Do not touch limb (1).** This phase does NOT apply
+      CLO 1B — row A10 belongs to Phase 2.
 - [ ] 1.4 Mirror all three, byte-identically, same commit.
 - [ ] 1.5 Confirm `/Three-part balancing test \(off-site evidence archive\)/` still matches both.
 
 ## Phase 2 — Class A + Class G
 
 - [ ] 2.1 CLO 1A: split the `privacy-policy.md` §5.11 storage-location bullet into two.
+- [ ] 2.1b **CLO 1B (row A10)** — the `gdpr-policy.md` §3.4 closing sentence. Owned here, not by
+      Phase 1; an earlier draft left it owned by no phase.
 - [ ] 2.2 CLO 1C template table: rows A1, A2/C1, A4, A5, A6, A7, A8, C2.
 - [ ] 2.3 Row G1: "Governance mode" → "Cloudflare R2 Lock Rule (age-based, ten (10) year
       retention floor)". S3 terminology for a mechanism the infrastructure does not use.
@@ -101,7 +104,11 @@ residual sweep is the closure criterion.
 - [ ] 7.3 Run AC10 / AC10a / AC11; paste the classified output into the PR body.
 - [ ] 7.4 `git diff origin/main | grep -n '#NNNN'` → nothing.
 - [ ] 7.5 File the availability/DR tracking issue (AC19 — the `chat-attachments` DR claim, NOT the
-      attribution, which is in scope as row E3) and confirm AC14/AC15/AC16.
+      attribution, which is in scope as row E3) and confirm AC14/AC15/AC16. AC14 uses
+      `grep -c '^-[^-]'` and `git diff -U0` — the bare `'^-'` form can never return 0 because the
+      `--- a/<path>` header matches it.
+- [ ] 7.6 File the register-binding follow-up issue from the plan's `## Follow-Up: the divergence
+      class this guard does not cover`. Carry the #7622 counterfactual verbatim into the body.
 
 ## Post-merge
 
