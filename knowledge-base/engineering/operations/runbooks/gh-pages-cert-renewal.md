@@ -255,7 +255,13 @@ with `soleur:trigger-cron`:
 
 ## Detection
 
-`cron-gh-pages-cert-state` runs daily at 03:00 UTC and:
+> **Superseded 2026-08-20 (#7640):** the daily `0 3 * * *` trigger described in this
+> section was REMOVED by the ADR-194 substrate PR; `cron-gh-pages-cert-state` is
+> manual-trigger-only, and its Sentry monitor carries `enabled = false`. Read the
+> steps below as the pre-cutover behaviour. Fire it with
+> `cron/gh-pages-cert-state.manual-trigger` via POST /api/internal/trigger-cron.
+
+`cron-gh-pages-cert-state` ran daily at 03:00 UTC (schedule now disarmed) and:
 
 - files/updates a `[cert-poll]` issue below **21 days** to expiry (a log), and
 - **pages via Sentry** below **7 days** when the cert is wedged in a state ACME
