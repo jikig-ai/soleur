@@ -234,6 +234,7 @@ anti-priming
 anti-slop
 anti-sycophancy
 anti-vacuity
+anti-vacuity-floor
 anycast
 ap-009
 ap-021
@@ -3318,6 +3319,7 @@ shell-init-scope
 shell-injection
 shell-limits
 shell-mock
+shell-parsing
 shell-portability
 shell-script
 shell-scripting

@@ -30,7 +30,7 @@ git init --bare -b main "$BARE" >/dev/null
 # Seed a commit on main via a temporary clone
 SEED="$TMP/seed"
 git clone "$BARE" "$SEED" >/dev/null 2>&1
-( cd "$SEED"
+( cd "$SEED" || { echo "FATAL: cd to sandbox \$SEED failed; refusing to write git objects in $(pwd)" >&2; exit 90; }
   git -c user.email=t@t -c user.name=t commit --allow-empty -m "seed" >/dev/null
   git push origin main >/dev/null 2>&1
 )
@@ -47,7 +47,7 @@ mkdir -p "$WT_PARENT/.worktrees"
 # Anchor a fake "victim" checkout — the worktree that holds an active lease
 # and which a sibling cleanup-merged invocation must NOT reap.
 git -C "$BARE" worktree add -b feat-victim "$WT_PARENT/.worktrees/feat-victim" main >/dev/null 2>&1
-( cd "$WT_PARENT/.worktrees/feat-victim"
+( cd "$WT_PARENT/.worktrees/feat-victim" || { echo "FATAL: cd to sandbox \$WT_PARENT/.worktrees/feat-victim failed; refusing to write git objects in $(pwd)" >&2; exit 90; }
   echo hi > a.txt
   git -c user.email=t@t -c user.name=t add a.txt
   # Date the commit older than the 10-min recent-commit grace so the lease
@@ -107,7 +107,15 @@ WT_ACTOR="$WT_PARENT/.worktrees/feat-actor"
 # matches the worktree being considered — so feat-victim is NOT protected
 # by that guard from a sibling session. Only the new lease guard protects it.
 (
-  cd "$WT_ACTOR"
+  # `|| exit` IS LOAD-BEARING (#7546 review). A bare `cd` that FAILS leaves the subshell in the
+  # INHERITED cwd -- the real worktree `test-all.sh` was invoked from -- and the cleanup-merged
+  # below then runs against it. All seven `worktree add` calls in this file swallow failure with
+  # `>/dev/null 2>&1`, so $WT_ACTOR being absent is a reachable state (a leftover branch from a
+  # crashed run is enough). Measured 2026-08-20: this escaped the sandbox and committed
+  # `victim change`, `victim2 change`, `v9 change` and `v12 change` onto a live feature branch in
+  # another session's worktree, then checked that worktree out to main and pulled. The fixture
+  # names map one-to-one onto the four cd-failure sites in this file.
+  cd "$WT_ACTOR" || { echo "FATAL: cd to sandbox \$WT_ACTOR failed; refusing to run cleanup-merged in $(pwd)" >&2; exit 90; }
   SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT" \
     bash "$WM" cleanup-merged >/tmp/cleanup-out.$$ 2>&1 || true
 )
@@ -145,7 +153,7 @@ kill "$HOLDER_PID" 2>/dev/null || true
 # ---------------------------------------------------------------------------
 git -C "$BARE" worktree add -b feat-victim2 "$WT_PARENT/.worktrees/feat-victim2" main >/dev/null 2>&1
 WT_VICTIM2="$WT_PARENT/.worktrees/feat-victim2"
-( cd "$WT_VICTIM2"
+( cd "$WT_VICTIM2" || { echo "FATAL: cd to sandbox \$WT_VICTIM2 failed; refusing to write git objects in $(pwd)" >&2; exit 90; }
   echo hi2 > b.txt
   git -c user.email=t@t -c user.name=t add b.txt
   # Older than the 10-minute recent-commit grace, so the LEASE is the only
@@ -177,7 +185,8 @@ elif kill -0 "$DEAD_PID" 2>/dev/null; then
 else
   pass "scenario 2 precondition: the acquiring process has exited (pid $DEAD_PID is dead)"
   (
-    cd "$WT_ACTOR"
+    # `|| exit` load-bearing -- see the note at the first cd site above.
+    cd "$WT_ACTOR" || { echo "FATAL: cd to sandbox \$WT_ACTOR failed; refusing to run cleanup-merged in $(pwd)" >&2; exit 90; }
     SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT" \
       bash "$WM" cleanup-merged >/tmp/cleanup2-out.$$ 2>&1 || true
   )
@@ -583,7 +592,7 @@ SEED9="$TMP/seed9"; git clone "$BARE9" "$SEED9" >/dev/null 2>&1
 rm -rf "$SEED9"
 WT9="$TMP/wt9"; mkdir -p "$WT9/.worktrees"
 git -C "$BARE9" worktree add -b feat-v9 "$WT9/.worktrees/feat-v9" main >/dev/null 2>&1
-( cd "$WT9/.worktrees/feat-v9"
+( cd "$WT9/.worktrees/feat-v9" || { echo "FATAL: cd to sandbox \$WT9/.worktrees/feat-v9 failed; refusing to write git objects in $(pwd)" >&2; exit 90; }
   echo hi9 > c.txt
   git -c user.email=t@t -c user.name=t add c.txt
   # Older than the 10-minute recent-commit grace, so the LEASE is the only thing
@@ -794,7 +803,7 @@ S12="$TMP/s12"; git clone "$BARE12" "$S12" >/dev/null 2>&1
 rm -rf "$S12"
 WT12="$TMP/wt12"; mkdir -p "$WT12/.worktrees"
 git -C "$BARE12" worktree add -b feat-v12 "$WT12/.worktrees/feat-v12" main >/dev/null 2>&1
-( cd "$WT12/.worktrees/feat-v12"
+( cd "$WT12/.worktrees/feat-v12" || { echo "FATAL: cd to sandbox \$WT12/.worktrees/feat-v12 failed; refusing to write git objects in $(pwd)" >&2; exit 90; }
   echo hi12 > d.txt
   git -c user.email=t@t -c user.name=t add d.txt
   GIT_COMMITTER_DATE="2025-01-01T00:00:00Z" \
