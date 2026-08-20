@@ -259,4 +259,139 @@ describe("legal-doc consistency: source ↔ Eleventy mirror", () => {
       ).not.toMatch(/RCS Luxembourg/);
     }
   });
+
+  // ---------------------------------------------------------------------
+  // Superseded corpus claims (#7624).
+  //
+  // Art. 30 PA-7 governs, and until 2026-08-20 the published corpus said the
+  // opposite of it on three points: that the CLA evidence archive was
+  // EU-region, that it introduced no third-country transfer, and that its
+  // retention was capped at ten years. This block exists because the other
+  // four legal gates cannot see that class of defect at all -- they compare
+  // hashes, heading sequences and drift, so TWO BYTE-IDENTICAL COPIES OF A
+  // FALSE SENTENCE PASS ALL OF THEM (#7349). This file owns the only
+  // mechanism in the repo that quantifies a prose proposition over both
+  // loadSource() and loadMirror().
+  //
+  // WHITESPACE IS NORMALISED before matching. Every literal below is
+  // newline-free, so without this a `prettier --prose-wrap` over
+  // docs/legal/*.md would silently disarm a subset of the sentinels while
+  // the rest kept firing -- a partial disarm, which is worse than a total
+  // one because the guard goes on looking alive. Measured at wrap-80, 5 of
+  // 11 literals stopped matching; 199 of 643 lines in
+  // privacy-policy.md currently exceed 200 characters.
+  //
+  // KNOWN RESIDUAL, stated rather than implied: nothing here pins that these
+  // assertions RAN. Emptying the two test.each callback bodies leaves the
+  // suite green -- the dispatch axis. `scripts/guard-vacuity-floor.test.sh`
+  // is the repo's meta-guard for exactly that shape, but it derives its
+  // population from tracked `*.test.sh` files, so a TypeScript assertion body
+  // is outside it by construction. Extending that derivation to `*.test.ts`
+  // is tracked at #7669.
+  //
+  // Correction markers must PARAPHRASE the superseded sentence, never quote
+  // it -- a verbatim quote would republish the forbidden literal in live
+  // prose and red this guard against a correct corpus.
+  const normalise = (text: string): string => text.replace(/\s+/g, " ");
+
+  // The pre-correction sentences, committed verbatim. This is what makes the
+  // floor below measure REACHABILITY rather than cardinality: a sentinel that
+  // matches nothing is dead on arrival, and a count cannot tell 11 live
+  // sentinels from 11 dead ones. A committed fixture is used deliberately
+  // instead of reading origin/main at test time -- a moving ref would invert
+  // the moment this PR merges and main starts carrying the corrected text.
+  const SUPERSEDED = normalise(
+    readFileSync(resolve(__dirname, "fixtures/legal-superseded-claims-7624.md"), "utf-8"),
+  );
+
+  // NEGATIVE arm: these exact sentences must never reappear on either surface.
+  const FORBIDDEN: Array<[string, string]> = [
+    ["privacy-policy", "no third-country transfer for archive contents at rest"],
+    ["privacy-policy", "retained for ten (10) years on the off-site archive"],
+    ["privacy-policy", "Governance mode"],
+    ["gdpr-policy", "does not introduce a third-country transfer"],
+    ["gdpr-policy", "bucket region is EU"],
+    ["gdpr-policy", "hard-set at 10 years"],
+    ["data-protection-disclosure", "Intra-EU processing for archive contents at rest"],
+    ["data-protection-disclosure", "Cloudflare R2 (storage, EU region)"],
+    ["data-protection-disclosure", "retained for ten (10) years per Section 2.3(n)"],
+    ["individual-cla", "retained for ten (10) years from the date of signature"],
+    ["corporate-cla", "retained for ten (10) years from the date of signature"],
+  ];
+
+  // POSITIVE arm, and it carries most of the weight. The negative arm pins
+  // eleven HISTORICAL PHRASINGS; it cannot see a paraphrase, and a corpus that
+  // simply DELETES the disclosure satisfies it trivially. These anchors are
+  // proposition-bearing and subject-coupled -- each names the importer's
+  // country or the retention posture, not a bare instrument token. A bare
+  // "EU-US Data Privacy Framework" would be vacuous: it already occurred 7x /
+  // 6x / 3x in the FALSE corpus, via the Stripe, GitHub and Cloudflare-CDN
+  // rows (cq-assert-anchor-not-bare-token).
+  //
+  // Every anchor below was verified to occur ZERO times on the pre-correction
+  // corpus and once on each surface now, so this arm reds on the old text.
+  const REQUIRED: Array<[string, string]> = [
+    ["privacy-policy", "does involve a transfer to a third country"],
+    ["privacy-policy", "Cloudflare, Inc. is established in the United States"],
+    ["gdpr-policy", "involve a third-country transfer"],
+    ["gdpr-policy", "Cloudflare, Inc. is established in the United States"],
+    ["data-protection-disclosure", "Third country: the United States"],
+    ["data-protection-disclosure", "a processor established in the **United States**"],
+    ["individual-cla", "a company established in the **United States**"],
+    ["individual-cla", "retained **indefinitely**"],
+    ["corporate-cla", "a company established in the **United States**"],
+    ["corporate-cla", "retained **indefinitely**"],
+  ];
+
+  test("superseded-claim sentinels are reachable, not merely numerous (#7624)", () => {
+    // Cardinality floors are satisfied by 11 garbage strings. This is the arm
+    // that is not: every sentinel must correspond to prose that was really
+    // published, and must be attributed to the document that really carried it.
+    expect(FORBIDDEN.length, "negative sentinel set was emptied or trimmed").toBe(11);
+    expect(REQUIRED.length, "positive sentinel set was emptied or trimmed").toBe(10);
+    for (const [doc, lit] of FORBIDDEN) {
+      expect(
+        SUPERSEDED,
+        `sentinel ${doc}/"${lit}" matches nothing in the pre-correction corpus — dead on arrival`,
+      ).toContain(normalise(`\`${doc}\` :: ${lit}`));
+    }
+    // The positive anchors need their own floor. `toContain` is satisfied by any
+    // string the document happens to hold, so substituting an anchor for a common
+    // word ("the") would keep this arm green while pinning nothing. Require each
+    // anchor to be long enough to be a phrase AND to actually name the proposition
+    // PA-7 (e)/(f) records, and to not itself be one of the superseded sentences.
+    for (const [doc, lit] of REQUIRED) {
+      expect(
+        lit.length,
+        `positive anchor ${doc}/"${lit}" is too short to be proposition-bearing`,
+      ).toBeGreaterThanOrEqual(20);
+      expect(
+        lit,
+        `positive anchor ${doc}/"${lit}" names neither the importer's country nor the retention posture`,
+      ).toMatch(/United States|third[- ]country|indefinitely/i);
+      expect(
+        SUPERSEDED,
+        `positive anchor ${doc}/"${lit}" is itself a superseded claim`,
+      ).not.toContain(normalise(lit));
+    }
+  });
+
+  test.each(FORBIDDEN)(
+    "superseded claim must not reappear: %s / %s",
+    (doc: string, lit: string) => {
+      const needle = normalise(lit);
+      expect(normalise(loadSource(doc)), `source ${doc} still carries: ${lit}`).not.toContain(needle);
+      expect(normalise(loadMirror(doc)), `mirror ${doc} still carries: ${lit}`).not.toContain(needle);
+    },
+  );
+
+  test.each(REQUIRED)(
+    "corrected disclosure must survive: %s / %s",
+    (doc: string, lit: string) => {
+      const needle = normalise(lit);
+      expect(normalise(loadSource(doc)), `source ${doc} lost: ${lit}`).toContain(needle);
+      expect(normalise(loadMirror(doc)), `mirror ${doc} lost: ${lit}`).toContain(needle);
+    },
+  );
+
 });

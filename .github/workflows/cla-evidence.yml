@@ -3,7 +3,7 @@ name: cla-evidence
 # Sidecar evidence layer alongside the upstream contributor-assistant/github-action
 # in cla.yml. Captures sign-time artifacts (doc-hash, verbatim comment body,
 # PR-of-record, allowlist-bypass provenance) and writes them to the off-site
-# Cloudflare R2 archive (governance object-lock, EU region) so a future BSL →
+# Cloudflare R2 archive (R2 Lock Rule, age-based 10y retention floor) so a future BSL →
 # Apache 2.0 relicensing event is defensible in EU/France jurisdiction.
 #
 # Plan: knowledge-base/project/plans/2026-05-04-feat-cla-legal-rigor-evidence-layer-plan.md
@@ -23,7 +23,7 @@ on:
     # then deletes their sign comment after the action has already accepted
     # the signature. The sidecar appends to the existing tombstone in both
     # cases; the canonical evidence record is content-addressed and
-    # immutable per Object Lock.
+    # immutable per the R2 Lock Rule (R2 does not implement the S3 Object Lock API).
     types: [created, edited, deleted]
 
 permissions:
@@ -214,5 +214,5 @@ jobs:
           # The R2 record itself is content-addressed at signatures/<sha>.json,
           # but the sha is not predictable from the contributor's view (depends
           # on workflow_run_id), so we don't promise a specific bucket key.
-          body="Recorded: signed against \`docs/legal/individual-cla.md\` at SHA \`$DOC_GIT_SHA\` (content \`sha256:$DOC_CONTENT_SHA256\`). Verify with \`git show $DOC_GIT_SHA:docs/legal/individual-cla.md | sha256sum\`. The evidence record is archived off-site under R2 Object Lock (Governance, 10yr) and retrievable via \`bash apps/cla-evidence/scripts/inspect-evidence.sh by-pr $PR_NUMBER\` (operator-only, see retrieval runbook)."
+          body="Recorded: signed against \`docs/legal/individual-cla.md\` at SHA \`$DOC_GIT_SHA\` (content \`sha256:$DOC_CONTENT_SHA256\`). Verify with \`git show $DOC_GIT_SHA:docs/legal/individual-cla.md | sha256sum\`. The evidence record is archived off-site under a Cloudflare R2 Lock Rule (age-based, 10-year write-once floor; retention is indefinite) and retrievable via \`bash apps/cla-evidence/scripts/inspect-evidence.sh by-pr $PR_NUMBER\` (operator-only, see retrieval runbook)."
           gh api "repos/$REPO_FULL/issues/$PR_NUMBER/comments" -X POST -f body="$body"
