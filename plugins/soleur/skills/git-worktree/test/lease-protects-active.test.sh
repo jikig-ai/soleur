@@ -67,15 +67,40 @@ cdx() {
 # file are in flight simultaneously, which makes "a merge drops one site back to a bare cd" a live
 # possibility rather than a hypothetical. Assert the PROPERTY here instead of trusting review to
 # notice. Excludes the `&&` forms, which short-circuit and are safe.
-# Keyed on STRUCTURE, never on any guard's WORDING. A check greping for `cdx(` would flag a site
-# guarded correctly some other way; one greping for a guard PHRASE would clear a site guarded with
-# different wording — and that second failure mode is not hypothetical: a sibling session counted
-# its own guarded sites with `grep -c '<its guard phrase>'` and got 5 when the answer was 7,
-# because it had worded the two reaper guards differently. What is dangerous is a `cd "` whose
-# failure is not handled, so that is what this looks for: both `&&` (short-circuits) and `||`
-# (explicit handler, which is how the other in-flight fix to this file guards its sites) are
-# accepted, whatever they are followed by.
-_bare_cd="$(grep -nE '^[[:space:]]*\(?[[:space:]]*cd "' "${BASH_SOURCE[0]}" | grep -vE '&&|\|\|' || true)"
+# Keyed on STRUCTURE, never on any guard WORDING, and evaluated on LOGICAL lines.
+#
+# Three corrections, each found by mutation rather than by reading:
+#   1. Wording. A check greping for `cdx(` flags a site guarded correctly some other way; one
+#      greping for a guard PHRASE clears a site guarded with different wording. Not hypothetical
+#      -- a sibling session counted its own guarded sites with `grep -c <its guard phrase>`, got
+#      5, and the answer was 7: it had worded its two reaper guards differently.
+#   2. Reach. Anchoring at line start inspected 7 of this file 25 `cd "` sites -- the dominant
+#      `if ( cd "` form was invisible, while the message below claimed to refuse on ANY bare cd.
+#      A guard narrower than the claim it carries is this suite own subject, one level up.
+#   3. Line shape. Most sites here are backslash-continued, so the `&&` that handles the failure
+#      sits on the NEXT physical line. Judging physical lines both misses a real defect and
+#      false-flags a correctly guarded two-line site.
+#
+# So: strip comments (prose naming `cd "` must not be inspected -- this block itself would
+# match), join continuations into one logical line, then flag any `cd "` whose logical line
+# neither carries `&&`/`||` nor makes cd itself the tested command. `if ( cd "$X" ... )` is NOT
+# exempt merely for containing `if`: that tests the SUBSHELL, so a resolution dropping the `&&`
+# leaves cd failure swallowed and the next command running in the wrong directory, which parses
+# cleanly and is silent. That case is mutation-proven below.
+_bare_cd="$(awk '
+  BEGIN { start_ln = 1 }
+  {
+    l = $0
+    sub(/(^|[[:space:]])#.*$/, "", l)
+    line = line l
+    if (sub(/\\[[:space:]]*$/, " ", line)) next
+    if (line ~ /(^|[^[:alnum:]_])cd "/ \
+        && line !~ /&&/ && line !~ /\|\|/ \
+        && line !~ /(^|[[:space:]])(if|while|until)[[:space:]]+!?[[:space:]]*cd[[:space:]]"/ \
+        && line !~ /(^|[^[:alnum:]_])cdx[[:space:]]/) print start_ln ": " line
+    line = ""; start_ln = NR + 1
+  }
+' "${BASH_SOURCE[0]}")"
 if [[ -n "$_bare_cd" ]]; then
   printf '  FAIL: unguarded cd site(s) in this suite — every fixture cd must go through cdx():\n' >&2
   printf '%s\n' "$_bare_cd" >&2
