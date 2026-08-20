@@ -15,6 +15,69 @@ requires_cpo_signoff: true
 
 # Migrate the marketing/docs site off GitHub Pages to Cloudflare Pages
 
+## Enhancement Summary
+
+**Deepened:** 2026-08-20. Eight review agents (terraform-architect, architecture-strategist,
+spec-flow-analyzer, code-simplicity-reviewer, kieran, CTO, a strong-model advisor consult) plus
+the deepen-plan halt gates. The plan was **restructured**, not annotated — four findings
+falsified load-bearing choices in the first draft.
+
+### What changed and why
+
+1. **The www→apex mechanism was wrong.** The first draft put the 301 in a Pages `_redirects`
+   file. Cloudflare documents domain-level redirects as **unsupported**, citing the exact
+   shape proposed; the repo's own canonical-host build gate would have rejected the file's
+   contents on every build; and the guard's chokepoint assertion would have landed outside
+   `infra-validation.yml`'s path filter, so the guard would have passed by never running.
+   Three independent failures behind one plausible line. Replaced with account Bulk Redirects
+   — the mechanism Cloudflare's own www-redirect guide prescribes and one this repo already
+   has wired.
+2. **One merge could not produce the plan's own verification order.** `apply-web-platform-infra.yml`
+   and `deploy-docs.yml` fire on the same push with no ordering edge, so the apex would point at
+   a Pages project with zero deployments, or the deploy would read a secret Terraform had not
+   yet created. Restructured into **three sequenced PRs, IaC first**.
+3. **A deferred item could not be deferred.** `cron-gh-pages-cert-state` runs `cron: "0 3 * * *"`
+   and its issue body instructs firing the reissue routine — which, post-cutover, de-proxies
+   **www** and then **cannot restore it** (`restore` fails closed at `1/5` records). Disarmament
+   is now an in-scope deliverable (D2); deletion stays deferred.
+4. **The cutover is a gap, not a swap.** A removed resource and its replacement are unrelated
+   graph nodes, so Terraform dispatches the deletes and the create concurrently — a coin flip
+   between a clean apply and error `81053` on the live apex, with a recordless window that
+   negative-caches for 1800 s. Gate 4.55 then forced the question the draft never asked: is the
+   outage necessary at all? Probably not — **Hypothesis Z** (custom-domain attachment, not the
+   record, selects the origin) is now the plan of record, with the two-pass apply demoted to a
+   measured fallback.
+
+### Also corrected
+
+- `ci.yml` runs `lint-encryption-posture.py --repo-sweep`, which **fail-closes on unknown
+  resource types**; neither Pages type is in the ledger. Adding `cf-pages.tf` would have
+  reddened CI deterministically.
+- The new apex record's Terraform address was never named — and `-target=cloudflare_record.github_pages`
+  must be **retained**, or the destroy is never planned.
+- Acceptance criteria that could not pass a correct implementation: `grep -c` exits 1 on zero
+  matches; a bare `grep -c 'default'` returns 1 on a correct no-default variable; a bare
+  action-name grep returns 2 because of a comment.
+- A guard was a costume (no runner, two rows resolving to "a reviewer notices") — cut.
+- A `_headers` file would have imposed a 4-hour deploy-staleness window on non-content-hashed
+  filenames — cut; the cache-control change is now deliberate.
+- Five monitors, not four: `soleur_changelog_deep` is the only deep-path apex monitor and
+  guards exactly the Pages directory-index risk. `soleur_acme_probe` goes **vacuous**, not
+  merely misdescribed.
+- The apex carries live Protonmail `MX` and four `TXT` records that no criterion protected —
+  a silent mail break invisible to every uptime monitor. Baseline captured; CUT9 added.
+- The origin-provenance probe **failed open**, printing the success verdict for an unreachable
+  site (an AP-021 violation). Hardened and verified across all four arms.
+- `workflow_dispatch` structurally cannot carry `[ack-destroy]`, so the documented escape hatch
+  cannot perform the rollback. The revert PR is now pre-opened.
+
+### Confirmed as sound (probed, no change)
+
+An apex CNAME **does** coexist with apex `MX`/`TXT` at Cloudflare — CNAME flattening is what
+makes it legal, and the conflict set never includes `MX`/`TXT`. This was the highest-flagged
+structural risk and it is not a risk; CUT9 still asserts it, because the failure would be silent.
+
+
 ## Overview
 
 ADR-194 (accepted 2026-08-20, commit `2635b1c3a`) records that the docs-site hosting
@@ -336,7 +399,7 @@ resource "cloudflare_list" "www_canonical" {
 plus a **second** `rules { }` block in `cloudflare_ruleset.bulk_redirects`, declared
 **after** the existing `legal_redirects` rule.
 
-**Why a separate list rather than a 14th item in `legal_redirects`:** Cloudflare does not
+**Why a separate list rather than a 13th item in `legal_redirects`:** Cloudflare does not
 document matching precedence between two list entries that could both match, and every
 existing item carries `include_subdomains = "enabled"` — so `www.soleur.ai/pages/legal/
 privacy-policy.html` already matches an apex item today. Adding a www catch-all to the same
@@ -476,6 +539,65 @@ the cutover apply.
 
 **PF-ORDER** is added to the pre-flight set: the cutover job asserts the destroy pass completed
 (the four records are gone from state) **before** the create pass is dispatched.
+
+## Downtime & Cutover
+
+**Trigger.** The deploy/router class fires: the apex record swap takes the public serving
+surface through a state where it has no address record. An earlier draft treated that window
+as something to *bound* (D4's two-pass apply). This gate requires evaluating a **zero-downtime
+path first**, and defaulting to it.
+
+**The offline-inducing operation, precisely.** `cloudflare_record.github_pages[*]` (4 × `A`)
+must be gone before `cloudflare_record.pages_apex` (`CNAME`) can exist — Cloudflare rejects a
+CNAME at a name still carrying `A` records (error `81053`). Between the last delete and the
+create, `soleur.ai` has no address record: resolvers get NODATA/NXDOMAIN and negative-cache it
+against the zone SOA minimum (**1800 s**), six times the 300 s positive TTL a proxied record
+uses. On an HSTS-preloaded domain there is no HTTP fallback. Affected surface: the public
+marketing and documentation site, `single-user incident` threshold.
+
+### Zero-downtime path — evaluated, and it is probably available
+
+**Hypothesis Z.** For a hostname attached to a Pages project as a custom domain, Cloudflare's
+edge routes by **Host header to the project**, and the DNS record's *content* is not what
+selects the origin — the record only has to exist and be **proxied** so the edge terminates the
+request. Two documented behaviours point this way: Cloudflare warns that pointing a CNAME at a
+Pages site *without* first attaching the custom domain yields a **522** (i.e. attachment is what
+establishes routing, and its absence is what breaks it), and Bulk Redirects are documented to
+run *"in front of your Pages project"* for an attached hostname.
+
+If Z holds, the cutover is **zero-downtime by construction and the record swap is not the
+cutover at all**:
+
+1. PR1 attaches `soleur.ai` as a Pages custom domain while the four `A` records still point at
+   GitHub Pages. The record stays proxied throughout; nothing is deleted.
+2. The apex begins serving from Pages at the moment of attachment — verified by CUT0
+   (`version.txt` equals the deployed SHA) and CUT2 (no GitHub-origin headers).
+3. The `A`→`CNAME` change becomes **cosmetic tidy-up** — correcting the record to express what
+   is already true — and can be scheduled independently of the cutover, or deferred entirely.
+4. Rollback is *detaching the custom domain*, which is faster than a revert PR and does not
+   touch DNS at all.
+
+**PF-Z (blocking, measured in PR1, before PR3 is written).** Attach the apex custom domain and,
+without changing any DNS record, measure: does `https://soleur.ai/version.txt` return the
+deployed SHA, and do the GitHub-origin headers disappear? This is a **reversible** probe — detach
+restores the prior state — and it is measured on the real hostname, so it settles Z rather than
+arguing it. PF7's detach measurement is the same experiment run backwards and the two share one
+result.
+
+### Residual-downtime path (fallback, only if PF-Z falsifies Z)
+
+If attachment alone does **not** move the origin, the record swap is genuinely the cutover and
+D4's two-pass targeted apply applies: destroy pass, assert the four records are gone, create
+pass. That bounds the recordless window to the latency of two API calls rather than to
+Terraform's scheduler.
+
+**This path is accepted only with:** the bounded window stated (target: under 5 s between
+passes), the cutover run inside a declared maintenance window at a low-traffic hour, the
+pre-opened revert PR ready (PF8), and the CUT0-CUT9 verification set gating "done". It is a
+**fallback**, not the plan of record — the plan of record is Z.
+
+**Why this gate earned its place here:** the earlier draft had already chosen the residual-downtime
+path and optimised it, without ever asking whether the outage was necessary. It probably is not.
 
 ## Token Decision — ADR-130 decision test applied
 
@@ -887,7 +1009,7 @@ independently.
 | `main.tf` | `cloudflare` alias `pages` bound to `var.cf_api_token_pages` | — | 1 |
 | `variables.tf` | `cf_api_token_pages` — sensitive, no default, description is the scope ledger | — | 1 |
 | `seo-bulk-redirects.tf` | `cloudflare_list.www_canonical` + a second ordered rule | `cloudflare.rulesets` | 1 |
-| `dns.tf` | apex `A`×4 → apex `CNAME`; www → proxied `A` at `192.0.2.1` | default `cloudflare` | 3 |
+| `dns.tf` | apex `A`×4 → apex `CNAME` (`cloudflare_record.pages_apex`); www `content` retargeted to the Pages project, staying a proxied `CNAME` (**in-place update**, not a replace) | default `cloudflare` | 3 |
 
 Provider pin unchanged: `cloudflare/cloudflare ~> 4.0` (4.52.7). All new HCL uses **v4 block
 syntax**; registry `latest` documents v5 attribute-set syntax and must not be copied.
@@ -989,9 +1111,13 @@ failure_modes:
         the project including a stale one, so it cannot discriminate.
     alert_route: deploy-docs.yml job failure.
   - mode: www stops 301-ing
-    detection: sentry_uptime_monitor.soleur_www asserts 301. Under D1's design www has no
-        origin (192.0.2.1), so a missing redirect hard-fails rather than quietly serving a
-        duplicate copy of the site.
+    detection: sentry_uptime_monitor.soleur_www asserts 301, not 2xx. Under D1's chosen
+        design www IS attached to the Pages project, so a missing redirect serves a duplicate
+        copy of the site at 200 — which is exactly what the 301 assertion catches, within one
+        confirmation period. (The rejected 192.0.2.1 variant would hard-fail instead; both are
+        caught by this same monitor, which is why the failure-mode severity, not detectability,
+        decided D1.) Second and third nets: the canonical-host build gate and the apex
+        <link rel="canonical">.
     alert_route: Sentry issue alert -> email.
   - mode: the retained cert-reissue routine fires post-cutover and de-proxies www one-way
     detection: the D2 apex-topology precondition refuses the run and emits a non-benign
