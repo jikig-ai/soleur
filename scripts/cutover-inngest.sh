@@ -2045,7 +2045,26 @@ case "$OP" in
     #     Writing `flushed` over an in-flight armed/flipping flip would race the running FSM.
     #  G2 the durable flush latch must EXIST. `flushed` asserts "the flush already happened"; if
     #     no latch is recorded that assertion is unfounded, and starting the server would adopt a
-    #     queue that was never flushed. Read no-SSH via the deploy-status hook, never by SSH.
+    #     queue that was never flushed. Answered off-host, never by SSH.
+    #
+    #     ENFORCED SINCE #7462, AND NOT HERE — read this clause as a statement about the SYSTEM,
+    #     not about this verb. From #7228 until #7462 it was documentation only: nothing anywhere
+    #     evaluated it. `op=arm`'s G3.7 now does, over betterstack-query.sh, keyed on the two
+    #     emit_state literals that prove a flush happened (`flip-complete`,
+    #     `refuse-rearm-after-done`). It lives at `op=arm` because that is the verb the predicate
+    #     can act on: `op=arm` must refuse when a latch EXISTS, `op=resume` must refuse when one
+    #     does NOT, and only the first is answerable off-host — absence of a Better Stack row is
+    #     also what a retention lapse looks like, so an off-host reader can only ever prove
+    #     presence. G1 below is what protects this verb, by scoping it to `done`: only a completed
+    #     flip evidences that a FLUSHALL actually happened. The earlier wording named the
+    #     deploy-status hook as the read path; the implemented reader is Better Stack.
+    #
+    #     KNOWN DEAD END, stated rather than left to be rediscovered: from terminal `aborted`
+    #     there is no dispatchable path forward. G1 accepts `done` ONLY, and `op=arm` is refused by
+    #     its own G3.7 whenever the latch that drove the FSM to `aborted` is still recorded. That
+    #     is pre-existing and correct — the latch is what stops a second FLUSHALL — but it means
+    #     recovery from `aborted` is a /mnt/data recut via the inngest-host-replace window, not a
+    #     dispatch. #7462 did not change it; it made the refusal happen before the prod writes.
     if [[ -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
       echo "::error::op=resume: DOPPLER_TOKEN_INNGEST_ARM is empty — the repo secret did not resolve (approve the inngest-cutover environment required-reviewer gate on this dispatch). Refusing the post-flush re-entry write."; exit 1
     fi
