@@ -38,6 +38,23 @@ while IFS= read -r var; do
   unset "$var" 2>/dev/null || true
 done < <(env | grep -oP '^GIT_\w+' || true)
 
+# ...then disable commit signing. Must come AFTER the loop above, which unsets
+# every GIT_* var and would wipe a caller-supplied override.
+#
+# GIT_CONFIG_COUNT rather than GIT_CONFIG_GLOBAL=/dev/null (the isolation the
+# sibling worktree-manager suites use): this suite drives GIT_CONFIG_GLOBAL
+# itself, per command, as the subject of its identity-resolution arms. The
+# COUNT mechanism is orthogonal and still applies under each fake global, so it
+# pins signing off without displacing the thing under test.
+#
+# Without it, a host with `commit.gpgsign=true` and no usable ssh agent fails
+# fixture commits with "failed to write commit object"; `git clone` then only
+# WARNS about an empty repository, so arms go red for a missing fixture while
+# reading as genuine SUT failures.
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0=commit.gpgsign
+export GIT_CONFIG_VALUE_0=false
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-helpers.sh"
 SCRIPT="$SCRIPT_DIR/../skills/git-worktree/scripts/worktree-manager.sh"

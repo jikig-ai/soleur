@@ -521,7 +521,20 @@ for hookf in "$REPO_ROOT/lefthook.yml" "$REPO_ROOT/plugins/soleur/scripts/grok-p
   # them, measured), (c) splitting on `;`, `&&` and `||` so the hatch is checked PER INVOCATION,
   # and (d) requiring only that the hatch appear somewhere in the same segment.
   HOOK_SRC="$(sed 's/\(^\|[[:space:]]\)#.*$/\1/' "$hookf" | sed -E 's/(\&\&|\|\||;)/\n/g')"
+  # NON-RUNNING MODES ARE NOT GATE RUNS. test-all.sh exits before registering any suite when
+  # its first argument is `--capacity` (a ~3 s /proc probe, always exit 0) or
+  # `--print-suite-globs`. Neither contends for anything, so neither needs the hatch — and
+  # `grok-pre-push-gate.sh` legitimately calls the first one. Flagging it was a FALSE POSITIVE
+  # of exactly the kind this arm exists to avoid producing: the property is "an unhatched GATE
+  # RUN", and matching every invocation of the script is broader than that. Derived from the
+  # runner rather than hardcoded, so a mode added later cannot silently start false-flagging.
+  _modes="$(grep -oE '^if \[\[ "\$\{1:-\}" == "--[a-z-]+"' "$REPO_ROOT/scripts/test-all.sh" \
+            | grep -oE -- '--[a-z-]+' || true)"
   HOOK_INV="$(grep -E '(^|[[:space:]])((bash|sh|zsh|exec|source)[[:space:]]+[^[:space:]|;&]*test-all\.sh|\.{0,2}/[^[:space:]|;&]*test-all\.sh)|^[[:space:]]*[^[:space:]|;&]*test-all\.sh([[:space:]]|$)' <<<"$HOOK_SRC" || true)"
+  while IFS= read -r _m; do
+    [[ -n "$_m" ]] || continue
+    HOOK_INV="$(grep -vF -- "test-all.sh $_m" <<<"$HOOK_INV" || true)"
+  done <<<"$_modes"
   CASES=$((CASES + 1))
   if [[ -z "$HOOK_INV" ]]; then
     fail "$hookrel no longer invokes scripts/test-all.sh — this guard is pinned to the wrong file"

@@ -58,3 +58,33 @@ on missing config in a pipeline, it is tooling state — not a regression in you
 ## Tags
 category: build-errors
 module: apps/web-platform
+
+## Addendum — 2026-08-19 (#1327)
+
+The finding recorded above ("there is no eslint config in the repo; `next lint`
+drops into an interactive prompt and exits 1; CI does not run lint at all") was
+accurate when written and is **no longer true as of #1327**. The body above is
+left byte-identical as the record of what was measured on 2026-06-05.
+
+What changed:
+
+- `apps/web-platform/eslint.config.mjs` now exists — an ESLint 9 flat config
+  consuming `@next/eslint-plugin-next`'s native `flatConfig` export, with
+  `@typescript-eslint/parser` for `.ts`/`.tsx` and node + browser globals. No new
+  dependencies were required; `eslint-config-next` already supplied the parser
+  and all five plugins transitively.
+- `"lint"` is now `eslint .` rather than `next lint`.
+- A `lint-webplat` job runs it on pull requests. It is **deliberately not a
+  required check** — see the plan's Decision 1.
+
+The original conclusion that `tsc --noEmit` + `vitest run` are the authoritative
+**merge-gating** checks still holds: lint is reported, not required.
+
+One thing this work uncovered that the original note could not have seen: ESLint
+could not have run correctly here even with a config. A blanket npm override
+pinned `brace-expansion` to `^5.0.9`, and `minimatch@3.1.5` — which `eslint`,
+`@eslint/config-array`, `@eslint/eslintrc`, `eslint-plugin-import`, `-jsx-a11y`
+and `-react` all depend on — requires `^1.1.7`. v5 exports an object where v1
+exported a function, so any brace glob died with
+`TypeError: expand is not a function`. Removing the blanket override (npm then
+nests each major independently) was a prerequisite for this migration.

@@ -206,6 +206,24 @@ Recorded so the gaps are visible rather than implied:
 - **The AP-021 detector gap** described above. A bounded widening measures 30 candidate hits
   across unrelated subsystems, most of them false positives in test files; the offending message
   is fixed here and the detector work is tracked on its own.
+
+  **Closed 2026-08-19 (#7578 + #7318).** All three filters were widened or narrowed together,
+  which the three-row table above is what made obvious: `OPERATOR_LINE` gained the
+  variable-assignment and continuation-line carriers, `CLAIM` gained a static-prose dash
+  appendix, and `MEASURED` no longer exonerates an appendix-named cause on an inferred token —
+  only on an explicit `MEASURED-BY:`. Both offending lines are now reported, verified against
+  the pre-fix tree.
+
+  Two notes for the record, because the follow-up issue restated this table lossily and the
+  restatement was costly. First, **#7578's title carried only the `OPERATOR_LINE` row and its
+  body only the `CLAIM` row**; neither carried `MEASURED`. The fix it prescribed — widen
+  `CLAIM`, reuse the other filters — is measured **inert** against both lines, and so is
+  widening `OPERATOR_LINE` and `CLAIM` together. Only changing all three works. This table had
+  it right; the issue derived from it did not.
+
+  Second, the "30 candidate hits" figure was measured with `OPERATOR_LINE` and `MEASURED`
+  unchanged, so it priced one factor of three. The delivered widening measures 12, of which 11
+  were triaged to `MEASURED-BY:` and the `.highwater` stayed at `1` rather than absorbing them.
 - **`vendor-quota-watch` (#5134, deferred from #5103).** This ADR **supersedes its mechanism
   and leaves it open with a re-scoped body.** Guard 1 cannot substitute for it: it reads the warehouse, which is dark at
   exactly the moment quota is exhausted. Claiming a closure this change does not deliver would

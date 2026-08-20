@@ -94,6 +94,33 @@ run_step() {
 
 echo "grok-pre-push-gate: starting local CI parity (repo: $REPO_ROOT)"
 
+# --- Phase 0: pre-launch capacity probe (#7545) — ADVISORY, never a gate ---
+#
+# Answers "can this box absorb the full gate I am about to start?" in ~3 s
+# (measured p50 on a 16-core box with ~640 pids; it walks /proc once). Phase 2
+# below runs `test-all.sh` with no TEST_GROUP, i.e. the FULL battery — ~45 min
+# uncontended per ADR-133, not the "~4-5 minute" figure this file's header
+# carries. On a contended box that run's REDs may be interleaving rather than
+# regressions, and knowing that up front is the whole point.
+#
+# `timeout` is not optional: on the loaded box this probe exists to diagnose, an
+# unbounded /proc walk can block the push gate with no marker at all.
+#
+# NOT run through run_step, and the `|| true` is deliberate: a capacity verdict
+# must never gate a push. It is a STATEMENT the operator reads, not a decision
+# the script makes — see the ADR-133 2026-08-19 addendum for why the blocking
+# form was cut. Its exit code is discarded so that a broken or missing probe
+# also cannot gate the push.
+echo "--- capacity (advisory, does not gate) ---"
+_cap_out="$(timeout 60 bash scripts/test-all.sh --capacity 2>&1 || true)"
+printf '%s\n' "$_cap_out"
+# ABSENCE IS ITS OWN OUTCOME. `|| true` on a bare call made a probe that died
+# before emitting indistinguishable from a healthy quiet box — the exact
+# vanishing answer the lib-stub arm exists to prevent, one layer out.
+if ! grep -q 'CAPACITY_' <<<"$_cap_out"; then
+  echo "[contention] BANNER CAPACITY_UNKNOWN reason=probe_failed_or_timed_out"
+fi
+
 # --- Phase 1: fast CI jobs (ci.yml always-run, no secrets) ---
 run_step "readme-counts" bash scripts/sync-readme-counts.sh --check
 run_step "adr-ordinals" bash scripts/check-adr-ordinals.sh
