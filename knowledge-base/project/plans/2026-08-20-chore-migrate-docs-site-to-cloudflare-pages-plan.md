@@ -703,18 +703,39 @@ time bomb that reds every docs deploy.
    as `CF_API_TOKEN_PAGES`.
 
    ```
-   automation-status: UNVERIFIED — /work MUST run a Playwright attempt and record
-   `playwright-attempt: navigated <URL>; reached <named human gate>` before any handoff.
-   An a-priori "console-gated" assertion is not acceptable evidence; a dashboard action under
-   an authenticated session is presumptively automatable until an attempt proves a named human
-   gate (CAPTCHA / OTP / TOTP / passkey / push-MFA / payment-card / hardware token).
-   Precedent: #5480, where the same a-priori claim was falsified by one attempt.
-   ```
+   automation-status: MEASURED 2026-08-20 — OPERATOR-ONLY (vendor bot-detection).
 
-2. **First-use scope probe** (this must run *after* step 1 — the existing `CF_API_TOKEN` is
-   Tunnel/DNS-scoped and 403s on the Pages API):
+   playwright-attempt: navigated https://dash.cloudflare.com/profile/api-tokens and
+   https://dash.cloudflare.com/login (Playwright MCP, persistent profile, Chrome with
+   --disable-blink-features=AutomationControlled already set); reached CAPTCHA/bot-detection
+   class expressed as an ASSET-LAYER BLOCK — the HTML shell is served but every JS bundle
+   fails net::ERR_FAILED (cf-unauthenticated-app, cf-ModalManager, cf-initGates,
+   cf-accountHooks, cf-templatesPreview, cf-TooltipProvider), so the SPA never boots and the
+   accessibility tree is a single 16-byte `- alert` node. No login form, no challenge widget
+   and no OTP prompt is ever rendered, so there is nothing to drive up to.
 
-   ```bash
+   DISCRIMINATED, not assumed: https://example.com/ renders fully in the SAME browser with a
+   live context and zero console errors, and a fresh browser instance reproduces the
+   dash.cloudflare.com failure identically. So it is neither a network fault nor tool
+   instability — it is specific to Cloudflare's dashboard under automation.
+
+   Also exhausted, so nobody re-derives it:
+     - API mint: all 9 CF_API_TOKEN_* in Doppler prd_terraform return 403 on
+       GET /user/tokens; none can mint. No global API key exists in any of the 13 configs.
+     - agent-browser CLI: daemon wedges ("Resource temporarily unavailable (os error 11)"
+       after 5 retries) across 4 attempts including `close`.
+     - soleur:provision-cloudflare: requires `read -s` on an INTERACTIVE terminal and is
+       documented "MUST run on the operator's local machine" — the agent Bash tool is
+       non-interactive by construction (hr-the-bash-tool-runs-in-a-non-interactive).
+     - soleur:cf-token-scope: requires Playwright MCP dashboard automation (same block) and
+       is a WIDEN of an existing token, not a mint.
+
+   OPERATOR ACTION (the only remaining path): Cloudflare dashboard -> My Profile -> API
+   Tokens -> Create Token -> Custom token; permission Account : Cloudflare Pages : Edit and
+   NOTHING else; TTL none. Write the value to Doppler soleur/prd_terraform as
+   CF_API_TOKEN_PAGES. Do NOT paste the value into an agent session
+   (hr-never-paste-secrets-via-bang-prefix). AC30 then asserts presence pre-merge.
+```bash
    TOK=$(doppler secrets get CF_API_TOKEN_PAGES -p soleur -c prd_terraform --plain)
    ACCT=$(doppler secrets get CF_ACCOUNT_ID     -p soleur -c prd_terraform --plain)
    ZONE=$(doppler secrets get CF_ZONE_ID        -p soleur -c prd_terraform --plain)
