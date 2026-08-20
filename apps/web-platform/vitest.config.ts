@@ -1,6 +1,7 @@
 import { defineConfig } from "vitest/config";
 import path from "path";
 import { fileURLToPath } from "url";
+import { REPO_WIDE_SUITES } from "./test/repo-wide-suites";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -39,9 +40,34 @@ export default defineConfig({
       {
         extends: true,
         test: {
+          name: "repo-wide",
+          environment: "node",
+          // Suites whose subject is the REPOSITORY, not this app: they read
+          // plugin scripts, workflow YAML and the knowledge base. Split out of
+          // `unit` (#7498) so `unit` can be declined on diffs that touch
+          // nothing here without silently declining these too — they exist to
+          // catch drift in exactly those diffs.
+          //
+          // Membership is an explicit list rather than a glob because the set
+          // is not a directory: 6 of 72 `cron-*.test.ts` escape the app and 66
+          // do not, so no path shape separates them. The list is kept honest by
+          // test/repo-wide-containment.test.ts, which recomputes it from disk.
+          include: [...REPO_WIDE_SUITES],
+          setupFiles: ["test/setup-node.ts"],
+          isolate: true,
+        },
+      },
+      {
+        extends: true,
+        test: {
           name: "unit",
           environment: "node",
           include: ["test/**/*.test.ts", "lib/**/*.test.ts"],
+          // The repo-wide project's files, removed from this one. Without the
+          // exclude they would run TWICE — and worse, the copy running here
+          // would be gated, so a green `unit` would carry a stale verdict for
+          // them on any diff that declines it.
+          exclude: [...REPO_WIDE_SUITES],
           // Default WORKSPACES_ROOT to a writable temp dir (server startup paths
           // now unconditionally mkdir the resolved workspace dir before sandbox
           // construction; the prod default "/workspaces" is not writable in CI).
