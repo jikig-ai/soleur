@@ -248,6 +248,7 @@ away by the threshold.
 | `scripts/orphan-process-reaper.sh` | The detector and its two verbs. Named for **processes** — see the naming note below. |
 | `scripts/orphan-process-reaper.test.sh` | Behavioural arms. Every gate asserted in both directions against a synthesized `/proc`, plus real-process arms. |
 | `scripts/orphan-process-reaper-mutation.test.sh` | The mutation battery: each check mutated out individually, each row proved to redden. |
+| `test/fixtures/orphan-proc-dangling/` | A committed dangling-symlink procfs fixture. It is the AC30b control arm *and* the target of the `discoverability_test`, so the probe is deterministic, needs no live `/proc`, and reddens on a regression to a suffix test. |
 | `knowledge-base/engineering/architecture/decisions/ADR-195-orphan-process-boundary-is-inode-verified-deleted-conjunction.md` | The decision record (ordinal provisional — see the ADR section). |
 
 **Naming, stated so a reviewer cannot conflate the two.** `apps/web-platform/infra/orphan-reaper.sh` already
@@ -983,7 +984,7 @@ logs:
     2026-05-05 across 24+ boots
 
 discoverability_test:
-  command: ORPHAN_PROC_ROOT=test/fixtures/orphan-proc-dangling bash scripts/orphan-process-reaper.sh report
+  command: bash -c 'ORPHAN_PROC_ROOT=test/fixtures/orphan-proc-dangling bash scripts/orphan-process-reaper.sh report'
   expected_output: "anchors=0 unreadable_gone=1"
   # Three deliberate choices, each closing a way the earlier probe would have failed or proved nothing.
   # (1) The counter line goes to STDOUT. preflight Check 10 runs `bash -c "$CMD" ... 2>/dev/null` and matches
@@ -994,6 +995,10 @@ discoverability_test:
   #     then correctly reports valid=0 -> FAIL); and under `--unshare-all` a mounted /proc shows only the
   #     sandbox's own 2-3 pids, so the real walk is never exercised anyway. `reap` refuses a non-/proc root,
   #     so pointing `report` at a fixture is safe by construction.
+  # (0) The `bash -c` wrapper is not cosmetic. probe-verb-gate.sh takes the FIRST whitespace-delimited token
+  #     of the dequoted command as the verb, so a leading `VAR=value` assignment becomes the "verb" and is
+  #     rejected — there is deliberately no path-shaped or assignment-shaped exemption. Verified against the
+  #     gate both ways: the bare form FAILs, the wrapped form passes.
   # (3) The expectation has INFORMATION CONTENT. `mode=report` merely echoes the argv back and `valid=1` says
   #     only that the walk completed — both stay green against a detector whose conjunction never fires,
   #     which is this plan's own top stated worry. Asserting `unreadable_gone=1` against the dangling-symlink
