@@ -529,10 +529,8 @@ logs:
   where: "GitHub Actions run logs (gate, suites, monitor); the monitor's alert issue"
   retention: "90 days for Actions logs (GitHub default); issue comments are permanent"
 discoverability_test:
-  command: "bash scripts/skill-security-scan-step-body.test.sh"
-  expected_output: >
-    a final line of the form `skill-security-scan-step-body: N passed, 0 failed (N assertions)`
-    with N at or above the suite's declared floor
+  command: bash scripts/skill-security-scan-step-body.test.sh
+  expected_output: ", 0 failed ("
 ```
 
 ### Affected-surface observability (Phase 2.9.2)
