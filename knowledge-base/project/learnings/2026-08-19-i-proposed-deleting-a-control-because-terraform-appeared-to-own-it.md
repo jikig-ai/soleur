@@ -36,6 +36,11 @@ Terraform declares those attributes **empty** and then declares that it does not
 manage them. So Terraform does not own the alert filters and an apply **cannot**
 restore them. `configure-sentry-alerts.sh` is their only executable definition.
 
+The four rules that block is on are `auth-exchange-code-burst`,
+`auth-callback-no-code-burst`, `auth-per-user-loop` and `auth-signout-burst`.
+Name them, because there is a *different* set of four in the same file and
+confusing the two is the failure mode below.
+
 This is not hypothetical. On 2026-06-02 all four auth alert rules drifted to
 empty filters, matched every issue in the project, and were repaired by a manual
 re-PUT of that script's definitions. The recurrence guard, **#4781**, is still
@@ -50,24 +55,51 @@ block normally means "this is the desired state". With an attribute in
 outside Terraform owns this, and Terraform will not fight it.* A reader
 skimming for "is this in Terraform?" sees the resource and concludes ownership.
 
-The same false premise had been sitting in a comment in a *third* script for
-months:
+## The correction that was itself wrong
+
+I then found what looked like the same false premise sitting in a comment in a
+*third* script, `assert-byok-rules-exist.sh`, and rewrote it:
 
 > The rule's `conditions_v2`/`filters_v2`/`actions_v2` are Terraform-owned (only
 > `environment` is in `lifecycle.ignore_changes`), and this assertion runs
 > POST-apply … so tag-drift is self-healing on the next apply.
 
-Both halves false, and the 2026-06-02 incident is the empirical refutation — the
-drift was not self-healed by an apply.
+**That comment was correct and I falsified it.** It is about a different four
+rules. `issue-alerts.tf` holds two disjoint sets, and only a per-resource read
+tells them apart:
+
+| Set | Rules | `ignore_changes` | v2 attributes | Who owns the filters |
+|---|---|---|---|---|
+| `EXPECTED_RULES` in `assert-byok-rules-exist.sh` | `byok-art-33-breach`, `byok-cap-exceeded`, `chat-message-save-failure`, `workspace-sync-health` | `[environment]` **only** | fully populated | **Terraform.** Drift *is* self-healing on the next apply. |
+| the `auth-*` set | `auth-exchange-code-burst`, `auth-callback-no-code-burst`, `auth-per-user-loop`, `auth-signout-burst` | `[conditions_v2, filters_v2, actions_v2, environment, frequency]` | declared `[]` | **Not Terraform.** `configure-sentry-alerts.sh` is their only executable definition — this is what #4781 and the 2026-06-02 incident are about. |
+
+The 2026-06-02 incident refutes the self-healing claim for the `auth-*` set and
+for that set only. Applied to the BYOK/chat/workspace-sync four it refutes
+nothing, because no apply was ever prevented from restoring them.
+
+**A file-level grep for `ignore_changes` cannot tell these sets apart.** Both
+blocks live in one file; grep returns the file. I ran that grep, saw the wide
+`ignore_changes`, and concluded it governed the rules the script asserts on. It
+governs four other resources forty lines away.
+
+Had the rewrite shipped, an operator whose BYOK Art. 33 breach alert had drifted
+would have been told an apply cannot help, and pointed at a script that does not
+define that rule at all — the exact inversion of the error this file was opened
+to record, committed while recording it. Reverted in `a279d511`; the original
+paragraph is restored verbatim with the trap noted beside it, because the
+mistake is one file-level grep away from being made again.
 
 ## Solution
 
 Before deleting or deprecating anything that looks like superseded tooling, ask
 **what consumes its output**, not what replaced it:
 
-1. For a Terraform-adjacent script, read the resource's `lifecycle` block. An
-   attribute in `ignore_changes` is *not* owned by Terraform, whatever the
-   resource declaration looks like.
+1. For a Terraform-adjacent script, read the `lifecycle` block **of the specific
+   resource blocks that script names** — not the file's. An attribute in
+   `ignore_changes` is *not* owned by Terraform, whatever the resource
+   declaration looks like; but a sibling resource's `ignore_changes` says
+   nothing about yours. Resolve the attribute per RESOURCE BLOCK. One `.tf`
+   file routinely holds both postures, and `grep -l` collapses them.
 2. Grep for open issues naming the script or the state it maintains
    (`gh issue list --search "<script>"`). An open recurrence guard is a live
    dependency.
@@ -115,6 +147,36 @@ block read as ownership while declaring the opposite.
   something falsifiable and then falsify it — "no automated caller" was checkable
   and true; "fails loudly" was checkable and false, and nothing made me check it
   because it was not the load-bearing clause.
+
+- **I "corrected" a true comment into a false one, and two review agents
+  agreed with me.** I resolved a CONCUR finding with a file-level `grep
+  ignore_changes` instead of reading the resource block the script actually
+  names, and inverted an accurate ownership claim. Two agents reviewing the
+  result made the identical error and concurred — which is what
+  N-artifacts-agreeing looks like when they inherit one premise, not
+  independent confirmation. **Prevention:** when a finding turns on an
+  attribute of *a specific resource*, the verifying command must be
+  resource-scoped (`awk '/^resource "type" "name"/,/^}$/'`), and agreement
+  between reviewers who read the same wrong grep is not evidence. Cost: one
+  commit to make, one to revert.
+
+- **I superseded a claim in the artifacts I remembered writing, not in the
+  artifacts that assert it.** Retracting the "410 was transient" reading, I
+  marked `versions.tf` and ADR-031 — the two I had edited — and moved on. A
+  predicate sweep (`git grep -ln transient` ∩ `410|issue-alert|rules/`, then
+  read each hit) found **four** more carrying the retracted reading with zero
+  supersession markers: the post-mortem, the #6636 plan, the Phase 0 evidence
+  file, and — worst — a learning whose *title* is
+  `transient-provider-410-reproduce-before-choosing-a-fix`, which states the
+  retracted stopping rule as a **general rule for any vendor-API break** and is
+  therefore what `learnings-researcher` retrieves next time. An unmarked peer
+  reads as still-live, and the most-retrieved artifact was the last one anyone
+  would think to check, precisely because it is not about this incident.
+  **Prevention:** a supersession is not done when the artifacts you *authored*
+  are marked. Derive the set from the retracted claim itself — grep the claim's
+  own words across the KB, read every hit, mark or clear each — and check the
+  generalised restatements first, because a dated incident record ages out of
+  circulation while a "Key Insight" does not.
 
 - **An ADR claim that a grep settles in seconds shipped unverified.** ADR-031's
   new Recurrence paragraph promised an `::error::` annotation on "every caller".

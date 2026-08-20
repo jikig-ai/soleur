@@ -1,5 +1,13 @@
 # Learning: a reported provider-API break (410/5xx) may be transient — reproduce on the pinned version before choosing a fix
 
+> **SUPERSEDED 2026-08-19 (#7590) — the generalisable rule below is HALF retracted; read
+> [§ Supersession](#supersession-2026-08-19-7590) before applying it.** "Reproduce before choosing
+> a fix" stands. "A clean reproduce means the break was transient" does **not**: the #6636 endpoint
+> was permanently deprecated on 2026-05-14 and served under scheduled brownouts, so the clean
+> `terraform plan` that this file reads as *recovery* only means the probe landed between windows.
+> This file is retrieved by `learnings-researcher` on vendor-API breaks — do not lift its Key
+> Insight without the correction.
+
 ## Problem
 
 Issue #6636 reported that Sentry retired the legacy issue-alert **read** API
@@ -64,3 +72,40 @@ read-path rework, so it is changelog-sourced, not plan-measured. This is
 ## Tags
 category: integration-issues
 module: apps/web-platform/infra/sentry
+
+## Supersession (2026-08-19, #7590)
+
+Dated record; measurements preserved. The Phase 0 plan really did return `0/0/0` with zero 410s on
+beta2. The inference drawn from that observation is retracted.
+
+**What is retracted.** "The retirement was **transient**; Sentry had restored the legacy endpoint by
+fix time." Sentry restored nothing. It deprecated the alert-rule API family on **2026-05-14** and
+serves it under **scheduled brownouts** — 410 inside a recurring window, 200 outside it. Measured on
+2026-08-19 in a single session, same token, same host, nothing changed on our side: 410 at ~20:5x
+UTC, then 200/200/200 at 21:23 UTC.
+
+**Why this file matters more than the incident report it summarises.** Its Key Insight is written as
+a *general rule* for any vendor-API break, so it is what a future search retrieves. Split it:
+
+| Clause | Verdict |
+|---|---|
+| "A reported external-API break is a **claim to reproduce**, not a fact to route on." | **Stands.** This is the right instinct and it is why the over-fix was avoided. |
+| "Reproducing it on the pinned version first tells you whether *any* fix is needed." | **Stands, weakened.** It bounds the blast radius of the fix; it does not establish the vendor's state. |
+| "A 410/5xx-class provider failure **can be a transient vendor incident that self-resolves**." | **Retracted as the default reading.** A deprecation served under brownouts is observationally identical to a transient incident from a single probe, and is far likelier for a documented API family. |
+| "…so the heavy migration was not needed." | **Right answer, wrong reason.** `0.15.4` is correct because its read path is not in the deprecated family — not because the endpoint came back. |
+
+**The corrected rule.** A single clean re-probe cannot distinguish *"restored"* from *"outside the
+next window"*, so it is not a valid stopping condition for a schedule-shaped failure. Before
+concluding "transient", read the response headers — `x-sentry-deprecation-date` and
+`x-sentry-replacement-endpoint` named this retirement directly and were present the whole time —
+or probe across more than one window. Prefer the header: it is the vendor asserting its own state,
+where a probe only samples it. Generalised: **when the failure could be scheduled, absence of the
+failure at one instant is not evidence of its absence.** #7590 ships that header check as a
+tripwire so the next deprecation self-reports on its first **200**.
+
+**Cross-references.**
+`knowledge-base/engineering/operations/post-mortems/sentry-issue-alert-410-transient-wedge-postmortem.md`
+(§ Supersession), `knowledge-base/project/plans/2026-07-17-fix-sentry-issue-alert-410-provider-bump-plan.md`
+(§ Supersession), `apps/web-platform/infra/sentry/versions.tf`, ADR-031 §Amendment 2026-08-19
+(#7590), and the successor learning
+`knowledge-base/project/learnings/integration-issues/2026-08-19-a-vendor-brownout-is-not-a-flake-and-the-header-said-so-all-along.md`.

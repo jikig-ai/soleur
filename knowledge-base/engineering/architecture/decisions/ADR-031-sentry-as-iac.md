@@ -618,12 +618,13 @@ avoid. `SENTRY_DEPRECATION_FAIL_WINDOW_DAYS` (default 30) governs WHEN escalatio
 caller that opted in; it is not an escape hatch for one that did not, and it is set in no
 workflow.
 
-So on the apply and release callers, a deprecation inside the window emits an `::error::`
+So on the apply and release callers, a deprecation inside the window emits a `::warning::`
 annotation and exits 0. That is a weaker channel than failing, and it is a deliberate trade —
 a warning on a green job is what failed in 2026-07, but freezing deploys on a vendor's calendar
-is worse. The durable record is the audit report itself, which names the affected endpoints.
-#7619 removes the need for the trade by splitting the fail-closed gating half from the advisory
-reporting half.
+is worse. The audit report names the affected endpoints, but do not read it as a durable record
+on both callers: only `reusable-release.yml` publishes it, and only on exit 0 — see §Recurrence,
+which measures both claims this paragraph used to make. #7619 removes the need for the trade by
+splitting the fail-closed gating half from the advisory reporting half.
 
 **Pagination follows the cursor, and never the Link target as given.** `detectors/` grows 1:1
 with cron monitors, so a loud-fail-on-truncation arm would — by ordinary monitor growth — red
@@ -654,9 +655,9 @@ tracked separately.
 deprecation of `workflows/`, `detectors/` or `monitors/` self-reports on the first 200 carrying the
 header — as a `::warning::` annotation, as a non-zero exit on callers that opted into escalation
 (`SENTRY_DEPRECATION_FAIL=1`; the advisory gate does, the apply path deliberately does not), and in
-the report's own `## Endpoint deprecation` section, which is the only durable channel of the three.
+the report's own `## Endpoint deprecation` section.
 
-Two corrections to what this paragraph said when first written, both measured:
+Three corrections to what this paragraph said when first written, all measured:
 
 - **Severity.** It claimed an `::error::` annotation. `grep -c '::error::'
   apps/web-platform/scripts/sentry-monitors-audit.sh` returns **0**. The tripwire emits
@@ -666,13 +667,36 @@ Two corrections to what this paragraph said when first written, both measured:
 - **Reach.** It claimed "every caller". The tripwire lives inside `sentry-monitors-audit.sh`'s own
   `curl_retry`, so it covers exactly the callers that route through that script —
   `sentry-audit-gate.yml`, `reusable-release.yml`, and `apply-sentry-infra.yml`'s audit step. It
-  does **not** cover the three scripts that call Sentry directly with their own `curl`:
-  `assert-byok-rules-exist.sh` (migrated to `workflows/` under #7590, so no longer exposed),
-  `audit-sentry-extra-text-references.sh` and `configure-sentry-alerts.sh`. The latter two still
-  read and WRITE the deprecated `projects/{org}/{proj}/rules/` path; their migration is blocked on
+  does **not** cover scripts that call Sentry with their own `curl` — a set far larger than this
+  paragraph first named, spanning `scripts/sentry-issue.sh`, most of `scripts/followthroughs/`, and
+  `apps/web-platform/infra/scripts/fresh-host-boot-trail.sh`. The set that matters *here* is the
+  narrower one: tracked shell that still issues a live request against the **deprecated alert-rule
+  family**. Its predicate is a request URL under `projects/{org}/{proj}/rules/` or
+  `organizations/{org}/alert-rules/` — not a *mention* of one, which is why a bare `rules/` grep
+  over-collects two scripts that name the path only in a comment. Regenerate the set with:
+
+  ```sh
+  git grep -lE 'api/0/(projects/[^ "]*/rules/|organizations/[^ "]*/alert-rules/)' -- '*.sh'
+  ```
+
+  As of #7590 that returns exactly two: `audit-sentry-extra-text-references.sh` and
+  `configure-sentry-alerts.sh`. `assert-byok-rules-exist.sh` left the set in that same PR when it
+  migrated to `workflows/`; `sentry-monitors-audit.sh` never belonged to it (its `rules/` hits are
+  the replacement-mapping comment). Those two still read and WRITE the deprecated
+  `projects/{org}/{proj}/rules/` path; their migration is blocked on
   an unresolved write shape (the `workflows/` payload has no `conditions`/`filters`/`actions` keys —
   it carries `triggers` and `actionFilters[]` instead) and is tracked separately. Neither has an
   automated caller, so no brownout can abort a workflow through them.
+- **Durability.** It called the report section "the only durable channel of the three". That fails
+  in two independent ways. `grep -ln 'AUDIT_OUT_DIR\|upload-artifact\|gh release upload'` over the three
+  callers returns `reusable-release.yml` alone — the other two leave the report in `RUNNER_TEMP`,
+  where it dies with the runner, so the section is not durable on two of the three. And on the one
+  caller that does publish it — as a **release asset**, not a CI artifact — the `script_rc -ne 0`
+  branch `exit 0`s *before* `gh release upload`, so a non-zero exit and the durable record are
+  mutually exclusive: the report is written exactly when the script had nothing to escalate, and is
+  absent exactly when it did. The measured statement, which supersedes the claim: durable on
+  `reusable-release.yml` only, as a release asset, and only on exit 0. The annotation — ephemeral,
+  but emitted on every caller — is the channel that actually survives an escalation.
 
 Within that scope it no longer surfaces months later as an intermittent red.
 

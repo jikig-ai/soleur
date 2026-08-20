@@ -1,5 +1,11 @@
 # Phase 0 Measurement Evidence — #6636 Sentry 410 / provider bump
 
+> **The measurements below stand; one INFERENCE in §0.1 is superseded (2026-08-19, #7590).** The
+> `0/0/0` plan and the zero 410s were really observed. They do **not** show the retirement was
+> transient or that Sentry "had restored it": the endpoint was permanently deprecated 2026-05-14
+> and is served under scheduled brownouts, so a plan run between windows returns clean either way.
+> See § Supersession at the foot of this file.
+
 Measured 2026-07-17 against **live** Sentry state (org `jikigai-eu` project, R2 backend,
 `SENTRY_IAC_AUTH_TOKEN` from Doppler `prd_terraform`). Terraform v1.10.5, linux_amd64.
 
@@ -48,3 +54,28 @@ regenerated `.terraform.lock.hcl`: `version = "0.15.4"`, 3 `h1:` + 14 `zh:` hash
 provider-version-only change (`versions.tf` + `.terraform.lock.hcl`), no state surgery.
 Option B (`sentry_alert` migration) NOT reached — the `monitor_ids` blocker persists at 0.15.4;
 deferral re-affirmed in ADR-031 (Amendment 2026-07-17, #6636).
+
+## Supersession (2026-08-19, #7590)
+
+Scope: **§0.1's Finding paragraph only.** Every measurement in this file — the `0/0/0` plan, the
+refresh counts (23/49/4), the version enumeration, the lockfile hashes — is unchanged and still
+correct.
+
+**Retracted:** "the `410 …` the issue observed at ~18:00–20:00Z was a **transient** Sentry-side
+retirement … by fix time Sentry had restored it".
+
+**Corrected:** Sentry deprecated the legacy alert-rule API family on 2026-05-14 and serves it under
+**scheduled brownouts** — 410 inside a recurring window, 200 outside it. Both states measured on
+2026-08-19 in one session against the same token and host: 410 at ~20:5x UTC, 200/200/200 at 21:23
+UTC. The 18:00–20:00Z observation was a brownout window; the Phase 0 plan ran outside one. Nothing
+was restored.
+
+**Unaffected:** §0.2's durability datum and the `0.15.4` conclusion. The bump is still right, for a
+reason §0.1 could not supply — `0.15.4`'s read path is not in the deprecated family at all, so it
+is immune to the brownout rather than merely lucky about its timing.
+
+**What §0.1 should have recorded.** The response headers, which name the retirement directly and
+were present throughout: `x-sentry-deprecation-date`, and per-endpoint
+`x-sentry-replacement-endpoint` (`rules/` → `workflows/`, `alert-rules/` → `detectors/`). A single
+clean plan cannot distinguish "restored" from "outside the next window"; a header can. #7590 ships
+that check as a tripwire in `sentry-monitors-audit.sh`'s `curl_retry`.
