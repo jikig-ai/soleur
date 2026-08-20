@@ -513,7 +513,7 @@ review time.
 
 ## Implementation Phases
 
-**Ordering note (from the advisor consult).** Phase 3 — the balancing-test re-derivation — runs
+**Ordering note (from the advisor consult).** **Phase 1** — the balancing-test re-derivation — runs
 **first**, ahead of the Class-A/B/E edits, and this ordering is load-bearing. The re-derivation is
 the only change in the PR with the potential to alter *heading structure* in `gdpr-policy.md`
 §3.4, and heading structure is what the mirror heading-sequence assertion, the sentinel
@@ -546,7 +546,8 @@ retired, but the ordering costs nothing and removes the last way it could return
 ### Phase 1 — the balancing-test re-derivation (`gdpr-policy.md` §3.4)
 
 Apply CLO 2A (preamble, row C4), 2B (limb (2) full replacement, rows A9 + C5) and 2C (limb (3)
-addition), canonical and mirror in lockstep. Substitute the Phase-0.5 issue number for `[#NNNN]`.
+addition), canonical and mirror in lockstep. **This phase does NOT apply CLO 1B** — an earlier
+draft asserted it did, which left row A10 owned by no phase at all; 1B belongs to Phase 2. Substitute the Phase-0.5 issue number for `[#NNNN]`.
 **Limb (1) is not touched** — it already says "age-based retention floor, 10 years", which is
 correct. Confirm after the edit that `/Three-part balancing test \(off-site evidence archive\)/`
 still matches both surfaces.
@@ -559,8 +560,9 @@ Phase-0.5 issue.
 
 ### Phase 2 — Class A (third-country transfer) and Class G
 
-Apply CLO 1A (the two-bullet split at `privacy-policy.md` §5.11), 1B is already done in Phase 1,
-and the 1C template table for rows A1, A2/C1, A4, A5, A6, A7, A8, plus C2 and **G1** (the
+Apply CLO 1A (the two-bullet split at `privacy-policy.md` §5.11) **and CLO 1B (row A10 — the
+`gdpr-policy.md` §3.4 closing sentence, the `does not introduce a third-country transfer` site)**,
+plus the 1C template table for rows A1, A2/C1, A4, A5, A6, A7, A8, C2 and **G1** (the
 "Governance mode" → "Cloudflare R2 Lock Rule" correction). Each edit lands byte-identically on the
 mirror in the same commit. **Data localisation must not be published as a safeguard anywhere.**
 
@@ -709,6 +711,25 @@ suppressor, and a reject condition — all to accommodate a sentence that never 
 string. **The upstream fix is one word of prose** (see `## Deviations from the CLO wording`):
 paraphrase the markers. The plan carries a required paraphrase instead of a test helper.
 
+**Two properties of the corpus that this guard silently depends on.** Both are recorded because a
+guard whose vacuity conditions are undocumented is one edit away from passing on a false corpus.
+
+1. **Prose paragraphs in `docs/legal/*.md` are single, unwrapped lines** — 194 of 638 lines in
+   `privacy-policy.md` exceed 200 characters; line 120 is 997 and line 122 is 938. Every entry in
+   `FORBIDDEN` is a newline-free literal, so if any editor or formatter ever hard-wraps these
+   paragraphs, `not.toContain("Cloudflare R2 (storage, EU region)")` stops matching and the
+   sentinel goes **vacuously green on a false corpus**. This is now a load-bearing invariant of the
+   guard and belongs in a comment above `FORBIDDEN`.
+2. **The dispatch floor is a typed threshold, which deviates from AP-023**
+   (`knowledge-base/engineering/architecture/principles-register.md:33`, ADR-193: *"The guard's
+   population is DERIVED by floor SHAPE, never listed"*). The in-repo correct form is the derived
+   identity at `apps/web-platform/test/legal-doc-shas-guard.test.ts:91`. A literal array cannot
+   derive a floor from itself, so the deviation is accepted here — but note that this floor also
+   sits **outside** `scripts/guard-vacuity-floor.test.sh`, whose population is derived from tracked
+   `*.test.sh` files: a `.ts` floor is not covered by the repo's own vacuity meta-guard. If the
+   propositions move to a data module (see `## Follow-Up: the divergence class this guard does not
+   cover`), the floor derives from its length and the deviation disappears.
+
 **Mutation matrix** (each row must drive the suite RED):
 
 | # | Mutation | Must redden because |
@@ -832,12 +853,20 @@ sentinels were not a whole-file snapshot — which an 11-entry `not.toContain` l
   runnable: the literal contains an ellipsis, and `**(c) Categories of personal data**` occurs
   **35 times** in the register, once per Processing Activity, with no PA-7 anchoring. Executable
   form:
-  `git diff origin/main -- knowledge-base/legal/article-30-register.md | grep -c '(c) Categories of personal data'`
-  → **0**; plus confirm every diff hunk header's line range falls inside PA-7's §(e) row (line
-  162) and excludes §(c) (line 158); plus
-  `git diff origin/main -- knowledge-base/legal/article-30-register.md | grep -c '^-'` → **0**,
+  `git diff origin/main -U0 -- knowledge-base/legal/article-30-register.md | grep -c '(c) Categories of personal data'`
+  → **0**; plus, with `-U0` so no context lines widen the range, confirm every hunk header's line
+  range falls inside PA-7's §(e) row (line 162) and excludes §(c) (line 158); plus
+  `git diff origin/main -- knowledge-base/legal/article-30-register.md | grep -c '^-[^-]'` → **0**,
   which enforces the CLO's append-only ruling (the existing CORPUS DIVERGENCE block must survive
   byte-for-byte).
+
+  **Both refinements are load-bearing and both were measured.** `grep -c '^-'` can *never* return
+  0: unified diff always emits a `--- a/<path>` header, which matches. On a purely-additive edit
+  to this very plan the bare form returns **136** while `'^-[^-]'` returns **116** — so as first
+  written, AC14 would have failed on a correct implementation, and the cheapest field fix under
+  time pressure is to weaken the assertion that guards the #7625 boundary. Likewise the hunk-range
+  clause is unsatisfiable at default context: `git diff` emits ±3 lines, so a header reads
+  `@@ -159,7 +159,7 @@` — a range that by construction extends past line 162.
 - **AC15** — **Better Stack disclosure tokens survive in all SIX files, not four.**
   `apps/web-platform/infra/vector.toml` is not in the diff. `validate-vector-config.yml`'s
   `DISCLOSURE_FILES` array (lines 160-167) is **six** entries, and the first draft of this AC named
@@ -934,8 +963,11 @@ error_reporting:
 
 failure_modes:
   - mode: "A future edit re-asserts EU-region / no-third-country-transfer / ten-year-ceiling on either surface."
-    detection: "legal-doc-consistency.test.ts negative sentinels (Guard 1), asserted against loadSource AND loadMirror."
+    detection: "legal-doc-consistency.test.ts negative sentinels (Guard 1), asserted against loadSource AND loadMirror. NOTE: this is a re-regression ratchet. It is NOT the mode that produced either #7601 or #7624 - see the mode below."
     alert_route: "Required `test` check reds; merge blocked."
+  - mode: "The register is AMENDED and the corpus is not re-affirmed - the mode that actually produced both #7601 and #7624."
+    detection: "NOTHING DETECTS THIS TODAY. Run the counterfactual: had all of Guard 1 existed on 2026-08-19, PR #7622 would still have merged green - it touches only knowledge-base/legal/article-30-register.md, which legal-doc-consistency.test.ts never reads. Guard 1 observes the corpus; it does not observe the register."
+    alert_route: "None. Tracked at the follow-up issue below; this plan does not close it."
   - mode: "Canonical is corrected but the published mirror is not, or the reverse - the failure this PR exists to prevent."
     detection: "Guard 1 mutation row 2 covers it directly; lint-legal-mirror-drift-baseline.sh also reds on drift growth."
     alert_route: "Required `test` check and the test-scripts job."
@@ -1405,6 +1437,59 @@ wrong sentence pass all five gates.**
 | T7 | A new mirror bullet added with a `](privacy-policy.md)` link | gate 5's published-link check fails |
 | T8 | `checks` array emptied | Guard 1's dispatch floor reds (mutation 4) |
 | T9 | A fixture document stating the transfer in the register's terms but different surrounding prose | Guard 1 harness H2 passes — the sentinel keys on the proposition, not a snapshot |
+
+## Follow-Up: the divergence class this guard does not cover
+
+Surfaced by the architecture review, recorded here because the plan would otherwise ship a guard
+presented as an answer to a problem it does not address.
+
+**Both divergences were created by amending the register, not by re-typing a forbidden phrase into
+the corpus.** #7601: the register was incomplete while the corpus was unchanged. #7624: the
+register was amended by #7622 while the corpus was unchanged. Guard 1 is a ratchet against
+*re-regression to known-bad strings*; the recurring failure is *the governing fact moved and
+nothing forced the corpus to be re-affirmed*. A register-amendment PR touches only
+`knowledge-base/legal/` and passes all five corpus gates green — as #7622 did, eight days ago.
+
+**The shape of the answer is a binding + freshness pin, not generation.** Do not generate corpus
+prose from the register: CLO Fork 1 is itself the proof that register wording is unusable verbatim
+as an Art. 13 disclosure, and Art. 12(1) intelligibility forbids pasting a record-keeping cell into
+a notice. Instead, apply `legal-doc-shas.ts` one level up — pin the **register cell**, bind it to
+**corpus anchors**:
+
+- a data file mapping each `(PA-N, limb)` to `{ anchors: [file + verbatim sentence fragment], affirmed_cell_sha }`;
+- an extractor keyed on the register's existing stable labels (`## Processing Activity 7 — …` at
+  `article-30-register.md:152`; `| **(e) Third-country transfers** |` at `:162` — every PA uses
+  identical row labels);
+- a gate that normalises and hashes the cell, reds when it differs from `affirmed_cell_sha`, and
+  names every bound corpus anchor the author must re-walk. Re-affirming is a deliberate one-line
+  pin, exactly like the SHA re-pin in Phase 7.1.
+
+The repo already runs this architecture in one place:
+`.github/workflows/validate-vector-config.yml:150-176` derives `source_id`/`cluster` from
+`vector.toml` and asserts them present across a six-file `DISCLOSURE_FILES` array — derive from
+source of truth, assert in corpus. Generalising it from two tokens to register cells is the same
+move.
+
+**Cost: roughly one day, and the expensive half is already paid.** This plan derived the complete
+binding map — 55 anchors across 16 files, each traced to a named PA-7 cell — and, as written, will
+**discard it into an archived markdown plan**. Persisting that table as the data file is the single
+highest-leverage change available, and it also collapses the AP-023 floor deviation noted in
+`## Guard Contract` (the floor derives from the data length) and turns AC2's hand-written
+register-cell citations into a structural property rather than a PR-body chore.
+
+**Disposition: file as a follow-up issue in this PR; do not build it here.** It is a new
+cross-boundary consistency mechanism between `knowledge-base/legal/` and `docs/legal/` and warrants
+its own ADR — which is exactly why it does not belong inside a P1 corpus correction. Labels
+`domain/legal` + `type/chore` + `priority/p2-medium` (all verified present). The issue body should
+carry the counterfactual above verbatim, because "the sentinels would not have caught #7622" is the
+whole argument and is easy to lose.
+
+**Also worth carrying into that issue** (architecture review, §2): the 15 existing pinned rows and
+the new negative rows are *different guards* — the former are structural presence markers whose
+failure means "you edited one surface", the latter are semantic truth claims whose failure means
+"you published a falsehood". This plan already separates them into distinct `test()` blocks, which
+resolves the immediate ambiguity; the data-module version should keep that distinction as an
+explicit `kind` field rather than re-merging them.
 
 ## Non-Goals
 
