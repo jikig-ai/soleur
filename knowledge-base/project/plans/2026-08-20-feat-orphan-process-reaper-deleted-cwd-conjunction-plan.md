@@ -984,7 +984,7 @@ logs:
     2026-05-05 across 24+ boots
 
 discoverability_test:
-  command: bash -c 'ORPHAN_PROC_ROOT=test/fixtures/orphan-proc-dangling bash scripts/orphan-process-reaper.sh report'
+  command: bash -c 'ORPHAN_PROC_ROOT=$PWD/test/fixtures/orphan-proc-dangling bash scripts/orphan-process-reaper.sh report'
   expected_output: "anchors=0 unreadable_gone=1"
   # Three deliberate choices, each closing a way the earlier probe would have failed or proved nothing.
   # (1) The counter line goes to STDOUT. preflight Check 10 runs `bash -c "$CMD" ... 2>/dev/null` and matches
@@ -1003,6 +1003,13 @@ discoverability_test:
   #     only that the walk completed — both stay green against a detector whose conjunction never fires,
   #     which is this plan's own top stated worry. Asserting `unreadable_gone=1` against the dangling-symlink
   #     fixture AC30b already requires means the probe reddens on a regression to a suffix test.
+  # (4) CORRECTED AFTER MEASUREMENT. The discriminating field is the COUNTER, not the anchor count: under a
+  #     suffix regression this fixture still reports `anchors=0`, because `_orphan_cwd_key` independently
+  #     re-stats the link and fails. What moves is `unreadable_gone`, measured 1 -> 0. The expectation string
+  #     was right; the mechanism sentence above was not, and a probe justified by the wrong mechanism is one
+  #     edit away from being "simplified" to `anchors=0`, which discriminates nothing.
+  #     The path is `$PWD`-anchored because the script refuses a relative ORPHAN_PROC_ROOT — a tool that
+  #     signals processes should never resolve its walk root against an ambient CWD.
 ```
 
 **One correction to a mitigation rationale rather than to the mitigation.** The trigger section justifies

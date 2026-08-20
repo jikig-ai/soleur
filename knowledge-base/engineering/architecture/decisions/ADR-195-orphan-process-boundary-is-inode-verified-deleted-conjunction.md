@@ -58,26 +58,37 @@ does not read as weakening a guard.
 
 **2. `exe`, `fd/1` and `fd/2` are never consulted at all.**
 
-Not "never as a positive term" — never. A `claude` self-update unlinks the running binary (~11
-live hits measured), and a deleted stdout with a live cwd **is** this repo's own
+Not "never as a positive term" — never. A `claude` self-update unlinks the running binary (the issue
+reported ~11 live hits; re-probed while writing this record the count was **0**, so it is an
+issue-time reading rather than a measurement taken here — the class is real, the number is
+transient), and a deleted stdout with a live cwd **is** this repo's own
 `scripts/tmpfs-guard.sh` cron instance. Keeping those reads out of the code makes both false
 positives structurally impossible rather than dependent on a polarity discipline a later edit can
 flip.
 
 **3. The anchor identifies; a confirmed anchor authorizes a SET.**
 
-Measured: `fd/255` is bash's script descriptor. Thirty-one processes box-wide carry one — thirty
-`bash` plus one `dbus-daemon` — and it is structurally absent on every non-shell process. So the
+Measured: `fd/255` is bash's script descriptor. Of ~594 processes, 27 carry one — 26 `bash` plus
+one `dbus-daemon`, whose `fd/255` is an `anon_inode:[pidfd]` rather than a script descriptor. So it
+is absent on every non-shell process **as a script descriptor**; the flat claim "absent on every
+non-shell process" is falsified by its own example sentence, and the census figure drifts with the
+box — it is quoted as an order of magnitude, not a constant. So the
 issue's own conjunction flags the bash **wrapper** and leaves the `python3` child that is actually
-holding the cores. Since the motivating incident is about reclaiming 62 CPU-minutes, and a
-battery's CPU lives in its children, the conjunction alone would not have reclaimed the thing it
+holding the cores. Since the motivating incident is a battery that ran for 62 minutes of wall-clock
+(not 62 CPU-minutes — on a 16-core box at `-P6` those are different quantities, and the issue says
+the former), and a battery's CPU lives in its children, the conjunction alone would not have reclaimed the thing it
 was written for.
 
 The conjunction is therefore preserved verbatim as an **anchor**, and a confirmed anchor extends
 to every own-uid process sharing that anchor's cwd **`dev:inode`** — measured identical across all
 three processes in that shape, because children inherit cwd across `fork` and an unlinked
-directory keeps its inode. Membership **restates every gate** on the member's own links; it never
-inherits the anchor's verdict.
+directory keeps its inode. Membership restates the gates it CAN restate, and this is stated precisely because an earlier draft of
+this record claimed parity it does not have. A member must satisfy: own uid, same mount and pid namespace,
+not the scanner or an ancestor or its process group, cwd genuinely unlinked, the anchor's cwd `dev:inode`,
+the anchor's **session id**, and the age floor. It is **not** subject to G3 — the `fd/255` conjunction is
+anchor-only, because `fd/255` is bash's script descriptor and a non-shell child does not have one. That is
+the entire reason the set exists, so the omission is deliberate; claiming "every gate" merely invited the
+next reader to skip re-deriving the member predicate.
 
 The device qualifier is load-bearing here even though the link count retired it from the
 deletedness test: membership is still an inode-*number* equality test, `/tmp` is dev 50 (tmpfs)
@@ -95,7 +106,12 @@ also the one scenario in which it destroys the session that ran it.
 **5. It reports; it does not reap.**
 
 The trigger is a `report` invocation in `scripts/test-all.sh`'s preamble. Nothing invokes `reap`
-automatically anywhere.
+automatically anywhere — and this sentence was **false when first written**. The behavioural suite's
+end-to-end arm ran `reap` against the real `/proc` with no signal sink and no pid restriction, so every
+full-gate run performed an unattended box-wide reap, twice. It is true now because that arm is scoped
+through the refusal-only authorization seam, and because a suite assertion pins that no direct `reap`
+invocation lacks a root seam, a sink, or a pid list. A claim of this shape needs a mechanical check
+rather than a sentence, which is the whole lesson of the record it sits in.
 
 This follows from the evidence, not from timidity: the conjunction returned **zero hits across 222
 own-uid processes**, which is evidence of *specificity in a sample containing no orphan* and is
@@ -114,10 +130,16 @@ a reader's judgment.
   **alive** and increments a counter. The counters are not decoration: without them a silent drop
   is indistinguishable from a real zero, and "no orphans" is indistinguishable from "the
   conjunction is unsatisfiable in production".
-- Two deletedness predicates now diverge **deliberately** across the repo: `proc.sh` keeps a bare
-  suffix test whose failure direction is a refusal, and the reaper uses the link count because its
-  failure direction is a kill. Both carry reciprocal comments. Unifying them would move one file's
-  refusal onto a test built for the opposite consequence.
+- The two predicates are not two answers to one question, and recording them that way is the trap. `proc.sh`
+  asks a **containment** question — "is this process inside the worktree I own?" — for which an unresolvable
+  path is a refusal. The reaper asks a **liveness** question — "is this inode unlinked?" — for which the same
+  reading is positive evidence. Describing them as inverted polarities of one deletedness test, as an earlier
+  draft of this record did, would send the next reader to unify them on the wrong axis.
+- The unification that WOULD be legitimate is blocked by a constraint worth naming: ADR-178 forbids a
+  plugin-shipped file from sourcing a repo-root library, so a shared primitive would have to live plugin-side
+  or be vendored. The target shape, if anyone takes it on, is one primitive with three callers each applying
+  its own policy — because the repo now carries **three** `/proc` classification sites (`proc.sh`,
+  `scripts/lib/test-contention.sh`, and this reaper), which is the inventory a future consolidator needs.
 - The tool refuses to run as root. Under `sudo`, "own uid" silently becomes uid 0 and the
   enforcement-by-accident (`readlink` failing on a foreign process) evaporates — measured,
   `readlink /proc/1/cwd` fails as uid 1001 and succeeds as root — so the reap set would become

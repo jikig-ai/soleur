@@ -17,22 +17,26 @@
 #
 # The difficulty is the discriminator, not the signal: a detached run and an
 # orphaned one look identical under `ps`. So a pid is an ANCHOR only under a
-# six-gate conjunction (G1-G6 below, plus G7 on the pid namespace), and any
-# error reading any of them leaves the process UNFLAGGED AND ALIVE.
+# SEVEN-gate conjunction (G1-G7 below), and any error reading any of them leaves
+# the process UNFLAGGED AND ALIVE.
 #
 # TWO SIGNALS ARE NEVER CONSULTED AT ALL — not "never as a positive term",
 # never:
-#   * `exe`  — a `claude` self-update unlinks the running binary (~11 live hits
-#              measured on this box). Reading it at all would make P2 a
-#              polarity discipline instead of a structural property.
+#   * `exe`  — a `claude` self-update unlinks the running binary. The issue
+#              reported ~11 live hits; re-probed later the count was 0, so treat
+#              that number as an issue-time reading rather than a standing
+#              measurement — the CLASS is real and recurring, the count is not.
+#              Reading `exe` at all would make this a polarity discipline
+#              instead of a structural property.
 #   * `fd/1`, `fd/2` — a deleted stdout with a live cwd IS this repo's own
 #              `scripts/tmpfs-guard.sh` cron instance (measured: pid 704313,
 #              75 s old and healthy). A reaper keyed on that shape kills the
 #              tmpfs guard on its next cron tick.
 #
 # EVIDENCE STATUS, stated because prose drifts toward the flattering reading:
-# the four-way conjunction returned ZERO hits across 222 own-uid processes on
-# the probed box. That is evidence of SPECIFICITY in a sample containing no
+# the four-way conjunction returned ZERO hits across the own-uid processes on the
+# probed box (~220 of ~600; the exact split drifts run to run and is quoted as an
+# order of magnitude, not a constant). That is evidence of SPECIFICITY in a sample containing no
 # orphan. It is NOT evidence of sensitivity — nothing here has ever been
 # observed firing on a real orphan in the wild. The only sensitivity evidence
 # that exists is the synthesized end-to-end arm in the test suite. That is why
@@ -66,8 +70,15 @@
 #   ORPHAN_REAPER_RECYCLE_PID       fault injection: force a late refusal on this pid
 #   ORPHAN_REAPER_FORCE_EUID        fault injection: pretend to be this uid
 #
-# The last three are FAULT-INJECTION seams and are fail-safe by construction:
-# each can only cause a REFUSAL, never an extra signal. They exist because the
+# The last four are FAULT-INJECTION or SCOPING seams, and each can only cause a
+# REFUSAL, never an extra signal. That property is now TRUE; it was asserted
+# before it was true, which is the worse of the two failures because it is the
+# sentence a future reviewer trusts instead of re-deriving. Measured on the
+# earlier form: FORCE_EUID=1234 SKIPPED the root refusal entirely (signalled=3),
+# and SELF_CWD_OVERRIDE pointed at an unreadable path emptied SELF_CWD_KEY and
+# thereby disabled the whole anti-suicide refusal (valid=1 signalled=3). The
+# real euid is now tested independently of its seam, an unreadable override is a
+# refusal rather than a silence, and ONLY_PIDS can only remove pids from a set. They exist because the
 # branches they reach (late refusal, structural refusal, root refusal) cannot
 # otherwise be driven from a synthesized procfs, and an un-drivable branch is a
 # guard that cannot be proved to fire.
@@ -176,7 +187,8 @@ if [[ -n "${CI:-}" ]]; then
 fi
 
 # --- Privilege floor (AC28b) ----------------------------------------------
-# G1 is `stat -Lc '%u' == id -u`, so under sudo "own uid" silently becomes uid 0
+# G1 is an ownership test against the EFFECTIVE uid, so under sudo "own uid"
+# silently becomes uid 0
 # and the enforcement-by-accident (readlink failing on a foreign process)
 # evaporates — measured, `readlink /proc/1/cwd` fails as uid 1001 and succeeds
 # as root. The reap set would become EVERY root process with an unlinked cwd, a
@@ -457,6 +469,32 @@ _orphan_classify() {  # pid role(anchor|member)
     skipped_same_pgroup=$((skipped_same_pgroup + 1)); return 1
   fi
 
+  # G2 — cwd genuinely unlinked.
+  _OC_CWD_NLINK="$(_orphan_nlink "$d/cwd")"
+  if ! _orphan_is_unlinked "$d/cwd"; then
+    # A failed stat and a live directory are DIFFERENT outcomes, and only the
+    # first is a reading error. Both leave the process alive.
+    if [[ "$_OC_CWD_NLINK" == "?" ]]; then
+      unreadable=$((unreadable + 1)); unreadable_gone=$((unreadable_gone + 1))
+    fi
+    return 1
+  fi
+  _OC_CWD_KEY="$(_orphan_cwd_key "$pid")"
+  [[ -n "$_OC_CWD_KEY" ]] || { unreadable=$((unreadable + 1)); return 1; }
+
+  # G5/G7 are tested AFTER the cwd predicate, deliberately.
+  #
+  # Every gate here is conjunctive and every one fails toward alive, so the
+  # ORDER cannot change a verdict — it only changes which counter records the
+  # refusal, and this order is the more informative one: `skipped_foreign_ns`
+  # now counts processes that WOULD otherwise have been candidates, rather than
+  # every foreign-namespace process on the box.
+  #
+  # It also makes the deletedness predicate reachable from a COMMITTED fixture.
+  # A fixture cannot know a given machine's namespace ids, so with the namespace
+  # gates first, a dangling-symlink fixture could never reach the `st_nlink`
+  # test — which is precisely the test the discoverability probe exists to
+  # exercise, since a regression to a bare suffix match would flag that fixture.
   # G5 — same mount namespace. Sandboxed processes (bwrap, rootless containers,
   # `unshare -m`, all of which this repo runs own-uid by design) routinely
   # operate with an unlinked or namespace-private cwd as NORMAL operation, and
@@ -482,19 +520,6 @@ _orphan_classify() {  # pid role(anchor|member)
   if [[ -n "$NS_PID_SELF" && "$nsp" != "$NS_PID_SELF" ]]; then
     skipped_foreign_ns=$((skipped_foreign_ns + 1)); return 1
   fi
-
-  # G2 — cwd genuinely unlinked.
-  _OC_CWD_NLINK="$(_orphan_nlink "$d/cwd")"
-  if ! _orphan_is_unlinked "$d/cwd"; then
-    # A failed stat and a live directory are DIFFERENT outcomes, and only the
-    # first is a reading error. Both leave the process alive.
-    if [[ "$_OC_CWD_NLINK" == "?" ]]; then
-      unreadable=$((unreadable + 1)); unreadable_gone=$((unreadable_gone + 1))
-    fi
-    return 1
-  fi
-  _OC_CWD_KEY="$(_orphan_cwd_key "$pid")"
-  [[ -n "$_OC_CWD_KEY" ]] || { unreadable=$((unreadable + 1)); return 1; }
 
   # G3 — anchors only: fd/255 is an unlinked REGULAR FILE at an ABSOLUTE path
   # ending `' (deleted)'`, and not a memfd. `%h == 0` alone is far broader than
@@ -575,14 +600,21 @@ _orphan_classify() {  # pid role(anchor|member)
 if [[ "$ORPHAN_REAPER_NO_FLOCK" != "1" ]] && command -v flock >/dev/null 2>&1; then
   _lockfile="${ORPHAN_REAPER_LOCKFILE:-${TMPDIR:-/tmp}/.orphan-process-reaper-$(id -u).lock}"
   # Creatability is probed with `:` FIRST, deliberately, and the `exec` below
-  # carries NO stderr redirection of its own. `exec 9>"$f" 2>/dev/null` — the
-  # obvious form, and the one the precedent uses — applies BOTH redirections to
-  # the CURRENT SHELL permanently, so every later `say` (including the "another
-  # run is in flight" line this block exists to print) is silently discarded for
-  # the rest of the run. Measured here: the contention path took the correct
-  # branch, exited 0, and printed nothing at all, which is indistinguishable
-  # from "ran and found nothing" — the exact confusion the counters exist to
-  # prevent.
+  # carries NO stderr redirection of its own.
+  #
+  # `exec 9>"$f" 2>/dev/null` — the obvious form — applies BOTH redirections to
+  # the CURRENT SHELL permanently, so every later stderr write is silently
+  # discarded for the rest of the run. Measured here before the fix: the
+  # contention path took the correct branch, exited 0, and printed nothing at
+  # all, which is indistinguishable from "ran and found nothing".
+  #
+  # PRECISELY ABOUT THE PRECEDENT, because an earlier commit message of mine
+  # overstated this: `scripts/tmpfs-guard.sh` does carry that exact form, but it
+  # does NOT suffer the consequence, because its `guard_log` writes to `logger`
+  # or to a file and never to stderr. The pattern is present there and inert.
+  # This script speaks on stderr, so the same pattern is live here — which is
+  # why the divergence is right for THIS file and is not a bug report about that
+  # one. Do not "fix" tmpfs-guard on the strength of this comment.
   # The `exec` stays INSIDE an `if` CONDITION, which is what makes a redirection
   # failure non-fatal. Moving it out (as an earlier revision did) meant that a
   # probe-succeeds-then-exec-fails window — the directory vanishing in between —
@@ -602,9 +634,11 @@ fi
 
 # --- The walk --------------------------------------------------------------
 # ONE guarded walk, pre-filtered on fd/255 EXISTENCE before anything is stat'ed.
-# Measured: 31 pids box-wide carry an fd/255 (30 bash + 1 dbus-daemon) out of
-# 592, so the pre-filter is what keeps this cheap enough to sit on the repo's
-# hottest path.
+# Measured: of ~600 processes only a few dozen carry an fd/255 at all (26 bash
+# plus one dbus-daemon in one census), so the pre-filter is what keeps this cheap
+# enough to sit on the repo's hottest path. Note it now runs AFTER the ownership
+# gate, so it only ever walks own-uid pids — an earlier comment quoted a
+# box-wide "561 of 592 have no fd/255", which described the previous ordering.
 #
 # `[[ -d "$d" && ! -L "$d" ]] || continue` — both terms load-bearing. Bash
 # WITHOUT nullglob iterates a non-matching pattern ONCE, LITERALLY (measured),

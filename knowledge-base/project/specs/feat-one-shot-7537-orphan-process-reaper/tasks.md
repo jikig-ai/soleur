@@ -108,8 +108,11 @@ the property.
 - [x] 6.1 Implement the incident-trace arm (AC40): worktree removal → anchor → report with set + reap command
       → explicit reap → child before anchor → journald record per signal.
 - [x] 6.2 Live-procfs sanity: `report` exits 0, `valid=1`, `scanned > 0` (AC38).
-- [x] 6.3 Write the ADR. Re-derive the ordinal against freshly-fetched `origin/*` refs immediately before
-      merge and sweep every artifact naming it in the same edit (AC39).
+- [x] 6.3 Write the ADR. (ADR-195 exists; ordinal derived against a fresh fetch.)
+- [ ] 6.3b Re-derive the ordinal immediately BEFORE MERGE and sweep every artifact naming it. Deliberately
+      unchecked: this is a merge-time act and the branch is unmerged, so ticking it would be a claim about
+      something that has not happened. Known live collision risk: PR 7616 currently carries a stale
+      `ADR-194-*` claim on an ordinal main has since taken, so whichever of the two merges second re-derives.
 
 ## Deviations from the plan, recorded rather than silently absorbed
 
@@ -147,3 +150,47 @@ the property.
   a row's verdict is its suite's exit status, which concurrency does not change;
   wall-clock is affected, and that is why the degree is stated with the number.
   Serial cost is ~36 x 10.5s.
+
+## Census figures — reconciled
+
+The plan quotes the own-uid census three irreconcilable ways for the same box on the same day
+(`own_uid=222`; "592 pids, 175 own-uid, 417 foreign"; and a figure implying 206). Re-probed while
+closing review: **~220 own-uid of ~600**, and the split moves by tens between runs as sessions come
+and go.
+
+None of the design decisions depends on the exact value — what they depend on is the ORDER OF
+MAGNITUDE (a few hundred own-uid, a few dozen carrying `fd/255`), and that has been stable across
+every probe. The figures are therefore quoted as approximations from here on rather than pinned as
+constants, and the ADR and the script header were corrected to match. A number that drifts run to
+run should never have been written as though it were a measurement of a fixed quantity.
+
+## Deviations from the plan — completed after review
+
+The four recorded above are accurate. Review found the section INCOMPLETE; these were also
+deviations and were not written down:
+
+- **AC27 (seam honesty)** shipped as a grep that every seam satisfies through its own default
+  assignment, so it was vacuous. Now requires a read on some line other than the declaration, and is
+  proven non-vacuous by planting a declared-but-unread seam.
+- **AC28h** shipped as a presence grep rather than the equality assertion the plan asked for, and it
+  was satisfiable by a comment. Now anchored to a non-comment line.
+- **AC34** pinned `|| true` as load-bearing; the shipped preamble captures rc explicitly instead,
+  which is stronger, but the plan's prose still described the old form.
+- **AC29** was weakened for M12 and M23: both are declared EQUIVALENT with proofs recorded and are
+  asserted to SURVIVE, so a stale proof reddens rather than passing silently.
+- **AC7**'s requirement that every one of its seven cases increments `unreadable` is asserted for
+  one case, not seven.
+- **Three fault-injection seams** (`SELF_CWD_OVERRIDE`, `RECYCLE_PID`, `FORCE_EUID`) and one scoping
+  seam (`ONLY_PIDS`) exist that no plan AC contemplated, and they change how AC12, AC18 and AC28b
+  are satisfied. Two of them could SUPPRESS a refusal until review measured it; all four are now
+  refusal-only.
+- **`test/fixtures/orphan-proc-dangling/`** and the whole `discoverability_test` block were dropped
+  from the implementation without a trace, despite having their own deepen commit. Both are now
+  present, and the probe was corrected twice: it needed an absolute path (the script refuses a
+  relative walk root), and its stated MECHANISM was wrong — the discriminating field is
+  `unreadable_gone` (measured 1 -> 0 under a suffix regression), not `anchors`, which stays 0 either
+  way because `_orphan_cwd_key` independently re-stats the link.
+- **G5/G7 were reordered** to run after the cwd predicate. No verdict changes (every gate is
+  conjunctive and fails toward alive); it makes `skipped_foreign_ns` count only processes that would
+  otherwise have been candidates, and it is what lets a committed fixture reach the deletedness test
+  at all, since a fixture cannot know a machine's namespace ids.

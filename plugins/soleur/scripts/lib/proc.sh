@@ -234,7 +234,9 @@ _proc_owns() {
   # REFUSAL — a process in such a directory is simply never claimed as ours, and
   # nothing is signalled on the strength of it.
   #
-  # scripts/orphan-process-reaper.sh asks a DIFFERENT question about the same
+  # The repo-root `scripts/orphan-process-reaper.sh` (a developer-box tool, not
+  # shipped to customers, so this path may not exist in your checkout) asks a
+  # DIFFERENT question about the same
   # link — "is this inode unlinked?" — and answers it with `stat -Lc '%h'`
   # rather than with the suffix, because for that question the failure direction
   # is a KILL. The two predicates are meant to diverge; unifying them would move
