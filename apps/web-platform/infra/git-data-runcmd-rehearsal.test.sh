@@ -1300,6 +1300,51 @@ S1DRV
     fail "S1: the shipped chain arms 'set -e' at or before the sshd stage (stage=${_s1_stage_ln:-?}, set -e=${_s1_sete_ln:-?})" \
          "S1's child-sh model runs with errexit OFF and now tests the opposite of what ships."; fi
 
+  # ── S1 CLASSIFIER NEGATIVE CONTROLS (#7572) ──────────────────────────────────────
+  #
+  # THE DEFECT THESE EXIST TO CLOSE. S1_RC is read out of the container's stdout with
+  # `sed -n 's/^STAGE_RC=//p' | tail -1`. When the container never ran at all -- image pull
+  # failed, apt-get died, docker exited 125 -- there is no marker, S1_RC is empty, and
+  # `${S1_RC:-none}` becomes the string "none". "none" is not "0", so the healthy assert
+  # fails with "the sshd_config stage exited <no marker> on a fresh 24.04 -- this is the boot
+  # abort", and "none" is not "1", so the mutation assert fails with "without the mkdir the
+  # stage exited <no marker>, expected 1". Both messages name a CAUSE THAT NEVER OCCURRED:
+  # the stage did not exit anything, because it never started. That is the ADR-166/AP-021
+  # misattribution T5's four-rung ladder already exists to prevent, one arm over.
+  #
+  # The ladder is ported here as a PURE FUNCTION so its rungs can be driven directly, without
+  # docker and without a container. Mirrors R3(2c)'s in-file negative-control shape: an
+  # assertion nobody has ever seen fail is not evidence.
+  #
+  # THE RC CLASSES ARE AN ALLOWLIST, NOT "any non-zero" -- the same reasoning as _T5M_ENV_RCS.
+  # Reading every non-zero rc as an environment decline hands the skip bucket every HARNESS
+  # defect too: a mistyped `-v` source makes docker exit 125 with no marker, which is a bug in
+  # this file, and it would go green-with-a-NOTE forever.
+  _s1c() { _s1_classify "$1" "$2" "$3" "$4"; }
+
+  # rung 1 -- the execution marker is present: the stage RAN, whatever else is true.
+  if [ "$(_s1c 1 yes no yes)" = "ran" ]; then pass; else
+    fail "S1 CLASSIFIER rung 1: marker present must classify as 'ran', got '$(_s1c 1 yes no yes)'" \
+         "Without this rung a healthy mutation run (rc=1, marker present) is reclassified as a skip."; fi
+
+  # rung 2 -- the fixture marker outranks the rc classes. A deterministic bind failure must
+  # not be laundered into an environment skip.
+  if [ "$(_s1c 125 no yes no)" = "fixture-defect" ]; then pass; else
+    fail "S1 CLASSIFIER rung 2: fixture marker must outrank the rc allowlist, got '$(_s1c 125 no yes no)'" \
+         "125 is in the env allowlist; if the fixture rung sits below it, a mount typo in THIS file reports as an environment decline forever."; fi
+
+  # rung 3 -- no marker and an rc OUTSIDE the allowlist is a defect in this file, not the
+  # environment. This is the rung that keeps the skip bucket honest.
+  if [ "$(_s1c 7 no no yes)" = "harness-defect" ]; then pass; else
+    fail "S1 CLASSIFIER rung 3: rc outside _S1_ENV_RCS with no marker must be 'harness-defect', got '$(_s1c 7 no no yes)'" \
+         "Reading every non-zero rc as an environment decline hands the skip bucket every harness defect too."; fi
+
+  # rung 4 -- no marker and an rc INSIDE the allowlist is the genuine environment decline
+  # ADR-188 accepts. This is the ONLY route to a skip.
+  if [ "$(_s1c 100 no no no)" = "did-not-run" ]; then pass; else
+    fail "S1 CLASSIFIER rung 4: rc inside _S1_ENV_RCS with no marker must be 'did-not-run', got '$(_s1c 100 no no no)'" \
+         "This is the only rung ADR-188 justifies a skip on; if it does not fire, the accepted decline reds instead."; fi
+
   _s1_run "$TMP/sshd-stage.sh"
   if [ "${S1_RC:-none}" = "0" ]; then pass; else
     fail "S1: the sshd_config stage exited ${S1_RC:-<no marker>} on a fresh 24.04 — this is the boot abort" \
