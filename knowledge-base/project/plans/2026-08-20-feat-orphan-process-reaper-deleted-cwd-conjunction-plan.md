@@ -518,9 +518,26 @@ Isolation at the call site is `timeout 10 bash scripts/orphan-process-reaper.sh 
 covers exit status; the `timeout` covers the failure modes it does not — an unresponsive NFS/FUSE/autofs mount
 puts `readlink`/`stat` in uninterruptible sleep, and a command that never returns is never rescued by `|| true`.
 
-The reaper takes its **own** non-blocking `flock`, and exits 0 silently when it cannot acquire it. It never
-calls `tc_acquire`: that lock serialises whole suites with a 3600 s budget, and a preamble probe must not queue
-behind one.
+The reaper takes its **own** non-blocking `flock` and never calls `tc_acquire`: that lock serialises whole
+suites with a 3600 s budget, and a preamble probe must not queue behind one.
+
+**Precedent diff (Phase 4.4).** `scripts/tmpfs-guard.sh` already ships the canonical form for exactly this
+situation — a periodic own-uid maintenance script that must not overlap itself — and the reaper adopts it
+rather than inventing a variant. Two details in it are hard-won and are the reason for the diff:
+
+| | tmpfs-guard precedent | This plan, v1 | Adopted |
+| --- | --- | --- | --- |
+| Contention | logs `another … run is in flight — skipping`, then `exit 0` | "exits 0 **silently**" | The precedent. A silent skip is indistinguishable from "ran and found nothing", which is the exact confusion the `valid`/`scanned` counters exist to prevent. |
+| Lockfile uncreatable | runs **unserialised** and says so | unspecified | The precedent, including its prohibition: never fall back to `exec 9>/dev/null`. That locks the `/dev/null` inode, which is shared with every process on the box, so an unrelated flocker blocks this run indefinitely and it then reports "another run is in flight", which is false. |
+| Opt-out seam | `TMPFS_GUARD_NO_FLOCK` | unspecified | A matching `ORPHAN_REAPER_NO_FLOCK`, so the suite can exercise both arms. |
+
+**Scheduled-work precedent (Phase 4.4).** The repo carries 53 Inngest cron functions under
+`apps/web-platform/server/inngest/functions/cron-*`, and ADR-033 makes Inngest the canonical path for
+scheduled work. It does not apply here, and the reason is worth stating so a reviewer does not read the
+omission as an oversight: this tool is not scheduled work at all. It runs inside `scripts/test-all.sh` on the
+developer's own box, needs no app context, no app secrets and no Sentry integration, and reads a `/proc` that
+exists only on that machine. An Inngest function runs server-side on a different host entirely and could not
+see the processes in question.
 
 The cost objection that ruled out `tc_preamble` does not transfer. That objection was measured against
 `_tc_scan_procs` (~6.6 s, reading `cmdline` for 592 pids). This walk **pre-filters on `fd/255` existence
@@ -1092,8 +1109,11 @@ the criterion pins a shape rather than a value and says so.
     seams **before** sourcing; and no public `tc_*` verb is called anywhere.
 27. **Seam honesty.** Every seam declared in the header is read by the code below it — asserted by an arm per
     seam that sets it to a fixture value and requires a named, specific behavioural difference.
-28. The reaper takes its own non-blocking `flock` and exits 0 silently when it cannot acquire it; it never
-    calls `tc_acquire`.
+28. **Lock discipline, matching the `scripts/tmpfs-guard.sh` precedent.** The reaper takes its own
+    non-blocking `flock`; on contention it **logs and** exits 0, never silently. When the lockfile cannot be
+    created it runs unserialised and says so, and never falls back to `exec 9>/dev/null` — that locks an inode
+    shared with every process on the box. `ORPHAN_REAPER_NO_FLOCK` exercises both arms. It never calls
+    `tc_acquire`. Three arms: contention, lockfile-uncreatable, and the no-flock seam.
 
 ### Anti-vacuity
 
