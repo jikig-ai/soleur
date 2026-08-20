@@ -1392,6 +1392,12 @@ if want_scripts; then
   # names the .test.sh nowhere. `scripts/board/` is covered by no glob here, so this explicit
   # line is the suite's only registration anywhere. Mocks `gh` on PATH; needs no token.
   run_suite "scripts/board/set-board-status" bash scripts/board/set-board-status.test.sh
+
+  # EXPLICIT, because no glob in this file reaches it. The suite extracts the
+  # `run:` bodies out of the two skill-security-scan workflows and EXECUTES them
+  # under the shell GitHub Actions uses, so it is the only thing in the repo that
+  # can tell "the gate blocked this input" from "the gate never looked" (#7629).
+  run_suite "scripts/skill-security-scan-step-body" bash scripts/skill-security-scan-step-body.test.sh
 fi
 
 # Named bun-test entries — bun shard.
