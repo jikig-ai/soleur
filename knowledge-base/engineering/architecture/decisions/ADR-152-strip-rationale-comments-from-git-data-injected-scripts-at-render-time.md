@@ -135,6 +135,12 @@ carve-out MORE load-bearing, not less.
    passed", plus verify-the-verifier arms proving the strip is not a no-op and does not touch
    mid-line or trailing `#`.
 
+   > **Scoped 2026-08-20 (#7613):** that last clause is a property of **the render's** strip
+   > expression, and it is true of it. It was read as a property of the whole pipeline, which
+   > it is not — the *test suite* runs a SECOND, independent strip when it derives its
+   > `.code.sh` corpora, and that one is whole-line-only and therefore leaves trailing `#`
+   > standing. See the amendment at the end of this file.
+
 `git-data-runcmd-rehearsal.test.sh`'s B1 byte-identity check now compares against the
 **stripped** source, reading the expression out of `git-data.tf` rather than restating it — a
 hand-copied fourth spelling would drift, and a stripper that silently disagreed with
@@ -236,6 +242,7 @@ The registry uses `/(?m)^[ \t]*#([ \t][^\n]*)?\n/` (`local.registry_rationale_st
 |---|---|---|
 | Injected scripts (both hosts) | preserve `#!` only | scripts have no `#`-directive but a shebang |
 | The cloud-init template itself (registry) | preserve `#!` **and** any `#`-directive without a separator | `#cloud-config` is load-bearing and is a comment by syntax |
+| A **test suite's** `.code.sh` corpus, derived from an already-stripped render (#7613) | preserve `#!`, `${var#pat}`, `$#` and `#` inside strings — strip only ` # ` tails: `[[:space:]]+#([[:space:]].*)?$` | the input is shell that has ALREADY been through the render strip, so what survives is mid-line and trailing `#`, which is exactly what the other two expressions are not built to touch |
 
 Do not port an expression between these two cases. Verify the divergence the same way #7278
 did: assert the first line survives, assert every shebang survives, and assert the strip is
@@ -344,3 +351,61 @@ Mutation-proven in both directions.
 **Still outstanding**, unchanged from the amendment above: `hcloud_server.inngest` and the
 grok-dogfood host still render `base64gzip(templatefile(...))` with no arm in
 `cloud-init-user-data-size.test.ts`. Under cap today; on the same unguarded trajectory.
+
+
+---
+
+## Amendment — 2026-08-20 (#7613): a THIRD strip exists, in the test suite, and it is not this one
+
+### What was inconsistent
+
+The Decision above says the render's strip "does not touch mid-line or trailing `#`". That is
+true, and it is a property of the RENDER. It was read one scope too wide.
+
+`git-data-runcmd-rehearsal.test.sh` derives two `.code.sh` corpora from the already-stripped
+render, using its own independent expression — `^\s*#`, whole-line-only. So the pipeline has
+**two** strips in series, and the second one is the only thing standing between a trailing
+comment and the R3 family's predicates. Nothing in this ADR said so, and a reader checking
+"can a predicate be satisfied by a comment?" against this file alone would have concluded no.
+
+### The rule-table row, and why the expression differs
+
+The new row above is not a third dialect for its own sake. Its INPUT is different: it receives
+shell that has already been through the render strip, so whole-line comments are gone by
+construction and what remains is precisely the mid-line and trailing `#` the other two
+expressions are not built to touch. `[[:space:]]+#([[:space:]].*)?$` requires whitespace
+before the `#` and either end-of-line or whitespace after it, which is what preserves
+`${var#pat}`, `$#`, `#!` and `#` inside a URL fragment.
+
+**Do not reuse `_b2_strip` for this.** The suite already contains `sed -e 's/[[:space:]]*#.*$//'`
+under that name, and #7613's issue body proposed it as the ready-made fix. Measured against a
+synthesized fixture, its zero-width prefix (`*`, not `+`) destroys all four:
+
+| input | `_b2_strip` | the new expression |
+|---|---|---|
+| `base=${path#/prefix/}` | `base=${path` | `base=${path#/prefix/}` |
+| `argc=$#` | `argc=$` | `argc=$#` |
+| `url="…/#anchor"` | `url="…/` | `url="…/#anchor"` |
+| `#!/bin/sh` | *(empty)* | `#!/bin/sh` |
+
+### What the change is worth, stated honestly
+
+**It is a measured no-op today, and ships as prophylaxis.** Re-measured against a fresh render
+on 2026-08-20, independently of the plan that proposed it:
+
+- `luks-stage`: 55 lines → 55, **0** lines containing `#` after the current whole-line strip.
+- `runcmd-all`: 170 lines → 170, **1** such line —
+  `STAGE=volume_mount # (#6982) name the stage for the top-armed on_err fatal`.
+- `volume_mount` is matched by **zero** predicates in the suite, so the one survivor is on a
+  line nothing reads.
+- **0** at-risk tokens (`${var#pat}`, `$#`, `#`-in-string) in either artifact.
+
+So it changes one line in one artifact and no arm's verdict. It is retained because the
+property it buys — a predicate cannot be satisfied by the commentary that explains it — is one
+the suite asserts elsewhere and should not depend on the render's strip continuing to be
+exhaustive. The suite's own comment says this in the same words, rather than implying the
+change fixed something live.
+
+**Known false positive, recorded rather than papered over:** the expression strips
+`msg="value # not a comment"` to `msg="value`. There are zero such lines in either artifact
+today, and the suite asserts that count, so this is a bound rather than a latent break.

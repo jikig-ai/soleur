@@ -292,7 +292,7 @@ fi
 # the line -- line numbers must be preserved because R3(1)/(2)/(2b)/(2d) are ordering
 # predicates over them. The `+` prefix (not `*`) is load-bearing: `_b2_strip`'s zero-width
 # form destroys `${var#pat}` -> `${var`, `$#` -> `$`, and `#!/bin/sh` -> empty, all measured.
-_R3_TAIL_STRIP=''
+_R3_TAIL_STRIP='[ \t]+#([ \t].*)?$'
 
 R3_TAIL_STRIP="$_R3_TAIL_STRIP" python3 - "$TMP/rendered.yml" "$TMP" <<'PY'
 import sys, yaml, re
@@ -1883,7 +1883,12 @@ _r3_ln() { grep -n "$1" "$TMP/luks-stage.code.sh" 2>/dev/null | head -1 | cut -d
 #
 # _R3_SEED_PAT is DELIBERATELY the unanchored form at the commit that introduces these
 # controls, so their failure is the defect rather than a bug in the fixtures.
-_R3_SEED_PAT='GIT_DATA_LUKS_DETAIL='
+# ANCHORED (#7613 finding 1). Was `GIT_DATA_LUKS_DETAIL=`, unanchored, fed to a `head -1`
+# over a corpus that still carried trailing comments -- so a comment naming the token above
+# the real seed hijacked the line number and R3(1)/(2)/(2b) all reported the seed early while
+# it sat after the trap. Its own twin _r2d_ordered has been anchored since it was written; the
+# .code.sh split landed and this anchor did not. Now the same shape as the twin.
+_R3_SEED_PAT='^[[:space:]]*GIT_DATA_LUKS_DETAIL='
 # The guard-shape predicate R3(3b)(ii) uses, exported into the python heredoc rather than
 # restated there.
 _R3_GUARD_PAT='\[\s+-[rs]\s+"?'
@@ -1903,7 +1908,12 @@ provision
 sshd_config
 volume_mount'
 _r3b_sites_ok() {  # $1 = newline-separated site names; 0 = accept, 1 = reject
-  [ "$(printf '%s\n' "$1" | grep -c . || true)" -ge 6 ]
+  # A SET, NOT A FLOOR (#7613 finding 3). Was `count >= 6`, which holds across the exact
+  # mutation that matters: delete one reporting site, add an unrelated one, and the count is
+  # unchanged while the property is violated. Sub-assertion (iv) already does message-set
+  # equality for fatals and is the model followed here.
+  [ "$(printf '%s\n' "$1" | grep -c . || true)" -ge 6 ] || return 1
+  [ "$(printf '%s\n' "$1" | sort -u)" = "$(printf '%s\n' "$_R3B_EXPECTED_SITES" | sort -u)" ]
 }
 
 if [ -s "$TMP/luks-stage.code.sh" ]; then
@@ -1972,20 +1982,84 @@ fi
 _r3c_dir="$TMP/r3controls"; mkdir -p "$_r3c_dir"
 _r3_ln_in() { grep -n "$2" "$1" 2>/dev/null | head -1 | cut -d: -f1; }
 
+# ── GUARD 5 — the tail strip's live assertions and its _b2_strip parity check ────────
+#
+# THIS CHANGE IS PROPHYLACTIC, AND SAYING SO IS THE POINT. Re-measured against a fresh render
+# on 2026-08-20: the luks stage goes 55 -> 55 lines with ZERO surviving `#`, and the runcmd
+# concatenation 170 -> 170 with exactly ONE -- `STAGE=volume_mount # (#6982) …`, whose token
+# `volume_mount` is matched by no predicate in this file. So the tail strip changes one line
+# in one artifact and NO arm's verdict. It is retained because the property it buys -- a
+# predicate cannot be satisfied by the commentary explaining it -- should not depend on the
+# render's own strip continuing to be exhaustive. It is not retained because it fixed
+# something live, and the arms' RED/GREEN above is paid on the ANCHORING, which does re-flow
+# all eight.
+#
+# THE `+` PREFIX IS LOAD-BEARING. The suite already contains a stripper -- `_b2_strip`,
+# `sed -e 's/[[:space:]]*#.*$//'` -- and #7613's issue body proposed it as the ready-made fix.
+# Its zero-width `*` destroys `${var#pat}` -> `${var`, `$#` -> `$`, `#!/bin/sh` -> empty, and a
+# URL fragment. Measured, not assumed: the divergence assertion below is that measurement.
+_g5_dir="$TMP/g5"; mkdir -p "$_g5_dir"
+_g5_new() { R3_TAIL_STRIP="$_R3_TAIL_STRIP" python3 -c '
+import os, re, sys
+tail = os.environ.get("R3_TAIL_STRIP", "")
+tre = re.compile(tail) if tail else None
+out = []
+for l in open(sys.argv[1]).read().splitlines():
+    if re.match(r"^\s*#", l):
+        continue
+    if tre is not None:
+        l = tre.sub("", l)
+    out.append(l)
+# TRAILING NEWLINE, deliberately. `sed` terminates its last line and `"\n".join()` does not,
+# so without this `diff -q` reports a mismatch on two byte-identical corpora — which is
+# exactly what the first run of Guard 5(a) did.
+sys.stdout.write("\n".join(out) + "\n")
+' "$1"; }
+
+# (5a) PARITY ON THE REAL CORPUS. After the strip, B2's `_b2_strip` route and R3's route are
+# the same bytes -- which means B2 is now a REDUNDANT-IMPLEMENTATION CROSS-CHECK rather than
+# independent evidence, and this file says so rather than claiming a control it no longer has.
+# The parity is what makes that statement checkable.
+if [ -s "$TMP/runcmd-all.sh" ]; then
+  _g5_new "$TMP/runcmd-all.sh" > "$_g5_dir/new.txt" 2>/dev/null
+  _b2_strip "$TMP/runcmd-all.sh" > "$_g5_dir/b2.txt" 2>/dev/null
+  if diff -q "$_g5_dir/new.txt" "$_g5_dir/b2.txt" >/dev/null 2>&1; then pass; else
+    fail "GUARD 5(a): the tail strip and _b2_strip disagree on the real runcmd concatenation — B2's corpus and R3's are no longer the same bytes, so B2's cross-check is measuring a different file" \
+         "$(diff "$_g5_dir/b2.txt" "$_g5_dir/new.txt" 2>/dev/null | head -6)"; fi
+else
+  fail "GUARD 5(a): runcmd-all.sh absent, parity unverifiable"
+fi
+
+# (5b) DIVERGENCE ON A SYNTHESIZED FIXTURE. Parity alone is satisfied by two strippers that
+# are both wrong in the same way, and by two that are both no-ops. This is the arm that proves
+# the new expression is strictly safer -- and it is a SYNTHESIZED fixture precisely because the
+# real artifacts contain zero at-risk tokens, which is why (5a) can pass at all.
+printf 'base=${path#/prefix/}\nargc=$#\nurl="https://e.com/#anchor"\nplain=1   # trailing\n' > "$_g5_dir/risk.sh"
+_g5_new "$_g5_dir/risk.sh" > "$_g5_dir/risk.new" 2>/dev/null
+_b2_strip "$_g5_dir/risk.sh" > "$_g5_dir/risk.b2" 2>/dev/null
+_g5_keeps=$(grep -cE '\$\{path#/prefix/\}|argc=\$#|#anchor' "$_g5_dir/risk.new" 2>/dev/null || true)
+_g5_b2_keeps=$(grep -cE '\$\{path#/prefix/\}|argc=\$#|#anchor' "$_g5_dir/risk.b2" 2>/dev/null || true)
+if [ "$_g5_keeps" -eq 3 ] && [ "$_g5_b2_keeps" -eq 0 ]; then pass; else
+  fail "GUARD 5(b): on the at-risk fixture the tail strip preserved ${_g5_keeps}/3 tokens and _b2_strip preserved ${_g5_b2_keeps}/3 (expected 3 and 0) — the two strippers no longer differ in the way that justifies not reusing _b2_strip" \
+       "new=[$(tr '\n' ' ' < "$_g5_dir/risk.new")] b2=[$(tr '\n' ' ' < "$_g5_dir/risk.b2")]"; fi
+
 # ── FIXTURE A — the real seed relocated BELOW the trap, with a trailing comment naming the
 #    token left ABOVE it. Finding (1): with an unanchored `head -1` the comment hijacks the
 #    line number and R3(1)/(2)/(2b) report the seed early when it is late.
 _fxA="$_r3c_dir/A.code.sh"
 if [ -s "$TMP/luks-stage.code.sh" ]; then
+  # The seed is held out and re-emitted at END OF FILE, so it sits after BOTH the trap and
+  # the first append — the two orderings R3(2b) and R3(2) respectively assert. The decoy
+  # comment naming the token is left where the real seed used to be, above the trap, which is
+  # what an unanchored `head -1` latches onto.
   awk '
-    /^[[:space:]]*GIT_DATA_LUKS_DETAIL=/ && !moved { held = $0; moved = 1; next }
-    /^[[:space:]]*trap luks_err EXIT/ {
-      print "  : # seed for GIT_DATA_LUKS_DETAIL= is documented above this trap"
-      print $0
-      if (moved) { print held }
+    /^[[:space:]]*GIT_DATA_LUKS_DETAIL=/ && !moved {
+      held = $0; moved = 1
+      print "  : # seed for GIT_DATA_LUKS_DETAIL= is documented here"
       next
     }
     { print }
+    END { if (moved) print held }
   ' "$TMP/luks-stage.code.sh" > "$_fxA"
 else
   : > "$_fxA"
@@ -2850,7 +2924,19 @@ total=$((passes + fails + SKIPPED_ASSERTIONS))
 # underneath it. Do NOT edit the frozen 19-era baseline list higher up to reconcile with this;
 # each raise is itemised in its own stanza, and that list is what "19 pre-existing" is checked
 # against.
-if [ "$total" -lt 58 ]; then
+# RAISED 58 -> 68 (#7613), ITEMISED — ten new counted assertions, all pure text over $TMP,
+# so they are made on every route the suite reaches this far on:
+#     3  fixture A: R3(1), R3(2), R3(2b) — the unanchored seed lookup
+#     1  fixture A': R3(2c) — the family's own negative control must discriminate
+#     1  fixture B: R3(3b)(ii) — the guard predicate reading prose
+#     1  fixture B': R3(3d) — the deletion sed must land on code, not a comment
+#     1  fixture C: R3(3b)(i) — a count floor where the property is a set
+#     1  fixture D: R3(2d) — the anchored reference must stay discriminating
+#     2  Guard 5: _b2_strip parity on the real corpus, divergence on the at-risk fixture
+#   ----
+#    10
+# Re-derived from a measured run against the as-written file, not incremented by memory.
+if [ "$total" -lt 68 ]; then
   echo "FAIL: ran only ${total} assertions (<49) — harness did not execute fully" >&2
   exit 1
 fi
