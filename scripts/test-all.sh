@@ -4,6 +4,10 @@ set -euo pipefail
 # EXIT CONTRACT (#7424)
 #   0  every registered suite passed
 #   1  >= 1 suite FAILED (an assertion verdict) — failure dominates when both are present
+#      ALSO 1: a suite WROTE TO THE LIVE REPOSITORY. Counted into `failed` rather than given a
+#      new code, because every consumer of this runner is binary on non-zero and a fifth code
+#      buys nothing; the [FATAL] line above the summary names it unambiguously. See the
+#      REPO WRITE BOUNDARY blocks (#7553/#7652).
 #   3  0 failures and >= 1 suite KILLED — UNRESOLVED, not measured, and NOT green
 #      3 is a TOP-LEVEL contract only: a nested runner returning 3 into run_suite classifies
 #      as a plain FAIL, because rc=3 is not signal-shaped. Do not adopt 3 in a nested runner
@@ -747,6 +751,34 @@ tc_acquire "test-all"
 # machine state up to fifteen minutes stale and makes the start/end delta
 # meaningless. Sampled at the moment this run actually begins doing work.
 _emit_bytes_probe "__run_boundary_start__"
+
+# --- REPO WRITE BOUNDARY (start) ---------------------------------------------------------
+#
+# This runner is READ-ONLY with respect to the repository it is run from. Nothing it registers
+# may commit, check out, stage, or move a ref here. That is a property nobody was measuring,
+# and on 2026-08-20 it was violated: a suite silenced its `git worktree add` failures and then
+# ran `git add`/`git commit` in an unguarded subshell, so the commands executed in the CALLER
+# CWD — the developer's live worktree. Four escapes across three sessions in under two hours;
+# fixture commits landed on feature branches AND on local main, one worktree was checked out to
+# main, and hours of uncommitted work were destroyed. Every suite reported green throughout.
+#
+# The site-level fix (a guard in that suite) is necessary and not sufficient: it protects the
+# sites it covers, in the file it lives in. This is the BOUNDARY check, and it is deliberately
+# characterised by the INVARIANT rather than by any fingerprint of that fixture. Detection by
+# commit message, by the fixture's pinned committer date, or by author all key on incidental
+# properties of today's escape and fail SILENTLY CLEAN against a future one that differs. "The
+# gate wrote to the repo" does not.
+#
+# Sampled AFTER tc_acquire for the same reason the bytes probe is: a run that queued behind a
+# sibling can wait here, and a reading taken before the wait describes a stale tree.
+#
+# Degrades OPEN. A missing or failing git must not wedge the gate — an unmeasurable boundary is
+# reported at the end, never turned into a false RED.
+_repo_guard_ok=0
+_repo_state_before=""
+if _repo_state_before="$(git rev-parse HEAD 2>/dev/null && git status --porcelain 2>/dev/null | sha256sum)"; then
+  _repo_guard_ok=1
+fi
 
 # Pre-suite bash/python tests — scripts shard.
 if want_scripts; then
@@ -1547,6 +1579,38 @@ fi
 
 _emit_bytes_probe "__run_boundary_end__"
 tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"
+
+# --- REPO WRITE BOUNDARY (end) -----------------------------------------------------------
+#
+# Compared as a DELTA, so a tree that was already dirty at the start is fine; what is forbidden
+# is this run CHANGING it. Reported before the summary block so the marker stays the last
+# `=== ` line (#6750), and counted into `failed` so the exit code carries it: a run that
+# corrupted the repository is not a pass, whatever the suites said.
+_repo_wrote=0
+if [[ "$_repo_guard_ok" == 1 ]]; then
+  if _repo_state_after="$(git rev-parse HEAD 2>/dev/null && git status --porcelain 2>/dev/null | sha256sum)"; then
+    if [[ "$_repo_state_before" != "$_repo_state_after" ]]; then
+      _repo_wrote=1
+      failed=$((failed + 1))
+      echo "" >&2
+      echo "[FATAL] A SUITE WROTE TO THE LIVE REPOSITORY. This runner is read-only here." >&2
+      echo "        HEAD and/or the working tree changed between the first suite and this line." >&2
+      echo "        before: ${_repo_state_before//$'\n'/ | }" >&2
+      echo "        after : ${_repo_state_after//$'\n'/ | }" >&2
+      echo "        Committed work survives; UNCOMMITTED work may not. Do not re-run before" >&2
+      echo "        checking: git reflog -25, and git log --oneline origin/main..main" >&2
+      echo "        A suite whose fixture cd fails can run git in the caller CWD (#7553/#7652)." >&2
+    fi
+  else
+    echo "" >&2
+    echo "NOTE: the repo-write boundary could not be re-read; this run is not evidence that" >&2
+    echo "      no suite wrote to the repository." >&2
+  fi
+else
+  echo "" >&2
+  echo "NOTE: the repo-write boundary was not measured (git unavailable at run start); this run" >&2
+  echo "      is not evidence that no suite wrote to the repository." >&2
+fi
 
 # BREAKDOWN FIRST, TERMINAL MARKER LAST. The ordering is load-bearing, not cosmetic.
 # Both lines are `=== ...`-shaped, and the documented lesson from #6750 is to match
