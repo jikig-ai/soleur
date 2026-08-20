@@ -48,13 +48,14 @@
 # the pre-loop unpause PATCH, the final iteration's own GET (the part that overshoots), and the
 # terminal rollback PATCH. Each is capped by `--max-time ARM_CURL_MAX_TIME_S`, so per call site:
 #
-#   worst-case wall clock  =  deadline + ARM_POLL_INTERVAL_S + 4 × ARM_CURL_MAX_TIME_S
-#                          =  deadline + 70 s  at the shipped 10 / 15
+#   worst-case wall clock  =  deadline + ARM_POLL_INTERVAL_S
+#                             + (3 + ARM_ROLLBACK_ATTEMPTS) × ARM_CURL_MAX_TIME_S
+#                          =  deadline + 85 s  at the shipped 10 / 15 / 2
 #
 # ADDITIVE, not a multiplier: the overhead is per CALL SITE, so it scales with the number of
 # arms and not with the size of the deadlines. `Σ(deadlines) × 1.1` was the wrong shape — it
 # happened to be generous for six large deadlines and would under-budget a seventh small one.
-# The step ceiling in the workflow is sized against `Σ(deadline_i + 70)`; the whole ladder is
+# The step ceiling in the workflow is sized against `Σ(deadline_i + 85)`; the whole ladder is
 # derived, not restated, by the `ARM gate's deadlines fit its job` describe in
 # `plugins/soleur/test/terraform-target-parity.test.ts`.
 #
@@ -64,7 +65,9 @@
 # 2 × ARM_CURL_MAX_TIME_S` — the final iteration's overshoot plus the rollback PATCH — so at as
 # little as 2 s of Better Stack round-trip the old formula re-paused the monitor AFTER its first
 # absence alert had already fired. A false page from the gate that exists to prevent false pages.
-# The reserve is now the measured worst case: `deadline = period + grace − 40`.
+# The reserve is now the measured worst case: `deadline = period + grace − 40`. The rollback RETRY
+# does not enter this term: it fires only when the first attempt failed, and a failed PATCH did not
+# re-pause anything, so it lengthens the STEP's wall clock without lengthening the LIVE window.
 #
 # THE ROLLBACK IS ALSO RECORDED, NOT ONLY ATTEMPTED. Every id whose `PATCH {paused:false}`
 # succeeded is appended to `$ARMED_UNCONFIRMED` and removed ONLY when it reaches `up` or when a
@@ -194,6 +197,13 @@ HB_PATCH_CODE=""
 # (#7658 E7). `jq -r` unescapes `\n` into a real newline, so an `updated_at` containing one
 # breaks out of the annotation and emits an attacker-chosen line at column 0, which the runner
 # parses as a workflow command (`::error::`, `::add-mask::`, `::stop-commands::`).
+# `-f` here is belt-and-braces, NOT the load-bearing check, and this is recorded because the
+# review found `-f` deletable with both suites green (#7656 C4). Where it MATTERED was the old
+# `hb_patch_paused`, a bare `curl` whose exit status WAS its verdict — without `-f` a rollback that
+# got HTTP 500 read as success. That call now reads `%{http_code}` and does not depend on `-f` at
+# all. On this GET the flag is genuinely redundant: with or without it, a 5xx yields a body with no
+# `.data.attributes.status`, so the guard below fails closed either way (verified by mutation). The
+# check that decides is `[[ -n "$HB_STATUS" ]]`, and deleting THAT reds the suite (row M10).
 hb_fetch() {  # <id> -> 0 and sets HB_STATUS/HB_UPDATED_AT; non-zero when the lookup failed
   local body
   body=$(curl -fsS --max-time "$ARM_CURL_MAX_TIME_S" -H "Authorization: Bearer ${BS_TOKEN}" \
@@ -220,7 +230,44 @@ hb_patch_paused() {  # <id> <true|false> -> 0 on a 2xx; sets HB_PATCH_CODE
     -X PATCH -H "Authorization: Bearer ${BS_TOKEN}" -H 'Content-Type: application/json' \
     "${BS_API_BASE}/heartbeats/$1" --data-raw "{\"paused\":$2}" 2>/dev/null)
   HB_PATCH_CODE="${HB_PATCH_CODE//[^0-9]/}"
+  # curl printed nothing at all — a transport failure or a `--max-time` kill. `000` is curl's own
+  # spelling for that, and naming it keeps the retry classifier below total over the status space.
+  [[ -n "$HB_PATCH_CODE" ]] || HB_PATCH_CODE=000
   [[ "$HB_PATCH_CODE" =~ ^2 ]]
+}
+
+# THE ROLLBACK RETRIES ONCE, AND ONLY ON A STATUS THAT COULD SUCCEED ON A SECOND TRY (#7658 E8).
+# Deviation 3 made a FAILED rollback fatal (return 1) even for the soft inngest caller, which is
+# the right direction — a monitor that is unpaused with nothing feeding it is a statement about the
+# ARMING, and a soft landing there would leave the apply GREEN while production uptime alerting is
+# live-and-unfed. But it made a SINGLE unretried round-trip fatal, on the one arm that can never
+# take the no-op branch while #7228 is open: at 2.71 merge-applies/day that is ~990 rollback
+# PATCHes a year, every one of them able to red a routine apply and raise a false ops alarm on one
+# lost packet. The vendor's error rate is UNVERIFIED — this repo holds no measurement of it — so
+# the cost is stated as a sensitivity: p = 0.1 % → ~1 false red/yr, p = 0.5 % → ~5, p = 1 % → ~10.
+#
+# One immediate retry, no backoff: `--max-time` already bounds each attempt, the failure mode being
+# covered is a lost round-trip rather than a busy server, and every extra attempt is a term the
+# step's wall-clock ceiling has to carry (the ladder budgets `ARM_ROLLBACK_ATTEMPTS` explicitly).
+# A 4xx is NOT retried — a 401/403/404 does not fix itself on a second immediate call, and burning
+# the budget on it delays the `::error::` the operator needs.
+#
+# The sweep deliberately does NOT layer a second retry on top of this: it IS the next attempt, it
+# runs seconds later on the same id, and its own failure is reported as `outcome=partial` rather
+# than swallowed.
+ARM_ROLLBACK_ATTEMPTS=2
+hb_rollback() {  # <id> <label> -> 0 once the monitor is confirmed paused
+  local id="$1" label="$2" attempt=1
+  while true; do
+    hb_patch_paused "$id" true && return 0
+    [[ "$attempt" -lt "$ARM_ROLLBACK_ATTEMPTS" ]] || return 1
+    case "$HB_PATCH_CODE" in
+      5*|000) ;;
+      *) return 1 ;;
+    esac
+    echo "::warning::${label}: rollback PATCH paused=true returned HTTP ${HB_PATCH_CODE} — retrying once before treating the monitor as still live."
+    attempt=$(( attempt + 1 ))
+  done
 }
 
 # =================================================================================================
@@ -420,8 +467,8 @@ arm_one() {
   # NEITHER is a poll that never read a status at all. rc=2 asserts something about the feeder,
   # and no such assertion is available when every in-loop GET failed (#7658 E1) — that is a loss
   # of vendor visibility, i.e. the gate could not do its job, so it returns 1.
-  if ! hb_patch_paused "$id" true; then
-    echo "::error::${label}: rollback PATCH paused=true FAILED (HTTP ${HB_PATCH_CODE:-000}) — monitor ${id} is unpaused-and-unfed. Left on the re-pause sweep's books; investigate immediately."
+  if ! hb_rollback "$id" "$label"; then
+    echo "::error::${label}: rollback PATCH paused=true FAILED (HTTP ${HB_PATCH_CODE:-000}) after ${ARM_ROLLBACK_ATTEMPTS} attempt(s) — monitor ${id} is unpaused-and-unfed. Left on the re-pause sweep's books; investigate immediately."
     echo "::error::${label}: status never reached 'up' within ${elapsed}s of a ${deadline}s deadline (last status=${ARM_LAST_STATUS:-unknown})."
     return 1
   fi

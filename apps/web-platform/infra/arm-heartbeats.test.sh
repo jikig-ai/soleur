@@ -195,6 +195,13 @@ case "$method" in
       *) echo "fake curl: PATCH with an unrecognised body [$data]" >&2; exit 64 ;;
     esac
     if grep -qxF -- "$id $want" "$FAKE_PATCH_FAIL" 2>/dev/null; then emit 500 '{"errors":"boom"}'; fi
+    # "<id> <want> <code>": only the FIRST matching PATCH answers <code>; later ones succeed. This
+    # is what makes a RETRY distinguishable from a first-attempt success (#7658 E8).
+    once="$(awk -v i="$id" -v w="$want" '$1==i && $2==w{print $3}' "$FAKE_PATCH_FAIL_ONCE" 2>/dev/null | head -1)"
+    if [[ -n "$once" ]]; then
+      seen="$(awk -F'\t' -v i="$id" '$2=="PATCH" && $3==i && $4 ~ /"paused":'"$want"'/' "$FAKE_CALLS" | grep -c '')"
+      if [[ "$seen" -le 1 ]]; then emit "$once" '{"errors":"boom"}'; fi
+    fi
     if [[ "$want" == "false" ]]; then printf 'pending' > "$FAKE_STATE/$id.status"
     else printf 'paused' > "$FAKE_STATE/$id.status"; fi
     emit "$(status_for "patch-$want")" "$(printf '{"data":{"id":"%s"}}' "$id")"
@@ -211,11 +218,12 @@ FAKE_CALLS="$WORK/calls-selftest"; : > "$FAKE_CALLS"
 FAKE_GET_FAIL="$WORK/getfail-selftest"; : > "$FAKE_GET_FAIL"
 FAKE_GET_FAIL_AFTER="$WORK/getfailafter-selftest"; : > "$FAKE_GET_FAIL_AFTER"
 FAKE_PATCH_FAIL="$WORK/patchfail-selftest"; : > "$FAKE_PATCH_FAIL"
+FAKE_PATCH_FAIL_ONCE="$WORK/patchfailonce-selftest"; : > "$FAKE_PATCH_FAIL_ONCE"
 FAKE_EMPTY_BODY="$WORK/emptybody-selftest"; : > "$FAKE_EMPTY_BODY"
 FAKE_BAD_JSON="$WORK/badjson-selftest"; : > "$FAKE_BAD_JSON"
 FAKE_STATE="$WORK/state-selftest"; mkdir -p "$FAKE_STATE"
 FAKE_HTTP="$WORK/http-selftest"; mkdir -p "$FAKE_HTTP"
-export FAKE_CLOCK FAKE_CALLS FAKE_GET_FAIL FAKE_GET_FAIL_AFTER FAKE_PATCH_FAIL FAKE_EMPTY_BODY FAKE_BAD_JSON FAKE_STATE FAKE_HTTP
+export FAKE_CLOCK FAKE_CALLS FAKE_GET_FAIL FAKE_GET_FAIL_AFTER FAKE_PATCH_FAIL FAKE_PATCH_FAIL_ONCE FAKE_EMPTY_BODY FAKE_BAD_JSON FAKE_STATE FAKE_HTTP
 PATH="$BIN:$PATH" bash -c 'curl -fsS --max-time 15 -H "Authorization: Bearer x"' >/dev/null 2>&1
 assert_eq "the fake curl exits 64 when handed no URL (argv fidelity, not a fixture echo)" "64" "$?"
 PATH="$BIN:$PATH" bash -c 'curl -fsS -H "Authorization: Bearer x" https://x.test/heartbeats/1' >/dev/null 2>&1
@@ -295,6 +303,7 @@ case_setup() {  # <name> — fresh clock/calls/state for one run; every id defau
   FAKE_GET_FAIL="$CASE/getfail"; : > "$FAKE_GET_FAIL"
   FAKE_GET_FAIL_AFTER="$CASE/getfailafter"; : > "$FAKE_GET_FAIL_AFTER"
   FAKE_PATCH_FAIL="$CASE/patchfail"; : > "$FAKE_PATCH_FAIL"
+  FAKE_PATCH_FAIL_ONCE="$CASE/patchfailonce"; : > "$FAKE_PATCH_FAIL_ONCE"
   FAKE_EMPTY_BODY="$CASE/emptybody"; : > "$FAKE_EMPTY_BODY"
   FAKE_BAD_JSON="$CASE/badjson"; : > "$FAKE_BAD_JSON"
   FAKE_STATE="$CASE/state"
@@ -308,7 +317,7 @@ case_setup() {  # <name> — fresh clock/calls/state for one run; every id defau
     printf 'up' > "$FAKE_STATE/$id.status"
   done
   export FAKE_CLOCK FAKE_CALLS FAKE_GET_FAIL FAKE_GET_FAIL_AFTER FAKE_PATCH_FAIL \
-         FAKE_EMPTY_BODY FAKE_BAD_JSON FAKE_STATE FAKE_HTTP
+         FAKE_PATCH_FAIL_ONCE FAKE_EMPTY_BODY FAKE_BAD_JSON FAKE_STATE FAKE_HTTP
 }
 
 run_sut() {  # [sut-path] -> sets OUT and RC
@@ -440,6 +449,36 @@ assert "T2d says the unpause failed, with its status" \
   "[[ \"\$OUT\" == *'PATCH paused=false FAILED (HTTP 500)'* ]]"
 assert_eq "T2d writes no state — nothing was ever unpaused" "0" "$(state_lines)"
 
+# --- T2e/T2f: the rollback retries a transient, and does NOT retry a 4xx (#7658 E8) -----------
+# The rollback is the one write whose failure reds a routine apply, and while #7228 is open the
+# inngest arm executes it on EVERY merge — ~990 unretried round-trips a year, any one of which
+# could raise a false ops alarm on a lost packet.
+echo "--- T2e a 5xx rollback that succeeds on the retry is NOT a failed rollback"
+case_setup t2e
+printf 'paused' > "$FAKE_STATE/$ID_INNGEST.status"
+printf '%s true 500\n' "$ID_INNGEST" > "$FAKE_PATCH_FAIL_ONCE"
+FAKE_CURL_COST=1 run_sut
+assert_eq "T2e exits 0 — a transient lost round-trip is not an unpaused-and-unfed monitor" "0" "$RC"
+assert "T2e says it retried, rather than retrying silently" \
+  "[[ \"\$OUT\" == *'returned HTTP 500 — retrying once'* ]]"
+assert "T2e does NOT declare the monitor unpaused-and-unfed" "[[ \"\$OUT\" != *'unpaused-and-unfed'* ]]"
+assert_eq "T2e issues three PATCHes: unpause, failed rollback, successful rollback" "3" "$(patch_count)"
+assert "T2e's LAST PATCH is paused:true" \
+  "[[ \"\$(patch_bodies | tail -1)\" == '$ID_INNGEST {\"paused\":true}' ]]"
+assert_eq "T2e clears the books" "0" "$(state_lines)"
+assert "T2e still soft-lands with the feeder verdict (the arm itself worked)" \
+  "[[ \"\$OUT\" == *'no beat within 30s'* ]]"
+
+echo "--- T2f a 403 rollback is NOT retried: a 4xx does not fix itself on an immediate second call"
+case_setup t2f
+printf 'paused' > "$FAKE_STATE/$ID_INNGEST.status"
+printf '403' > "$FAKE_HTTP/$ID_INNGEST.patch-true"
+FAKE_CURL_COST=1 run_sut
+assert_eq "T2f exits 1" "1" "$RC"
+assert_eq "T2f issues exactly two PATCHes — no wasted retry" "2" "$(patch_count)"
+assert "T2f does not claim to have retried" "[[ \"\$OUT\" != *'retrying once'* ]]"
+assert "T2f names the status and the attempt count" "[[ \"\$OUT\" == *'HTTP 403'* ]]"
+
 # --- T3: the wall-clock bound (Guard 2 row 6) -----------------------------------------------
 echo "--- T3 the deadline is wall clock, not a sleep tally"
 case_setup t3
@@ -481,8 +520,8 @@ assert_eq "T5 exits 1 even for the SOFT caller — a failed rollback is about th
 assert "T5 reached the rollback (positive control: the unpause did succeed)" \
   "[[ \"\$(patch_bodies | head -1)\" == '$ID_INNGEST {\"paused\":false}' ]]"
 assert "T5 says the monitor is unpaused-and-unfed" "[[ \"\$OUT\" == *'unpaused-and-unfed'* ]]"
-assert "T5 does NOT emit the soft ::warning:: (that would leave the job green)" \
-  "[[ \"\$OUT\" != *'::warning::inngest-consumer'* ]]"
+assert "T5 does NOT emit the soft FEEDER verdict (that would leave the job green)" \
+  "[[ \"\$OUT\" != *'no beat within'* ]]"
 assert_eq "T5 leaves exactly the failed id on the re-pause sweep's books" "1" "$(state_lines)"
 assert "T5's remaining id is the right one" "[[ \"\$(cat '$STATEFILE')\" == '$ID_INNGEST' ]]"
 
@@ -563,7 +602,7 @@ assert_eq "T7d exits 1 — no status was read, so no assertion about the FEEDER 
 assert "T7d does NOT report the stale pre-unpause status" "[[ \"\$OUT\" != *'status=paused'* ]]"
 assert "T7d names the visibility loss explicitly" \
   "[[ \"\$OUT\" == *'every status read during the 30s poll FAILED'* ]]"
-assert "T7d does NOT emit the soft feeder ::warning::" "[[ \"\$OUT\" != *'::warning::inngest-consumer'* ]]"
+assert "T7d does NOT emit the soft feeder verdict" "[[ \"\$OUT\" != *'no beat within'* ]]"
 assert "T7d still rolled the monitor back to paused" \
   "[[ \"\$(patch_bodies | tail -1)\" == '$ID_INNGEST {\"paused\":true}' ]]"
 assert_eq "T7d clears the books — the rollback did return 2xx" "0" "$(state_lines)"
@@ -763,7 +802,7 @@ fi
 
 # M2 — flip the rollback to paused:false (Guard 2 row 7 at the script layer).
 # shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
-if mutate unpause-rollback 1 's|! hb_patch_paused "\$id" true|! hb_patch_paused "$id" false|'; then
+if mutate unpause-rollback 1 's|hb_patch_paused "\$id" true && return 0|hb_patch_paused "$id" false \&\& return 0|'; then
   case_setup m2
   printf 'paused' > "$FAKE_STATE/$ID_INNGEST.status"
   run_sut "$MUTANT"
@@ -903,6 +942,19 @@ if mutate sweep-unpause 1 's|^    if hb_patch_paused "\$id" true; then$|    if h
     "[[ \"\$(patch_bodies | tail -1)\" == '$ID_ZOT1 {\"paused\":false}' ]]"
 fi
 
+# M17 — drop the rollback retry, i.e. Deviation 3 as it first shipped: one unretried round-trip
+# reds a routine apply and raises a false ops alarm.
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
+if mutate no-rollback-retry 1 's|^ARM_ROLLBACK_ATTEMPTS=2$|ARM_ROLLBACK_ATTEMPTS=1|'; then
+  case_setup m17
+  printf 'paused' > "$FAKE_STATE/$ID_INNGEST.status"
+  printf '%s true 500\n' "$ID_INNGEST" > "$FAKE_PATCH_FAIL_ONCE"
+  FAKE_CURL_COST=1 run_sut "$MUTANT"
+  assert_eq "M17 RED: a single lost round-trip now reds the apply" "1" "$RC"
+  assert "M17 and it calls the monitor unpaused-and-unfed on a transient" \
+    "[[ \"\$OUT\" == *'unpaused-and-unfed'* ]]"
+fi
+
 # M15 — the anti-vacuity control. An UNMUTATED copy, run through the same harness, must still be
 # GREEN; without it a red baseline is indistinguishable from a caught mutation.
 cp "$SUT" "$WORK/mutant-control.sh" || { echo "FATAL: control copy failed"; exit 2; }
@@ -920,11 +972,11 @@ echo
 echo "arm-heartbeats: ${PASS} passed, ${FAIL} failed ($((PASS + FAIL)) assertions)"
 # MINIMUM-CARDINALITY FLOOR. A harness whose case loop silently ran nothing would otherwise report
 # "0 failed" and read as success. Absolute and hand-ratcheted — there is no second producer here to
-# derive it from. Ratcheted 55 → 176, the EXACT shipped count (#7656 C8: 55 against an actual 69
+# derive it from. Ratcheted 55 → 190, the EXACT shipped count (#7656 C8: 55 against an actual 69
 # left room to delete a whole ten-assertion case without tripping it). Exact, not "shipped minus a
 # margin": a margin is precisely the room a silent narrowing hides in, and removing an assertion on
 # purpose should cost one deliberate edit here.
-ASSERT_FLOOR=176
+ASSERT_FLOOR=190
 if [[ $((PASS + FAIL)) -lt "$ASSERT_FLOOR" ]]; then
   echo "FAIL: only $((PASS + FAIL)) assertions ran against a floor of ${ASSERT_FLOOR} — the suite is narrowed or a case aborted early."
   exit 1

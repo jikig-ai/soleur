@@ -110,19 +110,29 @@ work when the ARM step was cut, i.e. exactly when the least budget remains.
 grace − 10` re-paused the monitor AFTER its first absence alert at as little as 2 s of Better Stack
 round-trip. Reserve is now `poll_interval + 2 × curl_max_time = 40`.
 
+The per-call-site overhead also carries the ROLLBACK RETRY added for #7658 E8 — the rollback is
+the one write whose failure reds a routine apply, and while #7228 is open the inngest arm executes
+it on every merge, ~990 unretried round-trips a year. One immediate retry on a 5xx/000 (never on a
+4xx) makes the term `poll_interval + (3 + ARM_ROLLBACK_ATTEMPTS) × curl_max_time` = 85, not 70. It
+does NOT enter the rollback RESERVE: a failed PATCH re-paused nothing, so it lengthens the step's
+wall clock without lengthening the monitor's live window.
+
 ```
 deadlines      200 (240−40) / 440 (480−40) / 200 / 440 / 200 / 30      Σ = 1510
-work bound     1510 + 6 × 70                                         = 1930
-(1) step ≥ work                 →  33 min (1980 s) ≥ 1930            ✓ slack 50 s
+work bound     1510 + 6 × 85                                         = 2020
+(1) step ≥ work                 →  35 min (2100 s) ≥ 2020            ✓ slack 80 s
 (2) job − step ≥ max(pre-gate) + post-gate
     post-gate = 6 × 15 (sweep) + 30 (mint `timeout`) + 60 (teardown+summary) = 180
-                                →  2340 − 1980 = 360 ≥ 111 + 180 = 291  ✓ slack 69 s
-ladder: 1930 (work) < 1980 (step ceiling) < 2340 (job ceiling)
+                                →  2460 − 2100 = 360 ≥ 111 + 180 = 291  ✓ slack 69 s
+ladder: 2020 (work) < 2100 (step ceiling) < 2460 (job ceiling)
 ```
 
-**So the `apply` job is `timeout-minutes: 39`, the ARM step is 33, and the re-pause sweep carries
-its own `timeout-minutes: 3`.** Fleet-mutex worst case on a push is preflight 1 + apply 39 +
-notify 5 = **45 min** (`preflight` was uncounted in the earlier "40", which was itself 41).
+**So the `apply` job is `timeout-minutes: 41`, the ARM step is 35, and the re-pause sweep carries
+its own `timeout-minutes: 3`.** Fleet-mutex worst case on a push is preflight 1 + apply 41 +
+notify 5 = **47 min** (`preflight` was uncounted in the earlier "40", which was itself 41).
+Priced honestly: the worst case for an emergency dispatch issued while a merge apply is in flight
+moves from 16 min to 47 min, and the overlap histogram over 80 runs of the shared group is
+`{0: 69, 1: 11}` — 11 of 80 runs DID queue.
 Every one of those numbers is re-derived by the guard suite from the script and the workflow rather
 than restated; see `describe("the ARM gate's deadlines fit its job")`.
 

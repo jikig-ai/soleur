@@ -4164,13 +4164,21 @@ function timeoutSeconds(v: unknown, what: string): number {
 interface LadderTerms {
   pollIntervalS: number;
   curlMaxTimeS: number;
+  rollbackAttempts: number;
   maxPreGateS: number;
   mintTimeoutS: number;
 }
 
-/** The per-call-site wall clock the `elapsed` accounting does NOT see. See arm-heartbeats.sh. */
+/**
+ * The per-call-site wall clock the `elapsed` accounting does NOT see. See arm-heartbeats.sh.
+ *
+ * Three round-trips are unconditional (the pre-loop GET, the unpause PATCH, and the final
+ * iteration's own GET — the part that overshoots the deadline), plus one poll interval, plus the
+ * rollback, which retries `ARM_ROLLBACK_ATTEMPTS` times. The retry count is READ FROM THE SCRIPT:
+ * adding an attempt has to move the budget, or the budget is fiction.
+ */
 function perSiteOverheadS(t: LadderTerms): number {
-  return t.pollIntervalS + 4 * t.curlMaxTimeS;
+  return t.pollIntervalS + (3 + t.rollbackAttempts) * t.curlMaxTimeS;
 }
 
 function postGateBudgetS(sites: number, t: LadderTerms): number {
@@ -4236,6 +4244,7 @@ describe("the ARM gate's deadlines fit its job", () => {
     return {
       pollIntervalS: scriptConst(script, "ARM_POLL_INTERVAL_S"),
       curlMaxTimeS: scriptConst(script, "ARM_CURL_MAX_TIME_S"),
+      rollbackAttempts: scriptConst(script, "ARM_ROLLBACK_ATTEMPTS"),
       maxPreGateS: pinnedFromMeasurements("MAX_PRE_GATE_S"),
       mintTimeoutS: mintTimeoutSeconds(String(sweepStep?.run ?? "")),
     };
@@ -4321,7 +4330,7 @@ describe("the ARM gate's deadlines fit its job", () => {
       "the notify job",
     );
     const mutexMin = (preflightS + jobS + notifyS) / 60;
-    expect(mutexMin).toBe(45);
+    expect(mutexMin).toBe(47);
     // Every comment line in the file that states an ADDITIVE minute sum. There are three copies —
     // the apply header, the notify-apply-failure header, and the registry_luks_recut accounting
     // paragraph 1,300 lines away — and they used to be able to drift apart silently.
@@ -4448,13 +4457,14 @@ describe("Guard 2 mutation battery (#7587)", () => {
   const T: LadderTerms = {
     pollIntervalS: scriptConst(script, "ARM_POLL_INTERVAL_S"),
     curlMaxTimeS: scriptConst(script, "ARM_CURL_MAX_TIME_S"),
+    rollbackAttempts: scriptConst(script, "ARM_ROLLBACK_ATTEMPTS"),
     maxPreGateS: pinnedFromMeasurements("MAX_PRE_GATE_S"),
     mintTimeoutS: mintTimeoutSeconds(String(sweepStep?.run ?? "")),
   };
 
   test("control: the SHIPPED ladder is clean, read live from the workflow", () => {
-    expect(JOB_S).toBe(39 * 60);
-    expect(STEP_S).toBe(33 * 60);
+    expect(JOB_S).toBe(41 * 60);
+    expect(STEP_S).toBe(35 * 60);
     expect(ladderViolations(JOB_S, STEP_S, REAL_DEADLINES, T)).toEqual([]);
   });
 
@@ -4533,6 +4543,9 @@ describe("Guard 2 mutation battery (#7587)", () => {
     const widened: LadderTerms = { ...T, curlMaxTimeS: T.curlMaxTimeS * 3 };
     expect(ladderViolations(JOB_S, STEP_S, REAL_DEADLINES, widened).length).toBeGreaterThan(0);
     expect(() => scriptConst(script.replace(/^ARM_CURL_MAX_TIME_S=\d+$/m, "# removed"), "ARM_CURL_MAX_TIME_S")).toThrow();
+    // …and adding a rollback attempt has to cost the budget, or the retry term is decorative.
+    const retried: LadderTerms = { ...T, rollbackAttempts: T.rollbackAttempts + 3 };
+    expect(ladderViolations(JOB_S, STEP_S, REAL_DEADLINES, retried).length).toBeGreaterThan(0);
   });
 
   test("M7 RED: a post-gate budget of zero — the shape the old inequality shipped — is caught", () => {
@@ -4553,8 +4566,8 @@ describe("Guard 2 mutation battery (#7587)", () => {
   });
 
   test("H4 PASS: a non-canonical step ceiling that still satisfies the inequality MUST NOT red", () => {
-    // The contract is the inequality, not a literal. 34 min is not what ships and is fine.
-    expect(ladderViolations(JOB_S, 34 * 60, REAL_DEADLINES, T)).toEqual([]);
+    // The contract is the inequality, not a literal. 36 min is not what ships and is fine.
+    expect(ladderViolations(JOB_S, 36 * 60, REAL_DEADLINES, T)).toEqual([]);
   });
 
   test("H5 RED: an unresolvable deadline variable fails closed rather than dropping the term", () => {

@@ -353,7 +353,7 @@ jobs:
     # DISPATCH job, not this one — an attended rebuild with its own budget — so the merge-path
     # population is steady-state by construction and the estimate has nothing left to describe.
     #
-    # 15 → 39 (#7587, #7657). The 15 was never a measured constraint: its stated justification was
+    # 15 → 41 (#7587, #7657). The 15 was never a measured constraint: its stated justification was
     # "the operator-tolerance ceiling that matches `apply-deploy-pipeline-fix.yml`", and that
     # sibling's own apply job is `timeout-minutes: 90`. It was an unverified paraphrase, and the
     # entire "the ARM gate's deadline sum must be truncated to fit" framing rested on treating
@@ -365,15 +365,17 @@ jobs:
     # interval and the curl ceiling OUT of `apps/web-platform/infra/arm-heartbeats.sh` rather than
     # restating them here:
     #
-    #   (1) arm_step_timeout ≥ Σ over call sites of (deadline_i + poll_interval + 4 × curl_max_time)
-    #       → 1980 ≥ (200+440+200+440+200+30) + 6 × 70 = 1510 + 420 = 1930      ✓ slack 50 s
+    #   (1) arm_step_timeout ≥ Σ over call sites of
+    #       (deadline_i + poll_interval + (3 + rollback_attempts) × curl_max_time)
+    #       → 2100 ≥ (200+440+200+440+200+30) + 6 × 85 = 1510 + 510 = 2020      ✓ slack 80 s
     #   (2) job_timeout − arm_step_timeout ≥ max(pre-gate) + post-gate budget
-    #       → 2340 − 1980 = 360 ≥ 111 + 180 = 291                               ✓ slack 69 s
+    #       → 2460 − 2100 = 360 ≥ 111 + 180 = 291                               ✓ slack 69 s
     #
     # TERM (1) IS ADDITIVE, and that is the correction. `Σ × 1.1` applied a multiplier to overhead
     # that is per CALL SITE: each `arm_one` spends four `curl --max-time 15` round-trips the
-    # `elapsed` accounting never sees (pre-loop GET, unpause PATCH, the final iteration's own GET,
-    # the rollback PATCH) plus one poll interval of loop overshoot — 70 s, whatever the deadline.
+    # `elapsed` accounting never sees (pre-loop GET, unpause PATCH, the final iteration's own GET)
+    # plus one poll interval of loop overshoot plus the rollback, which retries once (#7658 E8) —
+    # 85 s, whatever the deadline.
     # Under the old shape the step ceiling broke at ≥9 s of vendor round-trip; measured by running
     # the shipped script under its own PATH stubs, six arms at 15 s/round-trip cost 2020 s against
     # a 1860 s ceiling. The header of `arm-heartbeats.sh` derives the 70.
@@ -391,17 +393,17 @@ jobs:
     # p95 — the earlier "p95 = 111" was a max-of-6 mislabelled. Observed 8–111 s; nearest-rank p95
     # at n = 42 is 81 s. The ladder uses the max deliberately.
     #
-    # The ladder is 1930 (work) < 1980 (step ceiling) < 2340 (job ceiling) — a job ceiling above,
+    # The ladder is 2020 (work) < 2100 (step ceiling) < 2460 (job ceiling) — a job ceiling above,
     # an in-script bound strictly below, which is the shape this file's two mutex-holding dispatch
     # jobs already document. The cost is the fleet-wide apply mutex: the `concurrency` group is
     # WORKFLOW-level, so the run-level worst case is the SUM across every job that can execute on
-    # a push, chained by `needs:` — preflight 1 + apply 39 + notify-apply-failure 5 = 45 min.
+    # a push, chained by `needs:` — preflight 1 + apply 41 + notify-apply-failure 5 = 47 min.
     # (`preflight` was uncounted in the earlier "40 min" claim, which was also 41.) Measured before
     # relying on it (2026-08-20, 80 completed runs of the shared group over 35 days): observed
     # queue depth never exceeded 1, the longest run took 23.7 min, and the sibling that shares this
     # mutex already runs a 90-minute apply. Priced honestly: the worst case for an emergency
-    # dispatch issued while a merge apply is in flight is now a 45-minute wait.
-    timeout-minutes: 39
+    # dispatch issued while a merge apply is in flight is now a 47-minute wait.
+    timeout-minutes: 41
     # No `environment:` reviewer gate. PR #4220 removed it: the per-apply
     # reviewer click was duplicative friction on top of the PR-merge gate
     # (CODEOWNERS review + branch protection on main), and was blocking
@@ -1109,13 +1111,13 @@ jobs:
         # is nothing to arm.
         if: always() && steps.ssh_token_gate.outputs.ssh_apply_skip != 'true'
         # STEP-LEVEL CEILING (#7587), the lower rung of the ladder documented on the job's own
-        # `timeout-minutes` above: 1930 (the script's worst-case wall clock) < 1980 (this step)
-        # < 2340 (the job). It is what makes an over-running ARM gate fail INSIDE the job — where
+        # `timeout-minutes` above: 2020 (the script's worst-case wall clock) < 2100 (this step)
+        # < 2460 (the job). It is what makes an over-running ARM gate fail INSIDE the job — where
         # the `if: always()` re-pause sweep below and the post-apply summary still run — instead
         # of being cancelled WITH the job, which is #7587's shape: the in-script rollback never
         # runs and a heartbeat is left unpaused-and-unfed until its grace window expires and it
         # pages, at whatever hour.
-        timeout-minutes: 33
+        timeout-minutes: 35
         working-directory: ${{ env.INFRA_DIR }}
         env:
           # Passed as DOPPLER_TOKEN (the CLI's own variable) rather than on argv: `--token <secret>`
@@ -1373,7 +1375,7 @@ jobs:
     runs-on: ubuntu-24.04
     # Bounds the fleet-mutex hold this job adds; GitHub's default is 360 minutes. The
     # `concurrency` group is WORKFLOW-level, so the run-level worst case is the SUM across every
-    # job that can execute on a push, chained by `needs:`: preflight 1 + apply 39 + this 5 = 45 min.
+    # job that can execute on a push, chained by `needs:`: preflight 1 + apply 41 + this 5 = 47 min.
     # `preflight` is counted — it was omitted from the earlier "40 min" arithmetic, which was 41.
     # Pinned to exactly 5 by the guard suite (raising it silently falsifies all three copies of the
     # sum, so the guard asserts the literal rather than a ceiling).
@@ -2830,9 +2832,9 @@ jobs:
   # job, and `registry_store_restore`.
   #
   # 2026-08-20 (#7587, corrected #7657): that same workflow-level accounting moved on the OTHER
-  # side of the file. The per-merge `apply` job went 15 → 39 and gained a `notify-apply-failure`
+  # side of the file. The per-merge `apply` job went 15 → 41 and gained a `notify-apply-failure`
   # sibling at 5, so the routine-merge arm of this group now has a run-level worst case of
-  # preflight 1 + apply 39 + notify 5 = 45 min rather than 15. (`preflight` is chained by `needs:`
+  # preflight 1 + apply 41 + notify 5 = 47 min rather than 15. (`preflight` is chained by `needs:`
   # and was uncounted in the first version of this paragraph, which said 40 for what was then 41.)
   # This job is dispatch-only and runs by deliberate action — but "deliberate" governs when a
   # dispatch is ISSUED, not whether a merge apply is already in flight, and the measurement below
@@ -2840,7 +2842,7 @@ jobs:
   # was {0 concurrent: 69, 1 concurrent: 11}, i.e. 11 of 80 runs DID queue. Observed queue depth
   # never exceeded 1 and the longest run took 23.7 min. Priced consequence, because it lands on the
   # dispatches issued during an outage: worst-case wait for an emergency dispatch stuck behind a
-  # routine merge apply moves from 16 min to 45 min, and this group covers `ci_ssh_token_replace`
+  # routine merge apply moves from 16 min to 47 min, and this group covers `ci_ssh_token_replace`
   # — described in this same file as "the ONE arm that can run while the SSH bridge is dead".
   registry_luks_recut:
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'registry-luks-recut'
