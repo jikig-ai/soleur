@@ -320,15 +320,30 @@ g3_decide() {
   # Positive prod-project pin (C3/D3). This is the SOLE remaining guard against arming onto
   # a non-prod Postgres now that equality no longer refuses — mutation-tested accordingly.
   #
-  # Pinned on the ROUTING position, not on mere presence (#7462 review). Supabase resolves the
-  # tenant from the pooler USERNAME, so the ref must appear in the userinfo as
-  # `://postgres.<ref>:` (session pooler — MEASURED against the live prd_terraform value, which
-  # carries a password, so the ref is followed by `:` and not by `@`), or in the direct host as
-  # `@db.<ref>.`. A bare `*<ref>*` substring would also accept a DSN carrying the ref in a
-  # password, dbname or query parameter while host and user point somewhere else entirely —
-  # which, as the only guard left, is the whole safety argument.
+  # Pin the DESTINATION, not a substring (#7462 review). Two earlier forms were defeated:
+  # a bare `*<ref>*` accepted the ref in a password/dbname/query param, and pinning only the
+  # pooler USERNAME (`*://postgres.<ref>:*`) accepted the prod username in front of ANY host —
+  # measured, `postgres.<prod-ref>` in front of host `db.<dev-ref>.supabase.co`
+  # returned `write`, i.e. armed onto the dev project, which is precisely what this guard
+  # exists to prevent. The username is a client-supplied field; only the authority decides
+  # where the connection lands.
+  #
+  # Three conjuncts, all MEASURED against the live prd_terraform value (1 '@', no ','
+  # no 'host='), so none of them refuses the legitimate DSN:
+  #   1. exactly one '@' — Go's net/url splits userinfo at the LAST '@' and permits '@'
+  #      inside it, so a second one relocates the host past any prefix match.
+  #   2. no ',' and no 'host=' — libpq/pgx accept multi-host lists and a `host=` connection
+  #      parameter, either of which overrides the URI authority after it has been checked.
+  #   3. the authority itself is anchored from the start of the string, on the Supabase
+  #      suffix, with the session-pooler port required in the authority rather than merely
+  #      present somewhere in the value.
+  if [[ "${pg//[!@]/}" != "@" ]]; then printf '%s' 'refuse-not-prod-project'; return 0; fi
   case "$pg" in
-    *://postgres.pigsfuxruiopinouvjwy:*|*@db.pigsfuxruiopinouvjwy.*) : ;;
+    *,*|*host=*) printf '%s' 'refuse-not-prod-project'; return 0 ;;
+  esac
+  case "$pg" in
+    postgresql://postgres.pigsfuxruiopinouvjwy:*@*.pooler.supabase.com:5432/*) : ;;
+    postgresql://*@db.pigsfuxruiopinouvjwy.supabase.co:5432/*) : ;;
     *) printf '%s' 'refuse-not-prod-project'; return 0 ;;
   esac
 
@@ -1121,13 +1136,19 @@ case "$OP" in
         # still writes it unconditionally (see the comment there for why branching on this
         # outcome was removed). The arm proceeds.
         #
-        # POST-FLUSH RE-ARM: if a FLUSHALL has already been performed for this host, the
-        # on-host monotonic latch (/mnt/data, #7228 P0-5) will refuse the re-arm and drive
-        # INNGEST_CUTOVER_FLIP to terminal `aborted` — this job will still report success,
-        # and the refusal surfaces only on the host's Better Stack channel. The correct
-        # re-entry for that case is INNGEST_CUTOVER_FLIP=flushed, not another arm
-        # (inngest-server-flip-guard.sh:161).
-        echo "::notice::op=arm: G3 — INNGEST_POSTGRES_URI on soleur-inngest/prd already equals the prod value (expected after any prior arm; op=rollback has no inverse for that write). Proceeding; G4 rewrites it unconditionally. If a FLUSHALL already ran for this host, the on-host latch will refuse this arm into terminal 'aborted' — re-enter with INNGEST_CUTOVER_FLIP=flushed instead." ;;
+        # POST-FLUSH RE-ARM. If a FLUSHALL has already been performed for this host, the
+        # on-host monotonic latch (/mnt/data, #7228 P0-5) refuses the re-arm and drives
+        # INNGEST_CUTOVER_FLIP to terminal `aborted`. Two corrections to an earlier draft of
+        # this comment, both MEASURED rather than reasoned (#7462 review):
+        #
+        #  - This job does NOT report success. confirm_flip_state matches "flag":"aborted"
+        #    first, and G6 exits 1 on that arm. The failure is loud in the run.
+        #  - `INNGEST_CUTOVER_FLIP=flushed` is NOT reachable from `aborted`. op=resume is the
+        #    only verb that writes it and its G1 accepts `done` ONLY, so once a re-arm has
+        #    driven the flag to `aborted` there is no dispatchable path forward. The safe
+        #    post-flush resume must be dispatched BEFORE re-arming, while the flag is still
+        #    `done`. Naming an unreachable remedy is worse than naming none.
+        echo "::notice::op=arm: G3 — INNGEST_POSTGRES_URI on soleur-inngest/prd already equals the prod value (expected after any prior arm; op=rollback has no inverse for that write). Proceeding; G4 rewrites it unconditionally. NOTE: if a FLUSHALL already ran for this host, the on-host latch refuses this arm into terminal 'aborted' and G6 below fails the job. Recovery from 'aborted' is NOT op=resume (its G1 accepts 'done' only) — dispatch op=resume BEFORE re-arming a flushed host." ;;
       write)
         : ;;
       *)
@@ -1169,6 +1190,29 @@ case "$OP" in
       echo "::error::op=arm: G3.5 CHANNEL-KEY PARITY GATE FAILED — refusing to arm the flip while the app<->host channel keys diverge (the #6178 durability gate). Reconcile + redeploy per the per-key remediation above, then re-run op=arm. Do NOT SSH the host."; exit 1
     fi
     echo "::notice::op=arm: G3.5 channel-key parity gate PASSED — app (soleur/prd) and host (soleur-inngest/prd) share both channel keys (sha256-verified). The post-2.4 app->host channel will authenticate."
+
+    # G3.6 — DIAGNOSTIC-BOOT HARD GATE (#7462). inngest-bootstrap.sh states this precondition
+    # in prose and NOTHING enforced it: "This is NOT a cutover state: clear
+    # INNGEST_DIAGNOSTIC_BOOT before arming." Measured 2026-08-20 — op=arm contained ZERO
+    # references to it while the flag was live at "1" on soleur-inngest/prd.
+    #
+    # Why it must refuse BEFORE the writes. With the flag set, the host's ExecStart renders the
+    # diagnostic arm: `unset INNGEST_POSTGRES_URI` (SQLite-only) with --sdk-url pointed at a
+    # closed loopback port, so it adopts NO function registry. Arming in that state runs the
+    # whole FSM to `done` — quiescing the web scheduler and cutting over to a host that serves
+    # nothing. The cutover reports success and production crons simply stop. That is a strictly
+    # worse instance of the failure G3 exists to prevent: arming onto no Postgres at all.
+    #
+    # Fail-closed on an unreadable value for the same reason G3 does: the config is proven
+    # readable by G1, so an unreadable read here is anomalous, and proceeding would arm blind.
+    DIAG_BOOT=$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get INNGEST_DIAGNOSTIC_BOOT -p soleur-inngest -c prd --plain 2>/dev/null || printf '%s' '__UNREADABLE__')
+    case "$DIAG_BOOT" in
+      ''|'0'|'false') echo "::notice::op=arm: G3.6 diagnostic-boot gate passed (INNGEST_DIAGNOSTIC_BOOT is clear; the host will render its durable-backend ExecStart)." ;;
+      '__UNREADABLE__')
+        echo "::error::op=arm: G3.6 — could not read INNGEST_DIAGNOSTIC_BOOT from soleur-inngest/prd despite a G1-readable config. Refusing FAIL-CLOSED: arming while that flag is set cuts over to a host that serves no registry. Do NOT SSH the host."; exit 1 ;;
+      *)
+        echo "::error::op=arm: G3.6 REFUSING — INNGEST_DIAGNOSTIC_BOOT is set on soleur-inngest/prd. A diagnostic boot renders an SQLite-only ExecStart with --sdk-url on a closed loopback port, so the host adopts NO function registry; arming now would quiesce the web scheduler and complete the cutover onto a host that serves nothing, reporting success. Clear INNGEST_DIAGNOSTIC_BOOT on soleur-inngest/prd, let the host re-render its ExecStart, then re-run op=arm. Do NOT SSH the host."; exit 1 ;;
+    esac
 
     # G4 — write the two DATA secrets FIRST, each via stdin (never argv), each exit-gated
     # before the next. Order is a correctness invariant: the URIs must land before `armed`.

@@ -462,12 +462,17 @@ assert "arm) no longer claims an already-current value 'would flip onto the DARK
 # the suite green. The branch is gone: all three prod writes are unconditional, which is the
 # property to pin, and it is pinnable by ABSENCE rather than by position.
 assert "arm) the G3-outcome skip flag is GONE (no conditional around a prod write)" "! grep -qE 'G3_SKIP_PG_WRITE' '$ARM_FILE'"
-assert "arm) the DSN write is not nested in an if/else" "! grep -qE '^[[:space:]]+(if|else|fi)\b.*(INNGEST_POSTGRES_URI|G3_OUTCOME)' '$ARM_FILE'"
-# All three writes must sit at the SAME indent depth — a conditional around any of them shows
-# up as a deeper indent, so this fails on exactly the mutation class above without needing a
-# command seam. Anchored on `doppler secrets set` at flag position, which a comment cannot emit.
-G4_WRITE_DEPTHS=$(grep -oE '^[[:space:]]+(printf|echo)[^|]*\| DOPPLER_TOKEN=' "$ARM_FILE" | sed -E 's/[^ ].*//' | awk '{print length}' | sort -u | tr '\n' ',')
-assert "arm) all prod secret writes sit at one indent depth (none conditionally nested)" "[[ \$(printf '%s' '$G4_WRITE_DEPTHS' | tr ',' '\n' | grep -c . ) -eq 1 ]]"
+assert "arm) no same-line short-circuit gates a prod write" "! grep -qE '(&&|\\|\\|)[^|]*\\| DOPPLER_TOKEN=' '$ARM_FILE'"
+# The three prod secret writes must sit at ONE indent depth, and there must be exactly three
+# of them. Depth alone is degenerate at a single match (deleting two writes leaves one depth,
+# which would pass), so the COUNT is asserted alongside it — together they fail on both the
+# "conditionally nested" and the "silently dropped" mutation classes without needing a command
+# seam. Anchored on the `| DOPPLER_TOKEN=` pipe, which a comment cannot emit. The whitespace
+# class is [[:space:]] in the grep and must match the strip, so tabs are handled identically.
+G4_WRITE_LINES=$(grep -cE '^[[:space:]]+(printf|echo)[^|]*\| DOPPLER_TOKEN=' "$ARM_FILE" || true)
+G4_WRITE_DEPTHS=$(grep -oE '^[[:space:]]+(printf|echo)[^|]*\| DOPPLER_TOKEN=' "$ARM_FILE" | sed -E 's/[^[:space:]].*//' | awk '{print length}' | sort -u | wc -l)
+assert "arm) exactly three prod secret writes remain (URI, heartbeat, flag)" "[[ '$G4_WRITE_LINES' -eq 3 ]]"
+assert "arm) all prod secret writes sit at one indent depth (none conditionally nested)" "[[ '$G4_WRITE_DEPTHS' -eq 1 ]]"
 assert "arm) G1 reads the current INNGEST_CUTOVER_FLIP from soleur-inngest (pre-write state guard)" "grep -qE 'doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest' '$ARM_FILE'"
 assert "arm) G1 refuses re-arm over a non-safe FSM state (DI-C2 REFUSING)" "grep -qE 'G1 REFUSING' '$ARM_FILE'"
 
@@ -497,7 +502,18 @@ assert "emitter stamps flag 'done' (the confirm's success key) + an aborted path
 assert "arm) calls confirm_flip_state (AC9)" "grep -qF 'confirm_flip_state \"\$ARM_ISO\"' '$ARM_FILE'"
 assert "arm) time-bounds via a SPACE-form timestamp, no ISO T/Z (the --since format P2)" "grep -qF \"+'%Y-%m-%d %H:%M:%S'\" '$ARM_FILE' && ! grep -qE 'ARM_ISO=.*T%H.*Z' '$ARM_FILE'"
 assert "arm) branches on the confirm result (done vs aborted/rolled-back vs timeout, fail-loud)" "grep -qF 'G6_STATE' '$ARM_FILE'"
-assert "arm) G3 pins the prod project-ref (stronger than a bare 'supabase' substring)" "grep -qF 'pigsfuxruiopinouvjwy' '$ARM_FILE'"
+# NOTE (#7462): this used to grep $ARM_FILE for the bare prod ref. The pin moved into
+# g3_decide, which is OUTSIDE $ARM_FILE, so the only surviving occurrence there is the
+# refuse-not-prod-project error MESSAGE — deleting the pin entirely left this green. It is
+# the third assertion invalidated by that move (see the :6543/:5432 note above) and the one
+# guarding what the ADR calls the sole guard against arming onto a non-prod Postgres.
+# Behavioural coverage is the g3_decide block below; what is assertable here is the message.
+assert "arm) surfaces the prod-project-ref remediation to the operator" "grep -qE '::error::.*ref pigsfuxruiopinouvjwy' '$ARM_FILE'"
+# And the pin itself is asserted where it actually lives, anchored on the case-arm shape a
+# comment or an error string cannot produce.
+assert "g3_decide pins the prod project ref on the AUTHORITY, not a bare substring" "grep -qE '^[[:space:]]+postgresql://postgres\\.pigsfuxruiopinouvjwy:\\*@\\*\\.pooler\\.supabase\\.com:5432/\\*\\)' '$BODY_SH'"
+assert "g3_decide rejects multi-host and host= parameter overrides" "grep -qE '^[[:space:]]+\\*,\\*\\|\\*host=\\*\\)' '$BODY_SH'"
+assert "g3_decide requires exactly one '@' (no userinfo host relocation)" "grep -qF 'if [[ \"\${pg//[!@]/}\" != \"@\" ]]' '$BODY_SH'"
 assert "arm) G1 fail-CLOSED: probes config readability (DOPPLER_PROJECT) before trusting an empty flip" "grep -qF 'config-readability probe failed' '$ARM_FILE' && grep -qE 'doppler secrets get DOPPLER_PROJECT -p soleur-inngest' '$ARM_FILE'"
 assert "arm) G3 fail-CLOSED on an empty PG_DARK read (no silent equality-pass)" "grep -qF 'could not read the current dark INNGEST_POSTGRES_URI' '$ARM_FILE'"
 assert "arm) adds NO deploy-status poll (Better Stack read only — QMAX/RMAX untouched, AC9)" "! grep -qE 'deploy-status' '$ARM_FILE'"
@@ -554,17 +570,30 @@ g3_case "refuses a non-prod project ref"           "$G3_DEV"         "$G3_DEV"  
 g3_case "already-current is a SKIP, not a refusal" "$G3_PROD"        "$G3_PROD"       "skip-already-current"
 g3_case "dark -> prod is the first-arm write"      "$G3_PROD"        "$G3_DEV"        "write"
 g3_case "a DIFFERENT prod-project value writes"    "$G3_PROD"        "$G3_PROD_ALT"   "write"
-# The pin is the SOLE guard against a non-prod target, so it needs a must-REFUSE row on the
-# axis a bare substring match would wave through: the prod ref present, but NOT in the routing
-# position — here it rides in the password and a query param while host and user point at the
-# dev project. A `*<ref>*` pin returns `write` for this and arms onto the wrong Postgres.
-G3_PROD_REF_OFF_ROUTE="postgresql://postgres.${G3_DEV_REF}:${G3_PROD_REF}@aws-0-eu-west-1.pooler.supabase.com:5432/postgres?application_name=${G3_PROD_REF}"
-g3_case "refuses the prod ref OUTSIDE the routing position" "$G3_PROD_REF_OFF_ROUTE" "$G3_PROD" "refuse-not-prod-project"
+# The pin is the SOLE guard against a non-prod target, so every row below is a must-REFUSE on
+# an axis some weaker form of the pin waved through. All twelve were MEASURED against two
+# earlier revisions of this guard and returned `write` (i.e. armed onto the wrong Postgres):
+# a bare `*<ref>*` substring accepted the ref anywhere in the value, and pinning only the
+# pooler USERNAME accepted the prod username in front of any host. Keep these rows: they are
+# the difference between pinning a string and pinning a destination.
+G3_H='aws-0-eu-west-1.pooler.supabase.com'
+g3_case "refuses prod user @ attacker host"        "postgresql://postgres.${G3_PROD_REF}:pw@attacker.example.com:5432/postgres"  "$G3_PROD" "refuse-not-prod-project"
+g3_case "refuses prod user @ raw IPv4"             "postgresql://postgres.${G3_PROD_REF}:pw@203.0.113.9:5432/postgres"           "$G3_PROD" "refuse-not-prod-project"
+g3_case "refuses prod user @ IPv6 literal"         "postgresql://postgres.${G3_PROD_REF}:pw@[2001:db8::1]:5432/postgres"         "$G3_PROD" "refuse-not-prod-project"
+g3_case "refuses prod user @ the DEV project host" "postgresql://postgres.${G3_PROD_REF}:pw@db.${G3_DEV_REF}.supabase.co:5432/postgres" "$G3_PROD" "refuse-not-prod-project"
+g3_case "refuses a host= connection-param override" "postgresql://postgres.${G3_PROD_REF}:pw@${G3_H}:5432/postgres?host=attacker.example.com" "$G3_PROD" "refuse-not-prod-project"
+g3_case "refuses a host= unix-socket override"     "postgresql://postgres.${G3_PROD_REF}:pw@${G3_H}:5432/postgres?host=/tmp"     "$G3_PROD" "refuse-not-prod-project"
+g3_case "refuses a multi-host list"                "postgresql://postgres.${G3_PROD_REF}:pw@attacker.example.com:5432,${G3_H}:5432/postgres" "$G3_PROD" "refuse-not-prod-project"
+g3_case "refuses the prod ref smuggled in a query param"  "postgresql://postgres.${G3_DEV_REF}:pw@${G3_H}:5432/postgres?application_name=x://postgres.${G3_PROD_REF}:y" "$G3_PROD" "refuse-not-prod-project"
+g3_case "refuses the prod ref smuggled as @db.<ref>. in a param" "postgresql://postgres.${G3_DEV_REF}:pw@${G3_H}:5432/postgres?fallback_application_name=@db.${G3_PROD_REF}.z" "$G3_PROD" "refuse-not-prod-project"
+g3_case "refuses db.<ref>. as an attacker SUBDOMAIN"  "postgresql://u:pw@db.${G3_PROD_REF}.attacker.example.com:5432/postgres"   "$G3_PROD" "refuse-not-prod-project"
+g3_case "refuses a second '@' relocating the host"    "postgresql://u:p@db.${G3_PROD_REF}.x@attacker.example.com:5432/postgres"  "$G3_PROD" "refuse-not-prod-project"
+g3_case "refuses :5432 present but not the authority port" "postgresql://postgres.${G3_PROD_REF}:pw@attacker.example.com:15432/postgres?application_name=a:5432" "$G3_PROD" "refuse-not-prod-project"
 
 # Anti-vacuity floor (harness row H1): a suite whose scenario dispatch silently stopped
 # would otherwise report success having evaluated nothing. This counts EVALUATIONS, not
 # assertion calls, so gutting g3_case's body cannot satisfy it.
-assert "g3_decide scenarios actually dispatched (>=8 evaluations)" "[[ '$G3_EVALS' -ge 8 ]]"
+assert "g3_decide scenarios actually dispatched (>=19 evaluations)" "[[ '$G3_EVALS' -ge 19 ]]"
 
 # The arm) case must route through the function exactly once — the Assembly contract.
 # Anchored on the call shape, not the bare name (which also appears in comments).
@@ -590,6 +619,14 @@ assert "arm) G3.5 masks BOTH the app + host key values (>=2 ::add-mask::)" "[[ '
 assert "arm) G3.5 NEVER echoes a raw channel-key value (no echo of \$APP_CK/\$HOST_CK — AC-NOBODY)" "! grep -qE 'echo[^\"]*\\\$\\{?(APP_CK|HOST_CK)([^_H]|\$)' '$ARM_FILE'"
 # The gate is HARD: a mismatch (or unreadable key) fails op=arm closed.
 assert "arm) G3.5 is a HARD GATE — a divergence exits op=arm non-zero (PARITY_FAIL)" "grep -qE 'PARITY_FAIL' '$ARM_FILE' && grep -qF 'CHANNEL-KEY PARITY GATE FAILED' '$ARM_FILE'"
+# G3.6 (#7462): the diagnostic-boot precondition inngest-bootstrap.sh states in prose and
+# nothing enforced. Arming with it set cuts over to a host that adopts no registry.
+assert "arm) has a G3.6 diagnostic-boot hard gate" "grep -qF 'G3.6 REFUSING' '$ARM_FILE'"
+assert "arm) G3.6 reads INNGEST_DIAGNOSTIC_BOOT from the isolated config via the arm token" "grep -qE 'doppler secrets get INNGEST_DIAGNOSTIC_BOOT -p soleur-inngest -c prd' '$ARM_FILE'"
+assert "arm) G3.6 fails CLOSED on an unreadable diagnostic flag" "grep -qF '__UNREADABLE__' '$ARM_FILE'"
+G36_LN=$(grep -nF 'G3.6 REFUSING' "$ARM_FILE" | head -1 | cut -d: -f1)
+G36_PGW_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1)
+assert "arm) G3.6 refuses BEFORE the first prod write (G4)" "[[ -n '$G36_LN' && -n '$G36_PGW_LN' && '$G36_LN' -lt '$G36_PGW_LN' ]]"
 assert "arm) G3.5 cites the #6178 cutover-502 condition in its remediation" "grep -qF 'cutover-502' '$ARM_FILE'"
 # The parity gate runs BEFORE the arm writes (G4/G5) — a divergent channel must
 # block the flip, never be written past.
