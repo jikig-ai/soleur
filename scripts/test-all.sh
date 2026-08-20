@@ -744,6 +744,27 @@ fi
 # wrapping the script) so no invocation can forget it. It NEVER aborts — on
 # timeout it proceeds with a named banner, so it cannot wedge a run. CI and the
 # SOLEUR_DISABLE_SESSION_STATE kill switch are honoured inside tc_acquire.
+# Declared BEFORE tc_acquire, i.e. OUTSIDE the region the two suites that drive this runner as
+# their SUT replace wholesale. scripts/test-all-killed-classification.test.sh and its sibling
+# splice their own fixture body between the lock-acquire call below and the epilogue, so a
+# variable first assigned inside that window does not exist in their sandbox while the reader
+# after it does — and under `set -u` that aborts the sandbox mid-run. Measured: it took AC2, AC3
+# and AC8b red in a suite this branch does not otherwise touch. Exactly the shape of #7553's own
+# regression, recorded in ADR-194 Decision 7.
+#
+# The anchors are NOT quoted verbatim here on purpose. Those fixtures locate the splice window by
+# substring and require it to be UNIQUE; an earlier draft of this comment quoted the acquire call
+# exactly, so the literal appeared twice and every sandbox build failed with
+# "sandbox build failed: killed_only/none" — 40 passed, 51 failed, in a suite whose own code was
+# untouched. A comment that names a token a parser keys on is part of that parser input
+# (cq-assert-anchor-not-bare-token), which is this branch's own subject.
+#
+# Initialised to the NOT-MEASURED value, so a sandbox that drops the capture degrades to an
+# honest "this run is not evidence" NOTE rather than either aborting or silently claiming a
+# clean boundary.
+_repo_guard_ok=0
+_repo_state_before=""
+
 tc_acquire "test-all"
 
 # AFTER tc_acquire, deliberately. A run that queued behind a sibling can wait up
@@ -774,8 +795,6 @@ _emit_bytes_probe "__run_boundary_start__"
 #
 # Degrades OPEN. A missing or failing git must not wedge the gate — an unmeasurable boundary is
 # reported at the end, never turned into a false RED.
-_repo_guard_ok=0
-_repo_state_before=""
 if _repo_state_before="$(git rev-parse HEAD 2>/dev/null && git status --porcelain 2>/dev/null | sha256sum)"; then
   _repo_guard_ok=1
 fi
