@@ -353,12 +353,12 @@ leaves the process unflagged and alive.
 
 | # | Gate | How |
 | --- | --- | --- |
-| G1 | Own uid | `stat -c %u /proc/<pid>` equals `id -u`. Read for **reporting**; enforcement remains the fact that `readlink` fails on a foreign process. Both, because a check that cannot report what it skipped is indistinguishable from one that passed. |
+| G1 | Own uid | **`stat -Lc '%u'`** on the `/proc/<pid>` entry equals `id -u`, and the skip is counted in `skipped_foreign_uid`. The `-L` is load-bearing and gets its own assertion: measured, `stat -c '%u'` on a symlink reports the **link's** uid (1001), while `stat -Lc '%u'` reports the target's (0), so the un-dereferenced form silently classifies every foreign process as own-uid. Enforcement is still structurally redundant — `readlink` fails on a foreign process — which is exactly why the counter matters: without a field whose value differs, removing this gate has no observable and M5 is an equivalent mutant. |
 | G2 | `cwd` genuinely unlinked | `stat -Lc '%h' /proc/<pid>/cwd` equals `0`. |
-| G3 | `fd/255` genuinely unlinked | `stat -Lc '%h' /proc/<pid>/fd/255` equals `0`. |
+| G3 | `fd/255` is an unlinked **regular file at an absolute path** | `stat -Lc '%h'` equals `0`, **and** the `readlink` value is an absolute path ending `' (deleted)'`, **and** the target is a regular file. All three, because `%h == 0` alone is far broader than "the bash script is unlinked": measured on this box, a `memfd_create` file has `nlink 0` and reports as a regular file, so any process holding a memfd on fd 255 satisfies a bare link-count test with no bash, no script and no orphan — and an anchor authorizes a whole reap set. Pipes, unix sockets and eventfds are `nlink 1` and were never the risk. The two added terms are **narrowing** and fail toward alive, so neither re-opens the polarity problem R2a closed: the suffix test is dangerous only as a *sole* term. |
 | G4 | Not the scanner | Not self, not an ancestor, not in the scanner's own process group. **Applies to reap-set members too — see below.** |
 | G5 | Same mount namespace | `/proc/<pid>/ns/mnt` resolves equal to the scanner's own. A process in a foreign namespace is unadjudicable. |
-| G6 | Older than the age floor | From `/proc/<pid>/stat` starttime against `/proc/uptime`. |
+| G6 | Older than the age floor | From `"$ORPHAN_PROC_ROOT"/<pid>/stat` starttime against **`"$ORPHAN_PROC_ROOT"/uptime`** — never a literal `/proc/uptime`. Against a fixture root, differencing a synthesized starttime from the real box uptime yields meaningless ages, makes AC8's two-direction arm impossible, and makes AC7's unreadable-uptime case unreachable. |
 
 **G-fail — the failure default, stated as a gate because it is one.** Any unreadable `/proc` entry, failed
 `stat`, unreadable `/proc/uptime`, or unresolvable namespace link leaves the process unflagged and increments
@@ -410,19 +410,36 @@ independently falsified it against this plan's own measurements:
 
 Cutting it also removes the carve-out, two mutation rows, and four fixtures.
 
-**R2c — a foreign mount namespace is unadjudicable (G5).** Without it, any own-uid process inside a `bwrap`,
-rootless-container, or `unshare -m` namespace reads as fully orphaned: the paths its magic links report do not
-exist in the scanner's namespace. This repo runs own-uid `bwrap` routinely — preflight Check 10 is sandboxed by
-design — so the class is live here, not theoretical. G5 refuses to adjudicate rather than guessing, which is the
-same posture `proc.sh` takes toward evidence it cannot establish. A synthesized `/proc` fixture cannot exercise
-this axis at all, which is precisely why it needed to be reasoned about rather than discovered.
+**R2c — a foreign mount namespace is unadjudicable (G5), and the reason is not the one first written.** The
+original rationale — "the paths its magic links report do not exist in the scanner's namespace" — stopped being
+true at R2a: `stat -L` on a magic link is resolved by the kernel against the target's own dentry and returns
+the true `st_nlink` regardless of namespace, and the design no longer re-resolves reported paths at all. Left
+as written, the next reader removes G5 as vacuous.
+
+The live reason is stronger: sandboxed processes — `bwrap`, rootless containers, `unshare -m`, all of which
+this repo runs own-uid, preflight Check 10 by design — routinely operate with an unlinked or namespace-private
+cwd **as normal operation**, and their lifecycle belongs to their supervisor, not to this tool. G5 refuses to
+adjudicate rather than guessing, the same posture `proc.sh` takes toward evidence it cannot establish.
+
+A correction to the earlier claim that this axis "cannot be exercised by a synthesized `/proc` at all": it can.
+`ns/mnt` is read as a link *string*, so a fixture crafts it to differ from the scanner's own for the negative
+arm and to match for every positive one. That claim and M9/AC6 contradicted each other; the fixture wins.
 
 ### The reap set
 
 Anchors are what the detector *identifies*; the reap set is what a confirmed anchor *authorizes*.
 
-- A member is an own-uid process that shares the anchor's cwd inode **and independently satisfies G2, G4, G5
-  and G6 on its own links**. Membership restates the gates; it never inherits the anchor's verdict.
+- A member is an own-uid process that shares the anchor's cwd **`dev:inode` pair** — compared as
+  `stat -Lc '%d:%i'` on both sides, never `%i` alone — **and independently satisfies G1, G2, G3's link-count
+  term, G4, G5 and G6 on its own links**. Membership restates the gates; it never inherits the anchor's verdict.
+- **The device qualifier is load-bearing here even though R2a retired it from the deletedness test.** R2a
+  replaced the *is-this-unlinked* comparison with `st_nlink`, which needs no comparison at all — but set
+  membership is still an inode-**number** equality test, and R1b's cross-device collision applies to it
+  verbatim. Measured: `/tmp` is dev 50 (tmpfs) and a worktree is dev 66307 (ext4), so a bare `%i` match across
+  them is ordinary; and tmpfs hands inode numbers from a monotonic counter (three consecutive `mkdir`s
+  measured 248902, 248903, 248904), so the number an own-uid process's directory receives is **steerable**.
+  Without `%d`, an unrelated process can be walked into a foreign anchor's reap set while both independently
+  pass every gate — restating the gates per member does not catch it, because each is genuinely unlinked.
 - **G4 on members is load-bearing and its absence was a suicide bug.** An earlier draft applied G4 to anchors
   only. Run this plan's own AC29 scenario against that: `git worktree remove` on a worktree with a suite
   running inside it leaves `test-all.sh`, the reaper it spawned from the preamble, and every suite child
@@ -431,9 +448,14 @@ Anchors are what the detector *identifies*; the reap set is what a confirmed anc
   in which it destroys the session that ran it.
 - **Structural refusal.** If the scanner's own cwd inode equals a candidate set's inode, the run aborts with
   `valid=0` and reports. The scanner is inside the doomed directory and cannot adjudicate it.
-- **Cardinality cap.** If a set exceeds `ORPHAN_REAPER_MAX_SET` (default 8), the whole reap is refused and
-  reported. A large set is far likelier to be a detector fault than a real orphan tree, and the cap converts
-  the worst blast radius from unbounded to reportable.
+- **Cardinality cap.** If a set exceeds `ORPHAN_REAPER_MAX_SET`, the whole reap is refused and reported,
+  counted `refused_cap`. The default is **measured against the motivating incident before being chosen, not
+  guessed**: a `git worktree remove` under a running `test-all.sh` produces a suite tree far wider than the 8
+  an earlier draft proposed, so that value would have refused precisely the incident AC40 traces end to end —
+  putting AC13 and AC40 in direct tension. The cap bars *automatic* action only; the full set is always
+  reported, and `reap` takes an explicit override the banner names, so it is a speed bump for a human rather
+  than a wall for the tool. It is also a free denial-of-reaping — any own-uid process can `fchdir` into the
+  doomed inode enough times to hold a set over the cap — which is a further reason it must not be a hard wall.
 - Children are signalled **before** the anchor, so a supervising parent cannot respawn them.
 - The set is wider than "descendants" because ancestry is unreliable for orphans, which are reparented. What
   else can share an unlinked cwd inode, enumerated rather than waved at: an interactive shell, editor, pager,
@@ -468,6 +490,37 @@ running, which is `cq-ac-must-not-depend-on-concurrent-sessions` reproduced insi
 Starttime is captured at scan and re-read before the signal; the member's own `st_nlink` is re-read too, and
 the anchor must still be alive and still unlinked. An inode number is pinned only while something holds it, and
 `/tmp` is tmpfs with fast churn, so a set membership computed at T0 is not evidence at T1.
+
+**Pid validation is `^[1-9][0-9]*$`, never `^[0-9]+$`, with an explicit refusal of pid 1.** Measured, the
+permissive form admits both `0` and `0777`. `kill -TERM 0` signals the **caller's entire process group** — for
+an operator running `reap` from their own shell, that is their foreground job. Real `/proc` never produces such
+entries, which is exactly why only the seam path can reach them, and the seam path is the one already treated
+as dangerous. Every signal is `kill -TERM -- "$pid"`, quoted, validated at the signal site.
+
+**The tool refuses to run as root.** Both verbs abort when `${EUID:-$(id -u)}` is 0. G1 is
+`stat -Lc '%u' == id -u`, so under `sudo` "own uid" silently becomes uid 0 and the enforcement-by-accident
+(`readlink` failing on a foreign process) evaporates — measured, `readlink /proc/1/cwd` fails as uid 1001 and
+succeeds as root. The reap set would become *every root process with an unlinked cwd*, a populated class on a
+box mid-`apt` transaction. The banner prints a `reap` command an operator may reflexively prefix with `sudo`
+when it "doesn't work", so this is the realistic path. It is its own mutation axis (privilege floor), distinct
+from M5's: M5 removes the uid gate, whereas here the gate is **present and passing** in the case that matters.
+
+**The procfs root is checked by identity, not by name.** `stat -fc '%T' "$ORPHAN_PROC_ROOT"` must equal `proc`
+(measured: `proc` for `/proc`, `tmpfs` for `/tmp`). A `!= /proc` string comparison refuses harmless aliases
+while permitting the one dangerous case it cannot see — a procfs from a foreign **pid** namespace bind-mounted
+at `/proc`, whose pids are not pids in the reaper's `kill` namespace. G5 covers `ns/mnt` and nothing covered
+`ns/pid`, so a **G7** requires `ns/pid` to equal the scanner's own, and `reap` additionally requires
+`$ORPHAN_PROC_ROOT/$$/stat` to exist and match the reaper's own `comm` and starttime. There is also an arm for
+the seam being **unset**, which a name check did not cover.
+
+**The injected signal sink is a file path that pids are appended to — never a command name that is executed.**
+An env-var-named command inside a shipped script is an arbitrary-execution hook, and the root refusal above
+exists precisely because this script can plausibly be invoked under `sudo`.
+
+**The seam is validated non-empty, absolute, and a directory before it is assigned anywhere.**
+`scripts/lib/test-contention.sh:39` binds `TC_PROC_ROOT="${TC_PROC_ROOT:-/proc}"` with `:-`, not `-`, so an
+**empty-but-set** seam silently reverts the borrowed helpers to the real `/proc` while the reaper's own walk
+globs `/[0-9]*` at the filesystem root. That is H4's class one layer lower, failing toward the live machine.
 
 **The `PROC_ROOT` seam must not be able to send a real signal.** The walk is `for d in "$PROC_ROOT"/[0-9]*` and
 fixtures are synthesized directories like `4242`. Real pids on this box were measured in the 2.9-million range,
@@ -513,6 +566,15 @@ It also means **the first strike is a reader's judgment**, which is strictly str
 earlier draft proposed. That two-strike file is cut: it re-implemented in state what the verb split already
 guarantees, it had no specified path, no pruning rule, and no corruption semantics, and — because the preamble
 runs *before* `tc_acquire` — concurrent worktrees would each have raced it anyway.
+
+**The exclusion process group is passed in explicitly, not inferred.** `timeout` runs its child in its own
+process group, so `_tc_pgrp` at the call site would return `timeout`'s pid rather than the suite's, and the
+suite's own command-substitution forks — precisely the class `proc.sh` documents pgid as the discriminator for
+— would not be excluded. The ancestor walk rescues the common case but not a reparented sibling fork. The
+caller therefore sets `ORPHAN_REAPER_EXCLUDE_PGID` (or invokes `timeout --foreground`), and an arm on the
+preamble path asserts the computed exclusion pgid equals the caller's. The behavioural suite structurally
+cannot see this — it pins `TC_SELF_PID` against a synthesized procfs, so the pgid computed *at the real call
+site* is never observed. That is H4's blind spot inverted: a call site that changes what self-exclusion means.
 
 Isolation at the call site is `timeout 10 bash scripts/orphan-process-reaper.sh report || true`. The `|| true`
 covers exit status; the `timeout` covers the failure modes it does not — an unresponsive NFS/FUSE/autofs mount
@@ -585,9 +647,19 @@ Therefore:
 - **Negative and structural arms may use case B** — live targets, real nlink values — which covers
   self-exclusion, the glob guard, counters, ordering, the cardinality cap, and the `… (deleted)`-named
   directory.
-- **Arms that cannot be synthesized at all** are the mount-namespace gate and anything depending on real
-  process lifecycle (signal delivery, starttime re-read, pid recycling). Those use real processes, and the
-  plan says so rather than letting an implementer discover it.
+- **Arms that need real process lifecycle** — signal delivery, starttime re-read, pid recycling, the
+  end-to-end trace — use real helper processes. The mount- and pid-namespace gates are **not** in this
+  category: both are read as link strings and are craftable in a fixture.
+
+Per-arm realism, stated so an implementer does not have to infer it:
+
+| Arm class | Fixture |
+| --- | --- |
+| Every anchor-positive (AC1, AC2, aged AC8, AC40) and the whole reap set | Real victim, or case-C handle |
+| `… (deleted)`-named spoof; cross-device collision; memfd on `fd/255` | Case B / crafted, live targets |
+| Unreadable, vanishing pid, missing `fd/255`, non-numeric starttime | Pure-synth |
+| Mount namespace, pid namespace, foreign uid | Crafted link strings / `ln -sfn /proc/1` |
+| Signal delivery, starttime re-read, pid recycling, AC40 | Real processes |
 
 The suite asserts this discipline directly: a control arm builds a case-A fixture and requires it to classify
 as `unreadable`, **not** as an anchor. Without that control, a later refactor back to dangling symlinks would
@@ -613,7 +685,7 @@ feeding both verbs.
 exactly that reason. This script also sources a library carrying `TC_PROC_ROOT`, so a bare name would be the
 third name for one concept inside one process — in the very place the Assembly below says copies drift apart.
 
-**Every glob iteration is guarded.** `for d in "$ORPHAN_PROC_ROOT"/[0-9]*; do [[ -d "$d" ]] || continue`. Bash
+**Every glob iteration is guarded.** `for d in "$ORPHAN_PROC_ROOT"/[0-9]*; do [[ -d "$d" && ! -L "$d" ]] || continue`. The `! -L` term is not decoration: measured, `[[ -d ]]` is **true** for a symlink-to-directory, and every downstream read is `stat -L`, which follows it silently — real `/proc` has no numeric symlink entries, but a fixture root or an operator-supplied root does. Bash
 without `nullglob` iterates a non-matching pattern **once, literally** — measured — and `nullglob` is set in
 none of the three sibling libraries. Without the guard a walk over an empty procfs reports `scanned=1`.
 
@@ -740,9 +812,9 @@ one element rather than asserting which links are checked today.
 | # | Mutation | Axis | Must redden because |
 | --- | --- | --- | --- |
 | M1 | Drop the `fd/255` conjunct; classify on `cwd` alone | conjunction arity | The deleted-cwd-only fixture becomes an anchor, and the conjunction the issue specifies is gone. |
-| M2 | Replace the link-count test with a `*' (deleted)'` suffix match | unlinked semantics | The healthy process whose cwd is a directory literally **named** `work (deleted)` is flagged — measured `st_nlink` 2 versus 0. |
-| M3 | Add `exe` to the conjunction | signal selection | The claude-self-update fixture (deleted `exe`, live `cwd`) changes verdict; the issue forbids this signal by name. |
-| M4 | Consult `fd/1` anywhere | signal selection | The tmpfs-guard cron fixture (deleted stdout, live cwd, live script) changes verdict — the failure that kills this repo's own guard. |
+| M2 | Replace the link-count test with a `*' (deleted)'` suffix match | unlinked semantics | The spoof fixture is flagged. **Its construction is not the obvious one and the row is vacuous without it:** flagging needs the conjunction, so the fixture must carry the suffix on *both* links — a real directory `work (deleted)` containing a real script named `victim.sh (deleted)`. With a normally-named script the suffix mutant fails G3, never flags, and M2 never reddens. |
+| M3 | Add `exe` to the conjunction | signal selection (narrowing) | Its witness is the **canonical positive**, not the self-update fixture. Adding a conjunct can only narrow, and the self-update fixture (deleted `exe`, live `cwd`) already fails G2 both before and after — an equivalent mutant against that witness. The canonical orphan's `exe` is `/usr/bin/bash` and not deleted (measured), so the added conjunct stops it flagging. |
+| M4 | Add `fd/1` as a **veto** (the polarity an implementer would actually write) | signal selection (veto) | Its witness is also the **canonical positive**, whose `fd/1` is `/dev/null` — a live path — so the veto suppresses it. The polarity must be pinned: as a *conjunct* the row reddens the same way, but against the tmpfs-guard cron witness the row is vacuous either way, because that fixture already fails G2 in the baseline. |
 | M5 | Remove the own-uid gate | ownership | A foreign-uid fixture reaches classification instead of being refused. |
 | M6 | Remove self/ancestor/pgid exclusion **from anchors** | self-exclusion | The scanner's own pid appears among anchors. |
 | M7 | Remove self/ancestor/pgid exclusion **from set members** | self-exclusion, member scope | The AC29 fixture — scanner and its ancestors sharing the doomed inode — puts the caller's own tree in the reap set. Separate axis from M6: an earlier draft passed M6 and still contained the suicide bug. |
@@ -750,21 +822,31 @@ one element rather than asserting which links are checked today.
 | M9 | Remove the mount-namespace gate | adjudicability | The foreign-namespace fixture, whose magic links resolve nowhere in the scanner's namespace, is flagged as fully orphaned. |
 | M10 | Remove the age floor | recency | The two-second-old orphan fixture is flagged. |
 | M11 | Accept a non-numeric `_tc_starttime_ticks` reading instead of counting it `unreadable` | borrowed-primitive validation | The unreadable-stat fixture yields an empty value, arithmetic-zero, and *passes* the age floor — the measured fail-open. |
-| M12 | Invert the error default: an unreadable link counts as unlinked | fail direction | The unreadable-`/proc`-entry fixture is flagged instead of left alive. |
+| M12 | Invert the error default: an unreadable link counts as unlinked | fail direction | Witness pinned to **`fd/255` present, `cwd` stat fails**. A wholly-unreadable `/proc/<pid>` is rejected by the `fd/255` existence pre-filter *before* classification, so the mutant never sees it and the row would be an equivalent mutant against that fixture. |
 | M13 | Drop the `[[ -d "$d" ]] || continue` glob guard, then point the walk at a pattern matching nothing | **the guard's own dispatch** | Bash iterates the literal pattern once, so the walk reports `scanned=1` over an empty procfs. This is the row an earlier draft got wrong: it asserted `scanned=0` and was therefore an equivalent mutant — the exact class the cited learnings say to hunt. |
 | M14 | Make `_orphan_classify` return after its first candidate | **second member after a compliant first** | The two-orphan fixture yields one anchor; a checker that stops at the first member is an instance of the class this contract exists to catch. |
 | M15 | Restrict the reap set to the anchor alone | reap-set reach | The measured three-process fixture signals one pid and the `python3` child that burns the cores survives — the R1a defect restored. |
 | M16 | Derive the reap set from its own predicate instead of from a confirmed anchor | reap-set derivation | An anchorless fixture — a process in an unlinked cwd with no anchor anywhere — is signalled. |
-| M17 | Let membership inherit the anchor's verdict instead of restating the unlinked test | member predicate | The recycled-inode fixture, whose cwd is live but occupies the anchor's released inode number, joins the set. |
+| M17 | Let membership inherit the anchor's verdict instead of restating the gates | member predicate | Witness re-specified: a process that **shares the anchor's `dev:inode` but fails G5 (foreign namespace) or G6 (younger than the floor)** joins the set. The original witness — a live directory occupying the anchor's *released* inode — cannot exist: measured, while the anchor holds its unlinked cwd the inode is not free, and a fresh `mkdir` gets the next number (247498 held vs 247517 fresh). Recycling across a scan→signal window is M20's axis, so the original wording was also a second spelling of M20. |
 | M18 | Remove the cardinality cap | blast-radius bound | The wide-set fixture (a removed worktree with many own-uid processes inside it) proceeds to signal instead of refusing and reporting. |
 | M19 | Signal the anchor before its children | ordering | The supervising-parent fixture respawns a child after the anchor dies. |
 | M20 | Remove starttime and `st_nlink` re-verification at the signal site | recycling | The fixture whose pid is recycled between scan and signal is signalled, and the `late_refused` arm reddens. |
 | M21 | Let `reap` run with `ORPHAN_PROC_ROOT` pointed at a fixture and no injected signal sink | seam safety | The fixture directory named for a **live** pid receives a real `TERM`. A seam that is documented but unimplemented produces a test that passes for the wrong reason. |
-| M22 | Remove the journald record, or write it after the signal instead of before | evidence | The kill-then-inspect fixture leaves no record; after a successful kill the `/proc` entry is gone and the evidence is unrecoverable. |
+| M22 | Remove the journald record entirely | evidence presence | The kill-then-inspect fixture leaves no record; after a successful kill the `/proc` entry is gone and the evidence is unrecoverable. |
 | M23 | Let a failed evidence write proceed to the signal | evidence | The unwritable-logger fixture signals unrecorded. |
 | M24 | Capture a `readlink`/`stat` without deciding its non-zero meaning | errexit discipline | The fixture containing a pid that vanishes mid-walk aborts the run, non-deterministically, instead of counting `unreadable`. |
 | M25 | Drop the `unreadable` counter from the summary line | reportability | The fixture with three unreadable `/proc` entries reports the same summary as a clean walk, so a silent drop is indistinguishable from a real zero. |
-| M26 | Delete the `declare -F` assertion and stub a borrowed helper away | borrowed-primitive drift | The exclusion set empties silently; `local x=$(…)` masks the substitution's status, so errexit does not catch it. |
+| M26 | Delete the `declare -F` assertion **only** (helper left intact) | assertion presence | The assertion's own absence must redden; compounding it with a stub made M26's observable identical to M6's, so it was not independent evidence. |
+| M27 | Write the journald record **after** the signal instead of before | evidence ordering | The kill-then-inspect fixture records a pid whose `/proc` entry is already gone, so the link readings are unrecoverable. Split from M22 because an `or` row is un-auditable — one branch may be equivalent and the battery cannot tell which ran. |
+| M28 | Stub a borrowed `_tc_*` helper away with the assertion intact | borrowed-primitive drift | The `declare -F` assertion must be what fails, loudly, rather than the exclusion set silently emptying. |
+| M29 | Remove the root refusal | privilege floor | The run-as-root fixture proceeds, and G1 **passes** because `id -u` is 0 — the gate is present and green in exactly the case that matters, which is why M5 does not cover this. |
+| M30 | Drop `%d` from the set-membership comparison, leaving bare `%i` | set-membership identity | The cross-device fixture — an unrelated process on ext4 whose cwd inode *number* equals a tmpfs anchor's — joins the reap set while independently passing every gate. Distinct from M15/M16/M17, none of which touch device qualification. |
+| M31 | Remove G3's regular-file and absolute-path terms, leaving bare `%h == 0` | predicate breadth | The memfd fixture — a process holding a `memfd_create` file on fd 255 with an unlinked cwd, no bash and no script — becomes an anchor and authorizes a reap set. |
+| M32 | Relax pid validation to `^[0-9]+$` | operand validation | The fixture entry named `0` reaches the signal site, where `kill -TERM 0` would signal the caller's whole process group. |
+| M33 | Replace the procfs identity check with a `!= /proc` name check, or drop the `ns/pid` term | namespace identity | The foreign-pid-namespace fixture bind-mounted at the expected path is accepted, and its pids are not pids in the reaper's `kill` namespace. |
+| M34 | Remove the startup evidence-channel probe | evidence-channel liveness | The absent-`logger` fixture reports `evidence=ok` and the tool silently becomes report-only forever, or proceeds believing it recorded. |
+| M35 | Collapse the staged drop counters back into one `unreadable` | reportability granularity | The mixed fixture cannot distinguish a foreign-uid pre-filter miss from a real masking, which on this box is a ~417-pid constant baseline swamping the signal. |
+| M36 | Stop the caller emitting on non-zero rc from the preamble | caller-side detection | The abort fixture produces no line at all and `|| true` hides the status, so "the detector did not run" becomes indistinguishable from "it ran and found nothing". |
 
 **Harness rows.** These edit the **suite**, not the system under test, because a matrix that only mutates the
 system under test cannot see a vacuous harness.
@@ -773,7 +855,9 @@ system under test cannot see a vacuous harness.
 | --- | --- | --- |
 | H1 | Stub `fail()` to a no-op | `cases` is incremented at the call site, so it keeps moving while `fails` stops; the conservation check `pass_n + fails == cases` breaks. A floor enforced through the suspect cannot witness the suspect. |
 | H2 | Neuter the battery's mutation step so the mutant is byte-identical to the original | Every row must first assert the mutant differs; a no-op edit is reported as a vacuous row, never as a pass. |
+| H1b | Rewrite `fail()` to increment `pass_n` instead of `fails` | Conservation still holds (`pass_n` +1, `fails` +0, `cases` +1), the absolute floor still holds, and the suite exits 0 — so neither H1 nor the floor can see it. This is defect #7 of the 2026-08-14 learning verbatim: *"rewriting `fail()` to increment `PASS` left each fully green; an assertion-count floor cannot see it either."* The remedy that learning prescribes and an earlier draft omitted: a **positive control** that calls `pass()` and `fail()` once each and verifies both counters moved. |
 | H3 | Delete the assertion-floor block | The floor is absolute and hand-ratcheted to the measured case count; its absence is a failure, not a smaller run. |
+| H5 | Force the suite's final `exit` to `0` | Nothing else exercises the suite's own exit path; a suite whose success condition is `fails == 0` exits 0 on `0 passed, 0 failed`. The battery must report every row vacuous rather than green. |
 | H4 | Point the suite's procfs seam at a fixture while leaving `TC_PROC_ROOT`/`TC_SELF_PID` at their real values | Self-exclusion silently reads the real `/proc`, so M6 and M7 assert nothing. A harness that leaks the real procfs into a synthetic run is the P1-1 class. |
 
 **Must-PASS fixtures that are not the canonical.** RED rows alone cannot detect a detector that rejects
@@ -785,7 +869,20 @@ classify as **not flagged** while the detector is correct:
 - A process with an unlinked `cwd` and **no** `fd/255`, where no anchor exists anywhere — no anchor, no set.
 - The tmpfs-guard cron shape: deleted `fd/1`, live `cwd`, live `fd/255`.
 - An own-uid process inside a foreign mount namespace whose links resolve nowhere here.
-- A process that vanishes mid-walk: counted `unreadable`, never flagged, and the walk completes.
+- A process that vanishes mid-walk: counted `unreadable_gone`, never flagged, and the walk completes.
+- A memfd held on `fd/255` with an unlinked cwd — `nlink 0`, but not a script.
+
+**Accept-direction variants — the half an earlier draft inverted.** The 2026-08-13 rule is about the *accept*
+direction, and for a **detector** the accept direction is "flag it". Every fixture above is reject-direction,
+so a stub that flags nothing satisfies all of them — which is exactly what the naive fixture strategy produced.
+These must **flag**, each differing from the canonical in a way the contract permits:
+
+- An anchor whose `fd/255` is a *different* unlinked script path.
+- An anchor whose unlinked cwd is on **ext4** (a removed worktree) rather than tmpfs — R1b names cross-device
+  semantics and nothing else tests them.
+- An anchor with **zero** set members.
+- An anchor exactly *at* the age-floor boundary.
+- An anchor whose cmdline contains non-printable bytes, which AC23 needs anyway.
 
 Two of these are worth naming as classes rather than cases. A wedged `git commit` from a sibling session — the
 session-state doc for this branch records nine in flight at once — is spared by the live-cwd term while its
@@ -798,73 +895,117 @@ zero-hit census cannot supply.
 
 ## Observability
 
-Layer citation: this host has **no path to Sentry or Better Stack**. `scripts/tmpfs-guard.sh` records the
-reason in its own header — Vector is not installed here, `tmpfs-guard` is not in the Vector tag allowlist, and
-no local Sentry DSN exists. The observability layer for a developer-box script is therefore the suite's own
-stderr plus journald. No SSH is involved anywhere, because the host is the machine the command runs on.
+**Layer citation (`hr-observability-layer-citation`): layer 7, `cli-stdout-artifact`** — a synchronous marker
+the operator reads in-session on a self-hosted machine, with no Soleur-side sink. That layer is defined by the
+execution surface rather than by file location, and this is that surface exactly. Naming it correctly imports
+its **durability obligation**: the synchronous marker must be paired with a durable artifact carrying the same
+fields. That obligation is what the `report` path failed in an earlier draft, and it is why the journald mirror
+below fires on **every** invocation rather than only before a signal.
 
-The channel is deliberately **not** the tmpfs-guard alarm file, which R1c showed deletes the whole file on a
-healthy-`/tmp` predicate uncorrelated with orphaned processes, and whose single reader renders only `tail -1`
-under a `[tmpfs-guard] /tmp alarm` label.
+The premise was verified rather than assumed: `vector.service` does not exist on this host and no `vector`
+binary is on `PATH`; `orphan-process-reaper` is absent from the `SYSLOG_IDENTIFIER` allowlist in
+`apps/web-platform/infra/vector.toml`, which governs the Hetzner prd host and could not reach this laptop
+regardless; and no Sentry DSN is present. Journald here is **persistent, measured**: `/var/log/journal` exists,
+`journalctl --disk-usage` reports 3 G, and `--list-boots` reaches back to 2026-05-05 across 24+ boots. That
+measurement is the whole basis for cutting the bespoke ledger file, so it is recorded as a number rather than
+as "journald default".
+
+**Second surface, declared:** `scripts/test-all.sh` also runs on GitHub-hosted runners (`ci.yml` shards
+`scripts`, `webplat`, `bun`) and in `main-health-monitor.yml`. The existing CI exemption guards `tc_acquire`,
+not the preamble, so the call would fire there too. The reaper therefore **skips under `CI`** and says so on
+one line: a runner's `/proc` cannot hold this operator's orphans, the walk would cost wall-clock on every
+shard for a verdict that cannot be actionable, and the whole cost analysis in this plan is dev-box. Where that
+skip line does land, it lands in **layer 6, the workflow run log** — durable, retained, readable via
+`gh run view --log`, no SSH.
 
 ```yaml
 liveness_signal:
-  what: the `[contention] ORPHAN_SCAN` summary line, printed on EVERY test-all.sh preamble run whether or not
-    anything was found, carrying scanned/anchors/unreadable/valid
-  cadence: once per test-all.sh launch — the moment the contention it detects is actually being paid
-  alert_target: the operator's own terminal, in the same banner block as the existing LOW_TMP_HEADROOM /
-    SIBLING_RUN_DETECTED / CAPACITY_* banners that scripts/lib/test-contention.sh already prints
+  what: the `[contention] ORPHAN_SCAN` summary line, emitted on EVERY invocation of either verb — to stdout
+    for the counter line, and mirrored verbatim to journald via one `logger -t orphan-process-reaper` call
+  cadence: once per test-all.sh launch (skipped under CI, which itself prints one line)
+  alert_target: the operator's terminal in-session; journald for the durable read
+    (`journalctl -t orphan-process-reaper`, non-follow); the workflow run log on CI
   configured_in: scripts/orphan-process-reaper.sh (producer), scripts/test-all.sh preamble (caller)
 
 error_reporting:
-  destination: journald via `logger -t orphan-process-reaper`, plus the stderr banner
-  fail_loud: yes — a failed evidence write REFUSES the reap rather than signalling unrecorded, and the refusal
-    prints on the banner. The record is the only surviving evidence of a kill, so losing it is not a degraded
-    run, it is a run that must not happen.
+  destination: journald via `logger -t orphan-process-reaper`, plus the stdout counter line and stderr prose
+  fail_loud: a failed evidence write refuses the reap. Stated precisely, because the verb previously exceeded
+    the mechanism: `logger` confirms a successful SEND, not delivery, and journald rate-limiting can drop
+    records while `logger` still exits 0. So the channel is probed once at startup and its state is reported
+    as `evidence=ok|down` on the counter line — which also covers the inverse failure the earlier draft could
+    not see at all, where a missing `logger` or socket silently turns the tool report-only forever.
 
 failure_modes:
-  - mode: the detector stops running (preamble call removed, short-circuited, or aborting on a sourcing error)
-    detection: the ORPHAN_SCAN banner line is absent from a test-all.sh run; the behavioural suite asserts the
-      line is emitted, so its removal reddens CI rather than going quiet. This is load-bearing because the call
-      site is `timeout … || true`, which would otherwise convert an abort into silence.
-    alert_route: CI failure on the banner arm
-  - mode: procfs unreadable, hidepid-masked, or the scanner sits inside the doomed directory
-    detection: an explicit 0|1 validity flag reported as `valid=0`, never degraded to "no orphans found" — a
-      probe that degrades to a number is indistinguishable from a real reading of that number
-    alert_route: banner line
-  - mode: candidates silently dropped by the fail-toward-alive rule
-    detection: the `unreadable=N` counter, printed on every run — the only evidence separating "no orphans"
-      from "the conjunction is unsatisfiable in production"
-    alert_route: banner line
+  - mode: the detector did not run, aborted mid-walk, or was killed by the call-site timeout
+    detection: the CALLER emits, because the callee cannot. test-all.sh captures the rc and prints
+      `[contention] ORPHAN_SCAN valid=0 reason=rc<N>` itself on any non-zero or 124. Absence of a line in a
+      preamble that scrolls past hundreds of suite lines is not a signal, and `|| true` guarantees the exit
+      code carries nothing — so the earlier draft's answer (an AC asserting the suite can emit the line
+      against a fixture) proved the script CAN emit it, never that it DID on this run.
+    alert_route: the preamble banner, plus the journald mirror
+  - mode: the walk was structurally blind
+    detection: `valid=0 reason=<procfs_unreadable|hidepid|scanner_in_doomed_inode|foreign_pid_ns|timeout>`.
+      A bare 0|1 covered three causes with three different remedies; every other field on this line
+      discriminates, and this one was the outlier.
+    alert_route: banner + journald
+  - mode: candidates are dropped before or during classification
+    detection: split by STAGE and CAUSE, not one bucket — `prefiltered_no_fd255`, `unreadable_denied`
+      (EACCES), `unreadable_gone` (ENOENT/ESRCH). Measured on this box: 592 pids, 175 own-uid, 417 foreign,
+      and `/proc/<foreign>/fd` is `dr-x------ root root` — so a `[ -e .../fd/255 ]` pre-filter test on a
+      foreign pid returns false, byte-identical to "has no fd/255". A single `unreadable` counter therefore
+      either carries a ~417 constant baseline that swamps the signal, or is blind at the stage that drops 70%
+      of the box. Split, unsatisfiability reads honestly as `prefiltered=417 own_candidates=24 anchors=0`.
+      Implementation constraint, measured: bare `readlink` is silent on failure (rc 1, empty stderr), so
+      obtaining a cause at all requires `readlink -v` or `stat`.
+    alert_route: banner + journald
   - mode: a set is refused for exceeding the cardinality cap
-    detection: `refused_cap=N`, reported distinctly from `refused`, because "too many to be plausible" and
-      "did not qualify" are different facts and only one of them means the detector may be wrong
-    alert_route: banner line naming the anchor and the set size
-  - mode: TERM is sent and the process survives it
-    detection: the survivor is by construction still an anchor at the next test-all.sh launch, so the periodic
-      re-scan reports it again — no polling, no synchronous sleep on the hot path
-    alert_route: banner line on the next run
+    detection: `refused_cap=N`, distinct from `refused` — "too many to be plausible" and "did not qualify" are
+      different facts and only one suggests the detector is wrong
+    alert_route: banner + journald, naming the anchor and the set size
+  - mode: TERM is sent and the process survives
+    detection: the survivor is by construction still an anchor at the next launch, so the periodic re-scan
+      reports it again — no polling, no synchronous sleep on the hot path
+    alert_route: banner on the next run
   - mode: a false positive terminates live work
-    detection: the authorizing record — pid, starttime, uid, sanitized cmdline, both link readings, measured
-      age, anchor-or-member, gate verdict — is written to journald BEFORE the signal
+    detection: the authorizing record is written to journald BEFORE the signal, ordered verdict / pid /
+      starttime / uid / links / age FIRST and the attacker-influenceable cmdline LAST and length-capped,
+      because journald truncates at LineMax and the earlier field order let a long cmdline truncate the
+      verdict out of the only surviving record
     alert_route: journald, which no health predicate clears
-  - mode: the detector reports zero for a long period
-    detection: `scanned=<N>` and `anchors=0` on every run distinguish a walk that observed 592 processes and
-      found nothing from a walk that observed none
-    alert_route: none — this is the healthy state, and the healthy state stays quiet by design
+  - mode: the evidence channel itself is down or rate-limited
+    detection: `evidence=ok|down`, probed once at startup
+    alert_route: banner + the reap refusal
 
 logs:
-  where: the test-all.sh stderr banner; journald via `logger -t orphan-process-reaper`
-  retention: journald default on this host
+  where: journald via `logger -t orphan-process-reaper` (durable artifact); the stdout counter line and stderr
+    prose in-session; the workflow run log under CI
+  retention: measured on this host — persistent journal at /var/log/journal, 3 G on disk, reaching back to
+    2026-05-05 across 24+ boots
 
 discoverability_test:
-  command: bash scripts/orphan-process-reaper.sh report
-  expected_output: "valid=1 mode=report"
-  # A STABLE SUBSTRING, not the whole line. preflight Check 10 substring-matches stdout against this value,
-  # and every other field — scanned, anchors, unreadable — varies with whatever happens to be running. Pinning
-  # them would fail the probe for reasons unrelated to the change under review. `unreadable=0` in particular is
-  # not reproducible on a 592-pid box: pids exit during any walk.
+  command: ORPHAN_PROC_ROOT=test/fixtures/orphan-proc-dangling bash scripts/orphan-process-reaper.sh report
+  expected_output: "anchors=0 unreadable_gone=1"
+  # Three deliberate choices, each closing a way the earlier probe would have failed or proved nothing.
+  # (1) The counter line goes to STDOUT. preflight Check 10 runs `bash -c "$CMD" ... 2>/dev/null` and matches
+  #     captured stdout, so a line on stderr — where all 14 sibling contention banners go — would have made
+  #     this a deterministic FAIL for a reason unrelated to the change.
+  # (2) It runs against a COMMITTED FIXTURE via the seam, not the live /proc. Check 10's sandbox degrades
+  #     `--proc /proc` to no `--proc` where it cannot be established, leaving no procfs at all (the script
+  #     then correctly reports valid=0 -> FAIL); and under `--unshare-all` a mounted /proc shows only the
+  #     sandbox's own 2-3 pids, so the real walk is never exercised anyway. `reap` refuses a non-/proc root,
+  #     so pointing `report` at a fixture is safe by construction.
+  # (3) The expectation has INFORMATION CONTENT. `mode=report` merely echoes the argv back and `valid=1` says
+  #     only that the walk completed — both stay green against a detector whose conjunction never fires,
+  #     which is this plan's own top stated worry. Asserting `unreadable_gone=1` against the dangling-symlink
+  #     fixture AC30b already requires means the probe reddens on a regression to a suffix test.
 ```
+
+**One correction to a mitigation rationale rather than to the mitigation.** The trigger section justifies
+`timeout 10` partly by unresponsive NFS/FUSE/autofs mounts. That reasoning is wrong and is not repeated:
+`timeout` sends SIGTERM (then SIGKILL with `-k`), and a task in `TASK_UNINTERRUPTIBLE` acts on neither until
+the syscall returns — that is what D state means. The `timeout` is kept because it bounds every *other*
+runaway, and the D-state case is recorded honestly as bounded by nothing, which is a reason not to `stat`
+paths that can live on such mounts rather than a reason to trust the wrapper.
 
 ## Architecture Decision (ADR/C4)
 
@@ -1070,8 +1211,10 @@ the criterion pins a shape rather than a value and says so.
 
 ### Verbs and evidence
 
-15. `report` signals nothing under every arm above — asserted by the absence of any `signalled` line and by the
-    survival of every fixture process.
+15. `report` signals nothing under every arm above — asserted on **one summary line** by `signalled=0`
+    **together with** `would_signal>0`, plus the survival of every fixture process. The paired positive is
+    load-bearing: an absence assertion alone is satisfied by renaming or dropping the field, which is the
+    "pair every returns-empty assertion with a non-empty positive control" rule from 2026-08-10.
 16. Exit codes, asserted against synthetic fixtures: `0` when the walk completes, whether or not anchors were
     found, and `1` only when the walk is structurally invalid. That the default exit is independent of findings
     is the point of the arm.
@@ -1091,8 +1234,16 @@ the criterion pins a shape rather than a value and says so.
     `failed`, `refused`, `refused_cap`, `late_refused`, `skipped_same_pgroup`, `skipped_foreign_ns`,
     `unreadable`, `scanned`, `valid`, `mode` as separate fields. A fixture with three unreadable entries
     reports `unreadable=3`, distinguishable from a clean walk.
-23. Every path reaching any output is sanitized through the `tr -c '[:print:]'` idiom; a fixture directory
-    named with an ANSI erase sequence cannot alter the terminal or forge an audit line.
+23. Every path reaching any output is sanitized through the canonical **`LC_ALL=C tr -c '[:print:]' '?'`**
+    idiom (`plugins/soleur/scripts/lib/proc.sh`). `LC_ALL=C` is load-bearing and pinned: the byte-wise pass is
+    what makes `\x7f`, U+2028 and U+2029 fall out as non-printable *bytes*. Fixtures include a directory named
+    with an ANSI erase sequence and one containing U+2028, so a locale regression is visible to the matrix.
+    Separately — because spaces, `=` and `/` are printable and survive — attacker-influenceable values are
+    emitted **last, one per line**, and every assertion on the report grammar is **prefix-anchored**
+    (`^signalled `). A directory named `x signalled pid=1 cwd=/y` otherwise renders verbatim inside a report
+    line, indistinguishable from a real kill record to a reader, to a `grep signalled`, and to AC15's own
+    negative assertion. `cq-assert-anchor-not-bare-token` applies to this tool's own output grammar, not only
+    to its argv matching.
 
 ### Robustness of the script itself
 
@@ -1115,17 +1266,54 @@ the criterion pins a shape rather than a value and says so.
     shared with every process on the box. `ORPHAN_REAPER_NO_FLOCK` exercises both arms. It never calls
     `tc_acquire`. Three arms: contention, lockfile-uncreatable, and the no-flock seam.
 
+28b. **Privilege floor.** Both verbs refuse to run when `${EUID:-$(id -u)}` is 0, asserted directly. Without
+    it, G1 (`stat -Lc '%u' == id -u`) *passes* under `sudo` and the reap set becomes every root process with
+    an unlinked cwd.
+28c. **Procfs identity, not name.** `stat -fc '%T' "$ORPHAN_PROC_ROOT"` equals `proc`; `/proc/<pid>/ns/pid`
+    equals the scanner's own (G7); `reap` additionally requires `$ORPHAN_PROC_ROOT/$$/stat` to match the
+    reaper's own `comm` and starttime. Arms for: foreign pid namespace, seam **unset**, and seam empty-but-set
+    (which would otherwise revert the borrowed helpers to the real `/proc` via that library's `:-` default).
+28d. **Signal-operand validation.** Pid form is `^[1-9][0-9]*$`; `0`, `0777` and pid 1 are refused; every
+    signal is `kill -TERM -- "$pid"`, quoted. Asserted with a fixture entry named `0`, which must never reach
+    the signal site.
+28e. **Sink shape.** The injected signal sink is a file path pids are appended to, never a command that is
+    executed — asserted by a fixture whose sink value is a command name that must not run.
+28f. **Set membership is device-qualified.** Compared as `stat -Lc '%d:%i'` on both sides. Asserted with a
+    cross-device fixture whose inode *number* collides with the anchor's; it must not join the set.
+28g. **Evidence-channel liveness.** `evidence=ok|down` is probed once at startup and printed on the counter
+    line. With `logger` absent the tool reports `evidence=down` and refuses to reap, rather than silently
+    becoming report-only or proceeding while believing it recorded.
+28h. **Exclusion pgid.** On the preamble path, the computed exclusion process group equals the caller's —
+    asserted at the real call site, because the synthesized-procfs suite pins `TC_SELF_PID` and structurally
+    cannot observe it.
+28i. **Stream discipline.** The counter line goes to **stdout** and prose to stderr, asserted by capturing the
+    two streams separately. preflight Check 10 matches captured stdout with stderr discarded, so a counter
+    line on stderr — where all 14 sibling contention banners go — makes the discoverability probe a
+    deterministic FAIL for a reason unrelated to the change.
+28j. **CI behaviour.** Under `CI` the reaper skips and prints one line saying so. `test-all.sh` runs on
+    GitHub-hosted runners in three `ci.yml` shards and in `main-health-monitor.yml`, and the existing CI
+    exemption guards `tc_acquire`, not the preamble.
+
 ### Anti-vacuity
 
-29. **Mutation battery.** Every row M1–M26 and every harness row H1–H4 is implemented and **demonstrated to
-    redden** — the battery asserts the mutant suite FAILS, and first asserts the mutant differs from the
-    original. A row whose edit produced no change is reported as vacuous and fails the battery. No mutation is
-    applied inside a command substitution.
-30. The rows span distinct **axes**, not one axis repeated: conjunction arity, unlinked semantics, signal
-    selection, ownership, self-exclusion at anchor scope, self-exclusion at member scope, structural refusal,
-    adjudicability, recency, borrowed-primitive validation, fail direction, guard dispatch, second-member
-    handling, reap-set reach, reap-set derivation, member predicate, blast-radius bound, ordering, recycling,
-    seam safety, evidence presence, evidence ordering, errexit discipline, reportability, and primitive drift.
+29. **Mutation battery.** Every row M1–M36 and every harness row H1, H1b, H2–H5 is implemented and **demonstrated to
+    redden**. Four structural requirements, each closing a named prior defect:
+    - **Green baseline first.** The unmutated control runs before any row and must be GREEN; a red control
+      **aborts** the battery rather than scoring rows. A red baseline makes all rows pass vacuously — the
+      `fatal: not a git repository` instance in the 2026-08-14 learning — and the hybrid fixture strategy
+      makes an environmental red (helper failed to start, `rmdir` raced) entirely plausible here.
+    - **Placement, not just difference.** `cmp`-style "the mutant differs" proves the file changed, never
+      *where*. The detector repeats the `|| rc=$?` capture idiom at every `readlink`/`stat` site, so a
+      file-wide `sed` without `/g` can land M24 on a site no fixture exercises while difference still reports
+      "landed". Every row scopes its edit to a line range, asserts the changed line falls inside the target
+      function's span, and asserts **exactly one line changed**.
+    - A row whose edit produced no change is reported vacuous and fails the battery.
+    - No mutation is applied inside a command substitution.
+30. **Axis distinctness is computed, not asserted.** The battery records, per mutant, the **set of failing arm
+    labels** from the behavioural suite, and asserts those sets are pairwise **non-identical and non-subset**.
+    Two rows that redden the same arms are one mutation wearing two names. This replaces a prose claim that
+    could only be checked by re-reading the table — the shape the 2026-08-14 learning calls out — with
+    something that runs, and it is what would have caught M17≈M20 and M26≈M6 without a reviewer.
 30b. **Fixture realism.** Anchor-positive arms are built from a real unlinked inode — a live process with a
     genuinely unlinked cwd, or a synthesized `/proc` link pointing at a `/proc/<pid>/fd/N` handle held open on
     an unlinked file. A control arm builds the naive dangling-symlink fixture and asserts it classifies as
@@ -1147,8 +1335,12 @@ the criterion pins a shape rather than a value and says so.
 34. **Preamble.** A `test-all.sh` run emits the `ORPHAN_SCAN` summary line whether or not anything was found;
     the call is `timeout 10 … || true`; and the verb invoked is `report`. Nothing in this plan invokes `reap`
     automatically. All four asserted.
-35. **Battery runtime is measured and recorded** before the mutation suite is registered, so its cost to the
-    scripts shard is known at review rather than discovered on a contention-bound box.
+35. **Battery runtime is measured against a named ceiling** before the mutation suite is registered — not
+    merely "recorded", which any number satisfies. The budget is **120 s wall-clock** for the full battery on
+    an uncontended box; exceeding it requires either trimming rows or moving the battery to its own shard, and
+    the measurement is quoted in the PR. 28 rows each running a suite that spawns real helper processes with
+    settle waits, on a box this plan itself calls contention-bound, is exactly the cost that should be known
+    before it lands.
 36. `scripts/tmpfs-guard.sh` is **not modified** — `git diff --stat origin/main -- scripts/tmpfs-guard.sh` is
     empty — and `bash scripts/tmpfs-guard.test.sh` passes. Its fd-skip behaviour is untouched by construction
     rather than by care.
@@ -1174,9 +1366,14 @@ the criterion pins a shape rather than a value and says so.
     each hop: `git worktree remove` on a worktree with a running multi-process suite inside it produces an
     anchor; the `test-all.sh` preamble reports it, with the set enumerated and the exact `reap` command named,
     and signals nothing; an explicit `reap` then signals the non-bash child before the anchor; a journald
-    record precedes each signal; and the summary reports the set fully accounted for. Without this arm the plan
-    can be fully satisfied while the motivating incident recurs unchanged — every other criterion is about a
-    gate, and none of them is about the journey.
+    record precedes each signal; and the summary reports the set fully accounted for.
+
+    This arm sends a **real `TERM` to a real synthesized victim** rather than an injected sink. Every other
+    kill-side criterion (AC17–AC20) runs against the mock, so without this one no process ever actually dies
+    in the suite — and since the plan states three times that it has no sensitivity evidence, an end-to-end
+    real-signal arm is the only such evidence obtainable before shipping. Without it the plan can be fully
+    satisfied while the motivating incident recurs unchanged: every other criterion is about a gate, and none
+    is about the journey.
 
 ### Post-merge (operator)
 
@@ -1197,6 +1394,8 @@ and no scheduling step.
 | **Borrowed primitives fail open.** `_tc_stat_field` returns exit 0 with empty output on an unreadable stat file, and empty is arithmetic zero even under `set -u` — so an unvalidated starttime *passes* any age floor. | Every returned value validated against `^[0-9]+$` before use, with M11 on that axis; `declare -F` on all three names; `TC_PROC_ROOT` and `TC_SELF_PID` set from this script's own seams before sourcing, with H4 catching a harness that leaks the real procfs into a synthetic run. |
 | **`set -euo pipefail` aborts on ordinary outcomes.** A vanishing pid and a missing `fd/255` are normal, and both abort a bare capture — with no mechanical backstop, since the repo's capture linter does not cover `readlink` or `stat`. | Explicit non-zero handling at every capture site, pinned by AC24 and M24, plus the `[[ -d "$d" ]] || continue` glob guard. |
 | **The mutation battery could pin the design in place.** 26 rows against a detector that has never fired. | Rows are written against **properties** (genuinely unlinked, namespace-independent) rather than mechanisms, so replacing `st_nlink` later is not a guard weakening. M15 pins "the set reaches the CPU-holding child", not "the set is unfiltered", so narrowing the set later does not redden a row designed to prevent narrowing. |
+| **This is a hygiene tool, not a security control.** Every gate is trivially evadable by an adversarial own-uid process — `chdir("/")`, `exec` away, or hardlink the script before deleting it so `fd/255` keeps `nlink 1`. | Stated plainly here so it is never cited as a containment boundary. It is not a weakness in the design: a same-uid attacker can already signal any target directly without involving the reaper, so evasion and adversarial recycling are not escalations. What the review *did* change are the inverse cases — mechanisms whose implemented predicate was broader than their stated one (G3/memfd, bare `%i` membership, root) and blast-radius amplification (the cap). |
+| **The evidence record is durable but not authentic.** Verified: `/var/log/journal` is `root:systemd-journal`, so an own-uid process cannot erase records. But `logger -t` sets a caller-supplied, unauthenticated `SYSLOG_IDENTIFIER`, and the trusted journald fields (`_UID`, `_PID`, `_COMM`) read `logger` for the genuine record too — so a forged record is indistinguishable from a real one at this privilege level. | Recorded in the ADR rather than papered over. The record is tamper-*resistant* against erasure and tamper-*evident* against nothing; authenticity would require originating it somewhere the same uid cannot impersonate, which is out of scope for a dev-box hygiene tool. |
 | **ADR ordinal collision.** Ordinals moved twice in one session on a prior branch. | Provisional, probed across all `origin/*` refs rather than `origin/main`, re-derived immediately before merge with every artifact naming it swept in the same edit. |
 
 ## Alternative Approaches Considered

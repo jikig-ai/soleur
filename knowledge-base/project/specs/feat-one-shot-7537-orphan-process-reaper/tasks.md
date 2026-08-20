@@ -43,23 +43,32 @@ the property.
       `scripts/lib/test-contention.sh`; add the `declare -F` assertion for `_tc_self_and_ancestors`,
       `_tc_pgrp`, `_tc_starttime_ticks` (AC26).
 - [ ] 2.4 Implement `_orphan_is_unlinked <pid> <link>` via `stat -Lc '%h'` — exactly one site.
-- [ ] 2.5 Implement `_orphan_classify` as the single chokepoint: G1 own-uid, G2 cwd unlinked, G3 fd/255
-      unlinked, G4 self/ancestor/pgid, G5 mount namespace, G6 age floor, G-fail default.
-- [ ] 2.6 Implement the walk with `[[ -d "$d" ]] || continue` and the `fd/255` pre-filter (AC25).
+- [ ] 2.5 Implement `_orphan_classify` as the single chokepoint: G1 own-uid (`stat -Lc '%u'` — the `-L` is
+      load-bearing), G2 cwd unlinked, G3 fd/255 unlinked **AND** absolute path ending `' (deleted)'` **AND**
+      regular file (a memfd has `nlink 0`), G4 self/ancestor/pgid, G5 mount namespace, G6 age floor against
+      `"$ORPHAN_PROC_ROOT"/uptime`, G7 pid namespace, G-fail default.
+- [ ] 2.5b Refuse to run as root (`EUID` 0). Check procfs by identity (`stat -fc '%T' == proc`), not by name.
+      Validate the seam non-empty/absolute/directory before assigning `TC_PROC_ROOT`/`TC_SELF_PID`.
+- [ ] 2.6 Implement the walk with `[[ -d "$d" && ! -L "$d" ]] || continue` and the `fd/255` pre-filter,
+      counting pre-filter misses as `prefiltered_no_fd255` separately from `unreadable_denied` /
+      `unreadable_gone` (AC25, M35).
 - [ ] 2.7 Explicit non-zero handling at every `readlink`/`stat` capture; validate every borrowed value against
       `^[0-9]+$` (AC24, AC9).
 - [ ] 2.8 Phase 1 goes GREEN.
 
 ## Phase 3 — reap set, verbs, evidence
 
-- [ ] 3.1 Reap-set expansion by shared unlinked cwd inode, with G2/G4/G5/G6 restated per member.
+- [ ] 3.1 Reap-set expansion by shared cwd **`dev:inode`** (`stat -Lc '%d:%i'`, never bare `%i`), with every
+      gate restated per member — G4 on members is the suicide-bug fix.
 - [ ] 3.2 Scanner-inside-the-doomed-inode structural refusal → `valid=0` (AC12).
 - [ ] 3.3 Cardinality cap → refuse whole set, count `refused_cap` (AC13).
 - [ ] 3.4 `report` and `reap`; exit codes `0`/`1` only (AC16).
-- [ ] 3.5 `reap`: children before anchor; re-verify gates, starttime and `st_nlink` at the signal site;
-      `TERM` only, one pid at a time, no group, no escalation (AC17, AC18).
+- [ ] 3.5 `reap`: children before anchor; re-verify gates, starttime and `st_nlink` at the signal site; pid
+      form `^[1-9][0-9]*$` with pid 1 refused; `kill -TERM -- "$pid"` quoted; no group, no escalation.
 - [ ] 3.6 `ORPHAN_PROC_ROOT != /proc` refusal on `reap` unless a signal sink is injected (AC19).
-- [ ] 3.7 journald record written before every signal; failed write refuses the reap (AC20).
+- [ ] 3.7 journald mirror of the summary line on EVERY invocation of BOTH verbs (the layer-7 durability
+      obligation), plus the authorizing record before every signal with verdict-first / cmdline-last field
+      order; probe the channel at startup and report `evidence=ok|down`; a failed write refuses the reap.
 - [ ] 3.8 Own non-blocking `flock`, exit 0 on contention; never `tc_acquire` (AC28).
 - [ ] 3.9 Counter line with all fields; path sanitization via `tr -c '[:print:]'` (AC22, AC23).
 - [ ] 3.10 Fail-safe dry-run parsing (AC21).
@@ -67,12 +76,18 @@ the property.
 ## Phase 4 — the mutation battery
 
 - [ ] 4.1 Create `scripts/orphan-process-reaper-mutation.test.sh`.
-- [ ] 4.2 Implement rows M1–M26; each copies the detector, applies ONE edit, runs the behavioural suite
-      against the mutant, asserts it FAILS.
+- [ ] 4.2 Implement rows M1–M36; each copies the detector, applies ONE edit, runs the behavioural suite
+      against the mutant, asserts it FAILS. Run the unmutated control FIRST and abort the battery if it is
+      not GREEN. Assert edit PLACEMENT (line inside the target function, exactly one line changed), not just
+      that the file differs.
 - [ ] 4.3 Each row first asserts the mutant DIFFERS from the original; a no-op edit is reported vacuous and
       fails the battery.
 - [ ] 4.4 No mutation applied inside a command substitution (AC29).
-- [ ] 4.5 Implement harness rows H1–H4, including H4 (procfs seam leak).
+- [ ] 4.5 Implement harness rows H1, H1b (`fail()` increments `pass_n`), H2, H3, H4 (procfs seam leak), H5
+      (forced `exit 0`), plus the assertion-helper positive control that calls `pass()` and `fail()` once each
+      and verifies both counters moved.
+- [ ] 4.7 Record the failing-arm-label set per mutant and assert pairwise non-identical and non-subset — this
+      is what makes "the rows span distinct axes" a check rather than prose.
 - [ ] 4.6 Confirm each row actually reddens.
 
 ## Phase 5 — registration and wiring
@@ -80,7 +95,8 @@ the property.
 - [ ] 5.1 Measure the battery's wall-clock and record it (AC35).
 - [ ] 5.2 Two `run_suite` lines in `scripts/test-all.sh` with neighbour-idiom comments (AC33).
 - [ ] 5.3 Preamble invocation: `timeout 10 bash scripts/orphan-process-reaper.sh report || true`, verb pinned
-      to `report`, banner emitted every run (AC34).
+      to `report`, banner emitted every run; caller captures rc and prints `ORPHAN_SCAN valid=0 reason=rc<N>`
+      itself on non-zero/124; caller passes `ORPHAN_REAPER_EXCLUDE_PGID`; skip under `CI` with one line.
 - [ ] 5.4 Comment-only note in `plugins/soleur/scripts/lib/proc.sh` + reciprocal in the reaper; no undefined
       ordinal cited (AC37).
 - [ ] 5.5 Confirm `scripts/lint-orphan-test-suites.sh` and `scripts/guard-vacuity-floor.test.sh` pass
