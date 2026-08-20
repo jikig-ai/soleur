@@ -36,7 +36,20 @@ set -euo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-REAPER="$REPO_ROOT/scripts/orphan-process-reaper.sh"
+# The system under test. The mutation battery points this at a mutant copy, so
+# every row exercises this suite unmodified — a battery that only mutates the
+# SUT cannot see a vacuous harness, which is what the H-rows exist for.
+REAPER="${ORPHAN_SUITE_SUT:-$REPO_ROOT/scripts/orphan-process-reaper.sh}"
+
+# The two REAL-PROCESS arms (live procfs, and the end-to-end incident trace)
+# cost ~6 s of this suite's ~16 s, almost all of it the member scan forking one
+# `stat` per pid on a ~600-pid box. The mutation battery runs this suite once
+# per row, so it skips them and says so; the battery's UNMUTATED CONTROL runs
+# the full suite including both. That split is safe only because no mutation
+# row's witness is a live arm — every M-row reddens on a synthesized fixture —
+# and it is stated here rather than inferred so a future row that DOES need a
+# live witness is written knowing the battery would not see it.
+SKIP_LIVE="${ORPHAN_SUITE_SKIP_LIVE:-0}"
 
 pass_n=0
 fails=0
@@ -160,6 +173,10 @@ mk_anchor() {  # root pid [cwd_handle] [starttime]
   mk_ns "$root" "$pid" "$NS_MNT_SELF" "$NS_PID_SELF"
   ln -sfn "$cwd" "$root/$pid/cwd"
   ln -sfn "$DELSCRIPT" "$root/$pid/fd/255"
+  # LIVE stdout, as measured on the real orphan (fd1=/dev/null). This is what
+  # makes an fd/1-veto mutation non-equivalent — and it is also the fixture the
+  # cut stdout-veto would have refused, which is how that veto was falsified.
+  ln -sfn /dev/null "$root/$pid/fd/1"
   mk_cmdline "$root" "$pid" "bash victim.sh"
 }
 
@@ -172,6 +189,16 @@ mk_member() {  # root pid [cwd_handle] [starttime] [comm]
   ln -sfn "$cwd" "$root/$pid/cwd"
   mk_cmdline "$root" "$pid" "$comm worker"
 }
+
+# An unlinked DIRECTORY handle: nlink 0 and suffixed like a deleted script, but
+# not a regular file. This is the witness for G3's regular-file term — without
+# it that term is never the deciding gate and mutating it away is invisible.
+mkdir -p "$UNLINKED_DIR/adir"
+exec 6<"$UNLINKED_DIR/adir"
+rmdir "$UNLINKED_DIR/adir"
+HANDLE_DIR="/proc/$$/fd/6"
+DELDIR="$TESTROOT/notascript.sh (deleted)"
+ln -sfn "$HANDLE_DIR" "$DELDIR"
 
 # --- Driving the reaper ----------------------------------------------------
 # The suite pins ORPHAN_REAPER_SELF_PID to a pid that is NOT in any fixture, so
@@ -461,13 +488,16 @@ expect_field would_signal 0 "AC10 anchorless: nothing would be signalled"
 # reaper it spawned, and every suite child sharing ONE unlinked cwd.
 R="$(fp_new ac11-anchor)"
 mk_anchor "$R" "$FIXTURE_SELF_PID"
-run_reaper "$R" report
+# EXCLUDE_PGID is pinned to a group no fixture uses so the process-group gate
+# cannot fire: without this the arm passes via pgid and mutating self-exclusion
+# is invisible (measured — M6, M7 and H4 all survived).
+run_reaper "$R" report ORPHAN_REAPER_EXCLUDE_PGID=888888
 expect_field anchors 0 "AC11 the scanner never flags ITSELF as an anchor"
 
 R="$(fp_new ac11-member)"
 mk_anchor "$R" 4242
 mk_member "$R" "$FIXTURE_SELF_PID" "$HANDLE_A"    # scanner shares the doomed inode
-run_reaper "$R" report
+run_reaper "$R" report ORPHAN_REAPER_EXCLUDE_PGID=888888
 cases=$((cases + 1))
 if [[ "$(awk -v p="$FIXTURE_SELF_PID" '$1=="member" && $0 ~ ("pid=" p "( |$)") {n++} END{print n+0}' <<<"$RR_OUT")" == "0" ]]; then
   pass "AC11/M7 the scanner is excluded from the REAP SET (the suicide bug)"
@@ -483,12 +513,25 @@ mk_stat "$R" 4250 1 777777 100
 run_reaper "$R" report ORPHAN_REAPER_EXCLUDE_PGID=777777
 expect_field skipped_same_pgroup 1 "AC11 same-process-group members are excluded and counted"
 
+# AC17/M17 — MEMBERSHIP RESTATES THE GATES; it never inherits the anchor's
+# verdict. The witness is a process sharing the anchor's cwd dev:inode that
+# fails a gate the ANCHOR passes — here G6, the age floor. Without this arm the
+# only thing distinguishing "membership re-checks" from "membership inherits" is
+# self-exclusion, which is M7's axis, and the two rows become one mutation
+# wearing two names (measured: identical failing-arm sets).
+R="$(fp_new ac17-member-gates)"
+mk_anchor "$R" 4242 "$HANDLE_A" 100
+mk_member "$R" 4243 "$HANDLE_A" 99999000    # same doomed inode, ~10s old
+run_reaper "$R" report ORPHAN_REAPER_MIN_AGE_S=600
+expect_field anchors     1 "AC17 the aged anchor still flags"
+expect_field set_members 1 "AC17 a young member does NOT inherit the anchor's verdict"
+
 # AC12 — structural refusal. The scanner is INSIDE the doomed directory and
 # cannot adjudicate it.
 R="$(fp_new ac12)"
 mk_anchor "$R" 4242
 mk_member "$R" "$FIXTURE_SELF_PID" "$HANDLE_A"
-run_reaper "$R" report ORPHAN_REAPER_SELF_CWD_OVERRIDE="$HANDLE_A"
+run_reaper "$R" report ORPHAN_REAPER_SELF_CWD_OVERRIDE="$HANDLE_A" ORPHAN_REAPER_EXCLUDE_PGID=888888
 expect_field valid 0 "AC12 scanner inside the doomed inode -> valid=0"
 cases=$((cases + 1))
 if [[ "$RR_RC" == "1" ]]; then pass "AC12 a structurally invalid walk exits 1"
@@ -557,6 +600,17 @@ ln -sfn "$HANDLE_A" "$R/4242/cwd"
 ln -sfn "$HANDLE_SCRIPT" "$R/4242/fd/255"   # readlink has NO ' (deleted)' suffix
 run_reaper "$R" report
 expect_field anchors 0 "AC/M31 a memfd-shaped fd/255 does not become an anchor"
+
+# G3's regular-file term, isolated: an unlinked DIRECTORY behind a
+# ' (deleted)'-suffixed absolute path satisfies every other term of G3.
+R="$(fp_new notafile)"
+mkdir -p "$R/4242/fd"
+mk_stat "$R" 4242 1 4242 100
+mk_ns   "$R" 4242 "$NS_MNT_SELF" "$NS_PID_SELF"
+ln -sfn "$HANDLE_A" "$R/4242/cwd"
+ln -sfn "$DELDIR" "$R/4242/fd/255"
+run_reaper "$R" report
+expect_field anchors 0 "AC/M31 an unlinked DIRECTORY on fd/255 is not an unlinked script"
 
 # ===========================================================================
 # Verbs and evidence (AC15-AC23, AC28b-AC28j)
@@ -758,6 +812,20 @@ for p in 4242 4243 4244; do
 done
 run_reaper "$R" report
 expect_field unreadable 3 "AC22/M25 three unreadable entries are distinguishable from a clean walk"
+
+# AC/M5 — the own-uid gate, against the REAL procfs. A foreign-owned /proc
+# entry cannot be synthesized without root, so this is the only witness there
+# is. Asserts a SHAPE (foreign-uid processes are counted, not silently walked),
+# never a count — the value is ambient.
+cases=$((cases + 1))
+_o=""; _rc=0
+_o="$(env -u CI ORPHAN_REAPER_NO_FLOCK=1 bash "$REAPER" report 2>/dev/null)" || _rc=$?
+_fu="$(awk '/^ORPHAN_SCAN /{for(i=2;i<=NF;i++){n=index($i,"=");if(substr($i,1,n-1)=="skipped_foreign_uid"){print substr($i,n+1);exit}}}' <<<"$_o")"
+if [[ "$_rc" == "0" && "${_fu:-0}" -gt 0 ]]; then
+  pass "AC/M5 foreign-uid processes are refused and COUNTED (skipped_foreign_uid=$_fu)"
+else
+  fail "AC/M5 the own-uid gate has no observable: skipped_foreign_uid=${_fu:-<absent>} against a real /proc"
+fi
 
 # AC23 — SANITIZATION AND OUTPUT GRAMMAR. Spaces, `=` and `/` are printable and
 # SURVIVE the tr pass, so a directory named `x signalled pid=1 cwd=/y` would
@@ -1053,6 +1121,9 @@ echo "--- end-to-end ---"
 # concurrent-sessions). What this pins is that the walk executes against a real
 # procfs at all — the class of breakage a synthesized-/proc suite structurally
 # cannot see.
+if [[ "$SKIP_LIVE" == "1" ]]; then
+  echo "  [skip] AC38/AC40 live-process arms (ORPHAN_SUITE_SKIP_LIVE=1)"
+else
 cases=$((cases + 1))
 _o=""; _rc=0
 _o="$(env -u CI ORPHAN_REAPER_NO_FLOCK=1 bash "$REAPER" report 2>/dev/null)" || _rc=$?
@@ -1164,6 +1235,8 @@ else
   fails=$((fails + 6))
 fi
 
+fi   # SKIP_LIVE
+
 # ===========================================================================
 # Vacuity floors
 # ===========================================================================
@@ -1173,7 +1246,11 @@ fi
 # shape-derived population recognises it — its floor_lines_of() matches only
 # these forms, and a floor written otherwise is not covered, not deferred, and
 # not reported as unclassified, but simply ABSENT.
-MIN_CASES=110
+# Absolute, hand-ratcheted to the measured case count. The live arms contribute
+# exactly 8 assertions (1 + 7 hops), so the skip-live floor is 8 lower — stated
+# as an explicit subtraction so the two numbers cannot drift apart.
+MIN_CASES=134
+[[ "$SKIP_LIVE" == "1" ]] && MIN_CASES=$((134 - 8))
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '\n[FATAL] assertion floor: %d assertions ran, expected at least %d.\n' \
     "$cases" "$MIN_CASES" >&2

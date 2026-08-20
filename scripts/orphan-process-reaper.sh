@@ -340,20 +340,16 @@ _orphan_classify() {  # pid role(anchor|member)
   local pid="$1" role="$2" d="$ORPHAN_PROC_ROOT/$1"
   _OC_AGE=""; _OC_STARTTIME=""; _OC_CWD_KEY=""; _OC_CWD_NLINK="?"; _OC_FD255_NLINK="?"
 
-  # G1 — own uid. The `-L` is load-bearing and gets its own assertion:
-  # measured, `stat -c '%u'` on a symlink reports the LINK's uid while
-  # `stat -Lc '%u'` reports the target's, so the un-dereferenced form silently
-  # classifies every foreign process as own-uid. Enforcement is structurally
-  # redundant (readlink fails on a foreign process) — which is exactly why the
-  # counter matters: without a field whose value differs, removing this gate has
-  # no observable at all.
-  local owner
-  owner=$(stat -Lc '%u' "$d" 2>/dev/null) || owner=""
-  if [[ ! "$owner" =~ ^[0-9]+$ ]]; then
+  # G1 (own uid) is NOT re-tested here. It is established exactly once, at the
+  # walk, for every pid that can reach this function — including reap-set
+  # members, which are drawn from the same walk. A second copy would be a guard
+  # with no observable, since no fixture can reach this line with a foreign uid.
+  #
+  # What remains is the readability probe the uid read was doubling as: an entry
+  # that has vanished between the glob and here is an ORDINARY outcome of this
+  # walk, not an error.
+  if [[ ! -d "$d" ]]; then
     unreadable=$((unreadable + 1)); unreadable_gone=$((unreadable_gone + 1)); return 1
-  fi
-  if [[ "$owner" != "$SELF_UID" ]]; then
-    skipped_foreign_uid=$((skipped_foreign_uid + 1)); return 1
   fi
 
   # G4 — not the scanner, an ancestor, or its process group. Applied HERE, so it
@@ -523,6 +519,23 @@ for d in "$ORPHAN_PROC_ROOT"/[0-9]*; do
   # dangerous.
   [[ "$pid" =~ ^[1-9][0-9]*$ ]] || continue
   scanned=$((scanned + 1))
+  # G1 — OWN UID, established once, here, ahead of the fd/255 pre-filter.
+  #
+  # Placement is the whole point and was found by measurement: this gate lived
+  # inside _orphan_classify, and on a real /proc it counted ZERO, because a
+  # foreign process's /proc/<pid>/fd is mode 500 so the pre-filter below
+  # rejected it first. The gate was therefore unreachable in production and its
+  # removal had no observable — an unfalsifiable guard.
+  #
+  # `[[ -O ]]` rather than `stat -Lc '%u'`: it answers exactly "is the effective
+  # uid the owner" with NO fork, which is what lets it run for every pid on a
+  # ~600-pid walk that sits on this repo's hottest path. /proc/<pid> is a real
+  # directory, never a symlink, so the dereference the stat form needed does not
+  # arise here.
+  if [[ ! -O "$d" ]]; then
+    skipped_foreign_uid=$((skipped_foreign_uid + 1))
+    continue
+  fi
   ALL_PIDS+=("$pid")
   if [[ ! -e "$d/fd/255" && ! -L "$d/fd/255" ]]; then
     prefiltered_no_fd255=$((prefiltered_no_fd255 + 1))
