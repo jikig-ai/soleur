@@ -444,7 +444,19 @@ assert "arm) writes POSTGRES_URI BEFORE INNGEST_CUTOVER_FLIP=armed (write order 
 # AC8 / G3 positive prod-URI assertion + :6543 reject; G1 pre-write FSM-state guard (DI-C2).
 assert "arm) G3 rejects the :6543 transaction pooler" "grep -qF ':6543' '$ARM_FILE'"
 assert "arm) G3 requires the :5432 session pooler" "grep -qF ':5432' '$ARM_FILE'"
-assert "arm) G3 refuses when prod == dark (PG == PG_DARK)" "grep -qE 'PG.*==.*PG_DARK' '$ARM_FILE'"
+# #7462: prod == dark is a SKIP, not a refusal. The old assertion here grepped for
+# `PG.*==.*PG_DARK` in the arm body — a comparison that has since moved into g3_decide, and
+# which could not have distinguished a refusal from a skip even while it was present. The
+# behavioural coverage is the g3_decide block further down; these assert the CONSUMER wiring.
+assert "arm) has an idempotent skip arm (not a refusal) for already-current" "grep -qF 'skip-already-current' '$ARM_FILE'"
+assert "arm) no longer claims an already-current value 'would flip onto the DARK backend'" "! grep -qF 'would flip onto the DARK backend' '$ARM_FILE'"
+assert "arm) evaluates NO G3 predicate inline (single chokepoint — Assembly contract)" "! grep -qE '^[[:space:]]+case \"\\\$PG\" in' '$ARM_FILE'"
+# AC7: skipping the DSN write must NOT skip the heartbeat or the `armed` write — that would
+# turn a successful arm into a silent no-op. Both must sit OUTSIDE the skip guard.
+assert "arm) G4 heartbeat write is reachable on the skip path" "grep -qE 'doppler secrets set INNGEST_HEARTBEAT_URL -p soleur-inngest -c prd' '$ARM_FILE'"
+assert "arm) G5 armed write is reachable on the skip path" "grep -qE \"printf '%s' 'armed'\" '$ARM_FILE'"
+G4_SKIP_GUARD_N=$(grep -cE 'G3_SKIP_PG_WRITE' "$ARM_FILE" || true)
+assert "arm) the skip guard is set once and read once (>=2 references)" "[[ '$G4_SKIP_GUARD_N' -ge 2 ]]"
 assert "arm) G1 reads the current INNGEST_CUTOVER_FLIP from soleur-inngest (pre-write state guard)" "grep -qE 'doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest' '$ARM_FILE'"
 assert "arm) G1 refuses re-arm over a non-safe FSM state (DI-C2 REFUSING)" "grep -qE 'G1 REFUSING' '$ARM_FILE'"
 
@@ -481,6 +493,67 @@ assert "arm) adds NO deploy-status poll (Better Stack read only — QMAX/RMAX un
 
 # AC13 no ssh in the arm block.
 assert "arm) contains no ssh (AC-NOSSH/AC13)" "! grep -qE '(^|[^[:alnum:]])ssh[[:space:]]' '$ARM_FILE'"
+
+# ============================================================================
+# #7462 — G3 DECISION FUNCTION (g3_decide): BEHAVIOURAL tests, not source-greps.
+#
+# Every other assertion in this file greps the script TEXT, which is structurally blind
+# to a change in WHICH BRANCH the decision takes. The pre-#7462 assertion
+# `grep -qE 'PG.*==.*PG_DARK'` still matches after the equality arm was inverted from a
+# refusal into a skip — it cannot see this change at all. These tests EXECUTE the
+# decision instead, so a mutation of any arm reddens the suite.
+#
+# The function is extracted from the REAL script ($BODY_SH) and sourced — never
+# re-declared inline, or the suite would assert a known-good snippet is known-good while
+# the shipped file regressed underneath it.
+# ============================================================================
+G3_FN="$(mktemp)"; SCRATCH+=("$G3_FN")
+awk '/^g3_decide\(\) \{$/,/^\}$/' "$BODY_SH" > "$G3_FN"
+G3_FN_N=$(wc -l < "$G3_FN")
+# F6 non-vacuity: an empty extraction would leave g3_decide undefined and every scenario
+# below would compare against an empty string rather than an outcome token.
+assert "g3_decide() is extractable from the script (>8 lines — F6 non-vacuity)" "[[ '$G3_FN_N' -gt 8 ]]"
+
+# shellcheck disable=SC1090
+. "$G3_FN"
+assert "g3_decide() is defined after sourcing" "declare -F g3_decide >/dev/null"
+
+# Synthesized fixtures ONLY (cq-test-fixtures-synthesized-only) — no real password or host.
+# The project refs are public Supabase project identifiers, not secrets, and are the values
+# the guard actually pins on.
+G3_PROD_REF="pigsfuxruiopinouvjwy"
+G3_DEV_REF="mlwiodleouzwniehynfz"
+G3_PROD="postgresql://postgres.${G3_PROD_REF}:synth-pw-a@aws-0-eu-west-1.pooler.supabase.com:5432/postgres"
+G3_PROD_ALT="postgresql://postgres.${G3_PROD_REF}:synth-pw-b@aws-0-eu-west-1.pooler.supabase.com:5432/postgres"
+G3_PROD_TXN="postgresql://postgres.${G3_PROD_REF}:synth-pw-a@aws-0-eu-west-1.pooler.supabase.com:6543/postgres"
+G3_PROD_NOPORT="postgresql://postgres.${G3_PROD_REF}:synth-pw-a@aws-0-eu-west-1.pooler.supabase.com/postgres"
+G3_DEV="postgresql://postgres.${G3_DEV_REF}:synth-pw-c@aws-0-eu-west-1.pooler.supabase.com:5432/postgres"
+
+G3_EVALS=0
+g3_case() { # $1 desc, $2 PG (to write), $3 PG_DARK (in place), $4 expected outcome
+  local got
+  got="$(g3_decide "$2" "$3")"
+  G3_EVALS=$((G3_EVALS + 1))
+  assert "g3_decide: $1 -> $4" "[[ '$got' == '$4' ]]"
+}
+
+g3_case "empty dark value fails closed"            "$G3_PROD"        ""               "refuse-empty-dark"
+g3_case "rejects the :6543 transaction pooler"     "$G3_PROD_TXN"    "$G3_PROD"       "refuse-txn-pooler"
+g3_case "requires the :5432 session pooler"        "$G3_PROD_NOPORT" "$G3_PROD"       "refuse-not-session-pooler"
+g3_case "refuses a non-prod project ref"           "$G3_DEV"         "$G3_DEV"        "refuse-not-prod-project"
+g3_case "already-current is a SKIP, not a refusal" "$G3_PROD"        "$G3_PROD"       "skip-already-current"
+g3_case "dark -> prod is the first-arm write"      "$G3_PROD"        "$G3_DEV"        "write"
+g3_case "a DIFFERENT prod-project value writes"    "$G3_PROD"        "$G3_PROD_ALT"   "write"
+
+# Anti-vacuity floor (harness row H1): a suite whose scenario dispatch silently stopped
+# would otherwise report success having evaluated nothing. This counts EVALUATIONS, not
+# assertion calls, so gutting g3_case's body cannot satisfy it.
+assert "g3_decide scenarios actually dispatched (>=7 evaluations)" "[[ '$G3_EVALS' -ge 7 ]]"
+
+# The arm) case must route through the function exactly once — the Assembly contract.
+# Anchored on the call shape, not the bare name (which also appears in comments).
+G3_CALLS=$(grep -cE '^[[:space:]]+G3_OUTCOME="?\$\(g3_decide ' "$ARM_FILE" || true)
+assert "arm) calls g3_decide exactly once (single chokepoint)" "[[ '$G3_CALLS' -eq 1 ]]"
 
 # ============================================================================
 # #6178 durability — G3.5 CHANNEL-KEY PARITY HARD GATE. INNGEST_EVENT_KEY +

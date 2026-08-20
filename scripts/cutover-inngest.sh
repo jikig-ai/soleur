@@ -270,6 +270,61 @@ doublefire_from() {
   printf '%s %s\n' "$(date -u -d "@$from_e" +%Y-%m-%dT%H:%M:%SZ)" "$src"
 }
 
+# G3 arm-decision (#7462). PURE: no I/O, no globals read or written, no input value
+# echoed — it returns one outcome TOKEN and the caller acts on it. That is what makes the
+# decision executable by a test: every other assertion over this file greps its TEXT, and
+# a text grep cannot see WHICH BRANCH a comparison takes.
+#
+#   $1  the prod value about to be written (G2 has already proven it non-empty)
+#   $2  the value currently in place on soleur-inngest/prd
+#
+# Outcomes: refuse-empty-dark | refuse-txn-pooler | refuse-not-session-pooler
+#           | refuse-not-prod-project | skip-already-current | write
+#
+# WHY THE EQUALITY ARM SKIPS RATHER THAN REFUSING (#7462). It used to `exit 1` when the
+# prod value already equalled the dark one. But G4 writes the prod DSN and op=rollback has
+# NO inverse for that write, so after the first successful arm (2026-07-23T15:46Z) the
+# dark slot holds the prod DSN permanently and the equality refusal fires FOREVER — the
+# cutover could never be re-armed after a rollback, which defeats rollback's purpose.
+#
+# Dropping the refusal costs no safety. The hazard its own message named ("would flip onto
+# the DARK backend") is fully held by the prod project-ref pin below: the dark backend is a
+# DISTINCT Supabase project (ADR-100 addendum 2026-07-15) and cannot carry the prod ref.
+# The FLUSHALL hazard is held by the monotonic latch in inngest-cutover-flip.sh (#7228
+# P0-5) — recorded AT the flush and fatal if unrecordable — never by this comparison.
+# Equality therefore means only "this write would change nothing", which is a fact to
+# record, not a reason to abort.
+g3_decide() {
+  local pg="$1" pg_dark="$2"
+
+  # FAIL-CLOSED on an unreadable dark value. The ORIGINAL rationale for this arm is now
+  # obsolete and must not be restated: it was that an empty value makes the equality
+  # comparison false and so SILENTLY passes. That cannot happen once the equality arm no
+  # longer gates anything. The arm is retained on different, still-valid grounds — G1 has
+  # already proven the config readable, so an empty read here is anomalous and most
+  # plausibly a token-scope or wrong-project fault. Refusing costs one dispatch;
+  # proceeding on an anomalous read is how a surprise gets armed.
+  if [[ -z "$pg_dark" ]]; then printf '%s' 'refuse-empty-dark'; return 0; fi
+
+  case "$pg" in
+    *:6543*) printf '%s' 'refuse-txn-pooler'; return 0 ;;
+  esac
+  case "$pg" in
+    *:5432*) : ;;
+    *) printf '%s' 'refuse-not-session-pooler'; return 0 ;;
+  esac
+  # Positive prod-project pin (C3/D3). This is the LOAD-BEARING guard against arming onto
+  # a non-prod Postgres now that equality no longer refuses — mutation-tested accordingly.
+  case "$pg" in
+    *pigsfuxruiopinouvjwy*) : ;;
+    *) printf '%s' 'refuse-not-prod-project'; return 0 ;;
+  esac
+
+  if [[ "$pg" == "$pg_dark" ]]; then printf '%s' 'skip-already-current'; return 0; fi
+  printf '%s' 'write'
+  return 0
+}
+
 case "$OP" in
   enumerate)
     # GET hook → records JSON in the response body. HMAC over empty body
@@ -1024,29 +1079,34 @@ case "$OP" in
     # equality below is the ONLY guard that distinguishes prod from dark (both are :5432 Supabase).
     # An empty PG_DARK would make `$PG == ""` false and SILENTLY pass the equality — the exact
     # §User-Brand-Impact failure (flip onto the dark backend). Refuse instead.
-    if [[ -z "$PG_DARK" ]]; then
-      echo "::error::op=arm: G3 — could not read the current dark INNGEST_POSTGRES_URI from soleur-inngest/prd (empty despite a readable config). Cannot assert prod != dark; refusing FAIL-CLOSED (no value echoed). Do NOT SSH the host."; exit 1
-    fi
-    case "$PG" in
-      *:6543*) echo "::error::op=arm: G3 — INNGEST_POSTGRES_URI uses the :6543 transaction pooler; inngest sqlc requires the :5432 session pooler (inngest-host.tf:157). Refusing (no value echoed)."; exit 1 ;;
+    # The decision itself lives in g3_decide (a pure function, defined above) so it can be
+    # driven RED by a test. This case is the SINGLE call site — the Assembly contract in the
+    # plan's Guard Contract — and no G3 predicate may be evaluated inline here.
+    G3_OUTCOME="$(g3_decide "$PG" "$PG_DARK")"
+    G3_SKIP_PG_WRITE=0
+    case "$G3_OUTCOME" in
+      refuse-empty-dark)
+        echo "::error::op=arm: G3 — could not read the current dark INNGEST_POSTGRES_URI from soleur-inngest/prd (empty despite a readable config). G1 already proved the config readable, so an empty read here is anomalous — most plausibly a token-scope or wrong-project fault. Refusing FAIL-CLOSED (no value echoed). Do NOT SSH the host."; exit 1 ;;
+      refuse-txn-pooler)
+        echo "::error::op=arm: G3 — INNGEST_POSTGRES_URI uses the :6543 transaction pooler; inngest sqlc requires the :5432 session pooler (inngest-host.tf:157). Refusing (no value echoed)."; exit 1 ;;
+      refuse-not-session-pooler)
+        echo "::error::op=arm: G3 — INNGEST_POSTGRES_URI does not contain the :5432 session-pooler port. Refusing (no value echoed)."; exit 1 ;;
+      refuse-not-prod-project)
+        echo "::error::op=arm: G3 — INNGEST_POSTGRES_URI does not target the TF-known prod inngest Postgres project (ref pigsfuxruiopinouvjwy). Refusing (no value echoed)."; exit 1 ;;
+      skip-already-current)
+        # NOT a refusal (#7462). The value we would write is ALREADY in place — the expected
+        # steady state after any previous successful arm, because op=rollback has no inverse
+        # for the G4 DSN write. The invariant G4 exists to establish already holds, so the
+        # write is skipped and the arm proceeds. The heartbeat write and the G5 `armed` write
+        # below still run; skipping THEM would turn a successful arm into a silent no-op.
+        G3_SKIP_PG_WRITE=1
+        echo "::notice::op=arm: G3 — INNGEST_POSTGRES_URI on soleur-inngest/prd already equals the prod value; skipping the redundant G4 write and proceeding (idempotent arm, value-silent)." ;;
+      write)
+        : ;;
+      *)
+        echo "::error::op=arm: G3 — g3_decide returned an unrecognised outcome. Refusing FAIL-CLOSED (no value echoed)."; exit 1 ;;
     esac
-    case "$PG" in
-      *:5432*) : ;;
-      *) echo "::error::op=arm: G3 — INNGEST_POSTGRES_URI does not contain the :5432 session-pooler port. Refusing (no value echoed)."; exit 1 ;;
-    esac
-    # Positive prod-project pin (C3/D3): assert PG targets the TF-known prod inngest Postgres
-    # project ref (pigsfuxruiopinouvjwy — variables.tf:270; NOT a secret, a Supabase project ref
-    # that appears in the pooler host + user). This is stronger than a bare `supabase` substring:
-    # a drifted-but-Supabase :5432 non-dark value (e.g. a staging project) is rejected. The dark
-    # backend is a DISTINCT project so it does NOT contain this ref. Value-silent (PG never echoed).
-    case "$PG" in
-      *pigsfuxruiopinouvjwy*) : ;;
-      *) echo "::error::op=arm: G3 — INNGEST_POSTGRES_URI does not target the TF-known prod inngest Postgres project (ref pigsfuxruiopinouvjwy). Refusing (no value echoed)."; exit 1 ;;
-    esac
-    if [[ "$PG" == "$PG_DARK" ]]; then
-      echo "::error::op=arm: G3 REFUSING — the prod INNGEST_POSTGRES_URI equals the CURRENT dark soleur-inngest/prd value. Arming this would flip onto the DARK backend (a mis-config/no-op) and FLUSHALL the host Redis onto the wrong Postgres (DI-C3, the §User-Brand-Impact failure). Refusing BEFORE any write (no value echoed)."; exit 1
-    fi
-    echo "::notice::op=arm: G3 positive prod-URI assertion passed (prod != dark, :5432 session pooler, prod project-ref present — all value-silent)"
+    echo "::notice::op=arm: G3 positive prod-URI assertion passed (:5432 session pooler, prod project-ref present, dark value readable — all value-silent; outcome=${G3_OUTCOME})"
 
     # G3.5 — CHANNEL-KEY PARITY HARD GATE (#6178 durability). INNGEST_EVENT_KEY +
     # INNGEST_SIGNING_KEY are a SHARED app<->host CHANNEL auth token, NOT an
@@ -1085,8 +1145,15 @@ case "$OP" in
 
     # G4 — write the two DATA secrets FIRST, each via stdin (never argv), each exit-gated
     # before the next. Order is a correctness invariant: the URIs must land before `armed`.
-    printf '%s' "$PG" | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_POSTGRES_URI -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=arm: G4 — writing INNGEST_POSTGRES_URI to soleur-inngest/prd FAILED. armed NOT written. Job aborts (no value echoed)."; exit 1; }
-    echo "::notice::op=arm: G4 wrote INNGEST_POSTGRES_URI to soleur-inngest/prd (value not echoed)"
+    # Skipped only on G3's `skip-already-current` — the value is already what we would
+    # write, so the write is a no-op and the invariant already holds. Every other outcome
+    # either exited above or falls through to perform the write.
+    if [[ "$G3_SKIP_PG_WRITE" == "1" ]]; then
+      echo "::notice::op=arm: G4 skipped the INNGEST_POSTGRES_URI write — already current (G3 outcome=skip-already-current). The heartbeat and G5 armed writes below still run."
+    else
+      printf '%s' "$PG" | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_POSTGRES_URI -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=arm: G4 — writing INNGEST_POSTGRES_URI to soleur-inngest/prd FAILED. armed NOT written. Job aborts (no value echoed)."; exit 1; }
+      echo "::notice::op=arm: G4 wrote INNGEST_POSTGRES_URI to soleur-inngest/prd (value not echoed)"
+    fi
     printf '%s' "$HB" | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_HEARTBEAT_URL -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=arm: G4 — writing INNGEST_HEARTBEAT_URL to soleur-inngest/prd FAILED. armed NOT written. Job aborts (no value echoed)."; exit 1; }
     echo "::notice::op=arm: G4 wrote INNGEST_HEARTBEAT_URL to soleur-inngest/prd (value not echoed)"
     # #7228: op=arm deliberately does NOT touch betteruptime_heartbeat.inngest_consumer, the
