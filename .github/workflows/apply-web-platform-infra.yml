@@ -591,8 +591,6 @@ jobs:
               -target=cloudflare_record.www \
               -target=cloudflare_record.github_pages_challenge \
               -target=cloudflare_pages_project.docs \
-              -target=cloudflare_pages_domain.apex \
-              -target=cloudflare_pages_domain.www \
               -target=github_actions_secret.cloudflare_api_token_pages \
               -target=github_actions_secret.cloudflare_account_id_pages \
               -target=cloudflare_record.buttondown_ns1 \

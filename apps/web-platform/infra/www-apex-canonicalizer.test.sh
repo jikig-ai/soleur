@@ -369,13 +369,27 @@ verdict "$www_shape_rc" "www record matches the ${STAGE} stage (${www_shape_want
 # LINKS 4 & 5 — the CROSS-FILE COUPLINGS
 # ---------------------------------------------------------------------------------------
 
-eq_case 'cloudflare_pages_project.docs.name|cloudflare_pages_project.docs.name' \
-  "$(attr project_name "$DOM_APEX")|$(attr project_name "$DOM_WWW")" \
-  "both pages_domain resources bind the project by REFERENCE (graph edge, not a literal)"
+# STAGE-AWARE, and the ABSENCE arm is the load-bearing one for PR1/PR2.
+#
+# The two `cloudflare_pages_domain` resources deliberately do NOT exist until PR3.
+# Attaching a production hostname to a Pages project that has zero deployments
+# would, under Hypothesis Z, move the apex origin to an empty project — and the
+# apply runs on merge, so nothing could gate it. Asserting their ABSENCE here is
+# what stops a future edit re-adding them to the substrate PR; asserting the pair
+# once they exist is what pins the attachment when PR3 lands.
+if [[ -n "$DOM_APEX" || -n "$DOM_WWW" ]]; then
+  eq_case 'cloudflare_pages_project.docs.name|cloudflare_pages_project.docs.name' \
+    "$(attr project_name "$DOM_APEX")|$(attr project_name "$DOM_WWW")" \
+    "both pages_domain resources bind the project by REFERENCE (graph edge, not a literal)"
 
-eq_case 'soleur.ai|www.soleur.ai' \
-  "$(unquote "$(attr domain "$DOM_APEX")")|$(unquote "$(attr domain "$DOM_WWW")")" \
-  "pages_domain attaches exactly the apex and the www host"
+  eq_case 'soleur.ai|www.soleur.ai' \
+    "$(unquote "$(attr domain "$DOM_APEX")")|$(unquote "$(attr domain "$DOM_WWW")")" \
+    "pages_domain attaches exactly the apex and the www host"
+else
+  eq_case '0' \
+    "$(strip_comments "$PAGES_TF" | grep -cE '^resource[[:space:]]+"cloudflare_pages_domain"' || true)" \
+    "no pages_domain attaches a production hostname yet (pre-PR3): an empty Pages project must not own the apex"
+fi
 
 # `wrangler[@A-Za-z0-9._-]*` because the invocation is very likely to be VERSION-PINNED
 # (`npx wrangler@4 pages deploy`). A bare `wrangler pages deploy` anchor does not match the
@@ -431,7 +445,15 @@ verdict "$cname_rc" "plugins/soleur/docs/CNAME is the apex, not www; found ${cna
 # add a case; do not derive it from anything this file computes.
 printf '\n'
 
-EXPECTED_CASES=24
+# Stage-dependent by construction, and each arm is a LITERAL — not derived from
+# anything this file computes, which would make the floor a tautology. Pre-PR3 the
+# pages_domain pair is replaced by a single absence assertion, so the count is one
+# lower. Bump the matching arm deliberately when you add a case.
+if [[ -n "$DOM_APEX" || -n "$DOM_WWW" ]]; then
+  EXPECTED_CASES=24   # PR3 onward: the two pages_domain couplings are live
+else
+  EXPECTED_CASES=23   # PR1/PR2: one absence assertion stands in for that pair
+fi
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[FATAL] vacuity floor: %d assertion cases executed, expected exactly %d — a case was deleted, skipped, or added without updating EXPECTED_CASES\n' \
     "$CASES" "$EXPECTED_CASES" >&2
