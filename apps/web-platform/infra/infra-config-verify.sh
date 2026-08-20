@@ -292,6 +292,24 @@ elif [[ "$HTTP_CODE" == "200" ]]; then
       if [[ "$FRESHNESS_REF_DEGRADED" -eq 1 ]]; then
         echo "::warning::The pass-2 freshness pin DEGRADED to this workflow's apply start (${APPLY_START_EPOCH}) because the bounded re-push published no usable start epoch (REPUSH_START_EPOCH='${REPUSH_START_EPOCH:-<absent>}'). That reference is strictly weaker: a frame published moments after the ORIGINAL apply began cannot have been produced by the re-push, yet it clears an APPLY_START_EPOCH-only pin. This run's verdict rests on the weaker test."
       fi
+      # UPPER BOUND, NOT JUST A LOWER ONE (#7546 review). `start_ts` is published BY THE HOST and
+      # is therefore host-selectable, and this arm bounded it only from below -- so a frame dated
+      # in the future verified. Measured: start_ts=9999999999 (year 2286) returned rc=0
+      # verdict=verified "Re-push VERIFIED". The `future_frame` guard already exists and is
+      # already reasoned about correctly in infra-config-gate.sh ("a host-clock anomaly or a
+      # fabricated frame, so it fails closed on BOTH sub-arms") -- but it lives inside
+      # infra_config_frame_stability, which this file calls ONLY on the DPF_REPLACED=false arm.
+      # Pass 2 is a fresh verdict path certifying a SECOND production write as recovered and it
+      # inherited none of it. A forward host-clock step defeats both of this arm's comparisons
+      # at once, and the stale-frame error two lines down names "a host clock step" as a threat
+      # it detects -- in one direction only.
+      PASS2_NOW_EPOCH=$(date -u +%s)
+      if [[ "$FRAME_START_TS" -gt $((PASS2_NOW_EPOCH + INFRA_CONFIG_CLOCK_SKEW_S)) ]]; then
+        echo "::error::FRAME FROM THE FUTURE AFTER RE-PUSH: the status endpoint reports an apply that started at ${FRAME_START_TS}, which is more than the ${INFRA_CONFIG_CLOCK_SKEW_S}s skew allowance ahead of this runner's clock (now=${PASS2_NOW_EPOCH}, delta=$((FRAME_START_TS - PASS2_NOW_EPOCH))s). start_ts is published by the host, so this is a host-clock anomaly or a fabricated frame — not a delivery this gate can vouch for. The bounded recovery is spent and this run has no verified delivery."
+        echo "verdict=failed" >> "$GITHUB_OUTPUT"
+        cat "$STATUS_RESPONSE" >&2 2>/dev/null || true
+        exit 1
+      fi
       if [[ "$FRAME_START_TS" -lt $((FRESHNESS_REF_EPOCH - INFRA_CONFIG_CLOCK_SKEW_S)) ]]; then
         echo "::error::STALE FRAME AFTER RE-PUSH: the frame DID advance (${REPUSH_BASELINE_TS} -> ${FRAME_START_TS}), but it still predates ${FRESHNESS_REF_LABEL} (began ${FRESHNESS_REF_EPOCH}) by $((FRESHNESS_REF_EPOCH - FRAME_START_TS))s, which is beyond the ${INFRA_CONFIG_CLOCK_SKEW_S}s host/runner clock allowance. So something moved the frame, but it was not this re-push — a queued handler invocation, a concurrent trigger, or a host clock step. The delivery this run needed is still unproven and the bounded recovery is spent. This is a DIFFERENT diagnosis from 'the frame did not move' and it has a different lever: do not re-run, and do not read the advance as a delivery. Inspect the host's journal for which invocation published start_ts=${FRAME_START_TS}."
         echo "verdict=failed" >> "$GITHUB_OUTPUT"

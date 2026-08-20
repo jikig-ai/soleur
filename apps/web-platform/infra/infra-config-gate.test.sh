@@ -733,6 +733,14 @@ CONTROLS = [
     ('D', 'f() {\n  awk \'BEGIN{print "terraform apply" | "sh"}\'\n}\n'),
     ('D', 'f() {\n  sed -e "s/x/terraform apply/e" file\n}\n'),
     ('D', 'f() {\n  sed -i "s/old/new/" ../../../.github/workflows/apply-deploy-pipeline-fix.yml\n}\n'),
+    # shape D (cont.) — the four awk/sed trampolines the ORIGINAL detector missed (#7546 review).
+    # Each was measured evading it: the program body coming from an unread FILE, the reverse pipe
+    # direction (execution, not output), and awk's OWN redirect, which no shell-redirect detector
+    # can see because the awk body lives inside a quoted span.
+    ('D', 'f() {\n  awk -f /tmp/evil.awk\n}\n'),
+    ('D', 'f() {\n  awk \'BEGIN{print "x" > "/etc/default/soleur-doppler-token"}\'\n}\n'),
+    ('D', 'f() {\n  awk \'BEGIN{"terraform apply -auto-approve" | getline r}\'\n}\n'),
+    ('D', 'f() {\n  sed \'w /etc/default/soleur-doppler-token\' file\n}\n'),
     # shape E — a write that invokes no command at all
     ('E', 'f() {\n  echo pwned > /etc/default/soleur-doppler-token\n}\n'),
 ]

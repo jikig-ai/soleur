@@ -215,8 +215,18 @@ def loop_depth_map(text):
 # being resolved, whereas a missed `system()` is an arbitrary-command trampoline in a file whose
 # entire contract is that it adjudicates and touches nothing.
 
-_AWK_EXEC = re.compile(r'''\bawk\b[^\n]*?(system\s*\(|\|\s*&?\s*["'](?:/bin/)?(?:ba|z|k|d)?sh["']|\bprint\s*\|)''')
-_SED_EXEC = re.compile(r'''\bsed\b[^\n]*?(-i\b|--in-place|s[^\n]*?/[a-zA-Z]*e[a-zA-Z]*(?:\s|;|$|["']))''')
+# WIDENED (#7546 review). The original three alternatives covered system(), pipe-to-shell and
+# `print |`, and MISSED four shapes that are equally arbitrary-command or arbitrary-write, all
+# measured evading it: `awk -f prog.awk` (the whole program comes from a file this scanner never
+# reads), `"cmd" | getline` (the reverse pipe direction -- execution, not output), `getline < cmd`,
+# and awk's OWN redirect `print ... > "file"` / `printf ... > "file"` (a write with no shell
+# redirection for the redirect detector to find, because the awk body lives inside a quoted span).
+_AWK_EXEC = re.compile(r'''\bawk\b[^\n]*?(system\s*\(|\|\s*&?\s*["'](?:/bin/)?(?:ba|z|k|d)?sh["']|\bprint\s*\||-f\s+\S|\|\s*getline\b|\bgetline\s*<|\bprintf?\b[^\n]*?>\s*["'])''')
+# WIDENED (#7546 review). `-i`/`--in-place` and the GNU `e` flag were covered; `sed -f prog.sed`
+# (whole program from an unread file) and sed's own `w`/`W` write commands were not -- `w FILE`
+# writes the pattern space to FILE, which is a write from a binary the allow list calls a "pure
+# text transform".
+_SED_EXEC = re.compile(r'''\bsed\b[^\n]*?(-i\b|--in-place|-f\s+\S|[;'"\s][wW]\s+[^\s;'"]+|s[^\n]*?/[a-zA-Z]*e[a-zA-Z]*(?:\s|;|$|["']))''')
 # THE REDIRECTION OPERATOR, LOCATED IN QUOTE-BLANKED TEXT AND READ FROM THE RAW TEXT.
 #
 # Neither text alone works, and both failures were measured on the real files. Over

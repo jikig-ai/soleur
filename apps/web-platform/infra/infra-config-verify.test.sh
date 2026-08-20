@@ -841,6 +841,30 @@ if mkframe 1000 "$STALE" && mkframe 3000 "$MOVED"; then
     else
       fail "#7104 I7e: rc=$rce and the log did not carry 'RE-PUSH DID NOT DELIVER': $(tr '\n' '|' < "$le" | tail -c 400)"
     fi
+
+    # I7f — THE UPPER BOUND. The other direction of the same comparison (#7546 review).
+    #
+    # Every I7 fixture above sits BELOW the reference: the arm was bounded from below only, and
+    # `start_ts` is published BY THE HOST, so a frame dated in the future verified. Measured on
+    # the shipped code: start_ts=9999999999 (year 2286) returned rc=0, verdict=verified,
+    # "Re-push VERIFIED". The `future_frame` guard already existed in infra-config-gate.sh and
+    # is called ONLY on the DPF_REPLACED=false arm, so pass 2 -- a fresh verdict path certifying
+    # a SECOND production write -- inherited none of it. A forward host-clock step defeats both
+    # of this arm's comparisons at once, and the stale-frame error names "a host clock step" as
+    # a threat it detects, in one direction only.
+    FUT="$I_TMP/future.json"
+    if mkframe 9999999999 "$FUT"; then
+      of="$I_TMP/of"; lf="$I_TMP/lf"; : > "$of"
+      rcf=0; drive_pass2 "$FUT" "$of" 1000 2000 "$lf" 2500 || rcf=$?
+      vf=$(grep -c '^verdict=verified$' "$of" || true)
+      if [[ "$rcf" -ne 0 && "$vf" -eq 0 ]] && grep -q 'FRAME FROM THE FUTURE AFTER RE-PUSH' "$lf"; then
+        pass "#7104 I7f: pass 2 REJECTS a host-published frame dated beyond the skew allowance ahead of the runner (rc=$rcf, never verdict=verified) — the upper bound, which every other I7 fixture omits"
+      else
+        fail "#7104 I7f: pass 2 accepted a frame from the future (rc=$rcf, verdict=verified x$vf). start_ts is host-selectable, so a bound from below alone lets a fabricated or clock-stepped frame certify a production write as recovered."
+      fi
+    else
+      fail "#7104 I7f: could not build the future-frame fixture — the upper-bound case is vacuous"
+    fi
   else
     fail "#7104 I7: could not build the absolute-freshness-pin fixtures — the whole P0-A arm is vacuous"
   fi
@@ -910,7 +934,7 @@ else
   exit 1
 fi
 
-VERIFY_MIN_ASSERTIONS=40
+VERIFY_MIN_ASSERTIONS=41
 if [[ "$PASS" -lt "$VERIFY_MIN_ASSERTIONS" ]]; then
   printf '  FAIL: assertion-count floor: only %d assertions ran, expected >= %d — arms were deleted or skipped\n' \
     "$PASS" "$VERIFY_MIN_ASSERTIONS" >&2
