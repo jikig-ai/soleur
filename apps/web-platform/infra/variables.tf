@@ -420,6 +420,44 @@ variable "cf_api_token_r2" {
   sensitive   = true
 }
 
+# SCOPE LEDGER — read this before rotating, widening, or reusing this token.
+#
+# PERMISSION: Account -> Cloudflare Pages -> Edit, and nothing else. No zone permission of
+#   any kind. Verified at first use by the probe in the ADR-194 plan's Phase 0: the token
+#   must return 200 on GET /accounts/<id>/pages/projects and 403 on
+#   GET /zones/<id>/rulesets. A 200 on the second means it was minted too broadly and must
+#   be re-minted narrower.
+# EXPIRY: none, deliberately. event-cf-token-expiry-check covers CF_API_TOKEN only, so a
+#   token minted with an expiry and no monitor is a ~90-day time bomb that would red every
+#   docs deploy with no advance warning.
+# WHY A NEW TOKEN RATHER THAN WIDENING AN EXISTING ONE: ADR-130's decision test. Pages is
+#   reached at /accounts/<id>/pages/projects, a different resource class from the zone
+#   rulesets cf_api_token_rulesets serves; folding Pages:Edit into that token would attach
+#   a site-content replacement primitive to a credential five .tf files and the pre-apply
+#   entrypoint gate already consume. The zone->account escalation is stated explicitly per
+#   ADR-130's #5092 note: this token is account-scoped because Pages is an account-level
+#   product.
+# ONE VALUE, FOUR NAMES: Doppler CF_API_TOKEN_PAGES -> TF_VAR_cf_api_token_pages ->
+#   GitHub Actions CLOUDFLARE_API_TOKEN_PAGES -> workflow env CLOUDFLARE_API_TOKEN. Only
+#   the last is forced (wrangler reads that exact name); the divergence is noted at both
+#   sites so a future reader does not mistake it for drift.
+# THREE STORAGE LOCATIONS, ONE ROTATION: Doppler prd_terraform, terraform.tfstate on R2,
+#   and GitHub Actions secrets. Rotating means replacing the Doppler value and re-applying
+#   this root; see the rotation-policy comment in cf-pages.tf.
+# CONSUMERS: main.tf provider alias cloudflare.pages; cf-pages.tf
+#   (cloudflare_pages_project.docs, cloudflare_pages_domain.apex/.www,
+#   github_actions_secret.cloudflare_api_token_pages); .github/workflows/deploy-docs.yml.
+# FORK-PR EXPOSURE: none. deploy-docs.yml has no pull_request trigger (verified 2026-08-20
+#   — zero occurrences in the file), so the secret is never exposed to a fork build.
+# NO DEFAULT (hr-tf-variable-no-operator-mint-default). Terraform resolves every root
+#   variable BEFORE -target pruning, so leaving this unprovisioned fails the whole
+#   merge-triggered apply on this root, not merely the Pages resources.
+variable "cf_api_token_pages" {
+  description = "Cloudflare API token narrowed to Account -> Cloudflare Pages:Edit for the soleur-docs Pages project (ADR-194, #7640). Account-scoped with no zone permission; minted with no expiry. Value from Doppler prd_terraform via TF_VAR_cf_api_token_pages, republished to GitHub Actions as CLOUDFLARE_API_TOKEN_PAGES by cf-pages.tf. Full scope ledger in the comment block above this declaration. No default (hr-tf-variable-no-operator-mint-default)."
+  type        = string
+  sensitive   = true
+}
+
 # No default: an unprovisioned no-default var fails the WHOLE merge-triggered apply
 # (Terraform resolves all root vars before -target pruning), so CF_API_TOKEN_DNS_EDIT MUST
 # be present in Doppler prd_terraform BEFORE this merges (ADR-065 sequencing — it already is).
