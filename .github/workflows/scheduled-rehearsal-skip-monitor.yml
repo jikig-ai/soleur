@@ -11,7 +11,9 @@
 # nothing that benefits from `step.run` memoisation; routing it through Inngest
 # would mean giving the app a GitHub token to do a job the Actions runner
 # already has one for. `scheduled-followthrough-sweeper.yml` is the same-shape
-# precedent and runs this very probe today.
+# precedent -- same shape (scheduled, repo-scoped, gh-only, files an issue), though it
+# does NOT run this probe: #7574 retires that enrolment precisely because the sweeper
+# closes on first PASS.
 #
 # WHY IT IS NOT A FOLLOW-THROUGH DIRECTIVE (the point of #7574). The sweeper
 # CLOSES a follow-through on its first PASS, and `closed_precheck` then refuses
@@ -39,9 +41,13 @@ concurrency:
 
 jobs:
   monitor:
-    runs-on: ubuntu-latest
+    # `gh run view --log` over 20 multi-MB logs otherwise inherits the 6h default.
+    timeout-minutes: 15
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      # SHA-pinned, like every other checkout in .github/workflows/. A floating tag in a
+      # PR whose subject is a supply-chain gate is the wrong default.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       # THE STREAK FILE IS THE CARRIER'S RESPONSIBILITY. The probe escalates to
       # a FAIL after N consecutive runs that could not reach a verdict; without
@@ -49,13 +55,29 @@ jobs:
       # That degrades OPEN, so the round-trip is asserted below rather than
       # assumed.
       - name: Restore transient-streak state
-        uses: actions/cache/restore@v4
+        id: streak
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: .monitor-state
-          key: rehearsal-skip-monitor-streak
+          # ROLLING WRITE KEY + PREFIX RESTORE. Actions cache entries are IMMUTABLE: a
+          # `save` against an existing key is a silent no-op (it logs and exits 0). With a
+          # FIXED key -- which is what this shipped as -- run 1 pins the cache forever, every
+          # later run restores that same value, increments it in-memory, and fails to save.
+          # The streak could never reach T5_TRANSIENT_ESCALATE_AFTER, so the one mechanism
+          # separating "permanently broken probe" from "healthy quiet window" was dead on
+          # arrival. Only a rotating write key with a prefix restore round-trips.
+          key: rehearsal-skip-monitor-streak-${{ github.run_id }}
+          restore-keys: |
+            rehearsal-skip-monitor-streak-
 
       - name: Run the skip-persistence probe
         id: probe
+        # `!cancelled()` because this step had NO status function and therefore inherited
+        # success(): a cache-service outage failing the restore above SKIPPED the probe, left
+        # `verdict` unset, and every gate below read unset as healthy -- a fully green run in
+        # which the monitor never ran. The alert step was hardened against this class and the
+        # two steps either side of it were not.
+        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           T5_PROBE_STATE: .monitor-state/streak
@@ -86,25 +108,35 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           exit 0
 
-      - name: Assert the streak file round-trips
+      - name: Assert the streak state round-trips
         if: ${{ !cancelled() }}
+        env:
+          MATCHED: ${{ steps.streak.outputs.cache-matched-key }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -uo pipefail
-          # A monitor whose escalation counter silently never persists is a
-          # monitor that can never escalate. Report it rather than discovering
-          # it during the incident it was meant to catch.
-          if [ -d .monitor-state ]; then
-            echo "monitor-state present; streak=$(cat .monitor-state/streak 2>/dev/null || echo '<cleared>')"
-          else
-            echo "::warning::.monitor-state is absent — the consecutive-TRANSIENT escalation cannot fire until cache persistence is working."
+          # ASSERT ON THE CACHE SERVICE, NOT ON THE DIRECTORY. This tested
+          # `[ -d .monitor-state ]`, which the probe step `mkdir -p`s two steps earlier in
+          # the SAME job -- so it was always true, the ::warning:: branch was unreachable
+          # code, and it passed at 100% broken persistence. A vacuous guard inside a PR whose
+          # subject is vacuous guards.
+          #
+          # It also exits NON-ZERO rather than warning. A ::warning:: does not change the job
+          # conclusion, so nothing surfaces it without someone opening the run — which
+          # hr-no-dashboard-eyeball-pull-data-yourself says will not happen. A red run is the
+          # only status GitHub surfaces on its own.
+          if [ "$RUN_NUMBER" -gt 1 ] && [ -z "$MATCHED" ]; then
+            echo "::error::cache restore returned no prior generation (run #$RUN_NUMBER). The consecutive-TRANSIENT escalation cannot fire, so a permanently broken probe is indistinguishable from a healthy quiet window."
+            exit 1
           fi
+          echo "streak state: matched-key='${MATCHED:-<none, first run>}' value=$(cat .monitor-state/streak 2>/dev/null || echo '<cleared by a real verdict>')"
 
       - name: Save transient-streak state
         if: ${{ !cancelled() }}
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: .monitor-state
-          key: rehearsal-skip-monitor-streak
+          key: rehearsal-skip-monitor-streak-${{ github.run_id }}
 
       - name: Open or update the alert issue
         # `!cancelled()` IS LOAD-BEARING, not decoration. Without an explicit status
@@ -122,8 +154,19 @@ jobs:
         run: |
           set -uo pipefail
           title="monitor: git-data rehearsal suite is skipping arms across runs"
+          # --state all, and a gh FAILURE is fatal rather than falling through to create.
+          # With --state open, an alert the operator had already closed was invisible, so a
+          # still-persisting FAIL filed a brand-new issue every 06:00 UTC; and
+          # `|| existing=""` turned any search error into "none found" -> duplicate. Both
+          # directions produce operator-facing issue spam.
+          ls_rc=0
           existing=$(gh issue list --repo "${{ github.repository }}" \
-            --state open --search "$title in:title" --json number --jq '.[0].number // empty') || existing=""
+            --state all --search "$title in:title" --json number,state \
+            --jq '[.[] | select(.state == "OPEN")][0].number // empty') || ls_rc=$?
+          if [ "$ls_rc" -ne 0 ]; then
+            echo "::error::gh issue list failed (exit $ls_rc); refusing to file a possibly-duplicate alert."
+            exit 1
+          fi
           body_file="${RUNNER_TEMP}/body.md"
           {
             printf '%s\n\n' "The rehearsal skip-persistence probe returned FAIL."
@@ -131,17 +174,37 @@ jobs:
             printf '```\n%s\n```\n\n' "$SUMMARY"
             printf '%s\n' "ADR-188 accepts that nothing bounds these arms' skips ACROSS runs; this monitor is that bound. A sustained skip means the deferred pre-baked image (#7535) is owed."
           } > "$body_file"
+          # Report a FAILED filing rather than letting a red run stand for both outcomes --
+          # the same treatment the postmerge job gets in this PR. Without it, "alert filed"
+          # and "alert lost" are the same observable.
+          iss_rc=0
+          set +e
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --repo "${{ github.repository }}" --body-file "$body_file"
           else
             gh issue create --repo "${{ github.repository }}" \
               --title "$title" --label "type/chore" --body-file "$body_file"
           fi
+          iss_rc=$?
+          set -e
+          if [ "$iss_rc" -ne 0 ]; then
+            echo "::error::the rehearsal-skip alert could NOT be filed (gh exited $iss_rc). The FAIL exists only in this run log; see $RUN_URL."
+            exit 1
+          fi
 
       - name: Report verdict
         if: ${{ !cancelled() }}
+        env:
+          VERDICT: ${{ steps.probe.outputs.verdict }}
+          RC: ${{ steps.probe.outputs.rc }}
         run: |
-          echo "probe verdict: ${{ steps.probe.outputs.verdict }} (rc=${{ steps.probe.outputs.rc }})"
-          # A monitor must not go red on a quiet window, but a FAIL is a real
-          # signal and the alert issue above is the durable record.
-          [ "${{ steps.probe.outputs.verdict }}" != "fail" ] || exit 1
+          set -uo pipefail
+          # POSITIVE-TRUTH ORDERING. This was `[ "$VERDICT" != "fail" ] || exit 1`, which
+          # reads an UNSET verdict as healthy — so any path that skipped or crashed the probe
+          # step produced a green, silent run. Assert on the value; escalate on unknown. A
+          # monitor that did not run is not a clean window.
+          case "$VERDICT" in
+            pass|transient) echo "probe verdict: $VERDICT (rc=$RC)" ;;
+            fail)           echo "probe verdict: fail (rc=$RC)"; exit 1 ;;
+            *)              echo "::error::the probe produced no verdict ('$VERDICT', rc='$RC'). A monitor that did not run is not a clean window."; exit 1 ;;
+          esac

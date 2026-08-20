@@ -95,7 +95,28 @@ fi
 # Run scanner against the proposed content. printf '%s' avoids echo's
 # backslash interpretation (security review P2-1) which could split lines and
 # hide regex matches.
-verdict="$(printf '%s' "$content" | SKILL_SECURITY_SCAN_OFFLINE=1 bash "$SCANNER" 2>/dev/null | head -1 | grep -oE 'HIGH-RISK|REVIEW|LOW-RISK' || echo 'UNKNOWN')"
+# CAPTURE THE STATUS (#7629). run-scan.sh's header advertised "Exit code: 0 always
+# (advisory)" and this line was written against that contract; the header is corrected in this
+# same change to say the VERDICT is advisory and the EXIT STATUS is not. `2>/dev/null | head -1
+# | grep -oE ... || echo UNKNOWN` converts a crashed scanner into UNKNOWN, and this hook maps
+# UNKNOWN to `ask` -- so a scanner that died while scanning a genuinely HIGH-RISK skill
+# downgrades a `deny` into something the operator can click through, and the traceback that
+# would have explained it is discarded. This file's own header calls itself the load-bearing
+# gate.
+sc_rc=0
+set +e
+sc_out="$(printf '%s' "$content" | SKILL_SECURITY_SCAN_OFFLINE=1 bash "$SCANNER" 2>"${TMPDIR:-/tmp}/sss-write.$$.err")"
+sc_rc=$?
+set -e
+if [ "$sc_rc" -ne 0 ]; then
+  printf 'skill-security-scan: run-scan.sh exited %s; treating as HIGH-RISK (a crashed scanner has produced no verdict)\n' "$sc_rc" >&2
+  head -c 400 "${TMPDIR:-/tmp}/sss-write.$$.err" >&2 2>/dev/null || true
+  rm -f "${TMPDIR:-/tmp}/sss-write.$$.err" 2>/dev/null || true
+  verdict="HIGH-RISK"
+else
+  rm -f "${TMPDIR:-/tmp}/sss-write.$$.err" 2>/dev/null || true
+  verdict="$(printf '%s' "$sc_out" | head -1 | grep -oE 'HIGH-RISK|REVIEW|LOW-RISK' || echo 'UNKNOWN')"
+fi
 
 slug="$(path_to_slug "$file_path")"
 

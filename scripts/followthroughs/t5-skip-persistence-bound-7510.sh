@@ -49,14 +49,24 @@ set -uo pipefail
 T5_PROBE_STATE="${T5_PROBE_STATE:-${TMPDIR:-/tmp}/t5-skip-probe-transient-streak}"
 T5_TRANSIENT_ESCALATE_AFTER="${T5_TRANSIENT_ESCALATE_AFTER:-3}"
 
-_transient() {  # $1 = human reason
+_transient() {  # $1 = human reason -- ALWAYS exits, never returns
   local streak=0
   [[ -r "$T5_PROBE_STATE" ]] && streak=$(tr -cd '0-9' < "$T5_PROBE_STATE" 2>/dev/null || echo 0)
-  [[ -n "$streak" ]] || streak=0
-  streak=$((streak + 1))
+  # BASE-10 AND SHAPE-VALIDATED. `$((streak + 1))` reads a LEADING ZERO as octal, so a stored
+  # `08`/`09` is an arithmetic EVALUATION ERROR -- and because this file runs without `set -e`,
+  # that error made the assignment fail, the function RETURN instead of reaching its exit, and
+  # every `... || _transient "..."` caller fall straight through to the PASS path. Measured:
+  # with gh entirely broken the probe printed
+  #   "PASS: 0 loud rehearsal skips ... across 0 observed post-merge run(s) (0 sampled)"
+  # and exited 0 -- a clean bill of health over a sample of zero, which is verbatim the
+  # un-run-instrument failure this file exists to prevent. `007` corrupts silently to 8.
+  [[ "$streak" =~ ^[0-9]+$ ]] || streak=0
+  streak=$((10#$streak + 1))
   printf '%s' "$streak" > "$T5_PROBE_STATE" 2>/dev/null || true
   echo "TRANSIENT: $1 (consecutive transient runs: ${streak}/${T5_TRANSIENT_ESCALATE_AFTER})" >&2
-  if [[ "$streak" -ge "$T5_TRANSIENT_ESCALATE_AFTER" ]]; then
+  # The threshold is operator-settable, so it gets the same treatment as the counter.
+  [[ "$T5_TRANSIENT_ESCALATE_AFTER" =~ ^[0-9]+$ ]] || T5_TRANSIENT_ESCALATE_AFTER=3
+  if [[ "$streak" -ge $((10#$T5_TRANSIENT_ESCALATE_AFTER)) ]]; then
     echo "FAIL: the probe has been unable to reach a verdict for ${streak} consecutive runs." >&2
     echo "      This is no longer a transient condition. A probe that cannot measure is not" >&2
     echo "      evidence that there is nothing to measure -- treat this as a broken instrument," >&2

@@ -138,8 +138,9 @@ carve-out MORE load-bearing, not less.
    > **Scoped 2026-08-20 (#7613):** that last clause is a property of **the render's** strip
    > expression, and it is true of it. It was read as a property of the whole pipeline, which
    > it is not — the *test suite* runs a SECOND, independent strip when it derives its
-   > `.code.sh` corpora, and that one is whole-line-only and therefore leaves trailing `#`
-   > standing. See the amendment at the end of this file.
+   > `.code.sh` corpora. Until #7613 that one was whole-line-only and left trailing `#`
+   > standing; #7613 extends it to blank ` # ` tails as well. Either way the clause above is a
+   > property of the RENDER's expression, not of the pipeline. See the amendment at the end.
 
 `git-data-runcmd-rehearsal.test.sh`'s B1 byte-identity check now compares against the
 **stripped** source, reading the expression out of `git-data.tf` rather than restating it — a
@@ -242,7 +243,7 @@ The registry uses `/(?m)^[ \t]*#([ \t][^\n]*)?\n/` (`local.registry_rationale_st
 |---|---|---|
 | Injected scripts (both hosts) | preserve `#!` only | scripts have no `#`-directive but a shebang |
 | The cloud-init template itself (registry) | preserve `#!` **and** any `#`-directive without a separator | `#cloud-config` is load-bearing and is a comment by syntax |
-| A **test suite's** `.code.sh` corpus, derived from an already-stripped render (#7613) | preserve `#!`, `${var#pat}`, `$#` and `#` inside strings — strip only ` # ` tails: `[[:space:]]+#([[:space:]].*)?$` | the input is shell that has ALREADY been through the render strip, so what survives is mid-line and trailing `#`, which is exactly what the other two expressions are not built to touch |
+| A **test suite's** `.code.sh` corpus, derived from an already-stripped render (#7613) | preserve `#!`, `${var#pat}`, `$#` and a URL fragment — strip only ` # ` tails. **Python `re`, so `[ \t]+#([ \t].*)?$`, NOT `[[:space:]]`** | the input is shell that has ALREADY been through the render strip, so what survives is mid-line and trailing `#`, which is exactly what the other two expressions are not built to touch |
 
 Do not port an expression between these two cases. Verify the divergence the same way #7278
 did: assert the first line survives, assert every shebang survives, and assert the strip is
@@ -373,7 +374,8 @@ comment and the R3 family's predicates. Nothing in this ADR said so, and a reade
 The new row above is not a third dialect for its own sake. Its INPUT is different: it receives
 shell that has already been through the render strip, so whole-line comments are gone by
 construction and what remains is precisely the mid-line and trailing `#` the other two
-expressions are not built to touch. `[[:space:]]+#([[:space:]].*)?$` requires whitespace
+expressions are not built to touch. `[ \t]+#([ \t].*)?$` — written for Python `re`, which has no POSIX classes, so
+`[[:space:]]` there is the literal set `{[,:,s,p,a,c,e,]}` and strips nothing — requires whitespace
 before the `#` and either end-of-line or whitespace after it, which is what preserves
 `${var#pat}`, `$#`, `#!` and `#` inside a URL fragment.
 
@@ -406,6 +408,17 @@ the suite asserts elsewhere and should not depend on the render's strip continui
 exhaustive. The suite's own comment says this in the same words, rather than implying the
 change fixed something live.
 
-**Known false positive, recorded rather than papered over:** the expression strips
+**Known false positive, and it is a LATENT BREAK rather than a bound.** The expression strips
 `msg="value # not a comment"` to `msg="value`. There are zero such lines in either artifact
-today, and the suite asserts that count, so this is a bound rather than a latent break.
+today — measured — but an earlier revision of this paragraph claimed "the suite asserts that
+count", and it does not: no assertion anywhere measures surviving trailing comments or at-risk
+tokens in the real corpora. Those numbers live only in prose. Worse, this particular shape is
+undetectable by the guard that does exist, because `_b2_strip` corrupts it identically, so a
+parity check stays green. Asserting an assertion is the same defect class this ADR's amendment
+is about, so it is stated as what it is: if such a line is ever introduced upstream, nothing
+here will catch it.
+
+**And the rule-table row above states a guarantee the expression lacks.** It says the expression
+preserves "`#` inside strings". It preserves a URL fragment (`#` with no preceding whitespace)
+and does NOT preserve a ` # ` sequence inside a quoted string. The table is the normative artifact
+this ADR tells the next host to port from, so the row names the narrower, true property.

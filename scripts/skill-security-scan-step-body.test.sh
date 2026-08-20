@@ -93,21 +93,41 @@ PY
 }
 
 # G1.1 — every in-scope name resolves to exactly one extractable body.
+# Destination is keyed by the step's own identity, so a failed extraction leaves ITS file
+# missing rather than renumbering everyone else's.
+_dest_for() {
+  case "$1" in
+    "Identify added SKILL/agent files in PR diff")     printf '%s' "$SANDBOX/body.identify" ;;
+    "Validate override artifacts (if any)")            printf '%s' "$SANDBOX/body.override" ;;
+    "Run scanner against each added SKILL/agent")      printf '%s' "$SANDBOX/body.scan" ;;
+    "Detect merged HIGH-RISK skills without override") printf '%s' "$SANDBOX/body.audit" ;;
+    *) printf '%s' "$SANDBOX/body.UNMAPPED" ;;
+  esac
+}
 _extracted=0
 for _n in "${IN_SCOPE_PR[@]}"; do
-  if extract_body "$WF_PR" "$_n" "$SANDBOX/body.$_extracted" 2>"$SANDBOX/x.err"; then
+  if extract_body "$WF_PR" "$_n" "$(_dest_for "$_n")" 2>"$SANDBOX/x.err"; then
     pass; _extracted=$((_extracted + 1))
   else
     fail "G1.1 pr-trailer: could not extract step $_n: $(cat "$SANDBOX/x.err")"
   fi
 done
 for _n in "${IN_SCOPE_PM[@]}"; do
-  if extract_body "$WF_PM" "$_n" "$SANDBOX/body.$_extracted" 2>"$SANDBOX/x.err"; then
+  if extract_body "$WF_PM" "$_n" "$(_dest_for "$_n")" 2>"$SANDBOX/x.err"; then
     pass; _extracted=$((_extracted + 1))
   else
     fail "G1.2 postmerge: could not extract step $_n: $(cat "$SANDBOX/x.err")"
   fi
 done
+
+# G1.0 — THE COUNT THE HEADER CLAIMS. The in-scope comment says "their number is asserted
+# against a literal below" and no such assertion existed; `_extracted` was a filename
+# counter and nothing more. Now it is the claim it was described as.
+if [ "$_extracted" -eq 4 ]; then
+  pass
+else
+  fail "G1.0: extracted ${_extracted} in-scope run: bodies, expected exactly 4 — the in-scope roster and the workflows have diverged"
+fi
 
 # G1.3 — SHAPE PREDICATE. Every `run:` body in both workflows is either in the
 # in-scope set or in the written-down exclusion set. This is what catches a
@@ -179,15 +199,24 @@ STUB
 # entire `set -e` abort class structurally invisible.
 run_body() {  # $1=body file $2=cwd; env passed by caller; stdout+stderr -> $OUT, status -> $RC
   OUT="$SANDBOX/out.$$.$RANDOM"
-  ( cd "$2" && GITHUB_OUTPUT="$2/gh_output" bash --noprofile --norc -eo pipefail "$1" ) \
+  # RUNNER_TEMP is exported so the extracted bodies' "${RUNNER_TEMP:-/tmp}/*.err" captures
+  # land in this fixture, not in a literal /tmp path shared by every concurrent shard.
+  ( cd "$2" && GITHUB_OUTPUT="$2/gh_output" RUNNER_TEMP="$2" bash --noprofile --norc -eo pipefail "$1" ) \
     >"$OUT" 2>&1
   RC=$?
 }
 
-BODY_IDENT="$SANDBOX/body.0"   # Identify added SKILL/agent files in PR diff
-BODY_OVER="$SANDBOX/body.1"    # Validate override artifacts (if any)
-BODY_SCAN="$SANDBOX/body.2"    # Run scanner against each added SKILL/agent
-BODY_AUDIT="$SANDBOX/body.3"   # Detect merged HIGH-RISK skills without override
+# BOUND BY NAME, NOT BY INDEX (review). These were `body.0`..`body.3`, positional, while
+# `_extracted` only increments on SUCCESS -- so one failed extraction shifted every later
+# index: BODY_SCAN would hold the audit body and BODY_AUDIT would name a file that does not
+# exist. `bash` on a missing file exits 127, so fixtures 1b/1c/1d/1e -- every must-FAIL row --
+# would have PASSED for the wrong reason. The run still reds via G1.1, so it was not a
+# shipping fail-open, but the RC evidence became meaningless in exactly the run you need to
+# read it in.
+BODY_IDENT="$SANDBOX/body.identify"
+BODY_OVER="$SANDBOX/body.override"
+BODY_SCAN="$SANDBOX/body.scan"
+BODY_AUDIT="$SANDBOX/body.audit"
 
 # ── 1a — a base SHA git cannot resolve must FAIL CLOSED ──────────────────────
 #
@@ -222,8 +251,15 @@ fi
 _fx=$(mkfixture 1b)
 mkdir -p "$_fx/plugins/soleur/skills/demo"
 printf -- '---\nname: demo\n---\nbody\n' > "$_fx/plugins/soleur/skills/demo/SKILL.md"
+# THE STUB PRINTS A VALID VERDICT *AND* EXITS NON-ZERO. Its first draft wrote only to
+# stderr, so `$sc_out` was empty and the EMPTY-VERDICT branch fired -- meaning this fixture
+# pinned 1c's guard, not the crash guard it is named for. Measured: reverting
+# `if [ "$sc_rc" -ne 0 ]` to `if false` left the suite 19 passed / 0 failed. A scanner that
+# prints a clean verdict and then dies is the only input that isolates the exit-status check,
+# and it is the realistic one -- run-scan.sh emits its banner before its later abort paths.
 cat > "$_fx/$SCAN_REL" <<'STUB'
 #!/usr/bin/env bash
+echo "# skill-security-scan verdict: LOW-RISK"
 echo "Traceback (most recent call last):" >&2
 echo "  File \"run-scan.py\", line 1, in <module>" >&2
 echo "RuntimeError: rule pack failed to load" >&2
@@ -235,7 +271,7 @@ ADDED="plugins/soleur/skills/demo/SKILL.md" BASE_SHA=x HEAD_SHA=y \
 if [ "$RC" -ne 0 ]; then
   pass
 else
-  fail "1b SCANNER CRASH: body exited 0 though run-scan.sh exited 1 with a traceback; a crashed scanner is scored as a clean skill. Output: $(head -c 300 "$OUT")"
+  fail "1b SCANNER CRASH: body exited 0 though run-scan.sh printed LOW-RISK and then exited 1; a scanner that died after emitting a verdict is scored as a clean skill, so the exit-status check is not load-bearing. Output: $(head -c 300 "$OUT")"
 fi
 if grep -q 'RuntimeError: rule pack failed to load' "$OUT" 2>/dev/null; then
   pass
@@ -397,6 +433,23 @@ else
   fail "1g.iv HIGH-RISK WITHOUT OVERRIDE: scan body exited 0 — the gate's primary purpose no longer holds"
 fi
 
+# ── 1h — the postmerge audit must PASS on a clean push ───────────────────────
+# BODY_AUDIT was exercised at exactly one site (1e, a must-FAIL), so the harness's own
+# doctrine -- "a harness that only ever asserts MUST-FAIL cannot see a gate that becomes too
+# aggressive" -- was applied to the pr-trailer bodies and not to the audit. Measured:
+# replacing the entire audit body with `exit 1` left the suite green.
+_fx=$(mkfixture 1h)
+( cd "$_fx" && git init -q -b main . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m base \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m head ) >/dev/null 2>&1 || {
+  printf 'FAIL: 1h fixture repo could not be built\n' >&2; exit 2; }
+MERGE_SHA=$(git -C "$_fx" rev-parse HEAD) run_body "$BODY_AUDIT" "$_fx"
+if [ "$RC" -eq 0 ]; then
+  pass
+else
+  fail "1h CLEAN PUSH: the postmerge audit exited $RC on a two-commit history with no added skills — the audit now fails closed on healthy pushes. Output: $(head -c 300 "$OUT")"
+fi
+
 # ── Assertion floor ──────────────────────────────────────────────────────────
 #
 # DELIBERATELY NOT ROUTED THROUGH fail(). A floor that increments the same
@@ -406,7 +459,9 @@ fi
 # directly, so deleting assertions above reddens the run rather than shrinking
 # both sides of an equality.
 _total=$((passes + fails))
-_FLOOR=17
+# Set to the FULL measured count (20 = 19 fixtures + G1.0), not a slack figure: any headroom
+# between a floor and the real total is deletable-assertion budget, not padding.
+_FLOOR=21
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d assertion(s) ran, floor is %d — the harness lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2

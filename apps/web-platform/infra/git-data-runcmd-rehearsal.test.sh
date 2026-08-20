@@ -290,8 +290,13 @@ fi
 #
 # The GREEN value is `[ \t]+#([ \t].*)?$`, which BLANKS THE TAIL IN PLACE rather than deleting
 # the line -- line numbers must be preserved because R3(1)/(2)/(2b)/(2d) are ordering
-# predicates over them. The `+` prefix (not `*`) is load-bearing: `_b2_strip`'s zero-width
-# form destroys `${var#pat}` -> `${var`, `$#` -> `$`, and `#!/bin/sh` -> empty, all measured.
+# predicates over them.
+#
+# TWO INDEPENDENT CHOICES, AND AN EARLIER REVISION CREDITED BOTH TO ONE. Holding the tail
+# constant and varying only `+` -> `*`, measured: the `+` prefix prevents exactly ONE
+# destruction, `$#` -> `$`. The other three (`${var#pat}`, a URL fragment, `#!/bin/sh`) are
+# saved by the BOUNDED TAIL `([ \t].*)?$`, which the star form also has. `_b2_strip`
+# (`[[:space:]]*#.*$`) destroys all four because it is zero-width AND unbounded.
 _R3_TAIL_STRIP='[ \t]+#([ \t].*)?$'
 
 R3_TAIL_STRIP="$_R3_TAIL_STRIP" python3 - "$TMP/rendered.yml" "$TMP" <<'PY'
@@ -352,7 +357,9 @@ open(f"{out}/sshd-stage.sh", "w").write(sshd[0])
 luks = [c for c in d["runcmd"] if isinstance(c, str) and "STAGE=luks_open" in c]
 assert len(luks) == 1, f"expected exactly 1 luks_open runcmd block, found {len(luks)}"
 open(f"{out}/luks-stage.sh", "w").write(luks[0])
-_tail = os.environ.get("R3_TAIL_STRIP", "")
+# NO DEFAULT. `.get(..., "")` degrades a MISSING export into "do not strip at all" -- the
+# exact fail-open this strip exists to close, reachable by deleting one env assignment.
+_tail = os.environ["R3_TAIL_STRIP"]
 _tre = re.compile(_tail) if _tail else None
 def _strip_code(_t):
     _out = []
@@ -1335,8 +1342,16 @@ chmod +x /usr/local/bin/git-data-emit
 # calls it bare. There is no init in a container; the restart's tolerance is not what S1 tests.
 printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/systemctl
 chmod +x /usr/local/bin/systemctl
-# The fixture marker goes FIRST -- before apt, before anything environmental can fail --
-# so its presence proves the mount worked and the driver started.
+# WHERE THIS SITS, AND WHY IT IS NOT FIRST (#7613 review). An earlier revision of this
+# comment claimed the marker precedes apt "so its presence proves the mount worked". It
+# does not -- apt-get update/install run above it under `set -e`. That placement is
+# nonetheless correct and moving the echo up would be a REGRESSION: an apt failure is the
+# environment decline ADR-188 accepts, so it must route to `did-not-run`, and emitting the
+# fixture marker before apt would convert every apt failure into a hard fixture-defect FAIL
+# -- reinstating the false-FAIL #7291 removed. What the marker actually buys is narrower
+# than the old comment said: it proves the driver reached the END of setup, so a failure
+# BELOW this line is deterministic. The mount-typo case it used to be credited with is
+# handled by the existence guard in _s1_run instead.
 echo "S1_FIXTURE_OK"
 set +e
 # The execution marker sits immediately above the stage invocation. Absence of this line is
@@ -1349,6 +1364,19 @@ S1DRV
 
   _s1_run() { # $1 = stage script to mount
     rm -rf "$TMP/s1out"; mkdir -p "$TMP/s1out"; : > "$TMP/s1out/sshd-capture.log"
+    # MOUNT-SOURCE EXISTENCE GUARD (#7613 review), ported from T5. Without it S1 reopened
+    # the fail-open T5 closes and its own comment claimed to have closed: docker exits 125
+    # for BOTH a failed image pull (environment) and a bad `-v` SOURCE (a defect in THIS
+    # file), 125 is in _S1_ENV_RCS, and a mount typo emits NEITHER marker -- so it walks
+    # rung 1 (no), rung 2 (no: S1's fixture marker is POSITIVE, so a typo cannot produce
+    # it), rung 3 (125 IS allowlisted), and lands on `did-not-run`: a green skip, forever.
+    # The rung-2 rationale was mis-ported from T5, whose fixture marker is a FAILURE marker
+    # and therefore genuinely intercepts that case. A positive marker cannot, so the
+    # interception has to happen here instead, before the ladder ever runs.
+    local _m
+    for _m in "$1" "$TMP/01-hardening.conf" "$TMP/sshd-drive.sh" "$TMP/s1out"; do
+      [ -e "$_m" ] || { echo "FIXTURE-FAIL: S1 mount source is absent: $_m" >&2; exit 2; }
+    done
     docker run --rm \
       -v "$1:/work/sshd-stage.sh:ro" \
       -v "$TMP/01-hardening.conf:/work/01-hardening.conf:ro" \
@@ -1396,7 +1424,14 @@ S1DRV
   # ("... echo S1_DRIVER_REACHED_STAGE: command not found") from satisfying the read. The
   # first draft used `-qx` in both places and this guard failed against a driver that carried
   # both markers.
-  if grep -qF "$_S1_MARKER" "$TMP/sshd-drive.sh" && grep -qF "$_S1_FIXTURE_MARKER" "$TMP/sshd-drive.sh"; then
+  # ANCHORED ON THE EMIT FORM (#7613 review), matching T5's `^echo <marker>$`. This was
+  # `grep -qF`, an unanchored substring over a file that INCLUDES its own comments -- so
+  # renaming the real echo and leaving `# emits S1_DRIVER_REACHED_STAGE` above it satisfied
+  # the guard while S1_MARKER_SEEN went permanently `no`, routing every run to a green skip.
+  # That is verbatim the failure this guard exists to prevent, and the same
+  # comment-satisfaction class #7613 closes three arms down.
+  if grep -qE "^[[:space:]]*echo \"${_S1_MARKER}\"[[:space:]]*$" "$TMP/sshd-drive.sh" \
+     && grep -qE "^[[:space:]]*echo \"${_S1_FIXTURE_MARKER}\"[[:space:]]*$" "$TMP/sshd-drive.sh"; then
     pass
   else
     fail "S1: an execution marker is absent from the mounted driver (marker=$(grep -cF "$_S1_MARKER" "$TMP/sshd-drive.sh" 2>/dev/null || true), fixture=$(grep -cF "$_S1_FIXTURE_MARKER" "$TMP/sshd-drive.sh" 2>/dev/null || true))" \
@@ -1901,19 +1936,30 @@ _R3_R2D_PAT='^[[:space:]]*GIT_DATA_RUNCMD_DETAIL='
 # today. The property is a SET -- delete one reporting site, add an unrelated one, and the
 # count is unchanged while the property is violated. Sub-assertion (iv) already does message-
 # set equality for fatals and is the model this is being moved to.
-_R3B_EXPECTED_SITES='gitdata_doppler_dl
-gc_timer
-luks_open
-provision
-sshd_config
-volume_mount'
-_r3b_sites_ok() {  # $1 = newline-separated site names; 0 = accept, 1 = reject
-  # A SET, NOT A FLOOR (#7613 finding 3). Was `count >= 6`, which holds across the exact
-  # mutation that matters: delete one reporting site, add an unrelated one, and the count is
-  # unchanged while the property is violated. Sub-assertion (iv) already does message-set
-  # equality for fatals and is the model followed here.
-  [ "$(printf '%s\n' "$1" | grep -c . || true)" -ge 6 ] || return 1
-  [ "$(printf '%s\n' "$1" | sort -u)" = "$(printf '%s\n' "$_R3B_EXPECTED_SITES" | sort -u)" ]
+# MEASURED, NOT GUESSED (#7613 review). The first draft of this roster held STAGE= names
+# (`luks_open`, `volume_mount`, …) while the analyzer's first field is the enclosing
+# HANDLER/STAGE WINDOW — so wiring the arm to it would have rejected on every single run.
+# These four are what a fresh render actually produces. Measured with the arm's own
+# analyzer: 7 emit rows, of which 6 are reporting (non-`info`) sites, across 4 distinct
+# windows -- which is why the floor conjunct below is `-ge 6` and not 8. An earlier
+# revision of this comment said "8 reporting emit sites", contradicting the code three
+# lines down.
+_R3B_EXPECTED_SITES='gc_timer
+luks_err
+on_err
+sshd_config'
+_r3b_sites_ok() {  # $1 = row count, $2 = newline-separated window names; 0 = accept
+  # A FLOOR **AND** A SET (#7613 finding 3). The floor alone holds across the exact mutation
+  # that matters — delete one reporting site, add an unrelated one — because the count does
+  # not move. Sub-assertion (iv) already does message-set equality for fatals and is the model.
+  #
+  # STATED HONESTLY: the set is over WINDOWS, so this catches a window disappearing and a
+  # window appearing. It does NOT catch swapping one emit site for another WITHIN a window
+  # that still has others; the floor is what bounds that direction, and it bounds it only by
+  # cardinality. Pinning the per-window distribution would close it and would hard-code a
+  # snapshot of today's render, which is the staleness AP-023 warns about one level up.
+  [ "$1" -ge 6 ] || return 1
+  [ "$(printf '%s\n' "$2" | sort -u)" = "$(printf '%s\n' "$_R3B_EXPECTED_SITES" | sort -u)" ]
 }
 
 if [ -s "$TMP/luks-stage.code.sh" ]; then
@@ -2004,7 +2050,7 @@ _r3_ln_in() { grep -n "$2" "$1" 2>/dev/null | head -1 | cut -d: -f1; }
 _g5_dir="$TMP/g5"; mkdir -p "$_g5_dir"
 _g5_new() { R3_TAIL_STRIP="$_R3_TAIL_STRIP" python3 -c '
 import os, re, sys
-tail = os.environ.get("R3_TAIL_STRIP", "")
+tail = os.environ["R3_TAIL_STRIP"]   # no default: a missing export is a defect, not "do not strip"
 tre = re.compile(tail) if tail else None
 out = []
 for l in open(sys.argv[1]).read().splitlines():
@@ -2026,9 +2072,23 @@ sys.stdout.write("\n".join(out) + "\n")
 if [ -s "$TMP/runcmd-all.sh" ]; then
   _g5_new "$TMP/runcmd-all.sh" > "$_g5_dir/new.txt" 2>/dev/null
   _b2_strip "$TMP/runcmd-all.sh" > "$_g5_dir/b2.txt" 2>/dev/null
-  if diff -q "$_g5_dir/new.txt" "$_g5_dir/b2.txt" >/dev/null 2>&1; then pass; else
-    fail "GUARD 5(a): the tail strip and _b2_strip disagree on the real runcmd concatenation — B2's corpus and R3's are no longer the same bytes, so B2's cross-check is measuring a different file" \
-         "$(diff "$_g5_dir/b2.txt" "$_g5_dir/new.txt" 2>/dev/null | head -6)"; fi
+  # (5a) PINS THE ARMS' OWN CORPUS -- it no longer compares against `_b2_strip`.
+  #
+  # THE _b2_strip PARITY ARM WAS REMOVED, and that is a correction rather than a relaxation.
+  # It asserted the two strippers AGREE on the real render, which is true only while the
+  # corpus contains none of the tokens they treat differently. Measured by injecting single
+  # lines into the real render: `base=${p#/x/}`, `argc=$#`, `#!/bin/sh` and `#nospace` each
+  # made it RED -- i.e. it fired precisely when the prophylaxis started earning its keep, and
+  # its failure text blamed B2's cross-check. A tripwire on improvement is one the next
+  # engineer deletes under time pressure. What it uniquely detected -- a DISABLED strip -- is
+  # now caught positively by 5(b) instead.
+  #
+  # What survives is the assertion that actually protects the arms: the strip's output IS the
+  # corpus every R3 predicate reads. Change the `^\s*#` rule at the extraction site alone and
+  # this reds, where the old pairing stayed green while the arms read a file no guard checked.
+  if diff -q "$_g5_dir/new.txt" "$TMP/runcmd-all.code.sh" >/dev/null 2>&1; then pass; else
+    fail "GUARD 5(a): the tail strip's output differs from runcmd-all.code.sh — the corpus every R3 predicate reads is not what this guard measured" \
+         "$(diff "$TMP/runcmd-all.code.sh" "$_g5_dir/new.txt" 2>/dev/null | head -6)"; fi
 else
   fail "GUARD 5(a): runcmd-all.sh absent, parity unverifiable"
 fi
@@ -2042,8 +2102,14 @@ _g5_new "$_g5_dir/risk.sh" > "$_g5_dir/risk.new" 2>/dev/null
 _b2_strip "$_g5_dir/risk.sh" > "$_g5_dir/risk.b2" 2>/dev/null
 _g5_keeps=$(grep -cE '\$\{path#/prefix/\}|argc=\$#|#anchor' "$_g5_dir/risk.new" 2>/dev/null || true)
 _g5_b2_keeps=$(grep -cE '\$\{path#/prefix/\}|argc=\$#|#anchor' "$_g5_dir/risk.b2" 2>/dev/null || true)
-if [ "$_g5_keeps" -eq 3 ] && [ "$_g5_b2_keeps" -eq 0 ]; then pass; else
-  fail "GUARD 5(b): on the at-risk fixture the tail strip preserved ${_g5_keeps}/3 tokens and _b2_strip preserved ${_g5_b2_keeps}/3 (expected 3 and 0) — the two strippers no longer differ in the way that justifies not reusing _b2_strip" \
+# THE THIRD CONJUNCT IS WHAT MAKES THIS SELF-SUFFICIENT (#7613 review). The first two
+# assert only that at-risk tokens SURVIVE, which is equally true when the tail strip is
+# disabled entirely -- so with `_R3_TAIL_STRIP=''` this arm passed while the mechanism it
+# guards did nothing. Asserting that a genuine ` # trailing` tail was REMOVED is the positive
+# direction, and it is the assertion that lets the _b2_strip parity arm go.
+_g5_stripped=$(grep -cE '^plain=1$' "$_g5_dir/risk.new" 2>/dev/null || true)
+if [ "$_g5_keeps" -eq 3 ] && [ "$_g5_b2_keeps" -eq 0 ] && [ "$_g5_stripped" -eq 1 ]; then pass; else
+  fail "GUARD 5(b): on the at-risk fixture the tail strip preserved ${_g5_keeps}/3 at-risk tokens (expected 3), _b2_strip preserved ${_g5_b2_keeps}/3 (expected 0), and the strip removed ${_g5_stripped}/1 genuine trailing tails (expected 1 — 0 means the strip is disabled) — the two strippers no longer differ in the way that justifies not reusing _b2_strip" \
        "new=[$(tr '\n' ' ' < "$_g5_dir/risk.new")] b2=[$(tr '\n' ' ' < "$_g5_dir/risk.b2")]"; fi
 
 # ── FIXTURE A — the real seed relocated BELOW the trap, with a trailing comment naming the
@@ -2111,7 +2177,7 @@ printf 'git-data-emit stage level msg "$_luks_detail"   # guarded by [ -s "$_luk
 # arm's own guard predicate over the result.
 _b_hits=$(R3_GUARD_PAT="$_R3_GUARD_PAT" R3_TAIL_STRIP="$_R3_TAIL_STRIP" python3 -c '
 import os, re, sys
-tail = os.environ.get("R3_TAIL_STRIP", "")
+tail = os.environ["R3_TAIL_STRIP"]   # no default: a missing export is a defect, not "do not strip"
 tre = re.compile(tail) if tail else None
 out = []
 for l in open(sys.argv[1]).read().splitlines():
@@ -2122,9 +2188,13 @@ for l in open(sys.argv[1]).read().splitlines():
     out.append(l)
 pat = re.compile(os.environ["R3_GUARD_PAT"] + re.escape("$_luks_detail"))
 print(len(pat.findall("\n".join(out))))
-' "$_fxB" 2>/dev/null || echo 0)
-if [ "${_b_hits:-1}" = "0" ]; then pass; else
-  fail "R3(3b)(ii) CONTROL: the arm's guard predicate found ${_b_hits} match(es) on a corpus whose ONLY occurrence of the guard shape is a trailing comment — deleting a real guard and leaving prose about it reports GUARDED" \
+' "$_fxB" 2>"$_r3c_dir/B.err") || _b_hits=ERROR
+# FAIL CLOSED (#7613 review). This was `2>/dev/null || echo 0`, and 0 is the PASS value --
+# so a KeyError, a bad regex, or an absent python3 reported "no match" and the one control
+# written to prove a deleted guard plus prose reports GUARDED could not tell "no match"
+# from "did not run". Every sibling guard in this file fails closed; this was the outlier.
+if [ "${_b_hits:-ERROR}" = "0" ]; then pass; else
+  fail "R3(3b)(ii) CONTROL: the arm's guard predicate returned '${_b_hits}' (expected 0) on a corpus whose ONLY occurrence of the guard shape is a trailing comment; ERROR means the predicate could not run: $(head -c 200 "$_r3c_dir/B.err" 2>/dev/null) — deleting a real guard and leaving prose about it reports GUARDED" \
        "That reopens the literal-leak branch the guard exists to close."; fi
 
 # ── FIXTURE B' — R3(3d): a trailing comment matching the deletion sed's shape must not be
@@ -2140,12 +2210,12 @@ if cmp -s "$_fxBp" "$_bp_mut"; then pass; else
 # ── FIXTURE C — one reporting site deleted and one unrelated site added. Finding (3): a
 #    `>= 6` COUNT floor holds across that swap; the property is a SET.
 _fxC_b="$_r3c_dir/C_before"; _fxC_a="$_r3c_dir/C_after"
-printf 'luks_open\nvolume_mount\nsshd_config\ngitdata_doppler_dl\ngc_timer\nprovision\n' > "$_fxC_b"
-printf 'luks_open\nvolume_mount\nsshd_config\ngitdata_doppler_dl\ngc_timer\nZZZ_unrelated\n' > "$_fxC_a"
+printf 'gc_timer\nluks_err\non_err\nsshd_config\n' > "$_fxC_b"
+printf 'gc_timer\nluks_err\non_err\nZZZ_unrelated\n' > "$_fxC_a"
 # Drive the ARM's OWN predicate over both corpora. The complete set must be ACCEPTED and the
 # swapped one REJECTED; a count floor accepts both, which is the defect.
-_c_ok_before=1; _r3b_sites_ok "$(cat "$_fxC_b")" && _c_ok_before=0
-_c_ok_after=1;  _r3b_sites_ok "$(cat "$_fxC_a")" && _c_ok_after=0
+_c_ok_before=1; _r3b_sites_ok 8 "$(cat "$_fxC_b")" && _c_ok_before=0
+_c_ok_after=1;  _r3b_sites_ok 8 "$(cat "$_fxC_a")" && _c_ok_after=0
 if [ "$_c_ok_before" -eq 0 ] && [ "$_c_ok_after" -ne 0 ]; then pass; else
   fail "R3(3b)(i) CONTROL: the arm's site predicate accepted the complete set (rc=${_c_ok_before}) and the swapped set (rc=${_c_ok_after}) alike — one reporting site was deleted and an unrelated one added, and it could not tell" \
        "A floor is not a set. Sub-assertion (iv) already does message-set equality for fatals and is the model this should follow."; fi
@@ -2523,7 +2593,12 @@ for i, l in enumerate(lines):
         # DETAIL=[], a verdict with no cause — #7204's defect), so pinning -r alone would
         # red the correct fix. Bounded to [wstart, epos): a guard belonging to a DIFFERENT
         # handler, or one placed after the emit, protects nothing here.
-        gpat = re.compile(os.environ.get("R3_GUARD_PAT", r'\[\s+-[rs]\s+"?') + re.escape(name))
+        # NO DEFAULT (#7613 review). A fallback literal here is a SECOND, unpinned copy of
+        # the pattern: change _R3_GUARD_PAT and drop the export, and the arm silently keeps
+        # matching the old spelling while the control raises KeyError -- which its own
+        # `|| echo 0` used to swallow into a PASS. Single-sourcing means the arm fails loudly
+        # when the value is absent.
+        gpat = re.compile(os.environ["R3_GUARD_PAT"] + re.escape(name))
         guarded = "GUARDED" if gpat.search(joined, wstart, offs[i]) else "UNGUARDED"
     print("|".join([wname, level.strip('"'), isvar, guarded, arg4, msg]))
 PY
@@ -2545,8 +2620,14 @@ if [ -s "$_R3B_SRC" ]; then
   _r3b_bound="$(printf '%s\n' "$_r3b_out" | awk -F'|' '$2!="info" && $1!=""' || true)"
   _r3b_fatal="$(printf '%s\n' "$_r3b_out" | awk -F'|' '$2=="fatal"' || true)"
   _r3b_n=$(printf '%s\n' "$_r3b_bound" | grep -c . || true)
-  if [ "${_r3b_n:-0}" -ge 6 ]; then pass; else
-    fail "R3(3b)(i): parsed only ${_r3b_n:-0} reporting emit sites in the concatenated runcmd (expected >= 6)" \
+  # WIRED TO THE ARM (#7613 review). _r3b_sites_ok was defined and read ONLY by its own
+  # negative control, while this arm kept the bare `-ge 6` count floor — so the control
+  # certified a predicate production did not use, and the six names in _R3B_EXPECTED_SITES
+  # had never been compared against the real render at all. The rows carry
+  # `site|level|isvar|guarded|arg4|msg`; the predicate wants bare names.
+  _r3b_site_names="$(printf '%s\n' "$_r3b_bound" | awk -F'|' 'NF{print $1}' | sort -u || true)"
+  if _r3b_sites_ok "${_r3b_n:-0}" "$_r3b_site_names"; then pass; else
+    fail "R3(3b)(i): reporting emit sites do not match the expected roster (parsed ${_r3b_n:-0}; got [$(printf '%s' "$_r3b_site_names" | tr '\n' ' ')], expected [$(printf '%s' "$_R3B_EXPECTED_SITES" | tr '\n' ' ')])" \
          "The extraction produced nothing usable, so every verdict below is vacuous. out=[$(printf '%s' "$_r3b_out" | head -c 300)]"
   fi
 
@@ -2707,11 +2788,18 @@ fi
 #   S1 healthy    2   (#7572: both container-dependent assertions in the healthy run)
 #   S1 mutation   3   (#7572: the mutant's rc, its fatal, and the privsep reproduction)
 #   ------------------
-#   total         5   -- NOT 7: T5 and S1 cannot both be maximally skipped in a run that
-#                        produced any verdict at all, and 5 is the largest single-run cost
-#                        actually reachable (S1's two groups together). If a future arm makes
-#                        7 reachable, raise it in a new stanza rather than editing this one.
-_SKIP_CEILING=5
+#   total         7   -- MEASURED, and it is 7 rather than 5. An earlier revision of this
+#                        stanza asserted "NOT 7: T5 and S1 cannot both be maximally skipped in
+#                        a run that produced any verdict at all". That is false, and the
+#                        refutation is one line up: _T5M_ENV_RCS and _S1_ENV_RCS are the SAME
+#                        allowlist ('100 125') and both arms pull the same image, so ONE
+#                        environmental condition satisfies both did-not-run rungs. Measured
+#                        against an unpullable image: docker rc=125, all three arms decline,
+#                        `Skipped: 7`. At a ceiling of 5 that legitimate decline produced a
+#                        SECOND, spurious failure blaming the arms for declaring cost they
+#                        genuinely have -- a false FAIL inside the mechanism ADR-188 built to
+#                        remove false FAILs.
+_SKIP_CEILING=7
 
 # THE STANZA'S DECLARED LIST MUST MATCH THE CODE. A ceiling itemised in a comment is a claim
 # about arm_skip call sites, and comments do not fail. Count the real call sites and assert
@@ -2736,13 +2824,27 @@ _SKIP_CEILING=5
 # neither lookahead nor an error guard.
 _T5_SKIPS=$(grep -cE '^[[:space:]]*arm_skip "T5 ' "$0" || true)
 _T5_MUT_SKIPS=$(grep -cE '^[[:space:]]*arm_skip "T5 MUTATION' "$0" || true)
-if [ "$_T5_SKIPS" -eq "$_T5_MUT_SKIPS" ]; then
+# AND A NON-ZERO FLOOR, AND CROSS-FILE PARITY (#7613 review). `-eq` alone passes on 0 == 0,
+# so rewording `arm_skip "T5 MUTATION …"` to `arm_skip "T5-MUTATION …"` left BOTH counts at
+# zero, this guard green, the call-site count still 3 -- and silently stopped the external
+# probe (scripts/followthroughs/t5-skip-persistence-bound-7510.sh) matching
+# `SKIP (loud): T5 `, so the daily monitor would have reported PASS forever. One edit, three
+# instruments blinded, zero reds. Every arm_skip call site must therefore open with a name
+# the probe greps for, and that is asserted rather than assumed.
+# Assigned BEFORE its first reader: the roster-parity check below consumes it, and under
+# `set -u` reading it first aborted the whole suite at line ~2802 rather than failing an
+# assertion. Caught by running the suite, not by reading the edit.
+_SKIP_CALL_SITES=$(grep -cE '^[[:space:]]*arm_skip ' "$0" || true)
+_S1_SKIPS=$(grep -cE '^[[:space:]]*arm_skip "S1 ' "$0" || true)
+_PROBE_NAMED=$(( _T5_SKIPS + _S1_SKIPS ))
+if [ "$_T5_SKIPS" -ge 1 ] \
+   && [ "$_T5_SKIPS" -eq "$_T5_MUT_SKIPS" ] \
+   && [ "$_PROBE_NAMED" -eq "$_SKIP_CALL_SITES" ]; then
   pass
 else
-  fail "T5 has ${_T5_SKIPS} arm_skip call site(s) of which only ${_T5_MUT_SKIPS} are MUTATION — its primary arm has become skip-eligible; S1's primary is no longer a bound (it declines via the classifier since #7572), so nothing unconditional remains to red a run in which the container never started" \
+  fail "arm_skip roster drift: T5=${_T5_SKIPS} (of which MUTATION=${_T5_MUT_SKIPS}), S1=${_S1_SKIPS}, probe-named total=${_PROBE_NAMED}, call sites=${_SKIP_CALL_SITES}. Either T5's primary became skip-eligible, or a call site's message no longer opens with a name the follow-through probe greps for — its primary arm has become skip-eligible; S1's primary is no longer a bound (it declines via the classifier since #7572), so nothing unconditional remains to red a run in which the container never started" \
        "The composite vacuity bound rests on T5's primary. Re-establish a bound before making it declinable."; fi
 
-_SKIP_CALL_SITES=$(grep -cE '^[[:space:]]*arm_skip ' "$0" || true)
 if [ "$_SKIP_CALL_SITES" -eq 3 ]; then pass; else
   fail "skip stanza drift: ${_SKIP_CALL_SITES} arm_skip call site(s) in this file, the itemised stanza declares 3 (T5 mutation; S1 healthy; S1 mutation)" \
        "The ceiling's itemisation is a claim about call sites; an unlisted one silently consumes another arm's budget."; fi
@@ -2942,7 +3044,7 @@ total=$((passes + fails + SKIPPED_ASSERTIONS))
 #    10
 # Re-derived from a measured run against the as-written file, not incremented by memory.
 if [ "$total" -lt 68 ]; then
-  echo "FAIL: ran only ${total} assertions (<49) — harness did not execute fully" >&2
+  echo "FAIL: ran only ${total} assertions (floor 68) — harness did not execute fully" >&2
   exit 1
 fi
 echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed, Skipped: ${SKIPPED_ASSERTIONS} (${total} assertions)"

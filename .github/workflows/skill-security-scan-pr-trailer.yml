@@ -85,8 +85,15 @@ jobs:
           # empty, no_new_skills=true, gate green having scanned nothing.
           # Keep the assignment at top level: `if ! local raw=$(cmd)` masks the
           # status (verified), so this must not be refactored into a helper.
+          # AMR, NOT A. Rename detection is ON by default, so `git mv skills/benign
+          # skills/pwned` + weaponise reports R and `--diff-filter=A` returns EMPTY --
+          # measured end-to-end: the scanner says HIGH-RISK, the gate's added set is [],
+          # no_new_skills=true, BOTH scan steps are if:-skipped, required check GREEN.
+          # Plain M (weaponising a skill in place) escaped the same way. Every counter and
+          # fail-closed branch this PR adds lives INSIDE a step gated on that flag, so the
+          # bypass sat one step upstream of all of it.
           rc=0
-          raw=$(git diff --name-only --diff-filter=A "$BASE_SHA"..."$HEAD_SHA" 2>"${RUNNER_TEMP:-/tmp}/diff.err") || rc=$?
+          raw=$(git diff --name-only --diff-filter=AMR "$BASE_SHA"..."$HEAD_SHA" 2>"${RUNNER_TEMP:-/tmp}/diff.err") || rc=$?
           if [ "$rc" -ne 0 ]; then
             echo "::error::skill-security-scan: git could not resolve the diff for base=$BASE_SHA head=$HEAD_SHA (git exited $rc). Refusing to report a clean scan from a diff that never resolved."
             cat "${RUNNER_TEMP:-/tmp}/diff.err" >&2 || true
@@ -199,7 +206,6 @@ jobs:
               echo "::error file=$path::skill-security-scan: run-scan.sh exited $sc_rc. A scanner that crashed has produced no verdict; this is not a clean skill."
               cat "${RUNNER_TEMP:-/tmp}/scan.err" >&2 || true
               fail=1
-              scanned=$((scanned + 1))
               continue
             fi
             verdict=$(printf '%s\n' "$sc_out" | head -1 | grep -oE 'HIGH-RISK|REVIEW|LOW-RISK' || true)
@@ -207,9 +213,14 @@ jobs:
               echo "::error file=$path::skill-security-scan: run-scan.sh emitted no recognised verdict (expected HIGH-RISK, REVIEW or LOW-RISK); treating as UNKNOWN and failing closed. First line was: $(printf '%s\n' "$sc_out" | head -1)"
               cat "${RUNNER_TEMP:-/tmp}/scan.err" >&2 || true
               fail=1
-              scanned=$((scanned + 1))
               continue
             fi
+            # COUNTS VERDICTS, NOT ITERATIONS (review). This also incremented inside the
+            # crash and unrecognised-verdict branches above, so `$scanned verdict(s)
+            # produced` asserted something the variable did not measure -- and the
+            # zero-verdict guard below could never be the sole cause of a failure,
+            # because every branch that skipped it had already set fail=1. Now the
+            # counter means what its name and its log line say.
             scanned=$((scanned + 1))
             slug=$(path_to_slug "$path")
             echo "::notice file=$path::skill-security-scan verdict: $verdict (slug=$slug)"
