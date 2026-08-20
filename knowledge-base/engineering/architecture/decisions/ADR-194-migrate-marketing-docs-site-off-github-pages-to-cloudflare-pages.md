@@ -3,7 +3,7 @@ title: Migrate the marketing/docs site off GitHub Pages to Cloudflare Pages — 
 status: accepted
 date: 2026-08-19
 related_adrs: [ADR-125, ADR-130, ADR-136]
-related: [6691, 6698, 6657, 7539, 7584, 7620]
+related: [6691, 6698, 6657, 7539, 7584, 7620, 7640]
 related_runbooks:
   - knowledge-base/engineering/operations/runbooks/gh-pages-cert-renewal.md
 brand_survival_threshold: single-user incident
@@ -184,6 +184,29 @@ Pages, retire the certificate-remediation subsystem, and return the zone to
    existing narrow token vs. mint an alias).
 6. **Delete** the remediation subsystem (listed below).
 
+> **Superseded 2026-08-20 (#7640) — item 3's premise. The item stands; the cost it was
+> priced at does not.** `## Consequences` below reasons that the `www -> apex` rule must be
+> added *inside* `seo_page_redirects` at its 10-rule Free-tier cap, and concludes *"retiring
+> the ACME carve-out frees the slot the www rule needs"*. **Retiring the carve-out frees zero
+> slots.** The carve-out is not a rule. It is a negative-match clause inside Rule 10's own
+> `expression` — `(not ssl) and not (http.host in {"soleur.ai" "www.soleur.ai"} and
+> starts_with(http.request.uri.path, "/.well-known/acme-challenge/"))` — inlined there
+> precisely because Cloudflare permits one user-defined ruleset per `(zone, phase)` and
+> rejects a `skip` action on the `http_request_dynamic_redirect` phase (CF API error 20016,
+> PR #3974). Deleting the clause leaves the rule count at 10. The slot it was believed to
+> free never existed, and the ~~"migrating pays for itself here"~~ claim is withdrawn.
+>
+> **The cap does not bind this work at all.** The 301 is rebuilt on a *different product*:
+> Cloudflare **Bulk Redirects**, account-level, on the `http_request_redirect` phase, with
+> its own quota (15 rules / 5 lists on Free), already wired in this repo at
+> `apps/web-platform/infra/seo-bulk-redirects.tf` and already inside the granted token scope
+> post-#5092. `seo_page_redirects` is not edited, Rule 10 and its ACME carve-out clause
+> survive verbatim, and `always_use_https = "off"` and the `ssl = "full"` Configuration Rule
+> are all explicitly out of scope for the migration. Rationale and the rejected options are
+> in **Alternatives Considered — the `www -> apex` 301 mechanism** below; the implementing
+> decision is `## Design Decision D1` of
+> `knowledge-base/project/plans/2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`.
+
 ### Sequencing
 
 Deliberately **after** the current incident is closed out, not during it. The
@@ -213,6 +236,14 @@ must be built, and it runs into a constraint this repo has already hit:
 So the www rule must be added *inside* the existing ruleset, at the cap.
 **Migrating pays for itself here**: retiring the ACME carve-out frees the slot the
 www rule needs.
+
+> **Superseded 2026-08-20 (#7640):** both sentences above are false. The carve-out is a
+> clause of Rule 10, not a rule, so retiring it frees no slot; and the www rule is not added
+> to this ruleset at all — it is a Cloudflare Bulk Redirect on a different phase with its own
+> quota. The full correction is the `> **Superseded 2026-08-20 (#7640) — item 3's premise**`
+> note in `## Decision` above. What survives here unchanged: the redirect really is
+> GitHub-Pages-owned today and really is lost by the migration, and
+> `www-apex-canonicalizer.test.sh` really does need rewriting.
 
 `www-apex-canonicalizer.test.sh` asserts three facts together (the records, the
 CNAME file, and the 301) and would need rewriting, since its premise becomes
@@ -267,3 +298,128 @@ false.
 - **`hr-observability-as-plan-quality-gate`**: the migration removes an
   observability burden rather than adding one — the `SOLEUR_CERT_REISSUE` marker
   family and its Better Stack queries retire with the subsystem.
+
+## Addendum — 2026-08-20 (#7640): what the implementation plan changed about this ADR's reasoning
+
+The decision is unchanged and the status stays **ACCEPTED**. Implementation planning
+(`knowledge-base/project/plans/2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`)
+falsified one premise and split one deliverable, and both are recorded here rather than
+silently absorbed into the plan.
+
+### 1. The free-slot premise (R1)
+
+Corrected in place — see the `> **Superseded 2026-08-20 (#7640) — item 3's premise**` note in
+`## Decision`, and the pointer at the false sentence in `## Consequences`. Summary: the ACME
+carve-out is a clause of Rule 10, not a rule; retiring it frees zero slots; and the cap it was
+measured against does not govern the product the 301 is actually rebuilt on.
+
+### 2. Deletion is deferred, but **disarmament is not** — and they are different decisions
+
+`### What gets deleted` above is a *cleanup once live* list, and every item on it is deferred
+out of the migration's scope by the plan (`ssl = "full"` in particular must stay in place for
+the whole rollback window, because the GitHub Pages origin certificate is expired by
+construction and `strict` would 526 a rollback). **One item cannot be deferred whole**: the
+certificate-reissue routine. Deleting it later is fine; leaving it *armed* across the cutover
+is not, because the cutover is what creates the hazard:
+
+- `cron-gh-pages-cert-state` runs on a live `0 3 * * *` schedule. Post-cutover the GitHub
+  Pages certificate is DNS-detached and can never recover, so the detector's steady-state
+  output is a `[cert-poll]` issue **every day, forever**, whose body instructs the reader —
+  in practice an autonomous agent — to fire `cron/gh-pages-cert-reissue.manual-trigger`.
+- Every precondition in `checkReissuePreconditions` still passes post-cutover, and probe-only
+  mode does **not** make the routine read-only: `setRecordsProxied(deps, records, false)` runs
+  unconditionally.
+- `listToggleRecords()` queries `[apex, "A"]` and `[www, "CNAME"]`. Post-cutover the apex is a
+  CNAME, so the apex is untouched and **`www` is what gets `proxied = false`** — dropping HSTS,
+  Rule 10's HTTPS upgrade, WAF and bot management on a host `domains.md` mandates be proxied.
+- It cannot undo that. `restoreStateInner` refuses to restore a subset when fewer than
+  `EXPECTED_TOGGLE_RECORDS = 5` records come back, which post-cutover is always. The routine's
+  own fail-loud safety guarantee is exactly what makes the de-proxying **one-way**.
+
+So the migration ships the disarmament with the substrate, not with the deletion: an
+apex-topology precondition that refuses to run unless the live apex record type is `A`, and
+removal of the `cron` trigger on `cron-gh-pages-cert-state` (its manual-trigger arm is
+retained). Nothing is deleted. See `## Design Decision D2` of the plan.
+
+This also voids, until that precondition is live, the justification AP-019 carries in
+`knowledge-base/engineering/architecture/principles-register.md` — recorded there under
+`## Notes`.
+
+### 3. Pointers
+
+- **Deferred cleanup** — the deletions in `### What gets deleted`, the retirement of the ACME
+  carve-out, and the return of the zone to `ssl = "strict"` are tracked on the deferred-cleanup
+  issue filed with PR1 of #7640. Its re-evaluation criteria include that `ssl = "full"` must
+  remain in place while the rollback window is open, that the docs-site container and the
+  public-visitor actor remain deliberately unmodelled in C4, and that
+  `sentry_uptime_monitor.soleur_acme_probe` **loses its property** at the cutover (it keeps
+  passing, but against Cloudflare Pages' own `404.html` rather than Rule 10's carve-out).
+- **Cutover runbook** —
+  `knowledge-base/engineering/operations/runbooks/cloudflare-pages-cutover.md` (lands with PR2).
+  It records that `workflow_dispatch` structurally cannot perform the rollback — the destroy
+  gate reads `github.event.head_commit.message`, which is empty on a dispatch run, so
+  `[ack-destroy]` can never match — making the merge of the pre-opened revert PR the only
+  rollback path.
+- **Retained runbook** — `gh-pages-cert-renewal.md` stays (it is a deferred-deletion artifact),
+  but the routine it documents refuses to run post-cutover by design.
+
+## Alternatives Considered — the `www -> apex` 301 mechanism (added 2026-08-20, #7640)
+
+GitHub Pages auto-301s `www.soleur.ai` to the primary domain named by `plugins/soleur/docs/CNAME`
+for free. Cloudflare Pages has no equivalent, so the redirect must be rebuilt. Three mechanisms
+were considered; the measured reason for each verdict is recorded so the next author does not
+re-derive them.
+
+### (i) A rule inside `cloudflare_ruleset.seo_page_redirects` — **rejected**
+
+This is what `## Consequences` above assumed. It fails on measurement, not on taste:
+
+- The ruleset holds exactly 10 rules (9 SEO 301s + Rule 10, the HTTPS catch-all) against a
+  documented Free cap of 10 for the `http_request_dynamic_redirect` phase, and Cloudflare
+  permits one user-defined ruleset per `(zone, phase)` — so there is no second ruleset to
+  put it in.
+- Rule 10 upgrades **every proxied host in the zone** to HTTPS, protecting cross-subdomain
+  credentials on `app.soleur.ai` and `deploy.soleur.ai` (caught by `user-impact-reviewer` in
+  PR #3974). It cannot be evicted to make room.
+- Consolidating rules 1–8 into one would need `regex_replace()` / `substring()`, which are
+  Business-tier functions.
+- And the ACME carve-out frees nothing when retired, because it is a clause and not a rule
+  (R1, above).
+
+### (ii) A `_redirects` file in the Eleventy build artifact — **rejected**
+
+Superficially the cheapest option, and it is the one Cloudflare's own documentation rules out:
+**domain-level redirects in `_redirects` are documented as unsupported**, and the doc cites this
+exact `www` → apex shape as the case it does not handle. Two repo-local reasons compound it: the
+canonical-host build gate in `deploy-docs.yml` would reject the file's contents on every build,
+and the guard assertion would then have to live in `eleventy.config.js`, which is outside
+`infra-validation.yml`'s `paths:` filter — so the chokepoint would be unguarded in CI.
+
+### (iii) Cloudflare Bulk Redirects (account-level) — **CHOSEN**
+
+A different product on a different phase (`http_request_redirect`), account-scoped, with its own
+Free quota (15 rules / 5 lists) — so the `http_request_dynamic_redirect` cap does not bind at all.
+It is already wired in this repo (`apps/web-platform/infra/seo-bulk-redirects.tf` holds the legal
+redirects), the token scope was already granted post-#5092, and it is what Cloudflare's own
+www-redirect guide prescribes for a Pages project.
+
+Two implementation choices inside (iii), both deliberate:
+
+- **A separate `cloudflare_list` rather than a 13th item in `legal_redirects`.** Every existing
+  item carries `include_subdomains = "enabled"`, so `www.soleur.ai/pages/legal/<slug>.html`
+  already matches an apex item today; adding a www catch-all to the same list would make the
+  winner depend on undocumented list-entry precedence. Rules **within a ruleset** evaluate in
+  declaration order, first-match-wins — a property this repo already relies on and documents —
+  so the legal rule is declared first and the www rule second, and precedence becomes explicit
+  and testable.
+- **`www` stays attached to the Pages project as a second custom domain**, diverging from
+  Cloudflare's guide (which parks www at `192.0.2.1`, an RFC 5737 black hole). Cloudflare
+  documents that Bulk Redirects run in front of a Pages project, so the redirect still wins.
+  The divergence buys a better failure mode: if the redirect ever stops firing, www serves the
+  site (duplicate content, already covered by the apex `<link rel="canonical">` and the
+  canonical-host build gate) instead of a hard Cloudflare 522 on an HSTS-preloaded host. Both
+  are caught by `sentry_uptime_monitor.soleur_www` within one confirmation interval, so
+  detection is a wash and the severity is not.
+
+Not reconsidered here, because the migration does not touch them: Rule 10, its ACME carve-out
+clause, `always_use_https = "off"`, and the `ssl = "full"` Configuration Rule.
