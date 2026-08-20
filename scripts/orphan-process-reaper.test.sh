@@ -1226,10 +1226,50 @@ if [[ -n "$E2E_WRAPPER" ]] && kill -0 "$E2E_WRAPPER" 2>/dev/null; then
   # Hop 4: an explicit reap signals the non-bash CHILD before the anchor, with
   # a journald record preceding each signal.
   EV="$TESTROOT/ev-e2e-reap"; : > "$EV"
+
+  # SCOPED TO OUR OWN VICTIMS, and this is a safety property of the SUITE, not a
+  # convenience. Before this, hop 4 ran `reap` against the REAL /proc with no
+  # signal sink, no root seam, no pid restriction and MIN_AGE_S=0 — so every
+  # `test-all.sh` run performed an unattended, box-wide reap that was WIDER than
+  # anything an operator could invoke by hand, and it ran twice, because the
+  # mutation battery's unmutated control runs this suite without SKIP_LIVE.
+  # Measured by review: a bystander tree one second old would have had three
+  # processes TERMed. It also contradicted the tool's own central claim, which
+  # ADR-195 states as "nothing invokes reap automatically anywhere."
+  #
+  # The scoping uses the refusal-only ORPHAN_REAPER_ONLY_PIDS seam — the same
+  # mechanism that binds an operator's reviewed set to the set `reap` destroys —
+  # so this arm exercises the shipped authorization path rather than a
+  # test-only bypass.
+  _e2e_auth=""
+  _e2e_auth="$(awk '$1 == "reap_authorization" { print $2; exit }' <<<"$_o")"
+  cases=$((cases + 1))
+  if [[ -n "$_e2e_auth" ]]; then
+    pass "AC40 hop 3b: report emits a reap_authorization pinning the reviewed set"
+  else
+    fail "AC40 hop 3b: no reap_authorization line — the reviewed set cannot be bound to the reaped set"
+  fi
+
+  # Independently of the seam, refuse to signal at all if the walk found
+  # anything outside the two processes this arm planted. A live box can hold
+  # someone else's orphan, and a test must never be the thing that reaps it.
+  _e2e_extra=0
+  while read -r _ap; do
+    [[ -n "$_ap" ]] || continue
+    [[ "$_ap" == "$E2E_WRAPPER" || "$_ap" == "$E2E_CHILD" ]] || _e2e_extra=$((_e2e_extra + 1))
+  done < <(awk '$1 == "anchor" || $1 == "member" { for (i = 2; i <= NF; i++) { n = index($i, "="); if (substr($i, 1, n-1) == "pid") print substr($i, n+1) } }' <<<"$_o")
+
   _o=""; _rc=0
-  _o="$(env -u CI ORPHAN_REAPER_NO_FLOCK=1 ORPHAN_REAPER_MIN_AGE_S=0 ORPHAN_REAPER_DRY_RUN=0 \
-        ORPHAN_REAPER_EVIDENCE_FILE="$EV" \
-        bash "$REAPER" reap 2>/dev/null)" || _rc=$?
+  cases=$((cases + 1))
+  if (( _e2e_extra > 0 )); then
+    fail "AC40 hop 4: the live walk found $_e2e_extra process(es) outside this arm's own victims — refusing to signal (this is the guard, not a SUT failure)"
+  else
+    pass "AC40 hop 4: the live set contains only this arm's own victims"
+    _o="$(env -u CI ORPHAN_REAPER_NO_FLOCK=1 ORPHAN_REAPER_MIN_AGE_S=0 ORPHAN_REAPER_DRY_RUN=0 \
+          ORPHAN_REAPER_ONLY_PIDS="${E2E_WRAPPER},${E2E_CHILD}" \
+          ORPHAN_REAPER_EVIDENCE_FILE="$EV" \
+          bash "$REAPER" reap 2>/dev/null)" || _rc=$?
+  fi
   sleep 0.6
   cases=$((cases + 1))
   if ! kill -0 "$E2E_WRAPPER" 2>/dev/null; then
@@ -1244,10 +1284,19 @@ if [[ -n "$E2E_WRAPPER" ]] && kill -0 "$E2E_WRAPPER" 2>/dev/null; then
     fail "AC40 hop 6: the child that actually held the cores survived — the R1a defect end-to-end"
   fi
   cases=$((cases + 1))
-  if [[ -n "$E2E_CHILD" ]] && [[ "$(grep -cE "verdict=authorized pid=$E2E_CHILD( |$)" "$EV" || true)" -ge 1 ]]; then
+  # Anchored on the two fields that matter, not on their ADJACENCY: the record
+  # gained `mode=`/`dry=` between them, and an assertion that pins field order
+  # pins spelling rather than the property.
+  if [[ -n "$E2E_CHILD" ]] && [[ "$(grep -cE "^orphan-reap verdict=authorized .*[ ]pid=$E2E_CHILD( |$)" "$EV" || true)" -ge 1 ]]; then
     pass "AC40 hop 7: an authorizing record precedes the real signal"
   else
     fail "AC40 hop 7: no evidence record for the pid that was actually signalled"
+  fi
+  cases=$((cases + 1))
+  if [[ -n "$E2E_CHILD" ]] && [[ "$(grep -cE "^orphan-reap outcome=signalled pid=$E2E_CHILD( |$)" "$EV" || true)" -ge 1 ]]; then
+    pass "AC40 hop 8: an OUTCOME record follows the signal, so intent and result are distinguishable"
+  else
+    fail "AC40 hop 8: no outcome record — a failed kill would leave a standing verdict=authorized with no counter-record"
   fi
 else
   fail "AC40 the e2e victim did not start — fixture error, not a SUT verdict"
@@ -1335,7 +1384,7 @@ fi
 # therefore valid in both. Full runs carry 8 more assertions (the live-procfs
 # arm and the seven end-to-end hops); those eight are not floored here, and that
 # slack is the price of one threshold that is correct under both modes.
-MIN_CASES=133
+MIN_CASES=133  # skip-live count; the live arms add 10 more
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '\n[FATAL] assertion floor: %d assertions ran, expected at least %d.\n' \
     "$cases" "$MIN_CASES" >&2

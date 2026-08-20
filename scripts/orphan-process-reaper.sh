@@ -98,6 +98,7 @@ ORPHAN_REAPER_EXCLUDE_PGID="${ORPHAN_REAPER_EXCLUDE_PGID:-}"
 ORPHAN_REAPER_SELF_CWD_OVERRIDE="${ORPHAN_REAPER_SELF_CWD_OVERRIDE:-}"
 ORPHAN_REAPER_RECYCLE_PID="${ORPHAN_REAPER_RECYCLE_PID:-}"
 ORPHAN_REAPER_FORCE_EUID="${ORPHAN_REAPER_FORCE_EUID:-}"
+ORPHAN_REAPER_ONLY_PIDS="${ORPHAN_REAPER_ONLY_PIDS:-}"
 
 MODE="${1:-report}"
 
@@ -109,6 +110,15 @@ say() { printf '[orphan-process-reaper] %s\n' "$1" >&2; }
 # printable characters in a UTF-8 locale.
 _orphan_sanitize() { printf '%s' "${1:-}" | LC_ALL=C tr -c '[:print:]' '?'; }
 
+evidence_write() {  # record
+  if [[ -n "$ORPHAN_REAPER_EVIDENCE_FILE" ]]; then
+    printf '%s\n' "$1" >> "$ORPHAN_REAPER_EVIDENCE_FILE" 2>/dev/null || return 1
+    return 0
+  fi
+  logger -t orphan-process-reaper -- "$1" 2>/dev/null || return 1
+  return 0
+}
+
 # --- Counters --------------------------------------------------------------
 # `unreadable` is load-bearing, not decoration: the fail-toward-alive rule
 # silently drops candidates, and without a count of those drops there is no
@@ -117,10 +127,10 @@ _orphan_sanitize() { printf '%s' "${1:-}" | LC_ALL=C tr -c '[:print:]' '?'; }
 # no-fd/255 pre-filter miss is a ~417-pid constant baseline on this box that
 # would otherwise swamp the signal.
 scanned=0; anchors=0; set_members=0; would_signal=0; signalled=0
-failed=0; refused=0; refused_cap=0; late_refused=0
-skipped_same_pgroup=0; skipped_foreign_ns=0; skipped_foreign_uid=0
+failed=0; refused=0; refused_cap=0; late_refused=0; refused_unauthorized=0
+skipped_same_pgroup=0; skipped_foreign_ns=0; skipped_foreign_uid=0; skipped_other_session=0
 prefiltered_no_fd255=0; unreadable=0; unreadable_denied=0; unreadable_gone=0
-valid=1; evidence=down
+valid=1; evidence=unprobed
 
 # Deferred output: attacker-influenceable values are emitted LAST, one per line
 # (AC23). Spaces, `=` and `/` are printable and SURVIVE the tr pass, so a
@@ -130,14 +140,23 @@ valid=1; evidence=down
 PATH_LINES=()
 
 emit_summary() {
-  printf 'ORPHAN_SCAN valid=%s mode=%s scanned=%s anchors=%s set_members=%s would_signal=%s signalled=%s failed=%s refused=%s refused_cap=%s late_refused=%s skipped_same_pgroup=%s skipped_foreign_ns=%s skipped_foreign_uid=%s prefiltered_no_fd255=%s unreadable=%s unreadable_denied=%s unreadable_gone=%s evidence=%s\n' \
-    "$valid" "$MODE" "$scanned" "$anchors" "$set_members" "$would_signal" \
+  printf 'ORPHAN_SCAN valid=%s mode=%s scanned=%s anchors=%s set_members=%s would_signal=%s signalled=%s failed=%s refused=%s refused_cap=%s late_refused=%s refused_unauthorized=%s skipped_same_pgroup=%s skipped_foreign_ns=%s skipped_foreign_uid=%s skipped_other_session=%s prefiltered_no_fd255=%s unreadable=%s unreadable_denied=%s unreadable_gone=%s evidence=%s\n' \
+    "$valid" "$(_orphan_sanitize "$MODE")" "$scanned" "$anchors" "$set_members" "$would_signal" \
     "$signalled" "$failed" "$refused" "$refused_cap" "$late_refused" \
+    "$refused_unauthorized" \
     "$skipped_same_pgroup" "$skipped_foreign_ns" "$skipped_foreign_uid" \
+    "$skipped_other_session" \
     "$prefiltered_no_fd255" "$unreadable" "$unreadable_denied" \
     "$unreadable_gone" "$evidence"
   local l
   for l in ${PATH_LINES[@]+"${PATH_LINES[@]}"}; do printf '%s\n' "$l"; done
+
+  # THE LAYER-7 DURABILITY OBLIGATION. A layer-7 citation whose only signal is
+  # stdout does not survive the session — and `report` is the only verb anything
+  # invokes automatically, so without this the tool's normal mode left no
+  # durable record at all and `evidence=ok` reported only that the channel probe
+  # had succeeded. Mirrored verbatim, on every invocation of both verbs.
+  evidence_write "orphan-scan valid=$valid mode=$(_orphan_sanitize "$MODE") scanned=$scanned anchors=$anchors set_members=$set_members would_signal=$would_signal signalled=$signalled unreadable=$unreadable evidence=$evidence" || true
 }
 
 die_invalid() {  # reason
@@ -164,8 +183,14 @@ fi
 # populated class on a box mid-apt transaction. The banner below prints a `reap`
 # command an operator may reflexively prefix with sudo when it "doesn't work",
 # so this is the realistic path rather than a hypothetical one.
-_euid="${ORPHAN_REAPER_FORCE_EUID:-${EUID:-$(id -u)}}"
-if [[ "$_euid" == "0" ]]; then
+# The seam may only ADD a refusal, never remove one — so the real euid is tested
+# INDEPENDENTLY of it. Measured on the previous form: `ORPHAN_REAPER_FORCE_EUID=1234`
+# skipped the root refusal entirely, so `ORPHAN_REAPER_FORCE_EUID=1000 sudo -E
+# … reap` ran as root with this guard disabled. That is the exact composition
+# the comment above calls the realistic path.
+_euid_real="${EUID:-$(id -u)}"
+_euid="${ORPHAN_REAPER_FORCE_EUID:-$_euid_real}"
+if [[ "$_euid" == "0" || "$_euid_real" == "0" ]]; then
   say "refusing to run as root: G1 would PASS for every root process and the reap set would become box-wide"
   valid=0
   emit_summary
@@ -182,6 +207,30 @@ if [[ "$ORPHAN_PROC_ROOT" != /* ]]; then
 fi
 if [[ ! -d "$ORPHAN_PROC_ROOT" ]]; then
   die_invalid "ORPHAN_PROC_ROOT is not a directory"
+fi
+
+# NUMERIC SEAMS ARE VALIDATED, and this is a signal-producing gap when they are
+# not. `(( age < ORPHAN_REAPER_MIN_AGE_S ))` on a NON-NUMERIC operand does not
+# abort — it errors and evaluates the `if` as FALSE, which SKIPS the branch that
+# spares fresh processes. Measured against a 2-second-old orphan: with
+# `ORPHAN_REAPER_MIN_AGE_S=10m` the process was SIGNALLED, and every counter on
+# the summary line reported a clean, valid walk. `10m`, `600s` and `10 minutes`
+# are all plausible spellings, and the banner below invites an operator to
+# re-run with an override.
+#
+# This is the same fail-open the G6 comment documents, one level up: there at
+# the READING, here at the OPERAND. Bash arithmetic also expands recursively, so
+# an unvalidated value is an execution surface as well.
+for _seam in ORPHAN_REAPER_MIN_AGE_S ORPHAN_REAPER_MAX_SET; do
+  if [[ ! "${!_seam}" =~ ^[0-9]+$ ]]; then
+    die_invalid "$_seam must be a plain integer, got '$(_orphan_sanitize "${!_seam}")'"
+  fi
+done
+if [[ ! "$ORPHAN_REAPER_SELF_PID" =~ ^[1-9][0-9]*$ ]]; then
+  # An invalid self pid empties BOTH halves of self-exclusion at once:
+  # `_tc_self_and_ancestors` gates its loop on `^[0-9]+$`, and `/proc/<junk>/stat`
+  # is unreadable so the process-group read comes back empty too.
+  die_invalid "ORPHAN_REAPER_SELF_PID must be a positive integer"
 fi
 
 # Procfs identity, NOT name (AC28c). A `!= /proc` string comparison refuses
@@ -232,20 +281,24 @@ CLK_TCK="$(getconf CLK_TCK 2>/dev/null || echo 100)"
 # tool either silently becomes report-only forever or proceeds believing it
 # recorded — and after a successful kill the /proc entry is gone, so the
 # evidence links can never be re-examined by anyone.
+# Probed by performing an actual WRITE through the same path a record takes.
+# `command -v logger` proves a binary is on PATH, not that a record lands: on a
+# host with no journald socket the summary would print `evidence=ok` over a dead
+# channel, and that field is what a reader consults to decide the run was
+# recorded. The end state stayed fail-safe either way — `evidence_write`'s own
+# per-record failure refuses the reap — but a false all-clear on the counter
+# line is its own defect.
+# Three states, never two. `unprobed` is the initial value and survives only on
+# an abort that happens before this block; reaching here always resolves to a
+# MEASURED `ok` or `down`, so a reader can tell "the channel is dead" from "we
+# never looked" — the distinction an early-abort summary previously collapsed.
+evidence=down
 if [[ -n "$ORPHAN_REAPER_EVIDENCE_FILE" ]]; then
   if printf '' >> "$ORPHAN_REAPER_EVIDENCE_FILE" 2>/dev/null; then evidence=ok; fi
-elif command -v logger >/dev/null 2>&1; then
+elif command -v logger >/dev/null 2>&1 \
+     && logger -t orphan-process-reaper -- "orphan-probe channel=journald" 2>/dev/null; then
   evidence=ok
 fi
-
-evidence_write() {  # record
-  if [[ -n "$ORPHAN_REAPER_EVIDENCE_FILE" ]]; then
-    printf '%s\n' "$1" >> "$ORPHAN_REAPER_EVIDENCE_FILE" 2>/dev/null || return 1
-    return 0
-  fi
-  logger -t orphan-process-reaper -- "$1" 2>/dev/null || return 1
-  return 0
-}
 
 # --- The unlinked predicate — EXACTLY ONE SITE ----------------------------
 # Link count is the kernel's own answer to "is this inode unlinked". One syscall
@@ -289,6 +342,15 @@ _orphan_cwd_key() {  # pid -> prints dev:inode, or empty
   printf '%s' "$k"
 }
 
+_orphan_sid() {  # pid -> prints the session id, or empty when unreadable
+  # Session id is overall field 6 of /proc/<pid>/stat, i.e. index 4 after
+  # `_tc_stat_field`'s comm strip (1=state, 2=ppid, 3=pgrp, 4=session).
+  local v
+  v=$(_tc_stat_field "$ORPHAN_PROC_ROOT/$1/stat" 4) || v=""
+  [[ "$v" =~ ^[0-9]+$ ]] || v=""
+  printf '%s' "$v"
+}
+
 # --- Exclusion set (G4) ----------------------------------------------------
 SELF_CHAIN=" $(_tc_self_and_ancestors)"
 SELF_PGID=""
@@ -303,19 +365,46 @@ else
 fi
 [[ "$SELF_PGID" =~ ^[0-9]+$ ]] || SELF_PGID=""
 
+# READ FROM THE REAL /proc, unconditionally — never from the seam root.
+#
+# These are the scanner's OWN reference namespaces, and the whole point of G5/G7
+# is to compare a candidate against where THIS process will send a signal.
+# Reading them from `$ORPHAN_PROC_ROOT` lets a foreign-pid-namespace procfs
+# supply BOTH sides of the comparison: measured, a fixture root carrying an entry
+# for the scanner's own pid pointing at the same foreign namespace produced
+# `signalled pid=4242 skipped_foreign_ns=0`, while the identical fixture without
+# that entry correctly refused. `kill` always lands in our namespace regardless
+# of what the seam says, so the reference must come from where `kill` looks.
+#
+# It costs the tests nothing: no fixture ever contains the scanner's pid, so the
+# seam path was never exercised anyway.
 NS_MNT_SELF=""
-NS_MNT_SELF=$(readlink "$ORPHAN_PROC_ROOT/$ORPHAN_REAPER_SELF_PID/ns/mnt" 2>/dev/null) || NS_MNT_SELF=""
-[[ -n "$NS_MNT_SELF" ]] || { NS_MNT_SELF=$(readlink /proc/self/ns/mnt 2>/dev/null) || NS_MNT_SELF=""; }
+NS_MNT_SELF=$(readlink /proc/self/ns/mnt 2>/dev/null) || NS_MNT_SELF=""
 NS_PID_SELF=""
-NS_PID_SELF=$(readlink "$ORPHAN_PROC_ROOT/$ORPHAN_REAPER_SELF_PID/ns/pid" 2>/dev/null) || NS_PID_SELF=""
-[[ -n "$NS_PID_SELF" ]] || { NS_PID_SELF=$(readlink /proc/self/ns/pid 2>/dev/null) || NS_PID_SELF=""; }
+NS_PID_SELF=$(readlink /proc/self/ns/pid 2>/dev/null) || NS_PID_SELF=""
 
 # The scanner's own cwd identity, for the structural refusal.
+# The structural refusal's operand may never go missing silently. Measured on
+# the previous form: `ORPHAN_REAPER_SELF_CWD_OVERRIDE=/nonexistent` emptied this
+# value, and the `-n` conjunct at the refusal site then made the ENTIRE
+# anti-suicide guard a no-op — `valid=1 signalled=3` on a fixture that otherwise
+# refused. A guard whose operand can vanish without a refusal is the wrong
+# default for the one guard whose absence made an earlier draft reap the
+# caller's own process tree.
+#
+# The override now ADDS a key rather than replacing the real one, so the seam
+# stays refusal-only in fact and not merely in the header's description of it.
 SELF_CWD_KEY=""
+SELF_CWD_KEY=$(stat -Lc '%d:%i' /proc/self/cwd 2>/dev/null) || SELF_CWD_KEY=""
+if [[ -z "$SELF_CWD_KEY" ]]; then
+  die_invalid "cannot identify the scanner's own cwd — refusing rather than adjudicating without it"
+fi
+SELF_CWD_KEY_EXTRA=""
 if [[ -n "$ORPHAN_REAPER_SELF_CWD_OVERRIDE" ]]; then
-  SELF_CWD_KEY=$(stat -Lc '%d:%i' "$ORPHAN_REAPER_SELF_CWD_OVERRIDE" 2>/dev/null) || SELF_CWD_KEY=""
-else
-  SELF_CWD_KEY=$(stat -Lc '%d:%i' /proc/self/cwd 2>/dev/null) || SELF_CWD_KEY=""
+  SELF_CWD_KEY_EXTRA=$(stat -Lc '%d:%i' "$ORPHAN_REAPER_SELF_CWD_OVERRIDE" 2>/dev/null) || SELF_CWD_KEY_EXTRA=""
+  if [[ -z "$SELF_CWD_KEY_EXTRA" ]]; then
+    die_invalid "ORPHAN_REAPER_SELF_CWD_OVERRIDE is set but unreadable — refusing"
+  fi
 fi
 
 # --- Uptime (G6 base) ------------------------------------------------------
@@ -483,8 +572,14 @@ if [[ "$ORPHAN_REAPER_NO_FLOCK" != "1" ]] && command -v flock >/dev/null 2>&1; t
   # branch, exited 0, and printed nothing at all, which is indistinguishable
   # from "ran and found nothing" — the exact confusion the counters exist to
   # prevent.
-  if : >> "$_lockfile" 2>/dev/null; then
-    exec 9>> "$_lockfile"
+  # The `exec` stays INSIDE an `if` CONDITION, which is what makes a redirection
+  # failure non-fatal. Moving it out (as an earlier revision did) meant that a
+  # probe-succeeds-then-exec-fails window — the directory vanishing in between —
+  # killed the script with rc 1 before any ORPHAN_SCAN line, violating this
+  # file's own contract that exit 1 reports a structurally invalid walk AND
+  # prints a summary. The probe is still first, and the `exec` still carries no
+  # stderr redirection of its own; both properties are kept.
+  if : >> "$_lockfile" 2>/dev/null && exec 9>> "$_lockfile"; then
     if ! flock -n 9; then
       say "another orphan-process-reaper run is in flight — skipping"
       exit 0
@@ -582,6 +677,57 @@ SET_STARTTIME=()
 SET_AGE=()
 SET_CWDNL=()
 SET_FDNL=()
+declare -A SET_SEEN=()
+
+# ONE cwd-key scan for the whole walk, not one per anchor.
+#
+# The key is ANCHOR-INDEPENDENT — it is a property of the pid — so computing it
+# inside the anchor loop made the pass O(anchors x pids). Measured at ~1.11 s per
+# anchor, and the motivating incident produces MANY anchors: every nested
+# `bash <script>` level holds its own fd/255, so a suite tree is a tree of
+# anchors, not one anchor with members. Ten anchors under the real
+# `timeout 10 … report` call shape came back `WALL 10.01 rc=124` twice — the
+# probe killed by its own timeout, emitting no summary, no reap_command and no
+# path evidence, because those are deferred to the tail. The tool went silent in
+# exactly the scenario it was written for.
+#
+# `%n` is load-bearing, not cosmetic. A missing path emits NO stdout row (only a
+# stderr line), so a positional read would shift every later path onto the wrong
+# pid — failing toward EXTRA members, which is the direction that kills. With
+# `%n` each row is self-identifying and a dropped path simply has no entry,
+# which is handled exactly as an unreadable key was before.
+declare -A CWD_KEY_OF=()
+if (( anchors > 0 )) && (( ${#ALL_PIDS[@]} > 0 )); then
+  _kpaths=()
+  for p in "${ALL_PIDS[@]}"; do _kpaths+=("$ORPHAN_PROC_ROOT/$p/cwd"); done
+  _chunk=800
+  for (( _ci = 0; _ci < ${#_kpaths[@]}; _ci += _chunk )); do
+    while read -r _kn _kv; do
+      [[ -n "$_kn" && -n "$_kv" ]] || continue
+      _kp="${_kn%/cwd}"; _kp="${_kp##*/}"
+      [[ "$_kp" =~ ^[1-9][0-9]*$ ]] || continue
+      CWD_KEY_OF["$_kp"]="$_kv"
+    done < <(stat -Lc '%n %d:%i' -- "${_kpaths[@]:$_ci:$_chunk}" 2>/dev/null || true)
+  done
+fi
+
+# Append a pid to the reap set exactly once, whatever role first claimed it.
+#
+# WITHOUT this, two anchors sharing one doomed inode each enumerate the other as
+# a member — which is not an edge case, it is the motivating incident: measured,
+# 7 bash + 3 python3 in one removed worktree produced `anchors=7
+# set_members=70 signalled=70` for TEN distinct pids. Seventy TERMs, seventy
+# evidence records, the cardinality cap evaluated against a per-anchor total of
+# 10 while the real signal count was 70 (so the cap bounded nothing), and
+# children-before-anchor violated because six bash wrappers were signalled as
+# "members" of the first anchor before any child.
+_set_add() {  # pid role anchor starttime age cwd_nlink fd255_nlink
+  [[ -n "${SET_SEEN[$1]:-}" ]] && return 0
+  SET_SEEN["$1"]=1
+  SET_PIDS+=("$1"); SET_ROLES+=("$2"); SET_ANCHOR+=("$3")
+  SET_STARTTIME+=("$4"); SET_AGE+=("$5"); SET_CWDNL+=("$6"); SET_FDNL+=("$7")
+  return 0
+}
 
 if (( anchors > 0 )); then
   for i in "${!ANCHOR_PIDS[@]}"; do
@@ -590,31 +736,63 @@ if (( anchors > 0 )); then
     [[ -n "$a_key" ]] || continue
 
     # STRUCTURAL REFUSAL — the scanner is inside the doomed directory and cannot
-    # adjudicate it.
-    if [[ -n "$SELF_CWD_KEY" && "$SELF_CWD_KEY" == "$a_key" ]]; then
+    # adjudicate it. Both the real key and any injected extra key refuse.
+    if [[ "$SELF_CWD_KEY" == "$a_key" ]] \
+       || [[ -n "$SELF_CWD_KEY_EXTRA" && "$SELF_CWD_KEY_EXTRA" == "$a_key" ]]; then
       die_invalid "the scanner's own cwd is the candidate inode — it cannot adjudicate the directory it is standing in"
     fi
 
+    # THE ANCHOR IS CONFIRMED BEFORE ANY MEMBER IS QUEUED.
+    #
+    # Previously this re-classification was the LAST statement of the loop, so
+    # its `continue` skipped only the anchor's own append and left every member
+    # already queued — signalled with no confirmed anchor at all, which is the
+    # one thing the property forbids.
+    _orphan_classify "$a_pid" anchor || continue
+    a_st="$_OC_STARTTIME"; a_age="$_OC_AGE"
+    a_cwdnl="$_OC_CWD_NLINK"; a_fdnl="$_OC_FD255_NLINK"
+    a_sid="$(_orphan_sid "$a_pid")"
+
     members=()
+    m_st=(); m_age=(); m_cwdnl=()
     for p in ${ALL_PIDS[@]+"${ALL_PIDS[@]}"}; do
       [[ "$p" == "$a_pid" ]] && continue
-      k="$(_orphan_cwd_key "$p")"
+      k="${CWD_KEY_OF[$p]:-}"
       [[ -n "$k" && "$k" == "$a_key" ]] || continue
+
+      # SAME SESSION as the anchor — the member conjunct that bounds the blast
+      # radius to the orphaned TREE rather than to everything standing in one
+      # directory.
+      #
+      # Measured on this box: the repo-root cwd inode is shared by 49 own-uid
+      # processes, 41 of which clear the age floor — twelve live agent sessions
+      # among them — and 41 is under the default cap, so one anchor would have
+      # auto-authorized all of them. The session id is inherited across fork and
+      # exec and changes only on setsid(), so an orphaned suite tree shares one
+      # even after its leader dies, while an unrelated editor or shell that
+      # merely cd'd into the directory does not. Measured effect on that
+      # cluster: 41 candidates -> at most 5.
+      #
+      # Fails toward alive: an unreadable session id on either side is not a
+      # member. Counted, because a gate with no observable cannot be falsified —
+      # which is how G1 shipped unreachable in the first place.
+      m_sid="$(_orphan_sid "$p")"
+      if [[ -z "$a_sid" || -z "$m_sid" || "$m_sid" != "$a_sid" ]]; then
+        skipped_other_session=$((skipped_other_session + 1)); continue
+      fi
+
       _orphan_classify "$p" member || continue
-      members+=("$p")
+      members+=("$p"); m_st+=("$_OC_STARTTIME"); m_age+=("$_OC_AGE"); m_cwdnl+=("$_OC_CWD_NLINK")
     done
 
     total=$(( ${#members[@]} + 1 ))
 
     # CARDINALITY CAP. The default is measured against the motivating incident
-    # rather than guessed: `git worktree remove` under a running test-all.sh
-    # produces a suite tree far wider than the 8 an earlier draft proposed, so
-    # that value would have refused precisely the incident this tool exists for.
-    # The cap bars AUTOMATIC action only — the full set is always reported, and
-    # `reap` takes an explicit override the banner names, so it is a speed bump
-    # for a human rather than a wall for the tool. It is also a free
-    # denial-of-reaping (any own-uid process can fchdir into the doomed inode
-    # enough times to hold a set over the cap), which is a further reason it
+    # rather than guessed. The cap bars AUTOMATIC action only — the full set is
+    # always reported, and `reap` takes an explicit override the banner names, so
+    # it is a speed bump for a human rather than a wall for the tool. It is also
+    # a free denial-of-reaping (any own-uid process can fchdir into the doomed
+    # inode enough times to hold a set over it), which is a further reason it
     # must not be a hard wall.
     over_cap=0
     if (( total > ORPHAN_REAPER_MAX_SET )); then
@@ -623,23 +801,24 @@ if (( anchors > 0 )); then
       say "set for anchor $a_pid has $total members, over the cap of $ORPHAN_REAPER_MAX_SET — refusing to act automatically; re-run with ORPHAN_REAPER_MAX_SET=$total to override"
     fi
 
-    for p in ${members[@]+"${members[@]}"}; do
+    for mi in "${!members[@]}"; do
+      p="${members[$mi]}"
       set_members=$((set_members + 1))
-      printf 'member pid=%s anchor=%s\n' "$p" "$a_pid"
+      # The reader has to be able to JUDGE this process, not just see its pid.
+      # The whole trigger design rests on a person or an agent reviewing the set
+      # before anything is signalled, and members are signalled FIRST.
+      printf 'member pid=%s anchor=%s age=%s starttime=%s cwd_nlink=%s\n' \
+        "$p" "$a_pid" "${m_age[$mi]}" "${m_st[$mi]}" "${m_cwdnl[$mi]}"
+      _mcmd=""
+      _mcmd=$(tr '\0' ' ' < "$ORPHAN_PROC_ROOT/$p/cmdline" 2>/dev/null) || _mcmd=""
+      PATH_LINES+=("path pid=$p kind=cmdline value=$(_orphan_sanitize "$_mcmd")")
       if (( over_cap == 0 )); then
-        _orphan_classify "$p" member || continue
-        SET_PIDS+=("$p"); SET_ROLES+=("member"); SET_ANCHOR+=("$a_pid")
-        SET_STARTTIME+=("$_OC_STARTTIME"); SET_AGE+=("$_OC_AGE")
-        SET_CWDNL+=("$_OC_CWD_NLINK"); SET_FDNL+=("$_OC_FD255_NLINK")
+        _set_add "$p" member "$a_pid" "${m_st[$mi]}" "${m_age[$mi]}" "${m_cwdnl[$mi]}" "?"
       fi
     done
-    # The anchor itself counts as a set member for reporting.
     set_members=$((set_members + 1))
     if (( over_cap == 0 )); then
-      _orphan_classify "$a_pid" anchor || continue
-      SET_PIDS+=("$a_pid"); SET_ROLES+=("anchor"); SET_ANCHOR+=("$a_pid")
-      SET_STARTTIME+=("$_OC_STARTTIME"); SET_AGE+=("$_OC_AGE")
-      SET_CWDNL+=("$_OC_CWD_NLINK"); SET_FDNL+=("$_OC_FD255_NLINK")
+      _set_add "$a_pid" anchor "$a_pid" "$a_st" "$a_age" "$a_cwdnl" "$a_fdnl"
     fi
   done
 fi
@@ -657,8 +836,21 @@ case "$MODE" in
       # channel wrote to an alarm file that its own health predicate deleted
       # five minutes later; that was worse than a report nobody acts on, it was
       # a report nobody RECEIVES.
-      printf 'reap_command bash scripts/orphan-process-reaper.sh reap\n'
-      say "$would_signal process(es) look orphaned; nothing has been signalled. Review the set above, then run: bash scripts/orphan-process-reaper.sh reap"
+      # BIND THE REVIEWED SET TO THE DESTROYED SET. `reap` is an independent
+      # walk, so without this the design applies "a set computed at T0 is not
+      # evidence at T1" WITHIN a run and abandons it across the review boundary
+      # — the one boundary that carries the operator's consent. The printed
+      # command pins the exact pids and their starttimes; `reap` refuses
+      # anything not on the list, so a set that widened between review and
+      # action cannot be acted on silently.
+      _auth=""
+      for _ai in "${!SET_PIDS[@]}"; do
+        _auth+="${SET_PIDS[$_ai]}:${SET_STARTTIME[$_ai]},"
+      done
+      _auth="${_auth%,}"
+      printf 'reap_authorization %s\n' "$_auth"
+      printf 'reap_command ORPHAN_REAPER_ONLY_PIDS=%s bash scripts/orphan-process-reaper.sh reap\n' "$_auth"
+      say "$would_signal process(es) look orphaned; nothing has been signalled. Review the set above, then run the reap_command line printed on stdout — it pins the exact pids you reviewed."
     fi
     emit_summary
     exit 0
@@ -690,7 +882,7 @@ fi
 # re-examined by anyone — and the victim class has unrecoverable output by
 # construction, so this is the only record that a false positive ever happened.
 if [[ "$evidence" != "ok" ]]; then
-  say "refusing to reap: the evidence channel is down, and an unrecorded reap of an unrecoverable-output process leaves no trace that a false positive happened"
+  say "refusing to reap (evidence=$evidence): the evidence channel is down, and an unrecorded reap of an unrecoverable-output process leaves no trace that a false positive happened"
   refused=$((refused + 1))
   emit_summary
   exit 1
@@ -712,6 +904,18 @@ signal_one() {  # index
   local i="$1" pid="${SET_PIDS[$1]}" role="${SET_ROLES[$1]}"
   local d="$ORPHAN_PROC_ROOT/$pid"
 
+  # AUTHORIZATION. Refusal-only by construction: when the seam is unset nothing
+  # changes, and when it is set it can only remove pids from the set. The
+  # starttime is part of the token so a recycled pid cannot inherit consent
+  # granted to its predecessor.
+  if [[ -n "$ORPHAN_REAPER_ONLY_PIDS" ]]; then
+    case ",$ORPHAN_REAPER_ONLY_PIDS," in
+      *",$pid:${SET_STARTTIME[$i]},"*) ;;
+      *",$pid,"*) ;;
+      *) refused_unauthorized=$((refused_unauthorized + 1)); return 0 ;;
+    esac
+  fi
+
   # Re-verification at the signal site covers pid recycling AND inode recycling,
   # which are the same class: an inode number is pinned only while something
   # holds it, and /tmp is tmpfs with fast churn, so a set membership computed at
@@ -730,8 +934,20 @@ signal_one() {  # index
   if ! _orphan_classify "$pid" "$role"; then
     late_refused=$((late_refused + 1)); return 0
   fi
-  # The anchor must still be alive and still unlinked.
+  # The anchor must still be alive and still unlinked — AND still be the same
+  # process, and still the one this member belongs to. Re-testing only that some
+  # process at that pid has an unlinked cwd would let a recycled pid inherit the
+  # authority, and never re-comparing the keys would let a member that fchdir'd
+  # into a different doomed directory keep a membership it no longer has. Both
+  # are the recycling class this file already refuses for the member's own
+  # starttime; the relation that authorizes the kill deserves the same test.
   if ! _orphan_is_unlinked "$ORPHAN_PROC_ROOT/${SET_ANCHOR[$i]}/cwd"; then
+    late_refused=$((late_refused + 1)); return 0
+  fi
+  local now_key anchor_key
+  now_key="$(_orphan_cwd_key "$pid")"
+  anchor_key="$(_orphan_cwd_key "${SET_ANCHOR[$i]}")"
+  if [[ -z "$now_key" || -z "$anchor_key" || "$now_key" != "$anchor_key" ]]; then
     late_refused=$((late_refused + 1)); return 0
   fi
   # Operand validation AT THE SIGNAL SITE, not only at the walk.
@@ -743,7 +959,10 @@ signal_one() {  # index
   cmdline=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null) || cmdline=""
   # Verdict FIRST, attacker-influenceable cmdline LAST.
   local rec
-  rec="orphan-reap verdict=authorized pid=$pid role=$role uid=$SELF_UID starttime=${SET_STARTTIME[$i]} age=${SET_AGE[$i]} cwd_nlink=${SET_CWDNL[$i]} fd255_nlink=${SET_FDNL[$i]} anchor=${SET_ANCHOR[$i]} cmdline=$(_orphan_sanitize "$cmdline")"
+  # `mode=`/`dry=` are load-bearing: without them a REHEARSAL emits a record
+  # byte-identical to a real kill, so the one artifact that can ever prove a
+  # false positive happened cannot distinguish rehearsed from signalled.
+  rec="orphan-reap verdict=authorized mode=$MODE dry=$DRY pid=$pid role=$role uid=$SELF_UID starttime=${SET_STARTTIME[$i]} age=${SET_AGE[$i]} cwd_nlink=${SET_CWDNL[$i]} fd255_nlink=${SET_FDNL[$i]} anchor=${SET_ANCHOR[$i]} cmdline=$(_orphan_sanitize "$cmdline")"
   if ! evidence_write "$rec"; then
     say "evidence write failed for pid $pid — refusing to signal it unrecorded"
     refused=$((refused + 1)); return 0
@@ -761,6 +980,10 @@ signal_one() {  # index
     kill -TERM -- "$pid" 2>/dev/null || { failed=$((failed + 1)); return 0; }
   fi
   signalled=$((signalled + 1))
+  # The OUTCOME record. The pre-record above proves intent; nothing proved the
+  # syscall's result, so a failed kill left a standing `verdict=authorized` with
+  # no counter-record. Loseable by design — the pre-record stays load-bearing.
+  evidence_write "orphan-reap outcome=signalled pid=$pid role=$role" || true
   printf 'signalled pid=%s role=%s\n' "$pid" "$role"
   return 0
 }
