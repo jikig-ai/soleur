@@ -1163,6 +1163,33 @@ workflows, not as the 25th hand-rolled copy — building it per-workflow is prec
 the deferral exists to end. Re-evaluation criterion: the next workflow found to have no channel, or
 a request from the notification's recipient.
 
+**`archive-kb.sh` will move a spec artifact this branch promoted to a GUARD INPUT (found in QA).**
+`terraform-target-parity.test.ts` pins the pre-gate ceiling by reading
+`knowledge-base/project/specs/feat-one-shot-.../measurements.md` for its `LADDER-PIN:` marker —
+deliberately, so the literal and the measurement cannot drift. But compound's automatic
+consolidation archives `specs/feat-<slug>/` by `git mv`, and the script has no idea any tracked
+file outside `knowledge-base/` reads it.
+
+**MEASURED, not assumed:** with that directory renamed out of the way the suite goes from
+**177 pass / 0 fail** to **158 pass / 4 fail / 1 error**, with 15 tests never reaching an
+assertion (`readFileSync` throws before `terms()` returns). Archival at ship time would therefore
+red `main`.
+
+Archival was consequently **NOT run** in this session's compound phase — recorded here rather than
+performed. Two candidate fixes, neither bundled into this branch (different subsystem, scope
+discipline):
+
+1. **Make the move refuse loudly.** Before each `git mv`, grep the tracked tree outside
+   `knowledge-base/` for the artifact path and refuse if anything references it. ~15 lines plus a
+   new `archive-kb.test.sh` (the script currently has no sibling suite at all, which is its own
+   finding). This is the "make a silent failure mode loud" shape.
+2. **Move the pin out of the session artifact.** A measurement that a merged guard reads is no
+   longer a session artifact; it belongs somewhere permanent, with `measurements.md` keeping the
+   derivation. Larger, and it needs the ladder authors' intent.
+
+Fix (1) is the one that generalises — every future plan that pins a guard to its own measurement
+log has this hazard, and only the script can see it.
+
 ## References & Research
 
 - Issues: **#7586** (P1, the channel), **#7587** (P2, the budget). Context only, **not** work

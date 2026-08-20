@@ -30,6 +30,18 @@ are substituted by `general-purpose` agents carrying each agent's own definition
 - Unverifiable from the repo, carried into tasks.md Phase 0.6 for empirical re-confirmation:
   `git_data_prd`'s tfstate absence, and `$RUNNER_TEMP` step-persistence. Both load-bearing.
 
+### QA + Compound Phase (2026-08-20)
+- QA found ONE uncovered plan scenario (#8, the cancellation window) and fixed it: `arm-heartbeats.test.sh`
+  T11 + mutation row M18, plus two smaller gaps (S4's `::error::` annotation, T4's self-clearing
+  sequence). Floor 190 -> 206. Commit 9499bc0f7.
+- **DO NOT RUN `archive-kb.sh` ON THIS BRANCH until the deferral in the plan is resolved.**
+  `terraform-target-parity.test.ts:4023` reads
+  `knowledge-base/project/specs/feat-one-shot-.../measurements.md` for its `LADDER-PIN:` values.
+  Archiving that directory takes the suite from 177 pass / 0 fail to 158 pass / 4 fail / 1 error
+  (measured by renaming the directory and re-running). Compound's automatic consolidation was
+  therefore deliberately NOT executed; see the plan's `## Deferrals` section for the two candidate
+  fixes. Whoever runs ship must either resolve it or skip archival explicitly.
+
 ### Decisions
 - Separate `notify-apply-failure` job, NOT the issue's `if: failure()` step arm. Run 32168637847
   measures HALF of that: a job that exceeds its own `timeout-minutes` concludes `cancelled`, its

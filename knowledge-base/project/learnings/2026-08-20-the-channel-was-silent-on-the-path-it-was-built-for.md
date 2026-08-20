@@ -227,6 +227,34 @@ validating `case` rather than restated; no sentence may assert a fact the job di
 and any branch that calls an item urgent must prescribe a lever whose premise is read out of
 the shipped script.
 
+## 7. A session artifact promoted to a guard input stops being a session artifact — and the archiver cannot tell
+
+Found while running compound's own automatic-consolidation step.
+
+The ladder guard deliberately does **not** carry the pre-gate ceiling as a bare literal. It reads
+`LADDER-PIN: MAX_PRE_GATE_S=…` out of the spec's `measurements.md`, so the number and its
+derivation cannot drift. That is good practice — and it quietly changed what that file *is*.
+
+`archive-kb.sh` discovers `knowledge-base/project/specs/feat-<slug>/` and `git mv`s it into
+`archive/` at compound time, one step before ship. It has no idea whether anything reads what it
+moves. **Measured** by renaming the directory and re-running the suite: **177 pass / 0 fail →
+158 pass / 4 fail / 1 error**, with 15 tests never reaching an assertion because `readFileSync`
+throws before the terms are assembled. Archival would have reddened `main`, from a step whose
+entire purpose is tidying.
+
+**The generalizable form: pinning a guard to a session artifact promotes that artifact out of the
+session, and nothing in the pipeline observes the promotion.** The pin is still the right call —
+a literal with nothing cross-checking it fails *open*, which is worse. What is missing is the
+other half: a `git mv` that relocates a tracked file must first ask whether anything outside its
+own tree references it, and refuse loudly if so. Until it does, "the archiver runs automatically
+at compound time" and "guards may pin to measurement logs" are two individually-good practices
+that compose into a broken `main`.
+
+(Two smaller findings from the same dry run: the discovery glob missed this branch's plan entirely,
+because the plan is named for its topic and not for the branch slug — the known `*<slug>*` gap the
+compound skill documents; and `archive-kb.sh` has **no sibling test suite at all**, on a script
+whose only verb is `git mv`.)
+
 ## Session Errors
 
 **The `failure()` citation carried a pre-correction sentence into the next phase.**
