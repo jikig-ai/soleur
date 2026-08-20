@@ -202,7 +202,7 @@ logs:
   retention: GitHub default
 discoverability_test:
   command: bash apps/web-platform/infra/cutover-inngest-workflow.test.sh
-  expected_output: all assertions pass, with a non-zero assertion count reported
+  expected_output: "0 failed"
 ```
 
 ## Architecture Decision (ADR/C4)
@@ -455,3 +455,19 @@ remediation is not the #6617 dead-remediation defect), `apps/web-platform/infra/
 `knowledge-base/engineering/architecture/decisions/ADR-030-inngest-as-durable-trigger-layer.md`, and
 `knowledge-base/engineering/operations/runbooks/inngest-server.md` (which never named G3.6 — a gap
 this PR itself created).
+
+### `expected_output` corrected 2026-08-20 (#7462) — it was prose, so it verified nothing
+
+`hr-observability-as-plan-quality-gate` exists so a declared probe is actually runnable, and
+preflight Check 10 EXECUTES the command and substring-matches its stdout against
+`expected_output`. This plan declared `all assertions pass, with a non-zero assertion count
+reported` — a sentence no run ever emits, so the probe would have failed Check 10 as
+expectation drift while the suite was in fact green. Corrected to `"0 failed"`, which the
+runner's terminal `=== Results: N passed, 0 failed ===` line does emit and which is stable
+across the assertion-floor raises this PR performs (408 → 449).
+
+Deliberately NOT pinned to the pass COUNT: that would go stale on the next assertion added,
+and a probe that must be edited every time the thing it watches improves is a probe that gets
+edited without being read. The field is edited in place rather than appended because it is a
+machine-read schema field consumed by a gate, not a dated measurement — the reasoning for the
+change is what is appended here.

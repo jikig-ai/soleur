@@ -149,6 +149,35 @@ Four design choices worth carrying forward:
    file rather than the completion notification, and the box was `CAPACITY_CONTENDED` throughout
    (two sibling worktrees), which is why the `TEST_GROUP=scripts` shard queued on the advisory lock.
 
+8. **My new harness captures would have KILLED the suite instead of failing an assertion.**
+   `scripts/lint-shell-capture-exit.py` reported **11 new findings**, all of the shape
+   `X=$(grep -n … "$ARM_FILE" | head -1 | cut -d: -f1)`. Under `set -euo pipefail` a `grep` that
+   finds nothing exits 1, the assignment inherits it, and the suite **dies at that line** — so if
+   an ordering anchor ever stopped matching, the operator would get an abrupt exit with no
+   diagnostic rather than the named assertion failing. The pre-existing `G3ABORT_LN` I copied the
+   shape from is baselined, which is exactly why copying it felt safe.
+   **Recovery:** `|| true` on all 11; every consumer already guards with `-n`, so an empty capture
+   now FAILS its assertion loudly (mutation-confirmed: M1 and M16 still red).
+   **Prevention:** run the repo's own lints against the branch, not only the suite. This one is a
+   registered suite in `test-all.sh` and it caught in one second what reading the diff did not.
+
+9. **preflight Check 10's `env -i` sandbox found a PRE-EXISTING locale bug — and it was reported
+   as my regression.** Inside the sandbox the suite read **448 passed, 2 failed**, one of which was
+   the anti-deletion floor. The root cause was a single assertion from #6218:
+   `grep -qE 'SEAM . operator maintenance-window steps'`, where the separator is an **em-dash**
+   (`e2 80 94`). ERE `.` matches exactly one **byte**, so measured: `LC_ALL=C` → 0 matches,
+   `LC_ALL=en_US.UTF-8` → 1. Every local run has a UTF-8 locale; `env -i` does not, and neither
+   does a CI runner with no `LANG`.
+   **Recovery:** `grep -qF` on the literal — byte-exact and locale-independent — fixed inline
+   (1 line, a file this PR already owns, so the cost-of-filing gate says inline). The suite is now
+   green under **both** `LC_ALL=C` and UTF-8, and Check 10 executes it in the sandbox and passes.
+   **Prevention:** this is `work/SKILL.md` §9's "re-run each touched shard under the environments
+   it SHIPS into" rule paying for itself from an unexpected direction — the environment that
+   surfaced it was a *preflight gate's* sandbox, not a shard re-run. Generalise it: any assertion
+   using ERE `.` or a character class against text containing a multi-byte character is
+   locale-dependent, and `grep -F` is the fix. Note the shape of the false signal — the floor
+   assertion made ONE broken assertion look like TWO, and both looked like mine.
+
 ## Verification
 
 - `apps/web-platform/infra/cutover-inngest-workflow.test.sh` — **449 passed, 0 failed**;

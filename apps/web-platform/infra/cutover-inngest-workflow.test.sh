@@ -173,7 +173,13 @@ assert "execute 2.0 abort carries P1-6 remediation text" "grep -qE 'Remediation 
 assert "execute has a QUIESCE HARD GATE (P1-7)" "grep -qE 'QUIESCE HARD GATE' '$WF'"
 assert "quiesce gate tracks still-running hosts (STILL_RUNNING accumulator)" "grep -qE 'STILL_RUNNING' '$WF'"
 assert "quiesce gate withholds the SEAM + exits non-zero on survivors" "grep -qE 'QUIESCE HARD GATE FAILED' '$WF'"
-assert "execute prints the operator SEAM only after the gate" "grep -qE 'SEAM . operator maintenance-window steps' '$WF'"
+# `grep -qF`, not `-qE 'SEAM . operator'` (#7462): the separator is an EM-DASH (e2 80 94),
+# and ERE `.` matches exactly one BYTE, so the regex form matches only under a UTF-8 locale.
+# Measured — LC_ALL=C returns 0 matches, LC_ALL=en_US.UTF-8 returns 1 — which false-FAILED
+# this assertion (and, via the count, the anti-deletion floor) inside preflight Check 10's
+# `env -i` sandbox and would do the same on any CI runner with no LANG set. A fixed-string
+# match is byte-exact and locale-independent.
+assert "execute prints the operator SEAM only after the gate" "grep -qF 'SEAM — operator maintenance-window steps' '$WF'"
 # The SEAM must gate the flip arm on Better Stack, NOT a host read (P0-2).
 assert "SEAM confirms the flip via Better Stack, not a host cat (P0-2)" "grep -qE 'Better Stack' '$WF'"
 # #6369 — the 2.2b/2.3 arm-flip is no longer a manual Doppler write in the SEAM; the SEAM now
@@ -485,7 +491,7 @@ assert "arm) no same-line short-circuit gates a prod write" "! grep -qE '(&&|\\|
 # seam. Anchored on the `| DOPPLER_TOKEN=` pipe, which a comment cannot emit. The whitespace
 # class is [[:space:]] in the grep and must match the strip, so tabs are handled identically.
 G4_WRITE_LINES=$(grep -cE '^[[:space:]]+(printf|echo)[^|]*\| DOPPLER_TOKEN=' "$ARM_FILE" || true)
-G4_WRITE_DEPTHS=$(grep -oE '^[[:space:]]+(printf|echo)[^|]*\| DOPPLER_TOKEN=' "$ARM_FILE" | sed -E 's/[^[:space:]].*//' | awk '{print length}' | sort -u | wc -l)
+G4_WRITE_DEPTHS=$(grep -oE '^[[:space:]]+(printf|echo)[^|]*\| DOPPLER_TOKEN=' "$ARM_FILE" | sed -E 's/[^[:space:]].*//' | awk '{print length}' | sort -u | wc -l) || true
 assert "arm) exactly three prod secret writes remain (URI, heartbeat, flag)" "[[ '$G4_WRITE_LINES' -eq 3 ]]"
 # Indent depth and token-absence are both defeated by an if/else that keeps the write at the same
 # column (bash ignores indentation), which is the catastrophic mutation: `if [[ $G3_OUTCOME ==
@@ -493,8 +499,8 @@ assert "arm) exactly three prod secret writes remain (URI, heartbeat, flag)" "[[
 # boots against the dark backend and the job exits 0. Measured: it satisfied every other assertion
 # here. Pin the REGION instead — from the first prod write to the `armed` write there must be no
 # branching at all, because all three writes are unconditional by design.
-W_START=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1)
-W_END=$(grep -nF "printf '%s' 'armed'" "$ARM_FILE" | head -1 | cut -d: -f1)
+W_START=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1) || true
+W_END=$(grep -nF "printf '%s' 'armed'" "$ARM_FILE" | head -1 | cut -d: -f1) || true
 W_BRANCH=$(awk -v a="$W_START" -v b="$W_END" 'NR>=a && NR<=b' "$ARM_FILE" | grep -cE '^[[:space:]]*(if|else|elif|fi)\b' || true)
 assert "arm) the prod-write region is non-empty (F6 non-vacuity)" "[[ -n '$W_START' && -n '$W_END' && '$W_END' -gt '$W_START' ]]"
 assert "arm) NO branching between the first prod write and the armed write" "[[ '$W_BRANCH' -eq 0 ]]"
@@ -661,8 +667,8 @@ assert "g3_action scenarios actually dispatched (>=7)" "[[ '$ACT_EVALS' -ge 7 ]]
 # One abort gate, routed through the tested function, sitting before the first prod write.
 assert "arm) has exactly one G3 abort gate routed through g3_action" "[[ \$(grep -cF 'if [[ \"\$(g3_action \"\$G3_OUTCOME\")\" == \"abort\" ]]; then exit 1; fi' '$ARM_FILE') -eq 1 ]]"
 assert "arm) no G3 outcome arm carries its own exit (the gate decides)" "! grep -qE '^[[:space:]]+(refuse|skip|write)[a-z-]*\)[^#]*exit 1' '$ARM_FILE'"
-G3ABORT_LN=$(grep -nF 'g3_action "$G3_OUTCOME"' "$ARM_FILE" | head -1 | cut -d: -f1)
-G3ABORT_PGW=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1)
+G3ABORT_LN=$(grep -nF 'g3_action "$G3_OUTCOME"' "$ARM_FILE" | head -1 | cut -d: -f1) || true
+G3ABORT_PGW=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1) || true
 assert "arm) the G3 abort gate precedes the first prod write" "[[ -n '$G3ABORT_LN' && -n '$G3ABORT_PGW' && '$G3ABORT_LN' -lt '$G3ABORT_PGW' ]]"
 
 # G3.6's decision, driven the same way. Greps over the arm body could not see this: adding
@@ -846,16 +852,16 @@ assert "arm) G3.7 aborts unless the outcome is exactly 'clear' (fail-closed by c
 assert "arm) no G3.7 outcome arm carries its own exit (the gate decides)" \
   "! grep -qE '^[[:space:]]+(clear|latched|unreadable)\\)[^#]*exit 1' '$ARM_FILE'"
 # shellcheck disable=SC2016  # literal search pattern, not an expansion (G3ABORT_LN precedent)
-FL_GATE_LN=$(grep -nF 'if [[ "$FL_OUTCOME" != "clear" ]]; then exit 1; fi' "$ARM_FILE" | head -1 | cut -d: -f1)
-FL_PGW_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1)
-FL_ARMW_LN=$(grep -nE "secrets set INNGEST_CUTOVER_FLIP " "$ARM_FILE" | head -1 | cut -d: -f1)
+FL_GATE_LN=$(grep -nF 'if [[ "$FL_OUTCOME" != "clear" ]]; then exit 1; fi' "$ARM_FILE" | head -1 | cut -d: -f1) || true
+FL_PGW_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1) || true
+FL_ARMW_LN=$(grep -nE "secrets set INNGEST_CUTOVER_FLIP " "$ARM_FILE" | head -1 | cut -d: -f1) || true
 assert "arm) the G3.7 gate precedes the first prod write (pre-G4, not merely pre-G5)" \
   "[[ -n '$FL_GATE_LN' && -n '$FL_PGW_LN' && '$FL_GATE_LN' -lt '$FL_PGW_LN' ]]"
 assert "arm) the G3.7 gate precedes the 'armed' write (the double-fire window it closes)" \
   "[[ -n '$FL_GATE_LN' && -n '$FL_ARMW_LN' && '$FL_GATE_LN' -lt '$FL_ARMW_LN' ]]"
 # It must run AFTER G3.6 — both are pre-write refusals, and the cheaper Doppler read should not
 # be gated behind a Better Stack round-trip.
-FL_DIAG_LN=$(grep -nE 'case "\$\(diag_boot_decide ' "$ARM_FILE" | head -1 | cut -d: -f1)
+FL_DIAG_LN=$(grep -nE 'case "\$\(diag_boot_decide ' "$ARM_FILE" | head -1 | cut -d: -f1) || true
 assert "arm) G3.7 runs after G3.6 (ordering is stated, not incidental)" \
   "[[ -n '$FL_DIAG_LN' && -n '$FL_GATE_LN' && '$FL_DIAG_LN' -lt '$FL_GATE_LN' ]]"
 # The refusal must name the durable latch and forbid SSH, like every other refusal in this file.
@@ -907,8 +913,8 @@ assert "arm) G3.5 is a HARD GATE — a divergence exits op=arm non-zero (PARITY_
 assert "arm) has a G3.6 diagnostic-boot hard gate" "grep -qF 'G3.6 REFUSING' '$ARM_FILE'"
 assert "arm) G3.6 reads INNGEST_DIAGNOSTIC_BOOT from the isolated config via the arm token" "grep -qE 'doppler secrets get INNGEST_DIAGNOSTIC_BOOT -p soleur-inngest -c prd' '$ARM_FILE'"
 assert "arm) G3.6 fails CLOSED on an unreadable diagnostic flag" "grep -qF '__UNREADABLE__' '$ARM_FILE'"
-G36_LN=$(grep -nF 'G3.6 REFUSING' "$ARM_FILE" | head -1 | cut -d: -f1)
-G36_PGW_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1)
+G36_LN=$(grep -nF 'G3.6 REFUSING' "$ARM_FILE" | head -1 | cut -d: -f1) || true
+G36_PGW_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1) || true
 assert "arm) G3.6 refuses BEFORE the first prod write (G4)" "[[ -n '$G36_LN' && -n '$G36_PGW_LN' && '$G36_LN' -lt '$G36_PGW_LN' ]]"
 assert "arm) G3.5 cites the #6178 cutover-502 condition in its remediation" "grep -qF 'cutover-502' '$ARM_FILE'"
 # The parity gate runs BEFORE the arm writes (G4/G5) — a divergent channel must
