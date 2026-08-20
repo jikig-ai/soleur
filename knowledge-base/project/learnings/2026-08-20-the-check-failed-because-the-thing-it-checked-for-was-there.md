@@ -124,3 +124,46 @@ have to come *after* that loop.
 
 **A warning that should have been an error is how a broken fixture becomes a false
 verdict about the code under test.**
+
+## Second incident, same session: the gate committed into the real repo
+
+Running `scripts/test-all.sh` from inside a worktree put four synthetic commits
+onto **real branches** — `victim change`, `victim2 change`, `v9 change`,
+`v12 change`, author `t <t@t>`, files `a.txt`–`d.txt` — and switched the worktree
+onto `main`. Local `main` gained three of them; the feature branch gained one.
+`origin` was untouched and no other worktree was harmed, but nothing in the run
+said so: the gate exited 1 with its log **deleted**, and the only visible symptom
+was that a fix verified minutes earlier had vanished from the working tree.
+
+Chain:
+
+1. The run was launched with `TMPDIR=/var/tmp`.
+2. `test-all.sh` runs suites in parallel, and one of them sweeps stale tmp
+   directories. It deleted a sibling suite's **live** fixture mid-run — and the
+   gate's own log, which is what made the failure unreadable.
+3. `plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh` runs
+   `set -uo pipefail` **without `-e`**, and builds its fixture with errors
+   suppressed (`git worktree add … >/dev/null 2>&1`).
+4. With the fixture gone the guarded `cd` failed, execution continued, and the
+   following `git commit` calls ran **in the current directory** — the real repo.
+
+Run in isolation with CWD pointed at a throwaway repo, the same suite is
+**40/40 green and pollutes nothing**. The bug is not in the assertions; it is
+that the suite's writes are only correct while its `cd` is.
+
+### Rules
+
+1. **A test that runs `git commit` without `-e` is a loaded gun aimed at `$PWD`.**
+   Fixture setup whose failure is suppressed, plus no `set -e`, means every
+   subsequent write lands wherever the shell happens to be. Either `set -e`, or
+   make each mutation absolute (`git -C "$fixture"`), so a lost `cd` cannot
+   redirect it. Never let a suite's write target be implicit.
+2. **A sweeper and a fixture must not share a directory.** `TMPDIR=/var/tmp`
+   put live fixtures where a parallel sweep suite cleans. Pick a fixture root
+   the sweep cannot reach, or make the sweep age-gate on the *run*, not the file.
+3. **A gate that deletes its own log cannot be diagnosed.** Write the log
+   somewhere the suites under test do not clean; here `/var/tmp` erased the
+   only evidence and left `GATE_EXIT=1` alone in a 12-byte file.
+4. **Recover with `git update-ref`, not `reset --hard`.** The shared root
+   carried 10 staged changes and 127 untracked files belonging to other
+   sessions. Moving the branch ref restored `main` and touched neither.
