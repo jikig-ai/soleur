@@ -2,7 +2,7 @@
 #
 # One dedicated Hetzner host running the self-hosted OSS Inngest server
 # (`inngest start`, pinned v1.19.4) as a systemd unit with host-local Redis (AOF
-# on a block volume) + a distinct non-prod Postgres backend, on the existing
+# on a block volume) + a Postgres backend, on the existing
 # private network (network.tf) at 10.0.1.40. EXTRACTED from the co-located web
 # host so exactly-one-instance is enforced by TOPOLOGY, not a runtime role-guard:
 # OSS Inngest v1.x is single-writer and two servers on the same prod Postgres
@@ -11,6 +11,16 @@
 # standby (ADR-143, #6459) — a different host from the fsn1 .11 retired 2026-07-17 (#6538). Its
 # private IP is in this host's :8288/:8289 allowlist (web_host_private_ips below), propagated to
 # the running host via the `inngest-host-replace` dispatch (#6608 window), NOT the merge-apply.
+#
+# ⚠ BACKEND QUALIFIER CORRECTED (#7462, 2026-08-20). The third line above read "a distinct
+# NON-PROD Postgres backend". That described the dark pre-cutover configuration and stopped
+# being true on 2026-07-23T15:46Z: `op=arm` writes the PROD DSN into INNGEST_POSTGRES_URI and
+# `op=rollback` has no inverse for that write, so the prod DSN is the post-first-arm steady
+# state of that slot (ADR-100 addendum 2026-08-20). The qualifier is DROPPED rather than
+# re-pinned to "prod", because the backend's identity is runtime state held in Doppler
+# soleur-inngest/prd — it is not a property of this file, and a re-pin would go stale the same
+# way. What this file DOES own is the single-writer topology asserted immediately above, and
+# that is unchanged.
 #
 # STRUCTURAL PRECEDENT: zot-registry.tf (ADR-096) / git-data.tf (ADR-068), NOT the
 # co-located inngest.tf. inngest.tf provisions keys/secrets for the ON-web-host
@@ -25,11 +35,18 @@
 # init-only, NO `remote-exec` (the SSH-parity guard has no exclusion path otherwise);
 # (2) no inngest cred is a github_actions_secret.
 #
-# DARK-ON-PROVISION (AC-DARK): the host is born on a DISTINCT NON-PROD Postgres
-# backend (INNGEST_POSTGRES_URI, set OUT-OF-BAND into this project's prd config — see
-# the doppler_secret block below) with an empty function registry, so it fires ZERO
-# prod crons at boot. Dark→live is a Phase-2 operator Postgres flip gated behind a
-# Redis FLUSHALL + DBSIZE==0 assertion (ADR-100 Decision 6). No window at provision.
+# DARK-ON-PROVISION (AC-DARK): the host is born with an empty function registry and
+# fires ZERO prod crons at boot. Dark→live is a Phase-2 operator Postgres flip gated
+# behind a Redis FLUSHALL + DBSIZE==0 assertion (ADR-100 Decision 6). No window at
+# provision.
+#
+# ⚠ AC-DARK's PREMISE CHANGED, its CONCLUSION did not (#7462, 2026-08-20). This read
+# "the host is born on a DISTINCT NON-PROD Postgres backend". Since 2026-07-23T15:46Z
+# INNGEST_POSTGRES_URI holds the PROD DSN (see the BACKEND QUALIFIER CORRECTED note at
+# the top of this file), so a host provisioned today renders the DURABLE-backend
+# ExecStart. It is still dark — but because inngest-server-flip-guard.sh refuses every
+# prod-URI start whose INNGEST_CUTOVER_FLIP is outside {armed,flipping,flushed,done},
+# NOT because the DSN is non-prod. Do not re-derive AC-DARK from the DSN.
 
 locals {
   # Fresh private IP in 10.0.1.0/24 — web = .10 (.11 retired 2026-07-17, #6538), git-data = .20, registry = .30.
@@ -192,10 +209,14 @@ resource "doppler_secret" "inngest_redis_password_dedicated" {
 # engages AFTER the resource is in state). It is the session-pooler (:5432, NEVER :6543 —
 # breaks inngest's sqlc prepared statements) connection string.
 #
-# AC-DARK: at provision this points at a DISTINCT NON-PROD Postgres backend (a fresh empty
-# database firing ZERO prod crons). It is flipped to the prod inngest Postgres ONLY at the
-# Phase-2 cutover (operator, maintenance window), immediately after a Redis FLUSHALL +
-# DBSIZE==0 assertion (ADR-100 Decision 6). Provision it BEFORE the host boots (else
+# AC-DARK: this pointed at a DISTINCT NON-PROD Postgres backend (a fresh empty database
+# firing ZERO prod crons) up to and including the first cutover arm. ⚠ SUPERSEDED (#7462,
+# 2026-08-20): op=arm wrote the prod DSN here on 2026-07-23T15:46Z and op=rollback has no
+# inverse for that write, so the prod DSN is this value's steady state and the flip to it is
+# no longer a pending Phase-2 event. Darkness is now held by inngest-server-flip-guard.sh's
+# flag allowlist, not by this value — see the AC-DARK note near the top of this file and the
+# ADR-100 addendum 2026-08-20. The FLUSHALL + DBSIZE==0 gate (ADR-100 Decision 6) is
+# unchanged and still fronts every forward flip. Provision it BEFORE the host boots (else
 # cold-boot bricks — plan 1.4/M4): set it via `doppler secrets set` on the soleur-inngest
 # prd config (stdin, never argv). Rotation: rotate the DB password in the Supabase dashboard
 # → re-set INNGEST_POSTGRES_URI in the soleur-inngest prd config.
