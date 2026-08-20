@@ -14,6 +14,13 @@ spec: knowledge-base/project/specs/feat-one-shot-6636-sentry-alert-migration/tas
 
 # fix: Sentry retired the legacy issue-alert read API (410) — un-wedge the sentry Terraform root (#6636)
 
+> **SUPERSEDED 2026-08-19 (#7590).** This plan's *outcome* stands — Option A (the `0.15.4` bump)
+> was and remains the right fix. Its *premise* about the 410 does not: the endpoint was not
+> transiently retired, it was **permanently deprecated on 2026-05-14** and is served under
+> scheduled brownouts (410 inside a recurring window, 200 outside it). Read
+> [§ Supersession](#supersession-2026-08-19-7590) at the foot of this file before reusing the
+> Phase 0 measurement pattern — that gate is the specific thing this PR retracts.
+
 ## ⚠️ Decision Headline (read first)
 
 The issue asks to **migrate all 23 `sentry_issue_alert` resources to `sentry_alert`** (with the provider bump as an "alternative to evaluate"). The evidence inverts that ordering:
@@ -170,6 +177,15 @@ This is the load-bearing phase. Nothing downstream is trusted until measured aga
 - [ ] **A.4** `README.md`: correct the stale "6 issue alerts" → 23 (4 import-only auth_* + 19 TF-owned) while here; update the §Local invocation `de.sentry.io` note only if Phase 0 shows it is wrong (per ADR-031 the API host is the org-subdomain, not `de.sentry.io` — README §First-time-import prose predates the 2026-05-17 host correction; correct if touched).
 - [ ] **A.5** Amend ADR-031 (see §Architecture Decision).
 
+<!-- lint-infra-ignore start -->
+<!-- Deferred-orchestrator prose. Phase B is a FALLBACK that was never reached (Phase 0 selected
+     Option A) and is now superseded — see § Supersession. It prescribes no human-run infra step:
+     B.4 is explicit that "state surgery cannot run from an operator SSH (there is no human-run
+     path)" and routes the whole sequence through a one-time `workflow_dispatch` on
+     apply-sentry-infra.yml. lint-infra-no-human-steps flags B.4 on actor + `terraform` proximity,
+     which inverts the sentence's meaning. Wrapped per the linter's own prescribed escape rather
+     than reworded, because this is a dated plan. See hr-no-ssh-fallback-in-runbooks. -->
+
 ### Phase B — Migrate to `sentry_alert` (fallback; only if Phase 0 proves no version clears the 410)
 
 Reached ONLY when Phase 0 measurement shows no available stable provider reads `sentry_issue_alert` without a 410. This path is high-blast-radius; re-obtain CPO sign-off before executing.
@@ -181,6 +197,8 @@ Reached ONLY when Phase 0 measurement shows no available stable provider reads `
 - [ ] **B.4 Execution vehicle (no-SSH):** state surgery cannot run from an operator SSH (there is no human-run path — ADR-031/#6589). It runs via a one-time `workflow_dispatch` job on `apply-sentry-infra.yml` (or a dedicated one-shot migration workflow) that performs `state rm` → `import` → `plan` (expect no-op) with the same Doppler R2 + `SENTRY_IAC_AUTH_TOKEN` plumbing the apply job uses. Sequence it BEFORE the merge that lands the `sentry_alert` blocks, or the post-merge full-root apply will try to CREATE 23 alerts (duplicates) — the create-gate would catch it, but do not rely on that as the plan.
 - [ ] **B.5 Destroy-guard extension (load-bearing for B):** `sentry_alert.action_filters[]` carries array-of-blocks (`conditions[]`, `actions[]`). BEFORE any `sentry_alert` enters the full-root plan, extend `tests/scripts/lib/destroy-guard-filter-sentry.jq` with a `select(.type == "sentry_alert")` nested-clause counting `action_filters[].conditions[]` + `action_filters[].actions[]` + `trigger_conditions[]` shrink, extend `tests/scripts/test-destroy-guard-sentry-scope-guard.sh` to allow `sentry_alert`, and update `tests/scripts/test-destroy-guard-counter-sentry.sh` + a fixture. (Per ADR-031 amendment 2026-05-29 Sharp Edge — the guard is `.tf ∪ state`-scoped and a new nested-block type slips it silently.)
 - [ ] **B.6** Amend ADR-031 to `sentry_alert`-adopted; update `assert-byok-rules-exist.sh` only if names change (they must not).
+
+<!-- lint-infra-ignore end -->
 
 ### Phase 2 — Verification (both options; read-only, no extra prod write)
 
@@ -316,3 +334,44 @@ No other overlap. (Check ran; result recorded.)
 - **Fallback (B):** no stable clears the 410 → translate 23 → `state rm` (refresh-free, survives 410) → `import` → destroy-guard extended → plan no-op.
 - **Negative:** no `*.tfstate` committed diff (A); the PR gate's own plan proves no 410 (self-verifying); `assert-byok-rules-exist.sh` still lists all TF-owned BYOK/chat rules by name post-apply.
 - **Guard:** `test-destroy-guard-sentry-scope-guard.sh` `[ok]`; `test-destroy-guard-counter-sentry.sh` pass; `test-sentry-full-root-apply.sh` pass.
+
+## Supersession (2026-08-19, #7590)
+
+Kept as the dated plan it is. Nothing above is edited away.
+
+**What still stands.** The `sentry_alert`/`monitor_ids` blocker, the lockfile and destroy-guard
+sharp edges, and Option A as the right *first* move — a provider-only change with no state surgery
+was correct to try before a 23-resource migration.
+
+**What does NOT stand: Option A did not solve the problem it was adopted to solve.** Phase 0.4
+adopted it on a clean plan plus a changelog datum (`#885` moved `sentry_issue_alert` reads off the
+legacy endpoint). The datum was never plan-measured — §0.1's own evidence file says so — because
+measuring it requires being inside a brownout window. CI measured it on 2026-08-20 with `jianyuan/sentry v0.15.4` installed: run
+`32362401543` (11:09:07Z) took `410 "This API no longer exists"` on **29 of 29**
+`sentry_issue_alert` reads and failed `terraform plan`, while run `32362320701`
+**one minute earlier** (11:08:09Z), same branch, same pin, succeeded. The same
+alternation appears on 2026-08-19 (17:43 pass / 18:26 fail; 21:21 pass / 21:30 fail). The pin is still preferable to
+`0.15.0-beta2` on stable-vs-beta grounds, but it does not clear the 410 and the root remains wedged
+on the vendor's schedule. The unresolved exposure is tracked in #7650.
+
+**What is retracted: the Phase 0 measurement gate's stopping rule.** Phase 0.4 adopts Option A on
+observing "a real `terraform plan` with zero 410s". Against a **scheduled brownout** that
+observation is not evidence of a fix — a plan run outside the window returns clean whether the
+provider was bumped or not, so the gate cannot distinguish "the bump cleared it" from "we probed
+between windows". Both states were observed on 2026-08-19 within one session, same token, same
+host, nothing changed on our side: 410 at ~20:5x UTC, 200/200/200 at 21:23 UTC. The gate's
+framing — "a claim to MEASURE, not to trust" — was correct and is not what is being retracted;
+one clean probe as the *stopping condition* is.
+
+**What the gate should have read instead.** The response headers, which name the retirement
+directly and were present throughout: `x-sentry-deprecation-date` and, per-endpoint,
+`x-sentry-replacement-endpoint` (`rules/` → `workflows/`, `alert-rules/` → `detectors/`). #7590
+ships that header check as a tripwire inside `sentry-monitors-audit.sh`'s `curl_retry`, so the
+next deprecation self-reports on its first **200** rather than waiting for a red window. Any
+future plan gating on "the vendor error is gone" must read the headers or probe across more than
+one window; a single clean re-probe against a schedule-shaped failure proves nothing.
+
+**Cross-references.** The incident this plan closed —
+`knowledge-base/engineering/operations/post-mortems/sentry-issue-alert-410-transient-wedge-postmortem.md`
+(§ Supersession) — `apps/web-platform/infra/sentry/versions.tf` (inline block on the pin), and
+ADR-031 §Amendment 2026-08-19 (#7590) for the per-endpoint replacement table and full evidence.
