@@ -125,9 +125,26 @@ mechanism and the cutover.
 |---|---|---|---|
 | **PR1 — substrate** | `cf-pages.tf` (project, apex domain, two `github_actions_secret`), `main.tf` alias, `variables.tf`, the www Bulk Redirect (`seo-bulk-redirects.tf`), the cert-reissue disarmament, `-target=` allow-list, guard rewrite, ADR/C4/docs. **No `dns.tf`, no `deploy-docs.yml`.** | apply-infra | PF1-PF4 |
 | **PR2 — deploy path** | `deploy-docs.yml` only (terminal-step swap, build-identity stamp, post-deploy custom-domain probe, workflow rename, `environment:` removal) | deploy-docs | PF5-PF8 |
-| **PR3 — cutover** | the `dns.tf` hunk **alone**, merged with `[ack-destroy]` | apply-infra | CUT0-CUT9 |
+| **PR3 — attach** | `cloudflare_pages_domain.apex` + `.www` **alone** | apply-infra | PF9 (R8 probe + origin headers matching the branch PF-Z established) |
+| **PR4 — record swap** | the `dns.tf` hunk **alone** + Z-probe teardown, merged with `[ack-destroy]` | apply-infra | CUT0-CUT9 |
 
-PR3 being a single-file, single-hunk commit is what makes the rollback a surgical
+**Amended 2026-08-20 (#7640) — the cutover is SPLIT, and the rollback property is
+completed rather than weakened.** PR1 originally attached both custom domains. Under
+the plan's own Hypothesis Z ("the apex begins serving from Pages at the moment of
+attachment") that would move the apex origin to a project with ZERO deployments, on
+merge, with the verifying measurement scheduled after the mutation. The attachments
+now land in PR3 and the record swap in PR4, which is correct under BOTH branches of Z
+rather than only the preferred one: whichever of the two actually selects the origin,
+reverting the PR that introduced it removes it. That retires D3's open item 3(b) by
+construction instead of by measurement.
+
+The property that was load-bearing was never "one file" — it was that the revert
+removes exactly the cutover and leaves the substrate intact. `cloudflare_pages_project`,
+both Actions secrets and the Bulk Redirect stay in PR1/PR2 and survive every revert, so
+the original hazard ("reverting would destroy the Pages project along with the DNS
+record") is not engaged. PR3 is 0 destroys and needs no `[ack-destroy]`; only PR4 does.
+
+PR3 and PR4 being single-hunk commits is what makes each rollback a surgical
 `git revert`. If `cf-pages.tf` and `dns.tf` shared a squashed commit, reverting would
 destroy the Pages project along with the DNS record, leaving the apex pointed at nothing.
 
@@ -444,6 +461,24 @@ decision**, and the hazard is created by this work, so it must be closed by this
   state; fire `cron/gh-pages-cert-reissue.manual-trigger`"*. It hands an autonomous agent a
   daily, authoritative instruction to run the routine below. Likelihood is not "low" — it is
   the retained system's designed steady-state output.
+
+> **MEASURED 2026-08-20, not predicted.** The origin certificate for `soleur.ai`
+> already EXPIRED — `notAfter=Aug 16 13:53:34 2026 GMT`, verified against
+> `185.199.108.153` with SNI `soleur.ai` — and `gh api repos/jikig-ai/soleur/pages`
+> reports `https_certificate.state = "bad_authz"` with `is_https_eligible: false`,
+> i.e. wedged in the state that cannot self-heal. `[cert-poll]` issue **#6691** has
+> been OPEN since 2026-07-19 with **35 comments**, last written **2026-08-20T03:00:27Z**.
+>
+> So the self-escalating daily loop is not a post-cutover forecast this PR pre-empts —
+> it is 33 days old and ran this morning. And `certEscalation`'s `CERT_WARN_DAYS = 21`
+> / `CERT_CRITICAL_DAYS = 7` are both long since crossed (`daysUntilExpiry = -4`), so
+> disarming forfeits NO future warning: the watcher has nothing left to warn about.
+>
+> `curl -sSI https://soleur.ai/` returns **200** solely because the `ssl = "full"`
+> Configuration Rule (commit `0b4a446fc`, "restore soleur.ai (apex 526)") is masking a
+> dead origin certificate. That rule is not a constraint we merely tolerate — it is
+> currently the single point of failure keeping the site reachable, which raises the
+> urgency of PR2-PR4 rather than arguing for keeping a dead watcher armed.
 - Every precondition passes post-cutover: `assertStuckState` accepts `bad_authz`, and
   `checkReissuePreconditions` requires the ACME apex path to return `404`, which Cloudflare
   Pages does.
@@ -951,6 +986,8 @@ uses `$(grep -c … || true)` compared with `[ "$n" = "0" ]`, or `! grep -q`.
 - **AC27b** — the monitor's `schedule`, `checkin_margin_minutes`, `max_runtime_minutes` and both thresholds are unchanged from `main` (asserted by diff), so re-arming is a single-attribute flip.
 - **AC27c** — `routine-metadata-parity.test.ts` is green: every `ROUTINE_METADATA.description` is <= 160 chars, including the disarmed cert-state entry.
 - **AC27d** — `sentry-monitor-iac-parity.test.ts` is green **with no new `DISABLED_CRON_SLUG_EXEMPTIONS` entry** — the structural proof the monitor was disabled, not deleted.
+- **AC27f** — `[cert-poll]` issues #6691 and #6657 are closed with a comment naming this work as superseding and explicitly instructing that `cron/gh-pages-cert-reissue.manual-trigger` must NOT be fired. Asserted by `gh issue view 6691 --json state` returning `CLOSED`. Automated in the merge steps, never an operator action.
+- **AC30 (BLOCKING, pre-merge)** — `doppler secrets get CF_API_TOKEN_PAGES -p soleur -c prd_terraform --plain` exits `0`. Asserted BEFORE the PR is marked ready, not after: `cf_api_token_pages` has no default and Terraform resolves every root variable before `-target` pruning, so an absent secret freezes the ENTIRE `apps/web-platform/infra` root — blocking every unrelated infra change behind a red apply, across all three workflows that plan this root (`apply-web-platform-infra.yml`, `apply-deploy-pipeline-fix.yml`, and the 12-hourly `scheduled-terraform-drift.yml`).
 - **AC27e** — `cron-inngest-cron-watchdog.ts`'s cadence comment no longer cites `scheduled-gh-pages-cert-state` as a live constraint, and names `scheduled-community-monitor @ 0 8 * * *` as the surviving AC10 basis.
 - **AC28** — `scripts/encryption-posture-ledger.json` classifies both new resource types, and `python3 scripts/lint-encryption-posture.py --repo-sweep` exits `0`. The `cloudflare_pages_project` `stores[]` row carries a `provider-managed:<AttestationName>` mechanism with an `attestation_url` and a `retrieved_on` within 365 days — the validator rejects a bare "provider-managed encryption at rest" string.
 - **AC29** — the cutover apply is expressed as two targeted passes with the sequence asserted between them (PF-ORDER), and `-target=cloudflare_record.github_pages` is still present in the allow-list.
