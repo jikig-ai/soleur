@@ -1,0 +1,77 @@
+# Tasks — Cloudflare Pages migration (#7640)
+
+Plan: `knowledge-base/project/plans/2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`
+
+Delivery is **three sequenced PRs, IaC first** (plan §Delivery Sequencing). A single merge
+cannot produce the verification order the plan asserts.
+
+## Phase 0 — Pre-flight (blocking; nothing starts until this closes)
+
+- [ ] 0.1 Mint the narrow `Pages:Edit` token via Playwright, **no expiry**; record a
+      `playwright-attempt:` evidence line. Write to Doppler `soleur/prd_terraform` as
+      `CF_API_TOKEN_PAGES`. (`automation-status: UNVERIFIED` — attempt before any handoff.)
+- [ ] 0.2 Run the first-use scope probe. Require `pages -> 200`, `rulesets -> 403`.
+      A `200` on the second line means re-mint narrower.
+- [ ] 0.3 Assert the project name `soleur-docs` is free.
+- [ ] 0.4 Confirm `TF_VAR_cf_api_token_pages` resolves from `prd_terraform`. PR1 cannot
+      merge until it does — an unprovisioned no-default root var fails every apply on this root.
+- [ ] 0.5 Re-capture the header and apex `MX`/`TXT` baselines; record in the PR body.
+
+## Phase 1 — PR1: substrate (fires apply-infra only)
+
+- [ ] 1.1 Create `apps/web-platform/infra/cf-pages.tf`: `cloudflare_pages_project.docs`
+      (`production_branch = "main"`, no `source` block), `cloudflare_pages_domain.apex`,
+      `cloudflare_pages_domain.www`, and two `github_actions_secret` (token + account id),
+      each with a rotation-policy header comment.
+- [ ] 1.2 `main.tf` — add the `cloudflare` provider alias `pages`.
+- [ ] 1.3 `variables.tf` — declare `cf_api_token_pages`, sensitive, **no default**;
+      description is the scope ledger (permission, no-expiry, three storage locations,
+      four names for one value, no `pull_request` trigger on the consumer).
+- [ ] 1.4 `seo-bulk-redirects.tf` — add `cloudflare_list.www_canonical` (one item:
+      `subpath_matching`/`preserve_path_suffix`/`preserve_query_string` enabled,
+      `include_subdomains` **disabled**) and a **second** `rules {}` block in
+      `cloudflare_ruleset.bulk_redirects`, declared **after** the legal-redirects rule.
+- [ ] 1.5 `scripts/encryption-posture-ledger.json` — classify `cloudflare_pages_project`
+      into `store_classes` (with `attestation_url` + `retrieved_on` ≤ 365 days) and
+      `cloudflare_pages_domain` into `non_store_types`. Without this, `ci.yml`'s
+      `lint-encryption-posture.py --repo-sweep` fails closed on both new types.
+- [ ] 1.6 Cert-reissue **disarmament** (plan §D2): add an apex-topology precondition to
+      `cron-gh-pages-cert-reissue.ts` that refuses when the apex record type is not `A`;
+      remove the `cron` trigger from `cron-gh-pages-cert-state.ts` (retain manual-trigger);
+      record the AP-019 status in the principles register.
+- [ ] 1.7 `apply-web-platform-infra.yml` — add the six new `-target=` addresses.
+      **Retain `-target=cloudflare_record.github_pages`** (plan §D4).
+- [ ] 1.8 Rewrite `www-apex-canonicalizer.test.sh` against the five-link chain, with an
+      AP-023-conformant anti-vacuity floor (`printf >&2` + `exit 1`; counter increments at
+      the call site, never inside both verdict helpers).
+- [ ] 1.9 Docs: ADR-194 amendment, `domains.md` resolution note, three `model.c4`
+      description corrections, `soleur_acme_probe` description fix, deferred-cleanup issue.
+- [ ] 1.10 Gates PF1-PF4 (state, secrets, the R8 DNS-side-effect probe, live www 301 + the
+      ten legal paths).
+
+## Phase 2 — PR2: deploy path (fires deploy-docs only)
+
+- [ ] 2.1 `deploy-docs.yml` — swap **only** the three terminal steps for
+      `npm install --no-save wrangler@4.124.0` + `npx wrangler pages deploy _site
+      --project-name=soleur-docs --branch=main --commit-hash=$GITHUB_SHA --commit-dirty=false`.
+- [ ] 2.2 Emit `_site/version.txt` containing `${GITHUB_SHA}`; add `test -f` to the
+      build-verification gate.
+- [ ] 2.3 Add the post-deploy custom-domain probe (fails the job on SHA mismatch).
+- [ ] 2.4 Leftovers: rename the workflow, remove the `environment: github-pages` block,
+      drop `pages: write` / `id-token: write`, rewrite the stale Pages-actions comment.
+- [ ] 2.5 Create the cutover runbook, including content rollback and the fact that
+      `workflow_dispatch` cannot carry `[ack-destroy]`.
+- [ ] 2.6 Gates PF5-PF8 (production-branch identity, 404, the custom-domain **detach**
+      measurement, the pre-opened revert PR).
+
+## Phase 3 — PR3: cutover (fires apply-infra; `[ack-destroy]`)
+
+- [ ] 3.1 `dns.tf` — remove `cloudflare_record.github_pages`; add
+      `cloudflare_record.pages_apex` (`name = "soleur.ai"`, never `@`); retarget
+      `cloudflare_record.www`'s `content` (in-place update); rewrite the contract comment
+      to name all three redirect substrates.
+- [ ] 3.2 Express the apply as **two targeted passes** — destroy, assert, then create
+      (plan §D4, PF-ORDER).
+- [ ] 3.3 Pre-flight PF9, PF10, PF-ORDER.
+- [ ] 3.4 Verify CUT0-CUT9 under the 3-consecutive-samples rule. Roll back at T+20 min
+      if not all green.
