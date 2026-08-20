@@ -259,4 +259,72 @@ describe("legal-doc consistency: source ↔ Eleventy mirror", () => {
       ).not.toMatch(/RCS Luxembourg/);
     }
   });
+
+  // ---------------------------------------------------------------------
+  // Superseded corpus claims (#7624).
+  //
+  // Art. 30 PA-7 governs, and until 2026-08-20 the published corpus said the
+  // opposite of it on three points: that the CLA evidence archive was
+  // EU-region, that it introduced no third-country transfer, and that its
+  // retention was capped at ten years. This block exists because the other
+  // four legal gates cannot see that class of defect at all -- they compare
+  // hashes, heading sequences and drift, so TWO BYTE-IDENTICAL COPIES OF A
+  // FALSE SENTENCE PASS ALL OF THEM (#7349). This file owns the only
+  // mechanism in the repo that quantifies a prose proposition over both
+  // loadSource() and loadMirror().
+  //
+  // Plain strings, not regexes: no escaping to get wrong, and a substring
+  // check cannot be satisfied by a whole-file snapshot.
+  //
+  // LOAD-BEARING INVARIANT: prose paragraphs in docs/legal/*.md are single,
+  // unwrapped lines (194 of 638 lines in privacy-policy.md exceed 200 chars).
+  // Every literal below is newline-free, so if a formatter ever hard-wraps
+  // these paragraphs the negative assertions stop matching and this guard
+  // goes VACUOUSLY GREEN on a false corpus. Do not reflow those files.
+  //
+  // Correction markers must PARAPHRASE the superseded sentence, never quote
+  // it -- a verbatim quote would republish the forbidden literal in live
+  // prose and red this guard against a correct corpus.
+  const FORBIDDEN: Array<[string, string]> = [
+    ["privacy-policy", "no third-country transfer for archive contents at rest"],
+    ["privacy-policy", "retained for ten (10) years on the off-site archive"],
+    ["privacy-policy", "Governance mode"],
+    ["gdpr-policy", "does not introduce a third-country transfer"],
+    ["gdpr-policy", "bucket region is EU"],
+    ["gdpr-policy", "hard-set at 10 years"],
+    ["data-protection-disclosure", "Intra-EU processing for archive contents at rest"],
+    ["data-protection-disclosure", "Cloudflare R2 (storage, EU region)"],
+    ["data-protection-disclosure", "retained for ten (10) years per Section 2.3(n)"],
+    ["individual-cla", "retained for ten (10) years from the date of signature"],
+    ["corporate-cla", "retained for ten (10) years from the date of signature"],
+  ];
+
+  // The positive arm. Without it the guard is satisfiable by DELETING the
+  // corpus rather than correcting it: every FORBIDDEN literal is absent from
+  // an empty file. PA-7 (e) records DPF + SCCs + CBPR as the safeguard, so
+  // every document that describes the transfer must still name it.
+  const REQUIRED: Array<[string, string]> = [
+    ["privacy-policy", "EU-US Data Privacy Framework"],
+    ["gdpr-policy", "EU-US Data Privacy Framework"],
+    ["data-protection-disclosure", "EU-US Data Privacy Framework"],
+  ];
+
+  test("superseded corpus claims do not reappear on either surface (#7624)", () => {
+    // Anti-vacuity dispatch floor: without it, emptying FORBIDDEN makes the
+    // loop iterate zero times and this block exits green asserting nothing.
+    // Floor is 8 rather than the exact count so a deliberate future removal
+    // of a row or two need not touch it, while an accidental emptying reds.
+    expect(FORBIDDEN.length, "negative sentinel set was emptied").toBeGreaterThanOrEqual(8);
+    expect(REQUIRED.length, "positive sentinel set was emptied").toBeGreaterThanOrEqual(3);
+
+    for (const [doc, lit] of FORBIDDEN) {
+      expect(loadSource(doc), `source ${doc} still carries: ${lit}`).not.toContain(lit);
+      expect(loadMirror(doc), `mirror ${doc} still carries: ${lit}`).not.toContain(lit);
+    }
+    for (const [doc, lit] of REQUIRED) {
+      expect(loadSource(doc), `source ${doc} lost: ${lit}`).toContain(lit);
+      expect(loadMirror(doc), `mirror ${doc} lost: ${lit}`).toContain(lit);
+    }
+  });
+
 });
