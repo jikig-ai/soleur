@@ -107,6 +107,10 @@ function healthyPreconditions(): PreconditionInputs {
     caaCount: 0,
     challengeTxtPresent: true,
     alwaysUseHttps: "off",
+    // #7640 — the GitHub-Pages topology this routine was written for: four
+    // apex A-records pointing at 185.199.x. Post-Cloudflare-Pages cutover the
+    // apex is a CNAME and the routine must refuse (AC25).
+    apexRecordTypes: ["A", "A", "A", "A"],
   };
 }
 
@@ -313,6 +317,65 @@ describe("checkReissuePreconditions", () => {
   });
 });
 
+// =============================================================================
+// #7640 — TOPOLOGY precondition (AC25)
+// =============================================================================
+//
+// After the Cloudflare Pages cutover the apex is a CNAME, not four A-records.
+// EVERY other precondition still passes in that topology (Pages returns 404 on
+// the ACME path, CAA is still empty, the challenge TXT is still published), so
+// without this gate the routine half-runs: `listToggleRecords` queries
+// `[apex, "A"]` and finds nothing, the apex is untouched, and the only record
+// actually de-proxied is **www** — dropping HSTS, the HTTPS-upgrade rule, WAF
+// and bot management on a host `domains.md` mandates be proxied. It cannot undo
+// that: `restoreStateInner` refuses to restore a subset (< EXPECTED_TOGGLE_
+// RECORDS), so the de-proxying is ONE-WAY. Refusing to start is the only safe
+// behaviour.
+
+describe("checkReissuePreconditions — apex topology gate (#7640, AC25)", () => {
+  it("apex is a CNAME (post-cutover) → fails apexTopologyIsA", () => {
+    const r = checkReissuePreconditions({
+      ...healthyPreconditions(),
+      apexRecordTypes: ["CNAME"],
+    });
+    expect(r.ok).toBe(false);
+    expect(r.failed).toContain("apexTopologyIsA");
+    expect(r.results.apexTopologyIsA).toBe(false);
+    // Non-vacuity: the CNAME apex must be the ONLY reason it blocks. If any
+    // other precondition also failed here, this test would pass for the wrong
+    // reason and would keep passing if the topology gate were deleted.
+    expect(r.failed).toEqual(["apexTopologyIsA"]);
+  });
+
+  it("apex A-records (GitHub Pages topology) → passes apexTopologyIsA", () => {
+    const r = checkReissuePreconditions(healthyPreconditions());
+    expect(r.ok).toBe(true);
+    expect(r.results.apexTopologyIsA).toBe(true);
+  });
+
+  it("an unreadable/empty apex read FAILS CLOSED (refuse, never assume A)", () => {
+    // Unlike `alwaysUseHttps` (which coalesces an unreadable value to a PASS
+    // because the ACME carve-out is the authoritative signal), there is no
+    // second signal for topology. An empty read means "we do not know what the
+    // apex is", and a one-way de-proxying is not something to guess at.
+    const r = checkReissuePreconditions({
+      ...healthyPreconditions(),
+      apexRecordTypes: [],
+    });
+    expect(r.ok).toBe(false);
+    expect(r.failed).toContain("apexTopologyIsA");
+  });
+
+  it("a MIXED apex (an A plus a stray CNAME) still blocks", () => {
+    const r = checkReissuePreconditions({
+      ...healthyPreconditions(),
+      apexRecordTypes: ["A", "CNAME"],
+    });
+    expect(r.ok).toBe(false);
+    expect(r.failed).toContain("apexTopologyIsA");
+  });
+});
+
 describe("setRecordsProxied — partial-toggle abort", () => {
   it("throws PartialToggleError on the failing record", async () => {
     const { deps } = makeFake({ failToggleOffIds: ["a3"] });
@@ -392,6 +455,37 @@ describe("runReissueSteps — Scenario 5 (precondition blocked)", () => {
 
     expect(result.outcome).toBe("precondition_blocked");
     expect(result.preconditionResults?.caaPermissive).toBe(false);
+    expect(calls.setRecordProxied).toHaveLength(0);
+    expect(calls.setPagesCname).toHaveLength(0);
+  });
+
+  // #7640 / AC25 — the whole point of the topology gate, asserted end-to-end
+  // rather than only on the pure helper.
+  it("CNAME apex → NON-BENIGN precondition_blocked and www is never de-proxied", async () => {
+    const { deps, calls } = makeFake({
+      preconditions: {
+        ...healthyPreconditions(),
+        apexRecordTypes: ["CNAME"],
+      },
+    });
+    const result = await runReissueSteps(
+      makeStep(),
+      deps,
+      deps.logger,
+      remediationCtx(),
+    );
+
+    expect(result.outcome).toBe("precondition_blocked");
+    expect(result.preconditionResults?.apexTopologyIsA).toBe(false);
+    // NON-benign: it must page, not merely log. A benign terminal here would
+    // let the post-cutover topology sit unnoticed while an operator keeps
+    // firing the manual trigger.
+    expect(BENIGN_OUTCOMES.has(result.outcome)).toBe(false);
+    expect(result.ok).toBe(false);
+    expect(result.errorSummary).toContain("precondition_blocked");
+    // ‼️ THE ANTI-VACUITY ASSERTION. Without the topology precondition this
+    // exact fake reaches setRecordsProxied(false) and issues 5 PATCHes — the
+    // one-way de-proxying of www. Zero writes is only reachable WITH the gate.
     expect(calls.setRecordProxied).toHaveLength(0);
     expect(calls.setPagesCname).toHaveLength(0);
   });
@@ -1626,5 +1720,24 @@ describe("#6698 live deps are real, not a dead twin (AC8b)", () => {
     const src = deps.gatherDnsPropagation.toString();
     expect(src).toContain("setServers");
     expect(src).toContain("resolve6");
+  });
+
+  // #7640 / AC25 — the topology precondition is only real if the LIVE deps
+  // actually read the apex record type. A pure-helper test alone would pass
+  // against a `gatherPreconditions` that hardcodes `apexRecordTypes: ["A"]`.
+  it("buildLiveDeps.gatherPreconditions reads the live apex record type", () => {
+    const deps = buildLiveDeps({
+      installationToken: "t",
+      cfToken: "c",
+      zoneId: "z",
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+    const src = deps.gatherPreconditions.toString();
+    expect(src).toContain("apexRecordTypes");
+    // It must query Cloudflare's dns_records WITHOUT the `type=A` filter that
+    // `listToggleRecords` uses — that filter is precisely what makes a CNAME
+    // apex invisible.
+    expect(src).toContain("dns_records?name=");
+    expect(src).not.toContain("dns_records?name=${encodeURIComponent(APEX_NAME)}&type=A");
   });
 });

@@ -268,6 +268,14 @@ export interface PreconditionInputs {
   caaCount: number;
   challengeTxtPresent: boolean;
   alwaysUseHttps: string;
+  /**
+   * #7640 — the LIVE record types at the apex, read from Cloudflare with NO
+   * `type=` filter. Deliberately not derived from `listToggleRecords`, which
+   * queries `[APEX_NAME, "A"]`: that filter is exactly what makes a CNAME apex
+   * invisible to this routine. An empty array means the read failed or the
+   * apex is absent — see `checkReissuePreconditions`, which fails CLOSED on it.
+   */
+  apexRecordTypes: string[];
 }
 
 /**
@@ -631,6 +639,27 @@ export function checkReissuePreconditions(inputs: PreconditionInputs): {
     // anyway — so an unreadable setting must not block. #6657 live-run: the DNS-only
     // token made this precondition false with `=== "off"` and blocked the remediation.
     alwaysUseHttpsOff: inputs.alwaysUseHttps !== "on",
+    // ‼️ #7640 — TOPOLOGY PRECONDITION. This whole routine is written for the
+    // GitHub Pages topology: four apex A-records at 185.199.x plus the www
+    // CNAME. After the Cloudflare Pages cutover the apex is a CNAME, and every
+    // OTHER precondition above still passes in that topology (Pages returns 404
+    // on the ACME path, CAA is still empty, the challenge TXT is still
+    // published). So without this check the routine HALF-RUNS: `listToggleRecords`
+    // asks for `[APEX_NAME, "A"]`, gets nothing, leaves the apex alone — and the
+    // only record it actually de-proxies is **www**, dropping HSTS, the
+    // HTTPS-upgrade rule, WAF and bot management on a host `domains.md` mandates
+    // be proxied. It cannot put it back: `restoreStateInner` refuses to restore
+    // a subset (`records.length < EXPECTED_TOGGLE_RECORDS`), so the de-proxying
+    // is ONE-WAY and the fail-loud guarantee is what makes it so. Refusing to
+    // start is the only safe behaviour, and `precondition_blocked` is NOT in
+    // BENIGN_OUTCOMES, so it pages rather than logging quietly.
+    //
+    // Fails CLOSED on an empty read, unlike `alwaysUseHttpsOff` above: that one
+    // has a second authoritative signal (the ACME carve-out), this one has none.
+    // "We could not read the apex" must never be treated as "the apex is A".
+    apexTopologyIsA:
+      inputs.apexRecordTypes.length > 0 &&
+      inputs.apexRecordTypes.every((t) => t.toUpperCase() === "A"),
   };
   const failed = Object.entries(results)
     .filter(([, ok]) => !ok)
@@ -1441,12 +1470,49 @@ export function buildLiveDeps(args: {
       } catch {
         alwaysUseHttps = "unknown";
       }
+      // #7640 — read the apex WITHOUT a `type=` filter. `listToggleRecords`
+      // asks for `type=A`, which returns [] against a CNAME apex and so cannot
+      // distinguish "post-cutover topology" from "GitHub Pages topology, read
+      // failed". `[]` here is the FAIL-CLOSED value: checkReissuePreconditions
+      // blocks on it.
+      let apexRecordTypes: string[] = [];
+      try {
+        const res = await cfFetch(
+          `/zones/${zoneId}/dns_records?name=${encodeURIComponent(APEX_NAME)}`,
+          { method: "GET", token: cfToken },
+        );
+        if (res.ok) {
+          apexRecordTypes = (
+            (res.body as { result?: Array<{ type?: string }> })?.result ?? []
+          )
+            .map((r) => r.type ?? "")
+            .filter(Boolean);
+        } else {
+          reportSilentFallback(
+            new Error(`CF apex topology read failed: status=${res.status}`),
+            {
+              feature: SENTRY_FEATURE,
+              op: "gather-apex-topology",
+              extra: { name: APEX_NAME, status: res.status },
+            },
+          );
+        }
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: SENTRY_FEATURE,
+          op: "gather-apex-topology",
+          message: "CF apex topology read threw — failing closed",
+          extra: { name: APEX_NAME },
+        });
+        apexRecordTypes = [];
+      }
       return {
         acmeApexStatus,
         acmeWwwStatus,
         caaCount,
         challengeTxtPresent,
         alwaysUseHttps,
+        apexRecordTypes,
       };
     },
     // ‼️ REAL implementation, not a stub. The gate's type member, its step, and
