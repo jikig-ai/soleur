@@ -930,17 +930,67 @@ plan ships, because the plan changes nothing the model describes.
 
 ## Observability
 
-**Skipped, with reason.** No file in `## Files to Edit` falls under `apps/*/server/`,
-`apps/*/src/`, `apps/*/infra/`, or `plugins/*/scripts/`, and no new infrastructure surface is
-introduced. `apps/web-platform/lib/legal/legal-doc-shas.ts` is a constant table re-pin with no
-runtime error path, and `apps/web-platform/test/legal-doc-consistency.test.ts` is a test. The
-five CI gates enumerated above **are** the observability for this change class: a regression
-reddens `tc-document-sha-guard`, `test-webplat`, or `test-scripts` on the next PR.
+Phase 2.9's trigger set fires: `## Files to Edit` includes `apps/cla-evidence/infra/README.md`
+(matching `apps/*/infra/`) plus two non-docs paths under `apps/web-platform/`. The first draft of
+this plan recorded a prose "skipped, with reason" here, which the deepen-plan Phase 4.7 halt would
+have rejected — and rightly: for a corpus-truth change, "what tells us the corpus went false
+again?" is a real question with a real answer.
+
+```yaml
+liveness_signal:
+  what: "The five legal CI gates plus the extended sentinel table in legal-doc-consistency.test.ts - the only mechanism in the repo that asserts a legal-prose proposition against BOTH the canonical and the published surface."
+  cadence: "Every pull_request and every merge_group entry; none of the five is path-filtered."
+  alert_target: "The required `test` and `tc-document-sha-guard` status checks - a regression blocks merge rather than paging."
+  configured_in: ".github/workflows/ci.yml (jobs tc-document-sha-guard, test-webplat, test-scripts)"
+
+error_reporting:
+  destination: "GitHub Actions job failure on the required checks; the two lint gates exit 1 (violation) or 2 (cannot decide) and never a vacuous 0."
+  fail_loud: true
+
+failure_modes:
+  - mode: "A future edit re-asserts EU-region / no-third-country-transfer / ten-year-ceiling on either surface."
+    detection: "legal-doc-consistency.test.ts negative sentinels (Guard 1), asserted against loadSource AND loadMirror."
+    alert_route: "Required `test` check reds; merge blocked."
+  - mode: "Canonical is corrected but the published mirror is not, or the reverse - the failure this PR exists to prevent."
+    detection: "Guard 1 mutation row 2 covers it directly; lint-legal-mirror-drift-baseline.sh also reds on drift growth."
+    alert_route: "Required `test` check and the test-scripts job."
+  - mode: "The same false sentence is deleted from BOTH surfaces in lockstep - a silent under-disclosure."
+    detection: "NOT caught by the drift gate, which says so itself at lint-legal-mirror-drift-baseline.sh:536. Caught only by the SHA pin in legal-doc-shas.ts forcing a deliberate re-pin, plus the positive sentinels requiring EU-US Data Privacy Framework to remain present on all three docs."
+    alert_route: "tc-document-sha-guard, then human review of the re-pin."
+  - mode: "The corpus is corrected in-repo but the published Eleventy page does not rebuild, so soleur.ai keeps serving the false text."
+    detection: "No CI gate covers the deployed artifact. PM1's post-merge fetch of all three published mirrors is the only detector - which is why PM1 fetches three pages rather than one."
+    alert_route: "PM1 blocks PM3 (issue closure)."
+  - mode: "A deferred item - the retention-ceiling re-assessment or the chat-attachments tracking issue - is filed and then lost."
+    detection: "PM2 re-reads the register's Outstanding counsel-review items on main and confirms both issues are OPEN."
+    alert_route: "PM2 blocks PM3."
+
+logs:
+  where: "GitHub Actions run logs for ci.yml; both lint gates print a per-pair report and a classified violation list."
+  retention: "GitHub default Actions log retention (90 days)."
+
+discoverability_test:
+  command: "bash -c 'git grep -q \"EU-US Data Privacy Framework\" -- docs/legal/privacy-policy.md docs/legal/gdpr-policy.md docs/legal/data-protection-disclosure.md && ! git grep -qiE \"no third-country transfer for archive contents at rest|does not introduce a third-country transfer|Intra-EU processing for archive contents at rest\" -- docs/legal plugins/soleur/docs/pages/legal && echo CORPUS-OK'"
+  expected_output: "CORPUS-OK"
+```
+
+The probe's first token is `bash`, on preflight Check 10's `PROBE_VERB_ALLOWLIST`; it contains no
+`ssh`, needs no credentials, and runs entirely against the read-only repo. It asserts **both**
+halves of the property — the safeguard is present on all three documents, and the three superseded
+claims are absent from both surfaces — so it cannot be satisfied by deleting the corpus.
+
 
 ## Encryption Posture
 
-**Skipped.** No persistent store and no cross-component connection is introduced. The R2 bucket
-already exists and its posture is unchanged — this PR corrects how that posture is *described*.
+**Phase 2.11 does not fire — trigger evaluated rather than assumed.** No path in `## Files to Edit`
+matches `\.tf$`, `supabase/migrations/.*\.sql$`, `cloud-init.*\.ya?ml$` or
+`docker-compose.*\.ya?ml$`; `apps/cla-evidence/infra/README.md` is documentation inside an infra
+directory, not a Terraform file, and this PR edits no `.tf`. The prose does name a store class —
+the `soleur-cla-evidence` R2 bucket — but the gate's own skip clause covers exactly this case:
+*"a change confined to an already-provisioned surface."* The bucket, its Lock Rule and its
+jurisdiction are unchanged; what changes is how they are **described**. The posture itself is
+recorded in PA-7 §(g) and is deliberately **not** restated here — restating a posture in a second
+place is how the divergence this PR corrects came about.
+
 
 ## CLO Advisory — Binding Rulings
 
