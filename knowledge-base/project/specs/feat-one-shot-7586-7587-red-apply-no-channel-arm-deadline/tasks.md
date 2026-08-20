@@ -194,16 +194,16 @@ Phase 5 are written from the design, not from whatever the code ends up looking 
 
 ## Phase 6 — Verification
 
-- [ ] **6.1** Run the full bound set from AC8, naming each suite explicitly because a touched-file
+- [x] **6.1** Run the full bound set from AC8, naming each suite explicitly because a touched-file
       selection reaches only the first: `terraform-target-parity`, `stock-preflight-coverage`,
       `test-preapply-entrypoint-gate.sh`, `test-vector-redeliver-wiring.sh`,
       `web-1-swap-concurrency-parity.test.sh`, `arm-heartbeats.test.sh`, the c4 suites,
       `lint-workflow-errexit-capture.py`, `lint-orphan-test-suites.sh`, and
       `lint-infra-no-human-steps.py --changed --base origin/main` (the gate's own invocation over
       the changed set, never a hand-enumerated path list).
-- [ ] **6.2** `actionlint` the workflow; check each new/edited `run:` snippet with
+- [x] **6.2** `actionlint` the workflow; check each new/edited `run:` snippet with
       `bash -c '<snippet>'` — never `bash -n` on the `.yml`.
-- [ ] **6.3** Walk every acceptance criterion (AC1-AC10 incl. AC2b/AC2c/AC4b/AC6b) and record its
+- [x] **6.3** Walk every acceptance criterion (AC1-AC10 incl. AC2b/AC2c/AC4b/AC6b) and record its
       evidence in `measurements.md`.
 - [ ] **6.4** PR body carries `Closes #7586` and `Closes #7587`, no `Closes` for #7228, and names
       **both** observability layers (job conclusions → `notify-ops-email` → Resend → ops@; and

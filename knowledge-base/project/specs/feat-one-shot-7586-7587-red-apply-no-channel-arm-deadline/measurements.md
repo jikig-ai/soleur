@@ -392,6 +392,126 @@ the suite, which is where it runs in CI forever.
 
 ---
 
+## 6.1 — the bound suites, each named explicitly
+
+A touched-file selection reaches only the first, so every suite is named and run.
+
+| # | Suite | Result |
+|---|---|---|
+| 1 | `bun test plugins/soleur/test/terraform-target-parity.test.ts` | **159 pass, 0 fail** (was 130 — +29 from Guards 1 and 2) |
+| 2 | `bun test plugins/soleur/test/stock-preflight-coverage.test.ts` | 9 pass, 0 fail |
+| 3 | `bash tests/scripts/test-preapply-entrypoint-gate.sh` | 43 passed, 0 failed |
+| 4 | `bash tests/scripts/test-vector-redeliver-wiring.sh` | 34 passed, 0 failed |
+| 5 | `bash apps/web-platform/infra/web-1-swap-concurrency-parity.test.sh` | 23 passed, 0 failed |
+| 6 | `bash apps/web-platform/infra/arm-heartbeats.test.sh` | **69 passed, 0 failed** (new) |
+| 7 | `bash plugins/soleur/test/c4-model-freshness.test.sh` | ALL TESTS PASSED |
+| 8 | `bash plugins/soleur/test/c4-count-parity.test.sh` | ALL TESTS PASSED (10/10) |
+| 9 | `python3 scripts/lint-workflow-errexit-capture.py` | clean — 75 workflows, 759 `run:` bodies |
+| 10 | `bash scripts/lint-orphan-test-suites.sh` | `walked 363 tracked *.test.sh … 363 covered, 0 orphaned` |
+| 11 | `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` | `OK: no human-run infra steps in 6 scanned file(s)` |
+| 12 | `bun test plugins/soleur/` (whole directory) | 2511 pass, **1 fail** — see below |
+| 13 | `./node_modules/.bin/vitest run test/c4-render.test.ts test/c4-code-syntax.test.ts` (in `apps/web-platform`) | 23 passed |
+
+**The one failure, diagnosed rather than waved through.**
+`plugins/soleur/test/changelog-data.test.ts > returns html from GitHub Releases API` timed out at
+5000 ms inside the 64-file concurrent run, logging
+`[github.js] GitHub API failed, using fallback: The operation was aborted`. It is a **live network
+call**, and:
+
+```bash
+git diff origin/main...HEAD --name-only | grep -iE 'changelog|github\.js'   # → no match
+bun test plugins/soleur/test/changelog-data.test.ts                        # → 3 pass, 0 fail (529ms)
+```
+
+The diff touches neither the test nor its subject, and the file is green in isolation. Recorded as
+an environment flake, **not** cleared as "unrelated" without the isolated re-run.
+
+**`scripts/test-all.sh` was NOT run.** This work ran as a subagent with `SOLEUR_SUBAGENT=1`, so the
+runner exits **4 — REFUSED, nothing ran**. That is neither a pass nor a reap. The full gate is the
+parent's to run.
+
+---
+
+## 6.2 — actionlint, and every new/edited `run:` snippet
+
+```bash
+actionlint .github/workflows/apply-web-platform-infra.yml .github/workflows/infra-validation.yml   # rc 0
+```
+
+`actionlint` did fire once during implementation and the finding was real: a **comment** inside the
+`cause` step's `run:` body quoted `${{ … }}`, which the linter lexes as an expression
+(`got unexpected character '…' while lexing expression`). Reworded rather than suppressed.
+
+Each new/edited snippet was extracted from the parsed YAML and checked on its own — never
+`bash -n` on the `.yml`:
+
+| Snippet | `bash -n` | `shellcheck -x` |
+|---|---|---|
+| ARM gate step (edited) | rc 0 | rc 0 |
+| `Re-pause any monitor left unconfirmed` (new) | rc 0 | rc 0 |
+| `Resolve the failing step from the jobs API` (new) | rc 0 | rc 0 |
+| `apps/web-platform/infra/arm-heartbeats.sh` (new file) | rc 0 | rc 0 at every severity |
+| `apps/web-platform/infra/arm-heartbeats.test.sh` (new file) | rc 0 | rc 0 at every severity |
+
+**Two of the three snippets were additionally EXECUTED**, which is a stronger check than a syntax
+pass and is what the task actually wants. The ARM step was not: it mints a production Doppler
+credential and PATCHes live monitors, so running it is not a syntax check.
+
+*Sweep, empty state file* (the `ssh_apply_skip` / no-work run):
+
+```bash
+RT=$(mktemp -d); env RUNNER_TEMP="$RT" GITHUB_STEP_SUMMARY=$(mktemp) DOPPLER_TOKEN_WEB_ARM= bash snippet-sweep.sh
+# → rc 0, ZERO bytes of output, and no `doppler` invocation at all
+```
+
+That is AC4's early exit proven behaviourally: no credential re-mint and no false mint-failure
+alarm on a run with nothing to sweep.
+
+*Sweep, non-empty state file with an unreadable credential* (Test Scenario 9):
+
+```
+rc=1
+::warning::Heartbeat re-pause sweep FIRED: 1 monitor(s) were left unpaused-and-unconfirmed …
+::error::Re-pause sweep: BETTERSTACK_API_TOKEN unreadable via DOPPLER_TOKEN_WEB_ARM — 1 monitor(s) are LIVE AND UNFED …
+$GITHUB_STEP_SUMMARY → armed=1 repaused=0 failed=1 outcome=mint-unreadable
+```
+
+*Cause step, against a nonexistent run id* (fail-soft):
+
+```
+::warning::Could not read the jobs API (rc=1); the email will name the failing step as unresolved.
+rc=0; $GITHUB_OUTPUT → failing_step<<cause-e9936f41fc7acc27e912dd83 / unresolved / …
+```
+
+*Cause step, POSITIVE CONTROL against a genuinely failed apply run* (`31976455160`):
+
+```
+jobs API says:  apply → failure, failing step "Terraform plan (allow-list, non-SSH resources only)"
+snippet emits:  failing_step = "Terraform plan (allow-list non-SSH resources only)"
+rc=0
+```
+
+The extraction resolves a real failing step's name end to end against the live API. The comma is
+stripped by AC2c's charset — cosmetic, and deliberately not widened: the allow-list is the
+criterion's own literal.
+
+---
+
 ## 6.3 — acceptance criteria walk
 
-See the section appended below.
+| AC | Verdict | Evidence |
+|---|---|---|
+| **AC1** predicate / `needs` / budget / permissions / `continue-on-error` | **MET** | `describe("apply-web-platform-infra has a failure channel")` — the predicate is EVALUATED over the 48-row cross product, `needs` pinned to `["preflight","apply"]`, `timeout-minutes: 5 ≤ 10`, `permissions: {contents: read, actions: read}`, email step `continue-on-error: true`. Mutation rows G1-M1/M3/M4/M5 all RED. |
+| **AC2** named steps, body elements, interpolation allow-list | **MET** | Three tests in the same describe. The cancelled branch is asserted on the EXPRESSION (`/needs\.apply\.result\s*==\s*'cancelled'\s*&&/`), not the prose word. Allow-list enforced as a set difference; `needs.apply.outputs.*` explicitly absent. |
+| **AC2b** no `terraform apply` / `-target=` in any `run:` | **MET** | Guard test over parsed `run:` bodies, and `stock-preflight-coverage.test.ts` green (9/9) — that suite is the reason it matters: `jobFor("manual-rerun")` now returns two hits and disambiguates by `appliesTerraform`. |
+| **AC2c** cause-token shape validation | **MET** | Guard test asserts all five elements (CR/LF strip, charset clamp, 80-char clamp, HTML-escape, random heredoc delimiter). Plus the two live executions in §6.2 — fail-soft and positive control. |
+| **AC3** job `timeout-minutes`, comparator comment, two-part inequality | **MET, with the literal DELIBERATELY SUPERSEDED** | The job is **35**, not the AC's 30, and the ARM step is **31**, not 27 — see §0.3(a): the plan sized its ladder from the reachable Σ (1430) while writing this very guard against `sum(arm_one deadlines)` (1660), so the plan's own ladder fails its own guard. The **binding half of AC3 — the two-part inequality — is implemented exactly as written** and is what `ladderViolations` asserts; only the literals moved. The false comparator comment is replaced and now cites the measured p95 and the sibling's real 90. Mutation row G2-M1 RED. |
+| **AC4** step ceiling below the job, `always()` sweep, own credential, 2xx-only removal | **MET** | Guard test identifies the sweep by `always()` + the state-file literal + *not* invoking the arming script (a name-keyed match would false-RED on a rename; `always()` + literal alone matches the ARM step too — found by executing G2-M5). Removal-on-2xx-only proven behaviourally by `arm-heartbeats.test.sh` T4/T5/T6. |
+| **AC4b** sweep exits non-zero, and reports counts | **MET, with one honest narrowing** | rc 1 proven by live execution (§6.2). Counts go to `$GITHUB_STEP_SUMMARY` and the sweep's own annotations; the notify body carries the sweep's **outcome** (`steps.cause.outputs.sweep_conclusion`, read from the jobs API) rather than the integers — see Deviations. Every path that leaves the state file non-empty now reds the apply job, so the notify job always runs when the sweep has fired. |
+| **AC5** wall clock, explicit `set +e`, `\|\| true`, no bare `(( … ))` | **MET** | Guard test `AC5` (structural) plus `arm-heartbeats.test.sh` M1 (behavioural: 695 s observed vs a 230 s reported elapsed under the reverted accounting). `lint-workflow-errexit-capture.py` clean. |
+| **AC6** `inngest_consumer` deadline exactly 30, others unchanged, `arc == 2` rewritten | **MET** | `expect(deadlines).toEqual([230, 470, 230, 470, 230, 30])`, `ARM_INNGEST_DEADLINE=30`. Every other row verified byte-identical against `git show origin/main:` (diff empty). The warning carries the deadline from the variable, drops the "the probe is broken" instruction, and emits `status` + `updated_at` — asserted by T2. |
+| **AC6b** `arming_pending` comment | **MET** | `plugins/soleur/lib/heartbeat-manifest.ts` — records the ~2-day probabilistic window and that removal must follow **observed** arming, not a #7462 checklist tick. |
+| **AC7** every matrix row executed, log recorded | **MET** | §5.7 above — 16 real-artifact rows plus 6 script-layer rows, one initial survivor found and fixed. |
+| **AC8** CI green on every bound suite | **MET locally; CI not run** | §6.1. `scripts/test-all.sh` refused with rc 4 (subagent) by design; the parent runs the full gate. |
+| **AC9** ADR-117 amendment + `model.c4` edge | **MET** | `### Amendment (2026-08-20, #7587)` in ADR-117 naming both items; `github -> betterstack` now names the ARM gate's `PATCH /api/v2/heartbeats/<id>` under `DOPPLER_TOKEN_WEB_ARM`. `model.likec4.json` regenerated; c4 suites green. |
+| **AC10** post-merge `manual-rerun` dispatch, ARM step < 60 s | **NOT DONE — out of scope for this phase** | Phase 7 belongs to `/ship`, which the parent controls. Nothing here asserts it. |
