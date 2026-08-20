@@ -177,6 +177,15 @@ This is the load-bearing phase. Nothing downstream is trusted until measured aga
 - [ ] **A.4** `README.md`: correct the stale "6 issue alerts" → 23 (4 import-only auth_* + 19 TF-owned) while here; update the §Local invocation `de.sentry.io` note only if Phase 0 shows it is wrong (per ADR-031 the API host is the org-subdomain, not `de.sentry.io` — README §First-time-import prose predates the 2026-05-17 host correction; correct if touched).
 - [ ] **A.5** Amend ADR-031 (see §Architecture Decision).
 
+<!-- lint-infra-ignore start -->
+<!-- Deferred-orchestrator prose. Phase B is a FALLBACK that was never reached (Phase 0 selected
+     Option A) and is now superseded — see § Supersession. It prescribes no human-run infra step:
+     B.4 is explicit that "state surgery cannot run from an operator SSH (there is no human-run
+     path)" and routes the whole sequence through a one-time `workflow_dispatch` on
+     apply-sentry-infra.yml. lint-infra-no-human-steps flags B.4 on actor + `terraform` proximity,
+     which inverts the sentence's meaning. Wrapped per the linter's own prescribed escape rather
+     than reworded, because this is a dated plan. See hr-no-ssh-fallback-in-runbooks. -->
+
 ### Phase B — Migrate to `sentry_alert` (fallback; only if Phase 0 proves no version clears the 410)
 
 Reached ONLY when Phase 0 measurement shows no available stable provider reads `sentry_issue_alert` without a 410. This path is high-blast-radius; re-obtain CPO sign-off before executing.
@@ -188,6 +197,8 @@ Reached ONLY when Phase 0 measurement shows no available stable provider reads `
 - [ ] **B.4 Execution vehicle (no-SSH):** state surgery cannot run from an operator SSH (there is no human-run path — ADR-031/#6589). It runs via a one-time `workflow_dispatch` job on `apply-sentry-infra.yml` (or a dedicated one-shot migration workflow) that performs `state rm` → `import` → `plan` (expect no-op) with the same Doppler R2 + `SENTRY_IAC_AUTH_TOKEN` plumbing the apply job uses. Sequence it BEFORE the merge that lands the `sentry_alert` blocks, or the post-merge full-root apply will try to CREATE 23 alerts (duplicates) — the create-gate would catch it, but do not rely on that as the plan.
 - [ ] **B.5 Destroy-guard extension (load-bearing for B):** `sentry_alert.action_filters[]` carries array-of-blocks (`conditions[]`, `actions[]`). BEFORE any `sentry_alert` enters the full-root plan, extend `tests/scripts/lib/destroy-guard-filter-sentry.jq` with a `select(.type == "sentry_alert")` nested-clause counting `action_filters[].conditions[]` + `action_filters[].actions[]` + `trigger_conditions[]` shrink, extend `tests/scripts/test-destroy-guard-sentry-scope-guard.sh` to allow `sentry_alert`, and update `tests/scripts/test-destroy-guard-counter-sentry.sh` + a fixture. (Per ADR-031 amendment 2026-05-29 Sharp Edge — the guard is `.tf ∪ state`-scoped and a new nested-block type slips it silently.)
 - [ ] **B.6** Amend ADR-031 to `sentry_alert`-adopted; update `assert-byok-rules-exist.sh` only if names change (they must not).
+
+<!-- lint-infra-ignore end -->
 
 ### Phase 2 — Verification (both options; read-only, no extra prod write)
 
