@@ -134,8 +134,22 @@ heredoc_lines_of() { # <file> -> one line number per line inside a heredoc body
 #      conditional opener and excluding heredoc bodies closes both.
 #
 # A suite that fails DERIVATION never reaches the mutation arm and never reaches
-# UNCLASSIFIED either, so a too-narrow pattern here is the one failure mode this file cannot
-# report on itself. ARM 11 exists to bound exactly that.
+# UNCLASSIFIED either — `is_floor_bearing()` below is `floor_lines_of` too, so the repo-wide
+# sweep and the covered population share this one pattern. That makes a too-narrow pattern the
+# one failure mode this file cannot report on itself, in TWO directions, and they are bounded
+# unequally:
+#
+#   - NARROWING (a shape that used to match stops matching) is bounded by ARM 3. Its
+#     `MIN_FIRING_SUITES` is absolute and hand-ratcheted — deliberately never derived from
+#     anything this file computes — so a pattern that drops existing members drives `n_fires`
+#     under the ratchet and ARM 3 names it. That is the bound; there is no ARM 11. An earlier
+#     revision of this comment cited one, and no such arm has ever existed (the arms are
+#     1, 2, 2b, 3, 4, 5, 5b, 5c, 7, 8, 8b, 9, 10, 10d, 10e; 6 was deleted as subsumed and says
+#     so at its old position).
+#   - A NEW floor written in a shape the pattern never matched is bounded by NOTHING here, and
+#     cannot be: it is absent from both scopes and from `n_total`, so every arithmetic
+#     identity in this file still balances. Widen the pattern when you add a floor form, and
+#     expect ARM 3's ratchet to be raised in the same commit.
 floor_lines_of() { # <file> -> "lineno:text" per candidate
   local f="$1" base derived all alt c hd
   base="$(counters_of "$f")"
@@ -707,8 +721,9 @@ n_conserving=$(wc -l < "$CONSERVING")
 # Raised from 18 when the deferred scope joined this population (#7580). It was accurate for a
 # COVERED-only population and became stale-low by the deferred suites the moment they started
 # carrying conservation checks; a shrink-only ratchet left un-raised silently fails to capture
-# the gain it exists to lock in.
-MIN_CONSERVING=32
+# the gain it exists to lock in. Raised 32 -> 33 when fanout-suite-scope.test.sh gained one
+# (#7553): its floor read PASS+FAIL, the counter a neutered verdict helper keeps moving.
+MIN_CONSERVING=33
 cases=$((cases + 1))
 if [[ "$n_conserving" -ge "$MIN_CONSERVING" ]]; then
   pass "suites carrying an accounting-conservation check: $n_conserving (>= $MIN_CONSERVING)"

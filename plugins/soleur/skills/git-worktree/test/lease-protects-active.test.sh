@@ -17,8 +17,32 @@ PASS=0; FAIL=0
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 
-TMP=$(mktemp -d)
+TMP=$(mktemp -d) || { echo "FATAL: mktemp -d failed — refusing to run with an empty \$TMP, every fixture path would resolve against /" >&2; exit 2; }
 trap 'rm -rf "$TMP"' EXIT
+
+# EVERY `cd` into a fixture directory goes through this. An unguarded `cd` in this suite is a
+# LIVE-REPO HAZARD, not a style nit — the file already says so beside its guarded `cd` sites,
+# and five sites did not have it.
+#
+# The mechanism, observed 2026-08-20: this suite runs `set -uo pipefail` WITHOUT -e, and every
+# `git -C "$BARE" worktree add …` below silences its own failure with `>/dev/null 2>&1`. So a
+# fixture directory that was never created leaves `cd` failing, the subshell CONTINUING, and
+# the fixture's `git add` + `git commit` running in the caller's CWD — which, when this suite
+# runs under `TEST_GROUP=scripts`, is the developer's live worktree. Fixture commits
+# "victim change", "victim2 change", "v9 change" and "v12 change" landed on a real feature
+# branch and on local `main`, a later step checked that worktree out to `main`, and hours of
+# uncommitted work were destroyed. Nothing in the suite reported anything wrong.
+#
+# Exiting 90 ends only the subshell, so the marker is what makes the suite red: the fixture is
+# gone either way, and a silent "0 assertions about scenario N" is the shape this whole file
+# exists to prevent.
+cdx() {
+  cd "$1" 2>/dev/null && return 0
+  echo "  FAIL: fixture directory absent: $1" >&2
+  echo "        refusing to run fixture commands in $PWD — that is a LIVE repository." >&2
+  : > "$TMP/.cdx-failed"
+  exit 90
+}
 
 # ---------------------------------------------------------------------------
 # Stand up a fake bare repo with two branches: main + feat-victim. Merge
@@ -30,7 +54,7 @@ git init --bare -b main "$BARE" >/dev/null
 # Seed a commit on main via a temporary clone
 SEED="$TMP/seed"
 git clone "$BARE" "$SEED" >/dev/null 2>&1
-( cd "$SEED"
+( cdx "$SEED"
   git -c user.email=t@t -c user.name=t commit --allow-empty -m "seed" >/dev/null
   git push origin main >/dev/null 2>&1
 )
@@ -47,7 +71,7 @@ mkdir -p "$WT_PARENT/.worktrees"
 # Anchor a fake "victim" checkout — the worktree that holds an active lease
 # and which a sibling cleanup-merged invocation must NOT reap.
 git -C "$BARE" worktree add -b feat-victim "$WT_PARENT/.worktrees/feat-victim" main >/dev/null 2>&1
-( cd "$WT_PARENT/.worktrees/feat-victim"
+( cdx "$WT_PARENT/.worktrees/feat-victim"
   echo hi > a.txt
   git -c user.email=t@t -c user.name=t add a.txt
   # Date the commit older than the 10-min recent-commit grace so the lease
@@ -145,7 +169,7 @@ kill "$HOLDER_PID" 2>/dev/null || true
 # ---------------------------------------------------------------------------
 git -C "$BARE" worktree add -b feat-victim2 "$WT_PARENT/.worktrees/feat-victim2" main >/dev/null 2>&1
 WT_VICTIM2="$WT_PARENT/.worktrees/feat-victim2"
-( cd "$WT_VICTIM2"
+( cdx "$WT_VICTIM2"
   echo hi2 > b.txt
   git -c user.email=t@t -c user.name=t add b.txt
   # Older than the 10-minute recent-commit grace, so the LEASE is the only
@@ -583,7 +607,7 @@ SEED9="$TMP/seed9"; git clone "$BARE9" "$SEED9" >/dev/null 2>&1
 rm -rf "$SEED9"
 WT9="$TMP/wt9"; mkdir -p "$WT9/.worktrees"
 git -C "$BARE9" worktree add -b feat-v9 "$WT9/.worktrees/feat-v9" main >/dev/null 2>&1
-( cd "$WT9/.worktrees/feat-v9"
+( cdx "$WT9/.worktrees/feat-v9"
   echo hi9 > c.txt
   git -c user.email=t@t -c user.name=t add c.txt
   # Older than the 10-minute recent-commit grace, so the LEASE is the only thing
@@ -794,7 +818,7 @@ S12="$TMP/s12"; git clone "$BARE12" "$S12" >/dev/null 2>&1
 rm -rf "$S12"
 WT12="$TMP/wt12"; mkdir -p "$WT12/.worktrees"
 git -C "$BARE12" worktree add -b feat-v12 "$WT12/.worktrees/feat-v12" main >/dev/null 2>&1
-( cd "$WT12/.worktrees/feat-v12"
+( cdx "$WT12/.worktrees/feat-v12"
   echo hi12 > d.txt
   git -c user.email=t@t -c user.name=t add d.txt
   GIT_COMMITTER_DATE="2025-01-01T00:00:00Z" \
@@ -881,6 +905,14 @@ MIN_ASSERTIONS=40  # 3 -> 6 -> 9 -> 15 -> 17 (PR #7373 sc. 3-7) -> 40 (#7409 sc.
 # slip through whenever the defect happened to produce the expected dispatch
 # count. Matches scripts/lint-diagnosis-claims.test.sh and
 # scripts/lint-workflow-step-env-refs.test.sh, which both count PASS + FAIL.
+# A cdx() abort ends its subshell, not the suite, so without this the run would continue with
+# a fixture that was never built and report whatever the surviving assertions happened to say.
+if [[ -f "$TMP/.cdx-failed" ]]; then
+  echo "FAIL: at least one fixture directory was absent (see the 'fixture directory absent' line above)."
+  echo "      A 'git worktree add' failed silently. The suite did not run as designed; its verdicts are not evidence."
+  exit 1
+fi
+
 if [[ $(( PASS + FAIL )) -lt "$MIN_ASSERTIONS" ]]; then
   echo "FAIL: only $(( PASS + FAIL )) assertions ran, expected >= $MIN_ASSERTIONS — the suite did not execute what it claims to cover."
   exit 1
