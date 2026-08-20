@@ -241,10 +241,20 @@ resource "cloudflare_list" "legal_redirects" {
 # relies on and documents in seo-rulesets.tf. Ordering the legal rule first and this one
 # second makes the precedence explicit and testable.
 #
-# SAFE TO LAND BEFORE THE DNS CUTOVER. The Bulk Redirect matches on the www.soleur.ai host
-# at the edge regardless of where www's DNS points, so it produces the same 301 the site
-# already serves today. It is effectively a no-op until PR3 fires, which means it is live
-# and measurable before the cutover rather than during it.
+# SAFE TO LAND BEFORE THE DNS CUTOVER — but only WITH the ACME exclusion on the rule
+# below, and that qualification was missing from the first draft of this comment.
+#
+# The Bulk Redirect matches on the www.soleur.ai host at the edge regardless of where
+# www's DNS points, so for ordinary traffic it produces the same 301 the site already
+# serves today, and is live and measurable before the cutover rather than during it.
+#
+# The original claim was "effectively a no-op until PR3 fires". That was derived from the
+# APEX leg only and was FALSE for one path on the www leg: plain-HTTP
+# /.well-known/acme-challenge/*, which Rule 10 deliberately declines to touch, and which
+# this scheme-less subpath-matching list would therefore have 301'd — breaking the
+# cert-reissue routine's acmeWwwCarveout precondition in exactly the PR1..PR3 window where
+# GitHub Pages is still the origin that must renew. The exclusion on the rule below is what
+# makes the no-op claim true; do not remove it without re-reading Rule 10.
 resource "cloudflare_list" "www_canonical" {
   provider    = cloudflare.rulesets
   account_id  = var.cf_account_id
@@ -318,7 +328,27 @@ resource "cloudflare_ruleset" "bulk_redirects" {
     action      = "redirect"
     description = "301 www.soleur.ai -> soleur.ai via the www_canonical bulk list (ADR-194)"
     enabled     = true
-    expression  = "http.request.full_uri in $www_canonical"
+
+    # THE ACME EXCLUSION IS LOAD-BEARING AND IS NOT DEFENSIVE DECORATION.
+    #
+    # Rule 10 in seo-rulesets.tf carves ACME out of the HTTPS upgrade precisely so
+    # Let's Encrypt's HTTP-01 challenge can reach the origin on plain HTTP:
+    #   (not ssl) and not (http.host in {"soleur.ai" "www.soleur.ai"}
+    #                      and starts_with(http.request.uri.path, "/.well-known/acme-challenge/"))
+    # That carve-out means Rule 10 deliberately does NOTHING for this request. This
+    # list is scheme-less with subpath_matching enabled, so without the exclusion
+    # below it becomes the ONLY redirect actor on plain-HTTP www ACME traffic and
+    # answers 301 where the carve-out intends a pass-through — overriding a
+    # sibling ruleset's deliberate inaction from a later phase.
+    #
+    # The concrete breakage that caused: cron-gh-pages-cert-reissue probes
+    # http://www.soleur.ai/.well-known/acme-challenge/... with redirect:"manual"
+    # and asserts acmeWwwCarveout === 404. A 301 there fails that precondition, so
+    # the documented remediation for a wedged certificate refuses to run — during
+    # the PR1..PR3 window, while GitHub Pages is still the live origin and is the
+    # thing that has to renew. It also falsifies this file's own "no-op until the
+    # cutover" claim, which was written from the apex leg only.
+    expression = "http.request.full_uri in $www_canonical and not starts_with(http.request.uri.path, \"/.well-known/acme-challenge/\")"
 
     action_parameters {
       from_list {

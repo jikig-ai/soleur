@@ -98,6 +98,16 @@ const STEADY_PROXIED = true;
 // class in 2026-04-03-cloudflare-dns-at-symbol-causes-terraform-drift.md.
 export const EXPECTED_TOGGLE_RECORDS = 5;
 
+/**
+ * DNS record types that participate in ORIGIN SELECTION for a hostname.
+ *
+ * The apex topology read is deliberately un-filtered (a `type=A` query cannot
+ * see a CNAME apex, which is the state the precondition exists to detect), so
+ * it returns MX, TXT and anything else living at the apex name. Only these
+ * three decide where a request is served from.
+ */
+const APEX_ADDRESS_RECORD_TYPES = new Set(["A", "AAAA", "CNAME"]);
+
 // Preflight allowlist: only a genuinely-stuck cert is touched. Toggling a
 // healthy in-flight order (authorization_pending / dns_changed / new) can
 // MANUFACTURE a new bad_authz — hence an allowlist, not a denylist.
@@ -667,9 +677,25 @@ export function checkReissuePreconditions(inputs: PreconditionInputs): {
     // Fails CLOSED on an empty read, unlike `alwaysUseHttpsOff` above: that one
     // has a second authoritative signal (the ACME carve-out), this one has none.
     // "We could not read the apex" must never be treated as "the apex is A".
-    apexTopologyIsA:
-      inputs.apexRecordTypes.length > 0 &&
-      inputs.apexRecordTypes.every((t) => t.toUpperCase() === "A"),
+    //
+    // ONLY ADDRESS RECORDS ARE CONSIDERED, and that is load-bearing rather than
+    // tidiness. The live read is deliberately NOT `type=`-filtered (a `type=A`
+    // query is exactly what makes a CNAME apex invisible — the bug this
+    // precondition exists to catch), so it returns EVERY record at the apex
+    // name. Measured against the live zone on 2026-08-20 that is 10 records:
+    // 4 A, 2 MX, 4 TXT. A bare `.every(t => t === "A")` over that array is
+    // FALSE on the CURRENT GitHub Pages topology, which would block the routine
+    // from this PR's merge — the precise inversion of the intent, since the
+    // hazard only begins at the cutover. MX and TXT do not participate in origin
+    // selection; A, AAAA and CNAME do.
+    apexTopologyIsA: (() => {
+      const addressTypes = inputs.apexRecordTypes
+        .map((t) => t.toUpperCase())
+        .filter((t) => APEX_ADDRESS_RECORD_TYPES.has(t));
+      return (
+        addressTypes.length > 0 && addressTypes.every((t) => t === "A")
+      );
+    })(),
   };
   const failed = Object.entries(results)
     .filter(([, ok]) => !ok)
