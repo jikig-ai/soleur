@@ -24,8 +24,14 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 
 passes=0
 fails=0
+# APPEND-ONLY FAILURE LEDGER, ported from git-data-runcmd-rehearsal.test.sh, whose header
+# documents exactly this defect. A verdict computed as `[ "$fails" -eq 0 ]` shares its counter
+# with the thing it guards, so ONE token silences the suite: rewrite `fail()` to increment
+# `passes` and a real regression reports a full green run at exit 0 (measured). The exit status
+# reads a ledger that can only be silenced by DELETING evidence, not by moving a number.
+FAILURES=()
 pass() { passes=$((passes + 1)); }
-fail() { fails=$((fails + 1)); printf 'FAIL: %s\n' "$1" >&2; }
+fail() { fails=$((fails + 1)); FAILURES+=("$1"); printf 'FAIL: %s\n' "$1" >&2; }
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 PROBE="$REPO_ROOT/scripts/followthroughs/t5-skip-persistence-bound-7510.sh"
@@ -222,5 +228,4 @@ if [ "$_total" -lt "$_FLOOR" ]; then
 fi
 
 printf 't5-skip-persistence-bound-7510: %d passed, %d failed (%d assertions)\n' "$passes" "$fails" "$_total"
-[ "$fails" -eq 0 ] || exit 1
-exit 0
+exit $(( ${#FAILURES[@]} > 0 ))

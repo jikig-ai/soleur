@@ -35,8 +35,14 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 
 passes=0
 fails=0
+# APPEND-ONLY FAILURE LEDGER, ported from git-data-runcmd-rehearsal.test.sh, whose header
+# documents exactly this defect. A verdict computed as `[ "$fails" -eq 0 ]` shares its counter
+# with the thing it guards, so ONE token silences the suite: rewrite `fail()` to increment
+# `passes` and a real regression reports a full green run at exit 0 (measured). The exit status
+# reads a ledger that can only be silenced by DELETING evidence, not by moving a number.
+FAILURES=()
 pass() { passes=$((passes + 1)); }
-fail() { fails=$((fails + 1)); printf 'FAIL: %s\n' "$1" >&2; }
+fail() { fails=$((fails + 1)); FAILURES+=("$1"); printf 'FAIL: %s\n' "$1" >&2; }
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 WF_PR="$REPO_ROOT/.github/workflows/skill-security-scan-pr-trailer.yml"
@@ -165,6 +171,45 @@ else
   fail "G1.3 un-audited run: body present in neither the in-scope nor the exclusion set: $_unclassified"
 fi
 
+# ── Guard 1.4 — THE STEP WRAPPER, NOT JUST ITS BODY ─────────────────────────
+#
+# `extract_body` writes `hits[0]["run"]` and reads nothing else, so every fail-open that lives
+# in the step's YAML was invisible: adding `continue-on-error: true` to the scan step made the
+# entire #7629 gate advisory while this suite reported a perfect run. A body that fails closed
+# inside a step that tolerates failure is a gate that does not gate.
+#
+# Also pinned: the `if:` expression (a step gated on a condition that is never true is dark),
+# and the `env:` block, which the bodies below are executed with — the scan and audit steps
+# declare `CI: 'true'`, and running their bodies without it exercises the opposite mode from
+# production.
+_wrapper=$(python3 - "$WF_PR" "$WF_PM" <<'PY'
+import sys, yaml
+want = {
+  "Identify added SKILL/agent files in PR diff",
+  "Validate override artifacts (if any)",
+  "Run scanner against each added SKILL/agent",
+  "Detect merged HIGH-RISK skills without override",
+}
+out = []
+for wf in sys.argv[1:]:
+    d = yaml.safe_load(open(wf))
+    for jn, j in d["jobs"].items():
+        if j.get("continue-on-error"):
+            out.append(f"{wf}:job {jn}: continue-on-error")
+        for s in j.get("steps", []):
+            if s.get("name", "") not in want:
+                continue
+            if s.get("continue-on-error"):
+                out.append(f"{wf}:{s['name']}: continue-on-error")
+print("\n".join(out))
+PY
+)
+if [ -z "$_wrapper" ]; then
+  pass
+else
+  fail "G1.4 WRAPPER: an in-scope step or its job tolerates failure, so a body that fails closed cannot fail the check: $_wrapper"
+fi
+
 # ── Fixture plumbing ─────────────────────────────────────────────────────────
 #
 # EVERY FIXTURE CWD MUST CARRY STUBS FOR *BOTH* SCRIPTS THE BODIES INVOKE.
@@ -201,7 +246,9 @@ run_body() {  # $1=body file $2=cwd; env passed by caller; stdout+stderr -> $OUT
   OUT="$SANDBOX/out.$$.$RANDOM"
   # RUNNER_TEMP is exported so the extracted bodies' "${RUNNER_TEMP:-/tmp}/*.err" captures
   # land in this fixture, not in a literal /tmp path shared by every concurrent shard.
-  ( cd "$2" && GITHUB_OUTPUT="$2/gh_output" RUNNER_TEMP="$2" bash --noprofile --norc -eo pipefail "$1" ) \
+  # CI=true because both scan bodies declare it in their step `env:`; running them without it
+  # exercises the opposite mode from production.
+  ( cd "$2" && GITHUB_OUTPUT="$2/gh_output" RUNNER_TEMP="$2" CI=true bash --noprofile --norc -eo pipefail "$1" ) \
     >"$OUT" 2>&1
   RC=$?
 }
@@ -368,6 +415,65 @@ else
   fail "1f MERGE_GROUP SHAPE: no_new_skills=true was not written to GITHUB_OUTPUT on an empty diff"
 fi
 
+# ── 1f.ii — a REAL added skill must set no_new_skills=false and name the path ───
+# BODY_IDENT was driven by two fixtures, both asserting the EMPTY direction, and exactly one
+# assertion read GITHUB_OUTPUT (the `true` branch). So collapsing the body to always emit
+# `no_new_skills=true` -- which switches the entire PR gate off, because both downstream steps
+# are `if:`-gated on it being false -- left the suite fully green.
+_fx=$(mkfixture 1f-ii)
+( cd "$_fx" && git init -q -b main . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m base \
+  && mkdir -p plugins/soleur/skills/demo \
+  && printf -- '---\nname: demo\n---\nbody\n' > plugins/soleur/skills/demo/SKILL.md \
+  && git add -A && git -c user.email=t@t -c user.name=t commit -q -m add-skill ) >/dev/null 2>&1 || {
+  printf 'FAIL: 1f.ii fixture repo could not be built\n' >&2; exit 2; }
+BASE_SHA=$(git -C "$_fx" rev-parse HEAD~1) \
+HEAD_SHA=$(git -C "$_fx" rev-parse HEAD) \
+  run_body "$BODY_IDENT" "$_fx"
+if [ "$RC" -eq 0 ] && grep -q 'no_new_skills=false' "$_fx/gh_output" 2>/dev/null; then
+  pass
+else
+  fail "1f.ii REAL ADDITION: exit $RC and gh_output did not carry no_new_skills=false — the gate believes there is nothing to scan when a SKILL.md was added, which skips both downstream steps. Output: $(head -c 250 "$OUT")"
+fi
+if grep -q 'plugins/soleur/skills/demo/SKILL.md' "$_fx/gh_output" 2>/dev/null; then
+  pass
+else
+  fail "1f.ii REAL ADDITION: the added path is absent from GITHUB_OUTPUT, so the scan loop would receive an empty ADDED even with no_new_skills=false"
+fi
+
+# ── 1e.ii — the postmerge audit must honour a SUPPLIED base ────────────────────
+# The `*)` branch -- the github.event.before path #7629 adds, and the whole reason the
+# multi-commit push shape is now visible -- was exercised by no fixture: 1e leaves
+# EVENT_BEFORE unset and takes the all-zeroes arm.
+_fx=$(mkfixture 1e-ii)
+( cd "$_fx" && git init -q -b main . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m one \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m two \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m three ) >/dev/null 2>&1 || {
+  printf 'FAIL: 1e.ii fixture repo could not be built\n' >&2; exit 2; }
+EVENT_BEFORE=$(git -C "$_fx" rev-parse HEAD~2) \
+MERGE_SHA=$(git -C "$_fx" rev-parse HEAD) \
+  run_body "$BODY_AUDIT" "$_fx"
+if [ "$RC" -eq 0 ]; then
+  pass
+else
+  fail "1e.ii SUPPLIED BASE: the audit exited $RC on a three-commit push with a valid github.event.before and no added skills — the branch that makes multi-commit pushes auditable does not work. Output: $(head -c 250 "$OUT")"
+fi
+
+# ── 1e.iii — an unresolvable SUPPLIED base must FAIL CLOSED ────────────────────
+_fx=$(mkfixture 1e-iii)
+( cd "$_fx" && git init -q -b main . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m one ) >/dev/null 2>&1 || {
+  printf 'FAIL: 1e.iii fixture repo could not be built\n' >&2; exit 2; }
+EVENT_BEFORE=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef \
+MERGE_SHA=$(git -C "$_fx" rev-parse HEAD) \
+  run_body "$BODY_AUDIT" "$_fx"
+if [ "$RC" -ne 0 ]; then
+  pass
+else
+  fail "1e.iii UNRESOLVABLE SUPPLIED BASE: the audit exited 0 on a github.event.before that does not resolve — it degraded rather than refusing, which is the class the HEAD^1 fallback was removed for"
+fi
+
 # ── 1g — the must-PASS rows from Guards 1–3 ──────────────────────────────────
 
 # 1g.i — a clean override parse must PASS.
@@ -461,7 +567,7 @@ fi
 _total=$((passes + fails))
 # Set to the FULL measured count (20 = 19 fixtures + G1.0), not a slack figure: any headroom
 # between a floor and the real total is deletable-assertion budget, not padding.
-_FLOOR=21
+_FLOOR=26
 if [ "$_total" -lt "$_FLOOR" ]; then
   printf 'FAIL: assertion floor: %d assertion(s) ran, floor is %d — the harness lost coverage rather than passing it\n' \
     "$_total" "$_FLOOR" >&2
@@ -470,5 +576,4 @@ if [ "$_total" -lt "$_FLOOR" ]; then
 fi
 
 printf 'skill-security-scan-step-body: %d passed, %d failed (%d assertions)\n' "$passes" "$fails" "$_total"
-[ "$fails" -eq 0 ] || exit 1
-exit 0
+exit $(( ${#FAILURES[@]} > 0 ))

@@ -1476,6 +1476,16 @@ S1DRV
     fail "S1 CLASSIFIER rung 3: rc outside _S1_ENV_RCS with no marker must be 'harness-defect', got '$(_s1c 7 no no yes)'" \
          "Reading every non-zero rc as an environment decline hands the skip bucket every harness defect too."; fi
 
+  # rung 0 -- THE ALLOWLIST'S SIZE. The four rung controls probe membership at exactly two
+  # points (7 out, 100 in), so every OTHER rc can be added without any of them noticing:
+  # measured, `_S1_ENV_RCS='1 2 100 125 126 127 137'` left the suite 68/0 green, and 126/127
+  # are the docker exec and mount-permission classes this file's own prose calls harness
+  # defects. The failure direction is the dangerous one -- the SKIP bucket getting more
+  # aggressive -- so the set's cardinality is pinned rather than sampled.
+  if [ "$(printf '%s\n' $_S1_ENV_RCS | grep -c .)" -eq 2 ]; then pass; else
+    fail "S1 CLASSIFIER rung 0: _S1_ENV_RCS holds $(printf '%s\n' $_S1_ENV_RCS | grep -c .) rc class(es) [$_S1_ENV_RCS], expected exactly 2 (100 apt, 125 docker CLI/image pull)" \
+         "Widening this set hands the environment-decline bucket every harness defect, which is the fail-open ADR-188's allowlist exists to prevent."; fi
+
   # rung 4 -- no marker and an rc INSIDE the allowlist is the genuine environment decline
   # ADR-188 accepts. This is the ONLY route to a skip.
   if [ "$(_s1c 100 no no no)" = "did-not-run" ]; then pass; else
@@ -1582,7 +1592,7 @@ S1DRV
     esac
   fi
 else
-  # TWELVE, matching S1's assertion count on every other path, so a failed extraction cannot
+  # THIRTEEN, matching S1's assertion count on every other path, so a failed extraction cannot
   # satisfy the anti-vacuity floor by emitting fewer. Was SEVEN; #7572 adds the structural
   # marker guard (1) and the four classifier rung controls (4), both container-INDEPENDENT,
   # so every path grows by five. Re-derived from the success path rather than incremented by
@@ -1593,7 +1603,7 @@ else
   fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
   fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
   fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
-  fail "S1: skipped (extraction failed)"
+  fail "S1: skipped (extraction failed)"; fail "S1: skipped (extraction failed)"
 fi
 
 # S1's OWN INVARIANT, not the suite's. Twelve assertions are made, declared-skipped, or
@@ -1603,8 +1613,8 @@ fi
 # hole the classifier would otherwise open: routing assertions into arm_skip moves them out
 # of `passes` without moving them out of the total.
 _S1_TOTAL=$(( (passes - _S1_P0) + (fails - _S1_F0) + (SKIPPED_ASSERTIONS - _S1_S0) ))
-if [ "$_S1_TOTAL" -eq 12 ]; then pass; else
-  fail "S1: the arm contributed ${_S1_TOTAL} assertion(s), expected exactly 12 on every route" \
+if [ "$_S1_TOTAL" -eq 13 ]; then pass; else
+  fail "S1: the arm contributed ${_S1_TOTAL} assertion(s), expected exactly 13 on every route" \
        "A route contributing a different number is indistinguishable at the floor from an arm that partly vanished."; fi
 
 # AND AN S1-SPECIFIC SKIP BOUND. The suite-wide ceiling cannot tell whose skips they are, so
@@ -2097,7 +2107,12 @@ fi
 # are both wrong in the same way, and by two that are both no-ops. This is the arm that proves
 # the new expression is strictly safer -- and it is a SYNTHESIZED fixture precisely because the
 # real artifacts contain zero at-risk tokens, which is why (5a) can pass at all.
-printf 'base=${path#/prefix/}\nargc=$#\nurl="https://e.com/#anchor"\nplain=1   # trailing\n' > "$_g5_dir/risk.sh"
+# `tight=1 #nospace` is what gives the `([ \t].*)?$` clause a failing direction. Every other
+# at-risk token here is preceded by a NON-whitespace character, so a strictly more aggressive
+# `[ \t]+#.*$` preserved all of them and survived the entire suite -- the clause was asserted
+# by nothing. A `#` with no space after it is a comment the shipped expression must LEAVE
+# ALONE, and the aggressive spelling eats.
+printf 'base=${path#/prefix/}\nargc=$#\nurl="https://e.com/#anchor"\nplain=1   # trailing\ntight=1 #nospace\n' > "$_g5_dir/risk.sh"
 _g5_new "$_g5_dir/risk.sh" > "$_g5_dir/risk.new" 2>/dev/null
 _b2_strip "$_g5_dir/risk.sh" > "$_g5_dir/risk.b2" 2>/dev/null
 _g5_keeps=$(grep -cE '\$\{path#/prefix/\}|argc=\$#|#anchor' "$_g5_dir/risk.new" 2>/dev/null || true)
@@ -2108,8 +2123,9 @@ _g5_b2_keeps=$(grep -cE '\$\{path#/prefix/\}|argc=\$#|#anchor' "$_g5_dir/risk.b2
 # guards did nothing. Asserting that a genuine ` # trailing` tail was REMOVED is the positive
 # direction, and it is the assertion that lets the _b2_strip parity arm go.
 _g5_stripped=$(grep -cE '^plain=1$' "$_g5_dir/risk.new" 2>/dev/null || true)
-if [ "$_g5_keeps" -eq 3 ] && [ "$_g5_b2_keeps" -eq 0 ] && [ "$_g5_stripped" -eq 1 ]; then pass; else
-  fail "GUARD 5(b): on the at-risk fixture the tail strip preserved ${_g5_keeps}/3 at-risk tokens (expected 3), _b2_strip preserved ${_g5_b2_keeps}/3 (expected 0), and the strip removed ${_g5_stripped}/1 genuine trailing tails (expected 1 — 0 means the strip is disabled) — the two strippers no longer differ in the way that justifies not reusing _b2_strip" \
+_g5_tight=$(grep -cE '^tight=1 #nospace$' "$_g5_dir/risk.new" 2>/dev/null || true)
+if [ "$_g5_keeps" -eq 3 ] && [ "$_g5_b2_keeps" -eq 0 ] && [ "$_g5_stripped" -eq 1 ] && [ "$_g5_tight" -eq 1 ]; then pass; else
+  fail "GUARD 5(b): on the at-risk fixture the tail strip preserved ${_g5_keeps}/3 at-risk tokens (expected 3), _b2_strip preserved ${_g5_b2_keeps}/3 (expected 0), the strip removed ${_g5_stripped}/1 genuine trailing tails (expected 1 — 0 means the strip is disabled), and preserved ${_g5_tight}/1 no-space comments (expected 1 — 0 means the tail clause was widened to `#.*$`) — the two strippers no longer differ in the way that justifies not reusing _b2_strip" \
        "new=[$(tr '\n' ' ' < "$_g5_dir/risk.new")] b2=[$(tr '\n' ' ' < "$_g5_dir/risk.b2")]"; fi
 
 # ── FIXTURE A — the real seed relocated BELOW the trap, with a trailing comment naming the
@@ -3043,8 +3059,8 @@ total=$((passes + fails + SKIPPED_ASSERTIONS))
 #   ----
 #    10
 # Re-derived from a measured run against the as-written file, not incremented by memory.
-if [ "$total" -lt 68 ]; then
-  echo "FAIL: ran only ${total} assertions (floor 68) — harness did not execute fully" >&2
+if [ "$total" -lt 69 ]; then
+  echo "FAIL: ran only ${total} assertions (floor 69) — harness did not execute fully" >&2
   exit 1
 fi
 echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed, Skipped: ${SKIPPED_ASSERTIONS} (${total} assertions)"
