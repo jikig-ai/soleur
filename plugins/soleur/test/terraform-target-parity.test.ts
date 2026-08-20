@@ -4018,10 +4018,45 @@ describe("Guard 1 mutation battery (#7586)", () => {
 
 const ARM_SCRIPT = resolve(INFRA_DIR, "arm-heartbeats.sh");
 const ARM_STATE_FILE_LITERAL = "$RUNNER_TEMP/armed-unconfirmed";
-const SPEC_MEASUREMENTS = resolve(
-  REPO_ROOT,
-  "knowledge-base/project/specs/feat-one-shot-7586-7587-red-apply-no-channel-arm-deadline/measurements.md",
-);
+const SPEC_DIR_NAME = "feat-one-shot-7586-7587-red-apply-no-channel-arm-deadline";
+
+/**
+ * Resolve the measurement log WITHOUT pinning it to its pre-archive path.
+ *
+ * `archive-kb` `git mv`s a finished spec directory to `specs/archive/<timestamp>-<name>/` as
+ * routine housekeeping. A guard that hard-codes the live path therefore reds `main` the first time
+ * anyone tidies up -- the guard breaks on a legitimate edit, which is the definition of a false
+ * RED. Measured before this fix: archiving the directory took this suite from 177/0 to
+ * 158 pass / 4 fail / 1 error, with 15 tests never reaching an assertion.
+ *
+ * Search the live path first, then the archive (suffix match, because the archive prefixes a
+ * timestamp). Throw naming BOTH candidates if neither exists -- a missing pin must fail LOUD, never
+ * fall back to a literal, because the whole point of the pin is that the ladder and the measurement
+ * cannot drift apart.
+ */
+function resolveSpecMeasurements(): string {
+  const live = resolve(REPO_ROOT, "knowledge-base/project/specs", SPEC_DIR_NAME, "measurements.md");
+  if (existsSync(live)) return live;
+
+  const archiveRoot = resolve(REPO_ROOT, "knowledge-base/project/specs/archive");
+  if (existsSync(archiveRoot)) {
+    const hit = readdirSync(archiveRoot)
+      .filter((d) => d.endsWith(SPEC_DIR_NAME))
+      .sort()
+      .pop();
+    if (hit) {
+      const archived = resolve(archiveRoot, hit, "measurements.md");
+      if (existsSync(archived)) return archived;
+    }
+  }
+
+  throw new Error(
+    `measurements.md not found for ${SPEC_DIR_NAME}: looked at ${live} and under ${archiveRoot}/*${SPEC_DIR_NAME}/. ` +
+      `The LADDER-PIN values live there; the ladder guard cannot run without them.`,
+  );
+}
+
+const SPEC_MEASUREMENTS = resolveSpecMeasurements();
 
 /**
  * Identify the re-pause sweep WITHOUT keying on its step name — a rename is a legitimate edit and
