@@ -343,11 +343,67 @@ jobs:
       needs.preflight.outputs.skip != 'true' &&
       (github.event_name == 'push' || inputs.apply_target == 'manual-rerun')
     runs-on: ubuntu-24.04
-    # Budget: ~0.6 min/resource × ~70 targets = ~42 min worst-case cold-cache,
-    # but plan + apply against an already-provisioned state typically completes
-    # in ~3-5 min. 15 min is the operator-tolerance ceiling that matches
-    # `apply-deploy-pipeline-fix.yml`.
-    timeout-minutes: 15
+    # BUDGET, RE-DERIVED (#7587, corrected #7657). The retired line here read
+    # "~0.6 min/resource × ~70 targets = ~42 min worst-case cold-cache". It was an estimate, never
+    # a measurement, and it contradicted the ladder below by 22x — one sentence said the pre-gate
+    # window could be 2520 s while the next sized the job on a 111 s pre-gate. Measured instead,
+    # over the 42 most recent merge (push) applies that reached the ARM step (2026-08-20, method
+    # and per-run table in measurements.md §0.3(b)): the whole `apply` JOB ran 11–350 s, max
+    # 5.8 min. A genuinely cold-cache build of this root is a `web_host_create` / `*_host_replace`
+    # DISPATCH job, not this one — an attended rebuild with its own budget — so the merge-path
+    # population is steady-state by construction and the estimate has nothing left to describe.
+    #
+    # 15 → 41 (#7587, #7657). The 15 was never a measured constraint: its stated justification was
+    # "the operator-tolerance ceiling that matches `apply-deploy-pipeline-fix.yml`", and that
+    # sibling's own apply job is `timeout-minutes: 90`. It was an unverified paraphrase, and the
+    # entire "the ARM gate's deadline sum must be truncated to fit" framing rested on treating
+    # 900 s as fixed.
+    #
+    # The replacement is a two-part inequality, every term measured or derived from the shipped
+    # script, and both asserted by the `the ARM gate's deadlines fit its job` describe in
+    # `plugins/soleur/test/terraform-target-parity.test.ts` — which parses the deadlines, the poll
+    # interval and the curl ceiling OUT of `apps/web-platform/infra/arm-heartbeats.sh` rather than
+    # restating them here:
+    #
+    #   (1) arm_step_timeout ≥ Σ over call sites of
+    #       (deadline_i + poll_interval + (3 + rollback_attempts) × curl_max_time)
+    #       → 2100 ≥ (200+440+200+440+200+30) + 6 × 85 = 1510 + 510 = 2020      ✓ slack 80 s
+    #   (2) job_timeout − arm_step_timeout ≥ max(pre-gate) + post-gate budget
+    #       → 2460 − 2100 = 360 ≥ 111 + 180 = 291                               ✓ slack 69 s
+    #
+    # TERM (1) IS ADDITIVE, and that is the correction. `Σ × 1.1` applied a multiplier to overhead
+    # that is per CALL SITE: each `arm_one` spends four `curl --max-time 15` round-trips the
+    # `elapsed` accounting never sees (pre-loop GET, unpause PATCH, the final iteration's own GET)
+    # plus one poll interval of loop overshoot plus the rollback, which retries once (#7658 E8) —
+    # 85 s, whatever the deadline.
+    # Under the old shape the step ceiling broke at ≥9 s of vendor round-trip; measured by running
+    # the shipped script under its own PATH stubs, six arms at 15 s/round-trip cost 2020 s against
+    # a 1860 s ceiling. The header of `arm-heartbeats.sh` derives the 70.
+    # Σ is over EVERY call site, not the five reachable on today's merge path — a call site that
+    # is absent from tfstate today is still a call site, and the ceiling has to hold when it is not.
+    #
+    # TERM (2) BUDGETS WHAT RUNS AFTER THE GATE, which the old form did not: it reserved only the
+    # pre-gate window, leaving 129 s for the re-pause sweep, the bridge teardown and the post-apply
+    # summary combined. The sweep is the LAST-CHANCE rollback and it runs precisely when the ARM
+    # step was cut — i.e. when the least budget remains — so a sweep cancelled with the job
+    # relocates #7587's shape one rung up the ladder. post-gate budget = sweep 6 × `--max-time 15`
+    # (90 s) + its `timeout 30` Doppler mint + 60 s for the two remaining `always()` steps, and the
+    # sweep now carries its own `timeout-minutes: 3`.
+    # 111 s is the MAXIMUM pre-gate (job start → ARM step start) over those same 42 runs, not a
+    # p95 — the earlier "p95 = 111" was a max-of-6 mislabelled. Observed 8–111 s; nearest-rank p95
+    # at n = 42 is 81 s. The ladder uses the max deliberately.
+    #
+    # The ladder is 2020 (work) < 2100 (step ceiling) < 2460 (job ceiling) — a job ceiling above,
+    # an in-script bound strictly below, which is the shape this file's two mutex-holding dispatch
+    # jobs already document. The cost is the fleet-wide apply mutex: the `concurrency` group is
+    # WORKFLOW-level, so the run-level worst case is the SUM across every job that can execute on
+    # a push, chained by `needs:` — preflight 1 + apply 41 + notify-apply-failure 5 = 47 min.
+    # (`preflight` was uncounted in the earlier "40 min" claim, which was also 41.) Measured before
+    # relying on it (2026-08-20, 80 completed runs of the shared group over 35 days): observed
+    # queue depth never exceeded 1, the longest run took 23.7 min, and the sibling that shares this
+    # mutex already runs a 90-minute apply. Priced honestly: the worst case for an emergency
+    # dispatch issued while a merge apply is in flight is now a 47-minute wait.
+    timeout-minutes: 41
     # No `environment:` reviewer gate. PR #4220 removed it: the per-apply
     # reviewer click was duplicative friction on top of the PR-merge gate
     # (CODEOWNERS review + branch protection on main), and was blocking
@@ -1031,26 +1087,17 @@ jobs:
       # --- #6438/#6548: measured-beat ARM gate (ADR-117 automated) ------------------------------
       # The brand-critical step (#6400 shape prevention): a heartbeat that ships GREEN-but-inert is
       # the very failure this bundle exists to catch, so acceptance is a REAL measured beat, never a
-      # passing unit test. The sequence is ADR-117's (VERIFIED against the live Better Stack API):
-      # a paused heartbeat exposes NO usable ping timestamp — `attributes` is
-      # {status, paused, period, grace, updated_at, url, …} with NO last_ping_at, and `updated_at`
-      # does not move when a beat arrives while paused. So the only way to MEASURE a real beat is to
-      # UNPAUSE and watch `status` transition to `up`, rolling back BEFORE the first absence alert if
-      # it never does. For each web-host probe/guard heartbeat + git_data_prd this:
-      #   1. resolves the monitor id from TFSTATE (never a name-regex — a name collision would arm
-      #      the wrong monitor);
-      #   2. OP/STATE-GATES on live `status=="paused"`: a monitor already `up`/`pending`/`down`
-      #      (ignore_changes=[paused] keeps SOURCE paused=true forever, but a prior arm unpaused it
-      #      LIVE) is skipped, so routine re-applies are a TRUE no-op and never flake on a BS blip;
-      #   3. PATCH {paused:false}, then poll `status` every 10s until `up` within period+grace−10s;
-      #   4. `up` ⇒ a real beat landed ⇒ ARMED. Otherwise PATCH {paused:true} IMMEDIATELY (roll back
-      #      BEFORE the first absence alert would fire) and FAIL the apply loud — never leave an
-      #      unfed monitor live, never leave a green-but-inert one paused-and-forgotten.
-      # Uses the DEDICATED DOPPLER_TOKEN_WEB_ARM (read) to fetch BETTERSTACK_API_TOKEN, then writes
-      # the account-wide Better Stack API (blast radius recorded in ADR-117). The read-only
-      # "Best-effort heartbeat status" steps are deliberately NOT reused (they swallow errors and
-      # return "unavailable"). Never gated on the provisioner's exit code (P0-1). Runs only when the
-      # SSH provisioners actually installed the timers this run.
+      # passing unit test. The ADR-117 sequence, the per-monitor deadlines and the rollback all live
+      # in `apps/web-platform/infra/arm-heartbeats.sh` since #7587 — read the rationale there rather
+      # than in a paraphrase here, and see `apps/web-platform/infra/arm-heartbeats.test.sh` plus the
+      # `the ARM gate's deadlines fit its job` describe in
+      # `plugins/soleur/test/terraform-target-parity.test.ts` for what asserts on it.
+      # This step keeps only what the script cannot own: the DEDICATED DOPPLER_TOKEN_WEB_ARM (read)
+      # mint of BETTERSTACK_API_TOKEN and its ::add-mask::, and the `terraform show -json` that needs
+      # this step's working-directory. Writes reach the account-wide Better Stack API (blast radius
+      # recorded in ADR-117). The read-only "Best-effort heartbeat status" steps are deliberately NOT
+      # reused (they swallow errors and return "unavailable"). Never gated on the provisioner's exit
+      # code (P0-1). Runs only when the SSH provisioners actually installed the timers this run.
       - name: Arm web-host probe heartbeats (unpause→verify-status→rollback, fail-loud)
         # `always() &&` added for #7095. This is documented elsewhere in this file as the
         # ONLY unpause path for the web-host heartbeats. It sits AFTER the CF Tunnel SSH
@@ -1063,126 +1110,102 @@ jobs:
         # The ssh_apply_skip condition is preserved: on a genuine first bootstrap there
         # is nothing to arm.
         if: always() && steps.ssh_token_gate.outputs.ssh_apply_skip != 'true'
+        # STEP-LEVEL CEILING (#7587), the lower rung of the ladder documented on the job's own
+        # `timeout-minutes` above: 2020 (the script's worst-case wall clock) < 2100 (this step)
+        # < 2460 (the job). It is what makes an over-running ARM gate fail INSIDE the job — where
+        # the `if: always()` re-pause sweep below and the post-apply summary still run — instead
+        # of being cancelled WITH the job, which is #7587's shape: the in-script rollback never
+        # runs and a heartbeat is left unpaused-and-unfed until its grace window expires and it
+        # pages, at whatever hour.
+        timeout-minutes: 35
         working-directory: ${{ env.INFRA_DIR }}
         env:
-          DOPPLER_TOKEN_WEB_ARM: ${{ secrets.DOPPLER_TOKEN_WEB_ARM }}
+          # Passed as DOPPLER_TOKEN (the CLI's own variable) rather than on argv: `--token <secret>`
+          # sits in /proc/<pid>/cmdline, mode 0444, for the life of the call (#7661 G11).
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_WEB_ARM }}
         run: |
           set -uo pipefail
-          if [[ -z "${DOPPLER_TOKEN_WEB_ARM:-}" ]]; then
+          if [[ -z "${DOPPLER_TOKEN:-}" ]]; then
             echo "::error::DOPPLER_TOKEN_WEB_ARM is not configured — cannot arm the measured-beat heartbeats. It is minted by doppler_service_token.web_arm_write on the FIRST apply that lands web-arm-write-token.tf; re-run this workflow once that token has synced."
             exit 1
           fi
-          BS_TOKEN=$(doppler secrets get BETTERSTACK_API_TOKEN --plain --token "$DOPPLER_TOKEN_WEB_ARM" 2>/dev/null || true)
+          BS_TOKEN=$(timeout 30 doppler secrets get BETTERSTACK_API_TOKEN --plain 2>/dev/null || true)
           if [[ -z "$BS_TOKEN" ]]; then
             echo "::error::BETTERSTACK_API_TOKEN unreadable via DOPPLER_TOKEN_WEB_ARM."
             exit 1
           fi
           printf '::add-mask::%s\n' "$BS_TOKEN"
-          terraform show -json > /tmp/webplat-tfstate.json
+          # $RUNNER_TEMP, not /tmp (#7661 G10). `terraform show -json` does not redact sensitive
+          # values — it flags them in a parallel `sensitive_values` map — and this root holds
+          # `doppler_service_token.web_arm_write` (whose `key` attribute is a live token) plus the
+          # Cloudflare and Hetzner credentials. A fixed, predictable, world-readable path is
+          # readable by every later step in the job, third-party actions included.
+          terraform show -json > "$RUNNER_TEMP/webplat-tfstate.json"
+          # The arming pass itself lives in apps/web-platform/infra/arm-heartbeats.sh (#7587).
+          # It was ~130 lines of bash inside this scalar and nothing asserted on it; as a real
+          # script it is driven behaviourally by arm-heartbeats.test.sh with a fake clock and a
+          # fake curl on PATH. The credential mint and `terraform show` stay in this step
+          # because they need its secret env and its working-directory.
+          BS_TOKEN="$BS_TOKEN" \
+          TFSTATE_JSON="$RUNNER_TEMP/webplat-tfstate.json" \
+          ARMED_UNCONFIRMED="$RUNNER_TEMP/armed-unconfirmed" \
+            bash "$GITHUB_WORKSPACE/apps/web-platform/infra/arm-heartbeats.sh" --arm
 
-          hb_status() {  # <id> -> prints attributes.status (empty on lookup failure)
-            curl -fsS --max-time 15 -H "Authorization: Bearer ${BS_TOKEN}" \
-              "https://uptime.betterstack.com/api/v2/heartbeats/$1" 2>/dev/null \
-              | jq -r '.data.attributes.status // empty' 2>/dev/null || true
-          }
-          hb_patch_paused() {  # <id> <true|false> -> exit 0 on success
-            curl -fsS --max-time 15 -X PATCH \
-              -H "Authorization: Bearer ${BS_TOKEN}" -H 'Content-Type: application/json' \
-              "https://uptime.betterstack.com/api/v2/heartbeats/$1" \
-              --data-raw "{\"paused\":$2}" >/dev/null 2>&1
-          }
+      # --- #7587: the rollback that survives a cancellation ------------------------------------
+      # `arm_one` rolls a monitor back to `paused` on its own terminal branch. That line is
+      # unreachable on an EXTERNALLY-IMPOSED cut — a step timeout, a job timeout, a cancel — and on
+      # those paths a heartbeat is left unpaused with nothing feeding it, so it pages on absence at
+      # whatever hour its grace window expires. This step is the backstop: `arm-heartbeats.sh`
+      # records every id whose `PATCH {paused:false}` succeeded in `$RUNNER_TEMP/armed-unconfirmed`
+      # and removes it only on a 2xx rollback or on reaching `up`, so a non-empty file here
+      # means exactly "these monitors are live and unconfirmed".
+      #
+      # Deliberately NOT a `trap` inside the ARM step (Cut List C6): bash keeps only the last EXIT
+      # handler, an INT/TERM handler returns and then fires EXIT too, and bash defers the handler
+      # until the foreground `sleep` returns. A sibling step gated `if: always()` runs on every one
+      # of those paths — any signal that kills the ARM step leaves the job alive, and a job-level
+      # cancellation runs this inside the grace window.
+      #
+      # THE BODY IS NOT HERE (#7659). It shipped as ~45 lines of bash inside this scalar, guarded
+      # by ten regexes over the step text — the very shape the ARM gate was extracted OUT of in
+      # this same change, with a second `hb_patch_paused`, a second copy of the API base literal,
+      # and a fail-not-annotate branch that a regex could not tell from an unrelated `exit 1`.
+      # `arm-heartbeats.sh --sweep` is that body, executed by arm-heartbeats.test.sh (cases S1–S6).
+      # What stays here is what a script cannot own: the step's own secret env and the mint.
+      - name: Re-pause any monitor left unconfirmed
+        if: always()
+        # POST-GATE CEILING (#7657 D3). The ARM step got a ceiling and the LAST-CHANCE ROLLBACK did
+        # not, and the correlation is adversarial: the state file is non-empty precisely when the
+        # ARM step was cut, i.e. exactly when the least job budget remains. 3 min covers the whole
+        # post-gate budget the job's ladder reserves — six re-PATCHes at `--max-time 15` (90 s) plus
+        # the `timeout 30` mint — with 60 s of slack.
+        timeout-minutes: 3
+        env:
+          # See the ARM step: DOPPLER_TOKEN, not `--token` on argv (#7661 G11).
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_WEB_ARM }}
+        run: |
+          set -uo pipefail
+          # `set +e` EXPLICITLY: Actions runs a bare `run:` block as `bash -e {0}`, so errexit is
+          # INHERITED and `set -uo pipefail` only adds flags (ADR-170). The sweep reads its own
+          # mint failure as DATA — an empty token is an `outcome=mint-unreadable` report naming the
+          # ids, not an abort with no diagnosis.
+          set +e
+          # FIRST LINE OF WORK, before any credential read. This step is `if: always()`, so it runs
+          # on every apply including `ssh_apply_skip` runs and pre-gate failures where nothing was
+          # ever unpaused. Without this early exit it would re-mint a credential it does not need
+          # and raise a mint-failure alarm on runs with no work — a false alarm wired straight into
+          # the failure email this same PR adds. Never `set -x` here: the token is in scope below.
+          [[ -s "$RUNNER_TEMP/armed-unconfirmed" ]] || exit 0
 
-          # arm_one <state-address> <label> <deadline_seconds = period + grace - 10>
-          arm_one() {
-            local addr="$1" label="$2" deadline="$3"
-            local id status
-            id=$(jq -r --arg a "$addr" '.values.root_module.resources[]? | select(.address==$a) | .values.id' /tmp/webplat-tfstate.json)
-            if [[ -z "$id" || "$id" == "null" ]]; then
-              echo "::notice::${label}: not present in tfstate (address ${addr}) — skipping (this apply path did not create it)."
-              return 0
-            fi
-            status=$(hb_status "$id")
-            if [[ -z "$status" ]]; then
-              echo "::error::${label}: GET /heartbeats/${id} failed — cannot verify arm state."
-              return 1
-            fi
-            if [[ "$status" != "paused" ]]; then
-              echo "${label}: already armed (status=${status}) — no-op."
-              return 0
-            fi
-            echo "${label}: monitor ${id} is paused; unpausing and watching for a real beat (status→up, deadline=${deadline}s)…"
-            if ! hb_patch_paused "$id" false; then
-              echo "::error::${label}: PATCH paused=false FAILED — cannot begin arming."
-              return 1
-            fi
-            local waited=0
-            while (( waited < deadline )); do
-              sleep 10
-              waited=$(( waited + 10 ))
-              status=$(hb_status "$id")
-              if [[ "$status" == "up" ]]; then
-                echo "::notice::${label}: status=up within ${waited}s — a real beat landed. ARMED."
-                return 0
-              fi
-            done
-            # No `up` in time: roll back to paused BEFORE the first absence alert, then fail loud.
-            # Returns 2, NOT 1, and the distinction is load-bearing for exactly one caller. Every
-            # other non-zero exit from this function ("GET failed", "PATCH failed") means the gate
-            # could not do its job. THIS one means the gate worked and the FEEDER is not feeding —
-            # an assertion about the monitored system, not about the arming. Callers whose feeder
-            # is expected to be healthy still treat it as fatal (`|| rc=1` catches any non-zero);
-            # the inngest-consumer caller below distinguishes it, because its feeder is knowingly
-            # dark. The rollback is unconditional in both cases: this function NEVER leaves an
-            # unpaused-and-unfed monitor behind, which is the property the softer caller relies on.
-            hb_patch_paused "$id" true || echo "::error::${label}: rollback PATCH paused=true ALSO failed — the monitor is unpaused-and-unfed; investigate immediately."
-            echo "::error::${label}: status never reached 'up' within ${deadline}s (probe timer never pinged) — ROLLED BACK to paused. A green-but-inert monitor is the #6400 shape this gate exists to prevent. Investigate: is the web-1 timer installed + the private-net path healthy?"
-            return 2
-          }
-
-          rc=0
-          # deadline = period + grace − 10 (roll back just before the first absence alert):
-          # zot 180+60−10, nic-guard 360+120−10, git-data 60+180−10, inngest-consumer 180+60−10.
-          arm_one 'betteruptime_heartbeat.web_zot_consumer["web-1"]' 'web-zot-consumer (web-1)' 230 || rc=1
-          arm_one 'betteruptime_heartbeat.web_nic_guard["web-1"]'    'web-nic-guard (web-1)'    470 || rc=1
-          # (#6459/ADR-143) web-2's per-host heartbeats are born `paused` (web-probe.tf
-          # ignore_changes=[paused]) exactly like web-1's; the ONLY unpause path is this gate, so they
-          # MUST be armed here or web2-standby-soak-6459.sh reads them `paused` and false-FAILs a healthy
-          # web-2 as a DARK host (#6459 could never close). arm_one no-ops (return 0) when the address
-          # is absent from tfstate, so this is inert on any apply path that has not yet created web-2.
-          arm_one 'betteruptime_heartbeat.web_zot_consumer["web-2"]' 'web-zot-consumer (web-2)' 230 || rc=1
-          arm_one 'betteruptime_heartbeat.web_nic_guard["web-2"]'    'web-nic-guard (web-2)'    470 || rc=1
-          arm_one 'betteruptime_heartbeat.git_data_prd'              'git-data-prd'             230 || rc=1
-
-          # (#7228) inngest-consumer — the ONE caller that distinguishes rc=2 (see arm_one's
-          # terminal branch). Its feeder is inngest-consumer-probe.sh on web-1, which pings only
-          # after reading a NON-EMPTY function registry out of 10.0.1.40:8288. That host has not
-          # bound :8288 since 2026-07-30, and THIS PR DOES NOT FIX THAT — the fix needs
-          # `apply_target=inngest-host-replace` plus a cutover window, both deferred to numbered
-          # issues. So the probe is correctly SUPPRESSING, no beat can land, and arming hard here
-          # would red the infra apply on EVERY merge for the whole deferral window.
-          #
-          # This is not the "best-effort status" anti-pattern the block comment above rejects, and
-          # the difference is that the softness is self-clearing rather than permanent: arm_one
-          # returns 0 via its `already armed (status=…)` branch once the monitor is up, and
-          # ignore_changes=[paused] keeps it that way, so the FIRST apply after 10.0.1.40 actually
-          # serves arms it hard and every later apply is a no-op. The rollback-to-paused inside
-          # arm_one still runs, so we never leave an unpaused-and-unfed monitor. What we are
-          # declining to do is fail an apply because a KNOWN, TRACKED, OPEN outage is still open.
-          #
-          # The plan's AC13 ("a real beat is measured and the monitor is PATCHed unpaused") is
-          # therefore NOT satisfiable at merge for this heartbeat, and saying so is the point:
-          # arming it is a closing condition of the cutover issue, not of this PR. The probe's
-          # fault channel (vector Source 4, SyslogIdentifier=inngest-consumer-probe) is live from
-          # merge regardless, so the outage stays observable off-box the whole time — which is
-          # what distinguishes this from #6537's "shipped inert and forgotten for nine days".
-          arc=0
-          arm_one 'betteruptime_heartbeat.inngest_consumer' 'inngest-consumer (web-1)' 230 || arc=$?
-          if [[ "$arc" -eq 2 ]]; then
-            echo "::warning::inngest-consumer: no beat within 230s; monitor rolled back to paused. This is the EXPECTED state while the 10.0.1.40 bind failure (#7228) is open — the consumer probe suppresses its ping by design when the dedicated host serves nothing. It arms automatically on the first apply after that host serves. If #7228 is CLOSED and you are still seeing this, the probe or the private-net path is broken: check 'systemctl list-timers inngest-consumer-probe.timer' on web-1 and query SyslogIdentifier=inngest-consumer-probe in Better Stack for the classification."
-          elif [[ "$arc" -ne 0 ]]; then
-            rc=1
-          fi
-          exit "$rc"
+          # BS_TOKEN is derived INSIDE the ARM step and is invisible to a sibling step, so the mint
+          # is repeated here. `timeout 30` because an unbounded mint is a term the job's post-gate
+          # budget cannot price. An EMPTY result is handed to the sweep deliberately: it owns the
+          # `mint-unreadable` outcome, and it is the half that knows the monitor ids.
+          BS_TOKEN=$(timeout 30 doppler secrets get BETTERSTACK_API_TOKEN --plain 2>/dev/null || true)
+          [[ -z "$BS_TOKEN" ]] || printf '::add-mask::%s\n' "$BS_TOKEN"
+          BS_TOKEN="$BS_TOKEN" \
+          ARMED_UNCONFIRMED="$RUNNER_TEMP/armed-unconfirmed" \
+            bash "$GITHUB_WORKSPACE/apps/web-platform/infra/arm-heartbeats.sh" --sweep
 
       - name: Tear down cloudflared SSH bridge
         if: always()
@@ -1241,6 +1264,305 @@ jobs:
             echo "**SSH stage:** ${SSH_STAGE}"
             echo "**Run:** ${RUN_URL}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # --- #7586: a non-green apply run reaches a channel ----------------------------------------
+  # Before this job, the file had exactly ONE `notify-ops-email` call site — the `#7539` step
+  # inside `apply`, gated on `ssh_apply_skip == 'true'`. That is a GREEN-SKIP predicate: it fires
+  # when the run completed green having delivered nothing, and it cannot fire when the run goes
+  # red. Nothing else covered the gap: no `workflow_run` watcher names this workflow, it has no
+  # `sentry-heartbeat` call site, and GitHub's built-in failed-run email routes to the pushing
+  # actor, which `reusable-release.yml` already documents in-repo as "frequently a GitHub App
+  # identity, i.e. nobody". Measured on 2026-08-20: 23 `failure` + 1 `cancelled` of the last 60
+  # `main` runs, none of which notified anyone, while the post-mortem for this same workflow
+  # records detection as "by looking at the Actions tab" after three days of unapplied
+  # production infrastructure.
+  #
+  # A separate JOB, not the sibling `if: failure()` step the issue proposed (Cut List C1). A job
+  # that exceeds `timeout-minutes` concludes `cancelled`, and `failure()`-gated steps are SKIPPED
+  # on that path, so a step arm is structurally silent on exactly the #7587 path. A downstream job
+  # reads `needs.apply.result` regardless.
+  #
+  # CITATION, corrected (#7661 G5). Run 32168637847 is real and it measures the FIRST half: Main
+  # Health Monitor ran 70m43s against `timeout-minutes: 70` and concluded `cancelled`, and its
+  # `always()` siblings still ran, consuming 43 s past the timeout instant. It does NOT measure
+  # the second half — the step it was cited for, `Create issue on failure`, is gated
+  # `if: ${{ !cancelled() && … }}`, and that run contains no `failure()`-gated step at all.
+  #
+  # THE TWO LOAD-BEARING PREMISES, MEASURED (#7661 G5). Both were asserted from documentation; both
+  # were then checked against this repo's own run history, and each is recorded with exactly what
+  # its evidence covers and what it does not.
+  #
+  #   (a) A downstream `always()` JOB runs when an upstream job is CANCELLED.
+  #       VERIFIED. `infra-validation.yml`, runs 32272435663 / 32294251707 / 32296436704: the job
+  #       `validate (apps/web-platform/infra)` concluded `cancelled` after 6h, annotated "The job
+  #       has exceeded the maximum execution time of 6h0m0s / The operation was canceled", and the
+  #       downstream `infra-validate-required` (`needs: [detect-changes, validate]`, `if: always()`)
+  #       concluded `failure`, NOT `skipped` — its own log printed `RESULT: cancelled`, so it both
+  #       ran and read the cancelled result. NARROW SPOT: that job declares no `timeout-minutes`,
+  #       so the ceiling that cancelled it was GitHub's 6h platform default. That the two ceilings
+  #       are one code path is separately measured — `deploy-script-tests` (`timeout-minutes: 14`,
+  #       runs 32299138340 / 32299155123 / 32300783446) emits the identical annotation with a
+  #       different number, concludes `cancelled`, and every sibling job after it ran to `success`.
+  #       NOT IN HISTORY: a job cancelled by its DECLARED `timeout-minutes` that is literally named
+  #       in the `needs:` of the `always()` job that ran. The two halves are measured; the single
+  #       run joining them is not.
+  #
+  #   (b) A STEP exceeding its own `timeout-minutes` concludes `failure` (not `cancelled`) and the
+  #       job carries on. VERIFIED, in two halves from two workflows.
+  #       Half 1 — `web-platform-release.yml`, runs 32293304541 (job 96217488153) and 32283291347
+  #       (job 96183288475): step "Install psql", `timeout-minutes: 5`, logged "The action 'Install
+  #       psql' has timed out after 5 minutes", API step conclusion `failure`, and the JOB was not
+  #       cancelled — it ran on through `Post Run actions/checkout` and `Complete job`, both
+  #       `success`. Half 2 — `reusable-release.yml`'s `Tear down cloudflared registry bridge`
+  #       (`if: always()`) concludes `success` after a failed sibling step, across ~30 runs
+  #       (30913993850, 31379319736, 31751479655). NOT IN HISTORY: a step-level TIMEOUT with an
+  #       `if: always()` sibling behind it in the same job. Half 1 gives the conclusion, half 2
+  #       gives the continuation; no single run gives both.
+  #
+  #   Measurement note that feeds the ladder: a timeout kill overshoots its declared ceiling by
+  #   13–31 s of API wall clock (313 s against 300, 859–930 s against 840, 4243 s against 4200).
+  #   The job ceiling's 69 s of slack over the step ceiling absorbs that; do not shrink it below it.
+  #
+  # This job's HEADER COMMENT is inside `extractJobBlock(wf, "apply")` — that helper resets only
+  # on `/^ {2}[A-Za-z0-9_-]+:/` and `#` is not in that class, so 2-space-indented comment lines
+  # never close a job block (#7661 G4; the first version of this sentence claimed the opposite).
+  # The `#7539` guard survives anyway, for a different reason: its `extractStep` requires
+  # `^ {6}- name:` and takes the FIRST `/Notify ops/` STEP, which is still the one in the apply
+  # job. Guards that key on the apply block's TEXT must account for this header being in it.
+  #
+  # RESIDUAL, RE-DERIVED AND LARGER THAN FIRST STATED (#7654 A3). The first version of this
+  # paragraph read "~24/60 to ~1/60", which silently assumed all 23 failures were pushes. Counted
+  # properly over the same window (`gh run list --workflow apply-web-platform-infra.yml --branch
+  # main --limit 60`, 2026-08-20): 27 push/success, 18 push/failure, 9 dispatch/success,
+  # 5 dispatch/failure, 1 dispatch/cancelled — 24 non-green.
+  #
+  # This job covers the 18 push failures. It does NOT cover:
+  #   - the 5 dispatch failures, because every one of them was a NON-`manual-rerun` target
+  #     (registry_store_restore, registry_pull_path_gate x2, registry_luks_recut,
+  #     registry_host_replace) and the trigger clause below admits only `push` or `manual-rerun`;
+  #   - the 1 dispatch cancellation (run 32293338273, a `vector-redeliver` dispatch), for the
+  #     same reason AND because a RUN-level cancellation cancels queued jobs too, so an `always()`
+  #     job never starts. (A concurrency supersede cannot happen here: the group declares
+  #     `cancel-in-progress: false`.)
+  # Post-PR residual is therefore 6/60, not ~1/60.
+  #
+  # Note also that `preflight` carries no `if:` and no `needs:`, so it runs on EVERY dispatch
+  # target while no dispatch job `needs:` it — a red `preflight` reds the run while the target job
+  # goes green, and this job is silent on all 13 non-`manual-rerun` targets. Widening the trigger
+  # clause to every dispatch target means widening `needs:` to jobs that do not run on a push,
+  # which changes the predicate's shape; it is deliberately NOT done here, and the uncovered set
+  # is named above rather than glossed. The covering mechanism for BOTH residuals -- the 5
+  # non-`manual-rerun` dispatch failures and the 1 run-level cancellation -- is a `workflow_run`
+  # watcher, which does not exist for this workflow. It is tracked by #7662 (a default
+  # notification posture for production-affecting workflows), filed at ship time from the #7642
+  # plan's `## Deferrals`. `workflow_run` fires on `completed` INCLUDING `cancelled`, which is why
+  # it reaches the run-level cancellation that no in-run mechanism can: when a run is cancelled,
+  # its queued jobs are cancelled with it, so an `if: always()` job never starts at all.
+  #
+  # Asserted by `describe("apply-web-platform-infra has a failure channel")` in
+  # `plugins/soleur/test/terraform-target-parity.test.ts`, which EVALUATES the predicate below
+  # over {success,failure,cancelled,skipped}² × {push,manual-rerun,other} rather than
+  # string-matching it, and pins `needs:` in the same test so shrinking the array cannot shrink
+  # the obligation.
+  notify-apply-failure:
+    needs: [preflight, apply]
+    # NOT `github.event_name == 'push'` alone: `apply` also runs on the `manual-rerun` dispatch,
+    # which is the exact recovery command this job's own email prescribes — gating on push would
+    # leave the retry with no channel.
+    # NOT `needs.apply.result != 'success'` alone: a failed `preflight` leaves `apply` SKIPPED,
+    # which that predicate reads as fine while the run is red. `preflight` is in `needs:` precisely
+    # so the negated form below ("not everything is fine") can see it.
+    if: >-
+      always() &&
+      (github.event_name == 'push' || inputs.apply_target == 'manual-rerun') &&
+      !(needs.preflight.result == 'success' &&
+        (needs.apply.result == 'success' || needs.apply.result == 'skipped'))
+    runs-on: ubuntu-24.04
+    # Bounds the fleet-mutex hold this job adds; GitHub's default is 360 minutes. The
+    # `concurrency` group is WORKFLOW-level, so the run-level worst case is the SUM across every
+    # job that can execute on a push, chained by `needs:`: preflight 1 + apply 41 + this 5 = 47 min.
+    # `preflight` is counted — it was omitted from the earlier "40 min" arithmetic, which was 41.
+    # Pinned to exactly 5 by the guard suite (raising it silently falsifies all three copies of the
+    # sum, so the guard asserts the literal rather than a ceiling).
+    timeout-minutes: 5
+    # A job-level `permissions:` block REPLACES the workflow-level one, so `contents: read` has to
+    # be re-declared alongside the grant this job actually needs. `actions: read` is the minimum
+    # for `…/actions/runs/<id>/jobs`, which is where the failing step's name comes from.
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # Every step BELOW carries a `name:` — the guard suite's `extractStep` helper matches on
+      # `^ {6}- name:`, so an unnamed step is invisible to it and nothing below could be asserted.
+      # The `uses:`-only checkout above is the one exception, which is why this says "below"
+      # (#7661 G6: the universal was false, and it sat directly above the counterexample).
+      - name: Resolve the failing step from the jobs API
+        id: cause
+        # `always()`, not the implicit `success()`. There is nothing before this step but the
+        # checkout, and if THAT fails the job's own conclusion carries it — but an `if:`-less step
+        # here would be one more silent arm in the channel that exists because a silent arm let a
+        # red apply go unreported for three days (#7654 A1).
+        if: always()
+        run: |
+          set -uo pipefail
+          # `set +e` explicitly: Actions runs a bare `run:` block as `bash -e {0}` (ADR-170), and
+          # this body reads exit statuses as DATA. Without it the step dies at the first non-zero
+          # `gh api` and the email loses its cause AND its heartbeat line — the alarm's own
+          # diagnosis, silently unreachable, which is the defect class this job exists to end.
+          set +e
+
+          # The `apply` job declares no `outputs:`, and on the CANCELLED path — the path this job
+          # exists for — job outputs would be unreliable even if it did. So everything below comes
+          # from the jobs API under `actions: read`, which is the only channel that works there.
+          resp="$RUNNER_TEMP/apply-jobs.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" > "$resp" 2>/dev/null
+          api_rc=$?
+
+          raw=""
+          swept="unknown"
+          if [[ "$api_rc" -eq 0 && -s "$resp" ]]; then
+            raw=$(jq -r '[.jobs[]? | select(.name=="apply") | .steps[]? | select(.conclusion=="failure" or .conclusion=="cancelled") | .name] | first // empty' "$resp" 2>/dev/null)
+            swept=$(jq -r '[.jobs[]? | select(.name=="apply") | .steps[]? | select(.name | ascii_downcase | test("re-pause")) | .conclusion] | first // "unknown"' "$resp" 2>/dev/null)
+          else
+            echo "::warning::Could not read the jobs API (rc=${api_rc}); the email will say the failing step is unresolved AND that the sweep's state is unknown — never that the sweep did not run."
+          fi
+
+          # SHAPE VALIDATION, stated as a shape rather than as the words "shape-validated".
+          # A step NAME is attacker-adjacent in principle: a newline in it forges arbitrary
+          # `$GITHUB_OUTPUT` entries and spoofs `::notice::` annotations. Measured mitigant, not a
+          # substitute for the filter: no `- name:` in any workflow in this repo interpolates a
+          # GitHub expression at all, so step names are static text carried from `main`.
+          #   1. drop CR and LF outright;
+          #   2. transliterate the ONE non-ASCII character this workflow's own step names use —
+          #      `→` — rather than letting a byte-wise `tr -cd` shred it into `unpauseverify-
+          #      statusrollback`, a non-word, on exactly the step this job most expects to print;
+          #   3. keep only [A-Za-z0-9 ._:()/,#-] — note this ALREADY removes &, < and >, and `,`
+          #      and `#` are in the set because step names in this file use them and dropping them
+          #      garbles the name for no gain (the HTML escape below is what defends the sink);
+          #   4. clamp to 80 characters.
+          clean=$(printf '%s' "$raw" | tr -d '\r\n' | sed 's/→/->/g' | LC_ALL=C tr -cd 'A-Za-z0-9 ._:()/,#-' | cut -c1-80)
+          [[ -n "$clean" ]] || clean="unresolved"
+          # HTML-escape anyway, because the value lands in Resend's `html` field. It is a no-op
+          # against the filter above BY CONSTRUCTION, and it is here so that widening the
+          # allow-list later cannot silently turn a step name into markup.
+          esc=${clean//&/\&amp;}
+          esc=${esc//</\&lt;}
+          esc=${esc//>/\&gt;}
+
+          case "$swept" in
+            success|failure|cancelled|skipped) ;;
+            *) swept="unknown" ;;
+          esac
+
+          # THE PROSE IS RESOLVED HERE, NOT IN A TERNARY CHAIN INSIDE THE HTML (#7655).
+          # Two reasons it moved. (a) Correctness: a two-armed ternary over a FIVE-valued enum sent
+          # `cancelled`, `skipped` and `unknown` into the branch that says "nothing was left
+          # half-armed" — and `cancelled` is precisely the state where the sweep was cut mid-loop
+          # and monitors ARE live-and-unfed. A `case` beside the `case` that already enumerates the
+          # values cannot acquire a sixth value without a branch. (b) Testability: this is a table
+          # a guard can drive, which `describe("apply-web-platform-infra has a failure channel")`
+          # now does, value by value.
+          # AP-021: no sentence below names a cause this job did not MEASURE.
+          case "$swept" in
+            success)
+              sweep_msg='The heartbeat re-pause sweep ran and finished. Any monitor this run had switched ON mid-check has been switched back off — and on most red applies there was nothing to switch off in the first place. The exact counts are on the run page, under <strong>Heartbeat re-pause sweep</strong>. Monitors it switched off stay off until a later apply arms them; that is their normal state between applies.' ;;
+            failure)
+              sweep_msg='<strong>The heartbeat re-pause sweep FAILED.</strong> One or more uptime monitors are switched ON with nothing reporting to them, so a false alert WILL fire when their grace window expires. The run log names each monitor id. This is the one item here that needs attention before the alert arrives — and the re-run command below will NOT clear it: the arming gate skips any monitor that is already switched on, so a re-run leaves it exactly as it is. Fix it directly: open Better Stack &rarr; Monitors &rarr; Heartbeats, find each id from the run log, and press Pause.' ;;
+            cancelled)
+              sweep_msg='<strong>The heartbeat re-pause sweep was CUT OFF part-way through.</strong> It only does any work when this run had switched monitors on, so this is the most likely state of all for a monitor to be left switched ON with nothing reporting to it. Treat it exactly like a failure: open Better Stack &rarr; Monitors &rarr; Heartbeats and press Pause on any heartbeat that is running. The run log names the ids it reached before it was cut.' ;;
+            skipped)
+              sweep_msg='The heartbeat re-pause sweep is recorded as skipped, so it left nothing half-done — but it also checked nothing. If this run got as far as the heartbeat arming step, open Better Stack &rarr; Monitors &rarr; Heartbeats and confirm none are running unexpectedly.' ;;
+            *)
+              sweep_msg='<strong>We could not find out whether the heartbeat re-pause sweep ran.</strong> The API call that reports it failed, so this email cannot tell you either way — which is not the same as saying it did not run. Open the run page and look for the <strong>Heartbeat re-pause sweep</strong> step. If it is red or absent, check Better Stack &rarr; Monitors &rarr; Heartbeats for a heartbeat that is running with nothing reporting to it.' ;;
+          esac
+
+          # THREE arms, not two. A failed `preflight` leaves `apply` SKIPPED — one of the three
+          # modes this job was widened to cover — and on that path the jobs API finds no `apply`
+          # steps at all, so a two-armed ternary told the operator to "read the step named above"
+          # when the line above says `unresolved` (#7655 B5).
+          if [[ "${PREFLIGHT_RESULT}" != "success" ]]; then
+            action_msg='the run stopped BEFORE it applied anything. The pre-flight check itself did not pass, so no infrastructure change was attempted and there is no failing apply step to read — that is why the line above says <code>unresolved</code>. Nothing was applied, so nothing is half-applied. Open the run and read the <code>preflight</code> job.'
+          elif [[ "${APPLY_RESULT}" == "cancelled" ]]; then
+            action_msg='this run was CANCELLED — it ran out of its time budget or was stopped, rather than hitting a specific error. Read the run before re-dispatching: if it was stopped part-way through applying, part of the change is on the servers and part is not, and a plain re-run will not tell you which.'
+          else
+            action_msg='this run FAILED on the step named above. Read the run first: a re-dispatch will most likely fail in the same place, so the command below is a retry, not a diagnosis.'
+          fi
+
+          # A RANDOM heredoc delimiter: a fixed one is forgeable by a value that contains it.
+          delim="cause-$(openssl rand -hex 12 2>/dev/null || printf '%s' "${GITHUB_RUN_ID}${RANDOM}")"
+          {
+            printf 'failing_step<<%s\n' "$delim"
+            printf '%s\n' "$esc"
+            printf '%s\n' "$delim"
+            printf 'sweep_conclusion=%s\n' "$swept"
+            printf 'sweep_msg<<%s\n' "$delim"
+            printf '%s\n' "$sweep_msg"
+            printf '%s\n' "$delim"
+            printf 'action_msg<<%s\n' "$delim"
+            printf '%s\n' "$action_msg"
+            printf '%s\n' "$delim"
+          } >> "$GITHUB_OUTPUT"
+          echo "failing step: ${esc} | re-pause sweep: ${swept}"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          APPLY_RESULT: ${{ needs.apply.result }}
+
+      - name: Email ops on a non-green apply run
+        # `always()`, for the same reason the `cause` step carries it (#7654 A1). Without it this
+        # step inherits `success()`, so a failed checkout or a failed `cause` step SKIPS the email
+        # and the red run notifies nobody — a step arm that is structurally silent on exactly the
+        # path this job was built for, one level down from the Cut List C1 lesson in the header.
+        #
+        # NO `continue-on-error` (#7654 A2). It bought nothing: `notify-ops-email` already collapses
+        # every non-2xx from Resend into a `::warning::` and exits 0, so a Resend OUTAGE cannot red
+        # this run either way. What it suppressed was the composite's one hard failure — a missing
+        # `RESEND_API_KEY`, i.e. a rotated or expired secret — which is the single case where this
+        # job's own conclusion can distinguish "the alarm fired" from "the alarm silently did not".
+        # The "don't red an already-red run" argument is empty by construction: the run is already
+        # red, since that is this job's firing predicate.
+        if: always()
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: "Apply web-platform infra: run did NOT complete — production infrastructure may be un-applied"
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+          # INTERPOLATION ALLOW-LIST. Only workflow-context scalars plus this job's own
+          # shape-validated `cause` outputs appear below. Never a raw step log, `curl` output or a
+          # shell trace: the ARM gate reads BETTERSTACK_API_TOKEN and handles monitor ids, and
+          # terraform error strings carry resource identifiers and Doppler variable names. The
+          # destination is a plaintext, no-expiry mailbox behind a third-party processor.
+          body: |
+            <p>The <strong>Apply web-platform infra</strong> run for
+            <code>${{ github.sha }}</code> did <strong>not</strong> complete successfully, so the
+            infrastructure change on that commit is <strong>not on the servers</strong>.</p>
+            <p><strong>Is anything down right now?</strong> Most likely not — the
+            previously-applied configuration is still serving. It is not a guarantee, and this
+            email will not pretend otherwise: <code>terraform apply</code> leaves behind whatever
+            it had already created before it stopped, and the per-merge change set includes the
+            DNS record for <code>app.soleur.ai</code>, the <code>soleur.ai</code> zone settings,
+            DNSSEC and the web firewall. If the failing step named below is a Terraform apply, open
+            <code>soleur.ai</code> and <code>app.soleur.ai</code> in a browser before assuming
+            nothing moved. What is certain is that the newest change did not land in full, and
+            later merges will keep failing in the same place until the cause is fixed.</p>
+            <p><strong>Outcome:</strong> preflight <code>${{ needs.preflight.result }}</code>,
+            apply <code>${{ needs.apply.result }}</code>, heartbeat re-pause sweep
+            <code>${{ steps.cause.outputs.sweep_conclusion }}</code>.<br>
+            <strong>Failing step:</strong> <code>${{ steps.cause.outputs.failing_step }}</code></p>
+            <p><strong>What to do:</strong> ${{ steps.cause.outputs.action_msg }}</p>
+            <p><strong>Is uptime alerting still watching the servers?</strong>
+            ${{ steps.cause.outputs.sweep_msg }}</p>
+            <p><strong>Recovery (re-runs the whole apply).</strong> Easiest, no tools needed: open
+            the run link below and press <strong>Re-run failed jobs</strong> at the top right. Or
+            go to the repository's <strong>Actions</strong> tab &rarr; <strong>Apply web-platform
+            infra</strong> &rarr; <strong>Run workflow</strong>, which offers the same options as a
+            form. The equivalent command line, if you have the GitHub CLI signed in:</p>
+            <pre>gh workflow run apply-web-platform-infra.yml --ref main \
+              -f apply_target=manual-rerun \
+              -f reason='re-run after a non-green apply'</pre>
+            <p>Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}</p>
+
 
   # #6178 (ADR-100) — provision the dedicated Inngest singleton host. A dispatch-only job
   # (apply_target=inngest-host) whose -targets are STRIPPED from the per-merge coverage set
@@ -2513,6 +2835,20 @@ jobs:
   # Note honestly what did NOT change: the `concurrency` group is WORKFLOW-level, so the split
   # released no mutex. Worst-case fleet-wide apply block is now the SUM across the gate job, this
   # job, and `registry_store_restore`.
+  #
+  # 2026-08-20 (#7587, corrected #7657): that same workflow-level accounting moved on the OTHER
+  # side of the file. The per-merge `apply` job went 15 → 41 and gained a `notify-apply-failure`
+  # sibling at 5, so the routine-merge arm of this group now has a run-level worst case of
+  # preflight 1 + apply 41 + notify 5 = 47 min rather than 15. (`preflight` is chained by `needs:`
+  # and was uncounted in the first version of this paragraph, which said 40 for what was then 41.)
+  # This job is dispatch-only and runs by deliberate action — but "deliberate" governs when a
+  # dispatch is ISSUED, not whether a merge apply is already in flight, and the measurement below
+  # says it queues: over 80 completed runs of the shared group across 35 days the overlap histogram
+  # was {0 concurrent: 69, 1 concurrent: 11}, i.e. 11 of 80 runs DID queue. Observed queue depth
+  # never exceeded 1 and the longest run took 23.7 min. Priced consequence, because it lands on the
+  # dispatches issued during an outage: worst-case wait for an emergency dispatch stuck behind a
+  # routine merge apply moves from 16 min to 47 min, and this group covers `ci_ssh_token_replace`
+  # — described in this same file as "the ONE arm that can run while the SSH bridge is dead".
   registry_luks_recut:
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'registry-luks-recut'
     needs: registry_pull_path_gate

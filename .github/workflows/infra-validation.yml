@@ -512,6 +512,22 @@ jobs:
     # the ceiling's purpose is to catch a bypassed sleep mock, and a 20-minute ceiling would not.
     # Current long poles (run 31054177230): git-data runcmd rehearsal 96 s, web-host parity
     # mutation 47 s, ci-deploy 35 s, LUKS verify 28 s.
+    #
+    # RE-DERIVED 2026-08-20 (#7587), as the block above instructs, because this PR adds a step
+    # (`arm-heartbeats.test.sh`). The step measures **21.6 s** locally on a 16-core box — pure
+    # bash + jq with every `sleep` stubbed, so the runner should be comparable; it is ~2.5 % of
+    # the job.
+    # Measured from the API over the last 23 COMPLETED `deploy-script-tests` jobs, whole-job
+    # seconds: 495 512 513 538 538 538 542 543 555 576 576 718 723 727 740 742 758 763 766 775 863
+    # (plus two early failures at 70 and 395). ZERO cancellations. The 863 exceeds the 840 s
+    # ceiling in API wall clock, which is NOT a contradiction: GitHub's timeout clock starts when
+    # the job begins executing steps, while `started_at` is earlier — the same 13–31 s of
+    # divergence measured on this repo's actual timeout kills.
+    # VERDICT: NOT bumped. The margin this block sized for (~1.4x over the observed max) is gone —
+    # it is now ~1.0x — but bumping a ceiling whose stated purpose is to catch a bypassed sleep
+    # mock, in the same edit that adds 2.5 %, is exactly the move this block warns against. What
+    # would justify a bump: a cancellation, or a re-derivation that attributes the 495 -> 863
+    # spread to a specific suite. Neither exists yet, and the spread is the thing to explain first.
     timeout-minutes: 14
     steps:
       # fetch-depth: 0 + fetch-tags: true make the vinngest-v* tags reachable so
@@ -1377,6 +1393,23 @@ jobs:
       # terraform, cloud-init, docker, network, or root, so this job's environment already suffices.
       - name: Run credential-persist-to-home guard (#6633 — ProtectHome=read-only cred-write class)
         run: bash apps/web-platform/infra/credential-persist-home-guard.test.sh
+
+      # Registered here and NOWHERE ELSE (#7587). `run-registered-suites.sh` DERIVES its list by
+      # grepping this file for step commands that invoke a `.test.sh` in the infra directory. That
+      # pattern is deliberately NOT spelled out literally here: `run-registered-suites.test.sh`'s
+      # T2e oracle greps this same file with that same shape, so a prose copy of it is read as a
+      # ninth registered-but-underived suite and reds the gate (a comment defeating a guard --
+      # see knowledge-base/project/learnings/2026-08-02-my-comments-defeated-three-gates*). And
+      # `scripts/lint-orphan-test-suites.sh` walks every tracked `*.test.sh` repo-wide and reports
+      # anything no runner references — so an unregistered suite gates nothing AND fails the orphan
+      # lint. It also must not be registered twice: that linter treats a suite covered by more than
+      # one registration surface as an error, because the covered set is a union and a second
+      # surface makes de-registering from the first a silent no-op.
+      # Pure bash + jq + PATH stubs — no terraform, cloud-init, docker, network or root — so this
+      # job's environment already suffices (the jq dependency is shared with three sibling suites
+      # already registered in it).
+      - name: Run measured-beat ARM gate behavioural tests (#7587 — deadlines, rollback, state file)
+        run: bash apps/web-platform/infra/arm-heartbeats.test.sh
 
   # Registry user_data byte budget (#7282). Its OWN job, deliberately, for two reasons.
   #
