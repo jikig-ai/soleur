@@ -23,6 +23,11 @@ cannot produce the verification order the plan asserts.
       (`production_branch = "main"`, no `source` block), `cloudflare_pages_domain.apex`,
       `cloudflare_pages_domain.www`, and two `github_actions_secret` (token + account id),
       each with a rotation-policy header comment.
+- [ ] 1.1b **PF-Z (blocking, plan §Downtime & Cutover)** — with the apex custom domain attached
+      and **no DNS record changed**, measure whether `https://soleur.ai/` already serves from
+      Pages (SHA match on `version.txt`, GitHub-origin headers gone). If yes, the cutover is
+      zero-downtime and PR3's record swap is cosmetic tidy-up. If no, PR3 uses the two-pass
+      apply. Reversible: detaching restores the prior state.
 - [ ] 1.2 `main.tf` — add the `cloudflare` provider alias `pages`.
 - [ ] 1.3 `variables.tf` — declare `cf_api_token_pages`, sensitive, **no default**;
       description is the scope ledger (permission, no-expiry, three storage locations,
@@ -39,8 +44,14 @@ cannot produce the verification order the plan asserts.
       `cron-gh-pages-cert-reissue.ts` that refuses when the apex record type is not `A`;
       remove the `cron` trigger from `cron-gh-pages-cert-state.ts` (retain manual-trigger);
       record the AP-019 status in the principles register.
-- [ ] 1.7 `apply-web-platform-infra.yml` — add the six new `-target=` addresses.
-      **Retain `-target=cloudflare_record.github_pages`** (plan §D4).
+- [ ] 1.7 `apply-web-platform-infra.yml` — add the six new `-target=` addresses
+      (`cloudflare_pages_project.docs`, `cloudflare_pages_domain.apex`,
+      `cloudflare_pages_domain.www`, two `github_actions_secret`, `cloudflare_list.www_canonical`)
+      and, in PR3, `cloudflare_record.pages_apex`.
+      **Retain `-target=cloudflare_record.github_pages`** (plan §D4) — removing it once the
+      block leaves config means the destroy is never planned. Assert by direct grep, NOT via
+      `terraform-target-parity.test.ts` (which cannot see these resource types and passes
+      vacuously).
 - [ ] 1.8 Rewrite `www-apex-canonicalizer.test.sh` against the five-link chain, with an
       AP-023-conformant anti-vacuity floor (`printf >&2` + `exit 1`; counter increments at
       the call site, never inside both verdict helpers).
