@@ -422,3 +422,36 @@ row 2 is called out as load-bearing rather than routine.
 - Restoring the soleur-dev DSN to `soleur-inngest/prd`.
 - Adding a DSN-restoring inverse to `op=rollback`.
 - Retiring the soleur-dev co-tenancy defences (`0002_dev_inngest_tables_lockdown.sql`, `apply-inngest-rls-dev.yml`); they remain live and correct while the cutover has not held.
+
+## Plan-vs-shipped reconciliation (appended 2026-08-20; the plan body above is left as authored)
+
+Recorded as an addendum rather than by editing the phases: a plan is a dated record of what was
+intended with the evidence then available, and rewriting it in place would erase the two places the
+intent turned out to be wrong — which is the only part of it still worth reading.
+
+**Phase 4 ("Skip the redundant write") was implemented and then REVERTED before merge; AC6 is
+retired with it.** The guard bought nothing (writing a secret to the value it already holds is a
+no-op) and introduced a branch whose inversion is catastrophic and which no behavioural test
+covered: flipping its polarity skipped the write on the FIRST-arm transition, booting the host onto
+the dark backend while the cutover reported success, with the whole suite green. All three prod
+writes are now unconditional — strictly stronger, because the arm ESTABLISHES the invariant rather
+than observing it. Idempotence comes from G3 no longer refusing, never from skipping a write. Note
+this is the SECOND time this plan's own Cut List reasoning ("a cheaper mechanism buys the same
+property") failed on the same PR; the Cut List already records the first.
+
+**Phase 8 was added after the multi-agent review.** The CONCUR gate DISSENTED on both proposed
+scope-outs, so every item landed inline and net issue flow for this PR is **0**. Its contents are
+itemised in `tasks.md` §Phase 8: the G3.7 pre-flush-latch gate (closing an armed-window double-fire
+that idempotence itself opened, and implementing the G2 precondition `op=resume`'s header has
+documented since #7228), a four-surface stale-prose correction, an in-place record for the one
+surface that cannot be edited (`cloud-init-inngest.yml` — `user_data` is ForceNew on the sole
+scheduler), and a checked-not-assumed negative finding on ADR-105's pool arithmetic.
+
+**`## Files to Edit` above is a floor, not the shipped set.** The four it names were all edited. Six
+more were, and every one of them is a consequence of a review finding rather than of the original
+scope: `.github/workflows/cutover-inngest.yml` (map `FLUSH_LATCH_SINCE` into the step env, so G3.7's
+remediation is not the #6617 dead-remediation defect), `apps/web-platform/infra/inngest.tf`,
+`apps/web-platform/infra/inngest-host.tf`, `knowledge-base/operations/expenses.md`,
+`knowledge-base/engineering/architecture/decisions/ADR-030-inngest-as-durable-trigger-layer.md`, and
+`knowledge-base/engineering/operations/runbooks/inngest-server.md` (which never named G3.6 — a gap
+this PR itself created).
