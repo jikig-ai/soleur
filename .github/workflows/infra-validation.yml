@@ -1378,6 +1378,19 @@ jobs:
       - name: Run credential-persist-to-home guard (#6633 — ProtectHome=read-only cred-write class)
         run: bash apps/web-platform/infra/credential-persist-home-guard.test.sh
 
+      # Registered here and NOWHERE ELSE (#7587). `run-registered-suites.sh` DERIVES its list from
+      # this file's `run: bash apps/web-platform/infra/*.test.sh` steps, and
+      # `scripts/lint-orphan-test-suites.sh` walks every tracked `*.test.sh` repo-wide and reports
+      # anything no runner references — so an unregistered suite gates nothing AND fails the orphan
+      # lint. It also must not be registered twice: that linter treats a suite covered by more than
+      # one registration surface as an error, because the covered set is a union and a second
+      # surface makes de-registering from the first a silent no-op.
+      # Pure bash + jq + PATH stubs — no terraform, cloud-init, docker, network or root — so this
+      # job's environment already suffices (the jq dependency is shared with three sibling suites
+      # already registered in it).
+      - name: Run measured-beat ARM gate behavioural tests (#7587 — deadlines, rollback, state file)
+        run: bash apps/web-platform/infra/arm-heartbeats.test.sh
+
   # Registry user_data byte budget (#7282). Its OWN job, deliberately, for two reasons.
   #
   # (a) It USED to be barred from `deploy-script-tests`: that job's registration gate refuses any

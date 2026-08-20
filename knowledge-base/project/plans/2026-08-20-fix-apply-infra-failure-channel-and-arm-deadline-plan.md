@@ -56,7 +56,7 @@ Preceded by a 5-reviewer plan-review panel and three domain leaders.
 - **`stock-preflight-coverage.test.ts` is not a free pass**: the notify job's predicate names
   `manual-rerun`, so it resolves to one job only because no `run:` body mentions `terraform apply`
   or `-target=` (now AC2b).
-- **The true mutex cost is 35 min run-level, not 30** — the group is workflow-level and this file's
+- **The true mutex cost is 35 min run-level, not 30** *(superseded 2026-08-20: **40 min**, apply 35 + notify 5 — see the §2 marker below)* — the group is workflow-level and this file's
   own rule sums across jobs.
 
 ## Overview
@@ -542,6 +542,20 @@ So (2) needs `job_timeout ≥ 1620 + 111 = 1731 s`. **30 min (1800 s)** satisfie
 slack, and the resulting ladder is `1430 (work) < 1620 (step ceiling) < 1800 (job ceiling)` — the
 same shape the file's two dispatch jobs already document.
 
+> **Superseded 2026-08-20 at implementation (#7587):** the arithmetic above is left standing
+> because it is the reasoning the plan review signed off, but its **Term 1 is the wrong Σ** and the
+> ladder it produces does not satisfy this plan's own AC3. Term 1 uses the *reachable* sum (1430),
+> while AC3 writes the guard against `sum(arm_one deadlines)` — unqualified, i.e. **every** call
+> site, which is **1660** after the resize. `1620 < 1660 × 1.1 = 1826`, so a guard written to AC3's
+> text reds this ladder. A call site absent from tfstate *today* (`git_data_prd`) is still a call
+> site and the ceiling has to hold on the day it is not absent, so the ladder was re-sized from the
+> nominal Σ rather than the guard being relaxed: **ARM step 31 min (1860 s), `apply` job 35 min
+> (2100 s)** — `1660 (work) < 1860 (step) < 2100 (job)`, satisfying (1) at 1860 ≥ 1826 and (2) at
+> 2100 − 1860 = 240 ≥ 111. Full derivation and the queue-depth measurement that makes the larger
+> ceiling safe are in
+> `knowledge-base/project/specs/feat-one-shot-7586-7587-red-apply-no-channel-arm-deadline/measurements.md`
+> §0.3(a) and §0.7.
+
 **Why the pathological case the review raised is not reachable.** The concern was a cold-cache
 **web-host birth** apply (the file's own comment budgets ~42 min worst case) colliding with a full
 four-monitor arming pass in one job. Measured: `web_host_create` contains **zero** `arm_one` /
@@ -986,7 +1000,9 @@ suites — **acknowledged**, not folded in.
       `$GITHUB_OUTPUT` with a random heredoc delimiter (a newline in a step name otherwise forges
       arbitrary outputs and spoofs `::notice::` annotations). Measured mitigant, not a substitute:
       no `- name:` in any repo workflow interpolates `${{ … }}`, so names are static from `main`.
-- [ ] **AC3** — the `apply` job's `timeout-minutes` is 30 and its comparator comment no longer
+- [ ] **AC3** — *(literal superseded 2026-08-20: **35**, not 30, and the ARM step is **31**, not 27
+      — the inequality below is the binding half and it is what the guard asserts; see the §2
+      marker. The rest of this criterion is unchanged.)* the `apply` job's `timeout-minutes` is 30 and its comparator comment no longer
       claims to match a 15-minute sibling (the cited sibling's apply job is 90). The guard asserts
       the **two-part** inequality, not a single margin:
       `arm_step_timeout_s >= sum(arm_one deadlines) * 1.1` **and**

@@ -47,8 +47,18 @@
 // `connection`-blocks here put `type` first, so it holds as of #4844.
 //
 // Test harness: bun:test (matches sibling tests in plugins/soleur/test/*.ts).
+//
+// THIS SUITE'S NAME UNDERSTATES ITS CONTENTS, deliberately and with the cost recorded. Beyond
+// `-target=` parity it also owns two invariants of `apply-web-platform-infra.yml` that have
+// nowhere better to live: the workflow's NOTIFICATION CHANNEL (`the ssh_token_gate green-skip has
+// a channel (#7539)`, and since #7586 `apply-web-platform-infra has a failure channel`) and its
+// ARM-gate BUDGET (`the ARM gate's deadlines fit its job`, #7587). They are here rather than in a
+// new file because the channel guards share `extractJobBlock` / `extractStep` with the parity
+// guards and must not drift from them — a second file would re-implement both helpers and the two
+// copies would diverge. The workflow points back at this file from the ARM gate's own comment.
 
 import { describe, test, expect, beforeAll } from "bun:test";
+import { parse as parseYaml } from "yaml";
 import { resolve, join } from "path";
 import {
   readFileSync,
@@ -3341,5 +3351,753 @@ describe("apply_target enum <-> description parity (#6977)", () => {
       (opt) => !new RegExp(`(?<![\\w-])${opt}(?![\\w-])`).test(desc![1]),
     );
     expect(undocumented).toEqual([]);
+  });
+});
+
+// ============================================================================================
+// #7586 / #7587 — the apply workflow's FAILURE CHANNEL and its ARM-gate BUDGET.
+//
+// These two describes are co-located here rather than in a new suite because this file already
+// owns this workflow's channel invariant (the `#7539` green-skip describe above) and its
+// `extractJobBlock` / `extractStep` helpers. See the header note at the top of the file.
+//
+// Both guards share one anti-vacuity helper so "the guard must not pass on an empty scan" is
+// asserted once per guard rather than restated as four separate rows.
+// ============================================================================================
+
+/**
+ * Anti-vacuity floor. A guard that scanned zero subjects and exited clean is indistinguishable
+ * from a guard over a healthy repo — this is the difference. Every scan below routes through it.
+ */
+function expectNonEmptyDispatch(count: number, min = 1): void {
+  expect(count).toBeGreaterThanOrEqual(min);
+}
+
+// --- A small GitHub-expression evaluator ------------------------------------------------------
+//
+// The guard EVALUATES the predicate; it does not string-match it. A canonical-string match makes
+// harness row H2 (operand reordering, semantics identical) fail BY CONSTRUCTION, while a
+// token-presence check passes mutation rows 1/3/4 over a semantically broken predicate. So the
+// `if:` expression is parsed and run over the full cross product of conclusions and triggers, and
+// the truth table is what is asserted.
+//
+// `==` is deliberately GitHub's LOOSE equality, not `===`: when the operand types differ Actions
+// casts both to Number, which is how an unset output (`null`) compares EQUAL to `'0'`. Nothing in
+// this predicate depends on that, but an evaluator that quietly used strict equality would be
+// modelling a different language than the one the runner executes.
+
+type GhVal = string | number | boolean | null;
+
+function ghToNumber(v: GhVal): number {
+  if (v === null) return 0;
+  if (typeof v === "boolean") return v ? 1 : 0;
+  if (typeof v === "number") return v;
+  if (v.trim() === "") return 0;
+  return Number(v);
+}
+
+function ghEquals(a: GhVal, b: GhVal): boolean {
+  if (typeof a === typeof b && a !== null && b !== null) {
+    if (typeof a === "string") return a.toLowerCase() === (b as string).toLowerCase();
+    return a === b;
+  }
+  const x = ghToNumber(a);
+  const y = ghToNumber(b);
+  if (Number.isNaN(x) || Number.isNaN(y)) return false;
+  return x === y;
+}
+
+type Tok = { t: "op" | "str" | "path" | "fn"; v: string };
+
+function tokenizeGh(src: string): Tok[] {
+  const out: Tok[] = [];
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    if (/\s/.test(c)) {
+      i++;
+      continue;
+    }
+    const two = src.slice(i, i + 2);
+    if (two === "&&" || two === "||" || two === "==" || two === "!=") {
+      out.push({ t: "op", v: two });
+      i += 2;
+      continue;
+    }
+    if (c === "(" || c === ")" || c === "!") {
+      out.push({ t: "op", v: c });
+      i++;
+      continue;
+    }
+    if (c === "'") {
+      let j = i + 1;
+      let s = "";
+      while (j < src.length) {
+        if (src[j] === "'" && src[j + 1] === "'") {
+          s += "'";
+          j += 2;
+          continue;
+        }
+        if (src[j] === "'") break;
+        s += src[j];
+        j++;
+      }
+      if (j >= src.length) throw new Error(`unterminated string literal in: ${src}`);
+      out.push({ t: "str", v: s });
+      i = j + 1;
+      continue;
+    }
+    const m = /^[A-Za-z_][A-Za-z0-9_.-]*/.exec(src.slice(i));
+    if (!m) throw new Error(`unexpected character '${c}' in: ${src}`);
+    i += m[0].length;
+    if (src[i] === "(") {
+      const close = src.indexOf(")", i);
+      if (close === -1) throw new Error(`unterminated call ${m[0]}( in: ${src}`);
+      // Only zero-argument status functions appear in this repo's job-level predicates. A call
+      // with arguments would be silently mis-parsed, so refuse it rather than guess.
+      if (src.slice(i + 1, close).trim() !== "") {
+        throw new Error(`unsupported call with arguments: ${m[0]}(...)`);
+      }
+      out.push({ t: "fn", v: m[0] });
+      i = close + 1;
+      continue;
+    }
+    out.push({ t: "path", v: m[0] });
+  }
+  return out;
+}
+
+/**
+ * Evaluate a GitHub job-level `if:` expression.
+ *
+ * `ctx` maps context paths (`github.event_name`, `needs.apply.result`, …) to values; an
+ * unknown path resolves to `null`, exactly as a missing context does on the runner.
+ *
+ * Status functions are resolved from `jobStatus`. Any function this evaluator does not model
+ * THROWS rather than defaulting — a guard that silently treats an unmodelled function as `true`
+ * would report a truth table for an expression nobody wrote.
+ */
+function evalGhIf(src: string, ctx: Record<string, GhVal>): boolean {
+  const toks = tokenizeGh(src);
+  let p = 0;
+  const peek = (): Tok | undefined => toks[p];
+  const eat = (v: string): boolean => {
+    if (toks[p] && toks[p].t === "op" && toks[p].v === v) {
+      p++;
+      return true;
+    }
+    return false;
+  };
+
+  const primary = (): GhVal => {
+    const t = peek();
+    if (!t) throw new Error(`unexpected end of expression in: ${src}`);
+    if (t.t === "op" && t.v === "(") {
+      p++;
+      const v = orExpr();
+      if (!eat(")")) throw new Error(`missing ')' in: ${src}`);
+      return v;
+    }
+    if (t.t === "op" && t.v === "!") {
+      p++;
+      return !truthy(primary());
+    }
+    if (t.t === "str") {
+      p++;
+      return t.v;
+    }
+    if (t.t === "fn") {
+      p++;
+      // `always()` is the only status function these predicates use. Everything else — including
+      // `success()`, `failure()` and `cancelled()` — is refused rather than guessed at, because a
+      // job-level predicate carrying one would need the whole workflow's status to evaluate.
+      if (t.v === "always") return true;
+      throw new Error(`unmodelled status function ${t.v}() in: ${src}`);
+    }
+    p++;
+    return Object.prototype.hasOwnProperty.call(ctx, t.v) ? ctx[t.v] : null;
+  };
+
+  const truthy = (v: GhVal): boolean => {
+    if (typeof v === "boolean") return v;
+    if (v === null) return false;
+    if (typeof v === "number") return v !== 0;
+    return v !== "";
+  };
+
+  const cmpExpr = (): GhVal => {
+    const left = primary();
+    const t = peek();
+    if (t && t.t === "op" && (t.v === "==" || t.v === "!=")) {
+      p++;
+      const right = primary();
+      const eq = ghEquals(left, right);
+      return t.v === "==" ? eq : !eq;
+    }
+    return left;
+  };
+
+  const andExpr = (): GhVal => {
+    let v = cmpExpr();
+    while (eat("&&")) {
+      const r = cmpExpr();
+      v = truthy(v) ? r : v;
+    }
+    return v;
+  };
+
+  const orExpr = (): GhVal => {
+    let v = andExpr();
+    while (eat("||")) {
+      const r = andExpr();
+      v = truthy(v) ? v : r;
+    }
+    return v;
+  };
+
+  const result = orExpr();
+  if (p !== toks.length) throw new Error(`trailing tokens in: ${src}`);
+  return truthy(result);
+}
+
+// --- Guard 1: a non-green apply run has a channel (#7586) ---------------------------------------
+
+const NOTIFY_JOB_ID = "notify-apply-failure";
+const CONCLUSIONS = ["success", "failure", "cancelled", "skipped"] as const;
+
+/** The three trigger shapes the workflow can present to this job. */
+const TRIGGERS: Array<{ name: string; event: string; target: GhVal }> = [
+  { name: "push", event: "push", target: null },
+  { name: "manual-rerun", event: "workflow_dispatch", target: "manual-rerun" },
+  { name: "other-dispatch", event: "workflow_dispatch", target: "inngest-host" },
+];
+
+/**
+ * The PROPERTY, written independently of the implementation: every run in which the `apply` job
+ * does not reach `success`, and every run in which `apply` is skipped because `preflight` did not
+ * succeed, must reach the notification — on the merge path AND on the manual-rerun recovery path
+ * the email itself prescribes.
+ */
+function channelShouldFire(preflight: string, apply: string, event: string, target: GhVal): boolean {
+  const onACoveredTrigger = event === "push" || target === "manual-rerun";
+  const everythingIsFine = preflight === "success" && (apply === "success" || apply === "skipped");
+  return onACoveredTrigger && !everythingIsFine;
+}
+
+/** Evaluate a candidate predicate over the whole cross product; return the rows it gets wrong. */
+function channelTruthTableViolations(ifExpr: string): string[] {
+  const bad: string[] = [];
+  let rows = 0;
+  for (const trigger of TRIGGERS) {
+    for (const preflight of CONCLUSIONS) {
+      for (const apply of CONCLUSIONS) {
+        rows++;
+        const actual = evalGhIf(ifExpr, {
+          "github.event_name": trigger.event,
+          "inputs.apply_target": trigger.target,
+          "needs.preflight.result": preflight,
+          "needs.apply.result": apply,
+        });
+        const want = channelShouldFire(preflight, apply, trigger.event, trigger.target);
+        if (actual !== want) {
+          bad.push(`${trigger.name}/preflight=${preflight}/apply=${apply}: got ${actual}, want ${want}`);
+        }
+      }
+    }
+  }
+  expectNonEmptyDispatch(rows, CONCLUSIONS.length * CONCLUSIONS.length * TRIGGERS.length);
+  return bad;
+}
+
+/**
+ * The full verdict over a workflow's TEXT, so the mutation rows can feed it a fixture with the
+ * job deleted (row 2 / H1) rather than only a mutated predicate.
+ *
+ * `needs` is pinned INSIDE the same verdict that quantifies over it. Quantifying over `needs:`
+ * alone is not enough: shrinking the array would shrink the obligation, so an edit that drops
+ * `preflight` from BOTH `needs:` and the predicate would satisfy a `needs:`-relative guard while
+ * restoring the exact defect row 3 exists to catch (mutation row 5).
+ */
+function channelGuardViolations(wfText: string): string[] {
+  const doc = parseYaml(wfText) as {
+    jobs?: Record<string, { needs?: string[] | string; if?: string }>;
+  };
+  const job = doc.jobs?.[NOTIFY_JOB_ID];
+  if (!job) return [`no \`${NOTIFY_JOB_ID}\` job — the workflow has no failure channel at all`];
+  if (typeof job.if !== "string" || job.if.trim() === "") {
+    return [`\`${NOTIFY_JOB_ID}\` declares no \`if:\``];
+  }
+  const needs = Array.isArray(job.needs) ? job.needs : job.needs ? [job.needs] : [];
+  const out: string[] = [];
+  if (JSON.stringify(needs) !== JSON.stringify(["preflight", "apply"])) {
+    out.push(`needs is ${JSON.stringify(needs)}, expected ["preflight","apply"]`);
+  }
+  out.push(...channelTruthTableViolations(job.if));
+  return out;
+}
+
+describe("apply-web-platform-infra has a failure channel", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const doc = parseYaml(wf) as {
+    jobs?: Record<
+      string,
+      {
+        needs?: string[];
+        if?: string;
+        "timeout-minutes"?: number;
+        permissions?: Record<string, string>;
+        steps?: Array<Record<string, unknown>>;
+      }
+    >;
+  };
+  const job = doc.jobs?.[NOTIFY_JOB_ID];
+
+  test("the job exists, and its predicate is CORRECT over the whole conclusion x trigger space", () => {
+    expect(job).toBeDefined();
+    expect(channelGuardViolations(wf)).toEqual([]);
+  });
+
+  test("AC1: budget, permissions and the `needs:` pin", () => {
+    expect(job!["timeout-minutes"]).toBeLessThanOrEqual(10);
+    // A job-level `permissions:` block REPLACES the workflow-level one, so `contents: read` must
+    // be re-declared alongside the grant this job adds.
+    expect(job!.permissions).toMatchObject({ contents: "read", actions: "read" });
+    expect(job!.needs).toEqual(["preflight", "apply"]);
+  });
+
+  test("AC2: every step is NAMED, and the email step is `continue-on-error`", () => {
+    const steps = job!.steps ?? [];
+    expectNonEmptyDispatch(steps.length, 2);
+    // `extractStep` matches `^ {6}- name:`, so an unnamed step is invisible to this suite and
+    // nothing about it could be asserted. `uses:`-only checkout is the one exception.
+    const named = steps.filter((s) => typeof s.name === "string");
+    expectNonEmptyDispatch(named.length, 2);
+    const email = steps.find((s) => s.uses === "./.github/actions/notify-ops-email");
+    expect(email).toBeDefined();
+    // A Resend outage must not red an already-red run.
+    expect(email!["continue-on-error"]).toBe(true);
+  });
+
+  test("AC2b: no `run:` body in this job contains `terraform apply` or `-target=`", () => {
+    // LOAD-BEARING, not stylistic. The predicate names `manual-rerun`, so
+    // stock-preflight-coverage.test.ts's `jobFor("manual-rerun")` now returns TWO hits and
+    // disambiguates them with `appliesTerraform`, which greps exactly these two tokens over
+    // `run:` bodies. A `run:`-built email body mentioning either makes that suite red — and the
+    // "what did NOT land" prose is precisely the text most likely to contain them.
+    const runs = (job!.steps ?? []).map((s) => (typeof s.run === "string" ? s.run : "")).join("\n");
+    expectNonEmptyDispatch(runs.length, 1);
+    expect(runs).not.toMatch(/\bterraform\s+apply\b/);
+    expect(runs).not.toContain("-target=");
+  });
+
+  test("AC2c: the cause token is shape-validated with a STATED shape, and written under a random delimiter", () => {
+    const cause = (job!.steps ?? []).find((s) => s.id === "cause");
+    expect(cause).toBeDefined();
+    const body = String(cause!.run ?? "");
+    expectNonEmptyDispatch(body.length, 1);
+    // Errexit is inherited from `/usr/bin/bash -e {0}`; this body reads exit statuses as DATA.
+    expect(body).toMatch(/^\s*set \+e\s*$/m);
+    expect(body).toMatch(/tr -d '\\r\\n'/); // 1. CR/LF stripped outright
+    expect(body).toMatch(/tr -cd 'A-Za-z0-9 \._:\(\)\/-'/); // 2. charset clamped
+    expect(body).toMatch(/cut -c1-80/); // 3. length clamped
+    // 4. HTML-escaped before it reaches Resend's `html` field.
+    expect(body).toContain("&amp;");
+    expect(body).toContain("&lt;");
+    expect(body).toContain("&gt;");
+    // 5. A RANDOM heredoc delimiter — a fixed one is forgeable by a value containing it.
+    expect(body).toMatch(/delim=.*(openssl rand|RANDOM)/);
+    expect(body).toMatch(/failing_step<<%s/);
+    // It must NOT try to read `apply` step outputs: that job declares no `outputs:`.
+    expect(body).not.toContain("needs.apply.outputs");
+  });
+
+  test("AC2: the email body carries the four elements a non-technical reader needs", () => {
+    const email = (job!.steps ?? []).find((s) => s.uses === "./.github/actions/notify-ops-email");
+    const withBlock = email!.with as Record<string, string>;
+    const body = withBlock.body;
+    expectNonEmptyDispatch(body.length, 1);
+
+    // (1) A branch on the cancelled OUTCOME, asserted on the EXPRESSION — a body with no branch
+    // that merely uses the prose word "cancelled" would satisfy a token check.
+    expect(body).toMatch(/needs\.apply\.result\s*==\s*'cancelled'\s*&&/);
+    // (2) The failing step's name.
+    expect(body).toContain("steps.cause.outputs.failing_step");
+    // (3) Whether uptime alerting may be paused.
+    expect(body).toContain("steps.cause.outputs.sweep_conclusion");
+    expect(body).toMatch(/uptime (monitors?|alerting)/i);
+    // (4) That the previously-applied infrastructure is still serving.
+    expect(body).toMatch(/still serving/i);
+    // …plus a runnable recovery command, not a pointer to one.
+    expect(body).toContain("gh workflow run apply-web-platform-infra.yml");
+    expect(body).toContain("apply_target=manual-rerun");
+  });
+
+  test("AC2/AC9: the body's interpolations are an ALLOW-LIST, not whatever was to hand", () => {
+    const email = (job!.steps ?? []).find((s) => s.uses === "./.github/actions/notify-ops-email");
+    const body = (email!.with as Record<string, string>).body;
+    const allowed = new Set([
+      "github.sha",
+      "github.run_id",
+      "github.repository",
+      "github.server_url",
+      "needs.apply.result",
+      "needs.preflight.result",
+      "steps.cause.outputs.failing_step",
+      "steps.cause.outputs.sweep_conclusion",
+    ]);
+    const refs = new Set<string>();
+    for (const m of body.matchAll(/\$\{\{([\s\S]*?)\}\}/g)) {
+      for (const r of m[1].matchAll(/\b(github|inputs|needs|steps|secrets|env|runner|job)\.[A-Za-z0-9_.]+/g)) {
+        refs.add(r[0]);
+      }
+    }
+    expectNonEmptyDispatch(refs.size, 4);
+    // Never a raw step log, `curl` output or a shell trace: the ARM gate reads
+    // BETTERSTACK_API_TOKEN and handles monitor ids, and terraform error strings carry resource
+    // identifiers and Doppler variable names. The destination is a plaintext, no-expiry mailbox.
+    expect([...refs].filter((r) => !allowed.has(r))).toEqual([]);
+  });
+});
+
+describe("Guard 1 mutation battery (#7586)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const REAL = (parseYaml(wf) as { jobs: Record<string, { if: string }> }).jobs[NOTIFY_JOB_ID].if;
+
+  /** A minimal workflow carrying only the job this guard is about. */
+  function synthNotify(opts: { ifExpr?: string; needs?: string[]; omitJob?: boolean }): string {
+    if (opts.omitJob) return "name: x\njobs:\n  apply:\n    runs-on: ubuntu-24.04\n";
+    const needs = JSON.stringify(opts.needs ?? ["preflight", "apply"]);
+    const expr = (opts.ifExpr ?? REAL).replace(/\n/g, " ");
+    return [
+      "name: x",
+      "jobs:",
+      "  apply:",
+      "    runs-on: ubuntu-24.04",
+      `  ${NOTIFY_JOB_ID}:`,
+      `    needs: ${needs}`,
+      `    if: ${JSON.stringify(expr)}`,
+      "    runs-on: ubuntu-24.04",
+      "",
+    ].join("\n");
+  }
+
+  test("control: the REAL predicate, re-parsed through the synthetic shape, is clean", () => {
+    // A red baseline would make every row below indistinguishable from a caught mutation.
+    expect(channelGuardViolations(synthNotify({}))).toEqual([]);
+  });
+
+  test("M1 RED: `needs.apply.result == 'failure'` — the infra-validation precedent — is silent on cancelled", () => {
+    const v = channelGuardViolations(synthNotify({ ifExpr: "always() && needs.apply.result == 'failure'" }));
+    expect(v.length).toBeGreaterThan(0);
+    expect(v.some((s) => s.includes("apply=cancelled"))).toBe(true);
+  });
+
+  test("M2 RED: deleting the job leaves the guard with ZERO subjects, and it must say so", () => {
+    const v = channelGuardViolations(synthNotify({ omitJob: true }));
+    expect(v.length).toBeGreaterThan(0);
+    expect(v[0]).toContain("no failure channel at all");
+  });
+
+  test("M3 RED: dropping the `needs.preflight.result` clause misses the red run that leaves apply SKIPPED", () => {
+    const v = channelGuardViolations(
+      synthNotify({
+        ifExpr:
+          "always() && (github.event_name == 'push' || inputs.apply_target == 'manual-rerun') && " +
+          "!(needs.apply.result == 'success' || needs.apply.result == 'skipped')",
+      }),
+    );
+    expect(v.length).toBeGreaterThan(0);
+    expect(v.some((s) => s.includes("preflight=failure") && s.includes("apply=skipped"))).toBe(true);
+  });
+
+  test("M4 RED: narrowing the trigger to `push` only leaves the manual-rerun recovery with no channel", () => {
+    const v = channelGuardViolations(
+      synthNotify({
+        ifExpr:
+          "always() && github.event_name == 'push' && " +
+          "!(needs.preflight.result == 'success' && (needs.apply.result == 'success' || needs.apply.result == 'skipped'))",
+      }),
+    );
+    expect(v.length).toBeGreaterThan(0);
+    expect(v.some((s) => s.startsWith("manual-rerun/"))).toBe(true);
+  });
+
+  test("M5 RED: dropping `preflight` from `needs:` AND its clause, in one edit, still reds", () => {
+    // Without the `needs` pin this mutation reds NEITHER guard: the predicate would be
+    // self-consistent with a shrunken `needs:` array, which is how the plan's own first draft
+    // shipped the defect M3 exists to catch.
+    const v = channelGuardViolations(
+      synthNotify({
+        needs: ["apply"],
+        ifExpr:
+          "always() && (github.event_name == 'push' || inputs.apply_target == 'manual-rerun') && " +
+          "!(needs.apply.result == 'success' || needs.apply.result == 'skipped')",
+      }),
+    );
+    expect(v.length).toBeGreaterThan(0);
+    expect(v.some((s) => s.includes("expected [\"preflight\",\"apply\"]"))).toBe(true);
+  });
+
+  test("H1 RED: a fixture with no notify job cannot go vacuously green", () => {
+    expect(channelGuardViolations(synthNotify({ omitJob: true }))).not.toEqual([]);
+  });
+
+  test("H2 PASS: reordering the operands is semantics-preserving and MUST NOT red", () => {
+    // The contract is the truth table, not a canonical byte string. A guard that only accepts the
+    // shipped spelling rejects a correct implementation — which is why this guard evaluates.
+    const reordered =
+      "always() && " +
+      "!((needs.apply.result == 'skipped' || needs.apply.result == 'success') && needs.preflight.result == 'success') && " +
+      "(inputs.apply_target == 'manual-rerun' || github.event_name == 'push')";
+    expect(channelGuardViolations(synthNotify({ ifExpr: reordered }))).toEqual([]);
+  });
+});
+
+// --- Guard 2: the ARM gate's deadlines fit its job (#7587) --------------------------------------
+
+const ARM_SCRIPT = resolve(INFRA_DIR, "arm-heartbeats.sh");
+const ARM_STATE_FILE_LITERAL = "$RUNNER_TEMP/armed-unconfirmed";
+
+/**
+ * Identify the re-pause sweep WITHOUT keying on its step name — a rename is a legitimate edit and
+ * would false-RED a name-keyed guard.
+ *
+ * Three conjuncts, and the third is not decoration: the ARM step ALSO carries `always()` in its
+ * `if` and ALSO names the state file (it passes the path to `arm-heartbeats.sh` as env), so
+ * `always()` + the literal alone matches two steps and the guard cannot tell which it is looking
+ * at. The sweep is the one that does NOT invoke the arming script.
+ */
+function isSweepStep(s: Record<string, unknown>): boolean {
+  return (
+    typeof s.if === "string" &&
+    /\balways\(\)/.test(s.if) &&
+    typeof s.run === "string" &&
+    s.run.includes(ARM_STATE_FILE_LITERAL) &&
+    !s.run.includes("arm-heartbeats.sh")
+  );
+}
+
+/**
+ * The p95 elapsed from `apply` job start to the ARM step starting, RE-DERIVED at implementation
+ * time from the jobs API over the last six merge applies — 58/62/64/81/91/111 s — rather than
+ * carried from the plan. Command and per-run table:
+ * knowledge-base/project/specs/feat-one-shot-7586-7587-red-apply-no-channel-arm-deadline/measurements.md §0.3(b).
+ */
+const P95_PRE_GATE_S = 111;
+
+/** The vendor-latency factor on the deadline sum. */
+const VENDOR_FACTOR = 1.1;
+
+/**
+ * Every `arm_one` deadline, resolved to an integer.
+ *
+ * The call list does NOT fan out with `for_each` — each monitor is a hand-written line, by design
+ * — so this scan is textual, and that is precisely the property mutation row 3 defends. Comments
+ * are stripped first: the block comments above these calls quote deadlines in prose, and a
+ * comment-blind scan would sum the documentation.
+ */
+function armOneDeadlines(scriptText: string): number[] {
+  const stripped = scriptText
+    .split("\n")
+    .filter((l) => !/^\s*#/.test(l))
+    .join("\n");
+  const out: number[] = [];
+  for (const m of stripped.matchAll(/^arm_one\s+'[^']+'\s+'[^']+'\s+("?\$?\{?[A-Za-z0-9_]+\}?"?)\s*(?:\|\||$)/gm)) {
+    const raw = m[1].replace(/["${}]/g, "");
+    if (/^\d+$/.test(raw)) {
+      out.push(Number(raw));
+      continue;
+    }
+    // A deadline passed as a variable is resolved from its assignment, and FAILS CLOSED if the
+    // assignment cannot be found — an unresolvable term silently dropped from the sum is how a
+    // budget guard starts certifying a smaller number than the code will spend.
+    const assign = new RegExp(`^${raw}=(\\d+)\\s*$`, "m").exec(stripped);
+    if (!assign) throw new Error(`arm_one deadline '${raw}' could not be resolved to an integer`);
+    out.push(Number(assign[1]));
+  }
+  return out;
+}
+
+/** Minutes from a `timeout-minutes:` value, failing closed on a missing budget. */
+function timeoutSeconds(v: unknown, what: string): number {
+  if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) {
+    throw new Error(`${what} declares no usable timeout-minutes (got ${JSON.stringify(v)})`);
+  }
+  return v * 60;
+}
+
+/** The ladder verdict, pure so the mutation rows can drive it directly. */
+function ladderViolations(jobS: number, stepS: number, deadlines: number[]): string[] {
+  expectNonEmptyDispatch(deadlines.length, 1);
+  const sum = deadlines.reduce((a, b) => a + b, 0);
+  const out: string[] = [];
+  // (1) the step ceiling must cover the work the script can actually do
+  if (stepS < sum * VENDOR_FACTOR) {
+    out.push(`arm_step_timeout ${stepS}s < sum(deadlines) ${sum}s x ${VENDOR_FACTOR} = ${sum * VENDOR_FACTOR}s`);
+  }
+  // (2) the job must have room for everything that runs BEFORE the gate
+  if (jobS - stepS < P95_PRE_GATE_S) {
+    out.push(`job_timeout - arm_step_timeout = ${jobS - stepS}s < p95 pre-gate ${P95_PRE_GATE_S}s`);
+  }
+  // …and the step ceiling must be STRICTLY below the job's, or the gate is cancelled WITH the job
+  // rather than failing inside it, which is #7587's shape.
+  if (!(stepS < jobS)) out.push(`arm_step_timeout ${stepS}s is not strictly below job_timeout ${jobS}s`);
+  return out;
+}
+
+describe("the ARM gate's deadlines fit its job", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const script = readFileSync(ARM_SCRIPT, "utf8");
+  const doc = parseYaml(wf) as {
+    jobs: Record<string, { "timeout-minutes"?: number; steps?: Array<Record<string, unknown>> }>;
+  };
+  const applyJob = doc.jobs.apply;
+  const armStep = (applyJob.steps ?? []).find(
+    (s) => typeof s.name === "string" && /Arm web-host probe heartbeats/.test(s.name as string),
+  );
+
+  test("the two-part inequality holds, with both terms measured", () => {
+    expect(armStep).toBeDefined();
+    const jobS = timeoutSeconds(applyJob["timeout-minutes"], "the apply job");
+    const stepS = timeoutSeconds(armStep!["timeout-minutes"], "the ARM step");
+    const deadlines = armOneDeadlines(script);
+    // Every hand-written call site, not just the ones reachable on today's merge path: a call site
+    // absent from tfstate today is still a call site, and the ceiling has to hold when it is not.
+    expect(deadlines.length).toBe(6);
+    expect(ladderViolations(jobS, stepS, deadlines)).toEqual([]);
+  });
+
+  test("the `inngest_consumer` deadline is EXACTLY 30, and every other deadline is unchanged", () => {
+    // Not "<= 60": the 1430s reachable sum, the ~200s reclaimed and the 1-in-6 arming probability
+    // all plug in 30, so a looser bound would pass while falsifying the arithmetic.
+    const stripped = script.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+    expect(stripped).toMatch(/^ARM_INNGEST_DEADLINE=30$/m);
+    const deadlines = armOneDeadlines(script);
+    expect(deadlines).toEqual([230, 470, 230, 470, 230, 30]);
+  });
+
+  test("the `if: always()` re-pause sweep exists, identified by its STATE FILE and not by its name", () => {
+    // Identified by `always()` co-located with the state-file literal: keying on the step name
+    // would false-RED on a rename, which is a legitimate edit.
+    const sweeps = (applyJob.steps ?? []).filter(isSweepStep);
+    expectNonEmptyDispatch(sweeps.length, 1);
+    expect(sweeps.length).toBe(1);
+    const body = sweeps[0].run as string;
+
+    // AC4: it exits early BEFORE reading Doppler, so an apply with no work does not re-mint a
+    // credential it does not need and raise a mint-failure alarm on a run with nothing to sweep.
+    const firstWork = body
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l !== "" && !l.startsWith("#") && !/^set [+-]/.test(l))[0];
+    expect(firstWork).toContain(ARM_STATE_FILE_LITERAL);
+    expect(firstWork).toContain("exit 0");
+    expect(body.indexOf(ARM_STATE_FILE_LITERAL)).toBeLessThan(body.indexOf("doppler secrets get"));
+
+    // AC4: its own credential, re-minted and masked. BS_TOKEN is derived inside the ARM step and
+    // is invisible here, so without this the sweep would find ids and be unable to PATCH any.
+    expect((sweeps[0].env as Record<string, string>)?.DOPPLER_TOKEN_WEB_ARM).toBeDefined();
+    expect(body).toContain("doppler secrets get BETTERSTACK_API_TOKEN");
+    expect(body).toMatch(/printf '::add-mask::%s\\n'/);
+    expect(body).not.toMatch(/^\s*set -x\s*$/m);
+
+    // AC5/Guard-2 row 8: errexit is inherited, so the loop must not abort at the FIRST non-2xx.
+    expect(body).toMatch(/^\s*set \+e\s*$/m);
+    expect(body).not.toContain('{"paused":false}');
+    // ANCHORED ON THE PATCH CONSTRUCT, not on a bare `|| true`. Measured: the bare-token form was
+    // satisfied by the step's OWN Doppler line (`… --token "$X" 2>/dev/null || true)`), so
+    // deleting the guard from the re-pause PATCH left this assertion green and the mutation row
+    // survived. The `|| true` has to be tied to the body it protects.
+    expect(body).toMatch(/--data-raw '\{"paused":true\}'\s*\|\|\s*true\s*\)/);
+
+    // AC4b: it FAILS rather than annotating. `::error::` does not fail a step.
+    expect(body).toMatch(/^\s*exit 1\s*$/m);
+    // …and it reports armed / re-paused / failed counts where a reader can find them.
+    expect(body).toMatch(/armed=\$\{armed\} repaused=\$\{repaused\} failed=\$\{failed\}/);
+    expect(body).toContain("GITHUB_STEP_SUMMARY");
+  });
+
+  test("AC5: the script clears errexit explicitly and uses no bare arithmetic command", () => {
+    expect(script).toMatch(/^set \+e\b/m);
+    // A bare `(( … ))` exits non-zero whenever the expression evaluates to 0, which under an
+    // inherited errexit kills the rollback path mid-sweep.
+    const stripped = script.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+    expect(stripped).not.toMatch(/^\s*\(\(/m);
+    // The counter advances from the CLOCK, not from the sleep. Asserted behaviourally in
+    // apps/web-platform/infra/arm-heartbeats.test.sh (mutation row M1); this is the cheap
+    // structural companion, not the proof.
+    expect(stripped).toContain("elapsed=$(( $(now_s) - started ))");
+    // No `trap` (Cut List C6): bash keeps only the last EXIT handler, an INT/TERM handler returns
+    // and then fires EXIT too, and bash defers the handler until the foreground `sleep` returns.
+    expect(stripped).not.toMatch(/^\s*trap\b/m);
+  });
+
+  test("the workflow points a reader at what asserts this gate", () => {
+    const armBody = String(armStep!.run ?? "");
+    expect(armBody).toContain("apps/web-platform/infra/arm-heartbeats.sh");
+    const applyBlock = extractJobBlock(wf, "apply");
+    expect(applyBlock).toContain("arm-heartbeats.test.sh");
+    expect(applyBlock).toContain("terraform-target-parity.test.ts");
+  });
+});
+
+describe("Guard 2 mutation battery (#7587)", () => {
+  const script = readFileSync(ARM_SCRIPT, "utf8");
+  const REAL_DEADLINES = armOneDeadlines(script);
+  const JOB_S = 35 * 60;
+  const STEP_S = 31 * 60;
+
+  test("control: the shipped ladder is clean", () => {
+    expect(ladderViolations(JOB_S, STEP_S, REAL_DEADLINES)).toEqual([]);
+  });
+
+  test("M1 RED: lowering the job back to 15 min while leaving the deadlines alone — #7587 restored", () => {
+    const v = ladderViolations(15 * 60, STEP_S, REAL_DEADLINES);
+    expect(v.length).toBeGreaterThan(0);
+    expect(v.some((s) => s.includes("p95 pre-gate") || s.includes("not strictly below"))).toBe(true);
+  });
+
+  test("M2 RED: deleting every `arm_one` call leaves the scan with NOTHING to check", () => {
+    const gutted = script.replace(/^arm_one .*$/gm, ": removed");
+    expect(armOneDeadlines(gutted)).toEqual([]);
+    // expectNonEmptyDispatch is what converts "0 checked, exit 0" into a failure.
+    expect(() => ladderViolations(JOB_S, STEP_S, armOneDeadlines(gutted))).toThrow();
+  });
+
+  test("M3 RED: a SECOND call whose own deadline is fine but pushes the SUM past the ceiling", () => {
+    // A check that validates only the first call site is the defect class this row names.
+    const v = ladderViolations(JOB_S, STEP_S, [...REAL_DEADLINES, 470]);
+    expect(v.length).toBeGreaterThan(0);
+    expect(v[0]).toContain("sum(deadlines)");
+  });
+
+  test("M4 RED: removing the ARM step's own ceiling — the gate reverts to being cancelled WITH the job", () => {
+    expect(() => timeoutSeconds(undefined, "the ARM step")).toThrow(/no usable timeout-minutes/);
+  });
+
+  test("M5 RED: the sweep is identified by `always()` + the state-file literal, so deleting it is visible", () => {
+    const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    const doc = parseYaml(wf) as { jobs: Record<string, { steps?: Array<Record<string, unknown>> }> };
+    const steps = (doc.jobs.apply.steps ?? []).filter(isSweepStep);
+    expect(steps.length).toBe(1);
+    // Deleting it drops the count to zero, which the guard above asserts against.
+    const without = steps.slice(1);
+    expect(without.length).toBe(0);
+  });
+
+  test("H3 RED: a job with NO timeout-minutes must fail CLOSED, never read as unbounded-and-fine", () => {
+    expect(() => timeoutSeconds(undefined, "the apply job")).toThrow(/no usable timeout-minutes/);
+    expect(() => timeoutSeconds(0, "the apply job")).toThrow();
+    expect(() => timeoutSeconds("31", "the apply job")).toThrow();
+  });
+
+  test("H4 PASS: a non-canonical step ceiling that still satisfies the inequality MUST NOT red", () => {
+    // The contract is the inequality, not a literal. 32 min is not what ships and is fine.
+    expect(ladderViolations(JOB_S, 32 * 60, REAL_DEADLINES)).toEqual([]);
+  });
+
+  test("H5 RED: an unresolvable deadline variable fails closed rather than dropping the term", () => {
+    const broken = script.replace(/^ARM_INNGEST_DEADLINE=30$/m, "# assignment removed");
+    expect(() => armOneDeadlines(broken)).toThrow(/could not be resolved/);
   });
 });

@@ -284,6 +284,114 @@ same PR (task 4.4).
 
 ---
 
-## Phase 5.7 / 6.3 — guard mutation matrices and acceptance criteria
+## 5.7 — every row of both mutation matrices, executed against the REAL artifacts
 
-See the sections appended below as those phases complete.
+A guard that cannot be driven RED is vacuous. Two independent batteries were run.
+
+### (a) `arm-heartbeats.test.sh`'s own battery — Guard 2 rows 6-9 at the script layer
+
+Six rows, each mutating a pristine COPY of `apps/web-platform/infra/arm-heartbeats.sh` and
+asserting the edit landed before running it. Run with `bash apps/web-platform/infra/arm-heartbeats.test.sh`:
+
+```
+PASS: M-wallclock mutation landed against a pristine copy
+PASS: M1 RED: the sleep-tally blows T3's 450s observed-clock bound (measured 695s)
+PASS: M1 and it does so while REPORTING a compliant elapsed (230s) — which is why T3 asserts the clock
+PASS: M-unpause-rollback mutation landed against a pristine copy
+PASS: M2 RED: the terminal PATCH is no longer paused:true
+PASS: M-no-state-add mutation landed against a pristine copy
+PASS: M3 RED: a failed rollback no longer leaves the id on the sweep's books (T5 would be vacuous)
+PASS: M-soft-failed-rollback mutation landed against a pristine copy
+PASS: M4 RED: the apply job goes GREEN while a monitor is live-and-unfed
+PASS: M-deadline-230 mutation landed against a pristine copy
+PASS: M5 RED: the inngest arm advertises its old 230s budget again
+PASS: M5 and burns it: the observed clock passes 230s
+PASS: M6 control: the UNMUTATED copy still soft-lands at rc=0
+PASS: M6 control: and still advertises the 30s deadline
+```
+
+Suite total: **69 passed, 0 failed (69 assertions)**, rc 0.
+
+**The M1 row is the one worth reading.** Under the pre-#7587 sleep tally the SUT still *reports* a
+compliant `230s` elapsed while the observed clock reaches **695 s**. An assertion on the reported
+number alone passes over the defect — which is exactly what a regex-over-YAML guard would have
+been able to check. That is the measured case for the extraction.
+
+### (b) The real-artifact battery — Guard 1 and Guard 2 rows 1-5, 7-9 and the harness rows
+
+Each row mutates the SHIPPED `.github/workflows/apply-web-platform-infra.yml` /
+`arm-heartbeats.sh` in place, runs `bun test plugins/soleur/test/terraform-target-parity.test.ts`,
+restores from a pristine backup and asserts byte-identity. A row whose edit does not land is
+reported as a failure rather than counted as a pass, and an unmutated control runs both before and
+after so a red baseline cannot masquerade as a caught mutation.
+
+```
+CONTROL (unmutated): rc=0  GREEN
+  OK G1-M1  predicate -> needs.apply.result == 'failure'
+        want=RED got=RED
+  OK G1-M2  delete the notify-apply-failure job
+        want=RED got=RED
+  OK G1-M3  drop the needs.preflight.result clause
+        want=RED got=RED
+  OK G1-M4  narrow the trigger clause to push only
+        want=RED got=RED
+  OK G1-M5  drop preflight from needs: AND from the predicate
+        want=RED got=RED
+  OK G1-H2  reorder the operands (semantics identical)
+        want=PASS got=PASS
+  OK G2-M1  lower the apply job back to timeout-minutes: 15
+        want=RED got=RED
+  OK G2-M2  delete every arm_one call site
+        want=RED got=RED
+  OK G2-M3  add a 2nd arm_one whose deadline pushes the sum over
+        want=RED got=RED
+  OK G2-M4  remove the ARM step's step-level timeout-minutes
+        want=RED got=RED
+  OK G2-M5  remove the if: always() re-pause sweep step
+        want=RED got=RED
+  OK G2-M7  flip the sweep's PATCH body to {"paused":false}
+        want=RED got=RED
+  OK G2-M8  delete || true from the sweep's re-pause PATCH
+        want=RED got=RED
+  OK G2-M9  delete the sweep's ::add-mask:: on the re-minted token
+        want=RED got=RED
+  OK G2-H3  apply job with NO timeout-minutes at all
+        want=RED got=RED
+  OK G2-H4  step ceiling written 32 instead of 31 (still < job)
+        want=PASS got=PASS
+POST-RESTORE control: rc=0  GREEN
+
+=== mutation rows: 16 executed, 0 unexpected ===
+```
+
+**One row initially SURVIVED, and the finding is in the guard rather than the code.** `G2-M8`
+(delete `|| true` from the sweep's re-pause `PATCH`) was reported PASS on the first execution: the
+assertion was a bare `/\|\|\s*true\s*\)/` over the step body, and the step's OWN Doppler line
+(`doppler secrets get … 2>/dev/null || true)`) satisfies it. The guard was re-anchored on the
+construct it protects — `--data-raw '{"paused":true}' … || true)` — and the row then goes RED.
+This is `cq-assert-anchor-not-bare-token`, found by executing the matrix rather than by reading it.
+
+**Rows not in this battery, and why.** Guard 2 row 6 (the wall-clock accounting) is in battery (a)
+because it is only checkable behaviourally; the parity suite carries the cheap structural
+companion, and its comment says so rather than claiming it is the proof. Guard 1's H1 is
+row-identical to G1-M2 (a subject-less fixture) and is additionally asserted synthetically inside
+the suite, which is where it runs in CI forever.
+
+### Axes this battery did NOT edit, stated plainly
+
+- **Assertion dispatch** — the batteries do not neuter `expect`/`pass`/`fail` themselves. The
+  `.sh` suite carries a minimum-cardinality floor (55) that catches an emptied case loop, but not a
+  gutted `assert` helper.
+- **Fixture direction for the workflow-side guards** — `channelTruthTableViolations` quantifies
+  over the full 4 x 4 x 3 cross product, so the direction axis is covered there by construction;
+  the ladder guard is one-sided (it has no "too generous a ceiling" arm, because there is no upper
+  bound to violate).
+- **Population growth on the sweep** — no row ADDS a second `if: always()` state-file step. The
+  guard asserts `sweeps.length === 1`, so a second one reds, but that assertion is not
+  mutation-proven.
+
+---
+
+## 6.3 — acceptance criteria walk
+
+See the section appended below.

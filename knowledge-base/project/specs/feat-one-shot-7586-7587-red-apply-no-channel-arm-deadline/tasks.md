@@ -49,6 +49,11 @@ Phase 5 are written from the design, not from whatever the code ends up looking 
       `terraform-apply-web-platform-host` group before relying on the budget raise. The plan states
       the true worst case as 35 min run-level (apply 30 + notify 5, summed because the group is
       workflow-level); per-merge queue wait is the binding constraint and is **not** yet measured.
+      **MEASURED** (`measurements.md` §0.7): 80 completed runs of the shared group over 35 days —
+      observed queue depth never exceeded **1**, longest run **23.7 min**, worst wait-to-first-job
+      **492 s**, and the sibling sharing this mutex already runs a 90-minute apply. The raise is
+      therefore safe; the honest run-level worst case is **40 min** (apply 35 + notify 5), not the
+      plan's 35, because the ladder was re-sized from the nominal Σ (see 1.2/1.3).
 
 ## Phase 1 — Extract the ARM gate, then change its contracts
 
@@ -56,12 +61,17 @@ Phase 5 are written from the design, not from whatever the code ends up looking 
       `apps/web-platform/infra/arm-heartbeats.sh`, following the house precedent
       (`web-private-nic-guard.sh`). Parameterise the clock and the HTTP call so a test can inject
       fakes. Keep behaviour identical in this step — extraction first, changes after.
-- [x] **1.2** Raise the `apply` job's `timeout-minutes` from 15 to 30 and rewrite the adjacent
+- [x] **1.2** *(implemented as **35**, not 30 — the plan sized its ladder from the reachable Σ while
+      writing AC3's guard against the nominal Σ; `measurements.md` §0.3(a).)*
+      Raise the `apply` job's `timeout-minutes` from 15 to 30 and rewrite the adjacent
       comment: it currently claims the 15 "matches `apply-deploy-pipeline-fix.yml`", whose apply job
       is actually **90**. Cite the two-part inequality and the measured p95 instead.
 - [x] **1.3** Add a step-level `timeout-minutes` to the ARM gate satisfying
       `arm_step_timeout ≥ Σdeadlines × 1.1` and
       `job_timeout − arm_step_timeout ≥ p95 pre-gate` (≈27 min against a 30 min job).
+      *(implemented as **31 min against a 35 min job**: 1860 ≥ 1660 × 1.1 = 1826, and
+      2100 − 1860 = 240 ≥ 111. The inequality is what the guard asserts; the plan's literals were
+      derived from the wrong Σ.)*
 - [x] **1.4** Fix the wall-clock accounting inside `arm-heartbeats.sh`: the loop counter must advance
       by measured elapsed time, not by its `sleep 10` alone. Today the per-iteration
       `curl --max-time 15` is uncounted, so a 230 s nominal deadline can consume up to 575 s.
@@ -148,28 +158,37 @@ Phase 5 are written from the design, not from whatever the code ends up looking 
 
 ## Phase 5 — Guards (written from the design, not the code)
 
-- [ ] **5.1** Add `apps/web-platform/infra/arm-heartbeats.test.sh` with an injected fake clock and
+- [x] **5.1** Add `apps/web-platform/infra/arm-heartbeats.test.sh` with an injected fake clock and
       fake `curl`, driving Guard 2 rows 6-9 behaviourally.
-- [ ] **5.2** **Register it** in `apps/web-platform/infra/run-registered-suites.sh`.
+- [x] **5.2** **Register it** in `apps/web-platform/infra/run-registered-suites.sh`.
       `scripts/lint-orphan-test-suites.sh` enumerates `git ls-files '*.test.sh'` repo-wide, so an
       unregistered new `.test.sh` is an orphan by construction.
-- [ ] **5.3** In `plugins/soleur/test/terraform-target-parity.test.ts`: add the shared
+      *(PATH CORRECTED at implementation — the plan is authoritative for intent, never for paths.
+      `run-registered-suites.sh` does not carry a suite list: it DERIVES one by grepping
+      `run: bash apps/web-platform/infra/*.test.sh` out of `.github/workflows/infra-validation.yml`.
+      Registering it in the runner is therefore impossible; the step was added to
+      `infra-validation.yml` (job `deploy-script-tests`) instead, which is the single surface the
+      orphan lint recognises. Registering it in BOTH would also be an error — that linter treats a
+      suite covered by more than one surface as a finding. Verified: `--list` now derives 101
+      suites including this one, and `lint-orphan-test-suites.sh` reports
+      `walked 363 tracked *.test.sh … 363 covered, 0 orphaned`.)*
+- [x] **5.3** In `plugins/soleur/test/terraform-target-parity.test.ts`: add the shared
       `expectNonEmptyDispatch` helper and a header note that this suite also owns the apply
       workflow's channel and budget invariants.
-- [ ] **5.4** Guard 1 — `describe("apply-web-platform-infra has a failure channel")`. Extract the
+- [x] **5.4** Guard 1 — `describe("apply-web-platform-infra has a failure channel")`. Extract the
       `if:` expression and **evaluate** it over `{success,failure,cancelled,skipped}² ×
       {push,manual-rerun,other}`, asserting the truth table. Do not string-match: a canonical-string
       match makes H2 fail by construction, a token-presence check passes rows 1/3/4 over a broken
       predicate. Pin `needs` to equal `["preflight","apply"]` **in the same test** — otherwise
       dropping `preflight` from both `needs:` and the predicate reds neither guard (row 5).
-- [ ] **5.5** Guard 2 — `describe("the ARM gate's deadlines fit its job")`. Assert the two-part
+- [x] **5.5** Guard 2 — `describe("the ARM gate's deadlines fit its job")`. Assert the two-part
       inequality, the step timeout strictly below the job's, and the sweep identified by
       `if: always()` co-located with the state-file literal (**not** by step name — a rename would
       false-RED).
-- [ ] **5.6** Leave `describe("the ssh_token_gate green-skip has a channel (#7539)")`
+- [x] **5.6** Leave `describe("the ssh_token_gate green-skip has a channel (#7539)")`
       **byte-identical**. Its passing untouched is the regression signal that the new job did not
       disturb the old arm.
-- [ ] **5.7** Execute every row of both mutation matrices and both harness tables against the real
+- [x] **5.7** Execute every row of both mutation matrices and both harness tables against the real
       implementation; record each verdict in `measurements.md`. A guard that cannot be driven RED is
       vacuous.
 
