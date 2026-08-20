@@ -1,6 +1,6 @@
 ---
 title: Migrate the marketing/docs site off GitHub Pages to Cloudflare Pages — the proxy/certificate conflict is structural, not a bug to fix
-status: proposed
+status: accepted
 date: 2026-08-19
 related_adrs: [ADR-125, ADR-130, ADR-136]
 related: [6691, 6698, 6657, 7539, 7584, 7620]
@@ -13,9 +13,11 @@ brand_survival_threshold: single-user incident
 
 ## Status
 
-**PROPOSED** — not yet accepted. Written to support a decision, not to record one
-already taken. The mitigation it would supersede (`ssl = "full"`, PR #7584) is
-live and the site is healthy, so there is no time pressure on accepting it.
+**ACCEPTED** — 2026-08-20. Written to support a decision; the operator took it on
+the evidence recorded below. The mitigation it supersedes (`ssl = "full"`, PR
+#7584) is live and the site is healthy, so the migration proceeds without time
+pressure — and `ssl = "full"` stays in place until the migration is verified
+live. Implementation is tracked in issue #7640.
 
 ## Context
 
