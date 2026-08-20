@@ -112,6 +112,22 @@ scaffolding (`<section>`, `<div>`, `<h1>`, `<p>Effective…</p>`), link form
 (`privacy-policy.md` vs `/legal/privacy-policy/`), the `{{ stats.* }}` template vars, and
 blank-line runs. Everything else — every word of prose — must match after normalisation.
 
+**Mechanical verification of every repo claim in this plan (deepen-plan Phase 4.45).** An
+independent grep pass re-derived all 18 negative/absolute claims this plan makes about the
+repository — gate path-filters, `BODY_EQUIVALENCE_DOCS` membership, the warning-only
+`EXPECTED_COUNT`, the absence of a `--write` mode, the runtime-derived drift baseline, the mirror
+`.md`-link check, the break-glass env var, the `checks` tuple having **no polarity field**,
+`NO_BODY_LAST_UPDATED` membership, the 8 lowercase-64-hex SHA keys with T&C absent,
+`legal-doc-shas-guard.test.ts`'s two assertions, the six-entry `DISCLOSURE_FILES`, the
+DSAR-surface gate's six patterns, the empty tenant register, `iam.tf`'s placement-hint comment and
+`_default_` resource string, `chat-attachments` being Supabase Storage, **the absence of any
+`terraform apply` workflow for `apps/cla-evidence/infra/`**, and the per-PR-base doc-hash at
+`cla-evidence.yml:122-128`. **All 18 confirm; zero contradictions.** Two results are load-bearing
+beyond confirmation: (a) `infra-validation.yml` path-filters `apps/*/infra/**` but runs only
+`terraform fmt/validate/test` — no apply exists anywhere for that root, so editing row H2's README
+cannot trigger infrastructure change; (b) the `checks` tuple genuinely carries no polarity, which
+is what makes the Guard Contract's tuple-widening mandatory rather than optional.
+
 **Precision note on gate 1.** "Gate 1 hashes canonical only — the mirror is never hashed" is true
 for the three primary docs but **false as a general statement**: `check-tc-document-sha.sh:157`
 does `normalize_plugin "$mirror_path" | collapse | sha256sum` for the `BODY_EQUIVALENCE_DOCS`
