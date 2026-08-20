@@ -36,7 +36,26 @@ trap 'rm -rf "$TMP"' EXIT
 # Exiting 90 ends only the subshell, so the marker is what makes the suite red: the fixture is
 # gone either way, and a silent "0 assertions about scenario N" is the shape this whole file
 # exists to prevent.
-TMP_REAL="$(cd "$TMP" && pwd -P)"
+# FAIL-OPEN, CLOSED. The containment case below is `"$TMP_REAL"|"$TMP_REAL"/*`. If TMP_REAL is
+# ever EMPTY, the second pattern degrades to `/*`, which matches EVERY absolute path — so the
+# guard returns 0 for a live repository while reading, to anyone skimming, exactly like a guard.
+# Mutation-proven with TMP_REAL forced empty and the CWD a real repo: without this assertion the
+# helper printed "ACCEPTED" for the live checkout; with it, setup refuses.
+#
+# The `mktemp -d` guard above covers the common cause and not the rest: a `cd "$TMP"` that loses
+# a race, hits permissions, or finds TMP removed between mktemp and this resolve. Assert the
+# POST-CONDITION (an absolute path) rather than trusting the producer.
+#
+# Found by soleur-c1 while reviewing their own copy of this helper, after it had already passed
+# review here and shipped in three commits on this branch.
+TMP_REAL="$(cd "$TMP" && pwd -P)" || TMP_REAL=""
+case "$TMP_REAL" in
+  /*) : ;;
+  *)  echo "FATAL: could not resolve the fixture root '$TMP' to an absolute path — refusing." >&2
+      echo "       An empty root makes the containment check below match every absolute path." >&2
+      exit 2 ;;
+esac
+readonly TMP_REAL   # so a later assignment cannot reintroduce the empty case
 cdx() {
   local target="$1" top
   if ! cd "$target" 2>/dev/null; then
