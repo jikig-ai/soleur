@@ -23,6 +23,22 @@ WHAT IT DOES NOT DO. It is not a shell parser. It cannot see through `eval`, pro
 substitution, or a variable holding a command name — the last of which it reports as a hit
 rather than pretending to resolve. Its contract is: over the code it CAN see, a token in command
 position is reported, and anything it cannot classify is reported rather than skipped.
+
+KNOWN SILENT GAPS (#7546 review). The sentence above says unclassifiable things are REPORTED, and
+these are not — they are missed without a hit, which is the failure mode this module calls "the
+worst possible failure for an allow-list: silence that reads as approval". They are recorded here
+rather than left for the next reader to rediscover, and neither appears in either scanned file
+today:
+
+  $'terraform' apply    ANSI-C quoting in command position. `_blank` blanks the quoted span, and
+                        what survives is a bare `$` that matches neither CMD nor CMD_INDIRECT.
+                        Closing it needs the blanking to mark `$'` distinctly while preserving
+                        byte offsets, which is a change to the tokenizer rather than a regex.
+  ${!var} / ${v:-cmd}   these ARE reported, but as the token that FOLLOWS them (`apply`), so the
+                        line is flagged and the reason given is wrong.
+
+Both fail toward a hit being absent, not toward a wrong verdict on a hit that fires, and the
+loop-depth and redirect halves are unaffected.
 """
 
 import re
@@ -239,7 +255,10 @@ _SED_EXEC = re.compile(r'''\bsed\b[^\n]*?(-i\b|--in-place|-f\s+\S|[;'"\s][wW]\s+
 # `_blank` preserves byte offsets exactly (every blanked character emits one space, and
 # newlines survive), so the operator can be FOUND in the blanked text and its target READ from
 # the original at the same offset. That is the whole reason the blanking is offset-preserving.
-_REDIR_OP = re.compile(r'(?:^|[\s;|&)])[0-9]?>>?(?![&>])', re.M)
+# `\{fd\}` added (#7546 review): bash's named-file-descriptor redirect `{fd}> file` was
+# measured MISSED by both halves of the sweep -- the command half sees only an allow-listed
+# `echo`, and this regex admitted a leading DIGIT but not a `{name}`.
+_REDIR_OP = re.compile(r'(?:^|[\s;|&)])(?:[0-9]|\{[A-Za-z_][A-Za-z0-9_]*\})?>>?(?![&>])', re.M)
 _REDIR_TARGET = re.compile(r'[ \t]*((?:"[^"\n]*"|\'[^\'\n]*\'|[^\s;|&)\n])+)')
 
 
