@@ -219,6 +219,58 @@ resource "cloudflare_list" "legal_redirects" {
   }
 }
 
+# The www -> apex 301 (ADR-194 / #7640, decision D1).
+#
+# WHY THIS MOVED HERE. The redirect is currently GitHub-Pages-owned and free: GitHub Pages
+# auto-301s any alias to the primary domain named by plugins/soleur/docs/CNAME. Migrating
+# to Cloudflare Pages removes that behaviour, so the 301 has to be rebuilt somewhere.
+#
+# The issue body predicted it would land in seo_page_redirects and that retiring the ACME
+# carve-out would free the slot it needs. That premise is FALSE and was corrected during
+# planning: the carve-out is an inline clause of Rule 10, not a rule of its own, so
+# retiring it frees ZERO slots. Putting the redirect in account Bulk Redirects dissolves
+# the 10-rule Free-tier cap conflict rather than relocating it, and leaves Rule 10 and its
+# carve-out untouched.
+#
+# WHY A SEPARATE LIST rather than a 13th item in legal_redirects. Cloudflare does not
+# document matching precedence between two list entries that could both match, and every
+# legal_redirects item carries include_subdomains = "enabled" — so
+# www.soleur.ai/pages/legal/privacy-policy.html ALREADY matches an apex item today. A www
+# catch-all in the same list would make the winner depend on undocumented behaviour. Rules
+# WITHIN a ruleset evaluate in declaration order, first-match-wins, which this repo already
+# relies on and documents in seo-rulesets.tf. Ordering the legal rule first and this one
+# second makes the precedence explicit and testable.
+#
+# SAFE TO LAND BEFORE THE DNS CUTOVER. The Bulk Redirect matches on the www.soleur.ai host
+# at the edge regardless of where www's DNS points, so it produces the same 301 the site
+# already serves today. It is effectively a no-op until PR3 fires, which means it is live
+# and measurable before the cutover rather than during it.
+resource "cloudflare_list" "www_canonical" {
+  provider    = cloudflare.rulesets
+  account_id  = var.cf_account_id
+  name        = "www_canonical" # referenced by name from the ruleset's from_list
+  kind        = "redirect"
+  description = "www.soleur.ai -> soleur.ai 301, rebuilt on Cloudflare after the GitHub Pages alias auto-301 goes away. See ADR-194, #7640."
+
+  item {
+    value {
+      redirect {
+        # Scheme omitted deliberately: the source matches both http and https.
+        source_url            = "www.soleur.ai/"
+        target_url            = "https://soleur.ai/"
+        status_code           = 301
+        subpath_matching      = "enabled"
+        preserve_path_suffix  = "enabled"
+        preserve_query_string = "enabled"
+        # v4 string enum, NOT a bool. "disabled" because include_subdomains would match
+        # hosts to the LEFT of www.soleur.ai (e.g. a.www.soleur.ai), which is not wanted —
+        # this rule exists to canonicalise exactly one host.
+        include_subdomains = "disabled"
+      }
+    }
+  }
+}
+
 # Naming: no `seo_` prefix (vs sibling zone rulesets seo_page_redirects /
 # seo_response_headers) because this is THE single account-level
 # http_request_redirect phase owner — future non-SEO bulk lists would attach
@@ -249,6 +301,31 @@ resource "cloudflare_ruleset" "bulk_redirects" {
         # in the header). The `$legal_redirects` in `expression` above must
         # stay literal — only this binding creates the dependency.
         name = cloudflare_list.legal_redirects.name
+        key  = "http.request.full_uri"
+      }
+    }
+  }
+
+  # DECLARED SECOND, AND THE ORDER IS LOAD-BEARING (D1). Rules within a ruleset evaluate in
+  # declaration order with first-match-wins. The legal rule above must win for the ten
+  # legacy /pages/legal/<slug>.html paths, because those paths requested on the WWW host
+  # match BOTH lists: legal_redirects items carry include_subdomains = "enabled", and this
+  # rule is a host-wide catch-all. If this block were declared first, every legacy legal URL
+  # on www would collapse to the bare apex instead of reaching its /legal/<slug>/ target,
+  # silently destroying ten live redirects. T-WWW asserts exactly that, and moving this
+  # block above the legal rule must drive the guard red.
+  rules {
+    action      = "redirect"
+    description = "301 www.soleur.ai -> soleur.ai via the www_canonical bulk list (ADR-194)"
+    enabled     = true
+    expression  = "http.request.full_uri in $www_canonical"
+
+    action_parameters {
+      from_list {
+        # Resource reference, not a string literal — same graph-edge reason as the rule
+        # above: the list must exist before the ruleset binds it. The `$www_canonical` in
+        # `expression` stays literal; only this binding creates the dependency.
+        name = cloudflare_list.www_canonical.name
         key  = "http.request.full_uri"
       }
     }
