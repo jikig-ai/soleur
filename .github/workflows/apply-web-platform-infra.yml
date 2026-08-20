@@ -1351,8 +1351,13 @@ jobs:
   # goes green, and this job is silent on all 13 non-`manual-rerun` targets. Widening the trigger
   # clause to every dispatch target means widening `needs:` to jobs that do not run on a push,
   # which changes the predicate's shape; it is deliberately NOT done here, and the uncovered set
-  # is named above rather than glossed. The covering mechanism for the run-level cancellation is a
-  # `workflow_run` watcher, which does not exist for this workflow.
+  # is named above rather than glossed. The covering mechanism for BOTH residuals -- the 5
+  # non-`manual-rerun` dispatch failures and the 1 run-level cancellation -- is a `workflow_run`
+  # watcher, which does not exist for this workflow. It is tracked by #7662 (a default
+  # notification posture for production-affecting workflows), filed at ship time from the #7642
+  # plan's `## Deferrals`. `workflow_run` fires on `completed` INCLUDING `cancelled`, which is why
+  # it reaches the run-level cancellation that no in-run mechanism can: when a run is cancelled,
+  # its queued jobs are cancelled with it, so an `if: always()` job never starts at all.
   #
   # Asserted by `describe("apply-web-platform-infra has a failure channel")` in
   # `plugins/soleur/test/terraform-target-parity.test.ts`, which EVALUATES the predicate below

@@ -173,7 +173,7 @@ Every action item and follow-up so this incident cannot recur.
 The two rows above are kept for the record rather than deleted, but they no longer describe a live
 defect and the numbers they used to quote are stale. As shipped in PR #7642: the ARM gate lives in
 `apps/web-platform/infra/arm-heartbeats.sh` with Σ(deadlines) = 1510 s and a worst-case wall clock
-of 1930 s, under an ARM-step ceiling of 33 min and an `apply` job ceiling of 39 min, with an
+of 2020 s, under an ARM-step ceiling of 35 min and an `apply` job ceiling of 41 min, with an
 `if: always()` re-pause sweep behind it that re-pauses anything an externally-imposed cut left
 live. A non-green run reaches a `notify-apply-failure` job that emails ops. The residual — 6 of the
 last 60 runs, all non-`manual-rerun` dispatch targets plus one run-level cancellation — is stated

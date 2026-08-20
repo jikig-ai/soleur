@@ -755,7 +755,7 @@ failure_modes:
     alert_route: "ops@jikigai.com email"
   - mode: "the whole RUN is cancelled before the notify job starts (MANUAL cancel only — the workflow declares cancel-in-progress: false, so a concurrency supersede cannot cancel this run)"
     detection: "NOT DETECTED by this change — an always() job never starts when queued jobs are cancelled with the run. Measured frequency 1 of the last 60 runs. The covering mechanism is a workflow_run watcher, which does not exist for this workflow"
-    alert_route: "none — named residual, tracked by the Deferrals item"
+    alert_route: "none — named residual, tracked by #7662 (the Deferrals item, filed at ship time)"
   - mode: "a heartbeat is left unpaused-and-unfed by an abnormal exit"
     detection: "the always() sweep step re-pauses every id in $RUNNER_TEMP/armed-unconfirmed and reports the count"
     alert_route: "::error:: on the run + the failure email; residually, the Better Stack absence alert itself"
@@ -1137,7 +1137,8 @@ change (`2026-08-14-my-gate-reserved-its-reassuring-message-for-its-alarming-con
 
 ## Deferrals (tracking issue to file at ship time)
 
-**A default notification posture for production-affecting workflows.** Raised independently by the
+**A default notification posture for production-affecting workflows — FILED AS #7662 at ship time.**
+Raised independently by the
 CPO and CTO consults. This is the *second* notification arm bolted onto this one workflow (#7539
 covered the green-skip shape, #7586 the red shape) — coverage bought one post-mortem at a time, per
 workflow, per failure shape. Concrete first data point: `apply-deploy-pipeline-fix.yml`, the sibling
@@ -1163,32 +1164,39 @@ workflows, not as the 25th hand-rolled copy — building it per-workflow is prec
 the deferral exists to end. Re-evaluation criterion: the next workflow found to have no channel, or
 a request from the notification's recipient.
 
-**`archive-kb.sh` will move a spec artifact this branch promoted to a GUARD INPUT (found in QA).**
+Filed as **#7662** per `wg-when-deferring-a-capability-create-a`, after the
+`wg-defer-only-after-inline-triage` triple test passed on all three legs (not inline-able at ~130
+lines; two live observable triggers — the 6/60 uncovered runs and `apply-deploy-pipeline-fix.yml`
+having zero notification call sites; both signals present today, not hypothetical). The
+`notify-apply-failure` job's own header comment cites #7662 as the covering mechanism for its named
+residuals, so the code and the backlog point at each other.
+
+**`archive-kb.sh` would have moved a spec artifact this branch promoted to a GUARD INPUT (found in
+QA) — RESOLVED IN THIS BRANCH, no tracking issue filed.**
 `terraform-target-parity.test.ts` pins the pre-gate ceiling by reading
-`knowledge-base/project/specs/feat-one-shot-.../measurements.md` for its `LADDER-PIN:` marker —
-deliberately, so the literal and the measurement cannot drift. But compound's automatic
-consolidation archives `specs/feat-<slug>/` by `git mv`, and the script has no idea any tracked
-file outside `knowledge-base/` reads it.
+`measurements.md` for its `LADDER-PIN:` marker — deliberately, so the literal and the measurement
+cannot drift. But compound's automatic consolidation archives `specs/feat-<slug>/` by `git mv`, and
+the script has no idea any tracked file outside `knowledge-base/` reads it.
 
-**MEASURED, not assumed:** with that directory renamed out of the way the suite goes from
+**MEASURED, not assumed:** with that directory renamed out of the way the suite went from
 **177 pass / 0 fail** to **158 pass / 4 fail / 1 error**, with 15 tests never reaching an
-assertion (`readFileSync` throws before `terms()` returns). Archival at ship time would therefore
-red `main`.
+assertion (`readFileSync` threw before `terms()` returned). Archival at ship time would therefore
+have redded `main`.
 
-Archival was consequently **NOT run** in this session's compound phase — recorded here rather than
-performed. Two candidate fixes, neither bundled into this branch (different subsystem, scope
-discipline):
+**Fixed in `5e4b9c2db`, so this is no longer a deferral.** The guard now resolves its measurement
+log itself: the live `specs/<slug>/` path first, then `specs/archive/*<slug>/` by suffix (the
+archiver prefixes a timestamp). A genuinely missing pin still throws, naming BOTH candidates — it
+must never fall back to a literal, because the whole point of the pin is that the ladder and the
+measurement cannot drift apart. Proven both ways: 177/0 with the directory archived, and a named
+throw with the file absent. Archival is therefore SAFE to run from this branch onward; the earlier
+DO-NOT-RUN note recorded here is superseded.
 
-1. **Make the move refuse loudly.** Before each `git mv`, grep the tracked tree outside
-   `knowledge-base/` for the artifact path and refuse if anything references it. ~15 lines plus a
-   new `archive-kb.test.sh` (the script currently has no sibling suite at all, which is its own
-   finding). This is the "make a silent failure mode loud" shape.
-2. **Move the pin out of the session artifact.** A measurement that a merged guard reads is no
-   longer a session artifact; it belongs somewhere permanent, with `measurements.md` keeping the
-   derivation. Larger, and it needs the ladder authors' intent.
-
-Fix (1) is the one that generalises — every future plan that pins a guard to its own measurement
-log has this hazard, and only the script can see it.
+One observation is recorded rather than deferred, because this plan defers no capability here:
+`archive-kb.sh` is unchanged by this PR and still has no way to see a tracked file outside
+`knowledge-base/` that reads an artifact it is about to move. That is a pre-existing property of
+another subsystem, not a capability this plan scoped and dropped, and the fix above removes this
+branch's artifacts from its blast radius entirely — nothing this PR ships depends on the archiver
+learning to look.
 
 ## References & Research
 
