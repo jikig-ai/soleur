@@ -202,15 +202,36 @@ COVERED_DIRS='^(scripts/|plugins/soleur/test/)'
 # UNCLASSIFIED and the guard reddens naming the file, which is the entire point.
 DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-platform/test/infra/|\.claude/hooks/|plugins/soleur/skills/[^/]+/test/)'
 
+# THE PER-FILE PROMOTION SEAM (#7585, built by #7104 PR-B).
+#
+# ARM 5c's own note records that #7552 raised MAX_DEFERRED 46 -> 47 for exactly one file,
+# against that arm's instruction, and states: "Do NOT treat this bump as precedent for the next
+# one — the correct response to a second occurrence is to build the seam, not to add another
+# line here." This is the second occurrence, so this is the seam.
+#
+# Why it was needed: both sanctioned outs are directory-granular. "Cover it" by adding one file
+# to COVERED_DIRS leaves its directory in DEFERRED_DIRS and trips ARM 5's double-count check;
+# "promote its directory" is blocked by the per-scope construction ratchet that does not exist
+# yet. A file listed here is moved from the deferred ledger into the covered scope INDIVIDUALLY,
+# so it is mutation-tested like any covered suite — it is a promotion, not an exemption, and it
+# makes the ledger SHRINK rather than the ratchet grow.
+#
+# Anchored with ^...$ per entry so a path cannot be promoted by prefix accident.
+PROMOTED_FILES='^(apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh)$'
+
 COVERED="$SUITE_TMP/covered.txt"
 DEFERRED="$SUITE_TMP/deferred.txt"
 UNCLASSIFIED="$SUITE_TMP/unclassified.txt"
-{ grep -E "$COVERED_DIRS" "$FLOOR_ALL" || true; } > "$COVERED"
-{ grep -E "$DEFERRED_DIRS" "$FLOOR_ALL" || true; } > "$DEFERRED"
+{ { grep -E "$COVERED_DIRS" "$FLOOR_ALL" || true; }; { grep -E "$PROMOTED_FILES" "$FLOOR_ALL" || true; }; } | sort -u > "$COVERED"
+{ grep -E "$DEFERRED_DIRS" "$FLOOR_ALL" || true; } | { grep -vE "$PROMOTED_FILES" || true; } > "$DEFERRED"
 # Anything floor-bearing that matches NEITHER declared scope.
-{ grep -vE "$COVERED_DIRS" "$FLOOR_ALL" || true; } | { grep -vE "$DEFERRED_DIRS" || true; } > "$UNCLASSIFIED"
+{ grep -vE "$COVERED_DIRS" "$FLOOR_ALL" || true; } | { grep -vE "$DEFERRED_DIRS" || true; } \
+  | { grep -vE "$PROMOTED_FILES" || true; } > "$UNCLASSIFIED"
 # And anything counted TWICE would satisfy the identity while covering nothing.
 DOUBLE="$SUITE_TMP/double.txt"
+# Unchanged by the seam: a PROMOTED file never matches COVERED_DIRS, so it cannot appear on
+# both sides of this intersection. What this still catches is the original case — a
+# directory listed in both scope regexes.
 { grep -E "$COVERED_DIRS" "$FLOOR_ALL" || true; } | { grep -E "$DEFERRED_DIRS" || true; } > "$DOUBLE"
 
 n_total=$(wc -l < "$FLOOR_ALL")
@@ -407,6 +428,37 @@ fi
 # --- ARM 3: the firing population may only grow ------------------------------------------
 # Absolute and hand-ratcheted. Never derived from a variable this file computes: a floor
 # that descends with the thing it guards is not a floor.
+# PER-FILE MEMBERSHIP PIN ON THE PROMOTION SEAM (#7546 review).
+#
+# `PROMOTED_FILES` had no assertion of its own, and the aggregate ratchet below carries SLACK
+# (measured: 45 firing against MIN_FIRING_SUITES=36, i.e. nine). Measured consequence: DELETING
+# a promoted file's floor outright -- `if [[ "$N" -lt 40 ]]` -> `if false` in the battery -- left
+# this suite reporting `19 passed, 0 failed`, rc=0. ARM 4's closure and ARM 5's double-count both
+# stayed intact BY CONSTRUCTION: a deleted floor drops the file out of FLOOR_ALL entirely, so
+# covered+deferred+unclassified still balances (one subtracted from each side) and MAX_DEFERRED
+# is a ceiling a shrinking ledger cannot breach. Only the aggregate had a stake, and it had nine
+# to spare. So nine covered floors -- including both files this PR promotes -- could be removed
+# silently.
+#
+# The seam was already armored against a file being UNDECLARED (a typo'd entry pushes it back
+# into the ledger and breaches the zero-slack MAX_DEFERRED); it was not armored against the
+# promoted file's floor being REMOVED. This pin has zero slack by construction: every declared
+# entry must still be floor-bearing, must land in COVERED, and must score FIRES.
+promoted_problems=""
+while IFS= read -r pf; do
+  [[ -z "$pf" ]] && continue
+  grep -qxF "$pf" "$FLOOR_ALL" || { promoted_problems="$promoted_problems $pf:no-longer-floor-bearing"; continue; }
+  grep -qxF "$pf" "$COVERED"   || { promoted_problems="$promoted_problems $pf:not-in-covered"; continue; }
+  grep -qxF "$pf" "$FIRES_LIST" || promoted_problems="$promoted_problems $pf:floor-does-not-fire"
+done < <(printf '%s\n' "$PROMOTED_FILES" \
+          | sed -e 's/^\^(//' -e 's/)\$$//' -e 's/\\//g' -e 's/|/\n/g')
+cases=$((cases + 1))
+if [[ -z "$promoted_problems" ]]; then
+  pass "every PROMOTED_FILES entry is still floor-bearing, covered, and scores FIRES — promotion cannot decay into a silent exemption"
+else
+  fail "PROMOTED_FILES entries drifted:$promoted_problems. A promoted file whose floor was DELETED leaves the covered set entirely and every aggregate arm still balances, so this per-file pin is the only thing that sees it."
+fi
+
 MIN_FIRING_SUITES=36
 cases=$((cases + 1))
 if [[ "$n_fires" -ge "$MIN_FIRING_SUITES" ]]; then
@@ -764,7 +816,7 @@ fi
 # hand; never derived from a variable this file computes, because a floor that descends
 # with the thing it guards is not a floor.
 # ---------------------------------------------------------------------------------------
-MIN_META_CASES=19
+MIN_META_CASES=20
 if [[ "$cases" -lt "$MIN_META_CASES" ]]; then
   printf '\n[FATAL] meta-guard vacuity: only %d assertion(s) ran; expected >= %d.\n' \
     "$cases" "$MIN_META_CASES" >&2
@@ -784,6 +836,31 @@ if [[ $((passes + fails)) -ne "$cases" ]]; then
   else
     printf '  A verdict was recorded at a call site with no `cases=$((cases + 1))` before it.\n' >&2
   fi
+  exit 1
+fi
+
+
+# KNOWN-NEGATIVE SELF-TEST (#7546 review). Ported from infra-config-gate.test.sh, which was the
+# ONLY one of the four sibling suites to carry it -- and the only one that survived the mutation
+# below. An assertion harness that has never been shown to emit a FAIL has not returned a pass.
+#
+# MEASURED on a sandbox copy, with a genuine defect present (a covered suite's floor neutered --
+# a defect this guard exists to catch): swapping this suite's fail() to record a pass instead
+# left it reporting `19 passed, 0 failed`, rc=0, and the finding printed verbatim as
+# `[ok] 1 covered suite(s) have a floor that EXITS 0 under a neutered assertion machinery`.
+# The accounting identity above held throughout -- passes+fails == cases is balanced by a SWAP,
+# because one verdict left a bucket and entered another. That is the whole blind spot: a
+# conservation law cannot see a transfer.
+#
+# This matters more here than in the siblings: the suite whose stated purpose is catching a
+# floor enforced THROUGH the machinery it guards was itself enforced through the machinery it
+# guards. Runs in a subshell so the side effects stay off the parent's tally.
+if ( _p0="$passes"; _f0="$fails"
+     fail "self-test (expected -- this line proves fail() records a FAILURE)" >/dev/null 2>&1
+     [[ "$fails" -eq $((_f0 + 1)) && "$passes" -eq "$_p0" ]] ); then
+  :
+else
+  echo "harness self-test: the REAL fail() does not record a failure into fails -- it is neutered, or it records failures as passes. Every verdict above is unverifiable." >&2
   exit 1
 fi
 
