@@ -744,7 +744,11 @@ time bomb that reds every docs deploy.
    NOTHING else; TTL none. Write the value to Doppler soleur/prd_terraform as
    CF_API_TOKEN_PAGES. Do NOT paste the value into an agent session
    (hr-never-paste-secrets-via-bang-prefix). AC30 then asserts presence pre-merge.
-```bash
+   ```
+
+2. **First-use scope probe** (re-run any time the token is rotated):
+
+   ```bash
    TOK=$(doppler secrets get CF_API_TOKEN_PAGES -p soleur -c prd_terraform --plain)
    ACCT=$(doppler secrets get CF_ACCOUNT_ID     -p soleur -c prd_terraform --plain)
    ZONE=$(doppler secrets get CF_ZONE_ID        -p soleur -c prd_terraform --plain)
@@ -1016,7 +1020,13 @@ uses `$(grep -c … || true)` compared with `[ "$n" = "0" ]`, or `! grep -q`.
 - **AC27b** — the monitor's `schedule`, `checkin_margin_minutes`, `max_runtime_minutes` and both thresholds are unchanged from `main` (asserted by diff), so re-arming is a single-attribute flip.
 - **AC27c** — `routine-metadata-parity.test.ts` is green: every `ROUTINE_METADATA.description` is <= 160 chars, including the disarmed cert-state entry.
 - **AC27d** — `sentry-monitor-iac-parity.test.ts` is green **with no new `DISABLED_CRON_SLUG_EXEMPTIONS` entry** — the structural proof the monitor was disabled, not deleted.
+<!-- lint-infra-ignore start: AC27f describes an AUTOMATED merge step (a `gh issue close`
+     invocation in PR1's merge steps), not a human-run infra step. It trips the linter only
+     because it QUOTES the imperative that the filed comment must carry — "must NOT be
+     fired" is text destined for a GitHub issue body, addressed to whoever reads that
+     backlog, not an instruction to the operator. -->
 - **AC27f** — `[cert-poll]` issues #6691 and #6657 are closed with a comment naming this work as superseding and explicitly instructing that `cron/gh-pages-cert-reissue.manual-trigger` must NOT be fired. Asserted by `gh issue view 6691 --json state` returning `CLOSED`. Automated in the merge steps, never an operator action.
+<!-- lint-infra-ignore end -->
 - **AC30 (BLOCKING, pre-merge)** — `doppler secrets get CF_API_TOKEN_PAGES -p soleur -c prd_terraform --plain` exits `0`. Asserted BEFORE the PR is marked ready, not after: `cf_api_token_pages` has no default and Terraform resolves every root variable before `-target` pruning, so an absent secret freezes the ENTIRE `apps/web-platform/infra` root — blocking every unrelated infra change behind a red apply, across all three workflows that plan this root (`apply-web-platform-infra.yml`, `apply-deploy-pipeline-fix.yml`, and the 12-hourly `scheduled-terraform-drift.yml`).
 - **AC27e** — `cron-inngest-cron-watchdog.ts`'s cadence comment no longer cites `scheduled-gh-pages-cert-state` as a live constraint, and names `scheduled-community-monitor @ 0 8 * * *` as the surviving AC10 basis.
 - **AC28** — `scripts/encryption-posture-ledger.json` classifies both new resource types, and `python3 scripts/lint-encryption-posture.py --repo-sweep` exits `0`. The `cloudflare_pages_project` `stores[]` row carries a `provider-managed:<AttestationName>` mechanism with an `attestation_url` and a `retrieved_on` within 365 days — the validator rejects a bare "provider-managed encryption at rest" string.
