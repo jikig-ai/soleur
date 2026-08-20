@@ -430,7 +430,12 @@ jobs:
           # WHY A SEPARATE STEP rather than folding this into the verify step: it must observe
           # the frame BEFORE the apply mutates the host, and the verify step runs after. It is
           # also the right boundary on principle — this step SENSES, the verify step ADJUDICATES,
-          # and a verification gate should not share a step with its own verdict.
+          # and a verification gate should not share a step with its own verdict — nor, since
+          # #7104, with the remediation it triggers: the re-push is planned and graded in one
+          # step and applied in the next, and a second invocation of infra-config-verify.sh
+          # renders the terminal verdict. PR-B is this principle's first fully compliant
+          # instance; infra-config-verify.sh polls, adjudicates and emits a verdict, and never
+          # writes production.
           #
           # WHY A SEPARATE RESPONSE FILE: the red-gate alert step below hardcodes
           # RESP=/tmp/infra-config-status-response.txt and runs `jq -e .` on it. A pre-poller
@@ -731,247 +736,690 @@ jobs:
           # vector for the 2026-05-21 freeze, #4804). Set the boolean input on a
           # manual workflow_dispatch ONLY for a documented first bootstrap.
           ALLOW_MISSING_STATUS: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_missing_status_endpoint }}
+          VERIFY_PASS: "1"
+        run: bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/infra-config-verify.sh"
+
+      # --- #7104 PR-B: the bounded re-push -------------------------------------------------
+      #
+      # SENSING, ADJUDICATION AND ACTUATION ARE SEPARATE STEPS. This is not stylistic: the
+      # workflow ALREADY uses exactly this boundary for its FIRST apply (`Terraform plan`
+      # plans and grades; `Terraform apply` consumes the saved plan), roughly 400 lines
+      # above. Actuating a SECOND production apply from inside the verification step would
+      # have collapsed a boundary this file already relies on for the first one, and it is
+      # what made four separate fail-opens (plan R20.3-R20.6) possible. Under the split they
+      # are dissolved rather than patched: "a write was attempted" becomes a native step
+      # outcome, the 404 escape hatch cannot green a run that already wrote, and boundedness
+      # is structural because a step cannot run twice in a job.
+      - name: Plan and grade the bounded re-push (#7104)
+        id: repush_plan
+        if: steps.infra_config_gate.outputs.repush_needed == 'true'
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
         run: |
           set -euo pipefail
-          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
-          WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain)
-          CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain)
-          CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain)
+          # tfplan-repush.json carries the live prd Doppler token and the webhook HMAC in
+          # CLEARTEXT (terraform's JSON serialization ignores `sensitive`). The trap is the
+          # only form that survives all of the exits below.
+          trap 'rm -f tfplan-repush.json' EXIT
 
-          # Initial delay: the async script + state write + sync + restart
-          # scheduling takes ~5-8s; polling immediately wastes attempt 1.
-          sleep 8
+          if [[ -z "${AWS_ACCESS_KEY_ID:-}" || -z "${AWS_SECRET_ACCESS_KEY:-}" ]]; then
+            echo "::error::S3 backend credentials are empty — the re-push plan would run against no state at all."
+            exit 1
+          fi
+          if [[ ! -s "${CI_SSH_PUB:-}" ]]; then
+            echo "::error::CI_SSH_PUB is empty or missing. -target is transitive and deploy_pipeline_fix reaches hcloud_server.web, whose public_key is file(var.ssh_key_path); variables.tf defaults that to ~/.ssh/id_ed25519.pub, which does not exist on the runner, so the plan would ERROR under -input=false."
+            exit 1
+          fi
 
-          # The webhook returns HTTP 202 the moment the hook TRIGGERS, not when
-          # the async handler finishes writing files (trigger-and-forget,
-          # #4804). So success is NOT "the proxy responded" — it is "the state
-          # JSON proves every file landed". Assert the full invariant:
-          #   exit_code == 0 AND files_failed == 0 AND files_written == files_total
-          #                 AND files_total == EXPECTED (repo FILE_MAP length)
+          # -replace= AND -target= both naming the same resource: -replace alone would plan
+          # the whole graph, -target alone would plan a no-op (nothing changed since apply #1).
+          # -lock-timeout so a cancelled re-push cannot leave the S3 backend lock held and
+          # block every later apply on the sole no-SSH remediation path.
+          rc=0
+          doppler run --name-transformer tf-var -- \
+            terraform plan \
+              -replace=terraform_data.deploy_pipeline_fix \
+              -target=terraform_data.deploy_pipeline_fix \
+              -var="ssh_key_path=${CI_SSH_PUB}" \
+              -no-color -input=false -lock-timeout=120s -out=tfplan-repush || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::The re-push plan failed (rc=$rc). No production write was attempted."
+            exit 1
+          fi
+
+          terraform show -json tfplan-repush > tfplan-repush.json || {
+            echo "::error::Could not serialize the re-push plan for grading. Refusing to apply an ungraded plan."
+            exit 1
+          }
+
+          # THE GRADE. Measured 2026-08-13 against live prd state: this plan replaces exactly
+          # ONE managed resource, terraform_data.deploy_pipeline_fix (delete,create), with
+          # host_creates=0. That number is not decoration — deploy_pipeline_fix depends_on
+          # infra_config_handler_bootstrap, which carries an SSH remote-exec, and -target is
+          # transitive at the resource level, so a plan that reached it would run a
+          # remote-exec against the cloudflared bridge this job tears down three steps later.
+          # EVERY jq CAPTURE BELOW IS `rc=0; X=$(...) || rc=$?`, NEVER a bare `X=$(...)`.
           #
-          # #6178 false-green fix: the prior gate compared files_written vs the
-          # JSON's OWN files_total, which passes on a STALE status from an older,
-          # smaller FILE_MAP (a webhook restart-race left the host at 13/13 clean
-          # while the repo FILE_MAP was 15 — the gate went green while the 2
-          # cutover probe scripts were NEVER delivered). Derive the EXPECTED count
-          # from the repo's infra-config-apply.sh FILE_MAP at verify time: this
-          # still auto-tracks future FILE_MAP additions (not hardcoded) AND now
-          # catches UNDER-delivery (a host that landed fewer files than the repo
-          # expects). handler_bootstrap runs before this push and updates the host
-          # handler to the current FILE_MAP, so the count is aligned on a healthy
-          # apply.
-          # #6594 (PR-B): the adjudication logic lives in a sourceable, TESTED script
-          # (infra-config-gate.sh; infra-config-gate.test.sh drives it). CWD is INFRA_DIR.
-          # shellcheck source=/dev/null
-          source ./infra-config-gate.sh
-          # `|| true`: infra_config_expected_count ends in `grep -c`, which exits 1 on
-          # zero matches. Without this, a zero-row FILE_MAP would abort the step here
-          # under `set -eo pipefail` BEFORE the numeric guard below can emit its
-          # diagnostic (review, code-quality P-low). The guard still fails closed —
-          # an empty EXPECTED_COUNT trips the regex check.
-          EXPECTED_COUNT=$(infra_config_expected_count infra-config-apply.sh || true)
-          if [[ ! "$EXPECTED_COUNT" =~ ^[0-9]+$ || "$EXPECTED_COUNT" -eq 0 ]]; then
-            echo "::error::Could not derive EXPECTED FILE_MAP count from infra-config-apply.sh (got '$EXPECTED_COUNT')."
+          # This block runs under the step's own `set -euo pipefail`, where a simple assignment
+          # from a command substitution takes the substitution's exit status — so a bare
+          # `GRADED=$(jq ...)` on malformed JSON ABORTS THE STEP AT THAT LINE. Every line below
+          # it, including the `::error::` written to explain exactly this case, never executes.
+          # The step then dies mute: `repush_plan` reds with no annotation naming a cause, and
+          # the operator gets the generic red-run surface instead of the diagnosis this code
+          # already contains. The guards were written; they were simply unreachable.
+          #
+          # NOTE ON `.resource_changes[]` WITH NO `?`. The missing `?` is LOAD-BEARING and must
+          # not be "made consistent" with a later edit. On degraded or truncated JSON — no
+          # `resource_changes` key at all — `.resource_changes[]` ERRORS, jq exits non-zero, and
+          # the capture below routes to the fail-closed `::error::`. Adding `[]?` would make it
+          # yield an empty stream instead, so `length` would be 0, the grade would be a clean
+          # numeric zero, and a plan nobody could actually read would grade as "nothing changes".
+          # Fail closed on unreadable input is the whole contract of this step.
+          rc=0
+          GRADED=$(jq '[.resource_changes[] | select(.change.actions != ["no-op"]) | select(.mode == "managed")] | length' tfplan-repush.json) || rc=$?
+          if [[ "$rc" -ne 0 || ! "$GRADED" =~ ^[0-9]+$ ]]; then
+            echo "::error::Could not count changing managed resources in the re-push plan (jq rc=${rc}, got '${GRADED}'). The plan JSON is unreadable or has no resource_changes key. Failing closed rather than applying an ungraded plan."
             exit 1
           fi
-          echo "Expected delivered-file count (repo FILE_MAP): $EXPECTED_COUNT"
-          EXIT_CODE=""
-          FILES_FAILED=""
-          FILES_WRITTEN=""
-          FILES_TOTAL=""
-          for attempt in 1 2 3; do
-            # Truncate per attempt. `curl -s -o` leaves the PRIOR body in place on a transport
-            # failure, so without this a 000 on the last attempt leaves an EARLIER attempt's
-            # valid 200 frame on disk — and the red-gate alert step below reads that same path
-            # and `jq -e .`s it, so it would classify a dead listener as "reachable, activation
-            # failure" and tell the operator app health is unaffected. The pre-apply poller has
-            # done this since it was written; this is the sibling that was missed.
-            : > /tmp/infra-config-status-response.txt
-            HMAC=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= //')
-            HTTP_CODE=$(curl -s -o /tmp/infra-config-status-response.txt -w '%{http_code}' \
-              --max-time 10 \
-              -H "X-Signature-256: sha256=${HMAC}" \
-              -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
-              -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
-              "https://deploy.${APP_DOMAIN_BASE}/hooks/infra-config-status" 2>/dev/null || echo "000")
 
-            if [[ "$HTTP_CODE" == "200" ]]; then
-              EXIT_CODE=$(jq -r '.exit_code' /tmp/infra-config-status-response.txt 2>/dev/null || echo "MISSING")
-              FILES_FAILED=$(jq -r '.files_failed' /tmp/infra-config-status-response.txt 2>/dev/null || echo "MISSING")
-              FILES_WRITTEN=$(jq -r '.files_written' /tmp/infra-config-status-response.txt 2>/dev/null || echo "MISSING")
-              FILES_TOTAL=$(jq -r '.files_total' /tmp/infra-config-status-response.txt 2>/dev/null || echo "MISSING")
-              # Poll fast-path: stop polling once the COUNT invariant holds (single-
-              # sourced in infra-config-gate.sh). The CONTENT assert is deliberately NOT
-              # here — it runs once after the loop (terminal). Asserting content inside
-              # the loop would retry across fresh connector selections = any-of-3 (#6594).
-              if infra_config_count_invariant /tmp/infra-config-status-response.txt infra-config-apply.sh; then
-                echo "Infra-config apply count invariant holds (exit_code=0, files_written=${FILES_WRITTEN}/${FILES_TOTAL}, expected=${EXPECTED_COUNT}, files_failed=0 on attempt $attempt); running terminal adjudication."
-                cat /tmp/infra-config-status-response.txt
-                break
-              fi
-              echo "Attempt $attempt: exit_code=$EXIT_CODE files_failed=$FILES_FAILED files_written=$FILES_WRITTEN files_total=$FILES_TOTAL expected=$EXPECTED_COUNT (retrying in 5s...)"
-            elif [[ "$HTTP_CODE" == "404" ]]; then
-              echo "Attempt $attempt: infra-config-status endpoint not found (HTTP 404)"
-            else
-              echo "Attempt $attempt: HTTP $HTTP_CODE (retrying in 5s...)"
-            fi
-
-            if [[ "$attempt" -lt 3 ]]; then
-              sleep 5
-            fi
-          done
-
-          # --- Final adjudication (fail loud; no silent pass) ---
-          if [[ "$HTTP_CODE" == "404" ]]; then
-            if [[ "$ALLOW_MISSING_STATUS" == "true" ]]; then
-              echo "::warning::infra-config-status returned 404; tolerated via allow_missing_status_endpoint (documented first-bootstrap escape hatch). NOTHING was adjudicated on this run — no count invariant, no content assert, no freshness assertion."
-              # Write the output on this path too. It is the WEAKEST evidence the whole design
-              # can exit green on, and leaving it unwritten made it indistinguishable from
-              # `verified` to every consumer — absence reading as good news.
-              echo "freshness_evidence=none" >> "$GITHUB_OUTPUT"
-            else
-              echo "::error::infra-config-status returned HTTP 404 after all retries — the host's hooks.json predates the status endpoint and the apply did NOT verify. This is the false-success freeze vector (#4804). For a genuine first bootstrap, re-run via workflow_dispatch with allow_missing_status_endpoint=true."
-              cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
-              exit 1
-            fi
-          elif [[ "$HTTP_CODE" == "200" ]]; then
-            # Terminal adjudication (OUTSIDE the retry loop, #6594 PR-B): the count
-            # invariant (#6178 under-delivery guard) AND the per-file content assert —
-            # each delivered file's reported sha256 must equal the repo file the apply
-            # ran from (CWD is the checked-out INFRA_DIR at the applied SHA). A content
-            # mismatch is terminal and names the diverging file. This is what catches a
-            # stale-but-same-count host: 15/15 clean while ci-deploy.sh was never re-
-            # delivered (the exact #6594 false-green). Single-sourced in
-            # infra-config-gate.sh; driven by infra-config-gate.test.sh.
-            if ! adjudicate_infra_config /tmp/infra-config-status-response.txt . infra-config-apply.sh; then
-              cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
-              exit 1
-            fi
-            # #7220 AC20 — FRESHNESS PIN. Everything adjudicated above is satisfiable by a
-            # frame the host published on an EARLIER apply: exit_code=0, files_written=19/19,
-            # matching per-file digests and a populated restarts[] all persist on disk. So
-            # without this the gate proves "some apply reconciled", never "THIS one did" — and
-            # a handler that dies before publishing is exactly what leaves the previous frame
-            # in place, which is the #7220 shape. Same guard as
-            # scripts/followthroughs/ac12-telemetry-positive-control-7103.sh Guard 1.
-            FRAME_START_TS=$(jq -r '.start_ts // empty' /tmp/infra-config-status-response.txt 2>/dev/null || true)
-            if [[ ! "$FRAME_START_TS" =~ ^[0-9]+$ ]]; then
-              echo "::error::infra-config frame carries no numeric start_ts ('${FRAME_START_TS:-<absent>}') — freshness cannot be established, so a stale frame cannot be distinguished from this apply's. Failing closed."
-              cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
-              exit 1
-            fi
-            # #7104 — WHICH freshness assertion applies depends on whether a push was expected.
-            # Validated here as well as at the producer: the sensor can only emit "true"/"false",
-            # but an unset value means the plan step never recorded one, and defaulting THAT to
-            # either arm would pick a verification semantic by accident.
-            if [[ ! "${DPF_REPLACED:-}" =~ ^(true|false)$ ]]; then
-              echo "::error::DPF_REPLACED is '${DPF_REPLACED:-<unset>}', not true/false — the plan step did not record whether terraform_data.deploy_pipeline_fix would be replaced. The gate cannot choose between 'require a newer frame' and 'require an unchanged frame' without it, and guessing either way silently changes what this gate proves. Failing closed."
-              exit 1
-            fi
-
-            if [[ "$DPF_REPLACED" == "true" ]]; then
-              # A push WAS expected, so the #7220 pin applies unchanged: the frame must postdate
-              # this apply. This is the arm the dying-handler shape lives on.
-              if [[ ! "${APPLY_START_EPOCH:-}" =~ ^[0-9]+$ ]]; then
-                echo "::error::APPLY_START_EPOCH was not recorded by the apply step — the freshness pin cannot run, and silently skipping it would restore the stale-frame blind spot. Failing closed."
-                exit 1
-              fi
-              if [[ "$FRAME_START_TS" -lt "$APPLY_START_EPOCH" ]]; then
-                echo "::error::STALE FRAME: the status endpoint reports an apply that started at ${FRAME_START_TS}, BEFORE this workflow's apply began at ${APPLY_START_EPOCH}. The handler did not publish a new frame for this run — every green value above belongs to a previous apply. This is the #7220 failure shape: delivery reported against a frame the dying handler never overwrote."
-                cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
-                exit 1
-              fi
-              echo "Frame freshness OK: start_ts=${FRAME_START_TS} postdates this apply's start (${APPLY_START_EPOCH})."
-              echo "freshness_evidence=verified" >> "$GITHUB_OUTPUT"
-            else
-              # NO push was expected, so no new frame should exist. Requiring a newer frame here
-              # is what reds a correct run (measured: run 31636951749, 2026-08-12). Assert the
-              # frame is UNCHANGED instead. Verdict logic is in infra-config-gate.sh so it is
-              # driven by infra-config-gate.test.sh rather than living only in this YAML.
-              # `|| STABILITY_RC=$?` is the sanctioned capture form (AP-022,
-              # scripts/lint-workflow-errexit-capture.py). The obvious
-              # `X=$(cmd); rc=$?` is an ABORT rather than a capture: `run:` bodies execute as
-              # `bash -e {0}`, so a non-zero adjudication would kill the step ON THE ASSIGNMENT
-              # and every branch below — including the ::error:: that explains why — would never
-              # run. The step would still fail closed, but it would fail mute.
-              STABILITY_RC=0
-              NOW_EPOCH=$(date -u +%s)
-              STABILITY=$(infra_config_frame_stability "$FRAME_START_TS" "${PRE_APPLY_FRAME_START_TS:-}" "${PRE_FRAME_STATUS:-}" "$NOW_EPOCH" "${APPLY_START_EPOCH:-}") || STABILITY_RC=$?
-              if [[ "$STABILITY_RC" -ne 0 ]]; then
-                # Publish the verdict for the red-gate alert. Without it that step re-derives a
-                # diagnosis from the frame, and for these three verdicts the frame looks HEALTHY
-                # (200, parses, fatal_line=0), so it lands in the "no fatal attribution" arm and
-                # tells the operator this is a cosmetic ACTIVATION failure with app health
-                # unaffected — while handing them a Better Stack query that returns nothing
-                # because no fatal occurred. For `unexpected_push` every clause of that is false.
-                echo "stability_verdict=${STABILITY}" >> "$GITHUB_OUTPUT"
-                case "$STABILITY" in
-                  future_frame)
-                    echo "::error::FRAME FROM THE FUTURE: the status endpoint reports an apply that started at ${FRAME_START_TS}, which is more than the 300s skew allowance ahead of this runner's clock (now=${NOW_EPOCH}, delta=$((FRAME_START_TS - NOW_EPOCH))s). On a run that pushed nothing, that is a host-clock anomaly or a fabricated frame — not a delivery this gate can vouch for."
-                    ;;
-                  unexpected_push)
-                    echo "::error::UNEXPECTED PUSH: this run's plan did not replace terraform_data.deploy_pipeline_fix, so no config push should have fired — but the status frame moved forward (pre=${PRE_APPLY_FRAME_START_TS}, post=${FRAME_START_TS}). Either the applied plan diverged from the graded one, or something other than this workflow wrote to the host's sole credential channel. Both are terminal."
-                    ;;
-                  frame_regressed)
-                    echo "::error::FRAME WENT BACKWARDS: the status frame reports an EARLIER start (pre=${PRE_APPLY_FRAME_START_TS}, post=${FRAME_START_TS}) than it did before this apply. That is a state rollback or a host clock jump on a host that cannot be re-provisioned."
-                    ;;
-                  *)
-                    echo "::error::Frame-stability adjudication failed (verdict='${STABILITY}'). Failing closed."
-                    ;;
-                esac
-                cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
-                exit 1
-              fi
-
-              if [[ "$STABILITY" == "stable" ]]; then
-                echo "::notice::No config push was expected on this run (deploy_pipeline_fix was not replaced), so no new status frame should exist. VERIFIED: the frame is unchanged across this apply (start_ts=${FRAME_START_TS}, identical to the pre-apply reading) and its start_ts is not in the future. This establishes that the delivery channel answered and that NO NEW STATUS FRAME WAS PUBLISHED across this apply. Stated that narrowly on purpose: it does NOT prove nothing was written to the host (a seccomp or apparmor merge writes to the host while the frame correctly does not move), and it does NOT re-verify the bytes currently on disk — the frame records the last write, not a fresh read. The per-file digest match is NOT listed as evidence here: deploy_pipeline_fix was not replaced precisely because none of its hashed files changed, so on this arm a content match is guaranteed by construction and proves nothing."
-                echo "freshness_evidence=verified" >> "$GITHUB_OUTPUT"
-              elif [[ "$STABILITY" != "degraded:"* ]]; then
-                # FAIL CLOSED on an unrecognised verdict. This arm exists because the previous
-                # shape was a bare `else`: any token the adjudicator returns with rc 0 that is
-                # not literally "stable" landed in the PASSING branch below. The failing side of
-                # this dispatch already had a fail-closed default; the passing side did not, so
-                # adding one `case` arm to infra_config_frame_stability was enough to create a
-                # brand-new exit-0 path with no edit to this file at all.
-                echo "::error::Frame-stability returned an unrecognised verdict '${STABILITY}'. A verdict this gate cannot interpret must never be treated as a pass. Failing closed."
-                cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
-                exit 1
-              else
-                # degraded:<measured-status>. Pass, but say exactly what was and was not shown —
-                # and escalate out of band, because a ::warning:: in a green run is a log line
-                # nobody reads (the same criticism #7220 AC17 levelled at ::error:: annotations).
-                PRE_WHY="${STABILITY#degraded:}"
-                case "$PRE_WHY" in
-                  unreachable) PRE_DETAIL="the reading taken BEFORE the apply got no response (3 attempts over ~15s). Two readings are consistent with that and this run cannot distinguish them: a transient network blip, OR something restarted or reconfigured the listener outside this workflow — note the apply changed nothing on the host, so a listener that was down before and up after is not explained by this run" ;;
-                  http404)     PRE_DETAIL="the pre-apply reading returned HTTP 404 (no status endpoint) while the post-apply reading returned 200. On a run that pushed nothing the endpoint should not have appeared — treat this as a host changed outside this workflow, or a transient edge 404" ;;
-                  malformed)   PRE_DETAIL="the pre-apply reading returned HTTP 200 but carried no numeric start_ts" ;;
-                  secret_unavailable) PRE_DETAIL="the pre-apply reading never fired because WEBHOOK_DEPLOY_SECRET could not be read from Doppler — the step DID run and DID record that. A prd credential read failing on the workflow that delivers /etc/default/soleur-doppler-token is its own incident, separate from a missing reading" ;;
-                  *)           PRE_DETAIL="the pre-apply reading step did not record a result at all (the step did not run, or its result did not reach this step)" ;;
-                esac
-                echo "::warning::Freshness evidence is DEGRADED on this run. No config push was expected (deploy_pipeline_fix was not replaced) and the status endpoint answered 200 after the apply — but ${PRE_DETAIL}, so this run cannot show the frame was unchanged. VERIFIED: the endpoint answered, the frame parses, its start_ts is not in the future, and no frame postdating this apply was published. NOT VERIFIED: that the frame is byte-identical to the one that preceded this apply. (The per-file digest match is omitted from the VERIFIED list deliberately — on a no-push arm it is guaranteed by construction and is not independent evidence.) The delivery channel is reachable now; this run is recorded in Sentry as op=infra-config-preframe-degraded."
-                echo "freshness_evidence=degraded" >> "$GITHUB_OUTPUT"
-                echo "preframe_status=${PRE_WHY}" >> "$GITHUB_OUTPUT"
-              fi
-            fi
-            echo "Infra-config apply verified: count invariant + per-file content match (#6594 PR-B)."
-          elif [[ "$HTTP_CODE" == "000" || "$HTTP_CODE" == "502" || "$HTTP_CODE" == "503" ]]; then
-            # #7095 R34 — DISTINCT from the 404 branch above, and the distinction is the whole
-            # point. 404 means "the endpoint is not there" (a genuinely old hooks.json), and its
-            # message correctly points at first-bootstrap. 000/502/503 mean the webhook LISTENER
-            # ITSELF IS DOWN — the status endpoint dies WITH the unit, so a bricked webhook
-            # produced the 404 message before this branch existed: it pointed the engineer at
-            # first-bootstrap, and its suggested allow_missing_status_endpoint=true flag would
-            # have SUPPRESSED the very failure. Naming this shape separately is what stops a
-            # bricked remediation channel reading as a stale-host cosmetic.
-            echo "::error::infra-config-status is UNREACHABLE (HTTP $HTTP_CODE) after 3 attempts — this is the webhook listener being DOWN, not a missing endpoint. Do NOT re-run with allow_missing_status_endpoint=true: that flag suppresses exactly this failure."
-            echo "::error::RECOVERY — a plain workflow_dispatch re-run does NOT fix this. -target SELECTS resources, it does not force replacement, and this branch fires after a SUCCESSFUL apply, so the provisioners are clean and their remote-exec never re-runs. The route back is an explicit replace: terraform apply -replace=terraform_data.infra_config_handler_bootstrap (root SSH over the CF Tunnel, which does not depend on the webhook being alive), or a nonce bump in push-infra-config.sh. webhook.service itself is delivered by terraform_data.deploy_pipeline_fix, not by the bridge. The webhook is the ONLY no-SSH remediation channel on this host and the host cannot be replaced (cx33, orderable in 0 of 3 EU DCs), so treat a persistent unreachable state as a P1."
-            cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
+          # The destroy-guard, over the SAME shared filter the first plan uses.
+          rc=0
+          counts=$(jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq" tfplan-repush.json) || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::The destroy-guard filter could not be evaluated against the re-push plan (jq rc=${rc}). The guard did not run, so its silence cannot be read as clean."
             exit 1
+          fi
+          rc=0
+          host_creates=$(jq -r '.host_creates' <<<"$counts") || rc=$?
+          if [[ "$rc" -ne 0 || ! "$host_creates" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed on the re-push plan (jq rc=${rc}, host_creates='${host_creates}') — the guard did not evaluate, so it cannot be read as clean."
+            exit 1
+          fi
+          if [[ "$host_creates" -gt 0 ]]; then
+            echo "::error::The re-push plan would CREATE ${host_creates} hcloud_server resource(s). This path must never birth a host."
+            exit 1
+          fi
+
+          # A REFUSED GRADE MUST NAME ITSELF (#7104 PR-B review).
+          #
+          # Previously any grade other than 1 simply wrote `repush_graded=<n>` and exited 0. The
+          # apply's `if: ... == '1'` then skipped, pass 2 never ran, and the backstop reported
+          # "the recovery steps were skipped or MIS-KEYED" — which is a false diagnosis. Nothing
+          # was mis-keyed: the grader deliberately refused a plan whose blast radius was not the
+          # measured one, and that is the single most important thing to tell the operator.
+          #
+          # Exiting non-zero (rather than annotating and continuing) is what routes this to the
+          # alert step's re-push-plan-failure arm, whose text and remediation lever are already
+          # correct for "no production write was attempted".
+          #
+          # This does NOT weaken Guard 3's two-producer property: loosening this assert still
+          # leaves `if: steps.repush_plan.outputs.repush_graded == '1'` on the apply, so both
+          # producers must be edited to widen what gets written to production.
+          if [[ "$GRADED" -ne 1 ]]; then
+            echo "::error::The re-push plan graded ${GRADED} changing managed resource(s), not the measured 1. REFUSING to apply — this is a deliberate refusal by the grader, NOT a skipped or mis-keyed step. A grade of 0 means -replace produced no change (the resource or its address has drifted); a grade above 1 means the blast radius grew beyond terraform_data.deploy_pipeline_fix. No production write was attempted."
+            exit 1
+          fi
+
+          # PIN THE IDENTITY, NOT ONLY THE CARDINALITY.
+          #
+          # `GRADED == 1` says exactly one managed resource changes; it does NOT say WHICH. A
+          # plan that replaced one entirely different resource would satisfy it. The address set
+          # is already computed here — it used to be printed decoratively — so asserting it costs
+          # nothing and closes the gap between "one thing changes" and "the one thing we measured
+          # changes".
+          rc=0
+          addrs=$(jq -r '[.resource_changes[] | select(.change.actions != ["no-op"]) | select(.mode == "managed") | .address] | sort | join(",")' tfplan-repush.json) || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::Could not extract the changing address set from the re-push plan (jq rc=${rc}). Failing closed."
+            exit 1
+          fi
+          if [[ "$addrs" != "terraform_data.deploy_pipeline_fix" ]]; then
+            echo "::error::The re-push plan changes '${addrs}', not terraform_data.deploy_pipeline_fix. The grade was 1, so cardinality alone would have passed this — the plan targets the wrong resource. Refusing to apply; no production write was attempted."
+            exit 1
+          fi
+
+          # THE OUTPUT WRITE COMES BEFORE ANY REPORTING.
+          #
+          # It used to sit AFTER a decorative `jq -r '... \(.address) ...'` listing, under
+          # `set -e` — so a cosmetic formatting failure in a line whose only job was to pretty-
+          # print would abort the step and veto a correctly-graded recovery. Nothing that can
+          # fail may stand between a passed grade and the output that records it.
+          echo "repush_graded=${GRADED}" >> "$GITHUB_OUTPUT"
+          echo "Re-push plan graded: ${GRADED} changing managed resource(s) (${addrs}), host_creates=0."
+
+      # GUARD 3 — the apply is keyed on the GRADE, never on success().
+      #
+      # Keyed on success(), a grading step whose cardinality assert was written as an `echo`
+      # without `exit 1` — or loosened later by an editor "making it work" — would let this
+      # apply run anyway. Keying on the measured literal means loosening the assert also
+      # requires editing this `if:`, so two independent producers must agree, and a grader
+      # that fails to set the output at all skips the apply and trips the backstop below.
+      - name: Apply the bounded re-push (#7104)
+        id: repush_apply
+        if: steps.repush_plan.outputs.repush_graded == '1'
+        working-directory: ${{ env.INFRA_DIR }}
+        run: |
+          set -euo pipefail
+          # THE REFERENCE PASS 2 BOUNDS THE ADVANCE AGAINST (#7104 P0-A). Stamped BEFORE the
+          # apply, on the RUNNER's clock, so it is not host-selectable — and written to
+          # $GITHUB_OUTPUT before anything that can exit, so the reference survives an apply
+          # that fails. Without it pass 2 can only require the frame to postdate the ORIGINAL
+          # apply, which a frame published moments after that apply began already satisfies
+          # without the re-push having produced it.
+          echo "repush_start_epoch=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+          # No doppler wrapper and no -target/-var here: `terraform apply <planfile>` rejects
+          # both and takes every value from the graded plan file. That is the property the
+          # split buys — what is applied is exactly what was graded.
+          rc=0
+          terraform apply -no-color -input=false -lock-timeout=120s tfplan-repush || rc=$?
+          rm -f tfplan-repush
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::The bounded re-push apply FAILED (rc=$rc). The recovery is spent; pass 2 will render the terminal verdict."
+            exit 1
+          fi
+          echo "Bounded re-push applied."
+
+      # R22.7's free win: the "assert the webhook is alive after every apply" invariant
+      # covered apply #1 only. Under the inline shape that was unfixable; under the split it
+      # is one duplicated step with an `if:`.
+      # THE `id:` IS LOAD-BEARING (#7104 P0-B). Without it this step's outcome is unreadable, and
+      # its failure is therefore indistinguishable downstream from "pass 2 was skipped for some
+      # other reason". Because both this step and pass 2 carry a bare-expression `if:`, both also
+      # receive the implicit `success() &&` — so when this probe fails, pass 2 is SKIPPED rather
+      # than failed, and every alert arm declined in turn until the gate-never-ran catch-all fired
+      # and told the operator the gate never ran on a run whose gate ran, graded, deferred and
+      # re-pushed. The channel this probe guards is the ONLY no-SSH remediation path on a host
+      # that cannot be replaced, so that misroute lands on the one failure with no fallback.
+      - name: Verify webhook is alive post-re-push (#7104)
+        id: webhook_liveness
+        if: steps.repush_apply.outcome == 'success'
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          # "COULD NOT MEASURE" IS NOT "THE CHANNEL IS DOWN" (#7546 review).
+          #
+          # Two defects were measured here, and both fired the highest-severity remedy in the
+          # whole feature on a HEALTHY host.
+          #
+          #   (a) `X=$(doppler ... || doppler ...)` under `set -euo pipefail` ABORTS AT THE
+          #       ASSIGNMENT when both reads fail. The step then dies with NO ::error:: at all --
+          #       measured, it printed nothing and exited 1 -- and three consumers key on the raw
+          #       step outcome. A Doppler blip therefore files a P1 issue stating that the sole
+          #       no-SSH remediation channel of an unreplaceable host has been bricked, and routes
+          #       the operator to a production terraform apply. The instrument failing must never
+          #       be reported as the subject failing.
+          #
+          #   (b) the alive test was a DENY-list -- anything not 000/502/503 read as ALIVE, so
+          #       401, 403, 404 and 500 all certified the listener healthy. A 403 from an expired
+          #       CF Access service token (the very credential read three lines above) is the
+          #       likeliest one. This PR's own headline lesson, argued three times in
+          #       infra-config-gate.test.sh ("INVERTED TO AN ALLOW-LIST ... THIS IS THE IMPORTANT
+          #       PART OF THIS GUARD"), is not applied to the probe the same PR ships.
+          #
+          # So: read credentials WITHOUT aborting, publish a three-valued listener_state, and
+          # allow-list what counts as alive. Both non-up states still red the job -- after writing
+          # production, an unverifiable channel is not an all-clear -- but they are now
+          # DISTINGUISHABLE, and the consumers can stop asserting a cause nobody measured.
+          APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
+          cf_rc=0
+          CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null \
+            || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain 2>/dev/null) || cf_rc=$?
+          CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain 2>/dev/null \
+            || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain 2>/dev/null) || cf_rc=$?
+          [[ -n "${CF_ACCESS_SECRET:-}" ]] && echo "::add-mask::${CF_ACCESS_SECRET}"
+          [[ -n "${CF_ACCESS_ID:-}" ]] && echo "::add-mask::${CF_ACCESS_ID}"
+          if [[ "$cf_rc" -ne 0 || -z "${CF_ACCESS_ID:-}" || -z "${CF_ACCESS_SECRET:-}" ]]; then
+            echo "listener_state=probe_error" >> "$GITHUB_OUTPUT"
+            echo "::error::The post-re-push liveness probe COULD NOT RUN: the CF Access credentials could not be read from Doppler (rc=$cf_rc). This says NOTHING about the webhook listener — do NOT read it as a bricked channel and do NOT run the handler-replace lever on this evidence. The re-push DID apply, so this run still has no delivery verdict. Re-run the workflow once Doppler is reachable; if it recurs, check CF_ACCESS_CLIENT_ID/SECRET in the prd_terraform config."
+            exit 1
+          fi
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+            -H "CF-Access-Client-Id: ${CF_ACCESS_ID}" \
+            -H "CF-Access-Client-Secret: ${CF_ACCESS_SECRET}" \
+            "https://deploy.${APP_DOMAIN_BASE}/hooks/infra-config-status" 2>/dev/null || echo "000")
+          # ALLOW-LIST, not deny-list: only an explicit 200 certifies the listener alive.
+          case "$code" in
+            200)
+              echo "listener_state=up" >> "$GITHUB_OUTPUT"
+              echo "Webhook listener alive after the re-push (HTTP $code)."
+              ;;
+            401|403)
+              echo "listener_state=probe_error" >> "$GITHUB_OUTPUT"
+              echo "::error::The post-re-push liveness probe was REJECTED BY CF ACCESS (HTTP $code). That is our credential, not the host's health — do NOT read it as a bricked channel and do NOT run the handler-replace lever on this evidence. The re-push DID apply, so this run still has no delivery verdict. Rotate or re-check CF_ACCESS_CLIENT_ID/SECRET and re-run."
+              exit 1
+              ;;
+            *)
+              echo "listener_state=down" >> "$GITHUB_OUTPUT"
+              echo "::error::The webhook listener is DOWN (HTTP $code) after the re-push apply — the re-push bricked the only no-SSH remediation channel."
+              exit 1
+              ;;
+          esac
+
+      # PASS 2 — the terminal verdict, rendered by a second invocation of the SAME artifact.
+      - name: Verify infra-config apply succeeded (pass 2, post-re-push) (#7104)
+        id: infra_config_gate_pass2
+        if: steps.repush_apply.outcome == 'success'
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+          # HARDCODED false, and this one line is R20.4's entire fix. The escape hatch is a
+          # first-bootstrap affordance; letting it green a run that has ALREADY written
+          # production would be strictly worse than the race it recovers from. Pass 2 is a
+          # different step and never reads the dispatch input.
+          ALLOW_MISSING_STATUS: "false"
+          VERIFY_PASS: "2"
+          # The baseline is pass 1's OBSERVED start_ts, handed over as an argument rather
+          # than re-read. Both operands are then host-clock, so skew cancels.
+          REPUSH_BASELINE_TS: ${{ steps.infra_config_gate.outputs.observed_start_ts }}
+          # The ABSOLUTE reference (#7104 P0-A). Runner-clock, stamped by the apply step before
+          # it ran, so the host cannot select it. Pass 2 requires the frame to postdate THIS —
+          # not merely to be larger than the baseline, which any unrelated advance satisfies.
+          # A missing value degrades to APPLY_START_EPOCH inside the script, which is weaker but
+          # still sound, and the script names which reference it used.
+          REPUSH_START_EPOCH: ${{ steps.repush_apply.outputs.repush_start_epoch }}
+          # DPF_REPLACED is deliberately NOT re-declared here. The `Terraform plan` step
+          # exports it to $GITHUB_ENV, so it reaches this step as a job-level env var
+          # already. An `env:` entry sourcing it from a step output would need that step to
+          # carry an `id:` — it does not — and the expression would silently resolve to the
+          # EMPTY STRING and OVERRIDE the working job env, failing pass 2 closed on
+          # "DPF_REPLACED is '', not true/false". That mistake was made and caught here
+          # while writing this step; it is the exact class Guard 1 pins, because actionlint
+          # reports nothing for it.
+        run: bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/infra-config-verify.sh"
+
+      # #7104 PR-B review — RECLAIM THE BINARY PLAN ON EVERY PATH, INCLUDING THE SKIPPED ONES.
+      #
+      # `repush_plan` traps only `tfplan-repush.json` (the cleartext-credential render), and
+      # `repush_apply` deletes the binary `tfplan-repush` inline — but ONLY when it runs. On the
+      # grade-refused path the apply is skipped by its own `if:`, so the binary plan survives on
+      # the runner for the remainder of the job. It is a terraform plan file for production
+      # infrastructure: it encodes the full resource diff and is a saved-plan input that
+      # `terraform apply <planfile>` will consume without re-grading.
+      #
+      # `if: always()` and not `!cancelled()`: this deletes a file and nothing else, so running
+      # it on a cancelled run is strictly good. `rm -f` is already idempotent, so the step is a
+      # no-op on the overwhelming majority of runs where no re-push was ever planned.
+      # THE RECLAIM COVERED ONLY THE FILES THIS PASS AUTHORED (#7104 PR-B review, security).
+      #
+      # The FIRST apply's artifacts have the same shape and worse coverage, and the asymmetry was
+      # invisible because each half looked complete on its own:
+      #
+      #   tfplan.json  `rm -f` at the END of the plan step, with FIVE `exit 1` paths between its
+      #                creation and that line — so it survives every failure, which is exactly
+      #                when a plan for production infrastructure is most interesting. Its own
+      #                step comment claims the window is closed.
+      #   tfplan       the BINARY saved plan. Never reclaimed at all. `terraform apply <planfile>`
+      #                consumes it without re-grading, so it is a pre-authorised production write
+      #                sitting on the runner.
+      #   tfplan.txt   neither reclaimed NOR gitignored — the .gitignore entry `tfplan` matches a
+      #                file named exactly `tfplan`, not this one.
+      #
+      # `if: always()` and not `!cancelled()`: this deletes files and nothing else, so running it
+      # on a cancelled run is strictly good. `rm -f` is idempotent, so it is a no-op on the runs
+      # where a given artifact was never created.
+      - name: Reclaim the plan artifacts (#7104)
+        if: always()
+        working-directory: ${{ env.INFRA_DIR }}
+        run: |
+          set -uo pipefail
+          rm -f tfplan-repush tfplan-repush.json tfplan tfplan.json tfplan.txt
+          exit 0
+
+      # THE BACKSTOP. Pass 1's soft-fail is only safe because of this step.
+      #
+      # If a consumer `if:` is ever mis-keyed — a renamed step id, a typo'd output name —
+      # every re-push step SKIPS, pass 2 never runs, and the five success()-gated steps
+      # downstream re-arm: one closes the founder's GitHub issues, one swaps the running
+      # container. The job would go green having verified nothing, which is precisely
+      # #6594's latched false-green reintroduced by its own remedy. actionlint cannot catch
+      # it (a mistyped output name types as {string => string}, so every name is valid, and
+      # the actionlint job is not a required check), so the guarantee has to be here.
+      - name: Terminal verdict backstop (#7104)
+        if: always()
+        env:
+          PASS1_VERDICT: ${{ steps.infra_config_gate.outputs.verdict }}
+          PASS2_VERDICT: ${{ steps.infra_config_gate_pass2.outputs.verdict }}
+          GATE_OUTCOME: ${{ steps.infra_config_gate.outcome }}
+          # #7104 P0-B — so the backstop can name WHICH step failed instead of asserting that the
+          # recovery steps were "skipped or mis-keyed" on three paths where they ran and reported.
+          REPUSH_PLAN_OUTCOME: ${{ steps.repush_plan.outcome }}
+          REPUSH_APPLY_OUTCOME: ${{ steps.repush_apply.outcome }}
+          WEBHOOK_LIVENESS_OUTCOME: ${{ steps.webhook_liveness.outcome }}
+          WEBHOOK_LISTENER_STATE: ${{ steps.webhook_liveness.outputs.listener_state }}
+          # #7546 review: without this the backstop could not enumerate "pass 2 RAN and
+          # failed" -- the EXPECTED red path of this whole feature -- so that state fell to
+          # the catch-all below, whose text asserts a wiring bug that did not happen. The
+          # alert step got the fourth arm; this step did not.
+          PASS2_OUTCOME: ${{ steps.infra_config_gate_pass2.outcome }}
+        run: |
+          set -euo pipefail
+          # A step that FAILED has already reddened the job; this backstop exists for the
+          # case where everything reports success and no pass ever adjudicated.
+          # NULL TRAP, INVERTED (#7546 review). This was `!= "success"`, and `steps.<id>.outcome`
+          # resolves to the EMPTY STRING when the id is renamed or typo'd -- which is the single
+          # failure mode this backstop exists to catch, as its own comments say twice. `'' !=
+          # "success"` is TRUE, so the backstop exited 0 announcing "the job is already red" on a
+          # run that was GREEN, and every arm below became unreachable. Permanently and silently,
+          # via the one spelling this PR bans everywhere else. Measured: GATE_OUTCOME="" took the
+          # early exit. Enumerate the states, and make the unreadable one LOUD.
+          if [[ -z "${GATE_OUTCOME:-}" ]]; then
+            echo "::error::The backstop cannot read the gate step's outcome (it is empty). That means steps.infra_config_gate has been renamed or mis-keyed, so every downstream consumer gated on its outputs is silently comparing against the empty string and this job may be green having verified nothing. actionlint cannot see this. Failing closed."
+            exit 1
+          fi
+          if [[ "$GATE_OUTCOME" == "failure" || "$GATE_OUTCOME" == "cancelled" || "$GATE_OUTCOME" == "skipped" ]]; then
+            echo "The gate step did not succeed (outcome=$GATE_OUTCOME); the job is already red. Backstop has nothing to add."
+            exit 0
+          fi
+          if [[ "$PASS1_VERDICT" == "verified" || "$PASS2_VERDICT" == "verified" ]]; then
+            echo "Terminal verdict rendered (pass1='${PASS1_VERDICT:-<none>}' pass2='${PASS2_VERDICT:-<none>}')."
+            exit 0
+          fi
+
+          # THE 404 ESCAPE HATCH IS A TERMINAL STATE, AND A DISTINCT ONE (#7104 PR-B review).
+          #
+          # `unadjudicated` is what the verify script now emits on the documented first-bootstrap
+          # arm, where it tolerates a 404 and checks nothing. Before, that arm fell through to
+          # `verdict=verified` and this backstop waved it past as a full pass.
+          #
+          # It is handled HERE, above the mis-keyed error, and NOT by redding the run. Two
+          # reasons, and the second is binding:
+          #
+          #   * the message below would be false. It names "the recovery steps were skipped or
+          #     mis-keyed", and nothing was mis-keyed — an operator deliberately set
+          #     allow_missing_status_endpoint on a workflow_dispatch. That is the same
+          #     misdiagnosis-by-fallthrough this PR fixes in the refused-grade path.
+          #   * failing closed here would put a blocking assertion inside the SOLE no-SSH
+          #     delivery path for a host that cannot be re-provisioned (cx33, 0/6 stock), which
+          #     is precisely what the CTO ruling on this issue forbids. The escape hatch exists
+          #     for a bootstrap where the endpoint cannot yet answer; redding it would make the
+          #     flag unusable for the one situation it was built for.
+          #
+          # So: exit 0, but say plainly that nothing was verified. The flag is unreachable on a
+          # routine `push` apply (its env expression is gated on the dispatch input), so this
+          # cannot silently become the everyday path.
+          if [[ "$PASS1_VERDICT" == "unadjudicated" || "$PASS2_VERDICT" == "unadjudicated" ]]; then
+            echo "::warning::This run did NOT verify the config apply. The status endpoint returned 404 and allow_missing_status_endpoint was set, so the gate tolerated it and adjudicated nothing — no count invariant, no content assert, no freshness assertion. This is the documented first-bootstrap escape hatch and it is not a failure, but it is also not evidence that the configuration is live. Re-run without the flag once the host publishes a status frame."
+            exit 0
+          fi
+          # BRANCH ON THE RE-PUSH OUTCOMES BEFORE NARRATING (#7104 P0-B / S8).
+          #
+          # The single message below named "the recovery steps were skipped or mis-keyed" on three
+          # paths where nothing was mis-keyed: the liveness probe failed, the apply failed, or the
+          # plan refused to grade. Each of those is a step that RAN and reported, and each has its
+          # own lever. Naming an unmeasured cause is the defect this whole PR is about, and the
+          # backstop is the last thing an operator reads on a red run.
+          #
+          # Every arm still exits 1 — the job verified nothing on all of them. Only the diagnosis
+          # differs, which is the entire point.
+          # A FAILED PROBE IS NOT A DOWN CHANNEL (#7546 review). Both states arrive here as
+          # outcome=failure; only listener_state tells them apart, and the remedy differs
+          # completely -- one routes to a production terraform apply, the other must not.
+          if [[ "${WEBHOOK_LISTENER_STATE:-}" == "probe_error" ]]; then
+            echo "::error::NO TERMINAL VERDICT. The bounded re-push applied, and the post-re-push liveness probe then COULD NOT RUN (credential read or CF Access rejection) — so nothing measured the config channel. This is NOT evidence the channel is down: do NOT run the handler-replace lever on it. This run wrote production and no verdict exists for it. Re-run the workflow once the probe's credentials are readable."
+            exit 1
+          fi
+          if [[ "${WEBHOOK_LIVENESS_OUTCOME:-}" == "failure" ]]; then
+            echo "::error::NO TERMINAL VERDICT, and the config channel is DOWN. The bounded re-push applied and the post-re-push liveness probe then found the webhook listener not responding, which SKIPS pass 2 (it is skipped, not failed). Nothing was mis-keyed. This run wrote production and no verdict exists for it. Route back: (run from apps/web-platform/infra) doppler run --name-transformer tf-var -- terraform apply -replace=terraform_data.infra_config_handler_bootstrap -target=terraform_data.infra_config_handler_bootstrap -input=false -lock-timeout=120s . Do NOT run terraform apply -replace=hcloud_server.web -- that host cannot be re-provisioned (cx33, 0/6 stock)."
+            exit 1
+          fi
+          if [[ "${REPUSH_APPLY_OUTCOME:-}" == "failure" || "${REPUSH_PLAN_OUTCOME:-}" == "failure" ]]; then
+            echo "::error::NO TERMINAL VERDICT was rendered (pass1='${PASS1_VERDICT:-<none>}' pass2='${PASS2_VERDICT:-<none>}'). The re-push itself failed (plan='${REPUSH_PLAN_OUTCOME:-<none>}' apply='${REPUSH_APPLY_OUTCOME:-<none>}'), so pass 2 correctly never ran. Nothing was mis-keyed. The bounded recovery is spent — it is one attempt by construction, so re-running does not retry it."
+            exit 1
+          fi
+          if [[ "${REPUSH_PLAN_OUTCOME:-}" == "success" && "${REPUSH_APPLY_OUTCOME:-}" == "skipped" ]]; then
+            echo "::error::NO TERMINAL VERDICT was rendered (pass1='${PASS1_VERDICT:-<none>}' pass2='${PASS2_VERDICT:-<none>}'). The re-push was PLANNED but not applied, which means the grading step did not return the expected single-resource cardinality — the apply is keyed on the measured grade, never on success(), so it correctly refused. Nothing was mis-keyed and NOTHING was written. Read the grade printed by the plan step in this run."
+            exit 1
+          fi
+          if [[ "${PASS2_OUTCOME:-}" == "failure" ]]; then
+            echo "::error::NO TERMINAL VERDICT was rendered (pass1='${PASS1_VERDICT:-<none>}' pass2='${PASS2_VERDICT:-<none>}'). The re-push applied and pass 2 RAN and rendered a non-verified verdict. Nothing was mis-keyed and nothing is skipped: this is the expected red path when the recovery writes production and the host still does not publish a frame that proves the delivery. The bounded recovery is spent. Read pass 2's own ::error:: in this run -- it distinguishes 'the frame did not move' from 'the frame moved but predates the re-push', and those have different levers."
+            exit 1
+          fi
+          echo "::error::NO TERMINAL VERDICT was rendered (pass1='${PASS1_VERDICT:-<none>}' pass2='${PASS2_VERDICT:-<none>}'). Pass 1 deferred to a re-push and pass 2 never returned a verdict, and the re-push steps report plan='${REPUSH_PLAN_OUTCOME:-<none>}' apply='${REPUSH_APPLY_OUTCOME:-<none>}' liveness='${WEBHOOK_LIVENESS_OUTCOME:-<none>}' — no enumerated failure explains that combination, so the recovery steps were skipped or mis-keyed. This job verified NOTHING; failing closed rather than letting the downstream success()-gated steps re-arm."
+          exit 1
+
+      # --- #7104 PR-B: observability for a recovery that fires -----------------------------
+      #
+      # A SEPARATE STEP, deliberately. R17.6 flags that the gate step's credential surface is
+      # already unlisted, and it now also holds prod-write Terraform credentials; putting
+      # SENTRY_* and GH_TOKEN on it would widen that further. Keeping escalation out of the
+      # step that renders the verdict is the same principle the split itself encodes.
+      #
+      # `!cancelled()` and an ENUMERATED outcome rather than `success()`: this report matters
+      # MOST on the terminal-red path, where the gate exits 1. A success()-gated report would be
+      # dropped on exactly the runs worth counting. "Attempted" is a native step outcome under
+      # the split, so no output plumbing and no ordering rule is needed.
+      #
+      # NOT `!= 'skipped'` (#7104 PR-B review): that spelling inverts the null trap. A renamed or
+      # typo'd `repush_apply` id resolves to the EMPTY STRING, and `'' != 'skipped'` is TRUE, so
+      # the mis-keyed case would emit a "re-push attempted" Sentry event on EVERY run — including
+      # the overwhelming majority where no re-push happened. Enumerating the two real outcomes
+      # fails closed on a rename instead of open.
+      - name: Report the bounded re-push to Sentry (#7104)
+        if: >-
+          !cancelled()
+          && (steps.repush_apply.outcome == 'success' || steps.repush_apply.outcome == 'failure')
+        env:
+          SENTRY_INGEST_DOMAIN: ${{ secrets.SENTRY_INGEST_DOMAIN }}
+          SENTRY_PROJECT_ID: ${{ secrets.SENTRY_PROJECT_ID }}
+          SENTRY_PUBLIC_KEY: ${{ secrets.SENTRY_PUBLIC_KEY }}
+          APPLY_OUTCOME: ${{ steps.repush_apply.outcome }}
+          PASS2_OUTCOME: ${{ steps.infra_config_gate_pass2.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_SHA: ${{ github.sha }}
+        run: |
+          # Degrade-never-block, same contract as the sibling report step. `set +e` rather
+          # than the step-level error-tolerance key, which AC18 bans outright by literal.
+          set +e
+          set -uo pipefail
+          if [[ -z "${SENTRY_INGEST_DOMAIN:-}" || -z "${SENTRY_PROJECT_ID:-}" || -z "${SENTRY_PUBLIC_KEY:-}" ]]; then
+            echo "::warning::Sentry is not configured for this repo, so the re-push event could not be sent."
+            exit 0
+          fi
+          # `feature` is REQUIRED, not decoration: every rule in issue-alerts.tf is a
+          # filter_match="all" AND over a `feature` + `op` pair, so an event without it cannot
+          # match any rule that exists or any added later.
+          #
+          # NOTE, so this is not over-read: NO sentry_issue_alert rule currently matches
+          # op=infra-config-repush-attempted, exactly as #7527 already records for
+          # op=infra-config-preframe-degraded. This is a breadcrumb and a counter input, NOT
+          # an alert route. Claiming otherwise would be the AP-021 violation this plan exists
+          # to avoid; the paging rule belongs to #7527's scope.
+          payload=$(jq -nc \
+            --arg msg "infra-config bounded re-push attempted (apply=${APPLY_OUTCOME}, verify=${PASS2_OUTCOME:-not-reached})" \
+            --arg apply "${APPLY_OUTCOME}" \
+            --arg verify "${PASS2_OUTCOME:-not-reached}" \
+            --arg url "${RUN_URL}" \
+            --arg sha "${RUN_SHA}" \
+            '{level:"warning",
+              message:$msg,
+              release:$sha,
+              tags:{feature:"infra-config", op:"infra-config-repush-attempted", apply_outcome:$apply, verify_outcome:$verify},
+              extra:{run_url:$url, sha:$sha}}')
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+            -X POST "https://${SENTRY_INGEST_DOMAIN}/api/${SENTRY_PROJECT_ID}/store/" \
+            -H "Content-Type: application/json" \
+            -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=${SENTRY_PUBLIC_KEY}" \
+            -d "$payload" 2>/dev/null || echo "000")
+          if [[ "$code" =~ ^2 ]]; then
+            echo "Sentry re-push event accepted (HTTP ${code}, op=infra-config-repush-attempted)."
           else
-            echo "::error::infra-config-status did not respond with HTTP 200 after 3 attempts (last HTTP $HTTP_CODE). The handler is async behind a 202 trigger-and-forget, so a non-responding status endpoint cannot be treated as success."
-            cat /tmp/infra-config-status-response.txt >&2 2>/dev/null || true
-            exit 1
+            echo "::error::The re-push Sentry event could not be delivered (HTTP ${code}). A production write happened on this run and the out-of-band record of it did not."
           fi
+          exit 0
+
+      # The ledger body is composed in its OWN step, never batched with the `gh issue edit`
+      # that consumes it: a write and a read of the same file in one step is the documented
+      # 2026-05-12 race. Built with printf to a temp file rather than a flush-left heredoc
+      # inside `run: |`, which YAML block-scalar indentation mangles.
+      - name: Compose the re-push ledger entry (#7104)
+        id: ledger_body
+        # Enumerated outcomes, not `!= 'skipped'` — same inverted-null-trap fix as the two steps
+        # above: a renamed `repush_apply` id yields '', and `'' != 'skipped'` is TRUE, which would
+        # append a ledger row on every ordinary run.
+        if: >-
+          !cancelled()
+          && (steps.repush_apply.outcome == 'success' || steps.repush_apply.outcome == 'failure')
+          && github.event_name != 'workflow_dispatch'
+        env:
+          APPLY_OUTCOME: ${{ steps.repush_apply.outcome }}
+          PASS2_OUTCOME: ${{ steps.infra_config_gate_pass2.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_SHA: ${{ github.sha }}
+        run: |
+          # `set +e` and a terminal `exit 0`, matching the consuming step below (#7104 PR-B
+          # review). This step is pure BOOKKEEPING: a failed `mktemp`, a full disk, or a
+          # `$GITHUB_OUTPUT` write error must not convert a run that SUCCESSFULLY self-healed
+          # production into a red job. Without these it does exactly that — the step runs under
+          # the default `bash -eo pipefail`, so any one of those aborts it, and its sibling
+          # `Maintain the re-push ledger issue` already carries both for precisely this reason.
+          #
+          # NOT `continue-on-error: true`, which is the obvious-looking alternative and is wrong
+          # here: it pins the step's `conclusion` to `success` while leaving `outcome` as the real
+          # value, and scripts/followthroughs/moved-block-wedge-5887.sh reads `conclusion` — so it
+          # would feed that follow-through GREEN over a red. AC18 also bans the key by literal.
+          set +e
+          set -uo pipefail
+          f="$(mktemp)" || { echo "::warning::Could not allocate the ledger scratch file; skipping the ledger row for this run."; exit 0; }
+          {
+            printf '%s\n' "This issue is a running tally of every time the infra-config apply gate"
+            printf '%s\n' "recovered itself with a bounded re-push (#7104). It is created CLOSED and is"
+            printf '%s\n' "only ever edited, so it does not notify."
+            printf '%s\n\n' "It is a counter you can look at, not an alert. The run that produced each row also files an infra-config-recovery-notice issue, which is the surface that DOES notify."
+            printf '%s\n' "| when (UTC) | run | sha | apply | verify |"
+            printf '%s\n' "|---|---|---|---|---|"
+            printf '| %s | %s | %s | %s | %s |\n' \
+              "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${RUN_URL}" "${RUN_SHA:0:12}" \
+              "${APPLY_OUTCOME}" "${PASS2_OUTCOME:-not-reached}"
+          } >> "$f"
+          echo "path=$f" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      # THE GATE WAS VACUOUS, AND THIS PASS INTRODUCED IT (#7104 PR-B review).
+      #
+      # `steps.ledger_body.outcome == 'success'` can never be false: that step now runs `set +e`
+      # with a terminal `exit 0` — deliberately, so a bookkeeping failure cannot red a run that
+      # successfully self-healed production — INCLUDING on its own mktemp-failure arm, which
+      # exits 0 having written no `path` output at all. So this step ran on every path and then
+      # consumed an empty BODY_PATH.
+      #
+      # Gate on the OUTPUT instead. It is written only on the arm that actually composed a row,
+      # which is the condition this `if:` was always meant to express.
+      - name: Maintain the re-push ledger issue (#7104)
+        if: always() && steps.ledger_body.outputs.path != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BODY_PATH: ${{ steps.ledger_body.outputs.path }}
+          LEDGER_LABEL: infra-config-recovery-ledger
+          LEDGER_TITLE: "infra-config bounded re-push ledger (#7104)"
+        run: |
+          # Never reds a run that actually recovered: a bookkeeping failure must not convert a
+          # successful self-heal into a red job.
+          set +e
+          set -uo pipefail
+
+          # The label lives OUTSIDE the ci/ namespace (R14.2) and is created here rather than
+          # assumed.
+          #
+          # This ledger is the COUNTER, not the notification. #7104 PR-B review established that
+          # a green recovered run must also reach the operator, and that is handled by the
+          # `recovered` reach mode of scripts/infra-config-red-alert.sh — which files under its
+          # own infra-config-recovery-notice label at p2, deliberately NOT the p1 ci/infra-config-red
+          # dedupe slot. (An earlier revision of this comment said that helper was "deliberately
+          # NOT touched" because it hardcoded its labels; it no longer hardcodes them, and the
+          # separation that mattered — a self-heal must not swallow a real P1 — is now enforced
+          # by the per-mode dedupe key rather than by declining to reuse the helper at all.)
+          gh label create "$LEDGER_LABEL" \
+            --description "Running tally of infra-config gate self-recoveries (#7104). Never pages." \
+            --color ededed 2>/dev/null || true
+
+          # --state all: a ledger created closed is invisible to the default open-only search,
+          # so a narrower query would file a duplicate on every recovery.
+          # FAIL-CLOSED ON AN UNREADABLE LIST (#7546 review). This step runs under `set +e`, so a
+          # transient `gh issue list` failure yielded num="" -- INDISTINGUISHABLE from "no ledger
+          # exists" -- and the create branch below then filed a SECOND ledger under the same
+          # label. Subsequent runs `--limit 1` (no --sort, so newest-created wins) and append to
+          # the new one; the prior tally is orphaned under the same label and nothing detects it.
+          #
+          # The EDIT branch twenty lines down was hardened for exactly this transient in
+          # f4475c89b (`prev_rc` captured, refuses on an unreadable read). The READ that decides
+          # CREATE-vs-EDIT got neither. Same failure mode, same blast-radius class, opposite
+          # handling -- and losing one row is already this design's stated preference over
+          # corrupting the tally.
+          list_rc=0
+          num=$(gh issue list --state all --label "$LEDGER_LABEL" --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null) || list_rc=$?
+          if [[ "$list_rc" -ne 0 ]]; then
+            echo "::warning::Could not read the re-push ledger (gh issue list rc=$list_rc). Skipping this run's row rather than risking a SECOND ledger under the same label — an unreadable list is not evidence that no ledger exists. The row is lost; the tally is not."
+            exit 0
+          fi
+          if [[ -z "$num" ]]; then
+            url=$(gh issue create --title "$LEDGER_TITLE" --label "$LEDGER_LABEL" --body-file "$BODY_PATH" 2>/dev/null)
+            num="${url##*/}"
+            if [[ -z "$url" || -z "$num" ]]; then
+              echo "::warning::Could not create the re-push ledger issue. This run's row is LOST; the recovery itself is unaffected."
+              exit 0
+            fi
+            # Created CLOSED. This is what buys "the ledger never notifies" by construction:
+            # GitHub notifies on comments and state changes, not on body or title edits.
+            #
+            # THE CLOSE IS CHECKED (#7104 PR-B review). A failed `gh issue close` leaves the
+            # ledger OPEN, which silently breaks the "created closed so it never notifies"
+            # invariant this whole design rests on — and the next recovery would then edit an
+            # OPEN issue, notifying the founder for a run that worked.
+            if ! gh issue close "$num" 2>/dev/null; then
+              echo "::warning::The ledger issue #${num} was created but could NOT be closed. It is OPEN, which breaks the never-notifies invariant — close it manually or the next recovery will notify."
+            fi
+            echo "Ledger issue created and closed: ${url:-<none>}"
+          else
+            # THE APPEND WAS DESTRUCTIVE (#7104 PR-B review, silent-failure #2/#3).
+            #
+            # Under `set +e`, a failed `gh issue view` yielded prev='' — and the code below then
+            # wrote a file containing ONE ROW and handed it to `gh issue edit --body-file`, which
+            # REPLACES the body. Every prior row was deleted, the step printed "appended", and it
+            # exited 0. #7576 is explicitly blocked on the readings this artifact collects, so a
+            # transient API blip could silently destroy the evidence the follow-up depends on
+            # while reporting success.
+            #
+            # Fail closed on an unreadable or empty previous body: a ledger row is bookkeeping,
+            # and losing ONE row is strictly better than overwriting all of them.
+            prev_rc=0
+            prev=$(gh issue view "$num" --json body --jq .body 2>/dev/null) || prev_rc=$?
+            if [[ "$prev_rc" -ne 0 || -z "$prev" ]]; then
+              echo "::warning::Could not read the existing ledger body for #${num} (rc=${prev_rc}, ${#prev} bytes). REFUSING to edit it: writing this run's row alone would REPLACE every prior row, and #7576 is blocked on those readings. This run's row is lost; the ledger is intact."
+              exit 0
+            fi
+            # The header is the ledger's own self-description and is present in every body this
+            # step has ever written. If it is absent, what came back is not the ledger — an error
+            # page, a truncation, a different issue — and appending to it would still destroy the
+            # real one.
+            if ! grep -qF 'running tally of every time the infra-config apply gate' <<<"$prev"; then
+              echo "::warning::The body read back from #${num} does not carry the ledger header, so it is not the ledger this step maintains. REFUSING to overwrite it."
+              exit 0
+            fi
+            merged="$(mktemp)" || { echo "::warning::Could not allocate the ledger merge file; this run's row is lost and the ledger is intact."; exit 0; }
+            printf '%s\n' "$prev" > "$merged"
+            tail -n 1 "$BODY_PATH" >> "$merged"
+            # The merged body must be strictly LONGER than what it replaces. An append that
+            # shrinks the ledger is a truncation wearing an append's clothing.
+            if [[ "$(wc -c < "$merged")" -le "${#prev}" ]]; then
+              echo "::warning::The merged ledger body is not longer than the existing one; refusing to edit rather than risk truncating the tally."
+              exit 0
+            fi
+            if gh issue edit "$num" --body-file "$merged" 2>/dev/null; then
+              echo "Ledger issue #${num} appended."
+            else
+              echo "::warning::Could not append this run's row to ledger issue #${num}. The row is lost; the ledger is intact."
+            fi
+          fi
+          exit 0
 
       # #7104 — a green run with DEGRADED freshness evidence must still reach someone.
       #
@@ -987,10 +1435,16 @@ jobs:
       # prod-write Terraform credentials; adding Sentry keys to it widens that further. Adding a
       # new step is not a re-wiring of the seven existing status-keyed steps.
       #
-      # It does NOT use infra_config_red_alert: that helper hardcodes the message prefix
-      # "infra-config delivery gate RED: " and files a ci/infra-config-red issue. Both are
-      # measurably false here — the gate is GREEN. Keeping that helper monotonic (it means red)
-      # matters more than reusing it.
+      # It does NOT use infra_config_red_alert. That helper's red modes prefix the Sentry message
+      # "infra-config delivery gate RED: " and file a p1 ci/infra-config-red issue, and both are
+      # measurably false here — the gate is GREEN and nothing was written.
+      #
+      # It also does not use the helper's `recovered` mode (added in #7104 PR-B for the green
+      # SELF-HEAL path), and the distinction is worth stating because the two look adjacent: that
+      # mode reports a run in which a PRODUCTION WRITE happened, which is what earns a durable
+      # operator-visible record. This step reports thinner-than-usual EVIDENCE on a run that wrote
+      # nothing. Filing an issue per pre-apply network blip is the notification an operator learns
+      # to scroll past, so this one stays a Sentry event only.
       - name: Report degraded freshness evidence (#7104)
         if: always() && steps.infra_config_gate.outputs.freshness_evidence == 'degraded'
         env:
@@ -1062,8 +1516,57 @@ jobs:
       # `failure() && outcome != 'success'` reads as "the job failed and the gate did not pass",
       # which is the actual alerting condition. `failure()` is false on cancellation, so a
       # cancelled run does not page; `!= 'success'` covers both `failure` and `skipped`.
+      #
+      # #7104 PR-B — RE-KEYED ONTO THE TERMINAL VERDICT, because the step-outcome form above
+      # became false the moment pass 1 gained a soft-fail. Pass 1 now writes `verdict=pending`
+      # and exits **0** on the recoverable shape, so `steps.infra_config_gate.outcome` is
+      # `success` on EVERY re-push path — and the condition `outcome != 'success'` was therefore
+      # FALSE on all four new terminal-red paths: a failed re-push plan, a failed production
+      # apply, a red pass 2, and the backstop firing. Measured: this step was skipped on each,
+      # so the founder's only notification route went dark on exactly the failures this PR adds.
+      # That is the same outcome the comment above describes ("increasing the share of red runs
+      # that notify nobody"), reintroduced by a different mechanism.
+      #
+      # Keying on the VERDICT rather than on which step reddened is what makes this robust to
+      # the next step added: `verdict` is the contract both passes render, and an unset output
+      # (the gate never ran) is `''`, which `!= 'verified'` correctly treats as alertable. It
+      # also needs no `id:` on the backstop step, which has none.
+      # #7104 PR-B REVIEW — AND A GREEN RECOVERED RUN MUST NOTIFY SOMEONE TOO.
+      #
+      # The condition above was `failure() && ...`, so it could only ever fire on a red run. But
+      # the bounded re-push writes PRODUCTION on the sole no-SSH remediation channel and then, on
+      # the path this PR exists to create, SUCCEEDS — and the run ends green. On that path the
+      # operator was told nothing: the Sentry breadcrumb below is tagged
+      # op=infra-config-repush-attempted, which this file's own comment records as matching NO
+      # sentry_issue_alert rule, and the ledger issue is created CLOSED and only ever body-edited,
+      # which is by construction a surface that never notifies. An unattended production write
+      # that nobody is told about is the same invisibility #7220 exists to end, one path over.
+      #
+      # WHY THE `outcome == 'success' || outcome == 'failure'` FORM AND NOT `!= 'skipped'`.
+      #
+      # `!= 'skipped'` looks like the natural spelling and inverts the null trap: a renamed or
+      # typo'd `repush_apply` id makes `steps.repush_apply.outcome` the EMPTY STRING, and
+      # `'' != 'skipped'` is TRUE — so the mis-keyed case, the one failure mode the backstop step
+      # exists for, would fire this alert on EVERY run instead of none. Enumerating the two real
+      # outcomes fails closed on a rename instead of open. (actionlint cannot catch it: a mistyped
+      # step id types as {string => string}, so every name is valid.)
+      #
+      # `!cancelled()` rather than `always()`: this step FILES AND COMMENTS ON GitHub issues, so
+      # it mutates. `always()` is true on cancellation and would file an incident for a run the
+      # operator themselves cancelled. The previous `failure()` was already false on cancellation;
+      # this preserves that property while widening to the green-recovery path.
       - name: Alert on a red infra-config gate (#7220)
-        if: failure() && steps.infra_config_gate.outcome != 'success'
+        if: >-
+          !cancelled()
+          && (
+               steps.repush_apply.outcome == 'success'
+               || steps.repush_apply.outcome == 'failure'
+               || (
+                    failure()
+                    && steps.infra_config_gate.outputs.verdict != 'verified'
+                    && steps.infra_config_gate_pass2.outputs.verdict != 'verified'
+                  )
+             )
         working-directory: ${{ env.INFRA_DIR }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1085,6 +1588,25 @@ jobs:
           # frame that looks healthy on exactly these failures. Empty on every other red path,
           # which is what selects the pre-existing frame-derived branches.
           STABILITY_VERDICT: ${{ steps.infra_config_gate.outputs.stability_verdict }}
+          # #7104 P0-B — pass 1's verdict, read by the "gate ran and did not fail" arm so it can
+          # name `unadjudicated` explicitly instead of describing a delivery failure that the gate
+          # never reported.
+          PASS1_VERDICT: ${{ steps.infra_config_gate.outputs.verdict }}
+          # #7104 PR-B — the re-push phase outcomes. The phase IS the step (plan R22.1), so no
+          # `repush_failed=<phase>` output is plumbed; these three native outcomes name the phase
+          # between them. Read by the RE-PUSH arm below, which must precede every frame-derived
+          # branch: on a re-push failure the frame looks HEALTHY (200, parses, fatal_line=0), so
+          # every branch below would misdiagnose it as a cosmetic activation failure and route the
+          # operator to a Better Stack query that returns nothing.
+          REPUSH_PLAN_OUTCOME: ${{ steps.repush_plan.outcome }}
+          REPUSH_APPLY_OUTCOME: ${{ steps.repush_apply.outcome }}
+          PASS2_OUTCOME: ${{ steps.infra_config_gate_pass2.outcome }}
+          PASS2_VERDICT: ${{ steps.infra_config_gate_pass2.outputs.verdict }}
+          # #7104 P0-B — the post-re-push liveness probe's outcome. Its failure means the recovery
+          # destroyed the sole no-SSH remediation channel, and it SKIPS pass 2 rather than failing
+          # it, so without this the state is unreachable from every arm below.
+          WEBHOOK_LIVENESS_OUTCOME: ${{ steps.webhook_liveness.outcome }}
+          WEBHOOK_LISTENER_STATE: ${{ steps.webhook_liveness.outputs.listener_state }}
         run: |
           set -uo pipefail
           source "$GITHUB_WORKSPACE/scripts/infra-config-red-alert.sh"
@@ -1096,11 +1618,89 @@ jobs:
             exit 1
           }
 
+          # THE RE-PUSH BRICKED THE CHANNEL (#7104 P0-B). Handled BEFORE EVERY OTHER ARM, because
+          # it dominates them: when the post-re-push liveness probe fails, the recovery has
+          # destroyed the only no-SSH remediation channel on a host that cannot be re-provisioned
+          # (cx33, 0/6 stock). Nothing else this step could say matters more, and nothing else it
+          # could say is true.
+          #
+          # Tested for `== 'failure'` and not `!= 'success'`: a renamed or typo'd
+          # `webhook_liveness` id resolves to the EMPTY STRING, and `'' != 'success'` is TRUE, so
+          # the inverted spelling would route EVERY run — including the overwhelming majority
+          # where no re-push happened — into a P1 "the channel is down" alert. Same null trap the
+          # `!= 'skipped'` comments above record, one arm over.
+          if [[ "${WEBHOOK_LISTENER_STATE:-}" == "probe_error" ]]; then
+            infra_config_red_alert "The bounded re-push applied, and the post-re-push liveness probe then COULD NOT RUN — its CF Access credentials could not be read, or Cloudflare Access rejected them. NOTHING measured the webhook listener, so this is NOT evidence that the channel is down and the handler-replace lever must NOT be run on this evidence. What IS true: the re-push wrote production and pass 2 did not run, so no delivery verdict exists for this run. Re-run the workflow once the probe's credentials are readable." "unreachable" || true
+            exit 0
+          fi
+          if [[ "${WEBHOOK_LIVENESS_OUTCOME:-}" == "failure" ]]; then
+            infra_config_red_alert "The bounded re-push applied, and the post-re-push liveness probe then found the webhook listener DOWN. The recovery destroyed the sole no-SSH remediation channel on a host that cannot be re-provisioned (cx33, 0/6 stock). Pass 2 did not run — it is skipped, not failed — so no delivery verdict exists for this run and none should be inferred. The route back does not depend on the webhook being alive: (run from apps/web-platform/infra) doppler run --name-transformer tf-var -- terraform apply -replace=terraform_data.infra_config_handler_bootstrap -target=terraform_data.infra_config_handler_bootstrap -input=false -lock-timeout=120s , which reprovisions the handler over root SSH on the CF Tunnel. Do NOT run terraform apply -replace=hcloud_server.web ." "unreachable" || true
+            exit 0
+          fi
+
+          # THE RECOVERY WORKED (#7104 PR-B review). Handled after the bricked-channel arm and
+          # before the re-push-failure
+          # arm, before the gate-never-ran arm, and before every frame-derived branch.
+          #
+          # The ordering is not cosmetic. On this path pass 1 exited 0 with verdict=pending, the
+          # re-push applied, and pass 2 rendered `verified`, so GATE_OUTCOME is `success` and the
+          # gate-never-ran arm below would tell the operator "the infra-config gate never ran" —
+          # false — while every frame-derived branch would describe a delivery failure that did
+          # not happen. This arm is also the only one reachable on a run whose overall conclusion
+          # is GREEN, which is exactly why it was missing: every other arm is written for red.
+          #
+          # `recovered` is a distinct reach mode with its own label, priority, title and Sentry
+          # op. It must NOT reuse the red set: `ci/infra-config-red` is the dedupe key, so a
+          # routine self-heal filed into it would swallow a real P1 gate failure as a comment.
+          if [[ "${REPUSH_APPLY_OUTCOME:-}" == "success" && "${PASS2_VERDICT:-}" == "verified" ]]; then
+            # "Exactly one production write" was an UNDERSTATEMENT, not a summary (#7104 PR-B
+            # review). One terraform RESOURCE was replaced; that resource's local-exec re-delivers
+            # the full FILE_MAP (~24 files) and reconciles the systemd units on the host. Counting
+            # resources and reporting it as if it were counting effects is the same shape as the
+            # gate claiming a stale frame proves delivery.
+            infra_config_red_alert "Pass 1 detected the documented webhook-restart race and deferred its verdict; the bounded re-push applied cleanly and pass 2 then rendered verdict=verified. Exactly one terraform resource was replaced, terraform_data.deploy_pipeline_fix — which is not a one-file change: its provisioner re-delivers the whole FILE_MAP to the host and reconciles the systemd units, and pass 2 verified every delivered file's digest against the repo. No lever needs pulling. This record exists because the write happened at all, not because anything is wrong." "recovered" || true
+            exit 0
+          fi
+
           # Read the host's own frame. Every field below is sanitized AT THE SOURCE by
           # infra-config-apply.sh's on_exit (charset A-Za-z0-9 ._:/=-, so no quote, backslash,
           # newline or control character can survive) and is used here only as a shell VALUE
           # passed as a function argument — never eval'd, never interpolated into a command.
           RESP=/tmp/infra-config-status-response.txt
+
+          # THE BOUNDED RE-PUSH FAILED (#7104 PR-B). Handled BEFORE the gate-never-ran arm and
+          # before every frame-derived branch, and the ordering is the whole point: on this path
+          # pass 1 exited 0, so GATE_OUTCOME is `success` and the arm below would tell the
+          # operator "the infra-config gate never ran" — which is false, the gate ran, graded,
+          # and deferred. The frame also still reads HEALTHY (200, parses, fatal_line=0), so the
+          # reachable/activation branches further down would tell a non-technical founder that
+          # "the files that landed are on the host and app health is unaffected" and hand them a
+          # Better Stack query that returns nothing. Every clause of that is false when the
+          # TERRAFORM half failed mid-gate.
+          #
+          # NOTE ON THE LOCK: this backend has NO state lock (`use_lockfile = false` in main.tf —
+          # R2 does not support S3 conditional writes), so there is nothing to force-unlock. The
+          # shared `terraform-apply-web-platform-host` concurrency group is the sole serializer.
+          # Say that rather than routing the operator to a lock that cannot exist.
+          if [[ "${REPUSH_PLAN_OUTCOME:-}" == "failure" || "${REPUSH_APPLY_OUTCOME:-}" == "failure" || "${PASS2_OUTCOME:-}" == "failure" ]]; then
+            if [[ "${REPUSH_PLAN_OUTCOME:-}" == "failure" ]]; then
+              PHASE="planning the re-push (no production write was attempted)"
+              LEVER="Nothing was written. Re-run the workflow; if it fails here again, the re-push plan's shape has drifted from the 2026-08-13 measurement and the recovery is correctly refusing to write."
+            elif [[ "${REPUSH_APPLY_OUTCOME:-}" == "failure" ]]; then
+              PHASE="applying the re-push (a production write was ATTEMPTED and did not complete)"
+              LEVER="Terraform state may hold a tainted terraform_data.deploy_pipeline_fix. There is no backend lock to clear. Run a plan first to see the current state, then the documented lever is: (run from apps/web-platform/infra) doppler run --name-transformer tf-var -- terraform apply -replace=terraform_data.infra_config_handler_bootstrap -target=terraform_data.infra_config_handler_bootstrap -input=false -lock-timeout=120s . Do NOT run terraform apply -replace=hcloud_server.web — that host cannot be re-provisioned (cx33, 0/6 stock)."
+            else
+              PHASE="re-verifying after the re-push (the write completed; the host still did not publish a new frame)"
+              LEVER="The bounded recovery is spent — it is one attempt by construction, so re-running will not retry it. The documented lever is: (run from apps/web-platform/infra) doppler run --name-transformer tf-var -- terraform apply -replace=terraform_data.infra_config_handler_bootstrap -target=terraform_data.infra_config_handler_bootstrap -input=false -lock-timeout=120s . Do NOT run terraform apply -replace=hcloud_server.web — that host cannot be re-provisioned (cx33, 0/6 stock)."
+            fi
+            # `repush_failed`, not `reachable` (#7104 PR-B review). The reachable body opens "the
+            # files themselves reached the server", which is FALSE on the plan-failure path where
+            # nothing was written — and the old call compensated by asking a non-technical founder
+            # to "Ignore any suggestion that app health is unaffected", i.e. to disregard the body
+            # it was printed inside. A body that needs a clause contradicting it is the wrong body.
+            infra_config_red_alert "The automatic config re-push FAILED while ${PHASE}. This is NOT the ordinary activation failure: the gate detected the documented webhook-restart race, deferred its verdict, and the recovery it triggered did not deliver. ${LEVER}" "repush_failed" || true
+            exit 0
+          fi
 
           # THE GATE NEVER RAN. Handled FIRST, because every branch below reads a frame the host
           # publishes and reasons about what the gate measured — and if the gate was skipped
@@ -1109,10 +1709,36 @@ jobs:
           # channel did not answer, when in truth nothing ever asked it. The distinct third mode
           # exists so the alert says the one thing that is actually known: activation is
           # UNKNOWN, and the named step is where to look.
-          if [[ "${GATE_OUTCOME:-}" != "failure" ]]; then
+          # THE PREDICATE IS `skipped` OR EMPTY, NOT `!= 'failure'` (#7104 P0-B).
+          #
+          # `!= 'failure'` made this the catch-all for every outcome that is not literally
+          # `failure`, which since PR-B includes `success` — pass 1 SOFT-FAILS with exit 0 on the
+          # recoverable shape, so `success` is the outcome on every recovery path. That is how a
+          # re-push which bricked the channel was reported as "The infra-config gate never ran
+          # (outcome=success)": a message whose own parenthetical contradicts its claim, on the
+          # one failure with no fallback.
+          #
+          # The two states that actually mean "it never ran" are `skipped` (a step before it
+          # failed) and the empty string (a renamed step id). Enumerating them fails closed on a
+          # rename in the safe direction — an unrecognised outcome now falls through to the
+          # explicit arm below rather than silently borrowing this one's story.
+          if [[ -z "${GATE_OUTCOME:-}" || "${GATE_OUTCOME:-}" == "skipped" ]]; then
             DIED="a step before the gate"
             [[ "${APPLY_OUTCOME:-}" == "failure" ]] && DIED="the terraform apply (which is where this PR's sudo-grant and DropInPaths preconditions are asserted)"
             infra_config_red_alert "The infra-config gate never ran (outcome=${GATE_OUTCOME:-unset}) because ${DIED} failed first, so NOTHING has graded whether the config activated on the host. Do not read this as a delivery failure or an activation failure — it is ungraded. Fix the failing step named in the CI run and re-run; the gate then reports the real verdict." "ungraded" || true
+            exit 0
+          fi
+
+          # THE GATE RAN AND DID NOT FAIL, AND WE ARE STILL HERE.
+          #
+          # Narrowing the arm above leaves this residue, and it must be named rather than left to
+          # fall through into the frame-derived branches — those all describe a DELIVERY failure,
+          # and on this path the gate itself reported no failure at all. It is reachable when pass
+          # 1 rendered `unadjudicated` (the documented 404 first-bootstrap escape hatch, which
+          # adjudicates nothing) and something later in the job went red, and it is the honest
+          # place for any future outcome this ladder does not enumerate.
+          if [[ "${GATE_OUTCOME:-}" != "failure" ]]; then
+            infra_config_red_alert "The infra-config gate reported outcome=${GATE_OUTCOME} — it did not fail — but this run is red or wrote production, so something else did. Pass 1's verdict was '${PASS1_VERDICT:-unset}' and pass 2's was '${PASS2_VERDICT:-unset}'. If either reads 'unadjudicated', the status endpoint answered 404 and allow_missing_status_endpoint was set, so the gate deliberately checked NOTHING: that is not evidence the configuration is live. Do not read any delivery or activation claim into this run. The CI run linked below names the step that actually failed." "ungraded" || true
             exit 0
           fi
 
@@ -1199,8 +1825,19 @@ jobs:
           # is legitimate and is prescribed elsewhere in this very workflow.
           infra_config_red_alert "${WHERE} What is still true: the files that landed are on the host, and app health is unaffected — this is an ACTIVATION failure, not a delivery one. Next: from the repo root, run: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep SOLEUR_INFRA_CONFIG_FATAL. Do NOT run terraform apply -replace=hcloud_server.web — that host cannot be re-provisioned (cx33, 0/6 stock). Replacing terraform_data.infra_config_handler_bootstrap is a different and safe operation, but it is only the right lever when the status endpoint returns 000/502/503." "reachable" || true
 
+      # GATED ON THE VERDICT, NOT ON success() (#7104 PR-B review).
+      #
+      # `unadjudicated` is the 404 first-bootstrap escape hatch: the gate tolerated a missing
+      # status endpoint and checked NOTHING — no count invariant, no content assert, no freshness
+      # assertion — and then exited 0, which re-armed every `success()`-gated step downstream.
+      # This one swaps the running container on the strength of a verification that did not
+      # happen. `verified` is the only verdict that licenses it, and the OR covers the recovery
+      # path where pass 1 rendered `pending` and pass 2 rendered `verified`.
       - name: Redeploy to load applied profile and assert loaded==committed (#5875 item 4)
-        if: success()
+        if: >-
+          success()
+          && (steps.infra_config_gate.outputs.verdict == 'verified'
+              || steps.infra_config_gate_pass2.outputs.verdict == 'verified')
         working-directory: ${{ env.INFRA_DIR }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -1565,8 +2202,17 @@ jobs:
 
       # #7104 — same reasoning as the drift auto-close below: this closes an issue on the
       # strength of a self-heal, and a zero-change apply performed none.
+      # GATED ON THE VERDICT (#7104 PR-B review). The comment this step posts asserts
+      # "infra-config files landed (files_written == files_total, files_failed == 0)" — which is
+      # a MEASUREMENT, and on the `unadjudicated` arm the gate's own annotation says it adjudicated
+      # nothing. Posting it there fabricates a reading onto the founder's own issue and then closes
+      # it. The verdict gate is what makes the sentence true whenever it is written.
       - name: Close #4804 after self-heal verified
-        if: success() && env.PLAN_HAS_CHANGES == 'true'  && steps.check_4804.outputs.open == 'true'
+        if: >-
+          success() && env.PLAN_HAS_CHANGES == 'true'
+          && steps.check_4804.outputs.open == 'true'
+          && (steps.infra_config_gate.outputs.verdict == 'verified'
+              || steps.infra_config_gate_pass2.outputs.verdict == 'verified')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MERGE_SHA: ${{ github.sha }}
@@ -1586,8 +2232,15 @@ jobs:
       # zero-change apply nothing was re-aligned, and before this PR the step was unreachable on
       # such a run only because the gate red first. Making the gate correctly green arms it, so
       # the gate has to carry the condition the red was standing in for.
+      # GATED ON THE VERDICT (#7104 PR-B review). This closes drift issues with the comment
+      # "Server state was re-aligned with HEAD" — a claim about the HOST, which only the gate can
+      # substantiate. On the `unadjudicated` arm nothing checked whether the host received
+      # anything, so the drift the issue records may still be there.
       - name: Auto-close any open drift issues for this stack
-        if: success() && env.PLAN_HAS_CHANGES == 'true' 
+        if: >-
+          success() && env.PLAN_HAS_CHANGES == 'true'
+          && (steps.infra_config_gate.outputs.verdict == 'verified'
+              || steps.infra_config_gate_pass2.outputs.verdict == 'verified')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MERGE_SHA: ${{ github.sha }}
@@ -1609,6 +2262,13 @@ jobs:
           REASON: ${{ inputs.reason }}
           EVENT_NAME: ${{ github.event_name }}
           MERGE_SHA: ${{ github.sha }}
+          REPUSH_OUTCOME: ${{ steps.repush_apply.outcome }}
+          REPUSH_VERIFY: ${{ steps.infra_config_gate_pass2.outcome }}
+          # #7104 P0-B — the two facts that distinguish "a re-push happened" from "a re-push
+          # worked". Without them the summary could only report the former and asserted the latter.
+          PASS2_VERDICT: ${{ steps.infra_config_gate_pass2.outputs.verdict }}
+          WEBHOOK_LIVENESS_OUTCOME: ${{ steps.webhook_liveness.outcome }}
+          WEBHOOK_LISTENER_STATE: ${{ steps.webhook_liveness.outputs.listener_state }}
         run: |
           {
             echo "## Apply deploy-pipeline-fix"
@@ -1618,4 +2278,30 @@ jobs:
             echo "**Reason (manual only):** ${REASON:-n/a}"
             echo "**Status:** ${{ job.status }}"
             echo "**Run:** ${RUN_URL}"
+            # #7104 R20.7 §7 — the ONLY channel that makes a recovery visible by PUSH.
+            #
+            # As otherwise designed, a run that self-healed is: a green job, a step summary
+            # identical to a normal run, a Sentry event matching no alert rule, and a ledger
+            # issue deliberately built not to notify. So the honest answer to "can the
+            # operator tell a recovered run from one that never failed?" was NO. This line
+            # is what changes that, and it lives INSIDE this step rather than standing alone
+            # because a standalone summary block renders orphaned above this heading — and
+            # this is the one artifact the founder actually reads.
+            #
+            # GATED ON PASS 2 ACTUALLY VERIFYING (#7104 P0-B). This fired on
+            # `REPUSH_OUTCOME != 'skipped'`, so it also fired when the re-push apply FAILED and
+            # when the re-push bricked the webhook listener — printing "recovered itself" into
+            # the one artifact the founder reads, on the two runs where it did not. The re-push
+            # HAPPENING and the re-push WORKING are different facts; the summary now reports
+            # whichever is true rather than the more comfortable one.
+            if [[ "${REPUSH_OUTCOME:-skipped}" != "skipped" ]]; then
+              echo ""
+              if [[ "${PASS2_VERDICT:-}" == "verified" ]]; then
+                echo "**Self-healed:** the infra-config gate hit the documented webhook-restart race and recovered itself with one bounded re-push (apply=${REPUSH_OUTCOME}, re-verify=${REPUSH_VERIFY:-not-reached}). This run wrote production a second time. Running tally: see the \`infra-config-recovery-ledger\` issue."
+              elif [[ "${WEBHOOK_LIVENESS_OUTCOME:-}" == "failure" ]]; then
+                echo "**Re-push attempted, and the config channel is now DOWN:** the bounded re-push applied (apply=${REPUSH_OUTCOME}) and the liveness probe then found the webhook listener not responding. This run wrote production a second time and the result is UNVERIFIED — pass 2 was skipped, not passed. This is the one failure with no no-SSH route back; see the open \`ci/infra-config-red\` issue for the lever."
+              else
+                echo "**Re-push attempted and did NOT verify:** the bounded re-push ran (apply=${REPUSH_OUTCOME}, re-verify=${REPUSH_VERIFY:-not-reached}) and pass 2 did not render verdict=verified (verdict='${PASS2_VERDICT:-unset}'). This run wrote production a second time and nothing has confirmed the configuration is live. The recovery is one attempt by construction — re-running does not retry it."
+              fi
+            fi
           } >> "$GITHUB_STEP_SUMMARY"

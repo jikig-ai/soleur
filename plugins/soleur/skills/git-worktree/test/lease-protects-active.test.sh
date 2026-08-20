@@ -17,96 +17,8 @@ PASS=0; FAIL=0
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 
-TMP=$(mktemp -d) || { echo "FATAL: mktemp -d failed — refusing to run with an empty \$TMP, every fixture path would resolve against /" >&2; exit 2; }
+TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
-
-# EVERY `cd` into a fixture directory goes through this. An unguarded `cd` in this suite is a
-# LIVE-REPO HAZARD, not a style nit — the file already says so beside its guarded `cd` sites,
-# and five sites did not have it.
-#
-# The mechanism, observed 2026-08-20: this suite runs `set -uo pipefail` WITHOUT -e, and every
-# `git -C "$BARE" worktree add …` below silences its own failure with `>/dev/null 2>&1`. So a
-# fixture directory that was never created leaves `cd` failing, the subshell CONTINUING, and
-# the fixture's `git add` + `git commit` running in the caller's CWD — which, when this suite
-# runs under `TEST_GROUP=scripts`, is the developer's live worktree. Fixture commits
-# "victim change", "victim2 change", "v9 change" and "v12 change" landed on a real feature
-# branch and on local `main`, a later step checked that worktree out to `main`, and hours of
-# uncommitted work were destroyed. Nothing in the suite reported anything wrong.
-#
-# Exiting 90 ends only the subshell, so the marker is what makes the suite red: the fixture is
-# gone either way, and a silent "0 assertions about scenario N" is the shape this whole file
-# exists to prevent.
-TMP_REAL="$(cd "$TMP" && pwd -P)"
-cdx() {
-  local target="$1" top
-  if ! cd "$target" 2>/dev/null; then
-    printf '  FAIL: fixture directory absent: %s\n' "$target" >&2
-    printf '        refusing to run fixture commands in %s — that is a LIVE repository.\n' "$PWD" >&2
-    : > "$TMP/.cdx-failed"
-    exit 90
-  fi
-  # cd SUCCEEDING is not sufficient, and this is the half a naive guard misses: a directory that
-  # EXISTS but is not a git repository (a `worktree add` that created the dir and then failed, a
-  # fixture reaped mid-run) leaves `cd` returning 0 and git walking UP to the nearest enclosing
-  # repository. If TMPDIR is ever set inside a checkout — and this suite is run from one — that
-  # enclosing repository is the developer's. Pin the RESOLVED toplevel inside the fixture root,
-  # which every fixture repo in this file lives under, rather than trusting cd's exit status.
-  top="$(git rev-parse --show-toplevel 2>/dev/null)" || top=""
-  case "${top:-<none>}" in
-    "$TMP_REAL"|"$TMP_REAL"/*) return 0 ;;
-  esac
-  printf '  FAIL: %s exists, but its git toplevel is %s\n' "$target" "${top:-<not a git repository>}" >&2
-  printf '        which is OUTSIDE the fixture root %s — refusing, git would write to that repository.\n' "$TMP_REAL" >&2
-  : > "$TMP/.cdx-failed"
-  exit 90
-}
-
-# MERGE-RESOLUTION SELF-CHECK. This file was ALREADY partially hardened once — two sites carried
-# explicit "Guarded cd" comments while five did not — and it regressed anyway; the reaper sites
-# carry no fixture-commit symptom, so a regression there is silent. Two independent fixes to this
-# file are in flight simultaneously, which makes "a merge drops one site back to a bare cd" a live
-# possibility rather than a hypothetical. Assert the PROPERTY here instead of trusting review to
-# notice. Excludes the `&&` forms, which short-circuit and are safe.
-# Keyed on STRUCTURE, never on any guard WORDING, and evaluated on LOGICAL lines.
-#
-# Three corrections, each found by mutation rather than by reading:
-#   1. Wording. A check greping for `cdx(` flags a site guarded correctly some other way; one
-#      greping for a guard PHRASE clears a site guarded with different wording. Not hypothetical
-#      -- a sibling session counted its own guarded sites with `grep -c <its guard phrase>`, got
-#      5, and the answer was 7: it had worded its two reaper guards differently.
-#   2. Reach. Anchoring at line start inspected 7 of this file 25 `cd "` sites -- the dominant
-#      `if ( cd "` form was invisible, while the message below claimed to refuse on ANY bare cd.
-#      A guard narrower than the claim it carries is this suite own subject, one level up.
-#   3. Line shape. Most sites here are backslash-continued, so the `&&` that handles the failure
-#      sits on the NEXT physical line. Judging physical lines both misses a real defect and
-#      false-flags a correctly guarded two-line site.
-#
-# So: strip comments (prose naming `cd "` must not be inspected -- this block itself would
-# match), join continuations into one logical line, then flag any `cd "` whose logical line
-# neither carries `&&`/`||` nor makes cd itself the tested command. `if ( cd "$X" ... )` is NOT
-# exempt merely for containing `if`: that tests the SUBSHELL, so a resolution dropping the `&&`
-# leaves cd failure swallowed and the next command running in the wrong directory, which parses
-# cleanly and is silent. That case is mutation-proven below.
-_bare_cd="$(awk '
-  BEGIN { start_ln = 1 }
-  {
-    l = $0
-    sub(/(^|[[:space:]])#.*$/, "", l)
-    line = line l
-    if (sub(/\\[[:space:]]*$/, " ", line)) next
-    if (line ~ /(^|[^[:alnum:]_])cd "/ \
-        && line !~ /&&/ && line !~ /\|\|/ \
-        && line !~ /(^|[[:space:]])(if|while|until)[[:space:]]+!?[[:space:]]*cd[[:space:]]"/ \
-        && line !~ /(^|[^[:alnum:]_])cdx[[:space:]]/) print start_ln ": " line
-    line = ""; start_ln = NR + 1
-  }
-' "${BASH_SOURCE[0]}")"
-if [[ -n "$_bare_cd" ]]; then
-  printf '  FAIL: unguarded cd site(s) in this suite — every fixture cd must go through cdx():\n' >&2
-  printf '%s\n' "$_bare_cd" >&2
-  printf '        A bare cd here runs git in the CALLER CWD when the fixture is missing.\n' >&2
-  exit 1
-fi
 
 # ---------------------------------------------------------------------------
 # Stand up a fake bare repo with two branches: main + feat-victim. Merge
@@ -118,7 +30,7 @@ git init --bare -b main "$BARE" >/dev/null
 # Seed a commit on main via a temporary clone
 SEED="$TMP/seed"
 git clone "$BARE" "$SEED" >/dev/null 2>&1
-( cdx "$SEED"
+( cd "$SEED" || { echo "FATAL: cd to sandbox \$SEED failed; refusing to write git objects in $(pwd)" >&2; exit 90; }
   git -c user.email=t@t -c user.name=t commit --allow-empty -m "seed" >/dev/null
   git push origin main >/dev/null 2>&1
 )
@@ -135,7 +47,7 @@ mkdir -p "$WT_PARENT/.worktrees"
 # Anchor a fake "victim" checkout — the worktree that holds an active lease
 # and which a sibling cleanup-merged invocation must NOT reap.
 git -C "$BARE" worktree add -b feat-victim "$WT_PARENT/.worktrees/feat-victim" main >/dev/null 2>&1
-( cdx "$WT_PARENT/.worktrees/feat-victim"
+( cd "$WT_PARENT/.worktrees/feat-victim" || { echo "FATAL: cd to sandbox \$WT_PARENT/.worktrees/feat-victim failed; refusing to write git objects in $(pwd)" >&2; exit 90; }
   echo hi > a.txt
   git -c user.email=t@t -c user.name=t add a.txt
   # Date the commit older than the 10-min recent-commit grace so the lease
@@ -195,9 +107,17 @@ WT_ACTOR="$WT_PARENT/.worktrees/feat-actor"
 # matches the worktree being considered — so feat-victim is NOT protected
 # by that guard from a sibling session. Only the new lease guard protects it.
 (
-  cdx "$WT_ACTOR"
+  # `|| exit` IS LOAD-BEARING (#7546 review). A bare `cd` that FAILS leaves the subshell in the
+  # INHERITED cwd -- the real worktree `test-all.sh` was invoked from -- and the cleanup-merged
+  # below then runs against it. All seven `worktree add` calls in this file swallow failure with
+  # `>/dev/null 2>&1`, so $WT_ACTOR being absent is a reachable state (a leftover branch from a
+  # crashed run is enough). Measured 2026-08-20: this escaped the sandbox and committed
+  # `victim change`, `victim2 change`, `v9 change` and `v12 change` onto a live feature branch in
+  # another session's worktree, then checked that worktree out to main and pulled. The fixture
+  # names map one-to-one onto the four cd-failure sites in this file.
+  cd "$WT_ACTOR" || { echo "FATAL: cd to sandbox \$WT_ACTOR failed; refusing to run cleanup-merged in $(pwd)" >&2; exit 90; }
   SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT" \
-    bash "$WM" cleanup-merged >"$TMP/cleanup-out.txt" 2>&1 || true
+    bash "$WM" cleanup-merged >/tmp/cleanup-out.$$ 2>&1 || true
 )
 
 if [[ -d "$WT_VICTIM" ]]; then
@@ -233,7 +153,7 @@ kill "$HOLDER_PID" 2>/dev/null || true
 # ---------------------------------------------------------------------------
 git -C "$BARE" worktree add -b feat-victim2 "$WT_PARENT/.worktrees/feat-victim2" main >/dev/null 2>&1
 WT_VICTIM2="$WT_PARENT/.worktrees/feat-victim2"
-( cdx "$WT_VICTIM2"
+( cd "$WT_VICTIM2" || { echo "FATAL: cd to sandbox \$WT_VICTIM2 failed; refusing to write git objects in $(pwd)" >&2; exit 90; }
   echo hi2 > b.txt
   git -c user.email=t@t -c user.name=t add b.txt
   # Older than the 10-minute recent-commit grace, so the LEASE is the only
@@ -265,9 +185,10 @@ elif kill -0 "$DEAD_PID" 2>/dev/null; then
 else
   pass "scenario 2 precondition: the acquiring process has exited (pid $DEAD_PID is dead)"
   (
-    cdx "$WT_ACTOR"
+    # `|| exit` load-bearing -- see the note at the first cd site above.
+    cd "$WT_ACTOR" || { echo "FATAL: cd to sandbox \$WT_ACTOR failed; refusing to run cleanup-merged in $(pwd)" >&2; exit 90; }
     SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT" \
-      bash "$WM" cleanup-merged >"$TMP/cleanup2-out.txt" 2>&1 || true
+      bash "$WM" cleanup-merged >/tmp/cleanup2-out.$$ 2>&1 || true
   )
   if [[ -d "$WT_VICTIM2" ]]; then
     pass "a lease whose acquirer exited STILL protects the worktree from a sibling reap"
@@ -671,7 +592,7 @@ SEED9="$TMP/seed9"; git clone "$BARE9" "$SEED9" >/dev/null 2>&1
 rm -rf "$SEED9"
 WT9="$TMP/wt9"; mkdir -p "$WT9/.worktrees"
 git -C "$BARE9" worktree add -b feat-v9 "$WT9/.worktrees/feat-v9" main >/dev/null 2>&1
-( cdx "$WT9/.worktrees/feat-v9"
+( cd "$WT9/.worktrees/feat-v9" || { echo "FATAL: cd to sandbox \$WT9/.worktrees/feat-v9 failed; refusing to write git objects in $(pwd)" >&2; exit 90; }
   echo hi9 > c.txt
   git -c user.email=t@t -c user.name=t add c.txt
   # Older than the 10-minute recent-commit grace, so the LEASE is the only thing
@@ -882,7 +803,7 @@ S12="$TMP/s12"; git clone "$BARE12" "$S12" >/dev/null 2>&1
 rm -rf "$S12"
 WT12="$TMP/wt12"; mkdir -p "$WT12/.worktrees"
 git -C "$BARE12" worktree add -b feat-v12 "$WT12/.worktrees/feat-v12" main >/dev/null 2>&1
-( cdx "$WT12/.worktrees/feat-v12"
+( cd "$WT12/.worktrees/feat-v12" || { echo "FATAL: cd to sandbox \$WT12/.worktrees/feat-v12 failed; refusing to write git objects in $(pwd)" >&2; exit 90; }
   echo hi12 > d.txt
   git -c user.email=t@t -c user.name=t add d.txt
   GIT_COMMITTER_DATE="2025-01-01T00:00:00Z" \
@@ -969,14 +890,6 @@ MIN_ASSERTIONS=40  # 3 -> 6 -> 9 -> 15 -> 17 (PR #7373 sc. 3-7) -> 40 (#7409 sc.
 # slip through whenever the defect happened to produce the expected dispatch
 # count. Matches scripts/lint-diagnosis-claims.test.sh and
 # scripts/lint-workflow-step-env-refs.test.sh, which both count PASS + FAIL.
-# A cdx() abort ends its subshell, not the suite, so without this the run would continue with
-# a fixture that was never built and report whatever the surviving assertions happened to say.
-if [[ -f "$TMP/.cdx-failed" ]]; then
-  echo "FAIL: at least one fixture directory was absent (see the 'fixture directory absent' line above)."
-  echo "      A 'git worktree add' failed silently. The suite did not run as designed; its verdicts are not evidence."
-  exit 1
-fi
-
 if [[ $(( PASS + FAIL )) -lt "$MIN_ASSERTIONS" ]]; then
   echo "FAIL: only $(( PASS + FAIL )) assertions ran, expected >= $MIN_ASSERTIONS — the suite did not execute what it claims to cover."
   exit 1

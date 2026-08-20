@@ -191,6 +191,14 @@ open issues labelled `decision-challenge` under a distinct sub-heading **"Decisi
 your awareness (informational, not blocking)"** — capped at 5 with "+N more" — so they stay visible
 without diluting the action list above.
 
+**Automatic recoveries (same separate block).** Also list open issues labelled
+`infra-config-recovery-notice` there. These record a production write the system made on its own
+and then verified — no action is needed, which is exactly why they must NOT carry
+`action-required`: labelling a self-heal as an ask spends the P1 channel's credibility on a
+success. But an unattended write to the server's sole remote-repair channel is worth the founder
+knowing about, and without this line the digest — their only comprehension surface — never
+mentions it at all. One line each, naming how many times it has recurred.
+
 ### 5. What got smarter this week
 
 Source: the self-improvements Soleur's compounding loop **completed** in the window — the promotion

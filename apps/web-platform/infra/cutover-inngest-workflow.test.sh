@@ -55,6 +55,21 @@ assert() {
   else echo "  FAIL: $desc"; echo "    cond: $cond"; FAIL=$((FAIL + 1)); fi
 }
 
+# SELF-TEST of the assertion helper (#7462 review). Neutering `assert` — e.g. `eval "$cond" || true`
+# — made the whole suite report 381 passed / 0 failed / exit 0 with real regressions injected, and
+# the pass COUNT is not a tell because PASS increments on the same branch. Nothing downstream can
+# be trusted unless the helper itself is shown to distinguish true from false, so prove both
+# directions here and subtract the deliberate failure.
+_ST_P=$PASS; _ST_F=$FAIL
+assert "self-test: a TRUE condition passes" "true"
+assert "self-test: a FALSE condition fails (expected FAIL below)" "false"
+if [[ "$PASS" -ne $((_ST_P + 1)) || "$FAIL" -ne $((_ST_F + 1)) ]]; then
+  echo "  FATAL: assert() does not distinguish true from false — every verdict in this file is void."
+  exit 2
+fi
+FAIL=$((FAIL - 1))   # subtract the deliberate failure; the PASS from the true case is left as-is
+echo "  (assert() self-test OK — deliberate FAIL above is expected and subtracted)"
+
 echo "=== cutover-inngest.yml workflow tests ==="
 
 assert "workflow file exists" "[[ -f '$WF_YAML' ]]"
@@ -158,7 +173,13 @@ assert "execute 2.0 abort carries P1-6 remediation text" "grep -qE 'Remediation 
 assert "execute has a QUIESCE HARD GATE (P1-7)" "grep -qE 'QUIESCE HARD GATE' '$WF'"
 assert "quiesce gate tracks still-running hosts (STILL_RUNNING accumulator)" "grep -qE 'STILL_RUNNING' '$WF'"
 assert "quiesce gate withholds the SEAM + exits non-zero on survivors" "grep -qE 'QUIESCE HARD GATE FAILED' '$WF'"
-assert "execute prints the operator SEAM only after the gate" "grep -qE 'SEAM . operator maintenance-window steps' '$WF'"
+# `grep -qF`, not `-qE 'SEAM . operator'` (#7462): the separator is an EM-DASH (e2 80 94),
+# and ERE `.` matches exactly one BYTE, so the regex form matches only under a UTF-8 locale.
+# Measured — LC_ALL=C returns 0 matches, LC_ALL=en_US.UTF-8 returns 1 — which false-FAILED
+# this assertion (and, via the count, the anti-deletion floor) inside preflight Check 10's
+# `env -i` sandbox and would do the same on any CI runner with no LANG set. A fixed-string
+# match is byte-exact and locale-independent.
+assert "execute prints the operator SEAM only after the gate" "grep -qF 'SEAM — operator maintenance-window steps' '$WF'"
 # The SEAM must gate the flip arm on Better Stack, NOT a host read (P0-2).
 assert "SEAM confirms the flip via Better Stack, not a host cat (P0-2)" "grep -qE 'Better Stack' '$WF'"
 # #6369 — the 2.2b/2.3 arm-flip is no longer a manual Doppler write in the SEAM; the SEAM now
@@ -442,9 +463,48 @@ FLIP_SET_LN=$(grep -nE 'secrets set INNGEST_CUTOVER_FLIP ' "$ARM_FILE" | head -1
 assert "arm) writes POSTGRES_URI BEFORE INNGEST_CUTOVER_FLIP=armed (write order AC7)" "[[ -n '$PG_SET_LN' && -n '$FLIP_SET_LN' && '$PG_SET_LN' -lt '$FLIP_SET_LN' ]]"
 
 # AC8 / G3 positive prod-URI assertion + :6543 reject; G1 pre-write FSM-state guard (DI-C2).
-assert "arm) G3 rejects the :6543 transaction pooler" "grep -qF ':6543' '$ARM_FILE'"
-assert "arm) G3 requires the :5432 session pooler" "grep -qF ':5432' '$ARM_FILE'"
-assert "arm) G3 refuses when prod == dark (PG == PG_DARK)" "grep -qE 'PG.*==.*PG_DARK' '$ARM_FILE'"
+# NOTE (#7462): the pooler-port PREDICATES moved into g3_decide, so grepping $ARM_FILE for
+# ':6543'/':5432' now matches only the error-MESSAGE strings — it would pass with the
+# predicates deleted. Behavioural coverage is the g3_decide block below (scenarios 2 and 3).
+# What remains assertable here is that the arm still SURFACES the pooler remediation.
+assert "arm) surfaces the :6543 transaction-pooler remediation to the operator" "grep -qE '::error::.*:6543 transaction pooler' '$ARM_FILE'"
+assert "arm) names the :5432 session pooler in that remediation" "grep -qE '::error::.*:5432 session pooler' '$ARM_FILE'"
+# #7462: prod == dark is a SKIP, not a refusal. The old assertion here grepped for
+# `PG.*==.*PG_DARK` in the arm body — a comparison that has since moved into g3_decide, and
+# which could not have distinguished a refusal from a skip even while it was present. The
+# behavioural coverage is the g3_decide block further down; these assert the CONSUMER wiring.
+assert "arm) has an idempotent skip arm (not a refusal) for already-current" "grep -qF 'skip-already-current' '$ARM_FILE'"
+assert "arm) no longer claims an already-current value 'would flip onto the DARK backend'" "! grep -qF 'would flip onto the DARK backend' '$ARM_FILE'"
+
+# AC6/AC7 (#7462 review). An earlier revision branched the G4 DSN write on the G3 outcome and
+# asserted that branch with PRESENCE greps — which pass identically with the writes moved
+# inside the guard, i.e. they could not fail. Three mutations went uncaught, one of which
+# skipped the write on the FIRST-arm transition and armed the host onto the dark backend with
+# the suite green. The branch is gone: all three prod writes are unconditional, which is the
+# property to pin, and it is pinnable by ABSENCE rather than by position.
+assert "arm) the G3-outcome skip flag is GONE (no conditional around a prod write)" "! grep -qE 'G3_SKIP_PG_WRITE' '$ARM_FILE'"
+assert "arm) no same-line short-circuit gates a prod write" "! grep -qE '(&&|\\|\\|)[^|]*\\| DOPPLER_TOKEN=' '$ARM_FILE'"
+# The three prod secret writes must sit at ONE indent depth, and there must be exactly three
+# of them. Depth alone is degenerate at a single match (deleting two writes leaves one depth,
+# which would pass), so the COUNT is asserted alongside it — together they fail on both the
+# "conditionally nested" and the "silently dropped" mutation classes without needing a command
+# seam. Anchored on the `| DOPPLER_TOKEN=` pipe, which a comment cannot emit. The whitespace
+# class is [[:space:]] in the grep and must match the strip, so tabs are handled identically.
+G4_WRITE_LINES=$(grep -cE '^[[:space:]]+(printf|echo)[^|]*\| DOPPLER_TOKEN=' "$ARM_FILE" || true)
+G4_WRITE_DEPTHS=$(grep -oE '^[[:space:]]+(printf|echo)[^|]*\| DOPPLER_TOKEN=' "$ARM_FILE" | sed -E 's/[^[:space:]].*//' | awk '{print length}' | sort -u | wc -l) || true
+assert "arm) exactly three prod secret writes remain (URI, heartbeat, flag)" "[[ '$G4_WRITE_LINES' -eq 3 ]]"
+# Indent depth and token-absence are both defeated by an if/else that keeps the write at the same
+# column (bash ignores indentation), which is the catastrophic mutation: `if [[ $G3_OUTCOME ==
+# write ]]; then :; else <write>; fi` skips the DSN write on the FIRST-arm transition, so the host
+# boots against the dark backend and the job exits 0. Measured: it satisfied every other assertion
+# here. Pin the REGION instead — from the first prod write to the `armed` write there must be no
+# branching at all, because all three writes are unconditional by design.
+W_START=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1) || true
+W_END=$(grep -nF "printf '%s' 'armed'" "$ARM_FILE" | head -1 | cut -d: -f1) || true
+W_BRANCH=$(awk -v a="$W_START" -v b="$W_END" 'NR>=a && NR<=b' "$ARM_FILE" | grep -cE '^[[:space:]]*(if|else|elif|fi)\b' || true)
+assert "arm) the prod-write region is non-empty (F6 non-vacuity)" "[[ -n '$W_START' && -n '$W_END' && '$W_END' -gt '$W_START' ]]"
+assert "arm) NO branching between the first prod write and the armed write" "[[ '$W_BRANCH' -eq 0 ]]"
+assert "arm) all prod secret writes sit at one indent depth (none conditionally nested)" "[[ '$G4_WRITE_DEPTHS' -eq 1 ]]"
 assert "arm) G1 reads the current INNGEST_CUTOVER_FLIP from soleur-inngest (pre-write state guard)" "grep -qE 'doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest' '$ARM_FILE'"
 assert "arm) G1 refuses re-arm over a non-safe FSM state (DI-C2 REFUSING)" "grep -qE 'G1 REFUSING' '$ARM_FILE'"
 
@@ -474,13 +534,360 @@ assert "emitter stamps flag 'done' (the confirm's success key) + an aborted path
 assert "arm) calls confirm_flip_state (AC9)" "grep -qF 'confirm_flip_state \"\$ARM_ISO\"' '$ARM_FILE'"
 assert "arm) time-bounds via a SPACE-form timestamp, no ISO T/Z (the --since format P2)" "grep -qF \"+'%Y-%m-%d %H:%M:%S'\" '$ARM_FILE' && ! grep -qE 'ARM_ISO=.*T%H.*Z' '$ARM_FILE'"
 assert "arm) branches on the confirm result (done vs aborted/rolled-back vs timeout, fail-loud)" "grep -qF 'G6_STATE' '$ARM_FILE'"
-assert "arm) G3 pins the prod project-ref (stronger than a bare 'supabase' substring)" "grep -qF 'pigsfuxruiopinouvjwy' '$ARM_FILE'"
+# NOTE (#7462): this used to grep $ARM_FILE for the bare prod ref. The pin moved into
+# g3_decide, which is OUTSIDE $ARM_FILE, so the only surviving occurrence there is the
+# refuse-not-prod-project error MESSAGE — deleting the pin entirely left this green. It is
+# the third assertion invalidated by that move (see the :6543/:5432 note above) and the one
+# guarding what the ADR calls the sole guard against arming onto a non-prod Postgres.
+# Behavioural coverage is the g3_decide block below; what is assertable here is the message.
+assert "arm) surfaces the prod-project-ref remediation to the operator" "grep -qE '::error::.*ref pigsfuxruiopinouvjwy' '$ARM_FILE'"
+# And the pin itself is asserted where it actually lives, anchored on the case-arm shape a
+# comment or an error string cannot produce.
+# The pin is asserted where it lives, anchored on the authority-EXTRACTION shape a comment or an
+# error string cannot produce. Behavioural coverage is the g3_case rows below; these pin that the
+# implementation still parses rather than globbing (a glob over the whole DSN cannot express
+# "the authority is X", which is how three earlier revisions were defeated).
+assert "g3_decide extracts the authority before matching it" "grep -qF '_auth=\"\${_rest%%/*}\"' '$BODY_SH'"
+assert "g3_decide matches host:port WHOLE, not by globbing the DSN" "grep -qE '^[[:space:]]+\\*\\.pooler\\.supabase\\.com:5432\\)' '$BODY_SH'"
+assert "g3_decide rejects connection-parameter overrides case-insensitively" "grep -qE '\\*host=\\*\\|\\*host%3d\\*' '$BODY_SH'"
+assert "g3_decide requires exactly one '@' inside the AUTHORITY" "grep -qF 'if [[ \"\${_auth//[!@]/}\" != \"@\" ]]' '$BODY_SH'"
 assert "arm) G1 fail-CLOSED: probes config readability (DOPPLER_PROJECT) before trusting an empty flip" "grep -qF 'config-readability probe failed' '$ARM_FILE' && grep -qE 'doppler secrets get DOPPLER_PROJECT -p soleur-inngest' '$ARM_FILE'"
 assert "arm) G3 fail-CLOSED on an empty PG_DARK read (no silent equality-pass)" "grep -qF 'could not read the current dark INNGEST_POSTGRES_URI' '$ARM_FILE'"
 assert "arm) adds NO deploy-status poll (Better Stack read only — QMAX/RMAX untouched, AC9)" "! grep -qE 'deploy-status' '$ARM_FILE'"
 
 # AC13 no ssh in the arm block.
 assert "arm) contains no ssh (AC-NOSSH/AC13)" "! grep -qE '(^|[^[:alnum:]])ssh[[:space:]]' '$ARM_FILE'"
+
+# ============================================================================
+# #7462 — G3 DECISION FUNCTION (g3_decide): BEHAVIOURAL tests, not source-greps.
+#
+# Every other assertion in this file greps the script TEXT, which is structurally blind
+# to a change in WHICH BRANCH the decision takes. The pre-#7462 assertion
+# `grep -qE 'PG.*==.*PG_DARK'` still matches after the equality arm was inverted from a
+# refusal into a skip — it cannot see this change at all. These tests EXECUTE the
+# decision instead, so a mutation of any arm reddens the suite.
+#
+# The function is extracted from the REAL script ($BODY_SH) and sourced — never
+# re-declared inline, or the suite would assert a known-good snippet is known-good while
+# the shipped file regressed underneath it.
+# ============================================================================
+# The extraction is an awk range over the REAL script, so it is coupled to g3_decide's
+# signature and closing brace both sitting at column 0. A truncated-but-parseable extraction
+# fails the scenarios loudly and an empty one fails `declare -F` below, so this fails safe.
+G3_FN="$(mktemp)"; SCRATCH+=("$G3_FN")
+awk '/^g3_decide\(\) \{$/,/^\}$/' "$BODY_SH" > "$G3_FN"
+
+# shellcheck disable=SC1090
+. "$G3_FN"
+assert "g3_decide() is defined after sourcing" "declare -F g3_decide >/dev/null"
+
+# Synthesized fixtures ONLY (cq-test-fixtures-synthesized-only) — no real password or host.
+# The project refs are public Supabase project identifiers, not secrets, and are the values
+# the guard actually pins on.
+G3_PROD_REF="pigsfuxruiopinouvjwy"
+G3_DEV_REF="mlwiodleouzwniehynfz"
+G3_PROD="postgresql://postgres.${G3_PROD_REF}:synth-pw-a@aws-0-eu-west-1.pooler.supabase.com:5432/postgres"
+G3_PROD_ALT="postgresql://postgres.${G3_PROD_REF}:synth-pw-b@aws-0-eu-west-1.pooler.supabase.com:5432/postgres"
+G3_PROD_TXN="postgresql://postgres.${G3_PROD_REF}:synth-pw-a@aws-0-eu-west-1.pooler.supabase.com:6543/postgres"
+G3_PROD_NOPORT="postgresql://postgres.${G3_PROD_REF}:synth-pw-a@aws-0-eu-west-1.pooler.supabase.com/postgres"
+G3_DEV="postgresql://postgres.${G3_DEV_REF}:synth-pw-c@aws-0-eu-west-1.pooler.supabase.com:5432/postgres"
+
+G3_EVALS=0
+g3_case() { # $1 desc, $2 PG (to write), $3 PG_DARK (in place), $4 expected outcome
+  local got
+  got="$(g3_decide "$2" "$3")"
+  G3_EVALS=$((G3_EVALS + 1))
+  assert "g3_decide: $1 -> $4" "[[ '$got' == '$4' ]]"
+}
+# The eval counter and its assert are adjacent lines in one function, so a one-line excision of
+# the assert leaves the counter satisfied while every row stops being checked (measured: 357
+# passed / 0 failed / exit 0). Snapshot the verdict counters instead and require a real delta.
+G3_VERDICTS_BEFORE=$((PASS + FAIL))
+
+# HARNESS CANARY. Two measured mutations defeated every floor above: replacing g3_case's body with
+# `got="$4"` (every row then asserts the fixture table against itself) and deleting only its
+# assert line while keeping the counter increment. Both leave the suite green because the counters
+# they feed do not distinguish "compared against the SUT" from "compared against nothing". So
+# drive one row whose expectation is deliberately WRONG and require it to FAIL: a tautological or
+# assert-less g3_case cannot produce that failure.
+_HC_F=$FAIL
+g3_case "harness canary: a deliberately wrong expectation MUST fail (expected FAIL below)" "$G3_PROD" "$G3_PROD" "write"
+if [[ "$FAIL" -ne $((_HC_F + 1)) ]]; then
+  echo "  FATAL: g3_case does not compare against g3_decide — every g3_decide row in this file is void."
+  exit 2
+fi
+FAIL=$((FAIL - 1)); G3_EVALS=$((G3_EVALS - 1))
+echo "  (g3_case harness canary OK — deliberate FAIL above is expected and subtracted)"
+
+g3_case "empty dark value fails closed"            "$G3_PROD"        ""               "refuse-empty-dark"
+g3_case "rejects the :6543 transaction pooler"     "$G3_PROD_TXN"    "$G3_PROD"       "refuse-txn-pooler"
+g3_case "requires the :5432 session pooler"        "$G3_PROD_NOPORT" "$G3_PROD"       "refuse-not-session-pooler"
+g3_case "refuses a non-prod project ref"           "$G3_DEV"         "$G3_DEV"        "refuse-not-prod-project"
+g3_case "already-current is a SKIP, not a refusal" "$G3_PROD"        "$G3_PROD"       "skip-already-current"
+g3_case "dark -> prod is the first-arm write"      "$G3_PROD"        "$G3_DEV"        "write"
+g3_case "a DIFFERENT prod-project value writes"    "$G3_PROD"        "$G3_PROD_ALT"   "write"
+# The pin is the SOLE guard against a non-prod target, so every row below is a must-REFUSE on
+# an axis some weaker form of the pin waved through. All twelve were MEASURED against two
+# earlier revisions of this guard and returned `write` (i.e. armed onto the wrong Postgres):
+# a bare `*<ref>*` substring accepted the ref anywhere in the value, and pinning only the
+# pooler USERNAME accepted the prod username in front of any host. Keep these rows: they are
+# the difference between pinning a string and pinning a destination.
+G3_H='aws-0-eu-west-1.pooler.supabase.com'
+g3_case "refuses prod user @ attacker host"        "postgresql://postgres.${G3_PROD_REF}:pw@attacker.example.com:5432/postgres"  "$G3_PROD" "refuse-not-prod-project"
+g3_case "refuses prod user @ raw IPv4"             "postgresql://postgres.${G3_PROD_REF}:pw@203.0.113.9:5432/postgres"           "$G3_PROD" "refuse-not-prod-project"
+g3_case "refuses prod user @ IPv6 literal"         "postgresql://postgres.${G3_PROD_REF}:pw@[2001:db8::1]:5432/postgres"         "$G3_PROD" "refuse-not-prod-project"
+g3_case "refuses prod user @ the DEV project host" "postgresql://postgres.${G3_PROD_REF}:pw@db.${G3_DEV_REF}.supabase.co:5432/postgres" "$G3_PROD" "refuse-not-prod-project"
+g3_case "refuses a host= connection-param override" "postgresql://postgres.${G3_PROD_REF}:pw@${G3_H}:5432/postgres?host=attacker.example.com" "$G3_PROD" "refuse-not-prod-project"
+g3_case "refuses a host= unix-socket override"     "postgresql://postgres.${G3_PROD_REF}:pw@${G3_H}:5432/postgres?host=/tmp"     "$G3_PROD" "refuse-not-prod-project"
+g3_case "refuses a multi-host list"                "postgresql://postgres.${G3_PROD_REF}:pw@attacker.example.com:5432,${G3_H}:5432/postgres" "$G3_PROD" "refuse-not-prod-project"
+g3_case "refuses the prod ref smuggled in a query param"  "postgresql://postgres.${G3_DEV_REF}:pw@${G3_H}:5432/postgres?application_name=x://postgres.${G3_PROD_REF}:y" "$G3_PROD" "refuse-not-prod-project"
+g3_case "refuses the prod ref smuggled as @db.<ref>. in a param" "postgresql://postgres.${G3_DEV_REF}:pw@${G3_H}:5432/postgres?fallback_application_name=@db.${G3_PROD_REF}.z" "$G3_PROD" "refuse-not-prod-project"
+g3_case "refuses db.<ref>. as an attacker SUBDOMAIN"  "postgresql://u:pw@db.${G3_PROD_REF}.attacker.example.com:5432/postgres"   "$G3_PROD" "refuse-not-prod-project"
+g3_case "refuses a second '@' relocating the host"    "postgresql://u:p@db.${G3_PROD_REF}.x@attacker.example.com:5432/postgres"  "$G3_PROD" "refuse-not-prod-project"
+g3_case "refuses :5432 present but not the authority port" "postgresql://postgres.${G3_PROD_REF}:pw@attacker.example.com:15432/postgres?application_name=a:5432" "$G3_PROD" "refuse-not-prod-project"
+
+# G3's terminal action. Previously each refusal arm carried its own `exit 1` and nothing tested
+# that a refusal aborts: stripping all four turned G3 into a logger that fell through to the prod
+# write, at 381/0 green. The decision now lives in g3_action and is driven here.
+ACT_FN="$(mktemp)"; SCRATCH+=("$ACT_FN")
+awk '/^g3_action\(\) \{$/,/^\}$/' "$BODY_SH" > "$ACT_FN"
+# shellcheck disable=SC1090
+. "$ACT_FN"
+assert "g3_action() is defined after sourcing" "declare -F g3_action >/dev/null"
+ACT_EVALS=0
+act_case() { local got; got="$(g3_action "$2")"; ACT_EVALS=$((ACT_EVALS + 1)); assert "g3_action: $1 -> $3" "[[ '$got' == '$3' ]]"; }
+act_case "refuse-empty-dark aborts"          "refuse-empty-dark"         "abort"
+act_case "refuse-txn-pooler aborts"          "refuse-txn-pooler"         "abort"
+act_case "refuse-not-session-pooler aborts"  "refuse-not-session-pooler" "abort"
+act_case "refuse-not-prod-project aborts"    "refuse-not-prod-project"   "abort"
+act_case "skip-already-current proceeds"     "skip-already-current"      "proceed"
+act_case "write proceeds"                    "write"                     "proceed"
+act_case "an unknown token aborts (fail-closed)" "some-future-token"     "abort"
+assert "g3_action scenarios actually dispatched (>=7)" "[[ '$ACT_EVALS' -ge 7 ]]"
+# One abort gate, routed through the tested function, sitting before the first prod write.
+assert "arm) has exactly one G3 abort gate routed through g3_action" "[[ \$(grep -cF 'if [[ \"\$(g3_action \"\$G3_OUTCOME\")\" == \"abort\" ]]; then exit 1; fi' '$ARM_FILE') -eq 1 ]]"
+assert "arm) no G3 outcome arm carries its own exit (the gate decides)" "! grep -qE '^[[:space:]]+(refuse|skip|write)[a-z-]*\)[^#]*exit 1' '$ARM_FILE'"
+G3ABORT_LN=$(grep -nF 'g3_action "$G3_OUTCOME"' "$ARM_FILE" | head -1 | cut -d: -f1) || true
+G3ABORT_PGW=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1) || true
+assert "arm) the G3 abort gate precedes the first prod write" "[[ -n '$G3ABORT_LN' && -n '$G3ABORT_PGW' && '$G3ABORT_LN' -lt '$G3ABORT_PGW' ]]"
+
+# G3.6's decision, driven the same way. Greps over the arm body could not see this: adding
+# '1' to the pass-arm (i.e. arming WHILE the diagnostic flag is set — the exact catastrophe
+# the gate exists to prevent) left the suite green, because every message string survived.
+DIAG_FN="$(mktemp)"; SCRATCH+=("$DIAG_FN")
+awk '/^diag_boot_decide\(\) \{$/,/^\}$/' "$BODY_SH" > "$DIAG_FN"
+# shellcheck disable=SC1090
+. "$DIAG_FN"
+assert "diag_boot_decide() is defined after sourcing" "declare -F diag_boot_decide >/dev/null"
+DIAG_EVALS=0
+diag_case() { # $1 desc, $2 raw value, $3 expected outcome
+  local got; got="$(diag_boot_decide "$2")"
+  DIAG_EVALS=$((DIAG_EVALS + 1))
+  assert "diag_boot_decide: $1 -> $3" "[[ '$got' == '$3' ]]"
+}
+diag_case "unset is clear"                ""                "clear"
+diag_case "'0' is clear"                  "0"               "clear"
+diag_case "'false' is clear"              "false"           "clear"
+diag_case "'1' is SET — must refuse"      "1"               "set"
+diag_case "'true' is SET — must refuse"   "true"            "set"
+diag_case "any other value is SET (fail-closed)" "yes"      "set"
+diag_case "an unreadable read fails closed" "__UNREADABLE__" "unreadable"
+assert "diag_boot_decide scenarios actually dispatched (>=7)" "[[ '$DIAG_EVALS' -ge 7 ]]"
+assert "arm) routes G3.6 through diag_boot_decide (single chokepoint)" "grep -qE 'case \"\\\$\\(diag_boot_decide ' '$ARM_FILE'"
+
+# ============================================================================
+# #7462 review — G3.7 PRE-FLUSH-LATCH GATE. Behavioural, not grepped.
+#
+# WHY THIS GATE EXISTS. Making op=arm idempotent (this PR) removed the only thing that
+# stopped a re-arm of an already-flushed host from running to completion. Such an arm is
+# DOOMED — the monotonic latch on /mnt/data refuses it on-host and drives the flag to
+# terminal `aborted` — but before it does, G4 has written both prod secrets and G5 has
+# written `armed`, a value INSIDE inngest-server-flip-guard.sh's prod-start allowlist
+# {armed,flipping,flushed,done}, while op=rollback has already re-enabled the co-located
+# web schedulers. A reboot in that ~30-60s window starts a SECOND prod scheduler.
+# G3.7 refuses the doomed arm BEFORE any write, closing that window at its source.
+#
+# Three independent axes are driven below, because each is blind to the others' defects:
+#   (a) the DECISION (flush_latch_decide) — a pure token mapping;
+#   (b) the READER (_flush_latch_count) EXECUTED against a stubbed `doppler`, including
+#       its argv, so a reader that queries the WRONG thing is detectable;
+#   (c) the ASSEMBLY — that the gate is wired into arm) ahead of the first prod write,
+#       and that the remediation its message names is actually reachable by an operator.
+# ============================================================================
+
+FL_FN="$(mktemp)"; SCRATCH+=("$FL_FN")
+awk '/^flush_latch_decide\(\) \{$/,/^\}$/' "$BODY_SH" > "$FL_FN"
+FL_FN_N=$(wc -l < "$FL_FN" | tr -d '[:space:]')
+# Harness self-check FIRST — an empty extraction makes every row below vacuous.
+assert "#7462 flush_latch_decide extraction is non-vacuous (>3 lines, got $FL_FN_N)" "[[ '$FL_FN_N' -gt 3 ]]"
+# shellcheck disable=SC1090
+. "$FL_FN"
+assert "flush_latch_decide() is defined after sourcing" "declare -F flush_latch_decide >/dev/null"
+FL_EVALS=0
+fl_case() { # $1 desc, $2 input, $3 expected outcome
+  local got; got="$(flush_latch_decide "$2")"
+  FL_EVALS=$((FL_EVALS + 1))
+  assert "flush_latch_decide: $1 -> $3" "[[ '$got' == '$3' ]]"
+}
+fl_case "zero rows is clear — a genuine first arm proceeds" "0"              "clear"
+fl_case "one row is LATCHED — must refuse"                  "1"              "latched"
+fl_case "many rows is LATCHED"                              "12"             "latched"
+fl_case "an unreadable read fails closed"                   "__UNREADABLE__" "unreadable"
+fl_case "an empty read fails closed"                        ""               "unreadable"
+fl_case "a non-numeric count fails closed"                  "n/a"            "unreadable"
+fl_case "a negative count fails closed"                     "-1"             "unreadable"
+fl_case "a count with whitespace fails closed"              " 1"             "unreadable"
+assert "flush_latch_decide scenarios actually dispatched (>=8)" "[[ '$FL_EVALS' -ge 8 ]]"
+# HARNESS CANARY, mirroring g3_case's. A fl_case whose body stopped comparing against the real
+# function would report every row above as a PASS; prove it can FAIL, then subtract.
+_FL_P=$PASS; _FL_F=$FAIL
+fl_case "harness canary: a deliberately wrong expectation MUST fail (expected FAIL below)" "0" "latched"
+if [[ "$FAIL" -ne $((_FL_F + 1)) || "$PASS" -ne "$_FL_P" ]]; then
+  echo "  FATAL: fl_case does not compare against flush_latch_decide — every G3.7 decision row is void."
+  exit 2
+fi
+FAIL=$((FAIL - 1))
+echo "  (fl_case harness canary OK — deliberate FAIL above is expected and subtracted)"
+
+# --- (b) THE READER, EXECUTED. -------------------------------------------------------------
+# A gate is only as good as the question its reader asks. Stubbing `doppler` on the PRESENCE of a
+# call would leave the query shape unpinned: a reader that dropped the --grep terms would match
+# the ~2,880 noop-* heartbeat rows/day and report LATCHED forever, and one that dropped --since
+# would silently change the window. The stub therefore RECORDS its argv and the argv is asserted.
+FLC_FN="$(mktemp)"; SCRATCH+=("$FLC_FN")
+awk '/^_flush_latch_count\(\) \{$/,/^\}$/' "$BODY_SH" > "$FLC_FN"
+FLC_FN_N=$(wc -l < "$FLC_FN" | tr -d '[:space:]')
+assert "#7462 _flush_latch_count extraction is non-vacuous (>5 lines, got $FLC_FN_N)" "[[ '$FLC_FN_N' -gt 5 ]]"
+assert "#7462 extraction actually yields a callable _flush_latch_count" \
+  "bash -c 'eval \"\$(cat \"$FLC_FN\")\"; declare -F _flush_latch_count >/dev/null'"
+
+FL_ARGV="$(mktemp)"; SCRATCH+=("$FL_ARGV")
+FLC_OUT=""; FLC_RC=0
+call_flush_latch_count() { # $1 = rows | empty | fail
+  local mode="$1"
+  set +e
+  FLC_OUT=$(
+    eval "$(cat "$FLC_FN")"
+    # Stub the ONLY external command the reader runs. Defined AFTER the eval so it wins.
+    # shellcheck disable=SC2317  # invoked indirectly, by the _flush_latch_count eval'd above
+    doppler() {
+      printf '%s\n' "$*" > "$FL_ARGV"
+      case "$mode" in
+        rows)
+          printf '%s\n' '{"dt":"2026-07-24 10:20:51.000000","raw":"r1"}'
+          printf '%s\n' '{"dt":"2026-07-24 10:20:52.000000","raw":"r2"}'
+          return 0 ;;
+        empty) return 0 ;;
+        *)     return 7 ;;
+      esac
+    }
+    export FLUSH_LATCH_SINCE="365d"
+    _flush_latch_count 2>/dev/null
+  )
+  FLC_RC=$?
+  set -e
+}
+
+call_flush_latch_count rows
+assert "#7462 reader counts matching rows (2 rows -> '2', got '$FLC_OUT')" "[[ '$FLC_OUT' == '2' ]]"
+assert "#7462 reader always returns 0 so the DECISION owns the verdict (rc=$FLC_RC)" "[[ '$FLC_RC' -eq 0 ]]"
+# shellcheck disable=SC2034  # read inside the eval'd assert conditions below
+FLC_ARGV_SEEN="$(cat "$FL_ARGV")"
+# ARGV FIDELITY. Each of these is a way the gate could be silently defeated while still "working".
+assert "#7462 reader queries via prd_terraform (the betterstack-query cred config)" \
+  "grep -qF -- '-c prd_terraform' <<<\"\$FLC_ARGV_SEEN\""
+assert "#7462 reader invokes betterstack-query.sh (no SSH, no new transport)" \
+  "grep -qF -- 'scripts/betterstack-query.sh' <<<\"\$FLC_ARGV_SEEN\""
+assert "#7462 reader bounds the window with --since \$FLUSH_LATCH_SINCE" \
+  "grep -qF -- '--since 365d' <<<\"\$FLC_ARGV_SEEN\""
+assert "#7462 reader greps the flip-complete reason (QUOTED form)" \
+  "grep -qF -- '--grep \"reason\":\"flip-complete\"' <<<\"\$FLC_ARGV_SEEN\""
+assert "#7462 reader greps the refuse-rearm-after-done reason (QUOTED form)" \
+  "grep -qF -- '--grep \"reason\":\"refuse-rearm-after-done\"' <<<\"\$FLC_ARGV_SEEN\""
+# The heartbeat firehose must NOT be in the query — matching it would pin the gate at LATCHED.
+assert "#7462 reader does NOT grep the noop-* heartbeat reasons" \
+  "! grep -qE '\"reason\":\"noop' <<<\"\$FLC_ARGV_SEEN\""
+
+call_flush_latch_count empty
+assert "#7462 an empty result is '0' (clear), not an error" "[[ '$FLC_OUT' == '0' ]]"
+call_flush_latch_count fail
+assert "#7462 a FAILED query yields __UNREADABLE__, never 0 (fail-closed)" "[[ '$FLC_OUT' == '__UNREADABLE__' ]]"
+
+# The reader must never echo a raw Better Stack row — the standing purity contract of every
+# Better Stack reader in this script (a value could ride along in `.raw`).
+assert "#7462 reader extracts a COUNT only (no .raw, no jq over row bodies)" \
+  "! grep -qE '\\.raw|\\.message' '$FLC_FN'"
+
+# The window constant must carry an env-overridable default — a hardcoded literal makes the
+# error message's remediation unperformable (the #6617 dead-remediation class).
+assert "#7462 FLUSH_LATCH_SINCE is env-overridable with a default" \
+  "grep -qE '^FLUSH_LATCH_SINCE=\"\\\$\\{FLUSH_LATCH_SINCE:-[0-9]+[a-z]\\}\"' '$BODY_SH'"
+
+# --- (c) EMITTER PARITY (cross-file), in the SUBSET direction. -------------------------------
+# The two reasons this gate keys on are a vocabulary owned by inngest-cutover-flip.sh. If either
+# is renamed there, the grep silently matches nothing and the gate reports CLEAR forever — a
+# fail-open on the only question it asks. Assert each is a literal that file actually emits.
+FL_EMITTER_SH="$REPO_ROOT/apps/web-platform/infra/inngest-cutover-flip.sh"
+assert "#7462 the flip emitter exists (G3.7 parity source)" "[[ -f '$FL_EMITTER_SH' ]]"
+assert "#7462 EMITTER PARITY: flip-complete is a real emit_state literal" \
+  "grep -qE 'emit_state [^ ]+ [^ ]+ \"flip-complete\"' '$FL_EMITTER_SH'"
+assert "#7462 EMITTER PARITY: refuse-rearm-after-done is a real emit_state literal" \
+  "grep -qE 'emit_state [^ ]+ [^ ]+ \"refuse-rearm-after-done\"' '$FL_EMITTER_SH'"
+# And that both are genuinely evidence of a flush: the first is the arm that records the durable
+# latch, the second is the arm the latch itself takes.
+assert "#7462 flip-complete is emitted on the flag:done arm (a COMPLETED flip)" \
+  "grep -qE 'emit_state 0 .* \"flip-complete\" \"done\"' '$FL_EMITTER_SH'"
+assert "#7462 refuse-rearm-after-done is emitted by the latch refusal itself" \
+  "grep -qF 'refuse_rearm_after_done() {' '$FL_EMITTER_SH'"
+
+# --- (d) ASSEMBLY: the gate is wired into arm), ahead of every prod write. --------------------
+assert "arm) routes G3.7 through flush_latch_decide exactly once (single chokepoint)" \
+  "[[ \$(grep -cE '^[[:space:]]+FL_OUTCOME=\"?\\\$\\(flush_latch_decide ' '$ARM_FILE') -eq 1 ]]"
+assert "arm) reads the latch via _flush_latch_count exactly once" \
+  "[[ \$(grep -cE '^[[:space:]]+FLUSH_LATCH_N=\"?\\\$\\(_flush_latch_count' '$ARM_FILE') -eq 1 ]]"
+# PROCEED ONLY ON `clear`. Written as a positive-allowlist gate, not a blocklist of refusals:
+# a future outcome token then fails CLOSED by construction instead of falling through.
+assert "arm) G3.7 aborts unless the outcome is exactly 'clear' (fail-closed by construction)" \
+  "[[ \$(grep -cF 'if [[ \"\$FL_OUTCOME\" != \"clear\" ]]; then exit 1; fi' '$ARM_FILE') -eq 1 ]]"
+assert "arm) no G3.7 outcome arm carries its own exit (the gate decides)" \
+  "! grep -qE '^[[:space:]]+(clear|latched|unreadable)\\)[^#]*exit 1' '$ARM_FILE'"
+# shellcheck disable=SC2016  # literal search pattern, not an expansion (G3ABORT_LN precedent)
+FL_GATE_LN=$(grep -nF 'if [[ "$FL_OUTCOME" != "clear" ]]; then exit 1; fi' "$ARM_FILE" | head -1 | cut -d: -f1) || true
+FL_PGW_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1) || true
+FL_ARMW_LN=$(grep -nE "secrets set INNGEST_CUTOVER_FLIP " "$ARM_FILE" | head -1 | cut -d: -f1) || true
+assert "arm) the G3.7 gate precedes the first prod write (pre-G4, not merely pre-G5)" \
+  "[[ -n '$FL_GATE_LN' && -n '$FL_PGW_LN' && '$FL_GATE_LN' -lt '$FL_PGW_LN' ]]"
+assert "arm) the G3.7 gate precedes the 'armed' write (the double-fire window it closes)" \
+  "[[ -n '$FL_GATE_LN' && -n '$FL_ARMW_LN' && '$FL_GATE_LN' -lt '$FL_ARMW_LN' ]]"
+# It must run AFTER G3.6 — both are pre-write refusals, and the cheaper Doppler read should not
+# be gated behind a Better Stack round-trip.
+FL_DIAG_LN=$(grep -nE 'case "\$\(diag_boot_decide ' "$ARM_FILE" | head -1 | cut -d: -f1) || true
+assert "arm) G3.7 runs after G3.6 (ordering is stated, not incidental)" \
+  "[[ -n '$FL_DIAG_LN' && -n '$FL_GATE_LN' && '$FL_DIAG_LN' -lt '$FL_GATE_LN' ]]"
+# The refusal must name the durable latch and forbid SSH, like every other refusal in this file.
+assert "arm) the G3.7 refusal names the monotonic latch as the authority" \
+  "grep -qF 'G3.7 REFUSING' '$ARM_FILE' && grep -qE 'G3\\.7 REFUSING.*/mnt/data' '$ARM_FILE'"
+assert "arm) the G3.7 refusal forbids SSH (hr-no-ssh-fallback-in-runbooks)" \
+  "grep -qE 'G3\\.7 REFUSING.*Do NOT SSH the host' '$ARM_FILE'"
+# DEAD-REMEDIATION GUARD (#6617 class). The refusal tells the operator to re-dispatch with
+# FLUSH_LATCH_SINCE set. GitHub does not export repo vars to a step unless the workflow NAMES
+# them, so without this mapping the remediation is unperformable and the message is a lie.
+assert "#7462 the G3.7 remediation is REACHABLE: FLUSH_LATCH_SINCE is mapped into the step env" \
+  "grep -qE '^[[:space:]]+FLUSH_LATCH_SINCE:[[:space:]]*\\\$\{\{[[:space:]]*vars\.FLUSH_LATCH_SINCE[[:space:]]*\}\}' '$WF_YAML'"
+assert "arm) the G3.7 refusal names the variable the workflow actually exports" \
+  "grep -qE 'G3\\.7 REFUSING.*FLUSH_LATCH_SINCE' '$ARM_FILE'"
+
+# Anti-vacuity floor (harness row H1): a suite whose scenario dispatch silently stopped
+# would otherwise report success having evaluated nothing. This counts EVALUATIONS, not
+# assertion calls, so gutting g3_case's body cannot satisfy it.
+assert "g3_decide scenarios actually dispatched (>=19 evaluations)" "[[ '$G3_EVALS' -ge 19 ]]"
+G3_VERDICTS=$((PASS + FAIL - G3_VERDICTS_BEFORE))
+assert "g3_decide rows produced >=19 VERDICTS, not just evaluations" "[[ '$G3_VERDICTS' -ge 19 ]]"
+
+# The arm) case must route through the function exactly once — the Assembly contract.
+# Anchored on the call shape, not the bare name (which also appears in comments).
+G3_CALLS=$(grep -cE '^[[:space:]]+G3_OUTCOME="?\$\(g3_decide ' "$ARM_FILE" || true)
+assert "arm) calls g3_decide exactly once (single chokepoint)" "[[ '$G3_CALLS' -eq 1 ]]"
 
 # ============================================================================
 # #6178 durability — G3.5 CHANNEL-KEY PARITY HARD GATE. INNGEST_EVENT_KEY +
@@ -501,6 +908,14 @@ assert "arm) G3.5 masks BOTH the app + host key values (>=2 ::add-mask::)" "[[ '
 assert "arm) G3.5 NEVER echoes a raw channel-key value (no echo of \$APP_CK/\$HOST_CK — AC-NOBODY)" "! grep -qE 'echo[^\"]*\\\$\\{?(APP_CK|HOST_CK)([^_H]|\$)' '$ARM_FILE'"
 # The gate is HARD: a mismatch (or unreadable key) fails op=arm closed.
 assert "arm) G3.5 is a HARD GATE — a divergence exits op=arm non-zero (PARITY_FAIL)" "grep -qE 'PARITY_FAIL' '$ARM_FILE' && grep -qF 'CHANNEL-KEY PARITY GATE FAILED' '$ARM_FILE'"
+# G3.6 (#7462): the diagnostic-boot precondition inngest-bootstrap.sh states in prose and
+# nothing enforced. Arming with it set cuts over to a host that adopts no registry.
+assert "arm) has a G3.6 diagnostic-boot hard gate" "grep -qF 'G3.6 REFUSING' '$ARM_FILE'"
+assert "arm) G3.6 reads INNGEST_DIAGNOSTIC_BOOT from the isolated config via the arm token" "grep -qE 'doppler secrets get INNGEST_DIAGNOSTIC_BOOT -p soleur-inngest -c prd' '$ARM_FILE'"
+assert "arm) G3.6 fails CLOSED on an unreadable diagnostic flag" "grep -qF '__UNREADABLE__' '$ARM_FILE'"
+G36_LN=$(grep -nF 'G3.6 REFUSING' "$ARM_FILE" | head -1 | cut -d: -f1) || true
+G36_PGW_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1) || true
+assert "arm) G3.6 refuses BEFORE the first prod write (G4)" "[[ -n '$G36_LN' && -n '$G36_PGW_LN' && '$G36_LN' -lt '$G36_PGW_LN' ]]"
 assert "arm) G3.5 cites the #6178 cutover-502 condition in its remediation" "grep -qF 'cutover-502' '$ARM_FILE'"
 # The parity gate runs BEFORE the arm writes (G4/G5) — a divergent channel must
 # block the flip, never be written past.
@@ -1137,6 +1552,22 @@ assert "#6178 op=doublefire-probe arm surfaces the dropped count (arm-scoped)" "
 rm -rf "$BUCKET_PROGS_DIR"
 rm -f "$DF_HARNESS_SRC"
 rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" "$PROBE_ARMS_FILE"
+
+# WHOLE-SUITE ANTI-DELETION FLOOR (#7462 review). The only merge gate below is `FAIL -gt 0`, so
+# deleting any assertion lowers the pass count silently and exits 0 — measured: removing the
+# prod-write region assertion left the suite green. This floor is the full count at the time of
+# writing; raise it in lockstep when adding assertions, never lower it to make a removal pass.
+#
+# 408 -> 449 (+41) when the G3.7 pre-flush-latch gate landed. Stated as a DELTA on purpose: the
+# absolute number is only meaningful against the run that produced it, and re-deriving it after a
+# rebase is the point at which a silently-dropped sibling assertion would otherwise be papered
+# over. Re-measure by running this file, never by copying a remembered figure.
+if [[ "$PASS" -lt 449 ]]; then
+  echo "  FAIL: suite dispatched $PASS assertions, floor is 449 — an assertion was removed or skipped."
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: anti-deletion floor ($PASS >= 449 assertions dispatched)"
+fi
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

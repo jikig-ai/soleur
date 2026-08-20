@@ -142,6 +142,7 @@ adr-149
 adr-151
 adr-155
 adr-166
+adr-193
 adr-corpus
 adr-drift
 adr-hygiene
@@ -234,6 +235,7 @@ anti-priming
 anti-slop
 anti-sycophancy
 anti-vacuity
+anti-vacuity-floor
 anycast
 ap-009
 ap-021
@@ -1324,6 +1326,7 @@ error-mapping
 esbuild
 escape-hatch
 escaping
+eslint
 esm
 esm-hooks
 etag
@@ -3318,6 +3321,7 @@ shell-init-scope
 shell-injection
 shell-limits
 shell-mock
+shell-parsing
 shell-portability
 shell-script
 shell-scripting

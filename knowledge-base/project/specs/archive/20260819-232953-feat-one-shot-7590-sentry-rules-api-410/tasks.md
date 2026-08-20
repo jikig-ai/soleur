@@ -1,0 +1,208 @@
+# Tasks — fix #7590 Sentry audit rules-API deprecation
+
+Derived from
+`knowledge-base/project/plans/2026-08-17-fix-sentry-audit-rules-api-deprecation-plan.md`
+(post-plan-review). Scope challenges live in `decision-challenges.md` beside this file.
+
+Target: `apps/web-platform/scripts/sentry-monitors-audit.sh`
+
+---
+
+## Checkbox state — read this before trusting the boxes below
+
+**The boxes in Phases 0-6 were never maintained during execution.** They are all
+`[ ]` and the work is done; that is artifact lag, not outstanding work. Do not
+read an unticked box as a task, and do not bulk-tick them — a bulk toggle would
+convert unverified work into work that reads as verified, which is worse than
+the lag.
+
+The binding contract is the plan's **Acceptance Criteria** list, not this file.
+Ticked below are only the items whose literal command was run in the 2026-08-19
+resume session, with the output read.
+
+---
+
+## Phase 0 — Preconditions (no code)
+
+- [ ] 0.1 Probe all six Sentry endpoints via `doppler run --project soleur --config prd`, using
+      **`SENTRY_IAC_AUTH_TOKEN`** (not `SENTRY_AUTH_TOKEN` — Doppler `prd` holds both, with
+      different values). Record status + headers for the PR body, naming the token used.
+- [ ] 0.2 Confirm `organizations/{org}/workflows/` and `organizations/{org}/detectors/` return
+      arrays, carry **no** deprecation headers, and are readable by `SENTRY_IAC_AUTH_TOKEN`. If
+      either has gained a deprecation header, stop and re-plan.
+- [ ] 0.3 Baseline already measured — `14 passed, 0 failed`. Do not re-derive.
+
+## Phase 1 — Transport seam (blocks every test; do first)
+
+- [ ] 1.1 Add a transport-level seam to `curl_retry` (`CURL_BIN="${CURL_BIN:-curl}"`, or a `curl`
+      stub prepended to `PATH`). The existing `SENTRY_FIXTURE_*` seams `cat` a file and `return`
+      **before curl runs**, so they cannot express a status, header or retry sequence.
+- [ ] 1.2 Define and document the seam contract: how a test declares a status sequence, response
+      headers and body per URL. **Read an existing stub first** — `upload-evidence.test.sh`,
+      `upload-bypass.test.sh` (both `apps/cla-evidence/scripts/`), or
+      `apps/web-platform/infra/doppler-download-error-channel.test.sh` — and match the established
+      shape rather than adding a fourth dialect.
+- [ ] 1.2a The stub must record the **host actually requested**, so T20b can assert no request left
+      `$api_host`. Asserting only "no error" is satisfied by a silently-followed redirect.
+- [ ] 1.3 Add the seam to the script header's "Test injection" block.
+
+## Phase 2 — `curl_retry` rewrite (contract change; precedes its consumers)
+
+- [ ] 2.1 Capture response headers with **`-D` only**. Never add `-w` or `-o` inside the wrapper —
+      Gates 2/3 pass their own `-w` and read stdout as the status, while Gate 1 and the fetches read
+      stdout as the body. Duplicate `-w` is last-wins.
+- [ ] 2.2 Parse the status from the **last** `HTTP/` line of the header dump (redirects emit several).
+- [ ] 2.3 Classify: retry `429`/`5xx`; never retry `410`/`404`/`401`/`403`.
+- [ ] 2.4 Restrict status-based retry to **safe methods**. The Gate 3 `POST /releases/` keeps
+      transport-only retry — `probe_ver` is computed once outside the wrapper, so a retried write
+      returns 208 and Gate 3 hard-fails with a false scope diagnosis.
+- [ ] 2.5 **Classify only, never exit.** Preserve "return last attempt's output, exit 0" — every call
+      site is `x=$(curl_retry …)` under `set -euo pipefail`.
+- [ ] 2.6 Publish status + header-file path through exported shell variables
+      (`CURL_RETRY_LAST_STATUS` / `CURL_RETRY_LAST_HDR`) for the shape check to consume.
+- [ ] 2.7 Clean up the header temp file on every path. Keep the bounded 3-attempt ceiling.
+
+## Phase 3 — Deprecation tripwire
+
+- [ ] 3.1 Check captured headers for `x-sentry-deprecation-date` (case-insensitively — `-D`
+      preserves wire casing).
+- [ ] 3.2 Warn once per distinct endpoint, naming endpoint, date and replacement. Dedupe across a
+      paginated fetch.
+- [ ] 3.3 Escalate to a failing exit once the deprecation date is inside the configured window; pin
+      the window in the ADR amendment and state the escape hatch for an endpoint with no replacement.
+
+## Phase 4 — Fetch migration, pagination, diagnostic, orphan remap
+
+- [ ] 4.1 Replace `fetch_rules()` with `fetch_workflows()` + `fetch_detectors()`. Both replacements
+      are **org-scoped**, so the `SENTRY_PROJECT` branch dissolves. Keep `SENTRY_PROJECT` — Gate 2,
+      Gate 3 and the report frontmatter still use it.
+- [ ] 4.2 Add cursor-following for `detectors/` and `monitors/` (both grow with cron monitors; a
+      loud failure there deadlocks the deployment path). `workflows/` may keep a simple loud check.
+- [ ] 4.2a **Never follow a `Link` target as given.** Sentry's Link headers are absolute; following
+      them sends `SENTRY_IAC_AUTH_TOKEN` wherever the header points. Extract only the `cursor`
+      parameter and rebuild the URL from the validated `$api_host`. Read `link_next` in
+      `scripts/zot-inventory.sh` first — it documents the `<@attacker.tld/…>` userinfo attack,
+      measured against curl 8.18.0, and its rejection arm.
+- [ ] 4.2b Add a `MAX_PAGES` ceiling and a truncation counter (`LINK_UNFOLLOWED` shape). Any refusal
+      or ceiling-hit must **suppress the clean-state string** — never emit a clean verdict over a
+      set that was not fully enumerated.
+- [ ] 4.3 Add `SENTRY_FIXTURE_DETECTORS`, and make the detectors fetch **inherit fixture mode**:
+      when `SENTRY_FIXTURE_RULES`/`_MONITORS` is set and `_DETECTORS` is not, serve `[]` rather than
+      reaching the network — otherwise the 13 existing tests start making live calls and go red.
+- [ ] 4.4 Replace the bare `is not a JSON array` error with the self-naming diagnostic: status,
+      resolved host, full URL, which fetch, deprecation headers when present, plus a verdict field
+      distinguishing "5xx exhausted → re-run" from "410 deprecated → migrate".
+- [ ] 4.5 Remap Class A to `monitor_check_in_failure` detectors with empty `workflowIds`; report a
+      **count plus the invariant** `class_a_count == cron_detector_count`, not a per-slug list.
+- [ ] 4.6 Remap Class B to cron-detector `dataSources[].queryObj.slug` with no live monitor row.
+- [ ] 4.7 Remap Class C to workflows with `[.triggers.actions[]?] + [.actionFilters[]?.actions[]?]`
+      empty.
+- [ ] 4.8 Add the fail-closed extraction guard modelled on Class D's `declared_slugs` check: zero
+      cron detectors while `monitors_json` is non-empty is an extraction failure, not a clean org.
+- [ ] 4.9 Add not-evaluated states: if `detectors/` fails while `workflows/` succeeds, mark Classes A
+      and B not-evaluated and suppress the clean-state string.
+- [ ] 4.10 Emit the structured-pass count into the report so "structured found it" is
+      distinguishable from "fallback found it" (makes the structured-first property verifiable).
+- [ ] 4.11 Retire the `<!-- ids: -->` manifest (no live consumer; adoption complete at 29 resources).
+- [ ] 4.12 Correct the report: `Project filter:` frontmatter, the hardcoded clean-state string (it
+      enumerates the old class definitions verbatim), the `## Alert Rules` heading, and add
+      provenance (source endpoints + orphan-predicate generation).
+- [ ] 4.13 Verify the `## Alert Rules` table renderer against the workflows shape — a `null` name
+      column is a quiet report regression.
+
+## Phase 5 — Tests
+
+- [ ] 5.1 T15 — workflows+detectors payload yields correct orphans.
+- [ ] 5.2 T16 — 410 + deprecation headers produces the self-naming diagnostic (assert on the
+      replacement-endpoint substring, not a bare `ERROR` token).
+- [ ] 5.3 T17 — deprecation headers on a 200 warn and exit 0.
+- [ ] 5.4 T18 — retry classification + stdout byte-identity at both call-site shapes, including
+      500-then-208 on the POST.
+- [ ] 5.5 T19 — Class B against the detector binding; a generic tag value is not flagged.
+- [ ] 5.6 T20 — pagination followed, not truncated.
+- [ ] 5.6a T20b — hostile Link target refused (absolute URL, and `@`-bearing userinfo form). Assert
+      the stub's recorded host, and that the clean-state string is suppressed.
+- [ ] 5.6b T20c — `MAX_PAGES` ceiling terminates the loop and sets the truncation counter.
+- [ ] 5.7 T21 — extraction-failure guard.
+- [ ] 5.8 Refixture the rules-shaped tests the schema change invalidates (T3/T5/T8/T9/T11/T12).
+- [ ] 5.9 Add the per-guard harness rows (tests of the suite, not the script), including the
+      Guard 1 mutation-3 anti-vacuity floor — which lives in the **suite**, not the script.
+- [ ] 5.10 Fixtures synthesized per `cq-test-fixtures-synthesized-only` — invented org/project/slug
+      values, low-entropy ids. No captured production payload.
+
+## Phase 6 — Docs, workflow corrections, follow-up
+
+- [ ] 6.1 ADR-031 amendment: endpoint mapping + header provenance; brownout-not-removal citing
+      `versions.tf`'s 2026-07-17 "transient" misread; Class A predicate change and its invariant;
+      the `curl_retry` defect and repair; the write-probe idempotency restriction; the tripwire and
+      its escalation window.
+- [ ] 6.2 Correct deprecated-path references in the ADR body **in place**, not only by appending.
+- [ ] 6.3 Fix the script header's now-false "joins the two on `monitor.slug` references" description.
+- [ ] 6.4 Document the `SENTRY_IAC_AUTH_TOKEN` → `SENTRY_AUTH_TOKEN` env-rename trap in the header.
+- [ ] 6.5 Remove **both** false required-check claims from `.github/workflows/sentry-audit-gate.yml`
+      (header line 1 and line 18).
+- [ ] 6.6 Fix `.github/workflows/reusable-release.yml`'s stale audit-failure warning (it quotes an
+      error string the script cannot emit and a `de.sentry.io` default corrected in May).
+- [ ] 6.7 Retire the stale first-time adoption runbook in `apps/web-platform/infra/sentry/README.md`
+      (it says 4 rules; there are 29).
+- [ ] 6.8 File the Decision 6 follow-up: *"Split Sentry Audit Gate into a hermetic gates job and an
+      advisory live-API job"*, labels `type/chore` + `domain/engineering`, first AC
+      *"`AUDIT_MODE=gates` exists and `apply-sentry-infra.yml` uses it."*
+
+## Phase 7 — Verification
+
+- [ ] 7.1 Work through all 22 Acceptance Criteria in the plan.
+- [x] 7.2 `bash apps/web-platform/scripts/sentry-monitors-audit.test.sh` — green, count ≥ 14 + new.
+- [x] 7.3 `bash tests/scripts/test-sentry-monitors-audit-class-d.sh` — all 13 pass.
+- [x] 7.4 `bash scripts/lint-orphan-test-suites.sh` — `0 orphaned`. **Do not** add a `run_suite`
+      line for the unit suite; it is already glob-registered and an explicit line double-registers it.
+- [x] 7.5 AC14 gate-block byte-identity diff (anchored awk form from the plan — the naive range
+      self-matches and returns 364 lines instead of 61).
+- [ ] 7.6 PR body: endpoint table naming the token, the env-rename trap, Decision 6's
+      recommendation, and `Closes #7590`.
+
+## Phase 8 — Resume session (2026-08-19)
+
+Three items carried into the resume, plus what fell out of them. Every box here
+was run in-session and its output read.
+
+- [x] 8.1 Pin the transport-failure axis. `mk_curl_stub`'s respond spec gains an
+      optional 4th field, `exit_code`; T18e (safe GET, curl 28 -> 3 attempts,
+      backoff 5/10, stdout empty, exit 0) and T18f (write, curl 28 -> 1 attempt,
+      fixtured separately for the declared and inferred unsafe signals).
+- [x] 8.2 Pin the pagination fixes. T20f: two synthesized 159 KB pages, a fixture
+      precondition asserting page 1 stays above MAX_ARG_STRLEN, and a per_page=100
+      assertion on every detectors request.
+- [x] 8.3 Mutation-prove 8.1/8.2 — 8 mutations, sandbox copies, each diff-verified
+      as landed, unmutated control green first. All 8 killed. Battery script:
+      scratchpad `mutbat-7590.sh`; results transcribed into `session-state.md`.
+- [x] 8.4 Scope call on the three unmigrated siblings, CONCUR co-signed.
+      `assert-byok-rules-exist.sh` migrated INLINE (it is the only one wired into
+      a workflow, and it was live-firing); the other two deferred to #7634 on the
+      write-shape blocker.
+- [x] 8.5 Mutation-prove 8.4 — 4 mutations, control green at 16/16, 3 killed and
+      1 labelled equivalent (comment-only). Battery: scratchpad `mutbat-byok.sh`.
+- [x] 8.6 ADR-031 §Recurrence narrowed: both the `::error::` severity claim and
+      the "every caller" reach claim were false and are corrected, with the
+      caller population enumerated rather than recalled.
+- [x] 8.7 Prose corrections: `versions.tf` supersession note (dated measurement
+      left intact); the `(500, 504, timeout)` triple corrected to H3's
+      `504, 208, 500` at all three sites; `reusable-release.yml`'s
+      "falls back to `sentry.io`" retracted; `oauth-probe-failure.md` read recipe
+      migrated + configurator recipe gated; 2026-06-02 learning superseded in
+      place with the live field mapping.
+- [ ] 8.8 Shard gate: `TEST_GROUP=scripts`, `TEST_GROUP=webplat`,
+      `apps/web-platform/infra/run-registered-suites.sh`. Launched detached
+      2026-08-19; queued behind 4 sibling worktrees on the advisory lock.
+
+---
+
+## Do NOT do
+
+- Do **not** add `-w` or `-o` inside `curl_retry` (breaks Gate 1, both fetches, and Gates 2/3).
+- Do **not** add an explicit `run_suite` line to `scripts/test-all.sh` for the unit suite.
+- Do **not** size any retry to the brownout window (H4 is UNKNOWN; the window is a Sentry-side
+  runtime option).
+- Do **not** map workflow ids to rule ids by name (duplicate names are legal in Sentry).
+- Do **not** delete Class A or add `AUDIT_MODE=gates` without an explicit decision — both are
+  recorded as scope challenges in `decision-challenges.md`.

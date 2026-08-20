@@ -1,5 +1,11 @@
 # Phase 0 Measurement Evidence — #6636 Sentry 410 / provider bump
 
+> **The measurements below stand; one INFERENCE in §0.1 is superseded (2026-08-19, #7590).** The
+> `0/0/0` plan and the zero 410s were really observed. They do **not** show the retirement was
+> transient or that Sentry "had restored it": the endpoint was permanently deprecated 2026-05-14
+> and is served under scheduled brownouts, so a plan run between windows returns clean either way.
+> See § Supersession at the foot of this file.
+
 Measured 2026-07-17 against **live** Sentry state (org `jikigai-eu` project, R2 backend,
 `SENTRY_IAC_AUTH_TOKEN` from Doppler `prd_terraform`). Terraform v1.10.5, linux_amd64.
 
@@ -27,6 +33,9 @@ Stable line: `0.15.0, 0.15.1, 0.15.2, 0.15.3, 0.15.4`. Latest stable = **0.15.4*
 `/rules/{id}/` endpoint. So `0.15.4` (> 0.15.3) does not depend on the endpoint that returned 410
 — the bump future-proofs the root against the legacy endpoint's eventual *permanent* retirement.
 
+> **^ RETRACTED 2026-08-20 (#7590).** This datum is measured **false**: `0.15.4` still reads the
+> deprecated path (29/29 reads took 410 in CI run `32362401543`). See § Supersession.
+
 ## 0.3 — Bump + upgrade
 
 `versions.tf`: `0.15.0-beta2` → `0.15.4`. `terraform init -upgrade` → installed `v0.15.4`.
@@ -48,3 +57,36 @@ regenerated `.terraform.lock.hcl`: `version = "0.15.4"`, 3 `h1:` + 14 `zh:` hash
 provider-version-only change (`versions.tf` + `.terraform.lock.hcl`), no state surgery.
 Option B (`sentry_alert` migration) NOT reached — the `monitor_ids` blocker persists at 0.15.4;
 deferral re-affirmed in ADR-031 (Amendment 2026-07-17, #6636).
+
+## Supersession (2026-08-19, #7590)
+
+Scope: **§0.1's Finding paragraph only.** Every measurement in this file — the `0/0/0` plan, the
+refresh counts (23/49/4), the version enumeration, the lockfile hashes — is unchanged and still
+correct.
+
+**Retracted:** "the `410 …` the issue observed at ~18:00–20:00Z was a **transient** Sentry-side
+retirement … by fix time Sentry had restored it".
+
+**Corrected:** Sentry deprecated the legacy alert-rule API family on 2026-05-14 and serves it under
+**scheduled brownouts** — 410 inside a recurring window, 200 outside it. Both states measured on
+2026-08-19 in one session against the same token and host: 410 at ~20:5x UTC, 200/200/200 at 21:23
+UTC. The 18:00–20:00Z observation was a brownout window; the Phase 0 plan ran outside one. Nothing
+was restored.
+
+**Also retracted — §0.2's durability datum, which this file correctly flagged as unmeasured.** §0.2
+records that v0.15.3 (`#885`) moved `sentry_issue_alert` reads off the legacy endpoint, and the Key
+Insight of the companion learning notes honestly that "with the endpoint restored, `terraform plan`
+cannot observe the read-path rework, so it is changelog-sourced, not plan-measured". That caveat was
+right and the datum was wrong. CI measured it on 2026-08-20 with `jianyuan/sentry v0.15.4` installed: run
+`32362401543` (11:09:07Z) took `410 "This API no longer exists"` on **29 of 29**
+`sentry_issue_alert` reads and failed `terraform plan`, while run `32362320701`
+**one minute earlier** (11:08:09Z), same branch, same pin, succeeded. The same
+alternation appears on 2026-08-19 (17:43 pass / 18:26 fail; 21:21 pass / 21:30 fail). `0.15.4` still reads the deprecated path. The bump is
+stable-over-beta and worth keeping; it is not a fix for the 410, and the root is still wedged by
+every brownout window.
+
+**What §0.1 should have recorded.** The response headers, which name the retirement directly and
+were present throughout: `x-sentry-deprecation-date`, and per-endpoint
+`x-sentry-replacement-endpoint` (`rules/` → `workflows/`, `alert-rules/` → `detectors/`). A single
+clean plan cannot distinguish "restored" from "outside the next window"; a header can. #7590 ships
+that check as a tripwire in `sentry-monitors-audit.sh`'s `curl_retry`.
