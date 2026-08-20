@@ -191,7 +191,13 @@ for spec in "MIN_ROWS:19" "MIN_RESOLVED:19" "MIN_LOCKS:4"; do
     fail "$name: expected exactly 1 assignment, found $n — a shadowing redefinition retargets which one is effective"
     continue
   fi
-  value="$(grep -oE "^ *${name} = [0-9]+" "$GUARD" | grep -oE '[0-9]+$')"
+  # `|| true` is load-bearing, not defensive noise: under `set -euo pipefail` a
+  # zero-match grep exits 1, pipefail promotes it, and the assignment KILLS the suite
+  # mid-run instead of failing this assertion. The count check above makes a no-match
+  # unreachable today — which is exactly the reasoning lint-shell-capture-exit rejects,
+  # because it is an invariant held somewhere else. The `^[0-9]+$` check below is what
+  # turns an empty capture into a reported verdict.
+  value="$({ grep -oE "^ *${name} = [0-9]+" "$GUARD" | grep -oE '[0-9]+$'; } || true)"
   if [[ ! "$value" =~ ^[0-9]+$ ]]; then
     fail "$name is not a plain integer ('$value')"
   elif [[ "$value" -lt "$floor" ]]; then
