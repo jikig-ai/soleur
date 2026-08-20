@@ -60,8 +60,9 @@ run_step() {
   step "$name"
   # Capture rc — `if "$@"` is a boolean test and discards the exit code, so a step that
   # reports 3 (test-all.sh's EXIT CONTRACT: zero suites failed, >= 1 suite terminated with a
-  # signal-shaped status) would be re-labelled a failure. Non-zero either way: a step that was
-  # not measured is not a step that passed.
+  # signal-shaped status) or 4 (REFUSED — nothing ran) would be re-labelled a failure.
+  # Non-zero either way: a step that was not measured is not a step that passed. What the
+  # distinct arms buy is that the MESSAGE names the cause that actually occurred.
   local rc=0
   "$@" || rc=$?
   if (( rc == 0 )); then
@@ -74,6 +75,17 @@ run_step() {
     # absent evidence is the ADR-166 class this repo gates on.
     echo "[UNRESOLVED] $name — exited 3 without reporting a failure; if this step is test-all.sh see its EXIT CONTRACT block" >&2
     exit 3
+  elif (( rc == 4 )); then
+    # Same class as the rc=3 arm above, and the arm that arm exists to prevent: rc=4 is
+    # test-all.sh's REFUSED — NOTHING RAN — not a red diff, so routing it to [FAIL] names a
+    # cause that did not occur. Latent rather than live for the same reason rc=3 is: the only
+    # step that can produce 4 is the test-all step, and it carries SOLEUR_ALLOW_FULL_GATE=1
+    # (below), which overrides both of test-all.sh's rc=4 producers. It is arm'd anyway
+    # because the hatch is one edit away from being dropped and the mislabel would be silent.
+    echo "[REFUSED] $name — exited 4: the run was declined before any suite started, so this says nothing about your diff." >&2
+    echo "  If this step is test-all.sh: either SOLEUR_SUBAGENT=1 was set, or a sibling full-gate run was already in flight (#7553)." >&2
+    echo "  Wait for the sibling and re-run, or re-invoke with SOLEUR_ALLOW_FULL_GATE=1 having decided the second battery is worth its cost." >&2
+    exit 4
   else
     echo "[FAIL] $name" >&2
     exit 1

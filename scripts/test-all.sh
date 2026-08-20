@@ -707,11 +707,14 @@ _TC_RUN_START_ENTRIES=$(tc_tmp_entry_count)
 # The count must be one THIS process measured. TC_SIBLING_RUN_COUNT is exported, so a nested
 # test-all.sh inherits it — and a suite that drives this runner as its SUT neuters tc_preamble
 # in its sandbox, so the inherited number describes a machine state the sandbox never looked
-# at. Refusing on it turns every such suite red whenever any sibling happens to be running,
-# for a reason unrelated to its subject: measured, `TC_SIBLING_RUN_COUNT=4` alone took
+# at. Refusing on it turned every such suite red whenever any sibling happened to be running,
+# for a reason unrelated to its subject. Measured PRE-STAMP — i.e. against the tree before the
+# TC_SIBLING_RUN_COUNT_PID condition below existed — `TC_SIBLING_RUN_COUNT=4` alone took
 # test-all-killed-classification from 77/0 to 40/37 and test-all-infra-coverage-notice from
-# 118/0 to 38/81. tc_preamble stamps TC_SIBLING_RUN_COUNT_PID with its own $$ and does not
-# export it, so an inherited count carries no stamp and cannot refuse.
+# 118/0 to 38/81. Those two numbers are NOT reproducible at HEAD: re-running that A/B now
+# returns 77/0 and 118/0, because the stamp is exactly what makes an inherited count inert.
+# tc_preamble stamps TC_SIBLING_RUN_COUNT_PID with its own $$ and does not export it, so an
+# inherited count carries no stamp and cannot refuse.
 if [[ "${TC_SIBLING_RUN_COUNT:-0}" -gt 0 && "${TC_SIBLING_RUN_COUNT_PID:-}" == "$$" \
       && "${SOLEUR_ALLOW_FULL_GATE:-}" != "1" ]]; then
   echo "ERROR: refusing a full-gate run — ${TC_SIBLING_RUN_COUNT} sibling full-gate run(s) already in flight (TEST_GROUP=$TEST_GROUP)." >&2

@@ -43,8 +43,17 @@ cases=0
 # guards that loop separately.
 # MIN_ASSERTIONS adds the 22 fixed assertions that run past the toolchain probe (3 AC3/AC6b +
 # 3 directive-form + 7 transitive 4.x + AC3 couldNotResolve + AC6 + AC6b empty-from-set +
-# AC5 empty-input + AC5 broken-cjs + AC10 + 4.8 + 4.10 + 4.11). A full green run today reports
-# 37; read a floor failure on an otherwise-green run as "you added assertions, ratchet this".
+# AC5 empty-input + AC5 broken-cjs + AC10 + 4.8 + 4.10 + 4.11).
+#
+# These two are the CONSERVATIVE BASE (11 + 1 module, and + 22), used only when the
+# VALUE_SAFE_PATH extraction fails. On the normal path they are RATCHETED below to
+# `11 + <module count read from $CFG> (+ 22)` the moment that list is known. The bases alone
+# left slack equal to `module_count - 1` — today 3 fungible slots on the very gate this suite
+# exists to pin (the L1 client -> server-secret import boundary), so three assertions could be
+# deleted with the floor still green. Deriving from the config keeps the shrink-safety the
+# fixed `1` was chosen for (#5850 relocates modules out of server/**, and the floor now
+# follows that down automatically) while removing the slack, and it stays non-tautological
+# because the operand comes from $CFG, not from the loop the floor is watching.
 TOOLCHAIN_FREE_MIN_ASSERTIONS=12
 MIN_ASSERTIONS=34
 ok()   { printf 'ok   - %s\n' "$1"; pass=$((pass + 1)); }
@@ -217,6 +226,17 @@ if [[ -z "$VS_MODULES" ]]; then
   cases=$((cases + 1))
   bad "AC5(D4): could not extract VALUE_SAFE_PATH module list from $CFG"
 else
+  # Ratchet both floors onto the module count the config actually declares (see the derivation
+  # note beside their declaration). Read from $CFG, never from the loop below, so deleting the
+  # loop still trips the floor rather than shrinking it in lockstep.
+  read -ra _vs_declared <<< "$VS_MODULES"
+  vs_expected=${#_vs_declared[@]}
+  if [[ "$vs_expected" -gt 1 ]]; then
+    TOOLCHAIN_FREE_MIN_ASSERTIONS=$((11 + vs_expected))
+    MIN_ASSERTIONS=$((TOOLCHAIN_FREE_MIN_ASSERTIONS + 22))
+    printf 'note - anti-vacuity floors derived from %d declared VALUE_SAFE_PATH module(s): toolchain-free >= %d, full >= %d\n' \
+      "$vs_expected" "$TOOLCHAIN_FREE_MIN_ASSERTIONS" "$MIN_ASSERTIONS"
+  fi
   vs_checked=0
   for m in $VS_MODULES; do
     mf="$APP/server/${m}.ts"

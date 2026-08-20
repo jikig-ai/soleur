@@ -58,10 +58,16 @@ take the advisory lock a legitimate sibling is queued on. A refused run must cos
 portable, manual, and Grok-path override. `rc=4` now has two producers; the message names which
 tripped.
 
-**6. A sanctioned invocation carries the hatch.** `lefthook.yml`'s `bun-test` pre-commit hook and
-`plugins/soleur/scripts/grok-pre-push-gate.sh` both invoke the full gate deliberately, and both set
-`SOLEUR_ALLOW_FULL_GATE=1`. The refusal targets an *opportunistic* second battery, never the gate a
-commit or push is required to pass.
+**6. The two GIT-HOOK invocations carry the hatch; the skill-prescribed gate runs deliberately do
+not.** `lefthook.yml`'s `bun-test` pre-commit hook and `plugins/soleur/scripts/grok-pre-push-gate.sh`
+both invoke the full gate deliberately and both set `SOLEUR_ALLOW_FULL_GATE=1`, because a refusal
+there blocks committing or pushing outright and leaves the operator no action but to re-run the same
+command with the hatch. The pipeline's own gate runs are the opposite case and are left unhatched on
+purpose: `work` Phase 2's three `TEST_GROUP=` shard commands and `ship` Phase 4's `TEST_GROUP=all`
+run carry no hatch, and each of those two skill documents already tells its reader what `rc=4` means
+at that call site and what to do about it. There a refusal is both correct and actionable — wait for
+the sibling, or re-run with the hatch having decided the second battery is worth its cost.
+"Sanctioned" is therefore not the discriminator; *"is a refusal actionable at this call site?"* is.
 
 **7. A measured count must be measured by THIS process.** `tc_preamble` exports
 `TC_SIBLING_RUN_COUNT`, so a nested `test-all.sh` inherits it — including one whose own
@@ -76,12 +82,18 @@ nested runner that performs its own measurement sets its own stamp and refuses c
 This was not hypothetical and it is not detectable in CI. Two suites drive `test-all.sh` as their
 SUT and neuter `tc_preamble` in their sandboxes; both were refused on their parent's measurement
 whenever any sibling worktree happened to be running a battery. Single-variable A/B with the
-sandbox procfs pinned, on suites this branch does not touch:
+sandbox procfs pinned, on suites this branch does not touch — measured against the tree **BEFORE
+the provenance stamp landed**, which is the only tree on which the right-hand column reproduces:
 
-| suite | own measurement | `TC_SIBLING_RUN_COUNT=4` inherited |
+| suite | own measurement | `TC_SIBLING_RUN_COUNT=4` inherited (pre-stamp) |
 |---|---|---|
 | `scripts/test-all-killed-classification.test.sh` | 77 passed, 0 failed | 40 passed, 37 failed |
 | `scripts/test-all-infra-coverage-notice.test.sh` | 118 passed, 0 failed | 38 passed, 81 failed |
+
+Re-deriving the right-hand column at HEAD returns the LEFT-hand one: `TC_SIBLING_RUN_COUNT=4` alone
+now yields 77 passed, 0 failed, because the stamp is precisely what makes an inherited count inert.
+That is the fix working, not the table being wrong — but a reader who re-runs the command without
+this note concludes the numbers were fabricated, so the tense is load-bearing.
 
 CI runs with no siblings, so the count is `0` there and the inherited-count path is unreachable —
 the required `test` context stays green either way. The failure is visible only under the
@@ -115,7 +127,13 @@ environ, so they are per-call harness injections. Both would work.
 The measured condition has neither property: it needs no spawn-path cooperation, and CI can
 exercise it by starting a real sibling.
 
-**Eleven mechanisms for SETTING the variable were enumerated and all blocked** — `.claude/settings.json`
+**Eleven mechanisms for SETTING the variable were enumerated and all blocked.** The full M1–M11
+enumeration, with the measurement behind each verdict, is in the implementation plan under
+*"Mechanism enumeration for #7553"*
+([2026-08-19-fix-vacuity-floor-and-subagent-gate-plan.md](../../../project/plans/2026-08-19-fix-vacuity-floor-and-subagent-gate-plan.md)).
+Abridged to eight below: `.claude/settings.local.json` and the `PreToolUse(Bash)` `updatedInput`
+variant fold into their neighbours, and `PostToolUse` on `Task` — parent-side, and fired after the
+subagent has already finished — is blocked by ordering and is omitted here. `.claude/settings.json`
 `env` (works, but session-global, so it would refuse the lead's own sanctioned run), agent-file
 frontmatter (no such key), the `Task` tool input schema (no env field), a `PreToolUse` rewriter
 (ADR-162 permits exactly one `updatedInput` emitter and `grep-rewrite.sh` holds the slot), a
@@ -131,20 +149,52 @@ between the model and `Task`), and prompt prose (which is the agent discretion t
   `plugins/soleur/test/fanout-suite-scope.test.sh` synthesizes a procfs containing a sibling and
   asserts `rc=4`, plus a hatch arm, a solo negative control, and an additivity arm proving the
   `SOLEUR_SUBAGENT` path still refuses independently.
+- **Decision 7's predicate is fixtured in BOTH directions, which it was not at first.** The
+  inherited-count arm leaves `TC_SIBLING_RUN_COUNT_PID` UNSET, so it is satisfied by every
+  predicate that is false-on-unset: measured, replacing `== "$$"` with
+  `-n "${TC_SIBLING_RUN_COUNT_PID:-}"` left the suite at 36 passed, 0 failed, and no fixture
+  anywhere SET the variable. That degrades the decision from *"I measured this"* to *"someone
+  measured this"* — the DECLARED antecedent this ADR removes, re-entering through the very guard
+  meant to close it. A second arm now drives a stamp that is SET but names a foreign pid, and it
+  must run against the no-library sandbox: with a live `tc_preamble` both variables are
+  overwritten by a real measurement before the refusal is reached, so a full-sandbox arm passes
+  under the mutation and proves nothing.
+- **`export -n` on the stamp is unfalsifiable through any exit code** and is asserted at the
+  environment level instead. `$$` differs in a forked child whether or not the variable is
+  exported, so the rc arms stay green with the line deleted AND with an explicit `export` added.
+  The suite therefore sources the real library in a child, runs `tc_preamble`, and counts the
+  name in the child's `env`: 0 today, 1 with `export -n` removed.
 - **The ordering constraint in Decision #4 is asserted structurally, on source order** — not by
   grepping a refused run's output for a lock line. That was the first form and it was vacuous:
   `build_sandbox` neuters `tc_acquire`, so no lock line can ever appear in any arm's output.
-  Measured: relocating the refusal past `tc_acquire` left the suite at 24 passed, 0 failed. A guard
+  Measured **pre-fix, when the suite held 24 assertions**: relocating the refusal past
+  `tc_acquire` left it at 24 passed, 0 failed. The suite now holds 36, so re-running that
+  mutation today reds — the figure dates the observation, it is not the current total. A guard
   that cannot be driven red was not shipped in the PR that exists to remove them.
-- **A residual gap, stated plainly.** The two git-hook invokers carry the hatch, so neither
-  exercises the refusal. That is intended — they are sanctioned runs — but it means the refusal's
-  real-world firing surface is a developer or agent starting an *ad hoc* battery, not the gates.
+- **Where the refusal actually fires.** The two git-hook invokers carry the hatch, so neither
+  exercises it. Everything else does. `work` Phase 2's three shard commands and `ship` Phase 4's
+  `TEST_GROUP=all` run are prescribed **unhatched** by their own skill documents, so under the
+  parallel-worktree workflow this repo documents, the refusal fires on the pipeline's own gates
+  routinely — not only on a developer or agent starting an *ad hoc* battery. `package.json`'s
+  `"test": "bash scripts/test-all.sh"` is a third unhatched invoker in the same class, so
+  `npm test` is refused under a sibling too. What makes all three acceptable rather than defects
+  is that a refusal is actionable at each of those call sites, and the two skill documents state
+  what `rc=4` means at theirs (see Decision 6). An earlier draft of this ADR asserted the
+  opposite — *"not the gates"* — and was refuted by reading the two skill files it was
+  describing.
+- **A residual gap, stated plainly.** The refusal cannot fire at all where
+  `scripts/lib/test-contention.sh` is absent: `test-all.sh` installs no-op `tc_preamble`/`tc_acquire`
+  stubs in that case, so no count is ever measured and no stamp is ever set. That is the same class
+  as Decision 7 one level up — an antecedent that silently never holds — and it is the exact
+  condition `fanout-suite-scope.test.sh`'s sandbox reproduces deliberately. It is accepted rather
+  than closed: a tree missing that library is a broken checkout, and failing OPEN is the right
+  behaviour for a policy whose only effect is to decline work.
 - **The non-concurrent case is not covered.** A lone spawned agent running the full battery with no
   sibling present is not refused. That was the original issue's framing, and it now has only the
   prose instruction. Whether it is worth further mechanism is deferred; note that ADR-133's lock
   plus this refusal already remove the *measurable* harm (timing corruption and timeout-induced
   false REDs), leaving wasted wall-clock.
-- **Five skill documents were corrected** (`review`, `work` ×2, `ship`, `one-shot`) and
+- **Four skill documents were corrected, at five sites** (`review`, `work` ×2, `ship`, `one-shot`) and
   `fanout-suite-scope.test.sh` now asserts what its grep can actually establish, plus a regression
   guard against the falsehood returning.
 
@@ -156,4 +206,5 @@ between the model and `Task`), and prompt prose (which is the agent discretion t
 | Read a harness-injected identity (`CLAUDE_CODE_CHILD_SESSION`) | Measured available, rejected: refuses every spawned agent's pre-commit, and its fail-open mode is structurally untestable from CI. See above. |
 | Correct the false skill sentences and change nothing else | Leaves #7553 closing on prose alone, with its actual protection deferred indefinitely. The operator chose against this on 2026-08-19. |
 | Replace the refusal entirely with `flock` mutual exclusion | ADR-133's lock already exists and already serialises. A lock lets the run *start* and then queue; the issue's intent is that it never start. The two are complementary, and both now apply. |
+| Scope the refusal to full-gate (`TEST_GROUP=all`) invocations only, so a shard is never refused | Raised in the plan's risk table as mitigation (b) for the pre-commit blast radius, to be decided in Phase 3e. **Declined 2026-08-19.** Mitigation (a) — the `lefthook.yml` hatch — removed the motivating harm, and `TEST_GROUP` is not a proxy for cost: a shard contends for the same machine-global `/tmp` tmpfs and CPU as a full battery, which is the contention the refusal exists to prevent. Scoping would also have made the refusal unreachable from `work` Phase 2, which since ADR-183 is where most local runs happen. The consequence is accepted deliberately — a ~90 s shard IS refused while a sibling battery is in flight — and `work`'s own Phase 2 text documents `rc=4` at that call site. |
 | Put the refusal inside `tc_preamble` | It is a reporter whose banners are documented as advisory. Policy buried in a measurement function is how a stale comment becomes load-bearing. |

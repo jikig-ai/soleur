@@ -83,10 +83,24 @@ CASES=0
 
 printf '\n=== git-data-template-strip ===\n\n'
 
-command -v terraform >/dev/null 2>&1 || {
-  printf '  SKIP terraform not on PATH\n\n=== git-data-template-strip: skipped ===\n\n'
+# NOT a silent skip. Every arm below is render-dependent, so "terraform absent" means ZERO
+# assertions ran — and this door sat AHEAD of both the accounting-conservation check and the
+# anti-vacuity floor, so a runner that lost terraform reported `exit 0` with a clean-looking
+# banner and no coverage at all. In a suite whose subject is SECRET STRIPPING that is the one
+# exit door that must not be quiet. Mirrors the sibling
+# `git-data-render-strip-parity.test.sh` (its "render-dependent arms cannot be skipped under
+# CI=true" arm), which hard-fails the identical condition.
+if ! command -v terraform >/dev/null 2>&1; then
+  printf '  note terraform absent — ZERO arms ran; this run is NOT coverage\n'
+  if [[ "${CI:-}" == "true" ]]; then
+    printf '\n[FATAL] terraform is absent under CI=true. Every arm of this suite is render-dependent,\n' >&2
+    printf '  so there is no honest way to report a pass here. Install terraform on this runner.\n' >&2
+    printf '\n=== git-data-template-strip: %s passed, %s failed ===\n\n' "$passes" "$fails"
+    exit 1
+  fi
+  printf '\n=== git-data-template-strip: skipped (0 assertions, floor not evaluated) ===\n\n'
   exit 0
-}
+fi
 
 TMP=$(mktemp -d -t gdtplstrip.XXXXXXXX) || { echo "  FAIL mktemp"; exit 1; }
 trap 'rm -rf "$TMP"' EXIT

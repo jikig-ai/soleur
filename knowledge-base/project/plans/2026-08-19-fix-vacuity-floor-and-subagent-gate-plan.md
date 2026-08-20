@@ -37,6 +37,13 @@ The Research Reconciliation section below is load-bearing: the population is lar
 named suite is already compliant, and the ratchet the brief expects to shrink is derived in a way
 that makes it structurally incapable of shrinking. Read that section before the phases.
 
+> **Every `path:N` coordinate in this plan is a PLAN-TIME (2026-08-19) reading, and the PR this
+> plan describes moves most of them.** They are kept as written so the plan stays a faithful record
+> of what was read when the decisions were made; do not "refresh" them, and do not cite them
+> onward. Where a coordinate is load-bearing for a later reader it has been restated as a content
+> anchor below (`cq-cite-content-anchor-not-line-number`). Resolve anything else by grepping the
+> quoted text.
+
 ## Research Reconciliation — Brief vs. Codebase
 
 Every row was measured on this branch on 2026-08-19 with the command shown. These are not
@@ -52,7 +59,7 @@ adjustments of emphasis; three of them change what the work is.
 | (unstated) ARM 10's conservation checks will cover the new work | **They will not.** `CONSERVING` is built at `:626-629` from `< "$COVERED"`. New conservation checks in deferred suites are neither counted (ARM 10) nor structurally validated (ARM 10b/10c/10d). | Extend the per-scope arm to carry the conservation structure checks over the deferred scope too. |
 | "set `SOLEUR_SUBAGENT=1` on the agent-spawn path" | **No repo-controlled spawn path exists.** Agent spawning happens only via the model calling the `Task` tool; `plugins/soleur/lib/harness.ts` is a pure string formatter whose `AgentSpawn` interface has no env field. Eleven candidate mechanisms enumerated, all blocked — see Research Insights §Mechanism enumeration. | Two repairs were considered. (a) *Read* a variable the harness already sets — measured available (`CLAUDE_CODE_CHILD_SESSION=1`, `AI_AGENT=claude-code_2-1-228_agent`, both present in a spawned agent's Bash environment and absent from the `claude` process's own environ). **Rejected**: it would refuse every spawned agent's `lefthook` pre-commit, and its fail-open mode is structurally untestable. (b) **SELECTED** — bind the refusal to a condition the runner already *measures*, `tc_preamble`'s sibling count. See Phase 3e. |
 | "Spawned agents ... are spawned with `SOLEUR_SUBAGENT=1` in their environment" (`review/SKILL.md:159`, `work/SKILL.md:292`) | **False as a statement of fact.** Measured from inside two independent spawned agents: `SOLEUR_SUBAGENT` is UNSET in both. | Correct both sentences — unconditional under every repair path, and done in Phase 3a. |
-| (unstated by the brief) #7553's concurrency harm is unmitigated | **Already mitigated, and it has its own accepted ADR.** `scripts/test-all.sh:688` calls `tc_acquire "test-all"` — a real `flock`-based advisory lock in `scripts/lib/test-contention.sh:569` — and `:681` calls `tc_preamble`, which already *detects and names* sibling runs (`[contention] siblings: N other worktree(s) running test-all.sh`, banner `SIBLING_RUN_DETECTED`). This is **ADR-133**. Concurrent local full-gate runs already serialise. | **This materially reduces #7553's value and must be stated plainly.** The residual harm the refusal would prevent is *a subagent waiting on the lock and then running a battery it should never have started* — wasted wall-clock, not corrupted measurement. The brief's stated justification ("concurrent full-gate runs inflate each other's timings, which corrupts any timing-derived verdict") is **already addressed**. Recorded as **UC-2**; see the revised Phase 3. Note the lock is CI-exempt (`LOCK_SKIPPED_CI` at `test-contention.sh:593`), but CI runs no spawned agents, so the exemption is not a gap. |
+| (unstated by the brief) #7553's concurrency harm is unmitigated | **Already mitigated, and it has its own accepted ADR.** `scripts/test-all.sh` calls `tc_acquire "test-all"` (plan-time `:688`) — a real `flock`-based advisory lock in `scripts/lib/test-contention.sh:569` — and calls bare `tc_preamble` just above it (plan-time `:681`), which already *detects and names* sibling runs (`[contention] siblings: N other worktree(s) running test-all.sh`, banner `SIBLING_RUN_DETECTED`). This is **ADR-133**. Concurrent local full-gate runs already serialise. | **This materially reduces #7553's value and must be stated plainly.** The residual harm the refusal would prevent is *a subagent waiting on the lock and then running a battery it should never have started* — wasted wall-clock, not corrupted measurement. The brief's stated justification ("concurrent full-gate runs inflate each other's timings, which corrupts any timing-derived verdict") is **already addressed**. Recorded as **UC-2**; see the revised Phase 3. Note the lock is CI-exempt (`LOCK_SKIPPED_CI` at `test-contention.sh:593`), but CI runs no spawned agents, so the exemption is not a gap. |
 | "their 33 CONSTRUCTION cases would push that cap to ~50 and ARM 2 stops discriminating" | **Both halves falsified.** The deferred scope carries **16** construction failures, not 33, so promotion would move the cap 15 → **31**, not ~50. And ARM 2 is `n_construct -le MAX_CONSTRUCTION_FAILURES`: a ratchet at 31 catches the 32nd suite exactly as sharply as a ratchet at 15 catches the 16th. **Sensitivity to the next regression is 1 at every magnitude** — the cap's absolute value changes how it reads, not what it discriminates. | The brief's constraint is retained as the plan's default because it is the operator's stated direction, but its stated *rationale* does not survive measurement, and a reviewer proposed the simpler alternative it forbids. Recorded as **UC-3**; see Alternatives and `decision-challenges.md`. |
 
 ### Measurement commands
@@ -318,7 +325,7 @@ the substantive difference between this design and the one review killed: the an
 observable from inside the process, so no spawn-path cooperation is needed and there is no
 fail-open mode when a harness changes.
 
-**Assembly.** Two reads, not one: the pre-existing `if` at `scripts/test-all.sh:271`
+**Assembly.** Two reads, not one: the pre-existing `if [[ "${SOLEUR_SUBAGENT:-}" == "1" && … ]]` in `scripts/test-all.sh` (plan-time `:271`)
 (`SOLEUR_SUBAGENT`, **unchanged**) and the new sibling refusal in the `tc_preamble`→`tc_acquire`
 window at `:681-688`. The consumers of exit 4 are the four call sites enumerated in Research
 Insights; all block on non-zero, so adding a second producer of exit 4 does not change their
@@ -626,7 +633,7 @@ follow-up that needs its own design":
   reachable from inside a spawned agent?"**, and for both git hooks the answer is yes and routine.
   Shipping M12 therefore requires an escape-hatch design (a hook-level `SOLEUR_ALLOW_FULL_GATE=1`,
   or a lefthook exemption) that is out of scope here.
-- **The harm M12 targets is already mitigated.** `scripts/test-all.sh:688` calls
+- **The harm M12 targets is already mitigated.** `scripts/test-all.sh` (plan-time `:688`) calls
   `tc_acquire "test-all"`, an `flock` advisory lock (ADR-133), and `:681` calls `tc_preamble`,
   which detects and names sibling runs. Concurrent local full-gate runs already serialise, so the
   "corrupted timing measurement" justification no longer stands on its own.
@@ -638,8 +645,8 @@ ADRs. Verified inventory:
 | Location | Current text | Why it changes |
 |---|---|---|
 | `review/SKILL.md:159`, `work/SKILL.md:292` | "are spawned with `SOLEUR_SUBAGENT=1` in their environment" | Measured false from two spawned agents. |
-| `review/SKILL.md:164`, `work/SKILL.md:298` | test-all.sh "enforces this mechanically (it exits 4 when `SOLEUR_SUBAGENT=1`)" | True of the code, vacuous in practice — the antecedent never holds. |
-| `work/SKILL.md:805` | "exits 4 … when `SOLEUR_SUBAGENT=1` is set" | Same vacuity; already in Files-to-Edit but had no phase step. |
+| `review/SKILL.md` + `work/SKILL.md` — the sentence beginning *"…exits 4 when…"* in each (plan-time `:164` / `:298`) | test-all.sh "enforces this mechanically (it exits 4 when `SOLEUR_SUBAGENT=1`)" | True of the code, vacuous in practice — the antecedent never holds. |
+| `work/SKILL.md` — the *"The lead runs this gate, not a delegate"* paragraph (plan-time `:805`) | "exits 4 … when `SOLEUR_SUBAGENT=1` is set" | Same vacuity; already in Files-to-Edit but had no phase step. |
 | `ship/SKILL.md:345` | "ship reached from a spawned agent … **inherits exactly that variable**" | Directly false, and it is the one most likely to drive a wrong ship-time decision. |
 | `one-shot/SKILL.md:68` | "rc 4 = REFUSED … because `SOLEUR_SUBAGENT=1` is set — you are a spawned agent" | Same falsehood, different wording — survives any `'are spawned with'` grep. |
 
@@ -690,7 +697,7 @@ dependency on undocumented harness internals and **no** fail-open mode.
    `test-all.sh` where the `SOLEUR_SUBAGENT` refusal already lives, so both policies are visible
    together.
 
-2. **Place the refusal in the `tc_preamble`→`tc_acquire` window** (`scripts/test-all.sh:681-688`).
+2. **Place the refusal in the `tc_preamble`→`tc_acquire` window** — between the bare `tc_preamble` call and `tc_acquire "test-all"` in `scripts/test-all.sh` (plan-time `:681-688`).
    This ordering is load-bearing and is the same reasoning the existing refusal block states at
    `:269`: it must fire *after* the count exists but *before* `tc_acquire`, so a refused run never
    takes the advisory lock a legitimate sibling is queued on. Refusing after `tc_acquire` would make
@@ -757,7 +764,7 @@ between environments as a finding, not noise.
    and `grep -n 'MAX_DEFERRED=' …` still reports `47` — neither ratchet was raised, and
    `COVERED_DIRS` is byte-identical to its pre-PR value.
 7. No occurrence of `17` remains in the `MAX_CONSTRUCTION_FAILURES` explanatory comments.
-8. The refusal antecedent at `scripts/test-all.sh:271` is **byte-identical** to its pre-PR form —
+8. The `SOLEUR_SUBAGENT` refusal antecedent — the `if [[ "${SOLEUR_SUBAGENT:-}" == "1" && … ]]` line in `scripts/test-all.sh` (plan-time `:271`) — is **byte-identical** to its pre-PR form —
    `SOLEUR_SUBAGENT` is not widened, no harness-internal variable is read. (Phase 0.1 is
    superseded; there is no probe and no probe output to record.)
 9. `scripts/test-all.sh` refuses (exit 4) when `tc_preamble` measured `sib_count > 0` and
