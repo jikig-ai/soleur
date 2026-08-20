@@ -2677,6 +2677,14 @@ jobs:
   # Note honestly what did NOT change: the `concurrency` group is WORKFLOW-level, so the split
   # released no mutex. Worst-case fleet-wide apply block is now the SUM across the gate job, this
   # job, and `registry_store_restore`.
+  #
+  # 2026-08-20 (#7587): that same workflow-level accounting moved on the OTHER side of the file.
+  # The per-merge `apply` job went 15 → 35 and gained a `notify-apply-failure` sibling at 5, so
+  # the routine-merge arm of this group now has a 40-minute run-level worst case rather than a
+  # 15-minute one. This job is dispatch-only and runs by deliberate action, so it does not queue
+  # behind merges in practice — but the number this paragraph is about is the SUM, and it changed.
+  # Measured before the raise was relied on (80 completed runs of the shared group over 35 days):
+  # observed queue depth never exceeded 1 and the longest run took 23.7 min.
   registry_luks_recut:
     if: github.event_name == 'workflow_dispatch' && inputs.apply_target == 'registry-luks-recut'
     needs: registry_pull_path_gate
