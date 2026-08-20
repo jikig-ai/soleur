@@ -135,6 +135,22 @@ A1 can go red, and it was the single assertion that noticed the whole suite had
 stopped testing anything on that host. **A green suite is evidence about the
 fixture before it is evidence about the code.**
 
+Instance 3b — the fix for 3 then over-corrected. The new guard asserted the
+producer's exit was *exactly* `141`, and CI went red at `1`. Both are correct:
+a broken-pipe write fails two ways depending on the host's SIGPIPE disposition,
+and **both reproduce the bug identically once `pipefail` promotes the status**:
+
+| SIGPIPE disposition | Where | Producer outcome |
+|---|---|---|
+| default | dev machines | killed by signal 13 -> `141` |
+| ignored, inherited | GitHub Actions runners | `write()` returns `EPIPE` -> `exit 1` |
+
+So the assertion had to be **non-zero**, not `141`. Pinning to a signal number
+pins the arm to one host's disposition; the property under test is only "the
+producer fails when the reader quits early." Verify a host-sensitive assertion
+under both dispositions before pushing — `( trap '' PIPE; <suite> )` reproduces
+the runner's locally, and would have saved a CI round-trip.
+
 ## Drive-by found on the way
 
 Four `worktree-manager-*.test.sh` suites were not isolated from the operator's git

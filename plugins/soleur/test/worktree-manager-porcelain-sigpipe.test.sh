@@ -268,17 +268,26 @@ IFS=$'\t' read -r P_A1 B_A1 <<<"$(entry_at "$R_A1" 1)"
 assert_eq "true" "$([[ -n "$P_A1" && -n "$B_A1" ]] && echo true || echo false)" \
   "parsed a non-last entry from the listing (path=$P_A1 branch=$B_A1)"
 
-# A0 (inside A1's fixture): the stub must be a FAITHFUL producer. Piping it into
-# a short-circuiting reader has to yield 141. This is not ceremony — the first
-# version of this stub padded with a bash `printf` loop, and bash's printf
-# builtin survives EPIPE on some hosts ("write error: Broken pipe", then keeps
-# going). There the stub exited 0, the mutant could not reproduce the bug, and
-# every arm below would have passed vacuously against a broken script.
+# A0 (inside A1's fixture): the stub must be a FAITHFUL producer — piping it
+# into a short-circuiting reader must FAIL, because that failure is the entire
+# mechanism under test. This is not ceremony: the first version of this stub
+# padded with a bash `printf` loop, whose builtin survives EPIPE on some hosts
+# ("write error: Broken pipe", then keeps looping). There the stub exited 0, the
+# mutant could not reproduce the bug, and every arm below passed vacuously
+# against a broken script.
+#
+# Asserted as NON-ZERO rather than as 141, because the producer fails two
+# different ways depending on the host's SIGPIPE disposition, and both reproduce
+# the bug identically once `pipefail` promotes the status:
+#   * SIGPIPE default (dev machines) -> killed by signal 13 -> 141
+#   * SIGPIPE ignored (GitHub Actions runners) -> write() returns EPIPE -> exit 1
+# Demanding 141 pins the arm to one host's signal disposition and goes red on
+# the other while the bug is still faithfully reproduced — measured on CI.
 STUB_RC=0
 ( export PATH="$GIT_STUB_DIR:$PATH"
   cd "$R_A1" && git worktree list --porcelain | grep -qxF "worktree $P_A1" ) || STUB_RC=$?
-assert_eq "141" "$STUB_RC" \
-  "stub git dies of SIGPIPE when a grep -q reader quits early (arms are not vacuous)"
+assert_eq "true" "$([[ "$STUB_RC" -ne 0 ]] && echo true || echo false)" \
+  "stub git FAILS when a grep -q reader quits early (rc=$STUB_RC; arms are not vacuous)"
 
 RC_A1=$(run_verify "$SCRIPT" "$R_A1" "$P_A1" "$B_A1" "$TEST_DIR/a1.log")
 assert_eq "0" "$RC_A1" "verify_worktree_created exits 0 for a registered non-last worktree"
