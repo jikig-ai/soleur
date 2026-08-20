@@ -620,6 +620,10 @@ jobs:
   # stylish log, and the file-count floor below -- does not gate an unrelated PR.
   lint-webplat:
     runs-on: ubuntu-latest
+    # The only wall-clock bound on this job. The guard suite's own ESLINT_TIMEOUT_MS
+    # caps the vitest side; nothing capped this one, and a config that hangs would have
+    # run to the Actions six-hour default. Measured cost of the whole job is ~82s.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 

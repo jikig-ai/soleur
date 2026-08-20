@@ -48,6 +48,10 @@ export default [
     ignores: [
       "**/node_modules/**",
       ".next/**",
+      // `next build` with an export step drops thousands of bundle files here. It is
+      // absent today, and this config never reads .gitignore, so the list is hand-
+      // mirrored -- an unignored out/ would pull the whole bundle into the lint set.
+      "out/**",
       "dist/**",
       "coverage/**",
       "public/**",

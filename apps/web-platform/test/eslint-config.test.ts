@@ -380,9 +380,22 @@ describe("Guard 2 — the finding set is pinned", () => {
     // baseline entry is a hard failure — that is the "cannot grow silently" half, and it
     // is what makes the one-sided form still a ratchet rather than a rubber stamp.
     // Re-pin downward with the derivation command in BASELINE_FINDINGS' docstring.
+    // A local red here is far more often a stray file than a real regression: `eslint .`
+    // walks the WORKING TREE and does not read .gitignore, so any untracked .ts under
+    // apps/web-platform is linted. On this repo's parallel-worktree workflow a sibling
+    // session's scratch file lands in the count (observed: totals of 194 and 196 against
+    // the pinned 192). CI is the authoritative environment precisely because
+    // actions/checkout gives a clean tree. Say so in the failure rather than making the
+    // next reader rediscover it — cq-ac-must-not-depend-on-concurrent-sessions.
+    const strays = results
+      .map((f) => f.filePath)
+      .filter((fp) => /\/(__)?(probe|scratch|tmp)[-_.]/.test(fp));
+    const hint = strays.length
+      ? ` NOTE: ${strays.length} scratch-looking file(s) are in the lint set (${strays[0]}). Check \`git status\` — an untracked file from a concurrent session inflates this count.`
+      : " If this is unexpected, check `git status` for untracked files: eslint lints the working tree, not the index.";
     const grew = Object.entries(byRule)
       .filter(([k, n]) => n > (BASELINE_BY_RULE[k] ?? 0))
-      .map(([k, n]) => `${k}: ${n} > baseline ${BASELINE_BY_RULE[k] ?? 0}${k in BASELINE_BY_RULE ? "" : " (NEW RULE — no baseline entry)"}`);
+      .map(([k, n]) => `${k}: ${n} > baseline ${BASELINE_BY_RULE[k] ?? 0}${k in BASELINE_BY_RULE ? "" : " (NEW RULE — no baseline entry)"}${hint}`);
     expect(grew).toEqual([]);
     expect(total).toBeLessThanOrEqual(BASELINE_FINDINGS);
   }, 600_000);
