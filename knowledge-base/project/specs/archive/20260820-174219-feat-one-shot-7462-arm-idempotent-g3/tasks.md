@@ -1,6 +1,6 @@
 ---
 feature: feat-one-shot-7462-arm-idempotent-g3
-plan: knowledge-base/project/plans/2026-08-20-fix-inngest-arm-idempotent-g3-plan.md
+plan: knowledge-base/project/plans/archive/20260820-174219-2026-08-20-fix-inngest-arm-idempotent-g3-plan.md
 issue: 7462
 lane: cross-domain
 brand_survival_threshold: single-user incident

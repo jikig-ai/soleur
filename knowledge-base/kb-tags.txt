@@ -151,6 +151,7 @@ adr-ordinals
 adversarial-review
 advisor
 advisory-gate
+advisory-lock
 advisory-vs-blocking
 aeo
 aeo-score
@@ -315,6 +316,7 @@ as
 as-const-satisfies
 askuserquestion
 assert-dev-signin-eliminated.sh
+assert-vs-measure
 asserted-vs-measured
 assertion
 assertion-drift
@@ -1687,6 +1689,7 @@ guard-erosion
 guard-itself-dark
 guard-test
 guard-testing
+guard-vacuity
 guardrail
 guardrails
 guards
@@ -2388,6 +2391,7 @@ owner-repo
 ownership-transfer
 p1s
 pa8-disclosure
+package-install
 page
 paginate
 pagination
@@ -3069,6 +3073,7 @@ runbook
 runbook-authoring
 runbook-vs-code
 runbooks
+runner-image
 runner-reap
 runtime-auth-error
 runtime-errors
@@ -3488,6 +3493,7 @@ stale-data
 stale-detection
 stale-enumeration
 stale-filter
+stale-inherited-number
 stale-issue
 stale-lock
 stale-premise
@@ -3823,6 +3829,7 @@ ui-gating
 ui-pattern
 uid-remapping
 unattended-path
+unbounded-hang
 unbounded-recursion
 uncommitted work destroyed
 uncommitted work disappeared
