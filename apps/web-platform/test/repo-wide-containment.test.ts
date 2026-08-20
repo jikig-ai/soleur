@@ -43,41 +43,142 @@ import { REPO_WIDE_SUITES } from "./repo-wide-suites";
 
 const APP_ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 
-/** Longest consecutive `..` run, across both spellings that appear in-repo. */
+/** All `..` hops in one expression, counting both spellings. */
+function parentHops(expr: string): number {
+  let hops = 0;
+  for (const m of expr.matchAll(/(?:\.\.\/)+\.\.|\.\.(?:\/\.\.)+/g)) {
+    hops = Math.max(hops, (m[0].match(/\.\./g) ?? []).length);
+  }
+  const seq = expr.match(/["']\.\.["'](?:\s*,\s*["']\.\.["'])+/g) ?? [];
+  for (const m of seq) hops = Math.max(hops, (m.match(/["']\.\.["']/g) ?? []).length);
+  if (hops === 0 && /["']\.\.["']/.test(expr)) hops = 1;
+  return hops;
+}
+
+/** Longest consecutive `..` run anywhere in a file. */
 function longestParentRun(text: string): number {
   let best = 0;
-  // "../../.." as one string literal
   for (const m of text.matchAll(/(?:\.\.\/)+\.\.|\.\.(?:\/\.\.)+/g)) {
     best = Math.max(best, (m[0].match(/\.\./g) ?? []).length);
   }
-  // join(__dirname, "..", "..") — segments as separate arguments
-  for (const m of text.matchAll(/"\.\."(?:\s*,\s*"\.\.")+/g)) {
-    best = Math.max(best, (m[0].match(/"\.\."/g) ?? []).length);
+  for (const m of text.matchAll(/["']\.\.["'](?:\s*,\s*["']\.\.["'])+/g)) {
+    best = Math.max(best, (m[0].match(/["']\.\.["']/g) ?? []).length);
   }
   return best;
 }
 
 /** Names a helper that resolves the repo root directly, at any depth. */
-const REPO_ROOT_HELPER = /\bGIT_ROOT\b|\bfindRepoRoot\b|\brepoRoot\b|\bREPO_ROOT\b|\brepo_root\b/;
+const REPO_ROOT_HELPER =
+  /\bGIT_ROOT\b|\bfindRepoRoot\b|\brepoRoot\b|\bREPO_ROOT\b|\brepo_root\b|--show-toplevel/;
+
+/**
+ * Deepest reach of the file, in `..` hops, ACCOUNTING FOR ONE LEVEL OF
+ * VARIABLE SUBSTITUTION.
+ *
+ * The naive "longest single run" under-matches on a chain, and under-matching
+ * is the direction that fails open:
+ *
+ *   const APP = join(__dirname, "..", "..");   // 2 hops, == depth -> app root
+ *   readFileSync(join(APP, "..", "..", "x"));  // +2 more -> the REPO
+ *
+ * `longestParentRun` sees 2 and calls a depth-2 file app-local. Summing the
+ * referenced binding's hops sees 4 and correctly calls it an escape.
+ */
+function deepestReach(text: string): number {
+  // const NAME = <expr containing ..>
+  const bindings = new Map<string, number>();
+  // SINGLE LINE, and the initialiser must be a genuine path ROOT (`__dirname`
+  // or `import.meta`). A multi-line capture swallowed following statements and
+  // credited their `..` to an unrelated binding — `const row = emitAndParse(…)`
+  // picked up a later `join(__dirname, "../../server/…")` and mislabelled three
+  // app-local suites as escapes. Over-inclusion is the safe direction, but a
+  // guard that flags app-local files teaches people to pad the manifest.
+  for (const m of text.matchAll(
+    /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]*)/g,
+  )) {
+    if (!/__dirname|import\.meta/.test(m[2])) continue;
+    const hops = parentHops(m[2]);
+    if (hops > 0) bindings.set(m[1], hops);
+  }
+  let best = longestParentRun(text);
+  // join(X, "..", "..") / resolve(X, "../..") where X is such a binding.
+  for (const m of text.matchAll(/(?:join|resolve)\s*\(([^)]*)\)/g)) {
+    const args = m[1];
+    // Identifier references only — string literals stripped first. A binding
+    // named `kb` was matching the LITERAL "kb" inside
+    // `join(__dirname, "..", "components", "kb", f)`, which credited the
+    // binding's own hop a second time and mislabelled an app-local suite.
+    const idents = args.replace(/"[^"]*"|'[^']*'|`[^`]*`/g, "");
+    let base = 0;
+    for (const [name, hops] of bindings) {
+      if (new RegExp(`\\b${name}\\b`).test(idents)) base = Math.max(base, hops);
+    }
+    if (base > 0) best = Math.max(best, base + parentHops(args));
+  }
+  return best;
+}
+
+function escapesText(text: string, depth: number): boolean {
+  if (REPO_ROOT_HELPER.test(text)) return true;
+  return deepestReach(text) > depth;
+}
 
 function escapesApp(relPath: string): boolean {
   const text = readFileSync(join(APP_ROOT, relPath), "utf8");
-  if (REPO_ROOT_HELPER.test(text)) return true;
-  const depth = relPath.split("/").length - 1; // dirs below apps/web-platform
-  return longestParentRun(text) > depth;
+  return escapesText(text, relPath.split("/").length - 1);
 }
 
-function walk(dir: string, acc: string[] = []): string[] {
+/**
+ * Non-test modules under test/ and lib/ that themselves escape the app. A gated
+ * suite importing one becomes a repo reader without a single `..` of its own —
+ * the import-graph hole a per-file text scan cannot see.
+ */
+function escapingHelpers(): Set<string> {
+  const out = new Set<string>();
+  for (const dir of ["test", "lib"]) {
+    for (const f of walkAll(dir)) {
+      if (/\.test\.tsx?$/.test(f) || !/\.(ts|tsx|mts|cts)$/.test(f)) continue;
+      if (escapesApp(f)) out.add(f);
+    }
+  }
+  return out;
+}
+
+/** Relative import specifiers, resolved to repo-app-relative paths. */
+function relativeImports(relPath: string, text: string): string[] {
+  const dir = relPath.split("/").slice(0, -1);
+  const out: string[] = [];
+  for (const m of text.matchAll(/(?:from|import)\s*\(?\s*["'](\.[^"']*)["']/g)) {
+    const parts = [...dir];
+    for (const seg of m[1].split("/")) {
+      if (seg === "." || seg === "") continue;
+      if (seg === "..") parts.pop();
+      else parts.push(seg);
+    }
+    out.push(parts.join("/"));
+  }
+  return out;
+}
+
+function walkAll(dir: string, acc: string[] = []): string[] {
   for (const entry of readdirSync(join(APP_ROOT, dir), { withFileTypes: true })) {
     const rel = `${dir}/${entry.name}`;
+    // `node_modules` only. NOT `__synthesized__`: the unit project's
+    // `include: ["test/**/*.test.ts"]` does not skip it either, so skipping it
+    // here would leave a directory inside the gated project that the guard
+    // cannot see — a hole in a guard whose stated job is to have none.
     if (entry.isDirectory()) {
-      if (entry.name === "node_modules" || entry.name === "__synthesized__") continue;
-      walk(rel, acc);
-    } else if (entry.name.endsWith(".test.ts") || entry.name.endsWith(".test.tsx")) {
+      if (entry.name === "node_modules") continue;
+      walkAll(rel, acc);
+    } else {
       acc.push(rel);
     }
   }
   return acc;
+}
+
+function walk(dir: string): string[] {
+  return walkAll(dir).filter((f) => /\.test\.tsx?$/.test(f));
 }
 
 // Every file in a GATED project. Both `unit` (test|lib/**/*.test.ts) and
@@ -88,6 +189,28 @@ const gatedCandidates = [...walk("test"), ...walk("lib")].sort();
 const unitFiles = gatedCandidates.filter((f) => f.endsWith(".test.ts"));
 
 describe("repo-wide suite containment (#7498)", () => {
+  it("no gated suite imports a helper that escapes the app", () => {
+    // A suite with no `..` of its own still reads the repo if a module it
+    // imports does. Per-file text scanning cannot see that; this can.
+    const helpers = escapingHelpers();
+    const offenders: string[] = [];
+    for (const f of gatedCandidates) {
+      if (REPO_WIDE_SUITES.includes(f)) continue;
+      const text = readFileSync(join(APP_ROOT, f), "utf8");
+      for (const imp of relativeImports(f, text)) {
+        for (const h of helpers) {
+          if (h === imp || h === `${imp}.ts` || h === `${imp}.tsx` || h === `${imp}/index.ts`) {
+            offenders.push(`${f} -> ${h}`);
+          }
+        }
+      }
+    }
+    expect(
+      offenders,
+      "these gated suites reach the repo through an imported helper; add them to test/repo-wide-suites.ts",
+    ).toEqual([]);
+  });
+
   it("the manifest matches what actually escapes apps/web-platform", () => {
     const actual = unitFiles.filter(escapesApp).sort();
     const declared = [...REPO_WIDE_SUITES].sort();
@@ -151,6 +274,35 @@ describe("repo-wide suite containment (#7498)", () => {
     // the app root, which is the over-match half of the hazard.
     expect(longestParentRun('join(__dirname, "..", "..")')).toBe(2);
     expect(longestParentRun('join(__dirname, "..", "..")') > 2).toBe(false);
+  });
+
+  it("detects a CHAINED escape that a longest-single-run scan misses", () => {
+    // The hole a per-expression scan leaves open: each hop is within depth, the
+    // composition is not. At depth 2 this reaches the repo root.
+    const chained = [
+      'const APP = join(__dirname, "..", "..");',
+      'readFileSync(join(APP, "..", "..", "plugins", "x.sh"));',
+    ].join("\n");
+    expect(longestParentRun(chained)).toBe(2); // the naive scan says app-local…
+    expect(deepestReach(chained)).toBe(4); // …substitution sees the real reach
+    expect(escapesText(chained, 2)).toBe(true);
+
+    // Control: the same first hop WITHOUT a second must stay app-local, or the
+    // guard would flag most of the app.
+    const single = 'const APP = join(__dirname, "..", "..");\nreadFileSync(join(APP, "server", "x.ts"));';
+    expect(escapesText(single, 2)).toBe(false);
+  });
+
+  it("does not credit a binding named like a path SEGMENT", () => {
+    // `kb` the binding vs "kb" the literal. Matching the latter double-counted
+    // the hop and mislabelled an app-local suite as an escape.
+    const shadowed = 'const kb = (f) => join(__dirname, "..", "components", "kb", f);';
+    expect(escapesText(shadowed, 1)).toBe(false);
+  });
+
+  it("a repo-root helper name escapes at any depth", () => {
+    expect(escapesText("const r = GIT_ROOT;", 9)).toBe(true);
+    expect(escapesText("git rev-parse --show-toplevel", 9)).toBe(true);
   });
 });
 

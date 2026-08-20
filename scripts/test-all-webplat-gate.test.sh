@@ -93,6 +93,10 @@ echo ""
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# Writes the mutant to $TMP/$1.sh and returns non-zero on failure. NOT called
+# in a command substitution: an `exit 2` inside `$( )` leaves only the subshell,
+# so the designed fail-fast degraded into an empty path and two misleading
+# "mutant parses" failures pointing at the wrong cause.
 mutate() {
   # Split declarations: bash binds every name in one `local` before evaluating
   # the initialisers, so `local a="$1" b="$TMP/$a"` reads $a UNBOUND under
@@ -106,17 +110,18 @@ mutate() {
   sed -i "$sed_expr" "$out"
   if [[ ! -s "$out" ]]; then
     echo "  FATAL: mutant '$name' is missing or empty at $out" >&2
-    exit 2
+    return 2
   fi
   if diff -q "$TEST_ALL" "$out" >/dev/null 2>&1; then
     echo "  FATAL: mutation '$name' did not land — the arm below would pass vacuously" >&2
-    exit 2
+    return 2
   fi
-  printf '%s' "$out"
+  return 0
 }
 
 echo "M1: dropping the gate must break A2"
-M1="$(mutate m1 's/if _diff_touches "\${WEBPLAT_APP_PATHS\[@\]}"; then/if true; then/')"
+mutate m1 's/if _diff_touches "\${WEBPLAT_APP_PATHS\[@\]}"; then/if true; then/' || exit 2
+M1="$TMP/m1.sh"
 bash -n "$M1" && pass "M1 mutant is still a parseable script" || fail "M1 mutant parses"
 [[ -n "$(extract_block "$M1")" ]] && pass "M1 mutant still contains the webplat block" \
   || fail "M1 mutant still contains the webplat block"
@@ -128,9 +133,24 @@ fi
 echo ""
 
 echo "M2: gating repo-wide must break A3"
-# Move the repo-wide run_suite BELOW the gate by deleting its ungated line and
-# re-emitting it inside the gated arm.
-M2="$(mutate m2 '/run_suite "apps\/web-platform \[repo-wide\]"/,+1d')"
+# The mutation A3 exists for is repo-wide moved INSIDE the gate — not deleted.
+# Deletion is already covered by A1, and a mutant that only deletes leaves A3's
+# real failure mode uncertified. So: delete the ungated pair, then re-emit it
+# immediately after the `if _diff_touches` line, i.e. inside the gated arm.
+mutate m2 '/run_suite "apps\/web-platform \[repo-wide\]"/,+1d' || exit 2
+M2="$TMP/m2.sh"
+awk '
+  /if _diff_touches "\$\{WEBPLAT_APP_PATHS\[@\]\}"; then/ {
+    print
+    print "    run_suite \"apps/web-platform [repo-wide]\" env VITEST_SHARD=\"${VITEST_SHARD:-}\" \\"
+    print "      bash -c '"'"'cd apps/web-platform \&\& npm run test:ci -- --project repo-wide'"'"'"
+    next
+  }
+  { print }
+' "$M2" > "$M2.tmp" && mv "$M2.tmp" "$M2"
+grep -qF 'run_suite "apps/web-platform [repo-wide]"' "$M2" \
+  && pass "M2 mutant re-emitted repo-wide inside the gate (the mutation A3 targets)" \
+  || fail "M2 mutant re-emitted repo-wide inside the gate"
 bash -n "$M2" && pass "M2 mutant is still a parseable script" || fail "M2 mutant parses"
 [[ -n "$(extract_block "$M2")" ]] && pass "M2 mutant still contains the webplat block" \
   || fail "M2 mutant still contains the webplat block"
@@ -145,10 +165,10 @@ echo ""
 echo "=== Results ==="
 echo "Passed: $PASS"
 echo "Failed: $FAIL"
-# Anti-vacuity floor: 15 assertions run above. A refactor that silently drops
+# Anti-vacuity floor: 16 assertions run above. A refactor that silently drops
 # arms must not read as a pass.
-if (( PASS + FAIL < 15 )); then
-  echo "ANTI-VACUITY FLOOR TRIPPED: only $((PASS + FAIL)) assertions ran, expected 15." >&2
+if (( PASS + FAIL < 16 )); then
+  echo "ANTI-VACUITY FLOOR TRIPPED: only $((PASS + FAIL)) assertions ran, expected 16." >&2
   exit 1
 fi
 if (( FAIL > 0 )); then echo "SOME TESTS FAILED"; exit 1; fi
