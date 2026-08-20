@@ -246,7 +246,7 @@ describe("Guard 1 — the lint script is non-interactive and terminates", () => 
   }, 600_000);
 
   it("CI carries a job that actually runs the lint script", () => {
-    expect.assertions(3);
+    expect.assertions(4);
     const ci = readFileSync(
       resolve(REPO_ROOT, ".github/workflows/ci.yml"),
       "utf8",
@@ -259,12 +259,22 @@ describe("Guard 1 — the lint script is non-interactive and terminates", () => 
     expect(start).toBeGreaterThan(-1);
     const rest = ci.slice(start + 1);
     const nextJob = rest.search(/\n {2}[a-zA-Z0-9_-]+:\n/);
-    const block = nextJob === -1 ? rest : rest.slice(0, nextJob);
+    // Comment lines are stripped before matching. The first version of this
+    // test asserted a bare `MIN_FILES_SCANNED` against the raw block, and the
+    // block's own explanatory YAML comment names that identifier — so deleting
+    // the entire floor step left this test green. That is the defect class
+    // this whole PR exists to close, reintroduced by its own fix.
+    const block = (nextJob === -1 ? rest : rest.slice(0, nextJob))
+      .split("\n")
+      .filter((l) => !l.trimStart().startsWith("#"))
+      .join("\n");
     expect(block).toMatch(/^\s+run:\s+npm run lint$/m);
     // The floor step is the job's own anti-vacuity story. Without it the job
     // reports green having linted 11 of 2019 files (`export default []`
     // exits 0), and its only floor lived in a different job on a different
-    // matrix.
+    // matrix. Anchored on the step's `- name:` key, which a `#` comment line
+    // cannot produce, in addition to the identifier itself.
+    expect(block).toMatch(/^\s+- name: ESLint anti-vacuity floor$/m);
     expect(block).toMatch(/MIN_FILES_SCANNED/);
   });
 });
