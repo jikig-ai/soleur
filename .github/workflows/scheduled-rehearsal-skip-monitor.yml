@@ -107,7 +107,14 @@ jobs:
           key: rehearsal-skip-monitor-streak
 
       - name: Open or update the alert issue
-        if: ${{ steps.probe.outputs.verdict == 'fail' }}
+        # `!cancelled()` IS LOAD-BEARING, not decoration. Without an explicit status
+        # function this step inherits `success()`, so it skips after ANY earlier step
+        # failure -- i.e. the alarm goes silent in precisely the runs where something
+        # went wrong. That is the same fail-open class this PR exists to close, and
+        # scripts/alarm-issue-filing-guard.test.sh caught it here.
+        # `!cancelled()` rather than `always()`: this step mutates state (it files or
+        # comments on an issue), and `always()` is true on cancellation too.
+        if: ${{ !cancelled() && steps.probe.outputs.verdict == 'fail' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SUMMARY: ${{ steps.probe.outputs.summary }}
