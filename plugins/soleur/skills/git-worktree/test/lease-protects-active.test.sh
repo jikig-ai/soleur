@@ -107,7 +107,15 @@ WT_ACTOR="$WT_PARENT/.worktrees/feat-actor"
 # matches the worktree being considered — so feat-victim is NOT protected
 # by that guard from a sibling session. Only the new lease guard protects it.
 (
-  cd "$WT_ACTOR"
+  # `|| exit` IS LOAD-BEARING (#7546 review). A bare `cd` that FAILS leaves the subshell in the
+  # INHERITED cwd -- the real worktree `test-all.sh` was invoked from -- and the cleanup-merged
+  # below then runs against it. All seven `worktree add` calls in this file swallow failure with
+  # `>/dev/null 2>&1`, so $WT_ACTOR being absent is a reachable state (a leftover branch from a
+  # crashed run is enough). Measured 2026-08-20: this escaped the sandbox and committed
+  # `victim change`, `victim2 change`, `v9 change` and `v12 change` onto a live feature branch in
+  # another session's worktree, then checked that worktree out to main and pulled. The fixture
+  # names map one-to-one onto the four cd-failure sites in this file.
+  cd "$WT_ACTOR" || { echo "FATAL: cd to sandbox \$WT_ACTOR failed; refusing to run cleanup-merged in $(pwd)" >&2; exit 90; }
   SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT" \
     bash "$WM" cleanup-merged >/tmp/cleanup-out.$$ 2>&1 || true
 )
@@ -177,7 +185,8 @@ elif kill -0 "$DEAD_PID" 2>/dev/null; then
 else
   pass "scenario 2 precondition: the acquiring process has exited (pid $DEAD_PID is dead)"
   (
-    cd "$WT_ACTOR"
+    # `|| exit` load-bearing -- see the note at the first cd site above.
+    cd "$WT_ACTOR" || { echo "FATAL: cd to sandbox \$WT_ACTOR failed; refusing to run cleanup-merged in $(pwd)" >&2; exit 90; }
     SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT" \
       bash "$WM" cleanup-merged >/tmp/cleanup2-out.$$ 2>&1 || true
   )
