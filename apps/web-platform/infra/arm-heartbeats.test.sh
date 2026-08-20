@@ -96,6 +96,15 @@ cat > "$BIN/sleep" <<'EOS'
 n="${1:-0}"
 c=$(cat "$FAKE_CLOCK")
 echo $(( c + n )) > "$FAKE_CLOCK"
+# THE EXTERNAL CUT (#7587, plan scenario 8). GitHub ends a step that hits its `timeout-minutes`
+# by signalling it, and the modal moment for that is BETWEEN two polls — which is exactly here.
+# `sleep` is invoked directly by `arm_one` (no subshell, no pipeline), so $PPID is the SUT's own
+# bash and a SIGKILL here models the cut deterministically, with no race against the fake clock.
+if [[ -n "${FAKE_CUT_AFTER:-}" ]]; then
+  seen=$(( $(cat "$FAKE_CUT_COUNT" 2>/dev/null || echo 0) + 1 ))
+  echo "$seen" > "$FAKE_CUT_COUNT"
+  if [[ "$seen" -ge "$FAKE_CUT_AFTER" ]]; then kill -9 "$PPID" 2>/dev/null; exit 0; fi
+fi
 EOS
 
 cat > "$BIN/curl" <<'EOS'
@@ -306,6 +315,7 @@ case_setup() {  # <name> — fresh clock/calls/state for one run; every id defau
   FAKE_PATCH_FAIL_ONCE="$CASE/patchfailonce"; : > "$FAKE_PATCH_FAIL_ONCE"
   FAKE_EMPTY_BODY="$CASE/emptybody"; : > "$FAKE_EMPTY_BODY"
   FAKE_BAD_JSON="$CASE/badjson"; : > "$FAKE_BAD_JSON"
+  FAKE_CUT_COUNT="$CASE/cutcount"; : > "$FAKE_CUT_COUNT"
   FAKE_STATE="$CASE/state"
   FAKE_HTTP="$CASE/http"
   STATEFILE="$CASE/armed-unconfirmed"
@@ -317,7 +327,7 @@ case_setup() {  # <name> — fresh clock/calls/state for one run; every id defau
     printf 'up' > "$FAKE_STATE/$id.status"
   done
   export FAKE_CLOCK FAKE_CALLS FAKE_GET_FAIL FAKE_GET_FAIL_AFTER FAKE_PATCH_FAIL \
-         FAKE_PATCH_FAIL_ONCE FAKE_EMPTY_BODY FAKE_BAD_JSON FAKE_STATE FAKE_HTTP
+         FAKE_PATCH_FAIL_ONCE FAKE_EMPTY_BODY FAKE_BAD_JSON FAKE_STATE FAKE_HTTP FAKE_CUT_COUNT
 }
 
 run_sut() {  # [sut-path] -> sets OUT and RC
@@ -509,6 +519,16 @@ assert_eq "T4 issues ONLY the unpause — no rollback on a successful arm" "1" "
 assert "T4's single PATCH is the unpause" \
   "[[ \"\$(patch_bodies | head -1)\" == '$ID_INNGEST {\"paused\":false}' ]]"
 assert_eq "T4 removes the id from the state file on reaching up" "0" "$(state_lines)"
+# The second half of the self-clearing property the 30s deadline is chosen to PRESERVE: the next
+# apply must be a no-op, reached through `already armed`, not through a second unpause. Asserted
+# as a SEQUENCE against the same fixture — T1 proves the no-op on a monitor that was never
+# touched, which is a different premise from one this gate armed a moment ago.
+patches_after_arm="$(patch_count)"
+FAKE_CURL_COST=1 run_sut
+assert_eq "T4 the NEXT apply exits 0" "0" "$RC"
+assert "T4 the next apply no-ops via already armed, never a second unpause" \
+  "[[ \"\$OUT\" == *'inngest-consumer (web-1): already armed (status=up)'* ]]"
+assert_eq "T4 the next apply issues no PATCH at all" "$patches_after_arm" "$(patch_count)"
 
 # --- T5: the rollback itself fails ----------------------------------------------------------
 echo "--- T5 the rollback PATCH fails: the id STAYS on the sweep's books and the apply reds"
@@ -669,6 +689,33 @@ assert_eq "T10 the default interval costs exactly 9 GETs, not one per second" "9
 assert "T10 the DEFAULT BS_API_BASE is the production Better Stack API" \
   "grep -q 'https://uptime.betterstack.com/api/v2/heartbeats/' <<< \"\$(grep -o 'BS_API_BASE:-[^}]*' '$SUT')/heartbeats/\""
 
+# --- T11: THE EXTERNAL CUT — the window the sweep exists for (plan scenario 8) ----------------
+# The premise every S-case takes as given: that when the apply job is ended at its budget while an
+# arm is in flight, the id is ALREADY on the sweep's books. Nothing asserted it. The script says so
+# in a comment ("the id is on the sweep's books from the instant the monitor is live, not from the
+# instant we decide to give up") and MEASURED: moving `state_add` from before the poll loop to just
+# before the rollback left all 190 assertions green — every case that reads the state file reads it
+# after `arm_one` has returned, which is the one moment the cut never happens at. So this case
+# stops the SUT mid-poll and reads the books at that instant, then hands them to the real sweep.
+echo "--- T11 the job is cut mid-poll: the id is on the books, and the sweep re-pauses it"
+case_setup t11
+printf 'paused' > "$FAKE_STATE/$ID_INNGEST.status"
+FAKE_CUT_AFTER=2 FAKE_CURL_COST=1 run_sut
+assert "T11 the SUT really was cut (non-zero, and not its own soft landing)" "[[ \"\$RC\" -ne 0 ]]"
+assert "T11 the cut landed INSIDE the poll, before any rollback could run" \
+  "[[ \"\$OUT\" != *'no beat within'* && \"\$OUT\" != *'ROLLED BACK'* ]]"
+assert_eq "T11 exactly one PATCH was issued — the unpause, with no rollback behind it" "1" "$(patch_count)"
+assert "T11 that PATCH was the unpause, so the monitor is LIVE at the moment of the cut" \
+  "[[ \"\$(patch_bodies | head -1)\" == '$ID_INNGEST {\"paused\":false}' ]]"
+assert_eq "T11 the id is on the re-pause sweep's books AT THE CUT, not only after a give-up" "1" "$(state_lines)"
+assert "T11 and it is the right id" "[[ \"\$(cat '$STATEFILE')\" == '$ID_INNGEST' ]]"
+# …and the `always()` sweep, reading the file the cut left behind, closes the window.
+run_sweep
+assert_eq "T11 the sweep exits 0 on the books the cut left" "0" "$RC"
+assert "T11 the sweep re-pauses exactly the cut monitor" \
+  "[[ \"\$OUT\" == *'armed=1 repaused=1 failed=0 outcome=repaused'* ]]"
+assert_eq "T11 the monitor is paused again — the window is closed" "paused" "$(cat "$FAKE_STATE/$ID_INNGEST.status")"
+
 # =================================================================================================
 # --- S: the re-pause sweep (#7659) --------------------------------------------------------------
 # =================================================================================================
@@ -725,6 +772,12 @@ assert "S4 reports outcome=mint-unreadable" "[[ \"\$OUT\" == *'outcome=mint-unre
 assert "S4 prints the monitor IDS — the only thing that lets an operator re-pause by hand" \
   "[[ \"\$OUT\" == *\"$ID_ZOT1 $ID_NIC1\"* ]]"
 assert "S4 tells the operator where to click" "[[ \"\$OUT\" == *'Better Stack'* ]]"
+# `::error::` is not decoration: it is what puts the line in the run's annotation list, which has
+# a REST API — and it is that API the notify job's `cause` step reads. Downgrading the prefix to a
+# plain `echo` left every other S4 assertion green while the operator's only machine-readable
+# signal disappeared. The credential is named in the same line, so the reader knows WHAT failed.
+assert "S4 emits it as an ::error:: ANNOTATION, naming the credential it could not read" \
+  "[[ \"\$OUT\" == *'::error::Re-pause sweep: no Better Stack API token'* ]]"
 assert_eq "S4 attempts no PATCH (it has no credential to attempt one with)" "0" "$(patch_count)"
 
 echo "--- S5 the sweep is IDEMPOTENT: re-PATCHing an already-paused monitor is a no-op"
@@ -955,6 +1008,26 @@ if mutate no-rollback-retry 1 's|^ARM_ROLLBACK_ATTEMPTS=2$|ARM_ROLLBACK_ATTEMPTS
     "[[ \"\$OUT\" == *'unpaused-and-unfed'* ]]"
 fi
 
+# M18 — move `state_add` from the instant the monitor goes LIVE to the instant the gate gives up.
+# This is the row T11 exists to make possible. Before T11 the edit was invisible: every case that
+# reads the state file reads it after `arm_one` has RETURNED, and by then the late `state_add` has
+# already run — so all 190 assertions stayed green while the whole poll window, which is precisely
+# the window the `always()` sweep exists to cover, silently stopped being recorded.
+# shellcheck disable=SC2016  # the sed program is data; expanding it here is the bug
+# `mutate`'s line count is DELETIONS only, and this edit is one delete plus one pure insertion, so
+# the count it can see is 1. That is too weak on its own: if the insertion half silently stopped
+# matching (a reflow of the rollback line), the count would still read 1 and this row would be
+# running M3's mutation — no `state_add` anywhere — and passing for the wrong reason. So the
+# re-insertion is asserted directly.
+if mutate late-state-add 1 '/^  state_add "\$id"$/d; s|^  if ! hb_rollback "\$id" "\$label"; then$|  state_add "$id"\n&|'; then
+  assert "M18 the mutation MOVED state_add rather than deleting it (that is M3's row)" \
+    "grep -q '^  state_add \"\$id\"$' '$MUTANT'"
+  case_setup m18
+  printf 'paused' > "$FAKE_STATE/$ID_INNGEST.status"
+  FAKE_CUT_AFTER=2 FAKE_CURL_COST=1 run_sut "$MUTANT"
+  assert_eq "M18 RED: a cut mid-poll leaves the monitor LIVE and OFF the sweep's books" "0" "$(state_lines)"
+fi
+
 # M15 — the anti-vacuity control. An UNMUTATED copy, run through the same harness, must still be
 # GREEN; without it a red baseline is indistinguishable from a caught mutation.
 cp "$SUT" "$WORK/mutant-control.sh" || { echo "FATAL: control copy failed"; exit 2; }
@@ -975,8 +1048,9 @@ echo "arm-heartbeats: ${PASS} passed, ${FAIL} failed ($((PASS + FAIL)) assertion
 # derive it from. Ratcheted 55 → 190, the EXACT shipped count (#7656 C8: 55 against an actual 69
 # left room to delete a whole ten-assertion case without tripping it). Exact, not "shipped minus a
 # margin": a margin is precisely the room a silent narrowing hides in, and removing an assertion on
-# purpose should cost one deliberate edit here.
-ASSERT_FLOOR=190
+# purpose should cost one deliberate edit here. Ratcheted 190 → 206 for T11 (the external cut),
+# T4's self-clearing sequence, S4's annotation, and mutation row M18.
+ASSERT_FLOOR=206
 if [[ $((PASS + FAIL)) -lt "$ASSERT_FLOOR" ]]; then
   echo "FAIL: only $((PASS + FAIL)) assertions ran against a floor of ${ASSERT_FLOOR} — the suite is narrowed or a case aborted early."
   exit 1
