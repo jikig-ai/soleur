@@ -17,23 +17,30 @@
 # GDPR surface and could itself page. Existence-by-name is the deterministic,
 # side-effect-free liveness signal.
 #
-# SCOPE — existence-by-name, deliberately NOT filter-shape. Name-matching is
-# safe here because the failure mode this gate catches is ABSENCE — a duplicate
-# name still passes, which is the correct (fail-open-to-present) direction for
-# an existence check.
+# SCOPE — existence-by-name, deliberately NOT filter-shape. The rule's
+# `conditions_v2`/`filters_v2`/`actions_v2` are Terraform-owned (only
+# `environment` is in `lifecycle.ignore_changes`), and this assertion runs
+# POST-apply in the same workflow — so immediately after `terraform apply`
+# re-writes the filters from source, a rule's tag filters are guaranteed
+# correct. Tag-drift (a UI edit that leaves the rule present but renames a
+# `tagged_event` key) between applies is therefore self-healing on the next
+# apply; the residual window (out-of-band UI mute/drift undetected until the
+# next apply) is covered by the deferred recurring-liveness-cron option (plan
+# Phase 3.2, gated on review judgment). Name-matching is safe here because the
+# failure mode this gate catches is ABSENCE — a duplicate name still passes,
+# which is the correct (fail-open-to-present) direction for an existence check.
 #
-# Corrected 2026-08-19 (#7590). This block used to justify the narrow scope by
-# claiming the rule's `conditions_v2`/`filters_v2`/`actions_v2` are
-# "Terraform-owned (only `environment` is in `lifecycle.ignore_changes`)", and
-# concluded that tag-drift is "self-healing on the next apply". Both are false.
-# `infra/sentry/issue-alerts.tf` declares those attributes as `[]` and lists
-# `conditions_v2, filters_v2, actions_v2, environment, frequency` in
-# `ignore_changes` — so Terraform does NOT own the filters and an apply cannot
-# restore them. That is not theoretical: on 2026-06-02 all four rules drifted to
-# empty filters and matched every issue in the project, and the repair was a
-# manual re-PUT of the `configure-sentry-alerts.sh` definitions, not an apply.
-# The recurrence guard is #4781 (OPEN). Existence-by-name remains the right
-# scope for THIS script; only the reason is corrected.
+# The paragraph above is CORRECT for these four rules, and was briefly
+# "corrected" into a falsehood on 2026-08-19 (#7590) before being restored.
+# Recording why, because the mistake is one grep away from being made again:
+# `issue-alerts.tf` DOES contain
+# `ignore_changes = [conditions_v2, filters_v2, actions_v2, environment, frequency]`
+# — but on the four `auth-*` resources, which are a DIFFERENT four rules,
+# managed by `configure-sentry-alerts.sh` and tracked by #4781. The four in
+# EXPECTED_RULES below carry `ignore_changes = [environment]` only and do not
+# declare the v2 attributes empty, so Terraform genuinely owns their filters.
+# A file-level grep for `ignore_changes` cannot tell those two sets apart;
+# resolve the attribute per RESOURCE BLOCK before believing either claim.
 #
 # SCOPE — org-wide since #7590, previously project-scoped. The replacement
 # endpoint (below) is org-scoped and its payload carries no project binding, so
@@ -96,21 +103,62 @@ rules_json="$(fetch_rules)"
 
 # Fail closed on a non-array payload (Sentry error envelopes are objects).
 if ! jq -e 'type == "array"' >/dev/null 2>&1 <<<"$rules_json"; then
-  echo "ERROR: Sentry workflows response is not a JSON array — auth/region/endpoint failure. Cannot assert BYOK rule liveness." >&2
+  echo "ERROR: Sentry workflows response is not a JSON array. NOTE: this branch does NOT catch auth/region/HTTP errors — \`curl -fsS\` exits 22 on any >=400 and \`set -e\` aborts at the assignment above, before this check. What reaches here is a 200 carrying a non-array body: schema drift, an HTML interstitial, or a proxy injection. Cannot assert BYOK rule liveness." >&2
   printf '%s\n' "$rules_json" | head -c 500 >&2
   exit 1
 fi
 
+# PAGINATION CEILING. The fetch asks for one page of 100 and does not follow
+# cursors. The org returns 30 workflows today (measured 2026-08-19), but it
+# grew 4 -> 29 issue-alert resources in 76 days, so the ceiling is reachable.
+# If it is ever hit, a rule on page 2 is indistinguishable from an absent one,
+# and the absence branch below would tell the operator a GDPR control is dark
+# when it is live. Fail with THIS message instead, naming the real cause.
+#
+# The sibling `sentry_fetch_collection` in sentry-monitors-audit.sh follows
+# cursors against this same endpoint; porting it here is the real fix and is
+# deliberately not done in this PR — this guard exists so the day the ceiling
+# is reached produces an accurate diagnosis rather than a false alarm.
+if (( $(jq 'length' <<<"$rules_json") >= 100 )); then
+  echo "ERROR: the workflows payload returned >= 100 rows, which is this fetch's unpaginated ceiling — a rule beyond page 1 would read as ABSENT and produce a false 'control is dark' alarm. Do not trust a liveness verdict from this run. Fix: follow the Link rel=\"next\" cursor here, mirroring sentry_fetch_collection in sentry-monitors-audit.sh. Refs #7590." >&2
+  exit 1
+fi
+
+# LIVENESS, not mere existence. Matching on `.name` alone was a fail-open: a
+# rule disabled in the Sentry UI is still present in the payload, so all four
+# controls could be muted and this gate would report green. Measured
+# 2026-08-19 (#7590): a fully-muted fixture exited 0 with "[ok] ... all
+# expected rules present". The header above has claimed since #4656 that this
+# gate catches a "deleted/muted rule"; until now it caught only deleted.
+#
+# The enabled test is written as "no row with this name has `.enabled == true`"
+# rather than "some row has `.enabled == false`", so a payload that stops
+# carrying the field fails CLOSED (reported as muted) instead of silently
+# reverting to existence-by-name.
+#
+# ABSENCE IS REPORTED FIRST. A run can produce both lists, and absence is the
+# stronger finding: it is the one whose remediation differs (an apply can
+# recreate a deleted rule; only live state can re-enable a muted one). Ordering
+# the muted branch first made T2/T3/T7/T8 stop naming the absent rule.
 missing=()
+disabled=()
 for rule in "${EXPECTED_RULES[@]}"; do
   if ! jq -e --arg n "$rule" 'any(.[]; .name == $n)' >/dev/null 2>&1 <<<"$rules_json"; then
     missing+=("$rule")
+  elif ! jq -e --arg n "$rule" 'any(.[]; .name == $n and .enabled == true)' >/dev/null 2>&1 <<<"$rules_json"; then
+    disabled+=("$rule")
   fi
 done
 
 if (( ${#missing[@]} > 0 )); then
   echo "ERROR: issue-alert liveness assertion FAILED — rule(s) absent in Sentry: ${missing[*]}" >&2
-  echo "A silent mis-wire (dropped -target, deleted/muted rule, or name drift) leaves the named control un-paged: byok-art-33-breach → the GDPR Art. 33(1) 72h clock never starts; chat-message-save-failure → message-save outage un-paged; workspace-sync-health → diverged/stale workspace KB clone (and probe self-failure) un-paged. Refs #4656 item 5, #4849, #4882." >&2
+  echo "A silent mis-wire (dropped -target, deleted rule, or name drift) leaves the named control un-paged: byok-art-33-breach → the GDPR Art. 33(1) 72h clock never starts; chat-message-save-failure → message-save outage un-paged; workspace-sync-health → diverged/stale workspace KB clone (and probe self-failure) un-paged. Refs #4656 item 5, #4849, #4882." >&2
+  exit 1
+fi
+
+if (( ${#disabled[@]} > 0 )); then
+  echo "ERROR: issue-alert liveness assertion FAILED — rule(s) PRESENT BUT NOT ENABLED in Sentry: ${disabled[*]}" >&2
+  echo "The rule exists but is muted, so it pages nobody — same user-visible outcome as absence, different repair. An apply will NOT fix it: enablement is live state. Re-enable in the Sentry UI. Refs #7590." >&2
   exit 1
 fi
 

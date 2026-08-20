@@ -42,11 +42,11 @@ base_env() {
 echo "T1: all expected rules present"
 cat >"$TMPDIR_T/both.json" <<'JSON'
 [
-  {"id": "1", "name": "byok-art-33-breach"},
-  {"id": "2", "name": "byok-cap-exceeded"},
-  {"id": "3", "name": "chat-message-save-failure"},
-  {"id": "4", "name": "auth-exchange-code-burst"},
-  {"id": "5", "name": "workspace-sync-health"}
+  {"id": "1", "name": "byok-art-33-breach", "enabled": true},
+  {"id": "2", "name": "byok-cap-exceeded", "enabled": true},
+  {"id": "3", "name": "chat-message-save-failure", "enabled": true},
+  {"id": "4", "name": "auth-exchange-code-burst", "enabled": true},
+  {"id": "5", "name": "workspace-sync-health", "enabled": true}
 ]
 JSON
 set +e
@@ -62,10 +62,10 @@ echo "T2: byok-art-33-breach missing"
 # chat-message-save-failure present so only art-33 is absent (isolation).
 cat >"$TMPDIR_T/missing-breach.json" <<'JSON'
 [
-  {"id": "2", "name": "byok-cap-exceeded"},
-  {"id": "3", "name": "chat-message-save-failure"},
-  {"id": "4", "name": "auth-exchange-code-burst"},
-  {"id": "5", "name": "workspace-sync-health"}
+  {"id": "2", "name": "byok-cap-exceeded", "enabled": true},
+  {"id": "3", "name": "chat-message-save-failure", "enabled": true},
+  {"id": "4", "name": "auth-exchange-code-burst", "enabled": true},
+  {"id": "5", "name": "workspace-sync-health", "enabled": true}
 ]
 JSON
 set +e
@@ -82,9 +82,9 @@ echo "T3: byok-cap-exceeded missing"
 # chat + workspace-sync-health present so only cap is absent (isolation).
 cat >"$TMPDIR_T/missing-cap.json" <<'JSON'
 [
-  {"id": "1", "name": "byok-art-33-breach"},
-  {"id": "3", "name": "chat-message-save-failure"},
-  {"id": "5", "name": "workspace-sync-health"}
+  {"id": "1", "name": "byok-art-33-breach", "enabled": true},
+  {"id": "3", "name": "chat-message-save-failure", "enabled": true},
+  {"id": "5", "name": "workspace-sync-health", "enabled": true}
 ]
 JSON
 set +e
@@ -148,9 +148,9 @@ fi
 echo "T7: chat-message-save-failure missing"
 cat >"$TMPDIR_T/missing-chat.json" <<'JSON'
 [
-  {"id": "1", "name": "byok-art-33-breach"},
-  {"id": "2", "name": "byok-cap-exceeded"},
-  {"id": "5", "name": "workspace-sync-health"}
+  {"id": "1", "name": "byok-art-33-breach", "enabled": true},
+  {"id": "2", "name": "byok-cap-exceeded", "enabled": true},
+  {"id": "5", "name": "workspace-sync-health", "enabled": true}
 ]
 JSON
 set +e
@@ -167,9 +167,9 @@ if grep -q "chat-message-save-failure" <<<"$out"; then pass "names the missing c
 echo "T8: workspace-sync-health missing"
 cat >"$TMPDIR_T/missing-wsh.json" <<'JSON'
 [
-  {"id": "1", "name": "byok-art-33-breach"},
-  {"id": "2", "name": "byok-cap-exceeded"},
-  {"id": "3", "name": "chat-message-save-failure"}
+  {"id": "1", "name": "byok-art-33-breach", "enabled": true},
+  {"id": "2", "name": "byok-cap-exceeded", "enabled": true},
+  {"id": "3", "name": "chat-message-save-failure", "enabled": true}
 ]
 JSON
 set +e
@@ -212,10 +212,15 @@ if grep -qE '"https://\$\{SENTRY_API_HOST\}/api/0/organizations/\$\{SENTRY_ORG\}
 else
   fail "fetch_rules does not request organizations/\${SENTRY_ORG}/workflows/"
 fi
-if grep -qE 'projects/\$\{SENTRY_ORG\}/\$\{SENTRY_PROJECT\}/rules/' <<<"$code_only"; then
-  fail "the deprecated project rules endpoint is still requested"
+# Anchored on the deprecated FAMILY, not on the old `${SENTRY_PROJECT}`
+# interpolation. That symbol was deleted from the script by this same change,
+# so a guard naming it would only fire on a byte-exact revert and would miss a
+# re-introduction in any new form (`projects/${SENTRY_ORG}/web-platform/rules/`,
+# or the same path built from a differently-named variable).
+if grep -qE 'api/0/projects/[^"]*/rules/|api/0/organizations/[^"]*/alert-rules/' <<<"$code_only"; then
+  fail "a deprecated alert-rule-family endpoint is still requested"
 else
-  pass "no request to the deprecated projects/{org}/{proj}/rules/ path"
+  pass "no request to any deprecated alert-rule-family path"
 fi
 
 # ------------------------------------------------------------------------
@@ -237,6 +242,119 @@ if [[ $rc -eq 0 ]]; then
   pass "runs to success with SENTRY_PROJECT unset"
 else
   fail "SENTRY_PROJECT still required (rc=$rc): $out"
+fi
+
+# ------------------------------------------------------------------------
+# T11 — a rule that is PRESENT BUT MUTED fails, and says so.
+#
+# Regression guard for the fail-open this change closed. Matching on `.name`
+# alone, all four controls could be disabled in the Sentry UI and this gate
+# reported `[ok] ... all expected rules present` at exit 0 — measured
+# 2026-08-19 (#7590). The header has claimed since #4656 that it catches a
+# "muted rule"; it did not.
+#
+# Two arms, because rc != 0 alone cannot tell muting from absence and the two
+# have different repairs (an apply recreates a deleted rule; only live state
+# re-enables a muted one).
+# ------------------------------------------------------------------------
+echo "T11: a present-but-disabled rule fails, distinctly from absence"
+cat >"$TMPDIR_T/muted.json" <<'JSON'
+[
+  {"id": "1", "name": "byok-art-33-breach", "enabled": false},
+  {"id": "2", "name": "byok-cap-exceeded", "enabled": true},
+  {"id": "3", "name": "chat-message-save-failure", "enabled": true},
+  {"id": "5", "name": "workspace-sync-health", "enabled": true}
+]
+JSON
+set +e
+out=$(base_env SENTRY_FIXTURE_RULES="$TMPDIR_T/muted.json" bash "$SCRIPT" 2>&1)
+rc=$?
+set -e
+if [[ $rc -ne 0 ]] && grep -q 'PRESENT BUT NOT ENABLED' <<<"$out" && grep -q 'byok-art-33-breach' <<<"$out"; then
+  pass "a muted rule fails and is named"
+else
+  fail "muted rule not caught (rc=$rc): $out"
+fi
+# The muted verdict must NOT be reported as absence — different repair.
+if grep -q 'absent in Sentry' <<<"$out"; then
+  fail "a muted rule was reported as absent (wrong remediation)"
+else
+  pass "muted is reported distinctly from absent"
+fi
+
+# A payload that stops carrying `enabled` must fail CLOSED, not silently
+# revert to existence-by-name.
+cat >"$TMPDIR_T/nofield.json" <<'JSON'
+[
+  {"id": "1", "name": "byok-art-33-breach"},
+  {"id": "2", "name": "byok-cap-exceeded"},
+  {"id": "3", "name": "chat-message-save-failure"},
+  {"id": "5", "name": "workspace-sync-health"}
+]
+JSON
+set +e
+out=$(base_env SENTRY_FIXTURE_RULES="$TMPDIR_T/nofield.json" bash "$SCRIPT" 2>&1)
+rc=$?
+set -e
+if [[ $rc -ne 0 ]]; then
+  pass "a payload without .enabled fails closed"
+else
+  fail "missing .enabled silently reverted to existence-by-name (rc=0)"
+fi
+
+# BOTH conditions at once. This is the arm that pins the ORDER: with one rule
+# absent and another muted, the report must name the ABSENT one. Without this
+# fixture, swapping the two branches leaves the whole suite green (measured —
+# it survived a mutation battery at 21/21), because every other fixture has
+# exactly one of the two conditions and the ordering is unobservable.
+cat >"$TMPDIR_T/both-conditions.json" <<'JSON'
+[
+  {"id": "2", "name": "byok-cap-exceeded", "enabled": false},
+  {"id": "3", "name": "chat-message-save-failure", "enabled": true},
+  {"id": "5", "name": "workspace-sync-health", "enabled": true}
+]
+JSON
+set +e
+out=$(base_env SENTRY_FIXTURE_RULES="$TMPDIR_T/both-conditions.json" bash "$SCRIPT" 2>&1)
+rc=$?
+set -e
+# byok-art-33-breach is ABSENT; byok-cap-exceeded is present-but-muted.
+if [[ $rc -ne 0 ]] && grep -q 'absent in Sentry' <<<"$out" && grep -q 'byok-art-33-breach' <<<"$out"; then
+  pass "absence is reported first when a rule is absent AND another is muted"
+else
+  fail "expected the ABSENT rule to be named first (rc=$rc): $out"
+fi
+
+# ------------------------------------------------------------------------
+# T12 — the unpaginated ceiling reports TRUNCATION, not absence.
+#
+# The fetch asks for one page of 100 and follows no cursor. At >= 100 rows a
+# rule on page 2 is indistinguishable from a deleted one, and the absence
+# message tells the operator a GDPR control is dark. This asserts the run
+# fails with the pagination diagnosis instead.
+# ------------------------------------------------------------------------
+echo "T12: the >=100-row ceiling reports truncation, not a dark control"
+jq -nc '[range(0;100) | {id: (.|tostring), name: ("filler-" + (.|tostring)), enabled: true}]' \
+  > "$TMPDIR_T/ceiling.json"
+n_rows=$(jq 'length' "$TMPDIR_T/ceiling.json")
+if [[ "$n_rows" -lt 100 ]]; then
+  fail "T12 FIXTURE DEFECT: generated ${n_rows} rows, need >= 100 to reach the ceiling"
+else
+  set +e
+  out=$(base_env SENTRY_FIXTURE_RULES="$TMPDIR_T/ceiling.json" bash "$SCRIPT" 2>&1)
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 ]] && grep -q 'unpaginated ceiling' <<<"$out"; then
+    pass "ceiling hit reports truncation as the cause"
+  else
+    fail "ceiling not detected (rc=$rc): $out"
+  fi
+  # The whole point: it must NOT claim the four controls are absent.
+  if grep -q 'GDPR Art. 33(1) 72h clock never starts' <<<"$out"; then
+    fail "ceiling produced a false 'control is dark' alarm"
+  else
+    pass "no false control-is-dark alarm on a truncated page"
+  fi
 fi
 
 echo ""
