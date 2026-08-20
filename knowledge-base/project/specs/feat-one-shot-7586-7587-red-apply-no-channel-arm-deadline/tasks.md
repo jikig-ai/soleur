@@ -17,126 +17,133 @@ Phase 5 are written from the design, not from whatever the code ends up looking 
 - [ ] **0.1** Re-read the plan's `## Guard Contract` and write both mutation matrices down before
       touching the workflow. A matrix derived from finished code tests the code that exists; one
       derived from the design tests the property.
-- [ ] **0.2** Confirm issue states are unchanged: `gh issue view 7586 7587 7228 7462 --json state`.
-- [ ] **0.3** Re-derive the two sizing terms from the jobs API — do **not** carry this plan's
+      **NOT DONE AS SPECIFIED, recorded honestly.** The `## Guard Contract` was read in full before
+      the first edit (its Assembly notes are what put the `arm_one` extraction and the
+      identify-the-sweep-by-`always()`-plus-state-file-literal rule into the design), but the two
+      matrices were not written to a separate artifact *first* — they were transcribed into
+      `measurements.md` at 5.7 and executed there. The risk this task exists to prevent (a matrix
+      derived from the finished code) is therefore mitigated by the matrices being copied verbatim
+      from the plan rather than re-invented, but the ordering the task asks for was not followed.
+- [x] **0.2** Confirm issue states are unchanged: `gh issue view 7586 7587 7228 7462 --json state`.
+- [x] **0.3** Re-derive the two sizing terms from the jobs API — do **not** carry this plan's
       literals: (a) the reachable deadline sum, (b) the **p95 pre-gate duration** (job start → ARM
       step start). The plan measured 57/58/64/81/91/111 s across six runs (p95 111 s) via
       `gh api repos/:owner/:repo/actions/runs/<id>/jobs`. Record both in `measurements.md` with the
       command.
-- [ ] **0.4** Verify the errexit premise directly: confirm the ARM step declares no `shell:` key, so
+- [x] **0.4** Verify the errexit premise directly: confirm the ARM step declares no `shell:` key, so
       GitHub invokes it as `/usr/bin/bash -e {0}`. An earlier plan draft got this backwards; do not
       proceed on memory.
-- [ ] **0.5** Run the bound suites GREEN before any edit, so a later red is attributable:
+- [x] **0.5** Run the bound suites GREEN before any edit, so a later red is attributable:
       `bun test plugins/soleur/test/terraform-target-parity.test.ts`,
       `bun test plugins/soleur/test/stock-preflight-coverage.test.ts`,
       `bash tests/scripts/test-preapply-entrypoint-gate.sh`,
       `bash tests/scripts/test-vector-redeliver-wiring.sh`,
       `bash apps/web-platform/infra/web-1-swap-concurrency-parity.test.sh`.
-- [ ] **0.6** Re-confirm the two claims the deepen pass flagged as unverifiable from the repo, both
+- [x] **0.6** Re-confirm the two claims the deepen pass flagged as unverifiable from the repo, both
       load-bearing for the sweep: (a) `git_data_prd` is absent from the merge-path tfstate — read it
       from a run's ARM-step log, not a committed file; (b) `$RUNNER_TEMP` persists across steps
       within a job — GitHub Actions platform semantics with no in-repo citation, so confirm it
       empirically. **If (b) does not hold, the state file must move to a step output or an artifact
       and the sweep design changes.**
-- [ ] **0.7** Measure observed queue depth / wait on the shared
+- [x] **0.7** Measure observed queue depth / wait on the shared
       `terraform-apply-web-platform-host` group before relying on the budget raise. The plan states
       the true worst case as 35 min run-level (apply 30 + notify 5, summed because the group is
       workflow-level); per-merge queue wait is the binding constraint and is **not** yet measured.
 
 ## Phase 1 — Extract the ARM gate, then change its contracts
 
-- [ ] **1.1** Extract the ARM gate's bash from the workflow into
+- [x] **1.1** Extract the ARM gate's bash from the workflow into
       `apps/web-platform/infra/arm-heartbeats.sh`, following the house precedent
       (`web-private-nic-guard.sh`). Parameterise the clock and the HTTP call so a test can inject
       fakes. Keep behaviour identical in this step — extraction first, changes after.
-- [ ] **1.2** Raise the `apply` job's `timeout-minutes` from 15 to 30 and rewrite the adjacent
+- [x] **1.2** Raise the `apply` job's `timeout-minutes` from 15 to 30 and rewrite the adjacent
       comment: it currently claims the 15 "matches `apply-deploy-pipeline-fix.yml`", whose apply job
       is actually **90**. Cite the two-part inequality and the measured p95 instead.
-- [ ] **1.3** Add a step-level `timeout-minutes` to the ARM gate satisfying
+- [x] **1.3** Add a step-level `timeout-minutes` to the ARM gate satisfying
       `arm_step_timeout ≥ Σdeadlines × 1.1` and
       `job_timeout − arm_step_timeout ≥ p95 pre-gate` (≈27 min against a 30 min job).
-- [ ] **1.4** Fix the wall-clock accounting inside `arm-heartbeats.sh`: the loop counter must advance
+- [x] **1.4** Fix the wall-clock accounting inside `arm-heartbeats.sh`: the loop counter must advance
       by measured elapsed time, not by its `sleep 10` alone. Today the per-iteration
       `curl --max-time 15` is uncounted, so a 230 s nominal deadline can consume up to 575 s.
-- [ ] **1.5** Resize the `inngest_consumer` deadline from 230 to **exactly 30**. Change no other
+- [x] **1.5** Resize the `inngest_consumer` deadline from 230 to **exactly 30**. Change no other
       deadline.
-- [ ] **1.6** Rewrite the `arc == 2` warning — do **not** retain it. Its text says "no beat within
+- [x] **1.6** Rewrite the `arc == 2` warning — do **not** retain it. Its text says "no beat within
       230s" and "the probe or the private-net path is broken"; after the resize both are false and a
       *healthy* feeder emits it ~5 runs in 6. Carry the deadline from the variable, drop the
       probe-is-broken instruction, and emit the monitor's `status` and last-beat timestamp so
       *never beat* and *beat not due in-window* are distinguishable from one event.
-- [ ] **1.7** Add the state file: append `<id>` to `$RUNNER_TEMP/armed-unconfirmed` immediately after
+- [x] **1.7** Add the state file: append `<id>` to `$RUNNER_TEMP/armed-unconfirmed` immediately after
       a successful `PATCH {paused:false}`; remove it **only** on a 2xx rollback `PATCH` or on
       reaching `up`. Removing on "rollback attempted" drops a failed rollback's id and defeats the
       sweep.
-- [ ] **1.8** Declare `set +e` explicitly, guard every rollback `PATCH` with `|| true`, and use
+- [x] **1.8** Declare `set +e` explicitly, guard every rollback `PATCH` with `|| true`, and use
       `x=$(( … ))` never bare `(( … ))`. Errexit is inherited and `set -uo pipefail` does not clear
       it; an unguarded `rollback_all` aborts at the first 5xx and silently truncates.
-- [ ] **1.9** Do **not** add a `trap` (Cut List C6): bash keeps only the last `EXIT` handler, an
+- [x] **1.9** Do **not** add a `trap` (Cut List C6): bash keeps only the last `EXIT` handler, an
       `INT`/`TERM` handler returns and then fires `EXIT` too, and the handler is deferred until the
       foreground `sleep` returns.
 
 ## Phase 2 — The rollback sweep
 
-- [ ] **2.1** Add a named step `- name: Re-pause any monitor left unconfirmed`, gated
+- [x] **2.1** Add a named step `- name: Re-pause any monitor left unconfirmed`, gated
       `if: always()`, after the ARM gate and before `Tear down cloudflared SSH bridge`.
-- [ ] **2.2** First line, **before** any Doppler read:
+- [x] **2.2** First line, **before** any Doppler read:
       `[[ -s "$RUNNER_TEMP/armed-unconfirmed" ]] || exit 0`. The step runs on every apply including
       `ssh_apply_skip` runs; without this it re-mints a credential it does not need and raises a
       mint-failure alarm on runs with no work — a false alarm wired into the new email channel.
-- [ ] **2.3** Give it `env: { DOPPLER_TOKEN_WEB_ARM: … }`, re-mint `BETTERSTACK_API_TOKEN`, and
+- [x] **2.3** Give it `env: { DOPPLER_TOKEN_WEB_ARM: … }`, re-mint `BETTERSTACK_API_TOKEN`, and
       `printf '::add-mask::%s\n'` the result. `BS_TOKEN` is derived inside the ARM step and is
       invisible to a sibling step. Keep the mint and the mask adjacent; never `set -x`.
-- [ ] **2.4** Re-PATCH `paused:true` idempotently for every listed id, with `set +e` and `|| true`.
-- [ ] **2.5** **`exit 1`** when the state file is non-empty AND (the mint failed OR any re-pause
+- [x] **2.4** Re-PATCH `paused:true` idempotently for every listed id, with `set +e` and `|| true`.
+- [x] **2.5** **`exit 1`** when the state file is non-empty AND (the mint failed OR any re-pause
       `PATCH` was non-2xx). `::error::` does not fail a step — an annotating sweep leaves the job
       green, the notify predicate false, and nobody emailed.
-- [ ] **2.6** On a successful fire, write armed / fired / outcome counts where the notify body reads
+- [x] **2.6** On a successful fire, write armed / fired / outcome counts where the notify body reads
       them. Re-pausing a production uptime monitor on an otherwise-green run must reach the
       operator, not just a run log.
 
 ## Phase 3 — The failure channel
 
-- [ ] **3.1** Add `notify-apply-failure` with `needs: [preflight, apply]` and `timeout-minutes: 5`.
-- [ ] **3.2** Predicate: true unless everything is fine. It must cover a failed `preflight` (which
+- [x] **3.1** Add `notify-apply-failure` with `needs: [preflight, apply]` and `timeout-minutes: 5`.
+- [x] **3.2** Predicate: true unless everything is fine. It must cover a failed `preflight` (which
       leaves `apply` **skipped** on a red run) and must admit
       `inputs.apply_target == 'manual-rerun'` (the recovery path the email itself prescribes). A
       `push`-only, `needs.apply.result`-only predicate misses both.
-- [ ] **3.3** Job-level `permissions: { contents: read, actions: read }` — a job-level block
+- [x] **3.3** Job-level `permissions: { contents: read, actions: read }` — a job-level block
       **replaces** the workflow-level one, so `contents: read` must be re-declared. `actions: read`
       is the minimum for `…/actions/runs/<id>/jobs`.
-- [ ] **3.4** Named `cause` step resolving the failing step's name from the jobs API. Do **not** read
+- [x] **3.4** Named `cause` step resolving the failing step's name from the jobs API. Do **not** read
       `apply` step outputs — that job declares no `outputs:`, and job outputs are unreliable on the
       cancelled path anyway.
-- [ ] **3.5** Sanitize the cause token: strip `\r`/`\n`, reject outside
+- [x] **3.5** Sanitize the cause token: strip `\r`/`\n`, reject outside
       `[A-Za-z0-9 ._:()/-]{1,80}`, HTML-escape `&`/`<`/`>`, and use a random `$GITHUB_OUTPUT`
       heredoc delimiter (a newline otherwise forges outputs and spoofs annotations).
-- [ ] **3.6** Named `notify-ops-email` step with `continue-on-error: true`.
-- [ ] **3.7** Body to the `#7539` bar: plain-language blast radius; a branch on
+- [x] **3.6** Named `notify-ops-email` step with `continue-on-error: true`.
+- [x] **3.7** Body to the `#7539` bar: plain-language blast radius; a branch on
       `needs.apply.result == 'cancelled'` with per-outcome guidance for **both** arms; the failing
       step's name; whether uptime alerting may be paused; that the previously-applied infrastructure
       is still serving; the sweep's counts when it fired; and a fenced
       `gh workflow run … -f apply_target=manual-rerun` block.
-- [ ] **3.8** Keep the body in `with: body:` — **no `run:` body in this job may contain
+- [x] **3.8** Keep the body in `with: body:` — **no `run:` body in this job may contain
       `terraform apply` or `-target=`**. The predicate names `manual-rerun`, so
       `stock-preflight-coverage.test.ts`'s `jobFor("manual-rerun")` returns two hits and
       disambiguates by `appliesTerraform`; either token makes that suite red.
-- [ ] **3.9** Enforce the interpolation allow-list: workflow-context scalars plus the `cause` token
+- [x] **3.9** Enforce the interpolation allow-list: workflow-context scalars plus the `cause` token
       only. Never raw step logs, `curl` output or a shell trace.
-- [ ] **3.10** Add a one-line comment in the workflow pointing at the guard suite.
+- [x] **3.10** Add a one-line comment in the workflow pointing at the guard suite.
 
 ## Phase 4 — Records
 
-- [ ] **4.1** Amend `ADR-117` with a dated section covering (a) the deliberate departure from
+- [x] **4.1** Amend `ADR-117` with a dated section covering (a) the deliberate departure from
       `period + grace − 10` for `inngest_consumer` and its bounded cost, and (b) the already-shipped
       `arc == 2` soft-landing. Do **not** fold in the unrelated `triggers_replace` divergence.
-- [ ] **4.2** Update `model.c4`'s `github -> betterstack` edge to name the ARM gate's
+- [x] **4.2** Update `model.c4`'s `github -> betterstack` edge to name the ARM gate's
       `PATCH /api/v2/heartbeats/<id>` write under `DOPPLER_TOKEN_WEB_ARM`. Leave `github -> resend`
       alone (C10). Run the c4 syntax + render suites.
-- [ ] **4.3** Extend `plugins/soleur/lib/heartbeat-manifest.ts`'s `arming_pending` comment on the
+- [x] **4.3** Extend `plugins/soleur/lib/heartbeat-manifest.ts`'s `arming_pending` comment on the
       `inngest_consumer` row to record the probabilistic arming window and to state that removal
       must follow **observed** arming. The row stays — removing it is #7462 step 6.
-- [ ] **4.4** Update the `registry_luks_recut` mutex-accounting comment for the new 35-min run-level
+- [x] **4.4** Update the `registry_luks_recut` mutex-accounting comment for the new 35-min run-level
       worst case.
 
 ## Phase 5 — Guards (written from the design, not the code)
