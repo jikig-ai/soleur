@@ -17,6 +17,30 @@
 # (userId → userIdHash via HMAC-SHA256 reusing SENTRY_USERID_PEPPER per
 # ADR-029 §I4) → pii_scrub_string (regex backstop for non-pino / kernel-oops
 # lines, runs ONLY when the structured branch did not parse).
+#
+# Reload-path exercise (#7539). This paragraph carries no runtime meaning: it
+# exists to move the sha256 that `terraform_data.journald_persistent`'s
+# `triggers_replace` takes over this file (server.tf, the file() pair with
+# journald-soleur.conf), so the arm plans one real delivery and the hardened
+# reload runs once on web-1 under observation.
+#
+# Why a content change is the ONLY way to do that. The hardening shipped in
+# #7539 — a 20s settle window sized to one RestartSec=10 cycle, an NRestarts
+# delta to catch a crash-loop that is momentarily active, a `.prev` snapshot
+# taken only from a demonstrably-running agent, and a restore-and-report path
+# that distinguishes restored-and-running from VECTOR IS DOWN. None of it had
+# ever executed: #7539 touched neither trigger file, so the hash never moved.
+# `apply_target=vector-redeliver` cannot force it either, and that is by design
+# rather than a defect — the arm plans with `-target` and deliberately no
+# `-replace`, because a `-replace` flag "would force a needless production
+# restart even when the config had not changed" (runbooks/vector-redeliver.md).
+# Fired against an unmoved hash it plans `No changes`, its gate grades an empty
+# plan, the apply step is skipped, and the run reports success having done
+# nothing — measured on run 32279292256.
+#
+# So the dormancy cause and the dispatch's no-op are the same fact, and only a
+# real content change breaks the tie. Do not delete this paragraph to "clean
+# up": removing it moves the hash again and schedules another replace.
 
 data_dir = "/var/lib/vector"
 

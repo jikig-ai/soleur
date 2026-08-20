@@ -1374,6 +1374,10 @@ jobs:
           # fail). Pre-cutover (soak) ZOT_ACTIVE=0 so this is latent, and the
           # zot-entry-gate/soak-gate catch a missing/unsigned copy before the flip. The
           # remediation MUST re-sign, not just re-copy — hence the distinct $2 detail.
+          # MEASURED-BY: $? from `retry cosign sign`, passed to `degraded` as its first
+          # argument. "The image IS in zot at the correct digest" is measured by the copy
+          # steps above; the Sigstore/Fulcio attribution is explicitly hedged ("this is the
+          # one failure mode where … is a PLAUSIBLE cause") rather than asserted.
           retry cosign sign --yes "${ZOT}@${DIGEST}" \
             || degraded sign "$?" "The image IS in zot at the correct digest — the copy succeeded. What is missing is its SIGNATURE, which the host verifies before it will run the image, so the boot would hard-fail. This is the one failure mode where a third-party outage is a plausible cause: if Sigstore/Fulcio is down, waiting and re-running is the fix. Otherwise re-sign directly: 'cosign sign --yes ${ZOT}@${DIGEST}'."
 
