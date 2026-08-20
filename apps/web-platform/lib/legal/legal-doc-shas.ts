@@ -16,15 +16,15 @@ export const LEGAL_DOC_SHAS: Readonly<Record<string, string>> = {
   "cookie-policy":
     "e2ac3ba184bf3e29d94a5702e48b85447748d749f28c00664ee94b170b84417e",
   "corporate-cla":
-    "d41147d94cf53c9340cdf39d751b91b4140991ddbab092451308a1398eb00826",
+    "3a29a64cf1be210e273176682a930f16872b09bcf256d32b1f4490cda17c7270",
   "data-protection-disclosure":
-    "b011cd43df9a81f20ff417ff7ef7c4c8be9b9b3d6e4ecb10d572c907a5016dea",
+    "6e648c7f669f58786472d2887b1902a2cde6873f14eaca10b8a318c3a34b040c",
   "disclaimer":
     "ea66cca071771aad58b151ad022649326bcedf8b734d6afcffcd4ce1bcb44d7e",
   "gdpr-policy":
-    "912e5759d6cb8e3ec54838c9e1f687c2647b701ae9ccab6693a800669a8a3e94",
+    "06228fe8d823e77d7d462e4a3fb3445cc35c5f85b11a1733190e281cac021385",
   "individual-cla":
-    "8d773e4331fd82e4b27a506eac2f968ad319adcef624d8f6115c0b71deb5e538",
+    "fbc42498e5a763a730662f169de21cf4030a7e8dc980a02c6b067a10ef7a2bb1",
   "privacy-policy":
-    "8efeaa0e9808c9621a70f5727c27b3e4286afa92abf602ab524e9ee0c4a5f6d0",
+    "d6580fae9309d019adead2364e780e0d159e39e4616458ec08c8ecc6369960fe",
 };
