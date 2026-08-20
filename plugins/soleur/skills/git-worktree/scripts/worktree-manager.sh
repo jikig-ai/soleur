@@ -167,7 +167,7 @@ else
   if [[ -n "$_common_dir" && "$_common_dir" != /* ]]; then
     _common_dir="$(cd "$_common_dir" 2>/dev/null && pwd)" || _common_dir=""
   fi
-  if [[ -n "$_common_dir" ]] && git -C "$_common_dir" rev-parse --is-bare-repository 2>/dev/null | grep -q true; then
+  if [[ -n "$_common_dir" ]] && [[ "$(git -C "$_common_dir" rev-parse --is-bare-repository 2>/dev/null)" == "true" ]]; then
     IS_BARE=true
     # GIT_ROOT should point to the bare repo, not the worktree
     if [[ "$_common_dir" == */.git ]]; then
@@ -1043,6 +1043,30 @@ seed_worktree_bare_false() {
   return 0
 }
 
+# Whole-line membership test over `git worktree list --porcelain`.
+#
+# The obvious spelling is a pipeline, and it is WRONG under the `set -o pipefail`
+# at the top of this file:
+#
+#     git worktree list --porcelain | grep -qxF "$needle"
+#
+# `grep -q` exits at the FIRST match and closes the pipe. If the needle is not
+# near the end of the listing, git is still writing, takes SIGPIPE, exits 141,
+# and pipefail promotes that to the pipeline's status — so the test reports
+# "absent" precisely when the needle IS present and early. Porcelain order
+# follows `.git/worktrees` readdir order, so which branch names break is
+# effectively arbitrary and it reads as flaky infrastructure rather than a bug.
+# Measured on a 27-worktree checkout: rc=141, needle present at line 49 of 120.
+#
+# Capture first, match second — no pipeline, no reader that can quit early.
+# Returns 0 = present, 1 = absent, 2 = listing unreadable (callers that gate a
+# DESTRUCTIVE path must distinguish 1 from 2; "could not tell" is not "absent").
+_porcelain_has_line() {
+  local needle="$1" listing
+  listing="$(git worktree list --porcelain)" || return 2
+  [[ $'\n'"$listing"$'\n' == *$'\n'"$needle"$'\n'* ]]
+}
+
 # Verify a worktree was properly created and registered.
 # Checks: (1) rev-parse --show-toplevel matches expected path,
 #          (2) worktree appears in git worktree list.
@@ -1087,10 +1111,10 @@ verify_worktree_created() {
   fi
 
   # Check 2: Verify worktree is registered in git's worktree list (#1932)
-  if ! git worktree list --porcelain | grep -qxF "worktree $worktree_path"; then
+  if ! _porcelain_has_line "worktree $worktree_path"; then
     echo -e "${YELLOW}Warning: Worktree not in git worktree list — attempting repair...${NC}"
     git worktree repair "$worktree_path" 2>/dev/null || true
-    if ! git worktree list --porcelain | grep -qxF "worktree $worktree_path"; then
+    if ! _porcelain_has_line "worktree $worktree_path"; then
       echo "SOLEUR_GIT_WORKTREE_VERIFY_FAILED reason=unregistered branch=$branch_name expected=$worktree_path"
       echo -e "${RED}Error: Worktree directory exists but is not registered after repair${NC}"
       git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
@@ -1664,7 +1688,12 @@ heal_stale_branch() {
   # A branch checked out in ANY worktree is ACTIVE, not a stale orphan — never
   # heal it (guards both the remote delete and the local prune below in one place;
   # a checked-out branch is exactly the thing we must not touch).
-  if git worktree list --porcelain 2>/dev/null | grep -qx "branch refs/heads/$branch"; then
+  local _wt_probe=0
+  _porcelain_has_line "branch refs/heads/$branch" || _wt_probe=$?
+  # 0 = checked out (active). 2 = the listing could not be read. Only a definite
+  # 1 (absent) may fall through to the remote delete / local prune below — "we
+  # could not tell" must never authorise deleting someone's branch.
+  if [[ "$_wt_probe" != "1" ]]; then
     return 0
   fi
 
@@ -2682,7 +2711,9 @@ cleanup_merged_worktrees() {
     if [[ "$_line" == "branch refs/heads/"* ]]; then
       _wt_branch="${_line#branch refs/heads/}"
       [[ "$_wt_branch" == "main" || "$_wt_branch" == "master" ]] && continue
-      if printf '%s\n' "$gone_branches" "$merged_branches" | grep -qxF "$_wt_branch"; then continue; fi
+      # Same pipefail/SIGPIPE hazard as _porcelain_has_line: `grep -q` closing
+      # the pipe early makes printf's next write fail. Match in-shell instead.
+      if [[ $'\n'"$gone_branches"$'\n'"$merged_branches"$'\n' == *$'\n'"$_wt_branch"$'\n'* ]]; then continue; fi
       local _merged_count
       _merged_count=$(gh pr list --head "$_wt_branch" --state merged --limit 1 --json number --jq 'length' 2>/dev/null || echo "0")
       [[ "$_merged_count" == "1" ]] && gh_merged_branches+="${_wt_branch}"$'\n'
