@@ -104,6 +104,20 @@ export PATH="$STUB_DIR:$PATH"
 GIT_STUB_DIR="$TEST_DIR/gitbin"
 mkdir -p "$GIT_STUB_DIR"
 REAL_GIT="$(command -v git)"
+
+# The padding is emitted by an EXTERNAL `cat`, not a bash `printf` loop.
+# That distinction is the whole arm. Real git DIES on SIGPIPE; bash's printf
+# builtin does not necessarily — on the CI runner it reports
+# "write error: Broken pipe" and keeps looping, so the stub exited 0, the
+# mutant never reproduced the bug, and A2 went red while A1 passed vacuously.
+# `exec cat` makes the stub process BE cat, so it dies of SIGPIPE exactly as
+# git would and the pipeline sees 141.
+PAD_FILE="$TEST_DIR/porcelain-pad.txt"
+: >"$PAD_FILE"
+for ((_p = 0; _p < 2000; _p++)); do
+  printf 'worktree /nonexistent/pad-%s\n\n' "$_p"
+done >"$PAD_FILE"   # ~70 KiB: strictly more than the 64 KiB pipe buffer.
+
 cat > "$GIT_STUB_DIR/git" <<EOF
 #!/usr/bin/env bash
 _is_wt_list=0
@@ -114,15 +128,12 @@ for _a in "\$@"; do
 done
 if [[ "\$_is_wt_list" == 1 ]]; then
   "$REAL_GIT" "\$@" || exit \$?
-  # ~70 KiB of trailing entries: strictly more than the 64 KiB pipe buffer.
-  for ((_i = 0; _i < 2000; _i++)); do
-    printf 'worktree /nonexistent/pad-%s\n\n' "\$_i"
-  done
-  exit 0
+  exec cat "$PAD_FILE"
 fi
 exec "$REAL_GIT" "\$@"
 EOF
 chmod +x "$GIT_STUB_DIR/git"
+
 
 # --- Fixture ---------------------------------------------------------------
 # A clone with a real `origin` (so the remote-delete path is live) and enough
@@ -256,6 +267,18 @@ assert_eq "true" "$([[ "$COUNT_A1" -ge 3 ]] && echo true || echo false)" \
 IFS=$'\t' read -r P_A1 B_A1 <<<"$(entry_at "$R_A1" 1)"
 assert_eq "true" "$([[ -n "$P_A1" && -n "$B_A1" ]] && echo true || echo false)" \
   "parsed a non-last entry from the listing (path=$P_A1 branch=$B_A1)"
+
+# A0 (inside A1's fixture): the stub must be a FAITHFUL producer. Piping it into
+# a short-circuiting reader has to yield 141. This is not ceremony — the first
+# version of this stub padded with a bash `printf` loop, and bash's printf
+# builtin survives EPIPE on some hosts ("write error: Broken pipe", then keeps
+# going). There the stub exited 0, the mutant could not reproduce the bug, and
+# every arm below would have passed vacuously against a broken script.
+STUB_RC=0
+( export PATH="$GIT_STUB_DIR:$PATH"
+  cd "$R_A1" && git worktree list --porcelain | grep -qxF "worktree $P_A1" ) || STUB_RC=$?
+assert_eq "141" "$STUB_RC" \
+  "stub git dies of SIGPIPE when a grep -q reader quits early (arms are not vacuous)"
 
 RC_A1=$(run_verify "$SCRIPT" "$R_A1" "$P_A1" "$B_A1" "$TEST_DIR/a1.log")
 assert_eq "0" "$RC_A1" "verify_worktree_created exits 0 for a registered non-last worktree"
@@ -430,4 +453,4 @@ assert_contains "$(cat "$TEST_DIR/a9.log")" "reason=registry-unavailable" \
   "marker names the real cause, not reason=unregistered"
 echo ""
 
-print_results 23
+print_results 24
