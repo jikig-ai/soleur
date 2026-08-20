@@ -72,6 +72,34 @@ now report non-empty conditions+filters. Recurrence guard tracked in **#4781**.
   `conditions`+`filters`. **Empty filters = catch-all = it really did fire.**
   Only conclude "coincidental" after confirming the rule's filter cannot match
   the event's tags.
+
+  > **Superseded 2026-08-19 (#7590) — the recipe above no longer runs.** The
+  > bullet is left exactly as written; only the endpoint and field path are
+  > superseded. Sentry deprecated `projects/{org}/{proj}/rules/` on 2026-05-14
+  > and serves it under scheduled brownouts, so following it returns
+  > `curl: (22) … error: 410` for part of each cycle and a 200 the rest — the
+  > intermittency that cost this repo months on the audit gate. The live
+  > equivalent, measured 2026-08-19:
+  >
+  > ```bash
+  > curl -s -H "Authorization: Bearer $SENTRY_IAC_AUTH_TOKEN" \
+  >   "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/workflows/?per_page=100" \
+  >   | jq '.[] | select(.name == "auth-callback-no-code-burst")
+  >              | {name, freq: .triggers.conditions, tags: [.actionFilters[].conditions[]]}'
+  > ```
+  >
+  > The finding is unchanged and the check still works — only its coordinates
+  > moved. `filters` is now `actionFilters[].conditions[]`, entries of shape
+  > `{type: "tagged_event", comparison: {key, match, value}}`; `conditions` is
+  > now `triggers.conditions[]`, e.g.
+  > `{type: "event_frequency_count", comparison: {value, interval}}`. **Empty
+  > `actionFilters[].conditions[]` = catch-all = it really did fire**, exactly as
+  > the bullet says of the old `filters`. Verified live 2026-08-19: all four auth
+  > rules present, `enabled: true`, non-empty tag conditions — no active drift.
+  >
+  > The repair half of this learning (the direct PUT) is NOT yet portable: the
+  > write shape against `workflows/` is unresolved, and #4781's guard must be
+  > authored against `actionFilters[].conditions[]` rather than `filters`.
 - **A Sentry-paste-driven plan is a hypothesis, not a work order.** When the plan
   prescribes a code change, grep the target file's tests for a guard that forbids
   exactly that change (`expect(...).not.toHaveProperty`, "rejected approach",
