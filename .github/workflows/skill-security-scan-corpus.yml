@@ -29,6 +29,14 @@ jobs:
   calibration:
     name: corpus calibration
     runs-on: ubuntu-latest
+    # Bounded so a hung step fails loudly instead of parking a required check for the
+    # 360-minute GitHub default. #7623 removed the apt-get that actually hung on
+    # 2026-08-19 (127 min on one PR, 125 and 98 on two others, all on the same
+    # `Install jq` step) — but removing THAT step does not bound the NEXT one, and an
+    # unbounded required check is what turned a transient mirror stall into a
+    # three-PR outage with no failure signal. Measured normal runtime here is under a
+    # minute; 10 is generous by two orders of magnitude and still finite.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
