@@ -392,8 +392,22 @@ thing to reach for first.
 - `reap` — signals `TERM`, one pid at a time, never to a process group, with no automatic escalation to
   `KILL`.
 
-**Exit codes are distinct**, so a caller can branch: `0` nothing found, `10` candidates found, `1` the walk
-was structurally invalid. A constant exit code would leave no machine-readable verdict at all.
+**Exit codes.** `0` the walk completed, `1` the walk was structurally invalid. Findings are reported on the
+summary line, **not** in the default exit code; `report --strict` additionally exits `10` when any anchor was
+found, for a caller that wants to branch on it.
+
+That split is deliberate and was not the first draft. Making "found something" the default non-zero exit
+couples the health of any caller to **ambient machine state**: the live registration line in `test-all.sh`
+would turn the whole gate red because an unrelated orphan happened to exist on the box, which is
+`cq-ac-must-not-depend-on-concurrent-sessions` reproduced inside the tool rather than in an acceptance
+criterion. Structural invalidity is a property of the run; a stray orphan is a property of the machine, and
+only the first belongs in an exit code a suite reads.
+
+Verified rather than reasoned: `scripts/test-all.sh`'s `suite_exit_class()` classifies `0` as `ok`, treats
+`rc > 128 && rc <= 192` with a resolvable signal name as `killed`, and falls through to `failed` for
+everything else — so `rc=10` classifies as **failed**, and `run_suite` captures the rc rather than testing it
+(`"$@" || rc=$?`). A `report` line exiting 10 on findings would therefore have turned the full gate red
+because an unrelated process existed on the box.
 
 **The two-strike rule is how this plan resolves reap-now versus report-first**, and it is mechanical rather
 than a promise to revisit. The reaper refuses to signal any anchor it has not already recorded in a previous
@@ -692,7 +706,11 @@ logs:
 
 discoverability_test:
   command: bash scripts/orphan-process-reaper.sh report
-  expected_output: "orphan-process-reaper: anchors=0 set_members=0 scanned=<N> unreadable=0 valid=1 mode=report"
+  expected_output: "valid=1 mode=report"
+  # The expectation is deliberately a STABLE SUBSTRING of the summary line, not the whole line. preflight
+  # Check 10 substring-matches stdout against this value, and every other field on that line — scanned,
+  # anchors, unreadable — varies with whatever happens to be running on the box. Pinning them would make the
+  # probe fail for reasons that have nothing to do with the change under review.
 ```
 
 The probe's first token is `bash`, which is on `PROBE_VERB_ALLOWLIST` in
@@ -865,8 +883,10 @@ Recorded rather than skipped silently, because a reviewer's first question is wh
 8. **Self-exclusion.** The scanner never flags itself, an ancestor, or a pid sharing its process group.
 9. `report` signals nothing under every arm above, asserted by the absence of any `signalled` line and by the
    survival of every fixture process.
-10. Exit codes are distinct and all three are asserted: `0` nothing found, `10` candidates found, `1` the walk
-    was structurally invalid (`valid=0`).
+10. Exit codes asserted against synthetic fixtures, never the live machine: `0` when the walk completes
+    (whether or not anchors were found), `1` when the walk is structurally invalid, and `10` from
+    `report --strict` when an anchor was found. Asserting the default exit is independent of findings is the
+    point of the arm — it is what keeps the live registration line from reddening on ambient machine state.
 11. `reap` sends `TERM` only, one pid at a time, never to a process group, and never escalates to `KILL`
     automatically. Asserted against a captured-signal fixture, not by reading the source.
 12. `reap` re-verifies the full conjunction **and the starttime** immediately before signalling. Asserted by a
@@ -923,8 +943,11 @@ Recorded rather than skipped silently, because a reviewer's first question is wh
     plugins/soleur/scripts/lib/proc.sh` adds no non-comment line, and `bash plugins/soleur/test/proc.test.sh`
     passes. The comment records the divergent deletion predicate and its inverted failure direction, and the
     reaper carries the reciprocal note.
-24. `bash scripts/orphan-process-reaper.sh report` against the real `/proc` exits 0 and prints the summary
-    line named in `discoverability_test.expected_output`.
+24. `bash scripts/orphan-process-reaper.sh report` against the real `/proc` exits 0, reports `valid=1`, and
+    reports `scanned` greater than zero. It deliberately does **not** assert `anchors=0`: a real orphan on the
+    box at verification time is ambient state, and a criterion it can flip measures the machine rather than
+    the change. What this criterion pins is that the walk executes against a real procfs at all — the class of
+    breakage a synthesized-`/proc` suite structurally cannot see.
 25. Every seam declared in the script header is read by the code below it; a seam that is documented but
     unimplemented is asserted absent by a suite arm that sets each one and observes an effect.
 26. The ADR exists, its ordinal is re-derived against freshly-fetched `origin/*` refs immediately before
