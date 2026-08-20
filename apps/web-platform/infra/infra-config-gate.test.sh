@@ -709,43 +709,54 @@ def sweep(text):
 # The rows below the divider each instantiate a DIFFERENT shape, and each was measured EVADING
 # the pre-fix sweep. They are the controls that would have caught D3.
 CONTROLS = [
-    # shape A — a binary in command position, twelve wrappers
-    'f() {\n  terraform apply -auto-approve\n}\n',
-    'f() {\n  doppler run --name-transformer tf-var -- terraform apply\n}\n',
-    'f() {\n  x=`terraform apply`\n}\n',
-    'f() {\n  echo a | xargs terraform apply\n}\n',
-    'f() {\n  env TF_LOG=1 terraform apply\n}\n',
-    'f() {\n  bash -c "terraform apply"\n}\n',
-    'f() {\n  sh -c "terraform apply"\n}\n',
-    'f() {\n  eval "$cmd"\n}\n',
-    'f() {\n  ssh -o StrictHostKeyChecking=no host terraform apply\n}\n',
-    'f() {\n  command terraform apply\n}\n',
-    'f() {\n  nohup terraform apply\n}\n',
-    'f() {\n  timeout 60 terraform apply\n}\n',
+    # (shape, snippet). shape A — a binary in command position, twelve wrappers
+    ('A', 'f() {\n  terraform apply -auto-approve\n}\n'),
+    ('A', 'f() {\n  doppler run --name-transformer tf-var -- terraform apply\n}\n'),
+    ('A', 'f() {\n  x=`terraform apply`\n}\n'),
+    ('A', 'f() {\n  echo a | xargs terraform apply\n}\n'),
+    ('A', 'f() {\n  env TF_LOG=1 terraform apply\n}\n'),
+    ('A', 'f() {\n  bash -c "terraform apply"\n}\n'),
+    ('A', 'f() {\n  sh -c "terraform apply"\n}\n'),
+    ('A', 'f() {\n  eval "$cmd"\n}\n'),
+    ('A', 'f() {\n  ssh -o StrictHostKeyChecking=no host terraform apply\n}\n'),
+    ('A', 'f() {\n  command terraform apply\n}\n'),
+    ('A', 'f() {\n  nohup terraform apply\n}\n'),
+    ('A', 'f() {\n  timeout 60 terraform apply\n}\n'),
     # ---- shapes the twelve above cannot reach (D3, each EVADED before this change) ----
     # shape B — a PATH, so the old token regex captured nothing at all
-    'f() {\n  /usr/bin/terraform apply -auto-approve\n}\n',
-    'f() {\n  ./push-infra-config.sh\n}\n',
+    ('B', 'f() {\n  /usr/bin/terraform apply -auto-approve\n}\n'),
+    ('B', 'f() {\n  ./push-infra-config.sh\n}\n'),
     # shape C — the command name in a variable
-    'f() {\n  TF=terraform ; $TF apply -auto-approve\n}\n',
+    ('C', 'f() {\n  TF=terraform ; $TF apply -auto-approve\n}\n'),
     # shape D — a trampoline INSIDE the allow list, hidden in a quoted span
-    'f() {\n  awk \'BEGIN{system("terraform apply -auto-approve")}\'\n}\n',
-    'f() {\n  awk \'BEGIN{print "terraform apply" | "sh"}\'\n}\n',
-    'f() {\n  sed -e "s/x/terraform apply/e" file\n}\n',
-    'f() {\n  sed -i "s/old/new/" ../../../.github/workflows/apply-deploy-pipeline-fix.yml\n}\n',
+    ('D', 'f() {\n  awk \'BEGIN{system("terraform apply -auto-approve")}\'\n}\n'),
+    ('D', 'f() {\n  awk \'BEGIN{print "terraform apply" | "sh"}\'\n}\n'),
+    ('D', 'f() {\n  sed -e "s/x/terraform apply/e" file\n}\n'),
+    ('D', 'f() {\n  sed -i "s/old/new/" ../../../.github/workflows/apply-deploy-pipeline-fix.yml\n}\n'),
     # shape E — a write that invokes no command at all
-    'f() {\n  echo pwned > /etc/default/soleur-doppler-token\n}\n',
+    ('E', 'f() {\n  echo pwned > /etc/default/soleur-doppler-token\n}\n'),
 ]
-missed = [i for i, c in enumerate(CONTROLS, 1) if not sweep(c)]
+missed = [i for i, (_s, c) in enumerate(CONTROLS, 1) if not sweep(c)]
 if missed:
     print('CONTROL-FAILED (the detector missed control(s) %s, so its verdict on the real file '
           'would be a statement about the regex rather than about the file)'
           % ','.join(str(m) for m in missed))
     sys.exit(0)
 # The controls must also cross more than one shape, or the battery degenerates back to the
-# twelve-rows-one-axis state that made D3 invisible. Counted structurally rather than trusted.
-if len(CONTROLS) < 20:
-    print('CONTROL-FAILED (only %d controls; the shape-crossing rows were removed)' % len(CONTROLS))
+# twelve-rows-one-axis state that made D3 invisible.
+#
+# SHAPES, NOT ROWS (#7546 review). This said "Counted structurally rather than trusted" and then
+# counted ROWS -- which is precisely "trusted". Twelve rows of shape A satisfy `len(CONTROLS)
+# >= 20` just as well as five shapes do, and twelve of the twenty rows here ARE that one axis:
+# the block's own comment calls them "twelve rows crossing one axis is one row". So the floor
+# was propped up by the very rows it was written to make unnecessary, and deleting the eight
+# shape-crossing rows while adding eight more wrappers would have kept it green while restoring
+# exactly the state D3 exploited. Each control now carries its shape and BOTH are floored.
+_shapes = sorted({sh for sh, _c in CONTROLS})
+if len(CONTROLS) < 20 or len(_shapes) < 5:
+    print('CONTROL-FAILED (%d controls across %d shape(s) %s; need >= 20 rows AND >= 5 shapes -- '
+          'a row count cannot tell twelve wrappers of one shape from five distinct evasions)'
+          % (len(CONTROLS), len(_shapes), ''.join(_shapes)))
     sys.exit(0)
 
 hits = sweep(open(sys.argv[1], encoding='utf-8').read())

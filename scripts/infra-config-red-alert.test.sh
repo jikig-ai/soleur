@@ -37,10 +37,23 @@ mk_sandbox() { local d; d=$(mktemp -d "$SANDBOX_ROOT/sb.XXXXXX") || return 1; pr
 #
 # THIS SUPERSEDES THE STDOUT-CAPTURE RECONCILIATION this branch had added for the same finding
 # (F7). Both are valid independent producers; keeping two mechanisms in one file would mean two
-# things to keep in step and one of them silently rotting. #7575's call-site counter is the
-# repo-wide convention across 17 suites and is the stronger of the two — it floors on CASES, which
-# moves only with call sites, where a PASS-based floor DEFLATES when verdicts are discarded and so
-# reports a vacuity that did not happen while hiding the one that did.
+# things to keep in step and one of them silently rotting. #7575's call-site counter floors on
+# CASES, which moves only with call sites, where a PASS-based floor DEFLATES when verdicts are
+# discarded and so reports a vacuity that did not happen while hiding the one that did.
+#
+# TWO CORRECTIONS, both measured (#7546 review):
+#
+#   * "the repo-wide convention across 17 suites" was wrong. Measured 2026-08-20 by
+#     `grep -lE 'CASES=\$\(\( *CASES *\+ *1 *\)\)' **/*.test.sh`: SIX suites, this one
+#     included. It is a real and growing pattern, not yet a convention, and a number cited to
+#     justify a design ruling should carry the value it actually has.
+#   * "the stronger of the two" is true only against the mutation class it was chosen for. The
+#     conservation identity PASS+FAIL == CASES catches a DROPPED verdict and is blind to a
+#     SWAPPED one -- a helper that records a failure as a pass keeps the identity balanced at
+#     66, because one verdict left a bucket and entered another. Measured: swapping bad() left
+#     this suite reporting `66 passed, 0 failed (66 assertions)`, rc=0, with a live defect
+#     present. Neither mechanism sees a swap; the known-negative self-test at the foot of this
+#     file is what does, and it is why all four sibling suites now carry one.
 #
 # Never increment inside `$( )` — a subshell discards it.
 CASES=0

@@ -513,7 +513,26 @@ jobs:
     # Current long poles (run 31054177230): git-data runcmd rehearsal 96 s, web-host parity
     # mutation 47 s, ci-deploy 35 s, LUKS verify 28 s.
     #
-    # RE-DERIVED 2026-08-16 (#7104 review), as the block above instructs, because this PR makes an
+    # RE-DERIVED 2026-08-20 (#7546 review). The 2026-08-16 derivation below was correct for the
+    # battery AS IT THEN STOOD, and the battery has since gone 22 -> 40 rows (commit 2e44a01c5,
+    # "22 -> 40 battery rows, because 4 of the old 21 shared one detector") while this block kept
+    # sizing itself on 22. A timeout budget derived from a superseded row count is exactly the
+    # stale-number class this PR exists to fix, and it fails in the direction that cancels a job
+    # rather than the direction that merely wastes a runner.
+    #
+    # MEASURED 2026-08-20: `bash apps/web-platform/infra/infra-config-repush-mutation.test.sh`
+    # = 194 s wall clock, 40/40 rows, on a 16-core box where the battery's own min(4, nproc-2)
+    # cap yields JOBS=4. The 17-row figure recorded below was 85 s under the same conditions, so
+    # 17 -> 40 rows costs +109 s locally. CI is a 4-vCPU runner where the same cap yields JOBS=2,
+    # so budget roughly 2x: +218 s there.
+    #   observed deploy-script-tests max (15 runs, successful only) : 581 s
+    #   + the 17 -> 40 battery growth in CI                          : +218 s
+    #   new basis                                                    : ~799 s
+    #   799 x 1.4 = 1119 s = 18.6 min -> 20
+    # 15 -> 20 minutes. At 15 the margin would be 900/799 = 1.13x, well under the ~1.4x this
+    # block sizes for, and the battery alone would be ~43% of the whole budget.
+    #
+    # The superseded 2026-08-16 derivation, kept because its METHOD is the one applied above:
     # EXISTING step materially slower: the infra-config re-push mutation battery goes 17 -> 22 rows.
     # Measured from the API over the last 15 `Infra Validation` runs, deploy-script-tests job
     # seconds, successful only (one 65 s failure excluded — it died early and is not a duration):
@@ -525,7 +544,7 @@ jobs:
     #   626 x 1.4 = 876 s = 14.6 min -> 15.
     # 14 -> 15 minutes. At 14 the margin would be 840/626 = 1.34x, below the ~1.4x this block sizes
     # for. Still deliberately not larger, for the reason stated above.
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       # fetch-depth: 0 + fetch-tags: true make the vinngest-v* tags reachable so
       # the cloud-init-inngest-bootstrap drift-guard (AC6, #4675) can compare the
@@ -977,7 +996,7 @@ jobs:
       # AC21 — the Guard 1 + Guard 2 mutation matrices, executable rather than tabulated. This job
       # lists its tests explicitly (no glob), so an unregistered battery is a CLAIM: no gate sees
       # it, no runner enumerates it, and no orphan reporter names it. The rows drive the two suites
-      # above against 22 single-mutation sandboxes and assert the expected exit code AND that a
+      # above against 40 single-mutation sandboxes and assert the expected exit code AND that a
       # FAILING check named the property — "some assertion failed" is not detection, and neither is
       # "the marker appears somewhere in the log", which is what this asserted until #7104's review
       # measured that 11 of the then-17 markers were present in a GREEN baseline.
@@ -989,6 +1008,10 @@ jobs:
       # step runs in, is NOT a required check, so a RED row here does not block a merge on its own.
       # The battery's value is that it runs at all and reports honestly; it is not a merge gate.
       #
+      # TIMING, re-derived 2026-08-20 (#7546 review): the battery is now 40 rows, not 22, and
+      # measures 194 s wall clock at JOBS=4 on 16 cores (40/40). CI caps at JOBS=2 on 4 vCPU,
+      # so budget roughly 2x -- ~390 s of the job's 20-minute allowance. The superseded
+      # 22-row derivation follows, kept for its method:
       # TIMING, re-derived 2026-08-16 (#7104 review) because this PR takes it 17 -> 22 rows:
       # measured 102 s wall clock on a 16-core box at JOBS=4. That is NOT the CI figure — the
       # battery caps itself at min(4, nproc-2), and the public runner has 4 vCPU, so CI runs it at

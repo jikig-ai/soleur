@@ -428,6 +428,37 @@ fi
 # --- ARM 3: the firing population may only grow ------------------------------------------
 # Absolute and hand-ratcheted. Never derived from a variable this file computes: a floor
 # that descends with the thing it guards is not a floor.
+# PER-FILE MEMBERSHIP PIN ON THE PROMOTION SEAM (#7546 review).
+#
+# `PROMOTED_FILES` had no assertion of its own, and the aggregate ratchet below carries SLACK
+# (measured: 45 firing against MIN_FIRING_SUITES=36, i.e. nine). Measured consequence: DELETING
+# a promoted file's floor outright -- `if [[ "$N" -lt 40 ]]` -> `if false` in the battery -- left
+# this suite reporting `19 passed, 0 failed`, rc=0. ARM 4's closure and ARM 5's double-count both
+# stayed intact BY CONSTRUCTION: a deleted floor drops the file out of FLOOR_ALL entirely, so
+# covered+deferred+unclassified still balances (one subtracted from each side) and MAX_DEFERRED
+# is a ceiling a shrinking ledger cannot breach. Only the aggregate had a stake, and it had nine
+# to spare. So nine covered floors -- including both files this PR promotes -- could be removed
+# silently.
+#
+# The seam was already armored against a file being UNDECLARED (a typo'd entry pushes it back
+# into the ledger and breaches the zero-slack MAX_DEFERRED); it was not armored against the
+# promoted file's floor being REMOVED. This pin has zero slack by construction: every declared
+# entry must still be floor-bearing, must land in COVERED, and must score FIRES.
+promoted_problems=""
+while IFS= read -r pf; do
+  [[ -z "$pf" ]] && continue
+  grep -qxF "$pf" "$FLOOR_ALL" || { promoted_problems="$promoted_problems $pf:no-longer-floor-bearing"; continue; }
+  grep -qxF "$pf" "$COVERED"   || { promoted_problems="$promoted_problems $pf:not-in-covered"; continue; }
+  grep -qxF "$pf" "$FIRES_LIST" || promoted_problems="$promoted_problems $pf:floor-does-not-fire"
+done < <(printf '%s\n' "$PROMOTED_FILES" \
+          | sed -e 's/^\^(//' -e 's/)\$$//' -e 's/\\//g' -e 's/|/\n/g')
+cases=$((cases + 1))
+if [[ -z "$promoted_problems" ]]; then
+  pass "every PROMOTED_FILES entry is still floor-bearing, covered, and scores FIRES — promotion cannot decay into a silent exemption"
+else
+  fail "PROMOTED_FILES entries drifted:$promoted_problems. A promoted file whose floor was DELETED leaves the covered set entirely and every aggregate arm still balances, so this per-file pin is the only thing that sees it."
+fi
+
 MIN_FIRING_SUITES=36
 cases=$((cases + 1))
 if [[ "$n_fires" -ge "$MIN_FIRING_SUITES" ]]; then
@@ -785,7 +816,7 @@ fi
 # hand; never derived from a variable this file computes, because a floor that descends
 # with the thing it guards is not a floor.
 # ---------------------------------------------------------------------------------------
-MIN_META_CASES=19
+MIN_META_CASES=20
 if [[ "$cases" -lt "$MIN_META_CASES" ]]; then
   printf '\n[FATAL] meta-guard vacuity: only %d assertion(s) ran; expected >= %d.\n' \
     "$cases" "$MIN_META_CASES" >&2

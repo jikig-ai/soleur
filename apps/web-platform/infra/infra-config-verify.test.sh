@@ -295,6 +295,30 @@ if [[ -f "$VERIFY_SH" ]]; then
   fi
 fi
 
+# --- T6b: every curl call is a READ ----------------------------------------------------------
+# `curl` is on this sweep's ALLOWED set, justified by "it polls an endpoint ... Every one is
+# inert with respect to infrastructure". That is FALSE of curl in this very repo (#7546 review):
+# the workflow that consumes this script uses `curl -X POST "$DEPLOY_URL"` against
+# /hooks/deploy to SWAP THE RUNNING PRODUCTION CONTAINER -- its own comment says "to
+# /hooks/deploy -> swaps web-1". So the actuation sweep pins WHICH BINARIES may run and, for
+# curl alone among them, says nothing about what they may DO. `doppler` is pinned to
+# `secrets get` twenty lines above; curl had no equivalent, so a POST to the deploy hook added
+# to this script would pass the actuation sweep entirely.
+#
+# Pinned on the METHOD rather than the URL: an allow-list over hostnames would have to permit
+# the one host the gate legitimately polls, which is the same host that carries the deploy hook.
+if [[ -f "$VERIFY_SH" ]]; then
+  ctotal=$(cmd_position_count "$VERIFY_SH" curl)
+  cmut=$(grep -cE '(^|[;&|]|\$\()[[:space:]]*curl[[:space:]][^|;&]*(-X[[:space:]]*(POST|PUT|PATCH|DELETE)|--request[[:space:]]+(POST|PUT|PATCH|DELETE)|--data|-d[[:space:]]|--upload-file|-T[[:space:]])' "$VERIFY_SH" || true)
+  if [[ "$ctotal" -eq 0 ]]; then
+    fail "no command-position curl call found in infra-config-verify.sh — the fixture for T6b has drifted, so this assert is vacuous"
+  elif [[ "$cmut" -eq 0 ]]; then
+    pass "all $ctotal command-position curl call(s) are reads — no -X POST/PUT/PATCH/DELETE, no body upload. The verification surface polls; it does not actuate, and the workflow's own container swap is a POST to the same host"
+  else
+    fail "$cmut of $ctotal command-position curl call(s) carry a mutating method or a request body. curl is allow-listed here as a poller; a POST from the verdict step reaches /hooks/deploy, which swaps the running production container."
+  fi
+fi
+
 # --- T7: infra-config-gate.sh remains a PURE adjudicator --------------------------------------
 # Plan R20.7 §1: the sourced library is invisible to any grep over the workflow, and
 # is a pure adjudicator BY CONVENTION ONLY. PR-B adds a function to it, which widens
@@ -886,7 +910,7 @@ else
   exit 1
 fi
 
-VERIFY_MIN_ASSERTIONS=39
+VERIFY_MIN_ASSERTIONS=40
 if [[ "$PASS" -lt "$VERIFY_MIN_ASSERTIONS" ]]; then
   printf '  FAIL: assertion-count floor: only %d assertions ran, expected >= %d — arms were deleted or skipped\n' \
     "$PASS" "$VERIFY_MIN_ASSERTIONS" >&2
