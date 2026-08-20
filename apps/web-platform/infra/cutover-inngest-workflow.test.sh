@@ -689,6 +689,185 @@ diag_case "an unreadable read fails closed" "__UNREADABLE__" "unreadable"
 assert "diag_boot_decide scenarios actually dispatched (>=7)" "[[ '$DIAG_EVALS' -ge 7 ]]"
 assert "arm) routes G3.6 through diag_boot_decide (single chokepoint)" "grep -qE 'case \"\\\$\\(diag_boot_decide ' '$ARM_FILE'"
 
+# ============================================================================
+# #7462 review — G3.7 PRE-FLUSH-LATCH GATE. Behavioural, not grepped.
+#
+# WHY THIS GATE EXISTS. Making op=arm idempotent (this PR) removed the only thing that
+# stopped a re-arm of an already-flushed host from running to completion. Such an arm is
+# DOOMED — the monotonic latch on /mnt/data refuses it on-host and drives the flag to
+# terminal `aborted` — but before it does, G4 has written both prod secrets and G5 has
+# written `armed`, a value INSIDE inngest-server-flip-guard.sh's prod-start allowlist
+# {armed,flipping,flushed,done}, while op=rollback has already re-enabled the co-located
+# web schedulers. A reboot in that ~30-60s window starts a SECOND prod scheduler.
+# G3.7 refuses the doomed arm BEFORE any write, closing that window at its source.
+#
+# Three independent axes are driven below, because each is blind to the others' defects:
+#   (a) the DECISION (flush_latch_decide) — a pure token mapping;
+#   (b) the READER (_flush_latch_count) EXECUTED against a stubbed `doppler`, including
+#       its argv, so a reader that queries the WRONG thing is detectable;
+#   (c) the ASSEMBLY — that the gate is wired into arm) ahead of the first prod write,
+#       and that the remediation its message names is actually reachable by an operator.
+# ============================================================================
+
+FL_FN="$(mktemp)"; SCRATCH+=("$FL_FN")
+awk '/^flush_latch_decide\(\) \{$/,/^\}$/' "$BODY_SH" > "$FL_FN"
+FL_FN_N=$(wc -l < "$FL_FN" | tr -d '[:space:]')
+# Harness self-check FIRST — an empty extraction makes every row below vacuous.
+assert "#7462 flush_latch_decide extraction is non-vacuous (>3 lines, got $FL_FN_N)" "[[ '$FL_FN_N' -gt 3 ]]"
+# shellcheck disable=SC1090
+. "$FL_FN"
+assert "flush_latch_decide() is defined after sourcing" "declare -F flush_latch_decide >/dev/null"
+FL_EVALS=0
+fl_case() { # $1 desc, $2 input, $3 expected outcome
+  local got; got="$(flush_latch_decide "$2")"
+  FL_EVALS=$((FL_EVALS + 1))
+  assert "flush_latch_decide: $1 -> $3" "[[ '$got' == '$3' ]]"
+}
+fl_case "zero rows is clear — a genuine first arm proceeds" "0"              "clear"
+fl_case "one row is LATCHED — must refuse"                  "1"              "latched"
+fl_case "many rows is LATCHED"                              "12"             "latched"
+fl_case "an unreadable read fails closed"                   "__UNREADABLE__" "unreadable"
+fl_case "an empty read fails closed"                        ""               "unreadable"
+fl_case "a non-numeric count fails closed"                  "n/a"            "unreadable"
+fl_case "a negative count fails closed"                     "-1"             "unreadable"
+fl_case "a count with whitespace fails closed"              " 1"             "unreadable"
+assert "flush_latch_decide scenarios actually dispatched (>=8)" "[[ '$FL_EVALS' -ge 8 ]]"
+# HARNESS CANARY, mirroring g3_case's. A fl_case whose body stopped comparing against the real
+# function would report every row above as a PASS; prove it can FAIL, then subtract.
+_FL_P=$PASS; _FL_F=$FAIL
+fl_case "harness canary: a deliberately wrong expectation MUST fail (expected FAIL below)" "0" "latched"
+if [[ "$FAIL" -ne $((_FL_F + 1)) || "$PASS" -ne "$_FL_P" ]]; then
+  echo "  FATAL: fl_case does not compare against flush_latch_decide — every G3.7 decision row is void."
+  exit 2
+fi
+FAIL=$((FAIL - 1))
+echo "  (fl_case harness canary OK — deliberate FAIL above is expected and subtracted)"
+
+# --- (b) THE READER, EXECUTED. -------------------------------------------------------------
+# A gate is only as good as the question its reader asks. Stubbing `doppler` on the PRESENCE of a
+# call would leave the query shape unpinned: a reader that dropped the --grep terms would match
+# the ~2,880 noop-* heartbeat rows/day and report LATCHED forever, and one that dropped --since
+# would silently change the window. The stub therefore RECORDS its argv and the argv is asserted.
+FLC_FN="$(mktemp)"; SCRATCH+=("$FLC_FN")
+awk '/^_flush_latch_count\(\) \{$/,/^\}$/' "$BODY_SH" > "$FLC_FN"
+FLC_FN_N=$(wc -l < "$FLC_FN" | tr -d '[:space:]')
+assert "#7462 _flush_latch_count extraction is non-vacuous (>5 lines, got $FLC_FN_N)" "[[ '$FLC_FN_N' -gt 5 ]]"
+assert "#7462 extraction actually yields a callable _flush_latch_count" \
+  "bash -c 'eval \"\$(cat \"$FLC_FN\")\"; declare -F _flush_latch_count >/dev/null'"
+
+FL_ARGV="$(mktemp)"; SCRATCH+=("$FL_ARGV")
+FLC_OUT=""; FLC_RC=0
+call_flush_latch_count() { # $1 = rows | empty | fail
+  local mode="$1"
+  set +e
+  FLC_OUT=$(
+    eval "$(cat "$FLC_FN")"
+    # Stub the ONLY external command the reader runs. Defined AFTER the eval so it wins.
+    doppler() {
+      printf '%s\n' "$*" > "$FL_ARGV"
+      case "$mode" in
+        rows)
+          printf '%s\n' '{"dt":"2026-07-24 10:20:51.000000","raw":"r1"}'
+          printf '%s\n' '{"dt":"2026-07-24 10:20:52.000000","raw":"r2"}'
+          return 0 ;;
+        empty) return 0 ;;
+        *)     return 7 ;;
+      esac
+    }
+    export FLUSH_LATCH_SINCE="365d"
+    _flush_latch_count 2>/dev/null
+  )
+  FLC_RC=$?
+  set -e
+}
+
+call_flush_latch_count rows
+assert "#7462 reader counts matching rows (2 rows -> '2', got '$FLC_OUT')" "[[ '$FLC_OUT' == '2' ]]"
+assert "#7462 reader always returns 0 so the DECISION owns the verdict (rc=$FLC_RC)" "[[ '$FLC_RC' -eq 0 ]]"
+FLC_ARGV_SEEN="$(cat "$FL_ARGV")"
+# ARGV FIDELITY. Each of these is a way the gate could be silently defeated while still "working".
+assert "#7462 reader queries via prd_terraform (the betterstack-query cred config)" \
+  "grep -qF -- '-c prd_terraform' <<<\"\$FLC_ARGV_SEEN\""
+assert "#7462 reader invokes betterstack-query.sh (no SSH, no new transport)" \
+  "grep -qF -- 'scripts/betterstack-query.sh' <<<\"\$FLC_ARGV_SEEN\""
+assert "#7462 reader bounds the window with --since \$FLUSH_LATCH_SINCE" \
+  "grep -qF -- '--since 365d' <<<\"\$FLC_ARGV_SEEN\""
+assert "#7462 reader greps the flip-complete reason (QUOTED form)" \
+  "grep -qF -- '--grep \"reason\":\"flip-complete\"' <<<\"\$FLC_ARGV_SEEN\""
+assert "#7462 reader greps the refuse-rearm-after-done reason (QUOTED form)" \
+  "grep -qF -- '--grep \"reason\":\"refuse-rearm-after-done\"' <<<\"\$FLC_ARGV_SEEN\""
+# The heartbeat firehose must NOT be in the query — matching it would pin the gate at LATCHED.
+assert "#7462 reader does NOT grep the noop-* heartbeat reasons" \
+  "! grep -qE '\"reason\":\"noop' <<<\"\$FLC_ARGV_SEEN\""
+
+call_flush_latch_count empty
+assert "#7462 an empty result is '0' (clear), not an error" "[[ '$FLC_OUT' == '0' ]]"
+call_flush_latch_count fail
+assert "#7462 a FAILED query yields __UNREADABLE__, never 0 (fail-closed)" "[[ '$FLC_OUT' == '__UNREADABLE__' ]]"
+
+# The reader must never echo a raw Better Stack row — the standing purity contract of every
+# Better Stack reader in this script (a value could ride along in `.raw`).
+assert "#7462 reader extracts a COUNT only (no .raw, no jq over row bodies)" \
+  "! grep -qE '\\.raw|\\.message' '$FLC_FN'"
+
+# The window constant must carry an env-overridable default — a hardcoded literal makes the
+# error message's remediation unperformable (the #6617 dead-remediation class).
+assert "#7462 FLUSH_LATCH_SINCE is env-overridable with a default" \
+  "grep -qE '^FLUSH_LATCH_SINCE=\"\\\$\\{FLUSH_LATCH_SINCE:-[0-9]+[a-z]\\}\"' '$BODY_SH'"
+
+# --- (c) EMITTER PARITY (cross-file), in the SUBSET direction. -------------------------------
+# The two reasons this gate keys on are a vocabulary owned by inngest-cutover-flip.sh. If either
+# is renamed there, the grep silently matches nothing and the gate reports CLEAR forever — a
+# fail-open on the only question it asks. Assert each is a literal that file actually emits.
+FL_EMITTER_SH="$REPO_ROOT/apps/web-platform/infra/inngest-cutover-flip.sh"
+assert "#7462 the flip emitter exists (G3.7 parity source)" "[[ -f '$FL_EMITTER_SH' ]]"
+assert "#7462 EMITTER PARITY: flip-complete is a real emit_state literal" \
+  "grep -qE 'emit_state [^ ]+ [^ ]+ \"flip-complete\"' '$FL_EMITTER_SH'"
+assert "#7462 EMITTER PARITY: refuse-rearm-after-done is a real emit_state literal" \
+  "grep -qE 'emit_state [^ ]+ [^ ]+ \"refuse-rearm-after-done\"' '$FL_EMITTER_SH'"
+# And that both are genuinely evidence of a flush: the first is the arm that records the durable
+# latch, the second is the arm the latch itself takes.
+assert "#7462 flip-complete is emitted on the flag:done arm (a COMPLETED flip)" \
+  "grep -qE 'emit_state 0 .* \"flip-complete\" \"done\"' '$FL_EMITTER_SH'"
+assert "#7462 refuse-rearm-after-done is emitted by the latch refusal itself" \
+  "grep -qF 'refuse_rearm_after_done() {' '$FL_EMITTER_SH'"
+
+# --- (d) ASSEMBLY: the gate is wired into arm), ahead of every prod write. --------------------
+assert "arm) routes G3.7 through flush_latch_decide exactly once (single chokepoint)" \
+  "[[ \$(grep -cE '^[[:space:]]+FL_OUTCOME=\"?\\\$\\(flush_latch_decide ' '$ARM_FILE') -eq 1 ]]"
+assert "arm) reads the latch via _flush_latch_count exactly once" \
+  "[[ \$(grep -cE '^[[:space:]]+FLUSH_LATCH_N=\"?\\\$\\(_flush_latch_count' '$ARM_FILE') -eq 1 ]]"
+# PROCEED ONLY ON `clear`. Written as a positive-allowlist gate, not a blocklist of refusals:
+# a future outcome token then fails CLOSED by construction instead of falling through.
+assert "arm) G3.7 aborts unless the outcome is exactly 'clear' (fail-closed by construction)" \
+  "[[ \$(grep -cF 'if [[ \"\$FL_OUTCOME\" != \"clear\" ]]; then exit 1; fi' '$ARM_FILE') -eq 1 ]]"
+assert "arm) no G3.7 outcome arm carries its own exit (the gate decides)" \
+  "! grep -qE '^[[:space:]]+(clear|latched|unreadable)\\)[^#]*exit 1' '$ARM_FILE'"
+FL_GATE_LN=$(grep -nF 'if [[ "$FL_OUTCOME" != "clear" ]]; then exit 1; fi' "$ARM_FILE" | head -1 | cut -d: -f1)
+FL_PGW_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1)
+FL_ARMW_LN=$(grep -nE "secrets set INNGEST_CUTOVER_FLIP " "$ARM_FILE" | head -1 | cut -d: -f1)
+assert "arm) the G3.7 gate precedes the first prod write (pre-G4, not merely pre-G5)" \
+  "[[ -n '$FL_GATE_LN' && -n '$FL_PGW_LN' && '$FL_GATE_LN' -lt '$FL_PGW_LN' ]]"
+assert "arm) the G3.7 gate precedes the 'armed' write (the double-fire window it closes)" \
+  "[[ -n '$FL_GATE_LN' && -n '$FL_ARMW_LN' && '$FL_GATE_LN' -lt '$FL_ARMW_LN' ]]"
+# It must run AFTER G3.6 — both are pre-write refusals, and the cheaper Doppler read should not
+# be gated behind a Better Stack round-trip.
+FL_DIAG_LN=$(grep -nE 'case "\$\(diag_boot_decide ' "$ARM_FILE" | head -1 | cut -d: -f1)
+assert "arm) G3.7 runs after G3.6 (ordering is stated, not incidental)" \
+  "[[ -n '$FL_DIAG_LN' && -n '$FL_GATE_LN' && '$FL_DIAG_LN' -lt '$FL_GATE_LN' ]]"
+# The refusal must name the durable latch and forbid SSH, like every other refusal in this file.
+assert "arm) the G3.7 refusal names the monotonic latch as the authority" \
+  "grep -qF 'G3.7 REFUSING' '$ARM_FILE' && grep -qE 'G3\\.7 REFUSING.*/mnt/data' '$ARM_FILE'"
+assert "arm) the G3.7 refusal forbids SSH (hr-no-ssh-fallback-in-runbooks)" \
+  "grep -qE 'G3\\.7 REFUSING.*Do NOT SSH the host' '$ARM_FILE'"
+# DEAD-REMEDIATION GUARD (#6617 class). The refusal tells the operator to re-dispatch with
+# FLUSH_LATCH_SINCE set. GitHub does not export repo vars to a step unless the workflow NAMES
+# them, so without this mapping the remediation is unperformable and the message is a lie.
+assert "#7462 the G3.7 remediation is REACHABLE: FLUSH_LATCH_SINCE is mapped into the step env" \
+  "grep -qE '^[[:space:]]+FLUSH_LATCH_SINCE:[[:space:]]*\\\$\{\{[[:space:]]*vars\.FLUSH_LATCH_SINCE[[:space:]]*\}\}' '$WF_YAML'"
+assert "arm) the G3.7 refusal names the variable the workflow actually exports" \
+  "grep -qE 'G3\\.7 REFUSING.*FLUSH_LATCH_SINCE' '$ARM_FILE'"
+
 # Anti-vacuity floor (harness row H1): a suite whose scenario dispatch silently stopped
 # would otherwise report success having evaluated nothing. This counts EVALUATIONS, not
 # assertion calls, so gutting g3_case's body cannot satisfy it.
@@ -1369,11 +1548,16 @@ rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" 
 # deleting any assertion lowers the pass count silently and exits 0 — measured: removing the
 # prod-write region assertion left the suite green. This floor is the full count at the time of
 # writing; raise it in lockstep when adding assertions, never lower it to make a removal pass.
-if [[ "$PASS" -lt 408 ]]; then
-  echo "  FAIL: suite dispatched $PASS assertions, floor is 408 — an assertion was removed or skipped."
+#
+# 408 -> 449 (+41) when the G3.7 pre-flush-latch gate landed. Stated as a DELTA on purpose: the
+# absolute number is only meaningful against the run that produced it, and re-deriving it after a
+# rebase is the point at which a silently-dropped sibling assertion would otherwise be papered
+# over. Re-measure by running this file, never by copying a remembered figure.
+if [[ "$PASS" -lt 449 ]]; then
+  echo "  FAIL: suite dispatched $PASS assertions, floor is 449 — an assertion was removed or skipped."
   FAIL=$((FAIL + 1))
 else
-  echo "  PASS: anti-deletion floor ($PASS >= 408 assertions dispatched)"
+  echo "  PASS: anti-deletion floor ($PASS >= 449 assertions dispatched)"
 fi
 
 echo ""

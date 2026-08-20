@@ -172,6 +172,55 @@ _flip_transition_dt() {
   printf '%s\n' "$dt"
 }
 
+# G3.7's off-host READ (#7462 review). The flush latch is a FILE on the dedicated host's
+# /mnt/data volume (inngest-cutover-flip.sh `flush_already_performed`), and this script may not
+# SSH — so the readable proxy is the marker the on-host FSM emits at the two moments that PROVE
+# a FLUSHALL has already been performed for this host:
+#
+#   "reason":"flip-complete"            the forward flip COMPLETED, i.e. FLUSHALL ran and
+#                                       record_flush_latch wrote the durable latch.
+#   "reason":"refuse-rearm-after-done"  the on-host latch has ALREADY refused a re-arm.
+#
+# Both are emitted by inngest-cutover-flip.sh `emit_state` as STRING LITERALS and both already
+# sit in _flip_transition_dt's pinned reason set above — this is the SAME no-SSH reader, asked a
+# different question, so no new transport, credential or fixture class is introduced.
+#
+# SCOPED TO THIS HOST BY THE TABLE, not by a hostname grep. betterstack-query.sh's default
+# BS_TABLE is the `soleur-inngest-vector-prd` source, which ships ONLY the dedicated inngest
+# host's journald. A hostname filter would add nothing and would break on the next host replace,
+# which keeps the same name.
+#
+# NO TRUNCATION GUARD, deliberately — and the asymmetry with _flip_transition_dt is the point.
+# That function needs the EARLIEST transition, so a full page can hide the row it must return and
+# it refuses rather than derive a narrower window. This one needs only EXISTENCE, which is
+# monotone in the page: a full page means n >= limit >= 1, i.e. latched, and the only way to read
+# 0 is that the window genuinely holds no such row. Truncation cannot manufacture an absence.
+#
+# THE WINDOW IS A PRE-FILTER'S WINDOW, not the latch's. The on-host latch is unbounded in time;
+# Better Stack retention is not. Neither error direction can authorise a flush: too WIDE costs a
+# refused dispatch on a legitimately-recut host (recoverable by narrowing FLUSH_LATCH_SINCE — the
+# reason it is a variable and not a literal), and too NARROW degrades to the pre-gate behaviour,
+# where the on-host latch still refuses. Deliberately NOT FSM_ANCHOR_SINCE: that constant bounds
+# how long a COEXISTENCE anchor stays derivable and is tuned for that; this one approximates a
+# MONOTONIC "has this host ever been flushed?" and wants the widest window it can get.
+FLUSH_LATCH_SINCE="${FLUSH_LATCH_SINCE:-365d}"
+_flush_latch_count() {
+  local rows rc=0 n
+  rows=$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
+    --since "$FLUSH_LATCH_SINCE" \
+    --grep '"reason":"flip-complete"' \
+    --grep '"reason":"refuse-rearm-after-done"' \
+    --limit 5) || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    echo "::warning::G3.7 flush-latch read: betterstack-query.sh returned $rc (the READ PATH failed, NOT the on-host latch) — verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform" >&2
+    printf '%s' '__UNREADABLE__'
+    return 0
+  fi
+  # Count rows, never echo one: the standing purity contract of every Better Stack reader here.
+  n=$(printf '%s\n' "$rows" | grep -c '^{' || true)
+  printf '%s' "$n"
+}
+
 # #6178 — the doublefire probe's STARTED_AT lower bound, forwarded as ?from=.
 #
 # Emits TWO space-separated fields: "<ISO-8601 Z> <anchor_source>", where
@@ -313,6 +362,30 @@ diag_boot_decide() {
     '__UNREADABLE__') printf '%s' 'unreadable'; return 0 ;;
     ''|'0'|'false') printf '%s' 'clear'; return 0 ;;
     *) printf '%s' 'set'; return 0 ;;
+  esac
+}
+
+# G3.7's decision (#7462 review), extracted for the same reason g3_decide and diag_boot_decide
+# are: a guard whose decision cannot be driven RED is not a guard. The first revisions of BOTH
+# of those inlined a `case` in the arm body and were covered only by greps for their message
+# strings — which cannot see which branch a comparison takes.
+#
+#   $1  the row count from _flush_latch_count, or __UNREADABLE__ when the read failed
+# Outcomes: clear | latched | unreadable
+#
+# ANYTHING that is not a decimal count is `unreadable`, and the caller treats that as
+# fail-closed — the same direction G1/G3/G3.6 take. It is the safe one here because the question
+# this gate asks is "has a FLUSHALL EVER been performed for this host?", and an UNANSWERED
+# question must never read as "no". Note `0` is the ONLY clear-producing input, so a future
+# reader that returns a new sentinel refuses rather than proceeds.
+#
+# Same extraction contract as g3_decide: signature and closing brace at column 0, and no
+# column-0 `}` inside the body.
+flush_latch_decide() {
+  case "$1" in
+    ''|*[!0-9]*) printf '%s' 'unreadable'; return 0 ;;
+    0)           printf '%s' 'clear';      return 0 ;;
+    *)           printf '%s' 'latched';    return 0 ;;
   esac
 }
 
@@ -1275,6 +1348,54 @@ case "$OP" in
       *)
         echo "::error::op=arm: G3.6 — diag_boot_decide returned an unrecognised outcome. Refusing FAIL-CLOSED."; exit 1 ;;
     esac
+
+
+    # G3.7 — PRE-FLUSH-LATCH GATE (#7462 review). Refuses a DOOMED arm before ANY prod write.
+    #
+    # THE HAZARD IT CLOSES, precisely. Once a flip has completed, the monotonic latch on
+    # /mnt/data (inngest-cutover-flip.sh `flush_already_performed`, #7228 P0-5) refuses every
+    # subsequent re-arm and drives the flag to terminal `aborted`. That refusal is correct and is
+    # NOT what this gate second-guesses. What it fixes is everything op=arm did on the way there:
+    # G4 wrote both prod secrets and G5 wrote `armed`, and for the ~30-60s until the on-host 30s
+    # timer fired, INNGEST_CUTOVER_FLIP sat at `armed` — a value INSIDE
+    # inngest-server-flip-guard.sh's prod-start allowlist {armed,flipping,flushed,done} — while
+    # op=rollback had already re-enabled the co-located web schedulers. A reboot inside that
+    # window starts a SECOND prod scheduler: a double-fire, not data loss.
+    #
+    # THIS PR OWNS IT. Before #7462 that window was unreachable, but only incidentally: G3's
+    # equality refusal blocked the re-arm outright once the prod DSN was in the dark slot. Making
+    # op=arm idempotent removed that accidental block, so the window is PR-introduced and is
+    # closed here rather than deferred.
+    #
+    # IT ALSO IMPLEMENTS A PRECONDITION THAT WAS ONLY EVER DOCUMENTED. op=resume's header has
+    # named a "G2 the durable flush latch must EXIST" precondition since #7228 — to be answered
+    # off-host, never by SSH — and nothing enforced it. This is that predicate, read from the same
+    # side, applied at the verb that can act on it, over the same betterstack-query.sh reader
+    # _flip_transition_dt already uses: no new transport, credential or fixture class.
+    # (The literal name of the off-host read path is deliberately not spelled here: a sibling
+    # assertion greps this arm body for it to prove op=arm adds no polling hook, and a bare-token
+    # grep cannot tell a comment from code — cq-assert-anchor-not-bare-token.)
+    #
+    # PRE-FILTER, NOT THE AUTHORITY. The on-host latch remains the guard that actually prevents a
+    # second FLUSHALL; this gate can only ever ADD a refusal, never remove one. That is why the
+    # remediation below is allowed to narrow its window: doing so returns to the pre-gate
+    # behaviour, in which the on-host latch still refuses.
+    FLUSH_LATCH_N="$(_flush_latch_count)"
+    FL_OUTCOME="$(flush_latch_decide "$FLUSH_LATCH_N")"
+    case "$FL_OUTCOME" in
+      clear)
+        echo "::notice::op=arm: G3.7 flush-latch gate passed (no flip-complete / refuse-rearm-after-done row on the dedicated host's log source within $FLUSH_LATCH_SINCE). The on-host monotonic latch remains the authority; this gate is a pre-filter over its off-host evidence." ;;
+      latched)
+        echo "::error::op=arm: G3.7 REFUSING — the dedicated host's log source carries $FLUSH_LATCH_N flip-complete / refuse-rearm-after-done row(s) within $FLUSH_LATCH_SINCE, so a FLUSHALL has ALREADY been performed for this host. The monotonic latch that records it lives on /mnt/data and survives BOTH a rollback and a host replace, so this arm is doomed: it would write both prod secrets, park INNGEST_CUTOVER_FLIP at 'armed' (inside inngest-server-flip-guard.sh's prod-start allowlist, so a reboot would start a SECOND prod scheduler) and then be refused on-host into terminal 'aborted'. Refusing BEFORE any write; nothing was changed. There is no re-arm path while that latch stands, and op=resume is NOT it (its G1 accepts 'done' only). The latch is cleared only by recutting the host's /mnt/data volume via the inngest-host-replace window (ADR-100), never by SSH. If that recut has ALREADY happened, set the repo variable FLUSH_LATCH_SINCE to a window starting after it (e.g. '1h') and re-dispatch — that narrows this pre-filter only, and the on-host latch still refuses if it is in fact present. Do NOT SSH the host." ;;
+      unreadable)
+        echo "::error::op=arm: G3.7 — could not read the flip-FSM markers from Better Stack (the ::warning:: above names the read-path failure). Refusing FAIL-CLOSED: an unanswered 'has this host already been flushed?' must not be read as 'no', and G6 below confirms the flip over the SAME read path, so an arm dispatched now could not be confirmed either. Fix BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform and re-dispatch. Do NOT SSH the host." ;;
+      *)
+        echo "::error::op=arm: G3.7 — flush_latch_decide returned an unrecognised outcome. Refusing FAIL-CLOSED." ;;
+    esac
+    # ONE gate, and it is a positive allowlist rather than a blocklist of refusals: a future
+    # outcome token then fails CLOSED by construction instead of falling through to the prod
+    # write. That fall-through is exactly how G3 became a pure logger at 381/0 green.
+    if [[ "$FL_OUTCOME" != "clear" ]]; then exit 1; fi
 
     # G4 — write the two DATA secrets FIRST, each via stdin (never argv), each exit-gated
     # before the next. Order is a correctness invariant: the URIs must land before `armed`.
