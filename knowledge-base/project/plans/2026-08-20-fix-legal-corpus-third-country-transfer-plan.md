@@ -81,7 +81,7 @@ that is the only mechanism this plan may publish.
 
 | Mechanism considered | Property it would buy | Already covered by | Disposition |
 |---|---|---|---|
-| A new bespoke `lint-legal-transfer-claims.sh` gate | Property 6 | `apps/web-platform/test/legal-doc-consistency.test.ts:121-147` already owns a sentinel table of load-bearing legal prose fragments asserted against **both** surfaces. Extending it reuses the loop, the both-surface quantification, the doc loader and the CI wiring. | **CUT — but the original justification was wrong and is corrected here.** The claim "with zero new machinery" was **false**, and the correctness review caught it: the tuple is `Array<[string, RegExp]>` and the loop at `:142-147` hard-codes `expect(source).toMatch(pattern)` / `expect(mirror).toMatch(pattern)`. It carries **no polarity**, so a negative sentinel cannot be expressed in it at all. The real cost is a **third tuple element** (`"present" \| "absent"`) plus a two-arm branch in the loop — roughly six lines. That is still far cheaper than a new gate, and the cut stands; but it stands on a measured cost, not on a claim that turned out to be untrue. |
+| A new bespoke `lint-legal-transfer-claims.sh` gate | Property 6 | `apps/web-platform/test/legal-doc-consistency.test.ts` already owns the doc loaders, the both-surface quantification and the CI wiring. A standalone script would rebuild all three. | **CUT.** Add a second `test()` block in that file instead. An earlier draft justified this cut with "zero new machinery", which was **false** — the existing `checks` tuple is `Array<[string, RegExp]>` with the loop at `:142-147` hard-coding `toMatch`, so it carries no polarity and cannot express a negative sentinel. The separate block is the honest form of the same cut: it costs ~25 lines and touches none of the 15 pinned rows. |
 | A committed mirror-drift baseline file to regenerate | Lockstep detection | `scripts/lint-legal-mirror-drift-baseline.sh` derives its baseline at runtime from `git show <merge-base>:<path>`. There is **no baseline file**; nothing to regenerate. | **CUT.** Verified against the script header. |
 | A `TC_VERSION` bump | Forcing re-acceptance | `TC_VERSION` gates `docs/legal/terms-and-conditions.md` only (`apps/web-platform/lib/legal/tc-version.ts`). This PR does not touch T&C. | **CUT.** |
 | A `sed` sweep on `weur` | Properties 2-4 | Nothing — and it is actively wrong. Three of the four defect classes contain **no** `weur` token (the retention class, the FreeTSA class, and the two omissions). A `weur` sweep would have shipped a corpus still false in three ways. | **CUT.** Replaced by the per-row inventory below. |
@@ -302,7 +302,7 @@ transfer sections have none at all: their only Cloudflare entry is scoped to the
 |---|---|---|---|
 | E1 | `knowledge-base/legal/data-processing-agreement-template.md` | 210 | §11.1: "Where an Authorized Sub-processor processes Customer Data exclusively within the European Economic Area ("EEA"), **no transfer mechanism under Chapter V GDPR is required**. Per Schedule 2, the following sub-processors are EEA-only: … **Cloudflare R2 (region `weur` — Western Europe)** …" |
 | E2 | `knowledge-base/legal/data-processing-agreement-template.md` | 317 | Schedule 2 row, Location column: "EU (region `weur` — Western Europe)" |
-| E3 | `knowledge-base/legal/data-processing-agreement-template.md` | 317 | **RULED IN by the CLO (Fork 4b) — upgraded from flag-only:** the same row attributes `chat-attachments/*` to Cloudflare R2. It is a **Supabase Storage** bucket — verified at `apps/web-platform/scripts/dsar-export-oversize.sh:104`, which lists it via `${SUPABASE_URL}/storage/v1/object/list/chat-attachments`. Independent defect class; file a tracking issue. |
+| E3 | `knowledge-base/legal/data-processing-agreement-template.md` | 317 | **RULED IN by the CLO (Fork 4b) — upgraded from flag-only:** the same row attributes `chat-attachments/*` to Cloudflare R2. It is a **Supabase Storage** bucket — verified at `apps/web-platform/scripts/dsar-export-oversize.sh:104`, which lists it via `${SUPABASE_URL}/storage/v1/object/list/chat-attachments`. An independent defect class, folded in here only because the CLO ruled the whole Schedule 2 row is being rewritten anyway and a half-corrected row is worse than either state. |
 
 | E4 | `knowledge-base/legal/data-processing-agreement-template.md` | 378 | **FOUND BY THE CLO.** §8 Availability + DR: "Hetzner Helsinki primary; **Cloudflare R2 multi-region for object storage (`weur`)**; Supabase platform availability commitments." Two defects: the residency implication, and an implied R2 multi-region availability property for customer attachments that the corrected attribution shows this estate does not have. |
 
@@ -382,9 +382,9 @@ no accurate retention answer at the surface they are actually reading.
 `gdpr-policy.md:104` limb (3) is the corpus's own map of notice surfaces and it names the CLA
 preambles, which carry no transfer disclosure. CLO 2C appends a sentence to exactly that bullet,
 and CLO 4(a)'s cross-reference recommendation makes the preambles a valid **layered** notice under
-WP29 transparency guidance. This plan therefore **elevates CLO 4(a)'s "recommended, not required"
-cross-reference to REQUIRED** — a layered notice is only valid if the pointer is specific and the
-linked layer is accurate, and the flow review showed the pointer is what closes the hop.
+WP29 transparency guidance. See `## Deviations from the CLO wording` D2 for why J1 is in scope on
+the flow review's finding rather than as a promotion of the CLO's recommendation — the CLA
+cross-reference itself stays **recommended, adopted**, exactly as the CLO left it.
 
 ### Row arithmetic
 
@@ -474,7 +474,7 @@ individual correction verifiable. A residual sweep survives a missed row; a row 
 **Not edited, deliberately:** no `.tf` file (the placement-hint fact is already recorded at
 `apps/cla-evidence/infra/iam.tf:14`), `apps/web-platform/infra/vector.toml`, any version file, and
 `apps/web-platform/test/legal-doc-consistency.test.ts`'s **existing** sentinel rows — the CLO's
-rulings were constructed so that no existing sentinel needs editing, which AC6a verifies
+rulings were constructed so that no existing sentinel needs editing, which AC4 verifies
 empirically rather than assuming.
 
 ## Files to Create
@@ -533,7 +533,7 @@ retired, but the ordering costs nothing and removes the last way it could return
 0.3 Confirm a clean start: `bash scripts/lint-legal-mirror-drift-baseline.sh --base origin/main`
     (expect exit 0, "drift is within the baseline") and
     `bash apps/web-platform/scripts/check-tc-document-sha.sh` (expect exit 0).
-0.4 Re-derive the inventory at HEAD. For each of the 56 rows, confirm the verbatim sentence is
+0.4 Re-derive the inventory at HEAD. For each of the **64** rows, confirm the verbatim sentence is
     still present. Any row that has moved is **re-anchored on its text**, not skipped — and note
     that Phase 1's own edits shift every later line number in the same file, which is why the
     anchors are sentences and the line numbers are only a locator.
@@ -614,13 +614,11 @@ mirror in the same commit. **Data localisation must not be published as a safegu
 
 ### Phase 6 — Anti-regression sentinels
 
-Widen the `checks` tuple at `apps/web-platform/test/legal-doc-consistency.test.ts:121` to
-`Array<[string, RegExp, "present" | "absent"]>`, branch the loop at `:142-147` on polarity, add
-`stripCorrectionMarkers` to the `absent` arm, and add the fourteen rows plus the dispatch floor
-**enumerated concretely in `## Guard Contract`** — that section names every regex literal, so this
-phase is actionable without further derivation. Every **existing** row gains `"present"` and is
-otherwise untouched (AC6a). Then execute mutation rows 1-6 and harness rows H1-H4 and record each
-verdict (AC13).
+Add a **new `test()` block** to `apps/web-platform/test/legal-doc-consistency.test.ts` — the
+`FORBIDDEN` / `REQUIRED` arrays, the dispatch floor and the loop are written out in full in
+`## Guard Contract`, so this phase is actionable without further derivation. **Do not widen the
+existing `checks` tuple and do not touch any of its 15 pinned rows** (AC4). Then execute mutation
+rows 1-3 and harness row H1 and record each verdict (AC13).
 
 ### Phase 7 — Re-pin and verify
 
@@ -637,11 +635,10 @@ verdict (AC13).
     ```
     If the drift gate fails, the two surfaces have diverged — a real finding to fix, **not a gate
     to suppress**. Do not set `SOLEUR_LEGAL_DRIFT_ACCEPT` (CLO ship checklist item 4).
-7.3 Run AC10 / AC10a / AC11 / AC11a / AC11b and paste the classified output into the PR body.
+7.3 Run AC10 / AC10a / AC11 and paste the classified output into the PR body.
 7.4 `git diff origin/main | grep -n '#NNNN'` returns nothing.
 
 ## Guard Contract
-
 
 ### Guard 1 — corpus anti-regression sentinels (`legal-doc-consistency.test.ts`)
 
@@ -650,104 +647,90 @@ CLA evidence archive is EU-region, intra-EU, or free of a third-country transfer
 retention is capped at ten years; and every document that describes the archive's transfer names
 the safeguard PA-7 §(e) records.
 
-**Assembly.** The chokepoint is the `checks` table at
-`apps/web-platform/test/legal-doc-consistency.test.ts:121`, whose `for` loop at `:142-147` applies
-each pattern to **both** `loadSource(doc)` and `loadMirror(doc)`. That loop is the only place in
-the repo where a legal-prose proposition is quantified over both surfaces at once; the other four
-gates compare hashes, heading sequences, or drift, and are structurally blind to content truth.
+**Assembly.** `apps/web-platform/test/legal-doc-consistency.test.ts` owns the only mechanism in
+the repo that quantifies a legal-prose proposition over **both** `loadSource(doc)` and
+`loadMirror(doc)`; the other four gates compare hashes, heading sequences or drift and are
+structurally blind to content truth. The new guard is a **second `test()` block in that same
+file**, reusing the doc loaders and the CI wiring, and its assembly is the `FORBIDDEN` / `REQUIRED`
+arrays it iterates — a `for` loop over an array, not a hand-copied list of today's call sites.
 
-**Required mechanism change (measured, not assumed).** The tuple is `Array<[string, RegExp]>` and
-the loop hard-codes `toMatch`. Negative sentinels therefore require:
+**Mechanism — a new block, not a widened tuple.** The first draft proposed adding a
+`"present" | "absent"` third element to the existing `checks` tuple at `:121` and branching the
+loop at `:142-147`. The simplicity review showed why that is the wrong shape: it forces an edit to
+all **15** existing pinned rows, which then needs its own acceptance criterion to prove none was
+damaged, and it inherits regex escaping (`\(10\)`, `\(n\)`) plus the "`.` does not cross
+newlines" caveat. A separate block leaves the pinned table untouched **by construction** and lets
+the negative arm use plain strings:
 
 ```ts
-const checks: Array<[string, RegExp, "present" | "absent"]> = [ … ];
-for (const [doc, pattern, polarity] of checks) {
-  const source = loadSource(doc); const mirror = loadMirror(doc);
-  if (polarity === "present") {
-    expect(source, `source ${doc} missing ${pattern}`).toMatch(pattern);
-    expect(mirror, `mirror ${doc} missing ${pattern}`).toMatch(pattern);
-  } else {
-    expect(source, `source ${doc} still carries ${pattern}`).not.toMatch(pattern);
-    expect(mirror, `mirror ${doc} still carries ${pattern}`).not.toMatch(pattern);
+// Superseded corpus claims (#7624). Plain strings, not regexes: no escaping, and a
+// substring check cannot be satisfied by a whole-file snapshot.
+const FORBIDDEN: Array<[string, string]> = [
+  ["privacy-policy",              "no third-country transfer for archive contents at rest"],
+  ["privacy-policy",              "retained for ten (10) years on the off-site archive"],
+  ["privacy-policy",              "Governance mode"],
+  ["gdpr-policy",                 "does not introduce a third-country transfer"],
+  ["gdpr-policy",                 "bucket region is EU"],
+  ["gdpr-policy",                 "hard-set at 10 years"],
+  ["data-protection-disclosure",  "Intra-EU processing for archive contents at rest"],
+  ["data-protection-disclosure",  "Cloudflare R2 (storage, EU region)"],
+  ["data-protection-disclosure",  "retained for ten (10) years per Section 2.3(n)"],
+  ["individual-cla",              "retained for ten (10) years from the date of signature"],
+  ["corporate-cla",               "retained for ten (10) years from the date of signature"],
+];
+const REQUIRED: Array<[string, string]> = [
+  ["privacy-policy",              "EU-US Data Privacy Framework"],
+  ["gdpr-policy",                 "EU-US Data Privacy Framework"],
+  ["data-protection-disclosure",  "EU-US Data Privacy Framework"],
+];
+
+test("superseded corpus claims do not reappear on either surface (#7624)", () => {
+  expect(FORBIDDEN.length, "negative sentinel set was emptied").toBeGreaterThanOrEqual(8);
+  for (const [doc, lit] of FORBIDDEN) {
+    expect(loadSource(doc), `source ${doc} still carries: ${lit}`).not.toContain(lit);
+    expect(loadMirror(doc), `mirror ${doc} still carries: ${lit}`).not.toContain(lit);
   }
-}
+  for (const [doc, lit] of REQUIRED) {
+    expect(loadSource(doc), `source ${doc} lost: ${lit}`).toContain(lit);
+    expect(loadMirror(doc), `mirror ${doc} lost: ${lit}`).toContain(lit);
+  }
+});
 ```
 
-Every **existing** row gains a third element `"present"` and is otherwise untouched — AC6a asserts
-that from the diff. Note the loop applies each pattern to whole-file text, and JS `.` does not
-cross newlines, so every pattern must be satisfiable on a single line.
+**Dispatch floor** (anti-vacuity): the `FORBIDDEN.length >= 8` assertion above. The floor is 8
+rather than the exact row count so a deliberate future removal of two or three rows need not touch
+it, while an accidental emptying still reds.
 
-**The rows to add.** Negative rows are drawn from the *same* token list as AC10's residual sweep,
-so the guard and the closure criterion cannot drift apart. Positive rows discharge Property 1 at
-each document, which nothing in the first draft asserted.
-
-| Doc | Pattern | Polarity | Discharges |
-|---|---|---|---|
-| privacy-policy | `/no third-country transfer for archive contents at rest/` | absent | A3, A3′ |
-| privacy-policy | `/Governance mode/` | absent | G1, G1′ |
-| privacy-policy | `/retained for ten \(10\) years on the off-site archive/` | absent | C1, C1′ |
-| gdpr-policy | `/does not introduce a third-country transfer/` | absent | A10, A10′ |
-| gdpr-policy | `/bucket region is EU/i` | absent | A9, A9′ |
-| gdpr-policy | `/hard-set at 10 years/` | absent | C4, C4′ |
-| data-protection-disclosure | `/Intra-EU processing for archive contents at rest/` | absent | A6, A6′ |
-| data-protection-disclosure | `/Cloudflare R2 \(storage, EU region\)/` | absent | A4/B1, A4′/B1′ |
-| data-protection-disclosure | `/retained for ten \(10\) years per Section 2\.3\(n\)/` | absent | C8, C8′ |
-| individual-cla | `/retained for ten \(10\) years from the date of signature/` | absent | C6, C6′ |
-| corporate-cla | `/retained for ten \(10\) years from the date of signature/` | absent | C7, C7′ |
-| privacy-policy | `/EU-US Data Privacy Framework/` | present | Property 1 at PP |
-| gdpr-policy | `/EU-US Data Privacy Framework/` | present | Property 1 at gdpr |
-| data-protection-disclosure | `/EU-US Data Privacy Framework/` | present | Property 1 at DPD |
-
-**Dispatch floor** (anti-vacuity): `expect(checks.filter(c => c[2] === "absent").length).toBeGreaterThanOrEqual(11);`
-plus the existing implicit floor on the positive set. A table that iterates zero times, or whose
-negative half is deleted, must red rather than pass silently.
+**Why no `stripCorrectionMarkers`.** An earlier draft needed a helper to strip
+`*(Corrected … ref #7624 …)*` spans before the negative assertions, because CLO 1A's marker quotes
+the forbidden literal verbatim. That produced a four-mechanism stack — a stripper, a harness row
+proving the stripper was not over-broad, an acceptance criterion proving it was not a blanket
+suppressor, and a reject condition — all to accommodate a sentence that never needed to quote the
+string. **The upstream fix is one word of prose** (see `## Deviations from the CLO wording`):
+paraphrase the markers. The plan carries a required paraphrase instead of a test helper.
 
 **Mutation matrix** (each row must drive the suite RED):
 
 | # | Mutation | Must redden because |
 |---|---|---|
-| 1 | Restore `no third-country transfer for archive contents at rest` to `docs/legal/privacy-policy.md` | the PP negative sentinel forbids it on the canonical surface |
-| 2 | Restore the same literal to `plugins/soleur/docs/pages/legal/privacy-policy.md` **only**, canonical clean | the loop asserts every pattern against `loadMirror` too — the byte-identical-copy-of-a-false-sentence case this PR exists to close |
-| 3 | Delete `EU-US Data Privacy Framework` from `docs/legal/gdpr-policy.md` while leaving the mirror's copy | the positive sentinel is absent from one surface |
-| 4 | Delete the entire `checks` array (the guard's own dispatch) | the `for` loop iterates zero times; the dispatch floor is what makes this red instead of a vacuous pass |
-| 5 | Add a **second** false-claim surface after a compliant first — reintroduce `Intra-EU processing for archive contents at rest` into DPD §6.4 while PP stays corrected | a check that stops at the first document is itself an instance of the class; the loop must quantify over every row |
-| 6 | Restore `retained for ten (10) years from the date of signature` to `docs/legal/individual-cla.md` | the CLA-instrument rows were invisible to the first draft's subject sweep (see AC10a); this row is what makes them mechanically covered |
+| 1 | Restore `no third-country transfer for archive contents at rest` to `docs/legal/privacy-policy.md` | the canonical arm of the `FORBIDDEN` loop |
+| 2 | Restore the same literal to `plugins/soleur/docs/pages/legal/privacy-policy.md` **only**, canonical clean | the mirror arm — the byte-identical-copy-of-a-false-sentence case this PR exists to close, and the only failure mode no other gate in the repo can see |
+| 3 | Empty the `FORBIDDEN` array (the guard's own dispatch) | the `>= 8` floor; without it the `for` loop iterates zero times and the block exits green while asserting nothing |
 
-**Harness rows** (mutations to the SUITE, not the corpus):
+Rows 1 and 2 are deliberately the *same* literal on different surfaces: that pairing is what proves
+the loop quantifies over both, which a single canonical-only row cannot show. Row 3 is the
+anti-vacuity row required by Phase 2.12.
+
+**Harness row** (a mutation to the SUITE, not the corpus):
 
 | # | Mutation / input | Expected |
 |---|---|---|
-| H1 | Replace one negative sentinel's regex with a literal absent from every surface (e.g. `/zzz-never-present/`, polarity `absent`) | must **RED** under a deliberate re-introduction of the real literal it replaced — otherwise the negative assertion passes for the wrong reason and is vacuous |
-| H2 | A must-PASS input that is **not** the corrected corpus: a fixture doc pair describing the transfer in the register's terms, with different surrounding prose and a different section number | must **PASS** — proves the sentinels key on the proposition, not on a whole-file snapshot |
-| H3 | Flip one existing `"present"` row to `"absent"` without changing its regex | must **RED** — proves the polarity field is actually read by the loop and not silently ignored |
-| H4 | Broaden `stripCorrectionMarkers` to `t.replace(/.*!/gs, "")` (strip everything) | must **RED** — a strip that removes too much makes every negative sentinel vacuously true, and nothing else in the matrix can see it. Conversely, **delete** `stripCorrectionMarkers` entirely and the suite must also **RED** on the CLO 1A marker, proving the strip is load-bearing rather than decorative |
+| H1 | Delete the `REQUIRED` loop, leaving only `FORBIDDEN` | must **RED** under a corpus that has had `EU-US Data Privacy Framework` removed from one document — proves the guard cannot be satisfied by *deleting* the corpus rather than correcting it, which a negative-only sentinel set permits |
 
-**The correction markers collide with the negative sentinels — resolved by construction, not by
-luck.** The CLO's replacement wording deliberately *quotes* what the text used to say, which is
-better transparency than a paraphrase. But that means the forbidden literal is republished inside
-the marker. Checked row by row against the CLO wording, exactly one hard collision exists today:
-CLO 1A's marker contains `"Intra-EU processing -- no third-country transfer for archive contents at
-rest"`, which the PP negative sentinel forbids. Three more are near-misses that survive only on a
-word-versus-digit or a tense difference (`hard-set at ten years` vs the sentinel's `hard-set at 10
-years`; `introduced no third-country transfer` vs `does not introduce a third-country transfer`).
-Shipping on those near-misses would be exactly the fragility this plan's own learnings warn about.
+The earlier draft's H2/H3/H4 are cut: H3 tested the polarity field (gone with the tuple widening),
+H4 tested `stripCorrectionMarkers` (gone with the helper), and H2 built a fixture pair to prove the
+sentinels were not a whole-file snapshot — which an 11-entry `not.toContain` list cannot be.
 
-**The negative arm therefore runs against marker-stripped text**, not raw text:
-
-```ts
-// Correction markers deliberately quote the superseded sentence. They are transparency,
-// not a live claim, so the negative arm must not see them.
-const stripCorrectionMarkers = (t: string) =>
-  t.replace(/\*\((?:Corrected|Re-derived|Added)[^*]*ref #7624[^*]*\)\*/g, "");
-```
-
-Applied only in the `"absent"` branch; the `"present"` branch reads the raw text. **Harness row H4
-below is what proves the strip is scoped correctly** — a strip that removed too much would make
-every negative sentinel vacuous, which is the failure mode that matters here.
-
-**Reject condition for /work:** a negative sentinel whose forbidden literal appears in corrective
-prose *outside* a correction marker. AC11a verifies this empirically for every negative row rather
-than trusting the marker regex to have caught everything.
 
 ## Acceptance Criteria
 
@@ -760,11 +743,18 @@ than trusting the marker regex to have caught everything.
   §(e) does not name; specifically, `grep -rn "adequacy decision" docs/legal/privacy-policy.md
   docs/legal/gdpr-policy.md docs/legal/data-protection-disclosure.md` returns no *new* hit
   attached to the CLA evidence archive.
-- **AC3** — `bash apps/web-platform/scripts/check-tc-document-sha.sh` exits 0.
-- **AC4** — `bash scripts/lint-legal-mirror-drift-baseline.sh --base origin/main` exits 0 with
-  "drift is within the baseline".
-- **AC5** — `bash scripts/lint-legal-scope-block-placement.sh --base origin/main` exits 0.
-- **AC6** — `cd apps/web-platform && ./node_modules/.bin/vitest run test/legal-doc-consistency.test.ts test/legal-doc-shas-guard.test.ts` passes.
+- **AC3** — **The Phase 7.2 local battery passes**, in order and from a clean tree:
+  `apps/web-platform/scripts/check-tc-document-sha.sh` (exit 0),
+  `scripts/lint-legal-scope-block-placement.sh --base origin/main` (exit 0),
+  `scripts/lint-legal-mirror-drift-baseline.sh --base origin/main` (exit 0, "drift is within the
+  baseline"), and
+  `cd apps/web-platform && ./node_modules/.bin/vitest run test/legal-doc-consistency.test.ts test/legal-doc-shas-guard.test.ts`.
+  Four separate ACs restating one command block were collapsed here; the exit codes for the two
+  lint gates are `0` clean / `1` violation / `2` cannot decide, and a `2` is a failure, not a pass.
+- **AC4** — The new `test()` block leaves the **existing** pinned `checks` table byte-unchanged:
+  `git diff origin/main -- apps/web-platform/test/legal-doc-consistency.test.ts` shows additions
+  only within the new block and no modification to any pre-existing `[doc, pattern]` row. This is
+  what the separate-block mechanism buys, and it is asserted rather than assumed.
 - **AC7** — Canonical and mirror move in the **same commit** for every edited document pair.
   Verified by walking `git rev-list origin/main..HEAD` and, for each commit touching any
   `docs/legal/*.md`, asserting the same commit touches the corresponding
@@ -774,11 +764,6 @@ than trusting the marker regex to have caught everything.
   final prose byte. Lowercase 64-hex.
 - **AC9** — No `##`/`###` heading is added, removed, or reworded on any of the ten documents;
   heading-sequence parity is preserved by construction.
-- **AC6a** — **No existing sentinel needed editing.** `git diff origin/main --
-  apps/web-platform/test/legal-doc-consistency.test.ts` shows only **additions** to the `checks`
-  array; no pre-existing `[doc, pattern]` row is modified or removed. This is asserted, not
-  assumed — the CLO's rulings were built to keep all five pinned sentinels green, and that claim
-  must be verified by the diff rather than trusted.
 - **AC10** — **Residual-token sweep over the tracked tree — this is the closure criterion, not
   the row count.** Run, from the repo root, over `git ls-files` excluding
   `knowledge-base/project/**` and `**/archive/**` (point-in-time records that must retain the old
@@ -833,25 +818,13 @@ than trusting the marker regex to have caught everything.
   Each returns **0** on the file it targets. Any literal that returns 0 *before* the fix is a
   defective assertion, not a passing one — /work must confirm each returns ≥1 on `origin/main`
   first, per the "verify the gate on main, then on the fix" discipline.
-- **AC11a** — **The negative sentinels are not self-referential.** For every `absent`-polarity row
-  in `## Guard Contract`, confirm the forbidden literal appears in the corrected corpus **only**
-  inside a `*(Corrected … ref #7624 …)*` marker, and nowhere in live prose. Run the same grep with
-  the markers stripped and assert 0. This is what makes `stripCorrectionMarkers` safe rather than
-  a blanket suppressor.
-- **AC11b** — **The three sites that a partial fix would leave false.** The correctness review
-  constructed a concrete implementation that passes every other AC and all five gates while
-  leaving three published falsehoods standing. Each is asserted individually:
-  `grep -c "Cloudflare R2 (storage, EU region)" docs/legal/data-protection-disclosure.md` → 0;
-  `grep -c "does not introduce a third-country transfer" docs/legal/gdpr-policy.md` → 0;
-  `grep -c "retained for ten (10) years per Section 2.3(n)" docs/legal/data-protection-disclosure.md` → 0;
-  and the same three on the mirrors.
 - **AC12** — **Claim-family check (the #7416 trap).** For every sentence from which an entity or
   qualifier is removed, the PR body records what the surviving sentence now asserts and confirms
   it is true. Specifically: after FreeTSA is removed from the DPD §2.3(n) `**Sub-processors:**`
   line, the surviving list is confirmed to be a complete and accurate enumeration; and after
   "EU region" is removed from the retention parenthetical at `privacy-policy.md:122`, the
   surviving clause is confirmed not to imply a residency guarantee by omission.
-- **AC13** — Guard 1's mutation matrix rows 1-5 and harness rows H1-H2 are each executed and
+- **AC13** — Guard 1's mutation matrix rows 1-3 and harness row H1 are each executed and
   each produces the stated verdict. Output pasted into the PR body. A row that cannot be driven
   RED is a defect in the guard, not a passing result.
 - **AC14** — **#7625 stays unbundled, verified executably.** The first draft prescribed
@@ -871,9 +844,11 @@ than trusting the marker regex to have caught everything.
   only four — it omitted `knowledge-base/legal/article-30-register.md` and
   `knowledge-base/legal/compliance-posture.md`, **the first of which this PR edits** (row F1).
   Assert `grep -q '2457081'` and `grep -q 'eu-fsn-3'` in each of:
-  `docs/legal/privacy-policy.md`, `docs/legal/data-protection-disclosure.md`,
-  `knowledge-base/legal/article-30-register.md`, `knowledge-base/legal/compliance-posture.md`, and
-  both `plugins/soleur/docs/pages/legal/` mirrors. The workflow is path-filtered and does not fire
+  the five entries this PR actually edits — `docs/legal/privacy-policy.md`,
+  `docs/legal/data-protection-disclosure.md`, `knowledge-base/legal/article-30-register.md`, and
+  both `plugins/soleur/docs/pages/legal/` mirrors. (`compliance-posture.md` is the sixth entry but
+  is not in Files to Edit, so asserting its tokens survive would only assert that git left an
+  untouched file alone.) The workflow is path-filtered and does not fire
   on this PR — which is precisely the hazard: a removal would go undetected here and red the next
   infra PR, and `main`, instead.
 - **AC16** — No version file is bumped: `TC_VERSION`, `TC_DOCUMENT_SHA`, `TC_BUMP_METADATA`, the
@@ -883,17 +858,11 @@ than trusting the marker regex to have caught everything.
   every fork's ruling is reflected in the diff. Any post-advisory rebase or review-fix commit
   invalidates the sign-off and requires a re-read (per
   `2026-08-02-the-retraction-pr-was-itself-over-claiming…`).
-- **AC18** — The Tier classification (`Tier 1 — material`) is stated in the PR body per
-  `knowledge-base/legal/tc-version-bump-policy.md` § Non-T&C legal docs.
 - **AC19** — Tracking issue filed for E3 (`chat-attachments` mis-attributed to Cloudflare R2 in
   the DPA template Schedule 2), citing
   `apps/web-platform/scripts/dsar-export-oversize.sh:104` as the evidence. Labels
   `domain/legal` + `type/chore` + `priority/p3-low` — all three verified present at plan time
   via `gh label list --limit 200`.
-- **AC20** — If the CLO's Fork 2 ruling defers the balancing-test re-derivation, the deferral
-  carries a filed issue **and** an entry in `article-30-register.md` § *Outstanding
-  counsel-review items*. A deferral with neither is invisible.
-
 ### Post-merge
 
 - **PM1** — **Fetch all three published mirrors, not one page.** The first draft fetched only
@@ -905,7 +874,7 @@ than trusting the marker regex to have caught everything.
   `EU-US Data Privacy Framework` returns ≥1. Also confirm the PP §4.5, §7 and §10 additions and the
   gdpr §6 addition render. Automatable via `curl` + `grep` — not an operator step.
 - **PM2** — **Verify the deferred items actually exist**, rather than trusting the pre-merge
-  self-assertions in AC19/AC20. Re-read `knowledge-base/legal/article-30-register.md`
+  self-assertions in AC19 and the Phase-0.6 filing. Re-read `knowledge-base/legal/article-30-register.md`
   § *Outstanding counsel-review items* on `main` and confirm the retention-ceiling entry is
   present; `gh issue view <retention-ceiling-issue>` and `gh issue view <E3-tracking-issue>` both
   return `OPEN`. A filed-then-lost deferral is invisible, which is the whole reason
@@ -1007,6 +976,38 @@ jurisdiction are unchanged; what changes is how they are **described**. The post
 recorded in PA-7 §(g) and is deliberately **not** restated here — restating a posture in a second
 place is how the divergence this PR corrects came about.
 
+
+## Deviations from the CLO wording
+
+The CLO section below is binding. These are the **two** places this plan departs from its literal
+text, each preserving the ruling's stated intent. Both are recorded here rather than silently
+applied, so the CLO can reverse either at review.
+
+**D1 — the correction markers paraphrase the superseded sentence instead of quoting it.** The CLO
+wrote markers of the form *"this section previously stated \"Intra-EU processing -- no
+third-country transfer for archive contents at rest\""*. The stated intent is transparency: name
+what the text used to say. A paraphrase — *"this section previously described the archive as
+intra-EU with no third-country transfer"* — conveys the identical information to a reader **and**
+removes a collision: the quoted form republishes, in live prose, the exact literal the
+anti-regression guard forbids. The first draft answered that collision with a `stripCorrectionMarkers`
+helper, a harness row proving the stripper was not over-broad, an acceptance criterion proving it
+was not a blanket suppressor, and a reject condition — four mechanisms to accommodate one avoidable
+quotation. `/work` applies the CLO's markers **with the quoted literal replaced by a paraphrase**
+in all four places (CLO 1A, 1B, 2A, and the Fork 3(a)/4(a) markers), and changes nothing else about
+them. Three of the four already survive only on a word-versus-digit or tense difference
+(`hard-set at ten years` vs `hard-set at 10 years`), which is fragility, not safety.
+
+**D2 — `privacy-policy.md` §4.5 gains a pointer (row J1), which CLO 4(a) called "recommended, not
+required".** The CLO's recommendation was about making the *CLA preambles'* cross-reference
+specific. The flow review then found a distinct gap the CLO was not asked about: §4.5 is itself the
+Art. 13 collection notice, `gdpr-policy.md:104` names it as a notice surface, and after the Class-A
+corrections it still carries no transfer, no safeguard and no pointer — so a data subject who stops
+at §4.5 receives no Art. 13(1)(f) disclosure at all. This plan therefore treats **J1 as in scope on
+the flow review's finding**, not as a promotion of the CLO's recommendation, and treats the CLA
+cross-reference specificity as the CLO left it: **recommended, adopted, one line**. The earlier
+draft claimed to "elevate" the CLO's recommendation to REQUIRED while also declaring the CLO
+section governing — a contradiction the simplicity review caught. Phase 4.2 and the Class J note
+now say the same thing.
 
 ## CLO Advisory — Binding Rulings
 
@@ -1207,8 +1208,7 @@ has no mirror — marginal CI cost nil.
 
 > `, **Cloudflare Inc (R2 object custody — CLA evidence archive)** (US — EU-US DPF + SCCs + CBPR; same instrument as the Cloudflare CDN role)`
 
-**Schedule 2 — SPLIT the mis-attributed row (row E2 + row E3, now RULED IN rather than
-now RULED IN).** Replace the single Cloudflare R2 row at line 317 with:
+**Schedule 2 — SPLIT the mis-attributed row (rows E2 + E3).** Replace the single Cloudflare R2 row at line 317 with:
 
 > `| Cloudflare R2 (Cloudflare Inc) | Object storage — CLA evidence archive (`soleur-cla-evidence`) | CLA evidence records (GitHub username, signature timestamp, sign-comment body, PR-of-record, doc-hash, capture method) | **US (EU-US DPF + SCCs + CBPR).** The bucket carries a `WEUR` location hint, which is a placement preference and not a jurisdictional restriction; the bucket sits on Cloudflare's default jurisdiction | [cloudflare.com/cloudflare-customer-dpa](https://www.cloudflare.com/cloudflare-customer-dpa/) (same instrument as CDN row) |`
 
@@ -1352,7 +1352,7 @@ wrong sentence pass all five gates.**
   `/Three-part balancing test \(off-site evidence archive\)/`, and
   `/FreeTSA \(RFC 3161 Time Stamp Authority\):/`. **Corollary: reconcile the bodies, keep the
   headers and the quoted fragments.** The CLO's rulings were constructed to satisfy all fifteen —
-  AC6a verifies that from the diff rather than trusting it.
+  AC4 verifies that from the diff rather than trusting it.
 - **The FreeTSA §4.2 placement objection is answered, not outstanding.** An earlier draft of this
   plan said "the defect is the placement, not only the text — a fix that only edits the cell body
   leaves the table's own caption making the claim", while the Risks table simultaneously disfavoured
@@ -1414,6 +1414,9 @@ wrong sentence pass all five gates.**
 - **Version files** — no bump; AC16 asserts it.
 - **#7465 mirror-drift remediation** (target 2026-09-30) — this PR neither grows nor reduces the
   frozen drift beyond the lines it edits.
-- **E3, the `chat-attachments` mis-attribution** — a distinct defect class; tracked by the issue
-  filed under AC19 rather than fixed here.
+- **The `chat-attachments` DR/availability claim** (the second half of DPA-template §8, row E4) —
+  an availability property, not a residency one, and unfixable here because it depends on the
+  corrected attribution. Tracked by the AC19 issue. **Row E3 itself — the attribution — IS in
+  scope**, per CLO Fork 4b: the Schedule 2 row is being rewritten anyway and a half-corrected row
+  is worse than either state. An earlier draft listed E3 in both this section and Phase 5.1.
 - **Enrolling these three docs into `BODY_EQUIVALENCE_DOCS`** — tracked separately at #6585.
