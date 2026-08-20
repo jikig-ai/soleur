@@ -74,6 +74,16 @@ on:
       - ".github/workflows/git-data-rung2-rehearsal.yml"
       - ".github/workflows/apply-web-platform-infra.yml"
       - ".github/workflows/scheduled-terraform-drift.yml"
+      # (#7640) www-apex-canonicalizer.test.sh cross-reads deploy-docs.yml: its
+      # `wrangler pages deploy --branch` must equal cf-pages.tf's `production_branch`, and
+      # its `--project-name` must equal cloudflare_pages_project.docs's `name`. Those are two
+      # magic strings in YAML and HCL with no compiler between them, and a `--branch` that
+      # stops matching leaves every other assertion in the guard GREEN while the custom domain
+      # keeps serving the last matching build. Without this path a PR editing ONLY the deploy
+      # workflow would never run the guard that catches it -- a chokepoint assertion that
+      # passes by never executing, which is the exact defect ADR-194's plan rejected the
+      # `_redirects` design over.
+      - ".github/workflows/deploy-docs.yml"
       # (#7227) The evidence-capture script, for the same reason as the three workflows above:
       # git-data-rung2-rehearsal.test.sh arm 10 now compares its `--host-name` constraint
       # against the rehearsal prefix those workflows pin, and test-git-data-rung2-evidence-
