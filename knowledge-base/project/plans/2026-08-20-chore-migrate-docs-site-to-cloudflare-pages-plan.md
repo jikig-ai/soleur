@@ -899,6 +899,17 @@ uses `$(grep -c … || true)` compared with `[ "$n" = "0" ]`, or `! grep -q`.
 - **AC3** — two `cloudflare_pages_domain` resources are declared (apex and www): `grep -c 'resource "cloudflare_pages_domain"' apps/web-platform/infra/cf-pages.tf` equals `2`.
 - **AC4** — `variables.tf` declares `cf_api_token_pages` with `sensitive = true` and no `default`. Anchor on the **assignment**, not the word: `awk '/variable "cf_api_token_pages"/,/^}/' apps/web-platform/infra/variables.tf | grep -cE '^\s*default\s*=' || true` equals `0`. A bare `grep -c 'default'` returns `1` on a correct implementation, because the repo's convention for this exact variable shape is a description ending *"No default (hr-tf-variable-no-operator-mint-default)"* — verified against the `cf_api_token_dns_edit` precedent.
 - **AC5** — the `-target=` allow-list contains all six new addresses **and still contains `cloudflare_record.github_pages`** (D4). Asserted by a **direct grep of `.github/workflows/apply-web-platform-infra.yml`**, one assertion per address — not by delegating to `terraform-target-parity.test.ts` or `test-destroy-guard-counter-web-platform.sh`, neither of which can see a `cloudflare_pages_*` or `github_actions_secret` resource (R9). Both suites are still run, but as regression checks, not as evidence for this property.
+
+  **AC5 addendum — 2026-08-20 (#7640), measured.** Each of the seven assertions MUST be
+  LINE-ANCHORED, not a bare substring grep. Measured against the as-written workflow, the
+  bare form `grep -c -- '-target=cloudflare_record.github_pages'` returns **2**, because
+  `-target=cloudflare_record.github_pages_challenge` contains it as a prefix — so an AC5
+  written as `[ "$(grep -c ...)" = 1 ]` FAILS on a correct file, and the natural "fix" is to
+  loosen the assertion rather than anchor it. Use the terminated form, which returns 1:
+  `grep -cE '^[[:space:]]+-target=cloudflare_record\.github_pages \\$' <workflow>`.
+  This is not specific to that one address: `cloudflare_pages_project.docs` and
+  `cloudflare_pages_domain.www` are prefix-vulnerable to any future sibling in exactly the
+  same way, so all seven use the anchored form (`cq-assert-anchor-not-bare-token`).
 - **AC6** — `seo-rulesets.tf` is unchanged: `git diff --stat origin/main -- apps/web-platform/infra/seo-rulesets.tf` is empty. Rule 10 and its ACME carve-out clause survive verbatim.
 - **AC7** — `seo-config-rules.tf` still contains exactly one `ssl = "full"` Configuration Rule: `grep -c 'ssl *= *"full"' apps/web-platform/infra/seo-config-rules.tf` equals `1`. **Asserted at the resource level, not as an empty diff.** An empty-diff assertion would forbid correcting the rule's `REMOVAL CONDITION` comment, which instructs deleting the block once `gh api repos/jikig-ai/soleur/pages` reports an issued certificate — a condition the cutover makes permanently unsatisfiable, because DNS is detached and the certificate can never issue. Locking that comment in place is the same doc-rot this plan corrects elsewhere; the comment is updated and the rule is not.
 - **AC8** — none of the deferred-deletion artifacts are removed. Per-path existence check, never an aggregate count:
