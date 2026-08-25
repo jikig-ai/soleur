@@ -152,7 +152,8 @@ After `terraform apply` against a fresh `hcloud_server.web`, the inngest-server 
 ```bash
 doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
   --since 24h --grep 'SOLEUR_INNGEST_SERVER_PROBE' --limit 50 \
-  | jq -r 'select(.raw)|.raw|fromjson|select(.host_name=="soleur-inngest-prd")|.message'
+  | jq -R -r 'fromjson? | .raw? | fromjson?
+      | select(.host=="soleur-inngest" and .host_name=="soleur-inngest-prd") | .message?'
 ```
 
 `server_active=inactive` together with `cutover_flag=rollback` or `cutover_flag=rolled-back` means
@@ -173,10 +174,29 @@ the flag lives in Doppler and survives, so the replaced host reads it at boot an
 while the standing diagnostic evidence is destroyed.
 
 **The only thing that releases the brake is a cutover window** (`op=arm` and its gate sequence).
-While the brake stands there is no outage: web-1's co-located scheduler fires production crons
-normally, which is exactly why this state can persist unnoticed — and did, for 5.4 days, until the
-`*/15` dedicated-host arm on `scheduled-inngest-health.yml` was given the probe to read
-(`[ci/inngest-dedicated-host]`, verdict `stopped-by-brake`, no restart dispatched).
+
+**But "the brake is on" is NOT "nothing is broken" — correct an earlier reading here.** This entry
+originally said "while the brake stands there is no outage". That is HALF true and the false half
+matters:
+
+| Path | State | Evidence |
+|---|---|---|
+| Scheduled crons | **healthy** | web-1's co-located scheduler; ~14 `inngest/scheduled.timer` rows/hour |
+| App-originated `inngest.send()` | **FAILING CONTINUOUSLY** | ~621 `ECONNREFUSED 10.0.1.40:8288` rows/hour (~14,900/day), measured 2026-08-25 |
+
+`INNGEST_BASE_URL=http://10.0.1.40:8288` is baked unconditionally into the web-platform container
+(`ci-deploy.sh`, `cloud-init.yml`) and `server/inngest/client.ts` passes it through as `baseUrl`
+with **no fallback**. So every app-originated event send is addressed to the stopped host.
+`server/inngest/send-with-retry.ts` retries transient failures — against a host that is
+deliberately stopped, every retry also fails, and the event is dropped once retries exhaust.
+
+So the accurate statement is: **crons fire, events do not.** A reader who takes "no outage" at face
+value will under-prioritise this, which is exactly what happened for 5.4 days — the cron half stayed
+green and nothing read the half that was not.
+
+The `*/15` dedicated-host arm on `scheduled-inngest-health.yml` now surfaces the host state
+(`[ci/inngest-dedicated-host]`, verdict `stopped-by-brake`, no restart dispatched). It reports the
+HOST, not the dispatch failure; the dispatch failure is tracked separately.
 
 ## Heartbeat-miss triage
 

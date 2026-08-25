@@ -173,8 +173,16 @@ jobs:
           #
           # It NARROWS a pre-filter, never the on-host monotonic latch, which is the actual guard
           # against a second FLUSHALL and is unbounded in time. The one legitimate use is a host
-          # whose /mnt/data was recut (inngest-host-replace): the latch is genuinely gone, but the
-          # Better Stack rows that evidenced the old one have not aged out.
+          # whose /mnt/data was genuinely RECUT: the latch is gone, but the Better Stack rows that
+          # evidenced the old one have not aged out.
+          #
+          # CORRECTED 2026-08-25 (#7674): this comment used to name `inngest-host-replace` as the
+          # recut. It is NOT. A replace destroys and recreates the SERVER and RE-ATTACHES the same
+          # hcloud volume — /mnt/data and the latch survive it (measured: volume 106261946 created
+          # 2026-07-07, attached to a host created 2026-08-20, latch intact). No apply_target
+          # recuts /mnt/data today; the design for one is tracked in #7695. Until it exists there
+          # is no in-repo path that legitimately clears the latch, so narrowing this window on the
+          # belief that a replace cleared it would be narrowing it on a false premise.
           FLUSH_LATCH_SINCE: ${{ vars.FLUSH_LATCH_SINCE }}
           # The quiesce→register window (ISO-8601), OPTIONAL operator repo/env vars, mapped here
           # so the shell actually sees them (GitHub does not export repo vars to the step unless

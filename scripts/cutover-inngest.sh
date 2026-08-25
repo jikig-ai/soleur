@@ -50,8 +50,14 @@ BASE="https://deploy.soleur.ai/hooks"
 # says it is the sole discriminator for the ONE multiplexed Logs source 2457081. That is the
 # right field to filter on and it is NOT sufficient on its own: **#6616 is OPEN — "host_name
 # telemetry is lying"** — because `inngest-bootstrap.sh` sed-renders the literal
-# `soleur-inngest-prd` and a WEB host has been observed self-labelling with it, while
-# `lifecycle{ignore_changes=[user_data]}` stops it re-rendering.
+# `soleur-inngest-prd`, and a WEB host has been observed self-labelling with it.
+#
+# CORRECTED (#7674 review): an earlier draft of this comment blamed
+# `lifecycle{ignore_changes=[user_data]}` for the stale render. That is the wrong host —
+# `hcloud_server.inngest` carries `ignore_changes = [ssh_keys]` and `inngest-host.tf` says
+# "Deliberately NO lifecycle.ignore_changes=[user_data]" twice, because the force-replace IS its
+# reprovision path. The stale-render mechanism belongs to the WEB hosts, which is where the #6616
+# mislabel actually lives. The conclusion is unchanged and the premise now names the right host.
 #
 # `host` is Vector's auto-derived OS hostname, which for this node is the Hetzner server name
 # `hcloud_server.inngest` = `soleur-inngest`. `scripts/followthroughs/hostname-mislabel-web1-6616.sh`
@@ -302,9 +308,11 @@ _flush_latch_count() {
 #      a literal "host_name":"..." grep against the outer row matches NOTHING, EVER — which would
 #      pin H at 0 and refuse every arm. Decode `.raw`, then match the field literal.
 #
-# WINDOW. 15 minutes: wide enough to tolerate both today's ~35s terminal-arm cadence and any
+# WINDOW. 15 minutes: wide enough to tolerate both today's ~42s terminal-arm cadence (1.42/min measured) and any
 # future rate-limit, which the follow-up issue constrains to stay under 15 minutes. It must not be
-# tightened below the slower of the two.
+# tightened below the slower of the two. (Measured 2026-08-25: 170 rows in 2h = 1.42/min ~= one
+# row every 42s. An earlier draft said "~35s cadence" beside "~1.4/min"; those disagree — 35s
+# would be 1.7/min — and 1.42/min is the measured figure.)
 # DELIBERATELY A LITERAL, not an env override (#7674 review). Two reasons, and either alone
 # settles it. (1) It is not mapped into cutover-inngest.yml's step env, and GitHub does not
 # export repo vars to a step unless the workflow names them — so an override here would be an
@@ -325,8 +333,8 @@ _flip_liveness_count() {
   # Decode `.raw` first (it is double-encoded), then match the host field literal. Counts only;
   # never echoes a row, the standing purity contract of every Better Stack reader here.
   n=$(printf '%s\n' "$rows" \
-    | jq -r --arg h "$INNGEST_HOST" --arg hn "$INNGEST_HOST_NAME" \
-        'select(.raw) | .raw | fromjson? | select(.host == $h and .host_name == $hn) | 1' 2>/dev/null \
+    | jq -R -r --arg h "$INNGEST_HOST" --arg hn "$INNGEST_HOST_NAME" \
+        'fromjson? | .raw? | fromjson? | select(.host == $h and .host_name == $hn) | 1' 2>/dev/null \
     | grep -c '^1$' || true)
   case "$n" in
     ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
@@ -508,16 +516,41 @@ flush_latch_decide() {
   case "$1" in
     ''|*[!0-9]*) printf '%s' 'unreadable'; return 0 ;;
   esac
-  case "$2" in
-    ''|*[!0-9]*) printf '%s' 'unreadable'; return 0 ;;
-  esac
+  # L's VALUE is decisive before H is even consulted (#7674 review). A recorded flush is a refusal
+  # regardless of whether the host is currently audible, and ordering it after H's readability
+  # check meant (L>=1, H unreadable) printed the CREDENTIAL remediation for a state where a latch
+  # had actually been detected — reintroducing, in one cell, the mis-remediation the silent/
+  # unreadable split exists to prevent. No refuse/proceed decision changes; only the message.
   case "$1" in
     0) : ;;
     *) printf '%s' 'latched'; return 0 ;;
   esac
   case "$2" in
+    ''|*[!0-9]*) printf '%s' 'unreadable'; return 0 ;;
+  esac
+  case "$2" in
     0) printf '%s' 'silent'; return 0 ;;
     *) printf '%s' 'clear';  return 0 ;;
+  esac
+}
+
+# op=resume's G3 decision (#7674, CTO ruling). Same extraction contract as g3_decide and
+# flush_latch_decide: signature and closing brace at column 0, no column-0 `}` in the body.
+#
+#   $1  H — the row count from _flip_liveness_count, or __UNREADABLE__ when the read failed
+# Outcomes: audible | silent | unreadable
+#
+# DELIBERATELY NOT flush_latch_decide. L's POLARITY INVERTS between the two verbs: at op=arm
+# `L >= 1` means REFUSE (a flush already happened), while at op=resume that same fact is the G2
+# precondition being SATISFIED. Reusing the function would force the caller to invert two of four
+# arms and would leave the token `latched` meaning opposite things at its two call sites.
+resume_liveness_decide() {
+  case "$1" in
+    ''|*[!0-9]*) printf '%s' 'unreadable'; return 0 ;;
+  esac
+  case "$1" in
+    0) printf '%s' 'silent';  return 0 ;;
+    *) printf '%s' 'audible'; return 0 ;;
   esac
 }
 
@@ -1519,9 +1552,9 @@ case "$OP" in
       clear)
         echo "::notice::op=arm: G3.7 flush-latch gate passed — no flip-complete / refuse-rearm-after-done row within $FLUSH_LATCH_SINCE, AND the host is audible ($FLIP_LIVENESS_N inngest-cutover-flip row(s) from $INNGEST_HOST_NAME within $FLIP_LIVENESS_SINCE). NOTE: 'clear' is a WEAK verdict — it means 'the host is reporting and no flush evidence is visible in this window', NOT 'no flush has happened'. Better Stack retention against a $FLUSH_LATCH_SINCE window is UNMEASURED (#7674 H5/H6), so the on-host monotonic latch remains the authority; this gate can only ever ADD a refusal. Note the two signals cover DIFFERENT windows: H proves the host is audible NOW ($FLIP_LIVENESS_SINCE), which does not prove it was audible across the whole $FLUSH_LATCH_SINCE window L was read over — so an outage inside L's window could still have hidden a flush row." ;;
       latched)
-        echo "::error::op=arm: G3.7 REFUSING — the dedicated host's log source carries $FLUSH_LATCH_N flip-complete / refuse-rearm-after-done row(s) within $FLUSH_LATCH_SINCE, so a FLUSHALL has ALREADY been performed for this host. The monotonic latch that records it lives on /mnt/data and survives BOTH a rollback and a host replace, so this arm is doomed: it would write both prod secrets, park INNGEST_CUTOVER_FLIP at 'armed' (inside inngest-server-flip-guard.sh's prod-start allowlist, so a reboot would start a SECOND prod scheduler) and then be refused on-host into terminal 'aborted'. Refusing BEFORE any write; nothing was changed. There is no re-arm path while that latch stands, and op=resume is NOT it (its G1 accepts 'done' only). The latch is cleared ONLY by recutting the host's /mnt/data volume, never by SSH. CORRECTED #7674: an inngest-host-replace does NOT recut it — the replace re-ATTACHES the same hcloud volume, and the latch file survives (measured: volume 106261946 was created 2026-07-07 and is attached to a host created 2026-08-20, six weeks later, latch intact). No volume-recut apply_target exists yet; it is designed and tracked, and until it is built there is no in-repo mechanism that clears this latch. If that recut has ALREADY happened, set the repo variable FLUSH_LATCH_SINCE to a window starting after it (e.g. '1h') and re-dispatch — that narrows this pre-filter only, and the on-host latch still refuses if it is in fact present. Do NOT SSH the host." ;;
+        echo "::error::op=arm: G3.7 REFUSING — the dedicated host's log source carries $FLUSH_LATCH_N flip-complete / refuse-rearm-after-done row(s) within $FLUSH_LATCH_SINCE, so a FLUSHALL has ALREADY been performed for this host. The monotonic latch that records it lives on /mnt/data and survives BOTH a rollback and a host replace, so this arm is doomed: it would write both prod secrets, park INNGEST_CUTOVER_FLIP at 'armed' (inside inngest-server-flip-guard.sh's prod-start allowlist, so a reboot would start a SECOND prod scheduler) and then be refused on-host into terminal 'aborted'. Refusing BEFORE any write; nothing was changed. There is no re-arm path while that latch stands, and op=resume is NOT it (its G1 accepts 'done' only). The latch is cleared ONLY by recutting the host's /mnt/data volume, never by SSH. CORRECTED #7674: an inngest-host-replace does NOT recut it — the replace re-ATTACHES the same hcloud volume, and the latch file survives (measured: volume 106261946 was created 2026-07-07 and is attached to a host created 2026-08-20, six weeks later, latch intact). No apply_target recuts THIS volume yet (`registry-luks-recut` and `workspaces-luks-recut` exist, but for other volumes); the inngest one is designed and tracked in #7695, and until it is built there is no in-repo mechanism that clears this latch. If that recut has ALREADY happened, set the repo variable FLUSH_LATCH_SINCE to a window starting after it (e.g. '1h') and re-dispatch — that narrows this pre-filter only, and the on-host latch still refuses if it is in fact present. Do NOT SSH the host." ;;
       silent)
-        echo "::error::op=arm: G3.7 REFUSING — the flush-latch window is empty, but so is the host's own liveness window: ZERO inngest-cutover-flip rows from $INNGEST_HOST_NAME within $FLIP_LIVENESS_SINCE, while the read path itself succeeded. A silent host cannot supply evidence of ANYTHING, so the empty latch window proves nothing and must not be read as 'no flush has happened'. This is NOT a credential fault (that reports 'unreadable' and names prd_terraform) — the dedicated host has gone dark or stopped shipping journald. Check whether inngest-cutover-flip.timer is running and whether Vector is shipping, via the SOLEUR_INNGEST_SERVER_PROBE row (it carries server_active and cutover_flag in the same line). Refusing BEFORE any write; nothing was changed. Do NOT SSH the host." ;;
+        echo "::error::op=arm: G3.7 REFUSING — the flush-latch window is empty, but so is the host's own liveness window: ZERO inngest-cutover-flip rows from host=$INNGEST_HOST host_name=$INNGEST_HOST_NAME within $FLIP_LIVENESS_SINCE, while the read path itself succeeded. A silent host cannot supply evidence of ANYTHING, so the empty latch window proves nothing and must not be read as 'no flush has happened'. This is NOT a credential fault (that reports 'unreadable' and names prd_terraform) — the dedicated host has gone dark or stopped shipping journald. Note this measured the FULL conjunction host=$INNGEST_HOST AND host_name=$INNGEST_HOST_NAME, so an equally consistent cause is that the host's identity fields stopped matching (a rename, or a #6616 remediation that re-derives host_name) — check that before concluding the box is gone. Unit/timer state is NOT in the SOLEUR_INNGEST_SERVER_PROBE row; it is in the post-boot-health marker's svc=[...] field. Refusing BEFORE any write; nothing was changed. Do NOT SSH the host." ;;
       unreadable)
         echo "::error::op=arm: G3.7 — could not read the flip-FSM markers from Better Stack (the ::warning:: above names the read-path failure). Refusing FAIL-CLOSED: an unanswered 'has this host already been flushed?' must not be read as 'no', and G6 below confirms the flip over the SAME read path, so an arm dispatched now could not be confirmed either. Fix BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform and re-dispatch. Do NOT SSH the host." ;;
       *)
@@ -2221,6 +2254,35 @@ case "$OP" in
       *)
         echo "::error::op=resume: G1 REFUSING — INNGEST_CUTOVER_FLIP is '${RS_CUR:-unset}', not 'done'. op=resume exists for ONE case: a replaced host that inherited a completed flip's 'done' and carries no done-owner marker, so the flip guard refuses its start. Only 'done' evidences that a FLUSHALL happened; from any other state, writing 'flushed' would start a scheduler against a queue that may never have been flushed. Use op=arm for a fresh cutover — its monotonic-latch refusal is the correct answer if a flush already occurred."; exit 1 ;;
     esac
+    # G2 (the latch must EXIST) stays deferred here, and its absence is NOT the #7674 hole:
+    # op=arm's PERMITTING condition is an ABSENCE (L=0), which a dark host manufactures for free,
+    # whereas op=resume's is the PRESENCE of a `done` that only a completed flip writes — so a
+    # silent host can BLOCK this verb but can never AUTHORISE it. H is checked below for
+    # DELIVERABILITY, not for evidence.
+    #
+    # G3 — HOST-AUDIBILITY GATE (#7674, CTO ruling). `flushed` is acted on ONLY by the on-host 30s
+    # timer. Writing it to a dark host recovers nothing AND parks the flag in a state op=resume's
+    # own G1 rejects as IN-FLIGHT, while op=arm is separately refused by G3.7 — stranding the only
+    # dispatchable re-entry the system has, i.e. manufacturing a fresh instance of the KNOWN DEAD
+    # END this arm already documents, which has no clearing apply_target today (#7695). Refusing is
+    # strictly dominant: it forfeits nothing the write would have achieved.
+    #
+    # Known false-negative, accepted: H=0 also covers "host fine, Vector down". That is the only
+    # case this refuses a workable recovery, and it is acceptable because H is known-POSITIVE in
+    # this verb's exact target state — a guard-refused host still runs inngest-cutover-flip.timer
+    # and emits noop-* rows (measured ~1.4/min, the basis of #7674).
+    RS_LIVE_N="$(_flip_liveness_count)"
+    case "$(resume_liveness_decide "$RS_LIVE_N")" in
+      audible)
+        echo "::notice::op=resume: G3 — host is audible ($RS_LIVE_N inngest-cutover-flip row(s) from $INNGEST_HOST_NAME within $FLIP_LIVENESS_SINCE), so the on-host FSM can act on this write." ;;
+      silent)
+        echo "::error::op=resume: G3 REFUSING — ZERO inngest-cutover-flip rows from host=$INNGEST_HOST host_name=$INNGEST_HOST_NAME within $FLIP_LIVENESS_SINCE, while the read path itself SUCCEEDED: the dedicated host is dark or has stopped shipping journald. 'flushed' is acted on ONLY by the on-host 30s timer, so writing it now recovers nothing AND parks the flag in a state op=resume's own G1 rejects as IN-FLIGHT — stranding the only dispatchable re-entry this system has (op=arm is separately refused by G3.7). Refusing BEFORE the write; nothing was changed. Check inngest-cutover-flip.timer and Vector via the SOLEUR_INNGEST_SERVER_PROBE row (it carries server_active and cutover_flag in one line). If the host is genuinely gone, the path forward is an inngest-host-replace, then re-dispatch op=resume. Do NOT SSH the host."; exit 1 ;;
+      unreadable)
+        echo "::error::op=resume: G3 REFUSING FAIL-CLOSED — the liveness READ PATH failed (this is NOT a statement about the host). Verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform, then re-dispatch. Refusing BEFORE the write; nothing was changed. Do NOT SSH the host."; exit 1 ;;
+      *)
+        echo "::error::op=resume: G3 — resume_liveness_decide returned an unrecognised outcome. Refusing FAIL-CLOSED."; exit 1 ;;
+    esac
+
     printf '%s' 'flushed' | DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets set INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --no-interactive >/dev/null || { echo "::error::op=resume: writing INNGEST_CUTOVER_FLIP=flushed FAILED. Re-dispatch op=resume. Do NOT SSH the host."; exit 1; }
     echo "::notice::op=resume: wrote INNGEST_CUTOVER_FLIP=flushed to soleur-inngest/prd. The enabled 30s on-host timer takes the post-flush resume arm: start -> verify it SERVES -> record the done-owner marker -> done, with NO re-FLUSHALL."
     ;;

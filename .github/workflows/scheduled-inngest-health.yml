@@ -738,6 +738,18 @@ jobs:
           set -uo pipefail
           source "$GITHUB_WORKSPACE/scripts/inngest-dedicated-host-classify.sh"
 
+          # This workflow's header states its own contract (see the file preamble): every untrusted
+          # value flows through strip_log_injection before any echo into ::error:: or
+          # $GITHUB_OUTPUT. The three fields below come off-host, so they are untrusted by that
+          # definition. They are ALSO bounded by [^ ]+ and by vector.toml's upstream pii_scrub —
+          # but that scrub runs on a host under lifecycle{ignore_changes=[user_data]}, i.e. it can
+          # be serving a stale render, which is the whole reason #6616 exists. Do not rely on it.
+          # Byte-identical to the canonical copy in the liveness step; the helper is per-step.
+          strip_log_injection() {
+            printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
+          }
+
           if [[ -z "${BETTERSTACK_QUERY_HOST:-}" || -z "${BETTERSTACK_QUERY_USERNAME:-}" || -z "${BETTERSTACK_QUERY_PASSWORD:-}" ]]; then
             echo "::warning::#7674 dedicated-host arm: BETTERSTACK_QUERY_* unset — reporting probe-unavailable rather than a false healthy."
             {
@@ -764,14 +776,18 @@ jobs:
             # this host and web-1, and vector.toml states all hosts multiplex into ONE Logs
             # source with host_name the sole discriminator. web-1 legitimately reports
             # cutover_flag=unknown and must never be read as the dedicated host's state.
-            MINE="$(printf '%s\n' "$ROWS" | jq -r 'select(.raw) | .raw | fromjson?
+            # `-R` is load-bearing, not defensive habit (same reasoning as the follow-through
+            # probe's header): without it jq parses the STREAM, so ONE malformed line aborts the
+            # whole invocation and every valid row after it is lost — which would surface as
+            # probe-unavailable ("the host is silent") on a window that contained a real verdict.
+            MINE="$(printf '%s\n' "$ROWS" | jq -R -r 'fromjson? | .raw? | fromjson?
                       | select(.host == env.DEDICATED_HOST and .host_name == env.DEDICATED_HOST_NAME)
                       | .message // empty' 2>/dev/null | grep -F 'SOLEUR_INNGEST_SERVER_PROBE' || true)"
             N="$(printf '%s' "$MINE" | grep -c . || true)"
             LAST="$(printf '%s\n' "$MINE" | tail -1)"
-            ACTIVE="$(printf '%s' "$LAST" | grep -oE 'server_active=[^ ]+' | head -1 | cut -d= -f2 || true)"
-            CODE="$(printf '%s' "$LAST" | grep -oE 'http_code=[^ ]+' | head -1 | cut -d= -f2 || true)"
-            FLAG="$(printf '%s' "$LAST" | grep -oE 'cutover_flag=[^ ]+' | head -1 | cut -d= -f2 || true)"
+            ACTIVE="$(strip_log_injection "$(printf '%s' "$LAST" | grep -oE 'server_active=[^ ]+' | head -1 | cut -d= -f2 || true)")"
+            CODE="$(strip_log_injection "$(printf '%s' "$LAST" | grep -oE 'http_code=[^ ]+' | head -1 | cut -d= -f2 || true)")"
+            FLAG="$(strip_log_injection "$(printf '%s' "$LAST" | grep -oE 'cutover_flag=[^ ]+' | head -1 | cut -d= -f2 || true)")"
           fi
 
           VERDICT="$(classify_dedicated_host "$N" "$ACTIVE" "$CODE" "$FLAG")"
@@ -793,8 +809,19 @@ jobs:
             echo "flag=${FLAG:-unknown}"
           } >> "$GITHUB_OUTPUT"
 
+      # `stopped-by-brake` is a KNOWN standing state, already tracked by #7674, and it will hold
+      # until the cutover window. Filing it on the same channel as a genuine fault would post ~96
+      # comments/day for ~3 months (~9,300), and — worse — if the operator closes that issue the
+      # `EXISTING` lookup returns empty and the next tick FILES A NEW ONE, every 15 minutes. A real
+      # `not-serving` would then arrive as comment N+1 on a channel trained to be ignored. So the
+      # brake gets the run log only; the issue channel is reserved for verdicts that need a human.
+      - name: Note the known brake (run log only, no issue)
+        if: always() && steps.dedicated.outputs.verdict == 'stopped-by-brake'
+        run: |
+          echo "::notice::#7674 dedicated host stopped by a standing brake (cutover_flag=${{ steps.dedicated.outputs.flag }}) — known state, tracked by #7674, no issue filed and no restart dispatched."
+
       - name: File or comment dedicated-host issue (#7674)
-        if: always() && steps.dedicated.outputs.verdict != '' && steps.dedicated.outputs.verdict != 'healthy'
+        if: always() && steps.dedicated.outputs.verdict != '' && steps.dedicated.outputs.verdict != 'healthy' && steps.dedicated.outputs.verdict != 'stopped-by-brake'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -808,6 +835,16 @@ jobs:
           TITLE="[ci/inngest-dedicated-host] Dedicated inngest host is not serving"
           gh label create "ci/inngest-dedicated-host" --repo "$GH_REPO" \
             --color BFD4F2 --description "Dedicated inngest host (10.0.1.40) not serving — no restart path" 2>/dev/null || true
+          # `action-required` is load-bearing, not decoration: operator-digest harvests ONLY issues
+          # carrying it (this workflow says so itself at the connector-invariant step, and
+          # operator-digest/SKILL.md filters `--label action-required`). The sibling ci/inngest-*
+          # labels are NOT harvested — so without this, a genuinely dead scheduler or a broken
+          # consumer would be detected and then discarded into a log nobody reads.
+          gh label create "action-required" --repo "$GH_REPO" --color D93F0B \
+            --description "Needs an operator decision or action" 2>/dev/null || true
+          # An ::error:: annotation makes the run itself legible (observability layer 6) — the plan
+          # named this destination, and without it a not-serving run is green with an empty summary.
+          echo "::error::#7674 dedicated inngest host verdict=${VERDICT} — ${DETAIL}"
           EXISTING="$(gh issue list --repo "$GH_REPO" --label ci/inngest-dedicated-host --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)"
           # Built with printf rather than a multi-line assignment: continuation lines at column 0
           # inside a `run: |` block scalar terminate the block and break the workflow YAML.
@@ -821,8 +858,39 @@ jobs:
               echo "::warning::#7674 could not comment on issue #${EXISTING}"
           else
             gh issue create --repo "$GH_REPO" --title "$TITLE" \
-              --label ci/inngest-dedicated-host --label priority/p2-medium \
+              --label ci/inngest-dedicated-host --label action-required --label priority/p1-high \
               --body "$BODY" || echo "::warning::#7674 could not file the dedicated-host issue"
+          fi
+
+      # THE CONSUMER'S OWN DEATH (#7674 review). Every branch above keys on an OUTPUT of
+      # steps.dedicated. If that step crashes — the classifier moved, jq changed, the default
+      # `bash -e` shell aborting — it writes NO output, so every branch skips AND the final Sentry
+      # check-in computes its status from steps.effmode alone. A broken consumer would be
+      # indistinguishable from a healthy host: precisely the defect this PR exists to fix, one
+      # level up. This branch keys on the step's OUTCOME, which exists even when its outputs do not.
+      - name: Dedicated-host consumer crashed (#7674)
+        if: always() && steps.dedicated.outcome != 'success' && steps.dedicated.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          echo "::error::#7674 the dedicated-host probe consumer itself FAILED (outcome=${{ steps.dedicated.outcome }}) — the host's serving state was NOT measured this run. This is a broken reader, not a healthy host."
+          gh label create "ci/inngest-dedicated-host" --repo "$GH_REPO" --color BFD4F2 2>/dev/null || true
+          gh label create "action-required" --repo "$GH_REPO" --color D93F0B 2>/dev/null || true
+          TITLE="[ci/inngest-dedicated-host] Dedicated-host probe consumer is broken"
+          EXISTING="$(gh issue list --repo "$GH_REPO" --label ci/inngest-dedicated-host --state open --search "$TITLE" --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+          BODY="$(printf '%s\n' \
+            "verdict: \`arm-crashed\`" "" \
+            "The dedicated-host arm did not complete, so nothing measured whether 10.0.1.40 is serving. Absence of a verdict is NOT health." "" \
+            "Run: ${RUN_URL}")"
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "$BODY" || true
+          else
+            gh issue create --repo "$GH_REPO" --title "$TITLE" \
+              --label ci/inngest-dedicated-host --label action-required --label priority/p1-high \
+              --body "$BODY" || true
           fi
 
       - name: Auto-close dedicated-host issue (serving again)
