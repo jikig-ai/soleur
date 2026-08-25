@@ -57,6 +57,22 @@ permission alone would have left this in place.
 sum of every internal deadline on its path**, and remember that the failure mode of getting it
 wrong is *silence*, not truncation.
 
+**RECURRENCE, 2026-08-20 (#7586/#7587) — the same mechanism at the scale of a whole channel.**
+The artifact step above is one step; the next instance was an entire *notification channel*.
+`apply-web-platform-infra.yml` had no failure email at all, and the issue's own proposed fix was
+an `if: failure()` step arm on the `apply` job — which is silent on precisely the `timeout-minutes`
+path the sibling issue was about. A channel built on `failure()` notifies nobody on the one path
+it most needs to cover. The fix is a downstream **job** gated on `needs.<job>.result`, a *value*
+rather than a status function, evaluated over the whole `{success, failure, cancelled, skipped}`
+enum. **When the thing being disarmed is the alarm itself, "silence, not truncation" is the entire
+failure.**
+
+**And "the sum of every internal deadline" is ambiguous about *which* sum.** That instance had
+two — the deadlines that are *reachable* on today's path, and the deadlines that are *declared*
+at every call site. Size against the declared set: a call site absent from state today is still a
+call site on the day it is not. See
+[the channel was silent on the path it was built for](./2026-08-20-the-channel-was-silent-on-the-path-it-was-built-for.md) §4.
+
 ### 3. A permissions lint that over-reports gets "fixed" by widening token scope
 
 This is why the lint added here is conservative to the point of being fussy. A naive scan of the

@@ -234,6 +234,96 @@ The invariant is untouched: **no static check can prove a monitor is armed; it c
 feeder exists.** Arming is still verified by a measured beat — the beat is now measured by the
 apply workflow's op/state-gated step instead of by a human running the sequence by hand.
 
+### Amendment (2026-08-20, #7587/#7657): the rollback reserve is 40 s, one deadline departs from the formula, and the soft landing beside it
+
+Two items, both about the **`inngest_consumer`** arm of the automated gate the 2026-07-18
+amendment installed. Neither changes the measure-then-arm sequence; both record a departure that
+was previously justified only in a workflow comment.
+
+**0. The formula's reserve is `40`, not `10` (corrected at review-resolution, #7657 D5).** This
+ADR stated `deadline = period + grace − 10`, i.e. one poll interval held back for the rollback.
+That is not the real gap. The poll loop exits at up to `deadline + poll_interval + curl_max_time`
+(the final iteration's own round-trip is what overshoots), and the rollback `PATCH` then takes up
+to another `curl_max_time`. So the monitor is live for up to `deadline + poll_interval +
+2 × curl_max_time` = `deadline + 40` at the shipped 10 / 15 — and at as little as **2 s** of Better
+Stack round-trip the old reserve re-paused the monitor **after** its first absence alert had
+already fired. A false page produced by the gate whose purpose is to prevent false pages.
+
+**The formula is now `deadline = period + grace − 40`**, with the 40 derived rather than chosen:
+`ARM_POLL_INTERVAL_S + 2 × ARM_CURL_MAX_TIME_S`, both read out of
+`apps/web-platform/infra/arm-heartbeats.sh` by the guard that asserts it. Deadlines move
+accordingly: `web_zot_consumer` 230 → **200** (240 − 40), `web_nic_guard` 470 → **440** (480 − 40),
+`git_data_prd` 230 → **200** (240 − 40). The formula remains the default for every arm added later,
+and the guard re-derives each deadline from the monitor's own `period` + `grace` in the `.tf`
+source, so a monitor whose window changes cannot leave a stale deadline behind.
+
+**1. A deadline that is deliberately not `period + grace − 40`.** This ADR stated the formula
+unconditionally, so a reader of the ADR alone would be misled by what the gate now does. The
+`inngest_consumer` arm polls for **30 s**, not the formula's 200 s (`period` 180 + `grace` 60
+− 40). That is far inside the bound rather than outside it — 30 + 40 = 70 s against a 240 s
+window — so no false page is possible during a failed attempt.
+
+Measured on run `32356859661` and re-measured on `32360734255` (2026-08-20): the five healthy arms
+complete in **~0.6–1.0 s** of wall clock, while this single arm burned **~235 s** — **98.8 %** of
+the ARM step and **78.5 %** of the whole apply job — on **every** merge, at a measured 2.71
+merge-applies/day. It cannot succeed by construction while incident **#7228** is open, because its
+feeder correctly suppresses its ping against a host that has never bound `:8288`.
+
+The bounded cost, owned rather than buried. With a 180 s feeder period against a 30 s window,
+roughly **one apply in six** catches the first beat, so after #7462 restores the host the monitor
+arms **probabilistically** rather than on the next apply. Stated with its tail rather than its mean
+alone (#7657 D7), because the distribution is geometric and heavy-tailed: at 2.71 merge-applies/day
+the mean is 6 attempts ≈ **2.2 days**, the median ≈ 1.5 days, **p95 = 17 attempts ≈ 6.3 days**, p99
+≈ 9.6 days, and **P(still unarmed after 2 days) ≈ 37 %**. `UNVERIFIED` rider: p = 1/6 assumes Better
+Stack's `status` flips to `up` the moment a beat is received; if propagation lags by L the effective
+p is (30 − L)/180, and at L = 10 s that is 1/9 — mean 3.3 d, p95 9.4 d. No such vendor semantics
+were measured here. It was paused every day of
+the incident, so this is not a new dark state — but the window is real. Two properties keep the
+departure inside this ADR's doctrine rather than outside it: the arm still **attempts the
+measurement on every apply**, so `arm_one` returns 0 via `already armed (status=…)` the first time
+the monitor is live-`up` and nothing here can outlive the incident; and the unpause window stays
+far below the monitor's first absence alert (`period + grace` = 240 s), so **no false page is
+possible during a failed attempt**.
+
+Rejected in favour of the resize: a **short-circuit** of the arm while #7228 stays open. It buys
+the same wall clock and destroys the self-clearing property — a short-circuit never re-tests, so
+nothing re-arms the monitor once the incident closes — and its live `gh issue view` variant would
+need `issues: read` on the job that holds the production Doppler secrets and the fleet-wide apply
+mutex. Since ADR-100's 2026-08-12 addendum records that #7228 cannot close until #7462 lands, any
+dated or issue-keyed suppression would sit in the workflow for that whole window, which is exactly
+the regime in which self-expiry mechanisms rot (ADR-185).
+
+**2. The already-shipped `arc == 2` soft landing.** The `inngest_consumer` caller distinguishes
+`arm_one`'s rc=2 ("the gate worked and the FEEDER is not feeding") from every other non-zero exit
+and emits a `::warning::` instead of failing the apply. That departs from the 2026-07-18
+amendment's property 3 (*"fail-loud … and fails the apply"*) and until now was justified only in a
+workflow comment. It is recorded here because #7587 changes that arm, so documenting the divergence
+is now this change's business.
+
+The soft landing is **narrowed** in the same change, and the narrowing is the part worth keeping:
+a **failed rollback** now returns 1 even for this caller. "The monitor is unpaused and nothing is
+feeding it" is an assertion about the arming, not about the monitored system, and a soft landing
+there would leave the apply job green while production uptime alerting is live-and-unfed — with
+the notify job's predicate false and nobody emailed. The rollback itself is unconditional either
+way, and since #7587 it is also **recorded**: every unpaused id is written to
+`$RUNNER_TEMP/armed-unconfirmed` and cleared only on a real 2xx rollback or on reaching `up`, with
+an `if: always()` sweep step re-pausing whatever is left when the step is cut externally.
+
+Two items were considered and **not** folded in. A `budget-exhausted` third outcome dissolved with
+the wall-clock cap it existed to serve (the job budget was raised instead of the deadline sum being
+truncated, so no arm is ever skipped). And property 1 above claims the arm step runs when the
+monitor is live-`paused` **OR** its feeder was replaced this apply (`triggers_replace`); the
+shipped `arm_one` implements **only** the live-paused gate. That doc/code divergence is real and
+pre-existing, and it is unrelated debt this change did not create — recorded here as an
+observation, deliberately not repaired under a different issue's PR.
+
+The invariant is still untouched: **no static check can prove a monitor is armed; it can only
+prove a feeder exists.** What #7587 adds is that the *budget* the measurement runs inside is now
+asserted — `describe("the ARM gate's deadlines fit its job")` in
+`plugins/soleur/test/terraform-target-parity.test.ts` pins the two-part inequality, and
+`apps/web-platform/infra/arm-heartbeats.test.sh` drives the wall-clock bound and the rollback
+behaviourally against a fake clock.
+
 ## Consequences
 
 - `registry_prd` reclassifies `web-host-cron` → `dedicated-host-boot`, so ADR-103's `replace_target`
