@@ -4,7 +4,7 @@ date: 2026-08-25
 slug: fix-inngest-host-not-serving-and-latch-gate-blindness
 branch: feat-one-shot-7674-inngest-host-not-serving
 issue: 7674
-closes: 7674
+tracks: 7674
 lane: cross-domain
 type: fix
 domain: engineering
@@ -39,6 +39,22 @@ Two real defects sit behind that misreading, and this plan targets them:
 
 The plan also designs a gated, never-auto-executed destructive path for recutting `/mnt/data`,
 which does not exist today.
+
+### What this PR does and does not deliver — stated plainly
+
+The ask authorized three things. Measurement changed what each of them can honestly be:
+
+| Ask | Status here | Why |
+|---|---|---|
+| 1. Make the host serve | **Diagnosed, not fixed** | A durable serving ExecStart is reachable only inside a cutover, which requires `op=arm` — forbidden this session. The cause is now named from evidence; the fix is the step-5 window. |
+| 2. Authoritative flush-latch signal for G3.7 | **Mitigated, not met** | The `clear` verdict remains a **weak** verdict, and the on-host monotonic latch remains the authority. What ships is a strictly-additive refusal that closes the fail-open — not the authoritative read the ask described, which is unreachable without a host replace. |
+| 3. Design a volume-recut apply_target | **Designed, not built** | The design is complete below (five guard layers, the decision table, the naming correction). The build is deferred to the PR that opens the cutover window, because H5/H6 are UNKNOWN — the most destructive target in the inngest surface should not be built to clear a latch whose existence is undetermined. |
+
+**`tracks:` rather than `closes:` is deliberate and load-bearing.** Closing #7674 on merge would enrol
+the Phase 4 successor probe on a *closed* issue — the sweeper lists `--state open`, and its bounded
+closed-set pass reopens only on exit 1 while this probe correctly returns 2 until the host serves.
+That is precisely the permanent silent no-op this plan exists to retire. #7674 stays open until the
+probe itself reads PASS.
 
 ## Research Insights
 
@@ -236,20 +252,77 @@ Plaintext HTTP on the private network; no CDN, proxy, or certificate is in the p
 `FLUSH_LATCH_SINCE` — that tunes a window whose adequacy is unmeasurable. It must instead gain the
 ability to say *"I cannot tell"*, and refuse on that.
 
+### Network-Outage Deep-Dive (deepen-plan Phase 4.5)
+
+| Layer | Status | Verification artifact |
+|---|---|---|
+| L3 — firewall allow-list | **verified, not causal** | `hcloud_firewall.inngest` is zero-rule deny-all on the public interface only; nftables accepts `8288/8289` from the web-host private set, which contains web-1. Decisive: an nftables `drop` yields a timeout, but the measured symptom is `ECONNREFUSED` (TCP RST), so the packet reached the stack and nothing was listening. |
+| L3 — DNS / routing | **not applicable** | Target is a literal private IP; `nic=[10.0.1.40,]` confirms the interface address. |
+| L7 — TLS / proxy | **not applicable** | Plaintext HTTP on the private network; no CDN, proxy, or certificate in path. |
+| L7 — application | **verified, causal** | H4 confirmed: the flip FSM's `rollback` arm stopped the unit and parked at terminal `rolled-back`. |
+
+**Gap check:** none. Every layer carries a concrete artifact rather than an "obvious" judgement, and the
+L3 layer is excluded by the symptom's own shape rather than by assumption — which is the specific
+inversion `hr-ssh-diagnosis-verify-firewall` exists to prevent.
+
+## Downtime & Cutover
+
+Fires because Phase 3 introduces a `-replace` on `hcloud_volume.inngest_redis` and its attachment —
+the infra replace class, against a volume attached to a scheduler host.
+
+**The offline-inducing operation.** Destroying and recreating `/mnt/data` wipes the durable Redis
+queue state (in-flight `step.sleep`, queued jobs) and clears the flush latch.
+
+**Why the default path is zero-downtime, and the condition that makes it so.** At the only time a
+recut is legitimate — *before* the cutover — the dedicated host is **dark**, and the live scheduler is
+web-1's co-located instance. Destroying `/mnt/data` on a host that is serving nothing costs zero
+requests and zero queued jobs, because the queue that matters is web-1's. The recut is therefore
+inherently zero-downtime **provided it runs pre-cutover**, and no blue-green or expand-contract
+scaffolding is needed to make it so.
+
+**The dangerous case this analysis surfaced, and the guard it requires.** The same operation run
+*after* a completed cutover is a production outage: at that point 10.0.1.40 **is** the sole scheduler,
+`/mnt/data` holds the live queue, and a recut destroys it with no replica. Nothing in the four guard
+layers copied from `workspaces-luks-recut` would catch that — they check *what* is being destroyed,
+never *whether the host is currently serving*.
+
+**Therefore Phase 3 gains a fifth guard layer, a pre-flight state refusal:** the recut aborts unless
+the dedicated host is demonstrably dark. Fail closed on an unreadable signal, using the same
+two-signal shape as Phase 1 so a silent host cannot read as "safe to wipe":
+
+| Condition | Verdict |
+|---|---|
+| `INNGEST_CUTOVER_FLIP` is `done` (post-cutover; host is the live scheduler) | **refuse** |
+| flag readable and outside `{armed, flipping, flushed, done}`, and the probe's latest row shows `server_active != active` | proceed |
+| probe row shows `server_active=active` (host is serving, whatever the flag says) | **refuse** |
+| flag or probe unreadable / no recent probe row | **refuse** |
+
+**Residual downtime accepted:** none. The recut is bounded to a window in which the affected surface
+serves no traffic, and the guard above is what enforces that rather than assuming it.
+
+**Rollback:** the volume is recreated empty by the same apply; there is no partial state to unwind.
+The latch it cleared is intentionally not recoverable — that is the operation's purpose — so the
+authorization gate, not a rollback path, is the control.
+
 ## Sequencing
 
 Diagnosis does **not** gate the fixes, because the diagnosis is already complete from existing
 telemetry.
 
+**In this PR — the smallest coherent slice that fixes a presently load-bearing defect:**
+
 1. **Phase 1 — G3.7 gains a `silent` outcome + a liveness witness.** Repo-only. Removes the
-   fail-open on the only question the gate asks.
-2. **Phase 2 — a consumer for the probe.** Repo-only. Closes the detection gap that let this stand
-   5.4 days (and, in July, 12 days).
-3. **Phase 3 — `inngest-volume-recut` apply_target.** Repo-only, ships gated and inert.
-4. **Phase 4 — follow-through: retire the predecessor, enrol a positive successor.**
-5. **Phase 5 — corrections to the runbook and ADR-100.**
-6. **Phase 6 — the flip FSM's emit rate-limit.** Repo-side change that takes effect on the *next*
-   replace; explicitly not applied by this PR.
+   fail-open on the only question the gate asks. This is the one defect that is live today.
+2. **Phase 2 — a consumer for the probe**, as an arm on the existing watchdog rather than a new
+   workflow. Closes the detection gap that let this stand 5.4 days (and, in July, 12 days).
+3. **Phase 4 — follow-through: retire the predecessor, enrol a positive successor.**
+4. **Phase 5 — corrections to the runbook and ADR-100.**
+
+**Split out, each with its own issue — reasons in the phase bodies:**
+
+- **Phase 3 — `inngest-volume-recut`.** Designed here, built in the PR that opens the cutover window.
+- **Phase 6 — the flip FSM's emit rate-limit.** A Better Stack quota concern, replace-coupled, and
+  unobservable in the PR that would ship it.
 
 **Explicitly out of scope, and why:** `op=arm` (forbidden); any host replace (it reboots into the
 same `rolled-back` flag, the poller stops the unit again within 30 s, and it destroys the 5.4-day
@@ -308,13 +381,28 @@ Constraints this phase must honour, all pinned by existing assertions:
 not "no flush has happened". The on-host monotonic latch remains the authority; this gate can only
 ever ADD a refusal.
 
-### Phase 2 — give `SOLEUR_INNGEST_SERVER_PROBE` a consumer
+### Phase 2 — give `SOLEUR_INNGEST_SERVER_PROBE` a consumer, on the existing watchdog
 
-The marker is emitted hourly and read by nothing. Add a scheduled reader that pulls the most recent
-probe row for the dedicated host and fails loud when it reports not-serving, carrying the joined
-`cutover_flag` in the message so the *cause* is in the alert rather than one query away.
+The marker is emitted hourly and read by nothing. The consumer is **an arm on
+`.github/workflows/scheduled-inngest-health.yml`**, not a new workflow.
 
-Verdicts the reader must distinguish — `inngest-liveness-classify.sh` is the model, whose
+**Why not a new workflow.** The existing watchdog already runs `*/15`, already files and dedupes a
+P1 issue, already reports a Sentry check-in so a *missing* run alerts, and already implements the
+"a missing signal never reads as healthy" discipline this phase needs. A new scheduled workflow
+would duplicate all of that — and would be **denied at write time** by
+`.claude/hooks/new-scheduled-cron-prefer-inngest.sh` unless it carried a
+`<!-- gate-override: new-scheduled-cron-prefer-inngest -->` justification, which would be a gate
+override taken to avoid reusing a mechanism that already fits.
+
+**The hazard this arm must not walk into.** That workflow **auto-dispatches
+`restart-inngest-server.yml` on failure** (its header states so, and the job holds
+`actions: write` for exactly that). A dedicated-host arm wired to the default failure class would
+fight the standing `rollback` brake every 15 minutes — dispatching a restart that is LB-routed to
+the *web* host, against a dedicated-host condition a restart cannot fix. The arm must therefore join
+the **no-restart verdict family** the workflow already defines (`functions_query_degraded`,
+`pool_pressure`, `probe_unavailable` are all explicitly "NO restart"), with its own issue class.
+
+Verdicts the arm must distinguish — `inngest-liveness-classify.sh` is the model, whose
 `probe_unavailable` class exists precisely so a missing signal never reads as health:
 
 | Condition | Verdict |
@@ -325,11 +413,32 @@ Verdicts the reader must distinguish — `inngest-liveness-classify.sh` is the m
 | no probe row inside the window | **probe-unavailable** — never "healthy" |
 
 Field isolation is mandatory: the probe script is the **shared** renderer for the dedicated host and
-web-1, so the reader must select on the `host`/`host_name` field, never a bare payload substring.
+web-1, so the arm must select on the `host`/`host_name` field, never a bare payload substring.
 web-1's rows legitimately carry `cutover_flag=unknown` and must not be mistaken for the dedicated
 host's.
 
-### Phase 3 — the `inngest-volume-recut` apply_target (destructive, gated, inert by default)
+The arm needs the three `BETTERSTACK_QUERY_*` secrets added to the workflow's env, and — like every
+sibling scheduled workflow — its own Sentry cron monitor so the reader's own silence is detectable.
+
+### Phase 3 — the `inngest-volume-recut` apply_target — DESIGN ONLY, build deferred
+
+**Scope decision.** The ask's verb was *design*, and this section is the design. The **build** —
+enum option, guarded job, `expected_volume_id` input, destroy-guard library, and its test suite —
+is deferred to the PR that opens the cutover window, for three reasons:
+
+1. **H5/H6 are UNKNOWN.** Nobody has established that a FLUSHALL ever happened on this volume.
+   Building the most destructive target in the inngest surface to clear a latch whose existence is
+   undetermined inverts the evidence ordering this plan otherwise insists on.
+2. **It would ship inert.** Its only consumer is the cutover window, which Phase 1 gates and this PR
+   defers.
+3. **Its guards cannot be graded here.** The fixtures are necessarily synthesized, so the first real
+   exercise of the guard would also be the first destructive one. Building it alongside the live
+   plan output makes it gradeable.
+
+The design below is complete enough to implement without re-deriving it, and is recorded so the
+cutover-window PR inherits it rather than restarting.
+
+#### Design (to be built in the cutover-window PR)
 
 Named for what the volume is: `hcloud_volume.inngest_redis` is `format = "ext4"`, so **`-luks-` does
 not belong in the name**. It is the fleet's sole scheduler volume and holds the durable Redis queue
@@ -352,6 +461,14 @@ sole-copy `/mnt/data` data:
    bypass**.
 4. **Post-apply jq backstop** — assert from the **saved** plan that `hcloud_server.inngest` and every
    unrelated resource show **zero** actions, and that the volume shows delete+create.
+
+5. **Pre-flight "the host is dark" refusal** — added by the Downtime & Cutover analysis above, and
+   **not** present in the `workspaces-luks-recut` template. The four layers above check *what* is
+   destroyed; none checks *whether the host is currently serving*. Run post-approval and pre-apply,
+   refusing unless the flag is readable and outside `{armed, flipping, flushed, done}` **and** the
+   latest probe row shows `server_active != active`. Fail closed on an unreadable flag, an
+   unreadable probe, or no recent probe row. Without this, the same dispatch that is harmless
+   pre-cutover destroys the live production queue post-cutover.
 
 Plus a job-level `concurrency` mutex.
 
@@ -408,7 +525,7 @@ timeout's "the host ships nothing" attribution does not generalise — the host 
 today and G3.7 still reads zero, so "host dark" and "query finds nothing" are distinct failures that
 had been conflated.
 
-### Phase 6 — rate-limit the flip FSM's terminal no-op emit
+### Phase 6 — rate-limit the flip FSM's terminal no-op emit — SPLIT OUT
 
 `emit_state` calls `logger` unconditionally on **every** arm including the terminal no-ops, with no
 rate limit, at a 30 s cadence. Measured: **~1.7 rows/min ≈ 2,450 rows/day**, roughly 10% of the
@@ -416,11 +533,15 @@ rate limit, at a 30 s cadence. Measured: **~1.7 rows/min ≈ 2,450 rows/day**, r
 rollback, undetected. `vector.toml` states that any further timer-driven tag is "a fresh quota
 decision", and `#6617b` existed to remove exactly this shape from the heartbeat.
 
-Rate-limit the **terminal no-op arms only** to ~5 minutes. Two constraints:
-- **Not transition-only.** Transition-only emission would destroy the liveness witness Phase 1
-  depends on. The witness needs a heartbeat, just a slower one.
-- This is on-host code, so it is **replace-only** and takes effect on the next replace. Phase 1's
-  15-minute window is sized to tolerate both cadences precisely so the two can land out of step.
+**Not in this PR.** It is a quota concern rather than a serving or gate concern; it is replace-coupled,
+so it cannot take effect here; and it therefore cannot be observed in the PR that would ship it — an
+untested diff waiting on a replace this plan also declines to perform. The terminal-arm leak is also
+permanent by design (`noop-done` emits forever too), so it carries no urgency specific to #7674.
+
+**The coupling is discharged for free**, without keeping the phase: Phase 1 sizes its liveness window
+at **15 minutes now**, and the follow-up issue carries the single constraint that any rate-limit must
+keep the terminal-arm cadence **under 15 minutes** and must **not** become transition-only —
+transition-only emission would delete the witness Phase 1 depends on.
 
 ## Files to Edit
 
@@ -428,9 +549,7 @@ Rate-limit the **terminal no-op arms only** to ~5 minutes. Two constraints:
 |---|---|
 | `scripts/cutover-inngest.sh` | G3.7: add the liveness reader, add the `silent` outcome to `flush_latch_decide`, rewire the single chokepoint, rewrite the gate comment for the weak-`clear` honesty requirement. |
 | `apps/web-platform/infra/cutover-inngest-workflow.test.sh` | New decision-table rows, reader-argv assertions, ordering assertions; **raise the anti-deletion floor from 449** to the re-measured value (measure by running the file — never a remembered figure). |
-| `.github/workflows/apply-web-platform-infra.yml` | Add the `inngest-volume-recut` enum option, its guarded job, and the `expected_volume_id` input. |
-| `apps/web-platform/infra/inngest-cutover-flip.sh` | Rate-limit the terminal no-op emit (Phase 6; replace-coupled). |
-| `.github/workflows/infra-validation.yml` | Register the new suite(s). |
+| `.github/workflows/scheduled-inngest-health.yml` | Add the dedicated-host probe-consumer arm, wired into the **no-restart** verdict family with its own issue class; add the three `BETTERSTACK_QUERY_*` secrets. |
 | `knowledge-base/engineering/operations/runbooks/inngest-server.md` | The three corrections in Phase 5. |
 | `knowledge-base/engineering/architecture/decisions/ADR-100-inngest-dedicated-single-host-singleton-control-plane.md` | Addendum: replace-only delivery; "host dark" ≠ "query finds nothing". |
 
@@ -438,54 +557,88 @@ Rate-limit the **terminal no-op arms only** to ~5 minutes. Two constraints:
 
 | File | Purpose |
 |---|---|
-| `tests/scripts/lib/inngest-volume-recut-gate.sh` | Sourced destroy-guard for the recut plan, mirroring `workspaces-luks-recut-gate.sh`. |
-| `apps/web-platform/infra/inngest-volume-recut-header.test.sh` | Guard suite: enum↔job binding, reviewer-set non-empty, confirm-literal distinctness, mutation-tested. |
 | `scripts/followthroughs/inngest-host-not-serving-7674.sh` | Successor probe, positive assertion, mode `100755`. |
-| A scheduled reader workflow for the probe consumer (Phase 2) | Closes the detection gap. |
+
+**Deliberately not created in this PR** (deferred with Phase 3 / Phase 6):
+`tests/scripts/lib/inngest-volume-recut-gate.sh`,
+`apps/web-platform/infra/inngest-volume-recut-header.test.sh`, the
+`inngest-volume-recut` job in `.github/workflows/apply-web-platform-infra.yml`, and the
+`inngest-cutover-flip.sh` rate-limit. Also not created: a standalone scheduled reader workflow — the
+Phase 2 consumer is an arm on the existing watchdog instead.
+
+## Follow-up Issues to File
+
+| Issue | Carries |
+|---|---|
+| `inngest-volume-recut` apply_target | The complete Phase 3 design, to be built in the PR that opens the cutover window — including the fifth pre-flight "host is dark" refusal, and Guards 2 and 3. |
+| Flip-FSM terminal-arm emit rate-limit | The measured ~2,450 rows/day burn, plus the constraint that any rate-limit must keep the terminal-arm cadence **under 15 minutes** and must not become transition-only. |
+| `/mnt/data` plaintext encryption exception | The `at_rest` exception recorded below; expires 2026-11-30. |
 
 ## Acceptance Criteria
 
-### Pre-merge (PR)
+Split by what each criterion can actually prove. **Every criterion in the first group MUST fail against
+the pre-fix tree** — that is the check that keeps them from being ceremony. The second group are
+regression guards, which pass before *and* after by design; they are listed as regression guards
+rather than smuggled in as acceptance criteria.
+
+### Pre-merge — new behavior (each MUST fail on the pre-fix tree)
 
 1. `flush_latch_decide` returns `silent` for `(L=0, H=0)` and for `(L=0, H` non-decimal`)`, `clear`
    only for `(L=0, H≥1)`, `latched` for `L≥1`, `unreadable` for non-decimal `L` — asserted as a
    table, with a harness canary proving the comparator is live.
+   *Pre-fix: fails — `silent` does not exist and `(L=0)` yields `clear`.*
 2. Both readers validate their counts with an explicit `^[0-9]+$` predicate; no count reaches a
    comparison via bash arithmetic coercion.
-3. Exactly one call site each for the latch reader, the liveness reader, and the decider; zero
-   `exit 1` inside any `case` arm of `arm)`.
-4. The G3.7 gate line sorts after the G3.6 line and before the first prod write, asserted by
-   line-ordering.
-5. The `arm)` body contains no literal off-host read path (the existing sibling assertion stays
-   green).
-6. `bash apps/web-platform/infra/cutover-inngest-workflow.test.sh` passes, and again under
-   `LC_ALL=C`; the floor is raised to the value produced by **running** the file.
-7. `bash apps/web-platform/infra/run-registered-suites.sh` passes (floor 100), with the new suites
-   registered and zero unaccounted.
-8. `python3 scripts/lint-shell-capture-exit.py --baseline scripts/lint-shell-capture-exit.baseline.txt`
-   passes.
-9. `bash scripts/lint-workflows.sh` completes without a hang (rc 124 is the only failure).
-10. `inngest-volume-recut` appears in the enum **and** has a matching job guard — asserted
-    mechanically, with a mutation removing the job driving it red.
-11. The recut job declares `environment: inngest-cutover`, and an assertion proves that environment's
-    reviewer set is non-empty (block-scoped, mutation-tested).
-12. The recut confirm literal is distinct from every existing literal in the workflow.
-13. The destroy-guard fails closed when its resource count is empty or non-numeric.
-14. `scripts/followthroughs/inngest-host-not-serving-7674.sh` is mode `100755` in the git index,
-    contains no `${VAR:?}` form, uses `set -uo pipefail` without `-e`, and asserts
-    `server_active=active` together with `http_code=200`.
-15. `apps/web-platform/infra/cloud-init-inngest.yml` is **unmodified** —
-    `git diff --name-only origin/main...HEAD` does not list it.
-16. No `op=arm` dispatch occurs on this branch.
-17. Every `knowledge-base/` path cited in this plan resolves to a real file.
-18. **Every AC above was run against the pre-fix tree and FAILED there.** An AC that passes before
-    the change is vacuous and must be rewritten or dropped.
+   *Pre-fix: fails — only one reader exists.*
+3. Exactly one call site each for the latch reader, the liveness reader, and the decider.
+   *Pre-fix: fails — the liveness reader has zero call sites.*
+4. The G3.7 gate line sorts after the G3.6 line and before the first prod write, **with the liveness
+   reader invoked before the gate line**.
+   *Pre-fix: fails on the second clause.*
+5. `bash apps/web-platform/infra/cutover-inngest-workflow.test.sh` passes with the floor **raised
+   above 449** to the value produced by running the file, and passes again under `LC_ALL=C`.
+   *Pre-fix: fails — the floor is 449 and the new rows do not exist.*
+6. `scripts/followthroughs/inngest-host-not-serving-7674.sh` exists, is mode `100755` in the git
+   index, contains no `${VAR:?}` form, uses `set -uo pipefail` without `-e`, and asserts
+   `server_active=active` together with `http_code=200`.
+   *Pre-fix: fails — the file does not exist.*
+7. `scheduled-inngest-health.yml` carries a dedicated-host arm that is a member of the **no-restart**
+   verdict family — asserted by showing the arm's verdict does not reach the restart dispatch.
+   *Pre-fix: fails — no dedicated-host arm exists.*
+8. The runbook no longer states that clearing `INNGEST_DIAGNOSTIC_BOOT` re-renders a running host's
+   ExecStart, nor that `inngest-host-replace` recuts `/mnt/data`.
+   *Pre-fix: fails — both statements are present.*
+9. #7674's body carries the successor directive and the `follow-through` label; #7462 and #7228 each
+   carry **zero** `soleur:followthrough` directives.
+   *Pre-fix: fails — each closed issue carries exactly one, and #7674 has neither.*
+
+### Pre-merge — regression guards (expected to pass before and after)
+
+- `bash apps/web-platform/infra/run-registered-suites.sh` passes (floor 100, zero unaccounted).
+- `python3 scripts/lint-shell-capture-exit.py --baseline scripts/lint-shell-capture-exit.baseline.txt`
+  passes.
+- `bash scripts/lint-workflows.sh` completes without a hang (rc 124 is the only failure).
+- The `arm)` body still contains no literal off-host read path — the existing sibling assertion stays
+  green, which is the one that the new reader could most plausibly break.
+- `apps/web-platform/infra/cloud-init-inngest.yml` is absent from
+  `git diff --name-only origin/main...HEAD`.
+- Every `knowledge-base/` path cited in this plan resolves to a real file.
 
 ### Post-merge (automated)
 
-19. The probe-consumer reader runs on schedule and reports `stopped-by-brake` for the dedicated host
-    while the flag remains `rolled-back` — i.e. it names today's state rather than reporting health.
-20. The successor probe is enrolled on #7674 and returns `2` (TRANSIENT) without commenting daily.
+10. The watchdog's dedicated-host arm reports `stopped-by-brake` while the flag remains
+    `rolled-back` — naming today's state rather than reporting health — and dispatches **no**
+    restart.
+11. The successor probe is enrolled on #7674 and returns `2` (TRANSIENT) without commenting daily,
+    with #7674 still **open**.
+
+### Constraints (not acceptance criteria — no artifact makes them checkable)
+
+- No `op=arm` dispatch, in this session or on this branch, under any diagnosis.
+- No host replace dispatched.
+
+These are behavioral constraints on the implementing session, not post-conditions of the diff. They
+are recorded here so they are not mistaken for verified facts at review time.
 
 ## User-Brand Impact
 
@@ -510,21 +663,21 @@ is an aggregate reliability defect rather than a per-user incident.
 liveness_signal:
   what: SOLEUR_INNGEST_SERVER_PROBE, joined with cutover_flag in the same row
   cadence: hourly (inngest-server-probe.timer, OnUnitActiveSec=1h)
-  alert_target: the Phase 2 scheduled reader; fails loud on not-serving and on probe-unavailable
-  configured_in: apps/web-platform/infra/inngest-bootstrap.sh (emitter, existing); the Phase 2 reader workflow (consumer, new)
+  alert_target: the Phase 2 dedicated-host arm on .github/workflows/scheduled-inngest-health.yml, in its no-restart verdict family; fails loud on not-serving and on probe-unavailable
+  configured_in: apps/web-platform/infra/inngest-bootstrap.sh (emitter, existing); .github/workflows/scheduled-inngest-health.yml (consumer arm, new)
 error_reporting:
-  destination: GitHub Actions annotation (::error::) from the reader, plus the existing Better Stack row
+  destination: the watchdog's deduped issue class plus a GitHub Actions annotation (::error::), alongside the existing Better Stack row
   fail_loud: true — a missing probe row classifies as probe-unavailable, never as healthy
 failure_modes:
   - mode: dedicated host stopped by a standing rollback flag
     detection: probe row with server_active != active and cutover_flag in {rollback, rolled-back}
-    alert_route: reader verdict stopped-by-brake, naming the flag in the message
+    alert_route: arm verdict stopped-by-brake, naming the flag in the message; no restart dispatched
   - mode: dedicated host not serving for an unexplained reason
     detection: probe row with server_active != active and any other cutover_flag
-    alert_route: reader verdict not-serving
+    alert_route: arm verdict not-serving; no restart dispatched
   - mode: dedicated host stops reporting entirely
-    detection: no probe row inside the reader's window
-    alert_route: reader verdict probe-unavailable — distinct from healthy and from not-serving
+    detection: no probe row inside the arm's window
+    alert_route: arm verdict probe-unavailable — distinct from healthy and from not-serving; no restart dispatched
   - mode: G3.7 cannot see the flush latch because the host is silent
     detection: L=0 with H=0 over the 15-minute liveness window
     alert_route: gate outcome silent, refusing the arm before any prod write
@@ -644,7 +797,11 @@ exception:
 
 ## Guard Contract
 
-### Guard 1 — G3.7 two-signal flush-latch gate
+Guard 1 ships in this PR. Guards 2 and 3 are the design for the deferred `inngest-volume-recut`
+build and travel with that follow-up issue — they are recorded here so the contract is written from
+the design rather than re-derived from finished code later.
+
+### Guard 1 — G3.7 two-signal flush-latch gate (IN SCOPE — this PR)
 
 **Property.** No arm proceeds unless the dedicated host is currently reporting **and** shows no
 evidence of a prior FLUSHALL; absence of evidence from a silent host never reads as permission.
@@ -673,7 +830,7 @@ proving the harness cannot silently shrink. (b) A must-PASS input that is **not*
 `L=0, H=7` with a differently-shaped but valid liveness payload must still yield `clear`, proving the
 gate is not simply rejecting everything.
 
-### Guard 2 — `inngest-volume-recut` destroy-guard
+### Guard 2 — `inngest-volume-recut` destroy-guard (DEFERRED — travels with the recut issue)
 
 **Property.** The recut destroys the named volume and its attachment and **nothing else**, and it
 cannot run without a human approval that actually exists.
@@ -701,7 +858,12 @@ than report zero findings. (b) A must-PASS non-canonical plan JSON containing th
 unrelated **no-op** resource must still pass, proving the guard permits no-ops rather than rejecting
 everything.
 
-### Guard 3 — enum↔job binding for apply targets
+### Guard 3 — enum↔job binding for apply targets (DEFERRED — travels with the recut issue)
+
+Note: this is a repo-wide workflow invariant, not a #7674 concern. It is genuinely unguarded today
+(`scripts/lint-workflows.sh` has no `apply_target` handling), but it belongs to the workflow-lint
+suite rather than to a bug fix, and its `>= 15 options` floor would need bumping by every unrelated
+PR that adds a target. File it against the lint suite if the recut issue does not absorb it.
 
 **Property.** Every `apply_target` enum option has exactly one job that runs for it; an option with
 no job cannot ship.
