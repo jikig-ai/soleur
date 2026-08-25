@@ -3,7 +3,7 @@ title: "A 'healthy' server can lie — new deep-readiness check proves a host ca
 type: feature-launch
 publish_date: 2026-08-25
 channels: x, bluesky
-status: scheduled
+status: published
 pr_reference: "#5967"
 issue_reference: "#5966"
 ---
