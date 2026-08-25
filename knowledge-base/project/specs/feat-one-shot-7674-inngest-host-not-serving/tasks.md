@@ -31,21 +31,42 @@ Derived from
 
 - [ ] 1.1 Write the failing decision-table tests first, covering the full `(L, H)` cross-product
       including both non-decimal arms.
-- [ ] 1.2 Add the liveness reader as a function at column 0 outside the `arm)` body, with exactly one
-      call site, invoked **before** the gate line.
+- [ ] 1.2 **Extract** the liveness reader from `confirm_flip_state` (which already runs
+      `betterstack-query.sh --grep inngest-cutover-flip`) into a named helper at column 0 outside the
+      `arm)` body, called from both sites, invoked **before** the gate line. Do not author a third
+      reader.
+- [ ] 1.2a Count rows on the **tag**, never on an enumerated set of `reason` values. The catch-all
+      arm emits `noop-unset`, and that is the arm that fires in the very state G3.7 gates (a genuine
+      first arm). Enumerating `{noop-rolled-back, noop-done, noop-aborted}` would read H=0 on a
+      healthy host and refuse every legitimate arm.
+- [ ] 1.2b Filter on `host_name`. `vector.toml` states all hosts multiplex into one Logs source with
+      `host_name` as the sole discriminator, so the existing reader's "scoped by the table" comment
+      is false — inheriting it would count web-1's rows as the dedicated host's liveness.
 - [ ] 1.3 Validate both counts with an explicit `^[0-9]+$` predicate; never reach a comparison via
       bash arithmetic coercion.
 - [ ] 1.4 Add the `silent` outcome to `flush_latch_decide`, preserving its signature and column-0
       closing brace (the harness extracts it by `awk` range).
 - [ ] 1.5 Keep the single positive-allowlist chokepoint; add no `exit 1` inside any case arm.
+- [ ] 1.5a **Extend the existing per-arm-exit assertion to cover `silent)`.** It currently greps
+      `(clear|latched|unreadable))` and is blind to a new arm, so without this the no-per-arm-exit
+      contract is unenforced for exactly the arm being added.
+- [ ] 1.5b Route a non-decimal `H` to `unreadable`, never to `silent` — a non-decimal count is
+      produced only by a query failure, and routing it to `silent` prints the host-dark remediation
+      for a credential fault.
 - [ ] 1.6 Size the liveness window at **15 minutes** — it must tolerate both today's ~35 s cadence and
       any future rate-limit, which the follow-up issue constrains to stay under 15 minutes.
 - [ ] 1.7 Rewrite the gate comment to state that `clear` is a **weak** verdict while the retention
       question is unresolved, and that the on-host latch remains the authority.
 - [ ] 1.8 Add ordering assertions (G3.6 < liveness reader < G3.7 < first prod write) and the
       call-site-count assertions.
-- [ ] 1.9 Confirm the existing "no literal off-host read path inside `arm)`" assertion stays green —
-      this is the assertion the new reader is most likely to break.
+- [ ] 1.9 Confirm the existing arm-body assertion stays green. Note what it actually checks:
+      `! grep -qE 'deploy-status' "$ARM_FILE"` — it forbids `deploy-status`, **not**
+      `betterstack-query.sh`. Do not write an AC claiming it guards the off-host read path; it does
+      not, and such an AC passes vacuously forever.
+- [ ] 1.9a Correct the three false claims that currently ship to operators in
+      `scripts/cutover-inngest.sh`: the G3.6 `::error::` "let the host re-render its ExecStart"; the
+      G3.7 `::error::` "the latch is cleared only by recutting … via the inngest-host-replace
+      window"; and the reader comment claiming a `host_name` filter "would add nothing".
 - [ ] 1.10 Re-measure and raise the anti-deletion floor by **running** the suite; never copy a
       remembered figure.
 
@@ -113,7 +134,8 @@ Derived from
 ## Phase 7 — Verification
 
 - [ ] 7.1 `bash apps/web-platform/infra/cutover-inngest-workflow.test.sh`, then again under `LC_ALL=C`.
-- [ ] 7.2 `bash apps/web-platform/infra/run-registered-suites.sh` (floor 100, zero unaccounted).
+- [ ] 7.2 `bash apps/web-platform/infra/run-registered-suites.sh` — zero failures, zero unaccounted.
+      (No assertion floor exists; the gate is `failed > 0 || UNACCOUNTED > 0`.)
 - [ ] 7.3 `python3 scripts/lint-shell-capture-exit.py --baseline scripts/lint-shell-capture-exit.baseline.txt`
 - [ ] 7.4 `bash scripts/lint-workflows.sh` (only a hang is failure).
 - [ ] 7.5 Assert `cloud-init-inngest.yml` is absent from `git diff --name-only origin/main...HEAD`.

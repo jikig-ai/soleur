@@ -337,25 +337,46 @@ the fleet's sole scheduler).
 `flip-complete` / `refuse-rearm-after-done`, passed to `flush_latch_decide`, which returns
 `clear | latched | unreadable`. Zero rows ⇒ `clear` ⇒ pass.
 
-Add a **second, independent** signal: a count of *any* `inngest-cutover-flip` row inside a short
-recent window — the host's own liveness witness, measured to be arriving at ~1.7 rows/min, emitted
-by **every** terminal FSM arm (`noop-rolled-back`, `noop-done`, `noop-aborted`), so it survives
-whatever state the flag is in.
+Add a **second, independent** signal: `H`, a count of **any** `inngest-cutover-flip` row inside a
+short recent window — the host's own liveness witness, measured arriving at ~1.7 rows/min.
+
+**`H` must match the tag, never an enumerated set of `reason` values.** `run_flip`'s catch-all arm
+emits `reason=noop-unset` (`*) emit_state 0 "" "noop-unset" "${flag:-unset}"`), and *that is the arm
+that fires in the state G3.7 actually gates* — a genuine first arm, flag unset. A reader keyed on
+`{noop-rolled-back, noop-done, noop-aborted}` would read `H=0` on a perfectly healthy host and
+refuse every legitimate first arm, converting a fail-open gate into an unconditionally-closed one.
+Count rows on the tag.
 
 New decision table, replacing the single-input one:
 
 | `L` (latch rows) | `H` (liveness rows, 15 min) | outcome | gate |
 |---|---|---|---|
-| ≥ 1 | any | `latched` | refuse — a flush already happened |
 | non-decimal | any | `unreadable` | refuse — the **read path** is broken |
+| any | non-decimal | `unreadable` | refuse — same; a non-decimal count is produced *only* by a `betterstack-query.sh` failure |
+| ≥ 1 | decimal | `latched` | refuse — a flush already happened |
 | 0 | ≥ 1 | `clear` | proceed — the host is reporting and shows no flush |
 | 0 | 0 | **`silent`** | refuse — the host is **not reporting**; absence proves nothing |
-| 0 | non-decimal | `silent` | refuse |
 
 `silent` must be a distinct fourth outcome rather than folded into `unreadable`, because the forward
 actions differ: `unreadable` points at `BETTERSTACK_QUERY_*` credentials in `prd_terraform`;
 `silent` points at the dedicated host having gone dark. Collapsing them prints the wrong remediation
-at the worst moment.
+at the worst moment — which is also why a **non-decimal `H` routes to `unreadable`, not `silent`**:
+by construction `__UNREADABLE__` is emitted only on a query rc≠0, so routing it to `silent` would
+print the host-dark remediation for a credential fault, committing the exact mis-remediation the
+outcome split exists to prevent.
+
+**Reuse the reader that already exists.** `confirm_flip_state` already runs
+`betterstack-query.sh --since "$since" --grep inngest-cutover-flip --limit 50` — the `H` signal,
+already written and already argv-correct. Extract it into a named helper called from both sites
+rather than authoring a third reader.
+
+**Host isolation is required here too, and the existing reader's comment is wrong about it.** The
+current G3.7 reader claims it is "SCOPED TO THIS HOST BY THE TABLE, not by a hostname grep … A
+hostname filter would add nothing." `vector.toml` says the opposite: "ALL hosts multiplex into the
+ONE Logs source 2457081 — `host_name` is the sole discriminator." Building the new reader "exactly
+as the existing one" would therefore count web-1's rows as the dedicated host's liveness — a
+fail-open that reproduces the very defect this gate exists to close. The new reader MUST filter on
+`host_name`, and the false comment on the existing reader is corrected in the same change.
 
 Both readers must validate their counts with an explicit numeric predicate (`^[0-9]+$`) rather than
 relying on bash arithmetic coercion — an empty string from a broken pipe compares FALSE under
@@ -371,10 +392,16 @@ Constraints this phase must honour, all pinned by existing assertions:
   body — the test harness extracts it by `awk` range.
 - The 15-minute window tolerates **both** cadences: today's ~35 s and the ~5 min the Phase 6
   rate-limit imposes after the next replace. It must not be tightened below the slower of the two.
-- `cutover-inngest.sh` forbids naming the off-host read path literally inside the `arm)` body,
-  because a sibling assertion greps that body to prove `op=arm` adds no polling hook. The new reader
-  is therefore a **function defined outside** the arm, called once from it, exactly as the existing
-  latch reader is. An inline query would redden that assertion.
+- **The "sibling assertion" that supposedly forbids naming the off-host read path inside `arm)` does
+  not forbid that.** Measured: the only assertion of that shape is
+  `assert "arm) adds NO deploy-status poll …" "! grep -qE 'deploy-status' '$ARM_FILE'"` — it forbids
+  `deploy-status`, not `betterstack-query.sh`. An inlined liveness query would redden **nothing**.
+  `cutover-inngest.sh`'s own comment ("assertion greps this arm body for it to prove op=arm adds no
+  polling hook") asserts a guard that does not exist, and is corrected in this change. The new reader
+  is still defined **outside** the arm and called once — for the single-call-site contract, not
+  because an assertion enforces it — and the plan must not claim a guard it has not verified. This is
+  the same inherited-claim failure the plan's own learnings section records; it was caught here only
+  by re-reading the assertion rather than the comment describing it.
 
 **Honesty requirement.** The gate's comment must state that with H5/H6 unresolved, `clear` is a
 **weak** verdict: it means "the host is reporting and no flush evidence is visible in the window",
@@ -423,7 +450,7 @@ sibling scheduled workflow — its own Sentry cron monitor so the reader's own s
 ### Phase 3 — the `inngest-volume-recut` apply_target — DESIGN ONLY, build deferred
 
 **Scope decision.** The ask's verb was *design*, and this section is the design. The **build** —
-enum option, guarded job, `expected_volume_id` input, destroy-guard library, and its test suite —
+enum option, guarded job, `expected_inngest_volume_id` input, destroy-guard library, and its test suite —
 is deferred to the PR that opens the cutover window, for three reasons:
 
 1. **H5/H6 are UNKNOWN.** Nobody has established that a FLUSHALL ever happened on this volume.
@@ -449,12 +476,17 @@ sole-copy `/mnt/data` data:
 
 1. **`environment:` required-reviewer gate** — the sole human authorization, blocking the job before
    its first step. **Reuse the already-provisioned `inngest-cutover`** (verified
-   `required_reviewers=[deruelle]`, non-empty). Minting a new environment is the trap: an
+   `required_reviewers=[deruelle]`, non-empty). Inherited cost, stated rather than discovered later:
+   a reviewer gate on this workflow has previously left apply runs `waiting` for up to 13h while
+   holding the workflow-level concurrency group (`cancel-in-progress: false`), blocking sibling
+   applies. `workspaces_luks_recut` already accepts this trade; so does this target. Minting a new environment is the trap: an
    `environment:` naming an *unprovisioned* environment silently auto-approves, producing the
    appearance of a gate without the gate.
 2. **Typed confirm + numeric id pin** — a literal distinct from every existing one
    (`RECUT-WORKSPACES-LUKS`, `RECUT-REGISTRY-LUKS`, …) so a token typed for another target cannot
-   authorize this one, plus an `expected_volume_id` matched `^[0-9]+$`. Both are typo-guards and must
+   authorize this one, plus an `expected_inngest_volume_id` matched `^[0-9]+$` — distinctly named per the workflow's own
+   convention note, which argues that sharing one id input across targets makes a wrong-volume
+   mis-dispatch a typo rather than an impossibility. Both are typo-guards and must
    be labelled as such; the environment approval is the authorization.
 3. **Scoped plan + sourced destroy-guard** — a `-replace`/`-target` plan narrowed to the volume and
    its attachment, fed to `tests/scripts/lib/inngest-volume-recut-gate.sh`, with **no `[ack-destroy]`
@@ -474,7 +506,7 @@ Plus a job-level `concurrency` mutex.
 
 **Input-budget fork.** `workflow_dispatch` caps at 10 inputs and 7 are used; the workflow states that
 the next per-target input *pair* should split into a dedicated workflow rather than spend two more
-slots. A recut needs `expected_volume_id`, which spends slot 8 — inside the cap but one from it.
+slots. A recut needs `expected_inngest_volume_id`, which spends slot 8 of 10, leaving two free.
 **Decision: add the target to the existing workflow and reuse the existing `confirm` input**,
 spending exactly one new slot, and record that the *next* target needing an input must split.
 Rationale: a dedicated workflow duplicates the whole environment + destroy-guard + backstop scaffold
@@ -547,7 +579,7 @@ transition-only emission would delete the witness Phase 1 depends on.
 
 | File | Change |
 |---|---|
-| `scripts/cutover-inngest.sh` | G3.7: add the liveness reader, add the `silent` outcome to `flush_latch_decide`, rewire the single chokepoint, rewrite the gate comment for the weak-`clear` honesty requirement. |
+| `scripts/cutover-inngest.sh` | G3.7: extract the liveness reader from `confirm_flip_state`, add `host_name` isolation, add the `silent` outcome, rewire the chokepoint, rewrite the gate comment for the weak-`clear` honesty requirement. **Also correct three false claims that ship to operators:** the G3.6 `::error::` string telling them to clear `INNGEST_DIAGNOSTIC_BOOT` and let the host re-render (it cannot); the G3.7 `::error::` string saying the latch clears via the `inngest-host-replace` window (it does not); and the reader comment claiming table-scoping makes a `host_name` filter unnecessary (`vector.toml` says `host_name` is the sole discriminator). A runbook is read at leisure; an `::error::` is read at the moment of failure. |
 | `apps/web-platform/infra/cutover-inngest-workflow.test.sh` | New decision-table rows, reader-argv assertions, ordering assertions; **raise the anti-deletion floor from 449** to the re-measured value (measure by running the file — never a remembered figure). |
 | `.github/workflows/scheduled-inngest-health.yml` | Add the dedicated-host probe-consumer arm, wired into the **no-restart** verdict family with its own issue class; add the three `BETTERSTACK_QUERY_*` secrets. |
 | `knowledge-base/engineering/operations/runbooks/inngest-server.md` | The three corrections in Phase 5. |
@@ -614,12 +646,14 @@ rather than smuggled in as acceptance criteria.
 
 ### Pre-merge — regression guards (expected to pass before and after)
 
-- `bash apps/web-platform/infra/run-registered-suites.sh` passes (floor 100, zero unaccounted).
+- `bash apps/web-platform/infra/run-registered-suites.sh` passes with zero failures and zero
+  unaccounted suites. (It has no assertion floor — its gate is `failed > 0 || UNACCOUNTED > 0`.)
 - `python3 scripts/lint-shell-capture-exit.py --baseline scripts/lint-shell-capture-exit.baseline.txt`
   passes.
 - `bash scripts/lint-workflows.sh` completes without a hang (rc 124 is the only failure).
-- The `arm)` body still contains no literal off-host read path — the existing sibling assertion stays
-  green, which is the one that the new reader could most plausibly break.
+- The `arm)` body still contains no `deploy-status` poll — that is what the existing assertion
+  actually checks. (It does **not** check for `betterstack-query.sh`; an AC claiming otherwise would
+  pass vacuously forever.)
 - `apps/web-platform/infra/cloud-init-inngest.yml` is absent from
   `git diff --name-only origin/main...HEAD`.
 - Every `knowledge-base/` path cited in this plan resolves to a real file.
@@ -629,8 +663,11 @@ rather than smuggled in as acceptance criteria.
 10. The watchdog's dedicated-host arm reports `stopped-by-brake` while the flag remains
     `rolled-back` — naming today's state rather than reporting health — and dispatches **no**
     restart.
-11. The successor probe is enrolled on #7674 and returns `2` (TRANSIENT) without commenting daily,
-    with #7674 still **open**.
+11. The successor probe is enrolled on #7674, #7674 is still **open**, and the probe does not
+    comment daily. Note the sweeper comments TRANSIENT on **every** run, so "returns 2" and "does
+    not comment daily" are only jointly satisfiable via an `earliest=` that has not yet elapsed —
+    which is the intended configuration until the cutover window. Do not assert both of a running
+    probe.
 
 ### Constraints (not acceptance criteria — no artifact makes them checkable)
 
@@ -821,7 +858,7 @@ test.
 | 2 | Delete the liveness reader's call site so only the latch signal is consulted | RED — the two-call-site assertion fails |
 | 3 | Change the chokepoint from `!= "clear"` to a blocklist of specific refusals | RED — the positive-allowlist assertion fails |
 | 4 | Move the G3.7 gate line after the first prod write | RED — the ordering assertion fails |
-| 5 | Add a **second** terminal outcome not routed through the chokepoint | RED — the single-chokepoint assertion fails |
+| 5 | Add a `silent)` case arm carrying its own `exit 1` | RED — **requires extending** the existing per-arm-exit assertion, which greps `(clear\|latched\|unreadable)\)` and is blind to `silent)`. Without that extension this mutation goes GREEN and the no-per-arm-exit contract is unenforced for the new arm. |
 | 6 | Neuter the decider so it always returns `clear` (its own dispatch) | RED — the decision-table canary fails and the evaluation floor is not met |
 | 7 | Make a reader return the empty string on a broken pipe | RED — the `^[0-9]+$` predicate yields `unreadable`, never a numeric comparison |
 
@@ -865,8 +902,10 @@ Note: this is a repo-wide workflow invariant, not a #7674 concern. It is genuine
 suite rather than to a bug fix, and its `>= 15 options` floor would need bumping by every unrelated
 PR that adds a target. File it against the lint suite if the recut issue does not absorb it.
 
-**Property.** Every `apply_target` enum option has exactly one job that runs for it; an option with
-no job cannot ship.
+**Property.** Every `apply_target` enum option has **at least one** job that runs for it; an option
+with no job cannot ship. Not "exactly one": `registry-luks-recut` deliberately binds two
+(`registry_pull_path_gate` and `registry_luks_recut`, the latter `needs:` the former), so an
+exactly-one parser is RED on the unmodified tree.
 
 **Assembly.** The enum options block and the set of job-level `apply_target ==` guards, both parsed
 from `apply-web-platform-infra.yml`. The property quantifies over **all** options, not the newly
