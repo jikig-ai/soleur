@@ -20,42 +20,31 @@ pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 TMP=$(mktemp -d) || { echo "FATAL: mktemp -d failed — refusing to run with an empty \$TMP, every fixture path would resolve against /" >&2; exit 2; }
 trap 'rm -rf "$TMP"' EXIT
 
-# EVERY `cd` into a fixture directory goes through this. An unguarded `cd` in this suite is a
-# LIVE-REPO HAZARD, not a style nit — the file already says so beside its guarded `cd` sites,
-# and five sites did not have it.
-#
-# The mechanism, observed 2026-08-20: this suite runs `set -uo pipefail` WITHOUT -e, and every
-# `git -C "$BARE" worktree add …` below silences its own failure with `>/dev/null 2>&1`. So a
-# fixture directory that was never created leaves `cd` failing, the subshell CONTINUING, and
-# the fixture's `git add` + `git commit` running in the caller's CWD — which, when this suite
-# runs under `TEST_GROUP=scripts`, is the developer's live worktree. Fixture commits
-# "victim change", "victim2 change", "v9 change" and "v12 change" landed on a real feature
-# branch and on local `main`, a later step checked that worktree out to `main`, and hours of
-# uncommitted work were destroyed. Nothing in the suite reported anything wrong.
-#
-# Exiting 90 ends only the subshell, so the marker is what makes the suite red: the fixture is
-# gone either way, and a silent "0 assertions about scenario N" is the shape this whole file
-# exists to prevent.
-# FAIL-OPEN, CLOSED. The containment case below is `"$TMP_REAL"|"$TMP_REAL"/*`. If TMP_REAL is
-# ever EMPTY, the second pattern degrades to `/*`, which matches EVERY absolute path — so the
-# guard returns 0 for a live repository while reading, to anyone skimming, exactly like a guard.
-# Mutation-proven with TMP_REAL forced empty and the CWD a real repo: without this assertion the
-# helper printed "ACCEPTED" for the live checkout; with it, setup refuses.
-#
-# The `mktemp -d` guard above covers the common cause and not the rest: a `cd "$TMP"` that loses
-# a race, hits permissions, or finds TMP removed between mktemp and this resolve. Assert the
-# POST-CONDITION (an absolute path) rather than trusting the producer.
-#
-# Found by soleur-c1 while reviewing their own copy of this helper, after it had already passed
-# review here and shipped in three commits on this branch.
+# Resolved ONCE, with `pwd -P`: TMPDIR is routinely a symlink, and comparing an
+# unresolved $TMP against a resolved toplevel false-FAILS every call.
 TMP_REAL="$(cd "$TMP" && pwd -P)" || TMP_REAL=""
+# An EMPTY TMP_REAL would silently disable the containment check below, because the
+# pattern `"$TMP_REAL"/*` degrades to `/*`, which matches every absolute path — the
+# guard would return 0 for a live repository. That is the same fail-open shape this
+# whole helper exists to close, so it is asserted rather than assumed. `readonly`
+# stops a later assignment from reintroducing it.
 case "$TMP_REAL" in
   /*) : ;;
-  *)  echo "FATAL: could not resolve the fixture root '$TMP' to an absolute path — refusing." >&2
-      echo "       An empty root makes the containment check below match every absolute path." >&2
+  *)  echo "FATAL: could not resolve the fixture root '$TMP' to an absolute path — refusing, an empty root makes the containment check match everything" >&2
       exit 2 ;;
 esac
-readonly TMP_REAL   # so a later assignment cannot reintroduce the empty case
+readonly TMP_REAL
+
+# cd into a fixture, or refuse. Two arms, and the second is why `cd X || exit` is
+# not enough:
+#   (a) the directory is absent  -> cd fails.
+#   (b) the directory EXISTS but is not a repository -> cd SUCCEEDS, and git then
+#       walks UP to the enclosing repository. On 2026-08-20 that enclosing repo was
+#       a live worktree: `git worktree add` had created the path and then failed, so
+#       every guard keyed on cd's exit status passed and the fixture's commits landed
+#       on a real branch. Measured on main at 58486e1ae: HEAD 10b74df57 -> f5fd37bd6,
+#       carrying "victim", "victim2", "v9 change", "v12 change".
+# So containment is asserted on the RESOLVED git toplevel, not on cd's exit status.
 cdx() {
   local target="$1" top
   if ! cd "$target" 2>/dev/null; then
@@ -64,12 +53,6 @@ cdx() {
     : > "$TMP/.cdx-failed"
     exit 90
   fi
-  # cd SUCCEEDING is not sufficient, and this is the half a naive guard misses: a directory that
-  # EXISTS but is not a git repository (a `worktree add` that created the dir and then failed, a
-  # fixture reaped mid-run) leaves `cd` returning 0 and git walking UP to the nearest enclosing
-  # repository. If TMPDIR is ever set inside a checkout — and this suite is run from one — that
-  # enclosing repository is the developer's. Pin the RESOLVED toplevel inside the fixture root,
-  # which every fixture repo in this file lives under, rather than trusting cd's exit status.
   top="$(git rev-parse --show-toplevel 2>/dev/null)" || top=""
   case "${top:-<none>}" in
     "$TMP_REAL"|"$TMP_REAL"/*) return 0 ;;
@@ -214,22 +197,17 @@ WT_ACTOR="$WT_PARENT/.worktrees/feat-actor"
 # matches the worktree being considered — so feat-victim is NOT protected
 # by that guard from a sibling session. Only the new lease guard protects it.
 (
-  # GUARDING THIS SITE IS LOAD-BEARING (#7546 review, retained verbatim from that fix). A bare
-  # `cd` that FAILS leaves the subshell in the INHERITED cwd -- the real worktree
-  # `test-all.sh` was invoked from -- and the cleanup-merged below then runs against it. All
-  # seven `worktree add` calls in this file swallow failure with `>/dev/null 2>&1`, so
-  # $WT_ACTOR being absent is a reachable state (a leftover branch from a crashed run is
-  # enough). Measured 2026-08-20: this escaped the sandbox and committed `victim change`,
-  # `victim2 change`, `v9 change` and `v12 change` onto a live feature branch in another
-  # session's worktree, then checked that worktree out to main and pulled. The fixture names
-  # map one-to-one onto the four cd-failure sites in this file.
-  #
-  # #7546 guarded it inline; this is the same guard as a HELPER, so an eighth site cannot be
-  # added without one, and so the containment check (cd succeeding is not proof you are in the
-  # sandbox) applies here too.
+  # `|| exit` IS LOAD-BEARING (#7546 review). A bare `cd` that FAILS leaves the subshell in the
+  # INHERITED cwd -- the real worktree `test-all.sh` was invoked from -- and the cleanup-merged
+  # below then runs against it. All seven `worktree add` calls in this file swallow failure with
+  # `>/dev/null 2>&1`, so $WT_ACTOR being absent is a reachable state (a leftover branch from a
+  # crashed run is enough). Measured 2026-08-20: this escaped the sandbox and committed
+  # `victim change`, `victim2 change`, `v9 change` and `v12 change` onto a live feature branch in
+  # another session's worktree, then checked that worktree out to main and pulled. The fixture
+  # names map one-to-one onto the four cd-failure sites in this file.
   cdx "$WT_ACTOR"
   SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT" \
-    bash "$WM" cleanup-merged >"$TMP/cleanup-out.txt" 2>&1 || true
+    bash "$WM" cleanup-merged >/tmp/cleanup-out.$$ 2>&1 || true
 )
 
 if [[ -d "$WT_VICTIM" ]]; then
@@ -297,10 +275,10 @@ elif kill -0 "$DEAD_PID" 2>/dev/null; then
 else
   pass "scenario 2 precondition: the acquiring process has exited (pid $DEAD_PID is dead)"
   (
-    # Guarding this site is load-bearing -- see the note at the first cleanup-merged site above.
+    # `|| exit` load-bearing -- see the note at the first cd site above.
     cdx "$WT_ACTOR"
     SOLEUR_SESSION_STATE_ROOT="$LEASE_ROOT" \
-      bash "$WM" cleanup-merged >"$TMP/cleanup2-out.txt" 2>&1 || true
+      bash "$WM" cleanup-merged >/tmp/cleanup2-out.$$ 2>&1 || true
   )
   if [[ -d "$WT_VICTIM2" ]]; then
     pass "a lease whose acquirer exited STILL protects the worktree from a sibling reap"
@@ -1002,11 +980,13 @@ MIN_ASSERTIONS=40  # 3 -> 6 -> 9 -> 15 -> 17 (PR #7373 sc. 3-7) -> 40 (#7409 sc.
 # slip through whenever the defect happened to produce the expected dispatch
 # count. Matches scripts/lint-diagnosis-claims.test.sh and
 # scripts/lint-workflow-step-env-refs.test.sh, which both count PASS + FAIL.
-# A cdx() abort ends its subshell, not the suite, so without this the run would continue with
-# a fixture that was never built and report whatever the surviving assertions happened to say.
+# `exit 90` inside `( cdx ... )` ends only the SUBSHELL, so without this marker the
+# suite would carry on against a fixture it never built and report whatever the
+# surviving assertions happened to say. Checked BEFORE the vacuity floor: a run that
+# refused is not a run with too few assertions, and must not be described as one.
 if [[ -f "$TMP/.cdx-failed" ]]; then
-  echo "FAIL: at least one fixture directory was absent (see the 'fixture directory absent' line above)."
-  echo "      A 'git worktree add' failed silently. The suite did not run as designed; its verdicts are not evidence."
+  echo "FAIL: at least one fixture directory was absent or outside the fixture root."
+  echo "      The suite did not run as designed; its verdicts are not evidence."
   exit 1
 fi
 

@@ -790,6 +790,38 @@ fi
 tc_preamble
 _TC_RUN_START_ENTRIES=$(tc_tmp_entry_count)
 
+# Orphaned-PROCESS probe (#7537), emitted with the contention banners because it
+# answers the same question they do — "is something else on this box eating the
+# capacity this run needs?" — for processes rather than for /tmp.
+#
+# REPORT ONLY. Nothing in this repo invokes `reap` automatically: the detector
+# has never been observed firing on a real orphan, so the first strike is a
+# READER'S judgment. This is the moment an actor is present and already reading
+# stderr, which is what makes a report here a decision point rather than a
+# declaration site.
+#
+# `timeout 10` AND `|| true` are both load-bearing and cover different failures:
+# `|| true` covers a non-zero exit, and `timeout` covers what it cannot — an
+# unresponsive NFS/FUSE/autofs mount puts readlink/stat in uninterruptible
+# sleep, and a command that never returns is never rescued by `|| true`.
+#
+# EXCLUDE_PGID is passed EXPLICITLY rather than inferred: `timeout` runs its
+# child in its own process group, so the probe computing its own pgid would get
+# timeout's pid rather than this runner's, and this runner's command-
+# substitution forks would not be excluded from its own reap set.
+if [[ -z "${CI:-}" ]] && [[ -x scripts/orphan-process-reaper.sh || -f scripts/orphan-process-reaper.sh ]]; then
+  _orphan_rc=0
+  ORPHAN_REAPER_EXCLUDE_PGID="$(command ps -o pgid= -p $$ 2>/dev/null | tr -d ' ' || true)" \
+    timeout 10 bash scripts/orphan-process-reaper.sh report || _orphan_rc=$?
+  # The caller emits on a non-zero rc ITSELF. `|| true` hides the status, so
+  # without this line "the detector did not run" is indistinguishable from "it
+  # ran and found nothing" — and the second reads as an all-clear.
+  if [[ "$_orphan_rc" != "0" ]]; then
+    printf 'ORPHAN_SCAN valid=0 reason=rc%s\n' "$_orphan_rc"
+  fi
+  unset _orphan_rc
+fi
+
 # The capacity verdict (#7545), emitted BETWEEN the preamble and the lock —
 # after the readings exist, before the wait that may consume them.
 #
@@ -1085,6 +1117,24 @@ if want_scripts; then
   # #6789: arms for the tmpfs scratch reaper. It DELETES files, so every gate
   # (age/size/ownership/liveness/protected-path) is asserted in both directions.
   run_suite "scripts/tmpfs-guard" bash scripts/tmpfs-guard.test.sh
+  # #7537: the orphaned-PROCESS reaper. It SIGNALS processes, so every gate
+  # (own-uid, unlinked cwd, unlinked fd/255, self-exclusion, mount/pid
+  # namespace, age floor) is asserted in both directions here. Registered
+  # explicitly for the same reason as its neighbours: scripts/*.test.sh is NOT
+  # in the auto-glob below, so an unregistered suite is an ORPHAN that gates
+  # nothing (the #5417 class). lint-orphan-test-suites.sh enforces this line.
+  run_suite "scripts/orphan-process-reaper" bash scripts/orphan-process-reaper.test.sh
+  # The mutation battery for the same detector. Both lines are needed for the
+  # reason the legal-corpus pair below states: the behavioural suite proves the
+  # detector can detect a planted orphan, and the battery is the only thing that
+  # proves each of its GUARDS can be driven red. The preceding PR in this area
+  # shipped nine guards that could not fail; measured here at ~90s for 36 rows.
+  #
+  # NOT registered as a live `report` run: that would be a second /proc walk per
+  # launch, and a suite whose verdict depended on what else happened to be
+  # running is cq-ac-must-not-depend-on-concurrent-sessions reproduced inside
+  # the gate.
+  run_suite "scripts/orphan-process-reaper-mutations" bash scripts/orphan-process-reaper-mutation.test.sh
   # The fstab ceiling applier. Every case drives a FIXTURE fstab through the
   # RAISE_TMPFS_FSTAB seam — the real /etc/fstab is never read or written, because a
   # test that touched it could leave the machine unbootable. Registered explicitly for
@@ -1531,9 +1581,35 @@ fi
 # blocks shell-injection if a caller ever sets VITEST_SHARD to a value
 # containing `;` or `$(…)`. The matrix literal in ci.yml is always `K/N`
 # today, but the script is a public surface — defense in depth.
+#
+# Split into two suites (#7498) so the app-local half can be DECLINED on a diff
+# that touches nothing in the app, while the repo-wide half still runs.
+#
+#   repo-wide  — subject is the repository (plugin scripts, workflow YAML, the
+#                knowledge base). NEVER gated: these exist to catch drift in
+#                exactly the diffs that touch no app file, so gating them would
+#                decline them on the commits they guard.
+#   unit +     — subject is the app. Gated on apps/web-platform/.
+#   component
+#
+# 42 of the last 80 commits on origin/main (52%; 96/200 over 200) touch no
+# apps/web-platform file, so the decline is the common case rather than an edge.
+# The split is safe only because test/repo-wide-containment.test.ts proves no
+# gated suite reads outside the app — without it a new repo-reading test would
+# land in the gated project and be silently declined. That guard runs in the
+# repo-wide project, so it is never gated by the thing it guards.
 if want_webplat; then
-  run_suite "apps/web-platform" env VITEST_SHARD="${VITEST_SHARD:-}" \
-    bash -c 'cd apps/web-platform && npm run test:ci -- ${VITEST_SHARD:+--shard="$VITEST_SHARD"} 2>&1'
+  run_suite "apps/web-platform [repo-wide]" env VITEST_SHARD="${VITEST_SHARD:-}" \
+    bash -c 'cd apps/web-platform && npm run test:ci -- --project repo-wide ${VITEST_SHARD:+--shard="$VITEST_SHARD"} 2>&1'
+
+  if _diff_touches "${WEBPLAT_APP_PATHS[@]}"; then
+    run_suite "apps/web-platform [unit+component]" env VITEST_SHARD="${VITEST_SHARD:-}" \
+      bash -c 'cd apps/web-platform && npm run test:ci -- --project unit --project component ${VITEST_SHARD:+--shard="$VITEST_SHARD"} 2>&1'
+  else
+    _relevance_declined=$((_relevance_declined + 1))
+    skip_suite "apps/web-platform [unit+component]" "relevance" \
+      "cd apps/web-platform && npm run test:ci -- --project unit --project component"
+  fi
 fi
 
 # plugins/soleur bun-test recursion + blog-link-validation — bun shard.
@@ -1595,6 +1671,10 @@ if want_scripts; then
   # Pins that this runner's OWN infra coverage claim matches whether it actually invoked the
   # infra runner. Registered here rather than under want_bun for the same reason as above.
   run_suite "scripts/test-all-infra-coverage-notice" bash scripts/test-all-infra-coverage-notice.test.sh
+  # Guards this file's own webplat split (#7498). Registered next to its
+  # sibling: both assert shape properties of test-all.sh that nothing else
+  # would notice rotting.
+  run_suite "scripts/test-all-webplat-gate" bash scripts/test-all-webplat-gate.test.sh
   # Pins this runner's THREE-CLASS result taxonomy (#7424): a signal-shaped exit renders as
   # [KILLED], stays out of the failure count, and exits 3. Registered here rather than under
   # want_bun for the same reason as its neighbours — it shells out to python3 to build its

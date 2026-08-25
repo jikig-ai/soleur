@@ -556,18 +556,47 @@ For per-op slicing, run separate queries per `op:<verb>`.
 
 ### Sentry — alert rule status
 
+Migrated 2026-08-19 (#7590) off `projects/{org}/{proj}/rules/`, which now
+410s on a brownout schedule. The replacement is org-scoped and read-only, so
+unlike the write recipe below this one is a drop-in. Note `status` is gone;
+the equivalent field is `enabled`.
+
 ```bash
 curl -s --max-time 10 \
   -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
-  "https://${SENTRY_API_HOST}/api/0/projects/$SENTRY_ORG/$SENTRY_PROJECT/rules/" \
-  | jq '.[] | {name, lastTriggered, status}'
+  "https://${SENTRY_API_HOST}/api/0/organizations/$SENTRY_ORG/workflows/?per_page=100" \
+  | jq '.[] | select(.name | startswith("auth-")) | {name, lastTriggered, enabled}'
 ```
 
-Confirms the three rules (`auth-exchange-code-burst`,
-`auth-callback-no-code-burst`, `auth-per-user-loop`) exist and shows
-when each last fired.
+Confirms the auth rules (`auth-exchange-code-burst`,
+`auth-callback-no-code-burst`, `auth-per-user-loop`, `auth-signout-burst`)
+exist and shows when each last fired. Verified live 2026-08-19: all four
+present, `enabled: true`.
 
 ### Reconcile alert rules (rule drift / missing rule)
+
+> **This recipe is currently BLOCKED (2026-08-19, #7590). Read before running.**
+> `configure-sentry-alerts.sh` reads and writes
+> `projects/{org}/{proj}/rules/`, which Sentry deprecated on 2026-05-14 and
+> now serves under scheduled **brownouts** — 410 for a window on a recurring
+> schedule, 200 the rest of the time. Two consequences for an operator
+> reaching this page mid-incident:
+>
+> 1. A run that fails with `curl: (22) … error: 410` has hit the brownout,
+>    not a broken token or a bad region. Re-running minutes later may well
+>    succeed, and that success is not evidence the problem is gone.
+> 2. Migrating the script is not a URL swap. The replacement,
+>    `organizations/{org}/workflows/`, has no `conditions`/`filters`/`actions`
+>    keys — it carries `triggers` and `actionFilters[]` — so every write
+>    payload in this script is structurally dead against it. Tracked
+>    separately; do not attempt it inline during an incident.
+>
+> If the rules are drifted and this script will not run, the fallback is the
+> Sentry UI. Do NOT delete this script: `infra/sentry/issue-alerts.tf`
+> declares `conditions_v2`/`filters_v2`/`actions_v2` as `[]` and lists them in
+> `lifecycle.ignore_changes`, so Terraform does not own those filters and an
+> apply cannot restore them. This script is their only executable definition
+> (see #4781, the open recurrence guard for the 2026-06-02 drift).
 
 If a rule is missing from the GET output above, or someone edited a
 rule via the Sentry UI and it has drifted from the configurator's

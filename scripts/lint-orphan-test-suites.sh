@@ -578,6 +578,7 @@ else
     "CF_TUNNEL_BATTERY_PATHS|scripts/cf-tunnel-liveness-gate-mutations.test.sh|12"
     "C4_PRODUCER_PATHS|plugins/soleur/test/c4-from-components.test.sh|6"
     "GITHUB_SCRIPTS_SUITE_PATHS|.github/scripts/test/run-all.sh|9"
+    "WEBPLAT_APP_PATHS|apps/web-platform/test/repo-wide-containment.test.ts|3"
   )
 
   # TEST_RELEVANCE_PREFIXES VACUITY. It is the one array with no fail-closed guard of its own,

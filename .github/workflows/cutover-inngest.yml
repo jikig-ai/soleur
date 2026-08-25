@@ -165,6 +165,17 @@ jobs:
           # the cutover. Overloading one variable with both meanings would silently re-base the
           # expected-tick window so the gap ticks stop being enumerated.
           CUTOVER_ANCHOR_FROM: ${{ vars.CUTOVER_ANCHOR_FROM }}
+          # #7462 — G3.7's flush-latch pre-filter window (OPTIONAL repo var; the script defaults
+          # it to 365d). Mapped here because the gate's REFUSAL names it in its remediation:
+          # GitHub does not export repo vars to a step unless the workflow names them, and an
+          # unmapped variable is the #6617 dead-remediation defect (an operator told to
+          # re-dispatch with X set, where X is unreachable without editing and merging this file).
+          #
+          # It NARROWS a pre-filter, never the on-host monotonic latch, which is the actual guard
+          # against a second FLUSHALL and is unbounded in time. The one legitimate use is a host
+          # whose /mnt/data was recut (inngest-host-replace): the latch is genuinely gone, but the
+          # Better Stack rows that evidenced the old one have not aged out.
+          FLUSH_LATCH_SINCE: ${{ vars.FLUSH_LATCH_SINCE }}
           # The quiesce→register window (ISO-8601), OPTIONAL operator repo/env vars, mapped here
           # so the shell actually sees them (GitHub does not export repo vars to the step unless
           # named). CUTOVER_WINDOW_FROM/UNTIL drive the missed-tick auto-enumeration (P2-16,

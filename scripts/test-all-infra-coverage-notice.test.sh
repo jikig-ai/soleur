@@ -379,6 +379,7 @@ GATED=(
   "scripts/cf-tunnel-liveness-gate-mutations|CF_TUNNEL_BATTERY_PATHS"
   "plugins/soleur/test/c4-from-components.test.sh|C4_PRODUCER_PATHS"
   ".github/scripts/test/run-all.sh|GITHUB_SCRIPTS_SUITE_PATHS"
+  "apps/web-platform [unit+component]|WEBPLAT_APP_PATHS"
 )
 
 # REGISTRATION FLOOR, derived from $TARGET — not a hand-typed literal.
@@ -530,10 +531,28 @@ for g in "${GATED[@]}"; do
   # battery` vs `tests/scripts/test-registry-gate-mutation-battery.sh`) -- a first draft of this very
   # assertion assumed they were equal and red-flagged two correctly-wired suites, which is the same
   # mistake that got the static pairing check cut at plan time.
-  if grep -A3 -F "[skip] $lbl (relevance)" <<<"$GATE_OUT" | grep -qE '^ +bash .*\.sh( |$)'; then
+  #
+  # TWO accepted shapes, because not every gated suite is a shell script. The
+  # webplat projects (#7498) are a vitest invocation, and forcing them into a
+  # `bash …*.sh` spelling would mean printing `bash scripts/test-all.sh webplat`
+  # — which re-enters the SAME gate on the SAME diff and declines again. A
+  # re-run command that reproduces the decline is not actionable, which is the
+  # property this arm exists to protect.
+  #
+  # The "points at something real" half is kept for both shapes: the referenced
+  # script or workspace directory must exist. That is the measured failure the
+  # comment above records, and it is what stops this from becoming a shape check.
+  _rerun="$(grep -A3 -F "[skip] $lbl (relevance)" <<<"$GATE_OUT" | grep -E '^ +(bash .*\.sh( |$)|cd [A-Za-z0-9_./-]+ && npm run )' | head -1)"
+  _rerun_target=""
+  if [[ "$_rerun" =~ bash[[:space:]]+([A-Za-z0-9_./-]+\.sh) ]]; then
+    _rerun_target="${BASH_REMATCH[1]}"
+  elif [[ "$_rerun" =~ cd[[:space:]]+([A-Za-z0-9_./-]+)[[:space:]]+\&\& ]]; then
+    _rerun_target="${BASH_REMATCH[1]}"
+  fi
+  if [[ -n "$_rerun" && -n "$_rerun_target" && -e "$REPO_ROOT/$_rerun_target" ]]; then
     pass "$lbl's decline carries a runnable re-run command"
   else
-    fail "$lbl's decline has no usable re-run command"
+    fail "$lbl's decline has no usable re-run command (line='$_rerun' target='$_rerun_target')"
   fi
 done
 

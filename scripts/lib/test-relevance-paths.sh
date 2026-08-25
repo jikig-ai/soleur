@@ -242,7 +242,29 @@ GITHUB_SCRIPTS_SUITE_PATHS=(
 # PATHSPECS; a pathspec naming a tracked file simply matches nothing in `--others`, which is the
 # correct no-op. They are listed because the linter's prefix-coverage check requires every declared
 # predicate path to be reachable from this list, and GITHUB_SCRIPTS_SUITE_PATHS declares them.
+# Paths whose diff makes the APP-LOCAL vitest projects (`unit`, `component`)
+# relevant (#7498). Everything they test lives under apps/web-platform, and
+# `test/repo-wide-containment.test.ts` proves it: any suite there that reads
+# outside the app must be declared in test/repo-wide-suites.ts and moves to the
+# ungated `repo-wide` project.
+#
+# Deliberately just the app prefix. A wider list would be guesswork about which
+# repo files the app's own tests happen to read — and that guess is exactly what
+# the containment guard replaces with a checked invariant.
+WEBPLAT_APP_PATHS=(
+  "apps/web-platform/"
+  # Redundant for MATCHING — the prefix above already covers it — but required
+  # by lint-orphan-test-suites.sh's self-include invariant, and the invariant is
+  # right: a commit that edits the containment guard must re-arm this predicate,
+  # so the guard runs on the diff that changes it.
+  "apps/web-platform/test/repo-wide-containment.test.ts"
+  # Likewise: a commit that NARROWS this predicate must run the suite the
+  # predicate gates, or the narrowing ships unexercised.
+  "scripts/lib/test-relevance-paths.sh"
+)
+
 TEST_RELEVANCE_PREFIXES=(
+  "apps/web-platform"
   "scripts"
   "tests/scripts"
   ".github"

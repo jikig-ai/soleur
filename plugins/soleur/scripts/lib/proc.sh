@@ -226,6 +226,21 @@ _proc_owns() {
   # A deleted cwd is reported by the kernel as `<path> (deleted)`, with rc 0.
   # That is a "could not establish where this process is" state, not a path, so
   # it is refused rather than string-matched — no positive proof, no signal.
+  #
+  # This suffix test is FALSIFIABLE, and deliberately kept anyway (#7537).
+  # Measured: a live directory literally named `work (deleted)` reads st_nlink 2
+  # while a genuinely deleted cwd reads 0, so the suffix alone cannot tell the
+  # two apart. Here that does not matter, because the failure direction is a
+  # REFUSAL — a process in such a directory is simply never claimed as ours, and
+  # nothing is signalled on the strength of it.
+  #
+  # The repo-root `scripts/orphan-process-reaper.sh` (a developer-box tool, not
+  # shipped to customers, so this path may not exist in your checkout) asks a
+  # DIFFERENT question about the same
+  # link — "is this inode unlinked?" — and answers it with `stat -Lc '%h'`
+  # rather than with the suffix, because for that question the failure direction
+  # is a KILL. The two predicates are meant to diverge; unifying them would move
+  # this file's refusal onto a test built for the opposite consequence.
   [[ "$cwd" == *' (deleted)' ]] && return 1
   cwd=$(_proc_canon "$cwd")
   for n in ${_PROC_NESTED[@]+"${_PROC_NESTED[@]}"}; do
