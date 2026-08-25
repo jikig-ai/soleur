@@ -234,7 +234,13 @@ pre-commit:
     bun-test:
       priority: 6
       glob: "*.{ts,tsx,js,jsx}"
-      run: bash scripts/test-all.sh
+      # SOLEUR_ALLOW_FULL_GATE=1 is deliberate, not a workaround (#7553). test-all.sh refuses a
+      # full-gate run when it MEASURES a sibling full-gate run in flight. A pre-commit hook is a
+      # SANCTIONED invocation — the commit is the thing being gated, and refusing it would mean a
+      # developer (or a spawned agent, for which committing a .ts file is routine) cannot commit
+      # at all while any sibling worktree happens to be running the battery. The refusal exists to
+      # stop an OPPORTUNISTIC second battery, not to block the gate that must run.
+      run: SOLEUR_ALLOW_FULL_GATE=1 bash scripts/test-all.sh
     plugin-component-test:
       priority: 7
       glob: "plugins/soleur/**/*.md"

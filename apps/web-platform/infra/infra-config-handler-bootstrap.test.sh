@@ -31,19 +31,34 @@ INFRA_VALIDATION="$REPO_ROOT/.github/workflows/infra-validation.yml"
 
 PASS=0
 FAIL=0
-TOTAL=0
+# The independent case counter (ADR-193 #2). Incremented in assert() — the ASSERTION helper —
+# BEFORE the verdict is decided, and never inside pass()/fail(), the VERDICT helpers. That
+# split is the whole point: it was previously `TOTAL=$((TOTAL + 1))` sitting in the same body
+# that moved PASS/FAIL, so the count moved WITH the verdict and stubbing the verdict dropped
+# the row and its count together — the conservation identity below then held under the exact
+# fault it exists to catch. Never increment this inside `$( )`; a subshell discards it.
+CASES=0
+
+pass() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+
+fail() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  [[ -n "${2:-}" ]] && echo "        condition: $2"
+  return 0
+}
 
 assert() {
   local description="$1"
   local condition="$2"
-  TOTAL=$((TOTAL + 1))
+  CASES=$((CASES + 1))
   if eval "$condition"; then
-    PASS=$((PASS + 1))
-    echo "  PASS: $description"
+    pass "$description"
   else
-    FAIL=$((FAIL + 1))
-    echo "  FAIL: $description"
-    echo "        condition: $condition"
+    fail "$description" "$condition"
   fi
 }
 
@@ -268,15 +283,46 @@ assert "post-write asserts inngest-server drop-in is LOADED (DropInPaths)" \
 #
 # Zero headroom against the current count, so any deletion is loud. Ratchet when adding arms, and
 # read a floor failure on an otherwise-green run as "you added assertions, update this number".
+# --- Accounting conservation (ADR-193 #3) --------------------------------------------
+# Ordered BEFORE the floor per ADR-193 #4: a neutered fail() deflates the pass count, so the
+# floor would ALSO trip and would report "arms were deleted" — the misleading diagnosis. This
+# says "a verdict was discarded" instead. Reported with printf >&2 + exit 1 DIRECTLY, never
+# through fail(): a check that reports by calling the verdict helper increments the very
+# counter the exit status reads, so neutering fail() silences the rows AND the check meant to
+# notice the silence. The literal `[FATAL] accounting` is load-bearing — guard-vacuity-floor's
+# ARM 10 builds its conservation population by grepping that exact string (#7588).
+if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
+  printf '\n[FATAL] accounting: PASS+FAIL (%d) != CASES (%d).\n' \
+    "$((PASS + FAIL))" "$CASES" >&2
+  if [[ $((PASS + FAIL)) -lt "$CASES" ]]; then
+    printf '  An assertion was counted but its verdict was not recorded — that is what a neutered pass()/fail() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `CASES=$((CASES + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  echo "=== Results: $PASS/$CASES passed ==="
+  exit 1
+fi
+
+# --- Anti-vacuity floor (ADR-193 #1) -------------------------------------------------
+# Reads the INDEPENDENT case counter, and reports with printf >&2 + exit 1 DIRECTLY. It
+# previously did `FAIL=$((FAIL + 1))` and fell through to the trailer — so with the assertion
+# machinery neutered the floor "fired" into a counter nobody read before exit, the suite
+# printed a clean total and exited 0. A floor enforced through the suspect cannot witness
+# the suspect.
+#
+# Zero headroom against the current count, so any deletion is loud. Ratchet when adding arms,
+# and read a floor failure on an otherwise-green run as "you added assertions, update this".
 BOOTSTRAP_MIN_ASSERTIONS=50
-if (( TOTAL < BOOTSTRAP_MIN_ASSERTIONS )); then
-  echo "FAIL: assertion-count floor — ran $TOTAL assertions, expected >= $BOOTSTRAP_MIN_ASSERTIONS."
-  echo "      Arms were deleted or skipped; a green run here would be a coverage loss."
-  FAIL=$((FAIL + 1))
+if (( CASES < BOOTSTRAP_MIN_ASSERTIONS )); then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
+    "$CASES" "$BOOTSTRAP_MIN_ASSERTIONS" >&2
+  printf '  Arms were deleted or skipped; a green run here would be a coverage loss.\n' >&2
+  echo "=== Results: $PASS/$CASES passed ==="
+  exit 1
 fi
 
 echo ""
-echo "=== Results: $PASS/$TOTAL passed ==="
+echo "=== Results: $PASS/$CASES passed ==="
 if (( FAIL > 0 )); then
   echo "FAIL: $FAIL test(s) failed"
   exit 1
