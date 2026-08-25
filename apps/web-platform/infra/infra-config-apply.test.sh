@@ -25,6 +25,33 @@ FAIL=0
 # prints "SKIP (loud)" must add the exact number of assertions its taken branch would have made.
 SKIPPED_ASSERTIONS=0
 
+# The INDEPENDENT case counter (ADR-193 #2). Incremented at the CALL SITE — inside the three
+# assert_* ASSERTION helpers for their 120 call sites, and immediately before every raw
+# `pass`/`fail` for the ~145 inline verdict sites — and NEVER inside pass()/fail(), the VERDICT
+# helpers. That split is the whole point: the counters used to move together in one statement,
+# so stubbing the verdict dropped the row AND its count and the conservation identity below
+# still held under the exact fault it exists to catch. Never increment this inside `$( )`; a
+# subshell discards it.
+#
+# CASES counts assertions that RAN. A declared skip (SKIPPED_ASSERTIONS above) is an assertion
+# that did NOT run, so it is deliberately NOT a case: the identity is PASS + FAIL == CASES with
+# skips excluded, and the FLOOR — the only reader that cares what full coverage would have been
+# — adds SKIPPED_ASSERTIONS back on its own line.
+CASES=0
+
+# VERDICT helpers. They own PASS/FAIL and nothing else — no case counting, no floor reporting.
+# Neutering either one must therefore be visible as PASS+FAIL < CASES, which is what makes the
+# conservation check at the bottom of this file able to witness its own machinery being stubbed.
+pass() {
+  PASS=$((PASS + 1))
+  return 0
+}
+
+fail() {
+  FAIL=$((FAIL + 1))
+  return 0
+}
+
 # Single owning trap for every tempfile this suite allocates outside setup()/teardown()
 # (ADR-129 rule (c)). setup() manages TMPDIR_ROOT; arms that run without it register here.
 # /tmp is a machine-global tmpfs shared by parallel worktrees, so a per-run leak is unbounded.
@@ -113,25 +140,27 @@ export_valid_env_vars() {
 
 assert_eq() {
   local desc="$1" expected="$2" actual="$3"
+  CASES=$((CASES + 1))
   if [[ "$expected" == "$actual" ]]; then
     echo "  PASS: $desc"
-    PASS=$((PASS + 1))
+    pass
   else
     echo "  FAIL: $desc"
     echo "    expected: $expected"
     echo "    actual:   $actual"
-    FAIL=$((FAIL + 1))
+    fail
   fi
 }
 
 assert_file_exists() {
   local desc="$1" path="$2"
+  CASES=$((CASES + 1))
   if [[ -f "$path" ]]; then
     echo "  PASS: $desc"
-    PASS=$((PASS + 1))
+    pass
   else
     echo "  FAIL: $desc — file not found: $path"
-    FAIL=$((FAIL + 1))
+    fail
   fi
 }
 
@@ -139,14 +168,15 @@ assert_file_mode() {
   local desc="$1" path="$2" expected_mode="$3"
   local actual_mode
   actual_mode=$(stat -c '%a' "$path" 2>/dev/null || echo "missing")
+  CASES=$((CASES + 1))
   if [[ "$actual_mode" == "$expected_mode" ]]; then
     echo "  PASS: $desc"
-    PASS=$((PASS + 1))
+    pass
   else
     echo "  FAIL: $desc — mode mismatch"
     echo "    expected: $expected_mode"
     echo "    actual:   $actual_mode"
-    FAIL=$((FAIL + 1))
+    fail
   fi
 }
 
@@ -171,10 +201,10 @@ test_happy_path() {
   # the handler must not write it even in sandbox mode.
   if [[ -f "$TEST_DESTDIR/etc/sudoers.d/deploy-inngest-bootstrap" ]]; then
     echo "  FAIL: sudoers must not be written by the handler (#4827 root-managed)"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   else
     echo "  PASS: sudoers correctly not written by the handler"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   fi
   assert_file_exists "cat-infra-config-state.sh written" "$TEST_DESTDIR/usr/local/bin/cat-infra-config-state.sh"
   assert_file_exists "git-lock-chardevice-sweep.sh written (#5934)" "$TEST_DESTDIR/usr/local/bin/git-lock-chardevice-sweep.sh"
@@ -284,10 +314,10 @@ test_state_file_happy_path() {
   assert_eq "first file status is ok" "ok" "$first_file_status"
   if [[ "$first_file_sha" =~ ^[a-f0-9]{64}$ ]]; then
     echo "  PASS: first file has valid SHA256"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: first file SHA256 invalid: $first_file_sha"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   local start_ts end_ts
@@ -295,10 +325,10 @@ test_state_file_happy_path() {
   end_ts=$(jq -r '.end_ts' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "MISSING")
   if [[ "$start_ts" =~ ^[0-9]+$ ]] && [[ "$end_ts" =~ ^[0-9]+$ ]]; then
     echo "  PASS: timestamps are numeric"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: timestamps not numeric (start=$start_ts, end=$end_ts)"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   teardown
@@ -324,10 +354,10 @@ test_state_file_partial_failure() {
   assert_eq "exit_code is non-zero" "1" "$exit_code"
   if [[ "$files_failed" =~ ^[0-9]+$ ]] && [[ "$files_failed" -gt 0 ]]; then
     echo "  PASS: files_failed > 0"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: files_failed should be > 0, got $files_failed"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   local failed_file_status
@@ -338,10 +368,10 @@ test_state_file_partial_failure() {
   ok_count=$(jq '[.files[] | select(.status == "ok")] | length' "$INFRA_CONFIG_STATE" 2>/dev/null || echo "0")
   if [[ "$ok_count" =~ ^[0-9]+$ ]] && [[ "$ok_count" -gt 0 ]]; then
     echo "  PASS: other files still succeeded ($ok_count ok)"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: no files succeeded despite only 1 bad input"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   teardown
@@ -357,26 +387,26 @@ test_logger_tag() {
 
   if [[ -f "$LOGGER_LOG" ]] && grep -q "infra-config-apply" "$LOGGER_LOG"; then
     echo "  PASS: logger called with correct tag"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: no logger calls with tag infra-config-apply"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   if grep -q "starting:" "$LOGGER_LOG" 2>/dev/null; then
     echo "  PASS: logger start message present"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: no logger start message"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   if grep -q "complete:" "$LOGGER_LOG" 2>/dev/null; then
     echo "  PASS: logger completion message present"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: no logger completion message"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   teardown
@@ -408,10 +438,10 @@ MOCK
 
   if [[ -f "$order_log" ]] && grep -q "state_file_exists=true" "$order_log"; then
     echo "  PASS: state file exists when systemd-run is called"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: state file should exist before systemd-run"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   teardown
@@ -433,7 +463,7 @@ test_exit_trap_unhandled() {
     assert_eq "exit trap writes unhandled reason" "unhandled" "$reason"
   else
     echo "  FAIL: no state file written by EXIT trap"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   chmod 755 "$TEST_DESTDIR/usr/local/bin"
@@ -468,10 +498,10 @@ test_missing_env_partial_write() {
   # The missing-env file is NOT written
   if [[ -f "$TEST_DESTDIR/usr/local/bin/cat-infra-config-state.sh" ]]; then
     echo "  FAIL: missing-env file should not be written"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   else
     echo "  PASS: missing-env file correctly not written"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   fi
 
   # State JSON counts: MANAGED_N-1 written, 1 failed, MANAGED_N total (one env var deliberately missing)
@@ -568,10 +598,10 @@ test_prod_mode_escalated_move() {
   cideploy_line=$(grep '^/usr/local/bin/ci-deploy.sh|' "$helper_log" 2>/dev/null || echo "")
   if [[ "$cideploy_line" == "/usr/local/bin/ci-deploy.sh|755|root:root|#!/bin/bash" ]]; then
     echo "  PASS: ci-deploy.sh escalated with dest+mode+owner and decoded payload on stdin"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: ci-deploy.sh escalation wrong: '$cideploy_line'"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   # State JSON should report all 7 written, exit 0.
@@ -599,12 +629,12 @@ test_b64_delivery_parity() {
   map_vars=$(sed -n '/^FILE_MAP=(/,/^)/p' "$HANDLER" | grep -oE '"[A-Z0-9_]+_B64\|' | tr -d '"|' | sort -u)
   pass_vars=$(grep -oE '"envname": "[A-Z0-9_]+_B64"' "$hooks" | sed -E 's/.*"([A-Z0-9_]+)".*/\1/' | sort -u)
   if [[ "$push_keys" == "$map_vars" && "$map_vars" == "$pass_vars" ]]; then
-    echo "  PASS: push payload ↔ FILE_MAP ↔ pass-environment b64 key sets are identical ($(echo "$push_keys" | wc -l | tr -d ' ') keys)"; PASS=$((PASS + 1));
+    echo "  PASS: push payload ↔ FILE_MAP ↔ pass-environment b64 key sets are identical ($(echo "$push_keys" | wc -l | tr -d ' ') keys)"; CASES=$((CASES + 1)); pass;
   else
     echo "  FAIL: b64 delivery-surface drift (a file pushed but not env-bridged is written nowhere)"
     echo "    push vs FILE_MAP diff:"; comm -3 <(echo "$push_keys") <(echo "$map_vars") | sed 's/^/      /'
     echo "    FILE_MAP vs pass-environment diff:"; comm -3 <(echo "$map_vars") <(echo "$pass_vars") | sed 's/^/      /'
-    FAIL=$((FAIL + 1)); fi
+    CASES=$((CASES + 1)); fail; fi
 }
 
 # --- #6178: orphan-hook self-check — a hooks.json execute-command pointing at a
@@ -634,10 +664,10 @@ test_orphan_hook_selfcheck() {
 
   if grep -q "SOLEUR_INFRA_CONFIG_HOOK_ORPHAN" "$LOGGER_LOG" 2>/dev/null; then
     echo "  PASS: SOLEUR_INFRA_CONFIG_HOOK_ORPHAN marker emitted"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: no SOLEUR_INFRA_CONFIG_HOOK_ORPHAN marker in logger output"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   teardown
@@ -673,19 +703,19 @@ test_dropin_restart_grant() {
   # path or a stray flag here is a denial at runtime, not a widening.
   if grep -qxF "$expected_alias" "$sudoers"; then
     echo "  PASS: sudoers declares the alias with the exact argv"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: sudoers missing exact alias line: $expected_alias"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   # (b) The User_Spec that actually activates it. This is the half v1 omitted.
   if grep -qxF "deploy ALL=(root) NOPASSWD: DROPIN_TRY_RESTART" "$sudoers"; then
     echo "  PASS: sudoers pairs the alias with a deploy User_Spec"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: sudoers declares DROPIN_TRY_RESTART but never grants it to deploy"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   # (c) Both halves mirrored into cloud-init (fresh hosts). Indented there, so match on the
@@ -701,10 +731,10 @@ test_dropin_restart_grant() {
   # to install would surface only as denied restarts much later.
   if grep -qE '"grep -q DROPIN_TRY_RESTART /etc/sudoers\.d/deploy-inngest-bootstrap"' "$server_tf"; then
     echo "  PASS: server.tf remote-exec asserts the grant landed"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: server.tf bootstrap leg does not assert DROPIN_TRY_RESTART landed"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   # (e) NON-VACUITY: the units named in the grant must be the units the RESTART_MAP drives.
@@ -724,20 +754,20 @@ test_dropin_restart_grant() {
     n_units=$((n_units + 1))
     if grep -qE "^[[:space:]]*\"?${unit}\"?" <(sed -n '/^RESTART_MAP=(/,/^)/p' "$HANDLER"); then
       echo "  PASS: RESTART_MAP drives $unit"
-      PASS=$((PASS + 1))
+      CASES=$((CASES + 1)); pass
     else
       echo "  FAIL: $unit is granted in sudoers but absent from the handler's RESTART_MAP"
-      FAIL=$((FAIL + 1))
+      CASES=$((CASES + 1)); fail
     fi
   done <<<"$granted_units"
 
   # Non-vacuity: a broken derivation yields an empty list and this arm "passes" having compared
   # nothing — the exact shape the (e) header warns about one level up.
   if [[ "$n_units" -ge 1 ]]; then
-    echo "  PASS: the grant derivation found $n_units unit(s) to check"; PASS=$((PASS + 1))
+    echo "  PASS: the grant derivation found $n_units unit(s) to check"; CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: derived ZERO granted units from the sudoers alias — every check in (e) was vacuous"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 }
 
@@ -890,9 +920,9 @@ test_reconcile_stale_fires_and_disarms() {
   # Non-vacuity: the stub must actually have been invoked. Without this the arms above could
   # all be satisfied by a handler that never called anything.
   if grep -qxF "try-restart vector.service" "$STUB_CALLS"; then
-    echo "  PASS: the restart seam was invoked with the expected argv"; PASS=$((PASS + 1))
+    echo "  PASS: the restart seam was invoked with the expected argv"; CASES=$((CASES + 1)); pass
   else
-    echo "  FAIL: restart seam never invoked (calls: $(tr '\n' ';' < "$STUB_CALLS"))"; FAIL=$((FAIL + 1))
+    echo "  FAIL: restart seam never invoked (calls: $(tr '\n' ';' < "$STUB_CALLS"))"; CASES=$((CASES + 1)); fail
   fi
   # The advanced timestamp must be REPORTED, not just used internally — it is what the
   # post-apply follow-through probe reads.
@@ -900,9 +930,9 @@ test_reconcile_stale_fires_and_disarms() {
   tb=$(restart_field vector.service exec_main_start_ts_before)
   ta=$(restart_field vector.service exec_main_start_ts_after)
   if [[ "$ta" -gt "$tb" ]]; then
-    echo "  PASS: exec_main_start_ts advanced in the report ($tb -> $ta)"; PASS=$((PASS + 1))
+    echo "  PASS: exec_main_start_ts advanced in the report ($tb -> $ta)"; CASES=$((CASES + 1)); pass
   else
-    echo "  FAIL: reported timestamps did not advance ($tb -> $ta)"; FAIL=$((FAIL + 1))
+    echo "  FAIL: reported timestamps did not advance ($tb -> $ta)"; CASES=$((CASES + 1)); fail
   fi
 
   # --- second apply, same fixtures: must self-disarm ---
@@ -910,9 +940,9 @@ test_reconcile_stale_fires_and_disarms() {
   bash "$HANDLER" >/dev/null 2>&1 || true
   assert_eq "second apply skips the now-current unit" "not_stale" "$(restart_field vector.service reason)"
   if grep -q "^try-restart" "$STUB_CALLS"; then
-    echo "  FAIL: predicate did not self-disarm — restarted again ($(tr '\n' ';' < "$STUB_CALLS"))"; FAIL=$((FAIL + 1))
+    echo "  FAIL: predicate did not self-disarm — restarted again ($(tr '\n' ';' < "$STUB_CALLS"))"; CASES=$((CASES + 1)); fail
   else
-    echo "  PASS: predicate self-disarmed (no restart attempted on the second apply)"; PASS=$((PASS + 1))
+    echo "  PASS: predicate self-disarmed (no restart attempted on the second apply)"; CASES=$((CASES + 1)); pass
   fi
   restart_teardown
 }
@@ -927,9 +957,9 @@ test_reconcile_inactive_short_circuits() {
   # try-restart is a deliberate no-op on an inactive unit and STILL EXITS 0, so an attempt here
   # would grade as a successful restart that never happened. Assert no attempt was made at all.
   if grep -q "^try-restart" "$STUB_CALLS"; then
-    echo "  FAIL: attempted a restart on an inactive unit ($(tr '\n' ';' < "$STUB_CALLS"))"; FAIL=$((FAIL + 1))
+    echo "  FAIL: attempted a restart on an inactive unit ($(tr '\n' ';' < "$STUB_CALLS"))"; CASES=$((CASES + 1)); fail
   else
-    echo "  PASS: no restart attempted on an inactive unit"; PASS=$((PASS + 1))
+    echo "  PASS: no restart attempted on an inactive unit"; CASES=$((CASES + 1)); pass
   fi
   restart_teardown
 }
@@ -1002,9 +1032,9 @@ test_reconcile_timestamp_unparseable() {
   assert_eq "unparseable reason" "timestamp_unparseable"  "$(restart_field vector.service reason)"
   # Treating unparseable as stale would restart on every apply while reporting success.
   if grep -q "^try-restart" "$STUB_CALLS"; then
-    echo "  FAIL: attempted a restart on an unreadable timestamp"; FAIL=$((FAIL + 1))
+    echo "  FAIL: attempted a restart on an unreadable timestamp"; CASES=$((CASES + 1)); fail
   else
-    echo "  PASS: no restart attempted on an unreadable timestamp"; PASS=$((PASS + 1))
+    echo "  PASS: no restart attempted on an unreadable timestamp"; CASES=$((CASES + 1)); pass
   fi
   restart_teardown
 }
@@ -1033,9 +1063,9 @@ test_reconcile_vector_ordered_last() {
   assert_eq "every stale mapped unit was attempted" "$expected_calls" "$n_calls"
   # Non-vacuity: a broken derivation would make the line above compare 0 against 0.
   if [[ "$expected_calls" -ge 1 ]]; then
-    echo "  PASS: RESTART_MAP derivation is non-empty ($expected_calls unit(s))"; PASS=$((PASS + 1))
+    echo "  PASS: RESTART_MAP derivation is non-empty ($expected_calls unit(s))"; CASES=$((CASES + 1)); pass
   else
-    echo "  FAIL: derived ZERO units from RESTART_MAP — the ordering assertion is vacuous"; FAIL=$((FAIL + 1))
+    echo "  FAIL: derived ZERO units from RESTART_MAP — the ordering assertion is vacuous"; CASES=$((CASES + 1)); fail
   fi
   # Restarting vector blinks the log stream every post-apply assertion is read through, so it
   # must be the last thing this handler disturbs.
@@ -1044,9 +1074,9 @@ test_reconcile_vector_ordered_last() {
   local last_marker
   last_marker=$(grep 'SOLEUR_INFRA_CONFIG_RESTART' "$LOGGER_LOG" | tail -1)
   if [[ "$last_marker" == *"unit=vector.service"* ]]; then
-    echo "  PASS: vector is also last in the emitted markers"; PASS=$((PASS + 1))
+    echo "  PASS: vector is also last in the emitted markers"; CASES=$((CASES + 1)); pass
   else
-    echo "  FAIL: last marker was not vector: $last_marker"; FAIL=$((FAIL + 1))
+    echo "  FAIL: last marker was not vector: $last_marker"; CASES=$((CASES + 1)); fail
   fi
   restart_teardown
 }
@@ -1387,10 +1417,10 @@ test_handler_to_grant_lint() {
   local out rc=0
   out=$(_lint_privileged_verbs "$HANDLER") || rc=$?
   if [[ "$rc" -eq 0 ]]; then
-    echo "  PASS: no ungranted or un-sudoed privileged verbs in the handler"; PASS=$((PASS + 1))
+    echo "  PASS: no ungranted or un-sudoed privileged verbs in the handler"; CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: handler->grant lint found violations:"; printf '    %s\n' "$out"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   # The granted set must be non-trivial, asserted OUTSIDE the lint too. If `_granted_argv`
@@ -1399,10 +1429,10 @@ test_handler_to_grant_lint() {
   local n_granted
   n_granted=$(_granted_argv "${SCRIPT_DIR}/deploy-inngest-bootstrap.sudoers" | grep -c .)
   if [[ "$n_granted" -ge 10 ]]; then
-    echo "  PASS: the User_Spec-gated granted set resolved $n_granted argv"; PASS=$((PASS + 1))
+    echo "  PASS: the User_Spec-gated granted set resolved $n_granted argv"; CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: the granted set resolved only $n_granted argv — the sudoers parse is broken, so the lint is vacuous"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   # THE USER_SPEC IS LOAD-BEARING, asserted by construction rather than by reading the file: an
@@ -1413,10 +1443,10 @@ test_handler_to_grant_lint() {
   grep -v '^deploy ALL=(root) NOPASSWD: SYSTEMCTL_DAEMON_RELOAD$' \
     "${SCRIPT_DIR}/deploy-inngest-bootstrap.sudoers" > "$spec_stripped"
   if ! grep -qxF '/usr/bin/systemctl daemon-reload' <(_granted_argv "$spec_stripped"); then
-    echo "  PASS: an alias with no deploy User_Spec grants nothing"; PASS=$((PASS + 1))
+    echo "  PASS: an alias with no deploy User_Spec grants nothing"; CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: daemon-reload still read as granted after its User_Spec line was removed — the lint certifies a command sudo would DENY"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   # PROVEN RED AGAINST THE PRE-FIX HANDLER. Without this the lint could be vacuous in a way no
@@ -1441,17 +1471,17 @@ test_handler_to_grant_lint() {
     old_out=$(_lint_privileged_verbs "$old") || old_rc=$?
     if [[ "$old_rc" -ne 0 ]] && [[ "$old_out" == *"daemon-reload"* ]]; then
       echo "  PASS: the lint FLAGS the pre-fix handler's ungranted daemon-reload (this is #7220)"
-      PASS=$((PASS + 1))
+      CASES=$((CASES + 1)); pass
     else
       echo "  FAIL: the lint did NOT flag the pre-fix handler — it would not have caught #7220 (rc=$old_rc, out=${old_out:-<none>})"
-      FAIL=$((FAIL + 1))
+      CASES=$((CASES + 1)); fail
     fi
   elif git -C "$SCRIPT_DIR" cat-file -e "$pin" 2>/dev/null; then
     echo "  FAIL: the pinned pre-fix blob resolves but could not be read — the RED proof is broken, not skipped"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   elif [[ -n "${CI:-}" ]]; then
     echo "  FAIL: pinned pre-fix blob ${PRE_FIX_HANDLER_SHA:0:9} is absent under CI, where fetch-depth: 0 should guarantee it — AC6 RED proof NOT run"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   else
     echo "  SKIP (loud): pinned pre-fix blob ${PRE_FIX_HANDLER_SHA:0:9} not in this object store (shallow/partial clone, rewritten history, or not run inside the soleur checkout) — AC6 RED proof NOT run."
     echo "               Remedy: run from a full clone (git fetch --unshallow), or re-pin to tag web-v0.248.2."
@@ -1487,20 +1517,20 @@ test_unparseable_hooks_json_is_a_hard_failure() {
   bash "$HANDLER" >/dev/null 2>&1 || rc=$?
 
   if [[ "$rc" -ne 0 ]]; then
-    echo "  PASS: apply fails when hooks.json does not parse"; PASS=$((PASS + 1))
+    echo "  PASS: apply fails when hooks.json does not parse"; CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: apply exited 0 with an unparseable hooks.json — webhook would restart serving zero hooks"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   # Named, so the operator gets the RIGHT diagnosis rather than the 404 "first bootstrap" one.
   local reasons
   reasons=$(jq -r '.files[]?.reason // empty' "$INFRA_CONFIG_STATE" 2>/dev/null | tr '\n' ' ' || true)
   if [[ "$reasons" == *"hooks_json_unparseable"* ]]; then
-    echo "  PASS: the frame names hooks_json_unparseable"; PASS=$((PASS + 1))
+    echo "  PASS: the frame names hooks_json_unparseable"; CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: frame does not name the parse failure (reasons: ${reasons:-<none>})"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   # MORE THAN ONE INVALID SHAPE (#7220 review). With a single invalid fixture the arm could not
@@ -1520,10 +1550,10 @@ test_unparseable_hooks_json_is_a_hard_failure() {
     local sreason
     sreason=$(jq -r '.files[]?.reason // empty' "$INFRA_CONFIG_STATE" 2>/dev/null | tr '\n' ' ' || true)
     if [[ "$srcc" -ne 0 ]] && [[ "$sreason" == *"hooks_json_unparseable"* ]]; then
-      echo "  PASS: hooks.json shape $(printf '%q' "$shape") is rejected AND named"; PASS=$((PASS + 1))
+      echo "  PASS: hooks.json shape $(printf '%q' "$shape") is rejected AND named"; CASES=$((CASES + 1)); pass
     else
       echo "  FAIL: hooks.json shape $(printf '%q' "$shape") slipped through (rc=$srcc, reasons=${sreason:-<none>}) — webhook would restart serving zero hooks"
-      FAIL=$((FAIL + 1))
+      CASES=$((CASES + 1)); fail
     fi
     n_shapes=$((n_shapes + 1))
   done
@@ -1557,10 +1587,10 @@ test_unparseable_hooks_json_is_a_hard_failure() {
   local ok_reasons
   ok_reasons=$(jq -r '.files[]?.reason // empty' "$INFRA_CONFIG_STATE" 2>/dev/null | tr '\n' ' ' || true)
   if [[ "$ok_reasons" != *"hooks_json_unparseable"* ]]; then
-    echo "  PASS: a well-formed hooks.json is not flagged"; PASS=$((PASS + 1))
+    echo "  PASS: a well-formed hooks.json is not flagged"; CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: a VALID hooks.json was flagged unparseable — the guard rejects everything"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
   teardown
 }
@@ -1589,25 +1619,25 @@ test_self_restart_collect_argv_lockstep() {
   # denied in production with nothing red — the silent no-op class, on the delayed restart B5
   # exists to make reachable for the first time since ~2026-05.
   if grep -qE '^deploy ALL=\(root\) NOPASSWD: WEBHOOK_SELF_RESTART$' "$sudoers"; then
-    echo "  PASS: sudoers binds WEBHOOK_SELF_RESTART to deploy via a User_Spec"; PASS=$((PASS + 1))
+    echo "  PASS: sudoers binds WEBHOOK_SELF_RESTART to deploy via a User_Spec"; CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: WEBHOOK_SELF_RESTART has no 'deploy ALL=(root) NOPASSWD:' line — the alias grants nothing"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
   if grep -qE '^[[:space:]]*deploy ALL=\(root\) NOPASSWD: WEBHOOK_SELF_RESTART$' "$cloud_init"; then
-    echo "  PASS: cloud-init binds WEBHOOK_SELF_RESTART to deploy via a User_Spec"; PASS=$((PASS + 1))
+    echo "  PASS: cloud-init binds WEBHOOK_SELF_RESTART to deploy via a User_Spec"; CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: cloud-init defines WEBHOOK_SELF_RESTART without a User_Spec"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   # The caller must send exactly that. Anchored on the sudo-prefixed call, not a bare --collect
   # grep, which would also match this file's own prose.
   if grep -qF "sudo $expected" "$HANDLER"; then
-    echo "  PASS: the handler sends the granted --collect argv"; PASS=$((PASS + 1))
+    echo "  PASS: the handler sends the granted --collect argv"; CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: handler's systemd-run argv does not match the grant — the self-restart would be DENIED"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 }
 
@@ -1652,16 +1682,16 @@ test_daemon_reload_grant_lockstep() {
   # (b) A Cmnd_Alias with no User_Spec grants NOTHING — it is a definition, not an authorisation.
   # Asserting only the alias would pass against a file that never says `deploy ALL=(root)`.
   if grep -qE '^deploy ALL=\(root\) NOPASSWD: SYSTEMCTL_DAEMON_RELOAD$' "$sudoers"; then
-    echo "  PASS: sudoers binds the alias to deploy via a User_Spec"; PASS=$((PASS + 1))
+    echo "  PASS: sudoers binds the alias to deploy via a User_Spec"; CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: SYSTEMCTL_DAEMON_RELOAD has no 'deploy ALL=(root) NOPASSWD:' line — the alias grants nothing"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
   if grep -qE '^[[:space:]]*deploy ALL=\(root\) NOPASSWD: SYSTEMCTL_DAEMON_RELOAD$' "$cloud_init"; then
-    echo "  PASS: cloud-init binds the alias to deploy via a User_Spec"; PASS=$((PASS + 1))
+    echo "  PASS: cloud-init binds the alias to deploy via a User_Spec"; CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: cloud-init mirror defines the alias without a User_Spec"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   # (c) The CALLER must actually route through the seam. A bare `systemctl daemon-reload` (what
@@ -1675,17 +1705,17 @@ test_daemon_reload_grant_lockstep() {
   # Anchored on the seam variable, not on the bare verb: a bare-token grep would match the
   # prose in this file's own header comments describing the bug.
   if grep -qE '^[[:space:]]*\$SYSTEMCTL_PRIV daemon-reload$' "$HANDLER"; then
-    echo "  PASS: the handler invokes daemon-reload through the privileged seam"; PASS=$((PASS + 1))
+    echo "  PASS: the handler invokes daemon-reload through the privileged seam"; CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: handler does not call daemon-reload via \$SYSTEMCTL_PRIV — this is the #7220 shape"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
   # And the un-seamed form must be GONE, not merely joined by a seamed one.
   if grep -qE '^[[:space:]]*systemctl daemon-reload$' "$HANDLER"; then
     echo "  FAIL: a bare 'systemctl daemon-reload' survives in the handler — it would be denied"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   else
-    echo "  PASS: no bare un-seamed daemon-reload remains"; PASS=$((PASS + 1))
+    echo "  PASS: no bare un-seamed daemon-reload remains"; CASES=$((CASES + 1)); pass
   fi
 
   # (d) What sudoers grants is what sudo RUNS, so the granted argv is the seam minus its sudo
@@ -1715,10 +1745,10 @@ test_daemon_reload_runs_on_a_clean_apply() {
   # The argv is EXACTLY the granted one. The stub exits 64 on a stray argument, so a handler
   # sending `daemon-reload --now` would surface here rather than in production as a denial.
   if grep -qxF 'daemon-reload' "$STUB_CALLS"; then
-    echo "  PASS: the argv sent is exactly 'daemon-reload', no extra arguments"; PASS=$((PASS + 1))
+    echo "  PASS: the argv sent is exactly 'daemon-reload', no extra arguments"; CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: daemon-reload argv is not the granted shape: $(tr '\n' ';' < "$STUB_CALLS")"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   # A successful reload is NOT a fatal event — the channel must stay quiet, or it trains the
@@ -1756,20 +1786,20 @@ test_daemon_reload_reachable_with_test_mode_unset() {
   [[ "$n_reload" =~ ^[0-9]+$ ]] || n_reload=0
   if [[ "$n_reload" -ge 1 ]]; then
     echo "  PASS: daemon-reload fires with TEST_MODE unset — the call site is reachable in prod"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: daemon-reload did NOT fire on the prod path — the reload is test-only, which is #7220"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   # NON-VACUITY: prove this arm really took the prod branch. `sync` is guarded by the same
   # TEST_MODE check, so if it did not run, TEST_MODE was still set and the assertion above
   # proved nothing about production.
   if [[ -f "$STUB_STATE/../synced" ]] || grep -qF 'daemon-reload' "$STUB_CALLS" 2>/dev/null; then
-    echo "  PASS: the prod branch was actually entered"; PASS=$((PASS + 1))
+    echo "  PASS: the prod branch was actually entered"; CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: could not confirm the prod branch was entered — this arm is vacuous"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   export INFRA_CONFIG_TEST_MODE=1
@@ -1789,10 +1819,10 @@ test_daemon_reload_denied_is_attributed() {
   # It must DIE, not limp on. A reload that silently failed is what left every managed unit
   # running its start-time environment for ~3 months.
   if [[ "$rc" -ne 0 ]]; then
-    echo "  PASS: a denied reload fails the apply rather than passing silently"; PASS=$((PASS + 1))
+    echo "  PASS: a denied reload fails the apply rather than passing silently"; CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: handler exited 0 despite a denied daemon-reload — the #7220 silent failure"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   # And PR-A's channel must name it. This is the join between the two PRs: the instrument
@@ -1809,18 +1839,18 @@ test_daemon_reload_denied_is_attributed() {
   local f_cmd
   f_cmd=$(_frame_field fatal_cmd)
   if [[ "$f_cmd" == *"daemon-reload"* ]]; then
-    echo "  PASS: fatal_cmd names the failing verb ($f_cmd)"; PASS=$((PASS + 1))
+    echo "  PASS: fatal_cmd names the failing verb ($f_cmd)"; CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: fatal_cmd '$f_cmd' does not name daemon-reload — the operator cannot tell what died"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
   local f_line
   f_line=$(_frame_field fatal_line)
   if [[ "$f_line" =~ ^[0-9]+$ ]] && [[ "$f_line" -gt 0 ]]; then
-    echo "  PASS: fatal_line carries a real coordinate ($f_line)"; PASS=$((PASS + 1))
+    echo "  PASS: fatal_line carries a real coordinate ($f_line)"; CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: fatal_line is '$f_line' — attribution missing, which is #7220's original shape"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   # NON-VACUITY: the files were still delivered. If this read 0 the arm would be measuring a
@@ -1830,10 +1860,10 @@ test_daemon_reload_denied_is_attributed() {
   written=$(_frame_field files_written)
   if [[ "$written" =~ ^[0-9]+$ ]] && [[ "$written" -gt 0 ]]; then
     echo "  PASS: delivery still completed ($written files) — the failure is activation, not delivery"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: files_written='$written' — this arm is not exercising the activation failure"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   restart_teardown
@@ -1866,10 +1896,10 @@ test_sudoers_caller_argv_lockstep() {
     # Strip the sudo prefix: sudoers grants the command sudo will RUN, not the sudo call itself.
     expected="${seam_default#sudo } try-restart $unit"
     if grep -qxF "$expected" <<<"$granted_sudoers"; then
-      echo "  PASS: sudoers grants exactly what the handler sends for $unit"; PASS=$((PASS + 1))
+      echo "  PASS: sudoers grants exactly what the handler sends for $unit"; CASES=$((CASES + 1)); pass
     else
       echo "  FAIL: handler would send '$expected' — not granted. Granted: $(tr '\n' ';' <<<"$granted_sudoers")"
-      FAIL=$((FAIL + 1))
+      CASES=$((CASES + 1)); fail
     fi
     n_matched=$((n_matched + 1))
   done < <(sed -n '/^RESTART_MAP=(/,/^)/p' "$HANDLER" | sed -n 's/^[[:space:]]*"\([^|]*\)|\(.*\)"$/\1|\2/p')
@@ -1879,9 +1909,9 @@ test_sudoers_caller_argv_lockstep() {
   assert_eq "every RESTART_MAP unit was checked" "$(restart_map_count)" "$n_matched"
   # …and that derived count is itself non-zero, so the line above cannot pass 0 against 0.
   if [[ "$n_matched" -ge 1 ]]; then
-    echo "  PASS: the lockstep walked $n_matched unit(s)"; PASS=$((PASS + 1))
+    echo "  PASS: the lockstep walked $n_matched unit(s)"; CASES=$((CASES + 1)); pass
   else
-    echo "  FAIL: the lockstep walked ZERO units — the argv comparison was vacuous"; FAIL=$((FAIL + 1))
+    echo "  FAIL: the lockstep walked ZERO units — the argv comparison was vacuous"; CASES=$((CASES + 1)); fail
   fi
   assert_eq "the grant has no units the handler never restarts" "$n_matched" \
     "$(grep -c . <<<"$granted_sudoers")"
@@ -1937,10 +1967,10 @@ test_fatal_channel_exit64_replaces_stale_frame() {
   # instrument would erase exactly the death it exists to report. So assert the frame parses.
   if jq -e . "$INFRA_CONFIG_STATE" >/dev/null 2>&1; then
     echo "  PASS: an abort above the counters still writes well-formed JSON"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: abort above the counters produced no/invalid frame — the :-0 defaults regressed"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
   assert_eq "counters default to 0 rather than aborting the printf" "0" "$(_frame_field files_written)"
 
@@ -1969,10 +1999,10 @@ test_fatal_channel_subshell_attribution() {
 
   if [[ "$fline" =~ ^[0-9]+$ ]] && [[ "$fline" -gt 0 ]]; then
     echo "  PASS: fatal_line crossed the subshell boundary (line=$fline)"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: fatal_line=$fline — the ERR->EXIT handoff did not cross the subshell"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   # Non-vacuity: the command text must actually be there, else the absence assertions in the
@@ -1984,27 +2014,27 @@ test_fatal_channel_subshell_attribution() {
   # LAST ELEMENT — so first-writer-wins records `awk "{print $1}"`, naming a command that
   # SUCCEEDED, and this assertion goes RED. The outer frame is coarser but never wrong.
   case "$fcmd" in
-    *sha256sum*) echo "  PASS: fatal_cmd names the failing command, not a succeeded pipeline element"; PASS=$((PASS + 1)) ;;
-    *) echo "  FAIL: fatal_cmd=<$fcmd> does not name sha256sum (last-writer-wins handoff regressed?)"; FAIL=$((FAIL + 1)) ;;
+    *sha256sum*) echo "  PASS: fatal_cmd names the failing command, not a succeeded pipeline element"; CASES=$((CASES + 1)); pass ;;
+    *) echo "  FAIL: fatal_cmd=<$fcmd> does not name sha256sum (last-writer-wins handoff regressed?)"; CASES=$((CASES + 1)); fail ;;
   esac
 
   # The frame stays valid JSON and carries REAL accounting, not the hardcoded zeros of #7220.
   if jq -e . "$INFRA_CONFIG_STATE" >/dev/null 2>&1; then
     echo "  PASS: frame remains well-formed JSON with a sanitized command"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: frame is not valid JSON — the sanitizer let a quote or backslash through"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
   assert_eq "files_total is the REAL count, not the #7220 hardcoded 0" "$MANAGED_N" "$(_frame_field files_total)"
 
   # The journald arm of the same fact, via the AC14b seam.
   if grep -q 'SOLEUR_INFRA_CONFIG_FATAL' "$LOGGER_LOG" 2>/dev/null; then
     echo "  PASS: SOLEUR_INFRA_CONFIG_FATAL emitted to the journald arm"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: no SOLEUR_INFRA_CONFIG_FATAL marker — the no-SSH channel is silent"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   teardown
@@ -2030,22 +2060,22 @@ test_fatal_channel_no_secret_leak() {
 
   if grep -qF "$secret" "$INFRA_CONFIG_STATE" 2>/dev/null; then
     echo "  FAIL: the secret VALUE reached the state frame"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   else
     echo "  PASS: no secret value in the frame"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   fi
   if grep -qF "$secret" "$LOGGER_LOG" 2>/dev/null; then
     echo "  FAIL: the secret VALUE reached the journald arm"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   else
     echo "  PASS: no secret value in \$LOGGER_LOG"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   fi
   # Anti-vacuity — prove the channel was actually carrying command text at the time.
   case "$(_frame_field fatal_cmd)" in
-    *sha256sum*) echo "  PASS: non-vacuous — fatal_cmd was populated"; PASS=$((PASS + 1)) ;;
-    *) echo "  FAIL: fatal_cmd empty — the absence assertions above were vacuous"; FAIL=$((FAIL + 1)) ;;
+    *sha256sum*) echo "  PASS: non-vacuous — fatal_cmd was populated"; CASES=$((CASES + 1)); pass ;;
+    *) echo "  FAIL: fatal_cmd empty — the absence assertions above were vacuous"; CASES=$((CASES + 1)); fail ;;
   esac
 
   # THE ABOVE IS NOT THE PROPERTY. Review caught that honestly: the handler never reads
@@ -2067,11 +2097,11 @@ test_fatal_channel_no_secret_leak() {
 
   if [[ -n "$probe_out" ]] && [[ "$probe_out" != *"dp.st.LEAKCANARY7220"* ]] && [[ "$probe_out" == *'$SECRET'* ]]; then
     echo "  PASS: \$BASH_COMMAND is UNEXPANDED — it carries the literal \$SECRET, never the value"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: \$BASH_COMMAND expansion invariant broken — the sanitizer does NOT redact, so"
     echo "        this channel would ship credentials to Better Stack. Captured: <$probe_out>"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   # The invariant above is voided by exactly one construct class: `eval`, or sourcing generated
@@ -2084,10 +2114,10 @@ test_fatal_channel_no_secret_leak() {
   # The frame must contain no raw quote or newline, which is what keeps it parseable.
   if jq -e . "$INFRA_CONFIG_STATE" >/dev/null 2>&1; then
     echo "  PASS: frame parses (no raw quote/backslash/newline survived the sanitizer)"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: frame does not parse"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   teardown
@@ -2123,10 +2153,10 @@ test_fatal_channel_clean_apply_exits_zero() {
   # No handoff residue left behind to poison the NEXT run's attribution.
   if [[ -e "${INFRA_CONFIG_STATE}.fatal" ]]; then
     echo "  FAIL: .fatal handoff file survived a clean apply — next run would misattribute"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   else
     echo "  PASS: .fatal handoff cleaned up"
-    PASS=$((PASS + 1))
+    CASES=$((CASES + 1)); pass
   fi
 
   teardown
@@ -2184,7 +2214,7 @@ test_fatal_channel_red_against_pre_fix() {
     # object is ABSENT (measured on git 2.53.0), which would make the skip arm dead code.
     if git -C "$SCRIPT_DIR" cat-file -e "${PRE_FIX_HANDLER_SHA}:apps/web-platform/infra/infra-config-apply.sh" 2>/dev/null; then
       echo "  FAIL: pinned pre-fix commit resolves but the handler could not be read — mutation proof is broken, not skipped"
-      FAIL=$((FAIL + 1))
+      CASES=$((CASES + 1)); fail
     elif [[ -n "${CI:-}" ]]; then
       # Under CI the pinned commit is REACHABLE BY CONTRACT (deploy-script-tests checks out with
       # fetch-depth: 0 + fetch-tags: true), so absence is a breakage, not an environment limit.
@@ -2192,7 +2222,7 @@ test_fatal_channel_red_against_pre_fix() {
       # ref resolves at ANY depth, a specific historical commit does not — so the arm that
       # absence lands on must be the LOUD one wherever the depth is guaranteed.
       echo "  FAIL: pinned pre-fix commit ${PRE_FIX_HANDLER_SHA:0:9} is absent under CI, where fetch-depth: 0 should guarantee it — mutation proof NOT run"
-      FAIL=$((FAIL + 1))
+      CASES=$((CASES + 1)); fail
     else
       # Local/offline only. Cause is deliberately NOT narrowed to "shallow clone": `cat-file -e`
       # measures ABSENCE, and absence is equally produced by a partial/treeless clone, rewritten
@@ -2211,7 +2241,7 @@ test_fatal_channel_red_against_pre_fix() {
   # fix's markers — assert that before trusting it as a baseline.
   if grep -q 'local died=0' "$old"; then
     echo "  FAIL: pinned baseline already contains the #7220 fix — it is not a pre-fix handler"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
     teardown
     return 0
   fi
@@ -2297,16 +2327,16 @@ test_fatal_channel_death_after_publish_corrects_the_frame() {
   assert_eq "the post-publish death is named as its own shape" "fatal_after_publish" "$(_frame_field reason)"
   local fline; fline=$(_frame_field fatal_line)
   if [[ "$fline" =~ ^[0-9]+$ ]] && [[ "$fline" -gt 0 ]]; then
-    echo "  PASS: the death is attributed to a line ($fline)"; PASS=$((PASS + 1))
+    echo "  PASS: the death is attributed to a line ($fline)"; CASES=$((CASES + 1)); pass
   else
-    echo "  FAIL: fatal_line=$fline — a post-publish death lost its attribution"; FAIL=$((FAIL + 1))
+    echo "  FAIL: fatal_line=$fline — a post-publish death lost its attribution"; CASES=$((CASES + 1)); fail
   fi
   # Correcting the frame must not discard what the run actually earned.
   assert_eq "delivery accounting survives the rewrite" "$MANAGED_N" "$(_frame_field files_total)"
   if [[ "$(jq '.files | length' "$INFRA_CONFIG_STATE" 2>/dev/null || echo 0)" -eq "$MANAGED_N" ]]; then
-    echo "  PASS: files[] preserved through the correction"; PASS=$((PASS + 1))
+    echo "  PASS: files[] preserved through the correction"; CASES=$((CASES + 1)); pass
   else
-    echo "  FAIL: files[] was discarded when the frame was corrected"; FAIL=$((FAIL + 1))
+    echo "  FAIL: files[] was discarded when the frame was corrected"; CASES=$((CASES + 1)); fail
   fi
 
   teardown
@@ -2332,16 +2362,16 @@ test_fatal_channel_handoff_requires_ownership() {
   guard_line=$(grep -n -- '-O "\$FATAL_FILE"' "$HANDLER" | head -1 | cut -d: -f1)
   read_line=$(grep -n 'IFS= read -r f_rc' "$HANDLER" | head -1 | cut -d: -f1)
   if [[ -n "$guard_line" ]]; then
-    echo "  PASS: the handoff read is ownership-gated (line $guard_line)"; PASS=$((PASS + 1))
+    echo "  PASS: the handoff read is ownership-gated (line $guard_line)"; CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: no -O ownership gate on \$FATAL_FILE — a planted handoff would be believed"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
   if [[ -n "$guard_line" && -n "$read_line" && "$guard_line" -lt "$read_line" ]]; then
-    echo "  PASS: the gate precedes the read"; PASS=$((PASS + 1))
+    echo "  PASS: the gate precedes the read"; CASES=$((CASES + 1)); pass
   else
     echo "  FAIL: ownership gate at '$guard_line' does not precede the read at '$read_line'"
-    FAIL=$((FAIL + 1))
+    CASES=$((CASES + 1)); fail
   fi
 
   # BEHAVIOURAL, when the environment can actually express foreign ownership. Skips LOUDLY —
@@ -2355,10 +2385,10 @@ test_fatal_channel_handoff_requires_ownership() {
     case "$(_frame_field fatal_cmd)" in
       *PLANTED_FABRICATED_COMMAND*)
         echo "  FAIL: a foreign-owned handoff was believed — fabricated attribution reached the frame"
-        FAIL=$((FAIL + 1)) ;;
+        CASES=$((CASES + 1)); fail ;;
       *)
         echo "  PASS: foreign-owned handoff ignored; attribution came from this process only"
-        PASS=$((PASS + 1)) ;;
+        CASES=$((CASES + 1)); pass ;;
     esac
   else
     echo "  SKIP (loud): not root, so foreign ownership cannot be expressed here — the structural"
@@ -2471,21 +2501,21 @@ while IFS='|' read -r _env _dest _mode _owner; do
   _key="$(printf '%s' "$_env" | tr '[:upper:]' '[:lower:]')"
 
   if grep -qF "\"$_key\"" "$SCRIPT_DIR/push-infra-config.sh"; then
-    PASS=$((PASS + 1)); echo "  PASS: push-infra-config.sh emits payload key $_key"
+    CASES=$((CASES + 1)); pass; echo "  PASS: push-infra-config.sh emits payload key $_key"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: push-infra-config.sh has NO payload key $_key (file would never be transmitted)"
+    CASES=$((CASES + 1)); fail; echo "  FAIL: push-infra-config.sh has NO payload key $_key (file would never be transmitted)"
   fi
 
   if grep -qF "\"$_key\"" "$SCRIPT_DIR/hooks.json.tmpl" && grep -qF "\"$_env\"" "$SCRIPT_DIR/hooks.json.tmpl"; then
-    PASS=$((PASS + 1)); echo "  PASS: hooks.json.tmpl bridges $_key -> $_env"
+    CASES=$((CASES + 1)); pass; echo "  PASS: hooks.json.tmpl bridges $_key -> $_env"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: hooks.json.tmpl has NO bridge for $_key -> $_env (env var arrives empty)"
+    CASES=$((CASES + 1)); fail; echo "  FAIL: hooks.json.tmpl has NO bridge for $_key -> $_env (env var arrives empty)"
   fi
 
   if grep -qF "[\"$_dest\"]=" "$SCRIPT_DIR/infra-config-install.sh"; then
-    PASS=$((PASS + 1)); echo "  PASS: infra-config-install.sh DEST_SPEC allowlists $_dest"
+    CASES=$((CASES + 1)); pass; echo "  PASS: infra-config-install.sh DEST_SPEC allowlists $_dest"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: infra-config-install.sh DEST_SPEC does NOT allowlist $_dest (install rejects rc=3)"
+    CASES=$((CASES + 1)); fail; echo "  FAIL: infra-config-install.sh DEST_SPEC does NOT allowlist $_dest (install rejects rc=3)"
   fi
 done < <(awk '/^FILE_MAP=\(/{f=1;next} f&&/^\)/{f=0} f' "$SCRIPT_DIR/infra-config-apply.sh" \
            | sed -n 's/^[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p')
@@ -2495,26 +2525,66 @@ done < <(awk '/^FILE_MAP=\(/{f=1;next} f&&/^\)/{f=0} f' "$SCRIPT_DIR/infra-confi
 # report a clean pass having verified nothing. That is the exact silent-green shape this block
 # exists to prevent, so it must not be reproducible BY this block.
 if [[ "$_parity_examined" -ge 20 ]]; then
-  PASS=$((PASS + 1)); echo "  PASS: parity loop examined $_parity_examined FILE_MAP entries"
+  CASES=$((CASES + 1)); pass; echo "  PASS: parity loop examined $_parity_examined FILE_MAP entries"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: parity loop examined only $_parity_examined FILE_MAP entries (expected >= 20 — extractor is broken, not the config)"
+  CASES=$((CASES + 1)); fail; echo "  FAIL: parity loop examined only $_parity_examined FILE_MAP entries (expected >= 20 — extractor is broken, not the config)"
 fi
 
-# #7286 raised this from 190 to 251 (= 250 PASS + 1 declared-skip on this runner). The floor is
+# --- Accounting conservation (ADR-193 #3) --------------------------------------------
+# Ordered BEFORE the floor per ADR-193 #4: a neutered fail() deflates the verdict counts, so
+# the floor would ALSO trip and would report "arms were deleted" — the misleading diagnosis.
+# This says "a verdict was discarded" instead. Reported with printf >&2 + exit 1 DIRECTLY,
+# never through fail(): a check that reports by calling the verdict helper increments the very
+# counter the exit status reads, so neutering fail() silences the rows AND the check meant to
+# notice the silence. The literal `[FATAL] accounting` is load-bearing — guard-vacuity-floor's
+# ARM 10 builds its conservation population by grepping that exact string (#7588).
+#
+# SKIPPED_ASSERTIONS is deliberately absent from this identity. A declared skip is an assertion
+# that never ran: it produced no case and no verdict, so it is conserved by being excluded from
+# BOTH sides. Adding it to either side would make the check fire on every non-root or shallow
+# clone run. It re-enters only at the floor below, which is the one reader that asks what FULL
+# coverage would have been rather than what this process actually executed.
+if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
+  printf '\n[FATAL] accounting: PASS+FAIL (%d) != CASES (%d).\n' \
+    "$((PASS + FAIL))" "$CASES" >&2
+  if [[ $((PASS + FAIL)) -lt "$CASES" ]]; then
+    printf '  An assertion was counted but its verdict was not recorded — that is what a neutered pass()/fail() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `CASES=$((CASES + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  echo "=== Results: $PASS passed, $FAIL failed, $CASES cases, $SKIPPED_ASSERTIONS declared-skipped ==="
+  exit 1
+fi
+
+# --- Anti-vacuity floor (ADR-193 #1) -------------------------------------------------
+# Reads the INDEPENDENT case counter (plus the declared skips), and reports with printf >&2 +
+# exit 1 DIRECTLY. It previously read PASS and reported by doing `FAIL=$((FAIL + 1))`, falling
+# through to the trailer — so with the assertion machinery neutered the floor "fired" into a
+# counter nobody read before exit and the suite exited 0. A floor enforced through the suspect
+# cannot witness the suspect.
+#
+# CASES rather than PASS: a genuinely failing assertion is a product regression, not a coverage
+# loss, and the trailer below already reds on it. Reading PASS made a red suite ALSO shout
+# "arms were deleted", which sends the reader to the wrong file.
+#
+# #7286 raised this from 190 to 251 (= 250 cases + 1 declared-skip on this runner). The floor is
 # only a ratchet if it tracks the real total; leaving it at 190 after adding 61 assertions would
 # let the entire new parity block vanish without the floor noticing — which is the exact
 # "a count-framed ratchet cannot see a removal" failure the floor exists to prevent.
 APPLY_MIN_ASSERTIONS=251
-if [[ $((PASS + SKIPPED_ASSERTIONS)) -lt "$APPLY_MIN_ASSERTIONS" ]]; then
-  echo "  FAIL: assertion-count floor — $PASS assertions ran and $SKIPPED_ASSERTIONS were declared-skipped, expected >= $APPLY_MIN_ASSERTIONS"
-  FAIL=$((FAIL + 1))
+if [[ $((CASES + SKIPPED_ASSERTIONS)) -lt "$APPLY_MIN_ASSERTIONS" ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran and %d were declared-skipped (%d total), expected >= %d.\n' \
+    "$CASES" "$SKIPPED_ASSERTIONS" "$((CASES + SKIPPED_ASSERTIONS))" "$APPLY_MIN_ASSERTIONS" >&2
+  printf '  Arms were deleted or silently skipped; a green run here would be a coverage loss.\n' >&2
+  echo "=== Results: $PASS passed, $FAIL failed, $CASES cases, $SKIPPED_ASSERTIONS declared-skipped ==="
+  exit 1
 fi
 if [[ "$SKIPPED_ASSERTIONS" -gt 0 ]]; then
   echo "  NOTE: $SKIPPED_ASSERTIONS assertion(s) were declared-skipped by loud SKIP arms — this run is weaker than a full one."
 fi
 
 echo ""
-echo "=== Results: $PASS passed, $FAIL failed ==="
+echo "=== Results: $PASS passed, $FAIL failed, $CASES cases, $SKIPPED_ASSERTIONS declared-skipped ==="
 if [[ "$FAIL" -gt 0 ]]; then
   exit 1
 fi

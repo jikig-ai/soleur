@@ -134,8 +134,22 @@ heredoc_lines_of() { # <file> -> one line number per line inside a heredoc body
 #      conditional opener and excluding heredoc bodies closes both.
 #
 # A suite that fails DERIVATION never reaches the mutation arm and never reaches
-# UNCLASSIFIED either, so a too-narrow pattern here is the one failure mode this file cannot
-# report on itself. ARM 11 exists to bound exactly that.
+# UNCLASSIFIED either — `is_floor_bearing()` below is `floor_lines_of` too, so the repo-wide
+# sweep and the covered population share this one pattern. That makes a too-narrow pattern the
+# one failure mode this file cannot report on itself, in TWO directions, and they are bounded
+# unequally:
+#
+#   - NARROWING (a shape that used to match stops matching) is bounded by ARM 3. Its
+#     `MIN_FIRING_SUITES` is absolute and hand-ratcheted — deliberately never derived from
+#     anything this file computes — so a pattern that drops existing members drives `n_fires`
+#     under the ratchet and ARM 3 names it. That is the bound; there is no ARM 11. An earlier
+#     revision of this comment cited one, and no such arm has ever existed (the arms are
+#     1, 2, 2b, 3, 4, 5, 5b, 5c, 7, 8, 8b, 9, 10, 10d, 10e; 6 was deleted as subsumed and says
+#     so at its old position).
+#   - A NEW floor written in a shape the pattern never matched is bounded by NOTHING here, and
+#     cannot be: it is absent from both scopes and from `n_total`, so every arithmetic
+#     identity in this file still balances. Widen the pattern when you add a floor form, and
+#     expect ARM 3's ratchet to be raised in the same commit.
 floor_lines_of() { # <file> -> "lineno:text" per candidate
   local f="$1" base derived all alt c hd
   base="$(counters_of "$f")"
@@ -388,18 +402,38 @@ FIRES_LIST="$SUITE_TMP/fires.txt"; : > "$FIRES_LIST"
 NOFIRE_LIST="$SUITE_TMP/nofire.txt"; : > "$NOFIRE_LIST"
 CONSTRUCT_LIST="$SUITE_TMP/construct.txt"; : > "$CONSTRUCT_LIST"
 
-while IFS= read -r f; do
-  [[ -n "$f" ]] || continue
-  case "$(classify_suite "$f")" in
-    FIRES) printf '%s\n' "$f" >> "$FIRES_LIST" ;;
-    NO_FIRE) printf '%s\n' "$f" >> "$NOFIRE_LIST" ;;
-    *) printf '%s\n' "$f" >> "$CONSTRUCT_LIST" ;;
-  esac
-done < "$COVERED"
+# The DEFERRED scope is classified too, in the SAME pass, tagged by scope (#7580). Before this,
+# the mutation loop read `< "$COVERED"` only — so every suite in a deferred directory was COUNTED
+# by ARM 5c and never CLASSIFIED, and eleven of them had floors that exited 0 under a neutered
+# assertion machinery while every arm of this guard returned an identical verdict. Counting is
+# what failed to notice them; the fix has to be classification.
+#
+# One scope-tagged loop rather than two loops: less code, and it cannot drift between scopes.
+DEF_FIRES_LIST="$SUITE_TMP/fires-deferred.txt"; : > "$DEF_FIRES_LIST"
+DEF_NOFIRE_LIST="$SUITE_TMP/nofire-deferred.txt"; : > "$DEF_NOFIRE_LIST"
+DEF_CONSTRUCT_LIST="$SUITE_TMP/construct-deferred.txt"; : > "$DEF_CONSTRUCT_LIST"
+
+classify_into() { # <input-list> <fires-out> <nofire-out> <construct-out>
+  local src="$1" fout="$2" nout="$3" cout="$4" f
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    case "$(classify_suite "$f")" in
+      FIRES) printf '%s\n' "$f" >> "$fout" ;;
+      NO_FIRE) printf '%s\n' "$f" >> "$nout" ;;
+      *) printf '%s\n' "$f" >> "$cout" ;;
+    esac
+  done < "$src"
+}
+
+classify_into "$COVERED"  "$FIRES_LIST"     "$NOFIRE_LIST"     "$CONSTRUCT_LIST"
+classify_into "$DEFERRED" "$DEF_FIRES_LIST" "$DEF_NOFIRE_LIST" "$DEF_CONSTRUCT_LIST"
 
 n_fires=$(wc -l < "$FIRES_LIST")
 n_nofire=$(wc -l < "$NOFIRE_LIST")
 n_construct=$(wc -l < "$CONSTRUCT_LIST")
+n_def_fires=$(wc -l < "$DEF_FIRES_LIST")
+n_def_nofire=$(wc -l < "$DEF_NOFIRE_LIST")
+n_def_construct=$(wc -l < "$DEF_CONSTRUCT_LIST")
 
 printf '=== derived population ===\n'
 printf '  repo-wide floor-bearing : %d\n' "$n_total"
@@ -409,6 +443,10 @@ printf '  unclassified (must be 0): %d\n' "$n_unclassified"
 printf '  floor fires             : %d\n' "$n_fires"
 printf '  floor does NOT fire     : %d\n' "$n_nofire"
 printf '  mutant not constructible: %d\n' "$n_construct"
+printf '  -- deferred scope (#7580) --\n'
+printf '  deferred floor fires      : %d\n' "$n_def_fires"
+printf '  deferred does NOT fire    : %d\n' "$n_def_nofire"
+printf '  deferred not constructible: %d\n' "$n_def_construct"
 printf '\n'
 
 # --- ARM 1: no covered suite may have a floor that fails to fire -------------------------
@@ -433,6 +471,55 @@ if [[ "$n_construct" -le "$MAX_CONSTRUCTION_FAILURES" ]]; then
 else
   fail "mutant-construction failures GREW to $n_construct (ratchet is $MAX_CONSTRUCTION_FAILURES). A new floor joined the uncovered set:"
   while IFS= read -r f; do [[ -n "$f" ]] && printf '        %s\n' "$f"; done < "$CONSTRUCT_LIST"
+fi
+
+# --- ARM 2b: the DEFERRED scope is CLASSIFIED, not merely counted (#7580) ------------------
+#
+# ARM 5c counts the deferred ledger and refuses to let it grow. Counting is exactly what failed:
+# eleven deferred suites carried floors that exited 0 under a neutered assertion machinery, and
+# every arm of this guard returned an identical verdict before and after they were fixed, because
+# the mutation loop read the covered list only. This arm makes the deferred scope's floors
+# mechanically visible, in place, without promoting any directory into COVERED_DIRS and without
+# touching MAX_CONSTRUCTION_FAILURES.
+#
+# The ratchet is 0, not a slack figure. Slack in a floor is narrowing budget, and a set invariant
+# ("every member fires") is not the kind of thing that has a tolerance.
+MAX_DEFERRED_NOFIRE=0
+cases=$((cases + 1))
+if [[ "$n_def_nofire" -le "$MAX_DEFERRED_NOFIRE" ]]; then
+  pass "every DEFERRED floor survives a neutered assertion machinery ($n_def_fires firing, $n_def_construct unconstructible)"
+else
+  fail "$n_def_nofire deferred suite(s) have a floor that EXITS 0 under a neutered assertion machinery (ratchet is $MAX_DEFERRED_NOFIRE):"
+  while IFS= read -r f; do [[ -n "$f" ]] && printf '        %s\n' "$f"; done < "$DEF_NOFIRE_LIST"
+fi
+
+# The bucket identity. classify_suite returns exactly one of three verdicts for every input, so
+# fires + nofire + construct MUST equal the population size. This is strictly stronger than a
+# `>=` floor on the classified count: it catches an arm that classifies an EMPTY list (which would
+# report 0 NO_FIRE and pass while classifying nothing — the vacuity this whole guard is about,
+# one level up) AND one that double-counts, neither of which a floor can see.
+cases=$((cases + 1))
+if [[ $((n_def_fires + n_def_nofire + n_def_construct)) -eq "$n_deferred" ]]; then
+  pass "the deferred classification is exhaustive ($n_def_fires + $n_def_nofire + $n_def_construct == $n_deferred)"
+else
+  fail "deferred classification does not account for the population: $n_def_fires + $n_def_nofire + $n_def_construct != $n_deferred — the classification loop read a different (or empty) list than ARM 5c counted"
+fi
+
+# A floor REWRITE can move a suite from NO_FIRE into CONSTRUCTION rather than into FIRES, which
+# would drive the NO_FIRE count to 0 while the property still fails. MAX_CONSTRUCTION_FAILURES
+# cannot catch that: it is global and derived from $COVERED. Without this ratchet the arm above
+# has a live escape path, opened by the very PR that added it. Shrink-only, like its sibling.
+#
+# 18, measured. An earlier figure of 16 came from a probe that repointed COVERED_DIRS at four of
+# the five DEFERRED_DIRS prefixes and silently omitted apps/web-platform/scripts/, which carries
+# two. The conclusion it supported is unchanged and stronger: 18 exceeds the global cap of 15,
+# so promoting these directories wholesale is still blocked on a per-scope ratchet.
+MAX_DEFERRED_CONSTRUCTION=18
+cases=$((cases + 1))
+if [[ "$n_def_construct" -le "$MAX_DEFERRED_CONSTRUCTION" ]]; then
+  pass "deferred mutant-construction failures: $n_def_construct (<= $MAX_DEFERRED_CONSTRUCTION)"
+else
+  fail "deferred construction failures GREW to $n_def_construct (ratchet is $MAX_DEFERRED_CONSTRUCTION) — a floor rewrite made a mutant unconstructible instead of making the floor fire. Do NOT raise this number."
 fi
 
 # --- ARM 3: the firing population may only grow ------------------------------------------
@@ -522,7 +609,7 @@ fi
 #
 # WIDENING SCOPE NEEDS A PER-SCOPE RATCHET FIRST. MAX_CONSTRUCTION_FAILURES below is GLOBAL
 # and sits at exactly its current value with zero headroom; promoting the deferred
-# directories wholesale would push it from 17 to ~50 and ARM 2 would stop discriminating.
+# directories wholesale would push it from 15 to ~33 and ARM 2 would stop discriminating.
 # RAISED 46 -> 47 by #7552, for exactly one file, and against this arm's own instruction —
 # stated here rather than done quietly.
 #
@@ -532,7 +619,8 @@ fi
 # its directory remains in DEFERRED_DIRS trips ARM 4's double-count check. "Promote its
 # directory" is blocked by this file's own prerequisite two paragraphs up — the per-scope
 # construction ratchet does not exist yet, and wholesale promotion would push
-# MAX_CONSTRUCTION_FAILURES from 17 to ~50 and stop ARM 2 discriminating.
+# MAX_CONSTRUCTION_FAILURES from 15 to ~33 and stop ARM 2 discriminating. ARM 2b now classifies
+# that scope in place instead, which is the per-scope ratchet this paragraph asks for.
 #
 # That leaves only "ship the suite with no anti-vacuity floor", which is the opposite of what
 # this ratchet exists to encourage. The floor was instead made mutant-CONSTRUCTIBLE first (a
@@ -689,10 +777,15 @@ CONSERVING="$SUITE_TMP/conserving.txt"; : > "$CONSERVING"
 while IFS= read -r f; do
   [[ -n "$f" ]] || continue
   if grep -qaE '\[FATAL\] accounting' "$f"; then printf '%s\n' "$f" >> "$CONSERVING"; fi
-done < "$COVERED"
+done < <(cat "$COVERED" "$DEFERRED")
 n_conserving=$(wc -l < "$CONSERVING")
 
-MIN_CONSERVING=18
+# Raised from 18 when the deferred scope joined this population (#7580). It was accurate for a
+# COVERED-only population and became stale-low by the deferred suites the moment they started
+# carrying conservation checks; a shrink-only ratchet left un-raised silently fails to capture
+# the gain it exists to lock in. Raised 32 -> 33 when fanout-suite-scope.test.sh gained one
+# (#7553): its floor read PASS+FAIL, the counter a neutered verdict helper keeps moving.
+MIN_CONSERVING=33
 cases=$((cases + 1))
 if [[ "$n_conserving" -ge "$MIN_CONSERVING" ]]; then
   pass "suites carrying an accounting-conservation check: $n_conserving (>= $MIN_CONSERVING)"

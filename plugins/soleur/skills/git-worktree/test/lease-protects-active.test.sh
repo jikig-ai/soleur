@@ -63,6 +63,53 @@ cdx() {
   exit 90
 }
 
+# MERGE-RESOLUTION SELF-CHECK. This file was ALREADY partially hardened once — two sites carried
+# explicit "Guarded cd" comments while five did not — and it regressed anyway; the reaper sites
+# carry no fixture-commit symptom, so a regression there is silent. Two independent fixes to this
+# file are in flight simultaneously, which makes "a merge drops one site back to a bare cd" a live
+# possibility rather than a hypothetical. Assert the PROPERTY here instead of trusting review to
+# notice. Excludes the `&&` forms, which short-circuit and are safe.
+# Keyed on STRUCTURE, never on any guard WORDING, and evaluated on LOGICAL lines.
+#
+# Three corrections, each found by mutation rather than by reading:
+#   1. Wording. A check greping for `cdx(` flags a site guarded correctly some other way; one
+#      greping for a guard PHRASE clears a site guarded with different wording. Not hypothetical
+#      -- a sibling session counted its own guarded sites with `grep -c <its guard phrase>`, got
+#      5, and the answer was 7: it had worded its two reaper guards differently.
+#   2. Reach. Anchoring at line start inspected 7 of this file 25 `cd "` sites -- the dominant
+#      `if ( cd "` form was invisible, while the message below claimed to refuse on ANY bare cd.
+#      A guard narrower than the claim it carries is this suite own subject, one level up.
+#   3. Line shape. Most sites here are backslash-continued, so the `&&` that handles the failure
+#      sits on the NEXT physical line. Judging physical lines both misses a real defect and
+#      false-flags a correctly guarded two-line site.
+#
+# So: strip comments (prose naming `cd "` must not be inspected -- this block itself would
+# match), join continuations into one logical line, then flag any `cd "` whose logical line
+# neither carries `&&`/`||` nor makes cd itself the tested command. `if ( cd "$X" ... )` is NOT
+# exempt merely for containing `if`: that tests the SUBSHELL, so a resolution dropping the `&&`
+# leaves cd failure swallowed and the next command running in the wrong directory, which parses
+# cleanly and is silent. That case is mutation-proven below.
+_bare_cd="$(awk '
+  BEGIN { start_ln = 1 }
+  {
+    l = $0
+    sub(/(^|[[:space:]])#.*$/, "", l)
+    line = line l
+    if (sub(/\\[[:space:]]*$/, " ", line)) next
+    if (line ~ /(^|[^[:alnum:]_])cd "/ \
+        && line !~ /&&/ && line !~ /\|\|/ \
+        && line !~ /(^|[[:space:]])(if|while|until)[[:space:]]+!?[[:space:]]*cd[[:space:]]"/ \
+        && line !~ /(^|[^[:alnum:]_])cdx[[:space:]]/) print start_ln ": " line
+    line = ""; start_ln = NR + 1
+  }
+' "${BASH_SOURCE[0]}")"
+if [[ -n "$_bare_cd" ]]; then
+  printf '  FAIL: unguarded cd site(s) in this suite — every fixture cd must go through cdx():\n' >&2
+  printf '%s\n' "$_bare_cd" >&2
+  printf '        A bare cd here runs git in the CALLER CWD when the fixture is missing.\n' >&2
+  exit 1
+fi
+
 # ---------------------------------------------------------------------------
 # Stand up a fake bare repo with two branches: main + feat-victim. Merge
 # feat-victim into main so it qualifies as "merged" for cleanup_merged_worktrees.
