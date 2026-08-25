@@ -1292,9 +1292,9 @@ assert "#7228 the gate still resolves to the inngest-cutover environment" \
 # GETS THE PROD-WRITE TOKEN. Adding an op to the token expression but not the environment one
 # hands that op an arm-capable credential with NO required reviewer — and every pre-existing
 # assertion here passed, because they check the two expressions independently. Pin the SETS equal.
-ENV_OPS=$(printf '%s' "$ENV_EXPR" | grep -oE "inputs\.op == '[a-z-]+'" | sort -u)
+ENV_OPS=$(printf '%s' "$ENV_EXPR" | grep -oE "inputs\.op == '[a-z-]+'" | sort -u) || true
 TOK_EXPR=$(grep -E 'DOPPLER_TOKEN_INNGEST_ARM:' "$WF" | head -1) || true
-TOK_OPS=$(printf '%s' "$TOK_EXPR" | grep -oE "inputs\.op == '[a-z-]+'" | sort -u)
+TOK_OPS=$(printf '%s' "$TOK_EXPR" | grep -oE "inputs\.op == '[a-z-]+'" | sort -u) || true
 assert "#7674 the token expression was located (else the parity row below is vacuous)" \
   "[[ -n '$TOK_EXPR' ]]"
 assert "#7674 the reviewer-gated op set is non-empty (anti-vacuity for the parity row)" \

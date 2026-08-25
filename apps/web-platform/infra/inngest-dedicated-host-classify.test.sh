@@ -16,6 +16,14 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SUT="$REPO_ROOT/scripts/inngest-dedicated-host-classify.sh"
 WF="$REPO_ROOT/.github/workflows/scheduled-inngest-health.yml"
 
+# Tempfile ownership (ADR-129): this suite allocates scratch via mktemp, so it must register a
+# single owning trap — otherwise nothing removes them if the script dies mid-run. An earlier
+# revision used SCRATCH+=() copied from the sibling suite WITHOUT this infrastructure, i.e. it
+# recorded paths into an array nothing ever read. lint-trap-tempfile-ownership.py caught it.
+SCRATCH=()
+scratch_cleanup() { [[ ${#SCRATCH[@]} -gt 0 ]] && rm -rf "${SCRATCH[@]}" 2>/dev/null || true; }
+trap scratch_cleanup EXIT
+
 PASS=0; FAIL=0
 assert() {
   local desc="$1" cond="$2"

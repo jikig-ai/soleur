@@ -217,11 +217,17 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # makes the ledger SHRINK rather than the ratchet grow.
 #
 # Anchored with ^...$ per entry so a path cannot be promoted by prefix accident.
+# `inngest-dedicated-host-classify.test.sh` added by #7674 — a dedicated-host probe-consumer suite
+# under a deferred directory. Its floor is an exact-count bound (`PASS -lt <n>`, no slack) that
+# reports via a direct `echo` + `exit 1` rather than through the suite's own `assert` helper, so
+# neutering the assertion machinery cannot disarm it; the guard's harness measures it FIRES. This
+# promotion SHRINKS the ledger 48 -> 47 rather than raising the ratchet, which is the outcome the
+# failure message asks for.
 # `arm-heartbeats.test.sh` added by #7587 — a heartbeat-arming suite under a deferred directory.
 # Its floor (`ASSERT_FLOOR`, a literal bound adjacent to the test) is mutant-CONSTRUCTIBLE and
 # measured FIRES under neutered assertion machinery, so this is a promotion that buys real
 # mutation coverage rather than an exemption that moves a number.
-PROMOTED_FILES='^(apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh)$'
+PROMOTED_FILES='^(apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh)$'
 
 COVERED="$SUITE_TMP/covered.txt"
 DEFERRED="$SUITE_TMP/deferred.txt"
