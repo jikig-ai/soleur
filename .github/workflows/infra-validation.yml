@@ -102,6 +102,11 @@ on:
       # apps/web-platform/infra/inngest-cutover-flip.sh, needs no entry — `apps/*/infra/**`
       # already covers it, so adding a terminal reason there does run the parity guard.)
       - ".github/workflows/cutover-inngest.yml"
+      # (#7674) inngest-dedicated-host-classify.test.sh asserts the dedicated-host arm OF
+      # scheduled-inngest-health.yml -- the no-restart contract, the host isolation, and the
+      # decode-before-match. Same reason as the entry above: without this path a PR editing only
+      # that workflow would not run the guard whose whole job is protecting it.
+      - ".github/workflows/scheduled-inngest-health.yml"
       # (#6808) workspaces-luks-verify-workflow.test.sh asserts the classification contract OF
       # workspaces-luks-verify.yml -- that all four outcome classes are producible, that the alarm
       # step's `if:` is reachable on a failing run (a bare `failure()` would make it unreachable on
@@ -1268,6 +1273,9 @@ jobs:
 
       - name: Run cutover-inngest.yml workflow tests
         run: bash apps/web-platform/infra/cutover-inngest-workflow.test.sh
+
+      - name: Run dedicated-host probe-consumer classifier tests (#7674)
+        run: bash apps/web-platform/infra/inngest-dedicated-host-classify.test.sh
 
       - name: Run restart-inngest-server.yml self-trigger guard tests (#6425)
         run: bash apps/web-platform/infra/restart-inngest-workflow-guard.test.sh
