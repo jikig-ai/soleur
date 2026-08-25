@@ -153,6 +153,36 @@ mutations of one shape is one mutation. The highest-yield axis is usually
 *dispatch* — nothing in a battery that perturbs inputs can observe its own
 assertion helpers going silent.
 
+## 7. The prose documenting a classification satisfied the check guarding it
+
+ADR-136's parity gate exists to stop a new `cloudflare_*` class from entering the
+infra unclassified. It fired correctly on `cloudflare_pages_project`. Adjudicating
+it OUT meant writing a paragraph explaining *why* — it is the first class with a
+natural key to be ruled OUT, so the one-line table cell could not carry it.
+
+That paragraph names the type. The gate's ADR-to-test coupling (P2) asserted the
+type appears **anywhere** in the ADR, via `grep -Fq`. So once the explanation
+existed, the adjudication row it explains could be deleted and the suite stayed
+green at 43/43.
+
+The documentation written to make a decision reviewable is what stopped the test
+from checking that the decision was recorded. Bare-token presence was never the
+property worth asserting — it merely coincided with it for as long as every
+mention of a type lived inside its own table row. The first prose mention broke
+the coincidence, and nothing announced it.
+
+Only mutation testing found this. The fix was green, the gate was green, and the
+green was meaningless. Anchoring P2 on a table ROW carrying an OUT verdict also
+bought a check the old form could not express at all: an ADR that classifies a
+type `IN` while the test lists it `OUT` is now a failure — previously the two
+could contradict each other in permanent silence.
+
+**Anchor a coupling assertion on the STRUCTURE that encodes the decision (the row,
+the verdict cell), never on the presence of a name. A name appears in prose; a
+decision does not.** This is `cq-assert-anchor-not-bare-token`, and the way it
+recurs is that the person adding the prose and the person relying on the anchor
+are the same person, one commit apart.
+
 ## Session Errors
 
 1. **Commit signing hang misdiagnosed as memory pressure.** A prior session
@@ -250,11 +280,38 @@ assertion helpers going silent.
     **Prevention:** the orchestrator should write `session-state.md` from the
     returned Session Summary rather than assuming the subagent did.
 
+17. **A new `cloudflare_*` class shipped un-adjudicated, and only the deferred
+    shard caught it.** `cloudflare_pages_project` was added without a row in
+    ADR-136's adjudication table. It went unseen because `tests/scripts` was the
+    shard this branch had skipped while `lease-protects-active.test.sh` was unsafe
+    to run against a low-`/tmp` box; the omission surfaced only once that fix
+    reached main and the shard ran again.
+    **Prevention:** a deferred shard is unrun coverage, not absent coverage. When
+    a diff adds a resource TYPE (not just a resource), name the shard that
+    adjudicates types and run that suite directly rather than waiting for the
+    battery — `test-preapply-entrypoint-gate.sh` takes ~2s.
+
+18. **I defeated a gate with the prose written to satisfy it**, then nearly
+    shipped the vacuity — see §7. The fix was green and the green meant nothing.
+    **Prevention:** after editing any file a coupling test reads, mutate the
+    thing the test claims to protect and confirm RED. A passing test on a file
+    you just changed is a hypothesis, not evidence.
+
+19. **`git stash list` inside a compound Bash call — a recurrence.** Already
+    recorded earlier in this same session, and repeated while checking a linter
+    baseline. The guardrail denies the whole call, so the unrelated commands in
+    it were lost too.
+    **Prevention:** hook-denied verbs are denied at the CALL level, not the
+    command level. Never place one in a compound line — and treat "I already
+    made this mistake this session" as a reason to re-read the call before
+    sending, since the recurrence cost more than the original.
+
 ## Verified artifacts
 
 Guard 23/23 · mutation battery 16/16 · `terraform fmt`/`validate`/`test` (3 passed)
 · encryption-posture ledger (17 stores, 0 failing) · vacuity meta-guard 19/19 ·
-T15 no-human-steps · AC26 literal · AC8 per-path (all five deferred artifacts
+T15 no-human-steps · preapply-entrypoint gate 43/43 (P2 mutation-verified
+across 4 arms) · AC26 literal · AC8 per-path (all five deferred artifacts
 intact) · `ssl = "full"` retained.
 
 ## The thing worth remembering
