@@ -217,7 +217,11 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # makes the ledger SHRINK rather than the ratchet grow.
 #
 # Anchored with ^...$ per entry so a path cannot be promoted by prefix accident.
-PROMOTED_FILES='^(apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh)$'
+# `arm-heartbeats.test.sh` added by #7587 — a heartbeat-arming suite under a deferred directory.
+# Its floor (`ASSERT_FLOOR`, a literal bound adjacent to the test) is mutant-CONSTRUCTIBLE and
+# measured FIRES under neutered assertion machinery, so this is a promotion that buys real
+# mutation coverage rather than an exemption that moves a number.
+PROMOTED_FILES='^(apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh)$'
 
 COVERED="$SUITE_TMP/covered.txt"
 DEFERRED="$SUITE_TMP/deferred.txt"
