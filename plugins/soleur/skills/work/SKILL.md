@@ -290,14 +290,21 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    ---
 
    **Standing constraint for EVERY tier — a spawned agent never runs the gate.**
-   Spawned agents run only the suites targeting the files they were given, and are spawned with
-   `SOLEUR_SUBAGENT=1` in their environment. They must not run [scripts/test-all.sh](../../../../scripts/test-all.sh),
+   Spawned agents run only the suites targeting the files they were given. **`SOLEUR_SUBAGENT=1` is
+   a convention a lead MAY export before spawning — the harness does not set it** (measured
+   2026-08-19 from inside two independent spawned agents: UNSET in both, and no repo-controlled
+   spawn path exists to set it). They must not run [scripts/test-all.sh](../../../../scripts/test-all.sh),
    `apps/web-platform/infra/run-registered-suites.sh`, or any other full-gate runner: concurrent
    full-gate runs inflate each other's timings and corrupt the measurement. Measured 2026-08-11 —
    three agents running lints and suites at once turned an 860 s battery into 1675 s, and that
    1.9x figure was then nearly used as the suite's cost budget. The lead runs the gate ONCE,
-   after collecting fan-out work. [scripts/test-all.sh](../../../../scripts/test-all.sh) enforces this mechanically (it exits 4
-   when `SOLEUR_SUBAGENT=1`), because a paragraph in a prompt is agent discretion and this is not.
+   after collecting fan-out work. Two mechanical backstops exist, and neither depends on an agent
+   volunteering anything: [scripts/test-all.sh](../../../../scripts/test-all.sh) exits 4 when it MEASURES a sibling full-gate
+   run already in flight (#7553), and `tc_acquire`'s advisory lock (ADR-133) serialises whatever
+   gets past that. The `SOLEUR_SUBAGENT=1` exit-4 path is real and reachable by anyone who exports
+   it deliberately, but it is a convention rather than an enforced one — so the paragraph above IS
+   agent discretion for the non-concurrent case, and is written as an instruction, not a claim
+   about the harness.
 
    **Step 1: Analyze independence**
 
@@ -784,6 +791,19 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 - **population growth** — ADD a member to the guarded set, do not only edit one.
 - **demotion** — leave the asserted bytes byte-identical and reword the prose above them to make the prescription conditional. Retained deliberately: `ship/SKILL.md` and `plugins/soleur/test/fullsuite-merge-gate.test.ts` both actively guard this mutation, so dropping it from the list would leave the repo testing for an axis it no longer tells authors to mutate.
 - **the floor** — revert the PR's own thesis and confirm the suite reddens.
+- **the guard's OWN operand** — the axis every other row misses, because they all mutate the
+  SUT and confirm the guard REDS. This one mutates the GUARD and confirms it does not silently
+  WIDEN. Degenerate an operand the predicate interpolates — empty a variable inside a glob, a
+  regex, or a path prefix — and check whether the guard now accepts everything. Measured: a
+  containment check written as `case "$top" in "$ROOT"|"$ROOT"/*) return 0 ;; esac` degrades to
+  `/*` when `$ROOT` is empty, so it returned 0 for a LIVE repository — and the suite carrying it
+  still reported `40 passed, 0 failed`, because **a guard that accepts everything is
+  indistinguishable from a healthy run**. Ask of every guard "how does this fail OPEN", then
+  assert the POST-CONDITION its predicate depends on (`case "$ROOT" in /*) : ;; *) exit 2 ;; esac`)
+  rather than trusting the producer, and `readonly` it so a later assignment cannot reintroduce
+  the degenerate case. **Why:** #7553 — it passed review and shipped in three commits; caught by
+  a sibling session reviewing its own copy. See
+  `knowledge-base/project/learnings/2026-08-20-every-guard-was-present-read-as-protective-and-did-not-hold.md`.
 - **the verifier's own anchor SET** — the axis that survives hardening the PREDICATE. When you build a hand-anchored completeness check (a rebase-composition checklist, a "did the sweep miss anything" list), tightening each anchor is orthogonal to whether the anchors COVER the subject: a checklist upgraded presence → exact-occurrence-count, and positive-controlled against the source tree, still reported 16/16 on a tree where an entire 13-line block had been deleted, because none of its 16 anchors sat in that region. Positive-controlling proves the anchors are well-formed; both trees have the unsampled region intact, so it can never detect one. Where the population is enumerable, enumerate it instead of anchoring — for a rebase over a sibling that touched the same code, `git show <sibling> -- <file> | grep '^+'` then assert each added line is present at HEAD or classify it as deliberately superseded. **Why:** #7291/PR #7510 — 37 lines absent, 13 of them a floor itemisation whose loss left the raise chain unreconstructable, past a green suite and a green checklist. See `knowledge-base/project/learnings/2026-08-19-i-hardened-my-verifier-twice-and-its-sample-was-still-a-sample.md`.
 
 State plainly which axes your battery did NOT edit. Two mechanical companions: run the UNMUTATED control first (a red baseline voids every row), and assert each mutation LANDED against a pristine backup, because a mutation that does not land reports the BASELINE and that is indistinguishable from a pass. **Why:** PR #7470 (issue #7352) — a battery reported 6/6 RED and "no surviving mutants"; it had two axes, and the retraction ran a 13-mutation Round 2 across axes it never touched. Recorded in `knowledge-base/project/learnings/2026-08-12-my-ladder-rung-ended-in-a-label-so-it-fell-through-to-the-unsafe-branch.md`.
@@ -864,6 +884,8 @@ State plainly which axes your battery did NOT edit. Two mechanical companions: r
    this gate — by then the panel is already reviewing a suite CI will reject.
 
    **The lead runs this gate, not a delegate.** [scripts/test-all.sh](../../../../scripts/test-all.sh) exits `4` — REFUSED, nothing ran — when `SOLEUR_SUBAGENT=1` is set without `SOLEUR_ALLOW_FULL_GATE=1`. A ~90 s shard is far likelier to be delegated than a 45-minute battery was, so treat `rc=4` as its own outcome: it is not a reap and it is not a pass.
+
+   **The lead runs this gate, not a delegate.** [scripts/test-all.sh](../../../../scripts/test-all.sh) exits `4` — REFUSED, nothing ran — for either of two reasons, both overridden by `SOLEUR_ALLOW_FULL_GATE=1`: `SOLEUR_SUBAGENT=1` is set (a DECLARED spawned agent — a convention, so this only fires if someone exported it), or a sibling full-gate run is already in flight (a MEASURED condition, #7553 — this is the one that fires in practice). A ~90 s shard is far likelier to be delegated than a 45-minute battery was, so treat `rc=4` as its own outcome: it is not a reap and it is not a pass. The message names which of the two tripped.
 
    **Why a shard and not a hand-derived command set.** A `vitest --changed` + `git grep` derivation was specified and cut. A shard keeps the contention preamble (`SIBLING_RUN_DETECTED` / `SIBLING_SUITE_DETECTED` / `LOW_TMP_HEADROOM`), the `EXIT CONTRACT`, the terminal `=== N/M suites passed ===` marker, the rc file, and the `rc=3` UNRESOLVED class — an ad-hoc command set has none of them, and `vitest run --changed` with zero matches exits 1, which is indistinguishable from a real red by exit code alone. A shard also has **no empty-set state**: it always runs a defined suite list, so the "empty derived set" fail-open cannot arise. Losing the banner would have moved the earliest sibling-collision signal past the 8-10-agent review fan-out — the cost #7247 paid, where a duplicate implementation surfaced only because a banner named the sibling worktree after a full RED→GREEN cycle had been built and had to be reverted.
 
