@@ -733,8 +733,10 @@ jobs:
 
           if [[ -z "${BETTERSTACK_QUERY_HOST:-}" || -z "${BETTERSTACK_QUERY_USERNAME:-}" || -z "${BETTERSTACK_QUERY_PASSWORD:-}" ]]; then
             echo "::warning::#7674 dedicated-host arm: BETTERSTACK_QUERY_* unset — reporting probe-unavailable rather than a false healthy."
-            echo "verdict=probe-unavailable" >> "$GITHUB_OUTPUT"
-            echo "detail=the watchdog's own BETTERSTACK_QUERY_* secrets are unset; the dedicated host was not read at all" >> "$GITHUB_OUTPUT"
+            {
+              echo "verdict=probe-unavailable"
+              echo "detail=the watchdog's own BETTERSTACK_QUERY_* secrets are unset; the dedicated host was not read at all"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -778,9 +780,11 @@ jobs:
             *)
               DETAIL="no SOLEUR_INNGEST_SERVER_PROBE row from ${DEDICATED_HOST_NAME} within ${PROBE_WINDOW}, or the read failed (rows='${N}'). Absence is reported as unavailable, never as healthy." ;;
           esac
-          echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
-          echo "detail=$DETAIL" >> "$GITHUB_OUTPUT"
-          echo "flag=${FLAG:-unknown}" >> "$GITHUB_OUTPUT"
+          {
+            echo "verdict=$VERDICT"
+            echo "detail=$DETAIL"
+            echo "flag=${FLAG:-unknown}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: File or comment dedicated-host issue (#7674)
         if: always() && steps.dedicated.outputs.verdict != '' && steps.dedicated.outputs.verdict != 'healthy'
