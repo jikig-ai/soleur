@@ -946,13 +946,18 @@ standalone `jq --arg path … | contains($path)` per planned path). No open scop
 3. Gate ordering: G3.6 line < G3.7 line < first prod write line.
 4. Single-chokepoint and no-`exit 1`-in-arm assertions.
 5. The `arm)` body contains no literal off-host read path.
-6. Enum↔job binding across all `apply_target` options, with the orphan-option mutation.
-7. Recut destroy-guard against saved plan JSON fixtures: compliant, server-touched,
-   second-unrelated-destroy, zero-resource, and empty-count.
-8. Environment reviewer-set non-emptiness, block-scoped and mutation-tested.
-9. Successor probe: git-index mode, banned-form absence, `set -uo pipefail` without `-e`, and a
+6. Successor probe: git-index mode, banned-form absence, `set -uo pipefail` without `-e`, and a
    positive assertion on `server_active=active` **and** `http_code=200`.
-10. `cloud-init-inngest.yml` untouched, asserted against `origin/main`.
+7. The watchdog's dedicated-host arm reaches a no-restart verdict — asserted by showing the arm's
+   verdict values are members of the no-restart family and that no restart dispatch is reachable
+   from them.
+8. `cloud-init-inngest.yml` untouched, asserted against `origin/main`.
+
+**Deferred with the recut build** (recorded so the follow-up issue inherits them): enum↔job binding
+across all `apply_target` options with the orphan-option mutation; the destroy-guard against saved
+plan JSON fixtures (compliant, server-touched, second-unrelated-destroy, zero-resource, empty-count);
+environment reviewer-set non-emptiness, block-scoped and mutation-tested; and the pre-flight
+"host is dark" refusal across its four verdict rows.
 
 ## Risks & Sharp Edges
 
