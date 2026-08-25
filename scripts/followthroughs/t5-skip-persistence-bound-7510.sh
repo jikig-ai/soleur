@@ -12,7 +12,15 @@
 # Exit semantics (per sweep-followthroughs.sh contract):
 #   0 = PASS       (no skip observed in the sampled window; the residual has not materialised)
 #   1 = FAIL       (>= 1 skip observed; the deferred pre-bake / S1 extension is now owed)
-#   * = TRANSIENT  (gh unreachable, auth failure, no runs to sample)
+#   2 = TRANSIENT  (gh unreachable, auth failure, no runs to sample)
+#
+# There is no `*` row. Every exit this script performs is one of the three above, so any
+# OTHER code means the script did not run to a verdict (127 missing, 126 not executable,
+# 2-from-bash on a syntax error). The standing monitor treats that as its own RED rather
+# than folding it into TRANSIENT -- see scheduled-rehearsal-skip-monitor.yml. Note that
+# sweep-followthroughs.sh maps any other exit to TRANSIENT by ITS documented contract; that
+# is safe there because leaving an issue open is conservative, whereas in the monitor
+# TRANSIENT means green.
 #
 # Required env: GH_TOKEN  (declared via the directive's secrets= clause; the sweeper runs under
 #                          `env -i` and strips everything not declared)

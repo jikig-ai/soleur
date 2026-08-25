@@ -94,10 +94,25 @@ jobs:
           # an UNSET output is null and `null == '0'` is TRUE -- a step gated on
           # a numeric literal alone fires on a producer that wrote nothing at
           # all, which is exactly what a crashed step looks like.
+          # THE PROBE'S CONTRACT IS 0/1/2 AND NOTHING ELSE. `*) transient` mapped every
+          # OTHER rc -- 127 from a renamed or missing script, 2-from-bash for a syntax error,
+          # 126 for a non-executable path -- onto the one verdict the report step treats as
+          # GREEN. The consecutive-transient escalation cannot rescue that: its counter is
+          # incremented inside `_transient()` in the probe itself, which by definition never
+          # ran in any of those cases, so the streak stays pinned at 0 and a permanently dead
+          # probe reports green every morning forever. Same shape as the octal fail-open this
+          # PR fixes one level down -- the guard that exists to catch a dead instrument is
+          # bypassed precisely when the instrument dies before reaching it.
+          #
+          # This DELIBERATELY diverges from sweep-followthroughs.sh, whose documented contract
+          # is "comment TRANSIENT and leave open on any other exit". That is safe THERE because
+          # leaving an issue open is the conservative direction; here `transient` means green,
+          # so the identical rc carries the opposite safety semantics.
           case "$rc" in
             0) verdict=pass ;;
             1) verdict=fail ;;
-            *) verdict=transient ;;
+            2) verdict=transient ;;
+            *) verdict=broken ;;
           esac
           {
             echo "rc=$rc"
@@ -146,37 +161,61 @@ jobs:
         # scripts/alarm-issue-filing-guard.test.sh caught it here.
         # `!cancelled()` rather than `always()`: this step mutates state (it files or
         # comments on an issue), and `always()` is true on cancellation too.
-        if: ${{ !cancelled() && steps.probe.outputs.verdict == 'fail' }}
+        # Fires for `broken` as well as `fail`. A scheduled run has no watcher, so the
+        # issue -- not the red run -- is the artifact that reaches a human. A dead probe
+        # that only reddened a nightly cron would be silent in practice.
+        if: ${{ !cancelled() && (steps.probe.outputs.verdict == 'fail' || steps.probe.outputs.verdict == 'broken') }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SUMMARY: ${{ steps.probe.outputs.summary }}
+          VERDICT: ${{ steps.probe.outputs.verdict }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
-          title="monitor: git-data rehearsal suite is skipping arms across runs"
-          # --state all, and a gh FAILURE is fatal rather than falling through to create.
-          # With --state open, an alert the operator had already closed was invisible, so a
-          # still-persisting FAIL filed a brand-new issue every 06:00 UTC; and
-          # `|| existing=""` turned any search error into "none found" -> duplicate. Both
-          # directions produce operator-facing issue spam.
+          # The title names the condition actually OBSERVED. These are different failures and
+          # an operator triages from the title: `fail` means the arms really are skipping;
+          # `broken` means the instrument never reached a verdict, which is not evidence
+          # about the arms at all.
+          case "$VERDICT" in
+            broken) title="monitor: the rehearsal skip-persistence probe is not running to a verdict" ;;
+            *)      title="monitor: git-data rehearsal suite is skipping arms across runs" ;;
+          esac
+          # DEDUPE AGAINST OPEN ISSUES ONLY, and this comment now describes what the code
+          # does. It previously passed `--state all` while the jq below filtered to OPEN, so
+          # the widening was INERT -- behaviourally identical to `--state open`, but with the
+          # candidate pool grown to the repo's entire closed history, which only made
+          # truncation likelier. The claim it carried ("an alert the operator had already
+          # closed was invisible, so a still-persisting FAIL filed a brand-new issue every
+          # 06:00 UTC") described a fix that was never implemented.
+          #
+          # OPEN-only is also the RIGHT behaviour, not merely the current one: deduping
+          # against closed issues would let one closed alert silence this monitor
+          # permanently, a strictly worse fail-open than re-filing. The accepted cost is that
+          # a closed-but-still-failing condition files a fresh issue.
+          #
+          # --limit is load-bearing: `gh issue list` silently caps at 30, and a truncated page
+          # that drops the one OPEN alert reads as "none found" -> a duplicate every morning.
+          # The phrase is QUOTED: unquoted, the leading `monitor:` token can be read as a
+          # search QUALIFIER and the remaining words AND-match loosely, so the probe degrades
+          # toward "none found" -- the same defect one layer up. Same escaping ship's own
+          # Signal 3 uses, for the same reason.
+          # A gh FAILURE stays fatal rather than falling through to create: `|| existing=""`
+          # turned any search error into "none found" -> duplicate.
           ls_rc=0
-          # -L is load-bearing, not decoration. `gh issue list` silently caps at 30, and the
-          # --state all above (correct on its own terms) widens the candidate pool to this
-          # repo's ENTIRE closed history -- so the truncation gets strictly more likely as the
-          # repo ages. A truncated page that drops the one OPEN alert reads as "none found",
-          # and this job then files a duplicate every 06:00 UTC. A dedup probe that degrades
-          # toward "nothing exists" is a fail-open gate, which is the defect class this PR
-          # exists to close.
           existing=$(gh issue list --repo "${{ github.repository }}" \
-            --state all --search "$title in:title" --limit 200 --json number,state \
-            --jq '[.[] | select(.state == "OPEN")][0].number // empty') || ls_rc=$?
+            --state open --search "\"$title\" in:title" --limit 200 --json number,state \
+            --jq '.[0].number // empty') || ls_rc=$?
           if [ "$ls_rc" -ne 0 ]; then
             echo "::error::gh issue list failed (exit $ls_rc); refusing to file a possibly-duplicate alert."
             exit 1
           fi
           body_file="${RUNNER_TEMP}/body.md"
           {
-            printf '%s\n\n' "The rehearsal skip-persistence probe returned FAIL."
+            if [ "$VERDICT" = "broken" ]; then
+              printf '%s\n\n' "The rehearsal skip-persistence probe exited OUTSIDE its declared 0/1/2 contract -- it did not run to a verdict. This is a BROKEN INSTRUMENT, not evidence that the arms are healthy."
+            else
+              printf '%s\n\n' "The rehearsal skip-persistence probe returned FAIL."
+            fi
             printf 'Run: %s\n\n' "$RUN_URL"
             printf '```\n%s\n```\n\n' "$SUMMARY"
             printf '%s\n' "ADR-188 accepts that nothing bounds these arms' skips ACROSS runs; this monitor is that bound. A sustained skip means the deferred pre-baked image (#7535) is owed."
@@ -213,5 +252,6 @@ jobs:
           case "$VERDICT" in
             pass|transient) echo "probe verdict: $VERDICT (rc=$RC)" ;;
             fail)           echo "probe verdict: fail (rc=$RC)"; exit 1 ;;
+            broken)         echo "::error::the probe exited $RC, outside its declared 0/1/2 contract -- it did not run to a verdict. The consecutive-transient escalation cannot catch this, because that counter lives inside the probe's own _transient(), which never ran. A broken instrument is not a quiet window."; exit 1 ;;
             *)              echo "::error::the probe produced no verdict ('$VERDICT', rc='$RC'). A monitor that did not run is not a clean window."; exit 1 ;;
           esac

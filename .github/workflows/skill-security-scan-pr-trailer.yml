@@ -93,7 +93,7 @@ jobs:
           # fail-closed branch this PR adds lives INSIDE a step gated on that flag, so the
           # bypass sat one step upstream of all of it.
           rc=0
-          raw=$(git diff --name-only --diff-filter=AMR "$BASE_SHA"..."$HEAD_SHA" 2>"${RUNNER_TEMP:-/tmp}/diff.err") || rc=$?
+          raw=$(git diff --name-only --diff-filter=AMRT "$BASE_SHA"..."$HEAD_SHA" 2>"${RUNNER_TEMP:-/tmp}/diff.err") || rc=$?
           if [ "$rc" -ne 0 ]; then
             echo "::error::skill-security-scan: git could not resolve the diff for base=$BASE_SHA head=$HEAD_SHA (git exited $rc). Refusing to report a clean scan from a diff that never resolved."
             cat "${RUNNER_TEMP:-/tmp}/diff.err" >&2 || true
