@@ -986,7 +986,7 @@ logs:
   retention: "GitHub default Actions log retention (90 days)."
 
 discoverability_test:
-  command: "bash -c 'git grep -q \"EU-US Data Privacy Framework\" -- docs/legal/privacy-policy.md docs/legal/gdpr-policy.md docs/legal/data-protection-disclosure.md && ! git grep -qiE \"no third-country transfer for archive contents at rest|does not introduce a third-country transfer|Intra-EU processing for archive contents at rest\" -- docs/legal plugins/soleur/docs/pages/legal && echo CORPUS-OK'"
+  command: "bash scripts/probe-legal-corpus-truth.sh"
   expected_output: "CORPUS-OK"
 ```
 
@@ -994,6 +994,27 @@ The probe's first token is `bash`, on preflight Check 10's `PROBE_VERB_ALLOWLIST
 `ssh`, needs no credentials, and runs entirely against the read-only repo. It asserts **both**
 halves of the property — the safeguard is present on all three documents, and the three superseded
 claims are absent from both surfaces — so it cannot be satisfied by deleting the corpus.
+
+> **Corrected 2026-08-25 (#7664), during preflight Check 10.** This field previously declared an
+> inline `bash -c '<grep> && ! <grep> && echo CORPUS-OK'`. It was wrong twice, and the paragraph
+> above vouched for the two properties it *did* satisfy while never testing the two that mattered:
+>
+> 1. **Structurally unrunnable by the gate it was written for.** Check 10 Step 10.5 rejects every
+>    shell-active token — `&&` included — before executing, so the declared probe could only ever
+>    have produced a FAIL, never a verification.
+> 2. **False against the corrected corpus.** The `-i` grep matched the *correction notes*, which
+>    quote the superseded wording verbatim (`... previously described the archive as EU-region with
+>    intra-EU processing for archive contents at rest`). That is the mention-vs-invocation trap: it
+>    reported the corpus as false precisely because the corpus had been correctly fixed *and
+>    documented*. `legal-doc-consistency.test.ts` escapes the same collision only because its
+>    literals are case-sensitive and the notes quote in lower case — an accident, not a design.
+>
+> The replacement is `scripts/probe-legal-corpus-truth.sh`, the remedy Check 10 itself prescribes.
+> It strips the `*(Corrected …)*` audit-trail spans and only then matches, case-insensitively —
+> strictly stronger than the guard, which would miss a lower-case re-assertion. Mutation-tested
+> across seven rows: a re-asserted claim on either surface reds, a deleted safeguard reds, a
+> lower-case re-assertion reds, a claim *quoted inside a correction note* stays green, and a
+> missing document exits 2 rather than passing silently.
 
 
 ## Encryption Posture
