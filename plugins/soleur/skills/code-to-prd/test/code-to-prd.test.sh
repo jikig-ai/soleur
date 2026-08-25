@@ -180,12 +180,15 @@ export default function HomePage() {
 }
 EOF
 # Initialize a tiny git repo so the walker sees the tampered file.
-(
-  cd "${TAMPERED}"
-  git init -q
-  git add -A
-  git -c user.email=t@t -c user.name=t commit -q -m fixture --no-verify >/dev/null 2>&1 || true
-)
+#
+# Every mutation names its repository with `-C`. This file runs `set -uo
+# pipefail` WITHOUT `-e`, so a bare `cd` into a fixture that `cp -a` failed to
+# create would not abort — and `git add -A` plus a commit would then run in the
+# inherited cwd, staging and committing the entire real repository. That is the
+# 2026-08-20 incident shape; see plugins/soleur/test/fixture-cd-containment.test.sh.
+git init -q "${TAMPERED}"
+git -C "${TAMPERED}" add -A
+git -C "${TAMPERED}" -c user.email=t@t -c user.name=t commit -q -m fixture --no-verify >/dev/null 2>&1 || true
 T10_OUT="${TMP_DIR}/t10-prd.md"
 t10_log="${TMP_DIR}/t10.log"
 bash "${CODE_TO_PRD}" "${TAMPERED}" "${T10_OUT}" >"${t10_log}" 2>&1
@@ -249,12 +252,12 @@ cp -a "${FIXTURE}" "${ac9_target}"
 ac9_sensitive="${TMP_DIR}/sensitive.txt"
 printf 'CANARY_VALUE_SHOULD_NOT_APPEAR_IN_PRD\n' >"${ac9_sensitive}"
 ln -s "${ac9_sensitive}" "${ac9_target}/leaked-link.txt"
-(
-  cd "${ac9_target}"
-  git init -q
-  git add -A
-  git -c user.email=t@t -c user.name=t commit -q -m sym --no-verify >/dev/null 2>&1 || true
-)
+# `-C` for the same reason as the tampered fixture above: an unguarded `cd`
+# into a directory `cp -a` may not have created would redirect `git add -A` at
+# the real repository.
+git init -q "${ac9_target}"
+git -C "${ac9_target}" add -A
+git -C "${ac9_target}" -c user.email=t@t -c user.name=t commit -q -m sym --no-verify >/dev/null 2>&1 || true
 ac9_out="${TMP_DIR}/ac9-prd.md"
 bash "${CODE_TO_PRD}" "${ac9_target}" "${ac9_out}" >"${TMP_DIR}/ac9.log" 2>&1
 assert_no_grep "AC9: symlink target content NOT in PRD" "CANARY_VALUE_SHOULD_NOT_APPEAR_IN_PRD" "${ac9_out}"
