@@ -52,6 +52,18 @@ fails=0
 pass() { passes=$((passes + 1)); printf '  ok   %s\n' "$1"; }
 fail() { fails=$((fails + 1)); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; }
 
+# The independent case counter (ADR-193 #2). Incremented at each CALL SITE, immediately before
+# the block that decides a verdict — never inside pass()/fail(). The floor previously read
+# `_ran=$((passes + fails))`, a total DERIVED from the verdicts: it moved WITH the verdict, so
+# stubbing fail() dropped the row and its count together and the floor was satisfied under the
+# exact fault it exists to catch. This counter does not move when a verdict helper is neutered,
+# which is what makes the conservation check below non-tautological. Never increment it inside
+# `$( )` — a subshell discards it and the code still reads as correct. The three CONDITIONAL
+# arms (the CI=true skip guard, the render branch, and arm 4's terraform-only probes)
+# increment INSIDE the branch that actually reaches a verdict, so a skipped arm costs a case
+# and trips the floor rather than silently satisfying conservation.
+CASES=0
+
 printf '\n=== git-data-render-strip-parity ===\n\n'
 
 # ── 1. The two hand-mirrored maps must carry a BYTE-IDENTICAL strip expression ─────────
@@ -87,6 +99,7 @@ budget_raw="$(extract_strip git_data_rationale_strip "$BUDGET")"
 # equal the moment one of them spelled a character literally.
 budget_strip="${budget_raw//\\\\/\\}"
 
+CASES=$((CASES + 1))
 if [[ -z "$tf_strip" ]]; then
   fail "modules/git-data-userdata/main.tf declares a strip expression" "no git_data_rationale_strip assignment found"
 elif [[ -z "$budget_raw" ]]; then
@@ -103,6 +116,7 @@ tf_tpl="$(extract_strip git_data_template_rationale_strip "$TF")"
 budget_tpl_raw="$(extract_strip git_data_template_rationale_strip "$BUDGET")"
 budget_tpl="${budget_tpl_raw//\\\\/\\}"
 
+CASES=$((CASES + 1))
 if [[ -z "$tf_tpl" ]]; then
   fail "modules/git-data-userdata/main.tf declares a TEMPLATE strip expression" "no git_data_template_rationale_strip assignment found — the cloud-init body would ship unstripped"
 elif [[ -z "$budget_tpl_raw" ]]; then
@@ -120,6 +134,7 @@ fi
 # preserves `#!` and NOTHING else, which deletes `#cloud-config`; the template form preserves
 # any `#`-directive. Collapsing them is the exact regression that boots a host dark, and it
 # is a one-line edit away at all times.
+CASES=$((CASES + 1))
 if [[ -z "$tf_tpl" || -z "$tf_strip" ]]; then
   fail "both strip expressions are present to compare" "payload='${tf_strip}' template='${tf_tpl}'"
 elif [[ "$tf_strip" == "$tf_tpl" ]]; then
@@ -150,6 +165,7 @@ fi
 # nothing else in CI can see it.
 _tf_code="$(grep -vE '^[[:space:]]*(#|//)' "$TF")"
 _open_ln="$(grep -nE '^[[:space:]]*rendered[[:space:]]*=[[:space:]]*replace\(templatefile\(' <<<"$_tf_code" | head -1 | cut -d: -f1)"
+CASES=$((CASES + 1))
 if [[ -z "$_open_ln" ]]; then
   fail "the render does NOT apply the template strip" \
     "main.tf declares git_data_template_rationale_strip but `rendered` never opens replace(templatefile( — the stored payload is unstripped and the host boots the un-stripped document"
@@ -182,6 +198,7 @@ fi
 # passes either way: wrong stripper, green suite.
 _b1_anchored=$(grep -cF "re.search(r'^\\s*git_data_rationale_strip" "$REHEARSAL" 2>/dev/null || true)
 _b1_bare=$(grep -cE "re\\.search\\(r'git_data_rationale_strip" "$REHEARSAL" 2>/dev/null || true)
+CASES=$((CASES + 1))
 if [[ ! -f "$REHEARSAL" ]]; then
   fail "the rehearsal suite is readable" "expected it at $REHEARSAL"
 elif [[ "$_b1_anchored" -ge 1 && "$_b1_bare" -eq 0 ]]; then
@@ -192,6 +209,7 @@ else
 fi
 
 # And the live form must actually be the anchored one in the rehearsal suite.
+CASES=$((CASES + 1))
 if [[ -f "$REHEARSAL" ]] && grep -qF "re.search(r'^\\s*git_data_rationale_strip" "$REHEARSAL"; then
   pass "git-data-runcmd-rehearsal.test.sh uses the anchored, line-start extractor"
 else
@@ -205,6 +223,7 @@ fi
 # LINE-BASED regex. A brace inside the strip expression would unbalance the first; wrapping a
 # map entry across two physical lines would defeat the second. Both are invisible until that
 # suite reds for a reason that looks unrelated.
+CASES=$((CASES + 1))
 if [[ "$tf_strip" == *'{'* || "$tf_strip" == *'}'* ]]; then
   fail "strip expression contains no brace" "found a brace in: ${tf_strip}"
 else
@@ -212,6 +231,7 @@ else
 fi
 
 n_entries=$(grep -cE '^[[:space:]]+git_data_[a-z_]+[[:space:]]*=[[:space:]]*replace\(file\(' "$TF")
+CASES=$((CASES + 1))
 if [[ "$n_entries" -eq 9 ]]; then
   pass "all 9 stripped map entries are each on ONE physical line"
 else
@@ -225,6 +245,7 @@ fi
 # git-data-gc.sh UNSTRIPPED (22,920 B vs 20,448 B) — CI measuring and rehearsing a different
 # payload than production ships, the exact failure this file's header claims to catch.
 n_budget=$(grep -cE '^[[:space:]]+git_data_[a-z_]+[[:space:]]*=[[:space:]]*replace\(file\(' "$BUDGET")
+CASES=$((CASES + 1))
 if [[ "$n_budget" -eq "$n_entries" ]]; then
   pass "git-data-userdata-budget.sh applies the strip to the same ${n_entries} payloads"
 else
@@ -253,6 +274,7 @@ _cont_hits="$(awk 'prev ~ /\\[ \t]*$/ && $0 ~ /^[ \t]*#/ {printf "%s:%d\n", FILE
   "$DIR"/git-data-remove.sh "$DIR"/git-data-gc.sh "$DIR"/git-data-pre-receive-placeholder.sh \
   "$DIR"/git-data-gc.service "$DIR"/git-data-gc-failure.service "$DIR"/git-data-gc.timer \
   "$DIR"/cloud-init-git-data.yml 2>/dev/null || true)"
+CASES=$((CASES + 1))
 if [[ -z "$_cont_hits" ]]; then
   pass "no comment sits directly after a line continuation in any injected payload"
 else
@@ -265,12 +287,14 @@ if ! command -v terraform >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&
   # NOT a silent skip: an unrenderable harness must be visible, not read as coverage.
   printf '  note terraform or python3 absent — render-dependent arms did not run\n'
   if [[ "${CI:-}" == "true" ]]; then
+    CASES=$((CASES + 1))
     fail "render-dependent arms cannot be skipped under CI=true" "install terraform + python3 on this runner"
   fi
 else
   RENDER="$(mktemp -t gdstrip.XXXXXXXX.yml)" || { echo "mktemp failed" >&2; exit 2; }
   trap 'rm -f "$RENDER"' EXIT
   if ! bash "$BUDGET" "$RENDER" >/dev/null 2>&1; then
+    CASES=$((CASES + 1))
     fail "render succeeded" "git-data-userdata-budget.sh returned non-zero (over cap, or the render itself failed)"
   else
     shebang_out="$(python3 - "$RENDER" <<'PY'
@@ -303,6 +327,7 @@ PY
 )"
     n_checked="$(sed -n 's/^CHECKED=//p' <<<"$shebang_out")"
     n_bad="$(grep -c '^BAD ' <<<"$shebang_out" || true)"
+    CASES=$((CASES + 1))
     if [[ "$n_bad" -eq 0 ]]; then
       pass "all ${n_checked} rendered shell payloads keep their shebang and pass bash -n"
     else
@@ -326,21 +351,25 @@ if command -v terraform >/dev/null 2>&1; then
     printf '}\n'
   } > "$scratch/main.tf"
   got="$(printf 'local.out\n' | terraform -chdir="$scratch" console 2>/dev/null)"
+  CASES=$((CASES + 1))
   if [[ "$got" == *'#!/usr/bin/env bash'* ]]; then
     pass "strip preserves the shebang"
   else
     fail "strip ate the shebang" "got: ${got}"
   fi
+  CASES=$((CASES + 1))
   if [[ "$got" != *'a rationale line'* ]]; then
     pass "strip removes a whole-line rationale comment (it is not a no-op)"
   else
     fail "strip is a NO-OP — it left a whole-line comment in place" "got: ${got}"
   fi
+  CASES=$((CASES + 1))
   if [[ "$got" == *'${PATH#/}'* ]]; then
     pass "strip leaves mid-line # alone (parameter expansion survives)"
   else
     fail "strip damaged a \${var#...} parameter expansion" "got: ${got}"
   fi
+  CASES=$((CASES + 1))
   if [[ "$got" == *'cmd  # trailing'* ]]; then
     pass "strip leaves a trailing comment alone (anchored at line start only)"
   else
@@ -350,14 +379,45 @@ if command -v terraform >/dev/null 2>&1; then
 fi
 rm -f "$probe"
 
-# ── Minimum-cardinality floor ──────────────────────────────────────────────────────────
-_ran=$((passes + fails))
-if [[ "$_ran" -lt 15 ]]; then
-  fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 15.\n' "$_ran"
-else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 15)\n' "$_ran"
+# ── Accounting conservation (ADR-193 #3) ───────────────────────────────────────────────
+#
+# Ordered BEFORE the floor per ADR-193 #4: a neutered fail() deflates the recorded verdicts, so
+# the floor would ALSO trip and would report "arms were deleted" — the misleading diagnosis.
+# This says "a verdict was discarded" instead. Reported with printf >&2 + exit 1 DIRECTLY,
+# never through fail(): a check that reports by calling the verdict helper increments the very
+# counter the exit status reads, so neutering fail() silences the rows AND the check meant to
+# notice the silence. The literal `[FATAL] accounting` is load-bearing — guard-vacuity-floor's
+# ARM 10 builds its conservation population by grepping that exact string (#7588).
+if [[ $((passes + fails)) -ne "$CASES" ]]; then
+  printf '\n[FATAL] accounting: passes+fails (%d) != CASES (%d).\n' \
+    "$((passes + fails))" "$CASES" >&2
+  if [[ $((passes + fails)) -lt "$CASES" ]]; then
+    printf '  An assertion was counted but its verdict was not recorded — that is what a neutered pass()/fail() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `CASES=$((CASES + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  printf '\n=== git-data-render-strip-parity: %d passed, %d failed ===\n\n' "$passes" "$fails"
+  exit 1
 fi
+
+# ── Anti-vacuity floor (ADR-193 #1) ────────────────────────────────────────────────────
+#
+# Reads the INDEPENDENT case counter, and reports with printf >&2 + exit 1 DIRECTLY. It
+# previously read `_ran=$((passes + fails))` and reported by doing `fails=$((fails + 1))` and
+# falling through — so with the assertion machinery neutered the floor "fired" into a counter
+# nobody read before exit, the suite printed a clean total and exited 0. A floor enforced
+# through the suspect cannot witness the suspect.
+#
+# Zero headroom against the current count (10 unconditional arms + the render arm + arm 4's
+# four probes = 15), so any deletion is loud — and so is a silently skipped conditional arm,
+# because a skipped arm never increments. Ratchet when adding arms.
+if [[ "$CASES" -lt 15 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= 15.\n' "$CASES" >&2
+  printf '  Arms were deleted or skipped; a green run here would be a coverage loss.\n' >&2
+  printf '\n=== git-data-render-strip-parity: %d passed, %d failed ===\n\n' "$passes" "$fails"
+  exit 1
+fi
+printf '  ok   anti-vacuity floor: %s assertions ran (floor 15)\n' "$CASES"
 
 printf '\n=== git-data-render-strip-parity: %d passed, %d failed ===\n\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]

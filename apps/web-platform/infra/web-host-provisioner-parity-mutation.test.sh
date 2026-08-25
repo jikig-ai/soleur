@@ -167,6 +167,14 @@ fi
 
 pass=0
 fail=0
+# The INDEPENDENT case counter (ADR-193 #2). `ok`/`no` are the VERDICT helpers and must never
+# touch it: a counter that moves inside them moves WITH the verdict, so stubbing one drops the
+# row and its count together and the conservation identity below holds under the exact fault it
+# exists to catch. It is incremented once per assertion in the ASSERTION helpers (expect_red,
+# expect_green, expect_probe_red, expect_probe_green) and at the two inline call sites that
+# reach `ok`/`no` without one (the baseline and M33b). Never inside `$( )` -- a subshell
+# discards it.
+cases=0
 ok() { pass=$((pass + 1)); echo "[ok] $1"; }
 no() { fail=$((fail + 1)); echo "[FAIL] $1" >&2; }
 
@@ -216,6 +224,7 @@ mutations_run=0
 # expect_red <label> <file> <expected-anchor> <mutator>
 expect_red() {
   local label="$1" file="$2" anchor="$3" script="$4"
+  cases=$((cases + 1))
   restore
   if ! apply_mutation "$file" "$script"; then
     no "$label: mutator errored (anchor drifted?) -- the mutation never landed"; restore; return
@@ -240,6 +249,7 @@ expect_red() {
 # expect_green <label> <file> <mutator> -- direction control
 expect_green() {
   local label="$1" file="$2" script="$3"
+  cases=$((cases + 1))
   restore
   if ! apply_mutation "$file" "$script"; then no "$label: mutator errored"; restore; return; fi
   if cmp -s "$SANDBOX/$file" "$PRISTINE/$file"; then
@@ -252,6 +262,7 @@ expect_green() {
 
 # ── Baseline ─────────────────────────────────────────────────────────────────────────
 restore
+cases=$((cases + 1))
 if run_guard; then
   ok "baseline: guard is GREEN against the unmutated tree"
 else
@@ -736,6 +747,7 @@ s = s.replace(old, "host_script_files_v2 = [", 1)
 # sentence the guard wrote for exactly this case. So the discriminating assertion is the ABSENCE
 # of a traceback alongside the presence of the summary.
 restore
+cases=$((cases + 1))
 if apply_mutation server.tf '
 old = "host_script_files = ["
 assert old in s
@@ -794,6 +806,7 @@ probe_reds=0
 # THEN check what the probe did or did not do to it (P4).
 expect_probe_red() {
   local label="$1" anchor="$2" probe="$3" mfile="${4:-}" mscript="${5:-}"
+  cases=$((cases + 1))
   restore
   if [[ -n "$mfile" ]]; then
     if ! apply_mutation "$mfile" "$mscript"; then
@@ -817,6 +830,7 @@ expect_probe_red() {
 
 expect_probe_green() {
   local label="$1" probe="$2"
+  cases=$((cases + 1))
   restore
   probes_run=$((probes_run + 1))
   if SOLEUR_INFRA_DIR="$SANDBOX" SOLEUR_PARITY_ALLOWLIST_PROBE="$probe" bash "$GUARD" >"$OUT" 2>&1; then
@@ -1008,12 +1022,41 @@ j = s.index(anchor, i) + len(anchor)
 s = s[:j] + "\n      \"sudo useradd -l -d /usr/local/bin/phantom-useradd.sh svcuser\"," + s[j:]
 '
 
-# ── Non-vacuity floor on the battery itself ─────────────────────────────────────────
+# ── Accounting conservation (ADR-193 #3) ────────────────────────────────────────────────
+# Ordered BEFORE the three floors (ADR-193 #4). A neutered `ok` deflates `pass` while `cases`
+# keeps moving, so the floors would ALSO trip and would report "anchors drifted" -- a diagnosis
+# that sends the reader to the guard's failure text when the fault is in this battery's own
+# accounting. This says "a verdict was discarded" instead.
+#
+# Reported with printf >&2 + exit 1 DIRECTLY, never through `ok`/`no`. A check that reports by
+# calling the verdict helper increments the very counter the trailer's exit status reads, so
+# neutering the helper silences the assertion rows AND the check meant to notice the silence:
+# the battery prints a clean total and exits 0. The literal `[FATAL] accounting` is load-bearing
+# -- guard-vacuity-floor's ARM 10 builds its conservation population by grepping that exact
+# string, so different wording is invisible to it (#7588).
+if [[ $((pass + fail)) -ne "$cases" ]]; then
+  printf '\n[FATAL] accounting: pass+fail (%d) != cases (%d).\n' "$((pass + fail))" "$cases" >&2
+  if [[ $((pass + fail)) -lt "$cases" ]]; then
+    printf '  An assertion was counted but its verdict was not recorded -- that is what a neutered ok()/no() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `cases=$((cases + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  echo "=== provisioner-parity mutation: $pass passed, $fail failed, $cases cases ===" >&2
+  exit 1
+fi
+
+# ── Non-vacuity floors on the battery itself (ADR-193 #1) ───────────────────────────────
+# All three report with printf >&2 + exit 1 DIRECTLY. They previously called `ok`/`no`, which is
+# the ADR-193 defect: a floor whose failure arm routes through the suite's own verdict helper
+# cannot witness that helper being neutered -- the assertion rows go quiet AND so does the floor
+# meant to notice the quiet. Each carries a DISTINCT message so a failure says WHICH tripped.
 FLOOR=44
-if [[ "$mutations_run" -ge "$FLOOR" ]]; then
-  ok "battery ran $mutations_run landed, attributed mutations (floor $FLOOR)"
-else
-  no "battery ran only $mutations_run landed mutations (floor $FLOOR) -- anchors drifted; the untested invariants are unproven"
+if (( mutations_run < FLOOR )); then
+  printf '\n[FATAL] anti-vacuity floor (mutations): only %d landed, attributed mutation(s) ran, expected >= %d.\n' \
+    "$mutations_run" "$FLOOR" >&2
+  printf '  Anchors drifted or arms were deleted; the untested invariants are unproven.\n' >&2
+  echo "=== provisioner-parity mutation: $pass passed, $fail failed, $cases cases ===" >&2
+  exit 1
 fi
 
 # The probes are counted separately: they never touch a file, so `mutations_run`'s
@@ -1025,17 +1068,20 @@ fi
 # a floor on the thing it names.
 PROBE_FLOOR=7
 PROBE_RED_FLOOR=6
-if [[ "$probes_run" -ge "$PROBE_FLOOR" ]]; then
-  ok "battery ran $probes_run ALLOWLIST hygiene probes (floor $PROBE_FLOOR)"
-else
-  no "battery ran only $probes_run ALLOWLIST hygiene probes (floor $PROBE_FLOOR) -- §5 is unproven"
+if (( probes_run < PROBE_FLOOR )); then
+  printf '\n[FATAL] anti-vacuity floor (probes): only %d ALLOWLIST hygiene probe(s) ran, expected >= %d.\n' \
+    "$probes_run" "$PROBE_FLOOR" >&2
+  printf '  §5 is unproven: the probe arms were deleted or never reached.\n' >&2
+  echo "=== provisioner-parity mutation: $pass passed, $fail failed, $cases cases ===" >&2
+  exit 1
 fi
-if [[ "$probe_reds" -ge "$PROBE_RED_FLOOR" ]]; then
-  ok "battery ran $probe_reds RED-arm probes (floor $PROBE_RED_FLOOR)"
-else
-  no "battery ran only $probe_reds RED-arm probes (floor $PROBE_RED_FLOOR) -- the green controls
-    cannot stand in for them; §5's failure arms are unproven"
+if (( probe_reds < PROBE_RED_FLOOR )); then
+  printf '\n[FATAL] anti-vacuity floor (probe RED arms): only %d RED-arm probe(s) ran, expected >= %d.\n' \
+    "$probe_reds" "$PROBE_RED_FLOOR" >&2
+  printf '  The GREEN controls cannot stand in for them; §5 failure arms are unproven.\n' >&2
+  echo "=== provisioner-parity mutation: $pass passed, $fail failed, $cases cases ===" >&2
+  exit 1
 fi
 
-echo "=== provisioner-parity mutation: $pass passed, $fail failed ==="
+echo "=== provisioner-parity mutation: $pass passed, $fail failed ($cases cases) ==="
 [[ "$fail" -eq 0 ]]

@@ -90,18 +90,38 @@ apply_pipeline() {
 }
 
 # ---------- Test harness ----------
+# PASS / FAIL are the two VERDICT counters. FAILS is NOT a third counter: it is the
+# deferred failure-MESSAGE buffer, printed by the trailer so a failing row's detail lands
+# after the run rather than interleaved with the PASS stream. It moves in lockstep with
+# FAIL because both are written by fail() below and nowhere else, so the conservation
+# identity is over PASS + FAIL only — never over ${#FAILS[@]}.
 PASS=0
 FAIL=0
 FAILS=()
+
+# CASES is the INDEPENDENT case counter required by ADR-193 #2. It is incremented by the
+# ASSERTION helpers and at the inline CALL SITES, and by NEITHER verdict helper below. That
+# independence is the whole point: a counter moved inside pass()/fail() would move WITH the
+# verdict, so stubbing one would drop the row and its count together and `PASS+FAIL == CASES`
+# would still hold under the exact fault it exists to catch.
+CASES=0
+
+# The two TERMINAL verdict helpers. They touch ONLY the verdict counters.
+pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
+fail() { FAIL=$((FAIL + 1)); FAILS+=("$1"); }
 
 run_fixture() {
   local name="$1"
   local input_json="$2"
   shift 2
+  # Counted HERE, not inside pass()/fail(), and deliberately not inside the `$( )` on the
+  # next line — a command substitution runs in a subshell and the increment would be
+  # discarded while the code still reads as correct (ADR-193 #2). Every path below records
+  # exactly one verdict, so this call contributes exactly 1 to both sides of the identity.
+  CASES=$((CASES + 1))
   local output
   if ! output=$(apply_pipeline "$input_json"); then
-    FAIL=$((FAIL+1))
-    FAILS+=("$name: vector vrl pipeline exited non-zero")
+    fail "$name: vector vrl pipeline exited non-zero"
     return
   fi
 
@@ -110,8 +130,7 @@ run_fixture() {
   local assertion_ok=1
   for assertion in "$@"; do
     if ! echo "$output" | jq -e "$assertion" >/dev/null 2>&1; then
-      FAIL=$((FAIL+1))
-      FAILS+=("$name: assertion failed: $assertion")
+      fail "$name: assertion failed: $assertion"
       echo "  --- $name output:" >&2
       echo "  $output" >&2
       assertion_ok=0
@@ -119,8 +138,7 @@ run_fixture() {
     fi
   done
   if [[ "$assertion_ok" == 1 ]]; then
-    PASS=$((PASS+1))
-    echo "  PASS: $name"
+    pass "$name"
   fi
 }
 
@@ -260,10 +278,11 @@ echo "=== #4773 app-container source assertions ==="
 #     it to the sink). Asserted against vector.toml directly.
 assert_grep() {
   local desc="$1" pattern="$2"
+  CASES=$((CASES + 1))   # ADR-193 #2 — in the ASSERTION helper, never in pass()/fail().
   if grep -qE "$pattern" "$VECTOR_TOML"; then
-    PASS=$((PASS+1)); echo "  PASS: $desc"
+    pass "$desc"
   else
-    FAIL=$((FAIL+1)); FAILS+=("$desc: pattern not found in vector.toml: $pattern")
+    fail "$desc: pattern not found in vector.toml: $pattern"
   fi
 }
 assert_grep "app_container_journald source exists" '^\[sources\.app_container_journald\]'
@@ -303,24 +322,31 @@ extract_filter_condition() {
 # Prefix the FIRST top-level `if` with `.keep = ` so --print-object exposes the
 # boolean result (the preceding parse_json statement stays a standalone stmt).
 FILTER_PROG=$(extract_filter_condition | sed '0,/^if /s//.keep = if /')
+# Two-armed on purpose. This check used to record a verdict ONLY on failure, which made it
+# invisible to the conservation identity below (a case with no verdict, or a verdict with no
+# case, depending on where the increment sat). Every counted case records exactly one verdict.
+CASES=$((CASES + 1))
 if [[ -z "$FILTER_PROG" ]] || ! echo "$FILTER_PROG" | grep -q '\.keep = if '; then
-  FAIL=$((FAIL+1)); FAILS+=("app_container_warn_filter: condition extraction/rewrite failed")
+  fail "app_container_warn_filter: condition extraction/rewrite failed"
+else
+  pass "app_container_warn_filter condition extracted and rewritten for evaluation"
 fi
 
 run_filter_fixture() {
   local name="$1" input_json="$2" expected="$3"
   local tmp out
+  CASES=$((CASES + 1))   # ADR-193 #2 — in the ASSERTION helper, outside any `$( )`.
   tmp=$(mktemp)
   printf '%s\n' "$input_json" >"$tmp"
   if ! out=$("$VECTOR_BIN" vrl --input "$tmp" --print-object "$FILTER_PROG" 2>/tmp/vector-filter-err); then
     cat /tmp/vector-filter-err >&2
-    FAIL=$((FAIL+1)); FAILS+=("$name: vector vrl exited non-zero"); rm -f "$tmp"; return
+    fail "$name: vector vrl exited non-zero"; rm -f "$tmp"; return
   fi
   rm -f "$tmp"
   if echo "$out" | jq -e "(.keep == $expected)" >/dev/null 2>&1; then
-    PASS=$((PASS+1)); echo "  PASS: $name (keep=$expected)"
+    pass "$name (keep=$expected)"
   else
-    FAIL=$((FAIL+1)); FAILS+=("$name: expected keep=$expected, got: $out")
+    fail "$name: expected keep=$expected, got: $out"
   fi
 }
 run_filter_fixture "filter DROPS pino INFO (level 30 firehose)" \
@@ -368,10 +394,11 @@ HOST_SCRIPTS_BLOCK=$(awk '
 ' "$VECTOR_TOML")
 
 # AC1: the dedicated source exists and is a journald source.
+CASES=$((CASES + 1))   # ADR-193 #2 — inline CALL SITE increment, never inside pass()/fail().
 if [[ -n "$HOST_SCRIPTS_BLOCK" ]] && echo "$HOST_SCRIPTS_BLOCK" | grep -qE '^type = "journald"$'; then
-  PASS=$((PASS+1)); echo "  PASS: host_scripts_journald source exists (type=journald)"
+  pass "host_scripts_journald source exists (type=journald)"
 else
-  FAIL=$((FAIL+1)); FAILS+=("AC1: [sources.host_scripts_journald] with type=\"journald\" not found")
+  fail "AC1: [sources.host_scripts_journald] with type=\"journald\" not found"
 fi
 
 # AC2: the block has NO include_matches.PRIORITY line. These host-script lines
@@ -385,10 +412,11 @@ fi
 # PRIORITY filter (that reasoning is the whole point of #6536's Source-4-only fix). A bare
 # token grep makes the guard and its own documentation mutually exclusive: it false-FAILS on
 # the prose. A comment line cannot produce `include_matches.PRIORITY =`.
+CASES=$((CASES + 1))
 if echo "$HOST_SCRIPTS_BLOCK" | grep -qE '^[[:space:]]*include_matches\.PRIORITY[[:space:]]*='; then
-  FAIL=$((FAIL+1)); FAILS+=("AC2: host_scripts_journald must NOT carry an include_matches.PRIORITY line (would drop PRIORITY 4-5 host-script lines)")
+  fail "AC2: host_scripts_journald must NOT carry an include_matches.PRIORITY line (would drop PRIORITY 4-5 host-script lines)"
 else
-  PASS=$((PASS+1)); echo "  PASS: host_scripts_journald has no PRIORITY filter (captures PRIORITY 4-5)"
+  pass "host_scripts_journald has no PRIORITY filter (captures PRIORITY 4-5)"
 fi
 
 # AC3: drift guard — the SYSLOG_IDENTIFIER tag set MUST equal the set of infra
@@ -475,10 +503,11 @@ EXPECTED_TAGS=$(printf '%s\n%s\n' "$EXPECTED_TAGS" "$SYSTEMD_UNIT_IDENTIFIERS" |
 # Array entries are quoted strings on their own lines inside the include_matches
 # block; pull the bare tag from each.
 ACTUAL_TAGS=$(echo "$HOST_SCRIPTS_BLOCK" | grep -oP '^\s*"\K[a-z0-9-]+(?="\s*,?\s*$)' | sort -u)
+CASES=$((CASES + 1))
 if [[ -n "$EXPECTED_TAGS" && "$EXPECTED_TAGS" == "$ACTUAL_TAGS" ]]; then
-  PASS=$((PASS+1)); echo "  PASS: SYSLOG_IDENTIFIER tag set matches the infra emitters ($(echo "$EXPECTED_TAGS" | grep -c .) tags)"
+  pass "SYSLOG_IDENTIFIER tag set matches the infra emitters ($(echo "$EXPECTED_TAGS" | grep -c .) tags)"
 else
-  FAIL=$((FAIL+1)); FAILS+=("AC3: tag-set drift — host_scripts_journald array != the infra emitters.
+  fail "AC3: tag-set drift — host_scripts_journald array != the infra emitters.
     Reconcile in the direction the EMITTER dictates. A tag that is still emitted
     (a unit's SyslogIdentifier= or a live logger -t) but is missing from vector.toml
     means the channel does NOT ship — that is #6536 itself. Deleting the vector.toml
@@ -487,7 +516,7 @@ else
     expected (from infra/*.sh SyslogIdentifier= units + logger -t scripts):
 $(echo "$EXPECTED_TAGS" | sed 's/^/      /')
     actual (from vector.toml source array):
-$(echo "$ACTUAL_TAGS" | sed 's/^/      /')")
+$(echo "$ACTUAL_TAGS" | sed 's/^/      /')"
 fi
 
 # AC3b (#6536): pin the SyslogIdentifier= channel as an INDEPENDENT derivation source.
@@ -499,16 +528,17 @@ fi
 # AC3 starts demanding its deletion from vector.toml. Assert the channel yields the tag
 # on its own, with no reference to any logger call.
 SYSLOG_ID_DERIVED=$(grep -hoP '^SyslogIdentifier=\K[a-z0-9-]+$' "$INFRA_DIR"/*.sh | sort -u)
+CASES=$((CASES + 1))
 if printf '%s\n' "$SYSLOG_ID_DERIVED" | grep -qx 'inngest-heartbeat'; then
-  PASS=$((PASS+1)); echo "  PASS: inngest-heartbeat derives from the unit's SyslogIdentifier= alone (independent of the dark arm)"
+  pass "inngest-heartbeat derives from the unit's SyslogIdentifier= alone (independent of the dark arm)"
 else
-  FAIL=$((FAIL+1)); FAILS+=("AC3b: inngest-heartbeat is no longer derivable from a SyslogIdentifier= line in infra/*.sh.
+  fail "AC3b: inngest-heartbeat is no longer derivable from a SyslogIdentifier= line in infra/*.sh.
     Either the unit lost SyslogIdentifier=inngest-heartbeat (the #6536 regression — its
     stderr silently retags to the ExecStart basename 'doppler' and matches no vector.toml
     source), or the derivation was re-coupled to the logger -t gate. Do NOT satisfy this
     by deleting the vector.toml entry.
     SyslogIdentifier= derived from infra/*.sh:
-$(printf '%s\n' "$SYSLOG_ID_DERIVED" | sed 's/^/      /')")
+$(printf '%s\n' "$SYSLOG_ID_DERIVED" | sed 's/^/      /')"
 fi
 
 # AC3c (#6556 Part 1) — basename coverage for STANDALONE unit files (the "beyond infra/*.sh"
@@ -563,13 +593,14 @@ for svc in "$INFRA_DIR"/*.service; do
   SERVICE_BASENAME_VIOLATORS+="$(basename "$svc") tags as '$tag' (ExecStart basename) — add SyslogIdentifier= + a Source 4 entry, or exclude '$tag' with a reason"$'\n'
 done
 
+CASES=$((CASES + 1))
 if [[ "$SERVICE_SCANNED" -lt 1 || "$BN_DERIVED" -lt 3 ]]; then
-  FAIL=$((FAIL+1)); FAILS+=("AC3c non-vacuity: expected >=1 .service scanned and >=3 basenames derived, got scanned=$SERVICE_SCANNED derived=$BN_DERIVED (extractor broke → the coverage check would pass vacuously)")
+  fail "AC3c non-vacuity: expected >=1 .service scanned and >=3 basenames derived, got scanned=$SERVICE_SCANNED derived=$BN_DERIVED (extractor broke → the coverage check would pass vacuously)"
 elif [[ -n "$SERVICE_BASENAME_VIOLATORS" ]]; then
-  FAIL=$((FAIL+1)); FAILS+=("AC3c (#6556): a standalone unit tags as its ExecStart basename and is neither in Source 4 nor excluded:
-$(printf '%s' "$SERVICE_BASENAME_VIOLATORS" | sed 's/^/      /')")
+  fail "AC3c (#6556): a standalone unit tags as its ExecStart basename and is neither in Source 4 nor excluded:
+$(printf '%s' "$SERVICE_BASENAME_VIOLATORS" | sed 's/^/      /')"
 else
-  PASS=$((PASS+1)); echo "  PASS: every no-SyslogIdentifier .service basename is allowlisted or excluded-with-reason ($SERVICE_SCANNED units scanned, $BN_DERIVED basenames)"
+  pass "every no-SyslogIdentifier .service basename is allowlisted or excluded-with-reason ($SERVICE_SCANNED units scanned, $BN_DERIVED basenames)"
 fi
 
 # AC3c-disjoint: an exclusion must NOT also be a shipped tag (a tag is shipped OR excluded, never both).
@@ -577,10 +608,11 @@ EXCL_SHIPPED=""
 for k in "${!SYSLOG_TAG_EXCLUSIONS[@]}"; do
   printf '%s\n' "$ACTUAL_TAGS" | grep -qxF "$k" && EXCL_SHIPPED+="$k "
 done
+CASES=$((CASES + 1))
 if [[ -n "$EXCL_SHIPPED" ]]; then
-  FAIL=$((FAIL+1)); FAILS+=("AC3c-disjoint: exclusion(s) also present in the Source 4 allowlist (a tag is either shipped OR excluded): $EXCL_SHIPPED")
+  fail "AC3c-disjoint: exclusion(s) also present in the Source 4 allowlist (a tag is either shipped OR excluded): $EXCL_SHIPPED"
 else
-  PASS=$((PASS+1)); echo "  PASS: exclusion set is disjoint from the Source 4 allowlist"
+  pass "exclusion set is disjoint from the Source 4 allowlist"
 fi
 
 # AC3c-stale: every exclusion must correspond to a basename a real .service actually produces —
@@ -589,10 +621,11 @@ STALE_EXCL=""
 for k in "${!SYSLOG_TAG_EXCLUSIONS[@]}"; do
   printf '%s\n' "$SERVICE_BASENAMES" | grep -qxF "$k" || STALE_EXCL+="$k "
 done
+CASES=$((CASES + 1))
 if [[ -n "$STALE_EXCL" ]]; then
-  FAIL=$((FAIL+1)); FAILS+=("AC3c-stale: exclusion(s) for a basename no .service produces — remove the dead exclusion: $STALE_EXCL")
+  fail "AC3c-stale: exclusion(s) for a basename no .service produces — remove the dead exclusion: $STALE_EXCL"
 else
-  PASS=$((PASS+1)); echo "  PASS: every exclusion corresponds to a real .service ExecStart basename"
+  pass "every exclusion corresponds to a real .service ExecStart basename"
 fi
 
 # AC4: redaction-boundary guard (GDPR) — host_scripts_journald must traverse the
@@ -602,7 +635,59 @@ assert_grep "host_scripts_journald is an input of pii_scrub_drop_userdata (redac
   '^inputs = \[.*"host_scripts_journald".*\]'
 
 echo
-echo "=== Summary: $PASS passed, $FAIL failed ==="
+# --- Accounting conservation (ADR-193 #3) ---------------------------------------------------
+# The arm that catches a DISCARDED verdict. The floor below only catches "no assertions RAN";
+# it cannot catch "assertions ran and their verdicts were thrown away", because CASES keeps its
+# full value when pass()/fail() is a no-op. Every counted case records exactly one verdict, so
+# PASS+FAIL MUST equal CASES.
+#
+# Ordered BEFORE the floor per ADR-193 #4: a neutered pass() deflates PASS, which would also
+# trip a pass-reading pin and report the misleading "fixtures were deleted". This says "a
+# verdict was discarded" instead, and names the harness-bug direction separately so a genuine
+# slip does not read as a PII-scrubbing regression.
+#
+# Reported with `printf >&2` + `exit 1` DIRECTLY, never through fail(): a check that reports by
+# calling the verdict helper increments the very counter the exit status reads, so neutering
+# fail() would silence the rows AND the check meant to notice the silence. The literal
+# `[FATAL] accounting` is load-bearing — guard-vacuity-floor's ARM 10 builds its conservation
+# population by grepping that exact string.
+if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
+  printf '\n[FATAL] accounting: PASS+FAIL (%d) != CASES (%d).\n' \
+    "$((PASS + FAIL))" "$CASES" >&2
+  if [[ $((PASS + FAIL)) -lt "$CASES" ]]; then
+    printf '  An assertion was counted but its verdict was not recorded — that is what a neutered pass()/fail() looks like.\n' >&2
+  else
+    printf '  A verdict was recorded at a call site with no `CASES=$((CASES + 1))` before it. This is a harness bug, not a product failure: add the increment at that call site.\n' >&2
+  fi
+  echo "=== Summary: $PASS passed, $FAIL failed ($CASES cases) ==="
+  exit 1
+fi
+
+# --- Anti-vacuity floor (ADR-193 #1) --------------------------------------------------------
+# This suite had NO floor at all: a harness that silently ran nothing — an `extract_vrl` that
+# started returning empty, a `run_fixture` that early-returned, a deleted block of fixtures —
+# printed a clean, smaller total and exited 0. That matters more here than in most suites: these
+# fixtures are the only executable proof that userId/email/Bearer/Art-9 user-content redaction
+# actually happens before log lines leave the host for Better Stack. A vacuous green here is how
+# a scrubbing regression reaches a user wearing a checkmark.
+#
+# Reads the INDEPENDENT CASES counter and reports with `printf >&2` + `exit 1` DIRECTLY — it
+# does NOT call fail(), because a floor enforced through the suspect cannot witness the suspect.
+#
+# Zero headroom against the current count, so any deletion is loud. The conditional utf8-pepper
+# fixture is deliberately NOT counted in the floor (it only runs when the pepper carries a
+# multi-byte char), so the pin is the guaranteed-minimum run. Ratchet when adding fixtures, and
+# read a floor failure on an otherwise-green run as "you added rows, update this number".
+PII_SCRUB_MIN_CASES=35
+if (( CASES < PII_SCRUB_MIN_CASES )); then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
+    "$CASES" "$PII_SCRUB_MIN_CASES" >&2
+  printf '  Fixtures were deleted or skipped; a green run here would be a PII-redaction coverage loss.\n' >&2
+  echo "=== Summary: $PASS passed, $FAIL failed ($CASES cases) ==="
+  exit 1
+fi
+
+echo "=== Summary: $PASS passed, $FAIL failed ($CASES cases) ==="
 if [[ "$FAIL" -gt 0 ]]; then
   for f in "${FAILS[@]}"; do echo "  FAIL: $f"; done
   exit 1

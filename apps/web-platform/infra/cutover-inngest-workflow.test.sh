@@ -1562,12 +1562,20 @@ rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" 
 # absolute number is only meaningful against the run that produced it, and re-deriving it after a
 # rebase is the point at which a silently-dropped sibling assertion would otherwise be papered
 # over. Re-measure by running this file, never by copying a remembered figure.
+#
+# REPORTS DIRECTLY, never through FAIL (ADR-193 #1). It previously did `FAIL=$((FAIL + 1))` and
+# fell through to the shared `[[ "$FAIL" -gt 0 ]]` gate at the bottom — so with the assertion
+# machinery neutered the floor "fired" into a counter nothing read before exit, and the suite
+# printed a clean total and exited 0. A floor enforced through the suspect cannot witness the
+# suspect. Caught by scripts/guard-vacuity-floor.test.sh ARM 2b, whose deferred-scope ratchet is
+# 0 — this suite was the one member of the deferred population that still had the defect.
 if [[ "$PASS" -lt 449 ]]; then
-  echo "  FAIL: suite dispatched $PASS assertions, floor is 449 — an assertion was removed or skipped."
-  FAIL=$((FAIL + 1))
-else
-  echo "  PASS: anti-deletion floor ($PASS >= 449 assertions dispatched)"
+  printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is 449 — an assertion was removed or skipped.\n' "$PASS" >&2
+  echo ""
+  echo "=== Results: $PASS passed, $FAIL failed ==="
+  exit 1
 fi
+echo "  PASS: anti-deletion floor ($PASS >= 449 assertions dispatched)"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="
