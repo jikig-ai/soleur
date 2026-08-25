@@ -522,7 +522,10 @@ assert "confirm keys on the emitter FLAG field (\"flag\":\"done\" + exit_code:0 
 assert "confirm does NOT key on \"reason\":\"done\" (the field-mismatch bug the review caught)" "! grep -qF '\"reason\":\"done\"' '$CONFIRM_FILE'"
 assert "confirm detects the aborted terminal flag (fail-loud path)" "grep -qF '\"flag\":\"aborted\"' '$CONFIRM_FILE'"
 assert "confirm detects the rolled-back terminal flag" "grep -qF '\"flag\":\"rolled-back\"' '$CONFIRM_FILE'"
-assert "confirm reads via betterstack-query.sh (no-SSH), never a deploy-status poll" "grep -qE 'betterstack-query.sh --since' '$CONFIRM_FILE' && ! grep -qE 'deploy-status' '$CONFIRM_FILE'"
+# #7674: the query itself moved into the shared _flip_query_rows helper (one reader, two
+# callers). The no-SSH / no-deploy-status invariant is asserted on the HELPER below; what is
+# assertable HERE is that confirm still routes through it rather than growing a second reader.
+assert "confirm reads through the shared _flip_query_rows helper (no second reader)" "grep -qE '_flip_query_rows ' '$CONFIRM_FILE' && ! grep -qE 'deploy-status' '$CONFIRM_FILE'"
 assert "confirm never dumps a raw Better Stack row (no 'jq .')" "! grep -qE 'jq \\.($|[^a-zA-Z_])' '$CONFIRM_FILE'"
 assert "confirm distinguishes a query-path failure from FSM-not-terminal (::warning:: CONFIRM PATH)" "grep -qE 'CONFIRM PATH' '$CONFIRM_FILE'"
 # Emitter parity: the on-host emitter MUST actually stamp the flag states the confirm greps for.
@@ -724,24 +727,39 @@ assert "#7462 flush_latch_decide extraction is non-vacuous (>3 lines, got $FL_FN
 . "$FL_FN"
 assert "flush_latch_decide() is defined after sourcing" "declare -F flush_latch_decide >/dev/null"
 FL_EVALS=0
-fl_case() { # $1 desc, $2 input, $3 expected outcome
-  local got; got="$(flush_latch_decide "$2")"
+fl_case() { # $1 desc, $2 L (latch count), $3 H (liveness count), $4 expected outcome
+  local got; got="$(flush_latch_decide "$2" "$3")"
   FL_EVALS=$((FL_EVALS + 1))
-  assert "flush_latch_decide: $1 -> $3" "[[ '$got' == '$3' ]]"
+  assert "flush_latch_decide: $1 (L=$2,H=$3) -> $4" "[[ '$got' == '$4' ]]"
 }
-fl_case "zero rows is clear — a genuine first arm proceeds" "0"              "clear"
-fl_case "one row is LATCHED — must refuse"                  "1"              "latched"
-fl_case "many rows is LATCHED"                              "12"             "latched"
-fl_case "an unreadable read fails closed"                   "__UNREADABLE__" "unreadable"
-fl_case "an empty read fails closed"                        ""               "unreadable"
-fl_case "a non-numeric count fails closed"                  "n/a"            "unreadable"
-fl_case "a negative count fails closed"                     "-1"             "unreadable"
-fl_case "a count with whitespace fails closed"              " 1"             "unreadable"
-assert "flush_latch_decide scenarios actually dispatched (>=8)" "[[ '$FL_EVALS' -ge 8 ]]"
+# THE TWO-SIGNAL TABLE (#7674). L alone cannot distinguish "no flush has happened" from
+# "I cannot tell": measured 2026-08-25, G3.7's query returns 0 rows at 7d, 30d AND 365d while
+# the host emits ~1.4 flip rows/min, so L=0 was reporting coverage the gate did not have.
+# H — any inngest-cutover-flip row from THIS host inside a short window — is the host's own
+# liveness witness, and (L=0,H=0) is now `silent`: absence proves nothing when the witness is
+# also absent. Both non-decimal arms route to `unreadable`, never `silent`, because a
+# non-decimal count is produced ONLY by a query failure and `silent` prints the host-dark
+# remediation — the mis-remediation the outcome split exists to prevent.
+fl_case "no latch + host reporting is clear — a genuine first arm proceeds" "0"  "20"  "clear"
+fl_case "no latch + host SILENT refuses — absence proves nothing"           "0"  "0"   "silent"
+fl_case "one latch row is LATCHED — must refuse"                            "1"  "20"  "latched"
+fl_case "many latch rows is LATCHED"                                        "12" "20"  "latched"
+fl_case "LATCHED even when the host is silent (L dominates)"                "1"  "0"   "latched"
+fl_case "an unreadable latch read fails closed"           "__UNREADABLE__"  "20"  "unreadable"
+fl_case "an empty latch count fails closed"               ""                "20"  "unreadable"
+fl_case "a non-numeric latch count fails closed"          "n/a"             "20"  "unreadable"
+fl_case "a negative latch count fails closed"             "-1"              "20"  "unreadable"
+fl_case "a latch count with whitespace fails closed"      " 1"              "20"  "unreadable"
+fl_case "an unreadable LIVENESS read is unreadable, NOT silent" "0" "__UNREADABLE__" "unreadable"
+fl_case "an empty liveness count is unreadable, NOT silent"     "0" ""               "unreadable"
+fl_case "a non-numeric liveness count is unreadable, NOT silent" "0" "n/a"           "unreadable"
+fl_case "a negative liveness count is unreadable, NOT silent"    "0" "-1"            "unreadable"
+fl_case "a non-decimal L wins over a non-decimal H (both unreadable)" "x" "y"        "unreadable"
+assert "flush_latch_decide scenarios actually dispatched (>=15)" "[[ '$FL_EVALS' -ge 15 ]]"
 # HARNESS CANARY, mirroring g3_case's. A fl_case whose body stopped comparing against the real
 # function would report every row above as a PASS; prove it can FAIL, then subtract.
 _FL_P=$PASS; _FL_F=$FAIL
-fl_case "harness canary: a deliberately wrong expectation MUST fail (expected FAIL below)" "0" "latched"
+fl_case "harness canary: a deliberately wrong expectation MUST fail (expected FAIL below)" "0" "20" "latched"
 if [[ "$FAIL" -ne $((_FL_F + 1)) || "$PASS" -ne "$_FL_P" ]]; then
   echo "  FATAL: fl_case does not compare against flush_latch_decide — every G3.7 decision row is void."
   exit 2
@@ -823,6 +841,107 @@ assert "#7462 reader extracts a COUNT only (no .raw, no jq over row bodies)" \
 assert "#7462 FLUSH_LATCH_SINCE is env-overridable with a default" \
   "grep -qE '^FLUSH_LATCH_SINCE=\"\\\$\\{FLUSH_LATCH_SINCE:-[0-9]+[a-z]\\}\"' '$BODY_SH'"
 
+# --- (b2) THE LIVENESS READER (#7674), EXECUTED. ---------------------------------------------
+# H is the signal that turns G3.7's `clear` from "no evidence" into "no evidence, from a host we
+# can hear". Three ways it could be silently defeated, each asserted below:
+#   1. counting on an enumerated `reason` set instead of the TAG — the catch-all arm emits
+#      `noop-unset`, and that is the arm that fires in the very state G3.7 gates, so an
+#      enumeration would read H=0 on a healthy host and refuse every legitimate first arm;
+#   2. no host isolation — vector.toml: ALL hosts multiplex into ONE Logs source with host_name
+#      the sole discriminator, so web-1's rows would count as the dedicated host's liveness;
+#   3. matching the host on the OUTER row — `raw` is DOUBLE-ENCODED, so a literal
+#      `"host_name":"..."` grep against the outer line matches NOTHING, EVER, which would pin
+#      H at 0 and refuse every arm. The reader must decode before it matches.
+FLV_FN="$(mktemp)"; SCRATCH+=("$FLV_FN")
+awk '/^_flip_liveness_count\(\) \{$/,/^\}$/' "$BODY_SH" > "$FLV_FN"
+FLV_FN_N=$(wc -l < "$FLV_FN" | tr -d '[:space:]')
+assert "#7674 _flip_liveness_count extraction is non-vacuous (>5 lines, got $FLV_FN_N)" "[[ '$FLV_FN_N' -gt 5 ]]"
+
+FLQ_FN="$(mktemp)"; SCRATCH+=("$FLQ_FN")
+awk '/^_flip_query_rows\(\) \{$/,/^\}$/' "$BODY_SH" > "$FLQ_FN"
+FLQ_FN_N=$(wc -l < "$FLQ_FN" | tr -d '[:space:]')
+assert "#7674 _flip_query_rows extraction is non-vacuous (>3 lines, got $FLQ_FN_N)" "[[ '$FLQ_FN_N' -gt 3 ]]"
+# The no-SSH invariant, migrated here from confirm_flip_state when the reader was extracted.
+assert "#7674 the shared reader queries via betterstack-query.sh (no SSH, no new transport)" \
+  "grep -qE 'betterstack-query.sh' '$FLQ_FN' && ! grep -qE 'deploy-status' '$FLQ_FN'"
+assert "#7674 the shared reader queries via prd_terraform (the betterstack-query cred config)" \
+  "grep -qF -- '-c prd_terraform' '$FLQ_FN'"
+
+FLV_ARGV="$(mktemp)"; SCRATCH+=("$FLV_ARGV")
+FLV_OUT=""; FLV_RC=0
+call_flip_liveness_count() { # $1 = rows | foreign | empty | fail
+  local mode="$1"
+  set +e
+  FLV_OUT=$(
+    eval "$(cat "$FLQ_FN")"
+    eval "$(cat "$FLV_FN")"
+    # shellcheck disable=SC2317  # invoked indirectly, by the eval'd reader above
+    doppler() {
+      printf '%s\n' "$*" > "$FLV_ARGV"
+      case "$mode" in
+        rows)
+          printf '%s\n' '{"dt":"2026-08-25 10:20:51.000000","raw":"{\"host_name\":\"soleur-inngest-prd\",\"message\":\"x\"}"}'
+          printf '%s\n' '{"dt":"2026-08-25 10:20:52.000000","raw":"{\"host_name\":\"soleur-inngest-prd\",\"message\":\"y\"}"}'
+          return 0 ;;
+        foreign)
+          # web-1 rows in the SAME multiplexed source — must NOT count as dedicated-host liveness.
+          printf '%s\n' '{"dt":"2026-08-25 10:20:51.000000","raw":"{\"host_name\":\"soleur-web-platform\",\"message\":\"x\"}"}'
+          printf '%s\n' '{"dt":"2026-08-25 10:20:52.000000","raw":"{\"host_name\":\"soleur-web-platform\",\"message\":\"y\"}"}'
+          return 0 ;;
+        empty) return 0 ;;
+        *)     return 7 ;;
+      esac
+    }
+    export FLIP_LIVENESS_SINCE="15m"
+    # Both live at script scope, outside the extracted functions, so the eval'd harness must
+    # supply them. INNGEST_HOST_NAME empty would make the host filter match nothing and pin the
+    # reader at 0 — the exact fail-shape the isolation assertions below exist to catch.
+    export INNGEST_HOST_NAME="soleur-inngest-prd"
+    _flip_liveness_count 2>/dev/null
+  )
+  FLV_RC=$?
+  set -e
+}
+
+call_flip_liveness_count rows
+assert "#7674 liveness reader counts THIS host's rows (2 -> '2', got '$FLV_OUT')" "[[ '$FLV_OUT' == '2' ]]"
+assert "#7674 liveness reader always returns 0 so the DECISION owns the verdict (rc=$FLV_RC)" "[[ '$FLV_RC' -eq 0 ]]"
+call_flip_liveness_count foreign
+assert "#7674 HOST ISOLATION: another host's rows count 0, not as our liveness (got '$FLV_OUT')" "[[ '$FLV_OUT' == '0' ]]"
+call_flip_liveness_count empty
+assert "#7674 an empty liveness result is '0' (-> silent), not an error" "[[ '$FLV_OUT' == '0' ]]"
+call_flip_liveness_count fail
+assert "#7674 a FAILED liveness query yields __UNREADABLE__, never 0 (fail-closed)" "[[ '$FLV_OUT' == '__UNREADABLE__' ]]"
+# An empty discriminator must report unreadable (a misconfiguration), NOT silent (a dark host) —
+# otherwise the gate prints the wrong remediation while refusing every arm.
+FLV_EMPTYHOST=$(
+  set +e
+  eval "$(cat "$FLQ_FN")"; eval "$(cat "$FLV_FN")"
+  # shellcheck disable=SC2317  # invoked indirectly by the eval'd reader
+  doppler() { printf '%s\n' '{"dt":"x","raw":"{\"host_name\":\"soleur-inngest-prd\"}"}'; return 0; }
+  export FLIP_LIVENESS_SINCE="15m"; export INNGEST_HOST_NAME=""
+  _flip_liveness_count 2>/dev/null
+)
+assert "#7674 an EMPTY host discriminator is unreadable, not a false 'host is dark' (got '$FLV_EMPTYHOST')" \
+  "[[ '$FLV_EMPTYHOST' == '__UNREADABLE__' ]]"
+
+# shellcheck disable=SC2034  # read inside the eval'd assert conditions below
+FLV_ARGV_SEEN="$(cat "$FLV_ARGV")"
+assert "#7674 liveness reader bounds the window with --since \$FLIP_LIVENESS_SINCE" \
+  "grep -qF -- '--since 15m' <<<\"\$FLV_ARGV_SEEN\""
+assert "#7674 liveness reader keys on the TAG, not an enumerated reason set" \
+  "grep -qF -- '--grep inngest-cutover-flip' <<<\"\$FLV_ARGV_SEEN\""
+assert "#7674 liveness reader does NOT enumerate noop-* reasons (would read H=0 on a healthy host)" \
+  "! grep -qE 'noop-' <<<\"\$FLV_ARGV_SEEN\""
+# The host filter must NOT ride --grep: betterstack-query.sh OR-combines --grep terms, so a host
+# term there WIDENS the query instead of narrowing it — a fail-open wearing a filter's clothes.
+assert "#7674 host isolation is NOT attempted via --grep (which is OR-combined, so it would widen)" \
+  "! grep -qE '\\-\\-grep[= ]*[\"'\'']?host_name' <<<\"\$FLV_ARGV_SEEN\""
+assert "#7674 the liveness reader decodes .raw before matching the host (raw is double-encoded)" \
+  "grep -qE '\\.raw' '$FLV_FN'"
+assert "#7674 FLIP_LIVENESS_SINCE is env-overridable with a default" \
+  "grep -qE '^FLIP_LIVENESS_SINCE=\"\\\$\\{FLIP_LIVENESS_SINCE:-[0-9]+[a-z]+\\}\"' '$BODY_SH'"
+
 # --- (c) EMITTER PARITY (cross-file), in the SUBSET direction. -------------------------------
 # The two reasons this gate keys on are a vocabulary owned by inngest-cutover-flip.sh. If either
 # is renamed there, the grep silently matches nothing and the gate reports CLEAR forever — a
@@ -849,8 +968,10 @@ assert "arm) reads the latch via _flush_latch_count exactly once" \
 # a future outcome token then fails CLOSED by construction instead of falling through.
 assert "arm) G3.7 aborts unless the outcome is exactly 'clear' (fail-closed by construction)" \
   "[[ \$(grep -cF 'if [[ \"\$FL_OUTCOME\" != \"clear\" ]]; then exit 1; fi' '$ARM_FILE') -eq 1 ]]"
+# `silent` is in this alternation deliberately (#7674): the assertion was blind to a NEW arm,
+# so without it the no-per-arm-exit contract would be unenforced for exactly the arm being added.
 assert "arm) no G3.7 outcome arm carries its own exit (the gate decides)" \
-  "! grep -qE '^[[:space:]]+(clear|latched|unreadable)\\)[^#]*exit 1' '$ARM_FILE'"
+  "! grep -qE '^[[:space:]]+(clear|latched|unreadable|silent)\\)[^#]*exit 1' '$ARM_FILE'"
 # shellcheck disable=SC2016  # literal search pattern, not an expansion (G3ABORT_LN precedent)
 FL_GATE_LN=$(grep -nF 'if [[ "$FL_OUTCOME" != "clear" ]]; then exit 1; fi' "$ARM_FILE" | head -1 | cut -d: -f1) || true
 FL_PGW_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1) || true
@@ -1558,15 +1679,16 @@ rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" 
 # prod-write region assertion left the suite green. This floor is the full count at the time of
 # writing; raise it in lockstep when adding assertions, never lower it to make a removal pass.
 #
+# 449 -> 471 (+22) when G3.7 gained its second (liveness) signal and the `silent` outcome (#7674).
 # 408 -> 449 (+41) when the G3.7 pre-flush-latch gate landed. Stated as a DELTA on purpose: the
 # absolute number is only meaningful against the run that produced it, and re-deriving it after a
 # rebase is the point at which a silently-dropped sibling assertion would otherwise be papered
 # over. Re-measure by running this file, never by copying a remembered figure.
-if [[ "$PASS" -lt 449 ]]; then
-  echo "  FAIL: suite dispatched $PASS assertions, floor is 449 — an assertion was removed or skipped."
+if [[ "$PASS" -lt 471 ]]; then
+  echo "  FAIL: suite dispatched $PASS assertions, floor is 471 — an assertion was removed or skipped."
   FAIL=$((FAIL + 1))
 else
-  echo "  PASS: anti-deletion floor ($PASS >= 449 assertions dispatched)"
+  echo "  PASS: anti-deletion floor ($PASS >= 471 assertions dispatched)"
 fi
 
 echo ""
