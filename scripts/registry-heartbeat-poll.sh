@@ -21,8 +21,9 @@
 #             AFTER the residual window, i.e. by the NEW host.
 #
 # Precedent for heartbeat gating being legitimate when done this way: `arm_one` in
-# .github/workflows/apply-web-platform-infra.yml, which likewise refuses to accept a level and
-# watches for a real beat. (The `registry-host-replace` job carries a recorded decision that its
+# apps/web-platform/infra/arm-heartbeats.sh, which likewise refuses to accept a level and
+# watches for a real beat. (It lived in .github/workflows/apply-web-platform-infra.yml until
+# #7587 extracted it; that workflow now only invokes the script.) (The `registry-host-replace` job carries a recorded decision that its
 # own best-effort status step is INFORMATIONAL and MUST NOT gate — that note is about a naive
 # level read during a fresh boot, which is exactly what Phase A fixes.)
 #
