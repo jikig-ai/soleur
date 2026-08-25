@@ -74,3 +74,25 @@ structurally unreachable without arming. A plan that claimed to satisfy it would
 this session is forbidden from producing.
 
 **Decision needed:** confirm the split (4a now, 4b at the cutover window), or re-scope.
+
+---
+
+## Resolutions (operator, 2026-08-25)
+
+All three challenges were put to the operator with the trade-offs above, and all three were
+resolved in favour of the plan's recommendation. They are decided, not outstanding.
+
+- **UC-1 — ACCEPTED (substitution).** The flush-latch readback ships over ADR-100's already-adopted
+  Vector → Better Stack journald transport, giving G3.7 a second signal and a fail-closed `silent`
+  outcome. The webhook id is **not** built. ADR-100 Decision 6a stands unamended; no new inbound
+  control plane on the deny-all-public singleton, and no host replace. Accepted cost: no on-demand
+  read of the latch file's verbatim contents.
+- **UC-2 — ACCEPTED (design now, build at the cutover window).** The `inngest-volume-recut` design
+  ships complete — five guard layers including the "host is dark" pre-flight refusal absent from the
+  `workspaces-luks-recut` template — and the build defers to the PR that opens the cutover window.
+  Accepted cost: the target is unavailable if a recut becomes urgent first; mitigated because the
+  design is complete, so building it is mechanical.
+- **UC-3 — CONFIRMED (4a now, 4b at the cutover window).** The step-4 exit criterion is
+  acknowledged structurally unreachable this session and is NOT claimed. After this PR merges the
+  next act is a re-measurement and a cutover-readiness assessment brought back to the operator —
+  not an arm. `op=arm` remains forbidden for this session.
