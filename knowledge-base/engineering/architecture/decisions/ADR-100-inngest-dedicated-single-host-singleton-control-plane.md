@@ -839,8 +839,8 @@ turned out to be undeliverable for exactly this reason (see 3).
 The 2026-07 G6 confirm timeout was attributed to "the host ships nothing". That attribution does
 **not** generalise, and treating it as general is what let a fail-open stand for a month.
 
-Measured 2026-08-25: the host ships **~2,450 rows/day** (`inngest-cutover-flip`, ~1.4/min sustained,
-verified arriving), while G3.7's query — over that same live channel — returns **0 rows at 7d, 30d
+Measured 2026-08-25: the host ships **~2,040 rows/day** (`inngest-cutover-flip`, ~1.4/min sustained
+— 170 rows in a 2h window, verified arriving), while G3.7's query — over that same live channel — returns **0 rows at 7d, 30d
 and 365d**. Both statements are true simultaneously. A reader that cannot separate them reports
 `clear` (full coverage) on a question it has no evidence for, which is precisely what G3.7 did.
 

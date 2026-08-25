@@ -126,7 +126,7 @@ Derived from
 - [x] 8.1 File the `inngest-volume-recut` issue, carrying the complete Phase 3 design — five guard
       layers including the pre-flight "host is dark" refusal, the naming rationale, and Guards 2
       and 3.
-- [x] 8.2 File the flip-FSM emit rate-limit issue, carrying the measured ~2,450 rows/day burn and the
+- [x] 8.2 File the flip-FSM emit rate-limit issue, carrying the measured ~2,040 rows/day burn and the
       constraint that any rate-limit must keep the terminal-arm cadence under 15 minutes and must
       not become transition-only.
 - [x] 8.3 ~~File~~ the `/mnt/data` plaintext encryption-exception issue — **NOT filed: it already
