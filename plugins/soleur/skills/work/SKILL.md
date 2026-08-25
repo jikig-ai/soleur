@@ -789,6 +789,19 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 - **population growth** — ADD a member to the guarded set, do not only edit one.
 - **demotion** — leave the asserted bytes byte-identical and reword the prose above them to make the prescription conditional. Retained deliberately: `ship/SKILL.md` and `plugins/soleur/test/fullsuite-merge-gate.test.ts` both actively guard this mutation, so dropping it from the list would leave the repo testing for an axis it no longer tells authors to mutate.
 - **the floor** — revert the PR's own thesis and confirm the suite reddens.
+- **the guard's OWN operand** — the axis every other row misses, because they all mutate the
+  SUT and confirm the guard REDS. This one mutates the GUARD and confirms it does not silently
+  WIDEN. Degenerate an operand the predicate interpolates — empty a variable inside a glob, a
+  regex, or a path prefix — and check whether the guard now accepts everything. Measured: a
+  containment check written as `case "$top" in "$ROOT"|"$ROOT"/*) return 0 ;; esac` degrades to
+  `/*` when `$ROOT` is empty, so it returned 0 for a LIVE repository — and the suite carrying it
+  still reported `40 passed, 0 failed`, because **a guard that accepts everything is
+  indistinguishable from a healthy run**. Ask of every guard "how does this fail OPEN", then
+  assert the POST-CONDITION its predicate depends on (`case "$ROOT" in /*) : ;; *) exit 2 ;; esac`)
+  rather than trusting the producer, and `readonly` it so a later assignment cannot reintroduce
+  the degenerate case. **Why:** #7553 — it passed review and shipped in three commits; caught by
+  a sibling session reviewing its own copy. See
+  `knowledge-base/project/learnings/2026-08-20-every-guard-was-present-read-as-protective-and-did-not-hold.md`.
 - **the verifier's own anchor SET** — the axis that survives hardening the PREDICATE. When you build a hand-anchored completeness check (a rebase-composition checklist, a "did the sweep miss anything" list), tightening each anchor is orthogonal to whether the anchors COVER the subject: a checklist upgraded presence → exact-occurrence-count, and positive-controlled against the source tree, still reported 16/16 on a tree where an entire 13-line block had been deleted, because none of its 16 anchors sat in that region. Positive-controlling proves the anchors are well-formed; both trees have the unsampled region intact, so it can never detect one. Where the population is enumerable, enumerate it instead of anchoring — for a rebase over a sibling that touched the same code, `git show <sibling> -- <file> | grep '^+'` then assert each added line is present at HEAD or classify it as deliberately superseded. **Why:** #7291/PR #7510 — 37 lines absent, 13 of them a floor itemisation whose loss left the raise chain unreconstructable, past a green suite and a green checklist. See `knowledge-base/project/learnings/2026-08-19-i-hardened-my-verifier-twice-and-its-sample-was-still-a-sample.md`.
 
 State plainly which axes your battery did NOT edit. Two mechanical companions: run the UNMUTATED control first (a red baseline voids every row), and assert each mutation LANDED against a pristine backup, because a mutation that does not land reports the BASELINE and that is indistinguishable from a pass. **Why:** PR #7470 (issue #7352) — a battery reported 6/6 RED and "no surviving mutants"; it had two axes, and the retraction ran a 13-mutation Round 2 across axes it never touched. Recorded in `knowledge-base/project/learnings/2026-08-12-my-ladder-rung-ended-in-a-label-so-it-fell-through-to-the-unsafe-branch.md`.
