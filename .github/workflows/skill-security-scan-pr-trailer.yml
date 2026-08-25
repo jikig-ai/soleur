@@ -78,7 +78,29 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: |
           set -euo pipefail
-          added=$(git diff --name-only --diff-filter=A "$BASE_SHA"..."$HEAD_SHA" | \
+          # SEPARATE THE DIFF FROM THE FILTER. These used to be one pipeline
+          # ending in `|| true` -- which exists for grep's no-match exit 1, but
+          # covered the WHOLE pipeline. So an unresolvable BASE_SHA and a
+          # legitimately empty diff produced the identical observable: `added`
+          # empty, no_new_skills=true, gate green having scanned nothing.
+          # Keep the assignment at top level: `if ! local raw=$(cmd)` masks the
+          # status (verified), so this must not be refactored into a helper.
+          # AMR, NOT A. Rename detection is ON by default, so `git mv skills/benign
+          # skills/pwned` + weaponise reports R and `--diff-filter=A` returns EMPTY --
+          # measured end-to-end: the scanner says HIGH-RISK, the gate's added set is [],
+          # no_new_skills=true, BOTH scan steps are if:-skipped, required check GREEN.
+          # Plain M (weaponising a skill in place) escaped the same way. Every counter and
+          # fail-closed branch this PR adds lives INSIDE a step gated on that flag, so the
+          # bypass sat one step upstream of all of it.
+          rc=0
+          raw=$(git diff --name-only --diff-filter=AMRT "$BASE_SHA"..."$HEAD_SHA" 2>"${RUNNER_TEMP:-/tmp}/diff.err") || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::skill-security-scan: git could not resolve the diff for base=$BASE_SHA head=$HEAD_SHA (git exited $rc). Refusing to report a clean scan from a diff that never resolved."
+            cat "${RUNNER_TEMP:-/tmp}/diff.err" >&2 || true
+            exit 1
+          fi
+          # `|| true` survives verbatim HERE, where it covers only grep.
+          added=$(printf '%s\n' "$raw" | \
             grep -E '^(plugins/soleur/skills/[^/]+/SKILL\.md|plugins/soleur/agents/.+\.md|\.claude/skills/.+/SKILL\.md|\.claude/agents/.+\.md)$' || true)
           {
             echo "added<<EOF"
@@ -126,7 +148,23 @@ jobs:
           # appear in matched[]. Any-override acceptance was a P1 bypass —
           # an attacker landing a malicious skill + a throwaway override
           # would have passed the previous aggregate-count check.
-          matched_skills="$(bash plugins/soleur/skills/skill-security-scan/scripts/parse-override.sh --base "$BASE_SHA" --head "$HEAD_SHA" 2>/dev/null | jq -r '.matched[].skill // empty' | sort -u)"
+          # CAPTURE, THEN PARSE. The old form piped parse-override.sh straight into
+          # jq with 2>/dev/null: a parser that crashed produced an empty matched
+          # set, which is indistinguishable from "no overrides were supplied" --
+          # and an empty matched set is what makes every HIGH-RISK skill look
+          # unapproved OR, combined with the UNKNOWN verdict below, lets the whole
+          # step pass. Capture status and stderr; fail closed on a crash.
+          po_rc=0
+          set +e
+          po_out=$(bash plugins/soleur/skills/skill-security-scan/scripts/parse-override.sh --base "$BASE_SHA" --head "$HEAD_SHA" 2>"${RUNNER_TEMP:-/tmp}/po.err")
+          po_rc=$?
+          set -e
+          if [ "$po_rc" -ne 0 ]; then
+            echo "::error::skill-security-scan: parse-override.sh exited $po_rc; refusing to derive an override set from a failed parse."
+            cat "${RUNNER_TEMP:-/tmp}/po.err" >&2 || true
+            exit 1
+          fi
+          matched_skills="$(printf '%s\n' "$po_out" | jq -r '.matched[].skill // empty' | sort -u)"
           path_to_slug() {
             local p="$1"
             case "$p" in
@@ -140,10 +178,50 @@ jobs:
             esac
           }
           fail=0
+          scanned=0
+          requested=0
           while IFS= read -r path; do
             [ -z "$path" ] && continue
-            [ ! -f "$path" ] && continue
-            verdict=$(SKILL_SECURITY_SCAN_OFFLINE=1 bash plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh < "$path" 2>/dev/null | head -1 | grep -oE 'HIGH-RISK|REVIEW|LOW-RISK' || echo 'UNKNOWN')
+            requested=$((requested + 1))
+            if [ ! -f "$path" ]; then
+              # A PATH THE DIFF NAMED BUT THE CHECKOUT DOES NOT HAVE is not a
+              # skip -- it is the gate losing its subject. Silently `continue`ing
+              # here is how the step reached `exit 0` having formed zero verdicts.
+              echo "::error file=$path::skill-security-scan: path was reported as added but is not present in the checkout; cannot scan it."
+              fail=1
+              continue
+            fi
+            # CAPTURE THE OUTPUT TO A VARIABLE FIRST, THEN TAKE ITS FIRST LINE.
+            # `head -1` inside a pipeline whose status is read closes the pipe on
+            # the first line; under pipefail the producer takes SIGPIPE and the
+            # pipeline's status stops describing the scanner at all. And the old
+            # `|| echo UNKNOWN` converted BOTH a crash and an unparseable banner
+            # into a verdict the gate then accepted.
+            sc_rc=0
+            set +e
+            sc_out=$(SKILL_SECURITY_SCAN_OFFLINE=1 bash plugins/soleur/skills/skill-security-scan/scripts/run-scan.sh < "$path" 2>"${RUNNER_TEMP:-/tmp}/scan.err")
+            sc_rc=$?
+            set -e
+            if [ "$sc_rc" -ne 0 ]; then
+              echo "::error file=$path::skill-security-scan: run-scan.sh exited $sc_rc. A scanner that crashed has produced no verdict; this is not a clean skill."
+              cat "${RUNNER_TEMP:-/tmp}/scan.err" >&2 || true
+              fail=1
+              continue
+            fi
+            verdict=$(printf '%s\n' "$sc_out" | head -1 | grep -oE 'HIGH-RISK|REVIEW|LOW-RISK' || true)
+            if [ -z "$verdict" ]; then
+              echo "::error file=$path::skill-security-scan: run-scan.sh emitted no recognised verdict (expected HIGH-RISK, REVIEW or LOW-RISK); treating as UNKNOWN and failing closed. First line was: $(printf '%s\n' "$sc_out" | head -1)"
+              cat "${RUNNER_TEMP:-/tmp}/scan.err" >&2 || true
+              fail=1
+              continue
+            fi
+            # COUNTS VERDICTS, NOT ITERATIONS (review). This also incremented inside the
+            # crash and unrecognised-verdict branches above, so `$scanned verdict(s)
+            # produced` asserted something the variable did not measure -- and the
+            # zero-verdict guard below could never be the sole cause of a failure,
+            # because every branch that skipped it had already set fail=1. Now the
+            # counter means what its name and its log line say.
+            scanned=$((scanned + 1))
             slug=$(path_to_slug "$path")
             echo "::notice file=$path::skill-security-scan verdict: $verdict (slug=$slug)"
             if [ "$verdict" = "HIGH-RISK" ]; then
@@ -156,4 +234,13 @@ jobs:
               fi
             fi
           done <<< "$ADDED"
+          # ZERO VERDICTS IS NOT A PASS (#7629 P2b). The step is only reached when
+          # no_new_skills=false -- i.e. the gate believes it has work. Exiting 0
+          # having scanned nothing means the gate reported success about a set it
+          # never examined, which is the failure one level below a wrong verdict.
+          if [ "$requested" -gt 0 ] && [ "$scanned" -eq 0 ]; then
+            echo "::error::skill-security-scan: $requested path(s) were queued for scanning and 0 verdicts were produced. Refusing to report success for a scan that did not happen."
+            fail=1
+          fi
+          echo "skill-security-scan: $scanned verdict(s) produced from $requested queued path(s)."
           exit $fail
