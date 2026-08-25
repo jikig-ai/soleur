@@ -16,7 +16,7 @@ artifact was on disk and complete, so planning was NOT re-run.
 2. **The recovered plan was internally contradictory.** Review had superseded the Phase 0.1 /
    M12 "read a harness-injected variable" design inside Phase 3, but the Acceptance Criteria
    (AC8-AC11), Files to Edit, Test Scenarios (T7/T9/T11), the Guard 2 mutation matrix, the
-   Observability failure-modes, the Risks table and the ADR-195 description all still described
+   Observability failure-modes, the Risks table and the ADR-196 description all still described
    the superseded design. `/work` would have been handed a plan saying both "do not widen the
    antecedent" and "prove the widened antecedent refuses". Reconciled by the lead before `/work`;
    10 targeted edits.
@@ -44,7 +44,7 @@ artifact was on disk and complete, so planning was NOT re-run.
   `tc_preamble`->`tc_acquire` window. Chosen over docs-only and over full M12. Rationale: it binds
   the refusal to a condition the runner MEASURES rather than one an agent must DECLARE, so it needs
   no spawn-path cooperation, has no fail-open mode, and is testable in CI.
-- **ADR-195 re-scoped** to record the measured-vs-declared decision, with M12 in its
+- **ADR-196 re-scoped** to record the measured-vs-declared decision, with M12 in its
   rejected-alternatives table carrying both disqualifying findings.
 
 ### Components Invoked

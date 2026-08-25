@@ -1,4 +1,4 @@
-# ADR-195: A full-gate refusal binds to a condition the runner MEASURES, not one an agent DECLARES
+# ADR-196: A full-gate refusal binds to a condition the runner MEASURES, not one an agent DECLARES
 
 - **Status:** Accepted. True the moment the code merges — no soak window, no time-gated criterion.
 - **Date:** 2026-08-19

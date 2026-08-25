@@ -895,7 +895,7 @@ fi
 # variable first assigned inside that window does not exist in their sandbox while the reader
 # after it does — and under `set -u` that aborts the sandbox mid-run. Measured: it took AC2, AC3
 # and AC8b red in a suite this branch does not otherwise touch. Exactly the shape of #7553's own
-# regression, recorded in ADR-195 Decision 7.
+# regression, recorded in ADR-196 Decision 7.
 #
 # The anchors are NOT quoted verbatim here on purpose. Those fixtures locate the splice window by
 # substring and require it to be UNIQUE; an earlier draft of this comment quoted the acquire call

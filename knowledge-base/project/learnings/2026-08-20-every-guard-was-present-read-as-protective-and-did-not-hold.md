@@ -149,7 +149,7 @@ proposed root cause** (their escape predated the thing they blamed by 25 minutes
    applies to COMMENTS — a comment naming a token a parser keys on is part of that parser's input.
 9. **Declared a variable inside the window the two SUT-driving suites splice over** — `set -u`
    aborted them (77/0 → 40/37). **Recovery:** declared at top level, initialised to the
-   NOT-MEASURED value. **Prevention:** ADR-195 Decision 7 — a change to `test-all.sh` is a
+   NOT-MEASURED value. **Prevention:** ADR-196 Decision 7 — a change to `test-all.sh` is a
    change to those suites' SUT, and CI cannot see it (one shard, clean tree).
 10. **A mutation arm that never landed** — wrong shard, so the probe never ran; `rc=0, 7/7`.
     **Recovery:** re-ran on the shard that globs it. **Prevention:** assert the mutation LANDED
@@ -171,5 +171,10 @@ proposed root cause** (their escape predated the thing they blamed by 25 minutes
     calls do not share shell variables.
 16. **ADR-194 ordinal collision** — `main` landed a different ADR-194 mid-flight. **Recovery:**
     renumbered to ADR-195, sweeping by CLAIM not by literal (3 of 9 references meant the OTHER
-    record; a blanket `sed` would have silently repointed them). **Prevention:** re-check the
-    ordinal against freshly-fetched `origin/main` immediately before merge.
+    record; a blanket `sed` would have silently repointed them). **It then collided a SECOND
+    time** — `main` landed its own ADR-195 (orphan-process-boundary, #7641) while this branch was
+    in CI — so it is now ADR-196. **Prevention:** re-checking the ordinal "immediately before
+    merge" is necessary and NOT sufficient on a `main` that lands a PR every ~30 min: the window
+    between the re-check and the merge is itself long enough to collide. The durable fix is a
+    content-addressed or merge-time-assigned ordinal; until then, expect to renumber during CI
+    and sweep by claim each time.
