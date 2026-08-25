@@ -2182,7 +2182,15 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // criterion for #7556.
   // Same orthogonality note applies — a warehouse query, not a host login, so
   // `hr-no-ssh-fallback-in-runbooks` is satisfied.
-  const BASELINE_DECLARED_PROBES = 5;
+  // 5 -> 6 (#7674). The sixth is
+  // `plans/archive/20260825-134550-2026-08-25-fix-inngest-host-not-serving-and-latch-gate-blindness-plan.md`,
+  // and it was checked against this assertion's own instruction before the number moved rather
+  // than after: the declaration sits INSIDE that plan's `discoverability_test:` sub-block, not
+  // adrift in the observability block, and it is genuine — the probe it names
+  // (`scripts/followthroughs/inngest-host-not-serving-7674.sh`) asserts a property of the live
+  // host's Better Stack telemetry, for which no unauthenticated substitute reads that source. So
+  // it is a real declaration to be baselined, not a template leftover to be deleted.
+  const BASELINE_DECLARED_PROBES = 6;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
