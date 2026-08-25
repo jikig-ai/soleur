@@ -90,6 +90,29 @@ def scope_has_set_e(lines, idx):
             depth -= 1
     return False
 
+HEREDOC = re.compile(r'<<-?\s*[\'"]?([A-Za-z_][A-Za-z0-9_]*)[\'"]?')
+
+def heredoc_lines(lines):
+    """Line indices inside a heredoc body.
+
+    Suites in this repo routinely EMBED fixture scripts in heredocs, including
+    fixtures that deliberately spell the forbidden shape so a scanner can be
+    proven non-vacuous. Those bodies are data, not code that will ever run in
+    this shell — treating them as code makes every such suite a false positive,
+    starting with this one, which flagged its own A2 fixture.
+    """
+    inside, term, out = False, None, set()
+    for i, l in enumerate(lines):
+        if inside:
+            out.add(i)
+            if l.strip() == term:
+                inside, term = False, None
+            continue
+        m = HEREDOC.search(l)
+        if m and not l.lstrip().startswith("#"):
+            inside, term = True, m.group(1)
+    return out
+
 def scan(paths):
     out = []
     for f in paths:
@@ -97,7 +120,10 @@ def scan(paths):
             lines = open(f, encoding="utf-8", errors="replace").read().split("\n")
         except OSError:
             continue
+        skip = heredoc_lines(lines)
         for i, line in enumerate(lines):
+            if i in skip:
+                continue
             if line.lstrip().startswith("#"):
                 continue
             if not CD.match(line):
@@ -108,7 +134,7 @@ def scan(paths):
                 continue          # a failed cd aborts
             window = lines[i + 1 : i + 13]
             for off, wl in enumerate(window):
-                if wl.lstrip().startswith("#"):
+                if (i + 1 + off) in skip or wl.lstrip().startswith("#"):
                     continue
                 m = WRITE.search(wl)
                 if not m:
@@ -213,12 +239,36 @@ n="$(python3 "$SCANNER" "$TMP/ok4.test.sh" 2>&1 | sed -n 's/^SITES=//p')"
   || fail "a read-only block was flagged ($n)"
 echo ""
 
+echo "A5: a fixture embedded in a heredoc is data, not code"
+# The exact shape A2 relies on, but written INSIDE a heredoc — which is how
+# every fixture in this repo is authored. Flagging it made this very file red
+# in CI while passing locally (the file was still untracked, so `git ls-files`
+# did not hand it to the scanner).
+cat > "$TMP/heredoc.test.sh" <<'OUTER'
+#!/usr/bin/env bash
+set -uo pipefail
+cat > "$TMP/inner.sh" <<'INNER'
+(
+  cd "$FIXTURE"
+  git commit --allow-empty -m "victim change"
+)
+INNER
+OUTER
+n="$(python3 "$SCANNER" "$TMP/heredoc.test.sh" 2>&1 | sed -n 's/^SITES=//p')"
+[[ "$n" == "0" ]] && pass "heredoc-embedded fixtures are not flagged" \
+  || fail "a heredoc-embedded fixture was flagged ($n) — every fixture suite becomes a false positive"
+# …and the SAME bytes, as a real script rather than heredoc data, must still flag.
+n2="$(python3 "$SCANNER" "$TMP/bad.test.sh" 2>&1 | sed -n 's/^SITES=//p')"
+[[ "$n2" == "1" ]] && pass "the same shape as real code is still flagged (skip is scoped, not blanket)" \
+  || fail "heredoc skipping disabled real detection ($n2)"
+echo ""
+
 echo "=== Results ==="
 echo "Passed: $PASS"
 echo "Failed: $FAIL"
-# Floor: 6 assertions. A refactor that drops arms must not read as a pass.
-if (( PASS + FAIL < 6 )); then
-  echo "ANTI-VACUITY FLOOR TRIPPED: only $((PASS + FAIL)) assertions ran, expected 6." >&2
+# Floor: 8 assertions. A refactor that drops arms must not read as a pass.
+if (( PASS + FAIL < 8 )); then
+  echo "ANTI-VACUITY FLOOR TRIPPED: only $((PASS + FAIL)) assertions ran, expected 8." >&2
   exit 1
 fi
 if (( FAIL > 0 )); then echo "SOME TESTS FAILED"; exit 1; fi
