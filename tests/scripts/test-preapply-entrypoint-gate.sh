@@ -615,8 +615,21 @@ t_parity_all_types_adjudicated() {
   fi
 }
 
-# P2: ADR-136 names every adjudicated-OUT type — so the ADR and this test cannot
-#     drift (the coupling the plan requires).
+# P2: ADR-136 ADJUDICATES every adjudicated-OUT type — so the ADR and this test
+#     cannot drift (the coupling the plan requires).
+#
+# ANCHORED ON THE TABLE ROW, NOT ON THE BARE TOKEN. This was `grep -Fq "$t"`,
+# which asked only whether the name appears ANYWHERE in the ADR. Prose naming a
+# type — a caveat paragraph, a forward note about a sibling class — satisfied
+# that, so the type's actual adjudication row could be deleted with this test
+# still green. Measured, not theorised: adding a paragraph that mentions
+# `cloudflare_pages_project` and then deleting its table row left the suite at
+# 43/43. The bare-token form was vacuous for exactly the class of type this
+# gate exists to force a decision about (cq-assert-anchor-not-bare-token).
+#
+# The anchor requires a table ROW whose FIRST cell code-spans the type AND
+# whose row carries an OUT verdict. Backticks delimit the type, so
+# `cloudflare_zero_trust_tunnel_cloudflared` does not match the `_config` row.
 t_parity_adr_lists_out_set() {
   if [[ ! -f "$ADR133" ]]; then
     _report "P2 ADR-136 lists the adjudicated-OUT set" fail "missing $ADR133"
@@ -624,12 +637,12 @@ t_parity_adr_lists_out_set() {
   fi
   local t missing=()
   for t in "${ADJUDICATED_OUT[@]}"; do
-    grep -Fq "$t" "$ADR133" || missing+=("$t")
+    grep -Eq "^\|[^|]*\`${t}\`.*\| *OUT" "$ADR133" || missing+=("$t")
   done
   if [[ "${#missing[@]}" -eq 0 ]]; then
-    _report "P2 ADR-136 names every adjudicated-OUT type (ADR↔test coupling)" ok
+    _report "P2 ADR-136 has an OUT-verdict table row for every adjudicated-OUT type (ADR↔test coupling)" ok
   else
-    _report "P2 ADR-136 lists the adjudicated-OUT set" fail "absent from ADR-136: ${missing[*]}"
+    _report "P2 ADR-136 lists the adjudicated-OUT set" fail "no OUT-verdict table row in ADR-136 for: ${missing[*]}"
   fi
 }
 
