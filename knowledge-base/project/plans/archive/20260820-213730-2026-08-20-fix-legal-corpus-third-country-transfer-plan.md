@@ -506,7 +506,7 @@ data. The exposure it addresses is a **transparency** exposure: a data subject c
 the Art. 15(2) right to be informed of the safeguards for a transfer whose existence the
 controller denies in writing.
 
-**Brand-survival threshold:** `single-user incident`. One contributor reading one false
+- **Brand-survival threshold:** `single-user incident`. One contributor reading one false
 transfer statement is the whole harm; there is no aggregation threshold below which it is
 acceptable. `requires_cpo_signoff: true` is set accordingly, and `user-impact-reviewer` runs at
 review time.
