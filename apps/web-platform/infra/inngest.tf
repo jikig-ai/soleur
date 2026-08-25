@@ -246,6 +246,23 @@ resource "doppler_secret" "inngest_redis_password_prd" {
 # STOPS both co-located inngests; the dedicated host (10.0.1.40) uses its OWN dark
 # pooler (soleur-dev), so prod-pooler inngest load goes to ~0.
 #
+# ⚠ SUPERSEDED IN PART (#7462, 2026-08-20) — the last clause above is FALSE and is left in
+# place only so this correction has something to cite. The dedicated host has NOT pointed at
+# soleur-dev since 2026-07-23T15:46Z: `op=arm` overwrites INNGEST_POSTGRES_URI with the PROD
+# DSN and `op=rollback` has no inverse for that write, so the prod DSN is the post-first-arm
+# steady state of the "dark" slot (ADR-100 addendum 2026-08-20). Post-flip, prod-pooler inngest
+# load therefore does NOT go to ~0 — it moves to the dedicated host.
+#
+# THE BUDGET BELOW IS UNAFFECTED, and that is a measurement rather than a hope. ADR-105 never
+# rested on the ~0 claim: its Precondition section names the durable resolution as "collapses to
+# ONE prod-pool writer permanently", not to zero, and its arithmetic is one writer at P×5 ≤ 20 <
+# pool_size 30. The dedicated host honours that cap — inngest-bootstrap.sh writes
+# `--postgres-max-open-conns` into the durable-backend ExecStart, and inngest-server-flip-guard.sh
+# uses that same flag as its durable sentinel. So the post-flip operating point is exactly the one
+# ADR-105 already models, and the sentence above was inconsistent with the ADR it anchors even
+# before the DSN write made it stale. Correcting it RECONCILES the two; it does not obsolete
+# either, and no separate pool-arithmetic finding follows from it.
+#
 # DECISION (#6258, supersedes #5562): KEEP `default_pool_size` at 30 — do NOT revert to
 # 15. The #5562 revert's premise (that the client cap bounds inngest's *total* under 15) is
 # falsified by the per-pool model above: tightening the upstream pool to 15 while inngest's

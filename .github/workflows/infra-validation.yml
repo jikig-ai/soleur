@@ -513,22 +513,46 @@ jobs:
     # Current long poles (run 31054177230): git-data runcmd rehearsal 96 s, web-host parity
     # mutation 47 s, ci-deploy 35 s, LUKS verify 28 s.
     #
-    # RE-DERIVED 2026-08-20 (#7587), as the block above instructs, because this PR adds a step
-    # (`arm-heartbeats.test.sh`). The step measures **21.6 s** locally on a 16-core box — pure
-    # bash + jq with every `sleep` stubbed, so the runner should be comparable; it is ~2.5 % of
-    # the job.
-    # Measured from the API over the last 23 COMPLETED `deploy-script-tests` jobs, whole-job
-    # seconds: 495 512 513 538 538 538 542 543 555 576 576 718 723 727 740 742 758 763 766 775 863
-    # (plus two early failures at 70 and 395). ZERO cancellations. The 863 exceeds the 840 s
-    # ceiling in API wall clock, which is NOT a contradiction: GitHub's timeout clock starts when
-    # the job begins executing steps, while `started_at` is earlier — the same 13–31 s of
-    # divergence measured on this repo's actual timeout kills.
-    # VERDICT: NOT bumped. The margin this block sized for (~1.4x over the observed max) is gone —
-    # it is now ~1.0x — but bumping a ceiling whose stated purpose is to catch a bypassed sleep
-    # mock, in the same edit that adds 2.5 %, is exactly the move this block warns against. What
-    # would justify a bump: a cancellation, or a re-derivation that attributes the 495 -> 863
-    # spread to a specific suite. Neither exists yet, and the spread is the thing to explain first.
-    timeout-minutes: 14
+    # RE-DERIVED 2026-08-20 (#7546 review). The 2026-08-16 derivation below was correct for the
+    # battery AS IT THEN STOOD, and the battery has since gone 22 -> 40 rows (commit 2e44a01c5,
+    # "22 -> 40 battery rows, because 4 of the old 21 shared one detector") while this block kept
+    # sizing itself on 22. A timeout budget derived from a superseded row count is exactly the
+    # stale-number class this PR exists to fix, and it fails in the direction that cancels a job
+    # rather than the direction that merely wastes a runner.
+    #
+    # MEASURED 2026-08-20: `bash apps/web-platform/infra/infra-config-repush-mutation.test.sh`
+    # = 194 s wall clock, 40/40 rows, on a 16-core box where the battery's own min(4, nproc-2)
+    # cap yields JOBS=4. The 17-row figure recorded below was 85 s under the same conditions, so
+    # 17 -> 40 rows costs +109 s locally. CI is a 4-vCPU runner where the same cap yields JOBS=2,
+    # so budget roughly 2x: +218 s there.
+    #   observed deploy-script-tests max (15 runs, successful only) : 581 s
+    #   + the 17 -> 40 battery growth in CI                          : +218 s
+    #   new basis                                                    : ~799 s
+    #   799 x 1.4 = 1119 s = 18.6 min -> 20
+    # 15 -> 20 minutes. At 15 the margin would be 900/799 = 1.13x, well under the ~1.4x this
+    # block sizes for, and the battery alone would be ~43% of the whole budget.
+    #
+    # The superseded 2026-08-16 derivation, kept because its METHOD is the one applied above:
+    # EXISTING step materially slower: the infra-config re-push mutation battery goes 17 -> 22 rows.
+    # Measured from the API over the last 15 `Infra Validation` runs, deploy-script-tests job
+    # seconds, successful only (one 65 s failure excluded — it died early and is not a duration):
+    #   422 436 439 462 475 484 485 493 497 498 503 505 564 581
+    # So the 565 s basis recorded above is itself now stale: the observed max is 581 s.
+    # The battery's added cost: 85 s -> 102 s measured locally at JOBS=4 on 16 cores, and CI is a
+    # 4-vCPU runner where the battery's own min(4, nproc-2) cap yields JOBS=2, so the +5 rows cost
+    # roughly +45 s there rather than +17 s. New basis ~626 s.
+    #   626 x 1.4 = 876 s = 14.6 min -> 15.
+    # 14 -> 15 minutes. At 14 the margin would be 840/626 = 1.34x, below the ~1.4x this block sizes
+    # for. Still deliberately not larger, for the reason stated above.
+    #
+    # AMENDED 2026-08-20 (#7587): this PR adds one step to this job,
+    # `arm-heartbeats.test.sh` — pure bash + jq with every `sleep` stubbed, measured at 21.6 s
+    # locally on a 16-core box. Against the 20-minute (1200 s) budget derived directly above that
+    # is ~1.8 %, and against the ~799 s basis it is ~2.7 %, so the ~1.4x margin this block sizes
+    # for survives the addition (799 + 22 = 821; 1200/821 = 1.46x). NOT re-bumped: an addition
+    # this size does not move the derivation, and the block's own rule is that a ceiling meant to
+    # catch a bypassed sleep mock is not raised casually.
+    timeout-minutes: 20
     steps:
       # fetch-depth: 0 + fetch-tags: true make the vinngest-v* tags reachable so
       # the cloud-init-inngest-bootstrap drift-guard (AC6, #4675) can compare the
@@ -973,6 +997,45 @@ jobs:
 
       - name: Run infra-config apply gate adjudicator guard (#6594 content assert vs stale-same-count)
         run: bash apps/web-platform/infra/infra-config-gate.test.sh
+
+      - name: "Run infra-config verification-body guard (#7104 extracted body does not actuate)"
+        run: bash apps/web-platform/infra/infra-config-verify.test.sh
+
+      # AC21 — the Guard 1 + Guard 2 mutation matrices, executable rather than tabulated. This job
+      # lists its tests explicitly (no glob), so an unregistered battery is a CLAIM: no gate sees
+      # it, no runner enumerates it, and no orphan reporter names it. The rows drive the two suites
+      # above against 40 single-mutation sandboxes and assert the expected exit code AND that a
+      # FAILING check named the property — "some assertion failed" is not detection, and neither is
+      # "the marker appears somewhere in the log", which is what this asserted until #7104's review
+      # measured that 11 of the then-17 markers were present in a GREEN baseline.
+      #
+      # REGISTRATION IS HARD-GATED; EXECUTION HERE IS ADVISORY *IN THIS JOB*, AND MERGE-BLOCKING
+      # ELSEWHERE. Registration is enforced by `guard-script-fixture-tests`, which IS a required
+      # check — an unregistered suite fails CI. And `deploy-script-tests`, the job this step runs
+      # in, is NOT in scripts/required-checks.txt, so a RED row in THIS job does not block a merge.
+      #
+      # CORRECTED 2026-08-20 (#7546 review): the previous sentence stopped there and concluded
+      # "it is not a merge gate", which is false for exactly the PRs these suites exist to cover.
+      # All three ARE registered in apps/web-platform/infra/run-registered-suites.sh (measured:
+      # entries 37, 40, 41), scripts/test-all.sh invokes that runner as a nested suite whenever
+      # the diff touches `apps/web-platform/infra/` (or when diff detection fails, which
+      # fail-safes to running it), and `test` IS a required context. So on any infra-touching PR
+      # a RED row here blocks the merge through that route. The distinction is real but it is
+      # about WHICH JOB, not about whether the guards gate anything — and a comment that tells a
+      # future reader these batteries are advisory is the kind of claim this PR exists to stop.
+      #
+      # TIMING, re-derived 2026-08-20 (#7546 review): the battery is now 40 rows, not 22, and
+      # measures 194 s wall clock at JOBS=4 on 16 cores (40/40). CI caps at JOBS=2 on 4 vCPU,
+      # so budget roughly 2x -- ~390 s of the job's 20-minute allowance. The superseded
+      # 22-row derivation follows, kept for its method:
+      # TIMING, re-derived 2026-08-16 (#7104 review) because this PR takes it 17 -> 22 rows:
+      # measured 102 s wall clock on a 16-core box at JOBS=4. That is NOT the CI figure — the
+      # battery caps itself at min(4, nproc-2), and the public runner has 4 vCPU, so CI runs it at
+      # JOBS=2 on slower cores. Budget roughly 2x the local number. The previously recorded "~85 s
+      # … 4 at a time" was a 16-core figure presented without that qualification, which is how the
+      # job's own timeout budget came to be sized against a number CI never sees.
+      - name: "Run infra-config re-push Guard 1 + Guard 2 mutation battery (#7104 AC21)"
+        run: bash apps/web-platform/infra/infra-config-repush-mutation.test.sh
 
       - name: Run ci-deploy-wrapper.sh tests
         run: bash apps/web-platform/infra/ci-deploy-wrapper.test.sh

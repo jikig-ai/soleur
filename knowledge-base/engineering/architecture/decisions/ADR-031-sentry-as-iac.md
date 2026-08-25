@@ -499,7 +499,19 @@ reads refreshed on every PR and on the main apply — so the transient 410 wedge
 **Measurement (Phase 0, the load-bearing gate).** Run against **live** Sentry state
 2026-07-17: `terraform plan` on the pinned `0.15.0-beta2` returned a clean full-root no-op
 (0/0/0) with **zero 410s** — the retirement was transient and Sentry had restored the legacy
-endpoint. So the 410 was NOT reproducible-on-beta2 by the time of the fix; a bump was not
+endpoint.
+
+> **Superseded 2026-08-19 (#7590):** the reading "transient, and Sentry had restored the
+> endpoint" was wrong, and the measurement above is exactly what a wrong reading looks like.
+> Sentry deprecated this API family on **2026-05-14** and serves it under scheduled
+> **brownouts** — 410 for a short window on a recurring schedule, 200 the rest of the time. A
+> re-probe minutes later therefore returns a clean 0/0/0 whether the endpoint was restored or
+> merely outside its next window, and the two are indistinguishable from a single follow-up
+> probe. The signal that would have separated them was in the response headers the whole time
+> (`x-sentry-deprecation-date`, `x-sentry-replacement-endpoint`); nothing read them. See
+> Amendment 2026-08-19 (#7590) below.
+
+So the 410 was NOT reproducible-on-beta2 by the time of the fix; a bump was not
 *required* to clear it. But the standing deprecation warning ("migrate to `sentry_alert`")
 signals the legacy read path will eventually be retired for real, and the beta pin was itself
 flagged "re-evaluate on first stable".
@@ -508,7 +520,10 @@ flagged "re-evaluate on first stable".
 line's latest, `0.15.4`. This is the durable fix, not merely a beta-pin cleanup: provider
 **v0.15.3** (`jianyuan/terraform-provider-sentry#885`, "fix: Update reads from GET endpoint")
 switched `sentry_issue_alert` reads **off** the legacy endpoint, so `0.15.4` no longer depends
-on the retired read path. Measured on `0.15.4` against live state: `validate` exit 0, full-root
+on the retired read path. *(**That last clause is RETRACTED — measured false 2026-08-20 under
+#7590; see the Correction at the end of this amendment.** `0.15.4` still reads the deprecated
+path. The bump stands as stable-over-beta, not as a fix for the 410.)* Measured on `0.15.4`
+against live state: `validate` exit 0, full-root
 `plan` no-op (0/0/0) across all 23 issue alerts + 49 cron + 4 uptime monitors, zero 410s, no
 drift, `fmt` clean. It is a provider-version-only change (`versions.tf` pin + regenerated
 `.terraform.lock.hcl` for the CI/dev platform set) — no state surgery, no resource rewrite,
@@ -526,10 +541,190 @@ updated: **re-attempt the `sentry_alert` migration when those default-monitor da
 confirmed to let a project-wide frequency rule fire faithfully** (not merely "on first stable",
 which is now satisfied).
 
-**Recurrence.** If Sentry retires the legacy read endpoint *permanently*, `0.15.4` is already
-off it (v0.15.3 #885), so this root does not re-wedge on that account. A different provider
-read regression would surface the same way (full-root plan failure → red required gate) and is
-governed by the same #6589 machinery.
+**Recurrence.** ~~If Sentry retires the legacy read endpoint *permanently*, `0.15.4` is already
+off it (v0.15.3 #885), so this root does not re-wedge on that account.~~ **RETRACTED 2026-08-20
+(#7590) — measured false; see the Amendment below.** A different provider read regression would
+surface the same way (full-root plan failure → red required gate) and is governed by the same
+#6589 machinery.
+
+**Correction (2026-08-20, #7590) — `0.15.4` is NOT off the legacy read path, and this root DOES
+re-wedge.** The claim above, and the "durable fix" rationale in the decision paragraph, both rest
+on the v0.15.3 changelog entry (`#885`). That datum was never plan-measured: the 2026-07-17 Phase 0
+plan ran outside a brownout window, and its own evidence file flags the durability claim as
+"changelog-sourced, not plan-measured". CI has now measured it. With `jianyuan/sentry v0.15.4`
+installed, run `32362401543` (2026-08-20T11:09:07Z) took `410 "This API no longer exists"` on
+**29 of 29** `sentry_issue_alert` reads and failed `terraform plan`; run `32362320701` **one minute
+earlier** (11:08:09Z), same branch and same pin, passed. The alternation repeats on 2026-08-19
+(17:43 pass / 18:26 fail; 21:21 pass / 21:30 fail) — the brownout signature, now visible in CI
+history rather than inferred.
+
+Consequences: the `0.15.4` pin is still preferable to `0.15.0-beta2` (stable over beta, and it
+resolves the "re-evaluate at first stable" note), but it is **not** a fix for the 410 and #6636 did
+not durably close this. The sentry Terraform root remains wedged by every brownout window, which
+also means the required `sentry-destroy-required` gate and `apply-sentry-infra.yml` fail on the
+vendor's schedule — the "detector blocks its own cure" deadlock this ADR describes elsewhere, now
+load-bearing rather than hypothetical. The real fix is a provider that reads the replacement
+endpoint (`organizations/{org}/workflows/`); the `sentry_alert`/`monitor_ids` blocker in the
+paragraph above is unchanged and still forbids the migration the issue originally proposed. Tracked
+in #7650.
+
+**Amendment (2026-08-19, #7590) — the alert-rule API family is deprecated with brownouts,
+not removed; the audit is migrated per-endpoint and the orphan predicate is rebound.**
+
+**What happened.** `Sentry Audit Gate` alternated green and red across consecutive runs on a
+byte-identical script. The alternation was read as flakiness for months. It is a deprecation
+**brownout**: Sentry deprecated the alert-rule API on 2026-05-14 and returns 410 for a short
+window on a recurring schedule. Two consequences follow that a "transient vendor blip" reading
+does not predict — the failure never self-heals, and re-probing after a red reliably "clears"
+it, which is why the 2026-07-17 amendment above reached the wrong conclusion.
+
+**Endpoint mapping, taken from Sentry's own response headers.** Every deprecated 410 carries
+`x-sentry-replacement-endpoint`. The mapping is **per-endpoint**, and this is the load-bearing
+detail: the two endpoints this audit used have DIFFERENT successors, so repointing both at
+`workflows/` would have silently mis-mapped metric alerts onto issue-alert routing.
+
+| Deprecated (410 + headers) | Replacement (200, no deprecation headers) |
+|---|---|
+| `projects/{org}/{proj}/rules/` | `organizations/{org}/workflows/` |
+| `organizations/{org}/alert-rules/` | `organizations/{org}/detectors/` |
+| `organizations/{org}/combined-rules/` | (410; not called by this root) |
+
+Both replacements are **org-scoped**, so the audit's `SENTRY_PROJECT` fetch branch dissolved.
+`SENTRY_PROJECT` still scopes Gates 2 and 3.
+
+**The orphan predicate was already broken, independently of the deprecation.** Classes A and B
+keyed on a `monitor.slug` binding inside rule `.conditions[]`/`.filters[]`. Measured against
+the live org: that key matches **0 rows**, and **0 of 55** monitor slugs appear anywhere in the
+rules payload. It did not fail to survive the migration — it never matched, so Class A had
+flagged every monitor in the org since it shipped. The classes are rebound onto the routing
+graph that actually exists:
+
+    monitor  <--(slug)--  cron detector  --(workflowIds)-->  workflow
+
+Class A is now a **count plus a machine-checked invariant**, `class_a_count ==
+cron_detector_count`, asserted in the suite rather than stated here. A literal baseline (55
+today) would go stale the moment monitor 56 lands and could not distinguish ordinary growth
+from a real routing attachment from an extraction failure; the invariant distinguishes all
+three. Deliberately **not** recorded in this ADR: the literal count.
+
+**`curl_retry` never inspected HTTP status.** It retried only when the transport itself failed,
+so the 500 and 504 recorded in the 2026-07-17 amendment were never retried at all. It now
+classifies: 429/5xx retried, 410/404/401/403 never — retrying a 410 would mask a permanent
+sunset as a flake, which is the precise ambiguity that cost this investigation a full session.
+
+**Retry is idempotency-aware.** Gate 3 is a non-idempotent `POST /releases/` whose `probe_ver`
+is computed once, outside the wrapper, and whose check is `!= 201`. Sentry returns **208** when
+the release already exists, so status-retrying a 5xx whose write landed server-side would yield
+a deterministic 208 and a false "token lacks project:releases scope" diagnosis. Write probes
+are excluded from status retry. This failure mode could not occur before only because the
+wrapper never retried on status at all.
+
+**Capture is `-D` only; `-w`/`-o` are forbidden inside the wrapper.** `curl_retry`'s stdout is
+polymorphic — Gates 2/3 pass their own `-o /dev/null -w '%{http_code}'` and read stdout as the
+STATUS, while Gate 1 and every fetch read it as the BODY. A wrapper `-w` after `"$@"` wins
+(duplicate `-w` is last-wins) and turns a healthy body into `[...]200`, firing the new
+diagnostic against a working endpoint.
+
+**The deprecation tripwire, and why its escalation is CALLER-SCOPED.** Any response carrying
+`x-sentry-deprecation-date` now warns — **including a 200**, which is the state these endpoints
+were in for three months while nothing read the header.
+
+Escalation to a non-zero exit is **opt-in per caller** (`SENTRY_DEPRECATION_FAIL=1`) and **off by
+default**; only the advisory `sentry-audit-gate.yml` sets it. That asymmetry is the load-bearing
+decision, not the window:
+
+The tripwire runs inside `curl_retry`, which Gates 1–3 also call, so its reach is NOT limited to
+the endpoints this migration moved. A deprecation header on `/organizations/{org}/` — which the
+audit must read to prove org controllability, and cannot migrate away from — reaches it too. And
+`apply-sentry-infra.yml` runs this script BEFORE `terraform plan`, so escalating there would be a
+vendor-scheduled freeze on Sentry infra deploys, possibly including the deploy that ships the
+migration: the same "detector blocks its own cure" deadlock the Class D state half exists to
+avoid. `SENTRY_DEPRECATION_FAIL_WINDOW_DAYS` (default 30) governs WHEN escalation arms for a
+caller that opted in; it is not an escape hatch for one that did not, and it is set in no
+workflow.
+
+So on the apply and release callers, a deprecation inside the window emits a `::warning::`
+annotation and exits 0. That is a weaker channel than failing, and it is a deliberate trade —
+a warning on a green job is what failed in 2026-07, but freezing deploys on a vendor's calendar
+is worse. The audit report names the affected endpoints, but do not read it as a durable record
+on both callers: only `reusable-release.yml` publishes it, and only on exit 0 — see §Recurrence,
+which measures both claims this paragraph used to make. #7619 removes the need for the trade by
+splitting the fail-closed gating half from the advisory reporting half.
+
+**Pagination follows the cursor, and never the Link target as given.** `detectors/` grows 1:1
+with cron monitors, so a loud-fail-on-truncation arm would — by ordinary monitor growth — red
+this audit *before* the `terraform plan` step in `apply-sentry-infra.yml`, the only path that
+deploys the fix: the detector blocking its own cure, the same deadlock the Class D state half
+exists to avoid. Only the `cursor` parameter is extracted and the URL rebuilt from the
+validated `api_host`. Two independent reasons, and the second is why the obvious hardening is
+wrong: an `@`-bearing target makes curl treat the prefix as userinfo and send the token
+off-box; and Sentry's Link targets point at `sentry.io` even when the request went to the org
+subdomain, so a host-equality check would refuse **every** real pagination and silently
+truncate the audit.
+
+**The id manifest is retired.** Its first-time-import consumer is complete (29
+`sentry_issue_alert` resources, clean full-root plan) and its README runbook was stale by 25
+resources. Rule ids and workflow ids are disjoint identifier spaces, so repointing the manifest
+would have preserved its name and shape while changing its meaning — worse than deleting it.
+
+**Required-check status: unchanged, and the false claim corrected.** `sentry-audit-gate.yml`
+asserted in two places that it was a required check. It is absent from
+`scripts/required-checks.txt`, the canonical required-status-checks JSON, and
+`ruleset-ci-required.tf`. The claim was corrected rather than made true: this job calls the
+live Sentry API, and its own history holds three vendor-caused reds in three months, so
+requiring it would hand merge control to a vendor's uptime. The structural fix — splitting the
+fail-closed gating half from the advisory reporting half behind `AUDIT_MODE=gates` — is
+tracked separately.
+
+**Recurrence — scoped, and narrower than the first draft of this paragraph claimed.** Any future
+deprecation of `workflows/`, `detectors/` or `monitors/` self-reports on the first 200 carrying the
+header — as a `::warning::` annotation, as a non-zero exit on callers that opted into escalation
+(`SENTRY_DEPRECATION_FAIL=1`; the advisory gate does, the apply path deliberately does not), and in
+the report's own `## Endpoint deprecation` section.
+
+Three corrections to what this paragraph said when first written, all measured:
+
+- **Severity.** It claimed an `::error::` annotation. `grep -c '::error::'
+  apps/web-platform/scripts/sentry-monitors-audit.sh` returns **0**. The tripwire emits
+  `::warning::`, and the escalation path writes a plain `ERROR:` to stderr, which is not a GitHub
+  annotation at all. An ADR promising a severity the code does not emit is how an operator
+  concludes the channel is broken when it is merely quieter than advertised.
+- **Reach.** It claimed "every caller". The tripwire lives inside `sentry-monitors-audit.sh`'s own
+  `curl_retry`, so it covers exactly the callers that route through that script —
+  `sentry-audit-gate.yml`, `reusable-release.yml`, and `apply-sentry-infra.yml`'s audit step. It
+  does **not** cover scripts that call Sentry with their own `curl` — a set far larger than this
+  paragraph first named, spanning `scripts/sentry-issue.sh`, most of `scripts/followthroughs/`, and
+  `apps/web-platform/infra/scripts/fresh-host-boot-trail.sh`. The set that matters *here* is the
+  narrower one: tracked shell that still issues a live request against the **deprecated alert-rule
+  family**. Its predicate is a request URL under `projects/{org}/{proj}/rules/` or
+  `organizations/{org}/alert-rules/` — not a *mention* of one, which is why a bare `rules/` grep
+  over-collects two scripts that name the path only in a comment. Regenerate the set with:
+
+  ```sh
+  git grep -lE 'api/0/(projects/[^ "]*/rules/|organizations/[^ "]*/alert-rules/)' -- '*.sh'
+  ```
+
+  As of #7590 that returns exactly two: `audit-sentry-extra-text-references.sh` and
+  `configure-sentry-alerts.sh`. `assert-byok-rules-exist.sh` left the set in that same PR when it
+  migrated to `workflows/`; `sentry-monitors-audit.sh` never belonged to it (its `rules/` hits are
+  the replacement-mapping comment). Those two still read and WRITE the deprecated
+  `projects/{org}/{proj}/rules/` path; their migration is blocked on
+  an unresolved write shape (the `workflows/` payload has no `conditions`/`filters`/`actions` keys —
+  it carries `triggers` and `actionFilters[]` instead) and is tracked separately. Neither has an
+  automated caller, so no brownout can abort a workflow through them.
+- **Durability.** It called the report section "the only durable channel of the three". That fails
+  in two independent ways. `grep -ln 'AUDIT_OUT_DIR\|upload-artifact\|gh release upload'` over the three
+  callers returns `reusable-release.yml` alone — the other two leave the report in `RUNNER_TEMP`,
+  where it dies with the runner, so the section is not durable on two of the three. And on the one
+  caller that does publish it — as a **release asset**, not a CI artifact — the `script_rc -ne 0`
+  branch `exit 0`s *before* `gh release upload`, so a non-zero exit and the durable record are
+  mutually exclusive: the report is written exactly when the script had nothing to escalate, and is
+  absent exactly when it did. The measured statement, which supersedes the claim: durable on
+  `reusable-release.yml` only, as a release asset, and only on exit 0. The annotation — ephemeral,
+  but emitted on every caller — is the channel that actually survives an escalation.
+
+Within that scope it no longer surfaces months later as an intermittent red.
+
 
 ## Consequences
 

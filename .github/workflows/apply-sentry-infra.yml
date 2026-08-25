@@ -667,7 +667,8 @@ jobs:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
           SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
-          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+          # SENTRY_PROJECT dropped 2026-08-19 (#7590): the script's fetch is now
+          # org-scoped and the variable has no consumer there.
         run: |
           set -euo pipefail
           which jq >/dev/null 2>&1 || sudo apt-get install -y jq
