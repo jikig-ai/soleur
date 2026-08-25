@@ -78,6 +78,26 @@ in the *steady state*, not only in the state where something happens. "Nothing t
 benign-sounding outcome and an alarming one, enumerate the plans that reach each. A
 message that is only reachable from the alarming condition is worse than no message.
 
+> **RECURRENCE, 2026-08-20 (#7586, same workflow, six days later) — and it generalizes past
+> gate exit codes to operator-facing PROSE.** The `apply-web-platform-infra` failure email
+> branched on the re-pause sweep's conclusion. The producer enumerates four values plus a
+> floor; the email body branched on **two**, so `cancelled`, `skipped` and `unknown` all fell
+> into one arm reading *"the sweep did not run, so nothing was left half-armed."* `cancelled`
+> is precisely when the sweep **was** cut mid-loop and monitors **are** live-and-unfed. Worse,
+> `unknown` is reached only when the jobs-API read *failed* — so the same step that emits
+> `::warning::Could not read the jobs API` asserted, two elements later, a fact it had just
+> said it could not read.
+>
+> **The delta over insight 2 as written above:** there the benign branch was *unreachable*.
+> Here it is perfectly reachable and carries **a claim the job never measured**. So the
+> enumeration is necessary but not sufficient — for each reachable branch, also ask *what does
+> this sentence assert, and did this job measure it?* A default arm that absorbs three
+> distinct states into one reassuring sentence will be wrong on at least one of them, and the
+> one it is wrong on is the one the reader most needed. Structural fix: read the arm set out
+> of the **producer's own validating `case`** rather than restating it, and assert that no
+> sentence claims a fact the job did not measure. See
+> [the channel was silent on the path it was built for](./2026-08-20-the-channel-was-silent-on-the-path-it-was-built-for.md) §6.
+
 **3. Adding an Nth instance to a file already covered by a membership assertion silently
 weakens that assertion.** `check-cloudflare-token-drift.test.sh` pinned the
 `cf-tunnel-ssh-bridge` caller set by sorted **file list** + **total count**. While
@@ -110,6 +130,10 @@ about where.
   before writing the matrix.
 - Before shipping a guard, ask which plan reaches each success branch. If a branch is
   unreachable, it is not a branch — it is a comment.
+- The same question applies to operator-facing **prose**, not only to exit codes: enumerate
+  every value the producer can emit, give each its own sentence, and check each sentence
+  against what the emitter actually measured. A catch-all arm that reassures is the worst
+  place for a state you did not enumerate to land. (#7586)
 - When adding an instance to a set an existing assertion enumerates, run that assertion's
   mutation battery. A membership assertion over files silently degrades when a file gains
   a second instance.

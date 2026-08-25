@@ -231,6 +231,32 @@ export const MANIFEST: ManifestEntry[] = [
     // run), the inertness has a named cause and a named owner, and the probe's fault
     // classification ships off-box from merge via vector Source 4 — so the outage stays observable
     // the whole time the beat is silent. Removing this row is step 6 of #7462.
+    //
+    // 2026-08-20 (#7587): the arming attempt this row suppresses the alarm for got SHORTER, and
+    // that changes what "removable" means here. The ARM gate's deadline for this one monitor
+    // moved 230s -> 30s (apps/web-platform/infra/arm-heartbeats.sh; the departure from
+    // period+grace-40 is recorded in ADR-117's 2026-08-20 amendment), because a 230s poll that
+    // cannot succeed while #7228 is open was burning ~79% of every merge apply. With a 180s
+    // feeder period against a 30s window, roughly one apply in six can catch the first beat, so
+    // once #7462 restores the host this monitor arms PROBABILISTICALLY — and the distribution is
+    // geometric, so quote its tail as well as its mean: at the measured 2.71 merge-applies/day the
+    // mean is ~2.2 days, but p95 is ~6.3 days and P(still unarmed after 2 days) is ~37%.
+    //
+    // So this row must NOT be removed on a checklist tick when #7462 closes. Removal has to
+    // follow OBSERVED arming: the monitor read live-`up`, or an ARM gate run logging
+    // "inngest-consumer (web-1): already armed (status=up)". Removing it while the arming window
+    // is still running switches the nightly live-reconcile back on for a state that is expected,
+    // which is the false-alarm this declaration exists to prevent.
+    //
+    // What this row is and is NOT. It is a SUPPRESSION, not an observer: removing it loses no
+    // observation, it re-arms an alarm. The two actual observers are named in the paragraph above
+    // — the monitor read live-`up`, and the ARM gate logging `already armed (status=up)`. And the
+    // suppression works on the FIELD, not on a name: `plugins/soleur/scripts/
+    // reconcile-live-heartbeats.ts` reads `Pick<ManifestEntry, "name" | "feeder" |
+    // "arming_pending">` and suppresses on `arming_pending` being present, which is exactly why
+    // removing this row re-arms the alarm. (A name-keyed exemption would SURVIVE the removal —
+    // the opposite.) The suppression is also partial by design: `heartbeat-live-reconcile.test.ts`
+    // records that `arming_pending` does NOT exempt condition (b).
     arming_pending: { tracking_issue: 7462 },
     exempt_reason:
       "web-host-resident feeder (inngest-consumer-probe.timer on web-1) delivered by the SSH terraform_data provisioner (terraform_data.inngest_consumer_probe_install), NOT cloud-init boot on either host. It monitors the dedicated inngest host from the consumer side precisely so that arming it never requires an inngest-host-replace, so ADR-103's replace_target requirement correctly does not fire.",

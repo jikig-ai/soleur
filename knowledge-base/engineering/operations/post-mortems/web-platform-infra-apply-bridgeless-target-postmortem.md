@@ -167,5 +167,14 @@ Every action item and follow-up so this incident cannot recur.
 
 | Issue | Action | Status |
 |---|---|---|
-| #7586 | Give a RED `Apply web-platform infra` run a notification channel — the missing detector is the root cause of this incident's three-day duration, not its one-line fault. | open |
-| #7587 | Fix the ARM gate's cumulative deadline (1860s) exceeding the `apply` job's `timeout-minutes: 15`, so a mid-poll cancellation cannot leave an unpaused-and-unfed monitor behind. | open |
+| #7586 | Give a RED `Apply web-platform infra` run a notification channel — the missing detector is the root cause of this incident's three-day duration, not its one-line fault. | **fix merged** — `notify-apply-failure` job, PR #7642 |
+| #7587 | Fix the ARM gate's cumulative deadline exceeding the `apply` job's `timeout-minutes`, so a mid-poll cancellation cannot leave an unpaused-and-unfed monitor behind. | **fix merged** — PR #7642 |
+
+The two rows above are kept for the record rather than deleted, but they no longer describe a live
+defect and the numbers they used to quote are stale. As shipped in PR #7642: the ARM gate lives in
+`apps/web-platform/infra/arm-heartbeats.sh` with Σ(deadlines) = 1510 s and a worst-case wall clock
+of 2020 s, under an ARM-step ceiling of 35 min and an `apply` job ceiling of 41 min, with an
+`if: always()` re-pause sweep behind it that re-pauses anything an externally-imposed cut left
+live. A non-green run reaches a `notify-apply-failure` job that emails ops. The residual — 6 of the
+last 60 runs, all non-`manual-rerun` dispatch targets plus one run-level cancellation — is stated
+in that job's own header rather than here.
