@@ -328,6 +328,11 @@ Checked 2026-08-20 against 64 open `code-review` issues, matching every path in
 
 ## User-Brand Impact
 
+- **Brand-survival threshold:** `single-user incident` — one prospective user meeting a dark
+  or wrong `soleur.ai` is brand-fatal, and the apex is HSTS-preloaded so it cannot fall back
+  to HTTP. Mirrors the `brand_survival_threshold` frontmatter field; stated here too because
+  a reader of this section should not have to scroll to the frontmatter to learn it.
+
 **If this lands broken, the user experiences:** `https://soleur.ai` serving a Cloudflare
 error page, a Pages "no deployment" page, a stale build, or NXDOMAIN — the public
 marketing and documentation site, the only surface a prospective user meets before signing
@@ -1256,10 +1261,28 @@ logs:
         history retained by Cloudflare.
 
 discoverability_test:
-  command: |
-    bash -c 'H=$(curl -sS -D - -o /dev/null --max-time 20 -w "HTTPCODE=%{http_code}\n" https://soleur.ai/ 2>/dev/null) || { echo "UNREACHABLE (transport)"; exit 2; }; case "$H" in *"HTTPCODE=200"*) ;; *) echo "UNREACHABLE (status not 200)"; exit 2;; esac; printf "%s\n" "$H" | grep -qiE "^(x-github-request-id|x-fastly-request-id|via: 1\.1 varnish)" && echo "SERVING-FROM-GITHUB-PAGES" || echo "SERVING-FROM-CLOUDFLARE-PAGES"'
-  expected_output: "SERVING-FROM-CLOUDFLARE-PAGES"
+  command: bash apps/web-platform/infra/apex-origin-probe.sh
+  expected_output: "SERVING-FROM-GITHUB-PAGES"
 ```
+
+**Amended 2026-08-25.** The command was inline and preflight Check 10 could not run it, in
+two independent ways. Structurally it carried `$(`, `|` and `;`, which Check 10's shell-active
+token reject refuses before execution — the sanctioned remedy is a repo-relative script, so the
+probe now lives at `apps/web-platform/infra/apex-origin-probe.sh` and is committed rather than
+ad-hoc. Semantically its `expected_output` asserted the POST-cutover origin, so on a four-PR
+migration every run before the cutover reported a mismatch: the check could only ever fail
+until the last PR landed.
+
+`expected_output` therefore tracks the CURRENT stage and is `SERVING-FROM-GITHUB-PAGES` through
+PR1-PR3. **PR4 flips it to `SERVING-FROM-CLOUDFLARE-PAGES` as part of the cutover hunk** — that
+flip is the cutover's own assertion, and until it happens an unexpected Cloudflare verdict means
+the origin moved without the record swap, which is exactly what we want to hear about.
+
+The plan previously recorded that an earlier ad-hoc version of this probe "failed open, printing
+the success verdict for an unreachable site" and had been "hardened and verified across all four
+arms". That hardening existed only as this sentence — no script was committed. It is now real
+and re-verified: live -> `SERVING-FROM-GITHUB-PAGES` rc 0; bad host -> `UNREACHABLE (transport)`
+rc 2; reachable non-200 -> `UNREACHABLE (status not 200)` rc 2; shellcheck clean.
 
 The probe is unauthenticated, runs from any laptop or runner, reaches no private network, and
 its first token is `bash` (on the preflight Check 10 allowlist). `credentials_required` is
