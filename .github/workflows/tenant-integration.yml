@@ -322,9 +322,16 @@ jobs:
           # byte-parity with .github/workflows/ci.yml `test-webplat` job,
           # which calls `npm run test:ci` from the `webplat` branch of
           # scripts/test-all.sh. `--` separates npm-run args from vitest's.
+          #
+          # BOTH projects, not just `unit` (#7498). The repo-wide split moved 9
+          # files that live under test/server/ into the `repo-wide` project
+          # (the inngest cron-* and *-parity guards). With `--project unit`
+          # alone this step would silently stop running them while its path
+          # filter still names their directory — a narrowing invisible in the
+          # log, and one that breaks the byte-parity this comment claims.
           doppler run -p soleur -c dev_scheduled -- \
             env TENANT_INTEGRATION_TEST=1 \
-            npm run test:ci -- test/server/ --project unit --reporter=verbose
+            npm run test:ci -- test/server/ --project unit --project repo-wide --reporter=verbose
 
   # Always-run aggregator gate (#5585). This job — NOT the heavy
   # `tenant-integration` job — is the required status check registered in the

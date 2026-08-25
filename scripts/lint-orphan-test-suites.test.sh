@@ -108,7 +108,8 @@ build_pristine() {
     # shellcheck source=scripts/lib/test-relevance-paths.sh
     source "$REPO_ROOT/scripts/lib/test-relevance-paths.sh"
     printf '%s\n' "${REGISTRY_BATTERY_PATHS[@]}" "${CF_TUNNEL_BATTERY_PATHS[@]}" \
-                  "${C4_PRODUCER_PATHS[@]}" "${GITHUB_SCRIPTS_SUITE_PATHS[@]}"
+                  "${C4_PRODUCER_PATHS[@]}" "${GITHUB_SCRIPTS_SUITE_PATHS[@]}" \
+                  "${WEBPLAT_APP_PATHS[@]}"
   ) | LC_ALL=C sort -u | materialise || return 1
 
   # (4) The real inputs, copied verbatim. These are what the rows mutate.

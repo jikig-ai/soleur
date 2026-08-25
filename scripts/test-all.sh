@@ -1480,9 +1480,35 @@ fi
 # blocks shell-injection if a caller ever sets VITEST_SHARD to a value
 # containing `;` or `$(…)`. The matrix literal in ci.yml is always `K/N`
 # today, but the script is a public surface — defense in depth.
+#
+# Split into two suites (#7498) so the app-local half can be DECLINED on a diff
+# that touches nothing in the app, while the repo-wide half still runs.
+#
+#   repo-wide  — subject is the repository (plugin scripts, workflow YAML, the
+#                knowledge base). NEVER gated: these exist to catch drift in
+#                exactly the diffs that touch no app file, so gating them would
+#                decline them on the commits they guard.
+#   unit +     — subject is the app. Gated on apps/web-platform/.
+#   component
+#
+# 42 of the last 80 commits on origin/main (52%; 96/200 over 200) touch no
+# apps/web-platform file, so the decline is the common case rather than an edge.
+# The split is safe only because test/repo-wide-containment.test.ts proves no
+# gated suite reads outside the app — without it a new repo-reading test would
+# land in the gated project and be silently declined. That guard runs in the
+# repo-wide project, so it is never gated by the thing it guards.
 if want_webplat; then
-  run_suite "apps/web-platform" env VITEST_SHARD="${VITEST_SHARD:-}" \
-    bash -c 'cd apps/web-platform && npm run test:ci -- ${VITEST_SHARD:+--shard="$VITEST_SHARD"} 2>&1'
+  run_suite "apps/web-platform [repo-wide]" env VITEST_SHARD="${VITEST_SHARD:-}" \
+    bash -c 'cd apps/web-platform && npm run test:ci -- --project repo-wide ${VITEST_SHARD:+--shard="$VITEST_SHARD"} 2>&1'
+
+  if _diff_touches "${WEBPLAT_APP_PATHS[@]}"; then
+    run_suite "apps/web-platform [unit+component]" env VITEST_SHARD="${VITEST_SHARD:-}" \
+      bash -c 'cd apps/web-platform && npm run test:ci -- --project unit --project component ${VITEST_SHARD:+--shard="$VITEST_SHARD"} 2>&1'
+  else
+    _relevance_declined=$((_relevance_declined + 1))
+    skip_suite "apps/web-platform [unit+component]" "relevance" \
+      "cd apps/web-platform && npm run test:ci -- --project unit --project component"
+  fi
 fi
 
 # plugins/soleur bun-test recursion + blog-link-validation — bun shard.
@@ -1544,6 +1570,10 @@ if want_scripts; then
   # Pins that this runner's OWN infra coverage claim matches whether it actually invoked the
   # infra runner. Registered here rather than under want_bun for the same reason as above.
   run_suite "scripts/test-all-infra-coverage-notice" bash scripts/test-all-infra-coverage-notice.test.sh
+  # Guards this file's own webplat split (#7498). Registered next to its
+  # sibling: both assert shape properties of test-all.sh that nothing else
+  # would notice rotting.
+  run_suite "scripts/test-all-webplat-gate" bash scripts/test-all-webplat-gate.test.sh
   # Pins this runner's THREE-CLASS result taxonomy (#7424): a signal-shaped exit renders as
   # [KILLED], stays out of the failure count, and exits 3. Registered here rather than under
   # want_bun for the same reason as its neighbours — it shells out to python3 to build its
