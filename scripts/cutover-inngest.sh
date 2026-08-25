@@ -44,22 +44,38 @@ BASE="https://deploy.soleur.ai/hooks"
 # rolled-back | aborted | timeout. NEVER echoes a raw Better Stack row (a value could ride
 # along) — only the extracted flag token. A confirm-PATH (query) failure is announced on
 # stderr distinctly from an FSM-not-terminal state, so a timeout names the right subsystem.
-# The dedicated host's `host_name` as Vector stamps it (@@HOST_NAME@@, #6396). vector.toml is
-# explicit that ALL hosts multiplex into the ONE Logs source 2457081 and that `host_name` is the
-# sole discriminator, so any reader that needs "rows from THIS host" must filter on it.
+# The dedicated host's identity in Better Stack, as TWO fields — and both are required.
+#
+# `host_name` is the per-host discriminator #6396 introduced (`@@HOST_NAME@@`), and vector.toml
+# says it is the sole discriminator for the ONE multiplexed Logs source 2457081. That is the
+# right field to filter on and it is NOT sufficient on its own: **#6616 is OPEN — "host_name
+# telemetry is lying"** — because `inngest-bootstrap.sh` sed-renders the literal
+# `soleur-inngest-prd` and a WEB host has been observed self-labelling with it, while
+# `lifecycle{ignore_changes=[user_data]}` stops it re-rendering.
+#
+# `host` is Vector's auto-derived OS hostname, which for this node is the Hetzner server name
+# `hcloud_server.inngest` = `soleur-inngest`. `scripts/followthroughs/hostname-mislabel-web1-6616.sh`
+# pins that as the authoritative identity, and it cannot be forged by a stale sed literal.
+#
+# Requiring BOTH is strictly stronger than either: under the #6616 collision a web host supplies
+# a matching `host_name` and its own `host`, so the conjunction excludes it. Measured 2026-08-25:
+# 84/84 flip rows carry host=soleur-inngest host_name=soleur-inngest-prd, so the conjunction is
+# satisfied on every real row today — this narrows a latent fail-open, it does not narrow the
+# live signal.
+INNGEST_HOST="${INNGEST_HOST:-soleur-inngest}"
 INNGEST_HOST_NAME="${INNGEST_HOST_NAME:-soleur-inngest-prd}"
 
 # THE SHARED flip-FSM READER (#7674). One reader, two callers: confirm_flip_state (below) and
 # _flip_liveness_count (G3.7's H signal). Extracted rather than duplicated so the transport,
 # credential config and query shape cannot drift between the confirm path and the gate path.
 #
-#   $1  --since value, $2  --limit value
+#   $1  --since value (the --limit is fixed at 50: both callers want one page)
 # Echoes the raw betterstack-query.sh rows on stdout and RETURNS THE QUERY'S rc, so each caller
 # owns its own failure semantics: confirm warns and keeps polling, the liveness counter fails
 # closed. No-SSH by construction — betterstack-query.sh is the only transport.
 _flip_query_rows() {
-  local since="$1" limit="$2" rows rc=0
-  rows=$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since "$since" --grep inngest-cutover-flip --limit "$limit" 2>/dev/null) || rc=$?
+  local since="$1" rows rc=0
+  rows=$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since "$since" --grep inngest-cutover-flip --limit 50 2>/dev/null) || rc=$?
   printf '%s\n' "$rows"
   return "$rc"
 }
@@ -68,7 +84,7 @@ confirm_flip_state() {
   local since="$1" i rows raw rc
   for i in $(seq 1 40); do   # 40 x 15s = 600s (30s on-host timer + FLUSHALL/assert + journald->Vector->BS latency)
     rc=0
-    rows=$(_flip_query_rows "$since" 50) || rc=$?
+    rows=$(_flip_query_rows "$since") || rc=$?
     if [[ "$rc" -ne 0 ]]; then
       echo "::warning::confirm: betterstack-query.sh returned non-zero (the CONFIRM PATH failed, NOT the on-host FSM) — verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform" >&2
     fi
@@ -212,9 +228,14 @@ _flip_transition_dt() {
 # is the sole discriminator", and betterstack-query.sh defaults BS_TABLE to exactly that source.
 # Measured 2026-08-25: a default-table query returned rows carrying host_name=soleur-web-platform.
 #
-# It remains true that THIS latch reader does not need the filter — its two `reason` literals are
-# emitted only by the on-host flip FSM, which runs only on the dedicated host, so the reason terms
-# are themselves host-discriminating. The correction matters because the FALSE justification was
+# It remains true that THIS latch reader does not strictly need the filter — its two `reason`
+# literals are emitted only by the on-host flip FSM, so in practice the reason terms are
+# themselves host-discriminating (measured 2026-08-25: 84/84 flip rows came from this host).
+# "In practice" is the honest strength: that is an argument from who RUNS the emitter, not a
+# property the query enforces, and #6616 is the open issue about identity fields not meaning what
+# they appear to. The liveness reader below therefore filters explicitly rather than inheriting
+# this reasoning — see its guard note 2, which supersedes any reading of this paragraph as
+# licensing an unfiltered read. The correction matters because the FALSE justification was
 # about to be inherited by the liveness reader below, where the terms are NOT host-discriminating
 # and an unfiltered read would count web-1's rows as this host's liveness — a fail-open.
 #
@@ -284,26 +305,29 @@ _flush_latch_count() {
 # WINDOW. 15 minutes: wide enough to tolerate both today's ~35s terminal-arm cadence and any
 # future rate-limit, which the follow-up issue constrains to stay under 15 minutes. It must not be
 # tightened below the slower of the two.
-FLIP_LIVENESS_SINCE="${FLIP_LIVENESS_SINCE:-15m}"
+# DELIBERATELY A LITERAL, not an env override (#7674 review). Two reasons, and either alone
+# settles it. (1) It is not mapped into cutover-inngest.yml's step env, and GitHub does not
+# export repo vars to a step unless the workflow names them — so an override here would be an
+# unperformable remediation, the exact #6617 dead-remediation class this file's sibling comment
+# at `FLUSH_LATCH_SINCE` already names. (2) `FLUSH_LATCH_SINCE` earns its override because the
+# `latched` message TELLS the operator to narrow it; widening THIS window is the FAIL-OPEN
+# direction (more rows -> more likely `clear`), so an operator-reachable knob whose only effect
+# is to weaken the gate is not a knob worth shipping.
+FLIP_LIVENESS_SINCE="15m"
 _flip_liveness_count() {
   local rows rc=0 n
-  rows=$(_flip_query_rows "$FLIP_LIVENESS_SINCE" 50) || rc=$?
+  rows=$(_flip_query_rows "$FLIP_LIVENESS_SINCE") || rc=$?
   if [[ "$rc" -ne 0 ]]; then
     echo "::warning::G3.7 liveness read: betterstack-query.sh returned $rc (the READ PATH failed, NOT the host) — verify BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} in prd_terraform" >&2
     printf '%s' '__UNREADABLE__'
     return 0
   fi
-  # An EMPTY discriminator would make the filter below match nothing, pinning H at 0 and
-  # refusing every arm under the host-dark message — a mis-remediation of exactly the class the
-  # silent/unreadable split exists to prevent. It is a misconfiguration, not a dark host.
-  if [[ -z "${INNGEST_HOST_NAME:-}" ]]; then
-    echo "::warning::G3.7 liveness read: INNGEST_HOST_NAME is empty, so the host discriminator would match nothing. Reporting unreadable rather than a false 'host is dark'." >&2
-    printf '%s' '__UNREADABLE__'
-    return 0
-  fi
   # Decode `.raw` first (it is double-encoded), then match the host field literal. Counts only;
   # never echoes a row, the standing purity contract of every Better Stack reader here.
-  n=$(printf '%s\n' "$rows" | jq -r 'select(.raw) | .raw' 2>/dev/null | grep -cF "\"host_name\":\"${INNGEST_HOST_NAME}\"" || true)
+  n=$(printf '%s\n' "$rows" \
+    | jq -r --arg h "$INNGEST_HOST" --arg hn "$INNGEST_HOST_NAME" \
+        'select(.raw) | .raw | fromjson? | select(.host == $h and .host_name == $hn) | 1' 2>/dev/null \
+    | grep -c '^1$' || true)
   case "$n" in
     ''|*[!0-9]*) printf '%s' '__UNREADABLE__'; return 0 ;;
   esac
@@ -1493,7 +1517,7 @@ case "$OP" in
     FL_OUTCOME="$(flush_latch_decide "$FLUSH_LATCH_N" "$FLIP_LIVENESS_N")"
     case "$FL_OUTCOME" in
       clear)
-        echo "::notice::op=arm: G3.7 flush-latch gate passed — no flip-complete / refuse-rearm-after-done row within $FLUSH_LATCH_SINCE, AND the host is audible ($FLIP_LIVENESS_N inngest-cutover-flip row(s) from $INNGEST_HOST_NAME within $FLIP_LIVENESS_SINCE). NOTE: 'clear' is a WEAK verdict — it means 'the host is reporting and no flush evidence is visible in this window', NOT 'no flush has happened'. Better Stack retention against a $FLUSH_LATCH_SINCE window is UNMEASURED (#7674 H5/H6), so the on-host monotonic latch remains the authority; this gate can only ever ADD a refusal." ;;
+        echo "::notice::op=arm: G3.7 flush-latch gate passed — no flip-complete / refuse-rearm-after-done row within $FLUSH_LATCH_SINCE, AND the host is audible ($FLIP_LIVENESS_N inngest-cutover-flip row(s) from $INNGEST_HOST_NAME within $FLIP_LIVENESS_SINCE). NOTE: 'clear' is a WEAK verdict — it means 'the host is reporting and no flush evidence is visible in this window', NOT 'no flush has happened'. Better Stack retention against a $FLUSH_LATCH_SINCE window is UNMEASURED (#7674 H5/H6), so the on-host monotonic latch remains the authority; this gate can only ever ADD a refusal. Note the two signals cover DIFFERENT windows: H proves the host is audible NOW ($FLIP_LIVENESS_SINCE), which does not prove it was audible across the whole $FLUSH_LATCH_SINCE window L was read over — so an outage inside L's window could still have hidden a flush row." ;;
       latched)
         echo "::error::op=arm: G3.7 REFUSING — the dedicated host's log source carries $FLUSH_LATCH_N flip-complete / refuse-rearm-after-done row(s) within $FLUSH_LATCH_SINCE, so a FLUSHALL has ALREADY been performed for this host. The monotonic latch that records it lives on /mnt/data and survives BOTH a rollback and a host replace, so this arm is doomed: it would write both prod secrets, park INNGEST_CUTOVER_FLIP at 'armed' (inside inngest-server-flip-guard.sh's prod-start allowlist, so a reboot would start a SECOND prod scheduler) and then be refused on-host into terminal 'aborted'. Refusing BEFORE any write; nothing was changed. There is no re-arm path while that latch stands, and op=resume is NOT it (its G1 accepts 'done' only). The latch is cleared ONLY by recutting the host's /mnt/data volume, never by SSH. CORRECTED #7674: an inngest-host-replace does NOT recut it — the replace re-ATTACHES the same hcloud volume, and the latch file survives (measured: volume 106261946 was created 2026-07-07 and is attached to a host created 2026-08-20, six weeks later, latch intact). No volume-recut apply_target exists yet; it is designed and tracked, and until it is built there is no in-repo mechanism that clears this latch. If that recut has ALREADY happened, set the repo variable FLUSH_LATCH_SINCE to a window starting after it (e.g. '1h') and re-dispatch — that narrows this pre-filter only, and the on-host latch still refuses if it is in fact present. Do NOT SSH the host." ;;
       silent)

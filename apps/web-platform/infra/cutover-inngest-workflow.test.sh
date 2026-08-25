@@ -880,13 +880,22 @@ call_flip_liveness_count() { # $1 = rows | foreign | empty | fail
       printf '%s\n' "$*" > "$FLV_ARGV"
       case "$mode" in
         rows)
-          printf '%s\n' '{"dt":"2026-08-25 10:20:51.000000","raw":"{\"host_name\":\"soleur-inngest-prd\",\"message\":\"x\"}"}'
-          printf '%s\n' '{"dt":"2026-08-25 10:20:52.000000","raw":"{\"host_name\":\"soleur-inngest-prd\",\"message\":\"y\"}"}'
+          printf '%s\n' '{"dt":"2026-08-25 10:20:51.000000","raw":"{\"host\":\"soleur-inngest\",\"host_name\":\"soleur-inngest-prd\",\"message\":\"x\"}"}'
+          printf '%s\n' '{"dt":"2026-08-25 10:20:52.000000","raw":"{\"host\":\"soleur-inngest\",\"host_name\":\"soleur-inngest-prd\",\"message\":\"y\"}"}'
           return 0 ;;
         foreign)
           # web-1 rows in the SAME multiplexed source — must NOT count as dedicated-host liveness.
-          printf '%s\n' '{"dt":"2026-08-25 10:20:51.000000","raw":"{\"host_name\":\"soleur-web-platform\",\"message\":\"x\"}"}'
-          printf '%s\n' '{"dt":"2026-08-25 10:20:52.000000","raw":"{\"host_name\":\"soleur-web-platform\",\"message\":\"y\"}"}'
+          printf '%s\n' '{"dt":"2026-08-25 10:20:51.000000","raw":"{\"host\":\"soleur-web-platform\",\"host_name\":\"soleur-web-platform\",\"message\":\"x\"}"}'
+          printf '%s\n' '{"dt":"2026-08-25 10:20:52.000000","raw":"{\"host\":\"soleur-web-platform\",\"host_name\":\"soleur-web-platform\",\"message\":\"y\"}"}'
+          return 0 ;;
+        spoofed)
+          # THE #6616 COLLISION, FIXTURED: a WEB host self-labelling with the dedicated node's
+          # sed-rendered host_name literal (#6616 is OPEN precisely because this was observed).
+          # host_name ALONE counts these as our liveness -> H>0 -> `clear` -> the exact fail-open
+          # this gate exists to close. The `host` conjunct is what excludes them, so this fixture
+          # is what makes the dual-field filter load-bearing rather than decorative.
+          printf '%s\n' '{"dt":"2026-08-25 10:20:51.000000","raw":"{\"host\":\"soleur-web-platform\",\"host_name\":\"soleur-inngest-prd\",\"message\":\"x\"}"}'
+          printf '%s\n' '{"dt":"2026-08-25 10:20:52.000000","raw":"{\"host\":\"soleur-web-platform\",\"host_name\":\"soleur-inngest-prd\",\"message\":\"y\"}"}'
           return 0 ;;
         empty) return 0 ;;
         *)     return 7 ;;
@@ -896,6 +905,7 @@ call_flip_liveness_count() { # $1 = rows | foreign | empty | fail
     # Both live at script scope, outside the extracted functions, so the eval'd harness must
     # supply them. INNGEST_HOST_NAME empty would make the host filter match nothing and pin the
     # reader at 0 — the exact fail-shape the isolation assertions below exist to catch.
+    export INNGEST_HOST="soleur-inngest"
     export INNGEST_HOST_NAME="soleur-inngest-prd"
     _flip_liveness_count 2>/dev/null
   )
@@ -912,18 +922,9 @@ call_flip_liveness_count empty
 assert "#7674 an empty liveness result is '0' (-> silent), not an error" "[[ '$FLV_OUT' == '0' ]]"
 call_flip_liveness_count fail
 assert "#7674 a FAILED liveness query yields __UNREADABLE__, never 0 (fail-closed)" "[[ '$FLV_OUT' == '__UNREADABLE__' ]]"
-# An empty discriminator must report unreadable (a misconfiguration), NOT silent (a dark host) —
-# otherwise the gate prints the wrong remediation while refusing every arm.
-FLV_EMPTYHOST=$(
-  set +e
-  eval "$(cat "$FLQ_FN")"; eval "$(cat "$FLV_FN")"
-  # shellcheck disable=SC2317  # invoked indirectly by the eval'd reader
-  doppler() { printf '%s\n' '{"dt":"x","raw":"{\"host_name\":\"soleur-inngest-prd\"}"}'; return 0; }
-  export FLIP_LIVENESS_SINCE="15m"; export INNGEST_HOST_NAME=""
-  _flip_liveness_count 2>/dev/null
-)
-assert "#7674 an EMPTY host discriminator is unreadable, not a false 'host is dark' (got '$FLV_EMPTYHOST')" \
-  "[[ '$FLV_EMPTYHOST' == '__UNREADABLE__' ]]"
+call_flip_liveness_count spoofed
+assert "#6616 a web host SPOOFING our host_name counts 0, NOT as our liveness (got '$FLV_OUT')" \
+  "[[ '$FLV_OUT' == '0' ]]"
 
 # shellcheck disable=SC2034  # read inside the eval'd assert conditions below
 FLV_ARGV_SEEN="$(cat "$FLV_ARGV")"
@@ -939,8 +940,13 @@ assert "#7674 host isolation is NOT attempted via --grep (which is OR-combined, 
   "! grep -qE '\\-\\-grep[= ]*[\"'\'']?host_name' <<<\"\$FLV_ARGV_SEEN\""
 assert "#7674 the liveness reader decodes .raw before matching the host (raw is double-encoded)" \
   "grep -qE '\\.raw' '$FLV_FN'"
-assert "#7674 FLIP_LIVENESS_SINCE is env-overridable with a default" \
-  "grep -qE '^FLIP_LIVENESS_SINCE=\"\\\$\\{FLIP_LIVENESS_SINCE:-[0-9]+[a-z]+\\}\"' '$BODY_SH'"
+# DELIBERATELY A LITERAL, not env-overridable (#7674 review): it is not mapped into
+# cutover-inngest.yml's step env, so an override would be an unperformable remediation (the
+# #6617 dead-remediation class), and widening this window is the FAIL-OPEN direction.
+assert "#7674 FLIP_LIVENESS_SINCE is a LITERAL (an override would be dead AND fail-open)" \
+  "grep -qE '^FLIP_LIVENESS_SINCE=\"[0-9]+[a-z]+\"$' '$BODY_SH'"
+assert "#7674 FLIP_LIVENESS_SINCE is NOT plumbed into the workflow env (would be a dead knob)" \
+  "! grep -qF 'FLIP_LIVENESS_SINCE' '$WF_YAML'"
 
 # --- (c) EMITTER PARITY (cross-file), in the SUBSET direction. -------------------------------
 # The two reasons this gate keys on are a vocabulary owned by inngest-cutover-flip.sh. If either
@@ -1696,17 +1702,18 @@ rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" 
 # prod-write region assertion left the suite green. This floor is the full count at the time of
 # writing; raise it in lockstep when adding assertions, never lower it to make a removal pass.
 #
+# 475 -> 476 (+1) when the #6616 dual-field host isolation + spoof fixture landed (#7674 review).
 # 471 -> 475 (+4) when the AC3/AC4 chokepoint+ordering assertions landed (#7674).
 # 449 -> 471 (+22) when G3.7 gained its second (liveness) signal and the `silent` outcome (#7674).
 # 408 -> 449 (+41) when the G3.7 pre-flush-latch gate landed. Stated as a DELTA on purpose: the
 # absolute number is only meaningful against the run that produced it, and re-deriving it after a
 # rebase is the point at which a silently-dropped sibling assertion would otherwise be papered
 # over. Re-measure by running this file, never by copying a remembered figure.
-if [[ "$PASS" -lt 475 ]]; then
-  echo "  FAIL: suite dispatched $PASS assertions, floor is 475 — an assertion was removed or skipped."
+if [[ "$PASS" -lt 476 ]]; then
+  echo "  FAIL: suite dispatched $PASS assertions, floor is 476 — an assertion was removed or skipped."
   FAIL=$((FAIL + 1))
 else
-  echo "  PASS: anti-deletion floor ($PASS >= 475 assertions dispatched)"
+  echo "  PASS: anti-deletion floor ($PASS >= 476 assertions dispatched)"
 fi
 
 echo ""

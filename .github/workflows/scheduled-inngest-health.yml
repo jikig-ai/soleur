@@ -725,6 +725,13 @@ jobs:
           BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
           BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
           BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+          # TWO identity fields, both required (#7674 review / #6616). `host_name` is the
+          # per-host discriminator, but #6616 is OPEN — "host_name telemetry is lying" — because
+          # a web host has been seen self-labelling with this same sed-rendered literal. `host`
+          # is Vector's auto-derived OS hostname (the Hetzner server name) and cannot be forged
+          # by a stale literal. Requiring both excludes the collision; measured 2026-08-25 the
+          # conjunction holds on 84/84 real rows, so this narrows a latent fail-open only.
+          DEDICATED_HOST: soleur-inngest
           DEDICATED_HOST_NAME: soleur-inngest-prd
           PROBE_WINDOW: 3h
         run: |
@@ -757,8 +764,8 @@ jobs:
             # this host and web-1, and vector.toml states all hosts multiplex into ONE Logs
             # source with host_name the sole discriminator. web-1 legitimately reports
             # cutover_flag=unknown and must never be read as the dedicated host's state.
-            MINE="$(printf '%s\n' "$ROWS" | jq -r 'select(.raw) | .raw | fromjson
-                      | select(.host_name == env.DEDICATED_HOST_NAME)
+            MINE="$(printf '%s\n' "$ROWS" | jq -r 'select(.raw) | .raw | fromjson?
+                      | select(.host == env.DEDICATED_HOST and .host_name == env.DEDICATED_HOST_NAME)
                       | .message // empty' 2>/dev/null | grep -F 'SOLEUR_INNGEST_SERVER_PROBE' || true)"
             N="$(printf '%s' "$MINE" | grep -c . || true)"
             LAST="$(printf '%s\n' "$MINE" | tail -1)"

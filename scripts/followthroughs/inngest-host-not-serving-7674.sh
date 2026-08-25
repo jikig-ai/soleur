@@ -25,9 +25,11 @@
 # proof that it SERVES. Measured 2026-08-25 the host reported `server_active=inactive
 # http_code=000` for 5.4 days on one unchanged boot_id.
 #
-# HOST ISOLATION IS MANDATORY. inngest-server-probe.sh is the SHARED renderer for the dedicated
-# host AND web-1, and apps/web-platform/infra/vector.toml states ALL hosts multiplex into the ONE
-# Logs source 2457081 with `host_name` the sole discriminator. web-1 legitimately reports
+# HOST ISOLATION IS MANDATORY, ON TWO FIELDS. inngest-server-probe.sh is the SHARED renderer for
+# the dedicated host AND web-1, and apps/web-platform/infra/vector.toml states ALL hosts multiplex
+# into the ONE Logs source 2457081 with `host_name` the discriminator — but #6616 is OPEN because
+# that field can lie (see the `INNGEST_HOST` note below), so `host` is required too. web-1
+# legitimately reports
 # `cutover_flag=unknown` and, once it is serving, `server_active=active http_code=200` — so a
 # probe without the host filter would PASS on web-1's rows and close #7674 while the dedicated
 # host is still dark. That is the same "measured the wrong thing and closed the tracker" failure
@@ -70,6 +72,14 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 QUERY="${INNGEST_SERVING_QUERY_BIN:-$REPO_ROOT/scripts/betterstack-query.sh}"
 
 MARKER="SOLEUR_INNGEST_SERVER_PROBE"
+# TWO identity fields, both required (#7674 review / #6616 — "host_name telemetry is lying": a
+# web host has been observed self-labelling with the sed-rendered `soleur-inngest-prd` literal).
+# `host` is Vector's auto-derived OS hostname = the Hetzner server name, which a stale literal
+# cannot forge; `scripts/followthroughs/hostname-mislabel-web1-6616.sh` pins it as authoritative.
+# This matters most HERE: a PASS closes #7674, so a web-1 row satisfying only `host_name` would
+# close the tracker while the dedicated host is still dark — the permanent silent no-op this
+# probe exists to retire, recreated one field over.
+INNGEST_HOST="${INNGEST_SERVING_HOST:-soleur-inngest}"
 HOST_NAME="${INNGEST_SERVING_HOST_NAME:-soleur-inngest-prd}"
 WINDOW="${INNGEST_SERVING_WINDOW:-24h}"
 LIMIT="${INNGEST_SERVING_LIMIT:-500}"
@@ -104,13 +114,14 @@ fi
 # surface as reason=channel_dark ("the host emits nothing") on a window that in fact contained a
 # clean PASS. A warehouse read is exactly where a truncated line shows up.
 mine="$(printf '%s\n' "$rows" \
-  | jq -R -r 'fromjson? | .raw? | fromjson?
-              | select(.host_name == "'"$HOST_NAME"'")
-              | .message? // empty' 2>/dev/null \
+  | jq -R -r --arg h "$INNGEST_HOST" --arg hn "$HOST_NAME" \
+       'fromjson? | .raw? | fromjson?
+        | select(.host == $h and .host_name == $hn)
+        | .message? // empty' 2>/dev/null \
   | grep -F "$MARKER")"
 
 if [[ -z "$mine" ]]; then
-  echo "TRANSIENT: reason=channel_dark host=${HOST_NAME} window=${WINDOW} — zero ${MARKER} rows." >&2
+  echo "TRANSIENT: reason=channel_dark host=${INNGEST_HOST}/${HOST_NAME} window=${WINDOW} — zero ${MARKER} rows." >&2
   echo "           The host is not reporting, so its serving state is UNKNOWN — not 'healthy'." >&2
   echo "           Check inngest-server-probe.timer and the Vector shipper before reading this" >&2
   echo "           as progress. The */15 dedicated-host arm on scheduled-inngest-health.yml" >&2
@@ -140,7 +151,7 @@ active="$(printf '%s' "$last" | grep -oE 'server_active=[^ ]+' | head -1)"
 code="$(printf '%s' "$last" | grep -oE 'http_code=[^ ]+' | head -1)"
 flag="$(printf '%s' "$last" | grep -oE 'cutover_flag=[^ ]+' | head -1)"
 
-echo "TRANSIENT: reason=not_serving host=${HOST_NAME} ${active:-server_active=?} ${code:-http_code=?} ${flag:-cutover_flag=?}" >&2
+echo "TRANSIENT: reason=not_serving host=${INNGEST_HOST}/${HOST_NAME} ${active:-server_active=?} ${code:-http_code=?} ${flag:-cutover_flag=?}" >&2
 case "$flag" in
   *rollback|*rolled-back)
     echo "           The flag EXPLAINS the stop: the flip FSM's rollback arm stopped the unit and" >&2

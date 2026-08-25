@@ -115,6 +115,12 @@ assert "the workflow reads SOLEUR_INNGEST_SERVER_PROBE (the marker gains a consu
 # dedicated host's would make this arm report health for the wrong machine.
 assert "the arm isolates on the host field, never a bare payload substring" \
   "grep -qF 'host_name' '$WF'"
+# #6616 is OPEN — "host_name telemetry is lying": a web host has been observed self-labelling
+# with the dedicated node's sed-rendered literal. host_name ALONE would let that web host's rows
+# be read as this host's state, and the arm auto-CLOSES its issue on a `healthy` verdict — so the
+# collision would silently resolve a dedicated-host alarm from the wrong machine's telemetry.
+assert "#6616 the arm ALSO isolates on the unforgeable `host` field (host_name alone can lie)" \
+  "grep -qE '^ *DEDICATED_HOST: soleur-inngest\$' '$WF' && grep -qF '.host == env.DEDICATED_HOST' '$WF'"
 # `raw` is DOUBLE-ENCODED in ClickHouse: a "host_name":"..." literal matched against the outer
 # row matches NOTHING, EVER. The arm must decode before it matches or it reads 0 rows forever
 # and reports probe-unavailable permanently.
@@ -133,9 +139,9 @@ echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
 # WHOLE-SUITE ANTI-DELETION FLOOR. The only merge gate is `FAIL -gt 0`, so a deleted or skipped
 # assertion is otherwise indistinguishable from a clean run.
-if [[ "$PASS" -lt 27 ]]; then
-  echo "  FAIL: suite dispatched $PASS assertions, floor is 27 — an assertion was removed or skipped."
+if [[ "$PASS" -lt 28 ]]; then
+  echo "  FAIL: suite dispatched $PASS assertions, floor is 28 — an assertion was removed or skipped."
   exit 1
 fi
 [[ "$FAIL" -eq 0 ]] || exit 1
-echo "  PASS: anti-deletion floor ($PASS >= 27 assertions dispatched)"
+echo "  PASS: anti-deletion floor ($PASS >= 28 assertions dispatched)"
