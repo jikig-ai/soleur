@@ -970,6 +970,23 @@ assert "arm) G3.7 aborts unless the outcome is exactly 'clear' (fail-closed by c
   "[[ \$(grep -cF 'if [[ \"\$FL_OUTCOME\" != \"clear\" ]]; then exit 1; fi' '$ARM_FILE') -eq 1 ]]"
 # `silent` is in this alternation deliberately (#7674): the assertion was blind to a NEW arm,
 # so without it the no-per-arm-exit contract would be unenforced for exactly the arm being added.
+# SINGLE-CHOKEPOINT + ORDERING (#7674, AC3/AC4). The shared reader must have exactly the two
+# callers it was extracted for — a third would be the duplicated reader the extraction exists to
+# prevent, and drift between them is how the confirm path and the gate path stop asking the same
+# question. The liveness read must also be INVOKED BEFORE the decide: a decider handed a stale or
+# unset H is the fail-open this gate was built to close.
+FLQ_SITES=$(grep -cE '^[[:space:]]*(rows=\$\()?_flip_query_rows ' "$BODY_SH") || true
+assert "#7674 the shared reader has exactly 2 call sites (confirm + liveness), got $FLQ_SITES" \
+  "[[ '$FLQ_SITES' -eq 2 ]]"
+FLV_SITES=$(grep -cE '^[[:space:]]+FLIP_LIVENESS_N="?\$\(_flip_liveness_count' "$ARM_FILE") || true
+assert "arm) reads liveness via _flip_liveness_count exactly once, got $FLV_SITES" \
+  "[[ '$FLV_SITES' -eq 1 ]]"
+FLV_LN=$(grep -nE '^[[:space:]]+FLIP_LIVENESS_N=' "$ARM_FILE" | head -1 | cut -d: -f1) || true
+FLD_LN=$(grep -nE '^[[:space:]]+FL_OUTCOME=' "$ARM_FILE" | head -1 | cut -d: -f1) || true
+assert "arm) the liveness reader is invoked BEFORE flush_latch_decide (H is never stale/unset)" \
+  "[[ -n '$FLV_LN' && -n '$FLD_LN' && '$FLV_LN' -lt '$FLD_LN' ]]"
+assert "arm) flush_latch_decide is called with BOTH signals (a one-arg call is the old fail-open)" \
+  "grep -qE 'flush_latch_decide \"\\\$FLUSH_LATCH_N\" \"\\\$FLIP_LIVENESS_N\"' '$ARM_FILE'"
 assert "arm) no G3.7 outcome arm carries its own exit (the gate decides)" \
   "! grep -qE '^[[:space:]]+(clear|latched|unreadable|silent)\\)[^#]*exit 1' '$ARM_FILE'"
 # shellcheck disable=SC2016  # literal search pattern, not an expansion (G3ABORT_LN precedent)
@@ -1679,16 +1696,17 @@ rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" 
 # prod-write region assertion left the suite green. This floor is the full count at the time of
 # writing; raise it in lockstep when adding assertions, never lower it to make a removal pass.
 #
+# 471 -> 475 (+4) when the AC3/AC4 chokepoint+ordering assertions landed (#7674).
 # 449 -> 471 (+22) when G3.7 gained its second (liveness) signal and the `silent` outcome (#7674).
 # 408 -> 449 (+41) when the G3.7 pre-flush-latch gate landed. Stated as a DELTA on purpose: the
 # absolute number is only meaningful against the run that produced it, and re-deriving it after a
 # rebase is the point at which a silently-dropped sibling assertion would otherwise be papered
 # over. Re-measure by running this file, never by copying a remembered figure.
-if [[ "$PASS" -lt 471 ]]; then
-  echo "  FAIL: suite dispatched $PASS assertions, floor is 471 — an assertion was removed or skipped."
+if [[ "$PASS" -lt 475 ]]; then
+  echo "  FAIL: suite dispatched $PASS assertions, floor is 475 — an assertion was removed or skipped."
   FAIL=$((FAIL + 1))
 else
-  echo "  PASS: anti-deletion floor ($PASS >= 471 assertions dispatched)"
+  echo "  PASS: anti-deletion floor ($PASS >= 475 assertions dispatched)"
 fi
 
 echo ""
