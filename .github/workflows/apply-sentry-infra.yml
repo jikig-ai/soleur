@@ -285,10 +285,50 @@ jobs:
           # Read-only: no -out, so nothing here can be applied. The plan is
           # FULL-ROOT (no -target=) — that is the contract this gate exists to
           # enforce, and AC3 pins that no -target= survives in this file.
-          terraform plan -no-color -input=false -out=tfplan
-          rc=$?
+          # Bounded retry, armed ONLY for Sentry's deprecated alert-rule brownout.
+          # `sentry_issue_alert` reads `projects/{org}/{proj}/rules/{id}/`, which Sentry
+          # deprecated 2026-05-14 and serves under brownouts: measured 2026-08-20, run
+          # 32362320701 (11:08:09Z) passed and 32362401543 (11:09:07Z) took 410 on 29 of
+          # 29 reads, same commit and same pin. Observed wedges are minutes wide and sit
+          # between successes (20:44 pass / 20:45 fail / 20:48 pass), so re-planning after
+          # a pause clears them. #7650.
+          #
+          # This is a MITIGATION WITH A SHELF LIFE, not a fix. When Sentry finishes
+          # retiring the family every attempt will 410 and this loop will exhaust and fail
+          # — which is the correct behaviour, and the signal to finish the `sentry_alert`
+          # migration rather than to raise the attempt count.
+          #
+          # It retries on ONE signature and nothing else. Any other plan failure exits on
+          # the first attempt, because a retry that widens past its evidence is how a real
+          # failure gets laundered into a slow green.
+          plan_attempts=3
+          plan_backoff=(90 210)
+          attempt=1
+          while : ; do
+            terraform plan -no-color -input=false -out=tfplan 2>&1 | tee /tmp/sentry-plan.out
+            rc=${PIPESTATUS[0]}
+            [[ $rc -eq 0 ]] && break
+            # Both must hold: the vendor's 410 body AND a deprecated-family resource.
+            # `status 410` alone would also match a 410 from any other endpoint.
+            if grep -q 'status 410' /tmp/sentry-plan.out \
+               && grep -q 'sentry_issue_alert\.' /tmp/sentry-plan.out \
+               && [[ $attempt -lt $plan_attempts ]]; then
+              sleep_for=${plan_backoff[$((attempt-1))]}
+              echo "SOLEUR_SENTRY_BROWNOUT_RETRY attempt=${attempt}/${plan_attempts} sleep=${sleep_for}s reason=deprecated-alert-rule-410 issue=7650"
+              echo "::warning::Sentry's deprecated alert-rule API returned 410 during terraform plan (attempt ${attempt}/${plan_attempts}). This is a vendor brownout, not a change in this diff — retrying in ${sleep_for}s. Tracked in #7650."
+              attempt=$((attempt+1))
+              sleep "$sleep_for"
+              continue
+            fi
+            break
+          done
           if [[ $rc -ne 0 ]]; then
-            echo "::error::terraform plan failed (exit $rc)"
+            if grep -q 'status 410' /tmp/sentry-plan.out && grep -q 'sentry_issue_alert\.' /tmp/sentry-plan.out; then
+              echo "SOLEUR_SENTRY_BROWNOUT_EXHAUSTED attempts=${plan_attempts} issue=7650"
+              echo "::error::terraform plan failed (exit $rc): Sentry's deprecated alert-rule API returned 410 on every one of ${plan_attempts} attempts. Either the brownout window is now wider than the retry budget, or the family is fully retired — in both cases the fix is the sentry_alert migration (#7650), NOT a higher attempt count."
+            else
+              echo "::error::terraform plan failed (exit $rc)"
+            fi
             exit $rc
           fi
           set -e
@@ -603,10 +643,50 @@ jobs:
           # the sentry-destroy-required PR gate. Do not reintroduce address
           # scoping here: it is unrepresentable for a resource whose block is
           # gone, which is precisely how #4929 and #6074 orphaned live monitors.
-          terraform plan -no-color -input=false -out=tfplan
-          rc=$?
+          # Bounded retry, armed ONLY for Sentry's deprecated alert-rule brownout.
+          # `sentry_issue_alert` reads `projects/{org}/{proj}/rules/{id}/`, which Sentry
+          # deprecated 2026-05-14 and serves under brownouts: measured 2026-08-20, run
+          # 32362320701 (11:08:09Z) passed and 32362401543 (11:09:07Z) took 410 on 29 of
+          # 29 reads, same commit and same pin. Observed wedges are minutes wide and sit
+          # between successes (20:44 pass / 20:45 fail / 20:48 pass), so re-planning after
+          # a pause clears them. #7650.
+          #
+          # This is a MITIGATION WITH A SHELF LIFE, not a fix. When Sentry finishes
+          # retiring the family every attempt will 410 and this loop will exhaust and fail
+          # — which is the correct behaviour, and the signal to finish the `sentry_alert`
+          # migration rather than to raise the attempt count.
+          #
+          # It retries on ONE signature and nothing else. Any other plan failure exits on
+          # the first attempt, because a retry that widens past its evidence is how a real
+          # failure gets laundered into a slow green.
+          plan_attempts=3
+          plan_backoff=(90 210)
+          attempt=1
+          while : ; do
+            terraform plan -no-color -input=false -out=tfplan 2>&1 | tee /tmp/sentry-plan.out
+            rc=${PIPESTATUS[0]}
+            [[ $rc -eq 0 ]] && break
+            # Both must hold: the vendor's 410 body AND a deprecated-family resource.
+            # `status 410` alone would also match a 410 from any other endpoint.
+            if grep -q 'status 410' /tmp/sentry-plan.out \
+               && grep -q 'sentry_issue_alert\.' /tmp/sentry-plan.out \
+               && [[ $attempt -lt $plan_attempts ]]; then
+              sleep_for=${plan_backoff[$((attempt-1))]}
+              echo "SOLEUR_SENTRY_BROWNOUT_RETRY attempt=${attempt}/${plan_attempts} sleep=${sleep_for}s reason=deprecated-alert-rule-410 issue=7650"
+              echo "::warning::Sentry's deprecated alert-rule API returned 410 during terraform plan (attempt ${attempt}/${plan_attempts}). This is a vendor brownout, not a change in this diff — retrying in ${sleep_for}s. Tracked in #7650."
+              attempt=$((attempt+1))
+              sleep "$sleep_for"
+              continue
+            fi
+            break
+          done
           if [[ $rc -ne 0 ]]; then
-            echo "::error::terraform plan failed (exit $rc)"
+            if grep -q 'status 410' /tmp/sentry-plan.out && grep -q 'sentry_issue_alert\.' /tmp/sentry-plan.out; then
+              echo "SOLEUR_SENTRY_BROWNOUT_EXHAUSTED attempts=${plan_attempts} issue=7650"
+              echo "::error::terraform plan failed (exit $rc): Sentry's deprecated alert-rule API returned 410 on every one of ${plan_attempts} attempts. Either the brownout window is now wider than the retry budget, or the family is fully retired — in both cases the fix is the sentry_alert migration (#7650), NOT a higher attempt count."
+            else
+              echo "::error::terraform plan failed (exit $rc)"
+            fi
             exit $rc
           fi
           set -e
