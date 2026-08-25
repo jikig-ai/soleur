@@ -111,6 +111,33 @@ not with, the migration.
 - [ ] **3.4** Remove the retry only once **zero** `sentry_issue_alert` resources remain, and
       not before. While the 4 `auth_*` rules remain, the retry is still load-bearing.
 
+## Observability
+
+Added after review found this block missing, which is the root cause of everything it
+found: without it nobody was forced to name the layer, and the retry shipped
+marker-only. `SOLEUR_*` is a host-journald convention — every source in
+`apps/web-platform/infra/vector.toml` is scoped to the Hetzner host's
+`SYSLOG_IDENTIFIER` — and these markers are emitted on a GitHub-hosted runner whose
+stdout no Vector source ships. **An `::error::` annotation and a marker in an Actions
+log are detail lines inside a signal, not a signal.** That correction was already made
+once on this same workflow (2026-07-17 sentry-iac delete-path plan); this plan
+reintroduced it and is corrected here.
+
+| Field | Value |
+|---|---|
+| `failure_modes` | (1) brownout absorbed by the retry — previously a red required check, now a green run; (2) brownout wider than the retry budget, or the family fully retired — `outcome=exhausted`; (3) the migration changes when a pure-frequency rule fires |
+| `detection` | (1)+(2) `scripts/followthroughs/sentry-brownout-frequency-7650.sh` on the existing daily sweeper, reading run logs from OUTSIDE the workflow it observes; (3) Phase 0 measurement against a scratch project, before any prod change |
+| `alert_route` | (2) sweeper marks the follow-through FAIL and comments on #7650 — a real channel, unlike the marker. (1) is counted, not paged: the retry is absorbing it and a threshold picked without data would be a number invented to look rigorous |
+| `layer` | GitHub Actions run logs, reached via `gh run view --log` by an external prober. Explicitly NOT layers 1-7: no Vector source ships GitHub-runner stdout |
+| `discoverability_test.command` | `GH_TOKEN=$GH_TOKEN bash scripts/followthroughs/sentry-brownout-frequency-7650.sh` |
+
+Before the retry, `gh run list --json conclusion` WAS the frequency meter (measured: 89
+success / 3 failure / 8 cancelled over 100 runs). The retry greens the runs that clear
+on attempt 2-3, decaying that counter toward zero. The probe above is what keeps the
+count from disappearing, and it is why `outcome=cleared` is emitted at all — without it
+the log shows "we retried" and never "it worked", so a resolved brownout and one still
+in progress are indistinguishable.
+
 ## Sharp edges
 
 - **A clean plan is not evidence of vendor state.** See the retracted 2026-07-17 finding and
