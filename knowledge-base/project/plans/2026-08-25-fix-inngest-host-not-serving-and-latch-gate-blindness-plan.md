@@ -622,8 +622,9 @@ rather than smuggled in as acceptance criteria.
 2. Both readers validate their counts with an explicit `^[0-9]+$` predicate; no count reaches a
    comparison via bash arithmetic coercion.
    *Pre-fix: fails — only one reader exists.*
-3. Exactly one call site each for the latch reader, the liveness reader, and the decider.
-   *Pre-fix: fails — the liveness reader has zero call sites.*
+3. Exactly one call site each for the latch reader and the decider, and exactly **two** for the
+   liveness reader (the `arm)` gate plus `confirm_flip_state`, which it was extracted from).
+   *Pre-fix: fails — no shared liveness helper exists.*
 4. The G3.7 gate line sorts after the G3.6 line and before the first prod write, **with the liveness
    reader invoked before the gate line**.
    *Pre-fix: fails on the second clause.*
@@ -844,11 +845,16 @@ the design rather than re-derived from finished code later.
 evidence of a prior FLUSHALL; absence of evidence from a silent host never reads as permission.
 
 **Assembly.** The chokepoint is the single `FL_OUTCOME` allowlist test in the `arm)` case of
-`scripts/cutover-inngest.sh`. Every input flows through exactly two reader functions (latch count,
-liveness count) and one pure decider, each with exactly one call site, all defined at column 0
-outside the arm. The property quantifies over the decider's full input cross-product, not over the
-outcomes that happen to exist today — a fifth outcome added later must still funnel through the same
-test.
+`scripts/cutover-inngest.sh`. Every input flows through two reader functions (latch count, liveness
+count) and one pure decider, all defined at column 0 outside the arm. Call-site counts differ and
+the contract must say which: the latch reader and the decider have **exactly one** call site each;
+the liveness reader has **exactly two**, because it is the helper extracted from `confirm_flip_state`
+and is shared with it — reuse, not duplication, is the point. Asserting "one call site" for all three
+would be RED on a correct implementation.
+
+The property quantifies over the decider's full input cross-product, not over the outcomes that
+happen to exist today — a fifth outcome added later must still funnel through the same test, and the
+per-arm-exit assertion must be widened to see it (see mutation 5).
 
 **Mutation matrix.**
 
