@@ -680,6 +680,17 @@ are recorded here so they are not mistaken for verified facts at review time.
 
 ## User-Brand Impact
 
+> **Superseded 2026-08-25 (#7698).** The paragraph below asserts "there is no outage". That was
+> FALSE when written, and the evidence against it had already been measured and written down in
+> #7674 earlier the same session. App-originated `inngest.send()` from web-1 was being refused
+> continuously at the dead host — re-measured at ship time over a 6h non-saturating window:
+> ~478/hour, ~11,500/day of `ECONNREFUSED 10.0.1.40:8288`. "Scheduled crons are firing" was taken
+> to mean "nothing is broken"; only the crons run on web-1's co-located scheduler. The outage is
+> real, ongoing, and tracked by #7698 with a post-mortem at
+> `knowledge-base/engineering/operations/post-mortems/inngest-app-dispatch-econnrefused-postmortem.md`.
+> The original text is kept rather than rewritten, because the plan is the record of what I believed
+> when I wrote it and that belief is the subject of this feature's learning.
+
 **If this lands broken, the user experiences:** nothing immediately — web-1's co-located scheduler is
 firing production crons normally and there is no outage. The exposure is deferred: a G3.7 that still
 fails open lets a future arm quiesce the working scheduler and complete a cutover onto a host that
@@ -690,10 +701,12 @@ volume's durable queue state — in-flight `step.sleep` and queued jobs — if i
 without review. Hence the required-reviewer environment, typed confirm, scoped destroy-guard with no
 bypass, and post-apply backstop, and never auto-executing.
 
-**Brand-survival threshold:** `aggregate pattern`. No single user's data is at risk in this PR: the
-production scheduler is unaffected, the destructive path ships inert, and every change is repo-side.
-The pattern being corrected — a gate reporting coverage it does not have, and a marker nobody reads —
-is an aggregate reliability defect rather than a per-user incident.
+- **Brand-survival threshold:** `aggregate pattern` — no single user's data is at risk in this PR:
+  the production scheduler is unaffected, the destructive path ships inert, and every change is
+  repo-side. The pattern being corrected — a gate reporting coverage it does not have, and a marker
+  nobody reads — is an aggregate reliability defect rather than a per-user incident. (The #7698
+  outage noted above is a pre-existing production fault this PR detects but does not cause or fix;
+  it does not change this PR's own threshold.)
 
 ## Observability
 
