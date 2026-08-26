@@ -53,7 +53,34 @@ definitions stranded against a dying endpoint.
 Do not attempt these four until #7634 resolves the write shape. A file-level grep for
 `ignore_changes` cannot tell this set apart from the other 25 — resolve per resource block.
 
-## Phase 0 — fidelity measurement (gates everything; no edit until it passes)
+## Phase 0 — COMPLETE (2026-08-26): PASS
+
+Evidence: `knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase0-fidelity-evidence.md`
+
+The risk did not materialise, and the question was answerable by reading rather than by
+building a scratch experiment: **Sentry has already migrated all 29 rules server-side**,
+so `rules/` and `workflows/` are two views of the same objects and the faithful
+translation already exists, authored by the vendor.
+
+- **All 30 workflows bind to the same detector** `1213799` (`issue_stream`) — lifecycle,
+  pure-frequency, and Sentry's own default alike. `monitor_ids` is therefore not a
+  semantic differentiator, and binding a pure-frequency rule to the issue-stream monitor
+  is exactly what Sentry does. The 9 pure-frequency rules need no special handling.
+- **Frequency is a first-class trigger type**, not an action filter: 11
+  `event_frequency_count` + 2 `event_unique_user_frequency_count` in `triggers.conditions`,
+  while `actionFilters` carry `tagged_event` and nothing else (65/65). **This refutes the
+  translation mapping in Phase 2.1 below, which is corrected accordingly.**
+- The four `auth-*` rules' live definitions are now readable from the API rather than only
+  from `configure-sentry-alerts.sh`. This does not unblock #7634 (a WRITE-shape problem)
+  but removes the reverse-engineering step from verifying a future migration.
+
+Consequence for the shape of the work: this is **closer to an import than a re-creation**.
+The target objects already exist with correct semantics; the task is getting Terraform to
+manage them. Materially lower risk than this plan originally assumed.
+
+<details><summary>Original Phase 0 steps, kept as the dated record of what was planned</summary>
+
+## Phase 0 (as planned) — fidelity measurement
 
 - [ ] **0.1** Regenerate the classification from `issue-alerts.tf` and commit the classifier
       so the counts above are reproducible rather than asserted.
@@ -74,6 +101,8 @@ Do not attempt these four until #7634 resolves the write shape. A file-level gre
 retracted 2026-07-17 finding: a plan run outside a brownout window is consistent with both
 "it works" and "we sampled the wrong moment".
 
+</details>
+
 ## Phase 1 — destroy-guard extension (BEFORE any sentry_alert enters a plan)
 
 - [ ] **1.1** Extend `tests/scripts/lib/destroy-guard-filter-sentry.jq` with a
@@ -89,10 +118,19 @@ not with, the migration.
 
 ## Phase 2 — translate and import (25 resources)
 
-- [ ] **2.1** Translate: lifecycle conditions -> `trigger_conditions`; frequency conditions
-      + `tagged_event`/`level` filters -> `action_filters[].conditions`; `filter_match` ->
-      `action_filters[].logic_type`; `actions_v2` + `frequency` -> `action_filters[].actions`
-      + `frequency_minutes`; bind `monitor_ids` to the default-monitor data sources.
+- [ ] **2.1** Translate, per the mapping MEASURED in Phase 0 (this corrects the mapping
+      originally written here, which sent frequency conditions to `action_filters` — a
+      place Sentry never puts them):
+      - lifecycle conditions (`first_seen_event` / `reappeared_event` / `regression_event`)
+        -> `trigger_conditions`, `logic_type = any-short`
+      - **frequency conditions -> `trigger_conditions` as `event_frequency_count` /
+        `event_unique_user_frequency_count`, `logic_type = all`** (NOT action filters)
+      - `tagged_event` / `level` filters -> `action_filters[].conditions` — measured to be
+        the only condition type Sentry puts there
+      - `filter_match` -> `action_filters[].logic_type`
+      - `actions_v2` + `frequency` -> `action_filters[].actions` + `frequency_minutes`
+      - `monitor_ids` -> the issue-stream default monitor, uniformly. Measured: all 30
+        live workflows bind to `1213799`; do not branch this per rule class.
 - [ ] **2.2** **Preserve every `name` byte-for-byte.** `assert-byok-rules-exist.sh`'s
       `EXPECTED_RULES` and operator dashboard queries both key on names.
 - [ ] **2.3** State surgery via a one-time `workflow_dispatch` (never SSH): `state rm` then
