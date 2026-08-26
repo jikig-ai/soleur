@@ -98,13 +98,22 @@ _repo_boundary_dim_config() {
   # `git checkout -b --track`, so they are the single config trace a `git -C "" checkout -b`
   # escape leaves behind. Cutting the whole family — individually defensible — composes with the
   # refs REPORT class to make that escape invisible in both dimensions at once.
-  # Routed through a FILE, never `out="$(git config --list -z)"`. Command substitution strips NUL
-  # bytes — bash even warns — so the `-z` framing is destroyed and every entry collapses into one
-  # unsplittable blob. The dimension then reports a single constant and goes silently blind to
-  # exactly the write it exists to catch. Caught by this lib's own test, not by reading.
-  local kv key val tmpf
-  tmpf="$(mktemp)" || return 1
-  if ! git config --local --list -z >"$tmpf" 2>/dev/null; then rm -f "$tmpf"; return 1; fi
+  # NEVER `out="$(git config --list -z)"`. Command substitution strips NUL bytes — bash even warns
+  # — so the `-z` framing is destroyed, every entry collapses into one unsplittable blob, and the
+  # dimension reports a constant while going silently blind to exactly the write it exists to
+  # catch. Caught by this lib's own test, not by reading.
+  #
+  # Streamed from a process substitution rather than a tempfile. A tempfile here would need an
+  # owning `trap ... EXIT` (ADR-129, enforced by scripts/lint-trap-tempfile-ownership), and this
+  # file is SOURCED — registering an EXIT trap would silently replace the caller's, which in
+  # test-all.sh is the trap that reports an unfinished boundary. The cure would disable the thing
+  # this lib exists to provide.
+  #
+  # `git config --list` exits 1 when there are no entries at all, which is legitimate rather than a
+  # capture failure, so repo liveness is established first and the listing is then read for what it
+  # holds.
+  local kv key val
+  git rev-parse --git-dir >/dev/null 2>&1 || return 1
   while IFS= read -r -d '' kv; do
     if [[ "$kv" == *$'\n'* ]]; then
       key="${kv%%$'\n'*}"
@@ -118,8 +127,7 @@ _repo_boundary_dim_config() {
       *.vscode-merge-base) continue ;;
     esac
     printf '%s\t%s\n' "$key" "$(_repo_boundary_digest "$val")"
-  done <"$tmpf" | LC_ALL=C sort
-  rm -f "$tmpf"
+  done < <(git config --local --list -z 2>/dev/null) | LC_ALL=C sort
 }
 
 _repo_boundary_dim_refs() {
@@ -213,12 +221,10 @@ _repo_boundary_branches_elsewhere() {
 # repo_boundary_classify <before> <after>
 # Prints zero or more `<SEVERITY>\t<dimension>\t<detail>` lines. Silent when there is no delta.
 repo_boundary_classify() {
+  # Herestrings and process substitutions throughout, never tempfiles: same ADR-129 reasoning as
+  # the config dimension above — a sourced lib cannot own an EXIT trap without clobbering its
+  # caller's.
   local before="${1-}" after="${2-}"
-  local bfile afile
-  bfile="$(mktemp)" || return 1
-  afile="$(mktemp)" || { rm -f "$bfile"; return 1; }
-  printf '%s' "$before" > "$bfile"
-  printf '%s' "$after"  > "$afile"
 
   local default_branch elsewhere
   default_branch="$(_repo_boundary_default_branch)"
@@ -227,7 +233,8 @@ repo_boundary_classify() {
 
   local dim
   for dim in head worktree config; do
-    if ! diff -q <(grep "^${dim}"$'\t' "$bfile" || true) <(grep "^${dim}"$'\t' "$afile" || true) >/dev/null; then
+    if ! diff -q <({ grep "^${dim}"$'\t' <<<"$before" || true; }) \
+                 <({ grep "^${dim}"$'\t' <<<"$after"  || true; }) >/dev/null; then
       printf 'FATAL\t%s\tthis dimension changed between the first suite and the end of the run\n' "$dim"
     fi
   done
@@ -235,8 +242,8 @@ repo_boundary_classify() {
   # Refs are classified per ref, by harm, so a sibling worktree's branch advancing does not carry
   # the same severity as this worktree's own branch moving under it.
   local brefs arefs
-  brefs="$(grep "^refs"$'\t' "$bfile" | sed 's/^refs\t//' || true)"
-  arefs="$(grep "^refs"$'\t' "$afile" | sed 's/^refs\t//' || true)"
+  brefs="$({ grep "^refs"$'\t' <<<"$before" || true; } | sed 's/^refs\t//')"
+  arefs="$({ grep "^refs"$'\t' <<<"$after"  || true; } | sed 's/^refs\t//')"
   if [[ "$brefs" != "$arefs" ]]; then
     local ref name bsha asha
     # Deletions first: FATAL unconditionally, including the all-refs-gone case that makes
@@ -271,7 +278,6 @@ repo_boundary_classify() {
     done <<<"$arefs"
   fi
 
-  rm -f "$bfile" "$afile"
 }
 
 # --- the rendered claim --------------------------------------------------------------------------

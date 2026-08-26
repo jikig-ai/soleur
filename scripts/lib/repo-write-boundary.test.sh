@@ -420,6 +420,39 @@ else
   fail "EXIT CONTRACT does not mention the REPORT class"
 fi
 
+# --- 28. EVERY sandbox that relocates the runner carries the lib, or says why not ---------------
+# The finding that produced this arm named ONE file; the fix is scoped to the CLASS. The runner
+# sources this lib fail-closed, so any suite that copies `scripts/test-all.sh` into a sandbox and
+# executes it exits 2 before its first arm — and the failure surfaces as that suite's own arms all
+# going red for unrelated-looking reasons, not as a missing file. Two of the three relocators were
+# named in the plan; the third (`fanout-suite-scope.test.sh`) was found only by a red shard, after
+# the first two had been fixed and read as complete.
+#
+# So the population is ENUMERATED from the tree rather than remembered, and a relocator that
+# genuinely does not need the lib must SAY SO — a silent exemption is how this class regrows.
+ck
+relocators=""; unlisted=""
+while IFS= read -r f; do
+  grep -qE '^[[:space:]]*cp\b.*test-all\.sh|cp "\$TARGET"|cp "\$MAIN_TARGET"|cp "\$RUNNER"' "$f" || continue
+  relocators="$relocators $f"
+  grep -q 'repo-write-boundary' "$f" && continue                      # copies the lib
+  grep -q 'repo-write-boundary-sandbox: not-needed' "$f" && continue  # declared early-exit-only
+  unlisted="$unlisted
+    $(realpath --relative-to="$REPO_ROOT" "$f")"
+done < <(git -C "$REPO_ROOT" ls-files '*.sh' | sed "s#^#$REPO_ROOT/#" | xargs grep -l 'test-all\.sh' 2>/dev/null)
+n_reloc=$(printf '%s' "$relocators" | wc -w)
+if [[ "$n_reloc" -lt 3 ]]; then
+  # Anti-vacuity, reported directly: an enumeration that finds nothing passes trivially, and this
+  # arm's whole value is that the population is derived rather than remembered.
+  printf '[FATAL] only %s runner-relocating suite(s) enumerated (expected >=3) — the derivation is broken, not the tree.\n' "$n_reloc" >&2
+  exit 1
+fi
+if [[ -z "$unlisted" ]]; then
+  pass "all $n_reloc runner-relocating sandbox(es) copy the lib or declare not-needed"
+else
+  fail "sandbox(es) that relocate test-all.sh without the boundary lib and without a declaration:$unlisted"
+fi
+
 # --- Accounting. Emitted DIRECTLY, never through pass()/fail(): a conservation check routed
 # through the verdict helper it exists to police cannot report the fault that corrupted it.
 if [[ $((passes + fails)) -ne $asserted ]]; then
@@ -432,7 +465,7 @@ if [[ $((passes + fails)) -ne $asserted ]]; then
   exit 1
 fi
 
-MIN_ASSERTIONS=27
+MIN_ASSERTIONS=28
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — arms were deleted or neutered" >&2
   exit 1
