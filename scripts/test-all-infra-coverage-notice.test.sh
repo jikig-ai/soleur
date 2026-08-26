@@ -379,7 +379,7 @@ GATED=(
   "scripts/cf-tunnel-liveness-gate-mutations|CF_TUNNEL_BATTERY_PATHS"
   "plugins/soleur/test/c4-from-components.test.sh|C4_PRODUCER_PATHS"
   ".github/scripts/test/run-all.sh|GITHUB_SCRIPTS_SUITE_PATHS"
-  "apps/web-platform [unit+component]|WEBPLAT_APP_PATHS"
+  "apps/web-platform [unit]|WEBPLAT_APP_PATHS"
 )
 
 # REGISTRATION FLOOR, derived from $TARGET — not a hand-typed literal.
