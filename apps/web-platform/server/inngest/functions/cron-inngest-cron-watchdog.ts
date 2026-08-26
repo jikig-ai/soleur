@@ -305,10 +305,20 @@ export async function cronInngestCronWatchdogHandler({
 // Registration
 // =============================================================================
 
-// Cadence: every 4h. Detection latency (≤4h) is well inside the miss window
-// of the tightest monitored daily cron (scheduled-gh-pages-cert-state @
-// 0 3 * * *, scheduled-community-monitor @ 0 8 * * *), so a post-deploy
-// desync is caught and healed before the next daily fire is missed (AC10).
+// Cadence: every 4h. AC10's ground is the INVARIANT, not a named cron: every
+// monitored daily cron fires once per 24h, so a ≤4h detection latency catches
+// and heals a post-deploy desync before the next daily fire is missed, whichever
+// daily cron happens to be earliest or tightest.
+//
+// This clause used to name a specific pair (scheduled-gh-pages-cert-state @
+// 0 3 * * * and scheduled-community-monitor @ 0 8 * * *) as "the tightest
+// monitored daily cron". #7640 disarmed the first for the ADR-194 cutover, and
+// the repair initially just promoted the second — which was ALSO wrong:
+// scheduled-daily-triage fires at 0 4 with checkin_margin_minutes = 30, earlier
+// and tighter than community-monitor's 0 8 / 60. Naming any single cron here
+// means this comment silently rots every time a margin or schedule moves
+// somewhere else in cron-monitors.tf, which is how it was wrong twice. The
+// invariant does not rot.
 export const cronInngestCronWatchdog = inngest.createFunction(
   {
     id: "cron-inngest-cron-watchdog",

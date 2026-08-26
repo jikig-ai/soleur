@@ -355,17 +355,56 @@ resource "sentry_cron_monitor" "scheduled_community_monitor" {
 # state for soleur.ai. Closes the gap exposed by the 2026-05-18 silent
 # cert-expiry outage (PR #3974 + PR #3986 + issue #3976). Daily cadence
 # leaves >2 weeks operator response on a single missed fire; the 240-
-# minute `checkin_margin_minutes` absorbs GHA cron jitter — this monitor
-# is GHA-fired (not Inngest), so the legacy GHA-jitter tolerance applies
-# (cf. `scheduled-daily-triage` which tightened to 30 min after its
-# Inngest migration in TR9 PR-1 #3985 — Inngest-fired monitors do NOT
-# need the 240-min margin).
+# minute `checkin_margin_minutes` is a GHA-era inheritance, RETAINED UNCHANGED.
+# (An earlier revision of this comment said the monitor "is GHA-fired (not
+# Inngest), so the legacy GHA-jitter tolerance applies". That was stale: TR9
+# Phase-2 migrated this poll to Inngest and deleted
+# scheduled-gh-pages-cert-state.yml. The 240 is kept as-is rather than re-tuned
+# to the Inngest norm — cf. `scheduled-daily-triage`, which tightened to 30 min
+# after its own Inngest migration in TR9 PR-1 #3985 — because re-tuning a margin
+# is a separate decision and this monitor is disabled anyway. Correcting the
+# sentence matters because whoever re-arms this would otherwise inherit a wrong
+# premise about why the margin is 240.)
 # `failure_issue_threshold = 1` because a single miss on a daily monitor
 # is itself noteworthy.
+#
+# ‼️ #7640 / ADR-194 — DISARMED (`enabled = false`), NOT deleted. The producer
+# `cron-gh-pages-cert-state` lost its `{ cron: "0 3 * * *" }` trigger in the
+# same PR (manual-trigger-only now), so this monitor would otherwise open a
+# MISSED-check-in issue EVERY DAY from that merge onward — the same daily-noise
+# loop the disarmament exists to remove, relocated from `[cert-poll]` issues
+# into Sentry.
+#
+# WHY `enabled = false` AND NOT A DELETE:
+#   - a delete requires `[ack-destroy]`, which this migration reserves for the
+#     DNS cutover PR; spending it on the substrate PR costs the gate its signal;
+#   - the handler still declares SENTRY_MONITOR_SLUG and still heartbeats on the
+#     retained manual-trigger arm, so a delete breaks the code->IaC parity guard
+#     (test/server/inngest/sentry-monitor-iac-parity.test.ts) and would need a
+#     DISABLED_CRON_SLUG_EXEMPTIONS entry;
+#   - a delete also moves model.c4's live monitor counts (55/11/44) and the
+#     Art. 30 register's monitor inventory, both count-gated in CI;
+#   - rollback is a revert of the cutover. Re-arming must be the INVERSE of
+#     disarming — one boolean here, one trigger there — not a re-creation of a
+#     destroyed resource through a second Terraform root.
+#
+# KNOWN RESIDUAL, accepted deliberately: a manual
+# `cron/gh-pages-cert-state.manual-trigger` still calls postSentryHeartbeat,
+# which POSTs to the check-in URL. Against a disabled monitor Sentry may return
+# 4xx; _cron-shared.ts does not retry a 4xx and routes it to
+# reportSilentFallback — one Sentry event per operator-initiated manual run.
+# Bounded and operator-triggered, three orders of magnitude below the ~365/yr it
+# replaces. Do NOT add a "skip heartbeat when disarmed" branch to the handler:
+# that would make the app a second source of truth for this monitor's state.
+#
+# The schedule and margins below are RETAINED VERBATIM as the re-arm recipe.
+# Flip `enabled` back to true ONLY in the same PR that restores the cron
+# trigger in cron-gh-pages-cert-state.ts.
 resource "sentry_cron_monitor" "scheduled_gh_pages_cert_state" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-gh-pages-cert-state"
+  enabled                 = false
   schedule                = { crontab = "0 3 * * *" }
   checkin_margin_minutes  = 240
   max_runtime_minutes     = 10

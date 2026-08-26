@@ -57,7 +57,6 @@ const SUT_SOURCE = readFileSync(
 describe("registration source-shape anchors (cross-check the import-time smoke)", () => {
   it.each([
     ['id: "cron-gh-pages-cert-state"', "canonical function id"],
-    ['cron: "0 3 * * *"', "daily at 03:00 UTC schedule"],
     ['event: "cron/gh-pages-cert-state.manual-trigger"', "operator manual trigger"],
     ['scope: "fn"', "fn-scoped serialization"],
     ['scope: "account"', "account-shared lane (cron-platform)"],
@@ -65,6 +64,37 @@ describe("registration source-shape anchors (cross-check the import-time smoke)"
     ["retries: 1", "no retry storm on cert check failure"],
   ])("source contains %s (%s)", (anchor) => {
     expect(SUT_SOURCE).toContain(anchor);
+  });
+});
+
+// =============================================================================
+// #7640 / AC26 — the daily schedule is DISARMED, the manual arm is retained
+// =============================================================================
+//
+// Post-Cloudflare-Pages cutover the GitHub Pages cert is DNS-detached by design
+// and can never recover, so this poll stays permanently tripped. On a daily
+// schedule that is a self-escalating loop: it files/comments a `[cert-poll]`
+// issue every day forever whose body instructs an agent to fire
+// `cron/gh-pages-cert-reissue.manual-trigger` — handing an autonomous agent a
+// daily, authoritative instruction to run a routine that de-proxies live www
+// one-way. Disarming the schedule closes the loop. The function is NOT deleted
+// (that is deferred) and its manual-trigger arm stays, so an operator can still
+// read the cert state on demand.
+
+describe("registration — the daily cron trigger is disarmed (#7640, AC26)", () => {
+  it("source registers NO cron schedule (quote- and spacing-agnostic)", () => {
+    expect(SUT_SOURCE).not.toContain('cron: "0 3 * * *"');
+    expect(SUT_SOURCE).not.toMatch(/^\s*(?:\{\s*)?cron\s*:\s*["'`]/m);
+  });
+
+  it("retains the manual-trigger arm as the ONLY trigger", () => {
+    expect(SUT_SOURCE).toContain(
+      'event: "cron/gh-pages-cert-state.manual-trigger"',
+    );
+  });
+
+  it("still registers and is still importable (not deleted — deferred)", () => {
+    expect(cronGhPagesCertState).toBeDefined();
   });
 });
 

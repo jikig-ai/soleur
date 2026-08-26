@@ -114,6 +114,11 @@ single-attempt, human-gated — NOT compliance-by-no-drift. It references **ADR-
 replay-safety contract) for the step structure and **ADR-033** (Inngest cron substrate), which it
 extends with a write-to-live-infra capability.
 
+> **Superseded 2026-08-20 (#7640) as to `self-reverting`:** that ground is VOID against the
+> post-cutover apex topology, and AP-019 is suspended until the routine's apex-topology
+> precondition is live. The other three grounds are unaffected. See
+> `## Addendum — 2026-08-20 (#7640)` at the end of this ADR.
+
 The restore MUST be a final step + `onFailure` handler, **not a JS `try…finally`**: `step.sleep`
 suspends via a control-flow throw that runs `finally` prematurely at the **first suspension**,
 restoring the proxy before the cert validates and collapsing the DNS-only window (then the memoized
@@ -188,3 +193,38 @@ coordination and self-heal auto-invoke are **deferred to v2** (#6677).
   P0 (`proxy_restore_failed`).
 - **New IaC:** a distinct `cloudflare_api_token` (Zone.DNS:Edit on the soleur.ai zone) published to
   Doppler `prd` as `CF_API_TOKEN_DNS_EDIT`.
+
+## Addendum — 2026-08-20 (#7640): AP-019 is suspended, and this routine is disarmed rather than deleted
+
+This ADR is **not** superseded and its decision is not reversed — but the topology it was
+measured against is being removed. ADR-194 migrates the marketing/docs site off GitHub Pages to
+Cloudflare Pages, and at the apex cutover the premise every argument here rests on (apex = four
+`A` records on GitHub anycast, a GitHub Pages origin certificate that can be re-issued) stops
+holding.
+
+**The consequence for AP-019.** The `## Decision` above registers this toggle as a narrow AP-001
+exception on the grounds that it is *transient, self-reverting, single-attempt, human-gated*. The
+**self-reverting** ground is provably false post-cutover and is recorded as **VOID** in
+`knowledge-base/engineering/architecture/principles-register.md` (AP-019 row + `## Notes`) until
+the mitigation below is live. Mechanism: `listToggleRecords()` queries `[apex, "A"]` and
+`[www, "CNAME"]`, so against a `CNAME` apex the `A` query returns nothing, `www` alone is flipped
+to `proxied = false`, and `restoreStateInner` — which refuses to restore when fewer than
+`EXPECTED_TOGGLE_RECORDS = 5` records come back — cannot put it back. The fail-loud restore
+guarantee this ADR relies on as a safety property is exactly what makes the de-proxying one-way in
+that topology. Probe-only mode does not help: `setRecordsProxied(deps, records, false)` runs
+unconditionally.
+
+**The mitigation (#7640 PR1, additive — nothing here is deleted).** `checkReissuePreconditions`
+gains an apex-topology precondition returning a non-benign terminal outcome unless the live apex
+record type is `A`, and `cron-gh-pages-cert-state` loses its `0 3 * * *` schedule (manual-trigger
+arm retained), closing the loop where the detector filed a daily `[cert-poll]` issue instructing
+its reader to fire this routine. Once that is live, the routine can only execute against the
+topology this ADR reasoned about, and AP-019's grounds hold again for every case in which it can
+run at all.
+
+**Deletion is deferred, deliberately.** The subsystem, `cf-cert-reissue-token.tf`, the
+`CF_API_TOKEN_DNS_EDIT` secret, `gh-pages-cert-renewal.md` and this ADR all survive the migration,
+because a DNS-only revert to GitHub Pages is ADR-194's rollback and it needs them. Disarmament and
+deletion have different deadlines: the hazard is created by the cutover, so it is closed by the
+cutover's own work. See ADR-194 `## Addendum — 2026-08-20 (#7640)` §2 and `## Design Decision D2`
+of `knowledge-base/project/plans/2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`.

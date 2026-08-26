@@ -19,6 +19,40 @@ Covers `soleur.ai` / `www.soleur.ai` — the marketing + docs site served by Git
 Pages behind Cloudflare. **`app.soleur.ai` is a different origin (Hetzner) and is
 never affected by anything on this page.**
 
+> **Superseded 2026-08-20 (#7640) — read this before running anything below.** The
+> marketing/docs site is migrating off GitHub Pages to Cloudflare Pages (ADR-194, accepted
+> 2026-08-20; plan
+> `knowledge-base/project/plans/2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`).
+> This page is **retained deliberately**, not by oversight — a DNS-only revert to GitHub Pages
+> is the migration's rollback, so the procedure has to survive. But once the apex cutover
+> (PR3 of #7640) has landed, **this procedure no longer works and two of its steps are actively
+> harmful**:
+>
+> - **The scripted path refuses to run, by design.** `cron-gh-pages-cert-reissue` is gated on the
+>   live apex record type still being `A`; post-cutover it is a `CNAME`, and the routine returns a
+>   non-benign terminal outcome instead of half-running. This is the correct behaviour: against a
+>   CNAME apex, `listToggleRecords()` matches only the **www** record and flips *it* to
+>   `proxied = false` — dropping HSTS, Rule 10's HTTPS upgrade, WAF and bot management on a host
+>   `domains.md` mandates be proxied — and `restoreStateInner` then refuses to restore a subset,
+>   making that de-proxying one-way. Do **not** work around the gate.
+> - **Step 8 — *"After a successful renewal, remove the `ssl = "full"` rule"* — is void.**
+>   `ssl = "full"` must **stay** for as long as the rollback window is open: the GitHub Pages
+>   origin certificate is expired by construction, and under `strict` a rollback would serve
+>   **526** — the exact outage this rule was added to end. Its removal is tracked on the #7640
+>   deferred-cleanup issue, not here.
+> - **The manual path cannot succeed either.** Eligibility requires the hostname to resolve to
+>   GitHub's anycast IPs; post-cutover it resolves to Cloudflare Pages, and repointing it to make
+>   a certificate issue *is* the rollback, not a renewal.
+> - `cron-gh-pages-cert-state`'s daily `0 3 * * *` trigger is **removed** (manual-trigger arm
+>   retained), so the `[cert-poll]` issue that used to instruct a reader to fire the routine no
+>   longer files itself. If you arrived here from an old one, stop.
+>
+> **How to tell which side of the cutover you are on**, without a dashboard:
+> `dig +short soleur.ai` returning the four `185.199.x` GitHub anycast addresses means pre-cutover
+> and everything below applies. Anything else means the migration has landed. Current state and the
+> rollback procedure are in
+> `knowledge-base/engineering/operations/runbooks/cloudflare-pages-cutover.md`.
+
 ## The one thing to understand first
 
 **GitHub Pages will not issue OR renew a certificate while the hostname is
@@ -191,6 +225,12 @@ impact.
    `seo-config-rules.tf` and re-run the guard test (it pins the rule count and
    the `TEMPORARY` marker). Retiring it at any other time re-arms the 526.
 
+   > **VOID from the #7640 cutover — do not perform step 8.** `ssl = "full"` must stay in
+   > place for as long as the ADR-194 rollback window is open: rollback repoints DNS at a
+   > GitHub Pages origin whose certificate is expired by construction, and `strict` would
+   > serve **526**. Its removal is tracked on the #7640 deferred-cleanup issue. See the
+   > banner at the top of this page.
+
 ### The scripted path
 
 `cron-gh-pages-cert-reissue` automates steps 1–7 and emits
@@ -215,7 +255,13 @@ with `soleur:trigger-cron`:
 
 ## Detection
 
-`cron-gh-pages-cert-state` runs daily at 03:00 UTC and:
+> **Superseded 2026-08-20 (#7640):** the daily `0 3 * * *` trigger described in this
+> section was REMOVED by the ADR-194 substrate PR; `cron-gh-pages-cert-state` is
+> manual-trigger-only, and its Sentry monitor carries `enabled = false`. Read the
+> steps below as the pre-cutover behaviour. Fire it with
+> `cron/gh-pages-cert-state.manual-trigger` via POST /api/internal/trigger-cron.
+
+`cron-gh-pages-cert-state` ran daily at 03:00 UTC (schedule now disarmed) and:
 
 - files/updates a `[cert-poll]` issue below **21 days** to expiry (a log), and
 - **pages via Sentry** below **7 days** when the cert is wedged in a state ACME
