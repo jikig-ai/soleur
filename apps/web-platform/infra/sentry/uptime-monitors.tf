@@ -190,7 +190,7 @@ resource "sentry_uptime_monitor" "soleur_acme_probe" {
   interval_seconds = 300
   timeout_ms       = 10000
 
-  description = "Alerts when CF Rule 10 (seo_page_redirects ACME carve-out) regresses. Healthy = 404; any other status is the signal. See uptime-monitors.tf comment and seo-rulesets.tf:240-254 for the carve-out under guard."
+  description = "Asserts 404 on the ACME challenge path. PRE-CUTOVER that detects a CF Rule 10 (seo_page_redirects ACME carve-out) regression, since the 404 is a passthrough to the GitHub Pages origin. From the #7640/ADR-194 Cloudflare Pages cutover it goes VACUOUS: Pages serves its own 404.html regardless of Rule 10, so the assertion is a permanent pass with zero coupling to the carve-out it names - while Rule 10 and its carve-out are explicitly RETAINED. Do not read green here as carve-out health post-cutover; the lost property is tracked on the #7640 deferred-cleanup issue. Carve-out under guard: Rule 10 in seo-rulesets.tf. The LOAD-BEARING comment above is scoped to the pre-cutover topology."
 
   downtime_threshold = 3
   recovery_threshold = 1

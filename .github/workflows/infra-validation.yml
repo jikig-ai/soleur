@@ -74,6 +74,16 @@ on:
       - ".github/workflows/git-data-rung2-rehearsal.yml"
       - ".github/workflows/apply-web-platform-infra.yml"
       - ".github/workflows/scheduled-terraform-drift.yml"
+      # (#7640) www-apex-canonicalizer.test.sh cross-reads deploy-docs.yml: its
+      # `wrangler pages deploy --branch` must equal cf-pages.tf's `production_branch`, and
+      # its `--project-name` must equal cloudflare_pages_project.docs's `name`. Those are two
+      # magic strings in YAML and HCL with no compiler between them, and a `--branch` that
+      # stops matching leaves every other assertion in the guard GREEN while the custom domain
+      # keeps serving the last matching build. Without this path a PR editing ONLY the deploy
+      # workflow would never run the guard that catches it -- a chokepoint assertion that
+      # passes by never executing, which is the exact defect ADR-194's plan rejected the
+      # `_redirects` design over.
+      - ".github/workflows/deploy-docs.yml"
       # (#7227) The evidence-capture script, for the same reason as the three workflows above:
       # git-data-rung2-rehearsal.test.sh arm 10 now compares its `--host-name` constraint
       # against the rehearsal prefix those workflows pin, and test-git-data-rung2-evidence-
@@ -1054,6 +1064,21 @@ jobs:
 
       - name: Run www-apex-canonicalizer drift-guard
         run: bash apps/web-platform/infra/www-apex-canonicalizer.test.sh
+
+      # The battery that proves the guard above can actually go RED (#7640). Registered, not
+      # orphaned: this job lists each infra test explicitly -- no glob -- so an unregistered
+      # battery is ZERO coverage, silently and greenly, and run-registered-suites.sh derives
+      # its list from THIS file, so registering here is what makes it runnable locally too.
+      #
+      # It carries more weight than the sibling batteries do. scripts/guard-vacuity-floor.test.sh
+      # gives the guard above NO mutation coverage: its floor is an exact cardinality (`-ne`),
+      # which that meta-guard's `floor_lines_of` does not classify as a floor candidate, and
+      # apps/web-platform/infra/ is in its DEFERRED_DIRS regardless. This battery is therefore
+      # the guard's ONLY falsifiability evidence. It has already earned it -- running the matrix
+      # found a version-pinned `npx wrangler@4 pages deploy` that the guard's invocation
+      # detector could not see, which made BOTH cross-file coupling assertions vacuous.
+      - name: Run www-apex-canonicalizer mutation battery (#7640)
+        run: bash apps/web-platform/infra/www-apex-canonicalizer-mutation.test.sh
 
       - name: Run cloud-init inngest-bootstrap pin drift-guard
         run: bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh

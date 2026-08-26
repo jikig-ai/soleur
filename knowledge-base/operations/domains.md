@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-05-18
+last_updated: 2026-08-20
 ---
 
 # Domains
@@ -77,3 +77,58 @@ A Configuration Rule scoped to `soleur.ai` + `www.soleur.ai` sets `ssl = "full"`
 This is acceptable **only** because the apex origin is a public static site: no auth, no cookies, no PII, and nothing a tampered response could escalate. Do **not** copy that rule to a host serving authenticated or user-submitted data.
 
 **Renewal procedure — and why timing is the whole trick — is in [gh-pages-cert-renewal.md](../engineering/operations/runbooks/gh-pages-cert-renewal.md).**
+
+## Addendum — 2026-08-20 (#7640): how the conflict is actually resolved
+
+This section **supersedes the framing** of *"How the conflict is currently resolved"* in
+`## Apex TLS: the proxy/certificate conflict (2026-08-16)` above. That section is left intact
+because it is an accurate record of the state between 2026-08-16 and the cutover; what it does
+not say is that `ssl = "full"` is a **mitigation, not the resolution**.
+
+**The resolution is architectural: the docs site moves off GitHub Pages onto Cloudflare Pages**
+([ADR-194](../engineering/architecture/decisions/ADR-194-migrate-marketing-docs-site-off-github-pages-to-cloudflare-pages.md),
+accepted 2026-08-20; implemented under #7640, plan at
+`knowledge-base/project/plans/2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`).
+Cloudflare serves the site, so **there is no origin leg and no origin certificate**. The conflict
+this page records does not get managed better — it stops existing. The two requirements that were
+in direct conflict are both satisfied afterwards: apex and www stay `proxied = true` for the HSTS
+preload commitment, and no certificate has to be issued to a proxied origin, because nothing is
+behind the proxy.
+
+**What is still true, and stays true through this change:**
+
+- The `## HSTS Preload Commitment` mandate is unchanged. Both hosts remain `proxied = true`;
+  Universal SSL's one-label wildcard `*.soleur.ai` covers www.
+- Rule 10 of `cloudflare_ruleset.seo_page_redirects` — **including its ACME carve-out clause** —
+  is **not** retired by the migration. `## Always Use HTTPS exception (2026-05-18)` above stands
+  verbatim, as does `always_use_https = "off"`. Retiring the carve-out was expected to free a
+  ruleset slot; it does not, because the carve-out is a clause of Rule 10 rather than a rule of
+  its own, so nothing about the 10-rule cap changes (see the ADR's `## Decision`, superseded note
+  of 2026-08-20).
+- `ssl = "full"` in `apps/web-platform/infra/seo-config-rules.tf` **stays in place** through the
+  migration and for as long as the rollback window is open. Rollback is a DNS revert to GitHub
+  Pages, whose certificate is expired by construction — under `strict` that rollback would serve
+  **526**. Do not "clean up" this rule as part of the migration; its removal is on the
+  deferred-cleanup issue with an explicit re-evaluation criterion.
+- Cloudflare is already a sub-processor and already holds the zone. No new vendor, no new
+  registrar or nameserver change, no DPA change. `## Domains` above is unaffected.
+
+**What changes, and when — the `## DNS Records` table above describes the pre-cutover topology.**
+The migration ships as three sequenced PRs; the table stays accurate until the third lands:
+
+| Record | Today (as tabled above) | After the cutover |
+|---|---|---|
+| `soleur.ai` | four proxied `A` records on GitHub Pages anycast (`185.199.10[89].153`, `185.199.11[01].153`) | one proxied `CNAME` to the Cloudflare Pages project, flattened at the apex; the `MX` and `TXT` records at the apex are unaffected — CNAME flattening is what makes that legal |
+| `www.soleur.ai` | proxied `CNAME` to `jikig-ai.github.io`; the `www -> apex` **301 is GitHub-Pages-owned** | proxied `CNAME` to the same Pages project, with the 301 rebuilt as a **Cloudflare Bulk Redirect** (account-level, `http_request_redirect` phase — *not* a rule in `seo_page_redirects`) running in front of the project |
+| `_github-pages-challenge-jikig-ai.soleur.ai` | `TXT`, unproxied, domain verification | retained; GitHub Pages configuration is left in place but DNS-detached, because that is what makes the rollback a DNS-only revert |
+
+`apps/web-platform/infra/dns.tf` remains the source of truth for all of it, and the cutover is a
+single-hunk change to that file — deliberately, so the rollback is one revert.
+
+**The GitHub Pages certificate-reissue routine is disarmed, not deleted.** Post-cutover it would
+otherwise flip **`www` to `proxied = false`** — dropping HSTS, Rule 10's HTTPS upgrade, WAF and
+bot management on a host this page mandates be proxied — and it structurally cannot restore that
+flip. It is gated on the apex still being an `A` record and its daily detector cron is removed;
+`gh-pages-cert-renewal.md` is retained but documents a routine that now refuses to run. See ADR-194
+`## Addendum — 2026-08-20 (#7640)` §2 and AP-019's note in
+[`principles-register.md`](../engineering/architecture/principles-register.md).
