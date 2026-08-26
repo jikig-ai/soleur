@@ -340,7 +340,46 @@ does not conclude this class is out of scope for the wrong reason.
    each candidate suite individually (step 6) does not answer this — only a full run does. This is
    the gate on the claim that the boundary work is independently shippable.
 
-### Phase 1 — CWD isolation at `run_suite` (primary mechanism)
+### Phase 0 measurement — Addendum 2026-08-26 (#7652): the decision rule fires AGAINST isolation
+
+Phase 0 step 2's decision rule was pre-committed as: *if the breakage set is ≤ 40 suites and each
+break is a path-resolution fix, CWD isolation is the primary mechanism; if it is larger, isolation
+still lands for the suites that pass and the residual sweep widens — record the measured number
+either way.* Measured on this branch, at `main` = `924994b2f`:
+
+| Probe | Command | Result |
+|---|---|---|
+| suites resolving their own root via `show-toplevel` | `git grep -l 'rev-parse --show-toplevel' -- '*.test.sh'`, minus fixture-scoped uses | **22** |
+| `run_suite` call sites naming an existing **relative** command path | walk of `grep -E '^\s*run_suite '` over `scripts/test-all.sh` | **170 of 177** |
+| suites reading the LIVE repo via a bare `git ls-files`/`grep`/`diff`/`log`/`rev-parse` | `git grep -lE '(^\|[^-])git (ls-files\|grep\|diff\|log\|rev-parse\|show\|config --get)' -- '*.test.sh'` | **64** |
+
+**The plan's own estimate was the 22, and it was the wrong quantity.** Two costs it did not
+project, both larger:
+
+1. Every `run_suite` call site — and the auto-discovery glob loop's `run_suite "$f" bash "$f"` —
+   passes the suite as a path relative to the repo root. Under isolation the interpreter cannot
+   find the script at all, so the breakage is at the INVOCATION layer, not inside the suites.
+   This one is centrally fixable (absolutise relative file args inside `run_suite`, ~10 lines) and
+   is not the blocker.
+2. **64 suites read the live repository on purpose.** A corpus scanner cannot run with the corpus
+   unreachable, and `fixture-cd-containment.test.sh` — the guard this issue's first half shipped —
+   is itself one of them. Their "fix" is `-C "$REPO_ROOT"` on every git call across 64 fixture
+   suites, which is both far past the threshold and an en-masse edit of fixture suites: the exact
+   activity the boundary detector exists to watch, performed before the detector has ever run
+   green.
+
+64 > 40, and these are not path-resolution fixes. **The rule therefore selects the residual sweep
+as the primary mechanism**, and Phase 3 is promoted accordingly. Per-suite opt-in isolation for the
+subset that would pass was considered and declined: classifying 374 suites by whether they need the
+repo is a judgement call on every member, and a wrong classification fails OPEN — the suite keeps
+its repo access and nothing reports that it was meant to lose it.
+
+What is given up is stated rather than elided: the lost-`cd` class (#7553) does not die at a
+chokepoint, so it stays covered only by `cdx()` in the one suite that has it plus
+`fixture-cd-containment.test.sh`'s repo-wide scanner. The `git -C ""` class is covered by Phase 3
+at every site the scanner can see, and the boundary reports any escape that gets past both.
+
+### Phase 1 — CWD isolation at `run_suite` (SUPERSEDED — see the addendum above)
 
 1. `run_suite()` starts each suite with its working directory in a per-run throwaway directory
    outside any git repository, with `GIT_CEILING_DIRECTORIES` set. Suites that need the repo root
