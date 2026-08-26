@@ -23,6 +23,39 @@ requires_cpo_signoff: true
 > Research Reconciliation. The `${CI:-}` severity tier, the `.git/hooks/` dimension, ADR-197 and
 > the ADR-177 cross-reference are cut. Provenance for each change is in `## Review Disposition`.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-08-26. Gates run: 4.6 user-brand impact (pass), 4.7 observability (all five
+fields present, non-placeholder, probe verb `bash`, no SSH), 4.8 PAT-shaped variables (no match),
+4.9 UI wireframe (no UI surface — skip), 4.10 encryption posture (no store or new connection — skip),
+4.11 guard contract (`scripts/lint-guard-contract.py` green over all three entries).
+
+**Verification sweep — every citation resolved live, none from memory:**
+
+| Class | Result |
+|---|---|
+| Issue / PR numbers (`#6750`, `#7098`, `#7424`, `#7652`) | all resolve; states and titles match their use here |
+| AGENTS rule IDs (`cq-ac-must-not-depend-on-concurrent-sessions`, `cq-assert-anchor-not-bare-token`, `cq-cite-content-anchor-not-line-number`) | all **active** in `AGENTS.md`; none retired or fabricated |
+| ADRs (084, 166, 177, 180, 193, 196) | all present on disk. `ADR-197` is absent **by design** — it is named only as the ordinal this revision **cut** |
+| Label `compliance/critical` | exists |
+| AC grep self-scope | no acceptance criterion greps a scope containing this plan |
+| Literal consistency | `assert_fixture_dir`, `repo-write-boundary.sh`, `fixture-scan.py`, `TESTALL_TARGET_OVERRIDE`, `MIN_FIRING_SUITES` each carry one canonical spelling across plan and `tasks.md` |
+
+**Verify-the-negative pass** on the load-bearing negative claim — *"no shipped path executes these
+suites"*, which is what bounds the blast radius to one operator. Independently confirmed: no
+plugin-local runner exists under `plugins/soleur/scripts/`, and no `CLAUDE_PLUGIN_ROOT`-rooted
+invocation of a `.test.sh` exists anywhere in the shipped subtree. Shipped `SKILL.md` files do
+*mention* `.test.sh` paths, which is precisely why the plan calls this bound **contingent rather
+than structural** — it is one edit away from being false.
+
+**Key improvements over v1**, all traceable in `## Review Disposition`: the primary mechanism moved
+from a per-call-site assertion sweep to CWD isolation at one chokepoint; the property split into
+P1a (empty operand, measured to affect only `git -C`) and P1b (relative operand, deferred with a
+tracking issue); the `${CI:-}` tier, the `.git/hooks/` dimension and a new ADR were cut; redaction
+became "digest every value" so no allowlist can be incomplete; and the config↔refs **composition
+hole** was closed — two individually-defensible projections that, together, made a
+`git -C "" checkout -b` escape invisible in both dimensions at once.
+
 ## Overview
 
 Two remaining instances of the "a fixture suite can write into the operator's real repository"

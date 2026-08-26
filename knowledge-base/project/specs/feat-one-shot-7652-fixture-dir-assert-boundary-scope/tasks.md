@@ -93,7 +93,7 @@ preamble before reordering anything.
 - [ ] 3.6 Create `plugins/soleur/test/fixture-dir-operand-assert.baseline.txt` in the
       `scripts/lint-shell-capture-exit.py` shape (`--baseline`, `--write-baseline`, shrink-only).
 - [ ] 3.7 Remediate the sites the baseline records. Known-certain: the five positional helpers;
-      `context-reviewed-gate.test.sh`'s `mktemp` binding **and its caller at `:80``;
+      `context-reviewed-gate.test.sh`'s `mktemp` binding **and its caller at `:80`**;
       `ship-unpushed-commits-gate.test.sh`'s ten `read … < <(make_synced_branch …)` sites;
       `tests/hooks/test_hook_emissions.sh`; `scripts/context-reviewed-gate-discoverability.sh`.
 - [ ] 3.8 Re-run each touched suite individually. Where a relative path is intended, make the **call
@@ -111,8 +111,10 @@ preamble before reordering anything.
 - [ ] 4.1 Both new suites GREEN; every touched suite re-run individually.
 - [ ] 4.2 Full battery on the affected shards, then assert **all** inspected dimensions unchanged —
       not only HEAD and porcelain.
-- [ ] 4.3 Execute every row of the Guard 1, Guard 2 and Guard 3 mutation matrices; prove each
-      mutation landed with `diff -q` against a pristine copy, never against `HEAD`.
+- [ ] 4.3 Execute every row of the Guard 1, Guard 2 and Guard 3 mutation matrices via the
+      existing `TESTALL_TARGET_OVERRIDE` + `build_sandbox` vehicle (never a substring parse of the
+      live runner); prove each mutation landed with `diff -q` against a pristine copy, never
+      against `HEAD`.
 - [ ] 4.4 `scripts/lint-orphan-test-suites.sh` and `scripts/guard-vacuity-floor.test.sh` green; both
       SUT sandbox suites pass.
 - [ ] 4.5 `bash scripts/lint-diagnosis-claims.sh` green (BLOCKING, AP-021 — it owns the diagnostic
