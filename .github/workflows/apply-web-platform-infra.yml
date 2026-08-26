@@ -554,6 +554,7 @@ jobs:
               -target=cloudflare_ruleset.seo_response_headers \
               -target=cloudflare_ruleset.seo_config_settings \
               -target=cloudflare_list.legal_redirects \
+              -target=cloudflare_list.www_canonical \
               -target=cloudflare_ruleset.bulk_redirects \
               -target=random_id.tunnel_secret \
               -target=cloudflare_zero_trust_tunnel_cloudflared.web \
@@ -589,6 +590,9 @@ jobs:
               -target=cloudflare_record.github_pages \
               -target=cloudflare_record.www \
               -target=cloudflare_record.github_pages_challenge \
+              -target=cloudflare_pages_project.docs \
+              -target=github_actions_secret.cloudflare_api_token_pages \
+              -target=github_actions_secret.cloudflare_account_id_pages \
               -target=cloudflare_record.buttondown_ns1 \
               -target=cloudflare_record.buttondown_ns2 \
               -target=cloudflare_zone_dnssec.soleur_ai \

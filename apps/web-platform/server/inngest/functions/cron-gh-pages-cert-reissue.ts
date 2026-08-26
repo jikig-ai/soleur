@@ -32,6 +32,16 @@
 // self-reverting, single-attempt, human-gated). Registered as AP-019 in
 // principles-register.md and governed by ADR-125.
 //
+// ‼️ The "self-reverting" ground is VOID from the #7640 apex cutover onward, and
+// that is what the apex-topology precondition below exists to enforce. Once the
+// apex is a CNAME, listToggleRecords() — which queries exactly [apex, "A"] and
+// [www, "CNAME"] — returns fewer than EXPECTED_TOGGLE_RECORDS (5), so
+// restoreStateInner refuses to restore a subset and the de-proxying of www
+// becomes ONE-WAY. The routine's own fail-loud safety guarantee is precisely
+// what removes the self-reversion this exception was granted for. The other four
+// AP-019 grounds are unaffected; see principles-register.md ## Notes for the
+// scope of the void and the condition that lifts it.
+//
 // v1 = manual-trigger only (POST /api/internal/trigger-cron). Self-heal
 // auto-invoke + a drift/apply freeze-lock are deferred to a flag-gated v2
 // (CTO ruling 2026-07-18: no runtime freeze-lock substrate exists; v1 accepts
@@ -87,6 +97,16 @@ const STEADY_PROXIED = true;
 // type-aware assertion is tracked as a follow-up. Compare the parallel drift
 // class in 2026-04-03-cloudflare-dns-at-symbol-causes-terraform-drift.md.
 export const EXPECTED_TOGGLE_RECORDS = 5;
+
+/**
+ * DNS record types that participate in ORIGIN SELECTION for a hostname.
+ *
+ * The apex topology read is deliberately un-filtered (a `type=A` query cannot
+ * see a CNAME apex, which is the state the precondition exists to detect), so
+ * it returns MX, TXT and anything else living at the apex name. Only these
+ * three decide where a request is served from.
+ */
+const APEX_ADDRESS_RECORD_TYPES = new Set(["A", "AAAA", "CNAME"]);
 
 // Preflight allowlist: only a genuinely-stuck cert is touched. Toggling a
 // healthy in-flight order (authorization_pending / dns_changed / new) can
@@ -268,6 +288,14 @@ export interface PreconditionInputs {
   caaCount: number;
   challengeTxtPresent: boolean;
   alwaysUseHttps: string;
+  /**
+   * #7640 — the LIVE record types at the apex, read from Cloudflare with NO
+   * `type=` filter. Deliberately not derived from `listToggleRecords`, which
+   * queries `[APEX_NAME, "A"]`: that filter is exactly what makes a CNAME apex
+   * invisible to this routine. An empty array means the read failed or the
+   * apex is absent — see `checkReissuePreconditions`, which fails CLOSED on it.
+   */
+  apexRecordTypes: string[];
 }
 
 /**
@@ -631,6 +659,43 @@ export function checkReissuePreconditions(inputs: PreconditionInputs): {
     // anyway — so an unreadable setting must not block. #6657 live-run: the DNS-only
     // token made this precondition false with `=== "off"` and blocked the remediation.
     alwaysUseHttpsOff: inputs.alwaysUseHttps !== "on",
+    // ‼️ #7640 — TOPOLOGY PRECONDITION. This whole routine is written for the
+    // GitHub Pages topology: four apex A-records at 185.199.x plus the www
+    // CNAME. After the Cloudflare Pages cutover the apex is a CNAME, and every
+    // OTHER precondition above still passes in that topology (Pages returns 404
+    // on the ACME path, CAA is still empty, the challenge TXT is still
+    // published). So without this check the routine HALF-RUNS: `listToggleRecords`
+    // asks for `[APEX_NAME, "A"]`, gets nothing, leaves the apex alone — and the
+    // only record it actually de-proxies is **www**, dropping HSTS, the
+    // HTTPS-upgrade rule, WAF and bot management on a host `domains.md` mandates
+    // be proxied. It cannot put it back: `restoreStateInner` refuses to restore
+    // a subset (`records.length < EXPECTED_TOGGLE_RECORDS`), so the de-proxying
+    // is ONE-WAY and the fail-loud guarantee is what makes it so. Refusing to
+    // start is the only safe behaviour, and `precondition_blocked` is NOT in
+    // BENIGN_OUTCOMES, so it pages rather than logging quietly.
+    //
+    // Fails CLOSED on an empty read, unlike `alwaysUseHttpsOff` above: that one
+    // has a second authoritative signal (the ACME carve-out), this one has none.
+    // "We could not read the apex" must never be treated as "the apex is A".
+    //
+    // ONLY ADDRESS RECORDS ARE CONSIDERED, and that is load-bearing rather than
+    // tidiness. The live read is deliberately NOT `type=`-filtered (a `type=A`
+    // query is exactly what makes a CNAME apex invisible — the bug this
+    // precondition exists to catch), so it returns EVERY record at the apex
+    // name. Measured against the live zone on 2026-08-20 that is 10 records:
+    // 4 A, 2 MX, 4 TXT. A bare `.every(t => t === "A")` over that array is
+    // FALSE on the CURRENT GitHub Pages topology, which would block the routine
+    // from this PR's merge — the precise inversion of the intent, since the
+    // hazard only begins at the cutover. MX and TXT do not participate in origin
+    // selection; A, AAAA and CNAME do.
+    apexTopologyIsA: (() => {
+      const addressTypes = inputs.apexRecordTypes
+        .map((t) => t.toUpperCase())
+        .filter((t) => APEX_ADDRESS_RECORD_TYPES.has(t));
+      return (
+        addressTypes.length > 0 && addressTypes.every((t) => t === "A")
+      );
+    })(),
   };
   const failed = Object.entries(results)
     .filter(([, ok]) => !ok)
@@ -1441,12 +1506,49 @@ export function buildLiveDeps(args: {
       } catch {
         alwaysUseHttps = "unknown";
       }
+      // #7640 — read the apex WITHOUT a `type=` filter. `listToggleRecords`
+      // asks for `type=A`, which returns [] against a CNAME apex and so cannot
+      // distinguish "post-cutover topology" from "GitHub Pages topology, read
+      // failed". `[]` here is the FAIL-CLOSED value: checkReissuePreconditions
+      // blocks on it.
+      let apexRecordTypes: string[] = [];
+      try {
+        const res = await cfFetch(
+          `/zones/${zoneId}/dns_records?name=${encodeURIComponent(APEX_NAME)}`,
+          { method: "GET", token: cfToken },
+        );
+        if (res.ok) {
+          apexRecordTypes = (
+            (res.body as { result?: Array<{ type?: string }> })?.result ?? []
+          )
+            .map((r) => r.type ?? "")
+            .filter(Boolean);
+        } else {
+          reportSilentFallback(
+            new Error(`CF apex topology read failed: status=${res.status}`),
+            {
+              feature: SENTRY_FEATURE,
+              op: "gather-apex-topology",
+              extra: { name: APEX_NAME, status: res.status },
+            },
+          );
+        }
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: SENTRY_FEATURE,
+          op: "gather-apex-topology",
+          message: "CF apex topology read threw — failing closed",
+          extra: { name: APEX_NAME },
+        });
+        apexRecordTypes = [];
+      }
       return {
         acmeApexStatus,
         acmeWwwStatus,
         caaCount,
         challengeTxtPresent,
         alwaysUseHttps,
+        apexRecordTypes,
       };
     },
     // ‼️ REAL implementation, not a stub. The gate's type member, its step, and
