@@ -38,7 +38,20 @@ for path in "$@"; do
   [ -f "$path" ] || continue
   case "$path" in
     *SKILL.md|.claude/agents/*.md|plugins/soleur/agents/*.md)
-      verdict="$(SKILL_SECURITY_SCAN_OFFLINE=1 bash "$SCANNER" < "$path" 2>/dev/null | head -1 | grep -oE 'HIGH-RISK|REVIEW|LOW-RISK' || echo 'UNKNOWN')"
+      # Swept with the write hook and both workflows (#7629): a crashed scanner must not be
+      # reported as UNKNOWN, which reads as "the scanner ran and could not decide". This hook
+      # is advisory, so it degrades safe either way -- but the MESSAGE was naming a cause it
+      # had not measured, which is the defect the rest of this change closes.
+      sc_rc=0
+      set +e
+      sc_out="$(SKILL_SECURITY_SCAN_OFFLINE=1 bash "$SCANNER" < "$path" 2>/dev/null)"
+      sc_rc=$?
+      set -e
+      if [ "$sc_rc" -ne 0 ]; then
+        verdict="SCANNER-FAILED"
+      else
+        verdict="$(printf '%s' "$sc_out" | head -1 | grep -oE 'HIGH-RISK|REVIEW|LOW-RISK' || echo 'UNKNOWN')"
+      fi
       case "$verdict" in
         HIGH-RISK)
           # Check for override artifact in current branch staged or committed diff.
