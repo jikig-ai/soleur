@@ -52,6 +52,12 @@ their export did not complete.
      awk '{print $2}'
    ```
 
+   For the database side of the same window — a Postgres error or a PostgREST
+   rejection that never reached Sentry — run `doppler run -p soleur -c prd --
+   scripts/supabase-logs-query.sh --source postgres_logs --since <window>`; it answers
+   with a coverage verdict rather than a bare zero. Runbook:
+   `knowledge-base/engineering/operations/runbooks/supabase-log-query.md`.
+
 3. **Classify by `failure_reason`:**
 
    | Reason | Class | Next step |
