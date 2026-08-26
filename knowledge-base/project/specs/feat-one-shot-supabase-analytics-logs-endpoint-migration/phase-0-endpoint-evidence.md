@@ -21,27 +21,75 @@ evidence of no traffic. The 2026-06-29 determination's `INCONCLUSIVE` verdict st
 
 ## NEW — finding G, not in the plan's six
 
-**Omitting `iso_timestamp_start` / `iso_timestamp_end` makes the replacement endpoint fail,
-and makes the deprecated endpoint lie.**
+**Omitting `iso_timestamp_start` / `iso_timestamp_end` makes the replacement endpoint fail —
+and the vendor's own spec says it should not.**
 
 | Endpoint | `sql` only, no timestamp params | HTTP |
 |---|---|---|
 | `analytics/endpoints/logs` (new) | `{"result":null,"error":"Backend error! Retry your query. Please contact support if this continues."}` | 200 |
 | `analytics/endpoints/logs.all` (old) | `{"result":[{"c":0}],"error":null}` | 200 |
 
-Reproduced twice on the new endpoint minutes apart, so it is deterministic, not the transient
-`Backend error!` of finding D. Two consequences:
+Both endpoints' OpenAPI descriptions carry the identical sentence: *"If both are not provided,
+only the last 1 minute of logs will be queried."* The deprecated endpoint honours it — its
+`{"c":0}` is a real (empty) one-minute window. The replacement does not: it errors instead,
+reproducibly, minutes apart, so this is not the transient `Backend error!` of finding D.
 
-1. The plan's §Replacement Contract says the parameter set is **identical**. It is identical
-   in NAME, but not in OBLIGATION: the timestamp bounds are effectively required on the
-   replacement and optional on the deprecated endpoint. The helper must always send both.
-2. The old endpoint's timestamp-less answer is a **clean zero with `error: null`** — the exact
-   bare-zero shape this whole plan exists to make impossible. It is worth recording that the
-   endpoint being retired had one more false-zero mode than the one replacing it.
+Two consequences:
 
-Finding G is a fail-LOUD on the new endpoint, so it needs no new verdict branch — but the
-helper must never construct a request without both bounds, and the guard's fixture set should
-carry it so a future refactor that drops a bound is caught.
+1. The plan's §Replacement Contract says the parameter set is **identical**. It is identical in
+   NAME and in DOCUMENTED semantics, but not in BEHAVIOUR: the timestamp bounds are effectively
+   required on the replacement. The helper must always send both.
+2. The failure is LOUD, so it needs no new verdict branch — but the helper must never construct
+   a request without both bounds, and a fixture should pin it so a future refactor that drops a
+   bound is caught rather than being read as a dialect error.
+
+## The documented 24-hour cap is NOT enforced
+
+Both descriptions state: *"The timestamp range must be no more than 24 hours ... If the range is
+more than 24 hours, a validation error will be thrown."*
+
+Measured on the replacement: a **25-hour** range returns HTTP 200 with `{"c":5146}`, and a
+**61-day** range returns HTTP 200 with `{"c":185301}`. No validation error at any width. The
+real cap is the undocumented, non-monotonic truncation in the table above, sitting somewhere
+between 61 and 70 days — a boundary that can move.
+
+This matters for the helper's design: the vendor's documented guard cannot be relied on to
+reject a too-wide window, which is precisely why the monotonicity probe and the coverage verdict
+have to exist client-side.
+
+## Five paths are deprecated, not two
+
+`jq '.paths | to_entries[] | ... select(.value.deprecated == true)'` over the live spec:
+
+| Path | In-repo non-doc callers |
+|---|---|
+| `GET /v1/projects/{ref}/analytics/endpoints/logs.all` | 0 — removal announced 2026-09-23 |
+| `GET /v1/projects/{ref}/advisors/security` | **2** — `apply-inngest-rls.yml`, `scripts/supabase-advisor-scan.sh` |
+| `GET /v1/projects/{ref}/advisors/performance` | 0 |
+| `GET /v1/projects/{ref}/database/context` | 0 |
+| `POST /v1/projects/{ref}/functions` | 0 |
+
+The plan enumerated the first three. `database/context` and `POST .../functions` are also
+deprecated and also have zero callers, so they change no decision here — but the denylist is
+therefore a hand-maintained subset of a set the vendor publishes, which is the argument for
+PR-C's spec-diff poller deriving it rather than a human curating it.
+
+None of the five carries a sunset date in the spec; `logs.all`'s 2026-09-23 removal date exists
+only in the vendor's email. So a spec diff detects DEPRECATION but cannot detect an announced
+REMOVAL — the poller must not be described as covering the deadline case.
+
+## The vendor cannot attribute the traffic — the sweep's open item is not API-closable
+
+The plan's §Second-Caller Sweep prescribes, before 2026-09-23: *"pull Supabase's own Management
+API request log for `logs.all` over the last 30 days and attribute the traffic."*
+
+**There is no such endpoint.** The live spec contains zero paths matching `audit`, and the two
+usage endpoints are about the PROJECT's API traffic (PostgREST / auth / storage), not Management
+API calls by path — `usage.api-counts?interval=1day` returns `{"result":[],"error":null}`.
+
+So that action is not achievable with the PAT. Attribution requires a vendor support ticket, or
+it is accepted as unknown with the blast radius named. Recorded so the open item is not carried
+forward as though a probe would discharge it.
 
 ## Preconditions
 
