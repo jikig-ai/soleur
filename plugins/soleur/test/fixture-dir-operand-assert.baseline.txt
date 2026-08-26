@@ -37,7 +37,7 @@
 1	scripts/followthroughs/anthropic-admin-key-6297.test.sh
 2	scripts/lib/legal-base-ref.test.sh
 11	scripts/lint-dual-lockfile.test.sh
-2	scripts/lint-legal-mirror-drift-baseline.test.sh
-2	scripts/lint-legal-scope-block-placement.test.sh
+1	scripts/lint-legal-mirror-drift-baseline.test.sh
+1	scripts/lint-legal-scope-block-placement.test.sh
 7	scripts/lint-workflow-install-sites.test.sh
 4	tests/hooks/test_hook_emissions.sh

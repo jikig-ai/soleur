@@ -179,6 +179,7 @@ BIND_READ_PROCSUB = re.compile(
 
 _DECL = r'(?:local\s+|declare\s+|typeset\s+|export\s+)?'
 _LEAD = r'(?:^|;|\s|\()'
+FUNC_HEAD = re.compile(r'^\s*(?:function\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\(\)\s*\{')
 
 
 def _bind_res(var):
@@ -251,6 +252,18 @@ def scan_operand(paths):
             bind_idx, form = b
             # A guard anywhere between the binding and the use — inclusive of the binding line,
             # which is where `|| return 1` and `${1:?}` live.
+            #
+            # For the positional-at-use form the binding IS the use line, which would leave a
+            # one-line window and mark `assert_fixture_dir "$1"` on the PRECEDING line as absent.
+            # That is not a hypothetical: this scanner flagged its own sibling guard's Guard 3
+            # harness, which asserts on one line and writes on the next. So the window widens back
+            # to the enclosing function head — bounded there rather than by a line count, so a
+            # guard in a DIFFERENT function cannot clear this one.
+            if form == "positional-at-use":
+                for k in range(i - 1, max(-1, i - 60), -1):
+                    if FUNC_HEAD.match(lines[k]):
+                        break
+                    bind_idx = k
             guarded = False
             for k in range(bind_idx, i + 1):
                 if k in skip:

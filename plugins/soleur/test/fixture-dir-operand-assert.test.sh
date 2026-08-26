@@ -72,15 +72,20 @@ echo "fixture-dir-operand-assert.test.sh"
 
 # --- A. The live corpus, against the shrink-only baseline ----------------------------------------
 
-ck
-FILES_SCANNED=$(python3 "$SCANNER" --rule operand --repo "$REPO_ROOT" 2>/dev/null | sed -n 's/^FILES=//p')
 # ROW 6 — the guard's own dispatch. A scanner pointed at an empty corpus reports SITES=0, which is
-# indistinguishable from a clean tree and is the shape in which this whole family of guards fails.
-if [[ "${FILES_SCANNED:-0}" -gt 100 ]]; then
-  pass "the corpus is non-empty (${FILES_SCANNED} tracked *.sh files scanned)"
-else
-  fail "corpus is empty or tiny (FILES=${FILES_SCANNED:-unset}) — a SITES=0 over no files is not a clean tree"
+# byte-identical to a clean tree and is the shape in which this whole family of guards fails.
+#
+# Reported DIRECTLY, never through pass()/fail(): an anti-vacuity check routed through the verdict
+# machinery it exists to police cannot fire when that machinery is what broke. Measured — routing
+# this one through fail() made the whole suite exit 0 under `guard-vacuity-floor.test.sh`'s neutered
+# -helper mutant, which is the same defect one level up (ADR-193).
+FILES_SCANNED=$(python3 "$SCANNER" --rule operand --repo "$REPO_ROOT" 2>/dev/null | sed -n 's/^FILES=//p')
+if [[ "${FILES_SCANNED:-0}" -le 100 ]]; then
+  printf '[FATAL] corpus is empty or tiny (FILES=%s) — SITES=0 over no files is not a clean tree.\n' \
+    "${FILES_SCANNED:-unset}" >&2
+  exit 1
 fi
+echo "  (corpus: ${FILES_SCANNED} tracked *.sh files scanned)"
 
 ck
 live="$TMP_ROOT/live.txt"; base="$TMP_ROOT/base.txt"
@@ -148,9 +153,13 @@ while IFS= read -r f; do
   [[ "$b" == "$canon" ]] || drift="$drift
     $(realpath --relative-to="$REPO_ROOT" "$f")"
 done < <(grep -rl '^assert_fixture_dir() {' "$REPO_ROOT" --include='*.sh' 2>/dev/null)
+# Same reasoning as the corpus floor above: zero inline copies makes the drift comparison
+# vacuous, so it is reported directly rather than through the helper it would be policing.
 if [[ $copies -lt 1 ]]; then
-  fail "no inline copies found — this arm would pass vacuously"
-elif [[ -z "$drift" ]]; then
+  printf '[FATAL] no inline assert_fixture_dir copies found — the drift arm would pass vacuously.\n' >&2
+  exit 1
+fi
+if [[ -z "$drift" ]]; then
   pass "all $copies inline definition(s) are byte-equal to the canonical body"
 else
   fail "inline definition drift:$drift"
@@ -169,110 +178,149 @@ fi
 # --- E. The scanner's own behaviour, on synthetic fixtures ------------------------------------------
 # Written here rather than extracted from tracked files by name: a by-name extraction is the
 # substring-splice shape this guard rejects everywhere else.
-synth() { # synth <name> <body>
+# Fixture bodies arrive on STDIN via a quoted heredoc, never as a single-quoted argument.
+# That is not style: a multi-line single-quoted string is CODE LINES as far as any line-oriented
+# scanner is concerned, so this suite's own fixtures registered as four live P1a sites and the
+# ratchet flagged the guard as a new offender. A heredoc body is data, which is what they are —
+# and it is the same convention `fixture-cd-containment.test.sh` already uses for its A5 case.
+synth() { # synth <name>  (body on stdin)
   local d="$TMP_ROOT/synth-$1"; mkdir -p "$d"
-  printf '%s\n' "$2" > "$d/case.sh"
+  cat > "$d/case.sh"
   python3 "$SCANNER" --rule operand "$d/case.sh" 2>/dev/null | sed -n 's/^SITES=//p'
 }
 
 # ROW 1/2 — the canonical instance, and a SECOND file after the first is compliant. A check that
 # stops at the first member is itself an instance of this family.
 ck
-n=$(synth row1 'helper() {
+n=$(synth row1 <<'SYNTHEOF'
+helper() {
   local dir="$1"
   git -C "$dir" config commit.gpgsign false
-}')
+}
+SYNTHEOF
+)
 if [[ "$n" == "1" ]]; then pass "ROW 1: an unasserted positional binding is flagged"
 else fail "ROW 1: expected 1 site, got ${n:-none}"; fi
 
 ck
 d2="$TMP_ROOT/two"; mkdir -p "$d2"
-printf '%s\n' 'a() {
+cat > "$d2/clean.sh" <<'SYNTHEOF'
+a() {
   local dir="$1"
   assert_fixture_dir "$dir"
   git -C "$dir" commit --allow-empty -m x
-}' > "$d2/clean.sh"
-printf '%s\n' 'b() {
+}
+SYNTHEOF
+cat > "$d2/dirty.sh" <<'SYNTHEOF'
+b() {
   local dir="$1"
   git -C "$dir" commit --allow-empty -m x
-}' > "$d2/dirty.sh"
+}
+SYNTHEOF
 n=$(python3 "$SCANNER" --rule operand "$d2/clean.sh" "$d2/dirty.sh" 2>/dev/null | sed -n 's/^SITES=//p')
 if [[ "$n" == "1" ]]; then pass "ROW 2: a second offending file is still found after the first is clean"
 else fail "ROW 2: expected 1 site across two files, got ${n:-none}"; fi
 
 # ROW 3 — positional at the USE site, with no intermediate variable. Live in two files today.
 ck
-n=$(synth row3 'commit_all() { git -C "$1" add -A && git -C "$1" commit -m x; }')
+n=$(synth row3 <<'SYNTHEOF'
+commit_all() { git -C "$1" add -A && git -C "$1" commit -m x; }
+SYNTHEOF
+)
 if [[ "${n:-0}" -ge 1 ]]; then pass "ROW 3: git -C \"\$1\" at the use site is flagged"
 else fail "ROW 3: expected >=1 site, got ${n:-none}"; fi
 
 # ROW 4 — bound from a command substitution in its LIVE shape, not the mktemp special case.
 ck
-n=$(synth row4 'p=$(new_repo fixture)
-git -C "$p" checkout -q -b probe')
+n=$(synth row4 <<'SYNTHEOF'
+p=$(new_repo fixture)
+git -C "$p" checkout -q -b probe
+SYNTHEOF
+)
 if [[ "$n" == "1" ]]; then pass "ROW 4: a \$(helper ...) binding is flagged"
 else fail "ROW 4: expected 1 site, got ${n:-none}"; fi
 
 # `init` is named explicitly in the verb list: it returns 0 and REINITIALISES the caller's
 # repository, which the intuition "re-init is harmless" would otherwise cull.
 ck
-n=$(synth init 'h() {
+n=$(synth init <<'SYNTHEOF'
+h() {
   local d="$1"
   git -C "$d" init -q
-}')
+}
+SYNTHEOF
+)
 if [[ "$n" == "1" ]]; then pass "git -C \"\" init is a write verb (it reinitialises the caller's repo)"
 else fail "init not treated as a write verb, got ${n:-none}"; fi
 
 # --- F. Must-PASS. None of these is the canonical shape, and each would be a false positive. --------
 ck
-n=$(synth guarded 'h() {
+n=$(synth guarded <<'SYNTHEOF'
+h() {
   local d
   d=$(mktemp -d) || return 1
   git -C "$d" commit --allow-empty -m x
-}')
+}
+SYNTHEOF
+)
 if [[ "$n" == "0" ]]; then pass "must-PASS: \`d=\$(mktemp -d) || return 1\` is guarded"
 else fail "must-PASS regression: guarded mktemp flagged (${n})"; fi
 
 ck
-n=$(synth reads 'h() {
+n=$(synth reads <<'SYNTHEOF'
+h() {
   local d="$1"
   git -C "$d" status
   git -C "$d" worktree list
   git -C "$d" rev-parse HEAD
-}')
+}
+SYNTHEOF
+)
 if [[ "$n" == "0" ]]; then pass "must-PASS: reads are not writes"
 else fail "must-PASS regression: a read was flagged (${n})"; fi
 
 ck
-n=$(synth derived 'h() {
+n=$(synth derived <<'SYNTHEOF'
+h() {
   local d="$1"
   git -C "$d/work" commit --allow-empty -m x
-}')
+}
+SYNTHEOF
+)
 if [[ "$n" == "0" ]]; then pass "must-PASS: a DERIVED operand (\$d/work) is outside P1a"
 else fail "must-PASS regression: derived operand flagged (${n})"; fi
 
 ck
-n=$(synth heredoc 'cat > /tmp/x <<EOS
+n=$(synth heredoc <<'SYNTHEOF'
+cat > /tmp/x <<EOS
 h() {
   local d="$1"
   git -C "$d" commit --allow-empty -m x
 }
-EOS')
+EOS
+SYNTHEOF
+)
 if [[ "$n" == "0" ]]; then pass "must-PASS: the forbidden shape inside a heredoc body is data, not code"
 else fail "must-PASS regression: heredoc body flagged (${n})"; fi
 
 ck
-n=$(synth absolute 'h() {
+n=$(synth absolute <<'SYNTHEOF'
+h() {
   local d="/tmp/fixture-abs"
   git -C "$d" commit --allow-empty -m x
-}')
+}
+SYNTHEOF
+)
 if [[ "$n" == "0" ]]; then pass "must-PASS: a literal binding cannot be empty"
 else fail "must-PASS regression: literal binding flagged (${n})"; fi
 
 ck
-n=$(synth trapstr 'WORK=$(mktemp -d)
+n=$(synth trapstr <<'SYNTHEOF'
+WORK=$(mktemp -d)
 trap '"'"'rm -rf "$WORK"'"'"' EXIT
-git -C "$WORK" commit --allow-empty -m x')
+git -C "$WORK" commit --allow-empty -m x
+SYNTHEOF
+)
 # Stated explicitly rather than left to the regex: the `trap` string is a P1b concern (a relative
 # or empty operand to `rm -rf`), and the git write on the following line IS in scope and flagged.
 if [[ "${n:-0}" -ge 1 ]]; then pass "a trap string does not suppress the git write beside it (P1b stays P1b)"
@@ -346,7 +394,7 @@ if [[ $((passes + fails)) -ne $asserted ]]; then
   exit 1
 fi
 
-MIN_ASSERTIONS=18
+MIN_ASSERTIONS=17
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS}" >&2
   exit 1
