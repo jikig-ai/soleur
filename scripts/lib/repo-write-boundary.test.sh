@@ -308,6 +308,118 @@ else
   fail "sibling-worktree branch harm class wrong: '$(printf '%s' "$verdict" | tr '\n' '|')'"
 fi
 
+# ==============================================================================================
+# RUNNER INTEGRATION. The lib being correct is half the property; the other half is that
+# `scripts/test-all.sh` actually calls it, calls it in the right WINDOW, and cannot print a claim
+# the lib did not produce. These arms drive the real runner as SUT.
+# ==============================================================================================
+
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+RUNNER="$REPO_ROOT/scripts/test-all.sh"
+
+# --- 21. The lib is sourced, and sourced ABOVE tc_acquire ---------------------------------------
+# Placement is load-bearing, not style: both SUT-sandbox suites splice out everything between
+# `tc_acquire "test-all"` and `tc_epilogue`, and the end block runs under `set -u`. A source line
+# or a boundary variable below the anchor is deleted in those sandboxes, and the failure surfaces
+# as two unrelated red suites rather than as this one.
+ck
+src_ln=$(grep -n 'repo-write-boundary\.sh' "$RUNNER" | head -n1 | cut -d: -f1)
+acq_ln=$(grep -n '^tc_acquire "test-all"' "$RUNNER" | head -n1 | cut -d: -f1)
+if [[ -n "$src_ln" && -n "$acq_ln" ]] && (( src_ln < acq_ln )); then
+  pass "the boundary lib is sourced above tc_acquire (line $src_ln < $acq_ln)"
+else
+  fail "boundary lib source placement wrong (src=${src_ln:-none} acquire=${acq_ln:-none})"
+fi
+
+# --- 22. Exactly two _repo_state call sites in the runner ------------------------------------------
+# The window has to span the whole suite list. One call site means a boundary that never closes;
+# three means a window whose extent is no longer obvious from reading.
+ck
+calls=$(grep -cE '^[[:space:]]*(if )?_repo_state_(before|after)="\$\(_repo_state\)"' "$RUNNER" || true)
+if [[ "$calls" == "2" ]]; then pass "_repo_state has exactly two call sites in the runner"
+else fail "_repo_state call sites in runner: $calls (want 2)"; fi
+
+# --- 23. ROW 13 — a missing lib exits 2 and does NOT blame git --------------------------------------
+# The `|| true` contract would leave `_repo_state` undefined, return 127 inside the `if`, and make
+# the run print "the repo-write boundary was not measured (git unavailable at run start)" — an
+# AP-021 violation manufactured by this very fix. A lib that decides whether the gate means
+# anything is a hard failure when missing (the _REL_LIB class).
+ck
+sb="$TMP_ROOT/nolib"; mkdir -p "$sb/lib"
+cp "$RUNNER" "$sb/test-all.sh"
+cp "$REPO_ROOT/scripts/lib/test-relevance-paths.sh" "$sb/lib/" 2>/dev/null
+cp "$REPO_ROOT/scripts/lib/test-contention.sh" "$sb/lib/" 2>/dev/null
+# deliberately do NOT copy repo-write-boundary.sh
+nolib_out=$(cd "$REPO_ROOT" && timeout 60 bash "$sb/test-all.sh" 2>&1 </dev/null | head -20)
+nolib_rc=$?
+if grep -q 'repo-write-boundary' <<<"$nolib_out" && ! grep -qi 'git unavailable' <<<"$nolib_out"; then
+  pass "a missing boundary lib is named and refused, without blaming git"
+else
+  fail "missing-lib contract wrong: '$(printf '%s' "$nolib_out" | tr '\n' '|' | cut -c1-220)'"
+fi
+
+# --- 24. ROW 14 — a STALE lib narrows the CLAIM, not just the check -----------------------------
+# `test -f` proves a file exists, never that it defines what the caller calls. A lib that defines
+# a narrower _repo_state beside a full-dimension claim is #7652 one layer up, across this new
+# module seam — so the runner checks the named function SET, in the _TC_LIB shape.
+ck
+stale="$TMP_ROOT/stalelib"; mkdir -p "$stale/lib"
+cp "$RUNNER" "$stale/test-all.sh"
+for f in test-relevance-paths.sh test-contention.sh; do cp "$REPO_ROOT/scripts/lib/$f" "$stale/lib/" 2>/dev/null; done
+printf '%s\n' '#!/usr/bin/env bash' '_repo_state() { git rev-parse HEAD; }' > "$stale/lib/repo-write-boundary.sh"
+stale_out=$(cd "$REPO_ROOT" && timeout 60 bash "$stale/test-all.sh" 2>&1 </dev/null | head -20)
+if grep -qiE 'repo_boundary_(manifest|classify|dimensions|render)' <<<"$stale_out"; then
+  pass "a stale lib is named by the missing-function check rather than silently narrowing the gate"
+else
+  fail "stale-lib contract wrong: '$(printf '%s' "$stale_out" | tr '\n' '|' | cut -c1-220)'"
+fi
+
+# --- 25. AC8 — the message renders inspected / not-inspected / per-dimension next action ----------
+# Asserted by CONTENT ANCHOR on the runner's own rendering path, driven with a synthetic delta, so
+# the assertion cannot be satisfied by prose sitting in a comment.
+ck
+render=$(cd "$REPO_ROOT" && env REPO_BOUNDARY_SALT=fixed-test-salt bash -c '
+  source "'"$LIB"'"
+  b="$(_repo_state)"
+  printf "INSPECTED\n%s\nNOTINSPECTED\n%s\nNEXT\n" "$(repo_boundary_render_inspected "$b")" "$(repo_boundary_render_not_inspected "$b")"
+  for d in head worktree config refs; do printf "%s: %s\n" "$d" "$(repo_boundary_next_action "$d")"; done')
+missing_anchor=""
+for a in 'HEAD' 'tree and index' 'local (shared) config' 'harm class' \
+         'push to a remote' 'did not start' \
+         'git reflog' 'git config --local --list' 'git show-ref'; do
+  grep -qF -- "$a" <<<"$render" || missing_anchor="$missing_anchor [$a]"
+done
+if [[ -z "$missing_anchor" ]]; then
+  pass "the rendered message carries inspected, not-inspected and a per-dimension next action"
+else
+  fail "rendered message missing anchors:$missing_anchor"
+fi
+
+# --- 26. AC9 / ROW 11 — a run killed before the end boundary emits the not-measured NOTE -----------
+# A run has no `trap ... EXIT` today, so a kill emits NOTHING — and the escape most likely to kill a
+# run is exactly the one that suppresses the verdict. "No FATAL line" must never read as clean.
+ck
+if grep -qE "trap .*_repo_boundary_exit_note|_repo_boundary_exit_note.*EXIT" "$RUNNER"; then
+  pass "the runner arms an EXIT trap so a killed run cannot read as a clean boundary"
+else
+  fail "no EXIT-trap not-measured NOTE in the runner"
+fi
+
+# --- 27. The EXIT CONTRACT documents the REPORT class ----------------------------------------------
+# A new result class that increments nothing and changes no exit code is a state the runner's own
+# contract does not describe — which is the same claim/check drift being fixed here.
+ck
+# Anchored on the CLASS DESCRIPTION, not the bare word "REPORT": `sed -n 1,60p` of this runner
+# already contains that word in unrelated prose, so a bare-token check passed before the contract
+# was written (cq-assert-anchor-not-bare-token — this branch's own subject).
+contract=$(sed -n '1,60p' "$RUNNER")
+if grep -qi 'REPORT.*increments nothing' <<<"$contract" \
+   || grep -qi 'REPORT class' <<<"$contract"; then
+  pass "the EXIT CONTRACT block describes the REPORT class"
+else
+  fail "EXIT CONTRACT does not mention the REPORT class"
+fi
+
 # --- Accounting. Emitted DIRECTLY, never through pass()/fail(): a conservation check routed
 # through the verdict helper it exists to police cannot report the fault that corrupted it.
 if [[ $((passes + fails)) -ne $asserted ]]; then
@@ -320,7 +432,7 @@ if [[ $((passes + fails)) -ne $asserted ]]; then
   exit 1
 fi
 
-MIN_ASSERTIONS=20
+MIN_ASSERTIONS=27
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — arms were deleted or neutered" >&2
   exit 1

@@ -8,6 +8,13 @@ set -euo pipefail
 #      new code, because every consumer of this runner is binary on non-zero and a fifth code
 #      buys nothing; the [FATAL] line above the summary names it unambiguously. See the
 #      REPO WRITE BOUNDARY blocks (#7553/#7652).
+#      NOT 1: the REPORT class — an observation, never a verdict. A ref belonging to a branch
+#      that `git worktree list` says is checked out in ANOTHER worktree moved during this run.
+#      That is a sibling session doing its own work, not this run corrupting anything, so a
+#      REPORT class increments nothing and changes no exit code — it is printed, and that is
+#      the whole of its effect. It is
+#      documented here because a result class the runner can produce but its own contract does
+#      not describe is the same claim/check drift this boundary exists to fix (#7652).
 #   3  0 failures and >= 1 suite KILLED — UNRESOLVED, not measured, and NOT green
 #      3 is a TOP-LEVEL contract only: a nested runner returning 3 into run_suite classifies
 #      as a plain FAIL, because rc=3 is not signal-shaped. Do not adopt 3 in a nested runner
@@ -316,6 +323,47 @@ _emit_bytes_probe() {
 # SUITES EXECUTE: were it absent and the arrays empty, every gated suite would decline silently
 # and the summary would still read green — the exact "green that is not evidence" the gate
 # exists to prevent, produced by the gate itself. A missing file is a hard failure.
+# --- Repo-write boundary lib (#7652) ------------------------------------------------------
+#
+# The _REL_LIB class of contract, not the _TC_LIB `|| true` class, and the selection rule is the
+# one _REL_LIB's own comment states: a lib that decides whether the gate MEANS ANYTHING is a hard
+# failure when missing. Under `|| true`, `_repo_state` would be undefined, return 127 inside
+# `if _repo_state_before="$(_repo_state)"` — where `set -e` does not fire — and the run would
+# print "the repo-write boundary was not measured (git unavailable at run start)", naming a cause
+# it did not measure. That is an AP-021 violation manufactured by the fix for #7652.
+#
+# `test -f` is checked too, and is not sufficient on its own: it proves a file exists, never that
+# it defines what the caller will call. So the named function SET is asserted in the _TC_LIB
+# shape, and a STALE lib is NAMED rather than silently narrowing the gate behind a full-width
+# claim.
+#
+# Placed HERE, above `tc_acquire`, deliberately: both suites that drive this runner as their SUT
+# splice out everything between that anchor and `tc_epilogue`, and the end block runs under
+# `set -u`. A source line below the anchor is deleted in those sandboxes and surfaces as two
+# unrelated red suites instead of one honest failure.
+_RWB_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/repo-write-boundary.sh"
+if [[ ! -f "$_RWB_LIB" ]]; then
+  echo "ERROR: missing $_RWB_LIB — the repo-write boundary is undefined." >&2
+  echo "Refusing to run: without it this runner cannot tell whether a suite wrote to your" >&2
+  echo "repository, and a silent clean claim is worse than no claim." >&2
+  exit 2
+fi
+# shellcheck source=scripts/lib/repo-write-boundary.sh
+source "$_RWB_LIB"
+_RWB_MISSING=""
+for _rwb_fn in _repo_state repo_boundary_dimensions repo_boundary_manifest \
+               repo_boundary_render_inspected repo_boundary_render_not_inspected \
+               repo_boundary_classify repo_boundary_next_action; do
+  declare -F "$_rwb_fn" >/dev/null || _RWB_MISSING="$_RWB_MISSING $_rwb_fn"
+done
+if [[ -n "$_RWB_MISSING" ]]; then
+  echo "ERROR: $_RWB_LIB is present but STALE — missing:$_RWB_MISSING" >&2
+  echo "Refusing to run: a narrower check beneath a full-width claim is the exact defect the" >&2
+  echo "boundary exists to prevent." >&2
+  exit 2
+fi
+unset _rwb_fn
+
 _REL_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/test-relevance-paths.sh"
 if [[ ! -f "$_REL_LIB" ]]; then
   echo "ERROR: missing $_REL_LIB — the suite relevance predicates are undefined." >&2
@@ -910,6 +958,23 @@ fi
 _repo_guard_ok=0
 _repo_state_before=""
 _repo_last_suite="(none started)"
+# Set by the end block once the boundary has been re-read and reported. Until then the EXIT trap
+# below owns the verdict.
+_repo_boundary_reported=0
+
+# A run KILLED before the end boundary emits nothing today — the runner arms no EXIT trap — and
+# the escape most likely to kill a run is exactly the one that would suppress the verdict. So
+# "no FATAL line" is currently indistinguishable from "clean", which is the reading that ships.
+# This trap makes the absence speak.
+_repo_boundary_exit_note() {
+  [[ "$_repo_boundary_reported" == 1 ]] && return 0
+  [[ "$_repo_guard_ok" == 1 ]] || return 0
+  echo "" >&2
+  echo "NOTE: this run ended before the repo-write boundary was re-read, so it is NOT evidence" >&2
+  echo "      that no suite wrote to your repository. The absence of a [FATAL] line above means" >&2
+  echo "      the check did not run, not that it passed. Last suite started: ${_repo_last_suite}" >&2
+}
+trap '_repo_boundary_exit_note' EXIT
 
 tc_acquire "test-all"
 
@@ -941,7 +1006,7 @@ _emit_bytes_probe "__run_boundary_start__"
 #
 # Degrades OPEN. A missing or failing git must not wedge the gate — an unmeasurable boundary is
 # reported at the end, never turned into a false RED.
-if _repo_state_before="$(git rev-parse HEAD 2>/dev/null && git status --porcelain 2>/dev/null | sha256sum)"; then
+if _repo_state_before="$(_repo_state)"; then
   _repo_guard_ok=1
 fi
 
@@ -1837,28 +1902,71 @@ tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"
 # `=== ` line (#6750), and counted into `failed` so the exit code carries it: a run that
 # corrupted the repository is not a pass, whatever the suites said.
 _repo_wrote=0
+_repo_reported=0
 if [[ "$_repo_guard_ok" == 1 ]]; then
-  if _repo_state_after="$(git rev-parse HEAD 2>/dev/null && git status --porcelain 2>/dev/null | sha256sum)"; then
-    if [[ "$_repo_state_before" != "$_repo_state_after" ]]; then
-      _repo_wrote=1
-      failed=$((failed + 1))
+  if _repo_state_after="$(_repo_state)"; then
+    # Classified per dimension rather than as one boolean. A sibling worktree's branch advancing
+    # and this worktree's HEAD moving under it are not the same event, and collapsing them makes
+    # the FATAL line cry wolf on the common case until nobody reads it.
+    _repo_verdict="$(repo_boundary_classify "$_repo_state_before" "$_repo_state_after" || true)"
+    if [[ -n "$_repo_verdict" ]]; then
+      _repo_fatal="$(printf '%s\n' "$_repo_verdict" | { grep '^FATAL' || true; })"
+      _repo_report="$(printf '%s\n' "$_repo_verdict" | { grep '^REPORT' || true; })"
+
+      if [[ -n "$_repo_fatal" ]]; then
+        _repo_wrote=1
+        failed=$((failed + 1))
+        echo "" >&2
+        echo "[FATAL] A SUITE WROTE TO THE LIVE REPOSITORY. This runner is read-only here." >&2
+        echo "        Last suite started: ${_repo_last_suite}" >&2
+        echo "        (not necessarily THAT suite's write — it is where the run had reached;" >&2
+        echo "         every suite before it completed without changing the tree.)" >&2
+        echo "" >&2
+        echo "        WHAT CHANGED:" >&2
+        printf '%s\n' "$_repo_fatal" | while IFS=$'\t' read -r _sev _dim _detail; do
+          echo "          [$_dim] $_detail" >&2
+          echo "                 next: $(repo_boundary_next_action "$_dim")" >&2
+        done
+        echo "" >&2
+        echo "        Committed work survives; UNCOMMITTED work may not. Recover in this order:" >&2
+        echo "          1. git push origin <good-sha>:refs/heads/<branch>   # durability BEFORE local surgery" >&2
+        echo "          2. git update-ref refs/heads/<branch> <good-sha> <bad-sha>   # compare-and-swap" >&2
+        echo "          3. restore the checkout, then remove the fixture's files" >&2
+        echo "        A suite whose fixture cd fails, or whose git -C operand is empty, runs git in" >&2
+        echo "        the caller CWD (#7553/#7652)." >&2
+      fi
+
+      if [[ -n "$_repo_report" ]]; then
+        echo "" >&2
+        echo "[REPORT] A ref moved that belongs to a branch checked out in ANOTHER worktree." >&2
+        echo "         This is very likely a sibling session doing its own work. It increments" >&2
+        echo "         nothing and changes no exit code; it is printed so it is not mistaken for" >&2
+        echo "         silence." >&2
+        printf '%s\n' "$_repo_report" | while IFS=$'\t' read -r _sev _dim _detail; do
+          echo "           [$_dim] $_detail" >&2
+        done
+        # `Last suite started` is deliberately NOT repeated here. The whole premise of this class
+        # is that a suite of THIS run probably was not the cause, so naming one would point the
+        # reader at an innocent label — the precise AP-021 shape this boundary exists to refuse.
+        echo "         Attribution: see the [contention] preamble at the top of this run; it" >&2
+        echo "         lists the sibling worktrees that were live when this run started." >&2
+      fi
+
+      # Rendered FROM THE MANIFEST carried inside the snapshot — never from a literal list here.
+      # If the lib narrows, this narrows with it, which is what stops a full-width claim from
+      # sitting on top of a partial check.
       echo "" >&2
-      echo "[FATAL] A SUITE WROTE TO THE LIVE REPOSITORY. This runner is read-only here." >&2
-      echo "        Last suite started: ${_repo_last_suite}" >&2
-      echo "        (not necessarily THAT suite's write — it is where the run had reached;" >&2
-      echo "         every suite before it completed without changing the tree.)" >&2
-      echo "        HEAD and/or the working tree changed between the first suite and this line." >&2
-      echo "        before: ${_repo_state_before//$'\n'/ | }" >&2
-      echo "        after : ${_repo_state_after//$'\n'/ | }" >&2
-      echo "        Committed work survives; UNCOMMITTED work may not. Do not re-run before" >&2
-      echo "        checking: git reflog -25, and git log --oneline origin/main..main" >&2
-      echo "        A suite whose fixture cd fails can run git in the caller CWD (#7553/#7652)." >&2
+      echo "        INSPECTED (this is the whole of what was measured):" >&2
+      repo_boundary_render_inspected "$_repo_state_after" >&2
+      echo "        NOT INSPECTED (a clean boundary is not evidence about these):" >&2
+      repo_boundary_render_not_inspected "$_repo_state_after" >&2
       echo "" >&2
       echo "        SCOPE, stated so it is not over-read: this covers runs of THIS runner only." >&2
       echo "        A suite invoked directly (bash path/to/x.test.sh), lefthook's pre-commit" >&2
       echo "        hook, and every other entry point are NOT inspected here. The per-site" >&2
       echo "        guards inside the suites are the protection; this is defence in depth over" >&2
       echo "        gate runs, and a clean run here is not evidence about those other paths." >&2
+      _repo_reported=1
     fi
   else
     echo "" >&2
@@ -1867,9 +1975,12 @@ if [[ "$_repo_guard_ok" == 1 ]]; then
   fi
 else
   echo "" >&2
-  echo "NOTE: the repo-write boundary was not measured (git unavailable at run start); this run" >&2
-  echo "      is not evidence that no suite wrote to the repository." >&2
+  echo "NOTE: the repo-write boundary was not measured (git could not read HEAD at run start);" >&2
+  echo "      this run is not evidence that no suite wrote to the repository." >&2
 fi
+# Ownership of the verdict passes from the EXIT trap to this block, whatever the outcome above —
+# including the degraded arms, which have already said their piece.
+_repo_boundary_reported=1
 
 # BREAKDOWN FIRST, TERMINAL MARKER LAST. The ordering is load-bearing, not cosmetic.
 # Both lines are `=== ...`-shaped, and the documented lesson from #6750 is to match
