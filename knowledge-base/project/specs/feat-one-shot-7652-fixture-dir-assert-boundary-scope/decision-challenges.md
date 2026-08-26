@@ -32,4 +32,24 @@ The plan is written so either path works: the phase order already puts the bound
 Phase 0 step 7's observe-only full run is the gate on whether the boundary half is safe to ship
 before the sites are fixed.
 
-**Decision:** _pending operator_
+**Decision:** _resolved by the pipeline runner, 2026-08-26 — **keep one PR, boundary-first**._
+
+This is a technical fork (`hr-technical-fork-is-not-an-operator-question`): the operator is
+non-technical, the outcome they asked for — #7652 fixed — is identical either way, and the
+reviewers' arguments are about detector sequencing and review load, neither of which is theirs to
+weigh. Resolved here rather than escalated.
+
+The split's strongest argument is accepted on its merits and satisfied by ordering rather than by
+splitting. The window it protects — fixture suites being edited en masse while no detector watches
+— is a **local working-tree** window, not a post-merge one: the mass edit happens in this worktree,
+and `test-all.sh` runs from the working tree, not from `main`. So committing Phase 0 + 2 (the
+boundary) before Phase 1 touches its first fixture puts the detector live exactly when it is
+needed. Merging it to `main` first adds nothing to that protection.
+
+What the single-PR path gives up is the review-load argument, which is real: two mechanisms, three
+guard contracts, ~15 acceptance criteria in one diff. Mitigated by keeping the two halves in
+separate commits so they can be reviewed independently, and by Phase 0 step 7's observe-only full
+run gating the boundary half before any fixture is edited.
+
+What it avoids is a second full review → QA → ship cycle, which the operator pays for in API
+credit and which buys no additional safety given the local-window analysis above.
