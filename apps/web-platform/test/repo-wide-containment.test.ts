@@ -181,10 +181,10 @@ function walk(dir: string): string[] {
   return walkAll(dir).filter((f) => /\.test\.tsx?$/.test(f));
 }
 
-// Every file in a GATED project. Both `unit` (test|lib/**/*.test.ts) and
-// `component` (test/**/*.test.tsx) are declined together, so both need the
-// containment property — a `.test.tsx` that read the repo would fail open
-// exactly as a `.test.ts` would.
+// Candidates for the containment check. `unit` (test|lib/**/*.test.ts) is the
+// gated project, so its containment is load-bearing. `component`
+// (test/**/*.test.tsx) runs always, so its arm is a kept invariant rather than
+// a live guard — see the note on that arm below.
 const gatedCandidates = [...walk("test"), ...walk("lib")].sort();
 const unitFiles = gatedCandidates.filter((f) => f.endsWith(".test.ts"));
 
@@ -238,9 +238,11 @@ describe("repo-wide suite containment (#7498)", () => {
   });
 
   it("no component (.test.tsx) suite escapes the app", () => {
-    // The component project has no manifest — it is gated wholesale, so the
-    // invariant is absolute rather than "declared or app-local". Measured 0 of
-    // 240 at #7498; this keeps it that way.
+    // NOT load-bearing for the gate any more — `component` runs always (#7498
+    // declined gating it on measurement, and that decision was restored). The
+    // invariant is kept because it is true, cheap, and the precondition anyone
+    // would need if gating `component` is ever revisited: measured 0 of 240 at
+    // #7498. Deleting it would make that future decision unmeasurable again.
     const escaping = gatedCandidates.filter((f) => f.endsWith(".test.tsx")).filter(escapesApp);
     expect(
       escaping,
