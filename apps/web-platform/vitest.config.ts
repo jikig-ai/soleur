@@ -1,7 +1,7 @@
 import { defineConfig } from "vitest/config";
 import path from "path";
 import { fileURLToPath } from "url";
-import { REPO_WIDE_SUITES } from "./test/repo-wide-suites";
+import { REPO_WIDE_SUITES } from "./repo-wide-suites";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 

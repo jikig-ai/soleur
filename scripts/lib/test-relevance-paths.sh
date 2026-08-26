@@ -245,7 +245,7 @@ GITHUB_SCRIPTS_SUITE_PATHS=(
 # Paths whose diff makes the APP-LOCAL vitest projects (`unit`, `component`)
 # relevant (#7498). Everything they test lives under apps/web-platform, and
 # `test/repo-wide-containment.test.ts` proves it: any suite there that reads
-# outside the app must be declared in test/repo-wide-suites.ts and moves to the
+# outside the app must be declared in repo-wide-suites.ts and moves to the
 # ungated `repo-wide` project.
 #
 # Deliberately just the app prefix. A wider list would be guesswork about which

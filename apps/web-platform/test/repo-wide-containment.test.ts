@@ -39,7 +39,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { REPO_WIDE_SUITES } from "./repo-wide-suites";
+import { REPO_WIDE_SUITES } from "../repo-wide-suites";
 
 const APP_ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 
@@ -207,7 +207,7 @@ describe("repo-wide suite containment (#7498)", () => {
     }
     expect(
       offenders,
-      "these gated suites reach the repo through an imported helper; add them to test/repo-wide-suites.ts",
+      "these gated suites reach the repo through an imported helper; add them to repo-wide-suites.ts",
     ).toEqual([]);
   });
 
@@ -229,7 +229,7 @@ describe("repo-wide suite containment (#7498)", () => {
         "`missing` = suites that escape apps/web-platform but are NOT in the",
         "manifest. These are in the GATED project right now and are declined on",
         "diffs that touch nothing in this app — i.e. exactly the diffs they",
-        "guard. Add them to test/repo-wide-suites.ts.",
+        "guard. Add them to repo-wide-suites.ts.",
         "",
         "`stale` = manifest entries that no longer escape (or no longer exist).",
         "They run on every commit for no reason. Remove them.",
