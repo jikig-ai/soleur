@@ -35,8 +35,13 @@
 #
 # THE FIX IS ALWAYS ONE OF: `&&`-chain it, `|| exit` it, use a `cdx`-style
 # containment helper, or make the mutation absolute with `git -C "$fixture"`.
-# Prefer the last: a write that names its own repository cannot be redirected at
-# all, which is a stronger property than any cd-guard.
+# Prefer the last — but only WITH its precondition, which an earlier version of
+# this paragraph omitted: `git -C "$fixture"` cannot be redirected by a lost cwd
+# only while `$fixture` is guaranteed non-empty and absolute. `git -C ""` does
+# NOT error; it silently operates on the current directory, so an unasserted
+# operand converts this recommendation back into the defect it replaces. That is
+# a real class, not a hypothetical — it is #7652 instance 1, and it is covered by
+# `fixture-dir-operand-assert.test.sh`, never by the rule below.
 #
 # Run: bash plugins/soleur/test/fixture-cd-containment.test.sh
 
@@ -55,113 +60,17 @@ echo ""
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-SCANNER="$TMP/scan.py"
-cat > "$SCANNER" <<'PYEOF'
-import re, subprocess, sys, os
-
-WRITE = re.compile(
-    r'\bgit\s+(?:-c\s+\S+\s+)*'
-    r'(commit|push|add\b|update-ref|checkout|reset|branch\s+-[dD]|worktree\s+(add|remove)|rm\b|mv\b)'
-)
-CD    = re.compile(r'^(\s*)\(?\s*cd\s+["\']?\$')
-SET_E = re.compile(r'^\s*set\s+-[a-zA-Z]*e')
-
-def scope_has_set_e(lines, idx):
-    """`set -e` at file level, or inside the subshell enclosing `idx`."""
-    for l in lines[:idx]:
-        if SET_E.match(l) and not l.lstrip().startswith("#"):
-            # A file-level `set -e` (column 0) covers everything below it.
-            if l == l.lstrip():
-                return True
-    # Walk back to the opening `(` of the enclosing subshell, if any.
-    depth = 0
-    for j in range(idx - 1, max(-1, idx - 60), -1):
-        s = lines[j].strip()
-        if s.startswith("#"):
-            continue
-        if s == ")":
-            depth += 1
-        elif s == "(" or s.endswith("("):
-            if depth == 0:
-                for k in range(j + 1, idx):
-                    if SET_E.match(lines[k]) and not lines[k].lstrip().startswith("#"):
-                        return True
-                return False
-            depth -= 1
-    return False
-
-HEREDOC = re.compile(r'<<-?\s*[\'"]?([A-Za-z_][A-Za-z0-9_]*)[\'"]?')
-
-def heredoc_lines(lines):
-    """Line indices inside a heredoc body.
-
-    Suites in this repo routinely EMBED fixture scripts in heredocs, including
-    fixtures that deliberately spell the forbidden shape so a scanner can be
-    proven non-vacuous. Those bodies are data, not code that will ever run in
-    this shell — treating them as code makes every such suite a false positive,
-    starting with this one, which flagged its own A2 fixture.
-    """
-    inside, term, out = False, None, set()
-    for i, l in enumerate(lines):
-        if inside:
-            out.add(i)
-            if l.strip() == term:
-                inside, term = False, None
-            continue
-        m = HEREDOC.search(l)
-        if m and not l.lstrip().startswith("#"):
-            inside, term = True, m.group(1)
-    return out
-
-def scan(paths):
-    out = []
-    for f in paths:
-        try:
-            lines = open(f, encoding="utf-8", errors="replace").read().split("\n")
-        except OSError:
-            continue
-        skip = heredoc_lines(lines)
-        for i, line in enumerate(lines):
-            if i in skip:
-                continue
-            if line.lstrip().startswith("#"):
-                continue
-            if not CD.match(line):
-                continue
-            if "&&" in line or "||" in line or "cdx" in line:
-                continue          # self-guarding
-            if scope_has_set_e(lines, i):
-                continue          # a failed cd aborts
-            window = lines[i + 1 : i + 13]
-            for off, wl in enumerate(window):
-                if (i + 1 + off) in skip or wl.lstrip().startswith("#"):
-                    continue
-                m = WRITE.search(wl)
-                if not m:
-                    continue
-                if "git -C" in wl:
-                    continue      # names its own repo; a lost cwd is inert
-                out.append((f, i + 1, line.strip()[:58], i + 2 + off, m.group(0)[:30]))
-                break
-    return out
-
-if __name__ == "__main__":
-    if sys.argv[1] == "--repo":
-        os.chdir(sys.argv[2])
-        files = subprocess.run(
-            ["git", "ls-files", "*.test.sh"], capture_output=True, text=True
-        ).stdout.split()
-    else:
-        files = sys.argv[1:]
-    hits = scan(files)
-    for f, n, cd, wn, w in hits:
-        print(f"{f}:{n}: unguarded `cd` -> `{w}` at line {wn}")
-        print(f"    {cd}")
-    print(f"SITES={len(hits)}")
-PYEOF
+# The scanner is the SHARED module, not a copy. Its sibling guard
+# (`fixture-dir-operand-assert.test.sh`) forbids a different shape — an EMPTY `git -C` operand,
+# which involves no `cd` at all and which this rule is structurally unable to see — over the same
+# corpus, with the same heredoc-skipping and comment-skipping and `set -e`-scope machinery. Two
+# copies of that machinery plus a comment asking a future reader to keep them in step is not an
+# invariant; one module is. #7652
+SCANNER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/fixture-scan.py"
+[[ -f "$SCANNER" ]] || { echo "FATAL: missing shared scanner $SCANNER" >&2; exit 2; }
 
 echo "A1: no tracked *.test.sh redirects a git write through an unguarded cd"
-SCAN_OUT="$(python3 "$SCANNER" --repo "$REPO_ROOT" 2>&1)"
+SCAN_OUT="$(python3 "$SCANNER" --rule cd --repo "$REPO_ROOT" 2>&1)"
 SITES="$(sed -n 's/^SITES=//p' <<<"$SCAN_OUT")"
 if [[ "$SITES" == "0" ]]; then
   pass "no unguarded cd-then-write sites"
@@ -185,7 +94,7 @@ set -uo pipefail
   git -c user.email=t@t commit --allow-empty -m "victim change"
 )
 EOF
-BAD="$(python3 "$SCANNER" "$TMP/bad.test.sh" 2>&1)"
+BAD="$(python3 "$SCANNER" --rule cd "$TMP/bad.test.sh" 2>&1)"
 [[ "$(sed -n 's/^SITES=//p' <<<"$BAD")" == "1" ]] \
   && pass "the exact 2026-08-20 shape is flagged" \
   || { fail "the incident shape is NOT flagged — the scanner is vacuous"; echo "$BAD" | sed 's/^/    /'; }
@@ -208,7 +117,9 @@ set -uo pipefail
   git commit --allow-empty -m seed
 )
 EOF
-# git -C names its own repository; a lost cwd cannot redirect it.
+# git -C names its own repository, so a lost cwd cannot redirect it — PROVIDED the
+# operand is non-empty and absolute, which is the sibling guard's property, not this
+# one's.
 cat > "$TMP/ok3.test.sh" <<'EOF'
 #!/usr/bin/env bash
 set -uo pipefail
@@ -218,7 +129,7 @@ set -uo pipefail
 )
 EOF
 for f in ok1 ok2 ok3; do
-  n="$(python3 "$SCANNER" "$TMP/$f.test.sh" 2>&1 | sed -n 's/^SITES=//p')"
+  n="$(python3 "$SCANNER" --rule cd "$TMP/$f.test.sh" 2>&1 | sed -n 's/^SITES=//p')"
   [[ "$n" == "0" ]] && pass "$f: guarded spelling is not flagged" \
     || fail "$f: guarded spelling was flagged ($n) — the check over-matches"
 done
@@ -234,7 +145,7 @@ set -uo pipefail
   git rev-parse HEAD
 )
 EOF
-n="$(python3 "$SCANNER" "$TMP/ok4.test.sh" 2>&1 | sed -n 's/^SITES=//p')"
+n="$(python3 "$SCANNER" --rule cd "$TMP/ok4.test.sh" 2>&1 | sed -n 's/^SITES=//p')"
 [[ "$n" == "0" ]] && pass "reads are not writes (the check is scoped to mutations)" \
   || fail "a read-only block was flagged ($n)"
 echo ""
@@ -254,11 +165,11 @@ cat > "$TMP/inner.sh" <<'INNER'
 )
 INNER
 OUTER
-n="$(python3 "$SCANNER" "$TMP/heredoc.test.sh" 2>&1 | sed -n 's/^SITES=//p')"
+n="$(python3 "$SCANNER" --rule cd "$TMP/heredoc.test.sh" 2>&1 | sed -n 's/^SITES=//p')"
 [[ "$n" == "0" ]] && pass "heredoc-embedded fixtures are not flagged" \
   || fail "a heredoc-embedded fixture was flagged ($n) — every fixture suite becomes a false positive"
 # …and the SAME bytes, as a real script rather than heredoc data, must still flag.
-n2="$(python3 "$SCANNER" "$TMP/bad.test.sh" 2>&1 | sed -n 's/^SITES=//p')"
+n2="$(python3 "$SCANNER" --rule cd "$TMP/bad.test.sh" 2>&1 | sed -n 's/^SITES=//p')"
 [[ "$n2" == "1" ]] && pass "the same shape as real code is still flagged (skip is scoped, not blanket)" \
   || fail "heredoc skipping disabled real detection ($n2)"
 echo ""

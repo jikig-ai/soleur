@@ -9,6 +9,26 @@
 
 set -euo pipefail
 
+# Refuse before writing, rather than let an empty operand retarget a git write at whatever
+# repository the caller happens to be standing in. `git -C ""` does NOT error — it silently
+# operates on the current directory, which under TEST_GROUP=scripts is the developer's live
+# worktree, whose `.git/config` is the SHARED file every worktree on the machine inherits.
+#
+# Rejects bare `/` as well as empty: a `/*` case arm accepts `/`, and `rm -rf "/"/*` is the worst
+# outcome available in this corpus. Tests the LEADING `/` only, never a `realpath` comparison,
+# which breaks on a symlinked /tmp.
+#
+# The body below is the CANONICAL copy, asserted byte-for-byte against every other copy by
+# plugins/soleur/test/fixture-dir-operand-assert.test.sh. Do not reword it in one file only. #7652
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    /)  printf 'FATAL: fixture dir is bare /; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/pre-merge-rebase.sh"
 
@@ -21,6 +41,7 @@ command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
 
 init_git_repo() {
   local dir="$1"
+  assert_fixture_dir "$dir"
   git -C "$dir" init -q
   git -C "$dir" symbolic-ref HEAD refs/heads/main
   git -C "$dir" config user.email test@test.local
