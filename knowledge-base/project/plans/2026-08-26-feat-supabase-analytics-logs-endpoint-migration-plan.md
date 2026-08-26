@@ -507,7 +507,62 @@ drivable-RED before it is written.
 3.10 **Data minimisation** — bounded `--limit` default, no artifact, no output file. Note
     honestly that in an agent session stdout lands in a transcript, so the bounded limit —
     not "stdout only" — is the real control.
-3.11 Exit codes `0`/`1`/`2`; shared verdict logic in `scripts/lib/` (auto-registers).
+3.11 Exit codes per 3.9b; shared verdict logic in `scripts/lib/` (auto-registers).
+
+3.12 **ClickHouse dialect — there is an in-repo precedent; do not invent the idioms.**
+     The replacement endpoint requires ClickHouse SQL, and `scripts/betterstack-query.sh`
+     already writes it against a different warehouse. Adopt its forms rather than
+     translating BigQuery habits:
+
+     - **Time filtering:** `dt >= now() - INTERVAL <n> <unit>` for relative windows,
+       `dt >= '<iso>'` for absolute — not BigQuery's `TIMESTAMP_SUB`.
+     - **Newest-N presented oldest-first** is a *nested* subquery, and this is the one that
+       bears on our coverage math (`betterstack-query.sh:216-218`):
+       ```sql
+       SELECT ts, msg FROM (
+         SELECT ts, msg FROM <src> WHERE <pred> ORDER BY ts DESC LIMIT <n>
+       ) ORDER BY ts ASC
+       ```
+       The inner `ORDER BY … DESC LIMIT` selects **which** rows survive; the outer reorders
+       them. Get this wrong and `--limit` silently changes *which* window the returned rows
+       describe — which corrupts the `min()`/`max()` coverage report **and** is the
+       mechanism behind the monotonicity probe's known false-pass (if `--limit` binds both
+       calls they can compare equal regardless of truncation). Compute coverage from an
+       aggregate query that is **not** `--limit`-bound, never from the limited row set.
+     - **Row-per-line output:** `FORMAT JSONEachRow` is the house form for machine parsing.
+
+     **Vendor-dialect specifics** (researched; treat as leads to confirm at Phase 0, not as
+     settled contract):
+
+     - **Structured metadata is a `log_attributes` map, not nested JSON** — bracket access
+       with the full dotted key as a string: `log_attributes['request.method']`. Map values
+       are **always strings**, so numeric comparison needs `toInt32OrZero(...)`. Keys are
+       discoverable at run time: `SELECT arrayJoin(mapKeys(log_attributes)) AS key FROM logs
+       WHERE source = '<src>' GROUP BY key`. This is the single biggest unknown the helper
+       faces and it is answerable in one call.
+     - **BigQuery→ClickHouse:** `UNNEST(x) WITH OFFSET` → `ARRAY JOIN x, arrayEnumerate(x)`;
+       `TIMESTAMP_SUB(t, INTERVAL n DAY)` → `subtractDays(t, n)`;
+       `REGEXP_CONTAINS(c, p)` → `match(c, p)` (RE2); `SAFE_CAST` → `toStringOrNull` /
+       `toInt32OrZero`; `IFNULL` → `ifNull`/`coalesce`. `concat()` **propagates NULL** — wrap
+       every nullable argument in `coalesce(x, '')`.
+     - **Timestamps:** compare against a parsed value, not a bare string literal —
+       `parseDateTime64BestEffort('<iso>', 6)`. `min()`/`max()` need no conversion.
+     - **String escaping:** single-quote literals, doubling an embedded `'`;
+       `curl --data-urlencode` handles URL-encoding, so escape only for ClickHouse.
+     - **Documented `source` values** (13): `auth_logs`, `auth_audit_logs`, `edge_logs`,
+       `function_edge_logs`, `function_logs`, `postgrest_logs`, `pgbouncer_logs`,
+       `postgres_logs`, `realtime_logs`, `storage_logs`, `supavisor_logs`,
+       `database_version_upgrade_logs`, `multigres_logs`. Every source this plan measured on
+       the prd ref appears in that list — corroboration, not a substitute for 3.6's runtime
+       enumeration, which stays authoritative because the list can drift.
+
+     **One researched claim is CONTRADICTED by this plan's own measurement — do not act on
+     it.** Secondary sources state the endpoint rejects `COUNT(*)`. Every probe in this plan
+     used `count(*)` (`select source, count(*) as c from logs group by source` and
+     `select count(*) as c from logs`) and each returned HTTP 200 with a populated `result`.
+     Direct measurement outranks the write-up; `count(*)` is used throughout 3.6. Recorded
+     so an implementer who meets the same claim does not "fix" working code. *(Sources also
+     claim `SELECT *` is rejected — untested here, and the helper never issues it.)*
 
 ### Phase 4 — Discoverability wiring (do not skip; this is what the MCP cut rests on)
 
