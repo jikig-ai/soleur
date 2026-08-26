@@ -13,6 +13,65 @@ requires_cpo_signoff: true
 
 <!-- iac-routing-ack: plan-phase-2-8-reviewed -->
 
+## Enhancement Summary
+
+**Deepened:** 2026-08-26 · **Review panel:** 7 agents (DHH, Kieran, code-simplicity,
+architecture-strategist, spec-flow-analyzer, CPO, CTO-devex) + CLO and CTO domain
+assessments · **Halt gates:** 4.5 skip, 4.6 pass, 4.7 pass, 4.8 pass, 4.9 skip, 4.10 pass,
+4.11 pass (`lint-guard-contract.py` → `2 guard entries`), 4.55 skip.
+
+### The five findings that changed the design
+
+1. **The original guard was vacuous.** A `logs.all` string denylist quantifies over the
+   empty set once the single prose reference is handled — and `advisors/security`, a
+   *different* deprecated path, has live callers. Replaced with a Management-API call-site
+   assembly whose host-pin arm has permanent unwaived coverage.
+2. **The guard's assembly could not enforce its own PAT-exfil property.** A caller whose
+   host has been redirected does not contain the pinned literal, so a literal-keyed assembly
+   never enumerates it. The host-pin arm now **inverts the quantifier** (assembly = things
+   that carry a PAT or a `/v1/projects/` path; membership = contains the literal).
+3. **The plan would have committed production log rows to a public repo.** Fixtures captured
+   from a live GDPR exposure window, into `tests/scripts/fixtures/**`, which no existing
+   gate covers. Now: capture the envelope, synthesize every row body.
+4. **Discoverability was justified backwards.** The MCP cut rested on "the runbook solves
+   it" — but the precedent script is found because it is pasted into six agent-facing
+   bodies, and its closest sibling (with a runbook, no skill-body mention) is cited in zero.
+   Phase 4 now edits the skill bodies, and promotes GATE G-ESCALATE out of a June plan
+   blockquote into a runbook with `triggers:` frontmatter (activating a routing surface that
+   is inert repo-wide today).
+5. **The journey had no terminus.** Cutting window-chunking removed the *remedy* and kept
+   only the *detector*, leaving an agent's rational recovery as hand-written curl — the
+   exact behaviour the plan exists to retire. The helper now auto-narrows and unions
+   per-slice coverage, and the verdict is bound to the **exit code** (3), not only stdout.
+
+### Also corrected in this pass
+
+- The guard is **advisory, not blocking** (`lint-bot-statuses` is absent from
+  `required-checks.txt`); every merge-gating claim was removed and promotion filed as a
+  tracked issue with its four coupled steps, including the #6049 auto-fabrication trap.
+- A sixth failure mode found: a **format-valid but wrong project ref** passes all five other
+  checks and prints `COVERED` over another project's data.
+- The instrumentation check was **circular** (a "full retained span" query is itself the
+  wide window that returns zero); span pinned to a measured 30 days.
+- Hand-typed census numbers removed entirely in favour of a `.highwater` ratchet — three
+  independent counts disagreed because each used a different pathspec and unit.
+- Deprecated-path extraction must be **file-scoped**: the live `advisors/security` call sits
+  131 lines below its host literal, so a line-scoped guard finds zero and reports green.
+- Mechanical AC repairs: `grep -c` exits 1 on zero matches (kills the step under `set -e`);
+  `--numstat` + merge-base + a non-vacuity floor for the append-only check; `--jq .state`;
+  `grep -cF` for dotted needles.
+- `lint-orphan-test-suites.sh` is **blind to `tests/scripts/`** — registration is now
+  asserted directly rather than through a proxy that cannot fail.
+- Attribution fix: **#6288 is the issue the Better Stack short-answer bug kept open**, not
+  the finding — inherited from a review agent and propagated unverified until this pass.
+
+### Verified live in this pass
+
+ADR-197 free across all 60 `origin/*` refs · commit `924994b2f` on `origin/main` with the
+quoted subject · #5697 `OPEN` · #6049 title matches the auto-fabrication citation · all six
+cited AGENTS.md rule IDs active · all nine other cited ADRs exist · no PAT-shaped variables ·
+scheduled-work precedent (53 Inngest crons vs 13 GH Actions).
+
 ## Overview
 
 Supabase removes the Management API endpoint `analytics/endpoints/logs.all` on 2026-09-23,
@@ -194,9 +253,17 @@ skill bodies. That wiring is Phase 4 and costs four lines.
 - **Precedent to mirror:** `scripts/betterstack-query.sh` + `runbooks/betterstack-log-query.md`
   — read-only, ClickHouse-SQL, incident-time, with an explicit unset-creds message
   (*"You are NOT missing Better Stack access… Do NOT conclude 'no access / can't verify'"*)
-  and the literal `doppler run` re-invocation. **It already documents finding C under a
-  different vendor**: `remote()` is hot-window-only, so `--since 24h` silently answers with
-  ~40 minutes — *"not an error, just a short answer"* — which kept #6288 open for a month.
+  and the literal `doppler run` re-invocation. **Its header already documents finding C
+  under a different vendor** (`scripts/betterstack-query.sh`, the "ARCHIVE table" note):
+  `remote()` is the hot window only — ~40 minutes on 2026-07-15 — so a hot-only query
+  silently answers `--since 24h` with 40 minutes of rows, *"not an error, just a short
+  answer… the short answer is the bug."*
+  **Attribution, verified against that header:** #6288 is the issue the bug **kept open**
+  (its soak gate was reading short answers), not the finding itself — #6288's own title is
+  a zot restart-loop. Cite it as the victim, not the discovery. *(This plan originally
+  carried the wrong framing, inherited from a review agent and propagated unverified; it is
+  recorded here because "PR/issue #N introduced X" is wrong far more often than #N's
+  existence is.)*
 - **House pattern** (`postgrest-reload-schema.sh`): pinned host literal, no env override;
   `scrub_pat()` matching `sbp_[A-Za-z0-9]{20,}`; exit `0`/`1`/`2`.
   (`betterstack-query.sh` uses exit **3** for missing creds — the divergence is noted in
@@ -506,9 +573,9 @@ point**, leading with the `doppler run` invocation.
 
 ADR-197 scoped to **one invariant, stated above the vendor**: *a zero from any log surface
 is not evidence of absence without a coverage and instrumentation assertion.* The repo now
-has **two independent vendor proofs** of the class — #6288 (Better Stack `remote()`
-hot-window: `--since 24h` silently answers with 40 minutes) and this endpoint's
-non-monotonic cap. Stating it at that altitude is what stops a third surface relearning it.
+has **two independent vendor proofs** of the class — the Better Stack `remote()`
+hot-window (`--since 24h` silently answering with ~40 minutes; it kept #6288 open from
+2026-07-10) and this endpoint's non-monotonic cap. Stating it at that altitude is what stops a third surface relearning it.
 The ADR also records what the guard's non-vacuity rests on **after** `advisors/*` migrates
 (the host-pin arm), so a future reader does not re-litigate it.
 
@@ -538,11 +605,21 @@ so an expiry that hard-fails CI would force a migration the vendor has not made 
 ### Phase 9 (PR-C) — Deprecation spec-diff, folded in
 
 One step appended to `.github/workflows/scheduled-supabase-advisor-scan.yml`, which is
-`workflow_dispatch:`-only (dispatched by `cron-supabase-advisor-scan.ts`), already holds
+`workflow_dispatch:`-only (dispatched by the Inngest function
+`apps/web-platform/server/inngest/functions/cron-supabase-advisor-scan.ts`), already holds
 `SUPABASE_ACCESS_TOKEN` (:54), already calls this host, and already carries a label-based
 dedupe + comment-if-open + auto-close block (:248-280). Folding in avoids a new cron surface
-**and** the `new-scheduled-cron-prefer-inngest` hook that would deny a new `schedule:`
+**and** the `new-scheduled-cron-prefer-inngest` hook that would deny a new scheduled
 workflow outright.
+
+**Precedent verified (ADR-033):** 53 Inngest cron functions vs 13 GH Actions
+`scheduled-*.yml` — Inngest is canonical, and this target is already on it.
+
+**Implementation constraint from that file's own header:** the hook denies the write when
+the trigger token appears **even inside a comment**. So the appended step must not
+introduce that literal anywhere in the YAML, including explanatory comments — describe the
+cadence in prose ("the nightly fire", "the Inngest dispatcher") rather than naming the
+trigger key.
 
 Mirror `scheduled-marketplace-drift.yml`'s hardening: bootstrap the label before
 `gh issue create`; capture `gh issue list` **and its exit code** and refuse to file when the
@@ -859,8 +936,8 @@ writing any file. That tension is real and is resolved deliberately, not ignored
 **Create ADR-197** *(provisional; re-verify across all `origin/*` refs before merge)* —
 scoped to one invariant stated **above the vendor**: *a zero from any log surface is not
 evidence of absence without a coverage and instrumentation assertion.* Two independent
-vendor proofs: #6288 (Better Stack `remote()` hot-window silently answering 40 minutes for
-`--since 24h`) and this endpoint's non-monotonic cap. Records the six failure modes, the
+vendor proofs: the Better Stack `remote()` hot window (silently answering ~40 minutes for
+`--since 24h`, which kept #6288 open from 2026-07-10) and this endpoint's non-monotonic cap. Records the six failure modes, the
 guard's chokepoint **and its documented limitation**, and what non-vacuity rests on after
 `advisors/*` migrates.
 
