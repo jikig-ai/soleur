@@ -3,7 +3,8 @@
 # Guards the webplat vitest split in scripts/test-all.sh (#7498).
 #
 # The split gives the app-local projects (`unit`, `component`) a relevance gate
-# on `apps/web-platform/`, while `repo-wide` runs always. Two ways that can rot,
+# on `apps/web-platform/`, while `repo-wide` and `component` run always. Two ways
+# that can rot,
 # both silent:
 #
 #   1. `repo-wide` acquires a gate. Then the suites whose entire purpose is to
@@ -45,28 +46,28 @@ extract_block() {
 BLOCK="$(extract_block "$TEST_ALL")"
 
 echo "A1: both webplat suites are declared"
-grep -qF 'run_suite "apps/web-platform [repo-wide]"' <<<"$BLOCK" \
-  && pass "repo-wide suite declared" || fail "repo-wide suite declared"
-grep -qF 'run_suite "apps/web-platform [unit+component]"' <<<"$BLOCK" \
+grep -qF 'run_suite "apps/web-platform [repo-wide+component]"' <<<"$BLOCK" \
+  && pass "repo-wide+component suite declared" || fail "repo-wide+component suite declared"
+grep -qF 'run_suite "apps/web-platform [unit]"' <<<"$BLOCK" \
   && pass "app-local suite declared" || fail "app-local suite declared"
 echo ""
 
 echo "A2: the app-local suite is gated, and its decline is COUNTED"
 grep -qF '_diff_touches "${WEBPLAT_APP_PATHS[@]}"' <<<"$BLOCK" \
   && pass "gate predicate present" || fail "gate predicate present"
-grep -qF 'skip_suite "apps/web-platform [unit+component]"' <<<"$BLOCK" \
+grep -qF 'skip_suite "apps/web-platform [unit]"' <<<"$BLOCK" \
   && pass "decline goes through skip_suite (ADR-181: a decline is a verdict)" \
   || fail "decline goes through skip_suite"
 grep -qF '_relevance_declined=$((_relevance_declined + 1))' <<<"$BLOCK" \
   && pass "decline increments the relevance counter" || fail "decline increments the counter"
 echo ""
 
-echo "A3: repo-wide is NOT gated"
+echo "A3: repo-wide + component are NOT gated"
 # Everything before the `if _diff_touches` line is the ungated region.
 UNGATED="$(awk '/_diff_touches/{exit} {print}' <<<"$BLOCK")"
-grep -qF 'run_suite "apps/web-platform [repo-wide]"' <<<"$UNGATED" \
-  && pass "repo-wide runs outside the gate" \
-  || fail "repo-wide runs outside the gate — it would be declined on the diffs it guards"
+grep -qF 'run_suite "apps/web-platform [repo-wide+component]"' <<<"$UNGATED" \
+  && pass "repo-wide + component run outside the gate" \
+  || fail "repo-wide + component run outside the gate — repo-wide would be declined on the diffs it guards"
 echo ""
 
 echo "A4: the predicate array is declared, non-empty, and app-scoped"
@@ -137,25 +138,25 @@ echo "M2: gating repo-wide must break A3"
 # Deletion is already covered by A1, and a mutant that only deletes leaves A3's
 # real failure mode uncertified. So: delete the ungated pair, then re-emit it
 # immediately after the `if _diff_touches` line, i.e. inside the gated arm.
-mutate m2 '/run_suite "apps\/web-platform \[repo-wide\]"/,+1d' || exit 2
+mutate m2 '/run_suite "apps\/web-platform \[repo-wide+component\]"/,+1d' || exit 2
 M2="$TMP/m2.sh"
 awk '
   /if _diff_touches "\$\{WEBPLAT_APP_PATHS\[@\]\}"; then/ {
     print
-    print "    run_suite \"apps/web-platform [repo-wide]\" env VITEST_SHARD=\"${VITEST_SHARD:-}\" \\"
+    print "    run_suite \"apps/web-platform [repo-wide+component]\" env VITEST_SHARD=\"${VITEST_SHARD:-}\" \\"
     print "      bash -c '"'"'cd apps/web-platform \&\& npm run test:ci -- --project repo-wide'"'"'"
     next
   }
   { print }
 ' "$M2" > "$M2.tmp" && mv "$M2.tmp" "$M2"
-grep -qF 'run_suite "apps/web-platform [repo-wide]"' "$M2" \
+grep -qF 'run_suite "apps/web-platform [repo-wide+component]"' "$M2" \
   && pass "M2 mutant re-emitted repo-wide inside the gate (the mutation A3 targets)" \
   || fail "M2 mutant re-emitted repo-wide inside the gate"
 bash -n "$M2" && pass "M2 mutant is still a parseable script" || fail "M2 mutant parses"
 [[ -n "$(extract_block "$M2")" ]] && pass "M2 mutant still contains the webplat block" \
   || fail "M2 mutant still contains the webplat block"
 M2_UNGATED="$(awk '/_diff_touches/{exit} {print}' <<<"$(extract_block "$M2")")"
-if grep -qF 'run_suite "apps/web-platform [repo-wide]"' <<<"$M2_UNGATED"; then
+if grep -qF 'run_suite "apps/web-platform [repo-wide+component]"' <<<"$M2_UNGATED"; then
   fail "M2 mutant still shows repo-wide ungated — A3 is vacuous"
 else
   pass "gated-repo-wide mutant is detected (A3 can be driven red)"

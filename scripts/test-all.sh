@@ -1611,16 +1611,27 @@ fi
 # land in the gated project and be silently declined. That guard runs in the
 # repo-wide project, so it is never gated by the thing it guards.
 if want_webplat; then
-  run_suite "apps/web-platform [repo-wide]" env VITEST_SHARD="${VITEST_SHARD:-}" \
-    bash -c 'cd apps/web-platform && npm run test:ci -- --project repo-wide ${VITEST_SHARD:+--shard="$VITEST_SHARD"} 2>&1'
+  # `component` runs ALWAYS, alongside repo-wide. #7498 evaluated gating it and
+  # declined on measurement: at ~80 s it is a ~39 s expected saving, "statistically
+  # the same quantity this PR already declined for the union predicate", and taking
+  # it "would import a new fail-open surface to buy back exactly what was refused".
+  #
+  # #7666 gated it anyway, reasoning that the containment guard covers `component`
+  # at zero marginal cost once it exists for `unit`. That reversed an explicit,
+  # measured decision by the issue author on the strength of an argument about
+  # cost, not about the risk the decision was made on — so it is reverted here.
+  # The invariant the guard asserts (0 of 240 `.test.tsx` escape the app) is kept:
+  # it is true and worth keeping true, it is simply no longer load-bearing.
+  run_suite "apps/web-platform [repo-wide+component]" env VITEST_SHARD="${VITEST_SHARD:-}" \
+    bash -c 'cd apps/web-platform && npm run test:ci -- --project repo-wide --project component ${VITEST_SHARD:+--shard="$VITEST_SHARD"} 2>&1'
 
   if _diff_touches "${WEBPLAT_APP_PATHS[@]}"; then
-    run_suite "apps/web-platform [unit+component]" env VITEST_SHARD="${VITEST_SHARD:-}" \
-      bash -c 'cd apps/web-platform && npm run test:ci -- --project unit --project component ${VITEST_SHARD:+--shard="$VITEST_SHARD"} 2>&1'
+    run_suite "apps/web-platform [unit]" env VITEST_SHARD="${VITEST_SHARD:-}" \
+      bash -c 'cd apps/web-platform && npm run test:ci -- --project unit ${VITEST_SHARD:+--shard="$VITEST_SHARD"} 2>&1'
   else
     _relevance_declined=$((_relevance_declined + 1))
-    skip_suite "apps/web-platform [unit+component]" "relevance" \
-      "cd apps/web-platform && npm run test:ci -- --project unit --project component"
+    skip_suite "apps/web-platform [unit]" "relevance" \
+      "cd apps/web-platform && npm run test:ci -- --project unit"
   fi
 fi
 
