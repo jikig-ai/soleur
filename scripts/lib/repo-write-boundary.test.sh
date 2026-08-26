@@ -453,6 +453,32 @@ else
   fail "sandbox(es) that relocate test-all.sh without the boundary lib and without a declaration:$unlisted"
 fi
 
+# --- 29. ROWS 6 & 7 — the WINDOW, not just the call count -------------------------------------------
+# Arm 22 counts the call sites; it cannot see a window that shrank. Two orderings carry the whole
+# meaning of the measurement and a delete-only battery is blind to both:
+#   row 7 — the START snapshot must sit AFTER `tc_acquire`. A run that queued behind a sibling can
+#           wait up to TC_LOCK_TIMEOUT (3600 s), so a reading taken before the wait describes a
+#           machine state up to an hour stale and the delta means nothing.
+#   row 6 — the END snapshot must sit AFTER the last `run_suite`. Moved above it, the window stops
+#           spanning the suite list and the boundary reports clean about suites it never covered.
+ck
+acq=$(grep -n '^tc_acquire "test-all"' "$RUNNER" | head -n1 | cut -d: -f1)
+# Anchored on the STATEMENT, not the bare token: the runner's own explanatory comment above the
+# lib-source block QUOTES `if _repo_state_before="$(_repo_state)"` to explain why the contract is
+# fail-closed, and an unanchored grep matched that comment at line 331 instead of the code at 1008.
+# That is cq-assert-anchor-not-bare-token firing inside the arm written to check ordering.
+start_snap=$(grep -nE '^[[:space:]]*if _repo_state_before="\$\(_repo_state\)"' "$RUNNER" \
+  | grep -v ':[[:space:]]*#' | head -n1 | cut -d: -f1)
+end_snap=$(grep -nE '^[[:space:]]*if _repo_state_after="\$\(_repo_state\)"' "$RUNNER" \
+  | grep -v ':[[:space:]]*#' | head -n1 | cut -d: -f1)
+last_suite=$(grep -n '^\s*run_suite ' "$RUNNER" | tail -n1 | cut -d: -f1)
+if [[ -n "$acq" && -n "$start_snap" && -n "$end_snap" && -n "$last_suite" ]] \
+   && (( start_snap > acq )) && (( end_snap > last_suite )); then
+  pass "the boundary window spans the suite list: tc_acquire($acq) < start($start_snap), last run_suite($last_suite) < end($end_snap)"
+else
+  fail "boundary window ordering wrong: acquire=$acq start=$start_snap last_run_suite=$last_suite end=$end_snap"
+fi
+
 # --- Accounting. Emitted DIRECTLY, never through pass()/fail(): a conservation check routed
 # through the verdict helper it exists to police cannot report the fault that corrupted it.
 if [[ $((passes + fails)) -ne $asserted ]]; then
@@ -465,7 +491,7 @@ if [[ $((passes + fails)) -ne $asserted ]]; then
   exit 1
 fi
 
-MIN_ASSERTIONS=28
+MIN_ASSERTIONS=29
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — arms were deleted or neutered" >&2
   exit 1
