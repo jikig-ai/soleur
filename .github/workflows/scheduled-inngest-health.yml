@@ -698,6 +698,214 @@ jobs:
             gh issue close "$STALE" --repo "$GH_REPO" --comment "Inngest durable again at ${NOW} (durability_state=durable). Run: ${RUN_URL}"
           fi
 
+      # ========================================================================================
+      # DEDICATED-HOST ARM (#7674) — the first consumer SOLEUR_INNGEST_SERVER_PROBE has ever had.
+      #
+      # inngest-server-probe.sh has emitted that marker hourly since #6617a and NOTHING read it.
+      # Measured 2026-08-25: the dedicated host (10.0.1.40) had been `server_active=inactive` for
+      # 5.4 days on one unchanged boot_id, every row also carrying `cutover_flag=rolled-back` —
+      # symptom and cause on the same line, for ~130 consecutive hours. This workflow meanwhile
+      # polled the WEB host and stayed green, correctly, because the web host is healthy. A dead
+      # dedicated host was invisible by construction.
+      #
+      # DELIBERATELY ISOLATED FROM THE LIVENESS VERDICT CHAIN. This arm never writes
+      # `failure_mode`, so it cannot reach the restart dispatch, cannot pollute the #6374
+      # [ci/inngest-down] age gate, and cannot flip the Sentry heartbeat below. That last point is
+      # load-bearing rather than incidental: the brake is a KNOWN state that will stand until the
+      # cutover window, so wiring it to the heartbeat would hold the primary watchdog permanently
+      # red and mask genuine web-1 failures behind it. Visibility goes to a dedicated issue class.
+      #
+      # A restart would be actively wrong here regardless: restart-inngest-server.yml is
+      # LB-routed to the WEB host, so it cannot touch 10.0.1.40, and nothing but a cutover
+      # releases a standing rollback flag.
+      - name: Dedicated inngest host probe consumer (#7674)
+        id: dedicated
+        if: always()
+        env:
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+          # TWO identity fields, both required (#7674 review / #6616). `host_name` is the
+          # per-host discriminator, but #6616 is OPEN — "host_name telemetry is lying" — because
+          # a web host has been seen self-labelling with this same sed-rendered literal. `host`
+          # is Vector's auto-derived OS hostname (the Hetzner server name) and cannot be forged
+          # by a stale literal. Requiring both excludes the collision; measured 2026-08-25 the
+          # conjunction holds on 84/84 real rows, so this narrows a latent fail-open only.
+          DEDICATED_HOST: soleur-inngest
+          DEDICATED_HOST_NAME: soleur-inngest-prd
+          PROBE_WINDOW: 3h
+        run: |
+          set -uo pipefail
+          source "$GITHUB_WORKSPACE/scripts/inngest-dedicated-host-classify.sh"
+
+          # This workflow's header states its own contract (see the file preamble): every untrusted
+          # value flows through strip_log_injection before any echo into ::error:: or
+          # $GITHUB_OUTPUT. The three fields below come off-host, so they are untrusted by that
+          # definition. They are ALSO bounded by [^ ]+ and by vector.toml's upstream pii_scrub —
+          # but that scrub runs on a host under lifecycle{ignore_changes=[user_data]}, i.e. it can
+          # be serving a stale render, which is the whole reason #6616 exists. Do not rely on it.
+          # Byte-identical to the canonical copy in the liveness step; the helper is per-step.
+          strip_log_injection() {
+            printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
+          }
+
+          if [[ -z "${BETTERSTACK_QUERY_HOST:-}" || -z "${BETTERSTACK_QUERY_USERNAME:-}" || -z "${BETTERSTACK_QUERY_PASSWORD:-}" ]]; then
+            echo "::warning::#7674 dedicated-host arm: BETTERSTACK_QUERY_* unset — reporting probe-unavailable rather than a false healthy."
+            {
+              echo "verdict=probe-unavailable"
+              echo "detail=the watchdog's own BETTERSTACK_QUERY_* secrets are unset; the dedicated host was not read at all"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # rc is captured, never allowed to abort the step: the default Actions shell runs with
+          # -e, so `ROWS="$(cmd)"; rc=$?` would kill the step at that line and the classification
+          # below — the whole point of the arm — would never run.
+          rc=0
+          ROWS="$(bash "$GITHUB_WORKSPACE/scripts/betterstack-query.sh" \
+            --since "$PROBE_WINDOW" --grep 'SOLEUR_INNGEST_SERVER_PROBE' --limit 50 2>/dev/null)" || rc=$?
+
+          if [[ "$rc" -ne 0 ]]; then
+            N="__UNREADABLE__"; ACTIVE=""; CODE=""; FLAG=""
+          else
+            # `raw` is DOUBLE-ENCODED in ClickHouse, so a "host_name":"..." literal matched
+            # against the OUTER row matches nothing, ever — that would pin the count at 0 and
+            # report probe-unavailable forever. Decode .raw first, THEN isolate the host.
+            # Host isolation is mandatory: inngest-server-probe.sh is the shared renderer for
+            # this host and web-1, and vector.toml states all hosts multiplex into ONE Logs
+            # source with host_name the sole discriminator. web-1 legitimately reports
+            # cutover_flag=unknown and must never be read as the dedicated host's state.
+            # `-R` is load-bearing, not defensive habit (same reasoning as the follow-through
+            # probe's header): without it jq parses the STREAM, so ONE malformed line aborts the
+            # whole invocation and every valid row after it is lost — which would surface as
+            # probe-unavailable ("the host is silent") on a window that contained a real verdict.
+            MINE="$(printf '%s\n' "$ROWS" | jq -R -r 'fromjson? | .raw? | fromjson?
+                      | select(.host == env.DEDICATED_HOST and .host_name == env.DEDICATED_HOST_NAME)
+                      | .message // empty' 2>/dev/null | grep -F 'SOLEUR_INNGEST_SERVER_PROBE' || true)"
+            N="$(printf '%s' "$MINE" | grep -c . || true)"
+            LAST="$(printf '%s\n' "$MINE" | tail -1)"
+            ACTIVE="$(strip_log_injection "$(printf '%s' "$LAST" | grep -oE 'server_active=[^ ]+' | head -1 | cut -d= -f2 || true)")"
+            CODE="$(strip_log_injection "$(printf '%s' "$LAST" | grep -oE 'http_code=[^ ]+' | head -1 | cut -d= -f2 || true)")"
+            FLAG="$(strip_log_injection "$(printf '%s' "$LAST" | grep -oE 'cutover_flag=[^ ]+' | head -1 | cut -d= -f2 || true)")"
+          fi
+
+          VERDICT="$(classify_dedicated_host "$N" "$ACTIVE" "$CODE" "$FLAG")"
+          echo "#7674 dedicated host: rows=$N server_active='${ACTIVE:-<none>}' http_code='${CODE:-<none>}' cutover_flag='${FLAG:-<none>}' -> $VERDICT"
+
+          case "$VERDICT" in
+            healthy)
+              DETAIL="serving: server_active=active http_code=200 (cutover_flag=${FLAG:-<none>})" ;;
+            stopped-by-brake)
+              DETAIL="NOT serving, and the flag explains it: cutover_flag=${FLAG} stopped inngest-server via the flip FSM's rollback arm. No restart can fix this and none is dispatched — only a cutover window releases the brake. Tracked by #7674." ;;
+            not-serving)
+              DETAIL="NOT serving and UNEXPLAINED: server_active='${ACTIVE}' http_code='${CODE}' with cutover_flag='${FLAG:-<none>}', which does not account for the stop. This is a genuine diagnosis, not a known brake." ;;
+            *)
+              DETAIL="no SOLEUR_INNGEST_SERVER_PROBE row from ${DEDICATED_HOST_NAME} within ${PROBE_WINDOW}, or the read failed (rows='${N}'). Absence is reported as unavailable, never as healthy." ;;
+          esac
+          {
+            echo "verdict=$VERDICT"
+            echo "detail=$DETAIL"
+            echo "flag=${FLAG:-unknown}"
+          } >> "$GITHUB_OUTPUT"
+
+      # `stopped-by-brake` is a KNOWN standing state, already tracked by #7674, and it will hold
+      # until the cutover window. Filing it on the same channel as a genuine fault would post ~96
+      # comments/day for ~3 months (~9,300), and — worse — if the operator closes that issue the
+      # `EXISTING` lookup returns empty and the next tick FILES A NEW ONE, every 15 minutes. A real
+      # `not-serving` would then arrive as comment N+1 on a channel trained to be ignored. So the
+      # brake gets the run log only; the issue channel is reserved for verdicts that need a human.
+      - name: Note the known brake (run log only, no issue)
+        if: always() && steps.dedicated.outputs.verdict == 'stopped-by-brake'
+        run: |
+          echo "::notice::#7674 dedicated host stopped by a standing brake (cutover_flag=${{ steps.dedicated.outputs.flag }}) — known state, tracked by #7674, no issue filed and no restart dispatched."
+
+      - name: File or comment dedicated-host issue (#7674)
+        if: always() && steps.dedicated.outputs.verdict != '' && steps.dedicated.outputs.verdict != 'healthy' && steps.dedicated.outputs.verdict != 'stopped-by-brake'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERDICT: ${{ steps.dedicated.outputs.verdict }}
+          DETAIL: ${{ steps.dedicated.outputs.detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          # A DISTINCT class from [ci/inngest-down] so this never pollutes the #6374 age gate
+          # and never cross-matches its auto-close.
+          TITLE="[ci/inngest-dedicated-host] Dedicated inngest host is not serving"
+          gh label create "ci/inngest-dedicated-host" --repo "$GH_REPO" \
+            --color BFD4F2 --description "Dedicated inngest host (10.0.1.40) not serving — no restart path" 2>/dev/null || true
+          # `action-required` is load-bearing, not decoration: operator-digest harvests ONLY issues
+          # carrying it (this workflow says so itself at the connector-invariant step, and
+          # operator-digest/SKILL.md filters `--label action-required`). The sibling ci/inngest-*
+          # labels are NOT harvested — so without this, a genuinely dead scheduler or a broken
+          # consumer would be detected and then discarded into a log nobody reads.
+          gh label create "action-required" --repo "$GH_REPO" --color D93F0B \
+            --description "Needs an operator decision or action" 2>/dev/null || true
+          # An ::error:: annotation makes the run itself legible (observability layer 6) — the plan
+          # named this destination, and without it a not-serving run is green with an empty summary.
+          echo "::error::#7674 dedicated inngest host verdict=${VERDICT} — ${DETAIL}"
+          EXISTING="$(gh issue list --repo "$GH_REPO" --label ci/inngest-dedicated-host --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+          # Built with printf rather than a multi-line assignment: continuation lines at column 0
+          # inside a `run: |` block scalar terminate the block and break the workflow YAML.
+          BODY="$(printf '%s\n' \
+            "verdict: \`${VERDICT}\`" "" \
+            "${DETAIL}" "" \
+            "Run: ${RUN_URL}" "" \
+            "This arm dispatches **no** restart: \`restart-inngest-server.yml\` is LB-routed to the web host and cannot reach 10.0.1.40, and a standing rollback flag is released only by a cutover window. Restoration is tracked by #7674.")"
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "$BODY" || \
+              echo "::warning::#7674 could not comment on issue #${EXISTING}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$TITLE" \
+              --label ci/inngest-dedicated-host --label action-required --label priority/p1-high \
+              --body "$BODY" || echo "::warning::#7674 could not file the dedicated-host issue"
+          fi
+
+      # THE CONSUMER'S OWN DEATH (#7674 review). Every branch above keys on an OUTPUT of
+      # steps.dedicated. If that step crashes — the classifier moved, jq changed, the default
+      # `bash -e` shell aborting — it writes NO output, so every branch skips AND the final Sentry
+      # check-in computes its status from steps.effmode alone. A broken consumer would be
+      # indistinguishable from a healthy host: precisely the defect this PR exists to fix, one
+      # level up. This branch keys on the step's OUTCOME, which exists even when its outputs do not.
+      - name: Dedicated-host consumer crashed (#7674)
+        if: always() && steps.dedicated.outcome != 'success' && steps.dedicated.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          echo "::error::#7674 the dedicated-host probe consumer itself FAILED (outcome=${{ steps.dedicated.outcome }}) — the host's serving state was NOT measured this run. This is a broken reader, not a healthy host."
+          gh label create "ci/inngest-dedicated-host" --repo "$GH_REPO" --color BFD4F2 2>/dev/null || true
+          gh label create "action-required" --repo "$GH_REPO" --color D93F0B 2>/dev/null || true
+          TITLE="[ci/inngest-dedicated-host] Dedicated-host probe consumer is broken"
+          EXISTING="$(gh issue list --repo "$GH_REPO" --label ci/inngest-dedicated-host --state open --search "$TITLE" --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+          BODY="$(printf '%s\n' \
+            "verdict: \`arm-crashed\`" "" \
+            "The dedicated-host arm did not complete, so nothing measured whether 10.0.1.40 is serving. Absence of a verdict is NOT health." "" \
+            "Run: ${RUN_URL}")"
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "$BODY" || true
+          else
+            gh issue create --repo "$GH_REPO" --title "$TITLE" \
+              --label ci/inngest-dedicated-host --label action-required --label priority/p1-high \
+              --body "$BODY" || true
+          fi
+
+      - name: Auto-close dedicated-host issue (serving again)
+        if: always() && steps.dedicated.outputs.verdict == 'healthy'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          for n in $(gh issue list --repo "$GH_REPO" --label ci/inngest-dedicated-host --state open --json number --jq '.[].number' 2>/dev/null || true); do
+            gh issue close "$n" --repo "$GH_REPO" \
+              --comment "Dedicated inngest host is serving again (server_active=active, http_code=200). Auto-closed by ${RUN_URL}." || true
+          done
+
       - name: Sentry check-in (final)
         if: always()
         continue-on-error: true

@@ -4,7 +4,8 @@
 # TRACKER: **#6500**, which is OPEN and must stay open until an operator says otherwise.
 #
 # WHY THIS IS NOT A TELEMETRY PROBE. #6500's technical precondition — the dedicated inngest host
-# resolving its bootstrap image from zot — is verified by inngest-zot-boot-7462.sh on #7462. This
+# resolving its bootstrap image from zot — is verified by inngest-host-not-serving-7674.sh on #7674. (RE-POINTED 2026-08-25: the former
+# probe was retired and #7462 closed, so that reference named a check that no longer runs.) This
 # probe deliberately does NOT re-measure that. Closing #6500 is an AUTHORIZATION act: it gates
 # ADR-096 Phase 5.3-5.5 (retiring GHCR push/egress), and zot-soak-6122.sh's blocker arm reads
 # #6500's state to decide whether that retirement may proceed. Auto-closing it from telemetry would
@@ -85,7 +86,7 @@ if [[ "$n_pass" -eq 0 ]]; then
   echo "TRANSIENT: reason=awaiting_operator_verdict — no 'RESULT: PASS' line on #${ISSUE} yet." >&2
   echo "           This is the EXPECTED steady state. #6500 closes when an operator authorizes" >&2
   echo "           it, not when telemetry looks good; the technical precondition is measured" >&2
-  echo "           separately by inngest-zot-boot-7462.sh on #7462." >&2
+  echo "           separately by inngest-host-not-serving-7674.sh on #7674." >&2
   exit 2
 fi
 

@@ -144,6 +144,60 @@ After `terraform apply` against a fresh `hcloud_server.web`, the inngest-server 
 3. Verify via the deploy-status webhook (NO SSH) — see [§ Bootstrap-image release](#bootstrap-image-release-tag--build--deploy--verify) step 4. Expect `{component:"inngest", tag:"<TAG>", reason:"success"}`.
 4. [§ Unpause heartbeat](#unpause-heartbeat) once you've confirmed the heartbeat timer is firing.
 
+## `inactive` because a standing `rollback` flag stopped it — #7674
+
+**The discriminator is one row.** `SOLEUR_INNGEST_SERVER_PROBE` carries `server_active=` **and**
+`cutover_flag=` in the SAME line, hourly. Read that line before opening any other query:
+
+```bash
+doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \
+  --since 24h --grep 'SOLEUR_INNGEST_SERVER_PROBE' --limit 50 \
+  | jq -R -r 'fromjson? | .raw? | fromjson?
+      | select(.host=="soleur-inngest" and .host_name=="soleur-inngest-prd") | .message?'
+```
+
+`server_active=inactive` together with `cutover_flag=rollback` or `cutover_flag=rolled-back` means
+the host was **told to stop and obeyed**: `inngest-cutover-flip.sh`'s `rollback` arm calls
+`stop_server`, writes the terminal `rolled-back`, and then emits `noop-rolled-back` on every 30s
+tick thereafter. The host is not broken and there is nothing to repair on it.
+
+**`inactive` is not `failed`.** That distinction is the whole diagnosis. A crash or a restart loop
+leaves the unit `failed` and the `boot_id` churning; a deliberate stop leaves it `inactive` on an
+unchanged `boot_id`. Measured 2026-08-25: 5.4 days of `server_active=inactive http_code=000
+bind=[] priv8288=000` on one unchanged `boot_id`, with the flip guard's ALLOW arm logged twice at
+boot — the unit started, and the FSM subsequently stopped it.
+
+**Do not** read `bind=[]` / `priv8288=000` as a bind or firewall fault in this state; they are
+consequences of the stop. **Do not** dispatch a restart: `restart-inngest-server.yml` is LB-routed
+to the *web* host and cannot reach 10.0.1.40. **Do not** dispatch a host replace to "clear" it —
+the flag lives in Doppler and survives, so the replaced host reads it at boot and stops again,
+while the standing diagnostic evidence is destroyed.
+
+**The only thing that releases the brake is a cutover window** (`op=arm` and its gate sequence).
+
+**But "the brake is on" is NOT "nothing is broken" — correct an earlier reading here.** This entry
+originally said "while the brake stands there is no outage". That is HALF true and the false half
+matters:
+
+| Path | State | Evidence |
+|---|---|---|
+| Scheduled crons | **healthy** | web-1's co-located scheduler; ~14 `inngest/scheduled.timer` rows/hour |
+| App-originated `inngest.send()` | **FAILING CONTINUOUSLY** | ~621 `ECONNREFUSED 10.0.1.40:8288` rows/hour (~14,900/day), measured 2026-08-25 |
+
+`INNGEST_BASE_URL=http://10.0.1.40:8288` is baked unconditionally into the web-platform container
+(`ci-deploy.sh`, `cloud-init.yml`) and `server/inngest/client.ts` passes it through as `baseUrl`
+with **no fallback**. So every app-originated event send is addressed to the stopped host.
+`server/inngest/send-with-retry.ts` retries transient failures — against a host that is
+deliberately stopped, every retry also fails, and the event is dropped once retries exhaust.
+
+So the accurate statement is: **crons fire, events do not.** A reader who takes "no outage" at face
+value will under-prioritise this, which is exactly what happened for 5.4 days — the cron half stayed
+green and nothing read the half that was not.
+
+The `*/15` dedicated-host arm on `scheduled-inngest-health.yml` now surfaces the host state
+(`[ci/inngest-dedicated-host]`, verdict `stopped-by-brake`, no restart dispatched). It reports the
+HOST, not the dispatch failure; the dispatch failure is tracked separately.
+
 ## Heartbeat-miss triage
 
 BetterStack emails `ops@jikigai.com` when the heartbeat is silent past the 30-second grace period. Triage:
@@ -828,8 +882,17 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
      the host renders an SQLite-only ExecStart with `--sdk-url` on a closed loopback port, so it adopts
      **no** function registry: arming would run the FSM to `done`, quiesce the web scheduler and
      complete the cutover onto a host that serves nothing — reporting success while production crons
-     stop. **Remediation:** clear `INNGEST_DIAGNOSTIC_BOOT` on `soleur-inngest/prd`, let the host
-     re-render its ExecStart, then re-run `op=arm`. No SSH.
+     stop. **Remediation:** clear `INNGEST_DIAGNOSTIC_BOOT` on `soleur-inngest/prd`, **then replace the
+     host** (`apply_target=inngest-host-replace`) so it re-renders its ExecStart, then re-run
+     `op=arm`. No SSH.
+
+     > **Corrected 2026-08-25 (#7674).** This step previously read "clear the flag, let the host
+     > re-render its ExecStart". That is not performable: `inngest-bootstrap.sh` consumes
+     > `INNGEST_DIAGNOSTIC_BOOT` in `runcmd`, at **first boot only**, so clearing the Doppler value
+     > changes nothing on a host that is already running — it re-renders on its next boot and not
+     > before. An operator following the old wording would clear the flag, wait for a re-render
+     > that cannot happen, and re-run `op=arm` into the same refusal. The gate's own `::error::`
+     > string carried the same false instruction and was corrected in the same change.
    - **G3.7 pre-flush-latch gate (#7462):** refuses to arm — **before any prod write** — when the
      dedicated host's Better Stack log source carries a `"reason":"flip-complete"` or
      `"reason":"refuse-rearm-after-done"` row inside `FLUSH_LATCH_SINCE` (default `365d`), i.e. when a
@@ -842,8 +905,21 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
      dispatched). It is a **pre-filter, not the authority** — the on-host latch is what actually
      prevents a second `FLUSHALL`, and this gate can only ever ADD a refusal.
      **Remediation:** there is none while the latch stands, and `op=resume` is not it (its G1 accepts
-     `done` only). The latch clears only when the host's `/mnt/data` volume is recut, via the
-     `inngest-host-replace` maintenance window — never by SSH. If that recut has ALREADY happened but
+     `done` only). The latch clears only when the host's `/mnt/data` volume is **recut** — never by SSH, and
+     **not** by an `inngest-host-replace`.
+
+     > **Corrected 2026-08-25 (#7674).** This previously said the recut happens "via the
+     > `inngest-host-replace` maintenance window". It does not. A replace destroys and recreates the
+     > SERVER and **re-attaches the same `hcloud_volume`**; `/mnt/data` and the latch file on it
+     > survive intact. Measured: volume `106261946` was created 2026-07-07 and is attached to a host
+     > created 2026-08-20 — six weeks later, across a replace, latch preserved. Nor does
+     > `op=verify-wiped-volume` help: it wipes `/var/lib/inngest`, not `/mnt/data`.
+     >
+     > There is **no `apply_target` that recuts `/mnt/data` today.** The design for one
+     > (`inngest-volume-recut`, five guard layers, required-reviewer environment, typed confirm) is
+     > recorded in the #7674 plan and tracked for the PR that opens the cutover window. Until it is
+     > built, a standing latch has no in-repo remediation, and pretending otherwise is what left
+     > this gate's operator-facing message pointing at a window that could not clear it. If that recut has ALREADY happened but
      the old rows have not aged out, set the repo variable `FLUSH_LATCH_SINCE` to a window starting
      after it (e.g. `1h`) and re-dispatch; that narrows this pre-filter only.
    - **G4/G5 writes:** `INNGEST_POSTGRES_URI` → `INNGEST_HEARTBEAT_URL` → `INNGEST_CUTOVER_FLIP`
