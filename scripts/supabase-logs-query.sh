@@ -298,7 +298,24 @@ to_epoch() {
   fi
   date -u -d "$w" +%s 2>/dev/null
 }
-to_iso() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%S 2>/dev/null; }
+# THE TRAILING Z IS LOAD-BEARING AND ITS ABSENCE BROKE EVERY LIVE INVOCATION.
+#
+# Shipped without it, this function emitted `2026-07-28T14:13:50`, and the endpoint answers
+# that with HTTP 400 `iso_timestamp_start: Invalid ISO datetime` -- for EVERY ref, EVERY
+# window, EVERY source. The helper could not complete a single real query; it reported
+# CONFIG_ERROR / exit 2 and told the reader to go check their ref.
+#
+# It survived twelve review agents, two mutation batteries and a full test suite because the
+# suites drive a PATH-shimmed fake `curl` that echoes a fixture regardless of what it is sent.
+# That puts the fixture seam ABOVE the code under test for anything the vendor validates, so
+# no amount of mocked coverage could see it. It was found by running the real script against
+# the real API once. Measured 2026-08-27, same ref, same SQL, same window, sole variable:
+#   iso_timestamp_start=2026-08-26T00:00:00   -> HTTP 400 Invalid ISO datetime
+#   iso_timestamp_start=2026-08-26T00:00:00Z  -> HTTP 200 {"result":[{"c":5123}]}
+#
+# The fake now rejects a bound with no timezone designator (exit 69), so this cannot regress
+# behind a green suite the way it shipped.
+to_iso() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null; }
 
 NOW_EPOCH="$(date -u +%s)"
 START_EPOCH="$(to_epoch "$SINCE")"

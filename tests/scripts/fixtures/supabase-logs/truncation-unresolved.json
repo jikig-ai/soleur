@@ -18,9 +18,9 @@
         "--source",
         "postgres_logs",
         "--since",
-        "2025-06-01T00:00:00",
+        "2025-06-01T00:00:00Z",
         "--until",
-        "2026-08-27T00:00:00"
+        "2026-08-27T00:00:00Z"
       ],
       "exit": 3,
       "verdict": "INCONCLUSIVE",
@@ -29,7 +29,7 @@
         "rows=UNAVAILABLE",
         "would need 65 slices",
         "more than the 32 this helper will issue unattended",
-        "Re-run these exact slices and sum them: --since 2025-06-01T00:00:00"
+        "Re-run these exact slices and sum them: --since 2025-06-01T00:00:00Z"
       ],
       "calls": [
         "identity",

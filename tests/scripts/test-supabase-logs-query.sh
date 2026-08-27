@@ -129,6 +129,20 @@ case "$url" in
       printf 'STUB: logs request missing an iso bound (start=%q end=%q)\n' "$ts_start" "$ts_end" >&2
       exit 64
     fi
+    # THE BOUND MUST CARRY A TIMEZONE DESIGNATOR, and this stub exists because its absence
+    # shipped. `to_iso` emitted a naive `2026-07-28T14:13:50`; the live endpoint answers that
+    # with HTTP 400 `iso_timestamp_start: Invalid ISO datetime` on EVERY ref and EVERY window,
+    # so the helper could not complete a single real query -- while this suite, twelve review
+    # agents and two mutation batteries all stayed green, because a fake that echoes a fixture
+    # regardless of what it is sent puts the seam ABOVE every property the VENDOR validates.
+    # A stub can only catch what it is taught to reject, so teach it the contract.
+    for _b in "$ts_start" "$ts_end"; do
+      case "$_b" in
+        *Z|*+[0-9][0-9]:[0-9][0-9]|*-[0-9][0-9]:[0-9][0-9]) : ;;
+        *) printf 'STUB: iso bound %q has no timezone designator; the live endpoint answers this with HTTP 400 Invalid ISO datetime\n' "$_b" >&2
+           exit 69 ;;
+      esac
+    done
     case "$sql" in
       *instrumentation_c*) key=instrumentation ;;
       *window_source_c*)   key=window ;;
@@ -518,8 +532,8 @@ fi
 STUB_STATE="$WORK/state" STUB_LOG="$WORK/calls.log" FIXTURE="$FIXDIR/success.json" \
   "$WORK/bin/curl" --silent --show-error --max-time 60 --get --header @- \
   --data-urlencode 'sql=select timestamp as row_ts, id, event_message from logs order by row_ts desc limit 5' \
-  --data-urlencode 'iso_timestamp_start=2026-08-25T00:00:00' \
-  --data-urlencode 'iso_timestamp_end=2026-08-26T00:00:00' \
+  --data-urlencode 'iso_timestamp_start=2026-08-25T00:00:00Z' \
+  --data-urlencode 'iso_timestamp_end=2026-08-26T00:00:00Z' \
   --write-out x --url "$STUB_LOGS_URL" \
   >/dev/null 2>&1 </dev/null
 if [[ "$?" -eq 67 ]]; then

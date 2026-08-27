@@ -40,7 +40,7 @@ Legend: `[ ]` pending · **PR-A** legal · **PR-B** deadline (2026-09-23) · **P
       (`scan-workflow.test.sh:260,263`; `cron-supabase-advisor-scan.test.ts:94-95` asserts
       *absence* while containing the token). Exemptions dated + inline-justified.
 - [ ] 3.3 **Host-pin arm — invert the quantifier.** Assembly =
-      `/v1/projects/|SUPABASE_ACCESS_TOKEN|SUPABASE_PAT`; membership assertion = contains the
+      `/v1/projects|SUPABASE_ACCESS_TOKEN|SUPABASE_PAT`; membership assertion = contains the
       bare literal, or is on a dated non-caller allowlist. A literal-keyed assembly cannot
       see a redirected host, which makes Property 5 unenforceable.
 - [ ] 3.4 Triage the eight files carrying a PAT var or `/v1/projects/` path with no host

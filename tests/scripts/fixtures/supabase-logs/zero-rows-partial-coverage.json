@@ -17,16 +17,16 @@
         "--source",
         "auth_logs",
         "--since",
-        "2026-08-15T00:00:00",
+        "2026-08-15T00:00:00Z",
         "--until",
-        "2026-08-26T00:00:00"
+        "2026-08-26T00:00:00Z"
       ],
       "exit": 3,
       "verdict": "INCONCLUSIVE",
       "reason": "PARTIAL_COVERAGE",
       "require": [
         "rows=0",
-        "UNCOVERED: head 2026-08-15T00:00:00..2026-08-18T04:22:10.000000",
+        "UNCOVERED: head 2026-08-15T00:00:00Z..2026-08-18T04:22:10.000000",
         "treat the uncovered part as unknown"
       ],
       "calls": [

@@ -158,7 +158,14 @@ assembly_deprecation() {
   git -C "$REPO_ROOT" grep -lI --fixed-strings -e "$HOST_LITERAL" -- "${PATHSPEC[@]}" 2>/dev/null || true
 }
 assembly_hostpin() {
-  git -C "$REPO_ROOT" grep -lIE -e '/v1/projects/|SUPABASE_ACCESS_TOKEN|SUPABASE_PAT' -- "${PATHSPEC[@]}" 2>/dev/null || true
+  # ANCHOR WITHOUT THE TRAILING SLASH, deliberately. `${API}/v1/projects` with the ref appended
+  # later is a real call shape, and requiring the slash here would leave such a file out of the
+  # assembly entirely -- so the detection fix one layer down could never see it. Measured on the
+  # tree at 2026-08-27: both patterns enumerate the identical 29 files, so this buys coverage
+  # against the SHAPE and absolves no existing line. Widening an assembly is the safe direction;
+  # membership is the assertion, and a non-caller that lands here is triaged onto the dated
+  # allowlist rather than being hidden from the guard.
+  git -C "$REPO_ROOT" grep -lIE -e '/v1/projects|SUPABASE_ACCESS_TOKEN|SUPABASE_PAT' -- "${PATHSPEC[@]}" 2>/dev/null || true
 }
 
 # Comment markers are per-language. `--` is a comment ONLY in .sql: in shell and YAML a huge
