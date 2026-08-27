@@ -25,7 +25,11 @@
   identical, but data model (per-source tables -> unified stream with a `source` column),
   SQL dialect (BigQuery -> ClickHouse) and timestamp encoding (int-micros -> ISO string)
   all changed, and EVERY failure returns HTTP 200. Six measured false-answer modes,
-  including a non-monotonic window (61d -> 199,361 rows; 70d -> 2,676; 80d+ -> 0).
+  including a non-monotonic window where a WIDER window returns FEWER rows, which is
+  impossible for a correct range query. Counts deliberately not restated here: they move as
+  rows age out, and this file was written after a re-measurement that read different
+  magnitudes than the plan did. Canonical, with both samples reconciled:
+  `phase-0-endpoint-evidence.md` (same directory).
 - The originally-briefed `logs.all` denylist guard is vacuous by construction (zero committed
   callers). Replaced with a Management-API call-site assembly guard whose host-pin arm
   INVERTS the quantifier, so a redirected host is a missing member rather than invisible.

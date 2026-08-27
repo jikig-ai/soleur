@@ -143,7 +143,13 @@ exists to prevent.
 - ADR-192's three-state classifier and this ADR's verdict contract are the same invariant at two
   altitudes. ADR-192 is not superseded; it becomes the Better Stack instance of D-1 through D-4.
 - Consumers that previously read a row count from stdout must now read the exit code as well.
-  The two runbooks above state this at their entry points.
+  `knowledge-base/engineering/operations/runbooks/supabase-log-query.md` states this at its
+  entry point. **The Better Stack side does NOT, and this ADR does not claim otherwise:**
+  `betterstack-log-query.md:36` records that its `NIC_ALARM_VERDICT` is carried as an
+  independent verdict, "deliberately NOT in the exit code". So D-4 (bind the verdict to `$?`)
+  is implemented on the Supabase surface and is an ASPIRATION on the Better Stack one. Stating
+  that asymmetry is the point: an ADR that claimed both surfaces already complied would be the
+  same over-claim it exists to forbid, and the gap is what a later change has to close.
 - The GDPR determination that motivated the Supabase half is **reinforced, not reopened** — its
   `INCONCLUSIVE` access-log treatment turns out to have been correct for a stronger reason than
   the one recorded at the time. See the 2026-08-26 addenda on

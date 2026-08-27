@@ -143,7 +143,7 @@ Verified against prd ref `pigsfuxruiopinouvjwy`.
 |---|---|---|---|
 | A | Old-dialect query on the new endpoint | `result: null`, `error: "Backend error!…"` | Checking status + `result \| length` reads **0 rows**. |
 | B | `source = 'totally_not_a_source'` | `error: null`, `[{"c":0}]` | A typo'd/renamed source is indistinguishable from a real zero. |
-| C | Over-wide window | `error: null`, **silently truncated** | 24h → 5,158 rows; **61d → 199,361**; **70d → 2,676**; 80d+ → **0**. A *wider* window returning *fewer* rows is impossible for a correct range query. |
+| C | Over-wide window | `error: null`, **silently truncated** | 24h → 5,158 rows; **61d → 199,361**; **70d → 2,676**; 80d+ → **0**. A *wider* window returning *fewer* rows is impossible for a correct range query. *(Plan-time sample, 2026-08-26. These counts move continuously as rows age out — a later re-measurement read 61d → 185,301 and 70d → 3,230. The two are not in conflict and neither is stale; the SHAPE is the finding, the magnitudes are not. Canonical: `knowledge-base/project/specs/feat-one-shot-supabase-analytics-logs-endpoint-migration/phase-0-endpoint-evidence.md`.)* |
 | D | `group by source` over 55 days | **HTTP 500**, `error: null`, `result: null` | A 5xx with a null error field; naive `.result \| length` → 0. |
 | E | Uninstrumented source | `error: null`, `0` | `edge_logs` returns 0 across 30 days — "never emitted", not "no traffic". |
 | F | **Format-valid but wrong `--ref`** | `error: null`, real rows, full coverage | **Every safety mechanism passes.** The verdict prints `COVERED` over another project's data. The most likely 2am error, and the one nothing else here catches. |
@@ -905,11 +905,16 @@ liveness_signal:
   what: the deprecation-assembly lint step in the ADVISORY `lint-bot-statuses` job, plus the
         two suites run by `scripts/test-all.sh` via their explicit `run_suite` lines
   cadence: every push and every PR
-  alert_target: "PR annotation on a red advisory step — NOT a required check. Promotion to
-                 blocking is tracked (Phase 8) and deliberately out of scope here."
+  alert_target: "A RED STEP in a non-required job — no annotation. Corrected at review:
+                 an earlier revision of this field claimed a PR annotation, but none of the
+                 three scripts emits `::error::` (grep returns 0), and without a workflow
+                 command GitHub renders no annotation. The only signal is a red X on a job
+                 most PRs never open. Promotion to blocking is tracked (Phase 8) and
+                 deliberately out of scope here."
   configured_in: .github/workflows/ci.yml (lint-bot-statuses), scripts/test-all.sh
 error_reporting:
-  destination: stderr with the house `::error::` prefix; CI surfaces it as a step annotation
+  destination: stderr, surfaced as a red step in a non-required job. NOT an annotation —
+               see alert_target above.
   fail_loud: true — a non-null `error` field, a null `result`, or any non-2xx is ALWAYS an
              error exit, never a zero-row success
 failure_modes:
