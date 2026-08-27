@@ -195,6 +195,61 @@ t_replace_not_counted_as_create() {
   fi
 }
 
+# T10-T14 (#7650): sentry_alert nested surfaces. Added BEFORE any sentry_alert
+# enters a plan — the filter counts nested shrink per-type with no walk(), so a
+# type with no clause has its shrink counted as 0 and slips silently. That is the
+# whole failure mode, and it is not observable from a passing plan.
+#
+# Attribute names taken from the provider docs at v0.15.5, not from the migration
+# plan's prose: that prose had the frequency mapping wrong (Phase 0 evidence,
+# knowledge-base/project/specs/fix-7650-sentry-alert-migration/).
+_sa_plan() { # $1=before $2=after -> a one-resource update plan
+  printf '{"resource_changes":[{"type":"sentry_alert","address":"sentry_alert.zot","change":{"actions":["update"],"before":%s,"after":%s}}]}' "$1" "$2"
+}
+_SA_FULL='{"trigger_conditions":[{"type":"event_frequency_count"}],"legacy_trigger_conditions":["new_high_priority_issue"],"action_filters":[{"logic_type":"all","conditions":[{"type":"tagged_event"},{"type":"tagged_event"}],"actions":[{"email":{}}]}]}'
+
+_sa_case() { # $1=label $2=after-json $3=want-ndel
+  local got want="$3"
+  # Two jq invocations on purpose: `-f FILE` plus a positional filter makes jq read
+  # the positional as a second program FILE, which fails as "could not open file".
+  got=$(_sa_plan "$_SA_FULL" "$2" | jq -f "$FILTER" -c | jq -r '.nested_deletes')
+  if [[ "$got" == "$want" ]]; then _report "$1" ok
+  else _report "$1" fail "nested_deletes got '$got' want '$want'"; fi
+}
+
+t_sentry_alert_noop_is_zero() {
+  _sa_case "T10 sentry_alert no-op scores 0" "$_SA_FULL" 0
+}
+
+t_sentry_alert_condition_shrink_trips() {
+  _sa_case "T11 dropping one action_filters[].conditions[] element trips the guard" \
+    '{"trigger_conditions":[{"type":"event_frequency_count"}],"legacy_trigger_conditions":["new_high_priority_issue"],"action_filters":[{"logic_type":"all","conditions":[{"type":"tagged_event"}],"actions":[{"email":{}}]}]}' 1
+}
+
+# The one most easily missed: legacy_trigger_conditions is a List of STRING, not
+# blocks, and the provider documents "when omitted from config these will be
+# removed on the next apply". A shrink here silently drops a live trigger type the
+# provider cannot represent natively. Counted for exactly that reason.
+t_sentry_alert_legacy_trigger_shrink_trips() {
+  _sa_case "T12 dropping a legacy_trigger_conditions entry trips the guard" \
+    '{"trigger_conditions":[{"type":"event_frequency_count"}],"legacy_trigger_conditions":[],"action_filters":[{"logic_type":"all","conditions":[{"type":"tagged_event"},{"type":"tagged_event"}],"actions":[{"email":{}}]}]}' 1
+}
+
+# Container AND contents are counted, so removing a whole filter registers a larger
+# shrink than removing one condition inside it. Pinning the magnitude keeps a
+# future "simplification" to counting only the container from passing quietly.
+t_sentry_alert_whole_filter_removal_counts_contents() {
+  _sa_case "T13 removing a whole action_filters block counts its contents too (4)" \
+    '{"trigger_conditions":[{"type":"event_frequency_count"}],"legacy_trigger_conditions":["new_high_priority_issue"],"action_filters":[]}' 4
+}
+
+# Growth must not produce a negative that could offset a real shrink elsewhere in
+# the same plan. `select(. > 0)` per resource is what enforces this; T14 pins it.
+t_sentry_alert_growth_is_not_negative() {
+  _sa_case "T14 adding a condition scores 0, never negative" \
+    '{"trigger_conditions":[{"type":"event_frequency_count"}],"legacy_trigger_conditions":["new_high_priority_issue"],"action_filters":[{"logic_type":"all","conditions":[{"type":"tagged_event"},{"type":"tagged_event"},{"type":"level"}],"actions":[{"email":{}}]}]}' 0
+}
+
 # T9 (#6589): the measured live baseline creates nothing. AC5's sub-assertion.
 t_real_baseline_zero_creates() {
   if [[ ! -f "$FIXTURES/tfplan-sentry-real-baseline.json" ]]; then
@@ -218,6 +273,11 @@ t_issue_alert_nested_delete_trips
 t_pure_create_counted
 t_replace_not_counted_as_create
 t_real_baseline_zero_creates
+t_sentry_alert_noop_is_zero
+t_sentry_alert_condition_shrink_trips
+t_sentry_alert_legacy_trigger_shrink_trips
+t_sentry_alert_whole_filter_removal_counts_contents
+t_sentry_alert_growth_is_not_negative
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

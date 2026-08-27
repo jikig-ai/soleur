@@ -82,6 +82,40 @@
 # Count the array-of-blocks v2 surfaces on a sentry_issue_alert side. Sum of
 # conditions_v2 + filters_v2 + actions_v2 elements; `($side // {})` null-coalesces
 # the resource-create/-delete edges (already excluded by the outer delete guard).
+# Count the array-of-blocks surfaces on a sentry_alert side (#7650). Added BEFORE
+# any sentry_alert enters a plan: this filter counts nested shrink per-type with no
+# walk(), so a type arriving without a clause has its shrink counted as 0 and slips
+# the guard silently — the failure mode the scope guard exists to make loud.
+#
+# Attribute names verified against the provider docs at v0.15.5, not from the
+# migration plan's prose (which had the frequency mapping wrong — see the Phase 0
+# evidence under knowledge-base/project/specs/fix-7650-sentry-alert-migration/).
+#
+# FIVE surfaces, and the middle one is easy to miss:
+#   trigger_conditions[]         — Attributes List
+#   legacy_trigger_conditions[]  — List of STRING, not blocks. Counted anyway because
+#                                  the provider documents "when omitted from config
+#                                  these will be removed on the next apply": dropping
+#                                  an entry silently removes a live trigger type that
+#                                  the provider cannot represent natively
+#                                  (new_high_priority_issue, existing_high_priority_issue,
+#                                  issue_resolution_change). A shrink here is exactly
+#                                  the unreviewed deletion this guard is for.
+#   action_filters[]             — the filter blocks themselves
+#   action_filters[].conditions[]
+#   action_filters[].actions[]
+#
+# Both the container and its contents are counted, so removing a whole action_filter
+# registers a larger shrink than removing one condition inside it. Either is > 0,
+# which is all the guard needs; the magnitude is only for the operator message.
+def sentry_alert_blocks_count($side):
+  ($side // {})
+  | ([.trigger_conditions[]?] | length)
+  + ([.legacy_trigger_conditions[]?] | length)
+  + ([.action_filters[]?] | length)
+  + ([.action_filters[]?.conditions[]?] | length)
+  + ([.action_filters[]?.actions[]?] | length);
+
 def sentry_issue_alert_blocks_count($side):
   ($side // {})
   | ([.conditions_v2[]?] | length)
@@ -100,6 +134,13 @@ def sentry_issue_alert_blocks_count($side):
        | select(.type == "sentry_issue_alert")
        | select(.change.actions? | index("delete") | not)
        | (sentry_issue_alert_blocks_count(.change.before) - sentry_issue_alert_blocks_count(.change.after))
+       | select(. > 0)),
+
+      # sentry_alert.{trigger_conditions,legacy_trigger_conditions,action_filters[.conditions,.actions]} (#7650)
+      (.resource_changes[]?
+       | select(.type == "sentry_alert")
+       | select(.change.actions? | index("delete") | not)
+       | (sentry_alert_blocks_count(.change.before) - sentry_alert_blocks_count(.change.after))
        | select(. > 0))
     ] | add // 0
   )
