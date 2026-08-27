@@ -342,7 +342,7 @@ sweep_dir() {
     n="$(jq -r '._expect | length' "$fx")"
     for (( i = 0; i < n; i++ )); do
       run="$(jq -c "._expect[$i]" "$fx")"
-      check_fixture_run "$fx" "$run" "$name[$i]"
+      check_fixture_run "$fx" "$run" "${name}[$i]"
     done
   done
   SWEPT="$seen"
