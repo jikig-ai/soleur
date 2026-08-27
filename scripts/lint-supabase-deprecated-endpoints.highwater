@@ -1,0 +1,38 @@
+23  # Supabase Management API call sites this guard can still SEE.
+    #
+    # THIS IS A COVERAGE FLOOR, NOT AN OFFENDER CEILING, AND THE DIRECTION IS INVERTED
+    # RELATIVE TO THIS REPO'S OTHER .highwater FILES. lint-diagnosis-claims.highwater and
+    # lint-trap-tempfile-ownership's baseline count OFFENDERS, so they ratchet DOWN and their
+    # header says "do not RAISE this to make a build pass". This one counts CALL SITES THE
+    # EXTRACTOR STILL MATCHES, so:
+    #
+    #   DO NOT LOWER THIS NUMBER TO MAKE A BUILD PASS.
+    #
+    # A drop is the failure. It means either a call site was genuinely deleted (fine -- lower
+    # this in the SAME commit as the deletion, and say which site) or the extractor went blind:
+    # a pathspec typo, a renamed tree, a reworded `API=` assignment, a comment-marker change.
+    # A guard that stops matching prints "0 violations" and looks exactly like a clean repo,
+    # which is the class 924994b2f closed. This number is the only thing that tells them apart.
+    #
+    # Growth is legitimate. A new Management API caller RAISES it; the guard prints a note
+    # asking you to. Raising is free, lowering needs a reason.
+    #
+    # WHAT THE 23 COUNTS, EXACTLY. Non-comment lines, in the union of the two assemblies, that
+    # match a Management API CALL CONSTRUCT: a host token (the literal `https://api.supabase.com`
+    # or a `$VAR`/`${VAR}` used as the host) immediately followed by `/v1/projects/`. It is a
+    # CENSUS OF THE SCANNED SCOPE, NOT OF THE REPO -- it counts only what the pathspec recorded
+    # verbatim in the script header walks, and only what the call-construct anchor detects.
+    #
+    # Deliberately NOT counted, each verified by reading the line:
+    #   - `/v1/projects/` with no host token (assertion strings in
+    #     apply-inngest-rls-dev-workflow.test.sh:169-170, postgrest-reload-schema.test.sh:117)
+    #   - comment lines (inngest.tf:218, 0002_dev_inngest_tables_lockdown.sql:60)
+    #   - Hetzner's `/v1/servers/`, `/v1/actions/`, `/v1/images/` in scripts/cutover-inngest.sh.
+    #     The anchor is `/v1/projects/` and not `/v1/` precisely so a Supabase host-pin rule
+    #     cannot red three correct Hetzner lines.
+    #   - apps/web-platform/infra/cron-egress-allowlist.txt:66, the bare hostname
+    #     `api.supabase.com` with no scheme and no path -- in neither assembly by construction.
+    #
+    # The three `advisors/security` sites inside this 23 are WAIVED, not absent. The waiver
+    # lives in the script's DENY array with its date and justification; removing it is what
+    # turns this population red, and that is the guard's live non-vacuity proof.
